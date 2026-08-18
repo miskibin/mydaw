@@ -1,0 +1,26 @@
+[package]
+name = "mydaw-plugin-debug-tap"
+description = "MYDAW plugin: RT-safe audio capture tap plus WAV/PNG/statistics inspection of what the engine actually played."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
+
+rtrb.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# Analysis and output. All three are used exclusively off the audio thread.
+realfft.workspace = true
+hound.workspace = true
+png.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

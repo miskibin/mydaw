@@ -22,23 +22,26 @@
 //!   AudioIoService::install_graph  ---------->  RtGraphSlot::poll_swap
 //!   AudioIoService::set_playing    ---------->  drain_commands -> TransportClock
 //!   MeterThrottle::poll (metering) <----------  MeterFrame push
+//!   DebugTapService::capture       <----------  TapRtSide::push_block
 //!                                               |
 //!                                               +-> run_block -> device buffer
 //! ```
 //!
 //! # Boot behaviour
-//! [`AudioIoPlugin`] registers the service and claims the meter producer, but does
-//! **not** open the device. Booting the kernel on a machine without audio output
+//! [`AudioIoPlugin`] registers the service and claims the meter producer and the
+//! debug capture tap, but does **not** open the device. Booting the kernel on a machine without audio output
 //! must not fail, and the app should decide when audio goes live. Call
 //! [`AudioIoService::start`] when you are ready.
 //!
 //! ```no_run
 //! use mydaw_kernel::Kernel;
 //! use mydaw_plugin_audio_io::{AudioIoPlugin, AudioIoService};
+//! use mydaw_plugin_debug_tap::DebugTapPlugin;
 //! use mydaw_plugin_metering::MeteringPlugin;
 //!
 //! let mut kernel = Kernel::new();
 //! kernel.add_plugin(Box::new(MeteringPlugin::new())).unwrap();
+//! kernel.add_plugin(Box::new(DebugTapPlugin::new())).unwrap();
 //! kernel.add_plugin(Box::new(AudioIoPlugin::new())).unwrap();
 //! kernel.boot().unwrap();
 //!
@@ -57,6 +60,7 @@ pub use service::{AudioIoConfig, AudioIoError, AudioIoService, StreamInfo};
 use std::sync::Arc;
 
 use mydaw_kernel::{KernelCtx, Plugin, PluginManifest};
+use mydaw_plugin_debug_tap::DebugTapHandoff;
 use mydaw_plugin_metering::MeterTap;
 
 /// Kernel id of this plugin.
@@ -64,11 +68,13 @@ pub const PLUGIN_ID: &str = "audio-io";
 
 /// Manifest dependencies.
 ///
-/// The dependency on `metering` is what guarantees `MeterTap` exists by the time
-/// [`Plugin::start`] runs here -- the kernel starts plugins in topological order.
-const DEPS: &[&str] = &["metering"];
+/// The dependencies on `metering` and `debug-tap` are what guarantee `MeterTap`
+/// and `DebugTapHandoff` exist by the time [`Plugin::start`] runs here -- the
+/// kernel starts plugins in topological order.
+const DEPS: &[&str] = &["metering", "debug-tap"];
 
-/// Owns the [`AudioIoService`] and wires it to the metering plugin.
+/// Owns the [`AudioIoService`] and wires it to the metering and debug-tap
+/// plugins.
 pub struct AudioIoPlugin {
     config: AudioIoConfig,
     service: Option<Arc<AudioIoService>>,
@@ -131,6 +137,18 @@ impl Plugin for AudioIoPlugin {
             None => log::warn!("MeterTap service missing; audio-io will run without metering"),
         }
 
+        // Same story for the debug capture tap. Its absence is a debugging
+        // capability lost, never a reason to refuse to make sound.
+        match ctx.services.get::<DebugTapHandoff>() {
+            Some(handoff) => match handoff.take() {
+                Some(tap) => service.attach_debug_tap(tap),
+                None => {
+                    log::warn!("debug tap already taken; audio-io will run without capture support")
+                }
+            },
+            None => log::warn!("DebugTapHandoff service missing; captures are unavailable"),
+        }
+
         // The device is opened on demand, not here. See the crate docs.
     }
 
@@ -145,20 +163,25 @@ impl Plugin for AudioIoPlugin {
 mod tests {
     use super::*;
     use mydaw_kernel::{Kernel, KernelError};
+    use mydaw_plugin_debug_tap::DebugTapPlugin;
     use mydaw_plugin_metering::MeteringPlugin;
 
     fn booted() -> Kernel {
         let mut kernel = Kernel::new();
         kernel.add_plugin(Box::new(MeteringPlugin::new())).unwrap();
+        kernel.add_plugin(Box::new(DebugTapPlugin::new())).unwrap();
         kernel.add_plugin(Box::new(AudioIoPlugin::new())).unwrap();
         kernel.boot().unwrap();
         kernel
     }
 
     #[test]
-    fn metering_starts_before_audio_io() {
+    fn its_dependencies_start_before_audio_io() {
         let kernel = booted();
-        assert_eq!(kernel.boot_order(), vec!["metering", "audio-io"]);
+        assert_eq!(
+            kernel.boot_order(),
+            vec!["metering", "debug-tap", "audio-io"]
+        );
     }
 
     #[test]
@@ -166,13 +189,18 @@ mod tests {
         // Declared out of dependency order: the kernel's topological sort fixes it.
         let mut kernel = Kernel::new();
         kernel.add_plugin(Box::new(AudioIoPlugin::new())).unwrap();
+        kernel.add_plugin(Box::new(DebugTapPlugin::new())).unwrap();
         kernel.add_plugin(Box::new(MeteringPlugin::new())).unwrap();
         kernel.boot().unwrap();
-        assert_eq!(kernel.boot_order(), vec!["metering", "audio-io"]);
+        assert_eq!(
+            kernel.boot_order(),
+            vec!["debug-tap", "metering", "audio-io"],
+            "dependencies first; among equals, registration order"
+        );
     }
 
     #[test]
-    fn booting_without_metering_is_a_dependency_error_not_a_silent_downgrade() {
+    fn booting_without_a_dependency_is_an_error_not_a_silent_downgrade() {
         let mut kernel = Kernel::new();
         kernel.add_plugin(Box::new(AudioIoPlugin::new())).unwrap();
         let err = kernel.boot().unwrap_err();
@@ -180,6 +208,16 @@ mod tests {
             err,
             KernelError::MissingDependency { ref plugin, ref dependency }
                 if plugin == "audio-io" && dependency == "metering"
+        ));
+
+        let mut kernel = Kernel::new();
+        kernel.add_plugin(Box::new(MeteringPlugin::new())).unwrap();
+        kernel.add_plugin(Box::new(AudioIoPlugin::new())).unwrap();
+        let err = kernel.boot().unwrap_err();
+        assert!(matches!(
+            err,
+            KernelError::MissingDependency { ref plugin, ref dependency }
+                if plugin == "audio-io" && dependency == "debug-tap"
         ));
     }
 
@@ -203,6 +241,33 @@ mod tests {
             !tap.is_available(),
             "audio-io should have claimed the producer during start"
         );
+    }
+
+    #[test]
+    fn starting_claims_the_debug_tap_and_parks_it_for_the_first_stream() {
+        let kernel = booted();
+        let handoff = kernel.ctx().services.get::<DebugTapHandoff>().unwrap();
+        assert!(
+            !handoff.is_available(),
+            "audio-io should have claimed the tap during start"
+        );
+        let service = kernel.ctx().services.get::<AudioIoService>().unwrap();
+        assert!(service.has_debug_tap());
+    }
+
+    #[test]
+    fn a_missing_debug_tap_is_a_warning_not_a_boot_failure() {
+        // The tap taken by somebody else before audio-io starts: the stream
+        // must still come up, just without capture support.
+        let mut kernel = Kernel::new();
+        kernel.add_plugin(Box::new(MeteringPlugin::new())).unwrap();
+        kernel.add_plugin(Box::new(DebugTapPlugin::new())).unwrap();
+        kernel.add_plugin(Box::new(AudioIoPlugin::new())).unwrap();
+        kernel.boot().unwrap();
+
+        let service = kernel.ctx().services.get::<AudioIoService>().unwrap();
+        assert!(service.has_debug_tap());
+        assert!(!service.is_running());
     }
 
     #[test]

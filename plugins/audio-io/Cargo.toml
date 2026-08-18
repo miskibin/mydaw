@@ -13,6 +13,10 @@ mydaw-ipc-bridge.workspace = true
 # For the `MeterTap` service type. The manifest dependency on "metering"
 # guarantees the service exists by the time this plugin starts.
 mydaw-plugin-metering.workspace = true
+# For the `DebugTapHandoff` service type. Same story as metering: the manifest
+# dependency on "debug-tap" guarantees the service exists when this plugin
+# starts.
+mydaw-plugin-debug-tap.workspace = true
 
 cpal.workspace = true
 # cpal's own `realtime` feature is off (it is not a default), so promotion is
@@ -27,3 +31,5 @@ thiserror.workspace = true
 # The RT-path test drives a real node through `run_block`. No audio device is
 # opened, so this suite runs on a headless CI machine.
 mydaw-plugin-test-tone.workspace = true
+# `tests/debug_tap_capture.rs` asserts that -inf dBFS survives serialisation.
+serde_json.workspace = true

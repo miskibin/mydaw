@@ -12,6 +12,7 @@
 //!   GraphHandle::install  ---- rtrb ---->    RtGraphSlot::poll_swap
 //!   RtCommandProducer     ---- rtrb ---->    drain_commands
 //!   MeterThrottle::poll   <--- rtrb -----    MeterProducer::push
+//!   DebugTapService       <--- rtrb -----    TapRtSide::push_block
 //!   Arc<TransportClock>   <-- atomics -->    advance / snapshot
 //! ```
 //! Every mutex in this file is locked from ordinary threads only: `start`,
@@ -31,6 +32,7 @@ use std::time::Duration;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use mydaw_ipc_bridge::MeterProducer;
+use mydaw_plugin_debug_tap::TapRtSide;
 use mydaw_rt_core::{
     graph_channel, rt_channel, GcThread, GraphHandle, GraphInstallError, GraphSpec, RtCommand,
     RtCommandProducer, TransportClock,
@@ -123,25 +125,32 @@ struct Session {
     /// The callback hands the meter producer back here when it is dropped, so a
     /// later `start()` can reuse it. See [`RtStateCarrier`].
     meters_returned: mpsc::Receiver<MeterProducer>,
+    /// Same, for the debug capture tap.
+    debug_tap_returned: mpsc::Receiver<TapRtSide>,
 }
 
-/// Owns [`RtState`] inside the cpal closure and returns the meter producer on
-/// teardown.
+/// Owns [`RtState`] inside the cpal closure and returns the borrowed RT halves
+/// on teardown.
 ///
-/// The metering plugin hands out its producer exactly once (SPSC), so if stopping
-/// the stream simply dropped it, the meters would be dead for the rest of the
-/// process. This carrier makes stop/start cycles lossless.
+/// The metering and debug-tap plugins hand out their producers exactly once
+/// (SPSC), so if stopping the stream simply dropped them, meters and captures
+/// would be dead for the rest of the process. This carrier makes stop/start
+/// cycles lossless.
 struct RtStateCarrier {
     state: RtState,
     meters_returned: mpsc::SyncSender<MeterProducer>,
+    debug_tap_returned: mpsc::SyncSender<TapRtSide>,
 }
 
 impl Drop for RtStateCarrier {
     fn drop(&mut self) {
+        // Bounded channels, never contended: a failed send just means nobody
+        // is listening, which is fine at teardown.
         if let Some(producer) = self.state.take_meters() {
-            // Bounded channel, never contended: a failed send just means nobody
-            // is listening, which is fine at teardown.
             let _ = self.meters_returned.try_send(producer);
+        }
+        if let Some(tap) = self.state.take_debug_tap() {
+            let _ = self.debug_tap_returned.try_send(tap);
         }
     }
 }
@@ -158,6 +167,8 @@ pub struct AudioIoService {
     stats: Arc<AudioIoStats>,
     /// The meter producer between stream lifetimes.
     meters: Mutex<Option<MeterProducer>>,
+    /// The debug capture tap between stream lifetimes.
+    debug_tap: Mutex<Option<TapRtSide>>,
     session: Mutex<Option<Session>>,
     /// Mirrors `session.is_some()` so [`Self::is_running`] needs no lock.
     running: AtomicBool,
@@ -177,6 +188,7 @@ impl AudioIoService {
             gc: GcThread::spawn(),
             stats: Arc::new(AudioIoStats::default()),
             meters: Mutex::new(None),
+            debug_tap: Mutex::new(None),
             session: Mutex::new(None),
             running: AtomicBool::new(false),
         }
@@ -189,6 +201,20 @@ impl AudioIoService {
     /// meters simply stay at zero.
     pub fn attach_meters(&self, producer: MeterProducer) {
         *self.meters.lock() = Some(producer);
+    }
+
+    /// Give the service the debug tap's RT side.
+    ///
+    /// Called once by the plugin during kernel start, with the RT side taken
+    /// from `debug-tap`'s `DebugTapHandoff`. Without it the stream still runs;
+    /// `debug_capture` simply reports that the engine never started.
+    pub fn attach_debug_tap(&self, tap: TapRtSide) {
+        *self.debug_tap.lock() = Some(tap);
+    }
+
+    /// Whether a debug tap is parked here, waiting for the next stream.
+    pub fn has_debug_tap(&self) -> bool {
+        self.debug_tap.lock().is_some()
     }
 
     /// Counters maintained by the audio thread.
@@ -313,11 +339,13 @@ impl AudioIoService {
             graph_channel(self.config.graph_queue_capacity, self.gc.handle());
         let (command_tx, command_rx) = rt_channel::<RtCommand>(self.config.command_queue_capacity);
         let (meters_return_tx, meters_returned) = mpsc::sync_channel(1);
+        let (tap_return_tx, debug_tap_returned) = mpsc::sync_channel(1);
 
         let state = RtState::new(RtStateParams {
             graph: graph_slot,
             commands: command_rx,
             meters: self.meters.lock().take(),
+            debug_tap: self.debug_tap.lock().take(),
             transport: Arc::clone(&transport),
             sample_rate: sample_rate as f64,
             out_channels: channels as usize,
@@ -330,6 +358,7 @@ impl AudioIoService {
         let mut carrier = RtStateCarrier {
             state,
             meters_returned: meters_return_tx,
+            debug_tap_returned: tap_return_tx,
         };
         let out_channels = channels as usize;
         let error_stats = Arc::clone(&self.stats);
@@ -372,6 +401,7 @@ impl AudioIoService {
             commands: command_tx,
             info: info.clone(),
             meters_returned,
+            debug_tap_returned,
         });
         self.running.store(true, Ordering::Release);
 
@@ -405,6 +435,13 @@ impl AudioIoService {
         {
             Ok(producer) => *self.meters.lock() = Some(producer),
             Err(_) => log::debug!("meter producer not returned by the audio callback"),
+        }
+        match session
+            .debug_tap_returned
+            .recv_timeout(Duration::from_millis(250))
+        {
+            Ok(tap) => *self.debug_tap.lock() = Some(tap),
+            Err(_) => log::debug!("debug tap not returned by the audio callback"),
         }
 
         log::info!("audio output stopped: {}", session.info.device_name);
@@ -463,6 +500,20 @@ mod tests {
         let service = AudioIoService::default();
         service.attach_meters(producer);
         assert!(service.meters.lock().is_some());
+    }
+
+    #[test]
+    fn an_attached_debug_tap_survives_until_a_stream_takes_it() {
+        let (tap, consumer) = mydaw_plugin_debug_tap::debug_tap_channel(64);
+        let service = AudioIoService::default();
+        assert!(!service.has_debug_tap());
+        service.attach_debug_tap(tap);
+        assert!(service.has_debug_tap());
+        assert_eq!(
+            consumer.shared().sample_rate(),
+            0.0,
+            "the rate is only known once a stream is built"
+        );
     }
 
     #[test]

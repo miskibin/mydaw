@@ -4,13 +4,27 @@
 //! pile of plugins into an application:
 //!
 //! 1. build a [`Kernel`](mydaw_kernel::Kernel) and register the Phase 0 plugin
-//!    set (metering, test-tone, audio-io, host-clap, host-vst3, plugin-windows),
+//!    set (metering, debug-tap, test-tone, audio-io, host-clap, host-vst3,
+//!    plugin-windows),
 //! 2. boot it -- dependency order and lifecycle are the kernel's problem,
 //! 3. snapshot plugins and contributed panels for the webview,
 //! 4. open the audio device and publish the test-tone graph,
-//! 5. run a Tauri v2 window over the SolidJS UI in `ui/`, exposing four commands
+//! 5. run a Tauri v2 window over the SolidJS UI in `ui/`, exposing five commands
 //!    and one meter stream,
 //! 6. stop audio and shut the kernel down when the window closes.
+//!
+//! # Headless capture mode
+//! With [`DEBUG_CAPTURE_ENV`] set, steps 5 and 6 are replaced by: play, capture
+//! that many seconds of the engine's output, write a WAV/PNG/JSON set under
+//! `.debug/captures/`, print a report between
+//! [`REPORT_BEGIN`]/[`REPORT_END`] markers, and exit -- no window is created at
+//! all. That is the interface an automated agent uses to *see* what the DAW is
+//! playing:
+//!
+//! ```text
+//! MYDAW_DEBUG_CAPTURE=2 cargo run -p mydaw-app --features custom-protocol
+//! ```
+//! Exit code 0 if audio was captured, 1 if it was not.
 //!
 //! The kernel deliberately does *not* live in Tauri's managed state: plugins are
 //! not `Send`. It stays on the main thread, owned by the run loop; the UI-facing
@@ -24,11 +38,18 @@
 //! ```
 
 mod commands;
+pub mod debug_capture;
 mod dto;
 mod graph;
 mod meters;
 mod state;
 
+pub use debug_capture::{
+    capture_root, capture_to_disk, captures_dir, debug_capture_seconds_from_env,
+    parse_capture_seconds, report_text, run_headless_capture, CaptureArtifacts, CaptureOutcome,
+    CaptureReportDto, DebugCaptureError, CAPTURE_ROOT_ENV, DEBUG_CAPTURE_ENV, REPORT_BEGIN,
+    REPORT_END,
+};
 pub use dto::{ClapPluginInfoDto, MeterFrameDto};
 pub use graph::{
     clap_effect_node, clap_fx_spec_from_env, install_tone_graph, load_env_clap_effect,
@@ -84,6 +105,27 @@ pub fn run() -> ExitCode {
         Err(err) => log::warn!("audio output unavailable ({err}); running without sound"),
     }
 
+    // Headless capture: no window, no event loop, no user. Everything the
+    // capture needs (device, graph, transport) is already up, so this runs
+    // here and the process exits without ever creating a webview.
+    match debug_capture_seconds_from_env() {
+        Some(Ok(seconds)) => {
+            let captured = run_headless_capture(&state, seconds);
+            shutdown(&state, clap_fx.as_mut(), &mut kernel);
+            return if captured {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            };
+        }
+        Some(Err(message)) => {
+            eprintln!("MYDAW: {message}");
+            shutdown(&state, clap_fx.as_mut(), &mut kernel);
+            return ExitCode::FAILURE;
+        }
+        None => {}
+    }
+
     // Handles for the shutdown path, cloned before `state` moves into Tauri.
     let meters = std::sync::Arc::clone(state.meters());
     let audio = std::sync::Arc::clone(state.audio());
@@ -95,6 +137,7 @@ pub fn run() -> ExitCode {
             commands::get_clap_plugins,
             commands::transport_play,
             commands::transport_stop,
+            commands::debug_capture,
             commands::subscribe_meters,
         ])
         .build(tauri::generate_context!());
@@ -129,6 +172,20 @@ pub fn run() -> ExitCode {
     });
 
     ExitCode::SUCCESS
+}
+
+/// Tear everything down in the same order the window-close path uses.
+fn shutdown(
+    state: &AppState,
+    clap_fx: Option<&mut mydaw_plugin_host_clap::LoadedClapPlugin>,
+    kernel: &mut mydaw_kernel::Kernel,
+) {
+    state.meters().shutdown();
+    // Closing the stream retires the graph, which is what eventually drops the
+    // CLAP node and sends its processor back to the main thread.
+    state.audio().stop();
+    shutdown_clap(clap_fx);
+    kernel.shutdown();
 }
 
 /// Deactivate and destroy a hosted CLAP plugin, on the main thread.

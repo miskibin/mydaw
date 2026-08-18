@@ -25,6 +25,7 @@ mydaw-kernel.workspace = true
 mydaw-rt-core.workspace = true
 mydaw-ipc-bridge.workspace = true
 mydaw-plugin-metering.workspace = true
+mydaw-plugin-debug-tap.workspace = true
 mydaw-plugin-test-tone.workspace = true
 mydaw-plugin-audio-io.workspace = true
 mydaw-plugin-host-clap.workspace = true
@@ -34,6 +35,8 @@ mydaw-plugin-windows.workspace = true
 # --- shell ---
 tauri = { version = "2", features = [] }
 serde.workspace = true
+# The debug-capture command writes stats.json and the headless report.
+serde_json.workspace = true
 log.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true

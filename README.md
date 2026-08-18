@@ -6,6 +6,16 @@ Tauri v2 + SolidJS on the front, a lock-free real-time audio graph behind the wa
 
 Status: **Phase 0 — scaffold.** It boots, lists its plugins, plays a 440 Hz test tone and streams
 meters to the UI. No sequencing, no mixer, no project files yet.
+
+Seeing what it plays, without speakers:
+
+```sh
+MYDAW_DEBUG_CAPTURE=2 cargo run -p mydaw-app --features custom-protocol
+```
+
+captures two seconds of the output bus into `.debug/captures/<timestamp>/` — a float WAV, a
+waveform/spectrum PNG with labelled axes, and a statistics JSON — prints a report and exits.
+See [`docs/superpowers/specs/2026-08-18-debug-tap-harness.md`](docs/superpowers/specs/2026-08-18-debug-tap-harness.md).
 Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-design.md`](docs/superpowers/specs/2026-08-18-mydaw-scaffold-design.md).
 
 ## Layout
@@ -16,6 +26,7 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `crates/rt-core` | RT primitives: `RtNode`, serial graph, lock-free graph swap, `rtrb` command queue, transport clock |
 | `crates/ipc-bridge` | Kernel ⇄ webview data: serde DTOs, `UiSnapshot`, 30 Hz meter throttle. Tauri-free by design |
 | `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
+| `plugins/debug-tap` | RT-safe capture of the output bus, plus WAV / annotated PNG / statistics — so the engine can be *inspected* without ears |
 | `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
 | `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
 | `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
@@ -56,7 +67,7 @@ pnpm --dir ui build
 cargo run -p mydaw-app --features custom-protocol
 ```
 
-The window shows the kernel status panel (six plugins, all `STARTED`), a meters panel and a
+The window shows the kernel status panel (seven plugins, all `STARTED`), a meters panel and a
 transport bar. **Play** starts the transport and the test tone; **Stop** silences it and keeps the
 playhead where it is. With no audio device the shell logs a warning and runs on without sound.
 
@@ -86,10 +97,12 @@ CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github
 ## How the shell fits together
 
 ```text
-app/src/state.rs     boot_kernel() -> six plugins -> UiSnapshot (+ the shell's kernel-status panel)
-app/src/graph.rs     test-tone -> [CLAP effect] -> TransportGate  ->  AudioIoService::install_graph
-app/src/meters.rs    MeterThrottle -> pump thread (15 ms) -> Channel<MeterFrameDto>
-app/src/commands.rs  get_ui_snapshot | get_clap_plugins | transport_play | transport_stop | subscribe_meters
+app/src/state.rs          boot_kernel() -> seven plugins -> UiSnapshot (+ the shell's kernel-status panel)
+app/src/graph.rs          test-tone -> [CLAP effect] -> TransportGate  ->  AudioIoService::install_graph
+app/src/meters.rs         MeterThrottle -> pump thread (15 ms) -> Channel<MeterFrameDto>
+app/src/debug_capture.rs  DebugTapService -> WAV + PNG + stats.json under .debug/captures/
+app/src/commands.rs       get_ui_snapshot | get_clap_plugins | transport_play | transport_stop |
+                          debug_capture | subscribe_meters
 ```
 
 The kernel itself never enters Tauri's managed state (`Box<dyn Plugin>` is not `Send`); it stays on

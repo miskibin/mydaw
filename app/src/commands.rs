@@ -9,6 +9,7 @@ use mydaw_ipc_bridge::UiSnapshot;
 use tauri::ipc::Channel;
 use tauri::State;
 
+use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{ClapPluginInfoDto, MeterFrameDto};
 use crate::state::AppState;
 
@@ -46,6 +47,25 @@ pub fn transport_play(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 pub fn transport_stop(state: State<'_, AppState>) -> Result<(), String> {
     state.set_playing(false).map_err(|err| err.to_string())
+}
+
+/// Capture `seconds` of the engine's output and write a WAV, an annotated PNG
+/// and a statistics JSON under `.debug/captures/<timestamp>/`.
+///
+/// Blocks for roughly `seconds` while the audio thread fills the tap, so it
+/// runs on Tauri's blocking pool (`async` + a blocking body) rather than on the
+/// main thread: a two-second capture must not freeze the window.
+///
+/// Errors are strings because the UI shows them in the status bar as-is; the
+/// typed variants live in [`crate::debug_capture::DebugCaptureError`].
+#[tauri::command]
+pub async fn debug_capture(
+    state: State<'_, AppState>,
+    seconds: f32,
+) -> Result<CaptureReportDto, String> {
+    let outcome = capture_to_disk(state.debug_tap(), seconds, &capture_root())
+        .map_err(|err| err.to_string())?;
+    Ok(CaptureReportDto::from(&outcome))
 }
 
 /// Stream throttled meter frames into `channel` until the webview drops it.

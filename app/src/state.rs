@@ -5,6 +5,7 @@ use std::sync::Arc;
 use mydaw_ipc_bridge::{PanelManifestDto, UiSnapshot};
 use mydaw_kernel::{Kernel, KernelError};
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoPlugin, AudioIoService, StreamInfo};
+use mydaw_plugin_debug_tap::{DebugTapPlugin, DebugTapService};
 use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin, LoadedClapPlugin};
 use mydaw_plugin_host_vst3::HostVst3Plugin;
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
@@ -40,6 +41,7 @@ pub enum StartupError {
 pub fn boot_kernel() -> Result<Kernel, KernelError> {
     let mut kernel = Kernel::new();
     kernel.add_plugin(Box::new(MeteringPlugin::new()))?;
+    kernel.add_plugin(Box::new(DebugTapPlugin::new()))?;
     kernel.add_plugin(Box::new(TestTonePlugin::new()))?;
     kernel.add_plugin(Box::new(AudioIoPlugin::new()))?;
     kernel.add_plugin(Box::new(HostClapPlugin::new()))?;
@@ -80,6 +82,9 @@ pub struct AppState {
     tone: Arc<TestToneFactory>,
     clap: Arc<ClapHostService>,
     meters: Arc<MeterPump>,
+    /// The audio inspection harness. Non-RT, `Send + Sync`, and safe to call
+    /// from a Tauri command thread.
+    debug_tap: Arc<DebugTapService>,
 }
 
 impl AppState {
@@ -104,6 +109,9 @@ impl AppState {
         let meter_output = services
             .get::<MeterOutput>()
             .ok_or(StartupError::MissingService("MeterOutput"))?;
+        let debug_tap = services
+            .get::<DebugTapService>()
+            .ok_or(StartupError::MissingService("DebugTapService"))?;
 
         let throttle = meter_output.take();
         if throttle.is_none() {
@@ -116,6 +124,7 @@ impl AppState {
             tone,
             clap,
             meters: MeterPump::new(throttle),
+            debug_tap,
         })
     }
 
@@ -199,6 +208,12 @@ impl AppState {
     pub fn audio(&self) -> &Arc<AudioIoService> {
         &self.audio
     }
+
+    /// The audio capture harness behind `debug_capture` and
+    /// `MYDAW_DEBUG_CAPTURE`.
+    pub fn debug_tap(&self) -> &Arc<DebugTapService> {
+        &self.debug_tap
+    }
 }
 
 #[cfg(test)]
@@ -213,14 +228,15 @@ mod tests {
             kernel.boot_order(),
             vec![
                 "metering",
+                "debug-tap",
                 "test-tone",
                 "host-clap",
                 "host-vst3",
                 "plugin-windows",
                 "audio-io",
             ],
-            "audio-io waits for metering; Kahn's algorithm keeps the rest in \
-             registration order"
+            "audio-io waits for metering and debug-tap; Kahn's algorithm keeps \
+             the rest in registration order"
         );
         assert!(kernel
             .plugin_statuses()
@@ -229,11 +245,11 @@ mod tests {
     }
 
     #[test]
-    fn the_snapshot_lists_six_plugins_and_the_shell_panel() {
+    fn the_snapshot_lists_every_plugin_and_the_shell_panel() {
         let kernel = boot_kernel().unwrap();
         let snapshot = ui_snapshot(&kernel);
 
-        assert_eq!(snapshot.plugins.len(), 6);
+        assert_eq!(snapshot.plugins.len(), 7);
         assert!(snapshot
             .plugins
             .iter()
@@ -248,7 +264,8 @@ mod tests {
         assert_eq!(
             components,
             vec!["kernel-status", "meters", "clap-browser"],
-            "panels appear in kernel boot order after the shell's own"
+            "panels appear in kernel boot order after the shell's own; \
+             debug-tap deliberately contributes none"
         );
     }
 
@@ -297,6 +314,20 @@ mod tests {
             state.clap_plugins(true).len(),
             plugins.len(),
             "a rescan of an unchanged machine finds the same plugins"
+        );
+    }
+
+    #[test]
+    fn the_debug_tap_service_is_available_and_idle_after_boot() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        let debug = state.debug_tap();
+        assert!(!debug.is_armed());
+        assert_eq!(debug.dropped(), 0);
+        assert_eq!(
+            debug.sample_rate(),
+            0.0,
+            "no stream has opened, so no rate is known yet"
         );
     }
 

@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use mydaw_ipc_bridge::{MeterFrame, MeterProducer};
+use mydaw_plugin_debug_tap::TapRtSide;
 use mydaw_rt_core::{
     disable_denormals, drain_commands, AudioBuffers, ProcessCtx, RtCommandConsumer, RtGraphSlot,
     TransportClock, CHANNELS,
@@ -96,6 +97,9 @@ pub struct RtStateParams {
     pub commands: RtCommandConsumer,
     /// Meter queue producer, if metering is wired up.
     pub meters: Option<MeterProducer>,
+    /// Debug capture tap, if `debug-tap` is wired up. Costs one relaxed atomic
+    /// load per block while nobody is capturing.
+    pub debug_tap: Option<TapRtSide>,
     /// Shared transport, advanced by the callback and read by everyone else.
     pub transport: Arc<TransportClock>,
     /// Device sample rate, in Hz.
@@ -116,6 +120,7 @@ pub struct RtState {
     graph: RtGraphSlot,
     commands: RtCommandConsumer,
     meters: Option<MeterProducer>,
+    debug_tap: Option<TapRtSide>,
     transport: Arc<TransportClock>,
     buffers: AudioBuffers,
     sample_rate: f64,
@@ -131,11 +136,20 @@ pub struct RtState {
 
 impl RtState {
     /// Build the RT state. **Non-RT**: allocates the audio buffers.
+    ///
+    /// Also publishes the negotiated sample rate to the debug tap. The capture
+    /// service has no other way to learn it -- it never sees the device -- and
+    /// doing it here means every stream, including a restart on a different
+    /// device, reports the rate its samples were actually produced at.
     pub fn new(params: RtStateParams) -> Self {
+        if let Some(tap) = params.debug_tap.as_ref() {
+            tap.set_sample_rate(params.sample_rate);
+        }
         Self {
             graph: params.graph,
             commands: params.commands,
             meters: params.meters,
+            debug_tap: params.debug_tap,
             transport: params.transport,
             buffers: AudioBuffers::new(params.max_block.max(1)),
             sample_rate: params.sample_rate,
@@ -168,6 +182,15 @@ impl RtState {
     /// after the first stop/start cycle.
     pub fn take_meters(&mut self) -> Option<MeterProducer> {
         self.meters.take()
+    }
+
+    /// Give the debug tap back so a later `start()` can reuse it.
+    ///
+    /// Same reasoning as [`take_meters`](Self::take_meters): the tap's RT side
+    /// is handed out once, so swallowing it on teardown would leave the capture
+    /// harness dead for the rest of the process.
+    pub fn take_debug_tap(&mut self) -> Option<TapRtSide> {
+        self.debug_tap.take()
     }
 
     /// Promote this thread and disable denormals. Idempotent; call from the
@@ -274,6 +297,16 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
         *sample = 0.0;
     }
 
+    // The debug capture tap sees exactly what the graph produced, before the
+    // device's channel layout is applied: a capture is always stereo, even on a
+    // 5.1 card. Disarmed (the normal case) this is one relaxed atomic load.
+    //
+    // Disjoint field borrows: `buffers` is read while `debug_tap` is mutated.
+    if let Some(tap) = state.debug_tap.as_mut() {
+        let [left, right] = state.buffers.as_slices();
+        tap.push_block(left, right);
+    }
+
     state.transport.advance(frames);
     state.stats.blocks_processed.fetch_add(1, Ordering::Relaxed);
 
@@ -301,12 +334,16 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
 mod tests {
     use super::*;
     use mydaw_ipc_bridge::meter_channel;
+    use mydaw_plugin_debug_tap::{debug_tap_channel, TapConsumer};
     use mydaw_plugin_test_tone::{TestToneNode, DEFAULT_AMPLITUDE};
     use mydaw_rt_core::{graph_channel, rt_channel, GcThread, GraphSpec, RtCommand};
     use std::time::Instant;
 
     const SR: f64 = 48_000.0;
     const MAX_BLOCK: usize = 512;
+    /// Samples, not frames. Comfortably larger than any block these tests
+    /// push, so a capture assertion never fails for lack of ring space.
+    const TAP_CAPACITY: usize = 16_384;
 
     /// A test rig with every non-RT half kept around so the test can poke the RT
     /// state the same way the service does.
@@ -315,6 +352,7 @@ mod tests {
         graph: mydaw_rt_core::GraphHandle,
         commands: mydaw_rt_core::RtCommandProducer,
         throttle: mydaw_ipc_bridge::MeterThrottle,
+        tap: TapConsumer,
         transport: Arc<TransportClock>,
         stats: Arc<AudioIoStats>,
         _gc: GcThread,
@@ -325,6 +363,7 @@ mod tests {
         let (graph, slot) = graph_channel(4, gc.handle());
         let (cmd_tx, cmd_rx) = rt_channel::<RtCommand>(64);
         let (meter_tx, throttle) = meter_channel(64);
+        let (tap_rt, tap) = debug_tap_channel(TAP_CAPACITY);
         let transport = Arc::new(TransportClock::new(SR));
         let stats = Arc::new(AudioIoStats::default());
 
@@ -332,6 +371,7 @@ mod tests {
             graph: slot,
             commands: cmd_rx,
             meters: Some(meter_tx),
+            debug_tap: Some(tap_rt),
             transport: Arc::clone(&transport),
             sample_rate: SR,
             out_channels,
@@ -344,6 +384,7 @@ mod tests {
             graph,
             commands: cmd_tx,
             throttle,
+            tap,
             transport,
             stats,
             _gc: gc,
@@ -493,6 +534,7 @@ mod tests {
             graph: slot,
             commands: cmd_rx,
             meters: Some(meter_tx),
+            debug_tap: None,
             transport: Arc::new(TransportClock::new(SR)),
             sample_rate: SR,
             out_channels: 2,
@@ -520,6 +562,132 @@ mod tests {
         let mut out = vec![0.0_f32; 64 * 2];
         run_block(&mut rig.state, &mut out);
         assert_eq!(rig.stats.blocks_processed(), 1);
+    }
+
+    #[test]
+    fn the_debug_tap_learns_the_sample_rate_when_the_state_is_built() {
+        let rig = rig(2);
+        assert_eq!(
+            rig.tap.shared().sample_rate(),
+            SR,
+            "the capture service has no other way to learn the device rate"
+        );
+    }
+
+    #[test]
+    fn a_disarmed_debug_tap_receives_nothing() {
+        let mut rig = rig(2);
+        install_test_tone(&mut rig);
+        let mut out = vec![0.0_f32; 128 * 2];
+        for _ in 0..8 {
+            run_block(&mut rig.state, &mut out);
+        }
+        assert_eq!(rig.tap.available(), 0, "capture must be opt-in");
+        assert_eq!(rig.tap.shared().dropped(), 0);
+    }
+
+    #[test]
+    fn an_armed_debug_tap_receives_the_post_graph_stereo_bus() {
+        let mut rig = rig(2);
+        install_test_tone(&mut rig);
+        rig.tap.shared().arm();
+
+        let mut out = vec![0.0_f32; 128 * 2];
+        run_block(&mut rig.state, &mut out);
+        rig.tap.shared().disarm();
+
+        let mut captured = Vec::new();
+        rig.tap.drain_into(&mut captured, usize::MAX);
+        assert_eq!(captured.len(), 128 * 2, "one stereo frame per device frame");
+        assert_eq!(
+            captured, out,
+            "on a stereo device the capture is the device buffer, sample for sample"
+        );
+        assert!(captured.iter().any(|s| s.abs() > 1e-6));
+    }
+
+    #[test]
+    fn the_debug_tap_stays_stereo_on_a_surround_device() {
+        let mut rig = rig(6);
+        install_test_tone(&mut rig);
+        rig.tap.shared().arm();
+
+        let mut out = vec![0.0_f32; 64 * 6];
+        run_block(&mut rig.state, &mut out);
+        rig.tap.shared().disarm();
+
+        let mut captured = Vec::new();
+        rig.tap.drain_into(&mut captured, usize::MAX);
+        assert_eq!(
+            captured.len(),
+            64 * 2,
+            "the tap mirrors the engine bus, not the device layout"
+        );
+        for (frame, pair) in captured.chunks_exact(2).enumerate() {
+            assert_eq!(pair[0], out[frame * 6]);
+            assert_eq!(pair[1], out[frame * 6 + 1]);
+        }
+    }
+
+    #[test]
+    fn the_debug_tap_captures_exactly_the_frames_that_were_processed() {
+        let mut rig = rig(2);
+        install_test_tone(&mut rig);
+        rig.tap.shared().arm();
+
+        // Twice max_block: the graph only produced MAX_BLOCK frames, and that
+        // is what the capture must contain -- not the silenced tail.
+        let mut out = vec![0.0_f32; MAX_BLOCK * 2 * 2];
+        run_block(&mut rig.state, &mut out);
+        rig.tap.shared().disarm();
+
+        let mut captured = Vec::new();
+        rig.tap.drain_into(&mut captured, usize::MAX);
+        assert_eq!(captured.len(), MAX_BLOCK * 2);
+    }
+
+    #[test]
+    fn the_debug_tap_is_handed_back_when_the_state_is_torn_down() {
+        let mut rig = rig(2);
+        assert!(rig.state.take_debug_tap().is_some());
+        assert!(rig.state.take_debug_tap().is_none());
+
+        // Still processes fine without a debug tap.
+        let mut out = vec![0.0_f32; 64 * 2];
+        run_block(&mut rig.state, &mut out);
+        assert_eq!(rig.stats.blocks_processed(), 1);
+    }
+
+    #[test]
+    fn a_full_tap_ring_drops_samples_instead_of_stalling_the_callback() {
+        let gc = GcThread::spawn();
+        let (graph, slot) = graph_channel(4, gc.handle());
+        let (_cmd_tx, cmd_rx) = rt_channel::<RtCommand>(8);
+        let (meter_tx, _throttle) = meter_channel(64);
+        // Room for 32 stereo frames; each block pushes 128.
+        let (tap_rt, tap) = debug_tap_channel(64);
+        let stats = Arc::new(AudioIoStats::default());
+        let mut state = RtState::new(RtStateParams {
+            graph: slot,
+            commands: cmd_rx,
+            meters: Some(meter_tx),
+            debug_tap: Some(tap_rt),
+            transport: Arc::new(TransportClock::new(SR)),
+            sample_rate: SR,
+            out_channels: 2,
+            max_block: MAX_BLOCK,
+            stats: Arc::clone(&stats),
+        });
+        drop(graph);
+        tap.shared().arm();
+
+        let mut out = vec![0.0_f32; 128 * 2];
+        for _ in 0..4 {
+            run_block(&mut state, &mut out);
+        }
+
+        assert_eq!(stats.blocks_processed(), 4, "the callback never stalled");
+        assert!(tap.shared().dropped() > 0, "the overflow must be counted");
     }
 
     #[test]

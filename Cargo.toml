@@ -19,12 +19,16 @@ cpal = "0.18"                    # cross-platform device I/O; WASAPI on Windows
 audio_thread_priority = "0.37"   # promote the callback thread to MMCSS/Pro Audio
 # --- plugin hosting ---
 clack-host = "0.1"  # safe CLAP host bindings (discovery in Phase 0, hosting in spike 2)
+# --- analysis / debug harness (non-RT only) ---
+realfft = "3"      # real-input FFT for capture spectra (wraps rustfft)
+hound = "3"        # 32-bit float WAV writer/reader for captures
+png = "0.18"       # PNG encoder; the rasteriser is ours (plotters is far too heavy)
 # --- general ---
 thiserror = "2"
 log = "0.4"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"   # dev-only: DTO wire-shape tests
+serde_json = "1"   # DTO wire-shape tests, and the debug-tap axis/stats sidecars
 
 # --- internal crates ---
 mydaw-kernel = { path = "crates/kernel" }
@@ -33,6 +37,7 @@ mydaw-ipc-bridge = { path = "crates/ipc-bridge" }
 
 # --- internal plugins (registered by hand in `app/main.rs`) ---
 mydaw-plugin-metering = { path = "plugins/metering" }
+mydaw-plugin-debug-tap = { path = "plugins/debug-tap" }
 mydaw-plugin-test-tone = { path = "plugins/test-tone" }
 mydaw-plugin-audio-io = { path = "plugins/audio-io" }
 mydaw-plugin-host-clap = { path = "plugins/host-clap" }
