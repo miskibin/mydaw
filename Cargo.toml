@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+# TODO(next agent): once `plugins/*` and `app/` exist, extend this to the final list:
+#     members = ["crates/*", "plugins/*", "app"]
+# It is kept at `crates/*` for now because Cargo errors out on members that are
+# not present on disk, and those directories are owned by other agents.
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Shared dependency versions. Member crates opt in with `dep.workspace = true`.
+[workspace.dependencies]
+# --- real-time plumbing ---
+rtrb = "0.4"        # lock-free SPSC ring buffer (UI <-> RT thread)
+basedrop = "0.1"    # defer deallocation off the RT thread
+arc-swap = "1"      # atomic Arc publish; reserved for non-RT shared config snapshots
+# --- general ---
+thiserror = "2"
+log = "0.4"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"   # dev-only: DTO wire-shape tests
+
+# --- internal crates ---
+mydaw-kernel = { path = "crates/kernel" }
+mydaw-rt-core = { path = "crates/rt-core" }
+mydaw-ipc-bridge = { path = "crates/ipc-bridge" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

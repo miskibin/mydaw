@@ -1,0 +1,13 @@
+[package]
+name = "mydaw-kernel"
+description = "MYDAW microkernel: plugin lifecycle, typed service registry, non-RT event bus, contribution points."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-rt-core.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true

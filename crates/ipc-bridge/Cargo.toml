@@ -1,0 +1,15 @@
+[package]
+name = "mydaw-ipc-bridge"
+description = "Kernel <-> webview bridge logic for MYDAW: meter throttling and serde DTOs. Tauri-free by design."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+rtrb.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
