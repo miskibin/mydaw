@@ -16,6 +16,10 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use mydaw_app::{boot_kernel, AppState, MeterFrameDto};
+use mydaw_fixture_clap_gain::{GAIN, PLUGIN_ID};
+use mydaw_plugin_host_clap::test_util::{missing_fixture_message, stage_fixture_bundle};
+use mydaw_plugin_host_clap::LoadedClapPlugin;
+use mydaw_plugin_test_tone::DEFAULT_AMPLITUDE;
 use parking_lot::Mutex;
 
 /// Frames collected from the pump, newest last.
@@ -103,4 +107,83 @@ fn play_produces_a_tone_and_stop_silences_it() {
 
     state.meters().shutdown();
     state.audio().stop();
+}
+
+/// The spike's audible claim, measured through the device: inserting the -6 dB
+/// fixture makes the master meter read half as much.
+///
+/// Same shape as the test above (real device, real graph, real meter stream),
+/// with the CLAP plugin in the chain. `#[ignore]`d for the same reasons.
+///
+/// ```sh
+/// cargo test -p mydaw-app --test audio_end_to_end -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "opens the audio device and makes an audible tone"]
+fn a_clap_effect_in_the_live_graph_halves_the_master_meter() {
+    let scratch = std::env::temp_dir().join(format!("mydaw-e2e-clap-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("scratch dir");
+    let Some(bundle) = stage_fixture_bundle(&scratch) else {
+        eprintln!("{}", missing_fixture_message());
+        let _ = std::fs::remove_dir_all(&scratch);
+        return;
+    };
+
+    let kernel = boot_kernel().expect("kernel boots");
+    let state = AppState::from_kernel(&kernel).expect("services present");
+    let mut plugin = LoadedClapPlugin::load(&bundle, PLUGIN_ID).expect("fixture loads");
+
+    let info = match state.start_audio_with_effect(Some(&mut plugin)) {
+        Ok(info) => info,
+        Err(err) => {
+            eprintln!("no audio device ({err}); nothing to verify on this machine");
+            let _ = std::fs::remove_dir_all(&scratch);
+            return;
+        }
+    };
+    eprintln!(
+        "device: {} @ {} Hz, {} ch; CLAP effect '{}' active={}",
+        info.device_name,
+        info.sample_rate,
+        info.channels,
+        plugin.info().id,
+        plugin.is_active()
+    );
+    assert!(plugin.is_active(), "the effect must be in the live graph");
+
+    let collected = Arc::new(Collected::default());
+    let sink = Arc::clone(&collected);
+    state.meters().subscribe(Box::new(move |frame| {
+        sink.count.fetch_add(1, Ordering::Relaxed);
+        sink.frames.lock().push(frame);
+        true
+    }));
+
+    state.set_playing(true).expect("transport starts");
+    sleep(Duration::from_millis(2_000));
+    let playing: Vec<MeterFrameDto> = collected.frames.lock().drain(..).collect();
+    state.set_playing(false).expect("transport stops");
+
+    let loudest = playing.iter().fold(0.0_f32, |acc, f| acc.max(f.peak_l));
+    let expected = DEFAULT_AMPLITUDE * GAIN;
+    eprintln!("peak with the -6 dB fixture inserted: {loudest:.4}");
+    eprintln!("expected ~{expected:.4}; the tone alone peaks at ~{DEFAULT_AMPLITUDE:.4}");
+    assert!(
+        (loudest - expected).abs() < 0.01,
+        "expected a ~{expected} peak, got {loudest}"
+    );
+
+    sleep(Duration::from_millis(200));
+    let after: Vec<MeterFrameDto> = collected.frames.lock().drain(..).collect();
+    let tail = after.last().expect("frames keep arriving after stop");
+    assert_eq!(tail.peak_l, 0.0, "stop must silence the output");
+
+    state.meters().shutdown();
+    state.audio().stop();
+    assert!(
+        plugin.shutdown(),
+        "the plugin deactivates on the main thread after the graph is retired"
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
+    eprintln!("CLAP effect deactivated cleanly");
 }

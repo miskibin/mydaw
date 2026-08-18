@@ -29,8 +29,11 @@ mod graph;
 mod meters;
 mod state;
 
-pub use dto::MeterFrameDto;
-pub use graph::{install_tone_graph, tone_graph, TransportGate};
+pub use dto::{ClapPluginInfoDto, MeterFrameDto};
+pub use graph::{
+    clap_effect_node, clap_fx_spec_from_env, install_tone_graph, load_env_clap_effect,
+    parse_clap_fx_spec, tone_graph, ClapEffectSpec, ClapFxEnvError, TransportGate, CLAP_FX_ENV,
+};
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
 pub use state::{boot_kernel, ui_snapshot, AppState, StartupError, KERNEL_STATUS_PANEL};
 
@@ -63,7 +66,12 @@ pub fn run() -> ExitCode {
         }
     };
 
-    match state.start_audio() {
+    // Loaded before the device opens, activated after: the plugin needs the
+    // negotiated sample rate. Owned here, on the main thread, because a
+    // `LoadedClapPlugin` is `!Send` and must outlive the node it hands the graph.
+    let mut clap_fx = load_env_clap_effect(state.clap());
+
+    match state.start_audio_with_effect(clap_fx.as_mut()) {
         Ok(info) => log::info!(
             "audio output: {} @ {} Hz, {} ch (max block {}); test-tone graph installed",
             info.device_name,
@@ -84,6 +92,7 @@ pub fn run() -> ExitCode {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::get_ui_snapshot,
+            commands::get_clap_plugins,
             commands::transport_play,
             commands::transport_stop,
             commands::subscribe_meters,
@@ -96,6 +105,7 @@ pub fn run() -> ExitCode {
             eprintln!("MYDAW: could not create the application window: {err}");
             meters.shutdown();
             audio.stop();
+            shutdown_clap(clap_fx.as_mut());
             kernel.shutdown();
             return ExitCode::FAILURE;
         }
@@ -109,12 +119,34 @@ pub fn run() -> ExitCode {
         if matches!(event, tauri::RunEvent::Exit) {
             log::info!("shutting down");
             meters.shutdown();
+            // Closing the stream retires the graph, which is what eventually
+            // drops the CLAP node and sends its processor back here. Only then
+            // can the plugin be deactivated on this (main) thread.
             audio.stop();
+            shutdown_clap(clap_fx.as_mut());
             kernel.shutdown();
         }
     });
 
     ExitCode::SUCCESS
+}
+
+/// Deactivate and destroy a hosted CLAP plugin, on the main thread.
+///
+/// Waits for the node the audio graph owns to be retired by the `basedrop`
+/// collector; see `mydaw_plugin_host_clap::hosting` for why that wait exists.
+/// A timeout is not fatal -- clack leaks the instance rather than destroying it
+/// from the wrong thread -- but it is worth a log line.
+fn shutdown_clap(plugin: Option<&mut mydaw_plugin_host_clap::LoadedClapPlugin>) {
+    let Some(plugin) = plugin else { return };
+    if plugin.shutdown() {
+        log::info!("CLAP effect '{}' deactivated", plugin.info().id);
+    } else {
+        log::warn!(
+            "CLAP effect '{}' was still active at shutdown; its instance will be leaked",
+            plugin.info().id
+        );
+    }
 }
 
 /// `RUST_LOG` if set, otherwise `info`. `try_init` so a second call (tests,

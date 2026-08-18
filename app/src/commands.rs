@@ -9,13 +9,30 @@ use mydaw_ipc_bridge::UiSnapshot;
 use tauri::ipc::Channel;
 use tauri::State;
 
-use crate::dto::MeterFrameDto;
+use crate::dto::{ClapPluginInfoDto, MeterFrameDto};
 use crate::state::AppState;
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
 #[tauri::command]
 pub fn get_ui_snapshot(state: State<'_, AppState>) -> UiSnapshot {
     state.snapshot()
+}
+
+/// Installed CLAP plugins, for the browser panel.
+///
+/// The first call scans the standard plugin directories, which loads every
+/// installed bundle into this process; later calls serve the cache. Pass
+/// `rescan: true` (the panel's Rescan button) to walk the directories again --
+/// that is how a plugin installed while MYDAW was running becomes visible.
+///
+/// Marked `async` so Tauri runs it off the main thread: on a machine with a large
+/// plugin collection a scan takes long enough to stutter the window.
+#[tauri::command]
+pub async fn get_clap_plugins(
+    state: State<'_, AppState>,
+    rescan: bool,
+) -> Result<Vec<ClapPluginInfoDto>, String> {
+    Ok(state.clap_plugins(rescan))
 }
 
 /// Start the transport. The position is wherever it was left.

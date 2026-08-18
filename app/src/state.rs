@@ -5,13 +5,14 @@ use std::sync::Arc;
 use mydaw_ipc_bridge::{PanelManifestDto, UiSnapshot};
 use mydaw_kernel::{Kernel, KernelError};
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoPlugin, AudioIoService, StreamInfo};
-use mydaw_plugin_host_clap::HostClapPlugin;
+use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin, LoadedClapPlugin};
 use mydaw_plugin_host_vst3::HostVst3Plugin;
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::PluginWindowsPlugin;
 
-use crate::graph::install_tone_graph;
+use crate::dto::ClapPluginInfoDto;
+use crate::graph::{clap_effect_node, install_tone_graph};
 use crate::meters::MeterPump;
 
 /// Panel key of the kernel status view, mirrored in `ui/src/panels/registry.ts`.
@@ -77,6 +78,7 @@ pub struct AppState {
     snapshot: UiSnapshot,
     audio: Arc<AudioIoService>,
     tone: Arc<TestToneFactory>,
+    clap: Arc<ClapHostService>,
     meters: Arc<MeterPump>,
 }
 
@@ -96,6 +98,9 @@ impl AppState {
         let tone = services
             .get::<TestToneFactory>()
             .ok_or(StartupError::MissingService("TestToneFactory"))?;
+        let clap = services
+            .get::<ClapHostService>()
+            .ok_or(StartupError::MissingService("ClapHostService"))?;
         let meter_output = services
             .get::<MeterOutput>()
             .ok_or(StartupError::MissingService("MeterOutput"))?;
@@ -109,6 +114,7 @@ impl AppState {
             snapshot: ui_snapshot(kernel),
             audio,
             tone,
+            clap,
             meters: MeterPump::new(throttle),
         })
     }
@@ -122,11 +128,55 @@ impl AppState {
     /// Whatever cpal reports, plus [`AudioIoError::NotRunning`] if the stream died
     /// between opening it and installing the graph.
     pub fn start_audio(&self) -> Result<StreamInfo, AudioIoError> {
+        self.start_audio_with_effect(None)
+    }
+
+    /// Open the output device and publish `test-tone -> [effect] -> gate`.
+    ///
+    /// `effect` is activated *after* the device is open, because activation needs
+    /// the negotiated sample rate and block size. A plugin that will not activate
+    /// is logged and skipped -- the tone still plays.
+    ///
+    /// The caller keeps ownership of the [`LoadedClapPlugin`] (it is `!Send` and
+    /// must outlive the node it creates), which is why this takes `&mut` rather
+    /// than storing it: `AppState` lives in Tauri's managed state and must stay
+    /// `Send + Sync`.
+    ///
+    /// # Errors
+    /// Whatever cpal reports, plus [`AudioIoError::NotRunning`] if the stream died
+    /// between opening it and installing the graph.
+    pub fn start_audio_with_effect(
+        &self,
+        effect: Option<&mut LoadedClapPlugin>,
+    ) -> Result<StreamInfo, AudioIoError> {
         // Order is forced by the service: `install_graph` needs a live session,
         // because the graph channel is created together with the stream.
         let info = self.audio.start()?;
-        install_tone_graph(&self.audio, &self.tone)?;
+        let node = effect.and_then(|plugin| {
+            clap_effect_node(plugin, f64::from(info.sample_rate), info.max_block)
+        });
+        install_tone_graph(&self.audio, &self.tone, node)?;
         Ok(info)
+    }
+
+    /// Installed CLAP plugins, in the shape the webview reads.
+    ///
+    /// Served from [`ClapHostService::cached_scan`]: the first call walks the
+    /// standard plugin directories and loads every bundle it finds (slow, and it
+    /// runs vendor code), later calls are free. `rescan` forces a fresh walk, for
+    /// the case where the user installed a plugin without restarting MYDAW.
+    pub fn clap_plugins(&self, rescan: bool) -> Vec<ClapPluginInfoDto> {
+        let scanned = if rescan {
+            self.clap.refresh()
+        } else {
+            self.clap.cached_scan()
+        };
+        scanned.iter().map(ClapPluginInfoDto::from).collect()
+    }
+
+    /// The CLAP host service, for code that needs to load a specific bundle.
+    pub fn clap(&self) -> &Arc<ClapHostService> {
+        &self.clap
     }
 
     /// Start or stop the transport.
@@ -195,7 +245,24 @@ mod tests {
             .iter()
             .map(|p| p.component.as_str())
             .collect();
-        assert_eq!(components, vec!["kernel-status", "meters"]);
+        assert_eq!(
+            components,
+            vec!["kernel-status", "meters", "clap-browser"],
+            "panels appear in kernel boot order after the shell's own"
+        );
+    }
+
+    #[test]
+    fn the_clap_browser_panel_is_contributed_by_the_host_plugin() {
+        let kernel = boot_kernel().unwrap();
+        let snapshot = ui_snapshot(&kernel);
+        let panel = snapshot
+            .panels
+            .iter()
+            .find(|p| p.component == "clap-browser")
+            .expect("host-clap must contribute the browser panel");
+        assert_eq!(panel.id, "clap-browser");
+        assert_eq!(panel.title, "CLAP Plugins");
     }
 
     #[test]
@@ -208,6 +275,28 @@ mod tests {
         assert!(
             !output.is_available(),
             "the pump owns the throttle after boot"
+        );
+    }
+
+    #[test]
+    fn the_clap_plugin_list_is_available_and_never_panics() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+
+        // Scans this machine's real CLAP directories. The count depends on what
+        // is installed (CI: none), so the contract under test is "it returns a
+        // well-formed list without panicking", plus the cache.
+        let plugins = state.clap_plugins(false);
+        for plugin in &plugins {
+            assert!(!plugin.id.is_empty(), "a scanned plugin always has an id");
+            assert!(!plugin.path.is_empty());
+        }
+        assert!(state.clap().has_cached_scan());
+        assert_eq!(state.clap_plugins(false).len(), plugins.len());
+        assert_eq!(
+            state.clap_plugins(true).len(),
+            plugins.len(),
+            "a rescan of an unchanged machine finds the same plugins"
         );
     }
 

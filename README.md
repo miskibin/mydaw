@@ -18,11 +18,12 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
 | `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
 | `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
-| `plugins/host-clap` | CLAP discovery today, hosting in Phase 1 |
+| `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
 | `plugins/host-vst3` | VST3 host stub (Phase 1 spike 5) |
 | `plugins/plugin-windows` | Native child windows for external plugin GUIs (Phase 1 spike 3) |
 | `app/` | The shell: boots the kernel, registers the plugin set, hosts the webview, owns the Tauri commands |
 | `ui/` | SolidJS + TypeScript + Vite frontend ([`ui/README.md`](ui/README.md)) |
+| `test-fixtures/clap-gain` | A real CLAP plugin (-6 dB stereo gain) built by the workspace, so the CLAP host is tested against something deterministic rather than whatever happens to be installed |
 
 ## Quickstart
 
@@ -77,7 +78,8 @@ cargo test -p mydaw-app --test audio_end_to_end -- --ignored --nocapture
 ```
 
 It boots the kernel, installs the test-tone graph, plays for ~1 s and asserts that meter frames
-move and the playhead advances — the whole audio path minus the webview.
+move and the playhead advances — the whole audio path minus the webview. A second `#[ignore]`d test
+in the same file inserts the fixture CLAP plugin and asserts the master peak halves (0.2 → 0.1).
 
 CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
@@ -85,9 +87,9 @@ CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github
 
 ```text
 app/src/state.rs     boot_kernel() -> six plugins -> UiSnapshot (+ the shell's kernel-status panel)
-app/src/graph.rs     test-tone -> TransportGate  ->  AudioIoService::install_graph
+app/src/graph.rs     test-tone -> [CLAP effect] -> TransportGate  ->  AudioIoService::install_graph
 app/src/meters.rs    MeterThrottle -> pump thread (15 ms) -> Channel<MeterFrameDto>
-app/src/commands.rs  get_ui_snapshot | transport_play | transport_stop | subscribe_meters
+app/src/commands.rs  get_ui_snapshot | get_clap_plugins | transport_play | transport_stop | subscribe_meters
 ```
 
 The kernel itself never enters Tauri's managed state (`Box<dyn Plugin>` is not `Send`); it stays on

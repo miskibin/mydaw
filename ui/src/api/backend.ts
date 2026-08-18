@@ -1,4 +1,4 @@
-import type { MeterFrame, UiSnapshot, Unsubscribe } from './types';
+import type { ClapPluginInfoDto, MeterFrame, UiSnapshot, Unsubscribe } from './types';
 
 /**
  * The only surface the UI is allowed to use to reach the kernel.
@@ -13,6 +13,12 @@ export interface Backend {
   readonly kind: 'tauri' | 'mock';
   /** One-shot fetch of plugins + contributed panels. */
   getUiSnapshot(): Promise<UiSnapshot>;
+  /**
+   * Installed CLAP plugins. The first call makes the backend scan the standard
+   * plugin directories, which can take a moment on a well-stocked machine;
+   * afterwards it is served from a cache. Pass `rescan` to walk them again.
+   */
+  getClapPlugins(rescan?: boolean): Promise<ClapPluginInfoDto[]>;
   transportPlay(): Promise<void>;
   transportStop(): Promise<void>;
   /** Subscribe to the throttled meter stream. Call the result to detach. */
@@ -43,6 +49,11 @@ class TauriBackend implements Backend {
   async getUiSnapshot(): Promise<UiSnapshot> {
     const { invoke } = await this.core();
     return invoke<UiSnapshot>('get_ui_snapshot');
+  }
+
+  async getClapPlugins(rescan = false): Promise<ClapPluginInfoDto[]> {
+    const { invoke } = await this.core();
+    return invoke<ClapPluginInfoDto[]>('get_clap_plugins', { rescan });
   }
 
   async transportPlay(): Promise<void> {
@@ -84,9 +95,31 @@ const MOCK_SNAPSHOT: UiSnapshot = {
   panels: [
     { id: 'kernel-status', title: 'Kernel Status', component: 'kernel-status' },
     { id: 'meters', title: 'Master Meters', component: 'meters' },
+    { id: 'clap-browser', title: 'CLAP Plugins', component: 'clap-browser' },
     { id: 'mixer', title: 'Mixer', component: 'mixer-view' },
   ],
 };
+
+/**
+ * Two plausible plugins, one of them with no vendor or version, because the
+ * CLAP format allows that and the panel has to render it without collapsing.
+ */
+const MOCK_CLAP_PLUGINS: ClapPluginInfoDto[] = [
+  {
+    id: 'com.example.reverb',
+    name: 'Example Reverb',
+    vendor: 'Example Audio',
+    version: '2.1.0',
+    path: 'C:\\Program Files\\Common Files\\CLAP\\ExampleReverb.clap',
+  },
+  {
+    id: 'dev.mydaw.fixture.gain',
+    name: 'MYDAW Fixture Gain',
+    vendor: '',
+    version: '',
+    path: 'D:\\MYDAW\\target\\debug\\mydaw-gain.clap',
+  },
+];
 
 const MOCK_SAMPLE_RATE = 48_000;
 const MOCK_FRAME_HZ = 30;
@@ -104,6 +137,11 @@ class MockBackend implements Backend {
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
     return structuredClone(MOCK_SNAPSHOT);
+  }
+
+  async getClapPlugins(_rescan = false): Promise<ClapPluginInfoDto[]> {
+    // Structured clone so panels cannot mutate the shared fixture.
+    return structuredClone(MOCK_CLAP_PLUGINS);
   }
 
   async transportPlay(): Promise<void> {

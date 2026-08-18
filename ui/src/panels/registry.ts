@@ -1,3 +1,4 @@
+import { ClapBrowserPanel } from './clap-browser/ClapBrowserPanel';
 import { KernelStatusPanel } from './kernel-status/KernelStatusPanel';
 import { MetersPanel } from './meters/MetersPanel';
 import type { PanelComponent } from './types';
@@ -13,6 +14,7 @@ import type { PanelComponent } from './types';
 export const PANEL_REGISTRY: Record<string, PanelComponent> = {
   'kernel-status': KernelStatusPanel,
   meters: MetersPanel,
+  'clap-browser': ClapBrowserPanel,
 };
 
 /** Resolves a manifest key, or `undefined` when this build does not know it. */

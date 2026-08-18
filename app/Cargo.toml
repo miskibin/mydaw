@@ -41,6 +41,12 @@ env_logger = "0.11"
 
 [dev-dependencies]
 serde_json.workspace = true
+parking_lot.workspace = true
+# The fixture CLAP plugin: `tests/clap_graph.rs` runs a real plugin through the
+# real graph, and depending on it here is what makes Cargo build its cdylib
+# before these tests run.
+mydaw-fixture-clap-gain = { path = "../test-fixtures/clap-gain" }
+mydaw-plugin-test-tone.workspace = true
 
 [features]
 # Set by the Tauri CLI for production builds; it switches `generate_context!`

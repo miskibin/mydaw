@@ -10,6 +10,7 @@
 //! actually cares.
 
 use mydaw_ipc_bridge::MeterFrame;
+use mydaw_plugin_host_clap::ClapPluginInfo;
 use serde::Serialize;
 
 /// [`MeterFrame`] in the shape the webview expects (camelCase).
@@ -41,6 +42,34 @@ impl From<MeterFrame> for MeterFrameDto {
     }
 }
 
+/// One row of the CLAP browser panel.
+///
+/// `path` is a `String`, not a `PathBuf`: serde renders a `PathBuf` as whatever
+/// the OS encoding happens to be, and a Windows path with a non-UTF-8 byte would
+/// fail to serialise and take the whole command with it. Lossy conversion here
+/// means a mangled character in a tooltip instead of an empty panel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClapPluginInfoDto {
+    pub id: String,
+    pub name: String,
+    pub vendor: String,
+    pub version: String,
+    pub path: String,
+}
+
+impl From<&ClapPluginInfo> for ClapPluginInfoDto {
+    fn from(info: &ClapPluginInfo) -> Self {
+        Self {
+            id: info.id.clone(),
+            name: info.name.clone(),
+            vendor: info.vendor.clone(),
+            version: info.version.clone(),
+            path: info.path.to_string_lossy().into_owned(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +97,43 @@ mod tests {
         assert_eq!(object["peakL"], 0.5);
         assert_eq!(object["samplePos"], 4_096);
         assert_eq!(object["playing"], true);
+    }
+
+    #[test]
+    fn clap_plugin_info_serialises_with_the_keys_the_ui_reads() {
+        let dto = ClapPluginInfoDto::from(&ClapPluginInfo {
+            id: "com.acme.thing".to_owned(),
+            name: "Thing".to_owned(),
+            vendor: "Acme".to_owned(),
+            version: "1.2.3".to_owned(),
+            path: std::path::PathBuf::from(r"C:\CLAP\Thing.clap"),
+        });
+        let json: serde_json::Value = serde_json::to_value(dto).unwrap();
+        let object = json.as_object().unwrap();
+
+        // Mirrors `ClapPluginInfoDto` in ui/src/api/types.ts, key for key.
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["id", "name", "path", "vendor", "version"]);
+        assert_eq!(object["id"], "com.acme.thing");
+        assert_eq!(object["name"], "Thing");
+        assert_eq!(object["vendor"], "Acme");
+        assert_eq!(object["version"], "1.2.3");
+        assert_eq!(object["path"], r"C:\CLAP\Thing.clap");
+    }
+
+    #[test]
+    fn a_plugin_with_no_vendor_or_version_still_serialises() {
+        // `scan_bundle` leaves these empty rather than dropping the plugin, so the
+        // DTO has to survive it -- the UI shows a dash.
+        let dto = ClapPluginInfoDto::from(&ClapPluginInfo {
+            id: "x".to_owned(),
+            name: String::new(),
+            vendor: String::new(),
+            version: String::new(),
+            path: std::path::PathBuf::from("x.clap"),
+        });
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"vendor\":\"\""), "{json}");
     }
 }

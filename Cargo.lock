@@ -424,6 +424,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "clack-extensions"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6d97d8b4cab1975314c053b9ec35575c5cccd8c7b3db37b21cbe435be6174416"
+dependencies = [
+ "bitflags 2.13.1",
+ "clack-common",
+ "clack-host",
+ "clack-plugin",
+ "clap-sys",
+]
+
+[[package]]
 name = "clack-host"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -433,6 +446,16 @@ dependencies = [
  "clap-sys",
  "libloading 0.8.9",
  "objc2-foundation",
+]
+
+[[package]]
+name = "clack-plugin"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fa04a5185c367bfd5566e616c9c20cec2abaee9bf8a6060a3f6e44b505d5f32"
+dependencies = [
+ "clack-common",
+ "clap-sys",
 ]
 
 [[package]]
@@ -2093,6 +2116,7 @@ version = "0.1.0"
 dependencies = [
  "env_logger",
  "log",
+ "mydaw-fixture-clap-gain",
  "mydaw-ipc-bridge",
  "mydaw-kernel",
  "mydaw-plugin-audio-io",
@@ -2108,6 +2132,14 @@ dependencies = [
  "tauri",
  "tauri-build",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "mydaw-fixture-clap-gain"
+version = "0.1.0"
+dependencies = [
+ "clack-extensions",
+ "clack-plugin",
 ]
 
 [[package]]
@@ -2150,9 +2182,13 @@ dependencies = [
 name = "mydaw-plugin-host-clap"
 version = "0.1.0"
 dependencies = [
+ "clack-extensions",
  "clack-host",
  "log",
+ "mydaw-fixture-clap-gain",
  "mydaw-kernel",
+ "mydaw-rt-core",
+ "parking_lot",
  "thiserror 2.0.20",
 ]
 

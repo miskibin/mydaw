@@ -1,11 +1,14 @@
-//! `mydaw-plugin-host-clap` -- CLAP plugin discovery.
+//! `mydaw-plugin-host-clap` -- CLAP plugin discovery and hosting.
 //!
-//! **Phase 0 scope is discovery only.** This crate finds `.clap` bundles, opens
-//! each one far enough to read its plugin descriptors, and reports what it found.
-//! It instantiates nothing and processes no audio: that is Phase 1 spike 2
-//! ("load real CLAP plugin, process audio through it"), which will wrap a plugin
-//! instance in an [`RtNode`](mydaw_kernel::RtNode) behind the same seam the VST3
-//! host will use.
+//! Two halves:
+//!
+//! - **Discovery** (this module): find `.clap` bundles, open each far enough to
+//!   read its plugin descriptors, report what is installed. Cheap, cached, and
+//!   safe to call from a UI command.
+//! - **Hosting** ([`hosting`]): instantiate one of those plugins, activate it,
+//!   and run it inside the RT graph as a [`ClapNode`] -- Phase 1 spike 2. Read
+//!   the [`hosting`] module docs before touching it: CLAP's thread model is not
+//!   optional, and the deactivation-on-drop story is subtle.
 //!
 //! # Crash isolation -- read this before trusting a scan
 //! Loading a CLAP bundle runs third-party code inside this process: the OS loader
@@ -26,6 +29,9 @@
 //! The seam is already here: [`ClapHostService::scan_bundle`] is a pure
 //! path-in/results-out function, so the subprocess can call exactly it.
 
+pub mod hosting;
+pub mod test_util;
+
 use std::ffi::CStr;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -33,13 +39,25 @@ use std::sync::Arc;
 
 use clack_host::entry::PluginEntry;
 use clack_host::plugin::PluginDescriptor;
-use mydaw_kernel::{KernelCtx, Plugin, PluginManifest};
+use mydaw_kernel::{KernelCtx, PanelManifest, Plugin, PluginManifest};
+use parking_lot::Mutex;
+
+pub use hosting::{
+    ClapHostError, ClapNode, ClapNodeStats, ClapPortLayout, LoadedClapPlugin, RETIRE_TIMEOUT,
+};
 
 /// Kernel id of this plugin.
 pub const PLUGIN_ID: &str = "host-clap";
 
-/// RT node type id this host will claim once it can build nodes (spike 2).
+/// RT node type id this host claims for nodes it builds.
 pub const NODE_TYPE_ID: &str = "clap";
+
+/// Panel id of the CLAP browser, contributed to the webview at registration.
+pub const BROWSER_PANEL_ID: &str = "clap-browser";
+
+/// Frontend component key rendering [`BROWSER_PANEL_ID`]. Mirrored in
+/// `ui/src/panels/registry.ts`; renaming it is a breaking UI change.
+pub const BROWSER_PANEL_COMPONENT: &str = "clap-browser";
 
 /// File extension of a CLAP bundle.
 const CLAP_EXTENSION: &str = "clap";
@@ -73,7 +91,7 @@ pub struct ClapPluginInfo {
 impl ClapPluginInfo {
     /// Convert a descriptor. Returns `None` for a descriptor with no id, which is
     /// malformed -- an id is the one field the format requires.
-    fn from_descriptor(descriptor: &PluginDescriptor, path: &Path) -> Option<Self> {
+    pub(crate) fn from_descriptor(descriptor: &PluginDescriptor, path: &Path) -> Option<Self> {
         let id = cstr_to_string(descriptor.id())?;
         if id.is_empty() {
             return None;
@@ -117,6 +135,15 @@ pub enum ClapScanError {
 /// `ctx.services.get::<ClapHostService>()`.
 pub struct ClapHostService {
     search_paths: Vec<PathBuf>,
+    /// Result of the last [`scan`](Self::scan), if one has happened.
+    ///
+    /// A scan loads every installed CLAP bundle into the process, which is slow
+    /// (hundreds of milliseconds on a well-stocked machine) and, worse, runs
+    /// third-party code. Doing it once per process and serving the cache is not
+    /// an optimisation, it is the difference between a UI panel that opens and
+    /// one that hangs. `Arc` so a caller keeps a stable list even if a refresh
+    /// replaces the cache underneath.
+    cache: Mutex<Option<Arc<[ClapPluginInfo]>>>,
 }
 
 impl Default for ClapHostService {
@@ -130,6 +157,7 @@ impl ClapHostService {
     pub fn new() -> Self {
         Self {
             search_paths: standard_search_paths(),
+            cache: Mutex::new(None),
         }
     }
 
@@ -137,6 +165,7 @@ impl ClapHostService {
     pub fn with_search_paths(search_paths: impl IntoIterator<Item = PathBuf>) -> Self {
         Self {
             search_paths: search_paths.into_iter().collect(),
+            cache: Mutex::new(None),
         }
     }
 
@@ -193,6 +222,62 @@ impl ClapHostService {
             Ok(descriptors) => descriptors,
             Err(_) => Err(ClapScanError::Panicked),
         }
+    }
+
+    /// Plugin list, scanning at most once per process.
+    ///
+    /// The first call performs a full [`scan`](Self::scan); later calls return the
+    /// same list without touching the filesystem or loading anything. Use
+    /// [`refresh`](Self::refresh) after the user installs a plugin.
+    pub fn cached_scan(&self) -> Arc<[ClapPluginInfo]> {
+        if let Some(cached) = self.cache.lock().clone() {
+            return cached;
+        }
+        // Deliberately scanning outside the lock: a scan runs vendor code and can
+        // take a while, and blocking every other caller behind it would turn one
+        // slow plugin into a frozen UI. A concurrent double scan is wasteful but
+        // harmless -- the last writer wins and both callers get a valid list.
+        let scanned: Arc<[ClapPluginInfo]> = self.scan().into();
+        *self.cache.lock() = Some(Arc::clone(&scanned));
+        scanned
+    }
+
+    /// Discard the cache and scan again. Returns the fresh list.
+    pub fn refresh(&self) -> Arc<[ClapPluginInfo]> {
+        let scanned: Arc<[ClapPluginInfo]> = self.scan().into();
+        *self.cache.lock() = Some(Arc::clone(&scanned));
+        scanned
+    }
+
+    /// Whether [`cached_scan`](Self::cached_scan) would answer without scanning.
+    pub fn has_cached_scan(&self) -> bool {
+        self.cache.lock().is_some()
+    }
+
+    /// Load and instantiate the plugin with CLAP id `id`, found via
+    /// [`cached_scan`](Self::cached_scan).
+    ///
+    /// # Errors
+    /// [`ClapHostError::UnknownPluginId`] when nothing scanned has that id, plus
+    /// anything [`LoadedClapPlugin::load`] can report.
+    pub fn instantiate_by_id(&self, id: &str) -> Result<LoadedClapPlugin, ClapHostError> {
+        let plugins = self.cached_scan();
+        let found = plugins
+            .iter()
+            .find(|plugin| plugin.id == id)
+            .ok_or_else(|| ClapHostError::UnknownPluginId(id.to_owned()))?;
+        LoadedClapPlugin::load(&found.path, id)
+    }
+
+    /// Load and instantiate a plugin from an explicit bundle path.
+    ///
+    /// Bypasses the scan entirely: this is the path a project file (which stores
+    /// bundle + id) and the `MYDAW_CLAP_FX` developer override take.
+    ///
+    /// # Errors
+    /// Anything [`LoadedClapPlugin::load`] can report.
+    pub fn load(&self, path: &Path, plugin_id: &str) -> Result<LoadedClapPlugin, ClapHostError> {
+        LoadedClapPlugin::load(path, plugin_id)
     }
 
     fn load_descriptors(path: &Path) -> Result<Vec<ClapPluginInfo>, ClapScanError> {
@@ -335,6 +420,14 @@ impl Plugin for HostClapPlugin {
         ctx.services
             .provide(Arc::clone(&service))
             .expect("ClapHostService provided twice: host-clap registered more than once");
+        // The browser is a *view* of the scan, not the scan itself: contributing
+        // the panel costs nothing and still does not load a single plugin. The
+        // webview asks for the list when the user opens the panel.
+        ctx.contribute_panel(PanelManifest::new(
+            BROWSER_PANEL_ID,
+            "CLAP Plugins",
+            BROWSER_PANEL_COMPONENT,
+        ));
         self.service = Some(service);
     }
 
@@ -482,7 +575,68 @@ mod tests {
             .get::<ClapHostService>()
             .expect("service should be provided");
         assert!(!service.search_paths().is_empty());
-        assert!(kernel.ui_panels().is_empty());
+        assert!(
+            !service.has_cached_scan(),
+            "registration must not load a single plugin"
+        );
+
+        // One panel, and no RT node factory: CLAP nodes are built from a chosen
+        // bundle + id, which a stateless `RtNodeFactory` cannot express.
+        let panels = kernel.ui_panels();
+        assert_eq!(panels.len(), 1);
+        assert_eq!(panels[0].id, BROWSER_PANEL_ID);
+        assert_eq!(panels[0].title, "CLAP Plugins");
+        assert_eq!(panels[0].component, BROWSER_PANEL_COMPONENT);
         assert!(kernel.ctx().rt_node_factory(NODE_TYPE_ID).is_none());
+    }
+
+    #[test]
+    fn the_scan_cache_is_populated_lazily_and_reused() {
+        let dir = TempDir::new("cache");
+        let service = ClapHostService::with_search_paths([dir.path().to_path_buf()]);
+
+        assert!(!service.has_cached_scan(), "nothing is scanned up front");
+        let first = service.cached_scan();
+        assert!(service.has_cached_scan());
+        let second = service.cached_scan();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "the second call must serve the cache, not rescan"
+        );
+
+        // A bundle appearing after the scan stays invisible until a refresh.
+        std::fs::write(dir.path().join("late.clap"), b"broken").unwrap();
+        assert!(Arc::ptr_eq(&service.cached_scan(), &first));
+        let refreshed = service.refresh();
+        assert!(!Arc::ptr_eq(&refreshed, &first));
+    }
+
+    #[test]
+    fn instantiating_an_unscanned_id_is_a_typed_error() {
+        let dir = TempDir::new("unknown-id");
+        let service = ClapHostService::with_search_paths([dir.path().to_path_buf()]);
+        let err = service
+            .instantiate_by_id("com.example.not-installed")
+            .expect_err("nothing is installed in an empty directory");
+        assert!(
+            matches!(err, ClapHostError::UnknownPluginId(ref id) if id == "com.example.not-installed"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn loading_a_bundle_that_is_not_a_library_is_a_typed_error() {
+        let dir = TempDir::new("not-a-library");
+        let bogus = dir.path().join("garbage.clap");
+        std::fs::write(&bogus, b"this is not a shared library").unwrap();
+
+        let service = ClapHostService::with_search_paths([dir.path().to_path_buf()]);
+        let err = service
+            .load(&bogus, "whatever")
+            .expect_err("a text file is not a CLAP bundle");
+        assert!(
+            matches!(err, ClapHostError::BundleLoad { .. }),
+            "got {err:?}"
+        );
     }
 }

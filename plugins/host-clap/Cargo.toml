@@ -1,6 +1,6 @@
 [package]
 name = "mydaw-plugin-host-clap"
-description = "MYDAW plugin: CLAP plugin discovery. Phase 0 scans and describes; hosting arrives with Phase 1 spike 2."
+description = "MYDAW plugin: CLAP plugin discovery and hosting -- scans bundles and runs a plugin instance as an RT graph node."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -8,6 +8,17 @@ publish.workspace = true
 
 [dependencies]
 mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
 clack-host.workspace = true
+clack-extensions = { version = "0.1.1", features = ["clack-host", "audio-ports"] }
 log.workspace = true
+parking_lot.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+# The test fixture CLAP plugin. Depending on it here is not (only) about the two
+# constants the tests import: it is what makes `cargo test` build the fixture's
+# `cdylib` before the host tests run, so `target/<profile>/` really contains a
+# loadable `.clap` bundle. Without the dependency edge Cargo has no reason to
+# build a dynamic library nothing links against.
+mydaw-fixture-clap-gain = { path = "../../test-fixtures/clap-gain" }

@@ -47,5 +47,22 @@ export interface MeterFrame {
   playing: boolean;
 }
 
+/**
+ * One installed CLAP plugin, as reported by the host's scan. Mirrors
+ * `ClapPluginInfoDto` in `app/src/dto.rs`.
+ *
+ * `vendor` and `version` may be empty strings: the CLAP format only requires an
+ * id, and a bundle that omits the rest is still perfectly loadable.
+ */
+export interface ClapPluginInfoDto {
+  /** Stable CLAP id, e.g. `com.u-he.diva`. Unique across the whole scan. */
+  id: string;
+  name: string;
+  vendor: string;
+  version: string;
+  /** Absolute path of the `.clap` bundle the plugin came from. */
+  path: string;
+}
+
 /** Unsubscribe handle returned by streaming APIs. */
 export type Unsubscribe = () => void;
