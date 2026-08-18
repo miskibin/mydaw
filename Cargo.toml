@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-# TODO(next agent): once `plugins/*` and `app/` exist, extend this to the final list:
+# TODO(app agent): add `"app"` here once `app/` exists:
 #     members = ["crates/*", "plugins/*", "app"]
-# It is kept at `crates/*` for now because Cargo errors out on members that are
-# not present on disk, and those directories are owned by other agents.
-members = ["crates/*"]
+# Cargo errors out on members that are not present on disk, and `app/` is owned
+# by another agent.
+members = ["crates/*", "plugins/*"]
 
 [workspace.package]
 edition = "2021"
@@ -18,6 +18,11 @@ publish = false
 rtrb = "0.4"        # lock-free SPSC ring buffer (UI <-> RT thread)
 basedrop = "0.1"    # defer deallocation off the RT thread
 arc-swap = "1"      # atomic Arc publish; reserved for non-RT shared config snapshots
+# --- audio I/O ---
+cpal = "0.18"                    # cross-platform device I/O; WASAPI on Windows
+audio_thread_priority = "0.37"   # promote the callback thread to MMCSS/Pro Audio
+# --- plugin hosting ---
+clack-host = "0.1"  # safe CLAP host bindings (discovery in Phase 0, hosting in spike 2)
 # --- general ---
 thiserror = "2"
 log = "0.4"
@@ -29,6 +34,14 @@ serde_json = "1"   # dev-only: DTO wire-shape tests
 mydaw-kernel = { path = "crates/kernel" }
 mydaw-rt-core = { path = "crates/rt-core" }
 mydaw-ipc-bridge = { path = "crates/ipc-bridge" }
+
+# --- internal plugins (registered by hand in `app/main.rs`) ---
+mydaw-plugin-metering = { path = "plugins/metering" }
+mydaw-plugin-test-tone = { path = "plugins/test-tone" }
+mydaw-plugin-audio-io = { path = "plugins/audio-io" }
+mydaw-plugin-host-clap = { path = "plugins/host-clap" }
+mydaw-plugin-host-vst3 = { path = "plugins/host-vst3" }
+mydaw-plugin-windows = { path = "plugins/plugin-windows" }
 
 [profile.release]
 lto = "thin"

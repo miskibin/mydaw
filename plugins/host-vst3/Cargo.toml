@@ -1,0 +1,12 @@
+[package]
+name = "mydaw-plugin-host-vst3"
+description = "MYDAW plugin: VST3 hosting. Stub -- the real implementation lands with Phase 1 spike 5."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No `vst3` dependency yet, on purpose. See the crate docs: pulling in the
+# bindings before spike 5 buys nothing and costs build time on every CI run.
+[dependencies]
+mydaw-kernel.workspace = true

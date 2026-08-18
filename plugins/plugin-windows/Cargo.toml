@@ -1,0 +1,11 @@
+[package]
+name = "mydaw-plugin-windows"
+description = "MYDAW plugin: native child windows for external plugin GUIs. Stub -- lands with Phase 1 spike 3."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# No `tao` dependency yet, on purpose. See the crate docs.
+[dependencies]
+mydaw-kernel.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "mydaw-plugin-metering"
+description = "MYDAW plugin: owns the audio-thread -> UI meter queue and the Meters panel contribution."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+mydaw-ipc-bridge.workspace = true
+log.workspace = true
+parking_lot.workspace = true

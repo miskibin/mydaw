@@ -1,0 +1,29 @@
+[package]
+name = "mydaw-plugin-audio-io"
+description = "MYDAW plugin: cpal output device, the real-time callback, and the graph/transport/meter plumbing behind it."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
+mydaw-ipc-bridge.workspace = true
+# For the `MeterTap` service type. The manifest dependency on "metering"
+# guarantees the service exists by the time this plugin starts.
+mydaw-plugin-metering.workspace = true
+
+cpal.workspace = true
+# cpal's own `realtime` feature is off (it is not a default), so promotion is
+# ours to do -- from inside the callback, on the thread that actually runs it.
+audio_thread_priority.workspace = true
+
+log.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The RT-path test drives a real node through `run_block`. No audio device is
+# opened, so this suite runs on a headless CI machine.
+mydaw-plugin-test-tone.workspace = true

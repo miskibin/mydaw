@@ -1,0 +1,13 @@
+[package]
+name = "mydaw-plugin-host-clap"
+description = "MYDAW plugin: CLAP plugin discovery. Phase 0 scans and describes; hosting arrives with Phase 1 spike 2."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+clack-host.workspace = true
+log.workspace = true
+thiserror.workspace = true
