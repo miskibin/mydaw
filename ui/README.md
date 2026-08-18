@@ -57,6 +57,10 @@ The UI expects these Tauri commands (`src/api/backend.ts` is the only caller):
 | `transport_stop` | no args, no return |
 | `subscribe_meters` | takes `{ channel }` (Tauri v2 `Channel<MeterFrame>`), streams at 30-60 Hz |
 
+Plus the dev-only bench surface (`src/dev/ipcBench.ts` is the only caller): `bench_ping`,
+`bench_ping_async`, `bench_plan`, `bench_sync`, `bench_stream`, `bench_meter_stamp`,
+`bench_finish`.
+
 ## Adding a panel
 
 1. Rust side contributes a `PanelManifestDto` with a `component` key.
@@ -73,3 +77,21 @@ stream must not drive the reactive scheduler. Text readouts (timecode, sample po
 playhead at 10 Hz instead. All meter drawing lives in `src/panels/meters/draw.ts`, kept free of
 Solid and allocation-free in its hot path, because that file is the vehicle for the Phase 1 IPC
 performance spike.
+
+Those numbers now exist:
+[`docs/superpowers/specs/2026-08-18-spike4-ipc-perf.md`](../docs/superpowers/specs/2026-08-18-spike4-ipc-perf.md).
+
+## The IPC bench (dev only)
+
+`src/dev/` holds the webview half of the spike-4 benchmark. It is loaded lazily and only when the
+Rust side contributes the `ipc-bench` panel:
+
+```sh
+MYDAW_DEV_PANELS=1 cargo run -p mydaw-app --features custom-protocol   # panel, run it by hand
+MYDAW_IPC_BENCH=1  cargo run -p mydaw-app --features custom-protocol   # run the matrix and exit
+MYDAW_IPC_BENCH=stress ...                                             # plus the past-the-cliff rows
+```
+
+Results land in `.debug/ipc-bench/<timestamp>.json` with a summary on stdout between
+`===== MYDAW IPC BENCH BEGIN/END =====`. In a normal session none of this is downloaded: the
+manifest is absent, so the lazy chunk is never fetched.

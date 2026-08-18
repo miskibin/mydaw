@@ -46,6 +46,14 @@ pub struct MeterPump {
     running: AtomicBool,
     shutdown: AtomicBool,
     interval: Duration,
+    /// Whether to stamp each frame with the bench clock on its way out.
+    ///
+    /// Off unless the IPC benchmark turns it on, and one relaxed atomic load per
+    /// emitted frame (at most 30 a second, on a thread that is about to do IPC)
+    /// when it is. This is the *only* change spike 4 makes to the live meter
+    /// path, and it is what makes the real end-to-end meter latency measurable
+    /// rather than inferred.
+    stamp: AtomicBool,
 }
 
 impl MeterPump {
@@ -63,7 +71,20 @@ impl MeterPump {
             running: AtomicBool::new(false),
             shutdown: AtomicBool::new(false),
             interval,
+            stamp: AtomicBool::new(false),
         })
+    }
+
+    /// Start or stop stamping emitted frames with the bench clock.
+    ///
+    /// Only `bench_meter_stamp` calls this; see [`MeterFrameDto::pump_ms`].
+    pub fn set_stamping(&self, enabled: bool) {
+        self.stamp.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Whether frames currently carry a bench timestamp.
+    pub fn is_stamping(&self) -> bool {
+        self.stamp.load(Ordering::Relaxed)
     }
 
     /// Whether a throttle was handed over at construction.
@@ -122,7 +143,13 @@ impl MeterPump {
         let Some(sink) = guard.as_ref() else {
             return false;
         };
-        if sink(MeterFrameDto::from(frame)) {
+        let mut dto = MeterFrameDto::from(frame);
+        if self.stamp.load(Ordering::Relaxed) {
+            // Stamped here, immediately before the send, so the number the
+            // webview subtracts covers the IPC hop and nothing else.
+            dto.pump_ms = Some(crate::ipc_bench::epoch_ms());
+        }
+        if sink(dto) {
             true
         } else {
             // The webview went away (reload, close). Retire the subscription so
@@ -264,6 +291,43 @@ mod tests {
         // Late subscriptions after shutdown do not resurrect the thread.
         pump.subscribe(Box::new(|_| true));
         assert!(!pump.is_running());
+    }
+
+    #[test]
+    fn frames_are_stamped_only_while_the_bench_asks_for_it() {
+        let (mut tx, pump) = rig();
+        let seen: Arc<Mutex<Vec<Option<f64>>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink_seen = Arc::clone(&seen);
+        pump.subscribe(Box::new(move |dto| {
+            sink_seen.lock().push(dto.pump_ms);
+            true
+        }));
+
+        // Explicit, spaced instants: back-to-back polls would be swallowed by
+        // the throttle rather than by anything this test is about.
+        let t0 = Instant::now();
+        let tick = Duration::from_millis(10);
+
+        assert!(!pump.is_stamping(), "the live path is unstamped by default");
+        tx.push(frame(0.5)).unwrap();
+        assert!(pump.pump_once(t0));
+
+        pump.set_stamping(true);
+        assert!(pump.is_stamping());
+        tx.push(frame(0.5)).unwrap();
+        assert!(pump.pump_once(t0 + tick));
+
+        pump.set_stamping(false);
+        tx.push(frame(0.5)).unwrap();
+        assert!(pump.pump_once(t0 + tick * 2));
+
+        let seen = seen.lock();
+        assert_eq!(seen.len(), 3);
+        assert_eq!(seen[0], None);
+        assert!(seen[1].is_some_and(|ms| ms > 0.0), "stamped while enabled");
+        assert_eq!(seen[2], None, "stamping is switched off again");
+
+        pump.shutdown();
     }
 
     #[test]

@@ -709,3 +709,58 @@ code {
   width: 7px;
   height: 7px;
 }
+
+/* ---------------------------------------------------------------------------
+   IPC bench (dev instrument, spike 4)
+
+   Contributed only under MYDAW_DEV_PANELS / MYDAW_IPC_BENCH, so this is
+   deliberately plain: a table that stays readable in a 280 px dock, no chrome.
+   --------------------------------------------------------------------------- */
+
+.ipc-bench {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.ipc-bench__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ipc-bench__status {
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+
+.ipc-bench__error {
+  color: var(--warn);
+}
+
+.ipc-bench__meta {
+  color: var(--fg-2);
+  line-height: 1.5;
+}
+
+.ipc-bench__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+}
+
+.ipc-bench__table th,
+.ipc-bench__table td {
+  padding: 2px 4px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+
+.ipc-bench__table th:first-child,
+.ipc-bench__table td:first-child {
+  text-align: left;
+  white-space: nowrap;
+}

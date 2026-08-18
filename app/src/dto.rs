@@ -27,6 +27,14 @@ pub struct MeterFrameDto {
     /// Transport position in frames at the end of the measured block.
     pub sample_pos: u64,
     pub playing: bool,
+    /// When the pump handed this frame to the webview, on the bench clock
+    /// ([`crate::ipc_bench::epoch_ms`]).
+    ///
+    /// `None` -- and absent from the JSON entirely -- unless the IPC bench asked
+    /// the pump to stamp frames, which is the only thing that reads it. That
+    /// keeps the normal meter frame byte-for-byte what it was before spike 4.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pump_ms: Option<f64>,
 }
 
 impl From<MeterFrame> for MeterFrameDto {
@@ -38,6 +46,7 @@ impl From<MeterFrame> for MeterFrameDto {
             rms_r: frame.rms_r,
             sample_pos: frame.sample_pos,
             playing: frame.playing,
+            pump_ms: None,
         }
     }
 }
@@ -97,6 +106,24 @@ mod tests {
         assert_eq!(object["peakL"], 0.5);
         assert_eq!(object["samplePos"], 4_096);
         assert_eq!(object["playing"], true);
+    }
+
+    #[test]
+    fn the_bench_timestamp_is_absent_unless_the_pump_stamped_the_frame() {
+        let plain = MeterFrameDto::from(MeterFrame::SILENT);
+        assert_eq!(plain.pump_ms, None);
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(
+            !json.contains("pumpMs"),
+            "an unstamped frame is exactly the pre-spike-4 wire shape: {json}"
+        );
+
+        let stamped = MeterFrameDto {
+            pump_ms: Some(1234.5),
+            ..plain
+        };
+        let json: serde_json::Value = serde_json::to_value(stamped).unwrap();
+        assert_eq!(json["pumpMs"], 1234.5);
     }
 
     #[test]

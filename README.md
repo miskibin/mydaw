@@ -16,6 +16,16 @@ MYDAW_DEBUG_CAPTURE=2 cargo run -p mydaw-app --features custom-protocol
 captures two seconds of the output bus into `.debug/captures/<timestamp>/` — a float WAV, a
 waveform/spectrum PNG with labelled axes, and a statistics JSON — prints a report and exits.
 See [`docs/superpowers/specs/2026-08-18-debug-tap-harness.md`](docs/superpowers/specs/2026-08-18-debug-tap-harness.md).
+
+Measuring what the webview costs:
+
+```sh
+MYDAW_IPC_BENCH=1 cargo run -p mydaw-app --release --features custom-protocol
+```
+
+runs the Rust → WebView2 transport matrix (JSON vs binary channels, 64 B → 1 MB, 30 → 240 Hz),
+writes `.debug/ipc-bench/<timestamp>.json`, prints a report and exits. Verdict and numbers:
+[`docs/superpowers/specs/2026-08-18-spike4-ipc-perf.md`](docs/superpowers/specs/2026-08-18-spike4-ipc-perf.md).
 Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-design.md`](docs/superpowers/specs/2026-08-18-mydaw-scaffold-design.md).
 
 ## Layout

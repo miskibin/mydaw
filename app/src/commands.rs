@@ -6,12 +6,15 @@
 //! `Serialize`, and the UI shows the message as-is in the status bar).
 
 use mydaw_ipc_bridge::UiSnapshot;
-use tauri::ipc::Channel;
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{ClapPluginInfoDto, MeterFrameDto};
 use crate::gui_bridge::{ClapGuiCommand, ClapGuiStatusDto};
+use crate::ipc_bench::{
+    self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
+};
 use crate::state::AppState;
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
@@ -99,4 +102,124 @@ pub fn subscribe_meters(state: State<'_, AppState>, channel: Channel<MeterFrameD
     state
         .meters()
         .subscribe(Box::new(move |frame| channel.send(frame).is_ok()));
+}
+
+// ---------------------------------------------------------------------------
+// IPC benchmark (spike 4)
+// ---------------------------------------------------------------------------
+//
+// Dev-only surface. These commands are always registered -- the invoke handler
+// is a compile-time match, so an unused arm costs nothing -- but nothing calls
+// them unless `MYDAW_DEV_PANELS`/`MYDAW_IPC_BENCH` put the bench panel in the
+// snapshot. See `crate::ipc_bench`.
+
+/// The bench clock, right now. The webview's half of the epoch handshake, and
+/// the thing whose round trip *is* the RTT measurement.
+///
+/// Deliberately synchronous: Tauri runs a sync command on the main thread, which
+/// is the same thread a real UI command competes for, so this is the honest
+/// number for "what does an `invoke` cost in this app".
+#[tauri::command]
+pub fn bench_ping() -> f64 {
+    ipc_bench::epoch_ms()
+}
+
+/// The same ping, on Tauri's worker pool, so the report can show what `async`
+/// buys (or costs) against the main-thread path.
+#[tauri::command]
+pub async fn bench_ping_async() -> f64 {
+    ipc_bench::epoch_ms()
+}
+
+/// The scenario matrix this run should execute. Defined in Rust so the UI, the
+/// auto run and the tests all read the same list; `MYDAW_IPC_BENCH=stress`
+/// appends the past-the-cliff scenarios.
+#[tauri::command]
+pub fn bench_plan() -> Vec<StreamConfig> {
+    ipc_bench::env_plan()
+}
+
+/// Reconcile the two clocks from the webview's ping handshake.
+///
+/// The UI could do this arithmetic itself; it deliberately does not. One
+/// implementation, in the language that has the tests, is what keeps the offset
+/// used *during* a run identical to the offset printed in the report.
+///
+/// `None` when the handshake contained nothing usable.
+#[tauri::command]
+pub fn bench_sync(samples: Vec<EpochSample>) -> Option<EpochSync> {
+    ipc_bench::estimate_epoch_offset(&samples)
+}
+
+/// Stream one scenario's frames into `channel`, returning how many were
+/// scheduled so the caller knows when it has them all.
+///
+/// The frames go out from a dedicated thread: this command must return
+/// immediately (it runs on the main thread) and the pacing must not be at the
+/// mercy of Tauri's executor. `InvokeResponseBody` is the channel payload
+/// because it is the one type that carries *either* a pre-serialised JSON string
+/// or raw bytes -- the two transports under test -- with no further conversion.
+///
+/// # Errors
+/// A configuration outside the harness's limits, or a thread that will not spawn.
+#[tauri::command]
+pub fn bench_stream(
+    config: StreamConfig,
+    channel: Channel<InvokeResponseBody>,
+) -> Result<u32, String> {
+    config.validate().map_err(|err| err.to_string())?;
+    let frames = config.frame_count();
+    std::thread::Builder::new()
+        .name("mydaw-ipc-bench".to_owned())
+        .spawn(move || {
+            let sent = ipc_bench::run_stream(config, |payload| {
+                let body = match payload {
+                    BenchPayload::Json(text) => InvokeResponseBody::Json(text),
+                    BenchPayload::Binary(bytes) => InvokeResponseBody::Raw(bytes),
+                };
+                channel.send(body).is_ok()
+            });
+            if sent < frames {
+                log::warn!("ipc bench: the webview stopped receiving after {sent}/{frames} frames");
+            }
+        })
+        .map_err(|err| format!("could not start the bench sender: {err}"))?;
+    Ok(frames)
+}
+
+/// Turn the live meter path's bench timestamp on or off.
+///
+/// This is how the *real* meter latency is measured rather than modelled: the
+/// pump stamps the frame it is about to send, the webview subtracts.
+#[tauri::command]
+pub fn bench_meter_stamp(state: State<'_, AppState>, enabled: bool) {
+    state.meters().set_stamping(enabled);
+}
+
+/// Aggregate a finished run, write it to `.debug/ipc-bench/<run id>.json`, print
+/// the report to stdout, and -- in auto mode only -- exit the app.
+///
+/// The exit is deferred by a beat so this command's own response reaches the
+/// webview first; an agent reads the stdout report, so a truncated response
+/// would cost nothing, but a truncated *report* would cost the run.
+///
+/// # Errors
+/// A results file that cannot be written.
+#[tauri::command]
+pub async fn bench_finish(
+    app: tauri::AppHandle,
+    run: BenchRunInput,
+) -> Result<BenchReport, String> {
+    let report = ipc_bench::build_report(&run, ipc_bench::run_id(std::time::SystemTime::now()));
+    let path = ipc_bench::write_report(&report, &capture_root())
+        .map_err(|err| format!("could not write the bench results: {err}"))?;
+    print!("{}", ipc_bench::report_text(&report, Some(&path)));
+
+    if ipc_bench::auto_mode() {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            app.exit(0);
+        });
+    }
+    Ok(report)
 }

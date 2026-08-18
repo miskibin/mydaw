@@ -15,6 +15,7 @@ use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 use crate::dto::ClapPluginInfoDto;
 use crate::graph::{clap_effect_node, install_tone_graph};
 use crate::gui_bridge::ClapGuiBridge;
+use crate::ipc_bench;
 use crate::meters::MeterPump;
 
 /// Panel key of the kernel status view, mirrored in `ui/src/panels/registry.ts`.
@@ -57,6 +58,10 @@ pub fn boot_kernel() -> Result<Kernel, KernelError> {
 /// The kernel status panel has no owning plugin -- it displays the plugin
 /// registry, so a plugin contributing it would be circular. The shell injects it
 /// first so it is the leftmost tab in the dock.
+///
+/// The IPC bench panel is appended only when its environment variable is set
+/// (see [`crate::ipc_bench`]); with no flag the snapshot is exactly what it was
+/// before spike 4, which is what keeps the harness free in a normal run.
 pub fn ui_snapshot(kernel: &Kernel) -> UiSnapshot {
     let mut snapshot = UiSnapshot::from_kernel(kernel);
     snapshot.panels.insert(
@@ -67,6 +72,15 @@ pub fn ui_snapshot(kernel: &Kernel) -> UiSnapshot {
             component: KERNEL_STATUS_PANEL.to_owned(),
         },
     );
+    for (id, title, component) in
+        crate::ipc_bench::bench_panels_for(ipc_bench::dev_panels_enabled(), ipc_bench::auto_mode())
+    {
+        snapshot.panels.push(PanelManifestDto {
+            id,
+            title,
+            component,
+        });
+    }
     snapshot
 }
 

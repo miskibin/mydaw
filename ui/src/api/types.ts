@@ -45,6 +45,13 @@ export interface MeterFrame {
   rmsR: number;
   samplePos: number;
   playing: boolean;
+  /**
+   * When the pump handed this frame to the webview, on the Rust bench clock.
+   *
+   * Absent in every normal run: only the spike-4 IPC benchmark asks the pump to
+   * stamp frames, and it is the only thing that reads this.
+   */
+  pumpMs?: number;
 }
 
 /**

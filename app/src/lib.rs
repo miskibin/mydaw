@@ -26,6 +26,13 @@
 //! ```
 //! Exit code 0 if audio was captured, 1 if it was not.
 //!
+//! # IPC benchmark mode
+//! With `MYDAW_IPC_BENCH=1` the window opens as usual, but the UI immediately
+//! runs the spike-4 transport matrix, writes `.debug/ipc-bench/<timestamp>.json`,
+//! prints a report between [`ipc_bench::REPORT_BEGIN`]/[`ipc_bench::REPORT_END`]
+//! and exits. `MYDAW_DEV_PANELS=1` contributes the same panel without running
+//! anything, for measuring by hand. See [`ipc_bench`].
+//!
 //! The kernel deliberately does *not* live in Tauri's managed state: plugins are
 //! not `Send`. It stays on the main thread, owned by the run loop; the UI-facing
 //! state is a snapshot plus `Arc`s to services (see [`state::AppState`]).
@@ -43,6 +50,7 @@ mod dto;
 mod graph;
 pub mod gui_bridge;
 pub mod gui_host;
+pub mod ipc_bench;
 mod meters;
 mod state;
 
@@ -59,6 +67,10 @@ pub use graph::{
 };
 pub use gui_bridge::{ClapGuiBridge, ClapGuiCommand, ClapGuiStatusDto, GUI_REQUEST_TIMEOUT};
 pub use gui_host::{ClapGuiHost, NO_PLUGIN_MESSAGE};
+pub use ipc_bench::{
+    auto_mode as ipc_bench_auto_mode, BenchReport, BenchTransport, StreamConfig, DEV_PANELS_ENV,
+    IPC_BENCH_ENV, IPC_BENCH_PANEL,
+};
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
 pub use state::{boot_kernel, ui_snapshot, AppState, StartupError, KERNEL_STATUS_PANEL};
 
@@ -156,6 +168,16 @@ pub fn run() -> ExitCode {
             commands::open_clap_gui,
             commands::close_clap_gui,
             commands::subscribe_meters,
+            // Spike 4's benchmark surface. Registered unconditionally (an
+            // unused match arm is free); reachable only when the bench panel is
+            // in the snapshot, which takes an environment variable.
+            commands::bench_ping,
+            commands::bench_ping_async,
+            commands::bench_plan,
+            commands::bench_sync,
+            commands::bench_stream,
+            commands::bench_meter_stamp,
+            commands::bench_finish,
         ])
         .build(tauri::generate_context!());
 
