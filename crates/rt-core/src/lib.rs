@@ -12,6 +12,7 @@
 //!   ---------------------------------------- | --------------------------------
 //!   GraphSpec -> GraphHandle::install  ------> RtGraphSlot::poll_swap / process
 //!   RtCommand -> rt_channel producer   ------> drain_commands
+//!   LiveNote  -> note_channel producer ------> drain_notes -> NoteEventBuffer
 //!   TransportClock (read for UI)       <-----> TransportClock::advance
 //!   GcThread (frees old graphs)        <------ Owned<..> dropped, never freed
 //! ```
@@ -30,6 +31,7 @@ mod denormals;
 mod gc;
 mod graph;
 mod node;
+mod notes;
 mod transport;
 
 pub use buffers::{AudioBuffers, CHANNELS};
@@ -42,6 +44,10 @@ pub use graph::{
     graph_channel, CompiledGraph, GraphHandle, GraphInstallError, GraphSpec, RtGraphSlot,
 };
 pub use node::{ProcessCtx, RtNode, RtNodeFactory};
+pub use notes::{
+    drain_notes, note_channel, LiveNote, NoteConsumer, NoteEvent, NoteEventBuffer, NoteKind,
+    NoteProducer, DEFAULT_NOTE_CAPACITY, MAX_KEY,
+};
 pub use transport::{TransportClock, TransportSnapshot};
 
 /// Re-exported so downstream crates can name `basedrop` types (`Handle`, `Owned`)

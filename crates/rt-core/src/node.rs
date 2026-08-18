@@ -1,6 +1,6 @@
 //! The RT processing contract: [`RtNode`] and its factory.
 
-use crate::{AudioBuffers, TransportSnapshot};
+use crate::{AudioBuffers, NoteEvent, TransportSnapshot};
 
 /// Everything a node needs for one block.
 ///
@@ -14,15 +14,43 @@ pub struct ProcessCtx<'a> {
     pub frames: usize,
     /// Transport state for this block, sampled once so all nodes agree.
     pub transport: TransportSnapshot,
+    /// This block's note events, sorted by
+    /// [`frame_offset`](NoteEvent::frame_offset), every offset `< frames`.
+    ///
+    /// Borrowed from a buffer the audio thread pre-allocated (see
+    /// [`NoteEventBuffer`](crate::NoteEventBuffer)); a node reads it and never
+    /// owns it. Empty for every node in a chain with no instrument in it, which
+    /// is why iterating it unconditionally costs nothing.
+    pub events: &'a [NoteEvent],
 }
 
 impl<'a> ProcessCtx<'a> {
-    /// Build a context, keeping `frames` and the buffer view in sync.
+    /// Build a context with no note events, keeping `frames` and the buffer view
+    /// in sync.
+    ///
+    /// This is the right constructor for effect-only chains and for the many
+    /// tests that are about audio rather than notes; the audio callback itself
+    /// uses [`with_events`](Self::with_events).
     pub fn new(
         buffers: &'a mut AudioBuffers,
         sample_rate: f64,
         frames: usize,
         transport: TransportSnapshot,
+    ) -> Self {
+        Self::with_events(buffers, sample_rate, frames, transport, &[])
+    }
+
+    /// Build a context carrying this block's note events.
+    ///
+    /// `events` must be sorted by `frame_offset` with every offset inside the
+    /// block; [`NoteEventBuffer`](crate::NoteEventBuffer) guarantees the first
+    /// and the caller guarantees the second.
+    pub fn with_events(
+        buffers: &'a mut AudioBuffers,
+        sample_rate: f64,
+        frames: usize,
+        transport: TransportSnapshot,
+        events: &'a [NoteEvent],
     ) -> Self {
         buffers.set_frames(frames);
         let frames = buffers.frames();
@@ -31,6 +59,7 @@ impl<'a> ProcessCtx<'a> {
             sample_rate,
             frames,
             transport,
+            events,
         }
     }
 }

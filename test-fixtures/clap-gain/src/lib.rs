@@ -1,15 +1,28 @@
-//! `mydaw-fixture-clap-gain` -- a real CLAP plugin, built for the test suite.
+//! `mydaw-fixture-clap-gain` -- real CLAP plugins, built for the test suite.
 //!
 //! Spike 2 hosts CLAP plugins. Testing that against whatever the developer
 //! happens to have installed is not a test, it is a coincidence: the assertions
 //! would depend on a third party's DSP, the machine, and the day. So the
-//! workspace builds its own plugin instead.
+//! workspace builds its own plugins instead.
 //!
-//! The DSP is the most boring thing that is still observable end to end:
-//! **stereo in, stereo out, every sample multiplied by [`GAIN`] (0.5, -6.02 dB)**.
-//! No parameters, no GUI, no state, no events, no latency, no randomness --
+//! One bundle, two plugins:
+//!
+//! | CLAP id | What it is | What it proves |
+//! | --- | --- | --- |
+//! | [`PLUGIN_ID`] (`…fixture.gain`) | stereo in/out, `× `[`GAIN`] | audio reaches a plugin and comes back |
+//! | [`synth::PLUGIN_ID`] (`…fixture.synth`) | note-in, stereo out, 8 sine voices | *note events* reach a plugin |
+//!
+//! Two plugins in one bundle is also not an accident: it is the layout every
+//! real vendor ships, and exercising the host's "find the plugin with this id
+//! inside this bundle" path for free is worth the small amount of factory
+//! boilerplate at the bottom of this file.
+//!
+//! The gain plugin's DSP is the most boring thing that is still observable end
+//! to end: **stereo in, stereo out, every sample multiplied by [`GAIN`] (0.5,
+//! -6.02 dB)**. No parameters, no state, no events, no latency, no randomness --
 //! `output == input * 0.5`, sample for sample, forever. That makes the host-side
-//! assertions exact rather than approximate.
+//! assertions exact rather than approximate. The synth is documented in
+//! [`synth`].
 //!
 //! # Why `crate-type = ["cdylib", "rlib"]`
 //! The `cdylib` is the artifact under test: `cargo build` writes
@@ -22,6 +35,7 @@
 //! This crate is a test fixture. It is never shipped.
 
 pub mod gui;
+pub mod synth;
 
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
@@ -31,10 +45,13 @@ use clack_extensions::gui::{
     GuiConfiguration, GuiResizeHints, GuiSize, PluginGui, PluginGuiImpl, Window,
 };
 use clack_extensions::timer::{PluginTimer, PluginTimerImpl, TimerId};
+use clack_plugin::entry::prelude::*;
 use clack_plugin::plugin::PluginError;
 use clack_plugin::prelude::*;
+use std::ffi::CStr;
 
 use crate::gui::FixtureGui;
+use crate::synth::{SynthMainThread, SynthPlugin};
 
 /// CLAP id of the fixture. Hosts address the plugin by this string.
 pub const PLUGIN_ID: &str = "dev.mydaw.fixture.gain";
@@ -292,7 +309,102 @@ impl PluginTimerImpl for GainMainThread<'_> {
     }
 }
 
-clack_export_entry!(SinglePluginEntry<GainPlugin>);
+// ---------------------------------------------------------------------------
+// The bundle entry
+// ---------------------------------------------------------------------------
+
+/// The bundle's plugin factory: gain at index 0, synth at index 1.
+///
+/// Hand-written rather than [`SinglePluginEntry`] because the bundle exposes two
+/// plugins. The descriptors are built once, when the entry is loaded, and handed
+/// out by reference -- CLAP requires them to outlive every instance.
+pub struct FixtureFactory {
+    gain: PluginDescriptor,
+    synth: PluginDescriptor,
+}
+
+impl Default for FixtureFactory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FixtureFactory {
+    pub fn new() -> Self {
+        Self {
+            gain: PluginDescriptor::new(PLUGIN_ID, PLUGIN_NAME)
+                .with_vendor(PLUGIN_VENDOR)
+                .with_version(PLUGIN_VERSION),
+            synth: PluginDescriptor::new(synth::PLUGIN_ID, synth::PLUGIN_NAME)
+                .with_vendor(PLUGIN_VENDOR)
+                .with_version(PLUGIN_VERSION),
+        }
+    }
+}
+
+impl PluginFactoryImpl for FixtureFactory {
+    fn plugin_count(&self) -> u32 {
+        2
+    }
+
+    fn plugin_descriptor(&self, index: u32) -> Option<&PluginDescriptor> {
+        match index {
+            0 => Some(&self.gain),
+            1 => Some(&self.synth),
+            _ => None,
+        }
+    }
+
+    fn create_plugin<'a>(
+        &'a self,
+        host_info: HostInfo<'a>,
+        plugin_id: &CStr,
+    ) -> Option<PluginInstance<'a>> {
+        if plugin_id == self.gain.id().unwrap_or_default() {
+            Some(PluginInstance::new::<GainPlugin>(
+                host_info,
+                &self.gain,
+                |_host| Ok(()),
+                |host, _shared| {
+                    Ok(GainMainThread {
+                        host,
+                        gui: FixtureGui::new(),
+                    })
+                },
+            ))
+        } else if plugin_id == self.synth.id().unwrap_or_default() {
+            Some(PluginInstance::new::<SynthPlugin>(
+                host_info,
+                &self.synth,
+                |_host| Ok(()),
+                |_host, _shared| Ok(SynthMainThread),
+            ))
+        } else {
+            // An id this bundle does not export. Returning `None` is what makes
+            // the host's `PluginNotFound` path reachable.
+            None
+        }
+    }
+}
+
+/// The bundle entry point. Exposes exactly [`FixtureFactory`].
+pub struct FixtureEntry {
+    factory: PluginFactoryWrapper<FixtureFactory>,
+}
+
+impl Entry for FixtureEntry {
+    fn new(_bundle_path: Option<&CStr>) -> Result<Self, EntryLoadError> {
+        Ok(Self {
+            factory: PluginFactoryWrapper::new(FixtureFactory::new()),
+        })
+    }
+
+    fn declare_factories<'a>(&'a self, builder: &mut EntryFactories<'a>) {
+        builder.register_factory(&self.factory);
+    }
+}
+
+clack_export_entry!(FixtureEntry);
 
 #[cfg(test)]
 mod tests {

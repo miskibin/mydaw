@@ -35,6 +35,7 @@ src/
 │   ├── types.ts        # wire types mirrored from the Rust ipc-bridge crate
 │   └── backend.ts      # Backend interface + TauriBackend / MockBackend + auto-pick
 ├── lib/playhead.ts     # local playhead interpolation between sparse RT updates
+├── lib/keyboard.ts     # the computer-keyboard piano: key map, octave, note names
 ├── panels/
 │   ├── registry.ts     # component-key -> Solid component (mirror of Rust contributions)
 │   ├── PanelFrame.tsx  # panel chrome + registry resolution, unknown-key fallback
@@ -42,7 +43,7 @@ src/
 │   ├── kernel-status/  # plugin registry rows with lifecycle dots
 │   └── meters/         # canvas stereo peak/RMS meter (draw.ts is Solid-free)
 ├── shell/              # TransportBar, PanelDock, MainArea, StatusBar
-├── state.tsx           # Solid context: snapshot, transport, meter bus, playhead
+├── state.tsx           # Solid context: snapshot, transport, meter bus, playhead, held notes
 └── styles/             # theme.css (tokens) + app.css (layout)
 ```
 
@@ -55,7 +56,9 @@ The UI expects these Tauri commands (`src/api/backend.ts` is the only caller):
 | `get_ui_snapshot` | returns `UiSnapshot { plugins: PluginStatusDto[], panels: PanelManifestDto[] }` |
 | `transport_play` | no args, no return |
 | `transport_stop` | no args, no return |
-| `subscribe_meters` | takes `{ channel }` (Tauri v2 `Channel<MeterFrame>`), streams at 30-60 Hz |
+| `note_on` | takes `{ key, velocity }` (MIDI key `0..=127`, velocity `0..=1`); sounds regardless of transport state |
+| `note_off` | takes `{ key }` |
+| `subscribe_meters` | takes `{ channel }` (Tauri v2 `Channel<MeterFrame>`), streams at 30 Hz |
 
 Plus the dev-only bench surface (`src/dev/ipcBench.ts` is the only caller): `bench_ping`,
 `bench_ping_async`, `bench_plan`, `bench_sync`, `bench_stream`, `bench_meter_stamp`,

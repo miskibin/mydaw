@@ -27,8 +27,8 @@ use std::sync::Arc;
 use mydaw_ipc_bridge::{MeterFrame, MeterProducer};
 use mydaw_plugin_debug_tap::TapRtSide;
 use mydaw_rt_core::{
-    disable_denormals, drain_commands, AudioBuffers, ProcessCtx, RtCommandConsumer, RtGraphSlot,
-    TransportClock, CHANNELS,
+    disable_denormals, drain_commands, drain_notes, AudioBuffers, NoteConsumer, NoteEventBuffer,
+    ProcessCtx, RtCommandConsumer, RtGraphSlot, TransportClock, CHANNELS,
 };
 
 use crate::priority::RealtimeToken;
@@ -43,6 +43,7 @@ pub struct AudioIoStats {
     blocks_processed: AtomicU64,
     truncated_blocks: AtomicU64,
     meter_frames_dropped: AtomicU64,
+    note_events_dropped: AtomicU64,
     stream_errors: AtomicU64,
     priority_promotion_failures: AtomicU64,
 }
@@ -66,6 +67,18 @@ impl AudioIoStats {
     /// Harmless -- only the newest meter value is ever displayed.
     pub fn meter_frames_dropped(&self) -> u64 {
         self.meter_frames_dropped.load(Ordering::Relaxed)
+    }
+
+    /// Note events dropped because the block's event buffer was full.
+    ///
+    /// Audible: a dropped note-on is a note that never sounds, and a dropped
+    /// note-off is a note that never stops. The buffer is sized to the note
+    /// queue's capacity, so on the live path this can only be non-zero if
+    /// something is generating more than
+    /// [`AudioIoConfig::note_queue_capacity`](crate::AudioIoConfig::note_queue_capacity)
+    /// events in a single block.
+    pub fn note_events_dropped(&self) -> u64 {
+        self.note_events_dropped.load(Ordering::Relaxed)
     }
 
     /// Errors reported by cpal's error callback (device lost, xrun, ...).
@@ -95,6 +108,11 @@ pub struct RtStateParams {
     pub graph: RtGraphSlot,
     /// Receives transport commands from the UI.
     pub commands: RtCommandConsumer,
+    /// Receives live note events (a keyboard, a pad, the UI's piano).
+    pub notes: NoteConsumer,
+    /// Events the block's note buffer can hold. Sized to the note queue's
+    /// capacity so a full queue always fits in one block.
+    pub note_capacity: usize,
     /// Meter queue producer, if metering is wired up.
     pub meters: Option<MeterProducer>,
     /// Debug capture tap, if `debug-tap` is wired up. Costs one relaxed atomic
@@ -119,6 +137,9 @@ pub struct RtStateParams {
 pub struct RtState {
     graph: RtGraphSlot,
     commands: RtCommandConsumer,
+    notes: NoteConsumer,
+    /// This block's note events. Allocated once, refilled every block.
+    note_events: NoteEventBuffer,
     meters: Option<MeterProducer>,
     debug_tap: Option<TapRtSide>,
     transport: Arc<TransportClock>,
@@ -148,6 +169,8 @@ impl RtState {
         Self {
             graph: params.graph,
             commands: params.commands,
+            notes: params.notes,
+            note_events: NoteEventBuffer::new(params.note_capacity),
             meters: params.meters,
             debug_tap: params.debug_tap,
             transport: params.transport,
@@ -236,8 +259,11 @@ impl RtState {
 ///    heard in this block rather than the next.
 /// 2. **Drain transport commands** before snapshotting, so a `Seek` issued with
 ///    the same message as a `SetPlaying` takes effect on the same block.
-/// 3. **Process**, then interleave and measure in a single pass over the samples.
-/// 4. **Advance the transport** by the frames actually produced, then publish the
+/// 3. **Drain live notes** into the block's event buffer, all at frame offset 0:
+///    a key pressed between callbacks sounds from the first sample of the next
+///    block, which is the least latency a block-based engine can offer.
+/// 4. **Process**, then interleave and measure in a single pass over the samples.
+/// 5. **Advance the transport** by the frames actually produced, then publish the
 ///    meter frame carrying the post-advance position (what the playhead should
 ///    show once this block has been heard).
 pub fn run_block(state: &mut RtState, output: &mut [f32]) {
@@ -250,12 +276,30 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
     state.graph.poll_swap();
     drain_commands(&mut state.commands, &state.transport);
 
+    // Live input has no position within the block, so every event lands at
+    // offset 0. Sample-accurate offsets arrive with the sequencer, which will
+    // fill this same buffer from the pattern instead of from the queue.
+    state.note_events.clear();
+    let dropped = drain_notes(&mut state.notes, &mut state.note_events, 0);
+    if dropped > 0 {
+        state
+            .stats
+            .note_events_dropped
+            .fetch_add(dropped as u64, Ordering::Relaxed);
+    }
+
     let transport = state.transport.snapshot();
 
-    // `ProcessCtx::new` clamps to the buffers' `max_block`, so `frames` may be
-    // less than the device asked for. The tail is silenced below.
+    // `ProcessCtx::with_events` clamps to the buffers' `max_block`, so `frames`
+    // may be less than the device asked for. The tail is silenced below.
     let frames = {
-        let mut ctx = ProcessCtx::new(&mut state.buffers, state.sample_rate, requested, transport);
+        let mut ctx = ProcessCtx::with_events(
+            &mut state.buffers,
+            state.sample_rate,
+            requested,
+            transport,
+            state.note_events.as_slice(),
+        );
         state.graph.process(&mut ctx);
         ctx.frames
     };
@@ -336,7 +380,10 @@ mod tests {
     use mydaw_ipc_bridge::meter_channel;
     use mydaw_plugin_debug_tap::{debug_tap_channel, TapConsumer};
     use mydaw_plugin_test_tone::{TestToneNode, DEFAULT_AMPLITUDE};
-    use mydaw_rt_core::{graph_channel, rt_channel, GcThread, GraphSpec, RtCommand};
+    use mydaw_rt_core::{
+        graph_channel, note_channel, rt_channel, GcThread, GraphSpec, LiveNote, NoteEvent,
+        NoteProducer, RtCommand, RtNode,
+    };
     use std::time::Instant;
 
     const SR: f64 = 48_000.0;
@@ -351,6 +398,7 @@ mod tests {
         state: RtState,
         graph: mydaw_rt_core::GraphHandle,
         commands: mydaw_rt_core::RtCommandProducer,
+        notes: NoteProducer,
         throttle: mydaw_ipc_bridge::MeterThrottle,
         tap: TapConsumer,
         transport: Arc<TransportClock>,
@@ -359,9 +407,14 @@ mod tests {
     }
 
     fn rig(out_channels: usize) -> Rig {
+        rig_with_note_capacity(out_channels, 64)
+    }
+
+    fn rig_with_note_capacity(out_channels: usize, note_capacity: usize) -> Rig {
         let gc = GcThread::spawn();
         let (graph, slot) = graph_channel(4, gc.handle());
         let (cmd_tx, cmd_rx) = rt_channel::<RtCommand>(64);
+        let (note_tx, note_rx) = note_channel(note_capacity);
         let (meter_tx, throttle) = meter_channel(64);
         let (tap_rt, tap) = debug_tap_channel(TAP_CAPACITY);
         let transport = Arc::new(TransportClock::new(SR));
@@ -370,6 +423,8 @@ mod tests {
         let state = RtState::new(RtStateParams {
             graph: slot,
             commands: cmd_rx,
+            notes: note_rx,
+            note_capacity,
             meters: Some(meter_tx),
             debug_tap: Some(tap_rt),
             transport: Arc::clone(&transport),
@@ -383,11 +438,33 @@ mod tests {
             state,
             graph,
             commands: cmd_tx,
+            notes: note_tx,
             throttle,
             tap,
             transport,
             stats,
             _gc: gc,
+        }
+    }
+
+    /// Records the note events each block hands it, so a test can assert what
+    /// reached the graph without involving a plugin.
+    ///
+    /// It locks a mutex inside `process`, which a real node must never do; the
+    /// node is inside the graph and therefore unreachable from the test thread
+    /// any other way. Nothing here runs on a real audio callback.
+    #[derive(Clone, Default)]
+    struct NoteSpy(Arc<parking_lot::Mutex<Vec<Vec<NoteEvent>>>>);
+
+    impl NoteSpy {
+        fn blocks(&self) -> Vec<Vec<NoteEvent>> {
+            self.0.lock().clone()
+        }
+    }
+
+    impl RtNode for NoteSpy {
+        fn process(&mut self, ctx: &mut ProcessCtx) {
+            self.0.lock().push(ctx.events.to_vec());
         }
     }
 
@@ -527,12 +604,15 @@ mod tests {
         let gc = GcThread::spawn();
         let (graph, slot) = graph_channel(4, gc.handle());
         let (_cmd_tx, cmd_rx) = rt_channel::<RtCommand>(8);
+        let (_note_tx, note_rx) = note_channel(8);
         // Capacity 1: the second block has nowhere to put its frame.
         let (meter_tx, _throttle) = meter_channel(1);
         let stats = Arc::new(AudioIoStats::default());
         let mut state = RtState::new(RtStateParams {
             graph: slot,
             commands: cmd_rx,
+            notes: note_rx,
+            note_capacity: 8,
             meters: Some(meter_tx),
             debug_tap: None,
             transport: Arc::new(TransportClock::new(SR)),
@@ -663,6 +743,7 @@ mod tests {
         let gc = GcThread::spawn();
         let (graph, slot) = graph_channel(4, gc.handle());
         let (_cmd_tx, cmd_rx) = rt_channel::<RtCommand>(8);
+        let (_note_tx, note_rx) = note_channel(8);
         let (meter_tx, _throttle) = meter_channel(64);
         // Room for 32 stereo frames; each block pushes 128.
         let (tap_rt, tap) = debug_tap_channel(64);
@@ -670,6 +751,8 @@ mod tests {
         let mut state = RtState::new(RtStateParams {
             graph: slot,
             commands: cmd_rx,
+            notes: note_rx,
+            note_capacity: 8,
             meters: Some(meter_tx),
             debug_tap: Some(tap_rt),
             transport: Arc::new(TransportClock::new(SR)),
@@ -688,6 +771,90 @@ mod tests {
 
         assert_eq!(stats.blocks_processed(), 4, "the callback never stalled");
         assert!(tap.shared().dropped() > 0, "the overflow must be counted");
+    }
+
+    #[test]
+    fn live_notes_reach_the_graph_at_the_start_of_the_next_block() {
+        let mut rig = rig(2);
+        let spy = NoteSpy::default();
+        rig.graph
+            .install(GraphSpec::new().with(Box::new(spy.clone())))
+            .unwrap();
+
+        let mut out = vec![0.0_f32; 128 * 2];
+        // Block 1: nothing queued.
+        run_block(&mut rig.state, &mut out);
+
+        rig.notes.push(LiveNote::note_on(69, 0.75)).unwrap();
+        rig.notes.push(LiveNote::note_on(72, 1.0)).unwrap();
+        run_block(&mut rig.state, &mut out);
+
+        // Block 3: the queue is empty again, so the events must be gone.
+        run_block(&mut rig.state, &mut out);
+
+        let blocks = spy.blocks();
+        assert_eq!(blocks.len(), 3);
+        assert!(blocks[0].is_empty(), "no notes were queued for block 1");
+        assert_eq!(
+            blocks[1],
+            vec![
+                NoteEvent::note_on(0, 69, 0.75),
+                NoteEvent::note_on(0, 72, 1.0)
+            ],
+            "live notes arrive at frame 0, in the order they were sent"
+        );
+        assert!(
+            blocks[2].is_empty(),
+            "the buffer is cleared every block; events must not linger"
+        );
+        assert_eq!(rig.stats.note_events_dropped(), 0);
+    }
+
+    #[test]
+    fn notes_are_delivered_whether_or_not_the_transport_is_running() {
+        // Playing an instrument with the sequencer stopped is the normal way to
+        // audition one, so the note path must not be gated on the transport.
+        let mut rig = rig(2);
+        let spy = NoteSpy::default();
+        rig.graph
+            .install(GraphSpec::new().with(Box::new(spy.clone())))
+            .unwrap();
+
+        let mut out = vec![0.0_f32; 64 * 2];
+        rig.notes.push(LiveNote::note_on(60, 1.0)).unwrap();
+        run_block(&mut rig.state, &mut out);
+        assert!(!rig.transport.snapshot().playing);
+
+        rig.commands.push(RtCommand::SetPlaying(true)).unwrap();
+        rig.notes.push(LiveNote::note_off(60)).unwrap();
+        run_block(&mut rig.state, &mut out);
+
+        let blocks = spy.blocks();
+        assert_eq!(blocks[0], vec![NoteEvent::note_on(0, 60, 1.0)]);
+        assert_eq!(blocks[1], vec![NoteEvent::note_off(0, 60)]);
+    }
+
+    #[test]
+    fn a_note_burst_larger_than_the_block_buffer_is_dropped_and_counted() {
+        // Queue deeper than the block buffer: only the engine's own config keeps
+        // these equal, so the overflow branch has to be real and counted.
+        let mut rig = rig_with_note_capacity(2, 2);
+        let (mut tx, rx) = note_channel(16);
+        rig.state.notes = rx;
+        for key in 60..=64 {
+            tx.push(LiveNote::note_on(key, 1.0)).unwrap();
+        }
+
+        let spy = NoteSpy::default();
+        rig.graph
+            .install(GraphSpec::new().with(Box::new(spy.clone())))
+            .unwrap();
+        let mut out = vec![0.0_f32; 64 * 2];
+        run_block(&mut rig.state, &mut out);
+
+        assert_eq!(spy.blocks()[0].len(), 2, "the buffer holds what it can");
+        assert_eq!(rig.stats.note_events_dropped(), 3);
+        assert_eq!(rig.stats.blocks_processed(), 1, "the callback carried on");
     }
 
     #[test]

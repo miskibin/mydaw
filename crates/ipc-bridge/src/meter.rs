@@ -46,13 +46,36 @@ impl MeterFrame {
 /// metering: only the latest value is displayed. Peak *hold* semantics, if wanted,
 /// belong in the metering plugin on the RT side, not here.
 ///
+/// # Keeping to the grid
+/// The deadline for the next emission advances by exactly `min_interval` from
+/// the *previous deadline*, not from the moment the poll happened. That
+/// difference is the whole of the spike-4 cadence bug: a caller polling on its
+/// own timer never lands exactly on the deadline, and resetting to `now` folded
+/// that overshoot into every subsequent interval, so a 30 Hz throttle polled
+/// every 15 ms emitted at 22 Hz. Advancing the deadline instead means the lag is
+/// bounded by one poll interval and never accumulates.
+///
+/// A caller that stalls for longer than [`RESYNC_AFTER`] intervals resyncs to
+/// `now` rather than firing a burst to catch up: nobody wants six meter frames
+/// at once after the pump was descheduled, and only the newest carries any
+/// information anyway.
+///
 /// Lives on a non-RT thread (the IPC pump).
 pub struct MeterThrottle {
     rx: Consumer<MeterFrame>,
     latest: Option<MeterFrame>,
     min_interval: Duration,
+    /// Deadline the *next* emission is measured from. See the type docs: this is
+    /// the previous ideal grid point, not the previous wall-clock emission.
     last_emit: Option<Instant>,
 }
+
+/// How far behind the grid the throttle may fall before it gives up on catching
+/// up and resynchronises to the current time.
+///
+/// Two intervals: one poll's worth of slack is normal, anything more means the
+/// caller was descheduled and a catch-up burst would help nobody.
+pub const RESYNC_AFTER: u32 = 2;
 
 impl MeterThrottle {
     /// Throttle at [`DEFAULT_METER_HZ`].
@@ -94,16 +117,24 @@ impl MeterThrottle {
             self.latest = Some(frame);
         }
 
-        let due = match self.last_emit {
-            None => true,
-            Some(last) => now.saturating_duration_since(last) >= self.min_interval,
-        };
-        if !due {
+        let elapsed = self
+            .last_emit
+            .map(|last| now.saturating_duration_since(last));
+        if elapsed.is_some_and(|elapsed| elapsed < self.min_interval) {
             return None;
         }
 
         let frame = self.latest.take()?;
-        self.last_emit = Some(now);
+        self.last_emit = Some(match (self.last_emit, elapsed) {
+            // Normal case: step the deadline forward by one whole interval, so
+            // the overshoot of this poll is not baked into the next one.
+            (Some(last), Some(elapsed)) if elapsed < self.min_interval * RESYNC_AFTER => {
+                last + self.min_interval
+            }
+            // First emission, an unthrottled instance, or a caller that stalled:
+            // start a fresh grid from here.
+            _ => now,
+        });
         Some(frame)
     }
 }
@@ -177,6 +208,62 @@ mod tests {
             (30..=31).contains(&emitted),
             "expected ~30 emissions in 1 s, got {emitted}"
         );
+    }
+
+    /// The spike-4 cadence bug, as a regression test.
+    ///
+    /// A 30 Hz throttle polled every 15 ms used to emit at 21.85 Hz, because
+    /// each emission reset the deadline to the moment of the (late) poll. It
+    /// must now land within one poll interval of the ideal 30 per second.
+    #[test]
+    fn a_caller_polling_off_the_grid_still_gets_the_configured_rate() {
+        for poll_ms in [5_u64, 8, 15, 16] {
+            let (mut tx, rx) = rtrb::RingBuffer::<MeterFrame>::new(4);
+            let mut throttle = MeterThrottle::with_rate(rx, 30.0);
+            let t0 = Instant::now();
+
+            let mut emitted = 0;
+            let mut elapsed = 0_u64;
+            while elapsed < 1_000 {
+                let _ = tx.push(frame(0.5));
+                if throttle.poll(t0 + Duration::from_millis(elapsed)).is_some() {
+                    emitted += 1;
+                }
+                elapsed += poll_ms;
+            }
+            assert!(
+                (29..=31).contains(&emitted),
+                "polling every {poll_ms} ms should still yield ~30 frames/s, got {emitted}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stalled_caller_resyncs_instead_of_firing_a_catch_up_burst() {
+        let (mut tx, rx) = rtrb::RingBuffer::<MeterFrame>::new(8);
+        let mut throttle = MeterThrottle::with_rate(rx, 30.0);
+        let t0 = Instant::now();
+
+        tx.push(frame(0.1)).unwrap();
+        assert!(throttle.poll(t0).is_some());
+
+        // Descheduled for a second, then polled tightly. A deadline that kept
+        // stepping by 33 ms would owe ~30 frames and fire them back to back.
+        let stall = Duration::from_millis(1_000);
+        tx.push(frame(0.2)).unwrap();
+        assert!(throttle.poll(t0 + stall).is_some());
+
+        tx.push(frame(0.3)).unwrap();
+        assert!(
+            throttle
+                .poll(t0 + stall + Duration::from_millis(1))
+                .is_none(),
+            "the grid restarts at the resync point, so nothing is owed"
+        );
+        tx.push(frame(0.4)).unwrap();
+        assert!(throttle
+            .poll(t0 + stall + Duration::from_millis(34))
+            .is_some());
     }
 
     #[test]

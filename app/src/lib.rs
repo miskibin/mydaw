@@ -8,9 +8,10 @@
 //!    plugin-windows),
 //! 2. boot it -- dependency order and lifecycle are the kernel's problem,
 //! 3. snapshot plugins and contributed panels for the webview,
-//! 4. open the audio device and publish the test-tone graph,
-//! 5. run a Tauri v2 window over the SolidJS UI in `ui/`, exposing five commands
-//!    and one meter stream,
+//! 4. open the audio device and publish the engine graph (the test tone, or a
+//!    CLAP instrument when [`CLAP_INSTRUMENT_ENV`] names one),
+//! 5. run a Tauri v2 window over the SolidJS UI in `ui/`, exposing the transport,
+//!    note, plugin and capture commands plus one meter stream,
 //! 6. stop audio and shut the kernel down when the window closes.
 //!
 //! # Headless capture mode
@@ -62,8 +63,10 @@ pub use debug_capture::{
 };
 pub use dto::{ClapPluginInfoDto, MeterFrameDto};
 pub use graph::{
-    clap_effect_node, clap_fx_spec_from_env, install_tone_graph, load_env_clap_effect,
-    parse_clap_fx_spec, tone_graph, ClapEffectSpec, ClapFxEnvError, TransportGate, CLAP_FX_ENV,
+    clap_effect_node, clap_fx_spec_from_env, clap_instrument_node, clap_instrument_spec_from_env,
+    clap_node, clap_spec_from_env, engine_graph, install_engine_graph, load_env_clap_effect,
+    load_env_clap_instrument, load_env_clap_plugin, parse_clap_plugin_spec, tone_graph,
+    ClapPluginEnvError, ClapPluginSpec, TransportGate, CLAP_FX_ENV, CLAP_INSTRUMENT_ENV,
 };
 pub use gui_bridge::{ClapGuiBridge, ClapGuiCommand, ClapGuiStatusDto, GUI_REQUEST_TIMEOUT};
 pub use gui_host::{ClapGuiHost, NO_PLUGIN_MESSAGE};
@@ -72,7 +75,7 @@ pub use ipc_bench::{
     IPC_BENCH_ENV, IPC_BENCH_PANEL,
 };
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
-pub use state::{boot_kernel, ui_snapshot, AppState, StartupError, KERNEL_STATUS_PANEL};
+pub use state::{boot_kernel, ui_snapshot, AppState, NoteError, StartupError, KERNEL_STATUS_PANEL};
 
 use std::process::ExitCode;
 
@@ -103,14 +106,20 @@ pub fn run() -> ExitCode {
         }
     };
 
-    // Loaded before the device opens, activated after: the plugin needs the
+    // Loaded before the device opens, activated after: the plugins need the
     // negotiated sample rate. Owned here, on the main thread, because a
     // `LoadedClapPlugin` is `!Send` and must outlive the node it hands the graph.
+    let mut clap_instrument = load_env_clap_instrument(state.clap());
     let mut clap_fx = load_env_clap_effect(state.clap());
+    let source = if clap_instrument.is_some() {
+        "CLAP instrument"
+    } else {
+        "test-tone"
+    };
 
-    match state.start_audio_with_effect(clap_fx.as_mut()) {
+    match state.start_audio_with_plugins(clap_instrument.as_mut(), clap_fx.as_mut()) {
         Ok(info) => log::info!(
-            "audio output: {} @ {} Hz, {} ch (max block {}); test-tone graph installed",
+            "audio output: {} @ {} Hz, {} ch (max block {}); {source} graph installed",
             info.device_name,
             info.sample_rate,
             info.channels,
@@ -127,7 +136,12 @@ pub fn run() -> ExitCode {
     match debug_capture_seconds_from_env() {
         Some(Ok(seconds)) => {
             let captured = run_headless_capture(&state, seconds);
-            shutdown(&state, clap_fx.as_mut(), &mut kernel);
+            shutdown(
+                &state,
+                clap_instrument.as_mut(),
+                clap_fx.as_mut(),
+                &mut kernel,
+            );
             return if captured {
                 ExitCode::SUCCESS
             } else {
@@ -136,7 +150,12 @@ pub fn run() -> ExitCode {
         }
         Some(Err(message)) => {
             eprintln!("MYDAW: {message}");
-            shutdown(&state, clap_fx.as_mut(), &mut kernel);
+            shutdown(
+                &state,
+                clap_instrument.as_mut(),
+                clap_fx.as_mut(),
+                &mut kernel,
+            );
             return ExitCode::FAILURE;
         }
         None => {}
@@ -164,6 +183,8 @@ pub fn run() -> ExitCode {
             commands::get_clap_plugins,
             commands::transport_play,
             commands::transport_stop,
+            commands::note_on,
+            commands::note_off,
             commands::debug_capture,
             commands::open_clap_gui,
             commands::close_clap_gui,
@@ -187,7 +208,8 @@ pub fn run() -> ExitCode {
             eprintln!("MYDAW: could not create the application window: {err}");
             meters.shutdown();
             audio.stop();
-            shutdown_clap(clap_fx.as_mut());
+            shutdown_clap(clap_instrument.as_mut(), "instrument");
+            shutdown_clap(clap_fx.as_mut(), "effect");
             kernel.shutdown();
             return ExitCode::FAILURE;
         }
@@ -215,8 +237,12 @@ pub fn run() -> ExitCode {
         // window's own `WM_TIMER` keeps this firing at ~60 Hz; the rest of the
         // time it fires whenever anything else happens, which is exactly when
         // there is something to do.
+        // The editor surface still hosts one plugin: the effect when there is
+        // one, otherwise the instrument. A second editor window means a second
+        // GUI session and a second `LoadedClapPlugin` to pump, which is a Phase
+        // 2 concern (one editor per track insert) rather than a step-2 one.
         tauri::RunEvent::MainEventsCleared => {
-            gui_host.tick(clap_fx.as_mut(), &gui_bridge);
+            gui_host.tick(clap_fx.as_mut().or(clap_instrument.as_mut()), &gui_bridge);
         }
         tauri::RunEvent::Exit => {
             log::info!("shutting down");
@@ -224,12 +250,13 @@ pub fn run() -> ExitCode {
             // Before anything else: the plugin's editor must be destroyed while
             // its bundle is still loaded. A window whose procedure lives in an
             // unloaded DLL crashes the process on the next message.
-            gui_host.shutdown(clap_fx.as_mut());
+            gui_host.shutdown(clap_fx.as_mut().or(clap_instrument.as_mut()));
             // Closing the stream retires the graph, which is what eventually
-            // drops the CLAP node and sends its processor back here. Only then
-            // can the plugin be deactivated on this (main) thread.
+            // drops the CLAP nodes and sends their processors back here. Only
+            // then can the plugins be deactivated on this (main) thread.
             audio.stop();
-            shutdown_clap(clap_fx.as_mut());
+            shutdown_clap(clap_instrument.as_mut(), "instrument");
+            shutdown_clap(clap_fx.as_mut(), "effect");
             kernel.shutdown();
         }
         _ => {}
@@ -241,14 +268,16 @@ pub fn run() -> ExitCode {
 /// Tear everything down in the same order the window-close path uses.
 fn shutdown(
     state: &AppState,
+    clap_instrument: Option<&mut mydaw_plugin_host_clap::LoadedClapPlugin>,
     clap_fx: Option<&mut mydaw_plugin_host_clap::LoadedClapPlugin>,
     kernel: &mut mydaw_kernel::Kernel,
 ) {
     state.meters().shutdown();
     // Closing the stream retires the graph, which is what eventually drops the
-    // CLAP node and sends its processor back to the main thread.
+    // CLAP nodes and sends their processors back to the main thread.
     state.audio().stop();
-    shutdown_clap(clap_fx);
+    shutdown_clap(clap_instrument, "instrument");
+    shutdown_clap(clap_fx, "effect");
     kernel.shutdown();
 }
 
@@ -258,13 +287,13 @@ fn shutdown(
 /// collector; see `mydaw_plugin_host_clap::hosting` for why that wait exists.
 /// A timeout is not fatal -- clack leaks the instance rather than destroying it
 /// from the wrong thread -- but it is worth a log line.
-fn shutdown_clap(plugin: Option<&mut mydaw_plugin_host_clap::LoadedClapPlugin>) {
+fn shutdown_clap(plugin: Option<&mut mydaw_plugin_host_clap::LoadedClapPlugin>, role: &str) {
     let Some(plugin) = plugin else { return };
     if plugin.shutdown() {
-        log::info!("CLAP effect '{}' deactivated", plugin.info().id);
+        log::info!("CLAP {role} '{}' deactivated", plugin.info().id);
     } else {
         log::warn!(
-            "CLAP effect '{}' was still active at shutdown; its instance will be leaked",
+            "CLAP {role} '{}' was still active at shutdown; its instance will be leaked",
             plugin.info().id
         );
     }

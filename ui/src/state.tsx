@@ -8,6 +8,15 @@ import {
 } from 'solid-js';
 import { getBackend, type Backend } from './api/backend';
 import type { MeterFrame, PanelManifestDto, PluginStatusDto } from './api/types';
+import {
+  clampOctave,
+  DEFAULT_OCTAVE,
+  DEFAULT_VELOCITY,
+  isPianoEvent,
+  midiKeyFor,
+  OCTAVE_DOWN_CODE,
+  OCTAVE_UP_CODE,
+} from './lib/keyboard';
 import { Playhead } from './lib/playhead';
 
 /** Connection/boot state of the kernel, surfaced in the status bar. */
@@ -40,6 +49,10 @@ export interface AppState {
   readonly playing: Accessor<boolean>;
   /** Low-rate mirror of the playhead, for text readouts (~10 Hz). */
   readonly positionSeconds: Accessor<number>;
+  /** Octave the computer-keyboard piano is currently playing in. */
+  readonly octave: Accessor<number>;
+  /** MIDI key numbers currently held down, lowest first. */
+  readonly heldNotes: Accessor<number[]>;
   play(): void;
   stop(): void;
   refresh(): void;
@@ -77,6 +90,8 @@ function createAppState(): AppState {
   const [panels, setPanels] = createSignal<PanelManifestDto[]>([]);
   const [playing, setPlaying] = createSignal(false);
   const [positionSeconds, setPositionSeconds] = createSignal(0);
+  const [octave, setOctave] = createSignal(DEFAULT_OCTAVE);
+  const [heldNotes, setHeldNotes] = createSignal<number[]>([]);
 
   const refresh = () => {
     setKernelState('connecting');
@@ -139,6 +154,65 @@ function createAppState(): AppState {
     );
   };
 
+  // --- the computer-keyboard piano ---------------------------------------
+  //
+  // Held notes live in a Map from the *physical key* to the MIDI key it started,
+  // not in the signal: the note-off has to release whatever the key-down played,
+  // even if the octave has been shifted in between. The signal is only what the
+  // status bar renders.
+  const held = new Map<string, number>();
+
+  const publishHeld = () => setHeldNotes([...held.values()].sort((a, b) => a - b));
+
+  const reportNoteError = (err: unknown) =>
+    setKernelError(err instanceof Error ? err.message : String(err));
+
+  const releaseKey = (code: string) => {
+    const key = held.get(code);
+    if (key === undefined) return;
+    held.delete(code);
+    publishHeld();
+    void backend.noteOff(key).catch(reportNoteError);
+  };
+
+  /** Release everything. Used when focus leaves, so no note can stick on. */
+  const releaseAll = () => {
+    for (const code of [...held.keys()]) releaseKey(code);
+  };
+
+  const handleKeyDown = (event: KeyboardEvent) => {
+    // Auto-repeat would retrigger the note dozens of times a second.
+    if (event.repeat || !isPianoEvent(event)) return;
+
+    if (event.code === OCTAVE_DOWN_CODE || event.code === OCTAVE_UP_CODE) {
+      const delta = event.code === OCTAVE_UP_CODE ? 1 : -1;
+      setOctave((current) => clampOctave(current + delta));
+      event.preventDefault();
+      return;
+    }
+
+    const key = midiKeyFor(event.code, octave());
+    if (key === null || held.has(event.code)) return;
+    held.set(event.code, key);
+    publishHeld();
+    event.preventDefault();
+    void backend.noteOn(key, DEFAULT_VELOCITY).catch((err: unknown) => {
+      // The engine never got the note, so the UI must not claim it is held.
+      held.delete(event.code);
+      publishHeld();
+      reportNoteError(err);
+    });
+  };
+
+  const handleKeyUp = (event: KeyboardEvent) => releaseKey(event.code);
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    // Alt-tabbing away with a key down never delivers its keyup.
+    window.addEventListener('blur', releaseAll);
+  }
+
   refresh();
   void subscribeMeters();
 
@@ -150,6 +224,12 @@ function createAppState(): AppState {
     disposed = true;
     detach?.();
     clearInterval(readoutTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', releaseAll);
+    }
+    releaseAll();
   });
 
   const play = () => {
@@ -179,6 +259,8 @@ function createAppState(): AppState {
     panels,
     playing,
     positionSeconds,
+    octave,
+    heldNotes,
     play,
     stop,
     refresh,

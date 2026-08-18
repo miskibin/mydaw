@@ -11,6 +11,7 @@
 //!   ----------------------------------      ----------------------------
 //!   GraphHandle::install  ---- rtrb ---->    RtGraphSlot::poll_swap
 //!   RtCommandProducer     ---- rtrb ---->    drain_commands
+//!   NoteProducer          ---- rtrb ---->    drain_notes
 //!   MeterThrottle::poll   <--- rtrb -----    MeterProducer::push
 //!   DebugTapService       <--- rtrb -----    TapRtSide::push_block
 //!   Arc<TransportClock>   <-- atomics -->    advance / snapshot
@@ -34,8 +35,8 @@ use cpal::{SampleFormat, Stream, StreamConfig};
 use mydaw_ipc_bridge::MeterProducer;
 use mydaw_plugin_debug_tap::TapRtSide;
 use mydaw_rt_core::{
-    graph_channel, rt_channel, GcThread, GraphHandle, GraphInstallError, GraphSpec, RtCommand,
-    RtCommandProducer, TransportClock,
+    graph_channel, note_channel, rt_channel, GcThread, GraphHandle, GraphInstallError, GraphSpec,
+    LiveNote, NoteProducer, RtCommand, RtCommandProducer, TransportClock, DEFAULT_NOTE_CAPACITY,
 };
 use parking_lot::Mutex;
 
@@ -77,6 +78,12 @@ pub enum AudioIoError {
     /// it, which in practice means the stream is wedged.
     #[error("transport command queue is full")]
     CommandQueueFull,
+
+    /// The live note queue is full. The audio thread drains it every block, so
+    /// this means either a wedged stream or a note source producing more than a
+    /// block's worth of events between callbacks.
+    #[error("note queue is full")]
+    NoteQueueFull,
 }
 
 /// Tunables for [`AudioIoService`].
@@ -92,6 +99,14 @@ pub struct AudioIoConfig {
     pub graph_queue_capacity: usize,
     /// Depth of the transport command queue.
     pub command_queue_capacity: usize,
+    /// Depth of the live note queue, and the size of the per-block note event
+    /// buffer it drains into.
+    ///
+    /// One number for both on purpose: with the buffer at least as large as the
+    /// queue, a full queue always fits into one block, so the live path can
+    /// never drop an event between the two. (The overflow counter still exists
+    /// for the sequencer, which will fill the same buffer from elsewhere.)
+    pub note_queue_capacity: usize,
 }
 
 impl Default for AudioIoConfig {
@@ -100,6 +115,7 @@ impl Default for AudioIoConfig {
             max_block: 4096,
             graph_queue_capacity: 8,
             command_queue_capacity: 256,
+            note_queue_capacity: DEFAULT_NOTE_CAPACITY,
         }
     }
 }
@@ -121,6 +137,7 @@ struct Session {
     transport: Arc<TransportClock>,
     graph: GraphHandle,
     commands: RtCommandProducer,
+    notes: NoteProducer,
     info: StreamInfo,
     /// The callback hands the meter producer back here when it is dropped, so a
     /// later `start()` can reuse it. See [`RtStateCarrier`].
@@ -287,6 +304,26 @@ impl AudioIoService {
             .map_err(|_| AudioIoError::CommandQueueFull)
     }
 
+    /// Send a live note event to the audio thread.
+    ///
+    /// The event takes effect at the first sample of the next block; live input
+    /// carries no offset within a block (see
+    /// [`LiveNote`](mydaw_rt_core::LiveNote)). Deliberately *not* gated on the
+    /// transport: playing an instrument with the sequencer stopped is the normal
+    /// way to audition one.
+    ///
+    /// # Errors
+    /// [`AudioIoError::NotRunning`] with no stream open, and
+    /// [`AudioIoError::NoteQueueFull`] if the audio thread is not draining.
+    pub fn send_note(&self, note: LiveNote) -> Result<(), AudioIoError> {
+        let mut guard = self.session.lock();
+        let session = guard.as_mut().ok_or(AudioIoError::NotRunning)?;
+        session
+            .notes
+            .push(note)
+            .map_err(|_| AudioIoError::NoteQueueFull)
+    }
+
     /// Start or stop the transport.
     pub fn set_playing(&self, playing: bool) -> Result<(), AudioIoError> {
         self.send_command(RtCommand::SetPlaying(playing))
@@ -338,12 +375,15 @@ impl AudioIoService {
         let (graph_handle, graph_slot) =
             graph_channel(self.config.graph_queue_capacity, self.gc.handle());
         let (command_tx, command_rx) = rt_channel::<RtCommand>(self.config.command_queue_capacity);
+        let (note_tx, note_rx) = note_channel(self.config.note_queue_capacity);
         let (meters_return_tx, meters_returned) = mpsc::sync_channel(1);
         let (tap_return_tx, debug_tap_returned) = mpsc::sync_channel(1);
 
         let state = RtState::new(RtStateParams {
             graph: graph_slot,
             commands: command_rx,
+            notes: note_rx,
+            note_capacity: self.config.note_queue_capacity,
             meters: self.meters.lock().take(),
             debug_tap: self.debug_tap.lock().take(),
             transport: Arc::clone(&transport),
@@ -399,6 +439,7 @@ impl AudioIoService {
             transport,
             graph: graph_handle,
             commands: command_tx,
+            notes: note_tx,
             info: info.clone(),
             meters_returned,
             debug_tap_returned,
@@ -483,6 +524,10 @@ mod tests {
             Err(AudioIoError::NotRunning)
         ));
         assert!(matches!(service.seek(0), Err(AudioIoError::NotRunning)));
+        assert!(matches!(
+            service.send_note(LiveNote::note_on(60, 1.0)),
+            Err(AudioIoError::NotRunning)
+        ));
         assert!(service.with_graph_handle(|_| ()).is_none());
     }
 
@@ -529,5 +574,6 @@ mod tests {
         assert_eq!(config.max_block, 4096);
         assert!(config.graph_queue_capacity >= 2);
         assert!(config.command_queue_capacity >= 64);
+        assert_eq!(config.note_queue_capacity, DEFAULT_NOTE_CAPACITY);
     }
 }

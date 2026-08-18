@@ -53,6 +53,27 @@ pub fn transport_stop(state: State<'_, AppState>) -> Result<(), String> {
     state.set_playing(false).map_err(|err| err.to_string())
 }
 
+/// Play a note on the loaded instrument.
+///
+/// `key` is a MIDI key number (60 = middle C, 69 = A440) and `velocity` is
+/// `0.0..=1.0`. Sounds whether or not the transport is running: this is live
+/// input, not sequenced playback.
+///
+/// Synchronous on purpose. The whole command is a bounds check and one wait-free
+/// queue push, so hopping to a worker pool would cost more than it does, and a
+/// held chord is a burst of these -- latency here is audible.
+#[tauri::command]
+pub fn note_on(state: State<'_, AppState>, key: u8, velocity: f32) -> Result<(), String> {
+    state.note_on(key, velocity).map_err(|err| err.to_string())
+}
+
+/// Release a note. Not an error if that key was never pressed -- the plugin
+/// decides what an unmatched note-off means.
+#[tauri::command]
+pub fn note_off(state: State<'_, AppState>, key: u8) -> Result<(), String> {
+    state.note_off(key).map_err(|err| err.to_string())
+}
+
 /// Capture `seconds` of the engine's output and write a WAV, an annotated PNG
 /// and a statistics JSON under `.debug/captures/<timestamp>/`.
 ///

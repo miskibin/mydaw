@@ -701,6 +701,23 @@ code {
   font-weight: 600;
 }
 
+/* The computer-keyboard piano readout. Held notes light up, so a key press is
+   visibly acknowledged even on a machine with no audio device. */
+.statusbar__item--notes {
+  gap: 4px;
+  min-width: 96px;
+  transition: color 90ms ease-out;
+}
+
+.statusbar__item--notes.is-playing {
+  color: var(--accent);
+}
+
+.statusbar__label,
+.statusbar__muted {
+  color: var(--fg-2);
+}
+
 .statusbar__spacer {
   flex: 1;
 }

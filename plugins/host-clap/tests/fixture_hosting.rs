@@ -15,13 +15,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use mydaw_fixture_clap_gain::synth::{
+    key_to_hz, ATTACK_MS, PLUGIN_ID as SYNTH_ID, PLUGIN_NAME as SYNTH_NAME, RELEASE_MS, VOICES,
+    VOICE_GAIN,
+};
 use mydaw_fixture_clap_gain::{GAIN, PLUGIN_ID, PLUGIN_NAME, PLUGIN_VENDOR};
 use mydaw_plugin_host_clap::hosting::{ClapHostError, LoadedClapPlugin};
 use mydaw_plugin_host_clap::test_util::{
     missing_fixture_message, stage_fixture_bundle, FIXTURE_BUNDLE_NAME,
 };
 use mydaw_plugin_host_clap::ClapHostService;
-use mydaw_rt_core::{AudioBuffers, ProcessCtx, RtNode, TransportSnapshot};
+use mydaw_rt_core::{AudioBuffers, NoteEvent, ProcessCtx, RtNode, TransportSnapshot};
 
 const SAMPLE_RATE: f64 = 48_000.0;
 const MAX_BLOCK: usize = 256;
@@ -103,13 +107,24 @@ fn the_scanner_finds_and_describes_the_staged_fixture() {
     let service = ClapHostService::with_search_paths([dir.path().to_path_buf()]);
     let found = service.scan();
 
-    assert_eq!(found.len(), 1, "one bundle, one plugin: {found:?}");
-    let plugin = &found[0];
-    assert_eq!(plugin.id, PLUGIN_ID);
-    assert_eq!(plugin.name, PLUGIN_NAME);
-    assert_eq!(plugin.vendor, PLUGIN_VENDOR);
-    assert!(!plugin.version.is_empty());
-    assert_eq!(plugin.path, bundle);
+    // One bundle, two plugins -- the layout every real vendor ships, and the
+    // reason `ClapPluginInfo::path` is not a unique key.
+    assert_eq!(found.len(), 2, "one bundle, two plugins: {found:?}");
+    assert!(found.iter().all(|p| p.path == bundle));
+    assert!(found.iter().all(|p| p.vendor == PLUGIN_VENDOR));
+    assert!(found.iter().all(|p| !p.version.is_empty()));
+
+    let gain = found
+        .iter()
+        .find(|p| p.id == PLUGIN_ID)
+        .expect("the gain fixture must be listed");
+    assert_eq!(gain.name, PLUGIN_NAME);
+
+    let synth = found
+        .iter()
+        .find(|p| p.id == SYNTH_ID)
+        .expect("the synth fixture must be listed");
+    assert_eq!(synth.name, SYNTH_NAME);
 }
 
 #[test]
@@ -440,6 +455,415 @@ fn a_bundle_that_is_not_a_shared_library_does_not_hide_the_fixture() {
 
     let service = ClapHostService::with_search_paths([dir.path().to_path_buf()]);
     let found = service.scan();
-    assert_eq!(found.len(), 1, "the broken bundle is skipped: {found:?}");
-    assert_eq!(found[0].id, PLUGIN_ID);
+    assert_eq!(
+        found.len(),
+        2,
+        "the broken bundle is skipped, the good one keeps both its plugins: {found:?}"
+    );
+    assert!(found.iter().any(|p| p.id == PLUGIN_ID));
+    assert!(found.iter().any(|p| p.id == SYNTH_ID));
+}
+
+// ---------------------------------------------------------------------------
+// Note dispatch (step 2)
+// ---------------------------------------------------------------------------
+//
+// The claim under test: a `NoteEvent` in `ProcessCtx` becomes a CLAP note event
+// inside a real plugin, through the real FFI boundary, and the plugin makes the
+// sound it was asked for. The synth fixture is deterministic, so these assert
+// frequencies and amplitudes rather than "something happened".
+
+/// Render one block with note events attached.
+fn render_with_events(
+    node: &mut dyn RtNode,
+    buffers: &mut AudioBuffers,
+    frames: usize,
+    events: &[NoteEvent],
+) -> [Vec<f32>; 2] {
+    let mut ctx = ProcessCtx::with_events(
+        buffers,
+        SAMPLE_RATE,
+        frames,
+        TransportSnapshot::default(),
+        events,
+    );
+    node.process(&mut ctx);
+    let [left, right] = buffers.as_slices();
+    [left.to_vec(), right.to_vec()]
+}
+
+/// Largest absolute sample.
+fn peak(samples: &[f32]) -> f32 {
+    samples.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()))
+}
+
+/// Frequency estimated from rising zero crossings. Good enough for one sine,
+/// meaningless for a chord -- which is why the chord test measures level.
+fn zero_crossing_hz(samples: &[f32]) -> f64 {
+    let mut crossings = 0_usize;
+    let mut first = None;
+    let mut last = 0_usize;
+    for (index, pair) in samples.windows(2).enumerate() {
+        if pair[0] <= 0.0 && pair[1] > 0.0 {
+            if first.is_none() {
+                first = Some(index);
+            }
+            last = index;
+            crossings += 1;
+        }
+    }
+    let Some(first) = first.filter(|_| crossings > 1) else {
+        return 0.0;
+    };
+    let span = (last - first) as f64;
+    (crossings - 1) as f64 * SAMPLE_RATE / span
+}
+
+#[test]
+fn the_synth_fixture_reports_an_instrument_layout_with_a_note_input() {
+    let Some((_dir, bundle)) = fixture("synth-layout") else {
+        return;
+    };
+    let plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let layout = plugin.port_layout();
+
+    assert_eq!(layout.input_ports, 0, "an instrument takes no audio in");
+    assert_eq!(layout.output_ports, 1);
+    assert_eq!(layout.main_output_channels, 2);
+    assert_eq!(layout.note_input_ports, 1);
+    assert_eq!(layout.note_output_ports, 0);
+    assert!(layout.is_instrument());
+    assert!(!layout.is_stereo_effect());
+    assert!(layout.is_supported(), "the graph must accept an instrument");
+    assert!(layout.has_note_input());
+    assert!(!layout.has_audio_input());
+}
+
+#[test]
+fn an_instrument_is_silent_until_it_is_played() {
+    let Some((_dir, bundle)) = fixture("synth-silent") else {
+        return;
+    };
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("an instrument must activate");
+    assert!(node.delivers_notes());
+
+    // Deliberately noisy input: an instrument must overwrite the bus, not add
+    // to it, or a chain would leak whatever was upstream.
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    write_sine(&mut buffers, MAX_BLOCK, 0, 0.5);
+
+    let [left, right] = render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+    assert_eq!(peak(&left), 0.0, "no notes, no sound");
+    assert_eq!(peak(&right), 0.0);
+    assert_eq!(node.stats().events_sent(), 0);
+    assert_eq!(node.stats().events_dropped(), 0);
+    assert_eq!(node.stats().process_errors(), 0);
+}
+
+#[test]
+fn a_note_on_reaches_the_plugin_and_sounds_at_the_key_frequency() {
+    let Some((_dir, bundle)) = fixture("synth-note-on") else {
+        return;
+    };
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("activate");
+
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    buffers.silence();
+
+    // A4 at full velocity, then let it run until the 2 ms attack is over.
+    render_with_events(
+        &mut node,
+        &mut buffers,
+        MAX_BLOCK,
+        &[NoteEvent::note_on(0, 69, 1.0)],
+    );
+    assert_eq!(node.stats().events_sent(), 1);
+    assert_eq!(node.stats().events_dropped(), 0);
+
+    let mut sustained = Vec::new();
+    for _ in 0..16 {
+        let [left, right] = render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+        assert_eq!(
+            left, right,
+            "the synth is mono, fanned out to both channels"
+        );
+        sustained.extend_from_slice(&left);
+    }
+
+    let expected_peak = VOICE_GAIN;
+    assert!(
+        (peak(&sustained) - expected_peak).abs() < 0.01,
+        "velocity 1.0 should peak at {expected_peak}, got {}",
+        peak(&sustained)
+    );
+    let measured = zero_crossing_hz(&sustained);
+    assert!(
+        (measured - f64::from(key_to_hz(69))).abs() < 1.0,
+        "key 69 should sound at 440 Hz, measured {measured:.2} Hz"
+    );
+    assert_eq!(node.stats().process_errors(), 0);
+}
+
+#[test]
+fn velocity_scales_the_amplitude_the_plugin_produces() {
+    let Some((_dir, bundle)) = fixture("synth-velocity") else {
+        return;
+    };
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("activate");
+
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    buffers.silence();
+    render_with_events(
+        &mut node,
+        &mut buffers,
+        MAX_BLOCK,
+        &[NoteEvent::note_on(0, 69, 0.5)],
+    );
+
+    let mut sustained = Vec::new();
+    for _ in 0..8 {
+        let [left, _] = render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+        sustained.extend_from_slice(&left);
+    }
+    let expected = VOICE_GAIN * 0.5;
+    assert!(
+        (peak(&sustained) - expected).abs() < 0.01,
+        "velocity 0.5 should peak at {expected}, got {}",
+        peak(&sustained)
+    );
+}
+
+#[test]
+fn the_attack_ramp_starts_from_silence_so_a_note_on_does_not_click() {
+    let Some((_dir, bundle)) = fixture("synth-attack") else {
+        return;
+    };
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("activate");
+
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    buffers.silence();
+    let [left, _] = render_with_events(
+        &mut node,
+        &mut buffers,
+        MAX_BLOCK,
+        &[NoteEvent::note_on(0, 69, 1.0)],
+    );
+
+    // A step to full amplitude would put a broadband click into the spectrum,
+    // which is exactly what a capture test is trying to measure around.
+    assert!(left[0].abs() < 0.01, "the first sample must be near zero");
+    let attack_frames = ((ATTACK_MS / 1000.0) * SAMPLE_RATE as f32) as usize;
+    assert!(
+        peak(&left[..attack_frames.min(left.len())]) < VOICE_GAIN,
+        "the ramp must not have finished inside the attack window"
+    );
+}
+
+#[test]
+fn a_note_off_releases_the_voice_to_silence() {
+    let Some((_dir, bundle)) = fixture("synth-note-off") else {
+        return;
+    };
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("activate");
+
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    buffers.silence();
+    render_with_events(
+        &mut node,
+        &mut buffers,
+        MAX_BLOCK,
+        &[NoteEvent::note_on(0, 69, 1.0)],
+    );
+    for _ in 0..8 {
+        render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+    }
+    let [held, _] = render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+    assert!(peak(&held) > 0.1, "the note is sounding before the release");
+
+    render_with_events(
+        &mut node,
+        &mut buffers,
+        MAX_BLOCK,
+        &[NoteEvent::note_off(0, 69)],
+    );
+
+    // 50 ms at 48 kHz is 2400 frames; give it a margin and then demand digital
+    // silence, not merely "quieter".
+    let release_frames = ((RELEASE_MS / 1000.0) * SAMPLE_RATE as f32) as usize;
+    let blocks = release_frames / MAX_BLOCK + 2;
+    let mut tail = Vec::new();
+    for _ in 0..blocks {
+        let [left, _] = render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+        tail.extend_from_slice(&left);
+    }
+    let [after, _] = render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+    assert_eq!(
+        peak(&after),
+        0.0,
+        "the voice must be free once the release has run out"
+    );
+    assert!(
+        peak(&tail) > 0.0,
+        "the release must be a ramp, not an instant cut"
+    );
+    assert_eq!(node.stats().events_sent(), 2);
+}
+
+#[test]
+fn a_chord_sounds_every_key_it_was_given() {
+    let Some((_dir, bundle)) = fixture("synth-chord") else {
+        return;
+    };
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("activate");
+
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    buffers.silence();
+    // A C major triad, arriving in one block like a struck chord.
+    let chord = [
+        NoteEvent::note_on(0, 60, 1.0),
+        NoteEvent::note_on(0, 64, 1.0),
+        NoteEvent::note_on(0, 67, 1.0),
+    ];
+    render_with_events(&mut node, &mut buffers, MAX_BLOCK, &chord);
+    assert_eq!(node.stats().events_sent(), 3);
+
+    let mut sustained = Vec::new();
+    for _ in 0..16 {
+        let [left, _] = render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+        sustained.extend_from_slice(&left);
+    }
+
+    // Three independent sines: the sum must be louder than one voice and can
+    // never exceed three, which proves all three arrived without needing an FFT
+    // in this crate (the shell's capture test does the spectral version).
+    let measured = peak(&sustained);
+    assert!(
+        measured > VOICE_GAIN * 1.5,
+        "three voices should be clearly louder than one, got {measured}"
+    );
+    assert!(
+        measured <= VOICE_GAIN * 3.0 + 1e-4,
+        "three voices cannot exceed three voices, got {measured}"
+    );
+    assert!(sustained.iter().all(|s| s.is_finite()));
+}
+
+#[test]
+fn events_are_placed_at_their_frame_offset_not_at_the_start_of_the_block() {
+    let Some((_dir, bundle)) = fixture("synth-offset") else {
+        return;
+    };
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("activate");
+
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    buffers.silence();
+    const OFFSET: u32 = 128;
+    let [left, _] = render_with_events(
+        &mut node,
+        &mut buffers,
+        MAX_BLOCK,
+        &[NoteEvent::note_on(OFFSET, 69, 1.0)],
+    );
+
+    // Everything before the offset must be untouched silence. This is the whole
+    // difference between a sample-accurate host and one that quantises to the
+    // block -- invisible until the sequencer arrives, so worth asserting now.
+    assert_eq!(
+        peak(&left[..OFFSET as usize]),
+        0.0,
+        "nothing may sound before the event's frame"
+    );
+    assert!(
+        peak(&left[OFFSET as usize..]) > 0.0,
+        "the note must sound from its own frame onwards"
+    );
+}
+
+#[test]
+fn note_events_for_a_plugin_without_a_note_port_are_skipped_silently() {
+    let Some((_dir, bundle)) = fixture("gain-notes") else {
+        return;
+    };
+    // The gain fixture declares no note ports at all. Sending it events must be
+    // a no-op: not an error, and not a delivery.
+    let mut plugin = LoadedClapPlugin::load(&bundle, PLUGIN_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("activate");
+    assert!(!node.delivers_notes());
+
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    write_sine(&mut buffers, MAX_BLOCK, 0, 0.2);
+    let expected: Vec<f32> = buffers.as_slices()[0].iter().map(|s| s * GAIN).collect();
+
+    let [left, _] = render_with_events(
+        &mut node,
+        &mut buffers,
+        MAX_BLOCK,
+        &[NoteEvent::note_on(0, 69, 1.0), NoteEvent::note_off(0, 69)],
+    );
+
+    for (actual, expected) in left.iter().zip(&expected) {
+        assert!((actual - expected).abs() <= 1e-7);
+    }
+    assert_eq!(node.stats().events_sent(), 0, "nothing was delivered");
+    assert_eq!(
+        node.stats().events_dropped(),
+        0,
+        "a plugin with no note input is a configuration, not a loss"
+    );
+    assert_eq!(node.stats().process_errors(), 0);
+}
+
+#[test]
+fn more_voices_than_the_synth_has_steal_rather_than_stack() {
+    let Some((_dir, bundle)) = fixture("synth-steal") else {
+        return;
+    };
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).expect("load");
+    let mut node = plugin
+        .create_node(SAMPLE_RATE, MAX_BLOCK)
+        .expect("activate");
+
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    buffers.silence();
+    // Twelve keys into eight voices.
+    let events: Vec<NoteEvent> = (60..72)
+        .map(|key| NoteEvent::note_on(0, key, 1.0))
+        .collect();
+    render_with_events(&mut node, &mut buffers, MAX_BLOCK, &events);
+    assert_eq!(node.stats().events_sent(), events.len() as u64);
+
+    let mut sustained = Vec::new();
+    for _ in 0..16 {
+        let [left, _] = render_with_events(&mut node, &mut buffers, MAX_BLOCK, &[]);
+        sustained.extend_from_slice(&left);
+    }
+    assert!(
+        peak(&sustained) <= VOICE_GAIN * VOICES as f32 + 1e-4,
+        "no more than {VOICES} voices may ever sound at once, got {}",
+        peak(&sustained)
+    );
+    assert!(sustained.iter().all(|s| s.is_finite()));
 }

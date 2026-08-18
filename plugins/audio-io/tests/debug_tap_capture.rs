@@ -17,11 +17,14 @@ use mydaw_plugin_audio_io::{run_block, AudioIoStats, RtState, RtStateParams};
 use mydaw_plugin_debug_tap::{debug_tap_channel, CaptureError, DebugTapService};
 use mydaw_plugin_test_tone::{TestToneNode, DEFAULT_AMPLITUDE, DEFAULT_FREQUENCY_HZ};
 use mydaw_rt_core::{
-    graph_channel, rt_channel, GcThread, GraphSpec, ProcessCtx, RtCommand, RtNode, TransportClock,
+    graph_channel, note_channel, rt_channel, GcThread, GraphSpec, ProcessCtx, RtCommand, RtNode,
+    TransportClock,
 };
 
 const SR: f64 = 48_000.0;
 const BLOCK: usize = 256;
+/// Nothing here sends notes; the engine still needs a queue to drain.
+const NOTE_CAPACITY: usize = 16;
 const MAX_BLOCK: usize = 512;
 
 /// The shell's transport gate, duplicated here so this test does not depend on
@@ -70,9 +73,12 @@ fn engine(playing: bool) -> (Engine, Arc<DebugTapService>) {
         .push(RtCommand::SetPlaying(playing))
         .expect("the command queue is empty");
 
+    let (_notes_tx, notes) = note_channel(NOTE_CAPACITY);
     let state = RtState::new(RtStateParams {
         graph: slot,
         commands,
+        notes,
+        note_capacity: NOTE_CAPACITY,
         meters: None,
         debug_tap: Some(tap_rt),
         transport,
@@ -253,9 +259,12 @@ fn a_capture_survives_the_rt_state_being_torn_down_and_rebuilt() {
     let gc = GcThread::spawn();
     let (_graph, slot) = graph_channel(4, gc.handle());
     let (_commands_tx, commands) = rt_channel::<RtCommand>(16);
+    let (_notes_tx, notes) = note_channel(NOTE_CAPACITY);
     let mut rebuilt = RtState::new(RtStateParams {
         graph: slot,
         commands,
+        notes,
+        note_capacity: NOTE_CAPACITY,
         meters: None,
         debug_tap: Some(tap),
         transport: Arc::new(TransportClock::new(44_100.0)),

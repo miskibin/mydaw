@@ -12,8 +12,10 @@ use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 
+use mydaw_rt_core::{LiveNote, MAX_KEY};
+
 use crate::dto::ClapPluginInfoDto;
-use crate::graph::{clap_effect_node, install_tone_graph};
+use crate::graph::{clap_effect_node, clap_instrument_node, install_engine_graph};
 use crate::gui_bridge::ClapGuiBridge;
 use crate::ipc_bench;
 use crate::meters::MeterPump;
@@ -28,6 +30,22 @@ pub enum StartupError {
     /// Always a wiring bug in [`boot_kernel`], never a runtime condition.
     #[error("plugin service '{0}' is missing after boot")]
     MissingService(&'static str),
+}
+
+/// Why a note could not be played.
+///
+/// The first two are reachable from the webview, which can send any number it
+/// likes: a UI bug must produce a message in the status bar, not an event the
+/// plugin has to defend itself against.
+#[derive(Debug, thiserror::Error)]
+pub enum NoteError {
+    #[error("note key {0} is out of range; CLAP keys are 0..={MAX_KEY}")]
+    KeyOutOfRange(u8),
+    #[error("note velocity {0} is not a number between 0.0 and 1.0")]
+    InvalidVelocity(f32),
+    /// No audio device, or the audio thread is not draining its queue.
+    #[error(transparent)]
+    Audio(#[from] AudioIoError),
 }
 
 /// Register the Phase 0 plugin set and boot the kernel.
@@ -161,34 +179,52 @@ impl AppState {
     /// Whatever cpal reports, plus [`AudioIoError::NotRunning`] if the stream died
     /// between opening it and installing the graph.
     pub fn start_audio(&self) -> Result<StreamInfo, AudioIoError> {
-        self.start_audio_with_effect(None)
+        self.start_audio_with_plugins(None, None)
     }
 
     /// Open the output device and publish `test-tone -> [effect] -> gate`.
     ///
-    /// `effect` is activated *after* the device is open, because activation needs
-    /// the negotiated sample rate and block size. A plugin that will not activate
-    /// is logged and skipped -- the tone still plays.
+    /// # Errors
+    /// See [`start_audio_with_plugins`](Self::start_audio_with_plugins).
+    pub fn start_audio_with_effect(
+        &self,
+        effect: Option<&mut LoadedClapPlugin>,
+    ) -> Result<StreamInfo, AudioIoError> {
+        self.start_audio_with_plugins(None, effect)
+    }
+
+    /// Open the output device and publish the engine graph.
     ///
-    /// The caller keeps ownership of the [`LoadedClapPlugin`] (it is `!Send` and
-    /// must outlive the node it creates), which is why this takes `&mut` rather
-    /// than storing it: `AppState` lives in Tauri's managed state and must stay
-    /// `Send + Sync`.
+    /// With an `instrument` the chain is `instrument -> [effect]`; without one it
+    /// is `test-tone -> [effect] -> gate`. See `crate::graph` for why only one of
+    /// those has a transport gate.
+    ///
+    /// Both plugins are activated *after* the device is open, because activation
+    /// needs the negotiated sample rate and block size. One that will not
+    /// activate is logged and skipped -- the engine still runs, one node lighter.
+    ///
+    /// The caller keeps ownership of each [`LoadedClapPlugin`] (they are `!Send`
+    /// and must outlive the nodes they create), which is why this takes `&mut`
+    /// rather than storing them: `AppState` lives in Tauri's managed state and
+    /// must stay `Send + Sync`.
     ///
     /// # Errors
     /// Whatever cpal reports, plus [`AudioIoError::NotRunning`] if the stream died
     /// between opening it and installing the graph.
-    pub fn start_audio_with_effect(
+    pub fn start_audio_with_plugins(
         &self,
+        instrument: Option<&mut LoadedClapPlugin>,
         effect: Option<&mut LoadedClapPlugin>,
     ) -> Result<StreamInfo, AudioIoError> {
         // Order is forced by the service: `install_graph` needs a live session,
         // because the graph channel is created together with the stream.
         let info = self.audio.start()?;
-        let node = effect.and_then(|plugin| {
-            clap_effect_node(plugin, f64::from(info.sample_rate), info.max_block)
-        });
-        install_tone_graph(&self.audio, &self.tone, node)?;
+        let sample_rate = f64::from(info.sample_rate);
+        let instrument_node =
+            instrument.and_then(|plugin| clap_instrument_node(plugin, sample_rate, info.max_block));
+        let effect_node =
+            effect.and_then(|plugin| clap_effect_node(plugin, sample_rate, info.max_block));
+        install_engine_graph(&self.audio, &self.tone, instrument_node, effect_node)?;
         Ok(info)
     }
 
@@ -218,6 +254,39 @@ impl AppState {
     /// [`AudioIoError::NotRunning`] when no device was opened.
     pub fn set_playing(&self, playing: bool) -> Result<(), AudioIoError> {
         self.audio.set_playing(playing)
+    }
+
+    /// Play a note, live.
+    ///
+    /// Deliberately independent of the transport: pressing a key must make a
+    /// sound whether or not the DAW is playing. See `crate::graph`.
+    ///
+    /// # Errors
+    /// [`NoteError::KeyOutOfRange`] or [`NoteError::InvalidVelocity`] for values
+    /// the webview should never have sent, and [`NoteError::Audio`] when no
+    /// device is open.
+    pub fn note_on(&self, key: u8, velocity: f32) -> Result<(), NoteError> {
+        if key > MAX_KEY {
+            return Err(NoteError::KeyOutOfRange(key));
+        }
+        if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity) {
+            return Err(NoteError::InvalidVelocity(velocity));
+        }
+        self.audio.send_note(LiveNote::note_on(key, velocity))?;
+        Ok(())
+    }
+
+    /// Release a note.
+    ///
+    /// # Errors
+    /// [`NoteError::KeyOutOfRange`], or [`NoteError::Audio`] when no device is
+    /// open.
+    pub fn note_off(&self, key: u8) -> Result<(), NoteError> {
+        if key > MAX_KEY {
+            return Err(NoteError::KeyOutOfRange(key));
+        }
+        self.audio.send_note(LiveNote::note_off(key))?;
+        Ok(())
     }
 
     /// The snapshot handed to the webview. Cheap to clone (a few short strings).
@@ -368,6 +437,51 @@ mod tests {
         assert!(matches!(
             state.set_playing(true),
             Err(AudioIoError::NotRunning)
+        ));
+    }
+
+    #[test]
+    fn notes_fail_cleanly_without_a_device() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        assert!(matches!(
+            state.note_on(60, 1.0),
+            Err(NoteError::Audio(AudioIoError::NotRunning))
+        ));
+        assert!(matches!(
+            state.note_off(60),
+            Err(NoteError::Audio(AudioIoError::NotRunning))
+        ));
+    }
+
+    #[test]
+    fn a_note_the_webview_should_never_have_sent_is_rejected_before_the_queue() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+
+        // Validation happens before the device is consulted, so these fail with
+        // the *useful* error even on a machine with no sound card.
+        assert!(matches!(
+            state.note_on(128, 1.0),
+            Err(NoteError::KeyOutOfRange(128))
+        ));
+        assert!(matches!(
+            state.note_off(200),
+            Err(NoteError::KeyOutOfRange(200))
+        ));
+        for bad in [-0.1_f32, 1.5, f32::NAN, f32::INFINITY] {
+            assert!(
+                matches!(state.note_on(60, bad), Err(NoteError::InvalidVelocity(_))),
+                "velocity {bad} should have been rejected"
+            );
+        }
+        assert!(
+            state.note_on(MAX_KEY, 1.0).is_err(),
+            "key 127 is valid; it fails only because there is no device"
+        );
+        assert!(matches!(
+            state.note_on(MAX_KEY, 1.0),
+            Err(NoteError::Audio(_))
         ));
     }
 }

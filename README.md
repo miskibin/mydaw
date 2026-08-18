@@ -123,10 +123,11 @@ CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github
 ```text
 app/src/state.rs          boot_kernel() -> seven plugins -> UiSnapshot (+ the shell's kernel-status panel)
 app/src/graph.rs          test-tone -> [CLAP effect] -> TransportGate  ->  AudioIoService::install_graph
-app/src/meters.rs         MeterThrottle -> pump thread (15 ms) -> Channel<MeterFrameDto>
+                          or, with MYDAW_CLAP_INSTRUMENT: instrument -> [CLAP effect]  (no gate)
+app/src/meters.rs         MeterThrottle -> pump thread (interval/4) -> Channel<MeterFrameDto>
 app/src/debug_capture.rs  DebugTapService -> WAV + PNG + stats.json under .debug/captures/
 app/src/commands.rs       get_ui_snapshot | get_clap_plugins | transport_play | transport_stop |
-                          debug_capture | subscribe_meters
+                          note_on | note_off | debug_capture | subscribe_meters
 ```
 
 The kernel itself never enters Tauri's managed state (`Box<dyn Plugin>` is not `Send`); it stays on

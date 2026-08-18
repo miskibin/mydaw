@@ -58,9 +58,13 @@ use std::time::{Duration, Instant};
 
 use clack_extensions::audio_ports::PluginAudioPorts;
 use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
+use clack_extensions::note_ports::PluginNotePorts;
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
+use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent};
+use clack_host::events::io::EventBuffer;
+use clack_host::events::{Match, Pckn};
 use clack_host::prelude::*;
-use mydaw_rt_core::{ProcessCtx, RtNode, CHANNELS};
+use mydaw_rt_core::{NoteKind, ProcessCtx, RtNode, CHANNELS, DEFAULT_NOTE_CAPACITY};
 
 use crate::timers::ClapTimers;
 use crate::ClapPluginInfo;
@@ -384,12 +388,12 @@ impl MainThreadWork {
 // Port layout
 // ---------------------------------------------------------------------------
 
-/// What a plugin says about its main audio ports.
+/// What a plugin says about its ports.
 ///
 /// Read once, on the main thread, before activation: CLAP only allows a plugin to
 /// change its port configuration while deactivated, so a layout read here stays
 /// valid for the life of the activation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ClapPortLayout {
     pub input_ports: u32,
     pub output_ports: u32,
@@ -397,16 +401,50 @@ pub struct ClapPortLayout {
     pub main_input_channels: u32,
     /// Channel count of output port 0.
     pub main_output_channels: u32,
+    /// Note input ports. Zero for a plugin with no `note-ports` extension --
+    /// per the CLAP specification that means *no* note ports, so the host must
+    /// not send it events.
+    pub note_input_ports: u32,
+    /// Note output ports. Recorded for completeness; MYDAW does not read a
+    /// plugin's note output yet (see [`ClapNode::process`]).
+    pub note_output_ports: u32,
 }
 
 impl ClapPortLayout {
-    /// Whether this layout is the stereo-in/stereo-out shape the Phase 1 graph
-    /// can drive. Everything else is a Phase 2 mixer feature.
+    /// Whether this layout is the stereo-in/stereo-out shape of an insert
+    /// effect. Anything wider is a Phase 2 mixer feature.
     pub fn is_stereo_effect(&self) -> bool {
         self.input_ports >= 1
             && self.output_ports >= 1
             && self.main_input_channels == CHANNELS as u32
             && self.main_output_channels == CHANNELS as u32
+    }
+
+    /// Whether this layout is an instrument: no audio in, stereo out.
+    ///
+    /// A note input is not required. A plugin that generates without being
+    /// played (a noise source, a test oscillator) is still an instrument as far
+    /// as the graph is concerned; it just never receives events.
+    pub fn is_instrument(&self) -> bool {
+        self.input_ports == 0
+            && self.output_ports >= 1
+            && self.main_output_channels == CHANNELS as u32
+    }
+
+    /// Whether the Phase 1 graph can drive this plugin at all.
+    pub fn is_supported(&self) -> bool {
+        self.is_stereo_effect() || self.is_instrument()
+    }
+
+    /// Whether the plugin takes audio input, and therefore whether
+    /// [`ClapNode`] hands it the bus.
+    pub fn has_audio_input(&self) -> bool {
+        self.input_ports >= 1
+    }
+
+    /// Whether the plugin accepts note events on port 0.
+    pub fn has_note_input(&self) -> bool {
+        self.note_input_ports >= 1
     }
 }
 
@@ -662,11 +700,12 @@ impl LoadedClapPlugin {
                 message: format!("maximum block size {max_block} does not fit in u32"),
             })?;
 
-        if !self.layout.is_stereo_effect() {
+        if !self.layout.is_supported() {
             return Err(ClapHostError::UnsupportedPortLayout {
                 message: format!(
                     "'{}' reports {} input port(s) x {} ch and {} output port(s) x {} ch; \
-                     the Phase 1 graph drives stereo in / stereo out only",
+                     the Phase 1 graph drives stereo in / stereo out (an effect) or \
+                     no input / stereo out (an instrument)",
                     self.info.id,
                     self.layout.input_ports,
                     self.layout.main_input_channels,
@@ -711,6 +750,7 @@ impl LoadedClapPlugin {
         Ok(ClapNode::new(
             started,
             max_block,
+            self.layout,
             self.retire_tx.clone(),
             Arc::clone(&self.requests),
         ))
@@ -801,11 +841,14 @@ impl Drop for LoadedClapPlugin {
     }
 }
 
-/// Read the plugin's main port layout through the `audio-ports` extension.
+/// Read the plugin's port layout through the `audio-ports` and `note-ports`
+/// extensions.
 ///
 /// A plugin that does not implement `audio-ports` has, per the CLAP
 /// specification, *no* audio ports at all -- so refusing it is correct, not
-/// pedantic: handing buffers to a plugin that declared none is a host bug.
+/// pedantic: handing buffers to a plugin that declared none is a host bug. The
+/// same rule applies to `note-ports`, but its absence is not an error: it simply
+/// means the plugin takes no events, and the node silently skips event delivery.
 fn read_port_layout(
     instance: &mut PluginInstance<MydawClapHost>,
 ) -> Result<ClapPortLayout, ClapHostError> {
@@ -838,15 +881,28 @@ fn read_port_layout(
             0
         };
 
+        // Absent extension -> no note ports. Not an error: most effects have
+        // none, and the ones that do are the interesting case.
+        let (note_input_ports, note_output_ports) = match handle.get_extension::<PluginNotePorts>()
+        {
+            Some(notes) => (
+                notes.count(&mut handle, true),
+                notes.count(&mut handle, false),
+            ),
+            None => (0, 0),
+        };
+
         Ok(ClapPortLayout {
             input_ports,
             output_ports,
             main_input_channels,
             main_output_channels,
+            note_input_ports,
+            note_output_ports,
         })
     }))
     .map_err(|_| ClapHostError::Panicked {
-        stage: "reporting its audio ports",
+        stage: "reporting its ports",
     })?
 }
 
@@ -864,6 +920,8 @@ pub struct ClapNodeStats {
     process_errors: AtomicU64,
     sleep_requests: AtomicU64,
     truncated_blocks: AtomicU64,
+    events_sent: AtomicU64,
+    events_dropped: AtomicU64,
 }
 
 impl ClapNodeStats {
@@ -889,6 +947,20 @@ impl ClapNodeStats {
     /// device's buffer grew past `AudioIoConfig::max_block`.
     pub fn truncated_blocks(&self) -> u64 {
         self.truncated_blocks.load(Ordering::Relaxed)
+    }
+
+    /// Note events handed to the plugin since activation.
+    pub fn events_sent(&self) -> u64 {
+        self.events_sent.load(Ordering::Relaxed)
+    }
+
+    /// Note events the node could not deliver: more events in one block than
+    /// [`MAX_BLOCK_EVENTS`], or a [`NoteKind`] this host does not translate yet.
+    ///
+    /// Events for a plugin with no note input port are *not* counted here --
+    /// that is a configuration, not a loss.
+    pub fn events_dropped(&self) -> u64 {
+        self.events_dropped.load(Ordering::Relaxed)
     }
 }
 
@@ -916,6 +988,10 @@ pub struct ClapNode {
     /// bus is a single in-place buffer, so the node owns both sides.
     input: [Vec<f32>; CHANNELS],
     output: [Vec<f32>; CHANNELS],
+    /// This block's note events in CLAP's own wire format. Pre-grown at
+    /// activation; see [`warmed_event_buffer`].
+    events_in: EventBuffer,
+    layout: ClapPortLayout,
     max_block: usize,
     steady_time: u64,
     stats: Arc<ClapNodeStats>,
@@ -927,6 +1003,7 @@ impl ClapNode {
     fn new(
         processor: StartedPluginAudioProcessor<MydawClapHost>,
         max_block: usize,
+        layout: ClapPortLayout,
         retire_tx: Sender<StartedPluginAudioProcessor<MydawClapHost>>,
         requests: Arc<ClapHostRequests>,
     ) -> Self {
@@ -938,6 +1015,8 @@ impl ClapNode {
             output_ports: AudioPorts::with_capacity(CHANNELS, 1),
             input: [vec![0.0; max_block], vec![0.0; max_block]],
             output: [vec![0.0; max_block], vec![0.0; max_block]],
+            events_in: warmed_event_buffer(MAX_BLOCK_EVENTS),
+            layout,
             max_block,
             steady_time: 0,
             stats: Arc::new(ClapNodeStats::default()),
@@ -961,6 +1040,92 @@ impl ClapNode {
     pub fn max_block(&self) -> usize {
         self.max_block
     }
+
+    /// The port layout this node was built for.
+    pub fn port_layout(&self) -> ClapPortLayout {
+        self.layout
+    }
+
+    /// Whether this node forwards [`ProcessCtx::events`] to its plugin.
+    pub fn delivers_notes(&self) -> bool {
+        self.layout.has_note_input()
+    }
+
+    /// Translate this block's note events into CLAP's wire format.
+    ///
+    /// Returns how many were dropped. RT-safe: [`EventBuffer::clear`] keeps the
+    /// allocation and every event pushed here is the same size as the ones the
+    /// buffer was warmed with, so `push` only writes into existing capacity.
+    fn fill_events(&mut self, events: &[mydaw_rt_core::NoteEvent], frames: usize) -> usize {
+        self.events_in.clear();
+        if !self.layout.has_note_input() || events.is_empty() {
+            return 0;
+        }
+
+        // `frames >= 1` is guaranteed by the caller. CLAP requires every event
+        // time to be inside the block; clamping is defensive, since the engine
+        // already guarantees it.
+        let last_frame = (frames - 1) as u32;
+        let mut dropped = 0;
+        for event in events {
+            if self.events_in.len() as usize >= MAX_BLOCK_EVENTS {
+                dropped += 1;
+                continue;
+            }
+            let time = event.frame_offset.min(last_frame);
+            match event.kind {
+                NoteKind::NoteOn { key, velocity } => {
+                    self.events_in.push(&NoteOnEvent::new(
+                        time,
+                        pckn(event.channel, key),
+                        f64::from(velocity),
+                    ));
+                }
+                NoteKind::NoteOff { key } => {
+                    // Release velocity 0.0: MYDAW's note model has no release
+                    // velocity yet, and 0.0 is what CLAP hosts send when they
+                    // have nothing to say about it.
+                    self.events_in
+                        .push(&NoteOffEvent::new(time, pckn(event.channel, key), 0.0));
+                }
+                // A `NoteKind` added after this code was written. Counted, not
+                // guessed at: silently reinterpreting an unknown event is how a
+                // host makes a plugin sound wrong in a way nobody can trace.
+                _ => dropped += 1,
+            }
+        }
+        dropped
+    }
+}
+
+/// Events a single block may carry into a plugin.
+///
+/// Matches the engine's own per-block note buffer, so anything the graph can
+/// hold, the node can forward.
+pub const MAX_BLOCK_EVENTS: usize = DEFAULT_NOTE_CAPACITY;
+
+/// An [`EventBuffer`] with room for `capacity` note events, and no more.
+///
+/// `EventBuffer::with_capacity` reserves for the largest standard CLAP event
+/// (a transport event, ~5x a note event), which for 1024 events is over a
+/// megabyte per node. Filling and clearing reserves exactly what note events
+/// need instead -- `clear` keeps the allocation -- at the cost of one loop on a
+/// non-RT thread.
+fn warmed_event_buffer(capacity: usize) -> EventBuffer {
+    let mut buffer = EventBuffer::new();
+    for _ in 0..capacity {
+        buffer.push(&NoteOnEvent::new(0, pckn(0, 0), 0.0));
+    }
+    buffer.clear();
+    buffer
+}
+
+/// Address one key on one channel of note port 0.
+///
+/// `note_id` is [`Match::All`]: MYDAW does not track per-note ids yet, so a
+/// note-off has to match every voice the matching note-on started.
+fn pckn(channel: u8, key: u8) -> Pckn {
+    Pckn::new(0_u16, u16::from(channel), u16::from(key), Match::All)
 }
 
 impl RtNode for ClapNode {
@@ -978,6 +1143,16 @@ impl RtNode for ClapNode {
             }
         }
 
+        // Notes first: the buffer has to be filled before `self` is split up for
+        // the borrow dance below.
+        let dropped = self.fill_events(ctx.events, frames);
+        if dropped > 0 {
+            self.stats
+                .events_dropped
+                .fetch_add(dropped as u64, Ordering::Relaxed);
+        }
+        let sent = u64::from(self.events_in.len());
+
         {
             let bus = ctx.buffers.as_slices();
             for (scratch, source) in self.input.iter_mut().zip(bus) {
@@ -994,6 +1169,8 @@ impl RtNode for ClapNode {
             output_ports,
             input,
             output,
+            events_in,
+            layout,
             steady_time,
             ..
         } = self;
@@ -1003,16 +1180,24 @@ impl RtNode for ClapNode {
         };
 
         let (input_left, input_right) = input.split_at_mut(1);
-        let audio_in = input_ports.with_input_buffers([AudioPortBuffer {
-            latency: 0,
-            channels: AudioPortBufferType::f32_input_only(
-                [
-                    InputChannel::variable(&mut input_left[0][..frames]),
-                    InputChannel::variable(&mut input_right[0][..frames]),
-                ]
-                .into_iter(),
-            ),
-        }]);
+        // An instrument declares no audio input port, so it must be handed
+        // none. Passing it the bus "just in case" would contradict its own
+        // `audio-ports` answer, which is a host bug even when a lenient plugin
+        // tolerates it.
+        let audio_in = if layout.has_audio_input() {
+            input_ports.with_input_buffers([AudioPortBuffer {
+                latency: 0,
+                channels: AudioPortBufferType::f32_input_only(
+                    [
+                        InputChannel::variable(&mut input_left[0][..frames]),
+                        InputChannel::variable(&mut input_right[0][..frames]),
+                    ]
+                    .into_iter(),
+                ),
+            }])
+        } else {
+            InputAudioBuffers::empty()
+        };
 
         let (output_left, output_right) = output.split_at_mut(1);
         let mut audio_out = output_ports.with_output_buffers([AudioPortBuffer {
@@ -1026,11 +1211,15 @@ impl RtNode for ClapNode {
             ),
         }]);
 
+        // Output events are discarded. `OutputEvents::void()` cannot allocate,
+        // whereas an `EventBuffer` output would grow without bound if a plugin
+        // emitted more than we reserved -- on the audio thread. Nothing consumes
+        // a plugin's note output yet, so the safe option costs nothing.
         let mut events_out = OutputEvents::void();
         let status = processor.process(
             &audio_in,
             &mut audio_out,
-            &InputEvents::empty(),
+            &events_in.as_input(),
             &mut events_out,
             Some(*steady_time),
             None,
@@ -1039,6 +1228,9 @@ impl RtNode for ClapNode {
         *steady_time = steady_time.wrapping_add(frames as u64);
 
         self.stats.process_calls.fetch_add(1, Ordering::Relaxed);
+        if sent > 0 {
+            self.stats.events_sent.fetch_add(sent, Ordering::Relaxed);
+        }
         match status {
             Ok(status) => {
                 if status == ProcessStatus::Sleep {
@@ -1093,28 +1285,105 @@ impl Drop for ClapNode {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_stereo_layout_is_accepted_and_anything_else_is_not() {
-        let stereo = ClapPortLayout {
+    /// A stereo-in/stereo-out effect with no note ports.
+    fn stereo_effect_layout() -> ClapPortLayout {
+        ClapPortLayout {
             input_ports: 1,
             output_ports: 1,
             main_input_channels: 2,
             main_output_channels: 2,
-        };
-        assert!(stereo.is_stereo_effect());
+            note_input_ports: 0,
+            note_output_ports: 0,
+        }
+    }
 
-        let instrument = ClapPortLayout {
-            input_ports: 0,
-            main_input_channels: 0,
-            ..stereo
-        };
-        assert!(!instrument.is_stereo_effect());
+    #[test]
+    fn a_stereo_layout_is_accepted_and_anything_else_is_not() {
+        let stereo = stereo_effect_layout();
+        assert!(stereo.is_stereo_effect());
+        assert!(stereo.is_supported());
+        assert!(stereo.has_audio_input());
+        assert!(!stereo.has_note_input());
 
         let mono = ClapPortLayout {
             main_output_channels: 1,
             ..stereo
         };
         assert!(!mono.is_stereo_effect());
+        assert!(!mono.is_supported(), "a mono output is still not drivable");
+
+        let no_output = ClapPortLayout {
+            output_ports: 0,
+            main_output_channels: 0,
+            ..stereo
+        };
+        assert!(!no_output.is_supported());
+    }
+
+    #[test]
+    fn an_instrument_layout_is_supported_and_is_not_an_effect() {
+        let instrument = ClapPortLayout {
+            input_ports: 0,
+            output_ports: 1,
+            main_input_channels: 0,
+            main_output_channels: 2,
+            note_input_ports: 1,
+            note_output_ports: 0,
+        };
+        assert!(!instrument.is_stereo_effect());
+        assert!(instrument.is_instrument());
+        assert!(instrument.is_supported());
+        assert!(
+            !instrument.has_audio_input(),
+            "it must not be handed the bus"
+        );
+        assert!(instrument.has_note_input());
+
+        // A generator with no note input is still an instrument as far as the
+        // graph is concerned; it just never receives events.
+        let generator = ClapPortLayout {
+            note_input_ports: 0,
+            ..instrument
+        };
+        assert!(generator.is_instrument());
+        assert!(!generator.has_note_input());
+
+        // Mono out is not something the stereo bus can carry.
+        let mono_instrument = ClapPortLayout {
+            main_output_channels: 1,
+            ..instrument
+        };
+        assert!(!mono_instrument.is_supported());
+    }
+
+    #[test]
+    fn a_plugin_with_no_note_ports_extension_reads_as_taking_no_events() {
+        // What `read_port_layout` produces for a plugin without the extension.
+        let effect = stereo_effect_layout();
+        assert_eq!(effect.note_input_ports, 0);
+        assert!(
+            !effect.has_note_input(),
+            "the CLAP spec says no extension means no note ports, so events are skipped"
+        );
+    }
+
+    #[test]
+    fn the_event_buffer_is_warmed_to_capacity_and_left_empty() {
+        let buffer = warmed_event_buffer(64);
+        assert!(buffer.is_empty(), "warming must not leave events behind");
+    }
+
+    #[test]
+    fn a_pckn_addresses_one_key_on_note_port_zero_with_a_wildcard_note_id() {
+        let target = pckn(3, 69);
+        assert_eq!(target.port_index, Match::Specific(0));
+        assert_eq!(target.channel, Match::Specific(3));
+        assert_eq!(target.key, Match::Specific(69));
+        assert_eq!(
+            target.note_id,
+            Match::All,
+            "MYDAW does not track note ids, so a note-off must match every voice"
+        );
     }
 
     /// A shared handler wired to fresh request latches, as `load` would build it.

@@ -36,6 +36,17 @@ export interface Backend {
   closeClapGui(): Promise<ClapGuiStatus>;
   transportPlay(): Promise<void>;
   transportStop(): Promise<void>;
+  /**
+   * Play a note on the loaded instrument.
+   *
+   * `key` is a MIDI key number (60 = middle C) and `velocity` is `0..1`. Sounds
+   * whether or not the transport is running -- this is live input, not
+   * sequenced playback. Rejects with a status-bar sentence when no audio device
+   * is open or the values are out of range.
+   */
+  noteOn(key: number, velocity: number): Promise<void>;
+  /** Release a note. Harmless if that key was never pressed. */
+  noteOff(key: number): Promise<void>;
   /** Subscribe to the throttled meter stream. Call the result to detach. */
   subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe>;
 }
@@ -89,6 +100,16 @@ class TauriBackend implements Backend {
   async transportStop(): Promise<void> {
     const { invoke } = await this.core();
     await invoke('transport_stop');
+  }
+
+  async noteOn(key: number, velocity: number): Promise<void> {
+    const { invoke } = await this.core();
+    await invoke('note_on', { key, velocity });
+  }
+
+  async noteOff(key: number): Promise<void> {
+    const { invoke } = await this.core();
+    await invoke('note_off', { key });
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {
@@ -196,6 +217,19 @@ class MockBackend implements Backend {
   async transportStop(): Promise<void> {
     this.playing = false;
     this.samplePos = 0;
+  }
+
+  /**
+   * There is no engine in a browser, so this only logs. The piano's own logic
+   * (mapping, held notes, octave shifting) is what is being developed against
+   * the mock; making a sound is the Rust side's business.
+   */
+  async noteOn(key: number, velocity: number): Promise<void> {
+    console.info(`[mock] note_on key=${key} velocity=${velocity.toFixed(2)}`);
+  }
+
+  async noteOff(key: number): Promise<void> {
+    console.info(`[mock] note_off key=${key}`);
   }
 
   /** Exposed so a panel test can assert the mock's view of the editor. */

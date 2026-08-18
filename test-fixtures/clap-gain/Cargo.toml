@@ -10,7 +10,13 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 clack-plugin = "0.1.1"
-clack-extensions = { version = "0.1.1", features = ["clack-plugin", "audio-ports", "gui", "timer"] }
+clack-extensions = { version = "0.1.1", features = [
+    "clack-plugin",
+    "audio-ports",
+    "note-ports",
+    "gui",
+    "timer",
+] }
 
 # The editor is raw Win32: a CLAP plugin embeds an HWND into the host window, so
 # there is no toolkit here to hide behind. See src/gui.rs.

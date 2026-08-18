@@ -15,6 +15,7 @@ clack-host.workspace = true
 clack-extensions = { version = "0.1.1", features = [
     "clack-host",
     "audio-ports",
+    "note-ports",
     "gui",
     "timer",
 ] }

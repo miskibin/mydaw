@@ -1,5 +1,27 @@
-//! The Phase 1 audio graph: a test tone, optionally through a CLAP effect,
-//! behind a transport gate.
+//! The Phase 1 audio graph: a source -- the test tone, or a CLAP instrument
+//! played from the keyboard -- optionally through a CLAP effect.
+//!
+//! # Two shapes, and why the gate only belongs to one
+//!
+//! ```text
+//!   default:      test-tone -> [effect] -> TransportGate
+//!   instrument:   instrument -> [effect]
+//! ```
+//!
+//! [`TransportGate`] exists because `TestToneNode` is a free-running
+//! oscillator: it makes a sine whether or not the DAW is playing, so the shell
+//! has to silence it when the transport is stopped. An instrument has the
+//! opposite problem. It is silent until it is *played*, and it is played live,
+//! by a human, whose expectation is that pressing a key makes a sound -- exactly
+//! as it does in every DAW, with the transport stopped, before anything has been
+//! recorded. Gating it on the transport would make the instrument mute unless
+//! you pressed Play first, which is not a stricter engine, just a broken one.
+//!
+//! So the instrument chain has no gate. Live notes are gated by their own
+//! note-offs, which is the correct mechanism. When the sequencer arrives it will
+//! gate *pattern playback* on the transport (no transport, no scheduled events)
+//! while leaving live input alone; that is a property of the event source, not
+//! of the audio chain, so it belongs there and not here.
 
 use std::path::PathBuf;
 
@@ -20,13 +42,26 @@ use mydaw_rt_core::{GraphSpec, ProcessCtx, RtNode, RtNodeFactory};
 /// real machine without a UI for inserting plugins.
 pub const CLAP_FX_ENV: &str = "MYDAW_CLAP_FX";
 
+/// Environment variable that makes a CLAP **instrument** the graph's source,
+/// replacing the test tone.
+///
+/// Same `<bundle path>;<CLAP plugin id>` format as [`CLAP_FX_ENV`], e.g.
+/// `MYDAW_CLAP_INSTRUMENT=D:\build\mydaw-gain.clap;dev.mydaw.fixture.synth`.
+/// Unset (the normal case) leaves the test-tone graph exactly as it was.
+///
+/// Also a step-2 affordance rather than a feature: Phase 2 loads instruments
+/// from the project file onto tracks.
+pub const CLAP_INSTRUMENT_ENV: &str = "MYDAW_CLAP_INSTRUMENT";
+
 /// Silences the bus while the transport is stopped.
 ///
 /// `TestToneNode` is a free-running oscillator: it writes a sine every block
 /// regardless of transport state, which is right for a DSP node and wrong for a
 /// DAW that is not playing. Rather than teach the oscillator about the transport
 /// (Phase 2 gives nodes proper gain/automation), the shell appends this gate to
-/// the end of the chain, so Play/Stop actually start and stop the sound.
+/// the end of the tone chain, so Play/Stop actually start and stop the sound.
+///
+/// Deliberately **not** used in the instrument chain; see the module docs.
 ///
 /// # RT safety
 /// Reads one `bool` from the per-block transport snapshot and fills pre-allocated
@@ -45,52 +80,81 @@ impl RtNode for TransportGate {
     }
 }
 
-/// A CLAP effect named by [`CLAP_FX_ENV`].
+/// A CLAP plugin named by an environment variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClapEffectSpec {
+pub struct ClapPluginSpec {
     pub path: PathBuf,
     pub id: String,
 }
 
-/// Why [`CLAP_FX_ENV`] could not be understood. Never fatal: the shell logs it
-/// and boots without the effect.
+/// Why a `<path>;<id>` environment variable could not be understood. Never
+/// fatal: the shell logs it and boots without the plugin.
+///
+/// Both variants carry the variable's name, because the same parser serves
+/// [`CLAP_FX_ENV`] and [`CLAP_INSTRUMENT_ENV`] and a message naming the wrong
+/// one would send the reader to the wrong shell command.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum ClapFxEnvError {
-    #[error("{CLAP_FX_ENV} must be '<bundle path>;<plugin id>', got '{0}'")]
-    Malformed(String),
-    #[error("{CLAP_FX_ENV} has an empty {0}")]
-    Empty(&'static str),
+pub enum ClapPluginEnvError {
+    #[error("{var} must be '<bundle path>;<plugin id>', got '{value}'")]
+    Malformed { var: &'static str, value: String },
+    #[error("{var} has an empty {field}")]
+    Empty {
+        var: &'static str,
+        field: &'static str,
+    },
 }
 
 /// Parse the `<path>;<id>` form. Whitespace around either half is trimmed,
 /// because shells and `.env` files put it there.
-pub fn parse_clap_fx_spec(value: &str) -> Result<ClapEffectSpec, ClapFxEnvError> {
+pub fn parse_clap_plugin_spec(
+    var: &'static str,
+    value: &str,
+) -> Result<ClapPluginSpec, ClapPluginEnvError> {
     let Some((path, id)) = value.rsplit_once(';') else {
-        return Err(ClapFxEnvError::Malformed(value.to_owned()));
+        return Err(ClapPluginEnvError::Malformed {
+            var,
+            value: value.to_owned(),
+        });
     };
     let (path, id) = (path.trim(), id.trim());
     if path.is_empty() {
-        return Err(ClapFxEnvError::Empty("bundle path"));
+        return Err(ClapPluginEnvError::Empty {
+            var,
+            field: "bundle path",
+        });
     }
     if id.is_empty() {
-        return Err(ClapFxEnvError::Empty("plugin id"));
+        return Err(ClapPluginEnvError::Empty {
+            var,
+            field: "plugin id",
+        });
     }
-    Ok(ClapEffectSpec {
+    Ok(ClapPluginSpec {
         path: PathBuf::from(path),
         id: id.to_owned(),
     })
 }
 
-/// Read [`CLAP_FX_ENV`], returning `None` when it is unset (the normal case).
-pub fn clap_fx_spec_from_env() -> Option<Result<ClapEffectSpec, ClapFxEnvError>> {
-    let raw = std::env::var(CLAP_FX_ENV).ok()?;
+/// Read `var`, returning `None` when it is unset or blank (the normal case).
+pub fn clap_spec_from_env(var: &'static str) -> Option<Result<ClapPluginSpec, ClapPluginEnvError>> {
+    let raw = std::env::var(var).ok()?;
     if raw.trim().is_empty() {
         return None;
     }
-    Some(parse_clap_fx_spec(&raw))
+    Some(parse_clap_plugin_spec(var, &raw))
 }
 
-/// Load the CLAP effect requested by the environment, if any.
+/// Read [`CLAP_FX_ENV`].
+pub fn clap_fx_spec_from_env() -> Option<Result<ClapPluginSpec, ClapPluginEnvError>> {
+    clap_spec_from_env(CLAP_FX_ENV)
+}
+
+/// Read [`CLAP_INSTRUMENT_ENV`].
+pub fn clap_instrument_spec_from_env() -> Option<Result<ClapPluginSpec, ClapPluginEnvError>> {
+    clap_spec_from_env(CLAP_INSTRUMENT_ENV)
+}
+
+/// Load the CLAP plugin named by `var`, if any.
 ///
 /// Returns `None` for "nothing was asked for" **and** for "it was asked for and
 /// failed" -- both are logged, and neither may stop the DAW from booting. A
@@ -100,11 +164,15 @@ pub fn clap_fx_spec_from_env() -> Option<Result<ClapEffectSpec, ClapFxEnvError>>
 /// The returned [`LoadedClapPlugin`] is not `Send` and owns the plugin instance:
 /// keep it on the main thread, and keep it alive for at least as long as any node
 /// it creates (see the `hosting` module docs in `mydaw-plugin-host-clap`).
-pub fn load_env_clap_effect(clap: &ClapHostService) -> Option<LoadedClapPlugin> {
-    let spec = match clap_fx_spec_from_env()? {
+pub fn load_env_clap_plugin(
+    clap: &ClapHostService,
+    var: &'static str,
+    role: &str,
+) -> Option<LoadedClapPlugin> {
+    let spec = match clap_spec_from_env(var)? {
         Ok(spec) => spec,
         Err(err) => {
-            log::warn!("ignoring {CLAP_FX_ENV}: {err}");
+            log::warn!("ignoring {var}: {err}");
             return None;
         }
     };
@@ -112,7 +180,7 @@ pub fn load_env_clap_effect(clap: &ClapHostService) -> Option<LoadedClapPlugin> 
     match clap.load(&spec.path, &spec.id) {
         Ok(plugin) => {
             log::info!(
-                "CLAP effect loaded: '{}' ({}) from {}",
+                "CLAP {role} loaded: '{}' ({}) from {}",
                 plugin.info().name,
                 plugin.info().id,
                 plugin.info().path.display()
@@ -121,7 +189,7 @@ pub fn load_env_clap_effect(clap: &ClapHostService) -> Option<LoadedClapPlugin> 
         }
         Err(err) => {
             log::warn!(
-                "could not load the CLAP effect from {CLAP_FX_ENV} ({}): {err}",
+                "could not load the CLAP {role} from {var} ({}): {err}",
                 spec.path.display()
             );
             None
@@ -129,13 +197,24 @@ pub fn load_env_clap_effect(clap: &ClapHostService) -> Option<LoadedClapPlugin> 
     }
 }
 
+/// Load the CLAP effect requested by [`CLAP_FX_ENV`], if any.
+pub fn load_env_clap_effect(clap: &ClapHostService) -> Option<LoadedClapPlugin> {
+    load_env_clap_plugin(clap, CLAP_FX_ENV, "effect")
+}
+
+/// Load the CLAP instrument requested by [`CLAP_INSTRUMENT_ENV`], if any.
+pub fn load_env_clap_instrument(clap: &ClapHostService) -> Option<LoadedClapPlugin> {
+    load_env_clap_plugin(clap, CLAP_INSTRUMENT_ENV, "instrument")
+}
+
 /// Activate `plugin` for this stream and wrap it in an RT node.
 ///
-/// Returns `None` (having logged) when the plugin will not activate -- an
-/// instrument rather than an effect, a mono plugin, a plugin that simply says no.
-/// The graph is then built without it.
-pub fn clap_effect_node(
+/// Returns `None` (having logged) when the plugin will not activate -- a mono
+/// plugin, a plugin whose ports the graph cannot drive, a plugin that simply
+/// says no. The graph is then built without it.
+pub fn clap_node(
     plugin: &mut LoadedClapPlugin,
+    role: &str,
     sample_rate: f64,
     max_block: usize,
 ) -> Option<Box<dyn RtNode>> {
@@ -143,7 +222,7 @@ pub fn clap_effect_node(
         Ok(node) => Some(Box::new(node)),
         Err(err) => {
             log::warn!(
-                "CLAP effect '{}' could not be activated ({err}); running without it",
+                "CLAP {role} '{}' could not be activated ({err}); running without it",
                 plugin.info().id
             );
             None
@@ -151,41 +230,82 @@ pub fn clap_effect_node(
     }
 }
 
-/// Build the default graph: `test-tone -> [effect] -> transport gate`.
+/// Activate a CLAP effect. See [`clap_node`].
+pub fn clap_effect_node(
+    plugin: &mut LoadedClapPlugin,
+    sample_rate: f64,
+    max_block: usize,
+) -> Option<Box<dyn RtNode>> {
+    clap_node(plugin, "effect", sample_rate, max_block)
+}
+
+/// Activate a CLAP instrument. See [`clap_node`].
+pub fn clap_instrument_node(
+    plugin: &mut LoadedClapPlugin,
+    sample_rate: f64,
+    max_block: usize,
+) -> Option<Box<dyn RtNode>> {
+    clap_node(plugin, "instrument", sample_rate, max_block)
+}
+
+/// Build the engine graph.
 ///
-/// The gate stays last so that Stop silences whatever the effect produced,
-/// including a reverb tail. The effect sits after the generator because that is
-/// where an insert lives.
+/// With an `instrument`: `instrument -> [effect]`, no gate -- an instrument is
+/// silent until it is played, and live playing must work with the transport
+/// stopped. Without one: `test-tone -> [effect] -> transport gate`, where the
+/// gate stays last so that Stop silences whatever the effect produced, including
+/// a reverb tail.
+///
+/// The effect sits after the source either way, because that is where an insert
+/// lives.
 ///
 /// Non-RT: node construction allocates, which is exactly why it happens here and
 /// not on the audio thread.
+pub fn engine_graph(
+    factory: &TestToneFactory,
+    instrument: Option<Box<dyn RtNode>>,
+    effect: Option<Box<dyn RtNode>>,
+    sample_rate: f64,
+    max_block: usize,
+) -> GraphSpec {
+    let gated = instrument.is_none();
+    let source = instrument.unwrap_or_else(|| factory.create(sample_rate, max_block));
+
+    let mut spec = GraphSpec::new().with(source);
+    if let Some(effect) = effect {
+        spec.push(effect);
+    }
+    if gated {
+        spec.push(Box::new(TransportGate));
+    }
+    spec
+}
+
+/// The default graph: `test-tone -> [effect] -> transport gate`.
 pub fn tone_graph(
     factory: &TestToneFactory,
     effect: Option<Box<dyn RtNode>>,
     sample_rate: f64,
     max_block: usize,
 ) -> GraphSpec {
-    let mut spec = GraphSpec::new().with(factory.create(sample_rate, max_block));
-    if let Some(effect) = effect {
-        spec.push(effect);
-    }
-    spec.push(Box::new(TransportGate));
-    spec
+    engine_graph(factory, None, effect, sample_rate, max_block)
 }
 
-/// Compile and publish [`tone_graph`] to the running audio thread.
+/// Compile and publish [`engine_graph`] to the running audio thread.
 ///
 /// # Errors
 /// [`AudioIoError::NotRunning`] when no stream is open (a machine with no output
 /// device still boots; it just has nothing to install into).
-pub fn install_tone_graph(
+pub fn install_engine_graph(
     audio: &AudioIoService,
     factory: &TestToneFactory,
+    instrument: Option<Box<dyn RtNode>>,
     effect: Option<Box<dyn RtNode>>,
 ) -> Result<(), AudioIoError> {
     let info = audio.stream_info().ok_or(AudioIoError::NotRunning)?;
-    audio.install_graph(tone_graph(
+    audio.install_graph(engine_graph(
         factory,
+        instrument,
         effect,
         f64::from(info.sample_rate),
         info.max_block,
@@ -231,6 +351,24 @@ mod tests {
                 for sample in channel.iter_mut() {
                     *sample *= 0.5;
                 }
+            }
+        }
+    }
+
+    /// Stand-in for a CLAP instrument with nothing to play.
+    struct SilentNode;
+    impl RtNode for SilentNode {
+        fn process(&mut self, ctx: &mut ProcessCtx) {
+            ctx.buffers.silence();
+        }
+    }
+
+    /// Stand-in for a CLAP instrument that has been played.
+    struct ConstNode(f32);
+    impl RtNode for ConstNode {
+        fn process(&mut self, ctx: &mut ProcessCtx) {
+            for channel in ctx.buffers.as_mut_slices() {
+                channel.fill(self.0);
             }
         }
     }
@@ -287,10 +425,59 @@ mod tests {
     }
 
     #[test]
+    fn an_instrument_replaces_the_tone_and_drops_the_gate() {
+        let factory = TestToneFactory::new();
+
+        // Instrument alone: one node, and it is *not* the gate.
+        let spec = engine_graph(&factory, Some(Box::new(SilentNode)), None, SR, BLOCK);
+        assert_eq!(spec.len(), 1, "no tone, no gate -- just the instrument");
+
+        // Instrument plus an insert.
+        let spec = engine_graph(
+            &factory,
+            Some(Box::new(SilentNode)),
+            Some(Box::new(HalveNode)),
+            SR,
+            BLOCK,
+        );
+        assert_eq!(spec.len(), 2);
+    }
+
+    #[test]
+    fn an_instrument_sounds_with_the_transport_stopped() {
+        // The whole point of dropping the gate. A stopped transport must not
+        // silence a live instrument, or a user could not audition one without
+        // pressing Play first.
+        let mut nodes: Vec<Box<dyn RtNode>> = vec![Box::new(ConstNode(0.3))];
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let mut ctx = ProcessCtx::new(
+            &mut buffers,
+            SR,
+            BLOCK,
+            TransportSnapshot {
+                sample_pos: 0,
+                playing: false,
+            },
+        );
+        for node in &mut nodes {
+            node.process(&mut ctx);
+        }
+        assert!(
+            buffers.as_slices()[0].iter().all(|s| *s == 0.3),
+            "the instrument chain has no gate to silence it"
+        );
+
+        // And the tone chain still behaves the old way, for contrast.
+        assert!(render(false, None).iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
     fn the_env_override_parses_a_windows_path_and_a_reverse_dns_id() {
-        let spec =
-            parse_clap_fx_spec(r"C:\Program Files\Common Files\CLAP\Thing.clap;com.acme.thing")
-                .unwrap();
+        let spec = parse_clap_plugin_spec(
+            CLAP_FX_ENV,
+            r"C:\Program Files\Common Files\CLAP\Thing.clap;com.acme.thing",
+        )
+        .unwrap();
         assert_eq!(
             spec.path,
             PathBuf::from(r"C:\Program Files\Common Files\CLAP\Thing.clap")
@@ -300,29 +487,58 @@ mod tests {
 
     #[test]
     fn the_env_override_splits_on_the_last_separator_and_trims() {
-        let spec = parse_clap_fx_spec("  /odd;path/a.clap ; org.x.y  ").unwrap();
+        let spec =
+            parse_clap_plugin_spec(CLAP_INSTRUMENT_ENV, "  /odd;path/a.clap ; org.x.y  ").unwrap();
         assert_eq!(spec.path, PathBuf::from("/odd;path/a.clap"));
         assert_eq!(spec.id, "org.x.y");
     }
 
     #[test]
-    fn a_malformed_env_override_is_a_typed_error_not_a_panic() {
+    fn a_malformed_env_override_is_a_typed_error_naming_the_variable() {
         assert_eq!(
-            parse_clap_fx_spec("no-separator-here"),
-            Err(ClapFxEnvError::Malformed("no-separator-here".to_owned()))
+            parse_clap_plugin_spec(CLAP_FX_ENV, "no-separator-here"),
+            Err(ClapPluginEnvError::Malformed {
+                var: CLAP_FX_ENV,
+                value: "no-separator-here".to_owned()
+            })
         );
         assert_eq!(
-            parse_clap_fx_spec(";com.acme.thing"),
-            Err(ClapFxEnvError::Empty("bundle path"))
+            parse_clap_plugin_spec(CLAP_FX_ENV, ";com.acme.thing"),
+            Err(ClapPluginEnvError::Empty {
+                var: CLAP_FX_ENV,
+                field: "bundle path"
+            })
         );
         assert_eq!(
-            parse_clap_fx_spec("thing.clap;"),
-            Err(ClapFxEnvError::Empty("plugin id"))
+            parse_clap_plugin_spec(CLAP_INSTRUMENT_ENV, "thing.clap;"),
+            Err(ClapPluginEnvError::Empty {
+                var: CLAP_INSTRUMENT_ENV,
+                field: "plugin id"
+            })
         );
         assert_eq!(
-            parse_clap_fx_spec("thing.clap;   "),
-            Err(ClapFxEnvError::Empty("plugin id"))
+            parse_clap_plugin_spec(CLAP_INSTRUMENT_ENV, "thing.clap;   "),
+            Err(ClapPluginEnvError::Empty {
+                var: CLAP_INSTRUMENT_ENV,
+                field: "plugin id"
+            })
         );
+
+        // The message must send the reader to the right shell command.
+        let message = parse_clap_plugin_spec(CLAP_INSTRUMENT_ENV, "nope")
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains(CLAP_INSTRUMENT_ENV), "{message}");
+        assert!(!message.contains(CLAP_FX_ENV), "{message}");
+    }
+
+    #[test]
+    fn the_two_environment_variables_are_distinct_and_documented() {
+        assert_eq!(CLAP_FX_ENV, "MYDAW_CLAP_FX");
+        assert_eq!(CLAP_INSTRUMENT_ENV, "MYDAW_CLAP_INSTRUMENT");
+        // Neither is set in the test process, so both read as absent.
+        assert!(clap_fx_spec_from_env().is_none());
+        assert!(clap_instrument_spec_from_env().is_none());
     }
 
     #[test]

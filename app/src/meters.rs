@@ -26,12 +26,46 @@ use crate::dto::MeterFrameDto;
 /// retires the subscription.
 pub type FrameSink = Box<dyn Fn(MeterFrameDto) -> bool + Send + Sync + 'static>;
 
-/// How often the pump looks at the queue.
+/// Fallback poll interval, used when there is no throttle to derive one from.
 ///
-/// Deliberately faster than the throttle's own 30 Hz budget: the throttle decides
-/// *whether* to emit, the pump only decides how promptly an emission is noticed.
-/// 15 ms keeps the added jitter at half a frame interval.
+/// With a throttle, [`poll_interval_for`] divides its emission interval instead;
+/// see that function for why a fixed 15 ms was the wrong answer.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(15);
+
+/// How many times the pump looks at the queue per emission slot.
+///
+/// Four gives a worst-case quantisation lag of a quarter of a frame interval
+/// (~8 ms at 30 Hz) for four wake-ups per slot on an idle thread, which is the
+/// cheap end of a trade that only gets more expensive.
+pub const POLL_DIVISOR: u32 = 4;
+
+/// Shortest interval the pump will spin at, whatever the throttle asks for.
+///
+/// A 240 Hz throttle would otherwise ask for a 1 ms sleep loop; the pump is not
+/// a real-time thread and should not pretend to be one.
+pub const MIN_POLL_INTERVAL: Duration = Duration::from_millis(2);
+
+/// Poll interval for a throttle emitting every `emit_interval`.
+///
+/// # Why this is not a constant
+/// The throttle decides *whether* to emit; the pump decides how promptly an
+/// emission is noticed. Spike 4 measured the live meter path at 21.85 Hz instead
+/// of 30, and the transport was not to blame: a 15 ms poll against a 33.3 ms
+/// budget means the poll at 30 ms is refused and the frame waits until 45 ms, so
+/// the real emission grid was 45 ms -- 22.2 Hz. Two independent timers beating
+/// against each other.
+///
+/// Dividing the throttle's own interval makes the poll grid a divisor of the
+/// emission grid, so every deadline is served by the next poll rather than the
+/// one after it. Together with the throttle's deadline stepping (see
+/// [`MeterThrottle`]) the long-run rate is the configured one.
+pub fn poll_interval_for(emit_interval: Duration) -> Duration {
+    if emit_interval.is_zero() {
+        // An unthrottled throttle emits whenever asked; poll at the default.
+        return POLL_INTERVAL;
+    }
+    (emit_interval / POLL_DIVISOR).max(MIN_POLL_INTERVAL)
+}
 
 /// Drains the throttled meter queue into the current subscriber.
 pub struct MeterPump {
@@ -57,9 +91,18 @@ pub struct MeterPump {
 }
 
 impl MeterPump {
-    /// Pump over the metering plugin's throttle.
+    /// Pump over the metering plugin's throttle, polling fast enough to serve
+    /// its emission rate. See [`poll_interval_for`].
     pub fn new(throttle: Option<MeterThrottle>) -> Arc<Self> {
-        Self::with_interval(throttle, POLL_INTERVAL)
+        let interval = throttle
+            .as_ref()
+            .map_or(POLL_INTERVAL, |t| poll_interval_for(t.min_interval()));
+        Self::with_interval(throttle, interval)
+    }
+
+    /// How often this pump looks at the queue.
+    pub fn poll_interval(&self) -> Duration {
+        self.interval
     }
 
     /// Pump with an explicit poll interval (tests).
@@ -334,8 +377,61 @@ mod tests {
     fn a_pump_without_a_throttle_is_harmless() {
         let pump = MeterPump::new(None);
         assert!(!pump.has_throttle());
+        assert_eq!(pump.poll_interval(), POLL_INTERVAL);
         pump.subscribe(Box::new(|_| true));
         assert!(!pump.pump_once(Instant::now()));
+        pump.shutdown();
+    }
+
+    #[test]
+    fn the_poll_interval_divides_the_throttles_emission_interval() {
+        // 30 Hz -> 33.33 ms -> 8.33 ms, a quarter of the emission slot.
+        let thirty_hz = Duration::from_secs_f64(1.0 / 30.0);
+        let polled = poll_interval_for(thirty_hz);
+        assert_eq!(polled, thirty_hz / POLL_DIVISOR);
+        assert!(polled < thirty_hz, "the pump must outpace the throttle");
+
+        // A very fast throttle is clamped: the pump is not an RT thread.
+        assert_eq!(
+            poll_interval_for(Duration::from_millis(4)),
+            MIN_POLL_INTERVAL
+        );
+        // An unthrottled throttle has no interval to divide.
+        assert_eq!(poll_interval_for(Duration::ZERO), POLL_INTERVAL);
+    }
+
+    /// The spike-4 finding, end to end through the pump: a 30 Hz throttle
+    /// polled at the pump's own interval must deliver ~30 frames a second, not
+    /// the 21.85 that a 15 ms poll against a 33.3 ms budget used to produce.
+    #[test]
+    fn a_thirty_hertz_throttle_delivers_thirty_frames_a_second_through_the_pump() {
+        let (mut tx, throttle) = mydaw_ipc_bridge::meter_channel(16);
+        let pump = MeterPump::new(Some(throttle));
+        let interval = pump.poll_interval();
+        assert!(interval < Duration::from_millis(15), "{interval:?}");
+
+        let delivered = Arc::new(AtomicUsize::new(0));
+        let sink = Arc::clone(&delivered);
+        pump.subscribe(Box::new(move |_| {
+            sink.fetch_add(1, Ordering::Relaxed);
+            true
+        }));
+
+        // Simulated wall clock: the thread body's `sleep(interval)` loop, but
+        // deterministic, so this test cannot flake on a busy machine.
+        let t0 = Instant::now();
+        let mut elapsed = Duration::ZERO;
+        while elapsed < Duration::from_secs(1) {
+            let _ = tx.push(frame(0.5));
+            pump.pump_once(t0 + elapsed);
+            elapsed += interval;
+        }
+
+        let count = delivered.load(Ordering::Relaxed);
+        assert!(
+            (29..=31).contains(&count),
+            "expected ~30 frames in one second, got {count}"
+        );
         pump.shutdown();
     }
 }
