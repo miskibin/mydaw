@@ -9,8 +9,15 @@ publish.workspace = true
 [dependencies]
 mydaw-kernel.workspace = true
 mydaw-rt-core.workspace = true
+# Spike 3: the host opens the editor's window through this service.
+mydaw-plugin-windows.workspace = true
 clack-host.workspace = true
-clack-extensions = { version = "0.1.1", features = ["clack-host", "audio-ports"] }
+clack-extensions = { version = "0.1.1", features = [
+    "clack-host",
+    "audio-ports",
+    "gui",
+    "timer",
+] }
 log.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
@@ -22,3 +29,12 @@ thiserror.workspace = true
 # loadable `.clap` bundle. Without the dependency edge Cargo has no reason to
 # build a dynamic library nothing links against.
 mydaw-fixture-clap-gain = { path = "../../test-fixtures/clap-gain" }
+
+# The GUI tests run their own message loop and inspect the plugin's child window
+# (parent, text) through Win32 -- the only way to prove liveness without a human
+# looking at the screen.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

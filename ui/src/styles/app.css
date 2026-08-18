@@ -473,6 +473,12 @@ code {
   border-top: 1px solid var(--bg-3);
 }
 
+.clap-browser__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .link-button:disabled {
   color: var(--fg-2);
   cursor: default;

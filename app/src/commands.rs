@@ -11,6 +11,7 @@ use tauri::State;
 
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{ClapPluginInfoDto, MeterFrameDto};
+use crate::gui_bridge::{ClapGuiCommand, ClapGuiStatusDto};
 use crate::state::AppState;
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
@@ -66,6 +67,27 @@ pub async fn debug_capture(
     let outcome = capture_to_disk(state.debug_tap(), seconds, &capture_root())
         .map_err(|err| err.to_string())?;
     Ok(CaptureReportDto::from(&outcome))
+}
+
+/// Open the loaded CLAP effect's editor in its own native window.
+///
+/// The work happens on the main thread -- a CLAP editor is `[main-thread]` and
+/// its window belongs to the event loop's thread -- so this posts a request and
+/// waits for the answer (see [`crate::gui_bridge`]). `async` so the wait happens
+/// on Tauri's blocking pool rather than on the main thread, which is the one that
+/// has to answer it.
+///
+/// Errors are the user-facing sentence, e.g. "This plugin has no editor." -- a
+/// plugin without a GUI is normal, not a malfunction.
+#[tauri::command]
+pub async fn open_clap_gui(state: State<'_, AppState>) -> Result<ClapGuiStatusDto, String> {
+    state.gui().request(ClapGuiCommand::Open)
+}
+
+/// Close the plugin editor. Not an error when nothing is open.
+#[tauri::command]
+pub async fn close_clap_gui(state: State<'_, AppState>) -> Result<ClapGuiStatusDto, String> {
+    state.gui().request(ClapGuiCommand::Close)
 }
 
 /// Stream throttled meter frames into `channel` until the webview drops it.

@@ -31,7 +31,7 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
 | `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
 | `plugins/host-vst3` | VST3 host stub (Phase 1 spike 5) |
-| `plugins/plugin-windows` | Native child windows for external plugin GUIs (Phase 1 spike 3) |
+| `plugins/plugin-windows` | Native top-level windows for external plugin GUIs, pumped by the shell's own message loop (Phase 1 spike 3) |
 | `app/` | The shell: boots the kernel, registers the plugin set, hosts the webview, owns the Tauri commands |
 | `ui/` | SolidJS + TypeScript + Vite frontend ([`ui/README.md`](ui/README.md)) |
 | `test-fixtures/clap-gain` | A real CLAP plugin (-6 dB stereo gain) built by the workspace, so the CLAP host is tested against something deterministic rather than whatever happens to be installed |
@@ -82,11 +82,25 @@ cargo fmt --all --check
 pnpm --dir ui build                      # tsc --noEmit + vite build
 ```
 
-One test is opt-in because it opens the real output device and is audible:
+Two tests are opt-in because they open the real output device and are audible (the second also
+puts a plugin editor on screen):
 
 ```sh
 cargo test -p mydaw-app --test audio_end_to_end -- --ignored --nocapture
+cargo test -p mydaw-app --test gui_audio_smoke  -- --ignored --nocapture
 ```
+
+## Plugin editors
+
+An external plugin's editor opens in its **own native window** next to MYDAW's -- a plugin paints
+with its own toolkit into an OS window handle, which cannot be composited into the webview. Load an
+effect and use *Open GUI* in the CLAP Plugins panel:
+
+```sh
+MYDAW_CLAP_FX='C:\path\to\plugin.clap;com.vendor.plugin' cargo run -p mydaw-app --features custom-protocol
+```
+
+See [`docs/superpowers/specs/2026-08-18-spike3-plugin-gui.md`](docs/superpowers/specs/2026-08-18-spike3-plugin-gui.md).
 
 It boots the kernel, installs the test-tone graph, plays for ~1 s and asserts that meter frames
 move and the playhead advances — the whole audio path minus the webview. A second `#[ignore]`d test

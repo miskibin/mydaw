@@ -1,4 +1,4 @@
-import { For, Show, createResource, type JSX } from 'solid-js';
+import { For, Show, createResource, createSignal, type JSX } from 'solid-js';
 import { useAppState } from '../../state';
 import type { PanelProps } from '../types';
 
@@ -10,7 +10,8 @@ function errorMessage(err: unknown): string {
 }
 
 /**
- * Lists the CLAP plugins the host found on this machine.
+ * Lists the CLAP plugins the host found on this machine, and opens the loaded
+ * effect's editor.
  *
  * The scan is deliberately lazy on both sides: the Rust host does not touch the
  * filesystem at boot (loading every installed plugin would make start-up as slow
@@ -18,6 +19,15 @@ function errorMessage(err: unknown): string {
  * list when it is first mounted. `createResource` therefore doubles as the
  * loading state -- the first fetch really can take a second on a machine with a
  * large collection.
+ *
+ * The editor opens in its own **native** window, not in this webview: a plugin
+ * paints with its own toolkit into an OS window handle. The button is therefore
+ * a request to the Rust main thread, and everything it can report -- including
+ * "This plugin has no editor." -- is shown here as text.
+ *
+ * Which plugin? The one the engine loaded via `MYDAW_CLAP_FX`, since inserting
+ * plugins from this list is Phase 2 work. Hence one button rather than one per
+ * row: a per-row button would promise something the engine cannot do yet.
  */
 export function ClapBrowserPanel(_props: PanelProps): JSX.Element {
   const app = useAppState();
@@ -28,16 +38,41 @@ export function ClapBrowserPanel(_props: PanelProps): JSX.Element {
   let force = false;
   const [plugins, { refetch }] = createResource(() => app.backend.getClapPlugins(force));
 
+  const [guiOpen, setGuiOpen] = createSignal(false);
+  const [guiBusy, setGuiBusy] = createSignal(false);
+  const [guiError, setGuiError] = createSignal<string | undefined>();
+
   const count = () => plugins()?.length ?? 0;
   const rescan = () => {
     force = true;
     void refetch();
   };
 
+  const toggleGui = async () => {
+    setGuiBusy(true);
+    setGuiError(undefined);
+    try {
+      const status = guiOpen()
+        ? await app.backend.closeClapGui()
+        : await app.backend.openClapGui();
+      setGuiOpen(status.open);
+    } catch (err) {
+      // The message is the backend's own sentence; it is the only explanation
+      // the user gets for a plugin that has no editor at all.
+      setGuiError(errorMessage(err));
+      setGuiOpen(false);
+    } finally {
+      setGuiBusy(false);
+    }
+  };
+
   return (
     <div class="clap-browser">
       <Show when={plugins.error}>
         <p class="clap-browser__error">Scan failed: {errorMessage(plugins.error)}</p>
+      </Show>
+      <Show when={guiError()}>
+        <p class="clap-browser__error">{guiError()}</p>
       </Show>
 
       <Show when={!plugins.loading} fallback={<p class="clap-browser__empty">Scanning…</p>}>
@@ -73,9 +108,20 @@ export function ClapBrowserPanel(_props: PanelProps): JSX.Element {
         <span>
           {count()} {count() === 1 ? 'plugin' : 'plugins'}
         </span>
-        <button class="link-button" type="button" disabled={plugins.loading} onClick={rescan}>
-          Rescan
-        </button>
+        <span class="clap-browser__actions">
+          <button
+            class="link-button"
+            type="button"
+            disabled={guiBusy()}
+            title="Open the loaded CLAP effect's editor in a native window"
+            onClick={() => void toggleGui()}
+          >
+            {guiOpen() ? 'Close GUI' : 'Open GUI'}
+          </button>
+          <button class="link-button" type="button" disabled={plugins.loading} onClick={rescan}>
+            Rescan
+          </button>
+        </span>
       </footer>
     </div>
   );

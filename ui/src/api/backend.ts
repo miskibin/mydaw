@@ -1,4 +1,10 @@
-import type { ClapPluginInfoDto, MeterFrame, UiSnapshot, Unsubscribe } from './types';
+import type {
+  ClapGuiStatus,
+  ClapPluginInfoDto,
+  MeterFrame,
+  UiSnapshot,
+  Unsubscribe,
+} from './types';
 
 /**
  * The only surface the UI is allowed to use to reach the kernel.
@@ -19,6 +25,15 @@ export interface Backend {
    * afterwards it is served from a cache. Pass `rescan` to walk them again.
    */
   getClapPlugins(rescan?: boolean): Promise<ClapPluginInfoDto[]>;
+  /**
+   * Open the loaded CLAP effect's editor in its own native window.
+   *
+   * Rejects with a sentence meant for the status bar -- most often "This plugin
+   * has no editor.", which is a normal answer rather than a failure.
+   */
+  openClapGui(): Promise<ClapGuiStatus>;
+  /** Close the plugin editor. Resolves even when nothing was open. */
+  closeClapGui(): Promise<ClapGuiStatus>;
   transportPlay(): Promise<void>;
   transportStop(): Promise<void>;
   /** Subscribe to the throttled meter stream. Call the result to detach. */
@@ -54,6 +69,16 @@ class TauriBackend implements Backend {
   async getClapPlugins(rescan = false): Promise<ClapPluginInfoDto[]> {
     const { invoke } = await this.core();
     return invoke<ClapPluginInfoDto[]>('get_clap_plugins', { rescan });
+  }
+
+  async openClapGui(): Promise<ClapGuiStatus> {
+    const { invoke } = await this.core();
+    return invoke<ClapGuiStatus>('open_clap_gui');
+  }
+
+  async closeClapGui(): Promise<ClapGuiStatus> {
+    const { invoke } = await this.core();
+    return invoke<ClapGuiStatus>('close_clap_gui');
   }
 
   async transportPlay(): Promise<void> {
@@ -104,6 +129,8 @@ const MOCK_SNAPSHOT: UiSnapshot = {
  * Two plausible plugins, one of them with no vendor or version, because the
  * CLAP format allows that and the panel has to render it without collapsing.
  */
+const MOCK_FIXTURE_ID = 'dev.mydaw.fixture.gain';
+
 const MOCK_CLAP_PLUGINS: ClapPluginInfoDto[] = [
   {
     id: 'com.example.reverb',
@@ -113,7 +140,7 @@ const MOCK_CLAP_PLUGINS: ClapPluginInfoDto[] = [
     path: 'C:\\Program Files\\Common Files\\CLAP\\ExampleReverb.clap',
   },
   {
-    id: 'dev.mydaw.fixture.gain',
+    id: MOCK_FIXTURE_ID,
     name: 'MYDAW Fixture Gain',
     vendor: '',
     version: '',
@@ -133,6 +160,7 @@ class MockBackend implements Backend {
   readonly kind = 'mock' as const;
   private playing = false;
   private samplePos = 0;
+  private guiOpen = false;
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
@@ -144,6 +172,23 @@ class MockBackend implements Backend {
     return structuredClone(MOCK_CLAP_PLUGINS);
   }
 
+  /**
+   * There is no native window in a browser, so this only records the state and
+   * says so in the console. The panel's own logic is what is being developed
+   * against the mock; the window is the Rust side's business.
+   */
+  async openClapGui(): Promise<ClapGuiStatus> {
+    this.guiOpen = true;
+    console.info('[mock] open_clap_gui: no native window outside Tauri');
+    return { open: true, pluginId: MOCK_FIXTURE_ID, width: 400, height: 250 };
+  }
+
+  async closeClapGui(): Promise<ClapGuiStatus> {
+    this.guiOpen = false;
+    console.info('[mock] close_clap_gui');
+    return { open: false, pluginId: MOCK_FIXTURE_ID, width: 0, height: 0 };
+  }
+
   async transportPlay(): Promise<void> {
     this.playing = true;
   }
@@ -151,6 +196,11 @@ class MockBackend implements Backend {
   async transportStop(): Promise<void> {
     this.playing = false;
     this.samplePos = 0;
+  }
+
+  /** Exposed so a panel test can assert the mock's view of the editor. */
+  isGuiOpen(): boolean {
+    return this.guiOpen;
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {

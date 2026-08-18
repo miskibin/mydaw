@@ -10,10 +10,11 @@ use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin, LoadedClapPlugin};
 use mydaw_plugin_host_vst3::HostVst3Plugin;
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
-use mydaw_plugin_windows::PluginWindowsPlugin;
+use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 
 use crate::dto::ClapPluginInfoDto;
 use crate::graph::{clap_effect_node, install_tone_graph};
+use crate::gui_bridge::ClapGuiBridge;
 use crate::meters::MeterPump;
 
 /// Panel key of the kernel status view, mirrored in `ui/src/panels/registry.ts`.
@@ -85,6 +86,9 @@ pub struct AppState {
     /// The audio inspection harness. Non-RT, `Send + Sync`, and safe to call
     /// from a Tauri command thread.
     debug_tap: Arc<DebugTapService>,
+    /// Mailbox to the main thread's plugin-GUI host. The editor itself cannot
+    /// live here: it is `!Send` and thread-bound (see `crate::gui_host`).
+    gui: Arc<ClapGuiBridge>,
 }
 
 impl AppState {
@@ -112,6 +116,11 @@ impl AppState {
         let debug_tap = services
             .get::<DebugTapService>()
             .ok_or(StartupError::MissingService("DebugTapService"))?;
+        // Resolved here so a missing plugin-windows registration is a boot error
+        // rather than a mystery when the user first clicks "Open GUI".
+        if !services.contains::<PluginWindowService>() {
+            return Err(StartupError::MissingService("PluginWindowService"));
+        }
 
         let throttle = meter_output.take();
         if throttle.is_none() {
@@ -125,6 +134,7 @@ impl AppState {
             clap,
             meters: MeterPump::new(throttle),
             debug_tap,
+            gui: Arc::new(ClapGuiBridge::new()),
         })
     }
 
@@ -213,6 +223,11 @@ impl AppState {
     /// `MYDAW_DEBUG_CAPTURE`.
     pub fn debug_tap(&self) -> &Arc<DebugTapService> {
         &self.debug_tap
+    }
+
+    /// The plugin-GUI mailbox. Commands post here; the run loop serves it.
+    pub fn gui(&self) -> &Arc<ClapGuiBridge> {
+        &self.gui
     }
 }
 

@@ -50,6 +50,8 @@ parking_lot.workspace = true
 # before these tests run.
 mydaw-fixture-clap-gain = { path = "../test-fixtures/clap-gain" }
 mydaw-plugin-test-tone.workspace = true
+mydaw-plugin-debug-tap.workspace = true
+mydaw-plugin-windows.workspace = true
 
 [features]
 # Set by the Tauri CLI for production builds; it switches `generate_context!`
@@ -58,3 +60,11 @@ mydaw-plugin-test-tone.workspace = true
 #   cargo run -p mydaw-app --features custom-protocol
 # DO NOT REMOVE.
 custom-protocol = ["tauri/custom-protocol"]
+
+# The spike-3 smoke test drives the editor window the way a user's mouse would
+# (a programmatic SetWindowPos) and reads back what the plugin painted.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

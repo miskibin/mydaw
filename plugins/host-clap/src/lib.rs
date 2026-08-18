@@ -29,8 +29,10 @@
 //! The seam is already here: [`ClapHostService::scan_bundle`] is a pure
 //! path-in/results-out function, so the subprocess can call exactly it.
 
+pub mod gui;
 pub mod hosting;
 pub mod test_util;
+pub mod timers;
 
 use std::ffi::CStr;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -42,9 +44,12 @@ use clack_host::plugin::PluginDescriptor;
 use mydaw_kernel::{KernelCtx, PanelManifest, Plugin, PluginManifest};
 use parking_lot::Mutex;
 
+pub use gui::{ClapGuiError, ClapGuiPump, ClapGuiSession, ResizeDecision};
 pub use hosting::{
-    ClapHostError, ClapNode, ClapNodeStats, ClapPortLayout, LoadedClapPlugin, RETIRE_TIMEOUT,
+    ClapGuiRequests, ClapHostError, ClapNode, ClapNodeStats, ClapPortLayout, LoadedClapPlugin,
+    MainThreadWork, RETIRE_TIMEOUT,
 };
+pub use timers::ClapTimers;
 
 /// Kernel id of this plugin.
 pub const PLUGIN_ID: &str = "host-clap";

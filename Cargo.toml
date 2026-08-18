@@ -23,6 +23,11 @@ clack-host = "0.1"  # safe CLAP host bindings (discovery in Phase 0, hosting in 
 realfft = "3"      # real-input FFT for capture spectra (wraps rustfft)
 hound = "3"        # 32-bit float WAV writer/reader for captures
 png = "0.18"       # PNG encoder; the rasteriser is ours (plotters is far too heavy)
+# --- native windows (plugin GUIs) ---
+# Raw Win32, not `tao`: plugin editor windows must be created on demand on the
+# thread that already owns tao's message loop, which tao's own API does not
+# expose. See `plugins/plugin-windows`.
+windows-sys = "0.61"
 # --- general ---
 thiserror = "2"
 log = "0.4"

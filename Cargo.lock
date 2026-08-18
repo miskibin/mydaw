@@ -2139,6 +2139,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "thiserror 2.0.20",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2147,6 +2148,7 @@ version = "0.1.0"
 dependencies = [
  "clack-extensions",
  "clack-plugin",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2213,9 +2215,11 @@ dependencies = [
  "log",
  "mydaw-fixture-clap-gain",
  "mydaw-kernel",
+ "mydaw-plugin-windows",
  "mydaw-rt-core",
  "parking_lot",
  "thiserror 2.0.20",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2247,7 +2251,11 @@ dependencies = [
 name = "mydaw-plugin-windows"
 version = "0.1.0"
 dependencies = [
+ "log",
  "mydaw-kernel",
+ "parking_lot",
+ "thiserror 2.0.20",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

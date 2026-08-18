@@ -64,5 +64,24 @@ export interface ClapPluginInfoDto {
   path: string;
 }
 
+/**
+ * State of the hosted plugin's editor window. Mirrors `ClapGuiStatusDto` in
+ * `app/src/gui_bridge.rs`.
+ *
+ * The editor is a *native* window next to MYDAW's, not a region of this webview:
+ * a plugin draws with its own toolkit into an OS window handle, which cannot be
+ * composited into WebView2. All the UI can do is ask for it to be opened or
+ * closed, and show what came back.
+ */
+export interface ClapGuiStatus {
+  /** Whether an editor window is currently open. */
+  open: boolean;
+  /** CLAP id of the plugin the editor belongs to, if one is loaded. */
+  pluginId: string | null;
+  /** Editor size in physical pixels; `0` when closed. */
+  width: number;
+  height: number;
+}
+
 /** Unsubscribe handle returned by streaming APIs. */
 export type Unsubscribe = () => void;

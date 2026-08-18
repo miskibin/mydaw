@@ -21,12 +21,20 @@
 //!
 //! This crate is a test fixture. It is never shipped.
 
+pub mod gui;
+
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
     PluginAudioPortsImpl,
 };
+use clack_extensions::gui::{
+    GuiConfiguration, GuiResizeHints, GuiSize, PluginGui, PluginGuiImpl, Window,
+};
+use clack_extensions::timer::{PluginTimer, PluginTimerImpl, TimerId};
 use clack_plugin::plugin::PluginError;
 use clack_plugin::prelude::*;
+
+use crate::gui::FixtureGui;
 
 /// CLAP id of the fixture. Hosts address the plugin by this string.
 pub const PLUGIN_ID: &str = "dev.mydaw.fixture.gain";
@@ -49,13 +57,34 @@ pub const GAIN: f32 = 0.5;
 /// Channel count of both the input and the output port.
 pub const CHANNELS: u32 = 2;
 
+/// One stereo port in each direction.
+pub const PORT_COUNT: u32 = 1;
+
+/// Environment variable that removes the `gui` and `timer-support` extensions
+/// from this plugin (`MYDAW_FIXTURE_GUI=0`).
+///
+/// A test affordance, and one that only exists because this is a test fixture: it
+/// is how the host's "this plugin has no editor" path
+/// (`ClapGuiError::NoGuiSupport`) is exercised end to end without a second
+/// fixture plugin. Read when the host queries extensions, which is before any
+/// editor exists.
+pub const GUI_ENV: &str = "MYDAW_FIXTURE_GUI";
+
+/// Whether this instance should advertise an editor.
+fn gui_enabled() -> bool {
+    !matches!(
+        std::env::var(GUI_ENV).ok().as_deref(),
+        Some("0") | Some("off") | Some("false")
+    )
+}
+
 /// The plugin type. Stateless -- everything it needs is a constant.
 pub struct GainPlugin;
 
 impl Plugin for GainPlugin {
     type AudioProcessor<'a> = GainProcessor;
     type Shared<'a> = ();
-    type MainThread<'a> = GainMainThread;
+    type MainThread<'a> = GainMainThread<'a>;
 
     fn declare_extensions(builder: &mut PluginExtensions<Self>, _shared: Option<&()>) {
         // Without this extension a CLAP plugin formally has *no* audio ports, and
@@ -63,6 +92,14 @@ impl Plugin for GainPlugin {
         // and one stereo out is what makes this fixture a realistic subject for
         // the host's port negotiation, not just for its process loop.
         builder.register::<PluginAudioPorts>();
+
+        if gui_enabled() {
+            // Spike 3's subject: a real embedded Win32 editor, animated only by
+            // host timers. `timer-support` is not an optional extra here --
+            // without it the editor visibly freezes, which is the point.
+            builder.register::<PluginGui>();
+            builder.register::<PluginTimer>();
+        }
     }
 }
 
@@ -78,21 +115,30 @@ impl DefaultPluginFactory for GainPlugin {
     }
 
     fn new_main_thread<'a>(
-        _host: HostMainThreadHandle<'a>,
+        host: HostMainThreadHandle<'a>,
         _shared: &'a (),
-    ) -> Result<GainMainThread, PluginError> {
-        Ok(GainMainThread)
+    ) -> Result<GainMainThread<'a>, PluginError> {
+        Ok(GainMainThread {
+            host,
+            gui: FixtureGui::new(),
+        })
     }
 }
 
-/// Main-thread half. Carries the audio-ports description and nothing else.
-pub struct GainMainThread;
+/// Main-thread half: the audio-ports description, and the editor.
+///
+/// It holds the host handle because the editor needs it -- `clap.timer-support`
+/// is a *host* service, and registering a timer is a main-thread call.
+pub struct GainMainThread<'a> {
+    host: HostMainThreadHandle<'a>,
+    gui: FixtureGui,
+}
 
-impl PluginMainThread<'_, ()> for GainMainThread {}
+impl<'a> PluginMainThread<'a, ()> for GainMainThread<'a> {}
 
-impl PluginAudioPortsImpl for GainMainThread {
+impl PluginAudioPortsImpl for GainMainThread<'_> {
     fn count(&mut self, _is_input: bool) -> u32 {
-        1
+        PORT_COUNT
     }
 
     fn get(&mut self, index: u32, is_input: bool, writer: &mut AudioPortInfoWriter) {
@@ -123,10 +169,10 @@ impl PluginAudioPortsImpl for GainMainThread {
 /// repeatedly and compare results without modelling any history.
 pub struct GainProcessor;
 
-impl<'a> PluginAudioProcessor<'a, (), GainMainThread> for GainProcessor {
+impl<'a> PluginAudioProcessor<'a, (), GainMainThread<'a>> for GainProcessor {
     fn activate(
         _host: HostAudioProcessorHandle<'a>,
-        _main_thread: &mut GainMainThread,
+        _main_thread: &mut GainMainThread<'a>,
         _shared: &'a (),
         _audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
@@ -174,6 +220,78 @@ impl<'a> PluginAudioProcessor<'a, (), GainMainThread> for GainProcessor {
     }
 }
 
+/// The editor. Every method is a thin adapter over [`FixtureGui`]; the
+/// interesting behaviour (size negotiation, the animation, the painted state)
+/// is documented in [`gui`].
+impl PluginGuiImpl for GainMainThread<'_> {
+    fn is_api_supported(&mut self, configuration: GuiConfiguration) -> bool {
+        self.gui.is_api_supported(configuration)
+    }
+
+    fn get_preferred_api(&mut self) -> Option<GuiConfiguration<'_>> {
+        self.gui.preferred_api()
+    }
+
+    fn create(&mut self, configuration: GuiConfiguration) -> Result<(), PluginError> {
+        self.gui.create(&mut self.host, configuration)
+    }
+
+    fn destroy(&mut self) {
+        self.gui.destroy(&mut self.host);
+    }
+
+    fn set_scale(&mut self, scale: f64) -> Result<(), PluginError> {
+        self.gui.set_scale(scale)
+    }
+
+    fn get_size(&mut self) -> Option<GuiSize> {
+        Some(self.gui.size())
+    }
+
+    fn can_resize(&mut self) -> bool {
+        self.gui.can_resize()
+    }
+
+    fn get_resize_hints(&mut self) -> Option<GuiResizeHints> {
+        Some(self.gui.resize_hints())
+    }
+
+    fn adjust_size(&mut self, size: GuiSize) -> Option<GuiSize> {
+        Some(gui::adjust(size))
+    }
+
+    fn set_size(&mut self, size: GuiSize) -> Result<(), PluginError> {
+        self.gui.set_size(size)
+    }
+
+    fn set_parent(&mut self, window: Window) -> Result<(), PluginError> {
+        self.gui.set_parent(window)
+    }
+
+    /// Embedded only: a fixture that accepted a transient window would let a host
+    /// bug (opening the editor floating) pass unnoticed.
+    fn set_transient(&mut self, _window: Window) -> Result<(), PluginError> {
+        Err(PluginError::Message(
+            "the fixture editor is embedded, never floating",
+        ))
+    }
+
+    fn show(&mut self) -> Result<(), PluginError> {
+        self.gui.show()
+    }
+
+    fn hide(&mut self) -> Result<(), PluginError> {
+        self.gui.hide()
+    }
+}
+
+/// The only thing in this plugin that advances the editor's animation.
+impl PluginTimerImpl for GainMainThread<'_> {
+    fn on_timer(&mut self, _timer_id: TimerId) {
+        self.gui.on_timer();
+    }
+}
+
 clack_export_entry!(SinglePluginEntry<GainPlugin>);
 
 #[cfg(test)]
@@ -210,8 +328,18 @@ mod tests {
 
     #[test]
     fn one_stereo_port_is_declared_in_each_direction() {
-        let mut main_thread = GainMainThread;
-        assert_eq!(main_thread.count(true), 1);
-        assert_eq!(main_thread.count(false), 1);
+        // `GainMainThread` now needs a live host handle, which only a real host
+        // can produce, so the port shape is asserted through the constants the
+        // implementation returns. `plugins/host-clap` checks the same thing
+        // through the actual FFI, against a loaded instance.
+        assert_eq!(PORT_COUNT, 1);
+        assert_eq!(CHANNELS, 2);
+    }
+
+    #[test]
+    fn the_editor_is_advertised_unless_the_environment_switches_it_off() {
+        // No variable is set in this process, so the editor is declared.
+        assert!(gui_enabled());
+        assert_eq!(GUI_ENV, "MYDAW_FIXTURE_GUI");
     }
 }

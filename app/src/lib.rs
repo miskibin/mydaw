@@ -41,6 +41,8 @@ mod commands;
 pub mod debug_capture;
 mod dto;
 mod graph;
+pub mod gui_bridge;
+pub mod gui_host;
 mod meters;
 mod state;
 
@@ -55,6 +57,8 @@ pub use graph::{
     clap_effect_node, clap_fx_spec_from_env, install_tone_graph, load_env_clap_effect,
     parse_clap_fx_spec, tone_graph, ClapEffectSpec, ClapFxEnvError, TransportGate, CLAP_FX_ENV,
 };
+pub use gui_bridge::{ClapGuiBridge, ClapGuiCommand, ClapGuiStatusDto, GUI_REQUEST_TIMEOUT};
+pub use gui_host::{ClapGuiHost, NO_PLUGIN_MESSAGE};
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
 pub use state::{boot_kernel, ui_snapshot, AppState, StartupError, KERNEL_STATUS_PANEL};
 
@@ -126,9 +130,20 @@ pub fn run() -> ExitCode {
         None => {}
     }
 
-    // Handles for the shutdown path, cloned before `state` moves into Tauri.
+    // Handles for the shutdown path and the run loop, cloned before `state` moves
+    // into Tauri.
     let meters = std::sync::Arc::clone(state.meters());
     let audio = std::sync::Arc::clone(state.audio());
+    let gui_bridge = std::sync::Arc::clone(state.gui());
+    // The window service belongs to this thread -- the one tao's loop will run on
+    // -- which is exactly what makes it legal to open plugin windows from the run
+    // callback below.
+    let window_service = kernel
+        .ctx()
+        .services
+        .get::<mydaw_plugin_windows::PluginWindowService>()
+        .expect("plugin-windows provides PluginWindowService; AppState checked at boot");
+    let mut gui_host = ClapGuiHost::new(window_service);
 
     let app = tauri::Builder::default()
         .manage(state)
@@ -138,6 +153,8 @@ pub fn run() -> ExitCode {
             commands::transport_play,
             commands::transport_stop,
             commands::debug_capture,
+            commands::open_clap_gui,
+            commands::close_clap_gui,
             commands::subscribe_meters,
         ])
         .build(tauri::generate_context!());
@@ -154,14 +171,38 @@ pub fn run() -> ExitCode {
         }
     };
 
+    // Waking the loop: a plugin-GUI request arrives on a command thread while the
+    // loop may be blocked in `GetMessage` with nothing to do. `run_on_main_thread`
+    // posts an event, which makes the loop turn once -- and one turn is all the
+    // bridge needs, because the drain happens in `MainEventsCleared`.
+    {
+        let handle = app.handle().clone();
+        gui_bridge.set_waker(Box::new(move || {
+            let _ = handle.run_on_main_thread(|| {});
+        }));
+    }
+
     // The run loop owns the kernel. `RunEvent::Exit` fires after the last window
     // is gone, which is where the process tears itself down in order: stop
     // pushing frames at a dead webview, close the device, then stop plugins in
     // reverse dependency order.
-    app.run(move |_handle, event| {
-        if matches!(event, tauri::RunEvent::Exit) {
+    app.run(move |_handle, event| match event {
+        // Every pass of the event loop, and therefore the plugin GUI's heartbeat:
+        // CLAP timers, `on_main_thread` callbacks, editor resize negotiation and
+        // the open/close requests the webview queued. While an editor is open its
+        // window's own `WM_TIMER` keeps this firing at ~60 Hz; the rest of the
+        // time it fires whenever anything else happens, which is exactly when
+        // there is something to do.
+        tauri::RunEvent::MainEventsCleared => {
+            gui_host.tick(clap_fx.as_mut(), &gui_bridge);
+        }
+        tauri::RunEvent::Exit => {
             log::info!("shutting down");
             meters.shutdown();
+            // Before anything else: the plugin's editor must be destroyed while
+            // its bundle is still loaded. A window whose procedure lives in an
+            // unloaded DLL crashes the process on the next message.
+            gui_host.shutdown(clap_fx.as_mut());
             // Closing the stream retires the graph, which is what eventually
             // drops the CLAP node and sends its processor back here. Only then
             // can the plugin be deactivated on this (main) thread.
@@ -169,6 +210,7 @@ pub fn run() -> ExitCode {
             shutdown_clap(clap_fx.as_mut());
             kernel.shutdown();
         }
+        _ => {}
     });
 
     ExitCode::SUCCESS

@@ -57,9 +57,12 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use clack_extensions::audio_ports::PluginAudioPorts;
+use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
+use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
 use clack_host::prelude::*;
 use mydaw_rt_core::{ProcessCtx, RtNode, CHANNELS};
 
+use crate::timers::ClapTimers;
 use crate::ClapPluginInfo;
 
 /// Host identity handed to every plugin we instantiate.
@@ -175,9 +178,118 @@ impl ClapHostRequests {
     }
 }
 
+/// What a plugin's *editor* has asked the host for, latched as atomics.
+///
+/// CLAP's `clap_host_gui` callbacks are `[thread-safe]`: `request_resize` in
+/// particular may arrive from a plugin's own worker thread. Acting on one means
+/// touching a window, which is main-thread-only work, so the callbacks record and
+/// the main thread acts -- the same shape as [`ClapHostRequests`].
+#[derive(Debug, Default)]
+pub struct ClapGuiRequests {
+    /// Packed [`GuiSize`], valid only while `resize_pending` is set.
+    resize: AtomicU64,
+    resize_pending: AtomicBool,
+    show: AtomicBool,
+    hide: AtomicBool,
+    hints_changed: AtomicBool,
+    closed: AtomicBool,
+    /// Set when the plugin destroyed its own GUI before telling us
+    /// (`closed(was_destroyed = true)`): the host must then not call `destroy`.
+    self_destroyed: AtomicBool,
+}
+
+impl ClapGuiRequests {
+    /// Take the size the plugin asked its window to become, if any.
+    pub fn take_resize(&self) -> Option<GuiSize> {
+        if self.resize_pending.swap(false, Ordering::AcqRel) {
+            Some(GuiSize::unpack_from_u64(
+                self.resize.load(Ordering::Acquire),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Take the "please show my editor" flag.
+    pub fn take_show(&self) -> bool {
+        self.show.swap(false, Ordering::AcqRel)
+    }
+
+    /// Take the "please hide my editor" flag.
+    pub fn take_hide(&self) -> bool {
+        self.hide.swap(false, Ordering::AcqRel)
+    }
+
+    /// Take the "my resize hints changed" flag.
+    pub fn take_hints_changed(&self) -> bool {
+        self.hints_changed.swap(false, Ordering::AcqRel)
+    }
+
+    /// Take the "my editor is gone" flag.
+    pub fn take_closed(&self) -> bool {
+        self.closed.swap(false, Ordering::AcqRel)
+    }
+
+    /// Whether the plugin destroyed its own GUI. Sticky until the host tears the
+    /// session down, because calling `destroy` on an already-destroyed GUI is
+    /// exactly the kind of double-free CLAP's `was_destroyed` flag exists to
+    /// prevent.
+    pub fn was_self_destroyed(&self) -> bool {
+        self.self_destroyed.load(Ordering::Acquire)
+    }
+
+    /// Forget everything. Called when a GUI session ends, so a stale request
+    /// cannot be applied to the next one.
+    pub fn clear(&self) {
+        self.resize_pending.store(false, Ordering::Release);
+        self.show.store(false, Ordering::Release);
+        self.hide.store(false, Ordering::Release);
+        self.hints_changed.store(false, Ordering::Release);
+        self.closed.store(false, Ordering::Release);
+        self.self_destroyed.store(false, Ordering::Release);
+    }
+}
+
 /// `[thread-safe]` half of the host. Shared with the plugin for its whole life.
 pub struct ClapHostShared {
     requests: Arc<ClapHostRequests>,
+    gui: Arc<ClapGuiRequests>,
+}
+
+impl HostGuiImpl for ClapHostShared {
+    fn resize_hints_changed(&self) {
+        self.gui.hints_changed.store(true, Ordering::Release);
+    }
+
+    /// Latch the request; the main thread resizes the window on its next pass.
+    ///
+    /// CLAP explicitly allows an asynchronous answer here: a successful return
+    /// means "acknowledged", and if the size turns out to be impossible the host
+    /// tells the plugin by calling `set_size` with what it actually got.
+    fn request_resize(&self, new_size: GuiSize) -> Result<(), HostError> {
+        self.gui
+            .resize
+            .store(new_size.pack_to_u64(), Ordering::Release);
+        self.gui.resize_pending.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn request_show(&self) -> Result<(), HostError> {
+        self.gui.show.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn request_hide(&self) -> Result<(), HostError> {
+        self.gui.hide.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    fn closed(&self, was_destroyed: bool) {
+        if was_destroyed {
+            self.gui.self_destroyed.store(true, Ordering::Release);
+        }
+        self.gui.closed.store(true, Ordering::Release);
+    }
 }
 
 impl SharedHandler<'_> for ClapHostShared {
@@ -195,11 +307,34 @@ impl SharedHandler<'_> for ClapHostShared {
     }
 }
 
-/// `[main-thread]` half of the host. Nothing to hold yet; extensions that need
-/// main-thread state (params, GUI) will grow it in later spikes.
-pub struct ClapHostMainThread;
+/// `[main-thread]` half of the host.
+///
+/// Owns the plugin's timer registrations. `clap.timer-support` is a main-thread
+/// extension in both directions: the plugin registers from the main thread and
+/// the host must call `on_timer` there too.
+pub struct ClapHostMainThread {
+    timers: Arc<ClapTimers>,
+}
 
 impl MainThreadHandler<'_> for ClapHostMainThread {}
+
+impl HostTimerImpl for ClapHostMainThread {
+    /// Register a timer. The period is clamped to something this host can
+    /// actually deliver -- CLAP allows the host to adjust a period that is too
+    /// short, and promising 1 ms when the message loop runs at ~60 Hz would be a
+    /// lie the plugin cannot detect.
+    fn register_timer(&mut self, period_ms: u32) -> Result<TimerId, HostError> {
+        Ok(self.timers.register(period_ms))
+    }
+
+    fn unregister_timer(&mut self, timer_id: TimerId) -> Result<(), HostError> {
+        if self.timers.unregister(timer_id) {
+            Ok(())
+        } else {
+            Err(HostError::Message("no such timer"))
+        }
+    }
+}
 
 /// Ties the three handler types together. See [`HostHandlers`].
 pub struct MydawClapHost;
@@ -209,6 +344,40 @@ impl HostHandlers for MydawClapHost {
     type MainThread<'a> = ClapHostMainThread;
     /// No audio-thread callbacks are implemented yet, so the unit type does.
     type AudioProcessor<'a> = ();
+
+    /// The host extensions MYDAW implements.
+    ///
+    /// `gui` and `timer-support` are what a plugin editor needs from its host:
+    /// somewhere to ask for a different window size, and a heartbeat to animate
+    /// on. Both are serviced on the main thread by
+    /// [`LoadedClapPlugin::tick_main_thread`].
+    fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &ClapHostShared) {
+        builder.register::<HostGui>();
+        builder.register::<HostTimer>();
+    }
+}
+
+/// What one [`LoadedClapPlugin::tick_main_thread`] pass actually did.
+///
+/// Returned rather than logged: at 60 Hz a log line per tick would be noise, and
+/// a test wants a number.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MainThreadWork {
+    /// `clap_plugin_timer_support->on_timer` calls made.
+    pub timers_fired: usize,
+    /// Whether `clap_plugin->on_main_thread` was called.
+    pub callback: bool,
+    /// Whether the plugin asked to be deactivated and reactivated. Recorded, not
+    /// acted on: rebuilding the graph is the shell's business (see the spike 3
+    /// spec's limitations).
+    pub restart_requested: bool,
+}
+
+impl MainThreadWork {
+    /// Whether anything happened at all.
+    pub const fn is_idle(&self) -> bool {
+        self.timers_fired == 0 && !self.callback && !self.restart_requested
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +431,11 @@ pub struct LoadedClapPlugin {
     info: ClapPluginInfo,
     layout: ClapPortLayout,
     requests: Arc<ClapHostRequests>,
+    gui_requests: Arc<ClapGuiRequests>,
+    timers: Arc<ClapTimers>,
+    /// Reused by [`tick_main_thread`](Self::tick_main_thread) so servicing timers
+    /// allocates nothing per frame.
+    due_timers: Vec<TimerId>,
     /// Given to every node so it can hand its processor back on drop.
     retire_tx: Sender<StartedPluginAudioProcessor<MydawClapHost>>,
     retire_rx: Receiver<StartedPluginAudioProcessor<MydawClapHost>>,
@@ -316,12 +490,19 @@ impl LoadedClapPlugin {
             };
 
             let requests = Arc::new(ClapHostRequests::default());
+            let gui_requests = Arc::new(ClapGuiRequests::default());
+            let timers = Arc::new(ClapTimers::new());
             let shared_requests = Arc::clone(&requests);
+            let shared_gui = Arc::clone(&gui_requests);
+            let main_thread_timers = Arc::clone(&timers);
             let instance = PluginInstance::<MydawClapHost>::new(
                 move |_| ClapHostShared {
                     requests: shared_requests,
+                    gui: shared_gui,
                 },
-                |_| ClapHostMainThread,
+                move |_| ClapHostMainThread {
+                    timers: main_thread_timers,
+                },
                 &entry,
                 &id,
                 &host_info,
@@ -331,11 +512,11 @@ impl LoadedClapPlugin {
                 message: err.to_string(),
             })?;
 
-            Ok((entry, instance, info, requests))
+            Ok((entry, instance, info, requests, gui_requests, timers))
         }))
         .map_err(|_| ClapHostError::Panicked { stage: "loading" })??;
 
-        let (entry, mut instance, info, requests) = loaded;
+        let (entry, mut instance, info, requests, gui_requests, timers) = loaded;
 
         let layout = read_port_layout(&mut instance)?;
         let (retire_tx, retire_rx) = mpsc::channel();
@@ -346,6 +527,9 @@ impl LoadedClapPlugin {
             info,
             layout,
             requests,
+            gui_requests,
+            timers,
+            due_timers: Vec::new(),
             retire_tx,
             retire_rx,
             node_outstanding: false,
@@ -365,6 +549,74 @@ impl LoadedClapPlugin {
     /// Latched `request_restart` / `request_process` / `request_callback` flags.
     pub fn requests(&self) -> &Arc<ClapHostRequests> {
         &self.requests
+    }
+
+    /// Latched `clap_host_gui` callbacks. Serviced by the GUI session, if one is
+    /// open; see [`crate::gui`].
+    pub fn gui_requests(&self) -> &Arc<ClapGuiRequests> {
+        &self.gui_requests
+    }
+
+    /// The plugin's registered `clap.timer-support` timers.
+    pub fn timers(&self) -> &Arc<ClapTimers> {
+        &self.timers
+    }
+
+    /// A main-thread handle to the plugin, for extensions the host drives itself.
+    ///
+    /// Only valid on the thread that loaded the plugin, which is what CLAP means
+    /// by `[main-thread]`; `LoadedClapPlugin` being `!Send` is what enforces it.
+    pub fn plugin_handle(&mut self) -> PluginMainThreadHandle<'_> {
+        self.instance.plugin_handle()
+    }
+
+    /// One pass of the host's main-thread obligations: fire due timers, and run
+    /// the `on_main_thread` callback if the plugin asked for one.
+    ///
+    /// Call it from the application's event loop, at least as often as the
+    /// shortest registered timer period (MYDAW calls it from Tauri's
+    /// `MainEventsCleared`, woken ~60 Hz by the plugin window's own timer). It is
+    /// cheap when nothing is due: one `Instant::now`, one uncontended lock.
+    ///
+    /// Not RT-safe and not meant to be: this is the main thread.
+    pub fn tick_main_thread(&mut self) -> MainThreadWork {
+        let mut work = MainThreadWork {
+            restart_requested: self.requests.take_restart(),
+            ..MainThreadWork::default()
+        };
+
+        if self.requests.take_callback() {
+            // `on_main_thread` is how a plugin wakes its own main thread after a
+            // worker thread had something to say. Ignoring it (spike 2's
+            // behaviour) leaves plugins waiting forever.
+            self.instance.call_on_main_thread_callback();
+            work.callback = true;
+        }
+
+        // Collected first, dispatched after the lock is released: a plugin is
+        // allowed to register or unregister timers from inside `on_timer`, and
+        // doing that while we held the registry would deadlock.
+        self.timers
+            .collect_due(Instant::now(), &mut self.due_timers);
+        if !self.due_timers.is_empty() {
+            let due = std::mem::take(&mut self.due_timers);
+            let mut handle = self.instance.plugin_handle();
+            if let Some(timer) = handle.get_extension::<PluginTimer>() {
+                for id in &due {
+                    // Re-check: `on_timer` may have unregistered a later one in
+                    // this same batch, and firing a dead timer is a bug a plugin
+                    // is entitled to trip over.
+                    if self.timers.contains(*id) {
+                        timer.on_timer(&mut handle, *id);
+                        work.timers_fired += 1;
+                    }
+                }
+            }
+            self.due_timers = due;
+            self.due_timers.clear();
+        }
+
+        work
     }
 
     /// Whether the instance is currently activated.
@@ -865,12 +1117,23 @@ mod tests {
         assert!(!mono.is_stereo_effect());
     }
 
+    /// A shared handler wired to fresh request latches, as `load` would build it.
+    fn shared_handler() -> (ClapHostShared, Arc<ClapHostRequests>, Arc<ClapGuiRequests>) {
+        let requests = Arc::new(ClapHostRequests::default());
+        let gui = Arc::new(ClapGuiRequests::default());
+        (
+            ClapHostShared {
+                requests: Arc::clone(&requests),
+                gui: Arc::clone(&gui),
+            },
+            requests,
+            gui,
+        )
+    }
+
     #[test]
     fn request_flags_latch_once_and_clear_on_read() {
-        let requests = Arc::new(ClapHostRequests::default());
-        let shared = ClapHostShared {
-            requests: Arc::clone(&requests),
-        };
+        let (shared, requests, _) = shared_handler();
 
         assert!(!requests.take_restart());
         shared.request_restart();
@@ -882,6 +1145,104 @@ mod tests {
         assert!(requests.take_process());
         shared.request_callback();
         assert!(requests.take_callback());
+    }
+
+    #[test]
+    fn gui_callbacks_latch_the_size_the_plugin_asked_for() {
+        let (shared, _, gui) = shared_handler();
+
+        assert!(gui.take_resize().is_none());
+        shared
+            .request_resize(GuiSize {
+                width: 640,
+                height: 480,
+            })
+            .unwrap();
+        // A second request before the host looks replaces the first: only the
+        // latest size is meaningful.
+        shared
+            .request_resize(GuiSize {
+                width: 800,
+                height: 600,
+            })
+            .unwrap();
+        assert_eq!(
+            gui.take_resize(),
+            Some(GuiSize {
+                width: 800,
+                height: 600
+            })
+        );
+        assert!(gui.take_resize().is_none(), "reading must clear the flag");
+    }
+
+    #[test]
+    fn gui_show_hide_and_close_are_latched_separately() {
+        let (shared, _, gui) = shared_handler();
+
+        shared.request_show().unwrap();
+        shared.request_hide().unwrap();
+        shared.resize_hints_changed();
+        assert!(gui.take_show());
+        assert!(!gui.take_show());
+        assert!(gui.take_hide());
+        assert!(gui.take_hints_changed());
+
+        assert!(!gui.was_self_destroyed());
+        shared.closed(false);
+        assert!(gui.take_closed());
+        assert!(
+            !gui.was_self_destroyed(),
+            "closed(false) means the GUI still exists and the host must destroy it"
+        );
+
+        shared.closed(true);
+        assert!(gui.take_closed());
+        assert!(
+            gui.was_self_destroyed(),
+            "closed(true) means the plugin already destroyed its GUI"
+        );
+
+        // Ending a session forgets everything, so nothing leaks into the next one.
+        gui.clear();
+        assert!(!gui.was_self_destroyed());
+        assert!(!gui.take_closed());
+    }
+
+    #[test]
+    fn a_timer_registration_goes_through_the_main_thread_handler() {
+        let timers = Arc::new(ClapTimers::new());
+        let mut handler = ClapHostMainThread {
+            timers: Arc::clone(&timers),
+        };
+
+        let id = handler
+            .register_timer(33)
+            .expect("registration must succeed");
+        assert_eq!(timers.len(), 1);
+        assert!(timers.contains(id));
+
+        handler.unregister_timer(id).expect("it was registered");
+        assert!(timers.is_empty());
+        assert!(
+            handler.unregister_timer(id).is_err(),
+            "unregistering an unknown timer must be reported, not swallowed"
+        );
+    }
+
+    #[test]
+    fn an_idle_tick_is_reported_as_idle() {
+        assert!(MainThreadWork::default().is_idle());
+        assert!(!MainThreadWork {
+            timers_fired: 1,
+            ..MainThreadWork::default()
+        }
+        .is_idle());
+        assert!(!MainThreadWork {
+            callback: true,
+            ..MainThreadWork::default()
+        }
+        .is_idle());
     }
 
     #[test]
