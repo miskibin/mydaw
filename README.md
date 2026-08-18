@@ -1,0 +1,94 @@
+# MYDAW
+
+An FL Studio-style DAW built as a tiny Rust microkernel with **everything else as a plugin** —
+audio I/O, metering, CLAP/VST3 hosting and UI panels all register against the same contract.
+Tauri v2 + SolidJS on the front, a lock-free real-time audio graph behind the wall.
+
+Status: **Phase 0 — scaffold.** It boots, lists its plugins, plays a 440 Hz test tone and streams
+meters to the UI. No sequencing, no mixer, no project files yet.
+Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-design.md`](docs/superpowers/specs/2026-08-18-mydaw-scaffold-design.md).
+
+## Layout
+
+| Path | What lives there |
+| --- | --- |
+| `crates/kernel` | Microkernel: `Plugin` trait, typed service registry, non-RT event bus, dependency-ordered lifecycle |
+| `crates/rt-core` | RT primitives: `RtNode`, serial graph, lock-free graph swap, `rtrb` command queue, transport clock |
+| `crates/ipc-bridge` | Kernel ⇄ webview data: serde DTOs, `UiSnapshot`, 30 Hz meter throttle. Tauri-free by design |
+| `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
+| `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
+| `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
+| `plugins/host-clap` | CLAP discovery today, hosting in Phase 1 |
+| `plugins/host-vst3` | VST3 host stub (Phase 1 spike 5) |
+| `plugins/plugin-windows` | Native child windows for external plugin GUIs (Phase 1 spike 3) |
+| `app/` | The shell: boots the kernel, registers the plugin set, hosts the webview, owns the Tauri commands |
+| `ui/` | SolidJS + TypeScript + Vite frontend ([`ui/README.md`](ui/README.md)) |
+
+## Quickstart
+
+Prerequisites: Rust stable, Node 22+, pnpm, and the WebView2 runtime (preinstalled on Windows 11).
+
+```sh
+pnpm --dir ui install
+```
+
+**With the Tauri CLI** (`cargo install tauri-cli --version "^2"`, or `pnpm add -D @tauri-apps/cli`):
+
+```sh
+cd app && cargo tauri dev    # runs `pnpm --dir ../ui dev` and the shell together
+```
+
+The CLI finds `app/tauri.conf.json` because that is where it is run from; `app/` is an ordinary
+workspace member, so `cargo build -p mydaw-app` keeps working with or without the CLI.
+
+**Without it** — the CLI only orchestrates the two processes, so run them yourself:
+
+```sh
+pnpm --dir ui dev            # terminal 1: Vite on http://localhost:1420
+cargo run -p mydaw-app       # terminal 2: the shell, pointed at the dev server
+```
+
+**Against built assets** (no dev server; `ui/dist` is embedded in the binary):
+
+```sh
+pnpm --dir ui build
+cargo run -p mydaw-app --features custom-protocol
+```
+
+The window shows the kernel status panel (six plugins, all `STARTED`), a meters panel and a
+transport bar. **Play** starts the transport and the test tone; **Stop** silences it and keeps the
+playhead where it is. With no audio device the shell logs a warning and runs on without sound.
+
+`RUST_LOG=debug` raises the log level; the debug build keeps its console for exactly that reason.
+
+## Tests
+
+```sh
+cargo test --workspace                   # every crate; silent, no device needed
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all --check
+pnpm --dir ui build                      # tsc --noEmit + vite build
+```
+
+One test is opt-in because it opens the real output device and is audible:
+
+```sh
+cargo test -p mydaw-app --test audio_end_to_end -- --ignored --nocapture
+```
+
+It boots the kernel, installs the test-tone graph, plays for ~1 s and asserts that meter frames
+move and the playhead advances — the whole audio path minus the webview.
+
+CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+
+## How the shell fits together
+
+```text
+app/src/state.rs     boot_kernel() -> six plugins -> UiSnapshot (+ the shell's kernel-status panel)
+app/src/graph.rs     test-tone -> TransportGate  ->  AudioIoService::install_graph
+app/src/meters.rs    MeterThrottle -> pump thread (15 ms) -> Channel<MeterFrameDto>
+app/src/commands.rs  get_ui_snapshot | transport_play | transport_stop | subscribe_meters
+```
+
+The kernel itself never enters Tauri's managed state (`Box<dyn Plugin>` is not `Send`); it stays on
+the main thread and is shut down by the run loop when the window closes.

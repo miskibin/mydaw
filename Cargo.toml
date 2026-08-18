@@ -1,10 +1,6 @@
 [workspace]
 resolver = "2"
-# TODO(app agent): add `"app"` here once `app/` exists:
-#     members = ["crates/*", "plugins/*", "app"]
-# Cargo errors out on members that are not present on disk, and `app/` is owned
-# by another agent.
-members = ["crates/*", "plugins/*"]
+members = ["crates/*", "plugins/*", "app"]
 
 [workspace.package]
 edition = "2021"

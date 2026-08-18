@@ -1,0 +1,51 @@
+[package]
+name = "mydaw-app"
+description = "MYDAW shell: boots the microkernel, registers the plugin set, and hosts the webview UI over Tauri v2."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Library + thin binary: the whole shell lives in the library so it can be unit
+# tested (`cargo test -p mydaw-app`), while `main.rs` only calls into it.
+[lib]
+name = "mydaw_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mydaw-app"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# --- workspace ---
+mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
+mydaw-ipc-bridge.workspace = true
+mydaw-plugin-metering.workspace = true
+mydaw-plugin-test-tone.workspace = true
+mydaw-plugin-audio-io.workspace = true
+mydaw-plugin-host-clap.workspace = true
+mydaw-plugin-host-vst3.workspace = true
+mydaw-plugin-windows.workspace = true
+
+# --- shell ---
+tauri = { version = "2", features = [] }
+serde.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+env_logger = "0.11"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+# Set by the Tauri CLI for production builds; it switches `generate_context!`
+# from "load the dev server URL" to "serve the embedded ../ui/dist". Also the way
+# to run the shell against built assets without the CLI:
+#   cargo run -p mydaw-app --features custom-protocol
+# DO NOT REMOVE.
+custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Baseline permissions for the MYDAW main window. Commands defined by this app (get_ui_snapshot, transport_*, subscribe_meters) are always allowed; this only covers the built-in core plugins.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
