@@ -8,3 +8,4 @@ app/gen/
 # Debug-tap captures: WAV/PNG/JSON written by MYDAW_DEBUG_CAPTURE and the
 # `debug_capture` command. Diagnostic output, never source.
 .debug/
+.cargo/
