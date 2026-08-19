@@ -393,6 +393,61 @@ pub struct SequencerStateDto {
     pub pattern: PatternDto,
 }
 
+/// What the open audio device is, for the status bar's BUFFER and LATENCY.
+///
+/// Every field is `0`/empty when no stream is running, which is a real state
+/// rather than a failure: the UI shows a dash and says so. `latency_ms` is
+/// derived here rather than in the webview so the two never disagree about
+/// which block size the figure was computed from.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamInfoDto {
+    /// The device the stream is on, or an empty string while stopped.
+    pub device_name: String,
+    pub sample_rate: f64,
+    pub channels: u32,
+    /// Largest block the callback can be handed, in frames.
+    pub buffer_frames: u32,
+    /// One block's worth of time, in milliseconds. `0` while stopped.
+    pub latency_ms: f64,
+    /// Whether a stream is open at all.
+    pub running: bool,
+}
+
+impl StreamInfoDto {
+    /// The "no device" answer: what the status bar draws before audio starts.
+    pub fn stopped() -> Self {
+        Self {
+            device_name: String::new(),
+            sample_rate: 0.0,
+            channels: 0,
+            buffer_frames: 0,
+            latency_ms: 0.0,
+            running: false,
+        }
+    }
+}
+
+impl From<mydaw_plugin_audio_io::StreamInfo> for StreamInfoDto {
+    fn from(info: mydaw_plugin_audio_io::StreamInfo) -> Self {
+        let sample_rate = f64::from(info.sample_rate);
+        let buffer_frames = info.max_block as u32;
+        let latency_ms = if sample_rate > 0.0 {
+            f64::from(buffer_frames) / sample_rate * 1000.0
+        } else {
+            0.0
+        };
+        Self {
+            device_name: info.device_name,
+            sample_rate,
+            channels: u32::from(info.channels),
+            buffer_frames,
+            latency_ms,
+            running: true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

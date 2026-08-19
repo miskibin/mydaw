@@ -1,4 +1,5 @@
 import type {
+  AssetStatus,
   ClapGuiStatus,
   ClapPluginInfoDto,
   ClapSlot,
@@ -9,6 +10,7 @@ import type {
   ProjectInfo,
   SequencerState,
   SourceDto,
+  StreamInfo,
   TrackDto,
   UiSnapshot,
   Unsubscribe,
@@ -234,6 +236,27 @@ export interface Backend {
    * been saved has nowhere to go, so that one asks either way.
    */
   saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null>;
+
+  /**
+   * What the open audio device is, for the status bar's BUFFER and LATENCY.
+   *
+   * Answers with `running: false` rather than rejecting when no stream is open:
+   * a status bar has to draw something before audio starts, and "not yet" is not
+   * an error worth a red line.
+   */
+  getStreamInfo(): Promise<StreamInfo>;
+
+  /**
+   * Downloadable instrument assets, when this build has any.
+   *
+   * **Optional on purpose.** The Rust commands are landing on another branch;
+   * until they do, `TauriBackend` leaves these undefined and the browser hides
+   * the download row rather than calling a command that is not registered. Once
+   * the commands exist, implementing these two is the whole of the merge.
+   */
+  getAssetStatus?(): Promise<AssetStatus[]>;
+  /** Start (or resume) one asset's download. Resolves with the fresh statuses. */
+  startAssetDownload?(id: string): Promise<AssetStatus[]>;
 
   /** Subscribe to the throttled meter stream. Call the result to detach. */
   subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe>;
@@ -474,6 +497,16 @@ class TauriBackend implements Backend {
     const { invoke } = await this.core();
     return invoke<ProjectInfo | null>('save_project', { saveAs, path: path ?? null });
   }
+
+  async getStreamInfo(): Promise<StreamInfo> {
+    const { invoke } = await this.core();
+    return invoke<StreamInfo>('get_stream_info');
+  }
+
+  // `getAssetStatus` / `startAssetDownload` are deliberately absent: the
+  // commands are not registered in this build, and `invoke` on an unregistered
+  // command rejects. An absent method is the honest way to say "not here yet",
+  // and it is the one the UI already handles.
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {
     const { Channel, invoke } = await this.core();
@@ -912,6 +945,21 @@ class MockBackend implements Backend {
   private saved = new Map<string, MockSession>();
   /** The path of the most recent save; what the open dialog would have offered. */
   private lastSavedPath: string | null = null;
+  /**
+   * The downloadable assets. One, because one is enough to draw every state and
+   * the real list is the sampler branch's to decide.
+   */
+  private assets: AssetStatus[] = [
+    {
+      id: 'piano',
+      name: 'Concert Grand',
+      state: 'absent',
+      progress: 0,
+      bytesTotal: 148_000_000,
+      bytesDone: 0,
+      error: null,
+    },
+  ];
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
@@ -1595,6 +1643,58 @@ class MockBackend implements Backend {
     }
     console.info(`[mock] no save dialog outside Tauri, using ${candidate}`);
     return candidate;
+  }
+
+  /**
+   * A plausible device: 48 kHz, 256-frame blocks, i.e. 5.33 ms.
+   *
+   * `running: true` even though nothing is playing, because the mock stands in
+   * for a session whose device *is* open -- a status bar permanently reading
+   * "no device" in a plain browser would leave the readouts unrehearsable.
+   */
+  async getStreamInfo(): Promise<StreamInfo> {
+    const bufferFrames = 256;
+    return {
+      deviceName: 'Mock Output (browser)',
+      sampleRate: MOCK_SAMPLE_RATE,
+      channels: 2,
+      bufferFrames,
+      latencyMs: (bufferFrames / MOCK_SAMPLE_RATE) * 1000,
+      running: true,
+    };
+  }
+
+  /**
+   * The downloadable-asset surface, implemented here and only here.
+   *
+   * The mock has it so the browser's download row -- progress bar, states,
+   * failure text -- can be built and looked at in a plain browser while the Rust
+   * commands are still being written on another branch. `TauriBackend` leaves
+   * both methods undefined, so inside the app the row hides itself instead of
+   * calling a command that does not exist.
+   */
+  async getAssetStatus(): Promise<AssetStatus[]> {
+    return structuredClone(this.assets);
+  }
+
+  async startAssetDownload(id: string): Promise<AssetStatus[]> {
+    const asset = this.assets.find((entry) => entry.id === id);
+    if (!asset) throw new Error(`there is no asset '${id}'`);
+    if (asset.state === 'ready' || asset.state === 'downloading') return this.getAssetStatus();
+    asset.state = 'downloading';
+    asset.progress = 0;
+    asset.bytesDone = 0;
+    asset.error = null;
+    const timer = setInterval(() => {
+      asset.bytesDone = Math.min(asset.bytesTotal, asset.bytesDone + asset.bytesTotal / 25);
+      asset.progress = asset.bytesTotal > 0 ? asset.bytesDone / asset.bytesTotal : 1;
+      if (asset.progress >= 1) {
+        asset.state = 'ready';
+        asset.progress = 1;
+        clearInterval(timer);
+      }
+    }, 160);
+    return this.getAssetStatus();
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {

@@ -20,33 +20,61 @@ The dev server is fixed to port **1420** with `strictPort: true` (Tauri conventi
 
 Opening `http://localhost:1420` in an ordinary browser works with no Rust side running:
 `getBackend()` checks for `window.__TAURI_INTERNALS__` and falls back to `MockBackend`, which
-serves a fake snapshot (kernel-status, meters, and one deliberately unregistered `mixer-view`
-panel to exercise the unknown-panel path) plus a synthetic 30 Hz meter stream. Hit **Play** to
-start it. The status bar shows which backend is live.
+serves the same two-track project Rust starts with, four fixture CLAP plugins, three fixture VST3
+classes, a synthetic 30 Hz meter stream and one downloadable asset. Hit **Play** to start it. The
+status bar shows which backend is live.
 
 Inside Tauri, the same page uses `TauriBackend`. `@tauri-apps/api` is imported dynamically, so
 the browser session never evaluates it — production builds are plain static files in `dist/`.
+
+## The shell
+
+The layout is **WAVE Shell v2**; the design and the reasoning behind every disabled control are in
+[`docs/superpowers/specs/2026-08-19-wave-shell-v2-ui.md`](../docs/superpowers/specs/2026-08-19-wave-shell-v2-ui.md).
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ TransportBar   play · clock · BPM · PEAK · theme             │
+├──────────┬────────────────────────────────────┬──────────────┤
+│ Browser  │ Arrangement  track rows + playhead │ Inspector    │
+│ Sounds   ├────────────────────────────────────┤ instrument   │
+│ Devices  │ BottomPanel   MIXER │ EDITOR       │ master insert│
+│ Projects │   strips      │  steps / notes     │ + Device ⌘K  │
+├──────────┴────────────────────────────────────┴──────────────┤
+│ StatusBar   device · buffer · latency · errors               │
+└──────────────────────────────────────────────────────────────┘
+```
+
+Everything drawn is either wired to the engine or **visibly disabled** (0.5 opacity,
+`cursor: default`, a tooltip saying what is coming). There is no third category.
 
 ## Layout
 
 ```
 src/
 ├── api/
-│   ├── types.ts        # wire types mirrored from the Rust ipc-bridge crate
+│   ├── types.ts        # wire types mirrored from the Rust side
 │   └── backend.ts      # Backend interface + TauriBackend / MockBackend + auto-pick
-├── lib/playhead.ts     # local playhead interpolation between sparse RT updates
-├── lib/keyboard.ts     # the computer-keyboard piano: key map, octave, note names, drum pads
+├── theme/
+│   ├── tokens.ts       # DARK/LIGHT palettes, mix/alpha, track colours (Solid-free)
+│   └── ThemeProvider   # writes --bg … --acc onto :root; persists to localStorage
+├── ui/
+│   ├── icons.tsx       # every SVG, paths copied from the design
+│   ├── drag.ts         # the one pointer-drag helper (faders, knobs, the tempo)
+│   ├── NumberField.tsx # drag-or-type numeric readout
+│   ├── Meter.tsx       # one peak meter, painted on the frame loop
+│   └── frameLoop.ts    # ONE requestAnimationFrame for the whole shell
+├── shell/
+│   ├── layout.tsx      # view state: panes open, which tab, palette, F7
+│   ├── TransportBar    │ BrowserPane  │ Arrangement
+│   ├── BottomPanel     │ Inspector    │ DevicePalette
+│   └── StatusBar
 ├── panels/
-│   ├── registry.ts     # component-key -> Solid component (mirror of Rust contributions)
-│   ├── PanelFrame.tsx  # panel chrome + registry resolution, unknown-key fallback
-│   ├── UnknownPanel.tsx
-│   ├── kernel-status/  # plugin registry rows with lifecycle dots
-│   ├── meters/         # canvas stereo peak/RMS meter (draw.ts is Solid-free)
-│   ├── mixer/          # one strip per track + master (scale.ts is Solid-free)
-│   └── sequencer/      # the 16-step grid
-├── shell/              # TransportBar, PanelDock, MainArea, StatusBar
-├── state.tsx           # Solid context: snapshot, transport, meter bus, playhead, held notes
-└── styles/             # theme.css (tokens) + app.css (layout)
+│   ├── mixer/          # MixerView.tsx + scale.ts (the dB curve, Solid-free)
+│   └── editor/         # StepGrid.tsx, RollView.tsx, draw.ts (canvas, Solid-free)
+├── lib/                # playhead.ts, pattern.ts, keyboard.ts — unchanged
+├── state.tsx           # the boundary with Rust: commands, meter stream, selection
+└── styles/wave.css     # every dimension from the design; colours are all var(--…)
 ```
 
 ## Backend contract
@@ -81,10 +109,16 @@ The UI expects these Tauri commands (`src/api/backend.ts` is the only caller):
 | `get_pattern` | returns `SequencerState { bpm, sampleRate, pattern }` — the step grid and the tempo |
 | `set_pattern` | takes `{ pattern }` (a whole `PatternDto`), returns the refreshed `SequencerState` |
 | `set_bpm` | takes `{ bpm }` (`20..=999`), returns the stored tempo; rejects rather than clamping |
+| `get_stream_info` | no args; returns `StreamInfo { deviceName, sampleRate, channels, bufferFrames, latencyMs, running }` — the status bar's BUFFER and LATENCY. Answers `running: false` rather than failing when no device is open |
 | `get_project_info` | returns `ProjectInfo { path, name, missingPlugins, warnings }` — which project is open, for the window title and the status bar |
 | `new_project` | no args; throws the session away and returns the fresh `ProjectInfo` |
 | `open_project` | takes `{ path }` (`null` shows the native dialog); returns `ProjectInfo`, or **`null` if the user cancelled** — not an error |
 | `save_project` | takes `{ saveAs, path }`; with `saveAs: false` and a project already on disk it overwrites with no dialog; `null` means cancelled |
+| `get_vst3_plugins` | takes `{ rescan }`; returns every scanned VST3 class. **Slow on the first call** — it opens every installed module — so the shell only asks when the Devices tab or the palette is first opened |
+| `get_vst3_master_effects` | returns the VST3 classes eligible for the master insert |
+| `set_track_source_vst3` | takes `{ track, modulePath, cid }` |
+| `set_master_effect_vst3` | takes `{ modulePath, cid }` |
+| `open_vst3_gui` / `close_vst3_gui` | take `{ target }`, return `Vst3GuiStatus` |
 | `subscribe_meters` | takes `{ channel }` (Tauri v2 `Channel<MeterFrame>`), streams at 30 Hz |
 
 The file dialogs are Rust's, not the webview's: `@tauri-apps/api`'s dialog plugin only exists
@@ -96,33 +130,37 @@ Plus the dev-only bench surface (`src/dev/ipcBench.ts` is the only caller): `ben
 `bench_ping_async`, `bench_plan`, `bench_sync`, `bench_stream`, `bench_meter_stamp`,
 `bench_finish`.
 
-## Adding a panel
+## Not yet on the wire
 
-1. Rust side contributes a `PanelManifestDto` with a `component` key.
-2. Add `'<key>': MyPanel` to `PANEL_REGISTRY` in `src/panels/registry.ts`.
-
-An unregistered key renders as an "unknown panel" card rather than breaking the dock, so a UI
-build older than the kernel degrades visibly instead of silently dropping panels.
+`AssetStatus`, `Backend.getAssetStatus` and `Backend.startAssetDownload` describe the downloadable
+instrument assets. The Rust commands are being written on another branch, so the two `Backend`
+methods are **optional**: `MockBackend` implements them (so the download row is real in `pnpm dev`)
+and `TauriBackend` does not, which is why the row hides itself inside the app rather than invoking a
+command that is not registered.
 
 ## Performance notes
 
 Meter frames do **not** flow through Solid signals. They land in a plain mutable `MeterBus`, and
-`MetersPanel` polls the latest frame from its own `requestAnimationFrame` loop — a 30-60 Hz
-stream must not drive the reactive scheduler. Text readouts (timecode, sample position) mirror the
-playhead at 10 Hz instead. All meter drawing lives in `src/panels/meters/draw.ts`, kept free of
-Solid and allocation-free in its hot path, because that file is the vehicle for the Phase 1 IPC
-performance spike.
+`src/ui/frameLoop.ts` runs **one** `requestAnimationFrame` loop for the whole shell — the clock, the
+bars/beats readout, the peak figure, every meter fill and both playheads paint by writing to the DOM
+directly. A 30-60 Hz stream must not drive the reactive scheduler. The loop does not run when
+nothing is subscribed, so an idle window is idle.
+
+Track rows, mixer strips and step cells use `<Index>`, not `<For>`. Every mixer command answers with
+a whole fresh `MixerState`, so a keyed `For` would rebuild every strip on every pointer move of a
+fader drag. Drags listen on `window` rather than capturing the pointer on the control, because the
+control can be re-rendered mid-gesture.
 
 Those numbers now exist:
 [`docs/superpowers/specs/2026-08-18-spike4-ipc-perf.md`](../docs/superpowers/specs/2026-08-18-spike4-ipc-perf.md).
 
 ## The IPC bench (dev only)
 
-`src/dev/` holds the webview half of the spike-4 benchmark. It is loaded lazily and only when the
-Rust side contributes the `ipc-bench` panel:
+`src/dev/ipcBench.ts` holds the webview half of the spike-4 benchmark. It is loaded lazily and only
+when the Rust side contributes the `ipc-bench-auto` manifest. The *manual* bench panel was removed
+with the panel dock; the automatic matrix still runs:
 
 ```sh
-MYDAW_DEV_PANELS=1 cargo run -p mydaw-app --features custom-protocol   # panel, run it by hand
 MYDAW_IPC_BENCH=1  cargo run -p mydaw-app --features custom-protocol   # run the matrix and exit
 MYDAW_IPC_BENCH=stress ...                                             # plus the past-the-cliff rows
 ```

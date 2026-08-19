@@ -521,5 +521,47 @@ export interface ProjectInfo {
   warnings: string[];
 }
 
+/**
+ * What the open audio device is. Mirrors `StreamInfoDto` in `app/src/dto.rs`.
+ *
+ * `running: false` with every number at zero is the ordinary "audio has not
+ * started" state, not a failure -- the status bar draws a dash for it.
+ */
+export interface StreamInfo {
+  deviceName: string;
+  sampleRate: number;
+  channels: number;
+  /** Largest block the callback can be handed, in frames: the BUFFER readout. */
+  bufferFrames: number;
+  /** One block's worth of time in milliseconds: the LATENCY readout. */
+  latencyMs: number;
+  running: boolean;
+}
+
+/**
+ * Progress of a downloadable instrument asset (the sampler's piano, today).
+ *
+ * **Provisional.** The commands behind it (`get_asset_status`,
+ * `start_asset_download`) are being added on another branch; this shape is the
+ * UI's half of that contract, written down here so the browser's download row is
+ * a real component against a typed surface rather than a picture. `Backend`
+ * declares the two methods as optional, and the shell hides the row when they
+ * are absent -- see `browser/AssetRow.tsx`.
+ */
+export interface AssetStatus {
+  /** Stable id, e.g. `piano`. */
+  id: string;
+  name: string;
+  /** `absent` before a download, `ready` once it is installed and usable. */
+  state: 'absent' | 'downloading' | 'ready' | 'failed';
+  /** `0..1` while downloading; `1` when ready. */
+  progress: number;
+  /** Total download size in bytes, or `0` when it is not known yet. */
+  bytesTotal: number;
+  bytesDone: number;
+  /** Why a `failed` download failed, in the backend's own words. */
+  error: string | null;
+}
+
 /** Unsubscribe handle returned by streaming APIs. */
 export type Unsubscribe = () => void;

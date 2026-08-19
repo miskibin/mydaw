@@ -286,6 +286,7 @@ pub fn run() -> ExitCode {
             commands::get_pattern,
             commands::set_pattern,
             commands::set_bpm,
+            commands::get_stream_info,
             // The project file: New / Open / Save / Save As, plus the name and
             // the missing-plugin warnings the title and status bars draw.
             commands::get_project_info,

@@ -1,285 +1,197 @@
-import { createSignal, Index, Show, type JSX } from 'solid-js';
-import { formatTimecode } from '../lib/playhead';
+import { Show, type JSX } from 'solid-js';
 import { useAppState } from '../state';
+import { useTheme } from '../theme/ThemeProvider';
+import { onFrame } from '../ui/frameLoop';
+import { NumberField } from '../ui/NumberField';
+import {
+  IconLoop,
+  IconMoon,
+  IconPause,
+  IconPlay,
+  IconRecord,
+  IconRewind,
+  IconStop,
+  IconSun,
+  WaveMark,
+} from '../ui/icons';
 
-/** Tempo bounds, mirroring `MIN_BPM`/`MAX_BPM` in `crates/rt-core`. */
+/** Tempo bounds, mirroring `crates/rt-core/src/transport.rs`. */
 const MIN_BPM = 20;
 const MAX_BPM = 999;
 
-/** Beats per pixel of vertical drag. One BPM per 4 px is the usual DAW feel. */
-const PIXELS_PER_BPM = 4;
+/** `mm:ss.mmm`, which is what the engine can actually tell us. */
+function timecode(seconds: number): string {
+  const clamped = Math.max(0, seconds);
+  const minutes = Math.floor(clamped / 60);
+  const secs = Math.floor(clamped % 60);
+  const millis = Math.floor((clamped % 1) * 1000);
+  return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(
+    millis,
+  ).padStart(3, '0')}`;
+}
 
 /**
- * Top chrome: transport buttons wired to the backend abstraction, the
- * instrument selector, the tempo control, and the position readout.
+ * `bar.beat.hundredths`, counting from one.
  *
- * # The tempo control
- * A number input *and* a vertical drag, because both are how people set a
- * tempo: typing 174 is exact, and dragging is how you find out that 128 was
- * better. Both funnel into the same `setBpm`, which clamps here and is rejected
- * by Rust if it somehow still escapes the range -- a tempo of 0 would divide the
- * scheduler's step length by zero, so it is checked in both languages.
+ * Computed from the same interpolated sample position the timecode uses, so the
+ * two readouts can never disagree about where the transport is. Four beats to
+ * the bar because the engine's signature is fixed at 4/4 -- which is also why
+ * the SIG field beside it is a label rather than a control.
+ */
+function barsBeats(seconds: number, bpm: number): string {
+  if (!Number.isFinite(bpm) || bpm <= 0) return '001.1.00';
+  const beats = Math.max(0, seconds) * (bpm / 60);
+  const bar = Math.floor(beats / 4) + 1;
+  const beat = Math.floor(beats % 4) + 1;
+  const fraction = Math.floor((beats % 1) * 100);
+  return `${String(bar).padStart(3, '0')}.${beat}.${String(fraction).padStart(2, '0')}`;
+}
+
+/** A linear amplitude as dBFS, or `-inf` at silence. */
+function peakDb(amplitude: number): string {
+  if (!Number.isFinite(amplitude) || amplitude <= 0) return '−∞';
+  const db = 20 * Math.log10(amplitude);
+  if (db <= -60) return '−∞';
+  // A real minus sign, matching the design's readouts.
+  return `${db < 0 ? '−' : '+'}${Math.abs(db).toFixed(1)}`;
+}
+
+/**
+ * The top bar: transport, position, tempo and the theme switch.
  *
- * # The source selector is a dropdown now
- * It used to be a row of segmented buttons, on the grounds that the list was
- * short, fixed, and worth reading at a glance. The list is no longer any of
- * those things: it is the three built-ins plus every CLAP instrument installed
- * on the machine, which on a working system is dozens and has no upper bound.
- * A button row would either overflow the bar or squeeze the transport off it.
- * A `<select>` costs a click to *browse* but still shows the current choice
- * without one, which is the part that mattered.
- *
- * The optgroups are the same two the mixer strip uses -- `Built in` and
- * `CLAP instruments` -- because they are the same list, and a user who learns
- * the shape of it in one place should recognise it in the other.
+ * The clock and the peak readout are painted from the shared animation frame
+ * rather than from signals, for the reason `frameLoop.ts` explains: a 30-60 Hz
+ * meter stream must not drive the reactive scheduler. Everything else here is
+ * ordinary reactive markup.
  */
 export function TransportBar(): JSX.Element {
   const app = useAppState();
-  /** Text being typed, while the input has focus. `null` means "show the state". */
-  const [draft, setDraft] = createSignal<string | null>(null);
+  const theme = useTheme();
 
-  const clampBpm = (value: number) => Math.min(MAX_BPM, Math.max(MIN_BPM, value));
+  let clockEl: HTMLSpanElement | undefined;
+  let barsEl: HTMLSpanElement | undefined;
+  let peakEl: HTMLElement | undefined;
 
-  /** Name of the track the selector and the keyboard address. */
-  const selectedTrackName = () => {
-    const mixer = app.mixer();
-    return mixer?.tracks.find((track) => track.selected)?.name;
-  };
-
-  const builtIns = () => app.sources().filter((source) => source.kind === 'internal');
-  const instruments = () => app.sources().filter((source) => source.kind === 'clap');
-
-  /** The source currently on the selected track, `''` before the list arrives. */
-  const currentSourceId = () => app.currentSource()?.id ?? '';
-
-  /**
-   * Put the chosen source on the selected track. Which track that is comes from
-   * the mixer rather than being remembered here, so this bar and the mixer panel
-   * can never disagree about who the keyboard is playing.
-   */
-  const pick = (id: string) => {
-    const source = app.sources().find((entry) => entry.id === id);
-    const track = app.mixer()?.selected;
-    if (source && track !== undefined) app.placeSource(track, source);
-  };
-
-  /** Accept what was typed, ignoring anything that is not a tempo. */
-  const commitDraft = () => {
-    const text = draft();
-    setDraft(null);
-    if (text === null) return;
-    const parsed = Number.parseFloat(text);
-    if (Number.isFinite(parsed)) app.setBpm(clampBpm(parsed));
-  };
-
-  /**
-   * Vertical drag: pointer capture so the gesture survives leaving the input,
-   * and up is faster. The value is applied continuously -- a tempo you cannot
-   * hear until you let go is a tempo you cannot dial in.
-   */
-  const startDrag = (event: PointerEvent) => {
-    if (event.button !== 0) return;
-    const target = event.currentTarget as HTMLElement;
-    const startY = event.clientY;
-    const startBpm = app.bpm();
-    let moved = false;
-
-    const move = (moveEvent: PointerEvent) => {
-      const delta = Math.round((startY - moveEvent.clientY) / PIXELS_PER_BPM);
-      if (delta === 0 && !moved) return;
-      moved = true;
-      app.setBpm(clampBpm(startBpm + delta));
-    };
-    const end = () => {
-      target.removeEventListener('pointermove', move);
-      target.removeEventListener('pointerup', end);
-      target.removeEventListener('pointercancel', end);
-      // A drag that moved must not also land as a click-to-focus-and-select.
-      if (moved) target.blur();
-    };
-
-    target.setPointerCapture(event.pointerId);
-    target.addEventListener('pointermove', move);
-    target.addEventListener('pointerup', end);
-    target.addEventListener('pointercancel', end);
-  };
+  onFrame(() => {
+    const seconds = app.playhead.positionSeconds();
+    if (clockEl) clockEl.textContent = timecode(seconds);
+    if (barsEl) barsEl.textContent = barsBeats(seconds, app.bpm());
+    const frame = app.meters.latest;
+    if (peakEl) peakEl.textContent = peakDb(Math.max(frame?.peakL ?? 0, frame?.peakR ?? 0));
+  });
 
   return (
-    <header class="transport">
-      <div class="transport__brand">
-        <span class="transport__logo">MYDAW</span>
-        <span class="transport__phase">phase 0</span>
+    <header class="wv-transport">
+      <div class="wv-brand">
+        <WaveMark />
+        <div class="wv-brand__names">
+          <span class="wv-brand__app">WAVE</span>
+          <span class="wv-brand__project" title={app.project().path ?? 'never saved'}>
+            {app.project().name}
+          </span>
+        </div>
       </div>
 
-      {/*
-        The project actions live on the bar rather than in a menu, because there
-        is no menu: this row is all the chrome MYDAW has. Four plain buttons in
-        the order every file menu ever written puts them, so nobody has to look
-        for Save. Each `title` carries its accelerator -- the shortcuts are the
-        faster way and this is where they are learned; `state.tsx` owns them.
+      <div class="wv-transport__group">
+        <span
+          class="wv-tbtn wv-disabled"
+          title="Return to start — coming soon"
+          aria-hidden="true"
+        >
+          <IconRewind />
+        </span>
 
-        There is no confirmation on New. Nothing tracks unsaved edits yet, so a
-        prompt would have to either ask every time (and be clicked through) or
-        guess, and guessing wrong about somebody's session is worse than the
-        question.
-      */}
-      <div class="transport__file" role="group" aria-label="Project">
         <button
           type="button"
-          class="transport__button"
-          title="Start a fresh project (Ctrl+N)"
-          onClick={() => app.newProject()}
-        >
-          New
-        </button>
-        <button
-          type="button"
-          class="transport__button"
-          title="Open a project (Ctrl+O)"
-          onClick={() => app.openProject()}
-        >
-          Open
-        </button>
-        <button
-          type="button"
-          class="transport__button"
-          title="Save the project (Ctrl+S)"
-          onClick={() => app.saveProject()}
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          class="transport__button"
-          title="Save the project under a new name (Ctrl+Shift+S)"
-          onClick={() => app.saveProjectAs()}
-        >
-          Save As
-        </button>
-      </div>
-
-      <div class="transport__controls" role="group" aria-label="Transport">
-        <button
-          type="button"
-          class="transport__button transport__button--play"
-          classList={{ 'is-active': app.playing() }}
+          class="wv-tbtn wv-tbtn--play"
+          classList={{ 'is-playing': app.playing() }}
+          title={app.playing() ? 'Pause (Space)' : 'Play (Space)'}
+          aria-label={app.playing() ? 'Pause' : 'Play'}
           aria-pressed={app.playing()}
-          title="Play (backend: transport_play)"
-          onClick={() => app.play()}
+          onClick={() => (app.playing() ? app.stop() : app.play())}
         >
-          <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
-            <path d="M3 1.5 L12 7 L3 12.5 Z" fill="currentColor" />
-          </svg>
-          <span>Play</span>
+          <Show when={app.playing()} fallback={<IconPlay />}>
+            <IconPause />
+          </Show>
         </button>
+
         <button
           type="button"
-          class="transport__button"
-          title="Stop (backend: transport_stop)"
+          class="wv-tbtn"
+          title="Stop. The playhead stays where it is — there is no rewind yet."
+          aria-label="Stop"
           onClick={() => app.stop()}
         >
-          <svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true">
-            <rect x="3" y="3" width="8" height="8" fill="currentColor" />
-          </svg>
-          <span>Stop</span>
+          <IconStop />
         </button>
+
+        <span class="wv-tbtn wv-tbtn--rec wv-disabled" title="Record — coming soon">
+          <IconRecord />
+        </span>
+        <span class="wv-tbtn wv-tbtn--loop wv-disabled" title="Loop — coming soon">
+          <IconLoop />
+        </span>
       </div>
 
-      <Show when={app.sources().length > 0}>
-        <div class="source">
-          {/*
-            The selector sets the source of the *selected track* -- the same one
-            the keyboard plays and the same one the mixer highlights. Naming the
-            track here is what keeps that from being a surprise; the mixer panel
-            is where you change which track it is.
-          */}
-          <label class="source__label" for="source" title="The source of the selected track">
-            {selectedTrackName() ?? 'Source'}
-          </label>
-          {/*
-            `<Index>`, not `<For>`: the whole list is re-fetched after every
-            mixer command, so each `SourceDto` is a new object every time and
-            `<For>` would rebuild every option on a fader move. The order is
-            fixed (built-ins, then the scan), so keying by position is right.
-          */}
-          <select
-            id="source"
-            class="source__select"
-            value={currentSourceId()}
-            aria-label="Instrument source for the selected track"
-            title={app.currentSource()?.description ?? 'The source of the selected track'}
-            onChange={(event) => pick(event.currentTarget.value)}
-          >
-            <optgroup label="Built in">
-              <Index each={builtIns()}>
-                {(source) => (
-                  <option value={source().id} title={source().description}>
-                    {source().label}
-                  </option>
-                )}
-              </Index>
-            </optgroup>
-            <optgroup label="CLAP instruments">
-              <Index each={instruments()}>
-                {(source) => (
-                  <option
-                    value={source().id}
-                    title={
-                      source().vendor
-                        ? `${source().label} — ${source().vendor}`
-                        : source().label
-                    }
-                  >
-                    {source().label}
-                  </option>
-                )}
-              </Index>
-            </optgroup>
-          </select>
-        </div>
-      </Show>
+      <div class="wv-clock">
+        <span class="wv-clock__time" ref={clockEl}>
+          00:00.000
+        </span>
+        <span class="wv-clock__bars" ref={barsEl}>
+          001.1.00
+        </span>
+      </div>
 
-      <div class="transport__readouts">
-        <div class="readout">
-          <span class="readout__label">Position</span>
-          <span class="readout__value readout__value--mono">
-            {formatTimecode(app.positionSeconds())}
-          </span>
+      <div class="wv-meta">
+        <div class="wv-meta__field">
+          <NumberField
+            class="wv-meta__value"
+            value={app.bpm}
+            onInput={(bpm) => app.setBpm(Math.round(bpm * 100) / 100)}
+            min={MIN_BPM}
+            max={MAX_BPM}
+            step={0.25}
+            aria-label="Tempo in beats per minute"
+            title="Drag to change the tempo, double-click to type one"
+          />
+          <span class="wv-meta__label">BPM</span>
         </div>
-        <div class="readout">
-          <label class="readout__label" for="tempo">
-            Tempo
-          </label>
-          <span class="readout__value readout__value--mono tempo">
-            <input
-              id="tempo"
-              class="tempo__input"
-              type="number"
-              inputmode="decimal"
-              min={MIN_BPM}
-              max={MAX_BPM}
-              step="0.1"
-              value={draft() ?? app.bpm().toFixed(1)}
-              title={`Tempo in BPM (${MIN_BPM}–${MAX_BPM}). Type a value, or drag up and down.`}
-              onPointerDown={startDrag}
-              onInput={(event) => setDraft(event.currentTarget.value)}
-              onBlur={commitDraft}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') event.currentTarget.blur();
-                if (event.key === 'Escape') {
-                  setDraft(null);
-                  event.currentTarget.blur();
-                }
-              }}
-            />
-            <small> BPM</small>
-          </span>
+        <div class="wv-meta__field">
+          <span class="wv-meta__value">4/4</span>
+          <span class="wv-meta__label">SIG</span>
         </div>
-        <div class="readout">
-          <span class="readout__label">Signature</span>
-          <span class="readout__value readout__value--mono">4/4</span>
+        <div class="wv-meta__field wv-disabled" title="Key detection — coming soon">
+          <span class="wv-meta__value">—</span>
+          <span class="wv-meta__label">KEY</span>
         </div>
       </div>
+
+      <span class="wv-spacer" />
+
+      <div class="wv-levels">
+        <span>
+          PEAK <b ref={peakEl}>−∞</b>
+        </span>
+        <span class="wv-disabled" title="Loudness metering — coming soon">
+          LUFS <b>—</b>
+        </span>
+      </div>
+
+      <button
+        type="button"
+        class="wv-chipbtn"
+        title={theme.isDark() ? 'Switch to the light theme' : 'Switch to the dark theme'}
+        aria-label="Toggle theme"
+        onClick={() => theme.toggle()}
+      >
+        <Show when={theme.isDark()} fallback={<IconMoon />}>
+          <IconSun />
+        </Show>
+      </button>
+
+      <span class="wv-avatar wv-disabled" title="Accounts — coming soon">
+        M
+      </span>
     </header>
   );
 }
