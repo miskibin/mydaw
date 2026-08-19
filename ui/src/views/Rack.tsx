@@ -18,16 +18,31 @@
  * rather than just change what is drawn -- leaving the cells switched on under
  * a converted melody would double every hit. Both directions carry as much as
  * the other representation can hold, and the readout says what was lost.
+ *
+ * ## Where in the loop we are
+ *
+ * Two overlays are laid over the whole stack of rows -- a column the width of
+ * one cell over the step that is sounding, and a hairline at the exact
+ * position -- rather than a class on the cell in every lane. One `translateX`
+ * per frame instead of one per row per frame, and the roll-mode previews get
+ * the moving line for free because they share the lane's coordinate system.
+ * See {@link soundingStep} for what the rack claims to know in SONG mode, which
+ * is deliberately less than in PAT mode.
  */
 
-import { For, Index, Show, createSignal } from 'solid-js';
+import { For, Index, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 
 import type { ChannelClipDto, PatternDto, TrackDto } from '../api/types';
 import {
+  TICKS_PER_STEP,
   displayMode,
+  emptyRow,
   isAccent,
   notesToSteps,
+  patternTick,
   patternTicks,
+  samplesToTicks,
+  stepCells,
   stepsToNotes,
   withChannel,
   withToggledStep,
@@ -35,14 +50,51 @@ import {
 import { useAppState } from '../state';
 import { useView } from '../shell/view';
 import { alpha, trackColor } from '../theme/tokens';
+import { onFrame } from '../ui/frameLoop';
 import { IconCaret, IconRoll, IconWarn, IconX } from '../ui/icons';
 import { InstrumentMenu } from './InstrumentMenu';
 
 /** A step cell, in pixels. Fixed: see the module docs. */
 const CELL_W = 13;
 const CELL_H = 22;
+/** Between two cells of the same bar. From the mock's rack lane. */
+const CELL_GAP = 1.5;
+/** Between two bars -- the only gap, because the beat is shown by colour. */
+const BAR_GAP = 5;
+/** Cells in one bar of 4/4 at a sixteenth per cell. */
+const CELLS_PER_BAR = 16;
+/** Cells in one beat, which is what gets the brighter fill. */
+const CELLS_PER_BEAT = 4;
+
+const CELL_PITCH = CELL_W + CELL_GAP;
+const BAR_PITCH = CELLS_PER_BAR * CELL_W + (CELLS_PER_BAR - 1) * CELL_GAP + BAR_GAP;
+
 /** The lengths a pattern may be, which is what the picker offers. */
 const LENGTHS = [16, 32, 64];
+
+/** Where cell `index`'s left edge sits inside a lane, in pixels. */
+function cellX(index: number): number {
+  const bar = Math.floor(index / CELLS_PER_BAR);
+  return bar * BAR_PITCH + (index - bar * CELLS_PER_BAR) * CELL_PITCH;
+}
+
+/** How wide a lane of `steps` cells is. The roll preview matches it exactly. */
+function laneWidth(steps: number): number {
+  return steps <= 0 ? 0 : cellX(steps - 1) + CELL_W;
+}
+
+/**
+ * Where a *fractional* step position sits, in pixels.
+ *
+ * Interpolated between one cell's left edge and the next rather than from a
+ * pixels-per-tick constant, so the hairline stays inside the cell the column is
+ * highlighting even across a bar gap, which is wider than a cell gap.
+ */
+function positionX(step: number): number {
+  const whole = Math.floor(step);
+  const left = cellX(whole);
+  return left + (step - whole) * (cellX(whole + 1) - left);
+}
 
 export function Rack(): ReturnType<typeof Show> {
   const app = useAppState();
@@ -57,6 +109,131 @@ export function Rack(): ReturnType<typeof Show> {
   /** The clip the active pattern puts on `channel`, if any. */
   const clipFor = (channel: number): ChannelClipDto | undefined =>
     pattern()?.channels.find((clip) => clip.channel === channel);
+
+  // --- where in the loop we are --------------------------------------------
+
+  let rowsEl: HTMLDivElement | undefined;
+  let columnEl: HTMLDivElement | undefined;
+  let lineEl: HTMLDivElement | undefined;
+
+  /**
+   * How far the lanes start from the left edge of the row stack.
+   *
+   * Measured rather than added up from the LED, the name box and the roll
+   * button, because a constant here would be a second opinion about the row's
+   * layout that the CSS could drift away from without anything failing. Cached:
+   * it only moves when the row's chrome does.
+   */
+  let laneLeft = -1;
+  function laneOffset(): number {
+    if (laneLeft > 0) return laneLeft;
+    const lane = rowsEl?.querySelector<HTMLElement>('.wv-chrow__lane');
+    // A miss is not cached: the first paint can land before the engine's first
+    // answer has put any rows on screen, and caching the zero it measures then
+    // would pin the playhead to the left edge for the life of the view.
+    if (!lane) return 0;
+    laneLeft = lane.offsetLeft;
+    return laneLeft;
+  }
+  createEffect(() => {
+    // Anything that can change the row's leading controls re-measures.
+    app.tracks().length;
+    pattern()?.steps;
+    laneLeft = -1;
+  });
+
+  /**
+   * Which step of the active pattern is sounding, fractionally, or `null`.
+   *
+   * **PAT mode** is unambiguous: the transport is looping this pattern and the
+   * position inside the loop *is* the answer.
+   *
+   * **SONG mode** is not. The active pattern may be on the timeline in a dozen
+   * places, in none, or twice at once, and a rack lit up from a clip the user
+   * is not looking at is a lie told sixty times a second. So the rack answers
+   * only when exactly one unmuted clip of this pattern is under the playhead --
+   * then there is one true answer -- and stays dark otherwise.
+   *
+   * Called from the frame loop, so every signal read here is untracked.
+   */
+  function soundingStep(current: PatternDto): number | null {
+    const samples = app.playhead.positionSamples();
+    const rate = app.playhead.getSampleRate();
+    const bpm = app.bpm();
+    if (app.playMode() === 'pat') {
+      return patternTick(samples, rate, bpm, current) / TICKS_PER_STEP;
+    }
+    const list = app.playlist();
+    if (!list) return null;
+    const songTick = samplesToTicks(samples, rate, bpm);
+    const sounding = list.clips.filter(
+      (clip) =>
+        clip.kind === 'pattern' &&
+        clip.patternId === current.id &&
+        songTick >= clip.start &&
+        songTick < clip.start + clip.length &&
+        list.tracks[clip.track]?.muted !== true,
+    );
+    if (sounding.length !== 1) return null;
+    const loop = patternTicks(current);
+    if (loop <= 0) return null;
+    return (((songTick - sounding[0]!.start) % loop) + loop) % loop / TICKS_PER_STEP;
+  }
+
+  function hidePosition(): void {
+    if (columnEl) columnEl.style.display = 'none';
+    if (lineEl) lineEl.style.display = 'none';
+  }
+
+  // Subscribed to the frame loop only while the transport runs: a stopped rack
+  // costs nothing, which is the whole contract `onFrame` is built on. It is
+  // still painted **once** when the transport stops, because where you stopped
+  // is exactly the thing you wanted to see -- what would be dishonest is a
+  // marker that kept moving, not one that stayed put.
+  createEffect(() => {
+    const current = pattern();
+    // Tracked so the one paint a stopped transport gets is repeated once the
+    // rows exist: the very first can land before `<Index>` has rendered any,
+    // and `laneOffset` has nothing to measure until it has.
+    app.tracks().length;
+    if (!current) {
+      hidePosition();
+      return;
+    }
+    let lastStep = -1;
+    let lastX = Number.NaN;
+    const paint = () => {
+      if (!columnEl || !lineEl) return;
+      const position = soundingStep(current);
+      if (position === null) {
+        hidePosition();
+        lastStep = -1;
+        return;
+      }
+      // An explicit value, not `''`: the stylesheet's own `display: none` is
+      // what hides these, so clearing the inline style would un-hide nothing.
+      columnEl.style.display = 'block';
+      lineEl.style.display = 'block';
+      const left = laneOffset();
+      // The column moves once per step; the line moves every frame. Writing
+      // only what changed keeps a stopped-on-a-step rack down to one property.
+      const step = Math.min(current.steps - 1, Math.max(0, Math.floor(position)));
+      if (step !== lastStep) {
+        lastStep = step;
+        columnEl.style.transform = `translateX(${left + cellX(step)}px)`;
+      }
+      const x = left + positionX(position);
+      if (x !== lastX) {
+        lastX = x;
+        lineEl.style.transform = `translateX(${x}px)`;
+      }
+    };
+
+    paint();
+    if (!app.playing()) return;
+    onFrame(paint);
+    onCleanup(hidePosition);
+  });
 
   function selectChannel(index: number): void {
     view.setStrip({ kind: 'track', index });
@@ -105,9 +282,9 @@ export function Rack(): ReturnType<typeof Show> {
     app.editPatternOnce('Convert to steps', (target) =>
       withChannel(target, channel, key, (existing) => ({
         ...existing,
-        steps: existing.steps
-          ? notesToSteps(notes, existing.steps, target.steps)
-          : existing.steps,
+        // A clip can have no grid at all; fold onto a fresh one rather than
+        // dropping the notes into a row that is not there.
+        steps: notesToSteps(notes, existing.steps ?? emptyRow(key, target.steps), target.steps),
         notes: [],
       })),
     );
@@ -278,28 +455,36 @@ export function Rack(): ReturnType<typeof Show> {
         }}
         onDrop={addFromDrop}
       >
-        <Index each={app.tracks()}>
-          {(track) => (
-            <RackRow
-              track={track()}
-              pattern={pattern()}
-              selected={(() => {
-                const strip = view.strip();
-                return strip.kind === 'track' && strip.index === track().index;
-              })()}
-              onSelect={() => selectChannel(track().index)}
-              onToggleStep={(index, accent) => toggleStep(track().index, index, accent)}
-              onOpenRoll={() => {
-                selectChannel(track().index);
-                view.openRoll(track().index);
-              }}
-              onInstrument={() => setInstrumentFor(track().index)}
-              onToggleMode={() => toggleMode(track().index, track().name)}
-              onRemove={() => removeChannel(track())}
-              canRemove={app.tracks().length > 1}
-            />
-          )}
-        </Index>
+        <div class="wv-rack__rows" ref={rowsEl}>
+          {/* Under the cells in the source order but painted over them, which
+              is what makes it read as a wash on the column rather than a block
+              in front of it. Both are inert to the pointer. */}
+          <div class="wv-rack__col" ref={columnEl} style={{ width: `${CELL_W}px` }} />
+          <div class="wv-rack__line" ref={lineEl} />
+
+          <Index each={app.tracks()}>
+            {(track) => (
+              <RackRow
+                track={track()}
+                pattern={pattern()}
+                selected={(() => {
+                  const strip = view.strip();
+                  return strip.kind === 'track' && strip.index === track().index;
+                })()}
+                onSelect={() => selectChannel(track().index)}
+                onToggleStep={(index, accent) => toggleStep(track().index, index, accent)}
+                onOpenRoll={() => {
+                  selectChannel(track().index);
+                  view.openRoll(track().index);
+                }}
+                onInstrument={() => setInstrumentFor(track().index)}
+                onToggleMode={() => toggleMode(track().index, track().name)}
+                onRemove={() => removeChannel(track())}
+                canRemove={app.tracks().length > 1}
+              />
+            )}
+          </Index>
+        </div>
 
         <div
           class="wv-rack__drop"
@@ -343,11 +528,9 @@ function RackRow(props: {
   const colour = () => trackColor(props.track.id);
   const clip = () => props.pattern?.channels.find((entry) => entry.channel === props.track.index);
   const isRoll = () => displayMode(clip()) === 'roll';
-  const steps = () => clip()?.steps?.steps ?? [];
-
-  /** Beat and bar gaps, so a cell's position is readable at a glance. */
-  const gapFor = (index: number): string =>
-    index % 16 === 0 ? '9px' : index % 4 === 0 ? '4px' : '1.5px';
+  const length = () => props.pattern?.steps ?? 16;
+  /** Always a full lane -- see `stepCells` for the three ways a clip arrives. */
+  const steps = () => stepCells(clip(), length());
 
   return (
     <div
@@ -422,13 +605,17 @@ function RackRow(props: {
         <IconRoll />
       </button>
 
-      <div class="wv-chrow__lane">
+      <div class="wv-chrow__lane" style={{ width: `${laneWidth(length())}px` }}>
         <Show
           when={!isRoll()}
           fallback={
             <button
               type="button"
               class="wv-chrow__preview"
+              style={{
+                width: `${laneWidth(length())}px`,
+                'background-size': `${BAR_PITCH}px 100%`,
+              }}
               title="Open the piano roll for this channel"
               onClick={(event) => {
                 event.stopPropagation();
@@ -440,24 +627,42 @@ function RackRow(props: {
           }
         >
           <Index each={steps()}>
-            {(cell, index) => (
-              <button
-                type="button"
-                class="wv-step"
-                classList={{ 'is-on': cell().on, 'is-accent': cell().on && isAccent(cell().velocity) }}
-                style={{
-                  width: `${CELL_W}px`,
-                  height: `${CELL_H}px`,
-                  'margin-left': index === 0 ? '0' : gapFor(index),
-                  background: cell().on ? colour() : undefined,
-                }}
-                title={`Step ${index + 1} — click to toggle, shift-click for an accent`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  props.onToggleStep(index, event.shiftKey);
-                }}
-              />
-            )}
+            {(cell, index) => {
+              // The beat is shown by colour, not by a wider gap: the mock tints
+              // every fourth cell and separates only the bars, which keeps the
+              // lane one readable block instead of four ragged clusters -- and
+              // it is what lets the playhead column be a single element.
+              const beat = index % CELLS_PER_BEAT === 0;
+              return (
+                <button
+                  type="button"
+                  class="wv-step"
+                  classList={{
+                    'is-beat': beat,
+                    'is-on': cell().on,
+                    'is-accent': cell().on && isAccent(cell().velocity),
+                  }}
+                  style={{
+                    width: `${CELL_W}px`,
+                    height: `${CELL_H}px`,
+                    'margin-left':
+                      index === 0
+                        ? '0'
+                        : `${index % CELLS_PER_BAR === 0 ? BAR_GAP : CELL_GAP}px`,
+                    background: cell().on
+                      ? beat
+                        ? colour()
+                        : alpha(colour(), 0.8)
+                      : undefined,
+                  }}
+                  title={`Step ${index + 1} — click to toggle, shift-click for an accent`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    props.onToggleStep(index, event.shiftKey);
+                  }}
+                />
+              );
+            }}
           </Index>
         </Show>
       </div>

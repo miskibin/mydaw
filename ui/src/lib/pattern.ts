@@ -77,6 +77,40 @@ export function stepsOf(pattern: PatternDto, channel: number): StepRowDto | null
   return channelClip(pattern, channel)?.steps ?? null;
 }
 
+/** A cell nothing has been drawn into. */
+export function emptyStep(): StepDto {
+  return { on: false, velocity: STEP_VELOCITY };
+}
+
+/** An empty grid of `steps` cells, triggering `key`. */
+export function emptyRow(key: number, steps: number): StepRowDto {
+  return { key, label: '', steps: Array.from({ length: steps }, emptyStep) };
+}
+
+/**
+ * The `length` cells a channel's lane draws, whatever state the clip is in.
+ *
+ * Three things can arrive on the wire and all three must come out as a full
+ * lane, because **a rack row a user cannot click in is not a state anyone can
+ * understand**:
+ *
+ * - no clip at all -- a channel added while a hosted plugin was placed used to
+ *   arrive like this (`AppState::add_track` skipped its pattern sync on the two
+ *   hosted branches);
+ * - a clip with `steps: null` -- `ChannelClip::melodic` in the engine makes one,
+ *   and `PatternSet::add_channel` will not retrofit a grid onto a clip that
+ *   already exists;
+ * - a clip whose row is shorter than the pattern, after a length change.
+ *
+ * The old rack read `clip.steps.steps` and fell back to `[]`, which rendered as
+ * a row with the mode button and the delete cross and *no lane between them*.
+ */
+export function stepCells(clip: ChannelClipDto | undefined, length: number): StepDto[] {
+  const row = clip?.steps?.steps;
+  if (row && row.length === length) return row;
+  return Array.from({ length }, (_, index) => row?.[index] ?? emptyStep());
+}
+
 /** How a channel draws: notes win, because a grid cannot show a note length. */
 export function displayMode(clip: ChannelClipDto | undefined): 'steps' | 'roll' {
   return clip && clip.notes.length > 0 ? 'roll' : 'steps';
@@ -84,16 +118,7 @@ export function displayMode(clip: ChannelClipDto | undefined): 'steps' | 'roll' 
 
 /** An empty grid on `channel`, triggering `key`. */
 export function emptyClip(channel: number, key: number, steps: number): ChannelClipDto {
-  return {
-    channel,
-    mode: 'steps',
-    steps: {
-      key,
-      label: '',
-      steps: Array.from({ length: steps }, () => ({ on: false, velocity: STEP_VELOCITY })),
-    },
-    notes: [],
-  };
+  return { channel, mode: 'steps', steps: emptyRow(key, steps), notes: [] };
 }
 
 /**
@@ -143,8 +168,18 @@ export function withToggledStep(
   fallbackKey: number,
 ): PatternDto {
   return withChannel(pattern, channel, fallbackKey, (clip) => {
-    const row = clip.steps;
-    if (!row || index < 0 || index >= row.steps.length) return clip;
+    if (index < 0 || index >= pattern.steps) return clip;
+    // The lane is drawn for every channel (see `stepCells`), so a click on one
+    // has to be able to create the row it was drawn on -- otherwise the cell
+    // the user just hit is a control that does nothing.
+    const existing = clip.steps;
+    const row =
+      existing && existing.steps.length === pattern.steps
+        ? existing
+        : {
+            ...(existing ?? emptyRow(fallbackKey, pattern.steps)),
+            steps: stepCells(clip, pattern.steps),
+          };
     const cell = row.steps[index]!;
     const next: StepDto = accent
       ? cell.on && isAccent(cell.velocity)

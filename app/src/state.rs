@@ -1260,6 +1260,31 @@ impl AppState {
     /// the hosted path, [`SourceError::MainThread`] carrying what the main
     /// thread said.
     pub fn add_track(&self, source: Source, name: Option<String>) -> Result<usize, MixerError> {
+        let outcome = self.place_track(source, name);
+        // One call site for all three paths, and deliberately outside the `?`.
+        //
+        // Two things are load-bearing here. It runs whichever path placed the
+        // track: the two hosted branches used to `return` before reaching it, so
+        // once *any* CLAP or VST3 plugin was placed -- one instrument on one
+        // channel is enough -- every channel added afterwards got no grid in any
+        // pattern, and the rack drew it as a row with no lane at all. And it
+        // runs even when `outcome` is an error: with no audio device the graph
+        // install fails *after* the track was added, and a pattern that did not
+        // follow it would leave a channel nothing can be clicked into. Against a
+        // genuine refusal (the track limit) it re-syncs a channel that already
+        // has a grid, which `PatternSet::add_channel` ignores.
+        //
+        // The count comes from the project rather than from `outcome` for the
+        // same reason.
+        self.sync_channel_added(self.tracks.track_count().saturating_sub(1));
+        outcome
+    }
+
+    /// Put the track wherever this build's plugin state says it has to go.
+    ///
+    /// Split out so [`add_track`](Self::add_track) has exactly one exit and one
+    /// pattern sync -- see the comment there for what that is holding up.
+    fn place_track(&self, source: Source, name: Option<String>) -> Result<usize, MixerError> {
         // With a VST3 plugin placed the edit goes to the *VST3* host, which
         // re-attaches both formats after the one rebuild. With only CLAP placed
         // it goes to the CLAP host, exactly as it did in step 6. See
@@ -1276,12 +1301,7 @@ impl AppState {
                 .map_err(MixerError::Source)?;
             return Ok(self.tracks.track_count().saturating_sub(1));
         }
-        let outcome = self.tracks.add_track(source, name, &self.audio);
-        // From the project rather than from `outcome`: with no audio device the
-        // graph install fails *after* the track was added, and a pattern that
-        // did not follow it would leave a channel nothing can be clicked into.
-        self.sync_channel_added(self.tracks.track_count().saturating_sub(1));
-        outcome
+        self.tracks.add_track(source, name, &self.audio)
     }
 
     /// Give every pattern a grid on a channel that has just appeared.
@@ -2305,6 +2325,44 @@ mod tests {
             (0..before as u8).collect::<Vec<_>>(),
             "the channels above the removed one shifted down"
         );
+    }
+
+    #[test]
+    fn a_new_channel_gets_a_grid_in_every_pattern_and_not_only_the_active_one() {
+        // The rack draws whatever the *active* pattern says, so a channel that
+        // reached only that one looks perfectly fine until you click another
+        // pattern tab and find a row with no lane in it.
+        //
+        // This drives the plain path, which is the only one a test process can
+        // reach -- the other two need a main-thread plugin host with a real
+        // bundle loaded. What makes it cover them too is that `add_track` now
+        // has a single exit and a single `sync_channel_added`, so there is no
+        // longer a branch that *can* skip it. That, not this assertion, is what
+        // fixed the bug; this holds the invariant the fix restored.
+        let (_kernel, state) = state();
+        let first = state.sequencer().patterns().active_id();
+        let second = state.add_pattern(None).expect("a second pattern");
+        let before = state.sequencer().active_pattern().channels.len();
+
+        let _ = state.add_track(Source::PolySynth, None);
+
+        for id in [first, second] {
+            state
+                .edit_patterns(|set| set.set_active(id))
+                .expect("the pattern exists");
+            let pattern = state.sequencer().active_pattern();
+            let clip = pattern
+                .channel(before as u8)
+                .unwrap_or_else(|| panic!("pattern {id} must speak for the new channel"));
+            let row = clip
+                .steps
+                .as_ref()
+                .unwrap_or_else(|| panic!("pattern {id}'s new channel must have a grid to click"));
+            assert!(
+                row.steps.iter().all(|cell| !cell.on),
+                "and the grid it gets must be empty"
+            );
+        }
     }
 
     #[test]

@@ -874,9 +874,13 @@ button:disabled.wv-can-disable {
 :root {
   --playhead: #eef1f5;
   --palette-shadow: rgb(0 0 0 / 45%);
+  /* An unlit step cell on a beat. A lift off `--sunk` rather than a palette
+     entry, because it exists only to make the beat readable inside the lane. */
+  --stepbeat: #252a33;
 }
 
 :root[data-theme='light'] {
   --playhead: #1c2028;
   --palette-shadow: rgb(0 0 0 / 18%);
+  --stepbeat: #d9dee6;
 }

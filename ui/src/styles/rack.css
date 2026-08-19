@@ -16,6 +16,51 @@
   overflow: auto;
 }
 
+/*
+ * The rows, and the two position overlays laid across all of them.
+ *
+ * `position: relative` here rather than on `.wv-rack` on purpose: the overlays
+ * must scroll with the lanes, and an absolute child of the *scroller* would
+ * still scroll -- but it would also stretch over the drop zone, which is not
+ * part of the loop.
+ */
+.wv-rack__rows {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: max-content;
+}
+
+/* The step that is sounding, washed across every lane. FL's own affordance. */
+.wv-rack__col {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: none;
+  border-radius: 3px;
+  background: var(--playhead);
+  /* Enough to find at a glance across five lanes, not enough to change what
+     colour a switched-on cell looks like -- it is a wash, not a cursor. */
+  opacity: 0.2;
+  pointer-events: none;
+}
+
+/* The exact position, which is what a roll-mode preview has instead of a cell. */
+.wv-rack__line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: none;
+  width: 1px;
+  background: var(--playhead);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
 .wv-chrow {
   display: flex;
   flex: none;
@@ -46,7 +91,7 @@
   flex: none;
   gap: 1px;
   align-items: center;
-  width: 112px;
+  width: 98px;
   height: 24px;
 }
 
@@ -117,7 +162,12 @@
   height: 24px;
 }
 
-/* One step. Fixed size, always -- the sizes come from the component. */
+/*
+ * One step. Fixed size, always -- the sizes come from the component.
+ *
+ * The first cell of each beat is lighter and carries the stronger border, which
+ * is how the mock says "beat" without spending horizontal space on a gap.
+ */
 .wv-step {
   flex: none;
   border-radius: 3px;
@@ -125,15 +175,22 @@
   box-shadow: inset 0 0 0 1px var(--line);
 }
 
+.wv-step.is-beat {
+  background: var(--stepbeat);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
 .wv-step:hover {
   box-shadow: inset 0 0 0 1px var(--dim2);
 }
 
-.wv-step.is-on {
+.wv-step.is-on,
+.wv-step.is-on.is-beat {
   box-shadow: inset 0 -2px 0 rgb(0 0 0 / 25%);
 }
 
-.wv-step.is-accent {
+.wv-step.is-accent,
+.wv-step.is-accent.is-beat {
   box-shadow: inset 0 -2px 0 rgb(0 0 0 / 25%), inset 0 0 0 1.5px var(--txt);
 }
 
@@ -142,12 +199,14 @@
   position: relative;
   flex: none;
   overflow: hidden;
-  width: 560px;
   height: 24px;
   border-radius: 4px;
   background: var(--sunk);
   box-shadow: inset 0 0 0 1px var(--line);
-  background-image: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 25%);
+  /* One rule per bar. The tile's width is set from the component, so a 16-step
+     preview and a 64-step one are ruled at the same pitch as the step lanes. */
+  background-image: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 100%);
+  background-repeat: repeat-x;
 }
 
 .wv-chrow__note {
