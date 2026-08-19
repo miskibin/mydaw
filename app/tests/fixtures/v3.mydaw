@@ -1,0 +1,224 @@
+{
+  "format_version": 3,
+  "bpm": 147.0,
+  "master_gain_db": -3.5,
+  "selected_track": 1,
+  "tracks": [
+    {
+      "id": 0,
+      "name": "Drums",
+      "source": {
+        "kind": "internal",
+        "id": "drum-kit"
+      },
+      "gain_db": -6.5,
+      "pan": -0.25,
+      "muted": false,
+      "soloed": false,
+      "state_blob": ""
+    },
+    {
+      "id": 1,
+      "name": "Lead",
+      "source": {
+        "kind": "internal",
+        "id": "poly-synth"
+      },
+      "gain_db": 0.0,
+      "pan": 0.0,
+      "muted": false,
+      "soloed": true,
+      "state_blob": ""
+    }
+  ],
+  "master_effect": null,
+  "play_mode": "song",
+  "patterns": [
+    {
+      "id": 1,
+      "name": "Beat",
+      "color": "#4f8ef7",
+      "steps": 16,
+      "channels": [
+        {
+          "channel": 0,
+          "mode": "steps",
+          "steps": {
+            "key": 36,
+            "label": "Kick",
+            "steps": [
+              {
+                "on": true,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": true,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              }
+            ]
+          },
+          "notes": []
+        },
+        {
+          "channel": 1,
+          "mode": "roll",
+          "steps": {
+            "key": 36,
+            "label": "Kick",
+            "steps": [
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              },
+              {
+                "on": false,
+                "velocity": 0.78
+              }
+            ]
+          },
+          "notes": [
+            {
+              "key": 60,
+              "start": 0,
+              "length": 960,
+              "velocity": 0.8
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "active_pattern": 1,
+  "playlist": {
+    "tracks": [
+      {
+        "id": 1,
+        "name": "Track 1",
+        "muted": false
+      }
+    ],
+    "clips": [
+      {
+        "id": 1,
+        "kind": "pattern",
+        "track": 0,
+        "start": 0,
+        "length": 15360,
+        "pattern_id": 1
+      }
+    ]
+  },
+  "audio_sources": []
+}

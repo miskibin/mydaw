@@ -225,6 +225,9 @@ impl Vst3Host {
             Vst3Command::RemoveTrack { track } => self
                 .remove_track(tracks, audio, track, clap)
                 .map(|()| Vst3Answer::Done),
+            Vst3Command::Rebuild => self
+                .rebuild(tracks, audio, clap)
+                .map(|()| Vst3Answer::Done),
         }
     }
 
@@ -424,6 +427,20 @@ impl Vst3Host {
             self.instances.destroy(instance);
         }
         outcome
+    }
+
+    /// Install a graph from the project as it now stands and re-attach **both**
+    /// formats. See [`ClapCommand::Rebuild`](crate::ClapCommand::Rebuild).
+    pub fn rebuild(
+        &mut self,
+        tracks: &TrackHost,
+        audio: &AudioIoService,
+        clap: &mut ClapHost,
+    ) -> Result<(), String> {
+        tracks
+            .install_graph(audio)
+            .map_err(|err| err.to_string())?;
+        self.reattach_both(tracks, audio, clap)
     }
 
     fn reattach_both(
@@ -693,6 +710,7 @@ mod tests {
             Arc::new(mydaw_plugin_test_tone::TestToneFactory::new()),
             Arc::new(mydaw_plugin_instruments::InstrumentRegistry::new()),
             Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
+            Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
         )
     }
 

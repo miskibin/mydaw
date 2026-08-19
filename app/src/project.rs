@@ -30,12 +30,17 @@
 //! reads one bool. Soloing is then exactly as click-free as muting, because it
 //! *is* muting.
 
+use mydaw_plugin_effects::EffectRegistry;
 use mydaw_plugin_instruments::SingleDrum;
 use mydaw_plugin_sampler::SamplerRegistry;
-use mydaw_rt_core::{db_to_gain, gain_to_db, MixerParams, MAX_GAIN_DB, MAX_TRACKS, SILENCE_DB};
+use mydaw_rt_core::{
+    db_to_gain, gain_to_db, max_send_db, MixerParams, StripId, MAX_BUSES, MAX_GAIN_DB,
+    MAX_SEND_LEVEL, MAX_TRACKS, SILENCE_DB,
+};
 use serde::Serialize;
 
 use crate::clap_bridge::{ClapBoard, ClapSlotDto};
+use crate::effects::{chain_dto, InsertDef, InsertDto, InsertError, InsertTarget, MAX_INSERTS};
 use crate::source::{SamplerSourceRef, Source};
 use crate::vst3_bridge::{Vst3Board, Vst3SlotDto};
 
@@ -70,10 +75,16 @@ pub struct TrackDef {
     pub pan: f32,
     pub muted: bool,
     pub soloed: bool,
+    /// Internal effects, in signal order, between the source and the gate.
+    ///
+    /// The parameter blocks inside these are shared with the nodes the graph is
+    /// running -- see [`crate::effects`] -- so cloning a `TrackDef` shares them
+    /// rather than copying them, which is what a DTO and a save both want.
+    pub inserts: Vec<InsertDef>,
 }
 
 impl TrackDef {
-    /// A track at unity gain, centred, unmuted.
+    /// A track at unity gain, centred, unmuted, with an empty chain.
     pub fn new(id: u32, name: impl Into<String>, source: Source) -> Self {
         Self {
             id,
@@ -83,12 +94,98 @@ impl TrackDef {
             pan: 0.0,
             muted: false,
             soloed: false,
+            inserts: Vec::new(),
         }
     }
 
     /// The linear multiplier this track's fader asks for.
     pub fn gain(&self) -> f32 {
         db_to_gain(self.gain_db)
+    }
+}
+
+/// One bus, as the session holds it.
+///
+/// A track without a source. It sums whatever sends into it, runs its own
+/// insert chain, and has a strip whose main output goes to the master -- see
+/// [`mydaw_rt_core::graph`] for the whole topology and why a main output is
+/// never rerouted.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BusDef {
+    /// Stable across renumbering. Key a UI list on it.
+    pub id: u32,
+    pub name: String,
+    /// A colour the UI paints the strip and every send knob feeding it with.
+    ///
+    /// `Option`, and **absent** rather than empty when there is none: the engine
+    /// has no palette, and inventing one would put a design decision in a file
+    /// format. Same rule as a pattern's colour.
+    pub color: Option<String>,
+    pub gain_db: f32,
+    pub pan: f32,
+    pub muted: bool,
+    pub soloed: bool,
+    /// Internal effects on the summed input, before the strip.
+    pub inserts: Vec<InsertDef>,
+}
+
+impl BusDef {
+    /// A bus at unity gain, centred, unmuted, with an empty chain.
+    pub fn new(id: u32, name: impl Into<String>) -> Self {
+        Self {
+            id,
+            name: name.into(),
+            color: None,
+            gain_db: 0.0,
+            pan: 0.0,
+            muted: false,
+            soloed: false,
+            inserts: Vec::new(),
+        }
+    }
+
+    /// The linear multiplier this bus's fader asks for.
+    pub fn gain(&self) -> f32 {
+        db_to_gain(self.gain_db)
+    }
+}
+
+/// One send tap, as the session holds it.
+///
+/// A tap is **additive**: it does not take the signal away from the source's
+/// main output, it adds a copy of it to a bus. The source keeps its own path to
+/// the master, and "wet only" is a pre-fader tap with the fader down.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SendDef {
+    /// Stable across renumbering of either end. What the level and pre/post
+    /// commands address, so a send survives a bus being deleted above it.
+    pub id: u32,
+    /// The strip the copy is taken from.
+    pub source: StripId,
+    /// The bus it is added into. The master is never a send destination --
+    /// every strip already has an implicit main output there.
+    pub dest: usize,
+    /// Linear level, `0.0..=`[`MAX_SEND_LEVEL`]. `1.0` is unity.
+    pub level: f32,
+    /// Whether the copy is taken before the source's fader, pan and mute.
+    pub pre: bool,
+}
+
+impl SendDef {
+    /// A send at unity, post-fader -- what a freshly created one should be.
+    pub const fn new(id: u32, source: StripId, dest: usize) -> Self {
+        Self {
+            id,
+            source,
+            dest,
+            level: 1.0,
+            pre: false,
+        }
+    }
+
+    /// This send's level in decibels, for a UI that draws a dB scale.
+    pub fn level_db(&self) -> f32 {
+        gain_to_db(self.level)
     }
 }
 
@@ -110,6 +207,43 @@ pub enum TrackError {
     InvalidPan(f32),
 }
 
+/// Why a bus or send edit was refused.
+///
+/// Every variant is reachable from the webview, which can send any index it
+/// likes, plus two that are genuine engine limitations and one -- [`Cycle`] --
+/// that is the routing rule this whole type exists for.
+///
+/// [`Cycle`]: Self::Cycle
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum RouteError {
+    #[error("there is no bus {0}")]
+    NoSuchBus(usize),
+    #[error("there is no track {0}")]
+    NoSuchTrack(usize),
+    #[error("there is no send {0}")]
+    NoSuchSend(u32),
+    #[error("a project may have at most {MAX_BUSES} buses")]
+    TooManyBuses,
+    /// The field is `from` and not `source` because `thiserror` reads a field
+    /// called `source` as the error's *cause* and demands it be an error.
+    #[error("{from} already sends to bus {dest}")]
+    DuplicateSend { from: StripId, dest: usize },
+    #[error("a bus cannot send to itself")]
+    SelfSend,
+    /// The edit would make a bus feed itself, directly or through others.
+    ///
+    /// Refused at **edit time**, so the audio thread never has to know that a
+    /// cycle is possible. The message names the whole loop, because "that would
+    /// be a cycle" is not something a user can act on and "bus 1 -> bus 3 -> bus
+    /// 1" is.
+    #[error("that would feed a bus into itself: {0}")]
+    Cycle(String),
+    #[error("send level {0} is not a number between 0.0 and {MAX_SEND_LEVEL}")]
+    InvalidLevel(f32),
+    #[error("a bus must have a name")]
+    BlankName,
+}
+
 /// The session's tracks and master fader.
 ///
 /// # Track index is note channel
@@ -123,9 +257,27 @@ pub enum TrackError {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {
     pub tracks: Vec<TrackDef>,
+    /// The buses, in strip order. A bus's **index** is what a
+    /// [`SendDef::dest`] names and what the audio thread's parameter block is
+    /// keyed by, exactly as a track's index is.
+    pub buses: Vec<BusDef>,
+    /// Every send tap in the session, in creation order.
+    ///
+    /// One flat list rather than a list per strip: a send is a *relationship*,
+    /// the UI draws it from both ends ("sends from this strip" and "what feeds
+    /// this bus"), and a copy kept on each end is a copy that can disagree.
+    pub sends: Vec<SendDef>,
     /// Master fader, in dB.
     pub master_gain_db: f32,
+    /// Internal effects on the master bus, **ahead of** the hosted insert. See
+    /// [`crate::effects`] on why that order.
+    pub master_inserts: Vec<InsertDef>,
     next_id: u32,
+    next_bus_id: u32,
+    /// Next insert identity. Session-wide rather than per chain, so an insert
+    /// moved from one strip to another could one day keep its id.
+    next_insert_id: u32,
+    next_send_id: u32,
 }
 
 impl Default for Project {
@@ -170,8 +322,8 @@ impl Project {
         tracks.push(TrackDef::new(id, piano.label(), piano));
         Self {
             tracks,
-            master_gain_db: 0.0,
             next_id: id + 1,
+            ..Self::empty()
         }
     }
 
@@ -179,8 +331,14 @@ impl Project {
     pub fn empty() -> Self {
         Self {
             tracks: Vec::new(),
+            buses: Vec::new(),
+            sends: Vec::new(),
             master_gain_db: 0.0,
+            master_inserts: Vec::new(),
             next_id: 0,
+            next_bus_id: 0,
+            next_insert_id: 0,
+            next_send_id: 0,
         }
     }
 
@@ -192,21 +350,428 @@ impl Project {
     /// highest one in the file, so a track added after a load cannot collide
     /// with one that was in it.
     pub fn restored(tracks: Vec<TrackDef>, master_gain_db: f32) -> Self {
-        let next_id = tracks
-            .iter()
-            .map(|track| track.id)
-            .max()
-            .map_or(0, |highest| highest.saturating_add(1));
+        Self::restored_with(tracks, master_gain_db, Vec::new(), Vec::new(), Vec::new())
+    }
+
+    /// A whole project read back from a version 4 file.
+    ///
+    /// Every id -- track, bus, insert and send -- is restored rather than
+    /// regenerated, and each counter continues past the highest one in the file,
+    /// so anything added after a load cannot collide with what was in it.
+    pub fn restored_with(
+        tracks: Vec<TrackDef>,
+        master_gain_db: f32,
+        buses: Vec<BusDef>,
+        sends: Vec<SendDef>,
+        master_inserts: Vec<InsertDef>,
+    ) -> Self {
+        let past = |highest: Option<u32>| highest.map_or(0, |id| id.saturating_add(1));
+        let next_id = past(tracks.iter().map(|track| track.id).max());
+        let next_bus_id = past(buses.iter().map(|bus| bus.id).max());
+        let next_insert_id = past(
+            tracks
+                .iter()
+                .flat_map(|track| &track.inserts)
+                .chain(buses.iter().flat_map(|bus| &bus.inserts))
+                .chain(&master_inserts)
+                .map(|insert| insert.id)
+                .max(),
+        );
+        let next_send_id = past(sends.iter().map(|send| send.id).max());
         Self {
             tracks,
+            buses,
+            sends,
             master_gain_db,
+            master_inserts,
             next_id,
+            next_bus_id,
+            next_insert_id,
+            next_send_id,
         }
     }
 
     /// The id the next added track will get. Diagnostics and tests.
     pub const fn next_id(&self) -> u32 {
         self.next_id
+    }
+
+    /// The id the next added bus will get.
+    pub const fn next_bus_id(&self) -> u32 {
+        self.next_bus_id
+    }
+
+    /// The id the next added insert will get.
+    pub const fn next_insert_id(&self) -> u32 {
+        self.next_insert_id
+    }
+
+    /// The id the next added send will get.
+    pub const fn next_send_id(&self) -> u32 {
+        self.next_send_id
+    }
+
+    // --------------------------------------------------------- insert chains
+
+    /// The chain `target` names, or `None` for a strip that is not there.
+    pub fn chain(&self, target: InsertTarget) -> Option<&Vec<InsertDef>> {
+        match target {
+            InsertTarget::Master => Some(&self.master_inserts),
+            InsertTarget::Track(index) => self.tracks.get(index).map(|track| &track.inserts),
+            InsertTarget::Bus(index) => self.buses.get(index).map(|bus| &bus.inserts),
+        }
+    }
+
+    /// The chain `target` names, mutably.
+    pub fn chain_mut(&mut self, target: InsertTarget) -> Option<&mut Vec<InsertDef>> {
+        match target {
+            InsertTarget::Master => Some(&mut self.master_inserts),
+            InsertTarget::Track(index) => self.tracks.get_mut(index).map(|t| &mut t.inserts),
+            InsertTarget::Bus(index) => self.buses.get_mut(index).map(|b| &mut b.inserts),
+        }
+    }
+
+    /// The insert `target` and `index` name.
+    pub fn insert(&self, target: InsertTarget, index: usize) -> Option<&InsertDef> {
+        self.chain(target).and_then(|chain| chain.get(index))
+    }
+
+    /// Every chain in the project, in the order the graph builds them.
+    pub fn chains(&self) -> impl Iterator<Item = (InsertTarget, &Vec<InsertDef>)> {
+        self.tracks
+            .iter()
+            .enumerate()
+            .map(|(index, track)| (InsertTarget::Track(index), &track.inserts))
+            .chain(
+                self.buses
+                    .iter()
+                    .enumerate()
+                    .map(|(index, bus)| (InsertTarget::Bus(index), &bus.inserts)),
+            )
+            .chain(std::iter::once((
+                InsertTarget::Master,
+                &self.master_inserts,
+            )))
+    }
+
+    /// Add an internal effect to a chain, returning where it landed.
+    ///
+    /// A `position` past the end appends, which is what dropping onto empty
+    /// space means.
+    ///
+    /// # Errors
+    /// [`InsertError::UnknownEffect`], [`InsertError::NoSuchTrack`],
+    /// [`InsertError::NoSuchBus`] or [`InsertError::TooManyInserts`].
+    pub fn add_insert(
+        &mut self,
+        target: InsertTarget,
+        type_id: &str,
+        position: Option<usize>,
+        registry: &EffectRegistry,
+    ) -> Result<usize, InsertError> {
+        // Built before anything is borrowed or mutated, so an unknown effect
+        // leaves the project exactly as it was.
+        let def = InsertDef::new(self.next_insert_id, type_id, registry)?;
+        let chain = self
+            .chain_mut(target)
+            .ok_or(InsertError::no_such_chain(target))?;
+        if chain.len() >= MAX_INSERTS {
+            return Err(InsertError::TooManyInserts);
+        }
+        let at = position.unwrap_or(chain.len()).min(chain.len());
+        chain.insert(at, def);
+        self.next_insert_id = self.next_insert_id.saturating_add(1);
+        Ok(at)
+    }
+
+    /// Remove an insert, returning it.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchTrack`], [`InsertError::NoSuchBus`] or
+    /// [`InsertError::NoSuchInsert`].
+    pub fn remove_insert(
+        &mut self,
+        target: InsertTarget,
+        index: usize,
+    ) -> Result<InsertDef, InsertError> {
+        let chain = self
+            .chain_mut(target)
+            .ok_or(InsertError::no_such_chain(target))?;
+        if index >= chain.len() {
+            return Err(InsertError::NoSuchInsert { target, index });
+        }
+        Ok(chain.remove(index))
+    }
+
+    /// Move an insert so that it ends up at `to`.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchTrack`], [`InsertError::NoSuchBus`] or
+    /// [`InsertError::NoSuchInsert`].
+    pub fn move_insert(
+        &mut self,
+        target: InsertTarget,
+        from: usize,
+        to: usize,
+    ) -> Result<(), InsertError> {
+        let chain = self
+            .chain_mut(target)
+            .ok_or(InsertError::no_such_chain(target))?;
+        if from >= chain.len() {
+            return Err(InsertError::NoSuchInsert {
+                target,
+                index: from,
+            });
+        }
+        if to >= chain.len() {
+            return Err(InsertError::NoSuchInsert { target, index: to });
+        }
+        let def = chain.remove(from);
+        chain.insert(to, def);
+        Ok(())
+    }
+
+    /// Whether any chain holds anything at all.
+    pub fn has_inserts(&self) -> bool {
+        self.chains().any(|(_, chain)| !chain.is_empty())
+    }
+
+    // ------------------------------------------------------------ buses
+
+    /// Append a bus, returning its index.
+    ///
+    /// # Errors
+    /// [`RouteError::TooManyBuses`] past [`MAX_BUSES`], or
+    /// [`RouteError::BlankName`].
+    pub fn add_bus(&mut self, name: Option<String>) -> Result<usize, RouteError> {
+        if self.buses.len() >= MAX_BUSES {
+            return Err(RouteError::TooManyBuses);
+        }
+        let id = self.next_bus_id;
+        let name = match name {
+            Some(name) if name.trim().is_empty() => return Err(RouteError::BlankName),
+            Some(name) => name,
+            // Numbered by position, which is what the user is looking at, not by
+            // id -- "Bus 3" after two deletions should be the third strip.
+            None => format!("Bus {}", self.buses.len() + 1),
+        };
+        self.next_bus_id = self.next_bus_id.saturating_add(1);
+        self.buses.push(BusDef::new(id, name));
+        Ok(self.buses.len() - 1)
+    }
+
+    /// Remove a bus, **and every send at either end of it**.
+    ///
+    /// Both ends, because a bus index is a *position*: a send left pointing at
+    /// the bus that has moved into the gap would silently reroute somebody's
+    /// reverb, and a send *from* the deleted bus has no source at all. Sends
+    /// naming a later bus are renumbered down, for the same reason removing a
+    /// track renumbers the ones after it.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn remove_bus(&mut self, bus: usize) -> Result<BusDef, RouteError> {
+        if bus >= self.buses.len() {
+            return Err(RouteError::NoSuchBus(bus));
+        }
+        self.sends
+            .retain(|send| send.dest != bus && send.source != StripId::Bus(bus));
+        for send in &mut self.sends {
+            if send.dest > bus {
+                send.dest -= 1;
+            }
+            if let StripId::Bus(index) = send.source {
+                if index > bus {
+                    send.source = StripId::Bus(index - 1);
+                }
+            }
+        }
+        Ok(self.buses.remove(bus))
+    }
+
+    /// Apply `edit` to one bus.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn edit_bus(
+        &mut self,
+        bus: usize,
+        edit: impl FnOnce(&mut BusDef),
+    ) -> Result<(), RouteError> {
+        let def = self.buses.get_mut(bus).ok_or(RouteError::NoSuchBus(bus))?;
+        edit(def);
+        Ok(())
+    }
+
+    /// Whether any bus is soloed.
+    pub fn any_bus_soloed(&self) -> bool {
+        self.buses.iter().any(|bus| bus.soloed)
+    }
+
+    /// Whether bus `index` is silent right now, solo resolved.
+    ///
+    /// Buses and tracks share one solo scope: soloing a track silences every bus
+    /// that is not itself soloed, which is what makes "solo the kick" audible
+    /// through a drum bus only if the user soloed that too. The alternative --
+    /// two independent solo systems -- produces a soloed track that is silent
+    /// because its group is not, which nobody would understand.
+    pub fn bus_effective_mute(&self, index: usize) -> bool {
+        let Some(bus) = self.buses.get(index) else {
+            return true;
+        };
+        if self.any_soloed() || self.any_bus_soloed() {
+            !bus.soloed
+        } else {
+            bus.muted
+        }
+    }
+
+    // ------------------------------------------------------------ sends
+
+    /// Whether `source` names a strip this project has.
+    fn has_strip(&self, source: StripId) -> bool {
+        match source {
+            StripId::Track(index) => index < self.tracks.len(),
+            StripId::Bus(index) => index < self.buses.len(),
+        }
+    }
+
+    /// The send with this id.
+    pub fn send(&self, id: u32) -> Option<&SendDef> {
+        self.sends.iter().find(|send| send.id == id)
+    }
+
+    /// Add a send tap, returning its id.
+    ///
+    /// Refuses anything the graph could not run: a strip that is not there, a
+    /// second tap between the same two strips, a bus feeding itself, and -- the
+    /// interesting one -- any tap that would close a loop of buses.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchTrack`], [`RouteError::NoSuchBus`],
+    /// [`RouteError::DuplicateSend`], [`RouteError::SelfSend`],
+    /// [`RouteError::Cycle`].
+    pub fn add_send(&mut self, source: StripId, dest: usize) -> Result<u32, RouteError> {
+        if dest >= self.buses.len() {
+            return Err(RouteError::NoSuchBus(dest));
+        }
+        if !self.has_strip(source) {
+            return Err(match source {
+                StripId::Track(index) => RouteError::NoSuchTrack(index),
+                StripId::Bus(index) => RouteError::NoSuchBus(index),
+            });
+        }
+        if source == StripId::Bus(dest) {
+            return Err(RouteError::SelfSend);
+        }
+        if self
+            .sends
+            .iter()
+            .any(|send| send.source == source && send.dest == dest)
+        {
+            return Err(RouteError::DuplicateSend { from: source, dest });
+        }
+        if let StripId::Bus(from) = source {
+            if let Some(loop_path) = self.cycle_through(from, dest) {
+                return Err(RouteError::Cycle(loop_path));
+            }
+        }
+        let id = self.next_send_id;
+        self.next_send_id = self.next_send_id.saturating_add(1);
+        self.sends.push(SendDef::new(id, source, dest));
+        Ok(id)
+    }
+
+    /// Remove a send by id.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchSend`].
+    pub fn remove_send(&mut self, id: u32) -> Result<SendDef, RouteError> {
+        let at = self
+            .sends
+            .iter()
+            .position(|send| send.id == id)
+            .ok_or(RouteError::NoSuchSend(id))?;
+        Ok(self.sends.remove(at))
+    }
+
+    /// Apply `edit` to one send.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchSend`].
+    pub fn edit_send(
+        &mut self,
+        id: u32,
+        edit: impl FnOnce(&mut SendDef),
+    ) -> Result<(), RouteError> {
+        let def = self
+            .sends
+            .iter_mut()
+            .find(|send| send.id == id)
+            .ok_or(RouteError::NoSuchSend(id))?;
+        edit(def);
+        Ok(())
+    }
+
+    /// The loop a tap `from -> dest` would close, written out, or `None`.
+    ///
+    /// A depth-first walk from `dest` along the bus-to-bus taps that already
+    /// exist, looking for `from`. Naming the whole path is the point: "that
+    /// would be a cycle" is not something a user can act on, and
+    /// `"bus 1 -> bus 3 -> bus 1"` is.
+    fn cycle_through(&self, from: usize, dest: usize) -> Option<String> {
+        if from == dest {
+            return Some(format!("{} -> {}", self.bus_name(from), self.bus_name(dest)));
+        }
+        // Iterative DFS with an explicit path, so a deep chain cannot blow the
+        // stack and so the path is available when the target is found.
+        let mut stack: Vec<Vec<usize>> = vec![vec![dest]];
+        let mut seen = vec![false; self.buses.len()];
+        while let Some(path) = stack.pop() {
+            let tip = *path.last().expect("a path is never empty");
+            if tip == from {
+                let mut names: Vec<String> =
+                    std::iter::once(from).chain(path).map(|bus| self.bus_name(bus)).collect();
+                names.dedup();
+                return Some(names.join(" -> "));
+            }
+            if seen.get(tip).copied().unwrap_or(true) {
+                continue;
+            }
+            seen[tip] = true;
+            for send in &self.sends {
+                if send.source == StripId::Bus(tip) {
+                    let mut next = path.clone();
+                    next.push(send.dest);
+                    stack.push(next);
+                }
+            }
+        }
+        None
+    }
+
+    /// A bus's name for an error message, or its index when it has none.
+    fn bus_name(&self, bus: usize) -> String {
+        self.buses
+            .get(bus)
+            .map_or_else(|| format!("bus {bus}"), |def| def.name.clone())
+    }
+
+    /// Drop and renumber every send after track `index` was removed.
+    ///
+    /// A track index is a position, so the same argument as [`remove_bus`] holds
+    /// at the other end of the matrix.
+    ///
+    /// [`remove_bus`]: Self::remove_bus
+    fn retarget_sends_after_removing_track(&mut self, index: usize) {
+        self.sends.retain(|send| send.source != StripId::Track(index));
+        for send in &mut self.sends {
+            if let StripId::Track(track) = send.source {
+                if track > index {
+                    send.source = StripId::Track(track - 1);
+                }
+            }
+        }
     }
 
     /// Tracks in this project.
@@ -268,6 +833,7 @@ impl Project {
         if self.tracks.len() == 1 {
             return Err(TrackError::LastTrack);
         }
+        self.retarget_sends_after_removing_track(index);
         Ok(self.tracks.remove(index))
     }
 
@@ -307,8 +873,54 @@ impl Project {
                 None => params.set_track_muted(index, true),
             }
         }
+        for index in 0..MAX_BUSES {
+            match self.buses.get(index) {
+                Some(bus) => {
+                    params.set_bus_gain(index, bus.gain());
+                    params.set_bus_pan(index, bus.pan);
+                    params.set_bus_muted(index, self.bus_effective_mute(index));
+                }
+                None => params.set_bus_muted(index, true),
+            }
+        }
+        // The whole send matrix, not only the taps that exist: a cell a tap no
+        // longer points at must not keep a level that a *later* tap between the
+        // same two strips would silently inherit.
+        for source in (0..MAX_TRACKS)
+            .map(StripId::Track)
+            .chain((0..MAX_BUSES).map(StripId::Bus))
+        {
+            for dest in 0..MAX_BUSES {
+                match self
+                    .sends
+                    .iter()
+                    .find(|send| send.source == source && send.dest == dest)
+                {
+                    Some(send) => {
+                        params.set_send_level(source, dest, send.level);
+                        params.set_send_pre(source, dest, send.pre);
+                    }
+                    None => {
+                        params.set_send_level(source, dest, 1.0);
+                        params.set_send_pre(source, dest, false);
+                    }
+                }
+            }
+        }
         params.set_master_gain(db_to_gain(self.master_gain_db));
     }
+}
+
+/// Validate a send level the webview sent.
+///
+/// # Errors
+/// [`RouteError::InvalidLevel`] -- rejected rather than clamped, so a UI bug is
+/// a status bar sentence instead of a silently different mix.
+pub fn check_send_level(level: f32) -> Result<f32, RouteError> {
+    if !level.is_finite() || !(0.0..=MAX_SEND_LEVEL).contains(&level) {
+        return Err(RouteError::InvalidLevel(level));
+    }
+    Ok(level)
 }
 
 /// Validate a fader value the webview sent.
@@ -469,6 +1081,70 @@ pub struct TrackDto {
     /// reference is still in the project and will be saved back out. See
     /// [`MissingPlugins`].
     pub missing: Option<MissingPluginDto>,
+    /// Internal effects on this track, in signal order.
+    pub inserts: Vec<InsertDto>,
+}
+
+/// One bus strip, as the webview draws it.
+///
+/// Deliberately the same field names as [`TrackDto`] where they mean the same
+/// thing, so a mixer can draw a strip from either with one component.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BusDto {
+    /// Position, which is what a send's `dest` names.
+    pub index: usize,
+    /// Stable identity across renumbering. Key a UI list on this.
+    pub id: u32,
+    pub name: String,
+    /// Absent when the engine has none -- see [`BusDef::color`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    pub gain_db: f32,
+    pub pan: f32,
+    /// The button state, not the outcome. See [`silenced`](Self::silenced).
+    pub muted: bool,
+    pub soloed: bool,
+    /// Whether this bus is actually silent right now, solo resolved across
+    /// tracks *and* buses.
+    pub silenced: bool,
+    pub inserts: Vec<InsertDto>,
+}
+
+/// One send tap, as the webview draws it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendDto {
+    /// Stable identity. **Every send command addresses this**, not a pair of
+    /// indices, so a send survives a bus being deleted above it.
+    pub id: u32,
+    /// `"track"` or `"bus"` -- the same vocabulary an insert target uses.
+    pub source_kind: String,
+    pub source_index: usize,
+    /// Index of the destination bus.
+    pub dest: usize,
+    /// Linear level, `0.0..=`[`MAX_SEND_LEVEL`]. `1.0` is unity.
+    pub level: f32,
+    /// The same level in decibels, so a knob can lay its range out
+    /// logarithmically without the UI keeping its own copy of the conversion.
+    /// [`SILENCE_DB`] at zero.
+    pub level_db: f32,
+    /// Whether the tap is taken before the source's fader, pan and mute.
+    pub pre: bool,
+}
+
+impl SendDto {
+    fn new(send: &SendDef) -> Self {
+        Self {
+            id: send.id,
+            source_kind: if send.source.is_bus() { "bus" } else { "track" }.to_owned(),
+            source_index: send.source.index(),
+            dest: send.dest,
+            level: send.level,
+            level_db: send.level_db(),
+            pre: send.pre,
+        }
+    }
 }
 
 /// The master strip.
@@ -487,6 +1163,8 @@ pub struct MasterDto {
     /// The master effect the project asked for and did not get. See
     /// [`MissingPlugins`].
     pub missing: Option<MissingPluginDto>,
+    /// Internal effects on the master bus, **ahead of** the hosted insert.
+    pub inserts: Vec<InsertDto>,
 }
 
 /// Everything the mixer panel needs in one message.
@@ -494,14 +1172,28 @@ pub struct MasterDto {
 #[serde(rename_all = "camelCase")]
 pub struct MixerStateDto {
     pub tracks: Vec<TrackDto>,
+    /// The buses, in strip order. Empty in a project that has none.
+    pub buses: Vec<BusDto>,
+    /// Every send tap, from both kinds of source. The UI draws "sends from this
+    /// strip" and "what feeds this bus" by filtering this one list, which is why
+    /// it is not split per strip -- two copies could disagree.
+    pub sends: Vec<SendDto>,
     pub master: MasterDto,
     /// Index of the track the keyboard and the source selector address.
     pub selected: usize,
     /// The engine's fixed track limit, so the UI can grey out "add".
     pub max_tracks: usize,
+    /// The engine's fixed bus limit, likewise.
+    pub max_buses: usize,
+    /// The engine's fixed per-chain insert limit.
+    pub max_inserts: usize,
     /// Fader bounds, so the UI does not keep its own copy of the scale.
     pub min_gain_db: f32,
     pub max_gain_db: f32,
+    /// Send-knob bounds: linear `0.0..=max_send_level`, which is
+    /// `min_gain_db..=max_send_db` on a dB scale.
+    pub max_send_level: f32,
+    pub max_send_db: f32,
 }
 
 /// Render `project` for the webview.
@@ -516,6 +1208,7 @@ pub fn mixer_state_dto(
     clap: &ClapBoard,
     vst3: &Vst3Board,
     missing: &MissingPlugins,
+    effects: &EffectRegistry,
 ) -> MixerStateDto {
     MixerStateDto {
         tracks: project
@@ -537,18 +1230,42 @@ pub fn mixer_state_dto(
                 clap: clap.track(index),
                 vst3: vst3.track(index),
                 missing: missing.track(index),
+                inserts: chain_dto(&track.inserts, effects),
             })
             .collect(),
+        buses: project
+            .buses
+            .iter()
+            .enumerate()
+            .map(|(index, bus)| BusDto {
+                index,
+                id: bus.id,
+                name: bus.name.clone(),
+                color: bus.color.clone(),
+                gain_db: bus.gain_db,
+                pan: bus.pan,
+                muted: bus.muted,
+                soloed: bus.soloed,
+                silenced: project.bus_effective_mute(index),
+                inserts: chain_dto(&bus.inserts, effects),
+            })
+            .collect(),
+        sends: project.sends.iter().map(SendDto::new).collect(),
         master: MasterDto {
             gain_db: project.master_gain_db,
             clap: clap.master(),
             vst3: vst3.master(),
             missing: missing.master(),
+            inserts: chain_dto(&project.master_inserts, effects),
         },
         selected,
         max_tracks: MAX_TRACKS,
+        max_buses: MAX_BUSES,
+        max_inserts: MAX_INSERTS,
         min_gain_db: SILENCE_DB,
         max_gain_db: MAX_GAIN_DB,
+        max_send_level: MAX_SEND_LEVEL,
+        max_send_db: max_send_db(),
     }
 }
 
@@ -818,6 +1535,7 @@ mod tests {
             &ClapBoard::new(),
             &Vst3Board::new(),
             &MissingPlugins::new(),
+            &EffectRegistry::new(),
         );
 
         assert_eq!(dto.tracks.len(), project.len());
@@ -849,11 +1567,17 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "buses",
                 "master",
+                "maxBuses",
                 "maxGainDb",
+                "maxInserts",
+                "maxSendDb",
+                "maxSendLevel",
                 "maxTracks",
                 "minGainDb",
                 "selected",
+                "sends",
                 "tracks"
             ]
         );
@@ -871,6 +1595,7 @@ mod tests {
                 "gainDb",
                 "id",
                 "index",
+                "inserts",
                 "missing",
                 "muted",
                 "name",
@@ -908,7 +1633,14 @@ mod tests {
         assert!(missing.track(0).is_none());
         assert!(missing.track(99).is_none(), "past the end is not a warning");
 
-        let dto = mixer_state_dto(&project, 0, &ClapBoard::new(), &Vst3Board::new(), &missing);
+        let dto = mixer_state_dto(
+            &project,
+            0,
+            &ClapBoard::new(),
+            &Vst3Board::new(),
+            &missing,
+            &EffectRegistry::new(),
+        );
         assert!(dto.tracks[0].missing.is_none());
         assert_eq!(dto.tracks[1].missing.as_ref(), Some(&warning));
         assert_eq!(
@@ -925,7 +1657,14 @@ mod tests {
         missing.clear();
         assert!(missing.is_empty());
         assert!(
-            mixer_state_dto(&project, 0, &ClapBoard::new(), &Vst3Board::new(), &missing).tracks[1]
+            mixer_state_dto(
+            &project,
+            0,
+            &ClapBoard::new(),
+            &Vst3Board::new(),
+            &missing,
+            &EffectRegistry::new(),
+        ).tracks[1]
                 .missing
                 .is_none()
         );
@@ -979,6 +1718,7 @@ mod tests {
             &board,
             &Vst3Board::new(),
             &MissingPlugins::new(),
+            &EffectRegistry::new(),
         );
         assert!(dto.tracks[0].clap.is_none());
         let placed = dto.tracks[1].clap.as_ref().expect("track 1 is hosted");

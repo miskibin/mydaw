@@ -6,6 +6,7 @@ use mydaw_ipc_bridge::{PanelManifestDto, UiSnapshot};
 use mydaw_kernel::{Kernel, KernelError};
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoPlugin, AudioIoService, StreamInfo};
 use mydaw_plugin_debug_tap::{DebugTapPlugin, DebugTapService};
+use mydaw_plugin_effects::{EffectRegistry, EffectsPlugin};
 use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin};
 use mydaw_plugin_host_vst3::{HostVst3Plugin, Vst3HostService};
 use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
@@ -20,7 +21,7 @@ use mydaw_plugin_sequencer::{
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 
-use mydaw_rt_core::{clamp_bpm, LiveNote, MAX_BPM, MAX_KEY, MIN_BPM};
+use mydaw_rt_core::{clamp_bpm, LiveNote, StripId, MAX_BPM, MAX_KEY, MIN_BPM};
 
 use crate::clap_bridge::{ClapAnswer, ClapCommand, ClapGuiStatusDto, ClapHostBridge, ClapTarget};
 use crate::dto::{
@@ -28,7 +29,8 @@ use crate::dto::{
 };
 use crate::ipc_bench;
 use crate::meters::MeterPump;
-use crate::project::{MixerStateDto, Project, TrackError};
+use crate::effects::{EffectInfoDto, InsertError, InsertTarget};
+use crate::project::{MixerStateDto, Project, RouteError, TrackError};
 use crate::project_bridge::{ProjectBridge, ProjectCommand, ProjectInfoDto};
 use crate::source::{check_bundle_path, Source, SourceDto, SourceError};
 use crate::tracks::{MixerError, TrackHost};
@@ -129,6 +131,7 @@ pub fn boot_kernel() -> Result<Kernel, KernelError> {
     kernel.add_plugin(Box::new(DebugTapPlugin::new()))?;
     kernel.add_plugin(Box::new(TestTonePlugin::new()))?;
     kernel.add_plugin(Box::new(InstrumentsPlugin::new()))?;
+    kernel.add_plugin(Box::new(EffectsPlugin::new()))?;
     kernel.add_plugin(Box::new(SamplerPlugin::new()))?;
     kernel.add_plugin(Box::new(SequencerPlugin::new()))?;
     kernel.add_plugin(Box::new(AudioIoPlugin::new()))?;
@@ -254,6 +257,9 @@ impl AppState {
         let sampler = services
             .get::<SamplerRegistry>()
             .ok_or(StartupError::MissingService("SamplerRegistry"))?;
+        let effects = services
+            .get::<EffectRegistry>()
+            .ok_or(StartupError::MissingService("EffectRegistry"))?;
         let sequencer = services
             .get::<SequencerService>()
             .ok_or(StartupError::MissingService("SequencerService"))?;
@@ -291,7 +297,12 @@ impl AppState {
             }
         };
 
-        let tracks = Arc::new(TrackHost::new(tone, instruments, Arc::clone(&sampler)));
+        let tracks = Arc::new(TrackHost::new(
+            tone,
+            instruments,
+            Arc::clone(&sampler),
+            effects,
+        ));
         // The rack and the pattern set have to agree from the first frame: the
         // sequencer plugin publishes an empty set (it has no idea what channels
         // exist), and this is the one place that knows both. A rejected seed
@@ -454,7 +465,7 @@ impl AppState {
             Err(MixerError::Source(err)) => Err(err),
             Err(MixerError::Audio(err)) => Err(SourceError::Audio(err)),
             // A bad index is a UI bug; it reaches the status bar as itself.
-            Err(MixerError::Track(err)) => Err(SourceError::MainThread(err.to_string())),
+            Err(other) => Err(SourceError::MainThread(other.to_string())),
         }
     }
 
@@ -831,6 +842,290 @@ impl AppState {
             self.vst3_bridge.board(),
             self.project_bridge.missing(),
         )
+    }
+
+    // ------------------------------------------------- buses, sends, inserts
+
+    /// The internal effect catalogue, everything a generic knob panel needs.
+    ///
+    /// Static for the process lifetime: fetch it once at startup.
+    pub fn effect_catalogue(&self) -> Vec<EffectInfoDto> {
+        crate::effects::catalogue(self.tracks.effects())
+    }
+
+    /// Install a graph from the project as it now stands.
+    ///
+    /// The one funnel every **structural** mixer edit ends in, and the whole of
+    /// the thread choice: with a hosted plugin loaded the rebuild has to happen
+    /// on a host's main thread, because the new graph needs a new node for every
+    /// instance and only that thread can make one. With nothing hosted it is a
+    /// `GraphSpec` and a queue push on the calling thread, so a headless session
+    /// never pays for a mailbox it has no server for.
+    ///
+    /// **A missing device is not an error.** A bus, a send and an insert chain
+    /// are project data, exactly as a pattern is: a user on a machine with no
+    /// sound card must still be able to build a mix, and `start_audio_with`
+    /// installs whatever the session holds when a stream comes up.
+    fn rebuild_graph(&self) -> Result<(), MixerError> {
+        // See `add_track` for why the VST3 host is asked first when both formats
+        // are loaded: it re-attaches both after the one rebuild.
+        if !self.vst3_bridge.board().is_empty() {
+            return self
+                .vst3_command(Vst3Command::Rebuild)
+                .map(|_| ())
+                .map_err(MixerError::Source);
+        }
+        if self.tracks.has_hosted_node() {
+            return self
+                .clap_command(ClapCommand::Rebuild)
+                .map(|_| ())
+                .map_err(MixerError::Source);
+        }
+        match self.tracks.install_graph(&self.audio) {
+            Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
+            Err(err) => Err(MixerError::Audio(err)),
+        }
+    }
+
+    /// Apply a structural edit to the project and rebuild the graph.
+    ///
+    /// A refused edit changes nothing and never reaches the rebuild.
+    fn edit_structure<T>(
+        &self,
+        edit: impl FnOnce(&mut Project) -> Result<T, MixerError>,
+    ) -> Result<T, MixerError> {
+        let value = self.tracks.edit_project(edit)?;
+        self.rebuild_graph()?;
+        Ok(value)
+    }
+
+    /// Add a bus. Rebuilds the graph.
+    ///
+    /// # Errors
+    /// [`RouteError::TooManyBuses`], [`RouteError::BlankName`].
+    pub fn add_bus(&self, name: Option<String>) -> Result<usize, MixerError> {
+        self.edit_structure(|project| project.add_bus(name).map_err(MixerError::from))
+    }
+
+    /// Remove a bus, and every send at either end of it. Rebuilds the graph.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn remove_bus(&self, bus: usize) -> Result<(), MixerError> {
+        self.edit_structure(|project| project.remove_bus(bus).map_err(MixerError::from))
+            .map(|_| ())
+    }
+
+    /// Rename a bus. No rebuild -- a name is not in the graph.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`], [`RouteError::BlankName`].
+    pub fn rename_bus(&self, bus: usize, name: &str) -> Result<(), RouteError> {
+        if name.trim().is_empty() {
+            return Err(RouteError::BlankName);
+        }
+        self.tracks
+            .edit_project(|project| project.edit_bus(bus, |def| def.name = name.to_owned()))
+    }
+
+    /// Set or clear a bus's colour. No rebuild.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn set_bus_color(&self, bus: usize, color: Option<String>) -> Result<(), RouteError> {
+        let color = color.filter(|value| !value.trim().is_empty());
+        self.tracks
+            .edit_project(|project| project.edit_bus(bus, |def| def.color = color))
+    }
+
+    /// Set a bus's fader, in dB. No rebuild: an atomic, like a track's.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`], or [`TrackError::InvalidGain`] as a sentence.
+    pub fn set_bus_gain_db(&self, bus: usize, db: f32) -> Result<(), MixerError> {
+        let db = crate::project::check_gain_db(db)?;
+        self.tracks
+            .edit_project(|project| project.edit_bus(bus, |def| def.gain_db = db))?;
+        Ok(())
+    }
+
+    /// Set a bus's pan. No rebuild.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`] or [`TrackError::InvalidPan`].
+    pub fn set_bus_pan(&self, bus: usize, pan: f32) -> Result<(), MixerError> {
+        let pan = crate::project::check_pan(pan)?;
+        self.tracks
+            .edit_project(|project| project.edit_bus(bus, |def| def.pan = pan))?;
+        Ok(())
+    }
+
+    /// Mute or unmute a bus. No rebuild.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn set_bus_muted(&self, bus: usize, muted: bool) -> Result<(), RouteError> {
+        self.tracks
+            .edit_project(|project| project.edit_bus(bus, |def| def.muted = muted))
+    }
+
+    /// Solo or un-solo a bus. No rebuild.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn set_bus_soloed(&self, bus: usize, soloed: bool) -> Result<(), RouteError> {
+        self.tracks
+            .edit_project(|project| project.edit_bus(bus, |def| def.soloed = soloed))
+    }
+
+    /// Add a send tap, returning its id. Rebuilds the graph.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`], [`RouteError::NoSuchTrack`],
+    /// [`RouteError::DuplicateSend`], [`RouteError::SelfSend`] or
+    /// [`RouteError::Cycle`] -- and on a refusal nothing is rebuilt.
+    pub fn add_send(&self, source: StripId, dest: usize) -> Result<u32, MixerError> {
+        self.edit_structure(|project| project.add_send(source, dest).map_err(MixerError::from))
+    }
+
+    /// Remove a send tap. Rebuilds the graph.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchSend`].
+    pub fn remove_send(&self, id: u32) -> Result<(), MixerError> {
+        self.edit_structure(|project| project.remove_send(id).map_err(MixerError::from))
+            .map(|_| ())
+    }
+
+    /// Set a send's level. **One atomic store; no rebuild.**
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchSend`], [`RouteError::InvalidLevel`].
+    pub fn set_send_level(&self, id: u32, level: f32) -> Result<(), RouteError> {
+        self.tracks.set_send_level(id, level)
+    }
+
+    /// Move a send between pre- and post-fader. **One atomic store.**
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchSend`].
+    pub fn set_send_pre(&self, id: u32, pre: bool) -> Result<(), RouteError> {
+        self.tracks.set_send_pre(id, pre)
+    }
+
+    /// Add an internal effect to a chain, returning where it landed. Rebuilds.
+    ///
+    /// # Errors
+    /// [`InsertError::UnknownEffect`], [`InsertError::TooManyInserts`], or a
+    /// target that is not there.
+    pub fn add_insert(
+        &self,
+        target: InsertTarget,
+        type_id: &str,
+        position: Option<usize>,
+    ) -> Result<usize, MixerError> {
+        let effects = Arc::clone(self.tracks.effects());
+        self.edit_structure(|project| {
+            project
+                .add_insert(target, type_id, position, &effects)
+                .map_err(MixerError::from)
+        })
+    }
+
+    /// Remove an insert. Rebuilds.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchInsert`], or a target that is not there.
+    pub fn remove_insert(&self, target: InsertTarget, index: usize) -> Result<(), MixerError> {
+        self.edit_structure(|project| {
+            project
+                .remove_insert(target, index)
+                .map_err(MixerError::from)
+        })
+        .map(|_| ())
+    }
+
+    /// Move an insert within its chain. Rebuilds.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchInsert`], or a target that is not there.
+    pub fn move_insert(
+        &self,
+        target: InsertTarget,
+        from: usize,
+        to: usize,
+    ) -> Result<(), MixerError> {
+        self.edit_structure(|project| {
+            project
+                .move_insert(target, from, to)
+                .map_err(MixerError::from)
+        })
+    }
+
+    /// Set one insert parameter, returning **what was actually stored**.
+    ///
+    /// One atomic store: no rebuild, no allocation. The answer is the sanitised
+    /// value, so a knob that sent 40 kHz to a 20 Hz..20 kHz parameter can snap
+    /// itself to the top rather than draw where the engine is not.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchInsert`] or [`InsertError::NoSuchParam`].
+    pub fn set_insert_param(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        param_id: &str,
+        value: f32,
+    ) -> Result<f32, InsertError> {
+        self.tracks
+            .set_insert_param(target, index, param_id, value)
+    }
+
+    /// Turn one insert's bypass on or off.
+    ///
+    /// A parameter like any other -- every effect declares `bypass` and does the
+    /// 10 ms equal-gain crossfade itself -- so this is one atomic store and no
+    /// rebuild. It is offered by name because every strip draws the button.
+    ///
+    /// # Errors
+    /// As [`set_insert_param`](Self::set_insert_param).
+    pub fn set_insert_bypass(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        bypassed: bool,
+    ) -> Result<(), InsertError> {
+        self.tracks
+            .set_insert_param(
+                target,
+                index,
+                mydaw_plugin_effects::BYPASS_PARAM,
+                f32::from(u8::from(bypassed)),
+            )
+            .map(|_| ())
+    }
+
+    /// One insert's live meters, for a panel polling at frame rate.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchInsert`].
+    pub fn insert_readouts(
+        &self,
+        target: InsertTarget,
+        index: usize,
+    ) -> Result<Vec<crate::effects::ParamValueDto>, InsertError> {
+        self.tracks.insert_readouts(target, index)
+    }
+
+    /// Every meter on one chain.
+    ///
+    /// # Errors
+    /// A target that is not there.
+    pub fn chain_readouts(
+        &self,
+        target: InsertTarget,
+    ) -> Result<Vec<crate::effects::InsertReadoutsDto>, InsertError> {
+        self.tracks.chain_readouts(target)
     }
 
     // -------------------------------------------------------------- projects
@@ -1400,6 +1695,7 @@ mod tests {
                 "debug-tap",
                 "test-tone",
                 "instruments",
+                "effects",
                 "sampler",
                 "sequencer",
                 "host-clap",
@@ -1421,7 +1717,7 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let snapshot = ui_snapshot(&kernel);
 
-        assert_eq!(snapshot.plugins.len(), 10);
+        assert_eq!(snapshot.plugins.len(), 11);
         assert!(snapshot
             .plugins
             .iter()

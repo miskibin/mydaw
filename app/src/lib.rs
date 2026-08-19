@@ -57,6 +57,7 @@ pub mod clap_host;
 mod commands;
 pub mod debug_capture;
 mod dto;
+pub mod effects;
 mod graph;
 pub mod insert;
 pub mod ipc_bench;
@@ -87,6 +88,11 @@ pub use dto::{
     PatternSetDto, PatternSummaryDto, PlaylistDto, PlaylistTrackDto, SequencerStateDto, StepDto,
     StepRowDto, StreamInfoDto, TrackMeterDto, Vst3PluginInfoDto,
 };
+pub use effects::{
+    catalogue, chain_dto, chain_readouts_dto, insert_dto, EffectInfoDto, InsertDef, InsertDto,
+    InsertEdit, InsertError, InsertReadoutsDto, InsertTarget, ParamDefDto, ParamValueDto,
+    ReadoutDefDto, MAX_INSERTS,
+};
 pub use graph::{engine_graph, source_chain, track_chain, TransportGate};
 pub use insert::{insert_slot, InsertHandle, InsertSlot};
 pub use ipc_bench::{
@@ -95,8 +101,9 @@ pub use ipc_bench::{
 };
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
 pub use project::{
-    check_gain_db, check_pan, mixer_state_dto, MasterDto, MissingPluginDto, MissingPlugins,
-    MixerStateDto, Project, TrackDef, TrackDto, TrackError,
+    check_gain_db, check_pan, check_send_level, mixer_state_dto, BusDef, BusDto, MasterDto,
+    MissingPluginDto, MissingPlugins, MixerStateDto, Project, RouteError, SendDef, SendDto,
+    TrackDef, TrackDto, TrackError,
 };
 pub use project_bridge::{
     ProjectAnswer, ProjectBridge, ProjectCommand, ProjectInfoDto, PROJECT_TIMEOUT,
@@ -271,6 +278,27 @@ pub fn run() -> ExitCode {
             commands::set_track_source,
             commands::add_track,
             commands::remove_track,
+            // --- buses, sends and insert chains ---
+            commands::get_effects,
+            commands::add_bus,
+            commands::remove_bus,
+            commands::rename_bus,
+            commands::set_bus_color,
+            commands::set_bus_gain,
+            commands::set_bus_pan,
+            commands::set_bus_mute,
+            commands::set_bus_solo,
+            commands::add_send,
+            commands::remove_send,
+            commands::set_send_level,
+            commands::set_send_pre,
+            commands::add_insert,
+            commands::remove_insert,
+            commands::move_insert,
+            commands::set_insert_param,
+            commands::set_insert_bypass,
+            commands::get_insert_readouts,
+            commands::get_chain_readouts,
             // Hosted CLAP plugins: the picker, the master insert, the editors
             // and the state groundwork the project file will use.
             commands::set_track_source_clap,

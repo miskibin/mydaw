@@ -60,6 +60,37 @@ use crate::{AudioBuffers, CHANNELS};
 /// address, which is not a coincidence: a note channel *is* a track index.
 pub const MAX_TRACKS: usize = 16;
 
+/// Buses the engine can run at once.
+///
+/// Fixed for exactly the reason [`MAX_TRACKS`] is: every piece of per-bus state
+/// the audio thread touches -- the parameter block, the send matrix, the peak
+/// block, the meter frame -- is a `[_; MAX_BUSES]`, so nothing on the RT side
+/// ever grows. Eight is the number of aux/group buses a mixer of sixteen
+/// channels needs before the *routing* rather than the count becomes the
+/// limitation, and it keeps the send matrix (see [`MixerParams`]) at
+/// `(16 + 8) x 8` = 192 entries, which is under two kilobytes.
+pub const MAX_BUSES: usize = 8;
+
+/// Strips a send can originate from: every track plus every bus.
+///
+/// The send matrix is indexed by [`StripId::slot`], so this is its first
+/// dimension.
+pub const MAX_SEND_SOURCES: usize = MAX_TRACKS + MAX_BUSES;
+
+/// Loudest a send tap may be, as a linear multiplier.
+///
+/// `1.0` is unity -- the tap carries exactly what the strip produced -- and the
+/// headroom above it is the +1.94 dB a send knob is conventionally allowed to
+/// push, so that a reverb can be driven harder than its source without touching
+/// the source. Anything above this is a mistake rather than a gesture, and is
+/// clamped.
+pub const MAX_SEND_LEVEL: f32 = 1.25;
+
+/// [`MAX_SEND_LEVEL`] in decibels: `+1.9382`.
+pub fn max_send_db() -> f32 {
+    gain_to_db(MAX_SEND_LEVEL)
+}
+
 /// How long a gain, pan or mute change takes to complete, in seconds.
 ///
 /// 10 ms is the standard mixer fade: below the ~20 ms at which a level change
@@ -135,6 +166,96 @@ pub const MAX_GAIN_DB: f32 = 6.0;
 
 // ---------------------------------------------------------------- parameters
 
+/// Which strip a send comes from.
+///
+/// Tracks and buses are separate index spaces everywhere a user can see them --
+/// "track 3" and "bus 3" are different strips -- so a send's source has to say
+/// *which* three it means. [`slot`](Self::slot) flattens the pair into the one
+/// number the send matrix is indexed by, and nothing outside this module needs
+/// to know what that number is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum StripId {
+    /// A track, by index. Also its note channel -- see [`crate::graph`].
+    Track(usize),
+    /// A bus, by index.
+    Bus(usize),
+}
+
+impl StripId {
+    /// Row of the send matrix this strip owns, or `None` past the fixed limits.
+    ///
+    /// Tracks occupy `0..MAX_TRACKS` and buses the [`MAX_BUSES`] rows after
+    /// them, so the two never collide and neither has to be renumbered when the
+    /// other grows.
+    pub const fn slot(self) -> Option<usize> {
+        match self {
+            Self::Track(index) if index < MAX_TRACKS => Some(index),
+            Self::Bus(index) if index < MAX_BUSES => Some(MAX_TRACKS + index),
+            _ => None,
+        }
+    }
+
+    /// Whether this names a bus.
+    pub const fn is_bus(self) -> bool {
+        matches!(self, Self::Bus(_))
+    }
+
+    /// The index, whichever kind this is.
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Track(index) | Self::Bus(index) => index,
+        }
+    }
+}
+
+impl std::fmt::Display for StripId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Track(index) => write!(f, "track {index}"),
+            Self::Bus(index) => write!(f, "bus {index}"),
+        }
+    }
+}
+
+/// One send tap's live values, as the audio thread reads them.
+///
+/// Both are *levels*, not events, so both are atomics for the reason the whole
+/// of [`MixerParams`] is: a dropped queue entry would leave a send at the wrong
+/// level for ever. **Changing either one costs no graph rebuild** -- the tap is
+/// already in the compiled graph, and this is all it reads.
+///
+/// Whether a tap *exists* is structural and does live in the graph; see
+/// [`GraphSpec::push_send`](crate::GraphSpec::push_send).
+#[derive(Debug)]
+pub struct SendParams {
+    /// Linear level, `0.0..=`[`MAX_SEND_LEVEL`], as `f32::to_bits`.
+    level: AtomicU32,
+    /// Whether the tap is taken **before** the source strip's fader, pan and
+    /// mute. See [`crate::graph`] for exactly where "before" is.
+    pre: AtomicBool,
+}
+
+impl Default for SendParams {
+    /// Unity, post-fader -- the setting a freshly created send should have, and
+    /// the one a matrix cell nobody has touched must not be able to make audible
+    /// on its own (no tap exists until the graph carries one).
+    fn default() -> Self {
+        Self {
+            level: AtomicU32::new(1.0_f32.to_bits()),
+            pre: AtomicBool::new(false),
+        }
+    }
+}
+
+/// A send level the graph can safely multiply by.
+fn sane_send_level(level: f32) -> f32 {
+    if level.is_finite() && level >= 0.0 {
+        level.min(MAX_SEND_LEVEL)
+    } else {
+        0.0
+    }
+}
+
 /// One track's mixer parameters, as the audio thread reads them.
 ///
 /// `muted` is the **effective** mute: solo is resolved on the non-RT side and
@@ -180,6 +301,18 @@ fn store_f32(cell: &AtomicU32, value: f32) {
 #[derive(Debug)]
 pub struct MixerParams {
     tracks: [TrackParams; MAX_TRACKS],
+    /// Every bus's strip. Identical in shape to a track's, because a bus *is* a
+    /// strip: it sums, it has a fader, a pan and a mute, and it has its own
+    /// insert chain. What it does not have is a source.
+    buses: [TrackParams; MAX_BUSES],
+    /// The send matrix, `[source slot][destination bus]`.
+    ///
+    /// A fixed matrix rather than a list, so that a send's level and pre/post
+    /// flag can be written from a command thread and read from the audio thread
+    /// **without either of them agreeing on an index first**. The graph carries
+    /// the taps that exist and looks each one's cell up by the pair it already
+    /// knows; a cell no tap points at is simply never read.
+    sends: [[SendParams; MAX_BUSES]; MAX_SEND_SOURCES],
     /// Linear master gain, as `f32::to_bits`.
     master_gain: AtomicU32,
 }
@@ -188,6 +321,8 @@ impl Default for MixerParams {
     fn default() -> Self {
         Self {
             tracks: std::array::from_fn(|_| TrackParams::default()),
+            buses: std::array::from_fn(|_| TrackParams::default()),
+            sends: std::array::from_fn(|_| std::array::from_fn(|_| SendParams::default())),
             master_gain: AtomicU32::new(1.0_f32.to_bits()),
         }
     }
@@ -273,6 +408,128 @@ impl MixerParams {
         let pan = pan_gains(load_f32(&params.pan));
         [gain * pan[0], gain * pan[1]]
     }
+
+    // ----------------------------------------------------------------- buses
+
+    /// Linear gain of `bus`, or `0.0` past [`MAX_BUSES`].
+    pub fn bus_gain(&self, bus: usize) -> f32 {
+        self.buses.get(bus).map_or(0.0, |b| load_f32(&b.gain))
+    }
+
+    /// Set the linear gain of `bus`. Out-of-range indices are ignored.
+    pub fn set_bus_gain(&self, bus: usize, gain: f32) {
+        if let Some(params) = self.buses.get(bus) {
+            store_f32(&params.gain, sane_gain(gain));
+        }
+    }
+
+    /// Pan of `bus`, or `0.0` past [`MAX_BUSES`].
+    pub fn bus_pan(&self, bus: usize) -> f32 {
+        self.buses.get(bus).map_or(0.0, |b| load_f32(&b.pan))
+    }
+
+    /// Set the pan of `bus`, clamped to `-1.0..=1.0`.
+    pub fn set_bus_pan(&self, bus: usize, pan: f32) {
+        if let Some(params) = self.buses.get(bus) {
+            let pan = if pan.is_finite() {
+                pan.clamp(-1.0, 1.0)
+            } else {
+                0.0
+            };
+            store_f32(&params.pan, pan);
+        }
+    }
+
+    /// Whether `bus` is effectively muted.
+    pub fn bus_muted(&self, bus: usize) -> bool {
+        self.buses
+            .get(bus)
+            .is_some_and(|b| b.muted.load(Ordering::Relaxed))
+    }
+
+    /// Set the effective mute of `bus`. Solo is resolved by the caller, exactly
+    /// as it is for a track.
+    pub fn set_bus_muted(&self, bus: usize, muted: bool) {
+        if let Some(params) = self.buses.get(bus) {
+            params.muted.store(muted, Ordering::Relaxed);
+        }
+    }
+
+    /// The channel coefficients `bus` should be heading towards this block.
+    pub fn bus_target(&self, bus: usize) -> [f32; CHANNELS] {
+        let Some(params) = self.buses.get(bus) else {
+            return [0.0; CHANNELS];
+        };
+        if params.muted.load(Ordering::Relaxed) {
+            return [0.0; CHANNELS];
+        }
+        let gain = load_f32(&params.gain);
+        let pan = pan_gains(load_f32(&params.pan));
+        [gain * pan[0], gain * pan[1]]
+    }
+
+    // ----------------------------------------------------------------- sends
+
+    /// The matrix cell for a `(source, destination bus)` pair.
+    fn send_cell(&self, source: StripId, dest: usize) -> Option<&SendParams> {
+        self.sends.get(source.slot()?)?.get(dest)
+    }
+
+    /// Linear level of the tap from `source` into bus `dest`.
+    ///
+    /// `0.0` for a pair outside the fixed limits, which is also what a tap that
+    /// does not exist would contribute.
+    pub fn send_level(&self, source: StripId, dest: usize) -> f32 {
+        self.send_cell(source, dest)
+            .map_or(0.0, |cell| load_f32(&cell.level))
+    }
+
+    /// Set a tap's level, clamped to `0.0..=`[`MAX_SEND_LEVEL`].
+    ///
+    /// **No graph rebuild.** The audio thread reads this once per block and
+    /// ramps towards it, so a send knob drag costs exactly what a fader drag
+    /// costs.
+    pub fn set_send_level(&self, source: StripId, dest: usize, level: f32) {
+        if let Some(cell) = self.send_cell(source, dest) {
+            store_f32(&cell.level, sane_send_level(level));
+        }
+    }
+
+    /// Whether the tap from `source` into bus `dest` is taken before the
+    /// source's fader.
+    pub fn send_pre(&self, source: StripId, dest: usize) -> bool {
+        self.send_cell(source, dest)
+            .is_some_and(|cell| cell.pre.load(Ordering::Relaxed))
+    }
+
+    /// Move a tap between pre- and post-fader. **No graph rebuild.**
+    ///
+    /// The tap itself is in the graph twice over -- once reading the pre-fader
+    /// buffer and once the post-fader one -- and this atomic says which of the
+    /// two is live. See [`crate::graph`].
+    pub fn set_send_pre(&self, source: StripId, dest: usize, pre: bool) {
+        if let Some(cell) = self.send_cell(source, dest) {
+            cell.pre.store(pre, Ordering::Relaxed);
+        }
+    }
+
+    /// The pre- and post-fader coefficients a tap should be heading towards.
+    ///
+    /// Exactly one of the two is the level and the other is zero, so the flag
+    /// is a **crossfade between two taps** rather than a branch that reroutes
+    /// audio on a block boundary: flipping pre/post mid-play ramps one tap down
+    /// while the other ramps up, and neither steps.
+    pub fn send_targets(&self, source: StripId, dest: usize) -> (f32, f32) {
+        let Some(cell) = self.send_cell(source, dest) else {
+            return (0.0, 0.0);
+        };
+        let level = load_f32(&cell.level);
+        if cell.pre.load(Ordering::Relaxed) {
+            (level, 0.0)
+        } else {
+            (0.0, level)
+        }
+    }
 }
 
 /// A gain the strip can safely multiply by: finite and non-negative.
@@ -351,6 +608,39 @@ impl TrackStrip {
         dst: &mut AudioBuffers,
         target: [f32; CHANNELS],
     ) -> [f32; CHANNELS] {
+        self.run::<true>(src, dst, target)
+    }
+
+    /// Scale `src` towards `target` and **write** it over `dst`, returning the
+    /// per-channel peak of what was written.
+    ///
+    /// The same arithmetic as [`mix_into`](Self::mix_into) with an assignment
+    /// where that has an accumulation, so the two are bit-identical against a
+    /// silent destination. It exists because a **post-fader send** needs the
+    /// post-strip signal as a *value*: the master sum consumes it, but so does
+    /// every bus the strip taps into, and computing it once into a scratch
+    /// buffer is the only way to hand the same samples to more than one
+    /// destination.
+    ///
+    /// # RT safety
+    /// As [`mix_into`](Self::mix_into).
+    pub fn apply_into(
+        &mut self,
+        src: &AudioBuffers,
+        dst: &mut AudioBuffers,
+        target: [f32; CHANNELS],
+    ) -> [f32; CHANNELS] {
+        self.run::<false>(src, dst, target)
+    }
+
+    /// `ADD` chooses accumulation or assignment. A const parameter rather than a
+    /// `bool` argument so the branch is gone before the loop is.
+    fn run<const ADD: bool>(
+        &mut self,
+        src: &AudioBuffers,
+        dst: &mut AudioBuffers,
+        target: [f32; CHANNELS],
+    ) -> [f32; CHANNELS] {
         let source = src.as_slices();
         let mut destination = dst.as_mut_slices();
         let mut peak = [0.0_f32; CHANNELS];
@@ -382,7 +672,11 @@ impl TrackStrip {
                 for frame in 0..frames {
                     let value = input[frame] * gain;
                     peak[channel] = peak[channel].max(value.abs());
-                    output[frame] += value;
+                    if ADD {
+                        output[frame] += value;
+                    } else {
+                        output[frame] = value;
+                    }
                 }
             } else {
                 // The step is derived from the frames *left*, so the ramp always
@@ -396,7 +690,11 @@ impl TrackStrip {
                     }
                     let value = input[frame] * gain;
                     peak[channel] = peak[channel].max(value.abs());
-                    output[frame] += value;
+                    if ADD {
+                        output[frame] += value;
+                    } else {
+                        output[frame] = value;
+                    }
                 }
                 self.current[channel] = gain;
                 self.remaining[channel] = remaining;
@@ -510,57 +808,60 @@ impl TrackPeak {
     }
 }
 
-/// Every track's peak for one block, in a fixed array the audio thread owns.
+/// Every strip's peak for one block, in a fixed array the audio thread owns.
 ///
 /// `Copy`, so the meter path reads it out of the graph by value with no lock and
-/// no queue of its own.
+/// no queue of its own. `N` is the fixed strip count of whatever it is
+/// measuring -- [`TrackPeaks`] for the tracks, [`BusPeaks`] for the buses. One
+/// type rather than two identical ones, because the two differ in exactly one
+/// number and a copy of this that drifted would be a meter that lies.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct TrackPeaks {
-    peaks: [TrackPeak; MAX_TRACKS],
+pub struct PeakBlock<const N: usize> {
+    peaks: [TrackPeak; N],
     count: usize,
 }
 
-impl Default for TrackPeaks {
+impl<const N: usize> Default for PeakBlock<N> {
     fn default() -> Self {
         Self::SILENT
     }
 }
 
-impl TrackPeaks {
-    /// No tracks, no level.
+impl<const N: usize> PeakBlock<N> {
+    /// No strips, no level.
     pub const SILENT: Self = Self {
-        peaks: [TrackPeak::SILENT; MAX_TRACKS],
+        peaks: [TrackPeak::SILENT; N],
         count: 0,
     };
 
-    /// A block of `count` silent tracks.
+    /// A block of `count` silent strips.
     pub fn empty(count: usize) -> Self {
         Self {
-            peaks: [TrackPeak::SILENT; MAX_TRACKS],
-            count: count.min(MAX_TRACKS),
+            peaks: [TrackPeak::SILENT; N],
+            count: count.min(N),
         }
     }
 
-    /// Tracks the graph that produced this block was running.
+    /// Strips the graph that produced this block was running.
     pub fn count(&self) -> usize {
         self.count
     }
 
-    /// Peak of `track`, or [`TrackPeak::SILENT`] past the end.
-    pub fn get(&self, track: usize) -> TrackPeak {
-        if track < self.count {
-            self.peaks[track]
+    /// Peak of `strip`, or [`TrackPeak::SILENT`] past the end.
+    pub fn get(&self, strip: usize) -> TrackPeak {
+        if strip < self.count {
+            self.peaks[strip]
         } else {
             TrackPeak::SILENT
         }
     }
 
-    /// Record `track`'s peak. Indices past [`MAX_TRACKS`] are ignored.
-    pub fn set(&mut self, track: usize, peak: TrackPeak) {
-        if track < MAX_TRACKS {
-            self.peaks[track] = peak;
-            if track >= self.count {
-                self.count = track + 1;
+    /// Record `strip`'s peak. Indices past the fixed limit are ignored.
+    pub fn set(&mut self, strip: usize, peak: TrackPeak) {
+        if strip < N {
+            self.peaks[strip] = peak;
+            if strip >= self.count {
+                self.count = strip + 1;
             }
         }
     }
@@ -570,6 +871,12 @@ impl TrackPeaks {
         &self.peaks[..self.count]
     }
 }
+
+/// Every track's post-strip peak for one block.
+pub type TrackPeaks = PeakBlock<MAX_TRACKS>;
+
+/// Every bus's post-strip peak for one block.
+pub type BusPeaks = PeakBlock<MAX_BUSES>;
 
 #[cfg(test)]
 mod tests {
@@ -854,6 +1161,149 @@ mod tests {
         assert_eq!(peaks.count(), 2);
         assert_eq!(TrackPeaks::default(), TrackPeaks::SILENT);
         assert_eq!(TrackPeaks::empty(999).count(), MAX_TRACKS);
+    }
+
+    #[test]
+    fn a_strip_id_maps_onto_its_own_row_of_the_send_matrix_and_never_anothers() {
+        // The one thing that would be catastrophic and silent: track n and bus n
+        // sharing a row, so moving a track's reverb send moved a bus's.
+        let mut slots: Vec<usize> = (0..MAX_TRACKS)
+            .map(|i| StripId::Track(i).slot().unwrap())
+            .chain((0..MAX_BUSES).map(|i| StripId::Bus(i).slot().unwrap()))
+            .collect();
+        assert_eq!(slots.len(), MAX_SEND_SOURCES);
+        slots.sort_unstable();
+        slots.dedup();
+        assert_eq!(slots.len(), MAX_SEND_SOURCES, "two strips share a row");
+        assert_eq!(*slots.last().unwrap(), MAX_SEND_SOURCES - 1);
+
+        assert_eq!(StripId::Track(MAX_TRACKS).slot(), None);
+        assert_eq!(StripId::Bus(MAX_BUSES).slot(), None);
+        assert!(StripId::Bus(0).is_bus() && !StripId::Track(0).is_bus());
+        assert_eq!(StripId::Bus(3).index(), 3);
+        assert_eq!(StripId::Track(2).to_string(), "track 2");
+        assert_eq!(StripId::Bus(2).to_string(), "bus 2");
+    }
+
+    #[test]
+    fn a_fresh_send_matrix_is_unity_and_post_fader_and_refuses_nonsense() {
+        let params = MixerParams::new();
+        for source in [StripId::Track(0), StripId::Bus(7)] {
+            assert_eq!(params.send_level(source, 0), 1.0);
+            assert!(!params.send_pre(source, 0));
+            assert_eq!(params.send_targets(source, 0), (0.0, 1.0));
+        }
+
+        params.set_send_level(StripId::Track(1), 2, 0.4);
+        assert_eq!(params.send_level(StripId::Track(1), 2), 0.4);
+        assert_eq!(
+            params.send_level(StripId::Bus(1), 2),
+            1.0,
+            "bus 1 must not share track 1's cell"
+        );
+
+        params.set_send_level(StripId::Track(1), 2, 9.0);
+        assert_eq!(
+            params.send_level(StripId::Track(1), 2),
+            MAX_SEND_LEVEL,
+            "clamped to the headroom a send knob has"
+        );
+        params.set_send_level(StripId::Track(1), 2, f32::NAN);
+        assert_eq!(params.send_level(StripId::Track(1), 2), 0.0);
+        params.set_send_level(StripId::Track(1), 2, -1.0);
+        assert_eq!(params.send_level(StripId::Track(1), 2), 0.0);
+
+        // Out-of-range pairs are inert rather than panicking: the indices come
+        // from a webview.
+        params.set_send_level(StripId::Track(MAX_TRACKS), 0, 0.5);
+        assert_eq!(params.send_level(StripId::Track(MAX_TRACKS), 0), 0.0);
+        assert_eq!(params.send_targets(StripId::Bus(MAX_BUSES), 0), (0.0, 0.0));
+        assert!(!params.send_pre(StripId::Track(0), MAX_BUSES));
+    }
+
+    #[test]
+    fn the_pre_post_flag_hands_the_level_to_exactly_one_of_the_two_taps() {
+        let params = MixerParams::new();
+        params.set_send_level(StripId::Track(0), 1, 0.6);
+        assert_eq!(params.send_targets(StripId::Track(0), 1), (0.0, 0.6));
+        params.set_send_pre(StripId::Track(0), 1, true);
+        assert_eq!(params.send_targets(StripId::Track(0), 1), (0.6, 0.0));
+    }
+
+    #[test]
+    fn a_bus_strip_behaves_exactly_as_a_track_strip_does() {
+        let params = MixerParams::new();
+        for bus in 0..MAX_BUSES {
+            assert_eq!(params.bus_gain(bus), 1.0);
+            assert_eq!(params.bus_pan(bus), 0.0);
+            assert!(!params.bus_muted(bus));
+            assert_eq!(params.bus_target(bus), [1.0, 1.0]);
+        }
+        params.set_bus_gain(2, 0.5);
+        params.set_bus_pan(2, -1.0);
+        let target = params.bus_target(2);
+        assert!((target[0] - 0.5 * pan_gains(-1.0)[0]).abs() < 1e-6);
+        params.set_bus_muted(2, true);
+        assert_eq!(params.bus_target(2), [0.0, 0.0]);
+
+        params.set_bus_gain(2, f32::NAN);
+        assert_eq!(params.bus_gain(2), 0.0);
+        params.set_bus_pan(2, 9.0);
+        assert_eq!(params.bus_pan(2), 1.0);
+
+        params.set_bus_gain(MAX_BUSES, 0.5);
+        assert_eq!(params.bus_gain(MAX_BUSES), 0.0);
+        assert_eq!(params.bus_target(MAX_BUSES), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn writing_a_strip_is_bit_identical_to_summing_it_into_silence() {
+        // What lets a post-fader send exist at all: the value the master gets is
+        // the same whether it was accumulated in one pass or produced into a
+        // scratch buffer and added afterwards.
+        let src = buffers_filled(512, 0.371);
+        let mut summed = silent(512);
+        let mut written = silent(512);
+        let mut a = TrackStrip::new(SR, [1.0, 1.0]);
+        let mut b = TrackStrip::new(SR, [1.0, 1.0]);
+        let peak_a = a.mix_into(&src, &mut summed, [0.25, 0.75]);
+        let peak_b = b.apply_into(&src, &mut written, [0.25, 0.75]);
+        assert_eq!(peak_a, peak_b);
+        assert_eq!(summed.as_slices()[0], written.as_slices()[0]);
+        assert_eq!(summed.as_slices()[1], written.as_slices()[1]);
+    }
+
+    #[test]
+    fn writing_a_strip_replaces_whatever_was_in_the_destination() {
+        let src = buffers_filled(8, 1.0);
+        let mut dst = buffers_filled(8, 0.5);
+        let mut strip = TrackStrip::new(SR, [1.0, 1.0]);
+        strip.apply_into(&src, &mut dst, [1.0, 1.0]);
+        assert!(dst.as_slices()[0].iter().all(|s| *s == 1.0));
+    }
+
+    #[test]
+    fn the_send_headroom_is_the_documented_two_decibels() {
+        assert!((max_send_db() - 1.9382).abs() < 0.001, "{}", max_send_db());
+        assert_eq!(MAX_SEND_LEVEL, 1.25);
+    }
+
+    #[test]
+    fn bus_peaks_are_the_same_machinery_as_track_peaks_with_their_own_limit() {
+        let mut peaks = BusPeaks::empty(2);
+        assert_eq!(peaks.count(), 2);
+        peaks.set(
+            1,
+            TrackPeak {
+                peak_l: 0.5,
+                peak_r: 0.25,
+            },
+        );
+        assert_eq!(peaks.get(1).max(), 0.5);
+        peaks.set(MAX_BUSES, TrackPeak { peak_l: 1.0, peak_r: 1.0 });
+        assert_eq!(peaks.count(), 2, "a write past the array is ignored");
+        assert_eq!(BusPeaks::empty(999).count(), MAX_BUSES);
+        assert_eq!(BusPeaks::default(), BusPeaks::SILENT);
     }
 
     #[test]

@@ -438,6 +438,7 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
         // -size copy out of the graph -- no second pass over the audio, and no
         // queue of its own.
         frame.set_track_peaks(&state.graph.track_peaks());
+        frame.set_bus_peaks(&state.graph.bus_peaks());
         if meters.push(frame).is_err() {
             state
                 .stats

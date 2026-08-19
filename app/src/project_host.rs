@@ -346,7 +346,7 @@ impl ProjectHost {
     ) -> Result<LoadReport, ProjectFileError> {
         // Validate everything first, so a file the engine cannot run leaves the
         // session exactly as it was rather than half replaced.
-        let (project, selected) = file.to_project()?;
+        let (project, selected) = file.to_project(session.tracks.effects())?;
         let (patterns, playlist) = file.to_song()?;
         let mode = file.to_play_mode();
         let bpm = file.to_bpm()?;
@@ -802,6 +802,7 @@ mod tests {
                     Arc::new(TestToneFactory::new()),
                     Arc::new(InstrumentRegistry::new()),
                     Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
+                    Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
                 )),
                 audio: Arc::new(AudioIoService::default()),
                 sequencer: Arc::new(SequencerService::new()),
@@ -860,6 +861,7 @@ mod tests {
             muted: false,
             soloed: false,
             state_blob: String::new(),
+            inserts: Vec::new(),
         }
     }
 

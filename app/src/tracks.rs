@@ -46,19 +46,23 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
+use mydaw_plugin_effects::EffectRegistry;
 use mydaw_plugin_instruments::InstrumentRegistry;
 use mydaw_plugin_sampler::SamplerRegistry;
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_rt_core::basedrop::Handle;
-use mydaw_rt_core::{GraphSpec, MixerParams, RtNode, RtNodeFactory, MAX_TRACKS};
+use mydaw_rt_core::{
+    BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, MAX_TRACKS,
+};
 use parking_lot::Mutex;
 
 use crate::clap_bridge::ClapBoard;
+use crate::effects::{InsertDef, InsertError, InsertTarget};
 use crate::graph::track_chain;
 use crate::insert::InsertHandle;
 use crate::project::{
-    check_gain_db, check_pan, mixer_state_dto, MissingPlugins, MixerStateDto, Project, TrackDef,
-    TrackError,
+    check_gain_db, check_pan, mixer_state_dto, MissingPlugins, MixerStateDto, Project, RouteError,
+    TrackDef, TrackError,
 };
 use crate::source::{SilentNode, Source, SourceError, SourceHandle};
 use crate::vst3_bridge::Vst3Board;
@@ -70,6 +74,13 @@ pub enum MixerError {
     /// that cannot be made.
     #[error(transparent)]
     Track(#[from] TrackError),
+    /// A bus or a send edit was refused -- most usefully, it would have made a
+    /// cycle.
+    #[error(transparent)]
+    Route(#[from] RouteError),
+    /// An insert-chain edit was refused.
+    #[error(transparent)]
+    Insert(#[from] InsertError),
     /// The source could not be built or installed.
     #[error(transparent)]
     Source(#[from] SourceError),
@@ -87,6 +98,10 @@ pub struct TrackHost {
     /// when a download finishes. Held as the registry rather than as a list of
     /// factories for exactly that reason.
     sampler: Arc<SamplerRegistry>,
+    /// The internal effects a chain can hold. Consulted to build a chain's
+    /// nodes, to answer "what knobs does this have", and to reject a `type_id`
+    /// this build does not know.
+    effects: Arc<EffectRegistry>,
     /// What the audio thread reads. Shared with every graph compiled from this
     /// host, so a rebuild never resets a fader.
     params: Arc<MixerParams>,
@@ -116,9 +131,10 @@ impl TrackHost {
         tone: Arc<TestToneFactory>,
         instruments: Arc<InstrumentRegistry>,
         sampler: Arc<SamplerRegistry>,
+        effects: Arc<EffectRegistry>,
     ) -> Self {
         let project = Project::starter(crate::project::default_piano(&sampler));
-        Self::with_project(tone, instruments, sampler, project)
+        Self::with_project(tone, instruments, sampler, effects, project)
     }
 
     /// A host on an explicit project (tests, and one day a project file).
@@ -126,6 +142,7 @@ impl TrackHost {
         tone: Arc<TestToneFactory>,
         instruments: Arc<InstrumentRegistry>,
         sampler: Arc<SamplerRegistry>,
+        effects: Arc<EffectRegistry>,
         project: Project,
     ) -> Self {
         let params = Arc::new(MixerParams::new());
@@ -134,6 +151,7 @@ impl TrackHost {
             tone,
             instruments,
             sampler,
+            effects,
             params,
             handles: (0..MAX_TRACKS)
                 .map(|index| {
@@ -156,6 +174,11 @@ impl TrackHost {
     /// The parameter block the audio thread reads.
     pub fn params(&self) -> &Arc<MixerParams> {
         &self.params
+    }
+
+    /// The internal effect catalogue.
+    pub fn effects(&self) -> &Arc<EffectRegistry> {
+        &self.effects
     }
 
     /// The master bus's insert point.
@@ -259,7 +282,147 @@ impl TrackHost {
             .selected
             .load(Ordering::Relaxed)
             .min(project.len().saturating_sub(1));
-        mixer_state_dto(&project, selected, clap, vst3, missing)
+        mixer_state_dto(&project, selected, clap, vst3, missing, &self.effects)
+    }
+
+    // ------------------------------------------------------- routing edits
+
+    /// Apply a **structural** edit to the project, then republish.
+    ///
+    /// The graph is *not* rebuilt here: adding a bus, a send or an insert
+    /// changes how many nodes a graph has, and only a caller that knows whether
+    /// a hosted plugin is loaded can choose between rebuilding inline and going
+    /// through a host's main thread. See
+    /// [`AppState::rebuild_graph`](crate::AppState::rebuild_graph).
+    ///
+    /// A refused edit leaves the project exactly as it was, because every
+    /// operation this funnels validates before it mutates.
+    ///
+    /// # Errors
+    /// Whatever the edit reported.
+    pub fn edit_project<T, E>(
+        &self,
+        edit: impl FnOnce(&mut Project) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let mut project = self.project.lock();
+        let value = edit(&mut project)?;
+        project.publish(&self.params);
+        Ok(value)
+    }
+
+    /// Set a send's level. **One atomic store; no rebuild, no allocation.**
+    ///
+    /// Returns nothing rather than the whole mixer, because a send knob drag
+    /// produces one of these per frame and the caller already knows what it
+    /// asked for.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchSend`] or [`RouteError::InvalidLevel`].
+    pub fn set_send_level(&self, id: u32, level: f32) -> Result<(), RouteError> {
+        let level = crate::project::check_send_level(level)?;
+        let mut project = self.project.lock();
+        let mut source = None;
+        project.edit_send(id, |send| {
+            send.level = level;
+            source = Some((send.source, send.dest));
+        })?;
+        if let Some((source, dest)) = source {
+            self.params.set_send_level(source, dest, level);
+        }
+        Ok(())
+    }
+
+    /// Move a send between pre- and post-fader. **One atomic store.**
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchSend`].
+    pub fn set_send_pre(&self, id: u32, pre: bool) -> Result<(), RouteError> {
+        let mut project = self.project.lock();
+        let mut source = None;
+        project.edit_send(id, |send| {
+            send.pre = pre;
+            source = Some((send.source, send.dest));
+        })?;
+        if let Some((source, dest)) = source {
+            self.params.set_send_pre(source, dest, pre);
+        }
+        Ok(())
+    }
+
+    /// Set one insert parameter, returning **what was actually stored**.
+    ///
+    /// One atomic store. No rebuild, no allocation, and the answer is the
+    /// sanitised value so a knob can snap itself to the truth rather than draw
+    /// where the engine is not.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchInsert`] and friends, or
+    /// [`InsertError::NoSuchParam`] for an id the effect does not have.
+    pub fn set_insert_param(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        param_id: &str,
+        value: f32,
+    ) -> Result<f32, InsertError> {
+        let project = self.project.lock();
+        let def = Self::insert_at(&project, target, index)?;
+        def.params
+            .set_by_id(param_id, value)
+            .ok_or_else(|| InsertError::NoSuchParam {
+                effect: def.type_id.clone(),
+                param: param_id.to_owned(),
+            })
+    }
+
+    /// One insert's live meter values.
+    ///
+    /// # Errors
+    /// As [`set_insert_param`](Self::set_insert_param), minus the parameter.
+    pub fn insert_readouts(
+        &self,
+        target: InsertTarget,
+        index: usize,
+    ) -> Result<Vec<crate::effects::ParamValueDto>, InsertError> {
+        let project = self.project.lock();
+        let def = Self::insert_at(&project, target, index)?;
+        Ok(def
+            .params
+            .readout_snapshot()
+            .into_iter()
+            .map(|(id, value)| crate::effects::ParamValueDto {
+                id: id.to_owned(),
+                value,
+            })
+            .collect())
+    }
+
+    /// Every meter on one chain, in chain order.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchTrack`] / [`InsertError::NoSuchBus`].
+    pub fn chain_readouts(
+        &self,
+        target: InsertTarget,
+    ) -> Result<Vec<crate::effects::InsertReadoutsDto>, InsertError> {
+        let project = self.project.lock();
+        let chain = project
+            .chain(target)
+            .ok_or(InsertError::no_such_chain(target))?;
+        Ok(crate::effects::chain_readouts_dto(chain))
+    }
+
+    fn insert_at(
+        project: &Project,
+        target: InsertTarget,
+        index: usize,
+    ) -> Result<&InsertDef, InsertError> {
+        let chain = project
+            .chain(target)
+            .ok_or(InsertError::no_such_chain(target))?;
+        chain
+            .get(index)
+            .ok_or(InsertError::NoSuchInsert { target, index })
     }
 
     // ------------------------------------------------------------ mixer edits
@@ -558,16 +721,68 @@ impl TrackHost {
             let gate = Arc::clone(&self.gates[index]);
             let slot =
                 self.handles[index].open(node, def.source.clone(), gc.clone(), Arc::clone(&gate));
-            // Per-track *effect* inserts are a later step's work -- the graph
-            // already carries a chain for them, and this is where they would go.
-            spec.push_track(track_chain(slot, None, gate));
+            spec.push_track(track_chain(
+                slot,
+                self.build_chain(&def.inserts, limits),
+                gate,
+            ));
         }
 
-        // Unconditional, and transparent while empty. Compiling it in every time
-        // is what lets a master effect be inserted, replaced and removed with no
-        // graph rebuild at all -- see `crate::insert`.
+        for def in &project.buses {
+            let mut bus = BusSpec::new();
+            bus.inserts = self.build_chain(&def.inserts, limits);
+            spec.push_bus(bus);
+        }
+
+        for send in &project.sends {
+            spec.push_send(SendSpec::new(send.source, send.dest));
+        }
+
+        // The master's *internal* chain runs first and the one hosted insert
+        // last. That order keeps the hosted slot a single unconditional node at
+        // a fixed position, which is what makes its rebuild-free swap work (see
+        // `crate::insert`) -- and it is the order a user gets anyway by
+        // inserting the built-ins and then reaching for a plugin to finalise the
+        // bus.
+        for node in self.build_chain(&project.master_inserts, limits) {
+            spec.push_master_insert(node);
+        }
         spec.push_master_insert(crate::insert::insert_slot(&self.master_insert, gc));
         spec
+    }
+
+    /// Instantiate one insert chain against the blocks the project owns.
+    ///
+    /// Every node is handed the **same** `Arc<ParamBlock>` the session holds, so
+    /// a rebuild picks each effect up exactly where the last graph left it --
+    /// the argument [`MixerParams`] makes for faders, at knob granularity.
+    ///
+    /// An insert naming an effect this build does not have is **skipped with a
+    /// warning**, not fatal: that is the missing-plugin policy one level down,
+    /// and the entry stays in the project so a save writes it back out.
+    fn build_chain(
+        &self,
+        chain: &[InsertDef],
+        limits: &mydaw_rt_core::GraphLimits,
+    ) -> Vec<Box<dyn RtNode>> {
+        chain
+            .iter()
+            .filter_map(|def| {
+                let node = self.effects.create(
+                    &def.type_id,
+                    limits.sample_rate,
+                    limits.max_block,
+                    Arc::clone(&def.params),
+                );
+                if node.is_none() {
+                    log::warn!(
+                        "'{}' is not an effect this build has; skipping it in the chain",
+                        def.type_id
+                    );
+                }
+                node
+            })
+            .collect()
     }
 
     /// Forget every track's stream channel, and the master insert's. Called when
@@ -611,6 +826,7 @@ mod tests {
             Arc::new(mydaw_plugin_test_tone::TestToneFactory::new()),
             Arc::new(InstrumentRegistry::new()),
             Arc::new(SamplerRegistry::detached()),
+            Arc::new(EffectRegistry::new()),
         )
     }
 

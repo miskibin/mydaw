@@ -2160,6 +2160,7 @@ dependencies = [
  "mydaw-kernel",
  "mydaw-plugin-audio-io",
  "mydaw-plugin-debug-tap",
+ "mydaw-plugin-effects",
  "mydaw-plugin-host-clap",
  "mydaw-plugin-host-vst3",
  "mydaw-plugin-instruments",

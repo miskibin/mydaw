@@ -127,6 +127,17 @@ pub enum ClapCommand {
     /// Remove a track and rebuild the graph, re-attaching every hosted plugin
     /// and renumbering the placements after it.
     RemoveTrack { track: usize },
+    /// Install a graph built from the project **as it now stands**, and
+    /// re-attach every hosted plugin into it.
+    ///
+    /// The structural mixer edits -- adding a bus, a send or an insert -- change
+    /// the shape of the graph without changing the *placements*, so the caller
+    /// applies them to the project on its own thread (they are a mutex and some
+    /// `Vec`s) and asks only for the half that has to happen on the main one.
+    /// One command rather than one per edit: the main thread's job is identical
+    /// for all of them, and an enum variant per edit would be the same code
+    /// written five times.
+    Rebuild,
 }
 
 /// What the main thread answers with.

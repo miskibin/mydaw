@@ -160,6 +160,7 @@ impl Rig {
             Arc::new(TestToneFactory::new()),
             Arc::new(InstrumentRegistry::new()),
             Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
+        Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
             project,
         ));
         let collector = Collector::new();

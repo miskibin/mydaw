@@ -77,6 +77,10 @@ pub enum Vst3Command {
     },
     /// Remove a track and rebuild, likewise.
     RemoveTrack { track: usize },
+    /// Install a graph from the project as it now stands and re-attach every
+    /// hosted plugin of both formats. See
+    /// [`ClapCommand::Rebuild`](crate::ClapCommand::Rebuild).
+    Rebuild,
 }
 
 /// What the main thread answers with.

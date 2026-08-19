@@ -1,15 +1,23 @@
 //! Audio graph: built off-thread, handed to the audio thread lock-free.
 //!
 //! # Shape
-//! From step 5 the graph is a mixer, not a chain:
+//! From step 5 the graph is a mixer, not a chain; from the routing step it is a
+//! mixer with buses:
 //!
 //! ```text
 //!   track 0:  source -> insert.. -> [strip: gain, pan, mute] --\
 //!   track 1:  source -> insert.. -> [strip: gain, pan, mute] ---+--> sum
-//!   ...                                                        /      |
-//!   track n:  source -> insert.. -> [strip: gain, pan, mute] --/       v
+//!   ...                    |  \                                /      |
+//!   track n:  source -> insert.. -> [strip: gain, pan, mute] --/       |
+//!                          |   \                                      |
+//!                    (pre tap)  (post tap)                            |
+//!                          v     v                                    |
+//!                     bus b:  Σ -> insert.. -> [strip] ---------------/|
+//!                                     |   \                           |
+//!                               (pre tap)  (post tap) -> bus c (later) |
+//!                                                                      v
 //!                                                        master insert..
-//!                                                                     |
+//!                                                                      |
 //!                                                        [master strip: gain]
 //! ```
 //!
@@ -17,6 +25,37 @@
 //! its strip scales that buffer into the shared bus. `ctx.buffers` -- the bus the
 //! audio callback hands in -- is the *master*: it is cleared at the top of the
 //! block, summed into, and is what the device, the meters and the debug tap see.
+//!
+//! # Routing: one main out, any number of taps
+//! Every strip -- track or bus -- has **one implicit main output, into the
+//! master**, and any number of additional *send taps* into buses. There is no
+//! command to reroute a main out, and that is the design rather than an
+//! omission: a mixer where every strip's main path is settled is one where the
+//! signal flow can be read off the strip list, and the thing users actually want
+//! (a reverb, a parallel compressor, a drum group) is a *tap*, not a reroute.
+//! "Wet only" is a pre-fader tap with the fader down, which is exactly how it is
+//! done on a desk.
+//!
+//! **Pre-fader means after the inserts and before the strip** -- so a pre-fader
+//! tap is unaffected by the source's fader, pan *and* mute, and a track pulled to
+//! silence still feeds its reverb. **Post-fader means after the strip**, so the
+//! tap follows the fader, which is what keeps a reverb in proportion while a
+//! fader is ridden.
+//!
+//! Both taps for one send are compiled into the graph, and the pre/post flag
+//! chooses which of the two carries the level -- see
+//! [`MixerParams::send_targets`]. Flipping the flag therefore ramps one tap down
+//! while the other ramps up rather than switching a route on a block boundary,
+//! which is the difference between a routing change and a click.
+//!
+//! # Bus order, and why a cycle cannot reach the audio thread
+//! A bus's inputs must all have been computed before it runs, so the buses are
+//! processed in a **topological order** of the bus-to-bus send edges, computed
+//! once at compile time by [`bus_order`]. A cycle has no such order; the shell
+//! refuses to create one (see the routing spec), and if one arrives anyway the
+//! compiler breaks it by **dropping the edges that would run backwards** rather
+//! than by producing a graph whose output depends on buffer staleness. The audio
+//! thread never sees a cycle and never has to check for one.
 //!
 //! Tracks are processed one after another on the audio thread. Rendering them in
 //! parallel is a real win once tracks carry heavyweight plugins, and it is
@@ -65,7 +104,10 @@ use std::sync::Arc;
 use basedrop::{Handle, Owned};
 use rtrb::{Consumer, Producer};
 
-use crate::mixer::{MasterStrip, MixerParams, TrackPeak, TrackPeaks, TrackStrip, MAX_TRACKS};
+use crate::mixer::{
+    BusPeaks, MasterStrip, MixerParams, StripId, TrackPeak, TrackPeaks, TrackStrip, MAX_BUSES,
+    MAX_TRACKS,
+};
 use crate::{AudioBuffers, NoteEvent, ProcessCtx, RtNode};
 
 /// Block size a graph's scratch buffers are sized to when the builder does not
@@ -142,6 +184,114 @@ impl TrackSpec {
     }
 }
 
+/// One bus, as a non-RT thread describes it.
+///
+/// A bus has no source: its input is whatever sends into it. Everything else
+/// about it -- the insert chain, the strip, the main out into the master -- is a
+/// track's, minus the generator.
+#[derive(Default)]
+pub struct BusSpec {
+    /// Effects, in order, on the summed input.
+    pub inserts: Vec<Box<dyn RtNode>>,
+}
+
+impl BusSpec {
+    /// A bus with an empty chain.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builder-style insert append.
+    #[must_use]
+    pub fn with_insert(mut self, node: Box<dyn RtNode>) -> Self {
+        self.inserts.push(node);
+        self
+    }
+
+    /// Nodes in this bus.
+    pub fn node_count(&self) -> usize {
+        self.inserts.len()
+    }
+}
+
+/// One send tap, as a non-RT thread describes it.
+///
+/// Structure only: *that* a tap exists, and between which two strips. Its level
+/// and its pre/post flag live in [`MixerParams`] and are read per block, which
+/// is what makes moving a send knob free and adding one a rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SendSpec {
+    /// Where the signal is taken from.
+    pub source: StripId,
+    /// Which bus it is added into.
+    pub dest: usize,
+}
+
+impl SendSpec {
+    pub const fn new(source: StripId, dest: usize) -> Self {
+        Self { source, dest }
+    }
+}
+
+/// A processing order for `bus_count` buses that respects every bus-to-bus send.
+///
+/// Kahn's algorithm over the edges `send.source == Bus(a) -> send.dest == b`.
+/// Buses caught in a cycle -- which the shell refuses to create -- are appended
+/// in index order after everything that *can* be ordered, so the answer is
+/// always a permutation of `0..bus_count` and is always deterministic.
+///
+/// The second half of the answer is what the caller must then do: a send whose
+/// destination is **not later** in this order has to be dropped, because running
+/// it would add into a buffer that has already been consumed. See
+/// [`GraphSpec::compile`].
+pub fn bus_order(bus_count: usize, sends: &[SendSpec]) -> Vec<usize> {
+    let count = bus_count.min(MAX_BUSES);
+    let mut indegree = vec![0_usize; count];
+    // Edges, deduplicated by construction: a pair may only appear once, and a
+    // self-edge is not an ordering constraint (it is a cycle of one, dropped).
+    let mut edges: Vec<(usize, usize)> = Vec::new();
+    for send in sends {
+        let StripId::Bus(from) = send.source else {
+            continue;
+        };
+        if from >= count || send.dest >= count || from == send.dest {
+            continue;
+        }
+        if edges.contains(&(from, send.dest)) {
+            continue;
+        }
+        edges.push((from, send.dest));
+        indegree[send.dest] += 1;
+    }
+
+    let mut order: Vec<usize> = Vec::with_capacity(count);
+    let mut ready: Vec<usize> = (0..count).filter(|bus| indegree[*bus] == 0).collect();
+    // Popped from the front so ties break by index, which makes the order stable
+    // across rebuilds and therefore makes a compiled graph reproducible.
+    let mut cursor = 0;
+    while cursor < ready.len() {
+        let bus = ready[cursor];
+        cursor += 1;
+        order.push(bus);
+        for (from, to) in &edges {
+            if *from != bus {
+                continue;
+            }
+            indegree[*to] -= 1;
+            if indegree[*to] == 0 {
+                ready.push(*to);
+            }
+        }
+    }
+    // Whatever is left is in a cycle. Appending it keeps the answer total.
+    for bus in 0..count {
+        if !order.contains(&bus) {
+            order.push(bus);
+        }
+    }
+    order
+}
+
 /// A graph description assembled on a non-RT thread.
 ///
 /// Two ways to build one, and they are the same builder:
@@ -155,6 +305,8 @@ impl TrackSpec {
 #[derive(Default)]
 pub struct GraphSpec {
     tracks: Vec<TrackSpec>,
+    buses: Vec<BusSpec>,
+    sends: Vec<SendSpec>,
     master_inserts: Vec<Box<dyn RtNode>>,
     params: Option<Arc<MixerParams>>,
     limits: Option<GraphLimits>,
@@ -195,6 +347,40 @@ impl GraphSpec {
     #[must_use]
     pub fn with_track(mut self, track: TrackSpec) -> Self {
         self.tracks.push(track);
+        self
+    }
+
+    /// Add a bus. Its index is its position, and that is what a
+    /// [`SendSpec`] names.
+    pub fn push_bus(&mut self, bus: BusSpec) -> &mut Self {
+        self.buses.push(bus);
+        self
+    }
+
+    /// Builder-style [`push_bus`](Self::push_bus).
+    #[must_use]
+    pub fn with_bus(mut self, bus: BusSpec) -> Self {
+        self.buses.push(bus);
+        self
+    }
+
+    /// Add a send tap.
+    ///
+    /// Structure only: the level and the pre/post flag are read from
+    /// [`MixerParams`] every block, so nothing here has to be rebuilt when
+    /// either moves. A tap naming a strip or a bus this spec does not have is
+    /// dropped at [`compile`](Self::compile) time rather than refused, because
+    /// the spec is assembled from a project that has already been validated and
+    /// a mismatch here is a wiring bug, not a user error.
+    pub fn push_send(&mut self, send: SendSpec) -> &mut Self {
+        self.sends.push(send);
+        self
+    }
+
+    /// Builder-style [`push_send`](Self::push_send).
+    #[must_use]
+    pub fn with_send(mut self, send: SendSpec) -> Self {
+        self.sends.push(send);
         self
     }
 
@@ -256,9 +442,11 @@ impl GraphSpec {
         self.params.as_ref()
     }
 
-    /// Total nodes across every track and the master bus.
+    /// Total nodes across every track, every bus and the master bus.
     pub fn len(&self) -> usize {
-        self.tracks.iter().map(TrackSpec::node_count).sum::<usize>() + self.master_inserts.len()
+        self.tracks.iter().map(TrackSpec::node_count).sum::<usize>()
+            + self.buses.iter().map(BusSpec::node_count).sum::<usize>()
+            + self.master_inserts.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -268,6 +456,16 @@ impl GraphSpec {
     /// Tracks in this spec.
     pub fn track_count(&self) -> usize {
         self.tracks.len()
+    }
+
+    /// Buses in this spec.
+    pub fn bus_count(&self) -> usize {
+        self.buses.len()
+    }
+
+    /// Send taps in this spec, before compilation drops any.
+    pub fn send_count(&self) -> usize {
+        self.sends.len()
     }
 
     /// Freeze the spec into something the audio thread can run.
@@ -283,21 +481,105 @@ impl GraphSpec {
         let limits = self.limits.unwrap_or_default();
         let params = self.params.unwrap_or_else(|| Arc::new(MixerParams::new()));
         self.tracks.truncate(MAX_TRACKS);
+        self.buses.truncate(MAX_BUSES);
+
+        let track_count = self.tracks.len();
+        let bus_count = self.buses.len();
+        let order = bus_order(bus_count, &self.sends);
+        // Where each bus sits in the processing order, so a send can be checked
+        // for "does my destination run after me" in constant time.
+        let mut position = [0_usize; MAX_BUSES];
+        for (at, bus) in order.iter().enumerate() {
+            position[*bus] = at;
+        }
+
+        // Keep only the taps this graph can actually run: a source that exists,
+        // a destination that exists, and -- for a bus-to-bus tap -- a
+        // destination that has not been consumed by the time the source runs.
+        let keep = |send: &SendSpec| -> bool {
+            if send.dest >= bus_count {
+                return false;
+            }
+            match send.source {
+                StripId::Track(index) => index < track_count,
+                StripId::Bus(index) => {
+                    index < bus_count && position[send.dest] > position[index]
+                }
+            }
+        };
+        let sends: Vec<SendSpec> = self.sends.iter().copied().filter(keep).collect();
+
+        let taps_for = |source: StripId| -> Vec<SendTap> {
+            sends
+                .iter()
+                .filter(|send| send.source == source)
+                .map(|send| SendTap::new(send.dest, source, &params, &limits))
+                .collect()
+        };
 
         let tracks: Vec<TrackChain> = self
             .tracks
             .into_iter()
             .enumerate()
-            .map(|(index, spec)| TrackChain::new(index, spec, &params, &limits))
+            .map(|(index, spec)| {
+                TrackChain::new(index, spec, taps_for(StripId::Track(index)), &params, &limits)
+            })
+            .collect();
+
+        let buses: Vec<BusChain> = self
+            .buses
+            .into_iter()
+            .enumerate()
+            .map(|(index, spec)| {
+                BusChain::new(index, spec, taps_for(StripId::Bus(index)), &params, &limits)
+            })
             .collect();
 
         let master = MasterStrip::new(limits.sample_rate, params.master_gain());
         CompiledGraph {
             peaks: TrackPeaks::empty(tracks.len()),
+            bus_peaks: BusPeaks::empty(buses.len()),
             tracks,
+            buses,
+            bus_order: order,
+            // One shared post-fader scratch, reused by every strip in turn: a
+            // strip's post-fader signal is produced, handed to the master and to
+            // its taps, and finished with before the next strip starts.
+            post: AudioBuffers::new(limits.max_block.max(1)),
             master_inserts: self.master_inserts,
             master,
             params,
+        }
+    }
+}
+
+/// One send tap as the audio thread runs it.
+///
+/// Two strips rather than one, because the pre/post flag is a **crossfade**:
+/// [`MixerParams::send_targets`] hands the level to exactly one of them and zero
+/// to the other, and both ramp. A flag flipped mid-play therefore fades between
+/// two taps of the same signal rather than switching a route on a block
+/// boundary.
+///
+/// The strips are `TrackStrip`s with the same coefficient in both channels, so a
+/// send never moves the image of what it is tapping.
+struct SendTap {
+    dest: usize,
+    source: StripId,
+    pre: TrackStrip,
+    post: TrackStrip,
+}
+
+impl SendTap {
+    fn new(dest: usize, source: StripId, params: &MixerParams, limits: &GraphLimits) -> Self {
+        let (pre, post) = params.send_targets(source, dest);
+        Self {
+            dest,
+            source,
+            // Built already sitting at their targets, for the same reason a
+            // strip is: a rebuild must not fade a reverb send in.
+            pre: TrackStrip::new(limits.sample_rate, [pre, pre]),
+            post: TrackStrip::new(limits.sample_rate, [post, post]),
         }
     }
 }
@@ -314,10 +596,18 @@ struct TrackChain {
     /// The subset of the block's events addressed to this track. Allocated to
     /// its full capacity here and only ever `clear`ed and `push`ed after that.
     events: Vec<NoteEvent>,
+    /// This track's send taps, in destination order.
+    sends: Vec<SendTap>,
 }
 
 impl TrackChain {
-    fn new(index: usize, spec: TrackSpec, params: &MixerParams, limits: &GraphLimits) -> Self {
+    fn new(
+        index: usize,
+        spec: TrackSpec,
+        sends: Vec<SendTap>,
+        params: &MixerParams,
+        limits: &GraphLimits,
+    ) -> Self {
         Self {
             source: spec.source,
             inserts: spec.inserts,
@@ -325,6 +615,7 @@ impl TrackChain {
             strip: TrackStrip::new(limits.sample_rate, params.track_target(index)),
             scratch: AudioBuffers::new(limits.max_block.max(1)),
             events: Vec::with_capacity(limits.max_events),
+            sends,
         }
     }
 
@@ -333,14 +624,94 @@ impl TrackChain {
     }
 }
 
+/// One bus as the audio thread runs it.
+///
+/// A track chain without the source and without the note filtering: its input
+/// arrives in [`input`](Self::input) from whatever tapped into it earlier in the
+/// block.
+struct BusChain {
+    inserts: Vec<Box<dyn RtNode>>,
+    strip: TrackStrip,
+    /// Where this bus's inputs accumulate, and where its inserts run. Cleared at
+    /// the top of every block, for the same reason the master bus is: it is a
+    /// sum, and last block's is not part of this one.
+    input: AudioBuffers,
+    sends: Vec<SendTap>,
+}
+
+impl BusChain {
+    fn new(
+        index: usize,
+        spec: BusSpec,
+        sends: Vec<SendTap>,
+        params: &MixerParams,
+        limits: &GraphLimits,
+    ) -> Self {
+        Self {
+            inserts: spec.inserts,
+            strip: TrackStrip::new(limits.sample_rate, params.bus_target(index)),
+            input: AudioBuffers::new(limits.max_block.max(1)),
+            sends,
+        }
+    }
+
+    fn node_count(&self) -> usize {
+        self.inserts.len()
+    }
+}
+
+/// Add `src` into `dst`, frame for frame over the shorter of the two.
+///
+/// The second half of a strip that has taps to feed: the post-fader signal is
+/// produced into a scratch buffer once and this is what carries it to the master
+/// sum. RT-safe -- arithmetic over pre-allocated slices.
+fn add_into(src: &AudioBuffers, dst: &mut AudioBuffers) {
+    let source = src.as_slices();
+    let mut destination = dst.as_mut_slices();
+    for channel in 0..crate::CHANNELS {
+        let input = source[channel];
+        let output = &mut destination[channel];
+        let frames = input.len().min(output.len());
+        for frame in 0..frames {
+            output[frame] += input[frame];
+        }
+    }
+}
+
+/// Two distinct elements of a slice, both mutable.
+///
+/// The buses live in one `Vec` and a bus-to-bus tap needs to read one and write
+/// another, which is exactly the borrow `split_at_mut` exists for. `a == b` is
+/// unreachable: a self-send is dropped at compile time (see
+/// [`GraphSpec::compile`]), because a bus cannot run after itself.
+fn pair_mut<T>(items: &mut [T], a: usize, b: usize) -> (&mut T, &mut T) {
+    debug_assert_ne!(a, b, "a strip cannot send to itself");
+    if a < b {
+        let (left, right) = items.split_at_mut(b);
+        (&mut left[a], &mut right[0])
+    } else {
+        let (left, right) = items.split_at_mut(a);
+        (&mut right[0], &mut left[b])
+    }
+}
+
 /// An executable graph. Owned by the audio thread while it is current.
 pub struct CompiledGraph {
     tracks: Vec<TrackChain>,
+    buses: Vec<BusChain>,
+    /// The order the buses are processed in: a topological sort of the
+    /// bus-to-bus send edges, fixed at compile time. See [`bus_order`].
+    bus_order: Vec<usize>,
+    /// Scratch for one strip's post-fader signal, reused strip by strip. Only
+    /// touched by a strip that has at least one send tap.
+    post: AudioBuffers,
     master_inserts: Vec<Box<dyn RtNode>>,
     master: MasterStrip,
     params: Arc<MixerParams>,
     /// Last block's post-strip peak per track, for the meter path.
     peaks: TrackPeaks,
+    /// Last block's post-strip peak per bus.
+    bus_peaks: BusPeaks,
 }
 
 impl CompiledGraph {
@@ -354,16 +725,26 @@ impl CompiledGraph {
         // borrowed mutably -- the alternative is an `Arc::clone` per block.
         let Self {
             tracks,
+            buses,
+            bus_order,
+            post,
             master_inserts,
             master,
             params,
             peaks,
+            bus_peaks,
         } = self;
 
         // The bus starts silent: it is a *sum*, and whatever the previous block
         // left in it is not part of this one.
         ctx.buffers.silence();
+        post.set_frames(ctx.frames);
         *peaks = TrackPeaks::empty(tracks.len());
+        *bus_peaks = BusPeaks::empty(buses.len());
+        for bus in buses.iter_mut() {
+            bus.input.set_frames(ctx.frames);
+            bus.input.silence();
+        }
 
         for (index, track) in tracks.iter_mut().enumerate() {
             let TrackChain {
@@ -373,6 +754,7 @@ impl CompiledGraph {
                 strip,
                 scratch,
                 events,
+                sends,
             } = track;
 
             // Only this track's notes. `ctx.events` is sorted by frame offset
@@ -405,8 +787,90 @@ impl CompiledGraph {
             };
             debug_assert!(frames <= ctx.frames);
 
-            let peak = strip.mix_into(scratch, ctx.buffers, params.track_target(index));
+            // Pre-fader taps read the chain's output *before* the strip, so a
+            // track pulled to silence still feeds its reverb.
+            for tap in sends.iter_mut() {
+                let (pre, _) = params.send_targets(tap.source, tap.dest);
+                tap.pre
+                    .mix_into(scratch, &mut buses[tap.dest].input, [pre, pre]);
+            }
+
+            let peak = if sends.is_empty() {
+                // The overwhelmingly common shape, and the one every mixer test
+                // before routing existed measures: multiply and accumulate in
+                // one pass, straight into the master sum.
+                strip.mix_into(scratch, ctx.buffers, params.track_target(index))
+            } else {
+                // With taps to feed, the post-fader signal has more than one
+                // consumer, so it is produced once into the shared scratch and
+                // handed to each. Bit-identical to the branch above.
+                let peak = strip.apply_into(scratch, post, params.track_target(index));
+                add_into(post, ctx.buffers);
+                for tap in sends.iter_mut() {
+                    let (_, level) = params.send_targets(tap.source, tap.dest);
+                    tap.post
+                        .mix_into(post, &mut buses[tap.dest].input, [level, level]);
+                }
+                peak
+            };
             peaks.set(
+                index,
+                TrackPeak {
+                    peak_l: peak[0],
+                    peak_r: peak[1],
+                },
+            );
+        }
+
+        // Buses, in an order that guarantees every input is already summed.
+        for position in 0..bus_order.len() {
+            let index = bus_order[position];
+            {
+                let BusChain { input, inserts, .. } = &mut buses[index];
+                let mut bus_ctx = ProcessCtx::with_events(
+                    input,
+                    ctx.sample_rate,
+                    ctx.frames,
+                    ctx.transport,
+                    &[],
+                );
+                for node in inserts.iter_mut() {
+                    node.process(&mut bus_ctx);
+                }
+            }
+
+            let tap_count = buses[index].sends.len();
+            for tap in 0..tap_count {
+                let dest = buses[index].sends[tap].dest;
+                let source = buses[index].sends[tap].source;
+                let (pre, _) = params.send_targets(source, dest);
+                let (from, to) = pair_mut(buses, index, dest);
+                let BusChain { input, sends, .. } = from;
+                sends[tap].pre.mix_into(input, &mut to.input, [pre, pre]);
+            }
+
+            let target = params.bus_target(index);
+            let peak = if tap_count == 0 {
+                let BusChain { input, strip, .. } = &mut buses[index];
+                strip.mix_into(input, ctx.buffers, target)
+            } else {
+                let peak = {
+                    let BusChain { input, strip, .. } = &mut buses[index];
+                    strip.apply_into(input, post, target)
+                };
+                add_into(post, ctx.buffers);
+                for tap in 0..tap_count {
+                    let dest = buses[index].sends[tap].dest;
+                    let source = buses[index].sends[tap].source;
+                    let (_, level) = params.send_targets(source, dest);
+                    let (from, to) = pair_mut(buses, index, dest);
+                    from.sends[tap]
+                        .post
+                        .mix_into(post, &mut to.input, [level, level]);
+                }
+                peak
+            };
+            bus_peaks.set(
                 index,
                 TrackPeak {
                     peak_l: peak[0],
@@ -421,18 +885,40 @@ impl CompiledGraph {
         master.apply(ctx.buffers, params.master_gain());
     }
 
-    /// Total nodes across every track and the master bus.
+    /// Total nodes across every track, every bus and the master bus.
     pub fn node_count(&self) -> usize {
         self.tracks
             .iter()
             .map(TrackChain::node_count)
             .sum::<usize>()
+            + self.buses.iter().map(BusChain::node_count).sum::<usize>()
             + self.master_inserts.len()
     }
 
     /// Tracks this graph runs.
     pub fn track_count(&self) -> usize {
         self.tracks.len()
+    }
+
+    /// Buses this graph runs.
+    pub fn bus_count(&self) -> usize {
+        self.buses.len()
+    }
+
+    /// Send taps this graph runs, after compilation dropped any it could not.
+    pub fn send_count(&self) -> usize {
+        self.tracks.iter().map(|t| t.sends.len()).sum::<usize>()
+            + self.buses.iter().map(|b| b.sends.len()).sum::<usize>()
+    }
+
+    /// The order the buses run in. Diagnostics and tests.
+    pub fn bus_order(&self) -> &[usize] {
+        &self.bus_order
+    }
+
+    /// Per-bus peaks from the last block processed.
+    pub fn bus_peaks(&self) -> BusPeaks {
+        self.bus_peaks
     }
 
     /// Note channel `track` answers to.
@@ -546,6 +1032,18 @@ impl RtGraphSlot {
         self.current
             .as_ref()
             .map_or(TrackPeaks::SILENT, |g| g.track_peaks())
+    }
+
+    /// Buses the current graph runs.
+    pub fn bus_count(&self) -> usize {
+        self.current.as_ref().map_or(0, |g| g.bus_count())
+    }
+
+    /// Per-bus peaks from the last block. Silent when no graph is installed.
+    pub fn bus_peaks(&self) -> BusPeaks {
+        self.current
+            .as_ref()
+            .map_or(BusPeaks::SILENT, |g| g.bus_peaks())
     }
 }
 
@@ -1196,6 +1694,440 @@ mod tests {
         handle.install(GraphSpec::new()).unwrap();
         let err = handle.install(GraphSpec::new()).unwrap_err();
         assert!(matches!(err, GraphInstallError::QueueFull), "got {err:?}");
+    }
+
+    // ------------------------------------------------------------ routing
+
+    /// Doubles the bus it runs on, so a test can tell "the bus chain ran" from
+    /// "the signal reached the master some other way".
+    struct DoubleNode;
+    impl RtNode for DoubleNode {
+        fn process(&mut self, ctx: &mut ProcessCtx) {
+            for ch in ctx.buffers.as_mut_slices() {
+                for s in ch.iter_mut() {
+                    *s *= 2.0;
+                }
+            }
+        }
+    }
+
+    /// Render `blocks` blocks of `frames` and return the whole left channel, so
+    /// a ramp can be measured rather than only its endpoint.
+    fn render_blocks(
+        slot: &mut RtGraphSlot,
+        buffers: &mut AudioBuffers,
+        frames: usize,
+        blocks: usize,
+    ) -> Vec<f32> {
+        let mut out = Vec::with_capacity(frames * blocks);
+        for _ in 0..blocks {
+            let mut ctx = ProcessCtx::new(buffers, SR, frames, TransportSnapshot::default());
+            slot.process(&mut ctx);
+            out.extend_from_slice(buffers.as_slices()[0]);
+        }
+        out
+    }
+
+    #[test]
+    fn a_send_tap_adds_the_source_into_a_bus_and_the_bus_reaches_the_master() {
+        let collector = Collector::new();
+        let (mut handle, mut slot) = graph_channel(2, collector.handle());
+        let mut buffers = AudioBuffers::new(64);
+        let params = Arc::new(MixerParams::new());
+        params.set_send_level(StripId::Track(0), 0, 0.5);
+
+        handle
+            .install(
+                GraphSpec::new()
+                    .with_limits(limits(64))
+                    .with_params(Arc::clone(&params))
+                    .with_track(TrackSpec::new(Box::new(ConstNode(1.0))))
+                    // The bus doubles, so its contribution is distinguishable
+                    // from the track's own main out.
+                    .with_bus(BusSpec::new().with_insert(Box::new(DoubleNode)))
+                    .with_send(SendSpec::new(StripId::Track(0), 0)),
+            )
+            .unwrap();
+        slot.poll_swap();
+
+        // main out (1.0) + bus (1.0 * 0.5 tap, doubled) = 2.0
+        let rendered = render_blocks(&mut slot, &mut buffers, 64, 2);
+        assert!((rendered[127] - 2.0).abs() < 1e-6, "{}", rendered[127]);
+        assert_eq!(slot.bus_count(), 1);
+        assert!((slot.bus_peaks().get(0).peak_l - 1.0).abs() < 1e-6);
+        assert!((slot.track_peaks().get(0).peak_l - 1.0).abs() < 1e-6);
+    }
+
+    /// The property the whole pre/post distinction exists for, stated as a
+    /// measurement: with the source's fader all the way down, a pre-fader tap
+    /// still feeds its bus and a post-fader one is silent.
+    #[test]
+    fn a_fader_at_silence_stops_a_post_fader_send_and_not_a_pre_fader_one() {
+        const BLOCK: usize = 1024;
+        let measure = |pre: bool| -> f32 {
+            let collector = Collector::new();
+            let (mut handle, mut slot) = graph_channel(2, collector.handle());
+            let mut buffers = AudioBuffers::new(BLOCK);
+            let params = Arc::new(MixerParams::new());
+            // Fader down *before* the graph is built, so the strip starts at
+            // silence and nothing is measuring a ramp.
+            params.set_track_gain(0, 0.0);
+            params.set_send_level(StripId::Track(0), 0, 1.0);
+            params.set_send_pre(StripId::Track(0), 0, pre);
+
+            handle
+                .install(
+                    GraphSpec::new()
+                        .with_limits(limits(BLOCK))
+                        .with_params(Arc::clone(&params))
+                        .with_track(TrackSpec::new(Box::new(ConstNode(0.5))))
+                        .with_bus(BusSpec::new())
+                        .with_send(SendSpec::new(StripId::Track(0), 0)),
+                )
+                .unwrap();
+            slot.poll_swap();
+            let rendered = render_blocks(&mut slot, &mut buffers, BLOCK, 2);
+            rendered[rendered.len() - 1]
+        };
+
+        let pre = measure(true);
+        let post = measure(false);
+        assert!((pre - 0.5).abs() < 1e-6, "a pre-fader send ignores the fader: {pre}");
+        assert_eq!(post, 0.0, "a post-fader send follows it");
+        assert!(
+            dbfs(post) < dbfs(pre) - 80.0,
+            "pre {} dBFS vs post {} dBFS",
+            dbfs(pre),
+            dbfs(post)
+        );
+    }
+
+    #[test]
+    fn a_mute_stops_a_post_fader_send_and_not_a_pre_fader_one() {
+        // The same argument as the fader, for the control users actually reach
+        // for when they want "wet only".
+        const BLOCK: usize = 1024;
+        let collector = Collector::new();
+        let (mut handle, mut slot) = graph_channel(2, collector.handle());
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let params = Arc::new(MixerParams::new());
+        params.set_track_muted(0, true);
+        params.set_send_level(StripId::Track(0), 0, 1.0);
+        params.set_send_pre(StripId::Track(0), 0, true);
+
+        handle
+            .install(
+                GraphSpec::new()
+                    .with_limits(limits(BLOCK))
+                    .with_params(Arc::clone(&params))
+                    .with_track(TrackSpec::new(Box::new(ConstNode(0.25))))
+                    .with_bus(BusSpec::new())
+                    .with_send(SendSpec::new(StripId::Track(0), 0)),
+            )
+            .unwrap();
+        slot.poll_swap();
+        let rendered = render_blocks(&mut slot, &mut buffers, BLOCK, 2);
+        assert!((rendered[rendered.len() - 1] - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_send_level_change_ramps_instead_of_stepping() {
+        const BLOCK: usize = 256;
+        let collector = Collector::new();
+        let (mut handle, mut slot) = graph_channel(2, collector.handle());
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let params = Arc::new(MixerParams::new());
+        params.set_track_muted(0, true); // Only the send path is audible.
+        params.set_send_level(StripId::Track(0), 0, 0.0);
+        params.set_send_pre(StripId::Track(0), 0, true);
+
+        handle
+            .install(
+                GraphSpec::new()
+                    .with_limits(limits(BLOCK))
+                    .with_params(Arc::clone(&params))
+                    .with_track(TrackSpec::new(Box::new(ConstNode(1.0))))
+                    .with_bus(BusSpec::new())
+                    .with_send(SendSpec::new(StripId::Track(0), 0)),
+            )
+            .unwrap();
+        slot.poll_swap();
+
+        let mut rendered = Vec::new();
+        for block in 0..8 {
+            if block == 2 {
+                params.set_send_level(StripId::Track(0), 0, 1.0);
+            }
+            let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, TransportSnapshot::default());
+            slot.process(&mut ctx);
+            rendered.extend_from_slice(buffers.as_slices()[0]);
+        }
+
+        let limit = 1.0 / 480.0 + 1e-6;
+        let worst = rendered
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(worst <= limit, "the send knob stepped by {worst}");
+        assert!((rendered[rendered.len() - 1] - 1.0).abs() < 1e-6, "and arrived");
+    }
+
+    #[test]
+    fn flipping_a_send_between_pre_and_post_crossfades_rather_than_switching() {
+        // Both taps are in the graph and the flag decides which carries the
+        // level, so the change is two ramps rather than a reroute -- which is
+        // what keeps it from clicking. With the fader at unity the two taps
+        // carry the same signal, so the sum stays constant throughout.
+        const BLOCK: usize = 256;
+        let collector = Collector::new();
+        let (mut handle, mut slot) = graph_channel(2, collector.handle());
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let params = Arc::new(MixerParams::new());
+        params.set_track_muted(0, true);
+        params.set_send_level(StripId::Track(0), 0, 1.0);
+        params.set_send_pre(StripId::Track(0), 0, true);
+
+        handle
+            .install(
+                GraphSpec::new()
+                    .with_limits(limits(BLOCK))
+                    .with_params(Arc::clone(&params))
+                    .with_track(TrackSpec::new(Box::new(ConstNode(1.0))))
+                    .with_bus(BusSpec::new())
+                    .with_send(SendSpec::new(StripId::Track(0), 0)),
+            )
+            .unwrap();
+        slot.poll_swap();
+        // Unmute so the post tap carries the same level as the pre one.
+        params.set_track_muted(0, false);
+
+        let mut rendered = Vec::new();
+        for block in 0..8 {
+            if block == 3 {
+                params.set_send_pre(StripId::Track(0), 0, false);
+            }
+            let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, TransportSnapshot::default());
+            slot.process(&mut ctx);
+            // The bus contribution alone: the master carries the track's own
+            // main out as well, and that is not what this measures.
+            rendered.push(slot.bus_peaks().get(0).peak_l);
+        }
+        assert!(
+            rendered.iter().all(|level| (*level - 1.0).abs() < 1e-3),
+            "the bus level dipped during the flip: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn buses_run_in_an_order_that_respects_every_bus_to_bus_send() {
+        // 0 -> 2, 2 -> 1: the only valid order is 0, 2, 1.
+        let sends = [
+            SendSpec::new(StripId::Bus(0), 2),
+            SendSpec::new(StripId::Bus(2), 1),
+        ];
+        assert_eq!(bus_order(3, &sends), vec![0, 2, 1]);
+        // Nothing to order: index order, so a rebuild is reproducible.
+        assert_eq!(bus_order(3, &[]), vec![0, 1, 2]);
+        assert_eq!(bus_order(0, &sends), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_bus_to_bus_send_reaches_the_destination_in_the_same_block() {
+        let collector = Collector::new();
+        let (mut handle, mut slot) = graph_channel(2, collector.handle());
+        let mut buffers = AudioBuffers::new(64);
+        let params = Arc::new(MixerParams::new());
+        params.set_track_muted(0, true);
+        params.set_send_level(StripId::Track(0), 1, 1.0);
+        params.set_send_pre(StripId::Track(0), 1, true);
+        params.set_send_level(StripId::Bus(1), 0, 1.0);
+
+        handle
+            .install(
+                GraphSpec::new()
+                    .with_limits(limits(64))
+                    .with_params(Arc::clone(&params))
+                    .with_track(TrackSpec::new(Box::new(ConstNode(0.25))))
+                    // Bus 0 is declared first but must run *second*.
+                    .with_bus(BusSpec::new())
+                    .with_bus(BusSpec::new())
+                    .with_send(SendSpec::new(StripId::Track(0), 1))
+                    .with_send(SendSpec::new(StripId::Bus(1), 0)),
+            )
+            .unwrap();
+        slot.poll_swap();
+        render_blocks(&mut slot, &mut buffers, 64, 2);
+
+        assert_eq!(slot.current.as_ref().unwrap().bus_order(), &[1, 0]);
+        let peaks = slot.bus_peaks();
+        assert!((peaks.get(1).peak_l - 0.25).abs() < 1e-6, "bus 1 got the track");
+        assert!(
+            (peaks.get(0).peak_l - 0.25).abs() < 1e-6,
+            "and bus 0 got bus 1, in the same block"
+        );
+    }
+
+    #[test]
+    fn a_cycle_is_broken_at_compile_time_rather_than_reaching_the_audio_thread() {
+        // 0 -> 1 and 1 -> 0. Whatever order is chosen, one of the two edges runs
+        // backwards; that edge is dropped, and the other survives.
+        let spec = GraphSpec::new()
+            .with_limits(limits(8))
+            .with_bus(BusSpec::new())
+            .with_bus(BusSpec::new())
+            .with_send(SendSpec::new(StripId::Bus(0), 1))
+            .with_send(SendSpec::new(StripId::Bus(1), 0));
+        assert_eq!(spec.send_count(), 2);
+        let graph = spec.compile();
+        assert_eq!(graph.bus_count(), 2);
+        assert_eq!(
+            graph.send_count(),
+            1,
+            "exactly the edges that would run backwards are dropped"
+        );
+
+        // A self-send is a cycle of one and is dropped entirely.
+        let graph = GraphSpec::new()
+            .with_limits(limits(8))
+            .with_bus(BusSpec::new())
+            .with_send(SendSpec::new(StripId::Bus(0), 0))
+            .compile();
+        assert_eq!(graph.send_count(), 0);
+    }
+
+    #[test]
+    fn a_send_naming_a_strip_the_graph_does_not_have_is_dropped() {
+        let graph = GraphSpec::new()
+            .with_limits(limits(8))
+            .with_track(TrackSpec::new(Box::new(ConstNode(1.0))))
+            .with_bus(BusSpec::new())
+            .with_send(SendSpec::new(StripId::Track(0), 0))
+            .with_send(SendSpec::new(StripId::Track(9), 0))
+            .with_send(SendSpec::new(StripId::Track(0), 5))
+            .compile();
+        assert_eq!(graph.send_count(), 1);
+    }
+
+    #[test]
+    fn buses_past_the_fixed_limit_are_dropped_at_compile_time() {
+        let mut spec = GraphSpec::new().with_limits(limits(8));
+        for _ in 0..MAX_BUSES + 3 {
+            spec = spec.with_bus(BusSpec::new());
+        }
+        assert_eq!(spec.compile().bus_count(), MAX_BUSES);
+    }
+
+    #[test]
+    fn a_bus_fader_and_pan_reach_the_master_sum_and_the_bus_meter() {
+        const BLOCK: usize = 1024;
+        let collector = Collector::new();
+        let (mut handle, mut slot) = graph_channel(2, collector.handle());
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let params = Arc::new(MixerParams::new());
+        params.set_track_muted(0, true);
+        params.set_send_level(StripId::Track(0), 0, 1.0);
+        params.set_send_pre(StripId::Track(0), 0, true);
+        params.set_bus_gain(0, 0.5);
+        params.set_bus_pan(0, -1.0);
+
+        handle
+            .install(
+                GraphSpec::new()
+                    .with_limits(limits(BLOCK))
+                    .with_params(Arc::clone(&params))
+                    .with_track(TrackSpec::new(Box::new(ConstNode(1.0))))
+                    .with_bus(BusSpec::new())
+                    .with_send(SendSpec::new(StripId::Track(0), 0)),
+            )
+            .unwrap();
+        slot.poll_swap();
+
+        let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, TransportSnapshot::default());
+        slot.process(&mut ctx);
+        let [left, right] = buffers.as_slices();
+        assert!((left[0] - 0.5 * pan_gains(-1.0)[0]).abs() < 1e-6, "{}", left[0]);
+        assert!(right[0].abs() < 1e-9, "hard left leaves nothing on the right");
+        assert!(slot.bus_peaks().get(0).peak_r.abs() < 1e-9);
+
+        params.set_bus_muted(0, true);
+        for _ in 0..2 {
+            let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, TransportSnapshot::default());
+            slot.process(&mut ctx);
+        }
+        assert_eq!(slot.bus_peaks().get(0), TrackPeak::SILENT);
+    }
+
+    #[test]
+    fn a_graph_with_no_sends_is_bit_identical_to_one_compiled_before_buses_existed() {
+        // The compatibility claim behind adding all of this: a project with no
+        // routing must produce exactly the samples it produced before, which is
+        // why the no-tap path still goes through `mix_into` rather than through
+        // the post-fader scratch.
+        const BLOCK: usize = 128;
+        let render = |with_empty_bus: bool| -> Vec<f32> {
+            let collector = Collector::new();
+            let (mut handle, mut slot) = graph_channel(2, collector.handle());
+            let params = Arc::new(MixerParams::new());
+            params.set_track_gain(0, 0.3);
+            let mut spec = GraphSpec::new()
+                .with_limits(limits(BLOCK))
+                .with_params(Arc::clone(&params))
+                .with_track(TrackSpec::new(Box::new(ConstNode(0.7))))
+                .with_track(TrackSpec::new(Box::new(AddNode(0.11))));
+            if with_empty_bus {
+                spec = spec.with_bus(BusSpec::new());
+            }
+            handle.install(spec).unwrap();
+            slot.poll_swap();
+            let mut buffers = AudioBuffers::new(BLOCK);
+            render_blocks(&mut slot, &mut buffers, BLOCK, 4)
+        };
+        assert_eq!(
+            render(false),
+            render(true),
+            "a bus nothing sends into must be inaudible"
+        );
+    }
+
+    #[test]
+    fn send_parameters_survive_a_rebuild_and_the_new_graph_does_not_fade_in() {
+        // The step-6 property, at send granularity: a structural edit (adding a
+        // bus, adding an insert) recompiles the graph, and the reverb send must
+        // not sweep back up over 10 ms every time.
+        const BLOCK: usize = 64;
+        let collector = Collector::new();
+        let (mut handle, mut slot) = graph_channel(4, collector.handle());
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let params = Arc::new(MixerParams::new());
+        params.set_track_muted(0, true);
+        params.set_send_level(StripId::Track(0), 0, 0.75);
+        params.set_send_pre(StripId::Track(0), 0, true);
+
+        let build = |extra_bus: bool| {
+            let mut spec = GraphSpec::new()
+                .with_limits(limits(BLOCK))
+                .with_params(Arc::clone(&params))
+                .with_track(TrackSpec::new(Box::new(ConstNode(1.0))))
+                .with_bus(BusSpec::new())
+                .with_send(SendSpec::new(StripId::Track(0), 0));
+            if extra_bus {
+                spec = spec.with_bus(BusSpec::new());
+            }
+            spec
+        };
+
+        handle.install(build(false)).unwrap();
+        slot.poll_swap();
+        let mut rendered = render_blocks(&mut slot, &mut buffers, BLOCK, 2);
+        handle.install(build(true)).unwrap();
+        slot.poll_swap();
+        rendered.extend(render_blocks(&mut slot, &mut buffers, BLOCK, 2));
+
+        assert!(
+            rendered.iter().all(|s| (*s - 0.75).abs() < 1e-6),
+            "the send level must be continuous across the swap"
+        );
+        assert_eq!(slot.bus_count(), 2);
     }
 
     /// The point of `basedrop`: dropping a graph on the "audio thread" must not

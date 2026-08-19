@@ -231,6 +231,7 @@ impl ClapHost {
             ClapCommand::RemoveTrack { track } => self
                 .remove_track(tracks, audio, track)
                 .map(|()| ClapAnswer::Done),
+            ClapCommand::Rebuild => self.rebuild(tracks, audio).map(|()| ClapAnswer::Done),
         }
     }
 
@@ -488,6 +489,18 @@ impl ClapHost {
         outcome
     }
 
+    /// Install a graph from the project as it now stands and re-attach.
+    ///
+    /// The main-thread half of every structural mixer edit that is not a track
+    /// add or remove: a bus, a send, an insert. The project has already been
+    /// changed by whoever asked; this is the part only this thread can do.
+    pub fn rebuild(&mut self, tracks: &TrackHost, audio: &AudioIoService) -> Result<(), String> {
+        tracks
+            .install_graph(audio)
+            .map_err(|err| err.to_string())?;
+        self.reattach(tracks, audio)
+    }
+
     /// Give every placed instance a node in the graph that is now installed.
     fn reattach(&mut self, tracks: &TrackHost, audio: &AudioIoService) -> Result<(), String> {
         let (sample_rate, max_block) = stream_info(audio)?;
@@ -737,6 +750,7 @@ mod tests {
             Arc::new(mydaw_plugin_test_tone::TestToneFactory::new()),
             Arc::new(mydaw_plugin_instruments::InstrumentRegistry::new()),
             Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
+            Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
         )
     }
 

@@ -78,21 +78,26 @@
 //! with a warning. **The reference stays in the file either way**, so saving a
 //! project on a machine that lacks a plugin does not throw the plugin away.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use mydaw_plugin_effects::EffectRegistry;
 use mydaw_plugin_host_vst3::ClassId;
 use mydaw_plugin_sequencer::{
     AudioClip, Clip, Pattern, PatternClip, PatternError, PatternSet, PlayMode, Playlist,
     PlaylistError, PlaylistTrack,
 };
-use mydaw_rt_core::{MAX_BPM, MAX_TRACKS, MIN_BPM};
+use mydaw_rt_core::{
+    StripId, MAX_BPM, MAX_BUSES, MAX_GAIN_DB, MAX_TRACKS, MIN_BPM, SILENCE_DB,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::clap_bridge::{from_base64, to_base64};
 use crate::dto::{ChannelClipDto, MelodicNoteDto, PatternDto, StepDto, StepRowDto};
-use crate::project::{check_gain_db, check_pan, Project, TrackDef};
+use crate::effects::InsertDef;
+use crate::project::{check_gain_db, check_pan, BusDef, Project, SendDef, TrackDef};
 use crate::source::{ClapSourceRef, Source, Vst3SourceRef};
 
 /// The format this build writes, and the highest it will read.
@@ -102,7 +107,17 @@ use crate::source::{ClapSourceRef, Source, Vst3SourceRef};
 /// | 1 | step 8 | The format. |
 /// | 2 | step 9 | `pattern.notes`; `pattern.steps` may be 32 or 64. |
 /// | 3 | patterns + playlist | `patterns`, `active_pattern`, `playlist`, `audio_sources`, `play_mode`; the single `pattern` is gone. |
-pub const FORMAT_VERSION: u32 = 3;
+/// | 4 | mixer v2 | `buses`, `sends`, `tracks[].inserts`, `master_inserts`. |
+///
+/// # Why version 4 is a bump and not just three new optional fields
+/// Rule 1 (unknown fields are ignored) already lets an older build open a file
+/// with them. That is exactly the problem: a version 3 build opening a project
+/// whose drum bus carries a compressor would play it back **without the
+/// compressor and without the bus**, silently, and then save that loss back over
+/// the user's file. An insert chain and a routing graph are required for correct
+/// playback, which is step 8's own stated bump condition, so refusing the file
+/// by name is the correct outcome.
+pub const FORMAT_VERSION: u32 = 4;
 
 /// File extension, without the dot. The native dialogs filter on it.
 pub const PROJECT_EXTENSION: &str = "mydaw";
@@ -131,8 +146,20 @@ pub struct ProjectFile {
     /// The mixer, in track order. A track's **position** is its note channel,
     /// which is why the order is data rather than presentation.
     pub tracks: Vec<TrackEntry>,
+    /// The buses, in strip order. A bus's **position** is what a send names.
+    ///
+    /// Absent in a version 3 file, which had none -- so the default is an empty
+    /// list, which is exactly what such a file meant.
+    #[serde(default)]
+    pub buses: Vec<BusEntry>,
+    /// Every send tap.
+    #[serde(default)]
+    pub sends: Vec<SendEntry>,
     /// The one plugin on the master insert, or `null`.
     pub master_effect: Option<EffectEntry>,
+    /// Internal effects on the master bus, ahead of [`Self::master_effect`].
+    #[serde(default)]
+    pub master_inserts: Vec<InsertEntry>,
     /// Whether the transport was left on `pat` or `song`.
     #[serde(default = "default_play_mode")]
     pub play_mode: String,
@@ -449,6 +476,147 @@ pub struct TrackEntry {
     /// bytes instead of four per byte.
     #[serde(default)]
     pub state_blob: String,
+    /// Internal effects, in signal order.
+    #[serde(default)]
+    pub inserts: Vec<InsertEntry>,
+}
+
+/// One internal effect on a chain.
+///
+/// # Why every parameter is written, not only the ones that were moved
+/// A default that changes in a later build must not silently change a saved
+/// project. Writing the whole set costs a few hundred bytes per effect and makes
+/// the file say exactly what it will sound like. It is also the precedent the
+/// v1 -> v2 migration set, where `"notes": []` is written explicitly rather than
+/// omitted.
+///
+/// The map is a [`BTreeMap`] so the key order is deterministic and the
+/// byte-identical round trip still holds.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InsertEntry {
+    /// Stable identity, restored rather than regenerated so a UI list keyed on
+    /// it does not look like every effect being replaced after a load.
+    pub id: u32,
+    /// Which effect, by the `type_id` its factory answers to. An effect this
+    /// build does not have is a **warning**, not a refusal -- see
+    /// [`ProjectFile::to_project`].
+    pub type_id: String,
+    /// Every parameter, by id. Ids this build does not know are ignored, which
+    /// is rule 1 at parameter granularity -- see
+    /// [`ParamBlock::apply`](mydaw_rt_core::ParamBlock::apply).
+    #[serde(default)]
+    pub params: BTreeMap<String, f32>,
+}
+
+impl InsertEntry {
+    /// Record a live insert the way a file has to.
+    pub fn capture(def: &InsertDef) -> Self {
+        Self {
+            id: def.id,
+            type_id: def.type_id.clone(),
+            params: def
+                .values()
+                .into_iter()
+                .map(|(id, value)| (id.to_owned(), value))
+                .collect(),
+        }
+    }
+
+    /// Rebuild the live insert this entry names.
+    ///
+    /// `None` -- with a warning -- for a `type_id` this build does not have. A
+    /// later build's effect is not a corrupt file, and the rest of the chain
+    /// still loads; the entry itself is kept in
+    /// [`ProjectFile`](crate::ProjectFile) either way, so a save on this machine
+    /// does not throw it away.
+    pub fn restore(&self, registry: &EffectRegistry) -> Option<InsertDef> {
+        match InsertDef::new(self.id, &self.type_id, registry) {
+            Ok(def) => {
+                def.params
+                    .apply(self.params.iter().map(|(id, value)| (id.as_str(), *value)));
+                Some(def)
+            }
+            Err(err) => {
+                log::warn!("{err}; leaving it out of the chain");
+                None
+            }
+        }
+    }
+}
+
+/// One bus.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BusEntry {
+    pub id: u32,
+    pub name: String,
+    /// Absent rather than `null` when there is none -- the engine has no
+    /// palette, and inventing one would put a design decision in a file format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    pub gain_db: f32,
+    pub pan: f32,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub soloed: bool,
+    #[serde(default)]
+    pub inserts: Vec<InsertEntry>,
+}
+
+/// One send tap.
+///
+/// The source is a `(kind, index)` pair rather than a tagged enum, so the file
+/// reads the way the command surface talks -- `"track"` / `"bus"` plus a number.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SendEntry {
+    pub id: u32,
+    /// `track` or `bus`. Anything else is skipped on load with a warning, on
+    /// the same terms as an unknown clip kind.
+    pub source_kind: String,
+    pub source_index: usize,
+    /// Index of the destination bus.
+    pub dest: usize,
+    /// Linear level. `1.0` is unity.
+    pub level: f32,
+    #[serde(default)]
+    pub pre: bool,
+}
+
+impl SendEntry {
+    /// Record a live send.
+    pub fn capture(send: &SendDef) -> Self {
+        Self {
+            id: send.id,
+            source_kind: if send.source.is_bus() { "bus" } else { "track" }.to_owned(),
+            source_index: send.source.index(),
+            dest: send.dest,
+            level: send.level,
+            pre: send.pre,
+        }
+    }
+
+    /// Rebuild the live send, or `None` with a warning for a source kind this
+    /// build does not know.
+    pub fn restore(&self) -> Option<SendDef> {
+        let source = match self.source_kind.as_str() {
+            "track" => StripId::Track(self.source_index),
+            "bus" => StripId::Bus(self.source_index),
+            other => {
+                log::warn!(
+                    "send {} comes from a '{other}', which this build does not know; skipping it",
+                    self.id
+                );
+                return None;
+            }
+        };
+        Some(SendDef {
+            id: self.id,
+            source,
+            dest: self.dest,
+            level: self.level,
+            pre: self.pre,
+        })
+    }
 }
 
 /// What sits at the head of a track.
@@ -576,6 +744,8 @@ pub enum ProjectFileError {
     NoTracks,
     #[error("a project may have at most {MAX_TRACKS} tracks; this one has {0}")]
     TooManyTracks(usize),
+    #[error("a project may have at most {MAX_BUSES} buses; this one has {0}")]
+    TooManyBuses(usize),
     /// One track's data is not usable. Names the track, so the sentence points
     /// at the line to look at.
     #[error("track {track} ('{name}'): {reason}")]
@@ -752,9 +922,30 @@ impl ProjectFile {
                     state_blob: track_states
                         .get(index)
                         .map_or_else(String::new, |bytes| to_base64(bytes)),
+                    inserts: track.inserts.iter().map(InsertEntry::capture).collect(),
                 })
                 .collect(),
+            buses: project
+                .buses
+                .iter()
+                .map(|bus| BusEntry {
+                    id: bus.id,
+                    name: bus.name.clone(),
+                    color: bus.color.clone(),
+                    gain_db: bus.gain_db,
+                    pan: bus.pan,
+                    muted: bus.muted,
+                    soloed: bus.soloed,
+                    inserts: bus.inserts.iter().map(InsertEntry::capture).collect(),
+                })
+                .collect(),
+            sends: project.sends.iter().map(SendEntry::capture).collect(),
             master_effect,
+            master_inserts: project
+                .master_inserts
+                .iter()
+                .map(InsertEntry::capture)
+                .collect(),
             play_mode: song.mode.id().to_owned(),
             patterns: song
                 .patterns
@@ -831,12 +1022,18 @@ impl ProjectFile {
     /// [`ProjectFileError::NoTracks`], [`ProjectFileError::TooManyTracks`],
     /// [`ProjectFileError::Track`] for a value the mixer would refuse or a
     /// source this build cannot name.
-    pub fn to_project(&self) -> Result<(Project, usize), ProjectFileError> {
+    pub fn to_project(
+        &self,
+        effects: &EffectRegistry,
+    ) -> Result<(Project, usize), ProjectFileError> {
         if self.tracks.is_empty() {
             return Err(ProjectFileError::NoTracks);
         }
         if self.tracks.len() > MAX_TRACKS {
             return Err(ProjectFileError::TooManyTracks(self.tracks.len()));
+        }
+        if self.buses.len() > MAX_BUSES {
+            return Err(ProjectFileError::TooManyBuses(self.buses.len()));
         }
 
         let mut defs = Vec::with_capacity(self.tracks.len());
@@ -861,8 +1058,73 @@ impl ProjectFile {
                 pan,
                 muted: entry.muted,
                 soloed: entry.soloed,
+                inserts: restore_chain(&entry.inserts, effects),
             });
         }
+
+        let buses: Vec<BusDef> = self
+            .buses
+            .iter()
+            .map(|entry| BusDef {
+                id: entry.id,
+                name: if entry.name.trim().is_empty() {
+                    format!("Bus {}", entry.id + 1)
+                } else {
+                    entry.name.clone()
+                },
+                color: entry.color.clone(),
+                // Clamped rather than refused: a bus is not a track, its fader
+                // is not something the file's own validation ever checked, and a
+                // project that will not open over a stray decibel is worse than
+                // one that opens at the edge of the scale.
+                gain_db: entry.gain_db.clamp(SILENCE_DB, MAX_GAIN_DB),
+                pan: if entry.pan.is_finite() {
+                    entry.pan.clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                },
+                muted: entry.muted,
+                soloed: entry.soloed,
+                inserts: restore_chain(&entry.inserts, effects),
+            })
+            .collect();
+
+        // A send naming a strip this project does not have is dropped with a
+        // warning rather than refusing the file: it can only come from a file
+        // that was hand-edited or written by a build that allowed more strips,
+        // and the rest of the routing still works.
+        let mut sends: Vec<SendDef> = Vec::new();
+        for entry in &self.sends {
+            let Some(send) = entry.restore() else {
+                continue;
+            };
+            let source_exists = match send.source {
+                StripId::Track(index) => index < defs.len(),
+                StripId::Bus(index) => index < buses.len(),
+            };
+            if !source_exists || send.dest >= buses.len() || send.source == StripId::Bus(send.dest)
+            {
+                log::warn!(
+                    "send {} runs {} -> bus {}, which this project does not have; dropping it",
+                    send.id,
+                    send.source,
+                    send.dest
+                );
+                continue;
+            }
+            if sends
+                .iter()
+                .any(|kept| kept.source == send.source && kept.dest == send.dest)
+            {
+                log::warn!("send {} duplicates an earlier one; dropping it", send.id);
+                continue;
+            }
+            sends.push(SendDef {
+                level: crate::project::check_send_level(send.level).unwrap_or(1.0),
+                ..send
+            });
+        }
+        drop_send_cycles(&mut sends);
 
         if let Some(effect) = &self.master_effect {
             from_base64(&effect.state_blob).map_err(ProjectFileError::MasterEffect)?;
@@ -875,7 +1137,16 @@ impl ProjectFile {
         }
 
         let selected = self.selected_track.min(defs.len() - 1);
-        Ok((Project::restored(defs, self.master_gain_db), selected))
+        Ok((
+            Project::restored_with(
+                defs,
+                self.master_gain_db,
+                buses,
+                sends,
+                restore_chain(&self.master_inserts, effects),
+            ),
+            selected,
+        ))
     }
 
     /// The step grid this file describes.
@@ -988,6 +1259,65 @@ impl ProjectFile {
 // ---------------------------------------------------------------------------
 // Parsing
 // ---------------------------------------------------------------------------
+
+/// Rebuild one insert chain, leaving out any effect this build does not have.
+fn restore_chain(entries: &[InsertEntry], effects: &EffectRegistry) -> Vec<InsertDef> {
+    entries
+        .iter()
+        .filter_map(|entry| entry.restore(effects))
+        .take(crate::effects::MAX_INSERTS)
+        .collect()
+}
+
+/// Drop the bus-to-bus taps that would close a loop.
+///
+/// A cycle cannot be created through the command surface -- [`Project::add_send`]
+/// refuses one -- so this only ever fires on a hand-edited file. Dropping the
+/// edge that closes the loop is the same answer the graph compiler gives, and it
+/// keeps a damaged file openable instead of turning a routing typo into "your
+/// project will not load".
+///
+/// [`Project::add_send`]: crate::Project::add_send
+fn drop_send_cycles(sends: &mut Vec<SendDef>) {
+    let mut kept: Vec<SendDef> = Vec::with_capacity(sends.len());
+    for send in sends.drain(..) {
+        let StripId::Bus(from) = send.source else {
+            kept.push(send);
+            continue;
+        };
+        // Would `dest` already reach `from`? If so this edge closes a loop.
+        let mut frontier = vec![send.dest];
+        let mut seen = vec![send.dest];
+        let mut closes = from == send.dest;
+        while let Some(bus) = frontier.pop() {
+            if closes {
+                break;
+            }
+            for edge in &kept {
+                if edge.source != StripId::Bus(bus) {
+                    continue;
+                }
+                if edge.dest == from {
+                    closes = true;
+                    break;
+                }
+                if !seen.contains(&edge.dest) {
+                    seen.push(edge.dest);
+                    frontier.push(edge.dest);
+                }
+            }
+        }
+        if closes {
+            log::warn!(
+                "send {} would feed bus {from} into itself; dropping it",
+                send.id
+            );
+        } else {
+            kept.push(send);
+        }
+    }
+    *sends = kept;
+}
 
 /// Just enough of a project file to decide whether to read the rest.
 #[derive(Deserialize)]
@@ -1283,7 +1613,7 @@ mod tests {
             format!(r#""format_version": {FORMAT_VERSION},"#),
             "{json}"
         );
-        assert_eq!(FORMAT_VERSION, 3, "patterns and the playlist");
+        assert_eq!(FORMAT_VERSION, 4, "buses, sends and insert chains");
         assert!(json.ends_with("}\n"), "the file ends with a newline");
     }
 
@@ -1295,7 +1625,7 @@ mod tests {
         let parsed = parse_project(&text).expect("what we wrote is what we read");
         assert_eq!(parsed, file);
 
-        let (restored, selected) = parsed.to_project().expect("a valid project");
+        let (restored, selected) = parsed.to_project(&EffectRegistry::new()).expect("a valid project");
         assert_eq!(restored, project, "the whole mixer, field for field");
         assert_eq!(selected, 1);
         assert_eq!(parsed.to_bpm().unwrap(), 147.0);
@@ -1339,7 +1669,7 @@ mod tests {
         let file = ProjectFile::capture(&project, 0, 174.3, &empty_song(), &[], None);
 
         let parsed = parse_project(&file.to_json().unwrap()).unwrap();
-        let (restored, _) = parsed.to_project().unwrap();
+        let (restored, _) = parsed.to_project(&EffectRegistry::new()).unwrap();
         assert_eq!(restored.tracks[0].gain_db, -6.020_6);
         assert_eq!(restored.tracks[0].pan, 0.333_333_34);
         assert_eq!(restored.tracks[1].gain_db, SILENCE_DB);
@@ -1448,7 +1778,7 @@ mod tests {
             "escaped in the file"
         );
         let parsed = parse_project(&text).unwrap();
-        let (project, _) = parsed.to_project().unwrap();
+        let (project, _) = parsed.to_project(&EffectRegistry::new()).unwrap();
         assert_eq!(
             project.tracks[1].source.clap_ref().unwrap().bundle_path,
             std::path::PathBuf::from(r"C:\CLAP\Fixture.clap")
@@ -1519,7 +1849,7 @@ mod tests {
         // Everything version 1 could say is still said.
         assert_eq!(parsed.to_bpm().unwrap(), 147.0);
         assert_eq!(parsed.master_gain_db, -3.5);
-        let (project, selected) = parsed.to_project().expect("a valid project");
+        let (project, selected) = parsed.to_project(&EffectRegistry::new()).expect("a valid project");
         assert_eq!(project.len(), 2);
         assert_eq!(project.tracks[0].name, "Drums");
         assert_eq!(project.tracks[0].gain_db, -6.5);
@@ -1583,7 +1913,7 @@ mod tests {
 
         let saved = migrated.to_json().unwrap();
         assert!(
-            saved.contains(r#""format_version": 3"#),
+            saved.contains(r#""format_version": 4"#),
             "a save writes the current format"
         );
         assert!(
@@ -1878,13 +2208,13 @@ mod tests {
     fn a_project_with_no_tracks_or_too_many_is_refused() {
         let mut file = captured();
         file.tracks.clear();
-        assert!(matches!(file.to_project(), Err(ProjectFileError::NoTracks)));
+        assert!(matches!(file.to_project(&EffectRegistry::new()), Err(ProjectFileError::NoTracks)));
 
         let mut file = captured();
         let one = file.tracks[0].clone();
         file.tracks = vec![one; MAX_TRACKS + 1];
         assert!(matches!(
-            file.to_project(),
+            file.to_project(&EffectRegistry::new()),
             Err(ProjectFileError::TooManyTracks(n)) if n == MAX_TRACKS + 1
         ));
     }
@@ -1914,7 +2244,7 @@ mod tests {
         ] {
             let mut file = captured();
             mutate(&mut file.tracks[1]);
-            let err = file.to_project().unwrap_err();
+            let err = file.to_project(&EffectRegistry::new()).unwrap_err();
             assert!(
                 matches!(err, ProjectFileError::Track { track: 1, .. }),
                 "{field} produced {err:?}"
@@ -1928,7 +2258,7 @@ mod tests {
         let mut file = captured();
         file.master_effect.as_mut().unwrap().state_blob = "!!!!".to_owned();
         assert!(matches!(
-            file.to_project(),
+            file.to_project(&EffectRegistry::new()),
             Err(ProjectFileError::MasterEffect(_))
         ));
 
@@ -1937,7 +2267,7 @@ mod tests {
             plugin: EffectRef::vst3(r"C:\VST3\Thing.vst3", "not-hex", "Thing"),
             state_blob: String::new(),
         });
-        let err = file.to_project().unwrap_err();
+        let err = file.to_project(&EffectRegistry::new()).unwrap_err();
         assert!(matches!(err, ProjectFileError::MasterEffect(_)), "{err:?}");
         assert!(err.to_string().contains("class id"), "{err}");
     }
@@ -2088,6 +2418,6 @@ mod tests {
         let mut file = captured();
         let last = file.tracks.len() - 1;
         file.selected_track = 99;
-        assert_eq!(file.to_project().unwrap().1, last);
+        assert_eq!(file.to_project(&EffectRegistry::new()).unwrap().1, last);
     }
 }

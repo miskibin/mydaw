@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use mydaw_rt_core::basedrop::Collector;
 use mydaw_rt_core::{
-    graph_channel, AudioBuffers, GraphLimits, GraphSpec, MixerParams, NoteEvent, NoteKind,
-    ProcessCtx, RtNode, TrackSpec, TransportSnapshot, MAX_TRACKS,
+    graph_channel, AudioBuffers, BusSpec, GraphLimits, GraphSpec, MixerParams, NoteEvent, NoteKind,
+    ProcessCtx, RtNode, SendSpec, StripId, TrackSpec, TransportSnapshot, MAX_BUSES, MAX_TRACKS,
 };
 
 thread_local! {
@@ -192,6 +192,101 @@ fn sixteen_tracks_with_a_full_event_block_allocate_nothing() {
     );
     assert_eq!(slot.track_count(), MAX_TRACKS);
     assert_eq!(slot.track_peaks().count(), MAX_TRACKS);
+}
+
+/// The routing step's worst case: sixteen tracks, eight buses, **every** track
+/// tapping **every** bus, and every bus tapping every later bus.
+///
+/// 156 send taps, 312 send strips, eight bus input buffers and one shared
+/// post-fader scratch, all of which have to have been allocated before the wall.
+/// This is the shape the fixed [`MAX_BUSES`] cap exists to make measurable: a
+/// mixer that allocated once per tap would allocate 156 times a block here.
+#[test]
+fn a_full_send_matrix_over_eight_buses_allocates_nothing() {
+    let collector = Collector::new();
+    let (mut handle, mut slot) = graph_channel(2, collector.handle());
+    let params = Arc::new(MixerParams::new());
+
+    let mut spec = GraphSpec::new()
+        .with_params(Arc::clone(&params))
+        .with_limits(GraphLimits {
+            sample_rate: SR,
+            max_block: BLOCK,
+            max_events: EVENTS,
+        });
+    for track in 0..MAX_TRACKS {
+        spec = spec.with_track(TrackSpec::new(Box::new(EventCountingNode {
+            value: 0.001 * (track + 1) as f32,
+            seen: 0,
+        })));
+    }
+    for _ in 0..MAX_BUSES {
+        spec = spec.with_bus(BusSpec::new());
+    }
+    for track in 0..MAX_TRACKS {
+        for bus in 0..MAX_BUSES {
+            spec = spec.with_send(SendSpec::new(StripId::Track(track), bus));
+            params.set_send_level(StripId::Track(track), bus, 0.1);
+        }
+    }
+    for from in 0..MAX_BUSES {
+        for to in from + 1..MAX_BUSES {
+            spec = spec.with_send(SendSpec::new(StripId::Bus(from), to));
+            params.set_send_level(StripId::Bus(from), to, 0.05);
+        }
+    }
+    let declared = spec.send_count();
+    handle.install(spec).expect("install");
+    slot.poll_swap();
+    assert_eq!(declared, MAX_TRACKS * MAX_BUSES + MAX_BUSES * (MAX_BUSES - 1) / 2);
+
+    let mut buffers = AudioBuffers::new(BLOCK);
+    let events = block_events();
+    {
+        let mut ctx = ProcessCtx::with_events(
+            &mut buffers,
+            SR,
+            BLOCK,
+            TransportSnapshot::default(),
+            &events,
+        );
+        slot.process(&mut ctx);
+    }
+
+    let observed = count_allocations(|| {
+        for block in 0..32 {
+            // Send knobs and pre/post flags moving while it renders: both are
+            // atomics, and both drive a ramp that has its own branch.
+            let source = StripId::Track(block % MAX_TRACKS);
+            params.set_send_level(source, block % MAX_BUSES, 0.2);
+            params.set_send_pre(source, block % MAX_BUSES, block % 2 == 0);
+            params.set_bus_gain(block % MAX_BUSES, 0.7);
+            params.set_bus_pan(block % MAX_BUSES, -0.3);
+            params.set_bus_muted(block % MAX_BUSES, block % 5 == 0);
+
+            slot.poll_swap();
+            let mut ctx = ProcessCtx::with_events(
+                &mut buffers,
+                SR,
+                BLOCK,
+                TransportSnapshot::default(),
+                &events,
+            );
+            slot.process(&mut ctx);
+            let _ = slot.track_peaks();
+            let _ = slot.bus_peaks();
+        }
+    });
+
+    assert_eq!(
+        observed, 0,
+        "a full send matrix allocated {observed} time(s) over 32 blocks"
+    );
+    assert_eq!(slot.bus_count(), MAX_BUSES);
+    assert_eq!(slot.bus_peaks().count(), MAX_BUSES);
+    // Nothing is silent and nothing has run away: the whole matrix is live.
+    let master = buffers.as_slices()[0][BLOCK - 1];
+    assert!(master.is_finite() && master.abs() > 0.0, "{master}");
 }
 
 #[test]

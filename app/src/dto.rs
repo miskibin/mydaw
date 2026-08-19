@@ -56,6 +56,17 @@ pub struct MeterFrameDto {
     pub playing: bool,
     /// Post-strip, pre-master peak of every track, in track order.
     pub tracks: Vec<TrackMeterDto>,
+    /// Post-strip, pre-master peak of every bus, in bus order.
+    ///
+    /// A separate list rather than more entries in `tracks`, because a bus is a
+    /// different strip with a different index space: `buses[0]` is bus 0, not
+    /// "the track after the last one". Empty in a project with no buses, so a
+    /// session that never opened the routing view pays nothing for it.
+    ///
+    /// The frame therefore carries at most `MAX_TRACKS` + `MAX_BUSES` + 1 =
+    /// **25** strips: sixteen tracks, eight buses and the master, whose level is
+    /// the flat `peak*`/`rms*` fields at the top.
+    pub buses: Vec<TrackMeterDto>,
     /// When the pump handed this frame to the webview, on the bench clock
     /// ([`crate::ipc_bench::epoch_ms`]).
     ///
@@ -80,6 +91,7 @@ impl From<MeterFrame> for MeterFrameDto {
                 .iter()
                 .map(TrackMeterDto::from)
                 .collect(),
+            buses: frame.bus_meters().iter().map(TrackMeterDto::from).collect(),
             pump_ms: None,
         }
     }
@@ -735,6 +747,7 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "buses",
                 "peakL",
                 "peakR",
                 "playing",

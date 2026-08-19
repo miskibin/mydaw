@@ -45,12 +45,14 @@ pub use denormals::disable_denormals;
 pub use denormals::mxcsr;
 pub use gc::{GcThread, DEFAULT_GC_INTERVAL};
 pub use graph::{
-    graph_channel, CompiledGraph, GraphHandle, GraphInstallError, GraphLimits, GraphSpec,
-    RtGraphSlot, TrackSpec, DEFAULT_MAX_BLOCK, DEFAULT_MAX_EVENTS, DEFAULT_SAMPLE_RATE,
+    bus_order, graph_channel, BusSpec, CompiledGraph, GraphHandle, GraphInstallError, GraphLimits,
+    GraphSpec, RtGraphSlot, SendSpec, TrackSpec, DEFAULT_MAX_BLOCK, DEFAULT_MAX_EVENTS,
+    DEFAULT_SAMPLE_RATE,
 };
 pub use mixer::{
-    db_to_gain, gain_to_db, pan_gains, param_ramp_frames, MasterStrip, MixerParams, TrackParams,
-    TrackPeak, TrackPeaks, TrackStrip, MAX_GAIN_DB, MAX_TRACKS, PARAM_RAMP_MIN_FRAMES,
+    db_to_gain, gain_to_db, max_send_db, pan_gains, param_ramp_frames, BusPeaks, MasterStrip,
+    MixerParams, PeakBlock, SendParams, StripId, TrackParams, TrackPeak, TrackPeaks, TrackStrip,
+    MAX_BUSES, MAX_GAIN_DB, MAX_SEND_LEVEL, MAX_SEND_SOURCES, MAX_TRACKS, PARAM_RAMP_MIN_FRAMES,
     PARAM_RAMP_SECONDS, SILENCE_DB,
 };
 pub use node::{ProcessCtx, RtNode, RtNodeFactory};

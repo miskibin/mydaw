@@ -152,13 +152,11 @@ pub fn engine_graph(
 /// [`TrackHost::build_spec`]: crate::tracks::TrackHost::build_spec
 pub fn track_chain(
     slot: crate::source::SourceSlot,
-    effect: Option<Box<dyn RtNode>>,
+    inserts: Vec<Box<dyn RtNode>>,
     gate: Arc<AtomicBool>,
 ) -> TrackSpec {
     let mut track = TrackSpec::new(Box::new(slot) as Box<dyn RtNode>);
-    if let Some(effect) = effect {
-        track.inserts.push(effect);
-    }
+    track.inserts = inserts;
     track.inserts.push(Box::new(TransportGate::new(gate)));
     track
 }
@@ -170,7 +168,7 @@ pub fn source_chain(
     effect: Option<Box<dyn RtNode>>,
     gate: Arc<AtomicBool>,
 ) -> GraphSpec {
-    GraphSpec::new().with_track(track_chain(slot, effect, gate))
+    GraphSpec::new().with_track(track_chain(slot, effect.into_iter().collect(), gate))
 }
 
 #[cfg(test)]

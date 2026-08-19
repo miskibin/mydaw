@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use mydaw_rt_core::{TrackPeaks, MAX_TRACKS};
+use mydaw_rt_core::{BusPeaks, TrackPeaks, MAX_BUSES, MAX_TRACKS};
 use rtrb::Consumer;
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +52,12 @@ pub struct MeterFrame {
     pub tracks: [TrackMeter; MAX_TRACKS],
     /// Tracks the graph was running when this block was measured.
     pub track_count: u8,
+    /// Per-bus peaks, measured after each bus's strip, on the same terms as
+    /// [`tracks`](Self::tracks). Only the first
+    /// [`bus_count`](Self::bus_count) are meaningful.
+    pub buses: [TrackMeter; MAX_BUSES],
+    /// Buses the graph was running when this block was measured.
+    pub bus_count: u8,
 }
 
 impl MeterFrame {
@@ -65,11 +71,27 @@ impl MeterFrame {
         playing: false,
         tracks: [TrackMeter::SILENT; MAX_TRACKS],
         track_count: 0,
+        buses: [TrackMeter::SILENT; MAX_BUSES],
+        bus_count: 0,
     };
 
     /// The tracks that actually exist, as a slice.
     pub fn track_meters(&self) -> &[TrackMeter] {
         &self.tracks[..(self.track_count as usize).min(MAX_TRACKS)]
+    }
+
+    /// The buses that actually exist, as a slice.
+    pub fn bus_meters(&self) -> &[TrackMeter] {
+        &self.buses[..(self.bus_count as usize).min(MAX_BUSES)]
+    }
+
+    /// Copy the graph's per-bus peaks into this frame. RT-safe.
+    pub fn set_bus_peaks(&mut self, peaks: &BusPeaks) {
+        self.bus_count = peaks.count().min(MAX_BUSES) as u8;
+        for (slot, peak) in self.buses.iter_mut().zip(peaks.as_slice()) {
+            slot.peak_l = peak.peak_l;
+            slot.peak_r = peak.peak_r;
+        }
     }
 
     /// Copy the graph's per-track peaks into this frame.

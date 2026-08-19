@@ -21,6 +21,7 @@ use crate::dto::{
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
+use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueDto};
 use crate::project::MixerStateDto;
 use crate::project_bridge::ProjectInfoDto;
 use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
@@ -28,6 +29,7 @@ use crate::source::{Source, SourceDto};
 use crate::state::AppState;
 use crate::vst3_bridge::Vst3GuiStatusDto;
 use mydaw_plugin_sequencer::{PlayMode, DEFAULT_CLIP_TICKS};
+use mydaw_rt_core::StripId;
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
 #[tauri::command]
@@ -352,6 +354,318 @@ pub async fn remove_track(
 ) -> Result<MixerStateDto, String> {
     state.remove_track(track).map_err(|err| err.to_string())?;
     Ok(state.mixer_state())
+}
+
+// ---------------------------------------------------------------------------
+// Buses, sends and insert chains
+// ---------------------------------------------------------------------------
+//
+// Three kinds of command, and only one of them rebuilds the graph:
+//
+// | kind | cost |
+// | --- | --- |
+// | `set_send_level`, `set_send_pre`, `set_insert_param`, `set_insert_bypass`, and the bus fader/pan/mute/solo | one atomic store; the audio thread hears it on its next block with a 10 ms ramp |
+// | `rename_bus`, `set_bus_color` | a string in the project; nothing crosses the RT wall at all |
+// | `add_bus`, `remove_bus`, `add_send`, `remove_send`, `add_insert`, `remove_insert`, `move_insert` | a graph rebuild, through the same machinery `add_track` uses -- so they are `async`, because with a hosted plugin loaded they wait for a host's main thread |
+//
+// Every one of them succeeds with **no audio device open**, for the reason the
+// pattern commands do: a mix is project data.
+
+/// Every internal effect this build can insert, with the metadata a generic
+/// knob panel renders from. Static: fetch once at startup.
+#[tauri::command]
+pub fn get_effects(state: State<'_, AppState>) -> Vec<EffectInfoDto> {
+    state.effect_catalogue()
+}
+
+/// Add a bus, returning the whole mixer.
+#[tauri::command]
+pub async fn add_bus(
+    state: State<'_, AppState>,
+    name: Option<String>,
+) -> Result<MixerStateDto, String> {
+    state.add_bus(name).map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Remove a bus, **and every send at either end of it**.
+///
+/// Buses after it shift down, and every send naming one follows -- a bus index
+/// is a position, and a send left pointing at the bus that moved into the gap
+/// would silently reroute somebody's reverb.
+#[tauri::command]
+pub async fn remove_bus(state: State<'_, AppState>, bus: usize) -> Result<MixerStateDto, String> {
+    state.remove_bus(bus).map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Rename a bus. Blank is refused.
+#[tauri::command]
+pub fn rename_bus(
+    state: State<'_, AppState>,
+    bus: usize,
+    name: String,
+) -> Result<MixerStateDto, String> {
+    state
+        .rename_bus(bus, &name)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Set or clear a bus's colour. `null` -- or a blank string -- clears it.
+#[tauri::command]
+pub fn set_bus_color(
+    state: State<'_, AppState>,
+    bus: usize,
+    color: Option<String>,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_bus_color(bus, color)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Set a bus's fader, in dB.
+#[tauri::command]
+pub fn set_bus_gain(
+    state: State<'_, AppState>,
+    bus: usize,
+    db: f32,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_bus_gain_db(bus, db)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Set a bus's pan, `-1.0`..=`1.0`.
+#[tauri::command]
+pub fn set_bus_pan(
+    state: State<'_, AppState>,
+    bus: usize,
+    pan: f32,
+) -> Result<MixerStateDto, String> {
+    state.set_bus_pan(bus, pan).map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Mute or unmute a bus.
+#[tauri::command]
+pub fn set_bus_mute(
+    state: State<'_, AppState>,
+    bus: usize,
+    muted: bool,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_bus_muted(bus, muted)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Solo or un-solo a bus. Tracks and buses share one solo scope.
+#[tauri::command]
+pub fn set_bus_solo(
+    state: State<'_, AppState>,
+    bus: usize,
+    soloed: bool,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_bus_soloed(bus, soloed)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Add a send tap from a strip into a bus, at unity and post-fader.
+///
+/// `sourceKind` is `"track"` or `"bus"`. Refused for a duplicate pair, for a bus
+/// sending to itself, and for anything that would feed a bus back into itself
+/// through others -- the error names the whole loop.
+#[tauri::command]
+pub async fn add_send(
+    state: State<'_, AppState>,
+    source_kind: String,
+    source_index: usize,
+    dest: usize,
+) -> Result<MixerStateDto, String> {
+    let source = parse_strip(&source_kind, source_index)?;
+    state.add_send(source, dest).map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Remove a send tap, by its id.
+#[tauri::command]
+pub async fn remove_send(
+    state: State<'_, AppState>,
+    send_id: u32,
+) -> Result<MixerStateDto, String> {
+    state.remove_send(send_id).map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Set a send's level, linear, `0.0`..=`maxSendLevel`.
+///
+/// One atomic store, so this is what a knob drag sends per frame. Returns
+/// nothing rather than the whole mixer for exactly that reason.
+#[tauri::command]
+pub fn set_send_level(
+    state: State<'_, AppState>,
+    send_id: u32,
+    level: f32,
+) -> Result<(), String> {
+    state
+        .set_send_level(send_id, level)
+        .map_err(|err| err.to_string())
+}
+
+/// Move a send between pre- and post-fader.
+///
+/// Pre-fader is taken after the source's inserts and **before** its fader, pan
+/// and mute, so a strip pulled to silence still feeds its bus. The change
+/// crossfades over 10 ms rather than switching a route on a block boundary.
+#[tauri::command]
+pub fn set_send_pre(state: State<'_, AppState>, send_id: u32, pre: bool) -> Result<(), String> {
+    state
+        .set_send_pre(send_id, pre)
+        .map_err(|err| err.to_string())
+}
+
+/// Add an internal effect to a chain, returning the whole mixer.
+///
+/// `target` is `"track"`, `"bus"` or `"master"`; `targetIndex` is ignored for
+/// the master. `position` is where in the chain it lands, or the end when
+/// absent.
+#[tauri::command]
+pub async fn add_insert(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    type_id: String,
+    position: Option<usize>,
+) -> Result<MixerStateDto, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    state
+        .add_insert(target, &type_id, position)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Remove an insert from a chain.
+#[tauri::command]
+pub async fn remove_insert(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    index: usize,
+) -> Result<MixerStateDto, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    state
+        .remove_insert(target, index)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Move an insert within its chain, so that it ends up at `to`.
+#[tauri::command]
+pub async fn move_insert(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    from: usize,
+    to: usize,
+) -> Result<MixerStateDto, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    state
+        .move_insert(target, from, to)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Set one insert parameter, returning **what was actually stored**.
+///
+/// One atomic store, so this is what a knob drag sends per frame. The answer is
+/// the sanitised value -- clamped into range and snapped to the parameter's step
+/// grid -- so a UI can put its knob where the engine actually is.
+#[tauri::command]
+pub fn set_insert_param(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    index: usize,
+    param_id: String,
+    value: f32,
+) -> Result<f32, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    state
+        .set_insert_param(target, index, &param_id, value)
+        .map_err(|err| err.to_string())
+}
+
+/// Turn one insert's bypass on or off.
+///
+/// A parameter like any other -- each effect crossfades itself over 10 ms and is
+/// bit-transparent once settled -- offered by name because every strip draws the
+/// button.
+#[tauri::command]
+pub fn set_insert_bypass(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    index: usize,
+    bypassed: bool,
+) -> Result<MixerStateDto, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    state
+        .set_insert_bypass(target, index, bypassed)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// One insert's live meter values.
+///
+/// **Separate from the parameter values on purpose**: a gain-reduction bar wants
+/// to move at frame rate, and sending twenty knob positions sixty times a second
+/// to animate one bar is the mistake this split exists to prevent.
+#[tauri::command]
+pub fn get_insert_readouts(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    index: usize,
+) -> Result<Vec<ParamValueDto>, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    state
+        .insert_readouts(target, index)
+        .map_err(|err| err.to_string())
+}
+
+/// Every meter on one chain, in chain order. Inserts that publish none appear
+/// with an empty list, so the answer's length is the chain's length.
+#[tauri::command]
+pub fn get_chain_readouts(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+) -> Result<Vec<InsertReadoutsDto>, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    state
+        .chain_readouts(target)
+        .map_err(|err| err.to_string())
+}
+
+/// `"track"` / `"bus"` plus an index, as the webview sends a send's source.
+fn parse_strip(kind: &str, index: usize) -> Result<StripId, String> {
+    match kind {
+        "track" => Ok(StripId::Track(index)),
+        "bus" => Ok(StripId::Bus(index)),
+        other => Err(format!(
+            "'{other}' is not a place a send can come from; expected 'track' or 'bus'"
+        )),
+    }
+}
+
+/// `"track"` / `"bus"` / `"master"` plus an index, as the webview sends a chain.
+fn parse_insert_target(kind: &str, index: usize) -> Result<InsertTarget, String> {
+    InsertTarget::parse(kind, index).map_err(|err| err.to_string())
 }
 
 // ---------------------------------------------------------------------------
