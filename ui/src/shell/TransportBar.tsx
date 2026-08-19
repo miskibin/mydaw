@@ -1,14 +1,24 @@
-import { For, Show, type JSX } from 'solid-js';
+import { createSignal, For, Show, type JSX } from 'solid-js';
 import { formatTimecode } from '../lib/playhead';
 import { useAppState } from '../state';
 
-/** Placeholder tempo until a transport plugin owns it (Phase 2). */
-const PLACEHOLDER_BPM = 128;
+/** Tempo bounds, mirroring `MIN_BPM`/`MAX_BPM` in `crates/rt-core`. */
+const MIN_BPM = 20;
+const MAX_BPM = 999;
+
+/** Beats per pixel of vertical drag. One BPM per 4 px is the usual DAW feel. */
+const PIXELS_PER_BPM = 4;
 
 /**
  * Top chrome: transport buttons wired to the backend abstraction, the
- * instrument selector, and the position and tempo readouts. Tempo is a
- * placeholder -- nothing on the Rust side reports it yet.
+ * instrument selector, the tempo control, and the position readout.
+ *
+ * # The tempo control
+ * A number input *and* a vertical drag, because both are how people set a
+ * tempo: typing 174 is exact, and dragging is how you find out that 128 was
+ * better. Both funnel into the same `setBpm`, which clamps here and is rejected
+ * by Rust if it somehow still escapes the range -- a tempo of 0 would divide the
+ * scheduler's step length by zero, so it is checked in both languages.
  *
  * The source selector is segmented buttons rather than a dropdown because the
  * list is short, fixed, and worth reading at a glance: which instrument is
@@ -19,6 +29,51 @@ const PLACEHOLDER_BPM = 128;
  */
 export function TransportBar(): JSX.Element {
   const app = useAppState();
+  /** Text being typed, while the input has focus. `null` means "show the state". */
+  const [draft, setDraft] = createSignal<string | null>(null);
+
+  const clampBpm = (value: number) => Math.min(MAX_BPM, Math.max(MIN_BPM, value));
+
+  /** Accept what was typed, ignoring anything that is not a tempo. */
+  const commitDraft = () => {
+    const text = draft();
+    setDraft(null);
+    if (text === null) return;
+    const parsed = Number.parseFloat(text);
+    if (Number.isFinite(parsed)) app.setBpm(clampBpm(parsed));
+  };
+
+  /**
+   * Vertical drag: pointer capture so the gesture survives leaving the input,
+   * and up is faster. The value is applied continuously -- a tempo you cannot
+   * hear until you let go is a tempo you cannot dial in.
+   */
+  const startDrag = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    const target = event.currentTarget as HTMLElement;
+    const startY = event.clientY;
+    const startBpm = app.bpm();
+    let moved = false;
+
+    const move = (moveEvent: PointerEvent) => {
+      const delta = Math.round((startY - moveEvent.clientY) / PIXELS_PER_BPM);
+      if (delta === 0 && !moved) return;
+      moved = true;
+      app.setBpm(clampBpm(startBpm + delta));
+    };
+    const end = () => {
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', end);
+      target.removeEventListener('pointercancel', end);
+      // A drag that moved must not also land as a click-to-focus-and-select.
+      if (moved) target.blur();
+    };
+
+    target.setPointerCapture(event.pointerId);
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', end);
+    target.addEventListener('pointercancel', end);
+  };
 
   return (
     <header class="transport">
@@ -89,9 +144,31 @@ export function TransportBar(): JSX.Element {
           </span>
         </div>
         <div class="readout">
-          <span class="readout__label">Tempo</span>
-          <span class="readout__value readout__value--mono" title="Placeholder — no tempo service yet">
-            {PLACEHOLDER_BPM.toFixed(2)}
+          <label class="readout__label" for="tempo">
+            Tempo
+          </label>
+          <span class="readout__value readout__value--mono tempo">
+            <input
+              id="tempo"
+              class="tempo__input"
+              type="number"
+              inputmode="decimal"
+              min={MIN_BPM}
+              max={MAX_BPM}
+              step="0.1"
+              value={draft() ?? app.bpm().toFixed(1)}
+              title={`Tempo in BPM (${MIN_BPM}–${MAX_BPM}). Type a value, or drag up and down.`}
+              onPointerDown={startDrag}
+              onInput={(event) => setDraft(event.currentTarget.value)}
+              onBlur={commitDraft}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') event.currentTarget.blur();
+                if (event.key === 'Escape') {
+                  setDraft(null);
+                  event.currentTarget.blur();
+                }
+              }}
+            />
             <small> BPM</small>
           </span>
         </div>

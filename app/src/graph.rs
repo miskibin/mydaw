@@ -381,6 +381,7 @@ mod tests {
         let transport = TransportSnapshot {
             sample_pos: 0,
             playing,
+            ..TransportSnapshot::default()
         };
         let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, transport);
         for node in &mut nodes {
@@ -487,6 +488,7 @@ mod tests {
             TransportSnapshot {
                 sample_pos: 0,
                 playing: false,
+                ..TransportSnapshot::default()
             },
         );
         for node in &mut nodes {
@@ -513,6 +515,7 @@ mod tests {
         let stopped = TransportSnapshot {
             sample_pos: 0,
             playing: false,
+            ..TransportSnapshot::default()
         };
 
         let mut buffers = AudioBuffers::new(BLOCK);

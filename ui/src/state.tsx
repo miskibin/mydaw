@@ -7,7 +7,13 @@ import {
   type JSX,
 } from 'solid-js';
 import { getBackend, type Backend } from './api/backend';
-import type { MeterFrame, PanelManifestDto, PluginStatusDto, SourceDto } from './api/types';
+import type {
+  MeterFrame,
+  PanelManifestDto,
+  PatternDto,
+  PluginStatusDto,
+  SourceDto,
+} from './api/types';
 import {
   clampOctave,
   DEFAULT_OCTAVE,
@@ -18,6 +24,7 @@ import {
   OCTAVE_DOWN_CODE,
   OCTAVE_UP_CODE,
 } from './lib/keyboard';
+import { clearedPattern, withToggledStep } from './lib/pattern';
 import { Playhead } from './lib/playhead';
 
 /** Connection/boot state of the kernel, surfaced in the status bar. */
@@ -63,11 +70,28 @@ export interface AppState {
    * The piano keys work either way.
    */
   readonly drumPadsActive: Accessor<boolean>;
+  /** The step grid, or `undefined` before the first fetch. */
+  readonly pattern: Accessor<PatternDto | undefined>;
+  /** Session tempo in beats per minute. */
+  readonly bpm: Accessor<number>;
   play(): void;
   stop(): void;
   refresh(): void;
   /** Put a different instrument at the head of the engine's chain. */
   selectSource(id: string): void;
+  /**
+   * Toggle one cell of the grid. `accent` is the shift-click variant; see
+   * `lib/pattern.ts` for exactly what each does.
+   *
+   * The local grid updates immediately and the backend is told once the user
+   * stops clicking (see `PATTERN_PUSH_DEBOUNCE_MS`) -- a click has to feel
+   * instant, and a drag across four cells is one message, not four.
+   */
+  toggleStep(rowIndex: number, stepIndex: number, accent: boolean): void;
+  /** Switch every cell off. */
+  clearPattern(): void;
+  /** Set the session tempo. Out-of-range values are reported, not clamped. */
+  setBpm(bpm: number): void;
   /**
    * Re-attach the app's own meter handler.
    *
@@ -82,6 +106,15 @@ const AppStateContext = createContext<AppState>();
 
 /** Text readout refresh rate. Deliberately far below the meter frame rate. */
 const READOUT_HZ = 10;
+
+/**
+ * How long the grid waits after the last click before telling the backend.
+ *
+ * Long enough that dragging a row of hi-hats is one message; short enough that
+ * a single click is published before the ear could notice. The local grid is
+ * updated immediately either way, so this is never felt as latency.
+ */
+const PATTERN_PUSH_DEBOUNCE_MS = 50;
 
 /**
  * Manifest id the shell contributes under `MYDAW_IPC_BENCH=1`. Its presence in
@@ -105,6 +138,8 @@ function createAppState(): AppState {
   const [octave, setOctave] = createSignal(DEFAULT_OCTAVE);
   const [heldNotes, setHeldNotes] = createSignal<number[]>([]);
   const [sources, setSources] = createSignal<SourceDto[]>([]);
+  const [pattern, setPattern] = createSignal<PatternDto | undefined>();
+  const [bpm, setBpmSignal] = createSignal(130);
 
   const currentSource = () => sources().find((source) => source.selected);
   const drumPadsActive = () => currentSource()?.id === 'drum-kit';
@@ -112,9 +147,22 @@ function createAppState(): AppState {
   const reportError = (err: unknown) =>
     setKernelError(err instanceof Error ? err.message : String(err));
 
+  /** Adopt a `SequencerState` from the backend, including the device rate. */
+  const adoptSequencerState = (state: {
+    bpm: number;
+    sampleRate: number;
+    pattern: PatternDto;
+  }) => {
+    setBpmSignal(state.bpm);
+    setPattern(state.pattern);
+    // Reported as 0 when no device is open; the playhead keeps its default.
+    if (state.sampleRate > 0) playhead.setSampleRate(state.sampleRate);
+  };
+
   const refresh = () => {
     setKernelState('connecting');
     void backend.getSources().then(setSources).catch(reportError);
+    void backend.getPattern().then(adoptSequencerState).catch(reportError);
     backend
       .getUiSnapshot()
       .then((snapshot) => {
@@ -261,6 +309,7 @@ function createAppState(): AppState {
     disposed = true;
     detach?.();
     clearInterval(readoutTimer);
+    if (pushTimer !== undefined) clearTimeout(pushTimer);
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
@@ -303,6 +352,67 @@ function createAppState(): AppState {
       .catch(reportError);
   };
 
+  // --- the step grid -----------------------------------------------------
+  //
+  // The local pattern is what the grid renders and what gets pushed; the
+  // backend's reply is deliberately *not* adopted on success. A reply that
+  // arrived while the user was still clicking would overwrite edits made since
+  // the request was sent, and it never carries anything new -- Rust echoes what
+  // it was given. On failure the whole state is re-fetched instead, which is
+  // the one case where the two really can disagree.
+  let pushTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const pushPattern = () => {
+    const current = pattern();
+    if (!current) return;
+    void backend
+      .setPattern(current)
+      .then(() => setKernelError(null))
+      .catch((err: unknown) => {
+        reportError(err);
+        void backend.getPattern().then(adoptSequencerState).catch(reportError);
+      });
+  };
+
+  const schedulePush = () => {
+    if (pushTimer !== undefined) clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => {
+      pushTimer = undefined;
+      pushPattern();
+    }, PATTERN_PUSH_DEBOUNCE_MS);
+  };
+
+  const toggleStep = (rowIndex: number, stepIndex: number, accent: boolean) => {
+    setPattern((current) =>
+      current ? withToggledStep(current, rowIndex, stepIndex, accent) : current,
+    );
+    schedulePush();
+  };
+
+  const clearPattern = () => {
+    setPattern((current) => (current ? clearedPattern(current) : current));
+    schedulePush();
+  };
+
+  const setBpm = (next: number) => {
+    if (next === bpm()) return;
+    const previous = bpm();
+    // Optimistic: the tempo readout and the moving step highlight both follow
+    // this signal, and waiting a round trip to move a number the user just
+    // typed reads as a stuck control.
+    setBpmSignal(next);
+    void backend
+      .setBpm(next)
+      .then((stored) => {
+        setBpmSignal(stored);
+        setKernelError(null);
+      })
+      .catch((err: unknown) => {
+        setBpmSignal(previous);
+        reportError(err);
+      });
+  };
+
   return {
     backend,
     meters,
@@ -318,10 +428,15 @@ function createAppState(): AppState {
     sources,
     currentSource,
     drumPadsActive,
+    pattern,
+    bpm,
     play,
     stop,
     refresh,
     selectSource,
+    toggleStep,
+    clearPattern,
+    setBpm,
     resubscribeMeters: subscribeMeters,
   };
 }

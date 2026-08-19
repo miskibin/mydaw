@@ -10,7 +10,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
-use crate::dto::{ClapPluginInfoDto, MeterFrameDto};
+use crate::dto::{ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto};
 use crate::gui_bridge::{ClapGuiCommand, ClapGuiStatusDto};
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
@@ -101,6 +101,46 @@ pub async fn set_source(
         .set_source_id(&source)
         .map_err(|err| err.to_string())?;
     Ok(state.sources())
+}
+
+/// The step grid and the session tempo. Called once at startup.
+///
+/// Both in one message because the panel needs both to draw itself: the grid
+/// needs the pattern, and the moving current-step highlight needs the tempo. See
+/// [`SequencerStateDto`] for why they do not ride in `get_ui_snapshot`.
+#[tauri::command]
+pub fn get_pattern(state: State<'_, AppState>) -> SequencerStateDto {
+    state.sequencer_state()
+}
+
+/// Replace the step grid, returning the state the session now holds.
+///
+/// A whole-pattern replacement rather than a per-step edit: a 4x16 grid is about
+/// a kilobyte of JSON, the IPC spike measured that as free, and one message per
+/// edit is a protocol with no ordering problems, no missed updates and no diff
+/// to get wrong.
+///
+/// Succeeds with no audio device open -- a pattern is project data, not stream
+/// state (see [`AppState::set_pattern`]). Rejects a grid the engine could not
+/// run, with a sentence naming the row that did it.
+#[tauri::command]
+pub fn set_pattern(
+    state: State<'_, AppState>,
+    pattern: PatternDto,
+) -> Result<SequencerStateDto, String> {
+    state
+        .set_pattern_dto(&pattern)
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Set the session tempo, returning the value that was stored.
+///
+/// Out-of-range values are rejected rather than clamped, so a user who typed
+/// 5000 is told rather than silently given 999.
+#[tauri::command]
+pub fn set_bpm(state: State<'_, AppState>, bpm: f64) -> Result<f64, String> {
+    state.set_bpm(bpm).map_err(|err| err.to_string())
 }
 
 /// Capture `seconds` of the engine's output and write a WAV, an annotated PNG

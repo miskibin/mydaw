@@ -4,8 +4,8 @@
 //! pile of plugins into an application:
 //!
 //! 1. build a [`Kernel`](mydaw_kernel::Kernel) and register the Phase 0 plugin
-//!    set (metering, debug-tap, test-tone, instruments, audio-io, host-clap,
-//!    plugin-windows),
+//!    set (metering, debug-tap, test-tone, instruments, sequencer, audio-io,
+//!    host-clap, plugin-windows),
 //! 2. boot it -- dependency order and lifecycle are the kernel's problem,
 //! 3. snapshot plugins and contributed panels for the webview,
 //! 4. open the audio device and publish the engine graph -- a swappable source
@@ -13,7 +13,7 @@
 //!    starting on the built-in poly synth (or a CLAP instrument when
 //!    [`CLAP_INSTRUMENT_ENV`] names one),
 //! 5. run a Tauri v2 window over the SolidJS UI in `ui/`, exposing the transport,
-//!    note, plugin and capture commands plus one meter stream,
+//!    note, pattern, tempo, plugin and capture commands plus one meter stream,
 //! 6. stop audio and shut the kernel down when the window closes.
 //!
 //! # Headless capture mode
@@ -67,7 +67,9 @@ pub use debug_capture::{
     CaptureReportDto, DebugCaptureError, CAPTURE_ROOT_ENV, DEBUG_CAPTURE_ENV, REPORT_BEGIN,
     REPORT_END,
 };
-pub use dto::{ClapPluginInfoDto, MeterFrameDto};
+pub use dto::{
+    ClapPluginInfoDto, MeterFrameDto, PatternDto, PatternRowDto, SequencerStateDto, StepDto,
+};
 pub use graph::{
     clap_effect_node, clap_fx_spec_from_env, clap_instrument_node, clap_instrument_spec_from_env,
     clap_node, clap_spec_from_env, engine_graph, install_engine_graph, load_env_clap_effect,
@@ -85,7 +87,10 @@ pub use source::{
     serve_clap_source_requests, ClapSourceBridge, Source, SourceDto, SourceError, SourceHandle,
     SourceSlot, CLAP_SOURCE_TIMEOUT,
 };
-pub use state::{boot_kernel, ui_snapshot, AppState, NoteError, StartupError, KERNEL_STATUS_PANEL};
+pub use state::{
+    boot_kernel, ui_snapshot, AppState, NoteError, SequencerError, StartupError,
+    KERNEL_STATUS_PANEL,
+};
 
 use std::process::ExitCode;
 
@@ -220,6 +225,9 @@ pub fn run() -> ExitCode {
             commands::note_off,
             commands::get_sources,
             commands::set_source,
+            commands::get_pattern,
+            commands::set_pattern,
+            commands::set_bpm,
             commands::debug_capture,
             commands::open_clap_gui,
             commands::close_clap_gui,

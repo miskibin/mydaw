@@ -2,6 +2,8 @@ import type {
   ClapGuiStatus,
   ClapPluginInfoDto,
   MeterFrame,
+  PatternDto,
+  SequencerState,
   SourceDto,
   UiSnapshot,
   Unsubscribe,
@@ -63,6 +65,29 @@ export interface Backend {
    * session with no CLAP instrument loaded.
    */
   setSource(id: string): Promise<SourceDto[]>;
+  /**
+   * The step grid and the session tempo, in one message.
+   *
+   * Fetched once at startup. `setPattern` and `setBpm` return the same shape (or
+   * the tempo alone), so the UI never has to guess what the engine did.
+   */
+  getPattern(): Promise<SequencerState>;
+  /**
+   * Replace the whole step grid.
+   *
+   * A whole-pattern replacement rather than a per-step edit: the grid is about a
+   * kilobyte of JSON, and one message per edit has no ordering problems and no
+   * diff to get wrong. Succeeds with no audio device open -- a pattern is
+   * project data. Rejects with a status-bar sentence naming the offending row.
+   */
+  setPattern(pattern: PatternDto): Promise<SequencerState>;
+  /**
+   * Set the session tempo, resolving with the value that was stored.
+   *
+   * Rejects rather than clamping when the value is outside 20..999, so a typo
+   * is reported instead of silently rounded.
+   */
+  setBpm(bpm: number): Promise<number>;
   /** Subscribe to the throttled meter stream. Call the result to detach. */
   subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe>;
 }
@@ -138,6 +163,21 @@ class TauriBackend implements Backend {
     return invoke<SourceDto[]>('set_source', { source: id });
   }
 
+  async getPattern(): Promise<SequencerState> {
+    const { invoke } = await this.core();
+    return invoke<SequencerState>('get_pattern');
+  }
+
+  async setPattern(pattern: PatternDto): Promise<SequencerState> {
+    const { invoke } = await this.core();
+    return invoke<SequencerState>('set_pattern', { pattern });
+  }
+
+  async setBpm(bpm: number): Promise<number> {
+    const { invoke } = await this.core();
+    return invoke<number>('set_bpm', { bpm });
+  }
+
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {
     const { Channel, invoke } = await this.core();
     const channel = new Channel<MeterFrame>();
@@ -161,12 +201,14 @@ const MOCK_SNAPSHOT: UiSnapshot = {
     { id: 'audio-io', name: 'Audio I/O (WASAPI)', state: 'started' },
     { id: 'metering', name: 'Metering', state: 'started' },
     { id: 'test-tone', name: 'Test Tone', state: 'registered' },
+    { id: 'sequencer', name: 'Step Sequencer', state: 'started' },
     { id: 'host-clap', name: 'CLAP Host', state: 'registered' },
     { id: 'host-vst3', name: 'VST3 Host', state: 'stopped' },
   ],
   panels: [
     { id: 'kernel-status', title: 'Kernel Status', component: 'kernel-status' },
     { id: 'meters', title: 'Master Meters', component: 'meters' },
+    { id: 'step-sequencer', title: 'Step Sequencer', component: 'step-sequencer' },
     { id: 'clap-browser', title: 'CLAP Plugins', component: 'clap-browser' },
     { id: 'mixer', title: 'Mixer', component: 'mixer-view' },
   ],
@@ -240,6 +282,39 @@ const MOCK_SOURCES: readonly SourceDto[] = [
   },
 ];
 
+/** Steps per pattern. Mirrors `STEPS` in `plugins/sequencer/src/pattern.rs`. */
+const MOCK_STEPS = 16;
+
+/** Tempo bounds and default, mirroring `crates/rt-core/src/transport.rs`. */
+const MOCK_DEFAULT_BPM = 130;
+const MOCK_MIN_BPM = 20;
+const MOCK_MAX_BPM = 999;
+
+/**
+ * The same four empty drum rows Rust starts with, labels included -- the labels
+ * come from Rust in a real session, and hard-coding a *different* set here would
+ * make the mock a worse rehearsal than no mock at all.
+ *
+ * Mirrors `Pattern::default` in `plugins/sequencer/src/pattern.rs`.
+ */
+function mockPattern(): PatternDto {
+  const rows: [number, string][] = [
+    [36, 'Kick'],
+    [38, 'Snare'],
+    [42, 'CH'],
+    [46, 'OH'],
+  ];
+  return {
+    steps: MOCK_STEPS,
+    rows: rows.map(([key, label]) => ({
+      key,
+      channel: 0,
+      label,
+      steps: Array.from({ length: MOCK_STEPS }, () => ({ on: false, velocity: 0.78 })),
+    })),
+  };
+}
+
 /**
  * Browser-only stand-in. Emits a plausible 30 Hz meter stream driven by a pair
  * of detuned sines so the meter panel and playhead interpolation can be
@@ -251,6 +326,8 @@ class MockBackend implements Backend {
   private samplePos = 0;
   private guiOpen = false;
   private source = 'poly-synth';
+  private bpm = MOCK_DEFAULT_BPM;
+  private pattern: PatternDto = mockPattern();
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
@@ -324,6 +401,43 @@ class MockBackend implements Backend {
   /** Exposed so a panel test can assert the mock's view of the editor. */
   isGuiOpen(): boolean {
     return this.guiOpen;
+  }
+
+  async getPattern(): Promise<SequencerState> {
+    // Structured clone so the panel cannot mutate the mock's own state behind
+    // its back -- the real backend gives out a fresh object every call.
+    return {
+      bpm: this.bpm,
+      sampleRate: MOCK_SAMPLE_RATE,
+      pattern: structuredClone(this.pattern),
+    };
+  }
+
+  /**
+   * Stores the grid in memory and validates it the way Rust does, so the
+   * panel's error path can be exercised in a plain browser.
+   */
+  async setPattern(pattern: PatternDto): Promise<SequencerState> {
+    if (pattern.steps !== MOCK_STEPS) {
+      throw new Error(`a pattern must have exactly ${MOCK_STEPS} steps, got ${pattern.steps}`);
+    }
+    const bad = pattern.rows.findIndex(
+      (row) =>
+        row.steps.length !== MOCK_STEPS ||
+        row.steps.some((step) => !Number.isFinite(step.velocity) || step.velocity < 0 || step.velocity > 1),
+    );
+    if (bad >= 0) throw new Error(`row ${bad} is not a valid pattern row`);
+
+    this.pattern = structuredClone(pattern);
+    return this.getPattern();
+  }
+
+  async setBpm(bpm: number): Promise<number> {
+    if (!Number.isFinite(bpm) || bpm < MOCK_MIN_BPM || bpm > MOCK_MAX_BPM) {
+      throw new Error(`tempo ${bpm} is not a number between ${MOCK_MIN_BPM} and ${MOCK_MAX_BPM}`);
+    }
+    this.bpm = bpm;
+    return this.bpm;
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {

@@ -849,3 +849,189 @@ code {
   text-align: left;
   white-space: nowrap;
 }
+
+/* -------------------------------------------------------------- sequencer */
+
+/*
+ * FL-style step grid. The columns are `1fr` rather than a fixed width so the
+ * grid fills whatever the dock gives it; `--dock-width` is what guarantees
+ * those columns stay big enough to hit. Beat groups are separated by a wider
+ * gap on every fourth column, which is what makes 16 cells readable as 4 beats
+ * without drawing a single line.
+ */
+.sequencer {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sequencer__empty {
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.sequencer__beats,
+.sequencer__row {
+  display: grid;
+  grid-template-columns: 42px repeat(16, 1fr);
+  gap: 2px;
+  align-items: center;
+}
+
+.sequencer__row-label {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--fg-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sequencer__beat {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--fg-2);
+  text-align: center;
+  line-height: 1;
+}
+
+.sequencer__beat.is-downbeat {
+  color: var(--fg-1);
+}
+
+.sequencer__step {
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--step-off);
+  cursor: pointer;
+  /* The grid is a drag target as much as a click target; text selection while
+     dragging across cells looks broken. */
+  user-select: none;
+}
+
+/* The beat groups: a wider gutter before every downbeat but the first. */
+.sequencer__beat.is-group-start,
+.sequencer__step.is-group-start {
+  margin-left: 4px;
+}
+
+.sequencer__step.is-downbeat {
+  border-color: var(--border-strong);
+}
+
+.sequencer__step:hover {
+  background: var(--step-off-hover);
+}
+
+.sequencer__step.is-on {
+  background: var(--step-on);
+  border-color: var(--step-on);
+}
+
+.sequencer__step.is-accent {
+  background: var(--step-accent);
+  border-color: var(--step-accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+}
+
+/* The playhead column. An outline rather than a fill, so it reads *over* the
+   step's own state instead of replacing it -- you can still see whether the
+   step under the playhead is on. */
+.sequencer__step.is-playing {
+  border-color: var(--step-playing);
+  box-shadow: inset 0 0 0 1px var(--step-playing);
+}
+
+.sequencer__footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--fg-2);
+}
+
+.sequencer__hint {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sequencer__count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.sequencer__clear {
+  font: inherit;
+  font-size: 10px;
+  color: var(--fg-1);
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.sequencer__clear:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+
+.sequencer__clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ------------------------------------------------------------ tempo field */
+
+.tempo {
+  display: inline-flex;
+  align-items: baseline;
+}
+
+/*
+ * Styled as a readout rather than an input: it sits between two other readouts
+ * and a box around one of the three would look like a mistake. The affordance
+ * is the cursor and the hover underline; the tooltip says it can be dragged.
+ */
+.tempo__input {
+  width: 5ch;
+  padding: 0;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-0);
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  cursor: ns-resize;
+  text-align: right;
+}
+
+.tempo__input:hover {
+  border-bottom-color: var(--border-strong);
+}
+
+.tempo__input:focus {
+  outline: none;
+  cursor: text;
+  border-bottom-color: var(--accent);
+}
+
+/* The spinners are a third way to change the value, in 0.1 steps, in a control
+   this narrow. Two ways is enough. */
+.tempo__input::-webkit-outer-spin-button,
+.tempo__input::-webkit-inner-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.tempo__input {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}

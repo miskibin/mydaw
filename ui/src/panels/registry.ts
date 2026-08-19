@@ -2,6 +2,7 @@ import { lazy } from 'solid-js';
 import { ClapBrowserPanel } from './clap-browser/ClapBrowserPanel';
 import { KernelStatusPanel } from './kernel-status/KernelStatusPanel';
 import { MetersPanel } from './meters/MetersPanel';
+import { SequencerPanel } from './sequencer/SequencerPanel';
 import type { PanelComponent } from './types';
 
 /**
@@ -15,6 +16,7 @@ import type { PanelComponent } from './types';
 export const PANEL_REGISTRY: Record<string, PanelComponent> = {
   'kernel-status': KernelStatusPanel,
   meters: MetersPanel,
+  'step-sequencer': SequencerPanel,
   'clap-browser': ClapBrowserPanel,
   // Dev instrument (spike 4), contributed only under MYDAW_DEV_PANELS /
   // MYDAW_IPC_BENCH. Lazy so a normal session never downloads it: Vite splits it

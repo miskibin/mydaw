@@ -87,6 +87,7 @@ fn render_peak(spec: GraphSpec) -> f32 {
         let transport = TransportSnapshot {
             sample_pos,
             playing: true,
+            ..TransportSnapshot::default()
         };
         {
             let mut ctx = ProcessCtx::new(&mut buffers, SAMPLE_RATE, BLOCK, transport);
@@ -173,6 +174,7 @@ fn the_transport_gate_still_wins_with_a_clap_effect_inserted() {
         TransportSnapshot {
             sample_pos: 0,
             playing: false,
+            ..TransportSnapshot::default()
         },
     );
     for node in &mut nodes {
@@ -241,6 +243,7 @@ fn a_graph_holding_a_clap_node_is_retired_by_the_collector_not_the_rt_thread() {
         TransportSnapshot {
             sample_pos: 0,
             playing: true,
+            ..TransportSnapshot::default()
         },
     );
     slot.process(&mut ctx);

@@ -60,6 +60,9 @@ The UI expects these Tauri commands (`src/api/backend.ts` is the only caller):
 | `note_off` | takes `{ key }` |
 | `get_sources` | returns `SourceDto[]` — the instruments the engine can play, one marked `selected` |
 | `set_source` | takes `{ source }` (an id from `get_sources`), returns the refreshed `SourceDto[]` |
+| `get_pattern` | returns `SequencerState { bpm, sampleRate, pattern }` — the step grid and the tempo |
+| `set_pattern` | takes `{ pattern }` (a whole `PatternDto`), returns the refreshed `SequencerState` |
+| `set_bpm` | takes `{ bpm }` (`20..=999`), returns the stored tempo; rejects rather than clamping |
 | `subscribe_meters` | takes `{ channel }` (Tauri v2 `Channel<MeterFrame>`), streams at 30 Hz |
 
 Plus the dev-only bench surface (`src/dev/ipcBench.ts` is the only caller): `bench_ping`,

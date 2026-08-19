@@ -44,10 +44,20 @@
   --meter-grid: #232932;
   --meter-label: #6f7887;
 
+  /* Step sequencer grid. */
+  --step-off: #1c212a;
+  --step-off-hover: #2b323d;
+  --step-on: #1f7a63;
+  --step-accent: #33c9a3;
+  --step-playing: #e0b341;
+
   /* Metrics. */
   --transport-height: 46px;
   --statusbar-height: 24px;
-  --dock-width: 300px;
+  /* Wide enough for the step sequencer's 16 columns plus a row label. Every
+     other panel is narrower than it wants to be anyway; this one has a hard
+     minimum, so it is the one that sets the number. */
+  --dock-width: 380px;
   --radius: 4px;
 
   --font-ui: "Segoe UI", system-ui, -apple-system, sans-serif;

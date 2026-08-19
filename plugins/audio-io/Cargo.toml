@@ -17,6 +17,11 @@ mydaw-plugin-metering.workspace = true
 # dependency on "debug-tap" guarantees the service exists when this plugin
 # starts.
 mydaw-plugin-debug-tap.workspace = true
+# For the pattern channel and the scheduler. Not a manifest dependency: this is
+# a type dependency only. The sequencer contributes no service the audio thread
+# needs -- the RT side owns a `PatternSlot` created here, exactly like the graph
+# and note queues, and the *pattern* it carries comes from the shell.
+mydaw-plugin-sequencer.workspace = true
 
 cpal.workspace = true
 # cpal's own `realtime` feature is off (it is not a default), so promotion is
@@ -31,5 +36,9 @@ thiserror.workspace = true
 # The RT-path test drives a real node through `run_block`. No audio device is
 # opened, so this suite runs on a headless CI machine.
 mydaw-plugin-test-tone.workspace = true
+# `tests/sequencer_engine.rs` renders a programmed beat through the real
+# callback and measures where the hits landed. The drum kit is the instrument
+# under the sequencer, and its onsets are what a grid can be checked against.
+mydaw-plugin-instruments.workspace = true
 # `tests/debug_tap_capture.rs` asserts that -inf dBFS survives serialisation.
 serde_json.workspace = true

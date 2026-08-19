@@ -1,0 +1,17 @@
+[package]
+name = "mydaw-plugin-sequencer"
+description = "MYDAW plugin: the step sequencer -- a 16-step pattern model, its RT-safe compiled form, and a sample-accurate, drift-free note scheduler."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
+# The pattern channel is an `rtrb` queue of `basedrop::Owned` patterns, the same
+# mechanism `rt-core` uses for graphs. `basedrop` is re-exported by `rt-core`;
+# `rtrb` is named directly, as `app` does for the source slot.
+rtrb.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true

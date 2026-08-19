@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use mydaw_ipc_bridge::{MeterFrame, MeterProducer};
 use mydaw_plugin_debug_tap::TapRtSide;
+use mydaw_plugin_sequencer::{PatternSlot, Scheduler, TransportWindow};
 use mydaw_rt_core::{
     disable_denormals, drain_commands, drain_notes, AudioBuffers, NoteConsumer, NoteEventBuffer,
     ProcessCtx, RtCommandConsumer, RtGraphSlot, TransportClock, CHANNELS,
@@ -72,11 +73,14 @@ impl AudioIoStats {
     /// Note events dropped because the block's event buffer was full.
     ///
     /// Audible: a dropped note-on is a note that never sounds, and a dropped
-    /// note-off is a note that never stops. The buffer is sized to the note
-    /// queue's capacity, so on the live path this can only be non-zero if
-    /// something is generating more than
+    /// note-off is a note that never stops. Counts both sources that fill the
+    /// buffer -- live input and the sequencer -- because the buffer they
+    /// overflow is the same one and the symptom is identical.
+    ///
+    /// The buffer is sized to the note queue's capacity, so on the live path
+    /// this can only be non-zero if something is generating more than
     /// [`AudioIoConfig::note_queue_capacity`](crate::AudioIoConfig::note_queue_capacity)
-    /// events in a single block.
+    /// events in a single block; a 16-row pattern contributes at most 32.
     pub fn note_events_dropped(&self) -> u64 {
         self.note_events_dropped.load(Ordering::Relaxed)
     }
@@ -113,6 +117,9 @@ pub struct RtStateParams {
     /// Events the block's note buffer can hold. Sized to the note queue's
     /// capacity so a full queue always fits in one block.
     pub note_capacity: usize,
+    /// Receives patterns published by
+    /// [`PatternHandle::install`](mydaw_plugin_sequencer::PatternHandle::install).
+    pub pattern: PatternSlot,
     /// Meter queue producer, if metering is wired up.
     pub meters: Option<MeterProducer>,
     /// Debug capture tap, if `debug-tap` is wired up. Costs one relaxed atomic
@@ -140,6 +147,11 @@ pub struct RtState {
     notes: NoteConsumer,
     /// This block's note events. Allocated once, refilled every block.
     note_events: NoteEventBuffer,
+    /// The pattern the sequencer is playing, swapped in like the graph.
+    pattern: PatternSlot,
+    /// Turns that pattern into events. Fixed-size state; see the sequencer's
+    /// `schedule` module for the timing argument.
+    scheduler: Scheduler,
     meters: Option<MeterProducer>,
     debug_tap: Option<TapRtSide>,
     transport: Arc<TransportClock>,
@@ -171,6 +183,8 @@ impl RtState {
             commands: params.commands,
             notes: params.notes,
             note_events: NoteEventBuffer::new(params.note_capacity),
+            pattern: params.pattern,
+            scheduler: Scheduler::new(),
             meters: params.meters,
             debug_tap: params.debug_tap,
             transport: params.transport,
@@ -248,6 +262,17 @@ impl RtState {
     pub fn is_realtime(&self) -> bool {
         self.priority.is_promoted()
     }
+
+    /// Note-offs the sequencer still owes. Diagnostics and tests: a non-zero
+    /// value after the transport has stopped would mean a stuck note.
+    pub fn pending_note_offs(&self) -> usize {
+        self.scheduler.pending()
+    }
+
+    /// Whether a pattern has reached the audio thread yet.
+    pub fn has_pattern(&self) -> bool {
+        self.pattern.has_pattern()
+    }
 }
 
 /// Process one block: the entire body of the audio callback.
@@ -255,15 +280,21 @@ impl RtState {
 /// `output` is the device's interleaved buffer, `out_channels` samples per frame.
 ///
 /// Order matters:
-/// 1. **Swap in any pending graph** first, so a graph installed a moment ago is
-///    heard in this block rather than the next.
+/// 1. **Swap in any pending graph and pattern** first, so an edit made a moment
+///    ago is heard in this block rather than the next.
 /// 2. **Drain transport commands** before snapshotting, so a `Seek` issued with
-///    the same message as a `SetPlaying` takes effect on the same block.
+///    the same message as a `SetPlaying` takes effect on the same block -- and
+///    so a tempo change is already in the snapshot the scheduler reads.
 /// 3. **Drain live notes** into the block's event buffer, all at frame offset 0:
 ///    a key pressed between callbacks sounds from the first sample of the next
 ///    block, which is the least latency a block-based engine can offer.
-/// 4. **Process**, then interleave and measure in a single pass over the samples.
-/// 5. **Advance the transport** by the frames actually produced, then publish the
+/// 4. **Schedule the pattern** into the same buffer, at real frame offsets.
+///    After the live notes, so that at a shared offset the key the user is
+///    pressing right now is not pre-empted by the grid (the buffer's insert is
+///    stable, so push order *is* the tie-break -- see the sequencer's `schedule`
+///    module).
+/// 5. **Process**, then interleave and measure in a single pass over the samples.
+/// 6. **Advance the transport** by the frames actually produced, then publish the
 ///    meter frame carrying the post-advance position (what the playhead should
 ///    show once this block has been heard).
 pub fn run_block(state: &mut RtState, output: &mut [f32]) {
@@ -274,13 +305,34 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
 
     let requested = output.len() / out_channels;
     state.graph.poll_swap();
+    state.pattern.poll_swap();
     drain_commands(&mut state.commands, &state.transport);
 
     // Live input has no position within the block, so every event lands at
-    // offset 0. Sample-accurate offsets arrive with the sequencer, which will
-    // fill this same buffer from the pattern instead of from the queue.
+    // offset 0.
     state.note_events.clear();
-    let dropped = drain_notes(&mut state.notes, &mut state.note_events, 0);
+    let mut dropped = drain_notes(&mut state.notes, &mut state.note_events, 0);
+
+    let transport = state.transport.snapshot();
+
+    // The graph will be asked for `requested` frames but can only produce
+    // `max_block` of them, and the transport advances by what it produced. The
+    // scheduler has to agree, or a truncated block would leave a gap in the
+    // grid; so the window is the clamped count, computed here rather than read
+    // back out of `ProcessCtx`.
+    let frames = requested.min(state.buffers.max_block());
+    dropped += state.scheduler.schedule(
+        state.pattern.current(),
+        &TransportWindow {
+            start_sample: transport.sample_pos,
+            frames,
+            sample_rate: state.sample_rate,
+            bpm: transport.bpm,
+            playing: transport.playing,
+        },
+        &mut state.note_events,
+    );
+
     if dropped > 0 {
         state
             .stats
@@ -288,15 +340,13 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
             .fetch_add(dropped as u64, Ordering::Relaxed);
     }
 
-    let transport = state.transport.snapshot();
-
-    // `ProcessCtx::with_events` clamps to the buffers' `max_block`, so `frames`
-    // may be less than the device asked for. The tail is silenced below.
+    // `ProcessCtx::with_events` clamps to the buffers' `max_block`, which is the
+    // same clamp `frames` already applied.
     let frames = {
         let mut ctx = ProcessCtx::with_events(
             &mut state.buffers,
             state.sample_rate,
-            requested,
+            frames,
             transport,
             state.note_events.as_slice(),
         );
@@ -379,10 +429,13 @@ mod tests {
     use super::*;
     use mydaw_ipc_bridge::meter_channel;
     use mydaw_plugin_debug_tap::{debug_tap_channel, TapConsumer};
+    use mydaw_plugin_sequencer::{
+        pattern_channel, Pattern, PatternHandle, PatternRow, Step, PATTERN_QUEUE_CAPACITY,
+    };
     use mydaw_plugin_test_tone::{TestToneNode, DEFAULT_AMPLITUDE};
     use mydaw_rt_core::{
         graph_channel, note_channel, rt_channel, GcThread, GraphSpec, LiveNote, NoteEvent,
-        NoteProducer, RtCommand, RtNode,
+        NoteKind, NoteProducer, RtCommand, RtNode, DEFAULT_BPM,
     };
     use std::time::Instant;
 
@@ -399,6 +452,7 @@ mod tests {
         graph: mydaw_rt_core::GraphHandle,
         commands: mydaw_rt_core::RtCommandProducer,
         notes: NoteProducer,
+        pattern: PatternHandle,
         throttle: mydaw_ipc_bridge::MeterThrottle,
         tap: TapConsumer,
         transport: Arc<TransportClock>,
@@ -416,6 +470,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = rt_channel::<RtCommand>(64);
         let (note_tx, note_rx) = note_channel(note_capacity);
         let (meter_tx, throttle) = meter_channel(64);
+        let (pattern_tx, pattern_rx) = pattern_channel(PATTERN_QUEUE_CAPACITY, gc.handle());
         let (tap_rt, tap) = debug_tap_channel(TAP_CAPACITY);
         let transport = Arc::new(TransportClock::new(SR));
         let stats = Arc::new(AudioIoStats::default());
@@ -425,6 +480,7 @@ mod tests {
             commands: cmd_rx,
             notes: note_rx,
             note_capacity,
+            pattern: pattern_rx,
             meters: Some(meter_tx),
             debug_tap: Some(tap_rt),
             transport: Arc::clone(&transport),
@@ -439,6 +495,7 @@ mod tests {
             graph,
             commands: cmd_tx,
             notes: note_tx,
+            pattern: pattern_tx,
             throttle,
             tap,
             transport,
@@ -605,6 +662,7 @@ mod tests {
         let (graph, slot) = graph_channel(4, gc.handle());
         let (_cmd_tx, cmd_rx) = rt_channel::<RtCommand>(8);
         let (_note_tx, note_rx) = note_channel(8);
+        let (_pattern_tx, pattern_rx) = pattern_channel(2, gc.handle());
         // Capacity 1: the second block has nowhere to put its frame.
         let (meter_tx, _throttle) = meter_channel(1);
         let stats = Arc::new(AudioIoStats::default());
@@ -613,6 +671,7 @@ mod tests {
             commands: cmd_rx,
             notes: note_rx,
             note_capacity: 8,
+            pattern: pattern_rx,
             meters: Some(meter_tx),
             debug_tap: None,
             transport: Arc::new(TransportClock::new(SR)),
@@ -744,6 +803,7 @@ mod tests {
         let (graph, slot) = graph_channel(4, gc.handle());
         let (_cmd_tx, cmd_rx) = rt_channel::<RtCommand>(8);
         let (_note_tx, note_rx) = note_channel(8);
+        let (_pattern_tx, pattern_rx) = pattern_channel(2, gc.handle());
         let (meter_tx, _throttle) = meter_channel(64);
         // Room for 32 stereo frames; each block pushes 128.
         let (tap_rt, tap) = debug_tap_channel(64);
@@ -753,6 +813,7 @@ mod tests {
             commands: cmd_rx,
             notes: note_rx,
             note_capacity: 8,
+            pattern: pattern_rx,
             meters: Some(meter_tx),
             debug_tap: Some(tap_rt),
             transport: Arc::new(TransportClock::new(SR)),
@@ -863,5 +924,261 @@ mod tests {
         let mut out: [f32; 0] = [];
         run_block(&mut rig.state, &mut out);
         assert_eq!(rig.stats.blocks_processed(), 0);
+    }
+
+    // ----------------------------------------------------------- sequencer
+
+    /// A pattern with one row on `key` hitting `steps`.
+    fn pattern_on(key: u8, steps: &[usize]) -> Pattern {
+        let mut pattern = Pattern::silent();
+        pattern.rows.push(PatternRow::empty(key).with_steps(steps));
+        pattern
+    }
+
+    /// Install `spy` as the whole graph and start the transport.
+    fn play_with_spy(rig: &mut Rig, spy: &NoteSpy) {
+        rig.graph
+            .install(GraphSpec::new().with(Box::new(spy.clone())))
+            .unwrap();
+        rig.commands.push(RtCommand::SetPlaying(true)).unwrap();
+    }
+
+    /// Every event the spy saw, as `(absolute sample, event)`.
+    ///
+    /// Valid only for a run that played from sample 0 in equal blocks, which is
+    /// how these tests drive it.
+    fn absolute(spy: &NoteSpy, frames: usize) -> Vec<(u64, NoteEvent)> {
+        spy.blocks()
+            .into_iter()
+            .enumerate()
+            .flat_map(|(block, events)| {
+                events.into_iter().map(move |event| {
+                    (
+                        (block * frames) as u64 + u64::from(event.frame_offset),
+                        event,
+                    )
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_pattern_reaches_the_graph_at_the_sample_the_grid_says() {
+        // The whole point of the step, through the real callback: a four-on-the
+        // -floor kick lands on samples 0, 22154, 44308, 66462 at 130 BPM.
+        let mut rig = rig(2);
+        let spy = NoteSpy::default();
+        play_with_spy(&mut rig, &spy);
+        rig.pattern
+            .install(pattern_on(36, &[0, 4, 8, 12]).compile())
+            .unwrap();
+
+        let frames = 256;
+        let mut out = vec![0.0_f32; frames * 2];
+        // Two bars at 130 BPM is 177 231 samples.
+        for _ in 0..700 {
+            run_block(&mut rig.state, &mut out);
+        }
+
+        let step_len = mydaw_plugin_sequencer::step_len_samples(SR, DEFAULT_BPM);
+        let onsets: Vec<u64> = absolute(&spy, frames)
+            .into_iter()
+            .filter(|(_, e)| e.kind.is_note_on())
+            .map(|(at, _)| at)
+            .collect();
+        let expected: Vec<u64> = (0..8)
+            .map(|hit| mydaw_plugin_sequencer::step_boundary(hit * 4, step_len))
+            .collect();
+        assert!(onsets.len() >= 8, "two bars is eight kicks, got {onsets:?}");
+        assert_eq!(&onsets[..8], &expected[..], "two bars of four-on-the-floor");
+        assert_eq!(rig.stats.note_events_dropped(), 0);
+    }
+
+    #[test]
+    fn a_stopped_transport_produces_no_pattern_events_and_leaves_nothing_owed() {
+        let mut rig = rig(2);
+        let spy = NoteSpy::default();
+        rig.graph
+            .install(GraphSpec::new().with(Box::new(spy.clone())))
+            .unwrap();
+        rig.pattern
+            .install(pattern_on(36, &[0, 4, 8, 12]).compile())
+            .unwrap();
+
+        let mut out = vec![0.0_f32; 256 * 2];
+        for _ in 0..20 {
+            run_block(&mut rig.state, &mut out);
+        }
+        assert!(
+            spy.blocks().iter().all(Vec::is_empty),
+            "the grid must be silent until Play is pressed"
+        );
+
+        // Play, then stop: the stopping block releases what is owed.
+        rig.commands.push(RtCommand::SetPlaying(true)).unwrap();
+        run_block(&mut rig.state, &mut out);
+        assert_eq!(rig.state.pending_note_offs(), 1, "the kick's gate is open");
+
+        rig.commands.push(RtCommand::SetPlaying(false)).unwrap();
+        run_block(&mut rig.state, &mut out);
+        assert_eq!(
+            rig.state.pending_note_offs(),
+            0,
+            "Stop must not leave a note hanging"
+        );
+        let last = spy.blocks().pop().unwrap();
+        assert_eq!(last.len(), 1);
+        assert_eq!(last[0].kind, NoteKind::NoteOff { key: 36 });
+        assert_eq!(last[0].frame_offset, 0);
+    }
+
+    #[test]
+    fn a_tempo_change_moves_the_grid_from_the_block_it_arrives_on() {
+        let mut rig = rig(2);
+        let spy = NoteSpy::default();
+        play_with_spy(&mut rig, &spy);
+        rig.pattern.install(pattern_on(36, &[0]).compile()).unwrap();
+        // Sent with the same message as Play: both are drained before the
+        // snapshot, so the very first block already runs at the new tempo.
+        rig.commands.push(RtCommand::SetBpm(260.0)).unwrap();
+
+        let frames = 256;
+        let mut out = vec![0.0_f32; frames * 2];
+        for _ in 0..200 {
+            run_block(&mut rig.state, &mut out);
+        }
+        assert_eq!(rig.transport.snapshot().bpm, 260.0);
+
+        let step_len = mydaw_plugin_sequencer::step_len_samples(SR, 260.0);
+        let bar = mydaw_plugin_sequencer::step_boundary(16, step_len);
+        let onsets: Vec<u64> = absolute(&spy, frames)
+            .into_iter()
+            .filter(|(_, e)| e.kind.is_note_on())
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(onsets[0], 0);
+        assert_eq!(onsets[1], bar, "the bar is half as long at twice the tempo");
+    }
+
+    #[test]
+    fn live_notes_and_pattern_events_share_one_buffer_with_live_input_first() {
+        // Both land at frame 0 of the same block: the documented tie-break says
+        // the key the user is pressing wins.
+        let mut rig = rig(2);
+        let spy = NoteSpy::default();
+        play_with_spy(&mut rig, &spy);
+        rig.pattern.install(pattern_on(36, &[0]).compile()).unwrap();
+        rig.notes.push(LiveNote::note_on(69, 0.5)).unwrap();
+
+        let mut out = vec![0.0_f32; 256 * 2];
+        run_block(&mut rig.state, &mut out);
+
+        let first = &spy.blocks()[0];
+        assert_eq!(first.len(), 2);
+        assert_eq!(first[0].kind.key(), Some(69), "live input first");
+        assert_eq!(first[1].kind.key(), Some(36), "then the grid");
+        assert!(first.iter().all(|e| e.frame_offset == 0));
+    }
+
+    #[test]
+    fn a_pattern_edited_mid_play_is_heard_from_the_next_block() {
+        let mut rig = rig(2);
+        let spy = NoteSpy::default();
+        play_with_spy(&mut rig, &spy);
+        rig.pattern.install(pattern_on(36, &[0]).compile()).unwrap();
+
+        let frames = 256;
+        let mut out = vec![0.0_f32; frames * 2];
+        run_block(&mut rig.state, &mut out);
+        assert_eq!(spy.blocks()[0].len(), 1, "step 0 of the first pattern");
+
+        // Swap to a different row while the transport runs. The old pattern is
+        // dropped on this thread by `poll_swap`, which under basedrop is a
+        // hand-off to the collector, not a free.
+        rig.pattern
+            .install(pattern_on(38, &(0..16).collect::<Vec<_>>()).compile())
+            .unwrap();
+        for _ in 0..200 {
+            run_block(&mut rig.state, &mut out);
+        }
+
+        let keys: Vec<u8> = absolute(&spy, frames)
+            .into_iter()
+            .filter(|(at, e)| *at > 0 && e.kind.is_note_on())
+            .filter_map(|(_, e)| e.kind.key())
+            .collect();
+        assert!(!keys.is_empty());
+        assert!(
+            keys.iter().all(|key| *key == 38),
+            "everything after the swap must come from the new pattern"
+        );
+        assert!(rig.state.has_pattern());
+    }
+
+    #[test]
+    fn a_pattern_with_more_events_than_the_block_buffer_is_counted_not_grown() {
+        // Sixteen rows all hitting every step, into a four-event buffer.
+        let mut rig = rig_with_note_capacity(2, 4);
+        let spy = NoteSpy::default();
+        play_with_spy(&mut rig, &spy);
+
+        let mut pattern = Pattern::silent();
+        for row in 0..mydaw_plugin_sequencer::MAX_ROWS {
+            let mut pattern_row = PatternRow::empty(36 + row as u8);
+            for step in 0..mydaw_plugin_sequencer::STEPS {
+                pattern_row.steps[step] = Step::accent();
+            }
+            pattern.rows.push(pattern_row);
+        }
+        rig.pattern.install(pattern.compile()).unwrap();
+
+        let mut out = vec![0.0_f32; 256 * 2];
+        run_block(&mut rig.state, &mut out);
+
+        assert_eq!(spy.blocks()[0].len(), 4, "the buffer holds what it can");
+        assert!(
+            rig.stats.note_events_dropped() >= 12,
+            "the rest must be counted, not silently lost"
+        );
+        assert_eq!(rig.stats.blocks_processed(), 1, "the callback carried on");
+    }
+
+    #[test]
+    fn a_truncated_block_does_not_leave_a_gap_in_the_grid() {
+        // The device asks for more than `max_block`, so only `max_block` frames
+        // are produced and the transport advances by that. The scheduler's
+        // window has to agree, or the steps inside the discarded tail would be
+        // scheduled once and never heard.
+        let mut rig = rig(2);
+        let spy = NoteSpy::default();
+        play_with_spy(&mut rig, &spy);
+        rig.pattern
+            .install(pattern_on(36, &(0..16).collect::<Vec<_>>()).compile())
+            .unwrap();
+
+        // Twice max_block, every block.
+        let mut out = vec![0.0_f32; MAX_BLOCK * 2 * 2];
+        for _ in 0..200 {
+            run_block(&mut rig.state, &mut out);
+        }
+        assert!(
+            rig.stats.truncated_blocks() > 0,
+            "the setup really truncated"
+        );
+
+        let step_len = mydaw_plugin_sequencer::step_len_samples(SR, DEFAULT_BPM);
+        let onsets: Vec<u64> = absolute(&spy, MAX_BLOCK)
+            .into_iter()
+            .filter(|(_, e)| e.kind.is_note_on())
+            .map(|(at, _)| at)
+            .collect();
+        for (index, onset) in onsets.iter().enumerate() {
+            assert_eq!(
+                *onset,
+                mydaw_plugin_sequencer::step_boundary(index as u64, step_len),
+                "step {index} moved"
+            );
+        }
+        assert!(onsets.len() > 16, "more than a bar was rendered");
     }
 }

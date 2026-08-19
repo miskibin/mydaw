@@ -102,6 +102,7 @@ impl Rig {
             TransportSnapshot {
                 sample_pos: 0,
                 playing,
+                ..TransportSnapshot::default()
             },
             events,
         );

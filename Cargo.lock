@@ -2131,6 +2131,7 @@ dependencies = [
  "mydaw-plugin-host-vst3",
  "mydaw-plugin-instruments",
  "mydaw-plugin-metering",
+ "mydaw-plugin-sequencer",
  "mydaw-plugin-test-tone",
  "mydaw-plugin-windows",
  "mydaw-rt-core",
@@ -2183,7 +2184,9 @@ dependencies = [
  "mydaw-ipc-bridge",
  "mydaw-kernel",
  "mydaw-plugin-debug-tap",
+ "mydaw-plugin-instruments",
  "mydaw-plugin-metering",
+ "mydaw-plugin-sequencer",
  "mydaw-plugin-test-tone",
  "mydaw-rt-core",
  "parking_lot",
@@ -2248,6 +2251,17 @@ dependencies = [
  "mydaw-ipc-bridge",
  "mydaw-kernel",
  "parking_lot",
+]
+
+[[package]]
+name = "mydaw-plugin-sequencer"
+version = "0.1.0"
+dependencies = [
+ "mydaw-kernel",
+ "mydaw-rt-core",
+ "parking_lot",
+ "rtrb",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

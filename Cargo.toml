@@ -45,6 +45,7 @@ mydaw-plugin-metering = { path = "plugins/metering" }
 mydaw-plugin-debug-tap = { path = "plugins/debug-tap" }
 mydaw-plugin-test-tone = { path = "plugins/test-tone" }
 mydaw-plugin-instruments = { path = "plugins/instruments" }
+mydaw-plugin-sequencer = { path = "plugins/sequencer" }
 mydaw-plugin-audio-io = { path = "plugins/audio-io" }
 mydaw-plugin-host-clap = { path = "plugins/host-clap" }
 mydaw-plugin-host-vst3 = { path = "plugins/host-vst3" }

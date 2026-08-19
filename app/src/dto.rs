@@ -1,17 +1,21 @@
 //! Wire shapes owned by the shell.
 //!
-//! `ipc-bridge` defines the canonical Rust types; this module only exists where
+//! The engine crates define the canonical Rust types; this module exists where
 //! the TypeScript contract in `ui/src/api/types.ts` disagrees with serde's
-//! default rendering of them. Today that is exactly one type: [`MeterFrame`]
-//! serialises its fields as `peak_l`/`sample_pos`, while the UI reads
-//! `peakL`/`samplePos`. Renaming the fields in `ipc-bridge` would push a
-//! JavaScript convention into a crate that is deliberately Tauri-free and
-//! webview-agnostic, so the translation lives here, at the boundary that
-//! actually cares.
+//! default rendering of them, or where a type needs a shape the engine has no
+//! business knowing about. [`MeterFrame`] serialises its fields as
+//! `peak_l`/`sample_pos` while the UI reads `peakL`/`samplePos`; a
+//! [`Pattern`] is a fixed-size array the webview would rather see as a list,
+//! with a row label attached. Pushing either convention down into crates that
+//! are deliberately Tauri-free and webview-agnostic would be the wrong trade, so
+//! the translation lives here, at the boundary that actually cares.
 
 use mydaw_ipc_bridge::MeterFrame;
 use mydaw_plugin_host_clap::ClapPluginInfo;
-use serde::Serialize;
+use mydaw_plugin_sequencer::{
+    row_label, Pattern, PatternError, PatternRow, Step, DEFAULT_STEP_VELOCITY, STEPS,
+};
+use serde::{Deserialize, Serialize};
 
 /// [`MeterFrame`] in the shape the webview expects (camelCase).
 ///
@@ -77,6 +81,145 @@ impl From<&ClapPluginInfo> for ClapPluginInfoDto {
             path: info.path.to_string_lossy().into_owned(),
         }
     }
+}
+
+// ---------------------------------------------------------------- sequencer
+
+/// One cell of the step grid.
+///
+/// `velocity` is carried even for a cell that is off, so toggling a step in the
+/// UI and toggling it back does not silently reset an accent.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepDto {
+    pub on: bool,
+    /// Normalised velocity, `0.0..=1.0`.
+    #[serde(default = "default_velocity")]
+    pub velocity: f32,
+}
+
+fn default_velocity() -> f32 {
+    DEFAULT_STEP_VELOCITY
+}
+
+impl From<&Step> for StepDto {
+    fn from(step: &Step) -> Self {
+        Self {
+            on: step.on,
+            velocity: step.velocity,
+        }
+    }
+}
+
+/// One row of the step grid.
+///
+/// `label` is derived, not stored: the row's identity is its key, and the name
+/// ("Kick", "CH") is a rendering of that key. It is sent so the UI does not have
+/// to keep a second copy of the General MIDI drum map, and ignored on the way
+/// back in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternRowDto {
+    pub key: u8,
+    #[serde(default)]
+    pub channel: u8,
+    #[serde(default)]
+    pub label: String,
+    pub steps: Vec<StepDto>,
+}
+
+impl From<&PatternRow> for PatternRowDto {
+    fn from(row: &PatternRow) -> Self {
+        Self {
+            key: row.key,
+            channel: row.channel,
+            label: row_label(row.key),
+            steps: row.steps.iter().map(StepDto::from).collect(),
+        }
+    }
+}
+
+/// The whole grid, as the webview reads and writes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatternDto {
+    /// Steps per row. Always 16 today; sent so a UI built against a longer
+    /// pattern fails loudly rather than rendering half a bar.
+    pub steps: u8,
+    pub rows: Vec<PatternRowDto>,
+}
+
+impl From<&Pattern> for PatternDto {
+    fn from(pattern: &Pattern) -> Self {
+        Self {
+            steps: pattern.steps,
+            rows: pattern.rows.iter().map(PatternRowDto::from).collect(),
+        }
+    }
+}
+
+impl TryFrom<&PatternDto> for Pattern {
+    type Error = PatternError;
+
+    /// Rebuild a [`Pattern`] from what the webview sent, then validate it.
+    ///
+    /// A row whose `steps` array is not exactly [`STEPS`] long is rejected here
+    /// rather than being padded or truncated: a UI that sent 15 steps has a bug,
+    /// and quietly inventing the sixteenth would hide it behind a beat that is
+    /// almost right.
+    fn try_from(dto: &PatternDto) -> Result<Self, Self::Error> {
+        let mut rows = Vec::with_capacity(dto.rows.len());
+        for (index, row) in dto.rows.iter().enumerate() {
+            if row.steps.len() != STEPS {
+                return Err(PatternError::WrongRowLength {
+                    row: index,
+                    got: row.steps.len(),
+                });
+            }
+            let mut steps = [Step::OFF; STEPS];
+            for (step, source) in steps.iter_mut().zip(&row.steps) {
+                *step = Step {
+                    on: source.on,
+                    velocity: source.velocity,
+                };
+            }
+            rows.push(PatternRow {
+                key: row.key,
+                channel: row.channel,
+                steps,
+            });
+        }
+        let pattern = Self {
+            rows,
+            steps: dto.steps,
+        };
+        pattern.validate()?;
+        Ok(pattern)
+    }
+}
+
+/// Everything the sequencer panel and the transport bar need in one message.
+///
+/// Tempo travels with the pattern rather than in
+/// [`UiSnapshot`](mydaw_ipc_bridge::UiSnapshot): that snapshot is the *kernel's*
+/// registry (plugins and panels), taken once at boot from a kernel that has no
+/// audio device yet, and `ipc-bridge` has no business depending on the
+/// sequencer. The two values a sequencer needs to draw itself belong together
+/// and arrive together.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequencerStateDto {
+    /// Session tempo, already clamped to the transport's legal range.
+    pub bpm: f64,
+    /// The open device's sample rate, or `0` when no stream is running.
+    ///
+    /// The panel needs it to turn the transport position it gets in *frames*
+    /// into a step number. Without it the UI would have to assume 48 kHz, and
+    /// the moving highlight would sit in the wrong step on a 44.1 kHz interface
+    /// -- visible, and exactly the kind of small lie that erodes trust in a
+    /// playhead.
+    pub sample_rate: f64,
+    pub pattern: PatternDto,
 }
 
 #[cfg(test)]
@@ -162,5 +305,174 @@ mod tests {
         });
         let json = serde_json::to_string(&dto).unwrap();
         assert!(json.contains("\"vendor\":\"\""), "{json}");
+    }
+
+    // ------------------------------------------------------------ sequencer
+
+    #[test]
+    fn the_sequencer_state_serialises_with_the_keys_the_panel_reads() {
+        let dto = SequencerStateDto {
+            bpm: 130.0,
+            sample_rate: 44_100.0,
+            pattern: PatternDto::from(&Pattern::default()),
+        };
+        let json: serde_json::Value = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["bpm"], 130.0);
+        assert_eq!(json["sampleRate"], 44_100.0);
+        assert_eq!(json["pattern"]["steps"], 16);
+
+        let rows = json["pattern"]["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0]["key"], 36);
+        assert_eq!(rows[0]["label"], "Kick");
+        assert_eq!(rows[3]["label"], "OH");
+        assert_eq!(rows[0]["steps"].as_array().unwrap().len(), 16);
+        assert_eq!(rows[0]["steps"][0]["on"], false);
+        assert!(rows[0]["steps"][0]["velocity"].is_number());
+
+        // Mirrors `PatternRowDto` in ui/src/api/types.ts, key for key.
+        let mut keys: Vec<&str> = rows[0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["channel", "key", "label", "steps"]);
+    }
+
+    #[test]
+    fn a_pattern_round_trips_through_the_wire_shape_unchanged() {
+        let mut pattern = Pattern::default();
+        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 4, 8, 12]);
+        pattern.rows[1].steps[4] = Step::accent();
+        pattern.rows[1].channel = 2;
+
+        let dto = PatternDto::from(&pattern);
+        let json = serde_json::to_string(&dto).unwrap();
+        let parsed: PatternDto = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, dto);
+        assert_eq!(Pattern::try_from(&parsed).unwrap(), pattern);
+    }
+
+    #[test]
+    fn the_label_is_derived_on_the_way_out_and_ignored_on_the_way_in() {
+        let json = r#"{
+            "steps": 16,
+            "rows": [{
+                "key": 36,
+                "label": "whatever the webview felt like",
+                "steps": [
+                    {"on": true, "velocity": 1.0},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78},
+                    {"on": false, "velocity": 0.78}
+                ]
+            }]
+        }"#;
+        let dto: PatternDto = serde_json::from_str(json).unwrap();
+        let pattern = Pattern::try_from(&dto).unwrap();
+        assert_eq!(pattern.rows[0].key, 36);
+        assert_eq!(pattern.rows[0].channel, 0, "absent means zero");
+        assert!(pattern.rows[0].steps[0].on);
+        // On the way back out the label is the one the drum map says.
+        assert_eq!(PatternDto::from(&pattern).rows[0].label, "Kick");
+    }
+
+    #[test]
+    fn a_row_of_the_wrong_length_is_rejected_by_name_rather_than_padded() {
+        let dto = PatternDto {
+            steps: 16,
+            rows: vec![PatternRowDto {
+                key: 36,
+                channel: 0,
+                label: String::new(),
+                steps: vec![
+                    StepDto {
+                        on: true,
+                        velocity: 1.0
+                    };
+                    15
+                ],
+            }],
+        };
+        assert_eq!(
+            Pattern::try_from(&dto),
+            Err(PatternError::WrongRowLength { row: 0, got: 15 })
+        );
+    }
+
+    #[test]
+    fn a_pattern_the_engine_cannot_run_is_refused_at_the_boundary() {
+        let row = |key: u8, velocity: f32| PatternRowDto {
+            key,
+            channel: 0,
+            label: String::new(),
+            steps: vec![StepDto { on: true, velocity }; STEPS],
+        };
+
+        // Too many rows.
+        let dto = PatternDto {
+            steps: 16,
+            rows: (0..17).map(|k| row(k as u8, 1.0)).collect(),
+        };
+        assert!(matches!(
+            Pattern::try_from(&dto),
+            Err(PatternError::TooManyRows(17))
+        ));
+
+        // The wrong number of steps.
+        let dto = PatternDto {
+            steps: 8,
+            rows: vec![row(36, 1.0)],
+        };
+        assert!(matches!(
+            Pattern::try_from(&dto),
+            Err(PatternError::WrongStepCount(8))
+        ));
+
+        // A velocity the webview should never have sent.
+        for bad in [-0.5_f32, 1.5, f32::NAN] {
+            let dto = PatternDto {
+                steps: 16,
+                rows: vec![row(36, bad)],
+            };
+            assert!(
+                matches!(
+                    Pattern::try_from(&dto),
+                    Err(PatternError::InvalidVelocity { .. })
+                ),
+                "velocity {bad} should have been refused"
+            );
+        }
+
+        // A key outside the MIDI range.
+        let dto = PatternDto {
+            steps: 16,
+            rows: vec![row(200, 1.0)],
+        };
+        assert!(matches!(
+            Pattern::try_from(&dto),
+            Err(PatternError::KeyOutOfRange { row: 0, key: 200 })
+        ));
+    }
+
+    #[test]
+    fn a_step_with_no_velocity_at_all_gets_the_default_rather_than_zero() {
+        let dto: StepDto = serde_json::from_str(r#"{"on": true}"#).unwrap();
+        assert!(dto.on);
+        assert_eq!(dto.velocity, DEFAULT_STEP_VELOCITY);
     }
 }

@@ -34,9 +34,13 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
 use mydaw_ipc_bridge::MeterProducer;
 use mydaw_plugin_debug_tap::TapRtSide;
+use mydaw_plugin_sequencer::{
+    pattern_channel, CompiledPattern, PatternHandle, PatternInstallError, PATTERN_QUEUE_CAPACITY,
+};
 use mydaw_rt_core::{
-    graph_channel, note_channel, rt_channel, GcThread, GraphHandle, GraphInstallError, GraphSpec,
-    LiveNote, NoteProducer, RtCommand, RtCommandProducer, TransportClock, DEFAULT_NOTE_CAPACITY,
+    clamp_bpm, graph_channel, note_channel, rt_channel, GcThread, GraphHandle, GraphInstallError,
+    GraphSpec, LiveNote, NoteProducer, RtCommand, RtCommandProducer, TransportClock,
+    DEFAULT_NOTE_CAPACITY,
 };
 use parking_lot::Mutex;
 
@@ -74,6 +78,10 @@ pub enum AudioIoError {
     #[error("could not install graph: {0}")]
     GraphInstall(#[from] GraphInstallError),
 
+    /// The pattern could not be handed to the audio thread.
+    #[error("could not install pattern: {0}")]
+    PatternInstall(#[from] PatternInstallError),
+
     /// The transport command queue is full -- the audio thread has not drained
     /// it, which in practice means the stream is wedged.
     #[error("transport command queue is full")]
@@ -99,6 +107,9 @@ pub struct AudioIoConfig {
     pub graph_queue_capacity: usize,
     /// Depth of the transport command queue.
     pub command_queue_capacity: usize,
+    /// Depth of the pattern publish queue. The audio thread drains it fully
+    /// every block; the depth only absorbs a burst of grid edits.
+    pub pattern_queue_capacity: usize,
     /// Depth of the live note queue, and the size of the per-block note event
     /// buffer it drains into.
     ///
@@ -115,6 +126,7 @@ impl Default for AudioIoConfig {
             max_block: 4096,
             graph_queue_capacity: 8,
             command_queue_capacity: 256,
+            pattern_queue_capacity: PATTERN_QUEUE_CAPACITY,
             note_queue_capacity: DEFAULT_NOTE_CAPACITY,
         }
     }
@@ -138,6 +150,8 @@ struct Session {
     graph: GraphHandle,
     commands: RtCommandProducer,
     notes: NoteProducer,
+    /// Publishes compiled patterns to the sequencer's slot in the RT state.
+    pattern: PatternHandle,
     info: StreamInfo,
     /// The callback hands the meter producer back here when it is dropped, so a
     /// later `start()` can reuse it. See [`RtStateCarrier`].
@@ -324,6 +338,25 @@ impl AudioIoService {
             .map_err(|_| AudioIoError::NoteQueueFull)
     }
 
+    /// Publish a compiled pattern to the sequencer. Takes effect on the next
+    /// block.
+    ///
+    /// A full replacement rather than a diff: a 16x16 grid is ~1.4 kB of fixed
+    /// arrays, which is cheaper to build, send and reason about than any
+    /// incremental protocol would be, and it makes a lost message impossible to
+    /// tell from a slow one.
+    ///
+    /// # Errors
+    /// [`AudioIoError::NotRunning`] with no stream open, and
+    /// [`AudioIoError::PatternInstall`] when the audio thread is behind
+    /// (retryable).
+    pub fn install_pattern(&self, pattern: CompiledPattern) -> Result<(), AudioIoError> {
+        let mut guard = self.session.lock();
+        let session = guard.as_mut().ok_or(AudioIoError::NotRunning)?;
+        session.pattern.install(pattern)?;
+        Ok(())
+    }
+
     /// Start or stop the transport.
     pub fn set_playing(&self, playing: bool) -> Result<(), AudioIoError> {
         self.send_command(RtCommand::SetPlaying(playing))
@@ -332,6 +365,24 @@ impl AudioIoService {
     /// Move the playhead to `sample_pos`.
     pub fn seek(&self, sample_pos: u64) -> Result<(), AudioIoError> {
         self.send_command(RtCommand::Seek(sample_pos))
+    }
+
+    /// Change the tempo. Returns the value that will be applied (clamped to
+    /// `MIN_BPM..=MAX_BPM`(mydaw_rt_core::MIN_BPM)).
+    ///
+    /// Goes through the command queue rather than writing the clock directly,
+    /// so a tempo change lands on a block boundary together with any transport
+    /// command sent with it -- the scheduler reads one snapshot per block, and a
+    /// tempo that changed halfway through one would move the grid under it.
+    pub fn set_bpm(&self, bpm: f64) -> Result<f64, AudioIoError> {
+        let clamped = clamp_bpm(bpm);
+        self.send_command(RtCommand::SetBpm(clamped))?;
+        Ok(clamped)
+    }
+
+    /// The tempo the audio thread is running at, or `None` while stopped.
+    pub fn bpm(&self) -> Option<f64> {
+        self.session.lock().as_ref().map(|s| s.transport.bpm())
     }
 
     /// Open the default output device and start the audio callback.
@@ -376,6 +427,8 @@ impl AudioIoService {
             graph_channel(self.config.graph_queue_capacity, self.gc.handle());
         let (command_tx, command_rx) = rt_channel::<RtCommand>(self.config.command_queue_capacity);
         let (note_tx, note_rx) = note_channel(self.config.note_queue_capacity);
+        let (pattern_handle, pattern_slot) =
+            pattern_channel(self.config.pattern_queue_capacity, self.gc.handle());
         let (meters_return_tx, meters_returned) = mpsc::sync_channel(1);
         let (tap_return_tx, debug_tap_returned) = mpsc::sync_channel(1);
 
@@ -384,6 +437,7 @@ impl AudioIoService {
             commands: command_rx,
             notes: note_rx,
             note_capacity: self.config.note_queue_capacity,
+            pattern: pattern_slot,
             meters: self.meters.lock().take(),
             debug_tap: self.debug_tap.lock().take(),
             transport: Arc::clone(&transport),
@@ -440,6 +494,7 @@ impl AudioIoService {
             graph: graph_handle,
             commands: command_tx,
             notes: note_tx,
+            pattern: pattern_handle,
             info: info.clone(),
             meters_returned,
             debug_tap_returned,
@@ -528,6 +583,15 @@ mod tests {
             service.send_note(LiveNote::note_on(60, 1.0)),
             Err(AudioIoError::NotRunning)
         ));
+        assert!(matches!(
+            service.install_pattern(CompiledPattern::EMPTY),
+            Err(AudioIoError::NotRunning)
+        ));
+        assert!(matches!(
+            service.set_bpm(130.0),
+            Err(AudioIoError::NotRunning)
+        ));
+        assert!(service.bpm().is_none());
         assert!(service.with_graph_handle(|_| ()).is_none());
     }
 
@@ -574,6 +638,7 @@ mod tests {
         assert_eq!(config.max_block, 4096);
         assert!(config.graph_queue_capacity >= 2);
         assert!(config.command_queue_capacity >= 64);
+        assert_eq!(config.pattern_queue_capacity, PATTERN_QUEUE_CAPACITY);
         assert_eq!(config.note_queue_capacity, DEFAULT_NOTE_CAPACITY);
     }
 }

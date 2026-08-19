@@ -6,14 +6,22 @@ use rtrb::{Consumer, Producer, RingBuffer};
 ///
 /// Deliberately `Copy` and allocation-free: pushing one of these never touches
 /// the allocator, and popping it on the audio thread never runs a destructor.
-/// Anything that needs heap data (a new graph, a sample buffer) goes through
-/// [`GraphHandle`](crate::GraphHandle) / `basedrop` instead, never through here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Anything that needs heap data (a new graph, a pattern, a sample buffer) goes
+/// through [`GraphHandle`](crate::GraphHandle) / `basedrop` instead, never
+/// through here.
+///
+/// Not `Eq`: [`SetBpm`](Self::SetBpm) carries an `f64`.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RtCommand {
     /// Start or stop the transport.
     SetPlaying(bool),
     /// Jump to an absolute sample position.
     Seek(u64),
+    /// Change the tempo. Clamped by
+    /// [`TransportClock::set_bpm`](crate::TransportClock::set_bpm), so an
+    /// out-of-range value here changes the tempo to the nearest legal one
+    /// rather than corrupting the sequencer's arithmetic.
+    SetBpm(f64),
 }
 
 /// Producer half, lives on the non-RT side.
@@ -38,6 +46,9 @@ pub fn drain_commands(rx: &mut RtCommandConsumer, transport: &crate::TransportCl
         match cmd {
             RtCommand::SetPlaying(p) => transport.set_playing(p),
             RtCommand::Seek(pos) => transport.seek(pos),
+            RtCommand::SetBpm(bpm) => {
+                transport.set_bpm(bpm);
+            }
         }
     }
 }
@@ -70,9 +81,22 @@ mod tests {
         let transport = TransportClock::new(48_000.0);
         tx.push(RtCommand::SetPlaying(true)).unwrap();
         tx.push(RtCommand::Seek(1024)).unwrap();
+        tx.push(RtCommand::SetBpm(174.3)).unwrap();
         drain_commands(&mut rx, &transport);
         let s = transport.snapshot();
         assert!(s.playing);
         assert_eq!(s.sample_pos, 1024);
+        assert_eq!(s.bpm, 174.3);
+    }
+
+    #[test]
+    fn a_tempo_command_is_clamped_where_it_is_applied() {
+        // The queue carries whatever it was given; the clock is what refuses to
+        // hold a tempo the sequencer cannot divide by.
+        let (mut tx, mut rx) = rt_channel::<RtCommand>(8);
+        let transport = TransportClock::new(48_000.0);
+        tx.push(RtCommand::SetBpm(0.0)).unwrap();
+        drain_commands(&mut rx, &transport);
+        assert_eq!(transport.bpm(), crate::MIN_BPM);
     }
 }

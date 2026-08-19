@@ -10,12 +10,13 @@ use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin, LoadedClapPlugin};
 use mydaw_plugin_host_vst3::HostVst3Plugin;
 use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
+use mydaw_plugin_sequencer::{Pattern, PatternError, SequencerPlugin, SequencerService};
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 
-use mydaw_rt_core::{LiveNote, RtNode, RtNodeFactory, MAX_KEY};
+use mydaw_rt_core::{clamp_bpm, LiveNote, RtNode, RtNodeFactory, MAX_BPM, MAX_KEY, MIN_BPM};
 
-use crate::dto::ClapPluginInfoDto;
+use crate::dto::{ClapPluginInfoDto, PatternDto, SequencerStateDto};
 use crate::graph::{clap_effect_node, clap_instrument_node, install_engine_graph};
 use crate::gui_bridge::ClapGuiBridge;
 use crate::ipc_bench;
@@ -50,6 +51,24 @@ pub enum NoteError {
     Audio(#[from] AudioIoError),
 }
 
+/// Why a sequencer edit was refused.
+///
+/// Both variants are reachable from the webview, which can send any JSON it
+/// likes. Note what is *not* here: "no audio device". A pattern and a tempo are
+/// project data, and editing them on a machine with no sound card has to work --
+/// see [`AppState::set_pattern`].
+#[derive(Debug, thiserror::Error)]
+pub enum SequencerError {
+    /// The pattern would not fit what the audio thread can run.
+    #[error(transparent)]
+    Pattern(#[from] PatternError),
+    #[error("tempo {0} is not a number between {MIN_BPM} and {MAX_BPM}")]
+    InvalidBpm(f64),
+    /// The audio thread has not picked up previous edits. Retryable.
+    #[error(transparent)]
+    Audio(#[from] AudioIoError),
+}
+
 /// Register the Phase 0 plugin set and boot the kernel.
 ///
 /// Registration order is irrelevant -- the kernel topologically sorts by manifest
@@ -66,6 +85,7 @@ pub fn boot_kernel() -> Result<Kernel, KernelError> {
     kernel.add_plugin(Box::new(DebugTapPlugin::new()))?;
     kernel.add_plugin(Box::new(TestTonePlugin::new()))?;
     kernel.add_plugin(Box::new(InstrumentsPlugin::new()))?;
+    kernel.add_plugin(Box::new(SequencerPlugin::new()))?;
     kernel.add_plugin(Box::new(AudioIoPlugin::new()))?;
     kernel.add_plugin(Box::new(HostClapPlugin::new()))?;
     kernel.add_plugin(Box::new(HostVst3Plugin::new()))?;
@@ -118,6 +138,9 @@ pub struct AppState {
     tone: Arc<TestToneFactory>,
     /// The built-in instruments, by `type_id`.
     instruments: Arc<InstrumentRegistry>,
+    /// The authoritative pattern and tempo. The audio thread runs copies of
+    /// both; this is the original (and, one day, what a project file holds).
+    sequencer: Arc<SequencerService>,
     /// The head of the chain. Swapping the source is a push through this, not a
     /// graph rebuild -- see `crate::source`.
     source: Arc<SourceHandle>,
@@ -152,6 +175,9 @@ impl AppState {
         let instruments = services
             .get::<InstrumentRegistry>()
             .ok_or(StartupError::MissingService("InstrumentRegistry"))?;
+        let sequencer = services
+            .get::<SequencerService>()
+            .ok_or(StartupError::MissingService("SequencerService"))?;
         let clap = services
             .get::<ClapHostService>()
             .ok_or(StartupError::MissingService("ClapHostService"))?;
@@ -177,6 +203,7 @@ impl AppState {
             audio,
             tone,
             instruments,
+            sequencer,
             source: Arc::new(SourceHandle::new(Source::DEFAULT)),
             clap_source: Arc::new(ClapSourceBridge::new()),
             clap,
@@ -249,7 +276,29 @@ impl AppState {
         let effect_node =
             effect.and_then(|plugin| clap_effect_node(plugin, sample_rate, info.max_block));
         install_engine_graph(&self.audio, &self.source, source, node, effect_node)?;
+        self.publish_sequencer();
         Ok(info)
+    }
+
+    /// Push the session's tempo and pattern into the stream that just opened.
+    ///
+    /// A [`TransportClock`](mydaw_rt_core::TransportClock) is built around a
+    /// device sample rate and therefore starts fresh with every stream, at the
+    /// default tempo and with no pattern. Everything the user has already done
+    /// lives in [`SequencerService`], so it is re-published here -- otherwise
+    /// stopping and restarting audio (a device change, a headless capture)
+    /// would silently reset the beat.
+    ///
+    /// Failures are logged rather than propagated: the stream is up and playable
+    /// either way, and refusing to open a device because a pattern queue was
+    /// momentarily full would be the wrong trade.
+    fn publish_sequencer(&self) {
+        if let Err(err) = self.audio.set_bpm(self.sequencer.bpm()) {
+            log::warn!("could not publish the tempo to the new stream: {err}");
+        }
+        if let Err(err) = self.audio.install_pattern(self.sequencer.compiled()) {
+            log::warn!("could not publish the pattern to the new stream: {err}");
+        }
     }
 
     /// Build the node for a source that does not need the main thread.
@@ -459,6 +508,84 @@ impl AppState {
         Ok(())
     }
 
+    /// The tempo and pattern, in the shape the webview reads.
+    pub fn sequencer_state(&self) -> SequencerStateDto {
+        SequencerStateDto {
+            bpm: self.sequencer.bpm(),
+            sample_rate: self.audio.sample_rate().unwrap_or(0.0),
+            pattern: PatternDto::from(&self.sequencer.pattern()),
+        }
+    }
+
+    /// Replace the pattern.
+    ///
+    /// Validated first, stored second, published third -- so a rejected edit
+    /// leaves both the session and the audio thread exactly as they were.
+    ///
+    /// **Not** an error when no device is open. A pattern is project data: a
+    /// user on a machine with no sound card, or with audio stopped, must still
+    /// be able to program a beat, and [`start_audio_with_source`] publishes
+    /// whatever the session holds when a stream comes up. The only audio error
+    /// worth reporting here is a full queue, which is retryable.
+    ///
+    /// # Errors
+    /// [`SequencerError::Pattern`] for a pattern the engine cannot run, and
+    /// [`SequencerError::Audio`] when the audio thread is behind.
+    ///
+    /// [`start_audio_with_source`]: Self::start_audio_with_source
+    pub fn set_pattern(&self, pattern: Pattern) -> Result<(), SequencerError> {
+        self.sequencer.set_pattern(pattern)?;
+        match self.audio.install_pattern(self.sequencer.compiled()) {
+            Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Replace the pattern from what the webview sent.
+    ///
+    /// # Errors
+    /// Everything [`set_pattern`](Self::set_pattern) reports, plus
+    /// [`SequencerError::Pattern`] for a DTO that does not describe a pattern
+    /// at all (a row of the wrong length).
+    pub fn set_pattern_dto(&self, dto: &PatternDto) -> Result<(), SequencerError> {
+        self.set_pattern(Pattern::try_from(dto)?)
+    }
+
+    /// Set the session tempo. Returns the value that was stored.
+    ///
+    /// Rejects what is not a tempo (NaN, infinity, out of range) rather than
+    /// clamping it: the UI's number input can produce those, and a user who
+    /// typed 5000 should be told, not silently given 999. The transport clamps
+    /// too, as a last line of defence.
+    ///
+    /// Like [`set_pattern`](Self::set_pattern), a missing device is not an
+    /// error -- the tempo is the session's, not the stream's.
+    ///
+    /// # Errors
+    /// [`SequencerError::InvalidBpm`], or [`SequencerError::Audio`] when the
+    /// command queue is full.
+    pub fn set_bpm(&self, bpm: f64) -> Result<f64, SequencerError> {
+        if !bpm.is_finite() || !(MIN_BPM..=MAX_BPM).contains(&bpm) {
+            return Err(SequencerError::InvalidBpm(bpm));
+        }
+        let stored = self.sequencer.set_bpm(clamp_bpm(bpm));
+        match self.audio.set_bpm(stored) {
+            Ok(_) | Err(AudioIoError::NotRunning) => Ok(stored),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// The session tempo.
+    pub fn bpm(&self) -> f64 {
+        self.sequencer.bpm()
+    }
+
+    /// The pattern and tempo service, for code that needs it directly (tests,
+    /// and one day the project-file loader).
+    pub fn sequencer(&self) -> &Arc<SequencerService> {
+        &self.sequencer
+    }
+
     /// The snapshot handed to the webview. Cheap to clone (a few short strings).
     pub fn snapshot(&self) -> UiSnapshot {
         self.snapshot.clone()
@@ -499,6 +626,7 @@ mod tests {
                 "debug-tap",
                 "test-tone",
                 "instruments",
+                "sequencer",
                 "host-clap",
                 "host-vst3",
                 "plugin-windows",
@@ -518,7 +646,7 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let snapshot = ui_snapshot(&kernel);
 
-        assert_eq!(snapshot.plugins.len(), 8);
+        assert_eq!(snapshot.plugins.len(), 9);
         assert!(snapshot
             .plugins
             .iter()
@@ -532,7 +660,7 @@ mod tests {
             .collect();
         assert_eq!(
             components,
-            vec!["kernel-status", "meters", "clap-browser"],
+            vec!["kernel-status", "meters", "step-sequencer", "clap-browser"],
             "panels appear in kernel boot order after the shell's own; \
              debug-tap deliberately contributes none"
         );
@@ -746,5 +874,104 @@ mod tests {
             state.note_on(MAX_KEY, 1.0),
             Err(NoteError::Audio(_))
         ));
+    }
+
+    // ------------------------------------------------------------ sequencer
+
+    fn state() -> (Kernel, AppState) {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        (kernel, state)
+    }
+
+    #[test]
+    fn a_fresh_session_offers_an_empty_four_row_grid_at_the_default_tempo() {
+        let (_kernel, state) = state();
+        let dto = state.sequencer_state();
+        assert_eq!(dto.bpm, mydaw_rt_core::DEFAULT_BPM);
+        assert_eq!(dto.sample_rate, 0.0, "no device is open in a test process");
+        assert_eq!(dto.pattern.steps, 16);
+        assert_eq!(
+            dto.pattern.rows.iter().map(|r| r.key).collect::<Vec<_>>(),
+            vec![36, 38, 42, 46]
+        );
+        assert!(dto
+            .pattern
+            .rows
+            .iter()
+            .all(|row| row.steps.iter().all(|step| !step.on)));
+        assert_eq!(dto.pattern.rows[2].label, "CH");
+    }
+
+    #[test]
+    fn programming_a_beat_works_with_no_audio_device_at_all() {
+        // The point of the decision: a pattern is project data. On a headless
+        // machine every note command fails, and every *edit* still has to work.
+        let (_kernel, state) = state();
+        let mut pattern = state.sequencer().pattern();
+        pattern.rows[0] = mydaw_plugin_sequencer::PatternRow::empty(36).with_steps(&[0, 4, 8, 12]);
+        state
+            .set_pattern(pattern.clone())
+            .expect("no device needed");
+
+        assert_eq!(state.sequencer().pattern(), pattern);
+        assert!(state.sequencer_state().pattern.rows[0].steps[4].on);
+        assert_eq!(state.sequencer().compiled().row_count(), 4);
+    }
+
+    #[test]
+    fn a_rejected_pattern_leaves_the_session_exactly_as_it_was() {
+        let (_kernel, state) = state();
+        let mut good = state.sequencer().pattern();
+        good.rows[0] = mydaw_plugin_sequencer::PatternRow::empty(36).with_steps(&[0]);
+        state.set_pattern(good.clone()).unwrap();
+
+        let bad = PatternDto {
+            steps: 16,
+            rows: vec![crate::dto::PatternRowDto {
+                key: 36,
+                channel: 0,
+                label: String::new(),
+                steps: Vec::new(),
+            }],
+        };
+        let err = state.set_pattern_dto(&bad).unwrap_err();
+        assert!(matches!(err, SequencerError::Pattern(_)), "{err:?}");
+        assert_eq!(state.sequencer().pattern(), good);
+    }
+
+    #[test]
+    fn the_tempo_is_stored_and_out_of_range_values_are_named_rather_than_clamped() {
+        let (_kernel, state) = state();
+        assert_eq!(state.set_bpm(174.3).unwrap(), 174.3);
+        assert_eq!(state.bpm(), 174.3);
+        assert_eq!(state.sequencer_state().bpm, 174.3);
+
+        for bad in [0.0, 19.9, 999.1, f64::NAN, f64::INFINITY, -130.0] {
+            let err = state.set_bpm(bad).unwrap_err();
+            assert!(
+                matches!(err, SequencerError::InvalidBpm(_)),
+                "tempo {bad} produced {err:?}"
+            );
+        }
+        assert_eq!(state.bpm(), 174.3, "a refused tempo changes nothing");
+        // The bounds themselves are legal.
+        assert_eq!(state.set_bpm(MIN_BPM).unwrap(), MIN_BPM);
+        assert_eq!(state.set_bpm(MAX_BPM).unwrap(), MAX_BPM);
+    }
+
+    #[test]
+    fn a_pattern_from_the_webview_is_validated_before_it_is_stored() {
+        let (_kernel, state) = state();
+        let mut dto = state.sequencer_state().pattern;
+        dto.rows[0].steps[0].on = true;
+        dto.rows[0].steps[0].velocity = 1.0;
+        state.set_pattern_dto(&dto).unwrap();
+        assert_eq!(state.sequencer().pattern().hit_count(), 1);
+
+        dto.rows[0].steps[1].velocity = f32::NAN;
+        dto.rows[0].steps[1].on = true;
+        assert!(state.set_pattern_dto(&dto).is_err());
+        assert_eq!(state.sequencer().pattern().hit_count(), 1, "unchanged");
     }
 }

@@ -48,7 +48,7 @@ pub use notes::{
     drain_notes, note_channel, LiveNote, NoteConsumer, NoteEvent, NoteEventBuffer, NoteKind,
     NoteProducer, DEFAULT_NOTE_CAPACITY, MAX_KEY,
 };
-pub use transport::{TransportClock, TransportSnapshot};
+pub use transport::{clamp_bpm, TransportClock, TransportSnapshot, DEFAULT_BPM, MAX_BPM, MIN_BPM};
 
 /// Re-exported so downstream crates can name `basedrop` types (`Handle`, `Owned`)
 /// without depending on the exact `basedrop` version themselves.

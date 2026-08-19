@@ -114,5 +114,63 @@ export interface SourceDto {
   takesNotes: boolean;
 }
 
+/**
+ * One cell of the step grid. Mirrors `StepDto` in `app/src/dto.rs`.
+ *
+ * `velocity` is carried even when `on` is false, so toggling a step off and on
+ * again does not silently discard an accent.
+ */
+export interface StepDto {
+  on: boolean;
+  /** Normalised velocity, `0..1`. */
+  velocity: number;
+}
+
+/**
+ * One row of the step grid. Mirrors `PatternRowDto` in `app/src/dto.rs`.
+ *
+ * `label` is derived by Rust from `key` (the General MIDI drum map) and ignored
+ * on the way back in: the row's identity is its key, and the name is a rendering
+ * of it. The UI must not keep its own copy of that map.
+ */
+export interface PatternRowDto {
+  /** MIDI key this row triggers: 36 kick, 38 snare, 42 CH, 46 OH. */
+  key: number;
+  /** Note channel, `0..15`. */
+  channel: number;
+  label: string;
+  /** Exactly `pattern.steps` entries. */
+  steps: StepDto[];
+}
+
+/** The whole grid. Mirrors `PatternDto` in `app/src/dto.rs`. */
+export interface PatternDto {
+  /** Steps per row. 16 today; a different number means this UI is stale. */
+  steps: number;
+  rows: PatternRowDto[];
+}
+
+/**
+ * Tempo and pattern in one message. Mirrors `SequencerStateDto` in
+ * `app/src/dto.rs`.
+ *
+ * They travel together because the panel needs both to draw itself: the grid
+ * comes from the pattern, and the moving current-step highlight is computed from
+ * the tempo.
+ */
+export interface SequencerState {
+  /** Session tempo, already inside the transport's legal range. */
+  bpm: number;
+  /**
+   * The open device's sample rate, or `0` when audio is not running.
+   *
+   * The panel needs it to turn a transport position in frames into a step
+   * number; without it the UI would have to assume 48 kHz and the moving
+   * highlight would sit in the wrong step on a 44.1 kHz interface.
+   */
+  sampleRate: number;
+  pattern: PatternDto;
+}
+
 /** Unsubscribe handle returned by streaming APIs. */
 export type Unsubscribe = () => void;
