@@ -148,7 +148,7 @@ impl InsertEdit {
 pub enum InsertError {
     #[error("'{0}' is not an internal effect")]
     UnknownEffect(String),
-    #[error("'{0}' is not a place to put an effect; expected 'track' or 'master'")]
+    #[error("'{0}' is not a place to put an effect; expected 'track', 'bus' or 'master'")]
     UnknownTarget(String),
     #[error("there is no track {0}")]
     NoSuchTrack(usize),
