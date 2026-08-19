@@ -57,6 +57,10 @@ pub use audio::{
     reference_count, AudioSource, AudioSourceError, AudioSourceRegistry, WaveformMip, MAX_SOURCES,
     MAX_SOURCE_SECONDS, MAX_WAVEFORM_BINS, MIP_BASE_FRAMES, MIP_LEVELS, MIP_RATIO,
 };
+/// The file extensions a "load audio" dialog should offer, from the decoder
+/// crate. Re-exported so the shell can reach it without depending on
+/// `mydaw-audio-file` directly for one constant.
+pub use mydaw_audio_file::AUDIO_EXTENSIONS;
 pub use clips::{
     audio_clip_channel, compile_audio_clips, playback_step, AudioClipHandle, AudioClipInstallError,
     AudioClipNode, AudioClipStats, CompiledAudioClip, CompiledAudioSong, AUDIO_CLIP_QUEUE_CAPACITY,

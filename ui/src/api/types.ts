@@ -1,10 +1,18 @@
 /**
- * Wire types mirrored from the Rust `ipc-bridge` crate.
+ * Wire types mirrored from the Rust side.
  *
- * These are hand-mirrored on purpose (Phase 0): the Rust side is the source of
- * truth and any drift should show up as a compile error in the panels that
- * consume them. If the surface grows past a handful of structs, generate this
- * file from the Rust definitions instead.
+ * These are hand-mirrored on purpose: the Rust side is the source of truth and
+ * any drift should show up as a compile error in the view that consumes them.
+ * The authoritative definitions are `app/src/dto.rs` (sequencer, meters,
+ * plugins), `app/src/project.rs` (mixer), `app/src/effects.rs` (the effect
+ * catalogue) and `app/src/source.rs` (instrument sources).
+ *
+ * Two conventions run through all of it:
+ *
+ * - **camelCase.** serde renames on the way out; the consumer is TypeScript.
+ * - **Ids, not indices, for anything a user or a file can name.** A pattern, a
+ *   playlist lane, a clip, a send and an insert each carry a stable number.
+ *   Positions change under insertion and deletion.
  */
 
 /** Lifecycle state of a kernel plugin, as reported by the registry. */
@@ -19,7 +27,10 @@ export interface PluginStatusDto {
 
 /**
  * A UI panel contributed by a plugin via `ui.contribute_panel(...)`.
- * `component` is a registry key resolved against `src/panels/registry.ts`.
+ *
+ * The panel dock is gone, but the manifest list is still how the dev-only IPC
+ * bench announces itself (`ipc-bench-auto`), which is the only thing that reads
+ * this now.
  */
 export interface PanelManifestDto {
   id: string;
@@ -34,10 +45,10 @@ export interface UiSnapshot {
 }
 
 /**
- * One track's level for a single block. Mirrors `TrackMeterDto` in
+ * One strip's level for a single block. Mirrors `TrackMeterDto` in
  * `app/src/dto.rs`.
  *
- * Measured after that track's fader/pan/mute and **before** the master fader,
+ * Measured after that strip's fader/pan/mute and **before** the master fader,
  * which is what a channel meter in a mixer shows.
  */
 export interface TrackMeter {
@@ -47,7 +58,7 @@ export interface TrackMeter {
 
 /**
  * A single metering packet from the RT graph, throttled to 30-60 Hz by the
- * bridge. Peak/RMS are linear amplitudes in [0, 1+] (may exceed 1 when
+ * bridge. Peak/RMS are linear amplitudes in `[0, 1+]` (they exceed 1 when
  * clipping). `samplePos` is the transport position in frames.
  */
 export interface MeterFrame {
@@ -58,28 +69,24 @@ export interface MeterFrame {
   rmsR: number;
   samplePos: number;
   playing: boolean;
-  /**
-   * One entry per track in the project, in track order. Empty before the first
-   * graph is installed.
-   */
+  /** One entry per track, in track order. Empty before the first graph. */
   tracks: TrackMeter[];
   /**
+   * One entry per bus, in bus order. A separate list rather than more entries
+   * in `tracks`, because a bus is a different strip in a different index space:
+   * `buses[0]` is bus 0, not "the track after the last one".
+   */
+  buses: TrackMeter[];
+  /**
    * When the pump handed this frame to the webview, on the Rust bench clock.
-   *
-   * Absent in every normal run: only the spike-4 IPC benchmark asks the pump to
-   * stamp frames, and it is the only thing that reads this.
+   * Absent in every normal run -- only the IPC benchmark asks for it.
    */
   pumpMs?: number;
 }
 
 /**
  * What a CLAP plugin is *for*, decided by the host from the bundle's `features`
- * list. Mirrors `ClapPluginKindDto` in `app/src/dto.rs`.
- *
- * This is what decides which picker a plugin turns up in: instruments are offered
- * as track sources, audio effects as the master insert. `other` is not a failure
- * -- a bundle may declare no recognisable feature at all -- it just means MYDAW
- * has nowhere to put it yet.
+ * list. This is what decides which picker a plugin turns up in.
  */
 export type ClapPluginKind = 'instrument' | 'audio-effect' | 'note-effect' | 'other';
 
@@ -87,8 +94,7 @@ export type ClapPluginKind = 'instrument' | 'audio-effect' | 'note-effect' | 'ot
 export type PluginFormat = 'CLAP' | 'VST3';
 
 /**
- * One installed CLAP plugin, as reported by the host's scan. Mirrors
- * `ClapPluginInfoDto` in `app/src/dto.rs`.
+ * One installed CLAP plugin, as reported by the host's scan.
  *
  * `vendor` and `version` may be empty strings: the CLAP format only requires an
  * id, and a bundle that omits the rest is still perfectly loadable.
@@ -103,106 +109,65 @@ export interface ClapPluginInfoDto {
   path: string;
   /** Which picker this plugin belongs in. Derived from `features` by Rust. */
   kind: ClapPluginKind;
-  /**
-   * The bundle's raw CLAP feature strings, e.g. `['audio-effect', 'reverb']`.
-   *
-   * Carried verbatim rather than re-interpreted here: `kind` is the host's
-   * reading of them, and this is the evidence, which the browser shows as
-   * tooltip detail so a surprising classification can be explained rather than
-   * argued with.
-   */
+  /** The bundle's raw CLAP feature strings, carried verbatim as evidence. */
   features: string[];
 }
 
 /**
- * What a VST3 plugin is *for*, decided by the host from the class's declared
- * `subCategories`. Mirrors `Vst3PluginInfoDto.kind` in `app/src/dto.rs`.
+ * What a VST3 plugin is *for*, from the class's declared `subCategories`.
  *
- * Shares `instrument` and `audio-effect` with `ClapPluginKind` on purpose, so one
- * list can badge either format. `unknown` has no CLAP equivalent: a VST3 module
- * that exposes only the older `IPluginFactory` declares no subcategories at all,
- * which is a real state rather than a failure -- MYDAW offers such a plugin as an
- * effect and lets the bus-layout check at load time decide.
+ * `unknown` has no CLAP equivalent: a module that exposes only the older
+ * `IPluginFactory` declares no subcategories at all, which is a real state
+ * rather than a failure.
  */
 export type Vst3PluginKind = 'instrument' | 'audio-effect' | 'other' | 'unknown';
 
-/**
- * One installed VST3 plugin class, as reported by the host's scan. Mirrors
- * `Vst3PluginInfoDto` in `app/src/dto.rs`.
- */
+/** One installed VST3 plugin class, as reported by the host's scan. */
 export interface Vst3PluginInfoDto {
-  /**
-   * The class id as 32 uppercase hex digits, e.g. `58545356736673586572756D...`.
-   *
-   * Not a reverse-DNS string like a CLAP id: VST3 identifies a class by sixteen
-   * raw bytes, and this is those bytes. Unique within a module.
-   */
+  /** The class id as 32 uppercase hex digits. Unique within a module. */
   id: string;
   name: string;
   vendor: string;
   version: string;
   /** Absolute path of the `.vst3` module: a bundle directory or a flat DLL. */
   path: string;
-  /** Which picker this plugin belongs in. Derived from `subcategories` by Rust. */
   kind: Vst3PluginKind;
-  /**
-   * The class's declared subcategories, split for display (`['Fx', 'Reverb']`).
-   *
-   * VST3 carries these as one `|`-separated string; Rust splits it. Empty for a
-   * module with no `IPluginFactory2`, which is exactly the `unknown` case.
-   */
+  /** The class's declared subcategories, split for display (`['Fx', 'Reverb']`). */
   subcategories: string[];
 }
 
-/**
- * State of one placed VST3 plugin's editor window. Mirrors `Vst3GuiStatusDto` in
- * `app/src/vst3_bridge.rs`.
- */
+/** State of one placed VST3 plugin's editor window. */
 export interface Vst3GuiStatus {
   open: boolean;
   /** Whether the plugin draws an editor at all. False is normal, not an error. */
   hasEditor: boolean;
-  /** Class id of the plugin the editor belongs to, if one is placed. */
   cid: string | null;
   width: number;
   height: number;
 }
 
-/**
- * A hosted VST3 plugin sitting in a track's source slot or the master's insert.
- * Mirrors `Vst3SlotDto` in `app/src/vst3_bridge.rs`.
- *
- * The sibling of `ClapSlot`. Two shapes rather than one because the identifying
- * field genuinely differs -- `cid` is 32 hex digits where CLAP has a `pluginId`
- * string -- and a shared type would have had to call one by the other's name.
- */
+/** A hosted VST3 plugin in a track's source slot or the master's insert. */
 export interface Vst3Slot {
-  /** Opaque handle for this instance, stable while the plugin stays placed. */
   instance: number;
-  /** Class id, as hex. */
   cid: string;
   name: string;
   vendor: string;
-  /** Absolute path of the `.vst3` module it was loaded from. */
   modulePath: string;
   hasEditor: boolean;
   guiOpen: boolean;
 }
 
 /**
- * Which placed plugin a CLAP command addresses. Mirrors `ClapTargetDto` in
- * `app/src/dto.rs`.
+ * Which placed plugin a hosted-plugin command addresses.
  *
  * A tagged union rather than "a track index, or -1 for the master": several
  * editors can be open at once, so a target is a lasting identity rather than a
- * momentary selection, and a sentinel index is exactly the kind of thing that
- * survives one refactor and then addresses the wrong strip.
+ * momentary selection.
  */
 export type ClapTarget = { slot: 'track'; index: number } | { slot: 'master' };
 
 /**
- * State of one placed plugin's editor window. Mirrors `ClapGuiStatusDto` in
- * `app/src/clap_bridge.rs`.
+ * State of one placed plugin's editor window.
  *
  * The editor is a *native* window next to MYDAW's, not a region of this webview:
  * a plugin draws with its own toolkit into an OS window handle, which cannot be
@@ -210,64 +175,30 @@ export type ClapTarget = { slot: 'track'; index: number } | { slot: 'master' };
  * closed, and show what came back.
  */
 export interface ClapGuiStatus {
-  /** Whether an editor window is currently open. */
   open: boolean;
-  /** Whether the plugin draws an editor at all. False is normal, not an error. */
   hasEditor: boolean;
-  /** CLAP id of the plugin the editor belongs to, if one is loaded. */
   pluginId: string | null;
-  /** Editor size in physical pixels; `0` when closed. */
   width: number;
   height: number;
 }
 
-/**
- * A hosted CLAP plugin sitting in a track's source slot or the master's insert.
- * Mirrors `ClapSlotDto` in `app/src/project.rs`.
- *
- * Present in `MixerState` rather than fetched separately because every strip
- * that draws a plugin also draws its editor button, and the two must never
- * disagree about whether the window is up.
- */
+/** A hosted CLAP plugin in a track's source slot or the master's insert. */
 export interface ClapSlot {
-  /**
-   * Opaque handle for this instance, stable for as long as the plugin stays
-   * placed. Only meaningful to Rust; the UI carries it and never reads into it.
-   */
   instance: number;
-  /** CLAP id of the plugin in the slot, e.g. `com.u-he.diva`. */
   pluginId: string;
   name: string;
-  /** Absolute path of the `.clap` bundle it was loaded from. */
   bundlePath: string;
   /**
-   * Whether this plugin draws an editor. When false the strip shows no editor
+   * Whether this plugin draws an editor. When false the UI shows no editor
    * button at all -- a plugin with no GUI is an ordinary plugin, and a button
    * that always answers "there is no editor" is worse than no button.
    */
   hasEditor: boolean;
-  /** Whether its editor window is up right now. */
   guiOpen: boolean;
 }
 
-/**
- * One thing the engine can put at the head of a track. Mirrors `SourceDto` in
- * `app/src/source.rs`.
- *
- * The list is the three built-ins in a fixed order followed by every scanned
- * CLAP *instrument*, and it comes from Rust rather than being hard-coded here,
- * so adding an instrument is a change in one language rather than two.
- */
-/**
- * Whether the bundled sample content is installed, and what the downloader is
- * doing about it.
- *
- * The content (a CC-BY grand piano) is ~131 MB and is deliberately *not* part of
- * a checkout: it is fetched on demand, pinned by commit and verified by SHA-256.
- * Nothing downloads without a click -- see `startAssetDownload`.
- */
+/** The sampler's asset-download progress, exactly as Rust reports it. */
 export interface AssetStatusDto {
-  /** Whether every pinned file is present on disk. */
   installed: boolean;
   /**
    * Whether the instrument is loaded and playable, which lags `installed`:
@@ -280,39 +211,24 @@ export interface AssetStatusDto {
   downloadedBytes: number;
   filesDone: number;
   fileCount: number;
-  /** The instrument this installs, e.g. `salamander-piano`. */
   instrumentId: string;
   instrumentName: string;
   /** Empty unless `state` is `error`. */
   error: string;
 }
 
+/** One thing the engine can put at the head of a track. */
 export interface SourceDto {
   /**
-   * Stable id: `poly-synth`, `drum-kit`, `test-tone`, `sampler:<instrumentId>`,
-   * or `clap:<pluginId>`.
-   *
-   * This is what `setTrackSource` takes for a built-in, and what a `TrackDto`
-   * reports as its `sourceId` either way. A CLAP source is *placed* with
-   * `setTrackSourceClap` instead, because the host has to load a bundle from
-   * disk rather than look a name up in a table.
+   * Stable id: `poly-synth`, `kick`, `sampler:<instrumentId>`,
+   * `clap:<pluginId>` or `vst3:<cid>`.
    */
   id: string;
   label: string;
   description: string;
-  /** Which of the three ways this source is placed. */
   kind: 'internal' | 'clap' | 'vst3';
-  /** Plugin vendor; empty for the built-ins, and possibly empty for a CLAP one. */
   vendor: string;
-  /**
-   * Absolute plugin path: a `.clap` bundle or a `.vst3` module. Set exactly when
-   * `kind` is `clap` or `vst3`.
-   */
   bundlePath: string | null;
-  /**
-   * The plugin's own identifier: a CLAP id, or a VST3 class id as hex. Set
-   * exactly when `kind` is `clap` or `vst3`.
-   */
   pluginId: string | null;
   /** Whether this is the selected track's source. Exactly one is true. */
   selected: boolean;
@@ -320,8 +236,12 @@ export interface SourceDto {
   takesNotes: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// The sequencer: patterns, the playlist, the transport mode
+// ---------------------------------------------------------------------------
+
 /**
- * One cell of the step grid. Mirrors `StepDto` in `app/src/dto.rs`.
+ * One cell of the step grid.
  *
  * `velocity` is carried even when `on` is false, so toggling a step off and on
  * again does not silently discard an accent.
@@ -333,226 +253,397 @@ export interface StepDto {
 }
 
 /**
- * One row of the step grid. Mirrors `PatternRowDto` in `app/src/dto.rs`.
+ * One channel's step grid.
  *
  * `label` is derived by Rust from `key` (the General MIDI drum map) and ignored
- * on the way back in: the row's identity is its key, and the name is a rendering
- * of it. The UI must not keep its own copy of that map.
+ * on the way back in: the row's identity is its key, and the name is a
+ * rendering of it. The UI must not keep its own copy of that map.
  */
-export interface PatternRowDto {
-  /** MIDI key this row triggers: 36 kick, 38 snare, 42 CH, 46 OH. */
+export interface StepRowDto {
+  /** MIDI key every switched-on cell triggers. */
   key: number;
-  /** Note channel, `0..15`. */
-  channel: number;
   label: string;
-  /** Exactly `pattern.steps` entries. */
+  /** Exactly `PatternDto.steps` entries -- the cells that play. */
   steps: StepDto[];
 }
 
 /**
- * One note of the piano roll. Mirrors `MelodicNoteDto` in `app/src/dto.rs`.
+ * One note of the piano roll.
  *
  * `start` and `length` are in **ticks**: `PPQ` (960) to the quarter note, so a
  * sixteenth is `TICKS_PER_STEP` (240). Ticks rather than steps because a note's
- * whole point is that it need not sit on the grid -- a triplet, a nudge, a note
- * held for three and a half beats. The units are not in the field names because
- * this shape is written into the `.mydaw` file too, and `startTicks` beside
- * `master_gain_db` would be a wart on the format for ever.
+ * whole point is that it need not sit on the grid.
+ *
+ * **No channel.** The note lives inside a `ChannelClipDto`, which knows which
+ * channel it is; carrying it twice was two facts that could disagree.
  */
 export interface MelodicNoteDto {
   /** MIDI key, `0..127`. 60 is middle C. */
   key: number;
-  /** Note channel, i.e. the index of the track this note plays. */
-  channel: number;
-  /** Offset from the start of the pattern, in ticks. */
   start: number;
-  /** How long the note sounds, in ticks. At least 1. */
   length: number;
   /** Normalised velocity, `0..1`. */
   velocity: number;
 }
 
-/** The whole pattern. Mirrors `PatternDto` in `app/src/dto.rs`. */
-export interface PatternDto {
-  /** Steps in the loop: 16, 32 or 64. Every row has exactly this many entries. */
-  steps: number;
-  rows: PatternRowDto[];
-  /**
-   * The piano roll, in no particular order. Rust sorts on compile, so the index
-   * of a note here is stable under an edit -- which is what lets the roll
-   * address the note being dragged by its position in this array.
-   */
+/**
+ * What one pattern says to one channel.
+ *
+ * `mode` is derived from whether there are notes and is ignored on the way in:
+ * the content decides. A grid cannot show a note length, so notes win.
+ */
+export interface ChannelClipDto {
+  /** The rack channel, the mixer strip and the note channel: one index. */
+  channel: number;
+  mode: 'steps' | 'roll';
+  /** The step grid, when this channel has one. Absent otherwise. */
+  steps?: StepRowDto | null | undefined;
   notes: MelodicNoteDto[];
 }
 
-/**
- * Tempo and pattern in one message. Mirrors `SequencerStateDto` in
- * `app/src/dto.rs`.
- *
- * They travel together because the panel needs both to draw itself: the grid
- * comes from the pattern, and the moving current-step highlight is computed from
- * the tempo.
- */
-export interface SequencerState {
-  /** Session tempo, already inside the transport's legal range. */
-  bpm: number;
-  /**
-   * The open device's sample rate, or `0` when audio is not running.
-   *
-   * The panel needs it to turn a transport position in frames into a step
-   * number; without it the UI would have to assume 48 kHz and the moving
-   * highlight would sit in the wrong step on a 44.1 kHz interface.
-   */
-  sampleRate: number;
-  pattern: PatternDto;
+/** A whole pattern, as the rack and the roll read and write it. */
+export interface PatternDto {
+  /** Stable across a save and load. Playlist clips reference it. */
+  id: number;
+  name: string;
+  /** Absent when the engine has none -- the engine has no palette. */
+  color?: string | null;
+  /** Steps in the loop: 16, 32 or 64. Every step row carries this many cells. */
+  steps: number;
+  channels: ChannelClipDto[];
+}
+
+/** One row of the pattern picker: everything a list needs, nothing a grid does. */
+export interface PatternSummaryDto {
+  id: number;
+  name: string;
+  color?: string | null;
+  steps: number;
+  /** Ticks in one time round the loop. `steps * 240`. */
+  lengthTicks: number;
+  channelCount: number;
+  hitCount: number;
+  noteCount: number;
+}
+
+/** The pattern picker's whole state, plus the pattern being edited. */
+export interface PatternSetDto {
+  patterns: PatternSummaryDto[];
+  activeId: number;
+  active: PatternDto;
+  maxPatterns: number;
+}
+
+/** One lane of the arrangement. */
+export interface PlaylistTrackDto {
+  id: number;
+  name: string;
+  muted: boolean;
 }
 
 /**
- * One plugin a project asked for and did not get. Mirrors `MissingPluginDto` in
- * `app/src/project.rs`.
+ * One clip on the timeline.
  *
- * A report rather than a loss: the reference stays in the project and is written
- * back out on the next save, so installing the plugin and reopening puts the
- * strip back together. That is why a load reports this instead of quietly
- * substituting a built-in, which would be an unasked-for edit to somebody's
- * song.
+ * One shape for both kinds rather than a tagged union, because the UI draws
+ * them with the same geometry and only the fill differs: `kind` says which, and
+ * the fields the other kind does not have are simply absent from the JSON.
  */
-export interface MissingPlugin {
+export interface ClipDto {
+  id: number;
+  kind: 'pattern' | 'audio';
+  /** Index of the lane it is drawn on. */
+  track: number;
+  /** Where it starts, in absolute song ticks. */
+  start: number;
+  /** How long it plays for, in song ticks. */
+  length: number;
+  /** The pattern it plays. Absent for an audio clip. */
+  patternId?: number;
+  /** The loaded audio file it plays. Absent for a pattern clip. */
+  sourceId?: number;
+  /** How far into that file playback begins, in the file's own frames. */
+  offsetFrames?: number;
+  /** Per-clip trim in dB. Absent for a pattern clip. */
+  gainDb?: number;
+}
+
+/** The arrangement. */
+export interface PlaylistDto {
+  tracks: PlaylistTrackDto[];
+  clips: ClipDto[];
+  /** One past the last tick any clip occupies, and where SONG mode stops. */
+  endTicks: number;
+  maxTracks: number;
+  maxClips: number;
+  maxTicks: number;
+}
+
+/**
+ * One loaded audio file.
+ *
+ * Everything here is a property of the *file*, not of any clip that plays it.
+ * The waveform is deliberately not in it -- see `WaveformDto`.
+ */
+export interface AudioSourceDto {
+  id: number;
+  path: string;
+  name: string;
+  /** Playable frames, in the file's own rate. `0` for a file that has moved. */
+  frames: number;
+  sampleRate: number;
+  durationSeconds: number;
   /**
-   * What the project called it -- the display name from the scan that placed
-   * it. A user recognises `Diva`; nobody recognises a path.
+   * How long the file is at the session's **current** tempo, in ticks -- which
+   * is what a clip drawn to cover the whole take should be. It moves with the
+   * tempo, because a tick does; the audio does not stretch.
    */
+  durationTicks: number;
+  /** Whether the file could not be found. Its clips stay, and are silent. */
+  missing: boolean;
+  bytes: number;
+}
+
+/**
+ * A source's waveform at the resolution that was asked for: one `[min, max]`
+ * pair per bin, over **both** channels, so the outer bound never hides a
+ * transient that is on one channel only.
+ */
+export interface WaveformDto {
+  sourceId: number;
+  frames: number;
+  /** Pairs actually returned, which may be fewer than asked for. */
+  bins: number;
+  maxBins: number;
+  peaks: [number, number][];
+}
+
+/** Which of the two timelines the transport plays. */
+export type PlayMode = 'pat' | 'song';
+
+/**
+ * Everything the rack, the roll, the playlist and the transport need in one
+ * message. Every sequencer command returns this whole shape.
+ */
+export interface SequencerState {
+  bpm: number;
+  /**
+   * The open device's sample rate, or `0` when no stream is running.
+   *
+   * The views need it to turn the transport position they get in *frames* into
+   * a tick. Without it the UI would have to assume 48 kHz and the playhead
+   * would sit in the wrong place on a 44.1 kHz interface.
+   */
+  sampleRate: number;
+  playMode: PlayMode;
+  /** Ticks per quarter note: 960. Sent so there is one definition of the grid. */
+  ppq: number;
+  /** Ticks in one step of the grid (a sixteenth): 240. */
+  ticksPerStep: number;
+  /** Ticks in one bar of 4/4: 3840. */
+  ticksPerBar: number;
+  patternSet: PatternSetDto;
+  playlist: PlaylistDto;
+}
+
+// ---------------------------------------------------------------------------
+// The mixer: strips, buses, sends, insert chains
+// ---------------------------------------------------------------------------
+
+/** One plugin a project asked for and did not get. */
+export interface MissingPlugin {
   name: string;
   /** `clap` or `vst3`, so a warning can say which format is absent. */
   format: string;
-  /** Where the project expected to find it. Often the whole explanation. */
   path: string;
-  /** Why it would not load, in the loader's own words. */
   reason: string;
 }
 
-/**
- * One mixer strip. Mirrors `TrackDto` in `app/src/project.rs`.
- *
- * `index` is the track's position *and* its note channel: a sequencer row on
- * channel 1 plays track 1, and the keyboard piano sends on the selected track's
- * index. `id` is what a UI list should be keyed on -- removing a track
- * renumbers the ones after it, so `index` is not stable.
- */
-export interface TrackDto {
+/** One parameter's or one meter's current value. */
+export interface ParamValueDto {
+  id: string;
+  value: number;
+}
+
+/** One internal effect placed in a chain. */
+export interface InsertDto {
+  /** Position in the chain, which is also the index every command takes. */
+  index: number;
+  /** Stable identity across reordering. Key a UI list on this. */
+  id: number;
+  typeId: string;
+  name: string;
+  /** The bypass switch's position, lifted out because every strip draws it. */
+  bypassed: boolean;
+  /** Every parameter's current value, in declaration order. */
+  params: ParamValueDto[];
+  /** Every meter's current value. Empty for the effects that publish none. */
+  readouts: ParamValueDto[];
+}
+
+/** Every meter on one insert, as the polling call returns them. */
+export interface InsertReadoutsDto {
   index: number;
   id: number;
+  readouts: ParamValueDto[];
+}
+
+/**
+ * How a knob should lay one parameter's range out. The stored value is always
+ * the real value in the parameter's own unit.
+ */
+export type ParamCurve = 'linear' | 'log' | 'db';
+
+/** The metadata a generic knob panel renders one parameter from. */
+export interface ParamDefDto {
+  id: string;
   name: string;
-  /** Source id, one of the ids from `getSources`. */
+  /** `"dB"`, `"Hz"`, `"ms"`, `"%"`, `":1"`, or empty. */
+  unit: string;
+  min: number;
+  max: number;
+  /** Named this because `default` is a reserved word in too many languages. */
+  defaultValue: number;
+  curve: ParamCurve;
+  /** Quantisation in the parameter's own unit, or `null` for continuous. */
+  step: number | null;
+  /**
+   * Ramp length in milliseconds. `0` marks a **switch**: the UI draws it as one
+   * and must not animate it.
+   */
+  smoothingMs: number;
+}
+
+/** One live meter an effect publishes. */
+export interface ReadoutDefDto {
+  id: string;
+  name: string;
+  unit: string;
+}
+
+/** One entry of the internal effect catalogue. Static: fetched once. */
+export interface EffectInfoDto {
+  typeId: string;
+  name: string;
+  description: string;
+  params: ParamDefDto[];
+  readouts: ReadoutDefDto[];
+}
+
+/** Which chain an insert command addresses. */
+export type InsertTargetKind = 'track' | 'bus' | 'master';
+
+/**
+ * A chain, as the UI addresses one. `index` is ignored for the master, and sent
+ * as `0` so the argument is never absent.
+ */
+export interface InsertTarget {
+  kind: InsertTargetKind;
+  index: number;
+}
+
+/** One mixer track. `index` is the track's position *and* its note channel. */
+export interface TrackDto {
+  index: number;
+  /** Stable identity across renumbering. Key a UI list on this. */
+  id: number;
+  name: string;
   sourceId: string;
   sourceLabel: string;
-  /** Fader position, in dB. `minGainDb` means silence. */
   gainDb: number;
   /** `-1` hard left, `0` centre, `1` hard right. */
   pan: number;
-  /** The mute button's own state. */
+  /** The button state, not the outcome. */
   muted: boolean;
   soloed: boolean;
-  /**
-   * Whether this track is actually silent right now, solo resolved. A track
-   * another track's solo has silenced has `silenced` true and `muted` false.
-   */
+  /** Whether this track is actually silent right now, solo resolved. */
   silenced: boolean;
-  /** Whether the keyboard piano and the source selector address this track. */
   selected: boolean;
-  /**
-   * The hosted CLAP instrument at the head of this track, when `sourceId` names
-   * one. `null` for a built-in source.
-   */
   clap: ClapSlot | null;
-  /**
-   * The hosted VST3 instrument at the head of this track.
-   *
-   * At most one of `clap` and `vst3` is ever set: a track has one source.
-   */
   vst3: Vst3Slot | null;
-  /**
-   * Set when the project asked for a plugin on this track and it could not be
-   * loaded. The track keeps everything else it had and renders silence.
-   */
   missing: MissingPlugin | null;
+  /** Internal effects on this track, in signal order. */
+  inserts: InsertDto[];
 }
 
-/** The master strip. Mirrors `MasterDto` in `app/src/project.rs`. */
+/** One bus. `index` is what a send's `dest` names. */
+export interface BusDto {
+  index: number;
+  id: number;
+  name: string;
+  /** Absent when the engine has none. */
+  color?: string | null;
+  gainDb: number;
+  pan: number;
+  muted: boolean;
+  soloed: boolean;
+  /** Solo is resolved across tracks *and* buses: they share one scope. */
+  silenced: boolean;
+  inserts: InsertDto[];
+}
+
+/** One send tap. Every send command addresses `id`, never a pair of indices. */
+export interface SendDto {
+  id: number;
+  sourceKind: 'track' | 'bus';
+  sourceIndex: number;
+  /** Index of the destination bus. */
+  dest: number;
+  /** Linear level, `0..=maxSendLevel`. `1.0` is unity. */
+  level: number;
+  /**
+   * The same level in decibels, so a knob can lay its range out logarithmically
+   * without the UI keeping its own copy of the conversion.
+   */
+  levelDb: number;
+  /** Whether the tap is taken before the source's fader, pan and mute. */
+  pre: boolean;
+}
+
+/** The master strip. */
 export interface MasterDto {
   gainDb: number;
-  /** The CLAP audio effect on the master insert, or `null` when there is none. */
   clap: ClapSlot | null;
-  /**
-   * The VST3 audio effect on the master insert.
-   *
-   * The insert holds **one** plugin, so at most one of `clap` and `vst3` is set.
-   * Placing either format evicts the other.
-   */
   vst3: Vst3Slot | null;
-  /** The master effect the project asked for and did not get. */
   missing: MissingPlugin | null;
+  /** Internal effects on the master bus, **ahead of** the hosted insert. */
+  inserts: InsertDto[];
 }
 
 /**
- * Everything the mixer panel needs in one message. Mirrors `MixerStateDto` in
- * `app/src/project.rs`.
- *
- * Every mixer command returns this whole shape rather than an acknowledgement,
- * so the panel never has to merge a partial update into what it already had.
+ * Everything the mixer needs in one message. Every mixer command returns this
+ * whole shape rather than an acknowledgement.
  */
 export interface MixerState {
   tracks: TrackDto[];
+  buses: BusDto[];
+  /**
+   * Every send tap, from both kinds of source. The UI draws "sends from this
+   * strip" and "what feeds this bus" by filtering this one list -- two copies
+   * of a relationship can disagree.
+   */
+  sends: SendDto[];
   master: MasterDto;
-  /** Index of the track the keyboard and the source selector address. */
   selected: number;
-  /** The engine's fixed track limit. */
   maxTracks: number;
-  /** Fader bounds in dB, so the UI keeps no copy of the scale. */
+  maxBuses: number;
+  maxInserts: number;
   minGainDb: number;
   maxGainDb: number;
+  maxSendLevel: number;
+  maxSendDb: number;
 }
 
-/**
- * Which project is open. Mirrors `ProjectInfoDto` in
- * `app/src/project_bridge.rs`.
- *
- * Every project command answers with this, not just `getProjectInfo`, so the
- * window title and the status bar are written from the reply to the command
- * that changed them rather than from a second question asked afterwards -- a
- * question whose answer could arrive out of order.
- */
+/** Which project is open. Every project command answers with this. */
 export interface ProjectInfo {
-  /**
-   * Absolute path of the open project, `null` for one that has never been
-   * saved.
-   *
-   * Read, never acted on: whether a plain Save needs a dialog is decided in
-   * Rust, where the dialog is. This is here so the status bar can say which
-   * file two projects of the same name are.
-   */
   path: string | null;
-  /** The file name without its extension, or `Untitled`. */
   name: string;
-  /**
-   * How many of the project's plugins could not be loaded. Zero in every
-   * ordinary session; the status bar warns when it is not, and the strips say
-   * which ones.
-   */
   missingPlugins: number;
-  /**
-   * Whatever was worth saying that was not an outright failure -- a plugin that
-   * would not load, a state blob a plugin refused, a load with no audio device
-   * to attach anything to.
-   *
-   * Sentences rather than codes, because Rust writes them for the status bar
-   * and the UI is not meant to interpret them.
-   */
+  /** Sentences rather than codes, because they go straight into the status bar. */
   warnings: string[];
 }
 
 /**
- * What the open audio device is. Mirrors `StreamInfoDto` in `app/src/dto.rs`.
+ * What the open audio device is.
  *
  * `running: false` with every number at zero is the ordinary "audio has not
  * started" state, not a failure -- the status bar draws a dash for it.
@@ -563,33 +654,19 @@ export interface StreamInfo {
   channels: number;
   /** Largest block the callback can be handed, in frames: the BUFFER readout. */
   bufferFrames: number;
-  /** One block's worth of time in milliseconds: the LATENCY readout. */
   latencyMs: number;
   running: boolean;
 }
 
-/**
- * Progress of a downloadable instrument asset (the sampler's piano, today).
- *
- * **Provisional.** The commands behind it (`get_asset_status`,
- * `start_asset_download`) are being added on another branch; this shape is the
- * UI's half of that contract, written down here so the browser's download row is
- * a real component against a typed surface rather than a picture. `Backend`
- * declares the two methods as optional, and the shell hides the row when they
- * are absent -- see `browser/AssetRow.tsx`.
- */
+/** One downloadable instrument asset, as the browser's download row reads it. */
 export interface AssetStatus {
-  /** Stable id, e.g. `piano`. */
   id: string;
   name: string;
-  /** `absent` before a download, `ready` once it is installed and usable. */
   state: 'absent' | 'downloading' | 'ready' | 'failed';
   /** `0..1` while downloading; `1` when ready. */
   progress: number;
-  /** Total download size in bytes, or `0` when it is not known yet. */
   bytesTotal: number;
   bytesDone: number;
-  /** Why a `failed` download failed, in the backend's own words. */
   error: string | null;
 }
 

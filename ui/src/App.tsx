@@ -1,97 +1,117 @@
-import { onCleanup, Show, type JSX } from 'solid-js';
-import { AppStateProvider, useAppState } from './state';
-import { ThemeProvider } from './theme/ThemeProvider';
-import { LayoutProvider, useLayout } from './shell/layout';
-import { TransportBar } from './shell/TransportBar';
-import { BrowserPane } from './shell/BrowserPane';
-import { Arrangement } from './shell/Arrangement';
-import { BottomPanel } from './shell/BottomPanel';
-import { Inspector } from './shell/Inspector';
-import { DevicePalette } from './shell/DevicePalette';
-import { StatusBar } from './shell/StatusBar';
-
 /**
- * WAVE Shell v2.
+ * The shell.
  *
- * Three providers, in the order their dependencies run: the theme writes the
- * custom properties everything else is drawn with, the app state opens the
- * backend and the meter stream, and the layout holds the view state that is
- * nobody's business but this shell's.
+ * Three main views and a fullscreen piano roll over them. Which one is up is
+ * pure view state -- switching never changes what the transport plays, which is
+ * what the PAT/SONG toggle in the top bar is for.
  */
-export function App(): JSX.Element {
-  return (
-    <ThemeProvider>
-      <AppStateProvider>
-        <LayoutProvider>
-          <Shell />
-        </LayoutProvider>
-      </AppStateProvider>
-    </ThemeProvider>
-  );
-}
 
-/** Whether a key event is somebody typing, and therefore not a shortcut. */
-function isTyping(event: KeyboardEvent): boolean {
-  const target = event.target as HTMLElement | null;
-  if (!target) return false;
-  if (target.isContentEditable) return true;
-  const tag = target.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-}
+import { Match, Show, Switch, onCleanup } from 'solid-js';
 
-function Shell(): JSX.Element {
+import { Browser } from './shell/Browser';
+import { SidePanel } from './shell/SidePanel';
+import { StatusBar } from './shell/StatusBar';
+import { TopBar } from './shell/TopBar';
+import { useView } from './shell/view';
+import { useAppState } from './state';
+import { IconChevron } from './ui/icons';
+import { Mixer } from './views/Mixer';
+import { Playlist } from './views/Playlist';
+import { Rack } from './views/Rack';
+import { Roll } from './views/Roll';
+
+export function App(): ReturnType<typeof Show> {
   const app = useAppState();
-  const layout = useLayout();
+  const view = useView();
 
-  /**
-   * The shell's own accelerators.
-   *
-   * Deliberately few, and all of them things with no other way in: Space is the
-   * transport, F7 is the maximise the tab bar also offers, and Ctrl+K is the
-   * palette. The project shortcuts (Ctrl+N/O/S) live in `state.tsx` beside the
-   * commands they run, and the computer-keyboard piano is there too -- putting
-   * either here would be a second window listener arguing with the first.
-   */
-  const onKeyDown = (event: KeyboardEvent) => {
-    if (event.repeat) return;
-    if (event.ctrlKey && !event.shiftKey && !event.altKey && event.code === 'KeyK') {
-      event.preventDefault();
-      app.ensureDevices();
-      layout.setPaletteOpen(!layout.paletteOpen());
-      return;
+  /** The view hotkeys. F7 opens the roll on whichever channel is selected. */
+  function onKeyDown(event: KeyboardEvent): void {
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
+    switch (event.key) {
+      case 'F5':
+        event.preventDefault();
+        view.go('playlist');
+        break;
+      case 'F6':
+        event.preventDefault();
+        view.go('rack');
+        break;
+      case 'F9':
+        event.preventDefault();
+        view.go('mixer');
+        break;
+      case 'F7': {
+        event.preventDefault();
+        const strip = view.strip();
+        view.openRoll(strip.kind === 'track' ? strip.index : (app.mixer()?.selected ?? 0));
+        break;
+      }
+      default:
+        break;
     }
-    if (isTyping(event)) return;
-    if (event.code === 'F7') {
-      event.preventDefault();
-      layout.toggleMaximised();
-      return;
-    }
-    if (event.code === 'Space' && !event.ctrlKey && !event.altKey && !event.metaKey) {
-      event.preventDefault();
-      if (app.playing()) app.stop();
-      else app.play();
-    }
-  };
+  }
 
   window.addEventListener('keydown', onKeyDown);
   onCleanup(() => window.removeEventListener('keydown', onKeyDown));
 
   return (
     <div class="wv-shell">
-      <TransportBar />
-      <div class="wv-body">
-        <BrowserPane />
-        <div class="wv-centre">
-          <Show when={!layout.maximised()}>
-            <Arrangement />
+      <TopBar />
+      <Show
+        when={!view.rollOpen()}
+        fallback={
+          <div class="wv-body">
+            <Roll />
+          </div>
+        }
+      >
+        <div class="wv-body">
+          <Show
+            when={view.browserOpen()}
+            fallback={
+              <div
+                class="wv-rail wv-rail--left"
+                onClick={() => view.setBrowserOpen(true)}
+                title="Show the browser"
+              >
+                <IconChevron direction="right" />
+                <span class="wv-rail__label">BROWSER</span>
+              </div>
+            }
+          >
+            <Browser />
           </Show>
-          <BottomPanel />
+
+          <Switch fallback={<Rack />}>
+            <Match when={view.view() === 'playlist'}>
+              <Playlist />
+            </Match>
+            <Match when={view.view() === 'rack'}>
+              <Rack />
+            </Match>
+            <Match when={view.view() === 'mixer'}>
+              <Mixer />
+            </Match>
+          </Switch>
+
+          <Show
+            when={view.sideOpen()}
+            fallback={
+              <div
+                class="wv-rail wv-rail--right"
+                onClick={() => view.setSideOpen(true)}
+                title="Show the picker and inspector"
+              >
+                <IconChevron direction="left" />
+                <span class="wv-rail__label">PICKER · INSPECTOR</span>
+              </div>
+            }
+          >
+            <SidePanel />
+          </Show>
         </div>
-        <Inspector />
-        <Show when={layout.paletteOpen()}>
-          <DevicePalette />
-        </Show>
-      </div>
+      </Show>
       <StatusBar />
     </div>
   );

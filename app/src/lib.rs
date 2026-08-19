@@ -342,6 +342,7 @@ pub fn run() -> ExitCode {
             commands::move_clip,
             commands::resize_clip,
             commands::load_audio_source,
+            commands::open_audio_file,
             commands::get_audio_sources,
             commands::unload_audio_source,
             commands::get_audio_waveform,

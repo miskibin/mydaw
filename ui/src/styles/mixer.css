@@ -1,0 +1,442 @@
+/*
+ * The MIXER view.
+ *
+ * Only what is genuinely a mixer strip lives here. Every shared control -- the
+ * segmented mode switch, the chips, the dashed adder, the meters, the faders,
+ * the knobs, the pills, the bypass dots, the swatches, the menu and its scrim,
+ * the list rows -- comes from `base.css` and is used, not re-declared.
+ *
+ * Same rules as base: BEM under `wv-`, state as a separate `.is-*` class, and
+ * **every colour a `var(--token)`**. The handful of rules that tune a shared
+ * class are written as `.wv-shared.wv-mixer__own` so they win on specificity
+ * rather than on which stylesheet the bundler happened to put last.
+ *
+ * Dimensions are the design's: a 90 px strip, a 106 px master, 26 px heads.
+ */
+
+.wv-mixer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wv-mixer__body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 12px 0 14px 12px;
+}
+
+/* The strips scroll sideways; the master does not, which is what "pinned"
+   means -- it is a sibling of the scroller rather than its last child. */
+.wv-mixer__strips {
+  display: flex;
+  flex: 1;
+  gap: 5px;
+  min-width: 0;
+  padding-right: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.wv-mixer__pin {
+  display: flex;
+  flex: none;
+  padding-right: 12px;
+}
+
+/* --- one strip ------------------------------------------------------------ */
+
+.wv-mixer__strip {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 90px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--panel2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  cursor: pointer;
+}
+
+.wv-mixer__strip--master {
+  width: 106px;
+}
+
+.wv-mixer__strip.is-active {
+  background: var(--accSoft);
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+
+/* Actually silent right now, solo resolved -- not the button's position. */
+.wv-mixer__strip.is-silenced {
+  opacity: 0.55;
+}
+
+.wv-mixer__head {
+  display: flex;
+  flex: none;
+  gap: 5px;
+  align-items: center;
+  height: 26px;
+  padding: 0 7px;
+  background: var(--head);
+}
+
+.wv-mixer__strip.is-active .wv-mixer__head {
+  background: var(--accSoft);
+}
+
+.wv-mixer__num {
+  flex: none;
+  font: 400 8.5px 'Geist Mono';
+  color: var(--faint);
+}
+
+.wv-mixer__strip.is-active .wv-mixer__num {
+  color: var(--txt2);
+}
+
+.wv-mixer__name {
+  overflow: hidden;
+  font: 500 10.5px Geist;
+  color: var(--txt2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-mixer__strip.is-active .wv-mixer__name {
+  font-weight: 600;
+  color: var(--txt);
+}
+
+.wv-mixer__mastername {
+  font: 500 9.5px 'Geist Mono';
+  letter-spacing: 0.1em;
+  color: var(--txt);
+}
+
+/* --- mute, solo, arm ------------------------------------------------------ */
+
+.wv-mixer__btns {
+  display: flex;
+  flex: none;
+  gap: 3px;
+  align-items: center;
+  padding: 5px 6px 0;
+}
+
+/* The strip's mute is a dot rather than the row's bar -- the same LED, drawn
+   the way a console draws it. `base.css` owns the two colours. */
+.wv-led.wv-led--dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.wv-mixer__kind {
+  flex: none;
+  font: 400 7.5px 'Geist Mono';
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+
+/* --- the insert chain ----------------------------------------------------- */
+
+.wv-mixer__slots {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 2px;
+  padding: 5px 6px 0;
+}
+
+.wv-mixer__slot {
+  display: flex;
+  flex: none;
+  gap: 5px;
+  align-items: center;
+  height: 15px;
+  padding: 0 5px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.wv-mixer__slot.is-filled {
+  background: var(--chip);
+  box-shadow: none;
+}
+
+.wv-mixer__slot.is-filled.is-bypassed {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
+.wv-mixer__slot.is-add:hover {
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+
+.wv-mixer__slot.is-more {
+  justify-content: center;
+  background: var(--chip);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
+.wv-mixer__slot.is-blank {
+  cursor: default;
+}
+
+/* A 4 px dot: the shared bypass LED, at strip scale. */
+.wv-dot.wv-mixer__bypass {
+  width: 4px;
+  height: 4px;
+}
+
+.wv-mixer__slotname {
+  overflow: hidden;
+  font: 400 8.5px 'Geist Mono';
+  color: var(--txt2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-mixer__slot.is-bypassed .wv-mixer__slotname {
+  color: var(--dim2);
+}
+
+.wv-mixer__slot.is-add .wv-mixer__slotname,
+.wv-mixer__slot.is-blank .wv-mixer__slotname {
+  color: var(--faint);
+}
+
+.wv-mixer__slot.is-more .wv-mixer__slotname {
+  font-weight: 600;
+  color: var(--dim);
+}
+
+/* The hosted plugin on the master insert, after the internal chain. */
+.wv-mixer__plugin {
+  display: flex;
+  flex: none;
+  gap: 5px;
+  align-items: center;
+  height: 17px;
+  margin: 4px 7px 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--chip);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
+.wv-mixer__gui {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  font: 400 9px 'Geist Mono';
+  color: var(--dim);
+}
+
+.wv-mixer__gui:hover {
+  background: var(--sunk);
+  color: var(--acc);
+}
+
+.wv-mixer__gui.is-open {
+  color: var(--acc);
+}
+
+/* --- pan and the level readout -------------------------------------------- */
+
+.wv-mixer__pan {
+  display: flex;
+  flex: none;
+  gap: 5px;
+  align-items: center;
+  padding: 6px 6px 0;
+}
+
+/* The shared `Knob` stacks cap, value and name. A 90 px strip has room for the
+   cap only: the pan position is spelled out beside it as `C` / `L42`, which is
+   how a pan is read, and the strip's own head already says what it is. */
+.wv-mixer__pan .wv-param__value,
+.wv-mixer__pan .wv-param__name {
+  display: none;
+}
+
+.wv-mixer__reads {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wv-mixer__panread {
+  font: 400 9px 'Geist Mono';
+  color: var(--dim2);
+}
+
+.wv-mixer__gain {
+  font: 400 9.5px 'Geist Mono';
+  color: var(--txt2);
+}
+
+/* --- fader and meters ----------------------------------------------------- */
+
+.wv-mixer__faders {
+  display: flex;
+  flex: 1;
+  gap: 5px;
+  justify-content: center;
+  min-height: 46px;
+  padding: 7px 7px 4px;
+}
+
+.wv-mixer__strip--master .wv-mixer__faders .wv-meter {
+  width: 8px;
+}
+
+/* --- the send cell -------------------------------------------------------- */
+
+.wv-mixer__send {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  align-items: center;
+  padding: 6px 6px 7px;
+  background: var(--sunk);
+  border-top: 1px solid var(--line);
+  cursor: default;
+}
+
+.wv-mixer__strip.is-active .wv-mixer__send {
+  border-top-color: var(--acc);
+}
+
+.wv-mixer__arrow {
+  height: 11px;
+  font: 400 11px 'Geist Mono';
+  line-height: 1;
+  color: var(--faint);
+}
+
+.wv-mixer__arrow.is-self,
+.wv-mixer__arrow.is-live {
+  color: var(--acc);
+}
+
+.wv-mixer__sendrow {
+  display: flex;
+  flex: none;
+  gap: 5px;
+  align-items: center;
+  min-height: 36px;
+}
+
+/* The send knob keeps its dB value and drops its name: the cell's arrow and
+   the header's mode switch already say which direction it is. */
+.wv-mixer__sendrow .wv-param__name {
+  display: none;
+}
+
+.wv-mixer__sendrow .wv-param__value {
+  font-size: 8.5px;
+}
+
+.wv-mixer__sendnote {
+  display: flex;
+  flex: none;
+  align-items: center;
+  min-height: 36px;
+  font: 500 7.5px 'Geist Mono';
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+
+.wv-mixer__sendnote.is-self {
+  color: var(--acc);
+}
+
+.wv-mixer__pre {
+  flex: none;
+  width: 26px;
+  font: 400 8.5px 'Geist Mono';
+  color: var(--txt2);
+  text-align: center;
+}
+
+/* Pre-fader is the setting that changes what the send hears, so it gets the
+   same warning colour solo does. */
+.wv-mixer__pre.is-pre {
+  color: var(--solo);
+}
+
+.wv-mixer__pre.is-off {
+  color: var(--faint);
+}
+
+.wv-mixer__out {
+  max-width: 100%;
+  overflow: hidden;
+  font: 400 8.5px 'Geist Mono';
+  color: var(--dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-mixer__peak {
+  font: 400 8.5px 'Geist Mono';
+  color: var(--dim2);
+}
+
+/* --- the header ----------------------------------------------------------- */
+
+.wv-seg__btn.wv-mixer__mode {
+  height: 20px;
+  padding: 0 8px;
+  font: 500 8.5px 'Geist Mono';
+  letter-spacing: 0.08em;
+}
+
+.wv-chip.wv-mixer__selchip {
+  flex: 1 1 auto;
+  min-width: 150px;
+  overflow: hidden;
+  background: var(--accSoft);
+  cursor: default;
+}
+
+.wv-swatch.wv-mixer__selswatch {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.wv-mixer__selname {
+  flex: none;
+  font: 600 11px Geist;
+  color: var(--txt);
+}
+
+.wv-mixer__route {
+  min-width: 0;
+  overflow: hidden;
+  font: 400 9.5px 'Geist Mono';
+  color: var(--dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- the effect picker ---------------------------------------------------- */
+
+.wv-menu.wv-mixer__fxmenu {
+  width: 198px;
+  max-height: 328px;
+  overflow-y: auto;
+}

@@ -1,0 +1,119 @@
+/*
+ * The fullscreen piano roll.
+ *
+ * Almost everything is painted on the canvas -- the keys, the ruler, the grid,
+ * the notes and the velocity lane are all one drawing. What is left here is the
+ * chrome around it: the toolbar, the lane's property tabs and the readout row.
+ */
+
+.wv-roll {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--lane);
+}
+
+.wv-roll__chan {
+  position: relative;
+  flex: none;
+}
+
+.wv-roll__chname {
+  font: 600 12px Geist;
+  color: var(--txt);
+}
+
+.wv-roll__chsrc {
+  max-width: 140px;
+  overflow: hidden;
+  font: 400 10px 'Geist Mono';
+  color: var(--dim2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-menu--channel {
+  top: 36px;
+  left: 0;
+  width: 256px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.wv-roll__host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--sunk);
+}
+
+.wv-roll__canvas {
+  display: block;
+  touch-action: none;
+}
+
+/* The velocity lane's property tabs sit over the canvas's own label column. */
+.wv-roll__lanetabs {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 62px;
+}
+
+.wv-roll__lanetab {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 5px;
+  font: 500 9.5px Geist;
+  color: var(--dim);
+  cursor: default;
+}
+
+.wv-roll__lanetab.is-active {
+  background: var(--accSoft);
+  color: var(--acc);
+}
+
+.wv-roll__foot {
+  display: flex;
+  flex: none;
+  gap: 14px;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  overflow-x: auto;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+.wv-roll__field {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: baseline;
+}
+
+.wv-roll__fieldtag {
+  font: 500 8.5px 'Geist Mono';
+  letter-spacing: 0.1em;
+  color: var(--dim2);
+}
+
+.wv-roll__fieldval {
+  min-width: 44px;
+  font: 500 11px 'Geist Mono';
+  color: var(--txt);
+  font-variant-numeric: tabular-nums;
+}
+
+.wv-roll__fieldval.is-empty {
+  color: var(--dim2);
+}

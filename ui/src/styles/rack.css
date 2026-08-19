@@ -1,0 +1,272 @@
+/*
+ * The channel rack.
+ *
+ * The lane scrolls horizontally and its cells never stretch -- see the note in
+ * `views/Rack.tsx`. `min-width: max-content` on the row is what makes the lane
+ * push the row wider instead of squeezing the cells.
+ */
+
+.wv-rack {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  padding: 8px 12px 4px;
+  overflow: auto;
+}
+
+.wv-chrow {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  min-width: max-content;
+  height: 32px;
+  padding: 0 5px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.wv-chrow:hover {
+  background: var(--panel);
+}
+
+.wv-chrow.is-selected {
+  background: var(--accSoft);
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+
+.wv-chrow.is-muted {
+  opacity: 0.5;
+}
+
+.wv-chrow__name {
+  display: flex;
+  flex: none;
+  gap: 1px;
+  align-items: center;
+  width: 112px;
+  height: 24px;
+}
+
+.wv-chrow__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: 500 11px Geist;
+  color: var(--txt2);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-chrow.is-selected .wv-chrow__label {
+  font-weight: 600;
+  color: var(--txt);
+}
+
+.wv-chrow__warn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  color: var(--rec);
+}
+
+.wv-chrow__caret {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--faint);
+}
+
+.wv-chrow__caret:hover {
+  background: var(--chip);
+  color: var(--txt);
+}
+
+.wv-chrow__roll {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--dim2);
+}
+
+.wv-chrow__roll:hover {
+  background: var(--chip);
+  color: var(--txt);
+}
+
+.wv-chrow__roll.is-on {
+  background: var(--accSoft);
+  color: var(--acc);
+}
+
+.wv-chrow__lane {
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: 24px;
+}
+
+/* One step. Fixed size, always -- the sizes come from the component. */
+.wv-step {
+  flex: none;
+  border-radius: 3px;
+  background: var(--sunk);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.wv-step:hover {
+  box-shadow: inset 0 0 0 1px var(--dim2);
+}
+
+.wv-step.is-on {
+  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 25%);
+}
+
+.wv-step.is-accent {
+  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 25%), inset 0 0 0 1.5px var(--txt);
+}
+
+/* A channel in roll mode shows its notes instead of a grid. */
+.wv-chrow__preview {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  width: 560px;
+  height: 24px;
+  border-radius: 4px;
+  background: var(--sunk);
+  box-shadow: inset 0 0 0 1px var(--line);
+  background-image: repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 25%);
+}
+
+.wv-chrow__note {
+  position: absolute;
+  min-width: 2px;
+  height: 12%;
+  min-height: 2px;
+  border-radius: 1px;
+}
+
+.wv-chrow__empty {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  font: 400 9px 'Geist Mono';
+  color: var(--faint);
+  transform: translateY(-50%);
+}
+
+.wv-chrow__mode {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font: 400 8.5px 'Geist Mono';
+  color: var(--faint);
+}
+
+.wv-chrow__mode:hover {
+  background: var(--chip);
+  color: var(--txt2);
+}
+
+.wv-chrow__del {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  color: var(--faint);
+}
+
+.wv-chrow__del:hover:not(:disabled) {
+  background: var(--chip);
+  color: var(--danger);
+}
+
+.wv-rack__drop {
+  position: sticky;
+  left: 0;
+  display: flex;
+  flex: none;
+  gap: 7px;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  font: 400 10px 'Geist Mono';
+  color: var(--faint);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.wv-rack__drop:hover,
+.wv-rack__drop.is-over {
+  border-color: var(--acc);
+  background: var(--accSoft);
+  color: var(--acc);
+}
+
+/* --- the pattern tabs in the view bar ------------------------------------ */
+
+.wv-pattabs {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 5px;
+  align-items: center;
+  max-width: 46%;
+  overflow-x: auto;
+}
+
+.wv-pattab {
+  display: flex;
+  flex: none;
+  gap: 6px;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  white-space: nowrap;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: 500 10.5px Geist;
+  color: var(--dim);
+}
+
+.wv-pattab:hover {
+  color: var(--txt2);
+}
+
+.wv-pattab.is-active {
+  color: var(--txt);
+}
+
+.wv-pattab__input {
+  flex: none;
+  width: 110px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--acc);
+  border-radius: 6px;
+  background: var(--sunk);
+  font: 500 10.5px Geist;
+  outline: none;
+}
+
+.wv-seg__btn--len {
+  padding: 0 8px;
+  font: 400 10px 'Geist Mono';
+}

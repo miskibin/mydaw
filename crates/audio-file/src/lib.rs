@@ -53,6 +53,15 @@ use symphonia::core::meta::MetadataOptions;
 /// Channels everything here is stored in. See the module docs.
 pub const CHANNELS: usize = 2;
 
+/// The extensions the formats in this build are usually written with.
+///
+/// **Not a gate.** [`decode_stereo`] *probes* the stream and never switches on
+/// an extension, so a correctly-named file with the wrong contents still fails
+/// and a mislabelled one still works. This exists so a file dialog's type filter
+/// and the decoders cannot drift apart -- the day `symphonia-bundle-mp3` ships a
+/// release and the feature goes on, this list moves with it, in one place.
+pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "ogg", "oga"];
+
 /// Interpolation taps needed before the current frame.
 pub const PAD_LEAD: usize = 1;
 
@@ -425,7 +434,10 @@ mod tests {
                     .and_then(|e| e.to_str())
                     .unwrap_or_default()
                     .to_ascii_lowercase();
-                if !matches!(extension.as_str(), "flac" | "ogg" | "oga" | "wav") {
+                // Driven by the exported list, so a format added to the filter
+                // without a decoder behind it fails here rather than in a file
+                // dialog that offers something this build cannot open.
+                if !AUDIO_EXTENSIONS.contains(&extension.as_str()) {
                     continue;
                 }
                 let decoded = decode_stereo(&entry, |rate| Some(rate as usize))

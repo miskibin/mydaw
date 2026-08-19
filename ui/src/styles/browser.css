@@ -1,0 +1,262 @@
+/*
+ * The browser pane.
+ *
+ * Only what `base.css` does not already have: the pane's own column, the tree's
+ * indent furniture, the format badge and the asset-download row. Everything
+ * else -- rows, tabs, chips, empty states, the rail -- is shared, because a
+ * second copy of `.wv-row` with a different height is how two lists in one app
+ * end up disagreeing.
+ *
+ * Dimensions are the design's; every colour is a `var(--token)`.
+ */
+
+.wv-browser {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 236px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+
+.wv-browser__head {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  height: 40px;
+  padding: 0 8px 0 12px;
+}
+
+.wv-browser__title {
+  font: 500 10px 'Geist Mono';
+  letter-spacing: 0.12em;
+  color: var(--dim2);
+}
+
+.wv-browser__collapse {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--dim);
+}
+
+.wv-browser__collapse:hover {
+  background: var(--chip);
+  color: var(--txt);
+}
+
+.wv-browser__tabs {
+  flex: none;
+  padding: 0 10px 8px;
+}
+
+/* The scrolling tree. One row per line, no wrapping, no reflow on scroll. */
+.wv-browser__tree {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 8px;
+}
+
+/* The Rescan row above the plugin folders. */
+.wv-browser__bar {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  padding: 2px 2px 6px;
+}
+
+/* A greyed row must not also light up on hover: it is not a target. */
+.wv-browser .wv-disabled[title]:hover {
+  background: transparent;
+}
+
+/* --- the tree ------------------------------------------------------------ */
+
+/* Scoped under the pane wherever a rule overrides a shared `.wv-row` property:
+   the two files carry equal specificity, and which of them the bundler puts
+   second is not this stylesheet's business. */
+.wv-browser .wv-tree__dir {
+  height: 26px;
+  padding-left: 8px;
+  cursor: pointer;
+}
+
+.wv-browser .wv-tree__dir .wv-row__name.is-open {
+  color: var(--txt);
+}
+
+.wv-tree__chev {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  color: var(--dim2);
+  transition: transform 0.12s;
+}
+
+.wv-tree__chev.is-open {
+  transform: rotate(90deg);
+}
+
+.wv-browser .wv-tree__leaf {
+  height: 25px;
+  padding-left: 22px;
+  cursor: grab;
+}
+
+.wv-browser .wv-tree__leaf:active {
+  cursor: grabbing;
+}
+
+.wv-browser .wv-tree__leaf--dim .wv-row__name {
+  color: var(--dim2);
+}
+
+/* The line that says which folder a leaf is under. */
+.wv-tree__guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 8px;
+  width: 1px;
+  background: var(--line2);
+  pointer-events: none;
+}
+
+/* A row that is a message rather than a thing: "scanning…". */
+.wv-browser .wv-tree__note {
+  height: 25px;
+  padding-left: 22px;
+  cursor: default;
+}
+
+.wv-browser .wv-tree__note:hover {
+  background: transparent;
+}
+
+.wv-browser .wv-tree__note .wv-row__name {
+  font-style: italic;
+  color: var(--dim2);
+}
+
+/* The `+` on a leaf, and the unload `×` on an audio row. */
+.wv-tree__btn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--chip);
+  font: 400 10px 'Geist Mono';
+  color: var(--dim);
+}
+
+.wv-tree__btn:hover:not(:disabled) {
+  color: var(--txt);
+}
+
+.wv-tree__btn--danger:hover {
+  color: var(--danger);
+}
+
+/* The "Load audio file…" row: the only way audio gets into the session. */
+.wv-browser .wv-tree__load {
+  height: 26px;
+  margin-bottom: 2px;
+  border: 1px dashed var(--line2);
+  color: var(--txt2);
+}
+
+.wv-browser .wv-tree__load:hover {
+  border-color: var(--acc);
+}
+
+.wv-tree__plus {
+  flex: none;
+  font: 400 11px 'Geist Mono';
+  color: var(--acc);
+}
+
+/* A plugin's declared kind, or its format. */
+.wv-badge {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--sunk);
+  font: 500 8.5px 'Geist Mono';
+  letter-spacing: 0.06em;
+  color: var(--dim2);
+}
+
+/* --- the asset footer ---------------------------------------------------- */
+
+.wv-browser__foot {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.wv-asset {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.wv-asset__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.wv-asset__name {
+  overflow: hidden;
+  font: 500 10.5px Geist;
+  color: var(--txt2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-asset__tick {
+  flex: none;
+  font: 400 11px 'Geist Mono';
+  color: var(--live);
+}
+
+.wv-asset__error {
+  overflow: hidden;
+  font: 400 9.5px 'Geist Mono';
+  color: var(--rec);
+  text-overflow: ellipsis;
+}
+
+.wv-progress {
+  overflow: hidden;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--sunk);
+}
+
+.wv-progress__fill {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--acc);
+  transition: width 0.2s linear;
+}

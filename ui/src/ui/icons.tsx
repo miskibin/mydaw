@@ -321,3 +321,159 @@ export function IconLock(): JSX.Element {
     </svg>
   );
 }
+
+// ---------------------------------------------------------------------------
+// WAVE Studio additions
+// ---------------------------------------------------------------------------
+//
+// Paths copied verbatim from `.design/wave-studio.html`, same as the ones
+// above: the roll and playlist toolbars, the dropdown caret and the piano-roll
+// button on a rack row.
+
+/** The caret on a dropdown: the pattern selector, a channel's instrument menu. */
+export function IconCaret(): JSX.Element {
+  return (
+    <svg
+      width="9"
+      height="9"
+      viewBox="0 0 10 10"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2.2 3.6 5 6.4l2.8-2.8" />
+    </svg>
+  );
+}
+
+/** A miniature keyboard: the button that opens a channel's piano roll. */
+export function IconRoll(): JSX.Element {
+  return (
+    <svg width="14" height="12" viewBox="0 0 16 12" fill="none" aria-hidden="true">
+      <rect x=".6" y=".6" width="14.8" height="10.8" rx="1.4" stroke="currentColor" stroke-width="1.1" />
+      <path d="M4 .6v6.4M7 .6v6.4M10 .6v6.4M13 .6v6.4" stroke="currentColor" stroke-width="1" />
+      <path
+        d="M2.6 .6h1.8v5.2H2.6zM5.7 .6h1.8v5.2H5.7zM8.8 .6h1.8v5.2H8.8zM11.9 .6h1.8v5.2h-1.8z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+/** The paint tool: a brush, for painting clips and repeated notes. */
+export function IconPaintTool(): JSX.Element {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 6.4h8V3.4H3zM6.2 6.4v2.2M6.2 11.6v-1.4" />
+    </svg>
+  );
+}
+
+/** The delete tool: an eraser. */
+export function IconEraseTool(): JSX.Element {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M2.4 9.6 6 6l4 4-2 2H4.4zM7.4 4.6 9.6 2.4l2 2-2.2 2.2" />
+    </svg>
+  );
+}
+
+/** The slice tool: scissors. */
+export function IconSliceTool(): JSX.Element {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 14 14"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      aria-hidden="true"
+    >
+      <circle cx="4" cy="10.4" r="1.7" />
+      <circle cx="10" cy="10.4" r="1.7" />
+      <path d="M5.2 9 10 2.4M8.8 9 4 2.4" />
+    </svg>
+  );
+}
+
+/** A back arrow: leaving the fullscreen piano roll. */
+export function IconBack(): JSX.Element {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.6"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M7.2 2.4 3.6 6l3.6 3.6" />
+    </svg>
+  );
+}
+
+/** A small × for a delete affordance inside a row. */
+export function IconX(): JSX.Element {
+  return (
+    <svg
+      width="10"
+      height="10"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      aria-hidden="true"
+    >
+      <path d="M3 3l6 6M9 3l-6 6" />
+    </svg>
+  );
+}
+
+/** A warning triangle: a plugin the project asked for and did not get. */
+export function IconWarn(): JSX.Element {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6 1.6 11 10.4H1z" />
+      <path d="M6 4.8v2.4M6 8.8v.1" />
+    </svg>
+  );
+}

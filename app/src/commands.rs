@@ -965,6 +965,51 @@ pub fn load_audio_source(
     Ok(AudioSourceDto::of(&source, state.bpm()))
 }
 
+/// Ask for an audio file with the native dialog and load it.
+///
+/// `null` when the user cancelled, which is not an error and must not put
+/// anything in the status bar -- the same shape [`open_project`] answers a
+/// cancel with.
+///
+/// The dialog lives here rather than in the webview for the reason the project
+/// dialogs do: the dialog plugin only exists inside the app, so a panel that
+/// raised one directly would be a blank screen in a plain browser and the mock
+/// would have nothing to stand in for. It also keeps "which formats can we
+/// decode" in one place -- [`load_audio_source`] and this filter cannot drift.
+///
+/// `async` because the dialog's own modal loop needs the main thread; blocking
+/// that thread waiting for it would be a deadlock.
+#[tauri::command]
+pub async fn open_audio_file(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<AudioSourceDto>, String> {
+    let Some(path) = pick_audio_file(&app) else {
+        return Ok(None);
+    };
+    let source = state
+        .load_audio_source(&path)
+        .map_err(|err| err.to_string())?;
+    Ok(Some(AudioSourceDto::of(&source, state.bpm())))
+}
+
+/// The native "open an audio file" dialog. `None` when the user cancelled.
+fn pick_audio_file(app: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter(AUDIO_FILTER, AUDIO_EXTENSIONS)
+        .set_title("Load audio file")
+        .blocking_pick_file()
+        .and_then(|file| file.into_path().ok())
+}
+
+/// The label on the audio dialog's type filter.
+const AUDIO_FILTER: &str = "Audio files";
+
+/// What [`load_audio_source`] can decode, and therefore what the dialog offers.
+const AUDIO_EXTENSIONS: &[&str] = mydaw_plugin_sequencer::AUDIO_EXTENSIONS;
+
 /// Every audio file the session has loaded, by ascending id.
 #[tauri::command]
 pub fn get_audio_sources(state: State<'_, AppState>) -> Vec<AudioSourceDto> {

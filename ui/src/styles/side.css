@@ -1,0 +1,335 @@
+/*
+ * The side panel: the picker and the inspector.
+ *
+ * Only what `base.css` does not already have. The cards, the knobs, the dashed
+ * "add one" chips, the bypass dot, the swatch, the empty state and the rail are
+ * all shared; what is here is the pane's column, the picker's 44 px row with its
+ * miniature, the inspector's header and its meter bars.
+ */
+
+.wv-side {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 306px;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+}
+
+.wv-side__head {
+  display: flex;
+  flex: none;
+  gap: 3px;
+  align-items: center;
+  height: 40px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.wv-side__collapse {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  color: var(--dim);
+}
+
+.wv-side__collapse:hover {
+  background: var(--chip);
+  color: var(--txt);
+}
+
+/* --- the picker ---------------------------------------------------------- */
+
+.wv-picker {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wv-picker__tabs {
+  flex: none;
+  padding: 10px 10px 8px;
+}
+
+.wv-picker__list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 10px;
+}
+
+.wv-picker__foot {
+  flex: none;
+  padding: 9px 11px;
+  background: var(--sunk);
+  border-top: 1px solid var(--line);
+  font: 400 9.5px 'Geist Mono';
+  line-height: 1.5;
+  color: var(--dim2);
+}
+
+/* One thing to paint with. */
+.wv-pick {
+  display: flex;
+  flex: none;
+  gap: 9px;
+  align-items: center;
+  height: 44px;
+  padding: 0 9px;
+  border-radius: 8px;
+  background: var(--panel2);
+  box-shadow: inset 0 0 0 1px var(--line);
+  cursor: grab;
+}
+
+.wv-pick:active {
+  cursor: grabbing;
+}
+
+.wv-pick:hover {
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
+.wv-pick.is-active {
+  background: var(--accSoft);
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+
+.wv-pick__text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.wv-pick__name {
+  overflow: hidden;
+  font: 500 11.5px Geist;
+  color: var(--txt);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-pick__meta {
+  overflow: hidden;
+  font: 400 9px 'Geist Mono';
+  color: var(--dim2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The miniature. Drawn only for the pattern whose content is on the wire. */
+.wv-pick__art {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  width: 62px;
+  height: 26px;
+  border-radius: 4px;
+  background: var(--sunk);
+}
+
+.wv-pick__mark {
+  position: absolute;
+  min-width: 2px;
+  height: 2px;
+  border-radius: 1px;
+  opacity: 0.9;
+}
+
+/* What a row with no content on the wire shows instead of an invented picture. */
+.wv-pick__bar {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  left: 8px;
+  height: 2px;
+  border-radius: 1px;
+  opacity: 0.45;
+}
+
+/* Scoped under the pane: this overrides `.wv-dashed`, which carries the same
+   specificity, and stylesheet order is the bundler's business rather than
+   this file's. */
+.wv-picker .wv-pick__add {
+  height: 30px;
+  border-radius: 7px;
+}
+
+/* --- the inspector ------------------------------------------------------- */
+
+.wv-insp {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.wv-insp__head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 11px 12px 12px;
+}
+
+.wv-insp__title {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Scoped for the same reason: it grows the shared `.wv-swatch`. */
+.wv-insp .wv-insp__swatch {
+  width: 8px;
+  height: 8px;
+}
+
+.wv-insp__name {
+  overflow: hidden;
+  font: 600 15px Geist;
+  letter-spacing: -0.01em;
+  color: var(--txt);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-insp__kind {
+  flex: none;
+  font: 400 10px 'Geist Mono';
+  color: var(--dim2);
+}
+
+.wv-insp__meta {
+  padding-left: 16px;
+  overflow: hidden;
+  font: 400 10.5px 'Geist Mono';
+  color: var(--dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-insp__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+}
+
+/* A card body that is prose rather than a knob grid. */
+.wv-insp__card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+}
+
+.wv-insp__source {
+  font: 500 11.5px Geist;
+  color: var(--txt);
+}
+
+/* The honest line: what the engine does *not* publish. */
+.wv-insp__line {
+  font: 400 10px Geist;
+  line-height: 1.45;
+  color: var(--dim);
+}
+
+.wv-insp__warn {
+  padding: 5px 7px;
+  border-radius: 6px;
+  background: var(--sunk);
+  box-shadow: inset 0 0 0 1px var(--rec);
+  font: 400 9.5px 'Geist Mono';
+  color: var(--rec);
+}
+
+.wv-insp__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+/* --- readouts ------------------------------------------------------------ */
+
+.wv-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 0 10px 10px;
+}
+
+.wv-meterbar {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+}
+
+.wv-meterbar__name {
+  flex: none;
+  width: 84px;
+  overflow: hidden;
+  font: 400 8.5px 'Geist Mono';
+  color: var(--dim2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-meterbar__track {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--sunk);
+}
+
+.wv-meterbar__fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--live);
+}
+
+.wv-meterbar__value {
+  flex: none;
+  width: 58px;
+  font: 400 9px 'Geist Mono';
+  color: var(--txt2);
+  text-align: right;
+}
+
+/* --- the hosted master effect -------------------------------------------- */
+
+.wv-insp__hosted {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.wv-insp__hostlist {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 180px;
+  overflow-y: auto;
+  margin-top: 6px;
+  padding: 4px;
+  border-radius: 7px;
+  background: var(--sunk);
+}

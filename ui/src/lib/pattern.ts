@@ -1,333 +1,443 @@
 /**
- * Pattern arithmetic and editing, kept out of the components.
+ * Pattern arithmetic, shared by the rack, the piano roll and the playlist.
  *
- * Everything here is a pure function of its arguments, in three families:
+ * Solid-free on purpose: everything here is a pure function over the wire
+ * shapes, so it can be reasoned about (and one day tested) without a renderer.
  *
- * - **What a click does.** `toggleStep` is the whole interaction model of the
- *   step grid, and it is small enough to read and specific enough to get wrong.
- * - **Where the playhead is.** `currentStep` and `currentTick` turn the
- *   transport position (in frames, from the meter stream, interpolated locally
- *   by `Playhead`) into a grid position, using the same arithmetic the Rust
- *   scheduler uses.
- * - **What an edit produces.** The `with*` functions return a new `PatternDto`
- *   with one thing changed and everything else structurally shared, so Solid's
- *   reference equality still short-circuits the untouched parts.
- *
- * Keeping them here rather than in the panels means the panels are markup and
- * the behaviour is testable.
+ * **Every `with*` helper returns the *same object reference* when the edit is
+ * illegal or a no-op.** `state.tsx` relies on `after === before` to skip both
+ * the redraw and the round trip to the engine.
  */
 
-import type { MelodicNoteDto, PatternDto, StepDto } from '../api/types';
+import type { ChannelClipDto, MelodicNoteDto, PatternDto, StepDto, StepRowDto } from '../api/types';
 
-/** Velocity a plain click gives a step. Mirrors `DEFAULT_STEP_VELOCITY`. */
-export const STEP_VELOCITY = 0.78;
-
-/** Velocity a shift-click gives a step. Mirrors `ACCENT_VELOCITY`. */
-export const ACCENT_VELOCITY = 1.0;
-
-/** At or above this, a step draws as an accent. Mirrors `ACCENT_THRESHOLD`. */
-export const ACCENT_THRESHOLD = 0.95;
-
-/** Steps per beat, so 16 steps is one bar of 4/4. Mirrors `STEPS_PER_BEAT`. */
-export const STEPS_PER_BEAT = 4;
-
-/** Ticks per quarter note. Mirrors `PPQ` in `plugins/sequencer/src/pattern.rs`. */
+/** Ticks per quarter note. Mirrors `PPQ` in the sequencer. */
 export const PPQ = 960;
-
-/** Ticks in one sixteenth-note step. Mirrors `TICKS_PER_STEP`. */
-export const TICKS_PER_STEP = PPQ / STEPS_PER_BEAT;
-
-/** The lengths a pattern may be, in steps. Mirrors `PATTERN_LENGTHS`. */
+/** Ticks in one step of the grid (a sixteenth). Mirrors `TICKS_PER_STEP`. */
+export const TICKS_PER_STEP = 240;
+/** Ticks in one bar of 4/4. Mirrors `TICKS_PER_BAR`. */
+export const TICKS_PER_BAR = 3840;
+/** Steps in one beat. */
+export const STEPS_PER_BEAT = 4;
+/** The lengths a pattern may be. Mirrors `PATTERN_LENGTHS`. */
 export const PATTERN_LENGTHS = [16, 32, 64] as const;
-
-/** Most notes a pattern may hold. Mirrors `MAX_NOTES`. */
+/** Velocity a freshly switched-on step gets. Mirrors `DEFAULT_STEP_VELOCITY`. */
+export const STEP_VELOCITY = 0.78;
+/** Velocity a shift-clicked step gets. */
+export const ACCENT_VELOCITY = 1;
+/** At or above this, a step or note draws as an accent. */
+export const ACCENT_THRESHOLD = 0.95;
+/** Most notes one channel may hold. Mirrors `MAX_NOTES`. */
 export const MAX_NOTES = 1024;
-
-/** Lowest and highest MIDI key a note may address. Mirrors `MAX_KEY`. */
-export const MIN_KEY = 0;
-export const MAX_KEY = 127;
-
-/** Sample rate assumed before the backend reports the device's. */
+/** Most channels one pattern may speak for. Mirrors `MAX_PATTERN_CHANNELS`. */
+export const MAX_PATTERN_CHANNELS = 16;
+/** What the UI assumes before a device is open, only for laying out a grid. */
 export const FALLBACK_SAMPLE_RATE = 48_000;
 
-/** Whether a step is loud enough to draw as an accent. */
-export function isAccent(step: StepDto): boolean {
-  return step.on && step.velocity >= ACCENT_THRESHOLD;
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const BLACK_KEYS = new Set([1, 3, 6, 8, 10]);
+
+/** `60` -> `C4`, the convention every DAW's piano roll labels keys with. */
+export function noteName(key: number): string {
+  const name = NOTE_NAMES[((key % 12) + 12) % 12] ?? 'C';
+  return `${name}${Math.floor(key / 12) - 1}`;
 }
 
-/**
- * What one click does to one cell.
- *
- * | Cell was | Click | Shift-click |
- * | --- | --- | --- |
- * | off | on, normal | on, accented |
- * | on, normal | off | accented |
- * | on, accented | off | off |
- *
- * Shift-click *promotes* rather than toggling, because the alternative -- two
- * clicks to accent an existing step, one of which briefly deletes it -- is the
- * thing people complain about in step sequencers that get this wrong.
- */
-export function toggleStep(step: StepDto, accent: boolean): StepDto {
-  if (!accent) {
-    return step.on
-      ? { on: false, velocity: step.velocity }
-      : { on: true, velocity: STEP_VELOCITY };
-  }
-  if (step.on && isAccent(step)) return { on: false, velocity: step.velocity };
-  return { on: true, velocity: ACCENT_VELOCITY };
+/** Whether this key is drawn as a black key. */
+export function isBlackKey(key: number): boolean {
+  return BLACK_KEYS.has(((key % 12) + 12) % 12);
 }
 
-/**
- * A copy of `pattern` with one cell toggled.
- *
- * Structurally shared: only the touched row and cell are new objects, so Solid's
- * reference equality still short-circuits the untouched rows. Out-of-range
- * indices return the pattern unchanged rather than throwing -- a click can only
- * come from a rendered cell, and defending the invariant is cheaper than
- * proving it.
- */
-export function withToggledStep(
-  pattern: PatternDto,
-  rowIndex: number,
-  stepIndex: number,
-  accent: boolean,
-): PatternDto {
-  const row = pattern.rows[rowIndex];
-  const cell = row?.steps[stepIndex];
-  if (!row || !cell) return pattern;
-
-  const steps = row.steps.slice();
-  steps[stepIndex] = toggleStep(cell, accent);
-  const rows = pattern.rows.slice();
-  rows[rowIndex] = { ...row, steps };
-  return { ...pattern, rows };
-}
-
-/** A copy of `pattern` with every cell switched off. */
-export function clearedPattern(pattern: PatternDto): PatternDto {
-  return {
-    ...pattern,
-    rows: pattern.rows.map((row) => ({
-      ...row,
-      steps: row.steps.map((step) => ({ on: false, velocity: step.velocity })),
-    })),
-  };
-}
-
-/** Total cells switched on. */
-export function hitCount(pattern: PatternDto): number {
-  return pattern.rows.reduce(
-    (total, row) => total + row.steps.filter((step) => step.on).length,
-    0,
-  );
-}
-
-/** Samples per step, the same formula the Rust scheduler uses. */
-export function stepLengthSamples(sampleRate: number, bpm: number): number {
-  return (sampleRate * 60) / bpm / STEPS_PER_BEAT;
-}
-
-/**
- * Which step of the loop the playhead is in, or `null` when it cannot be known.
- *
- * `samplePos` is the interpolated transport position in frames. The pattern
- * loops every `steps` steps, so this is a floor and a modulo -- computed from
- * the absolute position, exactly as the scheduler computes its boundaries, so
- * the highlight cannot drift away from what is being heard.
- *
- * `null` for a nonsense tempo or rate, or a pattern with no steps: the panel
- * then draws no highlight rather than one on step 0.
- */
-export function currentStep(
-  samplePos: number,
-  sampleRate: number,
-  bpm: number,
-  steps: number,
-): number | null {
-  if (!Number.isFinite(samplePos) || samplePos < 0) return null;
-  if (!Number.isFinite(sampleRate) || sampleRate <= 0) return null;
-  if (!Number.isFinite(bpm) || bpm <= 0) return null;
-  if (!Number.isInteger(steps) || steps <= 0) return null;
-
-  const length = stepLengthSamples(sampleRate, bpm);
-  if (!Number.isFinite(length) || length <= 0) return null;
-  return Math.floor(samplePos / length) % steps;
-}
-
-// ---------------------------------------------------------------- piano roll
-
-/** Ticks in one time round the loop. */
+/** Ticks in one time round `pattern`'s loop. */
 export function patternTicks(pattern: PatternDto): number {
   return pattern.steps * TICKS_PER_STEP;
 }
 
-/**
- * Where in the loop the playhead is, in ticks -- fractional, because this is
- * what draws a line rather than what fires a note.
- *
- * `null` for the same reasons `currentStep` returns it. Deliberately the same
- * `floor(pos / stepLength)` scaled to ticks, so the roll's playhead and the
- * sequencer's highlight can never disagree about which step is playing.
- */
-export function currentTick(
-  samplePos: number,
-  sampleRate: number,
-  bpm: number,
-  steps: number,
-): number | null {
-  if (!Number.isFinite(samplePos) || samplePos < 0) return null;
-  if (!Number.isFinite(sampleRate) || sampleRate <= 0) return null;
-  if (!Number.isFinite(bpm) || bpm <= 0) return null;
-  if (!Number.isInteger(steps) || steps <= 0) return null;
-
-  const length = stepLengthSamples(sampleRate, bpm);
-  if (!Number.isFinite(length) || length <= 0) return null;
-  const loopTicks = steps * TICKS_PER_STEP;
-  const ticks = (samplePos / length) * TICKS_PER_STEP;
-  // `%` on a float is exact enough here: the position is a display value and
-  // the modulus is a whole number of ticks.
-  return ((ticks % loopTicks) + loopTicks) % loopTicks;
+/** Whether a step or note is loud enough to draw as an accent. */
+export function isAccent(velocity: number): boolean {
+  return velocity >= ACCENT_THRESHOLD;
 }
 
-/**
- * Round `ticks` down to the nearest multiple of `snap`.
- *
- * `snap` of 0 (or anything that is not a positive integer) means "no snap", and
- * the tick is returned as an integer -- the engine's positions are integers
- * whether or not the user asked for a grid.
- */
-export function snapTicks(ticks: number, snap: number): number {
-  const floored = Math.max(0, Math.floor(ticks));
-  if (!Number.isFinite(snap) || snap < 1) return floored;
-  return Math.floor(floored / snap) * snap;
+// ---------------------------------------------------------------------------
+// Channels
+// ---------------------------------------------------------------------------
+
+/** What `pattern` says to `channel`, or `undefined` when it says nothing. */
+export function channelClip(pattern: PatternDto, channel: number): ChannelClipDto | undefined {
+  return pattern.channels.find((clip) => clip.channel === channel);
 }
 
-/**
- * A note clamped into what the engine will accept, or `null` if it cannot be.
- *
- * The one place the UI's rules about a note live. Every editing helper below
- * runs its result through this, so an edit can be written as arithmetic and the
- * bounds are applied once: a note is at least one tick long, starts at or after
- * zero, ends at or before the loop point, and addresses a real MIDI key.
- *
- * `null` when there is nowhere legal to put it -- a note dragged past the end of
- * a pattern with no room left for even one tick. The caller drops the edit
- * rather than storing something Rust would refuse.
- */
-export function clampNote(note: MelodicNoteDto, pattern: PatternDto): MelodicNoteDto | null {
-  const loop = patternTicks(pattern);
-  const key = Math.round(Math.min(MAX_KEY, Math.max(MIN_KEY, note.key)));
-  const start = Math.min(Math.max(0, Math.round(note.start)), loop - 1);
-  if (start < 0 || loop < 1) return null;
-  const length = Math.min(Math.max(1, Math.round(note.length)), loop - start);
-  if (length < 1) return null;
+/** The notes `pattern` puts on `channel`. Never `undefined`, so callers can map. */
+export function notesOf(pattern: PatternDto, channel: number): MelodicNoteDto[] {
+  return channelClip(pattern, channel)?.notes ?? [];
+}
+
+/** The step grid `pattern` puts on `channel`, when it has one. */
+export function stepsOf(pattern: PatternDto, channel: number): StepRowDto | null {
+  return channelClip(pattern, channel)?.steps ?? null;
+}
+
+/** How a channel draws: notes win, because a grid cannot show a note length. */
+export function displayMode(clip: ChannelClipDto | undefined): 'steps' | 'roll' {
+  return clip && clip.notes.length > 0 ? 'roll' : 'steps';
+}
+
+/** An empty grid on `channel`, triggering `key`. */
+export function emptyClip(channel: number, key: number, steps: number): ChannelClipDto {
   return {
-    key,
-    channel: Math.round(Math.min(15, Math.max(0, note.channel))),
-    start,
-    length,
-    velocity: Math.min(1, Math.max(0, note.velocity)),
+    channel,
+    mode: 'steps',
+    steps: {
+      key,
+      label: '',
+      steps: Array.from({ length: steps }, () => ({ on: false, velocity: STEP_VELOCITY })),
+    },
+    notes: [],
   };
 }
 
-/** A copy of `pattern` with `note` appended, or unchanged when it will not fit. */
-export function withNote(pattern: PatternDto, note: MelodicNoteDto): PatternDto {
-  if (pattern.notes.length >= MAX_NOTES) return pattern;
-  const clamped = clampNote(note, pattern);
-  if (!clamped) return pattern;
-  return { ...pattern, notes: [...pattern.notes, clamped] };
-}
-
-/** A copy of `pattern` with note `index` replaced. Out-of-range indices no-op. */
-export function withReplacedNote(
+/**
+ * Replace what `pattern` says to `channel`.
+ *
+ * `edit` is handed the clip that is there -- or a fresh empty one, so a caller
+ * never has to decide whether the channel already existed -- and returns the
+ * clip that should be there. Returning the clip it was given, or `null` for a
+ * channel that was already silent, leaves `pattern` untouched *by reference*.
+ */
+export function withChannel(
   pattern: PatternDto,
-  index: number,
-  note: MelodicNoteDto,
+  channel: number,
+  fallbackKey: number,
+  edit: (clip: ChannelClipDto) => ChannelClipDto | null,
 ): PatternDto {
-  if (index < 0 || index >= pattern.notes.length) return pattern;
-  const clamped = clampNote(note, pattern);
-  if (!clamped) return pattern;
-  const notes = pattern.notes.slice();
-  notes[index] = clamped;
-  return { ...pattern, notes };
+  const current = channelClip(pattern, channel);
+  const before = current ?? emptyClip(channel, fallbackKey, pattern.steps);
+  const after = edit(before);
+  if (after === before) return pattern;
+  if (after === null) {
+    if (!current) return pattern;
+    return { ...pattern, channels: pattern.channels.filter((clip) => clip.channel !== channel) };
+  }
+  const channels = current
+    ? pattern.channels.map((clip) => (clip.channel === channel ? after : clip))
+    : [...pattern.channels, after].sort((a, b) => a.channel - b.channel);
+  return { ...pattern, channels };
 }
 
-/** A copy of `pattern` without note `index`. Out-of-range indices no-op. */
-export function withoutNote(pattern: PatternDto, index: number): PatternDto {
-  if (index < 0 || index >= pattern.notes.length) return pattern;
-  return { ...pattern, notes: pattern.notes.filter((_, i) => i !== index) };
-}
-
-/** A copy of `pattern` with no melodic notes at all. */
-export function withoutNotes(pattern: PatternDto): PatternDto {
-  return pattern.notes.length === 0 ? pattern : { ...pattern, notes: [] };
-}
+// ---------------------------------------------------------------------------
+// Steps
+// ---------------------------------------------------------------------------
 
 /**
- * A copy of `pattern` at a new length, in steps.
+ * Toggle one cell.
  *
- * Growing is free. **Shrinking drops the notes that no longer fit** -- there is
- * nowhere to put a note that starts past the new loop point, and truncating one
- * to fit would silently rewrite music the user wrote. The drum grid is not
- * touched either way: Rust keeps every row's full-length array, so shortening
- * and lengthening again gives the steps back. Notes are the half that cannot
- * work like that, because the wire only carries the notes that exist.
- *
- * An illegal length returns the pattern unchanged rather than sending Rust
- * something it will refuse.
+ * A shift-click *promotes* rather than toggles: off -> accent -> off, so the
+ * accent is one gesture away from an empty cell and a plain click never
+ * silently downgrades one somebody set.
  */
-export function withPatternLength(pattern: PatternDto, steps: number): PatternDto {
-  if (!(PATTERN_LENGTHS as readonly number[]).includes(steps)) return pattern;
-  if (steps === pattern.steps) return pattern;
-
-  const loop = steps * TICKS_PER_STEP;
-  const rows = pattern.rows.map((row) => {
-    if (steps <= row.steps.length) return { ...row, steps: row.steps.slice(0, steps) };
-    const grown = row.steps.slice();
-    while (grown.length < steps) grown.push({ on: false, velocity: STEP_VELOCITY });
-    return { ...row, steps: grown };
+export function withToggledStep(
+  pattern: PatternDto,
+  channel: number,
+  index: number,
+  accent: boolean,
+  fallbackKey: number,
+): PatternDto {
+  return withChannel(pattern, channel, fallbackKey, (clip) => {
+    const row = clip.steps;
+    if (!row || index < 0 || index >= row.steps.length) return clip;
+    const cell = row.steps[index]!;
+    const next: StepDto = accent
+      ? cell.on && isAccent(cell.velocity)
+        ? { on: false, velocity: cell.velocity }
+        : { on: true, velocity: ACCENT_VELOCITY }
+      : { on: !cell.on, velocity: cell.on ? cell.velocity : Math.max(cell.velocity, STEP_VELOCITY) };
+    const steps = row.steps.slice();
+    steps[index] = next;
+    return { ...clip, steps: { ...row, steps } };
   });
-  const notes = pattern.notes
-    .filter((note) => note.start < loop)
-    .map((note) => ({ ...note, length: Math.min(note.length, loop - note.start) }));
-  return { steps, rows, notes };
+}
+
+/** Empty every cell and drop every note on `channel`. */
+export function withClearedChannel(
+  pattern: PatternDto,
+  channel: number,
+  fallbackKey: number,
+): PatternDto {
+  return withChannel(pattern, channel, fallbackKey, (clip) => {
+    const emptyRow = clip.steps
+      ? { ...clip.steps, steps: clip.steps.steps.map((cell) => ({ ...cell, on: false })) }
+      : clip.steps;
+    if (clip.notes.length === 0 && emptyRow === clip.steps) return clip;
+    return { ...clip, steps: emptyRow, notes: [] };
+  });
+}
+
+/** Switched-on cells plus notes, across every channel: the picker's "events". */
+export function eventCount(pattern: PatternDto): number {
+  return pattern.channels.reduce(
+    (total, clip) =>
+      total + clip.notes.length + (clip.steps?.steps.filter((cell) => cell.on).length ?? 0),
+    0,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Steps <-> roll
+// ---------------------------------------------------------------------------
+//
+// The engine's compiler plays a channel's grid *and* its notes -- `mode` is
+// derived from whether there are notes, but both are sounded. So switching a
+// channel between the two has to be a real conversion rather than a view
+// toggle: leaving the cells on underneath a converted melody would double every
+// hit. Both directions carry as much as the other representation can hold, and
+// the caller says so in the parameter readout.
+
+/** One note per switched-on cell, a sixteenth long, at the cell's velocity. */
+export function stepsToNotes(row: StepRowDto, length: number): MelodicNoteDto[] {
+  const notes: MelodicNoteDto[] = [];
+  row.steps.slice(0, length).forEach((cell, index) => {
+    if (!cell.on) return;
+    notes.push({
+      key: row.key,
+      start: index * TICKS_PER_STEP,
+      length: TICKS_PER_STEP,
+      velocity: cell.velocity,
+    });
+  });
+  return notes;
 }
 
 /**
- * The index of the topmost note under `(tick, key)`, or `-1`.
+ * Fold notes back onto the grid: each lands on its nearest step, at its own
+ * velocity, and the row's key becomes the one most of them used.
  *
- * Last match wins, so the note drawn on top -- later in the array -- is the one
- * a click selects. That matches what the eye picked, which is the only rule a
- * hit test needs.
+ * Lossy, and honestly so -- a grid has one key and no note lengths. The caller
+ * says what happened in the readout rather than pretending it was free.
  */
-export function noteAt(pattern: PatternDto, tick: number, key: number): number {
-  for (let index = pattern.notes.length - 1; index >= 0; index -= 1) {
-    const note = pattern.notes[index];
-    if (!note) continue;
+export function notesToSteps(
+  notes: readonly MelodicNoteDto[],
+  row: StepRowDto,
+  length: number,
+): StepRowDto {
+  const tally = new Map<number, number>();
+  for (const note of notes) tally.set(note.key, (tally.get(note.key) ?? 0) + 1);
+  let key = row.key;
+  let best = 0;
+  for (const [candidate, count] of tally) {
+    if (count > best) {
+      best = count;
+      key = candidate;
+    }
+  }
+  const cells: StepDto[] = Array.from({ length: row.steps.length }, (_, index) => ({
+    on: false,
+    velocity: row.steps[index]?.velocity ?? STEP_VELOCITY,
+  }));
+  for (const note of notes) {
+    const index = Math.round(note.start / TICKS_PER_STEP);
+    if (index < 0 || index >= length || index >= cells.length) continue;
+    cells[index] = { on: true, velocity: note.velocity };
+  }
+  return { ...row, key, steps: cells };
+}
+
+// ---------------------------------------------------------------------------
+// Notes
+// ---------------------------------------------------------------------------
+
+/** Clamp a note into the pattern, or reject it outright. */
+export function clampNote(note: MelodicNoteDto, pattern: PatternDto): MelodicNoteDto | null {
+  const limit = patternTicks(pattern);
+  const key = Math.round(note.key);
+  if (key < 0 || key > 127) return null;
+  const start = Math.max(0, Math.round(note.start));
+  if (start >= limit) return null;
+  const length = Math.max(1, Math.min(Math.round(note.length), limit - start));
+  const velocity = Math.min(1, Math.max(0.01, note.velocity));
+  return { key, start, length, velocity };
+}
+
+/**
+ * Put `notes` on `channel`, clamped and capped.
+ *
+ * **Deliberately not sorted.** The roll addresses the note it is dragging by
+ * its index in this array, so re-ordering on every edit would make a selection
+ * point at different notes halfway through a drag. The engine does not care --
+ * it compiles the notes into a schedule of its own -- so the order is the UI's
+ * to keep stable, and keeping it stable is what makes a marquee of forty notes
+ * draggable at all.
+ */
+export function withNotes(
+  pattern: PatternDto,
+  channel: number,
+  notes: readonly MelodicNoteDto[],
+  fallbackKey: number,
+): PatternDto {
+  const clean: MelodicNoteDto[] = [];
+  for (const note of notes) {
+    const fitted = clampNote(note, pattern);
+    if (fitted) clean.push(fitted);
+    if (clean.length >= MAX_NOTES) break;
+  }
+  return withChannel(pattern, channel, fallbackKey, (clip) => ({ ...clip, notes: clean }));
+}
+
+/**
+ * Which note in `notes` is under `(tick, key)`, or `-1`.
+ *
+ * Reverse scan, so the note drawn last -- the one on top -- is the one the
+ * pointer gets.
+ */
+export function noteAt(notes: readonly MelodicNoteDto[], tick: number, key: number): number {
+  for (let index = notes.length - 1; index >= 0; index -= 1) {
+    const note = notes[index]!;
     if (note.key === key && tick >= note.start && tick < note.start + note.length) return index;
   }
   return -1;
 }
 
-/** Names for the twelve pitch classes, sharps only. `noteName(60)` is `C4`. */
-const PITCH_CLASSES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+/** Snap a tick to a grid. `snap` of `0` means no snapping. */
+export function snapTicks(ticks: number, snap: number, floor = false): number {
+  if (snap <= 0) return Math.max(0, Math.round(ticks));
+  const grid = floor ? Math.floor(ticks / snap) : Math.round(ticks / snap);
+  return Math.max(0, grid * snap);
+}
+
+// ---------------------------------------------------------------------------
+// Note operations
+// ---------------------------------------------------------------------------
+//
+// Every one of these is a pure array -> array transform over the notes the user
+// picked, so the roll can apply it, push the result and hand the previous state
+// to the undo stack without any of them knowing about either.
+
+/** Move each note's start onto the snap grid. */
+export function quantize(notes: readonly MelodicNoteDto[], snap: number): MelodicNoteDto[] {
+  const grid = snap > 0 ? snap : TICKS_PER_STEP;
+  return notes.map((note) => ({ ...note, start: snapTicks(note.start, grid) }));
+}
 
 /**
- * Scientific pitch name for a MIDI key: 60 is `C4`, which is the convention
- * every DAW in this family uses (and the one MIDI itself declines to specify).
+ * Extend each note to where the next one starts.
+ *
+ * `all` is the whole channel, not just the selection: a selected note's
+ * neighbour may not be selected, and stopping short of it would be a legato
+ * that leaves a gap.
  */
-export function noteName(key: number): string {
-  const clamped = Math.round(Math.min(MAX_KEY, Math.max(MIN_KEY, key)));
-  return `${pitchClass(clamped)}${Math.floor(clamped / 12) - 1}`;
+export function legato(
+  picked: readonly MelodicNoteDto[],
+  all: readonly MelodicNoteDto[],
+): MelodicNoteDto[] {
+  const starts = [...new Set(all.map((note) => note.start))].sort((a, b) => a - b);
+  return picked.map((note) => {
+    const next = starts.find((start) => start > note.start);
+    return next === undefined ? note : { ...note, length: Math.max(1, next - note.start) };
+  });
 }
 
-/** Whether `key` is a black key, i.e. one of the five accidentals. */
-export function isBlackKey(key: number): boolean {
-  return pitchClass(key).length === 2;
+/** Scale every length by `factor`, never below a 64th. */
+export function scaleLength(notes: readonly MelodicNoteDto[], factor: number): MelodicNoteDto[] {
+  return notes.map((note) => ({
+    ...note,
+    length: Math.max(TICKS_PER_STEP / 4, Math.round(note.length * factor)),
+  }));
 }
 
-/** The pitch class of `key`, for any integer -- negative ones included. */
-function pitchClass(key: number): string {
-  return PITCH_CLASSES[((Math.round(key) % 12) + 12) % 12] ?? 'C';
+/**
+ * The **added** notes of a major triad on each of `notes`: +4 and +7 semitones.
+ *
+ * Deliberately not diatonic. The engine has no key signature and inventing one
+ * would put a guess in somebody's song; a major triad is the one answer that is
+ * obviously a choice rather than a wrong analysis, and it is what the mock's
+ * Chord button does.
+ */
+export function chord(notes: readonly MelodicNoteDto[]): MelodicNoteDto[] {
+  const added: MelodicNoteDto[] = [];
+  for (const note of notes) {
+    for (const interval of [4, 7]) {
+      if (note.key + interval <= 127) added.push({ ...note, key: note.key + interval });
+    }
+  }
+  return added;
+}
+
+/**
+ * Nudge start and velocity, deterministically.
+ *
+ * Seeded rather than `Math.random`, so pressing Humanize twice with the same
+ * selection is a repeatable edit and undo/redo lands on the same notes.
+ */
+export function humanize(notes: readonly MelodicNoteDto[], seed: number): MelodicNoteDto[] {
+  const random = mulberry32(seed);
+  return notes.map((note) => ({
+    ...note,
+    start: Math.max(0, note.start + Math.round((random() - 0.5) * 20)),
+    velocity: Math.min(1, Math.max(0.05, note.velocity + (random() - 0.5) * 0.125)),
+  }));
+}
+
+/** A small, fast, seeded PRNG. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(state ^ (state >>> 15), 1 | state);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Time
+// ---------------------------------------------------------------------------
+
+/** Samples one tick covers at `bpm`. */
+export function samplesPerTick(sampleRate: number, bpm: number): number {
+  const rate = sampleRate > 0 ? sampleRate : FALLBACK_SAMPLE_RATE;
+  return (rate * 60) / (bpm * PPQ);
+}
+
+/** Absolute song position, in fractional ticks. */
+export function samplesToTicks(samplePos: number, sampleRate: number, bpm: number): number {
+  return samplePos / samplesPerTick(sampleRate, bpm);
+}
+
+/** The inverse, for a click on a ruler: which sample to seek to. */
+export function ticksToSamples(ticks: number, sampleRate: number, bpm: number): number {
+  return ticks * samplesPerTick(sampleRate, bpm);
+}
+
+/**
+ * Where the playhead is inside the looping pattern, in ticks, or `null` when
+ * nothing is playing.
+ */
+export function patternTick(
+  samplePos: number,
+  sampleRate: number,
+  bpm: number,
+  pattern: PatternDto,
+): number {
+  const loop = patternTicks(pattern);
+  const ticks = samplesToTicks(samplePos, sampleRate, bpm);
+  return loop > 0 ? ((ticks % loop) + loop) % loop : 0;
+}
+
+/** `1.2.3` -- bar, beat, sixteenth, all one-based, as a transport reads them. */
+export function barsBeats(ticks: number): string {
+  const safe = Math.max(0, ticks);
+  const bar = Math.floor(safe / TICKS_PER_BAR) + 1;
+  const beat = Math.floor((safe % TICKS_PER_BAR) / PPQ) + 1;
+  const sixteenth = Math.floor((safe % PPQ) / TICKS_PER_STEP) + 1;
+  return `${String(bar).padStart(3, '0')}.${beat}.${sixteenth}`;
+}
+
+/** A note length as a musician would say it: `1/16`, `1/4`, `2 bars`. */
+export function lengthLabel(ticks: number): string {
+  if (ticks % TICKS_PER_BAR === 0 && ticks >= TICKS_PER_BAR) {
+    const bars = ticks / TICKS_PER_BAR;
+    return bars === 1 ? '1 bar' : `${bars} bars`;
+  }
+  const fraction = (4 * PPQ) / ticks;
+  if (Number.isInteger(fraction)) return `1/${fraction}`;
+  return `${(ticks / PPQ).toFixed(2)} beats`;
 }

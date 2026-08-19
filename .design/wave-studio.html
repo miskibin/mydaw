@@ -162,7 +162,7 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
       <span style="flex:none;white-space:nowrap;font:400 10px 'Geist Mono';color:var(--dim2,#646b76)">{{ rollCount }}</span>
     </div>
 
-    <div data-roll-scroll="1" style="flex:1;min-height:0;overflow:auto;background:var(--sunk,#0b0d10)">
+    <div data-roll-scroll="1" onWheel="{{ rollWheel }}" style="flex:1;min-height:0;overflow:auto;background:var(--sunk,#0b0d10)">
       <div style="{{ rollInner }}">
         <div style="{{ rulerRow }}">
           <div style="{{ rulerCorner }}">{{ rollKeyRange }}</div>
@@ -288,7 +288,22 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
       <div style="flex:1;min-height:0;display:flex;flex-direction:column">
         <div style="height:40px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;white-space:nowrap;background:var(--panel,#12151a);border-bottom:1px solid var(--line,#23272f)">
           <span style="font:500 10px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76)">CHANNEL RACK</span>
-          <span style="{{ rackPatStyle }}"><span style="{{ patSelDot }}"></span>{{ patSelName }}</span>
+          <div style="flex:none;display:flex;align-items:center;gap:5px;max-width:46%;overflow-x:auto">
+            <sc-for list="{{ patTabs }}" as="p" hint-placeholder-count="3">
+              <span onClick="{{ p.on }}" onContextMenu="{{ p.onCtx }}" style="{{ p.style }}" title="click to edit · right-click for options">
+                <span style="{{ p.dotStyle }}"></span>{{ p.name }}
+              </span>
+            </sc-for>
+            <span onClick="{{ addPattern }}" style="height:24px;flex:none;padding:0 8px;display:flex;align-items:center;border-radius:6px;border:1px dashed var(--line2,#2d323b);font:500 10px Geist;color:var(--dim,#8b929c);cursor:pointer">+</span>
+          </div>
+          <sc-if value="{{ patCtxOpen }}" hint-placeholder-val="{{ false }}">
+          <div onClick="{{ closePatCtx }}" onContextMenu="{{ closePatCtx }}" style="position:fixed;inset:0;z-index:120">
+            <div onClick="{{ eat }}" style="{{ patCtxStyle }}">
+              <div onClick="{{ patCtxDuplicate }}" style="{{ patCtxRowStyle }}">Duplicate</div>
+              <div onClick="{{ patCtxDelete }}" style="{{ patCtxDelStyle }}">Delete</div>
+            </div>
+          </div>
+          </sc-if>
           <div style="flex:1"></div>
           <span style="font:400 10px 'Geist Mono';color:var(--dim2,#646b76)">{{ rackMeta }}</span>
         </div>
@@ -360,7 +375,7 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
           <span style="{{ brushStyle }}"><span style="{{ brushDotStyle }}"></span>{{ brushLabel }}</span>
         </div>
 
-        <div style="flex:1;min-height:0;overflow:auto;background:var(--sunk,#0b0d10)">
+        <div onWheel="{{ plWheel }}" style="flex:1;min-height:0;overflow:auto;background:var(--sunk,#0b0d10)">
           <div style="{{ plInner }}">
             <div style="{{ plRulerRow }}">
               <div style="{{ plCorner }}">{{ plBarsLabel }}</div>
@@ -387,6 +402,7 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
                       <span style="{{ t.volLabel }}">{{ t.vol }}</span>
                     </div>
                   </div>
+                  <div onMouseDown="{{ t.onResizeH }}" style="{{ t.resizeHStyle }}" title="drag to resize track height"></div>
                 </div>
                 <div onMouseDown="{{ t.onDown }}" onDragOver="{{ t.onOver }}" onDrop="{{ t.onDrop }}" onContextMenu="{{ noCtx }}" style="{{ t.laneStyle }}">
                   <sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="2">
@@ -855,7 +871,7 @@ class Component extends DCLogic {
     mute:{}, selCh:'ch5', sel:[], tool:'draw', snap:1, zoom:1, lastLen:4,
     ghosts:true, veloProp:'Velocity', instMenu:null, chanMenu:false, marq:null,
     playing:false, loop:true, bar:5, windows:[], zTop:1,
-    tracks: INIT_TRACKS, clips: INIT_CLIPS, clipSeq:8, trSeq:5, trMute:{}, trSolo:{}, trArm:{}, trVol:{},
+    tracks: INIT_TRACKS, clips: INIT_CLIPS, clipSeq:8, trSeq:5, trMute:{}, trSolo:{}, trArm:{}, trVol:{}, trH:{},
     buses: INIT_BUSES, mst: INIT_MST, routes: INIT_ROUTES, mixSel:'ch7', sendMode:'from', solo:{}, arm:{}, busSeq:3,
     brush:{ kind:'pattern', ref:'p1' }, plTool:'paint', plSnap:1, plZoom:1,
     side:null, picker:'Patterns', bypass:{},
@@ -1389,6 +1405,18 @@ class Component extends DCLogic {
         buses: s.buses.concat([{ id:id, name:'Bus ' + n, color:'#7d8794', fx:[], vol:0.75, pan:0, sep:0.5, meter:22 }]) };
     });
   };
+  trackHDown(id) {
+    return e => {
+      e.stopPropagation(); e.preventDefault();
+      const startY = e.clientY, startH = this.state.trH[id] || 48;
+      const set = ev => {
+        const h = Math.max(32, Math.min(160, Math.round(startH + (ev.clientY - startY))));
+        const m = Object.assign({}, this.state.trH); m[id] = h;
+        this.setState({ trH:m });
+      };
+      this.drag(set);
+    };
+  }
   trVolDown(id) {
     return e => {
       e.stopPropagation(); e.preventDefault();
@@ -1448,7 +1476,7 @@ class Component extends DCLogic {
     const anyTrSolo = Object.keys(s.trSolo).some(k => s.trSolo[k]);
     const tracks = s.tracks.map(t => {
       const muted = !!s.trMute[t.id], solo = !!s.trSolo[t.id], armed = !!s.trArm[t.id];
-      const off = muted || (anyTrSolo && !solo), tv = s.trVol[t.id] == null ? 0.8 : s.trVol[t.id];
+      const off = muted || (anyTrSolo && !solo), tv = s.trVol[t.id] == null ? 0.8 : s.trVol[t.id], th = s.trH[t.id] || TRH;
       const clips = s.clips.filter(c => c.tr === t.id).map(c => {
         const isPat = c.kind === 'pattern';
         const p = isPat ? this.patOf(c.ref) : null;
@@ -1474,7 +1502,9 @@ class Component extends DCLogic {
         onArm: this.flagT('trArm', t.id, t.name + ' — Record Arm'),
         onVol: this.trVolDown(t.id), vol: (20 * Math.log10(Math.max(0.02, tv))).toFixed(1),
         onDel: this.delTrack(t.id), onDown: this.laneDown(t.id), onOver: e => e.preventDefault(), onDrop: this.laneDrop(t.id),
-        headStyle: { position:'sticky', left:0, zIndex:4, width: HEADW + 'px', flex:'none', height: TRH + 'px', display:'flex', alignItems:'center', gap:'8px',
+        onResizeH: this.trackHDown(t.id),
+        resizeHStyle: { position:'absolute', left:0, right:0, bottom:0, height:'5px', cursor:'ns-resize', zIndex:5 },
+        headStyle: { position:'sticky', left:0, zIndex:4, width: HEADW + 'px', flex:'none', height: th + 'px', display:'flex', alignItems:'center', gap:'8px',
           padding:'0 9px 0 10px', background: solo ? this.alpha('#e0a44a', light ? 0.1 : 0.08) : T.panel,
           borderRight:'1px solid ' + T.line2, borderBottom:'1px solid ' + T.line, opacity: off ? 0.5 : 1 },
         ledStyle: { width:'3px', height:'26px', flex:'none', borderRadius:'2px', cursor:'pointer',
@@ -1488,7 +1518,7 @@ class Component extends DCLogic {
         volTrack: { flex:1, minWidth:0, height:'4px', borderRadius:'2px', background:T.sunk, position:'relative', overflow:'hidden', cursor:'ew-resize' },
         volFill: { position:'absolute', left:0, top:0, bottom:0, width: (tv * 100) + '%', background: muted ? T.line2 : this.alpha(A, 0.8) },
         volLabel: { width:'30px', flex:'none', textAlign:'right', font:"400 8.5px 'Geist Mono'", color:T.dim2, whiteSpace:'nowrap' },
-        laneStyle: { position:'relative', width: PL_BARS * bw + 'px', flex:'none', height: TRH + 'px', borderBottom:'1px solid ' + T.line,
+        laneStyle: { position:'relative', width: PL_BARS * bw + 'px', flex:'none', height: th + 'px', borderBottom:'1px solid ' + T.line,
           background:T.lane, backgroundImage:laneBg, opacity: off ? 0.45 : 1, cursor: s.plTool === 'paint' ? 'copy' : 'default' }
       };
     });
@@ -1505,6 +1535,7 @@ class Component extends DCLogic {
       cyclePlSnap: () => this.setState(st => { const i = PL_SNAPS.findIndex(x => x[0] === st.plSnap); return { plSnap: PL_SNAPS[(i + 1) % PL_SNAPS.length][0] }; }),
       plZoomIn: () => this.setState(st => ({ plZoom: Math.min(3, st.plZoom * 1.25) })),
       plZoomOut: () => this.setState(st => ({ plZoom: Math.max(0.5, st.plZoom / 1.25) })),
+      plWheel: e => { if (e.shiftKey) { e.preventDefault(); this.setState(st => ({ plZoom: Math.min(3, Math.max(0.5, st.plZoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1))) })); } },
       brushLabel: bpat ? 'Brush · ' + bpat.name : bsm ? 'Brush · ' + bsm[0] : 'No brush — pick one on the right',
       brushStyle: { height:'26px', flex:'none', whiteSpace:'nowrap', padding:'0 10px', display:'flex', alignItems:'center', gap:'7px', borderRadius:'7px',
         background: this.alpha(bcol, 0.14), font:'500 10px Geist', color: light ? this.mix(bcol, '#0d1016', 0.4) : bcol },
@@ -1796,6 +1827,7 @@ class Component extends DCLogic {
       cycleSnap: () => this.setState(st => { const i = SNAPS.findIndex(x => x[0] === st.snap); return { snap: SNAPS[(i + 1) % SNAPS.length][0] }; }),
       zoomIn: () => this.setState(st => ({ zoom: Math.min(3, st.zoom * 1.25) })),
       zoomOut: () => this.setState(st => ({ zoom: Math.max(0.5, st.zoom / 1.25) })),
+      rollWheel: e => { if (e.shiftKey) { e.preventDefault(); this.setState(st => ({ zoom: Math.min(3, Math.max(0.5, st.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1))) })); } },
       toggleGhosts: () => this.setState({ ghosts: !s.ghosts }),
       ghostBtn: { height:'26px', flex:'none', whiteSpace:'nowrap', padding:'0 10px', display:'flex', alignItems:'center', borderRadius:'7px',
         background: s.ghosts ? this.alpha(A, 0.14) : 'transparent', boxShadow: s.ghosts ? 'none' : 'inset 0 0 0 1px ' + T.line,
@@ -1950,6 +1982,33 @@ class Component extends DCLogic {
         delStyle: { width:'18px', height:'18px', flex:'none', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'4px',
           font:"400 11px 'Geist Mono'", color:T.dim2, cursor:'pointer' } })),
       addPattern: this.addPattern,
+      patTabs: s.patterns.map(p => {
+        const on = s.pat === p.id;
+        return {
+          name:p.name, on: () => this.setState({ pat:p.id }),
+          onCtx: e => { e.preventDefault(); e.stopPropagation(); this.setState({ patCtx:{ id:p.id, x:e.clientX, y:e.clientY } }); },
+          style: { height:'24px', flex:'none', whiteSpace:'nowrap', padding:'0 9px', display:'flex', alignItems:'center', gap:'6px', borderRadius:'6px',
+            background: on ? this.alpha(p.color, 0.16) : 'transparent', boxShadow: on ? 'inset 0 0 0 1px ' + this.alpha(p.color, 0.6) : 'inset 0 0 0 1px ' + T.line,
+            font:'500 10.5px Geist', color: on ? T.txt : T.dim, cursor:'pointer' },
+          dotStyle: { width:'6px', height:'6px', flex:'none', borderRadius:'2px', background:p.color }
+        };
+      }),
+      patCtxOpen: !!s.patCtx,
+      closePatCtx: () => this.setState({ patCtx:null }),
+      patCtxStyle: s.patCtx ? { position:'fixed', left:s.patCtx.x + 'px', top:s.patCtx.y + 'px', width:'150px', padding:'5px', borderRadius:'9px',
+        background:T.panel2, boxShadow:'inset 0 0 0 1px ' + T.line2 + ',0 16px 36px rgba(0,0,0,' + (light ? '.18' : '.45') + ')', zIndex:121 } : {},
+      patCtxRowStyle: { height:'28px', display:'flex', alignItems:'center', padding:'0 9px', borderRadius:'6px', font:'500 11px Geist', color:T.txt2, cursor:'pointer' },
+      patCtxDelStyle: { height:'28px', display:'flex', alignItems:'center', padding:'0 9px', borderRadius:'6px', font:'500 11px Geist', color:'#e8607a', cursor:'pointer' },
+      patCtxDuplicate: () => this.setState(st => {
+        const src = st.patterns.find(x => x.id === st.patCtx.id); if (!src) return { patCtx:null };
+        const n = (st.patSeq || st.patterns.length) + 1, id = 'p' + n;
+        return { patterns: st.patterns.concat([Object.assign({}, src, { id:id, name:src.name + ' copy' })]), patSeq:n, pat:id, patCtx:null };
+      }),
+      patCtxDelete: () => this.setState(st => {
+        const rest = st.patterns.filter(x => x.id !== st.patCtx.id);
+        if (!rest.length) return { patCtx:null };
+        return { patterns:rest, pat: st.pat === st.patCtx.id ? rest[0].id : st.pat, patCtx:null };
+      }),
       rackMeta: s.channels.length + ' ch · ' + BARS + ' bars',
       rackRows: rackRows,
       openAddChannel: e => { e.stopPropagation(); this.setState({ instMenu:{ mode:'add' } }); },

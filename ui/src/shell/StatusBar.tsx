@@ -1,59 +1,71 @@
-import { Show, type JSX } from 'solid-js';
-import { useAppState } from '../state';
-
 /**
- * The bottom strip: what the audio device is, what went wrong, and which
- * backend is answering.
+ * The status bar: what the device is, what the last gesture did, and what went
+ * wrong.
  *
- * BUFFER and LATENCY come from `get_stream_info`, i.e. from the block size the
- * device actually opened with -- not from a setting somebody typed. CPU is not
- * here: the mock design shows one, and MYDAW has no DSP load figure yet. An
- * invented percentage in a status bar is worse than an absent one.
+ * The mock's CPU meter is **not** here. The engine publishes no CPU figure, and
+ * a number invented in the webview would be the most quietly dishonest thing in
+ * the whole shell -- a load meter is the one readout people trust without
+ * checking. Buffer and latency are real, and come from the open stream.
  */
-export function StatusBar(): JSX.Element {
-  const app = useAppState();
 
-  const info = () => app.streamInfo();
-  const running = () => info()?.running === true;
+import { Show } from 'solid-js';
+
+import { useAppState } from '../state';
+import { useView } from './view';
+
+export function StatusBar(): ReturnType<typeof Show> {
+  const app = useAppState();
+  const view = useView();
+
+  const hint = () =>
+    view.rollOpen()
+      ? 'shift-drag or the Select tool marquees · shift-click adds to the selection · Ctrl+A all · Ctrl+D duplicate · right-click deletes'
+      : 'F5 playlist · F6 rack · F7 piano roll · F9 mixer · Space play · Ctrl+Z undo';
 
   return (
     <footer class="wv-status">
       <span>
         DEVICE{' '}
-        <b>{running() ? (info()?.deviceName ?? 'unknown') : 'none'}</b>
+        <span class="wv-status__value">
+          {app.streamInfo()?.running ? app.streamInfo()!.deviceName : 'none'}
+        </span>
       </span>
       <span>
-        BUFFER <b>{running() ? info()?.bufferFrames : '—'}</b>
+        BUFFER{' '}
+        <span class="wv-status__value">
+          {app.streamInfo()?.running ? app.streamInfo()!.bufferFrames : '—'}
+        </span>
       </span>
       <span>
-        LATENCY <b>{running() ? `${info()?.latencyMs.toFixed(1)} ms` : '—'}</b>
-      </span>
-      <span>
-        RATE <b>{running() ? `${((info()?.sampleRate ?? 0) / 1000).toFixed(1)} kHz` : '—'}</b>
+        LATENCY{' '}
+        <span class="wv-status__value">
+          {app.streamInfo()?.running ? `${app.streamInfo()!.latencyMs.toFixed(1)} ms` : '—'}
+        </span>
       </span>
 
-      <span class="wv-spacer" />
+      <Show when={app.param()}>
+        <div class="wv-readout">
+          <span class="wv-readout__name">{app.param()!.name}</span>
+          <span class="wv-readout__value">{app.param()!.value}</span>
+        </div>
+      </Show>
+
+      <div class="wv-spacer" />
 
       <Show when={app.kernelError()}>
-        {(message) => (
-          <span class="wv-status__error" title={message()}>
-            {message()}
-          </span>
-        )}
-      </Show>
-      <Show when={app.project().missingPlugins > 0}>
-        <span class="wv-status__error">
-          {app.project().missingPlugins} plugin
-          {app.project().missingPlugins === 1 ? '' : 's'} missing
+        <span class="wv-status__error" title={app.kernelError()!}>
+          {app.kernelError()}
         </span>
       </Show>
+      <Show when={!app.kernelError()}>
+        <span>{hint()}</span>
+      </Show>
 
-      <span>
-        BACKEND <b>{app.backend.kind}</b>
-      </span>
-      <span class="wv-disabled" title="Autosave — coming soon">
-        AUTOSAVE <b>off</b>
-      </span>
+      <Show when={app.backend.kind === 'mock'}>
+        <span class="wv-status__value" title="No engine behind this window: the browser mock is answering">
+          MOCK
+        </span>
+      </Show>
     </footer>
   );
 }

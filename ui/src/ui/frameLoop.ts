@@ -22,14 +22,26 @@ type Painter = () => void;
 const painters = new Set<Painter>();
 let handle = 0;
 
+/**
+ * Painters that have already thrown.
+ *
+ * A broken painter must not stop the clock for the other nineteen, and it must
+ * not log sixty times a second either -- but swallowing it in silence is worse
+ * than both: a canvas that never draws then looks like a layout bug and costs
+ * an hour. So the first throw is reported, once, and the rest are dropped.
+ */
+const broken = new WeakSet<Painter & object>();
+
 function tick(): void {
   handle = requestAnimationFrame(tick);
   for (const paint of painters) {
     try {
       paint();
-    } catch {
-      // One broken painter must not stop the clock for the other nineteen.
-      // Nothing is logged: this would log sixty times a second.
+    } catch (error) {
+      if (!broken.has(paint)) {
+        broken.add(paint);
+        console.error('[mydaw] a frame painter threw and will be reported only once:', error);
+      }
     }
   }
 }

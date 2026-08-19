@@ -1,0 +1,1958 @@
+/**
+ * The browser-only backend.
+ *
+ * `pnpm dev` in a plain browser has no Rust side, so this stands in for the
+ * whole engine: five tracks, a pattern set, an arrangement, buses, sends,
+ * insert chains built from the **real** effect catalogue, a synthetic meter
+ * stream and an invented audio file.
+ *
+ * Two rules keep it worth having:
+ *
+ * 1. **It mirrors the engine's refusals.** A mock that accepts what Rust
+ *    rejects is a worse rehearsal than no mock at all -- the error path is the
+ *    half of a view that never gets looked at otherwise.
+ * 2. **It says what it cannot do.** There is no native window, no file dialog
+ *    and no audio device in a browser, so those log and answer plausibly rather
+ *    than pretending they happened.
+ */
+
+import type { Backend } from './backend';
+import type {
+  AssetStatus,
+  AudioSourceDto,
+  BusDto,
+  ChannelClipDto,
+  ClapGuiStatus,
+  ClapPluginInfoDto,
+  ClapSlot,
+  ClapTarget,
+  ClipDto,
+  EffectInfoDto,
+  InsertDto,
+  InsertReadoutsDto,
+  InsertTarget,
+  MasterDto,
+  MeterFrame,
+  MixerState,
+  ParamDefDto,
+  ParamValueDto,
+  PatternDto,
+  PatternSetDto,
+  PlayMode,
+  PlaylistDto,
+  PlaylistTrackDto,
+  ProjectInfo,
+  SendDto,
+  SequencerState,
+  SourceDto,
+  StreamInfo,
+  TrackDto,
+  UiSnapshot,
+  Unsubscribe,
+  Vst3GuiStatus,
+  Vst3PluginInfoDto,
+  Vst3Slot,
+  WaveformDto,
+} from './types';
+
+// ---------------------------------------------------------------------------
+// Engine constants, mirrored
+// ---------------------------------------------------------------------------
+
+const MAX_TRACKS = 16;
+const MAX_BUSES = 8;
+const MAX_INSERTS = 8;
+const MIN_GAIN_DB = -60;
+const MAX_GAIN_DB = 6;
+const MAX_SEND_LEVEL = 1.25;
+const MAX_SEND_DB = 1.9382;
+const MAX_PATTERNS = 32;
+const MAX_PLAYLIST_TRACKS = 16;
+const MAX_CLIPS = 512;
+const MAX_SONG_TICKS = 3_840 * 512;
+const MAX_NOTES = 1024;
+const MAX_WAVEFORM_BINS = 4096;
+const PPQ = 960;
+const TICKS_PER_STEP = 240;
+const TICKS_PER_BAR = 3840;
+const DEFAULT_CLIP_TICKS = TICKS_PER_BAR * 4;
+const PATTERN_LENGTHS = [16, 32, 64];
+const DEFAULT_STEPS = 16;
+const STEP_VELOCITY = 0.78;
+const DEFAULT_BPM = 130;
+const MIN_BPM = 20;
+const MAX_BPM = 999;
+const SAMPLE_RATE = 48_000;
+const FRAME_HZ = 30;
+
+/** The General MIDI keys the starter rack's channels trigger. */
+const DEFAULT_ROW_KEYS = [36, 38, 42, 46, 60];
+
+// ---------------------------------------------------------------------------
+// The effect catalogue, mirrored from `plugins/effects`
+// ---------------------------------------------------------------------------
+//
+// Verbatim, because this is what every knob in the inspector is laid out from:
+// a mock catalogue with a different range or curve would let a knob be built
+// against a taper the engine does not have.
+
+/** `ParamDef::new` -- continuous, unquantised, 10 ms ramp. */
+function param(
+  id: string,
+  name: string,
+  unit: string,
+  min: number,
+  max: number,
+  defaultValue: number,
+  curve: ParamDefDto['curve'],
+): ParamDefDto {
+  return { id, name, unit, min, max, defaultValue, curve, step: null, smoothingMs: 10 };
+}
+
+/** `ParamDef::choice` / `::toggle` -- quantised, and **not** smoothed. */
+function choice(id: string, name: string, count: number, defaultValue: number): ParamDefDto {
+  return {
+    id,
+    name,
+    unit: '',
+    min: 0,
+    max: count - 1,
+    defaultValue,
+    curve: 'linear',
+    step: 1,
+    smoothingMs: 0,
+  };
+}
+
+function toggle(id: string, name: string, on: boolean): ParamDefDto {
+  return choice(id, name, 2, on ? 1 : 0);
+}
+
+const EFFECTS: readonly EffectInfoDto[] = [
+  {
+    typeId: 'effects.eq',
+    name: 'EQ',
+    description: 'Five bands: highpass, low shelf, two parametric bells and a high shelf',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      toggle('hp.enabled', 'HP On', false),
+      param('hp.freq', 'HP Freq', 'Hz', 20, 1000, 80, 'log'),
+      choice('hp.slope', 'HP Slope', 2, 1),
+      toggle('low.enabled', 'Low On', true),
+      param('low.freq', 'Low Freq', 'Hz', 20, 20000, 120, 'log'),
+      param('low.gain', 'Low Gain', 'dB', -18, 18, 0, 'db'),
+      param('low.q', 'Low Q', '', 0.1, 10, 0.7, 'log'),
+      toggle('bell1.enabled', 'Bell 1 On', true),
+      param('bell1.freq', 'Bell 1 Freq', 'Hz', 20, 20000, 500, 'log'),
+      param('bell1.gain', 'Bell 1 Gain', 'dB', -18, 18, 0, 'db'),
+      param('bell1.q', 'Bell 1 Q', '', 0.1, 10, 1, 'log'),
+      toggle('bell2.enabled', 'Bell 2 On', true),
+      param('bell2.freq', 'Bell 2 Freq', 'Hz', 20, 20000, 3000, 'log'),
+      param('bell2.gain', 'Bell 2 Gain', 'dB', -18, 18, 0, 'db'),
+      param('bell2.q', 'Bell 2 Q', '', 0.1, 10, 1, 'log'),
+      toggle('high.enabled', 'High On', true),
+      param('high.freq', 'High Freq', 'Hz', 20, 20000, 8000, 'log'),
+      param('high.gain', 'High Gain', 'dB', -18, 18, 0, 'db'),
+      param('high.q', 'High Q', '', 0.1, 10, 0.7, 'log'),
+      param('output', 'Output', 'dB', -18, 18, 0, 'db'),
+    ],
+    readouts: [],
+  },
+  {
+    typeId: 'effects.compressor',
+    name: 'Compressor',
+    description:
+      'Feed-forward compressor with peak/RMS detection, soft knee and a sidechain highpass',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('threshold', 'Threshold', 'dB', -60, 0, -18, 'db'),
+      param('ratio', 'Ratio', ':1', 1, 20, 4, 'log'),
+      param('attack', 'Attack', 'ms', 0.05, 100, 10, 'log'),
+      param('release', 'Release', 'ms', 5, 2000, 100, 'log'),
+      toggle('auto_release', 'Auto Release', false),
+      param('knee', 'Knee', 'dB', 0, 18, 6, 'linear'),
+      choice('detector', 'Detector', 2, 0),
+      param('rms_ms', 'RMS Window', 'ms', 1, 100, 10, 'log'),
+      toggle('sc_hpf_on', 'SC Filter', false),
+      param('sc_hpf', 'SC Freq', 'Hz', 20, 500, 100, 'log'),
+      param('makeup', 'Makeup', 'dB', -24, 24, 0, 'db'),
+      toggle('auto_makeup', 'Auto Makeup', false),
+      param('mix', 'Mix', '%', 0, 100, 100, 'linear'),
+    ],
+    readouts: [
+      { id: 'gr', name: 'Gain Reduction', unit: 'dB' },
+      { id: 'gr_max', name: 'Max Gain Reduction', unit: 'dB' },
+    ],
+  },
+  {
+    typeId: 'effects.delay',
+    name: 'Delay',
+    description:
+      'Tempo-synced stereo or ping-pong delay with in-loop damping and one-knob ducking',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      toggle('sync', 'Sync', true),
+      choice('division', 'Division', 7, 3),
+      choice('modifier', 'Modifier', 3, 0),
+      param('time_ms', 'Time', 'ms', 1, 4000, 375, 'log'),
+      param('feedback', 'Feedback', '%', 0, 110, 35, 'linear'),
+      param('damp_hp', 'Damp HP', 'Hz', 20, 2000, 150, 'log'),
+      param('damp_lp', 'Damp LP', 'Hz', 200, 20000, 6500, 'log'),
+      choice('mode', 'Mode', 2, 0),
+      param('duck', 'Duck', '%', 0, 100, 0, 'linear'),
+      param('mix', 'Mix', '%', 0, 100, 30, 'linear'),
+    ],
+    readouts: [],
+  },
+  {
+    typeId: 'effects.saturator',
+    name: 'Saturator',
+    description: 'Tape, tube and clip waveshapers with a tilt, level-matched drive and 4x oversampling',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      choice('type', 'Type', 3, 0),
+      param('drive', 'Drive', 'dB', 0, 36, 0, 'db'),
+      toggle('auto_gain', 'Auto Gain', true),
+      param('tone', 'Tone', 'dB', -12, 12, 0, 'db'),
+      param('mix', 'Mix', '%', 0, 100, 100, 'linear'),
+      param('output', 'Output', 'dB', -24, 24, 0, 'db'),
+      choice('oversample', 'Oversampling', 3, 2),
+    ],
+    readouts: [
+      { id: 'auto_gain_db', name: 'Applied Auto Gain', unit: 'dB' },
+      { id: 'latency', name: 'Latency', unit: 'samples' },
+    ],
+  },
+  {
+    typeId: 'effects.utility',
+    name: 'Utility',
+    description: 'Gain, pan, stereo width, mono, polarity and a DC blocker',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('gain', 'Gain', 'dB', -36, 36, 0, 'db'),
+      param('pan', 'Pan', '', -1, 1, 0, 'linear'),
+      param('width', 'Width', '%', 0, 200, 100, 'linear'),
+      toggle('mono', 'Mono', false),
+      toggle('invert_l', 'Invert L', false),
+      toggle('invert_r', 'Invert R', false),
+      toggle('dc_block', 'DC Filter', false),
+    ],
+    readouts: [],
+  },
+];
+
+function effectInfo(typeId: string): EffectInfoDto {
+  const info = EFFECTS.find((entry) => entry.typeId === typeId);
+  if (!info) throw new Error(`there is no effect '${typeId}'`);
+  return info;
+}
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+const MOCK_SNAPSHOT: UiSnapshot = {
+  plugins: [
+    { id: 'kernel', name: 'Microkernel', state: 'started' },
+    { id: 'audio-io', name: 'Audio I/O (WASAPI)', state: 'started' },
+    { id: 'metering', name: 'Metering', state: 'started' },
+    { id: 'sequencer', name: 'Sequencer', state: 'started' },
+    { id: 'instruments', name: 'Internal Instruments', state: 'started' },
+    { id: 'effects', name: 'Internal Effects', state: 'started' },
+    { id: 'sampler', name: 'Sampler', state: 'started' },
+    { id: 'host-clap', name: 'CLAP Host', state: 'registered' },
+    { id: 'host-vst3', name: 'VST3 Host', state: 'registered' },
+  ],
+  panels: [],
+};
+
+/** The built-in sources, in the order and spelling `Source::BUILT_IN` lists them. */
+const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
+  {
+    id: 'poly-synth',
+    label: 'Poly Synth',
+    description: 'Eight-voice saw + sub synth, played from the keyboard',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'kick',
+    label: 'Kick',
+    description: 'Synthesised kick: 150 -> 50 Hz sine sweep with a noise click, tunable',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'snare',
+    label: 'Snare',
+    description: 'Synthesised snare: highpassed noise over a 180 Hz body, tunable',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'hat-closed',
+    label: 'Hat Closed',
+    description: 'Synthesised closed hi-hat: highpassed noise, 60 ms decay',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'hat-open',
+    label: 'Hat Open',
+    description: 'Synthesised open hi-hat: highpassed noise, 350 ms decay',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'drum-kit',
+    label: 'Drum Kit',
+    description: 'Synthesised kick, snare and hi-hats on GM keys 36/38/42/46',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'test-tone',
+    label: 'Test Tone',
+    description: '440 Hz sine, gated on the transport',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: false,
+  },
+  {
+    id: 'sampler:salamander-piano',
+    label: 'Salamander Grand Piano',
+    description: 'Yamaha C5 grand, 30 sampled notes x 3 velocity layers',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+];
+
+const FIXTURE_GAIN_ID = 'dev.mydaw.fixture.gain';
+
+const CLAP_PLUGINS: readonly ClapPluginInfoDto[] = [
+  {
+    id: 'dev.mydaw.fixture.synth',
+    name: 'MYDAW Fixture Synth',
+    vendor: 'MYDAW',
+    version: '0.1.0',
+    path: 'D:\\MYDAW\\target\\debug\\mydaw-synth.clap',
+    kind: 'instrument',
+    features: ['instrument', 'synthesizer', 'stereo'],
+  },
+  {
+    id: 'com.example.polybox',
+    name: 'Example PolyBox',
+    vendor: 'Example Audio',
+    version: '3.0.2',
+    path: 'C:\\Program Files\\Common Files\\CLAP\\ExamplePolyBox.clap',
+    kind: 'instrument',
+    features: ['instrument', 'sampler'],
+  },
+  {
+    id: 'com.example.reverb',
+    name: 'Example Reverb',
+    vendor: 'Example Audio',
+    version: '2.1.0',
+    path: 'C:\\Program Files\\Common Files\\CLAP\\ExampleReverb.clap',
+    kind: 'audio-effect',
+    features: ['audio-effect', 'reverb'],
+  },
+  {
+    // Declares no vendor, no version and one bare feature, all of which CLAP
+    // allows -- and it is the one with no editor, so the "this plugin has no
+    // editor" path stays reachable in a plain browser.
+    id: FIXTURE_GAIN_ID,
+    name: 'MYDAW Fixture Gain',
+    vendor: '',
+    version: '',
+    path: 'D:\\MYDAW\\target\\debug\\mydaw-gain.clap',
+    kind: 'audio-effect',
+    features: ['audio-effect'],
+  },
+];
+
+const VST3_PLUGINS: readonly Vst3PluginInfoDto[] = [
+  {
+    id: '58545356736673586572756D00000000',
+    name: 'Example Serial Synth',
+    vendor: 'Example Records',
+    version: '1.4.0',
+    path: 'C:\\Program Files\\Common Files\\VST3\\ExampleSerial.vst3',
+    kind: 'instrument',
+    subcategories: ['Instrument', 'Synth'],
+  },
+  {
+    id: '41545356746E4148564F582041535049',
+    name: 'Example Vocal Air',
+    vendor: 'Example Audio',
+    version: '4.2.1',
+    path: 'C:\\Program Files\\Common Files\\VST3\\ExampleVocalAir.vst3',
+    kind: 'audio-effect',
+    subcategories: ['Fx', 'Pitch Shift'],
+  },
+  {
+    // No `IPluginFactory2`, so the module declares nothing at all.
+    id: '0123456789ABCDEF0123456789ABCDEF',
+    name: 'Example Legacy Comp',
+    vendor: '',
+    version: '',
+    path: 'C:\\Program Files\\Common Files\\VST3\\ExampleLegacy.vst3',
+    kind: 'unknown',
+    subcategories: [],
+  },
+];
+
+const UNTITLED = 'Untitled';
+const PROJECT_DIR = 'D:\\Songs';
+
+/** The five tracks `Project::starter` builds, names and sources included. */
+function starterTracks(): TrackDto[] {
+  const wanted = ['kick', 'snare', 'hat-closed', 'hat-open', 'sampler:salamander-piano'];
+  return wanted.map((sourceId, index) => {
+    const source = INTERNAL_SOURCES.find((entry) => entry.id === sourceId)!;
+    return {
+      index,
+      id: index,
+      name: source.label,
+      sourceId: source.id,
+      sourceLabel: source.label,
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      selected: index === 0,
+      clap: null,
+      vst3: null,
+      // Never set by the mock: every plugin it knows about is a fixture, and a
+      // fixture cannot be uninstalled between a save and a load. The badge is
+      // deliberately unreachable here rather than faked.
+      missing: null,
+      inserts: [],
+    };
+  });
+}
+
+/** An empty pattern with a grid on each of `channels`. */
+function emptyPattern(id: number, name: string, channels: readonly number[]): PatternDto {
+  return {
+    id,
+    name,
+    steps: DEFAULT_STEPS,
+    channels: channels.map<ChannelClipDto>((channel) => ({
+      channel,
+      mode: 'steps',
+      steps: {
+        key: DEFAULT_ROW_KEYS[channel] ?? 60,
+        label: ['Kick', 'Snare', 'CH', 'OH'][channel] ?? '',
+        steps: Array.from({ length: DEFAULT_STEPS }, () => ({
+          on: false,
+          velocity: STEP_VELOCITY,
+        })),
+      },
+      notes: [],
+    })),
+  };
+}
+
+function projectName(path: string): string {
+  const file = path.split(/[\\/]/).pop() ?? path;
+  const dot = file.lastIndexOf('.');
+  // `> 0`, not `>= 0`: a leading dot is a hidden file's name, not an extension.
+  return dot > 0 ? file.slice(0, dot) : file;
+}
+
+function projectInfo(path: string | null): ProjectInfo {
+  return { path, name: path === null ? UNTITLED : projectName(path), missingPlugins: 0, warnings: [] };
+}
+
+// ---------------------------------------------------------------------------
+// The mock
+// ---------------------------------------------------------------------------
+
+interface MockBus {
+  id: number;
+  name: string;
+  color: string | null;
+  gainDb: number;
+  pan: number;
+  muted: boolean;
+  soloed: boolean;
+  inserts: InsertDto[];
+}
+
+interface MockSend {
+  id: number;
+  sourceKind: 'track' | 'bus';
+  sourceIndex: number;
+  dest: number;
+  level: number;
+  pre: boolean;
+}
+
+/** Everything a save writes down. */
+interface MockSession {
+  tracks: TrackDto[];
+  buses: MockBus[];
+  sends: MockSend[];
+  masterGainDb: number;
+  masterInserts: InsertDto[];
+  masterClap: ClapSlot | null;
+  masterVst3: Vst3Slot | null;
+  patterns: PatternDto[];
+  activePattern: number;
+  playlistTracks: PlaylistTrackDto[];
+  clips: ClipDto[];
+  bpm: number;
+  playMode: PlayMode;
+  selected: number;
+}
+
+export class MockBackend implements Backend {
+  readonly kind = 'mock' as const;
+
+  private playing = false;
+  private samplePos = 0;
+  private bpm = DEFAULT_BPM;
+  private playMode: PlayMode = 'pat';
+
+  private tracks: TrackDto[] = starterTracks();
+  private buses: MockBus[] = [];
+  private sends: MockSend[] = [];
+  private masterGainDb = 0;
+  private masterInserts: InsertDto[] = [];
+  private masterClap: ClapSlot | null = null;
+  private masterVst3: Vst3Slot | null = null;
+  private selected = 0;
+
+  private patterns: PatternDto[] = [emptyPattern(1, 'Pattern 1', [0, 1, 2, 3, 4])];
+  private activePattern = 1;
+  private playlistTracks: PlaylistTrackDto[] = Array.from({ length: 4 }, (_, index) => ({
+    id: index + 1,
+    name: `Track ${index + 1}`,
+    muted: false,
+  }));
+  private clips: ClipDto[] = [];
+  private audioSources: AudioSourceDto[] = [];
+
+  private nextTrackId = 5;
+  private nextBusId = 0;
+  private nextSendId = 0;
+  private nextInsertId = 0;
+  private nextPatternId = 2;
+  private nextLaneId = 5;
+  private nextClipId = 1;
+  private nextAudioId = 1;
+  private nextInstance = 1;
+  private inventedAudio = 0;
+
+  private openEditors = new Set<string>();
+  private clapStates = new Map<string, string>();
+  private project: ProjectInfo = projectInfo(null);
+  private saved = new Map<string, MockSession>();
+  private lastSavedPath: string | null = null;
+
+  private assets: AssetStatus[] = [
+    {
+      id: 'salamander-piano',
+      name: 'Salamander Grand Piano',
+      state: 'ready',
+      progress: 1,
+      bytesTotal: 148_000_000,
+      bytesDone: 148_000_000,
+      error: null,
+    },
+  ];
+
+  async getUiSnapshot(): Promise<UiSnapshot> {
+    return structuredClone(MOCK_SNAPSHOT);
+  }
+
+  // --- hosted plugins ------------------------------------------------------
+
+  async getClapPlugins(): Promise<ClapPluginInfoDto[]> {
+    return structuredClone(CLAP_PLUGINS) as ClapPluginInfoDto[];
+  }
+
+  async getVst3Plugins(): Promise<Vst3PluginInfoDto[]> {
+    return structuredClone(VST3_PLUGINS) as Vst3PluginInfoDto[];
+  }
+
+  async getMasterEffects(): Promise<ClapPluginInfoDto[]> {
+    return CLAP_PLUGINS.filter((plugin) => plugin.kind === 'audio-effect').map((p) => ({ ...p }));
+  }
+
+  async getVst3MasterEffects(): Promise<Vst3PluginInfoDto[]> {
+    return VST3_PLUGINS.filter(
+      (plugin) => plugin.kind === 'audio-effect' || plugin.kind === 'unknown',
+    ).map((p) => ({ ...p }));
+  }
+
+  private static targetKey(target: ClapTarget): string {
+    return target.slot === 'master' ? 'master' : `track:${target.index}`;
+  }
+
+  private requireClapSlot(target: ClapTarget): ClapSlot {
+    const slot = target.slot === 'master' ? this.masterClap : this.track(target.index).clap;
+    if (!slot) {
+      throw new Error(
+        target.slot === 'master'
+          ? 'there is no plugin on the master insert'
+          : `track ${target.index} has no hosted plugin`,
+      );
+    }
+    return slot;
+  }
+
+  private requireVst3Slot(target: ClapTarget): Vst3Slot {
+    const slot = target.slot === 'master' ? this.masterVst3 : this.track(target.index).vst3;
+    if (!slot) {
+      throw new Error(
+        target.slot === 'master'
+          ? 'there is no VST3 plugin on the master insert'
+          : `track ${target.index} has no hosted VST3 plugin`,
+      );
+    }
+    return slot;
+  }
+
+  async openClapGui(target: ClapTarget): Promise<ClapGuiStatus> {
+    const slot = this.requireClapSlot(target);
+    if (!slot.hasEditor) throw new Error(`${slot.name} has no editor.`);
+    const key = MockBackend.targetKey(target);
+    this.openEditors.add(key);
+    console.info(`[mock] open_clap_gui ${key}: no native window outside Tauri`);
+    return { open: true, hasEditor: true, pluginId: slot.pluginId, width: 400, height: 250 };
+  }
+
+  async closeClapGui(target: ClapTarget): Promise<ClapGuiStatus> {
+    const slot = this.requireClapSlot(target);
+    this.openEditors.delete(MockBackend.targetKey(target));
+    return { open: false, hasEditor: slot.hasEditor, pluginId: slot.pluginId, width: 0, height: 0 };
+  }
+
+  async openVst3Gui(target: ClapTarget): Promise<Vst3GuiStatus> {
+    const slot = this.requireVst3Slot(target);
+    if (!slot.hasEditor) throw new Error('This plugin has no editor.');
+    this.openEditors.add(MockBackend.targetKey(target));
+    return { open: true, hasEditor: true, cid: slot.cid, width: 800, height: 600 };
+  }
+
+  async closeVst3Gui(target: ClapTarget): Promise<Vst3GuiStatus> {
+    const slot = this.requireVst3Slot(target);
+    this.openEditors.delete(MockBackend.targetKey(target));
+    return { open: false, hasEditor: slot.hasEditor, cid: slot.cid, width: 0, height: 0 };
+  }
+
+  async saveClapState(target: ClapTarget): Promise<string> {
+    const slot = this.requireClapSlot(target);
+    return btoa(`mock-clap-state:${slot.pluginId}`);
+  }
+
+  async loadClapState(target: ClapTarget, stateBase64: string): Promise<void> {
+    this.requireClapSlot(target);
+    this.clapStates.set(MockBackend.targetKey(target), stateBase64);
+  }
+
+  /** Whether one editor is up. Exposed so a view test can assert it. */
+  isGuiOpen(target: ClapTarget): boolean {
+    return this.openEditors.has(MockBackend.targetKey(target));
+  }
+
+  // --- the transport -------------------------------------------------------
+
+  async transportPlay(): Promise<void> {
+    this.playing = true;
+  }
+
+  async transportStop(): Promise<void> {
+    this.playing = false;
+  }
+
+  async transportSeek(samplePos: number): Promise<void> {
+    this.samplePos = Math.max(0, Math.round(samplePos));
+  }
+
+  async setPlayMode(mode: PlayMode): Promise<SequencerState> {
+    if (mode !== 'pat' && mode !== 'song') {
+      throw new Error(`'${mode}' is not a play mode; expected 'pat' or 'song'`);
+    }
+    this.playMode = mode;
+    return this.sequencerState();
+  }
+
+  async noteOn(key: number, velocity: number): Promise<void> {
+    console.info(`[mock] note_on key=${key} velocity=${velocity.toFixed(2)}`);
+  }
+
+  async noteOff(key: number): Promise<void> {
+    console.info(`[mock] note_off key=${key}`);
+  }
+
+  // --- instruments ---------------------------------------------------------
+
+  private sourceList(): SourceDto[] {
+    const current = this.tracks[this.selected]?.sourceId;
+    const scanned = CLAP_PLUGINS.filter((plugin) => plugin.kind === 'instrument').map<
+      Omit<SourceDto, 'selected'>
+    >((plugin) => ({
+      id: `clap:${plugin.id}`,
+      label: plugin.name || plugin.id,
+      description: plugin.vendor ? `${plugin.vendor} — ${plugin.id}` : plugin.id,
+      kind: 'clap',
+      vendor: plugin.vendor,
+      bundlePath: plugin.path,
+      pluginId: plugin.id,
+      takesNotes: true,
+    }));
+    // Built-ins, then samplers, then CLAP instruments -- and **no VST3**, which
+    // reach the UI through `get_vst3_plugins` instead. Mirrors `state.rs`.
+    return [...INTERNAL_SOURCES, ...scanned].map((source) => ({
+      ...source,
+      selected: source.id === current,
+    }));
+  }
+
+  async getSources(): Promise<SourceDto[]> {
+    return this.sourceList();
+  }
+
+  async setSource(id: string): Promise<SourceDto[]> {
+    const wanted = this.sourceList().find((source) => source.id === id);
+    if (!wanted) throw new Error(`unknown source '${id}'`);
+    if (wanted.kind === 'clap' && wanted.bundlePath && wanted.pluginId) {
+      await this.setTrackSourceClap(this.selected, wanted.bundlePath, wanted.pluginId);
+    } else {
+      await this.setTrackSource(this.selected, id);
+    }
+    return this.getSources();
+  }
+
+  async setTrackSource(track: number, source: string): Promise<MixerState> {
+    const wanted = INTERNAL_SOURCES.find((entry) => entry.id === source);
+    if (!wanted) throw new Error(`unknown source '${source}'`);
+    const def = this.track(track);
+    def.sourceId = wanted.id;
+    def.sourceLabel = wanted.label;
+    def.name = wanted.label;
+    def.clap = null;
+    def.vst3 = null;
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
+    return this.mixerState();
+  }
+
+  private findClap(bundlePath: string, pluginId: string, kind: ClapPluginInfoDto['kind']) {
+    const plugin = CLAP_PLUGINS.find((e) => e.path === bundlePath && e.id === pluginId);
+    if (!plugin) throw new Error(`no plugin '${pluginId}' in bundle ${bundlePath}`);
+    if (plugin.kind !== kind) {
+      throw new Error(`${plugin.name || plugin.id} is a ${plugin.kind}, not a ${kind}`);
+    }
+    return plugin;
+  }
+
+  private newClapSlot(plugin: ClapPluginInfoDto): ClapSlot {
+    return {
+      instance: this.nextInstance++,
+      pluginId: plugin.id,
+      name: plugin.name || plugin.id,
+      bundlePath: plugin.path,
+      hasEditor: plugin.id !== FIXTURE_GAIN_ID,
+      guiOpen: false,
+    };
+  }
+
+  async setTrackSourceClap(
+    track: number,
+    bundlePath: string,
+    pluginId: string,
+  ): Promise<MixerState> {
+    const plugin = this.findClap(bundlePath, pluginId, 'instrument');
+    const def = this.track(track);
+    def.clap = this.newClapSlot(plugin);
+    def.vst3 = null;
+    def.sourceId = `clap:${plugin.id}`;
+    def.sourceLabel = def.clap.name;
+    def.name = def.clap.name;
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
+    return this.mixerState();
+  }
+
+  private findVst3(modulePath: string, cid: string, wanted: 'instrument' | 'audio-effect') {
+    const plugin = VST3_PLUGINS.find((e) => e.path === modulePath && e.id === cid);
+    if (!plugin) throw new Error(`no plugin class ${cid} in module ${modulePath}`);
+    // `unknown` is accepted as an effect: Rust's bus-layout check is what
+    // actually decides, and a stricter rule here would be a fiction.
+    const usable =
+      plugin.kind === wanted || (wanted === 'audio-effect' && plugin.kind === 'unknown');
+    if (!usable) throw new Error(`${plugin.name || plugin.id} is a ${plugin.kind}, not a ${wanted}`);
+    return plugin;
+  }
+
+  private newVst3Slot(plugin: Vst3PluginInfoDto): Vst3Slot {
+    return {
+      instance: this.nextInstance++,
+      cid: plugin.id,
+      name: plugin.name || plugin.id,
+      vendor: plugin.vendor,
+      modulePath: plugin.path,
+      hasEditor: plugin.kind !== 'unknown',
+      guiOpen: false,
+    };
+  }
+
+  async setTrackSourceVst3(track: number, modulePath: string, cid: string): Promise<MixerState> {
+    const plugin = this.findVst3(modulePath, cid, 'instrument');
+    const def = this.track(track);
+    def.vst3 = this.newVst3Slot(plugin);
+    def.clap = null;
+    def.sourceId = `vst3:${plugin.id}`;
+    def.sourceLabel = def.vst3.name;
+    def.name = def.vst3.name;
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
+    return this.mixerState();
+  }
+
+  // --- the mixer -----------------------------------------------------------
+
+  private track(index: number): TrackDto {
+    const track = this.tracks[index];
+    if (!track) throw new Error(`there is no track ${index}`);
+    return track;
+  }
+
+  private bus(index: number): MockBus {
+    const bus = this.buses[index];
+    if (!bus) throw new Error(`there is no bus ${index}`);
+    return bus;
+  }
+
+  private checkGain(db: number): number {
+    if (!Number.isFinite(db) || db < MIN_GAIN_DB || db > MAX_GAIN_DB) {
+      throw new Error(`gain ${db} dB is not a number between ${MIN_GAIN_DB} and ${MAX_GAIN_DB}`);
+    }
+    return db;
+  }
+
+  private checkPan(pan: number): number {
+    if (!Number.isFinite(pan) || pan < -1 || pan > 1) {
+      throw new Error(`pan ${pan} is not a number between -1.0 and 1.0`);
+    }
+    return pan;
+  }
+
+  /** Solo is resolved here, across tracks *and* buses, exactly as Rust does. */
+  private mixerState(): MixerState {
+    const anySoloed =
+      this.tracks.some((track) => track.soloed) || this.buses.some((bus) => bus.soloed);
+    const withClapGui = (slot: ClapSlot | null, target: ClapTarget): ClapSlot | null =>
+      slot ? { ...slot, guiOpen: this.openEditors.has(MockBackend.targetKey(target)) } : null;
+    const withVst3Gui = (slot: Vst3Slot | null, target: ClapTarget): Vst3Slot | null =>
+      slot ? { ...slot, guiOpen: this.openEditors.has(MockBackend.targetKey(target)) } : null;
+
+    const master: MasterDto = {
+      gainDb: this.masterGainDb,
+      clap: withClapGui(this.masterClap, { slot: 'master' }),
+      vst3: withVst3Gui(this.masterVst3, { slot: 'master' }),
+      missing: null,
+      inserts: structuredClone(this.masterInserts),
+    };
+
+    return {
+      tracks: this.tracks.map((track, index) => ({
+        ...track,
+        index,
+        silenced: anySoloed ? !track.soloed : track.muted,
+        selected: index === this.selected,
+        clap: withClapGui(track.clap, { slot: 'track', index }),
+        vst3: withVst3Gui(track.vst3, { slot: 'track', index }),
+        inserts: structuredClone(track.inserts),
+      })),
+      buses: this.buses.map<BusDto>((bus, index) => ({
+        index,
+        id: bus.id,
+        name: bus.name,
+        ...(bus.color === null ? {} : { color: bus.color }),
+        gainDb: bus.gainDb,
+        pan: bus.pan,
+        muted: bus.muted,
+        soloed: bus.soloed,
+        silenced: anySoloed ? !bus.soloed : bus.muted,
+        inserts: structuredClone(bus.inserts),
+      })),
+      sends: this.sends.map<SendDto>((send) => ({
+        id: send.id,
+        sourceKind: send.sourceKind,
+        sourceIndex: send.sourceIndex,
+        dest: send.dest,
+        level: send.level,
+        levelDb: send.level <= 0 ? MIN_GAIN_DB : 20 * Math.log10(send.level),
+        pre: send.pre,
+      })),
+      master,
+      selected: this.selected,
+      maxTracks: MAX_TRACKS,
+      maxBuses: MAX_BUSES,
+      maxInserts: MAX_INSERTS,
+      minGainDb: MIN_GAIN_DB,
+      maxGainDb: MAX_GAIN_DB,
+      maxSendLevel: MAX_SEND_LEVEL,
+      maxSendDb: MAX_SEND_DB,
+    };
+  }
+
+  async getTracks(): Promise<MixerState> {
+    return this.mixerState();
+  }
+
+  async setTrackGain(track: number, db: number): Promise<MixerState> {
+    this.track(track).gainDb = this.checkGain(db);
+    return this.mixerState();
+  }
+
+  async setTrackPan(track: number, pan: number): Promise<MixerState> {
+    this.track(track).pan = this.checkPan(pan);
+    return this.mixerState();
+  }
+
+  async setTrackMute(track: number, muted: boolean): Promise<MixerState> {
+    this.track(track).muted = muted;
+    return this.mixerState();
+  }
+
+  async setTrackSolo(track: number, soloed: boolean): Promise<MixerState> {
+    this.track(track).soloed = soloed;
+    return this.mixerState();
+  }
+
+  async setMasterGain(db: number): Promise<MixerState> {
+    this.masterGainDb = this.checkGain(db);
+    return this.mixerState();
+  }
+
+  async setSelectedTrack(track: number): Promise<MixerState> {
+    this.track(track);
+    this.selected = track;
+    return this.mixerState();
+  }
+
+  async addTrack(source: string, name?: string): Promise<MixerState> {
+    if (this.tracks.length >= MAX_TRACKS) {
+      throw new Error(`a project may have at most ${MAX_TRACKS} tracks`);
+    }
+    const wanted = INTERNAL_SOURCES.find((entry) => entry.id === source);
+    if (!wanted) throw new Error(`unknown source '${source}'`);
+    const index = this.tracks.length;
+    this.tracks.push({
+      index,
+      id: this.nextTrackId++,
+      name: name ?? wanted.label,
+      sourceId: wanted.id,
+      sourceLabel: wanted.label,
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      selected: false,
+      clap: null,
+      vst3: null,
+      missing: null,
+      inserts: [],
+    });
+    // A new rack channel gets a grid in every pattern, the way the engine's
+    // `PatternSet::add_channel` does -- otherwise the row would be missing
+    // until something else touched the pattern.
+    for (const pattern of this.patterns) {
+      if (!pattern.channels.some((clip) => clip.channel === index)) {
+        pattern.channels.push({
+          channel: index,
+          mode: 'steps',
+          steps: {
+            key: DEFAULT_ROW_KEYS[index] ?? 60,
+            label: '',
+            steps: Array.from({ length: pattern.steps }, () => ({
+              on: false,
+              velocity: STEP_VELOCITY,
+            })),
+          },
+          notes: [],
+        });
+      }
+    }
+    return this.mixerState();
+  }
+
+  async removeTrack(track: number): Promise<MixerState> {
+    this.track(track);
+    if (this.tracks.length === 1) throw new Error('a project must keep at least one track');
+    this.tracks.splice(track, 1);
+    // A track index *is* a note channel, so removing one renumbers every
+    // pattern -- the engine does this rather than leaving the arrangement
+    // pointing at the wrong instrument.
+    for (const pattern of this.patterns) {
+      pattern.channels = pattern.channels
+        .filter((clip) => clip.channel !== track)
+        .map((clip) => (clip.channel > track ? { ...clip, channel: clip.channel - 1 } : clip));
+    }
+    this.sends = this.sends
+      .filter((send) => !(send.sourceKind === 'track' && send.sourceIndex === track))
+      .map((send) =>
+        send.sourceKind === 'track' && send.sourceIndex > track
+          ? { ...send, sourceIndex: send.sourceIndex - 1 }
+          : send,
+      );
+    this.openEditors = MockBackend.reindexEditors(this.openEditors, track);
+    if (this.selected >= this.tracks.length) this.selected = this.tracks.length - 1;
+    return this.mixerState();
+  }
+
+  /** Drop `removed`'s editor key and shift every key above it down by one. */
+  private static reindexEditors(open: ReadonlySet<string>, removed: number): Set<string> {
+    const next = new Set<string>();
+    for (const key of open) {
+      if (key === 'master') {
+        next.add(key);
+        continue;
+      }
+      const index = Number.parseInt(key.slice('track:'.length), 10);
+      if (index === removed) continue;
+      next.add(
+        MockBackend.targetKey({ slot: 'track', index: index > removed ? index - 1 : index }),
+      );
+    }
+    return next;
+  }
+
+  async setMasterEffectClap(bundlePath: string, pluginId: string): Promise<MixerState> {
+    this.masterClap = this.newClapSlot(this.findClap(bundlePath, pluginId, 'audio-effect'));
+    this.masterVst3 = null;
+    this.openEditors.delete('master');
+    return this.mixerState();
+  }
+
+  async setMasterEffectVst3(modulePath: string, cid: string): Promise<MixerState> {
+    this.masterVst3 = this.newVst3Slot(this.findVst3(modulePath, cid, 'audio-effect'));
+    this.masterClap = null;
+    this.openEditors.delete('master');
+    return this.mixerState();
+  }
+
+  async clearMasterEffect(): Promise<MixerState> {
+    this.masterClap = null;
+    this.masterVst3 = null;
+    this.openEditors.delete('master');
+    return this.mixerState();
+  }
+
+  // --- buses, sends and inserts --------------------------------------------
+
+  async getEffects(): Promise<EffectInfoDto[]> {
+    return structuredClone(EFFECTS) as EffectInfoDto[];
+  }
+
+  async addBus(name?: string): Promise<MixerState> {
+    if (this.buses.length >= MAX_BUSES) {
+      throw new Error(`a project may have at most ${MAX_BUSES} buses`);
+    }
+    const id = this.nextBusId++;
+    this.buses.push({
+      id,
+      name: name?.trim() || `Bus ${this.buses.length + 1}`,
+      color: null,
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      inserts: [],
+    });
+    return this.mixerState();
+  }
+
+  async removeBus(bus: number): Promise<MixerState> {
+    this.bus(bus);
+    this.buses.splice(bus, 1);
+    // A bus index is a position, and a send left pointing at the bus that moved
+    // into the gap would silently reroute somebody's reverb.
+    this.sends = this.sends
+      .filter(
+        (send) => send.dest !== bus && !(send.sourceKind === 'bus' && send.sourceIndex === bus),
+      )
+      .map((send) => ({
+        ...send,
+        dest: send.dest > bus ? send.dest - 1 : send.dest,
+        sourceIndex:
+          send.sourceKind === 'bus' && send.sourceIndex > bus
+            ? send.sourceIndex - 1
+            : send.sourceIndex,
+      }));
+    return this.mixerState();
+  }
+
+  async renameBus(bus: number, name: string): Promise<MixerState> {
+    if (!name.trim()) throw new Error('a bus needs a name');
+    this.bus(bus).name = name.trim();
+    return this.mixerState();
+  }
+
+  async setBusColor(bus: number, color: string | null): Promise<MixerState> {
+    this.bus(bus).color = color && color.trim() ? color.trim() : null;
+    return this.mixerState();
+  }
+
+  async setBusGain(bus: number, db: number): Promise<MixerState> {
+    this.bus(bus).gainDb = this.checkGain(db);
+    return this.mixerState();
+  }
+
+  async setBusPan(bus: number, pan: number): Promise<MixerState> {
+    this.bus(bus).pan = this.checkPan(pan);
+    return this.mixerState();
+  }
+
+  async setBusMute(bus: number, muted: boolean): Promise<MixerState> {
+    this.bus(bus).muted = muted;
+    return this.mixerState();
+  }
+
+  async setBusSolo(bus: number, soloed: boolean): Promise<MixerState> {
+    this.bus(bus).soloed = soloed;
+    return this.mixerState();
+  }
+
+  /** Every bus `from` reaches, directly or through others. */
+  private reaches(from: number, seen = new Set<number>()): Set<number> {
+    for (const send of this.sends) {
+      if (send.sourceKind !== 'bus' || send.sourceIndex !== from) continue;
+      if (seen.has(send.dest)) continue;
+      seen.add(send.dest);
+      this.reaches(send.dest, seen);
+    }
+    return seen;
+  }
+
+  async addSend(
+    sourceKind: 'track' | 'bus',
+    sourceIndex: number,
+    dest: number,
+  ): Promise<MixerState> {
+    this.bus(dest);
+    if (sourceKind === 'track') this.track(sourceIndex);
+    else this.bus(sourceIndex);
+    if (sourceKind === 'bus' && sourceIndex === dest) {
+      throw new Error(`bus ${this.bus(dest).name} cannot send to itself`);
+    }
+    if (
+      this.sends.some(
+        (send) =>
+          send.sourceKind === sourceKind && send.sourceIndex === sourceIndex && send.dest === dest,
+      )
+    ) {
+      throw new Error('that send already exists');
+    }
+    if (sourceKind === 'bus' && this.reaches(dest).has(sourceIndex)) {
+      throw new Error(
+        `that would feed ${this.bus(sourceIndex).name} back into itself through ${this.bus(dest).name}`,
+      );
+    }
+    this.sends.push({ id: this.nextSendId++, sourceKind, sourceIndex, dest, level: 1, pre: false });
+    return this.mixerState();
+  }
+
+  private send(sendId: number): MockSend {
+    const send = this.sends.find((entry) => entry.id === sendId);
+    if (!send) throw new Error(`there is no send ${sendId}`);
+    return send;
+  }
+
+  async removeSend(sendId: number): Promise<MixerState> {
+    this.send(sendId);
+    this.sends = this.sends.filter((send) => send.id !== sendId);
+    return this.mixerState();
+  }
+
+  async setSendLevel(sendId: number, level: number): Promise<void> {
+    if (!Number.isFinite(level) || level < 0 || level > MAX_SEND_LEVEL) {
+      throw new Error(`send level ${level} is not between 0 and ${MAX_SEND_LEVEL}`);
+    }
+    this.send(sendId).level = level;
+  }
+
+  async setSendPre(sendId: number, pre: boolean): Promise<void> {
+    this.send(sendId).pre = pre;
+  }
+
+  private chain(target: InsertTarget): InsertDto[] {
+    switch (target.kind) {
+      case 'master':
+        return this.masterInserts;
+      case 'bus':
+        return this.bus(target.index).inserts;
+      default:
+        return this.track(target.index).inserts;
+    }
+  }
+
+  /** Renumber a chain after an edit: `index` is a position, and positions move. */
+  private static renumber(chain: InsertDto[]): void {
+    chain.forEach((insert, index) => {
+      insert.index = index;
+    });
+  }
+
+  async addInsert(
+    target: InsertTarget,
+    typeId: string,
+    position?: number,
+  ): Promise<MixerState> {
+    const info = effectInfo(typeId);
+    const chain = this.chain(target);
+    if (chain.length >= MAX_INSERTS) {
+      throw new Error(`a chain may hold at most ${MAX_INSERTS} effects`);
+    }
+    const insert: InsertDto = {
+      index: 0,
+      id: this.nextInsertId++,
+      typeId,
+      name: info.name,
+      bypassed: false,
+      params: info.params.map<ParamValueDto>((def) => ({ id: def.id, value: def.defaultValue })),
+      readouts: info.readouts.map<ParamValueDto>((def) => ({ id: def.id, value: 0 })),
+    };
+    const at = position === undefined ? chain.length : Math.min(chain.length, Math.max(0, position));
+    chain.splice(at, 0, insert);
+    MockBackend.renumber(chain);
+    return this.mixerState();
+  }
+
+  async removeInsert(target: InsertTarget, index: number): Promise<MixerState> {
+    const chain = this.chain(target);
+    if (!chain[index]) throw new Error(`there is no insert ${index} on that chain`);
+    chain.splice(index, 1);
+    MockBackend.renumber(chain);
+    return this.mixerState();
+  }
+
+  async moveInsert(target: InsertTarget, from: number, to: number): Promise<MixerState> {
+    const chain = this.chain(target);
+    const insert = chain[from];
+    if (!insert) throw new Error(`there is no insert ${from} on that chain`);
+    if (to < 0 || to >= chain.length) throw new Error(`there is no position ${to} on that chain`);
+    chain.splice(from, 1);
+    chain.splice(to, 0, insert);
+    MockBackend.renumber(chain);
+    return this.mixerState();
+  }
+
+  async setInsertParam(
+    target: InsertTarget,
+    index: number,
+    paramId: string,
+    value: number,
+  ): Promise<number> {
+    const chain = this.chain(target);
+    const insert = chain[index];
+    if (!insert) throw new Error(`there is no insert ${index} on that chain`);
+    const def = effectInfo(insert.typeId).params.find((entry) => entry.id === paramId);
+    if (!def) throw new Error(`${insert.name} has no parameter '${paramId}'`);
+    // Clamp, then snap to the step grid, and answer with what was stored -- the
+    // whole reason this command has a return value.
+    const clamped = Math.min(def.max, Math.max(def.min, value));
+    const stored =
+      def.step && def.step > 0
+        ? Math.min(def.max, def.min + Math.round((clamped - def.min) / def.step) * def.step)
+        : clamped;
+    const slot = insert.params.find((entry) => entry.id === paramId);
+    if (slot) slot.value = stored;
+    else insert.params.push({ id: paramId, value: stored });
+    if (paramId === 'bypass') insert.bypassed = stored >= 0.5;
+    return stored;
+  }
+
+  async setInsertBypass(
+    target: InsertTarget,
+    index: number,
+    bypassed: boolean,
+  ): Promise<MixerState> {
+    const insert = this.chain(target)[index];
+    if (!insert) throw new Error(`there is no insert ${index} on that chain`);
+    insert.bypassed = bypassed;
+    const slot = insert.params.find((entry) => entry.id === 'bypass');
+    if (slot) slot.value = bypassed ? 1 : 0;
+    return this.mixerState();
+  }
+
+  /**
+   * Plausible meters: a compressor's gain reduction breathes while the
+   * transport runs and rests at zero when it does not, so the bar in the
+   * inspector is worth looking at without an engine behind it.
+   */
+  async getChainReadouts(target: InsertTarget): Promise<InsertReadoutsDto[]> {
+    const now = performance.now() / 1000;
+    return this.chain(target).map<InsertReadoutsDto>((insert, index) => ({
+      index,
+      id: insert.id,
+      readouts: effectInfo(insert.typeId).readouts.map<ParamValueDto>((def) => {
+        if (!this.playing || insert.bypassed) return { id: def.id, value: 0 };
+        if (def.id === 'gr') {
+          return { id: def.id, value: 3 + 4 * Math.abs(Math.sin(now * 2.1 + index)) };
+        }
+        if (def.id === 'gr_max') return { id: def.id, value: 7.4 };
+        if (def.id === 'latency') return { id: def.id, value: 32 };
+        return { id: def.id, value: 0 };
+      }),
+    }));
+  }
+
+  // --- patterns ------------------------------------------------------------
+
+  private pattern(id: number): PatternDto {
+    const pattern = this.patterns.find((entry) => entry.id === id);
+    if (!pattern) throw new Error(`there is no pattern ${id}`);
+    return pattern;
+  }
+
+  private patternSet(): PatternSetDto {
+    return {
+      patterns: this.patterns.map((pattern) => ({
+        id: pattern.id,
+        name: pattern.name,
+        ...(pattern.color ? { color: pattern.color } : {}),
+        steps: pattern.steps,
+        lengthTicks: pattern.steps * TICKS_PER_STEP,
+        channelCount: pattern.channels.length,
+        hitCount: pattern.channels.reduce(
+          (total, clip) => total + (clip.steps?.steps.filter((cell) => cell.on).length ?? 0),
+          0,
+        ),
+        noteCount: pattern.channels.reduce((total, clip) => total + clip.notes.length, 0),
+      })),
+      activeId: this.activePattern,
+      active: this.derivedPattern(this.pattern(this.activePattern)),
+      maxPatterns: MAX_PATTERNS,
+    };
+  }
+
+  /** `mode` is derived on the way out, exactly as `ChannelClipDto::of` does. */
+  private derivedPattern(pattern: PatternDto): PatternDto {
+    return structuredClone({
+      ...pattern,
+      channels: pattern.channels.map((clip) => ({
+        ...clip,
+        mode: clip.notes.length > 0 ? ('roll' as const) : ('steps' as const),
+      })),
+    });
+  }
+
+  private playlist(): PlaylistDto {
+    const endTicks = this.clips.reduce((end, clip) => Math.max(end, clip.start + clip.length), 0);
+    return {
+      tracks: this.playlistTracks.map((track) => ({ ...track })),
+      clips: this.clips.map((clip) => ({ ...clip })),
+      endTicks,
+      maxTracks: MAX_PLAYLIST_TRACKS,
+      maxClips: MAX_CLIPS,
+      maxTicks: MAX_SONG_TICKS,
+    };
+  }
+
+  private sequencerState(): SequencerState {
+    return {
+      bpm: this.bpm,
+      sampleRate: SAMPLE_RATE,
+      playMode: this.playMode,
+      ppq: PPQ,
+      ticksPerStep: TICKS_PER_STEP,
+      ticksPerBar: TICKS_PER_BAR,
+      patternSet: this.patternSet(),
+      playlist: this.playlist(),
+    };
+  }
+
+  async getPattern(): Promise<SequencerState> {
+    return this.sequencerState();
+  }
+
+  /** Validates the way `Pattern::try_from` does, so the error path is reachable. */
+  async setPattern(pattern: PatternDto): Promise<SequencerState> {
+    if (!PATTERN_LENGTHS.includes(pattern.steps)) {
+      throw new Error(`a pattern must be 16, 32 or 64 steps long, got ${pattern.steps}`);
+    }
+    if (pattern.channels.length > MAX_TRACKS) {
+      throw new Error(`a pattern may speak for at most ${MAX_TRACKS} channels`);
+    }
+    const seen = new Set<number>();
+    const limit = pattern.steps * TICKS_PER_STEP;
+    for (const clip of pattern.channels) {
+      if (seen.has(clip.channel)) throw new Error(`two clips on channel ${clip.channel}`);
+      seen.add(clip.channel);
+      if (clip.steps && clip.steps.steps.length !== pattern.steps) {
+        throw new Error(
+          `channel ${clip.channel} sent ${clip.steps.steps.length} cells for a ${pattern.steps}-step pattern`,
+        );
+      }
+      if (clip.steps && (clip.steps.key < 0 || clip.steps.key > 127)) {
+        throw new Error(`channel ${clip.channel} has key ${clip.steps.key}, outside 0..127`);
+      }
+      if (clip.notes.length > MAX_NOTES) {
+        throw new Error(`channel ${clip.channel} has more than ${MAX_NOTES} notes`);
+      }
+      for (const note of clip.notes) {
+        if (note.key < 0 || note.key > 127) throw new Error(`note key ${note.key} is outside 0..127`);
+        if (note.start < 0 || note.length < 1 || note.start + note.length > limit) {
+          throw new Error(`a note does not fit a ${limit}-tick pattern`);
+        }
+        if (!Number.isFinite(note.velocity) || note.velocity < 0 || note.velocity > 1) {
+          throw new Error(`velocity ${note.velocity} is outside 0..1`);
+        }
+      }
+    }
+    const id = pattern.id === 0 ? this.activePattern : pattern.id;
+    const existing = this.pattern(id);
+    const index = this.patterns.indexOf(existing);
+    this.patterns[index] = structuredClone({ ...pattern, id, name: pattern.name || existing.name });
+    return this.sequencerState();
+  }
+
+  async addPattern(name?: string): Promise<SequencerState> {
+    if (this.patterns.length >= MAX_PATTERNS) {
+      throw new Error(`a project may hold at most ${MAX_PATTERNS} patterns`);
+    }
+    const id = this.nextPatternId++;
+    this.patterns.push(
+      emptyPattern(
+        id,
+        name?.trim() || `Pattern ${id}`,
+        this.tracks.map((_, index) => index),
+      ),
+    );
+    return this.sequencerState();
+  }
+
+  async clonePattern(patternId: number, name?: string): Promise<SequencerState> {
+    const source = this.pattern(patternId);
+    if (this.patterns.length >= MAX_PATTERNS) {
+      throw new Error(`a project may hold at most ${MAX_PATTERNS} patterns`);
+    }
+    const id = this.nextPatternId++;
+    const copy = structuredClone({ ...source, id, name: name?.trim() || `${source.name} copy` });
+    this.patterns.splice(this.patterns.indexOf(source) + 1, 0, copy);
+    return this.sequencerState();
+  }
+
+  async removePattern(patternId: number): Promise<SequencerState> {
+    this.pattern(patternId);
+    if (this.patterns.length === 1) throw new Error('a project must keep at least one pattern');
+    this.patterns = this.patterns.filter((pattern) => pattern.id !== patternId);
+    // The clips go with it: a set without the pattern and an arrangement still
+    // naming it is a state no caller should be able to publish.
+    this.clips = this.clips.filter((clip) => clip.patternId !== patternId);
+    if (this.activePattern === patternId) this.activePattern = this.patterns[0]!.id;
+    return this.sequencerState();
+  }
+
+  async renamePattern(patternId: number, name: string): Promise<SequencerState> {
+    if (!name.trim()) throw new Error('a pattern needs a name');
+    this.pattern(patternId).name = name.trim();
+    return this.sequencerState();
+  }
+
+  async setPatternColor(patternId: number, color: string | null): Promise<SequencerState> {
+    const pattern = this.pattern(patternId);
+    if (color && color.trim()) pattern.color = color.trim();
+    else delete pattern.color;
+    return this.sequencerState();
+  }
+
+  async setPatternLength(patternId: number, steps: number): Promise<SequencerState> {
+    if (!PATTERN_LENGTHS.includes(steps)) {
+      throw new Error(`a pattern must be 16, 32 or 64 steps long, got ${steps}`);
+    }
+    const pattern = this.pattern(patternId);
+    const limit = steps * TICKS_PER_STEP;
+    for (const clip of pattern.channels) {
+      const hanging = clip.notes.find((note) => note.start < limit && note.start + note.length > limit);
+      if (hanging) {
+        throw new Error(
+          `a note on channel ${clip.channel} would hang past the end of a ${steps}-step pattern`,
+        );
+      }
+    }
+    // Shortening is not destructive: cells past the new end are kept and simply
+    // not played, so lengthening again gives them back.
+    for (const clip of pattern.channels) {
+      if (!clip.steps) continue;
+      const cells = clip.steps.steps.slice(0, steps);
+      while (cells.length < steps) cells.push({ on: false, velocity: STEP_VELOCITY });
+      clip.steps = { ...clip.steps, steps: cells };
+    }
+    pattern.steps = steps;
+    return this.sequencerState();
+  }
+
+  async setActivePattern(patternId: number): Promise<SequencerState> {
+    this.pattern(patternId);
+    this.activePattern = patternId;
+    return this.sequencerState();
+  }
+
+  async setBpm(bpm: number): Promise<number> {
+    if (!Number.isFinite(bpm) || bpm < MIN_BPM || bpm > MAX_BPM) {
+      throw new Error(`tempo ${bpm} is not a number between ${MIN_BPM} and ${MAX_BPM}`);
+    }
+    this.bpm = bpm;
+    return this.bpm;
+  }
+
+  // --- the playlist --------------------------------------------------------
+
+  private lane(index: number): PlaylistTrackDto {
+    const lane = this.playlistTracks[index];
+    if (!lane) throw new Error(`there is no playlist track ${index}`);
+    return lane;
+  }
+
+  async addPlaylistTrack(name?: string): Promise<SequencerState> {
+    if (this.playlistTracks.length >= MAX_PLAYLIST_TRACKS) {
+      throw new Error(`an arrangement may have at most ${MAX_PLAYLIST_TRACKS} lanes`);
+    }
+    this.playlistTracks.push({
+      id: this.nextLaneId++,
+      name: name?.trim() || `Track ${this.playlistTracks.length + 1}`,
+      muted: false,
+    });
+    return this.sequencerState();
+  }
+
+  async removePlaylistTrack(track: number): Promise<SequencerState> {
+    this.lane(track);
+    if (this.playlistTracks.length === 1) {
+      throw new Error('an arrangement must keep at least one lane');
+    }
+    this.playlistTracks.splice(track, 1);
+    this.clips = this.clips
+      .filter((clip) => clip.track !== track)
+      .map((clip) => (clip.track > track ? { ...clip, track: clip.track - 1 } : clip));
+    return this.sequencerState();
+  }
+
+  async renamePlaylistTrack(track: number, name: string): Promise<SequencerState> {
+    if (!name.trim()) throw new Error('a lane needs a name');
+    this.lane(track).name = name.trim();
+    return this.sequencerState();
+  }
+
+  async setPlaylistTrackMute(track: number, muted: boolean): Promise<SequencerState> {
+    this.lane(track).muted = muted;
+    return this.sequencerState();
+  }
+
+  private checkClipBounds(start: number, length: number): void {
+    if (!Number.isInteger(start) || start < 0) throw new Error(`${start} is not a start tick`);
+    if (!Number.isInteger(length) || length <= 0) throw new Error('a clip cannot be zero long');
+    if (start + length > MAX_SONG_TICKS) throw new Error('that clip runs past the end of the song');
+    if (this.clips.length >= MAX_CLIPS) {
+      throw new Error(`an arrangement may hold at most ${MAX_CLIPS} clips`);
+    }
+  }
+
+  async addPatternClip(
+    patternId: number,
+    track: number,
+    start: number,
+    length?: number,
+  ): Promise<SequencerState> {
+    this.pattern(patternId);
+    this.lane(track);
+    const span = length ?? DEFAULT_CLIP_TICKS;
+    this.checkClipBounds(start, span);
+    this.clips.push({ id: this.nextClipId++, kind: 'pattern', track, start, length: span, patternId });
+    return this.sequencerState();
+  }
+
+  private clip(clipId: number): ClipDto {
+    const clip = this.clips.find((entry) => entry.id === clipId);
+    if (!clip) throw new Error(`there is no clip ${clipId}`);
+    return clip;
+  }
+
+  async removeClip(clipId: number): Promise<SequencerState> {
+    this.clip(clipId);
+    this.clips = this.clips.filter((clip) => clip.id !== clipId);
+    return this.sequencerState();
+  }
+
+  async moveClip(clipId: number, track: number, start: number): Promise<SequencerState> {
+    const clip = this.clip(clipId);
+    this.lane(track);
+    if (!Number.isInteger(start) || start < 0) throw new Error(`${start} is not a start tick`);
+    if (start + clip.length > MAX_SONG_TICKS) throw new Error('that clip runs past the end');
+    clip.track = track;
+    clip.start = start;
+    return this.sequencerState();
+  }
+
+  async resizeClip(clipId: number, length: number): Promise<SequencerState> {
+    const clip = this.clip(clipId);
+    if (!Number.isInteger(length) || length <= 0) throw new Error('a clip cannot be zero long');
+    clip.length = length;
+    return this.sequencerState();
+  }
+
+  // --- audio files ---------------------------------------------------------
+
+  /** How long a file is at the session's current tempo, rounded up. */
+  private ticksFor(seconds: number): number {
+    return Math.ceil((seconds * this.bpm * PPQ) / 60);
+  }
+
+  async loadAudioSource(path: string): Promise<AudioSourceDto> {
+    const already = this.audioSources.find((source) => source.path === path);
+    if (already) return { ...already, durationTicks: this.ticksFor(already.durationSeconds) };
+    const name = path.split(/[\\/]/).pop() ?? path;
+    // A deterministic length from the name, so the same invented file is the
+    // same length every session.
+    const seconds = 1.5 + (name.length % 7);
+    const source: AudioSourceDto = {
+      id: this.nextAudioId++,
+      path,
+      name,
+      frames: Math.round(seconds * 44_100),
+      sampleRate: 44_100,
+      durationSeconds: seconds,
+      durationTicks: this.ticksFor(seconds),
+      missing: false,
+      bytes: Math.round(seconds * 44_100 * 4),
+    };
+    this.audioSources.push(source);
+    return { ...source };
+  }
+
+  /**
+   * There is no file dialog outside Tauri, so one is invented -- the same trade
+   * the project's Save As makes. A dialog that could never succeed would leave
+   * audio clips unreachable in a plain browser, which is the one thing the mock
+   * exists to prevent.
+   */
+  async openAudioFile(): Promise<AudioSourceDto | null> {
+    this.inventedAudio += 1;
+    const path = `${PROJECT_DIR}\\takes\\take-${this.inventedAudio}.wav`;
+    console.info(`[mock] no file dialog outside Tauri, loading ${path}`);
+    return this.loadAudioSource(path);
+  }
+
+  async getAudioSources(): Promise<AudioSourceDto[]> {
+    return this.audioSources.map((source) => ({
+      ...source,
+      durationTicks: this.ticksFor(source.durationSeconds),
+    }));
+  }
+
+  async unloadAudioSource(sourceId: number): Promise<AudioSourceDto[]> {
+    const playing = this.clips.filter((clip) => clip.sourceId === sourceId).length;
+    if (playing > 0) {
+      throw new Error(`${playing} clip${playing > 1 ? 's' : ''} still play that file`);
+    }
+    this.audioSources = this.audioSources.filter((source) => source.id !== sourceId);
+    return this.getAudioSources();
+  }
+
+  /** A plausible envelope: a decaying, wobbling take, deterministic per source. */
+  async getAudioWaveform(sourceId: number, targetBins?: number): Promise<WaveformDto> {
+    const source = this.audioSources.find((entry) => entry.id === sourceId);
+    if (!source) throw new Error(`there is no audio source ${sourceId}`);
+    const bins = Math.min(MAX_WAVEFORM_BINS, Math.max(1, targetBins ?? 1024));
+    const peaks: [number, number][] = Array.from({ length: bins }, (_, index) => {
+      const t = index / bins;
+      const envelope =
+        (0.35 + 0.65 * Math.abs(Math.sin(t * Math.PI * (2 + sourceId)))) * (1 - t * 0.45);
+      const level = Math.min(0.98, envelope * (0.7 + 0.3 * Math.abs(Math.sin(t * 47))));
+      return [-level, level];
+    });
+    return { sourceId, frames: source.frames, bins, maxBins: MAX_WAVEFORM_BINS, peaks };
+  }
+
+  async addAudioClip(
+    sourceId: number,
+    track: number,
+    start: number,
+    length?: number,
+    offsetFrames?: number,
+    gainDb?: number,
+  ): Promise<SequencerState> {
+    const source = this.audioSources.find((entry) => entry.id === sourceId);
+    if (!source) throw new Error(`there is no audio source ${sourceId}`);
+    this.lane(track);
+    const span = length ?? this.ticksFor(source.durationSeconds);
+    this.checkClipBounds(start, span);
+    this.clips.push({
+      id: this.nextClipId++,
+      kind: 'audio',
+      track,
+      start,
+      length: span,
+      sourceId,
+      offsetFrames: offsetFrames ?? 0,
+      gainDb: gainDb ?? 0,
+    });
+    return this.sequencerState();
+  }
+
+  async setClipGain(clipId: number, gainDb: number): Promise<SequencerState> {
+    const clip = this.clip(clipId);
+    if (clip.kind !== 'audio') throw new Error('a pattern clip has no gain of its own');
+    clip.gainDb = gainDb;
+    return this.sequencerState();
+  }
+
+  async setClipOffset(clipId: number, offsetFrames: number): Promise<SequencerState> {
+    const clip = this.clip(clipId);
+    if (clip.kind !== 'audio') throw new Error('a pattern clip has no offset');
+    clip.offsetFrames = Math.max(0, Math.round(offsetFrames));
+    return this.sequencerState();
+  }
+
+  // --- the project ---------------------------------------------------------
+
+  async getProjectInfo(): Promise<ProjectInfo> {
+    return { ...this.project, warnings: [...this.project.warnings] };
+  }
+
+  private session(): MockSession {
+    return structuredClone({
+      tracks: this.tracks,
+      buses: this.buses,
+      sends: this.sends,
+      masterGainDb: this.masterGainDb,
+      masterInserts: this.masterInserts,
+      masterClap: this.masterClap,
+      masterVst3: this.masterVst3,
+      patterns: this.patterns,
+      activePattern: this.activePattern,
+      playlistTracks: this.playlistTracks,
+      clips: this.clips,
+      bpm: this.bpm,
+      playMode: this.playMode,
+      selected: this.selected,
+    });
+  }
+
+  private restore(session: MockSession): void {
+    const copy = structuredClone(session);
+    this.tracks = copy.tracks;
+    this.buses = copy.buses;
+    this.sends = copy.sends;
+    this.masterGainDb = copy.masterGainDb;
+    this.masterInserts = copy.masterInserts;
+    this.masterClap = copy.masterClap;
+    this.masterVst3 = copy.masterVst3;
+    this.patterns = copy.patterns;
+    this.activePattern = copy.activePattern;
+    this.playlistTracks = copy.playlistTracks;
+    this.clips = copy.clips;
+    this.bpm = copy.bpm;
+    this.playMode = copy.playMode;
+    this.selected = copy.selected;
+    this.reinstantiate();
+  }
+
+  /**
+   * Everything that belonged to the session being replaced and cannot outlive
+   * it. Both ways a session is replaced destroy every plugin instance, so no
+   * window may still claim to be open and a saved handle must not be handed out
+   * a second time.
+   */
+  private reinstantiate(): void {
+    this.openEditors.clear();
+    this.clapStates.clear();
+    for (const track of this.tracks) {
+      if (track.clap) track.clap.instance = this.nextInstance++;
+      if (track.vst3) track.vst3.instance = this.nextInstance++;
+    }
+    if (this.masterClap) this.masterClap.instance = this.nextInstance++;
+    if (this.masterVst3) this.masterVst3.instance = this.nextInstance++;
+  }
+
+  async newProject(): Promise<ProjectInfo> {
+    this.tracks = starterTracks();
+    this.buses = [];
+    this.sends = [];
+    this.masterGainDb = 0;
+    this.masterInserts = [];
+    this.masterClap = null;
+    this.masterVst3 = null;
+    this.patterns = [emptyPattern(1, 'Pattern 1', [0, 1, 2, 3, 4])];
+    this.activePattern = 1;
+    this.nextPatternId = 2;
+    this.playlistTracks = Array.from({ length: 4 }, (_, index) => ({
+      id: index + 1,
+      name: `Track ${index + 1}`,
+      muted: false,
+    }));
+    this.clips = [];
+    this.bpm = DEFAULT_BPM;
+    this.playMode = 'pat';
+    this.selected = 0;
+    this.nextTrackId = 5;
+    this.reinstantiate();
+    this.project = projectInfo(null);
+    return this.getProjectInfo();
+  }
+
+  /**
+   * There is no dialog outside Tauri, so the most recent save stands in for
+   * one, and `null` comes back when nothing has been written yet -- the same
+   * `null` a real cancel answers with, which is the path worth rehearsing.
+   */
+  async openProject(path?: string | null): Promise<ProjectInfo | null> {
+    const chosen = path ?? this.lastSavedPath;
+    if (chosen === null || chosen === undefined) {
+      console.info('[mock] open_project: no dialog outside Tauri, and nothing saved to offer');
+      return null;
+    }
+    const session = this.saved.get(chosen);
+    if (!session) throw new Error(`there is no project at ${chosen}`);
+    this.restore(session);
+    this.project = projectInfo(chosen);
+    return this.getProjectInfo();
+  }
+
+  async saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null> {
+    const chosen = path ?? (saveAs ? null : this.project.path) ?? this.invent();
+    this.saved.set(chosen, this.session());
+    this.lastSavedPath = chosen;
+    this.project = projectInfo(chosen);
+    return this.getProjectInfo();
+  }
+
+  private invent(): string {
+    const stem = this.project.path === null ? UNTITLED : projectName(this.project.path);
+    let candidate = `${PROJECT_DIR}\\${stem}.mydaw`;
+    for (let n = 2; this.saved.has(candidate); n += 1) {
+      candidate = `${PROJECT_DIR}\\${stem} ${n}.mydaw`;
+    }
+    return candidate;
+  }
+
+  /**
+   * A plausible device. `running: true` even when nothing is playing, because
+   * the mock stands in for a session whose device *is* open -- a status bar
+   * permanently reading "no device" would leave the readouts unrehearsable.
+   */
+  async getStreamInfo(): Promise<StreamInfo> {
+    const bufferFrames = 256;
+    return {
+      deviceName: 'Mock Output (browser)',
+      sampleRate: SAMPLE_RATE,
+      channels: 2,
+      bufferFrames,
+      latencyMs: (bufferFrames / SAMPLE_RATE) * 1000,
+      running: true,
+    };
+  }
+
+  async getAssetStatus(): Promise<AssetStatus[]> {
+    return structuredClone(this.assets);
+  }
+
+  async startAssetDownload(id: string): Promise<AssetStatus[]> {
+    const asset = this.assets.find((entry) => entry.id === id);
+    if (!asset) throw new Error(`there is no asset '${id}'`);
+    if (asset.state === 'ready' || asset.state === 'downloading') return this.getAssetStatus();
+    asset.state = 'downloading';
+    asset.progress = 0;
+    asset.bytesDone = 0;
+    asset.error = null;
+    const timer = setInterval(() => {
+      asset.bytesDone = Math.min(asset.bytesTotal, asset.bytesDone + asset.bytesTotal / 25);
+      asset.progress = asset.bytesTotal > 0 ? asset.bytesDone / asset.bytesTotal : 1;
+      if (asset.progress >= 1) {
+        asset.state = 'ready';
+        asset.progress = 1;
+        clearInterval(timer);
+      }
+    }, 160);
+    return this.getAssetStatus();
+  }
+
+  /**
+   * A synthetic 30 Hz stream: every strip on its own slow LFO, honouring its
+   * fader, pan and effective mute, and a bus lit by whatever sends into it --
+   * so a send knob visibly does something in a plain browser.
+   */
+  async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {
+    const periodMs = 1000 / FRAME_HZ;
+    const framesPerTick = Math.round(SAMPLE_RATE / FRAME_HZ);
+    const start = performance.now();
+
+    const timer = setInterval(() => {
+      if (this.playing) this.samplePos += framesPerTick;
+      const t = (performance.now() - start) / 1000;
+      const env = this.playing ? 1 : 0;
+      const state = this.mixerState();
+
+      const level = (index: number, gainDb: number, silenced: boolean): number => {
+        if (silenced || gainDb <= MIN_GAIN_DB) return 0;
+        return env * 10 ** (gainDb / 20) * (0.5 + 0.45 * Math.abs(Math.sin(t * (0.7 + index * 0.31))));
+      };
+      const spread = (amount: number, pan: number) => {
+        const theta = ((pan + 1) * Math.PI) / 4;
+        return {
+          peakL: amount * Math.SQRT2 * Math.cos(theta),
+          peakR: amount * Math.SQRT2 * Math.sin(theta),
+        };
+      };
+
+      const trackLevels = state.tracks.map((track, index) =>
+        level(index, track.gainDb, track.silenced),
+      );
+      const tracks = state.tracks.map((track, index) => spread(trackLevels[index]!, track.pan));
+      const buses = state.buses.map((bus, index) => {
+        const fed = state.sends
+          .filter((send) => send.dest === index && send.sourceKind === 'track')
+          .reduce((sum, send) => sum + (trackLevels[send.sourceIndex] ?? 0) * send.level, 0);
+        const amount = bus.silenced || bus.gainDb <= MIN_GAIN_DB
+          ? 0
+          : Math.min(1.4, fed * 10 ** (bus.gainDb / 20));
+        return spread(amount, bus.pan);
+      });
+
+      const peakL = env * (0.55 + 0.4 * Math.abs(Math.sin(t * 1.1)));
+      const peakR = env * (0.55 + 0.4 * Math.abs(Math.sin(t * 1.37 + 0.6)));
+      onFrame({
+        peakL,
+        peakR,
+        rmsL: peakL * 0.62,
+        rmsR: peakR * 0.62,
+        samplePos: this.samplePos,
+        playing: this.playing,
+        tracks,
+        buses,
+      });
+    }, periodMs);
+
+    return () => clearInterval(timer);
+  }
+}
