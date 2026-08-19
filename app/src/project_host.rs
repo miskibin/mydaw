@@ -58,7 +58,7 @@
 use std::path::{Path, PathBuf};
 
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
-use mydaw_plugin_sequencer::{PlayMode, Playlist, SequencerService};
+use mydaw_plugin_sequencer::{AudioSourceRegistry, PlayMode, Playlist, SequencerService};
 use mydaw_rt_core::DEFAULT_BPM;
 
 use crate::clap_bridge::{ClapBoard, ClapTarget};
@@ -66,8 +66,8 @@ use crate::clap_host::ClapHost;
 use crate::project::{MissingPluginDto, MissingPlugins, Project};
 use crate::project_bridge::{reply, ProjectAnswer, ProjectBridge, ProjectCommand, ProjectInfoDto};
 use crate::project_file::{
-    project_name, read_project_file, write_project_file, EffectEntry, EffectRef, ProjectFile,
-    ProjectFileError, Song, SourceEntry,
+    project_name, read_project_file, write_project_file, AudioSourceEntry, EffectEntry, EffectRef,
+    ProjectFile, ProjectFileError, Song, SourceEntry,
 };
 use crate::tracks::TrackHost;
 use crate::vst3_bridge::Vst3Board;
@@ -84,6 +84,10 @@ pub struct Session<'a> {
     pub tracks: &'a TrackHost,
     pub audio: &'a AudioIoService,
     pub sequencer: &'a SequencerService,
+    /// The audio files the arrangement's clips play. A load decodes the file's
+    /// `audio_sources` table into it and a save writes it back out -- see
+    /// [`restore_audio_sources`].
+    pub sources: &'a AudioSourceRegistry,
 }
 
 /// The two plugin hosts and the boards they publish to.
@@ -381,7 +385,15 @@ impl ProjectHost {
         // reject; publishing them to the stream can, and a busy queue is not a
         // reason to fail a load.
         let _ = session.sequencer.set_song(patterns, playlist);
+        // Before the arrangement is published: a clip whose source is not loaded
+        // yet compiles to nothing, and the publish below is what carries the
+        // audio across the RT wall.
+        restore_audio_sources(session.sources, file, &mut report.warnings);
         let _ = session.audio.install_song(session.sequencer.compile());
+        let _ = session
+            .tracks
+            .audio_clips()
+            .install(session.sequencer.compile_audio(session.sources));
         session.sequencer.set_bpm(bpm);
         let _ = session.audio.set_bpm(bpm);
         session.sequencer.set_play_mode(mode);
@@ -425,12 +437,65 @@ pub fn capture(session: &Session<'_>, hosts: &mut Hosts<'_>) -> (ProjectFile, Ve
             patterns: &patterns,
             playlist: &playlist,
             mode: session.sequencer.play_mode(),
-            audio_sources: Vec::new(),
+            // The whole registry, not only the sources clips point at: a file
+            // loaded and not yet placed is still part of what the user opened,
+            // and dropping it on save would make "load, save, reload" lose it.
+            audio_sources: session
+                .sources
+                .list()
+                .iter()
+                .map(|source| AudioSourceEntry {
+                    id: source.id(),
+                    path: source.path().to_string_lossy().into_owned(),
+                })
+                .collect(),
         },
         &states,
         master_effect,
     );
     (file, warnings)
+}
+
+/// Decode the file's `audio_sources` table into `sources`, replacing whatever
+/// the previous project loaded.
+///
+/// **A file that has moved is a warning, not a refusal** -- exactly as a missing
+/// plugin is. Its id gets a silent placeholder, so every clip that referenced it
+/// keeps its place in the arrangement and can be re-pointed at the file once it
+/// is found. Deleting the clips instead would make "I moved my samples folder"
+/// a destructive edit.
+///
+/// Returns one warning per file that could not be read.
+pub fn restore_audio_sources(
+    sources: &AudioSourceRegistry,
+    file: &ProjectFile,
+    warnings: &mut Vec<String>,
+) {
+    let keep: Vec<u64> = file.audio_sources.iter().map(|entry| entry.id).collect();
+    sources.retain(&keep);
+    for entry in &file.audio_sources {
+        let path = Path::new(&entry.path);
+        if sources
+            .get(entry.id)
+            .is_some_and(|existing| existing.path() == path && !existing.is_missing())
+        {
+            // Already loaded from the same path by the previous project: a
+            // re-decode would be seconds of disk for an identical buffer.
+            continue;
+        }
+        match sources.load_with_id(entry.id, path) {
+            Ok(source) => log::info!(
+                "loaded audio source {} ({}, {} frames)",
+                source.id(),
+                source.name(),
+                source.frames()
+            ),
+            Err(err) => {
+                sources.register_missing(entry.id, path);
+                warnings.push(format!("{err}; its clips will be silent"));
+            }
+        }
+    }
 }
 
 /// One slot's plugin state, or an empty blob and a warning.
@@ -786,6 +851,7 @@ mod tests {
         tracks: Arc<TrackHost>,
         audio: Arc<AudioIoService>,
         sequencer: Arc<SequencerService>,
+        sources: Arc<AudioSourceRegistry>,
         clap: ClapHost,
         clap_board: ClapBoard,
         vst3: Vst3Host,
@@ -805,6 +871,7 @@ mod tests {
                 )),
                 audio: Arc::new(AudioIoService::default()),
                 sequencer: Arc::new(SequencerService::new()),
+                sources: Arc::new(AudioSourceRegistry::new()),
                 clap: ClapHost::new(Arc::clone(&windows)),
                 clap_board: ClapBoard::new(),
                 vst3: Vst3Host::new(windows),
@@ -827,6 +894,7 @@ mod tests {
                 tracks: &self.tracks,
                 audio: &self.audio,
                 sequencer: &self.sequencer,
+                sources: &self.sources,
             };
             let mut hosts = Hosts {
                 clap: &mut self.clap,
@@ -1208,5 +1276,154 @@ mod tests {
         rig.with(|host, session, bridge, hosts| host.tick(session, bridge, hosts));
         assert_eq!(rig.bridge.pending(), 0);
         assert!(rig.host.path().is_none());
+    }
+
+    // ------------------------------------------------------- audio sources
+
+    /// A scratch directory that removes itself.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let base = std::env::temp_dir().join(format!(
+                "mydaw-project-audio-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&base);
+            std::fs::create_dir_all(&base).expect("temp dir");
+            Self(base)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A one-second 440 Hz mono WAV at `path`.
+    fn write_take(path: &Path) {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 44_100,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(path, spec).expect("wav writer");
+        for frame in 0..44_100 {
+            let value = ((frame as f64 / 44_100.0) * 440.0 * std::f64::consts::TAU).sin() as f32;
+            writer.write_sample(value * 0.5).expect("sample");
+        }
+        writer.finalize().expect("finalize");
+    }
+
+    /// A file with `audio_sources` naming `paths`.
+    fn file_with_sources(paths: &[&Path]) -> ProjectFile {
+        let mut file = default_project_file();
+        file.audio_sources = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| AudioSourceEntry {
+                id: index as u64 + 1,
+                path: path.to_string_lossy().into_owned(),
+            })
+            .collect();
+        file
+    }
+
+    #[test]
+    fn a_load_decodes_the_files_the_project_names_under_the_ids_its_clips_use() {
+        let dir = TempDir::new("restore");
+        let take = dir.0.join("vox.wav");
+        write_take(&take);
+
+        let sources = AudioSourceRegistry::new();
+        let mut warnings = Vec::new();
+        restore_audio_sources(&sources, &file_with_sources(&[&take]), &mut warnings);
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let restored = sources.get(1).expect("the id its clips name");
+        assert_eq!(restored.frames(), 44_100);
+        assert_eq!(restored.sample_rate(), 44_100.0);
+        assert!(!restored.is_missing());
+    }
+
+    #[test]
+    fn a_file_that_moved_is_a_warning_and_a_silent_source_rather_than_a_failed_load() {
+        // The whole point: a project whose samples folder moved still opens,
+        // still draws its clips, and can be re-pointed at the files. Deleting
+        // the clips would make it a destructive edit.
+        let sources = AudioSourceRegistry::new();
+        let mut warnings = Vec::new();
+        let gone = Path::new("D:/nowhere-9f2a/vox-take-4.wav");
+        restore_audio_sources(&sources, &file_with_sources(&[gone]), &mut warnings);
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("vox-take-4.wav"), "{}", warnings[0]);
+        assert!(warnings[0].contains("silent"), "{}", warnings[0]);
+
+        let placeholder = sources.get(1).expect("the id is still there");
+        assert!(placeholder.is_missing());
+        assert_eq!(placeholder.frames(), 0, "and it makes no sound");
+        assert_eq!(placeholder.path(), gone, "so it can be found again");
+    }
+
+    #[test]
+    fn opening_a_second_project_drops_the_first_ones_sources() {
+        let dir = TempDir::new("swap");
+        let first = dir.0.join("first.wav");
+        let second = dir.0.join("second.wav");
+        write_take(&first);
+        write_take(&second);
+
+        let sources = AudioSourceRegistry::new();
+        let mut warnings = Vec::new();
+        restore_audio_sources(&sources, &file_with_sources(&[&first]), &mut warnings);
+        assert_eq!(sources.len(), 1);
+
+        restore_audio_sources(&sources, &file_with_sources(&[&second]), &mut warnings);
+        assert_eq!(sources.len(), 1, "the previous project's take went with it");
+        assert_eq!(sources.get(1).expect("id 1").path(), second.as_path());
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+
+    #[test]
+    fn a_source_already_loaded_from_the_same_path_is_not_decoded_again() {
+        let dir = TempDir::new("reuse");
+        let take = dir.0.join("loop.wav");
+        write_take(&take);
+
+        let sources = AudioSourceRegistry::new();
+        let mut warnings = Vec::new();
+        let file = file_with_sources(&[&take]);
+        restore_audio_sources(&sources, &file, &mut warnings);
+        let first = sources.get(1).expect("loaded");
+
+        restore_audio_sources(&sources, &file, &mut warnings);
+        let second = sources.get(1).expect("still loaded");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "re-opening the same project must not re-decode its takes"
+        );
+    }
+
+    #[test]
+    fn a_save_writes_every_loaded_source_including_one_no_clip_plays_yet() {
+        let dir = TempDir::new("capture");
+        let take = dir.0.join("unplaced.wav");
+        write_take(&take);
+
+        let mut rig = Rig::new();
+        rig.sources.load(&take).expect("loads");
+        let file = rig.with(|_, session, _, hosts| capture(session, hosts).0);
+
+        assert_eq!(file.audio_sources.len(), 1);
+        assert_eq!(file.audio_sources[0].id, 1);
+        assert_eq!(
+            Path::new(&file.audio_sources[0].path),
+            take.as_path(),
+            "a file the user loaded and has not placed yet is still part of the project"
+        );
     }
 }

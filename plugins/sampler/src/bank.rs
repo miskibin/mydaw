@@ -39,11 +39,11 @@ use crate::decode::{decode_file, DecodeError};
 use crate::manifest::{InstrumentManifest, ManifestError, MANIFEST_FILE_NAME, MIN_VELOCITY};
 
 /// Interpolation taps needed before the current frame.
-const PAD_LEAD: usize = 1;
+const PAD_LEAD: usize = mydaw_audio_file::PAD_LEAD;
 /// Interpolation taps needed after the current frame.
-const PAD_TRAIL: usize = 2;
+const PAD_TRAIL: usize = mydaw_audio_file::PAD_TRAIL;
 /// Channels every sample is stored in. See the module docs.
-pub const CHANNELS: usize = 2;
+pub const CHANNELS: usize = mydaw_audio_file::CHANNELS;
 
 /// Lookup entry meaning "no sample covers this note".
 const NO_SAMPLE: u16 = u16::MAX;
@@ -115,13 +115,7 @@ impl LoadedSample {
     pub fn taps(&self, index: usize, channel: usize) -> [f32; 4] {
         // Content frame `index` sits at padded frame `index + PAD_LEAD`, so the
         // tap at `index - 1` is padded frame `index`, which always exists.
-        let base = index * CHANNELS + channel;
-        [
-            self.data[base],
-            self.data[base + CHANNELS],
-            self.data[base + 2 * CHANNELS],
-            self.data[base + 3 * CHANNELS],
-        ]
+        mydaw_audio_file::taps(&self.data, index, channel)
     }
 }
 

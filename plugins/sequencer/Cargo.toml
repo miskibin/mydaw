@@ -15,3 +15,12 @@ mydaw-rt-core.workspace = true
 rtrb.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
+log.workspace = true
+# Audio clips: decoding a file into the source registry (non-RT), and the
+# interpolation kernel the clip voices resample with (RT).
+mydaw-audio-file.workspace = true
+
+[dev-dependencies]
+# `hound` writes the synthetic WAVs the audio-source tests decode, so the suite
+# needs no committed audio.
+hound.workspace = true

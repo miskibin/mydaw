@@ -54,6 +54,7 @@
 
 pub mod clap_bridge;
 pub mod clap_host;
+pub mod clips;
 mod commands;
 pub mod debug_capture;
 mod dto;
@@ -76,6 +77,7 @@ pub use clap_bridge::{
     ClapSlotDto, ClapTarget, NO_MAIN_THREAD, REQUEST_TIMEOUT,
 };
 pub use clap_host::ClapHost;
+pub use clips::{audio_clip_node, AudioClipBus};
 pub use debug_capture::{
     capture_root, capture_to_disk, captures_dir, debug_capture_seconds_from_env,
     parse_capture_seconds, report_text, run_headless_capture, CaptureArtifacts, CaptureOutcome,
@@ -83,9 +85,10 @@ pub use debug_capture::{
     REPORT_END,
 };
 pub use dto::{
-    ChannelClipDto, ClapPluginInfoDto, ClipDto, MelodicNoteDto, MeterFrameDto, PatternDto,
-    PatternSetDto, PatternSummaryDto, PlaylistDto, PlaylistTrackDto, SequencerStateDto, StepDto,
-    StepRowDto, StreamInfoDto, TrackMeterDto, Vst3PluginInfoDto,
+    ticks_for_seconds, AudioSourceDto, ChannelClipDto, ClapPluginInfoDto, ClipDto, MelodicNoteDto,
+    MeterFrameDto, PatternDto, PatternSetDto, PatternSummaryDto, PlaylistDto, PlaylistTrackDto,
+    SequencerStateDto, StepDto, StepRowDto, StreamInfoDto, TrackMeterDto, Vst3PluginInfoDto,
+    WaveformDto,
 };
 pub use graph::{engine_graph, source_chain, track_chain, TransportGate};
 pub use insert::{insert_slot, InsertHandle, InsertSlot};
@@ -220,6 +223,7 @@ pub fn run() -> ExitCode {
     // only place that holds both. See `crate::project_bridge`.
     let project_bridge = std::sync::Arc::clone(state.project_bridge());
     let sequencer = std::sync::Arc::clone(state.sequencer());
+    let audio_sources = std::sync::Arc::clone(state.audio_sources());
     let mut project_host = ProjectHost::new();
     // The window service belongs to this thread -- the one tao's loop will run on
     // -- which is exactly what makes it legal to open plugin windows from the run
@@ -309,6 +313,13 @@ pub fn run() -> ExitCode {
             commands::remove_clip,
             commands::move_clip,
             commands::resize_clip,
+            commands::load_audio_source,
+            commands::get_audio_sources,
+            commands::unload_audio_source,
+            commands::get_audio_waveform,
+            commands::add_audio_clip,
+            commands::set_clip_gain,
+            commands::set_clip_offset,
             commands::set_bpm,
             commands::get_stream_info,
             // The project file: New / Open / Save / Save As, plus the name and
@@ -406,6 +417,7 @@ pub fn run() -> ExitCode {
                     tracks: &track_host,
                     audio: &audio,
                     sequencer: &sequencer,
+                    sources: &audio_sources,
                 },
                 &project_bridge,
                 &mut project_host::Hosts {

@@ -48,7 +48,7 @@ use mydaw_fixture_clap_gain::synth::{self, PLUGIN_ID as SYNTH_ID};
 use mydaw_plugin_audio_io::AudioIoService;
 use mydaw_plugin_debug_tap::{align_grid, detect_onsets, spectrum, OnsetConfig, Spectrum};
 use mydaw_plugin_host_clap::test_util::{missing_fixture_message, stage_fixture_bundle};
-use mydaw_plugin_sequencer::{Pattern, SequencerService, StepRow};
+use mydaw_plugin_sequencer::{AudioSourceRegistry, Pattern, SequencerService, StepRow};
 use mydaw_plugin_windows::PluginWindowService;
 use serde::{Deserialize, Serialize};
 
@@ -273,6 +273,7 @@ struct Rig {
     tracks: Arc<TrackHost>,
     audio: Arc<AudioIoService>,
     sequencer: Arc<SequencerService>,
+    sources: Arc<AudioSourceRegistry>,
 }
 
 impl Rig {
@@ -301,6 +302,7 @@ impl Rig {
         let tracks = Arc::clone(state.tracks());
         let audio = Arc::clone(state.audio());
         let sequencer = Arc::clone(state.sequencer());
+        let sources = Arc::clone(state.audio_sources());
         let mut clap = ClapHost::new(Arc::clone(&windows));
         let mut vst3 = Vst3Host::new(windows);
         clap.publish(&tracks, clap_bridge.board());
@@ -319,6 +321,7 @@ impl Rig {
             tracks,
             audio,
             sequencer,
+            sources,
         })
     }
 
@@ -335,6 +338,7 @@ impl Rig {
             tracks: &self.tracks,
             audio: &self.audio,
             sequencer: &self.sequencer,
+            sources: &self.sources,
         };
         let mut hosts = Hosts {
             clap: &mut self.clap,

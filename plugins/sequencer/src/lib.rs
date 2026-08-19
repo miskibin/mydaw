@@ -45,12 +45,23 @@
 //! let song = sequencer.compile(); // hand this to the audio thread
 //! ```
 
+pub mod audio;
+pub mod clips;
 pub mod compiled;
 pub mod pattern;
 pub mod playlist;
 pub mod schedule;
 pub mod set;
 
+pub use audio::{
+    reference_count, AudioSource, AudioSourceError, AudioSourceRegistry, WaveformMip, MAX_SOURCES,
+    MAX_SOURCE_SECONDS, MAX_WAVEFORM_BINS, MIP_BASE_FRAMES, MIP_LEVELS, MIP_RATIO,
+};
+pub use clips::{
+    audio_clip_channel, compile_audio_clips, playback_step, AudioClipHandle, AudioClipInstallError,
+    AudioClipNode, AudioClipStats, CompiledAudioClip, CompiledAudioSong, AUDIO_CLIP_QUEUE_CAPACITY,
+    AUDIO_CLIP_VOICES, CLIP_RAMP_MS,
+};
 pub use compiled::{
     song_channel, CompiledNote, CompiledPattern, CompiledPatternClip, CompiledSong, SongHandle,
     SongInstallError, SongSlot, SONG_QUEUE_CAPACITY,
@@ -311,6 +322,24 @@ impl SequencerService {
             state.patterns.active_index(),
             state.playlist.compile_pattern_clips(&state.patterns),
         )
+        // Audio clips travel separately (see `compile_audio`), but they are
+        // still part of the arrangement, so SONG mode must run to the end of
+        // one rather than stopping at the last pattern clip.
+        .extend_to(state.playlist.end_ticks())
+    }
+
+    /// The arrangement's **audio** clips, compiled for the audio thread.
+    ///
+    /// A second compile rather than a field on [`CompiledSong`]: notes and audio
+    /// cross the RT wall to two different places -- the scheduler that fills the
+    /// block's event buffer, and the node on the master bus -- and one value
+    /// carrying both would have to be published to both.
+    ///
+    /// **Non-RT.** Takes the song lock and then reads `sources`; nothing in the
+    /// registry ever takes the song lock, so the order is one-way.
+    pub fn compile_audio(&self, sources: &AudioSourceRegistry) -> CompiledAudioSong {
+        let state = self.state.lock();
+        compile_audio_clips(&state.playlist, |id| sources.get(id))
     }
 
     /// One past the last tick the arrangement occupies. `0` when it is empty.
@@ -368,6 +397,13 @@ impl Plugin for SequencerPlugin {
         ctx.services
             .provide(Arc::new(SequencerService::new()))
             .expect("SequencerService provided twice: the plugin is registered more than once");
+        // The audio files clips point at. A separate service rather than a field
+        // on `SequencerService`: a decode holds its lock for as long as a disk
+        // read takes, and the song's lock is taken by every keystroke in the
+        // piano roll. See `crate::audio`.
+        ctx.services
+            .provide(Arc::new(AudioSourceRegistry::new()))
+            .expect("AudioSourceRegistry provided twice: the plugin is registered more than once");
         ctx.contribute_panel(PanelManifest::new(
             SEQUENCER_PANEL,
             "Channel Rack",

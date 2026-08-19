@@ -20,11 +20,25 @@ audio_thread_priority = "0.37"   # promote the callback thread to MMCSS/Pro Audi
 # --- plugin hosting ---
 clack-host = "0.1"  # safe CLAP host bindings (discovery in Phase 0, hosting in spike 2)
 # --- sampled instruments (non-RT only: decoding and fetching happen at load) ---
-# `symphonia` decodes the FLAC/WAV the sampler's instruments ship as. Default
-# features are off: the sampler needs two container-free codecs, not the whole
-# media matrix, and every extra decoder is attack surface for a file we did not
-# author.
-symphonia = { version = "0.6", default-features = false, features = ["flac", "wav", "pcm"] }
+# `symphonia` decodes the FLAC/WAV the sampler's instruments ship as, and the
+# WAV/FLAC/OGG a user drops on the playlist as an audio clip. Default features
+# stay off: this is three codecs and two containers, not the whole media matrix,
+# and every extra decoder is attack surface for a file we did not author. Ogg
+# Vorbis is here because a bounce from another DAW or a downloaded loop is often
+# one.
+#
+# **MP3 is deliberately absent, and it is not a policy choice**:
+# `symphonia-bundle-mp3` has no released 0.6 -- only `0.6.0-alpha.2` -- so
+# enabling the `mp3` feature makes the workspace unresolvable. Add `"mp3"` here
+# the day it ships; `mydaw_audio_file::decode_stereo` needs no change, because it
+# probes rather than switching on the extension.
+symphonia = { version = "0.6", default-features = false, features = [
+    "flac",
+    "wav",
+    "pcm",
+    "ogg",
+    "vorbis",
+] }
 # `ureq` and not `reqwest`: the asset downloader is a blocking loop on its own
 # thread, so an async runtime would be pure weight. `reqwest` appears in the
 # lockfile but is not in this workspace's build graph, so it is not "free".
@@ -58,6 +72,9 @@ serde_json = "1"   # DTO wire-shape tests, and the debug-tap axis/stats sidecars
 mydaw-kernel = { path = "crates/kernel" }
 mydaw-rt-core = { path = "crates/rt-core" }
 mydaw-ipc-bridge = { path = "crates/ipc-bridge" }
+# Decoding one audio file into memory, shared by the sampler (an instrument's
+# recordings) and the sequencer (an audio clip on the playlist).
+mydaw-audio-file = { path = "crates/audio-file" }
 # Out-of-process plugin scanning: the worker protocol, the metadata cache and the
 # block list, shared by both plugin hosts.
 mydaw-plugin-scan = { path = "crates/plugin-scan" }

@@ -286,6 +286,18 @@ impl CompiledSong {
         self.end_ticks
     }
 
+    /// Move the song's end no earlier than `ticks`.
+    ///
+    /// Audio clips are not in `clips` -- they are rendered rather than
+    /// scheduled, and go through [`crate::clips`] -- but they are still part of
+    /// the *arrangement*, and SONG mode stops at the end of the last thing in
+    /// it. Without this, a song whose final item is a vocal would stop at the
+    /// last pattern clip and cut the vocal off.
+    pub fn extend_to(mut self, ticks: u64) -> Self {
+        self.end_ticks = self.end_ticks.max(ticks);
+        self
+    }
+
     /// Whether the arrangement would produce no events at all.
     pub fn song_is_silent(&self) -> bool {
         self.clips.iter().all(|clip| {

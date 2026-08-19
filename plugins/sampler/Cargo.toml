@@ -9,6 +9,9 @@ publish.workspace = true
 [dependencies]
 mydaw-kernel.workspace = true
 mydaw-rt-core.workspace = true
+# The decode, the padding and the interpolation kernel, shared with the
+# sequencer's audio clips.
+mydaw-audio-file.workspace = true
 
 parking_lot.workspace = true
 thiserror.workspace = true
@@ -17,9 +20,8 @@ serde.workspace = true
 serde_json.workspace = true
 arc-swap.workspace = true
 
-# Non-RT only: decoding happens when an instrument is loaded, fetching on a
-# worker thread the audio callback never touches.
-symphonia.workspace = true
+# Non-RT only: fetching happens on a worker thread the audio callback never
+# touches. (The decode itself moved to `mydaw-audio-file`.)
 ureq.workspace = true
 sha2.workspace = true
 

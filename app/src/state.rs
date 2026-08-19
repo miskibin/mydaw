@@ -14,8 +14,8 @@ use mydaw_plugin_sampler::{
     AssetDownloader, AssetState, AssetStatus, SamplerPlugin, SamplerRegistry,
 };
 use mydaw_plugin_sequencer::{
-    Pattern, PatternError, PatternSet, PatternSetError, PlayMode, Playlist, PlaylistError,
-    SequencerPlugin, SequencerService, SongError,
+    AudioSourceError, AudioSourceRegistry, Pattern, PatternError, PatternSet, PatternSetError,
+    PlayMode, Playlist, PlaylistError, SequencerPlugin, SequencerService, SongError,
 };
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
@@ -91,6 +91,9 @@ pub enum SequencerError {
     /// The audio thread has not picked up previous edits. Retryable.
     #[error(transparent)]
     Audio(#[from] AudioIoError),
+    /// A file could not be loaded, or a source could not be dropped.
+    #[error(transparent)]
+    AudioSource(#[from] AudioSourceError),
 }
 
 /// The pattern set a fresh project starts with: one pattern with an empty grid
@@ -191,6 +194,10 @@ pub struct AppState {
     /// The authoritative pattern and tempo. The audio thread runs copies of
     /// both; this is the original (and, one day, what a project file holds).
     sequencer: Arc<SequencerService>,
+    /// The audio files the arrangement's clips point at, decoded into RAM. A
+    /// sibling of the sequencer rather than a field on it -- see
+    /// `mydaw_plugin_sequencer::audio`.
+    sources: Arc<AudioSourceRegistry>,
     /// The project's tracks, the mixer parameters the audio thread reads, and
     /// one head-of-chain handle per track. See `crate::tracks`.
     tracks: Arc<TrackHost>,
@@ -257,6 +264,9 @@ impl AppState {
         let sequencer = services
             .get::<SequencerService>()
             .ok_or(StartupError::MissingService("SequencerService"))?;
+        let sources = services
+            .get::<AudioSourceRegistry>()
+            .ok_or(StartupError::MissingService("AudioSourceRegistry"))?;
         let clap = services
             .get::<ClapHostService>()
             .ok_or(StartupError::MissingService("ClapHostService"))?;
@@ -308,6 +318,7 @@ impl AppState {
             snapshot: ui_snapshot(kernel),
             audio,
             sequencer,
+            sources,
             tracks,
             clap_bridge: Arc::new(ClapHostBridge::new()),
             clap,
@@ -398,6 +409,10 @@ impl AppState {
         if let Err(err) = self.audio.install_song(self.sequencer.compile()) {
             log::warn!("could not publish the song to the new stream: {err}");
         }
+        // The clip node is created with the graph and starts with nothing, so a
+        // project loaded before the device came up publishes its audio here --
+        // exactly as the pattern does.
+        self.publish_audio_clips();
         if let Err(err) = self.audio.set_play_mode(self.sequencer.play_mode()) {
             log::warn!("could not publish the play mode to the new stream: {err}");
         }
@@ -1169,10 +1184,88 @@ impl AppState {
     /// the session holds when a stream comes up. The only audio error worth
     /// reporting is a full queue, which is retryable.
     fn publish_song(&self) -> Result<(), SequencerError> {
+        self.publish_audio_clips();
         match self.audio.install_song(self.sequencer.compile()) {
             Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
             Err(err) => Err(err.into()),
         }
+    }
+
+    /// Republish the arrangement's **audio** clips to the master bus.
+    ///
+    /// Notes and audio cross the wall to two places -- the scheduler and the
+    /// clip node -- so every song edit publishes both. Failures are logged
+    /// rather than propagated: with no device open there is nowhere to publish
+    /// to, and a full queue costs the *next* edit nothing (the node keeps the
+    /// last of a burst). The one thing it must not do is fail an edit that has
+    /// already been applied to the session.
+    fn publish_audio_clips(&self) {
+        let song = self.sequencer.compile_audio(&self.sources);
+        if let Err(err) = self.tracks.audio_clips().install(song) {
+            if !matches!(err, SourceError::Audio(AudioIoError::NotRunning)) {
+                log::warn!("could not publish the audio clips: {err}");
+            }
+        }
+    }
+
+    /// The audio-source registry, for the commands that load and list files.
+    pub fn audio_sources(&self) -> &Arc<AudioSourceRegistry> {
+        &self.sources
+    }
+
+    /// Decode `path` and give it a source id the arrangement can reference.
+    ///
+    /// Loading the same path twice returns the source that is already there --
+    /// see [`AudioSourceRegistry::load`].
+    ///
+    /// # Errors
+    /// [`SequencerError::AudioSource`], whose message names the file.
+    pub fn load_audio_source(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Arc<mydaw_plugin_sequencer::AudioSource>, SequencerError> {
+        let source = self.sources.load(path)?;
+        // A file that was missing when the project loaded and has now been
+        // re-loaded under a *new* id changes nothing about existing clips, but a
+        // reload of the same id does -- so republish either way. It is one
+        // compile of a list a human can count.
+        self.publish_audio_clips();
+        Ok(source)
+    }
+
+    /// How long a clip covering the whole of `source_id` should be, in ticks.
+    ///
+    /// What `add_audio_clip` uses when the caller gives no length. It is a
+    /// function of the **session tempo**, because a tick is: the same file is
+    /// four bars at 120 BPM and three at 160, and the audio does not stretch
+    /// either way. A source of zero frames (a file that has moved) gets the
+    /// default clip length, so its clip is still drawable and can be
+    /// re-pointed at the file once it is found.
+    ///
+    /// # Errors
+    /// [`SequencerError::AudioSource`] when there is no such source.
+    pub fn audio_clip_default_length(&self, source_id: u64) -> Result<u64, SequencerError> {
+        let source = self
+            .sources
+            .get(source_id)
+            .ok_or(AudioSourceError::NoSuchSource(source_id))?;
+        let ticks = crate::dto::ticks_for_seconds(source.seconds(), self.bpm());
+        Ok(if ticks == 0 {
+            mydaw_plugin_sequencer::DEFAULT_CLIP_TICKS
+        } else {
+            ticks
+        })
+    }
+
+    /// Drop a source, refusing while the arrangement still plays it.
+    ///
+    /// # Errors
+    /// [`SequencerError::AudioSource`] -- most usefully
+    /// [`AudioSourceError::StillReferenced`], whose message says how many clips.
+    pub fn unload_audio_source(&self, id: u64) -> Result<(), SequencerError> {
+        self.sources.unload(id, &self.sequencer.playlist())?;
+        self.publish_audio_clips();
+        Ok(())
     }
 
     /// Apply one edit to the pattern set and republish.

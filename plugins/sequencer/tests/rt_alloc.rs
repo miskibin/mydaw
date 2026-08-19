@@ -17,13 +17,18 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+use std::sync::Arc;
+
 use mydaw_plugin_sequencer::{
-    song_channel, ChannelClip, CompiledPatternClip, CompiledSong, MelodicNote, Pattern, PlayMode,
-    Scheduler, Step, StepRow, TransportWindow, MAX_NOTES, MAX_PATTERN_CHANNELS, MAX_STEPS,
-    TICKS_PER_BAR,
+    audio_clip_channel, song_channel, AudioSource, ChannelClip, CompiledAudioClip,
+    CompiledAudioSong, CompiledPatternClip, CompiledSong, MelodicNote, Pattern, PlayMode,
+    Scheduler, Step, StepRow, TransportWindow, AUDIO_CLIP_VOICES, MAX_NOTES, MAX_PATTERN_CHANNELS,
+    MAX_STEPS, TICKS_PER_BAR,
 };
 use mydaw_rt_core::basedrop::Collector;
-use mydaw_rt_core::{NoteEventBuffer, DEFAULT_BPM};
+use mydaw_rt_core::{
+    AudioBuffers, NoteEventBuffer, ProcessCtx, RtNode, TransportSnapshot, CHANNELS, DEFAULT_BPM,
+};
 
 thread_local! {
     static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
@@ -359,4 +364,159 @@ fn swapping_the_song_on_the_audio_thread_neither_allocates_nor_frees() {
     assert_eq!(collector.alloc_count(), 3);
     collector.collect();
     assert_eq!(collector.alloc_count(), 1, "only the current one survives");
+}
+
+// ---------------------------------------------------------------- audio clips
+
+/// A source of `frames` frames at 44.1 kHz -- deliberately *not* the device
+/// rate, so the interpolator is actually running rather than short-circuiting
+/// on a step of exactly 1.0.
+fn clip_source(id: u64, frames: usize) -> Arc<AudioSource> {
+    let data: Vec<f32> = (0..frames * CHANNELS)
+        .map(|index| ((index % 97) as f32 / 97.0) - 0.5)
+        .collect();
+    Arc::new(AudioSource::from_stereo(
+        id,
+        std::path::Path::new("alloc.wav"),
+        44_100.0,
+        data,
+    ))
+}
+
+/// More clips than there are voices, all overlapping, so every block is
+/// starting, stealing and fading at once.
+fn dense_audio_arrangement(source: &Arc<AudioSource>, count: u64) -> CompiledAudioSong {
+    let bar = TICKS_PER_BAR as u64;
+    CompiledAudioSong::new(
+        (0..count)
+            .map(|index| CompiledAudioClip {
+                clip_id: index + 1,
+                source: Arc::clone(source),
+                // Staggered by a sixteenth, so a clip starts in almost every
+                // block and the pool is never quiet.
+                start_ticks: index * 240,
+                length_ticks: 4 * bar,
+                offset_frames: index % 64,
+                gain: 0.5,
+            })
+            .collect(),
+    )
+}
+
+/// The clip player is an `RtNode` on the master bus, under the same rule as
+/// every other node: no allocation, no free, in the callback.
+///
+/// This drives it through the whole state machine -- start, steal, seek, stop,
+/// mode switch -- because the interesting allocations would be in the paths that
+/// only run at an edge.
+#[test]
+fn rendering_audio_clips_allocates_nothing_across_starts_seeks_stops_and_steals() {
+    let collector = Collector::new();
+    let (mut handle, mut node) = audio_clip_channel(8, collector.handle());
+    let source = clip_source(1, 44_100 * 4);
+    handle
+        .install(dense_audio_arrangement(
+            &source,
+            AUDIO_CLIP_VOICES as u64 + 16,
+        ))
+        .unwrap();
+
+    let mut buffers = AudioBuffers::new(4_096);
+
+    for frames in BLOCK_SIZES {
+        let mut sample_pos = 0_u64;
+        let count = count_allocations(|| {
+            for block in 0..24_u64 {
+                // Every fifth block is a seek and every eleventh is a stop, so
+                // the edge paths -- release-all, derive-covering-clips -- are
+                // exercised rather than only the steady state.
+                if block % 5 == 4 {
+                    sample_pos = sample_pos.wrapping_add(97_003);
+                }
+                let playing = block % 11 != 10;
+                let mode = if block % 7 == 6 {
+                    PlayMode::Pattern
+                } else {
+                    PlayMode::Song
+                };
+                let mut ctx = ProcessCtx::new(
+                    &mut buffers,
+                    48_000.0,
+                    frames,
+                    TransportSnapshot {
+                        sample_pos,
+                        playing,
+                        bpm: DEFAULT_BPM,
+                        mode,
+                    },
+                );
+                ctx.buffers.silence();
+                node.process(&mut ctx);
+                sample_pos += frames as u64;
+            }
+        });
+        assert_eq!(
+            count, 0,
+            "{frames}-frame blocks: the clip player allocated or freed {count} times"
+        );
+    }
+}
+
+/// Swapping the arrangement on the audio thread must neither allocate nor free
+/// -- and the superseded one must go to the collector, which is the whole point
+/// of `basedrop` here: the last `Arc<AudioSource>` in it can be a hundred
+/// megabytes, and `free()` in a callback is a dropout.
+#[test]
+fn swapping_the_arrangement_on_the_audio_thread_neither_allocates_nor_frees() {
+    let mut collector = Collector::new();
+    let (mut handle, mut node) = audio_clip_channel(8, collector.handle());
+    let source = clip_source(1, 44_100);
+
+    // Three arrangements, all built off the "audio thread" -- that is where the
+    // allocation belongs. The middle one drops every clip, so the swap has to
+    // retire voices rather than rebind them.
+    handle.install(dense_audio_arrangement(&source, 8)).unwrap();
+
+    let mut buffers = AudioBuffers::new(512);
+    let mut render = |node: &mut _, pos: u64| {
+        let mut ctx = ProcessCtx::new(
+            &mut buffers,
+            48_000.0,
+            512,
+            TransportSnapshot {
+                sample_pos: pos,
+                playing: true,
+                bpm: DEFAULT_BPM,
+                mode: PlayMode::Song,
+            },
+        );
+        ctx.buffers.silence();
+        RtNode::process(node, &mut ctx);
+    };
+    render(&mut node, 0);
+    render(&mut node, 512);
+
+    handle.install(CompiledAudioSong::empty()).unwrap();
+    handle.install(dense_audio_arrangement(&source, 4)).unwrap();
+
+    let count = count_allocations(|| {
+        for block in 2..8_u64 {
+            render(&mut node, block * 512);
+        }
+    });
+    assert_eq!(
+        count, 0,
+        "the arrangement swap allocated or freed {count} times"
+    );
+
+    // The superseded arrangements are still allocated: they were handed to the
+    // collector, not freed on the audio thread.
+    assert!(collector.alloc_count() >= 2, "{}", collector.alloc_count());
+    collector.collect();
+    collector.collect();
+    assert_eq!(
+        collector.alloc_count(),
+        1,
+        "only the current arrangement survives"
+    );
 }
