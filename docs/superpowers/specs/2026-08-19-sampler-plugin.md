@@ -365,6 +365,19 @@ chord headroom.
 `plugins/sampler/tests/rt_alloc.rs` — 5 tests, counting allocator, **0
 allocations** on the audio thread.
 
+`plugins/sampler/src/download.rs` — the whole installer state machine against an
+injected fetcher: success, checksum mismatch (file discarded, nothing left on
+disk, nothing looks installed), resume, a truncated file replaced, the
+background thread's transitions. No network, so it runs in CI.
+
+### Against the network
+
+`plugins/sampler/tests/live_download.rs`, `#[ignore]`d. Fetches the single
+smallest pinned file over real HTTPS and checks its SHA-256 — which is the only
+way to prove the TLS stack is wired, the pinned URLs resolve, and the bytes
+upstream still match what was recorded. Verified: `C8v4.flac`, 306 364 bytes,
+`1f8ff28f…`. A failure here means the supply chain broke, not the sampler.
+
 ### With assets (skip-if-absent)
 
 `plugins/sampler/tests/piano_assets.rs` — 8 tests. 90/90 samples loaded, 0
@@ -476,6 +489,7 @@ Stated rather than hidden. Each is a deliberate omission with a reason.
 | `plugins/sampler/src/node.rs` | `SamplerNode`, voices, pitch, interpolation. |
 | `plugins/sampler/src/registry.rs` | Runtime instrument discovery, `ArcSwap` hot-reload, id interning. |
 | `plugins/sampler/src/download.rs` | The in-app installer. |
+| `plugins/sampler/tests/live_download.rs` | The one network test, `#[ignore]`d. |
 | `app/src/source.rs` | `Source::Sampler`, `SamplerSourceRef`, the picker DTO. |
 | `app/src/tracks.rs` | `build_node` for a sampled source. |
 | `app/src/state.rs` | Registry wiring, `asset_status`, `start_asset_download`. |

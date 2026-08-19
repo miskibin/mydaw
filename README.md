@@ -114,6 +114,7 @@ The sampler's own tests split the same way. The offline ones need nothing:
 ```sh
 cargo test -p mydaw-plugin-sampler                        # voices, RT-alloc, manifest parsing
 cargo test -p mydaw-plugin-sampler --test piano_assets -- --nocapture
+cargo test -p mydaw-plugin-sampler --test live_download -- --ignored   # network
 ```
 
 `piano_assets` and `sampler_audio` **skip themselves** when the sample content is not installed,
