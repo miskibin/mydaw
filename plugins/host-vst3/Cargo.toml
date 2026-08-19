@@ -6,9 +6,23 @@ version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# The sacrificial process a scan opens modules in. `mydaw-app` can do the same
+# job (its `main` calls the same dispatcher), so shipping this binary is
+# optional; it exists because it starts in milliseconds rather than loading a
+# webview, and because it is what the tests here spawn.
+[[bin]]
+name = "mydaw-vst3-scan-worker"
+path = "src/bin/mydaw-vst3-scan-worker.rs"
+
 [dependencies]
 mydaw-kernel.workspace = true
 mydaw-rt-core.workspace = true
+# Out-of-process scanning: the worker protocol, the metadata cache and the block
+# list. Shared with the CLAP host, because a plugin crashing the scanner is not a
+# format-specific problem.
+mydaw-plugin-scan.workspace = true
+# A scan result crosses a pipe as JSON and is cached as JSON.
+serde.workspace = true
 # Step 7: the host opens the editor's window through this service, exactly as
 # `mydaw-plugin-host-clap` does.
 mydaw-plugin-windows.workspace = true

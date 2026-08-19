@@ -863,9 +863,10 @@ impl AppState {
     /// Installed CLAP plugins, in the shape the webview reads.
     ///
     /// Served from [`ClapHostService::cached_scan`]: the first call walks the
-    /// standard plugin directories and loads every bundle it finds (slow, and it
-    /// runs vendor code), later calls are free. `rescan` forces a fresh walk, for
-    /// the case where the user installed a plugin without restarting MYDAW.
+    /// standard plugin directories and reads every bundle it finds -- in a child
+    /// process each, so a vendor's `init()` cannot take MYDAW with it -- and later
+    /// calls are free. `rescan` forces a fresh walk, for the case where the user
+    /// installed a plugin without restarting MYDAW.
     pub fn clap_plugins(&self, rescan: bool) -> Vec<ClapPluginInfoDto> {
         let scanned = if rescan {
             self.clap.refresh()

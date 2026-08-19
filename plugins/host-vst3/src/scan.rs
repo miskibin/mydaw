@@ -14,24 +14,15 @@
 //!   no subcategories at all, and [`Vst3PluginKind::Unknown`] is the honest answer
 //!   for it rather than a guess.
 //!
-//! # Why each module is scanned on its own thread
+//! # Why a module is opened in a process MYDAW is willing to lose
 //!
 //! Opening a module runs a vendor's initialisation code, and on this machine
 //! several of the installed plugins are licence-protected: an unlicensed one may
 //! put up a modal dialog and never return. `catch_unwind` does not help with that
-//! -- nothing has panicked, the call simply has not come back.
+//! -- nothing has panicked, the call simply has not come back -- and it does not
+//! help with an access violation either.
 //!
-//! [`scan_module`] therefore does the whole load/enumerate/unload cycle inside a
-//! worker thread and waits [`SCAN_TIMEOUT`] for the results, which are plain data
-//! and `Send`. A module that blocks past the deadline is reported as
-//! [`Vst3ScanError::TimedOut`] and the scan moves on.
-//!
-//! **This leaks the worker thread and the module it loaded.** That is a real
-//! cost, taken deliberately: killing a thread mid-way through third-party code
-//! leaves locks held and is far worse, and the alternative -- one wedged plugin
-//! freezing the whole plugin list -- is not an alternative.
-//!
-//! # The loader lock, and why a timeout is not enough
+//! # The loader lock, and why a deadline alone is not enough
 //!
 //! Measured on the development machine (see the step 7 spec): a module that
 //! blocks *inside `DllMain`* holds the Windows **loader lock** while it does so,
@@ -40,22 +31,31 @@
 //!
 //! So one wedged plugin does not cost one plugin. It costs **every module after
 //! it**, and a scan that carried on regardless would report 42 perfectly good
-//! plugins as broken. That is why
-//! [`Vst3HostService::scan_detailed`](crate::Vst3HostService::scan_detailed)
-//! *stops* at the first timeout rather than continuing, records the culprit in
-//! the block list, and reports the rest as "not attempted": the next scan starts
-//! after the module that poisoned this one, so a user gets through their
-//! collection one restart per bad plugin instead of never.
+//! plugins as broken.
 //!
-//! An out-of-process scanner -- one child process per module -- is the actual
-//! fix, because a poisoned loader lock dies with the child. The seam for it is
-//! already here: [`scan_module_in_process`] is a pure path-in/results-out
-//! function, and `examples/scan_report.rs` already drives it that way.
+//! So [`Vst3HostService::scan_detailed`](crate::Vst3HostService::scan_detailed)
+//! does not open modules in this process at all. It hands the list to
+//! [`ModuleScan`](mydaw_plugin_scan::ModuleScan), which opens each unknown module
+//! in a **child process** and kills it at the deadline: a poisoned loader lock
+//! and an access violation both die with the child, and the module goes on the
+//! block list rather than taking the DAW with it.
+//!
+//! [`scan_module_in_process`] is the pure path-in/results-out function that child
+//! calls, and the [`ScanTarget`] impl at the bottom of this file is the whole of
+//! what this crate has to tell the shared scanner about VST3.
+//!
+//! [`scan_module`] -- one worker thread, one deadline, everything still in this
+//! process -- is what a scan used to do, and is kept because it is the shape of
+//! the fallback [`ModuleScan`](mydaw_plugin_scan::ModuleScan) uses when no worker
+//! executable can be found, and because `examples/scan_report.rs --in-process`
+//! measures the cost of that fallback rather than arguing about it.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
+use mydaw_plugin_scan::{ScanTarget, WorkerHandler};
+use serde::{Deserialize, Serialize};
 use vst3::ComPtr;
 use vst3::Steinberg::kResultOk;
 use vst3::Steinberg::{IPluginFactory, PClassInfo2};
@@ -165,7 +165,11 @@ pub fn split_subcategories(subcategories: &str) -> Vec<&str> {
 ///
 /// A module can export several, so `path` is not unique across results; the pair
 /// `(path, cid)` is, and that pair is what a project file records.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Serialisable because a scan result crosses a pipe from a worker process and
+/// lands in the scan cache. `path` is deliberately **not** part of that shape --
+/// see the field.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Vst3PluginInfo {
     /// The class id, as hex. Stable across versions -- it is what a project file
     /// stores and what `createInstance` is called with.
@@ -185,6 +189,13 @@ pub struct Vst3PluginInfo {
     /// [`kind`](Self::kind) is the interpretation.
     pub subcategories: String,
     /// The `.vst3` module this class came from.
+    ///
+    /// Never serialised. A worker process is told which module to open and a
+    /// cache entry is keyed by it, so the parent already knows the answer -- and
+    /// the path is the one field a child that may be running a hostile plugin
+    /// should not be trusted to invent. It is stamped back on by
+    /// [`ScanTarget::with_module_path`].
+    #[serde(skip)]
     pub path: PathBuf,
 }
 
@@ -392,6 +403,47 @@ pub fn scan_module_in_process(path: &Path) -> Result<Vec<Vst3PluginInfo>, Vst3Sc
         });
     }
     Ok(classes)
+}
+
+/// Everything the shared out-of-process scanner needs to know about VST3.
+///
+/// Four small answers: what to call this format, how to read one module, which
+/// file decides whether a cached answer is stale, and where the module path goes
+/// once a result has crossed a pipe.
+impl ScanTarget for Vst3PluginInfo {
+    const FORMAT: &'static str = "vst3";
+
+    fn read_module(module: &Path) -> Result<Vec<Self>, String> {
+        // A great many plugins touch COM during module load and expect the
+        // loading thread to be in an apartment already. In the worker process
+        // this is the *only* place that happens, so it happens here rather than
+        // in whatever wrapper called us. See `ComApartment`.
+        let _apartment = crate::module::ComApartment::enter();
+        scan_module_in_process(module).map_err(|err| err.to_string())
+    }
+
+    /// The binary, not the bundle.
+    ///
+    /// A VST3 bundle is a *directory*; its own length and timestamp say nothing
+    /// about the DLL two levels down inside it, so fingerprinting the directory
+    /// would happily serve a stale plugin list after an update.
+    fn fingerprint_path(module: &Path) -> PathBuf {
+        crate::module::resolve_binary(module).unwrap_or_else(|_| module.to_path_buf())
+    }
+
+    fn with_module_path(mut self, module: &Path) -> Self {
+        self.path = module.to_path_buf();
+        self
+    }
+}
+
+/// This crate's entry in a worker process's dispatch table.
+///
+/// `main` hands one of these per format to
+/// [`run_worker_if_requested`](mydaw_plugin_scan::run_worker_if_requested); see
+/// `src/bin/mydaw-vst3-scan-worker.rs` for the smallest possible caller.
+pub fn scan_worker_handler() -> WorkerHandler {
+    Vst3PluginInfo::worker_handler()
 }
 
 /// Enumerate the factory's `"Audio Module Class"` entries.

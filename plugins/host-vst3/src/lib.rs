@@ -24,34 +24,38 @@
 //! plugins installed on a real machine. It is **not** at parity with the CLAP
 //! path. What is missing, and why, is in
 //! `docs/superpowers/specs/2026-08-19-step7-vst3-host.md`; the short list is
-//! parameters (none are exposed), `IConnectionPoint` messaging (a dual-component
-//! plugin's editor may not follow its processor), and out-of-process scanning.
+//! parameters (none are exposed) and `IConnectionPoint` messaging (a
+//! dual-component plugin's editor may not follow its processor).
 //!
 //! # Crash isolation -- read this before trusting a scan
 //!
-//! Opening a VST3 module runs third-party code inside this process: the OS loader
-//! runs the DLL's entry point, then `InitDll` runs the vendor's initialisation.
-//! That code can crash, and on a machine with licence-protected plugins it can
-//! also *stop* -- a modal dialog waiting for a human is not a crash and no amount
-//! of `catch_unwind` sees it.
+//! Opening a VST3 module runs third-party code: the OS loader runs the DLL's
+//! entry point, then `InitDll` runs the vendor's initialisation. That code can
+//! crash, and on a machine with licence-protected plugins it can also *stop* -- a
+//! modal dialog waiting for a human is not a crash and no amount of
+//! `catch_unwind` sees it.
 //!
-//! So this crate defends on two axes and is honest about the third:
+//! **A scan therefore does not open modules in MYDAW's process.**
+//! [`Vst3HostService::scan_detailed`] hands the module list to
+//! [`mydaw_plugin_scan::ModuleScan`], which:
 //!
-//! - **panics**: [`catch_unwind`](std::panic::catch_unwind) around every FFI
-//!   boundary, so a module that panics is reported and skipped.
-//! - **hangs**: [`scan::scan_module`] runs each module's load/enumerate/unload
-//!   cycle on a worker thread with a [`SCAN_TIMEOUT`](scan::SCAN_TIMEOUT)
-//!   deadline. A module that blocks is reported and the scan moves on -- at the
-//!   cost of leaking that thread, which is discussed where it is done.
-//! - **hard crashes**: a segfault, a stack overflow or an `abort()` kills the
-//!   process, and nothing in-process changes that.
+//! - answers from a **metadata cache** for every module whose binary has not
+//!   changed since last time -- nothing is loaded at all, which is why the second
+//!   scan of a machine is instant;
+//! - opens every other module in a **child process** with a deadline. A segfault,
+//!   an `abort()`, a stack overflow and a licence dialog all end the same way:
+//!   the child dies, the module goes on the persistent block list, and this
+//!   process never noticed.
 //!
-//! TODO(phase 2): move scanning out of process -- spawn `mydaw --scan <dir>`, read
-//! results over a pipe, treat a non-zero exit as "this module is broken" and
-//! blacklist it. That is the only design that survives a hostile plugin, and it
-//! serves the CLAP host at the same time (which has the identical TODO).
-//! [`scan::scan_module_in_process`] is already the pure path-in/results-out
-//! function such a subprocess would call.
+//! That last point is not theoretical. Before it, the *first* scan on the
+//! development machine killed MYDAW outright -- before the block list had learned
+//! which module did it, so the next launch did exactly the same thing.
+//!
+//! The old in-process path ([`scan::scan_module`]: one worker thread, one
+//! deadline) survives as the fallback for a build with no worker executable, and
+//! it is still worse in the way that matters: a module that hangs inside
+//! `DllMain` holds the process-wide loader lock, so every module after it is
+//! unopenable too. `examples/scan_report.rs --in-process` measures exactly that.
 
 pub mod blocklist;
 pub mod gui;
@@ -66,6 +70,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use mydaw_kernel::{KernelCtx, PanelManifest, Plugin, PluginManifest};
+use mydaw_plugin_scan::{ModuleScan, ScanFailure};
 use parking_lot::Mutex;
 
 pub use blocklist::{BlockList, BLOCKLIST_FILE};
@@ -79,7 +84,8 @@ pub use instances::{
 };
 pub use module::{ClassId, Vst3Module, Vst3ModuleError};
 pub use scan::{
-    standard_search_paths, Vst3PluginInfo, Vst3PluginKind, Vst3ScanError, SCAN_TIMEOUT,
+    scan_worker_handler, standard_search_paths, Vst3PluginInfo, Vst3PluginKind, Vst3ScanError,
+    SCAN_TIMEOUT,
 };
 
 /// Kernel id of this plugin.
@@ -109,10 +115,10 @@ pub struct Vst3HostService {
     /// serving the cache is the difference between a panel that opens and one
     /// that hangs.
     cache: Mutex<Option<Arc<[Vst3PluginInfo]>>>,
-    /// Modules a previous scan found to be unopenable. See [`BlockList`] --
-    /// without it, a machine with a suite of licence-protected plugins takes
-    /// minutes to scan and puts a dialog on screen for each one, every time.
-    blocklist: BlockList,
+    /// How modules are actually opened: in a child process, against a metadata
+    /// cache, minus everything on the block list. See
+    /// [`mydaw_plugin_scan::ModuleScan`].
+    scanner: ModuleScan<Vst3PluginInfo>,
 }
 
 /// What one [`Vst3HostService::scan_detailed`] pass found.
@@ -124,18 +130,31 @@ pub struct Vst3HostService {
 pub struct Vst3ScanReport {
     /// Every plugin class found, in module order.
     pub plugins: Vec<Vst3PluginInfo>,
-    /// Modules that were opened and refused, with the reason.
+    /// Modules that produced nothing, with the reason.
     pub failures: Vec<(PathBuf, String)>,
+    /// Modules this pass added to the block list: each one crashed its scan
+    /// worker or never answered. They are not counted as scanned and will not be
+    /// opened again until the user clears the list.
+    pub blocked: Vec<PathBuf>,
     /// The module that wedged this scan, if one did.
     ///
     /// `Some` means the scan **stopped early**: that module blocked inside
     /// `DllMain` and is holding the process-wide loader lock, so nothing after it
-    /// could have been opened. It has been added to the block list, so the next
-    /// scan resumes past it.
+    /// could have been opened.
+    ///
+    /// Only reachable in the in-process fallback, i.e. a build with no scan
+    /// worker executable. A child hanging costs one module and nothing else,
+    /// which is the entire point of scanning out of process.
     pub aborted_at: Option<PathBuf>,
     /// Modules not opened: already block-listed, or after
     /// [`aborted_at`](Self::aborted_at) stopped the pass.
     pub skipped: Vec<PathBuf>,
+    /// Modules answered from the metadata cache, having opened nothing.
+    pub cache_hits: usize,
+    /// Child processes this pass started -- one per unknown or changed module.
+    pub children: usize,
+    /// Modules opened inside *this* process because no worker could be found.
+    pub in_process: usize,
     /// How long the whole pass took.
     pub elapsed: std::time::Duration,
 }
@@ -153,6 +172,46 @@ impl Vst3ScanReport {
     pub fn not_attempted(&self) -> usize {
         self.skipped.len()
     }
+
+    /// Whether the pass answered entirely from the cache and the block list.
+    ///
+    /// True for every scan after the first on an unchanged machine, which is the
+    /// difference between a browser that opens instantly and one that starts
+    /// dozens of processes.
+    pub fn opened_nothing(&self) -> bool {
+        self.children == 0 && self.in_process == 0
+    }
+}
+
+impl From<mydaw_plugin_scan::ScanPass<Vst3PluginInfo>> for Vst3ScanReport {
+    fn from(pass: mydaw_plugin_scan::ScanPass<Vst3PluginInfo>) -> Self {
+        Self {
+            plugins: pass.found,
+            failures: pass
+                .failures
+                .into_iter()
+                .map(|(path, failure)| {
+                    let reason = match &failure {
+                        // The shared crate keeps its messages format-neutral;
+                        // "VST3 module <path>" is what a VST3 browser wants to
+                        // show, and matches what the module errors already say.
+                        ScanFailure::Blocked(message) => {
+                            format!("VST3 module {}: {message}", path.display())
+                        }
+                        ScanFailure::Refused(message) => message.clone(),
+                    };
+                    (path, reason)
+                })
+                .collect(),
+            blocked: pass.newly_blocked,
+            aborted_at: pass.aborted_at,
+            skipped: pass.skipped,
+            cache_hits: pass.cache_hits,
+            children: pass.children,
+            in_process: pass.in_process,
+            elapsed: pass.elapsed,
+        }
+    }
 }
 
 impl Default for Vst3HostService {
@@ -162,49 +221,49 @@ impl Default for Vst3HostService {
 }
 
 impl Vst3HostService {
-    /// Service scanning the standard locations, with the user's persistent
-    /// block list. See [`standard_search_paths`](scan::standard_search_paths).
+    /// Service scanning the standard locations, with the user's persistent block
+    /// list and metadata cache, opening unknown modules in child processes. See
+    /// [`standard_search_paths`](scan::standard_search_paths).
     pub fn new() -> Self {
-        Self {
-            search_paths: scan::standard_search_paths(),
-            cache: Mutex::new(None),
-            blocklist: BlockList::load(),
-        }
+        Self::with_search_paths_and_scan(scan::standard_search_paths(), ModuleScan::persistent())
     }
 
-    /// Service scanning exactly the given roots, with an **in-memory** block
-    /// list.
+    /// Service scanning exactly the given roots, remembering nothing between
+    /// runs.
     ///
     /// In-memory on purpose: this is the constructor tests use, and a test that
-    /// wrote to the developer's real block list would be a test that changed
-    /// which plugins their DAW can see.
+    /// wrote to the developer's real block list or scan cache would be a test
+    /// that changed which plugins their DAW can see. Modules are still opened out
+    /// of process.
     pub fn with_search_paths(search_paths: impl IntoIterator<Item = PathBuf>) -> Self {
-        Self {
-            search_paths: search_paths.into_iter().collect(),
-            cache: Mutex::new(None),
-            blocklist: BlockList::in_memory(),
-        }
+        Self::with_search_paths_and_scan(search_paths, ModuleScan::in_memory())
     }
 
-    /// Service scanning the given roots with the block list the caller chose.
+    /// Service scanning the given roots with the scanner the caller chose.
     ///
-    /// The constructor a *tool* wants: an override of the search paths should
-    /// not also throw away the record of which modules wedge the loader, or the
-    /// tool spends a quarter of an hour re-learning it.
-    pub fn with_search_paths_and_blocklist(
+    /// The constructor a *tool* wants: an override of the search paths should not
+    /// also throw away the record of which modules wedge the loader, or the tool
+    /// spends a quarter of an hour re-learning it.
+    pub fn with_search_paths_and_scan(
         search_paths: impl IntoIterator<Item = PathBuf>,
-        blocklist: BlockList,
+        scanner: ModuleScan<Vst3PluginInfo>,
     ) -> Self {
         Self {
             search_paths: search_paths.into_iter().collect(),
             cache: Mutex::new(None),
-            blocklist,
+            scanner,
         }
     }
 
     /// The modules this service refuses to open. See [`BlockList`].
     pub fn blocklist(&self) -> &BlockList {
-        &self.blocklist
+        self.scanner.blocklist()
+    }
+
+    /// How this service opens modules: its block list, its metadata cache and
+    /// its worker configuration.
+    pub fn scanner(&self) -> &ModuleScan<Vst3PluginInfo> {
+        &self.scanner
     }
 
     /// Roots this service walks.
@@ -231,39 +290,11 @@ impl Vst3HostService {
 
     /// [`scan`](Self::scan), plus everything that went wrong.
     ///
-    /// A module that hangs is added to the block list here, which is the only
-    /// place that happens: a timeout is the *only* evidence a host gets that a
-    /// module is waiting on a human.
+    /// A module that crashes its worker or never answers is added to the block
+    /// list here, which is the only place that happens: a dead child is the only
+    /// evidence a host gets that a module is unopenable or waiting on a human.
     pub fn scan_detailed(&self) -> Vst3ScanReport {
-        let started = std::time::Instant::now();
-        let mut report = Vst3ScanReport::default();
-
-        for module in self.module_paths() {
-            // Everything after a wedged module is untrustworthy: it holds the
-            // loader lock, so every later `LoadLibraryW` in this process blocks
-            // behind it. See the `scan` module docs.
-            if report.aborted_at.is_some() || self.blocklist.contains(&module) {
-                report.skipped.push(module);
-                continue;
-            }
-            match scan::scan_module(&module) {
-                Ok(plugins) => report.plugins.extend(plugins),
-                Err(err @ Vst3ScanError::TimedOut { .. }) => {
-                    log::warn!(
-                        "{err}. It holds the OS loader lock, so no further module can be                          opened in this process; the scan stops here and resumes past it next                          time."
-                    );
-                    self.blocklist.block(&module);
-                    report.aborted_at = Some(module);
-                }
-                Err(err) => {
-                    log::warn!("skipping VST3 module {}: {err}", module.display());
-                    report.failures.push((module, err.to_string()));
-                }
-            }
-        }
-
-        report.elapsed = started.elapsed();
-        report
+        self.scanner.scan_all(&self.module_paths()).into()
     }
 
     /// Plugin list, scanning at most once per process.

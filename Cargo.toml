@@ -39,6 +39,9 @@ serde_json = "1"   # DTO wire-shape tests, and the debug-tap axis/stats sidecars
 mydaw-kernel = { path = "crates/kernel" }
 mydaw-rt-core = { path = "crates/rt-core" }
 mydaw-ipc-bridge = { path = "crates/ipc-bridge" }
+# Out-of-process plugin scanning: the worker protocol, the metadata cache and the
+# block list, shared by both plugin hosts.
+mydaw-plugin-scan = { path = "crates/plugin-scan" }
 
 # --- internal plugins (registered by hand in `app/main.rs`) ---
 mydaw-plugin-metering = { path = "plugins/metering" }

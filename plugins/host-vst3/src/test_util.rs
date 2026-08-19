@@ -17,16 +17,18 @@
 //!   prefer, so a developer chasing one plugin's behaviour need not edit code.
 //! - `MYDAW_VST3_PATH`: an extra search root, on top of the standard ones.
 //!
-//! # The block list is used, and that matters
+//! # The user's block list and scan cache are used, and that matters
 //!
-//! [`installed_plugins`] scans with the user's persistent
-//! [`BlockList`](crate::BlockList). Without it, a machine whose collection
-//! includes licence-protected plugins has its loader lock wedged by the first of
-//! them, and every test here then skips for entirely the wrong reason. Populate
-//! it once with `cargo run -p mydaw-plugin-host-vst3 --example scan_report`.
+//! [`installed_plugins`] scans with [`ModuleScan::persistent`] -- the same block
+//! list and metadata cache the DAW itself uses. The block list stops a machine
+//! full of licence-protected plugins from spending fifteen seconds per plugin on
+//! dialogs nobody will dismiss; the cache means a test binary that runs after the
+//! app has scanned once opens no modules at all.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+use mydaw_plugin_scan::ModuleScan;
 
 use crate::hosting::{LoadedVst3Plugin, Vst3BusLayout};
 use crate::scan::Vst3PluginInfo;
@@ -44,8 +46,9 @@ pub fn installed_plugins() -> &'static [Vst3PluginInfo] {
         if let Some(extra) = std::env::var_os("MYDAW_VST3_PATH") {
             roots.extend(std::env::split_paths(&extra));
         }
-        // The *persistent* block list, deliberately: see the module docs.
-        Vst3HostService::with_search_paths_and_blocklist(roots, crate::BlockList::load()).scan()
+        // The *persistent* block list and cache, deliberately: see the module
+        // docs.
+        Vst3HostService::with_search_paths_and_scan(roots, ModuleScan::persistent()).scan()
     })
 }
 

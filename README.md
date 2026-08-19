@@ -39,13 +39,14 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `crates/kernel` | Microkernel: `Plugin` trait, typed service registry, non-RT event bus, dependency-ordered lifecycle |
 | `crates/rt-core` | RT primitives: `RtNode`, the multi-track mixer graph, lock-free graph swap, `rtrb` command queue, transport clock |
 | `crates/ipc-bridge` | Kernel ⇄ webview data: serde DTOs, `UiSnapshot`, 30 Hz meter throttle. Tauri-free by design |
+| `crates/plugin-scan` | Crash-proof plugin discovery, shared by both hosts: one child process per unknown module, a metadata cache so unchanged ones are never opened again, and a persistent block list for the ones that will not survive being read |
 | `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
 | `plugins/debug-tap` | RT-safe capture of the output bus, plus WAV / annotated PNG / statistics — so the engine can be *inspected* without ears |
 | `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
 | `plugins/instruments` | The built-in instruments: a synthesised drum kit and a polyBLEP poly synth, driven by note events. No assets, bit-deterministic, zero-alloc |
 | `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
 | `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
-| `plugins/host-vst3` | VST3 host stub (Phase 1 spike 5) |
+| `plugins/host-vst3` | VST3 discovery **and hosting**: scans modules, runs a plugin instance as a `Vst3Node` in the RT graph (step 7) |
 | `plugins/plugin-windows` | Native top-level windows for external plugin GUIs, pumped by the shell's own message loop (Phase 1 spike 3) |
 | `app/` | The shell: boots the kernel, registers the plugin set, hosts the webview, owns the Tauri commands |
 | `ui/` | SolidJS + TypeScript + Vite frontend ([`ui/README.md`](ui/README.md)) |

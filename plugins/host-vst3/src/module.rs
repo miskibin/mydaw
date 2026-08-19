@@ -140,6 +140,27 @@ impl std::fmt::Display for ClassId {
     }
 }
 
+/// As the 32-digit hex string, not as sixteen numbers.
+///
+/// A class id crosses two boundaries in this shape already -- the IPC wire and a
+/// project file -- and the scan cache is read by humans when a plugin goes
+/// missing. A byte array would be all three of unreadable, larger, and a second
+/// spelling of the same thing.
+impl serde::Serialize for ClassId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_hex())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ClassId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Self::from_hex(&text).ok_or_else(|| {
+            serde::de::Error::custom(format!("{text:?} is not a 32-digit VST3 class id"))
+        })
+    }
+}
+
 /// Why a module could not be opened.
 #[derive(Debug, thiserror::Error)]
 pub enum Vst3ModuleError {
