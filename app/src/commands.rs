@@ -11,13 +11,16 @@ use tauri::State;
 
 use crate::clap_bridge::{ClapGuiStatusDto, ClapTarget};
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
-use crate::dto::{ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto};
+use crate::dto::{
+    ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto, Vst3PluginInfoDto,
+};
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
 use crate::project::MixerStateDto;
 use crate::source::{Source, SourceDto};
 use crate::state::AppState;
+use crate::vst3_bridge::Vst3GuiStatusDto;
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
 #[tauri::command]
@@ -426,6 +429,129 @@ pub async fn load_clap_state(
     let bytes = crate::clap_bridge::from_base64(&state_base64)?;
     state
         .load_clap_state(target, bytes)
+        .map_err(|err| err.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Hosted VST3 plugins
+// ---------------------------------------------------------------------------
+//
+// A sibling surface to the CLAP one above rather than a generalisation of it.
+// The two formats identify a plugin differently -- a CLAP id is a string, a VST3
+// class id is 32 hex digits -- so a merged command would have had to accept both
+// and decide which it was looking at. See `crate::vst3_bridge`.
+
+/// Installed VST3 plugins, for the browser panel and the pickers.
+///
+/// The first call scans the standard VST3 directories, which opens every
+/// installed module in this process. Pass `rescan: true` (the panel's Rescan
+/// button) to walk them again.
+///
+/// **A module that hangs is remembered and skipped next time.** On a machine with
+/// licence-protected plugins that is the difference between a panel that opens in
+/// seconds and one that takes minutes and leaves a dialog on screen for each --
+/// see `mydaw_plugin_host_vst3::blocklist`.
+///
+/// `async` so Tauri runs it off the main thread.
+#[tauri::command]
+pub async fn get_vst3_plugins(
+    state: State<'_, AppState>,
+    rescan: bool,
+) -> Result<Vec<Vst3PluginInfoDto>, String> {
+    Ok(state.vst3_plugins(rescan))
+}
+
+/// Scanned VST3 **audio effects**, for the master insert picker.
+#[tauri::command]
+pub async fn get_vst3_master_effects(
+    state: State<'_, AppState>,
+) -> Result<Vec<Vst3PluginInfoDto>, String> {
+    Ok(state.vst3_master_effects())
+}
+
+/// Put a hosted VST3 instrument at the head of one track.
+///
+/// `modulePath` and `cid` come straight from an entry in [`get_vst3_plugins`].
+/// Both travel because one module commonly exports several classes and a class
+/// id alone would not say which copy was meant.
+#[tauri::command]
+pub async fn set_track_source_vst3(
+    state: State<'_, AppState>,
+    track: usize,
+    module_path: String,
+    cid: String,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_source_vst3(track, &module_path, &cid)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Put a hosted VST3 effect in the master insert.
+///
+/// The insert holds **one** plugin of either format, so this displaces a CLAP
+/// effect that was there and destroys its instance -- see `crate::vst3_host`.
+/// [`clear_master_effect`] empties the slot whichever format is in it.
+#[tauri::command]
+pub async fn set_master_effect_vst3(
+    state: State<'_, AppState>,
+    module_path: String,
+    cid: String,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_master_effect_vst3(&module_path, &cid)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Open one hosted VST3 plugin's editor in its own native window.
+///
+/// `target` is `{"slot":"track","index":n}` or `{"slot":"master"}` -- the same
+/// shape the CLAP commands take, because a slot is a place in the mixer and a
+/// place in the mixer has no format.
+#[tauri::command]
+pub async fn open_vst3_gui(
+    state: State<'_, AppState>,
+    target: ClapTarget,
+) -> Result<Vst3GuiStatusDto, String> {
+    state.open_vst3_gui(target).map_err(|err| err.to_string())
+}
+
+/// Close it. Not an error when nothing is open.
+#[tauri::command]
+pub async fn close_vst3_gui(
+    state: State<'_, AppState>,
+    target: ClapTarget,
+) -> Result<Vst3GuiStatusDto, String> {
+    state.close_vst3_gui(target).map_err(|err| err.to_string())
+}
+
+/// Serialise a hosted VST3 plugin's component state, as base64.
+///
+/// An **empty** string means the plugin had nothing to save, which is a normal
+/// answer. Only the component half is saved; see
+/// `mydaw_plugin_host_vst3::LoadedVst3Plugin::save_state`.
+#[tauri::command]
+pub async fn save_vst3_state(
+    state: State<'_, AppState>,
+    target: ClapTarget,
+) -> Result<String, String> {
+    let bytes = state
+        .save_vst3_state(target)
+        .map_err(|err| err.to_string())?;
+    Ok(crate::clap_bridge::to_base64(&bytes))
+}
+
+/// Restore a hosted VST3 plugin from a blob produced by [`save_vst3_state`].
+#[tauri::command]
+pub async fn load_vst3_state(
+    state: State<'_, AppState>,
+    target: ClapTarget,
+    state_base64: String,
+) -> Result<(), String> {
+    let bytes = crate::clap_bridge::from_base64(&state_base64)?;
+    state
+        .load_vst3_state(target, bytes)
         .map_err(|err| err.to_string())
 }
 

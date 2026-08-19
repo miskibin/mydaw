@@ -1,12 +1,44 @@
 [package]
 name = "mydaw-plugin-host-vst3"
-description = "MYDAW plugin: VST3 hosting. Stub -- the real implementation lands with Phase 1 spike 5."
+description = "MYDAW plugin: VST3 plugin discovery and hosting -- scans modules and runs a plugin instance as an RT graph node."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-# No `vst3` dependency yet, on purpose. See the crate docs: pulling in the
-# bindings before spike 5 buys nothing and costs build time on every CI run.
 [dependencies]
 mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
+# Step 7: the host opens the editor's window through this service, exactly as
+# `mydaw-plugin-host-clap` does.
+mydaw-plugin-windows.workspace = true
+# Raw COM-style bindings for the VST3 API (coupler-rs, MIT/Apache). There is no
+# safe high-level VST3 host crate with a compatible licence; the safe layer over
+# these bindings is this crate.
+vst3 = "0.3"
+log.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+
+# A VST3 module is a Windows DLL. Loading one is `LoadLibraryW` +
+# `GetProcAddress`, which is what `windows-sys` is already in the workspace for.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Com",
+] }
+
+[dev-dependencies]
+# The spectral analysis the hardware tests use to prove a real instrument
+# actually produced the pitch it was asked for. Non-RT, test-only.
+mydaw-plugin-debug-tap.workspace = true
+
+# The GUI test runs its own message loop and inspects the plugin's child window
+# through Win32 -- the only way to prove an editor is really embedded without a
+# human looking at the screen.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }

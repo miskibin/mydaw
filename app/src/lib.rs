@@ -65,6 +65,8 @@ pub mod project;
 pub mod source;
 mod state;
 pub mod tracks;
+pub mod vst3_bridge;
+pub mod vst3_host;
 
 pub use clap_bridge::{
     from_base64, to_base64, ClapAnswer, ClapBoard, ClapCommand, ClapGuiStatusDto, ClapHostBridge,
@@ -79,7 +81,7 @@ pub use debug_capture::{
 };
 pub use dto::{
     ClapPluginInfoDto, MeterFrameDto, PatternDto, PatternRowDto, SequencerStateDto, StepDto,
-    TrackMeterDto,
+    TrackMeterDto, Vst3PluginInfoDto,
 };
 pub use graph::{engine_graph, source_chain, track_chain, TransportGate};
 pub use insert::{insert_slot, InsertHandle, InsertSlot};
@@ -94,13 +96,17 @@ pub use project::{
 };
 pub use source::{
     check_bundle_path, ClapSourceRef, SilentNode, Source, SourceDto, SourceError, SourceHandle,
-    SourceKindDto, SourceSlot,
+    SourceKindDto, SourceSlot, Vst3SourceRef,
 };
 pub use state::{
     boot_kernel, ui_snapshot, AppState, NoteError, SequencerError, StartupError,
     KERNEL_STATUS_PANEL, MIXER_PANEL,
 };
 pub use tracks::{MixerError, TrackHost};
+pub use vst3_bridge::{
+    Vst3Answer, Vst3Board, Vst3Command, Vst3GuiStatusDto, Vst3HostBridge, Vst3SlotDto, Vst3Target,
+};
+pub use vst3_host::Vst3Host;
 
 use std::process::ExitCode;
 
@@ -188,6 +194,7 @@ pub fn run() -> ExitCode {
     // the device it needs. All `Arc`s, cloned before `state` moves into Tauri's
     // managed state.
     let clap_bridge = std::sync::Arc::clone(state.clap_bridge());
+    let vst3_bridge = std::sync::Arc::clone(state.vst3_bridge());
     let track_host = std::sync::Arc::clone(state.tracks());
     // The window service belongs to this thread -- the one tao's loop will run on
     // -- which is exactly what makes it legal to open plugin windows from the run
@@ -197,12 +204,16 @@ pub fn run() -> ExitCode {
         .services
         .get::<mydaw_plugin_windows::PluginWindowService>()
         .expect("plugin-windows provides PluginWindowService; AppState checked at boot");
-    let mut clap_host = ClapHost::new(window_service);
+    let mut clap_host = ClapHost::new(std::sync::Arc::clone(&window_service));
+    let mut vst3_host = Vst3Host::new(window_service);
     // Published before the first command can arrive, so a `get_tracks` during
     // startup sees an accurate (empty) board rather than nothing at all, and so
-    // a CLAP command fails with a sentence instead of a five-second timeout.
+    // a hosted-plugin command fails with a sentence instead of a five-second
+    // timeout.
     clap_host.publish(&track_host, clap_bridge.board());
+    vst3_host.publish(&track_host, vst3_bridge.board());
     clap_bridge.set_served(true);
+    vst3_bridge.set_served(true);
 
     let app = tauri::Builder::default()
         .manage(state)
@@ -236,6 +247,15 @@ pub fn run() -> ExitCode {
             commands::close_clap_gui,
             commands::save_clap_state,
             commands::load_clap_state,
+            // Hosted VST3 plugins: the same surface, one format over.
+            commands::get_vst3_plugins,
+            commands::get_vst3_master_effects,
+            commands::set_track_source_vst3,
+            commands::set_master_effect_vst3,
+            commands::open_vst3_gui,
+            commands::close_vst3_gui,
+            commands::save_vst3_state,
+            commands::load_vst3_state,
             commands::get_pattern,
             commands::set_pattern,
             commands::set_bpm,
@@ -259,8 +279,10 @@ pub fn run() -> ExitCode {
         Err(err) => {
             eprintln!("MYDAW: could not create the application window: {err}");
             clap_bridge.set_served(false);
+            vst3_bridge.set_served(false);
             meters.shutdown();
             audio.stop();
+            vst3_host.shutdown();
             clap_host.shutdown();
             kernel.shutdown();
             return ExitCode::FAILURE;
@@ -274,6 +296,10 @@ pub fn run() -> ExitCode {
     {
         let handle = app.handle().clone();
         clap_bridge.set_waker(Box::new(move || {
+            let _ = handle.run_on_main_thread(|| {});
+        }));
+        let handle = app.handle().clone();
+        vst3_bridge.set_waker(Box::new(move || {
             let _ = handle.run_on_main_thread(|| {});
         }));
     }
@@ -291,13 +317,28 @@ pub fn run() -> ExitCode {
         // whenever anything else happens, which is exactly when there is
         // something to do.
         tauri::RunEvent::MainEventsCleared => {
+            // The master insert holds one plugin of either format, so a CLAP
+            // placement has to evict a VST3 one. `ClapHost` cannot do that for
+            // itself -- it does not know the other host exists -- so the run
+            // loop, which knows both, watches for the placement and says so.
+            // The other direction is inside `Vst3Host::place_master_effect`,
+            // which is handed the CLAP host for exactly this reason.
+            let clap_master_before = clap_host.instance_at(ClapTarget::Master);
             clap_host.tick(&track_host, &audio, &clap_bridge);
+            let clap_master_now = clap_host.instance_at(ClapTarget::Master);
+            if clap_master_now.is_some() && clap_master_now != clap_master_before {
+                vst3_host.evict_master();
+                vst3_host.publish(&track_host, vst3_bridge.board());
+            }
+
+            vst3_host.tick(&track_host, &audio, &vst3_bridge, &mut clap_host);
         }
         tauri::RunEvent::Exit => {
             log::info!("shutting down");
             // A command that arrives during teardown must be told, not left to
             // time out against a loop that will never turn again.
             clap_bridge.set_served(false);
+            vst3_bridge.set_served(false);
             meters.shutdown();
             // Closing the stream retires the graph, which is what eventually
             // drops the CLAP nodes and sends their processors back here. Only
@@ -306,6 +347,7 @@ pub fn run() -> ExitCode {
             // window whose procedure lives in an unloaded DLL crashes the
             // process on its next message.
             audio.stop();
+            vst3_host.shutdown();
             clap_host.shutdown();
             kernel.shutdown();
         }

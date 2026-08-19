@@ -1,54 +1,345 @@
-//! `mydaw-plugin-host-vst3` -- VST3 hosting. **Stub.**
+//! `mydaw-plugin-host-vst3` -- VST3 plugin discovery and hosting.
 //!
-//! Registered from boot day one so that the plugin list, the dependency graph and
-//! the status panel show the real shape of the system, and so that the crate that
-//! will hold the VST3 host already exists when spike 5 starts. It contributes
-//! nothing: no services, no node factories, no panels.
+//! The compatibility half of MYDAW's plugin story. CLAP is the primary format and
+//! `mydaw-plugin-host-clap` is the reference implementation; this crate is the
+//! same architecture over a much older API, and the architecture is deliberately
+//! identical so that the two can be read side by side:
 //!
-//! # Why a stub rather than nothing
-//! The scaffold spec (`docs/superpowers/specs/2026-08-18-mydaw-scaffold-design.md`)
-//! puts VST3 last in the risk order: CLAP is the primary format, VST3 is the
-//! compatibility tail. Registering an empty plugin now keeps `app/main.rs` stable
-//! when the implementation arrives -- the wiring line never changes, only this
-//! crate's insides do.
+//! | | CLAP | VST3 |
+//! | --- | --- | --- |
+//! | discovery | `ClapHostService` | [`Vst3HostService`] |
+//! | one instance | `LoadedClapPlugin` | [`LoadedVst3Plugin`] |
+//! | in the graph | `ClapNode` | [`Vst3Node`] |
+//! | its editor | `ClapGuiSession` | [`Vst3GuiSession`] |
+//! | many at once | `ClapInstanceHost` | [`Vst3InstanceHost`] |
 //!
-//! # Planned scope -- Phase 1, spike 5
-//! Per the spec, "minimal load + process via vst3 crate":
+//! Where they differ, the difference is the format's, not a choice: VST3 has no
+//! safe host binding, so [`module`] and [`host`] exist to build one, and every
+//! COM call in this crate is `unsafe` with the invariant it relies on written
+//! next to it.
 //!
-//! - Dependency: `vst3 = "0.3"` (raw COM-style bindings; there is no safe
-//!   high-level host crate with a compatible licence at time of writing).
-//! - Scan the standard Windows VST3 locations
-//!   (`%COMMONPROGRAMFILES%\VST3`, `%LOCALAPPDATA%\Programs\Common\VST3`),
-//!   enumerate classes through `IPluginFactory`.
-//! - Instantiate one `IComponent` + `IAudioProcessor`, negotiate a stereo bus
-//!   layout and 32-bit float processing, and wrap it behind
-//!   [`mydaw_kernel::RtNode`] exactly like the CLAP host does. The `RtNode` seam
-//!   is the whole point: the graph must not learn that two plugin formats exist.
-//! - Discovery shares the crash-isolation problem described in
-//!   `mydaw-plugin-host-clap`: an in-process scan cannot survive a plugin that
-//!   segfaults during load. The out-of-process scanner planned there is format
-//!   agnostic and will serve both hosts.
+//! # Scope -- this is a spike
 //!
-//! Nothing above is implemented yet. Deliberately.
+//! Step 7 proves the pillar: scan → load → process → notes → GUI, on the real
+//! plugins installed on a real machine. It is **not** at parity with the CLAP
+//! path. What is missing, and why, is in
+//! `docs/superpowers/specs/2026-08-19-step7-vst3-host.md`; the short list is
+//! parameters (none are exposed), `IConnectionPoint` messaging (a dual-component
+//! plugin's editor may not follow its processor), and out-of-process scanning.
+//!
+//! # Crash isolation -- read this before trusting a scan
+//!
+//! Opening a VST3 module runs third-party code inside this process: the OS loader
+//! runs the DLL's entry point, then `InitDll` runs the vendor's initialisation.
+//! That code can crash, and on a machine with licence-protected plugins it can
+//! also *stop* -- a modal dialog waiting for a human is not a crash and no amount
+//! of `catch_unwind` sees it.
+//!
+//! So this crate defends on two axes and is honest about the third:
+//!
+//! - **panics**: [`catch_unwind`](std::panic::catch_unwind) around every FFI
+//!   boundary, so a module that panics is reported and skipped.
+//! - **hangs**: [`scan::scan_module`] runs each module's load/enumerate/unload
+//!   cycle on a worker thread with a [`SCAN_TIMEOUT`](scan::SCAN_TIMEOUT)
+//!   deadline. A module that blocks is reported and the scan moves on -- at the
+//!   cost of leaking that thread, which is discussed where it is done.
+//! - **hard crashes**: a segfault, a stack overflow or an `abort()` kills the
+//!   process, and nothing in-process changes that.
+//!
+//! TODO(phase 2): move scanning out of process -- spawn `mydaw --scan <dir>`, read
+//! results over a pipe, treat a non-zero exit as "this module is broken" and
+//! blacklist it. That is the only design that survives a hostile plugin, and it
+//! serves the CLAP host at the same time (which has the identical TODO).
+//! [`scan::scan_module_in_process`] is already the pure path-in/results-out
+//! function such a subprocess would call.
 
-use mydaw_kernel::{KernelCtx, Plugin, PluginManifest};
+pub mod blocklist;
+pub mod gui;
+pub mod host;
+pub mod hosting;
+pub mod instances;
+pub mod module;
+pub mod scan;
+pub mod test_util;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use mydaw_kernel::{KernelCtx, PanelManifest, Plugin, PluginManifest};
+use parking_lot::Mutex;
+
+pub use blocklist::{BlockList, BLOCKLIST_FILE};
+pub use gui::{Vst3GuiError, Vst3GuiPump, Vst3GuiSession, FALLBACK_SIZE};
+pub use host::{Vst3GuiRequests, Vst3HostRequests, MAX_BLOCK_EVENTS, MAX_STATE_BYTES};
+pub use hosting::{
+    LoadedVst3Plugin, Vst3BusLayout, Vst3HostError, Vst3Node, Vst3NodeStats, RETIRE_TIMEOUT,
+};
+pub use instances::{
+    Vst3GuiState, Vst3InstanceError, Vst3InstanceHost, Vst3InstanceId, ACTIVATE_WAIT,
+};
+pub use module::{ClassId, Vst3Module, Vst3ModuleError};
+pub use scan::{
+    standard_search_paths, Vst3PluginInfo, Vst3PluginKind, Vst3ScanError, SCAN_TIMEOUT,
+};
 
 /// Kernel id of this plugin.
 pub const PLUGIN_ID: &str = "host-vst3";
 
-/// RT node type id this host will claim once it can build nodes.
-///
-/// Declared now so the constant has one home and project files written by a later
-/// build stay readable by this one (as "unknown node type" rather than garbage).
+/// RT node type id this host claims for nodes it builds.
 pub const NODE_TYPE_ID: &str = "vst3";
 
-/// VST3 host. Contributes nothing until Phase 1 spike 5.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct HostVst3Plugin;
+/// Panel id of the VST3 browser, contributed to the webview at registration.
+pub const BROWSER_PANEL_ID: &str = "vst3-browser";
+
+/// Frontend component key rendering [`BROWSER_PANEL_ID`]. Mirrored in
+/// `ui/src/panels/registry.ts`; renaming it is a breaking UI change.
+pub const BROWSER_PANEL_COMPONENT: &str = "vst3-browser";
+
+/// VST3 discovery service.
+///
+/// Provided as a kernel service by [`HostVst3Plugin`]; resolve it with
+/// `ctx.services.get::<Vst3HostService>()`.
+pub struct Vst3HostService {
+    search_paths: Vec<PathBuf>,
+    /// Result of the last [`scan`](Self::scan), if one has happened.
+    ///
+    /// A scan opens every installed module, which is slow (seconds on a
+    /// well-stocked machine, because VST3 modules are large and several here are
+    /// over 100 MB) and runs third-party code. Doing it once per process and
+    /// serving the cache is the difference between a panel that opens and one
+    /// that hangs.
+    cache: Mutex<Option<Arc<[Vst3PluginInfo]>>>,
+    /// Modules a previous scan found to be unopenable. See [`BlockList`] --
+    /// without it, a machine with a suite of licence-protected plugins takes
+    /// minutes to scan and puts a dialog on screen for each one, every time.
+    blocklist: BlockList,
+}
+
+/// What one [`Vst3HostService::scan_detailed`] pass found.
+///
+/// The plain [`scan`](Vst3HostService::scan) returns only the plugins, because
+/// that is all a picker needs. This carries the rest, which is what a diagnostic
+/// report and the step 7 compatibility table are made of.
+#[derive(Debug, Default)]
+pub struct Vst3ScanReport {
+    /// Every plugin class found, in module order.
+    pub plugins: Vec<Vst3PluginInfo>,
+    /// Modules that were opened and refused, with the reason.
+    pub failures: Vec<(PathBuf, String)>,
+    /// The module that wedged this scan, if one did.
+    ///
+    /// `Some` means the scan **stopped early**: that module blocked inside
+    /// `DllMain` and is holding the process-wide loader lock, so nothing after it
+    /// could have been opened. It has been added to the block list, so the next
+    /// scan resumes past it.
+    pub aborted_at: Option<PathBuf>,
+    /// Modules not opened: already block-listed, or after
+    /// [`aborted_at`](Self::aborted_at) stopped the pass.
+    pub skipped: Vec<PathBuf>,
+    /// How long the whole pass took.
+    pub elapsed: std::time::Duration,
+}
+
+impl Vst3ScanReport {
+    /// Whether the pass stopped early because a module wedged the loader.
+    ///
+    /// A caller that shows a plugin list should say so: "37 plugins not scanned"
+    /// is a very different message from "you have 6 plugins".
+    pub fn was_aborted(&self) -> bool {
+        self.aborted_at.is_some()
+    }
+
+    /// How many modules were not opened at all.
+    pub fn not_attempted(&self) -> usize {
+        self.skipped.len()
+    }
+}
+
+impl Default for Vst3HostService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Vst3HostService {
+    /// Service scanning the standard locations, with the user's persistent
+    /// block list. See [`standard_search_paths`](scan::standard_search_paths).
+    pub fn new() -> Self {
+        Self {
+            search_paths: scan::standard_search_paths(),
+            cache: Mutex::new(None),
+            blocklist: BlockList::load(),
+        }
+    }
+
+    /// Service scanning exactly the given roots, with an **in-memory** block
+    /// list.
+    ///
+    /// In-memory on purpose: this is the constructor tests use, and a test that
+    /// wrote to the developer's real block list would be a test that changed
+    /// which plugins their DAW can see.
+    pub fn with_search_paths(search_paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            search_paths: search_paths.into_iter().collect(),
+            cache: Mutex::new(None),
+            blocklist: BlockList::in_memory(),
+        }
+    }
+
+    /// Service scanning the given roots with the block list the caller chose.
+    ///
+    /// The constructor a *tool* wants: an override of the search paths should
+    /// not also throw away the record of which modules wedge the loader, or the
+    /// tool spends a quarter of an hour re-learning it.
+    pub fn with_search_paths_and_blocklist(
+        search_paths: impl IntoIterator<Item = PathBuf>,
+        blocklist: BlockList,
+    ) -> Self {
+        Self {
+            search_paths: search_paths.into_iter().collect(),
+            cache: Mutex::new(None),
+            blocklist,
+        }
+    }
+
+    /// The modules this service refuses to open. See [`BlockList`].
+    pub fn blocklist(&self) -> &BlockList {
+        &self.blocklist
+    }
+
+    /// Roots this service walks.
+    pub fn search_paths(&self) -> &[PathBuf] {
+        &self.search_paths
+    }
+
+    /// Every `*.vst3` path under the search roots, deduplicated.
+    pub fn module_paths(&self) -> Vec<PathBuf> {
+        scan::bundle_paths(&self.search_paths)
+    }
+
+    /// Find every VST3 plugin under the search paths.
+    ///
+    /// Never fails: an unreadable root, a module that will not load, one that
+    /// panics and one that hangs are all logged and skipped. A scan of a machine
+    /// with no VST3 plugins returns an empty vector.
+    ///
+    /// **Not cheap and not RT-safe.** Call it from a worker thread, once, and
+    /// cache the result -- which is what [`cached_scan`](Self::cached_scan) does.
+    pub fn scan(&self) -> Vec<Vst3PluginInfo> {
+        self.scan_detailed().plugins
+    }
+
+    /// [`scan`](Self::scan), plus everything that went wrong.
+    ///
+    /// A module that hangs is added to the block list here, which is the only
+    /// place that happens: a timeout is the *only* evidence a host gets that a
+    /// module is waiting on a human.
+    pub fn scan_detailed(&self) -> Vst3ScanReport {
+        let started = std::time::Instant::now();
+        let mut report = Vst3ScanReport::default();
+
+        for module in self.module_paths() {
+            // Everything after a wedged module is untrustworthy: it holds the
+            // loader lock, so every later `LoadLibraryW` in this process blocks
+            // behind it. See the `scan` module docs.
+            if report.aborted_at.is_some() || self.blocklist.contains(&module) {
+                report.skipped.push(module);
+                continue;
+            }
+            match scan::scan_module(&module) {
+                Ok(plugins) => report.plugins.extend(plugins),
+                Err(err @ Vst3ScanError::TimedOut { .. }) => {
+                    log::warn!(
+                        "{err}. It holds the OS loader lock, so no further module can be                          opened in this process; the scan stops here and resumes past it next                          time."
+                    );
+                    self.blocklist.block(&module);
+                    report.aborted_at = Some(module);
+                }
+                Err(err) => {
+                    log::warn!("skipping VST3 module {}: {err}", module.display());
+                    report.failures.push((module, err.to_string()));
+                }
+            }
+        }
+
+        report.elapsed = started.elapsed();
+        report
+    }
+
+    /// Plugin list, scanning at most once per process.
+    pub fn cached_scan(&self) -> Arc<[Vst3PluginInfo]> {
+        if let Some(cached) = self.cache.lock().clone() {
+            return cached;
+        }
+        // Deliberately scanning outside the lock, as the CLAP host does: a scan
+        // runs vendor code and can take a while, and blocking every other caller
+        // behind it would turn one slow plugin into a frozen UI. A concurrent
+        // double scan is wasteful but harmless.
+        let scanned: Arc<[Vst3PluginInfo]> = self.scan().into();
+        *self.cache.lock() = Some(Arc::clone(&scanned));
+        scanned
+    }
+
+    /// Discard the cache and scan again. Returns the fresh list.
+    pub fn refresh(&self) -> Arc<[Vst3PluginInfo]> {
+        let scanned: Arc<[Vst3PluginInfo]> = self.scan().into();
+        *self.cache.lock() = Some(Arc::clone(&scanned));
+        scanned
+    }
+
+    /// Whether [`cached_scan`](Self::cached_scan) would answer without scanning.
+    pub fn has_cached_scan(&self) -> bool {
+        self.cache.lock().is_some()
+    }
+
+    /// The scanned plugin with this class id, if one was found.
+    pub fn find(&self, cid: ClassId) -> Option<Vst3PluginInfo> {
+        self.cached_scan()
+            .iter()
+            .find(|plugin| plugin.cid == cid)
+            .cloned()
+    }
+
+    /// Load and instantiate the plugin with class id `cid` from `path`.
+    ///
+    /// Bypasses the scan: this is the path a project file (which stores module
+    /// path + class id) takes.
+    ///
+    /// # Errors
+    /// Anything [`LoadedVst3Plugin::load`] reports.
+    pub fn load(&self, path: &Path, cid: ClassId) -> Result<LoadedVst3Plugin, Vst3HostError> {
+        LoadedVst3Plugin::load(path, cid)
+    }
+}
+
+impl std::fmt::Debug for Vst3HostService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Vst3HostService")
+            .field("search_paths", &self.search_paths)
+            .field("scanned", &self.has_cached_scan())
+            .finish()
+    }
+}
+
+/// Provides [`Vst3HostService`]. Scans nothing at boot.
+///
+/// Discovery loads third-party code and walks the filesystem; doing that during
+/// kernel boot would make start-up as slow and as fragile as the worst plugin
+/// installed on the machine -- which, on a machine with licence-protected
+/// plugins, means a DAW that will not start until somebody dismisses a dialog.
+#[derive(Default)]
+pub struct HostVst3Plugin {
+    service: Option<Arc<Vst3HostService>>,
+}
 
 impl HostVst3Plugin {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// The service this plugin provided, once `register` has run.
+    pub fn service(&self) -> Option<&Arc<Vst3HostService>> {
+        self.service.as_ref()
     }
 }
 
@@ -57,8 +348,20 @@ impl Plugin for HostVst3Plugin {
         PluginManifest::new(PLUGIN_ID, "VST3 Host")
     }
 
-    /// No contributions yet. See the crate docs for the planned scope.
-    fn register(&mut self, _ctx: &mut KernelCtx) {}
+    fn register(&mut self, ctx: &mut KernelCtx) {
+        let service = Arc::new(Vst3HostService::new());
+        ctx.services
+            .provide(Arc::clone(&service))
+            .expect("Vst3HostService provided twice: host-vst3 registered more than once");
+        // The browser is a *view* of the scan, not the scan itself: contributing
+        // the panel costs nothing and still does not load a single module.
+        ctx.contribute_panel(PanelManifest::new(
+            BROWSER_PANEL_ID,
+            "VST3 Plugins",
+            BROWSER_PANEL_COMPONENT,
+        ));
+        self.service = Some(service);
+    }
 
     fn start(&mut self, _ctx: &KernelCtx) {}
 
@@ -70,15 +373,121 @@ mod tests {
     use super::*;
     use mydaw_kernel::Kernel;
 
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "mydaw-vst3-svc-{tag}-{}-{unique}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("scratch dir");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
-    fn boots_and_contributes_nothing() {
+    fn scanning_nothing_at_all_yields_nothing() {
+        let missing = std::env::temp_dir().join("mydaw-vst3-definitely-not-here-1a7c");
+        let service = Vst3HostService::with_search_paths([missing]);
+        assert!(service.scan().is_empty());
+        assert!(service.module_paths().is_empty());
+
+        let empty = Vst3HostService::with_search_paths([]);
+        assert!(empty.search_paths().is_empty());
+        assert!(empty.scan().is_empty());
+    }
+
+    #[test]
+    fn one_broken_module_does_not_hide_the_rest_of_the_tree() {
+        let dir = TempDir::new("mixed");
+        std::fs::write(dir.path().join("a.vst3"), b"broken").unwrap();
+        std::fs::write(dir.path().join("b.vst3"), b"also broken").unwrap();
+
+        let service = Vst3HostService::with_search_paths([dir.path().to_path_buf()]);
+        // Both are walked (neither aborts the walk) and both are skipped.
+        assert_eq!(service.module_paths().len(), 2);
+        assert!(service.scan().is_empty());
+    }
+
+    #[test]
+    fn the_scan_cache_is_populated_lazily_and_reused() {
+        let dir = TempDir::new("cache");
+        let service = Vst3HostService::with_search_paths([dir.path().to_path_buf()]);
+
+        assert!(!service.has_cached_scan(), "nothing is scanned up front");
+        let first = service.cached_scan();
+        assert!(service.has_cached_scan());
+        assert!(
+            Arc::ptr_eq(&first, &service.cached_scan()),
+            "the second call must serve the cache, not rescan"
+        );
+
+        // A module appearing after the scan stays invisible until a refresh.
+        std::fs::write(dir.path().join("late.vst3"), b"broken").unwrap();
+        assert!(Arc::ptr_eq(&service.cached_scan(), &first));
+        assert!(!Arc::ptr_eq(&service.refresh(), &first));
+    }
+
+    #[test]
+    fn looking_up_a_class_id_that_was_never_scanned_finds_nothing() {
+        let dir = TempDir::new("find");
+        let service = Vst3HostService::with_search_paths([dir.path().to_path_buf()]);
+        assert!(service.find(ClassId([1; 16])).is_none());
+    }
+
+    #[test]
+    fn loading_a_module_that_is_not_a_library_is_a_typed_error() {
+        let dir = TempDir::new("not-a-library");
+        let bogus = dir.path().join("garbage.vst3");
+        std::fs::write(&bogus, b"this is not a shared library").unwrap();
+
+        let service = Vst3HostService::with_search_paths([dir.path().to_path_buf()]);
+        let err = service
+            .load(&bogus, ClassId([0; 16]))
+            .expect_err("a text file is not a VST3 module");
+        assert!(matches!(err, Vst3HostError::Module(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn the_service_is_registered_and_scans_nothing_at_boot() {
         let mut kernel = Kernel::new();
         kernel.add_plugin(Box::new(HostVst3Plugin::new())).unwrap();
         kernel.boot().unwrap();
 
         assert_eq!(kernel.boot_order(), vec![PLUGIN_ID]);
-        assert!(kernel.ui_panels().is_empty());
-        assert!(kernel.ctx().services.is_empty());
+        let service = kernel
+            .ctx()
+            .services
+            .get::<Vst3HostService>()
+            .expect("service should be provided");
+        assert!(!service.search_paths().is_empty());
+        assert!(
+            !service.has_cached_scan(),
+            "registration must not open a single module"
+        );
+
+        // One panel, and no RT node factory: a VST3 node is built from a chosen
+        // module + class id, which a stateless `RtNodeFactory` cannot express.
+        let panels = kernel.ui_panels();
+        assert_eq!(panels.len(), 1);
+        assert_eq!(panels[0].id, BROWSER_PANEL_ID);
+        assert_eq!(panels[0].title, "VST3 Plugins");
+        assert_eq!(panels[0].component, BROWSER_PANEL_COMPONENT);
         assert!(kernel.ctx().rt_node_factory(NODE_TYPE_ID).is_none());
     }
 }

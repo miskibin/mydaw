@@ -59,6 +59,7 @@ use crate::project::{
     check_gain_db, check_pan, mixer_state_dto, MixerStateDto, Project, TrackDef, TrackError,
 };
 use crate::source::{SilentNode, Source, SourceError, SourceHandle};
+use crate::vst3_bridge::Vst3Board;
 
 /// Anything that can go wrong editing the mixer.
 #[derive(Debug, thiserror::Error)]
@@ -212,14 +213,29 @@ impl TrackHost {
         self.master_insert.is_occupied() || self.project.lock().has_clap_source()
     }
 
+    /// Whether a hosted plugin of **either** format is currently in the graph.
+    ///
+    /// What decides whether a layout edit can be done inline on the calling
+    /// thread or has to go through a main-thread re-attach.
+    pub fn has_hosted_node(&self) -> bool {
+        self.master_insert.is_occupied() || self.project.lock().has_hosted_source()
+    }
+
+    /// Whether a hosted VST3 node heads a track. The master insert is not
+    /// counted, because its format is not knowable from here -- the boards are
+    /// what answer that.
+    pub fn has_vst3_source(&self) -> bool {
+        self.project.lock().has_vst3_source()
+    }
+
     /// The mixer, in the shape the webview reads.
-    pub fn state(&self, board: &ClapBoard) -> MixerStateDto {
+    pub fn state(&self, clap: &ClapBoard, vst3: &Vst3Board) -> MixerStateDto {
         let project = self.project.lock();
         let selected = self
             .selected
             .load(Ordering::Relaxed)
             .min(project.len().saturating_sub(1));
-        mixer_state_dto(&project, selected, board)
+        mixer_state_dto(&project, selected, clap, vst3)
     }
 
     // ------------------------------------------------------------ mixer edits
@@ -305,12 +321,13 @@ impl TrackHost {
 
     /// Build the RT node for `source`.
     ///
-    /// A [`Source::Clap`] produces [`SilentNode`] rather than an error: only the
-    /// main thread can activate a hosted plugin, so a compiled graph carries a
-    /// silent placeholder in the track's slot and the main thread swaps the real
-    /// node in afterwards (at startup, and after every rebuild). Silence rather
-    /// than a fallback instrument, because a track set to a synthesiser must not
-    /// answer with a sine wave -- see [`SilentNode`].
+    /// A hosted source -- [`Source::Clap`] or [`Source::Vst3`] -- produces
+    /// [`SilentNode`] rather than an error: only its host's main thread can
+    /// activate a plugin, so a compiled graph carries a silent placeholder in the
+    /// track's slot and the main thread swaps the real node in afterwards (at
+    /// startup, and after every rebuild). Silence rather than a fallback
+    /// instrument, because a track set to a synthesiser must not answer with a
+    /// sine wave -- see [`SilentNode`].
     ///
     /// # Errors
     /// [`SourceError::MissingInstrument`] when the instruments plugin did not
@@ -324,11 +341,11 @@ impl TrackHost {
     ) -> Result<Box<dyn RtNode>, SourceError> {
         match source {
             Source::TestTone => Ok(self.tone.create(sample_rate, max_block)),
-            Source::Clap(_) => Ok(Box::new(SilentNode)),
+            Source::Clap(_) | Source::Vst3(_) => Ok(Box::new(SilentNode)),
             other => {
                 let type_id = other
                     .instrument_type_id()
-                    .expect("every non-CLAP, non-tone source names a built-in instrument");
+                    .expect("every non-hosted, non-tone source names a built-in instrument");
                 self.instruments
                     .create(type_id, sample_rate, max_block)
                     .ok_or(SourceError::MissingInstrument(type_id))
@@ -630,8 +647,8 @@ mod tests {
         assert_eq!(host.selected(), 1);
         assert_eq!(host.selected_source(), Source::PolySynth);
         let board = ClapBoard::new();
-        assert!(host.state(&board).tracks[1].selected);
-        assert!(!host.state(&board).tracks[0].selected);
+        assert!(host.state(&board, &Vst3Board::new()).tracks[1].selected);
+        assert!(!host.state(&board, &Vst3Board::new()).tracks[0].selected);
     }
 
     #[test]

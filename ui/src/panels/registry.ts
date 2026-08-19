@@ -4,6 +4,7 @@ import { KernelStatusPanel } from './kernel-status/KernelStatusPanel';
 import { MetersPanel } from './meters/MetersPanel';
 import { MixerPanel } from './mixer/MixerPanel';
 import { SequencerPanel } from './sequencer/SequencerPanel';
+import { Vst3BrowserPanel } from './vst3-browser/Vst3BrowserPanel';
 import type { PanelComponent } from './types';
 
 /**
@@ -23,6 +24,7 @@ export const PANEL_REGISTRY: Record<string, PanelComponent> = {
   meters: MetersPanel,
   'step-sequencer': SequencerPanel,
   'clap-browser': ClapBrowserPanel,
+  'vst3-browser': Vst3BrowserPanel,
   // Dev instrument (spike 4), contributed only under MYDAW_DEV_PANELS /
   // MYDAW_IPC_BENCH. Lazy so a normal session never downloads it: Vite splits it
   // into its own chunk, and a manifest that is never sent is a chunk that is

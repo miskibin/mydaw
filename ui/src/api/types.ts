@@ -83,6 +83,9 @@ export interface MeterFrame {
  */
 export type ClapPluginKind = 'instrument' | 'audio-effect' | 'note-effect' | 'other';
 
+/** Which plugin format a row in a unified list came from. */
+export type PluginFormat = 'CLAP' | 'VST3';
+
 /**
  * One installed CLAP plugin, as reported by the host's scan. Mirrors
  * `ClapPluginInfoDto` in `app/src/dto.rs`.
@@ -109,6 +112,81 @@ export interface ClapPluginInfoDto {
    * argued with.
    */
   features: string[];
+}
+
+/**
+ * What a VST3 plugin is *for*, decided by the host from the class's declared
+ * `subCategories`. Mirrors `Vst3PluginInfoDto.kind` in `app/src/dto.rs`.
+ *
+ * Shares `instrument` and `audio-effect` with `ClapPluginKind` on purpose, so one
+ * list can badge either format. `unknown` has no CLAP equivalent: a VST3 module
+ * that exposes only the older `IPluginFactory` declares no subcategories at all,
+ * which is a real state rather than a failure -- MYDAW offers such a plugin as an
+ * effect and lets the bus-layout check at load time decide.
+ */
+export type Vst3PluginKind = 'instrument' | 'audio-effect' | 'other' | 'unknown';
+
+/**
+ * One installed VST3 plugin class, as reported by the host's scan. Mirrors
+ * `Vst3PluginInfoDto` in `app/src/dto.rs`.
+ */
+export interface Vst3PluginInfoDto {
+  /**
+   * The class id as 32 uppercase hex digits, e.g. `58545356736673586572756D...`.
+   *
+   * Not a reverse-DNS string like a CLAP id: VST3 identifies a class by sixteen
+   * raw bytes, and this is those bytes. Unique within a module.
+   */
+  id: string;
+  name: string;
+  vendor: string;
+  version: string;
+  /** Absolute path of the `.vst3` module: a bundle directory or a flat DLL. */
+  path: string;
+  /** Which picker this plugin belongs in. Derived from `subcategories` by Rust. */
+  kind: Vst3PluginKind;
+  /**
+   * The class's declared subcategories, split for display (`['Fx', 'Reverb']`).
+   *
+   * VST3 carries these as one `|`-separated string; Rust splits it. Empty for a
+   * module with no `IPluginFactory2`, which is exactly the `unknown` case.
+   */
+  subcategories: string[];
+}
+
+/**
+ * State of one placed VST3 plugin's editor window. Mirrors `Vst3GuiStatusDto` in
+ * `app/src/vst3_bridge.rs`.
+ */
+export interface Vst3GuiStatus {
+  open: boolean;
+  /** Whether the plugin draws an editor at all. False is normal, not an error. */
+  hasEditor: boolean;
+  /** Class id of the plugin the editor belongs to, if one is placed. */
+  cid: string | null;
+  width: number;
+  height: number;
+}
+
+/**
+ * A hosted VST3 plugin sitting in a track's source slot or the master's insert.
+ * Mirrors `Vst3SlotDto` in `app/src/vst3_bridge.rs`.
+ *
+ * The sibling of `ClapSlot`. Two shapes rather than one because the identifying
+ * field genuinely differs -- `cid` is 32 hex digits where CLAP has a `pluginId`
+ * string -- and a shared type would have had to call one by the other's name.
+ */
+export interface Vst3Slot {
+  /** Opaque handle for this instance, stable while the plugin stays placed. */
+  instance: number;
+  /** Class id, as hex. */
+  cid: string;
+  name: string;
+  vendor: string;
+  /** Absolute path of the `.vst3` module it was loaded from. */
+  modulePath: string;
+  hasEditor: boolean;
+  guiOpen: boolean;
 }
 
 /**
@@ -192,13 +270,19 @@ export interface SourceDto {
   id: string;
   label: string;
   description: string;
-  /** Which of the two ways this source is placed. */
-  kind: 'internal' | 'clap';
+  /** Which of the three ways this source is placed. */
+  kind: 'internal' | 'clap' | 'vst3';
   /** Plugin vendor; empty for the built-ins, and possibly empty for a CLAP one. */
   vendor: string;
-  /** Absolute `.clap` bundle path. Set exactly when `kind` is `clap`. */
+  /**
+   * Absolute plugin path: a `.clap` bundle or a `.vst3` module. Set exactly when
+   * `kind` is `clap` or `vst3`.
+   */
   bundlePath: string | null;
-  /** CLAP id. Set exactly when `kind` is `clap`. */
+  /**
+   * The plugin's own identifier: a CLAP id, or a VST3 class id as hex. Set
+   * exactly when `kind` is `clap` or `vst3`.
+   */
   pluginId: string | null;
   /** Whether this is the selected track's source. Exactly one is true. */
   selected: boolean;
@@ -298,6 +382,12 @@ export interface TrackDto {
    * one. `null` for a built-in source.
    */
   clap: ClapSlot | null;
+  /**
+   * The hosted VST3 instrument at the head of this track.
+   *
+   * At most one of `clap` and `vst3` is ever set: a track has one source.
+   */
+  vst3: Vst3Slot | null;
 }
 
 /** The master strip. Mirrors `MasterDto` in `app/src/project.rs`. */
@@ -305,6 +395,13 @@ export interface MasterDto {
   gainDb: number;
   /** The CLAP audio effect on the master insert, or `null` when there is none. */
   clap: ClapSlot | null;
+  /**
+   * The VST3 audio effect on the master insert.
+   *
+   * The insert holds **one** plugin, so at most one of `clap` and `vst3` is set.
+   * Placing either format evicts the other.
+   */
+  vst3: Vst3Slot | null;
 }
 
 /**

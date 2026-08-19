@@ -170,6 +170,27 @@ impl ClapHost {
         &mut self.instances
     }
 
+    /// Forget the master placement, destroying the instance behind it.
+    ///
+    /// Called by the VST3 host when it takes the master insert. The master
+    /// insert holds **one** node of either format, so a VST3 install has already
+    /// displaced this instance's node; there is nothing to un-install here, only
+    /// an instance to free and a board entry to clear. Leaving it would mean a
+    /// CLAP plugin still loaded and activated that nothing points at, with the
+    /// mixer still drawing it. See `crate::vst3_host`.
+    ///
+    /// Returns whether anything was evicted.
+    pub fn evict_master(&mut self) -> bool {
+        match self.master.take() {
+            Some(instance) => {
+                log::info!("CLAP master effect displaced by a plugin of another format");
+                self.instances.destroy(instance);
+                true
+            }
+            None => false,
+        }
+    }
+
     // ------------------------------------------------------------- dispatch
 
     fn serve(

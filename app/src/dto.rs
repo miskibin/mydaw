@@ -12,6 +12,7 @@
 
 use mydaw_ipc_bridge::{MeterFrame, TrackMeter};
 use mydaw_plugin_host_clap::ClapPluginInfo;
+use mydaw_plugin_host_vst3::Vst3PluginInfo;
 use mydaw_plugin_sequencer::{
     row_label, Pattern, PatternError, PatternRow, Step, DEFAULT_STEP_VELOCITY, STEPS,
 };
@@ -121,6 +122,50 @@ impl From<&ClapPluginInfo> for ClapPluginInfoDto {
             path: info.path.to_string_lossy().into_owned(),
             kind: info.kind().id().to_owned(),
             features: info.features.clone(),
+        }
+    }
+}
+
+/// One row of the VST3 browser panel.
+///
+/// The counterpart of [`ClapPluginInfoDto`], and deliberately close to it so one
+/// UI list can show both with a format badge. The differences are the format's:
+/// `id` is a 32-digit class id rather than a reverse-DNS string, and
+/// `subcategories` is one `|`-separated string rather than a list -- carried
+/// verbatim, for the same reason CLAP's `features` are.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Vst3PluginInfoDto {
+    /// Class id as 32 uppercase hex digits. Unique within a module, and the
+    /// half of a locator a project file stores next to the path.
+    pub id: String,
+    pub name: String,
+    pub vendor: String,
+    pub version: String,
+    /// Absolute path of the `.vst3` module (bundle directory or flat DLL).
+    pub path: String,
+    /// Which picker this plugin belongs in: `instrument`, `audio-effect`,
+    /// `other`, or `unknown`.
+    ///
+    /// Shares its vocabulary with [`ClapPluginInfoDto::kind`] so one list can
+    /// filter both formats. `unknown` has no CLAP equivalent: it means the module
+    /// exposes no `IPluginFactory2` and therefore declares no subcategories at
+    /// all, which is a real state and not a failure.
+    pub kind: String,
+    /// The declared subcategories, split for display (`["Fx", "Reverb"]`).
+    pub subcategories: Vec<String>,
+}
+
+impl From<&Vst3PluginInfo> for Vst3PluginInfoDto {
+    fn from(info: &Vst3PluginInfo) -> Self {
+        Self {
+            id: info.cid.to_hex(),
+            name: info.name.clone(),
+            vendor: info.vendor.clone(),
+            version: info.version.clone(),
+            path: info.path.to_string_lossy().into_owned(),
+            kind: info.kind().id().to_owned(),
+            subcategories: info.subcategory_list(),
         }
     }
 }

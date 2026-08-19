@@ -7,7 +7,7 @@ use mydaw_kernel::{Kernel, KernelError};
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoPlugin, AudioIoService, StreamInfo};
 use mydaw_plugin_debug_tap::{DebugTapPlugin, DebugTapService};
 use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin};
-use mydaw_plugin_host_vst3::HostVst3Plugin;
+use mydaw_plugin_host_vst3::{HostVst3Plugin, Vst3HostService};
 use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
 use mydaw_plugin_sequencer::{Pattern, PatternError, SequencerPlugin, SequencerService};
@@ -17,12 +17,13 @@ use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 use mydaw_rt_core::{clamp_bpm, LiveNote, MAX_BPM, MAX_KEY, MIN_BPM};
 
 use crate::clap_bridge::{ClapAnswer, ClapCommand, ClapGuiStatusDto, ClapHostBridge, ClapTarget};
-use crate::dto::{ClapPluginInfoDto, PatternDto, SequencerStateDto};
+use crate::dto::{ClapPluginInfoDto, PatternDto, SequencerStateDto, Vst3PluginInfoDto};
 use crate::ipc_bench;
 use crate::meters::MeterPump;
 use crate::project::{MixerStateDto, Project, TrackError};
 use crate::source::{check_bundle_path, Source, SourceDto, SourceError};
 use crate::tracks::{MixerError, TrackHost};
+use crate::vst3_bridge::{Vst3Answer, Vst3Command, Vst3GuiStatusDto, Vst3HostBridge};
 
 /// Panel key of the kernel status view, mirrored in `ui/src/panels/registry.ts`.
 pub const KERNEL_STATUS_PANEL: &str = "kernel-status";
@@ -169,6 +170,12 @@ pub struct AppState {
     /// CLAP *discovery*: the scan behind the picker. Unlike hosting, this is
     /// `Send + Sync` and runs happily on a command thread.
     clap: Arc<ClapHostService>,
+    /// Mailbox to the main thread's VST3 host, and the board it publishes. A
+    /// sibling of `clap_bridge`, for the same reasons -- see `crate::vst3_bridge`.
+    vst3_bridge: Arc<Vst3HostBridge>,
+    /// VST3 *discovery*. Like its CLAP counterpart, `Send + Sync` and safe on a
+    /// command thread.
+    vst3: Arc<Vst3HostService>,
     meters: Arc<MeterPump>,
     /// The audio inspection harness. Non-RT, `Send + Sync`, and safe to call
     /// from a Tauri command thread.
@@ -200,6 +207,9 @@ impl AppState {
         let clap = services
             .get::<ClapHostService>()
             .ok_or(StartupError::MissingService("ClapHostService"))?;
+        let vst3 = services
+            .get::<Vst3HostService>()
+            .ok_or(StartupError::MissingService("Vst3HostService"))?;
         let meter_output = services
             .get::<MeterOutput>()
             .ok_or(StartupError::MissingService("MeterOutput"))?;
@@ -224,6 +234,8 @@ impl AppState {
             tracks: Arc::new(TrackHost::new(tone, instruments)),
             clap_bridge: Arc::new(ClapHostBridge::new()),
             clap,
+            vst3_bridge: Arc::new(Vst3HostBridge::new()),
+            vst3,
             meters: MeterPump::new(throttle),
             debug_tap,
         })
@@ -342,6 +354,14 @@ impl AppState {
                 })
                 .map(|_| ());
         }
+        if self.vst3_bridge.board().track(track).is_some() {
+            return self
+                .vst3_command(Vst3Command::SetTrackBuiltIn {
+                    track,
+                    source_id: source.id(),
+                })
+                .map(|_| ());
+        }
         let id = source.id();
         match self.tracks.set_source(track, source, &self.audio) {
             Ok(()) => {
@@ -405,6 +425,14 @@ impl AppState {
     /// # Errors
     /// [`SourceError::MainThread`].
     pub fn clear_master_effect(&self) -> Result<(), SourceError> {
+        // One insert, either format. Ask whichever host actually has something
+        // there; with nothing placed the CLAP path still gives the honest
+        // "there is no device / nothing to clear" answer it always did.
+        if self.vst3_bridge.board().master().is_some() {
+            return self
+                .vst3_command(Vst3Command::ClearMasterEffect)
+                .map(|_| ());
+        }
         self.clap_command(ClapCommand::ClearMasterEffect)
             .map(|_| ())
     }
@@ -456,6 +484,124 @@ impl AppState {
     }
 
     /// Post a command to the main thread's CLAP host and wait for its answer.
+    /// Put a hosted VST3 instrument at the head of one track.
+    ///
+    /// The VST3 counterpart of
+    /// [`set_track_source_clap`](Self::set_track_source_clap): the instance is
+    /// created, activated and swapped in on the main thread, and this waits for
+    /// it.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`] carrying whatever the host reported.
+    pub fn set_track_source_vst3(
+        &self,
+        track: usize,
+        module_path: &str,
+        cid: &str,
+    ) -> Result<(), SourceError> {
+        let module_path = check_bundle_path(module_path)?;
+        self.vst3_command(Vst3Command::SetTrackSource {
+            track,
+            module_path,
+            cid: cid.to_owned(),
+        })
+        .map(|_| ())
+    }
+
+    /// Put a hosted VST3 effect in the master insert, replacing whatever is
+    /// there -- including a CLAP one. The insert holds one plugin.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`].
+    pub fn set_master_effect_vst3(&self, module_path: &str, cid: &str) -> Result<(), SourceError> {
+        let module_path = check_bundle_path(module_path)?;
+        self.vst3_command(Vst3Command::SetMasterEffect {
+            module_path,
+            cid: cid.to_owned(),
+        })
+        .map(|_| ())
+    }
+
+    /// Open a hosted VST3 plugin's editor in its own native window.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`] carrying the reason -- most often "This
+    /// plugin has no editor.", which is a normal answer rather than a failure.
+    pub fn open_vst3_gui(&self, target: ClapTarget) -> Result<Vst3GuiStatusDto, SourceError> {
+        self.vst3_command(Vst3Command::OpenGui(target))?
+            .into_gui()
+            .map_err(SourceError::MainThread)
+    }
+
+    /// Close one VST3 plugin's editor. Not an error when nothing is open.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`].
+    pub fn close_vst3_gui(&self, target: ClapTarget) -> Result<Vst3GuiStatusDto, SourceError> {
+        self.vst3_command(Vst3Command::CloseGui(target))?
+            .into_gui()
+            .map_err(SourceError::MainThread)
+    }
+
+    /// Serialise a hosted VST3 plugin's component state.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`].
+    pub fn save_vst3_state(&self, target: ClapTarget) -> Result<Vec<u8>, SourceError> {
+        self.vst3_command(Vst3Command::SaveState(target))?
+            .into_state()
+            .map_err(SourceError::MainThread)
+    }
+
+    /// Restore a hosted VST3 plugin from a blob.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`].
+    pub fn load_vst3_state(&self, target: ClapTarget, state: Vec<u8>) -> Result<(), SourceError> {
+        self.vst3_command(Vst3Command::LoadState { target, state })
+            .map(|_| ())
+    }
+
+    /// The mailbox to the main thread's VST3 host.
+    pub fn vst3_bridge(&self) -> &Arc<Vst3HostBridge> {
+        &self.vst3_bridge
+    }
+
+    /// Installed VST3 plugins, for the browser panel and the pickers.
+    ///
+    /// Served from the scan cache; `rescan` walks the directories again. The
+    /// first call opens every installed module, which is why this is `async` at
+    /// the command layer.
+    pub fn vst3_plugins(&self, rescan: bool) -> Vec<Vst3PluginInfoDto> {
+        let scanned = if rescan {
+            self.vst3.refresh()
+        } else {
+            self.vst3.cached_scan()
+        };
+        scanned.iter().map(Vst3PluginInfoDto::from).collect()
+    }
+
+    /// Scanned VST3 **audio effects**, for the master insert picker.
+    pub fn vst3_master_effects(&self) -> Vec<Vst3PluginInfoDto> {
+        self.vst3
+            .cached_scan()
+            .iter()
+            .filter(|info| info.is_audio_effect())
+            .map(Vst3PluginInfoDto::from)
+            .collect()
+    }
+
+    /// The VST3 discovery service.
+    pub fn vst3(&self) -> &Arc<Vst3HostService> {
+        &self.vst3
+    }
+
+    fn vst3_command(&self, command: Vst3Command) -> Result<Vst3Answer, SourceError> {
+        self.vst3_bridge
+            .request(command)
+            .map_err(SourceError::MainThread)
+    }
+
     fn clap_command(&self, command: ClapCommand) -> Result<ClapAnswer, SourceError> {
         self.clap_bridge
             .request(command)
@@ -522,7 +668,8 @@ impl AppState {
 
     /// The mixer, in the shape the webview reads.
     pub fn mixer_state(&self) -> MixerStateDto {
-        self.tracks.state(self.clap_bridge.board())
+        self.tracks
+            .state(self.clap_bridge.board(), self.vst3_bridge.board())
     }
 
     /// Set a track's fader, in dB. Works with no audio device open.
@@ -594,7 +741,17 @@ impl AppState {
     /// the hosted path, [`SourceError::MainThread`] carrying what the main
     /// thread said.
     pub fn add_track(&self, source: Source, name: Option<String>) -> Result<usize, MixerError> {
-        if self.tracks.has_clap_node() {
+        // With a VST3 plugin placed the edit goes to the *VST3* host, which
+        // re-attaches both formats after the one rebuild. With only CLAP placed
+        // it goes to the CLAP host, exactly as it did in step 6. See
+        // `crate::vst3_host` for why only one of the two can own the operation.
+        if !self.vst3_bridge.board().is_empty() {
+            let source_id = source.id();
+            self.vst3_command(Vst3Command::AddTrack { source_id, name })
+                .map_err(MixerError::Source)?;
+            return Ok(self.tracks.track_count().saturating_sub(1));
+        }
+        if self.tracks.has_hosted_node() {
             let source_id = source.id();
             self.clap_command(ClapCommand::AddTrack { source_id, name })
                 .map_err(MixerError::Source)?;
@@ -610,7 +767,13 @@ impl AppState {
     /// # Errors
     /// [`MixerError`] -- most usefully [`TrackError::LastTrack`].
     pub fn remove_track(&self, track: usize) -> Result<(), MixerError> {
-        if self.tracks.has_clap_node() {
+        // See `add_track` for why the VST3 host is asked first.
+        if !self.vst3_bridge.board().is_empty() {
+            self.vst3_command(Vst3Command::RemoveTrack { track })
+                .map_err(MixerError::Source)?;
+            return Ok(());
+        }
+        if self.tracks.has_hosted_node() {
             self.clap_command(ClapCommand::RemoveTrack { track })
                 .map_err(MixerError::Source)?;
             return Ok(());
@@ -851,7 +1014,8 @@ mod tests {
                 "mixer",
                 "meters",
                 "step-sequencer",
-                "clap-browser"
+                "clap-browser",
+                "vst3-browser"
             ],
             "the shell's own panels first (the kernel registry and the mixer, \
              neither of which any plugin owns), then the plugins' in kernel boot \

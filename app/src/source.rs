@@ -56,6 +56,7 @@ use std::sync::Arc;
 
 use mydaw_plugin_audio_io::AudioIoError;
 use mydaw_plugin_host_clap::ClapPluginInfo;
+use mydaw_plugin_host_vst3::{ClassId, Vst3PluginInfo};
 use mydaw_rt_core::basedrop::{Handle, Owned};
 use mydaw_rt_core::{ProcessCtx, RtNode};
 use parking_lot::Mutex;
@@ -70,6 +71,14 @@ pub const SOURCE_QUEUE_CAPACITY: usize = 4;
 /// Prefix of a CLAP source's wire id, so `poly-synth` and a plugin that happens
 /// to call itself `poly-synth` can never collide.
 pub const CLAP_SOURCE_PREFIX: &str = "clap:";
+
+/// Prefix of a VST3 source's wire id.
+///
+/// Distinct from [`CLAP_SOURCE_PREFIX`] so an id records *which format* a
+/// track was headed by, not only which plugin: the two hosts are separate, and
+/// an id that did not say would be ambiguous the moment a vendor ships the same
+/// plugin in both formats -- which most of them do.
+pub const VST3_SOURCE_PREFIX: &str = "vst3:";
 
 /// A hosted CLAP instrument, identified the way a project file records one.
 ///
@@ -134,6 +143,68 @@ impl From<&ClapPluginInfo> for ClapSourceRef {
     }
 }
 
+/// A hosted VST3 instrument, identified the way a project file records one.
+///
+/// Module path **and** class id, for the same reason a CLAP source carries
+/// bundle and plugin id: one module commonly exports several classes, and the
+/// same class can be installed in two places.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Vst3SourceRef {
+    /// Absolute path of the `.vst3` module (bundle directory or flat DLL).
+    pub module_path: PathBuf,
+    /// The plugin class inside that module.
+    pub cid: ClassId,
+    /// Display name from the scan. May be empty, in which case the class id is
+    /// shown instead -- a name is not something the format guarantees.
+    pub name: String,
+}
+
+impl Vst3SourceRef {
+    /// A reference to `cid` inside `module_path`, with no display name.
+    pub fn new(module_path: impl Into<PathBuf>, cid: ClassId) -> Self {
+        Self {
+            module_path: module_path.into(),
+            cid,
+            name: String::new(),
+        }
+    }
+
+    /// The same reference carrying a display name.
+    pub fn named(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// What to put on a mixer strip.
+    pub fn label(&self) -> String {
+        if self.name.is_empty() {
+            self.cid.to_hex()
+        } else {
+            self.name.clone()
+        }
+    }
+
+    /// Wire id: `vst3:<class id as hex>`.
+    ///
+    /// The module path is deliberately *not* part of it, exactly as for CLAP: an
+    /// id crosses the IPC boundary and lands in a UI list, and a Windows path in
+    /// it would be a separator minefield. The path travels as its own argument on
+    /// [`set_track_source_vst3`](crate::commands::set_track_source_vst3).
+    pub fn wire_id(&self) -> String {
+        format!("{VST3_SOURCE_PREFIX}{}", self.cid.to_hex())
+    }
+}
+
+impl From<&Vst3PluginInfo> for Vst3SourceRef {
+    fn from(info: &Vst3PluginInfo) -> Self {
+        Self {
+            module_path: info.path.clone(),
+            cid: info.cid,
+            name: info.name.clone(),
+        }
+    }
+}
+
 /// What generates audio at the head of a track.
 ///
 /// Not `Copy` since step 6: a CLAP source carries the bundle path and plugin id
@@ -148,6 +219,8 @@ pub enum Source {
     DrumKit,
     /// A hosted CLAP instrument, chosen from the plugin picker.
     Clap(ClapSourceRef),
+    /// A hosted VST3 instrument, chosen from the same picker.
+    Vst3(Vst3SourceRef),
 }
 
 impl Source {
@@ -173,6 +246,7 @@ impl Source {
             Self::PolySynth => "poly-synth".to_owned(),
             Self::DrumKit => "drum-kit".to_owned(),
             Self::Clap(reference) => reference.wire_id(),
+            Self::Vst3(reference) => reference.wire_id(),
         }
     }
 
@@ -183,6 +257,7 @@ impl Source {
             Self::PolySynth => "Poly Synth".to_owned(),
             Self::DrumKit => "Drum Kit".to_owned(),
             Self::Clap(reference) => reference.label().to_owned(),
+            Self::Vst3(reference) => reference.label(),
         }
     }
 
@@ -198,6 +273,11 @@ impl Source {
                 "Hosted CLAP instrument {} from {}",
                 reference.plugin_id,
                 reference.bundle_path.display()
+            ),
+            Self::Vst3(reference) => format!(
+                "Hosted VST3 instrument {} from {}",
+                reference.cid,
+                reference.module_path.display()
             ),
         }
     }
@@ -220,10 +300,33 @@ impl Source {
         matches!(self, Self::Clap(_))
     }
 
+    /// Whether this source is a hosted VST3 plugin.
+    pub const fn is_vst3(&self) -> bool {
+        matches!(self, Self::Vst3(_))
+    }
+
+    /// Whether this source is hosted at all, in either format.
+    ///
+    /// The question the *graph* asks. A hosted source of either kind renders
+    /// [`SilentNode`] until its own host's main thread swaps the real node in,
+    /// and neither can be built from a `Send + Sync` factory -- which is the one
+    /// property the graph builder cares about.
+    pub const fn is_hosted(&self) -> bool {
+        self.is_clap() || self.is_vst3()
+    }
+
     /// The bundle path and plugin id, for a CLAP source.
     pub const fn clap_ref(&self) -> Option<&ClapSourceRef> {
         match self {
             Self::Clap(reference) => Some(reference),
+            _ => None,
+        }
+    }
+
+    /// The module path and class id, for a VST3 source.
+    pub const fn vst3_ref(&self) -> Option<&Vst3SourceRef> {
+        match self {
+            Self::Vst3(reference) => Some(reference),
             _ => None,
         }
     }
@@ -255,6 +358,11 @@ impl Source {
                 plugin_id: plugin_id.to_owned(),
             });
         }
+        if let Some(cid) = id.strip_prefix(VST3_SOURCE_PREFIX) {
+            return Err(SourceError::Vst3NeedsModule {
+                cid: cid.to_owned(),
+            });
+        }
         Self::BUILT_IN
             .into_iter()
             .find(|source| source.id() == id)
@@ -274,6 +382,13 @@ pub enum SourceError {
          use set_track_source_clap"
     )]
     ClapNeedsBundle { plugin_id: String },
+    /// A `vst3:` id arrived where only a built-in was expected. Always a UI bug,
+    /// for the same reason as [`ClapNeedsBundle`](Self::ClapNeedsBundle).
+    #[error(
+        "the VST3 plugin '{cid}' must be chosen with its module path; \
+         use set_track_source_vst3"
+    )]
+    Vst3NeedsModule { cid: String },
     /// The instruments plugin did not contribute the node this source names.
     /// Always a wiring bug, never a runtime condition.
     #[error("the built-in instrument '{0}' is not registered")]
@@ -487,6 +602,8 @@ pub enum SourceKindDto {
     Internal,
     /// A hosted CLAP instrument found by the scan.
     Clap,
+    /// A hosted VST3 instrument found by the scan.
+    Vst3,
 }
 
 /// One source, as the webview sees it.
@@ -527,6 +644,32 @@ impl SourceDto {
             plugin_id: None,
             selected: source == current,
             takes_notes: source.takes_notes(),
+        }
+    }
+
+    /// Describe a scanned VST3 instrument.
+    ///
+    /// `selected` compares the **class id and module path**, for the same reason
+    /// [`clap`](Self::clap) compares plugin id and bundle path.
+    pub fn vst3(info: &Vst3PluginInfo, current: &Source) -> Self {
+        let reference = Vst3SourceRef::from(info);
+        let selected = current
+            .vst3_ref()
+            .is_some_and(|active| active.cid == info.cid && active.module_path == info.path);
+        Self {
+            id: reference.wire_id(),
+            label: reference.label(),
+            description: if info.vendor.is_empty() {
+                format!("VST3 — {}", info.cid)
+            } else {
+                format!("{} — VST3", info.vendor)
+            },
+            kind: SourceKindDto::Vst3,
+            vendor: info.vendor.clone(),
+            bundle_path: Some(info.path.display().to_string()),
+            plugin_id: Some(info.cid.to_hex()),
+            selected,
+            takes_notes: true,
         }
     }
 

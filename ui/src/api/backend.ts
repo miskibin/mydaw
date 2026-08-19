@@ -11,6 +11,9 @@ import type {
   TrackDto,
   UiSnapshot,
   Unsubscribe,
+  Vst3GuiStatus,
+  Vst3PluginInfoDto,
+  Vst3Slot,
 } from './types';
 
 /**
@@ -32,6 +35,35 @@ export interface Backend {
    * afterwards it is served from a cache. Pass `rescan` to walk them again.
    */
   getClapPlugins(rescan?: boolean): Promise<ClapPluginInfoDto[]>;
+  /**
+   * Installed VST3 plugins. Same contract as `getClapPlugins`, one format over.
+   *
+   * The first call opens every installed `.vst3` module. A module that hangs --
+   * on Windows, almost always a licensing dialog -- is remembered and skipped by
+   * later scans, so the slow first call really is once per machine rather than
+   * once per launch.
+   */
+  getVst3Plugins(rescan?: boolean): Promise<Vst3PluginInfoDto[]>;
+  /** The scanned VST3 plugins eligible for the master insert. */
+  getVst3MasterEffects(): Promise<Vst3PluginInfoDto[]>;
+  /**
+   * Put a hosted VST3 instrument at the head of a track.
+   *
+   * The module path *and* the class id both travel, because one `.vst3` module
+   * can export several plugin classes.
+   */
+  setTrackSourceVst3(track: number, modulePath: string, cid: string): Promise<MixerState>;
+  /**
+   * Put a VST3 audio effect on the master insert.
+   *
+   * The insert holds **one** plugin of either format, so this replaces a CLAP
+   * effect that was there. `clearMasterEffect` empties it whichever it holds.
+   */
+  setMasterEffectVst3(modulePath: string, cid: string): Promise<MixerState>;
+  /** Open one placed VST3 plugin's editor in its own native window. */
+  openVst3Gui(target: ClapTarget): Promise<Vst3GuiStatus>;
+  /** Close it. Resolves even when nothing was open. */
+  closeVst3Gui(target: ClapTarget): Promise<Vst3GuiStatus>;
   /**
    * Open one placed plugin's editor in its own native window.
    *
@@ -200,6 +232,40 @@ class TauriBackend implements Backend {
   // snake_case name, so `bundlePath` here is `bundle_path` there. Sending
   // snake_case from this side is what would *not* arrive.
 
+  async getVst3Plugins(rescan = false): Promise<Vst3PluginInfoDto[]> {
+    const { invoke } = await this.core();
+    return invoke<Vst3PluginInfoDto[]>('get_vst3_plugins', { rescan });
+  }
+
+  async getVst3MasterEffects(): Promise<Vst3PluginInfoDto[]> {
+    const { invoke } = await this.core();
+    return invoke<Vst3PluginInfoDto[]>('get_vst3_master_effects');
+  }
+
+  async setTrackSourceVst3(
+    track: number,
+    modulePath: string,
+    cid: string,
+  ): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_track_source_vst3', { track, modulePath, cid });
+  }
+
+  async setMasterEffectVst3(modulePath: string, cid: string): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_master_effect_vst3', { modulePath, cid });
+  }
+
+  async openVst3Gui(target: ClapTarget): Promise<Vst3GuiStatus> {
+    const { invoke } = await this.core();
+    return invoke<Vst3GuiStatus>('open_vst3_gui', { target });
+  }
+
+  async closeVst3Gui(target: ClapTarget): Promise<Vst3GuiStatus> {
+    const { invoke } = await this.core();
+    return invoke<Vst3GuiStatus>('close_vst3_gui', { target });
+  }
+
   async openClapGui(target: ClapTarget): Promise<ClapGuiStatus> {
     const { invoke } = await this.core();
     return invoke<ClapGuiStatus>('open_clap_gui', { target });
@@ -364,7 +430,7 @@ const MOCK_SNAPSHOT: UiSnapshot = {
     { id: 'test-tone', name: 'Test Tone', state: 'registered' },
     { id: 'sequencer', name: 'Step Sequencer', state: 'started' },
     { id: 'host-clap', name: 'CLAP Host', state: 'registered' },
-    { id: 'host-vst3', name: 'VST3 Host', state: 'stopped' },
+    { id: 'host-vst3', name: 'VST3 Host', state: 'registered' },
   ],
   panels: [
     { id: 'kernel-status', title: 'Kernel Status', component: 'kernel-status' },
@@ -372,6 +438,7 @@ const MOCK_SNAPSHOT: UiSnapshot = {
     { id: 'meters', title: 'Master Meters', component: 'meters' },
     { id: 'step-sequencer', title: 'Step Sequencer', component: 'step-sequencer' },
     { id: 'clap-browser', title: 'CLAP Plugins', component: 'clap-browser' },
+    { id: 'vst3-browser', title: 'VST3 Plugins', component: 'vst3-browser' },
   ],
 };
 
@@ -403,6 +470,7 @@ function mockTracks(): TrackDto[] {
       silenced: false,
       selected: true,
       clap: null,
+      vst3: null,
     },
     {
       index: 1,
@@ -417,6 +485,7 @@ function mockTracks(): TrackDto[] {
       silenced: false,
       selected: false,
       clap: null,
+      vst3: null,
     },
   ];
 }
@@ -498,6 +567,66 @@ function mockClapSource(plugin: ClapPluginInfoDto): SourceDto {
       ? `Hosted CLAP instrument by ${plugin.vendor}`
       : 'Hosted CLAP instrument',
     kind: 'clap',
+    vendor: plugin.vendor,
+    bundlePath: plugin.path,
+    pluginId: plugin.id,
+    selected: false,
+    takesNotes: true,
+  };
+}
+
+/**
+ * Stand-ins for what a real machine has installed, chosen to cover the states
+ * the panel has to render: an instrument, an effect, and a class whose module
+ * declares no subcategories at all (`unknown`), which is the VST3-only case.
+ *
+ * The class ids are the real shape -- 32 hex digits -- because the mock is also
+ * what proves the UI never assumes a CLAP-style reverse-DNS id.
+ */
+const MOCK_VST3_PLUGINS: Vst3PluginInfoDto[] = [
+  {
+    id: '58545356736673586572756D00000000',
+    name: 'Example Serial Synth',
+    vendor: 'Example Records',
+    version: '1.4.0',
+    path: 'C:\\Program Files\\Common Files\\VST3\\ExampleSerial.vst3',
+    kind: 'instrument',
+    subcategories: ['Instrument', 'Synth'],
+  },
+  {
+    id: '41545356746E4148564F582041535049',
+    name: 'Example Vocal Air',
+    vendor: 'Example Audio',
+    version: '4.2.1',
+    path: 'C:\\Program Files\\Common Files\\VST3\\ExampleVocalAir.vst3',
+    kind: 'audio-effect',
+    subcategories: ['Fx', 'Pitch Shift'],
+  },
+  {
+    id: '0123456789ABCDEF0123456789ABCDEF',
+    name: 'Example Legacy Comp',
+    vendor: '',
+    version: '',
+    path: 'C:\\Program Files\\Common Files\\VST3\\ExampleLegacy.vst3',
+    // No `IPluginFactory2`, so the module declares nothing. MYDAW still offers
+    // it as an effect and lets the bus check at load time decide.
+    kind: 'unknown',
+    subcategories: [],
+  },
+];
+
+/** Wire id of a VST3 source, mirroring `Vst3SourceRef::wire_id` in Rust. */
+function mockVst3SourceId(cid: string): string {
+  return `vst3:${cid}`;
+}
+
+/** One scanned VST3 instrument, in the shape the source picker reads. */
+function mockVst3Source(plugin: Vst3PluginInfoDto): SourceDto {
+  return {
+    id: mockVst3SourceId(plugin.id),
+    label: plugin.name || plugin.id,
+    description: plugin.vendor ? `${plugin.vendor} — VST3` : `VST3 — ${plugin.id}`,
+    kind: 'vst3',
     vendor: plugin.vendor,
     bundlePath: plugin.path,
     pluginId: plugin.id,
@@ -599,6 +728,15 @@ class MockBackend implements Backend {
   private tracks: TrackDto[] = mockTracks();
   private masterGainDb = 0;
   private masterClap: ClapSlot | null = null;
+  /**
+   * The VST3 effect on the master insert.
+   *
+   * Separate from `masterClap` and mutually exclusive with it: the insert holds
+   * one plugin, so placing either format clears the other. Modelling it as two
+   * fields rather than one union is what makes that rule visible at every site
+   * that has to enforce it.
+   */
+  private masterVst3: Vst3Slot | null = null;
   private selected = 0;
   private nextTrackId = 2;
   /**
@@ -719,10 +857,13 @@ class MockBackend implements Backend {
   /** The built-ins, then every scanned instrument -- the order Rust lists them in. */
   private sourceList(): SourceDto[] {
     const current = this.tracks[this.selected]?.sourceId;
+    const scannedVst3 = MOCK_VST3_PLUGINS.filter(
+      (plugin) => plugin.kind === 'instrument',
+    ).map(mockVst3Source);
     const scanned = MOCK_CLAP_PLUGINS.filter((plugin) => plugin.kind === 'instrument').map(
       mockClapSource,
     );
-    return [...MOCK_INTERNAL_SOURCES, ...scanned].map((source) => ({
+    return [...MOCK_INTERNAL_SOURCES, ...scanned, ...scannedVst3].map((source) => ({
       ...source,
       selected: source.id === current,
     }));
@@ -762,6 +903,8 @@ class MockBackend implements Backend {
     const anySoloed = this.tracks.some((track) => track.soloed);
     const withGui = (slot: ClapSlot | null, target: ClapTarget): ClapSlot | null =>
       slot ? { ...slot, guiOpen: this.openEditors.has(MockBackend.targetKey(target)) } : null;
+    const withGui3 = (slot: Vst3Slot | null, target: ClapTarget): Vst3Slot | null =>
+      slot ? { ...slot, guiOpen: this.openEditors.has(MockBackend.targetKey(target)) } : null;
     return {
       tracks: this.tracks.map((track, index) => ({
         ...track,
@@ -769,10 +912,12 @@ class MockBackend implements Backend {
         silenced: anySoloed ? !track.soloed : track.muted,
         selected: index === this.selected,
         clap: withGui(track.clap, { slot: 'track', index }),
+        vst3: withGui3(track.vst3, { slot: 'track', index }),
       })),
       master: {
         gainDb: this.masterGainDb,
         clap: withGui(this.masterClap, { slot: 'master' }),
+        vst3: withGui3(this.masterVst3, { slot: 'master' }),
       },
       selected: this.selected,
       maxTracks: MOCK_MAX_TRACKS,
@@ -841,9 +986,11 @@ class MockBackend implements Backend {
     const def = this.track(track);
     def.sourceId = wanted.id;
     def.sourceLabel = wanted.label;
-    // A built-in replaces whatever plugin was there, and a window belonging to
-    // an instance that no longer exists must not be left claiming to be open.
+    // A built-in replaces whatever plugin was there, in either format, and a
+    // window belonging to an instance that no longer exists must not be left
+    // claiming to be open.
     def.clap = null;
+    def.vst3 = null;
     this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
     console.info(`[mock] set_track_source ${track} ${source}`);
     return this.mixerState();
@@ -895,6 +1042,122 @@ class MockBackend implements Backend {
     return this.mixerState();
   }
 
+  // -------------------------------------------------------------- VST3
+  //
+  // The same surface one format over. It shares `openEditors` and the master
+  // slot with the CLAP half deliberately: the insert holds one plugin of either
+  // kind, and a mock that let both sit there at once would let the panel be
+  // developed against a state Rust can never produce.
+
+  async getVst3Plugins(_rescan = false): Promise<Vst3PluginInfoDto[]> {
+    // Structured clone so panels cannot mutate the shared fixture.
+    return structuredClone(MOCK_VST3_PLUGINS);
+  }
+
+  async getVst3MasterEffects(): Promise<Vst3PluginInfoDto[]> {
+    return structuredClone(
+      MOCK_VST3_PLUGINS.filter(
+        (plugin) => plugin.kind === 'audio-effect' || plugin.kind === 'unknown',
+      ),
+    );
+  }
+
+  /** Find a scanned class, rejecting the way Rust does. */
+  private findVst3(
+    modulePath: string,
+    cid: string,
+    wanted: 'instrument' | 'audio-effect',
+  ): Vst3PluginInfoDto {
+    const plugin = MOCK_VST3_PLUGINS.find(
+      (entry) => entry.path === modulePath && entry.id === cid,
+    );
+    if (!plugin) throw new Error(`no plugin class ${cid} in module ${modulePath}`);
+    // `unknown` is accepted as an effect: the module declares no subcategories,
+    // and Rust's bus-layout check is what actually decides. Mirroring that here
+    // keeps the mock from teaching the panel a stricter rule than exists.
+    const usable =
+      plugin.kind === wanted || (wanted === 'audio-effect' && plugin.kind === 'unknown');
+    if (!usable) {
+      throw new Error(`${plugin.name || plugin.id} is a ${plugin.kind}, not a ${wanted}`);
+    }
+    return plugin;
+  }
+
+  private newVst3Slot(plugin: Vst3PluginInfoDto): Vst3Slot {
+    return {
+      instance: this.nextInstance++,
+      cid: plugin.id,
+      name: plugin.name || plugin.id,
+      vendor: plugin.vendor,
+      modulePath: plugin.path,
+      // The legacy class stands in for a plugin with no editor, so the mixer's
+      // "no editor button" path stays reachable in a plain browser.
+      hasEditor: plugin.kind !== 'unknown',
+      guiOpen: false,
+    };
+  }
+
+  async setTrackSourceVst3(
+    track: number,
+    modulePath: string,
+    cid: string,
+  ): Promise<MixerState> {
+    const plugin = this.findVst3(modulePath, cid, 'instrument');
+    const def = this.track(track);
+    def.vst3 = this.newVst3Slot(plugin);
+    def.clap = null;
+    def.sourceId = mockVst3SourceId(plugin.id);
+    def.sourceLabel = def.vst3.name;
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
+    console.info(`[mock] set_track_source_vst3 ${track} ${cid}`);
+    return this.mixerState();
+  }
+
+  async setMasterEffectVst3(modulePath: string, cid: string): Promise<MixerState> {
+    const plugin = this.findVst3(modulePath, cid, 'audio-effect');
+    this.masterVst3 = this.newVst3Slot(plugin);
+    // One insert, one plugin: taking it evicts the other format's, exactly as
+    // `Vst3Host::place_master_effect` does.
+    this.masterClap = null;
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'master' }));
+    console.info(`[mock] set_master_effect_vst3 ${cid}`);
+    return this.mixerState();
+  }
+
+  /** The VST3 slot a target names, rejecting an empty one the way Rust does. */
+  private requireVst3Slot(target: ClapTarget): Vst3Slot {
+    const slot = target.slot === 'master' ? this.masterVst3 : this.track(target.index).vst3;
+    if (!slot) {
+      throw new Error(
+        target.slot === 'master'
+          ? 'there is no VST3 plugin on the master insert'
+          : `track ${target.index} has no hosted VST3 plugin`,
+      );
+    }
+    return slot;
+  }
+
+  async openVst3Gui(target: ClapTarget): Promise<Vst3GuiStatus> {
+    const slot = this.requireVst3Slot(target);
+    if (!slot.hasEditor) throw new Error('This plugin has no editor.');
+    const key = MockBackend.targetKey(target);
+    this.openEditors.add(key);
+    console.info(`[mock] open_vst3_gui ${key}: no native window outside Tauri`);
+    return { open: true, hasEditor: true, cid: slot.cid, width: 800, height: 600 };
+  }
+
+  async closeVst3Gui(target: ClapTarget): Promise<Vst3GuiStatus> {
+    const slot = this.requireVst3Slot(target);
+    this.openEditors.delete(MockBackend.targetKey(target));
+    return {
+      open: false,
+      hasEditor: slot.hasEditor,
+      cid: slot.cid,
+      width: 0,
+      height: 0,
+    };
+  }
+
   async getMasterEffects(): Promise<ClapPluginInfoDto[]> {
     // Structured clone so panels cannot mutate the shared fixture.
     return structuredClone(
@@ -911,7 +1174,9 @@ class MockBackend implements Backend {
   }
 
   async clearMasterEffect(): Promise<MixerState> {
+    // One insert: emptying it empties it, whichever format was in it.
     this.masterClap = null;
+    this.masterVst3 = null;
     this.openEditors.delete(MockBackend.targetKey({ slot: 'master' }));
     console.info('[mock] clear_master_effect');
     return this.mixerState();
@@ -936,6 +1201,7 @@ class MockBackend implements Backend {
       silenced: false,
       selected: false,
       clap: null,
+      vst3: null,
     });
     return this.mixerState();
   }

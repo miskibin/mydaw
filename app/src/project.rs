@@ -35,6 +35,7 @@ use serde::Serialize;
 
 use crate::clap_bridge::{ClapBoard, ClapSlotDto};
 use crate::source::Source;
+use crate::vst3_bridge::{Vst3Board, Vst3SlotDto};
 
 /// One track, as the session holds it.
 #[derive(Debug, Clone, PartialEq)]
@@ -206,6 +207,19 @@ impl Project {
         self.tracks.iter().any(|track| track.source.is_clap())
     }
 
+    /// Whether any track is headed by a hosted VST3 instrument.
+    pub fn has_vst3_source(&self) -> bool {
+        self.tracks.iter().any(|track| track.source.is_vst3())
+    }
+
+    /// Whether any track is headed by a hosted plugin of either format.
+    ///
+    /// The question a *graph rebuild* asks: either kind needs its own host's
+    /// main thread to re-attach it, and neither can be built from a factory.
+    pub fn has_hosted_source(&self) -> bool {
+        self.tracks.iter().any(|track| track.source.is_hosted())
+    }
+
     /// Publish every track's gain, pan and effective mute, plus the master
     /// fader, into the block the audio thread reads.
     ///
@@ -286,6 +300,13 @@ pub struct TrackDto {
     /// [`ClapBoard`](crate::clap_bridge::ClapBoard)), so `get_tracks` -- which
     /// runs after every fader move -- reads it with no round trip.
     pub clap: Option<ClapSlotDto>,
+    /// The hosted VST3 instrument heading this track, when its source is one.
+    ///
+    /// Mutually exclusive with [`clap`](Self::clap): a track has one source. Two
+    /// fields rather than one tagged union because the two formats identify a
+    /// plugin differently (a CLAP id is a string, a VST3 class id is 32 hex
+    /// digits) and collapsing them would mean calling one by the other's name.
+    pub vst3: Option<Vst3SlotDto>,
 }
 
 /// The master strip.
@@ -293,8 +314,14 @@ pub struct TrackDto {
 #[serde(rename_all = "camelCase")]
 pub struct MasterDto {
     pub gain_db: f32,
-    /// The hosted CLAP effect in the master insert slot, if one is placed.
+    /// The CLAP audio effect on the master insert, or `null` when there is none.
     pub clap: Option<ClapSlotDto>,
+    /// The VST3 audio effect on the master insert.
+    ///
+    /// The insert holds **one** plugin, so at most one of `clap` and `vst3` is
+    /// ever set. Whichever host places one evicts the other's -- see
+    /// `crate::vst3_host`.
+    pub vst3: Option<Vst3SlotDto>,
 }
 
 /// Everything the mixer panel needs in one message.
@@ -318,7 +345,12 @@ pub struct MixerStateDto {
 /// where; it is read here rather than derived from `Source::Clap` because only
 /// the main thread knows whether a plugin has an editor and whether that editor
 /// is open, and the mixer draws both.
-pub fn mixer_state_dto(project: &Project, selected: usize, board: &ClapBoard) -> MixerStateDto {
+pub fn mixer_state_dto(
+    project: &Project,
+    selected: usize,
+    clap: &ClapBoard,
+    vst3: &Vst3Board,
+) -> MixerStateDto {
     MixerStateDto {
         tracks: project
             .tracks
@@ -336,12 +368,14 @@ pub fn mixer_state_dto(project: &Project, selected: usize, board: &ClapBoard) ->
                 soloed: track.soloed,
                 silenced: project.effective_mute(index),
                 selected: index == selected,
-                clap: board.track(index),
+                clap: clap.track(index),
+                vst3: vst3.track(index),
             })
             .collect(),
         master: MasterDto {
             gain_db: project.master_gain_db,
-            clap: board.master(),
+            clap: clap.master(),
+            vst3: vst3.master(),
         },
         selected,
         max_tracks: MAX_TRACKS,
@@ -562,7 +596,7 @@ mod tests {
     fn the_wire_shape_carries_what_the_mixer_panel_draws() {
         let mut project = Project::default();
         project.tracks[0].soloed = true;
-        let dto = mixer_state_dto(&project, 1, &ClapBoard::new());
+        let dto = mixer_state_dto(&project, 1, &ClapBoard::new(), &Vst3Board::new());
 
         assert_eq!(dto.tracks.len(), 2);
         assert_eq!(dto.selected, 1);
@@ -622,7 +656,8 @@ mod tests {
                 "silenced",
                 "soloed",
                 "sourceId",
-                "sourceLabel"
+                "sourceLabel",
+                "vst3"
             ]
         );
         assert_eq!(json["master"]["gainDb"], 0.0);
@@ -646,7 +681,7 @@ mod tests {
         };
         board.publish(vec![None, Some(slot.clone())], Some(slot));
 
-        let dto = mixer_state_dto(&project, 0, &board);
+        let dto = mixer_state_dto(&project, 0, &board, &Vst3Board::new());
         assert!(dto.tracks[0].clap.is_none());
         let placed = dto.tracks[1].clap.as_ref().expect("track 1 is hosted");
         assert_eq!(placed.instance, 3);
