@@ -38,8 +38,8 @@ export function App(): ReturnType<typeof Show> {
     const nearest = ZOOM_STEPS.reduce((a, b) =>
       Math.abs(b - cur) < Math.abs(a - cur) ? b : a
     );
-    const next = ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, ZOOM_STEPS.indexOf(nearest) + dir))];
-    applyZoom(next);
+    const index = Math.min(ZOOM_STEPS.length - 1, Math.max(0, ZOOM_STEPS.indexOf(nearest) + dir));
+    applyZoom(ZOOM_STEPS[index] ?? 1);
   }
   {
     const saved = Number(localStorage.getItem(ZOOM_KEY));
