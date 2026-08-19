@@ -37,7 +37,7 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | Path | What lives there |
 | --- | --- |
 | `crates/kernel` | Microkernel: `Plugin` trait, typed service registry, non-RT event bus, dependency-ordered lifecycle |
-| `crates/rt-core` | RT primitives: `RtNode`, serial graph, lock-free graph swap, `rtrb` command queue, transport clock |
+| `crates/rt-core` | RT primitives: `RtNode`, the multi-track mixer graph, lock-free graph swap, `rtrb` command queue, transport clock |
 | `crates/ipc-bridge` | Kernel ⇄ webview data: serde DTOs, `UiSnapshot`, 30 Hz meter throttle. Tauri-free by design |
 | `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
 | `plugins/debug-tap` | RT-safe capture of the output bus, plus WAV / annotated PNG / statistics — so the engine can be *inspected* without ears |
@@ -126,13 +126,20 @@ CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github
 ## How the shell fits together
 
 ```text
-app/src/state.rs          boot_kernel() -> seven plugins -> UiSnapshot (+ the shell's kernel-status panel)
-app/src/graph.rs          test-tone -> [CLAP effect] -> TransportGate  ->  AudioIoService::install_graph
-                          or, with MYDAW_CLAP_INSTRUMENT: instrument -> [CLAP effect]  (no gate)
+app/src/state.rs          boot_kernel() -> nine plugins -> UiSnapshot (+ the shell's kernel-status and mixer panels)
+app/src/project.rs        TrackDef / Project: the editable mixer, and the DTOs the panel reads
+app/src/tracks.rs         TrackHost: project -> MixerParams (atomics) + one SourceSlot per track
+app/src/graph.rs          per track: SourceSlot -> [inserts] -> TransportGate
+                          master:    sum -> [CLAP effect] -> master fader   ->  AudioIoService::install_graph
 app/src/meters.rs         MeterThrottle -> pump thread (interval/4) -> Channel<MeterFrameDto>
 app/src/debug_capture.rs  DebugTapService -> WAV + PNG + stats.json under .debug/captures/
 app/src/commands.rs       get_ui_snapshot | get_clap_plugins | transport_play | transport_stop |
-                          note_on | note_off | debug_capture | subscribe_meters
+                          note_on | note_off | get_sources | set_source |
+                          get_tracks | set_track_gain | set_track_pan | set_track_mute |
+                          set_track_solo | set_master_gain | set_selected_track |
+                          set_track_source | add_track | remove_track |
+                          get_pattern | set_pattern | set_bpm |
+                          debug_capture | subscribe_meters
 ```
 
 The kernel itself never enters Tauri's managed state (`Box<dyn Plugin>` is not `Send`); it stays on

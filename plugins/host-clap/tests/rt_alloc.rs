@@ -181,6 +181,19 @@ fn processing_a_clap_node_allocates_nothing() {
     assert_eq!(node.stats().process_errors(), 0);
 }
 
+/// Fills both channels with a constant, so the CLAP gain has something to halve
+/// and the final value is exact. Allocation-free, like everything else in the
+/// measured loop.
+struct ConstNode(f32);
+
+impl RtNode for ConstNode {
+    fn process(&mut self, ctx: &mut ProcessCtx) {
+        for channel in ctx.buffers.as_mut_slices() {
+            channel.fill(self.0);
+        }
+    }
+}
+
 #[test]
 fn the_whole_graph_path_with_a_clap_node_in_it_allocates_nothing() {
     // Same claim, one level up: what the audio callback actually calls is
@@ -199,14 +212,18 @@ fn the_whole_graph_path_with_a_clap_node_in_it_allocates_nothing() {
 
     let mut collector = Collector::new();
     let (mut handle, mut slot) = graph_channel(2, collector.handle());
+    // A generator, then the CLAP gain as an insert on the same track. A track's
+    // input is silence -- the source is what puts something in it -- so a plugin
+    // that halves what it is given needs something to halve.
     handle
-        .install(GraphSpec::new().with(Box::new(node)))
+        .install(
+            GraphSpec::new()
+                .with(Box::new(ConstNode(0.5)))
+                .with(Box::new(node)),
+        )
         .expect("install");
 
     let mut buffers = AudioBuffers::new(BLOCK);
-    for channel in buffers.as_mut_slices() {
-        channel.fill(0.5);
-    }
     assert!(slot.poll_swap());
     {
         let mut ctx = ProcessCtx::new(&mut buffers, 48_000.0, BLOCK, TransportSnapshot::default());
@@ -215,12 +232,6 @@ fn the_whole_graph_path_with_a_clap_node_in_it_allocates_nothing() {
 
     let observed = count_allocations(|| {
         for _ in 0..32 {
-            // Refilling is part of the measurement on purpose: `fill` on a
-            // pre-allocated slice must not allocate either, and it keeps the
-            // input identical every block so the final value is exact.
-            for channel in buffers.as_mut_slices() {
-                channel.fill(0.5);
-            }
             // `poll_swap` on an empty queue is part of every callback too.
             slot.poll_swap();
             let mut ctx =

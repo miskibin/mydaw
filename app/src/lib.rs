@@ -58,8 +58,10 @@ pub mod gui_bridge;
 pub mod gui_host;
 pub mod ipc_bench;
 mod meters;
+pub mod project;
 pub mod source;
 mod state;
+pub mod tracks;
 
 pub use debug_capture::{
     capture_root, capture_to_disk, captures_dir, debug_capture_seconds_from_env,
@@ -69,12 +71,13 @@ pub use debug_capture::{
 };
 pub use dto::{
     ClapPluginInfoDto, MeterFrameDto, PatternDto, PatternRowDto, SequencerStateDto, StepDto,
+    TrackMeterDto,
 };
 pub use graph::{
     clap_effect_node, clap_fx_spec_from_env, clap_instrument_node, clap_instrument_spec_from_env,
-    clap_node, clap_spec_from_env, engine_graph, install_engine_graph, load_env_clap_effect,
-    load_env_clap_instrument, load_env_clap_plugin, parse_clap_plugin_spec, source_chain,
-    ClapPluginEnvError, ClapPluginSpec, TransportGate, CLAP_FX_ENV, CLAP_INSTRUMENT_ENV,
+    clap_node, clap_spec_from_env, engine_graph, load_env_clap_effect, load_env_clap_instrument,
+    load_env_clap_plugin, parse_clap_plugin_spec, source_chain, track_chain, ClapPluginEnvError,
+    ClapPluginSpec, TransportGate, CLAP_FX_ENV, CLAP_INSTRUMENT_ENV,
 };
 pub use gui_bridge::{ClapGuiBridge, ClapGuiCommand, ClapGuiStatusDto, GUI_REQUEST_TIMEOUT};
 pub use gui_host::{ClapGuiHost, NO_PLUGIN_MESSAGE};
@@ -83,14 +86,19 @@ pub use ipc_bench::{
     IPC_BENCH_ENV, IPC_BENCH_PANEL,
 };
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
+pub use project::{
+    check_gain_db, check_pan, mixer_state_dto, MasterDto, MixerStateDto, Project, TrackDef,
+    TrackDto, TrackError,
+};
 pub use source::{
     serve_clap_source_requests, ClapSourceBridge, Source, SourceDto, SourceError, SourceHandle,
     SourceSlot, CLAP_SOURCE_TIMEOUT,
 };
 pub use state::{
     boot_kernel, ui_snapshot, AppState, NoteError, SequencerError, StartupError,
-    KERNEL_STATUS_PANEL,
+    KERNEL_STATUS_PANEL, MIXER_PANEL,
 };
+pub use tracks::{MixerError, TrackHost};
 
 use std::process::ExitCode;
 
@@ -131,31 +139,29 @@ pub fn run() -> ExitCode {
     // sentence instead of after a five-second round trip.
     state.clap_source().set_available(clap_instrument.is_some());
 
-    // A configured CLAP instrument still wins at startup -- it is what the user
-    // asked for by setting the variable. Otherwise the built-in synth, so the
-    // keyboard plays something the moment the window opens.
+    // The session's own tracks -- drums and a synth -- with a configured CLAP
+    // instrument taking over track 0, because that is what the user asked for by
+    // setting the variable.
     //
     // Except in headless capture mode, which presses Play and records whatever
     // comes out. An instrument is silent until somebody plays it, and there is
     // nobody there, so the capture would correctly report "no audio" and exit
-    // non-zero. That mode wants the free-running tone, which is exactly what it
-    // has always recorded.
-    let startup_source = if clap_instrument.is_some() {
-        Source::Clap
-    } else if debug_capture_seconds_from_env().is_some() {
-        Source::TestTone
+    // non-zero. That mode wants a single free-running tone track, which is
+    // exactly what it has always recorded.
+    let started = if debug_capture_seconds_from_env().is_some() && clap_instrument.is_none() {
+        state.start_audio_with_source(Source::TestTone, None, clap_fx.as_mut())
     } else {
-        Source::DEFAULT
+        state.start_audio_with_project(clap_instrument.as_mut(), clap_fx.as_mut())
     };
 
-    match state.start_audio_with_source(startup_source, clap_instrument.as_mut(), clap_fx.as_mut())
-    {
+    match started {
         Ok(info) => log::info!(
-            "audio output: {} @ {} Hz, {} ch (max block {}); source '{}' installed",
+            "audio output: {} @ {} Hz, {} ch (max block {}); {} track(s), selected source '{}'",
             info.device_name,
             info.sample_rate,
             info.channels,
             info.max_block,
+            state.tracks().track_count(),
             state.current_source().id()
         ),
         // Headless machines, RDP sessions and CI runners land here. The window,
@@ -203,7 +209,7 @@ pub fn run() -> ExitCode {
     // main thread installs into. Both are `Arc`s, cloned before `state` moves
     // into Tauri's managed state.
     let clap_source = std::sync::Arc::clone(state.clap_source());
-    let source_handle = std::sync::Arc::clone(state.source_handle());
+    let track_host = std::sync::Arc::clone(state.tracks());
     // The window service belongs to this thread -- the one tao's loop will run on
     // -- which is exactly what makes it legal to open plugin windows from the run
     // callback below.
@@ -225,6 +231,17 @@ pub fn run() -> ExitCode {
             commands::note_off,
             commands::get_sources,
             commands::set_source,
+            // The mixer.
+            commands::get_tracks,
+            commands::set_track_gain,
+            commands::set_track_pan,
+            commands::set_track_mute,
+            commands::set_track_solo,
+            commands::set_master_gain,
+            commands::set_selected_track,
+            commands::set_track_source,
+            commands::add_track,
+            commands::remove_track,
             commands::get_pattern,
             commands::set_pattern,
             commands::set_bpm,
@@ -295,7 +312,7 @@ pub fn run() -> ExitCode {
             // for.
             serve_clap_source_requests(
                 &clap_source,
-                &source_handle,
+                &track_host,
                 clap_instrument.as_mut(),
                 audio
                     .stream_info()

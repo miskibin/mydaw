@@ -2159,6 +2159,7 @@ name = "mydaw-ipc-bridge"
 version = "0.1.0"
 dependencies = [
  "mydaw-kernel",
+ "mydaw-rt-core",
  "rtrb",
  "serde",
  "serde_json",

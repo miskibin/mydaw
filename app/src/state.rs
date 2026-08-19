@@ -14,17 +14,29 @@ use mydaw_plugin_sequencer::{Pattern, PatternError, SequencerPlugin, SequencerSe
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 
-use mydaw_rt_core::{clamp_bpm, LiveNote, RtNode, RtNodeFactory, MAX_BPM, MAX_KEY, MIN_BPM};
+use mydaw_rt_core::{clamp_bpm, LiveNote, MAX_BPM, MAX_KEY, MIN_BPM};
 
 use crate::dto::{ClapPluginInfoDto, PatternDto, SequencerStateDto};
-use crate::graph::{clap_effect_node, clap_instrument_node, install_engine_graph};
+use crate::graph::{clap_effect_node, clap_instrument_node};
 use crate::gui_bridge::ClapGuiBridge;
 use crate::ipc_bench;
 use crate::meters::MeterPump;
-use crate::source::{ClapSourceBridge, Source, SourceDto, SourceError, SourceHandle};
+use crate::project::{MixerStateDto, Project, TrackError};
+use crate::source::{ClapSourceBridge, Source, SourceDto, SourceError};
+use crate::tracks::{MixerError, TrackHost};
 
 /// Panel key of the kernel status view, mirrored in `ui/src/panels/registry.ts`.
 pub const KERNEL_STATUS_PANEL: &str = "kernel-status";
+
+/// Panel key of the mixer, mirrored in `ui/src/panels/registry.ts`.
+///
+/// Contributed by the shell rather than by a plugin, for the same reason the
+/// kernel status view is: a mixer strip is a view of the **project**, and the
+/// project lives here. The metering plugin owns the meter *queue* and the
+/// sequencer owns the *pattern*, but neither owns a track -- so a plugin
+/// contributing this panel would have to reach back into the shell for
+/// everything it draws.
+pub const MIXER_PANEL: &str = "mixer";
 
 /// Startup failures that are not the kernel's own.
 #[derive(Debug, thiserror::Error)]
@@ -113,6 +125,14 @@ pub fn ui_snapshot(kernel: &Kernel) -> UiSnapshot {
             component: KERNEL_STATUS_PANEL.to_owned(),
         },
     );
+    snapshot.panels.insert(
+        1,
+        PanelManifestDto {
+            id: MIXER_PANEL.to_owned(),
+            title: "Mixer".to_owned(),
+            component: MIXER_PANEL.to_owned(),
+        },
+    );
     for (id, title, component) in
         crate::ipc_bench::bench_panels_for(ipc_bench::dev_panels_enabled(), ipc_bench::auto_mode())
     {
@@ -135,15 +155,12 @@ pub fn ui_snapshot(kernel: &Kernel) -> UiSnapshot {
 pub struct AppState {
     snapshot: UiSnapshot,
     audio: Arc<AudioIoService>,
-    tone: Arc<TestToneFactory>,
-    /// The built-in instruments, by `type_id`.
-    instruments: Arc<InstrumentRegistry>,
     /// The authoritative pattern and tempo. The audio thread runs copies of
     /// both; this is the original (and, one day, what a project file holds).
     sequencer: Arc<SequencerService>,
-    /// The head of the chain. Swapping the source is a push through this, not a
-    /// graph rebuild -- see `crate::source`.
-    source: Arc<SourceHandle>,
+    /// The project's tracks, the mixer parameters the audio thread reads, and
+    /// one head-of-chain handle per track. See `crate::tracks`.
+    tracks: Arc<TrackHost>,
     /// Mailbox to the main thread for the one source it alone can build.
     clap_source: Arc<ClapSourceBridge>,
     clap: Arc<ClapHostService>,
@@ -201,10 +218,8 @@ impl AppState {
         Ok(Self {
             snapshot: ui_snapshot(kernel),
             audio,
-            tone,
-            instruments,
             sequencer,
-            source: Arc::new(SourceHandle::new(Source::DEFAULT)),
+            tracks: Arc::new(TrackHost::new(tone, instruments)),
             clap_source: Arc::new(ClapSourceBridge::new()),
             clap,
             meters: MeterPump::new(throttle),
@@ -213,7 +228,12 @@ impl AppState {
         })
     }
 
-    /// Open the output device and publish the test-tone graph.
+    /// Open the output device on a single test-tone track.
+    ///
+    /// The offline/headless entry point: it *replaces* the project with one
+    /// track so that what comes out of the device is exactly one known
+    /// generator. `run()` uses [`start_audio_with_project`] instead, which keeps
+    /// the session's own tracks.
     ///
     /// Callers treat failure as a warning, not a fatal error: a machine with no
     /// output device (headless CI, RDP session) must still get a working window.
@@ -221,26 +241,22 @@ impl AppState {
     /// # Errors
     /// Whatever cpal reports, plus [`AudioIoError::NotRunning`] if the stream died
     /// between opening it and installing the graph.
+    ///
+    /// [`start_audio_with_project`]: Self::start_audio_with_project
     pub fn start_audio(&self) -> Result<StreamInfo, AudioIoError> {
         self.start_audio_with_plugins(None, None)
     }
 
-    /// Open the output device and publish a chain headed by `source`.
+    /// Open the output device on a single track headed by `source`.
     ///
-    /// The one entry point the shell's startup path uses: `run()` picks the
-    /// source (the CLAP instrument when one is configured, otherwise
-    /// [`Source::DEFAULT`]), and everything after that is
-    /// [`set_source`](Self::set_source).
+    /// Both plugins are activated *after* the device is open, because activation
+    /// needs the negotiated sample rate and block size. One that will not
+    /// activate is logged and skipped -- the engine still runs.
     ///
-    /// Both plugins are activated *after* the device is open, because
-    /// activation needs the negotiated sample rate and block size. One that
-    /// will not activate is logged and skipped -- the engine still runs.
-    ///
-    /// A source whose node cannot be built (a CLAP instrument that will not
-    /// activate, a missing built-in) falls back to [`Source::DEFAULT`] with a
-    /// warning rather than leaving the stream silent: a session with the wrong
-    /// instrument is recoverable from the UI, and one with no graph at all is
-    /// not.
+    /// A [`Source::Clap`] whose node cannot be built leaves the track on
+    /// [`Source::DEFAULT`] with a warning rather than leaving the stream silent:
+    /// a session with the wrong instrument is recoverable from the UI, and one
+    /// with no graph at all is not.
     ///
     /// # Errors
     /// Whatever cpal reports, plus [`AudioIoError::NotRunning`] if the stream
@@ -251,31 +267,79 @@ impl AppState {
         instrument: Option<&mut LoadedClapPlugin>,
         effect: Option<&mut LoadedClapPlugin>,
     ) -> Result<StreamInfo, AudioIoError> {
-        // Order is forced by the service: `install_graph` needs a live session,
-        // because the graph channel is created together with the stream.
+        // A CLAP track cannot be *compiled* -- only the caller's `!Send` plugin
+        // can build its node -- so the track starts on the fallback source and
+        // is upgraded once the node exists.
+        let (initial, clap_track) = if source == Source::Clap {
+            (Source::DEFAULT, Some(0))
+        } else {
+            (source, None)
+        };
+        let mut project = Project::empty();
+        project
+            .add(initial, Some(initial.label().to_owned()))
+            .expect("an empty project has room for one track");
+        self.start_audio_with(project, clap_track, instrument, effect)
+    }
+
+    /// Open the output device on the session's own tracks.
+    ///
+    /// The shell's startup path. When a CLAP instrument is configured it becomes
+    /// **track 0**'s source, replacing whatever the project had there: there is
+    /// exactly one hosted instrument instance and the first track is the one the
+    /// keyboard starts on, so that is where the thing the user asked for by
+    /// setting the environment variable belongs.
+    ///
+    /// # Errors
+    /// See [`start_audio_with_source`](Self::start_audio_with_source).
+    pub fn start_audio_with_project(
+        &self,
+        instrument: Option<&mut LoadedClapPlugin>,
+        effect: Option<&mut LoadedClapPlugin>,
+    ) -> Result<StreamInfo, AudioIoError> {
+        let clap_track = instrument.as_ref().map(|_| 0);
+        self.start_audio_with(self.tracks.project(), clap_track, instrument, effect)
+    }
+
+    /// Open the device, install `project`, and place the hosted plugins.
+    ///
+    /// Order is forced by the service: `install_graph` needs a live session,
+    /// because the graph channel is created together with the stream.
+    fn start_audio_with(
+        &self,
+        project: Project,
+        clap_track: Option<usize>,
+        instrument: Option<&mut LoadedClapPlugin>,
+        effect: Option<&mut LoadedClapPlugin>,
+    ) -> Result<StreamInfo, AudioIoError> {
         let info = self.audio.start()?;
         let sample_rate = f64::from(info.sample_rate);
 
-        let clap_node = if source == Source::Clap {
-            instrument.and_then(|plugin| clap_instrument_node(plugin, sample_rate, info.max_block))
-        } else {
-            None
-        };
-        let (source, node) = match (source, clap_node) {
-            (Source::Clap, Some(node)) => (Source::Clap, node),
-            (Source::Clap, None) => {
-                log::warn!(
-                    "no usable CLAP instrument; starting on '{}' instead",
-                    Source::DEFAULT.id()
-                );
-                (Source::DEFAULT, self.source_node(Source::DEFAULT, &info)?)
-            }
-            (source, _) => (source, self.source_node(source, &info)?),
-        };
-
+        self.tracks.set_project(project);
         let effect_node =
             effect.and_then(|plugin| clap_effect_node(plugin, sample_rate, info.max_block));
-        install_engine_graph(&self.audio, &self.source, source, node, effect_node)?;
+        self.tracks.install_graph(&self.audio, effect_node)?;
+
+        if let (Some(track), Some(plugin)) = (clap_track, instrument) {
+            match clap_instrument_node(plugin, sample_rate, info.max_block) {
+                Some(node) => {
+                    if let Err(err) = self.tracks.install_source(track, Source::Clap, node) {
+                        log::warn!(
+                            "the CLAP instrument could not be installed on track {track}: {err}"
+                        );
+                    }
+                }
+                None => log::warn!(
+                    "no usable CLAP instrument; track {track} stays on '{}'",
+                    self.tracks
+                        .project()
+                        .tracks
+                        .get(track)
+                        .map_or("<none>", |t| t.source.id())
+                ),
+            }
+        }
+
         self.publish_sequencer();
         Ok(info)
     }
@@ -301,55 +365,8 @@ impl AppState {
         }
     }
 
-    /// Build the node for a source that does not need the main thread.
-    ///
-    /// # Errors
-    /// [`AudioIoError::NotRunning`] is impossible here (the caller holds a
-    /// [`StreamInfo`]); a missing built-in instrument is a wiring bug, so it is
-    /// logged and the test tone stands in rather than failing the whole start.
-    fn source_node(
-        &self,
-        source: Source,
-        info: &StreamInfo,
-    ) -> Result<Box<dyn RtNode>, AudioIoError> {
-        let sample_rate = f64::from(info.sample_rate);
-        match self.build_source_node(source, sample_rate, info.max_block) {
-            Ok(node) => Ok(node),
-            Err(err) => {
-                log::warn!("{err}; falling back to the test tone");
-                Ok(self.tone.create(sample_rate, info.max_block))
-            }
-        }
-    }
-
-    /// Build the RT node for an internal source.
-    ///
-    /// # Errors
-    /// [`SourceError::ClapNotConfigured`] for [`Source::Clap`], which is not
-    /// buildable from here at all (it needs the main thread), and
-    /// [`SourceError::MissingInstrument`] when the instruments plugin did not
-    /// contribute the node -- a wiring bug rather than a runtime condition.
-    fn build_source_node(
-        &self,
-        source: Source,
-        sample_rate: f64,
-        max_block: usize,
-    ) -> Result<Box<dyn RtNode>, SourceError> {
-        match source {
-            Source::TestTone => Ok(self.tone.create(sample_rate, max_block)),
-            Source::Clap => Err(SourceError::ClapNotConfigured),
-            other => {
-                let type_id = other
-                    .instrument_type_id()
-                    .ok_or(SourceError::ClapNotConfigured)?;
-                self.instruments
-                    .create(type_id, sample_rate, max_block)
-                    .ok_or(SourceError::MissingInstrument(type_id))
-            }
-        }
-    }
-
-    /// Change what plays at the head of the chain, while the engine runs.
+    /// Change what plays at the head of the **selected** track, while the engine
+    /// runs.
     ///
     /// Internal sources are built and pushed straight from the calling thread
     /// -- a factory is `Send + Sync` and the swap is a wait-free queue push.
@@ -363,17 +380,31 @@ impl AppState {
     /// with no bundle loaded, and [`SourceError::MainThread`] for whatever the
     /// run loop reported.
     pub fn set_source(&self, source: Source) -> Result<(), SourceError> {
-        if source == Source::Clap {
-            return self.clap_source.request();
-        }
-        let info = self.audio.stream_info().ok_or(AudioIoError::NotRunning)?;
-        let node = self.build_source_node(source, f64::from(info.sample_rate), info.max_block)?;
-        self.source.install(node, source)?;
-        log::info!("source is now '{}'", source.id());
-        Ok(())
+        self.set_track_source(self.tracks.selected(), source)
     }
 
-    /// Change the source from its string id, as the webview sends it.
+    /// Change the source of one track.
+    ///
+    /// # Errors
+    /// See [`set_source`](Self::set_source).
+    pub fn set_track_source(&self, track: usize, source: Source) -> Result<(), SourceError> {
+        if source == Source::Clap {
+            return self.clap_source.request(track);
+        }
+        match self.tracks.set_source(track, source, &self.audio) {
+            Ok(()) => {
+                log::info!("track {track} source is now '{}'", source.id());
+                Ok(())
+            }
+            Err(MixerError::Source(err)) => Err(err),
+            Err(MixerError::Audio(err)) => Err(SourceError::Audio(err)),
+            // A bad index is a UI bug; it reaches the status bar as itself.
+            Err(MixerError::Track(err)) => Err(SourceError::MainThread(err.to_string())),
+        }
+    }
+
+    /// Change the selected track's source from its string id, as the webview
+    /// sends it.
     ///
     /// # Errors
     /// [`SourceError::Unknown`] for an id that names nothing, plus everything
@@ -382,12 +413,13 @@ impl AppState {
         self.set_source(Source::parse(id)?)
     }
 
-    /// The source currently at the head of the chain.
+    /// The source at the head of the selected track.
     pub fn current_source(&self) -> Source {
-        self.source.current()
+        self.tracks.selected_source()
     }
 
-    /// Every source, marked with which is playing and which can be chosen.
+    /// Every source, marked with which the selected track is playing and which
+    /// can be chosen.
     pub fn sources(&self) -> Vec<SourceDto> {
         let current = self.current_source();
         let clap = self.clap_source.is_available();
@@ -397,9 +429,85 @@ impl AppState {
             .collect()
     }
 
-    /// The head-of-chain handle, for the main thread's CLAP source path.
-    pub fn source_handle(&self) -> &Arc<SourceHandle> {
-        &self.source
+    /// The project's tracks and the mixer parameters the audio thread reads.
+    pub fn tracks(&self) -> &Arc<TrackHost> {
+        &self.tracks
+    }
+
+    /// The mixer, in the shape the webview reads.
+    pub fn mixer_state(&self) -> MixerStateDto {
+        self.tracks.state()
+    }
+
+    /// Set a track's fader, in dB. Works with no audio device open.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`] or [`TrackError::InvalidGain`].
+    pub fn set_track_gain_db(&self, track: usize, db: f32) -> Result<(), TrackError> {
+        self.tracks.set_gain_db(track, db)
+    }
+
+    /// Set a track's pan, `-1.0..=1.0`.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`] or [`TrackError::InvalidPan`].
+    pub fn set_track_pan(&self, track: usize, pan: f32) -> Result<(), TrackError> {
+        self.tracks.set_pan(track, pan)
+    }
+
+    /// Mute or unmute a track.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_track_muted(&self, track: usize, muted: bool) -> Result<(), TrackError> {
+        self.tracks.set_muted(track, muted)
+    }
+
+    /// Solo or un-solo a track.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_track_soloed(&self, track: usize, soloed: bool) -> Result<(), TrackError> {
+        self.tracks.set_soloed(track, soloed)
+    }
+
+    /// Set the master fader, in dB.
+    ///
+    /// # Errors
+    /// [`TrackError::InvalidGain`].
+    pub fn set_master_gain_db(&self, db: f32) -> Result<(), TrackError> {
+        self.tracks.set_master_gain_db(db)
+    }
+
+    /// Choose the track the keyboard piano and the source selector address.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_selected_track(&self, track: usize) -> Result<(), TrackError> {
+        self.tracks.set_selected(track)
+    }
+
+    /// The track the keyboard piano plays.
+    pub fn selected_track(&self) -> usize {
+        self.tracks.selected()
+    }
+
+    /// Add a track and rebuild the graph.
+    ///
+    /// # Errors
+    /// [`MixerError`] -- most usefully [`TrackError::TooManyTracks`] and
+    /// [`TrackError::ClapInGraph`].
+    pub fn add_track(&self, source: Source, name: Option<String>) -> Result<usize, MixerError> {
+        self.tracks.add_track(source, name, &self.audio)
+    }
+
+    /// Remove a track and rebuild the graph.
+    ///
+    /// # Errors
+    /// [`MixerError`] -- most usefully [`TrackError::LastTrack`] and
+    /// [`TrackError::ClapInGraph`].
+    pub fn remove_track(&self, track: usize) -> Result<(), MixerError> {
+        self.tracks.remove_track(track, &self.audio)
     }
 
     /// The CLAP source mailbox. Commands post here; the run loop serves it.
@@ -407,7 +515,7 @@ impl AppState {
         &self.clap_source
     }
 
-    /// Open the output device and publish `test-tone -> [effect] -> gate`.
+    /// Open the output device on a single test-tone track, through `effect`.
     ///
     /// # Errors
     /// See [`start_audio_with_plugins`](Self::start_audio_with_plugins).
@@ -423,8 +531,7 @@ impl AppState {
     /// With an `instrument`, [`Source::Clap`]; without one, [`Source::TestTone`]
     /// -- which is what the hardware tests and the headless capture path want,
     /// and deliberately *not* the shell's startup default (see
-    /// [`Source::DEFAULT`]). To start on anything else, call
-    /// [`start_audio_with_source`](Self::start_audio_with_source).
+    /// [`start_audio_with_project`](Self::start_audio_with_project)).
     ///
     /// The caller keeps ownership of each [`LoadedClapPlugin`] (they are `!Send`
     /// and must outlive the nodes they create), which is why this takes `&mut`
@@ -475,7 +582,11 @@ impl AppState {
         self.audio.set_playing(playing)
     }
 
-    /// Play a note, live.
+    /// Play a note, live, on the selected track.
+    ///
+    /// The event's channel **is** the track index, which is how a keyboard press
+    /// reaches one instrument and not every instrument in the project (see
+    /// `mydaw_rt_core::graph`).
     ///
     /// Deliberately independent of the transport: pressing a key must make a
     /// sound whether or not the DAW is playing. See `crate::graph`.
@@ -491,11 +602,12 @@ impl AppState {
         if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity) {
             return Err(NoteError::InvalidVelocity(velocity));
         }
-        self.audio.send_note(LiveNote::note_on(key, velocity))?;
+        self.audio
+            .send_note(LiveNote::note_on(key, velocity).on_channel(self.note_channel()))?;
         Ok(())
     }
 
-    /// Release a note.
+    /// Release a note on the selected track.
     ///
     /// # Errors
     /// [`NoteError::KeyOutOfRange`], or [`NoteError::Audio`] when no device is
@@ -504,8 +616,18 @@ impl AppState {
         if key > MAX_KEY {
             return Err(NoteError::KeyOutOfRange(key));
         }
-        self.audio.send_note(LiveNote::note_off(key))?;
+        self.audio
+            .send_note(LiveNote::note_off(key).on_channel(self.note_channel()))?;
         Ok(())
+    }
+
+    /// The note channel live input is sent on: the selected track's index.
+    ///
+    /// Clamped to the 16 channels a note event can address, which is also
+    /// [`MAX_TRACKS`](mydaw_rt_core::MAX_TRACKS) -- so the clamp is unreachable
+    /// rather than lossy.
+    fn note_channel(&self) -> u8 {
+        self.tracks.selected().min(mydaw_rt_core::MAX_TRACKS - 1) as u8
     }
 
     /// The tempo and pattern, in the shape the webview reads.
@@ -660,9 +782,16 @@ mod tests {
             .collect();
         assert_eq!(
             components,
-            vec!["kernel-status", "meters", "step-sequencer", "clap-browser"],
-            "panels appear in kernel boot order after the shell's own; \
-             debug-tap deliberately contributes none"
+            vec![
+                "kernel-status",
+                "mixer",
+                "meters",
+                "step-sequencer",
+                "clap-browser"
+            ],
+            "the shell's own panels first (the kernel registry and the mixer, \
+             neither of which any plugin owns), then the plugins' in kernel boot \
+             order; debug-tap deliberately contributes none"
         );
     }
 
@@ -754,11 +883,14 @@ mod tests {
     }
 
     #[test]
-    fn the_source_list_offers_every_source_and_starts_on_the_default() {
+    fn the_source_list_offers_every_source_and_starts_on_the_selected_track() {
         let kernel = boot_kernel().unwrap();
         let state = AppState::from_kernel(&kernel).unwrap();
 
-        assert_eq!(state.current_source(), Source::DEFAULT);
+        // Track 0 of the default project is the drum kit, and track 0 is what
+        // the keyboard and the selector address until the user says otherwise.
+        assert_eq!(state.selected_track(), 0);
+        assert_eq!(state.current_source(), Source::DrumKit);
         let sources = state.sources();
         assert_eq!(
             sources.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
@@ -769,7 +901,12 @@ mod tests {
             .filter(|s| s.selected)
             .map(|s| s.id.as_str())
             .collect();
-        assert_eq!(selected, vec!["poly-synth"], "exactly one is playing");
+        assert_eq!(selected, vec!["drum-kit"], "exactly one is playing");
+
+        // Selecting the synth track changes what the list marks, with no audio
+        // device involved at all.
+        state.set_selected_track(1).unwrap();
+        assert_eq!(state.current_source(), Source::PolySynth);
 
         // No `MYDAW_CLAP_INSTRUMENT` in the test process, so the CLAP source is
         // listed but not offerable -- the UI greys it out rather than hiding it,
@@ -798,7 +935,7 @@ mod tests {
         }
         assert_eq!(
             state.current_source(),
-            Source::DEFAULT,
+            Source::DrumKit,
             "a failed switch must not change what the UI is told is playing"
         );
     }
@@ -835,13 +972,14 @@ mod tests {
         let state = AppState::from_kernel(&kernel).unwrap();
         for source in [Source::TestTone, Source::PolySynth, Source::DrumKit] {
             assert!(
-                state.build_source_node(source, 48_000.0, 512).is_ok(),
+                state.tracks().build_node(source, 48_000.0, 512).is_ok(),
                 "'{}' could not be built",
                 source.id()
             );
         }
         assert!(state
-            .build_source_node(Source::Clap, 48_000.0, 512)
+            .tracks()
+            .build_node(Source::Clap, 48_000.0, 512)
             .is_err());
     }
 

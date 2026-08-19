@@ -39,7 +39,7 @@ use mydaw_plugin_sequencer::{
 };
 use mydaw_rt_core::{
     clamp_bpm, graph_channel, note_channel, rt_channel, GcThread, GraphHandle, GraphInstallError,
-    GraphSpec, LiveNote, NoteProducer, RtCommand, RtCommandProducer, TransportClock,
+    GraphLimits, GraphSpec, LiveNote, NoteProducer, RtCommand, RtCommandProducer, TransportClock,
     DEFAULT_NOTE_CAPACITY,
 };
 use parking_lot::Mutex;
@@ -291,11 +291,35 @@ impl AudioIoService {
     }
 
     /// Publish a graph to the audio thread. Takes effect on the next block.
-    pub fn install_graph(&self, spec: GraphSpec) -> Result<(), AudioIoError> {
+    ///
+    /// The graph's per-track scratch buffers, event buffers and parameter ramps
+    /// are sized from the **open stream** unless the builder pinned them with
+    /// [`GraphSpec::with_limits`]. A graph builder should not have to know the
+    /// device's block size to be correct, and a graph built against a stale one
+    /// would truncate every block.
+    pub fn install_graph(&self, mut spec: GraphSpec) -> Result<(), AudioIoError> {
         let mut guard = self.session.lock();
         let session = guard.as_mut().ok_or(AudioIoError::NotRunning)?;
+        spec.apply_default_limits(GraphLimits {
+            sample_rate: session.transport.sample_rate(),
+            max_block: self.config.max_block,
+            max_events: self.config.note_queue_capacity,
+        });
         session.graph.install(spec)?;
         Ok(())
+    }
+
+    /// The graph limits a graph installed right now would inherit.
+    ///
+    /// Exposed so an offline render (and the shell's own project builder) can
+    /// build a graph against exactly what the stream will give it. `None` while
+    /// stopped.
+    pub fn graph_limits(&self) -> Option<GraphLimits> {
+        self.session.lock().as_ref().map(|session| GraphLimits {
+            sample_rate: session.transport.sample_rate(),
+            max_block: self.config.max_block,
+            max_events: self.config.note_queue_capacity,
+        })
     }
 
     /// Escape hatch for callers that need the [`GraphHandle`] itself (e.g. to

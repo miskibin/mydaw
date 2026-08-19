@@ -81,6 +81,9 @@ const EMPTY_FRAME: MeterFrame = {
   rmsR: 0,
   samplePos: 0,
   playing: false,
+  // This panel is the *master* meter; per-track levels are the mixer's, and it
+  // reads them from the bus itself.
+  tracks: [],
 };
 
 /**

@@ -2,6 +2,7 @@ import { lazy } from 'solid-js';
 import { ClapBrowserPanel } from './clap-browser/ClapBrowserPanel';
 import { KernelStatusPanel } from './kernel-status/KernelStatusPanel';
 import { MetersPanel } from './meters/MetersPanel';
+import { MixerPanel } from './mixer/MixerPanel';
 import { SequencerPanel } from './sequencer/SequencerPanel';
 import type { PanelComponent } from './types';
 
@@ -15,6 +16,10 @@ import type { PanelComponent } from './types';
  */
 export const PANEL_REGISTRY: Record<string, PanelComponent> = {
   'kernel-status': KernelStatusPanel,
+  // Contributed by the shell, not by a plugin: a strip is a view of the
+  // project, and the project lives in `app`. See `MIXER_PANEL` in
+  // `app/src/state.rs`.
+  mixer: MixerPanel,
   meters: MetersPanel,
   'step-sequencer': SequencerPanel,
   'clap-browser': ClapBrowserPanel,

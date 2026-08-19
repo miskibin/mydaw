@@ -1,13 +1,22 @@
-//! The Phase 1 audio graph: a swappable source, optionally through a CLAP
-//! effect, and a transport gate that only some sources ask for.
+//! One track's chain, and the CLAP plugins an environment variable can put in
+//! the graph.
 //!
 //! ```text
-//!   SourceSlot -> [CLAP effect] -> TransportGate
+//!   per track:  SourceSlot -> [insert..] -> TransportGate -> [strip] --\
+//!                                                                       sum
+//!   master:                       [CLAP effect] -> [master fader] <----/
 //! ```
 //!
-//! The chain is installed once per stream. What changes at runtime is the node
-//! *inside* [`SourceSlot`](crate::source::SourceSlot) -- see `crate::source`
+//! The tracks themselves are assembled by [`TrackHost::build_spec`], which calls
+//! [`track_chain`] once per track; this module owns the pieces that are not the
+//! mixer's business -- the gate, and reading a CLAP plugin out of the
+//! environment.
+//!
+//! A track's chain is installed once per stream. What changes at runtime is the
+//! node *inside* [`SourceSlot`](crate::source::SourceSlot) -- see `crate::source`
 //! for why the swap happens there and not by rebuilding the graph.
+//!
+//! [`TrackHost::build_spec`]: crate::tracks::TrackHost::build_spec
 //!
 //! # Why the gate is conditional rather than absent
 //!
@@ -36,11 +45,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
 use mydaw_plugin_host_clap::{ClapHostService, LoadedClapPlugin};
-use mydaw_rt_core::{GraphSpec, ProcessCtx, RtNode};
-
-use crate::source::{Source, SourceHandle};
+use mydaw_rt_core::{GraphSpec, ProcessCtx, RtNode, TrackSpec};
 
 /// Environment variable that inserts a CLAP effect into the default graph.
 ///
@@ -290,9 +296,8 @@ pub fn clap_instrument_node(
 /// The effect sits after the source, because that is where an insert lives, and
 /// the gate goes last, so Stop silences whatever the effect produced.
 ///
-/// This is the shape the engine runs, minus the source slot: the running engine
-/// uses [`install_engine_graph`], and this exists for the offline renders that
-/// want a chain without a stream behind it.
+/// One track's worth of the shape the engine runs, minus the source slot -- for
+/// the offline renders that want a chain without a stream behind it.
 ///
 /// Non-RT: node construction allocates, which is exactly why it happens here and
 /// not on the audio thread.
@@ -311,51 +316,39 @@ pub fn engine_graph(
     spec
 }
 
-/// Compile and publish `SourceSlot -> [effect] -> TransportGate` to the running
-/// audio thread, and hand `handle` the slot's non-RT end.
+/// Assemble one track: `SourceSlot -> [effect] -> TransportGate`.
 ///
-/// `node` is the source to start on; after this returns, changing the source is
-/// [`SourceHandle::install`] and does not touch the graph again -- which is what
-/// lets a CLAP effect survive an instrument change (see `crate::source`).
+/// The gate goes **last**, so Stop silences whatever the track's inserts
+/// produced -- including a tail -- rather than only its generator. It is armed
+/// by the flag the slot publishes, so a later swap to (or from) the test tone
+/// arms or disarms it with no graph install at all.
 ///
-/// The gate is always in the chain and armed by the flag the slot publishes, so
-/// a later swap to (or from) the test tone arms or disarms it without another
-/// graph install.
+/// This is the function [`TrackHost::build_spec`] calls once per track, so the
+/// offline tests build the chain the engine actually runs rather than a copy of
+/// it that can drift.
 ///
-/// # Errors
-/// [`AudioIoError::NotRunning`] when no stream is open (a machine with no output
-/// device still boots; it just has nothing to install into).
-pub fn install_engine_graph(
-    audio: &AudioIoService,
-    handle: &SourceHandle,
-    source: Source,
-    node: Box<dyn RtNode>,
+/// [`TrackHost::build_spec`]: crate::tracks::TrackHost::build_spec
+pub fn track_chain(
+    slot: crate::source::SourceSlot,
     effect: Option<Box<dyn RtNode>>,
-) -> Result<(), AudioIoError> {
-    // Fails before anything is built when there is no stream, so a headless
-    // machine does not pay for a graph nobody can hear.
-    let _ = audio.stream_info().ok_or(AudioIoError::NotRunning)?;
-
-    let gate = Arc::new(AtomicBool::new(source.gated()));
-    let slot = handle.open(node, source, audio.gc_handle(), Arc::clone(&gate));
-    audio.install_graph(source_chain(slot, effect, gate))
+    gate: Arc<AtomicBool>,
+) -> TrackSpec {
+    let mut track = TrackSpec::new(Box::new(slot) as Box<dyn RtNode>);
+    if let Some(effect) = effect {
+        track.inserts.push(effect);
+    }
+    track.inserts.push(Box::new(TransportGate::new(gate)));
+    track
 }
 
-/// Assemble `SourceSlot -> [effect] -> TransportGate`.
-///
-/// Split out of [`install_engine_graph`] so the offline tests build the chain
-/// the engine actually runs rather than a copy of it that can drift.
+/// [`track_chain`] as a whole one-track graph, for offline renders that drive a
+/// [`RtGraphSlot`](mydaw_rt_core::RtGraphSlot) by hand.
 pub fn source_chain(
     slot: crate::source::SourceSlot,
     effect: Option<Box<dyn RtNode>>,
     gate: Arc<AtomicBool>,
 ) -> GraphSpec {
-    let mut spec = GraphSpec::new().with(Box::new(slot) as Box<dyn RtNode>);
-    if let Some(effect) = effect {
-        spec.push(effect);
-    }
-    spec.push(Box::new(TransportGate::new(gate)));
-    spec
+    GraphSpec::new().with_track(track_chain(slot, effect, gate))
 }
 
 #[cfg(test)]

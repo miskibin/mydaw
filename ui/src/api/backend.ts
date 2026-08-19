@@ -2,9 +2,11 @@ import type {
   ClapGuiStatus,
   ClapPluginInfoDto,
   MeterFrame,
+  MixerState,
   PatternDto,
   SequencerState,
   SourceDto,
+  TrackDto,
   UiSnapshot,
   Unsubscribe,
 } from './types';
@@ -65,6 +67,42 @@ export interface Backend {
    * session with no CLAP instrument loaded.
    */
   setSource(id: string): Promise<SourceDto[]>;
+
+  // --- the mixer -----------------------------------------------------------
+  //
+  // Every one of these resolves with the whole `MixerState`, so the panel never
+  // merges a partial update into what it already had. A strip is a handful of
+  // numbers and the IPC spike measured a message this size as free.
+
+  /** The project's tracks, the master strip and the current selection. */
+  getTracks(): Promise<MixerState>;
+  /**
+   * Set a track's fader, in dB (`minGainDb..=maxGainDb`).
+   *
+   * Succeeds with no audio device open -- a fader is project data. The engine
+   * ramps the change over 10 ms, so dragging is as cheap as clicking.
+   */
+  setTrackGain(track: number, db: number): Promise<MixerState>;
+  /** Set a track's pan, `-1` hard left to `1` hard right. */
+  setTrackPan(track: number, pan: number): Promise<MixerState>;
+  /** Mute or unmute a track. A mute is a 10 ms fade, not a cut. */
+  setTrackMute(track: number, muted: boolean): Promise<MixerState>;
+  /** Solo or un-solo a track. Anything soloed silences everything that is not. */
+  setTrackSolo(track: number, soloed: boolean): Promise<MixerState>;
+  /** Set the master fader, in dB. */
+  setMasterGain(db: number): Promise<MixerState>;
+  /** Choose the track the keyboard piano plays and the source selector targets. */
+  setSelectedTrack(track: number): Promise<MixerState>;
+  /** Put a different instrument at the head of one track, by index. */
+  setTrackSource(track: number, source: string): Promise<MixerState>;
+  /**
+   * Add a track. Rejects past the engine's limit, and while a hosted CLAP
+   * plugin is in the graph (`canEditLayout` is false then).
+   */
+  addTrack(source: string, name?: string): Promise<MixerState>;
+  /** Remove a track. Rejects for the last one, and while `canEditLayout` is false. */
+  removeTrack(track: number): Promise<MixerState>;
+
   /**
    * The step grid and the session tempo, in one message.
    *
@@ -163,6 +201,56 @@ class TauriBackend implements Backend {
     return invoke<SourceDto[]>('set_source', { source: id });
   }
 
+  async getTracks(): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('get_tracks');
+  }
+
+  async setTrackGain(track: number, db: number): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_track_gain', { track, db });
+  }
+
+  async setTrackPan(track: number, pan: number): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_track_pan', { track, pan });
+  }
+
+  async setTrackMute(track: number, muted: boolean): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_track_mute', { track, muted });
+  }
+
+  async setTrackSolo(track: number, soloed: boolean): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_track_solo', { track, soloed });
+  }
+
+  async setMasterGain(db: number): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_master_gain', { db });
+  }
+
+  async setSelectedTrack(track: number): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_selected_track', { track });
+  }
+
+  async setTrackSource(track: number, source: string): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_track_source', { track, source });
+  }
+
+  async addTrack(source: string, name?: string): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('add_track', { source, name: name ?? null });
+  }
+
+  async removeTrack(track: number): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('remove_track', { track });
+  }
+
   async getPattern(): Promise<SequencerState> {
     const { invoke } = await this.core();
     return invoke<SequencerState>('get_pattern');
@@ -207,12 +295,56 @@ const MOCK_SNAPSHOT: UiSnapshot = {
   ],
   panels: [
     { id: 'kernel-status', title: 'Kernel Status', component: 'kernel-status' },
+    { id: 'mixer', title: 'Mixer', component: 'mixer' },
     { id: 'meters', title: 'Master Meters', component: 'meters' },
     { id: 'step-sequencer', title: 'Step Sequencer', component: 'step-sequencer' },
     { id: 'clap-browser', title: 'CLAP Plugins', component: 'clap-browser' },
-    { id: 'mixer', title: 'Mixer', component: 'mixer-view' },
   ],
 };
+
+/**
+ * The mixer's own limits, mirroring `MAX_TRACKS`, `SILENCE_DB` and
+ * `MAX_GAIN_DB` in `crates/rt-core/src/mixer.rs`.
+ */
+const MOCK_MAX_TRACKS = 16;
+const MOCK_MIN_GAIN_DB = -60;
+const MOCK_MAX_GAIN_DB = 6;
+
+/**
+ * The same two tracks Rust starts with. Mirrors `Project::default` in
+ * `app/src/project.rs` -- a mock that greeted you with a different project
+ * would be a worse rehearsal than no mock at all.
+ */
+function mockTracks(): TrackDto[] {
+  return [
+    {
+      index: 0,
+      id: 0,
+      name: 'Drums',
+      sourceId: 'drum-kit',
+      sourceLabel: 'Drum Kit',
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      selected: true,
+    },
+    {
+      index: 1,
+      id: 1,
+      name: 'Synth',
+      sourceId: 'poly-synth',
+      sourceLabel: 'Poly Synth',
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      selected: false,
+    },
+  ];
+}
 
 /**
  * Two plausible plugins, one of them with no vendor or version, because the
@@ -325,9 +457,12 @@ class MockBackend implements Backend {
   private playing = false;
   private samplePos = 0;
   private guiOpen = false;
-  private source = 'poly-synth';
   private bpm = MOCK_DEFAULT_BPM;
   private pattern: PatternDto = mockPattern();
+  private tracks: TrackDto[] = mockTracks();
+  private masterGainDb = 0;
+  private selected = 0;
+  private nextTrackId = 2;
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
@@ -379,7 +514,8 @@ class MockBackend implements Backend {
   }
 
   async getSources(): Promise<SourceDto[]> {
-    return MOCK_SOURCES.map((source) => ({ ...source, selected: source.id === this.source }));
+    const current = this.tracks[this.selected]?.sourceId;
+    return MOCK_SOURCES.map((source) => ({ ...source, selected: source.id === current }));
   }
 
   /**
@@ -388,14 +524,128 @@ class MockBackend implements Backend {
    * follows the selection -- is what is being developed against the mock.
    */
   async setSource(id: string): Promise<SourceDto[]> {
-    const wanted = MOCK_SOURCES.find((source) => source.id === id);
-    if (!wanted) throw new Error(`unknown source '${id}'`);
-    if (!wanted.available) {
-      throw new Error('no CLAP instrument is loaded; set MYDAW_CLAP_INSTRUMENT before starting MYDAW');
-    }
-    this.source = id;
-    console.info(`[mock] set_source ${id}`);
+    await this.setTrackSource(this.selected, id);
     return this.getSources();
+  }
+
+  // --- the mixer -----------------------------------------------------------
+
+  /** The current mixer, cloned so a panel cannot mutate the mock behind its back. */
+  private mixerState(): MixerState {
+    const anySoloed = this.tracks.some((track) => track.soloed);
+    return {
+      tracks: this.tracks.map((track, index) => ({
+        ...track,
+        index,
+        silenced: anySoloed ? !track.soloed : track.muted,
+        selected: index === this.selected,
+      })),
+      master: { gainDb: this.masterGainDb },
+      selected: this.selected,
+      maxTracks: MOCK_MAX_TRACKS,
+      minGainDb: MOCK_MIN_GAIN_DB,
+      maxGainDb: MOCK_MAX_GAIN_DB,
+      canEditLayout: true,
+    };
+  }
+
+  /** Reject an index the panel should never have sent, the way Rust does. */
+  private track(index: number): TrackDto {
+    const track = this.tracks[index];
+    if (!track) throw new Error(`there is no track ${index}`);
+    return track;
+  }
+
+  private checkGain(db: number): number {
+    if (!Number.isFinite(db) || db < MOCK_MIN_GAIN_DB || db > MOCK_MAX_GAIN_DB) {
+      throw new Error(
+        `gain ${db} dB is not a number between ${MOCK_MIN_GAIN_DB} and ${MOCK_MAX_GAIN_DB}`,
+      );
+    }
+    return db;
+  }
+
+  async getTracks(): Promise<MixerState> {
+    return this.mixerState();
+  }
+
+  async setTrackGain(track: number, db: number): Promise<MixerState> {
+    this.track(track).gainDb = this.checkGain(db);
+    return this.mixerState();
+  }
+
+  async setTrackPan(track: number, pan: number): Promise<MixerState> {
+    if (!Number.isFinite(pan) || pan < -1 || pan > 1) {
+      throw new Error(`pan ${pan} is not a number between -1.0 and 1.0`);
+    }
+    this.track(track).pan = pan;
+    return this.mixerState();
+  }
+
+  async setTrackMute(track: number, muted: boolean): Promise<MixerState> {
+    this.track(track).muted = muted;
+    return this.mixerState();
+  }
+
+  async setTrackSolo(track: number, soloed: boolean): Promise<MixerState> {
+    this.track(track).soloed = soloed;
+    return this.mixerState();
+  }
+
+  async setMasterGain(db: number): Promise<MixerState> {
+    this.masterGainDb = this.checkGain(db);
+    return this.mixerState();
+  }
+
+  async setSelectedTrack(track: number): Promise<MixerState> {
+    this.track(track);
+    this.selected = track;
+    return this.mixerState();
+  }
+
+  async setTrackSource(track: number, source: string): Promise<MixerState> {
+    const wanted = MOCK_SOURCES.find((entry) => entry.id === source);
+    if (!wanted) throw new Error(`unknown source '${source}'`);
+    if (!wanted.available) {
+      throw new Error(
+        'no CLAP instrument is loaded; set MYDAW_CLAP_INSTRUMENT before starting MYDAW',
+      );
+    }
+    const def = this.track(track);
+    def.sourceId = wanted.id;
+    def.sourceLabel = wanted.label;
+    console.info(`[mock] set_track_source ${track} ${source}`);
+    return this.mixerState();
+  }
+
+  async addTrack(source: string, name?: string): Promise<MixerState> {
+    if (this.tracks.length >= MOCK_MAX_TRACKS) {
+      throw new Error(`a project may have at most ${MOCK_MAX_TRACKS} tracks`);
+    }
+    const wanted = MOCK_SOURCES.find((entry) => entry.id === source);
+    if (!wanted) throw new Error(`unknown source '${source}'`);
+    this.tracks.push({
+      index: this.tracks.length,
+      id: this.nextTrackId++,
+      name: name ?? wanted.label,
+      sourceId: wanted.id,
+      sourceLabel: wanted.label,
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      selected: false,
+    });
+    return this.mixerState();
+  }
+
+  async removeTrack(track: number): Promise<MixerState> {
+    this.track(track);
+    if (this.tracks.length === 1) throw new Error('a project must keep at least one track');
+    this.tracks.splice(track, 1);
+    if (this.selected >= this.tracks.length) this.selected = this.tracks.length - 1;
+    return this.mixerState();
   }
 
   /** Exposed so a panel test can assert the mock's view of the editor. */
@@ -454,6 +704,20 @@ class MockBackend implements Backend {
       // Two slow LFOs at different rates so L/R visibly diverge.
       const peakL = env * (0.55 + 0.4 * Math.abs(Math.sin(t * 1.1)));
       const peakR = env * (0.55 + 0.4 * Math.abs(Math.sin(t * 1.37 + 0.6)));
+      // One meter per track, each on its own LFO and honouring that track's
+      // fader, pan and effective mute -- so the mixer's strips move
+      // independently and a mute visibly empties one.
+      const state = this.mixerState();
+      const tracks = state.tracks.map((track, index) => {
+        if (track.silenced) return { peakL: 0, peakR: 0 };
+        const gain = track.gainDb <= MOCK_MIN_GAIN_DB ? 0 : 10 ** (track.gainDb / 20);
+        const level = env * gain * (0.5 + 0.45 * Math.abs(Math.sin(t * (0.7 + index * 0.31))));
+        const theta = ((track.pan + 1) * Math.PI) / 4;
+        return {
+          peakL: level * Math.SQRT2 * Math.cos(theta),
+          peakR: level * Math.SQRT2 * Math.sin(theta),
+        };
+      });
       onFrame({
         peakL,
         peakR,
@@ -461,6 +725,7 @@ class MockBackend implements Backend {
         rmsR: peakR * 0.62,
         samplePos: this.samplePos,
         playing: this.playing,
+        tracks,
       });
     }, periodMs);
 

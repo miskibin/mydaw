@@ -13,6 +13,7 @@
 //!   GraphSpec -> GraphHandle::install  ------> RtGraphSlot::poll_swap / process
 //!   RtCommand -> rt_channel producer   ------> drain_commands
 //!   LiveNote  -> note_channel producer ------> drain_notes -> NoteEventBuffer
+//!   MixerParams::set_* (atomics)       ------> TrackStrip / MasterStrip
 //!   TransportClock (read for UI)       <-----> TransportClock::advance
 //!   GcThread (frees old graphs)        <------ Owned<..> dropped, never freed
 //! ```
@@ -30,6 +31,7 @@ mod command;
 mod denormals;
 mod gc;
 mod graph;
+pub mod mixer;
 mod node;
 mod notes;
 mod transport;
@@ -41,7 +43,13 @@ pub use denormals::disable_denormals;
 pub use denormals::mxcsr;
 pub use gc::{GcThread, DEFAULT_GC_INTERVAL};
 pub use graph::{
-    graph_channel, CompiledGraph, GraphHandle, GraphInstallError, GraphSpec, RtGraphSlot,
+    graph_channel, CompiledGraph, GraphHandle, GraphInstallError, GraphLimits, GraphSpec,
+    RtGraphSlot, TrackSpec, DEFAULT_MAX_BLOCK, DEFAULT_MAX_EVENTS, DEFAULT_SAMPLE_RATE,
+};
+pub use mixer::{
+    db_to_gain, gain_to_db, pan_gains, param_ramp_frames, MasterStrip, MixerParams, TrackParams,
+    TrackPeak, TrackPeaks, TrackStrip, MAX_GAIN_DB, MAX_TRACKS, PARAM_RAMP_MIN_FRAMES,
+    PARAM_RAMP_SECONDS, SILENCE_DB,
 };
 pub use node::{ProcessCtx, RtNode, RtNodeFactory};
 pub use notes::{

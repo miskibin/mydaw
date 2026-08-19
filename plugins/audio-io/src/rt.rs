@@ -406,7 +406,7 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
 
     if let Some(meters) = state.meters.as_mut() {
         let inv = if frames > 0 { 1.0 / frames as f32 } else { 0.0 };
-        let frame = MeterFrame {
+        let mut frame = MeterFrame {
             peak_l,
             peak_r,
             rms_l: (sum_sq_l * inv).sqrt(),
@@ -414,7 +414,12 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
             // Post-advance: where the playhead stands once this block is audible.
             sample_pos: state.transport.snapshot().sample_pos,
             playing: transport.playing,
+            ..MeterFrame::SILENT
         };
+        // The per-track peaks the mixer measured during its sum pass. A fixed
+        // -size copy out of the graph -- no second pass over the audio, and no
+        // queue of its own.
+        frame.set_track_peaks(&state.graph.track_peaks());
         if meters.push(frame).is_err() {
             state
                 .stats
@@ -566,6 +571,71 @@ mod tests {
         assert!(frame.rms_l > 0.0 && frame.rms_l < frame.peak_l);
         assert_eq!(frame.peak_l, frame.peak_r);
         assert!(!frame.playing, "transport is stopped until told otherwise");
+    }
+
+    #[test]
+    fn the_meter_frame_carries_one_peak_per_track() {
+        // The per-track meter path, end to end on the RT side: the mixer
+        // measures each track during its sum pass, the graph keeps the block in
+        // a fixed array, and `run_block` copies it into the frame the UI reads.
+        use mydaw_rt_core::{GraphLimits, MixerParams, TrackSpec};
+
+        struct ConstNode(f32);
+        impl RtNode for ConstNode {
+            fn process(&mut self, ctx: &mut ProcessCtx) {
+                for channel in ctx.buffers.as_mut_slices() {
+                    channel.fill(self.0);
+                }
+            }
+        }
+
+        let mut rig = rig(2);
+        let params = Arc::new(MixerParams::new());
+        params.set_track_gain(1, 0.0);
+        rig.graph
+            .install(
+                GraphSpec::new()
+                    .with_limits(GraphLimits {
+                        sample_rate: SR,
+                        max_block: MAX_BLOCK,
+                        max_events: 64,
+                    })
+                    .with_params(Arc::clone(&params))
+                    .with_track(TrackSpec::new(Box::new(ConstNode(0.5))))
+                    .with_track(TrackSpec::new(Box::new(ConstNode(0.25)))),
+            )
+            .unwrap();
+
+        let mut out = vec![0.0_f32; 128 * 2];
+        run_block(&mut rig.state, &mut out);
+
+        let frame = rig.throttle.poll(Instant::now()).expect("frame expected");
+        assert_eq!(frame.track_count, 2, "only the tracks that exist");
+        assert_eq!(frame.track_meters().len(), 2);
+        assert_eq!(frame.tracks[0].peak_l, 0.5);
+        assert_eq!(frame.tracks[0].peak_r, 0.5);
+        assert_eq!(
+            frame.tracks[1],
+            mydaw_ipc_bridge::TrackMeter::SILENT,
+            "track 1's fader is at zero, and a channel meter is post-fader"
+        );
+        assert_eq!(
+            frame.peak_l, 0.5,
+            "the master carries only what was audible"
+        );
+    }
+
+    #[test]
+    fn a_graph_with_no_tracks_reports_no_track_meters() {
+        let mut rig = rig(2);
+        rig.graph.install(GraphSpec::new()).unwrap();
+        let mut out = vec![0.0_f32; 64 * 2];
+        run_block(&mut rig.state, &mut out);
+
+        let frame = rig.throttle.poll(Instant::now()).unwrap();
+        assert_eq!(frame.track_count, 0);
+        assert!(frame.track_meters().is_empty());
+        assert!(out.iter().all(|s| *s == 0.0));
     }
 
     #[test]

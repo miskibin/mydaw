@@ -9,6 +9,7 @@ import {
 import { getBackend, type Backend } from './api/backend';
 import type {
   MeterFrame,
+  MixerState,
   PanelManifestDto,
   PatternDto,
   PluginStatusDto,
@@ -74,11 +75,22 @@ export interface AppState {
   readonly pattern: Accessor<PatternDto | undefined>;
   /** Session tempo in beats per minute. */
   readonly bpm: Accessor<number>;
+  /** The project's tracks and master strip, or `undefined` before the first fetch. */
+  readonly mixer: Accessor<MixerState | undefined>;
   play(): void;
   stop(): void;
   refresh(): void;
-  /** Put a different instrument at the head of the engine's chain. */
+  /** Put a different instrument at the head of the selected track. */
   selectSource(id: string): void;
+  /**
+   * Run one mixer command and adopt the state it returns.
+   *
+   * Every mixer command answers with the whole `MixerState`, so this is the one
+   * place the panel's state is written and there is no partial update to merge.
+   * A rejected edit re-fetches, which is the only case where the UI and the
+   * engine can really disagree.
+   */
+  mixerCommand(run: (backend: Backend) => Promise<MixerState>): void;
   /**
    * Toggle one cell of the grid. `accent` is the shift-click variant; see
    * `lib/pattern.ts` for exactly what each does.
@@ -140,6 +152,7 @@ function createAppState(): AppState {
   const [sources, setSources] = createSignal<SourceDto[]>([]);
   const [pattern, setPattern] = createSignal<PatternDto | undefined>();
   const [bpm, setBpmSignal] = createSignal(130);
+  const [mixer, setMixer] = createSignal<MixerState | undefined>();
 
   const currentSource = () => sources().find((source) => source.selected);
   const drumPadsActive = () => currentSource()?.id === 'drum-kit';
@@ -162,6 +175,7 @@ function createAppState(): AppState {
   const refresh = () => {
     setKernelState('connecting');
     void backend.getSources().then(setSources).catch(reportError);
+    void backend.getTracks().then(setMixer).catch(reportError);
     void backend.getPattern().then(adoptSequencerState).catch(reportError);
     backend
       .getUiSnapshot()
@@ -336,9 +350,10 @@ function createAppState(): AppState {
   };
 
   /**
-   * Switch instrument. Everything held is released first: the note-offs have to
-   * reach the *old* instrument, or a key still down when the source changes
-   * would leave a voice sounding on a node that no longer receives its release.
+   * Switch the selected track's instrument. Everything held is released first:
+   * the note-offs have to reach the *old* instrument, or a key still down when
+   * the source changes would leave a voice sounding on a node that no longer
+   * receives its release.
    */
   const selectSource = (id: string) => {
     if (currentSource()?.id === id) return;
@@ -348,8 +363,34 @@ function createAppState(): AppState {
       .then((listed) => {
         setSources(listed);
         setKernelError(null);
+        // The mixer draws each strip's source name, so it has to follow.
+        void backend.getTracks().then(setMixer).catch(reportError);
       })
       .catch(reportError);
+  };
+
+  /**
+   * Run one mixer command and adopt the state it answers with.
+   *
+   * Held notes are released first for the same reason `selectSource` does it:
+   * a command can change which track the keyboard addresses (or what is on the
+   * one it already addresses), and a note-off has to reach the instrument that
+   * received the note-on.
+   */
+  const mixerCommand = (run: (backend: Backend) => Promise<MixerState>) => {
+    releaseAll();
+    void run(backend)
+      .then((state) => {
+        setMixer(state);
+        setKernelError(null);
+        // Selection and per-track sources both move the "which instrument is
+        // playing" answer the transport bar shows.
+        void backend.getSources().then(setSources).catch(reportError);
+      })
+      .catch((err: unknown) => {
+        reportError(err);
+        void backend.getTracks().then(setMixer).catch(reportError);
+      });
   };
 
   // --- the step grid -----------------------------------------------------
@@ -430,10 +471,12 @@ function createAppState(): AppState {
     drumPadsActive,
     pattern,
     bpm,
+    mixer,
     play,
     stop,
     refresh,
     selectSource,
+    mixerCommand,
     toggleStep,
     clearPattern,
     setBpm,

@@ -34,17 +34,35 @@ export interface UiSnapshot {
 }
 
 /**
+ * One track's level for a single block. Mirrors `TrackMeterDto` in
+ * `app/src/dto.rs`.
+ *
+ * Measured after that track's fader/pan/mute and **before** the master fader,
+ * which is what a channel meter in a mixer shows.
+ */
+export interface TrackMeter {
+  peakL: number;
+  peakR: number;
+}
+
+/**
  * A single metering packet from the RT graph, throttled to 30-60 Hz by the
  * bridge. Peak/RMS are linear amplitudes in [0, 1+] (may exceed 1 when
  * clipping). `samplePos` is the transport position in frames.
  */
 export interface MeterFrame {
+  /** Master bus, post master fader. */
   peakL: number;
   peakR: number;
   rmsL: number;
   rmsR: number;
   samplePos: number;
   playing: boolean;
+  /**
+   * One entry per track in the project, in track order. Empty before the first
+   * graph is installed.
+   */
+  tracks: TrackMeter[];
   /**
    * When the pump handed this frame to the webview, on the Rust bench clock.
    *
@@ -170,6 +188,67 @@ export interface SequencerState {
    */
   sampleRate: number;
   pattern: PatternDto;
+}
+
+/**
+ * One mixer strip. Mirrors `TrackDto` in `app/src/project.rs`.
+ *
+ * `index` is the track's position *and* its note channel: a sequencer row on
+ * channel 1 plays track 1, and the keyboard piano sends on the selected track's
+ * index. `id` is what a UI list should be keyed on -- removing a track
+ * renumbers the ones after it, so `index` is not stable.
+ */
+export interface TrackDto {
+  index: number;
+  id: number;
+  name: string;
+  /** Source id, one of the ids from `getSources`. */
+  sourceId: string;
+  sourceLabel: string;
+  /** Fader position, in dB. `minGainDb` means silence. */
+  gainDb: number;
+  /** `-1` hard left, `0` centre, `1` hard right. */
+  pan: number;
+  /** The mute button's own state. */
+  muted: boolean;
+  soloed: boolean;
+  /**
+   * Whether this track is actually silent right now, solo resolved. A track
+   * another track's solo has silenced has `silenced` true and `muted` false.
+   */
+  silenced: boolean;
+  /** Whether the keyboard piano and the source selector address this track. */
+  selected: boolean;
+}
+
+/** The master strip. Mirrors `MasterDto` in `app/src/project.rs`. */
+export interface MasterDto {
+  gainDb: number;
+}
+
+/**
+ * Everything the mixer panel needs in one message. Mirrors `MixerStateDto` in
+ * `app/src/project.rs`.
+ *
+ * Every mixer command returns this whole shape rather than an acknowledgement,
+ * so the panel never has to merge a partial update into what it already had.
+ */
+export interface MixerState {
+  tracks: TrackDto[];
+  master: MasterDto;
+  /** Index of the track the keyboard and the source selector address. */
+  selected: number;
+  /** The engine's fixed track limit. */
+  maxTracks: number;
+  /** Fader bounds in dB, so the UI keeps no copy of the scale. */
+  minGainDb: number;
+  maxGainDb: number;
+  /**
+   * Whether tracks can be added or removed. False while a hosted CLAP plugin is
+   * in the graph -- a rebuild would have to recreate it, and a CLAP plugin can
+   * only be activated once.
+   */
+  canEditLayout: boolean;
 }
 
 /** Unsubscribe handle returned by streaming APIs. */

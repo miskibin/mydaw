@@ -41,7 +41,9 @@ src/
 │   ├── PanelFrame.tsx  # panel chrome + registry resolution, unknown-key fallback
 │   ├── UnknownPanel.tsx
 │   ├── kernel-status/  # plugin registry rows with lifecycle dots
-│   └── meters/         # canvas stereo peak/RMS meter (draw.ts is Solid-free)
+│   ├── meters/         # canvas stereo peak/RMS meter (draw.ts is Solid-free)
+│   ├── mixer/          # one strip per track + master (scale.ts is Solid-free)
+│   └── sequencer/      # the 16-step grid
 ├── shell/              # TransportBar, PanelDock, MainArea, StatusBar
 ├── state.tsx           # Solid context: snapshot, transport, meter bus, playhead, held notes
 └── styles/             # theme.css (tokens) + app.css (layout)
@@ -58,8 +60,18 @@ The UI expects these Tauri commands (`src/api/backend.ts` is the only caller):
 | `transport_stop` | no args, no return |
 | `note_on` | takes `{ key, velocity }` (MIDI key `0..=127`, velocity `0..=1`); sounds regardless of transport state |
 | `note_off` | takes `{ key }` |
-| `get_sources` | returns `SourceDto[]` — the instruments the engine can play, one marked `selected` |
-| `set_source` | takes `{ source }` (an id from `get_sources`), returns the refreshed `SourceDto[]` |
+| `get_sources` | returns `SourceDto[]` — the instruments the engine can play, one marked `selected` (the **selected track**'s) |
+| `set_source` | takes `{ source }` (an id from `get_sources`), sets the selected track's source, returns the refreshed `SourceDto[]` |
+| `get_tracks` | returns `MixerState { tracks, master, selected, maxTracks, minGainDb, maxGainDb, canEditLayout }` |
+| `set_track_gain` | takes `{ track, db }`, returns the refreshed `MixerState`. Works with no audio device |
+| `set_track_pan` | takes `{ track, pan }` (`-1..=1`) |
+| `set_track_mute` | takes `{ track, muted }` |
+| `set_track_solo` | takes `{ track, soloed }` |
+| `set_master_gain` | takes `{ db }` |
+| `set_selected_track` | takes `{ track }` — which track the keyboard piano plays |
+| `set_track_source` | takes `{ track, source }` |
+| `add_track` | takes `{ source, name }`; rejects past `maxTracks` or while `canEditLayout` is false |
+| `remove_track` | takes `{ track }`; rejects for the last track or while `canEditLayout` is false |
 | `get_pattern` | returns `SequencerState { bpm, sampleRate, pattern }` — the step grid and the tempo |
 | `set_pattern` | takes `{ pattern }` (a whole `PatternDto`), returns the refreshed `SequencerState` |
 | `set_bpm` | takes `{ bpm }` (`20..=999`), returns the stored tempo; rejects rather than clamping |

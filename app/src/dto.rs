@@ -10,18 +10,38 @@
 //! are deliberately Tauri-free and webview-agnostic would be the wrong trade, so
 //! the translation lives here, at the boundary that actually cares.
 
-use mydaw_ipc_bridge::MeterFrame;
+use mydaw_ipc_bridge::{MeterFrame, TrackMeter};
 use mydaw_plugin_host_clap::ClapPluginInfo;
 use mydaw_plugin_sequencer::{
     row_label, Pattern, PatternError, PatternRow, Step, DEFAULT_STEP_VELOCITY, STEPS,
 };
 use serde::{Deserialize, Serialize};
 
+/// One track's level, as the mixer panel draws it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackMeterDto {
+    pub peak_l: f32,
+    pub peak_r: f32,
+}
+
+impl From<&TrackMeter> for TrackMeterDto {
+    fn from(meter: &TrackMeter) -> Self {
+        Self {
+            peak_l: meter.peak_l,
+            peak_r: meter.peak_r,
+        }
+    }
+}
+
 /// [`MeterFrame`] in the shape the webview expects (camelCase).
 ///
-/// `Copy` and 24 bytes: one of these crosses the IPC boundary up to 30 times a
-/// second, so it stays a flat struct with no owned data.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+/// The master fields are flat and `Copy`; the per-track levels become a `Vec` of
+/// exactly the tracks that exist, because a JSON array of sixteen entries with
+/// fourteen of them zero is fourteen entries of nothing crossing the boundary
+/// thirty times a second. The RT side stays a fixed array -- see
+/// [`MeterFrame::tracks`] -- and this is the one place the two shapes differ.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MeterFrameDto {
     pub peak_l: f32,
@@ -31,6 +51,8 @@ pub struct MeterFrameDto {
     /// Transport position in frames at the end of the measured block.
     pub sample_pos: u64,
     pub playing: bool,
+    /// Post-strip, pre-master peak of every track, in track order.
+    pub tracks: Vec<TrackMeterDto>,
     /// When the pump handed this frame to the webview, on the bench clock
     /// ([`crate::ipc_bench::epoch_ms`]).
     ///
@@ -50,6 +72,11 @@ impl From<MeterFrame> for MeterFrameDto {
             rms_r: frame.rms_r,
             sample_pos: frame.sample_pos,
             playing: frame.playing,
+            tracks: frame
+                .track_meters()
+                .iter()
+                .map(TrackMeterDto::from)
+                .collect(),
             pump_ms: None,
         }
     }
@@ -235,6 +262,7 @@ mod tests {
             rms_r: 0.2,
             sample_pos: 4_096,
             playing: true,
+            ..MeterFrame::SILENT
         });
         let json: serde_json::Value = serde_json::to_value(dto).unwrap();
         let object = json.as_object().unwrap();
@@ -244,11 +272,49 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["peakL", "peakR", "playing", "rmsL", "rmsR", "samplePos"]
+            [
+                "peakL",
+                "peakR",
+                "playing",
+                "rmsL",
+                "rmsR",
+                "samplePos",
+                "tracks"
+            ]
         );
         assert_eq!(object["peakL"], 0.5);
         assert_eq!(object["samplePos"], 4_096);
         assert_eq!(object["playing"], true);
+        assert_eq!(object["tracks"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn only_the_tracks_that_exist_cross_the_boundary() {
+        let mut peaks = mydaw_rt_core::TrackPeaks::empty(2);
+        peaks.set(
+            1,
+            mydaw_rt_core::TrackPeak {
+                peak_l: 0.75,
+                peak_r: 0.5,
+            },
+        );
+        let mut frame = MeterFrame::SILENT;
+        frame.set_track_peaks(&peaks);
+
+        let dto = MeterFrameDto::from(frame);
+        assert_eq!(dto.tracks.len(), 2, "not the fixed sixteen");
+        assert_eq!(
+            dto.tracks[0],
+            TrackMeterDto {
+                peak_l: 0.0,
+                peak_r: 0.0
+            }
+        );
+        assert_eq!(dto.tracks[1].peak_l, 0.75);
+
+        let json: serde_json::Value = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["tracks"][1]["peakL"], 0.75);
+        assert_eq!(json["tracks"][1]["peakR"], 0.5);
     }
 
     #[test]
@@ -258,7 +324,7 @@ mod tests {
         let json = serde_json::to_string(&plain).unwrap();
         assert!(
             !json.contains("pumpMs"),
-            "an unstamped frame is exactly the pre-spike-4 wire shape: {json}"
+            "an unstamped frame carries nothing the bench added: {json}"
         );
 
         let stamped = MeterFrameDto {

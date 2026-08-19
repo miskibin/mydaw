@@ -20,7 +20,11 @@ mod dto;
 mod meter;
 
 pub use dto::{PanelManifestDto, PluginStateDto, PluginStatusDto, UiSnapshot};
-pub use meter::{MeterFrame, MeterThrottle, DEFAULT_METER_HZ};
+pub use meter::{MeterFrame, MeterThrottle, TrackMeter, DEFAULT_METER_HZ};
+
+/// Tracks a [`MeterFrame`] can carry. The engine's own limit, re-exported so the
+/// UI side has one number to mirror.
+pub use mydaw_rt_core::MAX_TRACKS;
 
 /// Producer half of the meter queue; lives on the audio thread.
 pub type MeterProducer = rtrb::Producer<MeterFrame>;

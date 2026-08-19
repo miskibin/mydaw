@@ -2,6 +2,7 @@
 
 use std::time::{Duration, Instant};
 
+use mydaw_rt_core::{TrackPeaks, MAX_TRACKS};
 use rtrb::Consumer;
 use serde::{Deserialize, Serialize};
 
@@ -10,12 +11,35 @@ use serde::{Deserialize, Serialize};
 /// IPC (the Phase 1 spike measures the real ceiling).
 pub const DEFAULT_METER_HZ: f64 = 30.0;
 
+/// One track's level for a single block.
+///
+/// Measured **after** the track's strip and **before** the master fader, which
+/// is what a channel meter in a mixer shows: pull a fader down and its own meter
+/// follows; pull the master down and it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct TrackMeter {
+    pub peak_l: f32,
+    pub peak_r: f32,
+}
+
+impl TrackMeter {
+    /// A silent block.
+    pub const SILENT: Self = Self {
+        peak_l: 0.0,
+        peak_r: 0.0,
+    };
+}
+
 /// One metering sample set, produced on the audio thread.
 ///
 /// `Copy` and fixed-size: pushing it into an `rtrb` queue from the audio callback
-/// allocates nothing and runs no destructor.
+/// allocates nothing and runs no destructor. The per-track array is fixed at
+/// [`MAX_TRACKS`] for the same reason -- a `Vec` here would mean an allocation
+/// per block, and the DTO layer is where this becomes a list of exactly the
+/// tracks that exist.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct MeterFrame {
+    /// Master bus peak, post master fader.
     pub peak_l: f32,
     pub peak_r: f32,
     pub rms_l: f32,
@@ -23,10 +47,15 @@ pub struct MeterFrame {
     /// Transport position at the end of the measured block.
     pub sample_pos: u64,
     pub playing: bool,
+    /// Per-track peaks. Only the first [`track_count`](Self::track_count) are
+    /// meaningful; the rest are zero.
+    pub tracks: [TrackMeter; MAX_TRACKS],
+    /// Tracks the graph was running when this block was measured.
+    pub track_count: u8,
 }
 
 impl MeterFrame {
-    /// All-zero frame at position 0, stopped.
+    /// All-zero frame at position 0, stopped, with no tracks.
     pub const SILENT: Self = Self {
         peak_l: 0.0,
         peak_r: 0.0,
@@ -34,7 +63,25 @@ impl MeterFrame {
         rms_r: 0.0,
         sample_pos: 0,
         playing: false,
+        tracks: [TrackMeter::SILENT; MAX_TRACKS],
+        track_count: 0,
     };
+
+    /// The tracks that actually exist, as a slice.
+    pub fn track_meters(&self) -> &[TrackMeter] {
+        &self.tracks[..(self.track_count as usize).min(MAX_TRACKS)]
+    }
+
+    /// Copy the graph's per-track peaks into this frame.
+    ///
+    /// RT-safe: a fixed-size copy, called once per block on the audio thread.
+    pub fn set_track_peaks(&mut self, peaks: &TrackPeaks) {
+        self.track_count = peaks.count().min(MAX_TRACKS) as u8;
+        for (slot, peak) in self.tracks.iter_mut().zip(peaks.as_slice()) {
+            slot.peak_l = peak.peak_l;
+            slot.peak_r = peak.peak_r;
+        }
+    }
 }
 
 /// Rate limiter between the audio thread's meter queue and the webview.
@@ -286,10 +333,42 @@ mod tests {
             rms_r: 0.05,
             sample_pos: 1024,
             playing: true,
+            ..MeterFrame::SILENT
         })
         .unwrap();
         assert_eq!(json["peak_l"], 0.5);
         assert_eq!(json["sample_pos"], 1024);
         assert_eq!(json["playing"], true);
+        assert_eq!(json["track_count"], 0);
+        assert_eq!(json["tracks"].as_array().unwrap().len(), MAX_TRACKS);
+    }
+
+    #[test]
+    fn a_silent_frame_carries_no_tracks_at_all() {
+        let frame = MeterFrame::SILENT;
+        assert_eq!(frame.track_count, 0);
+        assert!(frame.track_meters().is_empty());
+    }
+
+    #[test]
+    fn track_peaks_from_the_graph_reach_the_frame_and_stop_at_the_track_count() {
+        let mut peaks = mydaw_rt_core::TrackPeaks::empty(2);
+        peaks.set(
+            0,
+            mydaw_rt_core::TrackPeak {
+                peak_l: 0.5,
+                peak_r: 0.25,
+            },
+        );
+        let mut frame = MeterFrame::SILENT;
+        frame.set_track_peaks(&peaks);
+
+        assert_eq!(frame.track_count, 2);
+        assert_eq!(frame.track_meters().len(), 2);
+        assert_eq!(frame.tracks[0].peak_l, 0.5);
+        assert_eq!(frame.tracks[0].peak_r, 0.25);
+        assert_eq!(frame.tracks[1], TrackMeter::SILENT);
+        // Everything past the count is left alone rather than reported.
+        assert_eq!(frame.tracks[MAX_TRACKS - 1], TrackMeter::SILENT);
     }
 }

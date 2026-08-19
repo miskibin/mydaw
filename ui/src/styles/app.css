@@ -1035,3 +1035,301 @@ code {
   appearance: textfield;
   -moz-appearance: textfield;
 }
+
+/* ----------------------------------------------------------------- mixer */
+
+.mixer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.mixer__empty {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+/*
+ * Horizontally scrollable: sixteen strips will not fit the dock, and a mixer
+ * that reflows into two rows is not a mixer. The master is pinned to the right
+ * of the scrolling row rather than outside it, because at two tracks it should
+ * sit next to them rather than across a gap.
+ */
+.mixer__strips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  align-items: stretch;
+}
+
+.mixer__footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.mixer__hint {
+  color: var(--fg-2);
+  font-size: 11px;
+}
+
+.mixer__add {
+  position: relative;
+}
+
+.mixer__add-button {
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.mixer__add-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+
+.mixer__add-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.mixer__add-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.mixer__add-item {
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  color: var(--fg-1);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.mixer__add-item:hover {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+
+/* ------------------------------------------------------------------ strip */
+
+.strip {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 62px;
+  padding: 6px 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.strip--master {
+  background: var(--bg-2);
+  border-color: var(--border-strong);
+  /* A little air, so the sum reads as a different kind of thing. */
+  margin-left: 6px;
+}
+
+/* The selected track is the one the keyboard plays, which is worth more than a
+   subtle hint: it changes what a key press does. */
+.strip.is-selected {
+  border-color: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px var(--accent-glow);
+}
+
+/* Silenced by its own mute or by somebody else's solo. Dimmed rather than
+   hidden: the strip still has to be clickable to un-silence it. */
+.strip.is-silenced .strip__name,
+.strip.is-silenced .strip__source,
+.strip.is-silenced .strip__readout {
+  opacity: 0.45;
+}
+
+.strip__header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  padding: 2px 0;
+  font: inherit;
+  color: var(--fg-0);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.strip__header:hover {
+  background: var(--bg-hover);
+}
+
+.strip__header--master {
+  cursor: default;
+}
+
+.strip__header--master:hover {
+  background: transparent;
+}
+
+.strip.is-selected .strip__name {
+  color: var(--accent);
+}
+
+.strip__name {
+  max-width: 100%;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.strip__source {
+  max-width: 100%;
+  font-size: 9px;
+  color: var(--fg-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Meter and fader side by side, the way a console puts them. */
+.strip__body {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  height: 120px;
+}
+
+.strip__meter {
+  display: flex;
+  gap: 2px;
+  align-items: flex-end;
+}
+
+.strip__meter-track {
+  position: relative;
+  width: 5px;
+  height: 100%;
+  background: var(--meter-trough);
+  border-radius: 1px;
+  overflow: hidden;
+}
+
+/* Height is written from an animation frame; only the colour is CSS. */
+.strip__meter-fill {
+  position: absolute;
+  bottom: 0;
+  width: 100%;
+  height: 0;
+  background: linear-gradient(
+    to top,
+    var(--meter-rms) 0%,
+    var(--meter-peak) 70%,
+    var(--meter-hot) 88%,
+    var(--meter-clip) 100%
+  );
+}
+
+/*
+ * A vertical range input. `writing-mode: vertical-lr` with `direction: rtl` is
+ * the standard way to turn one on its side; The deprecated
+ * `appearance: slider-vertical` spelling is deliberately not used: WebView2 warns
+ * about it on every load.
+ */
+.strip__fader {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 18px;
+  height: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: ns-resize;
+}
+
+.strip__pan {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent-dim);
+  cursor: ew-resize;
+}
+
+.strip__readout {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-1);
+}
+
+.strip__readout--pan {
+  color: var(--fg-2);
+  font-size: 9px;
+}
+
+.strip__buttons {
+  display: flex;
+  gap: 3px;
+  min-height: 20px;
+}
+
+.strip__toggle {
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.strip__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+
+.strip__toggle--mute.is-on {
+  color: #101216;
+  background: var(--warn);
+  border-color: var(--warn);
+}
+
+.strip__toggle--solo.is-on {
+  color: #101216;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.strip__toggle--remove:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}

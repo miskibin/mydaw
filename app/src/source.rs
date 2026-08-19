@@ -16,7 +16,7 @@
 //! ```
 //!
 //! The obvious implementation of `set_source` is "build a new `GraphSpec` and
-//! install it", the way [`install_engine_graph`](crate::install_engine_graph)
+//! install it", the way [`TrackHost::install_graph`](crate::tracks::TrackHost::install_graph)
 //! does at startup. It does not work, for a reason that is worth writing down:
 //! **a hosted CLAP plugin can only be activated once at a time.** Rebuilding
 //! the graph means building a new node for the effect too, and the old effect
@@ -411,8 +411,9 @@ impl SourceDto {
     }
 }
 
-/// One queued request and the channel its answer goes back on.
-type PendingClapSource = SyncSender<Result<(), String>>;
+/// One queued request: the track it is for, and the channel its answer goes
+/// back on.
+type PendingClapSource = (usize, SyncSender<Result<(), String>>);
 
 /// Mailbox between a Tauri command and the main thread's CLAP instrument.
 ///
@@ -459,19 +460,20 @@ impl ClapSourceBridge {
         *self.waker.lock() = Some(waker);
     }
 
-    /// Ask the main thread to make the CLAP instrument the source, and wait.
+    /// Ask the main thread to make the CLAP instrument `track`'s source, and
+    /// wait.
     ///
     /// # Errors
     /// [`SourceError::ClapNotConfigured`] without a round trip when no bundle
     /// was loaded, or [`SourceError::MainThread`] carrying whatever the main
     /// thread said -- including a timeout, which is what a build with no window
     /// (a headless capture, a test) produces.
-    pub fn request(&self) -> Result<(), SourceError> {
+    pub fn request(&self, track: usize) -> Result<(), SourceError> {
         if !self.is_available() {
             return Err(SourceError::ClapNotConfigured);
         }
         let (reply, answer) = sync_channel(1);
-        self.queue.lock().push_back(reply);
+        self.queue.lock().push_back((track, reply));
         if let Some(waker) = self.waker.lock().as_ref() {
             waker();
         }
@@ -515,28 +517,38 @@ impl std::fmt::Debug for ClapSourceBridge {
 /// back from the collector before re-activating: a plugin can only be active
 /// once, so switching away and back is exactly the case that needs the wait.
 /// The wait only happens on that path, and only after the user asked for it.
+///
+/// There is one plugin instance, so a burst of requests naming *different*
+/// tracks cannot all be honoured: the first queued one wins and the rest are
+/// told why. Only a user clicking two mixer strips inside one frame produces
+/// that, and saying so beats silently activating the wrong track.
 pub fn serve_clap_source_requests(
     bridge: &ClapSourceBridge,
-    handle: &SourceHandle,
+    host: &crate::tracks::TrackHost,
     instrument: Option<&mut LoadedClapPlugin>,
     stream: Option<(f64, usize)>,
 ) {
-    let pending = bridge.drain();
-    if pending.is_empty() {
+    let mut pending = bridge.drain().into_iter();
+    let Some((track, reply)) = pending.next() else {
         return;
-    }
-    let answer = build_clap_source(handle, instrument, stream);
-    for reply in pending {
-        // A command that timed out has dropped its receiver; that is its
-        // business, and it must not panic this thread.
-        let _ = reply.try_send(answer.clone());
+    };
+    let answer = build_clap_source(host, track, instrument, stream);
+    // A command that timed out has dropped its receiver; that is its business,
+    // and it must not panic this thread.
+    let _ = reply.try_send(answer);
+    for (_, superseded) in pending {
+        let _ = superseded.try_send(Err(
+            "another track claimed the CLAP instrument first; there is only one instance"
+                .to_owned(),
+        ));
     }
 }
 
 /// The body of [`serve_clap_source_requests`], separated so the error strings
 /// are written once.
 fn build_clap_source(
-    handle: &SourceHandle,
+    host: &crate::tracks::TrackHost,
+    track: usize,
     instrument: Option<&mut LoadedClapPlugin>,
     stream: Option<(f64, usize)>,
 ) -> Result<(), String> {
@@ -563,8 +575,7 @@ fn build_clap_source(
             plugin.info().id
         )
     })?;
-    handle
-        .install(node, Source::Clap)
+    host.install_source(track, Source::Clap, node)
         .map_err(|err| err.to_string())
 }
 
@@ -787,12 +798,20 @@ mod tests {
         assert_eq!(render(&mut slot, &mut buffers), 0.0);
     }
 
+    /// A host on the default two-track project, for the tests that need one.
+    fn host() -> crate::tracks::TrackHost {
+        crate::tracks::TrackHost::new(
+            Arc::new(mydaw_plugin_test_tone::TestToneFactory::new()),
+            Arc::new(mydaw_plugin_instruments::InstrumentRegistry::new()),
+        )
+    }
+
     #[test]
     fn the_clap_bridge_refuses_without_a_round_trip_when_nothing_is_loaded() {
         let bridge = ClapSourceBridge::new();
         assert!(!bridge.is_available());
         assert!(matches!(
-            bridge.request(),
+            bridge.request(0),
             Err(SourceError::ClapNotConfigured)
         ));
         assert_eq!(
@@ -815,7 +834,8 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(2);
             loop {
                 let pending = main_thread.drain();
-                if let Some(reply) = pending.into_iter().next() {
+                if let Some((track, reply)) = pending.into_iter().next() {
+                    assert_eq!(track, 1, "the request names the track it is for");
                     let _ = reply.try_send(Ok(()));
                     return;
                 }
@@ -824,7 +844,7 @@ mod tests {
             }
         });
 
-        bridge.request().expect("the main thread answered");
+        bridge.request(1).expect("the main thread answered");
         assert!(woken.load(Ordering::Acquire), "the loop must be poked");
         assert_eq!(bridge.pending(), 0);
         loop_thread.join().unwrap();
@@ -836,14 +856,14 @@ mod tests {
         bridge.set_available(true);
         let main_thread = Arc::clone(&bridge);
         let loop_thread = std::thread::spawn(move || loop {
-            if let Some(reply) = main_thread.drain().into_iter().next() {
+            if let Some((_, reply)) = main_thread.drain().into_iter().next() {
                 let _ = reply.try_send(Err("this plugin will not activate".to_owned()));
                 return;
             }
             sleep(Duration::from_millis(5));
         });
 
-        let err = bridge.request().unwrap_err();
+        let err = bridge.request(0).unwrap_err();
         assert_eq!(err.to_string(), "this plugin will not activate");
         loop_thread.join().unwrap();
     }
@@ -852,23 +872,43 @@ mod tests {
     fn serving_a_request_with_no_plugin_answers_rather_than_hanging() {
         let bridge = ClapSourceBridge::new();
         bridge.set_available(true);
-        let handle = SourceHandle::new(Source::TestTone);
+        let host = host();
         let (reply, answer) = sync_channel(1);
-        bridge.queue.lock().push_back(reply);
+        bridge.queue.lock().push_back((0, reply));
 
-        serve_clap_source_requests(&bridge, &handle, None, Some((48_000.0, 512)));
+        serve_clap_source_requests(&bridge, &host, None, Some((48_000.0, 512)));
         let outcome = answer.try_recv().expect("answered immediately");
         assert!(outcome.is_err());
         assert_eq!(bridge.pending(), 0);
     }
 
     #[test]
+    fn a_second_request_in_the_same_frame_is_told_it_lost_rather_than_ignored() {
+        let bridge = ClapSourceBridge::new();
+        bridge.set_available(true);
+        let host = host();
+        let (first, first_answer) = sync_channel(1);
+        let (second, second_answer) = sync_channel(1);
+        bridge.queue.lock().push_back((0, first));
+        bridge.queue.lock().push_back((1, second));
+
+        serve_clap_source_requests(&bridge, &host, None, Some((48_000.0, 512)));
+        assert!(first_answer.try_recv().expect("answered").is_err());
+        let loser = second_answer
+            .try_recv()
+            .expect("also answered")
+            .unwrap_err();
+        assert!(loser.contains("only one instance"), "{loser}");
+        assert_eq!(bridge.pending(), 0);
+    }
+
+    #[test]
     fn serving_with_no_pending_request_does_nothing_at_all() {
         let bridge = ClapSourceBridge::new();
-        let handle = SourceHandle::new(Source::TestTone);
-        serve_clap_source_requests(&bridge, &handle, None, None);
+        let host = host();
+        serve_clap_source_requests(&bridge, &host, None, None);
         assert_eq!(bridge.pending(), 0);
-        assert_eq!(handle.current(), Source::TestTone);
+        assert_eq!(host.selected_source(), Source::DrumKit);
     }
 
     #[test]

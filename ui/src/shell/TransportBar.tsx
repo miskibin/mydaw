@@ -34,6 +34,12 @@ export function TransportBar(): JSX.Element {
 
   const clampBpm = (value: number) => Math.min(MAX_BPM, Math.max(MIN_BPM, value));
 
+  /** Name of the track the selector and the keyboard address. */
+  const selectedTrackName = () => {
+    const mixer = app.mixer();
+    return mixer?.tracks.find((track) => track.selected)?.name;
+  };
+
   /** Accept what was typed, ignoring anything that is not a tempo. */
   const commitDraft = () => {
     const text = draft();
@@ -111,7 +117,15 @@ export function TransportBar(): JSX.Element {
 
       <Show when={app.sources().length > 0}>
         <div class="source">
-          <span class="source__label">Source</span>
+          {/*
+            The selector sets the source of the *selected track* -- the same one
+            the keyboard plays and the same one the mixer highlights. Naming the
+            track here is what keeps that from being a surprise; the mixer panel
+            is where you change which track it is.
+          */}
+          <span class="source__label" title="The source of the selected track">
+            {selectedTrackName() ?? 'Source'}
+          </span>
           <div class="segmented" role="group" aria-label="Instrument source">
             <For each={app.sources()}>
               {(source) => (

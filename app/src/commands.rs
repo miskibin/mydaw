@@ -15,7 +15,8 @@ use crate::gui_bridge::{ClapGuiCommand, ClapGuiStatusDto};
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
-use crate::source::SourceDto;
+use crate::project::MixerStateDto;
+use crate::source::{Source, SourceDto};
 use crate::state::AppState;
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
@@ -75,18 +76,19 @@ pub fn note_off(state: State<'_, AppState>, key: u8) -> Result<(), String> {
     state.note_off(key).map_err(|err| err.to_string())
 }
 
-/// Every source the session can play, marked with which one is selected and
-/// which are available. Called once at startup and again after every switch.
+/// Every source the session can play, marked with which one the **selected
+/// track** is playing and which are available. Called once at startup and again
+/// after every switch.
 #[tauri::command]
 pub fn get_sources(state: State<'_, AppState>) -> Vec<SourceDto> {
     state.sources()
 }
 
-/// Put a different instrument at the head of the chain.
+/// Put a different instrument at the head of the selected track.
 ///
 /// `source` is one of the ids from [`get_sources`]. The switch is a node swap
-/// on the running graph, so a CLAP effect keeps playing through it (see
-/// `crate::source`).
+/// on the running graph, so the mixer, the other tracks and a CLAP master insert
+/// all keep playing through it (see `crate::tracks`).
 ///
 /// `async` because `clap` -- and only `clap` -- has to wait for the main thread
 /// to activate the plugin; the built-in instruments answer immediately, from
@@ -101,6 +103,153 @@ pub async fn set_source(
         .set_source_id(&source)
         .map_err(|err| err.to_string())?;
     Ok(state.sources())
+}
+
+// ---------------------------------------------------------------------------
+// Mixer
+// ---------------------------------------------------------------------------
+//
+// Every one of these returns the whole mixer state rather than an
+// acknowledgement. A strip is a handful of numbers, the IPC spike measured a
+// message this size as free, and one shape back means the panel never has to
+// merge a partial update into what it already had -- which is where optimistic
+// UIs usually go wrong.
+
+/// The project's tracks, the master strip and the current selection.
+#[tauri::command]
+pub fn get_tracks(state: State<'_, AppState>) -> MixerStateDto {
+    state.mixer_state()
+}
+
+/// Set a track's fader, in dB (`-60..=6`).
+///
+/// Succeeds with no audio device open -- a fader is project data. The change is
+/// an atomic store the audio thread picks up on its next block and ramps over
+/// 10 ms, so dragging a fader costs the same as clicking one.
+#[tauri::command]
+pub fn set_track_gain(
+    state: State<'_, AppState>,
+    track: usize,
+    db: f32,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_gain_db(track, db)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Set a track's pan, `-1.0` hard left to `1.0` hard right.
+#[tauri::command]
+pub fn set_track_pan(
+    state: State<'_, AppState>,
+    track: usize,
+    pan: f32,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_pan(track, pan)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Mute or unmute a track. A mute is a 10 ms fade, not a cut.
+#[tauri::command]
+pub fn set_track_mute(
+    state: State<'_, AppState>,
+    track: usize,
+    muted: bool,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_muted(track, muted)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Solo or un-solo a track.
+///
+/// Solo is resolved here, not on the audio thread: with anything soloed, every
+/// track that is not soloed gets an effective mute. See `crate::project`.
+#[tauri::command]
+pub fn set_track_solo(
+    state: State<'_, AppState>,
+    track: usize,
+    soloed: bool,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_soloed(track, soloed)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Set the master fader, in dB.
+#[tauri::command]
+pub fn set_master_gain(state: State<'_, AppState>, db: f32) -> Result<MixerStateDto, String> {
+    state
+        .set_master_gain_db(db)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Choose the track the computer-keyboard piano plays and the source selector
+/// addresses.
+#[tauri::command]
+pub fn set_selected_track(
+    state: State<'_, AppState>,
+    track: usize,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_selected_track(track)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Put a different instrument at the head of one track, by index.
+///
+/// The mixer's own source picker. `set_source` is the same operation aimed at
+/// whichever track is selected.
+///
+/// `async` for the same reason as [`set_source`]: `clap` waits for the main
+/// thread.
+#[tauri::command]
+pub async fn set_track_source(
+    state: State<'_, AppState>,
+    track: usize,
+    source: String,
+) -> Result<MixerStateDto, String> {
+    let source = Source::parse(&source).map_err(|err| err.to_string())?;
+    state
+        .set_track_source(track, source)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Add a track and rebuild the graph.
+///
+/// Refused while a hosted CLAP plugin is in the graph -- a rebuild recreates
+/// every node, and a CLAP plugin can only be activated once. See
+/// `TrackError::ClapInGraph`.
+#[tauri::command]
+pub fn add_track(
+    state: State<'_, AppState>,
+    source: String,
+    name: Option<String>,
+) -> Result<MixerStateDto, String> {
+    let source = Source::parse(&source).map_err(|err| err.to_string())?;
+    state
+        .add_track(source, name)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Remove a track and rebuild the graph.
+///
+/// Refused for the last track, and while a CLAP plugin is in the graph. Note
+/// that removing a track renumbers the ones after it, and a track index *is* a
+/// note channel -- so a sequencer row addressed at a later track follows the
+/// renumbering.
+#[tauri::command]
+pub fn remove_track(state: State<'_, AppState>, track: usize) -> Result<MixerStateDto, String> {
+    state.remove_track(track).map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
 }
 
 /// The step grid and the session tempo. Called once at startup.
