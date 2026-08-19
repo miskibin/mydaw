@@ -62,7 +62,7 @@ impl Rig {
         let collector = Collector::new();
         let (mut handle, mut graph) = graph_channel(4, collector.handle());
         handle
-            .install(host.build_spec(&limits(), collector.handle(), None))
+            .install(host.build_spec(&limits(), collector.handle()))
             .expect("the shell's own graph must install");
         assert!(graph.poll_swap());
 
@@ -78,10 +78,7 @@ impl Rig {
     /// Recompile and install, the way adding or removing a track does.
     fn rebuild(&mut self) {
         self.handle
-            .install(
-                self.host
-                    .build_spec(&limits(), self.collector.handle(), None),
-            )
+            .install(self.host.build_spec(&limits(), self.collector.handle()))
             .expect("rebuild");
     }
 

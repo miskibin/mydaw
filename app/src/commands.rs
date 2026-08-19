@@ -9,9 +9,9 @@ use mydaw_ipc_bridge::UiSnapshot;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
+use crate::clap_bridge::{ClapGuiStatusDto, ClapTarget};
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto};
-use crate::gui_bridge::{ClapGuiCommand, ClapGuiStatusDto};
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
@@ -202,13 +202,11 @@ pub fn set_selected_track(
     Ok(state.mixer_state())
 }
 
-/// Put a different instrument at the head of one track, by index.
+/// Put a different **built-in** instrument at the head of one track, by index.
 ///
 /// The mixer's own source picker. `set_source` is the same operation aimed at
-/// whichever track is selected.
-///
-/// `async` for the same reason as [`set_source`]: `clap` waits for the main
-/// thread.
+/// whichever track is selected. A hosted CLAP instrument goes through
+/// [`set_track_source_clap`], which carries the bundle path too.
 #[tauri::command]
 pub async fn set_track_source(
     state: State<'_, AppState>,
@@ -222,13 +220,69 @@ pub async fn set_track_source(
     Ok(state.mixer_state())
 }
 
+/// Put a hosted CLAP instrument at the head of one track.
+///
+/// `bundlePath` and `pluginId` come straight from an entry in [`get_sources`]
+/// or [`get_clap_plugins`]. Both travel because two copies of the same plugin
+/// can be installed and an id alone would not say which was meant.
+///
+/// The instance is created, activated and swapped in **on the main thread**
+/// (a CLAP instance is `[main-thread]`-only), so this waits for it -- hence
+/// `async`, which keeps the wait on Tauri's blocking pool rather than on the
+/// thread that has to answer it.
+#[tauri::command]
+pub async fn set_track_source_clap(
+    state: State<'_, AppState>,
+    track: usize,
+    bundle_path: String,
+    plugin_id: String,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_source_clap(track, &bundle_path, &plugin_id)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Scanned CLAP **audio effects**, for the master insert picker.
+///
+/// The counterpart of [`get_sources`], which lists instruments: an effect cannot
+/// head a track and an instrument cannot process the master bus, so the two
+/// pickers are two lists rather than one with a warning.
+#[tauri::command]
+pub async fn get_master_effects(
+    state: State<'_, AppState>,
+) -> Result<Vec<ClapPluginInfoDto>, String> {
+    Ok(state.master_effects())
+}
+
+/// Put a hosted CLAP effect in the master insert, replacing any other.
+#[tauri::command]
+pub async fn set_master_effect_clap(
+    state: State<'_, AppState>,
+    bundle_path: String,
+    plugin_id: String,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_master_effect_clap(&bundle_path, &plugin_id)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Empty the master insert and destroy the plugin that was in it.
+#[tauri::command]
+pub async fn clear_master_effect(state: State<'_, AppState>) -> Result<MixerStateDto, String> {
+    state.clear_master_effect().map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
 /// Add a track and rebuild the graph.
 ///
-/// Refused while a hosted CLAP plugin is in the graph -- a rebuild recreates
-/// every node, and a CLAP plugin can only be activated once. See
-/// `TrackError::ClapInGraph`.
+/// Since step 6 this is allowed with hosted CLAP plugins loaded: the rebuild
+/// installs a plugin-free graph and the main thread re-attaches every instance
+/// into it, at the cost of a few milliseconds of silence from those plugins
+/// only. `async` because that path waits for the main thread.
 #[tauri::command]
-pub fn add_track(
+pub async fn add_track(
     state: State<'_, AppState>,
     source: String,
     name: Option<String>,
@@ -242,12 +296,14 @@ pub fn add_track(
 
 /// Remove a track and rebuild the graph.
 ///
-/// Refused for the last track, and while a CLAP plugin is in the graph. Note
-/// that removing a track renumbers the ones after it, and a track index *is* a
-/// note channel -- so a sequencer row addressed at a later track follows the
-/// renumbering.
+/// Refused for the last track. Note that removing a track renumbers the ones
+/// after it, and a track index *is* a note channel -- so a sequencer row
+/// addressed at a later track follows the renumbering.
 #[tauri::command]
-pub fn remove_track(state: State<'_, AppState>, track: usize) -> Result<MixerStateDto, String> {
+pub async fn remove_track(
+    state: State<'_, AppState>,
+    track: usize,
+) -> Result<MixerStateDto, String> {
     state.remove_track(track).map_err(|err| err.to_string())?;
     Ok(state.mixer_state())
 }
@@ -311,25 +367,66 @@ pub async fn debug_capture(
     Ok(CaptureReportDto::from(&outcome))
 }
 
-/// Open the loaded CLAP effect's editor in its own native window.
+/// Open one hosted plugin's editor in its own native window.
+///
+/// `target` is `{"slot":"track","index":n}` or `{"slot":"master"}`. **Several
+/// editors can be open at once**, one per placed instance.
 ///
 /// The work happens on the main thread -- a CLAP editor is `[main-thread]` and
 /// its window belongs to the event loop's thread -- so this posts a request and
-/// waits for the answer (see [`crate::gui_bridge`]). `async` so the wait happens
+/// waits for the answer (see [`crate::clap_bridge`]). `async` so the wait happens
 /// on Tauri's blocking pool rather than on the main thread, which is the one that
 /// has to answer it.
 ///
 /// Errors are the user-facing sentence, e.g. "This plugin has no editor." -- a
 /// plugin without a GUI is normal, not a malfunction.
 #[tauri::command]
-pub async fn open_clap_gui(state: State<'_, AppState>) -> Result<ClapGuiStatusDto, String> {
-    state.gui().request(ClapGuiCommand::Open)
+pub async fn open_clap_gui(
+    state: State<'_, AppState>,
+    target: ClapTarget,
+) -> Result<ClapGuiStatusDto, String> {
+    state.open_clap_gui(target).map_err(|err| err.to_string())
 }
 
-/// Close the plugin editor. Not an error when nothing is open.
+/// Close one plugin's editor. Not an error when nothing is open.
 #[tauri::command]
-pub async fn close_clap_gui(state: State<'_, AppState>) -> Result<ClapGuiStatusDto, String> {
-    state.gui().request(ClapGuiCommand::Close)
+pub async fn close_clap_gui(
+    state: State<'_, AppState>,
+    target: ClapTarget,
+) -> Result<ClapGuiStatusDto, String> {
+    state.close_clap_gui(target).map_err(|err| err.to_string())
+}
+
+/// Serialise a hosted plugin's state, as base64.
+///
+/// Groundwork for the project file (step 8): this is exactly the call a save
+/// will make per instance. An **empty** string means the plugin implements no
+/// `state` extension and has nothing to persist, which is a normal answer.
+///
+/// Base64 rather than a byte array because the blob is opaque binary and a JSON
+/// array of numbers would be four characters per byte.
+#[tauri::command]
+pub async fn save_clap_state(
+    state: State<'_, AppState>,
+    target: ClapTarget,
+) -> Result<String, String> {
+    let bytes = state
+        .save_clap_state(target)
+        .map_err(|err| err.to_string())?;
+    Ok(crate::clap_bridge::to_base64(&bytes))
+}
+
+/// Restore a hosted plugin from a blob produced by [`save_clap_state`].
+#[tauri::command]
+pub async fn load_clap_state(
+    state: State<'_, AppState>,
+    target: ClapTarget,
+    state_base64: String,
+) -> Result<(), String> {
+    let bytes = crate::clap_bridge::from_base64(&state_base64)?;
+    state
+        .load_clap_state(target, bytes)
+        .map_err(|err| err.to_string())
 }
 
 /// Stream throttled meter frames into `channel` until the webview drops it.

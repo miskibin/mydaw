@@ -57,7 +57,7 @@ fn rig(source: Source) -> Option<Rig> {
     let kernel = boot_kernel().expect("kernel boots");
     let state = AppState::from_kernel(&kernel).expect("services present");
 
-    match state.start_audio_with_source(source, None, None) {
+    match state.start_audio_with_source(source.clone()) {
         Ok(info) => eprintln!(
             "device: {} @ {} Hz, {} ch (max block {}); source '{}'",
             info.device_name,

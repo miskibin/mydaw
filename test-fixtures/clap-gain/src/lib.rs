@@ -7,10 +7,10 @@
 //!
 //! One bundle, two plugins:
 //!
-//! | CLAP id | What it is | What it proves |
-//! | --- | --- | --- |
-//! | [`PLUGIN_ID`] (`…fixture.gain`) | stereo in/out, `× `[`GAIN`] | audio reaches a plugin and comes back |
-//! | [`synth::PLUGIN_ID`] (`…fixture.synth`) | note-in, stereo out, 8 sine voices | *note events* reach a plugin |
+//! | CLAP id | What it is | Extensions | What it proves |
+//! | --- | --- | --- | --- |
+//! | [`PLUGIN_ID`] (`…fixture.gain`) | stereo in/out, `× `[`GAIN`] | `audio-ports`, `gui`, `timer-support` | audio reaches a plugin and comes back |
+//! | [`synth::PLUGIN_ID`] (`…fixture.synth`) | note-in, stereo out, 8 sine voices | `audio-ports`, `note-ports`, `state` | *note events* reach a plugin, and *state* survives a round trip |
 //!
 //! Two plugins in one bundle is also not an accident: it is the layout every
 //! real vendor ships, and exercising the host's "find the plugin with this id
@@ -23,6 +23,30 @@
 //! `output == input * 0.5`, sample for sample, forever. That makes the host-side
 //! assertions exact rather than approximate. The synth is documented in
 //! [`synth`].
+//!
+//! # Which plugin carries state, and why only one
+//! The synth implements `clap.state`; **the gain plugin deliberately does not**,
+//! and that asymmetry is a feature. A host has two paths through preset and
+//! project save -- "the plugin can be saved" and "the plugin cannot" -- and both
+//! need a subject. The gain fixture is the one whose
+//! `get_extension("clap.state")` comes back null, so please do not give it a
+//! state extension later on: a host test somewhere is asserting on that null.
+//!
+//! The synth's state is a **detune in semitones**, eight bytes on the wire
+//! ([`synth::state_blob`], [`synth::parse_state`], [`synth::STATE_MAGIC`]).
+//! Detune rather than gain because a state round trip that is only checked
+//! byte-wise proves the host moved a buffer, not that the plugin *used* what it
+//! loaded; a pitch change shows up as a spectral peak, so a host can load a
+//! blob, render a note, FFT the result, and assert on the sound. See [`synth`]
+//! for the layout and the semantics.
+//!
+//! # Features
+//! Both descriptors carry CLAP feature strings -- gain is
+//! `audio-effect`/`utility`/`stereo`, synth is
+//! `instrument`/`synthesizer`/`stereo`. A host is entitled to filter or
+//! categorise by these, and a fixture with an empty feature list would quietly
+//! sit outside whatever browser the host builds, which is exactly the kind of
+//! "works in the test, invisible in the app" gap fixtures exist to close.
 //!
 //! # Why `crate-type = ["cdylib", "rlib"]`
 //! The `cdylib` is the artifact under test: `cargo build` writes
@@ -46,12 +70,13 @@ use clack_extensions::gui::{
 };
 use clack_extensions::timer::{PluginTimer, PluginTimerImpl, TimerId};
 use clack_plugin::entry::prelude::*;
+use clack_plugin::plugin::features::{AUDIO_EFFECT, INSTRUMENT, STEREO, SYNTHESIZER, UTILITY};
 use clack_plugin::plugin::PluginError;
 use clack_plugin::prelude::*;
 use std::ffi::CStr;
 
 use crate::gui::FixtureGui;
-use crate::synth::{SynthMainThread, SynthPlugin};
+use crate::synth::{SynthMainThread, SynthPlugin, SynthShared};
 
 /// CLAP id of the fixture. Hosts address the plugin by this string.
 pub const PLUGIN_ID: &str = "dev.mydaw.fixture.gain";
@@ -125,6 +150,7 @@ impl DefaultPluginFactory for GainPlugin {
         PluginDescriptor::new(PLUGIN_ID, PLUGIN_NAME)
             .with_vendor(PLUGIN_VENDOR)
             .with_version(PLUGIN_VERSION)
+            .with_features([AUDIO_EFFECT, UTILITY, STEREO])
     }
 
     fn new_shared(_host: HostSharedHandle<'_>) -> Result<(), PluginError> {
@@ -334,10 +360,12 @@ impl FixtureFactory {
         Self {
             gain: PluginDescriptor::new(PLUGIN_ID, PLUGIN_NAME)
                 .with_vendor(PLUGIN_VENDOR)
-                .with_version(PLUGIN_VERSION),
+                .with_version(PLUGIN_VERSION)
+                .with_features([AUDIO_EFFECT, UTILITY, STEREO]),
             synth: PluginDescriptor::new(synth::PLUGIN_ID, synth::PLUGIN_NAME)
                 .with_vendor(PLUGIN_VENDOR)
-                .with_version(PLUGIN_VERSION),
+                .with_version(PLUGIN_VERSION)
+                .with_features([INSTRUMENT, SYNTHESIZER, STEREO]),
         }
     }
 }
@@ -376,8 +404,10 @@ impl PluginFactoryImpl for FixtureFactory {
             Some(PluginInstance::new::<SynthPlugin>(
                 host_info,
                 &self.synth,
-                |_host| Ok(()),
-                |_host, _shared| Ok(SynthMainThread),
+                // The synth's shared half is real: it carries the detune the
+                // `state` extension loads, across the main/audio thread line.
+                |_host| Ok(SynthShared::default()),
+                |_host, shared| Ok(SynthMainThread::new(shared)),
             ))
         } else {
             // An id this bundle does not export. Returning `None` is what makes

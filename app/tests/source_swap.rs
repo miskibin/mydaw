@@ -67,8 +67,8 @@ impl Rig {
     /// does when a device opens.
     fn new(source: Source, node: Box<dyn RtNode>) -> Self {
         let collector = Collector::new();
-        let handle = SourceHandle::new(source);
         let gate = Arc::new(AtomicBool::new(source.gated()));
+        let handle = SourceHandle::new(source.clone());
         let slot = handle.open(node, source, collector.handle(), Arc::clone(&gate));
 
         let ran_effect = Arc::new(AtomicBool::new(false));

@@ -31,6 +31,8 @@
 
 pub mod gui;
 pub mod hosting;
+pub mod instances;
+pub mod state;
 pub mod test_util;
 pub mod timers;
 
@@ -49,6 +51,10 @@ pub use hosting::{
     ClapGuiRequests, ClapHostError, ClapNode, ClapNodeStats, ClapPortLayout, LoadedClapPlugin,
     MainThreadWork, RETIRE_TIMEOUT,
 };
+pub use instances::{
+    ClapGuiState, ClapInstanceError, ClapInstanceHost, ClapInstanceId, ACTIVATE_WAIT,
+};
+pub use state::{ClapStateError, MAX_STATE_BYTES};
 pub use timers::ClapTimers;
 
 /// Kernel id of this plugin.
@@ -91,6 +97,14 @@ pub struct ClapPluginInfo {
     pub version: String,
     /// Bundle this plugin came from.
     pub path: PathBuf,
+    /// The plugin's declared `features`, verbatim, e.g.
+    /// `["instrument", "synthesizer", "stereo"]`.
+    ///
+    /// Kept as strings rather than as a parsed enum because the list is
+    /// open-ended: CLAP explicitly allows vendor-defined feature strings, and a
+    /// host that dropped the ones it did not recognise would make a plugin
+    /// browser worse for no benefit. [`kind`](Self::kind) is the interpretation.
+    pub features: Vec<String>,
 }
 
 impl ClapPluginInfo {
@@ -107,7 +121,106 @@ impl ClapPluginInfo {
             vendor: cstr_to_string(descriptor.vendor()).unwrap_or_default(),
             version: cstr_to_string(descriptor.version()).unwrap_or_default(),
             path: path.to_path_buf(),
+            features: descriptor
+                .features()
+                .map(|feature| feature.to_string_lossy().into_owned())
+                .collect(),
         })
+    }
+
+    /// What this plugin is *for*, as far as a picker is concerned.
+    ///
+    /// See [`ClapPluginKind`] for why this is read from the descriptor rather
+    /// than from the plugin's ports.
+    pub fn kind(&self) -> ClapPluginKind {
+        ClapPluginKind::from_features(&self.features)
+    }
+
+    /// Whether this plugin can head a track (i.e. generate audio from notes).
+    pub fn is_instrument(&self) -> bool {
+        self.kind() == ClapPluginKind::Instrument
+    }
+
+    /// Whether this plugin can sit in an insert slot (i.e. process audio).
+    pub fn is_audio_effect(&self) -> bool {
+        self.kind() == ClapPluginKind::AudioEffect
+    }
+}
+
+/// What a scanned plugin advertises itself as.
+///
+/// # Why the descriptor and not the ports
+///
+/// The authoritative answer to "can this plugin head a track" is its **port
+/// layout** ([`ClapPortLayout::is_instrument`]), and MYDAW does check exactly
+/// that -- but only at the moment an instance is created, because reading a
+/// plugin's ports requires *instantiating* it. A picker that classified by port
+/// layout would have to instantiate every installed plugin to draw a list, which
+/// on a well-stocked machine means running dozens of vendors' initialisation
+/// code to populate a dropdown.
+///
+/// So the two work together, and the split is deliberate:
+///
+/// | Question | Answered by | Cost |
+/// | --- | --- | --- |
+/// | What do I put in this list? | `features` (here) | free, already scanned |
+/// | May this actually be used here? | [`ClapPortLayout`] | one instantiation |
+///
+/// A plugin whose features lie is caught by the second check, with an error that
+/// names the layout it actually reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClapPluginKind {
+    /// `instrument`: generates audio, usually from notes. Can head a track.
+    Instrument,
+    /// `audio-effect`: processes audio. Can sit in an insert slot.
+    AudioEffect,
+    /// `note-effect` (arpeggiators, chord tools) with no audio effect feature.
+    /// MYDAW has nowhere to put one yet; listed so a user is not left wondering
+    /// where their arpeggiator went.
+    NoteEffect,
+    /// `analyzer`, or a plugin that declares no features MYDAW understands. A
+    /// bundle is allowed to declare nothing at all, and plenty do.
+    Other,
+}
+
+impl ClapPluginKind {
+    /// CLAP's `instrument` feature string.
+    pub const INSTRUMENT: &'static str = "instrument";
+    /// CLAP's `audio-effect` feature string.
+    pub const AUDIO_EFFECT: &'static str = "audio-effect";
+    /// CLAP's `note-effect` feature string.
+    pub const NOTE_EFFECT: &'static str = "note-effect";
+
+    /// Classify a feature list.
+    ///
+    /// Instrument wins over audio-effect when a plugin declares both, because a
+    /// plugin that can do either is one a user reaches for as an instrument --
+    /// and because MYDAW's track sources are the scarcer slot.
+    pub fn from_features<S: AsRef<str>>(features: &[S]) -> Self {
+        let has = |wanted: &str| {
+            features
+                .iter()
+                .any(|feature| feature.as_ref().eq_ignore_ascii_case(wanted))
+        };
+        if has(Self::INSTRUMENT) {
+            Self::Instrument
+        } else if has(Self::AUDIO_EFFECT) {
+            Self::AudioEffect
+        } else if has(Self::NOTE_EFFECT) {
+            Self::NoteEffect
+        } else {
+            Self::Other
+        }
+    }
+
+    /// Stable string id, as it crosses the IPC boundary.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Instrument => "instrument",
+            Self::AudioEffect => "audio-effect",
+            Self::NoteEffect => "note-effect",
+            Self::Other => "other",
+        }
     }
 }
 

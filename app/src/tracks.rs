@@ -26,19 +26,21 @@
 //!
 //! **Layout changes** -- adding or removing a track -- are the only edit that
 //! compiles and installs a new graph, because the number of track chains is
-//! fixed once a graph is compiled. And that is exactly why they are refused
-//! while a CLAP plugin is in the graph: the new graph would need new CLAP
-//! nodes, which only the main thread can build and which cannot exist while the
-//! old ones are still alive. See [`TrackError::ClapInGraph`].
+//! fixed once a graph is compiled. Step 5 refused them while a hosted CLAP
+//! plugin was in the graph; step 6 allows them, by having the main thread
+//! install a CLAP-free graph and then re-attach every instance into it. That
+//! protocol lives in [`ClapHost::rebuild`](crate::clap_host::ClapHost), because
+//! only the main thread can touch a CLAP instance -- this type only has to make
+//! sure a rebuilt graph has a *slot* waiting for each one.
 //!
-//! # Where the CLAP effect goes
-//! `MYDAW_CLAP_FX` becomes a **master insert**: it runs on the summed bus,
-//! after every track strip and before the master fader. That is where a
-//! master-bus effect belongs, and it is the only insert point that does not have
-//! to pick a track for it. Per-track inserts are a later step's work (they need
-//! a plugin browser and a project file to record them in); the graph already
-//! carries a per-track insert chain, so that is a change to the builder rather
-//! than to the engine.
+//! # Where a hosted effect goes
+//! The master bus carries one always-present [`InsertSlot`](crate::insert::InsertSlot),
+//! empty until a plugin is chosen. It runs on the summed bus, after every track
+//! strip and before the master fader -- where a master-bus effect belongs, and
+//! the only insert point that does not have to pick a track for it. Per-track
+//! *effect* inserts are a later step's work; the graph already carries a
+//! per-track insert chain, so that is a change to the builder rather than to the
+//! engine.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -50,11 +52,13 @@ use mydaw_rt_core::basedrop::Handle;
 use mydaw_rt_core::{GraphSpec, MixerParams, RtNode, RtNodeFactory, MAX_TRACKS};
 use parking_lot::Mutex;
 
+use crate::clap_bridge::ClapBoard;
 use crate::graph::track_chain;
+use crate::insert::InsertHandle;
 use crate::project::{
     check_gain_db, check_pan, mixer_state_dto, MixerStateDto, Project, TrackDef, TrackError,
 };
-use crate::source::{Source, SourceError, SourceHandle};
+use crate::source::{SilentNode, Source, SourceError, SourceHandle};
 
 /// Anything that can go wrong editing the mixer.
 #[derive(Debug, thiserror::Error)]
@@ -86,12 +90,11 @@ pub struct TrackHost {
     /// Per-track transport-gate flags, published by the slot and read by the
     /// gate node in the same chain.
     gates: Vec<Arc<AtomicBool>>,
+    /// The one insert point on the master bus. Present in every graph, empty
+    /// until a plugin is chosen -- see [`crate::insert`].
+    master_insert: Arc<InsertHandle>,
     /// Track the keyboard piano and the source selector address.
     selected: AtomicUsize,
-    /// Whether a hosted CLAP effect is installed as a master insert. The other
-    /// half of "is a CLAP node in the graph" is
-    /// [`Project::has_clap_source`], which the project answers for itself.
-    master_has_clap: AtomicBool,
 }
 
 impl TrackHost {
@@ -117,22 +120,31 @@ impl TrackHost {
                     let source = project
                         .tracks
                         .get(index)
-                        .map_or(Source::DEFAULT, |track| track.source);
+                        .map_or(Source::DEFAULT, |track| track.source.clone());
                     Arc::new(SourceHandle::new(source))
                 })
                 .collect(),
             gates: (0..MAX_TRACKS)
                 .map(|_| Arc::new(AtomicBool::new(false)))
                 .collect(),
+            master_insert: Arc::new(InsertHandle::new()),
             selected: AtomicUsize::new(0),
             project: Mutex::new(project),
-            master_has_clap: AtomicBool::new(false),
         }
     }
 
     /// The parameter block the audio thread reads.
     pub fn params(&self) -> &Arc<MixerParams> {
         &self.params
+    }
+
+    /// The master bus's insert point.
+    ///
+    /// The main thread installs a hosted CLAP effect here and clears it again;
+    /// nothing else writes to it. `Send + Sync`, like everything else on this
+    /// type, because the *handle* is -- only the node it carries is not.
+    pub fn master_insert(&self) -> &Arc<InsertHandle> {
+        &self.master_insert
     }
 
     /// A copy of the project.
@@ -182,7 +194,7 @@ impl TrackHost {
                     .load(Ordering::Relaxed)
                     .min(project.len().saturating_sub(1)),
             )
-            .map_or(Source::DEFAULT, |track| track.source)
+            .map_or(Source::DEFAULT, |track| track.source.clone())
     }
 
     /// The head-of-chain handle for `track`.
@@ -190,24 +202,24 @@ impl TrackHost {
         self.handles.get(track)
     }
 
-    /// Whether a hosted CLAP node is currently in the graph, as a source or as
-    /// the master insert. Layout edits are refused while one is.
+    /// Whether a hosted CLAP node is currently in the graph, as a track source
+    /// or as the master insert.
+    ///
+    /// Not a restriction any more (step 5 refused layout edits while it was
+    /// true); it is what decides whether a layout edit can be done inline on the
+    /// calling thread or has to go through the main thread's re-attach protocol.
     pub fn has_clap_node(&self) -> bool {
-        self.master_has_clap.load(Ordering::Acquire) || self.project.lock().has_clap_source()
+        self.master_insert.is_occupied() || self.project.lock().has_clap_source()
     }
 
     /// The mixer, in the shape the webview reads.
-    pub fn state(&self) -> MixerStateDto {
+    pub fn state(&self, board: &ClapBoard) -> MixerStateDto {
         let project = self.project.lock();
-        // Computed under the one lock this method takes: `has_clap_node` would
-        // take it again, and `parking_lot::Mutex` is not reentrant.
-        let can_edit_layout =
-            !self.master_has_clap.load(Ordering::Acquire) && !project.has_clap_source();
         let selected = self
             .selected
             .load(Ordering::Relaxed)
             .min(project.len().saturating_sub(1));
-        mixer_state_dto(&project, selected, can_edit_layout)
+        mixer_state_dto(&project, selected, board)
     }
 
     // ------------------------------------------------------------ mixer edits
@@ -291,26 +303,32 @@ impl TrackHost {
 
     // ----------------------------------------------------------- source edits
 
-    /// Build the RT node for a source that does not need the main thread.
+    /// Build the RT node for `source`.
+    ///
+    /// A [`Source::Clap`] produces [`SilentNode`] rather than an error: only the
+    /// main thread can activate a hosted plugin, so a compiled graph carries a
+    /// silent placeholder in the track's slot and the main thread swaps the real
+    /// node in afterwards (at startup, and after every rebuild). Silence rather
+    /// than a fallback instrument, because a track set to a synthesiser must not
+    /// answer with a sine wave -- see [`SilentNode`].
     ///
     /// # Errors
-    /// [`SourceError::ClapNotConfigured`] for [`Source::Clap`], which is not
-    /// buildable from here at all, and [`SourceError::MissingInstrument`] when
-    /// the instruments plugin did not contribute the node -- a wiring bug rather
-    /// than a runtime condition.
+    /// [`SourceError::MissingInstrument`] when the instruments plugin did not
+    /// contribute the node a built-in source names -- a wiring bug rather than a
+    /// runtime condition.
     pub fn build_node(
         &self,
-        source: Source,
+        source: &Source,
         sample_rate: f64,
         max_block: usize,
     ) -> Result<Box<dyn RtNode>, SourceError> {
         match source {
             Source::TestTone => Ok(self.tone.create(sample_rate, max_block)),
-            Source::Clap => Err(SourceError::ClapNotConfigured),
+            Source::Clap(_) => Ok(Box::new(SilentNode)),
             other => {
                 let type_id = other
                     .instrument_type_id()
-                    .ok_or(SourceError::ClapNotConfigured)?;
+                    .expect("every non-CLAP, non-tone source names a built-in instrument");
                 self.instruments
                     .create(type_id, sample_rate, max_block)
                     .ok_or(SourceError::MissingInstrument(type_id))
@@ -323,9 +341,10 @@ impl TrackHost {
     /// A node swap, not a rebuild -- see the module docs.
     ///
     /// # Errors
-    /// [`TrackError::NoSuchTrack`], [`SourceError::ClapNotConfigured`] (the
-    /// CLAP instrument goes through [`ClapSourceBridge`](crate::ClapSourceBridge)
-    /// instead), and [`AudioIoError::NotRunning`] with no device open.
+    /// [`TrackError::NoSuchTrack`] and [`AudioIoError::NotRunning`] with no
+    /// device open. A hosted CLAP source does not come through here at all: it
+    /// goes through [`ClapHostBridge`](crate::clap_bridge::ClapHostBridge), so
+    /// that the main thread creates the instance.
     pub fn set_source(
         &self,
         track: usize,
@@ -336,7 +355,7 @@ impl TrackHost {
             return Err(TrackError::NoSuchTrack(track).into());
         }
         let info = audio.stream_info().ok_or(AudioIoError::NotRunning)?;
-        let node = self.build_node(source, f64::from(info.sample_rate), info.max_block)?;
+        let node = self.build_node(&source, f64::from(info.sample_rate), info.max_block)?;
         self.install_source(track, source, node)?;
         Ok(())
     }
@@ -360,7 +379,7 @@ impl TrackHost {
             .handles
             .get(track)
             .ok_or(TrackError::NoSuchTrack(track))?;
-        handle.install(node, source)?;
+        handle.install(node, source.clone())?;
 
         let mut project = self.project.lock();
         let Some(def) = project.tracks.get_mut(track) else {
@@ -374,21 +393,23 @@ impl TrackHost {
 
     /// Append a track and rebuild the graph.
     ///
+    /// **A rebuild leaves every hosted CLAP plugin without a node.** The new
+    /// graph's slots are empty placeholders (see
+    /// [`build_node`](Self::build_node)); re-attaching the instances is the main
+    /// thread's job and is why a layout edit with a plugin loaded is routed
+    /// through [`ClapHost`](crate::clap_host::ClapHost) rather than called from
+    /// a command thread. [`AppState::add_track`](crate::AppState::add_track) is
+    /// what makes that choice.
+    ///
     /// # Errors
-    /// [`TrackError::TooManyTracks`], [`TrackError::ClapInGraph`], and whatever
-    /// building or installing the new graph reported.
+    /// [`TrackError::TooManyTracks`], and whatever building or installing the
+    /// new graph reported.
     pub fn add_track(
         &self,
         source: Source,
         name: Option<String>,
         audio: &AudioIoService,
     ) -> Result<usize, MixerError> {
-        if self.has_clap_node() {
-            return Err(TrackError::ClapInGraph.into());
-        }
-        if source == Source::Clap {
-            return Err(SourceError::ClapNotConfigured.into());
-        }
         let index = {
             let mut project = self.project.lock();
             let index = project.add(source, name)?;
@@ -401,13 +422,13 @@ impl TrackHost {
 
     /// Remove a track and rebuild the graph.
     ///
+    /// See [`add_track`](Self::add_track) on what a rebuild does to hosted
+    /// plugins.
+    ///
     /// # Errors
-    /// [`TrackError::NoSuchTrack`], [`TrackError::LastTrack`],
-    /// [`TrackError::ClapInGraph`], and whatever the rebuild reported.
+    /// [`TrackError::NoSuchTrack`], [`TrackError::LastTrack`], and whatever the
+    /// rebuild reported.
     pub fn remove_track(&self, track: usize, audio: &AudioIoService) -> Result<(), MixerError> {
-        if self.has_clap_node() {
-            return Err(TrackError::ClapInGraph.into());
-        }
         {
             let mut project = self.project.lock();
             project.remove(track)?;
@@ -426,28 +447,25 @@ impl TrackHost {
 
     /// Compile the project into a graph and hand it to the audio thread.
     ///
-    /// `master_insert` is the CLAP effect, when one is configured; it is built
-    /// on the main thread and moved in here, and it is the reason a rebuild
-    /// cannot recreate it (see the module docs).
+    /// The graph contains **no hosted CLAP node**: a CLAP-headed track gets a
+    /// silent placeholder and the master insert slot starts empty. Only the main
+    /// thread can activate a plugin, and it does so afterwards, through the slots
+    /// this graph carries.
     ///
     /// # Errors
     /// [`AudioIoError::NotRunning`] with no stream open, plus whatever the graph
-    /// queue reported. A track whose source cannot be built falls back to the
-    /// test tone with a warning rather than leaving the stream silent.
-    pub fn install_graph(
-        &self,
-        audio: &AudioIoService,
-        master_insert: Option<Box<dyn RtNode>>,
-    ) -> Result<(), AudioIoError> {
+    /// queue reported. A track whose built-in source cannot be built falls back
+    /// to the test tone with a warning rather than leaving the stream silent.
+    pub fn install_graph(&self, audio: &AudioIoService) -> Result<(), AudioIoError> {
         let limits = audio.graph_limits().ok_or(AudioIoError::NotRunning)?;
         let gc = audio.gc_handle();
-        let spec = self.build_spec(&limits, gc, master_insert);
+        let spec = self.build_spec(&limits, gc);
         audio.install_graph(spec)
     }
 
-    /// Rebuild without a master insert. See [`install_graph`](Self::install_graph).
+    /// Rebuild. See [`install_graph`](Self::install_graph).
     fn rebuild(&self, audio: &AudioIoService) -> Result<(), MixerError> {
-        self.install_graph(audio, None)?;
+        self.install_graph(audio)?;
         Ok(())
     }
 
@@ -456,12 +474,7 @@ impl TrackHost {
     /// Split out of [`install_graph`](Self::install_graph) so an offline test can
     /// render the graph the shell actually runs rather than a copy of it that
     /// can drift.
-    pub fn build_spec(
-        &self,
-        limits: &mydaw_rt_core::GraphLimits,
-        gc: Handle,
-        master_insert: Option<Box<dyn RtNode>>,
-    ) -> GraphSpec {
+    pub fn build_spec(&self, limits: &mydaw_rt_core::GraphLimits, gc: Handle) -> GraphSpec {
         let project = self.project.lock();
         project.publish(&self.params);
 
@@ -470,7 +483,7 @@ impl TrackHost {
             .with_limits(*limits);
 
         for (index, def) in project.tracks.iter().enumerate() {
-            let node = match self.build_node(def.source, limits.sample_rate, limits.max_block) {
+            let node = match self.build_node(&def.source, limits.sample_rate, limits.max_block) {
                 Ok(node) => node,
                 Err(err) => {
                     log::warn!(
@@ -481,27 +494,27 @@ impl TrackHost {
                 }
             };
             let gate = Arc::clone(&self.gates[index]);
-            let slot = self.handles[index].open(node, def.source, gc.clone(), Arc::clone(&gate));
-            // Per-track inserts are a later step's work -- the graph already
-            // carries a chain for them, and this is where they would go.
+            let slot =
+                self.handles[index].open(node, def.source.clone(), gc.clone(), Arc::clone(&gate));
+            // Per-track *effect* inserts are a later step's work -- the graph
+            // already carries a chain for them, and this is where they would go.
             spec.push_track(track_chain(slot, None, gate));
         }
 
-        if let Some(insert) = master_insert {
-            // Recorded here rather than at load time: an effect that would not
-            // activate never reaches the graph, and a layout edit only has to be
-            // refused for one that did.
-            self.master_has_clap.store(true, Ordering::Release);
-            spec.push_master_insert(insert);
-        }
+        // Unconditional, and transparent while empty. Compiling it in every time
+        // is what lets a master effect be inserted, replaced and removed with no
+        // graph rebuild at all -- see `crate::insert`.
+        spec.push_master_insert(crate::insert::insert_slot(&self.master_insert, gc));
         spec
     }
 
-    /// Forget every track's stream channel. Called when audio stops.
+    /// Forget every track's stream channel, and the master insert's. Called when
+    /// audio stops.
     pub fn close(&self) {
         for handle in &self.handles {
             handle.close();
         }
+        self.master_insert.close();
     }
 }
 
@@ -518,6 +531,7 @@ impl std::fmt::Debug for TrackHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::ClapSourceRef;
     use mydaw_rt_core::{db_to_gain, GraphLimits, MAX_TRACKS};
 
     const LIMITS: GraphLimits = GraphLimits {
@@ -525,6 +539,10 @@ mod tests {
         max_block: 256,
         max_events: 64,
     };
+
+    fn clap_ref() -> ClapSourceRef {
+        ClapSourceRef::new(r"C:\plugins\thing.clap", "com.acme.thing").named("Acme Thing")
+    }
 
     fn host() -> TrackHost {
         TrackHost::new(
@@ -611,8 +629,9 @@ mod tests {
         host.set_selected(1).unwrap();
         assert_eq!(host.selected(), 1);
         assert_eq!(host.selected_source(), Source::PolySynth);
-        assert!(host.state().tracks[1].selected);
-        assert!(!host.state().tracks[0].selected);
+        let board = ClapBoard::new();
+        assert!(host.state(&board).tracks[1].selected);
+        assert!(!host.state(&board).tracks[0].selected);
     }
 
     #[test]
@@ -630,54 +649,63 @@ mod tests {
     }
 
     #[test]
-    fn the_graph_the_host_builds_is_one_track_chain_per_track() {
+    fn the_graph_the_host_builds_is_one_track_chain_per_track_plus_the_master_insert() {
         let host = host();
         let collector = mydaw_rt_core::basedrop::Collector::new();
-        let spec = host.build_spec(&LIMITS, collector.handle(), None);
+        let spec = host.build_spec(&LIMITS, collector.handle());
 
         assert_eq!(spec.track_count(), 2);
-        // Source slot plus transport gate, twice.
-        assert_eq!(spec.len(), 4);
+        // Source slot plus transport gate, twice, plus the master insert slot.
+        assert_eq!(spec.len(), 5);
         assert!(spec.params().is_some(), "the mixer parameters are shared");
         assert_eq!(spec.limits(), LIMITS);
         assert!(!host.has_clap_node());
+        assert!(
+            host.master_insert().is_open() && !host.master_insert().is_occupied(),
+            "the slot is there, and empty"
+        );
     }
 
     #[test]
-    fn a_master_insert_marks_the_graph_as_holding_a_clap_node() {
-        struct Nothing;
-        impl RtNode for Nothing {
-            fn process(&mut self, _ctx: &mut mydaw_rt_core::ProcessCtx) {}
-        }
-
-        let host = host();
-        let collector = mydaw_rt_core::basedrop::Collector::new();
-        let spec = host.build_spec(&LIMITS, collector.handle(), Some(Box::new(Nothing)));
-        assert_eq!(spec.len(), 5, "two chains plus the master insert");
-        assert!(host.has_clap_node());
-        assert!(!host.state().can_edit_layout);
-    }
-
-    #[test]
-    fn a_layout_edit_is_refused_while_a_clap_plugin_is_in_the_graph() {
-        // The step 5 limitation, stated as a test: a rebuild recreates every
-        // node, and a hosted CLAP plugin cannot be activated twice.
+    fn a_layout_edit_is_allowed_with_a_clap_plugin_placed() {
+        // The step 5 limitation, deleted. The project edit goes through; the
+        // rebuild then fails only because this test has no audio device.
         let host = host();
         let mut project = host.project();
-        project.tracks[0].source = Source::Clap;
+        project.tracks[0].source = Source::Clap(clap_ref());
         host.set_project(project);
         assert!(host.has_clap_node());
 
         let audio = mydaw_plugin_audio_io::AudioIoService::default();
         assert!(matches!(
             host.add_track(Source::PolySynth, None, &audio),
-            Err(MixerError::Track(TrackError::ClapInGraph))
+            Err(MixerError::Audio(AudioIoError::NotRunning))
         ));
-        assert!(matches!(
-            host.remove_track(1, &audio),
-            Err(MixerError::Track(TrackError::ClapInGraph))
-        ));
-        assert_eq!(host.track_count(), 2, "nothing changed");
+        assert_eq!(host.track_count(), 3, "the project edit happened");
+    }
+
+    #[test]
+    fn a_clap_headed_track_compiles_to_silence_rather_than_a_fallback_instrument() {
+        // The main thread swaps the real node in a moment later. Until it does,
+        // a track the user set to a synthesiser must be silent -- not a sine.
+        let host = host();
+        let mut buffers = mydaw_rt_core::AudioBuffers::new(8);
+        for channel in buffers.as_mut_slices() {
+            channel.fill(0.5);
+        }
+        let mut node = host
+            .build_node(&Source::Clap(clap_ref()), 48_000.0, 8)
+            .expect("a placeholder is always buildable");
+        {
+            let mut ctx = mydaw_rt_core::ProcessCtx::new(
+                &mut buffers,
+                48_000.0,
+                8,
+                mydaw_rt_core::TransportSnapshot::default(),
+            );
+            node.process(&mut ctx);
+        }
+        assert!(buffers.as_slices()[0].iter().all(|sample| *sample == 0.0));
     }
 
     #[test]
@@ -696,14 +724,13 @@ mod tests {
     }
 
     #[test]
-    fn the_hosted_clap_instrument_is_never_built_from_a_command_thread() {
+    fn every_built_in_source_can_be_built_from_a_command_thread() {
         let host = host();
-        assert!(matches!(
-            host.build_node(Source::Clap, 48_000.0, 256),
-            Err(SourceError::ClapNotConfigured)
-        ));
-        for source in [Source::TestTone, Source::PolySynth, Source::DrumKit] {
-            assert!(host.build_node(source, 48_000.0, 256).is_ok(), "{source:?}");
+        for source in Source::BUILT_IN {
+            assert!(
+                host.build_node(&source, 48_000.0, 256).is_ok(),
+                "{source:?}"
+            );
         }
     }
 

@@ -92,16 +92,29 @@ fn rig(tag: &str) -> Option<Rig> {
         "the fixture must declare a note input, or this test proves nothing"
     );
 
-    match state.start_audio_with_plugins(Some(&mut plugin), None) {
-        Ok(info) => eprintln!(
-            "device: {} @ {} Hz, {} ch (max block {}); instrument '{}' active={}",
-            info.device_name,
-            info.sample_rate,
-            info.channels,
-            info.max_block,
-            plugin.info().id,
-            plugin.is_active()
-        ),
+    // The shell's own two steps for a CLAP-headed track: open the device on a
+    // track whose source *is* the plugin (which compiles to silence), then swap
+    // the activated node into that track's slot from this -- the main -- thread.
+    let reference = mydaw_app::ClapSourceRef::new(&bundle, SYNTH_ID).named("MYDAW Fixture Synth");
+    match state.start_audio_with_source(mydaw_app::Source::Clap(reference.clone())) {
+        Ok(info) => {
+            let node = plugin
+                .create_node(f64::from(info.sample_rate), info.max_block)
+                .expect("the synth fixture activates");
+            state
+                .tracks()
+                .install_source(0, mydaw_app::Source::Clap(reference), Box::new(node))
+                .expect("track 0's slot is open once a stream is");
+            eprintln!(
+                "device: {} @ {} Hz, {} ch (max block {}); instrument '{}' active={}",
+                info.device_name,
+                info.sample_rate,
+                info.channels,
+                info.max_block,
+                plugin.info().id,
+                plugin.is_active()
+            );
+        }
         Err(err) => {
             eprintln!("no audio device ({err}); nothing to verify on this machine");
             return None;

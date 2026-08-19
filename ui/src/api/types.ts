@@ -73,6 +73,17 @@ export interface MeterFrame {
 }
 
 /**
+ * What a CLAP plugin is *for*, decided by the host from the bundle's `features`
+ * list. Mirrors `ClapPluginKindDto` in `app/src/dto.rs`.
+ *
+ * This is what decides which picker a plugin turns up in: instruments are offered
+ * as track sources, audio effects as the master insert. `other` is not a failure
+ * -- a bundle may declare no recognisable feature at all -- it just means MYDAW
+ * has nowhere to put it yet.
+ */
+export type ClapPluginKind = 'instrument' | 'audio-effect' | 'note-effect' | 'other';
+
+/**
  * One installed CLAP plugin, as reported by the host's scan. Mirrors
  * `ClapPluginInfoDto` in `app/src/dto.rs`.
  *
@@ -87,11 +98,33 @@ export interface ClapPluginInfoDto {
   version: string;
   /** Absolute path of the `.clap` bundle the plugin came from. */
   path: string;
+  /** Which picker this plugin belongs in. Derived from `features` by Rust. */
+  kind: ClapPluginKind;
+  /**
+   * The bundle's raw CLAP feature strings, e.g. `['audio-effect', 'reverb']`.
+   *
+   * Carried verbatim rather than re-interpreted here: `kind` is the host's
+   * reading of them, and this is the evidence, which the browser shows as
+   * tooltip detail so a surprising classification can be explained rather than
+   * argued with.
+   */
+  features: string[];
 }
 
 /**
- * State of the hosted plugin's editor window. Mirrors `ClapGuiStatusDto` in
- * `app/src/gui_bridge.rs`.
+ * Which placed plugin a CLAP command addresses. Mirrors `ClapTargetDto` in
+ * `app/src/dto.rs`.
+ *
+ * A tagged union rather than "a track index, or -1 for the master": several
+ * editors can be open at once, so a target is a lasting identity rather than a
+ * momentary selection, and a sentinel index is exactly the kind of thing that
+ * survives one refactor and then addresses the wrong strip.
+ */
+export type ClapTarget = { slot: 'track'; index: number } | { slot: 'master' };
+
+/**
+ * State of one placed plugin's editor window. Mirrors `ClapGuiStatusDto` in
+ * `app/src/clap_bridge.rs`.
  *
  * The editor is a *native* window next to MYDAW's, not a region of this webview:
  * a plugin draws with its own toolkit into an OS window handle, which cannot be
@@ -101,6 +134,8 @@ export interface ClapPluginInfoDto {
 export interface ClapGuiStatus {
   /** Whether an editor window is currently open. */
   open: boolean;
+  /** Whether the plugin draws an editor at all. False is normal, not an error. */
+  hasEditor: boolean;
   /** CLAP id of the plugin the editor belongs to, if one is loaded. */
   pluginId: string | null;
   /** Editor size in physical pixels; `0` when closed. */
@@ -109,24 +144,63 @@ export interface ClapGuiStatus {
 }
 
 /**
- * One thing the engine can put at the head of its chain. Mirrors `SourceDto` in
+ * A hosted CLAP plugin sitting in a track's source slot or the master's insert.
+ * Mirrors `ClapSlotDto` in `app/src/project.rs`.
+ *
+ * Present in `MixerState` rather than fetched separately because every strip
+ * that draws a plugin also draws its editor button, and the two must never
+ * disagree about whether the window is up.
+ */
+export interface ClapSlot {
+  /**
+   * Opaque handle for this instance, stable for as long as the plugin stays
+   * placed. Only meaningful to Rust; the UI carries it and never reads into it.
+   */
+  instance: number;
+  /** CLAP id of the plugin in the slot, e.g. `com.u-he.diva`. */
+  pluginId: string;
+  name: string;
+  /** Absolute path of the `.clap` bundle it was loaded from. */
+  bundlePath: string;
+  /**
+   * Whether this plugin draws an editor. When false the strip shows no editor
+   * button at all -- a plugin with no GUI is an ordinary plugin, and a button
+   * that always answers "there is no editor" is worse than no button.
+   */
+  hasEditor: boolean;
+  /** Whether its editor window is up right now. */
+  guiOpen: boolean;
+}
+
+/**
+ * One thing the engine can put at the head of a track. Mirrors `SourceDto` in
  * `app/src/source.rs`.
  *
- * The list is fixed (two built-in instruments, the test tone, and a hosted CLAP
- * instrument) and comes from Rust rather than being hard-coded here, so adding
- * an instrument is a change in one language rather than two.
+ * The list is the three built-ins in a fixed order followed by every scanned
+ * CLAP *instrument*, and it comes from Rust rather than being hard-coded here,
+ * so adding an instrument is a change in one language rather than two.
  */
 export interface SourceDto {
-  /** Stable id, e.g. `poly-synth`. This is what `setSource` takes. */
+  /**
+   * Stable id: `poly-synth`, `drum-kit`, `test-tone`, or `clap:<pluginId>`.
+   *
+   * This is what `setTrackSource` takes for a built-in, and what a `TrackDto`
+   * reports as its `sourceId` either way. A CLAP source is *placed* with
+   * `setTrackSourceClap` instead, because the host has to load a bundle from
+   * disk rather than look a name up in a table.
+   */
   id: string;
   label: string;
   description: string;
-  /**
-   * Whether it can be selected right now. Only `clap` is ever false, and only
-   * because no bundle was named by `MYDAW_CLAP_INSTRUMENT` at startup.
-   */
-  available: boolean;
-  /** Whether this is the source currently playing. Exactly one is true. */
+  /** Which of the two ways this source is placed. */
+  kind: 'internal' | 'clap';
+  /** Plugin vendor; empty for the built-ins, and possibly empty for a CLAP one. */
+  vendor: string;
+  /** Absolute `.clap` bundle path. Set exactly when `kind` is `clap`. */
+  bundlePath: string | null;
+  /** CLAP id. Set exactly when `kind` is `clap`. */
+  pluginId: string | null;
+  /** Whether this is the selected track's source. Exactly one is true. */
   selected: boolean;
   /** Whether the computer-keyboard piano does anything for this source. */
   takesNotes: boolean;
@@ -219,11 +293,18 @@ export interface TrackDto {
   silenced: boolean;
   /** Whether the keyboard piano and the source selector address this track. */
   selected: boolean;
+  /**
+   * The hosted CLAP instrument at the head of this track, when `sourceId` names
+   * one. `null` for a built-in source.
+   */
+  clap: ClapSlot | null;
 }
 
 /** The master strip. Mirrors `MasterDto` in `app/src/project.rs`. */
 export interface MasterDto {
   gainDb: number;
+  /** The CLAP audio effect on the master insert, or `null` when there is none. */
+  clap: ClapSlot | null;
 }
 
 /**
@@ -243,12 +324,6 @@ export interface MixerState {
   /** Fader bounds in dB, so the UI keeps no copy of the scale. */
   minGainDb: number;
   maxGainDb: number;
-  /**
-   * Whether tracks can be added or removed. False while a hosted CLAP plugin is
-   * in the graph -- a rebuild would have to recreate it, and a CLAP plugin can
-   * only be activated once.
-   */
-  canEditLayout: boolean;
 }
 
 /** Unsubscribe handle returned by streaming APIs. */

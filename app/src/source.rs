@@ -1,14 +1,15 @@
-//! Choosing what sits at the head of the chain, while the engine is running.
+//! Choosing what sits at the head of a track, while the engine is running.
 //!
-//! Step 1 built the chain at startup and left it there. Step 3 has four things
-//! that can generate audio -- the test tone, two built-in instruments and a
-//! hosted CLAP instrument -- and a user who wants to switch between them by
-//! clicking, without a click.
+//! Step 1 built the chain at startup and left it there. Step 3 made the head of
+//! the chain swappable. Step 5 gave every track its own head. Step 6 makes the
+//! *set* of things that can go there open-ended: two built-in instruments, the
+//! test tone, and **any CLAP instrument installed on the machine**, chosen from
+//! a picker rather than named by an environment variable.
 //!
 //! # Why a slot, and not a new graph each time
 //!
 //! ```text
-//!   install once:   SourceSlot -> [CLAP effect] -> TransportGate
+//!   install once:   SourceSlot -> [insert..] -> TransportGate
 //!                        ^                              ^
 //!                        |                              |
 //!            new source node, by value           reads the same flag
@@ -19,22 +20,18 @@
 //! install it", the way [`TrackHost::install_graph`](crate::tracks::TrackHost::install_graph)
 //! does at startup. It does not work, for a reason that is worth writing down:
 //! **a hosted CLAP plugin can only be activated once at a time.** Rebuilding
-//! the graph means building a new node for the effect too, and the old effect
-//! node is not retired until the *old graph* is dropped -- which cannot happen
-//! until the new graph is installed. The two requirements are circular, and the
-//! ways out (install a graph without the effect, wait for the collector, then
-//! install it again) drop the insert for a few milliseconds every time the user
-//! changes instrument.
+//! the graph means building a new node for every hosted plugin too, and the old
+//! nodes are not retired until the *old graph* is dropped -- which cannot happen
+//! until the new graph is installed. The two requirements are circular.
 //!
-//! Swapping at node granularity has no such problem. The graph -- and the
-//! effect node inside it -- is built once and never touched again; only the
-//! head of the chain moves. It is also what a DAW actually does: changing the
-//! instrument on a track does not rebuild the mixer.
+//! Swapping at node granularity has no such problem. The graph is built once and
+//! only the head of a chain moves. It is also what a DAW actually does: changing
+//! the instrument on a track does not rebuild the mixer.
 //!
-//! The mechanism is [`GraphHandle`](mydaw_rt_core::GraphHandle)'s, one level
-//! down: the new node crosses the RT wall by value through an `rtrb` queue as a
-//! [`basedrop::Owned`], and the superseded one is dropped on the audio thread,
-//! which under `basedrop` means *queued for the collector*, not freed.
+//! Step 6 does finally allow the *layout* to change with CLAP plugins loaded,
+//! and it breaks the circle by conceding a few milliseconds of silence rather
+//! than by pretending the constraint is not there -- see
+//! [`crate::clap_host::ClapHost::rebuild`].
 //!
 //! # The gate travels with the source
 //! `TransportGate` exists because the test tone is a free-running oscillator;
@@ -49,47 +46,99 @@
 //! Everything here is `Send + Sync` and callable from a Tauri command thread,
 //! with one exception: a [`LoadedClapPlugin`](mydaw_plugin_host_clap::LoadedClapPlugin)
 //! is `!Send`, lives on the main thread, and is the only thing that can build a
-//! node for it. So [`ClapSourceBridge`] is a mailbox in the shape of
-//! [`ClapGuiBridge`](crate::gui_bridge::ClapGuiBridge): the command queues a
+//! node for it. So a CLAP source change goes through
+//! [`ClapHostBridge`](crate::clap_bridge::ClapHostBridge): the command queues a
 //! request, the run loop serves it, the command gets the answer or a timeout.
 
-use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use mydaw_plugin_audio_io::AudioIoError;
-use mydaw_plugin_host_clap::LoadedClapPlugin;
+use mydaw_plugin_host_clap::ClapPluginInfo;
 use mydaw_rt_core::basedrop::{Handle, Owned};
 use mydaw_rt_core::{ProcessCtx, RtNode};
 use parking_lot::Mutex;
 use rtrb::{Consumer, Producer};
 use serde::Serialize;
 
-use crate::graph::{clap_instrument_node, CLAP_INSTRUMENT_ENV};
-
 /// In-flight source swaps. Four is a user clicking faster than the audio thread
 /// runs a block, which does not happen; the queue exists so that overflow is a
 /// reported error rather than a possibility nobody thought about.
 pub const SOURCE_QUEUE_CAPACITY: usize = 4;
 
-/// How long a Tauri command waits for the main thread to switch to the CLAP
-/// instrument. Matches the plugin-GUI bridge: the work runs vendor code.
-pub const CLAP_SOURCE_TIMEOUT: Duration = Duration::from_secs(5);
+/// Prefix of a CLAP source's wire id, so `poly-synth` and a plugin that happens
+/// to call itself `poly-synth` can never collide.
+pub const CLAP_SOURCE_PREFIX: &str = "clap:";
 
-/// How long the main thread waits for a previously installed CLAP node to be
-/// retired by the collector before giving up on re-activating the plugin.
+/// A hosted CLAP instrument, identified the way a project file records one.
 ///
-/// Switching *away* from the CLAP instrument hands its node to `basedrop`, and
-/// `clap_plugin->activate()` cannot be called again until the collector has
-/// actually dropped it. That is a wait of one GC interval, so this is a couple
-/// of them; longer would freeze the window for no benefit, because at that
-/// point something is genuinely wrong rather than merely slow.
-pub const CLAP_RETIRE_WAIT: Duration = Duration::from_millis(500);
+/// Bundle path **and** plugin id, because neither alone is enough: one bundle
+/// commonly exports several plugins (the workspace's own fixture exports two),
+/// and the same plugin id can be installed in two places.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClapSourceRef {
+    /// Absolute path of the `.clap` bundle.
+    pub bundle_path: PathBuf,
+    /// CLAP plugin id inside that bundle, e.g. `com.u-he.diva`.
+    pub plugin_id: String,
+    /// Display name from the scan. May be empty -- CLAP only requires an id --
+    /// in which case the id is shown instead.
+    pub name: String,
+}
 
-/// What generates audio at the head of the chain.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+impl ClapSourceRef {
+    /// A reference to `plugin_id` inside `bundle_path`, with no display name.
+    pub fn new(bundle_path: impl Into<PathBuf>, plugin_id: impl Into<String>) -> Self {
+        Self {
+            bundle_path: bundle_path.into(),
+            plugin_id: plugin_id.into(),
+            name: String::new(),
+        }
+    }
+
+    /// The same reference carrying a display name.
+    pub fn named(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// What to put on a mixer strip.
+    pub fn label(&self) -> &str {
+        if self.name.is_empty() {
+            &self.plugin_id
+        } else {
+            &self.name
+        }
+    }
+
+    /// Wire id: `clap:<plugin id>`.
+    ///
+    /// The bundle path is deliberately *not* part of it. An id crosses the IPC
+    /// boundary and lands in a UI list; a Windows path in it would be a
+    /// separator minefield. The path travels as its own argument on the one
+    /// command that needs it
+    /// ([`set_track_source_clap`](crate::commands::set_track_source_clap)).
+    pub fn wire_id(&self) -> String {
+        format!("{CLAP_SOURCE_PREFIX}{}", self.plugin_id)
+    }
+}
+
+impl From<&ClapPluginInfo> for ClapSourceRef {
+    fn from(info: &ClapPluginInfo) -> Self {
+        Self {
+            bundle_path: info.path.clone(),
+            plugin_id: info.id.clone(),
+            name: info.name.clone(),
+        }
+    }
+}
+
+/// What generates audio at the head of a track.
+///
+/// Not `Copy` since step 6: a CLAP source carries the bundle path and plugin id
+/// that identify it, which is exactly what a project file has to record.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Source {
     /// The step-1 sine generator. Free-running, so it is gated on the transport.
     TestTone,
@@ -97,15 +146,19 @@ pub enum Source {
     PolySynth,
     /// The built-in [`drum-kit`](mydaw_plugin_instruments::DrumKitNode).
     DrumKit,
-    /// The CLAP instrument named by [`CLAP_INSTRUMENT_ENV`], if one is loaded.
-    Clap,
+    /// A hosted CLAP instrument, chosen from the plugin picker.
+    Clap(ClapSourceRef),
 }
 
 impl Source {
-    /// Every source, in the order the UI offers them.
-    pub const ALL: [Self; 4] = [Self::PolySynth, Self::DrumKit, Self::TestTone, Self::Clap];
+    /// The built-in sources, in the order the UI offers them.
+    ///
+    /// CLAP instruments are not here: what is available depends on the machine,
+    /// and the list comes from the scan
+    /// ([`AppState::sources`](crate::AppState::sources)).
+    pub const BUILT_IN: [Self; 3] = [Self::PolySynth, Self::DrumKit, Self::TestTone];
 
-    /// The source a fresh session starts on when no CLAP instrument is loaded.
+    /// The source a fresh session's synth track starts on.
     ///
     /// The poly synth rather than the test tone: a DAW that greets you with a
     /// playable instrument is telling the truth about what it is, and a
@@ -114,52 +167,69 @@ impl Source {
     pub const DEFAULT: Self = Self::PolySynth;
 
     /// Stable string id, as it crosses the IPC boundary and appears in the UI.
-    pub const fn id(self) -> &'static str {
+    pub fn id(&self) -> String {
         match self {
-            Self::TestTone => "test-tone",
-            Self::PolySynth => "poly-synth",
-            Self::DrumKit => "drum-kit",
-            Self::Clap => "clap",
+            Self::TestTone => "test-tone".to_owned(),
+            Self::PolySynth => "poly-synth".to_owned(),
+            Self::DrumKit => "drum-kit".to_owned(),
+            Self::Clap(reference) => reference.wire_id(),
         }
     }
 
     /// Name for a menu.
-    pub const fn label(self) -> &'static str {
+    pub fn label(&self) -> String {
         match self {
-            Self::TestTone => "Test Tone",
-            Self::PolySynth => "Poly Synth",
-            Self::DrumKit => "Drum Kit",
-            // Short, because these are segmented buttons in a transport bar
-            // that also has to fit the transport. The description carries the
-            // rest.
-            Self::Clap => "CLAP",
+            Self::TestTone => "Test Tone".to_owned(),
+            Self::PolySynth => "Poly Synth".to_owned(),
+            Self::DrumKit => "Drum Kit".to_owned(),
+            Self::Clap(reference) => reference.label().to_owned(),
         }
     }
 
     /// One line for a tooltip.
-    pub const fn description(self) -> &'static str {
+    pub fn description(&self) -> String {
         match self {
-            Self::TestTone => "440 Hz sine, gated on the transport",
-            Self::PolySynth => "Eight-voice saw + sub synth, played from the keyboard",
-            Self::DrumKit => "Synthesised kick, snare and hi-hats on GM keys 36/38/42/46",
-            Self::Clap => "The CLAP instrument named by MYDAW_CLAP_INSTRUMENT",
+            Self::TestTone => "440 Hz sine, gated on the transport".to_owned(),
+            Self::PolySynth => "Eight-voice saw + sub synth, played from the keyboard".to_owned(),
+            Self::DrumKit => {
+                "Synthesised kick, snare and hi-hats on GM keys 36/38/42/46".to_owned()
+            }
+            Self::Clap(reference) => format!(
+                "Hosted CLAP instrument {} from {}",
+                reference.plugin_id,
+                reference.bundle_path.display()
+            ),
         }
     }
 
     /// Whether this source has to be silenced while the transport is stopped.
     ///
     /// True for the test tone only. See the module docs and [`crate::graph`].
-    pub const fn gated(self) -> bool {
+    pub const fn gated(&self) -> bool {
         matches!(self, Self::TestTone)
     }
 
     /// Whether this source plays note events.
-    pub const fn takes_notes(self) -> bool {
+    pub const fn takes_notes(&self) -> bool {
         !matches!(self, Self::TestTone)
     }
 
+    /// Whether this source is a hosted CLAP plugin, and therefore needs the
+    /// main thread to build its node.
+    pub const fn is_clap(&self) -> bool {
+        matches!(self, Self::Clap(_))
+    }
+
+    /// The bundle path and plugin id, for a CLAP source.
+    pub const fn clap_ref(&self) -> Option<&ClapSourceRef> {
+        match self {
+            Self::Clap(reference) => Some(reference),
+            _ => None,
+        }
+    }
+
     /// The `type_id` of the built-in instrument backing this source, if any.
-    pub const fn instrument_type_id(self) -> Option<&'static str> {
+    pub const fn instrument_type_id(&self) -> Option<&'static str> {
         match self {
             Self::PolySynth => Some(mydaw_plugin_instruments::poly_synth::NODE_TYPE_ID),
             Self::DrumKit => Some(mydaw_plugin_instruments::drum_kit::NODE_TYPE_ID),
@@ -167,13 +237,25 @@ impl Source {
         }
     }
 
-    /// Parse an id that came from the webview.
+    /// Parse a **built-in** id that came from the webview.
+    ///
+    /// A CLAP source is deliberately not parseable from an id alone: the id
+    /// carries no bundle path, and a host that guessed one from a previous scan
+    /// would silently load a different copy of the plugin. The webview uses
+    /// [`set_track_source_clap`](crate::commands::set_track_source_clap), which
+    /// carries both halves.
     ///
     /// # Errors
-    /// [`SourceError::Unknown`], carrying the string, so the status bar can say
-    /// what was asked for rather than "invalid input".
+    /// [`SourceError::ClapNeedsBundle`] for a `clap:` id, and
+    /// [`SourceError::Unknown`] otherwise -- carrying the string, so the status
+    /// bar can say what was asked for rather than "invalid input".
     pub fn parse(id: &str) -> Result<Self, SourceError> {
-        Self::ALL
+        if let Some(plugin_id) = id.strip_prefix(CLAP_SOURCE_PREFIX) {
+            return Err(SourceError::ClapNeedsBundle {
+                plugin_id: plugin_id.to_owned(),
+            });
+        }
+        Self::BUILT_IN
             .into_iter()
             .find(|source| source.id() == id)
             .ok_or_else(|| SourceError::Unknown(id.to_owned()))
@@ -183,16 +265,15 @@ impl Source {
 /// Why a source could not be selected.
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
-    #[error("unknown source '{0}'; expected one of test-tone, poly-synth, drum-kit or clap")]
+    #[error("unknown source '{0}'; expected one of test-tone, poly-synth or drum-kit")]
     Unknown(String),
-    /// Asked for `clap` on a session that has no CLAP instrument loaded. A
-    /// normal answer, not a malfunction: the environment variable is a step
-    /// affordance and most sessions do not set it.
+    /// A `clap:` id arrived where only a built-in was expected. Always a UI bug:
+    /// the webview has the bundle path from the scan and must send it.
     #[error(
-        "no CLAP instrument is loaded; set {CLAP_INSTRUMENT_ENV}=<bundle>;<plugin id> \
-         before starting MYDAW"
+        "the CLAP plugin '{plugin_id}' must be chosen with its bundle path; \
+         use set_track_source_clap"
     )]
-    ClapNotConfigured,
+    ClapNeedsBundle { plugin_id: String },
     /// The instruments plugin did not contribute the node this source names.
     /// Always a wiring bug, never a runtime condition.
     #[error("the built-in instrument '{0}' is not registered")]
@@ -203,8 +284,8 @@ pub enum SourceError {
     /// The audio thread has not picked up previous swaps. Retryable.
     #[error("the source queue is full; the audio thread has not picked up previous swaps")]
     QueueFull,
-    /// Whatever the main thread reported while activating the CLAP instrument,
-    /// or a timeout when the run loop never answered.
+    /// Whatever the main thread reported while creating the CLAP instance, or a
+    /// timeout when the run loop never answered.
     #[error("{0}")]
     MainThread(String),
 }
@@ -221,6 +302,22 @@ pub struct SourceNode {
 impl SourceNode {
     pub fn new(node: Box<dyn RtNode>, gated: bool) -> Self {
         Self { node, gated }
+    }
+}
+
+/// A source that produces nothing at all.
+///
+/// The placeholder a CLAP-headed track renders while its instance is being
+/// attached: at startup, and for the few milliseconds of a graph rebuild.
+/// Silence rather than a fallback instrument on purpose -- a track the user set
+/// to a synthesiser must not answer with a sine wave because the host was
+/// briefly busy, and a *momentary gap* is a far smaller lie than a *wrong
+/// sound*.
+pub struct SilentNode;
+
+impl RtNode for SilentNode {
+    fn process(&mut self, ctx: &mut ProcessCtx) {
+        ctx.buffers.silence();
     }
 }
 
@@ -293,8 +390,8 @@ fn source_channel(
 
 /// The shell's handle on the head of the chain. `Send + Sync`.
 ///
-/// Created once at boot and reused across stream restarts: `attach` gives it
-/// the sender for the current stream, `detach` takes it back. Holding it in
+/// Created once at boot and reused across stream restarts: `open` gives it the
+/// sender for the current stream, `close` takes it back. Holding it in
 /// [`AppState`](crate::AppState) means a Tauri command can change the
 /// instrument without going anywhere near the main thread -- which is most of
 /// the point of doing the swap at node granularity.
@@ -340,10 +437,11 @@ impl SourceHandle {
     /// [`AudioIoError::NotRunning`] when no stream is open, or
     /// [`SourceError::QueueFull`] when the audio thread is behind (retryable).
     pub fn install(&self, node: Box<dyn RtNode>, source: Source) -> Result<(), SourceError> {
+        let gated = source.gated();
         let mut guard = self.sender.lock();
         let sender = guard.as_mut().ok_or(AudioIoError::NotRunning)?;
         // Allocated here, on this non-RT thread, which is the whole contract.
-        let owned = Owned::new(&sender.gc, SourceNode::new(node, source.gated()));
+        let owned = Owned::new(&sender.gc, SourceNode::new(node, gated));
         // On failure the rejected node is returned inside the error and dropped
         // right here, deliberately not on the audio thread. An *abandoned*
         // queue is a stream that has stopped since this sender was attached,
@@ -363,7 +461,7 @@ impl SourceHandle {
 
     /// The source last installed.
     pub fn current(&self) -> Source {
-        *self.current.lock()
+        self.current.lock().clone()
     }
 
     /// Whether a stream's channel is attached. Diagnostics and tests.
@@ -381,6 +479,16 @@ impl std::fmt::Debug for SourceHandle {
     }
 }
 
+/// What a source *is*, for a picker that groups them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SourceKindDto {
+    /// A generator that ships with MYDAW.
+    Internal,
+    /// A hosted CLAP instrument found by the scan.
+    Clap,
+}
+
 /// One source, as the webview sees it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,202 +496,97 @@ pub struct SourceDto {
     pub id: String,
     pub label: String,
     pub description: String,
-    /// Whether this source can be selected right now. Only `clap` is ever
-    /// unavailable, and only because no bundle was named at startup.
-    pub available: bool,
-    /// Whether this source is the one currently playing.
+    /// Whether this is a built-in or a scanned CLAP plugin, so the picker can
+    /// group them under headings rather than mixing them into one list.
+    pub kind: SourceKindDto,
+    /// Vendor, for a CLAP plugin. Empty for a built-in and for a bundle that
+    /// declares none.
+    pub vendor: String,
+    /// Bundle path, for a CLAP plugin. The webview sends it straight back to
+    /// [`set_track_source_clap`](crate::commands::set_track_source_clap), so it
+    /// never has to be re-derived from an id.
+    pub bundle_path: Option<String>,
+    /// CLAP plugin id, for a CLAP plugin.
+    pub plugin_id: Option<String>,
+    /// Whether this source is the one the selected track is playing.
     pub selected: bool,
     /// Whether the computer-keyboard piano does anything for this source.
     pub takes_notes: bool,
 }
 
 impl SourceDto {
-    /// Describe `source` in the context of the running session.
-    pub fn new(source: Source, current: Source, clap_available: bool) -> Self {
+    /// Describe a built-in source in the context of the running session.
+    pub fn built_in(source: &Source, current: &Source) -> Self {
         Self {
-            id: source.id().to_owned(),
-            label: source.label().to_owned(),
-            description: source.description().to_owned(),
-            available: source != Source::Clap || clap_available,
+            id: source.id(),
+            label: source.label(),
+            description: source.description(),
+            kind: SourceKindDto::Internal,
+            vendor: String::new(),
+            bundle_path: None,
+            plugin_id: None,
             selected: source == current,
             takes_notes: source.takes_notes(),
         }
     }
-}
 
-/// One queued request: the track it is for, and the channel its answer goes
-/// back on.
-type PendingClapSource = (usize, SyncSender<Result<(), String>>);
-
-/// Mailbox between a Tauri command and the main thread's CLAP instrument.
-///
-/// See the module docs. Same shape as
-/// [`ClapGuiBridge`](crate::gui_bridge::ClapGuiBridge), and for the same
-/// reason: the thing being asked for is `!Send` and thread-bound.
-pub struct ClapSourceBridge {
-    queue: Mutex<VecDeque<PendingClapSource>>,
-    /// Whether a CLAP instrument was loaded at startup. Published by the main
-    /// thread so a command can reject `clap` without a round trip -- and, more
-    /// importantly, so the UI can grey the option out instead of offering a
-    /// button that always fails.
-    available: AtomicBool,
-    waker: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
-}
-
-impl Default for ClapSourceBridge {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl ClapSourceBridge {
-    pub fn new() -> Self {
-        Self {
-            queue: Mutex::new(VecDeque::new()),
-            available: AtomicBool::new(false),
-            waker: Mutex::new(None),
-        }
-    }
-
-    /// Record whether a CLAP instrument is loaded. Called once by the shell.
-    pub fn set_available(&self, available: bool) {
-        self.available.store(available, Ordering::Release);
-    }
-
-    /// Whether `clap` is a selectable source in this session.
-    pub fn is_available(&self) -> bool {
-        self.available.load(Ordering::Acquire)
-    }
-
-    /// Install the callback that wakes the event loop.
-    pub fn set_waker(&self, waker: Box<dyn Fn() + Send + Sync>) {
-        *self.waker.lock() = Some(waker);
-    }
-
-    /// Ask the main thread to make the CLAP instrument `track`'s source, and
-    /// wait.
+    /// Describe a scanned CLAP instrument.
     ///
-    /// # Errors
-    /// [`SourceError::ClapNotConfigured`] without a round trip when no bundle
-    /// was loaded, or [`SourceError::MainThread`] carrying whatever the main
-    /// thread said -- including a timeout, which is what a build with no window
-    /// (a headless capture, a test) produces.
-    pub fn request(&self, track: usize) -> Result<(), SourceError> {
-        if !self.is_available() {
-            return Err(SourceError::ClapNotConfigured);
+    /// `selected` compares the **plugin id and bundle path**, not the display
+    /// name: two builds of the same plugin can share a name, and a picker that
+    /// ticked the wrong one would be worse than one that ticked none.
+    pub fn clap(info: &ClapPluginInfo, current: &Source) -> Self {
+        let reference = ClapSourceRef::from(info);
+        let selected = current
+            .clap_ref()
+            .is_some_and(|active| active.plugin_id == info.id && active.bundle_path == info.path);
+        Self {
+            id: reference.wire_id(),
+            label: reference.label().to_owned(),
+            description: if info.vendor.is_empty() {
+                info.id.clone()
+            } else {
+                format!("{} — {}", info.vendor, info.id)
+            },
+            kind: SourceKindDto::Clap,
+            vendor: info.vendor.clone(),
+            bundle_path: Some(info.path.display().to_string()),
+            plugin_id: Some(info.id.clone()),
+            selected,
+            takes_notes: true,
         }
-        let (reply, answer) = sync_channel(1);
-        self.queue.lock().push_back((track, reply));
-        if let Some(waker) = self.waker.lock().as_ref() {
-            waker();
-        }
-
-        match answer.recv_timeout(CLAP_SOURCE_TIMEOUT) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(message)) => Err(SourceError::MainThread(message)),
-            Err(_) => Err(SourceError::MainThread(format!(
-                "the main thread did not answer within {} s; is the window still open?",
-                CLAP_SOURCE_TIMEOUT.as_secs()
-            ))),
-        }
-    }
-
-    /// Take every queued request. Called from the main thread.
-    pub fn drain(&self) -> Vec<PendingClapSource> {
-        self.queue.lock().drain(..).collect()
-    }
-
-    /// How many requests are waiting. Diagnostics and tests.
-    pub fn pending(&self) -> usize {
-        self.queue.lock().len()
     }
 }
 
-impl std::fmt::Debug for ClapSourceBridge {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClapSourceBridge")
-            .field("available", &self.is_available())
-            .field("pending", &self.pending())
-            .finish()
-    }
-}
-
-/// Serve every queued CLAP-source request. **Main thread only.**
+/// A bundle path that arrived from the webview, checked before it reaches a
+/// loader.
 ///
-/// Called from the run loop's `MainEventsCleared`, next to the plugin-GUI host,
-/// because it needs the same `!Send` [`LoadedClapPlugin`] the editor does.
-///
-/// Waits (up to [`CLAP_RETIRE_WAIT`]) for a previously installed node to come
-/// back from the collector before re-activating: a plugin can only be active
-/// once, so switching away and back is exactly the case that needs the wait.
-/// The wait only happens on that path, and only after the user asked for it.
-///
-/// There is one plugin instance, so a burst of requests naming *different*
-/// tracks cannot all be honoured: the first queued one wins and the rest are
-/// told why. Only a user clicking two mixer strips inside one frame produces
-/// that, and saying so beats silently activating the wrong track.
-pub fn serve_clap_source_requests(
-    bridge: &ClapSourceBridge,
-    host: &crate::tracks::TrackHost,
-    instrument: Option<&mut LoadedClapPlugin>,
-    stream: Option<(f64, usize)>,
-) {
-    let mut pending = bridge.drain().into_iter();
-    let Some((track, reply)) = pending.next() else {
-        return;
-    };
-    let answer = build_clap_source(host, track, instrument, stream);
-    // A command that timed out has dropped its receiver; that is its business,
-    // and it must not panic this thread.
-    let _ = reply.try_send(answer);
-    for (_, superseded) in pending {
-        let _ = superseded.try_send(Err(
-            "another track claimed the CLAP instrument first; there is only one instance"
-                .to_owned(),
+/// # Errors
+/// [`SourceError::MainThread`] with a sentence naming the path, for an empty
+/// string or one that is not a file. Rejecting here rather than in the loader
+/// means the user is told "there is no such bundle" instead of the OS loader's
+/// error number.
+pub fn check_bundle_path(path: &str) -> Result<PathBuf, SourceError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(SourceError::MainThread(
+            "a CLAP bundle path cannot be empty".to_owned(),
         ));
     }
-}
-
-/// The body of [`serve_clap_source_requests`], separated so the error strings
-/// are written once.
-fn build_clap_source(
-    host: &crate::tracks::TrackHost,
-    track: usize,
-    instrument: Option<&mut LoadedClapPlugin>,
-    stream: Option<(f64, usize)>,
-) -> Result<(), String> {
-    let Some(plugin) = instrument else {
-        return Err(SourceError::ClapNotConfigured.to_string());
-    };
-    let Some((sample_rate, max_block)) = stream else {
-        return Err(AudioIoError::NotRunning.to_string());
-    };
-
-    // The previous node is retired by the `basedrop` collector some time after
-    // the slot swapped it out, and `activate()` cannot run until it is.
-    let deadline = Instant::now() + CLAP_RETIRE_WAIT;
-    while plugin.is_active() && Instant::now() < deadline {
-        if plugin.collect_retired() > 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(5));
+    let path = Path::new(trimmed);
+    if !path.exists() {
+        return Err(SourceError::MainThread(format!(
+            "there is no CLAP bundle at {}",
+            path.display()
+        )));
     }
-
-    let node = clap_instrument_node(plugin, sample_rate, max_block).ok_or_else(|| {
-        format!(
-            "the CLAP instrument '{}' could not be activated; see the log",
-            plugin.info().id
-        )
-    })?;
-    host.install_source(track, Source::Clap, node)
-        .map_err(|err| err.to_string())
+    Ok(path.to_path_buf())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use mydaw_rt_core::{AudioBuffers, TransportSnapshot};
-    use std::thread::sleep;
 
     /// Writes a constant, so a test can tell one source from another.
     struct ConstNode(f32);
@@ -602,18 +605,22 @@ mod tests {
         buffers.as_slices()[0][0]
     }
 
+    fn fixture_ref() -> ClapSourceRef {
+        ClapSourceRef::new(r"C:\plugins\thing.clap", "com.acme.thing").named("Acme Thing")
+    }
+
     #[test]
-    fn every_source_has_a_stable_id_that_round_trips() {
-        for source in Source::ALL {
-            assert_eq!(Source::parse(source.id()).unwrap(), source);
+    fn every_built_in_source_has_a_stable_id_that_round_trips() {
+        for source in Source::BUILT_IN {
+            assert_eq!(Source::parse(&source.id()).unwrap(), source);
             assert!(!source.label().is_empty());
             assert!(!source.description().is_empty());
         }
         // The ids are persisted by the UI and will be persisted by project
         // files; changing one is a breaking change, so they are pinned here.
         assert_eq!(
-            Source::ALL.map(Source::id),
-            ["poly-synth", "drum-kit", "test-tone", "clap"]
+            Source::BUILT_IN.map(|source| source.id()),
+            ["poly-synth", "drum-kit", "test-tone"]
         );
         assert_eq!(Source::DEFAULT, Source::PolySynth);
     }
@@ -626,10 +633,52 @@ mod tests {
     }
 
     #[test]
+    fn a_clap_id_alone_is_refused_because_it_names_no_bundle() {
+        // Two copies of the same plugin can be installed; guessing which one a
+        // bare id meant is exactly the sort of silent wrongness this refuses.
+        let err = Source::parse("clap:com.acme.thing").unwrap_err();
+        assert!(
+            matches!(err, SourceError::ClapNeedsBundle { ref plugin_id } if plugin_id == "com.acme.thing")
+        );
+        assert!(err.to_string().contains("set_track_source_clap"), "{err}");
+    }
+
+    #[test]
+    fn a_clap_source_carries_everything_a_project_file_needs_to_reload_it() {
+        let source = Source::Clap(fixture_ref());
+        assert!(source.is_clap());
+        assert!(source.takes_notes());
+        assert!(!source.gated());
+        assert_eq!(source.id(), "clap:com.acme.thing");
+        assert_eq!(source.label(), "Acme Thing");
+
+        let reference = source.clap_ref().expect("a CLAP source has one");
+        assert_eq!(reference.plugin_id, "com.acme.thing");
+        assert_eq!(
+            reference.bundle_path,
+            PathBuf::from(r"C:\plugins\thing.clap")
+        );
+        assert_eq!(source.instrument_type_id(), None);
+    }
+
+    #[test]
+    fn a_clap_plugin_with_no_display_name_falls_back_to_its_id() {
+        // CLAP only requires an id; a bundle that declares no name must still
+        // produce a strip label a user can read.
+        let anonymous = ClapSourceRef::new("x.clap", "com.acme.anonymous");
+        assert_eq!(anonymous.label(), "com.acme.anonymous");
+        assert_eq!(anonymous.wire_id(), "clap:com.acme.anonymous");
+    }
+
+    #[test]
     fn only_the_test_tone_is_gated_and_only_it_ignores_notes() {
         assert!(Source::TestTone.gated());
         assert!(!Source::TestTone.takes_notes());
-        for source in [Source::PolySynth, Source::DrumKit, Source::Clap] {
+        for source in [
+            Source::PolySynth,
+            Source::DrumKit,
+            Source::Clap(fixture_ref()),
+        ] {
             assert!(
                 !source.gated(),
                 "{} must sound with Stop pressed",
@@ -650,7 +699,6 @@ mod tests {
             );
         }
         assert_eq!(Source::TestTone.instrument_type_id(), None);
-        assert_eq!(Source::Clap.instrument_type_id(), None);
     }
 
     #[test]
@@ -798,154 +846,81 @@ mod tests {
         assert_eq!(render(&mut slot, &mut buffers), 0.0);
     }
 
-    /// A host on the default two-track project, for the tests that need one.
-    fn host() -> crate::tracks::TrackHost {
-        crate::tracks::TrackHost::new(
-            Arc::new(mydaw_plugin_test_tone::TestToneFactory::new()),
-            Arc::new(mydaw_plugin_instruments::InstrumentRegistry::new()),
-        )
+    #[test]
+    fn the_placeholder_for_an_unattached_clap_track_is_silence_not_a_tone() {
+        // A track set to a synthesiser must not answer with a sine wave because
+        // the host was briefly busy attaching the plugin.
+        let mut buffers = AudioBuffers::new(8);
+        for channel in buffers.as_mut_slices() {
+            channel.fill(0.7);
+        }
+        let mut node = SilentNode;
+        {
+            let mut ctx = ProcessCtx::new(&mut buffers, 48_000.0, 8, TransportSnapshot::default());
+            node.process(&mut ctx);
+        }
+        assert!(buffers.as_slices()[0].iter().all(|sample| *sample == 0.0));
     }
 
     #[test]
-    fn the_clap_bridge_refuses_without_a_round_trip_when_nothing_is_loaded() {
-        let bridge = ClapSourceBridge::new();
-        assert!(!bridge.is_available());
-        assert!(matches!(
-            bridge.request(0),
-            Err(SourceError::ClapNotConfigured)
-        ));
-        assert_eq!(
-            bridge.pending(),
-            0,
-            "nothing may be queued for the main thread"
-        );
-    }
+    fn the_dto_separates_built_ins_from_scanned_plugins_for_the_picker() {
+        let info = ClapPluginInfo {
+            id: "com.acme.thing".to_owned(),
+            name: "Acme Thing".to_owned(),
+            vendor: "Acme".to_owned(),
+            version: "1.0".to_owned(),
+            path: PathBuf::from(r"C:\plugins\thing.clap"),
+            features: vec!["instrument".to_owned()],
+        };
+        let current = Source::Clap(ClapSourceRef::from(&info));
 
-    #[test]
-    fn a_clap_request_is_queued_answered_and_woken() {
-        let bridge = Arc::new(ClapSourceBridge::new());
-        bridge.set_available(true);
-        let woken = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&woken);
-        bridge.set_waker(Box::new(move || flag.store(true, Ordering::Release)));
-
-        let main_thread = Arc::clone(&bridge);
-        let loop_thread = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            loop {
-                let pending = main_thread.drain();
-                if let Some((track, reply)) = pending.into_iter().next() {
-                    assert_eq!(track, 1, "the request names the track it is for");
-                    let _ = reply.try_send(Ok(()));
-                    return;
-                }
-                assert!(Instant::now() < deadline, "the request never arrived");
-                sleep(Duration::from_millis(5));
-            }
-        });
-
-        bridge.request(1).expect("the main thread answered");
-        assert!(woken.load(Ordering::Acquire), "the loop must be poked");
-        assert_eq!(bridge.pending(), 0);
-        loop_thread.join().unwrap();
-    }
-
-    #[test]
-    fn an_error_from_the_main_thread_reaches_the_caller_verbatim() {
-        let bridge = Arc::new(ClapSourceBridge::new());
-        bridge.set_available(true);
-        let main_thread = Arc::clone(&bridge);
-        let loop_thread = std::thread::spawn(move || loop {
-            if let Some((_, reply)) = main_thread.drain().into_iter().next() {
-                let _ = reply.try_send(Err("this plugin will not activate".to_owned()));
-                return;
-            }
-            sleep(Duration::from_millis(5));
-        });
-
-        let err = bridge.request(0).unwrap_err();
-        assert_eq!(err.to_string(), "this plugin will not activate");
-        loop_thread.join().unwrap();
-    }
-
-    #[test]
-    fn serving_a_request_with_no_plugin_answers_rather_than_hanging() {
-        let bridge = ClapSourceBridge::new();
-        bridge.set_available(true);
-        let host = host();
-        let (reply, answer) = sync_channel(1);
-        bridge.queue.lock().push_back((0, reply));
-
-        serve_clap_source_requests(&bridge, &host, None, Some((48_000.0, 512)));
-        let outcome = answer.try_recv().expect("answered immediately");
-        assert!(outcome.is_err());
-        assert_eq!(bridge.pending(), 0);
-    }
-
-    #[test]
-    fn a_second_request_in_the_same_frame_is_told_it_lost_rather_than_ignored() {
-        let bridge = ClapSourceBridge::new();
-        bridge.set_available(true);
-        let host = host();
-        let (first, first_answer) = sync_channel(1);
-        let (second, second_answer) = sync_channel(1);
-        bridge.queue.lock().push_back((0, first));
-        bridge.queue.lock().push_back((1, second));
-
-        serve_clap_source_requests(&bridge, &host, None, Some((48_000.0, 512)));
-        assert!(first_answer.try_recv().expect("answered").is_err());
-        let loser = second_answer
-            .try_recv()
-            .expect("also answered")
-            .unwrap_err();
-        assert!(loser.contains("only one instance"), "{loser}");
-        assert_eq!(bridge.pending(), 0);
-    }
-
-    #[test]
-    fn serving_with_no_pending_request_does_nothing_at_all() {
-        let bridge = ClapSourceBridge::new();
-        let host = host();
-        serve_clap_source_requests(&bridge, &host, None, None);
-        assert_eq!(bridge.pending(), 0);
-        assert_eq!(host.selected_source(), Source::DrumKit);
-    }
-
-    #[test]
-    fn the_dto_marks_availability_and_selection_for_the_webview() {
-        let listed: Vec<SourceDto> = Source::ALL
-            .into_iter()
-            .map(|source| SourceDto::new(source, Source::DrumKit, false))
-            .collect();
-
-        assert_eq!(listed.len(), 4);
-        assert!(listed.iter().filter(|dto| dto.selected).count() == 1);
-        assert!(
-            listed
-                .iter()
-                .find(|dto| dto.id == "drum-kit")
-                .unwrap()
-                .selected
-        );
-        let clap = listed.iter().find(|dto| dto.id == "clap").unwrap();
-        assert!(!clap.available, "no bundle was loaded");
-        assert!(listed
+        let built_in: Vec<SourceDto> = Source::BUILT_IN
             .iter()
-            .filter(|dto| dto.id != "clap")
-            .all(|dto| dto.available));
+            .map(|source| SourceDto::built_in(source, &current))
+            .collect();
+        assert_eq!(built_in.len(), 3);
+        assert!(built_in
+            .iter()
+            .all(|dto| dto.kind == SourceKindDto::Internal));
         assert!(
-            !listed
-                .iter()
-                .find(|dto| dto.id == "test-tone")
-                .unwrap()
-                .takes_notes
+            built_in.iter().all(|dto| !dto.selected),
+            "a CLAP source is playing, so no built-in is"
         );
+        assert!(built_in.iter().all(|dto| dto.bundle_path.is_none()));
+
+        let hosted = SourceDto::clap(&info, &current);
+        assert_eq!(hosted.kind, SourceKindDto::Clap);
+        assert!(hosted.selected);
+        assert_eq!(hosted.id, "clap:com.acme.thing");
+        assert_eq!(hosted.vendor, "Acme");
+        assert!(hosted.bundle_path.is_some());
+        assert!(hosted.takes_notes);
+
+        // The same plugin id from a different bundle is *not* the one playing.
+        let elsewhere = ClapPluginInfo {
+            path: PathBuf::from(r"D:\other\thing.clap"),
+            ..info.clone()
+        };
+        assert!(!SourceDto::clap(&elsewhere, &current).selected);
 
         // The webview reads camelCase.
-        let json = serde_json::to_string(&listed[0]).unwrap();
+        let json = serde_json::to_string(&hosted).unwrap();
         assert!(json.contains("\"takesNotes\""), "{json}");
+        assert!(json.contains("\"bundlePath\""), "{json}");
+        assert!(json.contains("\"kind\":\"clap\""), "{json}");
+    }
 
-        let with_clap = SourceDto::new(Source::Clap, Source::Clap, true);
-        assert!(with_clap.available && with_clap.selected);
+    #[test]
+    fn a_bundle_path_from_the_webview_is_checked_before_it_reaches_a_loader() {
+        assert!(check_bundle_path("").is_err());
+        assert!(check_bundle_path("   ").is_err());
+        let missing = std::env::temp_dir().join("mydaw-no-such-bundle-5e21.clap");
+        let err = check_bundle_path(&missing.display().to_string()).unwrap_err();
+        assert!(err.to_string().contains("no CLAP bundle"), "{err}");
+
+        // A path that does exist is accepted and trimmed.
+        let existing = std::env::temp_dir();
+        let padded = format!("  {}  ", existing.display());
+        assert_eq!(check_bundle_path(&padded).unwrap(), existing);
     }
 }

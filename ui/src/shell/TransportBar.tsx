@@ -1,4 +1,4 @@
-import { createSignal, For, Show, type JSX } from 'solid-js';
+import { createSignal, Index, Show, type JSX } from 'solid-js';
 import { formatTimecode } from '../lib/playhead';
 import { useAppState } from '../state';
 
@@ -20,12 +20,18 @@ const PIXELS_PER_BPM = 4;
  * by Rust if it somehow still escapes the range -- a tempo of 0 would divide the
  * scheduler's step length by zero, so it is checked in both languages.
  *
- * The source selector is segmented buttons rather than a dropdown because the
- * list is short, fixed, and worth reading at a glance: which instrument is
- * playing is the single most important piece of state on this bar, and a
- * collapsed `<select>` would hide it behind a click. An unavailable source
- * (`CLAP`, when no bundle was named at startup) stays visible and disabled --
- * "you could have one" is useful, "it does not exist" is not.
+ * # The source selector is a dropdown now
+ * It used to be a row of segmented buttons, on the grounds that the list was
+ * short, fixed, and worth reading at a glance. The list is no longer any of
+ * those things: it is the three built-ins plus every CLAP instrument installed
+ * on the machine, which on a working system is dozens and has no upper bound.
+ * A button row would either overflow the bar or squeeze the transport off it.
+ * A `<select>` costs a click to *browse* but still shows the current choice
+ * without one, which is the part that mattered.
+ *
+ * The optgroups are the same two the mixer strip uses -- `Built in` and
+ * `CLAP instruments` -- because they are the same list, and a user who learns
+ * the shape of it in one place should recognise it in the other.
  */
 export function TransportBar(): JSX.Element {
   const app = useAppState();
@@ -38,6 +44,23 @@ export function TransportBar(): JSX.Element {
   const selectedTrackName = () => {
     const mixer = app.mixer();
     return mixer?.tracks.find((track) => track.selected)?.name;
+  };
+
+  const builtIns = () => app.sources().filter((source) => source.kind === 'internal');
+  const instruments = () => app.sources().filter((source) => source.kind === 'clap');
+
+  /** The source currently on the selected track, `''` before the list arrives. */
+  const currentSourceId = () => app.currentSource()?.id ?? '';
+
+  /**
+   * Put the chosen source on the selected track. Which track that is comes from
+   * the mixer rather than being remembered here, so this bar and the mixer panel
+   * can never disagree about who the keyboard is playing.
+   */
+  const pick = (id: string) => {
+    const source = app.sources().find((entry) => entry.id === id);
+    const track = app.mixer()?.selected;
+    if (source && track !== undefined) app.placeSource(track, source);
   };
 
   /** Accept what was typed, ignoring anything that is not a tempo. */
@@ -123,30 +146,49 @@ export function TransportBar(): JSX.Element {
             track here is what keeps that from being a surprise; the mixer panel
             is where you change which track it is.
           */}
-          <span class="source__label" title="The source of the selected track">
+          <label class="source__label" for="source" title="The source of the selected track">
             {selectedTrackName() ?? 'Source'}
-          </span>
-          <div class="segmented" role="group" aria-label="Instrument source">
-            <For each={app.sources()}>
-              {(source) => (
-                <button
-                  type="button"
-                  class="segmented__button"
-                  classList={{ 'is-active': source.selected }}
-                  disabled={!source.available}
-                  aria-pressed={source.selected}
-                  title={
-                    source.available
-                      ? source.description
-                      : `${source.description} — not loaded in this session`
-                  }
-                  onClick={() => app.selectSource(source.id)}
-                >
-                  {source.label}
-                </button>
-              )}
-            </For>
-          </div>
+          </label>
+          {/*
+            `<Index>`, not `<For>`: the whole list is re-fetched after every
+            mixer command, so each `SourceDto` is a new object every time and
+            `<For>` would rebuild every option on a fader move. The order is
+            fixed (built-ins, then the scan), so keying by position is right.
+          */}
+          <select
+            id="source"
+            class="source__select"
+            value={currentSourceId()}
+            aria-label="Instrument source for the selected track"
+            title={app.currentSource()?.description ?? 'The source of the selected track'}
+            onChange={(event) => pick(event.currentTarget.value)}
+          >
+            <optgroup label="Built in">
+              <Index each={builtIns()}>
+                {(source) => (
+                  <option value={source().id} title={source().description}>
+                    {source().label}
+                  </option>
+                )}
+              </Index>
+            </optgroup>
+            <optgroup label="CLAP instruments">
+              <Index each={instruments()}>
+                {(source) => (
+                  <option
+                    value={source().id}
+                    title={
+                      source().vendor
+                        ? `${source().label} — ${source().vendor}`
+                        : source().label
+                    }
+                  >
+                    {source().label}
+                  </option>
+                )}
+              </Index>
+            </optgroup>
+          </select>
         </div>
       </Show>
 

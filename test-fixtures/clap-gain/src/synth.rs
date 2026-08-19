@@ -32,6 +32,54 @@
 //! and not at the start of the block. Live input always arrives at offset 0
 //! today, but the sequencer will not, and a fixture that ignored offsets could
 //! not tell the difference.
+//!
+//! # State: `clap.state`, and why it is a detune
+//! This plugin implements the CLAP `state` extension, so the host's
+//! save/load/preset path has something real to test against. The gain fixture
+//! deliberately does *not* -- it is the negative case, the plugin whose
+//! `get_extension("clap.state")` comes back null, and the host's "this plugin
+//! cannot be saved" branch needs a subject too.
+//!
+//! The saved value is a **detune in semitones** ([`state_blob`],
+//! [`parse_state`]), and that choice is the whole point. A state extension is
+//! trivial to test byte-wise -- write eight bytes, read eight bytes back, assert
+//! they match -- but a byte-wise test proves only that the host moved a buffer
+//! around; it would still pass if the plugin ignored the loaded value entirely.
+//! Detune closes that hole: it moves the sounding pitch, and pitch is a spectral
+//! peak, so a host test can load a blob, render a note, run an FFT, and assert
+//! on the *sound*. Load detune `12.0`, hold key 69, and the dominant bin has to
+//! land on 880 Hz instead of 440 Hz. A gain-shaped state value would not do
+//! this nearly as well: a wrong gain is easy to confuse with an envelope, a
+//! meter's ballistics, or a host applying its own trim, whereas a frequency is
+//! either there or it is not.
+//!
+//! ## Blob layout
+//! Eight bytes, fixed:
+//!
+//! | Offset | Size | Contents |
+//! | --- | --- | --- |
+//! | 0 | 4 | [`STATE_MAGIC`] (`MFS1`, "MYDAW Fixture Synth, version 1") |
+//! | 4 | 4 | detune in semitones, `f32`, little-endian |
+//!
+//! The magic exists so a host test can assert on the exact bytes and so a blob
+//! from some *other* plugin, fed in by a confused host, is rejected loudly
+//! instead of being read as a nonsense pitch. Little-endian is not a portability
+//! statement, it is a choice: MYDAW targets little-endian machines, and picking
+//! an explicit encoding beats `to_ne_bytes` silently meaning two different
+//! things. The detune is clamped to ±[`MAX_DETUNE_SEMITONES`] (two octaves) on
+//! the way in and on the way out, and a non-finite value is not storable at all
+//! -- an infinite `phase_step` would poison the voice array for the rest of the
+//! session, and "the fixture went silent forever" is the least debuggable
+//! failure a test can have.
+//!
+//! ## Where the detune is applied
+//! [`SynthShared`] holds the value in an atomic, because CLAP's `state.load` is
+//! a *main-thread* call while the DSP reads it on the audio thread. The
+//! processor re-reads it once per [`SynthProcessor::process`] call, not once per
+//! sample, and recomputes every active voice's `phase_step` from its stored
+//! `base_hz`. So a load lands on the next block for notes that are *already
+//! held* -- which is what a host test wants, since it can start a note, load a
+//! preset, and hear the pitch move without having to re-trigger anything.
 
 use clack_extensions::audio_ports::{
     AudioPortFlags, AudioPortInfo, AudioPortInfoWriter, AudioPortType, PluginAudioPorts,
@@ -41,11 +89,15 @@ use clack_extensions::note_ports::{
     NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
     PluginNotePortsImpl,
 };
+use clack_extensions::state::{PluginState, PluginStateImpl};
 use clack_plugin::events::event_types::{NoteOffEvent, NoteOnEvent};
 use clack_plugin::events::spaces::CoreEventSpace;
 use clack_plugin::events::Match;
 use clack_plugin::plugin::PluginError;
 use clack_plugin::prelude::*;
+use clack_plugin::stream::{InputStream, OutputStream};
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// CLAP id of the synth fixture.
 pub const PLUGIN_ID: &str = "dev.mydaw.fixture.synth";
@@ -90,6 +142,130 @@ pub fn key_to_hz(key: u8) -> f32 {
     A4_HZ * ((f32::from(key) - A4_KEY) / 12.0).exp2()
 }
 
+// ---------------------------------------------------------------------------
+// State: the detune blob
+// ---------------------------------------------------------------------------
+
+/// First four bytes of every state blob this plugin writes: `MFS1`.
+///
+/// "MYDAW Fixture Synth, format 1". A host test asserts on these bytes
+/// directly, and a blob that does not start with them is rejected rather than
+/// reinterpreted -- a wrong-plugin blob is a host bug worth failing on, not a
+/// pitch worth guessing at.
+pub const STATE_MAGIC: [u8; 4] = *b"MFS1";
+
+/// Largest detune, in semitones, in either direction: two octaves.
+///
+/// Two octaves is generous enough that a test can pick an obviously audible
+/// offset and narrow enough that key 0 detuned down stays above DC and key 127
+/// detuned up stays below Nyquist at 44.1 kHz, so no clamp anywhere else in the
+/// DSP has to exist to keep the fixture well behaved.
+pub const MAX_DETUNE_SEMITONES: f32 = 24.0;
+
+/// Bytes this plugin's state blob always occupies: magic plus one `f32`.
+const STATE_LEN: usize = 8;
+
+/// The largest blob [`SynthMainThread::load`] will accept before giving up.
+///
+/// A host is free to hand the plugin a stream of any length, including a
+/// hostile or corrupt one. Reading into a fixed buffer and refusing anything
+/// longer keeps `load` allocation-bounded; a fixture that happily read a
+/// gigabyte because a host said so would be testing the allocator, not the
+/// state extension.
+const STATE_READ_CAP: usize = 64;
+
+/// Builds the [`STATE_LEN`]-byte state blob for a detune in semitones.
+///
+/// The value is clamped to ±[`MAX_DETUNE_SEMITONES`]; a non-finite input
+/// becomes `0.0`. Clamping here rather than rejecting means a host that asks
+/// for a silly detune still gets a blob it can round-trip, which keeps the
+/// failure modes of "bad value" and "bad bytes" from being confused with each
+/// other.
+pub fn state_blob(detune_semitones: f32) -> Vec<u8> {
+    let detune = sanitize_detune(detune_semitones);
+    let mut bytes = Vec::with_capacity(STATE_LEN);
+    bytes.extend_from_slice(&STATE_MAGIC);
+    bytes.extend_from_slice(&detune.to_le_bytes());
+    bytes
+}
+
+/// Reads a detune in semitones back out of a state blob.
+///
+/// The inverse of [`state_blob`]. Returns `None` -- never panics, for any
+/// input, including empty and truncated slices -- when the length is not
+/// [`STATE_LEN`], the magic does not match, or the stored `f32` is non-finite
+/// or outside ±[`MAX_DETUNE_SEMITONES`]. Out-of-range is a rejection here and a
+/// clamp in [`state_blob`] on purpose: this function's job is to decide whether
+/// bytes that arrived from outside are trustworthy, and bytes carrying a value
+/// this plugin would never have written are not.
+pub fn parse_state(bytes: &[u8]) -> Option<f32> {
+    if bytes.len() != STATE_LEN || bytes[..4] != STATE_MAGIC {
+        return None;
+    }
+    let raw: [u8; 4] = bytes[4..8].try_into().ok()?;
+    let detune = f32::from_le_bytes(raw);
+    if !detune.is_finite() || detune.abs() > MAX_DETUNE_SEMITONES {
+        return None;
+    }
+    Some(detune)
+}
+
+/// Frequency multiplier for a detune in semitones: `2^(semitones / 12)`.
+///
+/// Equal temperament, same as [`key_to_hz`], so a detune of exactly 12 is
+/// exactly an octave and a host test can predict the resulting spectral peak
+/// with the same arithmetic the plugin used.
+pub fn detune_ratio(semitones: f32) -> f32 {
+    (semitones / 12.0).exp2()
+}
+
+/// A detune the plugin is willing to hold: finite, and within range.
+fn sanitize_detune(semitones: f32) -> f32 {
+    if semitones.is_finite() {
+        semitones.clamp(-MAX_DETUNE_SEMITONES, MAX_DETUNE_SEMITONES)
+    } else {
+        0.0
+    }
+}
+
+/// The synth's thread-safe state: the detune, and nothing else.
+///
+/// CLAP puts `state.load` on the main thread and `process` on the audio thread,
+/// so the one value they share has to cross threads. An `AtomicU32` holding the
+/// `f32`'s bits is the whole mechanism: it is lock-free, so the audio thread
+/// never blocks behind a preset load, and it makes `Shared` [`Send`] + [`Sync`]
+/// without a mutex the RT thread would have to promise not to contend on.
+///
+/// Relaxed ordering throughout: there is exactly one value and nothing is
+/// published alongside it, so there is no happens-before relationship to
+/// establish. The worst case is that a load lands one block later than it
+/// might have, which no test can hear.
+#[derive(Debug, Default)]
+pub struct SynthShared {
+    /// Detune in semitones, as `f32::to_bits`. Zero bits is `0.0`, so
+    /// `Default` is the un-detuned plugin without a hand-written impl.
+    detune_bits: AtomicU32,
+}
+
+impl SynthShared {
+    /// The current detune, in semitones. `0.0` until something sets it.
+    pub fn detune(&self) -> f32 {
+        f32::from_bits(self.detune_bits.load(Ordering::Relaxed))
+    }
+
+    /// Sets the detune, clamped to ±[`MAX_DETUNE_SEMITONES`].
+    ///
+    /// A non-finite argument stores `0.0` rather than propagating: a NaN detune
+    /// would give every voice a NaN `phase_step`, and the fixture would go
+    /// permanently silent in a way no assertion points at its cause.
+    pub fn set_detune(&self, semitones: f32) {
+        self.detune_bits
+            .store(sanitize_detune(semitones).to_bits(), Ordering::Relaxed);
+    }
+}
+
+impl PluginShared<'_> for SynthShared {}
+
 /// One sine voice.
 ///
 /// The envelope is a single value chasing a target: `target > 0` while the key
@@ -106,7 +282,14 @@ struct Voice {
     /// the envelope reaches zero so a note-off cannot free the slot early.
     held: bool,
     phase: f32,
-    /// Phase increment per sample, in cycles.
+    /// Un-detuned frequency of the key that started this voice, in Hz.
+    ///
+    /// Kept rather than folded straight into `phase_step` so that a detune
+    /// arriving mid-note can be applied to a voice that is already sounding:
+    /// the step is derived from this every block, not once at note-on.
+    base_hz: f32,
+    /// Phase increment per sample, in cycles. Recomputed once per block from
+    /// `base_hz` and the current detune ratio.
     phase_step: f32,
     envelope: f32,
     target: f32,
@@ -121,6 +304,7 @@ impl Voice {
             channel: 0,
             held: false,
             phase: 0.0,
+            base_hz: 0.0,
             phase_step: 0.0,
             envelope: 0.0,
             target: 0.0,
@@ -137,25 +321,82 @@ impl Voice {
 pub struct SynthPlugin;
 
 impl Plugin for SynthPlugin {
-    type AudioProcessor<'a> = SynthProcessor;
-    type Shared<'a> = ();
-    type MainThread<'a> = SynthMainThread;
+    type AudioProcessor<'a> = SynthProcessor<'a>;
+    type Shared<'a> = SynthShared;
+    type MainThread<'a> = SynthMainThread<'a>;
 
-    fn declare_extensions(builder: &mut PluginExtensions<Self>, _shared: Option<&()>) {
+    fn declare_extensions(builder: &mut PluginExtensions<Self>, _shared: Option<&SynthShared>) {
         builder.register::<PluginAudioPorts>();
         // Without this a CLAP plugin formally has no note ports, and a correct
         // host will not send it a single event. Declaring it is what makes this
         // fixture a real subject for the host's note dispatch.
         builder.register::<PluginNotePorts>();
+        // The reason this plugin, and not the gain fixture, carries state: see
+        // the module docs. The gain plugin stays state-less so the host's
+        // "plugin cannot be saved" path has a subject.
+        builder.register::<PluginState>();
     }
 }
 
-/// Main-thread half: nothing but the port descriptions.
-pub struct SynthMainThread;
+/// Main-thread half: the port descriptions, and the state extension.
+///
+/// It borrows [`SynthShared`] because `state.load` arrives here, on the main
+/// thread, while the value it delivers is read by the audio thread.
+pub struct SynthMainThread<'a> {
+    shared: &'a SynthShared,
+}
 
-impl PluginMainThread<'_, ()> for SynthMainThread {}
+impl<'a> SynthMainThread<'a> {
+    /// Wraps the shared state. The only field, and the only reason this type
+    /// is no longer a unit struct.
+    pub fn new(shared: &'a SynthShared) -> Self {
+        Self { shared }
+    }
+}
 
-impl PluginAudioPortsImpl for SynthMainThread {
+impl<'a> PluginMainThread<'a, SynthShared> for SynthMainThread<'a> {}
+
+/// The CLAP `state` extension: eight bytes in, eight bytes out.
+impl PluginStateImpl for SynthMainThread<'_> {
+    fn save(&mut self, output: &mut OutputStream) -> Result<(), PluginError> {
+        output
+            .write_all(&state_blob(self.shared.detune()))
+            .map_err(|_| PluginError::Message("failed to write synth fixture state"))
+    }
+
+    fn load(&mut self, input: &mut InputStream) -> Result<(), PluginError> {
+        // Bounded read: one byte more than the cap and the blob is refused
+        // outright. `take` keeps a host that streams forever from growing the
+        // buffer past `STATE_READ_CAP`.
+        let mut bytes = [0_u8; STATE_READ_CAP];
+        let mut cursor = 0_usize;
+        loop {
+            let read = input
+                .read(&mut bytes[cursor..])
+                .map_err(|_| PluginError::Message("failed to read synth fixture state"))?;
+            if read == 0 {
+                break;
+            }
+            cursor += read;
+            if cursor == bytes.len() {
+                // The buffer filled: either the blob is exactly the cap or it
+                // is longer. Either way it is not ours, and refusing beats
+                // parsing a prefix of something we do not understand.
+                return Err(PluginError::Message("synth fixture state blob is too long"));
+            }
+        }
+
+        // A blob that does not parse is an error, never a silent no-op: a host
+        // that hands over the wrong bytes must find out here, not by wondering
+        // later why the pitch never moved.
+        let detune = parse_state(&bytes[..cursor])
+            .ok_or(PluginError::Message("malformed synth fixture state blob"))?;
+        self.shared.set_detune(detune);
+        Ok(())
+    }
+}
+
+impl PluginAudioPortsImpl for SynthMainThread<'_> {
     /// No audio input, one stereo output. An instrument, in CLAP's terms.
     fn count(&mut self, is_input: bool) -> u32 {
         u32::from(!is_input)
@@ -176,7 +417,7 @@ impl PluginAudioPortsImpl for SynthMainThread {
     }
 }
 
-impl PluginNotePortsImpl for SynthMainThread {
+impl PluginNotePortsImpl for SynthMainThread<'_> {
     /// One note input, no note output.
     fn count(&mut self, is_input: bool) -> u32 {
         u32::from(is_input)
@@ -199,8 +440,19 @@ impl PluginNotePortsImpl for SynthMainThread {
 }
 
 /// Audio-thread half: the voices and one scratch buffer.
-pub struct SynthProcessor {
+pub struct SynthProcessor<'a> {
     voices: [Voice; VOICES],
+    /// The detune, read from here once per `process` call.
+    ///
+    /// A borrow rather than a copy because the value can change between blocks;
+    /// a borrow that is only *loaded* once per block, rather than once per
+    /// sample, because an atomic load in the inner sample loop would be a real
+    /// cost for a value that cannot legitimately change mid-block.
+    shared: &'a SynthShared,
+    /// The detune snapshotted at the top of the current block, in semitones.
+    /// Held so that a note-on landing mid-block uses the same value the rest
+    /// of the block was tuned with.
+    detune: f32,
     sample_rate: f32,
     /// Envelope steps per sample, derived from the sample rate at activation.
     attack_step: f32,
@@ -215,7 +467,7 @@ pub struct SynthProcessor {
     counter: u64,
 }
 
-impl SynthProcessor {
+impl SynthProcessor<'_> {
     /// Envelope step per sample for a ramp of `ms` milliseconds.
     fn step_for(ms: f32, sample_rate: f32) -> f32 {
         let frames = (ms / 1000.0) * sample_rate;
@@ -240,7 +492,10 @@ impl SynthProcessor {
         voice.key = Some(key);
         voice.channel = channel;
         voice.held = true;
-        voice.phase_step = key_to_hz(key) / self.sample_rate;
+        voice.base_hz = key_to_hz(key);
+        // Provisional, so a note that starts mid-block sounds at the right
+        // pitch immediately; `retune` refreshes it at the top of every block.
+        voice.phase_step = voice.base_hz * detune_ratio(self.detune) / self.sample_rate;
         voice.target = velocity.clamp(0.0, 1.0) * VOICE_GAIN;
         voice.age = self.counter;
     }
@@ -275,6 +530,22 @@ impl SynthProcessor {
             .enumerate()
             .min_by_key(|(_, v)| v.age)
             .map_or(0, |(index, _)| index)
+    }
+
+    /// Snapshot the shared detune and re-derive every active voice's phase
+    /// step from its `base_hz`.
+    ///
+    /// Called once per block. That cadence is the audible contract of the state
+    /// extension: a preset loaded while a key is held is heard on the very next
+    /// block, without the note having to be re-triggered.
+    fn retune(&mut self) {
+        self.detune = self.shared.detune();
+        let ratio = detune_ratio(self.detune);
+        for voice in &mut self.voices {
+            if voice.is_active() {
+                voice.phase_step = voice.base_hz * ratio / self.sample_rate;
+            }
+        }
     }
 
     /// Render `frames` samples of every active voice into the scratch buffer,
@@ -314,11 +585,11 @@ impl SynthProcessor {
     }
 }
 
-impl<'a> PluginAudioProcessor<'a, (), SynthMainThread> for SynthProcessor {
+impl<'a> PluginAudioProcessor<'a, SynthShared, SynthMainThread<'a>> for SynthProcessor<'a> {
     fn activate(
         _host: HostAudioProcessorHandle<'a>,
-        _main_thread: &mut SynthMainThread,
-        _shared: &'a (),
+        _main_thread: &mut SynthMainThread<'a>,
+        shared: &'a SynthShared,
         audio_config: PluginAudioConfiguration,
     ) -> Result<Self, PluginError> {
         let sample_rate = audio_config.sample_rate as f32;
@@ -327,6 +598,8 @@ impl<'a> PluginAudioProcessor<'a, (), SynthMainThread> for SynthProcessor {
         }
         Ok(Self {
             voices: [Voice::free(); VOICES],
+            shared,
+            detune: shared.detune(),
             sample_rate,
             attack_step: Self::step_for(ATTACK_MS, sample_rate),
             release_step: Self::step_for(RELEASE_MS, sample_rate),
@@ -343,6 +616,10 @@ impl<'a> PluginAudioProcessor<'a, (), SynthMainThread> for SynthProcessor {
         mut audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
+        // One atomic load per block, then every sounding voice is re-derived
+        // from its base frequency. Allocation-free, and O(VOICES).
+        self.retune();
+
         let frames = (audio.frames_count() as usize).min(self.scratch.len());
         self.scratch[..frames].fill(0.0);
 
@@ -391,7 +668,7 @@ impl<'a> PluginAudioProcessor<'a, (), SynthMainThread> for SynthProcessor {
     }
 }
 
-impl SynthProcessor {
+impl SynthProcessor<'_> {
     fn apply_note_on(&mut self, note: &NoteOnEvent) {
         let (Some(key), Some(channel)) = (key_of(note.key()), channel_of(note.channel())) else {
             return;
@@ -476,5 +753,111 @@ mod tests {
     fn the_identity_is_distinct_from_the_gain_fixture() {
         assert_ne!(PLUGIN_ID, crate::PLUGIN_ID);
         assert!(PLUGIN_ID.starts_with("dev.mydaw.fixture."));
+    }
+
+    #[test]
+    fn the_state_blob_is_eight_bytes_of_magic_then_a_little_endian_float() {
+        // A host test asserts on these bytes, so the layout is part of the
+        // contract, not an implementation detail.
+        let blob = state_blob(0.0);
+        assert_eq!(blob.len(), 8);
+        assert_eq!(&blob[..4], &STATE_MAGIC);
+        assert_eq!(&blob[..4], b"MFS1");
+        assert_eq!(&blob[4..], &0.0_f32.to_le_bytes());
+
+        let blob = state_blob(12.0);
+        assert_eq!(&blob[4..], &12.0_f32.to_le_bytes());
+    }
+
+    #[test]
+    fn every_representable_detune_survives_a_blob_round_trip() {
+        for detune in [
+            0.0,
+            12.0,
+            -7.5,
+            MAX_DETUNE_SEMITONES,
+            -MAX_DETUNE_SEMITONES,
+            0.5,
+            -0.25,
+        ] {
+            let parsed = parse_state(&state_blob(detune));
+            assert_eq!(parsed, Some(detune), "round trip of {detune}");
+        }
+    }
+
+    #[test]
+    fn parse_state_rejects_every_shape_of_bad_input_without_panicking() {
+        // The host controls this byte slice entirely, so none of these may be
+        // an index-out-of-bounds rather than a `None`.
+        assert_eq!(parse_state(&[]), None, "empty");
+        assert_eq!(parse_state(b"MFS"), None, "three bytes, a magic prefix");
+        assert_eq!(parse_state(&[0; 4]), None, "magic-length but no payload");
+
+        let mut wrong_magic = state_blob(3.0);
+        wrong_magic[0] = b'X';
+        assert_eq!(parse_state(&wrong_magic), None, "wrong magic");
+
+        let mut too_long = state_blob(3.0);
+        too_long.push(0);
+        assert_eq!(parse_state(&too_long), None, "nine bytes");
+
+        let mut truncated = state_blob(3.0);
+        truncated.pop();
+        assert_eq!(parse_state(&truncated), None, "seven bytes");
+    }
+
+    #[test]
+    fn parse_state_rejects_a_blob_carrying_a_value_the_plugin_would_never_write() {
+        // These blobs are well formed but the payload is not storable, so they
+        // can only have come from a corrupt or foreign source.
+        for poison in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 25.0, -100.0] {
+            let mut blob = STATE_MAGIC.to_vec();
+            blob.extend_from_slice(&poison.to_le_bytes());
+            assert_eq!(parse_state(&blob), None, "blob carrying {poison}");
+        }
+    }
+
+    #[test]
+    fn state_blob_clamps_out_of_range_and_zeroes_non_finite_input() {
+        assert_eq!(parse_state(&state_blob(1000.0)), Some(MAX_DETUNE_SEMITONES));
+        assert_eq!(
+            parse_state(&state_blob(-1000.0)),
+            Some(-MAX_DETUNE_SEMITONES)
+        );
+        for poison in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(parse_state(&state_blob(poison)), Some(0.0), "{poison}");
+        }
+    }
+
+    #[test]
+    fn a_detune_of_one_octave_doubles_the_frequency() {
+        assert_eq!(detune_ratio(0.0), 1.0, "no detune is exactly unity");
+        assert!((detune_ratio(12.0) - 2.0).abs() < 1e-6);
+        assert!((detune_ratio(-12.0) - 0.5).abs() < 1e-6);
+        // The claim a host's FFT test rests on: key 69 detuned an octave up
+        // sounds at 880 Hz.
+        assert!((key_to_hz(69) * detune_ratio(12.0) - 880.0).abs() < 1e-2);
+    }
+
+    #[test]
+    fn the_shared_detune_starts_at_zero_and_only_accepts_usable_values() {
+        let shared = SynthShared::default();
+        assert_eq!(shared.detune(), 0.0);
+
+        shared.set_detune(-7.5);
+        assert_eq!(shared.detune(), -7.5);
+
+        // Out of range is clamped, not rejected: the value is still usable.
+        shared.set_detune(99.0);
+        assert_eq!(shared.detune(), MAX_DETUNE_SEMITONES);
+        shared.set_detune(-99.0);
+        assert_eq!(shared.detune(), -MAX_DETUNE_SEMITONES);
+
+        // Non-finite is replaced by silence-safe zero rather than poisoning
+        // every voice's phase step for the rest of the session.
+        shared.set_detune(f32::NAN);
+        assert_eq!(shared.detune(), 0.0);
+        shared.set_detune(f32::INFINITY);
+        assert_eq!(shared.detune(), 0.0);
     }
 }

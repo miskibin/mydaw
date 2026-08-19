@@ -2221,6 +2221,7 @@ dependencies = [
  "log",
  "mydaw-fixture-clap-gain",
  "mydaw-kernel",
+ "mydaw-plugin-debug-tap",
  "mydaw-plugin-windows",
  "mydaw-rt-core",
  "parking_lot",

@@ -298,6 +298,133 @@ fn closing_the_window_is_reported_to_the_owner() {
     assert!(!is_window(hwnd));
 }
 
+/// Step 6's headline GUI claim: **two editors, at once**.
+///
+/// Spike 3 hosted one plugin and therefore had one session; the limitation was
+/// the shell's plugin model, not the window service's. Two instances of the same
+/// bundle is also the hardest version of the case: both editors register window
+/// classes from the same loaded module, which is exactly the collision that
+/// produced an access violation during spike 3 (see that spec's finding 2) and
+/// which the module-handle-in-class-name fix exists for.
+///
+/// The assertion is per-editor liveness. Each fixture editor advances its own
+/// frame counter only from its own `on_timer`, so "both counters went up"
+/// means both instances' timers were registered, serviced and painted -- from
+/// one loop, on one thread.
+#[test]
+fn two_editors_of_two_instances_are_open_and_animating_at_the_same_time() {
+    let dir = TempDir::new("two-editors");
+    let Some(bundle) = stage_fixture_bundle(dir.path()) else {
+        eprintln!("{}", missing_fixture_message());
+        return;
+    };
+    let windows = std::sync::Arc::new(PluginWindowService::new());
+    let mut host = mydaw_plugin_host_clap::ClapInstanceHost::new(std::sync::Arc::clone(&windows));
+
+    let first = host.create(&bundle, PLUGIN_ID).expect("instance one");
+    let second = host.create(&bundle, PLUGIN_ID).expect("instance two");
+    assert_ne!(first, second, "two instances, not one shared handle");
+    assert_eq!(host.len(), 2);
+
+    let opened_first = host
+        .open_gui(first, "MYDAW Fixture Gain 1")
+        .expect("editor");
+    let opened_second = host
+        .open_gui(second, "MYDAW Fixture Gain 2")
+        .expect("editor");
+    assert!(opened_first.open && opened_second.open);
+    assert_eq!(opened_first.width, PREFERRED_SIZE.width);
+    assert_eq!(
+        host.open_editors(),
+        2,
+        "both sessions must be live at the same time"
+    );
+    assert_eq!(
+        windows.open_count(),
+        2,
+        "two native windows, not one reused"
+    );
+
+    let hwnds = [
+        host.editor_hwnd(first).expect("window one"),
+        host.editor_hwnd(second).expect("window two"),
+    ];
+    assert_ne!(hwnds[0], hwnds[1]);
+    let children = [
+        child_of(hwnds[0]).expect("instance one embedded its editor"),
+        child_of(hwnds[1]).expect("instance two embedded its editor"),
+    ];
+    assert_ne!(children[0], children[1]);
+
+    // One loop, both plugins. `ClapInstanceHost::tick` is what the shell calls
+    // from `MainEventsCleared`, and it is the only thing driving either editor.
+    let before = children.map(|child| frame_counter(child).unwrap_or(0));
+    pump_host(&mut host, Duration::from_millis(400));
+    let after = children.map(|child| frame_counter(child).expect("a painted counter"));
+    for index in 0..2 {
+        assert!(
+            after[index] > before[index],
+            "editor {index} froze ({} -> {})",
+            before[index],
+            after[index]
+        );
+    }
+
+    // Both plugins can still be activated for audio while their editors are up.
+    for id in [first, second] {
+        assert!(
+            host.create_node(id, 48_000.0, 256).is_ok(),
+            "{id} must still be activatable with its editor open"
+        );
+    }
+
+    // Closing one leaves the other alone -- the failure mode a shared session
+    // would produce.
+    host.close_gui(first);
+    assert_eq!(host.open_editors(), 1);
+    assert!(!is_window(hwnds[0]));
+    assert!(is_window(hwnds[1]));
+    pump_host(&mut host, Duration::from_millis(150));
+    let survivor = frame_counter(children[1]).unwrap();
+    assert!(
+        survivor > after[1],
+        "the surviving editor must keep animating"
+    );
+
+    host.shutdown();
+    assert_eq!(host.len(), 0);
+    assert_eq!(windows.open_count(), 0);
+    assert!(!is_window(hwnds[1]));
+}
+
+/// The application's loop for a whole [`ClapInstanceHost`]: drain the queue,
+/// then let every hosted plugin do its main-thread work.
+fn pump_host(host: &mut mydaw_plugin_host_clap::ClapInstanceHost, duration: Duration) {
+    let deadline = Instant::now() + duration;
+    let mut message = MSG {
+        hwnd: std::ptr::null_mut(),
+        message: 0,
+        wParam: 0,
+        lParam: 0,
+        time: 0,
+        pt: windows_sys::Win32::Foundation::POINT { x: 0, y: 0 },
+    };
+    loop {
+        // SAFETY: `message` is a live, owned MSG.
+        unsafe {
+            while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+        }
+        host.tick();
+        if Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(4));
+    }
+}
+
 #[test]
 fn an_editor_that_is_never_opened_costs_nothing() {
     let Some((_dir, mut plugin)) = load_fixture("idle") else {

@@ -9,7 +9,7 @@ import {
   type JSX,
 } from 'solid-js';
 import { useAppState } from '../../state';
-import type { TrackDto } from '../../api/types';
+import type { ClapSlot, ClapTarget, MasterDto, TrackDto } from '../../api/types';
 import type { PanelProps } from '../types';
 import { faderFraction, faderToDb, formatDb, panLabel, peakFraction } from './scale';
 
@@ -40,17 +40,44 @@ import { faderFraction, faderToDb, formatDb, panLabel, peakFraction } from './sc
  * nothing musical happens. `scale.ts` maps travel to dB with a curve, so the
  * loud end -- the part you actually mix in -- gets most of the throw.
  *
+ * # Plugins live in the strips
+ * A track's instrument and the master's insert are both picked from a `<select>`
+ * in the strip that owns them, because that is where the answer to "what is this
+ * strip playing" belongs -- the CLAP browser lists what is *installed*, which is
+ * a different question. The dropdown *replaces* the old static source line
+ * rather than sitting under it: the select already renders the name, a second
+ * copy of it would only compete for the 24 vertical pixels a strip can spare,
+ * and a `<select>` cannot legally live inside the strip header, which is a
+ * `<button>`.
+ *
+ * A placed plugin's editor is a *native* window, so the strip's editor button is
+ * a request to the Rust main thread rather than something rendered here. Several
+ * can be open at once -- one per strip -- and a plugin whose `hasEditor` is
+ * false gets no button at all, because "this plugin has no editor" is an
+ * ordinary fact about a plugin rather than an error to be discovered by clicking.
+ *
  * # `<Index>`, not `<For>`
  * Every mixer command answers with a whole new `MixerState`, so every `TrackDto`
  * is a new object each time. `<For>` keys by reference and would tear the strips
  * down and rebuild them on every edit -- which, mid-drag, replaces the very
  * `<input>` the pointer is captured on and ends the gesture. `<Index>` keys by
  * position and hands each strip an accessor, so a fader move updates one
- * attribute and touches nothing else. Same reasoning as the sequencer grid.
+ * attribute and touches nothing else. Same reasoning as the sequencer grid, and
+ * the same reasoning applies again inside a strip: `app.sources()` is re-fetched
+ * after every command, so its `<option>`s are built with `<Index>` too. The
+ * master's effect list is the one exception -- `app.masterEffects()` is fetched
+ * once at startup and never replaced, so `<For>` is right for it.
  */
 export function MixerPanel(_props: PanelProps): JSX.Element {
   const app = useAppState();
   const [addOpen, setAddOpen] = createSignal(false);
+
+  /**
+   * A new track always starts on a built-in. `add_track` names its source by id,
+   * and a CLAP instrument is *placed* rather than named -- so the way to a new
+   * CLAP track is: add one, then pick the plugin in its own dropdown.
+   */
+  const startingSources = () => app.sources().filter((source) => source.kind === 'internal');
 
   return (
     <div class="mixer">
@@ -64,58 +91,46 @@ export function MixerPanel(_props: PanelProps): JSX.Element {
               <Index each={mixer().tracks}>
                 {(track) => <TrackStrip track={track} />}
               </Index>
-              <MasterStrip gainDb={mixer().master.gainDb} />
+              <MasterStrip master={mixer().master} />
             </div>
 
             <div class="mixer__footer">
-              <Show
-                when={mixer().canEditLayout}
-                fallback={
-                  <span
-                    class="mixer__hint"
-                    title="A rebuild would have to recreate every node, and a hosted CLAP plugin can only be activated once."
-                  >
-                    Track layout is locked while a CLAP plugin is loaded
-                  </span>
-                }
-              >
-                <span class="mixer__hint">
-                  {mixer().tracks.length}/{mixer().maxTracks} tracks · click a name to
-                  play it from the keyboard
-                </span>
-                <div class="mixer__add">
-                  <button
-                    type="button"
-                    class="mixer__add-button"
-                    disabled={mixer().tracks.length >= mixer().maxTracks}
-                    aria-expanded={addOpen()}
-                    title="Add a track"
-                    onClick={() => setAddOpen((open) => !open)}
-                  >
-                    + Track
-                  </button>
-                  <Show when={addOpen()}>
-                    <div class="mixer__add-menu" role="menu">
-                      <For each={app.sources().filter((source) => source.available)}>
-                        {(source) => (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            class="mixer__add-item"
-                            title={source.description}
-                            onClick={() => {
-                              setAddOpen(false);
-                              app.mixerCommand((backend) => backend.addTrack(source.id));
-                            }}
-                          >
-                            {source.label}
-                          </button>
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-                </div>
-              </Show>
+              <span class="mixer__hint">
+                {mixer().tracks.length}/{mixer().maxTracks} tracks · click a name to
+                play it from the keyboard
+              </span>
+              <div class="mixer__add">
+                <button
+                  type="button"
+                  class="mixer__add-button"
+                  disabled={mixer().tracks.length >= mixer().maxTracks}
+                  aria-expanded={addOpen()}
+                  title="Add a track"
+                  onClick={() => setAddOpen((open) => !open)}
+                >
+                  + Track
+                </button>
+                <Show when={addOpen()}>
+                  <div class="mixer__add-menu" role="menu">
+                    <For each={startingSources()}>
+                      {(source) => (
+                        <button
+                          type="button"
+                          role="menuitem"
+                          class="mixer__add-item"
+                          title={source.description}
+                          onClick={() => {
+                            setAddOpen(false);
+                            app.mixerCommand((backend) => backend.addTrack(source.id));
+                          }}
+                        >
+                          {source.label}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+              </div>
             </div>
           </>
         )}
@@ -128,6 +143,20 @@ export function MixerPanel(_props: PanelProps): JSX.Element {
 function TrackStrip(props: { track: Accessor<TrackDto> }): JSX.Element {
   const app = useAppState();
   const track = props.track;
+
+  const builtIns = () => app.sources().filter((source) => source.kind === 'internal');
+  const instruments = () => app.sources().filter((source) => source.kind === 'clap');
+
+  /**
+   * Apply whatever the dropdown landed on. The id round-trips through
+   * `app.sources()` rather than being decoded here, because *how* a source is
+   * placed (named, or loaded from a bundle) is the source's own business and is
+   * decided once, in `placeSource`.
+   */
+  const pick = (id: string) => {
+    const source = app.sources().find((entry) => entry.id === id);
+    if (source) app.placeSource(track().index, source);
+  };
 
   return (
     <div
@@ -147,8 +176,50 @@ function TrackStrip(props: { track: Accessor<TrackDto> }): JSX.Element {
         }
       >
         <span class="strip__name">{track().name}</span>
-        <span class="strip__source">{track().sourceLabel}</span>
       </button>
+
+      <select
+        class="strip__picker"
+        value={track().sourceId}
+        aria-label={`${track().name} source`}
+        title={`${track().name} plays ${track().sourceLabel}`}
+        onChange={(event) => pick(event.currentTarget.value)}
+      >
+        <optgroup label="Built in">
+          <Index each={builtIns()}>
+            {(source) => (
+              <option value={source().id} title={source().description}>
+                {source().label}
+              </option>
+            )}
+          </Index>
+        </optgroup>
+        <optgroup label="CLAP instruments">
+          <Index each={instruments()}>
+            {(source) => (
+              // The vendor rides in the tooltip rather than in the option text:
+              // a strip is a few dozen pixels wide, and "Name — Vendor" would be
+              // ellipsised down to neither.
+              <option
+                value={source().id}
+                title={
+                  source().vendor
+                    ? `${source().label} — ${source().vendor}`
+                    : source().label
+                }
+              >
+                {source().label}
+              </option>
+            )}
+          </Index>
+        </optgroup>
+      </select>
+
+      <Show when={track().clap}>
+        {(clap) => (
+          <ClapEditorButton slot={clap} target={{ slot: 'track', index: track().index }} />
+        )}
+      </Show>
 
       <div class="strip__body">
         <StripMeter track={track().index} />
@@ -223,7 +294,7 @@ function TrackStrip(props: { track: Accessor<TrackDto> }): JSX.Element {
         >
           S
         </button>
-        <Show when={app.mixer()?.canEditLayout && (app.mixer()?.tracks.length ?? 0) > 1}>
+        <Show when={(app.mixer()?.tracks.length ?? 0) > 1}>
           <button
             type="button"
             class="strip__toggle strip__toggle--remove"
@@ -240,16 +311,64 @@ function TrackStrip(props: { track: Accessor<TrackDto> }): JSX.Element {
   );
 }
 
-/** The master strip: a fader, a meter, and no pan. */
-function MasterStrip(props: { gainDb: number }): JSX.Element {
+/** The master strip: a fader, a meter, a CLAP insert, and no pan. */
+function MasterStrip(props: { master: MasterDto }): JSX.Element {
   const app = useAppState();
+
+  /**
+   * `''` is the "None" option. The plugin *id* is the option value because it is
+   * unique across the whole scan, and the bundle path is looked back up from it
+   * -- one `.clap` file can export several plugins, so the pair is what the
+   * placement command needs and neither half alone would do.
+   */
+  const pick = (id: string) => {
+    if (id === '') {
+      app.mixerCommand((backend) => backend.clearMasterEffect());
+      return;
+    }
+    const plugin = app.masterEffects().find((entry) => entry.id === id);
+    if (plugin) {
+      app.mixerCommand((backend) => backend.setMasterEffectClap(plugin.path, plugin.id));
+    }
+  };
 
   return (
     <div class="strip strip--master">
       <div class="strip__header strip__header--master">
         <span class="strip__name">Master</span>
-        <span class="strip__source">sum</span>
       </div>
+
+      <select
+        class="strip__picker"
+        value={props.master.clap?.pluginId ?? ''}
+        aria-label="Master insert effect"
+        title={
+          props.master.clap
+            ? `Master insert: ${props.master.clap.name}`
+            : 'No effect on the master insert'
+        }
+        onChange={(event) => pick(event.currentTarget.value)}
+      >
+        <option value="">No insert</option>
+        <optgroup label="CLAP effects">
+          {/* Fetched once at startup and never replaced, so `<For>` is right
+              here -- see the panel docs on `<Index>` vs `<For>`. */}
+          <For each={app.masterEffects()}>
+            {(plugin) => (
+              <option
+                value={plugin.id}
+                title={plugin.vendor ? `${plugin.name} — ${plugin.vendor}` : plugin.name}
+              >
+                {plugin.name || plugin.id}
+              </option>
+            )}
+          </For>
+        </optgroup>
+      </select>
+
+      <Show when={props.master.clap}>
+        {(clap) => <ClapEditorButton slot={clap} target={{ slot: 'master' }} />}
+      </Show>
 
       <div class="strip__body">
         <StripMeter track={null} />
@@ -259,9 +378,9 @@ function MasterStrip(props: { gainDb: number }): JSX.Element {
           min="0"
           max="1"
           step="0.001"
-          value={faderFraction(props.gainDb)}
+          value={faderFraction(props.master.gainDb)}
           aria-label="Master fader"
-          title={`Master — ${formatDb(props.gainDb)}`}
+          title={`Master — ${formatDb(props.master.gainDb)}`}
           onInput={(event) =>
             app.mixerCommand((backend) =>
               backend.setMasterGain(faderToDb(Number.parseFloat(event.currentTarget.value))),
@@ -270,10 +389,42 @@ function MasterStrip(props: { gainDb: number }): JSX.Element {
         />
       </div>
 
-      <span class="strip__readout">{formatDb(props.gainDb)}</span>
+      <span class="strip__readout">{formatDb(props.master.gainDb)}</span>
       <span class="strip__readout strip__readout--pan">stereo</span>
       <div class="strip__buttons strip__buttons--master" />
     </div>
+  );
+}
+
+/**
+ * Opens or closes one placed plugin's native editor window.
+ *
+ * Renders nothing at all when the plugin has no editor: a disabled button would
+ * suggest something is temporarily wrong, when in fact this plugin will never
+ * have a window. `slot` is a `<Show>` accessor, so it re-reads `guiOpen` from
+ * whatever `MixerState` arrived last rather than keeping a second copy of it.
+ */
+function ClapEditorButton(props: { slot: Accessor<ClapSlot>; target: ClapTarget }): JSX.Element {
+  const app = useAppState();
+
+  return (
+    <Show when={props.slot().hasEditor}>
+      <button
+        type="button"
+        class="strip__editor"
+        classList={{ 'is-on': props.slot().guiOpen }}
+        aria-pressed={props.slot().guiOpen}
+        aria-label={`${props.slot().name} editor`}
+        title={
+          props.slot().guiOpen
+            ? `Close ${props.slot().name}'s editor window`
+            : `Open ${props.slot().name}'s editor in its own window`
+        }
+        onClick={() => app.toggleClapGui(props.target, !props.slot().guiOpen)}
+      >
+        {props.slot().guiOpen ? 'Close' : 'Editor'}
+      </button>
+    </Show>
   );
 }
 

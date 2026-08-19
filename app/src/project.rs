@@ -33,6 +33,7 @@
 use mydaw_rt_core::{db_to_gain, gain_to_db, MixerParams, MAX_GAIN_DB, MAX_TRACKS, SILENCE_DB};
 use serde::Serialize;
 
+use crate::clap_bridge::{ClapBoard, ClapSlotDto};
 use crate::source::Source;
 
 /// One track, as the session holds it.
@@ -88,14 +89,6 @@ pub enum TrackError {
     InvalidGain(f32),
     #[error("pan {0} is not a number between -1.0 and 1.0")]
     InvalidPan(f32),
-    /// Adding or removing a track rebuilds the graph, which destroys and
-    /// recreates every node in it -- and a hosted CLAP plugin can only be
-    /// activated once, from the main thread. See the step 5 spec.
-    #[error(
-        "adding or removing a track is not supported while a CLAP plugin is in the graph; \
-         restart MYDAW without MYDAW_CLAP_INSTRUMENT / MYDAW_CLAP_FX to change the track layout"
-    )]
-    ClapInGraph,
 }
 
 /// The session's tracks and master fader.
@@ -187,7 +180,7 @@ impl Project {
         }
         let id = self.next_id;
         self.next_id += 1;
-        let name = name.unwrap_or_else(|| source.label().to_owned());
+        let name = name.unwrap_or_else(|| source.label());
         self.tracks.push(TrackDef::new(id, name, source));
         Ok(self.tracks.len() - 1)
     }
@@ -208,9 +201,9 @@ impl Project {
         Ok(self.tracks.remove(index))
     }
 
-    /// Whether any track's source is the hosted CLAP instrument.
+    /// Whether any track is headed by a hosted CLAP instrument.
     pub fn has_clap_source(&self) -> bool {
-        self.tracks.iter().any(|track| track.source == Source::Clap)
+        self.tracks.iter().any(|track| track.source.is_clap())
     }
 
     /// Publish every track's gain, pan and effective mute, plus the master
@@ -285,13 +278,23 @@ pub struct TrackDto {
     pub silenced: bool,
     /// Whether the keyboard piano and the source selector address this track.
     pub selected: bool,
+    /// The hosted CLAP plugin heading this track, when its source is one.
+    ///
+    /// Carries what a strip needs to draw an editor button without asking a
+    /// second question: whether the plugin *has* an editor, and whether it is
+    /// open right now. Published by the main thread (see
+    /// [`ClapBoard`](crate::clap_bridge::ClapBoard)), so `get_tracks` -- which
+    /// runs after every fader move -- reads it with no round trip.
+    pub clap: Option<ClapSlotDto>,
 }
 
 /// The master strip.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MasterDto {
     pub gain_db: f32,
+    /// The hosted CLAP effect in the master insert slot, if one is placed.
+    pub clap: Option<ClapSlotDto>,
 }
 
 /// Everything the mixer panel needs in one message.
@@ -307,13 +310,15 @@ pub struct MixerStateDto {
     /// Fader bounds, so the UI does not keep its own copy of the scale.
     pub min_gain_db: f32,
     pub max_gain_db: f32,
-    /// Whether the track layout can be edited at all. False when a CLAP plugin
-    /// is in the graph; see [`TrackError::ClapInGraph`].
-    pub can_edit_layout: bool,
 }
 
 /// Render `project` for the webview.
-pub fn mixer_state_dto(project: &Project, selected: usize, can_edit_layout: bool) -> MixerStateDto {
+///
+/// `board` is the main thread's published record of which hosted plugin sits
+/// where; it is read here rather than derived from `Source::Clap` because only
+/// the main thread knows whether a plugin has an editor and whether that editor
+/// is open, and the mixer draws both.
+pub fn mixer_state_dto(project: &Project, selected: usize, board: &ClapBoard) -> MixerStateDto {
     MixerStateDto {
         tracks: project
             .tracks
@@ -323,24 +328,25 @@ pub fn mixer_state_dto(project: &Project, selected: usize, can_edit_layout: bool
                 index,
                 id: track.id,
                 name: track.name.clone(),
-                source_id: track.source.id().to_owned(),
-                source_label: track.source.label().to_owned(),
+                source_id: track.source.id(),
+                source_label: track.source.label(),
                 gain_db: track.gain_db,
                 pan: track.pan,
                 muted: track.muted,
                 soloed: track.soloed,
                 silenced: project.effective_mute(index),
                 selected: index == selected,
+                clap: board.track(index),
             })
             .collect(),
         master: MasterDto {
             gain_db: project.master_gain_db,
+            clap: board.master(),
         },
         selected,
         max_tracks: MAX_TRACKS,
         min_gain_db: SILENCE_DB,
         max_gain_db: MAX_GAIN_DB,
-        can_edit_layout,
     }
 }
 
@@ -353,6 +359,11 @@ pub fn linear_to_db(gain: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::ClapSourceRef;
+
+    fn clap_ref() -> ClapSourceRef {
+        ClapSourceRef::new(r"C:\plugins\thing.clap", "com.acme.thing").named("Acme Thing")
+    }
 
     #[test]
     fn a_fresh_project_is_drums_on_track_zero_and_a_synth_on_track_one() {
@@ -506,8 +517,23 @@ mod tests {
             .unwrap();
         assert_eq!(project.tracks[index].name, "Ref");
         assert!(!project.has_clap_source());
-        project.tracks[0].source = Source::Clap;
+        project.tracks[0].source = Source::Clap(clap_ref());
         assert!(project.has_clap_source());
+    }
+
+    #[test]
+    fn a_clap_headed_track_is_named_after_the_plugin_and_records_where_it_came_from() {
+        // What a project file will serialise: the name a user sees, and the
+        // bundle plus id that let a reload find the same plugin.
+        let mut project = Project::empty();
+        let index = project.add(Source::Clap(clap_ref()), None).unwrap();
+        assert_eq!(project.tracks[index].name, "Acme Thing");
+        let reference = project.tracks[index]
+            .source
+            .clap_ref()
+            .expect("a CLAP source");
+        assert_eq!(reference.plugin_id, "com.acme.thing");
+        assert!(reference.bundle_path.ends_with("thing.clap"));
     }
 
     #[test]
@@ -536,13 +562,12 @@ mod tests {
     fn the_wire_shape_carries_what_the_mixer_panel_draws() {
         let mut project = Project::default();
         project.tracks[0].soloed = true;
-        let dto = mixer_state_dto(&project, 1, true);
+        let dto = mixer_state_dto(&project, 1, &ClapBoard::new());
 
         assert_eq!(dto.tracks.len(), 2);
         assert_eq!(dto.selected, 1);
         assert_eq!(dto.max_tracks, MAX_TRACKS);
         assert_eq!(dto.min_gain_db, SILENCE_DB);
-        assert!(dto.can_edit_layout);
         assert_eq!(dto.tracks[0].index, 0);
         assert_eq!(dto.tracks[0].source_id, "drum-kit");
         assert!(dto.tracks[0].soloed && !dto.tracks[0].silenced);
@@ -551,6 +576,10 @@ mod tests {
             "silenced by somebody else's solo, with its own button still off"
         );
         assert!(dto.tracks[1].selected && !dto.tracks[0].selected);
+        assert!(
+            dto.tracks.iter().all(|track| track.clap.is_none()) && dto.master.clap.is_none(),
+            "nothing is hosted in this project"
+        );
 
         // Mirrors `MixerState` in ui/src/api/types.ts, key for key.
         let json: serde_json::Value = serde_json::to_value(&dto).unwrap();
@@ -564,19 +593,13 @@ mod tests {
         assert_eq!(
             keys,
             [
-                "canEditLayout",
                 "master",
                 "maxGainDb",
-                "minGainDb",
                 "maxTracks",
+                "minGainDb",
                 "selected",
                 "tracks"
             ]
-            .iter()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
         );
         let mut track_keys: Vec<&str> = json["tracks"][0]
             .as_object()
@@ -588,6 +611,7 @@ mod tests {
         assert_eq!(
             track_keys,
             [
+                "clap",
                 "gainDb",
                 "id",
                 "index",
@@ -602,5 +626,33 @@ mod tests {
             ]
         );
         assert_eq!(json["master"]["gainDb"], 0.0);
+    }
+
+    #[test]
+    fn a_hosted_plugin_reaches_the_strip_that_holds_it_and_nothing_else() {
+        // The mixer draws an editor button from this, so a plugin appearing on
+        // the wrong strip would put the button on the wrong strip too.
+        let mut project = Project::default();
+        project.tracks[1].source = Source::Clap(clap_ref());
+
+        let board = ClapBoard::new();
+        let slot = ClapSlotDto {
+            instance: 3,
+            plugin_id: "com.acme.thing".to_owned(),
+            name: "Acme Thing".to_owned(),
+            bundle_path: r"C:\plugins\thing.clap".to_owned(),
+            has_editor: true,
+            gui_open: true,
+        };
+        board.publish(vec![None, Some(slot.clone())], Some(slot));
+
+        let dto = mixer_state_dto(&project, 0, &board);
+        assert!(dto.tracks[0].clap.is_none());
+        let placed = dto.tracks[1].clap.as_ref().expect("track 1 is hosted");
+        assert_eq!(placed.instance, 3);
+        assert!(placed.has_editor && placed.gui_open);
+        assert_eq!(dto.tracks[1].source_id, "clap:com.acme.thing");
+        assert_eq!(dto.tracks[1].source_label, "Acme Thing");
+        assert!(dto.master.clap.is_some());
     }
 }

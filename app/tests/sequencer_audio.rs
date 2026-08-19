@@ -100,7 +100,7 @@ fn a_programmed_beat_comes_out_of_the_device_on_the_tempo_grid() {
     // The drum kit is the instrument under the grid. Started before the pattern
     // is programmed, exactly as a session would: choose an instrument, then
     // click a beat into it.
-    let info = match state.start_audio_with_source(Source::DrumKit, None, None) {
+    let info = match state.start_audio_with_source(Source::DrumKit) {
         Ok(info) => info,
         Err(err) => {
             eprintln!("no audio device ({err}); nothing to verify on this machine");

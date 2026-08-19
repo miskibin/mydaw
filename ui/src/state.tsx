@@ -8,6 +8,8 @@ import {
 } from 'solid-js';
 import { getBackend, type Backend } from './api/backend';
 import type {
+  ClapPluginInfoDto,
+  ClapTarget,
   MeterFrame,
   MixerState,
   PanelManifestDto,
@@ -64,6 +66,14 @@ export interface AppState {
   readonly heldNotes: Accessor<number[]>;
   /** Every instrument the engine can play, with the current one marked. */
   readonly sources: Accessor<SourceDto[]>;
+  /**
+   * The CLAP audio effects that may go on the master insert.
+   *
+   * Fetched here rather than by the mixer panel because it comes from the same
+   * one-off scan `sources()` does, and a panel that is closed and reopened
+   * should not pay for the walk again.
+   */
+  readonly masterEffects: Accessor<ClapPluginInfoDto[]>;
   /** The source currently playing, or `undefined` before the list arrives. */
   readonly currentSource: Accessor<SourceDto | undefined>;
   /**
@@ -80,8 +90,23 @@ export interface AppState {
   play(): void;
   stop(): void;
   refresh(): void;
-  /** Put a different instrument at the head of the selected track. */
-  selectSource(id: string): void;
+  /**
+   * Put `source` at the head of `track`, whichever kind of source it is.
+   *
+   * The dispatch lives here rather than in each picker because both the mixer
+   * strip and the transport bar offer the same mixed list: a built-in is named
+   * by id, and a CLAP instrument is placed by bundle path plus plugin id,
+   * because the host has to load a file rather than look a name up in a table.
+   */
+  placeSource(track: number, source: SourceDto): void;
+  /**
+   * Open or close one placed plugin's native editor window.
+   *
+   * Several can be open at once, so this addresses one slot rather than "the"
+   * editor. The mixer is refreshed afterwards because `guiOpen` lives on the
+   * slot inside `MixerState`, and the button's label is drawn from it.
+   */
+  toggleClapGui(target: ClapTarget, open: boolean): void;
   /**
    * Run one mixer command and adopt the state it returns.
    *
@@ -150,6 +175,7 @@ function createAppState(): AppState {
   const [octave, setOctave] = createSignal(DEFAULT_OCTAVE);
   const [heldNotes, setHeldNotes] = createSignal<number[]>([]);
   const [sources, setSources] = createSignal<SourceDto[]>([]);
+  const [masterEffects, setMasterEffects] = createSignal<ClapPluginInfoDto[]>([]);
   const [pattern, setPattern] = createSignal<PatternDto | undefined>();
   const [bpm, setBpmSignal] = createSignal(130);
   const [mixer, setMixer] = createSignal<MixerState | undefined>();
@@ -175,6 +201,7 @@ function createAppState(): AppState {
   const refresh = () => {
     setKernelState('connecting');
     void backend.getSources().then(setSources).catch(reportError);
+    void backend.getMasterEffects().then(setMasterEffects).catch(reportError);
     void backend.getTracks().then(setMixer).catch(reportError);
     void backend.getPattern().then(adoptSequencerState).catch(reportError);
     backend
@@ -350,23 +377,23 @@ function createAppState(): AppState {
   };
 
   /**
-   * Switch the selected track's instrument. Everything held is released first:
-   * the note-offs have to reach the *old* instrument, or a key still down when
-   * the source changes would leave a voice sounding on a node that no longer
-   * receives its release.
+   * Ask for one plugin editor to be opened or closed.
+   *
+   * Unlike the mixer commands this answers with a `ClapGuiStatus` rather than a
+   * whole `MixerState`, but the strips draw the button from the slot's
+   * `guiOpen`, so the mixer is re-fetched either way -- including on failure,
+   * where the window may well have opened before whatever went wrong.
    */
-  const selectSource = (id: string) => {
-    if (currentSource()?.id === id) return;
-    releaseAll();
-    void backend
-      .setSource(id)
-      .then((listed) => {
-        setSources(listed);
-        setKernelError(null);
-        // The mixer draws each strip's source name, so it has to follow.
+  const toggleClapGui = (target: ClapTarget, open: boolean) => {
+    const request = open ? backend.openClapGui(target) : backend.closeClapGui(target);
+    void request
+      .then(() => setKernelError(null))
+      // The message is the backend's own sentence -- most often "This plugin has
+      // no editor.", which is an answer rather than a fault.
+      .catch(reportError)
+      .finally(() => {
         void backend.getTracks().then(setMixer).catch(reportError);
-      })
-      .catch(reportError);
+      });
   };
 
   /**
@@ -391,6 +418,29 @@ function createAppState(): AppState {
         reportError(err);
         void backend.getTracks().then(setMixer).catch(reportError);
       });
+  };
+
+  /**
+   * Put a source at the head of a track, dispatching on how it is placed.
+   *
+   * Goes through `mixerCommand` for both kinds, which releases every held note
+   * first: the note-offs have to reach the *old* instrument, or a key still down
+   * when the source changes leaves a voice sounding on a node that no longer
+   * receives its release.
+   */
+  const placeSource = (track: number, source: SourceDto) => {
+    if (source.kind === 'clap') {
+      const { bundlePath, pluginId } = source;
+      if (bundlePath === null || pluginId === null) {
+        // Rust sets both on every `clap` source, so this is a contract breach
+        // rather than a user-facing condition -- reported, not silently ignored.
+        reportError(new Error(`'${source.label}' is a CLAP source with no bundle to load`));
+        return;
+      }
+      mixerCommand((api) => api.setTrackSourceClap(track, bundlePath, pluginId));
+      return;
+    }
+    mixerCommand((api) => api.setTrackSource(track, source.id));
   };
 
   // --- the step grid -----------------------------------------------------
@@ -467,6 +517,7 @@ function createAppState(): AppState {
     octave,
     heldNotes,
     sources,
+    masterEffects,
     currentSource,
     drumPadsActive,
     pattern,
@@ -475,7 +526,8 @@ function createAppState(): AppState {
     play,
     stop,
     refresh,
-    selectSource,
+    placeSource,
+    toggleClapGui,
     mixerCommand,
     toggleStep,
     clearPattern,

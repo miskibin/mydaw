@@ -209,7 +209,7 @@ fn two_tracks_sum_mute_and_pan_through_the_device() {
 
     // The shell's own project: drums on track 0, a synth on track 1. Exactly
     // what the window opens on.
-    let info = match state.start_audio_with_project(None, None) {
+    let info = match state.start_audio_with_project() {
         Ok(info) => info,
         Err(err) => {
             eprintln!("no audio device ({err}); nothing to verify on this machine");

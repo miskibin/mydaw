@@ -96,6 +96,19 @@ pub struct ClapPluginInfoDto {
     pub vendor: String,
     pub version: String,
     pub path: String,
+    /// What the plugin advertises itself as: `instrument`, `audio-effect`,
+    /// `note-effect` or `other`. The browser badges it, and the pickers filter
+    /// on it -- an effect cannot head a track and an instrument cannot process
+    /// the master bus.
+    ///
+    /// Read from the descriptor's `features`, which is free; the authoritative
+    /// check is the plugin's port layout, and it happens when an instance is
+    /// created. See
+    /// [`ClapPluginKind`](mydaw_plugin_host_clap::ClapPluginKind).
+    pub kind: String,
+    /// The declared feature strings, verbatim. Shown as a tooltip, and the raw
+    /// material for a smarter filter later.
+    pub features: Vec<String>,
 }
 
 impl From<&ClapPluginInfo> for ClapPluginInfoDto {
@@ -106,6 +119,8 @@ impl From<&ClapPluginInfo> for ClapPluginInfoDto {
             vendor: info.vendor.clone(),
             version: info.version.clone(),
             path: info.path.to_string_lossy().into_owned(),
+            kind: info.kind().id().to_owned(),
+            features: info.features.clone(),
         }
     }
 }
@@ -343,6 +358,7 @@ mod tests {
             vendor: "Acme".to_owned(),
             version: "1.2.3".to_owned(),
             path: std::path::PathBuf::from(r"C:\CLAP\Thing.clap"),
+            features: vec!["instrument".to_owned(), "stereo".to_owned()],
         });
         let json: serde_json::Value = serde_json::to_value(dto).unwrap();
         let object = json.as_object().unwrap();
@@ -350,12 +366,19 @@ mod tests {
         // Mirrors `ClapPluginInfoDto` in ui/src/api/types.ts, key for key.
         let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["id", "name", "path", "vendor", "version"]);
+        assert_eq!(
+            keys,
+            ["features", "id", "kind", "name", "path", "vendor", "version"]
+        );
         assert_eq!(object["id"], "com.acme.thing");
         assert_eq!(object["name"], "Thing");
         assert_eq!(object["vendor"], "Acme");
         assert_eq!(object["version"], "1.2.3");
         assert_eq!(object["path"], r"C:\CLAP\Thing.clap");
+        assert_eq!(
+            object["kind"], "instrument",
+            "the picker filters on this, so it has to come from the features"
+        );
     }
 
     #[test]
@@ -368,9 +391,14 @@ mod tests {
             vendor: String::new(),
             version: String::new(),
             path: std::path::PathBuf::from("x.clap"),
+            features: Vec::new(),
         });
         let json = serde_json::to_string(&dto).unwrap();
         assert!(json.contains("\"vendor\":\"\""), "{json}");
+        assert_eq!(
+            dto.kind, "other",
+            "a bundle that declares no features is not a lie, just unhelpful"
+        );
     }
 
     // ------------------------------------------------------------ sequencer

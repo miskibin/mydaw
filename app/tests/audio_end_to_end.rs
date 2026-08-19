@@ -133,7 +133,9 @@ fn a_clap_effect_in_the_live_graph_halves_the_master_meter() {
     let state = AppState::from_kernel(&kernel).expect("services present");
     let mut plugin = LoadedClapPlugin::load(&bundle, PLUGIN_ID).expect("fixture loads");
 
-    let info = match state.start_audio_with_effect(Some(&mut plugin)) {
+    // A single test-tone track, then the fixture in the master insert slot --
+    // the same two steps the shell takes when a user picks a master effect.
+    let info = match state.start_audio() {
         Ok(info) => info,
         Err(err) => {
             eprintln!("no audio device ({err}); nothing to verify on this machine");
@@ -141,6 +143,14 @@ fn a_clap_effect_in_the_live_graph_halves_the_master_meter() {
             return;
         }
     };
+    let node = plugin
+        .create_node(f64::from(info.sample_rate), info.max_block)
+        .expect("the fixture activates for the negotiated configuration");
+    state
+        .tracks()
+        .master_insert()
+        .install(Some(Box::new(node)))
+        .expect("the master insert slot is open once a stream is");
     eprintln!(
         "device: {} @ {} Hz, {} ch; CLAP effect '{}' active={}",
         info.device_name,

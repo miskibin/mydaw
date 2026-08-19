@@ -59,6 +59,7 @@ use std::time::{Duration, Instant};
 use clack_extensions::audio_ports::PluginAudioPorts;
 use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
 use clack_extensions::note_ports::PluginNotePorts;
+use clack_extensions::state::{HostState, HostStateImpl};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
 use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent};
 use clack_host::events::io::EventBuffer;
@@ -81,6 +82,13 @@ const HOST_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// every 250 ms, so this is roughly eight sweeps of slack. Waiting is only ever
 /// done on a shutdown path, never while audio is running.
 pub const RETIRE_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long [`LoadedClapPlugin::wait_for_retire`] blocks on one receive before
+/// re-checking the deadline.
+///
+/// The receive is woken by the collector, so this only bounds how long a
+/// *timed-out* wait overshoots by; it is not a polling interval.
+const RETIRE_POLL: Duration = Duration::from_millis(25);
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -318,9 +326,24 @@ impl SharedHandler<'_> for ClapHostShared {
 /// the host must call `on_timer` there too.
 pub struct ClapHostMainThread {
     timers: Arc<ClapTimers>,
+    /// Latched `clap_host_state->mark_dirty`. See [`crate::state`].
+    state_dirty: Arc<AtomicBool>,
 }
 
 impl MainThreadHandler<'_> for ClapHostMainThread {}
+
+impl HostStateImpl for ClapHostMainThread {
+    /// The plugin's state has changed since the host last saved or loaded it --
+    /// a knob turned in its editor, say.
+    ///
+    /// Recorded rather than acted on: step 6 has no project file to mark
+    /// modified, and a host that saved on every knob movement would write a
+    /// megabyte per gesture. [`LoadedClapPlugin::take_state_dirty`] is what
+    /// step 8 will read.
+    fn mark_dirty(&mut self) {
+        self.state_dirty.store(true, Ordering::Release);
+    }
+}
 
 impl HostTimerImpl for ClapHostMainThread {
     /// Register a timer. The period is clamped to something this host can
@@ -355,9 +378,14 @@ impl HostHandlers for MydawClapHost {
     /// somewhere to ask for a different window size, and a heartbeat to animate
     /// on. Both are serviced on the main thread by
     /// [`LoadedClapPlugin::tick_main_thread`].
+    ///
+    /// `state` is declared so a plugin can tell the host its settings changed
+    /// (`mark_dirty`). The *reading* half of `clap.state` is a plugin extension
+    /// and needs no declaration; see [`crate::state`].
     fn declare_extensions(builder: &mut HostExtensions<Self>, _shared: &ClapHostShared) {
         builder.register::<HostGui>();
         builder.register::<HostTimer>();
+        builder.register::<HostState>();
     }
 }
 
@@ -471,6 +499,8 @@ pub struct LoadedClapPlugin {
     requests: Arc<ClapHostRequests>,
     gui_requests: Arc<ClapGuiRequests>,
     timers: Arc<ClapTimers>,
+    /// Latched `clap_host_state->mark_dirty`. See [`crate::state`].
+    state_dirty: Arc<AtomicBool>,
     /// Reused by [`tick_main_thread`](Self::tick_main_thread) so servicing timers
     /// allocates nothing per frame.
     due_timers: Vec<TimerId>,
@@ -530,9 +560,11 @@ impl LoadedClapPlugin {
             let requests = Arc::new(ClapHostRequests::default());
             let gui_requests = Arc::new(ClapGuiRequests::default());
             let timers = Arc::new(ClapTimers::new());
+            let state_dirty = Arc::new(AtomicBool::new(false));
             let shared_requests = Arc::clone(&requests);
             let shared_gui = Arc::clone(&gui_requests);
             let main_thread_timers = Arc::clone(&timers);
+            let main_thread_dirty = Arc::clone(&state_dirty);
             let instance = PluginInstance::<MydawClapHost>::new(
                 move |_| ClapHostShared {
                     requests: shared_requests,
@@ -540,6 +572,7 @@ impl LoadedClapPlugin {
                 },
                 move |_| ClapHostMainThread {
                     timers: main_thread_timers,
+                    state_dirty: main_thread_dirty,
                 },
                 &entry,
                 &id,
@@ -550,11 +583,19 @@ impl LoadedClapPlugin {
                 message: err.to_string(),
             })?;
 
-            Ok((entry, instance, info, requests, gui_requests, timers))
+            Ok((
+                entry,
+                instance,
+                info,
+                requests,
+                gui_requests,
+                timers,
+                state_dirty,
+            ))
         }))
         .map_err(|_| ClapHostError::Panicked { stage: "loading" })??;
 
-        let (entry, mut instance, info, requests, gui_requests, timers) = loaded;
+        let (entry, mut instance, info, requests, gui_requests, timers, state_dirty) = loaded;
 
         let layout = read_port_layout(&mut instance)?;
         let (retire_tx, retire_rx) = mpsc::channel();
@@ -567,6 +608,7 @@ impl LoadedClapPlugin {
             requests,
             gui_requests,
             timers,
+            state_dirty,
             due_timers: Vec::new(),
             retire_tx,
             retire_rx,
@@ -598,6 +640,53 @@ impl LoadedClapPlugin {
     /// The plugin's registered `clap.timer-support` timers.
     pub fn timers(&self) -> &Arc<ClapTimers> {
         &self.timers
+    }
+
+    /// Latched `clap_host_state->mark_dirty`. See [`crate::state`].
+    pub fn state_dirty(&self) -> &Arc<AtomicBool> {
+        &self.state_dirty
+    }
+
+    /// Whether a node created from this plugin is still outstanding.
+    ///
+    /// True between [`create_node`](Self::create_node) and the moment the
+    /// dropped node's processor comes back through the retire channel -- which
+    /// happens on the `basedrop` collector's schedule, not the caller's.
+    pub const fn has_outstanding_node(&self) -> bool {
+        self.node_outstanding
+    }
+
+    /// Wait (up to `timeout`) for a retired node's processor to come home, so
+    /// the instance can be activated again.
+    ///
+    /// A CLAP plugin can only be activated once at a time, and MYDAW retires
+    /// nodes through `basedrop`: the audio thread drops the node, and the
+    /// *collector thread* runs its destructor some sweeps later. Re-activating
+    /// -- which is what a graph rebuild and a source swap both do -- therefore
+    /// has to wait for that, and this is the wait, in one place rather than
+    /// copied into each caller.
+    ///
+    /// Returns `true` when the instance is inactive (i.e. ready to activate).
+    /// Cheap and immediate when nothing was outstanding.
+    pub fn wait_for_retire(&mut self, timeout: Duration) -> bool {
+        self.collect_retired();
+        if !self.instance.is_active() {
+            return true;
+        }
+        let deadline = Instant::now() + timeout;
+        while self.instance.is_active() {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            // A bounded receive rather than a sleep loop: the collector wakes us
+            // the instant it drops the node, and a poll interval would add up to
+            // that interval of silence to every source swap.
+            match self.retire_rx.recv_timeout(remaining.min(RETIRE_POLL)) {
+                Ok(started) => self.deactivate(started),
+                Err(_) => continue,
+            }
+        }
+        !self.instance.is_active()
     }
 
     /// A main-thread handle to the plugin, for extensions the host drives itself.
@@ -1483,6 +1572,7 @@ mod tests {
         let timers = Arc::new(ClapTimers::new());
         let mut handler = ClapHostMainThread {
             timers: Arc::clone(&timers),
+            state_dirty: Arc::new(AtomicBool::new(false)),
         };
 
         let id = handler
@@ -1497,6 +1587,23 @@ mod tests {
             handler.unregister_timer(id).is_err(),
             "unregistering an unknown timer must be reported, not swallowed"
         );
+    }
+
+    #[test]
+    fn mark_dirty_latches_until_the_host_reads_it() {
+        // Step 8 turns this into "the project has unsaved changes"; step 6 only
+        // has to prove the callback arrives and clears on read.
+        let dirty = Arc::new(AtomicBool::new(false));
+        let mut handler = ClapHostMainThread {
+            timers: Arc::new(ClapTimers::new()),
+            state_dirty: Arc::clone(&dirty),
+        };
+
+        assert!(!dirty.load(Ordering::Acquire));
+        handler.mark_dirty();
+        handler.mark_dirty();
+        assert!(dirty.swap(false, Ordering::AcqRel), "latched once");
+        assert!(!dirty.load(Ordering::Acquire), "reading clears it");
     }
 
     #[test]

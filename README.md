@@ -97,25 +97,34 @@ cargo fmt --all --check
 pnpm --dir ui build                      # tsc --noEmit + vite build
 ```
 
-Two tests are opt-in because they open the real output device and are audible (the second also
+Several tests are opt-in because they open the real output device and are audible (the second also
 puts a plugin editor on screen):
 
 ```sh
 cargo test -p mydaw-app --test audio_end_to_end -- --ignored --nocapture
 cargo test -p mydaw-app --test gui_audio_smoke  -- --ignored --nocapture
+cargo test -p mydaw-app --test clap_hardware    -- --ignored --nocapture --test-threads=1
+cargo test -p mydaw-app --test mixer_audio      -- --ignored --nocapture --test-threads=1
 ```
 
-## Plugin editors
+## Hosted CLAP plugins
 
-An external plugin's editor opens in its **own native window** next to MYDAW's -- a plugin paints
-with its own toolkit into an OS window handle, which cannot be composited into the webview. Load an
-effect and use *Open GUI* in the CLAP Plugins panel:
+Pick an instrument for a track from that strip's source dropdown, and an effect for the master bus
+from the master strip's selector; both list what the CLAP scan found on this machine. Point the scan
+at a build directory with the CLAP specification's own override:
 
 ```sh
-MYDAW_CLAP_FX='C:\path\to\plugin.clap;com.vendor.plugin' cargo run -p mydaw-app --features custom-protocol
+CLAP_PATH='C:\path\to\my\plugins' cargo run -p mydaw-app --features custom-protocol
 ```
 
-See [`docs/superpowers/specs/2026-08-18-spike3-plugin-gui.md`](docs/superpowers/specs/2026-08-18-spike3-plugin-gui.md).
+An external plugin's editor opens in its **own native window** next to MYDAW's -- a plugin paints
+with its own toolkit into an OS window handle, which cannot be composited into the webview. Every
+placed plugin gets its own *Editor* button on its strip, and several can be open at once.
+
+`MYDAW_CLAP_FX` and `MYDAW_CLAP_INSTRUMENT` were retired in step 6; the pickers do strictly more.
+
+See [`docs/superpowers/specs/2026-08-19-step6-clap-instruments.md`](docs/superpowers/specs/2026-08-19-step6-clap-instruments.md)
+and [`docs/superpowers/specs/2026-08-18-spike3-plugin-gui.md`](docs/superpowers/specs/2026-08-18-spike3-plugin-gui.md).
 
 It boots the kernel, installs the test-tone graph, plays for ~1 s and asserts that meter frames
 move and the playhead advances — the whole audio path minus the webview. A second `#[ignore]`d test

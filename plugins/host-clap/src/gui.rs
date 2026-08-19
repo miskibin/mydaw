@@ -176,6 +176,20 @@ pub struct ClapGuiPump {
     pub resized_to: Option<GuiSize>,
 }
 
+impl LoadedClapPlugin {
+    /// Whether this plugin implements `clap.gui` at all.
+    ///
+    /// Cheap (one extension query) and answered without creating anything, so
+    /// the UI can decide whether to draw an "Open editor" button rather than
+    /// drawing one that always fails. A plugin with no editor is perfectly
+    /// normal -- plenty of effects have none.
+    ///
+    /// `[main-thread]`, like every extension query.
+    pub fn has_editor(&mut self) -> bool {
+        self.plugin_handle().get_extension::<PluginGui>().is_some()
+    }
+}
+
 /// An open plugin editor: the plugin's `gui` extension plus the window it lives
 /// in.
 ///

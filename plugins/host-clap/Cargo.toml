@@ -17,6 +17,7 @@ clack-extensions = { version = "0.1.1", features = [
     "audio-ports",
     "note-ports",
     "gui",
+    "state",
     "timer",
 ] }
 log.workspace = true
@@ -30,6 +31,9 @@ thiserror.workspace = true
 # loadable `.clap` bundle. Without the dependency edge Cargo has no reason to
 # build a dynamic library nothing links against.
 mydaw-fixture-clap-gain = { path = "../../test-fixtures/clap-gain" }
+# The spectral analysis the instance tests use to prove that a state blob really
+# changed what a plugin sounds like. Non-RT, test-only.
+mydaw-plugin-debug-tap.workspace = true
 
 # The GUI tests run their own message loop and inspect the plugin's child window
 # (parent, text) through Win32 -- the only way to prove liveness without a human

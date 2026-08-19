@@ -134,8 +134,8 @@ code {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-/* The instrument selector. Segmented buttons: the list is short and fixed, and
-   which one is lit is the most important state on this bar. */
+/* The instrument selector. A dropdown rather than segmented buttons: the list
+   now ends with every CLAP instrument on the machine and has no upper bound. */
 
 .source {
   display: flex;
@@ -151,47 +151,25 @@ code {
   color: var(--fg-2);
 }
 
-.segmented {
-  display: flex;
+/* Bounded on both ends: wide enough that a plugin name is readable, capped so a
+   long one cannot push the tempo and position readouts off the bar. */
+.source__select {
   height: 28px;
+  min-width: 120px;
+  max-width: 200px;
+  padding: 0 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-0);
   background: var(--bg-3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.segmented__button {
-  padding: 0 10px;
-  font: inherit;
-  font-size: 11px;
-  white-space: nowrap;
-  color: var(--fg-1);
-  background: transparent;
-  border: 0;
-  border-left: 1px solid var(--border);
   cursor: pointer;
+  text-overflow: ellipsis;
 }
 
-.segmented__button:first-child {
-  border-left: 0;
-}
-
-.segmented__button:hover:not(:disabled) {
+.source__select:hover {
   background: var(--bg-hover);
-  color: var(--fg-0);
-}
-
-.segmented__button.is-active {
-  color: #06231c;
-  background: var(--accent);
-}
-
-/* Unavailable, not hidden: a CLAP source nobody loaded is still worth knowing
-   about, and a button that vanishes teaches nothing. */
-.segmented__button:disabled {
-  color: var(--fg-2);
-  opacity: 0.45;
-  cursor: not-allowed;
 }
 
 .transport__readouts {
@@ -455,10 +433,10 @@ code {
 
 .clap-row {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   grid-template-areas:
-    'name vendor version'
-    'path path    path';
+    'name kind vendor version'
+    'path path path   path';
   align-items: center;
   column-gap: 8px;
   padding: 4px 2px;
@@ -475,6 +453,31 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A badge, not a word in the flow: which kind a plugin is decides which picker
+   it turns up in, so it wants to be scannable down the column rather than read. */
+.clap-row__kind {
+  grid-area: kind;
+  padding: 1px 5px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: var(--fg-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+/* The two MYDAW can place are lit; the rest stay in the muted default above. */
+.clap-row__kind--instrument {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.clap-row__kind--audio-effect {
+  color: var(--fg-0);
+  border-color: var(--border-strong);
 }
 
 .clap-row__vendor {
@@ -520,6 +523,15 @@ code {
 .clap-browser__empty code {
   font-family: var(--font-mono);
   color: var(--fg-1);
+}
+
+/* Where the buttons used to be: this panel says what exists, the mixer says
+   where it goes, and the sentence is what connects the two. */
+.clap-browser__hint {
+  margin-top: 8px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--fg-2);
 }
 
 .clap-browser__footer {
@@ -1134,13 +1146,16 @@ code {
 
 /* ------------------------------------------------------------------ strip */
 
+/* 78px, up from 62: a strip now carries a `<select>` of plugin names, and at the
+   old width the closed control had room for about four characters. Still narrow
+   enough that the dock shows several at once, and the row scrolls either way. */
 .strip {
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
   align-items: center;
   gap: 5px;
-  width: 62px;
+  width: 78px;
   padding: 6px 4px;
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -1162,9 +1177,9 @@ code {
 }
 
 /* Silenced by its own mute or by somebody else's solo. Dimmed rather than
-   hidden: the strip still has to be clickable to un-silence it. */
+   hidden: the strip still has to be clickable to un-silence it. The picker is
+   deliberately *not* dimmed -- it is still a live control. */
 .strip.is-silenced .strip__name,
-.strip.is-silenced .strip__source,
 .strip.is-silenced .strip__readout {
   opacity: 0.45;
 }
@@ -1210,13 +1225,64 @@ code {
   text-overflow: ellipsis;
 }
 
-.strip__source {
+/*
+ * The source / insert picker.
+ *
+ * `width: 100%` with `min-width: 0` is the load-bearing pair: a `<select>`
+ * sizes itself to its widest option by default, so one plugin with a long name
+ * would widen this strip and every strip after it. Pinned to the strip's width
+ * and ellipsised instead, with the full name in the control's `title`.
+ */
+.strip__picker {
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
+  height: 18px;
+  padding: 0 3px;
+  font: inherit;
   font-size: 9px;
-  color: var(--fg-2);
-  white-space: nowrap;
-  overflow: hidden;
+  color: var(--fg-1);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  cursor: pointer;
   text-overflow: ellipsis;
+}
+
+.strip__picker:hover {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+
+/*
+ * Opens the plugin's own native window. Full-strip-width rather than a fourth
+ * square next to M and S: three 20px buttons already fill that row, and this one
+ * needs a word rather than a letter -- "E" would be a guess.
+ */
+.strip__editor {
+  width: 100%;
+  height: 17px;
+  padding: 0;
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  color: var(--fg-2);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.strip__editor:hover {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+
+/* Lit while that plugin's window is up -- several strips can be lit at once. */
+.strip__editor.is-on {
+  color: #06231c;
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
 }
 
 /* Meter and fader side by side, the way a console puts them. */

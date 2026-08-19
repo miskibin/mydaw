@@ -1,6 +1,8 @@
 import type {
   ClapGuiStatus,
   ClapPluginInfoDto,
+  ClapSlot,
+  ClapTarget,
   MeterFrame,
   MixerState,
   PatternDto,
@@ -31,14 +33,26 @@ export interface Backend {
    */
   getClapPlugins(rescan?: boolean): Promise<ClapPluginInfoDto[]>;
   /**
-   * Open the loaded CLAP effect's editor in its own native window.
+   * Open one placed plugin's editor in its own native window.
    *
-   * Rejects with a sentence meant for the status bar -- most often "This plugin
-   * has no editor.", which is a normal answer rather than a failure.
+   * Every placed plugin has its own window and they are independent, so opening
+   * a second one does not close the first. Rejects with a sentence meant for the
+   * status bar -- most often "This plugin has no editor.", which is a normal
+   * answer rather than a failure, and which the mixer avoids provoking by only
+   * offering the button when the slot's `hasEditor` is true.
    */
-  openClapGui(): Promise<ClapGuiStatus>;
-  /** Close the plugin editor. Resolves even when nothing was open. */
-  closeClapGui(): Promise<ClapGuiStatus>;
+  openClapGui(target: ClapTarget): Promise<ClapGuiStatus>;
+  /** Close one plugin's editor. Resolves even when nothing was open. */
+  closeClapGui(target: ClapTarget): Promise<ClapGuiStatus>;
+  /**
+   * The placed plugin's own opaque state, base64-encoded.
+   *
+   * An empty string is a real answer: the plugin does not implement the CLAP
+   * state extension, so there is nothing to save and nothing was lost.
+   */
+  saveClapState(target: ClapTarget): Promise<string>;
+  /** Restore what `saveClapState` returned. Rejects if the plugin refuses it. */
+  loadClapState(target: ClapTarget, stateBase64: string): Promise<void>;
   transportPlay(): Promise<void>;
   transportStop(): Promise<void>;
   /**
@@ -93,14 +107,35 @@ export interface Backend {
   setMasterGain(db: number): Promise<MixerState>;
   /** Choose the track the keyboard piano plays and the source selector targets. */
   setSelectedTrack(track: number): Promise<MixerState>;
-  /** Put a different instrument at the head of one track, by index. */
+  /** Put a different built-in instrument at the head of one track, by index. */
   setTrackSource(track: number, source: string): Promise<MixerState>;
   /**
-   * Add a track. Rejects past the engine's limit, and while a hosted CLAP
-   * plugin is in the graph (`canEditLayout` is false then).
+   * Put a hosted CLAP instrument at the head of one track.
+   *
+   * Separate from `setTrackSource` because placing one means loading a bundle
+   * from disk and instantiating it, which can fail in ways a built-in cannot:
+   * the file may have moved, or the bundle may no longer export that id. The
+   * bundle path *and* the plugin id are both sent because one `.clap` file can
+   * export several plugins.
    */
+  setTrackSourceClap(
+    track: number,
+    bundlePath: string,
+    pluginId: string,
+  ): Promise<MixerState>;
+  /**
+   * The scanned CLAP plugins eligible for the master insert, i.e. the audio
+   * effects. A separate call from `getSources` because the two lists are drawn
+   * from the same scan but never overlap.
+   */
+  getMasterEffects(): Promise<ClapPluginInfoDto[]>;
+  /** Put a CLAP audio effect on the master insert, replacing whatever was there. */
+  setMasterEffectClap(bundlePath: string, pluginId: string): Promise<MixerState>;
+  /** Take the master insert out. Resolves even when the slot was already empty. */
+  clearMasterEffect(): Promise<MixerState>;
+  /** Add a track. Rejects past the engine's limit. */
   addTrack(source: string, name?: string): Promise<MixerState>;
-  /** Remove a track. Rejects for the last one, and while `canEditLayout` is false. */
+  /** Remove a track. Rejects for the last one. */
   removeTrack(track: number): Promise<MixerState>;
 
   /**
@@ -161,14 +196,28 @@ class TauriBackend implements Backend {
     return invoke<ClapPluginInfoDto[]>('get_clap_plugins', { rescan });
   }
 
-  async openClapGui(): Promise<ClapGuiStatus> {
+  // Tauri v2 rewrites camelCase argument keys to the Rust parameter's
+  // snake_case name, so `bundlePath` here is `bundle_path` there. Sending
+  // snake_case from this side is what would *not* arrive.
+
+  async openClapGui(target: ClapTarget): Promise<ClapGuiStatus> {
     const { invoke } = await this.core();
-    return invoke<ClapGuiStatus>('open_clap_gui');
+    return invoke<ClapGuiStatus>('open_clap_gui', { target });
   }
 
-  async closeClapGui(): Promise<ClapGuiStatus> {
+  async closeClapGui(target: ClapTarget): Promise<ClapGuiStatus> {
     const { invoke } = await this.core();
-    return invoke<ClapGuiStatus>('close_clap_gui');
+    return invoke<ClapGuiStatus>('close_clap_gui', { target });
+  }
+
+  async saveClapState(target: ClapTarget): Promise<string> {
+    const { invoke } = await this.core();
+    return invoke<string>('save_clap_state', { target });
+  }
+
+  async loadClapState(target: ClapTarget, stateBase64: string): Promise<void> {
+    const { invoke } = await this.core();
+    await invoke('load_clap_state', { target, stateBase64 });
   }
 
   async transportPlay(): Promise<void> {
@@ -239,6 +288,30 @@ class TauriBackend implements Backend {
   async setTrackSource(track: number, source: string): Promise<MixerState> {
     const { invoke } = await this.core();
     return invoke<MixerState>('set_track_source', { track, source });
+  }
+
+  async setTrackSourceClap(
+    track: number,
+    bundlePath: string,
+    pluginId: string,
+  ): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_track_source_clap', { track, bundlePath, pluginId });
+  }
+
+  async getMasterEffects(): Promise<ClapPluginInfoDto[]> {
+    const { invoke } = await this.core();
+    return invoke<ClapPluginInfoDto[]>('get_master_effects');
+  }
+
+  async setMasterEffectClap(bundlePath: string, pluginId: string): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('set_master_effect_clap', { bundlePath, pluginId });
+  }
+
+  async clearMasterEffect(): Promise<MixerState> {
+    const { invoke } = await this.core();
+    return invoke<MixerState>('clear_master_effect');
   }
 
   async addTrack(source: string, name?: string): Promise<MixerState> {
@@ -329,6 +402,7 @@ function mockTracks(): TrackDto[] {
       soloed: false,
       silenced: false,
       selected: true,
+      clap: null,
     },
     {
       index: 1,
@@ -342,49 +416,115 @@ function mockTracks(): TrackDto[] {
       soloed: false,
       silenced: false,
       selected: false,
+      clap: null,
     },
   ];
 }
 
 /**
- * Two plausible plugins, one of them with no vendor or version, because the
- * CLAP format allows that and the panel has to render it without collapsing.
+ * Four plausible plugins: two instruments and two audio effects, so both
+ * pickers have something to show and neither is exercised only in its empty
+ * state.
+ *
+ * The fixture gain declares no vendor, no version and one bare feature, because
+ * the CLAP format allows all of that and the browser has to render it without
+ * collapsing. It is also the one with no editor, so the mixer's "this plugin
+ * has no editor button" path is reachable in a plain browser.
  */
-const MOCK_FIXTURE_ID = 'dev.mydaw.fixture.gain';
+const MOCK_FIXTURE_GAIN_ID = 'dev.mydaw.fixture.gain';
 
 const MOCK_CLAP_PLUGINS: ClapPluginInfoDto[] = [
+  {
+    id: 'dev.mydaw.fixture.synth',
+    name: 'MYDAW Fixture Synth',
+    vendor: 'MYDAW',
+    version: '0.1.0',
+    path: 'D:\\MYDAW\\target\\debug\\mydaw-synth.clap',
+    kind: 'instrument',
+    features: ['instrument', 'synthesizer', 'stereo'],
+  },
+  {
+    id: 'com.example.polybox',
+    name: 'Example PolyBox',
+    vendor: 'Example Audio',
+    version: '3.0.2',
+    path: 'C:\\Program Files\\Common Files\\CLAP\\ExamplePolyBox.clap',
+    kind: 'instrument',
+    features: ['instrument', 'sampler'],
+  },
   {
     id: 'com.example.reverb',
     name: 'Example Reverb',
     vendor: 'Example Audio',
     version: '2.1.0',
     path: 'C:\\Program Files\\Common Files\\CLAP\\ExampleReverb.clap',
+    kind: 'audio-effect',
+    features: ['audio-effect', 'reverb'],
   },
   {
-    id: MOCK_FIXTURE_ID,
+    id: MOCK_FIXTURE_GAIN_ID,
     name: 'MYDAW Fixture Gain',
     vendor: '',
     version: '',
     path: 'D:\\MYDAW\\target\\debug\\mydaw-gain.clap',
+    kind: 'audio-effect',
+    features: ['audio-effect'],
   },
 ];
+
+/**
+ * Whether a mock plugin draws an editor. Only the fixture gain does not -- see
+ * `MOCK_CLAP_PLUGINS`.
+ */
+function mockHasEditor(plugin: ClapPluginInfoDto): boolean {
+  return plugin.id !== MOCK_FIXTURE_GAIN_ID;
+}
+
+/**
+ * The id a placed CLAP plugin reports as a track's `sourceId`. Mirrors the
+ * `clap:` prefix Rust builds in `app/src/source.rs`; the UI compares these
+ * strings, so the two spellings have to agree exactly.
+ */
+function mockClapSourceId(pluginId: string): string {
+  return `clap:${pluginId}`;
+}
+
+/** One scanned CLAP instrument, as `get_sources` would offer it. */
+function mockClapSource(plugin: ClapPluginInfoDto): SourceDto {
+  return {
+    id: mockClapSourceId(plugin.id),
+    label: plugin.name || plugin.id,
+    description: plugin.vendor
+      ? `Hosted CLAP instrument by ${plugin.vendor}`
+      : 'Hosted CLAP instrument',
+    kind: 'clap',
+    vendor: plugin.vendor,
+    bundlePath: plugin.path,
+    pluginId: plugin.id,
+    selected: false,
+    takesNotes: true,
+  };
+}
 
 const MOCK_SAMPLE_RATE = 48_000;
 const MOCK_FRAME_HZ = 30;
 
 /**
- * The same four sources Rust offers, in the same order, with `clap`
- * unavailable -- a browser session has no `MYDAW_CLAP_INSTRUMENT`, so this is
- * also the state the selector's disabled path has to look right in.
+ * The three built-in sources Rust offers, in the same fixed order it lists them
+ * in. The scanned CLAP instruments are appended after these at call time, which
+ * is exactly what `get_sources` does.
  *
- * Mirrors `Source::ALL` in `app/src/source.rs`.
+ * Mirrors `Source::BUILT_IN` in `app/src/source.rs`.
  */
-const MOCK_SOURCES: readonly SourceDto[] = [
+const MOCK_INTERNAL_SOURCES: readonly SourceDto[] = [
   {
     id: 'poly-synth',
     label: 'Poly Synth',
     description: 'Eight-voice saw + sub synth, played from the keyboard',
-    available: true,
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
     selected: true,
     takesNotes: true,
   },
@@ -392,7 +532,10 @@ const MOCK_SOURCES: readonly SourceDto[] = [
     id: 'drum-kit',
     label: 'Drum Kit',
     description: 'Synthesised kick, snare and hi-hats on GM keys 36/38/42/46',
-    available: true,
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
     selected: false,
     takesNotes: true,
   },
@@ -400,17 +543,12 @@ const MOCK_SOURCES: readonly SourceDto[] = [
     id: 'test-tone',
     label: 'Test Tone',
     description: '440 Hz sine, gated on the transport',
-    available: true,
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
     selected: false,
     takesNotes: false,
-  },
-  {
-    id: 'clap',
-    label: 'CLAP',
-    description: 'The CLAP instrument named by MYDAW_CLAP_INSTRUMENT',
-    available: false,
-    selected: false,
-    takesNotes: true,
   },
 ];
 
@@ -456,13 +594,28 @@ class MockBackend implements Backend {
   readonly kind = 'mock' as const;
   private playing = false;
   private samplePos = 0;
-  private guiOpen = false;
   private bpm = MOCK_DEFAULT_BPM;
   private pattern: PatternDto = mockPattern();
   private tracks: TrackDto[] = mockTracks();
   private masterGainDb = 0;
+  private masterClap: ClapSlot | null = null;
   private selected = 0;
   private nextTrackId = 2;
+  /**
+   * Instance handles, handed out the way the Rust host does: never reused, so a
+   * stale handle is recognisably stale rather than silently addressing whatever
+   * took the slot next.
+   */
+  private nextInstance = 1;
+  /**
+   * Which editors are up, keyed by target. A *set*, not a single flag: several
+   * plugins can have their windows open at once, which is the case the mixer's
+   * per-strip buttons exist to reach and therefore the case the mock has to be
+   * able to rehearse.
+   */
+  private openEditors = new Set<string>();
+  /** The last state `loadClapState` was handed, per target. */
+  private clapStates = new Map<string, string>();
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
@@ -475,20 +628,70 @@ class MockBackend implements Backend {
   }
 
   /**
+   * A stable string per target, used to key the open-editor set and the saved
+   * states. Targets are compared by value, and two objects describing the same
+   * slot must not count as two different editors.
+   */
+  private static targetKey(target: ClapTarget): string {
+    return target.slot === 'master' ? 'master' : `track:${target.index}`;
+  }
+
+  /** The slot a target names, rejecting an empty one the way Rust does. */
+  private requireSlot(target: ClapTarget): ClapSlot {
+    const slot = target.slot === 'master' ? this.masterClap : this.track(target.index).clap;
+    if (!slot) {
+      throw new Error(
+        target.slot === 'master'
+          ? 'there is no plugin on the master insert'
+          : `track ${target.index} has no hosted plugin`,
+      );
+    }
+    return slot;
+  }
+
+  /**
    * There is no native window in a browser, so this only records the state and
    * says so in the console. The panel's own logic is what is being developed
    * against the mock; the window is the Rust side's business.
    */
-  async openClapGui(): Promise<ClapGuiStatus> {
-    this.guiOpen = true;
-    console.info('[mock] open_clap_gui: no native window outside Tauri');
-    return { open: true, pluginId: MOCK_FIXTURE_ID, width: 400, height: 250 };
+  async openClapGui(target: ClapTarget): Promise<ClapGuiStatus> {
+    const slot = this.requireSlot(target);
+    if (!slot.hasEditor) throw new Error(`${slot.name} has no editor.`);
+    const key = MockBackend.targetKey(target);
+    this.openEditors.add(key);
+    console.info(`[mock] open_clap_gui ${key}: no native window outside Tauri`);
+    return { open: true, hasEditor: true, pluginId: slot.pluginId, width: 400, height: 250 };
   }
 
-  async closeClapGui(): Promise<ClapGuiStatus> {
-    this.guiOpen = false;
-    console.info('[mock] close_clap_gui');
-    return { open: false, pluginId: MOCK_FIXTURE_ID, width: 0, height: 0 };
+  async closeClapGui(target: ClapTarget): Promise<ClapGuiStatus> {
+    const slot = this.requireSlot(target);
+    const key = MockBackend.targetKey(target);
+    this.openEditors.delete(key);
+    console.info(`[mock] close_clap_gui ${key}`);
+    return {
+      open: false,
+      hasEditor: slot.hasEditor,
+      pluginId: slot.pluginId,
+      width: 0,
+      height: 0,
+    };
+  }
+
+  /**
+   * Obviously a stand-in: a real plugin's state is an opaque blob only it can
+   * read, so all that can be rehearsed here is that the same target keeps
+   * answering with the same string.
+   */
+  async saveClapState(target: ClapTarget): Promise<string> {
+    const slot = this.requireSlot(target);
+    return btoa(`mock-clap-state:${slot.pluginId}`);
+  }
+
+  async loadClapState(target: ClapTarget, stateBase64: string): Promise<void> {
+    const key = MockBackend.targetKey(target);
+    this.requireSlot(target);
+    this.clapStates.set(key, stateBase64);
+    console.info(`[mock] load_clap_state ${key} (${stateBase64.length} chars)`);
   }
 
   async transportPlay(): Promise<void> {
@@ -513,39 +716,68 @@ class MockBackend implements Backend {
     console.info(`[mock] note_off key=${key}`);
   }
 
-  async getSources(): Promise<SourceDto[]> {
+  /** The built-ins, then every scanned instrument -- the order Rust lists them in. */
+  private sourceList(): SourceDto[] {
     const current = this.tracks[this.selected]?.sourceId;
-    return MOCK_SOURCES.map((source) => ({ ...source, selected: source.id === current }));
+    const scanned = MOCK_CLAP_PLUGINS.filter((plugin) => plugin.kind === 'instrument').map(
+      mockClapSource,
+    );
+    return [...MOCK_INTERNAL_SOURCES, ...scanned].map((source) => ({
+      ...source,
+      selected: source.id === current,
+    }));
+  }
+
+  async getSources(): Promise<SourceDto[]> {
+    return this.sourceList();
   }
 
   /**
    * There is no engine in a browser, so this only records the choice and says
-   * so. The selector's own logic -- disabled options, the keyboard hint that
-   * follows the selection -- is what is being developed against the mock.
+   * so. A CLAP id is routed to the placement command, because that is the only
+   * way a bundle ever reaches a track -- the same dispatch the UI does, kept
+   * here too so `set_source` stays usable with any id `get_sources` offered.
    */
   async setSource(id: string): Promise<SourceDto[]> {
-    await this.setTrackSource(this.selected, id);
+    const wanted = this.sourceList().find((source) => source.id === id);
+    if (!wanted) throw new Error(`unknown source '${id}'`);
+    if (wanted.kind === 'clap' && wanted.bundlePath && wanted.pluginId) {
+      await this.setTrackSourceClap(this.selected, wanted.bundlePath, wanted.pluginId);
+    } else {
+      await this.setTrackSource(this.selected, id);
+    }
     return this.getSources();
   }
 
   // --- the mixer -----------------------------------------------------------
 
-  /** The current mixer, cloned so a panel cannot mutate the mock behind its back. */
+  /**
+   * The current mixer, cloned so a panel cannot mutate the mock behind its back.
+   *
+   * `guiOpen` is *derived* from the open-editor set rather than stored on the
+   * slot, so there is exactly one answer to "is that window up" and no pair of
+   * copies to keep in step.
+   */
   private mixerState(): MixerState {
     const anySoloed = this.tracks.some((track) => track.soloed);
+    const withGui = (slot: ClapSlot | null, target: ClapTarget): ClapSlot | null =>
+      slot ? { ...slot, guiOpen: this.openEditors.has(MockBackend.targetKey(target)) } : null;
     return {
       tracks: this.tracks.map((track, index) => ({
         ...track,
         index,
         silenced: anySoloed ? !track.soloed : track.muted,
         selected: index === this.selected,
+        clap: withGui(track.clap, { slot: 'track', index }),
       })),
-      master: { gainDb: this.masterGainDb },
+      master: {
+        gainDb: this.masterGainDb,
+        clap: withGui(this.masterClap, { slot: 'master' }),
+      },
       selected: this.selected,
       maxTracks: MOCK_MAX_TRACKS,
       minGainDb: MOCK_MIN_GAIN_DB,
       maxGainDb: MOCK_MAX_GAIN_DB,
-      canEditLayout: true,
     };
   }
 
@@ -604,17 +836,84 @@ class MockBackend implements Backend {
   }
 
   async setTrackSource(track: number, source: string): Promise<MixerState> {
-    const wanted = MOCK_SOURCES.find((entry) => entry.id === source);
+    const wanted = MOCK_INTERNAL_SOURCES.find((entry) => entry.id === source);
     if (!wanted) throw new Error(`unknown source '${source}'`);
-    if (!wanted.available) {
-      throw new Error(
-        'no CLAP instrument is loaded; set MYDAW_CLAP_INSTRUMENT before starting MYDAW',
-      );
-    }
     const def = this.track(track);
     def.sourceId = wanted.id;
     def.sourceLabel = wanted.label;
+    // A built-in replaces whatever plugin was there, and a window belonging to
+    // an instance that no longer exists must not be left claiming to be open.
+    def.clap = null;
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
     console.info(`[mock] set_track_source ${track} ${source}`);
+    return this.mixerState();
+  }
+
+  /**
+   * Find a scanned bundle, rejecting the way Rust does when the file has moved
+   * or the id is not one the bundle exports.
+   */
+  private findPlugin(
+    bundlePath: string,
+    pluginId: string,
+    kind: ClapPluginInfoDto['kind'],
+  ): ClapPluginInfoDto {
+    const plugin = MOCK_CLAP_PLUGINS.find(
+      (entry) => entry.path === bundlePath && entry.id === pluginId,
+    );
+    if (!plugin) throw new Error(`no plugin '${pluginId}' in bundle ${bundlePath}`);
+    if (plugin.kind !== kind) {
+      throw new Error(`${plugin.name || plugin.id} is a ${plugin.kind}, not a ${kind}`);
+    }
+    return plugin;
+  }
+
+  private newSlot(plugin: ClapPluginInfoDto): ClapSlot {
+    return {
+      instance: this.nextInstance++,
+      pluginId: plugin.id,
+      name: plugin.name || plugin.id,
+      bundlePath: plugin.path,
+      hasEditor: mockHasEditor(plugin),
+      guiOpen: false,
+    };
+  }
+
+  async setTrackSourceClap(
+    track: number,
+    bundlePath: string,
+    pluginId: string,
+  ): Promise<MixerState> {
+    const plugin = this.findPlugin(bundlePath, pluginId, 'instrument');
+    const def = this.track(track);
+    def.clap = this.newSlot(plugin);
+    def.sourceId = mockClapSourceId(plugin.id);
+    def.sourceLabel = def.clap.name;
+    // A fresh instance, so any window the previous one had is gone with it.
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
+    console.info(`[mock] set_track_source_clap ${track} ${pluginId}`);
+    return this.mixerState();
+  }
+
+  async getMasterEffects(): Promise<ClapPluginInfoDto[]> {
+    // Structured clone so panels cannot mutate the shared fixture.
+    return structuredClone(
+      MOCK_CLAP_PLUGINS.filter((plugin) => plugin.kind === 'audio-effect'),
+    );
+  }
+
+  async setMasterEffectClap(bundlePath: string, pluginId: string): Promise<MixerState> {
+    const plugin = this.findPlugin(bundlePath, pluginId, 'audio-effect');
+    this.masterClap = this.newSlot(plugin);
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'master' }));
+    console.info(`[mock] set_master_effect_clap ${pluginId}`);
+    return this.mixerState();
+  }
+
+  async clearMasterEffect(): Promise<MixerState> {
+    this.masterClap = null;
+    this.openEditors.delete(MockBackend.targetKey({ slot: 'master' }));
+    console.info('[mock] clear_master_effect');
     return this.mixerState();
   }
 
@@ -622,7 +921,7 @@ class MockBackend implements Backend {
     if (this.tracks.length >= MOCK_MAX_TRACKS) {
       throw new Error(`a project may have at most ${MOCK_MAX_TRACKS} tracks`);
     }
-    const wanted = MOCK_SOURCES.find((entry) => entry.id === source);
+    const wanted = MOCK_INTERNAL_SOURCES.find((entry) => entry.id === source);
     if (!wanted) throw new Error(`unknown source '${source}'`);
     this.tracks.push({
       index: this.tracks.length,
@@ -636,6 +935,7 @@ class MockBackend implements Backend {
       soloed: false,
       silenced: false,
       selected: false,
+      clap: null,
     });
     return this.mixerState();
   }
@@ -644,13 +944,33 @@ class MockBackend implements Backend {
     this.track(track);
     if (this.tracks.length === 1) throw new Error('a project must keep at least one track');
     this.tracks.splice(track, 1);
+    // Editor keys name a track by *index*, and removing one renumbers every
+    // track after it. Re-keying rather than leaving the set alone: otherwise the
+    // window that belonged to the removed track would appear to belong to
+    // whichever track slid into its place.
+    this.openEditors = MockBackend.reindexEditors(this.openEditors, track);
     if (this.selected >= this.tracks.length) this.selected = this.tracks.length - 1;
     return this.mixerState();
   }
 
-  /** Exposed so a panel test can assert the mock's view of the editor. */
-  isGuiOpen(): boolean {
-    return this.guiOpen;
+  /** Drop `removed`'s editor key and shift every key above it down by one. */
+  private static reindexEditors(open: ReadonlySet<string>, removed: number): Set<string> {
+    const next = new Set<string>();
+    for (const key of open) {
+      if (key === 'master') {
+        next.add(key);
+        continue;
+      }
+      const index = Number.parseInt(key.slice('track:'.length), 10);
+      if (index === removed) continue;
+      next.add(MockBackend.targetKey({ slot: 'track', index: index > removed ? index - 1 : index }));
+    }
+    return next;
+  }
+
+  /** Exposed so a panel test can assert the mock's view of one editor. */
+  isGuiOpen(target: ClapTarget): boolean {
+    return this.openEditors.has(MockBackend.targetKey(target));
   }
 
   async getPattern(): Promise<SequencerState> {

@@ -60,18 +60,24 @@ The UI expects these Tauri commands (`src/api/backend.ts` is the only caller):
 | `transport_stop` | no args, no return |
 | `note_on` | takes `{ key, velocity }` (MIDI key `0..=127`, velocity `0..=1`); sounds regardless of transport state |
 | `note_off` | takes `{ key }` |
-| `get_sources` | returns `SourceDto[]` — the instruments the engine can play, one marked `selected` (the **selected track**'s) |
+| `get_sources` | returns `SourceDto[]` — the three built-ins then every scanned CLAP instrument, one marked `selected` (the **selected track**'s) |
 | `set_source` | takes `{ source }` (an id from `get_sources`), sets the selected track's source, returns the refreshed `SourceDto[]` |
-| `get_tracks` | returns `MixerState { tracks, master, selected, maxTracks, minGainDb, maxGainDb, canEditLayout }` |
+| `get_tracks` | returns `MixerState { tracks, master, selected, maxTracks, minGainDb, maxGainDb }` |
 | `set_track_gain` | takes `{ track, db }`, returns the refreshed `MixerState`. Works with no audio device |
 | `set_track_pan` | takes `{ track, pan }` (`-1..=1`) |
 | `set_track_mute` | takes `{ track, muted }` |
 | `set_track_solo` | takes `{ track, soloed }` |
 | `set_master_gain` | takes `{ db }` |
 | `set_selected_track` | takes `{ track }` — which track the keyboard piano plays |
-| `set_track_source` | takes `{ track, source }` |
-| `add_track` | takes `{ source, name }`; rejects past `maxTracks` or while `canEditLayout` is false |
-| `remove_track` | takes `{ track }`; rejects for the last track or while `canEditLayout` is false |
+| `set_track_source` | takes `{ track, source }` — a **built-in** source id |
+| `set_track_source_clap` | takes `{ track, bundlePath, pluginId }` — places a hosted CLAP instrument |
+| `get_master_effects` | returns `ClapPluginInfoDto[]` — the scanned CLAP **audio effects** |
+| `set_master_effect_clap` | takes `{ bundlePath, pluginId }`; `clear_master_effect` takes nothing |
+| `get_clap_plugins` | takes `{ rescan }`; returns every scanned plugin with its `kind` and `features` |
+| `open_clap_gui` / `close_clap_gui` | take `{ target }` (`{ slot: 'track', index }` or `{ slot: 'master' }`), return `ClapGuiStatus`. One native window per placed plugin, several at a time |
+| `save_clap_state` / `load_clap_state` | take `{ target }` (plus `{ stateBase64 }`); an empty string means the plugin has no state extension |
+| `add_track` | takes `{ source, name }`; rejects past `maxTracks` |
+| `remove_track` | takes `{ track }`; rejects for the last track |
 | `get_pattern` | returns `SequencerState { bpm, sampleRate, pattern }` — the step grid and the tempo |
 | `set_pattern` | takes `{ pattern }` (a whole `PatternDto`), returns the refreshed `SequencerState` |
 | `set_bpm` | takes `{ bpm }` (`20..=999`), returns the stored tempo; rejects rather than clamping |
