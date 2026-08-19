@@ -789,6 +789,34 @@ pub fn get_pattern(state: State<'_, AppState>) -> SequencerStateDto {
     state.sequencer_state()
 }
 
+/// The content of **one** pattern, by id.
+///
+/// `SequencerStateDto` carries the whole set as [`PatternSummaryDto`]s -- counts
+/// and no content -- plus the active pattern in full, which is everything the
+/// rack and the roll need and nothing more. The playlist needs more: a clip
+/// draws a miniature of the pattern it plays, and most clips on a timeline are
+/// not the pattern being edited.
+///
+/// So: one pattern at a time, asked for by the view that wants it and cached
+/// there, rather than fattening every sequencer reply with the content of every
+/// pattern for the sake of a few boxes of marks. A pattern is a few kilobytes;
+/// the whole set on every step toggle would not be.
+///
+/// # Errors
+/// A sentence naming the id, when the set has no such pattern.
+#[tauri::command]
+pub fn get_pattern_content(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+) -> Result<PatternDto, String> {
+    state
+        .sequencer()
+        .patterns()
+        .get(pattern_id)
+        .map(PatternDto::from)
+        .ok_or_else(|| format!("there is no pattern {pattern_id}"))
+}
+
 /// Replace one pattern wholesale.
 ///
 /// A whole-pattern replacement rather than a per-step edit: a rack of grids is

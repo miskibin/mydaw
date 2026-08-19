@@ -237,6 +237,40 @@
   pointer-events: none;
 }
 
+/* The pattern a clip plays, in miniature. Inert: the clip underneath is grabbed
+   through it, so a drag never depends on missing the marks. */
+.wv-clip__art {
+  position: absolute;
+  top: 15px;
+  right: 0;
+  bottom: 3px;
+  left: 0;
+  pointer-events: none;
+}
+
+.wv-clip__mark {
+  position: absolute;
+  min-width: 2px;
+  height: 2px;
+  border-radius: 1px;
+}
+
+/* Resizes one lane. On the header's bottom edge -- see `LaneGrip`. */
+.wv-pl__grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  height: 5px;
+  cursor: ns-resize;
+}
+
+.wv-pl__grip:hover {
+  background: var(--acc);
+  opacity: 0.55;
+}
+
 .wv-clip__grip {
   position: absolute;
   top: 0;

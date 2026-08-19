@@ -210,6 +210,15 @@ export interface Backend {
   /** The whole sequencer state. Called once at startup. */
   getPattern(): Promise<SequencerState>;
   /**
+   * The content of one pattern, by id.
+   *
+   * `SequencerState` carries every pattern as a summary and only the active one
+   * in full. The playlist draws a miniature of each clip's *own* pattern, most
+   * of which are not the one being edited, so it asks for those one at a time
+   * and caches them. **Rejects** an id the set does not have.
+   */
+  getPatternContent(patternId: number): Promise<PatternDto>;
+  /**
    * Replace one pattern wholesale. `pattern.id` names which; `0` means the
    * active one.
    *
@@ -593,6 +602,10 @@ class TauriBackend implements Backend {
 
   getPattern(): Promise<SequencerState> {
     return this.call('get_pattern');
+  }
+
+  getPatternContent(patternId: number): Promise<PatternDto> {
+    return this.call('get_pattern_content', { patternId });
   }
 
   setPattern(pattern: PatternDto): Promise<SequencerState> {

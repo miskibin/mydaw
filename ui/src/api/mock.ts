@@ -1395,6 +1395,14 @@ export class MockBackend implements Backend {
     return this.sequencerState();
   }
 
+  async getPatternContent(patternId: number): Promise<PatternDto> {
+    const pattern = this.patterns.find((entry) => entry.id === patternId);
+    // Refused rather than answered with an empty pattern, exactly as the engine
+    // does: a clip pointing at a pattern that is gone is a bug worth seeing.
+    if (!pattern) throw new Error(`there is no pattern ${patternId}`);
+    return structuredClone(pattern);
+  }
+
   /** Validates the way `Pattern::try_from` does, so the error path is reachable. */
   async setPattern(pattern: PatternDto): Promise<SequencerState> {
     if (!PATTERN_LENGTHS.includes(pattern.steps)) {

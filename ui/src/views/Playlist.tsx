@@ -12,17 +12,41 @@
  * carries a volume slider, a solo and a record-arm; none of those exist for a
  * lane, so rather than draw three dead controls this header shows what the lane
  * actually has plus its clip count. A clip's *sound* is the channel's, and its
- * fader is in the mixer.
+ * fader is in the mixer. The lane's **height**, though, is nobody's but the
+ * view's and costs the engine nothing, so it is draggable: the grip along the
+ * bottom edge of the header resizes that one lane, and a double-click puts it
+ * back. Heights are kept by lane **id**, because an index would slide onto the
+ * neighbour the moment a lane below was removed.
+ *
+ * ## A pattern clip draws the pattern
+ *
+ * An audio clip has a waveform; a pattern clip used to have a coloured
+ * rectangle, which tells you where a clip is and nothing about which one. So it
+ * draws a miniature of the pattern's real content -- every channel's notes and
+ * switched-on steps, in that channel's own colour. That content is not in
+ * `SequencerState` (which carries counts for every pattern and the full shape of
+ * only the active one), so it is fetched per pattern through
+ * `get_pattern_content` and cached here, the same arrangement the waveforms
+ * already use.
  */
 
-import { For, Index, Show, createSignal, onCleanup } from 'solid-js';
+import { For, Index, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 
-import type { ClipDto, WaveformDto } from '../api/types';
-import { TICKS_PER_BAR, samplesToTicks, snapTicks, ticksToSamples } from '../lib/pattern';
+import type { ClipDto, PatternDto, PlaylistTrackDto, WaveformDto } from '../api/types';
+import {
+  TICKS_PER_BAR,
+  TICKS_PER_STEP,
+  samplesToTicks,
+  snapTicks,
+  ticksToSamples,
+} from '../lib/pattern';
 import { useAppState } from '../state';
 import {
+  DEFAULT_LANE_H,
   PLAYLIST_SNAPS,
+  clampLaneHeight,
   clampZoom,
+  laneHeightOf,
   nextSnap,
   snapLabel,
   useView,
@@ -34,10 +58,22 @@ import { IconEraseTool, IconPaintTool, IconSelectTool, IconX } from '../ui/icons
 
 /** Pixels one bar covers at zoom 1. */
 const BAR_PX = 48;
-/** How tall a lane is. */
-const LANE_H = 48;
 /** How wide a lane header is. */
 const HEAD_W = 176;
+/**
+ * The key window a clip miniature maps onto its height: `C2` to `B6`.
+ *
+ * Fixed rather than fitted to each pattern's own range, so a bass line sits low
+ * in its clip and a lead sits high -- which is the whole reason to draw the
+ * notes rather than a bar. A per-pattern range would put every clip's content
+ * in the middle and say nothing.
+ */
+const MARK_LOW_KEY = 36;
+const MARK_HIGH_KEY = 95;
+/** Marks past this are a smear, and each one is a DOM node. */
+const MAX_CLIP_MARKS = 120;
+/** Narrower than this and there is nothing a mark could say. */
+const MIN_ART_PX = 22;
 /** How far past the last clip the timeline keeps going, in bars. */
 const TAIL_BARS = 8;
 /** The fewest bars ever drawn, so an empty arrangement still has a ruler. */
@@ -49,11 +85,66 @@ const TOOLS: readonly [PlaylistTool, string, () => ReturnType<typeof IconPaintTo
   ['delete', 'Delete clips', IconEraseTool],
 ];
 
+/** One mark inside a clip miniature: fractions of the clip, and a colour. */
+interface ClipMark {
+  left: number;
+  width: number;
+  bottom: number;
+  colour: string;
+}
+
+/**
+ * A pattern's content as marks, in the clip's own coordinates.
+ *
+ * A channel that has notes is drawn by pitch, so the shape of the melody is
+ * visible; a channel that has only steps has no pitch worth showing (a grid has
+ * one key), so its hits are stacked on their own row per channel, low in the
+ * clip, the way a drum lane reads in every DAW.
+ */
+function clipMarks(pattern: PatternDto, colourOf: (channel: number) => string): ClipMark[] {
+  const span = Math.max(1, pattern.steps * TICKS_PER_STEP);
+  const lanes = Math.max(1, pattern.channels.length);
+  const marks: ClipMark[] = [];
+
+  pattern.channels.forEach((clip, index) => {
+    const colour = colourOf(clip.channel);
+    if (clip.notes.length > 0) {
+      for (const note of clip.notes) {
+        const key = Math.min(MARK_HIGH_KEY, Math.max(MARK_LOW_KEY, note.key));
+        marks.push({
+          left: note.start / span,
+          width: Math.max(0.005, note.length / span),
+          bottom: (key - MARK_LOW_KEY) / (MARK_HIGH_KEY - MARK_LOW_KEY),
+          colour,
+        });
+      }
+      return;
+    }
+    const cells = clip.steps?.steps ?? [];
+    const width = 0.7 / Math.max(1, pattern.steps);
+    cells.forEach((cell, position) => {
+      if (!cell.on) return;
+      marks.push({
+        left: position / Math.max(1, pattern.steps),
+        width,
+        // Stacked from the floor, one thin row per channel, so two drum lanes
+        // do not land on top of each other and read as one.
+        bottom: 0.06 + (index / lanes) * 0.5,
+        colour,
+      });
+    });
+  });
+
+  return marks.slice(0, MAX_CLIP_MARKS);
+}
+
 export function Playlist(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
   const [waveforms, setWaveforms] = createSignal<Record<number, WaveformDto>>({});
   const pending = new Set<number>();
+  const [contents, setContents] = createSignal<Record<number, PatternDto>>({});
+  const pendingPatterns = new Set<number>();
 
   let playheadEl: HTMLDivElement | undefined;
   let scrollEl: HTMLDivElement | undefined;
@@ -79,6 +170,77 @@ export function Playlist(): ReturnType<typeof Show> {
         .finally(() => pending.delete(sourceId));
     }
     return undefined;
+  }
+
+  /**
+   * The content of the pattern a clip plays, fetched once and remembered.
+   *
+   * The **active** pattern is never cached: it is already on the wire in full
+   * and it changes under the user's hands, so a clip playing the pattern being
+   * edited must redraw as the rack is clicked rather than lag it by however long
+   * ago the fetch was.
+   */
+  function patternContent(id: number): PatternDto | undefined {
+    const active = app.pattern();
+    if (active && active.id === id) return active;
+    const have = contents()[id];
+    if (have) return have;
+    if (!pendingPatterns.has(id)) {
+      pendingPatterns.add(id);
+      app.backend
+        .getPatternContent(id)
+        .then((content) => setContents((all) => ({ ...all, [id]: content })))
+        .catch(() => {})
+        .finally(() => pendingPatterns.delete(id));
+    }
+    return undefined;
+  }
+
+  /**
+   * Drop a cached pattern that can no longer be trusted.
+   *
+   * Only the active pattern can be edited, so a cached copy goes stale in
+   * exactly two ways: it *was* active and the rack has since moved on, or its
+   * summary changed under it (a length change, a clone, an undo). Both are
+   * cheap to watch, and neither needs the engine to tell us anything new.
+   */
+  let previousActive = -1;
+  const fingerprints = new Map<number, string>();
+  createEffect(() => {
+    const active = app.sequencer()?.patternSet.activeId ?? -1;
+    const stale = new Set<number>();
+    if (previousActive >= 0 && previousActive !== active) stale.add(previousActive);
+    previousActive = active;
+    for (const summary of app.patterns()) {
+      const mark = `${summary.steps}:${summary.hitCount}:${summary.noteCount}`;
+      if (fingerprints.get(summary.id) !== mark) {
+        if (fingerprints.has(summary.id)) stale.add(summary.id);
+        fingerprints.set(summary.id, mark);
+      }
+    }
+    if (stale.size === 0) return;
+    setContents((all) => {
+      const next = { ...all };
+      for (const id of stale) delete next[id];
+      return next;
+    });
+  });
+
+  // --- lane heights --------------------------------------------------------
+
+  const laneHeight = (laneId: number) => laneHeightOf(view.laneHeights(), laneId);
+
+  /**
+   * Which lane the pointer is over, by asking the document rather than dividing
+   * by a lane height -- lanes are individually resizable now, so there is no
+   * single height to divide by.
+   */
+  function laneUnder(clientX: number, clientY: number): number | null {
+    for (const element of document.elementsFromPoint(clientX, clientY)) {
+      const lane = (element as HTMLElement).closest<HTMLElement>('.wv-pl__lane');
+      if (lane?.dataset.lane !== undefined) return Number(lane.dataset.lane);
+    }
+    return null;
   }
 
   // The playhead is written to the DOM on the frame loop: it moves every frame
@@ -163,7 +325,6 @@ export function Playlist(): ReturnType<typeof Show> {
     const originStart = clip.start;
     const originLength = clip.length;
     const originLane = clip.track;
-    const lanes = playlist()?.tracks.length ?? 1;
     let moved = false;
     let lastStart = originStart;
     let lastLane = originLane;
@@ -189,8 +350,11 @@ export function Playlist(): ReturnType<typeof Show> {
         );
         return;
       }
-      const dy = Math.round((moveEvent.clientY - startY) / LANE_H);
-      lastLane = Math.min(lanes - 1, Math.max(0, originLane + dy));
+      // The lane under the pointer, not a lane count derived from a fixed
+      // height: with resizable lanes the two stop agreeing at the first drag.
+      // Off the stack entirely (past the last lane, or over a scrollbar) keeps
+      // the last good answer rather than snapping back to where it started.
+      lastLane = laneUnder(moveEvent.clientX, moveEvent.clientY) ?? lastLane;
       lastStart = snapTicks(Math.max(0, originStart + dx), view.playlistSnap());
       app.say(
         clipName(clip),
@@ -352,7 +516,10 @@ export function Playlist(): ReturnType<typeof Show> {
           <Index each={playlist()?.tracks ?? []}>
             {(lane, index) => (
               <div class="wv-pl__row">
-                <div class="wv-pl__head" style={{ width: `${HEAD_W}px`, height: `${LANE_H}px` }}>
+                <div
+                  class="wv-pl__head"
+                  style={{ width: `${HEAD_W}px`, height: `${laneHeight(lane().id)}px` }}
+                >
                   <button
                     type="button"
                     class="wv-led"
@@ -390,13 +557,15 @@ export function Playlist(): ReturnType<typeof Show> {
                   >
                     <IconX />
                   </button>
+                  <LaneGrip lane={lane()} height={laneHeight(lane().id)} />
                 </div>
                 <div
                   class="wv-pl__lane"
+                  data-lane={index}
                   classList={{ 'is-muted': lane().muted, 'is-painting': view.playlistTool() === 'paint' }}
                   style={{
                     width: `${laneWidth()}px`,
-                    height: `${LANE_H}px`,
+                    height: `${laneHeight(lane().id)}px`,
                     'background-size': `${BAR_PX * view.playlistZoom() * 4}px 100%, ${BAR_PX * view.playlistZoom()}px 100%`,
                   }}
                   onPointerDown={(event) => onLanePointerDown(event, index)}
@@ -417,6 +586,16 @@ export function Playlist(): ReturnType<typeof Show> {
                             : 'var(--acc)'
                         }
                         waveform={clip.kind === 'audio' ? waveformFor(clip.sourceId!) : undefined}
+                        marks={() => {
+                          if (clip.kind !== 'pattern' || clip.patternId === undefined) return [];
+                          if (clip.length * pxPerTick() < MIN_ART_PX) return [];
+                          const content = patternContent(clip.patternId);
+                          if (!content) return [];
+                          return clipMarks(content, (channel) => {
+                            const track = app.tracks()[channel];
+                            return track ? trackColor(track.id) : trackColor(channel);
+                          });
+                        }}
                         selected={view.selectedClip() === clip.id}
                         onDown={(event, mode) => onClipPointerDown(event, clip, mode)}
                         onDelete={() => removeClip(clip)}
@@ -512,13 +691,68 @@ function LaneName(props: { name: string; onRename: (name: string) => void }): Re
   );
 }
 
-/** One clip: a coloured block with either a note sketch or a real waveform. */
+/**
+ * The grip that resizes one lane.
+ *
+ * A strip along the bottom edge of the header rather than of the lane itself:
+ * the lane is a drawing surface and a five-pixel band of it that paints nothing
+ * when you click would be a hole in the paint tool.
+ */
+function LaneGrip(props: { lane: PlaylistTrackDto; height: number }): ReturnType<typeof Show> {
+  const view = useView();
+  const app = useAppState();
+
+  const setHeight = (height: number) =>
+    view.setLaneHeights((all) => ({ ...all, [props.lane.id]: clampLaneHeight(height) }));
+
+  return (
+    <span
+      class="wv-pl__grip"
+      title={`${props.lane.name} — drag to resize this lane, double-click for ${DEFAULT_LANE_H} px`}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const startY = event.clientY;
+        const startHeight = props.height;
+        const onMove = (move: PointerEvent) => {
+          const next = clampLaneHeight(startHeight + (move.clientY - startY));
+          setHeight(next);
+          app.say(`${props.lane.name} · Lane height`, `${next} px`);
+        };
+        const onUp = () => {
+          window.removeEventListener('pointermove', onMove);
+          window.removeEventListener('pointerup', onUp);
+          document.body.style.removeProperty('cursor');
+          document.body.style.removeProperty('user-select');
+        };
+        document.body.style.setProperty('cursor', 'ns-resize');
+        document.body.style.setProperty('user-select', 'none');
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      }}
+      onDblClick={(event) => {
+        event.stopPropagation();
+        view.setLaneHeights((all) => {
+          const next = { ...all };
+          delete next[props.lane.id];
+          return next;
+        });
+        app.say(`${props.lane.name} · Lane height`, `${DEFAULT_LANE_H} px`);
+      }}
+    />
+  );
+}
+
+/** One clip: a coloured block with either the pattern it plays or a waveform. */
 function Clip(props: {
   clip: ClipDto;
   pxPerTick: number;
   name: string;
   colour: string;
   waveform: WaveformDto | undefined;
+  /** The pattern's content as marks. Empty for an audio clip or a narrow one. */
+  marks: () => ClipMark[];
   selected: boolean;
   onDown: (event: PointerEvent, mode: 'move' | 'resize') => void;
   onDelete: () => void;
@@ -565,6 +799,23 @@ function Clip(props: {
         <svg class="wv-clip__wave" viewBox="0 0 100 100" preserveAspectRatio="none">
           <path d={path()} fill="currentColor" />
         </svg>
+      </Show>
+      <Show when={props.clip.kind === 'pattern'}>
+        <div class="wv-clip__art">
+          <For each={props.marks()}>
+            {(mark) => (
+              <span
+                class="wv-clip__mark"
+                style={{
+                  left: `${mark.left * 100}%`,
+                  width: `${mark.width * 100}%`,
+                  bottom: `${mark.bottom * 84}%`,
+                  background: alpha(mark.colour, 0.85),
+                }}
+              />
+            )}
+          </For>
+        </div>
       </Show>
       <span class="wv-clip__grip" onPointerDown={(event) => props.onDown(event, 'resize')} />
     </div>

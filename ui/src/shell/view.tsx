@@ -30,6 +30,18 @@ export type Brush =
   | { kind: 'audio'; id: number }
   | null;
 
+/**
+ * Which insert the fullscreen effect editor is showing.
+ *
+ * By **id** and not by chain position, because the editor can reorder the chain
+ * it is looking at: an index would leave it pointed at whatever moved into that
+ * slot the moment somebody pressed the "move earlier" button.
+ */
+export interface InsertEditorRef {
+  strip: StripRef;
+  insertId: number;
+}
+
 /** The roll's pointer tools. */
 export type RollTool = 'draw' | 'paint' | 'select' | 'delete' | 'slice';
 
@@ -61,6 +73,22 @@ export const PLAYLIST_SNAPS: readonly [number, string][] = [
 export const MIN_ZOOM = 0.4;
 export const MAX_ZOOM = 4;
 
+/** How tall a playlist lane is before anyone drags it. */
+export const DEFAULT_LANE_H = 48;
+/** Below this a clip's label has nowhere to go; above it, the lane is a wall. */
+export const MIN_LANE_H = 30;
+export const MAX_LANE_H = 160;
+
+/** A lane's drawn height, from the map the playlist keeps. */
+export function laneHeightOf(heights: Record<number, number>, laneId: number): number {
+  return heights[laneId] ?? DEFAULT_LANE_H;
+}
+
+/** Clamp a dragged lane height into the bounds above. */
+export function clampLaneHeight(height: number): number {
+  return Math.min(MAX_LANE_H, Math.max(MIN_LANE_H, Math.round(height)));
+}
+
 export interface ViewState {
   view: Accessor<MainView>;
   go(view: MainView): void;
@@ -72,6 +100,17 @@ export interface ViewState {
   rollChannel: Accessor<number>;
   openRoll(channel: number): void;
   closeRoll(): void;
+
+  /**
+   * The insert whose full editor is up, or `null`.
+   *
+   * A second fullscreen layer, over the same three views the roll covers. Only
+   * ever one of the two: opening either closes the other, so Escape can never be
+   * ambiguous about which layer it is leaving.
+   */
+  insertEditor: Accessor<InsertEditorRef | null>;
+  openInsertEditor(ref: InsertEditorRef): void;
+  closeInsertEditor(): void;
 
   browserOpen: Accessor<boolean>;
   setBrowserOpen: Setter<boolean>;
@@ -116,6 +155,15 @@ export interface ViewState {
   /** The clip the playlist has selected, by id. */
   selectedClip: Accessor<number | null>;
   setSelectedClip: Setter<number | null>;
+  /**
+   * How tall each playlist lane is drawn, in pixels, by **lane id**.
+   *
+   * By id and not by index, because removing a lane shifts every index above it
+   * and a height that followed the index would slide onto its neighbour. Lanes
+   * absent from the map are {@link DEFAULT_LANE_H}.
+   */
+  laneHeights: Accessor<Record<number, number>>;
+  setLaneHeights: Setter<Record<number, number>>;
 
   /** Whether the window is wide enough for the top bar's optional readouts. */
   wideBar: Accessor<boolean>;
@@ -131,6 +179,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [previousView, setPreviousView] = createSignal<MainView>('rack');
   const [rollOpen, setRollOpen] = createSignal(false);
   const [rollChannel, setRollChannel] = createSignal(0);
+  const [insertEditor, setInsertEditor] = createSignal<InsertEditorRef | null>(null);
   const [browserOpen, setBrowserOpen] = createSignal(true);
   const [browserTab, setBrowserTab] = createSignal<BrowserTab>('sounds');
   const [sideOpen, setSideOpen] = createSignal(true);
@@ -148,6 +197,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [playlistSnap, setPlaylistSnap] = createSignal(PLAYLIST_SNAPS[0]![0]);
   const [playlistZoom, setPlaylistZoom] = createSignal(1);
   const [selectedClip, setSelectedClip] = createSignal<number | null>(null);
+  const [laneHeights, setLaneHeights] = createSignal<Record<number, number>>({});
   const [wideBar, setWideBar] = createSignal(
     typeof window === 'undefined' ? true : window.innerWidth >= WIDE_BAR_PX,
   );
@@ -160,6 +210,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     go(next) {
       setView(next);
       setRollOpen(false);
+      setInsertEditor(null);
       setPreviousView(next);
     },
     previousView,
@@ -169,11 +220,20 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
       setPreviousView(view());
       setRollChannel(channel);
       setSelection([]);
+      setInsertEditor(null);
       setRollOpen(true);
     },
     closeRoll() {
       setRollOpen(false);
       setSelection([]);
+    },
+    insertEditor,
+    openInsertEditor(ref) {
+      setRollOpen(false);
+      setInsertEditor(ref);
+    },
+    closeInsertEditor() {
+      setInsertEditor(null);
     },
     browserOpen,
     setBrowserOpen,
@@ -209,6 +269,8 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     setPlaylistZoom,
     selectedClip,
     setSelectedClip,
+    laneHeights,
+    setLaneHeights,
     wideBar,
   };
 

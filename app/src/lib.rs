@@ -324,6 +324,7 @@ pub fn run() -> ExitCode {
             commands::load_vst3_state,
             // Patterns, the arrangement and the play mode.
             commands::get_pattern,
+            commands::get_pattern_content,
             commands::set_pattern,
             commands::add_pattern,
             commands::clone_pattern,
