@@ -50,7 +50,7 @@ use mydaw_fixture_clap_gain::synth::{self, PLUGIN_ID as SYNTH_ID, VOICE_GAIN};
 use mydaw_plugin_audio_io::AudioIoService;
 use mydaw_plugin_host_clap::test_util::{missing_fixture_message, stage_fixture_bundle};
 use mydaw_plugin_instruments::InstrumentRegistry;
-use mydaw_plugin_sequencer::{Pattern, PatternRow, SequencerService};
+use mydaw_plugin_sequencer::{Pattern, PatternSet, PlayMode, Playlist, SequencerService, StepRow};
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_plugin_windows::PluginWindowService;
 use mydaw_rt_core::basedrop::Collector;
@@ -380,9 +380,14 @@ fn authored_project(bundle: &Path) -> Project {
 
 /// A beat with hits on both a kick row and a snare row.
 fn authored_pattern() -> Pattern {
-    let mut pattern = Pattern::default();
-    pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 4, 8, 12]);
-    pattern.rows[1] = PatternRow::empty(38).with_steps(&[4, 12]);
+    let mut pattern = Pattern::with_channels(1, "Pattern 1", &[0, 1, 2, 3, 4], |channel| {
+        mydaw_plugin_sequencer::DEFAULT_ROW_KEYS
+            .get(channel as usize)
+            .copied()
+            .unwrap_or(mydaw_plugin_sequencer::DEFAULT_STEP_KEY)
+    });
+    pattern.channels[0].steps = Some(StepRow::empty(36).with_steps(&[0, 4, 8, 12]));
+    pattern.channels[1].steps = Some(StepRow::empty(38).with_steps(&[4, 12]));
     pattern
 }
 
@@ -402,7 +407,10 @@ fn a_whole_session_survives_a_save_and_a_load_into_a_fresh_engine() {
     let authored = authored_project(&bundle);
     let mut first = Rig::new(authored.clone());
     first.sequencer.set_bpm(147.0);
-    first.sequencer.set_pattern(authored_pattern()).unwrap();
+    first
+        .sequencer
+        .set_song(PatternSet::single(authored_pattern()), Playlist::default())
+        .unwrap();
     first.tracks.set_selected(1).unwrap();
     first.tracks.set_soloed(1, true).unwrap();
     first.place(1, &bundle);
@@ -469,7 +477,7 @@ fn a_whole_session_survives_a_save_and_a_load_into_a_fresh_engine() {
     assert!(restored.tracks[1].soloed);
     assert_eq!(restored.master_gain_db, -2.0);
     assert_eq!(second.sequencer.bpm(), 147.0);
-    assert_eq!(second.sequencer.pattern(), authored_pattern());
+    assert_eq!(second.sequencer.active_pattern(), authored_pattern());
     assert_eq!(second.tracks.selected(), 1);
 
     // The solo is a *derived* value -- recomputed from the whole project, never
@@ -619,7 +627,10 @@ fn a_project_whose_plugin_is_gone_still_opens_with_everything_else_intact() {
 
     let mut first = Rig::new(project);
     first.sequencer.set_bpm(112.0);
-    first.sequencer.set_pattern(authored_pattern()).unwrap();
+    first
+        .sequencer
+        .set_song(PatternSet::single(authored_pattern()), Playlist::default())
+        .unwrap();
     first.place(1, &shared);
     first.load_state(1, &synth::state_blob(-5.0));
 
@@ -654,7 +665,7 @@ fn a_project_whose_plugin_is_gone_still_opens_with_everything_else_intact() {
     // The project opened.
     assert_eq!(second.tracks.track_count(), 2);
     assert_eq!(second.sequencer.bpm(), 112.0);
-    assert_eq!(second.sequencer.pattern(), authored_pattern());
+    assert_eq!(second.sequencer.active_pattern(), authored_pattern());
     assert_eq!(second.tracks.project().tracks[0].gain_db, -3.0);
     assert_eq!(second.tracks.project().tracks[0].source, Source::DrumKit);
 
@@ -754,7 +765,12 @@ fn loading_over_a_live_session_replaces_every_plugin_and_leaves_nothing_behind()
         &plain,
         0,
         130.0,
-        &Pattern::default(),
+        &mydaw_app::Song {
+            patterns: &PatternSet::single(authored_pattern()),
+            playlist: &Playlist::default(),
+            mode: PlayMode::Pattern,
+            audio_sources: Vec::new(),
+        },
         &[],
         None,
     ));

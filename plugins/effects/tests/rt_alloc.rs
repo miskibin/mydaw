@@ -92,6 +92,7 @@ fn run_block(node: &mut dyn RtNode, buffers: &mut AudioBuffers, frames: usize, p
         sample_pos: position,
         playing: true,
         bpm: DEFAULT_BPM,
+        ..TransportSnapshot::default()
     };
     let mut ctx = ProcessCtx::new(buffers, SR, frames, transport);
     node.process(&mut ctx);

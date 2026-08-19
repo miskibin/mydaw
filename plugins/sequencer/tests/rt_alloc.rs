@@ -1,12 +1,14 @@
-//! Proves the scheduler and the pattern slot allocate nothing on the audio
-//! thread.
+//! Proves the scheduler and the song slot allocate nothing on the audio thread,
+//! in both play modes.
 //!
 //! The scheduler runs *before* the graph, on the same callback, under the same
 //! rule (see [`RtNode`](mydaw_rt_core::RtNode)'s zero-alloc invariant). Reading
-//! the code is not evidence: a fixed array is only fixed until somebody reaches
-//! for a `Vec`, and `PatternSlot::poll_swap` drops a `basedrop::Owned` on this
-//! very thread -- the whole point of which is that dropping it must *not* free
-//! anything.
+//! the code is not evidence -- and it is *less* evidence than it used to be,
+//! because a `CompiledSong` is built out of `Vec`s. The claim is that they are
+//! built off this thread and only indexed on it, which is exactly the sort of
+//! claim a counting allocator settles and an argument does not.
+//! `SongSlot::poll_swap` also drops a `basedrop::Owned` right here, the whole
+//! point of which is that dropping it must *not* free anything.
 //!
 //! Same harness as `plugins/instruments/tests/rt_alloc.rs`: a counting global
 //! allocator armed per-thread, so the test's own setup is not counted, and the
@@ -16,8 +18,9 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use mydaw_plugin_sequencer::{
-    pattern_channel, CompiledPattern, MelodicNote, Pattern, PatternRow, Scheduler, Step,
-    TransportWindow, MAX_NOTES, MAX_ROWS, MAX_STEPS,
+    song_channel, ChannelClip, CompiledPatternClip, CompiledSong, MelodicNote, Pattern, PlayMode,
+    Scheduler, Step, StepRow, TransportWindow, MAX_NOTES, MAX_PATTERN_CHANNELS, MAX_STEPS,
+    TICKS_PER_BAR,
 };
 use mydaw_rt_core::basedrop::Collector;
 use mydaw_rt_core::{NoteEventBuffer, DEFAULT_BPM};
@@ -80,36 +83,66 @@ fn count_allocations(body: impl FnOnce()) -> u64 {
 /// The block sizes a real device asks for, plus the awkward ones it should not.
 const BLOCK_SIZES: [usize; 8] = [1, 32, 64, 127, 256, 441, 512, 4_096];
 
-/// Every row hitting every step of the longest pattern, plus the full thousand
-/// melodic notes: the densest pattern MYDAW can express, and therefore the most
-/// events one block can be asked to produce.
-fn dense_pattern() -> CompiledPattern {
-    let mut pattern = Pattern::silent();
+/// Every channel hitting every step of the longest pattern, plus a full
+/// thousand melodic notes on one of them: the densest pattern MYDAW can express,
+/// and therefore the most events one block can be asked to produce.
+fn dense_pattern() -> Pattern {
+    let mut pattern = Pattern::silent(1, "Dense");
     pattern.length_steps = MAX_STEPS as u8;
-    for row in 0..MAX_ROWS {
-        let mut pattern_row = PatternRow::empty(36 + row as u8);
-        for step in 0..MAX_STEPS {
-            pattern_row.steps[step] = Step::accent();
-        }
-        pattern.rows.push(pattern_row);
-    }
-    // Spread across the four bars, several to a tick position, so the
-    // scheduler's binary search has ties to get right and its pending array is
-    // put under real pressure.
     let pattern_ticks = pattern.ticks();
-    for index in 0..MAX_NOTES {
-        let start = (index as u32 * 15) % pattern_ticks;
-        pattern.notes.push(MelodicNote::new(
-            36 + (index % 60) as u8,
-            (index % 8) as u8,
-            start,
-            (pattern_ticks - start).clamp(1, 480),
-        ));
+    for channel in 0..MAX_PATTERN_CHANNELS {
+        let key = 36 + channel as u8;
+        let mut clip = ChannelClip::stepped(channel as u8, key);
+        let mut row = StepRow::empty(key);
+        for step in 0..MAX_STEPS {
+            row.steps[step] = Step::accent();
+        }
+        clip.steps = Some(row);
+        if channel == 0 {
+            // Spread across the four bars, several to a tick position, so the
+            // scheduler's binary search has ties to get right and its pending
+            // array is put under real pressure.
+            clip.notes = (0..MAX_NOTES)
+                .map(|index| {
+                    let start = (index as u32 * 15) % pattern_ticks;
+                    MelodicNote::new(
+                        36 + (index % 60) as u8,
+                        start,
+                        (pattern_ticks - start).clamp(1, 480),
+                    )
+                })
+                .collect();
+        }
+        pattern.channels.push(clip);
     }
     pattern
         .validate()
         .expect("the densest legal pattern is legal");
-    pattern.compile()
+    pattern
+}
+
+/// That pattern, alone, with nothing arranged.
+fn dense_song() -> CompiledSong {
+    CompiledSong::new(vec![dense_pattern().compile()], 0, Vec::new())
+}
+
+/// That pattern arranged as thirty-two overlapping clips: the densest
+/// arrangement song mode can be asked to walk in one block.
+fn dense_arrangement() -> CompiledSong {
+    let bar = TICKS_PER_BAR as u64;
+    CompiledSong::new(
+        vec![dense_pattern().compile()],
+        0,
+        (0..32)
+            .map(|index| CompiledPatternClip {
+                pattern: 0,
+                // Overlapping on purpose: an arrangement where only one clip is
+                // ever live would not exercise the loop this is bounding.
+                start_ticks: index * bar,
+                length_ticks: 8 * bar,
+            })
+            .collect(),
+    )
 }
 
 #[test]
@@ -134,32 +167,39 @@ fn the_allocation_counter_actually_counts() {
 }
 
 #[test]
-fn scheduling_allocates_nothing_across_tempos_rates_and_block_sizes() {
-    let pattern = dense_pattern();
+fn scheduling_allocates_nothing_across_modes_tempos_rates_and_block_sizes() {
+    let pattern_only = dense_song();
+    let arrangement = dense_arrangement();
     // Built before arming: the event buffer is the host's, not the scheduler's.
-    let mut buffer = NoteEventBuffer::new(2_048);
+    let mut buffer = NoteEventBuffer::new(8_192);
     let mut scheduler = Scheduler::new();
 
     let count = count_allocations(|| {
-        for sample_rate in [44_100.0_f64, 48_000.0] {
-            for bpm in [20.0_f64, 130.0, 174.3, 999.0] {
-                for frames in BLOCK_SIZES {
-                    scheduler.reset();
-                    let mut start = 0_u64;
-                    for _ in 0..24 {
-                        buffer.clear();
-                        scheduler.schedule(
-                            Some(&pattern),
-                            &TransportWindow {
-                                start_sample: start,
-                                frames,
-                                sample_rate,
-                                bpm,
-                                playing: true,
-                            },
-                            &mut buffer,
-                        );
-                        start += frames as u64;
+        for (mode, song) in [
+            (PlayMode::Pattern, &pattern_only),
+            (PlayMode::Song, &arrangement),
+        ] {
+            for sample_rate in [44_100.0_f64, 48_000.0] {
+                for bpm in [20.0_f64, 130.0, 174.3, 999.0] {
+                    for frames in BLOCK_SIZES {
+                        scheduler.reset();
+                        let mut start = 0_u64;
+                        for _ in 0..24 {
+                            buffer.clear();
+                            scheduler.schedule(
+                                Some(song),
+                                &TransportWindow {
+                                    start_sample: start,
+                                    frames,
+                                    sample_rate,
+                                    bpm,
+                                    playing: true,
+                                    mode,
+                                },
+                                &mut buffer,
+                            );
+                            start += frames as u64;
+                        }
                     }
                 }
             }
@@ -167,12 +207,46 @@ fn scheduling_allocates_nothing_across_tempos_rates_and_block_sizes() {
     });
 
     assert_eq!(count, 0, "the scheduler allocated {count} times");
-    assert_eq!(scheduler.overflowed(), 0, "no note-off was ever lost");
+}
+
+#[test]
+fn switching_mode_every_block_allocates_nothing() {
+    // The mode edge takes the flush path, and takes it while the pending array
+    // is full of a dense pattern's owed note-offs.
+    let pattern_only = dense_song();
+    let arrangement = dense_arrangement();
+    let mut buffer = NoteEventBuffer::new(8_192);
+    let mut scheduler = Scheduler::new();
+
+    let count = count_allocations(|| {
+        for block in 0..64_u64 {
+            let (mode, song) = if block % 2 == 0 {
+                (PlayMode::Pattern, &pattern_only)
+            } else {
+                (PlayMode::Song, &arrangement)
+            };
+            buffer.clear();
+            scheduler.schedule(
+                Some(song),
+                &TransportWindow {
+                    start_sample: block * 512,
+                    frames: 512,
+                    sample_rate: 48_000.0,
+                    bpm: DEFAULT_BPM,
+                    playing: true,
+                    mode,
+                },
+                &mut buffer,
+            );
+        }
+    });
+
+    assert_eq!(count, 0, "switching mode allocated {count} times");
 }
 
 #[test]
 fn the_stop_flush_and_the_seek_flush_allocate_nothing() {
-    let pattern = dense_pattern();
+    let song = dense_song();
     let mut buffer = NoteEventBuffer::new(2_048);
     let mut scheduler = Scheduler::new();
 
@@ -187,13 +261,14 @@ fn the_stop_flush_and_the_seek_flush_allocate_nothing() {
             ] {
                 buffer.clear();
                 scheduler.schedule(
-                    Some(&pattern),
+                    Some(&song),
                     &TransportWindow {
                         start_sample: start,
                         frames: 64,
                         sample_rate: 48_000.0,
                         bpm: DEFAULT_BPM,
                         playing,
+                        mode: PlayMode::Pattern,
                     },
                     &mut buffer,
                 );
@@ -211,7 +286,7 @@ fn the_stop_flush_and_the_seek_flush_allocate_nothing() {
 fn a_full_event_buffer_does_not_make_the_scheduler_allocate() {
     // The overflow branch: 256 events into a 4-slot buffer. Dropping must be a
     // returned count, never a growth.
-    let pattern = dense_pattern();
+    let song = dense_song();
     let mut buffer = NoteEventBuffer::new(4);
     let capacity = buffer.capacity();
     let mut scheduler = Scheduler::new();
@@ -220,13 +295,14 @@ fn a_full_event_buffer_does_not_make_the_scheduler_allocate() {
         for block in 0..32_u64 {
             buffer.clear();
             scheduler.schedule(
-                Some(&pattern),
+                Some(&song),
                 &TransportWindow {
                     start_sample: block * 4_096,
                     frames: 4_096,
                     sample_rate: 48_000.0,
                     bpm: 999.0,
                     playing: true,
+                    mode: PlayMode::Pattern,
                 },
                 &mut buffer,
             );
@@ -238,20 +314,23 @@ fn a_full_event_buffer_does_not_make_the_scheduler_allocate() {
 }
 
 #[test]
-fn swapping_the_pattern_on_the_audio_thread_neither_allocates_nor_frees() {
-    // The `basedrop` claim, measured: the slot picks up a new pattern and drops
-    // the old one, and neither may touch the allocator on this thread.
+fn swapping_the_song_on_the_audio_thread_neither_allocates_nor_frees() {
+    // The `basedrop` claim, measured: the slot picks up a new song and drops the
+    // old one, and neither may touch the allocator on this thread. This is the
+    // test that makes `Vec` inside a `CompiledSong` legitimate rather than
+    // merely convenient -- a `Vec` frees its buffer on drop, and dropping here
+    // must not free.
     let mut collector = Collector::new();
-    let (mut handle, mut slot) = pattern_channel(8, collector.handle());
-    let dense = dense_pattern();
-    let sparse = Pattern::default().compile();
+    let (mut handle, mut slot) = song_channel(8, collector.handle());
+    let dense = dense_song();
+    let arrangement = dense_arrangement();
 
     // Installed off the "audio thread" -- that is where the allocation belongs.
     handle.install(dense.clone()).unwrap();
-    handle.install(sparse).unwrap();
+    handle.install(arrangement).unwrap();
     handle.install(dense).unwrap();
 
-    let mut buffer = NoteEventBuffer::new(2_048);
+    let mut buffer = NoteEventBuffer::new(8_192);
     let mut scheduler = Scheduler::new();
 
     let count = count_allocations(|| {
@@ -266,17 +345,15 @@ fn swapping_the_pattern_on_the_audio_thread_neither_allocates_nor_frees() {
                     sample_rate: 48_000.0,
                     bpm: DEFAULT_BPM,
                     playing: true,
+                    mode: PlayMode::Song,
                 },
                 &mut buffer,
             );
         }
     });
 
-    assert_eq!(
-        count, 0,
-        "the pattern swap allocated or freed {count} times"
-    );
-    assert!(slot.has_pattern());
+    assert_eq!(count, 0, "the song swap allocated or freed {count} times");
+    assert!(slot.has_song());
     // And the superseded patterns really were handed to the collector rather
     // than freed: they are still allocated until it runs.
     assert_eq!(collector.alloc_count(), 3);

@@ -83,12 +83,15 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use mydaw_plugin_host_vst3::ClassId;
-use mydaw_plugin_sequencer::{Pattern, PatternError};
+use mydaw_plugin_sequencer::{
+    AudioClip, Clip, Pattern, PatternClip, PatternError, PatternSet, PlayMode, Playlist,
+    PlaylistError, PlaylistTrack,
+};
 use mydaw_rt_core::{MAX_BPM, MAX_TRACKS, MIN_BPM};
 use serde::{Deserialize, Serialize};
 
 use crate::clap_bridge::{from_base64, to_base64};
-use crate::dto::PatternDto;
+use crate::dto::{ChannelClipDto, MelodicNoteDto, PatternDto, StepDto, StepRowDto};
 use crate::project::{check_gain_db, check_pan, Project, TrackDef};
 use crate::source::{ClapSourceRef, Source, Vst3SourceRef};
 
@@ -98,7 +101,8 @@ use crate::source::{ClapSourceRef, Source, Vst3SourceRef};
 /// | --- | --- | --- |
 /// | 1 | step 8 | The format. |
 /// | 2 | step 9 | `pattern.notes`; `pattern.steps` may be 32 or 64. |
-pub const FORMAT_VERSION: u32 = 2;
+/// | 3 | patterns + playlist | `patterns`, `active_pattern`, `playlist`, `audio_sources`, `play_mode`; the single `pattern` is gone. |
+pub const FORMAT_VERSION: u32 = 3;
 
 /// File extension, without the dot. The native dialogs filter on it.
 pub const PROJECT_EXTENSION: &str = "mydaw";
@@ -129,9 +133,298 @@ pub struct ProjectFile {
     pub tracks: Vec<TrackEntry>,
     /// The one plugin on the master insert, or `null`.
     pub master_effect: Option<EffectEntry>,
-    /// The step grid. The same shape the webview exchanges, so there is exactly
-    /// one pattern serialiser in the app rather than two that can drift.
-    pub pattern: PatternDto,
+    /// Whether the transport was left on `pat` or `song`.
+    #[serde(default = "default_play_mode")]
+    pub play_mode: String,
+    /// Every pattern, in picker order. The same shape the webview exchanges, so
+    /// there is exactly one pattern serialiser in the app rather than two that
+    /// can drift.
+    ///
+    /// Empty in a version 1 or 2 file, which carried [`Self::pattern`] instead;
+    /// [`parse_project`] fills it in.
+    #[serde(default)]
+    pub patterns: Vec<PatternDto>,
+    /// Id of the pattern that was being edited.
+    #[serde(default)]
+    pub active_pattern: u64,
+    /// The arrangement.
+    #[serde(default)]
+    pub playlist: PlaylistEntry,
+    /// Every audio file the arrangement references, by path.
+    ///
+    /// A table rather than a path on each clip, because two clips of the same
+    /// take are the common case and a path repeated per clip is a path that can
+    /// disagree with itself. Paths are stored as written; a file that has moved
+    /// is a warning on load, not a refusal -- exactly as a missing plugin is.
+    #[serde(default)]
+    pub audio_sources: Vec<AudioSourceEntry>,
+    /// The single pattern a version 1 or 2 file carried.
+    ///
+    /// Read on the way in and **never written**: [`ProjectFile::capture`] fills
+    /// [`Self::patterns`], and this stays `None` so a version 3 file has no
+    /// vestigial field. See [`migrate_single_pattern`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<LegacyPatternDto>,
+}
+
+/// What [`ProjectFile::play_mode`] is when a file does not say. Older files
+/// predate the switch, and pattern mode is what they were playing.
+fn default_play_mode() -> String {
+    PlayMode::Pattern.id().to_owned()
+}
+
+/// The arrangement, on disk.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PlaylistEntry {
+    #[serde(default)]
+    pub tracks: Vec<PlaylistTrackEntry>,
+    #[serde(default)]
+    pub clips: Vec<ClipEntry>,
+}
+
+/// One lane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlaylistTrackEntry {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub muted: bool,
+}
+
+/// One clip.
+///
+/// Flat, with `kind` deciding which of the optional halves is meaningful --
+/// the same shape [`ClipDto`](crate::dto::ClipDto) uses on the wire, and for
+/// the same reason: an externally-tagged enum would put the discriminant in a
+/// wrapper object and make the file harder to read by eye than it needs to be.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClipEntry {
+    pub id: u64,
+    /// `pattern` or `audio`. Anything else is skipped on load, with a warning:
+    /// a clip kind this build does not know is a *later* format's, and the rest
+    /// of the arrangement still opens.
+    pub kind: String,
+    pub track: usize,
+    /// Absolute song ticks.
+    pub start: u64,
+    pub length: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_frames: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gain_db: Option<f32>,
+}
+
+impl ClipEntry {
+    /// One clip, on its way to disk.
+    pub fn capture(clip: &Clip) -> Self {
+        let base = Self {
+            id: clip.id(),
+            kind: clip.kind().to_owned(),
+            track: clip.track(),
+            start: clip.start_ticks(),
+            length: clip.length_ticks(),
+            pattern_id: None,
+            source_id: None,
+            offset_frames: None,
+            gain_db: None,
+        };
+        match clip {
+            Clip::Pattern(pattern) => Self {
+                pattern_id: Some(pattern.pattern_id),
+                ..base
+            },
+            Clip::Audio(audio) => Self {
+                source_id: Some(audio.source_id),
+                offset_frames: Some(audio.offset_frames),
+                gain_db: Some(audio.gain_db),
+                ..base
+            },
+        }
+    }
+
+    /// One clip, on its way back.
+    ///
+    /// `None` -- with a warning -- for a clip this build cannot make sense of:
+    /// a kind it does not know, or one missing the half its kind needs. A
+    /// later format's clip is not a corrupt file, and the rest of the
+    /// arrangement still opens, which is the same answer a missing plugin gets.
+    pub fn restore(&self) -> Option<Clip> {
+        match self.kind.as_str() {
+            "pattern" => match self.pattern_id {
+                Some(pattern_id) => Some(Clip::Pattern(PatternClip {
+                    id: self.id,
+                    pattern_id,
+                    track: self.track,
+                    start_ticks: self.start,
+                    length_ticks: self.length,
+                })),
+                None => {
+                    log::warn!(
+                        "clip {} says 'pattern' but names none; skipping it",
+                        self.id
+                    );
+                    None
+                }
+            },
+            "audio" => match self.source_id {
+                Some(source_id) => Some(Clip::Audio(AudioClip {
+                    id: self.id,
+                    source_id,
+                    track: self.track,
+                    start_ticks: self.start,
+                    offset_frames: self.offset_frames.unwrap_or(0),
+                    length_ticks: self.length,
+                    gain_db: self.gain_db.filter(|db| db.is_finite()).unwrap_or(0.0),
+                })),
+                None => {
+                    log::warn!(
+                        "clip {} says 'audio' but names no file; skipping it",
+                        self.id
+                    );
+                    None
+                }
+            },
+            other => {
+                log::warn!(
+                    "clip {} is of kind '{other}', which this build does not know; skipping it",
+                    self.id
+                );
+                None
+            }
+        }
+    }
+}
+
+/// One audio file the arrangement references.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AudioSourceEntry {
+    pub id: u64,
+    /// Where the file was when the project was saved.
+    pub path: String,
+}
+
+/// The single pattern a version 1 or 2 file carried.
+///
+/// Kept as its own type rather than by making the current [`PatternDto`] read
+/// both shapes: a migration is a *translation between two formats*, and a
+/// deserialiser that quietly accepts either is a format with no version at all.
+/// This type is frozen -- nothing may be added to it, because nothing will ever
+/// write it again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegacyPatternDto {
+    pub steps: u8,
+    pub rows: Vec<LegacyRowDto>,
+    /// Absent in version 1, which had no piano roll.
+    #[serde(default)]
+    pub notes: Vec<LegacyNoteDto>,
+}
+
+/// One row of the version 1/2 step grid.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LegacyRowDto {
+    pub key: u8,
+    #[serde(default)]
+    pub channel: u8,
+    #[serde(default)]
+    pub label: String,
+    pub steps: Vec<StepDto>,
+}
+
+/// One note of the version 2 piano roll.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LegacyNoteDto {
+    pub key: u8,
+    #[serde(default)]
+    pub channel: u8,
+    pub start: u32,
+    pub length: u32,
+    #[serde(default = "legacy_velocity")]
+    pub velocity: f32,
+}
+
+fn legacy_velocity() -> f32 {
+    mydaw_plugin_sequencer::DEFAULT_STEP_VELOCITY
+}
+
+/// Turn a version 1/2 pattern into the version 3 shape.
+///
+/// The old format had a flat list of rows and a flat list of notes, each entry
+/// carrying its own channel; the new one keys by channel. So this buckets both
+/// lists by channel, and where a channel had **more than one row** -- legal in
+/// the old format, and what a drum-kit track looked like -- every row after the
+/// first becomes *notes*.
+///
+/// That is not a workaround, it is the same translation
+/// [`Pattern::compile`](mydaw_plugin_sequencer::Pattern::compile) does: a step
+/// is a note at `index * TICKS_PER_STEP` lasting `STEP_GATE_TICKS`. The
+/// migrated pattern therefore compiles to the same events the old one did, note
+/// for note, which is the only property a migration has to have.
+///
+/// The pattern is named "Pattern 1" and given id 1, because a version 2 file
+/// had exactly one and it had no name.
+pub fn migrate_single_pattern(legacy: &LegacyPatternDto) -> PatternDto {
+    use mydaw_plugin_sequencer::{STEP_GATE_TICKS, TICKS_PER_STEP};
+
+    let mut channels: Vec<ChannelClipDto> = Vec::new();
+    let clip_for = |channels: &mut Vec<ChannelClipDto>, channel: u8| -> usize {
+        if let Some(index) = channels.iter().position(|c| c.channel == channel) {
+            return index;
+        }
+        channels.push(ChannelClipDto {
+            channel,
+            mode: String::new(),
+            steps: None,
+            notes: Vec::new(),
+        });
+        channels.len() - 1
+    };
+
+    for row in &legacy.rows {
+        let index = clip_for(&mut channels, row.channel);
+        if channels[index].steps.is_none() {
+            channels[index].steps = Some(StepRowDto {
+                key: row.key,
+                label: String::new(),
+                steps: row.steps.clone(),
+            });
+            continue;
+        }
+        // A second row on the same channel: the grid cannot hold it, so it
+        // becomes the notes it always meant.
+        for (step, cell) in row.steps.iter().enumerate() {
+            if !cell.on {
+                continue;
+            }
+            channels[index].notes.push(MelodicNoteDto {
+                key: row.key,
+                start: step as u32 * TICKS_PER_STEP,
+                length: STEP_GATE_TICKS,
+                velocity: cell.velocity,
+            });
+        }
+    }
+
+    for note in &legacy.notes {
+        let index = clip_for(&mut channels, note.channel);
+        channels[index].notes.push(MelodicNoteDto {
+            key: note.key,
+            start: note.start,
+            length: note.length,
+            velocity: note.velocity,
+        });
+    }
+
+    PatternDto {
+        id: 1,
+        name: "Pattern 1".to_owned(),
+        color: None,
+        steps: legacy.steps,
+        channels,
+    }
 }
 
 /// One track.
@@ -297,6 +590,8 @@ pub enum ProjectFileError {
     InvalidBpm(f64),
     #[error("the pattern in this project cannot be run: {0}")]
     Pattern(#[from] PatternError),
+    #[error("the arrangement in this project cannot be played: {0}")]
+    Playlist(#[from] PlaylistError),
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +704,20 @@ impl EffectRef {
     }
 }
 
+/// Everything the sequencer contributes to a save, borrowed for the call.
+///
+/// A struct rather than four positional parameters: at this arity the call site
+/// is unreadable, and swapping the set and the playlist would compile.
+pub struct Song<'a> {
+    pub patterns: &'a PatternSet,
+    pub playlist: &'a Playlist,
+    pub mode: PlayMode,
+    /// Every audio file the arrangement references. Empty until the audio
+    /// source registry exists; the field is here because the *format* has to
+    /// carry it from version 3 rather than gaining it in version 4.
+    pub audio_sources: Vec<AudioSourceEntry>,
+}
+
 impl ProjectFile {
     /// Assemble a file from a live session.
     ///
@@ -419,7 +728,7 @@ impl ProjectFile {
         project: &Project,
         selected: usize,
         bpm: f64,
-        pattern: &Pattern,
+        song: &Song,
         track_states: &[Vec<u8>],
         master_effect: Option<EffectEntry>,
     ) -> Self {
@@ -446,7 +755,34 @@ impl ProjectFile {
                 })
                 .collect(),
             master_effect,
-            pattern: PatternDto::from(pattern),
+            play_mode: song.mode.id().to_owned(),
+            patterns: song
+                .patterns
+                .patterns()
+                .iter()
+                .map(PatternDto::from)
+                .collect(),
+            active_pattern: song.patterns.active_id(),
+            playlist: PlaylistEntry {
+                tracks: song
+                    .playlist
+                    .tracks()
+                    .iter()
+                    .map(|track| PlaylistTrackEntry {
+                        id: track.id,
+                        name: track.name.clone(),
+                        muted: track.muted,
+                    })
+                    .collect(),
+                clips: song
+                    .playlist
+                    .clips()
+                    .iter()
+                    .map(ClipEntry::capture)
+                    .collect(),
+            },
+            audio_sources: song.audio_sources.clone(),
+            pattern: None,
         }
     }
 
@@ -548,8 +884,50 @@ impl ProjectFile {
     /// [`ProjectFileError::Pattern`] for a grid the engine could not run -- a
     /// row of the wrong length, a key outside the MIDI range, a velocity that is
     /// not a number.
-    pub fn to_pattern(&self) -> Result<Pattern, ProjectFileError> {
-        Ok(Pattern::try_from(&self.pattern)?)
+    pub fn to_song(&self) -> Result<(PatternSet, Playlist), ProjectFileError> {
+        let mut patterns = Vec::with_capacity(self.patterns.len());
+        for dto in &self.patterns {
+            patterns.push(Pattern::try_from(dto)?);
+        }
+        let active = patterns
+            .iter()
+            .position(|pattern| pattern.id == self.active_pattern)
+            .unwrap_or(0);
+        let set = PatternSet::restored(patterns, active);
+
+        let tracks: Vec<PlaylistTrack> = self
+            .playlist
+            .tracks
+            .iter()
+            .map(|track| PlaylistTrack {
+                id: track.id,
+                name: if track.name.trim().is_empty() {
+                    format!("Track {}", track.id)
+                } else {
+                    track.name.clone()
+                },
+                muted: track.muted,
+            })
+            .collect();
+        let clips: Vec<Clip> = self
+            .playlist
+            .clips
+            .iter()
+            .filter_map(ClipEntry::restore)
+            .collect();
+        let playlist = if tracks.is_empty() && clips.is_empty() {
+            Playlist::default()
+        } else {
+            Playlist::restored(tracks, clips)
+        };
+        playlist.validate(&set)?;
+        Ok((set, playlist))
+    }
+
+    /// Which play mode the file was saved in. Anything unrecognised is pattern
+    /// mode, which is the answer that cannot surprise anyone.
+    pub fn to_play_mode(&self) -> PlayMode {
+        PlayMode::parse(&self.play_mode).unwrap_or_default()
     }
 
     /// The tempo this file describes, checked against the transport's range.
@@ -646,6 +1024,23 @@ pub fn parse_project(text: &str) -> Result<ProjectFile, ProjectFileError> {
     }
     let mut file: ProjectFile =
         serde_json::from_str(text).map_err(|err| ProjectFileError::Malformed(err.to_string()))?;
+
+    // Version 1 and 2 carried one unnamed pattern and no arrangement. Both
+    // become a version 3 file with one pattern called "Pattern 1" and an empty
+    // playlist -- which is exactly what those files meant, because there was
+    // nowhere else for a pattern to be placed.
+    if file.patterns.is_empty() {
+        if let Some(legacy) = file.pattern.take() {
+            file.patterns = vec![migrate_single_pattern(&legacy)];
+        }
+    }
+    file.pattern = None;
+    if file.active_pattern == 0 {
+        file.active_pattern = file.patterns.first().map_or(1, |pattern| pattern.id);
+    }
+    if file.play_mode.trim().is_empty() {
+        file.play_mode = default_play_mode();
+    }
     file.format_version = FORMAT_VERSION;
     Ok(file)
 }
@@ -741,7 +1136,7 @@ pub fn project_name(path: Option<&Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mydaw_plugin_sequencer::{MelodicNote, PatternRow, Step, TICKS_PER_STEP};
+    use mydaw_plugin_sequencer::{MelodicNote, Step, StepRow, TICKS_PER_STEP};
     use mydaw_rt_core::{MAX_GAIN_DB, SILENCE_DB};
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -782,27 +1177,50 @@ mod tests {
     /// of the format has to carry, including a length that is not the default
     /// and a note that is not on the grid.
     fn beat() -> Pattern {
-        let mut pattern = Pattern {
-            length_steps: 32,
-            ..Pattern::default()
-        };
-        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 4, 8, 12, 16, 20, 24, 28]);
-        pattern.rows[2] = PatternRow::empty(42).with_steps(&[2, 6, 10, 14]);
-        pattern.rows[1].steps[4] = Step::accent();
-        pattern.rows[1].channel = 1;
-        pattern.notes = vec![
-            MelodicNote::new(60, 1, 0, 960),
-            MelodicNote::new(64, 1, 960, 480).at_velocity(0.31),
-            // Deliberately between the grid lines: a triplet eighth, which is
-            // the thing a step index could not have expressed.
-            MelodicNote::new(67, 2, 1_920 + 320, 320),
+        let mut pattern = Pattern::with_channels(1, "Pattern 1", &[0, 1, 2, 3], |channel| {
+            mydaw_plugin_sequencer::DEFAULT_ROW_KEYS[channel as usize]
+        });
+        pattern.length_steps = 32;
+        pattern.color = Some("#4f8ef7".to_owned());
+        pattern.channels[0].steps =
+            Some(StepRow::empty(36).with_steps(&[0, 4, 8, 12, 16, 20, 24, 28]));
+        pattern.channels[2].steps = Some(StepRow::empty(42).with_steps(&[2, 6, 10, 14]));
+        pattern.channels[1].steps.as_mut().unwrap().steps[4] = Step::accent();
+        pattern.channels[1].notes = vec![
+            MelodicNote::new(60, 0, 960),
+            MelodicNote::new(64, 960, 480).at_velocity(0.31),
         ];
+        // Deliberately between the grid lines: a triplet eighth, which is the
+        // thing a step index could not have expressed.
+        pattern.channels[2].notes = vec![MelodicNote::new(67, 1_920 + 320, 320)];
         pattern
+    }
+
+    /// A second pattern and an arrangement of both: the version 3 half of the
+    /// format, and the half a version 2 file could not have said anything about.
+    fn song() -> (PatternSet, Playlist) {
+        let mut set = PatternSet::single(beat());
+        let second = set.add(Some("Bridge".to_owned()), &[0, 1], |_| 36).unwrap();
+        set.get_mut(second).unwrap().channels[0].steps =
+            Some(StepRow::empty(36).with_steps(&[0, 8]));
+        set.set_active(second).unwrap();
+
+        let mut playlist = Playlist::default();
+        playlist.rename_track(0, "Drums").unwrap();
+        playlist.set_track_muted(3, true).unwrap();
+        playlist.add_pattern_clip(1, 0, 0, 2 * 3_840).unwrap();
+        playlist
+            .add_pattern_clip(1, 0, 4 * 3_840, 2 * 3_840)
+            .unwrap();
+        playlist
+            .add_pattern_clip(second, 1, 4 * 3_840, 4 * 3_840)
+            .unwrap();
+        (set, playlist)
     }
 
     /// The project the round-trip tests use: three tracks, one of them hosted,
     /// every mixer control off its default.
-    fn session() -> (Project, Pattern) {
+    fn session() -> (Project, PatternSet, Playlist) {
         let mut project = Project::default();
         project
             .add(Source::TestTone, Some("Tone".to_owned()))
@@ -816,16 +1234,33 @@ mod tests {
         project.tracks[1].soloed = true;
         project.tracks[2].pan = 1.0;
         project.master_gain_db = -3.5;
-        (project, beat())
+        let (set, playlist) = song();
+        (project, set, playlist)
+    }
+
+    /// The song a project with nothing written in it has: one empty pattern
+    /// and an empty arrangement.
+    fn empty_song<'a>() -> Song<'a> {
+        Song {
+            patterns: Box::leak(Box::new(PatternSet::default())),
+            playlist: Box::leak(Box::new(Playlist::default())),
+            mode: PlayMode::Pattern,
+            audio_sources: Vec::new(),
+        }
     }
 
     fn captured() -> ProjectFile {
-        let (project, pattern) = session();
+        let (project, patterns, playlist) = session();
         ProjectFile::capture(
             &project,
             1,
             147.0,
-            &pattern,
+            &Song {
+                patterns: &patterns,
+                playlist: &playlist,
+                mode: PlayMode::Pattern,
+                audio_sources: Vec::new(),
+            },
             &[Vec::new(), b"MFS1\x00\x00\x40\x41".to_vec(), Vec::new()],
             Some(EffectEntry {
                 plugin: EffectRef::clap(r"C:\CLAP\Fixture.clap", "dev.mydaw.fixture.gain", "Gain"),
@@ -848,13 +1283,13 @@ mod tests {
             format!(r#""format_version": {FORMAT_VERSION},"#),
             "{json}"
         );
-        assert_eq!(FORMAT_VERSION, 2, "step 9 added the piano roll");
+        assert_eq!(FORMAT_VERSION, 3, "patterns and the playlist");
         assert!(json.ends_with("}\n"), "the file ends with a newline");
     }
 
     #[test]
     fn a_session_round_trips_through_the_file_with_every_field_intact() {
-        let (project, pattern) = session();
+        let (project, patterns, playlist) = session();
         let file = captured();
         let text = file.to_json().unwrap();
         let parsed = parse_project(&text).expect("what we wrote is what we read");
@@ -864,7 +1299,10 @@ mod tests {
         assert_eq!(restored, project, "the whole mixer, field for field");
         assert_eq!(selected, 1);
         assert_eq!(parsed.to_bpm().unwrap(), 147.0);
-        assert_eq!(parsed.to_pattern().unwrap(), pattern);
+        let (restored_patterns, restored_playlist) = parsed.to_song().expect("a valid song");
+        assert_eq!(restored_patterns, patterns, "every pattern, note for note");
+        assert_eq!(restored_playlist, playlist, "and the whole arrangement");
+        assert_eq!(parsed.to_play_mode(), PlayMode::Pattern);
         assert_eq!(parsed.track_state(1).unwrap(), b"MFS1\x00\x00\x40\x41");
         assert!(parsed.track_state(0).unwrap().is_empty());
         assert_eq!(
@@ -898,7 +1336,7 @@ mod tests {
         project.tracks[0].pan = 0.333_333_34;
         project.tracks[1].gain_db = SILENCE_DB;
         project.master_gain_db = MAX_GAIN_DB;
-        let file = ProjectFile::capture(&project, 0, 174.3, &Pattern::default(), &[], None);
+        let file = ProjectFile::capture(&project, 0, 174.3, &empty_song(), &[], None);
 
         let parsed = parse_project(&file.to_json().unwrap()).unwrap();
         let (restored, _) = parsed.to_project().unwrap();
@@ -1097,25 +1535,43 @@ mod tests {
             "Gain"
         );
 
-        // And the new half is empty rather than absent, which is what a project
-        // written before the piano roll existed actually meant.
-        let pattern = parsed.to_pattern().expect("the grid still runs");
+        // And the new halves are empty rather than absent, which is what a
+        // project written before the piano roll and the playlist existed meant.
+        let (set, playlist) = parsed.to_song().expect("the grid still runs");
+        assert_eq!(set.len(), 1, "version 1 had exactly one pattern");
+        let pattern = set.active();
+        assert_eq!(pattern.name, "Pattern 1");
         assert_eq!(pattern.length_steps, 16, "version 1 was always one bar");
-        assert!(pattern.notes.is_empty(), "no melody was ever written");
+        // Version 1's four drum rows were three on channel 0 and one on
+        // channel 1 -- a drum-kit track, where the *key* picked the drum. A
+        // channel has one grid now, so the kick keeps it and the hats become the
+        // notes they always meant: fourteen events either way.
         assert_eq!(
-            pattern.hit_count(),
+            pattern
+                .channels
+                .iter()
+                .map(|c| c.channel)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+        assert_eq!(pattern.hit_count(), 4 + 2, "the two grids that survived");
+        assert_eq!(pattern.note_count(), 8, "the eight hats, as notes");
+        assert_eq!(
+            pattern.compile().note_count(),
             14,
-            "four kicks, two snares, eight hats"
+            "four kicks, two snares, eight hats -- the same events as version 1"
         );
         assert_eq!(
-            pattern.rows[1].steps[4].velocity, 1.0,
+            pattern.channel(1).unwrap().steps.as_ref().unwrap().steps[4].velocity,
+            1.0,
             "the accent survived"
         );
-        assert_eq!(pattern.rows[1].channel, 1);
+        assert!(playlist.clips().is_empty(), "there was nowhere to place it");
+        assert_eq!(parsed.to_play_mode(), PlayMode::Pattern);
     }
 
     #[test]
-    fn opening_a_version_one_project_and_saving_it_writes_version_two() {
+    fn opening_a_version_one_project_and_saving_it_writes_the_current_version() {
         // The migration policy in one test: read old, write current. The user
         // never sees a dialog and never loses the file -- it is simply a
         // version 2 project the next time it is opened.
@@ -1127,22 +1583,143 @@ mod tests {
 
         let saved = migrated.to_json().unwrap();
         assert!(
-            saved.contains(r#""format_version": 2"#),
+            saved.contains(r#""format_version": 3"#),
             "a save writes the current format"
         );
         assert!(
-            saved.contains(r#""notes": []"#),
-            "and the new field is written explicitly rather than omitted"
+            saved.contains(r#""playlist""#) && saved.contains(r#""patterns""#),
+            "and the new fields are written explicitly rather than omitted"
+        );
+        assert!(
+            !saved.contains(r#""pattern":"#),
+            "the version 2 field is gone, not left vestigial: {saved}"
         );
 
         // From there the ordinary byte-identity property holds.
         let reopened = parse_project(&saved).unwrap();
         assert_eq!(reopened, migrated);
         assert_eq!(reopened.to_json().unwrap(), saved);
-        assert_eq!(
-            reopened.to_pattern().unwrap(),
-            migrated.to_pattern().unwrap()
+        assert_eq!(reopened.to_song().unwrap(), migrated.to_song().unwrap());
+    }
+
+    /// A real version 2 project, written by the step 9 build and kept verbatim.
+    ///
+    /// The interesting one: version 2 had a piano roll, so this exercises the
+    /// part of the migration that has something to translate.
+    const V2_PROJECT: &str = include_str!("../tests/fixtures/v2.mydaw");
+
+    #[test]
+    fn a_version_two_project_keeps_its_grid_its_roll_and_its_channels() {
+        assert!(
+            V2_PROJECT.contains(r#""format_version": 2"#),
+            "the fixture must stay a version 2 file"
         );
+        assert!(
+            V2_PROJECT.contains(r#""notes""#),
+            "a version 2 file has a piano roll; this one must exercise it"
+        );
+
+        let parsed = parse_project(V2_PROJECT).expect("a version 2 project still opens");
+        assert_eq!(parsed.format_version, FORMAT_VERSION);
+        assert_eq!(parsed.to_bpm().unwrap(), 147.0);
+
+        let (set, playlist) = parsed.to_song().expect("the song still runs");
+        assert_eq!(set.len(), 1);
+        let pattern = set.active();
+        assert_eq!(pattern.id, 1);
+        assert_eq!(pattern.name, "Pattern 1");
+        assert_eq!(pattern.length_steps, 32, "two bars, as saved");
+
+        // The flat rows became one clip per channel...
+        assert_eq!(
+            pattern
+                .channels
+                .iter()
+                .map(|c| c.channel)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "one clip per channel the old rows addressed"
+        );
+        assert_eq!(pattern.hit_count(), 8 + 1 + 4);
+        assert_eq!(
+            pattern.channel(1).unwrap().steps.as_ref().unwrap().steps[4].velocity,
+            1.0,
+            "the accent survived"
+        );
+
+        // ...and the notes landed on the channels they named.
+        assert_eq!(pattern.channel(1).unwrap().notes.len(), 2);
+        assert_eq!(pattern.channel(2).unwrap().notes.len(), 1);
+        assert_eq!(
+            pattern.channel(2).unwrap().notes[0].start_ticks,
+            1_920 + 320
+        );
+        assert_eq!(pattern.channel(1).unwrap().notes[1].velocity, 0.31);
+        assert_eq!(pattern.note_count(), 3);
+
+        // Version 2 had no arrangement and no mode.
+        assert!(playlist.clips().is_empty());
+        assert_eq!(parsed.to_play_mode(), PlayMode::Pattern);
+    }
+
+    #[test]
+    fn a_second_row_on_one_channel_becomes_the_notes_it_always_meant() {
+        // Legal in version 2 -- a drum-kit track had four rows on channel 0 --
+        // and impossible in version 3, where a channel has one grid. The
+        // migration turns the extra rows into notes, which is the same
+        // translation `Pattern::compile` does, so the pattern still produces
+        // exactly the events it did.
+        let legacy = LegacyPatternDto {
+            steps: 16,
+            rows: vec![
+                LegacyRowDto {
+                    key: 36,
+                    channel: 0,
+                    label: String::new(),
+                    steps: (0..16)
+                        .map(|i| StepDto {
+                            on: i == 0,
+                            velocity: 0.78,
+                        })
+                        .collect(),
+                },
+                LegacyRowDto {
+                    key: 42,
+                    channel: 0,
+                    label: String::new(),
+                    steps: (0..16)
+                        .map(|i| StepDto {
+                            on: i == 8,
+                            velocity: 1.0,
+                        })
+                        .collect(),
+                },
+            ],
+            notes: Vec::new(),
+        };
+        let migrated = migrate_single_pattern(&legacy);
+        assert_eq!(migrated.channels.len(), 1, "one channel, one clip");
+        let clip = &migrated.channels[0];
+        assert_eq!(
+            clip.steps.as_ref().unwrap().key,
+            36,
+            "the first row keeps the grid"
+        );
+        assert_eq!(clip.notes.len(), 1, "the second row became a note");
+        assert_eq!(clip.notes[0].key, 42);
+        assert_eq!(clip.notes[0].start, 8 * TICKS_PER_STEP);
+        assert_eq!(
+            clip.notes[0].length,
+            mydaw_plugin_sequencer::STEP_GATE_TICKS
+        );
+        assert_eq!(clip.notes[0].velocity, 1.0);
+
+        // And the whole point: it compiles to the same two events.
+        let compiled = Pattern::try_from(&migrated).unwrap().compile();
+        assert_eq!(compiled.note_count(), 2);
+        assert_eq!(compiled.note(0).unwrap().key, 36);
+        assert_eq!(compiled.note(1).unwrap().key, 42);
+        assert_eq!(compiled.note(1).unwrap().start_ticks, 8 * TICKS_PER_STEP);
     }
 
     #[test]
@@ -1153,55 +1730,107 @@ mod tests {
         // change.
         let file = captured();
         let parsed = parse_project(&file.to_json().unwrap()).unwrap();
-        let pattern = parsed.to_pattern().unwrap();
+        let (set, _) = parsed.to_song().unwrap();
+        let pattern = set.get(1).expect("the beat");
 
         assert_eq!(pattern.length_steps, 32, "two bars, as saved");
-        assert_eq!(pattern, beat(), "note for note, in the order written");
-        assert_eq!(pattern.notes[2].start_ticks, 1_920 + 320);
+        assert_eq!(*pattern, beat(), "note for note, in the order written");
+        let triplet = pattern.channel(2).unwrap().notes[0];
+        assert_eq!(triplet.start_ticks, 1_920 + 320);
         assert_eq!(
-            pattern.notes[2].start_ticks % TICKS_PER_STEP,
+            triplet.start_ticks % TICKS_PER_STEP,
             80,
             "the triplet is still off the sixteenth grid, which is the point"
         );
-        assert_eq!(pattern.notes[1].velocity, 0.31);
-        assert_eq!(pattern.notes[2].channel, 2);
+        assert_eq!(pattern.channel(1).unwrap().notes[1].velocity, 0.31);
+        assert_eq!(pattern.color.as_deref(), Some("#4f8ef7"));
 
-        // The rows carry exactly the steps that play, not the engine's tail.
-        assert!(parsed.pattern.rows.iter().all(|row| row.steps.len() == 32));
+        // The grids carry exactly the steps that play, not the engine's tail.
+        assert!(parsed.patterns[0]
+            .channels
+            .iter()
+            .filter_map(|clip| clip.steps.as_ref())
+            .all(|row| row.steps.len() == 32));
     }
 
     #[test]
     fn a_four_bar_pattern_round_trips_at_its_own_length() {
-        let mut pattern = Pattern {
-            length_steps: 64,
-            ..Pattern::default()
-        };
-        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 32, 63]);
-        pattern.notes = vec![MelodicNote::new(60, 0, 15_120, 240)];
-        let file = ProjectFile::capture(&Project::default(), 0, 130.0, &pattern, &[], None);
+        let mut pattern = Pattern::with_channels(1, "Pattern 1", &[0], |_| 36);
+        pattern.length_steps = 64;
+        pattern.channels[0].steps = Some(StepRow::empty(36).with_steps(&[0, 32, 63]));
+        pattern.channels[0].notes = vec![MelodicNote::new(60, 15_120, 240)];
+        let set = PatternSet::single(pattern.clone());
+        let file = ProjectFile::capture(
+            &Project::default(),
+            0,
+            130.0,
+            &Song {
+                patterns: &set,
+                playlist: &Playlist::default(),
+                mode: PlayMode::Song,
+                audio_sources: Vec::new(),
+            },
+            &[],
+            None,
+        );
 
         let text = file.to_json().unwrap();
         let parsed = parse_project(&text).unwrap();
-        assert_eq!(parsed.pattern.steps, 64);
-        assert_eq!(parsed.to_pattern().unwrap(), pattern);
+        assert_eq!(parsed.patterns[0].steps, 64);
+        assert_eq!(*parsed.to_song().unwrap().0.active(), pattern);
+        assert_eq!(
+            parsed.to_play_mode(),
+            PlayMode::Song,
+            "the mode is saved too"
+        );
         assert_eq!(parsed.to_json().unwrap(), text, "and it is byte-stable");
+    }
+
+    #[test]
+    fn an_arrangement_survives_the_file_clip_for_clip() {
+        let parsed = parse_project(&captured().to_json().unwrap()).unwrap();
+        let (_, playlist) = parsed.to_song().unwrap();
+        assert_eq!(playlist.tracks().len(), 4);
+        assert_eq!(playlist.tracks()[0].name, "Drums");
+        assert!(playlist.tracks()[3].muted, "the mute is arrangement data");
+        assert_eq!(playlist.clips().len(), 3);
+        assert_eq!(playlist.end_ticks(), 8 * 3_840);
+    }
+
+    #[test]
+    fn a_clip_naming_a_pattern_the_file_does_not_have_is_refused_on_load() {
+        // Hand-edited, or written by a build that deleted the pattern without
+        // dropping its clips. Loading it half-way would leave a silent gap that
+        // only shows up on playback.
+        let mut file = captured();
+        file.playlist.clips[0].pattern_id = Some(999);
+        let err = file.to_song().unwrap_err();
+        assert!(matches!(err, ProjectFileError::Playlist(_)), "{err:?}");
+        assert!(err.to_string().contains("999"), "{err}");
+    }
+
+    #[test]
+    fn a_clip_of_a_kind_this_build_does_not_know_is_skipped_rather_than_fatal() {
+        // A later format's clip. The rest of the arrangement still opens, which
+        // is the same answer a missing plugin gets.
+        let mut file = captured();
+        file.playlist.clips[0].kind = "video".to_owned();
+        let (_, playlist) = file.to_song().expect("the rest still loads");
+        assert_eq!(playlist.clips().len(), 2);
     }
 
     #[test]
     fn a_pattern_length_the_engine_does_not_have_is_refused_on_load() {
         let mut file = captured();
-        file.pattern.steps = 24;
-        assert!(matches!(
-            file.to_pattern(),
-            Err(ProjectFileError::Pattern(_))
-        ));
+        file.patterns[0].steps = 24;
+        assert!(matches!(file.to_song(), Err(ProjectFileError::Pattern(_))));
         assert!(
-            file.to_pattern()
+            file.to_song()
                 .unwrap_err()
                 .to_string()
                 .contains("16, 32 or 64"),
             "{}",
-            file.to_pattern().unwrap_err()
+            file.to_song().unwrap_err()
         );
     }
 
@@ -1211,8 +1840,8 @@ mod tests {
         // shortened. Either way the engine could not run it, and loading it
         // half-way would leave a note the scheduler owes an off it never sends.
         let mut file = captured();
-        file.pattern.notes[0].length = 99_999;
-        let err = file.to_pattern().unwrap_err();
+        file.patterns[0].channels[1].notes[0].length = 99_999;
+        let err = file.to_song().unwrap_err();
         assert!(matches!(err, ProjectFileError::Pattern(_)), "{err:?}");
         assert!(err.to_string().contains("ticks long"), "{err}");
     }
@@ -1324,11 +1953,13 @@ mod tests {
         assert!(file.validate().is_err(), "and a save refuses it too");
 
         let mut file = captured();
-        file.pattern.rows[0].steps.pop();
-        assert!(matches!(
-            file.to_pattern(),
-            Err(ProjectFileError::Pattern(_))
-        ));
+        file.patterns[0].channels[0]
+            .steps
+            .as_mut()
+            .unwrap()
+            .steps
+            .pop();
+        assert!(matches!(file.to_song(), Err(ProjectFileError::Pattern(_))));
     }
 
     #[test]
@@ -1402,14 +2033,7 @@ mod tests {
         let path = dir.join("song.mydaw");
         write_project_file(&path, &captured()).unwrap();
 
-        let small = ProjectFile::capture(
-            &Project::default(),
-            0,
-            130.0,
-            &Pattern::default(),
-            &[],
-            None,
-        );
+        let small = ProjectFile::capture(&Project::default(), 0, 130.0, &empty_song(), &[], None);
         write_project_file(&path, &small).unwrap();
         assert_eq!(read_project_file(&path).unwrap(), small);
         assert_eq!(fs::read_to_string(&path).unwrap(), small.to_json().unwrap());
@@ -1454,14 +2078,7 @@ mod tests {
 
     #[test]
     fn the_capture_clamps_a_selection_that_no_longer_exists() {
-        let file = ProjectFile::capture(
-            &Project::default(),
-            9,
-            130.0,
-            &Pattern::default(),
-            &[],
-            None,
-        );
+        let file = ProjectFile::capture(&Project::default(), 9, 130.0, &empty_song(), &[], None);
         assert_eq!(
             file.selected_track,
             Project::default().len() - 1,

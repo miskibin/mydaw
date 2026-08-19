@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use mydaw_ipc_bridge::{MeterFrame, MeterProducer};
 use mydaw_plugin_debug_tap::TapRtSide;
-use mydaw_plugin_sequencer::{PatternSlot, Scheduler, TransportWindow};
+use mydaw_plugin_sequencer::{Scheduler, SongSlot, TransportWindow};
 use mydaw_rt_core::{
     disable_denormals, drain_commands, drain_notes, AudioBuffers, NoteConsumer, NoteEventBuffer,
     ProcessCtx, RtCommandConsumer, RtGraphSlot, TransportClock, CHANNELS,
@@ -117,9 +117,9 @@ pub struct RtStateParams {
     /// Events the block's note buffer can hold. Sized to the note queue's
     /// capacity so a full queue always fits in one block.
     pub note_capacity: usize,
-    /// Receives patterns published by
-    /// [`PatternHandle::install`](mydaw_plugin_sequencer::PatternHandle::install).
-    pub pattern: PatternSlot,
+    /// Receives songs published by
+    /// [`SongHandle::install`](mydaw_plugin_sequencer::SongHandle::install).
+    pub song: SongSlot,
     /// Meter queue producer, if metering is wired up.
     pub meters: Option<MeterProducer>,
     /// Debug capture tap, if `debug-tap` is wired up. Costs one relaxed atomic
@@ -147,9 +147,10 @@ pub struct RtState {
     notes: NoteConsumer,
     /// This block's note events. Allocated once, refilled every block.
     note_events: NoteEventBuffer,
-    /// The pattern the sequencer is playing, swapped in like the graph.
-    pattern: PatternSlot,
-    /// Turns that pattern into events. Fixed-size state; see the sequencer's
+    /// The song the sequencer is playing -- every pattern and the arrangement
+    /// -- swapped in like the graph.
+    song: SongSlot,
+    /// Turns that song into events. Fixed-size state; see the sequencer's
     /// `schedule` module for the timing argument.
     scheduler: Scheduler,
     meters: Option<MeterProducer>,
@@ -183,7 +184,7 @@ impl RtState {
             commands: params.commands,
             notes: params.notes,
             note_events: NoteEventBuffer::new(params.note_capacity),
-            pattern: params.pattern,
+            song: params.song,
             scheduler: Scheduler::new(),
             meters: params.meters,
             debug_tap: params.debug_tap,
@@ -269,9 +270,15 @@ impl RtState {
         self.scheduler.pending()
     }
 
-    /// Whether a pattern has reached the audio thread yet.
-    pub fn has_pattern(&self) -> bool {
-        self.pattern.has_pattern()
+    /// Whether a song has reached the audio thread yet.
+    pub fn has_song(&self) -> bool {
+        self.song.has_song()
+    }
+
+    /// Note-offs the scheduler could not park. Diagnostics: a non-zero value
+    /// would mean a stuck note, so it is counted rather than assumed away.
+    pub fn scheduler_overflows(&self) -> u64 {
+        self.scheduler.overflowed()
     }
 }
 
@@ -305,7 +312,7 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
 
     let requested = output.len() / out_channels;
     state.graph.poll_swap();
-    state.pattern.poll_swap();
+    state.song.poll_swap();
     drain_commands(&mut state.commands, &state.transport);
 
     // Live input has no position within the block, so every event lands at
@@ -322,16 +329,27 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
     // back out of `ProcessCtx`.
     let frames = requested.min(state.buffers.max_block());
     dropped += state.scheduler.schedule(
-        state.pattern.current(),
+        state.song.current(),
         &TransportWindow {
             start_sample: transport.sample_pos,
             frames,
             sample_rate: state.sample_rate,
             bpm: transport.bpm,
             playing: transport.playing,
+            mode: transport.mode,
         },
         &mut state.note_events,
     );
+
+    // Song mode plays to the end of the last clip and stops, which is FL's
+    // default and the only one that does not need a loop region to be
+    // meaningful. The scheduler cannot do this itself -- it has no clock, on
+    // purpose -- so it reports and the callback acts. One relaxed store; the
+    // stop edge on the *next* block is what flushes the owed note-offs, which
+    // is exactly the same path a user pressing Stop takes.
+    if state.scheduler.song_ended() {
+        state.transport.set_playing(false);
+    }
 
     if dropped > 0 {
         state
@@ -435,7 +453,8 @@ mod tests {
     use mydaw_ipc_bridge::meter_channel;
     use mydaw_plugin_debug_tap::{debug_tap_channel, TapConsumer};
     use mydaw_plugin_sequencer::{
-        pattern_channel, Pattern, PatternHandle, PatternRow, Step, PATTERN_QUEUE_CAPACITY,
+        song_channel, ChannelClip, CompiledSong, MelodicNote, Pattern, SongHandle, StepRow,
+        SONG_QUEUE_CAPACITY,
     };
     use mydaw_plugin_test_tone::{TestToneNode, DEFAULT_AMPLITUDE};
     use mydaw_rt_core::{
@@ -457,7 +476,7 @@ mod tests {
         graph: mydaw_rt_core::GraphHandle,
         commands: mydaw_rt_core::RtCommandProducer,
         notes: NoteProducer,
-        pattern: PatternHandle,
+        song: SongHandle,
         throttle: mydaw_ipc_bridge::MeterThrottle,
         tap: TapConsumer,
         transport: Arc<TransportClock>,
@@ -475,7 +494,7 @@ mod tests {
         let (cmd_tx, cmd_rx) = rt_channel::<RtCommand>(64);
         let (note_tx, note_rx) = note_channel(note_capacity);
         let (meter_tx, throttle) = meter_channel(64);
-        let (pattern_tx, pattern_rx) = pattern_channel(PATTERN_QUEUE_CAPACITY, gc.handle());
+        let (song_tx, song_rx) = song_channel(SONG_QUEUE_CAPACITY, gc.handle());
         let (tap_rt, tap) = debug_tap_channel(TAP_CAPACITY);
         let transport = Arc::new(TransportClock::new(SR));
         let stats = Arc::new(AudioIoStats::default());
@@ -485,7 +504,7 @@ mod tests {
             commands: cmd_rx,
             notes: note_rx,
             note_capacity,
-            pattern: pattern_rx,
+            song: song_rx,
             meters: Some(meter_tx),
             debug_tap: Some(tap_rt),
             transport: Arc::clone(&transport),
@@ -500,7 +519,7 @@ mod tests {
             graph,
             commands: cmd_tx,
             notes: note_tx,
-            pattern: pattern_tx,
+            song: song_tx,
             throttle,
             tap,
             transport,
@@ -732,7 +751,7 @@ mod tests {
         let (graph, slot) = graph_channel(4, gc.handle());
         let (_cmd_tx, cmd_rx) = rt_channel::<RtCommand>(8);
         let (_note_tx, note_rx) = note_channel(8);
-        let (_pattern_tx, pattern_rx) = pattern_channel(2, gc.handle());
+        let (_song_tx, song_rx) = song_channel(2, gc.handle());
         // Capacity 1: the second block has nowhere to put its frame.
         let (meter_tx, _throttle) = meter_channel(1);
         let stats = Arc::new(AudioIoStats::default());
@@ -741,7 +760,7 @@ mod tests {
             commands: cmd_rx,
             notes: note_rx,
             note_capacity: 8,
-            pattern: pattern_rx,
+            song: song_rx,
             meters: Some(meter_tx),
             debug_tap: None,
             transport: Arc::new(TransportClock::new(SR)),
@@ -873,7 +892,7 @@ mod tests {
         let (graph, slot) = graph_channel(4, gc.handle());
         let (_cmd_tx, cmd_rx) = rt_channel::<RtCommand>(8);
         let (_note_tx, note_rx) = note_channel(8);
-        let (_pattern_tx, pattern_rx) = pattern_channel(2, gc.handle());
+        let (_song_tx, song_rx) = song_channel(2, gc.handle());
         let (meter_tx, _throttle) = meter_channel(64);
         // Room for 32 stereo frames; each block pushes 128.
         let (tap_rt, tap) = debug_tap_channel(64);
@@ -883,7 +902,7 @@ mod tests {
             commands: cmd_rx,
             notes: note_rx,
             note_capacity: 8,
-            pattern: pattern_rx,
+            song: song_rx,
             meters: Some(meter_tx),
             debug_tap: Some(tap_rt),
             transport: Arc::new(TransportClock::new(SR)),
@@ -998,11 +1017,19 @@ mod tests {
 
     // ----------------------------------------------------------- sequencer
 
-    /// A pattern with one row on `key` hitting `steps`.
+    /// A one-channel pattern whose step row on `key` hits `steps`.
     fn pattern_on(key: u8, steps: &[usize]) -> Pattern {
-        let mut pattern = Pattern::silent();
-        pattern.rows.push(PatternRow::empty(key).with_steps(steps));
+        let mut pattern = Pattern::silent(1, "P");
+        let mut clip = ChannelClip::stepped(0, key);
+        clip.steps = Some(StepRow::empty(key).with_steps(steps));
+        pattern.channels.push(clip);
         pattern
+    }
+
+    /// That pattern as a song with nothing arranged, which is what pattern mode
+    /// plays.
+    fn song_of(pattern: &Pattern) -> CompiledSong {
+        CompiledSong::new(vec![pattern.compile()], 0, Vec::new())
     }
 
     /// Install `spy` as the whole graph and start the transport.
@@ -1039,8 +1066,8 @@ mod tests {
         let mut rig = rig(2);
         let spy = NoteSpy::default();
         play_with_spy(&mut rig, &spy);
-        rig.pattern
-            .install(pattern_on(36, &[0, 4, 8, 12]).compile())
+        rig.song
+            .install(song_of(&pattern_on(36, &[0, 4, 8, 12])))
             .unwrap();
 
         let frames = 256;
@@ -1071,8 +1098,8 @@ mod tests {
         rig.graph
             .install(GraphSpec::new().with(Box::new(spy.clone())))
             .unwrap();
-        rig.pattern
-            .install(pattern_on(36, &[0, 4, 8, 12]).compile())
+        rig.song
+            .install(song_of(&pattern_on(36, &[0, 4, 8, 12])))
             .unwrap();
 
         let mut out = vec![0.0_f32; 256 * 2];
@@ -1107,7 +1134,7 @@ mod tests {
         let mut rig = rig(2);
         let spy = NoteSpy::default();
         play_with_spy(&mut rig, &spy);
-        rig.pattern.install(pattern_on(36, &[0]).compile()).unwrap();
+        rig.song.install(song_of(&pattern_on(36, &[0]))).unwrap();
         // Sent with the same message as Play: both are drained before the
         // snapshot, so the very first block already runs at the new tempo.
         rig.commands.push(RtCommand::SetBpm(260.0)).unwrap();
@@ -1137,7 +1164,7 @@ mod tests {
         let mut rig = rig(2);
         let spy = NoteSpy::default();
         play_with_spy(&mut rig, &spy);
-        rig.pattern.install(pattern_on(36, &[0]).compile()).unwrap();
+        rig.song.install(song_of(&pattern_on(36, &[0]))).unwrap();
         rig.notes.push(LiveNote::note_on(69, 0.5)).unwrap();
 
         let mut out = vec![0.0_f32; 256 * 2];
@@ -1155,7 +1182,7 @@ mod tests {
         let mut rig = rig(2);
         let spy = NoteSpy::default();
         play_with_spy(&mut rig, &spy);
-        rig.pattern.install(pattern_on(36, &[0]).compile()).unwrap();
+        rig.song.install(song_of(&pattern_on(36, &[0]))).unwrap();
 
         let frames = 256;
         let mut out = vec![0.0_f32; frames * 2];
@@ -1165,8 +1192,8 @@ mod tests {
         // Swap to a different row while the transport runs. The old pattern is
         // dropped on this thread by `poll_swap`, which under basedrop is a
         // hand-off to the collector, not a free.
-        rig.pattern
-            .install(pattern_on(38, &(0..16).collect::<Vec<_>>()).compile())
+        rig.song
+            .install(song_of(&pattern_on(38, &(0..16).collect::<Vec<_>>())))
             .unwrap();
         for _ in 0..200 {
             run_block(&mut rig.state, &mut out);
@@ -1182,25 +1209,26 @@ mod tests {
             keys.iter().all(|key| *key == 38),
             "everything after the swap must come from the new pattern"
         );
-        assert!(rig.state.has_pattern());
+        assert!(rig.state.has_song());
     }
 
     #[test]
     fn a_pattern_with_more_events_than_the_block_buffer_is_counted_not_grown() {
-        // Sixteen rows all hitting every step, into a four-event buffer.
+        // Sixteen notes on the same channel at the same tick -- a chord no
+        // instrument would play, and the cheapest way to overfill a four-event
+        // buffer inside one block. All on channel 0 because the spy sits in a
+        // track chain, and a track chain only ever sees its own channel.
         let mut rig = rig_with_note_capacity(2, 4);
         let spy = NoteSpy::default();
         play_with_spy(&mut rig, &spy);
 
-        let mut pattern = Pattern::silent();
-        for row in 0..mydaw_plugin_sequencer::MAX_ROWS {
-            let mut pattern_row = PatternRow::empty(36 + row as u8);
-            for step in 0..mydaw_plugin_sequencer::DEFAULT_STEPS {
-                pattern_row.steps[step] = Step::accent();
-            }
-            pattern.rows.push(pattern_row);
-        }
-        rig.pattern.install(pattern.compile()).unwrap();
+        let mut pattern = Pattern::silent(1, "Dense");
+        let mut clip = ChannelClip::melodic(0);
+        clip.notes = (0..16)
+            .map(|index| MelodicNote::new(36 + index as u8, 0, 240).at_velocity(1.0))
+            .collect();
+        pattern.channels.push(clip);
+        rig.song.install(song_of(&pattern)).unwrap();
 
         let mut out = vec![0.0_f32; 256 * 2];
         run_block(&mut rig.state, &mut out);
@@ -1222,8 +1250,8 @@ mod tests {
         let mut rig = rig(2);
         let spy = NoteSpy::default();
         play_with_spy(&mut rig, &spy);
-        rig.pattern
-            .install(pattern_on(36, &(0..16).collect::<Vec<_>>()).compile())
+        rig.song
+            .install(song_of(&pattern_on(36, &(0..16).collect::<Vec<_>>())))
             .unwrap();
 
         // Twice max_block, every block.

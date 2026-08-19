@@ -83,8 +83,9 @@ pub use debug_capture::{
     REPORT_END,
 };
 pub use dto::{
-    ClapPluginInfoDto, MelodicNoteDto, MeterFrameDto, PatternDto, PatternRowDto, SequencerStateDto,
-    StepDto, TrackMeterDto, Vst3PluginInfoDto,
+    ChannelClipDto, ClapPluginInfoDto, ClipDto, MelodicNoteDto, MeterFrameDto, PatternDto,
+    PatternSetDto, PatternSummaryDto, PlaylistDto, PlaylistTrackDto, SequencerStateDto, StepDto,
+    StepRowDto, StreamInfoDto, TrackMeterDto, Vst3PluginInfoDto,
 };
 pub use graph::{engine_graph, source_chain, track_chain, TransportGate};
 pub use insert::{insert_slot, InsertHandle, InsertSlot};
@@ -101,9 +102,11 @@ pub use project_bridge::{
     ProjectAnswer, ProjectBridge, ProjectCommand, ProjectInfoDto, PROJECT_TIMEOUT,
 };
 pub use project_file::{
-    parse_project, project_name, read_project_file, temp_path_for, write_project_file, ClapEntry,
-    EffectEntry, EffectRef, ProjectFile, ProjectFileError, SourceEntry, TrackEntry, Vst3Entry,
-    FORMAT_VERSION, PROJECT_EXTENSION, UNTITLED,
+    migrate_single_pattern, parse_project, project_name, read_project_file, temp_path_for,
+    write_project_file, AudioSourceEntry, ClapEntry, ClipEntry, EffectEntry, EffectRef,
+    LegacyNoteDto, LegacyPatternDto, LegacyRowDto, PlaylistEntry, PlaylistTrackEntry, ProjectFile,
+    ProjectFileError, Song, SourceEntry, TrackEntry, Vst3Entry, FORMAT_VERSION, PROJECT_EXTENSION,
+    UNTITLED,
 };
 pub use project_host::{
     attach, capture as capture_project, default_project_file, Hosts, LoadReport, ProjectHost,
@@ -286,8 +289,25 @@ pub fn run() -> ExitCode {
             commands::close_vst3_gui,
             commands::save_vst3_state,
             commands::load_vst3_state,
+            // Patterns, the arrangement and the play mode.
             commands::get_pattern,
             commands::set_pattern,
+            commands::add_pattern,
+            commands::clone_pattern,
+            commands::remove_pattern,
+            commands::rename_pattern,
+            commands::set_pattern_color,
+            commands::set_pattern_length,
+            commands::set_active_pattern,
+            commands::set_play_mode,
+            commands::add_playlist_track,
+            commands::remove_playlist_track,
+            commands::rename_playlist_track,
+            commands::set_playlist_track_mute,
+            commands::add_pattern_clip,
+            commands::remove_clip,
+            commands::move_clip,
+            commands::resize_clip,
             commands::set_bpm,
             commands::get_stream_info,
             // The project file: New / Open / Save / Save As, plus the name and

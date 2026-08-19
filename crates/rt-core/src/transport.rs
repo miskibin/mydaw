@@ -13,7 +13,73 @@
 //! does that once per block, into the [`TransportSnapshot`], so every node in
 //! the graph sees the same tempo for the whole block.
 
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+
+/// What the transport is playing.
+///
+/// FL Studio's PAT/SONG switch, and the same two answers: the pattern you are
+/// editing, or the arrangement you built out of them.
+///
+/// # Why this is here and not in the sequencer
+/// For the same reason the tempo is (see the module docs): it is a property of
+/// *the transport*, not of whatever happens to be reading it. The playhead, the
+/// sequencer, a future metronome and a UI badge all have to agree on it, and
+/// putting it in the crate that owns one of those readers would mean rt-core
+/// depending on the sequencer or the mode travelling by a second route with a
+/// second publication story.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlayMode {
+    /// Loop the pattern set's active pattern, forever, from tick zero.
+    #[default]
+    Pattern,
+    /// Play the playlist from the transport's position to the end of the last
+    /// clip.
+    Song,
+}
+
+impl PlayMode {
+    /// Stable wire name: `pat` or `song`.
+    pub const fn id(self) -> &'static str {
+        match self {
+            Self::Pattern => "pat",
+            Self::Song => "song",
+        }
+    }
+
+    /// Parse a wire name.
+    ///
+    /// Accepts `pattern` as well as `pat`, because both spellings are obvious
+    /// and a mode switch failing over a synonym would be an infuriating bug.
+    pub fn parse(id: &str) -> Option<Self> {
+        match id {
+            "pat" | "pattern" => Some(Self::Pattern),
+            "song" => Some(Self::Song),
+            _ => None,
+        }
+    }
+
+    /// Whether this is song mode.
+    pub const fn is_song(self) -> bool {
+        matches!(self, Self::Song)
+    }
+
+    /// As stored in the clock's atomic.
+    const fn as_u8(self) -> u8 {
+        match self {
+            Self::Pattern => 0,
+            Self::Song => 1,
+        }
+    }
+
+    /// Back from it. Anything else is pattern mode, which is the safe answer:
+    /// a corrupt byte must not make the transport play an arrangement.
+    const fn from_u8(raw: u8) -> Self {
+        match raw {
+            1 => Self::Song,
+            _ => Self::Pattern,
+        }
+    }
+}
 
 /// Tempo a fresh session starts at.
 ///
@@ -58,6 +124,8 @@ pub struct TransportSnapshot {
     pub playing: bool,
     /// Tempo in beats per minute, already clamped to `MIN_BPM..=MAX_BPM`.
     pub bpm: f64,
+    /// Whether the transport is playing a pattern or the arrangement.
+    pub mode: PlayMode,
 }
 
 impl Default for TransportSnapshot {
@@ -71,6 +139,7 @@ impl Default for TransportSnapshot {
             sample_pos: 0,
             playing: false,
             bpm: DEFAULT_BPM,
+            mode: PlayMode::Pattern,
         }
     }
 }
@@ -87,6 +156,8 @@ pub struct TransportClock {
     playing: AtomicBool,
     /// `f64::to_bits` of the tempo. See the module docs.
     bpm_bits: AtomicU64,
+    /// [`PlayMode`] as a byte. One relaxed load per block, like the tempo.
+    mode: AtomicU8,
     sample_rate: f64,
 }
 
@@ -102,6 +173,7 @@ impl TransportClock {
             sample_pos: AtomicU64::new(0),
             playing: AtomicBool::new(false),
             bpm_bits: AtomicU64::new(clamp_bpm(bpm).to_bits()),
+            mode: AtomicU8::new(PlayMode::Pattern.as_u8()),
             sample_rate,
         }
     }
@@ -116,6 +188,7 @@ impl TransportClock {
             sample_pos: self.sample_pos.load(Ordering::Relaxed),
             playing: self.playing.load(Ordering::Relaxed),
             bpm: self.bpm(),
+            mode: self.play_mode(),
         }
     }
 
@@ -158,6 +231,16 @@ impl TransportClock {
         let clamped = clamp_bpm(bpm);
         self.bpm_bits.store(clamped.to_bits(), Ordering::Relaxed);
         clamped
+    }
+
+    /// Whether the transport is playing a pattern or the arrangement.
+    pub fn play_mode(&self) -> PlayMode {
+        PlayMode::from_u8(self.mode.load(Ordering::Relaxed))
+    }
+
+    /// Set the play mode. Takes effect on the audio thread's next block.
+    pub fn set_play_mode(&self, mode: PlayMode) {
+        self.mode.store(mode.as_u8(), Ordering::Relaxed);
     }
 
     /// Current position in seconds, for display purposes.
@@ -226,6 +309,36 @@ mod tests {
         // of being allowed to poison every step boundary downstream.
         assert_eq!(t.set_bpm(f64::NAN), DEFAULT_BPM);
         assert!(t.bpm().is_finite());
+    }
+
+    #[test]
+    fn the_play_mode_starts_on_pattern_and_reaches_the_snapshot() {
+        let t = TransportClock::new(48_000.0);
+        assert_eq!(t.play_mode(), PlayMode::Pattern);
+        assert_eq!(t.snapshot().mode, PlayMode::Pattern);
+        t.set_play_mode(PlayMode::Song);
+        assert_eq!(t.play_mode(), PlayMode::Song);
+        assert_eq!(t.snapshot().mode, PlayMode::Song);
+        assert_eq!(TransportSnapshot::default().mode, PlayMode::Pattern);
+    }
+
+    #[test]
+    fn the_play_mode_round_trips_through_its_wire_name() {
+        assert_eq!(PlayMode::Pattern.id(), "pat");
+        assert_eq!(PlayMode::Song.id(), "song");
+        assert_eq!(PlayMode::parse("pat"), Some(PlayMode::Pattern));
+        assert_eq!(PlayMode::parse("pattern"), Some(PlayMode::Pattern));
+        assert_eq!(PlayMode::parse("song"), Some(PlayMode::Song));
+        assert_eq!(PlayMode::parse("PAT"), None);
+        assert_eq!(PlayMode::parse(""), None);
+        assert_eq!(PlayMode::default(), PlayMode::Pattern);
+        assert!(PlayMode::Song.is_song());
+        assert!(!PlayMode::Pattern.is_song());
+        // A byte the clock could never have stored must not play a song.
+        assert_eq!(PlayMode::from_u8(200), PlayMode::Pattern);
+        for mode in [PlayMode::Pattern, PlayMode::Song] {
+            assert_eq!(PlayMode::from_u8(mode.as_u8()), mode);
+        }
     }
 
     #[test]

@@ -35,8 +35,8 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use mydaw_app::{
-    boot_kernel, capture_root, capture_to_disk, AppState, CaptureOutcome, MelodicNoteDto,
-    PatternDto, PatternRowDto, SamplerSourceRef, Source, StepDto,
+    boot_kernel, capture_root, capture_to_disk, AppState, CaptureOutcome, ChannelClipDto,
+    MelodicNoteDto, PatternDto, SamplerSourceRef, Source, StepDto, StepRowDto,
 };
 use mydaw_plugin_debug_tap::{align_grid, detect_onsets, spectrum, Band, OnsetConfig};
 use mydaw_plugin_sequencer::{step_len_samples, DEFAULT_STEP_VELOCITY, TICKS_PER_STEP};
@@ -378,30 +378,41 @@ fn arpeggio_over_a_beat() -> PatternDto {
         on,
         velocity: DEFAULT_STEP_VELOCITY,
     };
-    let row = |key: u8, hit: &dyn Fn(usize) -> bool| PatternRowDto {
-        key,
-        channel: 0,
-        label: String::new(),
-        steps: (0..STEPS).map(|index| step(hit(index))).collect(),
+    let drum = |channel: u8, key: u8, hit: &dyn Fn(usize) -> bool| ChannelClipDto {
+        channel,
+        mode: String::new(),
+        steps: Some(StepRowDto {
+            key,
+            label: String::new(),
+            steps: (0..STEPS).map(|index| step(hit(index))).collect(),
+        }),
+        notes: Vec::new(),
     };
 
     PatternDto {
+        id: 1,
+        name: "Pattern 1".to_owned(),
+        color: None,
         steps: STEPS as u8,
-        rows: vec![
-            row(36, &|index| index % 4 == 0),
-            row(38, &|_| false),
-            row(42, &|index| index % 2 == 0),
-            row(46, &|_| false),
-        ],
-        notes: (0..BARS * 4)
-            .map(|quarter| MelodicNoteDto {
-                key: ARPEGGIO[quarter % ARPEGGIO.len()],
+        channels: vec![
+            drum(0, 36, &|index| index % 4 == 0),
+            drum(2, 42, &|index| index % 2 == 0),
+            // The melody, on its own channel: one clip per channel, and a
+            // channel with notes is a piano roll rather than a grid.
+            ChannelClipDto {
                 channel: PIANO_CHANNEL,
-                start: quarter as u32 * QUARTER_TICKS,
-                length: QUARTER_TICKS,
-                velocity: DEFAULT_STEP_VELOCITY,
-            })
-            .collect(),
+                mode: String::new(),
+                steps: None,
+                notes: (0..BARS * 4)
+                    .map(|quarter| MelodicNoteDto {
+                        key: ARPEGGIO[quarter % ARPEGGIO.len()],
+                        start: quarter as u32 * QUARTER_TICKS,
+                        length: QUARTER_TICKS,
+                        velocity: DEFAULT_STEP_VELOCITY,
+                    })
+                    .collect(),
+            },
+        ],
     }
 }
 

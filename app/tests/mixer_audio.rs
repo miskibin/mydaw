@@ -39,7 +39,7 @@ use std::time::Duration;
 
 use mydaw_app::{boot_kernel, capture_root, capture_to_disk, AppState, CaptureOutcome};
 use mydaw_plugin_debug_tap::{spectrum, Spectrum};
-use mydaw_plugin_sequencer::{Pattern, PatternRow};
+use mydaw_plugin_sequencer::{Pattern, StepRow};
 
 /// Tempo the beat runs at. The engine's default, and a dance tempo.
 const BPM: f64 = 130.0;
@@ -195,9 +195,14 @@ impl Measured {
 /// Kick on every beat, and nothing else. See the module docs for why the hats
 /// are not in it.
 fn kick_only() -> Pattern {
-    let mut pattern = Pattern::default();
-    let kick = pattern.rows[0].key;
-    pattern.rows[0] = PatternRow::empty(kick).with_steps(&[0, 4, 8, 12]);
+    let mut pattern = Pattern::with_channels(1, "Pattern 1", &[0, 1, 2, 3, 4], |channel| {
+        mydaw_plugin_sequencer::DEFAULT_ROW_KEYS
+            .get(channel as usize)
+            .copied()
+            .unwrap_or(mydaw_plugin_sequencer::DEFAULT_STEP_KEY)
+    });
+    let kick = pattern.channels[0].steps.as_ref().unwrap().key;
+    pattern.channels[0].steps = Some(StepRow::empty(kick).with_steps(&[0, 4, 8, 12]));
     pattern
 }
 
@@ -232,8 +237,8 @@ fn two_tracks_sum_mute_and_pan_through_the_device() {
     // channel 0, so they play track 0's kit.
     assert!(state
         .sequencer()
-        .pattern()
-        .rows
+        .active_pattern()
+        .channels
         .iter()
         .all(|row| row.channel == 0));
 

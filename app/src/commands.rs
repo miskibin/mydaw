@@ -27,6 +27,7 @@ use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
 use crate::source::{Source, SourceDto};
 use crate::state::AppState;
 use crate::vst3_bridge::Vst3GuiStatusDto;
+use mydaw_plugin_sequencer::{PlayMode, DEFAULT_CLIP_TICKS};
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
 #[tauri::command]
@@ -341,26 +342,141 @@ pub async fn remove_track(
     Ok(state.mixer_state())
 }
 
-/// The step grid and the session tempo. Called once at startup.
+// ---------------------------------------------------------------------------
+// Patterns, the arrangement and the play mode
+// ---------------------------------------------------------------------------
+//
+// Every one of these returns the **whole** [`SequencerStateDto`] rather than an
+// acknowledgement, for the same reason the mixer commands return the whole
+// mixer: one shape back means a panel never merges a partial update into what
+// it already had, which is where optimistic UIs go wrong. The IPC spike
+// measured a message this size as free.
+//
+// Every one of them also succeeds with **no audio device open**. Patterns and
+// arrangements are project data; a user on a machine with no sound card must
+// still be able to write a beat, and the session republishes itself when a
+// stream comes up.
+
+/// Add an empty pattern with a grid on every rack channel, returning the new
+/// state.
 ///
-/// Both in one message because the panel needs both to draw itself: the grid
-/// needs the pattern, and the moving current-step highlight needs the tempo. See
-/// [`SequencerStateDto`] for why they do not ride in `get_ui_snapshot`.
+/// The new pattern is **not** made active: adding one and switching to it are
+/// two gestures, and a command that did both could not express the other. Send
+/// [`set_active_pattern`] after it if that is what the button means.
+#[tauri::command]
+pub fn add_pattern(
+    state: State<'_, AppState>,
+    name: Option<String>,
+) -> Result<SequencerStateDto, String> {
+    state.add_pattern(name).map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Duplicate a pattern, content and all. The copy lands directly after it.
+#[tauri::command]
+pub fn clone_pattern(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+    name: Option<String>,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_patterns(|set| set.clone_pattern(pattern_id, name))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Delete a pattern **and every playlist clip that played it**.
+///
+/// The two are one command because they must not be separable: a set without
+/// the pattern and an arrangement still naming it is a state no caller should
+/// be able to publish. Refused for the last pattern.
+#[tauri::command]
+pub fn remove_pattern(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+) -> Result<SequencerStateDto, String> {
+    state
+        .remove_pattern(pattern_id)
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Rename a pattern. A blank name is refused -- the picker would show an empty
+/// row.
+#[tauri::command]
+pub fn rename_pattern(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+    name: String,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_patterns(|set| set.rename(pattern_id, name))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Set a pattern's accent colour, or clear it with `null`.
+///
+/// The engine only stores it: there is no palette here, and inventing one would
+/// put a design decision in a file format.
+#[tauri::command]
+pub fn set_pattern_color(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+    color: Option<String>,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_patterns(|set| set.set_color(pattern_id, color))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Set a pattern's loop length, in steps: 16, 32 or 64.
+///
+/// Shortening is **not** destructive -- cells and notes past the new end are
+/// kept and simply not played, so lengthening again gives them back. The one
+/// exception is a note that would then hang past the bar line, which is refused.
+#[tauri::command]
+pub fn set_pattern_length(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+    steps: u8,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_patterns(|set| set.set_length(pattern_id, steps))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Choose which pattern the grid, the roll and PAT mode address.
+#[tauri::command]
+pub fn set_active_pattern(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_patterns(|set| set.set_active(pattern_id))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// The whole sequencer: patterns, the arrangement, the tempo, the mode and the
+/// tick geometry. Called once at startup.
 #[tauri::command]
 pub fn get_pattern(state: State<'_, AppState>) -> SequencerStateDto {
     state.sequencer_state()
 }
 
-/// Replace the step grid, returning the state the session now holds.
+/// Replace one pattern wholesale.
 ///
-/// A whole-pattern replacement rather than a per-step edit: a 4x16 grid is about
-/// a kilobyte of JSON, the IPC spike measured that as free, and one message per
-/// edit is a protocol with no ordering problems, no missed updates and no diff
-/// to get wrong.
+/// A whole-pattern replacement rather than a per-step edit: a rack of grids is
+/// a few kilobytes of JSON, the IPC spike measured that as free, and one message
+/// per edit is a protocol with no ordering problems, no missed updates and no
+/// diff to get wrong.
 ///
-/// Succeeds with no audio device open -- a pattern is project data, not stream
-/// state (see [`AppState::set_pattern`]). Rejects a grid the engine could not
-/// run, with a sentence naming the row that did it.
+/// `pattern.id` names which pattern; `0` (or absent) means the active one.
+/// Rejects a pattern the engine could not run, with a sentence naming what did
+/// it.
 #[tauri::command]
 pub fn set_pattern(
     state: State<'_, AppState>,
@@ -368,6 +484,136 @@ pub fn set_pattern(
 ) -> Result<SequencerStateDto, String> {
     state
         .set_pattern_dto(&pattern)
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Switch the transport between `pat` and `song`.
+///
+/// Also accepts `pattern` for `pat`. Takes effect on the audio thread's next
+/// block, at the same latency as pressing play.
+#[tauri::command]
+pub fn set_play_mode(
+    state: State<'_, AppState>,
+    mode: String,
+) -> Result<SequencerStateDto, String> {
+    let mode = PlayMode::parse(&mode)
+        .ok_or_else(|| format!("'{mode}' is not a play mode; expected 'pat' or 'song'"))?;
+    state.set_play_mode(mode).map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+// --------------------------------------------------------------- the playlist
+
+/// Append an arrangement lane.
+#[tauri::command]
+pub fn add_playlist_track(
+    state: State<'_, AppState>,
+    name: Option<String>,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.add_track(name))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Remove a lane **and every clip on it**, shifting the lanes below up.
+///
+/// The clips go because a clip's lane is its position rather than a reference:
+/// one left behind would have to move somewhere, and every somewhere is a silent
+/// rewrite of the arrangement. Refused for the last lane.
+#[tauri::command]
+pub fn remove_playlist_track(
+    state: State<'_, AppState>,
+    track: usize,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.remove_track(track).map(|_| ()))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Rename a lane.
+#[tauri::command]
+pub fn rename_playlist_track(
+    state: State<'_, AppState>,
+    track: usize,
+    name: String,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.rename_track(track, name))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Mute or unmute a lane.
+///
+/// Silences it; it does not shorten the song, so the playhead still runs to the
+/// end of a muted lane's last clip.
+#[tauri::command]
+pub fn set_playlist_track_mute(
+    state: State<'_, AppState>,
+    track: usize,
+    muted: bool,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.set_track_muted(track, muted))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Place a pattern on the timeline.
+///
+/// `start` and `length` are in **ticks** (960 to the quarter note, 3840 to the
+/// bar). A length longer than the pattern loops it; shorter trims it. `length`
+/// absent means four bars.
+#[tauri::command]
+pub fn add_pattern_clip(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+    track: usize,
+    start: u64,
+    length: Option<u64>,
+) -> Result<SequencerStateDto, String> {
+    let length = length.unwrap_or(DEFAULT_CLIP_TICKS);
+    state
+        .edit_playlist(|list| list.add_pattern_clip(pattern_id, track, start, length))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Remove a clip.
+#[tauri::command]
+pub fn remove_clip(state: State<'_, AppState>, clip_id: u64) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.remove_clip(clip_id).map(|_| ()))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Move a clip to another lane and start tick.
+#[tauri::command]
+pub fn move_clip(
+    state: State<'_, AppState>,
+    clip_id: u64,
+    track: usize,
+    start: u64,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.move_clip(clip_id, track, start))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Change a clip's length, in ticks. Zero is refused.
+#[tauri::command]
+pub fn resize_clip(
+    state: State<'_, AppState>,
+    clip_id: u64,
+    length: u64,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.resize_clip(clip_id, length))
         .map_err(|err| err.to_string())?;
     Ok(state.sequencer_state())
 }

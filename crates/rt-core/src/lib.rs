@@ -62,7 +62,9 @@ pub use params::{
     smoothing_frames, AtomicF32, ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ParamSmoother,
     ReadoutDef, SmoothedParams, DEFAULT_SMOOTHING_MS,
 };
-pub use transport::{clamp_bpm, TransportClock, TransportSnapshot, DEFAULT_BPM, MAX_BPM, MIN_BPM};
+pub use transport::{
+    clamp_bpm, PlayMode, TransportClock, TransportSnapshot, DEFAULT_BPM, MAX_BPM, MIN_BPM,
+};
 
 /// Re-exported so downstream crates can name `basedrop` types (`Handle`, `Owned`)
 /// without depending on the exact `basedrop` version themselves.

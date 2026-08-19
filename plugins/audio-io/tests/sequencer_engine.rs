@@ -26,8 +26,8 @@ use mydaw_plugin_audio_io::{run_block, AudioIoStats, RtState, RtStateParams};
 use mydaw_plugin_debug_tap::{align_grid, detect_onsets, GridReport, Onset, OnsetConfig};
 use mydaw_plugin_instruments::DrumKitNode;
 use mydaw_plugin_sequencer::{
-    pattern_channel, step_boundary, step_len_samples, Pattern, PatternRow, Step, DEFAULT_STEPS,
-    PATTERN_QUEUE_CAPACITY,
+    song_channel, step_boundary, step_len_samples, ChannelClip, CompiledSong, MelodicNote, Pattern,
+    StepRow, DEFAULT_STEPS, SONG_QUEUE_CAPACITY, STEP_GATE_TICKS, TICKS_PER_STEP,
 };
 use mydaw_rt_core::{
     graph_channel, note_channel, rt_channel, GcThread, GraphSpec, RtCommand, TransportClock,
@@ -48,18 +48,37 @@ const CLOSED_HAT: u8 = 42;
 ///
 /// Fourteen clicks in the grid -- four kicks, two snares, eight hats.
 fn demo_beat() -> Pattern {
-    let mut pattern = Pattern::silent();
-    pattern
-        .rows
-        .push(PatternRow::empty(KICK).with_steps(&[0, 4, 8, 12]));
-    pattern
-        .rows
-        .push(PatternRow::empty(SNARE).with_steps(&[4, 12]));
-    let mut hats = PatternRow::empty(CLOSED_HAT);
-    for step in (0..DEFAULT_STEPS).step_by(2) {
-        hats.steps[step] = Step::on();
+    // Everything on **channel 0**, as notes rather than as three step rows.
+    //
+    // Two reasons, both about what this file is testing. It renders a single
+    // `DrumKitNode` inside one track chain, and a track chain only sees its own
+    // channel -- three channels would mean two thirds of the beat never
+    // arriving. And a pattern holds one clip per channel, so one channel cannot
+    // have three step rows at three keys; the kit picks its drum from the key,
+    // which is exactly the arrangement the per-drum instruments replaced.
+    //
+    // Steps compile to notes anyway (see `mydaw_plugin_sequencer::pattern`), so
+    // writing them as notes here changes nothing about the timing claim under
+    // test: a note at `n * TICKS_PER_STEP` is a step at `n`, to the sample.
+    let mut pattern = Pattern::silent(1, "Demo");
+    let mut clip = ChannelClip::melodic(0);
+    let mut hit = |key: u8, step: usize| {
+        clip.notes.push(MelodicNote::new(
+            key,
+            step as u32 * TICKS_PER_STEP,
+            STEP_GATE_TICKS,
+        ));
+    };
+    for step in [0, 4, 8, 12] {
+        hit(KICK, step);
     }
-    pattern.rows.push(hats);
+    for step in [4, 12] {
+        hit(SNARE, step);
+    }
+    for step in (0..DEFAULT_STEPS).step_by(2) {
+        hit(CLOSED_HAT, step);
+    }
+    pattern.channels.push(clip);
     pattern
 }
 
@@ -70,15 +89,15 @@ fn render(pattern: &Pattern, frames: usize, bpm: f64) -> (Vec<f32>, Arc<AudioIoS
     let (mut graph, graph_slot) = graph_channel(4, gc.handle());
     let (mut commands, command_rx) = rt_channel::<RtCommand>(16);
     let (_notes_tx, notes) = note_channel(NOTE_CAPACITY);
-    let (mut pattern_tx, pattern_slot) = pattern_channel(PATTERN_QUEUE_CAPACITY, gc.handle());
+    let (mut song_tx, song_slot) = song_channel(SONG_QUEUE_CAPACITY, gc.handle());
     let stats = Arc::new(AudioIoStats::default());
 
     graph
         .install(GraphSpec::new().with(Box::new(DrumKitNode::new(SR))))
         .expect("the graph should install");
-    pattern_tx
-        .install(pattern.compile())
-        .expect("the pattern should install");
+    song_tx
+        .install(CompiledSong::new(vec![pattern.compile()], 0, Vec::new()))
+        .expect("the song should install");
     commands.push(RtCommand::SetBpm(bpm)).unwrap();
     commands.push(RtCommand::SetPlaying(true)).unwrap();
 
@@ -87,7 +106,7 @@ fn render(pattern: &Pattern, frames: usize, bpm: f64) -> (Vec<f32>, Arc<AudioIoS
         commands: command_rx,
         notes,
         note_capacity: NOTE_CAPACITY,
-        pattern: pattern_slot,
+        song: song_slot,
         meters: None,
         debug_tap: None,
         transport: Arc::new(TransportClock::new(SR)),
@@ -211,7 +230,11 @@ fn an_empty_pattern_renders_digital_silence() {
     // The other half of the claim: the grid is what makes sound, and an empty
     // grid makes none. A sequencer that leaks a hit from somewhere would show
     // up here and nowhere else.
-    let (left, stats) = render(&Pattern::default(), two_bars(DEFAULT_BPM), DEFAULT_BPM);
+    let (left, stats) = render(
+        &Pattern::silent(1, "Empty"),
+        two_bars(DEFAULT_BPM),
+        DEFAULT_BPM,
+    );
     assert!(
         left.iter().all(|s| *s == 0.0),
         "an empty pattern must be silent, not quiet"
@@ -227,8 +250,10 @@ fn the_hits_land_on_the_samples_the_scheduler_computed() {
     // to be exactly `step_boundary(16, step_len)`.
     let bpm = DEFAULT_BPM;
     let step_len = step_len_samples(SR, bpm);
-    let mut pattern = Pattern::silent();
-    pattern.rows.push(PatternRow::empty(KICK).with_steps(&[0]));
+    let mut pattern = Pattern::silent(1, "One kick");
+    let mut clip = ChannelClip::stepped(0, KICK);
+    clip.steps = Some(StepRow::empty(KICK).with_steps(&[0]));
+    pattern.channels.push(clip);
 
     let (left, _) = render(&pattern, two_bars(bpm), bpm);
     let bar = step_boundary(DEFAULT_STEPS as u64, step_len) as usize;

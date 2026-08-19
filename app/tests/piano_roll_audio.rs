@@ -43,8 +43,8 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use mydaw_app::{
-    boot_kernel, capture_root, capture_to_disk, AppState, MelodicNoteDto, PatternDto,
-    PatternRowDto, StepDto,
+    boot_kernel, capture_root, capture_to_disk, AppState, ChannelClipDto, MelodicNoteDto,
+    PatternDto, StepDto, StepRowDto,
 };
 use mydaw_plugin_debug_tap::{
     align_grid, detect_onsets, spectrum, Band, GridReport, Onset, OnsetConfig,
@@ -117,33 +117,44 @@ fn arpeggio_over_a_beat() -> PatternDto {
         on,
         velocity: DEFAULT_STEP_VELOCITY,
     };
-    let row = |key: u8, hit: &dyn Fn(usize) -> bool| PatternRowDto {
-        key,
-        channel: 0,
-        label: String::new(),
-        steps: (0..STEPS).map(|index| step(hit(index))).collect(),
+    let drum = |channel: u8, key: u8, hit: &dyn Fn(usize) -> bool| ChannelClipDto {
+        channel,
+        mode: String::new(),
+        steps: Some(StepRowDto {
+            key,
+            label: String::new(),
+            steps: (0..STEPS).map(|index| step(hit(index))).collect(),
+        }),
+        notes: Vec::new(),
     };
 
     PatternDto {
+        id: 1,
+        name: "Pattern 1".to_owned(),
+        color: None,
         steps: STEPS as u8,
-        rows: vec![
+        channels: vec![
             // Kick on every quarter -- four on the floor, and the grid every
             // melodic window is measured against.
-            row(36, &|index| index % 4 == 0),
-            row(38, &|_| false),
+            drum(0, 36, &|index| index % 4 == 0),
             // Closed hats on every eighth.
-            row(42, &|index| index % 2 == 0),
-            row(46, &|_| false),
-        ],
-        notes: (0..BARS * 4)
-            .map(|quarter| MelodicNoteDto {
-                key: ARPEGGIO[quarter % ARPEGGIO.len()],
+            drum(2, 42, &|index| index % 2 == 0),
+            // The melody, on its own channel: one clip per channel, and a
+            // channel with notes is a piano roll rather than a grid.
+            ChannelClipDto {
                 channel: SYNTH_CHANNEL,
-                start: quarter as u32 * QUARTER_TICKS,
-                length: QUARTER_TICKS,
-                velocity: DEFAULT_STEP_VELOCITY,
-            })
-            .collect(),
+                mode: String::new(),
+                steps: None,
+                notes: (0..BARS * 4)
+                    .map(|quarter| MelodicNoteDto {
+                        key: ARPEGGIO[quarter % ARPEGGIO.len()],
+                        start: quarter as u32 * QUARTER_TICKS,
+                        length: QUARTER_TICKS,
+                        velocity: DEFAULT_STEP_VELOCITY,
+                    })
+                    .collect(),
+            },
+        ],
     }
 }
 
@@ -238,10 +249,10 @@ fn a_pattern_of_notes_and_drums_comes_out_of_the_device_in_tune_and_on_the_grid(
     state
         .set_pattern_dto(&arpeggio_over_a_beat())
         .expect("the pattern is valid");
-    let stored = state.sequencer().pattern();
+    let stored = state.sequencer().active_pattern();
     assert_eq!(stored.length_steps as usize, STEPS, "two bars");
     assert_eq!(stored.hit_count(), 8 + 16, "eight kicks, sixteen hats");
-    assert_eq!(stored.notes.len(), 8, "two times round a four-note figure");
+    assert_eq!(stored.note_count(), 8, "two times round a four-note figure");
 
     // --- play, settle, capture ----------------------------------------------
     state.set_playing(true).expect("the transport starts");

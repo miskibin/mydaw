@@ -2,6 +2,8 @@
 
 use rtrb::{Consumer, Producer, RingBuffer};
 
+use crate::PlayMode;
+
 /// Commands the audio thread applies at a block boundary.
 ///
 /// Deliberately `Copy` and allocation-free: pushing one of these never touches
@@ -22,6 +24,12 @@ pub enum RtCommand {
     /// out-of-range value here changes the tempo to the nearest legal one
     /// rather than corrupting the sequencer's arithmetic.
     SetBpm(f64),
+    /// Play the active pattern, or play the arrangement.
+    ///
+    /// A transport command rather than a song edit: switching mode must take
+    /// effect on the *next block*, at the same latency as pressing play, and it
+    /// must not wait for a song recompile that has nothing to do with it.
+    SetPlayMode(PlayMode),
 }
 
 /// Producer half, lives on the non-RT side.
@@ -49,6 +57,7 @@ pub fn drain_commands(rx: &mut RtCommandConsumer, transport: &crate::TransportCl
             RtCommand::SetBpm(bpm) => {
                 transport.set_bpm(bpm);
             }
+            RtCommand::SetPlayMode(mode) => transport.set_play_mode(mode),
         }
     }
 }
@@ -82,11 +91,13 @@ mod tests {
         tx.push(RtCommand::SetPlaying(true)).unwrap();
         tx.push(RtCommand::Seek(1024)).unwrap();
         tx.push(RtCommand::SetBpm(174.3)).unwrap();
+        tx.push(RtCommand::SetPlayMode(PlayMode::Song)).unwrap();
         drain_commands(&mut rx, &transport);
         let s = transport.snapshot();
         assert!(s.playing);
         assert_eq!(s.sample_pos, 1024);
         assert_eq!(s.bpm, 174.3);
+        assert_eq!(s.mode, PlayMode::Song);
     }
 
     #[test]

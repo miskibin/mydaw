@@ -114,6 +114,7 @@ impl Harness {
             sample_pos: self.position,
             playing: self.playing,
             bpm: self.bpm,
+            ..TransportSnapshot::default()
         };
         {
             let mut ctx = ProcessCtx::new(&mut self.buffers, self.sample_rate, frames, transport);

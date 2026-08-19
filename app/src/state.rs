@@ -13,14 +13,19 @@ use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
 use mydaw_plugin_sampler::{
     AssetDownloader, AssetState, AssetStatus, SamplerPlugin, SamplerRegistry,
 };
-use mydaw_plugin_sequencer::{Pattern, PatternError, SequencerPlugin, SequencerService};
+use mydaw_plugin_sequencer::{
+    Pattern, PatternError, PatternSet, PatternSetError, PlayMode, Playlist, PlaylistError,
+    SequencerPlugin, SequencerService, SongError,
+};
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 
 use mydaw_rt_core::{clamp_bpm, LiveNote, MAX_BPM, MAX_KEY, MIN_BPM};
 
 use crate::clap_bridge::{ClapAnswer, ClapCommand, ClapGuiStatusDto, ClapHostBridge, ClapTarget};
-use crate::dto::{ClapPluginInfoDto, PatternDto, SequencerStateDto, Vst3PluginInfoDto};
+use crate::dto::{
+    ClapPluginInfoDto, PatternDto, PatternSetDto, PlaylistDto, SequencerStateDto, Vst3PluginInfoDto,
+};
 use crate::ipc_bench;
 use crate::meters::MeterPump;
 use crate::project::{MixerStateDto, Project, TrackError};
@@ -78,11 +83,34 @@ pub enum SequencerError {
     /// The pattern would not fit what the audio thread can run.
     #[error(transparent)]
     Pattern(#[from] PatternError),
+    /// The edit was refused by the pattern set or the arrangement.
+    #[error(transparent)]
+    Song(#[from] SongError),
     #[error("tempo {0} is not a number between {MIN_BPM} and {MAX_BPM}")]
     InvalidBpm(f64),
     /// The audio thread has not picked up previous edits. Retryable.
     #[error(transparent)]
     Audio(#[from] AudioIoError),
+}
+
+/// The pattern set a fresh project starts with: one pattern with an empty grid
+/// on every rack channel.
+///
+/// Lives here rather than in the sequencer because it needs to know what is
+/// *on* each channel to pick the grid's key -- a drum channel gets its General
+/// MIDI number so a row entered at its default key plays the drum untransposed,
+/// and anything else gets middle C. The sequencer crate deliberately does not
+/// depend on the instruments one.
+pub fn starter_pattern_set(project: &Project) -> PatternSet {
+    let channels: Vec<u8> = (0..project.len().min(mydaw_rt_core::MAX_TRACKS))
+        .map(|index| index as u8)
+        .collect();
+    PatternSet::starter(&channels, |channel| {
+        match project.tracks.get(channel as usize).map(|t| &t.source) {
+            Some(Source::Drum(drum)) => drum.base_key(),
+            _ => mydaw_plugin_sequencer::DEFAULT_STEP_KEY,
+        }
+    })
 }
 
 /// Register the Phase 0 plugin set and boot the kernel.
@@ -263,11 +291,24 @@ impl AppState {
             }
         };
 
+        let tracks = Arc::new(TrackHost::new(tone, instruments, Arc::clone(&sampler)));
+        // The rack and the pattern set have to agree from the first frame: the
+        // sequencer plugin publishes an empty set (it has no idea what channels
+        // exist), and this is the one place that knows both. A rejected seed
+        // would be a wiring bug, so it is logged rather than propagated -- an
+        // empty pattern is still an editable session.
+        if let Err(err) = sequencer.set_song(
+            starter_pattern_set(&tracks.project()),
+            mydaw_plugin_sequencer::Playlist::default(),
+        ) {
+            log::warn!("could not seed the starter pattern set: {err}");
+        }
+
         Ok(Self {
             snapshot: ui_snapshot(kernel),
             audio,
             sequencer,
-            tracks: Arc::new(TrackHost::new(tone, instruments, Arc::clone(&sampler))),
+            tracks,
             clap_bridge: Arc::new(ClapHostBridge::new()),
             clap,
             vst3_bridge: Arc::new(Vst3HostBridge::new()),
@@ -354,8 +395,11 @@ impl AppState {
         if let Err(err) = self.audio.set_bpm(self.sequencer.bpm()) {
             log::warn!("could not publish the tempo to the new stream: {err}");
         }
-        if let Err(err) = self.audio.install_pattern(self.sequencer.compiled()) {
-            log::warn!("could not publish the pattern to the new stream: {err}");
+        if let Err(err) = self.audio.install_song(self.sequencer.compile()) {
+            log::warn!("could not publish the song to the new stream: {err}");
+        }
+        if let Err(err) = self.audio.set_play_mode(self.sequencer.play_mode()) {
+            log::warn!("could not publish the play mode to the new stream: {err}");
         }
     }
 
@@ -937,7 +981,39 @@ impl AppState {
                 .map_err(MixerError::Source)?;
             return Ok(self.tracks.track_count().saturating_sub(1));
         }
-        self.tracks.add_track(source, name, &self.audio)
+        let outcome = self.tracks.add_track(source, name, &self.audio);
+        // From the project rather than from `outcome`: with no audio device the
+        // graph install fails *after* the track was added, and a pattern that
+        // did not follow it would leave a channel nothing can be clicked into.
+        self.sync_channel_added(self.tracks.track_count().saturating_sub(1));
+        outcome
+    }
+
+    /// Give every pattern a grid on a channel that has just appeared.
+    ///
+    /// Called after the rack grew, whichever of the three paths did it. A
+    /// channel that exists in the mixer and not in the pattern would be a row
+    /// the user cannot click in until they draw a note into it, which is not a
+    /// state anyone would understand.
+    fn sync_channel_added(&self, index: usize) {
+        if index > mydaw_plugin_sequencer::MAX_CHANNEL as usize {
+            return;
+        }
+        let key = self.step_key_for(index);
+        self.sequencer.add_channel(index as u8, key);
+        let _ = self.publish_song();
+    }
+
+    /// Drop a removed channel from every pattern, shifting the ones above it.
+    ///
+    /// A channel *is* a track index, so not doing this would leave every
+    /// pattern playing the wrong instrument -- see
+    /// [`Pattern::retarget_after_removing`](mydaw_plugin_sequencer::Pattern::retarget_after_removing).
+    fn sync_channel_removed(&self, track: usize) {
+        if track <= mydaw_plugin_sequencer::MAX_CHANNEL as usize {
+            self.sequencer.remove_channel(track as u8);
+            let _ = self.publish_song();
+        }
     }
 
     /// Remove a track and rebuild the graph.
@@ -958,7 +1034,14 @@ impl AppState {
                 .map_err(MixerError::Source)?;
             return Ok(());
         }
-        self.tracks.remove_track(track, &self.audio)
+        let before = self.tracks.track_count();
+        let outcome = self.tracks.remove_track(track, &self.audio);
+        // As in `add_track`: the project edit happens before the graph install,
+        // so what decides is whether the rack actually shrank.
+        if self.tracks.track_count() < before {
+            self.sync_channel_removed(track);
+        }
+        outcome
     }
 
     /// The CLAP host mailbox. Commands post here; the run loop serves it.
@@ -1042,12 +1125,151 @@ impl AppState {
         self.tracks.selected().min(mydaw_rt_core::MAX_TRACKS - 1) as u8
     }
 
-    /// The tempo and pattern, in the shape the webview reads.
+    /// The whole sequencer, in the shape the webview reads.
+    ///
+    /// Patterns, the arrangement, the tempo, the mode and the tick geometry in
+    /// one message. Every pattern command returns this, so a panel never has to
+    /// merge a partial update into what it already had -- which is where
+    /// optimistic UIs usually go wrong. The IPC spike measured a message this
+    /// size as free.
     pub fn sequencer_state(&self) -> SequencerStateDto {
+        let (patterns, playlist) = self.sequencer.song();
         SequencerStateDto {
             bpm: self.sequencer.bpm(),
             sample_rate: self.audio.sample_rate().unwrap_or(0.0),
-            pattern: PatternDto::from(&self.sequencer.pattern()),
+            play_mode: self.sequencer.play_mode().id(),
+            ppq: mydaw_plugin_sequencer::PPQ,
+            ticks_per_step: mydaw_plugin_sequencer::TICKS_PER_STEP,
+            ticks_per_bar: mydaw_plugin_sequencer::TICKS_PER_BAR,
+            pattern_set: PatternSetDto::from(&patterns),
+            playlist: PlaylistDto::from(&playlist),
+        }
+    }
+
+    /// Republish the compiled song to the audio thread.
+    ///
+    /// Every song edit ends here. **Not** an error when no device is open: a
+    /// pattern is project data, a user on a machine with no sound card must
+    /// still be able to program a beat, and `publish_sequencer` pushes whatever
+    /// the session holds when a stream comes up. The only audio error worth
+    /// reporting is a full queue, which is retryable.
+    fn publish_song(&self) -> Result<(), SequencerError> {
+        match self.audio.install_song(self.sequencer.compile()) {
+            Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Apply one edit to the pattern set and republish.
+    ///
+    /// The one funnel every pattern command goes through, so that "validate,
+    /// roll back on failure, recompile, publish" is written once instead of
+    /// fifteen times.
+    ///
+    /// # Errors
+    /// [`SequencerError::Song`] for an edit the engine refused (the session is
+    /// unchanged), or [`SequencerError::Audio`] when the audio thread is behind
+    /// (the session *is* changed -- the edit happened, only the publish did
+    /// not, and the next one will carry it).
+    pub fn edit_patterns<T>(
+        &self,
+        edit: impl FnOnce(&mut PatternSet) -> Result<T, PatternSetError>,
+    ) -> Result<T, SequencerError> {
+        let value = self.sequencer.edit_patterns(edit)?;
+        self.publish_song()?;
+        Ok(value)
+    }
+
+    /// Apply one edit to the arrangement and republish.
+    ///
+    /// # Errors
+    /// As [`edit_patterns`](Self::edit_patterns).
+    pub fn edit_playlist<T>(
+        &self,
+        edit: impl FnOnce(&mut Playlist) -> Result<T, PlaylistError>,
+    ) -> Result<T, SequencerError> {
+        let value = self.sequencer.edit_playlist(edit)?;
+        self.publish_song()?;
+        Ok(value)
+    }
+
+    /// Add an empty pattern with a grid on every rack channel.
+    ///
+    /// The channels come from the *mixer*, because that is what a pattern
+    /// addresses, and their step keys from what is on them -- so a new pattern
+    /// in a session of four drums and a piano opens with four drum grids and a
+    /// piano grid rather than with nothing.
+    ///
+    /// # Errors
+    /// As [`edit_patterns`](Self::edit_patterns).
+    pub fn add_pattern(&self, name: Option<String>) -> Result<u64, SequencerError> {
+        let project = self.tracks.project();
+        let channels: Vec<u8> = (0..project.len().min(mydaw_rt_core::MAX_TRACKS))
+            .map(|index| index as u8)
+            .collect();
+        let keys: Vec<u8> = channels
+            .iter()
+            .map(|channel| self.step_key_for(*channel as usize))
+            .collect();
+        self.edit_patterns(move |set| {
+            set.add(name, &channels, |channel| {
+                keys.get(channel as usize).copied().unwrap_or(60)
+            })
+        })
+    }
+
+    /// Make `id` the pattern the grid and PAT mode address. Test affordance for
+    /// the command of the same name.
+    #[cfg(test)]
+    pub(crate) fn set_active_pattern_for_test(&self, id: u64) {
+        self.edit_patterns(|set| set.set_active(id)).unwrap();
+    }
+
+    /// Delete a pattern, and every clip that played it.
+    ///
+    /// # Errors
+    /// As [`edit_patterns`](Self::edit_patterns).
+    pub fn remove_pattern(&self, id: u64) -> Result<usize, SequencerError> {
+        let dropped = self.sequencer.remove_pattern(id)?;
+        self.publish_song()?;
+        Ok(dropped)
+    }
+
+    /// The step key a new channel's grid gets: the drum's General MIDI number
+    /// when the channel is one of the first four, middle C otherwise.
+    ///
+    /// Derived from the *source* rather than from the position, so a rack whose
+    /// first channel is a synth does not get a grid on key 36.
+    fn step_key_for(&self, channel: usize) -> u8 {
+        let source = self
+            .tracks
+            .project()
+            .tracks
+            .get(channel)
+            .map(|track| track.source.clone());
+        match source {
+            Some(Source::Drum(drum)) => drum.base_key(),
+            _ => mydaw_plugin_sequencer::DEFAULT_STEP_KEY,
+        }
+    }
+
+    /// Whether the transport plays the active pattern or the arrangement.
+    pub fn play_mode(&self) -> PlayMode {
+        self.sequencer.play_mode()
+    }
+
+    /// Switch between pattern and song mode.
+    ///
+    /// Stores it in the session first and publishes second, so the mode survives
+    /// a device that is not open yet -- exactly like the tempo.
+    ///
+    /// # Errors
+    /// [`SequencerError::Audio`] when the command queue is full.
+    pub fn set_play_mode(&self, mode: PlayMode) -> Result<(), SequencerError> {
+        self.sequencer.set_play_mode(mode);
+        match self.audio.set_play_mode(mode) {
+            Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
+            Err(err) => Err(err.into()),
         }
     }
 
@@ -1068,11 +1290,11 @@ impl AppState {
     ///
     /// [`start_audio_with_source`]: Self::start_audio_with_source
     pub fn set_pattern(&self, pattern: Pattern) -> Result<(), SequencerError> {
-        self.sequencer.set_pattern(pattern)?;
-        match self.audio.install_pattern(self.sequencer.compiled()) {
-            Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
-            Err(err) => Err(err.into()),
-        }
+        let id = pattern.id;
+        self.edit_patterns(move |set| {
+            *set.get_mut(id)? = pattern;
+            Ok(())
+        })
     }
 
     /// Replace the pattern from what the webview sent.
@@ -1082,7 +1304,15 @@ impl AppState {
     /// [`SequencerError::Pattern`] for a DTO that does not describe a pattern
     /// at all (a row of the wrong length).
     pub fn set_pattern_dto(&self, dto: &PatternDto) -> Result<(), SequencerError> {
-        self.set_pattern(Pattern::try_from(dto)?)
+        let mut pattern = Pattern::try_from(dto)?;
+        // A DTO with no id addresses the pattern being edited, which is what a
+        // panel that only ever shows one pattern sends. A DTO *with* an id
+        // addresses that pattern, so a UI that edits a pattern it is not
+        // looking at can.
+        if pattern.id == 0 {
+            pattern.id = self.sequencer.patterns().active_id();
+        }
+        self.set_pattern(pattern)
     }
 
     /// Set the session tempo. Returns the value that was stored.
@@ -1198,6 +1428,7 @@ mod tests {
                 // of the views onto it -- the grid and the roll.
                 "step-sequencer",
                 "piano-roll",
+                "playlist",
                 "clap-browser",
                 "vst3-browser"
             ],
@@ -1533,17 +1764,32 @@ mod tests {
         let dto = state.sequencer_state();
         assert_eq!(dto.bpm, mydaw_rt_core::DEFAULT_BPM);
         assert_eq!(dto.sample_rate, 0.0, "no device is open in a test process");
-        assert_eq!(dto.pattern.steps, 16);
+        assert_eq!(dto.pattern_set.active.steps, 16);
         assert_eq!(
-            dto.pattern.rows.iter().map(|r| r.key).collect::<Vec<_>>(),
-            vec![36, 38, 42, 46]
+            dto.pattern_set
+                .active
+                .channels
+                .iter()
+                .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
+                .collect::<Vec<_>>(),
+            vec![36, 38, 42, 46, mydaw_plugin_sequencer::DEFAULT_STEP_KEY],
+            "the four drums get their General MIDI keys, the synth middle C"
         );
-        assert!(dto
-            .pattern
-            .rows
-            .iter()
-            .all(|row| row.steps.iter().all(|step| !step.on)));
-        assert_eq!(dto.pattern.rows[2].label, "CH");
+        assert!(dto.pattern_set.active.channels.iter().all(|clip| clip
+            .steps
+            .as_ref()
+            .is_none_or(|row| row.steps.iter().all(|step| !step.on))));
+        assert_eq!(
+            dto.pattern_set.active.channels[2]
+                .steps
+                .as_ref()
+                .unwrap()
+                .label,
+            "CH"
+        );
+        assert_eq!(dto.play_mode, "pat");
+        assert_eq!(dto.pattern_set.patterns.len(), 1);
+        assert_eq!(dto.playlist.tracks.len(), 4);
     }
 
     #[test]
@@ -1551,37 +1797,153 @@ mod tests {
         // The point of the decision: a pattern is project data. On a headless
         // machine every note command fails, and every *edit* still has to work.
         let (_kernel, state) = state();
-        let mut pattern = state.sequencer().pattern();
-        pattern.rows[0] = mydaw_plugin_sequencer::PatternRow::empty(36).with_steps(&[0, 4, 8, 12]);
+        let mut pattern = state.sequencer().active_pattern();
+        pattern.channels[0].steps =
+            Some(mydaw_plugin_sequencer::StepRow::empty(36).with_steps(&[0, 4, 8, 12]));
         state
             .set_pattern(pattern.clone())
             .expect("no device needed");
 
-        assert_eq!(state.sequencer().pattern(), pattern);
-        assert!(state.sequencer_state().pattern.rows[0].steps[4].on);
-        assert_eq!(state.sequencer().compiled().row_count(), 4);
+        assert_eq!(state.sequencer().active_pattern(), pattern);
+        assert!(
+            state.sequencer_state().pattern_set.active.channels[0]
+                .steps
+                .as_ref()
+                .unwrap()
+                .steps[4]
+                .on
+        );
+        // Four steps became four notes: the audio thread only sees notes.
+        assert_eq!(
+            state
+                .sequencer()
+                .compile()
+                .active_pattern()
+                .unwrap()
+                .note_count(),
+            4
+        );
     }
 
     #[test]
     fn a_rejected_pattern_leaves_the_session_exactly_as_it_was() {
         let (_kernel, state) = state();
-        let mut good = state.sequencer().pattern();
-        good.rows[0] = mydaw_plugin_sequencer::PatternRow::empty(36).with_steps(&[0]);
+        let mut good = state.sequencer().active_pattern();
+        good.channels[0].steps = Some(mydaw_plugin_sequencer::StepRow::empty(36).with_steps(&[0]));
         state.set_pattern(good.clone()).unwrap();
 
         let bad = PatternDto {
+            id: good.id,
+            name: "Pattern 1".to_owned(),
+            color: None,
             steps: 16,
-            rows: vec![crate::dto::PatternRowDto {
-                key: 36,
+            channels: vec![crate::dto::ChannelClipDto {
                 channel: 0,
-                label: String::new(),
-                steps: Vec::new(),
+                mode: String::new(),
+                steps: Some(crate::dto::StepRowDto {
+                    key: 36,
+                    label: String::new(),
+                    steps: Vec::new(),
+                }),
+                notes: Vec::new(),
             }],
-            notes: Vec::new(),
         };
         let err = state.set_pattern_dto(&bad).unwrap_err();
         assert!(matches!(err, SequencerError::Pattern(_)), "{err:?}");
-        assert_eq!(state.sequencer().pattern(), good);
+        assert_eq!(state.sequencer().active_pattern(), good);
+    }
+
+    #[test]
+    fn a_new_pattern_opens_with_a_grid_on_every_rack_channel() {
+        // The channels come from the mixer, and the step keys from what is on
+        // them -- a session of four drums and a synth opens a new pattern with
+        // four drum grids and one on middle C, not with nothing.
+        let (_kernel, state) = state();
+        let id = state.add_pattern(Some("Verse".to_owned())).unwrap();
+        let set = state.sequencer().patterns();
+        assert_eq!(set.len(), 2);
+        assert_eq!(
+            set.active_id(),
+            1,
+            "adding is not switching; a UI that wants both says both"
+        );
+
+        let added = set.get(id).expect("just added");
+        assert_eq!(added.name, "Verse");
+        assert_eq!(
+            added
+                .channels
+                .iter()
+                .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
+                .collect::<Vec<_>>(),
+            vec![36, 38, 42, 46, mydaw_plugin_sequencer::DEFAULT_STEP_KEY]
+        );
+
+        state.set_active_pattern_for_test(id);
+        assert_eq!(state.sequencer_state().pattern_set.active_id, id);
+    }
+
+    #[test]
+    fn adding_and_removing_a_rack_channel_moves_every_pattern_with_it() {
+        // A channel *is* a track index. A pattern left pointing at the wrong
+        // instrument would turn "delete a track" into "delete a track and
+        // quietly rewrite the song".
+        let (_kernel, state) = state();
+        let before = state.sequencer().active_pattern().channels.len();
+
+        // No device, so the graph install fails -- the project edit in front of
+        // it is what is under test, and the pattern must follow it.
+        let _ = state.add_track(Source::PolySynth, None);
+        assert_eq!(
+            state.sequencer().active_pattern().channels.len(),
+            before + 1
+        );
+        assert!(state
+            .sequencer()
+            .active_pattern()
+            .channel(before as u8)
+            .is_some());
+
+        let _ = state.remove_track(0);
+        let pattern = state.sequencer().active_pattern();
+        assert_eq!(pattern.channels.len(), before);
+        assert_eq!(
+            pattern
+                .channels
+                .iter()
+                .map(|c| c.channel)
+                .collect::<Vec<_>>(),
+            (0..before as u8).collect::<Vec<_>>(),
+            "the channels above the removed one shifted down"
+        );
+    }
+
+    #[test]
+    fn the_play_mode_switches_with_no_audio_device_at_all() {
+        let (_kernel, state) = state();
+        assert_eq!(state.play_mode(), PlayMode::Pattern);
+        state
+            .set_play_mode(PlayMode::Song)
+            .expect("no device needed");
+        assert_eq!(state.play_mode(), PlayMode::Song);
+        assert_eq!(state.sequencer_state().play_mode, "song");
+    }
+
+    #[test]
+    fn an_arrangement_is_built_and_deleting_its_pattern_takes_its_clips() {
+        let (_kernel, state) = state();
+        let second = state.add_pattern(None).unwrap();
+        for (track, start) in [(0_usize, 0_u64), (0, 3_840), (1, 3_840)] {
+            state
+                .edit_playlist(|list| list.add_pattern_clip(second, track, start, 3_840))
+                .unwrap();
+        }
+        assert_eq!(state.sequencer_state().playlist.clips.len(), 3);
+        assert_eq!(state.sequencer_state().playlist.end_ticks, 7_680);
+
+        assert_eq!(state.remove_pattern(second).unwrap(), 3);
+        assert!(state.sequencer_state().playlist.clips.is_empty());
+        assert_eq!(state.sequencer_state().playlist.end_ticks, 0);
     }
 
     #[test]
@@ -1607,15 +1969,21 @@ mod tests {
     #[test]
     fn a_pattern_from_the_webview_is_validated_before_it_is_stored() {
         let (_kernel, state) = state();
-        let mut dto = state.sequencer_state().pattern;
-        dto.rows[0].steps[0].on = true;
-        dto.rows[0].steps[0].velocity = 1.0;
+        let mut dto = state.sequencer_state().pattern_set.active;
+        let row = dto.channels[0].steps.as_mut().unwrap();
+        row.steps[0].on = true;
+        row.steps[0].velocity = 1.0;
         state.set_pattern_dto(&dto).unwrap();
-        assert_eq!(state.sequencer().pattern().hit_count(), 1);
+        assert_eq!(state.sequencer().active_pattern().hit_count(), 1);
 
-        dto.rows[0].steps[1].velocity = f32::NAN;
-        dto.rows[0].steps[1].on = true;
+        let row = dto.channels[0].steps.as_mut().unwrap();
+        row.steps[1].velocity = f32::NAN;
+        row.steps[1].on = true;
         assert!(state.set_pattern_dto(&dto).is_err());
-        assert_eq!(state.sequencer().pattern().hit_count(), 1, "unchanged");
+        assert_eq!(
+            state.sequencer().active_pattern().hit_count(),
+            1,
+            "unchanged"
+        );
     }
 }

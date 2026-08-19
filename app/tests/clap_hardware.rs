@@ -47,7 +47,7 @@ use mydaw_fixture_clap_gain::synth::{self, PLUGIN_ID as SYNTH_ID};
 use mydaw_plugin_audio_io::AudioIoService;
 use mydaw_plugin_debug_tap::{spectrum, Spectrum};
 use mydaw_plugin_host_clap::test_util::{missing_fixture_message, stage_fixture_bundle};
-use mydaw_plugin_sequencer::{Pattern, PatternRow};
+use mydaw_plugin_sequencer::{Pattern, StepRow};
 use mydaw_plugin_windows::PluginWindowService;
 
 /// Tempo the beat runs at. The engine's default, and a dance tempo.
@@ -242,9 +242,14 @@ impl Measured {
 /// Kick on every beat, and nothing else: a hi-hat is broadband and would smear
 /// the partials this test measures.
 fn kick_only() -> Pattern {
-    let mut pattern = Pattern::default();
-    let kick = pattern.rows[0].key;
-    pattern.rows[0] = PatternRow::empty(kick).with_steps(&[0, 4, 8, 12]);
+    let mut pattern = Pattern::with_channels(1, "Pattern 1", &[0, 1, 2, 3, 4], |channel| {
+        mydaw_plugin_sequencer::DEFAULT_ROW_KEYS
+            .get(channel as usize)
+            .copied()
+            .unwrap_or(mydaw_plugin_sequencer::DEFAULT_STEP_KEY)
+    });
+    let kick = pattern.channels[0].steps.as_ref().unwrap().key;
+    pattern.channels[0].steps = Some(StepRow::empty(kick).with_steps(&[0, 4, 8, 12]));
     pattern
 }
 

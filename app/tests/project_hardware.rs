@@ -48,7 +48,7 @@ use mydaw_fixture_clap_gain::synth::{self, PLUGIN_ID as SYNTH_ID};
 use mydaw_plugin_audio_io::AudioIoService;
 use mydaw_plugin_debug_tap::{align_grid, detect_onsets, spectrum, OnsetConfig, Spectrum};
 use mydaw_plugin_host_clap::test_util::{missing_fixture_message, stage_fixture_bundle};
-use mydaw_plugin_sequencer::{Pattern, PatternRow, SequencerService};
+use mydaw_plugin_sequencer::{Pattern, SequencerService, StepRow};
 use mydaw_plugin_windows::PluginWindowService;
 use serde::{Deserialize, Serialize};
 
@@ -425,9 +425,14 @@ impl Rig {
 /// Kick on every beat, and nothing else: a hi-hat is broadband and would smear
 /// both the onsets and the partials this test measures.
 fn kick_only() -> Pattern {
-    let mut pattern = Pattern::default();
-    let kick = pattern.rows[0].key;
-    pattern.rows[0] = PatternRow::empty(kick).with_steps(&[0, 4, 8, 12]);
+    let mut pattern = Pattern::with_channels(1, "Pattern 1", &[0, 1, 2, 3, 4], |channel| {
+        mydaw_plugin_sequencer::DEFAULT_ROW_KEYS
+            .get(channel as usize)
+            .copied()
+            .unwrap_or(mydaw_plugin_sequencer::DEFAULT_STEP_KEY)
+    });
+    let kick = pattern.channels[0].steps.as_ref().unwrap().key;
+    pattern.channels[0].steps = Some(StepRow::empty(kick).with_steps(&[0, 4, 8, 12]));
     pattern
 }
 
@@ -562,7 +567,7 @@ fn session_b_reopens_the_project_in_a_fresh_process_and_measures_the_same_thing(
     // default tempo, with no plugin anywhere.
     assert_eq!(rig.clap.instance_count(), 0);
     assert_eq!(rig.state.bpm(), mydaw_rt_core::DEFAULT_BPM);
-    assert!(rig.state.sequencer().pattern().is_empty());
+    assert!(rig.state.sequencer().active_pattern().is_empty());
 
     // --- open it -----------------------------------------------------------
     let info = rig.project_command(ProjectCommand::Open { path: path.clone() });
@@ -575,7 +580,7 @@ fn session_b_reopens_the_project_in_a_fresh_process_and_measures_the_same_thing(
 
     // Everything the file said, before a single sample is measured.
     assert_eq!(rig.state.bpm(), BPM);
-    assert_eq!(rig.state.sequencer().pattern(), kick_only());
+    assert_eq!(rig.state.sequencer().active_pattern(), kick_only());
     assert_eq!(rig.clap.instance_count(), 1, "the plugin came back");
     let mixer = rig.state.mixer_state();
     assert_eq!(mixer.tracks[0].gain_db, -3.0);

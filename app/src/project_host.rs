@@ -58,7 +58,7 @@
 use std::path::{Path, PathBuf};
 
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
-use mydaw_plugin_sequencer::{Pattern, SequencerService};
+use mydaw_plugin_sequencer::{PlayMode, Playlist, SequencerService};
 use mydaw_rt_core::DEFAULT_BPM;
 
 use crate::clap_bridge::{ClapBoard, ClapTarget};
@@ -67,7 +67,7 @@ use crate::project::{MissingPluginDto, MissingPlugins, Project};
 use crate::project_bridge::{reply, ProjectAnswer, ProjectBridge, ProjectCommand, ProjectInfoDto};
 use crate::project_file::{
     project_name, read_project_file, write_project_file, EffectEntry, EffectRef, ProjectFile,
-    ProjectFileError, SourceEntry,
+    ProjectFileError, Song, SourceEntry,
 };
 use crate::tracks::TrackHost;
 use crate::vst3_bridge::Vst3Board;
@@ -200,15 +200,11 @@ impl ProjectHost {
         let (file, warnings) = capture(session, hosts);
         write_project_file(path, &file).map_err(|err| named(path, &err))?;
         log::info!(
-            "saved {} ({} track(s), {} hit(s))",
+            "saved {} ({} track(s), {} pattern(s), {} clip(s))",
             path.display(),
             file.tracks.len(),
-            file.pattern
-                .rows
-                .iter()
-                .flat_map(|row| &row.steps)
-                .filter(|step| step.on)
-                .count()
+            file.patterns.len(),
+            file.playlist.clips.len()
         );
 
         self.path = Some(path.to_path_buf());
@@ -351,7 +347,8 @@ impl ProjectHost {
         // Validate everything first, so a file the engine cannot run leaves the
         // session exactly as it was rather than half replaced.
         let (project, selected) = file.to_project()?;
-        let pattern = file.to_pattern()?;
+        let (patterns, playlist) = file.to_song()?;
+        let mode = file.to_play_mode();
         let bpm = file.to_bpm()?;
 
         let mut report = LoadReport {
@@ -380,13 +377,15 @@ impl ProjectHost {
                 .warnings
                 .push(format!("the audio graph could not be rebuilt: {err}")),
         }
-        // The pattern and the tempo were validated above, so neither of these
-        // can reject; publishing them to the stream can, and a busy queue is not
-        // a reason to fail a load.
-        let _ = session.sequencer.set_pattern(pattern);
-        let _ = session.audio.install_pattern(session.sequencer.compiled());
+        // The song and the tempo were validated above, so none of these can
+        // reject; publishing them to the stream can, and a busy queue is not a
+        // reason to fail a load.
+        let _ = session.sequencer.set_song(patterns, playlist);
+        let _ = session.audio.install_song(session.sequencer.compile());
         session.sequencer.set_bpm(bpm);
         let _ = session.audio.set_bpm(bpm);
+        session.sequencer.set_play_mode(mode);
+        let _ = session.audio.set_play_mode(mode);
         let _ = session.tracks.set_selected(selected);
 
         Ok(report)
@@ -417,11 +416,17 @@ pub fn capture(session: &Session<'_>, hosts: &mut Hosts<'_>) -> (ProjectFile, Ve
     }
 
     let master_effect = capture_master(hosts, &mut warnings);
+    let (patterns, playlist) = session.sequencer.song();
     let file = ProjectFile::capture(
         &project,
         session.tracks.selected(),
         session.sequencer.bpm(),
-        &session.sequencer.pattern(),
+        &Song {
+            patterns: &patterns,
+            playlist: &playlist,
+            mode: session.sequencer.play_mode(),
+            audio_sources: Vec::new(),
+        },
         &states,
         master_effect,
     );
@@ -722,11 +727,18 @@ fn file_has_plugins(file: &ProjectFile) -> bool {
 /// A file rather than a special case, so New and Open reset exactly the same
 /// things -- see the module docs.
 pub fn default_project_file() -> ProjectFile {
+    let project = Project::default();
+    let patterns = crate::state::starter_pattern_set(&project);
     ProjectFile::capture(
-        &Project::default(),
+        &project,
         0,
         DEFAULT_BPM,
-        &Pattern::default(),
+        &Song {
+            patterns: &patterns,
+            playlist: &Playlist::default(),
+            mode: PlayMode::Pattern,
+            audio_sources: Vec::new(),
+        },
         &[],
         None,
     )
@@ -747,10 +759,26 @@ mod tests {
     use crate::project_file::{ClapEntry, TrackEntry};
     use crate::source::{ClapSourceRef, Source};
     use mydaw_plugin_instruments::InstrumentRegistry;
-    use mydaw_plugin_sequencer::PatternRow;
+    use mydaw_plugin_sequencer::PatternSet;
     use mydaw_plugin_test_tone::TestToneFactory;
     use mydaw_plugin_windows::PluginWindowService;
     use std::sync::Arc;
+
+    /// A one-pattern song with a kick on `hits`, plus an arrangement of it.
+    ///
+    /// Both halves, because a load has to restore both and a test that only
+    /// carried patterns would not notice an arrangement being dropped.
+    fn beat(hits: &[usize]) -> (PatternSet, Playlist) {
+        let mut pattern =
+            mydaw_plugin_sequencer::Pattern::with_channels(1, "Pattern 1", &[0, 1], |_| 36);
+        pattern.channels[0].steps =
+            Some(mydaw_plugin_sequencer::StepRow::empty(36).with_steps(hits));
+        let set = PatternSet::single(pattern);
+
+        let mut playlist = Playlist::default();
+        playlist.add_pattern_clip(1, 0, 0, 4 * 3_840).unwrap();
+        (set, playlist)
+    }
 
     /// A session with no audio device: the headless half of everything a load
     /// does, which is every field except the plugin instances.
@@ -850,10 +878,21 @@ mod tests {
         project.tracks[1].soloed = true;
         project.tracks[2].gain_db = 4.0;
         project.master_gain_db = -2.5;
-        let mut pattern = Pattern::default();
-        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 4, 8, 12]);
+        let (patterns, playlist) = beat(&[0, 4, 8, 12]);
 
-        let file = ProjectFile::capture(&project, 2, 147.0, &pattern, &[], None);
+        let file = ProjectFile::capture(
+            &project,
+            2,
+            147.0,
+            &Song {
+                patterns: &patterns,
+                playlist: &playlist,
+                mode: PlayMode::Song,
+                audio_sources: Vec::new(),
+            },
+            &[],
+            None,
+        );
         let report = rig.load(&file).expect("a valid project");
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         assert_eq!(report.missing_count(), 0);
@@ -861,7 +900,13 @@ mod tests {
         assert_eq!(rig.tracks.project(), project);
         assert_eq!(rig.tracks.selected(), 2);
         assert_eq!(rig.sequencer.bpm(), 147.0);
-        assert_eq!(rig.sequencer.pattern(), pattern);
+        assert_eq!(rig.sequencer.patterns(), patterns);
+        assert_eq!(rig.sequencer.playlist(), playlist);
+        assert_eq!(
+            rig.sequencer.play_mode(),
+            PlayMode::Song,
+            "the mode is session state and a load restores it"
+        );
 
         // ...and the atomics the audio thread actually reads, solo resolved.
         let params = rig.tracks.params();
@@ -881,10 +926,21 @@ mod tests {
         project.tracks[0].gain_db = -6.5;
         project.tracks[1].pan = 0.5;
         project.master_gain_db = 1.5;
-        let mut pattern = Pattern::default();
-        pattern.rows[1] = PatternRow::empty(38).with_steps(&[4, 12]);
+        let (patterns, playlist) = beat(&[4, 12]);
 
-        let file = ProjectFile::capture(&project, 1, 92.5, &pattern, &[], None);
+        let file = ProjectFile::capture(
+            &project,
+            1,
+            92.5,
+            &Song {
+                patterns: &patterns,
+                playlist: &playlist,
+                mode: PlayMode::Pattern,
+                audio_sources: Vec::new(),
+            },
+            &[],
+            None,
+        );
         rig.load(&file).unwrap();
         let recaptured = rig.capture();
         assert_eq!(recaptured, file);
@@ -919,7 +975,7 @@ mod tests {
             },
             {
                 let mut f = good.clone();
-                f.pattern.rows[0].steps.pop();
+                f.patterns[0].steps = 24;
                 f
             },
         ] {
@@ -941,7 +997,20 @@ mod tests {
         let mut project = Project::default();
         project.tracks[1].source =
             Source::Clap(ClapSourceRef::new(&missing, "com.acme.thing").named("Acme Thing"));
-        let file = ProjectFile::capture(&project, 0, 130.0, &Pattern::default(), &[], None);
+        let (patterns, playlist) = beat(&[0]);
+        let file = ProjectFile::capture(
+            &project,
+            0,
+            130.0,
+            &Song {
+                patterns: &patterns,
+                playlist: &playlist,
+                mode: PlayMode::Pattern,
+                audio_sources: Vec::new(),
+            },
+            &[],
+            None,
+        );
 
         let report = rig.load(&file).expect("one absent plugin is not a refusal");
         assert_eq!(
@@ -982,9 +1051,8 @@ mod tests {
     fn new_project_is_the_default_session_and_goes_through_the_same_load() {
         let mut rig = Rig::new();
         rig.sequencer.set_bpm(174.0);
-        let mut pattern = Pattern::default();
-        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 8]);
-        rig.sequencer.set_pattern(pattern).unwrap();
+        let (patterns, playlist) = beat(&[0, 8]);
+        rig.sequencer.set_song(patterns, playlist).unwrap();
         rig.tracks.set_gain_db(0, -20.0).unwrap();
         rig.tracks.set_soloed(1, true).unwrap();
 
@@ -997,7 +1065,7 @@ mod tests {
         assert_eq!(info.missing_plugins, 0);
         assert_eq!(rig.tracks.project(), Project::default());
         assert_eq!(rig.sequencer.bpm(), DEFAULT_BPM);
-        assert!(rig.sequencer.pattern().is_empty());
+        assert!(rig.sequencer.active_pattern().is_empty());
         assert_eq!(rig.tracks.selected(), 0);
         assert!(rig.host.path().is_none());
         assert_eq!(rig.bridge.info().name, crate::project_file::UNTITLED);
@@ -1102,11 +1170,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Kick", "Snare", "Hat Closed", "Hat Open", "Poly Synth"]
         );
-        assert!(file
-            .pattern
-            .rows
-            .iter()
-            .all(|row| row.steps.iter().all(|step| !step.on)));
+        assert_eq!(file.patterns.len(), 1, "one empty pattern to start from");
+        assert!(file.patterns[0].channels.iter().all(|clip| clip
+            .steps
+            .as_ref()
+            .is_none_or(|row| row.steps.iter().all(|step| !step.on))));
+        assert!(file.playlist.clips.is_empty());
+        assert_eq!(file.play_mode, "pat");
         assert!(!file_has_plugins(&file));
     }
 

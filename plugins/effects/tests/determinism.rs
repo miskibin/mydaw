@@ -86,6 +86,7 @@ fn render(
                 sample_pos: position,
                 playing: true,
                 bpm: DEFAULT_BPM,
+                ..TransportSnapshot::default()
             };
             let mut ctx = ProcessCtx::new(&mut buffers, SR, frames, transport);
             node.process(&mut ctx);

@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use mydaw_app::{boot_kernel, capture_root, capture_to_disk, AppState, Source};
 use mydaw_plugin_debug_tap::{align_grid, detect_onsets, GridReport, Onset, OnsetConfig};
-use mydaw_plugin_sequencer::{step_len_samples, Pattern, PatternRow, Step, DEFAULT_STEPS};
+use mydaw_plugin_sequencer::{step_len_samples, Pattern, Step, StepRow, DEFAULT_STEPS};
 
 /// Tempo the beat is programmed at. The engine's default, and a dance tempo.
 const BPM: f64 = 130.0;
@@ -58,15 +58,21 @@ const TOLERANCE_MS: f64 = 1.0;
 /// The demo beat: fourteen clicks in the grid -- four kicks, two snares and
 /// eight hats.
 fn demo_beat() -> Pattern {
-    let mut pattern = Pattern::default();
-    // Rows are kick / snare / closed hat / open hat, in that order.
-    pattern.rows[0] = PatternRow::empty(pattern.rows[0].key).with_steps(&[0, 4, 8, 12]);
-    pattern.rows[1] = PatternRow::empty(pattern.rows[1].key).with_steps(&[4, 12]);
-    let mut hats = PatternRow::empty(pattern.rows[2].key);
+    let mut pattern = Pattern::with_channels(1, "Pattern 1", &[0, 1, 2, 3, 4], |channel| {
+        mydaw_plugin_sequencer::DEFAULT_ROW_KEYS
+            .get(channel as usize)
+            .copied()
+            .unwrap_or(mydaw_plugin_sequencer::DEFAULT_STEP_KEY)
+    });
+    let key = |channel: usize| pattern.channels[channel].steps.as_ref().unwrap().key;
+    let (kick, snare, hat) = (key(0), key(1), key(2));
+    pattern.channels[0].steps = Some(StepRow::empty(kick).with_steps(&[0, 4, 8, 12]));
+    pattern.channels[1].steps = Some(StepRow::empty(snare).with_steps(&[4, 12]));
+    let mut hats = StepRow::empty(hat);
     for step in (0..DEFAULT_STEPS).step_by(2) {
         hats.steps[step] = Step::on();
     }
-    pattern.rows[2] = hats;
+    pattern.channels[2].steps = Some(hats);
     pattern
 }
 
@@ -124,7 +130,7 @@ fn a_programmed_beat_comes_out_of_the_device_on_the_tempo_grid() {
     assert_eq!(state.set_bpm(BPM).expect("the tempo is legal"), BPM);
     state.set_pattern(demo_beat()).expect("the beat is valid");
     assert_eq!(
-        state.sequencer().pattern().hit_count(),
+        state.sequencer().active_pattern().hit_count(),
         14,
         "four kicks, two snares, eight hats"
     );

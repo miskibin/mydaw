@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use mydaw_plugin_audio_io::{run_block, AudioIoStats, RtState, RtStateParams};
 use mydaw_plugin_debug_tap::{debug_tap_channel, CaptureError, DebugTapService};
-use mydaw_plugin_sequencer::{pattern_channel, PATTERN_QUEUE_CAPACITY};
+use mydaw_plugin_sequencer::{song_channel, SONG_QUEUE_CAPACITY};
 use mydaw_plugin_test_tone::{TestToneNode, DEFAULT_AMPLITUDE, DEFAULT_FREQUENCY_HZ};
 use mydaw_rt_core::{
     graph_channel, note_channel, rt_channel, GcThread, GraphSpec, ProcessCtx, RtCommand, RtNode,
@@ -75,13 +75,13 @@ fn engine(playing: bool) -> (Engine, Arc<DebugTapService>) {
         .expect("the command queue is empty");
 
     let (_notes_tx, notes) = note_channel(NOTE_CAPACITY);
-    let (_pattern_tx, pattern) = pattern_channel(PATTERN_QUEUE_CAPACITY, gc.handle());
+    let (_song_tx, song) = song_channel(SONG_QUEUE_CAPACITY, gc.handle());
     let state = RtState::new(RtStateParams {
         graph: slot,
         commands,
         notes,
         note_capacity: NOTE_CAPACITY,
-        pattern,
+        song,
         meters: None,
         debug_tap: Some(tap_rt),
         transport,
@@ -263,13 +263,13 @@ fn a_capture_survives_the_rt_state_being_torn_down_and_rebuilt() {
     let (_graph, slot) = graph_channel(4, gc.handle());
     let (_commands_tx, commands) = rt_channel::<RtCommand>(16);
     let (_notes_tx, notes) = note_channel(NOTE_CAPACITY);
-    let (_pattern_tx, pattern) = pattern_channel(PATTERN_QUEUE_CAPACITY, gc.handle());
+    let (_song_tx, song) = song_channel(SONG_QUEUE_CAPACITY, gc.handle());
     let mut rebuilt = RtState::new(RtStateParams {
         graph: slot,
         commands,
         notes,
         note_capacity: NOTE_CAPACITY,
-        pattern,
+        song,
         meters: None,
         debug_tap: Some(tap),
         transport: Arc::new(TransportClock::new(44_100.0)),

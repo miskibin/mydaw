@@ -1512,6 +1512,7 @@ mod tests {
             sample_pos: 4_800,
             playing: true,
             bpm: 128.0,
+            ..TransportSnapshot::default()
         };
         let ctx = ProcessCtx::new(&mut buffers, 48_000.0, 64, transport);
         let context = process_context(&ctx);
