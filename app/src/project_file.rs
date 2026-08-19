@@ -953,6 +953,52 @@ mod tests {
         assert_eq!(json, r#"{"kind":"internal","id":"drum-kit"}"#);
     }
 
+    /// A sampled instrument persists for free, and that is the point: its id is
+    /// complete, so it needs no `SourceEntry` variant, no path in the file, and
+    /// no loader on the way back in.
+    #[test]
+    fn a_sampled_instrument_round_trips_as_an_internal_source() {
+        let source = Source::Sampler(
+            crate::source::SamplerSourceRef::new("salamander-piano")
+                .named("Salamander Grand Piano"),
+        );
+        let entry = SourceEntry::capture(&source);
+
+        assert_eq!(
+            entry,
+            SourceEntry::Internal {
+                id: "sampler:salamander-piano".to_owned()
+            },
+            "a bundled instrument is internal, not hosted"
+        );
+        assert!(
+            !entry.is_hosted(),
+            "nothing has to be loaded from disk by a plugin host"
+        );
+
+        let json = serde_json::to_string(&entry).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"internal","id":"sampler:salamander-piano"}"#
+        );
+
+        // Back out again. The display name is *not* restored -- it belongs to
+        // the registry, not to the file -- so identity is compared by id.
+        let restored = entry.to_source().unwrap();
+        assert_eq!(restored.id(), source.id());
+        assert_eq!(
+            restored.sampler_ref().map(|r| r.instrument_id.as_str()),
+            Some("salamander-piano")
+        );
+        assert_eq!(entry.label(), "sampler:salamander-piano");
+
+        // And a project file carrying one parses on a machine with no assets:
+        // the source survives, and the track is silent until they arrive.
+        let parsed: SourceEntry =
+            serde_json::from_str(r#"{"kind":"internal","id":"sampler:not-installed"}"#).unwrap();
+        assert_eq!(parsed.to_source().unwrap().id(), "sampler:not-installed");
+    }
+
     #[test]
     fn a_windows_path_survives_json_with_its_backslashes() {
         // The one encoding trap in a Windows-first DAW: a path is escaped going

@@ -10,6 +10,9 @@ use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin};
 use mydaw_plugin_host_vst3::{HostVst3Plugin, Vst3HostService};
 use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
+use mydaw_plugin_sampler::{
+    AssetDownloader, AssetState, AssetStatus, SamplerPlugin, SamplerRegistry,
+};
 use mydaw_plugin_sequencer::{Pattern, PatternError, SequencerPlugin, SequencerService};
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
@@ -98,6 +101,7 @@ pub fn boot_kernel() -> Result<Kernel, KernelError> {
     kernel.add_plugin(Box::new(DebugTapPlugin::new()))?;
     kernel.add_plugin(Box::new(TestTonePlugin::new()))?;
     kernel.add_plugin(Box::new(InstrumentsPlugin::new()))?;
+    kernel.add_plugin(Box::new(SamplerPlugin::new()))?;
     kernel.add_plugin(Box::new(SequencerPlugin::new()))?;
     kernel.add_plugin(Box::new(AudioIoPlugin::new()))?;
     kernel.add_plugin(Box::new(HostClapPlugin::new()))?;
@@ -187,6 +191,17 @@ pub struct AppState {
     /// The audio inspection harness. Non-RT, `Send + Sync`, and safe to call
     /// from a Tauri command thread.
     debug_tap: Arc<DebugTapService>,
+    /// The sampled instruments. Held alongside [`tracks`](Self::tracks), which
+    /// also has it, because the source picker lists from here and the asset
+    /// downloader's completion callback rescans it.
+    sampler: Arc<SamplerRegistry>,
+    /// Installs the sample content on demand.
+    ///
+    /// `None` only if this build's `assets-manifest.json` is unusable, which
+    /// the sampler crate's own tests make impossible -- but a boot failure over
+    /// an optional download would be the wrong trade, so it degrades to "the
+    /// button is not offered".
+    assets: Option<Arc<AssetDownloader>>,
 }
 
 impl AppState {
@@ -208,6 +223,9 @@ impl AppState {
         let instruments = services
             .get::<InstrumentRegistry>()
             .ok_or(StartupError::MissingService("InstrumentRegistry"))?;
+        let sampler = services
+            .get::<SamplerRegistry>()
+            .ok_or(StartupError::MissingService("SamplerRegistry"))?;
         let sequencer = services
             .get::<SequencerService>()
             .ok_or(StartupError::MissingService("SequencerService"))?;
@@ -234,11 +252,22 @@ impl AppState {
             log::warn!("meter throttle was already claimed; the UI meters will stay silent");
         }
 
+        // A manifest this build cannot read means the in-app download is not
+        // offered; everything else, including a piano installed by the script,
+        // still works. So it is a warning, not a boot failure.
+        let assets = match AssetDownloader::new(mydaw_plugin_sampler::instruments_root()) {
+            Ok(downloader) => Some(Arc::new(downloader)),
+            Err(err) => {
+                log::warn!("the in-app asset downloader is unavailable: {err}");
+                None
+            }
+        };
+
         Ok(Self {
             snapshot: ui_snapshot(kernel),
             audio,
             sequencer,
-            tracks: Arc::new(TrackHost::new(tone, instruments)),
+            tracks: Arc::new(TrackHost::new(tone, instruments, Arc::clone(&sampler))),
             clap_bridge: Arc::new(ClapHostBridge::new()),
             clap,
             vst3_bridge: Arc::new(Vst3HostBridge::new()),
@@ -246,6 +275,8 @@ impl AppState {
             project_bridge: Arc::new(ProjectBridge::new()),
             meters: MeterPump::new(throttle),
             debug_tap,
+            sampler,
+            assets,
         })
     }
 
@@ -649,6 +680,16 @@ impl AppState {
             .iter()
             .map(|source| SourceDto::built_in(source, &current))
             .collect();
+        // Sampled instruments sit with the built-ins because that is what they
+        // are; they are appended rather than compiled into `BUILT_IN` only
+        // because the set is discovered at runtime and can grow while the app
+        // is running -- which is exactly what happens when a download finishes.
+        sources.extend(
+            self.sampler
+                .instruments()
+                .iter()
+                .map(|info| SourceDto::sampler(info, &current)),
+        );
         sources.extend(
             self.clap
                 .cached_scan()
@@ -657,6 +698,71 @@ impl AppState {
                 .map(|info| SourceDto::clap(info, &current)),
         );
         sources
+    }
+
+    /// The sampled instrument registry.
+    pub fn sampler(&self) -> &Arc<SamplerRegistry> {
+        &self.sampler
+    }
+
+    /// Whether the bundled sample content is installed, and what the downloader
+    /// is doing about it.
+    ///
+    /// Reports [`AssetState::Error`] with a sentence when this build has no
+    /// usable manifest, rather than `None`: the shell has one thing to render
+    /// either way.
+    pub fn asset_status(&self) -> AssetStatus {
+        let mut status = match self.assets.as_ref() {
+            Some(downloader) => downloader.status(),
+            None => AssetStatus {
+                installed: false,
+                instrument_ready: false,
+                state: AssetState::Error,
+                total_bytes: 0,
+                downloaded_bytes: 0,
+                files_done: 0,
+                file_count: 0,
+                instrument_id: String::new(),
+                instrument_name: String::new(),
+                error: "this build has no usable asset manifest".to_owned(),
+            },
+        };
+        // The fact the picker actually depends on: files on disk are not an
+        // instrument until the background scan has decoded them.
+        status.instrument_ready = self
+            .sampler
+            .contains(&mydaw_plugin_sampler::source_id(&status.instrument_id));
+        status
+    }
+
+    /// Start downloading the bundled sample content.
+    ///
+    /// **Only ever called from a user's click.** Nothing here runs on its own:
+    /// see the consent note in [`mydaw_plugin_sampler::download`].
+    ///
+    /// When the transfer finishes the sampler registry rescans on its own
+    /// thread, so the new instrument reaches `get_sources` without a restart
+    /// and without this function waiting for a decode.
+    ///
+    /// # Errors
+    /// A sentence, for a build with no manifest or a download already running.
+    pub fn start_asset_download(&self) -> Result<(), String> {
+        let downloader = self
+            .assets
+            .as_ref()
+            .ok_or("this build has no usable asset manifest")?;
+        let sampler = Arc::clone(&self.sampler);
+        downloader
+            .start(move |result| match result {
+                Ok(()) => {
+                    log::info!("sampler: assets installed; rescanning instruments");
+                    sampler.rescan_in_background();
+                }
+                // The error is already recorded in the downloader's status,
+                // which is where the UI reads it from.
+                Err(err) => log::warn!("sampler: asset install failed: {err}"),
+            })
+            .map_err(|err| err.to_string())
     }
 
     /// Every scanned CLAP **audio effect**, for the master insert picker.
@@ -1049,6 +1155,7 @@ mod tests {
                 "debug-tap",
                 "test-tone",
                 "instruments",
+                "sampler",
                 "sequencer",
                 "host-clap",
                 "host-vst3",
@@ -1069,7 +1176,7 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let snapshot = ui_snapshot(&kernel);
 
-        assert_eq!(snapshot.plugins.len(), 9);
+        assert_eq!(snapshot.plugins.len(), 10);
         assert!(snapshot
             .plugins
             .iter()

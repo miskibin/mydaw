@@ -110,8 +110,8 @@ pub use project_host::{
     Session,
 };
 pub use source::{
-    check_bundle_path, ClapSourceRef, SilentNode, Source, SourceDto, SourceError, SourceHandle,
-    SourceKindDto, SourceSlot, Vst3SourceRef,
+    check_bundle_path, ClapSourceRef, SamplerSourceRef, SilentNode, Source, SourceDto, SourceError,
+    SourceHandle, SourceKindDto, SourceSlot, Vst3SourceRef, SAMPLER_SOURCE_PREFIX,
 };
 pub use state::{
     boot_kernel, ui_snapshot, AppState, NoteError, SequencerError, StartupError,
@@ -253,6 +253,9 @@ pub fn run() -> ExitCode {
             commands::note_off,
             commands::get_sources,
             commands::set_source,
+            // The bundled sample content: is it installed, and install it.
+            commands::get_asset_status,
+            commands::start_asset_download,
             // The mixer.
             commands::get_tracks,
             commands::set_track_gain,

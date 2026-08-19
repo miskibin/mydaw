@@ -258,9 +258,39 @@ export interface ClapSlot {
  * CLAP *instrument*, and it comes from Rust rather than being hard-coded here,
  * so adding an instrument is a change in one language rather than two.
  */
+/**
+ * Whether the bundled sample content is installed, and what the downloader is
+ * doing about it.
+ *
+ * The content (a CC-BY grand piano) is ~131 MB and is deliberately *not* part of
+ * a checkout: it is fetched on demand, pinned by commit and verified by SHA-256.
+ * Nothing downloads without a click -- see `startAssetDownload`.
+ */
+export interface AssetStatusDto {
+  /** Whether every pinned file is present on disk. */
+  installed: boolean;
+  /**
+   * Whether the instrument is loaded and playable, which lags `installed`:
+   * decoding is a background job, so there is a window in which the files are
+   * all there and the source picker still has nothing to offer.
+   */
+  instrumentReady: boolean;
+  state: 'idle' | 'downloading' | 'verifying' | 'done' | 'error';
+  totalBytes: number;
+  downloadedBytes: number;
+  filesDone: number;
+  fileCount: number;
+  /** The instrument this installs, e.g. `salamander-piano`. */
+  instrumentId: string;
+  instrumentName: string;
+  /** Empty unless `state` is `error`. */
+  error: string;
+}
+
 export interface SourceDto {
   /**
-   * Stable id: `poly-synth`, `drum-kit`, `test-tone`, or `clap:<pluginId>`.
+   * Stable id: `poly-synth`, `drum-kit`, `test-tone`, `sampler:<instrumentId>`,
+   * or `clap:<pluginId>`.
    *
    * This is what `setTrackSource` takes for a built-in, and what a `TrackDto`
    * reports as its `sourceId` either way. A CLAP source is *placed* with

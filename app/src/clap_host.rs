@@ -736,6 +736,7 @@ mod tests {
         TrackHost::new(
             Arc::new(mydaw_plugin_test_tone::TestToneFactory::new()),
             Arc::new(mydaw_plugin_instruments::InstrumentRegistry::new()),
+            Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
         )
     }
 

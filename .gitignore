@@ -9,3 +9,10 @@ app/gen/
 # `debug_capture` command. Diagnostic output, never source.
 .debug/
 .cargo/
+
+# Bundled sample content: ~138 MB of CC-BY piano, downloaded and checksummed by
+# `scripts/fetch-assets.ps1` or by the in-app downloader. Never committed --
+# what *is* committed is `assets-manifest.json`, which pins every file's URL and
+# SHA-256. A clone with no assets builds, tests and runs; the sampler simply
+# reports zero instruments. See docs/superpowers/specs/2026-08-19-sampler-plugin.md.
+assets/

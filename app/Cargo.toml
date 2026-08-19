@@ -28,6 +28,7 @@ mydaw-plugin-metering.workspace = true
 mydaw-plugin-debug-tap.workspace = true
 mydaw-plugin-test-tone.workspace = true
 mydaw-plugin-instruments.workspace = true
+mydaw-plugin-sampler.workspace = true
 mydaw-plugin-sequencer.workspace = true
 mydaw-plugin-audio-io.workspace = true
 mydaw-plugin-host-clap.workspace = true

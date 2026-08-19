@@ -47,6 +47,7 @@ use std::sync::Arc;
 
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
 use mydaw_plugin_instruments::InstrumentRegistry;
+use mydaw_plugin_sampler::SamplerRegistry;
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_rt_core::basedrop::Handle;
 use mydaw_rt_core::{GraphSpec, MixerParams, RtNode, RtNodeFactory, MAX_TRACKS};
@@ -81,6 +82,11 @@ pub enum MixerError {
 pub struct TrackHost {
     tone: Arc<TestToneFactory>,
     instruments: Arc<InstrumentRegistry>,
+    /// The sampled instruments, which unlike the synthesised ones are
+    /// discovered at runtime -- and may appear *after* this host was built,
+    /// when a download finishes. Held as the registry rather than as a list of
+    /// factories for exactly that reason.
+    sampler: Arc<SamplerRegistry>,
     /// What the audio thread reads. Shared with every graph compiled from this
     /// host, so a rebuild never resets a fader.
     params: Arc<MixerParams>,
@@ -101,14 +107,19 @@ pub struct TrackHost {
 
 impl TrackHost {
     /// A host on the default project.
-    pub fn new(tone: Arc<TestToneFactory>, instruments: Arc<InstrumentRegistry>) -> Self {
-        Self::with_project(tone, instruments, Project::default())
+    pub fn new(
+        tone: Arc<TestToneFactory>,
+        instruments: Arc<InstrumentRegistry>,
+        sampler: Arc<SamplerRegistry>,
+    ) -> Self {
+        Self::with_project(tone, instruments, sampler, Project::default())
     }
 
     /// A host on an explicit project (tests, and one day a project file).
     pub fn with_project(
         tone: Arc<TestToneFactory>,
         instruments: Arc<InstrumentRegistry>,
+        sampler: Arc<SamplerRegistry>,
         project: Project,
     ) -> Self {
         let params = Arc::new(MixerParams::new());
@@ -116,6 +127,7 @@ impl TrackHost {
         Self {
             tone,
             instruments,
+            sampler,
             params,
             handles: (0..MAX_TRACKS)
                 .map(|index| {
@@ -335,6 +347,13 @@ impl TrackHost {
     /// instrument, because a track set to a synthesiser must not answer with a
     /// sine wave -- see [`SilentNode`].
     ///
+    /// A [`Source::Sampler`] whose instrument is not loaded also produces
+    /// [`SilentNode`], with a warning. That is a *runtime* condition rather
+    /// than a wiring bug -- a project saved on a machine with the sample
+    /// content opened on one without it -- and silence is the same answer given
+    /// for a plugin that will not load, for the same reason: a track set to a
+    /// piano must not answer with a sine wave.
+    ///
     /// # Errors
     /// [`SourceError::MissingInstrument`] when the instruments plugin did not
     /// contribute the node a built-in source names -- a wiring bug rather than a
@@ -348,6 +367,20 @@ impl TrackHost {
         match source {
             Source::TestTone => Ok(self.tone.create(sample_rate, max_block)),
             Source::Clap(_) | Source::Vst3(_) => Ok(Box::new(SilentNode)),
+            Source::Sampler(reference) => {
+                let type_id = reference.wire_id();
+                Ok(self
+                    .sampler
+                    .create(&type_id, sample_rate, max_block)
+                    .unwrap_or_else(|| {
+                        log::warn!(
+                            "the sampled instrument '{}' is not installed; \
+                             this track will be silent until its assets are downloaded",
+                            reference.instrument_id
+                        );
+                        Box::new(SilentNode)
+                    }))
+            }
             other => {
                 let type_id = other
                     .instrument_type_id()
@@ -571,6 +604,7 @@ mod tests {
         TrackHost::new(
             Arc::new(mydaw_plugin_test_tone::TestToneFactory::new()),
             Arc::new(InstrumentRegistry::new()),
+            Arc::new(SamplerRegistry::detached()),
         )
     }
 

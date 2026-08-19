@@ -19,6 +19,17 @@ cpal = "0.18"                    # cross-platform device I/O; WASAPI on Windows
 audio_thread_priority = "0.37"   # promote the callback thread to MMCSS/Pro Audio
 # --- plugin hosting ---
 clack-host = "0.1"  # safe CLAP host bindings (discovery in Phase 0, hosting in spike 2)
+# --- sampled instruments (non-RT only: decoding and fetching happen at load) ---
+# `symphonia` decodes the FLAC/WAV the sampler's instruments ship as. Default
+# features are off: the sampler needs two container-free codecs, not the whole
+# media matrix, and every extra decoder is attack surface for a file we did not
+# author.
+symphonia = { version = "0.6", default-features = false, features = ["flac", "wav", "pcm"] }
+# `ureq` and not `reqwest`: the asset downloader is a blocking loop on its own
+# thread, so an async runtime would be pure weight. `reqwest` appears in the
+# lockfile but is not in this workspace's build graph, so it is not "free".
+ureq = "3"
+sha2 = "0.10"      # SHA-256 over every downloaded asset; pinned in assets-manifest.json
 # --- analysis / debug harness (non-RT only) ---
 realfft = "3"      # real-input FFT for capture spectra (wraps rustfft)
 hound = "3"        # 32-bit float WAV writer/reader for captures
@@ -45,6 +56,7 @@ mydaw-plugin-metering = { path = "plugins/metering" }
 mydaw-plugin-debug-tap = { path = "plugins/debug-tap" }
 mydaw-plugin-test-tone = { path = "plugins/test-tone" }
 mydaw-plugin-instruments = { path = "plugins/instruments" }
+mydaw-plugin-sampler = { path = "plugins/sampler" }
 mydaw-plugin-sequencer = { path = "plugins/sequencer" }
 mydaw-plugin-audio-io = { path = "plugins/audio-io" }
 mydaw-plugin-host-clap = { path = "plugins/host-clap" }

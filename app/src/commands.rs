@@ -8,6 +8,7 @@
 use std::path::PathBuf;
 
 use mydaw_ipc_bridge::UiSnapshot;
+use mydaw_plugin_sampler::AssetStatus;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
@@ -89,6 +90,30 @@ pub fn note_off(state: State<'_, AppState>, key: u8) -> Result<(), String> {
 #[tauri::command]
 pub fn get_sources(state: State<'_, AppState>) -> Vec<SourceDto> {
     state.sources()
+}
+
+/// Whether the bundled sample content is installed, and what the downloader is
+/// doing about it.
+///
+/// Polled by the shell while a download runs, which is what draws the
+/// percentage. Cheap: file metadata plus three atomic loads, never a hash.
+#[tauri::command]
+pub fn get_asset_status(state: State<'_, AppState>) -> AssetStatus {
+    state.asset_status()
+}
+
+/// Download the bundled sample content.
+///
+/// Returns as soon as the transfer has *started*; the shell polls
+/// [`get_asset_status`] for progress. When it finishes, the sampler rescans and
+/// the new instrument appears in [`get_sources`] with no restart.
+///
+/// Nothing calls this except a user pressing the button. See the consent note
+/// in `mydaw_plugin_sampler::download`.
+#[tauri::command]
+pub fn start_asset_download(state: State<'_, AppState>) -> Result<AssetStatus, String> {
+    state.start_asset_download()?;
+    Ok(state.asset_status())
 }
 
 /// Put a different instrument at the head of the selected track.

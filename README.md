@@ -43,6 +43,7 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `plugins/debug-tap` | RT-safe capture of the output bus, plus WAV / annotated PNG / statistics — so the engine can be *inspected* without ears |
 | `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
 | `plugins/instruments` | The built-in instruments: a synthesised drum kit and a polyBLEP poly synth, driven by note events. No assets, bit-deterministic, zero-alloc |
+| `plugins/sampler` | The sampled instrument: a manifest-driven, 32-voice sample player, plus the checksummed fetcher that installs its content. See [Sample content](#sample-content) |
 | `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
 | `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
 | `plugins/host-vst3` | VST3 host stub (Phase 1 spike 5) |
@@ -105,7 +106,56 @@ cargo test -p mydaw-app --test audio_end_to_end -- --ignored --nocapture
 cargo test -p mydaw-app --test gui_audio_smoke  -- --ignored --nocapture
 cargo test -p mydaw-app --test clap_hardware    -- --ignored --nocapture --test-threads=1
 cargo test -p mydaw-app --test mixer_audio      -- --ignored --nocapture --test-threads=1
+cargo test -p mydaw-app --test sampler_audio    -- --ignored --nocapture --test-threads=1
 ```
+
+The sampler's own tests split the same way. The offline ones need nothing:
+
+```sh
+cargo test -p mydaw-plugin-sampler                        # voices, RT-alloc, manifest parsing
+cargo test -p mydaw-plugin-sampler --test piano_assets -- --nocapture
+```
+
+`piano_assets` and `sampler_audio` **skip themselves** when the sample content is not installed,
+which is why `cargo test --workspace` is green on a fresh clone and in CI.
+
+## Sample content
+
+`plugins/sampler` plays recordings, and recordings are not in this repository: `assets/` is
+gitignored and the piano is 131 MB. What *is* committed is
+[`assets-manifest.json`](assets-manifest.json), which pins every file's URL and SHA-256 against a
+specific upstream commit.
+
+**A checkout with no assets builds, tests and runs.** The sampler starts, reports zero instruments,
+and logs a hint. Install the content either way you like:
+
+```sh
+pwsh -File scripts/fetch-assets.ps1          # idempotent; -Verify re-hashes, -Force re-downloads
+```
+
+…or from inside the running app: the status bar offers
+`Download Salamander Grand Piano (131 MB)`. Nothing downloads without that click. Both installers
+read the same manifest, verify every file against its SHA-256, and write each one atomically
+(`<name>.part`, then rename) so an interrupted run never leaves a truncated sample behind. When it
+finishes, the instrument appears in the track source picker **without a restart**.
+
+`scripts/gen-asset-manifest.ps1` regenerates the manifest from the upstream SFZ mapping. It is a
+maintenance tool, not part of a normal install.
+
+### Attribution
+
+The bundled piano is the **[Salamander Grand Piano V3](https://github.com/sfzinstruments/SalamanderGrandPiano)**
+by **Alexander Holm**, licensed **[CC-BY-3.0](https://creativecommons.org/licenses/by/3.0/)**, pinned
+at commit `3382bf9`. A subset is installed: every one of the 30 sampled notes at 3 of the 16 recorded
+velocity layers.
+
+CC-BY-3.0 is an attribution licence. MYDAW does not redistribute these files — it downloads them from
+the source above — but **anything you export that contains their sound carries the credit
+requirement**. `scripts/fetch-assets.ps1` writes `assets/ATTRIBUTION.md` beside the samples, and the
+credit is also carried in the manifest and surfaced by the sampler at runtime.
+
+Design notes, the manifest format, the memory budget and the measured verification numbers are in
+[`docs/superpowers/specs/2026-08-19-sampler-plugin.md`](docs/superpowers/specs/2026-08-19-sampler-plugin.md).
 
 ## Hosted CLAP plugins
 

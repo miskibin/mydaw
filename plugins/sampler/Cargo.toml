@@ -1,0 +1,31 @@
+[package]
+name = "mydaw-plugin-sampler"
+description = "MYDAW plugin: a manifest-driven sample-playback instrument, plus the fetcher that installs its bundled sample content."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
+
+parking_lot.workspace = true
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+arc-swap.workspace = true
+
+# Non-RT only: decoding happens when an instrument is loaded, fetching on a
+# worker thread the audio callback never touches.
+symphonia.workspace = true
+ureq.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+# The spectral assertions measure what the sampler produces rather than
+# asserting it by eye; `debug-tap` already owns the FFT the rest of the project
+# reads. `hound` writes the synthetic WAVs the asset-free tests decode.
+mydaw-plugin-debug-tap.workspace = true
+hound.workspace = true

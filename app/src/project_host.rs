@@ -773,6 +773,7 @@ mod tests {
                 tracks: Arc::new(TrackHost::new(
                     Arc::new(TestToneFactory::new()),
                     Arc::new(InstrumentRegistry::new()),
+                    Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
                 )),
                 audio: Arc::new(AudioIoService::default()),
                 sequencer: Arc::new(SequencerService::new()),

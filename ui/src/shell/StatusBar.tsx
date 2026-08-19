@@ -1,7 +1,16 @@
-import { Show, type JSX } from 'solid-js';
+import { Show, createSignal, onCleanup, onMount, type JSX } from 'solid-js';
 import { useAppState } from '../state';
 import { DRUM_PAD_HINT, noteName } from '../lib/keyboard';
 import { registeredPanelKeys } from '../panels/registry';
+import type { AssetStatusDto } from '../api/types';
+
+/** How often the asset line refreshes while a download runs. */
+const ASSET_POLL_MS = 500;
+
+const megabytes = (bytes: number): number => Math.round(bytes / 1_000_000);
+
+const percent = (status: AssetStatusDto): number =>
+  status.totalBytes > 0 ? Math.floor((100 * status.downloadedBytes) / status.totalBytes) : 0;
 
 /** What the computer keyboard does right now, given the selected source. */
 const PIANO_HINT = 'A W S E D F T G Y H U J, Z/X to shift octave';
@@ -18,6 +27,53 @@ export function StatusBar(): JSX.Element {
   const startedCount = () => app.plugins().filter((p) => p.state === 'started').length;
   const unknownPanels = () =>
     app.panels().filter((p) => !registeredPanelKeys().includes(p.component)).length;
+
+  // A local signal rather than app state: nothing else in the UI cares, and the
+  // whole affordance disappears once the content is installed. Polled while a
+  // transfer runs (the command is metadata plus three atomic loads), and left
+  // alone otherwise.
+  const [assets, setAssets] = createSignal<AssetStatusDto | undefined>();
+  const refresh = async () => {
+    try {
+      const next = await app.backend.getAssetStatus();
+      const appeared = next.instrumentReady && !assets()?.instrumentReady;
+      setAssets(next);
+      // A newly loaded instrument is a new entry in the source picker, and
+      // nothing else would tell it.
+      if (appeared) app.refresh();
+    } catch {
+      // A backend without the command is a backend with nothing to offer here;
+      // leaving the line hidden is the right failure.
+    }
+  };
+  onMount(() => {
+    void refresh();
+    // Polled only while something is in flight -- a transfer, or the decode
+    // that follows one. An installed, loaded session polls nothing.
+    const timer = setInterval(() => {
+      const status = assets();
+      if (!status || status.instrumentReady) return;
+      if (status.state !== 'idle' || status.installed) void refresh();
+    }, ASSET_POLL_MS);
+    onCleanup(() => clearInterval(timer));
+  });
+  /**
+   * The status, but only while there is something to say about it: before the
+   * content is playable, and only when this build has content to offer.
+   * Returning the object rather than a boolean is what gives `<Show>`'s child
+   * the narrowed value.
+   */
+  const pending = (): AssetStatusDto | undefined => {
+    const status = assets();
+    return status && !status.instrumentReady && status.fileCount > 0 ? status : undefined;
+  };
+  const download = async () => {
+    try {
+      setAssets(await app.backend.startAssetDownload());
+    } catch {
+      void refresh();
+    }
+  };
 
   return (
     <footer class="statusbar">
@@ -70,6 +126,36 @@ export function StatusBar(): JSX.Element {
           {app.project().missingPlugins}{' '}
           {app.project().missingPlugins === 1 ? 'plugin' : 'plugins'} missing
         </span>
+      </Show>
+
+      {/*
+        The bundled sample content. Absent from a checkout on purpose (131 MB of
+        CC-BY piano), so a first run has to offer to fetch it -- and must not
+        fetch it unasked, which is why this is a button and not an effect.
+        Disappears for good once installed, so the common case costs one line of
+        nothing. Deliberately plain: a full-width banner would be a permanent
+        tax on every session after the first.
+      */}
+      <Show when={pending()}>
+        {(status) => (
+          <span
+            class="statusbar__item statusbar__item--hint"
+            title={status().error || `${status().instrumentName}, verified against pinned checksums`}
+          >
+            <Show
+              when={!status().installed && status().state !== 'downloading'}
+              fallback={
+                status().installed
+                  ? `Loading ${status().instrumentName}…`
+                  : `Downloading ${status().instrumentName}… ${percent(status())}%`
+              }
+            >
+              <button class="link-button" type="button" onClick={() => void download()}>
+                Download {status().instrumentName} ({megabytes(status().totalBytes)} MB)
+              </button>
+            </Show>
+          </span>
+        )}
       </Show>
 
       <span class="statusbar__spacer" />

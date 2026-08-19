@@ -1,4 +1,5 @@
 import type {
+  AssetStatusDto,
   ClapGuiStatus,
   ClapPluginInfoDto,
   ClapSlot,
@@ -114,6 +115,18 @@ export interface Backend {
    * session with no CLAP instrument loaded.
    */
   setSource(id: string): Promise<SourceDto[]>;
+  /**
+   * Whether the bundled sample content is installed, and any download's
+   * progress. Cheap enough to poll while one is running.
+   */
+  getAssetStatus(): Promise<AssetStatusDto>;
+  /**
+   * Start downloading the bundled sample content. **Only ever from a click** --
+   * nothing fetches 131 MB on its own. Resolves once the transfer has started;
+   * poll `getAssetStatus` for progress. When it finishes the new instrument
+   * appears in `getSources` with no restart.
+   */
+  startAssetDownload(): Promise<AssetStatusDto>;
 
   // --- the mixer -----------------------------------------------------------
   //
@@ -356,6 +369,16 @@ class TauriBackend implements Backend {
   async setSource(id: string): Promise<SourceDto[]> {
     const { invoke } = await this.core();
     return invoke<SourceDto[]>('set_source', { source: id });
+  }
+
+  async getAssetStatus(): Promise<AssetStatusDto> {
+    const { invoke } = await this.core();
+    return invoke<AssetStatusDto>('get_asset_status');
+  }
+
+  async startAssetDownload(): Promise<AssetStatusDto> {
+    const { invoke } = await this.core();
+    return invoke<AssetStatusDto>('start_asset_download');
   }
 
   async getTracks(): Promise<MixerState> {
@@ -1029,6 +1052,31 @@ class MockBackend implements Backend {
 
   async getSources(): Promise<SourceDto[]> {
     return this.sourceList();
+  }
+
+  /**
+   * There is no filesystem in a browser, so the mock reports the content as
+   * installed and loaded. That hides the download line rather than offering a
+   * button that could not work -- the affordance is about a real install, and a
+   * mock that pretended to fetch 131 MB would be theatre.
+   */
+  async getAssetStatus(): Promise<AssetStatusDto> {
+    return {
+      installed: true,
+      instrumentReady: true,
+      state: 'done',
+      totalBytes: 0,
+      downloadedBytes: 0,
+      filesDone: 0,
+      fileCount: 0,
+      instrumentId: '',
+      instrumentName: '',
+      error: '',
+    };
+  }
+
+  async startAssetDownload(): Promise<AssetStatusDto> {
+    throw new Error('there is no sample content to download in the mock backend');
   }
 
   /**

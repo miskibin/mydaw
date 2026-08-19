@@ -113,6 +113,7 @@ impl Rig {
         let tracks = Arc::new(TrackHost::with_project(
             Arc::new(TestToneFactory::new()),
             Arc::new(InstrumentRegistry::new()),
+            Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
             project,
         ));
         let collector = Collector::new();

@@ -72,6 +72,17 @@ pub const SOURCE_QUEUE_CAPACITY: usize = 4;
 /// to call itself `poly-synth` can never collide.
 pub const CLAP_SOURCE_PREFIX: &str = "clap:";
 
+/// Prefix of a sampled instrument's wire id, re-exported from the plugin that
+/// owns the format.
+///
+/// Unlike `clap:` and `vst3:`, a `sampler:` id is **complete**: it names an
+/// instrument directory under `assets/instruments`, and there is no second half
+/// (a bundle path, a class id) that has to travel beside it. That is what makes
+/// [`Source::parse`] able to rebuild a sampler source from an id alone, and
+/// therefore what makes project persistence free -- see
+/// [`SourceEntry`](crate::project_file::SourceEntry).
+pub use mydaw_plugin_sampler::SOURCE_PREFIX as SAMPLER_SOURCE_PREFIX;
+
 /// Prefix of a VST3 source's wire id.
 ///
 /// Distinct from [`CLAP_SOURCE_PREFIX`] so an id records *which format* a
@@ -205,6 +216,62 @@ impl From<&Vst3PluginInfo> for Vst3SourceRef {
     }
 }
 
+/// A sampled instrument, identified the way a project file records one.
+///
+/// One string, because one string is all it takes: the instrument id names a
+/// directory under `assets/instruments`, and the *content* of that directory is
+/// pinned by `assets-manifest.json`. There is deliberately no path here. A
+/// project that recorded where the samples were on the machine that saved it
+/// would be a project that could not be opened anywhere else.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SamplerSourceRef {
+    /// Instrument id, e.g. `salamander-piano`. Without the `sampler:` prefix.
+    pub instrument_id: String,
+    /// Display name from the registry. May be empty -- an id parsed out of a
+    /// project file carries no name -- in which case the id is shown instead.
+    pub name: String,
+}
+
+impl SamplerSourceRef {
+    /// A reference to `instrument_id`, with no display name.
+    pub fn new(instrument_id: impl Into<String>) -> Self {
+        Self {
+            instrument_id: instrument_id.into(),
+            name: String::new(),
+        }
+    }
+
+    /// The same reference carrying a display name.
+    #[must_use]
+    pub fn named(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    /// What to put on a mixer strip.
+    pub fn label(&self) -> &str {
+        if self.name.is_empty() {
+            &self.instrument_id
+        } else {
+            &self.name
+        }
+    }
+
+    /// Wire id: `sampler:<instrument id>`. Also the node factory's `type_id`.
+    pub fn wire_id(&self) -> String {
+        mydaw_plugin_sampler::source_id(&self.instrument_id)
+    }
+}
+
+impl From<&mydaw_plugin_sampler::InstrumentInfo> for SamplerSourceRef {
+    fn from(info: &mydaw_plugin_sampler::InstrumentInfo) -> Self {
+        Self {
+            instrument_id: info.id.clone(),
+            name: info.name.clone(),
+        }
+    }
+}
+
 /// What generates audio at the head of a track.
 ///
 /// Not `Copy` since step 6: a CLAP source carries the bundle path and plugin id
@@ -217,6 +284,14 @@ pub enum Source {
     PolySynth,
     /// The built-in [`drum-kit`](mydaw_plugin_instruments::DrumKitNode).
     DrumKit,
+    /// A sampled instrument loaded from `assets/instruments`.
+    ///
+    /// **Internal, not hosted.** It is built by a `Send + Sync` factory on the
+    /// calling thread exactly like the synthesised instruments -- the main
+    /// thread is not involved, because there is no plugin instance to own. What
+    /// makes it different from the other two is only that the *set* of them is
+    /// discovered at runtime rather than compiled in.
+    Sampler(SamplerSourceRef),
     /// A hosted CLAP instrument, chosen from the plugin picker.
     Clap(ClapSourceRef),
     /// A hosted VST3 instrument, chosen from the same picker.
@@ -245,6 +320,7 @@ impl Source {
             Self::TestTone => "test-tone".to_owned(),
             Self::PolySynth => "poly-synth".to_owned(),
             Self::DrumKit => "drum-kit".to_owned(),
+            Self::Sampler(reference) => reference.wire_id(),
             Self::Clap(reference) => reference.wire_id(),
             Self::Vst3(reference) => reference.wire_id(),
         }
@@ -256,6 +332,7 @@ impl Source {
             Self::TestTone => "Test Tone".to_owned(),
             Self::PolySynth => "Poly Synth".to_owned(),
             Self::DrumKit => "Drum Kit".to_owned(),
+            Self::Sampler(reference) => reference.label().to_owned(),
             Self::Clap(reference) => reference.label().to_owned(),
             Self::Vst3(reference) => reference.label(),
         }
@@ -268,6 +345,9 @@ impl Source {
             Self::PolySynth => "Eight-voice saw + sub synth, played from the keyboard".to_owned(),
             Self::DrumKit => {
                 "Synthesised kick, snare and hi-hats on GM keys 36/38/42/46".to_owned()
+            }
+            Self::Sampler(reference) => {
+                format!("Sampled instrument '{}'", reference.instrument_id)
             }
             Self::Clap(reference) => format!(
                 "Hosted CLAP instrument {} from {}",
@@ -331,6 +411,14 @@ impl Source {
         }
     }
 
+    /// The instrument id, for a sampled source.
+    pub const fn sampler_ref(&self) -> Option<&SamplerSourceRef> {
+        match self {
+            Self::Sampler(reference) => Some(reference),
+            _ => None,
+        }
+    }
+
     /// The `type_id` of the built-in instrument backing this source, if any.
     pub const fn instrument_type_id(&self) -> Option<&'static str> {
         match self {
@@ -363,6 +451,16 @@ impl Source {
                 cid: cid.to_owned(),
             });
         }
+        // A sampler id *is* parseable from itself: it names an instrument
+        // directory and nothing else. The display name is left empty here and
+        // filled in from the registry wherever one is available -- which is
+        // what lets a project file round-trip a sampled source with no help.
+        if let Some(instrument_id) = id.strip_prefix(SAMPLER_SOURCE_PREFIX) {
+            if instrument_id.is_empty() {
+                return Err(SourceError::Unknown(id.to_owned()));
+            }
+            return Ok(Self::Sampler(SamplerSourceRef::new(instrument_id)));
+        }
         Self::BUILT_IN
             .into_iter()
             .find(|source| source.id() == id)
@@ -373,8 +471,20 @@ impl Source {
 /// Why a source could not be selected.
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
-    #[error("unknown source '{0}'; expected one of test-tone, poly-synth or drum-kit")]
+    #[error(
+        "unknown source '{0}'; expected one of test-tone, poly-synth, drum-kit \
+         or sampler:<instrument>"
+    )]
     Unknown(String),
+    /// A sampled instrument that is not loaded -- most often because the
+    /// assets have not been downloaded yet. A *runtime* condition, unlike
+    /// [`MissingInstrument`](Self::MissingInstrument): the id is fine, the
+    /// content is simply not on this machine.
+    #[error(
+        "the sampled instrument '{0}' is not installed; \
+         download the sample content, or run scripts/fetch-assets.ps1"
+    )]
+    MissingSampler(String),
     /// A `clap:` id arrived where only a built-in was expected. Always a UI bug:
     /// the webview has the bundle path from the scan and must send it.
     #[error(
@@ -647,6 +757,31 @@ impl SourceDto {
         }
     }
 
+    /// Describe a loaded sampled instrument.
+    ///
+    /// [`SourceKindDto::Internal`], with the built-ins, because that is what it
+    /// is: no plugin is hosted, nothing is loaded from a bundle, and the picker
+    /// should not invite the user to think of a bundled piano as a third-party
+    /// plugin. The only reason it is not in [`Source::BUILT_IN`] is that the
+    /// list is discovered at runtime.
+    pub fn sampler(info: &mydaw_plugin_sampler::InstrumentInfo, current: &Source) -> Self {
+        let reference = SamplerSourceRef::from(info);
+        let selected = current
+            .sampler_ref()
+            .is_some_and(|active| active.instrument_id == info.id);
+        Self {
+            id: reference.wire_id(),
+            label: reference.label().to_owned(),
+            description: info.description.clone(),
+            kind: SourceKindDto::Internal,
+            vendor: String::new(),
+            bundle_path: None,
+            plugin_id: None,
+            selected,
+            takes_notes: true,
+        }
+    }
+
     /// Describe a scanned VST3 instrument.
     ///
     /// `selected` compares the **class id and module path**, for the same reason
@@ -802,6 +937,86 @@ mod tests {
             PathBuf::from(r"C:\plugins\thing.clap")
         );
         assert_eq!(source.instrument_type_id(), None);
+    }
+
+    /// Unlike a hosted plugin, a sampled instrument is fully described by its
+    /// id -- which is what makes project persistence free.
+    #[test]
+    fn a_sampler_id_parses_back_into_a_source_without_any_second_half() {
+        let source = Source::parse("sampler:salamander-piano").expect("parses");
+        assert_eq!(
+            source,
+            Source::Sampler(SamplerSourceRef::new("salamander-piano"))
+        );
+        assert_eq!(source.id(), "sampler:salamander-piano");
+        assert_eq!(
+            source.label(),
+            "salamander-piano",
+            "with no registry to ask, the id is the label"
+        );
+        assert!(source.takes_notes());
+        assert!(!source.gated());
+        assert!(
+            !source.is_hosted(),
+            "a sampled instrument is internal: no bundle, no main thread"
+        );
+        assert!(!source.is_clap() && !source.is_vst3());
+        assert_eq!(
+            source.instrument_type_id(),
+            None,
+            "it is not in the synthesised instrument registry"
+        );
+        assert_eq!(
+            source.sampler_ref().map(|r| r.instrument_id.as_str()),
+            Some("salamander-piano")
+        );
+
+        // A name from the registry is carried but is not part of identity.
+        let named = Source::Sampler(
+            SamplerSourceRef::new("salamander-piano").named("Salamander Grand Piano"),
+        );
+        assert_eq!(named.label(), "Salamander Grand Piano");
+        assert_eq!(named.id(), source.id(), "the id is the id either way");
+    }
+
+    #[test]
+    fn a_bare_sampler_prefix_is_not_a_source() {
+        let err = Source::parse("sampler:").unwrap_err();
+        assert!(matches!(err, SourceError::Unknown(ref id) if id == "sampler:"));
+    }
+
+    #[test]
+    fn the_sampler_dto_sits_with_the_built_ins_and_marks_the_selected_one() {
+        let info = mydaw_plugin_sampler::InstrumentInfo {
+            type_id: "sampler:salamander-piano",
+            id: "salamander-piano".to_owned(),
+            name: "Salamander Grand Piano".to_owned(),
+            description: "Yamaha C5 grand".to_owned(),
+            attribution: "Alexander Holm, CC-BY-3.0".to_owned(),
+            samples: 90,
+            skipped: 0,
+            bytes: 222_000_000,
+        };
+
+        let playing = Source::Sampler(SamplerSourceRef::new("salamander-piano"));
+        let dto = SourceDto::sampler(&info, &playing);
+        assert_eq!(dto.id, "sampler:salamander-piano");
+        assert_eq!(dto.label, "Salamander Grand Piano");
+        assert_eq!(dto.description, "Yamaha C5 grand");
+        assert_eq!(
+            dto.kind,
+            SourceKindDto::Internal,
+            "a bundled piano is not a third-party plugin"
+        );
+        assert!(dto.selected);
+        assert!(dto.takes_notes);
+        assert!(dto.bundle_path.is_none(), "there is no bundle to name");
+        assert!(dto.plugin_id.is_none());
+
+        // A different instrument is not the one playing.
+        assert!(!SourceDto::sampler(&info, &Source::PolySynth).selected);
+        let other = Source::Sampler(SamplerSourceRef::new("something-else"));
+        assert!(!SourceDto::sampler(&info, &other).selected);
     }
 
     #[test]
