@@ -37,13 +37,14 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | Path | What lives there |
 | --- | --- |
 | `crates/kernel` | Microkernel: `Plugin` trait, typed service registry, non-RT event bus, dependency-ordered lifecycle |
-| `crates/rt-core` | RT primitives: `RtNode`, the multi-track mixer graph, lock-free graph swap, `rtrb` command queue, transport clock |
+| `crates/rt-core` | RT primitives: `RtNode`, the multi-track mixer graph with buses and send taps, lock-free graph swap, `rtrb` command queue, transport clock. See [`the routing spec`](docs/superpowers/specs/2026-08-19-mixer-v2-routing.md) |
 | `crates/ipc-bridge` | Kernel ⇄ webview data: serde DTOs, `UiSnapshot`, 30 Hz meter throttle. Tauri-free by design |
 | `crates/plugin-scan` | Crash-proof plugin discovery, shared by both hosts: one child process per unknown module, a metadata cache so unchanged ones are never opened again, and a persistent block list for the ones that will not survive being read |
 | `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
 | `plugins/debug-tap` | RT-safe capture of the output bus, plus WAV / annotated PNG / statistics — so the engine can be *inspected* without ears |
 | `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
 | `plugins/instruments` | The built-in instruments: four synthesised drums (one per channel), a legacy drum kit and a polyBLEP poly synth, driven by note events. No assets, bit-deterministic, zero-alloc |
+| `plugins/effects` | The mixer effects that ship inside the DAW: EQ, compressor, delay, saturator and utility, driven by the parameter system. Transparent at their defaults, click-free on bypass, zero-alloc. See [`the spec`](docs/superpowers/specs/2026-08-19-param-system-effects-v1.md) |
 | `plugins/sequencer` | Patterns, the playlist and the scheduler: a set of named patterns, an arrangement of clips, and PAT/SONG playback that is drift-free by construction. See [`the spec`](docs/superpowers/specs/2026-08-19-engine-patterns-playlist.md) |
 | `plugins/sampler` | The sampled instrument: a manifest-driven, 32-voice sample player, plus the checksummed fetcher that installs its content. See [Sample content](#sample-content) |
 | `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
