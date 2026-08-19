@@ -34,6 +34,9 @@ mydaw-plugin-audio-io.workspace = true
 mydaw-plugin-host-clap.workspace = true
 mydaw-plugin-host-vst3.workspace = true
 mydaw-plugin-windows.workspace = true
+# `main` dispatches the scan-worker protocol before anything else starts, so a
+# shipped single binary is its own scan worker and no sidecar has to be bundled.
+mydaw-plugin-scan.workspace = true
 
 # --- shell ---
 tauri = { version = "2", features = [] }

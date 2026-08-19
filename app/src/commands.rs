@@ -744,14 +744,15 @@ pub async fn load_clap_state(
 
 /// Installed VST3 plugins, for the browser panel and the pickers.
 ///
-/// The first call scans the standard VST3 directories, which opens every
-/// installed module in this process. Pass `rescan: true` (the panel's Rescan
-/// button) to walk them again.
+/// The first call scans the standard VST3 directories. Pass `rescan: true` (the
+/// panel's Rescan button) to walk them again.
 ///
-/// **A module that hangs is remembered and skipped next time.** On a machine with
-/// licence-protected plugins that is the difference between a panel that opens in
-/// seconds and one that takes minutes and leaves a dialog on screen for each --
-/// see `mydaw_plugin_host_vst3::blocklist`.
+/// **No module is ever opened in this process.** A module MYDAW has not seen
+/// before is opened in a child process which is killed if it will not answer, so
+/// a plugin that crashes or puts up a licence dialog costs one entry in the
+/// plugin list rather than the DAW; one that has not changed since the last scan
+/// is answered from a metadata cache and not opened at all. See
+/// `mydaw_plugin_scan`.
 ///
 /// `async` so Tauri runs it off the main thread.
 #[tauri::command]

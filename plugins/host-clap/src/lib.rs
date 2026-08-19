@@ -11,23 +11,28 @@
 //!   optional, and the deactivation-on-drop story is subtle.
 //!
 //! # Crash isolation -- read this before trusting a scan
-//! Loading a CLAP bundle runs third-party code inside this process: the OS loader
-//! runs the DLL's entry point, then `clap_entry->init()` runs the vendor's own
-//! initialisation. That code can do anything, including crash.
+//! Loading a CLAP bundle runs third-party code: the OS loader runs the DLL's
+//! entry point, then `clap_entry->init()` runs the vendor's own initialisation.
+//! That code can do anything, including crash.
 //!
-//! [`ClapHostService::scan_bundle`] wraps each bundle in
-//! [`std::panic::catch_unwind`], so a bundle that panics through an FFI boundary
-//! is reported and skipped rather than taking the scan (and the DAW) with it.
-//! **That is the limit of what an in-process scanner can do.** A segfault, a
-//! stack overflow, an `abort()` or a hijacked exception filter kills the process
-//! outright, and no amount of Rust error handling changes that.
+//! **A scan therefore does not load bundles into MYDAW's process.**
+//! [`ClapHostService::scan`] hands the bundle list to
+//! [`mydaw_plugin_scan::ModuleScan`], which answers from a metadata cache for
+//! every bundle whose file has not changed, and opens the rest in a **child
+//! process** with a deadline. A segfault, an `abort()`, a hijacked exception
+//! filter and a bundle that simply never returns all end the same way: the child
+//! dies, the bundle goes on a persistent block list, and MYDAW does not notice.
 //!
-//! TODO(phase 2): move scanning out of process -- spawn `mydaw --scan <dir>`, read
-//! results over a pipe, treat a non-zero exit as "this bundle is broken" and
-//! blacklist it. That is the only design that survives a hostile plugin, and it
-//! also gets crash isolation for VST3 for free (see `mydaw-plugin-host-vst3`).
-//! The seam is already here: [`ClapHostService::scan_bundle`] is a pure
-//! path-in/results-out function, so the subprocess can call exactly it.
+//! This is the same machinery `mydaw-plugin-host-vst3` uses, and it was built
+//! for VST3's reasons -- a licence dialog inside `DllMain` wedging the process's
+//! loader lock. CLAP has no such plugin *on this machine*, which is not the same
+//! as CLAP being safe: the format has no more control over what a vendor does in
+//! `init()` than VST3 does. The only CLAP-specific part is
+//! [`ClapPluginInfo`]'s [`ScanTarget`] impl, which is fifteen lines.
+//!
+//! [`ClapHostService::scan_bundle`] remains the pure path-in/results-out function
+//! -- it is what the child calls, and what the in-process fallback calls in a
+//! build with no worker executable.
 
 pub mod gui;
 pub mod hosting;
@@ -44,7 +49,9 @@ use std::sync::Arc;
 use clack_host::entry::PluginEntry;
 use clack_host::plugin::PluginDescriptor;
 use mydaw_kernel::{KernelCtx, PanelManifest, Plugin, PluginManifest};
+use mydaw_plugin_scan::{ModuleScan, ScanPass, ScanTarget, WorkerHandler};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 
 pub use gui::{ClapGuiError, ClapGuiPump, ClapGuiSession, ResizeDecision};
 pub use hosting::{
@@ -85,7 +92,11 @@ const MAX_SCAN_DEPTH: usize = 8;
 /// One bundle can export several plugins, so `path` is not unique across results;
 /// `id` is (it is the plugin's stable CLAP identifier, which is what a project
 /// file stores).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Serialisable because a scan result crosses a pipe from a worker process and
+/// lands in the scan cache. `path` is deliberately **not** part of that shape --
+/// see the field.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ClapPluginInfo {
     /// CLAP plugin id, e.g. `"com.u-he.diva"`. Stable across versions.
     pub id: String,
@@ -96,6 +107,13 @@ pub struct ClapPluginInfo {
     /// Version string, empty if the bundle does not declare one.
     pub version: String,
     /// Bundle this plugin came from.
+    ///
+    /// Never serialised. A worker process is told which bundle to open and a
+    /// cache entry is keyed by it, so the parent already knows the answer -- and
+    /// the path is the one field a child that may be running a hostile plugin
+    /// should not be trusted to invent. It is stamped back on by
+    /// [`ScanTarget::with_module_path`].
+    #[serde(skip)]
     pub path: PathBuf,
     /// The plugin's declared `features`, verbatim, e.g.
     /// `["instrument", "synthesizer", "stereo"]`.
@@ -145,6 +163,42 @@ impl ClapPluginInfo {
     pub fn is_audio_effect(&self) -> bool {
         self.kind() == ClapPluginKind::AudioEffect
     }
+}
+
+/// Everything the shared out-of-process scanner needs to know about CLAP.
+///
+/// Compare `mydaw-plugin-host-vst3`'s impl: the two differ in the four lines
+/// that are genuinely format-specific and nowhere else, which is the argument
+/// for the shared crate existing.
+impl ScanTarget for ClapPluginInfo {
+    const FORMAT: &'static str = "clap";
+
+    fn read_module(module: &Path) -> Result<Vec<Self>, String> {
+        ClapHostService::scan_bundle(module).map_err(|err| err.to_string())
+    }
+
+    // `fingerprint_path` is the default -- the bundle path itself. On Windows and
+    // Linux a `.clap` is the shared library, so its length and timestamp are
+    // exactly the right thing to watch.
+    //
+    // TODO(macOS): a `.clap` there is a *directory*, and a directory's own
+    // timestamp does not change when the binary inside it is rewritten in place.
+    // Resolve `Contents/MacOS/<name>` the way `mydaw-plugin-host-vst3`'s
+    // `resolve_binary` does before MYDAW ships a macOS build.
+
+    fn with_module_path(mut self, module: &Path) -> Self {
+        self.path = module.to_path_buf();
+        self
+    }
+}
+
+/// This crate's entry in a worker process's dispatch table.
+///
+/// `main` hands one of these per format to
+/// [`run_worker_if_requested`](mydaw_plugin_scan::run_worker_if_requested); see
+/// `src/bin/mydaw-clap-scan-worker.rs` for the smallest possible caller.
+pub fn scan_worker_handler() -> WorkerHandler {
+    ClapPluginInfo::worker_handler()
 }
 
 /// What a scanned plugin advertises itself as.
@@ -262,6 +316,10 @@ pub struct ClapHostService {
     /// one that hangs. `Arc` so a caller keeps a stable list even if a refresh
     /// replaces the cache underneath.
     cache: Mutex<Option<Arc<[ClapPluginInfo]>>>,
+    /// How bundles are actually opened: in a child process, against a metadata
+    /// cache, minus everything on the block list. See
+    /// [`mydaw_plugin_scan::ModuleScan`].
+    scanner: ModuleScan<ClapPluginInfo>,
 }
 
 impl Default for ClapHostService {
@@ -271,19 +329,32 @@ impl Default for ClapHostService {
 }
 
 impl ClapHostService {
-    /// Service scanning the standard locations. See [`standard_search_paths`].
+    /// Service scanning the standard locations, with the user's persistent block
+    /// list and metadata cache. See [`standard_search_paths`].
     pub fn new() -> Self {
-        Self {
-            search_paths: standard_search_paths(),
-            cache: Mutex::new(None),
-        }
+        Self::with_search_paths_and_scan(standard_search_paths(), ModuleScan::persistent())
     }
 
-    /// Service scanning exactly the given roots. Missing roots are ignored.
+    /// Service scanning exactly the given roots, remembering nothing between
+    /// runs. Missing roots are ignored.
+    ///
+    /// In-memory on purpose: this is the constructor tests use, and a test that
+    /// wrote to the developer's real block list or scan cache would be a test
+    /// that changed which plugins their DAW can see. Bundles are still opened out
+    /// of process.
     pub fn with_search_paths(search_paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self::with_search_paths_and_scan(search_paths, ModuleScan::in_memory())
+    }
+
+    /// Service scanning the given roots with the scanner the caller chose.
+    pub fn with_search_paths_and_scan(
+        search_paths: impl IntoIterator<Item = PathBuf>,
+        scanner: ModuleScan<ClapPluginInfo>,
+    ) -> Self {
         Self {
             search_paths: search_paths.into_iter().collect(),
             cache: Mutex::new(None),
+            scanner,
         }
     }
 
@@ -292,24 +363,41 @@ impl ClapHostService {
         &self.search_paths
     }
 
+    /// How this service opens bundles: its block list, its metadata cache and its
+    /// worker configuration.
+    pub fn scanner(&self) -> &ModuleScan<ClapPluginInfo> {
+        &self.scanner
+    }
+
+    /// The bundles this service refuses to open.
+    ///
+    /// A bundle lands here by taking its scan worker down or by never answering.
+    /// The file is `%LOCALAPPDATA%\MYDAW\clap-blocklist.txt`, separate from the
+    /// VST3 one on purpose: forgetting a wedged VST3 plugin must not also forget
+    /// everything learned about a CLAP collection.
+    pub fn blocklist(&self) -> &mydaw_plugin_scan::BlockList {
+        self.scanner.blocklist()
+    }
+
     /// Find every CLAP plugin under the search paths.
     ///
     /// Never fails: an unreadable root, a bundle that will not load and a bundle
     /// that panics are all logged and skipped. A scan of a machine with no CLAP
     /// plugins installed returns an empty vector.
     ///
-    /// **Not cheap and not RT-safe.** It touches the filesystem and loads
-    /// arbitrary shared libraries; call it from a worker thread, once, and cache
+    /// **Not cheap and not RT-safe.** It touches the filesystem and starts a
+    /// process per unknown bundle; call it from a worker thread, once, and cache
     /// the result.
     pub fn scan(&self) -> Vec<ClapPluginInfo> {
-        let mut found = Vec::new();
-        for bundle in self.bundle_paths() {
-            match Self::scan_bundle(&bundle) {
-                Ok(plugins) => found.extend(plugins),
-                Err(err) => log::warn!("skipping CLAP bundle {}: {err}", bundle.display()),
-            }
-        }
-        found
+        self.scan_detailed().found
+    }
+
+    /// [`scan`](Self::scan), plus everything that went wrong.
+    ///
+    /// A bundle that crashes its worker or never answers is added to the block
+    /// list here, which is the only place that happens.
+    pub fn scan_detailed(&self) -> ScanPass<ClapPluginInfo> {
+        self.scanner.scan_all(&self.bundle_paths())
     }
 
     /// Every `*.clap` path under the search roots, deduplicated.

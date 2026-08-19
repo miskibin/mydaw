@@ -1,0 +1,13 @@
+[package]
+name = "mydaw-plugin-scan"
+description = "MYDAW plugin scanning: the out-of-process worker protocol, the metadata cache and the block list shared by the CLAP and VST3 hosts."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+parking_lot.workspace = true

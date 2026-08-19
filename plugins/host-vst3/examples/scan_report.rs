@@ -1,68 +1,70 @@
 //! Print what this machine has installed, module by module, as it goes.
 //!
 //! ```text
-//! cargo run -p mydaw-plugin-host-vst3 --example scan_report                 # isolated (default)
-//! cargo run -p mydaw-plugin-host-vst3 --example scan_report -- --in-process # what the app does
+//! cargo run -p mydaw-plugin-host-vst3 --example scan_report                  # what the app does
+//! cargo run -p mydaw-plugin-host-vst3 --example scan_report -- --in-process  # the old way, for comparison
+//! cargo run -p mydaw-plugin-host-vst3 --example scan_report -- --cold        # ignore the metadata cache
 //! cargo run -p mydaw-plugin-host-vst3 --example scan_report -- --retry-blocked
 //! cargo run -p mydaw-plugin-host-vst3 --example scan_report -- --module <path>
 //! ```
 //!
 //! The diagnostic that produced the compatibility table in
-//! `docs/superpowers/specs/2026-08-19-step7-vst3-host.md`, and -- in its default
-//! mode -- **a working prototype of the out-of-process scanner** the crate docs
-//! promise for phase 2.
+//! `docs/superpowers/specs/2026-08-19-step7-vst3-host.md`, and the way the
+//! scanner's cost is measured rather than argued about.
 //!
-//! # Why isolation is the default here
+//! # It drives the real thing
 //!
-//! Measured on the development machine: a module that blocks inside `DllMain`
-//! holds the Windows loader lock, and every later `LoadLibraryW` in that process
-//! blocks behind it forever. An in-process scan of that machine therefore reports
-//! *one* plugin and 42 false failures. One child process per module makes that
-//! impossible -- a poisoned loader lock dies with the child -- and the difference
-//! between the two modes is one command-line flag, which is the point: `--in-process`
-//! reproduces exactly what the shipping app currently does, so the cost of not
-//! having the subprocess scanner is a number rather than an argument.
+//! Every mode here goes through [`Vst3HostService`] and
+//! [`ModuleScan`](mydaw_plugin_scan::ModuleScan) -- the same block list, the same
+//! metadata cache, the same worker protocol the app uses. Progress is printed by
+//! scanning one module per call rather than by a private code path, so there is
+//! no second implementation to drift.
 //!
-//! The child mode (`--module`) is the whole protocol: a path in, a report on
-//! stdout, an exit code. It is deliberately the shape a `mydaw --scan` subcommand
-//! would take.
+//! `--in-process` selects [`WorkerSpawn::InProcess`], which is exactly what the
+//! shipping app did before workers existed. On a machine with a licence-protected
+//! plugin the difference is not subtle: the first hang wedges the process-wide
+//! loader lock and every module after it is reported broken.
 
-use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::path::PathBuf;
+use std::time::Instant;
 
-use mydaw_plugin_host_vst3::scan::{scan_module_in_process, SCAN_TIMEOUT};
-use mydaw_plugin_host_vst3::{BlockList, Vst3HostService};
-
-/// How long a child gets before the parent kills it. A little more than the
-/// in-process deadline, so a child that is merely slow reports for itself.
-const CHILD_TIMEOUT: Duration = Duration::from_secs(SCAN_TIMEOUT.as_secs() + 5);
+use mydaw_plugin_host_vst3::scan::{bundle_paths, standard_search_paths, Vst3PluginInfo};
+use mydaw_plugin_scan::{ModuleScan, ScanPass, WorkerSpawn};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let in_process = args.iter().any(|arg| arg == "--in-process");
+    let cold = args.iter().any(|arg| arg == "--cold");
+    let retry_blocked = args.iter().any(|arg| arg == "--retry-blocked");
 
-    // --- child mode: one module, one process ------------------------------
+    let mut scanner = ModuleScan::<Vst3PluginInfo>::persistent();
+    if in_process {
+        scanner = scanner.with_spawn(WorkerSpawn::InProcess);
+    }
+
+    // --- one module, on demand ---------------------------------------------
     if let Some(index) = args.iter().position(|arg| arg == "--module") {
         let Some(path) = args.get(index + 1) else {
             eprintln!("--module needs a path");
             std::process::exit(2);
         };
-        std::process::exit(scan_one(Path::new(path)));
+        let module = PathBuf::from(path);
+        report_line(&scanner.scan_all(std::slice::from_ref(&module)));
+        return;
     }
 
-    // --- parent mode -------------------------------------------------------
-    let in_process = args.iter().any(|arg| arg == "--in-process");
-    let retry_blocked = args.iter().any(|arg| arg == "--retry-blocked");
-
-    let service = Vst3HostService::new();
-    let blocklist = BlockList::load();
+    let roots = standard_search_paths();
     if retry_blocked {
-        blocklist.clear();
+        scanner.blocklist().clear();
         println!("block list cleared: every module will be tried again\n");
+    }
+    if cold || retry_blocked {
+        scanner.cache().clear();
+        println!("metadata cache cleared: every module will be opened again\n");
     }
 
     println!("search roots:");
-    for root in service.search_paths() {
+    for root in &roots {
         println!(
             "  {} {}",
             if root.exists() { "*" } else { "-" },
@@ -70,14 +72,14 @@ fn main() {
         );
     }
 
-    let modules = service.module_paths();
+    let modules = bundle_paths(&roots);
     println!(
         "\n{} module(s) found; mode: {}\n",
         modules.len(),
         if in_process {
-            "IN-PROCESS (what the app does today)"
+            "IN-PROCESS (what the app did before out-of-process scanning)"
         } else {
-            "ISOLATED (one child process per module)"
+            "ISOLATED (one child process per unknown module)"
         }
     );
     if modules.is_empty() {
@@ -85,19 +87,13 @@ fn main() {
         return;
     }
 
-    let exe = std::env::current_exe().ok();
-    let mut ok = 0_usize;
-    let mut classes = 0_usize;
-    let mut failed = 0_usize;
-    let mut hung = 0_usize;
-    let mut skipped = 0_usize;
-    let mut poisoned = false;
+    let mut totals = Totals::default();
     let started = Instant::now();
 
     for (index, module) in modules.iter().enumerate() {
         let name = module.file_name().map_or_else(
             || module.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
+            |leaf| leaf.to_string_lossy().into_owned(),
         );
         print!(
             "[{:>2}/{}] {:<40} ",
@@ -107,71 +103,39 @@ fn main() {
         );
         flush();
 
-        if blocklist.contains(module) && !retry_blocked {
-            println!("SKIP  (block-listed)");
-            skipped += 1;
-            continue;
-        }
-        if poisoned {
-            println!("SKIP  (the loader lock is held by an earlier module)");
-            skipped += 1;
-            continue;
-        }
+        // One module at a time, through the production scanner: the block list
+        // and the cache live in `scanner` and carry across the calls, so this is
+        // the same pass the app makes, printed as it happens.
+        let pass = scanner.scan_all(std::slice::from_ref(module));
+        totals.add(&pass);
+        report_line(&pass);
 
-        let at = Instant::now();
-        let outcome = if in_process {
-            in_process_scan(module)
-        } else {
-            match exe.as_deref() {
-                Some(exe) => isolated_scan(exe, module),
-                None => in_process_scan(module),
+        if pass.was_aborted() {
+            println!("         (block-listed; it holds this process's loader lock, so the rest");
+            println!("          of this scan cannot run -- that is the bug isolation fixes)");
+            for later in &modules[index + 1..] {
+                println!("        - {} not attempted", later.display());
             }
-        };
-        let took = at.elapsed().as_secs_f64();
-
-        match outcome {
-            Outcome::Ok(lines) => {
-                ok += 1;
-                classes += lines.len();
-                println!("OK   {took:>6.2}s  {} class(es)", lines.len());
-                for line in lines {
-                    println!("         - {line}");
-                }
-            }
-            Outcome::Failed(why) => {
-                failed += 1;
-                println!("FAIL {took:>6.2}s  {why}");
-            }
-            Outcome::Hung => {
-                hung += 1;
-                blocklist.block(module);
-                println!(
-                    "HUNG {took:>6.2}s  no answer within {}s",
-                    CHILD_TIMEOUT.as_secs()
-                );
-                if in_process {
-                    println!("         (block-listed; it holds the loader lock, so the rest of");
-                    println!("          this scan cannot run -- that is the bug isolation fixes)");
-                    poisoned = true;
-                } else {
-                    println!("         (block-listed; the child was killed, this process is fine)");
-                }
-            }
+            break;
         }
     }
 
     println!(
-        "\n{} module(s) in {:.1}s: {ok} opened ({classes} plugin class(es)), \
-         {failed} refused, {hung} hung, {skipped} not attempted",
+        "\n{} module(s) in {:.1}s: {} opened ({} plugin class(es)), {} refused, {} \
+         blocked, {} not attempted; {} answered from cache, {} child process(es), {} opened here",
         modules.len(),
-        started.elapsed().as_secs_f64()
+        started.elapsed().as_secs_f64(),
+        totals.opened,
+        totals.classes,
+        totals.refused,
+        totals.blocked,
+        totals.skipped,
+        totals.cache_hits,
+        totals.children,
+        totals.in_process,
     );
-    if poisoned {
-        println!(
-            "\nThe scan stopped early: a module wedged this process's loader lock. Re-run to \
-             resume past it, or drop --in-process."
-        );
-    }
+
+    let blocklist = scanner.blocklist();
     if !blocklist.is_empty() {
         println!("\nblock list ({} entr(ies)):", blocklist.len());
         for entry in blocklist.entries() {
@@ -181,91 +145,65 @@ fn main() {
     }
 }
 
-enum Outcome {
-    Ok(Vec<String>),
-    Failed(String),
-    Hung,
+#[derive(Default)]
+struct Totals {
+    opened: usize,
+    classes: usize,
+    refused: usize,
+    blocked: usize,
+    skipped: usize,
+    cache_hits: usize,
+    children: usize,
+    in_process: usize,
 }
 
-/// Scan one module in this process. Fast, and poisons this process if it hangs.
-fn in_process_scan(module: &Path) -> Outcome {
-    match mydaw_plugin_host_vst3::scan::scan_module(module) {
-        Ok(found) => Outcome::Ok(found.iter().map(describe).collect()),
-        Err(mydaw_plugin_host_vst3::Vst3ScanError::TimedOut { .. }) => Outcome::Hung,
-        Err(err) => Outcome::Failed(err.to_string()),
+impl Totals {
+    fn add(&mut self, pass: &ScanPass<Vst3PluginInfo>) {
+        self.classes += pass.found.len();
+        if !pass.found.is_empty() {
+            self.opened += 1;
+        }
+        self.blocked += pass.newly_blocked.len();
+        self.refused += pass
+            .failures
+            .iter()
+            .filter(|(_, failure)| !failure.is_blocked())
+            .count();
+        self.skipped += pass.skipped.len();
+        self.cache_hits += pass.cache_hits;
+        self.children += pass.children;
+        self.in_process += pass.in_process;
     }
 }
 
-/// Scan one module in a child process, killing it if it will not answer.
-fn isolated_scan(exe: &Path, module: &Path) -> Outcome {
-    let child = Command::new(exe)
-        .arg("--module")
-        .arg(module)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut child) = child else {
-        return in_process_scan(module);
+/// One module's outcome, in the shape the compatibility table wants.
+fn report_line(pass: &ScanPass<Vst3PluginInfo>) {
+    let took = pass.elapsed.as_secs_f64();
+    if !pass.skipped.is_empty() {
+        println!("SKIP  (block-listed)");
+        return;
+    }
+    // One module per pass, so there is at most one of each of these.
+    if let Some((_, failure)) = pass.failures.first() {
+        if failure.is_blocked() {
+            println!("BAD  {took:>6.2}s  {failure}");
+        } else {
+            println!("FAIL {took:>6.2}s  {failure}");
+        }
+        return;
+    }
+    let how = if pass.cache_hits > 0 {
+        "cached"
+    } else {
+        "read"
     };
-
-    let deadline = Instant::now() + CHILD_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut text = String::new();
-                if let Some(mut out) = child.stdout.take() {
-                    use std::io::Read;
-                    let _ = out.read_to_string(&mut text);
-                }
-                let lines: Vec<String> = text
-                    .lines()
-                    .filter_map(|line| line.strip_prefix("CLASS "))
-                    .map(str::to_owned)
-                    .collect();
-                return if status.success() {
-                    Outcome::Ok(lines)
-                } else {
-                    Outcome::Failed(
-                        text.lines()
-                            .find_map(|line| line.strip_prefix("ERROR "))
-                            .unwrap_or("the child exited without a reason")
-                            .to_owned(),
-                    )
-                };
-            }
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    // The whole point of isolation: whatever it wedged dies here.
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Outcome::Hung;
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Err(err) => return Outcome::Failed(err.to_string()),
-        }
+    println!("OK   {took:>6.2}s  {} class(es) [{how}]", pass.found.len());
+    for info in &pass.found {
+        println!("         - {}", describe(info));
     }
 }
 
-/// Child mode: scan exactly one module and report on stdout.
-fn scan_one(module: &Path) -> i32 {
-    // No timeout thread here: the parent owns the deadline, and a child that
-    // hangs is killed. That is the entire advantage of doing it this way.
-    match scan_module_in_process(module) {
-        Ok(found) => {
-            for info in &found {
-                println!("CLASS {}", describe(info));
-            }
-            0
-        }
-        Err(err) => {
-            println!("ERROR {err}");
-            1
-        }
-    }
-}
-
-fn describe(info: &mydaw_plugin_host_vst3::Vst3PluginInfo) -> String {
+fn describe(info: &Vst3PluginInfo) -> String {
     format!(
         "{:<34} {:<18} {:<12} {:<26} {}",
         truncate(&info.name, 34),

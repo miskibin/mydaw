@@ -2165,6 +2165,7 @@ dependencies = [
  "mydaw-plugin-instruments",
  "mydaw-plugin-metering",
  "mydaw-plugin-sampler",
+ "mydaw-plugin-scan",
  "mydaw-plugin-sequencer",
  "mydaw-plugin-test-tone",
  "mydaw-plugin-windows",
@@ -2266,9 +2267,11 @@ dependencies = [
  "mydaw-fixture-clap-gain",
  "mydaw-kernel",
  "mydaw-plugin-debug-tap",
+ "mydaw-plugin-scan",
  "mydaw-plugin-windows",
  "mydaw-rt-core",
  "parking_lot",
+ "serde",
  "thiserror 2.0.20",
  "windows-sys 0.61.2",
 ]
@@ -2280,9 +2283,11 @@ dependencies = [
  "log",
  "mydaw-kernel",
  "mydaw-plugin-debug-tap",
+ "mydaw-plugin-scan",
  "mydaw-plugin-windows",
  "mydaw-rt-core",
  "parking_lot",
+ "serde",
  "thiserror 2.0.20",
  "vst3",
  "windows-sys 0.61.2",
@@ -2324,6 +2329,16 @@ dependencies = [
  "symphonia",
  "thiserror 2.0.20",
  "ureq",
+]
+
+[[package]]
+name = "mydaw-plugin-scan"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "parking_lot",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

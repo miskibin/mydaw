@@ -62,18 +62,20 @@ Measured, on this machine:
 A timeout alone is not enough: the first hang made 42 healthy modules look
 broken. Three things follow, and all three are implemented:
 
-- **`Vst3HostService::scan_detailed` stops at the first timeout** and reports the
-  rest as "not attempted" (`Vst3ScanReport::aborted_at`). Carrying on would have
-  produced a confidently wrong plugin list.
+- **`Vst3HostService::scan_detailed` stops at the first timeout** *when it has no
+  worker to scan with* and reports the rest as "not attempted"
+  (`Vst3ScanReport::aborted_at`). Carrying on would have produced a confidently
+  wrong plugin list. With a worker -- every normal build -- a hang costs one
+  module and the pass continues, and `aborted_at` is always `None`.
 - **A persistent block list** (`blocklist.rs`,
   `%LOCALAPPDATA%\MYDAW\vst3-blocklist.txt`) records the culprit, so the next
   scan resumes past it. A user gets through their collection one restart per bad
   plugin instead of never — and after the first pass, scanning is 3 seconds.
-- **`examples/scan_report.rs` runs one child process per module by default**,
-  which makes the problem impossible: a poisoned loader lock dies with the child.
-  This is a working prototype of the phase-2 out-of-process scanner, and
-  `--in-process` reproduces exactly what the shipping app does today, so the cost
-  of not having it is a number rather than an argument.
+- **Scanning now happens out of process** (`crates/plugin-scan`), which makes the
+  problem impossible: a poisoned loader lock dies with the child. See
+  [Out-of-process scanning](#out-of-process-scanning) below; `scan_report
+  --in-process` still reproduces the old behaviour, so the cost of not having it
+  stays a number rather than an argument.
 
 ### 3. Modules are never unloaded
 
@@ -88,6 +90,181 @@ what makes this class of bug so easy to ship.
 SDK's own module wrapper, which caches modules per path for the process lifetime.
 The cost is address space — file-backed mappings the OS can page out; the
 alternative cost is a crashed DAW.
+
+---
+
+## Out-of-process scanning
+
+**Status:** landed after the spike, in `crates/plugin-scan`
+(`mydaw-plugin-scan`). Used by **both** hosts.
+
+The block list and the per-module deadline made the machine above usable. They
+did not make it correct, and the failure that forced this was not a hang: on a
+fresh install, the *first* scan killed MYDAW outright — before the block list had
+learned which module did it, so the next launch did exactly the same thing. A
+block list only helps once you have survived long enough to write it.
+
+So a module is now opened in a process MYDAW is willing to lose.
+
+### The shape
+
+```text
+for each module:
+    block-listed?          -> skip, never open it
+    fingerprint unchanged? -> answer from the cache, open nothing
+    otherwise              -> open it in a child process, with a deadline
+        answered           -> remember it (a plugin list or a refusal alike)
+        crashed / hung     -> block-list it, carry on with the next module
+```
+
+Three pieces, one per file:
+
+| | file | what it is |
+| --- | --- | --- |
+| the child, and the protocol | `worker.rs` | one process per module |
+| what was found last time | `cache.rs` | `%LOCALAPPDATA%\MYDAW\<format>-scan-cache.json` |
+| what must never be opened | `blocklist.rs` | `%LOCALAPPDATA%\MYDAW\<format>-blocklist.txt` |
+
+A host supplies one `ScanTarget` impl — its info type, a format tag, how to read
+one module, which file to fingerprint — and gets all three. The VST3 impl is
+twenty lines; the CLAP one is fifteen.
+
+### The worker protocol
+
+```text
+parent                                        child
+------                                        -----
+spawn(worker, env {                           run_worker_if_requested() sees the
+    MYDAW_SCAN_WORKER = "vst3"                    two variables, scans exactly
+    MYDAW_SCAN_MODULE = "C:\...\Thing.vst3"       that one module
+}, stdout = pipe, stderr = null)
+                                              prints one line to stdout:
+                                              MYDAW-SCAN-RESULT {"status":...}
+                                              exit(0)
+drain stdout on a thread;
+poll for exit until the deadline;
+kill on the deadline
+```
+
+Four decisions are load-bearing.
+
+- **The request travels in the environment, not in `argv`.** The worker is
+  normally the MYDAW binary itself, which has its own command line to parse
+  (Tauri, the debug-capture flags); an environment variable cannot collide with
+  any of it, and cannot be confused with a file dropped on the icon.
+- **The answer is a marked line, not the whole of stdout.** Plugins print. A
+  licensing library's banner must not be mistaken for a scan result, and must not
+  hide one either, so the line that matters carries `MYDAW-SCAN-RESULT ` and
+  everything else is ignored.
+- **The child exits 0 whenever it produced an answer**, including "this module
+  refused to load". Exit status therefore means exactly one thing — *did the
+  process survive* — and the parent can block-list on abnormal exit without
+  having to tell a plugin's error apart from a plugin's crash. This is the
+  distinction the block list lives or dies by: a refusal is cached and shown, a
+  crash is block-listed and never retried.
+- **stdout is drained on its own thread** while the parent polls for exit.
+  Waiting and *then* reading deadlocks the moment a chatty plugin fills the pipe
+  buffer; reading to the end without waiting never notices a hang. Output is
+  capped at 1 MiB and the rest drained, so a plugin that prints a novel cannot
+  make the parent allocate without bound.
+
+The per-module deadline is 15 s — generous, because a large sample-based plugin
+genuinely takes seconds to initialise and a licence check may talk to the
+network; finite, because an unlicensed one is waiting for a human who is not
+coming.
+
+### Who the child is
+
+`WorkerSpawn::Auto` resolves, in order:
+
+1. `MYDAW_SCAN_WORKER_BIN` — an explicit override (tests; a packager shipping a
+   sidecar).
+2. `mydaw-<format>-scan-worker` next to the current executable, or one directory
+   up when the current executable sits in `deps/` or `examples/` (Cargo's
+   layout). These are the small dedicated workers each host crate ships — half a
+   megabyte, milliseconds to start, versus the whole DAW.
+3. The current executable itself, **only if it has called
+   `run_worker_if_requested`** — which `app/src/main.rs` does, first thing. That
+   is what makes the shipping single binary its own worker with no packaging at
+   all, and the opt-in is what stops a test binary or an unrelated tool from
+   being re-executed once per module by accident.
+4. Nothing — the caller falls back to opening modules in-process on a thread with
+   a deadline, exactly as before. Worse (a hang still poisons the loader lock)
+   but better than reporting a machine as having no plugins.
+
+### The cache key
+
+Length **plus** modification time of the file that is actually loaded — for a
+VST3 bundle that is the binary at `Contents/x86_64-win/`, not the directory,
+whose own metadata says nothing about what is inside it. Either field alone is
+forgeable by an installer: a patch release commonly keeps the size, unpacking an
+archive commonly keeps the timestamp. A content hash would be stronger and would
+cost reading tens of megabytes per module on every start-up, which is the thing
+being avoided.
+
+Refusals are cached too — a stray text file named `.vst3` costs a whole process
+to rediscover and fails identically every time, until the fingerprint changes.
+Crashes are **not** cached; that is the block list's job, because the answer
+there is "never open this again" rather than "here is what is inside it", and
+because a user who licenses the plugin must be able to undo it by deleting one
+line.
+
+### What it costs, measured on the same machine
+
+| scan mode | wall clock | plugin classes found |
+| --- | --- | --- |
+| in-process, no block list (the original) | 420 s | **1** of 29 |
+| in-process, block list populated | 4.3 s | 29 |
+| **out of process, cold cache** | **3.9 s** | **29** |
+| **out of process, warm cache** | **0.0 s** | **29** |
+
+43 modules, 14 of them block-listed and skipped, 29 opened. The cold
+out-of-process figure is 29 `CreateProcess` calls plus 29 module loads and is
+*within noise of* — here, slightly faster than — loading the same 29 modules into
+one process; the dedicated worker is small enough that spawning it costs less
+than the contention it avoids. Warm scans open nothing at all, which is the case
+that actually matters: it is what happens every time a user opens the plugin
+browser.
+
+The last two rows come from `plugins/host-vst3/tests/scan_isolation.rs`, which
+runs both passes over this machine's real modules and asserts the two find
+**identical** `(module, class id)` sets. Reproduce with:
+
+```text
+cargo run  -p mydaw-plugin-host-vst3 --example scan_report -- --cold
+cargo run  -p mydaw-plugin-host-vst3 --example scan_report
+cargo test -p mydaw-plugin-host-vst3 --test scan_isolation -- --nocapture
+```
+
+### CLAP got the same thing
+
+`clap_entry->init()` is a vendor's code in MYDAW's address space exactly as
+`DllMain` is. No CLAP plugin on this machine misbehaves — a statement about this
+machine's collection, not about the format — so CLAP's evidence is different in
+kind: `plugins/host-clap/tests/scan_isolation.rs` proves a child process reports
+byte-identical descriptors for the workspace's fixture bundle, and it runs in CI,
+which the VST3 comparison cannot. The two block lists and the two caches are
+separate files on purpose: forgetting a wedged VST3 plugin must not also forget
+everything learned about a CLAP collection.
+
+### What the tests actually prove
+
+The behaviours nobody wants to build as real binaries — a worker that exits
+non-zero, one that prints rubbish, one that never answers — are exercised in
+`crates/plugin-scan` with shell commands standing in for the child. The parent
+cannot tell the difference: it spawns a process, reads its stdout and watches its
+exit status either way. Each case asserts the same three things: the parent
+survives, the module lands on the block list, and the *next* pass does not start
+a child for it.
+
+### What is still not isolated
+
+Only *scanning*. Instantiating a plugin to play it still loads it into MYDAW,
+because that is what hosting a plugin means — an out-of-process **host** (a
+bridge process per plugin instance, audio over shared memory) is a different and
+much larger project, and no DAW gets it for free. The block list closes the loop
+that matters: a module that cannot survive being read is never reached by the
+load path either.
 
 ---
 
@@ -330,10 +507,12 @@ Ordered by how much they would cost a user.
 3. **Component state only.** `save_state` writes `IComponent::getState`; a
    complete VST3 preset also carries `IEditController::getState` (editor-only
    settings such as a scroll position).
-4. **In-process scanning.** The block list and the abort-on-hang make it usable;
-   a subprocess scanner makes it correct. `scan::scan_module_in_process` is
-   already the pure path-in/results-out function such a child would call, and
-   `examples/scan_report.rs` already drives it that way.
+4. ~~**In-process scanning.**~~ **Done** -- see
+   [Out-of-process scanning](#out-of-process-scanning). What remains of it: a
+   build with no worker executable falls back to opening modules in-process, and
+   that fallback still has the old failure mode. It is reachable only if `main`
+   never calls `run_worker_if_requested` *and* no dedicated worker was shipped
+   alongside it, which no MYDAW build does.
 5. **Modules are never unloaded** (see above). A user who uninstalls a plugin
    mid-session keeps its DLL mapped until restart.
 6. **Stereo only.** `Vst3BusLayout::is_supported` accepts stereo-in/stereo-out or
@@ -352,7 +531,7 @@ Ordered by how much they would cost a user.
 
 | capability | CLAP | VST3 | next step |
 | --- | --- | --- | --- |
-| scan + cache | yes | yes (+ block list) | share the block list with CLAP |
+| scan + cache | yes (+ block list) | yes (+ block list) | -- (shared: `mydaw-plugin-scan`) |
 | instrument on a track | yes | yes | — |
 | effect on the master insert | yes | yes | more insert slots (Phase 2 mixer) |
 | editor window | yes | yes | — |
@@ -360,7 +539,7 @@ Ordered by how much they would cost a user.
 | parameters / automation | no | no | one design, both hosts |
 | plugin-requested restart | recorded | recorded | act on it in the shell |
 | timers / main-thread callbacks | `clap.timer-support` | n/a (VST3 has no equivalent) | — |
-| out-of-process scan | TODO | TODO (prototyped) | promote `scan_report --module` to `mydaw --scan` |
+| out-of-process scan | yes | yes | out-of-process *hosting* is a separate project |
 
 The two hosts are close enough that a shared `PluginHost` trait is now a
 mechanical refactor rather than a speculative abstraction — which is the outcome
@@ -370,6 +549,8 @@ that makes this spike worth having done second rather than first.
 
 ## Gates
 
+At the end of the spike:
+
 - `cargo test --workspace`: **817 passed, 0 failed** (baseline before this step:
   504).
 - `cargo clippy --workspace --all-targets -- -D warnings`: clean.
@@ -378,10 +559,19 @@ that makes this spike worth having done second rather than first.
 - Hardware tests (`--test hardware`, `--test hardware_gui`, `--test rt_alloc`):
   green on this machine, skip-if-absent elsewhere.
 
+After [out-of-process scanning](#out-of-process-scanning):
+
+- `cargo test --workspace`: **939 passed, 0 failed** (+122: `mydaw-plugin-scan`'s
+  30, and 11 across the two hosts' `scan_isolation` tests, the rest from the
+  crate's own unit coverage of the cache, block list and protocol).
+- `cargo clippy --workspace --all-targets -- -D warnings`: clean.
+- `cargo fmt --all --check`: clean.
+- No `ui/` changes.
+
 Run the hardware set with:
 
 ```text
-cargo run  -p mydaw-plugin-host-vst3 --example scan_report          # populate the block list once
+cargo run  -p mydaw-plugin-host-vst3 --example scan_report          # populate the block list and cache once
 cargo test -p mydaw-plugin-host-vst3 --test hardware     -- --nocapture --test-threads=1
 cargo test -p mydaw-plugin-host-vst3 --test hardware_gui -- --nocapture --test-threads=1
 cargo test -p mydaw-plugin-host-vst3 --test rt_alloc     -- --nocapture --test-threads=1
