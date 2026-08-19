@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use mydaw_app::{boot_kernel, capture_root, capture_to_disk, AppState, Source};
 use mydaw_plugin_debug_tap::{align_grid, detect_onsets, GridReport, Onset, OnsetConfig};
-use mydaw_plugin_sequencer::{step_len_samples, Pattern, PatternRow, Step, STEPS};
+use mydaw_plugin_sequencer::{step_len_samples, Pattern, PatternRow, Step, DEFAULT_STEPS};
 
 /// Tempo the beat is programmed at. The engine's default, and a dance tempo.
 const BPM: f64 = 130.0;
@@ -63,7 +63,7 @@ fn demo_beat() -> Pattern {
     pattern.rows[0] = PatternRow::empty(pattern.rows[0].key).with_steps(&[0, 4, 8, 12]);
     pattern.rows[1] = PatternRow::empty(pattern.rows[1].key).with_steps(&[4, 12]);
     let mut hats = PatternRow::empty(pattern.rows[2].key);
-    for step in (0..STEPS).step_by(2) {
+    for step in (0..DEFAULT_STEPS).step_by(2) {
         hats.steps[step] = Step::on();
     }
     pattern.rows[2] = hats;
@@ -114,7 +114,7 @@ fn a_programmed_beat_comes_out_of_the_device_on_the_tempo_grid() {
 
     let sample_rate = f64::from(info.sample_rate);
     let step_len = step_len_samples(sample_rate, BPM);
-    let bar_seconds = step_len * STEPS as f64 / sample_rate;
+    let bar_seconds = step_len * DEFAULT_STEPS as f64 / sample_rate;
     eprintln!(
         "tempo: {BPM} BPM | step {step_len:.3} samples ({:.3} ms) | bar {bar_seconds:.4} s",
         step_len / sample_rate * 1_000.0

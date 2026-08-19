@@ -83,8 +83,8 @@ pub use debug_capture::{
     REPORT_END,
 };
 pub use dto::{
-    ClapPluginInfoDto, MeterFrameDto, PatternDto, PatternRowDto, SequencerStateDto, StepDto,
-    TrackMeterDto, Vst3PluginInfoDto,
+    ClapPluginInfoDto, MelodicNoteDto, MeterFrameDto, PatternDto, PatternRowDto, SequencerStateDto,
+    StepDto, TrackMeterDto, Vst3PluginInfoDto,
 };
 pub use graph::{engine_graph, source_chain, track_chain, TransportGate};
 pub use insert::{insert_slot, InsertHandle, InsertSlot};

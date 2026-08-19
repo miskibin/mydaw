@@ -26,12 +26,36 @@
 //! which is why a note that started on step 15 and ends after the wrap needs no
 //! special case at all.
 //!
+//! # The two clocks are one clock
+//! A melodic note is positioned in **ticks** ([`PPQ`](crate::PPQ) per quarter)
+//! rather than in steps, and its sample position is
+//! [`tick_boundary`]:
+//!
+//! ```text
+//!   tick_boundary(t) = round((t / TICKS_PER_STEP) * step_len)
+//! ```
+//!
+//! Written that way, and not as `round(t * tick_len)`, for one reason: when `t`
+//! is a whole number of steps, `t / 240` is *exactly* the integer step index
+//! (an exact multiple of 240 divided by 240 is exact in IEEE 754), so the
+//! expression becomes `round(n * step_len)` -- character for character the drum
+//! grid's own [`step_boundary`]. A note written on the grid therefore lands on
+//! the very same sample as a drum hit on that step, not within a sample of it.
+//! The equality is asserted over ten thousand steps at four tempos.
+//!
+//! Positions between the grid lines round to the nearest sample and are exact to
+//! within that half sample, from the absolute tick, for the same
+//! never-accumulate reason as above. Loop `k` of a pattern `L` steps long starts
+//! at tick `k * L * TICKS_PER_STEP`, so the loop points are step boundaries too
+//! and a wrap remains a non-event.
+//!
 //! # The pending note-off state machine
 //! A step's note-on is emitted at its boundary; its note-off is due
-//! [`GATE_FRACTION`] of a step later. That is usually inside the same block --
-//! but at a small block size, or a slow tempo, or when the note-off lands in the
-//! *next* bar, it is not. So a note-off that falls past the end of the block is
-//! parked in a fixed-size array and emitted by a later block:
+//! [`GATE_FRACTION`] of a step later. A melodic note's is due at its own
+//! `start + length`. Either is usually inside the same block -- but at a small
+//! block size, or a slow tempo, or when the note-off lands in the *next* bar, it
+//! is not. So a note-off that falls past the end of the block is parked in a
+//! fixed-size array and emitted by a later block:
 //!
 //! ```text
 //!   block k        |----------|                  on(step n) at +12
@@ -47,7 +71,10 @@
 //! - **Stop** flushes every parked note-off at frame 0 of the stopping block.
 //! - **Seek** does the same: the notes belong to a bar that is no longer under
 //!   the playhead.
-//! - The array is sized `MAX_ROWS * 2`, twice what a 50 % gate can produce.
+//! - The array is sized [`MAX_PENDING`]: twice what a 50 % gate can leave owed
+//!   across the drum rows, plus one slot for every melodic note there can be --
+//!   because a thousand whole notes starting together is a legal, if unmusical,
+//!   pattern, and "cannot happen" is not a bounds check.
 //!
 //! # Ordering at the same frame offset
 //! [`NoteEventBuffer`] is a stable sort, so the order events are *pushed* is the
@@ -57,14 +84,22 @@
 //! not be pre-empted by the grid; offs-before-ons because that turns a step that
 //! retriggers a still-sounding key into a retrigger rather than a stuck note.
 //!
+//! The drum rows are emitted before the melodic notes. Nothing depends on that
+//! order -- they address different keys in every pattern anyone will write, and
+//! the buffer sorts by offset regardless -- but it is fixed so that a capture is
+//! reproducible.
+//!
 //! # RT safety
 //! Every field is a fixed-size array or a scalar. `schedule` allocates nothing,
-//! locks nothing and calls nothing that can. `tests/rt_alloc.rs` measures it.
+//! locks nothing and calls nothing that can. The melodic path **binary-searches**
+//! the sorted note array for the first note due in the block rather than walking
+//! all thousand of them, so the per-block cost is `O(log n + emitted)`.
+//! `tests/rt_alloc.rs` measures the allocation claim with a counting allocator.
 
 use mydaw_rt_core::{NoteEvent, NoteEventBuffer};
 
 use crate::compiled::CompiledPattern;
-use crate::pattern::{MAX_ROWS, STEPS_PER_BEAT};
+use crate::pattern::{MAX_NOTES, MAX_ROWS, STEPS_PER_BEAT, TICKS_PER_STEP};
 
 /// Fraction of a step a scheduled note sounds for.
 ///
@@ -76,10 +111,12 @@ pub const GATE_FRACTION: f64 = 0.5;
 
 /// Parked note-offs the scheduler can hold at once.
 ///
-/// Two per row. A [`GATE_FRACTION`] of 0.5 can only ever leave one note per row
-/// pending, so this is a doubling of the worst case rather than a guess -- and
-/// it stays correct if the gate is ever raised towards a full step.
-pub const MAX_PENDING: usize = MAX_ROWS * 2;
+/// Two per drum row -- a [`GATE_FRACTION`] of 0.5 can only ever leave one note
+/// per row pending, so that is a doubling of the worst case rather than a guess,
+/// and it stays correct if the gate is ever raised towards a full step -- plus
+/// one per melodic note, because a note may be as long as the whole pattern and
+/// a thousand of them may sound at once.
+pub const MAX_PENDING: usize = MAX_ROWS * 2 + MAX_NOTES;
 
 /// Samples per step at `sample_rate` and `bpm`.
 ///
@@ -95,6 +132,16 @@ pub fn step_len_samples(sample_rate: f64, bpm: f64) -> f64 {
 /// Rounded to the nearest sample, from the absolute index. See the module docs.
 pub fn step_boundary(index: u64, step_len: f64) -> u64 {
     (index as f64 * step_len).round() as u64
+}
+
+/// Absolute sample position of `tick`, counted from tick 0.
+///
+/// `step_len` rather than a tick length, and the division before the
+/// multiplication rather than after, so that a tick on a step boundary reduces
+/// to [`step_boundary`] *exactly* -- see the module docs. The tests assert the
+/// identity rather than trusting the argument.
+pub fn tick_boundary(tick: u64, step_len: f64) -> u64 {
+    ((tick as f64 / TICKS_PER_STEP as f64) * step_len).round() as u64
 }
 
 /// One block's worth of transport, as the scheduler needs it.
@@ -247,12 +294,19 @@ impl Scheduler {
         let Some(pattern) = pattern else {
             return dropped;
         };
-        if pattern.row_count() == 0 || pattern.steps() == 0 {
+        // A pattern of no length has no loop to be at a position within, which
+        // both halves below would divide by.
+        if pattern.steps() == 0 {
             return dropped;
         }
 
-        // --- step boundaries falling inside [start, end) ---------------------
         let step_len = step_len_samples(window.sample_rate, window.bpm);
+
+        // --- step boundaries falling inside [start, end) ---------------------
+        //
+        // Skipped entirely when there are no drum rows -- a piano-roll-only
+        // pattern is an ordinary pattern, and the melodic half below is not
+        // behind this gate.
         let gate = (step_len * GATE_FRACTION).round().max(1.0) as u64;
         let steps = pattern.steps() as u64;
 
@@ -260,7 +314,7 @@ impl Scheduler {
         // `floor(start / step_len)` can land just *below* `start` and the one
         // before it cannot. Boundaries below `start` are skipped, not emitted.
         let mut index = ((start as f64 / step_len).floor() as u64).saturating_sub(1);
-        loop {
+        while pattern.row_count() > 0 {
             let boundary = step_boundary(index, step_len);
             if boundary >= end {
                 break;
@@ -303,6 +357,106 @@ impl Scheduler {
             index += 1;
         }
 
+        // --- melodic notes falling inside [start, end) -----------------------
+        dropped += self.schedule_notes(pattern, start, end, step_len, out);
+
+        dropped
+    }
+
+    /// Emit the melodic notes due in `[start, end)`.
+    ///
+    /// Split out of [`schedule`](Self::schedule) because it is a different loop
+    /// over a different structure and inlining the two would produce a function
+    /// nobody could read. The shape is:
+    ///
+    /// ```text
+    ///   for each loop iteration overlapping the block:
+    ///       binary-search the sorted notes for the first one at or after `start`
+    ///       walk forward, emitting, until one lands at or after `end`
+    /// ```
+    ///
+    /// The search is what keeps a thousand-note pattern from costing a thousand
+    /// multiplications per block; the early break is what keeps it from costing
+    /// them again on the way out.
+    ///
+    /// # RT safety
+    /// No allocation and no unbounded loop: `partition_point` is a binary search
+    /// over a slice, and the outer loop advances by at least
+    /// `16 * step_len >= 16` samples per iteration.
+    fn schedule_notes(
+        &mut self,
+        pattern: &CompiledPattern,
+        start: u64,
+        end: u64,
+        step_len: f64,
+        out: &mut NoteEventBuffer,
+    ) -> usize {
+        let notes = pattern.notes();
+        if notes.is_empty() {
+            return 0;
+        }
+        let loop_ticks = pattern.steps() as u64 * u64::from(TICKS_PER_STEP);
+        // A pattern of no length would make the loop below never advance.
+        let loop_len = loop_ticks as f64 / f64::from(TICKS_PER_STEP) * step_len;
+        if !loop_len.is_finite() || loop_len < 1.0 {
+            return 0;
+        }
+
+        let mut dropped = 0;
+        // From the *fractional* loop length, not the rounded one: dividing by a
+        // rounded loop length would drift into the wrong iteration after a few
+        // hundred bars, which is exactly the bug this whole module is written to
+        // avoid. One iteration early, because the rounding can put the boundary
+        // just below `start`.
+        let mut iteration = ((start as f64 / loop_len).floor() as u64).saturating_sub(1);
+        loop {
+            let base_tick = iteration * loop_ticks;
+            let loop_start = tick_boundary(base_tick, step_len);
+            if loop_start >= end {
+                break;
+            }
+
+            // The notes are sorted by start tick and `tick_boundary` is
+            // monotonic, so "is this note before the block?" is monotonic too --
+            // which is what makes a binary search correct here.
+            let first = notes.partition_point(|note| {
+                tick_boundary(base_tick + u64::from(note.start_ticks), step_len) < start
+            });
+            for note in &notes[first..] {
+                let at = tick_boundary(base_tick + u64::from(note.start_ticks), step_len);
+                if at >= end {
+                    break;
+                }
+                let offset = (at - start) as u32;
+                if !out.push(
+                    NoteEvent::note_on(offset, note.key, note.velocity).on_channel(note.channel),
+                ) {
+                    dropped += 1;
+                }
+
+                let off_at = tick_boundary(base_tick + note.end_ticks(), step_len);
+                // A zero-length note would put its own note-off at its note-on;
+                // `compile` clamps the length to 1 tick, but at a slow enough
+                // tempo one tick still rounds to zero samples, and a note-off
+                // *before* the note-on would sort ahead of it.
+                let off_at = off_at.max(at + 1);
+                if off_at < end {
+                    if !out.push(
+                        NoteEvent::note_off((off_at - start) as u32, note.key)
+                            .on_channel(note.channel),
+                    ) {
+                        dropped += 1;
+                    }
+                } else if !self.park(PendingOff {
+                    at: off_at,
+                    key: note.key,
+                    channel: note.channel,
+                }) {
+                    self.overflowed += 1;
+                }
+            }
+            iteration += 1;
+        }
         dropped
     }
 
@@ -380,7 +534,7 @@ impl Scheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pattern::{Pattern, PatternRow, STEPS};
+    use crate::pattern::{Pattern, PatternRow, DEFAULT_STEPS};
     use mydaw_rt_core::{NoteKind, DEFAULT_BPM};
 
     const SR: f64 = 48_000.0;
@@ -493,7 +647,7 @@ mod tests {
     #[test]
     fn a_stopped_transport_emits_nothing_however_full_the_pattern_is() {
         let mut scheduler = Scheduler::new();
-        let pattern = one_row(36, &(0..STEPS).collect::<Vec<_>>());
+        let pattern = one_row(36, &(0..DEFAULT_STEPS).collect::<Vec<_>>());
         let mut buffer = NoteEventBuffer::new(64);
         for block in 0..8 {
             buffer.clear();
@@ -515,25 +669,25 @@ mod tests {
         for sample_rate in [44_100.0_f64, 48_000.0] {
             for bpm in [60.0_f64, 130.0, 174.3, 999.0] {
                 let step_len = step_len_samples(sample_rate, bpm);
-                let expected: Vec<u64> = (0..STEPS as u64)
+                let expected: Vec<u64> = (0..DEFAULT_STEPS as u64)
                     .map(|n| step_boundary(n, step_len))
                     .collect();
-                let bar = step_len * STEPS as f64;
+                let bar = step_len * DEFAULT_STEPS as f64;
 
                 for frames in [32_usize, 256, 441, 4_096] {
                     let mut scheduler = Scheduler::new();
-                    let pattern = one_row(36, &(0..STEPS).collect::<Vec<_>>());
+                    let pattern = one_row(36, &(0..DEFAULT_STEPS).collect::<Vec<_>>());
                     // Enough blocks to cover one whole bar, plus one.
                     let blocks = (bar / frames as f64).ceil() as usize + 1;
                     let events = run(&mut scheduler, &pattern, blocks, frames, bpm, sample_rate);
                     let got = onsets(&events);
                     assert!(
-                        got.len() >= STEPS,
+                        got.len() >= DEFAULT_STEPS,
                         "{sample_rate} Hz / {bpm} BPM / {frames} frames: only {} onsets",
                         got.len()
                     );
                     assert_eq!(
-                        &got[..STEPS],
+                        &got[..DEFAULT_STEPS],
                         &expected[..],
                         "{sample_rate} Hz / {bpm} BPM / {frames} frames"
                     );
@@ -581,7 +735,7 @@ mod tests {
         );
         // Step 0 of bar b is global step index b*16.
         for (bar, onset) in onsets.iter().enumerate() {
-            let expected = step_boundary(bar as u64 * STEPS as u64, step_len);
+            let expected = step_boundary(bar as u64 * DEFAULT_STEPS as u64, step_len);
             assert_eq!(
                 *onset, expected,
                 "bar {bar} drifted: {onset} instead of {expected}"
@@ -590,7 +744,7 @@ mod tests {
         // And the last one is still within half a sample of the ideal position,
         // which is the rounding and nothing else.
         let last = *onsets.last().unwrap();
-        let ideal = (onsets.len() - 1) as f64 * step_len * STEPS as f64;
+        let ideal = (onsets.len() - 1) as f64 * step_len * DEFAULT_STEPS as f64;
         assert!(
             (last as f64 - ideal).abs() <= 0.5,
             "after ten minutes the error is {} samples",
@@ -669,10 +823,10 @@ mod tests {
         // corrupted by. That is why this test asserts *ordinary* results either
         // side of a bar line rather than a special case.
         let mut scheduler = Scheduler::new();
-        let pattern = one_row(60, &[STEPS - 1]);
+        let pattern = one_row(60, &[DEFAULT_STEPS - 1]);
         let step_len = step_len_samples(SR, DEFAULT_BPM);
         let gate = (step_len * GATE_FRACTION).round() as u64;
-        let bar = step_boundary(STEPS as u64, step_len);
+        let bar = step_boundary(DEFAULT_STEPS as u64, step_len);
         let frames = 2_048;
 
         // Long enough to reach step 15 of the second bar (~172 000 samples).
@@ -698,12 +852,12 @@ mod tests {
 
         assert_eq!(
             ons[0].1,
-            step_boundary(STEPS as u64 - 1, step_len),
+            step_boundary(DEFAULT_STEPS as u64 - 1, step_len),
             "step 15 of bar 0"
         );
         assert_eq!(
             ons[1].1,
-            step_boundary(2 * STEPS as u64 - 1, step_len),
+            step_boundary(2 * DEFAULT_STEPS as u64 - 1, step_len),
             "step 15 of bar 1: the loop is a modulo, not a reset"
         );
         assert!(
@@ -774,7 +928,7 @@ mod tests {
     #[test]
     fn seeking_releases_owed_notes_and_resumes_on_the_grid_at_the_new_position() {
         let mut scheduler = Scheduler::new();
-        let pattern = one_row(60, &(0..STEPS).collect::<Vec<_>>());
+        let pattern = one_row(60, &(0..DEFAULT_STEPS).collect::<Vec<_>>());
         let step_len = step_len_samples(SR, DEFAULT_BPM);
         let mut buffer = NoteEventBuffer::new(64);
 
@@ -949,7 +1103,7 @@ mod tests {
         let rate = 44_100.0;
         let step_len = step_len_samples(rate, bpm);
         let mut scheduler = Scheduler::new();
-        let pattern = one_row(36, &(0..STEPS).collect::<Vec<_>>());
+        let pattern = one_row(36, &(0..DEFAULT_STEPS).collect::<Vec<_>>());
         let events = run(&mut scheduler, &pattern, 4, 4_096, bpm, rate);
         let got = onsets(&events);
         for (index, onset) in got.iter().enumerate() {
@@ -959,7 +1113,10 @@ mod tests {
                 "step {index}"
             );
         }
-        assert!(got.len() > STEPS, "more than a bar fits in four blocks");
+        assert!(
+            got.len() > DEFAULT_STEPS,
+            "more than a bar fits in four blocks"
+        );
     }
 
     #[test]
@@ -1009,7 +1166,7 @@ mod tests {
         // (carrying a phase across the change) is what a tempo *ramp* needs, and
         // there is no automation yet to ramp with.
         let mut scheduler = Scheduler::new();
-        let pattern = one_row(36, &(0..STEPS).collect::<Vec<_>>());
+        let pattern = one_row(36, &(0..DEFAULT_STEPS).collect::<Vec<_>>());
         let mut buffer = NoteEventBuffer::new(64);
 
         let fast = step_len_samples(SR, 260.0);
@@ -1057,5 +1214,587 @@ mod tests {
             key: 36,
             channel: 0
         }));
+    }
+
+    // ----------------------------------------------------------- piano roll
+
+    use crate::pattern::{MelodicNote, MAX_NOTES, PATTERN_LENGTHS, TICKS_PER_STEP};
+
+    /// A pattern with no drum rows and the given notes, `length` steps long.
+    fn notes_only(length: u8, notes: &[MelodicNote]) -> CompiledPattern {
+        Pattern {
+            rows: Vec::new(),
+            length_steps: length,
+            notes: notes.to_vec(),
+        }
+        .compile()
+    }
+
+    /// `(absolute sample, key)` of the note-ons in `events`.
+    fn on_keys(events: &[(u64, NoteEvent)]) -> Vec<(u64, u8)> {
+        events
+            .iter()
+            .filter(|(_, e)| e.kind.is_note_on())
+            .map(|(at, e)| (*at, e.kind.key().unwrap()))
+            .collect()
+    }
+
+    /// `(absolute sample, key)` of the note-offs in `events`.
+    fn off_keys(events: &[(u64, NoteEvent)]) -> Vec<(u64, u8)> {
+        events
+            .iter()
+            .filter(|(_, e)| matches!(e.kind, NoteKind::NoteOff { .. }))
+            .map(|(at, e)| (*at, e.kind.key().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn a_tick_on_a_step_line_is_the_very_same_sample_as_that_step() {
+        // The claim the whole tick representation rests on. Not "within a
+        // sample": *equal*, for ten thousand steps -- which is four hundred bars
+        // -- at every rate and tempo the engine allows. If this ever fails, a
+        // melody written on the grid will flam against the drums, quietly.
+        for sample_rate in [44_100.0_f64, 48_000.0, 96_000.0] {
+            for bpm in [20.0_f64, 60.0, 130.0, 174.3, 999.0] {
+                let step_len = step_len_samples(sample_rate, bpm);
+                for step in 0..10_000_u64 {
+                    assert_eq!(
+                        tick_boundary(step * u64::from(TICKS_PER_STEP), step_len),
+                        step_boundary(step, step_len),
+                        "{sample_rate} Hz / {bpm} BPM, step {step}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_tick_between_the_grid_lines_is_within_half_a_sample_of_the_ideal() {
+        // Off-grid positions get no exactness guarantee, only the rounding one.
+        // A triplet eighth (320 ticks) and a 64th (60) are the cases that matter,
+        // because they are the ones a step grid cannot express at all.
+        let step_len = step_len_samples(48_000.0, 174.3);
+        for tick in [60_u64, 320, 640, 1_500, 3_839, 15_359, 100_000] {
+            let ideal = tick as f64 / f64::from(TICKS_PER_STEP) * step_len;
+            let got = tick_boundary(tick, step_len) as f64;
+            assert!(
+                (got - ideal).abs() <= 0.5,
+                "tick {tick}: {got} is {} samples from {ideal}",
+                got - ideal
+            );
+        }
+    }
+
+    #[test]
+    fn a_melodic_note_emits_an_on_and_an_off_at_the_samples_its_ticks_name() {
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        // C4 on the second beat, a quarter note long.
+        let pattern = notes_only(16, &[MelodicNote::new(60, 1, 960, 960).at_velocity(0.5)]);
+
+        let mut scheduler = Scheduler::new();
+        // Long enough to reach tick 1920, which is 44 308 samples in.
+        let events = run(&mut scheduler, &pattern, 128, 512, DEFAULT_BPM, SR);
+
+        let ons = on_keys(&events);
+        let offs = off_keys(&events);
+        // Tick 960 is step 4; tick 1920 is step 8.
+        assert_eq!(ons[0], (step_boundary(4, step_len), 60));
+        assert_eq!(offs[0], (step_boundary(8, step_len), 60));
+
+        let on_event = events.iter().find(|(_, e)| e.kind.is_note_on()).unwrap().1;
+        assert_eq!(
+            on_event.kind,
+            NoteKind::NoteOn {
+                key: 60,
+                velocity: 0.5
+            }
+        );
+        assert_eq!(on_event.channel, 1, "the note's channel is its track");
+        assert_eq!(scheduler.pending(), 0, "nothing left owed");
+    }
+
+    #[test]
+    fn a_note_written_on_the_grid_sounds_with_the_drum_hit_on_that_step() {
+        // The property a musician would notice if it were false. Kick on step 4,
+        // bass note on tick 960 -- the same instant -- and the two note-ons must
+        // share a frame offset, not merely a block.
+        let mut pattern = Pattern::default();
+        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 4, 8, 12]);
+        pattern.notes = vec![
+            MelodicNote::new(36, 1, 0, 240),
+            MelodicNote::new(43, 1, 960, 240),
+            MelodicNote::new(48, 1, 1_920, 240),
+            MelodicNote::new(43, 1, 2_880, 240),
+        ];
+        let compiled = pattern.compile();
+
+        let mut scheduler = Scheduler::new();
+        // One whole bar is 88 615 samples at 130 BPM.
+        let events = run(&mut scheduler, &compiled, 200, 512, DEFAULT_BPM, SR);
+
+        // The run is a little longer than a bar, so the loop has begun again;
+        // the first four of each are the bar under test.
+        let drum_hits: Vec<u64> = events
+            .iter()
+            .filter(|(_, e)| e.kind.is_note_on() && e.kind.key() == Some(36) && e.channel == 0)
+            .map(|(at, _)| *at)
+            .take(4)
+            .collect();
+        let melody: Vec<u64> = events
+            .iter()
+            .filter(|(_, e)| e.kind.is_note_on() && e.channel == 1)
+            .map(|(at, _)| *at)
+            .take(4)
+            .collect();
+        assert_eq!(drum_hits.len(), 4);
+        assert_eq!(
+            drum_hits, melody,
+            "the bass line and the kick must land on identical samples"
+        );
+    }
+
+    #[test]
+    fn the_notes_loop_with_the_pattern_however_long_it_is() {
+        for length in PATTERN_LENGTHS {
+            let step_len = step_len_samples(SR, DEFAULT_BPM);
+            // One note on the very first tick, so its onsets are the loop points.
+            let pattern = notes_only(length, &[MelodicNote::new(60, 0, 0, 240)]);
+            let bar = step_boundary(u64::from(length), step_len);
+
+            let mut scheduler = Scheduler::new();
+            let blocks = (bar as usize * 3) / 2_048 + 2;
+            let events = run(&mut scheduler, &pattern, blocks, 2_048, DEFAULT_BPM, SR);
+            let ons = on_keys(&events);
+            assert!(ons.len() >= 3, "{length} steps: only {} onsets", ons.len());
+            for (index, (at, _)) in ons.iter().take(3).enumerate() {
+                assert_eq!(
+                    *at,
+                    step_boundary(index as u64 * u64::from(length), step_len),
+                    "{length} steps, loop {index}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_note_ending_on_the_bar_line_has_its_off_parked_across_the_wrap() {
+        // The melodic counterpart of the drum test above, and the case the spec
+        // calls out: a note that starts near the end of the loop and whose
+        // note-off is due *after* the pattern has wrapped. There is no phase to
+        // reset, so the claim is that nothing special happens -- the off arrives
+        // at the loop point, several blocks after the on, and the next time round
+        // the note starts again.
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        let pattern = notes_only(
+            16,
+            &[MelodicNote::new(72, 0, 15 * 240, 240)], // the last step, filled
+        );
+        let bar = step_boundary(16, step_len);
+        let frames = 512;
+
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        let mut ons: Vec<(usize, u64)> = Vec::new();
+        let mut offs: Vec<(usize, u64)> = Vec::new();
+        // Two whole bars, so the second time round is really reached.
+        for block in 0..350 {
+            let start = (block * frames) as u64;
+            buffer.clear();
+            scheduler.schedule(
+                Some(&pattern),
+                &window(start, frames, DEFAULT_BPM, true),
+                &mut buffer,
+            );
+            for event in buffer.as_slice() {
+                let at = start + u64::from(event.frame_offset);
+                match event.kind {
+                    NoteKind::NoteOff { .. } => offs.push((block, at)),
+                    _ => ons.push((block, at)),
+                }
+            }
+        }
+
+        assert_eq!(ons[0].1, step_boundary(15, step_len), "step 15 of bar 0");
+        assert_eq!(
+            offs[0].1, bar,
+            "the note-off is the first sample of the next time round"
+        );
+        assert!(
+            offs[0].0 > ons[0].0,
+            "the off was parked across at least one block boundary \
+             (on in block {}, off in block {})",
+            ons[0].0,
+            offs[0].0
+        );
+        assert_eq!(ons[1].1, step_boundary(31, step_len), "step 15 of bar 1");
+        assert_eq!(offs[1].1, step_boundary(32, step_len));
+        assert_eq!(scheduler.pending(), 0, "everything owed was paid");
+    }
+
+    #[test]
+    fn a_chord_is_three_note_ons_at_one_offset_and_three_offs_at_another() {
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        let pattern = notes_only(
+            16,
+            &[
+                MelodicNote::new(60, 2, 0, 480),
+                MelodicNote::new(64, 2, 0, 480),
+                MelodicNote::new(67, 2, 0, 480),
+            ],
+        );
+
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        // One block long enough to hold the whole chord: the note-off is 11 077
+        // samples in, and parking it would prove nothing about ordering.
+        scheduler.schedule(
+            Some(&pattern),
+            &window(0, 16_384, DEFAULT_BPM, true),
+            &mut buffer,
+        );
+
+        let ons: Vec<&NoteEvent> = buffer
+            .as_slice()
+            .iter()
+            .filter(|e| e.kind.is_note_on())
+            .collect();
+        assert_eq!(ons.len(), 3, "a triad is three notes, not one");
+        assert!(ons.iter().all(|e| e.frame_offset == 0));
+        let mut keys: Vec<u8> = ons.iter().filter_map(|e| e.kind.key()).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, vec![60, 64, 67]);
+
+        let offs: Vec<&NoteEvent> = buffer
+            .as_slice()
+            .iter()
+            .filter(|e| matches!(e.kind, NoteKind::NoteOff { .. }))
+            .collect();
+        assert_eq!(offs.len(), 3);
+        let expected_off = step_boundary(2, step_len) as u32;
+        assert!(offs.iter().all(|e| e.frame_offset == expected_off));
+    }
+
+    #[test]
+    fn stopping_releases_the_melodic_notes_the_scheduler_still_owes() {
+        // A chord of long notes: every one of them is owed a note-off, and Stop
+        // is the moment they would otherwise be left sounding for ever.
+        let pattern = notes_only(
+            16,
+            &[
+                MelodicNote::new(60, 1, 0, 3_840),
+                MelodicNote::new(64, 1, 0, 3_840),
+                MelodicNote::new(67, 1, 0, 3_840),
+            ],
+        );
+
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        scheduler.schedule(
+            Some(&pattern),
+            &window(0, 64, DEFAULT_BPM, true),
+            &mut buffer,
+        );
+        assert_eq!(buffer.len(), 3, "three note-ons");
+        assert_eq!(scheduler.pending(), 3, "three note-offs owed");
+
+        buffer.clear();
+        scheduler.schedule(
+            Some(&pattern),
+            &window(64, 64, DEFAULT_BPM, false),
+            &mut buffer,
+        );
+        assert_eq!(buffer.len(), 3, "three note-offs");
+        assert!(buffer.as_slice().iter().all(|e| e.frame_offset == 0));
+        assert!(buffer
+            .as_slice()
+            .iter()
+            .all(|e| matches!(e.kind, NoteKind::NoteOff { .. }) && e.channel == 1));
+        assert_eq!(scheduler.pending(), 0, "nothing may stay stuck");
+    }
+
+    #[test]
+    fn seeking_releases_owed_melodic_notes_and_resumes_where_it_landed() {
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        let pattern = notes_only(
+            16,
+            &[
+                MelodicNote::new(60, 0, 0, 3_840),
+                MelodicNote::new(72, 0, 1_920, 240),
+            ],
+        );
+
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        scheduler.schedule(
+            Some(&pattern),
+            &window(0, 64, DEFAULT_BPM, true),
+            &mut buffer,
+        );
+        assert_eq!(scheduler.pending(), 1, "the whole note is owed an off");
+
+        // Jump to the tick the second note starts on, in the third loop.
+        let target = tick_boundary(2 * 3_840 + 1_920, step_len);
+        buffer.clear();
+        scheduler.schedule(
+            Some(&pattern),
+            &window(target, 64, DEFAULT_BPM, true),
+            &mut buffer,
+        );
+
+        let events = buffer.as_slice();
+        assert!(
+            matches!(events[0].kind, NoteKind::NoteOff { key: 60 }) && events[0].frame_offset == 0,
+            "the pre-seek note is released first: {events:?}"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind.key() == Some(72) && e.kind.is_note_on() && e.frame_offset == 0),
+            "the note at the seek target must fire: {events:?}"
+        );
+    }
+
+    #[test]
+    fn drums_notes_and_live_input_merge_into_one_ordered_stream() {
+        // The whole point of one scheduler rather than two: at a shared offset
+        // the order is live input, then the grid, then the piano roll, and the
+        // buffer is sorted by offset throughout.
+        let mut pattern = Pattern::default();
+        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 4]);
+        pattern.notes = vec![
+            MelodicNote::new(60, 1, 0, 240),
+            MelodicNote::new(64, 1, 120, 240),
+        ];
+        let compiled = pattern.compile();
+
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        // The engine drains live input first; here, by hand.
+        buffer.push(NoteEvent::note_on(0, 69, 0.5).on_channel(3));
+        scheduler.schedule(
+            Some(&compiled),
+            &window(0, 4_096, DEFAULT_BPM, true),
+            &mut buffer,
+        );
+
+        assert!(
+            buffer.is_sorted(),
+            "the merged stream must be in time order"
+        );
+        let at_zero: Vec<(u8, u8)> = buffer
+            .as_slice()
+            .iter()
+            .filter(|e| e.frame_offset == 0 && e.kind.is_note_on())
+            .map(|e| (e.kind.key().unwrap(), e.channel))
+            .collect();
+        assert_eq!(
+            at_zero,
+            vec![(69, 3), (36, 0), (60, 1)],
+            "live input, then the grid, then the roll"
+        );
+    }
+
+    #[test]
+    fn a_thousand_notes_are_found_by_search_rather_than_by_walking_them_all() {
+        // The binary search is only correct because the compiled notes are
+        // sorted. This fills the array to the brim with notes one tick apart and
+        // asks for a block in the middle of it: the right ones, and only the
+        // right ones, have to come out.
+        let notes: Vec<MelodicNote> = (0..MAX_NOTES)
+            .map(|i| MelodicNote::new(36 + (i % 60) as u8, 0, i as u32 * 15, 15))
+            .collect();
+        let pattern = notes_only(64, &notes);
+        assert_eq!(pattern.note_count(), MAX_NOTES);
+
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        let mut scheduler = Scheduler::new();
+
+        // Walk the whole loop in blocks and collect every note-on: the set has
+        // to be exactly the thousand notes, in tick order.
+        let loop_samples = step_boundary(64, step_len);
+        let frames = 512;
+        let blocks = (loop_samples as usize / frames) + 2;
+        let mut buffer = NoteEventBuffer::new(4_096);
+        let mut ons: Vec<(u64, u8)> = Vec::new();
+        for block in 0..blocks {
+            let start = (block * frames) as u64;
+            buffer.clear();
+            assert_eq!(
+                scheduler.schedule(
+                    Some(&pattern),
+                    &window(start, frames, DEFAULT_BPM, true),
+                    &mut buffer
+                ),
+                0,
+                "nothing may be dropped"
+            );
+            for event in buffer.as_slice() {
+                if event.kind.is_note_on() {
+                    ons.push((
+                        start + u64::from(event.frame_offset),
+                        event.kind.key().unwrap(),
+                    ));
+                }
+            }
+        }
+
+        assert!(ons.len() >= MAX_NOTES, "only {} notes fired", ons.len());
+        for (index, (at, key)) in ons.iter().take(MAX_NOTES).enumerate() {
+            assert_eq!(
+                *at,
+                tick_boundary(index as u64 * 15, step_len),
+                "note {index} landed on the wrong sample"
+            );
+            assert_eq!(
+                *key,
+                36 + (index % 60) as u8,
+                "note {index} is the wrong key"
+            );
+        }
+        assert_eq!(scheduler.overflowed(), 0, "no note-off was ever lost");
+    }
+
+    #[test]
+    fn ten_minutes_of_melodic_playback_does_not_drift_by_a_single_sample() {
+        // The drum grid's drift test, for the tick clock. A note on the first
+        // tick of a four-bar loop, run for ten minutes at an awkward tempo and
+        // an awkward block size.
+        let bpm = 174.3;
+        let step_len = step_len_samples(SR, bpm);
+        let pattern = notes_only(64, &[MelodicNote::new(60, 0, 0, 240)]);
+
+        let frames = 441;
+        let blocks = ((SR * 600.0) as u64 / frames as u64) as usize;
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        let mut onsets = Vec::new();
+        for block in 0..blocks {
+            let start = (block * frames) as u64;
+            buffer.clear();
+            scheduler.schedule(
+                Some(&pattern),
+                &window(start, frames, bpm, true),
+                &mut buffer,
+            );
+            for event in buffer.as_slice() {
+                if event.kind.is_note_on() {
+                    onsets.push(start + u64::from(event.frame_offset));
+                }
+            }
+        }
+
+        // A four-bar loop at 174.3 BPM is 264 372 samples, so ten minutes is
+        // about a hundred of them.
+        assert!(
+            onsets.len() > 90,
+            "ten minutes should be ~100 loops, got {}",
+            onsets.len()
+        );
+        for (loop_index, onset) in onsets.iter().enumerate() {
+            assert_eq!(
+                *onset,
+                step_boundary(loop_index as u64 * 64, step_len),
+                "loop {loop_index} drifted"
+            );
+        }
+        let last = *onsets.last().unwrap();
+        let ideal = (onsets.len() - 1) as f64 * step_len * 64.0;
+        assert!(
+            (last as f64 - ideal).abs() <= 0.5,
+            "after ten minutes the error is {} samples",
+            last as f64 - ideal
+        );
+    }
+
+    #[test]
+    fn every_note_lands_on_its_tick_at_every_tempo_rate_and_block_size() {
+        // The melodic counterpart of the step-boundary sweep: how the blocks are
+        // cut must make no difference at all to where a note sounds.
+        let notes = [
+            MelodicNote::new(60, 0, 0, 60),
+            MelodicNote::new(62, 0, 320, 60),   // a triplet eighth
+            MelodicNote::new(64, 0, 960, 60),   // beat two
+            MelodicNote::new(65, 0, 1_501, 60), // deliberately off everything
+            MelodicNote::new(67, 0, 3_600, 60),
+        ];
+        let pattern = notes_only(16, &notes);
+
+        for sample_rate in [44_100.0_f64, 48_000.0] {
+            for bpm in [60.0_f64, 130.0, 174.3, 999.0] {
+                let step_len = step_len_samples(sample_rate, bpm);
+                let expected: Vec<u64> = notes
+                    .iter()
+                    .map(|n| tick_boundary(u64::from(n.start_ticks), step_len))
+                    .collect();
+                let loop_samples = step_boundary(16, step_len) as f64;
+
+                for frames in [32_usize, 256, 441, 4_096] {
+                    let mut scheduler = Scheduler::new();
+                    let blocks = (loop_samples / frames as f64).ceil() as usize + 1;
+                    let events = run(&mut scheduler, &pattern, blocks, frames, bpm, sample_rate);
+                    let got: Vec<u64> =
+                        on_keys(&events).iter().map(|(at, _)| *at).take(5).collect();
+                    assert_eq!(
+                        got, expected,
+                        "{sample_rate} Hz / {bpm} BPM / {frames} frames"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_pattern_with_notes_but_no_rows_still_plays_them() {
+        // `schedule` returns early when there are no drum rows; the piano roll
+        // must not be behind that gate.
+        let pattern = notes_only(16, &[MelodicNote::new(60, 0, 0, 240)]);
+        assert_eq!(pattern.row_count(), 0);
+
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        scheduler.schedule(
+            Some(&pattern),
+            &window(0, 512, DEFAULT_BPM, true),
+            &mut buffer,
+        );
+        assert_eq!(buffer.len(), 1, "the note-on: {:?}", buffer.as_slice());
+        assert!(buffer.as_slice()[0].kind.is_note_on());
+    }
+
+    #[test]
+    fn a_stopped_transport_emits_no_notes_either() {
+        let pattern = notes_only(16, &[MelodicNote::new(60, 0, 0, 240)]);
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        for block in 0..8 {
+            buffer.clear();
+            scheduler.schedule(
+                Some(&pattern),
+                &window(block * 512, 512, DEFAULT_BPM, false),
+                &mut buffer,
+            );
+            assert!(buffer.is_empty(), "block {block} emitted while stopped");
+        }
+    }
+
+    #[test]
+    fn a_note_off_never_precedes_its_own_note_on_however_short_the_note() {
+        // One tick at 20 BPM is 3.1 samples; at 999 BPM it is 0.06, which rounds
+        // to the same sample as the note-on. A note-off at or before its note-on
+        // would sort ahead of it and leave the voice sounding for ever.
+        for bpm in [20.0_f64, 130.0, 999.0] {
+            let pattern = notes_only(16, &[MelodicNote::new(60, 0, 0, 1)]);
+            let mut scheduler = Scheduler::new();
+            let mut buffer = NoteEventBuffer::new(64);
+            scheduler.schedule(Some(&pattern), &window(0, 512, bpm, true), &mut buffer);
+            let events = buffer.as_slice();
+            assert_eq!(events.len(), 2, "{bpm} BPM: {events:?}");
+            assert!(events[0].kind.is_note_on(), "{bpm} BPM: {events:?}");
+            assert!(
+                matches!(events[1].kind, NoteKind::NoteOff { .. })
+                    && events[1].frame_offset > events[0].frame_offset,
+                "{bpm} BPM: the off must be strictly after the on: {events:?}"
+            );
+        }
     }
 }

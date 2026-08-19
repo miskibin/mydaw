@@ -897,12 +897,30 @@ code {
   font-size: 12px;
 }
 
+/*
+ * The scroller. A one-bar pattern fits the dock; a four-bar one is 64 columns,
+ * which does not, and shrinking the cells to fit would make them unhittable
+ * long before the fourth bar. So the grid keeps a minimum column and the panel
+ * scrolls sideways -- every row scrolls together because they are all inside
+ * this one element.
+ */
+.sequencer__grid {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
 .sequencer__beats,
 .sequencer__row {
   display: grid;
-  grid-template-columns: 42px repeat(16, 1fr);
+  /* `--steps` is set from the pattern's length by `SequencerPanel`. */
+  grid-template-columns: 42px repeat(var(--steps, 16), minmax(14px, 1fr));
   gap: 2px;
   align-items: center;
+  min-width: min-content;
 }
 
 .sequencer__row-label {
@@ -1441,4 +1459,159 @@ code {
 .strip__toggle--remove:hover {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+/* ------------------------------------------------------------- piano roll */
+
+/*
+ * The roll fills the workspace: one toolbar, one canvas that takes everything
+ * left over, one status line. The canvas is sized by a ResizeObserver on its
+ * host rather than by CSS on itself, because a canvas has to be told its
+ * backing-store size in device pixels and `width: 100%` would only stretch it.
+ */
+.roll {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: var(--roll-bg);
+}
+
+.roll__empty {
+  padding: 24px;
+  color: var(--fg-2);
+  font-size: 12px;
+}
+
+.roll__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  padding: 0 10px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-2);
+}
+
+/* Which track a new note plays. The one piece of state in this panel that is
+   not the panel's own, so it is stated rather than implied. */
+.roll__target {
+  font-family: var(--font-mono);
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.roll__control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.roll__control select {
+  font: inherit;
+  font-size: 11px;
+  color: var(--fg-0);
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 1px 4px;
+}
+
+.roll__zoom {
+  display: flex;
+  gap: 2px;
+}
+
+.roll__zoom button,
+.roll__clear {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--fg-1);
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.roll__zoom button:hover:not(:disabled),
+.roll__clear:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+
+.roll__zoom button:disabled,
+.roll__clear:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.roll__spacer {
+  flex: 1;
+}
+
+.roll__count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.roll__canvas-host {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.roll__canvas {
+  display: block;
+  /* A crosshair, because the whole surface is a place to put a note. */
+  cursor: crosshair;
+  outline: none;
+}
+
+.roll__canvas:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.roll__footer {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--fg-2);
+}
+
+.roll__hint {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The workspace tabs are buttons now, not spans. */
+.workspace__tab {
+  font: inherit;
+  font-size: 11px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.workspace__tab:hover:not(.is-disabled) {
+  color: var(--fg-1);
+}
+
+.workspace__tab.is-disabled {
+  cursor: default;
 }

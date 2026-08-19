@@ -70,6 +70,12 @@ export function SequencerPanel(_props: PanelProps): JSX.Element {
       >
         {(pattern) => (
           <>
+            {/* The column count is the pattern's, not a constant: step 9 made a
+                pattern one, two or four bars long, and the grid follows. A
+                sixty-four-column grid is wider than the dock, so the whole thing
+                scrolls sideways rather than shrinking the cells past hitting
+                size. */}
+            <div class="sequencer__grid" style={{ '--steps': pattern().steps }}>
             <div class="sequencer__beats" aria-hidden="true">
               <span class="sequencer__row-label" />
               <Index each={Array.from({ length: pattern().steps })}>
@@ -120,6 +126,7 @@ export function SequencerPanel(_props: PanelProps): JSX.Element {
                 </div>
               )}
             </Index>
+            </div>
 
             <div class="sequencer__footer">
               <span class="sequencer__hint">Click to place · Shift-click to accent</span>

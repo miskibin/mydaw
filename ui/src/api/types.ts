@@ -319,11 +319,40 @@ export interface PatternRowDto {
   steps: StepDto[];
 }
 
-/** The whole grid. Mirrors `PatternDto` in `app/src/dto.rs`. */
+/**
+ * One note of the piano roll. Mirrors `MelodicNoteDto` in `app/src/dto.rs`.
+ *
+ * `start` and `length` are in **ticks**: `PPQ` (960) to the quarter note, so a
+ * sixteenth is `TICKS_PER_STEP` (240). Ticks rather than steps because a note's
+ * whole point is that it need not sit on the grid -- a triplet, a nudge, a note
+ * held for three and a half beats. The units are not in the field names because
+ * this shape is written into the `.mydaw` file too, and `startTicks` beside
+ * `master_gain_db` would be a wart on the format for ever.
+ */
+export interface MelodicNoteDto {
+  /** MIDI key, `0..127`. 60 is middle C. */
+  key: number;
+  /** Note channel, i.e. the index of the track this note plays. */
+  channel: number;
+  /** Offset from the start of the pattern, in ticks. */
+  start: number;
+  /** How long the note sounds, in ticks. At least 1. */
+  length: number;
+  /** Normalised velocity, `0..1`. */
+  velocity: number;
+}
+
+/** The whole pattern. Mirrors `PatternDto` in `app/src/dto.rs`. */
 export interface PatternDto {
-  /** Steps per row. 16 today; a different number means this UI is stale. */
+  /** Steps in the loop: 16, 32 or 64. Every row has exactly this many entries. */
   steps: number;
   rows: PatternRowDto[];
+  /**
+   * The piano roll, in no particular order. Rust sorts on compile, so the index
+   * of a note here is stable under an edit -- which is what lets the roll
+   * address the note being dragged by its position in this array.
+   */
+  notes: MelodicNoteDto[];
 }
 
 /**

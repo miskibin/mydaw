@@ -1195,7 +1195,7 @@ mod tests {
         let mut pattern = Pattern::silent();
         for row in 0..mydaw_plugin_sequencer::MAX_ROWS {
             let mut pattern_row = PatternRow::empty(36 + row as u8);
-            for step in 0..mydaw_plugin_sequencer::STEPS {
+            for step in 0..mydaw_plugin_sequencer::DEFAULT_STEPS {
                 pattern_row.steps[step] = Step::accent();
             }
             pattern.rows.push(pattern_row);

@@ -14,7 +14,8 @@ use mydaw_ipc_bridge::{MeterFrame, TrackMeter};
 use mydaw_plugin_host_clap::ClapPluginInfo;
 use mydaw_plugin_host_vst3::Vst3PluginInfo;
 use mydaw_plugin_sequencer::{
-    row_label, Pattern, PatternError, PatternRow, Step, DEFAULT_STEP_VELOCITY, STEPS,
+    row_label, MelodicNote, Pattern, PatternError, PatternRow, Step, DEFAULT_STEP_VELOCITY,
+    MAX_STEPS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -212,35 +213,105 @@ pub struct PatternRowDto {
     pub channel: u8,
     #[serde(default)]
     pub label: String,
+    /// Exactly [`PatternDto::steps`] entries -- the cells that play, not the
+    /// engine's full-length array. See [`Pattern::try_from`].
     pub steps: Vec<StepDto>,
 }
 
-impl From<&PatternRow> for PatternRowDto {
-    fn from(row: &PatternRow) -> Self {
+impl PatternRowDto {
+    /// This row's first `length` cells, which are the ones the pattern plays.
+    pub fn of(row: &PatternRow, length: usize) -> Self {
         Self {
             key: row.key,
             channel: row.channel,
             label: row_label(row.key),
-            steps: row.steps.iter().map(StepDto::from).collect(),
+            steps: row
+                .steps
+                .iter()
+                .take(length.min(MAX_STEPS))
+                .map(StepDto::from)
+                .collect(),
         }
     }
 }
 
-/// The whole grid, as the webview reads and writes it.
+/// One note of the piano roll.
+///
+/// `start` and `length` are in **ticks** -- 960 to the quarter note, so a
+/// sixteenth is 240. Named without the unit in the field itself because this
+/// shape is written into the project file as well as sent to the webview, and
+/// `startTicks` in a file whose every other key is `snake_case` would be a wart
+/// on the format for the rest of its life. The units are documented here, in
+/// `ui/src/api/types.ts`, and in the spec.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MelodicNoteDto {
+    /// MIDI key, `0..=127`. 60 is middle C.
+    pub key: u8,
+    /// Note channel, i.e. the index of the track this note plays.
+    #[serde(default)]
+    pub channel: u8,
+    /// Offset from the start of the pattern, in ticks.
+    pub start: u32,
+    /// How long the note sounds, in ticks. At least 1.
+    pub length: u32,
+    #[serde(default = "default_velocity")]
+    pub velocity: f32,
+}
+
+impl From<&MelodicNote> for MelodicNoteDto {
+    fn from(note: &MelodicNote) -> Self {
+        Self {
+            key: note.key,
+            channel: note.channel,
+            start: note.start_ticks,
+            length: note.length_ticks,
+            velocity: note.velocity,
+        }
+    }
+}
+
+impl From<&MelodicNoteDto> for MelodicNote {
+    fn from(dto: &MelodicNoteDto) -> Self {
+        Self {
+            key: dto.key,
+            channel: dto.channel,
+            start_ticks: dto.start,
+            length_ticks: dto.length,
+            velocity: dto.velocity,
+        }
+    }
+}
+
+/// The whole pattern, as the webview reads and writes it.
+///
+/// Field order is the order it appears in a `.mydaw` file (see
+/// [`crate::project_file`]), so `notes` goes **after** `rows`: a version 1 file
+/// then reads as a version 2 one with the notes missing, which is exactly what
+/// the migration wants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PatternDto {
-    /// Steps per row. Always 16 today; sent so a UI built against a longer
-    /// pattern fails loudly rather than rendering half a bar.
+    /// Steps in the loop: 16, 32 or 64. Every row carries this many entries.
     pub steps: u8,
     pub rows: Vec<PatternRowDto>,
+    /// The piano roll. Absent in a version 1 project file, which is how a
+    /// migration to version 2 is a `#[serde(default)]` rather than a branch.
+    #[serde(default)]
+    pub notes: Vec<MelodicNoteDto>,
 }
 
 impl From<&Pattern> for PatternDto {
     fn from(pattern: &Pattern) -> Self {
+        let length = pattern.length_steps as usize;
         Self {
-            steps: pattern.steps,
-            rows: pattern.rows.iter().map(PatternRowDto::from).collect(),
+            steps: pattern.length_steps,
+            rows: pattern
+                .rows
+                .iter()
+                .map(|row| PatternRowDto::of(row, length))
+                .collect(),
+            notes: pattern.notes.iter().map(MelodicNoteDto::from).collect(),
         }
     }
 }
@@ -250,20 +321,32 @@ impl TryFrom<&PatternDto> for Pattern {
 
     /// Rebuild a [`Pattern`] from what the webview sent, then validate it.
     ///
-    /// A row whose `steps` array is not exactly [`STEPS`] long is rejected here
-    /// rather than being padded or truncated: a UI that sent 15 steps has a bug,
-    /// and quietly inventing the sixteenth would hide it behind a beat that is
-    /// almost right.
+    /// A row whose `steps` array is not exactly `dto.steps` long is rejected
+    /// here rather than being padded or truncated: a UI that sent 15 steps has a
+    /// bug, and quietly inventing the sixteenth would hide it behind a beat that
+    /// is almost right.
+    ///
+    /// Note that the *engine's* rows are always [`MAX_STEPS`] long whatever the
+    /// pattern's length -- the tail is kept so that shortening a pattern is not
+    /// destructive -- but the wire only ever carries the steps that play. A
+    /// round trip through the webview therefore loses the tail, which is the
+    /// right trade: the UI has no way to show it, and sending 64 cells to draw
+    /// 16 of them would be inviting a UI bug to become a data one.
     fn try_from(dto: &PatternDto) -> Result<Self, Self::Error> {
+        let length = dto.steps as usize;
+        if !Pattern::is_legal_length(length) {
+            return Err(PatternError::WrongStepCount(length));
+        }
         let mut rows = Vec::with_capacity(dto.rows.len());
         for (index, row) in dto.rows.iter().enumerate() {
-            if row.steps.len() != STEPS {
+            if row.steps.len() != length {
                 return Err(PatternError::WrongRowLength {
                     row: index,
                     got: row.steps.len(),
+                    expected: length,
                 });
             }
-            let mut steps = [Step::OFF; STEPS];
+            let mut steps = [Step::OFF; MAX_STEPS];
             for (step, source) in steps.iter_mut().zip(&row.steps) {
                 *step = Step {
                     on: source.on,
@@ -278,7 +361,8 @@ impl TryFrom<&PatternDto> for Pattern {
         }
         let pattern = Self {
             rows,
-            steps: dto.steps,
+            length_steps: dto.steps,
+            notes: dto.notes.iter().map(MelodicNote::from).collect(),
         };
         pattern.validate()?;
         Ok(pattern)
@@ -312,6 +396,7 @@ pub struct SequencerStateDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mydaw_plugin_sequencer::DEFAULT_STEPS;
 
     #[test]
     fn serialises_with_the_key_names_the_ui_reads() {
@@ -546,10 +631,15 @@ mod tests {
                     15
                 ],
             }],
+            notes: Vec::new(),
         };
         assert_eq!(
             Pattern::try_from(&dto),
-            Err(PatternError::WrongRowLength { row: 0, got: 15 })
+            Err(PatternError::WrongRowLength {
+                row: 0,
+                got: 15,
+                expected: 16
+            })
         );
     }
 
@@ -559,13 +649,14 @@ mod tests {
             key,
             channel: 0,
             label: String::new(),
-            steps: vec![StepDto { on: true, velocity }; STEPS],
+            steps: vec![StepDto { on: true, velocity }; DEFAULT_STEPS],
         };
 
         // Too many rows.
         let dto = PatternDto {
             steps: 16,
             rows: (0..17).map(|k| row(k as u8, 1.0)).collect(),
+            notes: Vec::new(),
         };
         assert!(matches!(
             Pattern::try_from(&dto),
@@ -576,6 +667,7 @@ mod tests {
         let dto = PatternDto {
             steps: 8,
             rows: vec![row(36, 1.0)],
+            notes: Vec::new(),
         };
         assert!(matches!(
             Pattern::try_from(&dto),
@@ -587,6 +679,7 @@ mod tests {
             let dto = PatternDto {
                 steps: 16,
                 rows: vec![row(36, bad)],
+                notes: Vec::new(),
             };
             assert!(
                 matches!(
@@ -601,6 +694,7 @@ mod tests {
         let dto = PatternDto {
             steps: 16,
             rows: vec![row(200, 1.0)],
+            notes: Vec::new(),
         };
         assert!(matches!(
             Pattern::try_from(&dto),

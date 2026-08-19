@@ -51,6 +51,26 @@
   --step-accent: #33c9a3;
   --step-playing: #e0b341;
 
+  /* Piano roll canvas (read by src/panels/piano-roll/draw.ts). Same family as
+     the step grid: a note and a step are the same idea at two resolutions, and
+     they should not be two different greens. */
+  --roll-bg: #0d1014;
+  --roll-row-white: #151a21;
+  --roll-row-black: #101419;
+  --roll-grid-step: #1b212a;
+  --roll-grid-beat: #28313d;
+  --roll-grid-bar: #3c4756;
+  --roll-note: #1f7a63;
+  --roll-note-accent: #33c9a3;
+  --roll-note-selected: #7ee6c4;
+  --roll-note-edge: #0b0d10;
+  --roll-playhead: #e0b341;
+  --roll-key-white: #c8cedb;
+  --roll-key-black: #20262f;
+  --roll-key-edge: #0b0d10;
+  --roll-label: #6f7887;
+  --roll-outside: #080a0d;
+
   /* Metrics. */
   --transport-height: 46px;
   --statusbar-height: 24px;

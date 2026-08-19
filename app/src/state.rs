@@ -1087,7 +1087,10 @@ mod tests {
                 "kernel-status",
                 "mixer",
                 "meters",
+                // The sequencer plugin owns the pattern, so it contributes both
+                // of the views onto it -- the grid and the roll.
                 "step-sequencer",
+                "piano-roll",
                 "clap-browser",
                 "vst3-browser"
             ],
@@ -1453,6 +1456,7 @@ mod tests {
                 label: String::new(),
                 steps: Vec::new(),
             }],
+            notes: Vec::new(),
         };
         let err = state.set_pattern_dto(&bad).unwrap_err();
         assert!(matches!(err, SequencerError::Pattern(_)), "{err:?}");

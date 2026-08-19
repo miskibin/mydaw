@@ -507,6 +507,7 @@ const MOCK_SNAPSHOT: UiSnapshot = {
     { id: 'mixer', title: 'Mixer', component: 'mixer' },
     { id: 'meters', title: 'Master Meters', component: 'meters' },
     { id: 'step-sequencer', title: 'Step Sequencer', component: 'step-sequencer' },
+    { id: 'piano-roll', title: 'Piano Roll', component: 'piano-roll' },
     { id: 'clap-browser', title: 'CLAP Plugins', component: 'clap-browser' },
     { id: 'vst3-browser', title: 'VST3 Plugins', component: 'vst3-browser' },
   ],
@@ -757,8 +758,17 @@ const MOCK_INTERNAL_SOURCES: readonly SourceDto[] = [
   },
 ];
 
-/** Steps per pattern. Mirrors `STEPS` in `plugins/sequencer/src/pattern.rs`. */
+/** Steps a fresh pattern has. Mirrors `DEFAULT_STEPS` in the sequencer. */
 const MOCK_STEPS = 16;
+
+/** The lengths a pattern may be. Mirrors `PATTERN_LENGTHS`. */
+const MOCK_PATTERN_LENGTHS = [16, 32, 64];
+
+/** Ticks per sixteenth-note step. Mirrors `TICKS_PER_STEP`. */
+const MOCK_TICKS_PER_STEP = 240;
+
+/** Most notes a pattern may hold. Mirrors `MAX_NOTES`. */
+const MOCK_MAX_NOTES = 1024;
 
 /** Tempo bounds and default, mirroring `crates/rt-core/src/transport.rs`. */
 const MOCK_DEFAULT_BPM = 130;
@@ -787,6 +797,7 @@ function mockPattern(): PatternDto {
       label,
       steps: Array.from({ length: MOCK_STEPS }, () => ({ on: false, velocity: 0.78 })),
     })),
+    notes: [],
   };
 }
 
@@ -1403,15 +1414,43 @@ class MockBackend implements Backend {
    * panel's error path can be exercised in a plain browser.
    */
   async setPattern(pattern: PatternDto): Promise<SequencerState> {
-    if (pattern.steps !== MOCK_STEPS) {
-      throw new Error(`a pattern must have exactly ${MOCK_STEPS} steps, got ${pattern.steps}`);
+    if (!MOCK_PATTERN_LENGTHS.includes(pattern.steps)) {
+      throw new Error(`a pattern must be 16, 32 or 64 steps long, got ${pattern.steps}`);
     }
     const bad = pattern.rows.findIndex(
       (row) =>
-        row.steps.length !== MOCK_STEPS ||
-        row.steps.some((step) => !Number.isFinite(step.velocity) || step.velocity < 0 || step.velocity > 1),
+        row.steps.length !== pattern.steps ||
+        row.steps.some(
+          (step) => !Number.isFinite(step.velocity) || step.velocity < 0 || step.velocity > 1,
+        ),
     );
     if (bad >= 0) throw new Error(`row ${bad} is not a valid pattern row`);
+
+    // The same bounds `Pattern::validate` applies, so the panel's error path can
+    // be exercised in a plain browser. A mock that accepted what Rust refuses
+    // would be a worse rehearsal than no mock at all.
+    if (pattern.notes.length > MOCK_MAX_NOTES) {
+      throw new Error(`a pattern may have at most ${MOCK_MAX_NOTES} notes, got ${pattern.notes.length}`);
+    }
+    const patternTicks = pattern.steps * MOCK_TICKS_PER_STEP;
+    const badNote = pattern.notes.findIndex(
+      (note) =>
+        !Number.isInteger(note.start) ||
+        !Number.isInteger(note.length) ||
+        note.start < 0 ||
+        note.length < 1 ||
+        note.start + note.length > patternTicks ||
+        note.key < 0 ||
+        note.key > 127 ||
+        note.channel < 0 ||
+        note.channel > 15 ||
+        !Number.isFinite(note.velocity) ||
+        note.velocity < 0 ||
+        note.velocity > 1,
+    );
+    if (badNote >= 0) {
+      throw new Error(`note ${badNote} does not fit a ${patternTicks}-tick pattern`);
+    }
 
     this.pattern = structuredClone(pattern);
     return this.getPattern();

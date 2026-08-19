@@ -16,8 +16,8 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use mydaw_plugin_sequencer::{
-    pattern_channel, CompiledPattern, Pattern, PatternRow, Scheduler, Step, TransportWindow,
-    MAX_ROWS, STEPS,
+    pattern_channel, CompiledPattern, MelodicNote, Pattern, PatternRow, Scheduler, Step,
+    TransportWindow, MAX_NOTES, MAX_ROWS, MAX_STEPS,
 };
 use mydaw_rt_core::basedrop::Collector;
 use mydaw_rt_core::{NoteEventBuffer, DEFAULT_BPM};
@@ -80,17 +80,35 @@ fn count_allocations(body: impl FnOnce()) -> u64 {
 /// The block sizes a real device asks for, plus the awkward ones it should not.
 const BLOCK_SIZES: [usize; 8] = [1, 32, 64, 127, 256, 441, 512, 4_096];
 
-/// Every row hitting every step: the densest pattern the grid can express, and
-/// therefore the most events one block can be asked to produce.
+/// Every row hitting every step of the longest pattern, plus the full thousand
+/// melodic notes: the densest pattern MYDAW can express, and therefore the most
+/// events one block can be asked to produce.
 fn dense_pattern() -> CompiledPattern {
     let mut pattern = Pattern::silent();
+    pattern.length_steps = MAX_STEPS as u8;
     for row in 0..MAX_ROWS {
         let mut pattern_row = PatternRow::empty(36 + row as u8);
-        for step in 0..STEPS {
+        for step in 0..MAX_STEPS {
             pattern_row.steps[step] = Step::accent();
         }
         pattern.rows.push(pattern_row);
     }
+    // Spread across the four bars, several to a tick position, so the
+    // scheduler's binary search has ties to get right and its pending array is
+    // put under real pressure.
+    let pattern_ticks = pattern.ticks();
+    for index in 0..MAX_NOTES {
+        let start = (index as u32 * 15) % pattern_ticks;
+        pattern.notes.push(MelodicNote::new(
+            36 + (index % 60) as u8,
+            (index % 8) as u8,
+            start,
+            (pattern_ticks - start).clamp(1, 480),
+        ));
+    }
+    pattern
+        .validate()
+        .expect("the densest legal pattern is legal");
     pattern.compile()
 }
 
@@ -229,7 +247,7 @@ fn swapping_the_pattern_on_the_audio_thread_neither_allocates_nor_frees() {
     let sparse = Pattern::default().compile();
 
     // Installed off the "audio thread" -- that is where the allocation belongs.
-    handle.install(dense).unwrap();
+    handle.install(dense.clone()).unwrap();
     handle.install(sparse).unwrap();
     handle.install(dense).unwrap();
 

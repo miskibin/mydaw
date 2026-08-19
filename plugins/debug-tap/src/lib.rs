@@ -65,7 +65,7 @@ pub use analysis::{
 pub use capture::{format_db, Capture, CaptureError, DebugTapService, MAX_CAPTURE_SECONDS};
 pub use error::CaptureIoError;
 pub use onset::{
-    align_grid, detect_onsets, grid_report, GridDeviation, GridReport, Onset, OnsetConfig,
+    align_grid, detect_onsets, grid_report, Band, GridDeviation, GridReport, Onset, OnsetConfig,
 };
 pub use render::{axes_sidecar_path, RenderedPng, PNG_HEIGHT, PNG_WIDTH};
 pub use tap::{debug_tap_channel, TapConsumer, TapRtSide, TapShared, CHANNELS, TAP_QUEUE_CAPACITY};

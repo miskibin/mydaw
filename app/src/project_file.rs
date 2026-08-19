@@ -39,7 +39,7 @@
 //! version before anything else.
 //!
 //! # Forward migration
-//! Two rules, both implemented here:
+//! Three rules, all implemented here:
 //!
 //! 1. **Unknown fields are ignored.** A file written by a later MYDAW that
 //!    added, say, `tracks[].colour` still loads in this build, minus the colour.
@@ -48,10 +48,27 @@
 //!    is safe; *misreading* known ones is not, and a format that renumbered its
 //!    tracks would do exactly that. [`ProjectFileError::FutureVersion`] says so
 //!    in a sentence a status bar can show.
+//! 3. **An older `format_version` is migrated, never rejected.** A project a
+//!    user saved is a document, and a DAW that cannot open its own last release's
+//!    files is a DAW people stop trusting with their work.
 //!
 //! The version is read before anything else is parsed, so a file from the future
 //! is refused with the version message rather than with whatever type error its
 //! new shape happens to produce first.
+//!
+//! ## Version 1 -> version 2 (step 9)
+//! Version 2 added the piano roll: `pattern.notes`, and a `pattern.steps` that
+//! may be 32 or 64 as well as 16. The migration is therefore *nothing* --
+//! `notes` is `#[serde(default)]`, so a version 1 file parses as a version 2 one
+//! with an empty roll and a one-bar pattern, which is precisely what it meant.
+//!
+//! What [`parse_project`] does do is stamp [`FORMAT_VERSION`] onto the parsed
+//! file, so that the next save writes version 2 rather than silently re-writing
+//! a version number this build no longer produces. That is the whole of the
+//! migration policy: **migrate on load, write current on save**, and let the
+//! byte-identity round trip test cover the rest. `tests/fixtures/v1.mydaw` is a
+//! real file written by the step 8 build, kept so that the claim is tested
+//! against the format rather than against this build's idea of it.
 //!
 //! # What a missing plugin does *not* do
 //! Nothing in this module fails because a plugin binary is absent -- it does not
@@ -76,7 +93,12 @@ use crate::project::{check_gain_db, check_pan, Project, TrackDef};
 use crate::source::{ClapSourceRef, Source, Vst3SourceRef};
 
 /// The format this build writes, and the highest it will read.
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// | Version | Shipped in | What changed |
+/// | --- | --- | --- |
+/// | 1 | step 8 | The format. |
+/// | 2 | step 9 | `pattern.notes`; `pattern.steps` may be 32 or 64. |
+pub const FORMAT_VERSION: u32 = 2;
 
 /// File extension, without the dot. The native dialogs filter on it.
 pub const PROJECT_EXTENSION: &str = "mydaw";
@@ -595,11 +617,17 @@ struct VersionProbe {
     format_version: Option<u32>,
 }
 
-/// Parse a project from text.
+/// Parse a project from text, migrating an older format on the way.
 ///
 /// The version is read first, from a probe that knows about one field, so that a
 /// file from a future MYDAW is refused with [`ProjectFileError::FutureVersion`]
 /// rather than with whatever type error its new shape happens to produce.
+///
+/// An **older** file is upgraded rather than refused -- see the module docs on
+/// forward migration. The returned [`ProjectFile`] always carries
+/// [`FORMAT_VERSION`], whatever the bytes said, so that a load-then-save writes
+/// the current format and the byte-identity property holds from the second save
+/// onwards rather than never.
 ///
 /// # Errors
 /// [`ProjectFileError::Malformed`] for anything that is not a project (bad
@@ -616,7 +644,10 @@ pub fn parse_project(text: &str) -> Result<ProjectFile, ProjectFileError> {
     if found > FORMAT_VERSION {
         return Err(ProjectFileError::FutureVersion { found });
     }
-    serde_json::from_str(text).map_err(|err| ProjectFileError::Malformed(err.to_string()))
+    let mut file: ProjectFile =
+        serde_json::from_str(text).map_err(|err| ProjectFileError::Malformed(err.to_string()))?;
+    file.format_version = FORMAT_VERSION;
+    Ok(file)
 }
 
 /// Read and parse a project file.
@@ -710,7 +741,7 @@ pub fn project_name(path: Option<&Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mydaw_plugin_sequencer::{PatternRow, Step};
+    use mydaw_plugin_sequencer::{MelodicNote, PatternRow, Step, TICKS_PER_STEP};
     use mydaw_rt_core::{MAX_GAIN_DB, SILENCE_DB};
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -747,12 +778,25 @@ mod tests {
         )
     }
 
+    /// Two bars of drums with a melody over them: everything the pattern half
+    /// of the format has to carry, including a length that is not the default
+    /// and a note that is not on the grid.
     fn beat() -> Pattern {
-        let mut pattern = Pattern::default();
-        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 4, 8, 12]);
+        let mut pattern = Pattern {
+            length_steps: 32,
+            ..Pattern::default()
+        };
+        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 4, 8, 12, 16, 20, 24, 28]);
         pattern.rows[2] = PatternRow::empty(42).with_steps(&[2, 6, 10, 14]);
         pattern.rows[1].steps[4] = Step::accent();
         pattern.rows[1].channel = 1;
+        pattern.notes = vec![
+            MelodicNote::new(60, 1, 0, 960),
+            MelodicNote::new(64, 1, 960, 480).at_velocity(0.31),
+            // Deliberately between the grid lines: a triplet eighth, which is
+            // the thing a step index could not have expressed.
+            MelodicNote::new(67, 2, 1_920 + 320, 320),
+        ];
         pattern
     }
 
@@ -799,7 +843,12 @@ mod tests {
             .lines()
             .nth(1)
             .expect("a pretty-printed object has a second line");
-        assert_eq!(first.trim(), r#""format_version": 1,"#, "{json}");
+        assert_eq!(
+            first.trim(),
+            format!(r#""format_version": {FORMAT_VERSION},"#),
+            "{json}"
+        );
+        assert_eq!(FORMAT_VERSION, 2, "step 9 added the piano roll");
         assert!(json.ends_with("}\n"), "the file ends with a newline");
     }
 
@@ -957,6 +1006,169 @@ mod tests {
         let parsed = parse_project(&value.to_string()).expect("unknown fields are tolerated");
         assert_eq!(parsed.tracks[0].name, "Drums");
         assert_eq!(parsed, captured());
+    }
+
+    // ------------------------------------------------------------- migration
+
+    /// A real version 1 project, written by the step 8 build and kept verbatim.
+    ///
+    /// Checked in rather than generated: the point of a migration test is to
+    /// read the *format*, and a fixture this build produced would only prove
+    /// that this build agrees with itself.
+    const V1_PROJECT: &str = include_str!("../tests/fixtures/v1.mydaw");
+
+    #[test]
+    fn a_version_one_project_opens_with_an_empty_piano_roll() {
+        // The fixture is genuinely version 1 -- if somebody "helpfully" updates
+        // it, this test stops testing anything.
+        assert!(
+            V1_PROJECT.contains(r#""format_version": 1"#),
+            "the fixture must stay a version 1 file"
+        );
+        assert!(
+            !V1_PROJECT.contains("\"notes\""),
+            "a version 1 file has no piano roll at all"
+        );
+
+        let parsed = parse_project(V1_PROJECT).expect("a version 1 project still opens");
+
+        // Everything version 1 could say is still said.
+        assert_eq!(parsed.to_bpm().unwrap(), 147.0);
+        assert_eq!(parsed.master_gain_db, -3.5);
+        let (project, selected) = parsed.to_project().expect("a valid project");
+        assert_eq!(project.len(), 2);
+        assert_eq!(project.tracks[0].name, "Drums");
+        assert_eq!(project.tracks[0].gain_db, -6.5);
+        assert!(project.tracks[1].soloed);
+        assert_eq!(
+            project.tracks[1].source.clap_ref().unwrap().plugin_id,
+            "dev.mydaw.fixture.synth"
+        );
+        assert_eq!(selected, 1);
+        assert_eq!(parsed.track_state(1).unwrap(), b"MFS1\x00\x00\x40\x41");
+        assert_eq!(
+            parsed.master_effect.as_ref().unwrap().plugin.label(),
+            "Gain"
+        );
+
+        // And the new half is empty rather than absent, which is what a project
+        // written before the piano roll existed actually meant.
+        let pattern = parsed.to_pattern().expect("the grid still runs");
+        assert_eq!(pattern.length_steps, 16, "version 1 was always one bar");
+        assert!(pattern.notes.is_empty(), "no melody was ever written");
+        assert_eq!(
+            pattern.hit_count(),
+            14,
+            "four kicks, two snares, eight hats"
+        );
+        assert_eq!(
+            pattern.rows[1].steps[4].velocity, 1.0,
+            "the accent survived"
+        );
+        assert_eq!(pattern.rows[1].channel, 1);
+    }
+
+    #[test]
+    fn opening_a_version_one_project_and_saving_it_writes_version_two() {
+        // The migration policy in one test: read old, write current. The user
+        // never sees a dialog and never loses the file -- it is simply a
+        // version 2 project the next time it is opened.
+        let migrated = parse_project(V1_PROJECT).unwrap();
+        assert_eq!(
+            migrated.format_version, FORMAT_VERSION,
+            "the parsed file carries the current version, whatever the bytes said"
+        );
+
+        let saved = migrated.to_json().unwrap();
+        assert!(
+            saved.contains(r#""format_version": 2"#),
+            "a save writes the current format"
+        );
+        assert!(
+            saved.contains(r#""notes": []"#),
+            "and the new field is written explicitly rather than omitted"
+        );
+
+        // From there the ordinary byte-identity property holds.
+        let reopened = parse_project(&saved).unwrap();
+        assert_eq!(reopened, migrated);
+        assert_eq!(reopened.to_json().unwrap(), saved);
+        assert_eq!(
+            reopened.to_pattern().unwrap(),
+            migrated.to_pattern().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_piano_roll_survives_the_file_tick_for_tick() {
+        // Ticks are integers and JSON numbers are doubles, so a note's position
+        // is exact by construction -- but the *order* of the notes and the
+        // pattern's length are not, and both are things a re-save could quietly
+        // change.
+        let file = captured();
+        let parsed = parse_project(&file.to_json().unwrap()).unwrap();
+        let pattern = parsed.to_pattern().unwrap();
+
+        assert_eq!(pattern.length_steps, 32, "two bars, as saved");
+        assert_eq!(pattern, beat(), "note for note, in the order written");
+        assert_eq!(pattern.notes[2].start_ticks, 1_920 + 320);
+        assert_eq!(
+            pattern.notes[2].start_ticks % TICKS_PER_STEP,
+            80,
+            "the triplet is still off the sixteenth grid, which is the point"
+        );
+        assert_eq!(pattern.notes[1].velocity, 0.31);
+        assert_eq!(pattern.notes[2].channel, 2);
+
+        // The rows carry exactly the steps that play, not the engine's tail.
+        assert!(parsed.pattern.rows.iter().all(|row| row.steps.len() == 32));
+    }
+
+    #[test]
+    fn a_four_bar_pattern_round_trips_at_its_own_length() {
+        let mut pattern = Pattern {
+            length_steps: 64,
+            ..Pattern::default()
+        };
+        pattern.rows[0] = PatternRow::empty(36).with_steps(&[0, 32, 63]);
+        pattern.notes = vec![MelodicNote::new(60, 0, 15_120, 240)];
+        let file = ProjectFile::capture(&Project::default(), 0, 130.0, &pattern, &[], None);
+
+        let text = file.to_json().unwrap();
+        let parsed = parse_project(&text).unwrap();
+        assert_eq!(parsed.pattern.steps, 64);
+        assert_eq!(parsed.to_pattern().unwrap(), pattern);
+        assert_eq!(parsed.to_json().unwrap(), text, "and it is byte-stable");
+    }
+
+    #[test]
+    fn a_pattern_length_the_engine_does_not_have_is_refused_on_load() {
+        let mut file = captured();
+        file.pattern.steps = 24;
+        assert!(matches!(
+            file.to_pattern(),
+            Err(ProjectFileError::Pattern(_))
+        ));
+        assert!(
+            file.to_pattern()
+                .unwrap_err()
+                .to_string()
+                .contains("16, 32 or 64"),
+            "{}",
+            file.to_pattern().unwrap_err()
+        );
+    }
+
+    #[test]
+    fn a_note_that_runs_off_the_end_of_the_pattern_is_refused_on_load() {
+        // Hand-edited, or written by a build with a longer pattern and then
+        // shortened. Either way the engine could not run it, and loading it
+        // half-way would leave a note the scheduler owes an off it never sends.
+        let mut file = captured();
+        file.pattern.notes[0].length = 99_999;
+        let err = file.to_pattern().unwrap_err();
+        assert!(matches!(err, ProjectFileError::Pattern(_)), "{err:?}");
+        assert!(err.to_string().contains("ticks long"), "{err}");
     }
 
     #[test]

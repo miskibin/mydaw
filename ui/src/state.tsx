@@ -148,6 +148,20 @@ export interface AppState {
   toggleStep(rowIndex: number, stepIndex: number, accent: boolean): void;
   /** Switch every cell off. */
   clearPattern(): void;
+  /**
+   * Replace the pattern with `edit(current)` and push it, debounced.
+   *
+   * The general form of `toggleStep` and `clearPattern`, and what the piano
+   * roll uses for all of its editing: a note is placed, moved, resized or
+   * deleted by handing in the pure function that does it (see `lib/pattern.ts`),
+   * so this file stays the one place that knows *when* an edit reaches Rust and
+   * never grows a second copy of *what* an edit is.
+   *
+   * Returning the pattern unchanged -- which every helper does for an edit that
+   * would not be legal -- is a no-op all the way down: same object, same
+   * reference, nothing redrawn and nothing sent.
+   */
+  editPattern(edit: (pattern: PatternDto) => PatternDto): void;
   /** Set the session tempo. Out-of-range values are reported, not clamped. */
   setBpm(bpm: number): void;
   /**
@@ -602,6 +616,18 @@ function createAppState(): AppState {
     schedulePush();
   };
 
+  const editPattern = (edit: (pattern: PatternDto) => PatternDto) => {
+    const before = pattern();
+    if (!before) return;
+    const after = edit(before);
+    // Reference equality, which every helper in `lib/pattern.ts` preserves for
+    // an edit it refused. A drag that has not yet crossed a grid line produces
+    // dozens of these a second, and none of them should redraw or be sent.
+    if (after === before) return;
+    setPattern(after);
+    schedulePush();
+  };
+
   const setBpm = (next: number) => {
     if (next === bpm()) return;
     const previous = bpm();
@@ -653,6 +679,7 @@ function createAppState(): AppState {
     mixerCommand,
     toggleStep,
     clearPattern,
+    editPattern,
     setBpm,
     resubscribeMeters: subscribeMeters,
   };

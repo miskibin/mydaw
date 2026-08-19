@@ -26,8 +26,8 @@ use mydaw_plugin_audio_io::{run_block, AudioIoStats, RtState, RtStateParams};
 use mydaw_plugin_debug_tap::{align_grid, detect_onsets, GridReport, Onset, OnsetConfig};
 use mydaw_plugin_instruments::DrumKitNode;
 use mydaw_plugin_sequencer::{
-    pattern_channel, step_boundary, step_len_samples, Pattern, PatternRow, Step,
-    PATTERN_QUEUE_CAPACITY, STEPS,
+    pattern_channel, step_boundary, step_len_samples, Pattern, PatternRow, Step, DEFAULT_STEPS,
+    PATTERN_QUEUE_CAPACITY,
 };
 use mydaw_rt_core::{
     graph_channel, note_channel, rt_channel, GcThread, GraphSpec, RtCommand, TransportClock,
@@ -56,7 +56,7 @@ fn demo_beat() -> Pattern {
         .rows
         .push(PatternRow::empty(SNARE).with_steps(&[4, 12]));
     let mut hats = PatternRow::empty(CLOSED_HAT);
-    for step in (0..STEPS).step_by(2) {
+    for step in (0..DEFAULT_STEPS).step_by(2) {
         hats.steps[step] = Step::on();
     }
     pattern.rows.push(hats);
@@ -109,7 +109,7 @@ fn render(pattern: &Pattern, frames: usize, bpm: f64) -> (Vec<f32>, Arc<AudioIoS
 
 /// Samples in two bars at `bpm`.
 fn two_bars(bpm: f64) -> usize {
-    (step_len_samples(SR, bpm) * (STEPS * 2) as f64).ceil() as usize
+    (step_len_samples(SR, bpm) * (DEFAULT_STEPS * 2) as f64).ceil() as usize
 }
 
 /// A one-line summary an agent (or a reader of a failure) can act on.
@@ -231,7 +231,7 @@ fn the_hits_land_on_the_samples_the_scheduler_computed() {
     pattern.rows.push(PatternRow::empty(KICK).with_steps(&[0]));
 
     let (left, _) = render(&pattern, two_bars(bpm), bpm);
-    let bar = step_boundary(STEPS as u64, step_len) as usize;
+    let bar = step_boundary(DEFAULT_STEPS as u64, step_len) as usize;
 
     // The kick's first sample is its noise click, so the very first non-zero
     // sample of each hit is the hit.

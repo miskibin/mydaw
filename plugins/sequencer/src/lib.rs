@@ -3,24 +3,30 @@
 //!
 //! Step 3 gave the engine instruments and a computer-keyboard piano. That makes
 //! sounds, but a DAW is not a synthesiser: it is a machine for laying sounds out
-//! *in time*. This crate is that machine's smallest honest version -- a 16-step,
-//! one-bar grid, an FL-style pattern, looping forever while the transport runs.
+//! *in time*. This crate is that machine -- an FL-style step grid for drums and
+//! a piano roll for everything with a pitch, looping together while the
+//! transport runs.
 //!
 //! | Module | What |
 //! | --- | --- |
-//! | [`pattern`] | [`Pattern`] / [`PatternRow`] / [`Step`]: the editable grid, its bounds, and its typed rejections. |
-//! | [`compiled`] | [`CompiledPattern`]: the same grid in fixed arrays, plus the `basedrop` channel that carries it across the RT wall. |
+//! | [`pattern`] | [`Pattern`] / [`PatternRow`] / [`Step`] / [`MelodicNote`]: the editable pattern, its bounds, and its typed rejections. |
+//! | [`compiled`] | [`CompiledPattern`]: the same pattern in fixed arrays, plus the `basedrop` channel that carries it across the RT wall. |
 //! | [`schedule`] | [`Scheduler`]: pattern + transport window -> note events, sample-accurate and drift-free. |
 //!
 //! # The one idea worth reading
 //! Everything about the timing follows from refusing to accumulate. A step
 //! boundary is `round(n * step_len)` for the **absolute** step index `n`, so
 //! there is no running total to drift, no phase to reset at the loop point, and
-//! no state to get wrong after a seek. The scheduler's only state is the set of
-//! note-offs it still owes -- and it owes those because notes have length, not
-//! because time does.
+//! no state to get wrong after a seek. Melodic notes live on a finer grid --
+//! [`PPQ`] ticks per quarter note -- but on the *same* clock: `tick_boundary` is
+//! written so that a tick on a step line reduces to that identical expression,
+//! and a note drawn on the grid lands on the same sample as a drum hit there.
 //!
-//! See `docs/superpowers/specs/2026-08-19-step4-step-sequencer.md`.
+//! The scheduler's only state is the set of note-offs it still owes -- and it
+//! owes those because notes have length, not because time does.
+//!
+//! See `docs/superpowers/specs/2026-08-19-step4-step-sequencer.md` and
+//! `docs/superpowers/specs/2026-08-19-step9-piano-roll.md`.
 //!
 //! # Using it
 //! ```no_run
@@ -40,15 +46,17 @@ pub mod pattern;
 pub mod schedule;
 
 pub use compiled::{
-    pattern_channel, CompiledPattern, CompiledRow, PatternHandle, PatternInstallError, PatternSlot,
-    PATTERN_QUEUE_CAPACITY,
+    pattern_channel, CompiledNote, CompiledPattern, CompiledRow, PatternHandle,
+    PatternInstallError, PatternSlot, PATTERN_QUEUE_CAPACITY,
 };
 pub use pattern::{
-    row_label, Pattern, PatternError, PatternRow, Step, ACCENT_THRESHOLD, ACCENT_VELOCITY,
-    DEFAULT_ROW_KEYS, DEFAULT_STEP_VELOCITY, MAX_CHANNEL, MAX_ROWS, STEPS, STEPS_PER_BEAT,
+    row_label, MelodicNote, Pattern, PatternError, PatternRow, Step, ACCENT_THRESHOLD,
+    ACCENT_VELOCITY, DEFAULT_ROW_KEYS, DEFAULT_STEPS, DEFAULT_STEP_VELOCITY, MAX_CHANNEL,
+    MAX_NOTES, MAX_ROWS, MAX_STEPS, PATTERN_LENGTHS, PPQ, STEPS_PER_BEAT, TICKS_PER_STEP,
 };
 pub use schedule::{
-    step_boundary, step_len_samples, Scheduler, TransportWindow, GATE_FRACTION, MAX_PENDING,
+    step_boundary, step_len_samples, tick_boundary, Scheduler, TransportWindow, GATE_FRACTION,
+    MAX_PENDING,
 };
 
 use std::sync::Arc;
@@ -66,6 +74,13 @@ pub const PLUGIN_NAME: &str = "Step Sequencer";
 /// Panel id and frontend component key. Must match the key in
 /// `ui/src/panels/registry.ts`.
 pub const SEQUENCER_PANEL: &str = "step-sequencer";
+
+/// Panel id and frontend component key of the piano roll.
+///
+/// Contributed by this plugin rather than by the shell, because the pattern the
+/// roll edits is this plugin's: a panel is offered by whoever owns the state it
+/// draws. Must match the key in `ui/src/panels/registry.ts`.
+pub const PIANO_ROLL_PANEL: &str = "piano-roll";
 
 /// The authoritative, non-RT copy of the pattern and the tempo.
 ///
@@ -180,6 +195,11 @@ impl Plugin for SequencerPlugin {
             "Step Sequencer",
             SEQUENCER_PANEL,
         ));
+        ctx.contribute_panel(PanelManifest::new(
+            PIANO_ROLL_PANEL,
+            "Piano Roll",
+            PIANO_ROLL_PANEL,
+        ));
     }
 
     fn start(&mut self, _ctx: &KernelCtx) {}
@@ -201,16 +221,19 @@ mod tests {
     }
 
     #[test]
-    fn the_plugin_provides_the_service_and_contributes_the_panel() {
+    fn the_plugin_provides_the_service_and_contributes_both_pattern_panels() {
         let kernel = booted();
         assert!(kernel.ctx().services.get::<SequencerService>().is_some());
 
         let panels = kernel.ui_panels();
-        assert_eq!(panels.len(), 1);
+        assert_eq!(panels.len(), 2, "the step grid and the piano roll");
         assert_eq!(panels[0].id, SEQUENCER_PANEL);
         assert_eq!(panels[0].title, "Step Sequencer");
-        // Key into ui/src/panels/registry.ts -- renaming this breaks the UI.
+        assert_eq!(panels[1].id, PIANO_ROLL_PANEL);
+        assert_eq!(panels[1].title, "Piano Roll");
+        // Keys into ui/src/panels/registry.ts -- renaming these breaks the UI.
         assert_eq!(panels[0].component, "step-sequencer");
+        assert_eq!(panels[1].component, "piano-roll");
     }
 
     #[test]
@@ -243,7 +266,7 @@ mod tests {
 
         let bad = Pattern {
             rows: vec![PatternRow::empty(200)],
-            steps: STEPS as u8,
+            ..Pattern::silent()
         };
         assert!(service.set_pattern(bad).is_err());
         assert_eq!(
