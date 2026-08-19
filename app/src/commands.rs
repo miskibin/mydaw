@@ -15,8 +15,8 @@ use tauri::State;
 use crate::clap_bridge::{ClapGuiStatusDto, ClapTarget};
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{
-    ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto, StreamInfoDto,
-    Vst3PluginInfoDto,
+    AudioSourceDto, ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto, StreamInfoDto,
+    Vst3PluginInfoDto, WaveformDto,
 };
 use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueDto};
 use crate::ipc_bench::{
@@ -936,6 +936,149 @@ pub fn resize_clip(
 ) -> Result<SequencerStateDto, String> {
     state
         .edit_playlist(|list| list.resize_clip(clip_id, length))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+// ------------------------------------------------------ audio clips and files
+
+/// Decode an audio file into memory and give it a source id.
+///
+/// WAV, FLAC and Ogg Vorbis. The whole file goes into RAM, capped at
+/// [`MAX_SOURCE_SECONDS`](mydaw_plugin_sequencer::MAX_SOURCE_SECONDS); a file
+/// past that is refused with a message rather than truncated silently.
+///
+/// Loading a path that is already loaded returns the source that is already
+/// there rather than a second copy of it, so dragging one loop onto four lanes
+/// decodes once.
+///
+/// Returns the source, **not** the whole sequencer state: nothing about the
+/// arrangement changed. Placing it is [`add_audio_clip`].
+#[tauri::command]
+pub fn load_audio_source(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<AudioSourceDto, String> {
+    let source = state
+        .load_audio_source(std::path::Path::new(&path))
+        .map_err(|err| err.to_string())?;
+    Ok(AudioSourceDto::of(&source, state.bpm()))
+}
+
+/// Every audio file the session has loaded, by ascending id.
+#[tauri::command]
+pub fn get_audio_sources(state: State<'_, AppState>) -> Vec<AudioSourceDto> {
+    let bpm = state.bpm();
+    state
+        .audio_sources()
+        .list()
+        .iter()
+        .map(|source| AudioSourceDto::of(source, bpm))
+        .collect()
+}
+
+/// Drop an audio file from memory.
+///
+/// **Refused** while any clip still plays it, and the message says how many --
+/// unloading it anyway would silence part of the arrangement without saying so.
+/// Removing the last clip does *not* unload the file on its own: a user who
+/// deletes a clip and draws it again a second later should not pay for a second
+/// decode.
+#[tauri::command]
+pub fn unload_audio_source(
+    state: State<'_, AppState>,
+    source_id: u64,
+) -> Result<Vec<AudioSourceDto>, String> {
+    state
+        .unload_audio_source(source_id)
+        .map_err(|err| err.to_string())?;
+    let bpm = state.bpm();
+    Ok(state
+        .audio_sources()
+        .list()
+        .iter()
+        .map(|source| AudioSourceDto::of(source, bpm))
+        .collect())
+}
+
+/// A source's waveform as min/max pairs, for drawing a clip.
+///
+/// `targetBins` is a request, not a promise: a file with less detail than that
+/// returns what it has, and anything past
+/// [`MAX_WAVEFORM_BINS`](mydaw_plugin_sequencer::MAX_WAVEFORM_BINS) is clamped.
+/// Absent means 1024, which is about one pair per pixel for a clip drawn across
+/// a laptop screen.
+#[tauri::command]
+pub fn get_audio_waveform(
+    state: State<'_, AppState>,
+    source_id: u64,
+    target_bins: Option<usize>,
+) -> Result<WaveformDto, String> {
+    let source = state
+        .audio_sources()
+        .get(source_id)
+        .ok_or_else(|| format!("there is no audio source {source_id}"))?;
+    Ok(WaveformDto::of(&source, target_bins.unwrap_or(1_024)))
+}
+
+/// Place an audio file on the timeline.
+///
+/// `start` and `length` are in **ticks**; `offsetFrames` is in frames of the
+/// *file's own* rate, because it is a position in a recording rather than in the
+/// song and must not move when the tempo changes.
+///
+/// `length` absent means "the whole file at the current tempo". The audio is
+/// **not** stretched to fit: a clip longer than its file ends when the file
+/// does, and a shorter one cuts it off.
+#[tauri::command]
+pub fn add_audio_clip(
+    state: State<'_, AppState>,
+    source_id: u64,
+    track: usize,
+    start: u64,
+    length: Option<u64>,
+    offset_frames: Option<u64>,
+    gain_db: Option<f32>,
+) -> Result<SequencerStateDto, String> {
+    let length = match length {
+        Some(length) => length,
+        None => state
+            .audio_clip_default_length(source_id)
+            .map_err(|err| err.to_string())?,
+    };
+    let offset = offset_frames.unwrap_or(0);
+    let gain = gain_db.unwrap_or(0.0);
+    state
+        .edit_playlist(|list| list.add_audio_clip(source_id, track, start, length, offset, gain))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Set an audio clip's trim, in dB. `0.0` is unity.
+///
+/// Refused for a pattern clip, which has no gain of its own -- its channels have
+/// faders.
+#[tauri::command]
+pub fn set_clip_gain(
+    state: State<'_, AppState>,
+    clip_id: u64,
+    gain_db: f32,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.set_clip_gain(clip_id, gain_db))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
+/// Set how far into its file an audio clip begins, in the file's own frames.
+#[tauri::command]
+pub fn set_clip_offset(
+    state: State<'_, AppState>,
+    clip_id: u64,
+    offset_frames: u64,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.set_clip_offset(clip_id, offset_frames))
         .map_err(|err| err.to_string())?;
     Ok(state.sequencer_state())
 }

@@ -553,6 +553,33 @@ impl Playlist {
         }
     }
 
+    /// Set how far into its file an audio clip begins, in the file's own frames.
+    ///
+    /// Frames rather than ticks, for the reason
+    /// [`AudioClip::offset_frames`] gives: this is a position in a recording,
+    /// not in the song, and it must not move when the tempo does. An offset past
+    /// the end of the file is *allowed* and simply silent -- the registry is the
+    /// only thing that knows how long the file is, and a playlist that had to
+    /// ask it would be a playlist that cannot be edited without one.
+    ///
+    /// # Errors
+    /// [`PlaylistError::NoSuchClip`] -- including when the clip exists but is a
+    /// pattern clip, which has no file to be offset into.
+    pub fn set_clip_offset(&mut self, id: u64, offset_frames: u64) -> Result<(), PlaylistError> {
+        let clip = self
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id() == id)
+            .ok_or(PlaylistError::NoSuchClip(id))?;
+        match clip {
+            Clip::Audio(audio) => {
+                audio.offset_frames = offset_frames;
+                Ok(())
+            }
+            Clip::Pattern(_) => Err(PlaylistError::NoSuchClip(id)),
+        }
+    }
+
     /// Remove every clip that plays pattern `pattern_id`.
     ///
     /// Called when a pattern is deleted. The alternative -- leaving the clips
@@ -748,6 +775,41 @@ mod tests {
             playlist.set_clip_gain(id, -6.0),
             Err(PlaylistError::NoSuchClip(id))
         );
+        assert_eq!(
+            playlist.set_clip_offset(id, 1_000),
+            Err(PlaylistError::NoSuchClip(id)),
+            "and no file to be offset into"
+        );
+    }
+
+    #[test]
+    fn an_offset_is_in_the_files_own_frames_and_survives_a_move_and_a_resize() {
+        // The property the whole field exists for: trimming the head of a take
+        // and then dragging it, or stretching it, must not start it on a
+        // different syllable.
+        let mut playlist = Playlist::default();
+        let id = playlist.add_audio_clip(1, 0, 0, BAR, 22_050, 0.0).unwrap();
+        playlist.set_clip_offset(id, 44_100).unwrap();
+        playlist.move_clip(id, 1, 8 * BAR).unwrap();
+        playlist.resize_clip(id, 2 * BAR).unwrap();
+
+        let Some(Clip::Audio(clip)) = playlist.clip(id) else {
+            panic!("still an audio clip")
+        };
+        assert_eq!(clip.offset_frames, 44_100);
+        assert_eq!(clip.start_ticks, 8 * BAR);
+        assert_eq!(clip.length_ticks, 2 * BAR);
+    }
+
+    #[test]
+    fn an_offset_past_the_end_of_the_file_is_allowed_and_simply_silent() {
+        // The playlist does not know how long the file is -- the registry does
+        // -- and a playlist that had to ask one would be a playlist that cannot
+        // be edited without a decoded file behind it. The compile drops the clip.
+        let mut playlist = Playlist::default();
+        let id = playlist.add_audio_clip(1, 0, 0, BAR, 0, 0.0).unwrap();
+        playlist.set_clip_offset(id, u64::MAX).unwrap();
+        assert!(playlist.validate(&patterns()).is_ok());
     }
 
     #[test]

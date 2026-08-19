@@ -50,7 +50,9 @@ use mydaw_fixture_clap_gain::synth::{self, PLUGIN_ID as SYNTH_ID, VOICE_GAIN};
 use mydaw_plugin_audio_io::AudioIoService;
 use mydaw_plugin_host_clap::test_util::{missing_fixture_message, stage_fixture_bundle};
 use mydaw_plugin_instruments::InstrumentRegistry;
-use mydaw_plugin_sequencer::{Pattern, PatternSet, PlayMode, Playlist, SequencerService, StepRow};
+use mydaw_plugin_sequencer::{
+    AudioSourceRegistry, Pattern, PatternSet, PlayMode, Playlist, SequencerService, StepRow,
+};
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_plugin_windows::PluginWindowService;
 use mydaw_rt_core::basedrop::Collector;
@@ -140,6 +142,7 @@ struct Rig {
     tracks: Arc<TrackHost>,
     audio: Arc<AudioIoService>,
     sequencer: Arc<SequencerService>,
+    sources: Arc<AudioSourceRegistry>,
     clap: ClapHost,
     clap_board: ClapBoard,
     vst3: Vst3Host,
@@ -175,6 +178,7 @@ impl Rig {
             tracks,
             audio: Arc::new(AudioIoService::default()),
             sequencer: Arc::new(SequencerService::new()),
+            sources: Arc::new(AudioSourceRegistry::new()),
             clap: ClapHost::new(Arc::clone(&windows)),
             clap_board: ClapBoard::new(),
             vst3: Vst3Host::new(windows),
@@ -212,6 +216,7 @@ impl Rig {
                 tracks: &self.tracks,
                 audio: &self.audio,
                 sequencer: &self.sequencer,
+                sources: &self.sources,
             };
             let mut hosts = Hosts {
                 clap: &mut self.clap,
@@ -229,6 +234,7 @@ impl Rig {
                 tracks: &self.tracks,
                 audio: &self.audio,
                 sequencer: &self.sequencer,
+                sources: &self.sources,
             };
             let mut hosts = Hosts {
                 clap: &mut self.clap,
@@ -248,6 +254,7 @@ impl Rig {
             tracks: &self.tracks,
             audio: &self.audio,
             sequencer: &self.sequencer,
+            sources: &self.sources,
         };
         let mut hosts = Hosts {
             clap: &mut self.clap,

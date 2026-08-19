@@ -106,12 +106,9 @@ pub fn layer_gain(velocity: u8, vel_lo: u8, vel_hi: u8) -> f32 {
 /// returns `taps[2]`, which is what makes unshifted playback bit-exact.
 #[inline]
 pub fn cubic(taps: [f32; 4], x: f32) -> f32 {
-    let [y0, y1, y2, y3] = taps;
-    let c0 = y1;
-    let c1 = 0.5 * (y2 - y0);
-    let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
-    let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-    ((c3 * x + c2) * x + c1) * x + c0
+    // Shared with the sequencer's audio-clip voices, which resample for exactly
+    // the same reason: see `mydaw_audio_file`.
+    mydaw_audio_file::cubic(taps, x)
 }
 
 /// Frames advanced per output frame, for `key` on a sample rooted at

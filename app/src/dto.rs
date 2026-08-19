@@ -14,9 +14,9 @@ use mydaw_ipc_bridge::{MeterFrame, TrackMeter};
 use mydaw_plugin_host_clap::ClapPluginInfo;
 use mydaw_plugin_host_vst3::Vst3PluginInfo;
 use mydaw_plugin_sequencer::{
-    ChannelClip, Clip, MelodicNote, Pattern, PatternError, PatternSet, Playlist, PlaylistTrack,
-    Step, StepRow, DEFAULT_STEP_VELOCITY, MAX_CLIPS, MAX_PATTERNS, MAX_PLAYLIST_TRACKS,
-    MAX_SONG_TICKS, MAX_STEPS,
+    AudioSource, ChannelClip, Clip, MelodicNote, Pattern, PatternError, PatternSet, Playlist,
+    PlaylistTrack, Step, StepRow, DEFAULT_STEP_VELOCITY, MAX_CLIPS, MAX_PATTERNS,
+    MAX_PLAYLIST_TRACKS, MAX_SONG_TICKS, MAX_STEPS, MAX_WAVEFORM_BINS,
 };
 use serde::{Deserialize, Serialize};
 
@@ -619,6 +619,117 @@ impl From<&Playlist> for PlaylistDto {
             max_tracks: MAX_PLAYLIST_TRACKS,
             max_clips: MAX_CLIPS,
             max_ticks: MAX_SONG_TICKS,
+        }
+    }
+}
+
+/// One loaded audio file, as the browser and the clip inspector read it.
+///
+/// Everything here is a property of the *file*, not of any clip that plays it:
+/// two clips of one take show the same row. The waveform is deliberately **not**
+/// in it -- see [`WaveformDto`] -- because a source list is fetched on every
+/// arrangement change and a list of ten takes would carry a megabyte of peaks
+/// nobody asked for.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioSourceDto {
+    pub id: u64,
+    /// Where the file was when it was loaded.
+    pub path: String,
+    /// Its file name, for a UI with no room for the path.
+    pub name: String,
+    /// Playable frames, in the file's own rate. `0` for a file that has moved.
+    pub frames: u64,
+    /// The rate the file was recorded at, which need not be the device's.
+    /// `0` for a file that has moved.
+    pub sample_rate: f64,
+    pub duration_seconds: f64,
+    /// How long the file is at the session's **current** tempo, in ticks --
+    /// which is what a clip drawn to cover the whole take should be `length`.
+    /// It moves with the tempo, because a tick does; the audio does not stretch.
+    pub duration_ticks: u64,
+    /// Whether the file could not be found or read. Its clips stay in the
+    /// arrangement and are silent -- see the sequencer's `audio` module.
+    pub missing: bool,
+    /// Bytes of audio this source is holding.
+    pub bytes: u64,
+}
+
+impl AudioSourceDto {
+    /// Describe `source` at `bpm`.
+    ///
+    /// The tempo is a parameter rather than a field of the source because a file
+    /// has no tempo: how many ticks it covers is a question about the *session*,
+    /// and the answer changes when the session's tempo does.
+    pub fn of(source: &AudioSource, bpm: f64) -> Self {
+        Self {
+            id: source.id(),
+            path: source.path().to_string_lossy().into_owned(),
+            name: source.name(),
+            frames: source.frames() as u64,
+            sample_rate: source.sample_rate(),
+            duration_seconds: source.seconds(),
+            duration_ticks: ticks_for_seconds(source.seconds(), bpm),
+            missing: source.is_missing(),
+            bytes: source.bytes() as u64,
+        }
+    }
+}
+
+/// Ticks that `seconds` of wall-clock time covers at `bpm`.
+///
+/// `PPQ` ticks per beat, `bpm` beats per minute. Rounded up so a clip drawn to
+/// the whole of a take never ends one tick before the last sample.
+pub fn ticks_for_seconds(seconds: f64, bpm: f64) -> u64 {
+    if !(seconds.is_finite() && bpm.is_finite()) || seconds <= 0.0 || bpm <= 0.0 {
+        return 0;
+    }
+    (seconds * bpm / 60.0 * f64::from(mydaw_plugin_sequencer::PPQ)).ceil() as u64
+}
+
+/// A source's waveform, at the resolution that was asked for.
+///
+/// `peaks` is one `[min, max]` pair per bin, over **both** channels: a clip on a
+/// timeline is drawn as one envelope at the sizes this is for, and the outer
+/// bound never hides a transient that is on one channel only. Pairs rather than
+/// two arrays because a consumer reads them together, and `[[min, max], ...]`
+/// is what a `<path>` builder wants.
+///
+/// # Why JSON and not a binary blob
+/// The IPC spike measured a 64 kB message as free, and
+/// [`MAX_WAVEFORM_BINS`](mydaw_plugin_sequencer::MAX_WAVEFORM_BINS) pairs is
+/// roughly 40 kB of JSON -- inside it, for a payload a UI fetches once per
+/// source rather than per frame. A base64 `Float32Array` would be about a third
+/// of the size and would cost every consumer a decode step; the seam to add it
+/// later is this type, and nothing else would change.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformDto {
+    pub source_id: u64,
+    /// Frames the whole waveform spans.
+    pub frames: u64,
+    /// Pairs actually returned, which may be fewer than asked for when the file
+    /// has less detail than that.
+    pub bins: usize,
+    /// The most bins this build will ever return.
+    pub max_bins: usize,
+    pub peaks: Vec<[f32; 2]>,
+}
+
+impl WaveformDto {
+    /// `target_bins` pairs spanning the whole of `source`.
+    pub fn of(source: &AudioSource, target_bins: usize) -> Self {
+        let peaks: Vec<[f32; 2]> = source
+            .waveform(target_bins)
+            .into_iter()
+            .map(|(min, max)| [min, max])
+            .collect();
+        Self {
+            source_id: source.id(),
+            frames: source.frames() as u64,
+            bins: peaks.len(),
+            max_bins: MAX_WAVEFORM_BINS,
+            peaks,
         }
     }
 }

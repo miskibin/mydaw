@@ -114,6 +114,12 @@ pub struct TrackHost {
     /// The one insert point on the master bus. Present in every graph, empty
     /// until a plugin is chosen -- see [`crate::insert`].
     master_insert: Arc<InsertHandle>,
+    /// The audio-clip player, which sits on the master bus *before* the insert
+    /// point. Present in every graph for the same reason the insert slot is --
+    /// see [`crate::clips`]. Owned here because this is what assembles the
+    /// graph, not because a clip belongs to a track: a playlist lane is not a
+    /// mixer strip.
+    audio_clips: Arc<crate::clips::AudioClipBus>,
     /// Track the keyboard piano and the source selector address.
     selected: AtomicUsize,
 }
@@ -164,6 +170,7 @@ impl TrackHost {
                 .map(|_| Arc::new(AtomicBool::new(false)))
                 .collect(),
             master_insert: Arc::new(InsertHandle::new()),
+            audio_clips: Arc::new(crate::clips::AudioClipBus::new()),
             selected: AtomicUsize::new(0),
             project: Mutex::new(project),
         }
@@ -186,6 +193,11 @@ impl TrackHost {
     /// type, because the *handle* is -- only the node it carries is not.
     pub fn master_insert(&self) -> &Arc<InsertHandle> {
         &self.master_insert
+    }
+
+    /// The audio-clip player on the master bus. See [`crate::clips`].
+    pub fn audio_clips(&self) -> &Arc<crate::clips::AudioClipBus> {
+        &self.audio_clips
     }
 
     /// A copy of the project.
@@ -796,6 +808,17 @@ impl TrackHost {
             spec.push_send(SendSpec::new(send.source, send.dest));
         }
 
+        // Both master-bus nodes are unconditional and transparent while empty,
+        // for the same reason: compiling them in every time is what lets an
+        // audio clip appear and a master effect be inserted, replaced and
+        // removed with no graph rebuild at all -- see `crate::clips` and
+        // `crate::insert`.
+        //
+        // Order matters. The clip player is **first**, so a clip is summed into
+        // the bus *before* the master chain sees it: an audio clip goes to the
+        // master bus, not past it.
+        spec.push_master_insert(crate::clips::audio_clip_node(&self.audio_clips, gc.clone()));
+
         // The master's *internal* chain runs first and the one hosted insert
         // last. That order keeps the hosted slot a single unconditional node at
         // a fixed position, which is what makes its rebuild-free swap work (see
@@ -850,6 +873,7 @@ impl TrackHost {
             handle.close();
         }
         self.master_insert.close();
+        self.audio_clips.close();
     }
 }
 
@@ -996,21 +1020,26 @@ mod tests {
     }
 
     #[test]
-    fn the_graph_the_host_builds_is_one_track_chain_per_track_plus_the_master_insert() {
+    fn the_graph_the_host_builds_is_one_track_chain_per_track_plus_the_master_bus() {
         let host = host();
         let collector = mydaw_rt_core::basedrop::Collector::new();
         let spec = host.build_spec(&LIMITS, collector.handle());
 
         let count = Project::default().len();
         assert_eq!(spec.track_count(), count);
-        // Source slot plus transport gate per track, plus the master insert slot.
-        assert_eq!(spec.len(), count * 2 + 1);
+        // Source slot plus transport gate per track, plus the two master-bus
+        // nodes: the audio-clip player and the master insert slot.
+        assert_eq!(spec.len(), count * 2 + 2);
         assert!(spec.params().is_some(), "the mixer parameters are shared");
         assert_eq!(spec.limits(), LIMITS);
         assert!(!host.has_clap_node());
         assert!(
             host.master_insert().is_open() && !host.master_insert().is_occupied(),
             "the slot is there, and empty"
+        );
+        assert!(
+            host.audio_clips().is_open(),
+            "the clip player is compiled into every graph"
         );
     }
 

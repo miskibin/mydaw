@@ -1935,6 +1935,79 @@ mod tests {
         assert_eq!(reopened.to_song().unwrap(), migrated.to_song().unwrap());
     }
 
+    /// A version 3 project with audio clips and a source table.
+    ///
+    /// Committed rather than generated, for the reason every fixture here is:
+    /// the point of the test is to read the **format**, and a file this build
+    /// wrote would only prove that this build agrees with itself. One of its two
+    /// sources names a file that will never exist on any machine, because
+    /// "the samples folder moved" is the case that has to be a warning rather
+    /// than a refusal.
+    const V3_AUDIO_PROJECT: &str = include_str!("../tests/fixtures/v3-audio.mydaw");
+
+    #[test]
+    fn a_version_three_project_restores_its_audio_clips_and_its_source_table() {
+        assert!(
+            V3_AUDIO_PROJECT.contains(r#""format_version": 3"#),
+            "the fixture must stay a version 3 file"
+        );
+
+        let parsed = parse_project(V3_AUDIO_PROJECT).expect("a version 3 project opens");
+        assert_eq!(parsed.format_version, FORMAT_VERSION);
+        assert_eq!(parsed.to_bpm().unwrap(), 130.0);
+        assert_eq!(parsed.to_play_mode(), PlayMode::Song);
+
+        // The source table, in file order.
+        assert_eq!(
+            parsed
+                .audio_sources
+                .iter()
+                .map(|entry| (entry.id, entry.path.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, r"C:\takes\vox-take-4.wav"),
+                (2, r"C:\takes\gone-missing.flac"),
+            ]
+        );
+
+        let (_set, playlist) = parsed.to_song().expect("the song runs");
+        assert_eq!(playlist.tracks().len(), 2);
+        assert_eq!(playlist.clips().len(), 3);
+        assert_eq!(playlist.end_ticks(), 23_040 + 3_840);
+
+        // The audio clips kept every field that only they have. `offset_frames`
+        // in particular is in the *file's* frames and must not have been
+        // converted to anything.
+        let audio: Vec<_> = playlist
+            .clips()
+            .iter()
+            .filter_map(|clip| match clip {
+                Clip::Audio(audio) => Some(*audio),
+                Clip::Pattern(_) => None,
+            })
+            .collect();
+        assert_eq!(audio.len(), 2);
+        assert_eq!(audio[0].id, 2);
+        assert_eq!(audio[0].source_id, 1);
+        assert_eq!(audio[0].track, 1);
+        assert_eq!(audio[0].start_ticks, 11_520, "bar 3 at 3840 ticks a bar");
+        assert_eq!(audio[0].length_ticks, 7_680);
+        assert_eq!(audio[0].offset_frames, 22_050);
+        assert_eq!(audio[0].gain_db, -3.5);
+        assert_eq!(audio[1].source_id, 2);
+        assert_eq!(audio[1].offset_frames, 0);
+    }
+
+    #[test]
+    fn a_version_three_project_with_audio_survives_a_save_and_reopen_byte_for_byte() {
+        let parsed = parse_project(V3_AUDIO_PROJECT).expect("opens");
+        let saved = parsed.to_json().expect("serialises");
+        let reopened = parse_project(&saved).expect("reopens");
+        assert_eq!(reopened, parsed);
+        assert_eq!(reopened.to_json().unwrap(), saved);
+        assert_eq!(reopened.audio_sources, parsed.audio_sources);
+    }
+
     /// A real version 2 project, written by the step 9 build and kept verbatim.
     ///
     /// The interesting one: version 2 had a piano roll, so this exercises the

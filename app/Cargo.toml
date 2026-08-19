@@ -67,6 +67,9 @@ mydaw-fixture-clap-gain = { path = "../test-fixtures/clap-gain" }
 mydaw-plugin-test-tone.workspace = true
 mydaw-plugin-debug-tap.workspace = true
 mydaw-plugin-windows.workspace = true
+# Writes the synthetic takes the audio-clip tests load, so the suite needs no
+# committed audio.
+hound.workspace = true
 
 [features]
 # Set by the Tauri CLI for production builds; it switches `generate_context!`
