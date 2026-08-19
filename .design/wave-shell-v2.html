@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;padding:0;height:100%;overflow:hidden;font-family:Geist,ui-sans-serif,system-ui,sans-serif}
+*{box-sizing:border-box}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:rgba(128,138,150,.35);border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+a{color:#4f8ef7}a:hover{color:#2f6fe0}
+</style>
+</helmet>
+
+<div style="{{ shell }}">
+
+  <!-- transport -->
+  <div style="height:52px;flex:none;display:flex;align-items:center;gap:18px;padding:0 14px;background:var(--top,#15181c);border-bottom:1px solid var(--line,#23272f)">
+    <div style="display:flex;align-items:center;gap:9px;width:150px">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="var(--acc,#4f8ef7)" stroke-width="1.6" stroke-linecap="round"><path d="M1 9h2.2l2-5.4 2.6 11L11 6.2l1.6 4.4L14.2 9H17"></path></svg>
+      <div style="display:flex;flex-direction:column;gap:1px">
+        <span style="font:600 12.5px Geist;letter-spacing:.04em;color:var(--txt,#e7e9ec)">WAVE</span>
+        <span style="font:400 9.5px 'Geist Mono';color:var(--dim2,#646b76)">sundown_128</span>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:3px;padding:3px;background:var(--sunk,#0b0d10);border:1px solid var(--line,#23272f);border-radius:9px">
+      <div style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--dim,#8b929c);cursor:pointer">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 2.5v9L4.5 7z"></path><path d="M3 2.5v9"></path></svg>
+      </div>
+      <div onClick="{{ togglePlay }}" style="{{ playBtn }}">
+        <sc-if value="{{ playing }}" hint-placeholder-val="{{ false }}">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 2.5v9M9 2.5v9"></path></svg>
+        </sc-if>
+        <sc-if value="{{ stopped }}" hint-placeholder-val="{{ true }}">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="currentColor"><path d="M4 2.4 11.6 7 4 11.6z"></path></svg>
+        </sc-if>
+      </div>
+      <div style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:var(--dim,#8b929c);cursor:pointer">
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="8" height="8" rx="1.4"></rect></svg>
+      </div>
+      <div onClick="{{ toggleRec }}" style="{{ recBtn }}">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor"><circle cx="6" cy="6" r="3.6"></circle></svg>
+      </div>
+      <div onClick="{{ toggleLoop }}" style="{{ loopBtn }}">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5.5h6.5a2 2 0 0 1 0 4H4.5"></path><path d="M5.6 3.4 3.4 5.5l2.2 2.1"></path></svg>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:baseline;gap:11px">
+      <span style="font:500 21px/1 'Geist Mono';letter-spacing:-.01em;color:var(--txt,#e7e9ec)">01:23:45</span>
+      <span style="font:400 11px 'Geist Mono';color:var(--dim,#8b929c)">045.3.00</span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:18px;height:32px;padding-left:16px;border-left:1px solid var(--line,#23272f)">
+      <div style="display:flex;flex-direction:column;gap:2px"><span style="font:500 12.5px 'Geist Mono';color:var(--txt,#e7e9ec)">128.00</span><span style="font:500 8.5px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76)">BPM</span></div>
+      <div style="display:flex;flex-direction:column;gap:2px"><span style="font:500 12.5px 'Geist Mono';color:var(--txt,#e7e9ec)">4/4</span><span style="font:500 8.5px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76)">SIG</span></div>
+      <div style="display:flex;flex-direction:column;gap:2px"><span style="font:500 12.5px 'Geist Mono';color:var(--txt,#e7e9ec)">C♯m</span><span style="font:500 8.5px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76)">KEY</span></div>
+    </div>
+
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:14px;font:400 10.5px 'Geist Mono';color:var(--dim,#8b929c)">
+      <span>PEAK <span style="color:var(--txt,#e7e9ec)">−1.2</span></span>
+      <span>LUFS <span style="color:var(--txt,#e7e9ec)">−6.1</span></span>
+    </div>
+    <div onClick="{{ toggleTheme }}" style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:6px;background:var(--chip,#1d2128);color:var(--txt2,#c3c8d0);cursor:pointer">
+      <sc-if value="{{ isDark }}" hint-placeholder-val="{{ true }}">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="2.6"></circle><path d="M7 1.4v1.4M7 11.2v1.4M1.4 7h1.4M11.2 7h1.4M3.1 3.1l1 1M9.9 9.9l1 1M10.9 3.1l-1 1M4.1 9.9l-1 1"></path></svg>
+      </sc-if>
+      <sc-if value="{{ isLight }}" hint-placeholder-val="{{ false }}">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M11.4 8.6A5 5 0 0 1 5.4 2.6a5 5 0 1 0 6 6z"></path></svg>
+      </sc-if>
+    </div>
+    <div style="width:26px;height:26px;border-radius:50%;background:var(--chip,#1d2128);display:flex;align-items:center;justify-content:center;font:500 10.5px Geist;color:var(--txt2,#c3c8d0)">M</div>
+  </div>
+
+  <!-- body -->
+  <div style="flex:1;display:flex;min-height:0;position:relative">
+
+    <!-- browser -->
+    <sc-if value="{{ browserOpen }}" hint-placeholder-val="{{ true }}">
+    <div style="width:250px;flex:none;display:flex;flex-direction:column;background:var(--panel,#12151a);border-right:1px solid var(--line,#23272f)">
+      <div style="height:38px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px">
+        <span style="font:500 10px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76)">BROWSER</span>
+        <span style="flex:1"></span>
+        <span onClick="{{ toggleBrowser }}" style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--dim,#8b929c);cursor:pointer">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 2.4 3.6 6l3.6 3.6"></path></svg>
+        </span>
+      </div>
+      <div style="flex:none;padding:0 12px 10px;display:flex;flex-direction:column;gap:8px">
+        <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--sunk,#0b0d10);border:1px solid var(--line,#23272f);border-radius:8px">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--dim2,#646b76)" stroke-width="1.5" stroke-linecap="round"><circle cx="5.2" cy="5.2" r="3.2"></circle><path d="M7.6 7.6 10 10"></path></svg>
+          <span style="font:400 11.5px Geist;color:var(--dim2,#646b76)">Search</span>
+        </div>
+        <div style="display:flex;gap:3px">
+          <sc-for list="{{ browserTabs }}" as="b" hint-placeholder-count="4">
+            <span onClick="{{ b.on }}" style="{{ b.style }}">{{ b.name }}</span>
+          </sc-for>
+        </div>
+      </div>
+      <div style="flex:1;min-height:0;overflow-y:auto;padding:0 6px 8px;display:flex;flex-direction:column;gap:1px">
+        <sc-for list="{{ browserRows }}" as="r" hint-placeholder-count="12">
+          <div onClick="{{ r.on }}" style="{{ r.style }}"><span style="{{ r.nameStyle }}">{{ r.name }}</span><span style="flex:1"></span><span style="font:400 9.5px 'Geist Mono';color:var(--faint,#4b525c)">{{ r.meta }}</span></div>
+        </sc-for>
+      </div>
+      <div style="flex:none;padding:11px 12px;border-top:1px solid var(--line,#23272f);display:flex;flex-direction:column;gap:8px">
+        <div style="height:54px;border-radius:8px;background:var(--sunk,#0b0d10);position:relative;overflow:hidden">
+          <div style="{{ previewWave }}"></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;font:400 9.5px 'Geist Mono';color:var(--dim2,#646b76)">
+          <span>{{ previewName }}</span><span>48k · 24bit</span>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+    <sc-if value="{{ browserClosed }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ toggleBrowser }}" style="width:32px;flex:none;background:var(--panel,#12151a);border-right:1px solid var(--line,#23272f);display:flex;flex-direction:column;align-items:center;padding-top:11px;gap:14px;cursor:pointer">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--dim,#8b929c)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 2.4 8.4 6l-3.6 3.6"></path></svg>
+      <span style="font:500 10px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76);writing-mode:vertical-rl">BROWSER</span>
+    </div>
+    </sc-if>
+
+    <!-- center -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:var(--lane,#101318)">
+
+      <sc-if value="{{ arrangeVisible }}" hint-placeholder-val="{{ true }}">
+      <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+        <div style="height:38px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;background:var(--panel,#12151a);border-bottom:1px solid var(--line,#23272f)">
+          <span style="font:500 10px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76)">ARRANGEMENT</span>
+          <div style="display:flex;gap:2px">
+            <sc-for list="{{ tools }}" as="t" hint-placeholder-count="3">
+              <span onClick="{{ t.on }}" style="{{ t.style }}" title="{{ t.name }}">
+                <sc-if value="{{ t.isSelect }}" hint-placeholder-val="{{ true }}"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M3 2.2l7.4 4.6-3.2.7-1.1 3.3z"></path></svg></sc-if>
+                <sc-if value="{{ t.isDraw }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 11.4h2l6-6-2-2-6 6z"></path></svg></sc-if>
+                <sc-if value="{{ t.isCut }}" hint-placeholder-val="{{ false }}"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="4" cy="10.4" r="1.7"></circle><circle cx="10" cy="10.4" r="1.7"></circle><path d="M5.2 9 10 2.4M8.8 9 4 2.4"></path></svg></sc-if>
+              </span>
+            </sc-for>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;height:24px;padding:0 9px;background:var(--sunk,#0b0d10);border:1px solid var(--line,#23272f);border-radius:7px;font:400 10.5px 'Geist Mono';color:var(--txt2,#c3c8d0)">1/4</div>
+          <div style="flex:1"></div>
+          <sc-if value="{{ multiSelect }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 4px 0 10px;border-radius:7px;background:var(--accSoft,rgba(79,142,247,.14))">
+              <span style="font:400 10.5px 'Geist Mono';color:var(--acc,#4f8ef7)">{{ selCount }} selected</span>
+              <span onClick="{{ makeGroup }}" style="height:18px;padding:0 8px;display:flex;align-items:center;gap:5px;border-radius:5px;background:var(--acc,#4f8ef7);font:500 10px Geist;color:#fff;cursor:pointer">Group ⌘G</span>
+            </div>
+          </sc-if>
+          <span style="font:400 10.5px 'Geist Mono';color:var(--dim2,#646b76)">{{ selInfo }}</span>
+        </div>
+
+        <div style="flex:none;display:flex;background:var(--panel,#12151a);border-bottom:1px solid var(--line,#23272f)">
+          <div style="width:226px;flex:none;border-right:1px solid var(--line,#23272f);display:flex;align-items:flex-end;padding:0 12px 6px">
+            <span style="font:400 9.5px 'Geist Mono';color:var(--faint,#4b525c)">{{ counts }}</span>
+          </div>
+          <div style="flex:1;min-width:0;padding:5px 2px 0">
+            <div style="height:22px;display:flex;gap:2px">
+              <sc-for list="{{ sections }}" as="s" hint-placeholder-count="7">
+                <div onClick="{{ s.on }}" style="{{ s.style }}">{{ s.name }}</div>
+              </sc-for>
+            </div>
+            <div style="height:18px;display:flex;align-items:center">
+              <sc-for list="{{ sections }}" as="s" hint-placeholder-count="7">
+                <span style="{{ s.barStyle }}">{{ s.bar }}</span>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+
+        <div style="flex:1;min-height:0;display:flex;overflow-y:auto;position:relative">
+          <div style="width:226px;flex:none;border-right:1px solid var(--line,#23272f);background:var(--panel,#12151a);display:flex;flex-direction:column">
+            <sc-for list="{{ rows }}" as="t" hint-placeholder-count="10">
+              <div onClick="{{ t.on }}" style="{{ t.rowStyle }}">
+                <sc-if value="{{ t.isGroup }}" hint-placeholder-val="{{ false }}">
+                  <span onClick="{{ t.onFold }}" style="width:14px;flex:none;display:flex;align-items:center;justify-content:center;color:var(--dim,#8b929c);cursor:pointer">
+                    <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="{{ t.foldRotate }}"><path d="M3.4 1.8 6.6 5 3.4 8.2"></path></svg>
+                  </span>
+                </sc-if>
+                <span style="{{ t.barStyle }}"></span>
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                  <span style="{{ t.nameStyle }}">{{ t.name }}</span>
+                  <span style="{{ t.devStyle }}">{{ t.dev }}</span>
+                </div>
+                <div style="display:flex;gap:3px">
+                  <span onClick="{{ t.onArm }}" style="{{ t.armStyle }}"></span>
+                  <span onClick="{{ t.onSolo }}" style="{{ t.soloStyle }}">S</span>
+                  <span onClick="{{ t.onMute }}" style="{{ t.muteStyle }}">M</span>
+                </div>
+              </div>
+            </sc-for>
+            <div style="flex:1;min-height:26px"></div>
+          </div>
+
+          <div style="flex:1;min-width:0;position:relative;display:flex;flex-direction:column;background-image:repeating-linear-gradient(90deg,var(--grid1,#171b21) 0 1px,transparent 1px 5.55%),repeating-linear-gradient(90deg,var(--grid2,#1f242c) 0 1px,transparent 1px 22.2%)">
+            <sc-for list="{{ rows }}" as="t" hint-placeholder-count="10">
+              <div onClick="{{ t.on }}" style="{{ t.laneStyle }}">
+                <sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="2">
+                  <div onClick="{{ c.on }}" onDoubleClick="{{ c.onOpen }}" style="{{ c.style }}">
+                    <span style="{{ c.labelStyle }}">{{ c.label }}</span>
+                    <div style="{{ c.artStyle }}"></div>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-for>
+            <div style="{{ playheadStyle }}"></div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- bottom panel -->
+      <div style="{{ bottomStyle }}">
+        <div onClick="{{ toggleMaxBottom }}" style="height:6px;flex:none;display:flex;align-items:center;justify-content:center;background:var(--sunk,#0b0d10);cursor:ns-resize">
+          <span style="width:40px;height:2px;border-radius:2px;background:var(--line2,#2d323b)"></span>
+        </div>
+        <div style="height:36px;flex:none;display:flex;align-items:stretch;padding:0 12px;border-bottom:1px solid var(--line,#23272f)">
+          <sc-for list="{{ tabs }}" as="t" hint-placeholder-count="2">
+            <div onClick="{{ t.on }}" style="{{ t.style }}">{{ t.name }}<span style="{{ t.metaStyle }}">{{ t.meta }}</span></div>
+          </sc-for>
+          <span style="flex:1"></span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <sc-if value="{{ showModeToggle }}" hint-placeholder-val="{{ false }}">
+              <span onClick="{{ toggleEditorMode }}" style="height:22px;padding:0 10px;display:flex;align-items:center;border-radius:6px;background:var(--accSoft,rgba(79,142,247,.14));font:500 10px Geist;color:var(--acc,#4f8ef7);cursor:pointer">{{ editorModeLabel }}</span>
+            </sc-if>
+            <span onClick="{{ toggleMaxBottom }}" style="height:22px;padding:0 8px;display:flex;align-items:center;gap:6px;border-radius:6px;background:var(--chip,#1d2128);font:400 9.5px 'Geist Mono';color:var(--dim,#8b929c);cursor:pointer">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4.4 1.8H1.8v2.6M7.6 10.2h2.6V7.6"></path></svg>F7
+            </span>
+          </div>
+        </div>
+
+        <!-- MIXER -->
+        <sc-if value="{{ mixerActive }}" hint-placeholder-val="{{ true }}">
+        <div style="flex:1;min-height:0;display:flex;padding:10px 0 12px 12px;gap:0">
+          <div style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;display:flex;gap:5px;padding-right:10px">
+            <sc-for list="{{ strips }}" as="s" hint-placeholder-count="12">
+              <div onClick="{{ s.on }}" style="{{ s.style }}">
+                <div style="{{ s.headStyle }}">
+                  <span style="{{ s.dotStyle }}"></span>
+                  <span style="{{ s.nameStyle }}">{{ s.name }}</span>
+                </div>
+                <div style="flex:none;padding:6px 7px 0;display:flex;flex-direction:column;gap:3px">
+                  <sc-for list="{{ s.inserts }}" as="i" hint-placeholder-count="2">
+                    <span onClick="{{ i.on }}" style="{{ i.style }}">{{ i.name }}</span>
+                  </sc-for>
+                  <span onClick="{{ s.onAdd }}" style="{{ s.addStyle }}">+</span>
+                </div>
+                <div style="flex:1;min-height:0;display:flex;flex-direction:column;padding:7px;gap:7px">
+                  <div style="display:flex;align-items:center;gap:6px">
+                    <span onClick="{{ s.onPan }}" style="{{ s.knobBase }}"><span style="{{ s.knobStyle }}"></span></span>
+                    <span style="font:400 9px 'Geist Mono';color:var(--dim2,#646b76)">{{ s.pan }}</span>
+                  </div>
+                  <div style="flex:1;min-height:0;display:flex;gap:5px;justify-content:center">
+                    <div onClick="{{ s.onFader }}" style="width:20px;position:relative;background:var(--sunk,#0b0d10);border-radius:4px;cursor:ns-resize"><span style="{{ s.handleStyle }}"></span></div>
+                    <div style="width:7px;background:var(--sunk,#0b0d10);border-radius:3px;position:relative;overflow:hidden"><span style="{{ s.meterStyle }}"></span></div>
+                    <sc-if value="{{ s.stereo }}" hint-placeholder-val="{{ false }}">
+                      <div style="width:7px;background:var(--sunk,#0b0d10);border-radius:3px;position:relative;overflow:hidden"><span style="{{ s.meter2Style }}"></span></div>
+                    </sc-if>
+                  </div>
+                  <div style="display:flex;align-items:baseline;justify-content:space-between">
+                    <span style="font:400 9.5px 'Geist Mono';color:var(--txt2,#c3c8d0)">{{ s.gain }}</span>
+                    <span style="font:400 8.5px 'Geist Mono';color:var(--dim2,#646b76)">{{ s.out }}</span>
+                  </div>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="flex:none;padding-right:12px;display:flex">
+            <div onClick="{{ master.on }}" style="{{ master.style }}">
+              <div style="{{ master.headStyle }}"><span style="{{ master.nameStyle }}">MASTER</span></div>
+              <div style="flex:1;min-height:0;display:flex;flex-direction:column;padding:8px;gap:8px">
+                <div style="flex:1;min-height:0;display:flex;gap:5px;justify-content:center">
+                  <div style="width:20px;position:relative;background:var(--sunk,#0b0d10);border-radius:4px"><span style="{{ master.handleStyle }}"></span></div>
+                  <div style="width:8px;background:var(--sunk,#0b0d10);border-radius:3px;position:relative;overflow:hidden"><span style="{{ master.meterStyle }}"></span></div>
+                  <div style="width:8px;background:var(--sunk,#0b0d10);border-radius:3px;position:relative;overflow:hidden"><span style="{{ master.meter2Style }}"></span></div>
+                </div>
+                <span style="font:400 9.5px 'Geist Mono';color:var(--txt2,#c3c8d0);text-align:center">−3.1 dB</span>
+                <span style="font:400 8.5px 'Geist Mono';color:var(--dim2,#646b76);text-align:center">−6.1 LUFS</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- EDITOR: piano roll -->
+        <sc-if value="{{ rollActive }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;min-height:0;display:flex;padding:10px 12px 12px;gap:0">
+          <div style="width:46px;flex:none;display:flex;flex-direction:column;border-radius:7px 0 0 7px;overflow:hidden">
+            <sc-for list="{{ keys }}" as="k" hint-placeholder-count="24">
+              <div style="{{ k.style }}">{{ k.name }}</div>
+            </sc-for>
+          </div>
+          <div style="flex:1;min-width:0;position:relative;border-radius:0 7px 7px 0;overflow:hidden;background:var(--sunk,#0b0d10);background-image:repeating-linear-gradient(90deg,var(--grid2,#1f242c) 0 1px,transparent 1px 12.5%),repeating-linear-gradient(90deg,var(--grid1,#171b21) 0 1px,transparent 1px 3.125%),repeating-linear-gradient(180deg,var(--grid1,#171b21) 0 1px,transparent 1px 4.1666%)">
+            <sc-for list="{{ notes }}" as="n" hint-placeholder-count="16">
+              <div onClick="{{ n.on }}" style="{{ n.style }}"></div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- EDITOR: steps -->
+        <sc-if value="{{ stepActive }}" hint-placeholder-val="{{ false }}">
+        <div style="flex:1;min-height:0;display:flex;flex-direction:column;padding:12px;gap:6px">
+          <sc-for list="{{ stepLanes }}" as="l" hint-placeholder-count="4">
+            <div style="flex:1;min-height:0;display:flex;align-items:center;gap:10px">
+              <span style="width:52px;flex:none;font:400 10.5px Geist;color:var(--txt2,#c3c8d0)">{{ l.name }}</span>
+              <div style="flex:1;display:flex;gap:3px;height:100%">
+                <sc-for list="{{ l.steps }}" as="s" hint-placeholder-count="16">
+                  <div onClick="{{ s.on }}" style="{{ s.style }}"></div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+      </div>
+    </div>
+
+    <!-- inspector -->
+    <sc-if value="{{ inspectorOpen }}" hint-placeholder-val="{{ true }}">
+    <div style="width:330px;flex:none;display:flex;flex-direction:column;background:var(--panel,#12151a);border-left:1px solid var(--line,#23272f)">
+      <div style="height:38px;flex:none;display:flex;align-items:center;padding:0 10px 0 12px">
+        <span style="font:500 10px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76)">INSPECTOR</span>
+        <span style="flex:1"></span>
+        <span onClick="{{ toggleInspector }}" style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--dim,#8b929c);cursor:pointer">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 2.4 8.4 6l-3.6 3.6"></path></svg>
+        </span>
+      </div>
+
+      <div style="flex:none;padding:0 12px 12px;display:flex;flex-direction:column;gap:4px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="{{ selDotStyle }}"></span>
+          <span style="font:600 15px Geist;letter-spacing:-.01em;color:var(--txt,#e7e9ec)">{{ selName }}</span>
+          <span style="font:400 10px 'Geist Mono';color:var(--dim2,#646b76)">{{ selKind }}</span>
+        </div>
+        <span style="font:400 10.5px 'Geist Mono';color:var(--dim,#8b929c);padding-left:16px">{{ selMeta }}</span>
+      </div>
+
+      <div style="flex:1;min-height:0;overflow-y:auto;padding:0 12px 12px;display:flex;flex-direction:column;gap:8px">
+
+        <sc-if value="{{ multiSelect }}" hint-placeholder-val="{{ false }}">
+          <div style="border-radius:9px;background:var(--panel2,#171b21);border:1px solid var(--line,#23272f);padding:11px;display:flex;flex-direction:column;gap:9px">
+            <span style="font:400 11px Geist;color:var(--txt2,#c3c8d0)">{{ selCount }} tracks selected — shift-click to extend</span>
+            <div onClick="{{ makeGroup }}" style="height:30px;display:flex;align-items:center;justify-content:center;gap:7px;border-radius:7px;background:var(--acc,#4f8ef7);font:500 11px Geist;color:#fff;cursor:pointer">Group into bus ⌘G</div>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{ hasInstrument }}" hint-placeholder-val="{{ true }}">
+        <div style="border-radius:9px;background:var(--panel2,#171b21);border:1px solid var(--line,#23272f);overflow:hidden">
+          <div style="height:29px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--head,#1b1f26)">
+            <span style="font:500 9px 'Geist Mono';letter-spacing:.1em;color:var(--dim2,#646b76)">INSTRUMENT</span>
+            <span style="flex:1"></span>
+            <span onClick="{{ openInstrumentWindow }}" style="width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--dim,#8b929c);cursor:pointer">
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 1.8h3v3M4.8 10.2h-3v-3M10.2 1.8 6.6 5.4M1.8 10.2l3.6-3.6"></path></svg>
+            </span>
+          </div>
+          <div style="padding:9px 10px;display:flex;flex-direction:column;gap:7px">
+            <sc-for list="{{ layers }}" as="l" hint-placeholder-count="1">
+              <div style="{{ l.style }}">
+                <span style="width:5px;height:5px;flex:none;border-radius:50%;background:#4ec08a"></span>
+                <span style="font:500 11.5px Geist;color:var(--txt,#e7e9ec)">{{ l.name }}</span>
+                <span style="flex:1"></span>
+                <span style="font:400 9.5px 'Geist Mono';color:var(--dim2,#646b76)">{{ l.meta }}</span>
+              </div>
+            </sc-for>
+            <div onClick="{{ addLayer }}" style="height:25px;display:flex;align-items:center;justify-content:center;border-radius:6px;border:1px dashed var(--line2,#2d323b);font:500 10px Geist;color:var(--dim,#8b929c);cursor:pointer">+ Layer</div>
+          </div>
+        </div>
+        </sc-if>
+
+        <sc-for list="{{ cards }}" as="c" hint-placeholder-count="3">
+          <div style="{{ c.style }}">
+            <div onClick="{{ c.onToggle }}" style="{{ c.headStyle }}">
+              <span onClick="{{ c.onBypass }}" style="{{ c.dotStyle }}"></span>
+              <span style="{{ c.nameStyle }}">{{ c.name }}</span>
+              <span style="font:400 9px 'Geist Mono';color:var(--dim2,#646b76)">{{ c.state }}</span>
+              <span style="flex:1"></span>
+              <span onClick="{{ c.onOpen }}" style="width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--acc,#4f8ef7);cursor:pointer">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 1.8h3v3M4.8 10.2h-3v-3M10.2 1.8 6.6 5.4M1.8 10.2l3.6-3.6"></path></svg>
+              </span>
+            </div>
+            <sc-if value="{{ c.showCurve }}" hint-placeholder-val="{{ false }}">
+              <div style="height:70px;position:relative;background:var(--sunk,#0b0d10)">
+                <svg viewBox="0 0 320 70" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+                  <path d="{{ c.fill }}" fill="{{ c.fillColor }}"></path>
+                  <path d="{{ c.line }}" fill="none" stroke="{{ c.stroke }}" stroke-width="1.5"></path>
+                </svg>
+              </div>
+            </sc-if>
+            <sc-if value="{{ c.showKnobs }}" hint-placeholder-val="{{ false }}">
+              <div style="{{ c.knobGrid }}">
+                <sc-for list="{{ c.knobs }}" as="k" hint-placeholder-count="4">
+                  <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+                    <span onClick="{{ k.on }}" style="{{ k.base }}"><span style="{{ k.pointer }}"></span></span>
+                    <span style="font:400 9.5px 'Geist Mono';color:var(--txt2,#c3c8d0)">{{ k.val }}</span>
+                    <span style="font:400 8.5px 'Geist Mono';color:var(--dim2,#646b76)">{{ k.name }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ c.showTail }}" hint-placeholder-val="{{ false }}">
+              <div style="height:56px;position:relative;background:var(--sunk,#0b0d10)">
+                <svg viewBox="0 0 320 56" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+                  <path d="{{ c.tailFill }}" fill="{{ c.fillColor }}"></path>
+                  <path d="{{ c.tailLine }}" fill="none" stroke="{{ c.stroke }}" stroke-width="1.4"></path>
+                </svg>
+                <span style="position:absolute;left:8px;bottom:4px;font:400 8.5px 'Geist Mono';color:var(--faint,#4b525c)">{{ c.tailLabel }}</span>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+
+        <sc-if value="{{ hasSends }}" hint-placeholder-val="{{ true }}">
+        <div style="border-radius:9px;background:var(--panel2,#171b21);border:1px solid var(--line,#23272f);padding:10px;display:flex;flex-direction:column;gap:10px">
+          <span style="font:500 9px 'Geist Mono';letter-spacing:.1em;color:var(--dim2,#646b76)">SENDS TO RETURNS</span>
+          <sc-for list="{{ sends }}" as="s" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span onClick="{{ s.onKnob }}" style="{{ s.knobBase }}"><span style="{{ s.pointer }}"></span></span>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                <span style="font:500 11px Geist;color:var(--txt,#e7e9ec)">{{ s.name }}</span>
+                <span style="font:400 9.5px 'Geist Mono';color:var(--dim2,#646b76)">{{ s.device }}</span>
+              </div>
+              <span style="font:400 10px 'Geist Mono';color:var(--txt2,#c3c8d0)">{{ s.val }}</span>
+              <span onClick="{{ s.onOpen }}" style="width:20px;height:20px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:var(--dim,#8b929c);cursor:pointer">
+                <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4.8 2.4 8.4 6l-3.6 3.6"></path></svg>
+              </span>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+      </div>
+
+      <div style="flex:none;padding:9px 10px;border-top:1px solid var(--line,#23272f);background:var(--sunk,#0b0d10);display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+        <sc-for list="{{ chips }}" as="c" hint-placeholder-count="3">
+          <div onClick="{{ c.on }}" style="{{ c.style }}"><span style="{{ c.dotStyle }}"></span>{{ c.name }}</div>
+        </sc-for>
+        <span style="flex:1"></span>
+        <div onClick="{{ openAddFx }}" style="height:25px;padding:0 9px;display:flex;align-items:center;gap:6px;border-radius:7px;border:1px dashed var(--line2,#2d323b);font:500 10px Geist;color:var(--dim,#8b929c);cursor:pointer">+ Device<span style="font:400 9px 'Geist Mono';color:var(--dim2,#646b76)">⌘K</span></div>
+      </div>
+    </div>
+    </sc-if>
+    <sc-if value="{{ inspectorClosed }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ toggleInspector }}" style="width:32px;flex:none;background:var(--panel,#12151a);border-left:1px solid var(--line,#23272f);display:flex;flex-direction:column;align-items:center;padding-top:11px;gap:14px;cursor:pointer">
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--dim,#8b929c)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7.2 2.4 3.6 6l3.6 3.6"></path></svg>
+      <span style="font:500 10px 'Geist Mono';letter-spacing:.12em;color:var(--dim2,#646b76);writing-mode:vertical-rl">INSPECTOR</span>
+    </div>
+    </sc-if>
+
+    <sc-if value="{{ addFxOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="{{ addFxStyle }}">
+      <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid var(--line,#23272f)">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="var(--dim2,#646b76)" stroke-width="1.5" stroke-linecap="round"><circle cx="5.2" cy="5.2" r="3.2"></circle><path d="M7.6 7.6 10 10"></path></svg>
+        <span style="font:400 11.5px 'Geist Mono';color:var(--txt,#e7e9ec)">comp|</span>
+        <span style="flex:1"></span>
+        <span onClick="{{ closeAddFx }}" style="font:400 10px 'Geist Mono';color:var(--dim2,#646b76);cursor:pointer">esc</span>
+      </div>
+      <sc-for list="{{ fxResults }}" as="f" hint-placeholder-count="6">
+        <div onClick="{{ f.on }}" style="{{ f.style }}"><span>{{ f.name }}</span><span style="flex:1"></span><span style="font:400 9.5px 'Geist Mono';color:var(--dim2,#646b76)">{{ f.kind }}</span></div>
+      </sc-for>
+    </div>
+    </sc-if>
+
+    <!-- floating plugin windows -->
+    <sc-for list="{{ windows }}" as="w" hint-placeholder-count="0">
+      <div style="{{ w.style }}">
+        <div onMouseDown="{{ w.onDrag }}" onDoubleClick="{{ w.onMax }}" style="height:34px;flex:none;display:flex;align-items:center;gap:9px;padding:0 9px;background:var(--head,#1b1f26);border-bottom:1px solid var(--line,#23272f);cursor:grab">
+          <span style="{{ w.dotStyle }}"></span>
+          <span style="font:600 11.5px Geist;color:var(--txt,#e7e9ec)">{{ w.name }}</span>
+          <span style="font:400 10.5px 'Geist Mono';color:var(--acc,#4f8ef7)">{{ w.owner }}</span>
+          <span style="flex:1"></span>
+          <span style="height:21px;padding:0 8px;display:flex;align-items:center;border-radius:5px;background:var(--chip,#1d2128);font:400 9.5px 'Geist Mono';color:var(--dim,#8b929c)">{{ w.preset }}</span>
+          <span onClick="{{ w.onMax }}" style="width:21px;height:21px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:var(--chip,#1d2128);color:var(--dim,#8b929c);cursor:pointer">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1.2"></rect></svg>
+          </span>
+          <span onClick="{{ w.onClose }}" style="width:21px;height:21px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:var(--chip,#1d2128);color:var(--dim,#8b929c);cursor:pointer">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"></path></svg>
+          </span>
+        </div>
+        <div style="flex:1;min-height:0;display:flex;flex-direction:column;padding:12px;gap:10px">
+          <div style="flex:1;min-height:0;position:relative;border-radius:8px;background:var(--sunk,#0b0d10);overflow:hidden;background-image:repeating-linear-gradient(90deg,var(--grid1,#171b21) 0 1px,transparent 1px 12.5%),repeating-linear-gradient(180deg,var(--grid1,#171b21) 0 1px,transparent 1px 20%)">
+            <svg viewBox="0 0 610 206" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+              <path d="{{ w.fill }}" fill="{{ w.fillColor }}"></path>
+              <path d="{{ w.line }}" fill="none" stroke="{{ w.stroke }}" stroke-width="2"></path>
+            </svg>
+            <sc-for list="{{ w.handles }}" as="h" hint-placeholder-count="3">
+              <span onClick="{{ h.on }}" style="{{ h.style }}">{{ h.n }}</span>
+            </sc-for>
+          </div>
+          <div style="flex:none;display:flex;gap:5px">
+            <sc-for list="{{ w.bands }}" as="b" hint-placeholder-count="5">
+              <div onClick="{{ b.on }}" style="{{ b.style }}">
+                <span style="font:400 8.5px 'Geist Mono';color:var(--dim2,#646b76)">{{ b.tag }}</span>
+                <span style="font:400 10.5px 'Geist Mono';color:var(--txt,#e7e9ec)">{{ b.val }}</span>
+                <span style="font:400 9px 'Geist Mono';color:var(--dim,#8b929c)">{{ b.sub }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        <span style="position:absolute;right:3px;bottom:3px;width:11px;height:11px;border-right:2px solid var(--line2,#2d323b);border-bottom:2px solid var(--line2,#2d323b);border-radius:0 0 3px 0;cursor:nwse-resize"></span>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="height:26px;flex:none;display:flex;align-items:center;gap:18px;padding:0 14px;background:var(--sunk,#0b0d10);border-top:1px solid var(--line,#23272f);font:400 9.5px 'Geist Mono';color:var(--dim2,#646b76)">
+    <span>CPU <span style="color:var(--txt2,#c3c8d0)">12%</span></span>
+    <span>BUFFER <span style="color:var(--txt2,#c3c8d0)">256</span></span>
+    <span>LATENCY <span style="color:var(--txt2,#c3c8d0)">5.8 ms</span></span>
+    <span style="flex:1"></span>
+    <span>{{ winCount }}</span>
+    <span>AUTOSAVE 2 min</span>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1600,&quot;height&quot;:900},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark' | 'light'&quot;,&quot;section&quot;:&quot;Appearance&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#4f8ef7&quot;,&quot;options&quot;:[&quot;#4f8ef7&quot;,&quot;#2f6fe0&quot;,&quot;#47b8a8&quot;,&quot;#7c8cf8&quot;],&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Appearance&quot;}}">
+const DARK = { bg:'#0e1013', top:'#15181c', panel:'#12151a', panel2:'#171b21', head:'#1b1f26', line:'#23272f', line2:'#2d323b', txt:'#e7e9ec', txt2:'#c3c8d0', dim:'#8b929c', dim2:'#646b76', faint:'#4b525c', sunk:'#0b0d10', chip:'#1d2128', lane:'#101318', grid1:'#171b21', grid2:'#1f242c', ink:'#0b1220' };
+const LIGHT = { bg:'#eef0f3', top:'#ffffff', panel:'#f6f7f9', panel2:'#ffffff', head:'#eef0f3', line:'#dfe2e7', line2:'#cbd0d8', txt:'#14171c', txt2:'#3b414b', dim:'#6a7280', dim2:'#8a919b', faint:'#a8aeb8', sunk:'#eaecf0', chip:'#e5e8ed', lane:'#f2f4f7', grid1:'#e6e9ee', grid2:'#d8dce3', ink:'#ffffff' };
+
+const TRACKS = [
+  { id:'kick',   name:'Kick',   dev:'Drum Sampler', color:'#4f8ef7', pan:'C',   fader:26, meter:70, drum:true },
+  { id:'snare',  name:'Snare',  dev:'Drum Sampler', color:'#5aa9e6', pan:'L06', fader:32, meter:58, drum:true },
+  { id:'hats',   name:'Hats',   dev:'Drum Sampler', color:'#69c3d6', pan:'R10', fader:38, meter:44, drum:true },
+  { id:'bass',   name:'Bass',   dev:'Sub Mono',     color:'#47b8a8', pan:'C',   fader:24, meter:74 },
+  { id:'reese',  name:'Reese',  dev:'Wavetable',    color:'#5fbf8a', pan:'C',   fader:36, meter:52 },
+  { id:'chords', name:'Chords', dev:'Analog Keys',  color:'#7c8cf8', pan:'R08', fader:34, meter:48 },
+  { id:'lead',   name:'Lead',   dev:'Wavetable',    color:'#e0a44a', pan:'L04', fader:30, meter:62 },
+  { id:'pad',    name:'Pad',    dev:'Granular',     color:'#9a8cf0', pan:'C',   fader:44, meter:30 },
+  { id:'vocal',  name:'Vocal',  dev:'Comp track',   color:'#d9678f', pan:'C',   fader:28, meter:66 },
+  { id:'fx',     name:'FX',     dev:'Transitions',  color:'#8b93a1', pan:'C',   fader:46, meter:22 }
+];
+const RETURNS = [
+  { id:'ret1', name:'Reverb', dev:'Hall Reverb', color:'#4f8ef7', pan:'C', fader:38, meter:40, ret:true },
+  { id:'ret2', name:'Delay',  dev:'Ping Delay',  color:'#5aa9e6', pan:'C', fader:44, meter:26, ret:true }
+];
+const MASTER = { id:'master', name:'MASTER', dev:'stereo out', pan:'C', fader:22, meter:78, meter2:72, master:true };
+
+const CLIPS = {
+  kick:   [[5.5, 83, 'drum']],
+  snare:  [[11, 72, 'drum']],
+  hats:   [[16.6, 72, 'drum']],
+  bass:   [[11, 77, 'midi']],
+  reese:  [[44.4, 33, 'midi']],
+  chords: [[22.2, 22, 'midi'], [55.5, 22, 'midi']],
+  lead:   [[33.3, 10.5, 'midi'], [44.4, 21.5, 'midi'], [66.6, 21.5, 'midi']],
+  pad:    [[22.2, 33, 'midi'], [72, 16, 'midi']],
+  vocal:  [[22.2, 66.6, 'audio']],
+  fx:     [[16.6, 16, 'auto'], [38.8, 10.5, 'auto'], [55.5, 21.5, 'auto']]
+};
+
+const EQ = { name:'EQ Eight', kind:'curve' };
+const CHAINS = {
+  kick:   [EQ, { name:'Transient', kind:'knobs' }],
+  snare:  [EQ, { name:'Compressor', kind:'knobs' }],
+  hats:   [{ name:'Filter', kind:'curve' }],
+  bass:   [{ name:'Saturator', kind:'curve' }, { name:'Compressor', kind:'knobs' }],
+  reese:  [{ name:'Chorus', kind:'knobs' }, EQ],
+  chords: [EQ, { name:'Compressor', kind:'knobs' }],
+  lead:   [EQ, { name:'Compressor', kind:'knobs' }, { name:'Saturator', kind:'curve' }],
+  pad:    [{ name:'Filter', kind:'curve' }],
+  vocal:  [{ name:'De-Esser', kind:'knobs' }, EQ, { name:'Compressor', kind:'knobs' }],
+  fx:     [{ name:'Filter', kind:'curve' }],
+  ret1:   [{ name:'Hall Reverb', kind:'reverb' }, EQ],
+  ret2:   [{ name:'Ping Delay', kind:'delay' }],
+  master: [EQ, { name:'Glue Comp', kind:'knobs' }, { name:'Limiter', kind:'knobs' }]
+};
+const KNOBS = {
+  Compressor: [['THRESH','−18 dB',-52],['RATIO','3.2:1',-14],['ATTACK','10 ms',-64],['RELEASE','120 ms',36]],
+  'Glue Comp': [['THRESH','−12 dB',-40],['RATIO','4:1',10],['ATTACK','1 ms',-70],['MAKEUP','2.0 dB',14]],
+  Limiter: [['CEILING','−0.3 dB',60],['RELEASE','60 ms',-20],['LOOK','1.5 ms',-50],['GR','1.8 dB',0]],
+  Transient: [['ATTACK','+4.0',26],['SUSTAIN','−2.0',-30],['MIX','80 %',48],['OUT','0.0 dB',0]],
+  'De-Esser': [['FREQ','6.4 kHz',20],['THRESH','−22 dB',-40],['RANGE','6 dB',-8],['MIX','100 %',68]],
+  Chorus: [['RATE','0.4 Hz',-46],['DEPTH','35 %',-6],['WIDTH','80 %',44],['MIX','28 %',-24]],
+  'Hall Reverb': [['SIZE','62 m',18],['DECAY','3.4 s',26],['PRE-DLY','24 ms',-36],['DIFFUSE','78 %',40],['DAMPING','4.2 kHz',-8],['DRY/WET','100 %',66]],
+  'Ping Delay': [['TIME','1/8 D',-18],['FEEDBACK','42 %',4],['WIDTH','100 %',66],['DRY/WET','100 %',66]]
+};
+const SECTIONS = [['INTRO','1',8],['VERSE','9',16],['CHORUS','25',16],['DROP','41',16],['BREAKDOWN','57',16],['DROP 2','73',14],['OUTRO','87',8]];
+const FX_LIST = [['Compressor','dynamics'],['Glue Comp','dynamics'],['Multiband','dynamics'],['EQ Eight','filter'],['Saturator','drive'],['Hall Reverb','reverb']];
+const BROWSER_ROWS = [
+  ['Drums','412',0],['Kicks','28',1],['KICK_07','0.34',2],['KICK_11','0.41',2],['KICK_22','0.28',2],
+  ['Snares','61',1],['Hats','88',1],['Bass','96',0],['Synths','210',0],['Vocals','54',0],['Loops','331',0],['Devices','64',0]
+];
+const KEY_NAMES = ['B','A#','A','G#','G','F#','F','E','D#','D','C#','C'];
+const CURVE = {
+  line: 'M0 42 C34 42 44 18 74 22 C104 26 116 50 150 48 C186 46 202 28 236 28 C266 28 288 54 320 56',
+  fill: 'M0 42 C34 42 44 18 74 22 C104 26 116 50 150 48 C186 46 202 28 236 28 C266 28 288 54 320 56 L320 70 L0 70 Z'
+};
+const TAIL = {
+  line: 'M8 50 C8 12 8 12 8 12 C30 12 40 44 62 46 C90 48 96 20 120 22 C150 24 160 44 190 47 C230 50 240 34 270 44 C292 51 300 52 312 53',
+  fill: 'M8 50 C8 12 8 12 8 12 C30 12 40 44 62 46 C90 48 96 20 120 22 C150 24 160 44 190 47 C230 50 240 34 270 44 C292 51 300 52 312 53 L312 56 L8 56 Z'
+};
+
+class Component extends DCLogic {
+  state = {
+    theme: null, sel: ['lead'], tab: 'mixer', editorClip: 'Lead 2', editorTrack: 'lead', editorMode: 'roll',
+    solo: {}, mute: {}, arm: { lead: true }, browser: true, inspector: true, maxBottom: false,
+    groups: [], groupSeq: 0, folded: {}, windows: [], zTop: 1,
+    collapsed: {}, bypass: {}, section: 'DROP', playing: false, loop: true, tool: 'select',
+    browserTab: 'Sounds', preview: 'KICK_07', addFx: false, autoB: false, autoI: false,
+    steps: [[1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],[0,0,0,0,1,0,0,0,0,0,1,0,1,0,0,0],[0,1,0,1,0,1,0,1,0,1,0,1,0,1,1,1],[0,0,0,0,0,0,1,0,0,0,0,0,0,1,0,0]],
+    notes: [[14,0,2],[12,2,2],[10,4,4],[12,8,2],[14,10,2],[9,12,4],[14,16,2],[12,18,2],[10,20,4],[7,24,3],[9,27,2],[12,29,3],[16,4,2],[16,20,2],[5,12,4],[5,29,3]]
+  };
+
+  componentDidMount() { this.fit = () => this.autofit(); window.addEventListener('resize', this.fit); this.autofit(); }
+  componentWillUnmount() { window.removeEventListener('resize', this.fit); }
+  autofit() {
+    const w = window.innerWidth, s = this.state;
+    const patch = {};
+    if (w < 1180 && s.browser) { patch.browser = false; patch.autoB = true; }
+    else if (w >= 1180 && s.autoB && !s.browser) { patch.browser = true; patch.autoB = false; }
+    if (w < 940 && s.inspector) { patch.inspector = false; patch.autoI = true; }
+    else if (w >= 940 && s.autoI && !s.inspector) { patch.inspector = true; patch.autoI = false; }
+    if (Object.keys(patch).length) this.setState(patch);
+  }
+
+  light() { return (this.state.theme || this.props.theme || 'dark') === 'light'; }
+  T() { return this.light() ? LIGHT : DARK; }
+  acc() { const a = this.props.accent || '#4f8ef7'; return this.light() ? this.mix(a, '#0b1c3d', 0.28) : a; }
+  mix(a, b, t) {
+    const p = h => [1,3,5].map(i => parseInt(h.slice(i, i + 2), 16));
+    const x = p(a), y = p(b), c = i => Math.round(x[i] + (y[i] - x[i]) * t).toString(16).padStart(2, '0');
+    return '#' + c(0) + c(1) + c(2);
+  }
+  alpha(hex, a) { const p = [1,3,5].map(i => parseInt(hex.slice(i, i + 2), 16)); return 'rgba(' + p.join(',') + ',' + a + ')'; }
+
+  all() { return TRACKS.concat(RETURNS, [MASTER]); }
+  ent(id) { return this.all().find(t => t.id === id); }
+  primary() { const s = this.state.sel; return this.ent(s[s.length - 1]) || TRACKS[6]; }
+  groupOf(id) { return this.state.groups.find(g => g.members.indexOf(id) >= 0); }
+
+  selectId(id) {
+    return e => {
+      if (e) e.stopPropagation();
+      const add = e && (e.shiftKey || e.metaKey);
+      this.setState(s => {
+        if (!add) return { sel: [id] };
+        const has = s.sel.indexOf(id) >= 0;
+        const next = has ? s.sel.filter(x => x !== id) : s.sel.concat([id]);
+        return { sel: next.length ? next : [id] };
+      });
+    };
+  }
+  flip(key, id) {
+    return e => {
+      if (e) e.stopPropagation();
+      this.setState(s => { const m = Object.assign({}, s[key]); m[id] = !m[id]; return { [key]: m }; });
+    };
+  }
+  makeGroup = e => {
+    if (e) e.stopPropagation();
+    const members = this.state.sel.filter(id => TRACKS.some(t => t.id === id) && !this.groupOf(id));
+    if (members.length < 2) return;
+    this.setState(s => {
+      const n = s.groupSeq + 1;
+      const g = { id: 'grp' + n, name: 'Group ' + n, members: members, color: (this.ent(members[0]) || {}).color, fader: 30, meter: 60, pan: 'C' };
+      return { groups: s.groups.concat([g]), groupSeq: n, sel: [g.id] };
+    });
+  };
+
+  openWindow(name, owner) {
+    return e => {
+      if (e) e.stopPropagation();
+      this.setState(s => {
+        const hit = s.windows.find(w => w.name === name && w.owner === owner);
+        if (hit) return { windows: s.windows.map(w => (w === hit ? Object.assign({}, w, { z: s.zTop + 1 }) : w)), zTop: s.zTop + 1 };
+        const n = s.windows.length;
+        const W = 620, H = 340;
+        const x = Math.max(24, Math.round((window.innerWidth - W) / 2) - 120 + n * 28);
+        const y = Math.max(70, Math.round(window.innerHeight * 0.16) + n * 24);
+        return { windows: s.windows.concat([{ id: Date.now(), name, owner, x, y, w: W, h: H, max: false, z: s.zTop + 1 }]), zTop: s.zTop + 1 };
+      });
+    };
+  }
+  closeWin(id) { return e => { e.stopPropagation(); this.setState(s => ({ windows: s.windows.filter(w => w.id !== id) })); }; }
+  maxWin(id) { return e => { e.stopPropagation(); this.setState(s => ({ windows: s.windows.map(w => (w.id === id ? Object.assign({}, w, { max: !w.max }) : w)) })); }; }
+  dragWin(id) {
+    return e => {
+      const win = this.state.windows.find(w => w.id === id);
+      if (!win || win.max) return;
+      e.preventDefault();
+      const sx = e.clientX, sy = e.clientY, ox = win.x, oy = win.y;
+      const move = ev => this.setState(s => ({ windows: s.windows.map(w => (w.id === id ? Object.assign({}, w, { x: Math.max(0, ox + ev.clientX - sx), y: Math.max(56, oy + ev.clientY - sy) }) : w)) }));
+      const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
+      window.addEventListener('mousemove', move);
+      window.addEventListener('mouseup', up);
+      this.setState(s => ({ windows: s.windows.map(w => (w.id === id ? Object.assign({}, w, { z: s.zTop + 1 }) : w)), zTop: s.zTop + 1 }));
+    };
+  }
+
+  knob(size, deg, color, dim) {
+    const T = this.T();
+    return {
+      base: { width: size + 'px', height: size + 'px', flex: 'none', borderRadius: '50%', background: T.chip,
+        boxShadow: 'inset 0 0 0 1px ' + T.line2, position: 'relative', cursor: 'pointer' },
+      pointer: { position: 'absolute', left: '50%', top: '3px', width: '1.5px', height: Math.round(size * 0.34) + 'px',
+        borderRadius: '1px', background: dim ? T.dim : color, transform: 'translateX(-50%) rotate(' + deg + 'deg)', transformOrigin: 'bottom' }
+    };
+  }
+  clipArt(kind, color) {
+    const c = a => this.alpha(color, a);
+    const base = { position: 'absolute', left: 0, right: 0, top: '15px', bottom: '4px', backgroundRepeat: 'repeat-x' };
+    if (kind === 'audio') return Object.assign({}, base, {
+      backgroundImage: 'repeating-linear-gradient(90deg,' + c(0.95) + ' 0 1.5px,transparent 1.5px 4px),repeating-linear-gradient(90deg,' + c(0.35) + ' 0 1.5px,transparent 1.5px 4px)',
+      backgroundSize: '100% 46%,100% 100%', backgroundPosition: 'center,center' });
+    if (kind === 'drum') return Object.assign({}, base, {
+      backgroundImage: 'repeating-linear-gradient(90deg,' + c(0.9) + ' 0 2px,transparent 2px 11px),repeating-linear-gradient(90deg,' + c(0.5) + ' 0 2px,transparent 2px 22px)',
+      backgroundSize: '100% 4px,100% 4px', backgroundPosition: '0 70%,0 26%' });
+    if (kind === 'auto') return Object.assign({}, base, {
+      backgroundImage: 'linear-gradient(78deg,transparent 46%,' + c(0.75) + ' 47%,' + c(0.75) + ' 49%,transparent 50%)', backgroundSize: '100% 100%' });
+    return Object.assign({}, base, {
+      backgroundImage: 'repeating-linear-gradient(90deg,' + c(0.85) + ' 0 12px,transparent 12px 26px),repeating-linear-gradient(90deg,' + c(0.65) + ' 0 8px,transparent 8px 34px)',
+      backgroundSize: '100% 4px,100% 4px', backgroundPosition: '0 24%,0 72%' });
+  }
+
+  renderVals() {
+    const s = this.state, T = this.T(), A = this.acc(), light = this.light();
+    const p = this.primary(), selSet = {};
+    s.sel.forEach(id => { selSet[id] = true; });
+    const multi = s.sel.length > 1;
+
+    const vars = { '--bg': T.bg, '--top': T.top, '--panel': T.panel, '--panel2': T.panel2, '--head': T.head,
+      '--line': T.line, '--line2': T.line2, '--txt': T.txt, '--txt2': T.txt2, '--dim': T.dim, '--dim2': T.dim2,
+      '--faint': T.faint, '--sunk': T.sunk, '--chip': T.chip, '--lane': T.lane, '--grid1': T.grid1, '--grid2': T.grid2,
+      '--acc': A, '--accSoft': this.alpha(A, 0.14) };
+    const shell = Object.assign({ width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column',
+      background: T.bg, color: T.txt, font: '400 12px Geist', overflow: 'hidden' }, vars);
+
+    const rowH = 42;
+    const trackRow = (t, indent, group) => {
+      const on = !!selSet[t.id], muted = !!s.mute[t.id], soloed = !!s.solo[t.id], armed = !!s.arm[t.id];
+      return {
+        isGroup: false, name: t.name, dev: t.dev, foldRotate: {},
+        on: this.selectId(t.id), onFold: e => e.stopPropagation(),
+        rowStyle: { height: rowH + 'px', flex: 'none', display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '0 8px 0 ' + (10 + indent) + 'px', borderBottom: '1px solid ' + T.line,
+          background: on ? this.alpha(A, light ? 0.12 : 0.1) : 'transparent',
+          boxShadow: on ? 'inset 2px 0 0 ' + A : 'none', cursor: 'pointer' },
+        barStyle: { width: '3px', height: '24px', flex: 'none', borderRadius: '2px', background: (group && group.color) || t.color, opacity: muted ? 0.35 : 1 },
+        nameStyle: { font: (on ? '600' : '500') + ' 11.5px Geist', color: muted ? T.dim2 : (on ? T.txt : T.txt2), whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+        devStyle: { font: "400 9.5px 'Geist Mono'", color: muted ? T.faint : T.dim2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+        armStyle: { width: '17px', height: '17px', flex: 'none', borderRadius: '50%', cursor: 'pointer',
+          background: armed ? '#e05263' : 'transparent', boxShadow: 'inset 0 0 0 1px ' + (armed ? '#e05263' : T.line2) },
+        soloStyle: { width: '17px', height: '17px', flex: 'none', borderRadius: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          font: "500 9px 'Geist Mono'", cursor: 'pointer', background: soloed ? '#e0a44a' : T.chip, color: soloed ? T.ink : T.dim },
+        muteStyle: { width: '17px', height: '17px', flex: 'none', borderRadius: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          font: "500 9px 'Geist Mono'", cursor: 'pointer', background: muted ? T.txt2 : T.chip, color: muted ? T.ink : T.dim },
+        onSolo: this.flip('solo', t.id), onMute: this.flip('mute', t.id), onArm: this.flip('arm', t.id),
+        laneStyle: { height: rowH + 'px', flex: 'none', borderBottom: '1px solid ' + T.line, position: 'relative',
+          background: on ? this.alpha(A, 0.05) : 'transparent', opacity: muted ? 0.4 : 1, cursor: 'pointer' },
+        clips: (CLIPS[t.id] || []).map(c => {
+          const label = t.name + ' ' + ((CLIPS[t.id].indexOf(c)) + 1);
+          const active = s.editorClip === label;
+          const col = (group && group.color) || t.color;
+          return {
+            label: label, on: this.selectId(t.id),
+            onOpen: e => { e.stopPropagation(); this.setState({ sel: [t.id], tab: 'editor', editorClip: label, editorTrack: t.id, editorMode: t.drum ? 'step' : 'roll' }); },
+            style: { position: 'absolute', left: c[0] + '%', width: c[1] + '%', top: '5px', bottom: '5px', borderRadius: '4px',
+              background: this.alpha(col, active ? 0.3 : light ? 0.22 : 0.14),
+              boxShadow: active ? '0 0 0 1.5px ' + col : 'inset 0 0 0 1px ' + this.alpha(col, 0.4),
+              overflow: 'hidden', cursor: 'pointer' },
+            labelStyle: { position: 'absolute', left: '6px', top: '2px', zIndex: 1, font: "500 9px 'Geist Mono'",
+              color: light ? this.mix(col, '#0d1016', 0.5) : this.mix(col, '#ffffff', 0.5) },
+            artStyle: this.clipArt(c[2], light ? this.mix(col, '#0d1016', 0.3) : this.mix(col, '#ffffff', 0.2))
+          };
+        })
+      };
+    };
+
+    const rows = [];
+    const grouped = {};
+    s.groups.forEach(g => {
+      const on = !!selSet[g.id], folded = !!s.folded[g.id];
+      g.members.forEach(m => { grouped[m] = g; });
+      const clips = [];
+      g.members.forEach(m => (CLIPS[m] || []).forEach(c => clips.push([m, c])));
+      rows.push({
+        isGroup: true, name: g.name, dev: g.members.length + ' tracks · bus',
+        on: this.selectId(g.id), onFold: e => { e.stopPropagation(); this.setState(st => { const f = Object.assign({}, st.folded); f[g.id] = !f[g.id]; return { folded: f }; }); },
+        foldRotate: { transform: folded ? 'rotate(0deg)' : 'rotate(90deg)', transition: 'transform .12s' },
+        rowStyle: { height: rowH + 'px', flex: 'none', display: 'flex', alignItems: 'center', gap: '6px', padding: '0 8px 0 6px',
+          borderBottom: '1px solid ' + T.line, background: on ? this.alpha(A, light ? 0.12 : 0.1) : this.alpha(g.color, light ? 0.06 : 0.05),
+          boxShadow: on ? 'inset 2px 0 0 ' + A : 'none', cursor: 'pointer' },
+        barStyle: { width: '3px', height: '24px', flex: 'none', borderRadius: '2px', background: g.color },
+        nameStyle: { font: '600 11.5px Geist', color: T.txt },
+        devStyle: { font: "400 9.5px 'Geist Mono'", color: T.dim2 },
+        armStyle: { display: 'none' },
+        soloStyle: { width: '17px', height: '17px', borderRadius: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center', font: "500 9px 'Geist Mono'", background: s.solo[g.id] ? '#e0a44a' : T.chip, color: s.solo[g.id] ? T.ink : T.dim, cursor: 'pointer' },
+        muteStyle: { width: '17px', height: '17px', borderRadius: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center', font: "500 9px 'Geist Mono'", background: s.mute[g.id] ? T.txt2 : T.chip, color: s.mute[g.id] ? T.ink : T.dim, cursor: 'pointer' },
+        onSolo: this.flip('solo', g.id), onMute: this.flip('mute', g.id), onArm: e => e.stopPropagation(),
+        laneStyle: { height: rowH + 'px', flex: 'none', borderBottom: '1px solid ' + T.line, position: 'relative',
+          background: on ? this.alpha(A, 0.05) : 'transparent', cursor: 'pointer' },
+        clips: folded ? clips.map(pair => {
+          const t = this.ent(pair[0]), c = pair[1];
+          return {
+            label: '', on: this.selectId(g.id), onOpen: e => e.stopPropagation(),
+            style: { position: 'absolute', left: c[0] + '%', width: c[1] + '%', top: '5px', bottom: '5px', borderRadius: '4px',
+              background: this.alpha(g.color, light ? 0.2 : 0.13), boxShadow: 'inset 0 0 0 1px ' + this.alpha(g.color, 0.35), overflow: 'hidden' },
+            labelStyle: { display: 'none' },
+            artStyle: this.clipArt(c[2], light ? this.mix(g.color, '#0d1016', 0.3) : this.mix(g.color, '#ffffff', 0.2))
+          };
+        }) : []
+      });
+      if (!folded) g.members.forEach(m => { const t = this.ent(m); if (t) rows.push(trackRow(t, 16, g)); });
+    });
+    TRACKS.forEach(t => { if (!grouped[t.id]) rows.push(trackRow(t, 0, null)); });
+
+    const stripOf = (t, isGroup) => {
+      const on = !!selSet[t.id], muted = !!s.mute[t.id];
+      const pan = t.pan === 'C' ? 0 : (t.pan[0] === 'L' ? -1 : 1) * (parseInt(t.pan.slice(1), 10) / 64) * 130;
+      const k = this.knob(24, pan, on ? A : T.dim, false);
+      const chain = CHAINS[t.id] || [];
+      return {
+        name: t.name, pan: t.pan, gain: t.fader ? '−' + (t.fader / 5).toFixed(1) : '0.0',
+        out: isGroup ? 'MASTER' : (grouped[t.id] ? grouped[t.id].name.toUpperCase() : t.ret ? 'MASTER' : 'MASTER'),
+        stereo: false, on: this.selectId(t.id), onPan: e => e.stopPropagation(), onFader: e => e.stopPropagation(),
+        style: { width: '82px', flex: 'none', display: 'flex', flexDirection: 'column', borderRadius: '8px',
+          background: on ? this.alpha(A, light ? 0.1 : 0.09) : T.panel2, boxShadow: 'inset 0 0 0 1px ' + (on ? A : T.line),
+          opacity: muted ? 0.5 : 1, cursor: 'pointer', overflow: 'hidden' },
+        headStyle: { height: '26px', flex: 'none', display: 'flex', alignItems: 'center', gap: '6px', padding: '0 8px',
+          background: on ? this.alpha(A, 0.16) : T.head },
+        dotStyle: { width: '5px', height: '5px', flex: 'none', borderRadius: '50%', background: (isGroup ? t.color : (grouped[t.id] ? grouped[t.id].color : t.color)) },
+        nameStyle: { font: (on ? '600' : '500') + ' 10.5px Geist', color: on ? T.txt : T.txt2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+        inserts: chain.slice(0, 2).map(fx => ({
+          name: fx.name, on: this.openWindow(fx.name, t.name),
+          style: { height: '17px', display: 'flex', alignItems: 'center', padding: '0 6px', borderRadius: '4px',
+            background: s.bypass[fx.name] ? 'transparent' : T.chip, boxShadow: s.bypass[fx.name] ? 'inset 0 0 0 1px ' + T.line : 'none',
+            font: "400 9px 'Geist Mono'", color: s.bypass[fx.name] ? T.dim2 : T.txt2, whiteSpace: 'nowrap', overflow: 'hidden', cursor: 'pointer' }
+        })),
+        onAdd: e => { e.stopPropagation(); this.setState({ sel: [t.id], addFx: true }); },
+        addStyle: { height: '17px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '4px',
+          border: '1px dashed ' + T.line2, font: "400 10px 'Geist Mono'", color: T.dim2, cursor: 'pointer' },
+        knobBase: k.base, knobStyle: k.pointer,
+        handleStyle: { position: 'absolute', left: '-3px', right: '-3px', top: t.fader + '%', height: '12px', borderRadius: '3px',
+          background: on ? A : T.line2, boxShadow: '0 1px 3px rgba(0,0,0,.4)' },
+        meterStyle: { position: 'absolute', left: 0, right: 0, bottom: 0, height: (muted ? 0 : t.meter) + '%',
+          background: 'linear-gradient(180deg,#f0c25a,#4ec08a 26%,#3f9e72)' },
+        meter2Style: {}
+      };
+    };
+    const strips = s.groups.map(g => stripOf(Object.assign({ dev: 'bus' }, g), true))
+      .concat(TRACKS.map(t => stripOf(t, false)), RETURNS.map(t => stripOf(t, false)));
+
+    const mHandle = { position: 'absolute', left: '-3px', right: '-3px', top: MASTER.fader + '%', height: '12px', borderRadius: '3px', background: T.txt2 };
+    const master = {
+      on: this.selectId('master'),
+      style: { width: '104px', flex: 'none', display: 'flex', flexDirection: 'column', borderRadius: '8px',
+        background: selSet.master ? this.alpha(A, light ? 0.1 : 0.09) : T.panel2,
+        boxShadow: 'inset 0 0 0 1px ' + (selSet.master ? A : T.line2), cursor: 'pointer', overflow: 'hidden' },
+      headStyle: { height: '26px', flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: selSet.master ? this.alpha(A, 0.16) : T.head },
+      nameStyle: { font: "500 9.5px 'Geist Mono'", letterSpacing: '.1em', color: T.txt },
+      handleStyle: mHandle,
+      meterStyle: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '78%', background: 'linear-gradient(180deg,#f0c25a,#4ec08a 24%,#3f9e72)' },
+      meter2Style: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '72%', background: 'linear-gradient(180deg,#f0c25a,#4ec08a 24%,#3f9e72)' }
+    };
+
+    const selGroup = s.groups.find(g => g.id === p.id) || (s.sel.length === 1 ? s.groups.find(g => g.id === s.sel[0]) : null);
+    const selId = selGroup ? selGroup.id : p.id;
+    const chain = selGroup ? [{ name: 'Glue Comp', kind: 'knobs' }, EQ] : (CHAINS[selId] || []);
+
+    const cards = multi ? [] : chain.map(fx => {
+      const collapsed = !!s.collapsed[fx.name], off = !!s.bypass[fx.name];
+      const owner = selGroup ? selGroup.name : p.name;
+      const openWin = s.windows.some(w => w.name === fx.name && w.owner === owner);
+      const kn = KNOBS[fx.name] || KNOBS.Compressor;
+      const wide = fx.kind === 'reverb';
+      return {
+        name: fx.name, state: off ? 'bypassed' : openWin ? 'open' : '',
+        style: { flex: 'none', borderRadius: '9px', background: T.panel2, border: '1px solid ' + (openWin ? A : T.line), overflow: 'hidden' },
+        headStyle: { height: '29px', display: 'flex', alignItems: 'center', gap: '8px', padding: '0 10px',
+          background: openWin ? this.alpha(A, 0.12) : T.head, cursor: 'pointer' },
+        dotStyle: { width: '6px', height: '6px', flex: 'none', borderRadius: '50%', cursor: 'pointer',
+          background: off ? 'transparent' : (fx.kind === 'curve' ? A : '#4ec08a'), boxShadow: off ? 'inset 0 0 0 1px ' + T.dim : 'none' },
+        nameStyle: { font: '500 11.5px Geist', color: off ? T.dim : T.txt },
+        onToggle: this.flip('collapsed', fx.name), onBypass: this.flip('bypass', fx.name),
+        onOpen: this.openWindow(fx.name, owner),
+        showCurve: !collapsed && fx.kind === 'curve',
+        showKnobs: !collapsed && (fx.kind === 'knobs' || fx.kind === 'reverb' || fx.kind === 'delay'),
+        showTail: !collapsed && (fx.kind === 'reverb' || fx.kind === 'delay'),
+        knobGrid: { padding: '11px 10px', display: 'grid', gridTemplateColumns: wide ? 'repeat(3,1fr)' : 'repeat(4,1fr)', gap: '10px 6px' },
+        line: CURVE.line, fill: CURVE.fill, stroke: off ? T.dim : A, fillColor: this.alpha(A, off ? 0.05 : 0.12),
+        tailLine: TAIL.line, tailFill: TAIL.fill, tailLabel: fx.kind === 'reverb' ? 'impulse · 3.4 s tail' : 'taps · 1/8 dotted',
+        knobs: kn.map(k => {
+          const kk = this.knob(30, k[2], '#4ec08a', off);
+          return { name: k[0], val: k[1], base: kk.base, pointer: kk.pointer, on: e => e.stopPropagation() };
+        })
+      };
+    });
+
+    const chips = multi ? [] : chain.map(fx => {
+      const off = !!s.bypass[fx.name];
+      return {
+        name: fx.name, on: e => { e.stopPropagation(); this.setState(st => { const c = Object.assign({}, st.collapsed); c[fx.name] = false; return { collapsed: c }; }); },
+        style: { height: '25px', padding: '0 9px', display: 'flex', alignItems: 'center', gap: '6px', borderRadius: '7px',
+          background: off ? 'transparent' : T.chip, boxShadow: off ? 'inset 0 0 0 1px ' + T.line : 'none',
+          font: '500 10px Geist', color: off ? T.dim2 : T.txt2, cursor: 'pointer' },
+        dotStyle: { width: '5px', height: '5px', borderRadius: '50%', background: off ? 'transparent' : (fx.kind === 'curve' ? A : '#4ec08a'), boxShadow: off ? 'inset 0 0 0 1px ' + T.dim : 'none' }
+      };
+    });
+
+    const windows = s.windows.slice().sort((a, b) => a.z - b.z).map(w => {
+      const kn = KNOBS[w.name] || KNOBS.Compressor;
+      return {
+        name: w.name, owner: '— ' + w.owner, preset: 'Init ▾',
+        style: { position: 'absolute', left: w.max ? '0px' : w.x + 'px', top: w.max ? '0px' : w.y + 'px',
+          width: w.max ? '100%' : w.w + 'px', height: w.max ? '100%' : w.h + 'px', borderRadius: w.max ? '0' : '11px',
+          background: T.panel2, boxShadow: 'inset 0 0 0 1px ' + T.line2 + ',0 24px 60px rgba(0,0,0,' + (light ? '.22' : '.5') + ')',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden', zIndex: 30 + w.z },
+        dotStyle: { width: '6px', height: '6px', borderRadius: '50%', background: A },
+        onDrag: this.dragWin(w.id), onMax: this.maxWin(w.id), onClose: this.closeWin(w.id),
+        line: 'M0 124 C60 124 82 44 138 54 C196 64 214 152 296 144 C360 138 392 64 460 66 C520 68 566 154 610 170',
+        fill: 'M0 206 L0 124 C60 124 82 44 138 54 C196 64 214 152 296 144 C360 138 392 64 460 66 C520 68 566 154 610 170 L610 206 Z',
+        stroke: A, fillColor: this.alpha(A, 0.12),
+        handles: [['1', 22.6, 27], ['2', 48.5, 69], ['3', 75.4, 33]].map(h => ({
+          n: h[0], on: e => e.stopPropagation(),
+          style: { position: 'absolute', left: h[1] + '%', top: h[2] + '%', width: '15px', height: '15px', borderRadius: '50%',
+            background: A, boxShadow: '0 0 0 3px ' + this.alpha(A, 0.2), display: 'flex', alignItems: 'center', justifyContent: 'center',
+            font: "500 8.5px 'Geist Mono'", color: '#fff', transform: 'translate(-50%,-50%)', cursor: 'grab' }
+        })),
+        bands: kn.map(k => ({
+          tag: k[0], val: k[1], sub: '', on: e => e.stopPropagation(),
+          style: { flex: 1, borderRadius: '7px', background: T.head, padding: '7px 9px', display: 'flex', flexDirection: 'column', gap: '2px', cursor: 'pointer' }
+        }))
+      };
+    });
+
+    const keys = [];
+    for (let i = 0; i < 24; i++) {
+      const nm = KEY_NAMES[i % 12], black = nm.length > 1;
+      keys.push({ name: i % 12 === 11 ? 'C' + (4 - Math.floor(i / 12)) : '',
+        style: { flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '6px',
+          background: black ? T.sunk : T.panel2, borderBottom: '1px solid ' + T.line, borderRight: '1px solid ' + T.line,
+          font: "400 8px 'Geist Mono'", color: T.dim2 } });
+    }
+    const notes = s.notes.map(n => ({
+      on: e => e.stopPropagation(),
+      style: { position: 'absolute', left: (n[1] / 32 * 100) + '%', width: (n[2] / 32 * 100) + '%',
+        top: ((23 - n[0]) / 24 * 100) + '%', height: (100 / 24) + '%',
+        background: p.color || A, borderRadius: '2px', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.3)', cursor: 'pointer' }
+    }));
+    const stepLanes = ['Kick', 'Snare', 'Hat', 'Clap'].map((nm, li) => ({
+      name: nm,
+      steps: s.steps[li].map((v, i) => ({
+        on: () => this.setState(st => { const g = st.steps.map(r => r.slice()); g[li][i] = g[li][i] ? 0 : 1; return { steps: g }; }),
+        style: { flex: 1, borderRadius: '4px', cursor: 'pointer', background: v ? A : (i % 4 === 0 ? T.chip : T.sunk),
+          boxShadow: v ? 'none' : 'inset 0 0 0 1px ' + T.line }
+      }))
+    }));
+
+    const sendKnobs = [['Reverb', 'Hall Reverb', 'ret1', '−12.0', -18], ['Delay', 'Ping Delay', 'ret2', '−22.5', -52]];
+
+    return {
+      shell, isDark: !light, isLight: light,
+      toggleTheme: () => this.setState({ theme: light ? 'dark' : 'light' }),
+      playing: s.playing, stopped: !s.playing,
+      playBtn: { width: '32px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '6px',
+        background: s.playing ? '#4ec08a' : T.chip, color: s.playing ? '#07231a' : T.txt, cursor: 'pointer' },
+      togglePlay: () => this.setState({ playing: !s.playing }),
+      recBtn: { width: '28px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '6px',
+        background: 'transparent', color: '#e05263', cursor: 'pointer' },
+      toggleRec: () => this.setState(st => ({ arm: Object.keys(st.arm).length ? {} : { lead: true } })),
+      loopBtn: { width: '28px', height: '26px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '6px',
+        background: s.loop ? this.alpha(A, 0.14) : 'transparent', color: s.loop ? A : T.dim, cursor: 'pointer' },
+      toggleLoop: () => this.setState({ loop: !s.loop }),
+
+      browserOpen: s.browser, browserClosed: !s.browser,
+      toggleBrowser: () => this.setState({ browser: !s.browser, autoB: false }),
+      inspectorOpen: s.inspector, inspectorClosed: !s.inspector,
+      toggleInspector: () => this.setState({ inspector: !s.inspector, autoI: false }),
+      browserTabs: ['Sounds', 'Devices', 'Presets', 'Projects'].map(n => ({
+        name: n, on: () => this.setState({ browserTab: n }),
+        style: { padding: '4px 8px', borderRadius: '6px', background: s.browserTab === n ? T.chip : 'transparent',
+          font: '500 10px Geist', color: s.browserTab === n ? T.txt : T.dim, cursor: 'pointer' }
+      })),
+      browserRows: BROWSER_ROWS.map(r => {
+        const file = r[2] === 2, active = file && s.preview === r[0];
+        return {
+          name: r[0], meta: r[1],
+          on: () => file ? this.setState({ preview: r[0] }) : null,
+          style: { flex: 'none', height: r[2] ? '25px' : '27px', display: 'flex', alignItems: 'center', gap: '7px',
+            padding: '0 8px 0 ' + (8 + r[2] * 14) + 'px', borderRadius: '6px', cursor: 'pointer',
+            background: active ? this.alpha(A, 0.13) : 'transparent' },
+          nameStyle: { font: file ? "400 11px 'Geist Mono'" : '400 11.5px Geist', color: active ? T.txt : (r[2] ? T.dim : T.txt2) }
+        };
+      }),
+      previewName: s.preview,
+      previewWave: { position: 'absolute', left: '10px', right: '10px', top: '8px', bottom: '8px', backgroundRepeat: 'repeat-x',
+        backgroundImage: 'repeating-linear-gradient(90deg,' + this.alpha(A, 0.8) + ' 0 1.5px,transparent 1.5px 4px),repeating-linear-gradient(90deg,' + this.alpha(A, 0.25) + ' 0 1.5px,transparent 1.5px 4px)',
+        backgroundSize: '100% 38%,100% 92%', backgroundPosition: 'center,center' },
+
+      tools: [['select', 'Select'], ['draw', 'Draw'], ['cut', 'Split']].map(t => ({
+        name: t[1], isSelect: t[0] === 'select', isDraw: t[0] === 'draw', isCut: t[0] === 'cut',
+        on: () => this.setState({ tool: t[0] }),
+        style: { width: '26px', height: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '6px',
+          background: s.tool === t[0] ? T.chip : 'transparent', color: s.tool === t[0] ? T.txt : T.dim, cursor: 'pointer' }
+      })),
+      multiSelect: multi, selCount: s.sel.length, makeGroup: this.makeGroup,
+      selInfo: multi ? '' : p.name + ' · ' + ((CLIPS[p.id] || []).length) + ' clips',
+      counts: (TRACKS.length + s.groups.length) + ' tracks · ' + RETURNS.length + ' returns',
+      sections: SECTIONS.map(sec => {
+        const on = s.section === sec[0];
+        return {
+          name: sec[0], bar: sec[1], on: () => this.setState({ section: sec[0] }),
+          style: { flex: sec[2], borderRadius: '5px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: on ? A : (light ? T.chip : T.head), font: '500 9px Geist', letterSpacing: '.08em',
+            color: on ? '#fff' : T.dim, cursor: 'pointer', overflow: 'hidden' },
+          barStyle: { flex: sec[2], paddingLeft: '4px', font: "400 9px 'Geist Mono'", color: on ? A : T.faint }
+        };
+      }),
+      arrangeVisible: !s.maxBottom, rows,
+      playheadStyle: { position: 'absolute', left: '44.6%', top: 0, bottom: 0, width: '1px',
+        background: light ? '#1c2028' : '#eef1f5', pointerEvents: 'none', zIndex: 3 },
+
+      bottomStyle: { height: s.maxBottom ? 'auto' : '300px', flex: s.maxBottom ? 1 : 'none', minHeight: 0,
+        background: T.panel, borderTop: '1px solid ' + T.line, display: 'flex', flexDirection: 'column' },
+      tabs: [['mixer', 'MIXER', ''], ['editor', 'EDITOR', s.editorClip + (s.editorMode === 'roll' ? ' · notes' : ' · steps')]].map(t => ({
+        name: t[1], meta: t[2], on: () => this.setState({ tab: t[0] }),
+        style: { display: 'flex', alignItems: 'center', gap: '7px', padding: '0 13px', cursor: 'pointer',
+          font: (s.tab === t[0] ? '600' : '500') + ' 10.5px Geist', letterSpacing: '.06em',
+          color: s.tab === t[0] ? T.txt : T.dim, boxShadow: s.tab === t[0] ? 'inset 0 -2px 0 ' + A : 'none' },
+        metaStyle: { font: "400 9.5px 'Geist Mono'", color: T.dim2 }
+      })),
+      mixerActive: s.tab === 'mixer', strips, master,
+      showModeToggle: s.tab === 'editor',
+      rollActive: s.tab === 'editor' && s.editorMode === 'roll',
+      stepActive: s.tab === 'editor' && s.editorMode === 'step',
+      editorModeLabel: s.editorMode === 'roll' ? 'Notes / Steps' : 'Steps / Notes',
+      toggleEditorMode: () => this.setState({ editorMode: s.editorMode === 'roll' ? 'step' : 'roll' }),
+      toggleMaxBottom: () => this.setState({ maxBottom: !s.maxBottom }),
+      keys, notes, stepLanes,
+
+      selName: multi ? s.sel.length + ' tracks' : (selGroup ? selGroup.name : p.name),
+      selKind: multi ? 'multi' : selGroup ? 'group bus' : p.master ? 'master' : p.ret ? 'return' : 'track',
+      selMeta: multi ? 'shift-click to extend · ⌘G groups them' : selGroup ? selGroup.members.length + ' tracks → master'
+        : p.master ? 'sum of all channels' : p.ret ? 'return bus · fed by sends' : (s.editorTrack === p.id ? 'clip ' + s.editorClip + ' · ' : '') + (grouped[p.id] ? 'in ' + grouped[p.id].name : 'out master'),
+      selDotStyle: { width: '8px', height: '8px', borderRadius: '50%', background: multi ? A : (selGroup ? selGroup.color : (p.color || T.dim)) },
+      hasInstrument: !multi && !selGroup && !p.master && !p.ret,
+      layers: (p.id === 'lead' ? [['Wavetable', 'saw stack'], ['Layer 2 — Sine Sub', '−6.0 dB']] : [[p.dev || 'Device', 'preset']]).map((l, i) => ({
+        name: l[0], meta: l[1], style: { display: 'flex', alignItems: 'center', gap: '8px', paddingLeft: i ? '13px' : '0' }
+      })),
+      addLayer: e => e.stopPropagation(),
+      openInstrumentWindow: this.openWindow(p.dev || 'Instrument', p.name),
+      cards, chips,
+      hasSends: !multi && !p.master && !p.ret && !selGroup,
+      sends: sendKnobs.map(sd => {
+        const k = this.knob(28, sd[4], A, false);
+        return { name: sd[0], device: sd[1], val: sd[3], knobBase: k.base, pointer: k.pointer,
+          onKnob: e => e.stopPropagation(), onOpen: this.selectId(sd[2]) };
+      }),
+      addFxOpen: s.addFx,
+      openAddFx: e => { e.stopPropagation(); this.setState({ addFx: true }); },
+      closeAddFx: e => { e.stopPropagation(); this.setState({ addFx: false }); },
+      addFxStyle: { position: 'absolute', right: s.inspector ? '344px' : '46px', bottom: '20px', width: '250px', borderRadius: '10px',
+        background: T.panel2, boxShadow: 'inset 0 0 0 1px ' + T.line2 + ',0 20px 46px rgba(0,0,0,' + (light ? '.18' : '.45') + ')', zIndex: 80, overflow: 'hidden' },
+      fxResults: FX_LIST.map(f => ({
+        name: f[0], kind: f[1], on: e => { e.stopPropagation(); this.setState({ addFx: false }); },
+        style: { height: '30px', display: 'flex', alignItems: 'center', gap: '8px', padding: '0 10px', font: '400 11.5px Geist', color: T.txt2, cursor: 'pointer' }
+      })),
+      windows,
+      winCount: s.windows.length === 0 ? 'no plugin windows' : s.windows.length + (s.windows.length === 1 ? ' plugin window' : ' plugin windows')
+    };
+  }
+}
+
+</script>
+</body>
+</html>

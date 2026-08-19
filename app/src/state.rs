@@ -1299,25 +1299,36 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let state = AppState::from_kernel(&kernel).unwrap();
 
-        // Track 0 of the default project is the drum kit, and track 0 is what
-        // the keyboard and the selector address until the user says otherwise.
+        // Track 0 of the default project is the kick, and track 0 is what the
+        // keyboard and the selector address until the user says otherwise.
         assert_eq!(state.selected_track(), 0);
-        assert_eq!(state.current_source(), Source::DrumKit);
+        assert_eq!(
+            state.current_source(),
+            Source::Drum(mydaw_plugin_instruments::SingleDrum::Kick)
+        );
         let sources = state.sources();
         // The built-ins come first and in a fixed order; whatever CLAP
         // instruments this machine has follow (CI: none).
         assert_eq!(
             sources
                 .iter()
-                .take(3)
+                .take(Source::BUILT_IN.len())
                 .map(|s| s.id.as_str())
                 .collect::<Vec<_>>(),
-            vec!["poly-synth", "drum-kit", "test-tone"]
+            vec![
+                "poly-synth",
+                "kick",
+                "snare",
+                "hat-closed",
+                "hat-open",
+                "drum-kit",
+                "test-tone"
+            ]
         );
         assert!(
             sources
                 .iter()
-                .skip(3)
+                .skip(Source::BUILT_IN.len())
                 .all(|s| s.id.starts_with("clap:") && s.bundle_path.is_some()),
             "every listed plugin must carry the bundle path the picker sends back"
         );
@@ -1326,12 +1337,15 @@ mod tests {
             .filter(|s| s.selected)
             .map(|s| s.id.as_str())
             .collect();
-        assert_eq!(selected, vec!["drum-kit"], "exactly one is playing");
+        assert_eq!(selected, vec!["kick"], "exactly one is playing");
 
-        // Selecting the synth track changes what the list marks, with no audio
+        // Selecting another channel changes what the list marks, with no audio
         // device involved at all.
         state.set_selected_track(1).unwrap();
-        assert_eq!(state.current_source(), Source::PolySynth);
+        assert_eq!(
+            state.current_source(),
+            Source::Drum(mydaw_plugin_instruments::SingleDrum::Snare)
+        );
     }
 
     #[test]
@@ -1385,7 +1399,7 @@ mod tests {
 
         // Headless: the instruments are all registered, there is simply nowhere
         // to install them.
-        for id in ["drum-kit", "test-tone", "poly-synth"] {
+        for id in ["drum-kit", "test-tone", "poly-synth", "snare", "hat-open"] {
             let err = state.set_source_id(id).unwrap_err();
             assert!(
                 matches!(err, SourceError::Audio(AudioIoError::NotRunning)),
@@ -1394,7 +1408,7 @@ mod tests {
         }
         assert_eq!(
             state.current_source(),
-            Source::DrumKit,
+            Source::Drum(mydaw_plugin_instruments::SingleDrum::Kick),
             "a failed switch must not change what the UI is told is playing"
         );
     }

@@ -131,10 +131,10 @@ pub const HAT_GAIN: f32 = 0.2;
 // coherently and sound like one louder voice); fixed seeds so a hit is
 // reproducible to the bit.
 
-const KICK_SEED: u32 = 0x4B49_434B; // "KICK"
-const SNARE_SEED: u32 = 0x534E_4152; // "SNAR"
-const CLOSED_HAT_SEED: u32 = 0x4348_4154; // "CHAT"
-const OPEN_HAT_SEED: u32 = 0x4F48_4154; // "OHAT"
+pub(crate) const KICK_SEED: u32 = 0x4B49_434B; // "KICK"
+pub(crate) const SNARE_SEED: u32 = 0x534E_4152; // "SNAR"
+pub(crate) const CLOSED_HAT_SEED: u32 = 0x4348_4154; // "CHAT"
+pub(crate) const OPEN_HAT_SEED: u32 = 0x4F48_4154; // "OHAT"
 
 /// A drum this kit can play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,7 +184,7 @@ impl Drum {
 /// reads as an attack, 50 Hz has the weight, and the ~13 ms time constant
 /// between them is the difference between a kick and a bass note.
 #[derive(Debug, Clone, Copy)]
-struct KickVoice {
+pub(crate) struct KickVoice {
     active: bool,
     phase: f32,
     /// Sweep position, 1.0 at the transient and decaying to 0.0.
@@ -197,11 +197,18 @@ struct KickVoice {
     click_step: f32,
     noise: Noise,
     velocity: f32,
+    /// Frequency multiplier for this hit, `1.0` inside the kit.
+    ///
+    /// The per-drum instruments ([`crate::single_drum`]) let a note key detune
+    /// the kick by up to an octave either way; the kit itself always passes
+    /// `1.0`, because inside a kit the key *chooses which drum* and cannot also
+    /// mean a pitch.
+    pitch_ratio: f32,
     inverse_sample_rate: f32,
 }
 
 impl KickVoice {
-    fn new(sample_rate: f32) -> Self {
+    pub(crate) fn new(sample_rate: f32) -> Self {
         Self {
             active: false,
             phase: 0.0,
@@ -216,11 +223,16 @@ impl KickVoice {
             click_step: linear_step(1.0, KICK_CLICK_MS, sample_rate),
             noise: Noise::new(KICK_SEED),
             velocity: 0.0,
+            pitch_ratio: 1.0,
             inverse_sample_rate: 1.0 / sample_rate,
         }
     }
 
-    fn trigger(&mut self, velocity: f32) {
+    pub(crate) fn trigger(&mut self, velocity: f32) {
+        self.trigger_pitched(velocity, 1.0);
+    }
+
+    pub(crate) fn trigger_pitched(&mut self, velocity: f32, pitch_ratio: f32) {
         self.active = true;
         // Phase zero is where a sine is zero, so a hard start is not a step and
         // needs no attack ramp -- the click is deliberate, a discontinuity is not.
@@ -230,9 +242,14 @@ impl KickVoice {
         self.click = 1.0;
         self.noise.reseed(KICK_SEED);
         self.velocity = velocity;
+        self.pitch_ratio = pitch_ratio;
     }
 
-    fn render(&mut self, span: &mut [f32]) {
+    pub(crate) const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(crate) fn render(&mut self, span: &mut [f32]) {
         if !self.active {
             return;
         }
@@ -245,7 +262,7 @@ impl KickVoice {
                 self.active = false;
                 return;
             }
-            let hz = KICK_END_HZ + (KICK_START_HZ - KICK_END_HZ) * self.sweep;
+            let hz = (KICK_END_HZ + (KICK_START_HZ - KICK_END_HZ) * self.sweep) * self.pitch_ratio;
             let body = (self.phase * TAU).sin() * self.amplitude;
             let click = self.noise.next_bipolar() * self.click * KICK_CLICK_GAIN;
             *sample += (body + click) * gain;
@@ -260,13 +277,15 @@ impl KickVoice {
 
 /// Highpassed noise plus a decaying 180 Hz body tone.
 #[derive(Debug, Clone, Copy)]
-struct SnareVoice {
+pub(crate) struct SnareVoice {
     active: bool,
     noise: Noise,
     highpass: OnePole,
     noise_amplitude: f32,
     noise_coefficient: f32,
     tone_phase: f32,
+    /// Phase increment at the drum's own pitch, before the per-hit ratio.
+    base_increment: f32,
     tone_increment: f32,
     tone_amplitude: f32,
     tone_coefficient: f32,
@@ -274,7 +293,7 @@ struct SnareVoice {
 }
 
 impl SnareVoice {
-    fn new(sample_rate: f32) -> Self {
+    pub(crate) fn new(sample_rate: f32) -> Self {
         Self {
             active: false,
             noise: Noise::new(SNARE_SEED),
@@ -282,6 +301,7 @@ impl SnareVoice {
             noise_amplitude: 0.0,
             noise_coefficient: decay_coefficient(SNARE_NOISE_DECAY_MS, sample_rate),
             tone_phase: 0.0,
+            base_increment: SNARE_TONE_HZ / sample_rate,
             tone_increment: SNARE_TONE_HZ / sample_rate,
             tone_amplitude: 0.0,
             tone_coefficient: decay_coefficient(SNARE_TONE_DECAY_MS, sample_rate),
@@ -289,17 +309,31 @@ impl SnareVoice {
         }
     }
 
-    fn trigger(&mut self, velocity: f32) {
+    pub(crate) fn trigger(&mut self, velocity: f32) {
+        self.trigger_pitched(velocity, 1.0);
+    }
+
+    /// Hit the snare with its body tone scaled by `pitch_ratio`.
+    ///
+    /// Only the tone moves; the noise burst that is most of a snare is
+    /// unpitched, and highpassing it at a key-dependent frequency would be a
+    /// filter sweep dressed up as tuning.
+    pub(crate) fn trigger_pitched(&mut self, velocity: f32, pitch_ratio: f32) {
         self.active = true;
         self.noise.reseed(SNARE_SEED);
         self.highpass.reset();
         self.noise_amplitude = 1.0;
         self.tone_phase = 0.0;
+        self.tone_increment = self.base_increment * pitch_ratio;
         self.tone_amplitude = 1.0;
         self.velocity = velocity;
     }
 
-    fn render(&mut self, span: &mut [f32]) {
+    pub(crate) const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(crate) fn render(&mut self, span: &mut [f32]) {
         if !self.active {
             return;
         }
@@ -330,7 +364,7 @@ impl SnareVoice {
 /// The only difference between a closed and an open hat here is the decay time,
 /// which is also the only difference a listener can name.
 #[derive(Debug, Clone, Copy)]
-struct HatVoice {
+pub(crate) struct HatVoice {
     active: bool,
     noise: Noise,
     seed: u32,
@@ -344,7 +378,7 @@ struct HatVoice {
 }
 
 impl HatVoice {
-    fn new(decay_ms: f32, seed: u32, sample_rate: f32) -> Self {
+    pub(crate) fn new(decay_ms: f32, seed: u32, sample_rate: f32) -> Self {
         Self {
             active: false,
             noise: Noise::new(seed),
@@ -358,7 +392,7 @@ impl HatVoice {
         }
     }
 
-    fn trigger(&mut self, velocity: f32) {
+    pub(crate) fn trigger(&mut self, velocity: f32) {
         self.active = true;
         self.noise.reseed(self.seed);
         self.highpass.reset();
@@ -369,13 +403,17 @@ impl HatVoice {
     }
 
     /// Cut this voice short. Harmless when it is not sounding.
-    fn choke(&mut self) {
+    pub(crate) fn choke(&mut self) {
         if self.active {
             self.coefficient = self.choke_coefficient;
         }
     }
 
-    fn render(&mut self, span: &mut [f32], gain: f32) {
+    pub(crate) const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(crate) fn render(&mut self, span: &mut [f32], gain: f32) {
         if !self.active {
             return;
         }

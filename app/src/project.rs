@@ -30,12 +30,30 @@
 //! reads one bool. Soloing is then exactly as click-free as muting, because it
 //! *is* muting.
 
+use mydaw_plugin_instruments::SingleDrum;
+use mydaw_plugin_sampler::SamplerRegistry;
 use mydaw_rt_core::{db_to_gain, gain_to_db, MixerParams, MAX_GAIN_DB, MAX_TRACKS, SILENCE_DB};
 use serde::Serialize;
 
 use crate::clap_bridge::{ClapBoard, ClapSlotDto};
-use crate::source::Source;
+use crate::source::{SamplerSourceRef, Source};
 use crate::vst3_bridge::{Vst3Board, Vst3SlotDto};
+
+/// What a fresh project puts on its melodic channel.
+///
+/// The first sampled instrument the registry has, if any -- in practice the
+/// Salamander piano -- and otherwise the poly synth. A channel promising a
+/// piano on a machine whose samples have not been downloaded would be five
+/// minutes of silence and a bug report, and the honest fallback is a synth that
+/// says it is one.
+pub fn default_piano(sampler: &SamplerRegistry) -> Source {
+    sampler
+        .instruments()
+        .first()
+        .map_or(Source::PolySynth, |info| {
+            Source::Sampler(SamplerSourceRef::from(info))
+        })
+}
 
 /// One track, as the session holds it.
 #[derive(Debug, Clone, PartialEq)]
@@ -111,26 +129,52 @@ pub struct Project {
 }
 
 impl Default for Project {
-    /// Drums on track 0, a synth on track 1.
+    /// The starter rack, with the poly synth standing in for the piano.
     ///
-    /// Two tracks rather than one because the point of the step is that they
-    /// sum, and rather than four because a mixer full of silent tracks is a
-    /// worse first impression than one you have to add to. Drums first so the
-    /// sequencer's four default rows -- which are on channel 0, and are a kick,
-    /// a snare and two hats -- address the kit that can play them.
+    /// [`Project::starter`] is the real constructor; this is the one the tests
+    /// and the offline paths use, where there is no sampler registry to ask
+    /// whether the piano is installed.
     fn default() -> Self {
-        Self {
-            tracks: vec![
-                TrackDef::new(0, "Drums", Source::DrumKit),
-                TrackDef::new(1, "Synth", Source::PolySynth),
-            ],
-            master_gain_db: 0.0,
-            next_id: 2,
-        }
+        Self::starter(Source::PolySynth)
     }
 }
 
 impl Project {
+    /// The rack a fresh session opens with: four drums and a melodic channel.
+    ///
+    /// One instrument per channel, which is the whole reason the drum kit was
+    /// split ([`SingleDrum`](mydaw_plugin_instruments::SingleDrum)): a channel
+    /// has one fader, one pan and one insert chain, and a kick that cannot be
+    /// turned down independently of the hats is not a channel, it is four
+    /// channels wearing a coat.
+    ///
+    /// Five rather than two because this is a rack now rather than a proof that
+    /// two tracks sum, and because a drum pattern you can immediately click in
+    /// is the point of the first screen. Still well short of
+    /// [`MAX_TRACKS`], so there is room to add.
+    ///
+    /// `piano` is whatever the caller found for the melodic channel --
+    /// [`default_piano`] picks the sampled piano when its assets are installed
+    /// and the poly synth when they are not. The name on that channel follows
+    /// the source, so a session with no samples says "Poly Synth" rather than
+    /// promising a piano it does not have.
+    pub fn starter(piano: Source) -> Self {
+        let mut tracks: Vec<TrackDef> = SingleDrum::ALL
+            .iter()
+            .enumerate()
+            .map(|(index, drum)| {
+                TrackDef::new(index as u32, drum.display_name(), Source::Drum(*drum))
+            })
+            .collect();
+        let id = tracks.len() as u32;
+        tracks.push(TrackDef::new(id, piano.label(), piano));
+        Self {
+            tracks,
+            master_gain_db: 0.0,
+            next_id: id + 1,
+        }
+    }
+
     /// A project with no tracks at all. Renders silence.
     pub fn empty() -> Self {
         Self {
@@ -524,29 +568,75 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_project_is_drums_on_track_zero_and_a_synth_on_track_one() {
+    fn a_fresh_project_is_four_drum_channels_and_a_melodic_one() {
         let project = Project::default();
-        assert_eq!(project.len(), 2);
-        assert_eq!(project.tracks[0].name, "Drums");
-        assert_eq!(project.tracks[0].source, Source::DrumKit);
-        assert_eq!(project.tracks[1].name, "Synth");
-        assert_eq!(project.tracks[1].source, Source::PolySynth);
+        assert_eq!(project.len(), 5);
+        assert_eq!(
+            project
+                .tracks
+                .iter()
+                .map(|t| t.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Kick", "Snare", "Hat Closed", "Hat Open", "Poly Synth"],
+            "one instrument per channel, named after the instrument"
+        );
+        assert_eq!(
+            project
+                .tracks
+                .iter()
+                .map(|t| t.source.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Source::Drum(SingleDrum::Kick),
+                Source::Drum(SingleDrum::Snare),
+                Source::Drum(SingleDrum::ClosedHat),
+                Source::Drum(SingleDrum::OpenHat),
+                Source::PolySynth,
+            ]
+        );
         assert!(project
             .tracks
             .iter()
             .all(|t| t.gain_db == 0.0 && t.pan == 0.0 && !t.muted && !t.soloed));
         assert_eq!(project.master_gain_db, 0.0);
-
-        // Track 0 is the kit because the sequencer's four default rows are on
-        // channel 0 and are a kick, a snare and two hats.
+        // Ids are dense and start at zero, and the next one continues past them.
         assert_eq!(
-            mydaw_plugin_sequencer::Pattern::default()
-                .rows
-                .iter()
-                .map(|r| r.channel)
-                .collect::<Vec<_>>(),
-            vec![0, 0, 0, 0]
+            project.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4]
         );
+        assert_eq!(project.next_id(), 5);
+        assert!(
+            project.len() < MAX_TRACKS,
+            "a starter rack must leave room to add to"
+        );
+    }
+
+    /// The kit is not gone, only unused: a project saved before the split names
+    /// it, and that project has to open.
+    #[test]
+    fn the_starter_rack_does_not_use_the_legacy_kit() {
+        assert!(Project::default()
+            .tracks
+            .iter()
+            .all(|t| t.source != Source::DrumKit));
+    }
+
+    #[test]
+    fn the_melodic_channel_is_the_piano_when_its_samples_are_installed() {
+        // With no registry content there is nothing to promise, so the honest
+        // answer is the synth -- and the channel is named after it.
+        let empty = SamplerRegistry::detached();
+        assert_eq!(default_piano(&empty), Source::PolySynth);
+        assert_eq!(
+            Project::starter(default_piano(&empty)).tracks[4].name,
+            "Poly Synth"
+        );
+
+        // And when there is one, the channel takes its name too.
+        let piano = Source::Sampler(SamplerSourceRef::new("salamander-piano").named("Piano"));
+        let project = Project::starter(piano.clone());
+        assert_eq!(project.tracks[4].source, piano);
+        assert_eq!(project.tracks[4].name, "Piano");
     }
 
     #[test]
@@ -564,9 +654,9 @@ mod tests {
     fn solo_silences_everything_that_is_not_soloed_and_un_solo_restores() {
         let mut project = Project::default();
         project.add(Source::TestTone, None).unwrap();
-        assert_eq!(project.len(), 3);
+        let count = project.len();
         assert!(!project.any_soloed());
-        assert!((0..3).all(|i| !project.effective_mute(i)));
+        assert!((0..count).all(|i| !project.effective_mute(i)));
 
         project.tracks[1].soloed = true;
         assert!(project.any_soloed());
@@ -581,7 +671,7 @@ mod tests {
 
         project.tracks[1].soloed = false;
         project.tracks[2].soloed = false;
-        assert!((0..3).all(|i| !project.effective_mute(i)), "restored");
+        assert!((0..count).all(|i| !project.effective_mute(i)), "restored");
     }
 
     #[test]
@@ -626,7 +716,7 @@ mod tests {
 
         // A slot with no track behind it must be silent, so a graph that still
         // has one cannot make a sound.
-        assert!(params.track_muted(2));
+        assert!(params.track_muted(project.len()));
         assert!(params.track_muted(MAX_TRACKS - 1));
     }
 
@@ -650,18 +740,20 @@ mod tests {
             .add(Source::TestTone, Some("Tone".to_owned()))
             .unwrap();
         let ids: Vec<u32> = project.tracks.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec![0, 1, 2]);
+        assert_eq!(ids, vec![0, 1, 2, 3, 4, 5]);
 
         let removed = project.remove(0).unwrap();
-        assert_eq!(removed.name, "Drums");
+        assert_eq!(removed.name, "Kick");
         assert_eq!(
             project.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec![1, 2],
+            vec![1, 2, 3, 4, 5],
             "ids are stable; only the index -- and therefore the note channel -- moved"
         );
 
-        assert_eq!(project.remove(5), Err(TrackError::NoSuchTrack(5)));
-        project.remove(0).unwrap();
+        assert_eq!(project.remove(9), Err(TrackError::NoSuchTrack(9)));
+        while project.len() > 1 {
+            project.remove(0).unwrap();
+        }
         assert_eq!(project.remove(0), Err(TrackError::LastTrack));
     }
 
@@ -728,12 +820,12 @@ mod tests {
             &MissingPlugins::new(),
         );
 
-        assert_eq!(dto.tracks.len(), 2);
+        assert_eq!(dto.tracks.len(), project.len());
         assert_eq!(dto.selected, 1);
         assert_eq!(dto.max_tracks, MAX_TRACKS);
         assert_eq!(dto.min_gain_db, SILENCE_DB);
         assert_eq!(dto.tracks[0].index, 0);
-        assert_eq!(dto.tracks[0].source_id, "drum-kit");
+        assert_eq!(dto.tracks[0].source_id, "kick");
         assert!(dto.tracks[0].soloed && !dto.tracks[0].silenced);
         assert!(
             dto.tracks[1].silenced && !dto.tracks[1].muted,

@@ -1050,7 +1050,7 @@ mod tests {
         value["tracks"][0]["colour"] = serde_json::json!("#ff8800");
         value["tracks"][0]["source"]["latency_hint"] = serde_json::json!(128);
         let parsed = parse_project(&value.to_string()).expect("unknown fields are tolerated");
-        assert_eq!(parsed.tracks[0].name, "Drums");
+        assert_eq!(parsed.tracks[0].name, "Kick");
         assert_eq!(parsed, captured());
     }
 
@@ -1462,10 +1462,15 @@ mod tests {
             &[],
             None,
         );
-        assert_eq!(file.selected_track, 1, "two tracks, so the last is 1");
+        assert_eq!(
+            file.selected_track,
+            Project::default().len() - 1,
+            "a selection past the end lands on the last track"
+        );
         // ...and a file that names one anyway is clamped on the way back in.
         let mut file = captured();
+        let last = file.tracks.len() - 1;
         file.selected_track = 99;
-        assert_eq!(file.to_project().unwrap().1, 2);
+        assert_eq!(file.to_project().unwrap().1, last);
     }
 }

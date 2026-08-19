@@ -106,13 +106,19 @@ pub struct TrackHost {
 }
 
 impl TrackHost {
-    /// A host on the default project.
+    /// A host on the starter project: four drum channels and a melodic one.
+    ///
+    /// The melodic channel is the sampled piano when its assets are installed
+    /// and the poly synth when they are not -- which is why this needs the
+    /// registry and [`Project::default`] does not have it. See
+    /// [`default_piano`](crate::project::default_piano).
     pub fn new(
         tone: Arc<TestToneFactory>,
         instruments: Arc<InstrumentRegistry>,
         sampler: Arc<SamplerRegistry>,
     ) -> Self {
-        Self::with_project(tone, instruments, sampler, Project::default())
+        let project = Project::starter(crate::project::default_piano(&sampler));
+        Self::with_project(tone, instruments, sampler, project)
     }
 
     /// A host on an explicit project (tests, and one day a project file).
@@ -613,16 +619,19 @@ mod tests {
         // The parameter block has to be right from the first block the audio
         // thread runs, which is before any command has arrived.
         let host = host();
-        assert_eq!(host.track_count(), 2);
+        let count = Project::default().len();
+        assert_eq!(host.track_count(), count);
         assert_eq!(host.selected(), 0);
-        assert_eq!(host.selected_source(), Source::DrumKit);
+        assert_eq!(
+            host.selected_source(),
+            Source::Drum(mydaw_plugin_instruments::SingleDrum::Kick)
+        );
 
         let params = host.params();
         assert_eq!(params.track_gain(0), 1.0);
-        assert!(!params.track_muted(0));
-        assert!(!params.track_muted(1));
+        assert!((0..count).all(|index| !params.track_muted(index)));
         assert!(
-            params.track_muted(2),
+            params.track_muted(count),
             "a slot with no track behind it must be silent"
         );
         assert_eq!(params.master_gain(), 1.0);
@@ -682,10 +691,16 @@ mod tests {
     #[test]
     fn the_selected_track_is_what_the_keyboard_and_the_selector_address() {
         let host = host();
-        assert_eq!(host.selected_source(), Source::DrumKit);
+        assert_eq!(
+            host.selected_source(),
+            Source::Drum(mydaw_plugin_instruments::SingleDrum::Kick)
+        );
         host.set_selected(1).unwrap();
         assert_eq!(host.selected(), 1);
-        assert_eq!(host.selected_source(), Source::PolySynth);
+        assert_eq!(
+            host.selected_source(),
+            Source::Drum(mydaw_plugin_instruments::SingleDrum::Snare)
+        );
         let board = ClapBoard::new();
         let missing = MissingPlugins::new();
         assert!(host.state(&board, &Vst3Board::new(), &missing).tracks[1].selected);
@@ -712,9 +727,10 @@ mod tests {
         let collector = mydaw_rt_core::basedrop::Collector::new();
         let spec = host.build_spec(&LIMITS, collector.handle());
 
-        assert_eq!(spec.track_count(), 2);
-        // Source slot plus transport gate, twice, plus the master insert slot.
-        assert_eq!(spec.len(), 5);
+        let count = Project::default().len();
+        assert_eq!(spec.track_count(), count);
+        // Source slot plus transport gate per track, plus the master insert slot.
+        assert_eq!(spec.len(), count * 2 + 1);
         assert!(spec.params().is_some(), "the mixer parameters are shared");
         assert_eq!(spec.limits(), LIMITS);
         assert!(!host.has_clap_node());
@@ -739,7 +755,11 @@ mod tests {
             host.add_track(Source::PolySynth, None, &audio),
             Err(MixerError::Audio(AudioIoError::NotRunning))
         ));
-        assert_eq!(host.track_count(), 3, "the project edit happened");
+        assert_eq!(
+            host.track_count(),
+            Project::default().len() + 1,
+            "the project edit happened"
+        );
     }
 
     #[test]
@@ -777,8 +797,12 @@ mod tests {
             host.add_track(Source::PolySynth, None, &audio),
             Err(MixerError::Audio(AudioIoError::NotRunning))
         ));
-        assert_eq!(host.track_count(), 3);
-        assert!(!host.params().track_muted(2), "the new track is published");
+        let added = Project::default().len();
+        assert_eq!(host.track_count(), added + 1);
+        assert!(
+            !host.params().track_muted(added),
+            "the new track is published"
+        );
     }
 
     #[test]

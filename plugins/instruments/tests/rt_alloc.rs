@@ -15,7 +15,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
 use mydaw_plugin_instruments::drum_kit::{CLOSED_HAT_KEY, KICK_KEY, OPEN_HAT_KEY, SNARE_KEY};
-use mydaw_plugin_instruments::{DrumKitNode, PolySynthNode};
+use mydaw_plugin_instruments::{DrumKitNode, PolySynthNode, SingleDrum, SingleDrumNode};
 use mydaw_rt_core::{AudioBuffers, NoteEvent, ProcessCtx, RtNode, TransportSnapshot};
 
 thread_local! {
@@ -152,6 +152,40 @@ fn the_drum_kit_allocates_nothing_across_event_heavy_blocks() {
 
     assert_eq!(count, 0, "the drum kit allocated {count} times");
     assert!(node.unmapped_notes() > 0, "the diagnostic path really ran");
+}
+
+#[test]
+fn the_per_drum_instruments_allocate_nothing_across_event_heavy_blocks() {
+    // Every key is a trigger here, so the event stream is deliberately spread
+    // across the range -- including the ones that clamp the pitch, which is the
+    // only branch these nodes have that the kit does not.
+    let events: Vec<NoteEvent> = vec![
+        NoteEvent::note_on(0, 0, 1.0),
+        NoteEvent::note_on(1, 36, 0.8),
+        NoteEvent::note_on(2, 60, 0.9),
+        NoteEvent::note_off(2, 60),
+        NoteEvent::note_on(3, 127, 0.7),
+        NoteEvent::note_on(3, 24, 0.5),
+    ];
+
+    for drum in SingleDrum::ALL {
+        let mut node = SingleDrumNode::new(drum, 48_000.0);
+        let mut buffers = AudioBuffers::new(1_024);
+
+        let count = count_allocations(|| {
+            for size in BLOCK_SIZES {
+                for pass in 0..8 {
+                    // Alternate loaded and empty blocks so both the "apply an
+                    // event" and the "voice ran out and freed itself" paths run.
+                    let block_events: &[NoteEvent] = if pass % 2 == 0 { &events } else { &[] };
+                    run_block(&mut node, &mut buffers, size, block_events);
+                }
+            }
+        });
+
+        assert_eq!(count, 0, "{} allocated {count} times", drum.display_name());
+        assert!(node.triggers() > 0, "the trigger path really ran");
+    }
 }
 
 #[test]

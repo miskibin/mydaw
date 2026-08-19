@@ -944,7 +944,11 @@ mod tests {
         let file = ProjectFile::capture(&project, 0, 130.0, &Pattern::default(), &[], None);
 
         let report = rig.load(&file).expect("one absent plugin is not a refusal");
-        assert_eq!(rig.tracks.track_count(), 2, "the project loaded");
+        assert_eq!(
+            rig.tracks.track_count(),
+            project.len(),
+            "the project loaded"
+        );
         assert_eq!(
             rig.tracks.project().tracks[1].source,
             project.tracks[1].source,
@@ -1075,11 +1079,12 @@ mod tests {
         rig.load(&file).unwrap();
 
         let captured = rig.capture();
-        assert_eq!(captured.tracks.len(), 3);
-        assert!(captured.tracks[2].source.is_hosted());
-        assert_eq!(captured.tracks[2].state_blob, "");
-        assert_eq!(captured.tracks[2].name, "Hosted 2");
-        assert_eq!(captured.tracks[2].id, 2);
+        let hosted = captured.tracks.len() - 1;
+        assert_eq!(captured.tracks.len(), file.tracks.len());
+        assert!(captured.tracks[hosted].source.is_hosted());
+        assert_eq!(captured.tracks[hosted].state_blob, "");
+        assert_eq!(captured.tracks[hosted].name, "Hosted 2");
+        assert_eq!(captured.tracks[hosted].id, 2);
     }
 
     #[test]
@@ -1095,7 +1100,7 @@ mod tests {
                 .iter()
                 .map(|t| t.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Drums", "Synth"]
+            vec!["Kick", "Snare", "Hat Closed", "Hat Open", "Poly Synth"]
         );
         assert!(file
             .pattern

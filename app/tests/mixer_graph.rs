@@ -378,23 +378,39 @@ fn adding_a_track_mid_play_does_not_interrupt_the_others() {
 }
 
 #[test]
-fn the_shells_default_project_is_drums_then_synth_and_renders_silence_until_played() {
+fn the_shells_starter_rack_is_four_drums_and_a_synth_and_is_silent_until_played() {
     let rig_project = Project::default();
-    assert_eq!(rig_project.tracks[0].source, Source::DrumKit);
-    assert_eq!(rig_project.tracks[1].source, Source::PolySynth);
+    assert_eq!(
+        rig_project
+            .tracks
+            .iter()
+            .map(|t| t.source.id())
+            .collect::<Vec<_>>(),
+        vec!["kick", "snare", "hat-closed", "hat-open", "poly-synth"],
+        "one instrument per channel"
+    );
 
+    let count = rig_project.len();
     let mut rig = Rig::new(rig_project);
     let (left, right) = rig.settled(4, true);
     assert_eq!(peak(&left), 0.0, "instruments are silent until played");
     assert_eq!(peak(&right), 0.0);
-    assert_eq!(rig.peaks().len(), 2);
+    assert_eq!(rig.peaks().len(), count);
 
-    // A kick on channel 0 reaches the kit, and nothing else.
+    // A note on channel 0 reaches the kick channel, and nothing else -- which
+    // is the point of the split: a channel is one instrument, and a note
+    // addressed to it cannot leak into the snare.
     rig.render_with(true, &[NoteEvent::note_on(0, 36, 1.0)]);
     for _ in 0..8 {
         rig.render(true);
     }
     let peaks = rig.peaks();
-    assert!(peaks[0].peak_l > 0.01, "the kit answered the kick");
-    assert_eq!(peaks[1], TrackPeak::SILENT, "the synth was not addressed");
+    assert!(peaks[0].peak_l > 0.01, "the kick answered");
+    for (index, peak) in peaks.iter().enumerate().skip(1) {
+        assert_eq!(
+            *peak,
+            TrackPeak::SILENT,
+            "channel {index} was not addressed"
+        );
+    }
 }

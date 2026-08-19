@@ -843,7 +843,11 @@ mod tests {
             )
             .expect_err("a bare clap id names no bundle");
         assert!(err.contains("set_track_source_clap"), "{err}");
-        assert_eq!(tracks.track_count(), 2, "the project must not have changed");
+        assert_eq!(
+            tracks.track_count(),
+            crate::project::Project::default().len(),
+            "the project must not have changed"
+        );
     }
 
     #[test]

@@ -1,0 +1,1750 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#e9e7e2;font-family:'IBM Plex Sans',system-ui,sans-serif}
+a{color:#2a78d6}a:hover{color:#1b5fae}
+.dv-turn{padding:40px 44px 32px;border-bottom:1px solid rgba(0,0,0,.08);scroll-margin-top:16px}
+.dv-thd{display:flex;align-items:baseline;gap:10px;margin:0 0 20px}
+.dv-tid{font:600 10px 'IBM Plex Mono',monospace;padding:3px 7px;background:#1a1a1a;color:#fff;border-radius:4px;text-decoration:none}
+.dv-tname{font:600 13px/1.2 'IBM Plex Sans',sans-serif;color:#1a1a1a}
+.dv-opts{display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start}
+.dv-opt{flex:none;display:flex;flex-direction:column;gap:9px;scroll-margin-top:16px}
+.dv-oid{font:600 10.5px 'IBM Plex Mono',monospace;padding:3px 7px;background:rgba(0,0,0,.08);color:#1a1a1a;border-radius:5px;text-decoration:none}
+.dv-olabel{display:flex;align-items:baseline;gap:8px;font:400 11.5px/1.3 'IBM Plex Sans',sans-serif;color:rgba(0,0,0,.55)}
+.dv-card{max-width:100%;background:#0b0c0f;border:1px solid rgba(0,0,0,.14);border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,.14);overflow:hidden}
+.dv-card *{box-sizing:border-box}
+.dv-opt:target .dv-oid{background:#2a78d6;color:#fff}
+.dv-next{margin:26px 0 0;font:12px/1.6 'IBM Plex Sans',sans-serif;color:rgba(0,0,0,.5)}
+.dv-note{max-width:760px;margin:0 0 22px;font:13px/1.65 'IBM Plex Sans',sans-serif;color:rgba(0,0,0,.62)}
+.dv-note b{color:#1a1a1a;font-weight:600}
+</style>
+</helmet>
+
+<section class="dv-turn" id="t2">
+<div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">WAVE — selekcja jako kontekst, 3 poziomy widoku efektu · 1920×1080</span></div>
+<p class="dv-note"><b>Na ekranie widać całą hierarchię naraz:</b> chip (pasek łańcucha, dół Inspectora) → karta mini (EQ Eight / Compressor, Saturator collapsed = sam nagłówek + bypass) → okno pływające (pełny UI EQ Eight, title bar „EQ Eight — Lead”, resize + 2×klik na title bar = maximize). Okno żyje niezależnie od selekcji.<br><b>Bez powtórzeń:</b> miernik mastera z belki górnej wycięty — na górze zostały liczby (peak / LUFS), realny miernik jest raz, na strippie Master. Skala dB jest raz, po lewej stronie miksera, nie na każdym kanale. Fader i pan tylko w mikserze; Inspector trzyma tor sygnału. S / M / kropka-arm mają jedną semantykę wszędzie — mute na <b>Chords</b> wygasza też jej klipy w timeline. Grupa <b>DRUMS</b> jest zwinięta w jeden pas (3 ścieżki) zamiast tabu GROUPS dublującego listę.</p>
+<div class="dv-opts">
+
+<div class="dv-opt" id="2a">
+<div class="dv-olabel"><a class="dv-oid" href="#2a">2a</a>Zaznaczony klip <b>Lead 3</b> · dolny panel na MIXER, tab EDITOR czeka kontekstowo · okno pluginu otwarte nad shellem</div>
+<div class="dv-card" style="width:1920px">
+<div style="width:1920px;height:1080px;background:#0b0d11;color:#e6e9ef;font:400 12px 'IBM Plex Sans',sans-serif;display:flex;flex-direction:column;overflow:hidden;position:relative">
+
+  <!-- transport -->
+  <div style="height:54px;flex:none;display:flex;align-items:center;gap:20px;padding:0 16px;background:#14171e;border-bottom:1px solid #232833">
+    <div style="display:flex;align-items:center;gap:10px;width:178px">
+      <div style="width:22px;height:22px;flex:none;border-radius:6px;background:linear-gradient(150deg,#a78bfa,#6b4bd6)"></div>
+      <div style="display:flex;flex-direction:column;gap:1px">
+        <span style="font:600 12.5px 'IBM Plex Sans';letter-spacing:.06em">WAVE</span>
+        <span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">sundown_128.wave</span>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:4px;padding:4px;background:#0f1218;border:1px solid #222833;border-radius:8px">
+      <div style="width:30px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#8a93a2;font-size:10px">◀◀</div>
+      <div style="width:34px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:#242b38;color:#e6e9ef;font-size:11px">▶</div>
+      <div style="width:30px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#8a93a2;font-size:9px">■</div>
+      <div style="width:30px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:rgba(226,74,90,.16);box-shadow:inset 0 0 0 1px rgba(226,74,90,.45);color:#e24a5a;font-size:14px">●</div>
+      <div style="width:30px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:rgba(167,139,250,.14);color:#bda8ff;font-size:12px">⟲</div>
+    </div>
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <span style="font:500 22px/1 'IBM Plex Mono'">01:23:45</span>
+      <span style="font:400 11px 'IBM Plex Mono';color:#6b7381">045 · 3 · 000</span>
+    </div>
+    <div style="display:flex;align-items:center;gap:20px;height:34px;padding-left:18px;border-left:1px solid #232833">
+      <div style="display:flex;flex-direction:column;gap:3px"><span style="font:500 13px 'IBM Plex Mono'">128.00</span><span style="font:600 8.5px 'IBM Plex Mono';letter-spacing:.14em;color:#5d6673">BPM</span></div>
+      <div style="display:flex;flex-direction:column;gap:3px"><span style="font:500 13px 'IBM Plex Mono'">4/4</span><span style="font:600 8.5px 'IBM Plex Mono';letter-spacing:.14em;color:#5d6673">SIG</span></div>
+      <div style="display:flex;flex-direction:column;gap:3px"><span style="font:500 13px 'IBM Plex Mono'">C♯m</span><span style="font:600 8.5px 'IBM Plex Mono';letter-spacing:.14em;color:#5d6673">KEY</span></div>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:18px;font:400 10.5px 'IBM Plex Mono';color:#7b8493">
+      <span>PEAK <span style="color:#e6e9ef">−1.2</span></span>
+      <span>LUFS <span style="color:#e6e9ef">−6.1</span></span>
+      <span>32 <span style="color:#5d6673">VOICES</span></span>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <div style="height:26px;padding:0 10px;display:flex;align-items:center;border-radius:5px;background:#1b2029;font:500 10px 'IBM Plex Sans';color:#bda8ff">MONITOR</div>
+      <div style="width:28px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#8a93a2;font-size:12px">⚙</div>
+      <div style="width:26px;height:26px;border-radius:50%;background:#2a3140;display:flex;align-items:center;justify-content:center;font:600 10.5px 'IBM Plex Sans';color:#c9cfda">M</div>
+    </div>
+  </div>
+
+  <!-- body -->
+  <div style="flex:1;display:flex;min-height:0">
+
+    <!-- browser -->
+    <div style="width:268px;flex:none;display:flex;flex-direction:column;background:#12151b;border-right:1px solid #1e232c">
+      <div style="height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #1e232c">
+        <span style="font:600 9.5px 'IBM Plex Mono';letter-spacing:.14em;color:#5d6673">BROWSER</span>
+        <span style="flex:1"></span>
+        <span style="font:400 12px 'IBM Plex Mono';color:#4d5561">‹</span>
+      </div>
+      <div style="flex:none;padding:10px 12px 8px;display:flex;flex-direction:column;gap:9px">
+        <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#0e1116;border:1px solid #222833;border-radius:7px">
+          <span style="font-size:11px;color:#5d6673">⌕</span><span style="font:400 11.5px 'IBM Plex Sans';color:#5d6673">Search sounds, devices…</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <span style="padding:4px 9px;border-radius:5px;background:#242b38;font:500 10px 'IBM Plex Sans';color:#e6e9ef">Sounds</span>
+          <span style="padding:4px 9px;border-radius:5px;font:500 10px 'IBM Plex Sans';color:#7b8493">Instruments</span>
+          <span style="padding:4px 9px;border-radius:5px;font:500 10px 'IBM Plex Sans';color:#7b8493">FX</span>
+          <span style="padding:4px 9px;border-radius:5px;font:500 10px 'IBM Plex Sans';color:#7b8493">Presets</span>
+        </div>
+      </div>
+      <div style="flex:1;min-height:0;overflow:hidden;padding:0 6px;display:flex;flex-direction:column;gap:1px;font:400 11.5px 'IBM Plex Sans'">
+        <div style="display:flex;align-items:center;gap:8px;height:26px;padding:0 8px;border-radius:5px;color:#c9cfda"><span style="color:#5d6673;font-size:8px">▾</span>Drums<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">412</span></div>
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 8px 0 25px;border-radius:5px;background:#1b2029;color:#e6e9ef">Kicks / techno<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">28</span></div>
+        <div style="display:flex;flex-direction:column;gap:1px;padding:2px 0 4px 25px">
+          <div style="display:flex;align-items:center;height:24px;padding:0 8px;border-radius:5px;background:rgba(167,139,250,.14);box-shadow:inset 0 0 0 1px rgba(167,139,250,.32)"><span style="font:400 11px 'IBM Plex Mono';color:#cdbcff">KICK_07.wav</span><span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#8878c4">0.34</span></div>
+          <div style="display:flex;align-items:center;height:24px;padding:0 8px;color:#8a93a2"><span style="font:400 11px 'IBM Plex Mono'">KICK_11_dist.wav</span><span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">0.41</span></div>
+          <div style="display:flex;align-items:center;height:24px;padding:0 8px;color:#8a93a2"><span style="font:400 11px 'IBM Plex Mono'">KICK_22_soft.wav</span><span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">0.28</span></div>
+          <div style="display:flex;align-items:center;height:24px;padding:0 8px;color:#8a93a2"><span style="font:400 11px 'IBM Plex Mono'">KICK_30_sub.wav</span><span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">0.52</span></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 8px 0 25px;border-radius:5px;color:#8a93a2">Snares<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">61</span></div>
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 8px 0 25px;border-radius:5px;color:#8a93a2">Hats<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">88</span></div>
+        <div style="display:flex;align-items:center;gap:8px;height:24px;padding:0 8px 0 25px;border-radius:5px;color:#8a93a2">Percussion<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">74</span></div>
+        <div style="display:flex;align-items:center;gap:8px;height:26px;padding:0 8px;border-radius:5px;color:#c9cfda;margin-top:4px"><span style="color:#5d6673;font-size:8px">▸</span>Bass<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">96</span></div>
+        <div style="display:flex;align-items:center;gap:8px;height:26px;padding:0 8px;border-radius:5px;color:#c9cfda"><span style="color:#5d6673;font-size:8px">▸</span>Synths<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">210</span></div>
+        <div style="display:flex;align-items:center;gap:8px;height:26px;padding:0 8px;border-radius:5px;color:#c9cfda"><span style="color:#5d6673;font-size:8px">▸</span>Vocals<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">54</span></div>
+        <div style="display:flex;align-items:center;gap:8px;height:26px;padding:0 8px;border-radius:5px;color:#c9cfda"><span style="color:#5d6673;font-size:8px">▸</span>Loops<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">331</span></div>
+        <div style="display:flex;align-items:center;gap:8px;height:26px;padding:0 8px;border-radius:5px;color:#c9cfda"><span style="color:#5d6673;font-size:8px">▸</span>User library<span style="flex:1"></span><span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">1.2k</span></div>
+      </div>
+      <div style="flex:none;padding:12px;border-top:1px solid #1e232c;display:flex;flex-direction:column;gap:9px">
+        <div style="height:62px;border-radius:7px;background:#0e1116;border:1px solid #202632;position:relative;overflow:hidden">
+          <div style="position:absolute;left:9px;right:9px;top:9px;bottom:9px;background-image:repeating-linear-gradient(90deg,rgba(167,139,250,.85) 0 1.5px,transparent 1.5px 4px),repeating-linear-gradient(90deg,rgba(167,139,250,.3) 0 1.5px,transparent 1.5px 4px);background-size:100% 40%,100% 96%;background-position:center,center;background-repeat:repeat-x"></div>
+          <div style="position:absolute;left:9px;top:0;bottom:0;width:24%;background:rgba(167,139,250,.08);border-right:1px solid rgba(167,139,250,.5)"></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;font:400 9.5px 'IBM Plex Mono';color:#5d6673">
+          <span>KICK_07 · 48k · 24bit · 0.34s</span><span style="color:#7b8493">drag → timeline</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- center -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#0d1015">
+
+      <div style="height:36px;flex:none;display:flex;align-items:center;gap:12px;padding:0 12px;background:#111419;border-bottom:1px solid #1e232c">
+        <span style="font:600 9.5px 'IBM Plex Mono';letter-spacing:.14em;color:#5d6673">ARRANGEMENT</span>
+        <div style="display:flex;gap:2px">
+          <div style="width:26px;height:23px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:#242b38;color:#e6e9ef;font-size:11px">⌖</div>
+          <div style="width:26px;height:23px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#7b8493;font-size:11px">✎</div>
+          <div style="width:26px;height:23px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#7b8493;font-size:11px">✂</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:7px;height:23px;padding:0 9px;background:#0e1116;border:1px solid #222833;border-radius:6px;font:400 10.5px 'IBM Plex Mono';color:#c9cfda">SNAP 1/4<span style="color:#5d6673;font-size:7px">▾</span></div>
+        <div style="flex:1"></div>
+        <span style="font:400 10.5px 'IBM Plex Mono';color:#5d6673">Lead 3 · 16 bars · 24 notes</span>
+        <div style="height:23px;padding:0 9px;display:flex;align-items:center;border-radius:6px;background:rgba(167,139,250,.12);font:500 10px 'IBM Plex Sans';color:#bda8ff">FOLLOW</div>
+        <div style="display:flex;gap:2px">
+          <div style="width:24px;height:23px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#7b8493;font-size:13px">−</div>
+          <div style="width:24px;height:23px;display:flex;align-items:center;justify-content:center;border-radius:5px;color:#7b8493;font-size:13px">+</div>
+          <div style="height:23px;padding:0 8px;display:flex;align-items:center;border-radius:5px;color:#7b8493;font:400 10px 'IBM Plex Mono'">FIT</div>
+        </div>
+      </div>
+
+      <!-- sections + bar ruler -->
+      <div style="flex:none;display:flex;background:#111419;border-bottom:1px solid #1e232c">
+        <div style="width:230px;flex:none;border-right:1px solid #1e232c;display:flex;align-items:flex-end;padding:0 12px 6px">
+          <span style="font:600 9.5px 'IBM Plex Mono';letter-spacing:.1em;color:#464e5a">6 TRACKS · 2 BUSES</span>
+        </div>
+        <div style="flex:1;min-width:0;padding:5px 0 0">
+          <div style="height:24px;display:flex;gap:2px;padding:0 2px">
+            <div style="flex:8;border-radius:4px;background:rgba(107,75,214,.26);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';letter-spacing:.1em;color:#9d90cd">INTRO</div>
+            <div style="flex:16;border-radius:4px;background:rgba(107,75,214,.26);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';letter-spacing:.1em;color:#9d90cd">VERSE</div>
+            <div style="flex:16;border-radius:4px;background:rgba(107,75,214,.26);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';letter-spacing:.1em;color:#9d90cd">CHORUS</div>
+            <div style="flex:16;border-radius:4px;background:#a78bfa;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';letter-spacing:.1em;color:#171029">DROP</div>
+            <div style="flex:16;border-radius:4px;background:rgba(107,75,214,.26);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';letter-spacing:.1em;color:#9d90cd">BREAKDOWN</div>
+            <div style="flex:14;border-radius:4px;background:rgba(107,75,214,.26);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';letter-spacing:.1em;color:#9d90cd">DROP 2</div>
+            <div style="flex:8;border-radius:4px;background:rgba(107,75,214,.26);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';letter-spacing:.1em;color:#9d90cd">OUTRO</div>
+          </div>
+          <div style="height:20px;display:flex;align-items:center;font:400 9.5px 'IBM Plex Mono';color:#4d5561">
+            <span style="flex:8;padding-left:5px">1</span><span style="flex:16;padding-left:5px">9</span><span style="flex:16;padding-left:5px">25</span><span style="flex:16;padding-left:5px;color:#bda8ff">41</span><span style="flex:16;padding-left:5px">57</span><span style="flex:14;padding-left:5px">73</span><span style="flex:8;padding-left:5px">87</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- tracks -->
+      <div style="flex:1;min-height:0;display:flex;position:relative;overflow:hidden">
+        <div style="position:absolute;left:230px;top:0;bottom:0;right:0;pointer-events:none;z-index:2">
+          <div style="position:absolute;left:44.6%;top:0;bottom:0;width:1px;background:#f2f4f8;box-shadow:0 0 8px rgba(255,255,255,.35)"></div>
+        </div>
+
+        <!-- track headers -->
+        <div style="width:230px;flex:none;border-right:1px solid #1e232c;background:#111419;display:flex;flex-direction:column">
+          <div style="height:56px;display:flex;align-items:center;gap:9px;padding:0 10px;border-bottom:1px solid #191d25;background:#141821">
+            <span style="font-size:8px;color:#7b8493">▸</span>
+            <span style="width:3px;height:34px;border-radius:2px;background:#8b5cf6"></span>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+              <span style="font:600 11.5px 'IBM Plex Sans';color:#e6e9ef">DRUMS</span>
+              <span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">group · 3 tracks</span>
+            </div>
+            <div style="display:flex;gap:3px">
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span>
+            </div>
+          </div>
+          <div style="height:56px;display:flex;align-items:center;gap:9px;padding:0 10px 0 20px;border-bottom:1px solid #191d25">
+            <span style="width:3px;height:34px;border-radius:2px;background:#4f8ef7"></span>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+              <span style="font:500 11.5px 'IBM Plex Sans';color:#d5dae2">Bass</span>
+              <span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">Sub Bass</span>
+            </div>
+            <div style="display:flex;gap:3px">
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font-size:9px;color:#4d5561">●</span>
+            </div>
+          </div>
+          <div style="height:56px;display:flex;align-items:center;gap:9px;padding:0 10px 0 20px;border-bottom:1px solid #191d25">
+            <span style="width:3px;height:34px;border-radius:2px;background:#2ec4a6;opacity:.4"></span>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+              <span style="font:500 11.5px 'IBM Plex Sans';color:#6b7381">Chords</span>
+              <span style="font:400 9.5px 'IBM Plex Mono';color:#464e5a">Analog Lab</span>
+            </div>
+            <div style="display:flex;gap:3px">
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#e2a33c;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#171029">M</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font-size:9px;color:#4d5561">●</span>
+            </div>
+          </div>
+          <div style="height:56px;display:flex;align-items:center;gap:9px;padding:0 10px 0 20px;border-bottom:1px solid #191d25;background:rgba(167,139,250,.1);box-shadow:inset 2px 0 0 #a78bfa">
+            <span style="width:3px;height:34px;border-radius:2px;background:#e2b33c"></span>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+              <span style="font:600 11.5px 'IBM Plex Sans';color:#fff">Lead</span>
+              <span style="font:400 9.5px 'IBM Plex Mono';color:#8a93a2">Lead Synth · 2 layers</span>
+            </div>
+            <div style="display:flex;gap:3px">
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:rgba(226,74,90,.18);display:flex;align-items:center;justify-content:center;font-size:9px;color:#e24a5a">●</span>
+            </div>
+          </div>
+          <div style="height:56px;display:flex;align-items:center;gap:9px;padding:0 10px 0 20px;border-bottom:1px solid #191d25">
+            <span style="width:3px;height:34px;border-radius:2px;background:#e8558f"></span>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+              <span style="font:500 11.5px 'IBM Plex Sans';color:#d5dae2">Vocal</span>
+              <span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">Main Vocal</span>
+            </div>
+            <div style="display:flex;gap:3px">
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font-size:9px;color:#4d5561">●</span>
+            </div>
+          </div>
+          <div style="height:56px;display:flex;align-items:center;gap:9px;padding:0 10px 0 20px;border-bottom:1px solid #191d25">
+            <span style="width:3px;height:34px;border-radius:2px;background:#a78bfa"></span>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+              <span style="font:500 11.5px 'IBM Plex Sans';color:#d5dae2">FX</span>
+              <span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">Transitions</span>
+            </div>
+            <div style="display:flex;gap:3px">
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span>
+              <span style="width:19px;height:19px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font-size:9px;color:#4d5561">●</span>
+            </div>
+          </div>
+          <div style="flex:1;display:flex;align-items:flex-start;padding:12px 10px 0 20px">
+            <span style="font:400 10px 'IBM Plex Mono';color:#5d6673">drop instrument → new track</span>
+          </div>
+        </div>
+
+        <!-- lanes -->
+        <div style="flex:1;min-width:0;background-image:repeating-linear-gradient(90deg,#151922 0 1px,transparent 1px 5.55%),repeating-linear-gradient(90deg,#1c2230 0 1px,transparent 1px 22.2%);display:flex;flex-direction:column">
+          <div style="height:56px;border-bottom:1px solid #12161d;padding:6px 0;display:flex">
+            <div style="width:5.5%"></div>
+            <div style="width:83%;border-radius:4px;background:rgba(139,92,246,.2);box-shadow:inset 0 0 0 1px rgba(139,92,246,.5);position:relative;overflow:hidden">
+              <span style="position:absolute;left:7px;top:3px;font:500 9.5px 'IBM Plex Mono';color:#c4b5fd;z-index:1">Drums (3)</span>
+              <div style="position:absolute;left:0;right:0;top:16px;bottom:5px;background-image:repeating-linear-gradient(90deg,rgba(196,181,253,.85) 0 2px,transparent 2px 11px),repeating-linear-gradient(90deg,rgba(196,181,253,.5) 0 2px,transparent 2px 22px),repeating-linear-gradient(90deg,rgba(196,181,253,.35) 0 2px,transparent 2px 5.5px);background-size:100% 5px,100% 5px,100% 4px;background-position:0 65%,0 30%,0 96%;background-repeat:repeat-x"></div>
+            </div>
+          </div>
+          <div style="height:56px;border-bottom:1px solid #12161d;padding:6px 0;display:flex">
+            <div style="width:11%"></div>
+            <div style="width:77.5%;border-radius:4px;background:rgba(79,142,247,.18);box-shadow:inset 0 0 0 1px rgba(79,142,247,.45);position:relative;overflow:hidden">
+              <span style="position:absolute;left:7px;top:3px;font:500 9.5px 'IBM Plex Mono';color:#9dc0fb;z-index:1">Sub Bass</span>
+              <div style="position:absolute;left:0;right:0;top:18px;bottom:6px;background-image:repeating-linear-gradient(90deg,rgba(157,192,251,.9) 0 26px,transparent 26px 44px),repeating-linear-gradient(90deg,rgba(157,192,251,.7) 0 12px,transparent 12px 88px);background-size:100% 6px,100% 6px;background-position:0 78%,0 30%;background-repeat:repeat-x"></div>
+            </div>
+          </div>
+          <div style="height:56px;border-bottom:1px solid #12161d;padding:6px 0;display:flex;opacity:.42">
+            <div style="width:22.2%"></div>
+            <div style="width:55.5%;border-radius:4px;background:rgba(46,196,166,.16);box-shadow:inset 0 0 0 1px rgba(46,196,166,.4);position:relative;overflow:hidden">
+              <span style="position:absolute;left:7px;top:3px;font:500 9.5px 'IBM Plex Mono';color:#7fdccb;z-index:1">Chords · muted</span>
+              <div style="position:absolute;left:0;right:0;top:18px;bottom:6px;background-image:repeating-linear-gradient(90deg,rgba(127,220,203,.8) 0 40px,transparent 40px 66px),repeating-linear-gradient(90deg,rgba(127,220,203,.6) 0 40px,transparent 40px 66px);background-size:100% 5px,100% 5px;background-position:0 20%,0 70%;background-repeat:repeat-x"></div>
+            </div>
+          </div>
+          <div style="height:56px;border-bottom:1px solid #12161d;padding:6px 0;display:flex;background:rgba(167,139,250,.05)">
+            <div style="width:33.3%"></div>
+            <div style="width:11%;border-radius:4px;background:rgba(226,179,60,.14);box-shadow:inset 0 0 0 1px rgba(226,179,60,.35);position:relative;overflow:hidden;margin-right:2px">
+              <div style="position:absolute;left:0;right:0;top:18px;bottom:6px;background-image:repeating-linear-gradient(90deg,rgba(247,214,124,.75) 0 14px,transparent 14px 30px);background-size:100% 5px;background-position:0 50%;background-repeat:repeat-x"></div>
+            </div>
+            <div style="width:22%;border-radius:4px;background:rgba(226,179,60,.3);box-shadow:0 0 0 2px #e2b33c,0 6px 20px rgba(0,0,0,.45);position:relative;overflow:hidden">
+              <span style="position:absolute;left:7px;top:3px;font:600 9.5px 'IBM Plex Mono';color:#2a1f06;z-index:1">Lead 3 ⌄</span>
+              <div style="position:absolute;left:0;right:0;top:17px;bottom:5px;background-image:repeating-linear-gradient(90deg,rgba(60,44,8,.9) 0 12px,transparent 12px 24px),repeating-linear-gradient(90deg,rgba(60,44,8,.75) 0 8px,transparent 8px 32px),repeating-linear-gradient(90deg,rgba(60,44,8,.6) 0 16px,transparent 16px 48px);background-size:100% 5px,100% 5px,100% 5px;background-position:0 15%,0 52%,0 88%;background-repeat:repeat-x"></div>
+            </div>
+            <div style="width:22%;border-radius:4px;background:rgba(226,179,60,.14);box-shadow:inset 0 0 0 1px rgba(226,179,60,.35);position:relative;overflow:hidden;margin-left:2px">
+              <div style="position:absolute;left:0;right:0;top:18px;bottom:6px;background-image:repeating-linear-gradient(90deg,rgba(247,214,124,.7) 0 12px,transparent 12px 24px),repeating-linear-gradient(90deg,rgba(247,214,124,.55) 0 8px,transparent 8px 32px);background-size:100% 5px,100% 5px;background-position:0 30%,0 74%;background-repeat:repeat-x"></div>
+            </div>
+          </div>
+          <div style="height:56px;border-bottom:1px solid #12161d;padding:6px 0;display:flex">
+            <div style="width:22.2%"></div>
+            <div style="width:66.6%;border-radius:4px;background:rgba(232,85,143,.16);box-shadow:inset 0 0 0 1px rgba(232,85,143,.42);position:relative;overflow:hidden">
+              <span style="position:absolute;left:7px;top:3px;font:500 9.5px 'IBM Plex Mono';color:#f4a0c1;z-index:1">Main Vocal</span>
+              <div style="position:absolute;left:0;right:0;top:15px;bottom:4px;background-image:repeating-linear-gradient(90deg,rgba(244,160,193,.9) 0 1.5px,transparent 1.5px 4px),repeating-linear-gradient(90deg,rgba(244,160,193,.4) 0 1.5px,transparent 1.5px 4px);background-size:100% 44%,100% 100%;background-position:center,center;background-repeat:repeat-x"></div>
+            </div>
+          </div>
+          <div style="height:56px;border-bottom:1px solid #12161d;padding:8px 0;display:flex">
+            <div style="width:16.6%"></div>
+            <div style="width:16.6%;border-radius:4px;background:rgba(167,139,250,.12);box-shadow:inset 0 0 0 1px rgba(167,139,250,.32);position:relative;overflow:hidden">
+              <div style="position:absolute;left:6px;right:6px;top:8px;bottom:8px;border-bottom:1px dashed rgba(167,139,250,.35);background:linear-gradient(75deg,transparent 46%,rgba(167,139,250,.75) 47%,rgba(167,139,250,.75) 49%,transparent 50%)"></div>
+            </div>
+            <div style="width:11%;margin-left:11%;border-radius:4px;background:rgba(167,139,250,.12);box-shadow:inset 0 0 0 1px rgba(167,139,250,.32);position:relative;overflow:hidden">
+              <div style="position:absolute;left:6px;right:6px;top:8px;bottom:8px;background:radial-gradient(closest-side at 50% 100%,rgba(167,139,250,.55),transparent)"></div>
+            </div>
+            <div style="width:22%;margin-left:5.5%;border-radius:4px;background:rgba(167,139,250,.12);box-shadow:inset 0 0 0 1px rgba(167,139,250,.32);position:relative;overflow:hidden">
+              <div style="position:absolute;left:6px;right:6px;top:10px;bottom:10px;border-top:1px dashed rgba(167,139,250,.4);background:linear-gradient(100deg,rgba(167,139,250,.5) 0 2%,transparent 3%)"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- bottom panel -->
+      <div style="height:322px;flex:none;background:#111419;border-top:1px solid #232833;display:flex;flex-direction:column">
+        <div style="height:5px;flex:none;display:flex;align-items:center;justify-content:center;background:#0f1218">
+          <span style="width:44px;height:2px;border-radius:2px;background:#2b323e"></span>
+        </div>
+        <div style="height:34px;flex:none;display:flex;align-items:stretch;gap:0;padding:0 12px;border-bottom:1px solid #1e232c">
+          <div style="display:flex;align-items:center;padding:0 14px;font:600 10.5px 'IBM Plex Sans';letter-spacing:.06em;color:#fff;box-shadow:inset 0 -2px 0 #a78bfa">MIXER</div>
+          <div style="display:flex;align-items:center;padding:0 14px;font:500 10.5px 'IBM Plex Sans';letter-spacing:.06em;color:#7b8493">TRACKS</div>
+          <div style="display:flex;align-items:center;padding:0 14px;font:500 10.5px 'IBM Plex Sans';letter-spacing:.06em;color:#7b8493">GROUPS</div>
+          <div style="display:flex;align-items:center;gap:7px;padding:0 14px;font:500 10.5px 'IBM Plex Sans';letter-spacing:.06em;color:#7b8493">EDITOR<span style="font:400 9.5px 'IBM Plex Mono';color:#4d5561">Lead 3 · piano roll</span></div>
+          <span style="flex:1"></span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="height:22px;padding:0 9px;display:flex;align-items:center;gap:6px;border-radius:5px;background:#181d26;font:400 9.5px 'IBM Plex Mono';color:#8a93a2">POST FADER<span style="color:#4d5561;font-size:7px">▾</span></span>
+            <span style="height:22px;padding:0 9px;display:flex;align-items:center;gap:6px;border-radius:5px;background:#181d26;font:400 9.5px 'IBM Plex Mono';color:#8a93a2">MAXIMIZE <span style="color:#5d6673">F7</span></span>
+          </div>
+        </div>
+
+        <div style="flex:1;min-height:0;display:flex;padding:10px 12px 12px;gap:8px">
+          <!-- dB scale, once -->
+          <div style="width:26px;flex:none;display:flex;flex-direction:column;justify-content:space-between;padding:26px 0 30px;font:400 8.5px 'IBM Plex Mono';color:#464e5a;text-align:right">
+            <span>+6</span><span>0</span><span>−6</span><span>−12</span><span>−24</span><span>−36</span><span>−60</span>
+          </div>
+
+          <div style="flex:1;display:flex;gap:6px;min-width:0">
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#141821;border:1px solid #1e232c;border-radius:7px;overflow:hidden">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:#171c25"><span style="width:6px;height:6px;border-radius:50%;background:#8b5cf6"></span><span style="font:500 10.5px 'IBM Plex Sans';color:#d5dae2">Drums</span><span style="flex:1"></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">−3.4</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#a78bfa;transform:translateX(-50%) rotate(-22deg);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">PAN L12</span></div>
+                <div style="flex:1;display:flex;gap:7px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #202632;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:30%;height:14px;border-radius:3px;background:linear-gradient(180deg,#3b4453,#252c38);box-shadow:0 1px 3px rgba(0,0,0,.5)"></span></div>
+                  <div style="width:9px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:66%;background:linear-gradient(180deg,#ffd166,#5cd39a 26%,#3f9e6a)"></span></div>
+                </div>
+                <div style="display:flex;gap:4px"><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span></div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a;text-align:center">→ BUS 1</span>
+              </div>
+            </div>
+
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#141821;border:1px solid #1e232c;border-radius:7px;overflow:hidden">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:#171c25"><span style="width:6px;height:6px;border-radius:50%;background:#4f8ef7"></span><span style="font:500 10.5px 'IBM Plex Sans';color:#d5dae2">Bass</span><span style="flex:1"></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">−1.8</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#a78bfa;transform:translateX(-50%);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">PAN C</span></div>
+                <div style="flex:1;display:flex;gap:7px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #202632;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:24%;height:14px;border-radius:3px;background:linear-gradient(180deg,#3b4453,#252c38);box-shadow:0 1px 3px rgba(0,0,0,.5)"></span></div>
+                  <div style="width:9px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:74%;background:linear-gradient(180deg,#ffd166,#5cd39a 20%,#3f9e6a)"></span></div>
+                </div>
+                <div style="display:flex;gap:4px"><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span></div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a;text-align:center">→ MASTER</span>
+              </div>
+            </div>
+
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#141821;border:1px solid #1e232c;border-radius:7px;overflow:hidden;opacity:.55">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:#171c25"><span style="width:6px;height:6px;border-radius:50%;background:#2ec4a6"></span><span style="font:500 10.5px 'IBM Plex Sans';color:#d5dae2">Chords</span><span style="flex:1"></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">−4.0</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#a78bfa;transform:translateX(-50%) rotate(16deg);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">PAN R08</span></div>
+                <div style="flex:1;display:flex;gap:7px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #202632;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:34%;height:14px;border-radius:3px;background:linear-gradient(180deg,#3b4453,#252c38)"></span></div>
+                  <div style="width:9px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"></div>
+                </div>
+                <div style="display:flex;gap:4px"><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span><span style="flex:1;height:20px;border-radius:4px;background:#e2a33c;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#171029">M</span></div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a;text-align:center">→ BUS 2</span>
+              </div>
+            </div>
+
+            <div style="flex:1.05;min-width:0;display:flex;flex-direction:column;background:#181c26;border:1px solid #a78bfa;border-radius:7px;overflow:hidden;box-shadow:0 0 0 1px rgba(167,139,250,.35)">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:rgba(167,139,250,.16)"><span style="width:6px;height:6px;border-radius:50%;background:#e2b33c"></span><span style="font:600 10.5px 'IBM Plex Sans';color:#fff">Lead</span><span style="flex:1"></span><span style="font:400 9px 'IBM Plex Mono';color:#cdbcff">−5.2</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #4a4266;background:#1e1b2c;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#cdbcff;transform:translateX(-50%) rotate(-9deg);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#8a93a2">PAN L04</span></div>
+                <div style="flex:1;display:flex;gap:7px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #2f2a44;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:36%;height:14px;border-radius:3px;background:linear-gradient(180deg,#6b5fa0,#3a3358);box-shadow:0 1px 4px rgba(0,0,0,.55)"></span></div>
+                  <div style="width:9px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:58%;background:linear-gradient(180deg,#ffd166,#5cd39a 30%,#3f9e6a)"></span></div>
+                </div>
+                <div style="display:flex;gap:4px"><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span></div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#8878c4;text-align:center">→ BUS 1</span>
+              </div>
+            </div>
+
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#141821;border:1px solid #1e232c;border-radius:7px;overflow:hidden">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:#171c25"><span style="width:6px;height:6px;border-radius:50%;background:#e8558f"></span><span style="font:500 10.5px 'IBM Plex Sans';color:#d5dae2">Vocal</span><span style="flex:1"></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">−2.6</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#a78bfa;transform:translateX(-50%);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">PAN C</span></div>
+                <div style="flex:1;display:flex;gap:7px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #202632;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:28%;height:14px;border-radius:3px;background:linear-gradient(180deg,#3b4453,#252c38)"></span></div>
+                  <div style="width:9px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:70%;background:linear-gradient(180deg,#ffd166,#5cd39a 24%,#3f9e6a)"></span></div>
+                </div>
+                <div style="display:flex;gap:4px"><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span></div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a;text-align:center">→ BUS 2</span>
+              </div>
+            </div>
+
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#141821;border:1px solid #1e232c;border-radius:7px;overflow:hidden">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:#171c25"><span style="width:6px;height:6px;border-radius:50%;background:#a78bfa"></span><span style="font:500 10.5px 'IBM Plex Sans';color:#d5dae2">FX</span><span style="flex:1"></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">−8.0</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#a78bfa;transform:translateX(-50%) rotate(8deg);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">PAN R02</span></div>
+                <div style="flex:1;display:flex;gap:7px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #202632;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:46%;height:14px;border-radius:3px;background:linear-gradient(180deg,#3b4453,#252c38)"></span></div>
+                  <div style="width:9px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:34%;background:linear-gradient(180deg,#5cd39a,#3f9e6a)"></span></div>
+                </div>
+                <div style="display:flex;gap:4px"><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span></div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a;text-align:center">→ MASTER</span>
+              </div>
+            </div>
+
+            <div style="width:14px;flex:none;display:flex;align-items:center;justify-content:center"><span style="width:1px;height:70%;background:#1e232c"></span></div>
+
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#12161e;border:1px solid #232a36;border-radius:7px;overflow:hidden">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:#161b24"><span style="font:600 9px 'IBM Plex Mono';color:#6b7381">BUS</span><span style="font:500 10.5px 'IBM Plex Sans';color:#c9cfda">Drum Bus</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#8a93a2;transform:translateX(-50%);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">3 IN</span></div>
+                <div style="flex:1;display:flex;gap:7px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #202632;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:26%;height:14px;border-radius:3px;background:linear-gradient(180deg,#3b4453,#252c38)"></span></div>
+                  <div style="width:9px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:72%;background:linear-gradient(180deg,#ffd166,#5cd39a 22%,#3f9e6a)"></span></div>
+                </div>
+                <div style="display:flex;gap:4px"><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span></div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a;text-align:center">→ MASTER</span>
+              </div>
+            </div>
+
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#12161e;border:1px solid #232a36;border-radius:7px;overflow:hidden">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:#161b24"><span style="font:600 9px 'IBM Plex Mono';color:#6b7381">BUS</span><span style="font:500 10.5px 'IBM Plex Sans';color:#c9cfda">Reverb</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#8a93a2;transform:translateX(-50%);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">2 IN</span></div>
+                <div style="flex:1;display:flex;gap:7px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #202632;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:40%;height:14px;border-radius:3px;background:linear-gradient(180deg,#3b4453,#252c38)"></span></div>
+                  <div style="width:9px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:44%;background:linear-gradient(180deg,#5cd39a,#3f9e6a)"></span></div>
+                </div>
+                <div style="display:flex;gap:4px"><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">S</span><span style="flex:1;height:20px;border-radius:4px;background:#1c212b;display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#6b7381">M</span></div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a;text-align:center">→ MASTER</span>
+              </div>
+            </div>
+
+            <div style="width:132px;flex:none;display:flex;flex-direction:column;background:#151a24;border:1px solid #2b3342;border-radius:7px;overflow:hidden">
+              <div style="height:25px;flex:none;display:flex;align-items:center;gap:6px;padding:0 8px;background:#1a2029"><span style="font:600 10.5px 'IBM Plex Sans';letter-spacing:.06em;color:#e6e9ef">MASTER</span><span style="flex:1"></span><span style="font:400 9px 'IBM Plex Mono';color:#8a93a2">−3.1</span></div>
+              <div style="flex:1;display:flex;flex-direction:column;padding:8px;gap:9px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:26px;height:26px;border-radius:50%;border:1px solid #333c4c;background:#1c222c;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:9px;background:#e6e9ef;transform:translateX(-50%);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">MONO CHECK</span></div>
+                <div style="flex:1;display:flex;gap:6px;justify-content:center;min-height:0">
+                  <div style="width:22px;position:relative;background:#0e1116;border:1px solid #262e3a;border-radius:4px"><span style="position:absolute;left:-3px;right:-3px;top:22%;height:14px;border-radius:3px;background:linear-gradient(180deg,#4a5464,#2b323e);box-shadow:0 1px 4px rgba(0,0,0,.55)"></span></div>
+                  <div style="width:10px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:78%;background:linear-gradient(180deg,#ffd166,#5cd39a 18%,#3f9e6a)"></span></div>
+                  <div style="width:10px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;bottom:0;height:72%;background:linear-gradient(180deg,#ffd166,#5cd39a 20%,#3f9e6a)"></span></div>
+                </div>
+                <span style="font:400 8.5px 'IBM Plex Mono';color:#5d6673;text-align:center">PEAK −1.2 · LUFS −6.1</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- inspector -->
+    <div style="width:340px;flex:none;display:flex;flex-direction:column;background:#12151b;border-left:1px solid #1e232c">
+      <div style="height:36px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #1e232c">
+        <span style="font:600 9.5px 'IBM Plex Mono';letter-spacing:.14em;color:#5d6673">INSPECTOR</span>
+        <span style="flex:1"></span>
+        <span style="font:400 12px 'IBM Plex Mono';color:#4d5561">›</span>
+      </div>
+
+      <div style="flex:none;padding:12px;border-bottom:1px solid #1e232c;display:flex;flex-direction:column;gap:3px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="width:8px;height:8px;border-radius:50%;background:#e2b33c"></span>
+          <span style="font:600 14px 'IBM Plex Sans';color:#fff">Lead</span>
+          <span style="font:400 10px 'IBM Plex Mono';color:#5d6673">track 4</span>
+        </div>
+        <span style="font:400 10.5px 'IBM Plex Mono';color:#7b8493;padding-left:16px">clip Lead 3 · bar 41–57 · → Bus 1</span>
+      </div>
+
+      <div style="flex:1;min-height:0;overflow:hidden;padding:12px;display:flex;flex-direction:column;gap:9px">
+        <!-- instrument slot -->
+        <div style="flex:none;border-radius:8px;background:#161b24;border:1px solid #242c38;overflow:hidden">
+          <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#1a2029">
+            <span style="font:600 8.5px 'IBM Plex Mono';letter-spacing:.12em;color:#5d6673">INSTRUMENT</span>
+            <span style="flex:1"></span>
+            <span style="font:400 10px 'IBM Plex Mono';color:#7b8493">⤢</span>
+          </div>
+          <div style="padding:9px 10px;display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="width:5px;height:5px;border-radius:50%;background:#5cd39a"></span>
+              <span style="font:500 11.5px 'IBM Plex Sans';color:#e6e9ef">Lead Synth</span>
+              <span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">saw stack</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;padding-left:13px">
+              <span style="width:5px;height:5px;border-radius:50%;background:#5cd39a"></span>
+              <span style="font:500 11.5px 'IBM Plex Sans';color:#c9cfda">Layer 2 — Sine Sub</span>
+              <span style="flex:1"></span>
+              <span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">−6.0</span>
+            </div>
+            <div style="height:24px;display:flex;align-items:center;justify-content:center;border-radius:5px;border:1px dashed #2f3947;font:500 10px 'IBM Plex Sans';color:#7b8493">+ Layer</div>
+          </div>
+        </div>
+
+        <!-- FX card: EQ (open in window) -->
+        <div style="flex:none;border-radius:8px;background:#161b24;border:1px solid #3a3358;overflow:hidden">
+          <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:rgba(167,139,250,.13)">
+            <span style="width:7px;height:7px;border-radius:50%;background:#a78bfa"></span>
+            <span style="font:500 11.5px 'IBM Plex Sans';color:#fff">EQ Eight</span>
+            <span style="font:400 9px 'IBM Plex Mono';color:#8878c4">in window</span>
+            <span style="flex:1"></span>
+            <span style="font:400 11px 'IBM Plex Mono';color:#bda8ff">⤢</span>
+          </div>
+          <div style="height:74px;position:relative;background:#0e1116;background-image:repeating-linear-gradient(90deg,#171b22 0 1px,transparent 1px 44px)">
+            <svg viewBox="0 0 320 74" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+              <path d="M0 44 C34 44 44 20 74 24 C104 28 116 52 150 50 C186 48 202 30 236 30 C266 30 288 56 320 58 L320 74 L0 74 Z" fill="rgba(167,139,250,.14)"></path>
+              <path d="M0 44 C34 44 44 20 74 24 C104 28 116 52 150 50 C186 48 202 30 236 30 C266 30 288 56 320 58" fill="none" stroke="#a78bfa" stroke-width="1.6"></path>
+              <circle cx="74" cy="24" r="3.4" fill="#e2b33c"></circle>
+              <circle cx="150" cy="50" r="3.4" fill="#5cd39a"></circle>
+              <circle cx="236" cy="30" r="3.4" fill="#4f8ef7"></circle>
+            </svg>
+            <span style="position:absolute;left:8px;bottom:5px;font:400 8.5px 'IBM Plex Mono';color:#464e5a">20</span>
+            <span style="position:absolute;right:8px;bottom:5px;font:400 8.5px 'IBM Plex Mono';color:#464e5a">20k</span>
+          </div>
+        </div>
+
+        <!-- FX card: compressor mini -->
+        <div style="flex:none;border-radius:8px;background:#161b24;border:1px solid #242c38;overflow:hidden">
+          <div style="height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;background:#1a2029">
+            <span style="width:7px;height:7px;border-radius:50%;background:#5cd39a"></span>
+            <span style="font:500 11.5px 'IBM Plex Sans';color:#e6e9ef">Compressor</span>
+            <span style="flex:1"></span>
+            <span style="font:400 11px 'IBM Plex Mono';color:#7b8493">⤢</span>
+          </div>
+          <div style="padding:10px;display:flex;align-items:center;gap:10px">
+            <div style="flex:1;display:flex;justify-content:space-between">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><span style="width:28px;height:28px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:10px;background:#5cd39a;transform:translateX(-50%) rotate(-30deg);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#8a93a2">3.2:1</span><span style="font:400 8px 'IBM Plex Mono';color:#464e5a">RATIO</span></div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><span style="width:28px;height:28px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:10px;background:#5cd39a;transform:translateX(-50%) rotate(-70deg);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#8a93a2">10 ms</span><span style="font:400 8px 'IBM Plex Mono';color:#464e5a">ATK</span></div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><span style="width:28px;height:28px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:10px;background:#5cd39a;transform:translateX(-50%) rotate(38deg);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#8a93a2">120 ms</span><span style="font:400 8px 'IBM Plex Mono';color:#464e5a">REL</span></div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:4px"><span style="width:28px;height:28px;border-radius:50%;border:1px solid #2b323e;background:#1a1f29;position:relative"><span style="position:absolute;left:50%;top:3px;width:1px;height:10px;background:#5cd39a;transform:translateX(-50%) rotate(12deg);transform-origin:bottom"></span></span><span style="font:400 9px 'IBM Plex Mono';color:#8a93a2">2.0 dB</span><span style="font:400 8px 'IBM Plex Mono';color:#464e5a">GAIN</span></div>
+            </div>
+            <div style="width:8px;height:56px;background:#0e1116;border-radius:3px;position:relative;overflow:hidden"><span style="position:absolute;left:0;right:0;top:0;height:36%;background:linear-gradient(180deg,#e2a33c,rgba(226,163,60,.25))"></span></div>
+          </div>
+        </div>
+
+        <!-- collapsed card -->
+        <div style="flex:none;height:30px;display:flex;align-items:center;gap:8px;padding:0 10px;border-radius:8px;background:#141821;border:1px solid #212832">
+          <span style="width:7px;height:7px;border-radius:50%;background:transparent;box-shadow:inset 0 0 0 1px #4d5561"></span>
+          <span style="font:500 11.5px 'IBM Plex Sans';color:#6b7381">Saturator</span>
+          <span style="font:400 9px 'IBM Plex Mono';color:#464e5a">bypassed</span>
+          <span style="flex:1"></span>
+          <span style="font:400 9px 'IBM Plex Mono';color:#464e5a">▸</span>
+        </div>
+
+        <!-- sends -->
+        <div style="flex:none;border-radius:8px;background:#141821;border:1px solid #212832;padding:9px 10px;display:flex;flex-direction:column;gap:8px">
+          <span style="font:600 8.5px 'IBM Plex Mono';letter-spacing:.12em;color:#5d6673">SENDS</span>
+          <div style="display:flex;align-items:center;gap:9px">
+            <span style="width:66px;font:400 10.5px 'IBM Plex Sans';color:#c9cfda">Reverb</span>
+            <span style="flex:1;height:3px;border-radius:2px;background:#232a36;position:relative"><span style="position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:2px;background:#a78bfa"></span><span style="position:absolute;left:38%;top:-4px;width:10px;height:10px;border-radius:50%;background:#cdbcff;transform:translateX(-50%)"></span></span>
+            <span style="font:400 9.5px 'IBM Plex Mono';color:#8a93a2;width:38px;text-align:right">−12.0</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:9px">
+            <span style="width:66px;font:400 10.5px 'IBM Plex Sans';color:#c9cfda">Delay 1/8</span>
+            <span style="flex:1;height:3px;border-radius:2px;background:#232a36;position:relative"><span style="position:absolute;left:0;top:0;bottom:0;width:16%;border-radius:2px;background:#a78bfa"></span><span style="position:absolute;left:16%;top:-4px;width:10px;height:10px;border-radius:50%;background:#cdbcff;transform:translateX(-50%)"></span></span>
+            <span style="font:400 9.5px 'IBM Plex Mono';color:#8a93a2;width:38px;text-align:right">−22.5</span>
+          </div>
+        </div>
+        <div style="flex:1;min-height:0;display:flex;align-items:flex-end;padding-bottom:2px">
+          <span style="font:400 9.5px 'IBM Plex Mono';color:#5d6673">drag card to reorder chain</span>
+        </div>
+      </div>
+
+      <!-- chain chips -->
+      <div style="flex:none;padding:9px 10px;border-top:1px solid #1e232c;background:#0f1218;display:flex;align-items:center;gap:6px">
+        <div style="height:26px;padding:0 10px;display:flex;align-items:center;gap:6px;border-radius:6px;background:rgba(167,139,250,.18);box-shadow:inset 0 0 0 1px rgba(167,139,250,.5);font:500 10px 'IBM Plex Sans';color:#e3dbff"><span style="width:5px;height:5px;border-radius:50%;background:#a78bfa"></span>EQ Eight</div>
+        <div style="height:26px;padding:0 10px;display:flex;align-items:center;gap:6px;border-radius:6px;background:#1a1f29;font:500 10px 'IBM Plex Sans';color:#c9cfda"><span style="width:5px;height:5px;border-radius:50%;background:#5cd39a"></span>Comp</div>
+        <div style="height:26px;padding:0 10px;display:flex;align-items:center;gap:6px;border-radius:6px;background:#161a22;font:500 10px 'IBM Plex Sans';color:#5d6673"><span style="width:5px;height:5px;border-radius:50%;box-shadow:inset 0 0 0 1px #4d5561"></span>Sat</div>
+        <span style="flex:1"></span>
+        <div style="height:26px;padding:0 10px;display:flex;align-items:center;gap:6px;border-radius:6px;border:1px dashed #2f3947;font:500 10px 'IBM Plex Sans';color:#7b8493">+ Effect<span style="font:400 9px 'IBM Plex Mono';color:#4d5561">⌘K</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- status bar -->
+  <div style="height:28px;flex:none;display:flex;align-items:center;gap:20px;padding:0 14px;background:#0f1218;border-top:1px solid #1e232c;font:400 9.5px 'IBM Plex Mono';color:#5d6673">
+    <span>CPU <span style="color:#c9cfda">12%</span></span>
+    <span>RAM <span style="color:#c9cfda">2.8 GB</span></span>
+    <span>BUFFER <span style="color:#c9cfda">256</span></span>
+    <span>LATENCY <span style="color:#c9cfda">5.8 ms</span></span>
+    <span style="flex:1"></span>
+    <span>1 plugin window open</span>
+    <span>UNDO · REDO</span>
+    <span>AUTOSAVE <span style="color:#5cd39a">2 min ago</span></span>
+  </div>
+
+  <!-- floating plugin window -->
+  <div style="position:absolute;left:520px;top:376px;width:642px;height:352px;border-radius:10px;background:#141821;border:1px solid #39405000;box-shadow:0 0 0 1px #3a4152,0 28px 70px rgba(0,0,0,.66);display:flex;flex-direction:column;overflow:hidden;z-index:20">
+    <div style="height:34px;flex:none;display:flex;align-items:center;gap:9px;padding:0 10px;background:#1c2230;border-bottom:1px solid #262e3c;cursor:grab">
+      <span style="width:7px;height:7px;border-radius:50%;background:#a78bfa"></span>
+      <span style="font:600 11.5px 'IBM Plex Sans';color:#fff">EQ Eight</span>
+      <span style="font:400 10.5px 'IBM Plex Mono';color:#8878c4">— Lead</span>
+      <span style="flex:1"></span>
+      <span style="height:22px;padding:0 8px;display:flex;align-items:center;border-radius:5px;background:#232b3a;font:400 9.5px 'IBM Plex Mono';color:#8a93a2">Vocal Cut ▾</span>
+      <span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:#232b3a;font-size:10px;color:#8a93a2">□</span>
+      <span style="width:22px;height:22px;display:flex;align-items:center;justify-content:center;border-radius:5px;background:#232b3a;font-size:11px;color:#8a93a2">×</span>
+    </div>
+    <div style="flex:1;min-height:0;display:flex;flex-direction:column;padding:12px;gap:10px">
+      <div style="flex:1;min-height:0;position:relative;border-radius:8px;background:#0c0f14;border:1px solid #202632;overflow:hidden">
+        <div style="position:absolute;inset:0;background-image:repeating-linear-gradient(90deg,#161b22 0 1px,transparent 1px 78px),repeating-linear-gradient(180deg,#161b22 0 1px,transparent 1px 41px)"></div>
+        <svg viewBox="0 0 610 206" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%">
+          <path d="M0 190 L0 122 C60 122 82 46 138 56 C196 66 214 150 296 142 C360 136 392 66 460 68 C520 70 566 152 610 168 L610 206 L0 206 Z" fill="rgba(167,139,250,.13)"></path>
+          <path d="M0 122 C60 122 82 46 138 56 C196 66 214 150 296 142 C360 136 392 66 460 68 C520 70 566 152 610 168" fill="none" stroke="#a78bfa" stroke-width="2"></path>
+          <line x1="0" y1="103" x2="610" y2="103" stroke="#2a313e" stroke-width="1"></line>
+        </svg>
+        <div style="position:absolute;left:0;right:0;top:0;bottom:0">
+          <span style="position:absolute;left:22.6%;top:27%;width:16px;height:16px;border-radius:50%;background:#e2b33c;box-shadow:0 0 0 3px rgba(226,179,60,.22);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#241a02;transform:translate(-50%,-50%)">2</span>
+          <span style="position:absolute;left:48.5%;top:69%;width:16px;height:16px;border-radius:50%;background:#5cd39a;box-shadow:0 0 0 3px rgba(92,211,154,.22);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#04241a;transform:translate(-50%,-50%)">4</span>
+          <span style="position:absolute;left:75.4%;top:33%;width:16px;height:16px;border-radius:50%;background:#4f8ef7;box-shadow:0 0 0 3px rgba(79,142,247,.22);display:flex;align-items:center;justify-content:center;font:600 9px 'IBM Plex Mono';color:#02132b;transform:translate(-50%,-50%)">6</span>
+        </div>
+        <span style="position:absolute;left:10px;top:8px;font:400 9px 'IBM Plex Mono';color:#464e5a">+12 dB</span>
+        <span style="position:absolute;left:10px;bottom:8px;font:400 9px 'IBM Plex Mono';color:#464e5a">−12 dB</span>
+        <span style="position:absolute;right:10px;bottom:8px;font:400 9px 'IBM Plex Mono';color:#464e5a">20k</span>
+      </div>
+      <div style="flex:none;display:flex;gap:6px">
+        <div style="flex:1;border-radius:6px;background:#171c25;border:1px solid #232a36;padding:7px 8px;display:flex;flex-direction:column;gap:3px"><span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a">1 · LOW CUT</span><span style="font:400 10.5px 'IBM Plex Mono';color:#c9cfda">80 Hz</span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">Q 0.7</span></div>
+        <div style="flex:1;border-radius:6px;background:#1a1f2b;border:1px solid #3a3358;padding:7px 8px;display:flex;flex-direction:column;gap:3px"><span style="font:400 8.5px 'IBM Plex Mono';color:#8878c4">2 · BELL</span><span style="font:400 10.5px 'IBM Plex Mono';color:#fff">250 Hz · +3.1</span><span style="font:400 9px 'IBM Plex Mono';color:#8a93a2">Q 1.2</span></div>
+        <div style="flex:1;border-radius:6px;background:#171c25;border:1px solid #232a36;padding:7px 8px;display:flex;flex-direction:column;gap:3px"><span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a">4 · BELL</span><span style="font:400 10.5px 'IBM Plex Mono';color:#c9cfda">1.2 kHz · −2.4</span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">Q 0.9</span></div>
+        <div style="flex:1;border-radius:6px;background:#171c25;border:1px solid #232a36;padding:7px 8px;display:flex;flex-direction:column;gap:3px"><span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a">6 · SHELF</span><span style="font:400 10.5px 'IBM Plex Mono';color:#c9cfda">8.1 kHz · +2.0</span><span style="font:400 9px 'IBM Plex Mono';color:#5d6673">Q 0.7</span></div>
+        <div style="width:96px;border-radius:6px;background:#171c25;border:1px solid #232a36;padding:7px 8px;display:flex;flex-direction:column;gap:3px"><span style="font:400 8.5px 'IBM Plex Mono';color:#464e5a">OUTPUT</span><span style="font:400 10.5px 'IBM Plex Mono';color:#c9cfda">−1.0 dB</span><span style="font:400 9px 'IBM Plex Mono';color:#5cd39a">GR 2.4</span></div>
+      </div>
+    </div>
+    <span style="position:absolute;right:3px;bottom:3px;width:12px;height:12px;border-right:2px solid #4a5364;border-bottom:2px solid #4a5364;border-radius:0 0 3px 0"></span>
+  </div>
+
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Dalej: <a href="#2a">2a</a> z dolnym panelem na tabie EDITOR (piano roll + toggle step sequencer) i drugim oknem pluginu w tle — albo stan maximize (F7) dolnego panelu.</p>
+</section>
+
+<section class="dv-turn" id="t1">
+<div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">DAW shell — FL logic, modern docked shell · 1920×1080</span></div>
+<p class="dv-note"><b>Assumptions:</b> single-window, docked panels, tabbed bottom editor. Pattern-first: the Channel Rack owns instruments + step patterns, the Playlist arranges pattern clips and audio on a linear timeline. Plugin GUIs are separate native windows — the shell reserves screen real-estate and a dock/parking rail for them rather than embedding. Dev-first: everything has a keyboard route, panels show real numbers (samples, PPQ, CPU, buffer), no hand-holding. Type is IBM Plex Sans + Plex Mono; single hue-wheel track palette at fixed lightness so clips read as one family.</p>
+<div class="dv-opts">
+
+<!-- ============ 1a — Shell A: classic dock ============ -->
+<div class="dv-opt" id="1a">
+<div class="dv-olabel"><a class="dv-oid" href="#1a">1a</a>Shell A — classic dock: browser left, inspector right, tabbed editor bottom. Playlist active.</div>
+<div class="dv-card" style="width:1920px">
+<div style="width:1920px;height:1080px;background:#101216;color:#e8eaee;display:flex;flex-direction:column;font-size:12px;position:relative;overflow:hidden">
+
+  <!-- menubar -->
+  <div style="height:44px;flex:none;display:flex;align-items:center;gap:0;padding:0 14px;background:#16191e;border-bottom:1px solid #23272f">
+    <div style="display:flex;align-items:center;gap:9px;padding-right:18px">
+      <div style="width:20px;height:20px;border-radius:5px;background:linear-gradient(155deg,#ff6a3d,#d1372a);box-shadow:0 0 0 1px rgba(255,255,255,.14) inset"></div>
+      <span style="font:600 12.5px 'IBM Plex Sans';letter-spacing:.02em">RUSTBOX</span>
+    </div>
+    <div style="display:flex;gap:2px;font-size:12px;color:#9aa1ad">
+      <span style="padding:5px 10px;border-radius:5px">File</span>
+      <span style="padding:5px 10px;border-radius:5px">Edit</span>
+      <span style="padding:5px 10px;border-radius:5px;background:#23272f;color:#e8eaee">View</span>
+      <span style="padding:5px 10px;border-radius:5px">Pattern</span>
+      <span style="padding:5px 10px;border-radius:5px">Plugins</span>
+      <span style="padding:5px 10px;border-radius:5px">Render</span>
+      <span style="padding:5px 10px;border-radius:5px">Help</span>
+    </div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:8px;font:400 11px 'IBM Plex Mono';color:#9aa1ad">
+      <span style="padding:4px 9px;border:1px solid #2b3038;border-radius:5px;background:#1c2027">⌘K  command</span>
+      <span style="padding:4px 9px;border:1px solid #2b3038;border-radius:5px;background:#1c2027">ASIO · Focusrite 2i2</span>
+      <span style="padding:4px 9px;border:1px solid #2b3038;border-radius:5px;background:#1c2027">128 smp · 2.9 ms</span>
+    </div>
+  </div>
+
+  <!-- transport -->
+  <div style="height:68px;flex:none;display:flex;align-items:center;gap:18px;padding:0 16px;background:#131619;border-bottom:1px solid #23272f">
+    <div style="display:flex;align-items:center;gap:6px">
+      <div style="width:34px;height:34px;border-radius:6px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;justify-content:center"><div style="width:0;height:0;border-left:11px solid #63d18a;border-top:7px solid transparent;border-bottom:7px solid transparent;margin-left:3px"></div></div>
+      <div style="width:34px;height:34px;border-radius:6px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;justify-content:center"><div style="width:10px;height:10px;background:#9aa1ad;border-radius:1px"></div></div>
+      <div style="width:34px;height:34px;border-radius:6px;background:#2a1416;border:1px solid #4a1d1f;display:flex;align-items:center;justify-content:center"><div style="width:11px;height:11px;border-radius:50%;background:#ff4d4d;box-shadow:0 0 8px rgba(255,77,77,.55)"></div></div>
+      <div style="width:34px;height:34px;border-radius:6px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;justify-content:center;font:500 10px 'IBM Plex Mono';color:#4cc2ff">LP</div>
+    </div>
+
+    <div style="display:flex;align-items:flex-end;gap:14px;padding:0 18px;border-left:1px solid #23272f;border-right:1px solid #23272f;height:44px;align-items:center">
+      <div>
+        <div style="font:400 9px 'IBM Plex Mono';color:#626a76;letter-spacing:.09em;margin-bottom:2px">BAR · BEAT · TICK</div>
+        <div style="font:500 22px/1 'IBM Plex Mono';color:#e8eaee;letter-spacing:-.01em">009<span style="color:#4a5058">.</span>02<span style="color:#4a5058">.</span>048</div>
+      </div>
+      <div>
+        <div style="font:400 9px 'IBM Plex Mono';color:#626a76;letter-spacing:.09em;margin-bottom:2px">SAMPLES</div>
+        <div style="font:500 22px/1 'IBM Plex Mono';color:#8b919c">1 340 928</div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:16px">
+      <div>
+        <div style="font:400 9px 'IBM Plex Mono';color:#626a76;letter-spacing:.09em;margin-bottom:2px">TEMPO</div>
+        <div style="font:500 20px/1 'IBM Plex Mono';color:#e8eaee">140.00</div>
+      </div>
+      <div>
+        <div style="font:400 9px 'IBM Plex Mono';color:#626a76;letter-spacing:.09em;margin-bottom:2px">SIG</div>
+        <div style="font:500 20px/1 'IBM Plex Mono';color:#8b919c">4/4</div>
+      </div>
+      <div>
+        <div style="font:400 9px 'IBM Plex Mono';color:#626a76;letter-spacing:.09em;margin-bottom:2px">SNAP</div>
+        <div style="font:500 13px/1 'IBM Plex Mono';color:#8b919c;padding:5px 8px;background:#1c2027;border:1px solid #2b3038;border-radius:5px">1/16</div>
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:8px;padding-left:18px;border-left:1px solid #23272f">
+      <div style="font:400 9px 'IBM Plex Mono';color:#626a76;letter-spacing:.09em">PATTERN</div>
+      <div style="display:flex;gap:4px">
+        <div style="padding:6px 11px;border-radius:5px;background:#e0705f;color:#101216;font:600 11px 'IBM Plex Mono'">01 drums</div>
+        <div style="padding:6px 11px;border-radius:5px;background:#1c2027;border:1px solid #2b3038;color:#9aa1ad;font:400 11px 'IBM Plex Mono'">02 bass</div>
+        <div style="padding:6px 11px;border-radius:5px;background:#1c2027;border:1px solid #2b3038;color:#9aa1ad;font:400 11px 'IBM Plex Mono'">03 keys</div>
+        <div style="padding:6px 9px;border-radius:5px;background:#1c2027;border:1px dashed #343a44;color:#626a76;font:400 11px 'IBM Plex Mono'">+</div>
+      </div>
+    </div>
+
+    <div style="flex:1"></div>
+
+    <div style="display:flex;align-items:center;gap:12px">
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <div style="width:170px;height:7px;background:#1c2027;border-radius:2px;overflow:hidden"><div style="width:62%;height:100%;background:linear-gradient(90deg,#63d18a,#63d18a 72%,#ffd166)"></div></div>
+        <div style="width:170px;height:7px;background:#1c2027;border-radius:2px;overflow:hidden"><div style="width:57%;height:100%;background:linear-gradient(90deg,#63d18a,#63d18a 78%,#ffd166)"></div></div>
+        <div style="display:flex;justify-content:space-between;font:400 9px 'IBM Plex Mono';color:#626a76"><span>MASTER</span><span>−6.2 dB</span></div>
+      </div>
+      <div style="width:52px;height:52px;border-radius:50%;background:#1c2027;border:1px solid #2b3038;position:relative;display:flex;align-items:center;justify-content:center">
+        <div style="position:absolute;inset:5px;border-radius:50%;border:2px solid #23272f;border-top-color:#ff6a3d;border-right-color:#ff6a3d;transform:rotate(28deg)"></div>
+        <span style="font:500 10px 'IBM Plex Mono';color:#e8eaee">0.0</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- main body -->
+  <div style="flex:1;display:flex;min-height:0">
+
+    <!-- browser -->
+    <div style="width:238px;flex:none;background:#16191e;border-right:1px solid #23272f;display:flex;flex-direction:column">
+      <div style="height:34px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid #23272f">
+        <span style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">BROWSER</span>
+        <div style="flex:1"></div>
+        <span style="font:400 10px 'IBM Plex Mono';color:#626a76">⌘B</span>
+      </div>
+      <div style="padding:9px 10px;border-bottom:1px solid #23272f">
+        <div style="height:28px;border-radius:5px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;padding:0 9px;gap:7px">
+          <div style="width:9px;height:9px;border:1.5px solid #626a76;border-radius:50%"></div>
+          <span style="font:400 11px 'IBM Plex Mono';color:#626a76">filter…</span>
+        </div>
+      </div>
+      <div style="flex:1;overflow:hidden;padding:6px 0">
+        <sc-for list="{{ browser }}" as="row" hint-placeholder-count="14">
+          <div style="{{ row.style }}">
+            <span style="{{ row.markStyle }}"></span>
+            <span style="{{ row.textStyle }}">{{ row.name }}</span>
+            <span style="flex:1"></span>
+            <span style="font:400 9.5px 'IBM Plex Mono';color:#4a5058">{{ row.meta }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-top:1px solid #23272f;font:400 10px 'IBM Plex Mono';color:#626a76">
+        <span style="width:6px;height:6px;border-radius:50%;background:#63d18a"></span>
+        <span>412 plugins · 3 quarantined</span>
+      </div>
+    </div>
+
+    <!-- playlist -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#101216">
+      <div style="height:34px;flex:none;display:flex;align-items:center;gap:12px;padding:0 14px;border-bottom:1px solid #23272f;background:#131619">
+        <span style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#e8eaee">PLAYLIST</span>
+        <div style="display:flex;gap:3px">
+          <span style="padding:3px 8px;border-radius:4px;background:#23272f;font:400 10px 'IBM Plex Mono';color:#e8eaee">draw</span>
+          <span style="padding:3px 8px;border-radius:4px;font:400 10px 'IBM Plex Mono';color:#626a76">paint</span>
+          <span style="padding:3px 8px;border-radius:4px;font:400 10px 'IBM Plex Mono';color:#626a76">slice</span>
+          <span style="padding:3px 8px;border-radius:4px;font:400 10px 'IBM Plex Mono';color:#626a76">select</span>
+        </div>
+        <div style="flex:1"></div>
+        <span style="font:400 10px 'IBM Plex Mono';color:#626a76">32 bars · zoom 1:4</span>
+      </div>
+
+      <!-- ruler -->
+      <div style="height:26px;flex:none;display:flex;background:#131619;border-bottom:1px solid #23272f">
+        <div style="width:154px;flex:none;border-right:1px solid #23272f"></div>
+        <div style="flex:1;position:relative;overflow:hidden;display:flex">
+          <sc-for list="{{ ruler }}" as="b" hint-placeholder-count="32">
+            <div style="{{ b.style }}"><span style="{{ b.labelStyle }}">{{ b.label }}</span></div>
+          </sc-for>
+          <div style="{{ loopStyle }}"></div>
+        </div>
+      </div>
+
+      <!-- track rows -->
+      <div style="flex:1;position:relative;overflow:hidden">
+        <sc-for list="{{ tracks }}" as="t" hint-placeholder-count="9">
+          <div style="height:52px;display:flex;border-bottom:1px solid #191c21">
+            <div style="width:154px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;background:#16191e;border-right:1px solid #23272f">
+              <div style="{{ t.chipStyle }}"></div>
+              <div style="min-width:0;flex:1">
+                <div style="font:500 11.5px 'IBM Plex Sans';color:#e8eaee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.name }}</div>
+                <div style="font:400 9px 'IBM Plex Mono';color:#5b616c">{{ t.meta }}</div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:3px">
+                <span style="{{ t.mStyle }}">M</span>
+                <span style="{{ t.sStyle }}">S</span>
+              </div>
+            </div>
+            <div style="{{ laneStyle }}">
+              <sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="2">
+                <div style="{{ c.style }}">
+                  <div style="{{ c.headStyle }}">{{ c.label }}</div>
+                  <div style="{{ c.bodyStyle }}"></div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-for>
+        <div style="position:absolute;top:0;bottom:0;left:154px;right:0;pointer-events:none">
+          <div style="position:absolute;top:0;bottom:0;left:272px;width:1px;background:#ff6a3d;box-shadow:0 0 9px rgba(255,106,61,.7)"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- inspector -->
+    <div style="width:296px;flex:none;background:#16191e;border-left:1px solid #23272f;display:flex;flex-direction:column">
+      <div style="height:34px;flex:none;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid #23272f">
+        <span style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">CHANNEL</span>
+        <span style="font:500 10.5px 'IBM Plex Mono';color:#e0705f">01 · KICK</span>
+      </div>
+      <div style="padding:14px 12px;border-bottom:1px solid #23272f">
+        <div style="height:74px;border-radius:6px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;justify-content:center;background-image:repeating-linear-gradient(90deg,rgba(224,112,95,.55) 0 2px,transparent 2px 5px);background-size:100% 46%;background-repeat:no-repeat;background-position:center"></div>
+        <div style="display:flex;justify-content:space-between;margin-top:7px;font:400 9.5px 'IBM Plex Mono';color:#626a76"><span>kick_909_hard.wav</span><span>0.41 s · 48k</span></div>
+      </div>
+      <div style="padding:14px 12px;display:grid;grid-template-columns:repeat(4,1fr);gap:14px 8px;border-bottom:1px solid #23272f">
+        <sc-for list="{{ knobs }}" as="k" hint-placeholder-count="8">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:5px">
+            <div style="{{ k.ringStyle }}"></div>
+            <span style="font:400 9px 'IBM Plex Mono';color:#8b919c;letter-spacing:.04em">{{ k.name }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="padding:12px;flex:1;min-height:0">
+        <div style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad;margin-bottom:9px">INSERT CHAIN</div>
+        <sc-for list="{{ inserts }}" as="ins" hint-placeholder-count="4">
+          <div style="{{ ins.style }}">
+            <span style="{{ ins.dotStyle }}"></span>
+            <span style="font:400 11px 'IBM Plex Sans';color:#e8eaee;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ ins.name }}</span>
+            <span style="font:400 9px 'IBM Plex Mono';color:#5b616c">{{ ins.fmt }}</span>
+          </div>
+        </sc-for>
+        <div style="margin-top:7px;height:30px;border-radius:5px;border:1px dashed #343a44;display:flex;align-items:center;justify-content:center;font:400 10.5px 'IBM Plex Mono';color:#5b616c">+ add effect</div>
+        <div style="margin-top:16px;padding:10px;border-radius:6px;background:#1a1d22;border:1px solid #23272f">
+          <div style="font:400 9.5px 'IBM Plex Mono';color:#626a76;line-height:1.55">Plugin editors open as native windows.<br>Parked: <span style="color:#4cc2ff">Serum 2 · Pro-Q 4</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- bottom dock -->
+  <div style="height:272px;flex:none;background:#16191e;border-top:1px solid #23272f;display:flex;flex-direction:column">
+    <div style="height:32px;flex:none;display:flex;align-items:stretch;gap:0;border-bottom:1px solid #23272f">
+      <div style="display:flex;align-items:center;padding:0 14px;font:500 11px 'IBM Plex Sans';color:#e8eaee;background:#1c2027;border-right:1px solid #23272f;box-shadow:inset 0 -2px 0 #ff6a3d">Channel Rack</div>
+      <div style="display:flex;align-items:center;padding:0 14px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Piano Roll</div>
+      <div style="display:flex;align-items:center;padding:0 14px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Mixer</div>
+      <div style="display:flex;align-items:center;padding:0 14px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Automation</div>
+      <div style="display:flex;align-items:center;padding:0 14px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Console</div>
+      <div style="flex:1"></div>
+      <div style="display:flex;align-items:center;gap:10px;padding:0 14px;font:400 10px 'IBM Plex Mono';color:#626a76"><span>pattern 01 · 16 steps</span><span style="color:#343a44">|</span><span>swing 12%</span></div>
+    </div>
+    <div style="flex:1;display:flex;min-height:0">
+      <div style="flex:1;min-width:0;overflow:hidden;padding:8px 0">
+        <sc-for list="{{ channels }}" as="ch" hint-placeholder-count="6">
+          <div style="height:34px;display:flex;align-items:center;gap:8px;padding:0 12px">
+            <span style="{{ ch.chipStyle }}"></span>
+            <span style="font:500 11px 'IBM Plex Sans';color:#e8eaee;width:104px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ ch.name }}</span>
+            <span style="font:400 9px 'IBM Plex Mono';color:#5b616c;width:44px">{{ ch.fmt }}</span>
+            <div style="display:flex;gap:4px">
+              <sc-for list="{{ ch.steps }}" as="s" hint-placeholder-count="16">
+                <div style="{{ s.style }}"></div>
+              </sc-for>
+            </div>
+            <span style="flex:1"></span>
+            <div style="width:58px;height:4px;background:#1c2027;border-radius:2px;overflow:hidden"><div style="{{ ch.volStyle }}"></div></div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="width:296px;flex:none;border-left:1px solid #23272f;padding:12px">
+        <div style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad;margin-bottom:10px">ENGINE</div>
+        <sc-for list="{{ engine }}" as="e" hint-placeholder-count="5">
+          <div style="display:flex;align-items:center;gap:10px;height:26px">
+            <span style="font:400 10px 'IBM Plex Mono';color:#8b919c;width:86px">{{ e.name }}</span>
+            <div style="flex:1;height:5px;background:#1c2027;border-radius:2px;overflow:hidden"><div style="{{ e.barStyle }}"></div></div>
+            <span style="font:400 10px 'IBM Plex Mono';color:#e8eaee;width:52px;text-align:right">{{ e.val }}</span>
+          </div>
+        </sc-for>
+        <div style="margin-top:12px;padding:9px 10px;border-radius:5px;background:#1a1d22;border:1px solid #23272f;font:400 9.5px/1.6 'IBM Plex Mono';color:#626a76">
+          audio thread promoted · MMCSS Pro Audio<br>0 alloc violations · 0 xruns / 42 min
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- status -->
+  <div style="height:26px;flex:none;display:flex;align-items:center;gap:14px;padding:0 14px;background:#0d0f12;border-top:1px solid #23272f;font:400 10px 'IBM Plex Mono';color:#626a76">
+    <span style="color:#63d18a">● engine running</span>
+    <span>graph 84 nodes · pdc 1 152 smp</span>
+    <span>plugin host: 2 proc · clap 6 · vst3 3</span>
+    <span style="flex:1"></span>
+    <span>untitled.rbx — unsaved</span>
+  </div>
+
+  <sc-if value="{{ showPluginWindow }}" hint-placeholder-val="{{ true }}">
+    <div style="position:absolute;right:330px;bottom:314px;width:430px;background:#1a1d22;border:1px solid #343a44;border-radius:8px;box-shadow:0 24px 60px rgba(0,0,0,.62);overflow:hidden">
+      <div style="height:30px;display:flex;align-items:center;gap:9px;padding:0 10px;background:#22262d;border-bottom:1px solid #343a44">
+        <span style="width:8px;height:8px;border-radius:50%;background:#4cc2ff"></span>
+        <span style="font:500 11px 'IBM Plex Sans';color:#e8eaee">Pro-Q 4 — native window</span>
+        <span style="flex:1"></span>
+        <span style="font:400 10px 'IBM Plex Mono';color:#8b919c">VST3</span>
+        <span style="font:400 12px 'IBM Plex Mono';color:#8b919c">−</span>
+        <span style="font:400 12px 'IBM Plex Mono';color:#8b919c">×</span>
+      </div>
+      <div style="height:186px;display:flex;align-items:center;justify-content:center;background:repeating-linear-gradient(45deg,#1d2126 0 9px,#20242a 9px 18px)">
+        <div style="text-align:center">
+          <div style="font:400 10.5px 'IBM Plex Mono';color:#626a76;line-height:1.7">plugin-owned surface<br>host reserves size only</div>
+        </div>
+      </div>
+      <div style="height:28px;display:flex;align-items:center;gap:12px;padding:0 10px;border-top:1px solid #343a44;font:400 9.5px 'IBM Plex Mono';color:#5b616c">
+        <span>idle 60 Hz</span><span>latency 64 smp</span><span style="flex:1"></span><span style="color:#63d18a">sandboxed</span>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</div>
+</div>
+
+<!-- ============ 1b — Shell B: rail + command ============ -->
+<div class="dv-opt" id="1b">
+<div class="dv-olabel"><a class="dv-oid" href="#1b">1b</a>Shell B — icon rail, mixer docked full-height right, command palette open. More screen for the timeline.</div>
+<div class="dv-card" style="width:1920px">
+<div style="width:1920px;height:1080px;background:#101216;color:#e8eaee;display:flex;font-size:12px;position:relative;overflow:hidden">
+
+  <!-- rail -->
+  <div style="width:54px;flex:none;background:#0d0f12;border-right:1px solid #23272f;display:flex;flex-direction:column;align-items:center;padding:10px 0;gap:6px">
+    <div style="width:24px;height:24px;border-radius:6px;background:linear-gradient(155deg,#ff6a3d,#d1372a);margin-bottom:8px"></div>
+    <sc-for list="{{ rail }}" as="r" hint-placeholder-count="7">
+      <div style="{{ r.style }}">{{ r.glyph }}</div>
+    </sc-for>
+    <div style="flex:1"></div>
+    <div style="width:34px;height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font:400 12px 'IBM Plex Mono';color:#626a76">⚙</div>
+  </div>
+
+  <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+    <!-- unified bar -->
+    <div style="height:56px;flex:none;display:flex;align-items:center;gap:16px;padding:0 16px;background:#131619;border-bottom:1px solid #23272f">
+      <div style="display:flex;gap:5px">
+        <div style="width:30px;height:30px;border-radius:15px;background:#63d18a;display:flex;align-items:center;justify-content:center"><div style="width:0;height:0;border-left:9px solid #0d0f12;border-top:6px solid transparent;border-bottom:6px solid transparent;margin-left:3px"></div></div>
+        <div style="width:30px;height:30px;border-radius:15px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;justify-content:center"><div style="width:9px;height:9px;background:#9aa1ad;border-radius:1px"></div></div>
+        <div style="width:30px;height:30px;border-radius:15px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;justify-content:center"><div style="width:10px;height:10px;border-radius:50%;background:#ff4d4d"></div></div>
+      </div>
+      <div style="font:500 20px/1 'IBM Plex Mono';color:#e8eaee">009<span style="color:#4a5058">.</span>02<span style="color:#4a5058">.</span>048</div>
+      <div style="display:flex;gap:1px;background:#23272f;border-radius:5px;overflow:hidden">
+        <span style="padding:6px 10px;background:#1c2027;font:500 11px 'IBM Plex Mono';color:#e8eaee">140.00</span>
+        <span style="padding:6px 10px;background:#1c2027;font:400 11px 'IBM Plex Mono';color:#8b919c">4/4</span>
+        <span style="padding:6px 10px;background:#1c2027;font:400 11px 'IBM Plex Mono';color:#8b919c">1/16</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;padding-left:14px;border-left:1px solid #23272f">
+        <span style="padding:5px 10px;border-radius:14px;background:#e0705f;color:#101216;font:600 10.5px 'IBM Plex Mono'">01 drums</span>
+        <span style="padding:5px 10px;border-radius:14px;background:#1c2027;color:#9aa1ad;font:400 10.5px 'IBM Plex Mono'">02 bass</span>
+        <span style="padding:5px 10px;border-radius:14px;background:#1c2027;color:#9aa1ad;font:400 10.5px 'IBM Plex Mono'">03 keys</span>
+      </div>
+      <div style="flex:1"></div>
+      <div style="display:flex;align-items:center;gap:10px;font:400 10px 'IBM Plex Mono';color:#626a76">
+        <span>cpu 34%</span><span>128 smp</span><span style="color:#63d18a">● 0 xruns</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:3px">
+        <div style="width:120px;height:6px;background:#1c2027;border-radius:2px;overflow:hidden"><div style="width:64%;height:100%;background:#63d18a"></div></div>
+        <div style="width:120px;height:6px;background:#1c2027;border-radius:2px;overflow:hidden"><div style="width:58%;height:100%;background:#63d18a"></div></div>
+      </div>
+    </div>
+
+    <div style="flex:1;display:flex;min-height:0">
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+        <!-- timeline -->
+        <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+          <div style="height:26px;flex:none;display:flex;background:#131619;border-bottom:1px solid #23272f">
+            <div style="width:150px;flex:none;border-right:1px solid #23272f;display:flex;align-items:center;padding:0 12px;font:600 9.5px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">ARRANGEMENT</div>
+            <div style="flex:1;position:relative;overflow:hidden;display:flex">
+              <sc-for list="{{ ruler }}" as="b" hint-placeholder-count="32">
+                <div style="{{ b.style }}"><span style="{{ b.labelStyle }}">{{ b.label }}</span></div>
+              </sc-for>
+              <div style="{{ loopStyle }}"></div>
+            </div>
+          </div>
+          <div style="flex:1;position:relative;overflow:hidden">
+            <sc-for list="{{ tracks }}" as="t" hint-placeholder-count="9">
+              <div style="height:56px;display:flex;border-bottom:1px solid #191c21">
+                <div style="width:150px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;background:#16191e;border-right:1px solid #23272f">
+                  <div style="{{ t.barStyle }}"></div>
+                  <div style="min-width:0;flex:1">
+                    <div style="font:500 11.5px 'IBM Plex Sans';color:#e8eaee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.name }}</div>
+                    <div style="font:400 9px 'IBM Plex Mono';color:#5b616c">{{ t.meta }}</div>
+                  </div>
+                </div>
+                <div style="{{ laneStyle }}">
+                  <sc-for list="{{ t.clips }}" as="c" hint-placeholder-count="2">
+                    <div style="{{ c.style }}">
+                      <div style="{{ c.headStyle }}">{{ c.label }}</div>
+                      <div style="{{ c.bodyStyle }}"></div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+            <div style="position:absolute;top:0;bottom:0;left:150px;right:0;pointer-events:none">
+              <div style="position:absolute;top:0;bottom:0;left:272px;width:1px;background:#ff6a3d;box-shadow:0 0 9px rgba(255,106,61,.7)"></div>
+            </div>
+          </div>
+        </div>
+        <!-- editor dock -->
+        <div style="height:300px;flex:none;border-top:1px solid #23272f;background:#16191e;display:flex;flex-direction:column">
+          <div style="height:30px;flex:none;display:flex;align-items:stretch;border-bottom:1px solid #23272f">
+            <div style="display:flex;align-items:center;padding:0 13px;font:500 11px 'IBM Plex Sans';color:#e8eaee;box-shadow:inset 0 -2px 0 #4cc2ff">Piano Roll · 03 keys</div>
+            <div style="display:flex;align-items:center;padding:0 13px;font:400 11px 'IBM Plex Sans';color:#8b919c">Channel Rack</div>
+            <div style="display:flex;align-items:center;padding:0 13px;font:400 11px 'IBM Plex Sans';color:#8b919c">Automation</div>
+            <div style="flex:1"></div>
+            <div style="display:flex;align-items:center;padding:0 13px;font:400 10px 'IBM Plex Mono';color:#626a76">C1–C6 · vel 0–127</div>
+          </div>
+          <div style="flex:1;display:flex;min-height:0">
+            <div style="width:56px;flex:none;background:#131619;border-right:1px solid #23272f">
+              <sc-for list="{{ keys }}" as="k" hint-placeholder-count="16">
+                <div style="{{ k.style }}"><span style="{{ k.labelStyle }}">{{ k.label }}</span></div>
+              </sc-for>
+            </div>
+            <div style="flex:1;position:relative;background-image:repeating-linear-gradient(90deg,#1a1d22 0 1px,transparent 1px 34px),repeating-linear-gradient(180deg,#191c21 0 1px,transparent 1px 16px);background-position:0 0">
+              <sc-for list="{{ notes }}" as="n" hint-placeholder-count="12">
+                <div style="{{ n.style }}"></div>
+              </sc-for>
+              <div style="position:absolute;top:0;bottom:0;left:272px;width:1px;background:#ff6a3d"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- docked mixer column -->
+      <div style="width:436px;flex:none;background:#16191e;border-left:1px solid #23272f;display:flex;flex-direction:column">
+        <div style="height:30px;flex:none;display:flex;align-items:center;gap:10px;padding:0 12px;border-bottom:1px solid #23272f">
+          <span style="font:600 9.5px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">MIXER</span>
+          <span style="flex:1"></span>
+          <span style="font:400 10px 'IBM Plex Mono';color:#626a76">⌘M · collapse</span>
+        </div>
+        <div style="flex:1;display:flex;gap:0;padding:10px 8px;min-height:0;overflow:hidden">
+          <sc-for list="{{ stripsSlim }}" as="s" hint-placeholder-count="6">
+            <div style="{{ s.wrapStyle }}">
+              <div style="{{ s.nameStyle }}">{{ s.name }}</div>
+              <div style="flex:1;display:flex;gap:5px;justify-content:center;min-height:0;padding:8px 0">
+                <div style="width:9px;background:#131619;border-radius:2px;position:relative;overflow:hidden"><div style="{{ s.meterStyle }}"></div></div>
+                <div style="width:22px;background:#131619;border-radius:3px;position:relative">
+                  <div style="{{ s.faderStyle }}"></div>
+                </div>
+              </div>
+              <div style="font:400 9px 'IBM Plex Mono';color:#8b919c;text-align:center;padding-bottom:8px">{{ s.db }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- command palette -->
+  <div style="position:absolute;top:150px;left:50%;transform:translateX(-50%);width:620px;background:#1a1d22;border:1px solid #343a44;border-radius:10px;box-shadow:0 32px 80px rgba(0,0,0,.7);overflow:hidden">
+    <div style="height:48px;display:flex;align-items:center;gap:11px;padding:0 15px;border-bottom:1px solid #23272f">
+      <span style="font:400 12px 'IBM Plex Mono';color:#ff6a3d">›</span>
+      <span style="font:400 14px 'IBM Plex Mono';color:#e8eaee">render pattern</span>
+      <span style="width:1px;height:16px;background:#e8eaee"></span>
+    </div>
+    <sc-for list="{{ palette }}" as="p" hint-placeholder-count="5">
+      <div style="{{ p.style }}">
+        <span style="font:400 12px 'IBM Plex Sans';color:#e8eaee;flex:1">{{ p.name }}</span>
+        <span style="font:400 10px 'IBM Plex Mono';color:#5b616c">{{ p.kbd }}</span>
+      </div>
+    </sc-for>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============ 1c — Channel rack expanded ============ -->
+<div class="dv-opt" id="1c">
+<div class="dv-olabel"><a class="dv-oid" href="#1c">1c</a>Channel Rack maximized — step sequencer + per-channel routing, in Shell A.</div>
+<div class="dv-card" style="width:1920px">
+<div style="width:1920px;height:1080px;background:#101216;color:#e8eaee;display:flex;flex-direction:column;font-size:12px;overflow:hidden">
+  <div style="height:44px;flex:none;display:flex;align-items:center;gap:18px;padding:0 14px;background:#16191e;border-bottom:1px solid #23272f">
+    <div style="display:flex;align-items:center;gap:9px"><div style="width:20px;height:20px;border-radius:5px;background:linear-gradient(155deg,#ff6a3d,#d1372a)"></div><span style="font:600 12.5px 'IBM Plex Sans'">RUSTBOX</span></div>
+    <span style="font:400 11px 'IBM Plex Mono';color:#626a76">untitled.rbx</span>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:14px;font:400 11px 'IBM Plex Mono';color:#8b919c"><span>140.00 BPM</span><span style="color:#343a44">|</span><span>009.02.048</span><span style="color:#343a44">|</span><span style="color:#63d18a">● playing</span></div>
+  </div>
+
+  <div style="height:36px;flex:none;display:flex;align-items:stretch;background:#131619;border-bottom:1px solid #23272f">
+    <div style="display:flex;align-items:center;padding:0 16px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Playlist</div>
+    <div style="display:flex;align-items:center;padding:0 16px;font:500 11px 'IBM Plex Sans';color:#e8eaee;background:#1c2027;border-right:1px solid #23272f;box-shadow:inset 0 -2px 0 #ff6a3d">Channel Rack</div>
+    <div style="display:flex;align-items:center;padding:0 16px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Piano Roll</div>
+    <div style="display:flex;align-items:center;padding:0 16px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Mixer</div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:10px;padding:0 16px;font:400 10px 'IBM Plex Mono';color:#626a76"><span>graph 84 nodes</span><span>pdc 1 152 smp</span></div>
+  </div>
+
+  <div style="flex:1;display:flex;min-height:0">
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column">
+      <div style="height:46px;flex:none;display:flex;align-items:center;gap:14px;padding:0 18px;border-bottom:1px solid #23272f;background:#131619">
+        <span style="font:600 11px 'IBM Plex Sans';letter-spacing:.09em;color:#e8eaee">PATTERN 01 · DRUMS</span>
+        <div style="display:flex;gap:1px;background:#23272f;border-radius:5px;overflow:hidden">
+          <span style="padding:6px 11px;background:#1c2027;font:400 10.5px 'IBM Plex Mono';color:#e8eaee">16</span>
+          <span style="padding:6px 11px;background:#1c2027;font:400 10.5px 'IBM Plex Mono';color:#5b616c">32</span>
+          <span style="padding:6px 11px;background:#1c2027;font:400 10.5px 'IBM Plex Mono';color:#5b616c">64</span>
+        </div>
+        <span style="font:400 10.5px 'IBM Plex Mono';color:#626a76">steps</span>
+        <div style="flex:1"></div>
+        <span style="padding:6px 11px;border-radius:5px;background:#1c2027;border:1px solid #2b3038;font:400 10.5px 'IBM Plex Mono';color:#9aa1ad">swing 12%</span>
+        <span style="padding:6px 11px;border-radius:5px;background:#1c2027;border:1px solid #2b3038;font:400 10.5px 'IBM Plex Mono';color:#9aa1ad">humanize</span>
+        <span style="padding:6px 11px;border-radius:5px;background:#20262b;border:1px solid #2b3038;font:400 10.5px 'IBM Plex Mono';color:#4cc2ff">+ channel</span>
+      </div>
+
+      <div style="height:28px;flex:none;display:flex;align-items:center;background:#101216;border-bottom:1px solid #23272f">
+        <div style="width:330px;flex:none"></div>
+        <div style="display:flex;gap:6px">
+          <sc-for list="{{ stepRuler }}" as="s" hint-placeholder-count="16">
+            <div style="{{ s.style }}">{{ s.label }}</div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="flex:1;overflow:hidden">
+        <sc-for list="{{ rackRows }}" as="ch" hint-placeholder-count="10">
+          <div style="{{ ch.rowStyle }}">
+            <div style="width:330px;flex:none;display:flex;align-items:center;gap:10px;padding:0 14px">
+              <span style="{{ ch.chipStyle }}"></span>
+              <div style="width:36px;height:36px;border-radius:6px;background:#1c2027;border:1px solid #2b3038;flex:none;display:flex;align-items:center;justify-content:center;font:400 8.5px 'IBM Plex Mono';color:#5b616c">{{ ch.kind }}</div>
+              <div style="min-width:0;flex:1">
+                <div style="font:500 12px 'IBM Plex Sans';color:#e8eaee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ ch.name }}</div>
+                <div style="font:400 9px 'IBM Plex Mono';color:#5b616c">{{ ch.sub }}</div>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+                <div style="{{ ch.knobStyle }}"></div>
+                <span style="font:400 8px 'IBM Plex Mono';color:#4a5058">PAN</span>
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+                <div style="{{ ch.knob2Style }}"></div>
+                <span style="font:400 8px 'IBM Plex Mono';color:#4a5058">VOL</span>
+              </div>
+              <span style="{{ ch.busStyle }}">{{ ch.bus }}</span>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <sc-for list="{{ ch.steps }}" as="s" hint-placeholder-count="16">
+                <div style="{{ s.bigStyle }}"></div>
+              </sc-for>
+            </div>
+            <span style="flex:1"></span>
+            <div style="width:8px;height:34px;background:#131619;border-radius:2px;position:relative;overflow:hidden;margin-right:16px"><div style="{{ ch.meterStyle }}"></div></div>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="height:38px;flex:none;display:flex;align-items:center;gap:16px;padding:0 18px;border-top:1px solid #23272f;background:#131619;font:400 10px 'IBM Plex Mono';color:#626a76">
+        <span>alt-drag: velocity</span><span>shift-click: ghost</span><span>right-click: per-step params</span><span style="flex:1"></span><span style="color:#4cc2ff">step 05 · vel 104 · fine +12 tk</span>
+      </div>
+    </div>
+
+    <div style="width:340px;flex:none;background:#16191e;border-left:1px solid #23272f;display:flex;flex-direction:column">
+      <div style="height:34px;flex:none;display:flex;align-items:center;gap:9px;padding:0 13px;border-bottom:1px solid #23272f">
+        <span style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">STEP DETAIL</span>
+        <span style="font:500 10.5px 'IBM Plex Mono';color:#4cc2ff">05</span>
+      </div>
+      <div style="padding:16px 14px;border-bottom:1px solid #23272f">
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:16px 12px">
+          <sc-for list="{{ stepParams }}" as="p" hint-placeholder-count="6">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="{{ p.ringStyle }}"></div>
+              <div>
+                <div style="font:400 9px 'IBM Plex Mono';color:#626a76;letter-spacing:.05em">{{ p.name }}</div>
+                <div style="font:500 12px 'IBM Plex Mono';color:#e8eaee">{{ p.val }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="padding:14px;flex:1;min-height:0">
+        <div style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad;margin-bottom:10px">ROUTING</div>
+        <sc-for list="{{ routing }}" as="r" hint-placeholder-count="4">
+          <div style="height:32px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #1c2027">
+            <span style="font:400 10.5px 'IBM Plex Mono';color:#8b919c;width:70px">{{ r.name }}</span>
+            <span style="font:400 11px 'IBM Plex Sans';color:#e8eaee;flex:1">{{ r.val }}</span>
+            <span style="{{ r.tagStyle }}">{{ r.tag }}</span>
+          </div>
+        </sc-for>
+        <div style="margin-top:18px;padding:11px;border-radius:6px;background:#1a1d22;border:1px solid #23272f;font:400 9.5px/1.65 'IBM Plex Mono';color:#626a76">
+          Sampler channels stream from disk above 4 MB.<br>Pattern → clip: drag the pattern chip into the Playlist.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============ 1d — Mixer ============ -->
+<div class="dv-opt" id="1d">
+<div class="dv-olabel"><a class="dv-oid" href="#1d">1d</a>Mixer — insert chains visible per strip, sends matrix, master analyser. Plugin GUI parking rail on the right.</div>
+<div class="dv-card" style="width:1920px">
+<div style="width:1920px;height:1080px;background:#101216;color:#e8eaee;display:flex;flex-direction:column;font-size:12px;overflow:hidden">
+  <div style="height:44px;flex:none;display:flex;align-items:center;gap:18px;padding:0 14px;background:#16191e;border-bottom:1px solid #23272f">
+    <div style="display:flex;align-items:center;gap:9px"><div style="width:20px;height:20px;border-radius:5px;background:linear-gradient(155deg,#ff6a3d,#d1372a)"></div><span style="font:600 12.5px 'IBM Plex Sans'">RUSTBOX</span></div>
+    <span style="font:400 11px 'IBM Plex Mono';color:#626a76">untitled.rbx</span>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:14px;font:400 11px 'IBM Plex Mono';color:#8b919c"><span>140.00 BPM</span><span style="color:#343a44">|</span><span>009.02.048</span><span style="color:#343a44">|</span><span style="color:#63d18a">● playing</span></div>
+  </div>
+  <div style="height:36px;flex:none;display:flex;align-items:stretch;background:#131619;border-bottom:1px solid #23272f">
+    <div style="display:flex;align-items:center;padding:0 16px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Playlist</div>
+    <div style="display:flex;align-items:center;padding:0 16px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Channel Rack</div>
+    <div style="display:flex;align-items:center;padding:0 16px;font:400 11px 'IBM Plex Sans';color:#8b919c;border-right:1px solid #23272f">Piano Roll</div>
+    <div style="display:flex;align-items:center;padding:0 16px;font:500 11px 'IBM Plex Sans';color:#e8eaee;background:#1c2027;border-right:1px solid #23272f;box-shadow:inset 0 -2px 0 #ff6a3d">Mixer</div>
+    <div style="flex:1"></div>
+    <div style="display:flex;align-items:center;gap:10px;padding:0 16px;font:400 10px 'IBM Plex Mono';color:#626a76"><span>16 strips · 4 buses</span><span>pdc 1 152 smp</span></div>
+  </div>
+
+  <div style="flex:1;display:flex;min-height:0">
+    <div style="flex:1;min-width:0;display:flex;gap:0;padding:14px 0 0 14px;overflow:hidden">
+      <sc-for list="{{ strips }}" as="s" hint-placeholder-count="12">
+        <div style="{{ s.wrapStyle }}">
+          <div style="{{ s.headStyle }}">{{ s.name }}</div>
+          <div style="padding:8px 7px;border-bottom:1px solid #23272f;display:flex;flex-direction:column;gap:4px;min-height:110px">
+            <sc-for list="{{ s.inserts }}" as="i" hint-placeholder-count="3">
+              <div style="{{ i.style }}">{{ i.name }}</div>
+            </sc-for>
+          </div>
+          <div style="padding:9px 7px;display:flex;justify-content:center;border-bottom:1px solid #23272f">
+            <div style="{{ s.panStyle }}"></div>
+          </div>
+          <div style="flex:1;display:flex;gap:6px;justify-content:center;min-height:0;padding:10px 0">
+            <div style="width:10px;background:#0f1215;border-radius:2px;position:relative;overflow:hidden">
+              <div style="{{ s.meterStyle }}"></div>
+            </div>
+            <div style="width:26px;background:#0f1215;border-radius:3px;position:relative;border:1px solid #1c2027">
+              <div style="{{ s.faderStyle }}"></div>
+            </div>
+            <div style="width:16px;display:flex;flex-direction:column;justify-content:space-between;padding:2px 0;font:400 7.5px 'IBM Plex Mono';color:#3d434b">
+              <span>0</span><span>−12</span><span>−24</span><span>−48</span><span>∞</span>
+            </div>
+          </div>
+          <div style="padding:0 7px 8px;display:flex;flex-direction:column;gap:5px">
+            <div style="font:500 10px 'IBM Plex Mono';color:#e8eaee;text-align:center">{{ s.db }}</div>
+            <div style="display:flex;gap:4px;justify-content:center">
+              <span style="{{ s.mStyle }}">M</span>
+              <span style="{{ s.sStyle }}">S</span>
+              <span style="{{ s.rStyle }}">◉</span>
+            </div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="width:300px;flex:none;background:#16191e;border-left:1px solid #23272f;display:flex;flex-direction:column">
+      <div style="height:34px;flex:none;display:flex;align-items:center;padding:0 13px;border-bottom:1px solid #23272f"><span style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">MASTER</span></div>
+      <div style="padding:13px;border-bottom:1px solid #23272f">
+        <div style="height:96px;border-radius:6px;background:#0f1215;border:1px solid #23272f;position:relative;overflow:hidden">
+          <div style="position:absolute;inset:0;background:repeating-linear-gradient(90deg,transparent 0 13px,rgba(255,255,255,.03) 13px 14px)"></div>
+          <div style="{{ spectrumStyle }}"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font:400 9px 'IBM Plex Mono';color:#4a5058"><span>20</span><span>200</span><span>2k</span><span>20k</span></div>
+      </div>
+      <div style="padding:13px;border-bottom:1px solid #23272f">
+        <div style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad;margin-bottom:9px">LOUDNESS</div>
+        <sc-for list="{{ loudness }}" as="l" hint-placeholder-count="4">
+          <div style="display:flex;align-items:center;height:24px;gap:10px">
+            <span style="font:400 10px 'IBM Plex Mono';color:#8b919c;width:56px">{{ l.name }}</span>
+            <div style="flex:1;height:4px;background:#1c2027;border-radius:2px;overflow:hidden"><div style="{{ l.barStyle }}"></div></div>
+            <span style="font:500 10.5px 'IBM Plex Mono';color:#e8eaee;width:58px;text-align:right">{{ l.val }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="padding:13px;flex:1;min-height:0">
+        <div style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad;margin-bottom:9px">PLUGIN WINDOWS</div>
+        <sc-for list="{{ parked }}" as="p" hint-placeholder-count="4">
+          <div style="{{ p.style }}">
+            <span style="{{ p.dotStyle }}"></span>
+            <span style="font:400 11px 'IBM Plex Sans';color:#e8eaee;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</span>
+            <span style="font:400 9px 'IBM Plex Mono';color:#5b616c">{{ p.fmt }}</span>
+          </div>
+        </sc-for>
+        <div style="margin-top:12px;padding:10px;border-radius:6px;background:#1a1d22;border:1px solid #23272f;font:400 9.5px/1.65 'IBM Plex Mono';color:#626a76">
+          Editors are OS windows, never embedded.<br>Parking rail restores position per project.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============ 1e — Start / empty state ============ -->
+<div class="dv-opt" id="1e">
+<div class="dv-olabel"><a class="dv-oid" href="#1e">1e</a>Start state — engine + device status first, then recents and templates. Nothing decorative.</div>
+<div class="dv-card" style="width:1920px">
+<div style="width:1920px;height:1080px;background:#101216;color:#e8eaee;display:flex;flex-direction:column;font-size:12px;overflow:hidden">
+  <div style="height:44px;flex:none;display:flex;align-items:center;gap:18px;padding:0 14px;background:#16191e;border-bottom:1px solid #23272f">
+    <div style="display:flex;align-items:center;gap:9px"><div style="width:20px;height:20px;border-radius:5px;background:linear-gradient(155deg,#ff6a3d,#d1372a)"></div><span style="font:600 12.5px 'IBM Plex Sans'">RUSTBOX</span></div>
+    <span style="font:400 11px 'IBM Plex Mono';color:#4a5058">0.4.2 · debug</span>
+    <div style="flex:1"></div>
+    <span style="font:400 11px 'IBM Plex Mono';color:#626a76">⌘K</span>
+  </div>
+
+  <div style="flex:1;display:flex;align-items:center;justify-content:center;background:radial-gradient(1100px 620px at 50% 38%,#15181d,#101216 72%)">
+    <div style="width:1180px;display:flex;gap:34px">
+      <div style="flex:1">
+        <div style="font:600 30px/1.15 'IBM Plex Sans';letter-spacing:-.01em;color:#e8eaee">Ready.</div>
+        <div style="font:400 13px/1.6 'IBM Plex Mono';color:#626a76;margin-top:9px">Engine idle · nothing loaded · 0 alloc violations</div>
+
+        <div style="display:flex;gap:12px;margin-top:26px">
+          <div style="flex:1;padding:18px;border-radius:8px;background:#1a1d22;border:1px solid #2b3038;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)">
+            <div style="width:26px;height:26px;border-radius:6px;background:#ff6a3d;display:flex;align-items:center;justify-content:center;font:600 14px 'IBM Plex Mono';color:#101216">+</div>
+            <div style="font:600 14px 'IBM Plex Sans';color:#e8eaee;margin-top:12px">Empty project</div>
+            <div style="font:400 10.5px/1.55 'IBM Plex Mono';color:#626a76;margin-top:4px">4 channels, 1 pattern, 140 BPM</div>
+          </div>
+          <div style="flex:1;padding:18px;border-radius:8px;background:#16191e;border:1px solid #23272f">
+            <div style="width:26px;height:26px;border-radius:6px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;justify-content:center;font:400 12px 'IBM Plex Mono';color:#8b919c">⌥</div>
+            <div style="font:600 14px 'IBM Plex Sans';color:#e8eaee;margin-top:12px">From template</div>
+            <div style="font:400 10.5px/1.55 'IBM Plex Mono';color:#626a76;margin-top:4px">drum kit · sampler chain · mix bus</div>
+          </div>
+          <div style="flex:1;padding:18px;border-radius:8px;background:#16191e;border:1px solid #23272f">
+            <div style="width:26px;height:26px;border-radius:6px;background:#1c2027;border:1px solid #2b3038;display:flex;align-items:center;justify-content:center;font:400 12px 'IBM Plex Mono';color:#8b919c">↳</div>
+            <div style="font:600 14px 'IBM Plex Sans';color:#e8eaee;margin-top:12px">Open file</div>
+            <div style="font:400 10.5px/1.55 'IBM Plex Mono';color:#626a76;margin-top:4px">.rbx · import .mid · import stems</div>
+          </div>
+        </div>
+
+        <div style="margin-top:30px;font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">RECENT</div>
+        <div style="margin-top:10px;border-top:1px solid #23272f">
+          <sc-for list="{{ recents }}" as="r" hint-placeholder-count="4">
+            <div style="height:46px;display:flex;align-items:center;gap:14px;border-bottom:1px solid #1c2027">
+              <span style="{{ r.chipStyle }}"></span>
+              <span style="font:500 13px 'IBM Plex Sans';color:#e8eaee;width:230px">{{ r.name }}</span>
+              <span style="font:400 10.5px 'IBM Plex Mono';color:#626a76;width:120px">{{ r.meta }}</span>
+              <span style="font:400 10.5px 'IBM Plex Mono';color:#5b616c;flex:1">{{ r.plugins }}</span>
+              <span style="font:400 10.5px 'IBM Plex Mono';color:#4a5058">{{ r.when }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="width:352px;flex:none;display:flex;flex-direction:column;gap:12px">
+        <div style="padding:16px;border-radius:8px;background:#16191e;border:1px solid #23272f">
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:7px;height:7px;border-radius:50%;background:#63d18a"></span><span style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">AUDIO DEVICE</span></div>
+          <div style="font:500 14px 'IBM Plex Sans';color:#e8eaee;margin-top:11px">Focusrite Scarlett 2i2</div>
+          <div style="font:400 10.5px 'IBM Plex Mono';color:#626a76;margin-top:3px">ASIO · 48 000 Hz · 2 in / 2 out</div>
+          <div style="display:flex;gap:8px;margin-top:13px">
+            <div style="flex:1;padding:9px;border-radius:5px;background:#1c2027;border:1px solid #2b3038"><div style="font:400 8.5px 'IBM Plex Mono';color:#5b616c">BUFFER</div><div style="font:500 13px 'IBM Plex Mono';color:#e8eaee;margin-top:2px">128</div></div>
+            <div style="flex:1;padding:9px;border-radius:5px;background:#1c2027;border:1px solid #2b3038"><div style="font:400 8.5px 'IBM Plex Mono';color:#5b616c">ROUND-TRIP</div><div style="font:500 13px 'IBM Plex Mono';color:#63d18a;margin-top:2px">5.8 ms</div></div>
+          </div>
+          <div style="margin-top:11px;font:400 10px 'IBM Plex Mono';color:#4cc2ff">change device →</div>
+        </div>
+
+        <div style="padding:16px;border-radius:8px;background:#16191e;border:1px solid #23272f">
+          <div style="display:flex;align-items:center;gap:8px"><span style="width:7px;height:7px;border-radius:50%;background:#ffd166"></span><span style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">PLUGIN SCAN</span></div>
+          <div style="margin-top:12px;display:flex;align-items:baseline;gap:8px"><span style="font:500 26px/1 'IBM Plex Mono';color:#e8eaee">412</span><span style="font:400 11px 'IBM Plex Mono';color:#626a76">scanned</span></div>
+          <div style="height:5px;background:#1c2027;border-radius:2px;margin-top:12px;overflow:hidden"><div style="width:100%;height:100%;background:linear-gradient(90deg,#63d18a 0 92%,#ff4d4d 92%)"></div></div>
+          <div style="display:flex;gap:14px;margin-top:11px;font:400 10px 'IBM Plex Mono'">
+            <span style="color:#63d18a">380 ok</span><span style="color:#ffd166">29 clap</span><span style="color:#ff6a3d">3 quarantined</span>
+          </div>
+          <div style="margin-top:11px;padding:9px;border-radius:5px;background:#1c1417;border:1px solid #3a2124;font:400 9.5px/1.55 'IBM Plex Mono';color:#c98f8f">3 plugins crashed the out-of-process scanner and were skipped. <span style="color:#ff6a3d">review →</span></div>
+        </div>
+
+        <div style="padding:16px;border-radius:8px;background:#16191e;border:1px solid #23272f;flex:1">
+          <div style="font:600 10px 'IBM Plex Sans';letter-spacing:.11em;color:#9aa1ad">ENGINE</div>
+          <sc-for list="{{ startEngine }}" as="e" hint-placeholder-count="4">
+            <div style="height:28px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #1c2027">
+              <span style="font:400 10.5px 'IBM Plex Mono';color:#8b919c">{{ e.name }}</span>
+              <span style="{{ e.valStyle }}">{{ e.val }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="height:26px;flex:none;display:flex;align-items:center;gap:14px;padding:0 14px;background:#0d0f12;border-top:1px solid #23272f;font:400 10px 'IBM Plex Mono';color:#626a76">
+    <span>engine idle</span><span>no project</span><span style="flex:1"></span><span>rustbox 0.4.2 · clap 1.2.6 · vst3 3.8</span>
+  </div>
+</div>
+</div>
+</div>
+
+<!-- ============ 1f — Colour system ============ -->
+<div class="dv-opt" id="1f">
+<div class="dv-olabel"><a class="dv-oid" href="#1f">1f</a>Colour system — three track/meter palettes on the same chrome. Switch live via the <b>paletteMode</b> tweak.</div>
+<div class="dv-card" style="width:1180px;background:#101216">
+<div style="padding:24px;display:flex;flex-direction:column;gap:20px;font-size:12px;color:#e8eaee">
+  <sc-for list="{{ palettes }}" as="p" hint-placeholder-count="3">
+    <div style="{{ p.wrapStyle }}">
+      <div style="width:150px;flex:none">
+        <div style="font:600 13px 'IBM Plex Sans';color:#e8eaee">{{ p.name }}</div>
+        <div style="font:400 9.5px/1.5 'IBM Plex Mono';color:#626a76;margin-top:4px">{{ p.note }}</div>
+        <div style="{{ p.badgeStyle }}">{{ p.badge }}</div>
+      </div>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;gap:5px">
+          <sc-for list="{{ p.swatches }}" as="s" hint-placeholder-count="8">
+            <div style="{{ s.style }}"></div>
+          </sc-for>
+        </div>
+        <div style="display:flex;gap:12px;align-items:stretch">
+          <div style="flex:1;background:#0f1215;border:1px solid #23272f;border-radius:5px;padding:7px;display:flex;flex-direction:column;gap:5px">
+            <sc-for list="{{ p.clips }}" as="c" hint-placeholder-count="4">
+              <div style="{{ c.style }}">{{ c.label }}</div>
+            </sc-for>
+          </div>
+          <div style="width:150px;background:#0f1215;border:1px solid #23272f;border-radius:5px;padding:7px;display:flex;gap:6px;align-items:flex-end;justify-content:center">
+            <sc-for list="{{ p.meters }}" as="m" hint-placeholder-count="5">
+              <div style="width:12px;height:82px;background:#141719;border-radius:2px;position:relative;overflow:hidden"><div style="{{ m.style }}"></div></div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-for>
+</div>
+</div>
+</div>
+
+</div>
+<p class="dv-next">Try next: "go with <a class="dv-oid" href="#1b">1b</a>'s rail but keep <a class="dv-oid" href="#1a">1a</a>'s inspector" · "add the piano roll as a full screen" · "show the plugin browser + quarantine review" · "try a light theme for daylight studios"</p>
+</section>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;paletteMode&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Hue wheel&quot;,&quot;Duotone&quot;,&quot;Pastel&quot;],&quot;default&quot;:&quot;Hue wheel&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Colour system&quot;},&quot;meterStyle&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Gradient&quot;,&quot;Segmented&quot;],&quot;default&quot;:&quot;Gradient&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;section&quot;:&quot;Colour system&quot;},&quot;showPluginWindow&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Shell&quot;}}">
+const HUE = ['#e0705f','#d78f4f','#b8a94a','#7fb35c','#4fb39a','#4f9dd1','#8a86d6','#cc76b8'];
+const DUO = ['#ff6a3d','#e0603a','#c25638','#4cc2ff','#3fa5da','#3489b6','#8b919c','#626a76'];
+const PASTEL = ['#f2a99b','#f0c893','#dcd39b','#b6dba6','#9fd6c9','#a2c8ea','#bcb8ef','#e6afd9'];
+const PX = 34;
+
+class Component extends DCLogic {
+  colors() {
+    const m = this.props.paletteMode ?? 'Hue wheel';
+    return m === 'Duotone' ? DUO : m === 'Pastel' ? PASTEL : HUE;
+  }
+  meterFill(pct, style) {
+    const seg = style === 'Segmented'
+      ? 'repeating-linear-gradient(180deg,#63d18a 0 3px,rgba(0,0,0,.55) 3px 4px)'
+      : 'linear-gradient(180deg,#ffd166,#63d18a 34%,#3f9e6a)';
+    return { position: 'absolute', left: 0, right: 0, bottom: 0, height: pct + '%', background: seg };
+  }
+
+  renderVals() {
+    const C = this.colors();
+    const ms = this.props.meterStyle ?? 'Gradient';
+    const mix = (hex, a) => hex + a;
+
+    const clip = (bar, len, ci, label, audio) => {
+      const c = C[ci];
+      return {
+        style: { position: 'absolute', left: (bar - 1) * PX + 2 + 'px', width: len * PX - 4 + 'px', top: '5px', bottom: '5px',
+          background: mix(c, '26'), border: '1px solid ' + mix(c, 'aa'), borderLeft: '3px solid ' + c,
+          borderRadius: '3px', overflow: 'hidden', display: 'flex', flexDirection: 'column' },
+        headStyle: { font: "500 9px 'IBM Plex Mono'", color: c, padding: '2px 5px', letterSpacing: '.03em',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+        bodyStyle: { flex: 1, margin: '0 3px 3px', borderRadius: '2px',
+          background: audio
+            ? 'repeating-linear-gradient(90deg,' + mix(c, 'cc') + ' 0 1.5px,transparent 1.5px 4px)'
+            : 'repeating-linear-gradient(90deg,' + mix(c, '66') + ' 0 2px,transparent 2px 8px)',
+          backgroundSize: audio ? '100% 62%' : '100% 100%', backgroundRepeat: 'no-repeat', backgroundPosition: 'center' },
+        label: label
+      };
+    };
+
+    const trackDefs = [
+      ['Kick', 'sampler · 909', 0, [[1,4,'P01',0],[9,8,'P01',0],[21,4,'P01',0],[27,6,'P04',0]]],
+      ['Snare / clap', 'sampler', 1, [[5,4,'P01',0],[9,8,'P01',0],[21,10,'P04',0]]],
+      ['Hats', 'sampler · rex', 2, [[1,16,'P01',0],[19,12,'P04',0]]],
+      ['808 bass', 'clap · Vital', 3, [[5,4,'P02',0],[13,8,'P02',0],[25,6,'P05',0]]],
+      ['Keys', 'vst3 · Serum 2', 4, [[9,8,'P03',0],[21,10,'P03',0]]],
+      ['Pad bed', 'clap · Surge XT', 5, [[1,8,'P06',0],[17,14,'P06',0]]],
+      ['Vocal chop', 'audio', 6, [[9,6,'vox_A.wav',1],[19,8,'vox_B.wav',1]]],
+      ['Riser fx', 'audio', 7, [[15,2,'riser.wav',1],[30,3,'impact.wav',1]]],
+      ['Ref mix', 'audio · muted', 5, [[1,31,'ref_master.wav',1]]]
+    ];
+
+    const tracks = trackDefs.map(([name, meta, ci, cl], i) => ({
+      name, meta,
+      chipStyle: { width: '4px', height: '30px', borderRadius: '2px', background: C[ci], flex: 'none' },
+      barStyle: { width: '3px', alignSelf: 'stretch', margin: '9px 0', borderRadius: '2px', background: C[ci], flex: 'none' },
+      mStyle: { font: "500 8px 'IBM Plex Mono'", width: '15px', height: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRadius: '3px', background: i === 8 ? '#ff6a3d' : '#1c2027', color: i === 8 ? '#101216' : '#5b616c' },
+      sStyle: { font: "500 8px 'IBM Plex Mono'", width: '15px', height: '13px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRadius: '3px', background: '#1c2027', color: '#5b616c' },
+      clips: cl.map(([b, l, lab, a]) => clip(b, l, ci, lab, a))
+    }));
+
+    const laneStyle = { flex: 1, position: 'relative', minWidth: 0,
+      backgroundImage: 'repeating-linear-gradient(90deg,#1c2027 0 1px,transparent 1px ' + PX + 'px),repeating-linear-gradient(90deg,#22262d 0 1px,transparent 1px ' + PX * 4 + 'px)' };
+
+    const ruler = Array.from({ length: 34 }, (_, i) => {
+      const bar = i + 1, major = bar % 4 === 1;
+      return {
+        label: major ? String(bar) : '',
+        style: { width: PX + 'px', flex: 'none', boxSizing: 'border-box', borderLeft: '1px solid ' + (major ? '#2b3038' : '#1e2228'), display: 'flex', alignItems: 'center', paddingLeft: '4px' },
+        labelStyle: { font: "400 9.5px 'IBM Plex Mono'", color: major ? '#8b919c' : 'transparent' }
+      };
+    });
+
+    const loopStyle = { position: 'absolute', left: 8 * PX + 'px', width: 16 * PX + 'px', top: 0, height: '3px', background: '#4cc2ff', borderRadius: '2px' };
+
+    const browser = [
+      ['Plugin database', 'CLAP', 1], ['  Instruments', '58', 0], ['  Effects', '164', 0],
+      ['  Quarantined', '3', 2], ['Plugin database', 'VST3', 1], ['  Instruments', '92', 0],
+      ['  Effects', '98', 0], ['Packs', '', 1], ['  909 essentials', '124', 0], ['  Vinyl drums', '86', 0],
+      ['Project files', '', 1], ['  recorded', '12', 0], ['  rendered', '4', 0], ['Presets', '218', 1]
+    ].map(([name, meta, kind]) => ({
+      name, meta,
+      style: { height: '25px', display: 'flex', alignItems: 'center', gap: '8px', padding: '0 12px',
+        background: kind === 2 ? '#1c1417' : 'transparent' },
+      markStyle: { width: '5px', height: '5px', borderRadius: kind === 1 ? '1px' : '50%', flex: 'none',
+        background: kind === 2 ? '#ff6a3d' : kind === 1 ? '#4cc2ff' : '#3d434b' },
+      textStyle: { font: (kind === 1 ? '500' : '400') + " 11px 'IBM Plex Sans'", color: kind === 1 ? '#e8eaee' : kind === 2 ? '#c98f8f' : '#9aa1ad', whiteSpace: 'pre' }
+    }));
+
+    const ring = (deg, col, size) => ({ width: size + 'px', height: size + 'px', borderRadius: '50%', flex: 'none',
+      background: 'conic-gradient(from 220deg,' + col + ' 0 ' + deg + 'deg,#23272f ' + deg + 'deg 280deg,transparent 280deg)',
+      boxShadow: 'inset 0 0 0 4px #16191e, inset 0 0 0 5px #2b3038' });
+
+    const knobs = [['VOL', 190], ['PAN', 140], ['PITCH', 90], ['TIME', 240], ['CUT', 165], ['RES', 60], ['ATK', 30], ['DEC', 200]]
+      .map(([name, d]) => ({ name, ringStyle: ring(d, '#ff6a3d', 40) }));
+
+    const inserts = [['Transient Shaper', 'CLAP', '#63d18a'], ['Pro-Q 4', 'VST3', '#4cc2ff'], ['Saturn 2', 'VST3', '#4cc2ff'], ['Glue Comp', 'INT', '#8b919c']]
+      .map(([name, fmt, dot]) => ({ name, fmt,
+        style: { height: '30px', display: 'flex', alignItems: 'center', gap: '9px', padding: '0 9px', marginBottom: '5px',
+          borderRadius: '5px', background: '#1c2027', border: '1px solid #2b3038' },
+        dotStyle: { width: '6px', height: '6px', borderRadius: '50%', background: dot, flex: 'none' } }));
+
+    const steps16 = (on) => Array.from({ length: 16 }, (_, i) => {
+      const active = on.includes(i), accent = i % 4 === 0;
+      return {
+        style: { width: '20px', height: '20px', borderRadius: '3px', flex: 'none', boxSizing: 'border-box',
+          background: active ? C[0] : accent ? '#22262d' : '#1a1d22', border: '1px solid ' + (active ? C[0] : '#23272f') },
+        bigStyle: { width: '34px', height: '30px', borderRadius: '4px', flex: 'none', boxSizing: 'border-box',
+          background: active ? C[0] : accent ? '#22262d' : '#1a1d22',
+          border: '1px solid ' + (active ? C[0] : '#262a31'),
+          boxShadow: active ? '0 0 10px ' + C[0] + '44' : 'none' }
+      };
+    });
+
+    const chDefs = [
+      ['Kick 909', 'sampler', [0,4,8,12], 0, 74],
+      ['Clap', 'sampler', [4,12], 1, 52],
+      ['Hat closed', 'sampler', [2,6,10,14], 2, 38],
+      ['Hat open', 'sampler', [7,15], 2, 26],
+      ['808', 'Vital', [0,6,10], 3, 66],
+      ['Keys', 'Serum 2', [0,8], 4, 44]
+    ];
+    const channels = chDefs.map(([name, fmt, on, ci, v]) => ({
+      name, fmt,
+      chipStyle: { width: '4px', height: '18px', borderRadius: '2px', background: C[ci], flex: 'none' },
+      steps: steps16(on),
+      volStyle: { width: v + '%', height: '100%', background: C[ci] }
+    }));
+
+    const engine = [['CPU', 34, '34 %'], ['DSP load', 41, '41 %'], ['Disk', 12, '3.1 MB/s'], ['RAM', 28, '1.9 GB'], ['Voices', 55, '112 / 256']]
+      .map(([name, pct, val]) => ({ name, val,
+        barStyle: { width: pct + '%', height: '100%', background: pct > 70 ? '#ffd166' : '#63d18a' } }));
+
+    const rail = [['▦', 1], ['▤', 0], ['♫', 0], ['⊞', 0], ['◈', 0], ['⌗', 0], ['◱', 0]].map(([glyph, on]) => ({
+      glyph,
+      style: { width: '34px', height: '34px', borderRadius: '7px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        font: "400 14px 'IBM Plex Mono'", background: on ? '#23272f' : 'transparent', color: on ? '#ff6a3d' : '#626a76' }
+    }));
+
+    const KEYS = ['C4','B3','A#3','A3','G#3','G3','F#3','F3','E3','D#3','D3','C#3','C3','B2','A#2','A2'];
+    const keys = KEYS.map((label, i) => {
+      const black = label.includes('#');
+      return { label: black ? '' : label,
+        style: { height: '16px', borderBottom: '1px solid #1c2027', background: black ? '#0f1215' : '#191c21', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: '5px' },
+        labelStyle: { font: "400 7.5px 'IBM Plex Mono'", color: '#4a5058' } };
+    });
+
+    const noteDefs = [[0,2,2],[2,8,1],[4,4,3],[6,12,2],[9,1,4],[10,6,2],[12,3,3],[3,16,6],[7,6,10],[11,4,8],[5,2,12],[8,5,14]];
+    const notes = noteDefs.map(([row, len, col]) => ({
+      style: { position: 'absolute', top: row * 16 + 3 + 'px', height: '10px', left: col * 34 + 2 + 'px', width: len * 8.5 + 'px',
+        background: C[4], borderRadius: '2px', boxShadow: '0 0 6px ' + C[4] + '55' }
+    }));
+
+    const palette = [['Render pattern to audio clip', '⌘⇧R'], ['Render selection…', '⌘R'], ['Reveal render folder', ''], ['Render + replace channel', '⌥⌘R'], ['Rescan plugin database', '']]
+      .map(([name, kbd], i) => ({ name, kbd,
+        style: { height: '38px', display: 'flex', alignItems: 'center', gap: '12px', padding: '0 15px',
+          background: i === 0 ? '#23272f' : 'transparent', borderLeft: '2px solid ' + (i === 0 ? '#ff6a3d' : 'transparent') } }));
+
+    const slimDefs = [['KICK', 0, 74, 62], ['SNR', 1, 52, 55], ['HAT', 2, 38, 48], ['808', 3, 66, 60], ['KEYS', 4, 44, 52], ['MSTR', 7, 70, 66]];
+    const stripsSlim = slimDefs.map(([name, ci, meter, fader], i) => ({
+      name, db: (i === 5 ? '0.0' : '−' + (3 + i * 1.4).toFixed(1)),
+      wrapStyle: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', background: '#1a1d22',
+        border: '1px solid ' + (i === 5 ? '#343a44' : '#23272f'), borderRadius: '5px', margin: '0 3px' },
+      nameStyle: { font: "500 9.5px 'IBM Plex Mono'", color: '#101216', background: C[ci], padding: '4px 0', textAlign: 'center',
+        borderRadius: '4px 4px 0 0', letterSpacing: '.04em' },
+      meterStyle: this.meterFill(meter, ms),
+      faderStyle: { position: 'absolute', left: '-4px', right: '-4px', bottom: fader + '%', height: '12px', borderRadius: '3px',
+        background: '#3a4048', border: '1px solid #4d545e', boxShadow: '0 1px 3px rgba(0,0,0,.6)' }
+    }));
+
+    const stripDefs = [
+      ['Kick', 0, 74, 62, ['Transient','Pro-Q 4','Glue']],
+      ['Snare', 1, 52, 55, ['Pro-Q 4','1176']],
+      ['Hats', 2, 38, 48, ['Pro-Q 4']],
+      ['808', 3, 66, 60, ['Sat','MB Comp','Pro-Q 4']],
+      ['Keys', 4, 44, 52, ['Chorus','Pro-Q 4']],
+      ['Pads', 5, 30, 44, ['Valhalla','Pro-Q 4']],
+      ['Vox', 6, 58, 58, ['Pro-Q 4','LA-2A','Deesser']],
+      ['FX', 7, 22, 40, ['Reverb']],
+      ['DRUM BUS', 0, 78, 66, ['Glue','Tape']],
+      ['MUSIC BUS', 4, 61, 60, ['Glue']],
+      ['SEND A', 6, 34, 50, ['Plate']],
+      ['MASTER', 7, 70, 68, ['Pro-Q 4','Limiter','LUFS']]
+    ];
+    const strips = stripDefs.map(([name, ci, meter, fader, ins], i) => {
+      const bus = i >= 8, master = i === 11;
+      return { name, db: master ? '0.0' : '−' + (2 + i * 0.9).toFixed(1),
+        wrapStyle: { width: master ? '120px' : '106px', flex: 'none', display: 'flex', flexDirection: 'column',
+          background: master ? '#1c2027' : '#1a1d22', border: '1px solid ' + (master ? '#3a4048' : bus ? '#2b3038' : '#23272f'),
+          borderRadius: '6px', marginRight: '8px', overflow: 'hidden' },
+        headStyle: { font: "500 10px 'IBM Plex Mono'", color: bus ? '#101216' : '#101216', background: C[ci],
+          padding: '6px 0', textAlign: 'center', letterSpacing: '.05em' },
+        inserts: ins.map((n) => ({ name: n,
+          style: { height: '22px', display: 'flex', alignItems: 'center', padding: '0 7px', borderRadius: '3px',
+            background: '#22262d', border: '1px solid #2b3038', font: "400 9.5px 'IBM Plex Mono'", color: '#9aa1ad',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } })),
+        panStyle: ring(140 + i * 8, '#4cc2ff', 34),
+        meterStyle: this.meterFill(meter, ms),
+        faderStyle: { position: 'absolute', left: '-5px', right: '-5px', bottom: fader + '%', height: '14px', borderRadius: '3px',
+          background: 'linear-gradient(180deg,#464d57,#2f353d)', border: '1px solid #545c67', boxShadow: '0 2px 4px rgba(0,0,0,.6)' },
+        mStyle: { font: "500 8.5px 'IBM Plex Mono'", width: '20px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          borderRadius: '3px', background: '#22262d', color: '#5b616c' },
+        sStyle: { font: "500 8.5px 'IBM Plex Mono'", width: '20px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          borderRadius: '3px', background: i === 6 ? '#4cc2ff' : '#22262d', color: i === 6 ? '#101216' : '#5b616c' },
+        rStyle: { font: "500 8.5px 'IBM Plex Mono'", width: '20px', height: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          borderRadius: '3px', background: '#22262d', color: '#5b616c' } };
+    });
+
+    const spectrumStyle = { position: 'absolute', left: 0, right: 0, bottom: 0, height: '78%',
+      background: 'linear-gradient(180deg,rgba(76,194,255,.05),rgba(76,194,255,.3))',
+      clipPath: 'polygon(0% 100%,0% 42%,6% 22%,12% 38%,18% 30%,24% 52%,31% 40%,38% 58%,45% 48%,52% 66%,60% 56%,68% 72%,76% 64%,84% 80%,92% 74%,100% 92%,100% 100%)',
+      borderTop: 'none' };
+
+    const loudness = [['LUFS-I', 62, '−9.4'], ['LUFS-S', 58, '−8.8'], ['True peak', 88, '−0.6'], ['Range', 34, '6.2 LU']]
+      .map(([name, pct, val]) => ({ name, val,
+        barStyle: { width: pct + '%', height: '100%', background: pct > 80 ? '#ffd166' : '#63d18a' } }));
+
+    const parked = [['Serum 2 — Keys', 'VST3', '#4cc2ff'], ['Pro-Q 4 — Master', 'VST3', '#4cc2ff'], ['Surge XT — Pads', 'CLAP', '#63d18a'], ['Vital — 808', 'CLAP', '#63d18a']]
+      .map(([name, fmt, dot]) => ({ name, fmt,
+        style: { height: '30px', display: 'flex', alignItems: 'center', gap: '9px', padding: '0 9px', marginBottom: '5px',
+          borderRadius: '5px', background: '#1c2027', border: '1px solid #2b3038' },
+        dotStyle: { width: '6px', height: '6px', borderRadius: '50%', background: dot, flex: 'none' } }));
+
+    const stepRuler = Array.from({ length: 16 }, (_, i) => ({
+      label: i % 4 === 0 ? String(i / 4 + 1) : '·',
+      style: { width: '34px', textAlign: 'center', font: "400 9.5px 'IBM Plex Mono'", color: i % 4 === 0 ? '#8b919c' : '#3d434b' }
+    }));
+
+    const rackDefs = [
+      ['Kick 909', 'kick_909_hard.wav', 'WAV', [0,4,8,12], 0, 'BUS 1', 74],
+      ['Clap', 'clap_vinyl.wav', 'WAV', [4,12], 1, 'BUS 1', 52],
+      ['Hat closed', 'hh_cl_02.wav', 'WAV', [2,6,10,14], 2, 'BUS 1', 38],
+      ['Hat open', 'hh_op_01.wav', 'WAV', [7,15], 2, 'BUS 1', 26],
+      ['Rim', 'rim_tight.wav', 'WAV', [3,11], 2, 'BUS 1', 20],
+      ['808', 'Vital', 'CLAP', [0,6,10], 3, 'MIX 4', 66],
+      ['Sub layer', 'int. sine', 'INT', [0,10], 3, 'MIX 4', 48],
+      ['Keys', 'Serum 2', 'VST3', [0,8], 4, 'MIX 5', 44],
+      ['Pad bed', 'Surge XT', 'CLAP', [0], 5, 'MIX 6', 30],
+      ['Vocal chop', 'vox_A.wav', 'WAV', [2,9], 6, 'MIX 7', 55]
+    ];
+    const rackRows = rackDefs.map(([name, sub, kind, on, ci, bus, meter], i) => ({
+      name, sub, kind, bus,
+      rowStyle: { height: '50px', display: 'flex', alignItems: 'center', borderBottom: '1px solid #191c21',
+        background: i === 0 ? '#191d22' : 'transparent' },
+      chipStyle: { width: '4px', height: '30px', borderRadius: '2px', background: C[ci], flex: 'none' },
+      knobStyle: ring(150 + i * 9, '#4cc2ff', 26),
+      knob2Style: ring(200 + i * 5, '#ff6a3d', 26),
+      busStyle: { font: "400 9px 'IBM Plex Mono'", color: '#8b919c', padding: '3px 6px', borderRadius: '3px',
+        background: '#1c2027', border: '1px solid #2b3038', flex: 'none' },
+      steps: steps16(on).map((s) => ({ ...s, bigStyle: { ...s.bigStyle, background: on.includes(0) && false ? '' : s.bigStyle.background,
+        border: s.bigStyle.border } })),
+      meterStyle: this.meterFill(meter, ms)
+    }));
+    // recolor rack steps per channel hue
+    rackRows.forEach((r, i) => {
+      const c = C[rackDefs[i][4]];
+      r.steps = r.steps.map((s, si) => {
+        const active = rackDefs[i][3].includes(si), accent = si % 4 === 0;
+        return { style: s.style, bigStyle: { width: '34px', height: '30px', borderRadius: '4px', flex: 'none', boxSizing: 'border-box',
+          background: active ? c : accent ? '#22262d' : '#1a1d22',
+          border: '1px solid ' + (active ? c : '#262a31'),
+          boxShadow: active ? '0 0 10px ' + c + '44' : 'none' } };
+      });
+    });
+
+    const stepParams = [['VELOCITY', 190, '104'], ['PAN', 140, 'C'], ['PITCH', 120, '+0 st'], ['SHIFT', 100, '+12 tk'], ['RELEASE', 210, '38 %'], ['CUTOFF', 165, '4.2 kHz']]
+      .map(([name, d, val]) => ({ name, val, ringStyle: ring(d, '#4cc2ff', 34) }));
+
+    const routing = [['MIXER', 'Insert 1 — Kick', 'BUS 1'], ['OUTPUT', 'Drum bus', 'PDC 0'], ['MIDI IN', 'Push 3 · ch 1', 'LIVE'], ['SIDECHAIN', '→ 808 comp', 'SEND']]
+      .map(([name, val, tag]) => ({ name, val, tag,
+        tagStyle: { font: "400 8.5px 'IBM Plex Mono'", color: '#4cc2ff', padding: '3px 6px', borderRadius: '3px', background: '#16232b' } }));
+
+    const recents = [
+      ['nightdrive_v7', '18 tracks · 4:12', 'Serum 2 · Pro-Q 4 · Vital', '2 h ago', 0],
+      ['bounce_test', '4 tracks · 0:48', 'Surge XT', 'yesterday', 4],
+      ['client_rework_02', '31 tracks · 3:36', '11 plugins · 1 missing', '3 days ago', 6],
+      ['sampler_sketches', '9 tracks · 2:04', 'internal only', 'last week', 2]
+    ].map(([name, meta, plugins, when, ci]) => ({ name, meta, plugins, when,
+      chipStyle: { width: '3px', height: '22px', borderRadius: '2px', background: C[ci], flex: 'none' } }));
+
+    const startEngine = [['Backend', 'ASIO', '#e8eaee'], ['Thread policy', 'MMCSS Pro Audio', '#63d18a'], ['Plugin hosts', '0 running', '#8b919c'], ['Last session', '0 xruns / 42 min', '#63d18a']]
+      .map(([name, val, col]) => ({ name, val, valStyle: { font: "400 10.5px 'IBM Plex Mono'", color: col } }));
+
+    const palDefs = [
+      ['Hue wheel', 'Eight hues, fixed lightness. Clips read as one family; colour = identity only.', 'default', HUE],
+      ['Duotone', 'Warm = rhythm, cool = melodic, grey = utility. Fewer decisions, stronger structure.', 'opinionated', DUO],
+      ['Pastel', 'Low chroma on dark. Calmest at 32 tracks, weakest at a glance.', 'quiet', PASTEL]
+    ];
+    const palettes = palDefs.map(([name, note, badge, arr]) => ({
+      name, note, badge,
+      wrapStyle: { display: 'flex', gap: '18px', padding: '16px', borderRadius: '8px', background: '#16191e',
+        border: '1px solid ' + (name === (this.props.paletteMode ?? 'Hue wheel') ? '#3a4048' : '#23272f') },
+      badgeStyle: { display: 'inline-block', marginTop: '9px', font: "400 8.5px 'IBM Plex Mono'", letterSpacing: '.08em',
+        color: '#8b919c', padding: '3px 7px', borderRadius: '3px', background: '#1c2027', border: '1px solid #2b3038' },
+      swatches: arr.map((c) => ({ style: { flex: 1, height: '26px', borderRadius: '4px', background: c } })),
+      clips: [['P01 kick', 0, 100], ['P02 808', 3, 72], ['vox_A.wav', 6, 54], ['P06 pad', 5, 86]].map(([label, ci, w]) => ({
+        label,
+        style: { height: '20px', width: w + '%', borderRadius: '3px', display: 'flex', alignItems: 'center', padding: '0 6px',
+          background: arr[ci] + '26', border: '1px solid ' + arr[ci] + 'aa', borderLeft: '3px solid ' + arr[ci],
+          font: "500 9px 'IBM Plex Mono'", color: arr[ci] }
+      })),
+      meters: [74, 52, 38, 66, 30].map((v) => ({ style: this.meterFill(v, ms) }))
+    }));
+
+    return { tracks, laneStyle, ruler, loopStyle, browser, knobs, inserts, channels, engine, rail, keys, notes,
+      palette, stripsSlim, strips, spectrumStyle, loudness, parked, stepRuler, rackRows, stepParams, routing,
+      recents, startEngine, palettes, showPluginWindow: this.props.showPluginWindow ?? true };
+  }
+}
+</script>
+</body>
+</html>
