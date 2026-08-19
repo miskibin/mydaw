@@ -42,7 +42,8 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
 | `plugins/debug-tap` | RT-safe capture of the output bus, plus WAV / annotated PNG / statistics — so the engine can be *inspected* without ears |
 | `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
-| `plugins/instruments` | The built-in instruments: a synthesised drum kit and a polyBLEP poly synth, driven by note events. No assets, bit-deterministic, zero-alloc |
+| `plugins/instruments` | The built-in instruments: four synthesised drums (one per channel), a legacy drum kit and a polyBLEP poly synth, driven by note events. No assets, bit-deterministic, zero-alloc |
+| `plugins/sequencer` | Patterns, the playlist and the scheduler: a set of named patterns, an arrangement of clips, and PAT/SONG playback that is drift-free by construction. See [`the spec`](docs/superpowers/specs/2026-08-19-engine-patterns-playlist.md) |
 | `plugins/sampler` | The sampled instrument: a manifest-driven, 32-voice sample player, plus the checksummed fetcher that installs its content. See [Sample content](#sample-content) |
 | `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
 | `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
