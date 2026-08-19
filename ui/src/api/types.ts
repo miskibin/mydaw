@@ -349,6 +349,30 @@ export interface SequencerState {
 }
 
 /**
+ * One plugin a project asked for and did not get. Mirrors `MissingPluginDto` in
+ * `app/src/project.rs`.
+ *
+ * A report rather than a loss: the reference stays in the project and is written
+ * back out on the next save, so installing the plugin and reopening puts the
+ * strip back together. That is why a load reports this instead of quietly
+ * substituting a built-in, which would be an unasked-for edit to somebody's
+ * song.
+ */
+export interface MissingPlugin {
+  /**
+   * What the project called it -- the display name from the scan that placed
+   * it. A user recognises `Diva`; nobody recognises a path.
+   */
+  name: string;
+  /** `clap` or `vst3`, so a warning can say which format is absent. */
+  format: string;
+  /** Where the project expected to find it. Often the whole explanation. */
+  path: string;
+  /** Why it would not load, in the loader's own words. */
+  reason: string;
+}
+
+/**
  * One mixer strip. Mirrors `TrackDto` in `app/src/project.rs`.
  *
  * `index` is the track's position *and* its note channel: a sequencer row on
@@ -388,6 +412,11 @@ export interface TrackDto {
    * At most one of `clap` and `vst3` is ever set: a track has one source.
    */
   vst3: Vst3Slot | null;
+  /**
+   * Set when the project asked for a plugin on this track and it could not be
+   * loaded. The track keeps everything else it had and renders silence.
+   */
+  missing: MissingPlugin | null;
 }
 
 /** The master strip. Mirrors `MasterDto` in `app/src/project.rs`. */
@@ -402,6 +431,8 @@ export interface MasterDto {
    * Placing either format evicts the other.
    */
   vst3: Vst3Slot | null;
+  /** The master effect the project asked for and did not get. */
+  missing: MissingPlugin | null;
 }
 
 /**
@@ -421,6 +452,44 @@ export interface MixerState {
   /** Fader bounds in dB, so the UI keeps no copy of the scale. */
   minGainDb: number;
   maxGainDb: number;
+}
+
+/**
+ * Which project is open. Mirrors `ProjectInfoDto` in
+ * `app/src/project_bridge.rs`.
+ *
+ * Every project command answers with this, not just `getProjectInfo`, so the
+ * window title and the status bar are written from the reply to the command
+ * that changed them rather than from a second question asked afterwards -- a
+ * question whose answer could arrive out of order.
+ */
+export interface ProjectInfo {
+  /**
+   * Absolute path of the open project, `null` for one that has never been
+   * saved.
+   *
+   * Read, never acted on: whether a plain Save needs a dialog is decided in
+   * Rust, where the dialog is. This is here so the status bar can say which
+   * file two projects of the same name are.
+   */
+  path: string | null;
+  /** The file name without its extension, or `Untitled`. */
+  name: string;
+  /**
+   * How many of the project's plugins could not be loaded. Zero in every
+   * ordinary session; the status bar warns when it is not, and the strips say
+   * which ones.
+   */
+  missingPlugins: number;
+  /**
+   * Whatever was worth saying that was not an outright failure -- a plugin that
+   * would not load, a state blob a plugin refused, a load with no audio device
+   * to attach anything to.
+   *
+   * Sentences rather than codes, because Rust writes them for the status bar
+   * and the UI is not meant to interpret them.
+   */
+  warnings: string[];
 }
 
 /** Unsubscribe handle returned by streaming APIs. */

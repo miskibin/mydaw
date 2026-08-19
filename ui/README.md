@@ -81,7 +81,16 @@ The UI expects these Tauri commands (`src/api/backend.ts` is the only caller):
 | `get_pattern` | returns `SequencerState { bpm, sampleRate, pattern }` — the step grid and the tempo |
 | `set_pattern` | takes `{ pattern }` (a whole `PatternDto`), returns the refreshed `SequencerState` |
 | `set_bpm` | takes `{ bpm }` (`20..=999`), returns the stored tempo; rejects rather than clamping |
+| `get_project_info` | returns `ProjectInfo { path, name, missingPlugins, warnings }` — which project is open, for the window title and the status bar |
+| `new_project` | no args; throws the session away and returns the fresh `ProjectInfo` |
+| `open_project` | takes `{ path }` (`null` shows the native dialog); returns `ProjectInfo`, or **`null` if the user cancelled** — not an error |
+| `save_project` | takes `{ saveAs, path }`; with `saveAs: false` and a project already on disk it overwrites with no dialog; `null` means cancelled |
 | `subscribe_meters` | takes `{ channel }` (Tauri v2 `Channel<MeterFrame>`), streams at 30 Hz |
+
+The file dialogs are Rust's, not the webview's: `@tauri-apps/api`'s dialog plugin only exists
+inside the app, so a panel that raised one directly would be a blank screen in a browser and the
+mock would have nothing to stand in for. Every project command takes an optional explicit `path`
+for the caller that already knows one, which is what keeps the dialog a convenience.
 
 Plus the dev-only bench surface (`src/dev/ipcBench.ts` is the only caller): `bench_ping`,
 `bench_ping_async`, `bench_plan`, `bench_sync`, `bench_stream`, `bench_meter_stamp`,

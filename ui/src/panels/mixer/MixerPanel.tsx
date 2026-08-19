@@ -9,7 +9,13 @@ import {
   type JSX,
 } from 'solid-js';
 import { useAppState } from '../../state';
-import type { ClapSlot, ClapTarget, MasterDto, TrackDto } from '../../api/types';
+import type {
+  ClapSlot,
+  ClapTarget,
+  MasterDto,
+  MissingPlugin,
+  TrackDto,
+} from '../../api/types';
 import type { PanelProps } from '../types';
 import { faderFraction, faderToDb, formatDb, panLabel, peakFraction } from './scale';
 
@@ -215,6 +221,10 @@ function TrackStrip(props: { track: Accessor<TrackDto> }): JSX.Element {
         </optgroup>
       </select>
 
+      <Show when={track().missing}>
+        {(missing) => <MissingPluginBadge missing={missing} />}
+      </Show>
+
       <Show when={track().clap}>
         {(clap) => (
           <ClapEditorButton slot={clap} target={{ slot: 'track', index: track().index }} />
@@ -366,6 +376,10 @@ function MasterStrip(props: { master: MasterDto }): JSX.Element {
         </optgroup>
       </select>
 
+      <Show when={props.master.missing}>
+        {(missing) => <MissingPluginBadge missing={missing} />}
+      </Show>
+
       <Show when={props.master.clap}>
         {(clap) => <ClapEditorButton slot={clap} target={{ slot: 'master' }} />}
       </Show>
@@ -393,6 +407,37 @@ function MasterStrip(props: { master: MasterDto }): JSX.Element {
       <span class="strip__readout strip__readout--pan">stereo</span>
       <div class="strip__buttons strip__buttons--master" />
     </div>
+  );
+}
+
+/**
+ * The hole a plugin left when the project asked for it and it would not load.
+ *
+ * On the strip rather than in a dialog at load time, for three reasons: a
+ * project can be missing several plugins and a dialog would have to list them
+ * out of context, the strip is where the question "why is this track silent"
+ * gets asked, and the answer stays visible for as long as it is true. The status
+ * bar's count is what says to come and look.
+ *
+ * Not a button. There is nothing to click yet -- the fix is to install the
+ * plugin and reopen the project -- and a control that did nothing would be worse
+ * than a label that says so. The track keeps everything else it had, and the
+ * reference is still in the project file, so this is a repair notice rather than
+ * an obituary.
+ *
+ * The strip is 78px wide, so the badge shows the name and ellipsises; the format,
+ * the loader's reason and the path the project expected all ride in the `title`,
+ * which is where the sentence that actually explains it belongs.
+ */
+function MissingPluginBadge(props: { missing: Accessor<MissingPlugin> }): JSX.Element {
+  const missing = props.missing;
+  return (
+    <span
+      class="strip__missing"
+      title={`${missing().name} (${missing().format}) could not be loaded: ${missing().reason}\nExpected at ${missing().path}`}
+    >
+      ⚠ {missing().name}
+    </span>
   );
 }
 

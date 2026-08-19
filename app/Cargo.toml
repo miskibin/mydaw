@@ -36,6 +36,10 @@ mydaw-plugin-windows.workspace = true
 
 # --- shell ---
 tauri = { version = "2", features = [] }
+# Native Open/Save dialogs for the project file. Driven from Rust (see the
+# project commands) rather than from the webview, so the UI's mock backend keeps
+# working in a plain browser.
+tauri-plugin-dialog = "2"
 # The source slot swaps the head of the chain across the RT wall, the same way
 # `rt-core` swaps a whole graph. `basedrop` comes via `mydaw-rt-core`'s re-export
 # so the version stays pinned to the engine's; `rtrb` has no such re-export.

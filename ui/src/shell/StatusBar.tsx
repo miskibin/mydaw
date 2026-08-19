@@ -42,6 +42,36 @@ export function StatusBar(): JSX.Element {
         </span>
       </Show>
 
+      {/*
+        Which project this is. The window title says it too, but a maximised DAW
+        is mostly a window whose title bar you cannot see, and this line always
+        can be. The path is the tooltip rather than the label: it is what tells
+        two projects of the same name apart, and it is far too long for a bar
+        that also has to fit the piano readout.
+      */}
+      <span
+        class="statusbar__item"
+        title={app.project().path ?? 'This project has never been saved'}
+      >
+        project: <strong>{app.project().name}</strong>
+      </span>
+
+      {/*
+        A count here and the names on the strips: this is the line that says
+        *something* is wrong with the project you just opened, and the mixer is
+        where you find out what. Nothing was lost -- the references are still in
+        the file -- so this is a warning rather than an error.
+      */}
+      <Show when={app.project().missingPlugins > 0}>
+        <span
+          class="statusbar__item statusbar__item--warn"
+          title="The mixer strips say which. Install them and reopen the project to get them back."
+        >
+          {app.project().missingPlugins}{' '}
+          {app.project().missingPlugins === 1 ? 'plugin' : 'plugins'} missing
+        </span>
+      </Show>
+
       <span class="statusbar__spacer" />
 
       <Show when={app.kernelError()}>

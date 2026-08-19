@@ -62,6 +62,9 @@ pub mod insert;
 pub mod ipc_bench;
 mod meters;
 pub mod project;
+pub mod project_bridge;
+pub mod project_file;
+pub mod project_host;
 pub mod source;
 mod state;
 pub mod tracks;
@@ -91,8 +94,20 @@ pub use ipc_bench::{
 };
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
 pub use project::{
-    check_gain_db, check_pan, mixer_state_dto, MasterDto, MixerStateDto, Project, TrackDef,
-    TrackDto, TrackError,
+    check_gain_db, check_pan, mixer_state_dto, MasterDto, MissingPluginDto, MissingPlugins,
+    MixerStateDto, Project, TrackDef, TrackDto, TrackError,
+};
+pub use project_bridge::{
+    ProjectAnswer, ProjectBridge, ProjectCommand, ProjectInfoDto, PROJECT_TIMEOUT,
+};
+pub use project_file::{
+    parse_project, project_name, read_project_file, temp_path_for, write_project_file, ClapEntry,
+    EffectEntry, EffectRef, ProjectFile, ProjectFileError, SourceEntry, TrackEntry, Vst3Entry,
+    FORMAT_VERSION, PROJECT_EXTENSION, UNTITLED,
+};
+pub use project_host::{
+    attach, capture as capture_project, default_project_file, Hosts, LoadReport, ProjectHost,
+    Session,
 };
 pub use source::{
     check_bundle_path, ClapSourceRef, SilentNode, Source, SourceDto, SourceError, SourceHandle,
@@ -196,6 +211,13 @@ pub fn run() -> ExitCode {
     let clap_bridge = std::sync::Arc::clone(state.clap_bridge());
     let vst3_bridge = std::sync::Arc::clone(state.vst3_bridge());
     let track_host = std::sync::Arc::clone(state.tracks());
+    // The project path: saving asks every plugin for its state and loading
+    // destroys and recreates all of them, so it is served from the run loop too
+    // -- and from *here* rather than from either plugin host, because it is the
+    // only place that holds both. See `crate::project_bridge`.
+    let project_bridge = std::sync::Arc::clone(state.project_bridge());
+    let sequencer = std::sync::Arc::clone(state.sequencer());
+    let mut project_host = ProjectHost::new();
     // The window service belongs to this thread -- the one tao's loop will run on
     // -- which is exactly what makes it legal to open plugin windows from the run
     // callback below.
@@ -214,8 +236,13 @@ pub fn run() -> ExitCode {
     vst3_host.publish(&track_host, vst3_bridge.board());
     clap_bridge.set_served(true);
     vst3_bridge.set_served(true);
+    project_bridge.set_served(true);
 
     let app = tauri::Builder::default()
+        // Native Open/Save dialogs. Driven from Rust rather than from the
+        // webview so the UI's mock backend keeps working in a plain browser --
+        // see the project commands in `crate::commands`.
+        .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::get_ui_snapshot,
@@ -259,6 +286,12 @@ pub fn run() -> ExitCode {
             commands::get_pattern,
             commands::set_pattern,
             commands::set_bpm,
+            // The project file: New / Open / Save / Save As, plus the name and
+            // the missing-plugin warnings the title and status bars draw.
+            commands::get_project_info,
+            commands::new_project,
+            commands::open_project,
+            commands::save_project,
             commands::debug_capture,
             commands::subscribe_meters,
             // Spike 4's benchmark surface. Registered unconditionally (an
@@ -280,6 +313,7 @@ pub fn run() -> ExitCode {
             eprintln!("MYDAW: could not create the application window: {err}");
             clap_bridge.set_served(false);
             vst3_bridge.set_served(false);
+            project_bridge.set_served(false);
             meters.shutdown();
             audio.stop();
             vst3_host.shutdown();
@@ -300,6 +334,10 @@ pub fn run() -> ExitCode {
         }));
         let handle = app.handle().clone();
         vst3_bridge.set_waker(Box::new(move || {
+            let _ = handle.run_on_main_thread(|| {});
+        }));
+        let handle = app.handle().clone();
+        project_bridge.set_waker(Box::new(move || {
             let _ = handle.run_on_main_thread(|| {});
         }));
     }
@@ -332,6 +370,26 @@ pub fn run() -> ExitCode {
             }
 
             vst3_host.tick(&track_host, &audio, &vst3_bridge, &mut clap_host);
+
+            // Last, and after both plugin hosts have had their turn: a project
+            // load destroys and recreates everything either of them is holding,
+            // so it must not run in the middle of a half-served mailbox. It
+            // republishes both boards itself, because it moved everything on
+            // them and neither host's own tick would have noticed.
+            project_host.tick(
+                &project_host::Session {
+                    tracks: &track_host,
+                    audio: &audio,
+                    sequencer: &sequencer,
+                },
+                &project_bridge,
+                &mut project_host::Hosts {
+                    clap: &mut clap_host,
+                    clap_board: clap_bridge.board(),
+                    vst3: &mut vst3_host,
+                    vst3_board: vst3_bridge.board(),
+                },
+            );
         }
         tauri::RunEvent::Exit => {
             log::info!("shutting down");
@@ -339,6 +397,7 @@ pub fn run() -> ExitCode {
             // time out against a loop that will never turn again.
             clap_bridge.set_served(false);
             vst3_bridge.set_served(false);
+            project_bridge.set_served(false);
             meters.shutdown();
             // Closing the stream retires the graph, which is what eventually
             // drops the CLAP nodes and sends their processors back here. Only

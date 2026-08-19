@@ -424,8 +424,14 @@ impl ClapHost {
         Ok(())
     }
 
-    /// Empty the master insert.
-    fn clear_master_effect(&mut self, tracks: &TrackHost) -> Result<(), String> {
+    /// Empty the master insert and destroy the instance that was in it.
+    ///
+    /// Public because a project load has to strip the session down to nothing
+    /// before it builds the new one -- see [`crate::project_host`].
+    ///
+    /// # Errors
+    /// A sentence, when there is no stream to empty the slot in.
+    pub fn clear_master_effect(&mut self, tracks: &TrackHost) -> Result<(), String> {
         // Emptying the slot first is what makes the destroy below able to
         // collect the node: the audio thread has to drop it before the
         // collector can.

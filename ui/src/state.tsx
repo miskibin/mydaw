@@ -1,5 +1,6 @@
 import {
   createContext,
+  createEffect,
   createSignal,
   onCleanup,
   useContext,
@@ -15,6 +16,7 @@ import type {
   PanelManifestDto,
   PatternDto,
   PluginStatusDto,
+  ProjectInfo,
   SourceDto,
 } from './api/types';
 import {
@@ -87,9 +89,28 @@ export interface AppState {
   readonly bpm: Accessor<number>;
   /** The project's tracks and master strip, or `undefined` before the first fetch. */
   readonly mixer: Accessor<MixerState | undefined>;
+  /**
+   * Which project is open: the window title, the status bar, and the answer to
+   * whether Save has anywhere to write.
+   */
+  readonly project: Accessor<ProjectInfo>;
   play(): void;
   stop(): void;
   refresh(): void;
+  /**
+   * The four project commands.
+   *
+   * Each replaces or writes the whole session, so each is a `void` action that
+   * reports through `kernelError` rather than something to await: there is
+   * nothing for a caller to do with the answer that is not already done here.
+   * A cancelled dialog changes nothing and says nothing.
+   */
+  newProject(): void;
+  openProject(): void;
+  /** Overwrite the open project, or ask where to put one that has no path yet. */
+  saveProject(): void;
+  /** Always ask where to write, even for a project already on disk. */
+  saveProjectAs(): void;
   /**
    * Put `source` at the head of `track`, whichever kind of source it is.
    *
@@ -161,6 +182,20 @@ const PATTERN_PUSH_DEBOUNCE_MS = 50;
  */
 const IPC_BENCH_AUTO_PANEL = 'ipc-bench-auto';
 
+/**
+ * What the title and the status bar say before the first `getProjectInfo`
+ * answers. Mirrors `ProjectInfoDto::untitled` in `app/src/project_bridge.rs`: a
+ * session nobody has saved looks exactly like a session nobody has asked about
+ * yet, so the window title never flickers through a placeholder on the way to
+ * the truth.
+ */
+const UNTITLED_PROJECT: ProjectInfo = {
+  path: null,
+  name: 'Untitled',
+  missingPlugins: 0,
+  warnings: [],
+};
+
 function createAppState(): AppState {
   const backend = getBackend();
   const meters = new MeterBus();
@@ -179,6 +214,7 @@ function createAppState(): AppState {
   const [pattern, setPattern] = createSignal<PatternDto | undefined>();
   const [bpm, setBpmSignal] = createSignal(130);
   const [mixer, setMixer] = createSignal<MixerState | undefined>();
+  const [project, setProject] = createSignal<ProjectInfo>(UNTITLED_PROJECT);
 
   const currentSource = () => sources().find((source) => source.selected);
   const drumPadsActive = () => currentSource()?.id === 'drum-kit';
@@ -204,6 +240,7 @@ function createAppState(): AppState {
     void backend.getMasterEffects().then(setMasterEffects).catch(reportError);
     void backend.getTracks().then(setMixer).catch(reportError);
     void backend.getPattern().then(adoptSequencerState).catch(reportError);
+    void backend.getProjectInfo().then(setProject).catch(reportError);
     backend
       .getUiSnapshot()
       .then((snapshot) => {
@@ -301,7 +338,37 @@ function createAppState(): AppState {
     });
   };
 
+  /**
+   * The project accelerators: Ctrl+N, Ctrl+O, Ctrl+S and Ctrl+Shift+S.
+   *
+   * Deliberately ahead of `isPianoEvent`, and not filtered by it: that guard's
+   * whole job is to keep Ctrl chords *out* of the piano, so asking it about one
+   * would always answer no. For the same reason these fire while a field has
+   * focus -- Ctrl+S in the tempo box is Save, in every editor anybody has used.
+   *
+   * `event.code`, like the piano, so a shortcut stays under the same finger on
+   * a French or Dvorak layout. `preventDefault` unconditionally, because these
+   * are the webview's own Save and Open otherwise, and returning true is how
+   * the caller knows the event was spoken for.
+   */
+  const handleProjectShortcut = (event: KeyboardEvent): boolean => {
+    if (!event.ctrlKey || event.altKey || event.metaKey) return false;
+    let run: () => void;
+    if (event.code === 'KeyS') run = event.shiftKey ? saveProjectAs : saveProject;
+    // Save As is the only shifted one, so any other Shift+chord is somebody
+    // else's -- Ctrl+Shift+N is the browser's new window, not a new project.
+    else if (event.shiftKey) return false;
+    else if (event.code === 'KeyO') run = openProject;
+    else if (event.code === 'KeyN') run = newProject;
+    else return false;
+    event.preventDefault();
+    // Held down, this repeats at the OS key-repeat rate. One press is one save.
+    if (!event.repeat) run();
+    return true;
+  };
+
   const handleKeyDown = (event: KeyboardEvent) => {
+    if (handleProjectShortcut(event)) return;
     // Auto-repeat would retrigger the note dozens of times a second.
     if (event.repeat || !isPianoEvent(event)) return;
 
@@ -375,6 +442,56 @@ function createAppState(): AppState {
       setKernelError(err instanceof Error ? err.message : String(err));
     });
   };
+
+  // --- the project --------------------------------------------------------
+
+  /**
+   * Run one project command and adopt what it answers with.
+   *
+   * Held notes are released first, for the same reason `mixerCommand` does it
+   * and rather more urgently: the instrument that received the note-on is about
+   * to be destroyed, and a note-off sent after that reaches nothing at all.
+   *
+   * A `null` answer is the user closing the dialog. Nothing changed, so nothing
+   * is adopted and nothing is reported -- a cancelled Save that left a line in
+   * the status bar would read as a failed one.
+   *
+   * Success re-runs the whole `refresh()` rather than any single fetch, because
+   * a load replaces the mixer, the sources, the pattern and the tempo in one
+   * go. There is no partial update that would be right, and refreshing the one
+   * thing the caller happened to think of is how a stale strip survives a load.
+   */
+  const projectCommand = (run: (api: Backend) => Promise<ProjectInfo | null>) => {
+    releaseAll();
+    void run(backend)
+      .then((info) => {
+        if (!info) return;
+        setProject(info);
+        setKernelError(null);
+        refresh();
+      })
+      .catch(reportError);
+  };
+
+  const newProject = () => projectCommand((api) => api.newProject());
+  const openProject = () => projectCommand((api) => api.openProject());
+  const saveProject = () => projectCommand((api) => api.saveProject(false));
+  const saveProjectAs = () => projectCommand((api) => api.saveProject(true));
+
+  /**
+   * The window title is the project's name.
+   *
+   * Worth an effect of its own because the title is the one piece of UI that is
+   * not this app's to draw: it is what the taskbar and the alt-tab list show,
+   * and it is how somebody with two MYDAW windows open tells them apart.
+   *
+   * No dirty marker. Nothing tracks unsaved edits yet, and an asterisk that
+   * never appeared would be a promise the app does not keep -- worse than not
+   * offering one.
+   */
+  createEffect(() => {
+    if (typeof document !== 'undefined') document.title = `MYDAW — ${project().name}`;
+  });
 
   /**
    * Ask for one plugin editor to be opened or closed.
@@ -523,9 +640,14 @@ function createAppState(): AppState {
     pattern,
     bpm,
     mixer,
+    project,
     play,
     stop,
     refresh,
+    newProject,
+    openProject,
+    saveProject,
+    saveProjectAs,
     placeSource,
     toggleClapGui,
     mixerCommand,

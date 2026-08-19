@@ -5,6 +5,8 @@
 //! (managed state in, `Result<_, String>` out -- `AudioIoError` is not
 //! `Serialize`, and the UI shows the message as-is in the status bar).
 
+use std::path::PathBuf;
+
 use mydaw_ipc_bridge::UiSnapshot;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
@@ -18,6 +20,8 @@ use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
 use crate::project::MixerStateDto;
+use crate::project_bridge::ProjectInfoDto;
+use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
 use crate::source::{Source, SourceDto};
 use crate::state::AppState;
 use crate::vst3_bridge::Vst3GuiStatusDto;
@@ -554,6 +558,139 @@ pub async fn load_vst3_state(
         .load_vst3_state(target, bytes)
         .map_err(|err| err.to_string())
 }
+
+// ---------------------------------------------------------------------------
+// The project file
+// ---------------------------------------------------------------------------
+//
+// Four commands and one query, and the interesting decision is that **the file
+// dialog lives here rather than in the webview**. The UI's backend abstraction
+// exists so that every panel can run against a `MockBackend` in a plain browser
+// (see `ui/src/api/backend.ts`); a panel that reached for `@tauri-apps/api`
+// directly would work in the app and be a blank screen outside it. So the
+// webview asks for "open a project" and Rust decides what that means, which also
+// keeps "which extension is ours" in exactly one place.
+//
+// Each command takes an optional explicit `path`. With one, no dialog is shown
+// at all -- which is what a headless run, a test and one day a command line
+// need, and what makes the dialog a *convenience* rather than the only door.
+
+/// Which project is open, and what went wrong opening it.
+///
+/// Called at startup and after every project command, so the window title and
+/// the status bar can show the name.
+#[tauri::command]
+pub fn get_project_info(state: State<'_, AppState>) -> ProjectInfoDto {
+    state.project_info()
+}
+
+/// Reset the session to a fresh default project: Drums and Synth, an empty
+/// pattern, 130 bpm.
+///
+/// Everything is replaced -- every plugin instance is destroyed and the graph is
+/// rebuilt -- so this waits for the main thread, hence `async`.
+#[tauri::command]
+pub async fn new_project(state: State<'_, AppState>) -> Result<ProjectInfoDto, String> {
+    state.new_project().map_err(|err| err.to_string())
+}
+
+/// Open a `.mydaw` project, asking for one if `path` is not given.
+///
+/// Returns `null` when the user cancelled the dialog, which is not an error and
+/// must not put anything in the status bar.
+#[tauri::command]
+pub async fn open_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<Option<ProjectInfoDto>, String> {
+    let Some(path) = path.map(PathBuf::from).or_else(|| pick_project(&app)) else {
+        return Ok(None);
+    };
+    state
+        .open_project(path)
+        .map(Some)
+        .map_err(|err| err.to_string())
+}
+
+/// Save the session.
+///
+/// With `saveAs` false and a project already on disk, this overwrites it with no
+/// dialog -- the Ctrl+S case. Otherwise a save dialog is shown, and `null` comes
+/// back if the user cancelled.
+#[tauri::command]
+pub async fn save_project(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    save_as: bool,
+    path: Option<String>,
+) -> Result<Option<ProjectInfoDto>, String> {
+    let chosen = match path.map(PathBuf::from) {
+        Some(explicit) => Some(explicit),
+        None if !save_as => state
+            .project_path()
+            .or_else(|| pick_save_path(&app, &state)),
+        None => pick_save_path(&app, &state),
+    };
+    let Some(path) = chosen else {
+        return Ok(None);
+    };
+    state
+        .save_project(path)
+        .map(Some)
+        .map_err(|err| err.to_string())
+}
+
+/// The native "open a project" dialog. `None` when the user cancelled.
+///
+/// Blocking, and safe here because a `#[tauri::command] async fn` runs on
+/// Tauri's worker pool -- the dialog's own modal loop needs the main thread, and
+/// blocking that thread waiting for it would be a deadlock.
+fn pick_project(app: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .add_filter(PROJECT_FILTER, &[PROJECT_EXTENSION])
+        .set_title("Open project")
+        .blocking_pick_file()
+        .and_then(|file| file.into_path().ok())
+}
+
+/// The native "save a project as" dialog, opened on the current project's
+/// folder and name where there is one.
+fn pick_save_path(app: &tauri::AppHandle, state: &AppState) -> Option<PathBuf> {
+    use tauri_plugin_dialog::DialogExt;
+    let current = state.project_path();
+    let mut dialog = app
+        .dialog()
+        .file()
+        .add_filter(PROJECT_FILTER, &[PROJECT_EXTENSION])
+        .set_title("Save project as");
+    dialog = match &current {
+        Some(path) => {
+            if let Some(parent) = path.parent() {
+                dialog = dialog.set_directory(parent);
+            }
+            dialog.set_file_name(
+                path.file_name()
+                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+            )
+        }
+        None => dialog.set_file_name(format!("{UNTITLED}.{PROJECT_EXTENSION}")),
+    };
+    dialog.blocking_save_file().and_then(|file| {
+        let path = file.into_path().ok()?;
+        // A user who typed a bare name gets our extension, so a project cannot
+        // end up as a file the Open dialog then filters out.
+        Some(match path.extension() {
+            Some(_) => path,
+            None => path.with_extension(PROJECT_EXTENSION),
+        })
+    })
+}
+
+/// The label on the file dialogs' type filter.
+const PROJECT_FILTER: &str = "MYDAW project";
 
 /// Stream throttled meter frames into `channel` until the webview drops it.
 ///

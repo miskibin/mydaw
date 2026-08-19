@@ -6,6 +6,7 @@ import type {
   MeterFrame,
   MixerState,
   PatternDto,
+  ProjectInfo,
   SequencerState,
   SourceDto,
   TrackDto,
@@ -193,6 +194,47 @@ export interface Backend {
    * is reported instead of silently rounded.
    */
   setBpm(bpm: number): Promise<number>;
+
+  // --- the project ---------------------------------------------------------
+  //
+  // What crosses this boundary is an *intention* -- open a project -- rather
+  // than a path, because the file dialog is Rust's and not the webview's.
+  //
+  // That is the whole reason these four commands look the way they do. The
+  // dialog plugin only exists inside the app, so a panel that reached for
+  // `@tauri-apps/api` to raise one would be a blank screen in a plain browser
+  // and the mock would have nothing to stand in for -- which is exactly the
+  // situation this interface exists to prevent. Keeping the dialog behind the
+  // command also leaves "which extension is ours" with one spelling instead of
+  // two, and gives every command an optional explicit `path` for the caller
+  // that already knows: a test, a headless run, and one day a command line.
+  //
+  // The cost is one shape to remember: a command that shows a dialog resolves
+  // with `null` when the user closed it. That is an answer, not a failure --
+  // nothing changed, and nothing belongs in the status bar.
+
+  /** Which project is open, for the window title and the status bar. */
+  getProjectInfo(): Promise<ProjectInfo>;
+  /** Throw the session away and start again on a fresh default project. */
+  newProject(): Promise<ProjectInfo>;
+  /**
+   * Open a project, asking for one when no `path` is given.
+   *
+   * Replaces the whole session -- mixer, sources, pattern and tempo -- so a
+   * caller that keeps any of those has to re-read all of them. Resolves with
+   * `null` when the user cancelled the dialog.
+   */
+  openProject(path?: string | null): Promise<ProjectInfo | null>;
+  /**
+   * Write the session out, resolving with `null` when the user cancelled.
+   *
+   * `saveAs` is what decides whether a dialog is shown at all: without it, a
+   * project that already has a path is overwritten where it stands, which is
+   * the only thing Ctrl+S is ever allowed to mean. A project that has never
+   * been saved has nowhere to go, so that one asks either way.
+   */
+  saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null>;
+
   /** Subscribe to the throttled meter stream. Call the result to detach. */
   subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe>;
 }
@@ -405,6 +447,34 @@ class TauriBackend implements Backend {
     return invoke<number>('set_bpm', { bpm });
   }
 
+  // --- the project ---------------------------------------------------------
+
+  // The only synchronous one of the four: it reads a value the main thread has
+  // already published, where the other three wait on it.
+  async getProjectInfo(): Promise<ProjectInfo> {
+    const { invoke } = await this.core();
+    return invoke<ProjectInfo>('get_project_info');
+  }
+
+  async newProject(): Promise<ProjectInfo> {
+    const { invoke } = await this.core();
+    return invoke<ProjectInfo>('new_project');
+  }
+
+  // `path: null` rather than an omitted key, because that is what asks Rust for
+  // the dialog. An absent argument would be a `None` too, but only by accident
+  // of how Tauri deserialises a missing field, and the intention here is not
+  // accidental.
+  async openProject(path?: string | null): Promise<ProjectInfo | null> {
+    const { invoke } = await this.core();
+    return invoke<ProjectInfo | null>('open_project', { path: path ?? null });
+  }
+
+  async saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null> {
+    const { invoke } = await this.core();
+    return invoke<ProjectInfo | null>('save_project', { saveAs, path: path ?? null });
+  }
+
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {
     const { Channel, invoke } = await this.core();
     const channel = new Channel<MeterFrame>();
@@ -471,6 +541,7 @@ function mockTracks(): TrackDto[] {
       selected: true,
       clap: null,
       vst3: null,
+      missing: null,
     },
     {
       index: 1,
@@ -486,6 +557,11 @@ function mockTracks(): TrackDto[] {
       selected: false,
       clap: null,
       vst3: null,
+      // Never set by the mock. Every plugin it knows about is a fixture in this
+      // file, and a fixture cannot be uninstalled between a save and a load --
+      // so the badge is deliberately not reachable here rather than faked, and
+      // a strip that shows one in a plain browser is a bug in the panel.
+      missing: null,
     },
   ];
 }
@@ -714,6 +790,65 @@ function mockPattern(): PatternDto {
   };
 }
 
+/** What a never-saved session is called. Mirrors `UNTITLED` in `app/src/project_file.rs`. */
+const MOCK_UNTITLED = 'Untitled';
+
+/** Our extension. Mirrors `PROJECT_EXTENSION` in `app/src/project_file.rs`. */
+const MOCK_PROJECT_EXTENSION = 'mydaw';
+
+/**
+ * The folder the mock's invented paths sit in.
+ *
+ * A Windows path, because MYDAW's are: the mock is also where the UI proves it
+ * never tries to parse one, and a POSIX path here would let a `split('/')`
+ * survive review.
+ */
+const MOCK_PROJECT_DIR = 'D:\\Songs';
+
+/**
+ * Everything the mock writes when it "saves" a project, and everything it puts
+ * back when it opens one.
+ *
+ * The map of these is what makes save-then-open a real round trip rather than a
+ * new name over an untouched session. Without it the mock would agree with a UI
+ * that forgot to refresh after a load, which is the single mistake this feature
+ * is most likely to make.
+ */
+interface MockSession {
+  tracks: TrackDto[];
+  masterGainDb: number;
+  masterClap: ClapSlot | null;
+  masterVst3: Vst3Slot | null;
+  pattern: PatternDto;
+  bpm: number;
+  selected: number;
+  nextTrackId: number;
+}
+
+/**
+ * The name a path goes by: its file stem. Mirrors `project_name` in
+ * `app/src/project_file.rs`, separators included -- the two spellings have to
+ * agree, or the mock would teach the status bar a different answer than Rust
+ * gives it.
+ */
+function mockProjectName(path: string): string {
+  const file = path.split(/[\\/]/).pop() ?? path;
+  const dot = file.lastIndexOf('.');
+  // `> 0`, not `>= 0`: a leading dot is a hidden file's name, not an extension.
+  return dot > 0 ? file.slice(0, dot) : file;
+}
+
+/** The project information for a session living at `path`, or for no path at all. */
+function mockProjectInfo(path: string | null): ProjectInfo {
+  return {
+    path,
+    name: path === null ? MOCK_UNTITLED : mockProjectName(path),
+    // Always zero -- see the note on `mockTracks`.
+    missingPlugins: 0,
+    warnings: [],
+  };
+}
+
 /**
  * Browser-only stand-in. Emits a plausible 30 Hz meter stream driven by a pair
  * of detuned sines so the meter panel and playhead interpolation can be
@@ -754,6 +889,18 @@ class MockBackend implements Backend {
   private openEditors = new Set<string>();
   /** The last state `loadClapState` was handed, per target. */
   private clapStates = new Map<string, string>();
+  /** Which project is open. A browser session starts on a never-saved one. */
+  private project: ProjectInfo = mockProjectInfo(null);
+  /**
+   * The mock's "disk": every session it has written, by path.
+   *
+   * In memory and therefore gone on reload, which is honest -- a browser tab is
+   * not a filesystem, and pretending otherwise (localStorage, say) would let a
+   * stale session from last week's UI outlive the code that wrote it.
+   */
+  private saved = new Map<string, MockSession>();
+  /** The path of the most recent save; what the open dialog would have offered. */
+  private lastSavedPath: string | null = null;
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
@@ -918,6 +1065,7 @@ class MockBackend implements Backend {
         gainDb: this.masterGainDb,
         clap: withGui(this.masterClap, { slot: 'master' }),
         vst3: withGui3(this.masterVst3, { slot: 'master' }),
+        missing: null,
       },
       selected: this.selected,
       maxTracks: MOCK_MAX_TRACKS,
@@ -1202,6 +1350,7 @@ class MockBackend implements Backend {
       selected: false,
       clap: null,
       vst3: null,
+      missing: null,
     });
     return this.mixerState();
   }
@@ -1274,6 +1423,139 @@ class MockBackend implements Backend {
     }
     this.bpm = bpm;
     return this.bpm;
+  }
+
+  // --- the project ---------------------------------------------------------
+
+  async getProjectInfo(): Promise<ProjectInfo> {
+    return structuredClone(this.project);
+  }
+
+  /**
+   * Everything a save writes down, cloned on the way out so that edits made
+   * after the save cannot reach back into the file it wrote.
+   */
+  private session(): MockSession {
+    return structuredClone({
+      tracks: this.tracks,
+      masterGainDb: this.masterGainDb,
+      masterClap: this.masterClap,
+      masterVst3: this.masterVst3,
+      pattern: this.pattern,
+      bpm: this.bpm,
+      selected: this.selected,
+      nextTrackId: this.nextTrackId,
+    });
+  }
+
+  /** Put a written session back, cloned so the file survives the next edit. */
+  private restore(session: MockSession): void {
+    const copy = structuredClone(session);
+    this.tracks = copy.tracks;
+    this.masterGainDb = copy.masterGainDb;
+    this.masterClap = copy.masterClap;
+    this.masterVst3 = copy.masterVst3;
+    this.pattern = copy.pattern;
+    this.bpm = copy.bpm;
+    this.selected = copy.selected;
+    this.nextTrackId = copy.nextTrackId;
+    this.reinstantiate();
+  }
+
+  /**
+   * Everything that belonged to the session being replaced and cannot outlive
+   * it. Both of the ways a session is replaced -- new, and open -- destroy every
+   * plugin instance and build fresh ones, so no window may still claim to be
+   * open, no state blob may be attributed to an instance that no longer exists,
+   * and a saved handle must not be handed out a second time. That last one is
+   * the reason the slots are renumbered rather than restored as written: the
+   * mock never reuses an instance handle, and a file is full of old ones.
+   */
+  private reinstantiate(): void {
+    this.openEditors.clear();
+    this.clapStates.clear();
+    for (const track of this.tracks) {
+      if (track.clap) track.clap.instance = this.nextInstance++;
+      if (track.vst3) track.vst3.instance = this.nextInstance++;
+    }
+    if (this.masterClap) this.masterClap.instance = this.nextInstance++;
+    if (this.masterVst3) this.masterVst3.instance = this.nextInstance++;
+  }
+
+  /** Back to the two fixture tracks, an empty grid and 130 bpm. */
+  async newProject(): Promise<ProjectInfo> {
+    this.tracks = mockTracks();
+    this.pattern = mockPattern();
+    this.bpm = MOCK_DEFAULT_BPM;
+    this.masterGainDb = 0;
+    this.masterClap = null;
+    this.masterVst3 = null;
+    this.selected = 0;
+    // Two fixture tracks own ids 0 and 1, the same arithmetic this field's
+    // initialiser does -- a fresh project is a fresh mock, ids included.
+    this.nextTrackId = 2;
+    this.reinstantiate();
+    this.project = mockProjectInfo(null);
+    console.info('[mock] new_project');
+    return this.getProjectInfo();
+  }
+
+  /**
+   * Open a written session, or -- with no path -- whatever the open dialog would
+   * have come back with.
+   *
+   * There is no dialog outside Tauri, so the most recent save stands in for one,
+   * and `null` comes back when nothing has been written yet: a dialog with
+   * nothing to offer is a dialog the user closes, and that is the same `null`
+   * the real backend answers a cancel with. Rehearsing the cancel path is worth
+   * more than inventing a file nobody saved, which would put the panel in a
+   * state Rust can never produce. Same principle as `openClapGui`, which says
+   * what it cannot do rather than pretending it did it.
+   */
+  async openProject(path?: string | null): Promise<ProjectInfo | null> {
+    const chosen = path ?? this.lastSavedPath;
+    if (chosen === null) {
+      console.info('[mock] open_project: no dialog outside Tauri, and nothing saved to offer');
+      return null;
+    }
+    const session = this.saved.get(chosen);
+    if (!session) throw new Error(`there is no project at ${chosen}`);
+    this.restore(session);
+    this.project = mockProjectInfo(chosen);
+    console.info(`[mock] open_project ${chosen}`);
+    return this.getProjectInfo();
+  }
+
+  async saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null> {
+    // Save As always asks; a plain Save asks only when the project has nowhere
+    // to go yet. The same two branches Rust's `save_project` has, mirrored here
+    // so Ctrl+S can be developed against the mock and still mean "overwrite".
+    const chosen = path ?? (saveAs ? null : this.project.path) ?? this.invent();
+    this.saved.set(chosen, this.session());
+    this.lastSavedPath = chosen;
+    this.project = mockProjectInfo(chosen);
+    console.info(`[mock] save_project ${chosen}`);
+    return this.getProjectInfo();
+  }
+
+  /**
+   * What the save dialog would have come back with.
+   *
+   * Invented rather than refused: a Save As that could never succeed would
+   * leave the round trip -- and half the panel's logic -- unreachable in a
+   * plain browser, which is the one thing the mock exists to prevent. Numbered
+   * past a name already taken, because silently overwriting a file is the one
+   * thing a real dialog would never do without asking first.
+   */
+  private invent(): string {
+    const stem =
+      this.project.path === null ? MOCK_UNTITLED : mockProjectName(this.project.path);
+    let candidate = `${MOCK_PROJECT_DIR}\\${stem}.${MOCK_PROJECT_EXTENSION}`;
+    for (let n = 2; this.saved.has(candidate); n += 1) {
+      candidate = `${MOCK_PROJECT_DIR}\\${stem} ${n}.${MOCK_PROJECT_EXTENSION}`;
+    }
+    console.info(`[mock] no save dialog outside Tauri, using ${candidate}`);
+    return candidate;
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {

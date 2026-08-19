@@ -140,6 +140,31 @@ impl Project {
         }
     }
 
+    /// A project read back from a file.
+    ///
+    /// Ids are restored rather than regenerated -- a track keeps its identity
+    /// across a save and load, which is what lets a UI list keyed on it animate
+    /// correctly rather than replacing every row. The next id continues past the
+    /// highest one in the file, so a track added after a load cannot collide
+    /// with one that was in it.
+    pub fn restored(tracks: Vec<TrackDef>, master_gain_db: f32) -> Self {
+        let next_id = tracks
+            .iter()
+            .map(|track| track.id)
+            .max()
+            .map_or(0, |highest| highest.saturating_add(1));
+        Self {
+            tracks,
+            master_gain_db,
+            next_id,
+        }
+    }
+
+    /// The id the next added track will get. Diagnostics and tests.
+    pub const fn next_id(&self) -> u32 {
+        self.next_id
+    }
+
     /// Tracks in this project.
     pub fn len(&self) -> usize {
         self.tracks.len()
@@ -266,6 +291,94 @@ pub fn check_pan(pan: f32) -> Result<f32, TrackError> {
     Ok(pan)
 }
 
+// --------------------------------------------------------------- missing plugins
+
+/// Which of the project's plugins could not be loaded, and why.
+///
+/// # Why a project can be missing a plugin, and why that must not be fatal
+/// A project file records a plugin by **path and id** (see
+/// [`crate::project_file`]). Both can stop resolving without anything being
+/// wrong with the project: the user opened it on their laptop, uninstalled the
+/// plugin, or the vendor's updater moved the bundle. A DAW that refused the
+/// whole session over one of those would be refusing to open a user's work
+/// because of somebody else's software.
+///
+/// So a load leaves such a track **silent, with its reference intact** and
+/// records the reason here. The mixer draws a warning on that strip, and a save
+/// writes the reference back out unchanged -- which is what makes the project
+/// still open correctly on the machine that does have the plugin.
+///
+/// Published by the main thread after a load (it is the only thread that can
+/// discover the absence, because it is the only one that can try to create an
+/// instance) and read from command threads, exactly like
+/// [`ClapBoard`](crate::clap_bridge::ClapBoard).
+#[derive(Debug, Default)]
+pub struct MissingPlugins {
+    /// One entry per track index; `None` where the track is fine. Republished
+    /// whole, so a stale entry cannot outlive the track it described.
+    tracks: parking_lot::Mutex<Vec<Option<MissingPluginDto>>>,
+    master: parking_lot::Mutex<Option<MissingPluginDto>>,
+}
+
+impl MissingPlugins {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Replace the whole picture. Called by the main thread after every load.
+    pub fn publish(&self, tracks: Vec<Option<MissingPluginDto>>, master: Option<MissingPluginDto>) {
+        *self.tracks.lock() = tracks;
+        *self.master.lock() = master;
+    }
+
+    /// Forget every warning. Called before a load, and by "new project".
+    pub fn clear(&self) {
+        self.publish(Vec::new(), None);
+    }
+
+    /// The warning on `track`, if any.
+    pub fn track(&self, track: usize) -> Option<MissingPluginDto> {
+        self.tracks.lock().get(track).cloned().flatten()
+    }
+
+    /// The warning on the master insert, if any.
+    pub fn master(&self) -> Option<MissingPluginDto> {
+        self.master.lock().clone()
+    }
+
+    /// How many plugins the current project is missing.
+    pub fn len(&self) -> usize {
+        self.tracks
+            .lock()
+            .iter()
+            .filter(|slot| slot.is_some())
+            .count()
+            + usize::from(self.master.lock().is_some())
+    }
+
+    /// Whether everything the project asked for is loaded.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// One plugin a project asked for and did not get.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MissingPluginDto {
+    /// What the project called it -- the display name from the scan that placed
+    /// it, falling back to the plugin id. Shown on the strip, because a user
+    /// recognises "Diva" and does not recognise a path.
+    pub name: String,
+    /// `clap` or `vst3`, so the warning can say which format is absent.
+    pub format: String,
+    /// Where the project expected to find it. The tooltip; often the whole
+    /// explanation ("that drive is not plugged in").
+    pub path: String,
+    /// Why it could not be loaded, in the loader's own words.
+    pub reason: String,
+}
+
 // -------------------------------------------------------------------- the wire
 
 /// One mixer strip, as the webview draws it.
@@ -307,6 +420,11 @@ pub struct TrackDto {
     /// plugin differently (a CLAP id is a string, a VST3 class id is 32 hex
     /// digits) and collapsing them would mean calling one by the other's name.
     pub vst3: Option<Vst3SlotDto>,
+    /// Set when the project asked for a plugin on this track and it could not be
+    /// loaded. The strip draws a warning badge and renders silence; the
+    /// reference is still in the project and will be saved back out. See
+    /// [`MissingPlugins`].
+    pub missing: Option<MissingPluginDto>,
 }
 
 /// The master strip.
@@ -322,6 +440,9 @@ pub struct MasterDto {
     /// ever set. Whichever host places one evicts the other's -- see
     /// `crate::vst3_host`.
     pub vst3: Option<Vst3SlotDto>,
+    /// The master effect the project asked for and did not get. See
+    /// [`MissingPlugins`].
+    pub missing: Option<MissingPluginDto>,
 }
 
 /// Everything the mixer panel needs in one message.
@@ -350,6 +471,7 @@ pub fn mixer_state_dto(
     selected: usize,
     clap: &ClapBoard,
     vst3: &Vst3Board,
+    missing: &MissingPlugins,
 ) -> MixerStateDto {
     MixerStateDto {
         tracks: project
@@ -370,12 +492,14 @@ pub fn mixer_state_dto(
                 selected: index == selected,
                 clap: clap.track(index),
                 vst3: vst3.track(index),
+                missing: missing.track(index),
             })
             .collect(),
         master: MasterDto {
             gain_db: project.master_gain_db,
             clap: clap.master(),
             vst3: vst3.master(),
+            missing: missing.master(),
         },
         selected,
         max_tracks: MAX_TRACKS,
@@ -596,7 +720,13 @@ mod tests {
     fn the_wire_shape_carries_what_the_mixer_panel_draws() {
         let mut project = Project::default();
         project.tracks[0].soloed = true;
-        let dto = mixer_state_dto(&project, 1, &ClapBoard::new(), &Vst3Board::new());
+        let dto = mixer_state_dto(
+            &project,
+            1,
+            &ClapBoard::new(),
+            &Vst3Board::new(),
+            &MissingPlugins::new(),
+        );
 
         assert_eq!(dto.tracks.len(), 2);
         assert_eq!(dto.selected, 1);
@@ -649,6 +779,7 @@ mod tests {
                 "gainDb",
                 "id",
                 "index",
+                "missing",
                 "muted",
                 "name",
                 "pan",
@@ -661,6 +792,75 @@ mod tests {
             ]
         );
         assert_eq!(json["master"]["gainDb"], 0.0);
+        assert!(json["tracks"][0]["missing"].is_null());
+        assert!(json["master"]["missing"].is_null());
+    }
+
+    #[test]
+    fn a_plugin_the_project_could_not_load_reaches_the_strip_that_asked_for_it() {
+        // What a mixer needs in order to draw a warning badge rather than an
+        // inexplicably silent track.
+        let mut project = Project::default();
+        project.tracks[1].source = Source::Clap(clap_ref());
+
+        let missing = MissingPlugins::new();
+        assert!(missing.is_empty());
+        let warning = MissingPluginDto {
+            name: "Acme Thing".to_owned(),
+            format: "clap".to_owned(),
+            path: r"C:\plugins\thing.clap".to_owned(),
+            reason: "there is no CLAP bundle at C:\\plugins\\thing.clap".to_owned(),
+        };
+        missing.publish(vec![None, Some(warning.clone())], None);
+        assert_eq!(missing.len(), 1);
+        assert!(missing.track(0).is_none());
+        assert!(missing.track(99).is_none(), "past the end is not a warning");
+
+        let dto = mixer_state_dto(&project, 0, &ClapBoard::new(), &Vst3Board::new(), &missing);
+        assert!(dto.tracks[0].missing.is_none());
+        assert_eq!(dto.tracks[1].missing.as_ref(), Some(&warning));
+        assert_eq!(
+            dto.tracks[1].source_id, "clap:com.acme.thing",
+            "the reference stays in the project, so a save writes it back out"
+        );
+
+        let json: serde_json::Value = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["tracks"][1]["missing"]["name"], "Acme Thing");
+        assert_eq!(json["tracks"][1]["missing"]["format"], "clap");
+        assert!(json["tracks"][1]["missing"]["reason"].is_string());
+
+        // A republish cannot leave a stale warning behind.
+        missing.clear();
+        assert!(missing.is_empty());
+        assert!(
+            mixer_state_dto(&project, 0, &ClapBoard::new(), &Vst3Board::new(), &missing).tracks[1]
+                .missing
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_restored_project_keeps_its_track_ids_and_numbers_new_ones_past_them() {
+        // A UI list is keyed on the id, so a load that regenerated them would
+        // look like every track being replaced.
+        let restored = Project::restored(
+            vec![
+                TrackDef::new(7, "Kit", Source::DrumKit),
+                TrackDef::new(3, "Lead", Source::PolySynth),
+            ],
+            -3.0,
+        );
+        assert_eq!(
+            restored.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![7, 3]
+        );
+        assert_eq!(restored.master_gain_db, -3.0);
+        assert_eq!(restored.next_id(), 8, "past the highest, not past the last");
+
+        let mut restored = restored;
+        let index = restored.add(Source::TestTone, None).unwrap();
+        assert_eq!(restored.tracks[index].id, 8);
+        assert_eq!(Project::restored(Vec::new(), 0.0).next_id(), 0);
     }
 
     #[test]
@@ -681,7 +881,13 @@ mod tests {
         };
         board.publish(vec![None, Some(slot.clone())], Some(slot));
 
-        let dto = mixer_state_dto(&project, 0, &board, &Vst3Board::new());
+        let dto = mixer_state_dto(
+            &project,
+            0,
+            &board,
+            &Vst3Board::new(),
+            &MissingPlugins::new(),
+        );
         assert!(dto.tracks[0].clap.is_none());
         let placed = dto.tracks[1].clap.as_ref().expect("track 1 is hosted");
         assert_eq!(placed.instance, 3);

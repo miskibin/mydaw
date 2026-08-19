@@ -56,7 +56,8 @@ use crate::clap_bridge::ClapBoard;
 use crate::graph::track_chain;
 use crate::insert::InsertHandle;
 use crate::project::{
-    check_gain_db, check_pan, mixer_state_dto, MixerStateDto, Project, TrackDef, TrackError,
+    check_gain_db, check_pan, mixer_state_dto, MissingPlugins, MixerStateDto, Project, TrackDef,
+    TrackError,
 };
 use crate::source::{SilentNode, Source, SourceError, SourceHandle};
 use crate::vst3_bridge::Vst3Board;
@@ -229,13 +230,18 @@ impl TrackHost {
     }
 
     /// The mixer, in the shape the webview reads.
-    pub fn state(&self, clap: &ClapBoard, vst3: &Vst3Board) -> MixerStateDto {
+    pub fn state(
+        &self,
+        clap: &ClapBoard,
+        vst3: &Vst3Board,
+        missing: &MissingPlugins,
+    ) -> MixerStateDto {
         let project = self.project.lock();
         let selected = self
             .selected
             .load(Ordering::Relaxed)
             .min(project.len().saturating_sub(1));
-        mixer_state_dto(&project, selected, clap, vst3)
+        mixer_state_dto(&project, selected, clap, vst3, missing)
     }
 
     // ------------------------------------------------------------ mixer edits
@@ -647,8 +653,9 @@ mod tests {
         assert_eq!(host.selected(), 1);
         assert_eq!(host.selected_source(), Source::PolySynth);
         let board = ClapBoard::new();
-        assert!(host.state(&board, &Vst3Board::new()).tracks[1].selected);
-        assert!(!host.state(&board, &Vst3Board::new()).tracks[0].selected);
+        let missing = MissingPlugins::new();
+        assert!(host.state(&board, &Vst3Board::new(), &missing).tracks[1].selected);
+        assert!(!host.state(&board, &Vst3Board::new(), &missing).tracks[0].selected);
     }
 
     #[test]

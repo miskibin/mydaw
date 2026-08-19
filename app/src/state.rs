@@ -21,6 +21,7 @@ use crate::dto::{ClapPluginInfoDto, PatternDto, SequencerStateDto, Vst3PluginInf
 use crate::ipc_bench;
 use crate::meters::MeterPump;
 use crate::project::{MixerStateDto, Project, TrackError};
+use crate::project_bridge::{ProjectBridge, ProjectCommand, ProjectInfoDto};
 use crate::source::{check_bundle_path, Source, SourceDto, SourceError};
 use crate::tracks::{MixerError, TrackHost};
 use crate::vst3_bridge::{Vst3Answer, Vst3Command, Vst3GuiStatusDto, Vst3HostBridge};
@@ -176,6 +177,12 @@ pub struct AppState {
     /// VST3 *discovery*. Like its CLAP counterpart, `Send + Sync` and safe on a
     /// command thread.
     vst3: Arc<Vst3HostService>,
+    /// Mailbox to the main thread's project loader, plus the two things a
+    /// project publishes: which file is open and which of its plugins are
+    /// missing. Saving asks every plugin for its state and loading destroys and
+    /// recreates all of them, so like everything else about a hosted plugin it
+    /// cannot happen here -- see `crate::project_bridge`.
+    project_bridge: Arc<ProjectBridge>,
     meters: Arc<MeterPump>,
     /// The audio inspection harness. Non-RT, `Send + Sync`, and safe to call
     /// from a Tauri command thread.
@@ -236,6 +243,7 @@ impl AppState {
             clap,
             vst3_bridge: Arc::new(Vst3HostBridge::new()),
             vst3,
+            project_bridge: Arc::new(ProjectBridge::new()),
             meters: MeterPump::new(throttle),
             debug_tap,
         })
@@ -668,8 +676,74 @@ impl AppState {
 
     /// The mixer, in the shape the webview reads.
     pub fn mixer_state(&self) -> MixerStateDto {
-        self.tracks
-            .state(self.clap_bridge.board(), self.vst3_bridge.board())
+        self.tracks.state(
+            self.clap_bridge.board(),
+            self.vst3_bridge.board(),
+            self.project_bridge.missing(),
+        )
+    }
+
+    // -------------------------------------------------------------- projects
+
+    /// The project mailbox. Commands post here; the run loop serves it.
+    pub fn project_bridge(&self) -> &Arc<ProjectBridge> {
+        &self.project_bridge
+    }
+
+    /// Which project is open, and what went wrong opening it.
+    pub fn project_info(&self) -> ProjectInfoDto {
+        self.project_bridge.info()
+    }
+
+    /// The file the session came from, or `None` for one that has never been
+    /// saved. What decides whether Save needs a dialog.
+    pub fn project_path(&self) -> Option<std::path::PathBuf> {
+        self.project_bridge.current_path()
+    }
+
+    /// Reset the session to a fresh default project.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`] carrying whatever the main thread said, or
+    /// [`NO_MAIN_THREAD`](crate::project_bridge::NO_MAIN_THREAD) in a headless
+    /// session.
+    pub fn new_project(&self) -> Result<ProjectInfoDto, SourceError> {
+        self.project_command(ProjectCommand::New)
+    }
+
+    /// Rebuild the whole session from a `.mydaw` file.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`] carrying the reason: the file is not there,
+    /// is not a project, was written by a newer MYDAW, or does not describe a
+    /// session this engine could run. **A plugin that is absent from this
+    /// machine is not one of those** -- the project opens, that track is silent,
+    /// and the mixer says so.
+    pub fn open_project(
+        &self,
+        path: impl Into<std::path::PathBuf>,
+    ) -> Result<ProjectInfoDto, SourceError> {
+        self.project_command(ProjectCommand::Open { path: path.into() })
+    }
+
+    /// Write the session to `path`, which becomes the current project.
+    ///
+    /// # Errors
+    /// [`SourceError::MainThread`] carrying the reason. The previous contents of
+    /// `path` are untouched when it fails -- see
+    /// [`write_project_file`](crate::project_file::write_project_file).
+    pub fn save_project(
+        &self,
+        path: impl Into<std::path::PathBuf>,
+    ) -> Result<ProjectInfoDto, SourceError> {
+        self.project_command(ProjectCommand::Save { path: path.into() })
+    }
+
+    fn project_command(&self, command: ProjectCommand) -> Result<ProjectInfoDto, SourceError> {
+        self.project_bridge
+            .request(command)
+            .and_then(crate::project_bridge::ProjectAnswer::into_info)
+            .map_err(SourceError::MainThread)
     }
 
     /// Set a track's fader, in dB. Works with no audio device open.
@@ -1281,6 +1355,44 @@ mod tests {
             state.note_on(MAX_KEY, 1.0),
             Err(NoteError::Audio(_))
         ));
+    }
+
+    #[test]
+    fn a_fresh_session_reports_an_untitled_project_with_nothing_missing() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        let info = state.project_info();
+        assert_eq!(info.name, crate::project_file::UNTITLED);
+        assert!(info.path.is_none(), "nothing has been saved yet");
+        assert_eq!(info.missing_plugins, 0);
+        assert!(state.project_path().is_none(), "so Save has to ask where");
+        assert!(state.project_bridge().missing().is_empty());
+        assert!(state
+            .mixer_state()
+            .tracks
+            .iter()
+            .all(|track| track.missing.is_none()));
+    }
+
+    #[test]
+    fn a_project_command_in_a_headless_session_fails_at_once_rather_than_timing_out() {
+        // A minute per command (see `PROJECT_TIMEOUT`) would make this suite
+        // unusable, and the answer is knowable without asking anyone.
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        assert!(!state.project_bridge().is_served());
+
+        let started = std::time::Instant::now();
+        for outcome in [
+            state.new_project(),
+            state.open_project("nothing.mydaw"),
+            state.save_project("nothing.mydaw"),
+        ] {
+            let err = outcome.unwrap_err();
+            assert!(matches!(err, SourceError::MainThread(_)), "{err:?}");
+            assert_eq!(err.to_string(), crate::project_bridge::NO_MAIN_THREAD);
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 
     // ------------------------------------------------------------ sequencer

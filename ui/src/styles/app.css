@@ -127,6 +127,21 @@ code {
   transform: translateY(1px);
 }
 
+/* The project actions. The transport's own button, tightened: four of them sit
+   ahead of Play on a bar that is 46px tall and has a tempo readout to fit at the
+   other end, and at the transport's 28px/12px they would start pushing it off a
+   narrow window. Short labels, so none of them needs to wrap or ellipsise. */
+.transport__file {
+  display: flex;
+  gap: 4px;
+}
+
+.transport__file .transport__button {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+}
+
 .transport__button--play.is-active {
   color: #06231c;
   background: var(--accent);
@@ -1283,6 +1298,34 @@ code {
   color: #06231c;
   background: var(--accent-dim);
   border-color: var(--accent-dim);
+}
+
+/*
+ * A plugin the project asked for and did not get.
+ *
+ * Deliberately the same full-strip-width shape as `.strip__editor`: it sits in
+ * the same slot in the strip and stands for the same thing (what is at the head
+ * of this track), so a second geometry would only read as a second kind of
+ * thing. Ellipsised for the same reason `.strip__picker` is -- a plugin name is
+ * wider than 78px, and a badge that grew to fit one would drag every strip after
+ * it out of line. The explanation is in the `title`, so the cursor says there is
+ * one to be had.
+ */
+.strip__missing {
+  display: block;
+  width: 100%;
+  height: 17px;
+  padding: 0 3px;
+  font-size: 9px;
+  line-height: 15px;
+  color: var(--warn);
+  background: var(--bg-3);
+  border: 1px solid var(--warn);
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: help;
 }
 
 /* Meter and fader side by side, the way a console puts them. */

@@ -111,6 +111,53 @@ export function TransportBar(): JSX.Element {
         <span class="transport__phase">phase 0</span>
       </div>
 
+      {/*
+        The project actions live on the bar rather than in a menu, because there
+        is no menu: this row is all the chrome MYDAW has. Four plain buttons in
+        the order every file menu ever written puts them, so nobody has to look
+        for Save. Each `title` carries its accelerator -- the shortcuts are the
+        faster way and this is where they are learned; `state.tsx` owns them.
+
+        There is no confirmation on New. Nothing tracks unsaved edits yet, so a
+        prompt would have to either ask every time (and be clicked through) or
+        guess, and guessing wrong about somebody's session is worse than the
+        question.
+      */}
+      <div class="transport__file" role="group" aria-label="Project">
+        <button
+          type="button"
+          class="transport__button"
+          title="Start a fresh project (Ctrl+N)"
+          onClick={() => app.newProject()}
+        >
+          New
+        </button>
+        <button
+          type="button"
+          class="transport__button"
+          title="Open a project (Ctrl+O)"
+          onClick={() => app.openProject()}
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          class="transport__button"
+          title="Save the project (Ctrl+S)"
+          onClick={() => app.saveProject()}
+        >
+          Save
+        </button>
+        <button
+          type="button"
+          class="transport__button"
+          title="Save the project under a new name (Ctrl+Shift+S)"
+          onClick={() => app.saveProjectAs()}
+        >
+          Save As
+        </button>
+      </div>
+
       <div class="transport__controls" role="group" aria-label="Transport">
         <button
           type="button"

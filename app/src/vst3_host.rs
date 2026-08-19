@@ -360,8 +360,14 @@ impl Vst3Host {
         Ok(())
     }
 
-    /// Empty the master insert.
-    fn clear_master_effect(&mut self, tracks: &TrackHost) -> Result<(), String> {
+    /// Empty the master insert and destroy the instance that was in it.
+    ///
+    /// Public for the same reason its CLAP counterpart is: a project load
+    /// strips the session down before it builds the new one.
+    ///
+    /// # Errors
+    /// A sentence, when there is no stream to empty the slot in.
+    pub fn clear_master_effect(&mut self, tracks: &TrackHost) -> Result<(), String> {
         // Emptying the slot first is what makes the destroy below able to
         // collect the node: the audio thread has to drop it before the
         // collector can.
