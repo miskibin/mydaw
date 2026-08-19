@@ -1,0 +1,215 @@
+/*
+ * The fullscreen effect editor, and the magnitude curve both it and the
+ * inspector's compact card draw.
+ *
+ * Every colour is a custom property from `base.css`, so the light theme is a
+ * property swap and not a second sheet. The curve is the only thing here that
+ * needs stating twice: an SVG stroke cannot read `currentColor` through a
+ * `preserveAspectRatio="none"` stretch without also being stretched, so the
+ * paths carry `vector-effect: non-scaling-stroke` and their widths are set here
+ * in user units.
+ */
+
+/* --- the layer ----------------------------------------------------------- */
+
+/*
+ * Absolutely positioned inside `.wv-body` rather than replacing it: the panel
+ * behind is what polls the chain's meters, so unmounting it would stop the
+ * gain-reduction bar the editor is drawing.
+ */
+.wv-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+
+.wv-fx__name {
+  flex: none;
+  font: 600 13px 'Geist Variable';
+  letter-spacing: -0.01em;
+  color: var(--txt);
+}
+
+.wv-fx__name.is-off {
+  color: var(--dim);
+}
+
+.wv-fx__owner {
+  flex: none;
+  font: 400 10.5px 'Geist Mono Variable';
+  color: var(--dim);
+}
+
+.wv-fx__desc {
+  min-width: 0;
+  overflow: hidden;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--dim2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-fx__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--lane);
+}
+
+/* One column, capped: a knob row 1800 px wide is a row nobody can scan. */
+.wv-fx__sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.wv-fx__curve {
+  overflow: hidden;
+  padding: 12px 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel2);
+}
+
+.wv-fx__group {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel2);
+}
+
+.wv-fx__grouphead {
+  font: 500 9px 'Geist Mono Variable';
+  letter-spacing: 0.12em;
+  color: var(--dim2);
+  text-transform: uppercase;
+}
+
+/* Wide enough for `24 dB/oct` under a 44 px knob, and no wider. */
+.wv-fx__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 16px 8px;
+  align-items: end;
+}
+
+.wv-fx__none {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel2);
+  font: 400 11px 'Geist Variable';
+  color: var(--dim);
+}
+
+/* The editor's meters get the room the inspector's 306 px column has not. */
+.wv-meters--large {
+  padding: 0;
+}
+
+.wv-meters--large .wv-meterbar__name {
+  width: 150px;
+  font-size: 10px;
+}
+
+.wv-meters--large .wv-meterbar__track {
+  height: 8px;
+}
+
+.wv-meters--large .wv-meterbar__value {
+  width: 76px;
+  font-size: 10.5px;
+}
+
+/* --- the magnitude curve ------------------------------------------------- */
+
+.wv-eqc {
+  position: relative;
+  width: 100%;
+  border-radius: 6px;
+  background: var(--sunk);
+}
+
+.wv-eqc__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.wv-eqc__grid {
+  fill: none;
+  stroke: var(--grid2);
+  stroke-width: 1;
+}
+
+.wv-eqc__zero {
+  fill: none;
+  stroke: var(--line2);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.wv-eqc__area {
+  fill: var(--accSoft);
+  stroke: none;
+}
+
+.wv-eqc__line {
+  fill: none;
+  stroke: var(--acc);
+  stroke-width: 1.75;
+  stroke-linejoin: round;
+}
+
+/* Bypassed: the settings are still true, the sound is not. */
+.wv-eqc.is-muted .wv-eqc__line {
+  stroke: var(--dim);
+}
+
+.wv-eqc.is-muted .wv-eqc__area {
+  fill: transparent;
+}
+
+/* Axis labels are HTML, not SVG text: the box is stretched horizontally and a
+   stretched glyph is unreadable in a way a stretched path is not. */
+.wv-eqc__hz,
+.wv-eqc__db {
+  position: absolute;
+  font: 400 8.5px 'Geist Mono Variable';
+  color: var(--dim2);
+  pointer-events: none;
+}
+
+.wv-eqc__hz {
+  bottom: -14px;
+  transform: translateX(-50%);
+}
+
+.wv-eqc__hz--start {
+  transform: none;
+}
+
+.wv-eqc__hz--end {
+  transform: translateX(-100%);
+}
+
+.wv-eqc__db {
+  right: 6px;
+}
+
+.wv-eqc__db--top {
+  top: 4px;
+}
+
+.wv-eqc__db--bottom {
+  bottom: 4px;
+}

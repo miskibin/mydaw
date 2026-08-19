@@ -15,6 +15,7 @@ import { TopBar } from './shell/TopBar';
 import { useView } from './shell/view';
 import { useAppState } from './state';
 import { IconChevron } from './ui/icons';
+import { EffectEditor } from './views/EffectEditor';
 import { Mixer } from './views/Mixer';
 import { Playlist } from './views/Playlist';
 import { Rack } from './views/Rack';
@@ -146,6 +147,17 @@ export function App(): ReturnType<typeof Show> {
             }
           >
             <SidePanel />
+          </Show>
+
+          {/*
+            The effect editor covers the three views the way the roll does, but
+            *over* this row rather than instead of it: the inspector behind it is
+            what polls the chain's meters, and unmounting it would stop the
+            gain-reduction bar the editor is drawing. Never up at the same time
+            as the roll -- `openInsertEditor` and `openRoll` each close the other.
+          */}
+          <Show when={view.insertEditor()}>
+            <EffectEditor />
           </Show>
         </div>
       </Show>

@@ -27,17 +27,21 @@ import {
 
 import type {
   ClapPluginInfoDto,
+  EffectInfoDto,
   InsertDto,
   PatternDto,
   PatternSummaryDto,
   TrackDto,
   Vst3PluginInfoDto,
 } from '../api/types';
-import { formatValue, shortParamName } from '../lib/param';
+import { bandGainRangeDb, compactBody } from '../lib/effectLayout';
+import { formatValue, switchLabel } from '../lib/param';
 import { insertTargetFor, useAppState, type StripRef } from '../state';
 import { trackColor } from '../theme/tokens';
+import { EqCurve } from '../ui/EqCurve';
 import { IconChevron, IconClose, IconPopOut } from '../ui/icons';
-import { Knob } from '../ui/Knob';
+import { createInsertKnobs } from '../ui/insertKnob';
+import { ReadoutBars } from '../ui/ReadoutBars';
 import { formatDuration, formatRate } from './Browser';
 import { useView, type PickerTab, type SideTab } from './view';
 
@@ -394,21 +398,6 @@ function AudioRows(): JSX.Element {
 // The inspector
 // ---------------------------------------------------------------------------
 
-/** How much of a meter bar a readout fills, by the unit the engine declared. */
-function readoutFraction(unit: string, value: number): number {
-  const size = Math.abs(value);
-  switch (unit) {
-    case 'dB':
-      return Math.min(1, size / 24);
-    case '%':
-      return Math.min(1, size / 100);
-    case 'samples':
-      return Math.min(1, size / 512);
-    default:
-      return Math.min(1, size);
-  }
-}
-
 function Inspector(): JSX.Element {
   const app = useAppState();
   const view = useView();
@@ -511,7 +500,7 @@ function Inspector(): JSX.Element {
 
           <Index each={chain()}>
             {(insert) => (
-              <InsertCard strip={view.strip()} stripName={name()} insert={insert()} chain={chain()} />
+              <InsertCard strip={view.strip()} stripName={name()} insert={insert()} />
             )}
           </Index>
 
@@ -751,32 +740,41 @@ function InsertCard(props: {
   strip: StripRef;
   stripName: string;
   insert: InsertDto;
-  chain: InsertDto[];
 }): JSX.Element {
   const app = useAppState();
-
-  /**
-   * The parameter being dragged right now, and where the pointer has put it.
-   *
-   * `set_insert_param` is the per-frame command and answers with a single
-   * number; the whole `MixerState` -- which is what `props.insert.params` comes
-   * from -- is only refetched when the gesture ends. Without this the knob
-   * would not move under the pointer.
-   */
-  const [dragging, setDragging] = createSignal<{ id: string; value: number } | null>(null);
+  const view = useView();
 
   const target = () => insertTargetFor(props.strip);
   const info = () => app.effects().find((entry) => entry.typeId === props.insert.typeId);
-  const params = () => (info()?.params ?? []).filter((def) => def.id !== 'bypass');
   const readoutDefs = () => info()?.readouts ?? [];
   const live = () =>
     app.readouts().find((entry) => entry.id === props.insert.id)?.readouts ?? [];
 
-  const first = () => props.insert.index === 0;
-  const last = () => props.insert.index === props.chain.length - 1;
+  const knobs = createInsertKnobs({
+    strip: () => props.strip,
+    owner: () => `${props.stripName} · ${props.insert.name}`,
+    insert: () => props.insert,
+  });
 
-  const move = (to: number) =>
-    void app.mixerCommand((backend) => backend.moveInsert(target(), props.insert.index, to));
+  const body = createMemo(() => compactBody(info()));
+  /** The curve replaces the grid entirely; see `lib/effectLayout.ts` for why. */
+  const drawsCurve = () => body().kind === 'curve';
+  const knobParams = () => {
+    const shape = body();
+    return shape.kind === 'knobs' ? shape.params : [];
+  };
+
+  /**
+   * Every parameter by id, live while one of them is under the pointer.
+   *
+   * Only the curve reads the ones that are not on the card -- which is the point
+   * of it: a bell's Q has no knob here and still bends the line.
+   */
+  const values = createMemo(() => {
+    const map = new Map<string, number>();
+    for (const def of info()?.params ?? []) map.set(def.id, knobs.valueOf(def));
+    return map;
+  });
 
   return (
     <div class="wv-card">
@@ -800,23 +798,14 @@ function InsertCard(props: {
         <span class="wv-spacer" />
         <button
           type="button"
-          class="wv-card__icon wv-can-disable"
-          disabled={first()}
-          title={first() ? 'Already first in the chain' : 'Move earlier in the chain'}
-          aria-label="Move earlier in the chain"
-          onClick={() => move(props.insert.index - 1)}
+          class="wv-card__icon wv-card__icon--accent"
+          title={`Open ${props.insert.name} — every parameter, and the chain controls`}
+          aria-label={`Open the full editor for ${props.insert.name}`}
+          onClick={() =>
+            view.openInsertEditor({ strip: props.strip, insertId: props.insert.id })
+          }
         >
-          ↑
-        </button>
-        <button
-          type="button"
-          class="wv-card__icon wv-can-disable"
-          disabled={last()}
-          title={last() ? 'Already last in the chain' : 'Move later in the chain'}
-          aria-label="Move later in the chain"
-          onClick={() => move(props.insert.index + 1)}
-        >
-          ↓
+          <IconPopOut />
         </button>
         <button
           type="button"
@@ -834,78 +823,86 @@ function InsertCard(props: {
       </div>
 
       <Show
-        when={params().length > 0}
+        when={!drawsCurve()}
         fallback={
-          <div class="wv-insp__card-body">
-            <span class="wv-insp__line">
-              This build's catalogue has no parameters for {props.insert.typeId}.
-            </span>
+          <div class="wv-insp__curve">
+            <EqCurve
+              values={values()}
+              rangeDb={bandGainRangeDb(info())}
+              height={66}
+              muted={props.insert.bypassed}
+            />
           </div>
         }
       >
-        <div class="wv-card__grid">
-          <Index each={params()}>
-            {(def) => (
-              <Knob
-                def={def()}
-                typeId={props.insert.typeId}
-                label={shortParamName(def().name)}
-                owner={`${props.stripName} · ${props.insert.name}`}
-                size={28}
-                color={props.insert.bypassed ? 'var(--dim)' : 'var(--live)'}
-                value={() =>
-                  // While a drag is in flight the engine's copy is a frame or
-                  // more behind -- `set_insert_param` answers with the stored
-                  // value but the *whole mixer* is only refetched on commit, so
-                  // reading `props.insert.params` here would leave the pointer
-                  // pinned where the drag started. The local value is dropped
-                  // the moment the fresh mixer arrives.
-                  dragging()?.id === def().id
-                    ? dragging()!.value
-                    : (props.insert.params.find((value) => value.id === def().id)?.value ??
-                      def().defaultValue)
-                }
-                // Per frame, and one atomic store: the engine answers with what
-                // it actually kept, which the next whole-mixer reply carries.
-                onInput={(value) => {
-                  setDragging({ id: def().id, value });
-                  void app.backend
-                    .setInsertParam(target(), props.insert.index, def().id, value)
-                    .catch(app.report);
-                }}
-                onCommit={() => {
-                  void app
-                    .mixerCommand((backend) => backend.getTracks())
-                    .finally(() => setDragging(null));
-                }}
-              />
-            )}
-          </Index>
-        </div>
+        <Show
+          when={knobParams().length > 0}
+          fallback={
+            <div class="wv-insp__card-body">
+              <span class="wv-insp__line">
+                This build's catalogue has no parameters for {props.insert.typeId}.
+              </span>
+            </div>
+          }
+        >
+          <div class="wv-card__grid">
+            <Index each={knobParams()}>{(def) => <knobs.Param def={def()} />}</Index>
+            <Show when={resolvedTime(info(), values())}>
+              {(badge) => (
+                <div class="wv-param wv-insp__badge" title={badge().why}>
+                  <span class="wv-insp__badgemark">{badge().mark}</span>
+                  <span class="wv-param__value">{badge().value}</span>
+                  <span class="wv-param__name">Time</span>
+                </div>
+              )}
+            </Show>
+          </div>
+        </Show>
       </Show>
 
       <Show when={readoutDefs().length > 0}>
-        <div class="wv-meters">
-          <Index each={readoutDefs()}>
-            {(def) => {
-              const value = () =>
-                live().find((entry) => entry.id === def().id)?.value ?? 0;
-              return (
-                <div class="wv-meterbar" title={`${def().name}, live from the engine`}>
-                  <span class="wv-meterbar__name">{def().name}</span>
-                  <span class="wv-meterbar__track">
-                    <span
-                      class="wv-meterbar__fill"
-                      style={{ width: `${readoutFraction(def().unit, value()) * 100}%` }}
-                    />
-                  </span>
-                  <span class="wv-meterbar__value">{formatValue(def().unit, value())}</span>
-                </div>
-              );
-            }}
-          </Index>
-        </div>
+        <ReadoutBars defs={readoutDefs()} live={live()} />
       </Show>
     </div>
   );
+}
+
+/**
+ * The delay's time, resolved to what its two switches actually say.
+ *
+ * Deliberately words and not milliseconds while the delay is synced. The engine
+ * turns a division and the transport's tempo into a time internally and
+ * publishes neither the mapping nor the result, so a figure here would be the
+ * webview's guess at the engine's arithmetic printed as a fact. `Time` in free
+ * mode *is* a published parameter, so that one is a number.
+ *
+ * `null` for every other effect, which is what keeps this out of the layout
+ * table: it is one effect's badge, not a category of them.
+ */
+function resolvedTime(
+  info: EffectInfoDto | undefined,
+  values: ReadonlyMap<string, number>,
+): { mark: string; value: string; why: string } | null {
+  if (info?.typeId !== 'effects.delay') return null;
+  const at = (id: string) =>
+    values.get(id) ?? info.params.find((def) => def.id === id)?.defaultValue ?? 0;
+  if (at('sync') < 0.5) {
+    return {
+      mark: 'FREE',
+      value: formatValue('ms', at('time_ms')),
+      why: 'Free time: the delay runs at its Time parameter and ignores the tempo.',
+    };
+  }
+  const division = info.params.find((def) => def.id === 'division');
+  const modifier = info.params.find((def) => def.id === 'modifier');
+  const note = division ? switchLabel(info.typeId, division, at('division')) : '';
+  const shape = modifier ? switchLabel(info.typeId, modifier, at('modifier')) : '';
+  return {
+    mark: 'SYNC',
+    value: shape && shape !== 'Straight' ? `${note} ${shape.toLowerCase()}` : note,
+    why:
+      'Synced to the transport. The engine resolves the note value against the ' +
+      'tempo itself and publishes no millisecond figure, so this says the note ' +
+      'rather than guessing the number.',
+  };
 }

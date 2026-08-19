@@ -242,6 +242,31 @@
   color: var(--txt);
 }
 
+/* The EQ's card body: the curve fills it, so the padding is the card's own. */
+.wv-insp__curve {
+  padding: 9px 10px;
+}
+
+/*
+ * The delay's fourth cell: what its two switches resolved to.
+ *
+ * Shaped like a knob's cell rather than beside the grid, because it belongs to
+ * the same row of controls -- it is the readout for the switch two cells left.
+ */
+.wv-insp__badge {
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.wv-insp__badgemark {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--accSoft);
+  font: 500 8px 'Geist Mono Variable';
+  letter-spacing: 0.1em;
+  color: var(--acc);
+}
+
 /* The honest line: what the engine does *not* publish. */
 .wv-insp__line {
   font: 400 10px 'Geist Variable';
