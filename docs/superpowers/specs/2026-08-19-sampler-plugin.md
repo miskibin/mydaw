@@ -299,6 +299,42 @@ not on every status query: re-hashing 131 MB to answer "is it installed?" would
 make the status command cost half a second, and the atomic rename is what makes
 the size check sufficient.
 
+### Transport and TLS
+
+One `ureq::Agent`, built once per `HttpFetcher` rather than once per file: an
+agent owns the connection pool and the TLS session cache, and the previous
+per-file construction meant ninety fresh handshakes for one install.
+
+`ureq` compiles in Mozilla's root certificates and, by default, trusts nothing
+else. That is right for a browser and wrong for a desktop app on a corporate
+network. An inspecting proxy terminates TLS and re-signs with a private CA which
+IT has installed *in the operating system's store*; against the Mozilla bundle
+every URL then fails with `invalid peer certificate: UnknownIssuer`, while
+`curl` and every browser on the same machine succeed. So the workspace enables
+`ureq`'s `platform-verifier` feature and `download::tls_config` asks for
+`RootCerts::PlatformVerifier`: the machine's own opinion of a certificate
+becomes the app's.
+
+`MYDAW_TLS_NO_VERIFY=1` (also `true`/`yes`/`on`) turns verification off
+entirely, with a warning logged once per install. That is defensible **in this
+module and nowhere else**, and the reason is the section above: every byte
+written here is checked against a SHA-256 pinned in a file compiled into the
+binary. Integrity comes from the checksums, not from the certificate chain. A
+MITM without the escape hatch gets a failed connection; a MITM *with* it gets a
+checksum failure and a deleted `.part` file. What is actually given up is
+confidentiality on a public download of CC-BY piano samples, and the ability to
+tell "proxy" from "attacker" — which is why it is opt-in, loud, and documented
+as a last resort rather than a workaround.
+
+`AssetManifest::parse` still requires every URL to be `https://`, so the escape
+hatch cannot be sidestepped by rewriting the manifest to plain HTTP.
+
+Covered by four unit tests in `download.rs`: that the config names the platform
+verifier, that the flag really sets `disable_verification`, that **both** agents
+are constructible — which is what proves the `platform-verifier` feature is
+still enabled, since without it `ureq` panics on first connect rather than
+failing to compile — and that the environment variable's spellings parse.
+
 ### Status
 
 ```ts

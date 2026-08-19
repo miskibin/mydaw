@@ -43,7 +43,10 @@ fn the_pinned_urls_still_serve_the_bytes_their_checksums_promise() {
         entry.url
     );
 
-    let mut reader = HttpFetcher
+    // `new` rather than `with_verification`, so this test exercises exactly the
+    // configuration the app ships -- including `MYDAW_TLS_NO_VERIFY` when the
+    // person running it is behind a proxy the OS store does not know either.
+    let mut reader = HttpFetcher::new()
         .fetch(&entry.url)
         .unwrap_or_else(|err| panic!("the pinned URL must be reachable: {err}"));
 

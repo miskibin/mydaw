@@ -28,7 +28,15 @@ symphonia = { version = "0.6", default-features = false, features = ["flac", "wa
 # `ureq` and not `reqwest`: the asset downloader is a blocking loop on its own
 # thread, so an async runtime would be pure weight. `reqwest` appears in the
 # lockfile but is not in this workspace's build graph, so it is not "free".
-ureq = "3"
+#
+# `platform-verifier` pulls in `rustls-platform-verifier`, which validates the
+# server chain against the **operating system's** trust store instead of the
+# Mozilla roots `ureq` bundles by default. On a corporate network whose proxy
+# terminates TLS and re-signs with a private CA, the bundled roots produce
+# `invalid peer certificate: UnknownIssuer` for every URL -- while the machine
+# itself trusts that CA perfectly well, because IT installed it. See
+# `mydaw_plugin_sampler::download::tls_config`.
+ureq = { version = "3", features = ["platform-verifier"] }
 sha2 = "0.10"      # SHA-256 over every downloaded asset; pinned in assets-manifest.json
 # --- analysis / debug harness (non-RT only) ---
 realfft = "3"      # real-input FFT for capture spectra (wraps rustfft)

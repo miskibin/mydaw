@@ -143,6 +143,26 @@ finishes, the instrument appears in the track source picker **without a restart*
 `scripts/gen-asset-manifest.ps1` regenerates the manifest from the upstream SFZ mapping. It is a
 maintenance tool, not part of a normal install.
 
+### If your network inspects TLS
+
+The in-app downloader validates the server's certificate against **the operating system's trust
+store**, not against a bundled copy of Mozilla's roots. That is what makes it work behind a
+corporate proxy that terminates TLS and re-signs with a private CA: your IT department already
+installed that CA on the machine, and MYDAW now believes it.
+
+If the download still fails with `invalid peer certificate: UnknownIssuer`, the proxy's root is not
+in the system store either. As a last resort:
+
+```sh
+MYDAW_TLS_NO_VERIFY=1 cargo run -p mydaw-app     # or set it for the packaged app
+```
+
+This disables certificate verification for asset downloads only, and logs a loud warning. It is safe
+in the narrow sense that matters here: **every downloaded file is checked against the SHA-256 pinned
+in `assets-manifest.json`, which ships inside the binary.** An attacker on the wire can make the
+download fail, not make you install different samples. Unset it once the certificate is installed
+properly.
+
 ### Attribution
 
 The bundled piano is the **[Salamander Grand Piano V3](https://github.com/sfzinstruments/SalamanderGrandPiano)**

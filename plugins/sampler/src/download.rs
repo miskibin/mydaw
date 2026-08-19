@@ -44,6 +44,25 @@
 //! a second, and the atomic rename above is what makes the size check
 //! sufficient -- a file with the right name and size got there by passing its
 //! hash.
+//!
+//! # TLS, and why the OS decides what to trust
+//! `ureq` ships Mozilla's root certificates and, by default, trusts nothing
+//! else. That is the right default for a browser and the wrong one for a
+//! desktop application on a corporate network: an inspecting proxy terminates
+//! TLS and re-signs with a private CA which IT has installed *in the operating
+//! system's store*, and every URL then fails with
+//! `invalid peer certificate: UnknownIssuer`. So [`tls_config`] asks for
+//! [`RootCerts::PlatformVerifier`], and the machine's own opinion of a
+//! certificate becomes the app's.
+//!
+//! [`TLS_NO_VERIFY_ENV`] switches verification off entirely, loudly. That is
+//! defensible **here specifically** and nowhere else in the codebase: every
+//! byte this module writes is checked against a SHA-256 pinned in a file that
+//! ships inside the binary (see [`ASSET_MANIFEST_JSON`]), so the integrity of
+//! the install does not rest on TLS at all -- TLS is buying confidentiality for
+//! a public download of Creative Commons piano samples. A user behind a proxy
+//! MYDAW cannot be taught to trust gets their samples; an attacker who
+//! substitutes bytes gets a checksum failure and a deleted `.part` file.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -280,20 +299,113 @@ pub trait Fetcher: Send + Sync {
     fn fetch(&self, url: &str) -> Result<Box<dyn Read + Send>, DownloadError>;
 }
 
-/// Fetches over HTTPS.
-#[derive(Debug, Default)]
-pub struct HttpFetcher;
+/// Set to `1` (or `true`/`yes`/`on`) to skip TLS certificate verification.
+///
+/// The escape hatch for a network whose interception CA is not in the OS store
+/// either -- a proxy that was configured for browsers and forgotten about
+/// everywhere else. See the module docs for why disabling verification is
+/// acceptable in this one module: the SHA-256 pins, not the certificate chain,
+/// are what make an installed sample the right sample.
+pub const TLS_NO_VERIFY_ENV: &str = "MYDAW_TLS_NO_VERIFY";
+
+/// Whether the environment asks for unverified TLS.
+///
+/// Accepts the usual spellings of "yes" rather than only `1`, because a user
+/// reaching for this variable is already having a bad afternoon and
+/// `MYDAW_TLS_NO_VERIFY=true` silently doing nothing would extend it.
+pub fn tls_verification_disabled_by_env() -> bool {
+    std::env::var(TLS_NO_VERIFY_ENV).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
+}
+
+/// The TLS settings the downloader connects with.
+///
+/// `disable_verification` is the caller's decision rather than an environment
+/// read inside this function, so that a test can build both configurations
+/// without touching the process environment -- which is global, and which two
+/// tests running in parallel would fight over.
+///
+/// # Panics
+/// Never. `RootCerts::PlatformVerifier` needs `ureq`'s `platform-verifier`
+/// feature, which this workspace enables in its root `Cargo.toml`; without it
+/// `ureq` panics when the agent first connects. The unit test below builds an
+/// agent from this config precisely so a dropped feature flag is a red test
+/// rather than a panic in front of a user.
+pub fn tls_config(disable_verification: bool) -> ureq::tls::TlsConfig {
+    ureq::tls::TlsConfig::builder()
+        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+        .disable_verification(disable_verification)
+        .build()
+}
+
+/// The agent the downloader issues every request through.
+///
+/// One agent for the whole install rather than one per file: an agent owns the
+/// connection pool and the TLS session cache, and rebuilding it per sample
+/// meant a fresh handshake for each of ninety files.
+pub fn build_agent(disable_verification: bool) -> ureq::Agent {
+    ureq::Agent::config_builder()
+        .timeout_global(Some(REQUEST_TIMEOUT))
+        .tls_config(tls_config(disable_verification))
+        .build()
+        .into()
+}
+
+/// Fetches over HTTPS, trusting the operating system's certificate store.
+///
+/// See the module docs. The agent is built once, when the fetcher is created,
+/// so the warning about disabled verification is logged once per install rather
+/// than once per file.
+#[derive(Debug)]
+pub struct HttpFetcher {
+    agent: ureq::Agent,
+}
+
+impl Default for HttpFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpFetcher {
+    /// A fetcher configured from the environment.
+    pub fn new() -> Self {
+        let unverified = tls_verification_disabled_by_env();
+        if unverified {
+            log::warn!(
+                "{TLS_NO_VERIFY_ENV} is set: TLS certificate verification is DISABLED for asset \
+                 downloads. The connection is encrypted but unauthenticated -- anything between \
+                 this machine and the server can read and rewrite it. Every downloaded file is \
+                 still checked against the SHA-256 pinned in {ASSET_MANIFEST_FILE}, so a \
+                 substituted file is discarded rather than installed; unset the variable once \
+                 your proxy's root certificate is in the system trust store."
+            );
+        }
+        Self::with_verification(!unverified)
+    }
+
+    /// A fetcher with certificate verification explicitly on or off.
+    pub fn with_verification(verify: bool) -> Self {
+        Self {
+            agent: build_agent(!verify),
+        }
+    }
+}
 
 impl Fetcher for HttpFetcher {
     fn fetch(&self, url: &str) -> Result<Box<dyn Read + Send>, DownloadError> {
-        let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(REQUEST_TIMEOUT))
-            .build()
-            .into();
-        let response = agent.get(url).call().map_err(|err| DownloadError::Http {
-            url: url.to_owned(),
-            reason: err.to_string(),
-        })?;
+        let response = self
+            .agent
+            .get(url)
+            .call()
+            .map_err(|err| DownloadError::Http {
+                url: url.to_owned(),
+                reason: err.to_string(),
+            })?;
         Ok(Box::new(response.into_body().into_reader()))
     }
 }
@@ -353,7 +465,7 @@ impl AssetDownloader {
             AssetManifest::embedded()?,
             ASSET_MANIFEST_JSON.to_owned(),
             instruments_root,
-            Arc::new(HttpFetcher),
+            Arc::new(HttpFetcher::new()),
         ))
     }
 
@@ -933,5 +1045,100 @@ mod tests {
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    // ------------------------------------------------------------------- TLS
+
+    /// The whole point of the change: root certificates come from the operating
+    /// system, not from the Mozilla bundle `ureq` compiles in. A corporate
+    /// proxy's private CA is in the former and never in the latter.
+    #[test]
+    fn the_downloader_trusts_the_platforms_certificate_store_rather_than_a_bundle() {
+        let config = tls_config(false);
+        assert!(
+            matches!(config.root_certs(), ureq::tls::RootCerts::PlatformVerifier),
+            "expected the platform verifier, got {:?}",
+            config.root_certs()
+        );
+        assert!(!config.disable_verification());
+        assert_eq!(
+            config.provider(),
+            ureq::tls::TlsProvider::Rustls,
+            "rustls plus rustls-platform-verifier, which is what the feature flag buys"
+        );
+    }
+
+    /// And the escape hatch really disables verification rather than only
+    /// logging about it.
+    #[test]
+    fn the_escape_hatch_turns_verification_off() {
+        assert!(tls_config(true).disable_verification());
+    }
+
+    /// Building the agent is what proves the `platform-verifier` feature is
+    /// actually enabled: without it `ureq` panics on the first connection with
+    /// `RootCerts::PlatformVerifier`, which would be a crash in front of a user
+    /// rather than a compile error. Constructing both agents here turns a
+    /// dropped feature flag in `Cargo.toml` into a failing test.
+    #[test]
+    fn both_agent_modes_are_constructible() {
+        for disable_verification in [false, true] {
+            let agent = build_agent(disable_verification);
+            assert_eq!(
+                agent.config().timeouts().global,
+                Some(REQUEST_TIMEOUT),
+                "the per-request timeout must survive the TLS configuration"
+            );
+            assert!(matches!(
+                agent.config().tls_config().root_certs(),
+                ureq::tls::RootCerts::PlatformVerifier
+            ));
+            assert_eq!(
+                agent.config().tls_config().disable_verification(),
+                disable_verification
+            );
+        }
+        // And the fetcher's two constructors agree with the config they name.
+        assert!(!HttpFetcher::with_verification(true)
+            .agent
+            .config()
+            .tls_config()
+            .disable_verification());
+        assert!(HttpFetcher::with_verification(false)
+            .agent
+            .config()
+            .tls_config()
+            .disable_verification());
+    }
+
+    /// The spellings a user reaching for this variable is likely to type. Not
+    /// parallel-safe against anything else that reads the environment, which is
+    /// why this is the only test that touches it -- and it puts it back.
+    #[test]
+    fn the_no_verify_variable_accepts_the_obvious_spellings_and_nothing_else() {
+        let previous = std::env::var_os(TLS_NO_VERIFY_ENV);
+        for value in ["1", "true", "TRUE", "yes", "on", " 1 "] {
+            std::env::set_var(TLS_NO_VERIFY_ENV, value);
+            assert!(
+                tls_verification_disabled_by_env(),
+                "{value:?} should disable verification"
+            );
+        }
+        for value in ["0", "false", "no", "", "maybe"] {
+            std::env::set_var(TLS_NO_VERIFY_ENV, value);
+            assert!(
+                !tls_verification_disabled_by_env(),
+                "{value:?} should leave verification on"
+            );
+        }
+        std::env::remove_var(TLS_NO_VERIFY_ENV);
+        assert!(
+            !tls_verification_disabled_by_env(),
+            "unset means the secure default"
+        );
+        match previous {
+            Some(value) => std::env::set_var(TLS_NO_VERIFY_ENV, value),
+            None => std::env::remove_var(TLS_NO_VERIFY_ENV),
+        }
     }
 }
