@@ -50,7 +50,14 @@ import { faderFraction, faderToDb, formatDb, panLabel } from '../panels/mixer/sc
 import { useView } from '../shell/view';
 import { insertTargetFor, useAppState, type StripRef } from '../state';
 import { trackColor } from '../theme/tokens';
-import { FADER_TRAVEL_PX, startDrag } from '../ui/drag';
+import {
+  bindWheel,
+  debounce,
+  FADER_TRAVEL_PX,
+  FINE_FACTOR,
+  startDrag,
+  WHEEL_COMMIT_MS,
+} from '../ui/drag';
 import { onFrame } from '../ui/frameLoop';
 import { Knob, spec } from '../ui/Knob';
 import { Meter } from '../ui/Meter';
@@ -60,6 +67,75 @@ const PAN_DEF = spec('pan', 'Pan', '', -1, 1, 0);
 
 /** How far the pointer may travel and still count as a click on a send cell. */
 const SEND_CLICK_SLOP_PX = 3;
+
+/**
+ * How long after a release a second press is still the same double-click.
+ *
+ * The send cell's click is a *toggle*, and a toggle double-clicked twitches:
+ * route, unroute, and the level and the PRE flag the send was carrying are gone
+ * without the second click ever having been meant. So the cell swallows the
+ * second press and a double-click does exactly what a click does. 500 ms is the
+ * window Windows uses by default.
+ *
+ * Nothing in the DOM tells a `pointerup` that a `dblclick` is coming, so this
+ * has to be measured rather than asked for.
+ */
+const DOUBLE_CLICK_MS = 500;
+
+/**
+ * Decibels per notch of the wheel on a fader, and with shift held.
+ *
+ * A fader is read in dB, so its notch is a round number of dB rather than a
+ * fraction of the throw -- half a dB is the smallest move that is worth making
+ * on purpose, and a tenth is the smallest anyone can hear on a single source.
+ */
+const FADER_WHEEL_DB = 0.5;
+
+/**
+ * Pan units per notch. Pan runs -1..1 and is read out in hundredths (`L42`), so
+ * a notch is two of those: fifty notches from hard left to hard right.
+ */
+const PAN_WHEEL_STEP = 0.02;
+
+/**
+ * Pan units per notch with shift held.
+ *
+ * A hundredth rather than a fifth of a notch, because a hundredth is the whole
+ * resolution the parameter has -- `setPan` rounds there and the readout counts
+ * there. A truer fifth would round straight back to where it started, which is
+ * a modifier that visibly does nothing.
+ */
+const PAN_FINE_STEP = 0.01;
+
+/**
+ * Send level per notch, in the **linear** level the engine stores rather than
+ * the dB the knob shows.
+ *
+ * A send is a proportion of a signal, and 2% of it is the unit that proportion
+ * comes in. It also lands the resolution where it is needed: fine near unity,
+ * where a send is actually balanced, and coarse down in the -40s, which is a
+ * region you pass through rather than work in.
+ */
+const SEND_WHEEL_LEVEL = 0.02;
+
+/**
+ * A fine notch on a send, in the dB it is read in rather than the level it is
+ * stored in.
+ *
+ * A fifth of 2% of the signal is about a thirtieth of a decibel: real, sent to
+ * the engine, and invisible on a readout with one decimal place -- which is a
+ * modifier that looks broken. A tenth of a dB is the smallest move the readout
+ * can show, so that is what fine means here.
+ */
+const SEND_FINE_DB = 0.1;
+
+/**
+ * One strip's worth of horizontal travel: the 90 px strip of `mixer.css` plus
+ * the 5 px gap between them. Mirrored here rather than measured, because a
+ * scroll step that changed with the DOM would be a scroll step nobody could
+ * predict; if the strip width in `mixer.css` moves, this moves with it.
+ */
+const STRIP_PITCH_PX = 95;
 
 /** Insert rows a strip draws before it collapses the rest into "+N more". */
 const SLOT_ROWS = 4;
@@ -148,6 +224,34 @@ export function Mixer(): JSX.Element {
   const app = useAppState();
   const [menu, setMenu] = createSignal<FxMenu | null>(null);
 
+  /**
+   * The strip row scrolls itself sideways on the wheel.
+   *
+   * Chrome turns a vertical wheel into horizontal scrolling for a box that only
+   * overflows sideways on macOS and not on Windows, so on the platform this is
+   * built for a mixer wider than its window could only be reached by finding
+   * the scrollbar. The row therefore does it itself, one strip per notch, which
+   * also keeps the strips aligned rather than landing mid-fader.
+   *
+   * It only ever sees the *gaps*: every control on a strip stops its own wheel
+   * event, and this declines the notch when there is nothing to scroll, so a
+   * mixer that fits its window leaves the wheel exactly as it found it.
+   *
+   * Bound from the ref rather than from `onMount`, because the row lives inside
+   * the `Show` waiting for the engine's first `MixerState` and does not exist
+   * yet when the view mounts.
+   */
+  let unbindRow: (() => void) | undefined;
+  const bindStripRow = (row: HTMLDivElement): void => {
+    unbindRow?.();
+    unbindRow = bindWheel(row, (notches) => {
+      if (row.scrollWidth <= row.clientWidth) return false;
+      row.scrollLeft -= notches * STRIP_PITCH_PX;
+      return true;
+    });
+  };
+  onCleanup(() => unbindRow?.());
+
   function openMenu(target: InsertTarget, owner: string, event: MouseEvent): void {
     setMenu({
       target,
@@ -172,7 +276,7 @@ export function Mixer(): JSX.Element {
         >
           {(state) => (
             <>
-              <div class="wv-mixer__strips">
+              <div class="wv-mixer__strips" ref={bindStripRow}>
                 <Index each={state().tracks}>
                   {(track, i) => (
                     <Strip
@@ -373,8 +477,9 @@ function Strip(props: StripProps): JSX.Element {
 
   const name = () => track()?.name ?? bus()?.name ?? 'Master';
   const kindTag = () => (isMaster() ? 'OUT' : track() ? 'INS' : 'BUS');
-  const gainDb = () => track()?.gainDb ?? bus()?.gainDb ?? master()?.gainDb ?? 0;
-  const pan = () => track()?.pan ?? bus()?.pan;
+
+  const gainDb = () => localDb() ?? track()?.gainDb ?? bus()?.gainDb ?? master()?.gainDb ?? 0;
+  const pan = () => localPan() ?? track()?.pan ?? bus()?.pan;
   const muted = () => track()?.muted ?? bus()?.muted ?? false;
   const soloed = () => track()?.soloed ?? bus()?.soloed ?? false;
   const silenced = () => track()?.silenced ?? bus()?.silenced ?? false;
@@ -432,14 +537,40 @@ function Strip(props: StripProps): JSX.Element {
   }
 
   // --- level and pan -------------------------------------------------------
+  //
+  // Both go straight to the backend and draw from `local()` until a debounced
+  // `get_tracks` reconciles them, rather than routing every step through
+  // `mixerCommand` and reading the answer back.
+  //
+  // A gesture is a stream of small changes with an *end*, and the shell already
+  // knows the value at every point along it. Waiting for a whole `MixerState`
+  // per step means a control that only moves as fast as the round trip -- which
+  // is the defect the inspector's knobs already had to be cured of -- and on
+  // the wheel it means one refetch per click of a notched wheel. So the value
+  // moves now, the engine is told now, and the authoritative answer is asked
+  // for once the gesture goes quiet.
+
+  /** What the strip draws while the engine's copy is still catching up. */
+  const [localDb, setLocalDb] = createSignal<number | null>(null);
+  const [localPan, setLocalPan] = createSignal<number | null>(null);
+
+  const settle = debounce(WHEEL_COMMIT_MS, () => {
+    void app.mixerCommand((b) => b.getTracks()).finally(() => {
+      setLocalDb(null);
+      setLocalPan(null);
+    });
+  });
+  onCleanup(() => settle.cancel());
 
   function setGain(db: number): void {
+    setLocalDb(db);
     app.say(`${name()} · Volume`, `${formatDb(db)} dB`);
     const asTrack = track();
     const asBus = bus();
-    if (asTrack) void app.mixerCommand((b) => b.setTrackGain(asTrack.index, db));
-    else if (asBus) void app.mixerCommand((b) => b.setBusGain(asBus.index, db));
-    else void app.mixerCommand((b) => b.setMasterGain(db));
+    if (asTrack) void app.backend.setTrackGain(asTrack.index, db).catch(app.report);
+    else if (asBus) void app.backend.setBusGain(asBus.index, db).catch(app.report);
+    else void app.backend.setMasterGain(db).catch(app.report);
+    settle();
   }
 
   function onFaderDown(event: PointerEvent): void {
@@ -447,7 +578,10 @@ function Strip(props: StripProps): JSX.Element {
     event.stopPropagation();
     startDrag(event, {
       // In *travel* rather than decibels, so `scale.ts` stays the one thing
-      // that decides how the dB are spaced along the throw.
+      // that decides how the dB are spaced along the throw. Anchored on the
+      // value the fader already has, never on the pixel that was clicked: a
+      // fader that jumped to the pointer would be +6 dB into the monitors for
+      // the sake of a click three pixels too high.
       from: faderFraction(gainDb()),
       perPixel: 1 / FADER_TRAVEL_PX,
       min: 0,
@@ -456,12 +590,33 @@ function Strip(props: StripProps): JSX.Element {
     });
   }
 
+  function onFaderWheel(notches: number, event: WheelEvent): void {
+    const state = app.mixer();
+    const floor = state?.minGainDb ?? -60;
+    const ceiling = state?.maxGainDb ?? 6;
+    const step = FADER_WHEEL_DB * (event.shiftKey ? FINE_FACTOR : 1);
+    // Rounded to a tenth for the same reason `faderToDb` is: the readout has
+    // one decimal, and a fader reporting -6.03 while showing -6.0 reads as a bug.
+    const next = Math.round(Math.min(ceiling, Math.max(floor, gainDb() + notches * step)) * 10) / 10;
+    if (next === gainDb()) return;
+    setGain(next);
+  }
+
+  let faderEl: HTMLDivElement | undefined;
+  let unbindFader: (() => void) | undefined;
+  onMount(() => {
+    if (faderEl) unbindFader = bindWheel(faderEl, onFaderWheel);
+  });
+  onCleanup(() => unbindFader?.());
+
   function setPan(value: number): void {
     const next = Math.round(value * 100) / 100;
+    setLocalPan(next);
     const asTrack = track();
     const asBus = bus();
-    if (asTrack) void app.mixerCommand((b) => b.setTrackPan(asTrack.index, next));
-    else if (asBus) void app.mixerCommand((b) => b.setBusPan(asBus.index, next));
+    if (asTrack) void app.backend.setTrackPan(asTrack.index, next).catch(app.report);
+    else if (asBus) void app.backend.setBusPan(asBus.index, next).catch(app.report);
+    settle();
   }
 
   // --- the meter -----------------------------------------------------------
@@ -603,17 +758,26 @@ function Strip(props: StripProps): JSX.Element {
   const [dragDb, setDragDb] = createSignal<number | null>(null);
   const sendDb = () => dragDb() ?? existing()?.levelDb ?? (app.mixer()?.minGainDb ?? -60);
 
+  /** The linear level a send's dB reading stands for, and back again. */
+  const sendLevelOf = (db: number): number => {
+    const state = app.mixer();
+    const floor = state?.minGainDb ?? -60;
+    const ceiling = state?.maxSendLevel ?? 1.25;
+    return db <= floor ? 0 : Math.min(ceiling, 10 ** (db / 20));
+  };
+
+  const sendDbOf = (level: number): number => {
+    const floor = app.mixer()?.minGainDb ?? -60;
+    return level <= 0 ? floor : Math.max(floor, 20 * Math.log10(level));
+  };
+
   function onSendLevel(db: number): void {
     const send = existing();
     if (!send) return;
     setDragDb(db);
-    const state = app.mixer();
-    const floor = state?.minGainDb ?? -60;
-    const ceiling = state?.maxSendLevel ?? 1.25;
     // The knob works in decibels because that is the scale a level belongs on;
     // the engine stores the linear level, and holds the one conversion.
-    const level = db <= floor ? 0 : Math.min(ceiling, 10 ** (db / 20));
-    void app.backend.setSendLevel(send.id, level).catch(app.report);
+    void app.backend.setSendLevel(send.id, sendLevelOf(db)).catch(app.report);
   }
 
   function onSendCommit(): void {
@@ -654,14 +818,21 @@ function Strip(props: StripProps): JSX.Element {
   }
 
   /**
-   * Click versus drag on the send cell, measured rather than guessed.
+   * Click versus drag versus double-click on the send cell, measured rather
+   * than guessed.
    *
-   * A press that goes nowhere toggles the route; a press that moves is the
-   * knob's own level drag. Listening in the **capture** phase because the knob
-   * stops the event propagating once it has started its drag, and a bubble
-   * listener would therefore only ever see the "no route yet" case.
+   * A press that goes nowhere toggles the route; a press that moves more than
+   * `SEND_CLICK_SLOP_PX` is the knob's own level drag, so a hand that wobbles
+   * two pixels on the way to a click still routes; a press that follows a
+   * release closely enough is the second half of a double-click and does
+   * nothing at all, so the pair reads as the single toggle it was meant to be.
+   *
+   * Listening in the **capture** phase because the knob stops the event
+   * propagating once it has started its drag, and a bubble listener would
+   * therefore only ever see the "no route yet" case.
    */
   let cell: HTMLDivElement | undefined;
+  let lastRelease = Number.NEGATIVE_INFINITY;
 
   function onCellDown(event: PointerEvent): void {
     if (event.button !== 0) return;
@@ -670,6 +841,7 @@ function Strip(props: StripProps): JSX.Element {
     if (!routable()) return;
     const x0 = event.clientX;
     const y0 = event.clientY;
+    const redoubled = event.timeStamp - lastRelease < DOUBLE_CLICK_MS;
     let moved = false;
     const move = (moveEvent: PointerEvent) => {
       if (
@@ -679,11 +851,14 @@ function Strip(props: StripProps): JSX.Element {
         moved = true;
       }
     };
-    const up = () => {
+    const up = (upEvent: PointerEvent) => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
-      if (!moved) toggleRoute();
+      // A drag ends nowhere near where it began, so it cannot be the first half
+      // of anything: only a still press arms the double-click window.
+      lastRelease = moved ? Number.NEGATIVE_INFINITY : upEvent.timeStamp;
+      if (!moved && !redoubled) toggleRoute();
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -860,10 +1035,16 @@ function Strip(props: StripProps): JSX.Element {
             def={PAN_DEF}
             value={() => pan() ?? 0}
             onInput={setPan}
+            // Pan's own unit, not a fraction of the throw: the readout counts
+            // in hundredths and the wheel should move it in hundredths too.
+            wheelStep={(value, notches) =>
+              value +
+              Math.sign(notches) * (Math.abs(notches) < 1 ? PAN_FINE_STEP : PAN_WHEEL_STEP)
+            }
             owner={name()}
             size={22}
             color={selected() ? 'var(--acc)' : 'var(--dim)'}
-            title={`Pan ${panLabel(pan() ?? 0)} — drag, shift for fine, double-click to centre`}
+            title={`Pan ${panLabel(pan() ?? 0)} — drag or scroll, shift for fine, double-click to centre`}
           />
         </Show>
         <div class="wv-mixer__reads">
@@ -881,6 +1062,7 @@ function Strip(props: StripProps): JSX.Element {
 
       <div class="wv-mixer__faders">
         <div
+          ref={faderEl}
           class="wv-fader"
           role="slider"
           tabindex="0"
@@ -889,7 +1071,9 @@ function Strip(props: StripProps): JSX.Element {
           aria-valuemax={app.mixer()?.maxGainDb ?? 6}
           aria-valuenow={Number(gainDb().toFixed(1))}
           aria-valuetext={`${formatDb(gainDb())} dB`}
-          title="Drag to set the level, double-click for 0 dB"
+          title={`Drag to set the level · scroll for ${FADER_WHEEL_DB} dB a notch, shift for ${
+            FADER_WHEEL_DB * FINE_FACTOR
+          } · double-click for 0 dB`}
           onPointerDown={onFaderDown}
           onDblClick={(event) => {
             event.stopPropagation();
@@ -953,14 +1137,30 @@ function Strip(props: StripProps): JSX.Element {
               value={sendDb}
               onInput={onSendLevel}
               onCommit={onSendCommit}
+              // A notch is 2% of the signal, in the linear level the engine
+              // stores rather than the dB the cap shows: that is the unit a
+              // send is actually thought about in, and it puts the fine end of
+              // the resolution up at unity where the balancing happens. Shift
+              // crosses back into dB, because that is where the readout can
+              // show the difference.
+              wheelStep={(db, notches) =>
+                Math.abs(notches) < 1
+                  ? db + Math.sign(notches) * SEND_FINE_DB
+                  : sendDbOf(sendLevelOf(db) + notches * SEND_WHEEL_LEVEL)
+              }
               owner={sendOwner()}
               label="Send"
               size={20}
               disabled={existing() === undefined}
+              // No "double-click to reset" here, unlike every other knob in the
+              // shell: on this cell the click is the route toggle, and the
+              // first half of a double-click would have removed the send before
+              // there was anything left to reset. Unrouting and routing again
+              // *is* the reset -- a new send starts at 0 dB, post-fader.
               title={
                 existing()
-                  ? 'Drag for the send level · click to unroute'
-                  : 'Click to route this pair'
+                  ? 'Drag or scroll for the send level · click to unroute'
+                  : 'Click to route this pair · then drag or scroll for the level'
               }
             />
             <Show

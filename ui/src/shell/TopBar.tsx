@@ -206,7 +206,7 @@ export function TopBar(): ReturnType<typeof Show> {
               max={MAX_BPM}
               step={0.5}
               format={(value) => value.toFixed(2)}
-              title="Tempo — drag, or double-click to type"
+              title="Tempo — drag, scroll, or double-click to type"
               aria-label="Tempo in beats per minute"
             />
             <span class="wv-meta__tag">BPM</span>

@@ -7,23 +7,27 @@
  * parameter, a send level, a pan -- by handing it a `ParamDefDto`-shaped spec,
  * which is why there is no second, subtly different knob for the mixer.
  *
- * Four behaviours, all of them expected of a DAW knob and none of them
+ * Five behaviours, all of them expected of a DAW knob and none of them
  * negotiable:
  *
  * - **Vertical drag** moves the *normalised* position, so a logarithmic
  *   parameter moves by a constant musical interval per pixel.
+ * - **The wheel** moves that same normalised position by a fixed fraction per
+ *   notch, so it is curve-aware for free. A caller with a natural unit of its
+ *   own says so with `wheelStep`.
  * - **Shift** is fine control, live: pressing or releasing it mid-drag changes
- *   the rate from that pixel on.
+ *   the rate from that pixel on, and it is the same fifth of a step on the
+ *   wheel.
  * - **Double-click** returns the parameter to its default.
  * - **Every change says what it did** in the status bar's readout, formatted in
  *   the parameter's own unit.
  *
  * A parameter the engine declared as a switch (`smoothingMs: 0` with a step)
- * is drawn as a switch and cycled by clicking. It is never animated: there is
- * no value halfway between "peak" and "RMS".
+ * is drawn as a switch, cycled by clicking and stepped by the wheel. It is
+ * never animated: there is no value halfway between "peak" and "RMS".
  */
 
-import { Show } from 'solid-js';
+import { onCleanup, onMount, Show } from 'solid-js';
 
 import type { ParamDefDto } from '../api/types';
 import {
@@ -31,11 +35,30 @@ import {
   fromNormalised,
   isSwitch,
   knobAngle,
+  snapToStep,
   switchPositions,
   toNormalised,
 } from '../lib/param';
 import { useAppState } from '../state';
-import { KNOB_TRAVEL_PX, startDrag } from './drag';
+import {
+  bindWheel,
+  debounce,
+  FINE_FACTOR,
+  KNOB_TRAVEL_PX,
+  startDrag,
+  WHEEL_COMMIT_MS,
+} from './drag';
+
+/**
+ * How much of a parameter's range one notch of the wheel covers.
+ *
+ * A fiftieth, of the *normalised* position: a `log` frequency therefore moves
+ * by a constant musical interval per notch and a linear one by a constant
+ * amount, which is the same promise the drag makes. Fifty notches end to end is
+ * a couple of comfortable flicks -- fewer and a filter sweep is a wrist
+ * exercise, more and the wheel overshoots everything.
+ */
+const WHEEL_NORMALISED_STEP = 0.02;
 
 export interface KnobProps {
   /** The parameter's metadata. Synthesise one for anything not an insert. */
@@ -47,6 +70,17 @@ export interface KnobProps {
   onInput: (value: number) => void;
   /** Called once when the gesture ends, for callers that batch. */
   onCommit?: (value: number) => void;
+  /**
+   * Where one wheel notch lands, for a control whose own unit is not the
+   * parameter's.
+   *
+   * `notches` arrives signed and already scaled by shift, so a caller only
+   * states the size of a whole notch. Omitted -- which is every insert
+   * parameter, because only the engine knows what its unit means -- the wheel
+   * moves the normalised position by `WHEEL_NORMALISED_STEP` instead. The
+   * result is clamped and snapped to the parameter's step grid either way.
+   */
+  wheelStep?: (value: number, notches: number) => number;
   /** What owns it: `Reverb Bus · Compressor`. Prefixes the readout. */
   owner: string;
   /** Overrides the parameter's own name on the cap. */
@@ -74,19 +108,41 @@ export function Knob(props: KnobProps): ReturnType<typeof Show> {
     announce(value);
   }
 
+  /**
+   * The wheel's commit, deferred.
+   *
+   * A drag commits on the release it obviously has; a wheel has no release, so
+   * the end of the gesture is a pause. Callers batch a whole-mixer refetch onto
+   * `onCommit`, and one of those per notch is a round trip between every click
+   * of the wheel -- the value itself has already moved by then.
+   */
+  const commitSoon = debounce(WHEEL_COMMIT_MS, () => props.onCommit?.(props.value()));
+  onCleanup(() => commitSoon.cancel());
+
+  /** The position a switch is on, `0`-based. */
+  const switchIndex = (): number => {
+    const step = props.def.step && props.def.step > 0 ? props.def.step : 1;
+    return Math.round((props.value() - props.def.min) / step);
+  };
+
+  const switchValue = (index: number): number =>
+    props.def.min + index * (props.def.step && props.def.step > 0 ? props.def.step : 1);
+
   function onPointerDown(event: PointerEvent): void {
     if (props.disabled || event.button !== 0) return;
     if (isSwitch(props.def)) {
       // A switch has no travel: clicking advances it, wrapping at the end.
-      const step = props.def.step && props.def.step > 0 ? props.def.step : 1;
-      const index = Math.round((props.value() - props.def.min) / step);
-      const next = props.def.min + ((index + 1) % switchPositions(props.def)) * step;
+      const next = switchValue((switchIndex() + 1) % switchPositions(props.def));
       event.preventDefault();
       event.stopPropagation();
       apply(next);
       props.onCommit?.(next);
       return;
     }
+    // A pointer gesture is the authority on where the value ends up, so it
+    // cancels any notch still waiting to commit rather than letting that timer
+    // fire mid-drag and pull the caller's local value out from under it.
+    commitSoon.cancel();
     startDrag(event, {
       from: toNormalised(props.def, props.value()),
       perPixel: 1 / KNOB_TRAVEL_PX,
@@ -101,15 +157,59 @@ export function Knob(props: KnobProps): ReturnType<typeof Show> {
     if (props.disabled) return;
     event.preventDefault();
     event.stopPropagation();
+    commitSoon.cancel();
     apply(props.def.defaultValue);
     props.onCommit?.(props.def.defaultValue);
   }
 
+  function onWheel(notches: number, event: WheelEvent): void {
+    if (props.disabled) return;
+    const current = props.value();
+
+    if (isSwitch(props.def)) {
+      // A switch steps to the neighbouring position and stops at the ends. It
+      // does not wrap the way the click does: a click has a "next" and nothing
+      // else, a wheel has a direction, and wrapping a direction means rolling
+      // gently downwards lands on the top position.
+      const index = Math.min(
+        switchPositions(props.def) - 1,
+        Math.max(0, switchIndex() + (notches > 0 ? 1 : -1)),
+      );
+      const next = switchValue(index);
+      if (next === current) return;
+      apply(next);
+      commitSoon();
+      return;
+    }
+
+    const scaled = event.shiftKey ? notches * FINE_FACTOR : notches;
+    const next = props.wheelStep
+      ? snapToStep(props.def, props.wheelStep(current, scaled))
+      : fromNormalised(props.def, toNormalised(props.def, current) + scaled * WHEEL_NORMALISED_STEP);
+    if (next === current) return;
+    apply(next);
+    commitSoon();
+  }
+
+  // Bound on the wrapper rather than on the cap: a knob is 22-30 px across and
+  // the value under it is part of the same control to everyone but the DOM.
+  // Both shapes -- knob and switch -- are inside it, so there is one binding.
+  let root: HTMLDivElement | undefined;
+  let unbindWheel: (() => void) | undefined;
+  onMount(() => {
+    if (root) unbindWheel = bindWheel(root, onWheel);
+  });
+  onCleanup(() => unbindWheel?.());
+
   return (
     <div
+      ref={root}
       class="wv-param"
       classList={{ 'wv-disabled': props.disabled }}
-      title={props.title ?? `${props.def.name} — drag, shift for fine, double-click to reset`}
+      title={
+        props.title ??
+        `${props.def.name} — drag or scroll, shift for fine, double-click to reset`
+      }
     >
       <Show
         when={!isSwitch(props.def)}

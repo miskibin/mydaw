@@ -1,16 +1,18 @@
-import { createSignal, Show, type JSX } from 'solid-js';
-import { startDrag } from './drag';
+import { createSignal, onCleanup, Show, type JSX } from 'solid-js';
+import { bindWheel, debounce, FINE_FACTOR, startDrag, WHEEL_COMMIT_MS } from './drag';
 
 /**
  * A numeric readout that is also a control: drag it to change the value,
- * double-click it to type one.
+ * scroll it to nudge it, double-click it to type one.
  *
- * Both gestures, because they answer different questions. Dragging is how you
+ * Three gestures, because they answer different questions. Dragging is how you
  * find a tempo by ear -- the value moves while you listen, and there is no
  * moment where the field is half-typed and meaningless. Typing is how you set
  * one you already know, and it is the only way to reach 128 from 130 without a
- * steady hand. A field with only the drag is a field people fight; one with only
- * the box is one nobody nudges.
+ * steady hand. Scrolling is how you move a value you can already see by a known
+ * amount, which is the gesture a tempo actually wants most of the time. A field
+ * with only the drag is a field people fight; one with only the box is one
+ * nobody nudges.
  *
  * The value is not held here. `value` is read from the caller's signal and
  * `onInput` is called for every step of a drag (so the change is audible while
@@ -27,6 +29,8 @@ export interface NumberFieldProps {
   max: number;
   /** Value change per pixel of drag. */
   step: number;
+  /** Value change per notch of the wheel. Defaults to `step`. */
+  wheelStep?: number;
   /** How the value is rendered. Defaults to two decimal places. */
   format?: (value: number) => string;
   class?: string;
@@ -37,8 +41,34 @@ export interface NumberFieldProps {
 export function NumberField(props: NumberFieldProps): JSX.Element {
   const [editing, setEditing] = createSignal(false);
   let input: HTMLInputElement | undefined;
+  let unbindWheel: (() => void) | undefined;
 
   const format = () => (props.format ?? ((n: number) => n.toFixed(2)))(props.value());
+
+  // The value moves on every notch; only the commit waits, because a tempo
+  // change is a whole engine command and a fast scroll is a lot of them.
+  const commitSoon = debounce(WHEEL_COMMIT_MS, () => props.onCommit?.(props.value()));
+
+  function onWheel(notches: number, event: WheelEvent): void {
+    const step = props.wheelStep ?? props.step;
+    const delta = notches * step * (event.shiftKey ? FINE_FACTOR : 1);
+    const next = Math.min(props.max, Math.max(props.min, props.value() + delta));
+    if (next === props.value()) return;
+    props.onInput(next);
+    commitSoon();
+  }
+
+  // Bound from the ref rather than from `onMount`, because the readout is torn
+  // down and rebuilt every time the typing box opens and closes -- a listener
+  // attached once at mount would be attached to an element long gone.
+  const bindReadout = (el: HTMLButtonElement): void => {
+    unbindWheel?.();
+    unbindWheel = bindWheel(el, onWheel);
+  };
+  onCleanup(() => {
+    unbindWheel?.();
+    commitSoon.cancel();
+  });
 
   const commitTyped = (text: string) => {
     setEditing(false);
@@ -57,11 +87,13 @@ export function NumberField(props: NumberFieldProps): JSX.Element {
       when={editing()}
       fallback={
         <button
+          ref={bindReadout}
           type="button"
           class={`${props.class ?? ''} wv-meta__value--drag`}
-          title={props.title ?? 'Drag to change, double-click to type'}
+          title={props.title ?? 'Drag or scroll to change, double-click to type'}
           aria-label={props['aria-label']}
-          onPointerDown={(event) =>
+          onPointerDown={(event) => {
+            commitSoon.cancel();
             startDrag(event, {
               from: props.value(),
               perPixel: props.step,
@@ -70,8 +102,8 @@ export function NumberField(props: NumberFieldProps): JSX.Element {
               axis: 'both',
               onChange: props.onInput,
               onCommit: props.onCommit,
-            })
-          }
+            });
+          }}
           onDblClick={() => {
             setEditing(true);
             // Focus after the input exists. `queueMicrotask` rather than a
