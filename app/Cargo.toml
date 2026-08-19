@@ -27,6 +27,7 @@ mydaw-ipc-bridge.workspace = true
 mydaw-plugin-metering.workspace = true
 mydaw-plugin-debug-tap.workspace = true
 mydaw-plugin-test-tone.workspace = true
+mydaw-plugin-instruments.workspace = true
 mydaw-plugin-audio-io.workspace = true
 mydaw-plugin-host-clap.workspace = true
 mydaw-plugin-host-vst3.workspace = true
@@ -34,6 +35,10 @@ mydaw-plugin-windows.workspace = true
 
 # --- shell ---
 tauri = { version = "2", features = [] }
+# The source slot swaps the head of the chain across the RT wall, the same way
+# `rt-core` swaps a whole graph. `basedrop` comes via `mydaw-rt-core`'s re-export
+# so the version stays pinned to the engine's; `rtrb` has no such re-export.
+rtrb.workspace = true
 serde.workspace = true
 # The debug-capture command writes stats.json and the headless report.
 serde_json.workspace = true

@@ -4,8 +4,12 @@ An FL Studio-style DAW built as a tiny Rust microkernel with **everything else a
 audio I/O, metering, CLAP/VST3 hosting and UI panels all register against the same contract.
 Tauri v2 + SolidJS on the front, a lock-free real-time audio graph behind the wall.
 
-Status: **Phase 0 — scaffold.** It boots, lists its plugins, plays a 440 Hz test tone and streams
-meters to the UI. No sequencing, no mixer, no project files yet.
+Status: **Phase 1 — the engine plays.** It boots, lists its plugins, streams meters to the UI, and
+you can play it: a built-in eight-voice synth, a synthesised drum kit, a 440 Hz test tone or a
+hosted CLAP instrument, chosen from the transport bar and driven from the computer keyboard
+(`A W S E D F T G Y H U J`, `Z`/`X` for the octave; `C V B N` are drum pads when the kit is
+selected). No sequencing, no mixer, no project files yet.
+See [`docs/superpowers/specs/2026-08-19-step3-internal-instruments.md`](docs/superpowers/specs/2026-08-19-step3-internal-instruments.md).
 
 Seeing what it plays, without speakers:
 
@@ -38,6 +42,7 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
 | `plugins/debug-tap` | RT-safe capture of the output bus, plus WAV / annotated PNG / statistics — so the engine can be *inspected* without ears |
 | `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
+| `plugins/instruments` | The built-in instruments: a synthesised drum kit and a polyBLEP poly synth, driven by note events. No assets, bit-deterministic, zero-alloc |
 | `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
 | `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
 | `plugins/host-vst3` | VST3 host stub (Phase 1 spike 5) |

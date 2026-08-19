@@ -7,11 +7,12 @@ import {
   type JSX,
 } from 'solid-js';
 import { getBackend, type Backend } from './api/backend';
-import type { MeterFrame, PanelManifestDto, PluginStatusDto } from './api/types';
+import type { MeterFrame, PanelManifestDto, PluginStatusDto, SourceDto } from './api/types';
 import {
   clampOctave,
   DEFAULT_OCTAVE,
   DEFAULT_VELOCITY,
+  drumPadKeyFor,
   isPianoEvent,
   midiKeyFor,
   OCTAVE_DOWN_CODE,
@@ -53,9 +54,20 @@ export interface AppState {
   readonly octave: Accessor<number>;
   /** MIDI key numbers currently held down, lowest first. */
   readonly heldNotes: Accessor<number[]>;
+  /** Every instrument the engine can play, with the current one marked. */
+  readonly sources: Accessor<SourceDto[]>;
+  /** The source currently playing, or `undefined` before the list arrives. */
+  readonly currentSource: Accessor<SourceDto | undefined>;
+  /**
+   * Whether the drum pads (`C V B N`) are live, i.e. the drum kit is selected.
+   * The piano keys work either way.
+   */
+  readonly drumPadsActive: Accessor<boolean>;
   play(): void;
   stop(): void;
   refresh(): void;
+  /** Put a different instrument at the head of the engine's chain. */
+  selectSource(id: string): void;
   /**
    * Re-attach the app's own meter handler.
    *
@@ -92,9 +104,17 @@ function createAppState(): AppState {
   const [positionSeconds, setPositionSeconds] = createSignal(0);
   const [octave, setOctave] = createSignal(DEFAULT_OCTAVE);
   const [heldNotes, setHeldNotes] = createSignal<number[]>([]);
+  const [sources, setSources] = createSignal<SourceDto[]>([]);
+
+  const currentSource = () => sources().find((source) => source.selected);
+  const drumPadsActive = () => currentSource()?.id === 'drum-kit';
+
+  const reportError = (err: unknown) =>
+    setKernelError(err instanceof Error ? err.message : String(err));
 
   const refresh = () => {
     setKernelState('connecting');
+    void backend.getSources().then(setSources).catch(reportError);
     backend
       .getUiSnapshot()
       .then((snapshot) => {
@@ -164,8 +184,7 @@ function createAppState(): AppState {
 
   const publishHeld = () => setHeldNotes([...held.values()].sort((a, b) => a - b));
 
-  const reportNoteError = (err: unknown) =>
-    setKernelError(err instanceof Error ? err.message : String(err));
+  const reportNoteError = reportError;
 
   const releaseKey = (code: string) => {
     const key = held.get(code);
@@ -180,9 +199,34 @@ function createAppState(): AppState {
     for (const code of [...held.keys()]) releaseKey(code);
   };
 
+  /** Send a note-on and remember which physical key started it. */
+  const pressKey = (code: string, key: number) => {
+    if (held.has(code)) return;
+    held.set(code, key);
+    publishHeld();
+    void backend.noteOn(key, DEFAULT_VELOCITY).catch((err: unknown) => {
+      // The engine never got the note, so the UI must not claim it is held.
+      held.delete(code);
+      publishHeld();
+      reportNoteError(err);
+    });
+  };
+
   const handleKeyDown = (event: KeyboardEvent) => {
     // Auto-repeat would retrigger the note dozens of times a second.
     if (event.repeat || !isPianoEvent(event)) return;
+
+    // Drum pads first, and only while the kit is selected: `C V B N` mean
+    // nothing to the other instruments, and leaving them inert there keeps the
+    // status-bar hint honest.
+    if (drumPadsActive()) {
+      const pad = drumPadKeyFor(event.code);
+      if (pad !== null) {
+        event.preventDefault();
+        pressKey(event.code, pad);
+        return;
+      }
+    }
 
     if (event.code === OCTAVE_DOWN_CODE || event.code === OCTAVE_UP_CODE) {
       const delta = event.code === OCTAVE_UP_CODE ? 1 : -1;
@@ -192,16 +236,9 @@ function createAppState(): AppState {
     }
 
     const key = midiKeyFor(event.code, octave());
-    if (key === null || held.has(event.code)) return;
-    held.set(event.code, key);
-    publishHeld();
+    if (key === null) return;
     event.preventDefault();
-    void backend.noteOn(key, DEFAULT_VELOCITY).catch((err: unknown) => {
-      // The engine never got the note, so the UI must not claim it is held.
-      held.delete(event.code);
-      publishHeld();
-      reportNoteError(err);
-    });
+    pressKey(event.code, key);
   };
 
   const handleKeyUp = (event: KeyboardEvent) => releaseKey(event.code);
@@ -249,6 +286,23 @@ function createAppState(): AppState {
     });
   };
 
+  /**
+   * Switch instrument. Everything held is released first: the note-offs have to
+   * reach the *old* instrument, or a key still down when the source changes
+   * would leave a voice sounding on a node that no longer receives its release.
+   */
+  const selectSource = (id: string) => {
+    if (currentSource()?.id === id) return;
+    releaseAll();
+    void backend
+      .setSource(id)
+      .then((listed) => {
+        setSources(listed);
+        setKernelError(null);
+      })
+      .catch(reportError);
+  };
+
   return {
     backend,
     meters,
@@ -261,9 +315,13 @@ function createAppState(): AppState {
     positionSeconds,
     octave,
     heldNotes,
+    sources,
+    currentSource,
+    drumPadsActive,
     play,
     stop,
     refresh,
+    selectSource,
     resubscribeMeters: subscribeMeters,
   };
 }

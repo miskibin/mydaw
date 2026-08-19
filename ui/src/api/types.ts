@@ -90,5 +90,29 @@ export interface ClapGuiStatus {
   height: number;
 }
 
+/**
+ * One thing the engine can put at the head of its chain. Mirrors `SourceDto` in
+ * `app/src/source.rs`.
+ *
+ * The list is fixed (two built-in instruments, the test tone, and a hosted CLAP
+ * instrument) and comes from Rust rather than being hard-coded here, so adding
+ * an instrument is a change in one language rather than two.
+ */
+export interface SourceDto {
+  /** Stable id, e.g. `poly-synth`. This is what `setSource` takes. */
+  id: string;
+  label: string;
+  description: string;
+  /**
+   * Whether it can be selected right now. Only `clap` is ever false, and only
+   * because no bundle was named by `MYDAW_CLAP_INSTRUMENT` at startup.
+   */
+  available: boolean;
+  /** Whether this is the source currently playing. Exactly one is true. */
+  selected: boolean;
+  /** Whether the computer-keyboard piano does anything for this source. */
+  takesNotes: boolean;
+}
+
 /** Unsubscribe handle returned by streaming APIs. */
 export type Unsubscribe = () => void;

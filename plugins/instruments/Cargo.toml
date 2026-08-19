@@ -1,0 +1,17 @@
+[package]
+name = "mydaw-plugin-instruments"
+description = "MYDAW plugin: the built-in instruments -- a synthesised drum kit and a polyBLEP poly synth, as internal RtNodes driven by note events."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
+
+[dev-dependencies]
+# The spectral tests measure what the instruments actually produce rather than
+# asserting it by eye; `debug-tap` already owns the FFT and the statistics the
+# rest of the project reads.
+mydaw-plugin-debug-tap.workspace = true

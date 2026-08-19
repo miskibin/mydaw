@@ -15,6 +15,7 @@ use crate::gui_bridge::{ClapGuiCommand, ClapGuiStatusDto};
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
+use crate::source::SourceDto;
 use crate::state::AppState;
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
@@ -72,6 +73,34 @@ pub fn note_on(state: State<'_, AppState>, key: u8, velocity: f32) -> Result<(),
 #[tauri::command]
 pub fn note_off(state: State<'_, AppState>, key: u8) -> Result<(), String> {
     state.note_off(key).map_err(|err| err.to_string())
+}
+
+/// Every source the session can play, marked with which one is selected and
+/// which are available. Called once at startup and again after every switch.
+#[tauri::command]
+pub fn get_sources(state: State<'_, AppState>) -> Vec<SourceDto> {
+    state.sources()
+}
+
+/// Put a different instrument at the head of the chain.
+///
+/// `source` is one of the ids from [`get_sources`]. The switch is a node swap
+/// on the running graph, so a CLAP effect keeps playing through it (see
+/// `crate::source`).
+///
+/// `async` because `clap` -- and only `clap` -- has to wait for the main thread
+/// to activate the plugin; the built-in instruments answer immediately, from
+/// this thread. Running the whole command on the blocking pool means the one
+/// slow case cannot stall the window that has to serve it.
+#[tauri::command]
+pub async fn set_source(
+    state: State<'_, AppState>,
+    source: String,
+) -> Result<Vec<SourceDto>, String> {
+    state
+        .set_source_id(&source)
+        .map_err(|err| err.to_string())?;
+    Ok(state.sources())
 }
 
 /// Capture `seconds` of the engine's output and write a WAV, an annotated PNG

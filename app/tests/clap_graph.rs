@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use mydaw_app::{tone_graph, TransportGate};
+use mydaw_app::{engine_graph, TransportGate};
 use mydaw_fixture_clap_gain::{GAIN, PLUGIN_ID};
 use mydaw_plugin_host_clap::test_util::{missing_fixture_message, stage_fixture_bundle};
 use mydaw_plugin_host_clap::LoadedClapPlugin;
@@ -119,15 +119,14 @@ fn a_clap_effect_in_the_graph_halves_the_test_tone() {
     };
 
     let factory = TestToneFactory::new();
-    let plain = render_peak(tone_graph(&factory, None, SAMPLE_RATE, BLOCK));
+    let plain = render_peak(engine_graph(factory.create(SAMPLE_RATE, BLOCK), None, true));
 
     let mut plugin = LoadedClapPlugin::load(&bundle, PLUGIN_ID).expect("fixture loads");
     let node = plugin.create_node(SAMPLE_RATE, BLOCK).expect("activates");
-    let hosted = render_peak(tone_graph(
-        &factory,
+    let hosted = render_peak(engine_graph(
+        factory.create(SAMPLE_RATE, BLOCK),
         Some(Box::new(node)),
-        SAMPLE_RATE,
-        BLOCK,
+        true,
     ));
 
     // The tone is -14 dBFS; a full 128-frame block at 440 Hz reaches the crest,
@@ -163,7 +162,7 @@ fn the_transport_gate_still_wins_with_a_clap_effect_inserted() {
     let mut nodes: Vec<Box<dyn RtNode>> = vec![
         TestToneFactory::new().create(SAMPLE_RATE, BLOCK),
         Box::new(node),
-        Box::new(TransportGate),
+        Box::new(TransportGate::always()),
     ];
 
     let mut buffers = AudioBuffers::new(BLOCK);
@@ -202,11 +201,10 @@ fn a_graph_holding_a_clap_node_is_retired_by_the_collector_not_the_rt_thread() {
     let factory = TestToneFactory::new();
 
     handle
-        .install(tone_graph(
-            &factory,
+        .install(engine_graph(
+            factory.create(SAMPLE_RATE, BLOCK),
             Some(Box::new(node)),
-            SAMPLE_RATE,
-            BLOCK,
+            true,
         ))
         .expect("install");
     slot.poll_swap();
@@ -215,7 +213,7 @@ fn a_graph_holding_a_clap_node_is_retired_by_the_collector_not_the_rt_thread() {
     // would. The old graph -- and the `ClapNode` inside it -- is dropped by the
     // "audio thread" here, which under `basedrop` means *queued*, not destroyed.
     handle
-        .install(tone_graph(&factory, None, SAMPLE_RATE, BLOCK))
+        .install(engine_graph(factory.create(SAMPLE_RATE, BLOCK), None, true))
         .expect("install");
     slot.poll_swap();
     assert!(

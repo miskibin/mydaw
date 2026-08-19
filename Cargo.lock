@@ -2129,11 +2129,13 @@ dependencies = [
  "mydaw-plugin-debug-tap",
  "mydaw-plugin-host-clap",
  "mydaw-plugin-host-vst3",
+ "mydaw-plugin-instruments",
  "mydaw-plugin-metering",
  "mydaw-plugin-test-tone",
  "mydaw-plugin-windows",
  "mydaw-rt-core",
  "parking_lot",
+ "rtrb",
  "serde",
  "serde_json",
  "tauri",
@@ -2227,6 +2229,15 @@ name = "mydaw-plugin-host-vst3"
 version = "0.1.0"
 dependencies = [
  "mydaw-kernel",
+]
+
+[[package]]
+name = "mydaw-plugin-instruments"
+version = "0.1.0"
+dependencies = [
+ "mydaw-kernel",
+ "mydaw-plugin-debug-tap",
+ "mydaw-rt-core",
 ]
 
 [[package]]

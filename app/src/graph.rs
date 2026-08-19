@@ -1,12 +1,15 @@
-//! The Phase 1 audio graph: a source -- the test tone, or a CLAP instrument
-//! played from the keyboard -- optionally through a CLAP effect.
-//!
-//! # Two shapes, and why the gate only belongs to one
+//! The Phase 1 audio graph: a swappable source, optionally through a CLAP
+//! effect, and a transport gate that only some sources ask for.
 //!
 //! ```text
-//!   default:      test-tone -> [effect] -> TransportGate
-//!   instrument:   instrument -> [effect]
+//!   SourceSlot -> [CLAP effect] -> TransportGate
 //! ```
+//!
+//! The chain is installed once per stream. What changes at runtime is the node
+//! *inside* [`SourceSlot`](crate::source::SourceSlot) -- see `crate::source`
+//! for why the swap happens there and not by rebuilding the graph.
+//!
+//! # Why the gate is conditional rather than absent
 //!
 //! [`TransportGate`] exists because `TestToneNode` is a free-running
 //! oscillator: it makes a sine whether or not the DAW is playing, so the shell
@@ -17,18 +20,27 @@
 //! recorded. Gating it on the transport would make the instrument mute unless
 //! you pressed Play first, which is not a stricter engine, just a broken one.
 //!
-//! So the instrument chain has no gate. Live notes are gated by their own
-//! note-offs, which is the correct mechanism. When the sequencer arrives it will
-//! gate *pattern playback* on the transport (no transport, no scheduled events)
+//! So an instrument is not gated. Live notes are gated by their own note-offs,
+//! which is the correct mechanism. When the sequencer arrives it will gate
+//! *pattern playback* on the transport (no transport, no scheduled events)
 //! while leaving live input alone; that is a property of the event source, not
 //! of the audio chain, so it belongs there and not here.
+//!
+//! The gate node itself stays **last** in the chain either way, so Stop
+//! silences whatever the effect produced -- including a reverb tail -- rather
+//! than only the generator. Whether it is armed is a flag the source publishes
+//! as it is installed, so the two can never disagree about which source is
+//! playing.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
 use mydaw_plugin_host_clap::{ClapHostService, LoadedClapPlugin};
-use mydaw_plugin_test_tone::TestToneFactory;
-use mydaw_rt_core::{GraphSpec, ProcessCtx, RtNode, RtNodeFactory};
+use mydaw_rt_core::{GraphSpec, ProcessCtx, RtNode};
+
+use crate::source::{Source, SourceHandle};
 
 /// Environment variable that inserts a CLAP effect into the default graph.
 ///
@@ -53,24 +65,49 @@ pub const CLAP_FX_ENV: &str = "MYDAW_CLAP_FX";
 /// from the project file onto tracks.
 pub const CLAP_INSTRUMENT_ENV: &str = "MYDAW_CLAP_INSTRUMENT";
 
-/// Silences the bus while the transport is stopped.
+/// Silences the bus while the transport is stopped -- when the current source
+/// asks to be silenced.
 ///
 /// `TestToneNode` is a free-running oscillator: it writes a sine every block
 /// regardless of transport state, which is right for a DSP node and wrong for a
 /// DAW that is not playing. Rather than teach the oscillator about the transport
 /// (Phase 2 gives nodes proper gain/automation), the shell appends this gate to
-/// the end of the tone chain, so Play/Stop actually start and stop the sound.
+/// the end of the chain, so Play/Stop actually start and stop the sound.
 ///
-/// Deliberately **not** used in the instrument chain; see the module docs.
+/// An instrument must *not* be gated (see the module docs), and the source can
+/// change while the stream is running, so the decision is a shared flag rather
+/// than the gate's presence in the graph. The flag is written by
+/// [`SourceSlot`](crate::source::SourceSlot) at the head of the same chain, in
+/// the same block, so it always describes the source that just rendered.
 ///
 /// # RT safety
-/// Reads one `bool` from the per-block transport snapshot and fills pre-allocated
-/// slices. No allocation, no locking, no syscalls.
-pub struct TransportGate;
+/// Reads one atomic and one `bool` from the per-block transport snapshot, then
+/// fills pre-allocated slices. No allocation, no locking, no syscalls.
+pub struct TransportGate {
+    armed: Arc<AtomicBool>,
+}
+
+impl TransportGate {
+    /// A gate armed by `armed`, which the source slot publishes.
+    pub fn new(armed: Arc<AtomicBool>) -> Self {
+        Self { armed }
+    }
+
+    /// A gate that is always armed, for chains built by hand (tests, and the
+    /// offline renders in `tests/clap_graph.rs`) rather than by a source slot.
+    pub fn always() -> Self {
+        Self::new(Arc::new(AtomicBool::new(true)))
+    }
+
+    /// Whether this gate is currently silencing a stopped transport.
+    pub fn is_armed(&self) -> bool {
+        self.armed.load(Ordering::Acquire)
+    }
+}
 
 impl RtNode for TransportGate {
     fn process(&mut self, ctx: &mut ProcessCtx) {
-        if ctx.transport.playing {
+        if !self.is_armed() || ctx.transport.playing {
             return;
         }
         // `as_mut_slices` is already truncated to the block's frame count.
@@ -248,74 +285,84 @@ pub fn clap_instrument_node(
     clap_node(plugin, "instrument", sample_rate, max_block)
 }
 
-/// Build the engine graph.
+/// Build a plain serial chain: `source -> [effect] -> [gate]`.
 ///
-/// With an `instrument`: `instrument -> [effect]`, no gate -- an instrument is
-/// silent until it is played, and live playing must work with the transport
-/// stopped. Without one: `test-tone -> [effect] -> transport gate`, where the
-/// gate stays last so that Stop silences whatever the effect produced, including
-/// a reverb tail.
+/// The effect sits after the source, because that is where an insert lives, and
+/// the gate goes last, so Stop silences whatever the effect produced.
 ///
-/// The effect sits after the source either way, because that is where an insert
-/// lives.
+/// This is the shape the engine runs, minus the source slot: the running engine
+/// uses [`install_engine_graph`], and this exists for the offline renders that
+/// want a chain without a stream behind it.
 ///
 /// Non-RT: node construction allocates, which is exactly why it happens here and
 /// not on the audio thread.
 pub fn engine_graph(
-    factory: &TestToneFactory,
-    instrument: Option<Box<dyn RtNode>>,
+    source: Box<dyn RtNode>,
     effect: Option<Box<dyn RtNode>>,
-    sample_rate: f64,
-    max_block: usize,
+    gated: bool,
 ) -> GraphSpec {
-    let gated = instrument.is_none();
-    let source = instrument.unwrap_or_else(|| factory.create(sample_rate, max_block));
-
     let mut spec = GraphSpec::new().with(source);
     if let Some(effect) = effect {
         spec.push(effect);
     }
     if gated {
-        spec.push(Box::new(TransportGate));
+        spec.push(Box::new(TransportGate::always()));
     }
     spec
 }
 
-/// The default graph: `test-tone -> [effect] -> transport gate`.
-pub fn tone_graph(
-    factory: &TestToneFactory,
-    effect: Option<Box<dyn RtNode>>,
-    sample_rate: f64,
-    max_block: usize,
-) -> GraphSpec {
-    engine_graph(factory, None, effect, sample_rate, max_block)
-}
-
-/// Compile and publish [`engine_graph`] to the running audio thread.
+/// Compile and publish `SourceSlot -> [effect] -> TransportGate` to the running
+/// audio thread, and hand `handle` the slot's non-RT end.
+///
+/// `node` is the source to start on; after this returns, changing the source is
+/// [`SourceHandle::install`] and does not touch the graph again -- which is what
+/// lets a CLAP effect survive an instrument change (see `crate::source`).
+///
+/// The gate is always in the chain and armed by the flag the slot publishes, so
+/// a later swap to (or from) the test tone arms or disarms it without another
+/// graph install.
 ///
 /// # Errors
 /// [`AudioIoError::NotRunning`] when no stream is open (a machine with no output
 /// device still boots; it just has nothing to install into).
 pub fn install_engine_graph(
     audio: &AudioIoService,
-    factory: &TestToneFactory,
-    instrument: Option<Box<dyn RtNode>>,
+    handle: &SourceHandle,
+    source: Source,
+    node: Box<dyn RtNode>,
     effect: Option<Box<dyn RtNode>>,
 ) -> Result<(), AudioIoError> {
-    let info = audio.stream_info().ok_or(AudioIoError::NotRunning)?;
-    audio.install_graph(engine_graph(
-        factory,
-        instrument,
-        effect,
-        f64::from(info.sample_rate),
-        info.max_block,
-    ))
+    // Fails before anything is built when there is no stream, so a headless
+    // machine does not pay for a graph nobody can hear.
+    let _ = audio.stream_info().ok_or(AudioIoError::NotRunning)?;
+
+    let gate = Arc::new(AtomicBool::new(source.gated()));
+    let slot = handle.open(node, source, audio.gc_handle(), Arc::clone(&gate));
+    audio.install_graph(source_chain(slot, effect, gate))
+}
+
+/// Assemble `SourceSlot -> [effect] -> TransportGate`.
+///
+/// Split out of [`install_engine_graph`] so the offline tests build the chain
+/// the engine actually runs rather than a copy of it that can drift.
+pub fn source_chain(
+    slot: crate::source::SourceSlot,
+    effect: Option<Box<dyn RtNode>>,
+    gate: Arc<AtomicBool>,
+) -> GraphSpec {
+    let mut spec = GraphSpec::new().with(Box::new(slot) as Box<dyn RtNode>);
+    if let Some(effect) = effect {
+        spec.push(effect);
+    }
+    spec.push(Box::new(TransportGate::new(gate)));
+    spec
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mydaw_rt_core::{AudioBuffers, TransportSnapshot};
+    use mydaw_plugin_test_tone::TestToneFactory;
+    use mydaw_rt_core::{AudioBuffers, RtNodeFactory, TransportSnapshot};
 
     const SR: f64 = 48_000.0;
     const BLOCK: usize = 64;
@@ -328,7 +375,7 @@ mod tests {
         if let Some(effect) = effect {
             nodes.push(effect);
         }
-        nodes.push(Box::new(TransportGate));
+        nodes.push(Box::new(TransportGate::always()));
 
         let mut buffers = AudioBuffers::new(BLOCK);
         let transport = TransportSnapshot {
@@ -407,47 +454,30 @@ mod tests {
     }
 
     #[test]
-    fn the_default_graph_is_tone_then_gate_and_grows_by_one_with_an_effect() {
+    fn the_tone_chain_is_tone_then_gate_and_grows_by_one_with_an_effect() {
+        let tone = || TestToneFactory::new().create(SR, BLOCK);
+        assert_eq!(engine_graph(tone(), None, true).len(), 2);
         assert_eq!(
-            tone_graph(&TestToneFactory::new(), None, SR, BLOCK).len(),
-            2
-        );
-        assert_eq!(
-            tone_graph(
-                &TestToneFactory::new(),
-                Some(Box::new(HalveNode)),
-                SR,
-                BLOCK
-            )
-            .len(),
+            engine_graph(tone(), Some(Box::new(HalveNode)), true).len(),
             3
         );
     }
 
     #[test]
-    fn an_instrument_replaces_the_tone_and_drops_the_gate() {
-        let factory = TestToneFactory::new();
+    fn an_ungated_chain_is_just_the_source_and_its_insert() {
+        // An instrument alone: one node, and it is *not* the gate.
+        let spec = engine_graph(Box::new(SilentNode), None, false);
+        assert_eq!(spec.len(), 1, "no gate -- just the instrument");
 
-        // Instrument alone: one node, and it is *not* the gate.
-        let spec = engine_graph(&factory, Some(Box::new(SilentNode)), None, SR, BLOCK);
-        assert_eq!(spec.len(), 1, "no tone, no gate -- just the instrument");
-
-        // Instrument plus an insert.
-        let spec = engine_graph(
-            &factory,
-            Some(Box::new(SilentNode)),
-            Some(Box::new(HalveNode)),
-            SR,
-            BLOCK,
-        );
+        let spec = engine_graph(Box::new(SilentNode), Some(Box::new(HalveNode)), false);
         assert_eq!(spec.len(), 2);
     }
 
     #[test]
     fn an_instrument_sounds_with_the_transport_stopped() {
-        // The whole point of dropping the gate. A stopped transport must not
-        // silence a live instrument, or a user could not audition one without
-        // pressing Play first.
+        // The whole point of the gate being conditional. A stopped transport
+        // must not silence a live instrument, or a user could not audition one
+        // without pressing Play first.
         let mut nodes: Vec<Box<dyn RtNode>> = vec![Box::new(ConstNode(0.3))];
         let mut buffers = AudioBuffers::new(BLOCK);
         let mut ctx = ProcessCtx::new(
@@ -464,11 +494,47 @@ mod tests {
         }
         assert!(
             buffers.as_slices()[0].iter().all(|s| *s == 0.3),
-            "the instrument chain has no gate to silence it"
+            "an ungated chain has nothing to silence it"
         );
 
         // And the tone chain still behaves the old way, for contrast.
         assert!(render(false, None).iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn a_disarmed_gate_passes_a_stopped_transport_through_untouched() {
+        // The runtime half of the same decision: one gate node, two behaviours,
+        // chosen by the flag the source slot publishes.
+        let armed = Arc::new(AtomicBool::new(true));
+        let mut nodes: Vec<Box<dyn RtNode>> = vec![
+            Box::new(ConstNode(0.3)),
+            Box::new(TransportGate::new(Arc::clone(&armed))),
+        ];
+        let stopped = TransportSnapshot {
+            sample_pos: 0,
+            playing: false,
+        };
+
+        let mut buffers = AudioBuffers::new(BLOCK);
+        {
+            let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, stopped);
+            for node in &mut nodes {
+                node.process(&mut ctx);
+            }
+        }
+        assert!(buffers.as_slices()[0].iter().all(|s| *s == 0.0), "armed");
+
+        armed.store(false, Ordering::Release);
+        {
+            let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, stopped);
+            for node in &mut nodes {
+                node.process(&mut ctx);
+            }
+        }
+        assert!(
+            buffers.as_slices()[0].iter().all(|s| *s == 0.3),
+            "a disarmed gate must be transparent"
+        );
     }
 
     #[test]

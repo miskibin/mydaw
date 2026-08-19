@@ -60,6 +60,44 @@ export const OCTAVE_DOWN_CODE = 'KeyZ';
 /** Physical key that shifts the piano up an octave. */
 export const OCTAVE_UP_CODE = 'KeyX';
 
+/**
+ * Drum pads, active only while the drum kit is the selected source.
+ *
+ * ```text
+ *   C = kick (36)   V = snare (38)   B = closed hat (42)   N = open hat (46)
+ * ```
+ *
+ * The bottom row, continuing rightwards from `Z`/`X` -- which stay the octave
+ * shift, because taking them away would break the piano the moment somebody
+ * switched instrument and back. Four adjacent, unused keys in the order a
+ * drummer would name them (low to high, kick to hat), so the mapping is
+ * learnable in one glance at the status bar hint.
+ *
+ * These are *additional*: the piano keys keep working, so playing `A` in octave
+ * 2 still lands on key 36 and still hits the kick. The pads exist so a hit does
+ * not need an octave shift first.
+ */
+export const DRUM_PAD_KEYS: Readonly<Record<string, number>> = {
+  KeyC: 36, // kick
+  KeyV: 38, // snare
+  KeyB: 42, // closed hat
+  KeyN: 46, // open hat
+};
+
+/** Human-readable hint for the drum pads, shown when the kit is selected. */
+export const DRUM_PAD_HINT = 'C kick  V snare  B closed hat  N open hat';
+
+/**
+ * MIDI key for a drum pad, or `null` when that key is not a pad.
+ *
+ * Kept separate from {@link midiKeyFor} rather than merged into it: a pad is
+ * not transposed by the octave shift (a kick is key 36, always), and folding
+ * the two maps together would make that an exception instead of a fact.
+ */
+export function drumPadKeyFor(code: string): number | null {
+  return DRUM_PAD_KEYS[code] ?? null;
+}
+
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'] as const;
 
 /** Clamp an octave into the playable range. */

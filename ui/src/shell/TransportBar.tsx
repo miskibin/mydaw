@@ -1,4 +1,4 @@
-import { type JSX } from 'solid-js';
+import { For, Show, type JSX } from 'solid-js';
 import { formatTimecode } from '../lib/playhead';
 import { useAppState } from '../state';
 
@@ -6,9 +6,16 @@ import { useAppState } from '../state';
 const PLACEHOLDER_BPM = 128;
 
 /**
- * Top chrome: transport buttons wired to the backend abstraction, plus the
- * position and tempo readouts. Tempo is a placeholder -- nothing on the Rust
- * side reports it yet.
+ * Top chrome: transport buttons wired to the backend abstraction, the
+ * instrument selector, and the position and tempo readouts. Tempo is a
+ * placeholder -- nothing on the Rust side reports it yet.
+ *
+ * The source selector is segmented buttons rather than a dropdown because the
+ * list is short, fixed, and worth reading at a glance: which instrument is
+ * playing is the single most important piece of state on this bar, and a
+ * collapsed `<select>` would hide it behind a click. An unavailable source
+ * (`CLAP`, when no bundle was named at startup) stays visible and disabled --
+ * "you could have one" is useful, "it does not exist" is not.
  */
 export function TransportBar(): JSX.Element {
   const app = useAppState();
@@ -46,6 +53,33 @@ export function TransportBar(): JSX.Element {
           <span>Stop</span>
         </button>
       </div>
+
+      <Show when={app.sources().length > 0}>
+        <div class="source">
+          <span class="source__label">Source</span>
+          <div class="segmented" role="group" aria-label="Instrument source">
+            <For each={app.sources()}>
+              {(source) => (
+                <button
+                  type="button"
+                  class="segmented__button"
+                  classList={{ 'is-active': source.selected }}
+                  disabled={!source.available}
+                  aria-pressed={source.selected}
+                  title={
+                    source.available
+                      ? source.description
+                      : `${source.description} — not loaded in this session`
+                  }
+                  onClick={() => app.selectSource(source.id)}
+                >
+                  {source.label}
+                </button>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
 
       <div class="transport__readouts">
         <div class="readout">

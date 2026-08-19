@@ -2,6 +2,7 @@ import type {
   ClapGuiStatus,
   ClapPluginInfoDto,
   MeterFrame,
+  SourceDto,
   UiSnapshot,
   Unsubscribe,
 } from './types';
@@ -47,6 +48,21 @@ export interface Backend {
   noteOn(key: number, velocity: number): Promise<void>;
   /** Release a note. Harmless if that key was never pressed. */
   noteOff(key: number): Promise<void>;
+  /**
+   * Every instrument the engine can play, with the current one marked.
+   *
+   * Fetched once at startup; `setSource` returns the same list, so the UI never
+   * has to guess what the engine did.
+   */
+  getSources(): Promise<SourceDto[]>;
+  /**
+   * Put a different instrument at the head of the chain.
+   *
+   * Resolves with the refreshed list. Rejects with a status-bar sentence when
+   * the id is unknown, no audio device is open, or `clap` was asked for on a
+   * session with no CLAP instrument loaded.
+   */
+  setSource(id: string): Promise<SourceDto[]>;
   /** Subscribe to the throttled meter stream. Call the result to detach. */
   subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe>;
 }
@@ -112,6 +128,16 @@ class TauriBackend implements Backend {
     await invoke('note_off', { key });
   }
 
+  async getSources(): Promise<SourceDto[]> {
+    const { invoke } = await this.core();
+    return invoke<SourceDto[]>('get_sources');
+  }
+
+  async setSource(id: string): Promise<SourceDto[]> {
+    const { invoke } = await this.core();
+    return invoke<SourceDto[]>('set_source', { source: id });
+  }
+
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {
     const { Channel, invoke } = await this.core();
     const channel = new Channel<MeterFrame>();
@@ -173,6 +199,48 @@ const MOCK_SAMPLE_RATE = 48_000;
 const MOCK_FRAME_HZ = 30;
 
 /**
+ * The same four sources Rust offers, in the same order, with `clap`
+ * unavailable -- a browser session has no `MYDAW_CLAP_INSTRUMENT`, so this is
+ * also the state the selector's disabled path has to look right in.
+ *
+ * Mirrors `Source::ALL` in `app/src/source.rs`.
+ */
+const MOCK_SOURCES: readonly SourceDto[] = [
+  {
+    id: 'poly-synth',
+    label: 'Poly Synth',
+    description: 'Eight-voice saw + sub synth, played from the keyboard',
+    available: true,
+    selected: true,
+    takesNotes: true,
+  },
+  {
+    id: 'drum-kit',
+    label: 'Drum Kit',
+    description: 'Synthesised kick, snare and hi-hats on GM keys 36/38/42/46',
+    available: true,
+    selected: false,
+    takesNotes: true,
+  },
+  {
+    id: 'test-tone',
+    label: 'Test Tone',
+    description: '440 Hz sine, gated on the transport',
+    available: true,
+    selected: false,
+    takesNotes: false,
+  },
+  {
+    id: 'clap',
+    label: 'CLAP',
+    description: 'The CLAP instrument named by MYDAW_CLAP_INSTRUMENT',
+    available: false,
+    selected: false,
+    takesNotes: true,
+  },
+];
+
+/**
  * Browser-only stand-in. Emits a plausible 30 Hz meter stream driven by a pair
  * of detuned sines so the meter panel and playhead interpolation can be
  * developed without the Rust side running.
@@ -182,6 +250,7 @@ class MockBackend implements Backend {
   private playing = false;
   private samplePos = 0;
   private guiOpen = false;
+  private source = 'poly-synth';
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
@@ -230,6 +299,26 @@ class MockBackend implements Backend {
 
   async noteOff(key: number): Promise<void> {
     console.info(`[mock] note_off key=${key}`);
+  }
+
+  async getSources(): Promise<SourceDto[]> {
+    return MOCK_SOURCES.map((source) => ({ ...source, selected: source.id === this.source }));
+  }
+
+  /**
+   * There is no engine in a browser, so this only records the choice and says
+   * so. The selector's own logic -- disabled options, the keyboard hint that
+   * follows the selection -- is what is being developed against the mock.
+   */
+  async setSource(id: string): Promise<SourceDto[]> {
+    const wanted = MOCK_SOURCES.find((source) => source.id === id);
+    if (!wanted) throw new Error(`unknown source '${id}'`);
+    if (!wanted.available) {
+      throw new Error('no CLAP instrument is loaded; set MYDAW_CLAP_INSTRUMENT before starting MYDAW');
+    }
+    this.source = id;
+    console.info(`[mock] set_source ${id}`);
+    return this.getSources();
   }
 
   /** Exposed so a panel test can assert the mock's view of the editor. */

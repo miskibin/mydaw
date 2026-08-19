@@ -35,7 +35,7 @@ src/
 │   ├── types.ts        # wire types mirrored from the Rust ipc-bridge crate
 │   └── backend.ts      # Backend interface + TauriBackend / MockBackend + auto-pick
 ├── lib/playhead.ts     # local playhead interpolation between sparse RT updates
-├── lib/keyboard.ts     # the computer-keyboard piano: key map, octave, note names
+├── lib/keyboard.ts     # the computer-keyboard piano: key map, octave, note names, drum pads
 ├── panels/
 │   ├── registry.ts     # component-key -> Solid component (mirror of Rust contributions)
 │   ├── PanelFrame.tsx  # panel chrome + registry resolution, unknown-key fallback
@@ -58,6 +58,8 @@ The UI expects these Tauri commands (`src/api/backend.ts` is the only caller):
 | `transport_stop` | no args, no return |
 | `note_on` | takes `{ key, velocity }` (MIDI key `0..=127`, velocity `0..=1`); sounds regardless of transport state |
 | `note_off` | takes `{ key }` |
+| `get_sources` | returns `SourceDto[]` — the instruments the engine can play, one marked `selected` |
+| `set_source` | takes `{ source }` (an id from `get_sources`), returns the refreshed `SourceDto[]` |
 | `subscribe_meters` | takes `{ channel }` (Tauri v2 `Channel<MeterFrame>`), streams at 30 Hz |
 
 Plus the dev-only bench surface (`src/dev/ipcBench.ts` is the only caller): `bench_ping`,

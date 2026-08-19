@@ -4,12 +4,14 @@
 //! pile of plugins into an application:
 //!
 //! 1. build a [`Kernel`](mydaw_kernel::Kernel) and register the Phase 0 plugin
-//!    set (metering, debug-tap, test-tone, audio-io, host-clap, host-vst3,
+//!    set (metering, debug-tap, test-tone, instruments, audio-io, host-clap,
 //!    plugin-windows),
 //! 2. boot it -- dependency order and lifecycle are the kernel's problem,
 //! 3. snapshot plugins and contributed panels for the webview,
-//! 4. open the audio device and publish the engine graph (the test tone, or a
-//!    CLAP instrument when [`CLAP_INSTRUMENT_ENV`] names one),
+//! 4. open the audio device and publish the engine graph -- a swappable source
+//!    ([`Source`]) into an optional CLAP effect into the transport gate,
+//!    starting on the built-in poly synth (or a CLAP instrument when
+//!    [`CLAP_INSTRUMENT_ENV`] names one),
 //! 5. run a Tauri v2 window over the SolidJS UI in `ui/`, exposing the transport,
 //!    note, plugin and capture commands plus one meter stream,
 //! 6. stop audio and shut the kernel down when the window closes.
@@ -25,7 +27,10 @@
 //! ```text
 //! MYDAW_DEBUG_CAPTURE=2 cargo run -p mydaw-app --features custom-protocol
 //! ```
-//! Exit code 0 if audio was captured, 1 if it was not.
+//! Exit code 0 if audio was captured, 1 if it was not. This mode starts on the
+//! **test tone** rather than the shell's usual default: it presses Play with
+//! nobody at the keyboard, and an instrument that is silent until it is played
+//! would (correctly) record silence.
 //!
 //! # IPC benchmark mode
 //! With `MYDAW_IPC_BENCH=1` the window opens as usual, but the UI immediately
@@ -53,6 +58,7 @@ pub mod gui_bridge;
 pub mod gui_host;
 pub mod ipc_bench;
 mod meters;
+pub mod source;
 mod state;
 
 pub use debug_capture::{
@@ -65,7 +71,7 @@ pub use dto::{ClapPluginInfoDto, MeterFrameDto};
 pub use graph::{
     clap_effect_node, clap_fx_spec_from_env, clap_instrument_node, clap_instrument_spec_from_env,
     clap_node, clap_spec_from_env, engine_graph, install_engine_graph, load_env_clap_effect,
-    load_env_clap_instrument, load_env_clap_plugin, parse_clap_plugin_spec, tone_graph,
+    load_env_clap_instrument, load_env_clap_plugin, parse_clap_plugin_spec, source_chain,
     ClapPluginEnvError, ClapPluginSpec, TransportGate, CLAP_FX_ENV, CLAP_INSTRUMENT_ENV,
 };
 pub use gui_bridge::{ClapGuiBridge, ClapGuiCommand, ClapGuiStatusDto, GUI_REQUEST_TIMEOUT};
@@ -75,6 +81,10 @@ pub use ipc_bench::{
     IPC_BENCH_ENV, IPC_BENCH_PANEL,
 };
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
+pub use source::{
+    serve_clap_source_requests, ClapSourceBridge, Source, SourceDto, SourceError, SourceHandle,
+    SourceSlot, CLAP_SOURCE_TIMEOUT,
+};
 pub use state::{boot_kernel, ui_snapshot, AppState, NoteError, StartupError, KERNEL_STATUS_PANEL};
 
 use std::process::ExitCode;
@@ -111,19 +121,37 @@ pub fn run() -> ExitCode {
     // `LoadedClapPlugin` is `!Send` and must outlive the node it hands the graph.
     let mut clap_instrument = load_env_clap_instrument(state.clap());
     let mut clap_fx = load_env_clap_effect(state.clap());
-    let source = if clap_instrument.is_some() {
-        "CLAP instrument"
+    // Published so the UI can offer (or grey out) the CLAP source, and so a
+    // `set_source("clap")` on a session without one fails immediately with a
+    // sentence instead of after a five-second round trip.
+    state.clap_source().set_available(clap_instrument.is_some());
+
+    // A configured CLAP instrument still wins at startup -- it is what the user
+    // asked for by setting the variable. Otherwise the built-in synth, so the
+    // keyboard plays something the moment the window opens.
+    //
+    // Except in headless capture mode, which presses Play and records whatever
+    // comes out. An instrument is silent until somebody plays it, and there is
+    // nobody there, so the capture would correctly report "no audio" and exit
+    // non-zero. That mode wants the free-running tone, which is exactly what it
+    // has always recorded.
+    let startup_source = if clap_instrument.is_some() {
+        Source::Clap
+    } else if debug_capture_seconds_from_env().is_some() {
+        Source::TestTone
     } else {
-        "test-tone"
+        Source::DEFAULT
     };
 
-    match state.start_audio_with_plugins(clap_instrument.as_mut(), clap_fx.as_mut()) {
+    match state.start_audio_with_source(startup_source, clap_instrument.as_mut(), clap_fx.as_mut())
+    {
         Ok(info) => log::info!(
-            "audio output: {} @ {} Hz, {} ch (max block {}); {source} graph installed",
+            "audio output: {} @ {} Hz, {} ch (max block {}); source '{}' installed",
             info.device_name,
             info.sample_rate,
             info.channels,
-            info.max_block
+            info.max_block,
+            state.current_source().id()
         ),
         // Headless machines, RDP sessions and CI runners land here. The window,
         // the panels and the plugin list all still work; only sound is missing.
@@ -166,6 +194,11 @@ pub fn run() -> ExitCode {
     let meters = std::sync::Arc::clone(state.meters());
     let audio = std::sync::Arc::clone(state.audio());
     let gui_bridge = std::sync::Arc::clone(state.gui());
+    // The CLAP source path: the mailbox a command posts to, and the slot the
+    // main thread installs into. Both are `Arc`s, cloned before `state` moves
+    // into Tauri's managed state.
+    let clap_source = std::sync::Arc::clone(state.clap_source());
+    let source_handle = std::sync::Arc::clone(state.source_handle());
     // The window service belongs to this thread -- the one tao's loop will run on
     // -- which is exactly what makes it legal to open plugin windows from the run
     // callback below.
@@ -185,6 +218,8 @@ pub fn run() -> ExitCode {
             commands::transport_stop,
             commands::note_on,
             commands::note_off,
+            commands::get_sources,
+            commands::set_source,
             commands::debug_capture,
             commands::open_clap_gui,
             commands::close_clap_gui,
@@ -224,6 +259,10 @@ pub fn run() -> ExitCode {
         gui_bridge.set_waker(Box::new(move || {
             let _ = handle.run_on_main_thread(|| {});
         }));
+        let handle = app.handle().clone();
+        clap_source.set_waker(Box::new(move || {
+            let _ = handle.run_on_main_thread(|| {});
+        }));
     }
 
     // The run loop owns the kernel. `RunEvent::Exit` fires after the last window
@@ -242,6 +281,18 @@ pub fn run() -> ExitCode {
         // GUI session and a second `LoadedClapPlugin` to pump, which is a Phase
         // 2 concern (one editor per track insert) rather than a step-2 one.
         tauri::RunEvent::MainEventsCleared => {
+            // The one source only this thread can build. Served before the GUI
+            // tick so that switching to the CLAP instrument and opening its
+            // editor in quick succession happen in the order they were asked
+            // for.
+            serve_clap_source_requests(
+                &clap_source,
+                &source_handle,
+                clap_instrument.as_mut(),
+                audio
+                    .stream_info()
+                    .map(|info| (f64::from(info.sample_rate), info.max_block)),
+            );
             gui_host.tick(clap_fx.as_mut().or(clap_instrument.as_mut()), &gui_bridge);
         }
         tauri::RunEvent::Exit => {

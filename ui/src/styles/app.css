@@ -134,6 +134,66 @@ code {
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
+/* The instrument selector. Segmented buttons: the list is short and fixed, and
+   which one is lit is the most important state on this bar. */
+
+.source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.source__label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--fg-2);
+}
+
+.segmented {
+  display: flex;
+  height: 28px;
+  background: var(--bg-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.segmented__button {
+  padding: 0 10px;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--fg-1);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.segmented__button:first-child {
+  border-left: 0;
+}
+
+.segmented__button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg-0);
+}
+
+.segmented__button.is-active {
+  color: #06231c;
+  background: var(--accent);
+}
+
+/* Unavailable, not hidden: a CLAP source nobody loaded is still worth knowing
+   about, and a button that vanishes teaches nothing. */
+.segmented__button:disabled {
+  color: var(--fg-2);
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .transport__readouts {
   display: flex;
   gap: 18px;
@@ -711,6 +771,14 @@ code {
 
 .statusbar__item--notes.is-playing {
   color: var(--accent);
+}
+
+/* The drum-pad key hint. Present only while the kit is the source, because
+   that is the only time those keys do anything. */
+.statusbar__item--hint {
+  font-family: var(--font-mono);
+  color: var(--fg-2);
+  opacity: 0.8;
 }
 
 .statusbar__label,

@@ -1,7 +1,10 @@
 import { Show, type JSX } from 'solid-js';
 import { useAppState } from '../state';
-import { noteName } from '../lib/keyboard';
+import { DRUM_PAD_HINT, noteName } from '../lib/keyboard';
 import { registeredPanelKeys } from '../panels/registry';
+
+/** What the computer keyboard does right now, given the selected source. */
+const PIANO_HINT = 'A W S E D F T G Y H U J, Z/X to shift octave';
 
 const KERNEL_LABEL = {
   connecting: 'Connecting to kernel',
@@ -46,15 +49,29 @@ export function StatusBar(): JSX.Element {
       </Show>
 
       {/*
+        What the computer keyboard is currently playing, and what it can play.
+        The hint changes with the source because the drum pads only exist for
+        the kit -- a static hint would be wrong three quarters of the time.
+      */}
+      <Show when={app.drumPadsActive()}>
+        <span class="statusbar__item statusbar__item--hint" title="Drum pads, in addition to the piano keys">
+          {DRUM_PAD_HINT}
+        </span>
+      </Show>
+
+      {/*
         The piano readout. `octave` is the only way to know which notes A-J will
         play, and the held list is the only feedback that a key press reached
-        the engine at all -- worth a few characters of chrome, especially while
-        the instrument chain is behind an environment variable.
+        the engine at all.
       */}
       <span
         class="statusbar__item statusbar__item--mono statusbar__item--notes"
         classList={{ 'is-playing': app.heldNotes().length > 0 }}
-        title="Computer keyboard piano: A W S E D F T G Y H U J, Z/X to shift octave"
+        title={
+          app.drumPadsActive()
+            ? `Piano: ${PIANO_HINT}. Drum pads: ${DRUM_PAD_HINT}`
+            : `Computer keyboard piano: ${PIANO_HINT}`
+        }
       >
         <span class="statusbar__label">oct</span> {app.octave()}
         <Show when={app.heldNotes().length > 0} fallback={<span class="statusbar__muted"> —</span>}>

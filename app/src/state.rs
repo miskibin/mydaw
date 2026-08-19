@@ -8,17 +8,19 @@ use mydaw_plugin_audio_io::{AudioIoError, AudioIoPlugin, AudioIoService, StreamI
 use mydaw_plugin_debug_tap::{DebugTapPlugin, DebugTapService};
 use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin, LoadedClapPlugin};
 use mydaw_plugin_host_vst3::HostVst3Plugin;
+use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 
-use mydaw_rt_core::{LiveNote, MAX_KEY};
+use mydaw_rt_core::{LiveNote, RtNode, RtNodeFactory, MAX_KEY};
 
 use crate::dto::ClapPluginInfoDto;
 use crate::graph::{clap_effect_node, clap_instrument_node, install_engine_graph};
 use crate::gui_bridge::ClapGuiBridge;
 use crate::ipc_bench;
 use crate::meters::MeterPump;
+use crate::source::{ClapSourceBridge, Source, SourceDto, SourceError, SourceHandle};
 
 /// Panel key of the kernel status view, mirrored in `ui/src/panels/registry.ts`.
 pub const KERNEL_STATUS_PANEL: &str = "kernel-status";
@@ -63,6 +65,7 @@ pub fn boot_kernel() -> Result<Kernel, KernelError> {
     kernel.add_plugin(Box::new(MeteringPlugin::new()))?;
     kernel.add_plugin(Box::new(DebugTapPlugin::new()))?;
     kernel.add_plugin(Box::new(TestTonePlugin::new()))?;
+    kernel.add_plugin(Box::new(InstrumentsPlugin::new()))?;
     kernel.add_plugin(Box::new(AudioIoPlugin::new()))?;
     kernel.add_plugin(Box::new(HostClapPlugin::new()))?;
     kernel.add_plugin(Box::new(HostVst3Plugin::new()))?;
@@ -113,6 +116,13 @@ pub struct AppState {
     snapshot: UiSnapshot,
     audio: Arc<AudioIoService>,
     tone: Arc<TestToneFactory>,
+    /// The built-in instruments, by `type_id`.
+    instruments: Arc<InstrumentRegistry>,
+    /// The head of the chain. Swapping the source is a push through this, not a
+    /// graph rebuild -- see `crate::source`.
+    source: Arc<SourceHandle>,
+    /// Mailbox to the main thread for the one source it alone can build.
+    clap_source: Arc<ClapSourceBridge>,
     clap: Arc<ClapHostService>,
     meters: Arc<MeterPump>,
     /// The audio inspection harness. Non-RT, `Send + Sync`, and safe to call
@@ -139,6 +149,9 @@ impl AppState {
         let tone = services
             .get::<TestToneFactory>()
             .ok_or(StartupError::MissingService("TestToneFactory"))?;
+        let instruments = services
+            .get::<InstrumentRegistry>()
+            .ok_or(StartupError::MissingService("InstrumentRegistry"))?;
         let clap = services
             .get::<ClapHostService>()
             .ok_or(StartupError::MissingService("ClapHostService"))?;
@@ -163,6 +176,9 @@ impl AppState {
             snapshot: ui_snapshot(kernel),
             audio,
             tone,
+            instruments,
+            source: Arc::new(SourceHandle::new(Source::DEFAULT)),
+            clap_source: Arc::new(ClapSourceBridge::new()),
             clap,
             meters: MeterPump::new(throttle),
             debug_tap,
@@ -182,6 +198,166 @@ impl AppState {
         self.start_audio_with_plugins(None, None)
     }
 
+    /// Open the output device and publish a chain headed by `source`.
+    ///
+    /// The one entry point the shell's startup path uses: `run()` picks the
+    /// source (the CLAP instrument when one is configured, otherwise
+    /// [`Source::DEFAULT`]), and everything after that is
+    /// [`set_source`](Self::set_source).
+    ///
+    /// Both plugins are activated *after* the device is open, because
+    /// activation needs the negotiated sample rate and block size. One that
+    /// will not activate is logged and skipped -- the engine still runs.
+    ///
+    /// A source whose node cannot be built (a CLAP instrument that will not
+    /// activate, a missing built-in) falls back to [`Source::DEFAULT`] with a
+    /// warning rather than leaving the stream silent: a session with the wrong
+    /// instrument is recoverable from the UI, and one with no graph at all is
+    /// not.
+    ///
+    /// # Errors
+    /// Whatever cpal reports, plus [`AudioIoError::NotRunning`] if the stream
+    /// died between opening it and installing the graph.
+    pub fn start_audio_with_source(
+        &self,
+        source: Source,
+        instrument: Option<&mut LoadedClapPlugin>,
+        effect: Option<&mut LoadedClapPlugin>,
+    ) -> Result<StreamInfo, AudioIoError> {
+        // Order is forced by the service: `install_graph` needs a live session,
+        // because the graph channel is created together with the stream.
+        let info = self.audio.start()?;
+        let sample_rate = f64::from(info.sample_rate);
+
+        let clap_node = if source == Source::Clap {
+            instrument.and_then(|plugin| clap_instrument_node(plugin, sample_rate, info.max_block))
+        } else {
+            None
+        };
+        let (source, node) = match (source, clap_node) {
+            (Source::Clap, Some(node)) => (Source::Clap, node),
+            (Source::Clap, None) => {
+                log::warn!(
+                    "no usable CLAP instrument; starting on '{}' instead",
+                    Source::DEFAULT.id()
+                );
+                (Source::DEFAULT, self.source_node(Source::DEFAULT, &info)?)
+            }
+            (source, _) => (source, self.source_node(source, &info)?),
+        };
+
+        let effect_node =
+            effect.and_then(|plugin| clap_effect_node(plugin, sample_rate, info.max_block));
+        install_engine_graph(&self.audio, &self.source, source, node, effect_node)?;
+        Ok(info)
+    }
+
+    /// Build the node for a source that does not need the main thread.
+    ///
+    /// # Errors
+    /// [`AudioIoError::NotRunning`] is impossible here (the caller holds a
+    /// [`StreamInfo`]); a missing built-in instrument is a wiring bug, so it is
+    /// logged and the test tone stands in rather than failing the whole start.
+    fn source_node(
+        &self,
+        source: Source,
+        info: &StreamInfo,
+    ) -> Result<Box<dyn RtNode>, AudioIoError> {
+        let sample_rate = f64::from(info.sample_rate);
+        match self.build_source_node(source, sample_rate, info.max_block) {
+            Ok(node) => Ok(node),
+            Err(err) => {
+                log::warn!("{err}; falling back to the test tone");
+                Ok(self.tone.create(sample_rate, info.max_block))
+            }
+        }
+    }
+
+    /// Build the RT node for an internal source.
+    ///
+    /// # Errors
+    /// [`SourceError::ClapNotConfigured`] for [`Source::Clap`], which is not
+    /// buildable from here at all (it needs the main thread), and
+    /// [`SourceError::MissingInstrument`] when the instruments plugin did not
+    /// contribute the node -- a wiring bug rather than a runtime condition.
+    fn build_source_node(
+        &self,
+        source: Source,
+        sample_rate: f64,
+        max_block: usize,
+    ) -> Result<Box<dyn RtNode>, SourceError> {
+        match source {
+            Source::TestTone => Ok(self.tone.create(sample_rate, max_block)),
+            Source::Clap => Err(SourceError::ClapNotConfigured),
+            other => {
+                let type_id = other
+                    .instrument_type_id()
+                    .ok_or(SourceError::ClapNotConfigured)?;
+                self.instruments
+                    .create(type_id, sample_rate, max_block)
+                    .ok_or(SourceError::MissingInstrument(type_id))
+            }
+        }
+    }
+
+    /// Change what plays at the head of the chain, while the engine runs.
+    ///
+    /// Internal sources are built and pushed straight from the calling thread
+    /// -- a factory is `Send + Sync` and the swap is a wait-free queue push.
+    /// [`Source::Clap`] is the exception: only the main thread can activate a
+    /// hosted plugin, so it goes through [`ClapSourceBridge`] and waits.
+    ///
+    /// # Errors
+    /// [`SourceError::Audio`] when no device is open, [`SourceError::QueueFull`]
+    /// when the audio thread is behind (retryable),
+    /// [`SourceError::ClapNotConfigured`] when `clap` was asked for on a session
+    /// with no bundle loaded, and [`SourceError::MainThread`] for whatever the
+    /// run loop reported.
+    pub fn set_source(&self, source: Source) -> Result<(), SourceError> {
+        if source == Source::Clap {
+            return self.clap_source.request();
+        }
+        let info = self.audio.stream_info().ok_or(AudioIoError::NotRunning)?;
+        let node = self.build_source_node(source, f64::from(info.sample_rate), info.max_block)?;
+        self.source.install(node, source)?;
+        log::info!("source is now '{}'", source.id());
+        Ok(())
+    }
+
+    /// Change the source from its string id, as the webview sends it.
+    ///
+    /// # Errors
+    /// [`SourceError::Unknown`] for an id that names nothing, plus everything
+    /// [`set_source`](Self::set_source) can report.
+    pub fn set_source_id(&self, id: &str) -> Result<(), SourceError> {
+        self.set_source(Source::parse(id)?)
+    }
+
+    /// The source currently at the head of the chain.
+    pub fn current_source(&self) -> Source {
+        self.source.current()
+    }
+
+    /// Every source, marked with which is playing and which can be chosen.
+    pub fn sources(&self) -> Vec<SourceDto> {
+        let current = self.current_source();
+        let clap = self.clap_source.is_available();
+        Source::ALL
+            .into_iter()
+            .map(|source| SourceDto::new(source, current, clap))
+            .collect()
+    }
+
+    /// The head-of-chain handle, for the main thread's CLAP source path.
+    pub fn source_handle(&self) -> &Arc<SourceHandle> {
+        &self.source
+    }
+
+    /// The CLAP source mailbox. Commands post here; the run loop serves it.
+    pub fn clap_source(&self) -> &Arc<ClapSourceBridge> {
+        &self.clap_source
+    }
+
     /// Open the output device and publish `test-tone -> [effect] -> gate`.
     ///
     /// # Errors
@@ -193,15 +369,13 @@ impl AppState {
         self.start_audio_with_plugins(None, effect)
     }
 
-    /// Open the output device and publish the engine graph.
+    /// Open the output device on the source implied by the plugins given.
     ///
-    /// With an `instrument` the chain is `instrument -> [effect]`; without one it
-    /// is `test-tone -> [effect] -> gate`. See `crate::graph` for why only one of
-    /// those has a transport gate.
-    ///
-    /// Both plugins are activated *after* the device is open, because activation
-    /// needs the negotiated sample rate and block size. One that will not
-    /// activate is logged and skipped -- the engine still runs, one node lighter.
+    /// With an `instrument`, [`Source::Clap`]; without one, [`Source::TestTone`]
+    /// -- which is what the hardware tests and the headless capture path want,
+    /// and deliberately *not* the shell's startup default (see
+    /// [`Source::DEFAULT`]). To start on anything else, call
+    /// [`start_audio_with_source`](Self::start_audio_with_source).
     ///
     /// The caller keeps ownership of each [`LoadedClapPlugin`] (they are `!Send`
     /// and must outlive the nodes they create), which is why this takes `&mut`
@@ -216,16 +390,12 @@ impl AppState {
         instrument: Option<&mut LoadedClapPlugin>,
         effect: Option<&mut LoadedClapPlugin>,
     ) -> Result<StreamInfo, AudioIoError> {
-        // Order is forced by the service: `install_graph` needs a live session,
-        // because the graph channel is created together with the stream.
-        let info = self.audio.start()?;
-        let sample_rate = f64::from(info.sample_rate);
-        let instrument_node =
-            instrument.and_then(|plugin| clap_instrument_node(plugin, sample_rate, info.max_block));
-        let effect_node =
-            effect.and_then(|plugin| clap_effect_node(plugin, sample_rate, info.max_block));
-        install_engine_graph(&self.audio, &self.tone, instrument_node, effect_node)?;
-        Ok(info)
+        let source = if instrument.is_some() {
+            Source::Clap
+        } else {
+            Source::TestTone
+        };
+        self.start_audio_with_source(source, instrument, effect)
     }
 
     /// Installed CLAP plugins, in the shape the webview reads.
@@ -328,6 +498,7 @@ mod tests {
                 "metering",
                 "debug-tap",
                 "test-tone",
+                "instruments",
                 "host-clap",
                 "host-vst3",
                 "plugin-windows",
@@ -347,7 +518,7 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let snapshot = ui_snapshot(&kernel);
 
-        assert_eq!(snapshot.plugins.len(), 7);
+        assert_eq!(snapshot.plugins.len(), 8);
         assert!(snapshot
             .plugins
             .iter()
@@ -452,6 +623,98 @@ mod tests {
             state.note_off(60),
             Err(NoteError::Audio(AudioIoError::NotRunning))
         ));
+    }
+
+    #[test]
+    fn the_source_list_offers_every_source_and_starts_on_the_default() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+
+        assert_eq!(state.current_source(), Source::DEFAULT);
+        let sources = state.sources();
+        assert_eq!(
+            sources.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["poly-synth", "drum-kit", "test-tone", "clap"]
+        );
+        let selected: Vec<&str> = sources
+            .iter()
+            .filter(|s| s.selected)
+            .map(|s| s.id.as_str())
+            .collect();
+        assert_eq!(selected, vec!["poly-synth"], "exactly one is playing");
+
+        // No `MYDAW_CLAP_INSTRUMENT` in the test process, so the CLAP source is
+        // listed but not offerable -- the UI greys it out rather than hiding it,
+        // because "you could have one" is useful information.
+        let clap = sources.iter().find(|s| s.id == "clap").unwrap();
+        assert!(!clap.available);
+        assert!(sources
+            .iter()
+            .filter(|s| s.id != "clap")
+            .all(|s| s.available));
+    }
+
+    #[test]
+    fn switching_source_without_a_device_reports_it_instead_of_pretending() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+
+        // Headless: the instruments are all registered, there is simply nowhere
+        // to install them.
+        for id in ["drum-kit", "test-tone", "poly-synth"] {
+            let err = state.set_source_id(id).unwrap_err();
+            assert!(
+                matches!(err, SourceError::Audio(AudioIoError::NotRunning)),
+                "{id} produced {err:?}"
+            );
+        }
+        assert_eq!(
+            state.current_source(),
+            Source::DEFAULT,
+            "a failed switch must not change what the UI is told is playing"
+        );
+    }
+
+    #[test]
+    fn the_clap_source_is_refused_immediately_when_no_bundle_was_loaded() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+
+        // Not a five-second timeout waiting for a main thread that is not
+        // there: the shell publishes availability at startup, and this session
+        // has none.
+        let err = state.set_source_id("clap").unwrap_err();
+        assert!(matches!(err, SourceError::ClapNotConfigured), "{err:?}");
+        assert!(err.to_string().contains("MYDAW_CLAP_INSTRUMENT"), "{err}");
+        assert_eq!(state.clap_source().pending(), 0);
+    }
+
+    #[test]
+    fn an_unknown_source_id_is_rejected_before_anything_is_built() {
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        let err = state.set_source_id("wavetable").unwrap_err();
+        assert!(matches!(err, SourceError::Unknown(ref id) if id == "wavetable"));
+        assert!(err.to_string().contains("wavetable"), "{err}");
+    }
+
+    #[test]
+    fn every_built_in_source_can_actually_be_built() {
+        // The failure this guards against is a `type_id` in `Source` that no
+        // plugin contributes: a typo that would only show up as a silent
+        // fallback to the test tone at runtime.
+        let kernel = boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        for source in [Source::TestTone, Source::PolySynth, Source::DrumKit] {
+            assert!(
+                state.build_source_node(source, 48_000.0, 512).is_ok(),
+                "'{}' could not be built",
+                source.id()
+            );
+        }
+        assert!(state
+            .build_source_node(Source::Clap, 48_000.0, 512)
+            .is_err());
     }
 
     #[test]
