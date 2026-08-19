@@ -9,6 +9,7 @@ import {
 } from 'solid-js';
 import { getBackend, type Backend } from './api/backend';
 import type {
+  AssetStatus,
   ClapPluginInfoDto,
   ClapTarget,
   MeterFrame,
@@ -18,6 +19,8 @@ import type {
   PluginStatusDto,
   ProjectInfo,
   SourceDto,
+  StreamInfo,
+  Vst3PluginInfoDto,
 } from './api/types';
 import {
   clampOctave,
@@ -50,6 +53,17 @@ export class MeterBus {
   }
 }
 
+/**
+ * What the inspector is looking at.
+ *
+ * The engine's `selected` is a track index and nothing else -- it is what the
+ * keyboard piano plays -- so the master strip needs a selection state the engine
+ * has no field for. Modelling it as a union here rather than as "index, or -1"
+ * keeps the two ideas from being confused at the one place that matters: only a
+ * `track` selection is ever sent to `set_selected_track`.
+ */
+export type Selection = { kind: 'track'; index: number } | { kind: 'master' };
+
 export interface AppState {
   readonly backend: Backend;
   readonly meters: MeterBus;
@@ -60,8 +74,6 @@ export interface AppState {
   readonly panels: Accessor<PanelManifestDto[]>;
   /** Last known transport state, updated from meter frames and transport calls. */
   readonly playing: Accessor<boolean>;
-  /** Low-rate mirror of the playhead, for text readouts (~10 Hz). */
-  readonly positionSeconds: Accessor<number>;
   /** Octave the computer-keyboard piano is currently playing in. */
   readonly octave: Accessor<number>;
   /** MIDI key numbers currently held down, lowest first. */
@@ -94,9 +106,50 @@ export interface AppState {
    * whether Save has anywhere to write.
    */
   readonly project: Accessor<ProjectInfo>;
+  /** The open audio device, or `undefined` before the first fetch. */
+  readonly streamInfo: Accessor<StreamInfo | undefined>;
+  /** Every scanned CLAP plugin, both kinds. Fetched once, rescanned on demand. */
+  readonly clapPlugins: Accessor<ClapPluginInfoDto[]>;
+  /** Every scanned VST3 class, both kinds. */
+  readonly vst3Plugins: Accessor<Vst3PluginInfoDto[]>;
+  /** The VST3 classes eligible for the master insert. */
+  readonly vst3MasterEffects: Accessor<Vst3PluginInfoDto[]>;
+  /** Whether a plugin scan is in flight, so the button can say so. */
+  readonly scanning: Accessor<boolean>;
+  /** Downloadable instrument assets. Always empty when the backend has no such surface. */
+  readonly assets: Accessor<AssetStatus[]>;
+  /** Whether this backend implements the asset commands at all. */
+  readonly assetsSupported: boolean;
+  /** What the inspector is looking at: one track, or the master strip. */
+  readonly selection: Accessor<Selection>;
   play(): void;
   stop(): void;
   refresh(): void;
+  /**
+   * Make sure the scanned device lists have been fetched at least once.
+   *
+   * Called by the browser's Devices tab and by the device palette the first time
+   * either is opened. Idempotent, and free after the first call.
+   */
+  ensureDevices(): void;
+  /** Re-walk the plugin directories, then refresh every scanned list. */
+  rescanPlugins(): void;
+  /**
+   * Point the inspector at a track or the master.
+   *
+   * A track selection is also pushed to the engine, because that is what decides
+   * which instrument the computer-keyboard piano plays. Selecting the master
+   * leaves the engine's selection where it was: there is no instrument on the
+   * master to play, and silently moving the piano's target because somebody
+   * clicked a fader would be a surprise.
+   */
+  select(selection: Selection): void;
+  /** Add a track running the default built-in instrument. */
+  addTrack(): void;
+  /** Remove one track. Rejects for the last one, reported in the status bar. */
+  removeTrack(index: number): void;
+  /** Start one asset's download. A no-op when the backend has no asset surface. */
+  startAssetDownload(id: string): void;
   /**
    * The four project commands.
    *
@@ -128,6 +181,14 @@ export interface AppState {
    * slot inside `MixerState`, and the button's label is drawn from it.
    */
   toggleClapGui(target: ClapTarget, open: boolean): void;
+  /**
+   * Open or close whatever plugin is in `target`, in whichever format it is.
+   *
+   * The dispatch is here rather than at each button because the answer lives in
+   * `MixerState` -- a slot is a `clap` or a `vst3`, never both -- and a component
+   * that decided for itself would be a second copy of that rule.
+   */
+  toggleGui(target: ClapTarget, open: boolean): void;
   /**
    * Run one mixer command and adopt the state it returns.
    *
@@ -176,9 +237,6 @@ export interface AppState {
 
 const AppStateContext = createContext<AppState>();
 
-/** Text readout refresh rate. Deliberately far below the meter frame rate. */
-const READOUT_HZ = 10;
-
 /**
  * How long the grid waits after the last click before telling the backend.
  *
@@ -220,7 +278,6 @@ function createAppState(): AppState {
   const [plugins, setPlugins] = createSignal<PluginStatusDto[]>([]);
   const [panels, setPanels] = createSignal<PanelManifestDto[]>([]);
   const [playing, setPlaying] = createSignal(false);
-  const [positionSeconds, setPositionSeconds] = createSignal(0);
   const [octave, setOctave] = createSignal(DEFAULT_OCTAVE);
   const [heldNotes, setHeldNotes] = createSignal<number[]>([]);
   const [sources, setSources] = createSignal<SourceDto[]>([]);
@@ -229,6 +286,15 @@ function createAppState(): AppState {
   const [bpm, setBpmSignal] = createSignal(130);
   const [mixer, setMixer] = createSignal<MixerState | undefined>();
   const [project, setProject] = createSignal<ProjectInfo>(UNTITLED_PROJECT);
+  const [streamInfo, setStreamInfo] = createSignal<StreamInfo | undefined>();
+  const [clapPlugins, setClapPlugins] = createSignal<ClapPluginInfoDto[]>([]);
+  const [vst3Plugins, setVst3Plugins] = createSignal<Vst3PluginInfoDto[]>([]);
+  const [vst3MasterEffects, setVst3MasterEffects] = createSignal<Vst3PluginInfoDto[]>([]);
+  const [scanning, setScanning] = createSignal(false);
+  const [assets, setAssets] = createSignal<AssetStatus[]>([]);
+  const [selection, setSelection] = createSignal<Selection>({ kind: 'track', index: 0 });
+
+  const assetsSupported = typeof backend.getAssetStatus === 'function';
 
   const currentSource = () => sources().find((source) => source.selected);
   const drumPadsActive = () => currentSource()?.id === 'drum-kit';
@@ -248,6 +314,43 @@ function createAppState(): AppState {
     if (state.sampleRate > 0) playhead.setSampleRate(state.sampleRate);
   };
 
+  /**
+   * The scanned device lists: every CLAP plugin, every VST3 class, and the two
+   * effect subsets the master insert picker offers.
+   *
+   * Deliberately **not** part of `refresh()`. `get_vst3_plugins` opens every
+   * installed `.vst3` module the first time it is called, which on a stocked
+   * machine is the slowest thing MYDAW does; paying for it at launch would make
+   * every session wait for a list most of them never look at. So it runs the
+   * first time something needs it -- the browser's Devices tab, or the device
+   * palette -- and `scanning()` is what those two draw while it does.
+   *
+   * `getSources` and `getMasterEffects` are refreshed alongside because they are
+   * served from the same cache: a rescan that left them alone would hide a
+   * newly installed instrument from the Sounds tab until the next launch.
+   */
+  let devicesRequested = false;
+  const loadDevices = (rescan: boolean) => {
+    if (devicesRequested && !rescan) return;
+    devicesRequested = true;
+    setScanning(true);
+    void Promise.all([
+      backend.getClapPlugins(rescan).then(setClapPlugins),
+      backend.getVst3Plugins(rescan).then(setVst3Plugins),
+      backend.getMasterEffects().then(setMasterEffects),
+      backend.getVst3MasterEffects().then(setVst3MasterEffects),
+      backend.getSources().then(setSources),
+    ])
+      .then(() => setKernelError(null))
+      .catch(reportError)
+      .finally(() => setScanning(false));
+  };
+
+  const refreshAssets = () => {
+    if (!backend.getAssetStatus) return;
+    void backend.getAssetStatus().then(setAssets).catch(reportError);
+  };
+
   const refresh = () => {
     setKernelState('connecting');
     void backend.getSources().then(setSources).catch(reportError);
@@ -255,6 +358,10 @@ function createAppState(): AppState {
     void backend.getTracks().then(setMixer).catch(reportError);
     void backend.getPattern().then(adoptSequencerState).catch(reportError);
     void backend.getProjectInfo().then(setProject).catch(reportError);
+    void backend.getStreamInfo().then(setStreamInfo).catch(reportError);
+    refreshAssets();
+    // A scan already paid for stays paid for across a project load.
+    if (devicesRequested) loadDevices(false);
     backend
       .getUiSnapshot()
       .then((snapshot) => {
@@ -423,14 +530,28 @@ function createAppState(): AppState {
   refresh();
   void subscribeMeters();
 
-  const readoutTimer = setInterval(() => {
-    setPositionSeconds(playhead.positionSeconds());
-  }, 1000 / READOUT_HZ);
+  /**
+   * Keep the selection inside the project.
+   *
+   * A load, or a `remove_track` that the engine refused differently from what
+   * the optimistic adjustment assumed, can leave the inspector pointed at a row
+   * that is no longer there. Falling back to the engine's own selection rather
+   * than to zero keeps the keyboard piano and the inspector looking at the same
+   * track, which is the invariant the whole selection exists to hold.
+   */
+  createEffect(() => {
+    const state = mixer();
+    if (!state) return;
+    const current = selection();
+    if (current.kind !== 'track') return;
+    if (current.index >= 0 && current.index < state.tracks.length) return;
+    setSelection({ kind: 'track', index: state.selected });
+  });
 
   onCleanup(() => {
     disposed = true;
     detach?.();
-    clearInterval(readoutTimer);
+    if (assetTimer !== undefined) clearInterval(assetTimer);
     if (pushTimer !== undefined) clearTimeout(pushTimer);
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', handleKeyDown);
@@ -448,10 +569,20 @@ function createAppState(): AppState {
     });
   };
 
+  /**
+   * Stop the transport, leaving the playhead where it is.
+   *
+   * Deliberately no rewind. `transport_stop` keeps the position -- the Rust
+   * comment on it says in as many words that the UI decides what Stop means
+   * visually -- and there is no seek command to move it with. Zeroing the local
+   * playhead here (which the previous shell did) made the readout flick to
+   * `00:00.000` and then jump back the moment the next meter frame re-anchored
+   * it to where the engine really was. A readout that lies for one frame is
+   * worse than one that tells you the transport is parked at bar 3.
+   */
   const stop = () => {
     setPlaying(false);
-    playhead.reset(0, false);
-    setPositionSeconds(0);
+    playhead.update(playhead.positionSamples(), false);
     void backend.transportStop().catch((err: unknown) => {
       setKernelError(err instanceof Error ? err.message : String(err));
     });
@@ -554,24 +685,137 @@ function createAppState(): AppState {
   /**
    * Put a source at the head of a track, dispatching on how it is placed.
    *
-   * Goes through `mixerCommand` for both kinds, which releases every held note
-   * first: the note-offs have to reach the *old* instrument, or a key still down
-   * when the source changes leaves a voice sounding on a node that no longer
-   * receives its release.
+   * Goes through `mixerCommand` for all three kinds, which releases every held
+   * note first: the note-offs have to reach the *old* instrument, or a key still
+   * down when the source changes leaves a voice sounding on a node that no
+   * longer receives its release.
    */
   const placeSource = (track: number, source: SourceDto) => {
-    if (source.kind === 'clap') {
+    if (source.kind === 'clap' || source.kind === 'vst3') {
       const { bundlePath, pluginId } = source;
       if (bundlePath === null || pluginId === null) {
-        // Rust sets both on every `clap` source, so this is a contract breach
+        // Rust sets both on every hosted source, so this is a contract breach
         // rather than a user-facing condition -- reported, not silently ignored.
-        reportError(new Error(`'${source.label}' is a CLAP source with no bundle to load`));
+        reportError(
+          new Error(`'${source.label}' is a ${source.kind} source with no bundle to load`),
+        );
         return;
       }
-      mixerCommand((api) => api.setTrackSourceClap(track, bundlePath, pluginId));
+      mixerCommand((api) =>
+        source.kind === 'clap'
+          ? api.setTrackSourceClap(track, bundlePath, pluginId)
+          : api.setTrackSourceVst3(track, bundlePath, pluginId),
+      );
       return;
     }
     mixerCommand((api) => api.setTrackSource(track, source.id));
+  };
+
+  /**
+   * Point the inspector at a track or at the master.
+   *
+   * The engine is only told about a *track*: its `selected` is which instrument
+   * the keyboard piano plays, and the master has no instrument. Clicking the
+   * master fader must not silently move where the next key press sounds.
+   */
+  const select = (next: Selection) => {
+    setSelection(next);
+    if (next.kind !== 'track') return;
+    if (mixer()?.selected === next.index) return;
+    mixerCommand((api) => api.setSelectedTrack(next.index));
+  };
+
+  /**
+   * Add a track and select it.
+   *
+   * The selection is moved *after* the reply rather than optimistically: until
+   * the engine has answered, `mixer()` still describes a project the new index
+   * is out of range of, and the clamp below would helpfully put the selection
+   * straight back where it was.
+   */
+  const addTrack = () => {
+    releaseAll();
+    const number = (mixer()?.tracks.length ?? 0) + 1;
+    void backend
+      .addTrack('poly-synth', `Track ${number}`)
+      .then((state) => {
+        setMixer(state);
+        const index = state.tracks.length - 1;
+        setSelection({ kind: 'track', index });
+        setKernelError(null);
+        return backend.setSelectedTrack(index);
+      })
+      .then(setMixer)
+      .then(() => backend.getSources().then(setSources))
+      .catch((err: unknown) => {
+        reportError(err);
+        void backend.getTracks().then(setMixer).catch(reportError);
+      });
+  };
+
+  const removeTrack = (index: number) => {
+    mixerCommand((api) => api.removeTrack(index));
+    setSelection((current) => {
+      if (current.kind !== 'track') return current;
+      // Everything above the hole shifts down; the removed row's own slot is
+      // taken by its successor, or by the last track when it was the last row.
+      if (current.index > index) return { kind: 'track', index: current.index - 1 };
+      return current;
+    });
+  };
+
+  const startAssetDownload = (id: string) => {
+    const start = backend.startAssetDownload;
+    if (!start) return;
+    void start
+      .call(backend, id)
+      .then(setAssets)
+      .then(() => setKernelError(null))
+      .catch(reportError);
+  };
+
+  /**
+   * Poll the asset list while anything is downloading.
+   *
+   * A poll rather than a stream because a download is a minutes-long operation
+   * whose progress bar is happy at 2 Hz, and one more `Channel` on the Rust side
+   * is a cost this does not justify. Stops the moment nothing is in flight.
+   */
+  let assetTimer: ReturnType<typeof setInterval> | undefined;
+  createEffect(() => {
+    const busy = assets().some((asset) => asset.state === 'downloading');
+    if (busy && assetTimer === undefined) {
+      assetTimer = setInterval(refreshAssets, 500);
+    } else if (!busy && assetTimer !== undefined) {
+      clearInterval(assetTimer);
+      assetTimer = undefined;
+    }
+  });
+
+  /**
+   * Open or close whichever format sits in `target`.
+   *
+   * The slot in `MixerState` is the authority: a track has a `clap` or a `vst3`
+   * or neither, and only the mixer knows which. Asking the wrong command is not
+   * harmless -- `open_vst3_gui` on a CLAP slot rejects with a sentence about a
+   * missing VST3 plugin, which would read as a broken button.
+   */
+  const toggleGui = (target: ClapTarget, open: boolean) => {
+    const state = mixer();
+    const slotOwner =
+      target.slot === 'master' ? state?.master : state?.tracks[target.index];
+    const isVst3 = !!slotOwner?.vst3;
+    if (!isVst3) {
+      toggleClapGui(target, open);
+      return;
+    }
+    const request = open ? backend.openVst3Gui(target) : backend.closeVst3Gui(target);
+    void request
+      .then(() => setKernelError(null))
+      .catch(reportError)
+      .finally(() => {
+        void backend.getTracks().then(setMixer).catch(reportError);
+      });
   };
 
   // --- the step grid -----------------------------------------------------
@@ -656,7 +900,6 @@ function createAppState(): AppState {
     plugins,
     panels,
     playing,
-    positionSeconds,
     octave,
     heldNotes,
     sources,
@@ -667,9 +910,24 @@ function createAppState(): AppState {
     bpm,
     mixer,
     project,
+    streamInfo,
+    clapPlugins,
+    vst3Plugins,
+    vst3MasterEffects,
+    scanning,
+    assets,
+    assetsSupported,
+    selection,
     play,
     stop,
     refresh,
+    ensureDevices: () => loadDevices(false),
+    rescanPlugins: () => loadDevices(true),
+    select,
+    addTrack,
+    removeTrack,
+    startAssetDownload,
+    toggleGui,
     newProject,
     openProject,
     saveProject,

@@ -1,4 +1,5 @@
 import type {
+  AssetStatus,
   AssetStatusDto,
   ClapGuiStatus,
   ClapPluginInfoDto,
@@ -10,6 +11,7 @@ import type {
   ProjectInfo,
   SequencerState,
   SourceDto,
+  StreamInfo,
   TrackDto,
   UiSnapshot,
   Unsubscribe,
@@ -115,18 +117,6 @@ export interface Backend {
    * session with no CLAP instrument loaded.
    */
   setSource(id: string): Promise<SourceDto[]>;
-  /**
-   * Whether the bundled sample content is installed, and any download's
-   * progress. Cheap enough to poll while one is running.
-   */
-  getAssetStatus(): Promise<AssetStatusDto>;
-  /**
-   * Start downloading the bundled sample content. **Only ever from a click** --
-   * nothing fetches 131 MB on its own. Resolves once the transfer has started;
-   * poll `getAssetStatus` for progress. When it finishes the new instrument
-   * appears in `getSources` with no restart.
-   */
-  startAssetDownload(): Promise<AssetStatusDto>;
 
   // --- the mixer -----------------------------------------------------------
   //
@@ -247,6 +237,27 @@ export interface Backend {
    * been saved has nowhere to go, so that one asks either way.
    */
   saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null>;
+
+  /**
+   * What the open audio device is, for the status bar's BUFFER and LATENCY.
+   *
+   * Answers with `running: false` rather than rejecting when no stream is open:
+   * a status bar has to draw something before audio starts, and "not yet" is not
+   * an error worth a red line.
+   */
+  getStreamInfo(): Promise<StreamInfo>;
+
+  /**
+   * Downloadable instrument assets, when this build has any.
+   *
+   * **Optional on purpose.** The Rust commands are landing on another branch;
+   * until they do, `TauriBackend` leaves these undefined and the browser hides
+   * the download row rather than calling a command that is not registered. Once
+   * the commands exist, implementing these two is the whole of the merge.
+   */
+  getAssetStatus?(): Promise<AssetStatus[]>;
+  /** Start (or resume) one asset's download. Resolves with the fresh statuses. */
+  startAssetDownload?(id: string): Promise<AssetStatus[]>;
 
   /** Subscribe to the throttled meter stream. Call the result to detach. */
   subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe>;
@@ -371,16 +382,6 @@ class TauriBackend implements Backend {
     return invoke<SourceDto[]>('set_source', { source: id });
   }
 
-  async getAssetStatus(): Promise<AssetStatusDto> {
-    const { invoke } = await this.core();
-    return invoke<AssetStatusDto>('get_asset_status');
-  }
-
-  async startAssetDownload(): Promise<AssetStatusDto> {
-    const { invoke } = await this.core();
-    return invoke<AssetStatusDto>('start_asset_download');
-  }
-
   async getTracks(): Promise<MixerState> {
     const { invoke } = await this.core();
     return invoke<MixerState>('get_tracks');
@@ -496,6 +497,51 @@ class TauriBackend implements Backend {
   async saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null> {
     const { invoke } = await this.core();
     return invoke<ProjectInfo | null>('save_project', { saveAs, path: path ?? null });
+  }
+
+  async getStreamInfo(): Promise<StreamInfo> {
+    const { invoke } = await this.core();
+    return invoke<StreamInfo>('get_stream_info');
+  }
+
+  /** Map the sampler's single-download DTO onto the UI's per-asset rows. */
+  private static assetRows(dto: AssetStatusDto): AssetStatus[] {
+    const downloading =
+      dto.state === 'downloading' ||
+      dto.state === 'verifying' ||
+      // Files on disk but still decoding in the background: not ready yet,
+      // so keep the row in its busy state rather than offering a dead piano.
+      (dto.installed && !dto.instrumentReady && dto.state !== 'error');
+    const state: AssetStatus['state'] =
+      dto.state === 'error'
+        ? 'failed'
+        : dto.instrumentReady
+          ? 'ready'
+          : downloading
+            ? 'downloading'
+            : 'absent';
+    return [
+      {
+        id: dto.instrumentId,
+        name: dto.instrumentName,
+        state,
+        progress:
+          state === 'ready' ? 1 : dto.totalBytes > 0 ? dto.downloadedBytes / dto.totalBytes : 0,
+        bytesTotal: dto.totalBytes,
+        bytesDone: dto.downloadedBytes,
+        error: dto.error.length > 0 ? dto.error : null,
+      },
+    ];
+  }
+
+  async getAssetStatus(): Promise<AssetStatus[]> {
+    const { invoke } = await this.core();
+    return TauriBackend.assetRows(await invoke<AssetStatusDto>('get_asset_status'));
+  }
+
+  async startAssetDownload(_id: string): Promise<AssetStatus[]> {
+    const { invoke } = await this.core();
+    return TauriBackend.assetRows(await invoke<AssetStatusDto>('start_asset_download'));
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {
@@ -935,6 +981,21 @@ class MockBackend implements Backend {
   private saved = new Map<string, MockSession>();
   /** The path of the most recent save; what the open dialog would have offered. */
   private lastSavedPath: string | null = null;
+  /**
+   * The downloadable assets. One, because one is enough to draw every state and
+   * the real list is the sampler branch's to decide.
+   */
+  private assets: AssetStatus[] = [
+    {
+      id: 'piano',
+      name: 'Concert Grand',
+      state: 'absent',
+      progress: 0,
+      bytesTotal: 148_000_000,
+      bytesDone: 0,
+      error: null,
+    },
+  ];
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     // Structured clone so panels cannot mutate the shared fixture.
@@ -1052,31 +1113,6 @@ class MockBackend implements Backend {
 
   async getSources(): Promise<SourceDto[]> {
     return this.sourceList();
-  }
-
-  /**
-   * There is no filesystem in a browser, so the mock reports the content as
-   * installed and loaded. That hides the download line rather than offering a
-   * button that could not work -- the affordance is about a real install, and a
-   * mock that pretended to fetch 131 MB would be theatre.
-   */
-  async getAssetStatus(): Promise<AssetStatusDto> {
-    return {
-      installed: true,
-      instrumentReady: true,
-      state: 'done',
-      totalBytes: 0,
-      downloadedBytes: 0,
-      filesDone: 0,
-      fileCount: 0,
-      instrumentId: '',
-      instrumentName: '',
-      error: '',
-    };
-  }
-
-  async startAssetDownload(): Promise<AssetStatusDto> {
-    throw new Error('there is no sample content to download in the mock backend');
   }
 
   /**
@@ -1643,6 +1679,58 @@ class MockBackend implements Backend {
     }
     console.info(`[mock] no save dialog outside Tauri, using ${candidate}`);
     return candidate;
+  }
+
+  /**
+   * A plausible device: 48 kHz, 256-frame blocks, i.e. 5.33 ms.
+   *
+   * `running: true` even though nothing is playing, because the mock stands in
+   * for a session whose device *is* open -- a status bar permanently reading
+   * "no device" in a plain browser would leave the readouts unrehearsable.
+   */
+  async getStreamInfo(): Promise<StreamInfo> {
+    const bufferFrames = 256;
+    return {
+      deviceName: 'Mock Output (browser)',
+      sampleRate: MOCK_SAMPLE_RATE,
+      channels: 2,
+      bufferFrames,
+      latencyMs: (bufferFrames / MOCK_SAMPLE_RATE) * 1000,
+      running: true,
+    };
+  }
+
+  /**
+   * The downloadable-asset surface, implemented here and only here.
+   *
+   * The mock has it so the browser's download row -- progress bar, states,
+   * failure text -- can be built and looked at in a plain browser while the Rust
+   * commands are still being written on another branch. `TauriBackend` leaves
+   * both methods undefined, so inside the app the row hides itself instead of
+   * calling a command that does not exist.
+   */
+  async getAssetStatus(): Promise<AssetStatus[]> {
+    return structuredClone(this.assets);
+  }
+
+  async startAssetDownload(id: string): Promise<AssetStatus[]> {
+    const asset = this.assets.find((entry) => entry.id === id);
+    if (!asset) throw new Error(`there is no asset '${id}'`);
+    if (asset.state === 'ready' || asset.state === 'downloading') return this.getAssetStatus();
+    asset.state = 'downloading';
+    asset.progress = 0;
+    asset.bytesDone = 0;
+    asset.error = null;
+    const timer = setInterval(() => {
+      asset.bytesDone = Math.min(asset.bytesTotal, asset.bytesDone + asset.bytesTotal / 25);
+      asset.progress = asset.bytesTotal > 0 ? asset.bytesDone / asset.bytesTotal : 1;
+      if (asset.progress >= 1) {
+        asset.state = 'ready';
+        asset.progress = 1;
+        clearInterval(timer);
+      }
+    }, 160);
+    return this.getAssetStatus();
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {

@@ -15,7 +15,8 @@ use tauri::State;
 use crate::clap_bridge::{ClapGuiStatusDto, ClapTarget};
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{
-    ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto, Vst3PluginInfoDto,
+    ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto, StreamInfoDto,
+    Vst3PluginInfoDto,
 };
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
@@ -378,6 +379,19 @@ pub fn set_pattern(
 #[tauri::command]
 pub fn set_bpm(state: State<'_, AppState>, bpm: f64) -> Result<f64, String> {
     state.set_bpm(bpm).map_err(|err| err.to_string())
+}
+
+/// What the open audio device is: the status bar's BUFFER and LATENCY.
+///
+/// Answers with a `running: false` shape rather than an error when no stream is
+/// open, because "no device yet" is an ordinary state a status bar has to draw
+/// and not something to put in the error line.
+#[tauri::command]
+pub fn get_stream_info(state: State<'_, AppState>) -> StreamInfoDto {
+    state
+        .audio()
+        .stream_info()
+        .map_or_else(StreamInfoDto::stopped, StreamInfoDto::from)
 }
 
 /// Capture `seconds` of the engine's output and write a WAV, an annotated PNG
