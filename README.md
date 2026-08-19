@@ -108,6 +108,7 @@ cargo test -p mydaw-app --test gui_audio_smoke  -- --ignored --nocapture
 cargo test -p mydaw-app --test clap_hardware    -- --ignored --nocapture --test-threads=1
 cargo test -p mydaw-app --test mixer_audio      -- --ignored --nocapture --test-threads=1
 cargo test -p mydaw-app --test sampler_audio    -- --ignored --nocapture --test-threads=1
+cargo test -p mydaw-app --test song_mode_audio -- --ignored --nocapture --test-threads=1
 ```
 
 The sampler's own tests split the same way. The offline ones need nothing:
