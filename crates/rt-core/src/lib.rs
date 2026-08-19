@@ -14,6 +14,7 @@
 //!   RtCommand -> rt_channel producer   ------> drain_commands
 //!   LiveNote  -> note_channel producer ------> drain_notes -> NoteEventBuffer
 //!   MixerParams::set_* (atomics)       ------> TrackStrip / MasterStrip
+//!   ParamBlock::set (atomics)          ------> SmoothedParams (per-node knobs)
 //!   TransportClock (read for UI)       <-----> TransportClock::advance
 //!   GcThread (frees old graphs)        <------ Owned<..> dropped, never freed
 //! ```
@@ -34,6 +35,7 @@ mod graph;
 pub mod mixer;
 mod node;
 mod notes;
+pub mod params;
 mod transport;
 
 pub use buffers::{AudioBuffers, CHANNELS};
@@ -55,6 +57,10 @@ pub use node::{ProcessCtx, RtNode, RtNodeFactory};
 pub use notes::{
     drain_notes, note_channel, LiveNote, NoteConsumer, NoteEvent, NoteEventBuffer, NoteKind,
     NoteProducer, DEFAULT_NOTE_CAPACITY, MAX_KEY,
+};
+pub use params::{
+    smoothing_frames, AtomicF32, ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ParamSmoother,
+    ReadoutDef, SmoothedParams, DEFAULT_SMOOTHING_MS,
 };
 pub use transport::{clamp_bpm, TransportClock, TransportSnapshot, DEFAULT_BPM, MAX_BPM, MIN_BPM};
 

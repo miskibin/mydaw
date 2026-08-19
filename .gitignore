@@ -16,3 +16,6 @@ app/gen/
 # SHA-256. A clone with no assets builds, tests and runs; the sampler simply
 # reports zero instruments. See docs/superpowers/specs/2026-08-19-sampler-plugin.md.
 assets/
+
+# Agent scratch: session settings and other agents' worktrees. Never source.
+.claude/

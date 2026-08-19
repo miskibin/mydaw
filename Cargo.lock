@@ -2248,6 +2248,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mydaw-plugin-effects"
+version = "0.1.0"
+dependencies = [
+ "mydaw-kernel",
+ "mydaw-plugin-debug-tap",
+ "mydaw-rt-core",
+]
+
+[[package]]
 name = "mydaw-plugin-host-clap"
 version = "0.1.0"
 dependencies = [

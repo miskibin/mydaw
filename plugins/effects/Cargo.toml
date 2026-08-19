@@ -1,0 +1,17 @@
+[package]
+name = "mydaw-plugin-effects"
+description = "MYDAW plugin: the internal mixer effects -- parametric EQ, compressor, tempo-synced delay, saturator and utility, as parameterised RtNodes."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+mydaw-kernel.workspace = true
+mydaw-rt-core.workspace = true
+
+[dev-dependencies]
+# The DSP tests measure what the effects actually produce -- magnitude response,
+# harmonic content, aliasing floor -- rather than asserting it by eye; the debug
+# tap already owns the FFT the rest of the project reads.
+mydaw-plugin-debug-tap.workspace = true
