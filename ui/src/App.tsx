@@ -25,47 +25,15 @@ export function App(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
 
-  // UI zoom: the design is dense by intent, so the scale is the user's call.
-  // Chromium's non-standard `zoom` reflows layout (unlike transform: scale),
-  // which keeps hit targets and scrollbars correct.
-  const ZOOM_KEY = 'wave.zoom';
-  const ZOOM_STEPS = [0.8, 0.9, 1, 1.1, 1.2, 1.35, 1.5];
-  function applyZoom(z: number): void {
-    (document.body.style as CSSStyleDeclaration & { zoom: string }).zoom = String(z);
-    localStorage.setItem(ZOOM_KEY, String(z));
-  }
-  function stepZoom(dir: number): void {
-    const cur = Number(localStorage.getItem(ZOOM_KEY)) || 1;
-    const nearest = ZOOM_STEPS.reduce((a, b) =>
-      Math.abs(b - cur) < Math.abs(a - cur) ? b : a
-    );
-    const index = Math.min(ZOOM_STEPS.length - 1, Math.max(0, ZOOM_STEPS.indexOf(nearest) + dir));
-    applyZoom(ZOOM_STEPS[index] ?? 1);
-  }
-  {
-    const saved = Number(localStorage.getItem(ZOOM_KEY));
-    if (saved && saved !== 1) applyZoom(saved);
-  }
+  // UI zoom is the webview's own (`zoomHotkeysEnabled` in tauri.conf.json):
+  // Ctrl+= / Ctrl+- / Ctrl+0 are handled natively by WebView2, which scales
+  // viewport units and fixed positioning correctly — a CSS `zoom` on the body
+  // did not (100vh stays viewport-sized while everything else grows).
 
   /** The view hotkeys. F7 opens the roll on whichever channel is selected. */
   function onKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
     if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
-    if (event.ctrlKey && (event.key === '=' || event.key === '+')) {
-      event.preventDefault();
-      stepZoom(1);
-      return;
-    }
-    if (event.ctrlKey && event.key === '-') {
-      event.preventDefault();
-      stepZoom(-1);
-      return;
-    }
-    if (event.ctrlKey && event.key === '0') {
-      event.preventDefault();
-      applyZoom(1);
-      return;
-    }
     switch (event.key) {
       case 'F5':
         event.preventDefault();
