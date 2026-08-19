@@ -195,7 +195,10 @@ struct PendingOff {
 /// is derived from the window, which is why a seek needs no cooperation and a
 /// loop wrap needs no code.
 pub struct Scheduler {
-    pending: [PendingOff; MAX_PENDING],
+    /// Heap-allocated: 64 kB inline blew the main thread's 1 MB stack in debug
+    /// builds, where every move of the enclosing `RtState` into the cpal closure
+    /// is a real memcpy on the stack.
+    pending: Box<[PendingOff; MAX_PENDING]>,
     pending_len: usize,
     /// Transport state as of the previous block, for edge detection.
     playing: bool,
@@ -220,13 +223,23 @@ impl Default for Scheduler {
 
 impl Scheduler {
     /// A scheduler with nothing owed, stopped at sample 0, in pattern mode.
-    pub const fn new() -> Self {
-        Self {
-            pending: [PendingOff {
+    pub fn new() -> Self {
+        // Build the pending store on the heap from the start: `Box::new([..])`
+        // or a by-value array literal would construct all 64 kB on the stack
+        // first, which is the exact overflow this layout exists to avoid.
+        let pending: Box<[PendingOff; MAX_PENDING]> = vec![
+            PendingOff {
                 at: 0,
                 key: 0,
                 channel: 0,
-            }; MAX_PENDING],
+            };
+            MAX_PENDING
+        ]
+        .into_boxed_slice()
+        .try_into()
+        .expect("vec length is MAX_PENDING by construction");
+        Self {
+            pending,
             pending_len: 0,
             playing: false,
             mode: PlayMode::Pattern,
@@ -586,6 +599,18 @@ impl std::fmt::Debug for Scheduler {
 
 #[cfg(test)]
 mod tests {
+    /// Regression guard: the scheduler once carried its 64 kB pending store
+    /// inline, and the enclosing RtState's move into the audio callback
+    /// overflowed the main thread's 1 MB stack in debug builds on boot.
+    #[test]
+    fn scheduler_stays_small_on_the_stack() {
+        assert!(
+            std::mem::size_of::<super::Scheduler>() < 256,
+            "Scheduler is {} bytes; keep bulk storage boxed",
+            std::mem::size_of::<super::Scheduler>()
+        );
+    }
+
     use super::*;
     use crate::compiled::CompiledPatternClip;
     use crate::pattern::{
