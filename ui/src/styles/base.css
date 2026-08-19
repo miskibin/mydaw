@@ -38,7 +38,7 @@ body,
 body {
   background: var(--bg);
   color: var(--txt);
-  font: 400 12px Geist, ui-sans-serif, system-ui, sans-serif;
+  font: 400 12px 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -99,7 +99,7 @@ button:disabled.wv-can-disable {
 }
 
 .wv-mono {
-  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-family: 'Geist Mono Variable', ui-monospace, monospace;
 }
 
 .wv-spacer {
@@ -150,14 +150,14 @@ button:disabled.wv-can-disable {
 
 .wv-viewbar__title {
   flex: none;
-  font: 500 10px 'Geist Mono';
+  font: 500 10px 'Geist Mono Variable';
   letter-spacing: 0.12em;
   color: var(--dim2);
 }
 
 .wv-viewbar__meta {
   flex: none;
-  font: 400 10px 'Geist Mono';
+  font: 400 10px 'Geist Mono Variable';
   color: var(--dim2);
 }
 
@@ -182,7 +182,7 @@ button:disabled.wv-can-disable {
 }
 
 .wv-rail__label {
-  font: 500 10px 'Geist Mono';
+  font: 500 10px 'Geist Mono Variable';
   letter-spacing: 0.12em;
   color: var(--dim2);
   writing-mode: vertical-rl;
@@ -213,7 +213,7 @@ button:disabled.wv-can-disable {
   height: 24px;
   padding: 0 10px;
   border-radius: 6px;
-  font: 600 10px Geist;
+  font: 600 10px 'Geist Variable';
   letter-spacing: 0.07em;
   color: var(--dim);
 }
@@ -229,7 +229,7 @@ button:disabled.wv-can-disable {
 }
 
 .wv-seg__hot {
-  font: 400 8.5px 'Geist Mono';
+  font: 400 8.5px 'Geist Mono Variable';
   color: var(--faint);
 }
 
@@ -270,7 +270,7 @@ button:disabled.wv-can-disable {
   white-space: nowrap;
   border-radius: 7px;
   background: var(--chip);
-  font: 500 10.5px Geist;
+  font: 500 10.5px 'Geist Variable';
   color: var(--txt2);
 }
 
@@ -281,7 +281,7 @@ button:disabled.wv-can-disable {
 .wv-chip--sunk {
   background: var(--sunk);
   border: 1px solid var(--line);
-  font: 400 10.5px 'Geist Mono';
+  font: 400 10.5px 'Geist Mono Variable';
 }
 
 .wv-chip.is-active {
@@ -290,7 +290,7 @@ button:disabled.wv-can-disable {
 }
 
 .wv-chip__tag {
-  font: 500 8.5px 'Geist Mono';
+  font: 500 8.5px 'Geist Mono Variable';
   letter-spacing: 0.1em;
   color: var(--dim2);
 }
@@ -306,7 +306,7 @@ button:disabled.wv-can-disable {
   white-space: nowrap;
   border: 1px dashed var(--line2);
   border-radius: 6px;
-  font: 500 10px Geist;
+  font: 500 10px 'Geist Variable';
   color: var(--dim);
 }
 
@@ -331,7 +331,7 @@ button:disabled.wv-can-disable {
   width: 22px;
   height: 22px;
   border-radius: 5px;
-  font: 400 12px 'Geist Mono';
+  font: 400 12px 'Geist Mono Variable';
   color: var(--dim);
 }
 
@@ -354,7 +354,7 @@ button:disabled.wv-can-disable {
   justify-content: center;
   height: 24px;
   border-radius: 5px;
-  font: 500 10.5px Geist;
+  font: 500 10.5px 'Geist Variable';
   color: var(--dim2);
 }
 
@@ -375,7 +375,7 @@ button:disabled.wv-can-disable {
   height: 40px;
   margin-right: 14px;
   padding: 0 2px;
-  font: 500 11px Geist;
+  font: 500 11px 'Geist Variable';
   color: var(--dim2);
 }
 
@@ -409,7 +409,7 @@ button:disabled.wv-can-disable {
   height: 14px;
   border-radius: 3px;
   background: var(--sunk);
-  font: 500 8.5px 'Geist Mono';
+  font: 500 8.5px 'Geist Mono Variable';
   color: var(--dim2);
 }
 
@@ -436,7 +436,7 @@ button:disabled.wv-can-disable {
 .wv-param__value {
   max-width: 100%;
   overflow: hidden;
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--txt2);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -445,7 +445,7 @@ button:disabled.wv-can-disable {
 .wv-param__name {
   max-width: 100%;
   overflow: hidden;
-  font: 400 8.5px 'Geist Mono';
+  font: 400 8.5px 'Geist Mono Variable';
   color: var(--dim2);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -485,7 +485,7 @@ button:disabled.wv-can-disable {
   border-radius: 6px;
   background: var(--chip);
   box-shadow: inset 0 0 0 1px var(--line2);
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--dim);
 }
 
@@ -559,14 +559,14 @@ button:disabled.wv-can-disable {
 }
 
 .wv-card__tag {
-  font: 500 9px 'Geist Mono';
+  font: 500 9px 'Geist Mono Variable';
   letter-spacing: 0.1em;
   color: var(--dim2);
 }
 
 .wv-card__name {
   overflow: hidden;
-  font: 500 11.5px Geist;
+  font: 500 11.5px 'Geist Variable';
   color: var(--txt);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -661,7 +661,7 @@ button:disabled.wv-can-disable {
   height: 30px;
   padding: 0 6px 0 9px;
   border-radius: 6px;
-  font: 500 11.5px Geist;
+  font: 500 11.5px 'Geist Variable';
   color: var(--txt);
   text-align: left;
 }
@@ -680,7 +680,7 @@ button:disabled.wv-can-disable {
 
 .wv-menu__meta {
   flex: none;
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--dim2);
 }
 
@@ -692,7 +692,7 @@ button:disabled.wv-can-disable {
   width: 18px;
   height: 18px;
   border-radius: 4px;
-  font: 400 11px 'Geist Mono';
+  font: 400 11px 'Geist Mono Variable';
   color: var(--dim2);
 }
 
@@ -721,7 +721,7 @@ button:disabled.wv-can-disable {
   height: 38px;
   padding: 0 12px;
   border-bottom: 1px solid var(--line);
-  font: 600 11.5px Geist;
+  font: 600 11.5px 'Geist Variable';
   color: var(--txt);
 }
 
@@ -738,7 +738,7 @@ button:disabled.wv-can-disable {
   height: 34px;
   padding: 0 10px;
   border-radius: 7px;
-  font: 500 11.5px Geist;
+  font: 500 11.5px 'Geist Variable';
   color: var(--txt);
   text-align: left;
 }
@@ -753,7 +753,7 @@ button:disabled.wv-can-disable {
 
 .wv-modal__kind {
   flex: none;
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--dim2);
 }
 
@@ -782,7 +782,7 @@ button:disabled.wv-can-disable {
 
 .wv-row__name {
   overflow: hidden;
-  font: 500 11px Geist;
+  font: 500 11px 'Geist Variable';
   color: var(--txt2);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -794,7 +794,7 @@ button:disabled.wv-can-disable {
 
 .wv-row__meta {
   flex: none;
-  font: 400 9px 'Geist Mono';
+  font: 400 9px 'Geist Mono Variable';
   color: var(--faint);
 }
 
@@ -809,7 +809,7 @@ button:disabled.wv-can-disable {
   padding: 0 12px;
   background: var(--sunk);
   border-top: 1px solid var(--line);
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--dim2);
 }
 
@@ -860,13 +860,13 @@ button:disabled.wv-can-disable {
   align-items: center;
   justify-content: center;
   padding: 26px 18px;
-  font: 400 11px Geist;
+  font: 400 11px 'Geist Variable';
   color: var(--dim2);
   text-align: center;
 }
 
 .wv-empty__hint {
-  font: 400 10px 'Geist Mono';
+  font: 400 10px 'Geist Mono Variable';
   color: var(--faint);
 }
 

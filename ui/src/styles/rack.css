@@ -54,7 +54,7 @@
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font: 500 11px Geist;
+  font: 500 11px 'Geist Variable';
   color: var(--txt2);
   text-align: left;
   text-overflow: ellipsis;
@@ -162,7 +162,7 @@
   position: absolute;
   top: 50%;
   left: 8px;
-  font: 400 9px 'Geist Mono';
+  font: 400 9px 'Geist Mono Variable';
   color: var(--faint);
   transform: translateY(-50%);
 }
@@ -172,7 +172,7 @@
   height: 18px;
   padding: 0 6px;
   border-radius: 4px;
-  font: 400 8.5px 'Geist Mono';
+  font: 400 8.5px 'Geist Mono Variable';
   color: var(--faint);
 }
 
@@ -208,7 +208,7 @@
   height: 34px;
   border: 1px dashed var(--line);
   border-radius: 8px;
-  font: 400 10px 'Geist Mono';
+  font: 400 10px 'Geist Mono Variable';
   color: var(--faint);
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
@@ -242,7 +242,7 @@
   white-space: nowrap;
   border-radius: 6px;
   box-shadow: inset 0 0 0 1px var(--line);
-  font: 500 10.5px Geist;
+  font: 500 10.5px 'Geist Variable';
   color: var(--dim);
 }
 
@@ -262,11 +262,11 @@
   border: 1px solid var(--acc);
   border-radius: 6px;
   background: var(--sunk);
-  font: 500 10.5px Geist;
+  font: 500 10.5px 'Geist Variable';
   outline: none;
 }
 
 .wv-seg__btn--len {
   padding: 0 8px;
-  font: 400 10px 'Geist Mono';
+  font: 400 10px 'Geist Mono Variable';
 }

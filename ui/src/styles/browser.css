@@ -29,7 +29,7 @@
 }
 
 .wv-browser__title {
-  font: 500 10px 'Geist Mono';
+  font: 500 10px 'Geist Mono Variable';
   letter-spacing: 0.12em;
   color: var(--dim2);
 }
@@ -161,7 +161,7 @@
   height: 16px;
   border-radius: 4px;
   background: var(--chip);
-  font: 400 10px 'Geist Mono';
+  font: 400 10px 'Geist Mono Variable';
   color: var(--dim);
 }
 
@@ -187,7 +187,7 @@
 
 .wv-tree__plus {
   flex: none;
-  font: 400 11px 'Geist Mono';
+  font: 400 11px 'Geist Mono Variable';
   color: var(--acc);
 }
 
@@ -197,7 +197,7 @@
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--sunk);
-  font: 500 8.5px 'Geist Mono';
+  font: 500 8.5px 'Geist Mono Variable';
   letter-spacing: 0.06em;
   color: var(--dim2);
 }
@@ -227,7 +227,7 @@
 
 .wv-asset__name {
   overflow: hidden;
-  font: 500 10.5px Geist;
+  font: 500 10.5px 'Geist Variable';
   color: var(--txt2);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -235,13 +235,13 @@
 
 .wv-asset__tick {
   flex: none;
-  font: 400 11px 'Geist Mono';
+  font: 400 11px 'Geist Mono Variable';
   color: var(--live);
 }
 
 .wv-asset__error {
   overflow: hidden;
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--rec);
   text-overflow: ellipsis;
 }

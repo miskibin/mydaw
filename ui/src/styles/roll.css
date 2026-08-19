@@ -21,14 +21,14 @@
 }
 
 .wv-roll__chname {
-  font: 600 12px Geist;
+  font: 600 12px 'Geist Variable';
   color: var(--txt);
 }
 
 .wv-roll__chsrc {
   max-width: 140px;
   overflow: hidden;
-  font: 400 10px 'Geist Mono';
+  font: 400 10px 'Geist Mono Variable';
   color: var(--dim2);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -72,7 +72,7 @@
   height: 20px;
   padding: 0 7px;
   border-radius: 5px;
-  font: 500 9.5px Geist;
+  font: 500 9.5px 'Geist Variable';
   color: var(--dim);
   cursor: default;
 }
@@ -102,14 +102,14 @@
 }
 
 .wv-roll__fieldtag {
-  font: 500 8.5px 'Geist Mono';
+  font: 500 8.5px 'Geist Mono Variable';
   letter-spacing: 0.1em;
   color: var(--dim2);
 }
 
 .wv-roll__fieldval {
   min-width: 44px;
-  font: 500 11px 'Geist Mono';
+  font: 500 11px 'Geist Mono Variable';
   color: var(--txt);
   font-variant-numeric: tabular-nums;
 }

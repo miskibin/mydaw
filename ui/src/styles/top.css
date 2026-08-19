@@ -27,7 +27,7 @@
 }
 
 .wv-brand__name {
-  font: 600 12.5px Geist;
+  font: 600 12.5px 'Geist Variable';
   letter-spacing: 0.04em;
   color: var(--txt);
 }
@@ -35,7 +35,7 @@
 .wv-brand__project {
   max-width: 130px;
   overflow: hidden;
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--dim2);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -111,14 +111,14 @@
 
 .wv-clock__time {
   min-width: 96px;
-  font: 500 20px/1 'Geist Mono';
+  font: 500 20px/1 'Geist Mono Variable';
   color: var(--txt);
   font-variant-numeric: tabular-nums;
 }
 
 .wv-clock__bar {
   min-width: 62px;
-  font: 400 10.5px 'Geist Mono';
+  font: 400 10.5px 'Geist Mono Variable';
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
@@ -142,7 +142,7 @@
 }
 
 .wv-meta__value {
-  font: 500 12.5px 'Geist Mono';
+  font: 500 12.5px 'Geist Mono Variable';
   color: var(--txt);
   text-align: left;
   font-variant-numeric: tabular-nums;
@@ -163,13 +163,13 @@
   border: 0;
   border-bottom: 1px solid var(--acc);
   background: transparent;
-  font: 500 12.5px 'Geist Mono';
+  font: 500 12.5px 'Geist Mono Variable';
   color: var(--txt);
   outline: none;
 }
 
 .wv-meta__tag {
-  font: 500 8.5px 'Geist Mono';
+  font: 500 8.5px 'Geist Mono Variable';
   letter-spacing: 0.12em;
   color: var(--dim2);
 }
@@ -213,14 +213,14 @@
 .wv-patsel__name {
   max-width: 130px;
   overflow: hidden;
-  font: 500 11.5px Geist;
+  font: 500 11.5px 'Geist Variable';
   color: var(--txt);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .wv-patsel__tag {
-  font: 500 8.5px 'Geist Mono';
+  font: 500 8.5px 'Geist Mono Variable';
   letter-spacing: 0.12em;
   color: var(--dim2);
 }
@@ -236,7 +236,7 @@
   flex: none;
   max-width: 130px;
   overflow: hidden;
-  font: 500 11.5px Geist;
+  font: 500 11.5px 'Geist Variable';
   color: var(--txt);
   text-align: left;
   text-overflow: ellipsis;
@@ -249,7 +249,7 @@
   border: 0;
   border-bottom: 1px solid var(--acc);
   background: transparent;
-  font: 500 11.5px Geist;
+  font: 500 11.5px 'Geist Variable';
   outline: none;
 }
 

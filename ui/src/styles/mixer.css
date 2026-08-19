@@ -90,7 +90,7 @@
 
 .wv-mixer__num {
   flex: none;
-  font: 400 8.5px 'Geist Mono';
+  font: 400 8.5px 'Geist Mono Variable';
   color: var(--faint);
 }
 
@@ -100,7 +100,7 @@
 
 .wv-mixer__name {
   overflow: hidden;
-  font: 500 10.5px Geist;
+  font: 500 10.5px 'Geist Variable';
   color: var(--txt2);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -112,7 +112,7 @@
 }
 
 .wv-mixer__mastername {
-  font: 500 9.5px 'Geist Mono';
+  font: 500 9.5px 'Geist Mono Variable';
   letter-spacing: 0.1em;
   color: var(--txt);
 }
@@ -137,7 +137,7 @@
 
 .wv-mixer__kind {
   flex: none;
-  font: 400 7.5px 'Geist Mono';
+  font: 400 7.5px 'Geist Mono Variable';
   letter-spacing: 0.08em;
   color: var(--faint);
 }
@@ -195,7 +195,7 @@
 
 .wv-mixer__slotname {
   overflow: hidden;
-  font: 400 8.5px 'Geist Mono';
+  font: 400 8.5px 'Geist Mono Variable';
   color: var(--txt2);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -237,7 +237,7 @@
   width: 15px;
   height: 15px;
   border-radius: 3px;
-  font: 400 9px 'Geist Mono';
+  font: 400 9px 'Geist Mono Variable';
   color: var(--dim);
 }
 
@@ -277,12 +277,12 @@
 }
 
 .wv-mixer__panread {
-  font: 400 9px 'Geist Mono';
+  font: 400 9px 'Geist Mono Variable';
   color: var(--dim2);
 }
 
 .wv-mixer__gain {
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--txt2);
 }
 
@@ -321,7 +321,7 @@
 
 .wv-mixer__arrow {
   height: 11px;
-  font: 400 11px 'Geist Mono';
+  font: 400 11px 'Geist Mono Variable';
   line-height: 1;
   color: var(--faint);
 }
@@ -354,7 +354,7 @@
   flex: none;
   align-items: center;
   min-height: 36px;
-  font: 500 7.5px 'Geist Mono';
+  font: 500 7.5px 'Geist Mono Variable';
   letter-spacing: 0.08em;
   color: var(--faint);
 }
@@ -366,7 +366,7 @@
 .wv-mixer__pre {
   flex: none;
   width: 26px;
-  font: 400 8.5px 'Geist Mono';
+  font: 400 8.5px 'Geist Mono Variable';
   color: var(--txt2);
   text-align: center;
 }
@@ -384,14 +384,14 @@
 .wv-mixer__out {
   max-width: 100%;
   overflow: hidden;
-  font: 400 8.5px 'Geist Mono';
+  font: 400 8.5px 'Geist Mono Variable';
   color: var(--dim);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .wv-mixer__peak {
-  font: 400 8.5px 'Geist Mono';
+  font: 400 8.5px 'Geist Mono Variable';
   color: var(--dim2);
 }
 
@@ -400,7 +400,7 @@
 .wv-seg__btn.wv-mixer__mode {
   height: 20px;
   padding: 0 8px;
-  font: 500 8.5px 'Geist Mono';
+  font: 500 8.5px 'Geist Mono Variable';
   letter-spacing: 0.08em;
 }
 
@@ -420,14 +420,14 @@
 
 .wv-mixer__selname {
   flex: none;
-  font: 600 11px Geist;
+  font: 600 11px 'Geist Variable';
   color: var(--txt);
 }
 
 .wv-mixer__route {
   min-width: 0;
   overflow: hidden;
-  font: 400 9.5px 'Geist Mono';
+  font: 400 9.5px 'Geist Mono Variable';
   color: var(--dim);
   text-overflow: ellipsis;
   white-space: nowrap;

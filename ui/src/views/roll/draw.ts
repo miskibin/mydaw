@@ -333,7 +333,7 @@ export class RollRenderer {
 
       if (!ghost && scene.labels && w >= 34 && h >= 9) {
         ctx.fillStyle = scene.dark ? 'rgba(6,10,14,.85)' : 'rgba(255,255,255,.95)';
-        ctx.font = `500 ${Math.min(9.5, h - 3)}px 'Geist Mono', ui-monospace, monospace`;
+        ctx.font = `500 ${Math.min(9.5, h - 3)}px 'Geist Mono Variable', ui-monospace, monospace`;
         ctx.textBaseline = 'middle';
         ctx.fillText(noteName(note.key), x + 4, y + h / 2 + 0.5);
       }
@@ -429,7 +429,7 @@ export class RollRenderer {
       ctx.fillRect(x, 0, 1, RULER_H);
       if (isBar) {
         ctx.fillStyle = scene.palette.txt2;
-        ctx.font = "500 10px 'Geist Mono', ui-monospace, monospace";
+        ctx.font = "500 10px 'Geist Mono Variable', ui-monospace, monospace";
         ctx.fillText(String(tick / TICKS_PER_BAR + 1), x + 5, RULER_H / 2);
       }
     }
@@ -467,7 +467,7 @@ export class RollRenderer {
       ctx.fillRect(0, y + geo.rowH - 1, KEY_W, 1);
       if (!black) {
         ctx.fillStyle = scene.dark ? '#3a4048' : '#6a7280';
-        ctx.font = "400 8.5px 'Geist Mono', ui-monospace, monospace";
+        ctx.font = "400 8.5px 'Geist Mono Variable', ui-monospace, monospace";
         ctx.fillText(noteName(key), KEY_W - 7, y + geo.rowH / 2);
       }
       if (key % 12 === 0) {
