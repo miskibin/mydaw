@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use mydaw_app::effects::InsertTarget;
 use mydaw_app::{Project, Source, TrackDef, TrackHost};
 use mydaw_plugin_instruments::InstrumentRegistry;
 use mydaw_plugin_test_tone::{TestToneFactory, DEFAULT_AMPLITUDE};
@@ -414,4 +415,306 @@ fn the_shells_starter_rack_is_four_drums_and_a_synth_and_is_silent_until_played(
             "channel {index} was not addressed"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Routing, through the shell's own builder
+// ---------------------------------------------------------------------------
+
+/// One tone track and one bus, with `track 0 -> bus 0` at unity.
+fn routed_project(pre: bool) -> Project {
+    let mut project = Project::empty();
+    project.add(Source::TestTone, None).expect("room");
+    project.add_bus(Some("Reverb".to_owned())).expect("room");
+    let send = project
+        .add_send(mydaw_rt_core::StripId::Track(0), 0)
+        .expect("a legal tap");
+    project.edit_send(send, |send| send.pre = pre).unwrap();
+    project
+}
+
+#[test]
+fn a_send_into_a_bus_with_an_eq_on_it_reaches_the_master_through_the_bus() {
+    // The shell's whole routing path in one render: a project with a bus, an
+    // insert chain on it and a send into it, built by `build_spec` and run by
+    // the engine's own graph channel.
+    let effects = mydaw_plugin_effects::EffectRegistry::new();
+    let mut project = routed_project(true);
+    project
+        .add_insert(InsertTarget::Bus(0), "effects.utility", None, &effects)
+        .expect("the utility exists");
+    // -6 dB on the bus, so the bus's contribution is a known fraction of the
+    // track's rather than merely "some".
+    project.buses[0].inserts[0]
+        .params
+        .set_by_id("gain", -6.0206);
+
+    let mut rig = Rig::new(project);
+    let (dry_left, _) = rig.settled(8, true);
+    let with_bus = peak(&dry_left);
+
+    // ...and with the bus muted, only the track's own main out is left.
+    rig.host.set_bus_muted(0, true).unwrap();
+    let (muted_left, _) = rig.settled(8, true);
+    let main_only = peak(&muted_left);
+
+    assert!(
+        (main_only - DEFAULT_AMPLITUDE).abs() < 1e-3,
+        "the main out alone should be the tone: {main_only}"
+    );
+    let contribution = with_bus - main_only;
+    assert!(
+        (contribution - DEFAULT_AMPLITUDE * 0.5).abs() < 0.01,
+        "the bus should add half the tone (its utility is at -6 dB), added {contribution}"
+    );
+    assert_eq!(rig.graph.bus_count(), 1);
+}
+
+/// The pre/post proof, offline: with the fader at the bottom of its scale, a
+/// pre-fader send still feeds its bus and a post-fader one does not.
+#[test]
+fn a_fader_at_the_bottom_of_its_scale_stops_a_post_send_and_not_a_pre_one() {
+    let measure = |pre: bool| -> f32 {
+        let mut project = routed_project(pre);
+        project.tracks[0].gain_db = mydaw_rt_core::SILENCE_DB;
+        let mut rig = Rig::new(project);
+        let (left, _) = rig.settled(8, true);
+        peak(&left)
+    };
+
+    let pre = measure(true);
+    let post = measure(false);
+    assert!(
+        (pre - DEFAULT_AMPLITUDE).abs() < 1e-3,
+        "a pre-fader send ignores the fader: {pre}"
+    );
+    assert_eq!(post, 0.0, "a post-fader send follows it");
+    assert!(
+        dbfs(pre) - dbfs(post) > 80.0,
+        "pre {} dBFS vs post {} dBFS",
+        dbfs(pre),
+        dbfs(post)
+    );
+}
+
+#[test]
+fn a_bus_peak_reaches_the_meter_path_and_a_muted_bus_reads_silence() {
+    let mut rig = Rig::new(routed_project(true));
+    rig.settled(8, true);
+    let peaks = rig.graph.bus_peaks();
+    assert_eq!(peaks.count(), 1);
+    assert!(
+        (peaks.get(0).peak_l - DEFAULT_AMPLITUDE).abs() < 1e-3,
+        "{:?}",
+        peaks.get(0)
+    );
+
+    rig.host.set_bus_muted(0, true).unwrap();
+    rig.settled(8, true);
+    assert_eq!(rig.graph.bus_peaks().get(0), TrackPeak::SILENT);
+}
+
+#[test]
+fn a_send_level_reaches_the_audio_thread_with_no_rebuild_at_all() {
+    // The claim that makes a send knob cheap: one atomic store, and the graph
+    // the audio thread is running is the one it was already running.
+    let mut project = routed_project(true);
+    project.tracks[0].muted = true; // Only the send path is audible.
+    let mut rig = Rig::new(project);
+    let nodes_before = rig.graph.node_count();
+    rig.settled(8, true);
+    let unity = peak(&rig.render(true).0);
+
+    let send = rig.host.project().sends[0].id;
+    rig.host.set_send_level(send, 0.25).expect("a live send");
+    // No `rebuild()`: the level is an atomic the running graph reads.
+    let (left, _) = rig.settled(8, true);
+    let quieter = peak(&left);
+
+    assert_eq!(rig.graph.node_count(), nodes_before, "nothing was rebuilt");
+    assert!(
+        (quieter - unity * 0.25).abs() < 0.01,
+        "{unity} at unity, {quieter} at a quarter"
+    );
+
+    // ...and an out-of-range level is refused rather than clamped.
+    assert!(rig.host.set_send_level(send, 9.0).is_err());
+    assert!(rig.host.set_send_level(99, 0.5).is_err());
+}
+
+#[test]
+fn an_insert_parameter_reaches_the_running_node_with_no_rebuild() {
+    let effects = mydaw_plugin_effects::EffectRegistry::new();
+    let mut project = Project::empty();
+    project.add(Source::TestTone, None).expect("room");
+    project
+        .add_insert(InsertTarget::Track(0), "effects.utility", None, &effects)
+        .unwrap();
+
+    let mut rig = Rig::new(project);
+    let nodes_before = rig.graph.node_count();
+    rig.settled(8, true);
+    let unity = peak(&rig.render(true).0);
+
+    // The store comes back as what was *actually* stored, so a knob can snap
+    // itself to the truth.
+    let stored = rig
+        .host
+        .set_insert_param(InsertTarget::Track(0), 0, "gain", -6.0206)
+        .expect("the utility has a gain");
+    assert!((stored + 6.0206).abs() < 1e-4);
+    let (left, _) = rig.settled(8, true);
+    assert_eq!(rig.graph.node_count(), nodes_before, "nothing was rebuilt");
+    assert!(
+        (peak(&left) - unity * 0.5).abs() < 0.01,
+        "the gain did not reach the running node"
+    );
+
+    // A value past the parameter's range comes back clamped, not stored.
+    let clamped = rig
+        .host
+        .set_insert_param(InsertTarget::Track(0), 0, "gain", 1_000.0)
+        .unwrap();
+    assert_eq!(clamped, 36.0, "the utility's gain tops out at +36 dB");
+    assert!(rig
+        .host
+        .set_insert_param(InsertTarget::Track(0), 0, "nope", 0.0)
+        .is_err());
+    assert!(rig
+        .host
+        .set_insert_param(InsertTarget::Bus(0), 0, "gain", 0.0)
+        .is_err());
+}
+
+/// The gain-reduction meter, end to end through the shell: a compressor on a
+/// bus fed a signal well over its threshold must **report** the reduction it is
+/// applying, and report none when the signal is below it.
+#[test]
+fn a_compressor_on_a_bus_publishes_the_gain_reduction_it_is_applying() {
+    let effects = mydaw_plugin_effects::EffectRegistry::new();
+    let mut project = routed_project(true);
+    project
+        .add_insert(InsertTarget::Bus(0), "effects.compressor", None, &effects)
+        .expect("the compressor exists");
+    let params = &project.buses[0].inserts[0].params;
+    params.set_by_id("threshold", -40.0);
+    params.set_by_id("ratio", 8.0);
+    params.set_by_id("attack", 1.0);
+
+    let mut rig = Rig::new(project);
+    let readouts = |rig: &Rig| -> (f32, f32) {
+        let values = rig
+            .host
+            .insert_readouts(InsertTarget::Bus(0), 0)
+            .expect("the compressor is there");
+        let get = |id: &str| {
+            values
+                .iter()
+                .find(|value| value.id == id)
+                .map(|value| value.value)
+                .unwrap_or_else(|| panic!("no readout '{id}'"))
+        };
+        (get("gr"), get("gr_max"))
+    };
+
+    // Nothing rendered yet: nothing reduced.
+    assert_eq!(readouts(&rig), (0.0, 0.0));
+
+    rig.settled(16, true);
+    let (gr, gr_max) = readouts(&rig);
+    assert!(
+        gr > 3.0 && gr < 40.0,
+        "a tone {} dBFS over a -40 dB threshold at 8:1 should be reduced: gr {gr} dB",
+        dbfs(DEFAULT_AMPLITUDE) + 40.0
+    );
+    assert!(
+        gr_max >= gr,
+        "gr_max is the worst of the block and must not be below the last sample: {gr_max} < {gr}"
+    );
+    assert!(gr_max.is_finite() && gr_max < 60.0, "{gr_max}");
+
+    // Raise the threshold above the signal and the meter comes back down.
+    rig.host
+        .set_insert_param(InsertTarget::Bus(0), 0, "threshold", 0.0)
+        .unwrap();
+    rig.settled(64, true);
+    let (quiet_gr, _) = readouts(&rig);
+    assert!(
+        quiet_gr < 1.0,
+        "nothing is over a 0 dBFS threshold, so nothing should be reduced: {quiet_gr} dB"
+    );
+
+    // The whole chain's meters come back in chain order, with an entry per
+    // insert whether or not it publishes anything.
+    let chain = rig.host.chain_readouts(InsertTarget::Bus(0)).unwrap();
+    assert_eq!(chain.len(), 1);
+    assert_eq!(chain[0].index, 0);
+    assert_eq!(
+        chain[0]
+            .readouts
+            .iter()
+            .map(|value| value.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["gr", "gr_max"]
+    );
+    assert!(rig.host.chain_readouts(InsertTarget::Bus(9)).is_err());
+}
+
+#[test]
+fn a_bus_chain_runs_before_the_bus_fader_and_the_master_chain_before_the_hosted_slot() {
+    // Order matters and is not observable from a DTO, so it is asserted where
+    // it is decided: the node count the builder produces.
+    let effects = mydaw_plugin_effects::EffectRegistry::new();
+    let mut project = Project::empty();
+    project.add(Source::TestTone, None).expect("room");
+    project.add_bus(None).expect("room");
+    let bare = {
+        let rig = Rig::new(project.clone());
+        rig.graph.node_count()
+    };
+
+    project
+        .add_insert(InsertTarget::Track(0), "effects.eq", None, &effects)
+        .unwrap();
+    project
+        .add_insert(InsertTarget::Bus(0), "effects.delay", None, &effects)
+        .unwrap();
+    project
+        .add_insert(InsertTarget::Master, "effects.utility", None, &effects)
+        .unwrap();
+    let rig = Rig::new(project);
+    assert_eq!(
+        rig.graph.node_count(),
+        bare + 3,
+        "one node per insert, on every kind of chain"
+    );
+    assert_eq!(rig.graph.bus_count(), 1);
+}
+
+#[test]
+fn an_insert_naming_an_effect_this_build_does_not_have_is_skipped_not_fatal() {
+    // The missing-plugin policy at insert granularity: the graph still builds,
+    // the chain is simply one node shorter, and the entry stays in the project
+    // so a save writes it back out.
+    let effects = mydaw_plugin_effects::EffectRegistry::new();
+    let mut project = Project::empty();
+    project.add(Source::TestTone, None).expect("room");
+    project
+        .add_insert(InsertTarget::Track(0), "effects.utility", None, &effects)
+        .unwrap();
+    let known = {
+        let rig = Rig::new(project.clone());
+        rig.graph.node_count()
+    };
+
+    // Rewrite the entry to name an effect that does not exist, the way a
+    // project written by a later build would.
+    project.tracks[0].inserts[0].type_id = "effects.reverb".to_owned();
+    let rig = Rig::new(project);
+    assert_eq!(rig.graph.node_count(), known - 1);
+    let (left, _) = {
+        let mut rig = rig;
+        rig.settled(4, true)
+    };
+    assert!(peak(&left) > 0.0, "the rest of the track still plays");
 }

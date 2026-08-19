@@ -225,9 +225,7 @@ impl Vst3Host {
             Vst3Command::RemoveTrack { track } => self
                 .remove_track(tracks, audio, track, clap)
                 .map(|()| Vst3Answer::Done),
-            Vst3Command::Rebuild => self
-                .rebuild(tracks, audio, clap)
-                .map(|()| Vst3Answer::Done),
+            Vst3Command::Rebuild => self.rebuild(tracks, audio, clap).map(|()| Vst3Answer::Done),
         }
     }
 
@@ -437,9 +435,7 @@ impl Vst3Host {
         audio: &AudioIoService,
         clap: &mut ClapHost,
     ) -> Result<(), String> {
-        tracks
-            .install_graph(audio)
-            .map_err(|err| err.to_string())?;
+        tracks.install_graph(audio).map_err(|err| err.to_string())?;
         self.reattach_both(tracks, audio, clap)
     }
 

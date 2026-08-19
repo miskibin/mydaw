@@ -89,9 +89,7 @@ use mydaw_plugin_sequencer::{
     AudioClip, Clip, Pattern, PatternClip, PatternError, PatternSet, PlayMode, Playlist,
     PlaylistError, PlaylistTrack,
 };
-use mydaw_rt_core::{
-    StripId, MAX_BPM, MAX_BUSES, MAX_GAIN_DB, MAX_TRACKS, MIN_BPM, SILENCE_DB,
-};
+use mydaw_rt_core::{StripId, MAX_BPM, MAX_BUSES, MAX_GAIN_DB, MAX_TRACKS, MIN_BPM, SILENCE_DB};
 use serde::{Deserialize, Serialize};
 
 use crate::clap_bridge::{from_base64, to_base64};
@@ -1466,6 +1464,7 @@ pub fn project_name(path: Option<&Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::effects::InsertTarget;
     use mydaw_plugin_sequencer::{MelodicNote, Step, StepRow, TICKS_PER_STEP};
     use mydaw_rt_core::{MAX_GAIN_DB, SILENCE_DB};
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -1625,7 +1624,9 @@ mod tests {
         let parsed = parse_project(&text).expect("what we wrote is what we read");
         assert_eq!(parsed, file);
 
-        let (restored, selected) = parsed.to_project(&EffectRegistry::new()).expect("a valid project");
+        let (restored, selected) = parsed
+            .to_project(&EffectRegistry::new())
+            .expect("a valid project");
         assert_eq!(restored, project, "the whole mixer, field for field");
         assert_eq!(selected, 1);
         assert_eq!(parsed.to_bpm().unwrap(), 147.0);
@@ -1849,7 +1850,9 @@ mod tests {
         // Everything version 1 could say is still said.
         assert_eq!(parsed.to_bpm().unwrap(), 147.0);
         assert_eq!(parsed.master_gain_db, -3.5);
-        let (project, selected) = parsed.to_project(&EffectRegistry::new()).expect("a valid project");
+        let (project, selected) = parsed
+            .to_project(&EffectRegistry::new())
+            .expect("a valid project");
         assert_eq!(project.len(), 2);
         assert_eq!(project.tracks[0].name, "Drums");
         assert_eq!(project.tracks[0].gain_db, -6.5);
@@ -2208,7 +2211,10 @@ mod tests {
     fn a_project_with_no_tracks_or_too_many_is_refused() {
         let mut file = captured();
         file.tracks.clear();
-        assert!(matches!(file.to_project(&EffectRegistry::new()), Err(ProjectFileError::NoTracks)));
+        assert!(matches!(
+            file.to_project(&EffectRegistry::new()),
+            Err(ProjectFileError::NoTracks)
+        ));
 
         let mut file = captured();
         let one = file.tracks[0].clone();
@@ -2419,5 +2425,310 @@ mod tests {
         let last = file.tracks.len() - 1;
         file.selected_track = 99;
         assert_eq!(file.to_project(&EffectRegistry::new()).unwrap().1, last);
+    }
+
+    // ------------------------------------------------------- version 4
+
+    const V3_PROJECT: &str = include_str!("../tests/fixtures/v3.mydaw");
+
+    /// A project with a bus, a send and an insert on every kind of chain.
+    fn routed_session() -> Project {
+        let registry = EffectRegistry::new();
+        let mut project = Project::empty();
+        project
+            .add(Source::DrumKit, Some("Drums".to_owned()))
+            .unwrap();
+        project
+            .add(Source::PolySynth, Some("Lead".to_owned()))
+            .unwrap();
+        project.master_gain_db = -1.5;
+
+        project.add_bus(Some("Drum Bus".to_owned())).unwrap();
+        project.add_bus(Some("Reverb".to_owned())).unwrap();
+        project.buses[1].color = Some("#4f8ef7".to_owned());
+        project.buses[0].gain_db = -2.5;
+        project.buses[0].pan = 0.25;
+        project.buses[1].muted = true;
+
+        let send = project.add_send(StripId::Track(0), 0).unwrap();
+        project
+            .edit_send(send, |send| {
+                send.level = 0.4;
+                send.pre = true;
+            })
+            .unwrap();
+        project.add_send(StripId::Bus(0), 1).unwrap();
+
+        project
+            .add_insert(InsertTarget::Track(0), "effects.eq", None, &registry)
+            .unwrap();
+        project
+            .add_insert(InsertTarget::Bus(0), "effects.compressor", None, &registry)
+            .unwrap();
+        project
+            .add_insert(InsertTarget::Master, "effects.utility", None, &registry)
+            .unwrap();
+        project.tracks[0].inserts[0]
+            .params
+            .set_by_id("low.gain", 6.0);
+        project.buses[0].inserts[0].params.set_by_id("ratio", 8.0);
+        project
+    }
+
+    fn routed_file(project: &Project) -> ProjectFile {
+        let (patterns, playlist) = song();
+        ProjectFile::capture(
+            project,
+            0,
+            120.0,
+            &Song {
+                patterns: &patterns,
+                playlist: &playlist,
+                mode: PlayMode::Pattern,
+                audio_sources: Vec::new(),
+            },
+            &[],
+            None,
+        )
+    }
+
+    #[test]
+    fn a_version_three_project_still_opens_and_gains_empty_routing() {
+        // The whole of the v3 -> v4 migration: `#[serde(default)]` gives a file
+        // that predates buses exactly what it meant -- none.
+        assert!(
+            V3_PROJECT.contains(r#""format_version": 3"#),
+            "the fixture must stay version 3; nobody may 'helpfully' update it"
+        );
+        assert!(
+            !V3_PROJECT.contains(r#""buses""#) && !V3_PROJECT.contains(r#""inserts""#),
+            "and it must predate the routing fields"
+        );
+
+        let parsed = parse_project(V3_PROJECT).expect("a version 3 project still opens");
+        assert_eq!(
+            parsed.format_version, FORMAT_VERSION,
+            "migrate on load, write current on save"
+        );
+        assert!(parsed.buses.is_empty() && parsed.sends.is_empty());
+        assert!(parsed.master_inserts.is_empty());
+        assert!(parsed.tracks.iter().all(|track| track.inserts.is_empty()));
+
+        // The version 3 content is untouched.
+        assert_eq!(parsed.bpm, 147.0);
+        assert_eq!(parsed.master_gain_db, -3.5);
+        assert_eq!(parsed.play_mode, "song");
+        assert_eq!(parsed.patterns.len(), 1);
+        assert_eq!(parsed.playlist.clips.len(), 1);
+
+        let (project, selected) = parsed
+            .to_project(&EffectRegistry::new())
+            .expect("and it describes a session this engine can run");
+        assert_eq!(project.len(), 2);
+        assert_eq!(selected, 1);
+        assert!(project.buses.is_empty() && project.sends.is_empty());
+        assert!(!project.has_inserts());
+
+        // A save then writes version 4, with the new fields present rather than
+        // omitted -- so the file says what it will sound like.
+        let saved = parsed.to_json().unwrap();
+        assert!(saved.contains(r#""format_version": 4"#), "{saved}");
+        assert!(saved.contains(r#""buses": []"#) && saved.contains(r#""sends": []"#));
+        assert!(saved.contains(r#""master_inserts": []"#));
+        assert!(saved.contains(r#""inserts": []"#));
+
+        // From there the ordinary byte-identity property holds.
+        let reopened = parse_project(&saved).unwrap();
+        assert_eq!(reopened, parsed);
+        assert_eq!(reopened.to_json().unwrap(), saved);
+    }
+
+    #[test]
+    fn a_project_file_from_the_future_is_refused_by_name() {
+        let future = V3_PROJECT.replace(r#""format_version": 3"#, r#""format_version": 5"#);
+        assert!(matches!(
+            parse_project(&future),
+            Err(ProjectFileError::FutureVersion { found: 5 })
+        ));
+    }
+
+    #[test]
+    fn buses_sends_and_insert_chains_round_trip_with_every_value_intact() {
+        let project = routed_session();
+        let file = routed_file(&project);
+        let text = file.to_json().unwrap();
+        let parsed = parse_project(&text).expect("what we wrote is what we read");
+        assert_eq!(parsed, file);
+        assert_eq!(
+            parsed.to_json().unwrap(),
+            text,
+            "the round trip is byte-identical"
+        );
+
+        let (restored, _) = parsed.to_project(&EffectRegistry::new()).unwrap();
+        assert_eq!(restored.buses.len(), 2);
+        assert_eq!(restored.buses[0].name, "Drum Bus");
+        assert_eq!(restored.buses[0].gain_db, -2.5);
+        assert_eq!(restored.buses[0].pan, 0.25);
+        assert!(restored.buses[1].muted);
+        assert_eq!(restored.buses[1].color.as_deref(), Some("#4f8ef7"));
+
+        assert_eq!(restored.sends.len(), 2);
+        let send = &restored.sends[0];
+        assert_eq!(send.source, StripId::Track(0));
+        assert_eq!(send.dest, 0);
+        assert_eq!(send.level, 0.4);
+        assert!(send.pre);
+        assert_eq!(restored.sends[1].source, StripId::Bus(0));
+
+        // Parameter values survive, and so do the ids a UI keys its lists on.
+        assert_eq!(
+            restored.tracks[0].inserts[0].params.get_by_id("low.gain"),
+            Some(6.0)
+        );
+        assert_eq!(
+            restored.buses[0].inserts[0].params.get_by_id("ratio"),
+            Some(8.0)
+        );
+        assert_eq!(restored.master_inserts[0].type_id, "effects.utility");
+        assert_eq!(
+            restored.tracks[0].inserts[0].id,
+            project.tracks[0].inserts[0].id
+        );
+        assert_eq!(restored.next_insert_id(), project.next_insert_id());
+        assert_eq!(restored.next_send_id(), project.next_send_id());
+        assert_eq!(restored.next_bus_id(), project.next_bus_id());
+
+        // The whole session compares equal, which is the one-line "nothing was
+        // lost" the byte-identity test rests on.
+        assert_eq!(restored, project);
+    }
+
+    #[test]
+    fn every_parameter_is_written_not_only_the_ones_that_were_moved() {
+        // A default that changes in a later build must not silently change a
+        // saved project.
+        let project = routed_session();
+        let file = routed_file(&project);
+        let entry = &file.tracks[0].inserts[0];
+        assert_eq!(entry.type_id, "effects.eq");
+        assert_eq!(
+            entry.params.len(),
+            EffectRegistry::new()
+                .info("effects.eq")
+                .unwrap()
+                .params
+                .len()
+        );
+        // A `BTreeMap`, so the key order on disk is deterministic.
+        let keys: Vec<&String> = entry.params.keys().collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+    }
+
+    #[test]
+    fn an_effect_this_build_does_not_have_is_skipped_rather_than_fatal() {
+        // The missing-plugin policy, one level down: the project opens, that
+        // effect is simply not in the chain, and the entry is still in the file.
+        let project = routed_session();
+        let mut file = routed_file(&project);
+        file.tracks[0].inserts.push(InsertEntry {
+            id: 99,
+            type_id: "effects.reverb".to_owned(),
+            params: BTreeMap::new(),
+        });
+        let (restored, _) = file
+            .to_project(&EffectRegistry::new())
+            .expect("an unknown effect must not refuse the project");
+        assert_eq!(restored.tracks[0].inserts.len(), 1);
+        assert_eq!(restored.tracks[0].inserts[0].type_id, "effects.eq");
+    }
+
+    #[test]
+    fn a_parameter_this_build_does_not_have_is_ignored_at_parameter_granularity() {
+        let project = routed_session();
+        let mut file = routed_file(&project);
+        file.tracks[0].inserts[0]
+            .params
+            .insert("low.resonance".to_owned(), 0.7);
+        let (restored, _) = file.to_project(&EffectRegistry::new()).unwrap();
+        assert_eq!(
+            restored.tracks[0].inserts[0].params.get_by_id("low.gain"),
+            Some(6.0),
+            "the parameters this build does have still arrive"
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_file_that_routes_a_bus_into_itself_opens_with_that_edge_dropped() {
+        // A cycle cannot be created through the command surface, so this can
+        // only come from a hand-edited file. Dropping the edge that closes the
+        // loop keeps the project openable, which is worth far more than
+        // refusing it over a routing typo.
+        let project = routed_session();
+        let mut file = routed_file(&project);
+        file.sends.push(SendEntry {
+            id: 90,
+            source_kind: "bus".to_owned(),
+            source_index: 1,
+            dest: 0,
+            level: 1.0,
+            pre: false,
+        });
+        // ...and a self-send, and one naming a strip that is not there.
+        file.sends.push(SendEntry {
+            id: 91,
+            source_kind: "bus".to_owned(),
+            source_index: 0,
+            dest: 0,
+            level: 1.0,
+            pre: false,
+        });
+        file.sends.push(SendEntry {
+            id: 92,
+            source_kind: "track".to_owned(),
+            source_index: 9,
+            dest: 0,
+            level: 1.0,
+            pre: false,
+        });
+        file.sends.push(SendEntry {
+            id: 93,
+            source_kind: "aux".to_owned(),
+            source_index: 0,
+            dest: 0,
+            level: 1.0,
+            pre: false,
+        });
+
+        let (restored, _) = file.to_project(&EffectRegistry::new()).unwrap();
+        assert_eq!(
+            restored.sends.iter().map(|s| s.id).collect::<Vec<_>>(),
+            vec![0, 1],
+            "only the two real taps survive"
+        );
+    }
+
+    #[test]
+    fn a_file_with_more_buses_than_the_engine_runs_is_refused_by_name() {
+        let project = routed_session();
+        let mut file = routed_file(&project);
+        for id in 0..MAX_BUSES as u32 + 1 {
+            file.buses.push(BusEntry {
+                id: 100 + id,
+                name: format!("Extra {id}"),
+                color: None,
+                gain_db: 0.0,
+                pan: 0.0,
+                muted: false,
+                soloed: false,
+                inserts: Vec::new(),
+            });
+        }
+        assert!(matches!(
+            file.to_project(&EffectRegistry::new()),
+            Err(ProjectFileError::TooManyBuses(_))
+        ));
     }
 }

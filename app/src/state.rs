@@ -27,9 +27,9 @@ use crate::clap_bridge::{ClapAnswer, ClapCommand, ClapGuiStatusDto, ClapHostBrid
 use crate::dto::{
     ClapPluginInfoDto, PatternDto, PatternSetDto, PlaylistDto, SequencerStateDto, Vst3PluginInfoDto,
 };
+use crate::effects::{EffectInfoDto, InsertError, InsertTarget};
 use crate::ipc_bench;
 use crate::meters::MeterPump;
-use crate::effects::{EffectInfoDto, InsertError, InsertTarget};
 use crate::project::{MixerStateDto, Project, RouteError, TrackError};
 use crate::project_bridge::{ProjectBridge, ProjectCommand, ProjectInfoDto};
 use crate::source::{check_bundle_path, Source, SourceDto, SourceError};
@@ -921,11 +921,7 @@ impl AppState {
     /// # Errors
     /// [`RouteError::NoSuchBus`], [`RouteError::BlankName`].
     pub fn rename_bus(&self, bus: usize, name: &str) -> Result<(), RouteError> {
-        if name.trim().is_empty() {
-            return Err(RouteError::BlankName);
-        }
-        self.tracks
-            .edit_project(|project| project.edit_bus(bus, |def| def.name = name.to_owned()))
+        self.tracks.rename_bus(bus, name)
     }
 
     /// Set or clear a bus's colour. No rebuild.
@@ -933,9 +929,7 @@ impl AppState {
     /// # Errors
     /// [`RouteError::NoSuchBus`].
     pub fn set_bus_color(&self, bus: usize, color: Option<String>) -> Result<(), RouteError> {
-        let color = color.filter(|value| !value.trim().is_empty());
-        self.tracks
-            .edit_project(|project| project.edit_bus(bus, |def| def.color = color))
+        self.tracks.set_bus_color(bus, color)
     }
 
     /// Set a bus's fader, in dB. No rebuild: an atomic, like a track's.
@@ -943,10 +937,7 @@ impl AppState {
     /// # Errors
     /// [`RouteError::NoSuchBus`], or [`TrackError::InvalidGain`] as a sentence.
     pub fn set_bus_gain_db(&self, bus: usize, db: f32) -> Result<(), MixerError> {
-        let db = crate::project::check_gain_db(db)?;
-        self.tracks
-            .edit_project(|project| project.edit_bus(bus, |def| def.gain_db = db))?;
-        Ok(())
+        self.tracks.set_bus_gain_db(bus, db)
     }
 
     /// Set a bus's pan. No rebuild.
@@ -954,10 +945,7 @@ impl AppState {
     /// # Errors
     /// [`RouteError::NoSuchBus`] or [`TrackError::InvalidPan`].
     pub fn set_bus_pan(&self, bus: usize, pan: f32) -> Result<(), MixerError> {
-        let pan = crate::project::check_pan(pan)?;
-        self.tracks
-            .edit_project(|project| project.edit_bus(bus, |def| def.pan = pan))?;
-        Ok(())
+        self.tracks.set_bus_pan(bus, pan)
     }
 
     /// Mute or unmute a bus. No rebuild.
@@ -965,8 +953,7 @@ impl AppState {
     /// # Errors
     /// [`RouteError::NoSuchBus`].
     pub fn set_bus_muted(&self, bus: usize, muted: bool) -> Result<(), RouteError> {
-        self.tracks
-            .edit_project(|project| project.edit_bus(bus, |def| def.muted = muted))
+        self.tracks.set_bus_muted(bus, muted)
     }
 
     /// Solo or un-solo a bus. No rebuild.
@@ -974,8 +961,7 @@ impl AppState {
     /// # Errors
     /// [`RouteError::NoSuchBus`].
     pub fn set_bus_soloed(&self, bus: usize, soloed: bool) -> Result<(), RouteError> {
-        self.tracks
-            .edit_project(|project| project.edit_bus(bus, |def| def.soloed = soloed))
+        self.tracks.set_bus_soloed(bus, soloed)
     }
 
     /// Add a send tap, returning its id. Rebuilds the graph.
@@ -1077,8 +1063,7 @@ impl AppState {
         param_id: &str,
         value: f32,
     ) -> Result<f32, InsertError> {
-        self.tracks
-            .set_insert_param(target, index, param_id, value)
+        self.tracks.set_insert_param(target, index, param_id, value)
     }
 
     /// Turn one insert's bypass on or off.

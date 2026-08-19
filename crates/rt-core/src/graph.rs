@@ -502,9 +502,7 @@ impl GraphSpec {
             }
             match send.source {
                 StripId::Track(index) => index < track_count,
-                StripId::Bus(index) => {
-                    index < bus_count && position[send.dest] > position[index]
-                }
+                StripId::Bus(index) => index < bus_count && position[send.dest] > position[index],
             }
         };
         let sends: Vec<SendSpec> = self.sends.iter().copied().filter(keep).collect();
@@ -522,7 +520,13 @@ impl GraphSpec {
             .into_iter()
             .enumerate()
             .map(|(index, spec)| {
-                TrackChain::new(index, spec, taps_for(StripId::Track(index)), &params, &limits)
+                TrackChain::new(
+                    index,
+                    spec,
+                    taps_for(StripId::Track(index)),
+                    &params,
+                    &limits,
+                )
             })
             .collect();
 
@@ -823,17 +827,11 @@ impl CompiledGraph {
         }
 
         // Buses, in an order that guarantees every input is already summed.
-        for position in 0..bus_order.len() {
-            let index = bus_order[position];
+        for &index in bus_order.iter() {
             {
                 let BusChain { input, inserts, .. } = &mut buses[index];
-                let mut bus_ctx = ProcessCtx::with_events(
-                    input,
-                    ctx.sample_rate,
-                    ctx.frames,
-                    ctx.transport,
-                    &[],
-                );
+                let mut bus_ctx =
+                    ProcessCtx::with_events(input, ctx.sample_rate, ctx.frames, ctx.transport, &[]);
                 for node in inserts.iter_mut() {
                     node.process(&mut bus_ctx);
                 }
@@ -1792,7 +1790,10 @@ mod tests {
 
         let pre = measure(true);
         let post = measure(false);
-        assert!((pre - 0.5).abs() < 1e-6, "a pre-fader send ignores the fader: {pre}");
+        assert!(
+            (pre - 0.5).abs() < 1e-6,
+            "a pre-fader send ignores the fader: {pre}"
+        );
         assert_eq!(post, 0.0, "a post-fader send follows it");
         assert!(
             dbfs(post) < dbfs(pre) - 80.0,
@@ -1869,7 +1870,10 @@ mod tests {
             .map(|pair| (pair[1] - pair[0]).abs())
             .fold(0.0_f32, f32::max);
         assert!(worst <= limit, "the send knob stepped by {worst}");
-        assert!((rendered[rendered.len() - 1] - 1.0).abs() < 1e-6, "and arrived");
+        assert!(
+            (rendered[rendered.len() - 1] - 1.0).abs() < 1e-6,
+            "and arrived"
+        );
     }
 
     #[test]
@@ -1960,7 +1964,10 @@ mod tests {
 
         assert_eq!(slot.current.as_ref().unwrap().bus_order(), &[1, 0]);
         let peaks = slot.bus_peaks();
-        assert!((peaks.get(1).peak_l - 0.25).abs() < 1e-6, "bus 1 got the track");
+        assert!(
+            (peaks.get(1).peak_l - 0.25).abs() < 1e-6,
+            "bus 1 got the track"
+        );
         assert!(
             (peaks.get(0).peak_l - 0.25).abs() < 1e-6,
             "and bus 0 got bus 1, in the same block"
@@ -2045,8 +2052,15 @@ mod tests {
         let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, TransportSnapshot::default());
         slot.process(&mut ctx);
         let [left, right] = buffers.as_slices();
-        assert!((left[0] - 0.5 * pan_gains(-1.0)[0]).abs() < 1e-6, "{}", left[0]);
-        assert!(right[0].abs() < 1e-9, "hard left leaves nothing on the right");
+        assert!(
+            (left[0] - 0.5 * pan_gains(-1.0)[0]).abs() < 1e-6,
+            "{}",
+            left[0]
+        );
+        assert!(
+            right[0].abs() < 1e-9,
+            "hard left leaves nothing on the right"
+        );
         assert!(slot.bus_peaks().get(0).peak_r.abs() < 1e-9);
 
         params.set_bus_muted(0, true);

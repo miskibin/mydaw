@@ -495,9 +495,7 @@ impl ClapHost {
     /// add or remove: a bus, a send, an insert. The project has already been
     /// changed by whoever asked; this is the part only this thread can do.
     pub fn rebuild(&mut self, tracks: &TrackHost, audio: &AudioIoService) -> Result<(), String> {
-        tracks
-            .install_graph(audio)
-            .map_err(|err| err.to_string())?;
+        tracks.install_graph(audio).map_err(|err| err.to_string())?;
         self.reattach(tracks, audio)
     }
 

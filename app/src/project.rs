@@ -721,7 +721,11 @@ impl Project {
     /// `"bus 1 -> bus 3 -> bus 1"` is.
     fn cycle_through(&self, from: usize, dest: usize) -> Option<String> {
         if from == dest {
-            return Some(format!("{} -> {}", self.bus_name(from), self.bus_name(dest)));
+            return Some(format!(
+                "{} -> {}",
+                self.bus_name(from),
+                self.bus_name(dest)
+            ));
         }
         // Iterative DFS with an explicit path, so a deep chain cannot blow the
         // stack and so the path is available when the target is found.
@@ -730,8 +734,10 @@ impl Project {
         while let Some(path) = stack.pop() {
             let tip = *path.last().expect("a path is never empty");
             if tip == from {
-                let mut names: Vec<String> =
-                    std::iter::once(from).chain(path).map(|bus| self.bus_name(bus)).collect();
+                let mut names: Vec<String> = std::iter::once(from)
+                    .chain(path)
+                    .map(|bus| self.bus_name(bus))
+                    .collect();
                 names.dedup();
                 return Some(names.join(" -> "));
             }
@@ -764,7 +770,8 @@ impl Project {
     ///
     /// [`remove_bus`]: Self::remove_bus
     fn retarget_sends_after_removing_track(&mut self, index: usize) {
-        self.sends.retain(|send| send.source != StripId::Track(index));
+        self.sends
+            .retain(|send| send.source != StripId::Track(index));
         for send in &mut self.sends {
             if let StripId::Track(track) = send.source {
                 if track > index {
@@ -1656,18 +1663,17 @@ mod tests {
         // A republish cannot leave a stale warning behind.
         missing.clear();
         assert!(missing.is_empty());
-        assert!(
-            mixer_state_dto(
+        assert!(mixer_state_dto(
             &project,
             0,
             &ClapBoard::new(),
             &Vst3Board::new(),
             &missing,
             &EffectRegistry::new(),
-        ).tracks[1]
-                .missing
-                .is_none()
-        );
+        )
+        .tracks[1]
+            .missing
+            .is_none());
     }
 
     #[test]
@@ -1727,5 +1733,407 @@ mod tests {
         assert_eq!(dto.tracks[1].source_id, "clap:com.acme.thing");
         assert_eq!(dto.tracks[1].source_label, "Acme Thing");
         assert!(dto.master.clap.is_some());
+    }
+
+    // --------------------------------------------------------- buses & sends
+
+    fn routed() -> Project {
+        // Two tracks, two buses, and a track feeding the first bus.
+        let mut project = Project::empty();
+        project
+            .add(Source::PolySynth, Some("Kick".to_owned()))
+            .unwrap();
+        project
+            .add(Source::PolySynth, Some("Snare".to_owned()))
+            .unwrap();
+        project.add_bus(Some("Drums".to_owned())).unwrap();
+        project.add_bus(Some("Reverb".to_owned())).unwrap();
+        project.add_send(StripId::Track(0), 0).unwrap();
+        project
+    }
+
+    #[test]
+    fn buses_are_added_up_to_the_engines_limit_and_numbered_by_position() {
+        let mut project = Project::empty();
+        project.add(Source::PolySynth, None).unwrap();
+        assert_eq!(project.add_bus(None), Ok(0));
+        assert_eq!(project.buses[0].name, "Bus 1");
+        assert_eq!(project.buses[0].id, 0);
+        assert_eq!(project.add_bus(None), Ok(1));
+        assert_eq!(project.buses[1].name, "Bus 2");
+        assert_eq!(
+            project.add_bus(Some("  ".to_owned())),
+            Err(RouteError::BlankName)
+        );
+
+        while project.buses.len() < MAX_BUSES {
+            project.add_bus(None).unwrap();
+        }
+        assert_eq!(project.add_bus(None), Err(RouteError::TooManyBuses));
+        assert_eq!(project.buses.len(), MAX_BUSES);
+        assert_eq!(project.next_bus_id(), MAX_BUSES as u32);
+    }
+
+    #[test]
+    fn a_send_is_refused_for_everything_the_graph_could_not_run() {
+        let mut project = routed();
+        assert_eq!(
+            project.add_send(StripId::Track(0), 0),
+            Err(RouteError::DuplicateSend {
+                from: StripId::Track(0),
+                dest: 0
+            })
+        );
+        assert_eq!(
+            project.add_send(StripId::Bus(0), 0),
+            Err(RouteError::SelfSend)
+        );
+        assert_eq!(
+            project.add_send(StripId::Track(9), 0),
+            Err(RouteError::NoSuchTrack(9))
+        );
+        assert_eq!(
+            project.add_send(StripId::Track(0), 5),
+            Err(RouteError::NoSuchBus(5))
+        );
+        assert_eq!(project.sends.len(), 1, "a refusal changes nothing");
+    }
+
+    /// The routing rule this whole error type exists for, and the reason the
+    /// audio thread never has to check: a loop cannot be created at all.
+    #[test]
+    fn a_send_that_would_feed_a_bus_into_itself_is_refused_and_names_the_loop() {
+        let mut project = routed();
+        project.add_bus(Some("Delay".to_owned())).unwrap();
+        // Drums -> Reverb -> Delay
+        project.add_send(StripId::Bus(0), 1).unwrap();
+        project.add_send(StripId::Bus(1), 2).unwrap();
+
+        // Closing it two ways: the two-hop loop and the three-hop one. Both
+        // refused, both naming the path a user has to break.
+        let direct = project.add_send(StripId::Bus(1), 0).unwrap_err();
+        assert!(
+            matches!(&direct, RouteError::Cycle(path) if path == "Reverb -> Drums -> Reverb"),
+            "{direct}"
+        );
+        let long = project.add_send(StripId::Bus(2), 0).unwrap_err();
+        assert!(
+            matches!(&long, RouteError::Cycle(path) if path == "Delay -> Drums -> Reverb -> Delay"),
+            "{long}"
+        );
+        assert_eq!(project.sends.len(), 3, "no refusal left anything behind");
+
+        // ...and a tap that does not close a loop is still fine.
+        assert!(project.add_send(StripId::Track(1), 2).is_ok());
+    }
+
+    #[test]
+    fn removing_a_bus_takes_every_send_at_either_end_and_renumbers_the_rest() {
+        let mut project = routed();
+        project.add_bus(Some("Delay".to_owned())).unwrap();
+        project.add_send(StripId::Track(1), 2).unwrap(); // -> Delay
+        project.add_send(StripId::Bus(0), 1).unwrap(); // Drums -> Reverb
+        project.add_send(StripId::Bus(1), 2).unwrap(); // Reverb -> Delay
+        assert_eq!(project.sends.len(), 4);
+
+        let removed = project.remove_bus(1).expect("Reverb is there");
+        assert_eq!(removed.name, "Reverb");
+        let surviving: Vec<(StripId, usize)> =
+            project.sends.iter().map(|s| (s.source, s.dest)).collect();
+        assert_eq!(
+            surviving,
+            vec![(StripId::Track(0), 0), (StripId::Track(1), 1)],
+            "Delay moved from index 2 to index 1 and its send followed"
+        );
+        assert_eq!(project.buses[1].name, "Delay");
+        assert_eq!(project.remove_bus(9), Err(RouteError::NoSuchBus(9)));
+    }
+
+    #[test]
+    fn removing_a_track_takes_its_sends_and_renumbers_the_ones_above_it() {
+        // The same argument as a bus, at the other end of the matrix: a track
+        // index is a position, and a send left pointing at the track that moved
+        // into the gap would feed a reverb from the wrong instrument.
+        let mut project = routed();
+        project.add_send(StripId::Track(1), 1).unwrap();
+        project.remove(0).unwrap();
+        assert_eq!(
+            project.sends.iter().map(|s| s.source).collect::<Vec<_>>(),
+            vec![StripId::Track(0)],
+            "track 1's send followed it down to index 0"
+        );
+        assert_eq!(project.sends[0].dest, 1);
+    }
+
+    #[test]
+    fn a_send_is_addressed_by_id_so_it_survives_a_bus_being_deleted_above_it() {
+        let mut project = routed();
+        project.add_bus(Some("Delay".to_owned())).unwrap();
+        let id = project.add_send(StripId::Track(1), 2).unwrap();
+        project.remove_bus(0).unwrap();
+
+        let send = project.send(id).expect("the send is still there");
+        assert_eq!(send.dest, 1, "its destination moved down with the bus");
+        project.edit_send(id, |send| send.level = 0.5).unwrap();
+        assert_eq!(project.send(id).unwrap().level, 0.5);
+        assert_eq!(project.remove_send(99), Err(RouteError::NoSuchSend(99)));
+        assert!(project.remove_send(id).is_ok());
+        assert_eq!(project.send(id), None);
+    }
+
+    #[test]
+    fn a_send_level_is_stored_linear_and_reported_in_decibels() {
+        let send = SendDef::new(0, StripId::Track(0), 0);
+        assert_eq!(send.level, 1.0, "a fresh send is unity");
+        assert!(!send.pre, "and post-fader");
+        assert!(send.level_db().abs() < 1e-6);
+        let quiet = SendDef { level: 0.5, ..send };
+        assert!((quiet.level_db() + 6.0206).abs() < 1e-3);
+        assert_eq!(SendDef { level: 0.0, ..send }.level_db(), SILENCE_DB);
+
+        assert_eq!(check_send_level(0.0), Ok(0.0));
+        assert_eq!(check_send_level(MAX_SEND_LEVEL), Ok(MAX_SEND_LEVEL));
+        for bad in [f32::NAN, -0.1, 1.5] {
+            assert!(
+                matches!(check_send_level(bad), Err(RouteError::InvalidLevel(_))),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn publishing_pushes_every_bus_and_the_whole_send_matrix() {
+        let mut project = routed();
+        project.buses[0].gain_db = -6.0206;
+        project.buses[1].muted = true;
+        let id = project.sends[0].id;
+        project
+            .edit_send(id, |send| {
+                send.level = 0.25;
+                send.pre = true;
+            })
+            .unwrap();
+
+        let params = MixerParams::new();
+        project.publish(&params);
+
+        assert!((params.bus_gain(0) - 0.5).abs() < 1e-4);
+        assert!(!params.bus_muted(0));
+        assert!(params.bus_muted(1));
+        assert!(
+            params.bus_muted(project.buses.len()),
+            "a slot with no bus is silent"
+        );
+        assert_eq!(params.send_level(StripId::Track(0), 0), 0.25);
+        assert!(params.send_pre(StripId::Track(0), 0));
+
+        // A cell no tap points at must be back at the default, so a *later*
+        // send between the same two strips cannot inherit a stale level.
+        project.remove_send(id).unwrap();
+        project.publish(&params);
+        assert_eq!(params.send_level(StripId::Track(0), 0), 1.0);
+        assert!(!params.send_pre(StripId::Track(0), 0));
+    }
+
+    #[test]
+    fn a_soloed_track_silences_every_bus_that_is_not_itself_soloed() {
+        // One solo scope across tracks and buses: two independent ones would
+        // produce a soloed track that is silent because its group is not.
+        let mut project = routed();
+        assert!(!project.bus_effective_mute(0));
+
+        project.tracks[0].soloed = true;
+        assert!(project.bus_effective_mute(0), "the drum bus is not soloed");
+        project.buses[0].soloed = true;
+        assert!(!project.bus_effective_mute(0));
+        assert!(project.bus_effective_mute(1));
+
+        project.tracks[0].soloed = false;
+        project.buses[0].soloed = false;
+        assert!(!project.bus_effective_mute(0));
+        project.buses[0].muted = true;
+        assert!(project.bus_effective_mute(0));
+        assert!(project.bus_effective_mute(9), "past the end is silent");
+    }
+
+    #[test]
+    fn insert_chains_hang_off_every_kind_of_strip_and_are_capped() {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        for target in [
+            InsertTarget::Track(0),
+            InsertTarget::Bus(0),
+            InsertTarget::Master,
+        ] {
+            assert_eq!(
+                project.add_insert(target, "effects.eq", None, &registry),
+                Ok(0)
+            );
+            assert_eq!(
+                project.add_insert(target, "effects.compressor", Some(0), &registry),
+                Ok(0),
+                "a position puts it there rather than at the end"
+            );
+            assert_eq!(
+                project.chain(target).unwrap()[0].type_id,
+                "effects.compressor"
+            );
+        }
+        assert!(project.has_inserts());
+        assert_eq!(project.chains().count(), 2 + 2 + 1);
+
+        // Ids are session-wide and never reused.
+        let ids: Vec<u32> = project
+            .chains()
+            .flat_map(|(_, chain)| chain.iter().map(|insert| insert.id))
+            .collect();
+        let mut unique = ids.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len());
+        assert_eq!(project.next_insert_id(), 6);
+
+        // The cap, and the errors a webview can reach.
+        while project.chain(InsertTarget::Track(0)).unwrap().len() < MAX_INSERTS {
+            project
+                .add_insert(InsertTarget::Track(0), "effects.utility", None, &registry)
+                .unwrap();
+        }
+        assert_eq!(
+            project.add_insert(InsertTarget::Track(0), "effects.utility", None, &registry),
+            Err(InsertError::TooManyInserts)
+        );
+        assert_eq!(
+            project.add_insert(InsertTarget::Bus(9), "effects.eq", None, &registry),
+            Err(InsertError::NoSuchBus(9))
+        );
+        assert_eq!(
+            project.add_insert(InsertTarget::Track(0), "effects.reverb", None, &registry),
+            Err(InsertError::UnknownEffect("effects.reverb".to_owned()))
+        );
+    }
+
+    #[test]
+    fn moving_and_removing_an_insert_keeps_the_rest_of_the_chain_in_order() {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        let target = InsertTarget::Bus(0);
+        for type_id in ["effects.eq", "effects.compressor", "effects.delay"] {
+            project
+                .add_insert(target, type_id, None, &registry)
+                .unwrap();
+        }
+        let order = |project: &Project| -> Vec<String> {
+            project
+                .chain(target)
+                .unwrap()
+                .iter()
+                .map(|insert| insert.type_id.clone())
+                .collect()
+        };
+
+        project.move_insert(target, 2, 0).unwrap();
+        assert_eq!(
+            order(&project),
+            vec!["effects.delay", "effects.eq", "effects.compressor"]
+        );
+        let removed = project.remove_insert(target, 1).unwrap();
+        assert_eq!(removed.type_id, "effects.eq");
+        assert_eq!(order(&project), vec!["effects.delay", "effects.compressor"]);
+
+        assert_eq!(
+            project.remove_insert(target, 9),
+            Err(InsertError::NoSuchInsert { target, index: 9 })
+        );
+        assert_eq!(
+            project.move_insert(target, 0, 9),
+            Err(InsertError::NoSuchInsert { target, index: 9 })
+        );
+    }
+
+    #[test]
+    fn the_routing_wire_shape_carries_what_the_mixer_needs_to_draw_a_send() {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        project.buses[0].color = Some("#ff6b35".to_owned());
+        let id = project.sends[0].id;
+        project
+            .edit_send(id, |send| {
+                send.level = 0.5;
+                send.pre = true;
+            })
+            .unwrap();
+        project
+            .add_insert(InsertTarget::Bus(0), "effects.compressor", None, &registry)
+            .unwrap();
+
+        let dto = mixer_state_dto(
+            &project,
+            0,
+            &ClapBoard::new(),
+            &Vst3Board::new(),
+            &MissingPlugins::new(),
+            &registry,
+        );
+        assert_eq!(dto.max_buses, MAX_BUSES);
+        assert_eq!(dto.max_inserts, MAX_INSERTS);
+        assert_eq!(dto.max_send_level, MAX_SEND_LEVEL);
+        assert_eq!(dto.buses.len(), 2);
+        assert_eq!(dto.buses[0].inserts.len(), 1);
+        assert_eq!(dto.buses[0].inserts[0].name, "Compressor");
+        assert_eq!(dto.sends.len(), 1);
+
+        let json: serde_json::Value = serde_json::to_value(&dto).unwrap();
+        let mut bus_keys: Vec<&str> = json["buses"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        bus_keys.sort_unstable();
+        assert_eq!(
+            bus_keys,
+            [
+                "color", "gainDb", "id", "index", "inserts", "muted", "name", "pan", "silenced",
+                "soloed"
+            ]
+        );
+        let mut send_keys: Vec<&str> = json["sends"][0]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        send_keys.sort_unstable();
+        assert_eq!(
+            send_keys,
+            [
+                "dest",
+                "id",
+                "level",
+                "levelDb",
+                "pre",
+                "sourceIndex",
+                "sourceKind"
+            ]
+        );
+        assert_eq!(json["sends"][0]["sourceKind"], "track");
+        assert_eq!(json["sends"][0]["level"], 0.5);
+        assert!(json["sends"][0]["pre"].as_bool().unwrap());
+        assert_eq!(json["buses"][0]["color"], "#ff6b35");
+        assert!(json["master"]["inserts"].is_array());
+
+        // A bus with no colour has no key at all -- the engine has no palette.
+        project.buses[0].color = None;
+        let json: serde_json::Value = serde_json::to_value(mixer_state_dto(
+            &project,
+            0,
+            &ClapBoard::new(),
+            &Vst3Board::new(),
+            &MissingPlugins::new(),
+            &registry,
+        ))
+        .unwrap();
+        assert!(json["buses"][0].as_object().unwrap().get("color").is_none());
     }
 }

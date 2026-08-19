@@ -1300,7 +1300,13 @@ mod tests {
             },
         );
         assert_eq!(peaks.get(1).max(), 0.5);
-        peaks.set(MAX_BUSES, TrackPeak { peak_l: 1.0, peak_r: 1.0 });
+        peaks.set(
+            MAX_BUSES,
+            TrackPeak {
+                peak_l: 1.0,
+                peak_r: 1.0,
+            },
+        );
         assert_eq!(peaks.count(), 2, "a write past the array is ignored");
         assert_eq!(BusPeaks::empty(999).count(), MAX_BUSES);
         assert_eq!(BusPeaks::default(), BusPeaks::SILENT);

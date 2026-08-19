@@ -18,10 +18,10 @@ use crate::dto::{
     ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto, StreamInfoDto,
     Vst3PluginInfoDto,
 };
+use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueDto};
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
-use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueDto};
 use crate::project::MixerStateDto;
 use crate::project_bridge::ProjectInfoDto;
 use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
@@ -488,7 +488,9 @@ pub async fn add_send(
     dest: usize,
 ) -> Result<MixerStateDto, String> {
     let source = parse_strip(&source_kind, source_index)?;
-    state.add_send(source, dest).map_err(|err| err.to_string())?;
+    state
+        .add_send(source, dest)
+        .map_err(|err| err.to_string())?;
     Ok(state.mixer_state())
 }
 
@@ -507,11 +509,7 @@ pub async fn remove_send(
 /// One atomic store, so this is what a knob drag sends per frame. Returns
 /// nothing rather than the whole mixer for exactly that reason.
 #[tauri::command]
-pub fn set_send_level(
-    state: State<'_, AppState>,
-    send_id: u32,
-    level: f32,
-) -> Result<(), String> {
+pub fn set_send_level(state: State<'_, AppState>, send_id: u32, level: f32) -> Result<(), String> {
     state
         .set_send_level(send_id, level)
         .map_err(|err| err.to_string())
@@ -647,9 +645,7 @@ pub fn get_chain_readouts(
     target_index: usize,
 ) -> Result<Vec<InsertReadoutsDto>, String> {
     let target = parse_insert_target(&target, target_index)?;
-    state
-        .chain_readouts(target)
-        .map_err(|err| err.to_string())
+    state.chain_readouts(target).map_err(|err| err.to_string())
 }
 
 /// `"track"` / `"bus"` plus an index, as the webview sends a send's source.

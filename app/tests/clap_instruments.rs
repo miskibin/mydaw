@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use mydaw_app::clap_bridge::ClapTarget;
 use mydaw_app::clap_host::ClapHost;
+use mydaw_app::effects::InsertTarget;
 use mydaw_app::{ClapSourceRef, Project, Source, TrackHost};
 use mydaw_fixture_clap_gain::synth::{self, PLUGIN_ID as SYNTH_ID, VOICE_GAIN};
 use mydaw_fixture_clap_gain::{GAIN, PLUGIN_ID as GAIN_ID};
@@ -114,7 +115,7 @@ impl Rig {
             Arc::new(TestToneFactory::new()),
             Arc::new(InstrumentRegistry::new()),
             Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
-        Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
+            Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
             project,
         ));
         let collector = Collector::new();
@@ -438,6 +439,99 @@ fn adding_a_track_rebuilds_the_graph_and_every_hosted_plugin_comes_back_with_its
             "track {index}'s state changed across the rebuild"
         );
     }
+
+    rig.clap.shutdown();
+}
+
+#[test]
+fn a_routing_edit_rebuilds_the_graph_and_leaves_every_plugin_and_every_knob_alone() {
+    // The routing step's version of the claim above, and the one property that
+    // decides whether buses and insert chains are usable at all: adding a bus,
+    // a send and an effect **to a different strip** must not disturb a hosted
+    // plugin, and must not reset any other insert's parameters.
+    let Some((_dir, bundle)) = staged("routing-rebuild") else {
+        return;
+    };
+    let mut rig = Rig::new(synth_project(2, &bundle));
+    rig.place(1, &bundle, SYNTH_ID).expect("track 1");
+    let instance = rig
+        .clap
+        .instance_at(ClapTarget::Track { index: 1 })
+        .expect("placed");
+    rig.clap
+        .instances_mut()
+        .load_state(instance, &synth::state_blob(12.0))
+        .expect("loads");
+
+    let effects = mydaw_plugin_effects::EffectRegistry::new();
+    // An EQ on track 0, moved off its defaults. This is what must survive.
+    {
+        let mut project = rig.tracks.project();
+        project
+            .add_insert(InsertTarget::Track(0), "effects.eq", None, &effects)
+            .expect("the EQ exists");
+        project.tracks[0].inserts[0]
+            .params
+            .set_by_id("high.gain", 9.0);
+        rig.tracks.set_project(project);
+    }
+    rig.rebuild().expect("the EQ's own rebuild");
+
+    let before = rig.capture(&[(1, 69)]);
+    assert!(
+        has_partial(&before, 880.0, 12.0),
+        "the plugin is an octave up"
+    );
+    let instances_before = rig.clap.instance_count();
+
+    // Now four structural edits in a row, none of them touching track 1 or the
+    // EQ: a bus, a chain on that bus, a send into it, and a second insert
+    // somewhere else again.
+    {
+        let mut project = rig.tracks.project();
+        project.add_bus(Some("Reverb".to_owned())).expect("room");
+        project
+            .add_insert(InsertTarget::Bus(0), "effects.delay", None, &effects)
+            .expect("the delay exists");
+        project
+            .add_send(mydaw_rt_core::StripId::Track(0), 0)
+            .expect("a legal tap");
+        project
+            .add_insert(InsertTarget::Master, "effects.utility", None, &effects)
+            .expect("the utility exists");
+        rig.tracks.set_project(project);
+    }
+    rig.rebuild()
+        .expect("a routing edit must re-attach every plugin");
+
+    assert_eq!(
+        rig.clap.instance_count(),
+        instances_before,
+        "the instance was re-activated, not recreated"
+    );
+    assert_eq!(
+        rig.clap.instances_mut().save_state(instance).unwrap(),
+        synth::state_blob(12.0),
+        "the plugin's state changed across a rebuild it had nothing to do with"
+    );
+
+    // The knob that was moved is still where it was put -- the whole point of
+    // the shell owning the `ParamBlock` rather than the node.
+    let project = rig.tracks.project();
+    assert_eq!(
+        project.tracks[0].inserts[0].params.get_by_id("high.gain"),
+        Some(9.0),
+        "a structural edit reset another chain's parameters"
+    );
+    assert_eq!(project.buses.len(), 1);
+    assert_eq!(project.sends.len(), 1);
+    assert_eq!(project.master_inserts.len(), 1);
+
+    let after = rig.capture(&[(1, 69)]);
+    assert!(
+        has_partial(&after, 880.0, 12.0),
+        "the plugin lost its state or its node across a routing edit"
+    );
 
     rig.clap.shutdown();
 }

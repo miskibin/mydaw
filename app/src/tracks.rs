@@ -51,9 +51,7 @@ use mydaw_plugin_instruments::InstrumentRegistry;
 use mydaw_plugin_sampler::SamplerRegistry;
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_rt_core::basedrop::Handle;
-use mydaw_rt_core::{
-    BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, MAX_TRACKS,
-};
+use mydaw_rt_core::{BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, MAX_TRACKS};
 use parking_lot::Mutex;
 
 use crate::clap_bridge::ClapBoard;
@@ -308,6 +306,66 @@ impl TrackHost {
         let value = edit(&mut project)?;
         project.publish(&self.params);
         Ok(value)
+    }
+
+    /// Set a bus's fader, in dB.
+    ///
+    /// A store into the parameter block, exactly as a track's fader is: no
+    /// rebuild, nothing allocated, heard on the next block with a 10 ms ramp.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`] or [`TrackError::InvalidGain`].
+    pub fn set_bus_gain_db(&self, bus: usize, db: f32) -> Result<(), MixerError> {
+        let db = check_gain_db(db)?;
+        self.edit_project(|project| project.edit_bus(bus, |def| def.gain_db = db))?;
+        Ok(())
+    }
+
+    /// Set a bus's pan.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`] or [`TrackError::InvalidPan`].
+    pub fn set_bus_pan(&self, bus: usize, pan: f32) -> Result<(), MixerError> {
+        let pan = check_pan(pan)?;
+        self.edit_project(|project| project.edit_bus(bus, |def| def.pan = pan))?;
+        Ok(())
+    }
+
+    /// Mute or unmute a bus.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn set_bus_muted(&self, bus: usize, muted: bool) -> Result<(), RouteError> {
+        self.edit_project(|project| project.edit_bus(bus, |def| def.muted = muted))
+    }
+
+    /// Solo or un-solo a bus. Republishes every strip's effective mute, because
+    /// solo is a question about the whole project -- see [`Project`].
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn set_bus_soloed(&self, bus: usize, soloed: bool) -> Result<(), RouteError> {
+        self.edit_project(|project| project.edit_bus(bus, |def| def.soloed = soloed))
+    }
+
+    /// Rename a bus. Nothing crosses the RT wall at all.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`] or [`RouteError::BlankName`].
+    pub fn rename_bus(&self, bus: usize, name: &str) -> Result<(), RouteError> {
+        if name.trim().is_empty() {
+            return Err(RouteError::BlankName);
+        }
+        self.edit_project(|project| project.edit_bus(bus, |def| def.name = name.to_owned()))
+    }
+
+    /// Set or clear a bus's colour. A blank string clears it.
+    ///
+    /// # Errors
+    /// [`RouteError::NoSuchBus`].
+    pub fn set_bus_color(&self, bus: usize, color: Option<String>) -> Result<(), RouteError> {
+        let color = color.filter(|value| !value.trim().is_empty());
+        self.edit_project(|project| project.edit_bus(bus, |def| def.color = color))
     }
 
     /// Set a send's level. **One atomic store; no rebuild, no allocation.**

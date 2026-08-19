@@ -238,7 +238,10 @@ fn a_full_send_matrix_over_eight_buses_allocates_nothing() {
     let declared = spec.send_count();
     handle.install(spec).expect("install");
     slot.poll_swap();
-    assert_eq!(declared, MAX_TRACKS * MAX_BUSES + MAX_BUSES * (MAX_BUSES - 1) / 2);
+    assert_eq!(
+        declared,
+        MAX_TRACKS * MAX_BUSES + MAX_BUSES * (MAX_BUSES - 1) / 2
+    );
 
     let mut buffers = AudioBuffers::new(BLOCK);
     let events = block_events();
