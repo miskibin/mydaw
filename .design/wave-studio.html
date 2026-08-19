@@ -429,7 +429,7 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
             <span style="font:600 11px Geist;color:var(--txt,#e7e9ec)">{{ selTrackName }}</span>
             <span style="{{ selRouteStyle }}">{{ selTrackRoute }}</span>
           </div>
-          <span style="flex:none;font:400 10px 'Geist Mono';color:var(--dim2,#646b76)">{{ mixMeta }}</span>
+          <span style="{{ mixMetaStyle }}">{{ mixMeta }}</span>
         </div>
         <div style="flex:1;min-height:0;display:flex;padding:12px 0 14px 12px">
           <div style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;display:flex;gap:5px;padding-right:10px">
@@ -469,15 +469,17 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
                 <span style="flex:none;font:400 9.5px 'Geist Mono';color:var(--txt2,#c3c8d0);text-align:center">{{ s.gain }}</span>
                 <div style="{{ s.sendBox }}">
                   <span style="{{ s.arrowStyle }}">{{ s.arrow }}</span>
-                  <sc-if value="{{ s.hasSend }}" hint-placeholder-val="{{ true }}">
-                    <div style="display:flex;align-items:center;gap:5px">
-                      <span onMouseDown="{{ s.onSend }}" style="{{ s.sendBase }}" title="click to route · drag to set send level"><span style="{{ s.sendPointer }}"></span></span>
-                      <span onClick="{{ s.onPre }}" style="{{ s.sendLvlStyle }}" title="click for pre / post fader">{{ s.sendLvl }}</span>
-                    </div>
-                  </sc-if>
-                  <sc-if value="{{ s.noSend }}" hint-placeholder-val="{{ false }}">
-                    <span style="{{ s.sendNoteStyle }}">{{ s.sendNote }}</span>
-                  </sc-if>
+                  <div style="height:20px;flex:none;display:flex;align-items:center">
+                    <sc-if value="{{ s.hasSend }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;align-items:center;gap:5px">
+                        <span onMouseDown="{{ s.onSend }}" style="{{ s.sendBase }}" title="click to route · drag to set send level"><span style="{{ s.sendPointer }}"></span></span>
+                        <span onClick="{{ s.onPre }}" style="{{ s.sendLvlStyle }}" title="click for pre / post fader">{{ s.sendLvl }}</span>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ s.noSend }}" hint-placeholder-val="{{ false }}">
+                      <span style="{{ s.sendNoteStyle }}">{{ s.sendNote }}</span>
+                    </sc-if>
+                  </div>
                   <span onClick="{{ s.onOut }}" style="{{ s.outStyle }}">{{ s.outLabel }}</span>
                 </div>
               </div>
@@ -510,6 +512,7 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
               <span style="flex:none;font:400 9.5px 'Geist Mono';color:var(--txt2,#c3c8d0);text-align:center">{{ master.gain }}</span>
               <div style="{{ master.sendBox }}">
                 <span style="{{ master.arrowStyle }}">{{ master.arrow }}</span>
+                <div style="height:20px;flex:none;display:flex;align-items:center">
                 <sc-if value="{{ master.hasSend }}" hint-placeholder-val="{{ true }}">
                   <div style="display:flex;align-items:center;gap:5px">
                     <span onMouseDown="{{ master.onSend }}" style="{{ master.sendBase }}" title="click to route · drag to set send level"><span style="{{ master.sendPointer }}"></span></span>
@@ -519,6 +522,7 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
                 <sc-if value="{{ master.noSend }}" hint-placeholder-val="{{ false }}">
                   <span style="{{ master.sendNoteStyle }}">{{ master.sendNote }}</span>
                 </sc-if>
+                </div>
                 <span style="font:400 8.5px 'Geist Mono';color:var(--dim2,#646b76)">{{ master.lufs }}</span>
               </div>
             </div>
@@ -705,6 +709,12 @@ a{color:#4f8ef7}a:hover{color:#2f6fe0}
   <div style="height:26px;flex:none;display:flex;align-items:center;gap:18px;padding:0 12px;background:var(--sunk,#0b0d10);border-top:1px solid var(--line,#23272f);font:400 9.5px 'Geist Mono';color:var(--dim2,#646b76)">
     <span>CPU <span style="color:var(--txt2,#c3c8d0)">12%</span></span>
     <span>BUFFER <span style="color:var(--txt2,#c3c8d0)">256</span></span>
+    <sc-if value="{{ hasParam }}" hint-placeholder-val="{{ false }}">
+      <div style="{{ paramStyle }}">
+        <span style="{{ paramNameStyle }}">{{ paramName }}</span>
+        <span style="{{ paramValStyle }}">{{ paramVal }}</span>
+      </div>
+    </sc-if>
     <span style="flex:1"></span>
     <span>{{ statusHint }}</span>
   </div>
@@ -1029,7 +1039,11 @@ class Component extends DCLogic {
       e.stopPropagation();
       const box = e.currentTarget.parentNode.getBoundingClientRect();
       this.setState({ sel:[id] });
-      const set = ev => { const v = Math.max(1, Math.min(127, Math.round((box.bottom - ev.clientY) / box.height * 127))); this.patchNote(id, { v:v }); };
+      const set = ev => {
+        const v = Math.max(1, Math.min(127, Math.round((box.bottom - ev.clientY) / box.height * 127)));
+        this.patchNote(id, { v:v });
+        this.say('Note — Velocity', v + ' / 127');
+      };
       set(e); this.drag(set);
     };
   }
@@ -1223,11 +1237,16 @@ class Component extends DCLogic {
       const ti = this.state.tracks.findIndex(t => t.id === c.tr);
       this.drag(ev => {
         const dx = (ev.clientX - sx) / bw;
-        if (mode === 'resize') this.patchClip(id, { len: Math.max(this.state.plSnap || 0.25, this.plSnapv(olen + dx)) });
-        else {
+        if (mode === 'resize') {
+          const len = Math.max(this.state.plSnap || 0.25, this.plSnapv(olen + dx));
+          this.patchClip(id, { len:len });
+          this.say(c.name + ' — Clip Length', len.toFixed(2) + ' bars');
+        } else {
           const dy = Math.round((ev.clientY - sy) / 48);
           const t2 = this.state.tracks[Math.max(0, Math.min(this.state.tracks.length - 1, ti + dy))];
-          this.patchClip(id, { st: this.plSnapv(ost + dx), tr: t2.id });
+          const st = this.plSnapv(ost + dx);
+          this.patchClip(id, { st:st, tr: t2.id });
+          this.say(c.name + ' — Position', 'bar ' + (st + 1).toFixed(2) + ' · ' + t2.name);
         }
       });
     };
@@ -1240,10 +1259,22 @@ class Component extends DCLogic {
     return e => {
       e.stopPropagation();
       const box = e.currentTarget.getBoundingClientRect();
-      const set = ev => this.setTrk(id, { vol: Math.max(0.001, Math.min(1, (box.bottom - ev.clientY) / box.height)) });
+      const set = ev => {
+        const v = Math.max(0.001, Math.min(1, (box.bottom - ev.clientY) / box.height));
+        this.setTrk(id, { vol:v });
+        this.say(this.trk(id).name + ' — Volume', this.dbOf(v));
+      };
       set(e); this.drag(set);
     };
   }
+
+  say(name, val) {
+    this.setState({ param: { name:name, val:val } });
+    clearTimeout(this._pt);
+    this._pt = setTimeout(() => this.setState({ param:null }), 2600);
+  }
+  dbOf(v) { return (20 * Math.log10(Math.max(0.001, v))).toFixed(1) + ' dB'; }
+  panOf(v) { return v === 0 ? 'Centered' : (v < 0 ? 'Left ' : 'Right ') + Math.abs(Math.round(v * 100)) + '%'; }
 
   tracks() { return this.state.channels.concat(this.state.buses); }
   allTracks() { return this.tracks().concat([this.state.mst]); }
@@ -1277,11 +1308,12 @@ class Component extends DCLogic {
     this.setState(s => { const r = Object.assign({}, s.routes), k = src + '>' + dst; r[k] = Object.assign({ lvl:0.4, pre:false }, r[k], patch); return { routes:r }; });
   }
   toggleRoute(src, dst) {
-    this.setState(s => {
-      const r = Object.assign({}, s.routes), k = src + '>' + dst;
-      if (r[k]) delete r[k]; else r[k] = { lvl: dst === 'master' ? 1 : 0.4, pre:false };
-      return { routes:r };
-    });
+    const r = Object.assign({}, this.state.routes), k = src + '>' + dst, had = !!r[k];
+    const lvl = dst === 'master' ? 1 : 0.4;
+    if (had) delete r[k]; else r[k] = { lvl:lvl, pre:false };
+    this.setState({ routes:r });
+    this.say(this.trk(src).name + ' → ' + this.trk(dst).name + ' — Route',
+      had ? 'Disconnected' : 'Connected at ' + Math.round(lvl * 100) + '%');
   }
   sendDown(src, dst) {
     return e => {
@@ -1291,7 +1323,9 @@ class Component extends DCLogic {
       const mv = ev => {
         if (!moved && Math.abs(ev.clientY - y0) < 3) return;
         moved = true;
-        this.setRoute(src, dst, { lvl: Math.max(0, Math.min(1, base + (y0 - ev.clientY) / 110)) });
+        const v = Math.max(0, Math.min(1, base + (y0 - ev.clientY) / 110));
+        this.setRoute(src, dst, { lvl:v });
+        this.say(this.trk(src).name + ' → ' + this.trk(dst).name + ' — Send', Math.round(v * 100) + '%');
       };
       const up = () => {
         window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up);
@@ -1300,20 +1334,48 @@ class Component extends DCLogic {
       window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up);
     };
   }
-  togglePre(src, dst) { return e => { e.stopPropagation(); const r = this.state.routes[src + '>' + dst]; if (r) this.setRoute(src, dst, { pre: !r.pre }); }; }
-  flagT(map, id) { return e => { if (e) e.stopPropagation(); this.setState(s => { const m = Object.assign({}, s[map]); m[id] = !m[id]; const o = {}; o[map] = m; return o; }); }; }
+  togglePre(src, dst) {
+    return e => {
+      e.stopPropagation();
+      const r = this.state.routes[src + '>' + dst];
+      if (!r) return;
+      this.setRoute(src, dst, { pre: !r.pre });
+      this.say(this.trk(src).name + ' → ' + this.trk(dst).name + ' — Send Tap', r.pre ? 'Post-fader' : 'Pre-fader');
+    };
+  }
+  flagT(map, id, label) {
+    return e => {
+      if (e) e.stopPropagation();
+      const m = Object.assign({}, this.state[map]);
+      m[id] = !m[id];
+      const o = {}; o[map] = m;
+      this.setState(o);
+      if (label) {
+        const inv = map === 'mute' || map === 'trMute' || map === 'bypass';
+        this.say(label, m[id] ? (map === 'bypass' ? 'Bypassed' : inv ? 'Muted' : 'On') : (inv ? 'Active' : 'Off'));
+      }
+    };
+  }
   panDown(id) {
     return e => {
       e.stopPropagation(); e.preventDefault();
       const x0 = e.clientX, base = this.trk(id).pan || 0;
-      this.drag(ev => this.setTrk(id, { pan: Math.max(-1, Math.min(1, base + (ev.clientX - x0) / 90)) }));
+      this.drag(ev => {
+        const v = Math.max(-1, Math.min(1, base + (ev.clientX - x0) / 90));
+        this.setTrk(id, { pan:v });
+        this.say(this.trk(id).name + ' — Pan', this.panOf(v));
+      });
     };
   }
   sepDown(id) {
     return e => {
       e.stopPropagation(); e.preventDefault();
       const box = e.currentTarget.getBoundingClientRect();
-      const set = ev => this.setTrk(id, { sep: Math.max(0, Math.min(1, (ev.clientX - box.left) / box.width)) });
+      const set = ev => {
+        const v = Math.max(0, Math.min(1, (ev.clientX - box.left) / box.width));
+        this.setTrk(id, { sep:v });
+        this.say(this.trk(id).name + ' — Stereo Separation', Math.round(v * 200 - 100) + '%');
+      };
       set(e); this.drag(set);
     };
   }
@@ -1331,11 +1393,13 @@ class Component extends DCLogic {
     return e => {
       e.stopPropagation(); e.preventDefault();
       const box = e.currentTarget.getBoundingClientRect();
-      const set = ev => this.setState(s => {
-        const m = Object.assign({}, s.trVol);
-        m[id] = Math.max(0.02, Math.min(1, (ev.clientX - box.left) / box.width));
-        return { trVol:m };
-      });
+      const set = ev => {
+        const v = Math.max(0.02, Math.min(1, (ev.clientX - box.left) / box.width));
+        const m = Object.assign({}, this.state.trVol); m[id] = v;
+        const t = this.state.tracks.find(x => x.id === id);
+        this.setState({ trVol:m });
+        this.say((t ? t.name : 'Track') + ' — Track Volume', this.dbOf(v));
+      };
       set(e); this.drag(set);
     };
   }
@@ -1405,7 +1469,9 @@ class Component extends DCLogic {
       return {
         name:t.name, meta: (s.clips.filter(c => c.tr === t.id).length) + ' clips', clips:clips,
         on: e => e.stopPropagation(),
-        onMute: this.flagT('trMute', t.id), onSolo: this.flagT('trSolo', t.id), onArm: this.flagT('trArm', t.id),
+        onMute: this.flagT('trMute', t.id, t.name + ' — Track Enable'),
+        onSolo: this.flagT('trSolo', t.id, t.name + ' — Solo'),
+        onArm: this.flagT('trArm', t.id, t.name + ' — Record Arm'),
         onVol: this.trVolDown(t.id), vol: (20 * Math.log10(Math.max(0.02, tv))).toFixed(1),
         onDel: this.delTrack(t.id), onDown: this.laneDown(t.id), onOver: e => e.preventDefault(), onDrop: this.laneDrop(t.id),
         headStyle: { position:'sticky', left:0, zIndex:4, width: HEADW + 'px', flex:'none', height: TRH + 'px', display:'flex', alignItems:'center', gap:'8px',
@@ -1414,14 +1480,14 @@ class Component extends DCLogic {
         ledStyle: { width:'3px', height:'26px', flex:'none', borderRadius:'2px', cursor:'pointer',
           background: muted ? 'transparent' : '#4ec08a', boxShadow: muted ? 'inset 0 0 0 1px ' + T.line2 : '0 0 7px ' + this.alpha('#4ec08a', 0.4) },
         nameStyle: { font:'500 11.5px Geist', color: muted ? T.dim : T.txt2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
-        metaStyle: { flex:'none', font:"400 8.5px 'Geist Mono'", color:T.faint },
+        metaStyle: { flex:'none', font:"400 8.5px 'Geist Mono'", color:T.faint, whiteSpace:'nowrap' },
         soloStyle: { width:'16px', height:'14px', flex:'none', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'3px',
           font:"500 8.5px 'Geist Mono'", cursor:'pointer', background: solo ? '#e0a44a' : T.sunk, color: solo ? '#12151a' : T.dim2 },
         armStyle: { width:'16px', height:'14px', flex:'none', display:'flex', alignItems:'center', justifyContent:'center', borderRadius:'3px',
           font:"500 8.5px 'Geist Mono'", cursor:'pointer', background: armed ? '#d4614f' : T.sunk, color: armed ? '#fff' : T.dim2 },
         volTrack: { flex:1, minWidth:0, height:'4px', borderRadius:'2px', background:T.sunk, position:'relative', overflow:'hidden', cursor:'ew-resize' },
         volFill: { position:'absolute', left:0, top:0, bottom:0, width: (tv * 100) + '%', background: muted ? T.line2 : this.alpha(A, 0.8) },
-        volLabel: { width:'26px', flex:'none', textAlign:'right', font:"400 8.5px 'Geist Mono'", color:T.dim2 },
+        volLabel: { width:'30px', flex:'none', textAlign:'right', font:"400 8.5px 'Geist Mono'", color:T.dim2, whiteSpace:'nowrap' },
         laneStyle: { position:'relative', width: PL_BARS * bw + 'px', flex:'none', height: TRH + 'px', borderBottom:'1px solid ' + T.line,
           background:T.lane, backgroundImage:laneBg, opacity: off ? 0.45 : 1, cursor: s.plTool === 'paint' ? 'copy' : 'default' }
       };
@@ -1446,7 +1512,7 @@ class Component extends DCLogic {
       plInner: { position:'relative', width: HEADW + PL_BARS * bw + 'px' },
       plRulerRow: { position:'sticky', top:0, zIndex:6, height: RULER + 'px', display:'flex', background:T.panel, borderBottom:'1px solid ' + T.line2 },
       plCorner: { position:'sticky', left:0, zIndex:7, width: HEADW + 'px', flex:'none', display:'flex', alignItems:'center', paddingLeft:'10px',
-        background:T.panel, borderRight:'1px solid ' + T.line2, font:"400 9px 'Geist Mono'", color:T.dim2 },
+        background:T.panel, borderRight:'1px solid ' + T.line2, font:"400 9px 'Geist Mono'", color:T.dim2, whiteSpace:'nowrap', overflow:'hidden' },
       plBarsLabel: s.tracks.length + ' tracks · ' + s.clips.length + ' clips',
       plRulerTrack: { position:'relative', width: PL_BARS * bw + 'px', flex:'none' },
       plMarks: marks, plTracks: tracks,
@@ -1525,20 +1591,31 @@ class Component extends DCLogic {
       const dimmed = muted || (anySolo && isCh && !soloed);
       const kb = this.knob(22, (t.pan || 0) * 130, on ? A : T.dim, false);
       const outs = this.feeds(t.id);
-      const fx = t.fx || [], nSlots = isMaster ? Math.max(2, fx.length + 1) : Math.min(6, Math.max(4, fx.length + 1));
+      const fx = t.fx || [], CAP = isMaster ? 3 : 4, overflow = fx.length > CAP, shown = overflow ? CAP - 1 : CAP;
       const slots = [];
-      for (let i = 0; i < nSlots; i++) {
+      for (let i = 0; i < shown; i++) {
         const f = fx[i], off = f && !!s.bypass[t.id + f.name];
         slots.push({
           name: f ? f.name : (i === fx.length ? '+ effect' : ''),
           title: f ? f.name + ' — click opens · right-click removes' : 'empty slot ' + (i + 1),
           on: f ? this.openWindow(f.name, t.name) : this.selTrack(t.id),
           onDel: f && isCh ? this.delFx(t.id, i) : this.noCtx,
-          onBypass: f ? this.flagT('bypass', t.id + f.name) : this.noCtx,
+          onBypass: f ? this.flagT('bypass', t.id + f.name, t.name + ' · ' + f.name + ' — Effect') : this.noCtx,
           style: { height:'15px', flex:'none', display:'flex', alignItems:'center', gap:'5px', padding:'0 5px', borderRadius:'4px',
             background: f && !off ? T.chip : 'transparent', boxShadow: f ? (off ? 'inset 0 0 0 1px ' + T.line2 : 'none') : 'inset 0 0 0 1px ' + T.line, cursor:'pointer' },
           dotStyle: { width:'4px', height:'4px', flex:'none', borderRadius:'50%', background: f ? (off ? T.faint : '#4ec08a') : T.line2 },
           nameStyle: { font:"400 8.5px 'Geist Mono'", color: f ? (off ? T.dim2 : T.txt2) : T.faint, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }
+        });
+      }
+      if (overflow) {
+        const extra = fx.length - shown;
+        slots.push({
+          name: '+' + extra + ' more', title: extra + ' more effect' + (extra > 1 ? 's' : '') + ' on this track',
+          on: this.selTrack(t.id), onDel: this.noCtx, onBypass: this.noCtx,
+          style: { height:'15px', flex:'none', display:'flex', alignItems:'center', justifyContent:'center', gap:'5px', padding:'0 5px', borderRadius:'4px',
+            background:T.chip, boxShadow:'inset 0 0 0 1px ' + T.line2, cursor:'pointer' },
+          dotStyle: { display:'none' },
+          nameStyle: { font:"600 8.5px 'Geist Mono'", color:T.dim, whiteSpace:'nowrap' }
         });
       }
       const selfCell = t.id === sel;
@@ -1560,7 +1637,8 @@ class Component extends DCLogic {
         numStyle: { font:"400 8.5px 'Geist Mono'", flex:'none', color: on ? T.txt2 : T.faint },
         dotStyle: { width:'5px', height:'5px', flex:'none', borderRadius:'50%', background:t.color },
         nameStyle: { font:(on ? '600' : '500') + ' 10.5px Geist', color: on ? T.txt : T.txt2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
-        onMute: this.flagT('mute', t.id), onSolo: this.flagT('solo', t.id), onArm: this.flagT('arm', t.id),
+        onMute: this.flagT('mute', t.id, t.name + ' — Mute'), onSolo: this.flagT('solo', t.id, t.name + ' — Solo'),
+        onArm: this.flagT('arm', t.id, t.name + ' — Record Arm'),
         muteStyle: { width:'12px', height:'12px', flex:'none', borderRadius:'50%', cursor:'pointer',
           background: muted ? 'transparent' : '#4ec08a',
           boxShadow: muted ? 'inset 0 0 0 1.5px ' + T.line2 : '0 0 6px ' + this.alpha('#4ec08a', 0.45) },
@@ -1582,10 +1660,10 @@ class Component extends DCLogic {
         sendBox: { flex:'none', padding:'6px 6px 7px', display:'flex', flexDirection:'column', alignItems:'center', gap:'4px',
           background:T.sunk, borderTop:'1px solid ' + (on ? A : T.line) },
         arrow: selfCell ? '▼' : (blocked ? '·' : '▲'),
-        arrowStyle: { font:'400 ' + (selfCell ? '12' : '10') + "px 'Geist Mono'", lineHeight:1,
+        arrowStyle: { height:'11px', font:"400 11px 'Geist Mono'", lineHeight:1,
           color: selfCell ? A : (r ? this.alpha(A, 0.4 + lvl * 0.6) : T.faint) },
         hasSend: !selfCell && !blocked, noSend: selfCell || blocked,
-        sendNote: selfCell ? (mode === 'from' ? 'SENDS ▾' : 'FED BY ▾') : 'no path',
+        sendNote: selfCell ? (mode === 'from' ? 'SENDS' : 'FED BY') : 'no path',
         sendNoteStyle: { font:"500 7.5px 'Geist Mono'", letterSpacing:'.08em', color: selfCell ? A : T.faint },
         onSend: this.sendDown(src, dst), sendBase: sk.base, sendPointer: sk.pointer, onPre: this.togglePre(src, dst),
         sendLvl: r ? (r.pre ? 'PRE' : Math.round(lvl * 100)) : 'off',
@@ -1603,7 +1681,8 @@ class Component extends DCLogic {
       selTrackRoute: sel === 'master' ? 'final output' : mode === 'from'
         ? (outsSel.length ? 'out → ' + outsSel.map(nameOf).join(' + ') : 'not routed — nothing is heard')
         : (insSel.length ? 'in ← ' + insSel.map(x => nameOf(x[0])).join(' + ') : 'nothing feeding it'),
-      selChipStyle: { height:'24px', flex:'1 1 auto', minWidth:0, display:'flex', alignItems:'center', gap:'7px', padding:'0 9px', borderRadius:'7px',
+      mixMetaStyle: { flex:'0 1 auto', minWidth:0, font:"400 10px 'Geist Mono'", color:T.dim2, overflow:'hidden', textOverflow:'ellipsis' },
+      selChipStyle: { height:'24px', flex:'1 1 auto', minWidth:'150px', display:'flex', alignItems:'center', gap:'7px', padding:'0 9px', borderRadius:'7px',
         background: this.alpha(A, 0.13), whiteSpace:'nowrap', overflow:'hidden' },
       selRouteStyle: { minWidth:0, font:"400 9.5px 'Geist Mono'", color:T.dim, overflow:'hidden', textOverflow:'ellipsis' },
       selChipDot: { width:'6px', height:'6px', flex:'none', borderRadius:'50%', background: this.trk(sel).color },
@@ -1844,6 +1923,11 @@ class Component extends DCLogic {
           background: s.view === v[0] ? A : 'transparent', font:'600 10px Geist', letterSpacing:'.07em', color: s.view === v[0] ? '#fff' : T.dim, cursor:'pointer' },
         hotStyle: { font:"400 8.5px 'Geist Mono'", color: s.view === v[0] ? 'rgba(255,255,255,.7)' : T.faint }
       })),
+      hasParam: !!s.param, paramName: s.param ? s.param.name : '', paramVal: s.param ? s.param.val : '',
+      paramStyle: { flex:'none', display:'flex', alignItems:'center', gap:'7px', padding:'0 8px', height:'17px', borderRadius:'5px',
+        background: this.alpha(A, light ? 0.14 : 0.16), maxWidth:'440px', overflow:'hidden' },
+      paramNameStyle: { font:"400 9.5px 'Geist Mono'", color:T.dim, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' },
+      paramValStyle: { flex:'none', font:"500 9.5px 'Geist Mono'", color: light ? this.mix(A, '#0d1016', 0.5) : T.txt },
       rackOpen: s.view === 'rack', playlistOpen: s.view === 'playlist', mixerOpen: s.view === 'mixer',
       patSelName: this.patOf(s.pat).name,
       patSelDot: { width:'7px', height:'7px', flex:'none', borderRadius:'2px', background: this.patOf(s.pat).color },

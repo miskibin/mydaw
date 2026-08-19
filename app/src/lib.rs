@@ -252,6 +252,7 @@ pub fn run() -> ExitCode {
             commands::get_clap_plugins,
             commands::transport_play,
             commands::transport_stop,
+            commands::transport_seek,
             commands::note_on,
             commands::note_off,
             commands::get_sources,

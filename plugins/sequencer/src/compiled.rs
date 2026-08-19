@@ -49,10 +49,19 @@ use crate::pattern::TICKS_PER_STEP;
 
 /// In-flight song swaps.
 ///
-/// Four is a user dragging across the grid faster than the audio thread runs a
-/// block, which does not happen at 512 frames; the queue exists so that overflow
-/// is a reported error rather than a possibility nobody thought about.
-pub const SONG_QUEUE_CAPACITY: usize = 4;
+/// Sixty-four, and it was four until a real device asked for 4096-frame blocks.
+/// At 44.1 kHz that is 93 ms per callback, and building an arrangement is a
+/// burst of commands -- add a pattern, edit it, place three clips -- every one
+/// of which republishes the whole song. Five of them inside one block filled a
+/// four-deep queue and the fifth came back as an error, which is a real bug and
+/// not a theoretical one: it happened the first time this ran on hardware.
+///
+/// The queue only ever has to absorb a *burst*, because
+/// [`SongSlot::poll_swap`] keeps the last entry and drops the rest -- so the
+/// depth is "how many edits can a person make in one block", not "how far
+/// behind may the audio thread fall". Sixty-four is far past a human hand at
+/// any block size a driver offers, and it is sixty-four pointers.
+pub const SONG_QUEUE_CAPACITY: usize = 64;
 
 /// One note, ready to read on the audio thread.
 ///

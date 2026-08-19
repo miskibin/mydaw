@@ -65,6 +65,18 @@ pub fn transport_stop(state: State<'_, AppState>) -> Result<(), String> {
     state.set_playing(false).map_err(|err| err.to_string())
 }
 
+/// Move the playhead to an absolute sample position.
+///
+/// Samples rather than ticks, because that is what the transport counts and what
+/// the meter stream reports back -- converting in two places would let the
+/// playhead the UI draws and the playhead the engine plays disagree by a
+/// rounding. `SequencerState` carries `ppq`, `ticksPerStep` and `sampleRate` so
+/// the UI can do the conversion once, itself, from the same numbers.
+#[tauri::command]
+pub fn transport_seek(state: State<'_, AppState>, sample_pos: u64) -> Result<(), String> {
+    state.seek(sample_pos).map_err(|err| err.to_string())
+}
+
 /// Play a note on the loaded instrument.
 ///
 /// `key` is a MIDI key number (60 = middle C, 69 = A440) and `velocity` is

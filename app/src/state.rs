@@ -1077,6 +1077,20 @@ impl AppState {
         self.audio.set_playing(playing)
     }
 
+    /// Move the playhead to an absolute sample position.
+    ///
+    /// The command a dragged playhead sends. Everything downstream of it is
+    /// already seek-correct by construction -- the scheduler derives every
+    /// position from the absolute tick and owes nothing across the jump except
+    /// the note-offs it flushes -- so this is one atomic store and no
+    /// cooperation at all.
+    ///
+    /// # Errors
+    /// [`AudioIoError::NotRunning`] when no device was opened.
+    pub fn seek(&self, sample_pos: u64) -> Result<(), AudioIoError> {
+        self.audio.seek(sample_pos)
+    }
+
     /// Play a note, live, on the selected track.
     ///
     /// The event's channel **is** the track index, which is how a keyboard press
