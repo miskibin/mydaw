@@ -31,7 +31,7 @@
 //! centred content to keep its level.
 
 use mydaw_rt_core::{
-    pan_gains, ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ProcessCtx, RtNode,
+    pan_gains, ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ProcessCtx, ReadoutDef, RtNode,
     RtNodeFactory, SmoothedParams, CHANNELS,
 };
 use std::sync::Arc;
@@ -71,6 +71,12 @@ pub static PARAMS: &[ParamDef] = &[
     ParamDef::toggle("invert_r", "Invert R", false),
     ParamDef::toggle("dc_block", "DC Filter", false),
 ];
+
+/// What the utility publishes back.
+pub static READOUTS: &[ReadoutDef] = &[ReadoutDef::new("correlation", "Correlation", "")];
+
+/// Index of the stereo-correlation readout.
+pub const READOUT_CORR: usize = 0;
 
 /// Parameter indices, resolved once off the audio thread.
 #[derive(Debug, Clone, Copy)]
@@ -136,6 +142,7 @@ pub struct UtilityNode {
     gain: CachedDb,
     pan: CachedPan,
     dc: [DcBlocker; CHANNELS],
+    correlation: f32,
 }
 
 impl UtilityNode {
@@ -151,6 +158,7 @@ impl UtilityNode {
             bypass: Bypass::new(max_block, sample_rate),
             params: smoothed,
             index,
+            correlation: 0.0,
         }
     }
 
@@ -223,6 +231,46 @@ impl UtilityNode {
             left[frame] = l * gain * pan[0];
             right[frame] = r * gain * pan[1];
         }
+        self.publish_correlation(left, right, frames);
+    }
+
+    fn measure_and_publish(&mut self, ctx: &ProcessCtx) {
+        let [left, right] = ctx.buffers.as_slices();
+        let frames = ctx.frames.min(left.len()).min(right.len());
+        self.publish_correlation(left, right, frames);
+    }
+
+    fn publish_correlation(&mut self, left: &[f32], right: &[f32], frames: usize) {
+        let n = frames as f32;
+        if n < 2.0 {
+            return;
+        }
+        let mut sum_l = 0.0_f32;
+        let mut sum_r = 0.0_f32;
+        let mut sum_ll = 0.0_f32;
+        let mut sum_rr = 0.0_f32;
+        let mut sum_lr = 0.0_f32;
+        for i in 0..frames {
+            let l = left[i];
+            let r = right[i];
+            sum_l += l;
+            sum_r += r;
+            sum_ll += l * l;
+            sum_rr += r * r;
+            sum_lr += l * r;
+        }
+        let num = n * sum_lr - sum_l * sum_r;
+        let den_l = n * sum_ll - sum_l * sum_l;
+        let den_r = n * sum_rr - sum_r * sum_r;
+        let instant = if den_l > 1e-12 && den_r > 1e-12 {
+            (num / (den_l.sqrt() * den_r.sqrt())).clamp(-1.0, 1.0)
+        } else {
+            0.0
+        };
+        self.correlation += 0.2 * (instant - self.correlation);
+        self.params
+            .block()
+            .set_readout(READOUT_CORR, self.correlation);
     }
 }
 
@@ -240,11 +288,13 @@ impl RtNode for UtilityNode {
                 // Nothing to do, and nothing done: the buffer keeps the exact
                 // bits it arrived with.
                 self.params.skip_all(ctx.frames);
+                self.measure_and_publish(ctx);
             } else {
                 self.render(ctx);
             }
         } else {
             self.params.skip_all(ctx.frames);
+            self.params.block().set_readout(READOUT_CORR, 0.0);
         }
 
         self.bypass.blend(ctx, state, bypassed);
@@ -274,6 +324,10 @@ impl RtNodeFactory for UtilityFactory {
 impl ParamNodeFactory for UtilityFactory {
     fn params(&self) -> &'static [ParamDef] {
         PARAMS
+    }
+
+    fn readouts(&self) -> &'static [ReadoutDef] {
+        READOUTS
     }
 
     fn create_with_params(

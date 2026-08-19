@@ -20,14 +20,11 @@
 //! playlist lanes without either number meaning anything to the other.
 //!
 //! A pattern clip's audio goes wherever its pattern's channels go: to the rack
-//! channels, and therefore to their mixer strips. **An audio clip's audio goes
-//! to the master bus**, summed after every track strip and before the master
-//! insert and fader. That is the honest short version of routing for now: a
-//! playlist lane is not a mixer strip, so there is no strip to send it to, and
-//! sending it to strip *n* because the lane happens to be *n*-th would be
-//! inventing a relationship the model does not have. Per-clip gain covers the
-//! common case (see [`AudioClip::gain_db`]); real audio-track routing is a
-//! later step, and is a change to the graph rather than to this file.
+//! channels, and therefore to their mixer strips. An audio clip of file *N*
+//! goes to the **Audio Clip channel** for that file (`Source::AudioClip`),
+//! through that strip's inserts, fader, pan and mute. Playlist lanes stay
+//! drawing rows; they are not mixer strips. Per-clip gain
+//! ([`AudioClip::gain_db`]) is a trim on top of the channel.
 //!
 //! # Time is ticks, everywhere
 //! `start_ticks` and `length_ticks` are in the same [`PPQ`](crate::PPQ) ticks a
@@ -152,6 +149,14 @@ impl Clip {
         match self {
             Self::Pattern(clip) => clip.track,
             Self::Audio(clip) => clip.track,
+        }
+    }
+
+    /// The loaded file an audio clip plays, if this is one.
+    pub const fn audio_source_id(&self) -> Option<u64> {
+        match self {
+            Self::Audio(clip) => Some(clip.source_id),
+            Self::Pattern(_) => None,
         }
     }
 
@@ -484,6 +489,17 @@ impl Playlist {
         Ok(self.clips.remove(index))
     }
 
+    /// Drop every audio clip of `source_id`. Pattern clips are left alone.
+    ///
+    /// What happens when the Audio Clip channel for that file is deleted: the
+    /// arrangement must not keep playing a file whose channel is gone.
+    pub fn remove_clips_of_source(&mut self, source_id: u64) -> usize {
+        let before = self.clips.len();
+        self.clips
+            .retain(|clip| clip.audio_source_id() != Some(source_id));
+        before - self.clips.len()
+    }
+
     /// Move a clip to another lane and start tick.
     ///
     /// # Errors
@@ -810,6 +826,20 @@ mod tests {
         let id = playlist.add_audio_clip(1, 0, 0, BAR, 0, 0.0).unwrap();
         playlist.set_clip_offset(id, u64::MAX).unwrap();
         assert!(playlist.validate(&patterns()).is_ok());
+    }
+
+    #[test]
+    fn removing_a_file_channel_drops_every_clip_of_that_file() {
+        let mut playlist = Playlist::default();
+        playlist.add_audio_clip(1, 0, 0, BAR, 0, 0.0).unwrap();
+        playlist.add_audio_clip(1, 1, BAR, BAR, 0, 0.0).unwrap();
+        playlist.add_audio_clip(2, 0, 2 * BAR, BAR, 0, 0.0).unwrap();
+        playlist.add_pattern_clip(1, 0, 3 * BAR, BAR).unwrap();
+        assert_eq!(playlist.remove_clips_of_source(1), 2);
+        assert_eq!(playlist.clips().len(), 2);
+        assert_eq!(playlist.clips()[0].audio_source_id(), Some(2));
+        assert_eq!(playlist.clips()[1].kind(), "pattern");
+        assert_eq!(playlist.remove_clips_of_source(1), 0);
     }
 
     #[test]

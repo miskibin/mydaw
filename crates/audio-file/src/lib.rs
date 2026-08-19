@@ -1,7 +1,7 @@
 //! `mydaw-audio-file` -- one audio file, in memory, as interleaved stereo `f32`.
 //!
 //! ```text
-//!   *.wav / *.flac / *.ogg  --decode_stereo-->  DecodedAudio
+//!   *.wav / *.flac / *.ogg / *.mp3  --decode_stereo-->  DecodedAudio
 //!      (non-RT: symphonia)                       { data, frames, sample_rate }
 //!                                                        |
 //!                                       into_padded() ----+
@@ -31,14 +31,10 @@
 //!
 //! # Format policy
 //! `symphonia` with the formats a musician actually drops on a timeline: **WAV,
-//! FLAC and Ogg Vorbis**. Default features stay off -- every extra decoder is
-//! attack surface for a file this project did not author.
-//!
-//! **MP3 is missing for a build reason, not a policy one.** `symphonia-bundle-mp3`
-//! has no released 0.6 (only `0.6.0-alpha.2`), so turning the feature on makes
-//! the workspace unresolvable. Nothing in this file switches on the extension --
-//! the format is *probed* -- so the day that crate ships, adding `"mp3"` to the
-//! feature list in the workspace manifest is the whole change.
+//! FLAC and Ogg Vorbis**, plus **MP3** through `minimp3` because
+//! `symphonia-bundle-mp3` has no released 0.6. Default features stay off on
+//! symphonia -- every extra decoder is attack surface for a file this project
+//! did not author.
 
 use std::path::{Path, PathBuf};
 
@@ -56,11 +52,10 @@ pub const CHANNELS: usize = 2;
 /// The extensions the formats in this build are usually written with.
 ///
 /// **Not a gate.** [`decode_stereo`] *probes* the stream and never switches on
-/// an extension, so a correctly-named file with the wrong contents still fails
-/// and a mislabelled one still works. This exists so a file dialog's type filter
-/// and the decoders cannot drift apart -- the day `symphonia-bundle-mp3` ships a
-/// release and the feature goes on, this list moves with it, in one place.
-pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "ogg", "oga"];
+/// **Not a gate.** [`decode_stereo`] *probes* the stream (and, for `.mp3`,
+/// falls back to minimp3). This exists so a file dialog's type filter and the
+/// decoders cannot drift apart.
+pub const AUDIO_EXTENSIONS: &[&str] = &["wav", "flac", "ogg", "oga", "mp3"];
 
 /// Interpolation taps needed before the current frame.
 pub const PAD_LEAD: usize = 1;
@@ -217,6 +212,97 @@ pub fn cubic(taps: [f32; 4], x: f32) -> f32 {
 pub fn decode_stereo(
     path: &Path,
     max_frames_for: impl Fn(f64) -> Option<usize>,
+) -> Result<DecodedAudio, DecodeError> {
+    match decode_symphonia(path, &max_frames_for) {
+        Ok(audio) => Ok(audio),
+        Err(first) if looks_like_mp3(path) => match decode_mp3(path, max_frames_for) {
+            Ok(audio) => Ok(audio),
+            Err(_) => Err(first),
+        },
+        Err(err) => Err(err),
+    }
+}
+
+fn looks_like_mp3(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"))
+}
+
+/// MPEG-1/2 Layer III through minimp3. i16 interleaved → stereo f32.
+fn decode_mp3(
+    path: &Path,
+    max_frames_for: impl Fn(f64) -> Option<usize>,
+) -> Result<DecodedAudio, DecodeError> {
+    let file = std::fs::File::open(path).map_err(|source| DecodeError::Open {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let mut decoder = minimp3::Decoder::new(file);
+    let mut content: Vec<f32> = Vec::new();
+    let mut sample_rate = 0_f64;
+    let mut max_frames = None;
+    let mut truncated = false;
+
+    loop {
+        match decoder.next_frame() {
+            Ok(frame) => {
+                if sample_rate == 0.0 {
+                    if frame.sample_rate == 0 {
+                        return Err(DecodeError::BadRate {
+                            path: path.to_path_buf(),
+                            rate: 0,
+                        });
+                    }
+                    sample_rate = f64::from(frame.sample_rate);
+                    max_frames = max_frames_for(sample_rate);
+                }
+                let channels = frame.channels.max(1);
+                for pcm in frame.data.chunks(channels) {
+                    if max_frames.is_some_and(|cap| content.len() / CHANNELS >= cap) {
+                        truncated = true;
+                        break;
+                    }
+                    let left = pcm[0] as f32 / 32768.0;
+                    let right = if channels == 1 {
+                        left
+                    } else {
+                        pcm[1] as f32 / 32768.0
+                    };
+                    content.push(left);
+                    content.push(right);
+                }
+                if truncated {
+                    break;
+                }
+            }
+            Err(minimp3::Error::Eof) => break,
+            Err(err) => {
+                return Err(DecodeError::Decode {
+                    path: path.to_path_buf(),
+                    reason: err.to_string(),
+                })
+            }
+        }
+    }
+
+    if content.is_empty() || sample_rate <= 0.0 {
+        return Err(DecodeError::Empty {
+            path: path.to_path_buf(),
+        });
+    }
+    let frames = content.len() / CHANNELS;
+    Ok(DecodedAudio {
+        data: content,
+        frames,
+        sample_rate,
+        truncated,
+    })
+}
+
+fn decode_symphonia(
+    path: &Path,
+    max_frames_for: &impl Fn(f64) -> Option<usize>,
 ) -> Result<DecodedAudio, DecodeError> {
     let file = std::fs::File::open(path).map_err(|source| DecodeError::Open {
         path: path.to_path_buf(),
@@ -558,5 +644,31 @@ mod tests {
             let value = cubic([0.0, 1.0, 2.0, 3.0], x);
             assert!((value - (1.0 + x)).abs() < 1e-5, "x={x} gave {value}");
         }
+    }
+
+    #[test]
+    fn mp3_is_in_the_filter_this_build_claims() {
+        assert!(
+            AUDIO_EXTENSIONS.contains(&"mp3"),
+            "the dialog and the library listing share this list"
+        );
+    }
+
+    #[test]
+    fn an_mp3_decodes_through_the_minimp3_path() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("sine.mp3");
+        let decoded = decode_stereo(&path, |_| None).expect("decodes mp3");
+        assert!(
+            decoded.frames > 1_000,
+            "220 ms of 22.05 kHz should be thousands of frames, got {}",
+            decoded.frames
+        );
+        assert!((decoded.sample_rate - 22_050.0).abs() < 1.0);
+        assert_eq!(decoded.data.len(), decoded.frames * CHANNELS);
+        // The fixture is a 220 Hz sine: both channels must move, not sit at zero.
+        assert!(decoded.data.iter().any(|sample| sample.abs() > 0.1));
     }
 }

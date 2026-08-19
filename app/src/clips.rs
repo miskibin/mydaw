@@ -1,60 +1,46 @@
 //! The shell's end of the audio-clip player.
 //!
 //! ```text
-//!   tracks ─▶ Σ ─▶ AudioClipNode ─▶ InsertSlot ─▶ master fader ─▶ device
-//!                       ▲
-//!                       └── AudioClipBus::install(CompiledAudioSong)
-//!                           (rtrb + basedrop, off the audio thread)
+//!   AudioClip track head ─▶ [inserts] ─▶ strip ─▶ Σ ─▶ master
+//!            ▲
+//!            └── AudioClipBus::open_for_source / install
 //! ```
 //!
-//! [`InsertHandle`](crate::insert::InsertHandle) with a different payload, and
-//! for the same two reasons. The **node has to be in every graph** whether or not
-//! the arrangement has audio in it, because gaining a first audio clip must not
-//! be a graph rebuild; and the **handle has to outlive the stream**, because a
-//! channel is created with the stream and a project loaded before the device
-//! came up still has to publish itself when it does.
+//! Each audio-clip **channel** owns a node at the head of its mixer strip, so
+//! volume, pan, mute and inserts are the strip's. The bus still holds one
+//! compiled arrangement and fans it out: a node for file 3 only receives clips
+//! of file 3.
 //!
-//! It sits **first** among the master inserts, which is what puts a clip on the
-//! master bus after every track strip and before the master chain -- §6 of the
-//! playlist spec. The node adds to the bus rather than replacing it, so the
-//! tracks' sum passes through untouched.
-//!
-//! # Why this is not on `TrackHost`'s critical path
-//! `TrackHost` owns it (it is the thing that assembles the graph) but nothing
-//! about a *track* is involved: a playlist lane is not a mixer strip. The
-//! ownership is about who builds the spec, not about what a clip belongs to.
+//! A graph rebuild produces new nodes with empty queues. The bus remembers the
+//! last song and replays the right slice into every node it opens.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use mydaw_plugin_audio_io::AudioIoError;
 use mydaw_plugin_sequencer::{
-    audio_clip_channel, AudioClipHandle, AudioClipInstallError, AudioClipStats, CompiledAudioSong,
-    AUDIO_CLIP_QUEUE_CAPACITY,
+    audio_clip_channel, AudioClipHandle, AudioClipInstallError, AudioClipStats,
+    AudioSourceRegistry, CompiledAudioSong, OneShotNode, AUDIO_CLIP_QUEUE_CAPACITY,
 };
 use mydaw_rt_core::basedrop::Handle;
 use mydaw_rt_core::RtNode;
 use parking_lot::Mutex;
 
-use crate::source::SourceError;
+use crate::source::{SilentNode, SourceError};
+
+struct Slot {
+    /// `None` plays every clip (tests). `Some(id)` is one audio-clip channel.
+    source_id: Option<u64>,
+    handle: AudioClipHandle,
+}
 
 /// The shell's handle on the audio-clip player. `Send + Sync`.
-///
-/// Created once at boot and reused across stream restarts.
 pub struct AudioClipBus {
-    /// `None` until a stream is open. See [`open`](Self::open).
-    sender: Mutex<Option<AudioClipHandle>>,
-    /// The counters of the *current* stream's node, so the UI can ask about
-    /// stolen voices without reaching across the RT wall.
+    attached: AtomicBool,
+    slots: Mutex<Vec<Slot>>,
     stats: Mutex<Option<Arc<AudioClipStats>>>,
-    /// The last arrangement published, replayed into every node this bus opens.
-    ///
-    /// A graph rebuild (adding a track, changing a source) produces a **new**
-    /// clip node with an empty queue, and the arrangement is not the graph's to
-    /// lose. Rather than making every caller that can trigger a rebuild
-    /// remember to republish -- which is the kind of obligation that is honoured
-    /// in four places and forgotten in the fifth -- the bus replays it itself.
-    /// The copy is one `Arc` bump per clip; the audio is not duplicated.
     last: Mutex<Option<CompiledAudioSong>>,
+    sources: Mutex<Option<Arc<AudioSourceRegistry>>>,
 }
 
 impl Default for AudioClipBus {
@@ -67,79 +53,143 @@ impl AudioClipBus {
     /// An empty, detached bus.
     pub fn new() -> Self {
         Self {
-            sender: Mutex::new(None),
+            attached: AtomicBool::new(false),
+            slots: Mutex::new(Vec::new()),
             stats: Mutex::new(None),
             last: Mutex::new(None),
+            sources: Mutex::new(None),
         }
     }
 
-    /// Build the channel for a freshly opened stream and take the RT end.
-    ///
-    /// The node starts with **no arrangement**, exactly as the insert slot
-    /// starts empty: the caller republishes afterwards, which is the same path a
-    /// project load takes.
+    /// The registry one-shot nodes read files from. Called once at boot.
+    pub fn bind_sources(&self, sources: Arc<AudioSourceRegistry>) {
+        *self.sources.lock() = Some(sources);
+    }
+
+    /// Drop every slot before a graph rebuild fills them again.
+    pub fn begin_rebuild(&self) {
+        self.slots.lock().clear();
+    }
+
+    /// Unfiltered node: every clip. Used by tests.
     pub fn open(&self, gc: Handle) -> Box<dyn RtNode> {
+        self.open_filtered(None, gc)
+    }
+
+    /// Node that plays only clips of `source_id`, for that channel's strip head.
+    pub fn open_for_source(&self, source_id: u64, gc: Handle) -> Box<dyn RtNode> {
+        self.open_filtered(Some(source_id), gc)
+    }
+
+    fn open_filtered(&self, source_id: Option<u64>, gc: Handle) -> Box<dyn RtNode> {
         let (mut handle, node) = audio_clip_channel(AUDIO_CLIP_QUEUE_CAPACITY, gc);
         if let Some(song) = self.last.lock().clone() {
-            // A queue this fresh cannot be full, so this cannot fail for a
-            // reason worth reporting -- and failing to open a stream because an
-            // arrangement did not fit would be the wrong trade anyway.
-            if let Err(err) = handle.install(song) {
+            let slice = match source_id {
+                Some(id) => song.for_source(id),
+                None => song,
+            };
+            if let Err(err) = handle.install(slice) {
                 log::warn!("could not replay the arrangement into a new graph: {err}");
             }
         }
         *self.stats.lock() = Some(Arc::clone(handle.stats()));
-        *self.sender.lock() = Some(handle);
+        self.slots.lock().push(Slot { source_id, handle });
+        self.attached.store(true, Ordering::Release);
         Box::new(node)
     }
 
-    /// Forget the current stream's channel. Called when audio stops.
-    pub fn close(&self) {
-        *self.sender.lock() = None;
-        *self.stats.lock() = None;
+    /// A note-driven player of `source_id`, or silence if the file is not loaded.
+    pub fn oneshot_node(
+        &self,
+        source_id: u64,
+        start_frames: u64,
+        end_frames: u64,
+        pitch_cents: f32,
+    ) -> Box<dyn RtNode> {
+        let sources = self.sources.lock();
+        match sources.as_ref().and_then(|reg| reg.get(source_id)) {
+            Some(source) => Box::new(OneShotNode::new(
+                source,
+                start_frames,
+                end_frames,
+                pitch_cents,
+            )),
+            None => Box::new(SilentNode),
+        }
     }
 
-    /// Publish an arrangement to the audio thread.
+    /// Forget the current stream's channels. Called when audio stops.
+    pub fn close(&self) {
+        self.slots.lock().clear();
+        *self.stats.lock() = None;
+        self.attached.store(false, Ordering::Release);
+    }
+
+    /// Publish an arrangement to every open clip node.
     ///
     /// # Errors
     /// [`AudioIoError::NotRunning`] when no stream is open, or
     /// [`SourceError::QueueFull`] when the audio thread is behind (retryable).
     pub fn install(&self, song: CompiledAudioSong) -> Result<(), SourceError> {
-        // Remembered *before* the publish and whether or not it lands: with no
-        // device open there is nothing to publish to, and the arrangement still
-        // has to be there when one comes up.
         *self.last.lock() = Some(song.clone());
-        let mut guard = self.sender.lock();
-        let handle = guard.as_mut().ok_or(AudioIoError::NotRunning)?;
-        handle.install(song).map_err(|err| match err {
-            AudioClipInstallError::QueueFull => SourceError::QueueFull,
-            AudioClipInstallError::Disconnected => SourceError::Audio(AudioIoError::NotRunning),
-        })
+        if !self.attached.load(Ordering::Acquire) {
+            return Err(SourceError::Audio(AudioIoError::NotRunning));
+        }
+        let mut slots = self.slots.lock();
+        let mut full = false;
+        slots.retain_mut(|slot| {
+            let slice = match slot.source_id {
+                Some(id) => song.for_source(id),
+                None => song.clone(),
+            };
+            match slot.handle.install(slice) {
+                Ok(()) => true,
+                Err(AudioClipInstallError::Disconnected) => false,
+                Err(AudioClipInstallError::QueueFull) => {
+                    full = true;
+                    true
+                }
+            }
+        });
+        if full {
+            return Err(SourceError::QueueFull);
+        }
+        Ok(())
     }
 
     /// Whether a stream's channel is attached.
     pub fn is_open(&self) -> bool {
-        self.sender.lock().is_some()
+        self.attached.load(Ordering::Acquire) && !self.slots.lock().is_empty()
     }
 
     /// Voices the current stream has taken from a still-sounding clip.
-    ///
-    /// `0` with no stream open. Non-zero means an arrangement with more than
-    /// `AUDIO_CLIP_VOICES` clips overlapping -- audible as the oldest one
-    /// ending early, which is why it is counted rather than left to be noticed.
     pub fn voices_stolen(&self) -> u64 {
-        self.stats
+        self.slots
             .lock()
-            .as_ref()
-            .map_or(0, |stats| stats.voices_stolen())
+            .iter()
+            .map(|slot| slot.handle.stats().voices_stolen())
+            .sum::<u64>()
+            .max(
+                self.stats
+                    .lock()
+                    .as_ref()
+                    .map_or(0, |stats| stats.voices_stolen()),
+            )
     }
 
     /// Voices the current stream has started. Diagnostics and tests.
     pub fn voices_started(&self) -> u64 {
-        self.stats
+        self.slots
             .lock()
-            .as_ref()
-            .map_or(0, |stats| stats.voices_started())
+            .iter()
+            .map(|slot| slot.handle.stats().voices_started())
+            .sum::<u64>()
+            .max(
+                self.stats
+                    .lock()
+                    .as_ref()
+                    .map_or(0, |stats| stats.voices_started()),
+            )
     }
 }
 
@@ -184,6 +234,8 @@ mod tests {
             start_ticks: 0,
             length_ticks: 3_840,
             offset_frames: 0,
+            end_frames: 0,
+            pitch_ratio: 1.0,
             gain: 1.0,
         }])
     }

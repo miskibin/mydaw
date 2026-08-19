@@ -32,8 +32,8 @@ export function InstrumentMenu(props: {
   const app = useAppState();
   const [filter, setFilter] = createSignal('');
 
-  // The plugin scan is lazy and slow on the first call; opening this list is a
-  // moment the user is already waiting, so it is a good place to ask.
+  // The plugin list is cache-only until Rescan; opening this menu must not
+  // load unlicensed plugins just to populate a picker.
   onMount(() => void app.loadDevices());
 
   const choices = createMemo<Choice[]>(() => {

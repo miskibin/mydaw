@@ -363,6 +363,20 @@ export function IconRoll(): JSX.Element {
   );
 }
 
+/** FL's typing-keyboard-to-piano toggle, next to the transport. */
+export function IconTypingKeyboard(): JSX.Element {
+  return (
+    <svg width="16" height="12" viewBox="0 0 18 12" fill="none" aria-hidden="true">
+      <rect x=".6" y=".6" width="16.8" height="10.8" rx="1.4" stroke="currentColor" stroke-width="1.1" />
+      <path d="M4.2 .6v6.2M7.4 .6v6.2M10.6 .6v6.2M13.8 .6v6.2" stroke="currentColor" stroke-width="1" />
+      <path
+        d="M2.8 .6h1.7v5H2.8zM6 .6h1.7v5H6zM9.2 .6h1.7v5H9.2zM12.4 .6h1.7v5h-1.7z"
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
 /** The paint tool: a brush, for painting clips and repeated notes. */
 export function IconPaintTool(): JSX.Element {
   return (

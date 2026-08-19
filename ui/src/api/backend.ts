@@ -8,6 +8,8 @@ import type {
   EffectInfoDto,
   InsertReadoutsDto,
   InsertTarget,
+  LibraryEntryDto,
+  LibraryRootDto,
   MeterFrame,
   MixerState,
   PatternDto,
@@ -15,12 +17,14 @@ import type {
   ProjectInfo,
   SequencerState,
   SourceDto,
+  SpectrumDto,
   StreamInfo,
   UiSnapshot,
   Unsubscribe,
   Vst3GuiStatus,
   Vst3PluginInfoDto,
   WaveformDto,
+  SourcePreviewDto,
 } from './types';
 
 /**
@@ -129,6 +133,14 @@ export interface Backend {
   getTracks(): Promise<MixerState>;
   setTrackGain(track: number, db: number): Promise<MixerState>;
   setTrackPan(track: number, pan: number): Promise<MixerState>;
+  /** Channel pitch in cents (`-1200..=1200`) for clip and one-shot tracks. */
+  setTrackPitch(track: number, cents: number): Promise<MixerState>;
+  /** SMP region in the file's frames. `endFrames` of `0` means the whole file. */
+  setTrackSampleRegion(
+    track: number,
+    startFrames: number,
+    endFrames: number,
+  ): Promise<MixerState>;
   setTrackMute(track: number, muted: boolean): Promise<MixerState>;
   setTrackSolo(track: number, soloed: boolean): Promise<MixerState>;
   setMasterGain(db: number): Promise<MixerState>;
@@ -136,6 +148,11 @@ export interface Backend {
   setSelectedTrack(track: number): Promise<MixerState>;
   /** Add a track. Rejects past `maxTracks`. */
   addTrack(source: string, name?: string): Promise<MixerState>;
+  /**
+   * Decode an audio file as a oneshot sampler and add a rack channel that
+   * plays it. The same file can still be dropped on a playlist lane.
+   */
+  addSampleChannel(path: string): Promise<MixerState>;
   /** Remove a track. Rejects for the last one, and renumbers every pattern. */
   removeTrack(track: number): Promise<MixerState>;
   setMasterEffectClap(bundlePath: string, pluginId: string): Promise<MixerState>;
@@ -204,6 +221,15 @@ export interface Backend {
    * while a chain with meters is actually on screen.
    */
   getChainReadouts(target: InsertTarget): Promise<InsertReadoutsDto[]>;
+  /**
+   * Arm the analysis tap on one insert, or `null`/`null` to silence it.
+   * Only the focused fullscreen editor should hold this.
+   */
+  watchSpectrum(target: InsertTarget | null, index: number | null): Promise<void>;
+  /** Latest hop from the armed tap, or `null` when nothing is watched. */
+  getInsertSpectrum(): Promise<SpectrumDto | null>;
+  /** EQ band-solo of the source. `band` is a prefix, or `null` to stop. */
+  setInsertListen(target: InsertTarget, index: number, band: string | null): Promise<void>;
 
   // --- patterns ------------------------------------------------------------
 
@@ -280,6 +306,21 @@ export interface Backend {
   unloadAudioSource(sourceId: number): Promise<AudioSourceDto[]>;
   /** A source's waveform as min/max pairs. `targetBins` is a request, not a promise. */
   getAudioWaveform(sourceId: number, targetBins?: number): Promise<WaveformDto>;
+  /** One hit of a built-in or sampled instrument, as min/max bins. */
+  previewSource(sourceId: string, targetBins?: number): Promise<SourcePreviewDto>;
+  /**
+   * Write an OS-dropped file's bytes into the app's imports folder and answer
+   * with the absolute path, so the drop can ride the normal file pipeline.
+   * WebView2 gives a drop no path — see `lib/dnd.ts`. **Rejects** past 100 MB.
+   */
+  importDroppedAudio(fileName: string, bytes: Uint8Array): Promise<string>;
+  getLibraryRoots(): Promise<LibraryRootDto[]>;
+  /** Native folder dialog. `null` when cancelled. */
+  addLibraryFolder(): Promise<LibraryRootDto[] | null>;
+  removeLibraryFolder(id: string): Promise<LibraryRootDto[]>;
+  listLibraryDir(rootId: string, relPath: string): Promise<LibraryEntryDto[]>;
+  /** Audition a file without loading it into the project. */
+  previewAudioFile(path: string): Promise<void>;
   /** Place an audio file on the timeline. `length` absent means the whole file. */
   addAudioClip(
     sourceId: number,
@@ -447,6 +488,18 @@ class TauriBackend implements Backend {
     return this.call('set_track_pan', { track, pan });
   }
 
+  setTrackPitch(track: number, cents: number): Promise<MixerState> {
+    return this.call('set_track_pitch', { track, cents });
+  }
+
+  setTrackSampleRegion(
+    track: number,
+    startFrames: number,
+    endFrames: number,
+  ): Promise<MixerState> {
+    return this.call('set_track_sample_region', { track, startFrames, endFrames });
+  }
+
   setTrackMute(track: number, muted: boolean): Promise<MixerState> {
     return this.call('set_track_mute', { track, muted });
   }
@@ -465,6 +518,10 @@ class TauriBackend implements Backend {
 
   addTrack(source: string, name?: string): Promise<MixerState> {
     return this.call('add_track', { source, name: name ?? null });
+  }
+
+  addSampleChannel(path: string): Promise<MixerState> {
+    return this.call('add_sample_channel', { path });
   }
 
   removeTrack(track: number): Promise<MixerState> {
@@ -600,6 +657,27 @@ class TauriBackend implements Backend {
     });
   }
 
+  watchSpectrum(target: InsertTarget | null, index: number | null): Promise<void> {
+    return this.call('watch_spectrum', {
+      target: target?.kind ?? null,
+      targetIndex: target?.index ?? 0,
+      index,
+    });
+  }
+
+  getInsertSpectrum(): Promise<SpectrumDto | null> {
+    return this.call('get_insert_spectrum');
+  }
+
+  setInsertListen(target: InsertTarget, index: number, band: string | null): Promise<void> {
+    return this.call('set_insert_listen', {
+      target: target.kind,
+      targetIndex: target.index,
+      index,
+      band,
+    });
+  }
+
   getPattern(): Promise<SequencerState> {
     return this.call('get_pattern');
   }
@@ -704,6 +782,36 @@ class TauriBackend implements Backend {
 
   getAudioWaveform(sourceId: number, targetBins?: number): Promise<WaveformDto> {
     return this.call('get_audio_waveform', { sourceId, targetBins: targetBins ?? null });
+  }
+
+  previewSource(sourceId: string, targetBins?: number): Promise<SourcePreviewDto> {
+    return this.call('preview_source', { sourceId, targetBins: targetBins ?? null });
+  }
+
+  importDroppedAudio(fileName: string, bytes: Uint8Array): Promise<string> {
+    // A plain array: Tauri's JSON arg layer would turn a Uint8Array into an
+    // `{ "0": … }` object, which Rust's `Vec<u8>` does not deserialise.
+    return this.call('import_dropped_audio', { fileName, bytes: Array.from(bytes) });
+  }
+
+  getLibraryRoots(): Promise<LibraryRootDto[]> {
+    return this.call('get_library_roots');
+  }
+
+  addLibraryFolder(): Promise<LibraryRootDto[] | null> {
+    return this.call('add_library_folder');
+  }
+
+  removeLibraryFolder(id: string): Promise<LibraryRootDto[]> {
+    return this.call('remove_library_folder', { id });
+  }
+
+  listLibraryDir(rootId: string, relPath: string): Promise<LibraryEntryDto[]> {
+    return this.call('list_library_dir', { rootId, relPath });
+  }
+
+  previewAudioFile(path: string): Promise<void> {
+    return this.call('preview_audio_file', { path });
   }
 
   addAudioClip(

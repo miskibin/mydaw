@@ -47,13 +47,15 @@ import type {
   TrackDto,
 } from '../api/types';
 import { faderFraction, faderToDb, formatDb, panLabel } from '../panels/mixer/scale';
+import { addedInsertId, insertsOnStrip } from '../lib/inserts';
 import { useView } from '../shell/view';
 import { insertTargetFor, useAppState, type StripRef } from '../state';
 import { trackColor } from '../theme/tokens';
 import {
   bindWheel,
   debounce,
-  FADER_TRAVEL_PX,
+  FADER_HANDLE_PX,
+  faderThrowPx,
   FINE_FACTOR,
   startDrag,
   WHEEL_COMMIT_MS,
@@ -478,7 +480,10 @@ function Strip(props: StripProps): JSX.Element {
   const name = () => track()?.name ?? bus()?.name ?? 'Master';
   const kindTag = () => (isMaster() ? 'OUT' : track() ? 'INS' : 'BUS');
 
-  const gainDb = () => localDb() ?? track()?.gainDb ?? bus()?.gainDb ?? master()?.gainDb ?? 0;
+  const gainDb = () =>
+    isMaster()
+      ? app.masterGainDb()
+      : (localDb() ?? track()?.gainDb ?? bus()?.gainDb ?? 0);
   const pan = () => localPan() ?? track()?.pan ?? bus()?.pan;
   const muted = () => track()?.muted ?? bus()?.muted ?? false;
   const soloed = () => track()?.soloed ?? bus()?.soloed ?? false;
@@ -563,13 +568,16 @@ function Strip(props: StripProps): JSX.Element {
   onCleanup(() => settle.cancel());
 
   function setGain(db: number): void {
+    if (isMaster()) {
+      app.setMasterGain(db);
+      return;
+    }
     setLocalDb(db);
     app.say(`${name()} · Volume`, `${formatDb(db)} dB`);
     const asTrack = track();
     const asBus = bus();
     if (asTrack) void app.backend.setTrackGain(asTrack.index, db).catch(app.report);
     else if (asBus) void app.backend.setBusGain(asBus.index, db).catch(app.report);
-    else void app.backend.setMasterGain(db).catch(app.report);
     settle();
   }
 
@@ -583,7 +591,9 @@ function Strip(props: StripProps): JSX.Element {
       // fader that jumped to the pointer would be +6 dB into the monitors for
       // the sake of a click three pixels too high.
       from: faderFraction(gainDb()),
-      perPixel: 1 / FADER_TRAVEL_PX,
+      // The strip is as tall as the window; measuring it keeps the handle
+      // under the pointer instead of running ahead by (track / 180).
+      perPixel: 1 / faderThrowPx(faderEl?.getBoundingClientRect().height ?? 0),
       min: 0,
       max: 1,
       onChange: (fraction) => setGain(faderToDb(fraction)),
@@ -1090,7 +1100,7 @@ function Strip(props: StripProps): JSX.Element {
           <span
             class="wv-fader__handle"
             style={{
-              top: `calc((1 - ${faderFraction(gainDb()).toFixed(4)}) * (100% - 12px))`,
+              top: `calc((1 - ${faderFraction(gainDb()).toFixed(4)}) * (100% - ${FADER_HANDLE_PX}px))`,
             }}
           />
         </div>
@@ -1250,6 +1260,7 @@ function PeakReadout(props: { read: () => number }): JSX.Element {
 
 function EffectMenu(props: { menu: FxMenu; close: () => void }): JSX.Element {
   const app = useAppState();
+  const view = useView();
 
   return (
     <div
@@ -1271,9 +1282,20 @@ function EffectMenu(props: { menu: FxMenu; close: () => void }): JSX.Element {
               class="wv-menu__row"
               title={effect().description}
               onClick={() => {
-                void app.mixerCommand((b) => b.addInsert(props.menu.target, effect().typeId));
-                app.say(`${props.menu.owner} · Insert`, `${effect().name} added`);
-                props.close();
+                const target = props.menu.target;
+                const before = new Set(insertsOnStrip(app.mixer(), target).map((insert) => insert.id));
+                const strip: StripRef =
+                  target.kind === 'master'
+                    ? { kind: 'master' }
+                    : { kind: target.kind, index: target.index };
+                void app
+                  .mixerCommand((b) => b.addInsert(target, effect().typeId))
+                  .then(() => {
+                    const id = addedInsertId(before, insertsOnStrip(app.mixer(), target));
+                    if (id !== undefined) view.openInsertEditor({ strip, insertId: id });
+                    app.say(`${props.menu.owner} · Insert`, `${effect().name} added`);
+                    props.close();
+                  });
               }}
             >
               <span>{effect().name}</span>

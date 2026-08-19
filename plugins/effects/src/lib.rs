@@ -10,7 +10,8 @@
 //! | [`CompressorNode`](compressor::CompressorNode) | `effects.compressor` | Feed-forward, log-domain, peak/RMS, soft knee, sidechain highpass. |
 //! | [`DelayNode`](delay::DelayNode) | `effects.delay` | Tempo-synced or free, in-loop damping, ping-pong, one-knob ducking. |
 //! | [`SaturatorNode`](saturator::SaturatorNode) | `effects.saturator` | Tape/tube/clip shapers, 4x oversampled, drive-compensated. |
-//! | [`UtilityNode`](utility::UtilityNode) | `effects.utility` | Gain, pan, width, mono, polarity, DC blocker. |
+//! | [`LimiterNode`](limiter::LimiterNode) | `effects.limiter` | Stereo-linked peak limiter with lookahead. |
+//! | [`ReverbNode`](reverb::ReverbNode) | `effects.reverb` | Algorithmic room: decay, size, damp, mix. |
 //!
 //! # Five properties all of them hold
 //!
@@ -65,7 +66,9 @@ pub mod delay;
 pub mod dsp;
 pub mod effect;
 pub mod eq;
+pub mod limiter;
 pub mod oversample;
+pub mod reverb;
 pub mod saturator;
 pub mod test_support;
 pub mod utility;
@@ -74,6 +77,8 @@ pub use compressor::{CompressorFactory, CompressorNode};
 pub use delay::{DelayFactory, DelayNode};
 pub use effect::{Bypass, BypassState, BYPASS_PARAM, MIX_PARAM};
 pub use eq::{EqFactory, EqNode};
+pub use limiter::{LimiterFactory, LimiterNode};
+pub use reverb::{ReverbFactory, ReverbNode};
 pub use saturator::{SaturatorFactory, SaturatorNode, Shaper};
 pub use utility::{UtilityFactory, UtilityNode};
 
@@ -159,6 +164,18 @@ impl EffectRegistry {
                     Arc::new(SaturatorFactory::new()),
                 ),
                 Self::entry(
+                    limiter::NODE_TYPE_ID,
+                    limiter::DISPLAY_NAME,
+                    limiter::DESCRIPTION,
+                    Arc::new(LimiterFactory::new()),
+                ),
+                Self::entry(
+                    reverb::NODE_TYPE_ID,
+                    reverb::DISPLAY_NAME,
+                    reverb::DESCRIPTION,
+                    Arc::new(ReverbFactory::new()),
+                ),
+                Self::entry(
                     utility::NODE_TYPE_ID,
                     utility::DISPLAY_NAME,
                     utility::DESCRIPTION,
@@ -232,6 +249,22 @@ impl EffectRegistry {
             .find(|(info, _)| info.type_id == type_id)
             .map(|(_, factory)| factory.create_with_params(sample_rate, max_block, params))
     }
+
+    /// Same as [`create`](Self::create), handing the EQ its hold-to-solo word.
+    pub fn create_in_chain(
+        &self,
+        type_id: &str,
+        sample_rate: f64,
+        max_block: usize,
+        params: Arc<ParamBlock>,
+        listen: Arc<std::sync::atomic::AtomicI32>,
+    ) -> Option<Box<dyn RtNode>> {
+        if type_id == eq::NODE_TYPE_ID {
+            Some(EqFactory::new().create_with_listen(sample_rate, max_block, params, listen))
+        } else {
+            self.create(type_id, sample_rate, max_block, params)
+        }
+    }
 }
 
 impl std::fmt::Debug for EffectRegistry {
@@ -276,6 +309,8 @@ impl Plugin for EffectsPlugin {
         ctx.register_rt_node_factory(Box::new(CompressorFactory::new()));
         ctx.register_rt_node_factory(Box::new(DelayFactory::new()));
         ctx.register_rt_node_factory(Box::new(SaturatorFactory::new()));
+        ctx.register_rt_node_factory(Box::new(LimiterFactory::new()));
+        ctx.register_rt_node_factory(Box::new(ReverbFactory::new()));
         ctx.register_rt_node_factory(Box::new(UtilityFactory::new()));
         let _ = ctx.services.provide(Arc::new(EffectRegistry::new()));
     }
@@ -307,7 +342,10 @@ mod tests {
                 .unwrap_or_else(|| panic!("'{}' should be contributed", info.type_id));
             assert_eq!(factory.type_id(), info.type_id);
         }
-        assert!(kernel.ctx().rt_node_factory("effects.reverb").is_none());
+        assert!(kernel
+            .ctx()
+            .rt_node_factory("effects.not-an-effect")
+            .is_none());
     }
 
     #[test]
@@ -326,6 +364,8 @@ mod tests {
                 "effects.compressor",
                 "effects.delay",
                 "effects.saturator",
+                "effects.limiter",
+                "effects.reverb",
                 "effects.utility",
             ]
         );
@@ -392,7 +432,7 @@ mod tests {
         }
         assert!(registry
             .create(
-                "effects.reverb",
+                "effects.not-an-effect",
                 48_000.0,
                 256,
                 Arc::new(ParamBlock::new(&[]))
@@ -408,6 +448,8 @@ mod tests {
         assert_eq!(compressor::NODE_TYPE_ID, "effects.compressor");
         assert_eq!(delay::NODE_TYPE_ID, "effects.delay");
         assert_eq!(saturator::NODE_TYPE_ID, "effects.saturator");
+        assert_eq!(limiter::NODE_TYPE_ID, "effects.limiter");
+        assert_eq!(reverb::NODE_TYPE_ID, "effects.reverb");
         assert_eq!(utility::NODE_TYPE_ID, "effects.utility");
     }
 }

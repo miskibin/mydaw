@@ -724,7 +724,17 @@ impl CompiledGraph {
     /// RT-safe as long as each node honours the zero-alloc rule; this function
     /// itself only iterates pre-allocated `Vec`s and writes pre-allocated
     /// buffers.
+    /// Render one block without an analysis tap.
     pub fn process(&mut self, ctx: &mut ProcessCtx) {
+        self.process_with_spectrum(ctx, None);
+    }
+
+    /// Render one block, optionally copying a hop around the watched insert.
+    pub fn process_with_spectrum(
+        &mut self,
+        ctx: &mut ProcessCtx,
+        mut tap: Option<&mut crate::SpectrumTapRt>,
+    ) {
         // Destructured so the parameter block can be read while the tracks are
         // borrowed mutably -- the alternative is an `Arc::clone` per block.
         let Self {
@@ -784,9 +794,12 @@ impl CompiledGraph {
                 // A track's input is silence; its source generates into it.
                 track_ctx.buffers.silence();
                 source.process(&mut track_ctx);
-                for node in inserts.iter_mut() {
-                    node.process(&mut track_ctx);
-                }
+                crate::process_inserts(
+                    inserts,
+                    &mut track_ctx,
+                    tap.as_deref_mut(),
+                    crate::SpectrumLoc::Track(index),
+                );
                 track_ctx.frames
             };
             debug_assert!(frames <= ctx.frames);
@@ -832,9 +845,12 @@ impl CompiledGraph {
                 let BusChain { input, inserts, .. } = &mut buses[index];
                 let mut bus_ctx =
                     ProcessCtx::with_events(input, ctx.sample_rate, ctx.frames, ctx.transport, &[]);
-                for node in inserts.iter_mut() {
-                    node.process(&mut bus_ctx);
-                }
+                crate::process_inserts(
+                    inserts,
+                    &mut bus_ctx,
+                    tap.as_deref_mut(),
+                    crate::SpectrumLoc::Bus(index),
+                );
             }
 
             let tap_count = buses[index].sends.len();
@@ -877,9 +893,7 @@ impl CompiledGraph {
             );
         }
 
-        for node in master_inserts.iter_mut() {
-            node.process(ctx);
-        }
+        crate::process_inserts(master_inserts, ctx, tap, crate::SpectrumLoc::Master);
         master.apply(ctx.buffers, params.master_gain());
     }
 
@@ -1005,8 +1019,17 @@ impl RtGraphSlot {
 
     /// Run the current graph. Outputs silence when no graph is installed yet.
     pub fn process(&mut self, ctx: &mut ProcessCtx) {
+        self.process_with_spectrum(ctx, None);
+    }
+
+    /// Run the current graph, optionally copying a hop around the watched insert.
+    pub fn process_with_spectrum(
+        &mut self,
+        ctx: &mut ProcessCtx,
+        tap: Option<&mut crate::SpectrumTapRt>,
+    ) {
         match self.current.as_mut() {
-            Some(graph) => graph.process(ctx),
+            Some(graph) => graph.process_with_spectrum(ctx, tap),
             None => ctx.buffers.silence(),
         }
     }
@@ -2174,5 +2197,34 @@ mod tests {
         drop(slot);
         collector.collect();
         assert_eq!(collector.alloc_count(), 0);
+    }
+
+    #[test]
+    fn the_spectrum_tap_copies_one_insert_pre_and_post() {
+        let mut graph = GraphSpec::new()
+            .with_limits(limits(256))
+            .with(Box::new(ConstNode(0.25)))
+            .with(Box::new(AddNode(0.1)))
+            .compile();
+        let (tx, mut rx) = crate::spectrum_channel(4);
+        let watch = std::sync::Arc::new(crate::SpectrumWatch::new());
+        watch.set(crate::SpectrumTarget::track(0, 0));
+        let mut tap = crate::SpectrumTapRt::new(tx, watch, SR);
+        let mut buffers = AudioBuffers::new(256);
+        for _ in 0..(crate::SPECTRUM_HOP / 256) {
+            let mut ctx = ProcessCtx::new(&mut buffers, SR, 256, TransportSnapshot::default());
+            graph.process_with_spectrum(&mut ctx, Some(&mut tap));
+        }
+        let hop = rx.pop().expect("a full hop should have been pushed");
+        assert!(
+            (hop.pre_l[10] - 0.25).abs() < 1e-5,
+            "pre should be the source, got {}",
+            hop.pre_l[10]
+        );
+        assert!(
+            (hop.post_l[10] - 0.35).abs() < 1e-5,
+            "post should be after the insert, got {}",
+            hop.post_l[10]
+        );
     }
 }

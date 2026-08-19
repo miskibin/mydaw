@@ -44,6 +44,7 @@
 //! right; this way the response test and the future curve renderer are reading
 //! the same numbers.
 
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 use mydaw_rt_core::{
@@ -52,7 +53,8 @@ use mydaw_rt_core::{
 };
 
 use crate::biquad::{
-    high_shelf, highpass, low_shelf, peaking, Biquad, BiquadCoeffs, BUTTERWORTH_Q4,
+    bandpass, high_shelf, highpass, low_shelf, lowpass, peaking, Biquad, BiquadCoeffs,
+    BUTTERWORTH_Q4,
 };
 use crate::effect::{index_of, Bypass, CachedDb, BYPASS_PARAM};
 
@@ -359,6 +361,52 @@ fn band_coefficients(
     }
 }
 
+/// Coefficients for hold-to-solo: a band of the *source*, not the EQ's effect.
+fn listen_coefficients(
+    kind: BandKind,
+    freq: f64,
+    q: f64,
+    slope_choice: usize,
+    sample_rate: f64,
+) -> ([BiquadCoeffs; 2], usize) {
+    match kind {
+        BandKind::Highpass => {
+            if slope_choice == 0 {
+                (
+                    [
+                        lowpass(freq, std::f64::consts::FRAC_1_SQRT_2, sample_rate),
+                        BiquadCoeffs::BYPASS,
+                    ],
+                    1,
+                )
+            } else {
+                (
+                    [
+                        lowpass(freq, BUTTERWORTH_Q4[0], sample_rate),
+                        lowpass(freq, BUTTERWORTH_Q4[1], sample_rate),
+                    ],
+                    2,
+                )
+            }
+        }
+        BandKind::LowShelf => (
+            [
+                lowpass(freq, std::f64::consts::FRAC_1_SQRT_2, sample_rate),
+                BiquadCoeffs::BYPASS,
+            ],
+            1,
+        ),
+        BandKind::Bell => ([bandpass(freq, q, sample_rate), BiquadCoeffs::BYPASS], 1),
+        BandKind::HighShelf => (
+            [
+                highpass(freq, std::f64::consts::FRAC_1_SQRT_2, sample_rate),
+                BiquadCoeffs::BYPASS,
+            ],
+            1,
+        ),
+    }
+}
+
 /// The EQ's magnitude response at `hz`, in dB, for the settings in `block`.
 ///
 /// **Non-RT.** This is what the future curve display samples, and what
@@ -413,6 +461,9 @@ pub fn magnitude_curve(block: &ParamBlock, sample_rate: f64, points: usize) -> V
         .collect()
 }
 
+/// Hold-to-solo is off.
+pub const LISTEN_OFF: i32 = -1;
+
 /// The EQ node.
 pub struct EqNode {
     params: SmoothedParams,
@@ -420,6 +471,9 @@ pub struct EqNode {
     output: CachedDb,
     bands: [BandIndices; BANDS],
     filters: [Band; BANDS],
+    listen_filter: Band,
+    listen: Arc<AtomicI32>,
+    last_listen: i32,
     bypass: Bypass,
     sample_rate: f64,
 }
@@ -427,6 +481,21 @@ pub struct EqNode {
 impl EqNode {
     /// **Non-RT**: allocates.
     pub fn new(params: Arc<ParamBlock>, sample_rate: f64, max_block: usize) -> Self {
+        Self::new_with_listen(
+            params,
+            sample_rate,
+            max_block,
+            Arc::new(AtomicI32::new(LISTEN_OFF)),
+        )
+    }
+
+    /// Same as [`new`](Self::new), sharing a listen word the shell can store.
+    pub fn new_with_listen(
+        params: Arc<ParamBlock>,
+        sample_rate: f64,
+        max_block: usize,
+        listen: Arc<AtomicI32>,
+    ) -> Self {
         let bands = std::array::from_fn(|band| BandIndices::new(&params, band));
         let bypass_index = index_of(&params, BYPASS_PARAM);
         let smoothed = SmoothedParams::new(params, sample_rate);
@@ -436,6 +505,9 @@ impl EqNode {
             bypass_index,
             bands,
             filters: std::array::from_fn(|_| Band::new()),
+            listen_filter: Band::new(),
+            listen,
+            last_listen: LISTEN_OFF,
             bypass: Bypass::new(max_block, sample_rate),
             sample_rate: if sample_rate.is_finite() && sample_rate > 1.0 {
                 sample_rate
@@ -531,6 +603,34 @@ impl EqNode {
             right[frame] = r as f32 * output;
         }
     }
+
+    /// Band-pass (or HP-as-LP / shelf-region) of the *source*, not the EQ.
+    fn render_listen(&mut self, ctx: &mut ProcessCtx, band: usize) {
+        let index = self.bands[band];
+        let freq = f64::from(self.params.value(index.freq))
+            .clamp(f64::from(MIN_FREQ_HZ), f64::from(MAX_FREQ_HZ));
+        let q = if index.q == usize::MAX {
+            std::f64::consts::FRAC_1_SQRT_2
+        } else {
+            f64::from(self.params.value(index.q)).clamp(0.1, 10.0)
+        };
+        let slope = if index.slope == usize::MAX {
+            0
+        } else {
+            self.params.choice(index.slope)
+        };
+        let (coeffs, sections) = listen_coefficients(index.kind, freq, q, slope, self.sample_rate);
+        self.listen_filter.coeffs = coeffs;
+        self.listen_filter.sections = sections;
+
+        let frames = ctx.frames;
+        let channels = ctx.buffers.as_mut_slices();
+        let [left, right] = channels;
+        for frame in 0..frames {
+            left[frame] = self.listen_filter.process(0, f64::from(left[frame])) as f32;
+            right[frame] = self.listen_filter.process(1, f64::from(right[frame])) as f32;
+        }
+    }
 }
 
 /// The output parameter's index. Split out so `new` can build the cache before
@@ -545,6 +645,19 @@ fn index_of_output(params: &SmoothedParams) -> usize {
 impl RtNode for EqNode {
     fn process(&mut self, ctx: &mut ProcessCtx) {
         self.params.begin_block();
+        let listen = self.listen.load(Ordering::Relaxed);
+        if listen >= 0 && (listen as usize) < BANDS {
+            if listen != self.last_listen {
+                self.listen_filter.reset();
+                self.last_listen = listen;
+            }
+            let _ = self.bypass.begin(ctx, false);
+            self.render_listen(ctx, listen as usize);
+            self.params.skip_all(ctx.frames);
+            return;
+        }
+        self.last_listen = LISTEN_OFF;
+
         let bypassed = self.params.choice(self.bypass_index) != 0;
         let state = self.bypass.begin(ctx, bypassed);
 
@@ -576,6 +689,22 @@ pub struct EqFactory;
 impl EqFactory {
     pub const fn new() -> Self {
         Self
+    }
+
+    /// Build an EQ that shares the shell's hold-to-solo word.
+    pub fn create_with_listen(
+        &self,
+        sample_rate: f64,
+        max_block: usize,
+        params: Arc<ParamBlock>,
+        listen: Arc<AtomicI32>,
+    ) -> Box<dyn RtNode> {
+        Box::new(EqNode::new_with_listen(
+            params,
+            sample_rate,
+            max_block,
+            listen,
+        ))
     }
 }
 

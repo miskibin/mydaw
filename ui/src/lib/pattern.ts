@@ -53,6 +53,49 @@ export function patternTicks(pattern: PatternDto): number {
   return pattern.steps * TICKS_PER_STEP;
 }
 
+/**
+ * How a pattern miniature is laid out inside a playlist clip.
+ *
+ * Marks are fractions of **one pattern**, not of the clip. The art is then
+ * drawn at `cyclePx` wide — the pattern's own duration on the timeline — and
+ * tiled `cycles` times. A shorter clip crops via overflow; a longer clip shows
+ * the loop instead of stretching one copy across the block.
+ */
+export function clipArtLayout(
+  clipLengthTicks: number,
+  patternLengthTicks: number,
+  pxPerTick: number,
+): { cyclePx: number; cycles: number } {
+  const cycle = Math.max(1, patternLengthTicks);
+  return {
+    cyclePx: cycle * pxPerTick,
+    cycles: Math.max(1, Math.ceil(Math.max(0, clipLengthTicks) / cycle)),
+  };
+}
+
+/**
+ * How an audio clip's waveform is laid out inside the playlist clip.
+ *
+ * The wave is drawn at the **file's** duration on the timeline, not the clip's.
+ * Shortening the clip crops via overflow; lengthening past the remaining audio
+ * leaves empty space (the engine does not loop or stretch audio). An offset
+ * shifts the wave left so the audible start sits at the clip's left edge.
+ */
+export function audioWaveLayout(
+  sourceDurationTicks: number,
+  sourceFrames: number,
+  offsetFrames: number,
+  pxPerTick: number,
+): { wavePx: number; offsetPx: number } {
+  const wavePx = Math.max(0, sourceDurationTicks) * pxPerTick;
+  const frames = Math.max(0, sourceFrames);
+  const offset = Math.min(Math.max(0, offsetFrames), frames);
+  return {
+    wavePx,
+    offsetPx: frames > 0 ? (offset / frames) * wavePx : 0,
+  };
+}
+
 /** Whether a step or note is loud enough to draw as an accent. */
 export function isAccent(velocity: number): boolean {
   return velocity >= ACCENT_THRESHOLD;
@@ -205,6 +248,115 @@ export function withClearedChannel(
     if (clip.notes.length === 0 && emptyRow === clip.steps) return clip;
     return { ...clip, steps: emptyRow, notes: [] };
   });
+}
+
+/**
+ * Rewrite `channel`'s grid. Notes are dropped: the compiler plays both, so a
+ * fill left under a melody would double every hit.
+ *
+ * Returning the same cell array, when the clip already had that row and no
+ * notes, is a no-op by reference — same contract as the other `with*` helpers.
+ */
+function withMappedSteps(
+  pattern: PatternDto,
+  channel: number,
+  fallbackKey: number,
+  edit: (cells: readonly StepDto[]) => StepDto[],
+): PatternDto {
+  return withChannel(pattern, channel, fallbackKey, (clip) => {
+    const row =
+      clip.steps && clip.steps.steps.length === pattern.steps
+        ? clip.steps
+        : {
+            ...(clip.steps ?? emptyRow(fallbackKey, pattern.steps)),
+            steps: stepCells(clip, pattern.steps),
+          };
+    const steps = edit(row.steps);
+    const sameGrid =
+      steps === row.steps ||
+      (steps.length === row.steps.length &&
+        steps.every(
+          (cell, index) =>
+            cell.on === row.steps[index]!.on && cell.velocity === row.steps[index]!.velocity,
+        ));
+    if (sameGrid && clip.notes.length === 0 && clip.steps === row) return clip;
+    return { ...clip, steps: sameGrid ? row : { ...row, steps }, notes: [] };
+  });
+}
+
+/**
+ * Turn on every `interval`th cell starting at 0, and turn the rest off.
+ *
+ * Interval 4 on a sixteenth grid is a hit on each beat; 2 is eighths; 1 is
+ * every cell. Illegal intervals leave the pattern untouched.
+ */
+export function withFilledSteps(
+  pattern: PatternDto,
+  channel: number,
+  interval: number,
+  fallbackKey: number,
+): PatternDto {
+  if (!Number.isInteger(interval) || interval < 1) return pattern;
+  return withMappedSteps(pattern, channel, fallbackKey, (cells) => {
+    let changed = false;
+    const steps = cells.map((cell, index) => {
+      const on = index % interval === 0;
+      if (cell.on === on) return cell;
+      changed = true;
+      return { ...cell, on, velocity: on ? Math.max(cell.velocity, STEP_VELOCITY) : cell.velocity };
+    });
+    return changed ? steps : (cells as StepDto[]);
+  });
+}
+
+/** Flip every cell. Empty becomes a full row; a full row becomes empty. */
+export function withInvertedSteps(
+  pattern: PatternDto,
+  channel: number,
+  fallbackKey: number,
+): PatternDto {
+  return withMappedSteps(pattern, channel, fallbackKey, (cells) =>
+    cells.map((cell) => ({ ...cell, on: !cell.on })),
+  );
+}
+
+/**
+ * Rotate the grid. Negative `delta` moves hits earlier (left on the rack);
+ * positive moves them later.
+ */
+export function withShiftedSteps(
+  pattern: PatternDto,
+  channel: number,
+  delta: number,
+  fallbackKey: number,
+): PatternDto {
+  return withMappedSteps(pattern, channel, fallbackKey, (cells) => {
+    const length = cells.length;
+    if (length === 0) return cells as StepDto[];
+    const shift = ((delta % length) + length) % length;
+    if (shift === 0) return cells as StepDto[];
+    return cells.map((_, index) => cells[(index - shift + length) % length]!);
+  });
+}
+
+/**
+ * Independently switch each cell on or off. Seeded so the same press is a
+ * repeatable undo entry, not a new roll every time the stack is replayed.
+ */
+export function withRandomSteps(
+  pattern: PatternDto,
+  channel: number,
+  seed: number,
+  fallbackKey: number,
+): PatternDto {
+  const random = mulberry32(seed);
+  return withMappedSteps(pattern, channel, fallbackKey, (cells) =>
+    cells.map((cell) => ({
+      ...cell,
+      on: random() < 0.4,
+      velocity: Math.max(cell.velocity, STEP_VELOCITY),
+    })),
+  );
 }
 
 /** Switched-on cells plus notes, across every channel: the picker's "events". */
@@ -409,6 +561,48 @@ export function humanize(notes: readonly MelodicNoteDto[], seed: number): Melodi
     start: Math.max(0, note.start + Math.round((random() - 0.5) * 20)),
     velocity: Math.min(1, Math.max(0.05, note.velocity + (random() - 0.5) * 0.125)),
   }));
+}
+
+/**
+ * Merge selected notes that share a pitch and touch or overlap in time.
+ *
+ * FL's Ctrl+G. Notes that do not touch, and notes on other keys, stay as they
+ * are. Returns `all` by reference when nothing actually joins, so a gesture
+ * that finds no seam is free.
+ */
+export function glueNotes(
+  all: readonly MelodicNoteDto[],
+  indices: readonly number[],
+): MelodicNoteDto[] {
+  if (indices.length < 2) return all as MelodicNoteDto[];
+  const drop = new Set(indices);
+  const picked = indices
+    .map((index) => all[index])
+    .filter((note): note is MelodicNoteDto => note !== undefined)
+    .map((note) => ({ ...note }))
+    .sort((a, b) => a.key - b.key || a.start - b.start);
+  const merged: MelodicNoteDto[] = [];
+  for (const note of picked) {
+    const last = merged[merged.length - 1];
+    if (last && last.key === note.key && note.start <= last.start + last.length) {
+      const end = Math.max(last.start + last.length, note.start + note.length);
+      last.length = end - last.start;
+      last.velocity = Math.max(last.velocity, note.velocity);
+    } else {
+      merged.push(note);
+    }
+  }
+  if (merged.length === picked.length) return all as MelodicNoteDto[];
+  return [...all.filter((_, index) => !drop.has(index)), ...merged];
+}
+
+/** Split `note` at `tick`, or return it unchanged when the cut is not inside. */
+export function splitNoteAt(note: MelodicNoteDto, tick: number): MelodicNoteDto[] {
+  if (tick <= note.start || tick >= note.start + note.length) return [note];
+  return [
+    { ...note, length: tick - note.start },
+    { ...note, start: tick, length: note.start + note.length - tick },
+  ];
 }
 
 /** A small, fast, seeded PRNG. */

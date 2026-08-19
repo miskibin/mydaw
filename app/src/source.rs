@@ -92,6 +92,12 @@ pub use mydaw_plugin_sampler::SOURCE_PREFIX as SAMPLER_SOURCE_PREFIX;
 /// plugin in both formats -- which most of them do.
 pub const VST3_SOURCE_PREFIX: &str = "vst3:";
 
+/// Prefix of a playlist audio-clip channel.
+pub const AUDIO_CLIP_PREFIX: &str = "clip:";
+
+/// Prefix of a one-shot sampler channel.
+pub const ONESHOT_PREFIX: &str = "oneshot:";
+
 /// A hosted CLAP instrument, identified the way a project file records one.
 ///
 /// Bundle path **and** plugin id, because neither alone is enough: one bundle
@@ -219,11 +225,10 @@ impl From<&Vst3PluginInfo> for Vst3SourceRef {
 
 /// A sampled instrument, identified the way a project file records one.
 ///
-/// One string, because one string is all it takes: the instrument id names a
-/// directory under `assets/instruments`, and the *content* of that directory is
-/// pinned by `assets-manifest.json`. There is deliberately no path here. A
-/// project that recorded where the samples were on the machine that saved it
-/// would be a project that could not be opened anywhere else.
+/// For bundled instruments one string is all it takes: the id names a directory
+/// under `assets/instruments`. For a file dropped onto the rack the id is
+/// `file:` plus the absolute path, so the same project can reload that oneshot
+/// on the machine that saved it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SamplerSourceRef {
     /// Instrument id, e.g. `salamander-piano`. Without the `sampler:` prefix.
@@ -306,6 +311,12 @@ pub enum Source {
     Clap(ClapSourceRef),
     /// A hosted VST3 instrument, chosen from the same picker.
     Vst3(Vst3SourceRef),
+    /// A playlist audio clip channel: the file plays from the arrangement,
+    /// through this strip. Wire id `clip:{source_id}`.
+    AudioClip { source_id: u64 },
+    /// A one-shot sampler channel: the same file, triggered by notes. Wire id
+    /// `oneshot:{source_id}`.
+    OneShot { source_id: u64 },
 }
 
 impl Source {
@@ -346,6 +357,8 @@ impl Source {
             Self::Sampler(reference) => reference.wire_id(),
             Self::Clap(reference) => reference.wire_id(),
             Self::Vst3(reference) => reference.wire_id(),
+            Self::AudioClip { source_id } => format!("{AUDIO_CLIP_PREFIX}{source_id}"),
+            Self::OneShot { source_id } => format!("{ONESHOT_PREFIX}{source_id}"),
         }
     }
 
@@ -359,6 +372,8 @@ impl Source {
             Self::Sampler(reference) => reference.label().to_owned(),
             Self::Clap(reference) => reference.label().to_owned(),
             Self::Vst3(reference) => reference.label(),
+            Self::AudioClip { source_id } => format!("Audio {source_id}"),
+            Self::OneShot { source_id } => format!("Sample {source_id}"),
         }
     }
 
@@ -384,6 +399,10 @@ impl Source {
                 reference.cid,
                 reference.module_path.display()
             ),
+            Self::AudioClip { .. } => {
+                "Audio clip — plays from the playlist through this channel".to_owned()
+            }
+            Self::OneShot { .. } => "Sampler — plays this file from notes and steps".to_owned(),
         }
     }
 
@@ -396,7 +415,7 @@ impl Source {
 
     /// Whether this source plays note events.
     pub const fn takes_notes(&self) -> bool {
-        !matches!(self, Self::TestTone)
+        !matches!(self, Self::TestTone | Self::AudioClip { .. })
     }
 
     /// Whether this source is a hosted CLAP plugin, and therefore needs the
@@ -474,6 +493,17 @@ impl Source {
             Self::Sampler(_) => "sampler",
             Self::Clap(_) => "clap",
             Self::Vst3(_) => "vst3",
+            Self::AudioClip { .. } => "clip",
+            Self::OneShot { .. } => "sample",
+        }
+    }
+
+    /// The loaded audio file this channel plays, when it is an audio clip or
+    /// a one-shot sampler.
+    pub const fn sample_file_id(&self) -> Option<u64> {
+        match self {
+            Self::AudioClip { source_id } | Self::OneShot { source_id } => Some(*source_id),
+            _ => None,
         }
     }
 
@@ -510,6 +540,18 @@ impl Source {
             }
             return Ok(Self::Sampler(SamplerSourceRef::new(instrument_id)));
         }
+        if let Some(rest) = id.strip_prefix(AUDIO_CLIP_PREFIX) {
+            let source_id = rest
+                .parse::<u64>()
+                .map_err(|_| SourceError::Unknown(id.to_owned()))?;
+            return Ok(Self::AudioClip { source_id });
+        }
+        if let Some(rest) = id.strip_prefix(ONESHOT_PREFIX) {
+            let source_id = rest
+                .parse::<u64>()
+                .map_err(|_| SourceError::Unknown(id.to_owned()))?;
+            return Ok(Self::OneShot { source_id });
+        }
         Self::BUILT_IN
             .into_iter()
             .find(|source| source.id() == id)
@@ -534,6 +576,9 @@ pub enum SourceError {
          download the sample content, or run scripts/fetch-assets.ps1"
     )]
     MissingSampler(String),
+    /// A dropped audio file could not become a sampler channel.
+    #[error("{0}")]
+    SampleFile(String),
     /// A `clap:` id arrived where only a built-in was expected. Always a UI bug:
     /// the webview has the bundle path from the scan and must send it.
     #[error(
@@ -980,6 +1025,8 @@ mod tests {
             Source::Vst3(Vst3SourceRef::new(r"C:\p.vst3", ClassId([0; 16]))).engine(),
             "vst3"
         );
+        assert_eq!(Source::AudioClip { source_id: 3 }.engine(), "clip");
+        assert_eq!(Source::OneShot { source_id: 3 }.engine(), "sample");
     }
 
     #[test]
@@ -995,6 +1042,26 @@ mod tests {
         }
         // ...and the legacy kit is still parseable, so an old project opens.
         assert_eq!(Source::parse("drum-kit").unwrap(), Source::DrumKit);
+    }
+
+    #[test]
+    fn clip_and_oneshot_ids_parse_and_round_trip() {
+        let clip = Source::AudioClip { source_id: 9 };
+        assert_eq!(clip.id(), "clip:9");
+        assert_eq!(Source::parse("clip:9").unwrap(), clip);
+        assert!(!clip.takes_notes());
+        assert_eq!(clip.sample_file_id(), Some(9));
+
+        let shot = Source::OneShot { source_id: 9 };
+        assert_eq!(shot.id(), "oneshot:9");
+        assert_eq!(Source::parse("oneshot:9").unwrap(), shot);
+        assert!(shot.takes_notes());
+        assert_eq!(shot.sample_file_id(), Some(9));
+
+        assert!(matches!(
+            Source::parse("clip:nope"),
+            Err(SourceError::Unknown(_))
+        ));
     }
 
     #[test]

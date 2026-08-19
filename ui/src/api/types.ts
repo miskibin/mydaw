@@ -403,6 +403,22 @@ export interface AudioSourceDto {
   bytes: number;
 }
 
+/** A root in the sample library: bundled Packs, or a user extra-search folder. */
+export interface LibraryRootDto {
+  id: string;
+  name: string;
+  kind: 'packs' | 'extra';
+  path: string;
+}
+
+/** One child of a listed library directory. */
+export interface LibraryEntryDto {
+  name: string;
+  kind: 'dir' | 'file';
+  relPath: string;
+  path: string;
+}
+
 /**
  * A source's waveform at the resolution that was asked for: one `[min, max]`
  * pair per bin, over **both** channels, so the outer bound never hides a
@@ -415,6 +431,24 @@ export interface WaveformDto {
   bins: number;
   maxBins: number;
   peaks: [number, number][];
+}
+
+/**
+ * One hit of a built-in or sampled instrument, as min/max pairs.
+ *
+ * Distinct from {@link WaveformDto}: that is a loaded audio *file* addressed by
+ * a numeric id, and this is an instrument addressed by its source string.
+ */
+export interface SourcePreviewDto {
+  sourceId: string;
+  engine: 'synth' | 'sampler' | 'clap' | 'vst3' | 'tone' | 'clip' | 'sample';
+  frames: number;
+  sampleRate: number;
+  durationMs: number;
+  bins: number;
+  peaks: [number, number][];
+  /** Largest absolute sample. Near zero means the instrument produced silence. */
+  peak: number;
 }
 
 /** Which of the two timelines the transport plays. */
@@ -520,6 +554,20 @@ export interface ReadoutDefDto {
   unit: string;
 }
 
+/**
+ * One hop of analysis for the focused insert editor.
+ *
+ * `bins*` are log-spaced dB from 20 Hz to 20 kHz (same axis as the EQ).
+ * `scope*` are downsampled L/R pairs for the goniometer.
+ */
+export interface SpectrumDto {
+  binsPre: number[];
+  binsPost: number[];
+  scopeL: number[];
+  scopeR: number[];
+  correlation: number;
+}
+
 /** One entry of the internal effect catalogue. Static: fetched once. */
 export interface EffectInfoDto {
   typeId: string;
@@ -549,6 +597,8 @@ export interface TrackDto {
   name: string;
   sourceId: string;
   sourceLabel: string;
+  /** What actually makes the sound: `synth`, `sampler`, `clap`, `vst3`, `tone`, `clip`, `sample`. */
+  engine: 'synth' | 'sampler' | 'clap' | 'vst3' | 'tone' | 'clip' | 'sample';
   gainDb: number;
   /** `-1` hard left, `0` centre, `1` hard right. */
   pan: number;
@@ -563,6 +613,14 @@ export interface TrackDto {
   missing: MissingPlugin | null;
   /** Internal effects on this track, in signal order. */
   inserts: InsertDto[];
+  /** Channel pitch in cents. Meaningful for `clip` and `sample` engines. */
+  pitchCents: number;
+  /** SMP region start, in the file's own frames. */
+  sampleStartFrames: number;
+  /** SMP region end, exclusive. `0` means the whole file. */
+  sampleEndFrames: number;
+  /** Numeric audio-file id when this channel is `clip:` or `oneshot:`. */
+  audioSourceId?: number | null;
 }
 
 /** One bus. `index` is what a send's `dest` names. */

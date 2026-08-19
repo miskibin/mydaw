@@ -180,6 +180,15 @@ pub fn lowpass(hz: f64, q: f64, sample_rate: f64) -> BiquadCoeffs {
     BiquadCoeffs::normalise(b0, 1.0 - cos_w, b0, 1.0 + alpha, -2.0 * cos_w, 1.0 - alpha)
 }
 
+/// A 0 dB-peak bandpass at `hz` with width `q`.
+///
+/// Constant-skirt-gain / 0 dB peak (RBJ "BPF (constant 0 dB peak gain)"). The
+/// EQ uses this to *audition a band of the source*, not as a mix band.
+pub fn bandpass(hz: f64, q: f64, sample_rate: f64) -> BiquadCoeffs {
+    let Rbj { cos_w, alpha } = Rbj::new(hz, q, sample_rate);
+    BiquadCoeffs::normalise(alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos_w, 1.0 - alpha)
+}
+
 /// A peaking (bell) section: `gain_db` at `hz`, width set by `q`.
 ///
 /// Q here is the RBJ definition -- the ratio of centre frequency to the

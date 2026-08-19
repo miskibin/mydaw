@@ -48,6 +48,7 @@
 pub mod audio;
 pub mod clips;
 pub mod compiled;
+pub mod oneshot;
 pub mod pattern;
 pub mod playlist;
 pub mod schedule;
@@ -57,19 +58,21 @@ pub use audio::{
     reference_count, AudioSource, AudioSourceError, AudioSourceRegistry, WaveformMip, MAX_SOURCES,
     MAX_SOURCE_SECONDS, MAX_WAVEFORM_BINS, MIP_BASE_FRAMES, MIP_LEVELS, MIP_RATIO,
 };
-/// The file extensions a "load audio" dialog should offer, from the decoder
-/// crate. Re-exported so the shell can reach it without depending on
-/// `mydaw-audio-file` directly for one constant.
-pub use mydaw_audio_file::AUDIO_EXTENSIONS;
 pub use clips::{
-    audio_clip_channel, compile_audio_clips, playback_step, AudioClipHandle, AudioClipInstallError,
-    AudioClipNode, AudioClipStats, CompiledAudioClip, CompiledAudioSong, AUDIO_CLIP_QUEUE_CAPACITY,
+    audio_clip_channel, compile_audio_clips, compile_audio_clips_with, pitch_ratio, playback_step,
+    ramp_step, AudioClipHandle, AudioClipInstallError, AudioClipNode, AudioClipStats,
+    AudioClipTune, CompiledAudioClip, CompiledAudioSong, AUDIO_CLIP_QUEUE_CAPACITY,
     AUDIO_CLIP_VOICES, CLIP_RAMP_MS,
 };
 pub use compiled::{
     song_channel, CompiledNote, CompiledPattern, CompiledPatternClip, CompiledSong, SongHandle,
     SongInstallError, SongSlot, SONG_QUEUE_CAPACITY,
 };
+/// The file extensions a "load audio" dialog should offer, from the decoder
+/// crate. Re-exported so the shell can reach it without depending on
+/// `mydaw-audio-file` directly for one constant.
+pub use mydaw_audio_file::AUDIO_EXTENSIONS;
+pub use oneshot::{OneShotNode, ONESHOT_ROOT_KEY, ONESHOT_VOICES};
 pub use pattern::{
     row_label, ChannelClip, ChannelDisplay, MelodicNote, Pattern, PatternError, Step, StepRow,
     ACCENT_THRESHOLD, ACCENT_VELOCITY, DEFAULT_ROW_KEYS, DEFAULT_STEPS, DEFAULT_STEP_KEY,
@@ -336,14 +339,24 @@ impl SequencerService {
     ///
     /// A second compile rather than a field on [`CompiledSong`]: notes and audio
     /// cross the RT wall to two different places -- the scheduler that fills the
-    /// block's event buffer, and the node on the master bus -- and one value
-    /// carrying both would have to be published to both.
+    /// block's event buffer, and the Audio Clip node at the head of that file's
+    /// mixer strip -- and one value carrying both would have to be published to
+    /// both.
     ///
     /// **Non-RT.** Takes the song lock and then reads `sources`; nothing in the
     /// registry ever takes the song lock, so the order is one-way.
     pub fn compile_audio(&self, sources: &AudioSourceRegistry) -> CompiledAudioSong {
+        self.compile_audio_with(sources, |_| AudioClipTune::default())
+    }
+
+    /// [`compile_audio`](Self::compile_audio) with per-file pitch and region.
+    pub fn compile_audio_with(
+        &self,
+        sources: &AudioSourceRegistry,
+        tune_of: impl Fn(u64) -> AudioClipTune,
+    ) -> CompiledAudioSong {
         let state = self.state.lock();
-        compile_audio_clips(&state.playlist, |id| sources.get(id))
+        compile_audio_clips_with(&state.playlist, |id| sources.get(id), tune_of)
     }
 
     /// One past the last tick the arrangement occupies. `0` when it is empty.

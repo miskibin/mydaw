@@ -10,6 +10,7 @@
 
 import { Show } from 'solid-js';
 
+import { midiKeyFor, noteName } from '../lib/keyboard';
 import { useAppState } from '../state';
 import { useView } from './view';
 
@@ -17,10 +18,23 @@ export function StatusBar(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
 
+  const qName = () => noteName(midiKeyFor('KeyQ', app.octave()) ?? 60);
+
+  /** Held typing-keyboard notes, low to high — the live footer readout. */
+  const sounding = () =>
+    [...new Set(app.heldNotes())]
+      .sort((a, b) => a - b)
+      .map(noteName)
+      .join(' · ');
+
   const hint = () =>
     view.rollOpen()
-      ? 'shift-drag or the Select tool marquees · shift-click adds to the selection · Ctrl+A all · Ctrl+D duplicate · right-click deletes'
-      : 'F5 playlist · F6 rack · F7 piano roll · F9 mixer · Space play · Ctrl+Z undo';
+      ? view.typingKeyboard()
+        ? `typing keyboard on · Q is ${qName()} · tools off · Esc closes`
+        : 'left draw · shift stretch · right erase · ctrl select · alt unsnap · scrollbar edges zoom · P/B/E/D/C'
+      : view.typingKeyboard()
+        ? `typing keyboard on · Q is ${qName()} · 2 is C# · W is D · scroll the key button for octave · Ctrl+T off`
+        : 'F5 playlist · F6 rack · F7 piano roll · F9 mixer · Space play · Ctrl+T keys · Ctrl+Z undo';
 
   return (
     <footer class="wv-status">
@@ -43,7 +57,14 @@ export function StatusBar(): ReturnType<typeof Show> {
         </span>
       </span>
 
-      <Show when={app.param()}>
+      <Show when={sounding()}>
+        <div class="wv-readout wv-readout--note">
+          <span class="wv-readout__name">{app.heldNotes().length > 1 ? 'CHORD' : 'NOTE'}</span>
+          <span class="wv-readout__value">{sounding()}</span>
+        </div>
+      </Show>
+
+      <Show when={app.param() && !sounding()}>
         <div class="wv-readout">
           <span class="wv-readout__name">{app.param()!.name}</span>
           <span class="wv-readout__value">{app.param()!.value}</span>

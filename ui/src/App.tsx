@@ -1,29 +1,42 @@
 /**
  * The shell.
  *
- * Three main views and a fullscreen piano roll over them. Which one is up is
- * pure view state -- switching never changes what the transport plays, which is
- * what the PAT/SONG toggle in the top bar is for.
+ * Three main views and a fullscreen piano roll over them. Playlist and Rack
+ * also set what the transport plays (song vs pattern). Mixer leaves the mode
+ * alone so you can mix whichever is already going.
  */
 
-import { Match, Show, Switch, onCleanup } from 'solid-js';
+import { Match, Show, Switch, createEffect, onCleanup, untrack } from 'solid-js';
 
 import { Browser } from './shell/Browser';
 import { SidePanel } from './shell/SidePanel';
 import { StatusBar } from './shell/StatusBar';
 import { TopBar } from './shell/TopBar';
+import { midiKeyFor, noteName } from './lib/keyboard';
 import { useView } from './shell/view';
 import { useAppState } from './state';
 import { IconChevron } from './ui/icons';
-import { EffectEditor } from './views/EffectEditor';
+import { EffectEditors } from './views/EffectEditor';
 import { Mixer } from './views/Mixer';
 import { Playlist } from './views/Playlist';
 import { Rack } from './views/Rack';
 import { Roll } from './views/Roll';
+import { SampleEditor } from './views/SampleEditor';
 
 export function App(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
+
+  // Playlist plays the arrangement; Rack loops the pattern. Mixer does not
+  // touch the mode. `untrack` so a manual PAT/SONG click on the current view
+  // is not immediately overwritten.
+  createEffect(() => {
+    const next = view.view();
+    untrack(() => {
+      if (next === 'playlist' && app.playMode() !== 'song') app.setPlayMode('song');
+      else if (next === 'rack' && app.playMode() !== 'pat') app.setPlayMode('pat');
+    });
+  });
 
   // UI zoom is the webview's own (`zoomHotkeysEnabled` in tauri.conf.json):
   // Ctrl+= / Ctrl+- / Ctrl+0 are handled natively by WebView2, which scales
@@ -34,6 +47,17 @@ export function App(): ReturnType<typeof Show> {
   function onKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
     if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 't') {
+      event.preventDefault();
+      view.setTypingKeyboard((on) => !on);
+      app.say(
+        'Typing keyboard',
+        view.typingKeyboard()
+          ? `Q is ${noteName(midiKeyFor('KeyQ', app.octave()) ?? 60)}`
+          : 'off',
+      );
+      return;
+    }
     switch (event.key) {
       case 'F5':
         event.preventDefault();
@@ -117,15 +141,9 @@ export function App(): ReturnType<typeof Show> {
             <SidePanel />
           </Show>
 
-          {/*
-            The effect editor covers the three views the way the roll does, but
-            *over* this row rather than instead of it: the inspector behind it is
-            what polls the chain's meters, and unmounting it would stop the
-            gain-reduction bar the editor is drawing. Never up at the same time
-            as the roll -- `openInsertEditor` and `openRoll` each close the other.
-          */}
-          <Show when={view.insertEditor()}>
-            <EffectEditor />
+          <EffectEditors />
+          <Show when={view.sampleEditor() !== null}>
+            <SampleEditor />
           </Show>
         </div>
       </Show>

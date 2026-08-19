@@ -28,7 +28,10 @@
 
 use std::sync::Arc;
 
-use mydaw_ipc_bridge::{meter_channel, MeterProducer, MeterThrottle};
+use mydaw_ipc_bridge::{
+    meter_channel, spectrum_channel, MeterProducer, MeterThrottle, SpectrumConsumer,
+    SpectrumProducer, SpectrumWatch,
+};
 use mydaw_kernel::{KernelCtx, PanelManifest, Plugin, PluginManifest};
 use parking_lot::Mutex;
 
@@ -111,6 +114,61 @@ impl MeterOutput {
     }
 }
 
+/// Hop queue depth. The UI polls ~25 Hz and a hop is ~21 ms, so 4 is already
+/// more than a stalled frame or two.
+pub const SPECTRUM_QUEUE_CAPACITY: usize = 4;
+
+/// Audio-thread producer plus the shared watch word.
+///
+/// Same take-once contract as [`MeterTap`]: audio-io claims the producer at
+/// stream start. The watch is an `Arc` and can be cloned by anyone.
+pub struct SpectrumHandoff {
+    producer: Mutex<Option<SpectrumProducer>>,
+    watch: Arc<SpectrumWatch>,
+}
+
+impl SpectrumHandoff {
+    pub fn new(producer: SpectrumProducer, watch: Arc<SpectrumWatch>) -> Self {
+        Self {
+            producer: Mutex::new(Some(producer)),
+            watch,
+        }
+    }
+
+    pub fn take(&self) -> Option<SpectrumProducer> {
+        self.producer.lock().take()
+    }
+
+    pub fn watch(&self) -> Arc<SpectrumWatch> {
+        Arc::clone(&self.watch)
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.producer.lock().is_some()
+    }
+}
+
+/// The shell's end of the hop queue.
+pub struct SpectrumOutput {
+    consumer: Mutex<Option<SpectrumConsumer>>,
+}
+
+impl SpectrumOutput {
+    pub fn new(consumer: SpectrumConsumer) -> Self {
+        Self {
+            consumer: Mutex::new(Some(consumer)),
+        }
+    }
+
+    pub fn take(&self) -> Option<SpectrumConsumer> {
+        self.consumer.lock().take()
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.consumer.lock().is_some()
+    }
+}
+
 /// Creates the meter queue and contributes the Meters panel.
 pub struct MeteringPlugin {
     capacity: usize,
@@ -154,6 +212,8 @@ impl Plugin for MeteringPlugin {
 
     fn register(&mut self, ctx: &mut KernelCtx) {
         let (producer, throttle) = meter_channel(self.capacity());
+        let (spectrum_tx, spectrum_rx) = spectrum_channel(SPECTRUM_QUEUE_CAPACITY);
+        let watch = Arc::new(SpectrumWatch::new());
 
         // `provide` only fails on a duplicate of the same type, which would mean
         // two metering plugins were registered -- a wiring bug in `app/main.rs`,
@@ -164,6 +224,12 @@ impl Plugin for MeteringPlugin {
         ctx.services
             .provide(Arc::new(MeterOutput::new(throttle)))
             .expect("MeterOutput provided twice: metering plugin registered more than once");
+        ctx.services
+            .provide(Arc::new(SpectrumHandoff::new(spectrum_tx, watch)))
+            .expect("SpectrumHandoff provided twice: metering plugin registered more than once");
+        ctx.services
+            .provide(Arc::new(SpectrumOutput::new(spectrum_rx)))
+            .expect("SpectrumOutput provided twice: metering plugin registered more than once");
 
         ctx.contribute_panel(PanelManifest::new(METERS_PANEL, "Meters", METERS_PANEL));
     }
@@ -211,6 +277,8 @@ mod tests {
         let kernel = booted();
         assert!(kernel.ctx().services.get::<MeterTap>().is_some());
         assert!(kernel.ctx().services.get::<MeterOutput>().is_some());
+        assert!(kernel.ctx().services.get::<SpectrumHandoff>().is_some());
+        assert!(kernel.ctx().services.get::<SpectrumOutput>().is_some());
     }
 
     #[test]
@@ -225,6 +293,16 @@ mod tests {
         let out = kernel.ctx().services.get::<MeterOutput>().unwrap();
         assert!(out.take().is_some());
         assert!(out.take().is_none());
+
+        let spectrum = kernel.ctx().services.get::<SpectrumHandoff>().unwrap();
+        assert!(spectrum.take().is_some());
+        assert!(
+            spectrum.take().is_none(),
+            "a second hop producer would break SPSC"
+        );
+        let spectrum_out = kernel.ctx().services.get::<SpectrumOutput>().unwrap();
+        assert!(spectrum_out.take().is_some());
+        assert!(spectrum_out.take().is_none());
     }
 
     #[test]

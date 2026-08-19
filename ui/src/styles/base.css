@@ -7,20 +7,12 @@
  *   `.wv-block--modifier`. State is always a separate `.is-*` class.
  * - **Every colour is a `var(--token)`.** The palette comes from
  *   `theme/tokens.ts` and is written onto `:root` by the theme provider, so a
- *   literal colour here would be a control that ignores the light theme. The
- *   only literals are the four semantic constants below, which mean the same
- *   thing in both themes.
- * - Dimensions are literal, from the design.
+ *   literal colour here would be a control that ignores the light theme.
+ *   Tailwind utilities are the same rule: `bg-panel` / `text-foreground`, never
+ *   `bg-zinc-900`.
+ * - Dimensions are literal, from the design. Layout utilities (`flex`, `gap-2`)
+ *   are fair; colour still goes through the tokens.
  */
-
-:root {
-  /* Semantic colours, deliberately theme-independent: a record light is red in
-     a light room too. Mirrors `theme/tokens.ts`. */
-  --live: #4ec08a;
-  --solo: #e0a44a;
-  --rec: #e05263;
-  --danger: #e8607a;
-}
 
 * {
   box-sizing: border-box;
@@ -47,11 +39,11 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgb(128 138 150 / 35%);
+  background: color-mix(in srgb, var(--dim2) 55%, transparent);
   border-radius: 5px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(128 138 150 / 55%);
+  background: color-mix(in srgb, var(--dim) 70%, transparent);
 }
 ::-webkit-scrollbar-corner,
 ::-webkit-scrollbar-track {
@@ -225,7 +217,7 @@ button:disabled.wv-can-disable {
 
 .wv-seg__btn.is-active {
   background: var(--acc);
-  color: #fff;
+  color: var(--ink);
 }
 
 .wv-seg__hot {
@@ -234,7 +226,7 @@ button:disabled.wv-can-disable {
 }
 
 .wv-seg__btn.is-active .wv-seg__hot {
-  color: rgb(255 255 255 / 70%);
+  color: color-mix(in srgb, var(--ink) 70%, transparent);
 }
 
 /* An icon-only square in a segmented group: the roll and playlist tools. */
@@ -256,7 +248,7 @@ button:disabled.wv-can-disable {
 
 .wv-tool.is-active {
   background: var(--acc);
-  color: #fff;
+  color: var(--ink);
 }
 
 /* A small, quiet button: SNAP, zoom, Ghost notes, note operations. */
@@ -415,12 +407,12 @@ button:disabled.wv-can-disable {
 
 .wv-pill--solo.is-on {
   background: var(--solo);
-  color: #12151a;
+  color: var(--soloInk);
 }
 
 .wv-pill--rec.is-on {
   background: var(--rec);
-  color: #fff;
+  color: var(--ink);
 }
 
 /* --- knobs and parameters ------------------------------------------------ */
@@ -500,6 +492,7 @@ button:disabled.wv-can-disable {
 .wv-meter {
   position: relative;
   flex: none;
+  align-self: stretch;
   overflow: hidden;
   width: 7px;
   border-radius: 3px;
@@ -512,12 +505,13 @@ button:disabled.wv-can-disable {
   bottom: 0;
   left: 0;
   height: 0;
-  background: linear-gradient(180deg, #f0c25a, #4ec08a 26%, #3f9e72);
+  background: var(--meter);
 }
 
 .wv-fader {
   position: relative;
   flex: none;
+  align-self: stretch;
   width: 20px;
   border-radius: 4px;
   background: var(--sunk);
@@ -532,7 +526,7 @@ button:disabled.wv-can-disable {
   height: 12px;
   border-radius: 3px;
   background: var(--line2);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 40%);
+  box-shadow: 0 1px 3px var(--paletteShadow);
 }
 
 .wv-fader.is-active .wv-fader__handle {
@@ -547,6 +541,10 @@ button:disabled.wv-can-disable {
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--panel2);
+}
+
+.wv-card--insert {
+  cursor: pointer;
 }
 
 .wv-card__head {
@@ -641,7 +639,7 @@ button:disabled.wv-can-disable {
   align-items: flex-start;
   justify-content: center;
   padding-top: 80px;
-  background: rgb(0 0 0 / 35%);
+  background: var(--scrim);
 }
 
 .wv-menu {
@@ -650,7 +648,7 @@ button:disabled.wv-can-disable {
   padding: 5px;
   border-radius: 10px;
   background: var(--panel2);
-  box-shadow: inset 0 0 0 1px var(--line2), 0 20px 46px var(--palette-shadow);
+  box-shadow: inset 0 0 0 1px var(--line2), 0 20px 46px var(--paletteShadow);
 }
 
 .wv-menu__row {
@@ -676,6 +674,12 @@ button:disabled.wv-can-disable {
 
 .wv-menu__row--danger {
   color: var(--danger);
+}
+
+.wv-menu__rule {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
 }
 
 .wv-menu__meta {
@@ -710,7 +714,7 @@ button:disabled.wv-can-disable {
   max-height: 460px;
   border-radius: 11px;
   background: var(--panel2);
-  box-shadow: inset 0 0 0 1px var(--line2), 0 24px 60px var(--palette-shadow);
+  box-shadow: inset 0 0 0 1px var(--line2), 0 24px 60px var(--paletteShadow);
 }
 
 .wv-modal__head {
@@ -851,6 +855,15 @@ button:disabled.wv-can-disable {
   color: var(--txt);
 }
 
+.wv-readout--note {
+  background: var(--chip);
+}
+
+.wv-readout--note .wv-readout__value {
+  min-width: 2.2em;
+  font-variant-numeric: tabular-nums;
+}
+
 /* --- empty states -------------------------------------------------------- */
 
 .wv-empty {
@@ -870,17 +883,3 @@ button:disabled.wv-can-disable {
   color: var(--faint);
 }
 
-/* Theme-dependent values that are not palette entries. */
-:root {
-  --playhead: #eef1f5;
-  --palette-shadow: rgb(0 0 0 / 45%);
-  /* An unlit step cell on a beat. A lift off `--sunk` rather than a palette
-     entry, because it exists only to make the beat readable inside the lane. */
-  --stepbeat: #252a33;
-}
-
-:root[data-theme='light'] {
-  --playhead: #1c2028;
-  --palette-shadow: rgb(0 0 0 / 18%);
-  --stepbeat: #d9dee6;
-}

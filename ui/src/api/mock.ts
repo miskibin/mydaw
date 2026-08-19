@@ -31,6 +31,8 @@ import type {
   InsertDto,
   InsertReadoutsDto,
   InsertTarget,
+  LibraryEntryDto,
+  LibraryRootDto,
   MasterDto,
   MeterFrame,
   MixerState,
@@ -45,6 +47,7 @@ import type {
   SendDto,
   SequencerState,
   SourceDto,
+  SpectrumDto,
   StreamInfo,
   TrackDto,
   UiSnapshot,
@@ -53,7 +56,9 @@ import type {
   Vst3PluginInfoDto,
   Vst3Slot,
   WaveformDto,
+  SourcePreviewDto,
 } from './types';
+import { engineOf } from '../lib/channel';
 
 // ---------------------------------------------------------------------------
 // Engine constants, mirrored
@@ -224,6 +229,37 @@ const EFFECTS: readonly EffectInfoDto[] = [
     ],
   },
   {
+    typeId: 'effects.limiter',
+    name: 'Limiter',
+    description: 'Stereo-linked peak limiter with lookahead. Ceiling is the loudest sample that leaves.',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('gain', 'Gain', 'dB', -12, 24, 0, 'db'),
+      param('ceiling', 'Ceiling', 'dB', -12, 0, 0, 'db'),
+      param('release', 'Release', 'ms', 20, 500, 100, 'log'),
+      param('lookahead', 'Lookahead', 'ms', 0.1, 5, 1, 'log'),
+    ],
+    readouts: [
+      { id: 'gr', name: 'Gain Reduction', unit: 'dB' },
+      { id: 'gr_max', name: 'Max Gain Reduction', unit: 'dB' },
+    ],
+  },
+  {
+    typeId: 'effects.reverb',
+    name: 'Reverb',
+    description: 'Algorithmic room: decay, size, damp and mix. The display is the space.',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('mix', 'Mix', '%', 0, 100, 25, 'linear'),
+      param('decay', 'Decay', 's', 0.2, 12, 1.6, 'log'),
+      param('size', 'Size', '%', 20, 150, 80, 'linear'),
+      param('damp', 'Damp', '%', 0, 100, 40, 'linear'),
+      param('predelay', 'Predelay', 'ms', 0, 80, 12, 'linear'),
+      param('width', 'Width', '%', 0, 100, 100, 'linear'),
+    ],
+    readouts: [],
+  },
+  {
     typeId: 'effects.utility',
     name: 'Utility',
     description: 'Gain, pan, stereo width, mono, polarity and a DC blocker',
@@ -237,7 +273,7 @@ const EFFECTS: readonly EffectInfoDto[] = [
       toggle('invert_r', 'Invert R', false),
       toggle('dc_block', 'DC Filter', false),
     ],
-    readouts: [],
+    readouts: [{ id: 'correlation', name: 'Correlation', unit: '' }],
   },
 ];
 
@@ -427,8 +463,43 @@ const VST3_PLUGINS: readonly Vst3PluginInfoDto[] = [
 
 const UNTITLED = 'Untitled';
 const PROJECT_DIR = 'D:\\Songs';
+const MOCK_PACKS = 'D:\\MYDAW\\assets\\packs';
+const MOCK_DRUMS = [
+  'clap.wav',
+  'hihat-closed.wav',
+  'hihat-open.wav',
+  'kick.wav',
+  'snare-m.wav',
+  'stick-m.wav',
+  'tom-m.wav',
+] as const;
+const MOCK_FOLDERS_KEY = 'mydaw.mock.libraryFolders';
 
-/** The five tracks `Project::starter` builds, names and sources included. */
+function loadMockFolders(): LibraryRootDto[] {
+  try {
+    const raw = localStorage.getItem(MOCK_FOLDERS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as LibraryRootDto[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveMockFolders(folders: LibraryRootDto[]): void {
+  try {
+    localStorage.setItem(MOCK_FOLDERS_KEY, JSON.stringify(folders));
+  } catch {
+    /* quota / private mode — the session still has the array */
+  }
+}
+
+/** Default pitch/region for a mixer strip that is not a sample channel. */
+const SAMPLE_PLAY = {
+  pitchCents: 0,
+  sampleStartFrames: 0,
+  sampleEndFrames: 0,
+} as const;
 function starterTracks(): TrackDto[] {
   const wanted = ['kick', 'snare', 'hat-closed', 'hat-open', 'sampler:salamander-piano'];
   return wanted.map((sourceId, index) => {
@@ -439,6 +510,7 @@ function starterTracks(): TrackDto[] {
       name: source.label,
       sourceId: source.id,
       sourceLabel: source.label,
+      engine: engineOf(source.id),
       gainDb: 0,
       pan: 0,
       muted: false,
@@ -452,6 +524,7 @@ function starterTracks(): TrackDto[] {
       // deliberately unreachable here rather than faked.
       missing: null,
       inserts: [],
+      ...SAMPLE_PLAY,
     };
   });
 }
@@ -568,6 +641,12 @@ export class MockBackend implements Backend {
   private nextAudioId = 1;
   private nextInstance = 1;
   private inventedAudio = 0;
+  private extraFolders: LibraryRootDto[] = loadMockFolders();
+  private fileSamplers: Omit<SourceDto, 'selected'>[] = [];
+  private nextFolder = loadMockFolders().reduce((max, folder) => {
+    const match = /^extra-mock-(\d+)$/.exec(folder.id);
+    return match ? Math.max(max, Number(match[1]) + 1) : max;
+  }, 1);
 
   private openEditors = new Set<string>();
   private clapStates = new Map<string, string>();
@@ -730,7 +809,7 @@ export class MockBackend implements Backend {
     }));
     // Built-ins, then samplers, then CLAP instruments -- and **no VST3**, which
     // reach the UI through `get_vst3_plugins` instead. Mirrors `state.rs`.
-    return [...INTERNAL_SOURCES, ...scanned].map((source) => ({
+    return [...INTERNAL_SOURCES, ...this.fileSamplers, ...scanned].map((source) => ({
       ...source,
       selected: source.id === current,
     }));
@@ -752,14 +831,18 @@ export class MockBackend implements Backend {
   }
 
   async setTrackSource(track: number, source: string): Promise<MixerState> {
-    const wanted = INTERNAL_SOURCES.find((entry) => entry.id === source);
+    const wanted =
+      INTERNAL_SOURCES.find((entry) => entry.id === source) ??
+      this.fileSamplers.find((entry) => entry.id === source);
     if (!wanted) throw new Error(`unknown source '${source}'`);
     const def = this.track(track);
     def.sourceId = wanted.id;
     def.sourceLabel = wanted.label;
+    def.engine = engineOf(wanted.id);
     def.name = wanted.label;
     def.clap = null;
     def.vst3 = null;
+    def.audioSourceId = null;
     this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
     return this.mixerState();
   }
@@ -795,7 +878,9 @@ export class MockBackend implements Backend {
     def.vst3 = null;
     def.sourceId = `clap:${plugin.id}`;
     def.sourceLabel = def.clap.name;
+    def.engine = 'clap';
     def.name = def.clap.name;
+    def.audioSourceId = null;
     this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
     return this.mixerState();
   }
@@ -830,7 +915,9 @@ export class MockBackend implements Backend {
     def.clap = null;
     def.sourceId = `vst3:${plugin.id}`;
     def.sourceLabel = def.vst3.name;
+    def.engine = 'vst3';
     def.name = def.vst3.name;
+    def.audioSourceId = null;
     this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
     return this.mixerState();
   }
@@ -937,6 +1024,23 @@ export class MockBackend implements Backend {
     return this.mixerState();
   }
 
+  async setTrackPitch(track: number, cents: number): Promise<MixerState> {
+    const value = Number.isFinite(cents) ? Math.min(1_200, Math.max(-1_200, cents)) : 0;
+    this.track(track).pitchCents = value;
+    return this.mixerState();
+  }
+
+  async setTrackSampleRegion(
+    track: number,
+    startFrames: number,
+    endFrames: number,
+  ): Promise<MixerState> {
+    const def = this.track(track);
+    def.sampleStartFrames = Math.max(0, Math.floor(startFrames));
+    def.sampleEndFrames = Math.max(0, Math.floor(endFrames));
+    return this.mixerState();
+  }
+
   async setTrackMute(track: number, muted: boolean): Promise<MixerState> {
     this.track(track).muted = muted;
     return this.mixerState();
@@ -971,6 +1075,7 @@ export class MockBackend implements Backend {
       name: name ?? wanted.label,
       sourceId: wanted.id,
       sourceLabel: wanted.label,
+      engine: engineOf(wanted.id),
       gainDb: 0,
       pan: 0,
       muted: false,
@@ -981,6 +1086,7 @@ export class MockBackend implements Backend {
       vst3: null,
       missing: null,
       inserts: [],
+      ...SAMPLE_PLAY,
     });
     // A new rack channel gets a grid in every pattern, the way the engine's
     // `PatternSet::add_channel` does -- otherwise the row would be missing
@@ -1005,9 +1111,63 @@ export class MockBackend implements Backend {
     return this.mixerState();
   }
 
+  async addSampleChannel(path: string): Promise<MixerState> {
+    if (this.tracks.length >= MAX_TRACKS) {
+      throw new Error(`a project may have at most ${MAX_TRACKS} tracks`);
+    }
+    const loaded = await this.loadAudioSource(path);
+    const name = loaded.name;
+    const id = `oneshot:${loaded.id}`;
+    const index = this.tracks.length;
+    this.tracks.push({
+      index,
+      id: this.nextTrackId++,
+      name,
+      sourceId: id,
+      sourceLabel: name,
+      engine: 'sample',
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      selected: false,
+      clap: null,
+      vst3: null,
+      missing: null,
+      inserts: [],
+      ...SAMPLE_PLAY,
+      audioSourceId: loaded.id,
+    });
+    for (const pattern of this.patterns) {
+      if (!pattern.channels.some((clip) => clip.channel === index)) {
+        pattern.channels.push({
+          channel: index,
+          mode: 'steps',
+          steps: {
+            key: DEFAULT_ROW_KEYS[index] ?? 60,
+            label: '',
+            steps: Array.from({ length: pattern.steps }, () => ({
+              on: false,
+              velocity: STEP_VELOCITY,
+            })),
+          },
+          notes: [],
+        });
+      }
+    }
+    return this.mixerState();
+  }
+
   async removeTrack(track: number): Promise<MixerState> {
-    this.track(track);
+    const removed = this.track(track);
     if (this.tracks.length === 1) throw new Error('a project must keep at least one track');
+    if (removed.engine === 'clip' && removed.audioSourceId != null) {
+      const sourceId = removed.audioSourceId;
+      this.clips = this.clips.filter(
+        (clip) => !(clip.kind === 'audio' && clip.sourceId === sourceId),
+      );
+    }
     this.tracks.splice(track, 1);
     // A track index *is* a note channel, so removing one renumbers every
     // pattern -- the engine does this rather than leaving the arrangement
@@ -1319,11 +1479,47 @@ export class MockBackend implements Backend {
         if (def.id === 'gr') {
           return { id: def.id, value: 3 + 4 * Math.abs(Math.sin(now * 2.1 + index)) };
         }
-        if (def.id === 'gr_max') return { id: def.id, value: 7.4 };
+        if (def.id === 'gr_max') {
+          return { id: def.id, value: 4 + 5 * Math.abs(Math.sin(now * 1.4 + index)) };
+        }
         if (def.id === 'latency') return { id: def.id, value: 32 };
+        if (def.id === 'auto_gain_db') return { id: def.id, value: -((this.playing ? 6 : 0) as number) };
+        if (def.id === 'correlation') return { id: def.id, value: 0.72 };
         return { id: def.id, value: 0 };
       }),
     }));
+  }
+
+  private spectrumWatch: { target: InsertTarget; index: number } | null = null;
+
+  async watchSpectrum(target: InsertTarget | null, index: number | null): Promise<void> {
+    this.spectrumWatch = target && index !== null ? { target, index } : null;
+  }
+
+  async getInsertSpectrum(): Promise<SpectrumDto | null> {
+    if (!this.spectrumWatch) return null;
+    const bins = 128;
+    const now = performance.now() / 700;
+    const binsPost = Array.from({ length: bins }, (_, i) => {
+      const t = i / (bins - 1);
+      const body = -10 - t * 42;
+      const kick = 14 * Math.exp(-t * t * 18) * (0.55 + 0.45 * Math.sin(now * 3.2));
+      const presence = 8 * Math.exp(-((t - 0.62) ** 2) * 40) * (0.4 + 0.6 * Math.abs(Math.sin(now * 1.7)));
+      const air = 5 * Math.max(0, t - 0.78) * (0.5 + 0.5 * Math.sin(now * 2.4));
+      return Math.max(-90, body + kick + presence + air);
+    });
+    const scope = Array.from({ length: 64 }, (_, i) => Math.sin(now + i * 0.2) * 0.4);
+    return {
+      binsPre: binsPost.map((d) => d - 3),
+      binsPost,
+      scopeL: scope,
+      scopeR: scope.map((s, i) => s * 0.7 + Math.cos(now + i * 0.15) * 0.2),
+      correlation: 0.72,
+    };
+  }
+
+  async setInsertListen(_target: InsertTarget, _index: number, _band: string | null): Promise<void> {
+    // The mock has no audio path; solo is a no-op that must still resolve.
   }
 
   // --- patterns ------------------------------------------------------------
@@ -1702,6 +1898,159 @@ export class MockBackend implements Backend {
     return { sourceId, frames: source.frames, bins, maxBins: MAX_WAVEFORM_BINS, peaks };
   }
 
+  async previewSource(sourceId: string, targetBins?: number): Promise<SourcePreviewDto> {
+    if (sourceId.startsWith('clap:') || sourceId.startsWith('vst3:')) {
+      throw new Error(
+        'a hosted plugin draws its own window — click the channel name to open it',
+      );
+    }
+    const source = INTERNAL_SOURCES.find((entry) => entry.id === sourceId);
+    if (!source) throw new Error(`unknown source '${sourceId}'`);
+    const engine = engineOf(sourceId);
+    if (engine !== 'synth' && engine !== 'sampler' && engine !== 'tone') {
+      throw new Error(`unknown source '${sourceId}'`);
+    }
+    const bins = Math.min(MAX_WAVEFORM_BINS, Math.max(1, targetBins ?? 512));
+    const decay =
+      sourceId === 'hat-closed' ? 0.92 : sourceId === 'hat-open' ? 0.55 : sourceId === 'kick' ? 0.7 : 0.5;
+    const peaks: [number, number][] = Array.from({ length: bins }, (_, index) => {
+      const t = index / bins;
+      const envelope = Math.pow(1 - t, 1 + decay) * (0.45 + 0.55 * Math.abs(Math.sin(t * Math.PI * 6)));
+      const level = Math.min(0.95, envelope);
+      return [-level, level];
+    });
+    const peak = peaks.reduce((acc, pair) => Math.max(acc, pair[1]), 0);
+    return {
+      sourceId,
+      engine,
+      frames: 24_000,
+      sampleRate: 48_000,
+      durationMs: 500,
+      bins,
+      peaks,
+      peak,
+    };
+  }
+
+  async importDroppedAudio(fileName: string, bytes: Uint8Array): Promise<string> {
+    console.info(`[mock] import ${fileName} (${bytes.length} bytes) — nothing is written`);
+    return `${PROJECT_DIR}\\imports\\${fileName}`;
+  }
+
+  async getLibraryRoots(): Promise<LibraryRootDto[]> {
+    return [{ id: 'packs', name: 'Packs', kind: 'packs', path: MOCK_PACKS }, ...this.extraFolders];
+  }
+
+  async addLibraryFolder(): Promise<LibraryRootDto[] | null> {
+    const n = this.nextFolder++;
+    this.extraFolders.push({
+      id: `extra-mock-${n}`,
+      name: n === 1 ? 'Samples' : `Samples ${n}`,
+      kind: 'extra',
+      path: `${PROJECT_DIR}\\Samples${n === 1 ? '' : ` ${n}`}`,
+    });
+    saveMockFolders(this.extraFolders);
+    console.info('[mock] no folder dialog outside Tauri, added a sample folder');
+    return this.getLibraryRoots();
+  }
+
+  async removeLibraryFolder(id: string): Promise<LibraryRootDto[]> {
+    if (id === 'packs') throw new Error("there is no library folder 'packs'");
+    const before = this.extraFolders.length;
+    this.extraFolders = this.extraFolders.filter((folder) => folder.id !== id);
+    if (this.extraFolders.length === before) {
+      throw new Error(`there is no library folder '${id}'`);
+    }
+    saveMockFolders(this.extraFolders);
+    return this.getLibraryRoots();
+  }
+
+  async listLibraryDir(rootId: string, relPath: string): Promise<LibraryEntryDto[]> {
+    if (rootId === 'packs' && relPath === '') {
+      return [
+        {
+          name: 'Drums',
+          kind: 'dir',
+          relPath: 'Drums',
+          path: `${MOCK_PACKS}\\Drums`,
+        },
+      ];
+    }
+    if (rootId === 'packs' && relPath === 'Drums') {
+      return MOCK_DRUMS.map((name) => ({
+        name,
+        kind: 'file' as const,
+        relPath: `Drums/${name}`,
+        path: `${MOCK_PACKS}\\Drums\\${name}`,
+      }));
+    }
+    if (this.extraFolders.some((folder) => folder.id === rootId) && relPath === '') {
+      const root = this.extraFolders.find((folder) => folder.id === rootId)!;
+      return [
+        {
+          name: 'loop.wav',
+          kind: 'file',
+          relPath: 'loop.wav',
+          path: `${root.path}\\loop.wav`,
+        },
+      ];
+    }
+    return [];
+  }
+
+  async previewAudioFile(path: string): Promise<void> {
+    console.info(`[mock] preview ${path}`);
+  }
+
+  private ensureClipChannel(sourceId: number): void {
+    if (this.tracks.some((track) => track.engine === 'clip' && track.audioSourceId === sourceId)) {
+      return;
+    }
+    if (this.tracks.length >= MAX_TRACKS) {
+      throw new Error(`a project may have at most ${MAX_TRACKS} tracks`);
+    }
+    const source = this.audioSources.find((entry) => entry.id === sourceId);
+    const name = source?.name ?? `Audio ${sourceId}`;
+    const index = this.tracks.length;
+    this.tracks.push({
+      index,
+      id: this.nextTrackId++,
+      name,
+      sourceId: `clip:${sourceId}`,
+      sourceLabel: name,
+      engine: 'clip',
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      selected: false,
+      clap: null,
+      vst3: null,
+      missing: null,
+      inserts: [],
+      ...SAMPLE_PLAY,
+      audioSourceId: sourceId,
+    });
+    for (const pattern of this.patterns) {
+      if (!pattern.channels.some((clip) => clip.channel === index)) {
+        pattern.channels.push({
+          channel: index,
+          mode: 'steps',
+          steps: {
+            key: DEFAULT_ROW_KEYS[index] ?? 60,
+            label: '',
+            steps: Array.from({ length: pattern.steps }, () => ({
+              on: false,
+              velocity: STEP_VELOCITY,
+            })),
+          },
+          notes: [],
+        });
+      }
+    }
+  }
+
   async addAudioClip(
     sourceId: number,
     track: number,
@@ -1712,6 +2061,7 @@ export class MockBackend implements Backend {
   ): Promise<SequencerState> {
     const source = this.audioSources.find((entry) => entry.id === sourceId);
     if (!source) throw new Error(`there is no audio source ${sourceId}`);
+    this.ensureClipChannel(sourceId);
     this.lane(track);
     const span = length ?? this.ticksFor(source.durationSeconds);
     this.checkClipBounds(start, span);

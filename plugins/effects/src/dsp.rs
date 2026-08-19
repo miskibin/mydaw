@@ -90,10 +90,23 @@ impl OnePoleTpt {
     /// Cheap enough (one `tan`) to call once per block; not cheap enough to call
     /// per sample, which is why the delay's damping recomputes at block rate.
     pub fn set_cutoff(&mut self, hz: f32, sample_rate: f32) {
+        self.coefficient = Self::coefficient_for(hz, sample_rate);
+    }
+
+    /// The coefficient [`set_cutoff`](Self::set_cutoff) would compute for `hz`.
+    ///
+    /// For a caller that shares one cutoff across several filters, or glides a
+    /// coefficient per sample toward a block-rate target: the `tan` runs once.
+    pub fn coefficient_for(hz: f32, sample_rate: f32) -> f32 {
         let nyquist = sample_rate * 0.5;
         let hz = hz.clamp(1.0, nyquist * 0.99);
         let g = (std::f32::consts::PI * hz / sample_rate).tan();
-        self.coefficient = g / (1.0 + g);
+        g / (1.0 + g)
+    }
+
+    /// Install a coefficient from [`coefficient_for`](Self::coefficient_for).
+    pub fn set_coefficient(&mut self, coefficient: f32) {
+        self.coefficient = coefficient;
     }
 
     /// Forget the filter's memory.

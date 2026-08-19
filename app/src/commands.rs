@@ -22,6 +22,8 @@ use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueD
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
+use crate::library::{self, LibraryEntryDto, LibraryRootDto};
+use crate::preview::SourcePreviewDto;
 use crate::project::MixerStateDto;
 use crate::project_bridge::ProjectInfoDto;
 use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
@@ -199,6 +201,35 @@ pub fn set_track_pan(
     Ok(state.mixer_state())
 }
 
+/// Channel pitch for an audio-clip or one-shot track, in cents (`-1200..=1200`).
+#[tauri::command]
+pub fn set_track_pitch(
+    state: State<'_, AppState>,
+    track: usize,
+    cents: f32,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_pitch_cents(track, cents)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// SMP region for an audio-clip or one-shot track, in the file's own frames.
+///
+/// `endFrames` of `0` means the file's last frame.
+#[tauri::command]
+pub fn set_track_sample_region(
+    state: State<'_, AppState>,
+    track: usize,
+    start_frames: u64,
+    end_frames: u64,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_sample_region(track, start_frames, end_frames)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
 /// Mute or unmute a track. A mute is a 10 ms fade, not a cut.
 #[tauri::command]
 pub fn set_track_mute(
@@ -338,6 +369,18 @@ pub async fn add_track(
     let source = Source::parse(&source).map_err(|err| err.to_string())?;
     state
         .add_track(source, name)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Decode an audio file as a oneshot sampler and add a rack channel for it.
+#[tauri::command]
+pub async fn add_sample_channel(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<MixerStateDto, String> {
+    state
+        .add_sample_channel(std::path::Path::new(&path))
         .map_err(|err| err.to_string())?;
     Ok(state.mixer_state())
 }
@@ -646,6 +689,44 @@ pub fn get_chain_readouts(
 ) -> Result<Vec<InsertReadoutsDto>, String> {
     let target = parse_insert_target(&target, target_index)?;
     state.chain_readouts(target).map_err(|err| err.to_string())
+}
+
+/// Arm the analysis tap on one insert, or pass nulls to silence it.
+#[tauri::command]
+pub fn watch_spectrum(
+    state: State<'_, AppState>,
+    target: Option<String>,
+    target_index: usize,
+    index: Option<usize>,
+) -> Result<(), String> {
+    let dest = match target.as_deref() {
+        None => None,
+        Some(kind) => Some(parse_insert_target(kind, target_index)?),
+    };
+    state
+        .watch_spectrum(dest, index)
+        .map_err(|err| err.to_string())
+}
+
+/// Latest hop from the armed tap, or `null` when nothing is watched.
+#[tauri::command]
+pub fn get_insert_spectrum(state: State<'_, AppState>) -> Option<crate::effects::SpectrumDto> {
+    state.insert_spectrum()
+}
+
+/// EQ band-solo of the source. `band` is a prefix, or `null` to stop.
+#[tauri::command]
+pub fn set_insert_listen(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    index: usize,
+    band: Option<String>,
+) -> Result<(), String> {
+    let target = parse_insert_target(&target, target_index)?;
+    state
+        .set_insert_listen(target, index, band.as_deref())
+        .map_err(|err| err.to_string())
 }
 
 /// `"track"` / `"bus"` plus an index, as the webview sends a send's source.
@@ -1032,6 +1113,30 @@ fn pick_audio_file(app: &tauri::AppHandle) -> Option<PathBuf> {
         .and_then(|file| file.into_path().ok())
 }
 
+/// The native "add a sample folder" dialog. `None` when the user cancelled.
+fn pick_library_folder(app: &tauri::AppHandle) -> Option<PathBuf> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .set_title("Add sample folder")
+        .blocking_pick_folder()
+        .and_then(|file| file.into_path().ok())
+}
+
+fn library_json(app: &tauri::AppHandle) -> PathBuf {
+    use tauri::Manager;
+    app.path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("mydaw"))
+        .join("library.json")
+}
+
+fn packs_dir(app: &tauri::AppHandle) -> PathBuf {
+    use tauri::Manager;
+    let resource = app.path().resource_dir().ok();
+    library::resolve_packs_dir(resource.as_deref())
+}
+
 /// The label on the audio dialog's type filter.
 const AUDIO_FILTER: &str = "Audio files";
 
@@ -1094,6 +1199,152 @@ pub fn get_audio_waveform(
     Ok(WaveformDto::of(&source, target_bins.unwrap_or(1_024)))
 }
 
+/// One hit of a built-in or sampled source, as min/max bins.
+///
+/// Hosted plugins are refused: they draw their own editor. `targetBins` absent
+/// means 512, which is about one pair per pixel in the sample window.
+#[tauri::command]
+pub fn preview_source(
+    state: State<'_, AppState>,
+    source_id: String,
+    target_bins: Option<usize>,
+) -> Result<SourcePreviewDto, String> {
+    state
+        .preview_source(&source_id, target_bins.unwrap_or(512))
+        .map_err(|err| err.to_string())
+}
+
+/// The sample library roots: bundled Packs, then extra-search folders.
+#[tauri::command]
+pub fn get_library_roots(app: tauri::AppHandle) -> Vec<LibraryRootDto> {
+    let settings = library::load_settings(&library_json(&app));
+    library::roots(&packs_dir(&app), &settings)
+}
+
+/// Ask for a folder with the native dialog and remember it as an extra-search
+/// root. `null` when the user cancelled.
+#[tauri::command]
+pub async fn add_library_folder(
+    app: tauri::AppHandle,
+) -> Result<Option<Vec<LibraryRootDto>>, String> {
+    let Some(path) = pick_library_folder(&app) else {
+        return Ok(None);
+    };
+    let settings_path = library_json(&app);
+    let mut settings = library::load_settings(&settings_path);
+    library::add_folder(&mut settings, path).map_err(|err| err.to_string())?;
+    library::save_settings(&settings_path, &settings).map_err(|err| err.to_string())?;
+    Ok(Some(library::roots(&packs_dir(&app), &settings)))
+}
+
+/// Forget an extra-search folder. Packs cannot be removed.
+#[tauri::command]
+pub fn remove_library_folder(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<Vec<LibraryRootDto>, String> {
+    let settings_path = library_json(&app);
+    let mut settings = library::load_settings(&settings_path);
+    library::remove_folder(&mut settings, &id).map_err(|err| err.to_string())?;
+    library::save_settings(&settings_path, &settings).map_err(|err| err.to_string())?;
+    Ok(library::roots(&packs_dir(&app), &settings))
+}
+
+/// One level of a library root: directories and audio files.
+#[tauri::command]
+pub fn list_library_dir(
+    app: tauri::AppHandle,
+    root_id: String,
+    rel_path: String,
+) -> Result<Vec<LibraryEntryDto>, String> {
+    let settings = library::load_settings(&library_json(&app));
+    let roots = library::roots(&packs_dir(&app), &settings);
+    let root = roots
+        .iter()
+        .find(|root| root.id == root_id)
+        .ok_or_else(|| format!("there is no library folder '{root_id}'"))?;
+    library::list_dir(std::path::Path::new(&root.path), &rel_path).map_err(|err| err.to_string())
+}
+
+/// Longest OS-dropped file the webview may hand over, in bytes. The bytes
+/// travel in one JSON IPC message; past this the message stalls the webview.
+const MAX_IMPORT_BYTES: usize = 100 * 1024 * 1024;
+
+/// Copy a file dropped from the OS into the app's imports folder and answer
+/// with its absolute path.
+///
+/// WebView2 delivers an OS drop as a name and bytes, never a path, and Tauri's
+/// native drop handler is off so internal HTML5 drags work (`dragDropEnabled:
+/// false` — see `ui/src/lib/dnd.ts`). Writing the bytes next to `library.json`
+/// gives the decode pipeline the real path it already understands.
+#[tauri::command]
+pub fn import_dropped_audio(
+    app: tauri::AppHandle,
+    file_name: String,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    use tauri::Manager;
+
+    if bytes.len() > MAX_IMPORT_BYTES {
+        return Err(format!(
+            "{file_name} is {} MB — dropped files are capped at {} MB",
+            bytes.len() / (1024 * 1024),
+            MAX_IMPORT_BYTES / (1024 * 1024)
+        ));
+    }
+    // A browser drop reports a bare name, but nothing stops a payload from
+    // carrying separators; keep only the final component.
+    let name = std::path::Path::new(&file_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "that drop has no usable file name".to_owned())?;
+    let ext = std::path::Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| {
+            AUDIO_EXTENSIONS
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(ext))
+        })
+        .ok_or_else(|| format!("{name} is not an audio format this build can decode"))?
+        .to_owned();
+    let stem = std::path::Path::new(name)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| "that drop has no usable file name".to_owned())?;
+
+    let dir = app
+        .path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("mydaw"))
+        .join("imports");
+    std::fs::create_dir_all(&dir)
+        .map_err(|err| format!("could not create {}: {err}", dir.display()))?;
+
+    // Never overwrite: a second drop of a different `kick.wav` must not
+    // silently replace the one clips already play.
+    let mut target = dir.join(name);
+    let mut suffix = 1_u32;
+    while target.exists() {
+        target = dir.join(format!("{stem}-{suffix}.{ext}"));
+        suffix += 1;
+    }
+    std::fs::write(&target, &bytes)
+        .map_err(|err| format!("could not write {}: {err}", target.display()))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+/// Audition a file without loading it into the project.
+#[tauri::command]
+pub fn preview_audio_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+    state
+        .preview_audio_file(std::path::Path::new(&path))
+        .map_err(|err| err.to_string())
+}
+
 /// Place an audio file on the timeline.
 ///
 /// `start` and `length` are in **ticks**; `offsetFrames` is in frames of the
@@ -1121,6 +1372,9 @@ pub fn add_audio_clip(
     };
     let offset = offset_frames.unwrap_or(0);
     let gain = gain_db.unwrap_or(0.0);
+    state
+        .ensure_audio_clip_channel(source_id)
+        .map_err(|err| err.to_string())?;
     state
         .edit_playlist(|list| list.add_audio_clip(source_id, track, start, length, offset, gain))
         .map_err(|err| err.to_string())?;

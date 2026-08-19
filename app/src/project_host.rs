@@ -69,6 +69,7 @@ use crate::project_file::{
     project_name, read_project_file, write_project_file, AudioSourceEntry, EffectEntry, EffectRef,
     ProjectFile, ProjectFileError, Song, SourceEntry,
 };
+use crate::source::Source;
 use crate::tracks::TrackHost;
 use crate::vst3_bridge::Vst3Board;
 use crate::vst3_host::Vst3Host;
@@ -350,7 +351,7 @@ impl ProjectHost {
     ) -> Result<LoadReport, ProjectFileError> {
         // Validate everything first, so a file the engine cannot run leaves the
         // session exactly as it was rather than half replaced.
-        let (project, selected) = file.to_project(session.tracks.effects())?;
+        let (mut project, selected) = file.to_project(session.tracks.effects())?;
         let (patterns, playlist) = file.to_song()?;
         let mode = file.to_play_mode();
         let bpm = file.to_bpm()?;
@@ -359,6 +360,8 @@ impl ProjectHost {
             missing_tracks: vec![None; project.len()],
             ..LoadReport::default()
         };
+        ensure_audio_clip_channels(&mut project, &playlist, file, &mut report.warnings);
+        report.missing_tracks.resize(project.len(), None);
 
         // 1. Stop. Sequenced notes end here; held ones end in phase 3, when
         //    every instrument node in the session is replaced.
@@ -390,10 +393,12 @@ impl ProjectHost {
         // audio across the RT wall.
         restore_audio_sources(session.sources, file, &mut report.warnings);
         let _ = session.audio.install_song(session.sequencer.compile());
-        let _ = session
-            .tracks
-            .audio_clips()
-            .install(session.sequencer.compile_audio(session.sources));
+        let project = session.tracks.project();
+        let _ = session.tracks.audio_clips().install(
+            session
+                .sequencer
+                .compile_audio_with(session.sources, |id| project.audio_clip_tune(id)),
+        );
         session.sequencer.set_bpm(bpm);
         let _ = session.audio.set_bpm(bpm);
         session.sequencer.set_play_mode(mode);
@@ -407,6 +412,44 @@ impl ProjectHost {
 // ---------------------------------------------------------------------------
 // The phases
 // ---------------------------------------------------------------------------
+
+/// Add an Audio Clip channel for every file the arrangement plays, so a project
+/// saved before clip-channels existed still routes audio through a strip.
+fn ensure_audio_clip_channels(
+    project: &mut Project,
+    playlist: &Playlist,
+    file: &ProjectFile,
+    warnings: &mut Vec<String>,
+) {
+    let mut seen = std::collections::HashSet::new();
+    for clip in playlist.clips() {
+        let Some(source_id) = clip.audio_source_id() else {
+            continue;
+        };
+        if !seen.insert(source_id) {
+            continue;
+        }
+        if project.find_audio_clip_channel(source_id).is_some() {
+            continue;
+        }
+        let name = file
+            .audio_sources
+            .iter()
+            .find(|entry| entry.id == source_id)
+            .and_then(|entry| {
+                Path::new(&entry.path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("Audio {source_id}"));
+        if let Err(err) = project.add(Source::AudioClip { source_id }, Some(name)) {
+            warnings.push(format!(
+                "could not add an audio-clip channel for file {source_id}: {err}"
+            ));
+        }
+    }
+}
 
 /// Gather the session into a file, and everything worth warning about.
 ///
@@ -930,6 +973,9 @@ mod tests {
             soloed: false,
             state_blob: String::new(),
             inserts: Vec::new(),
+            pitch_cents: 0.0,
+            sample_start_frames: 0,
+            sample_end_frames: 0,
         }
     }
 

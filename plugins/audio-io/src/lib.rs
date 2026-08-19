@@ -61,7 +61,7 @@ use std::sync::Arc;
 
 use mydaw_kernel::{KernelCtx, Plugin, PluginManifest};
 use mydaw_plugin_debug_tap::DebugTapHandoff;
-use mydaw_plugin_metering::MeterTap;
+use mydaw_plugin_metering::{MeterTap, SpectrumHandoff};
 
 /// Kernel id of this plugin.
 pub const PLUGIN_ID: &str = "audio-io";
@@ -147,6 +147,16 @@ impl Plugin for AudioIoPlugin {
                 }
             },
             None => log::warn!("DebugTapHandoff service missing; captures are unavailable"),
+        }
+
+        match ctx.services.get::<SpectrumHandoff>() {
+            Some(handoff) => match handoff.take() {
+                Some(producer) => service.attach_spectrum(producer, handoff.watch()),
+                None => log::warn!(
+                    "spectrum producer already taken; audio-io will run without the analyser tap"
+                ),
+            },
+            None => log::warn!("SpectrumHandoff service missing; insert analysers are unavailable"),
         }
 
         // The device is opened on demand, not here. See the crate docs.
@@ -240,6 +250,16 @@ mod tests {
         assert!(
             !tap.is_available(),
             "audio-io should have claimed the producer during start"
+        );
+    }
+
+    #[test]
+    fn starting_claims_the_spectrum_producer() {
+        let kernel = booted();
+        let handoff = kernel.ctx().services.get::<SpectrumHandoff>().unwrap();
+        assert!(
+            !handoff.is_available(),
+            "audio-io should have claimed the analyser hop producer during start"
         );
     }
 

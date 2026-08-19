@@ -48,7 +48,7 @@ use std::sync::Arc;
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
 use mydaw_plugin_effects::EffectRegistry;
 use mydaw_plugin_instruments::InstrumentRegistry;
-use mydaw_plugin_sampler::SamplerRegistry;
+use mydaw_plugin_sampler::{file_path_of, SamplerRegistry};
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_rt_core::basedrop::Handle;
 use mydaw_rt_core::{BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, MAX_TRACKS};
@@ -120,6 +120,9 @@ pub struct TrackHost {
     /// graph, not because a clip belongs to a track: a playlist lane is not a
     /// mixer strip.
     audio_clips: Arc<crate::clips::AudioClipBus>,
+    /// Browser file preview, on the master bus after the clip player. Present
+    /// in every graph so clicking a sample never rebuilds anything.
+    file_preview: Arc<crate::file_preview::FilePreviewBus>,
     /// Track the keyboard piano and the source selector address.
     selected: AtomicUsize,
 }
@@ -171,6 +174,7 @@ impl TrackHost {
                 .collect(),
             master_insert: Arc::new(InsertHandle::new()),
             audio_clips: Arc::new(crate::clips::AudioClipBus::new()),
+            file_preview: Arc::new(crate::file_preview::FilePreviewBus::new()),
             selected: AtomicUsize::new(0),
             project: Mutex::new(project),
         }
@@ -195,9 +199,14 @@ impl TrackHost {
         &self.master_insert
     }
 
-    /// The audio-clip player on the master bus. See [`crate::clips`].
+    /// The audio-clip bus: one node per Audio Clip channel, plus one-shot players.
     pub fn audio_clips(&self) -> &Arc<crate::clips::AudioClipBus> {
         &self.audio_clips
+    }
+
+    /// The browser preview player. See [`crate::file_preview`].
+    pub fn file_preview(&self) -> &Arc<crate::file_preview::FilePreviewBus> {
+        &self.file_preview
     }
 
     /// A copy of the project.
@@ -248,6 +257,42 @@ impl TrackHost {
                     .min(project.len().saturating_sub(1)),
             )
             .map_or(Source::DEFAULT, |track| track.source.clone())
+    }
+
+    /// Decode any `sampler:file:...` sources that are not loaded yet.
+    ///
+    /// A project saved after a rack drop records the path in the source id.
+    /// Opening it has to put the oneshot back before the node is built, or the
+    /// track is silent.
+    pub fn ensure_file_samplers(&self) {
+        let sources: Vec<Source> = self
+            .project
+            .lock()
+            .tracks
+            .iter()
+            .map(|track| track.source.clone())
+            .collect();
+        for source in sources {
+            self.ensure_file_sampler(&source);
+        }
+    }
+
+    /// Load a dropped-file sampler if `source` names one that is not in the
+    /// registry yet. Failures are logged: the track stays silent, the way a
+    /// missing piano does.
+    pub fn ensure_file_sampler(&self, source: &Source) {
+        let Source::Sampler(reference) = source else {
+            return;
+        };
+        let Some(path) = file_path_of(&reference.instrument_id) else {
+            return;
+        };
+        if self.sampler.contains(&reference.wire_id()) {
+            return;
+        }
+        if let Err(err) = self.sampler.install_file(path) {
+            log::warn!("could not reload dropped sample {}: {err}", path.display());
+        }
     }
 
     /// The head-of-chain handle for `track`.
@@ -482,6 +527,32 @@ impl TrackHost {
         Ok(crate::effects::chain_readouts_dto(chain))
     }
 
+    /// EQ hold-to-solo of the source. `band` is a prefix (`hp`, `bell1`, …), or
+    /// `None` to stop. A no-op on a non-EQ insert.
+    ///
+    /// # Errors
+    /// As [`set_insert_param`](Self::set_insert_param), minus the parameter.
+    pub fn set_insert_listen(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        band: Option<&str>,
+    ) -> Result<(), InsertError> {
+        let project = self.project.lock();
+        let def = Self::insert_at(&project, target, index)?;
+        let value = match band {
+            None => -1,
+            Some(id) => mydaw_plugin_effects::eq::BAND_IDS
+                .iter()
+                .position(|&name| name == id)
+                .map(|i| i as i32)
+                .unwrap_or(-1),
+        };
+        def.listen
+            .store(value, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
     fn insert_at(
         project: &Project,
         target: InsertTarget,
@@ -531,6 +602,70 @@ impl TrackHost {
     /// [`TrackError::NoSuchTrack`].
     pub fn set_soloed(&self, track: usize, soloed: bool) -> Result<(), TrackError> {
         self.edit(track, |def| def.soloed = soloed)
+    }
+
+    /// Channel pitch for an audio-clip or one-shot track, in cents.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`]. Out-of-range values are clamped to ±1200.
+    pub fn set_pitch_cents(&self, track: usize, cents: f32) -> Result<(), TrackError> {
+        let cents = if cents.is_finite() {
+            cents.clamp(-1_200.0, 1_200.0)
+        } else {
+            0.0
+        };
+        self.edit(track, |def| def.pitch_cents = cents)
+    }
+
+    /// SMP region for an audio-clip or one-shot track, in the file's frames.
+    ///
+    /// `end == 0` means the file's last frame.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_sample_region(
+        &self,
+        track: usize,
+        start_frames: u64,
+        end_frames: u64,
+    ) -> Result<(), TrackError> {
+        self.edit(track, |def| {
+            def.sample_start_frames = start_frames;
+            def.sample_end_frames = end_frames;
+        })
+    }
+
+    /// Rebuild the one-shot node so a pitch or region edit is audible.
+    ///
+    /// A no-op when the track is not a one-shot, or when no device is open:
+    /// the project already holds the values, and the next graph install
+    /// builds the node from them.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`], or whatever swapping the node reported.
+    pub fn refresh_oneshot(&self, track: usize, audio: &AudioIoService) -> Result<(), MixerError> {
+        if audio.stream_info().is_none() {
+            return Ok(());
+        }
+        let (source, start, end, pitch) = {
+            let project = self.project.lock();
+            let def = project
+                .tracks
+                .get(track)
+                .ok_or(TrackError::NoSuchTrack(track))?;
+            (
+                def.source.clone(),
+                def.sample_start_frames,
+                def.sample_end_frames,
+                def.pitch_cents,
+            )
+        };
+        let Source::OneShot { source_id } = source else {
+            return Ok(());
+        };
+        let node = self.audio_clips.oneshot_node(source_id, start, end, pitch);
+        self.install_source(track, source, node)?;
+        Ok(())
     }
 
     /// Set the master fader, in dB.
@@ -605,7 +740,16 @@ impl TrackHost {
     ) -> Result<Box<dyn RtNode>, SourceError> {
         match source {
             Source::TestTone => Ok(self.tone.create(sample_rate, max_block)),
-            Source::Clap(_) | Source::Vst3(_) => Ok(Box::new(SilentNode)),
+            Source::Clap(_) | Source::Vst3(_) | Source::AudioClip { .. } => {
+                Ok(Box::new(SilentNode))
+            }
+            Source::OneShot { source_id } => {
+                // The registry-backed player, whole file at recorded pitch, so
+                // an offline render (the channel window's preview) makes sound.
+                // The graph builders pass the track's crop and pitch to the
+                // same node themselves; this path has no track to read.
+                Ok(self.audio_clips.oneshot_node(*source_id, 0, 0, 0.0))
+            }
             Source::Sampler(reference) => {
                 let type_id = reference.wire_id();
                 Ok(self
@@ -649,8 +793,29 @@ impl TrackHost {
         if track >= self.project.lock().len() {
             return Err(TrackError::NoSuchTrack(track).into());
         }
+        self.ensure_file_sampler(&source);
         let info = audio.stream_info().ok_or(AudioIoError::NotRunning)?;
-        let node = self.build_node(&source, f64::from(info.sample_rate), info.max_block)?;
+        let (start, end, pitch) = {
+            let project = self.project.lock();
+            let def = project
+                .tracks
+                .get(track)
+                .ok_or(TrackError::NoSuchTrack(track))?;
+            (
+                def.sample_start_frames,
+                def.sample_end_frames,
+                def.pitch_cents,
+            )
+        };
+        let node = match &source {
+            Source::AudioClip { source_id } => self
+                .audio_clips
+                .open_for_source(*source_id, audio.gc_handle()),
+            Source::OneShot { source_id } => {
+                self.audio_clips.oneshot_node(*source_id, start, end, pitch)
+            }
+            other => self.build_node(other, f64::from(info.sample_rate), info.max_block)?,
+        };
         self.install_source(track, source, node)?;
         Ok(())
     }
@@ -752,6 +917,7 @@ impl TrackHost {
     /// queue reported. A track whose built-in source cannot be built falls back
     /// to the test tone with a warning rather than leaving the stream silent.
     pub fn install_graph(&self, audio: &AudioIoService) -> Result<(), AudioIoError> {
+        self.ensure_file_samplers();
         let limits = audio.graph_limits().ok_or(AudioIoError::NotRunning)?;
         let gc = audio.gc_handle();
         let spec = self.build_spec(&limits, gc);
@@ -773,20 +939,33 @@ impl TrackHost {
         let project = self.project.lock();
         project.publish(&self.params);
 
+        self.audio_clips.begin_rebuild();
+
         let mut spec = GraphSpec::new()
             .with_params(Arc::clone(&self.params))
             .with_limits(*limits);
 
         for (index, def) in project.tracks.iter().enumerate() {
-            let node = match self.build_node(&def.source, limits.sample_rate, limits.max_block) {
-                Ok(node) => node,
-                Err(err) => {
-                    log::warn!(
-                        "track {index} ('{}'): {err}; falling back to the test tone",
-                        def.name
-                    );
-                    self.tone.create(limits.sample_rate, limits.max_block)
+            let node = match &def.source {
+                Source::AudioClip { source_id } => {
+                    self.audio_clips.open_for_source(*source_id, gc.clone())
                 }
+                Source::OneShot { source_id } => self.audio_clips.oneshot_node(
+                    *source_id,
+                    def.sample_start_frames,
+                    def.sample_end_frames,
+                    def.pitch_cents,
+                ),
+                other => match self.build_node(other, limits.sample_rate, limits.max_block) {
+                    Ok(node) => node,
+                    Err(err) => {
+                        log::warn!(
+                            "track {index} ('{}'): {err}; falling back to the test tone",
+                            def.name
+                        );
+                        self.tone.create(limits.sample_rate, limits.max_block)
+                    }
+                },
             };
             let gate = Arc::clone(&self.gates[index]);
             let slot =
@@ -808,16 +987,10 @@ impl TrackHost {
             spec.push_send(SendSpec::new(send.source, send.dest));
         }
 
-        // Both master-bus nodes are unconditional and transparent while empty,
-        // for the same reason: compiling them in every time is what lets an
-        // audio clip appear and a master effect be inserted, replaced and
-        // removed with no graph rebuild at all -- see `crate::clips` and
-        // `crate::insert`.
-        //
-        // Order matters. The clip player is **first**, so a clip is summed into
-        // the bus *before* the master chain sees it: an audio clip goes to the
-        // master bus, not past it.
-        spec.push_master_insert(crate::clips::audio_clip_node(&self.audio_clips, gc.clone()));
+        spec.push_master_insert(crate::file_preview::file_preview_node(
+            &self.file_preview,
+            gc.clone(),
+        ));
 
         // The master's *internal* chain runs first and the one hosted insert
         // last. That order keeps the hosted slot a single unconditional node at
@@ -849,11 +1022,12 @@ impl TrackHost {
         chain
             .iter()
             .filter_map(|def| {
-                let node = self.effects.create(
+                let node = self.effects.create_in_chain(
                     &def.type_id,
                     limits.sample_rate,
                     limits.max_block,
                     Arc::clone(&def.params),
+                    Arc::clone(&def.listen),
                 );
                 if node.is_none() {
                     log::warn!(
@@ -874,6 +1048,7 @@ impl TrackHost {
         }
         self.master_insert.close();
         self.audio_clips.close();
+        self.file_preview.close();
     }
 }
 
@@ -1028,7 +1203,7 @@ mod tests {
         let count = Project::default().len();
         assert_eq!(spec.track_count(), count);
         // Source slot plus transport gate per track, plus the two master-bus
-        // nodes: the audio-clip player and the master insert slot.
+        // nodes: the file-preview player and the master insert slot.
         assert_eq!(spec.len(), count * 2 + 2);
         assert!(spec.params().is_some(), "the mixer parameters are shared");
         assert_eq!(spec.limits(), LIMITS);
@@ -1038,9 +1213,22 @@ mod tests {
             "the slot is there, and empty"
         );
         assert!(
-            host.audio_clips().is_open(),
-            "the clip player is compiled into every graph"
+            !host.audio_clips().is_open(),
+            "clip nodes are only compiled onto Audio Clip channels"
         );
+    }
+
+    #[test]
+    fn an_audio_clip_channel_opens_a_filtered_clip_node() {
+        let host = host();
+        let mut project = host.project();
+        project
+            .add(Source::AudioClip { source_id: 7 }, Some("Kick.wav".into()))
+            .unwrap();
+        host.set_project(project);
+        let collector = mydaw_rt_core::basedrop::Collector::new();
+        let _ = host.build_spec(&LIMITS, collector.handle());
+        assert!(host.audio_clips().is_open());
     }
 
     #[test]

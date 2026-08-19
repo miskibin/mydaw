@@ -1,15 +1,13 @@
 /**
- * The WAVE Shell v2 palettes.
+ * The WAVE Shell palettes.
  *
- * Lifted verbatim from `.design/wave-shell-v2.html` (the `DARK` and `LIGHT`
- * consts). Every colour the shell draws with comes from here and reaches the DOM
- * as a CSS custom property, so a theme swap is one write to `:root` rather than
- * a re-render of every component -- which is what keeps the mixer's 30 Hz meters
- * out of the theme's way.
+ * A theme is this table. CSS, canvas and Tailwind all read the same keys as
+ * custom properties on `:root`, so swapping a theme is swapping one object --
+ * not hunting hex through stylesheets. shadcn's React widgets do not fit a
+ * Solid DAW; this is the part of shadcn that does: a token contract.
  *
- * Solid-free on purpose: this is a table and two colour functions, and it is
- * what the piano-roll canvas reads to paint itself in the same palette the DOM
- * uses.
+ * Solid-free on purpose: a table and two colour functions, which is also what
+ * the piano-roll canvas paints with.
  */
 
 /** One complete palette. Keys are the CSS custom property names, minus `--`. */
@@ -31,54 +29,145 @@ export interface Palette {
   lane: string;
   grid1: string;
   grid2: string;
-  /** Text drawn *on* an accent or a solo/mute pill: near-black in dark, white in light. */
+  /** Text drawn *on* an accent or a record pill. */
   ink: string;
+  live: string;
+  solo: string;
+  rec: string;
+  danger: string;
+  /** Text drawn on `--live` / `--solo`. */
+  liveInk: string;
+  soloInk: string;
+  playhead: string;
+  paletteShadow: string;
+  scrim: string;
+  stepbeat: string;
+  shade: string;
+  grip: string;
+  meterHi: string;
+  meterMid: string;
+  meterLo: string;
+  eqHp: string;
+  eqLow: string;
+  eqBell2: string;
+  eqHigh: string;
+  ivory: string;
+  ebony: string;
+  ivoryEdge: string;
+  sheen: string;
+  keyLane: string;
+  noteInk: string;
+  thumbMark: string;
+  noteStroke: string;
 }
 
+/**
+ * Colours that mean the same thing in every theme: a record light is red in a
+ * light room too. Spread into each palette so a custom theme can still override
+ * them, but the built-in pair stays in lockstep.
+ */
+const SEMANTIC = {
+  live: '#4ec08a',
+  solo: '#e0a44a',
+  rec: '#e05263',
+  danger: '#e8607a',
+  liveInk: '#07231a',
+  soloInk: '#12151a',
+  meterHi: '#f0c25a',
+  meterMid: '#4ec08a',
+  meterLo: '#3f9e72',
+  eqHp: '#7aa2f7',
+  eqLow: '#9ece6a',
+  eqBell2: '#e0af68',
+  eqHigh: '#bb9af7',
+} as const;
+
 export const DARK: Palette = {
+  ...SEMANTIC,
   bg: '#0e1013',
-  top: '#15181c',
-  panel: '#12151a',
-  panel2: '#171b21',
-  head: '#1b1f26',
-  line: '#23272f',
-  line2: '#2d323b',
-  txt: '#e7e9ec',
-  txt2: '#c3c8d0',
-  dim: '#8b929c',
-  dim2: '#646b76',
-  faint: '#4b525c',
-  sunk: '#0b0d10',
-  chip: '#1d2128',
-  lane: '#101318',
-  grid1: '#171b21',
-  grid2: '#1f242c',
+  top: '#171b21',
+  panel: '#161a21',
+  panel2: '#1e242d',
+  head: '#252b34',
+  line: '#4a5360',
+  line2: '#5c6573',
+  txt: '#f2f4f7',
+  txt2: '#d5dae2',
+  dim: '#b4bac4',
+  dim2: '#9aa2ad',
+  faint: '#7d8592',
+  sunk: '#0a0c0f',
+  chip: '#2c333d',
+  lane: '#12161c',
+  grid1: '#1c222a',
+  grid2: '#2e3641',
   ink: '#0b1220',
+  playhead: '#eef1f5',
+  paletteShadow: 'rgb(0 0 0 / 45%)',
+  scrim: 'rgb(0 0 0 / 35%)',
+  stepbeat: '#2a313b',
+  shade: 'rgb(0 0 0 / 25%)',
+  grip: 'rgb(0 0 0 / 16%)',
+  ivory: '#e8ebf1',
+  ebony: '#12151a',
+  ivoryEdge: 'rgb(20 24 30 / 28%)',
+  sheen: 'rgb(255 255 255 / 18%)',
+  keyLane: 'rgb(0 0 0 / 28%)',
+  noteInk: 'rgb(6 10 14 / 85%)',
+  thumbMark: 'rgb(255 255 255 / 22%)',
+  noteStroke: 'rgb(0 0 0 / 45%)',
 };
 
 export const LIGHT: Palette = {
-  bg: '#eef0f3',
+  ...SEMANTIC,
+  bg: '#e2e5eb',
   top: '#ffffff',
-  panel: '#f6f7f9',
+  panel: '#f2f3f6',
   panel2: '#ffffff',
-  head: '#eef0f3',
-  line: '#dfe2e7',
-  line2: '#cbd0d8',
-  txt: '#14171c',
-  txt2: '#3b414b',
-  dim: '#6a7280',
-  dim2: '#8a919b',
-  faint: '#a8aeb8',
-  sunk: '#eaecf0',
-  chip: '#e5e8ed',
-  lane: '#f2f4f7',
-  grid1: '#e6e9ee',
-  grid2: '#d8dce3',
+  head: '#e6e8ed',
+  line: '#9aa1ab',
+  line2: '#7a828e',
+  txt: '#101318',
+  txt2: '#2c313a',
+  dim: '#4a5160',
+  dim2: '#565e6c',
+  faint: '#6c7480',
+  sunk: '#d5d8de',
+  chip: '#c0c5ce',
+  lane: '#eaecf0',
+  grid1: '#d8dce3',
+  grid2: '#c0c6d0',
   ink: '#ffffff',
+  playhead: '#1c2028',
+  paletteShadow: 'rgb(0 0 0 / 18%)',
+  scrim: 'rgb(0 0 0 / 35%)',
+  stepbeat: '#c5cad3',
+  shade: 'rgb(0 0 0 / 25%)',
+  grip: 'rgb(0 0 0 / 16%)',
+  ivory: '#fbfcfe',
+  ebony: '#1b1e24',
+  ivoryEdge: 'rgb(20 24 30 / 16%)',
+  sheen: 'rgb(255 255 255 / 18%)',
+  keyLane: 'rgb(0 0 0 / 8%)',
+  noteInk: 'rgb(255 255 255 / 95%)',
+  thumbMark: 'rgb(0 0 0 / 28%)',
+  noteStroke: 'rgb(0 0 0 / 45%)',
 };
 
-/** The two themes, by name. */
+/** The two shipped themes, by name. A third theme is another `Palette` here. */
 export type ThemeName = 'dark' | 'light';
+
+/** How a named theme mixes and tints the accent. */
+interface ThemeMeta {
+  accSoft: number;
+  accentMixAmount: number;
+  accentMix: string;
+}
+
+const THEME_META: Record<ThemeName, ThemeMeta> = {
+  dark: { accSoft: 0.26, accentMixAmount: 0, accentMix: '#0b1c3d' },
+  light: { accSoft: 0.16, accentMixAmount: 0.28, accentMix: '#0b1c3d' },
+};
 
 /** The accent the app opens on. Same value the mock defaults its colour prop to. */
 export const DEFAULT_ACCENT = '#4f8ef7';
@@ -115,15 +204,21 @@ export function alpha(hex: string, a: number): string {
 }
 
 /**
+ * A wash that works on both `#rrggbb` and `var(--token)`, for inline styles.
+ */
+export function wash(color: string, amount: number): string {
+  return `color-mix(in srgb, ${color} ${Math.round(amount * 100)}%, transparent)`;
+}
+
+/**
  * The accent as drawn in `theme`.
  *
- * Light mode darkens it towards navy, exactly as the mock's `acc()` does: the
- * same blue that reads as bright on `#0e1013` is illegible as small text on
- * `#eef0f3`, and a single accent value for both themes is how a light theme ends
- * up with unreadable labels.
+ * Light mode darkens it towards navy: the same blue that reads as bright on a
+ * near-black canvas is illegible as small text on a pale one.
  */
 export function accentFor(accent: string, theme: ThemeName): string {
-  return theme === 'light' ? mix(accent, '#0b1c3d', 0.28) : accent;
+  const meta = THEME_META[theme];
+  return meta.accentMixAmount > 0 ? mix(accent, meta.accentMix, meta.accentMixAmount) : accent;
 }
 
 /**
@@ -134,11 +229,13 @@ export function accentFor(accent: string, theme: ThemeName): string {
  */
 export function cssVariables(theme: ThemeName, accent: string): Record<string, string> {
   const palette = paletteFor(theme);
+  const meta = THEME_META[theme];
   const acc = accentFor(accent, theme);
   const vars: Record<string, string> = {};
   for (const [name, value] of Object.entries(palette)) vars[`--${name}`] = value;
   vars['--acc'] = acc;
-  vars['--accSoft'] = alpha(acc, 0.14);
+  vars['--accSoft'] = alpha(acc, meta.accSoft);
+  vars['--meter'] = `linear-gradient(180deg,${palette.meterHi},${palette.meterMid} 26%,${palette.meterLo})`;
   return vars;
 }
 
@@ -170,10 +267,10 @@ export function trackColor(id: number): string {
 }
 
 /** The meter gradient both the strips and the master use. */
-export const METER_GRADIENT = 'linear-gradient(180deg,#f0c25a,#4ec08a 26%,#3f9e72)';
+export const METER_GRADIENT = `linear-gradient(180deg,${SEMANTIC.meterHi},${SEMANTIC.meterMid} 26%,${SEMANTIC.meterLo})`;
 
-/** Solo yellow and the arm/record red, which are not part of either palette. */
-export const SOLO_COLOR = '#e0a44a';
-export const REC_COLOR = '#e05263';
+/** Solo yellow and the arm/record red, which are not part of either surface ramp. */
+export const SOLO_COLOR = SEMANTIC.solo;
+export const REC_COLOR = SEMANTIC.rec;
 /** The "this is live" green: the play button, an instrument's dot. */
-export const LIVE_COLOR = '#4ec08a';
+export const LIVE_COLOR = SEMANTIC.live;

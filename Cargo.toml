@@ -27,11 +27,9 @@ clack-host = "0.1"  # safe CLAP host bindings (discovery in Phase 0, hosting in 
 # Vorbis is here because a bounce from another DAW or a downloaded loop is often
 # one.
 #
-# **MP3 is deliberately absent, and it is not a policy choice**:
-# `symphonia-bundle-mp3` has no released 0.6 -- only `0.6.0-alpha.2` -- so
-# enabling the `mp3` feature makes the workspace unresolvable. Add `"mp3"` here
-# the day it ships; `mydaw_audio_file::decode_stereo` needs no change, because it
-# probes rather than switching on the extension.
+# **MP3 is decoded by `minimp3` in `mydaw-audio-file`**, not by this crate:
+# `symphonia-bundle-mp3` has no released 0.6. The day it ships, the minimp3
+# path can go and `"mp3"` can land here.
 symphonia = { version = "0.6", default-features = false, features = [
     "flac",
     "wav",

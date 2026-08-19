@@ -17,9 +17,9 @@
 }
 
 /*
- * The rows, and the two position overlays laid across all of them.
+ * The rows, and the playhead pip sitting in the gutter above the first lane.
  *
- * `position: relative` here rather than on `.wv-rack` on purpose: the overlays
+ * `position: relative` here rather than on `.wv-rack` on purpose: the pip
  * must scroll with the lanes, and an absolute child of the *scroller* would
  * still scroll -- but it would also stretch over the drop zone, which is not
  * part of the loop.
@@ -31,33 +31,19 @@
   flex-direction: column;
   gap: 4px;
   min-width: max-content;
+  padding-top: 8px;
 }
 
-/* The step that is sounding, washed across every lane. FL's own affordance. */
-.wv-rack__col {
+/* The sounding step, as a tick above the first instrument — not a column wash. */
+.wv-rack__pip {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 2px;
   left: 0;
+  z-index: 1;
   display: none;
-  border-radius: 3px;
-  background: var(--playhead);
-  /* Enough to find at a glance across five lanes, not enough to change what
-     colour a switched-on cell looks like -- it is a wash, not a cursor. */
-  opacity: 0.2;
-  pointer-events: none;
-}
-
-/* The exact position, which is what a roll-mode preview has instead of a cell. */
-.wv-rack__line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  display: none;
-  width: 1px;
-  background: var(--playhead);
-  opacity: 0.85;
+  height: 5px;
+  border-radius: 2px;
+  background: var(--acc);
   pointer-events: none;
 }
 
@@ -67,7 +53,7 @@
   gap: 6px;
   align-items: center;
   min-width: max-content;
-  height: 32px;
+  height: 34px;
   padding: 0 5px;
   border-radius: 6px;
   cursor: pointer;
@@ -89,10 +75,47 @@
 .wv-chrow__name {
   display: flex;
   flex: none;
-  gap: 1px;
+  gap: 4px;
   align-items: center;
-  width: 98px;
+  width: 132px;
   height: 24px;
+}
+
+.wv-chrow__kind {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font: 600 8px 'Geist Mono Variable';
+  letter-spacing: 0.04em;
+}
+
+.wv-chrow__kind--plugin {
+  background: var(--accSoft);
+  color: var(--acc);
+}
+
+.wv-chrow__kind--sample {
+  background: color-mix(in srgb, var(--live) 18%, transparent);
+  color: var(--live);
+}
+
+.wv-chrow__kind--drum {
+  background: color-mix(in srgb, var(--solo) 18%, transparent);
+  color: var(--solo);
+}
+
+.wv-chrow__kind--synth {
+  background: var(--chip);
+  color: var(--txt2);
+}
+
+.wv-chrow__kind--tone {
+  background: var(--chip);
+  color: var(--dim);
+}
+
+.wv-menu.wv-menu--chrow {
+  width: 208px;
 }
 
 .wv-chrow__label {
@@ -186,12 +209,12 @@
 
 .wv-step.is-on,
 .wv-step.is-on.is-beat {
-  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 25%);
+  box-shadow: inset 0 -2px 0 var(--shade);
 }
 
 .wv-step.is-accent,
 .wv-step.is-accent.is-beat {
-  box-shadow: inset 0 -2px 0 rgb(0 0 0 / 25%), inset 0 0 0 1.5px var(--txt);
+  box-shadow: inset 0 -2px 0 var(--shade), inset 0 0 0 1.5px var(--txt);
 }
 
 /* A channel in roll mode shows its notes instead of a grid. */
@@ -224,6 +247,16 @@
   font: 400 9px 'Geist Mono Variable';
   color: var(--faint);
   transform: translateY(-50%);
+}
+
+.wv-chrow__clip {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 8px;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--dim);
+  letter-spacing: 0.04em;
 }
 
 .wv-chrow__mode {

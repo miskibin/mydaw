@@ -28,6 +28,12 @@
  * only the active one), so it is fetched per pattern through
  * `get_pattern_content` and cached here, the same arrangement the waveforms
  * already use.
+ *
+ * The miniature is **one pattern wide on the timeline**, tiled if the clip is
+ * longer and cropped if it is shorter. Stretching the marks to the clip's box
+ * would make a shortened clip look sped up. Audio clips do the same for the
+ * waveform: it is drawn at the file's own duration, so trimming crops the
+ * wave instead of squeezing it.
  */
 
 import { For, Index, Show, createEffect, createSignal, onCleanup } from 'solid-js';
@@ -36,10 +42,13 @@ import type { ClipDto, PatternDto, PlaylistTrackDto, WaveformDto } from '../api/
 import {
   TICKS_PER_BAR,
   TICKS_PER_STEP,
+  audioWaveLayout,
+  clipArtLayout,
   samplesToTicks,
   snapTicks,
   ticksToSamples,
 } from '../lib/pattern';
+import { allowDrop, droppedAudioFile, droppedAudioPath, importDroppedFile, parseDrop } from '../lib/dnd';
 import { useAppState } from '../state';
 import {
   DEFAULT_LANE_H,
@@ -52,7 +61,7 @@ import {
   useView,
   type PlaylistTool,
 } from '../shell/view';
-import { alpha, trackColor } from '../theme/tokens';
+import { trackColor, wash } from '../theme/tokens';
 import { onFrame } from '../ui/frameLoop';
 import { IconEraseTool, IconPaintTool, IconSelectTool, IconX } from '../ui/icons';
 
@@ -94,7 +103,10 @@ interface ClipMark {
 }
 
 /**
- * A pattern's content as marks, in the clip's own coordinates.
+ * A pattern's content as marks, in **one pattern's** coordinates (0..1).
+ *
+ * The clip then draws these at the pattern's timeline width, so shortening the
+ * clip crops and lengthening it loops — the marks never squeeze or stretch.
  *
  * A channel that has notes is drawn by pitch, so the shape of the melody is
  * visible; a channel that has only steps has no pitch worth showing (a grid has
@@ -231,14 +243,14 @@ export function Playlist(): ReturnType<typeof Show> {
   const laneHeight = (laneId: number) => laneHeightOf(view.laneHeights(), laneId);
 
   /**
-   * Which lane the pointer is over, by asking the document rather than dividing
-   * by a lane height -- lanes are individually resizable now, so there is no
-   * single height to divide by.
+   * Which lane the pointer is over, by Y against each lane's box.
+   *
+   * `elementsFromPoint` would hit the clip being dragged, and dividing by a
+   * single lane height is wrong now that lanes resize independently.
    */
-  function laneUnder(clientX: number, clientY: number): number | null {
-    for (const element of document.elementsFromPoint(clientX, clientY)) {
-      const lane = (element as HTMLElement).closest<HTMLElement>('.wv-pl__lane');
-      if (lane?.dataset.lane !== undefined) return Number(lane.dataset.lane);
+  function laneUnder(clientY: number, lanes: readonly { index: number; top: number; bottom: number }[]): number | null {
+    for (const lane of lanes) {
+      if (clientY >= lane.top && clientY < lane.bottom) return lane.index;
     }
     return null;
   }
@@ -298,16 +310,46 @@ export function Playlist(): ReturnType<typeof Show> {
 
   function onLaneDrop(event: DragEvent, lane: number): void {
     event.preventDefault();
-    const raw = event.dataTransfer?.getData('text/plain') ?? '';
-    const [kind, ref] = raw.split('::');
-    const id = Number(ref);
-    if (!Number.isFinite(id)) return;
     const start = tickAt(event.clientX, event.currentTarget as HTMLElement);
-    if (kind === 'pattern') place(lane, start, { kind: 'pattern', id });
-    else if (kind === 'audio') place(lane, start, { kind: 'audio', id });
-    else if (kind === 'inst') {
-      app.report(new Error('An instrument goes on the rack, not a playlist lane'));
+    const filePath = droppedAudioPath(event);
+    if (filePath) {
+      placeFile(lane, start, filePath);
+      return;
     }
+    // An OS drop arrives as bytes, not a path; import them, then place the
+    // written file exactly as a library `file::` drop would be.
+    const file = droppedAudioFile(event);
+    if (file) {
+      void importDroppedFile(file, (name, bytes) => app.backend.importDroppedAudio(name, bytes))
+        .then((path) => placeFile(lane, start, path))
+        .catch(app.report);
+      return;
+    }
+    const payload = parseDrop(event.dataTransfer?.getData('text/plain') ?? '');
+    if (!payload) return;
+    if (payload.kind === 'inst' || payload.kind === 'file') {
+      if (payload.kind === 'inst') {
+        app.report(new Error('An instrument goes on the rack, not a playlist lane'));
+      }
+      return;
+    }
+    const id = Number(payload.ref);
+    if (!Number.isFinite(id)) return;
+    if (payload.kind === 'pattern') place(lane, start, { kind: 'pattern', id });
+    else if (payload.kind === 'audio') place(lane, start, { kind: 'audio', id });
+  }
+
+  function placeFile(lane: number, start: number, path: string): void {
+    app.startPlaylistGesture('Paint audio clip');
+    void app.backend
+      .loadAudioSource(path)
+      .then(async (source) => {
+        await app.refreshAudioSources();
+        view.setBrush({ kind: 'audio', id: source.id });
+        return app.sequencerCommand((backend) => backend.addAudioClip(source.id, lane, start));
+      })
+      .then(() => app.commitPlaylistGesture())
+      .catch(app.report);
   }
 
   // --- moving and resizing -------------------------------------------------
@@ -329,8 +371,37 @@ export function Playlist(): ReturnType<typeof Show> {
     let lastStart = originStart;
     let lastLane = originLane;
     let lastLength = originLength;
+    const clipEl = (event.currentTarget as HTMLElement).closest<HTMLElement>('.wv-clip');
+    const originLaneEl = clipEl?.closest<HTMLElement>('.wv-pl__lane');
+    const originTop = originLaneEl?.getBoundingClientRect().top ?? 0;
+    const laneBoxes = Array.from(scrollEl?.querySelectorAll<HTMLElement>('.wv-pl__lane') ?? []).map(
+      (lane) => {
+        const box = lane.getBoundingClientRect();
+        return { index: Number(lane.dataset.lane), top: box.top, bottom: box.bottom };
+      },
+    );
 
     app.startPlaylistGesture(mode === 'move' ? 'Move clip' : 'Resize clip');
+
+    const paint = (): void => {
+      if (!clipEl) return;
+      clipEl.style.pointerEvents = 'none';
+      clipEl.style.zIndex = '8';
+      if (mode === 'resize') {
+        clipEl.style.width = `${Math.max(4, lastLength * pxPerTick() - 2)}px`;
+        return;
+      }
+      clipEl.style.left = `${lastStart * pxPerTick()}px`;
+      const target = laneBoxes.find((lane) => lane.index === lastLane);
+      clipEl.style.transform = target ? `translateY(${target.top - originTop}px)` : '';
+    };
+
+    let announced = '';
+    const announce = (value: string): void => {
+      if (value === announced) return;
+      announced = value;
+      app.say(clipName(clip), value);
+    };
 
     const onMove = (moveEvent: PointerEvent) => {
       const dx = (moveEvent.clientX - startX) / pxPerTick();
@@ -341,30 +412,26 @@ export function Playlist(): ReturnType<typeof Show> {
       if (mode === 'resize') {
         const snap = view.playlistSnap() || 1;
         lastLength = Math.max(snap, snapTicks(originLength + dx, view.playlistSnap()));
-        app.say(clipName(clip), `${(lastLength / TICKS_PER_BAR).toFixed(2)} bars`);
-        // Optimistic: the engine answers with the whole state, which would
-        // otherwise arrive a frame late and make the edge stutter.
-        (moveEvent.target as HTMLElement | null)?.closest<HTMLElement>('.wv-clip')?.style.setProperty(
-          'width',
-          `${Math.max(4, lastLength * pxPerTick() - 2)}px`,
-        );
+        announce(`${(lastLength / TICKS_PER_BAR).toFixed(2)} bars`);
+        paint();
         return;
       }
-      // The lane under the pointer, not a lane count derived from a fixed
-      // height: with resizable lanes the two stop agreeing at the first drag.
-      // Off the stack entirely (past the last lane, or over a scrollbar) keeps
-      // the last good answer rather than snapping back to where it started.
-      lastLane = laneUnder(moveEvent.clientX, moveEvent.clientY) ?? lastLane;
+      lastLane = laneUnder(moveEvent.clientY, laneBoxes) ?? lastLane;
       lastStart = snapTicks(Math.max(0, originStart + dx), view.playlistSnap());
-      app.say(
-        clipName(clip),
+      announce(
         `bar ${(lastStart / TICKS_PER_BAR + 1).toFixed(2)} · ${playlist()?.tracks[lastLane]?.name ?? ''}`,
       );
+      paint();
     };
 
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      if (clipEl) {
+        clipEl.style.pointerEvents = '';
+        if (!moved || lastLane === originLane) clipEl.style.transform = '';
+        if (!moved) clipEl.style.zIndex = '';
+      }
       if (!moved) {
         app.commitPlaylistGesture();
         return;
@@ -419,7 +486,7 @@ export function Playlist(): ReturnType<typeof Show> {
       const pattern = app.patterns().find((p) => p.id === brush.id);
       return pattern?.color ?? trackColor(brush.id);
     }
-    return 'var(--acc)';
+    return trackColor(brush.id);
   };
 
   onCleanup(() => pending.clear());
@@ -471,7 +538,7 @@ export function Playlist(): ReturnType<typeof Show> {
           </button>
         </div>
         <div class="wv-spacer" />
-        <span class="wv-brush" style={{ background: alpha(brushColour(), 0.14), color: brushColour() }}>
+        <span class="wv-brush" style={{ background: wash(brushColour(), 0.14), color: brushColour() }}>
           <span class="wv-swatch" style={{ background: brushColour() }} />
           {brushLabel()}
         </span>
@@ -569,7 +636,7 @@ export function Playlist(): ReturnType<typeof Show> {
                     'background-size': `${BAR_PX * view.playlistZoom() * 4}px 100%, ${BAR_PX * view.playlistZoom()}px 100%`,
                   }}
                   onPointerDown={(event) => onLanePointerDown(event, index)}
-                  onDragOver={(event) => event.preventDefault()}
+                  onDragOver={(event) => allowDrop(event)}
                   onDrop={(event) => onLaneDrop(event, index)}
                   onContextMenu={(event) => event.preventDefault()}
                 >
@@ -583,9 +650,15 @@ export function Playlist(): ReturnType<typeof Show> {
                           clip.kind === 'pattern'
                             ? (app.patterns().find((p) => p.id === clip.patternId)?.color ??
                               trackColor(clip.patternId ?? 0))
-                            : 'var(--acc)'
+                            : trackColor(clip.sourceId ?? 0)
                         }
                         waveform={clip.kind === 'audio' ? waveformFor(clip.sourceId!) : undefined}
+                        waveTicks={
+                          clip.kind === 'audio'
+                            ? (app.audioSources().find((source) => source.id === clip.sourceId)
+                                ?.durationTicks ?? 0)
+                            : 0
+                        }
                         marks={() => {
                           if (clip.kind !== 'pattern' || clip.patternId === undefined) return [];
                           if (clip.length * pxPerTick() < MIN_ART_PX) return [];
@@ -596,10 +669,31 @@ export function Playlist(): ReturnType<typeof Show> {
                             return track ? trackColor(track.id) : trackColor(channel);
                           });
                         }}
+                        patternTicks={
+                          clip.kind === 'pattern'
+                            ? (app.patterns().find((pattern) => pattern.id === clip.patternId)
+                                ?.lengthTicks ?? 0)
+                            : 0
+                        }
                         selected={view.selectedClip() === clip.id}
                         onDown={(event, mode) => onClipPointerDown(event, clip, mode)}
                         onDelete={() => removeClip(clip)}
                         onOpen={() => {
+                          if (clip.kind === 'audio' && clip.sourceId !== undefined) {
+                            const channel = app
+                              .tracks()
+                              .find(
+                                (entry) =>
+                                  entry.engine === 'clip' && entry.audioSourceId === clip.sourceId,
+                              );
+                            if (channel) {
+                              void app.mixerCommand((backend) =>
+                                backend.setSelectedTrack(channel.index),
+                              );
+                              view.openSampleEditor(channel.index);
+                            }
+                            return;
+                          }
                           if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
                           void app.sequencerCommand((backend) =>
                             backend.setActivePattern(clip.patternId!),
@@ -751,8 +845,12 @@ function Clip(props: {
   name: string;
   colour: string;
   waveform: WaveformDto | undefined;
+  /** The file's duration on the timeline; 0 when this is not an audio clip. */
+  waveTicks: number;
   /** The pattern's content as marks. Empty for an audio clip or a narrow one. */
   marks: () => ClipMark[];
+  /** Ticks in one loop of the pattern; 0 when this is not a pattern clip. */
+  patternTicks: number;
   selected: boolean;
   onDown: (event: PointerEvent, mode: 'move' | 'resize') => void;
   onDelete: () => void;
@@ -771,6 +869,16 @@ function Clip(props: {
     return `M${top.join(' L')} L${bottom.join(' L')} Z`;
   };
 
+  const art = () => clipArtLayout(props.clip.length, props.patternTicks, props.pxPerTick);
+  const wave = () =>
+    audioWaveLayout(
+      props.waveTicks > 0 ? props.waveTicks : props.clip.length,
+      props.waveform?.frames ?? 0,
+      props.clip.offsetFrames ?? 0,
+      props.pxPerTick,
+    );
+  const cycles = () => Array.from({ length: art().cycles }, (_, cycle) => cycle);
+
   return (
     <div
       class="wv-clip"
@@ -778,8 +886,8 @@ function Clip(props: {
       style={{
         left: `${props.clip.start * props.pxPerTick}px`,
         width: `${Math.max(6, props.clip.length * props.pxPerTick - 2)}px`,
-        background: alpha(props.colour === 'var(--acc)' ? '#4f8ef7' : props.colour, 0.18),
-        'box-shadow': `inset 0 0 0 1px ${alpha(props.colour === 'var(--acc)' ? '#4f8ef7' : props.colour, props.selected ? 1 : 0.55)}`,
+        background: wash(props.colour, 0.18),
+        'box-shadow': `inset 0 0 0 1px ${wash(props.colour, props.selected ? 1 : 0.55)}`,
       }}
       onPointerDown={(event) => props.onDown(event, 'move')}
       onDblClick={() => props.onOpen()}
@@ -796,23 +904,43 @@ function Clip(props: {
     >
       <span class="wv-clip__label">{props.name}</span>
       <Show when={props.clip.kind === 'audio' && props.waveform}>
-        <svg class="wv-clip__wave" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <svg
+          class="wv-clip__wave"
+          viewBox="0 0 100 100"
+          preserveAspectRatio="none"
+          style={{
+            width: `${wave().wavePx}px`,
+            left: `${-wave().offsetPx}px`,
+          }}
+        >
           <path d={path()} fill="currentColor" />
         </svg>
       </Show>
-      <Show when={props.clip.kind === 'pattern'}>
+      <Show when={props.clip.kind === 'pattern' && props.patternTicks > 0}>
         <div class="wv-clip__art">
-          <For each={props.marks()}>
-            {(mark) => (
-              <span
-                class="wv-clip__mark"
+          <For each={cycles()}>
+            {(cycle) => (
+              <div
+                class="wv-clip__cycle"
                 style={{
-                  left: `${mark.left * 100}%`,
-                  width: `${mark.width * 100}%`,
-                  bottom: `${mark.bottom * 84}%`,
-                  background: alpha(mark.colour, 0.85),
+                  left: `${cycle * art().cyclePx}px`,
+                  width: `${art().cyclePx}px`,
                 }}
-              />
+              >
+                <For each={props.marks()}>
+                  {(mark) => (
+                    <span
+                      class="wv-clip__mark"
+                      style={{
+                        left: `${mark.left * 100}%`,
+                        width: `${mark.width * 100}%`,
+                        bottom: `${mark.bottom * 84}%`,
+                        background: wash(mark.colour, 0.85),
+                      }}
+                    />
+                  )}
+                </For>
+              </div>
             )}
           </For>
         </div>

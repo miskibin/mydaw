@@ -35,6 +35,7 @@ import type {
   Vst3PluginInfoDto,
 } from '../api/types';
 import { bandGainRangeDb, compactBody } from '../lib/effectLayout';
+import { addedInsertId } from '../lib/inserts';
 import { formatValue, switchLabel } from '../lib/param';
 import { insertTargetFor, useAppState, type StripRef } from '../state';
 import { trackColor } from '../theme/tokens';
@@ -345,7 +346,7 @@ function AudioRows(): JSX.Element {
       fallback={
         <div class="wv-empty">
           No audio loaded.
-          <span class="wv-empty__hint">load a file from the browser's Audio tab</span>
+          <span class="wv-empty__hint">drag from the browser or drop a file on a lane</span>
         </div>
       }
     >
@@ -516,11 +517,20 @@ function Inspector(): JSX.Element {
                       ? `This chain holds ${maxInserts()} inserts`
                       : effect().description
                   }
-                  onClick={() =>
-                    void app.mixerCommand((backend) =>
-                      backend.addInsert(insertTargetFor(view.strip()), effect().typeId),
-                    )
-                  }
+                  onClick={() => {
+                    const strip = view.strip();
+                    const before = new Set(chain().map((insert) => insert.id));
+                    void app
+                      .mixerCommand((backend) =>
+                        backend.addInsert(insertTargetFor(strip), effect().typeId),
+                      )
+                      .then(() => {
+                        const id = addedInsertId(before, chain());
+                        if (id !== undefined) {
+                          view.openInsertEditor({ strip, insertId: id });
+                        }
+                      });
+                  }}
                 >
                   + {effect().name}
                 </button>
@@ -777,7 +787,14 @@ function InsertCard(props: {
   });
 
   return (
-    <div class="wv-card">
+    <div
+      class="wv-card wv-card--insert"
+      onClick={(event) => {
+        const el = event.target as HTMLElement;
+        if (el.closest('button, .wv-param')) return;
+        view.openInsertEditor({ strip: props.strip, insertId: props.insert.id });
+      }}
+    >
       <div class="wv-card__head">
         <button
           type="button"

@@ -57,6 +57,8 @@ export const COMPACT_CARDS: Readonly<
   'effects.compressor': { params: ['threshold', 'ratio', 'attack', 'release'] },
   'effects.delay': { params: ['division', 'feedback', 'mix'] },
   'effects.saturator': { params: ['drive', 'type', 'mix'] },
+  'effects.limiter': { params: ['gain', 'ceiling', 'release'] },
+  'effects.reverb': { params: ['mix', 'decay', 'size', 'damp'] },
   'effects.utility': { params: ['gain', 'pan', 'width', 'mono'] },
 };
 
@@ -118,6 +120,78 @@ export interface ParamGroup {
   /** Empty for the bucket that gets no heading, i.e. an effect with no groups. */
   label: string;
   params: ParamDefDto[];
+}
+
+/**
+ * Primary knobs under the display. Everything else goes in Advanced.
+ *
+ * The display *is* the editor; these are the few parameters the research named
+ * as things you still reach for with a hand, not a pointer on the curve.
+ * An unknown effect keeps the first four as primary so it still has a body.
+ */
+export const EDITOR_PRIMARY: Readonly<Record<string, readonly string[]>> = {
+  'effects.eq': ['output'],
+  'effects.compressor': ['attack', 'release', 'mix'],
+  'effects.delay': ['feedback', 'duck', 'mix'],
+  'effects.saturator': ['drive', 'type', 'mix'],
+  'effects.limiter': ['gain', 'ceiling', 'release'],
+  'effects.reverb': ['mix', 'decay', 'size', 'damp'],
+  'effects.utility': ['gain'],
+};
+
+/** Which display a type_id owns. Unknown effects get a generic knob grid. */
+export type EditorKind =
+  | 'eq'
+  | 'compressor'
+  | 'delay'
+  | 'saturator'
+  | 'limiter'
+  | 'reverb'
+  | 'utility'
+  | 'generic';
+
+export function editorKind(typeId: string | undefined): EditorKind {
+  switch (typeId) {
+    case 'effects.eq':
+      return 'eq';
+    case 'effects.compressor':
+      return 'compressor';
+    case 'effects.delay':
+      return 'delay';
+    case 'effects.saturator':
+      return 'saturator';
+    case 'effects.limiter':
+      return 'limiter';
+    case 'effects.reverb':
+      return 'reverb';
+    case 'effects.utility':
+      return 'utility';
+    default:
+      return 'generic';
+  }
+}
+
+/** Primary knobs and the leftover Advanced list for one catalogue entry. */
+export function editorLayout(info: EffectInfoDto | undefined): {
+  kind: EditorKind;
+  primary: ParamDefDto[];
+  advanced: ParamDefDto[];
+} {
+  const kind = editorKind(info?.typeId);
+  const all = editableParams(info);
+  const wanted = info ? EDITOR_PRIMARY[info.typeId] : undefined;
+  if (!wanted) {
+    return {
+      kind,
+      primary: all.slice(0, COMPACT_KNOBS),
+      advanced: all.slice(COMPACT_KNOBS),
+    };
+  }
+  const primary = wanted
+    .map((id) => all.find((def) => def.id === id))
+    .filter((def): def is ParamDefDto => def !== undefined);
+  const taken = new Set(primary.map((def) => def.id));
+  return { kind, primary, advanced: all.filter((def) => !taken.has(def.id)) };
 }
 
 /**

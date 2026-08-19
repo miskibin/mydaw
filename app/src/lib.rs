@@ -59,15 +59,19 @@ mod commands;
 pub mod debug_capture;
 mod dto;
 pub mod effects;
+mod file_preview;
 mod graph;
 pub mod insert;
 pub mod ipc_bench;
+mod library;
 mod meters;
+mod preview;
 pub mod project;
 pub mod project_bridge;
 pub mod project_file;
 pub mod project_host;
 pub mod source;
+pub mod spectrum;
 mod state;
 pub mod tracks;
 pub mod vst3_bridge;
@@ -94,7 +98,7 @@ pub use dto::{
 pub use effects::{
     catalogue, chain_dto, chain_readouts_dto, insert_dto, EffectInfoDto, InsertDef, InsertDto,
     InsertEdit, InsertError, InsertReadoutsDto, InsertTarget, ParamDefDto, ParamValueDto,
-    ReadoutDefDto, MAX_INSERTS,
+    ReadoutDefDto, SpectrumDto, MAX_INSERTS,
 };
 pub use graph::{engine_graph, source_chain, track_chain, TransportGate};
 pub use insert::{insert_slot, InsertHandle, InsertSlot};
@@ -103,6 +107,7 @@ pub use ipc_bench::{
     IPC_BENCH_ENV, IPC_BENCH_PANEL,
 };
 pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
+pub use preview::{PreviewError, SourcePreviewDto};
 pub use project::{
     check_gain_db, check_pan, check_send_level, mixer_state_dto, BusDef, BusDto, MasterDto,
     MissingPluginDto, MissingPlugins, MixerStateDto, Project, RouteError, SendDef, SendDto,
@@ -275,12 +280,15 @@ pub fn run() -> ExitCode {
             commands::get_tracks,
             commands::set_track_gain,
             commands::set_track_pan,
+            commands::set_track_pitch,
+            commands::set_track_sample_region,
             commands::set_track_mute,
             commands::set_track_solo,
             commands::set_master_gain,
             commands::set_selected_track,
             commands::set_track_source,
             commands::add_track,
+            commands::add_sample_channel,
             commands::remove_track,
             // --- buses, sends and insert chains ---
             commands::get_effects,
@@ -303,6 +311,9 @@ pub fn run() -> ExitCode {
             commands::set_insert_bypass,
             commands::get_insert_readouts,
             commands::get_chain_readouts,
+            commands::watch_spectrum,
+            commands::get_insert_spectrum,
+            commands::set_insert_listen,
             // Hosted CLAP plugins: the picker, the master insert, the editors
             // and the state groundwork the project file will use.
             commands::set_track_source_clap,
@@ -347,6 +358,13 @@ pub fn run() -> ExitCode {
             commands::get_audio_sources,
             commands::unload_audio_source,
             commands::get_audio_waveform,
+            commands::preview_source,
+            commands::get_library_roots,
+            commands::add_library_folder,
+            commands::remove_library_folder,
+            commands::list_library_dir,
+            commands::import_dropped_audio,
+            commands::preview_audio_file,
             commands::add_audio_clip,
             commands::set_clip_gain,
             commands::set_clip_offset,

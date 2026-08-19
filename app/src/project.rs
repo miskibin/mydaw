@@ -33,6 +33,7 @@
 use mydaw_plugin_effects::EffectRegistry;
 use mydaw_plugin_instruments::SingleDrum;
 use mydaw_plugin_sampler::SamplerRegistry;
+use mydaw_plugin_sequencer::AudioClipTune;
 use mydaw_rt_core::{
     db_to_gain, gain_to_db, max_send_db, MixerParams, StripId, MAX_BUSES, MAX_GAIN_DB,
     MAX_SEND_LEVEL, MAX_TRACKS, SILENCE_DB,
@@ -75,6 +76,12 @@ pub struct TrackDef {
     pub pan: f32,
     pub muted: bool,
     pub soloed: bool,
+    /// Channel pitch for audio-clip and one-shot channels, in cents.
+    pub pitch_cents: f32,
+    /// SMP region start, in the file's own frames.
+    pub sample_start_frames: u64,
+    /// SMP region end, exclusive. `0` means the file's last frame.
+    pub sample_end_frames: u64,
     /// Internal effects, in signal order, between the source and the gate.
     ///
     /// The parameter blocks inside these are shared with the nodes the graph is
@@ -94,6 +101,9 @@ impl TrackDef {
             pan: 0.0,
             muted: false,
             soloed: false,
+            pitch_cents: 0.0,
+            sample_start_frames: 0,
+            sample_end_frames: 0,
             inserts: Vec::new(),
         }
     }
@@ -827,6 +837,38 @@ impl Project {
         Ok(self.tracks.len() - 1)
     }
 
+    /// The mixer channel that plays playlist clips of `source_id`, if any.
+    pub fn find_audio_clip_channel(&self, source_id: u64) -> Option<usize> {
+        self.tracks.iter().position(|track| {
+            matches!(
+                track.source,
+                Source::AudioClip {
+                    source_id: id
+                } if id == source_id
+            )
+        })
+    }
+
+    /// Channel pitch and SMP region for every playlist clip of `source_id`.
+    pub fn audio_clip_tune(&self, source_id: u64) -> AudioClipTune {
+        self.tracks
+            .iter()
+            .find(|track| {
+                matches!(
+                    track.source,
+                    Source::AudioClip {
+                        source_id: id
+                    } if id == source_id
+                )
+            })
+            .map(|track| AudioClipTune {
+                pitch_cents: track.pitch_cents,
+                start_frames: track.sample_start_frames,
+                end_frames: track.sample_end_frames,
+            })
+            .unwrap_or_default()
+    }
+
     /// Remove track `index`, renumbering the ones after it.
     ///
     /// # Errors
@@ -1056,6 +1098,12 @@ pub struct TrackDto {
     /// Source id, as [`get_sources`](crate::commands::get_sources) reports them.
     pub source_id: String,
     pub source_label: String,
+    /// What actually makes the sound: `synth`, `sampler`, `clap`, `vst3`, `tone`.
+    ///
+    /// From [`Source::engine`](crate::source::Source::engine). The rack draws a
+    /// badge from this so a plugin channel and a drum channel are not the same
+    /// row with different names.
+    pub engine: String,
     pub gain_db: f32,
     pub pan: f32,
     /// The button state, not the outcome. See [`silenced`](Self::silenced).
@@ -1090,6 +1138,15 @@ pub struct TrackDto {
     pub missing: Option<MissingPluginDto>,
     /// Internal effects on this track, in signal order.
     pub inserts: Vec<InsertDto>,
+    /// Channel pitch in cents. Meaningful for audio-clip and one-shot channels.
+    pub pitch_cents: f32,
+    /// SMP region start, in the file's own frames.
+    pub sample_start_frames: u64,
+    /// SMP region end, exclusive. `0` means the whole file.
+    pub sample_end_frames: u64,
+    /// Numeric audio-file id when this channel is `clip:` or `oneshot:`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_source_id: Option<u64>,
 }
 
 /// One bus strip, as the webview draws it.
@@ -1228,6 +1285,7 @@ pub fn mixer_state_dto(
                 name: track.name.clone(),
                 source_id: track.source.id(),
                 source_label: track.source.label(),
+                engine: track.source.engine().to_owned(),
                 gain_db: track.gain_db,
                 pan: track.pan,
                 muted: track.muted,
@@ -1238,6 +1296,10 @@ pub fn mixer_state_dto(
                 vst3: vst3.track(index),
                 missing: missing.track(index),
                 inserts: chain_dto(&track.inserts, effects),
+                pitch_cents: track.pitch_cents,
+                sample_start_frames: track.sample_start_frames,
+                sample_end_frames: track.sample_end_frames,
+                audio_source_id: track.source.sample_file_id(),
             })
             .collect(),
         buses: project
@@ -1599,6 +1661,7 @@ mod tests {
             track_keys,
             [
                 "clap",
+                "engine",
                 "gainDb",
                 "id",
                 "index",
@@ -1607,6 +1670,9 @@ mod tests {
                 "muted",
                 "name",
                 "pan",
+                "pitchCents",
+                "sampleEndFrames",
+                "sampleStartFrames",
                 "selected",
                 "silenced",
                 "soloed",
@@ -2008,8 +2074,15 @@ mod tests {
             Err(InsertError::NoSuchBus(9))
         );
         assert_eq!(
-            project.add_insert(InsertTarget::Track(0), "effects.reverb", None, &registry),
-            Err(InsertError::UnknownEffect("effects.reverb".to_owned()))
+            project.add_insert(
+                InsertTarget::Track(0),
+                "effects.not-an-effect",
+                None,
+                &registry
+            ),
+            Err(InsertError::UnknownEffect(
+                "effects.not-an-effect".to_owned()
+            ))
         );
     }
 

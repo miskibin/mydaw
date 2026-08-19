@@ -10,7 +10,7 @@ use mydaw_plugin_effects::{EffectRegistry, EffectsPlugin};
 use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin};
 use mydaw_plugin_host_vst3::{HostVst3Plugin, Vst3HostService};
 use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
-use mydaw_plugin_metering::{MeterOutput, MeteringPlugin};
+use mydaw_plugin_metering::{MeterOutput, MeteringPlugin, SpectrumHandoff, SpectrumOutput};
 use mydaw_plugin_sampler::{
     AssetDownloader, AssetState, AssetStatus, SamplerPlugin, SamplerRegistry,
 };
@@ -21,7 +21,9 @@ use mydaw_plugin_sequencer::{
 use mydaw_plugin_test_tone::{TestToneFactory, TestTonePlugin};
 use mydaw_plugin_windows::{PluginWindowService, PluginWindowsPlugin};
 
-use mydaw_rt_core::{clamp_bpm, LiveNote, StripId, MAX_BPM, MAX_KEY, MIN_BPM};
+use mydaw_rt_core::{
+    clamp_bpm, LiveNote, SpectrumTarget, SpectrumWatch, StripId, MAX_BPM, MAX_KEY, MIN_BPM,
+};
 
 use crate::clap_bridge::{ClapAnswer, ClapCommand, ClapGuiStatusDto, ClapHostBridge, ClapTarget};
 use crate::dto::{
@@ -33,6 +35,7 @@ use crate::meters::MeterPump;
 use crate::project::{MixerStateDto, Project, RouteError, TrackError};
 use crate::project_bridge::{ProjectBridge, ProjectCommand, ProjectInfoDto};
 use crate::source::{check_bundle_path, Source, SourceDto, SourceError};
+use crate::spectrum::SpectrumPump;
 use crate::tracks::{MixerError, TrackHost};
 use crate::vst3_bridge::{Vst3Answer, Vst3Command, Vst3GuiStatusDto, Vst3HostBridge};
 
@@ -226,6 +229,9 @@ pub struct AppState {
     /// cannot happen here -- see `crate::project_bridge`.
     project_bridge: Arc<ProjectBridge>,
     meters: Arc<MeterPump>,
+    /// Insert analyser: hop drain + FFT. Armed by the focused editor window.
+    spectrum: Arc<SpectrumPump>,
+    spectrum_watch: Arc<SpectrumWatch>,
     /// The audio inspection harness. Non-RT, `Send + Sync`, and safe to call
     /// from a Tauri command thread.
     debug_tap: Arc<DebugTapService>,
@@ -282,6 +288,12 @@ impl AppState {
         let meter_output = services
             .get::<MeterOutput>()
             .ok_or(StartupError::MissingService("MeterOutput"))?;
+        let spectrum_handoff = services
+            .get::<SpectrumHandoff>()
+            .ok_or(StartupError::MissingService("SpectrumHandoff"))?;
+        let spectrum_output = services
+            .get::<SpectrumOutput>()
+            .ok_or(StartupError::MissingService("SpectrumOutput"))?;
         let debug_tap = services
             .get::<DebugTapService>()
             .ok_or(StartupError::MissingService("DebugTapService"))?;
@@ -294,6 +306,11 @@ impl AppState {
         let throttle = meter_output.take();
         if throttle.is_none() {
             log::warn!("meter throttle was already claimed; the UI meters will stay silent");
+        }
+        let spectrum_watch = spectrum_handoff.watch();
+        let spectrum_rx = spectrum_output.take();
+        if spectrum_rx.is_none() {
+            log::warn!("spectrum consumer was already claimed; insert analysers will stay silent");
         }
 
         // A manifest this build cannot read means the in-app download is not
@@ -313,6 +330,7 @@ impl AppState {
             Arc::clone(&sampler),
             effects,
         ));
+        tracks.audio_clips().bind_sources(Arc::clone(&sources));
         // The rack and the pattern set have to agree from the first frame: the
         // sequencer plugin publishes an empty set (it has no idea what channels
         // exist), and this is the one place that knows both. A rejected seed
@@ -337,6 +355,8 @@ impl AppState {
             vst3,
             project_bridge: Arc::new(ProjectBridge::new()),
             meters: MeterPump::new(throttle),
+            spectrum: Arc::new(SpectrumPump::new(spectrum_rx)),
+            spectrum_watch,
             debug_tap,
             sampler,
             assets,
@@ -1081,6 +1101,46 @@ impl AppState {
         self.tracks.set_insert_param(target, index, param_id, value)
     }
 
+    /// Arm the analysis tap on one insert, or silence it.
+    pub fn watch_spectrum(
+        &self,
+        target: Option<InsertTarget>,
+        index: Option<usize>,
+    ) -> Result<(), InsertError> {
+        let packed = match (target, index) {
+            (Some(target), Some(index)) => {
+                let _ = self.tracks.insert_readouts(target, index)?;
+                match target {
+                    InsertTarget::Track(strip) => SpectrumTarget::track(strip, index),
+                    InsertTarget::Bus(strip) => SpectrumTarget::bus(strip, index),
+                    InsertTarget::Master => SpectrumTarget::master(index),
+                }
+            }
+            _ => None,
+        };
+        if packed.is_none() {
+            self.spectrum.clear();
+        }
+        self.spectrum_watch.set(packed);
+        Ok(())
+    }
+
+    /// Latest analysed hop for the armed insert.
+    pub fn insert_spectrum(&self) -> Option<crate::effects::SpectrumDto> {
+        self.spectrum_watch.get()?;
+        self.spectrum.poll().map(crate::effects::SpectrumDto::from)
+    }
+
+    /// EQ hold-to-solo of the source.
+    pub fn set_insert_listen(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        band: Option<&str>,
+    ) -> Result<(), InsertError> {
+        self.tracks.set_insert_listen(target, index, band)
+    }
+
     /// Turn one insert's bypass on or off.
     ///
     /// A parameter like any other -- every effect declares `bypass` and does the
@@ -1207,6 +1267,47 @@ impl AppState {
         self.tracks.set_pan(track, pan)
     }
 
+    /// Channel pitch for an audio-clip or one-shot track, in cents.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_track_pitch_cents(&self, track: usize, cents: f32) -> Result<(), MixerError> {
+        self.tracks.set_pitch_cents(track, cents)?;
+        self.apply_sample_play(track)
+    }
+
+    /// SMP region for an audio-clip or one-shot track, in the file's frames.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_track_sample_region(
+        &self,
+        track: usize,
+        start_frames: u64,
+        end_frames: u64,
+    ) -> Result<(), MixerError> {
+        self.tracks
+            .set_sample_region(track, start_frames, end_frames)?;
+        self.apply_sample_play(track)
+    }
+
+    fn apply_sample_play(&self, track: usize) -> Result<(), MixerError> {
+        let source = self
+            .tracks
+            .project()
+            .tracks
+            .get(track)
+            .map(|def| def.source.clone());
+        match source {
+            Some(Source::AudioClip { .. }) => {
+                self.publish_audio_clips();
+                Ok(())
+            }
+            Some(Source::OneShot { .. }) => self.tracks.refresh_oneshot(track, &self.audio),
+            _ => Ok(()),
+        }
+    }
+
     /// Mute or unmute a track.
     ///
     /// # Errors
@@ -1280,6 +1381,41 @@ impl AppState {
         outcome
     }
 
+    /// Decode `path` as a one-shot sampler and add a rack channel that plays it.
+    ///
+    /// The same file can still be dropped on a playlist lane, which creates (or
+    /// reuses) a separate Audio Clip channel.
+    ///
+    /// # Errors
+    /// Decode failure, or [`add_track`](Self::add_track).
+    pub fn add_sample_channel(&self, path: &std::path::Path) -> Result<usize, MixerError> {
+        let source = self
+            .load_audio_source(path)
+            .map_err(|err| MixerError::Source(SourceError::SampleFile(err.to_string())))?;
+        let name = source.name();
+        let source_id = source.id();
+        self.add_track(Source::OneShot { source_id }, Some(name))
+    }
+
+    /// The Audio Clip channel for `source_id`, creating one if the file is new.
+    ///
+    /// Dropping the same wav on the playlist twice reuses this channel, so
+    /// volume, pan, pitch and region stay shared.
+    ///
+    /// # Errors
+    /// [`add_track`](Self::add_track).
+    pub fn ensure_audio_clip_channel(&self, source_id: u64) -> Result<usize, MixerError> {
+        if let Some(index) = self.tracks.project().find_audio_clip_channel(source_id) {
+            return Ok(index);
+        }
+        let name = self
+            .sources
+            .get(source_id)
+            .map(|source| source.name())
+            .unwrap_or_else(|| format!("Audio {source_id}"));
+        self.add_track(Source::AudioClip { source_id }, Some(name))
+    }
+
     /// Put the track wherever this build's plugin state says it has to go.
     ///
     /// Split out so [`add_track`](Self::add_track) has exactly one exit and one
@@ -1338,6 +1474,21 @@ impl AppState {
     /// # Errors
     /// [`MixerError`] -- most usefully [`TrackError::LastTrack`].
     pub fn remove_track(&self, track: usize) -> Result<(), MixerError> {
+        let clip_source =
+            self.tracks
+                .project()
+                .tracks
+                .get(track)
+                .and_then(|def| match def.source {
+                    Source::AudioClip { source_id } => Some(source_id),
+                    _ => None,
+                });
+        if let Some(source_id) = clip_source {
+            let _ = self.edit_playlist(|list| {
+                list.remove_clips_of_source(source_id);
+                Ok(())
+            });
+        }
         // See `add_track` for why the VST3 host is asked first.
         if !self.vst3_bridge.board().is_empty() {
             self.vst3_command(Vst3Command::RemoveTrack { track })
@@ -1491,7 +1642,7 @@ impl AppState {
         }
     }
 
-    /// Republish the arrangement's **audio** clips to the master bus.
+    /// Republish the arrangement's **audio** clips to every Audio Clip channel.
     ///
     /// Notes and audio cross the wall to two places -- the scheduler and the
     /// clip node -- so every song edit publishes both. Failures are logged
@@ -1500,7 +1651,10 @@ impl AppState {
     /// last of a burst). The one thing it must not do is fail an edit that has
     /// already been applied to the session.
     fn publish_audio_clips(&self) {
-        let song = self.sequencer.compile_audio(&self.sources);
+        let project = self.tracks.project();
+        let song = self
+            .sequencer
+            .compile_audio_with(&self.sources, |id| project.audio_clip_tune(id));
         if let Err(err) = self.tracks.audio_clips().install(song) {
             if !matches!(err, SourceError::Audio(AudioIoError::NotRunning)) {
                 log::warn!("could not publish the audio clips: {err}");
@@ -1531,6 +1685,18 @@ impl AppState {
         // compile of a list a human can count.
         self.publish_audio_clips();
         Ok(source)
+    }
+
+    /// Audition `path` through the dedicated preview slot. Does not consume a
+    /// registry entry.
+    ///
+    /// # Errors
+    /// Decode failure, or no audio device.
+    pub fn preview_audio_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(), crate::file_preview::PreviewFileError> {
+        self.tracks.file_preview().play(path)
     }
 
     /// How long a clip covering the whole of `source_id` should be, in ticks.
@@ -1878,9 +2044,9 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let state = AppState::from_kernel(&kernel).unwrap();
 
-        // Scans this machine's real CLAP directories. The count depends on what
-        // is installed (CI: none), so the contract under test is "it returns a
-        // well-formed list without panicking", plus the cache.
+        // Lists this machine's CLAP plugins from the on-disk cache only. A
+        // Rescan would open every unknown module, which is how unlicensed
+        // plugins pop an activation window — that is not a test's job.
         let plugins = state.clap_plugins(false);
         for plugin in &plugins {
             assert!(!plugin.id.is_empty(), "a scanned plugin always has an id");
@@ -1888,11 +2054,6 @@ mod tests {
         }
         assert!(state.clap().has_cached_scan());
         assert_eq!(state.clap_plugins(false).len(), plugins.len());
-        assert_eq!(
-            state.clap_plugins(true).len(),
-            plugins.len(),
-            "a rescan of an unchanged machine finds the same plugins"
-        );
     }
 
     #[test]

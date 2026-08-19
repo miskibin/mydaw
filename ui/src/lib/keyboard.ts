@@ -2,17 +2,17 @@
  * The computer-keyboard piano.
  *
  * Pure functions and constants only -- no DOM, no backend -- so the mapping can
- * be reasoned about (and later tested) without a browser. `state.tsx` owns the
+ * be reasoned about (and later tested) without a renderer. `state.tsx` owns the
  * listeners and the held-note bookkeeping.
  *
- * The layout is the one FL Studio and Live both use, which is worth copying
- * exactly: anybody who has touched a DAW already knows it, and a novel layout
- * would be a novelty rather than an improvement.
+ * The layout is FL Studio's typing keyboard (Ctrl+T): two octaves, black keys
+ * on the number row, Q = C of the upper octave.
  *
  * ```text
- *        W   E       T   Y   U
- *      A   S   D   F   G   H   J        A = C, J = B
- *        Z = octave down, X = octave up
+ *     2 3   5 6 7     9 0
+ *    Q W E R T Y U I O P     Q = C4 when the base octave is 3
+ *     S D   G H J
+ *    Z X C V B N M           Z = C3
  * ```
  */
 
@@ -22,81 +22,65 @@ const KEYS_PER_OCTAVE = 12;
 /** Velocity every key sends. A computer keyboard has no velocity sensor. */
 export const DEFAULT_VELOCITY = 0.8;
 
-/** Octave the piano starts on. Octave 4 puts `A` on middle C (MIDI 60). */
-export const DEFAULT_OCTAVE = 4;
+/**
+ * Octave the *lower* row starts on. Octave 3 puts `Z` on C3 and `Q` on C4,
+ * which is FL's default and what the toolbar button announces.
+ */
+export const DEFAULT_OCTAVE = 3;
 
 /**
  * Lowest and highest octave the piano can shift to.
  *
- * Bounded so every key of the top octave still lands inside CLAP's `0..=127`:
- * octave 8 gives keys 108..119, octave -1 gives 0..11.
+ * Bounded so the top of the Q-row (`P` = E of the octave above Q) still lands
+ * inside CLAP's `0..=127`.
  */
 export const MIN_OCTAVE = -1;
 export const MAX_OCTAVE = 8;
 
 /**
- * Physical key (`KeyboardEvent.code`) to semitone above the octave's C.
+ * Physical key (`KeyboardEvent.code`) to semitone above the lower row's C.
  *
  * `code`, not `key`: the mapping is about where a finger sits, so it must not
- * move when somebody uses a French or Dvorak layout.
+ * move when somebody uses a French or Dvorak layout. The Q-row is +12 so it
+ * sits one octave above Z.
  */
 export const KEY_TO_SEMITONE: Readonly<Record<string, number>> = {
-  KeyA: 0, //  C
-  KeyW: 1, //  C#
-  KeyS: 2, //  D
-  KeyE: 3, //  D#
-  KeyD: 4, //  E
-  KeyF: 5, //  F
-  KeyT: 6, //  F#
-  KeyG: 7, //  G
-  KeyY: 8, //  G#
-  KeyH: 9, //  A
-  KeyU: 10, // A#
-  KeyJ: 11, // B
+  // Lower octave: Z = C
+  KeyZ: 0,
+  KeyS: 1,
+  KeyX: 2,
+  KeyD: 3,
+  KeyC: 4,
+  KeyV: 5,
+  KeyG: 6,
+  KeyB: 7,
+  KeyH: 8,
+  KeyN: 9,
+  KeyJ: 10,
+  KeyM: 11,
+  // Upper octave: Q = C
+  KeyQ: 12,
+  Digit2: 13,
+  KeyW: 14,
+  Digit3: 15,
+  KeyE: 16,
+  KeyR: 17,
+  Digit5: 18,
+  KeyT: 19,
+  Digit6: 20,
+  KeyY: 21,
+  Digit7: 22,
+  KeyU: 23,
+  KeyI: 24,
+  Digit9: 25,
+  KeyO: 26,
+  Digit0: 27,
+  KeyP: 28,
 };
 
-/** Physical key that shifts the piano down an octave. */
-export const OCTAVE_DOWN_CODE = 'KeyZ';
-/** Physical key that shifts the piano up an octave. */
-export const OCTAVE_UP_CODE = 'KeyX';
-
-/**
- * Drum pads, active only while the drum kit is the selected source.
- *
- * ```text
- *   C = kick (36)   V = snare (38)   B = closed hat (42)   N = open hat (46)
- * ```
- *
- * The bottom row, continuing rightwards from `Z`/`X` -- which stay the octave
- * shift, because taking them away would break the piano the moment somebody
- * switched instrument and back. Four adjacent, unused keys in the order a
- * drummer would name them (low to high, kick to hat), so the mapping is
- * learnable in one glance at the status bar hint.
- *
- * These are *additional*: the piano keys keep working, so playing `A` in octave
- * 2 still lands on key 36 and still hits the kick. The pads exist so a hit does
- * not need an octave shift first.
- */
-export const DRUM_PAD_KEYS: Readonly<Record<string, number>> = {
-  KeyC: 36, // kick
-  KeyV: 38, // snare
-  KeyB: 42, // closed hat
-  KeyN: 46, // open hat
-};
-
-/** Human-readable hint for the drum pads, shown when the kit is selected. */
-export const DRUM_PAD_HINT = 'C kick  V snare  B closed hat  N open hat';
-
-/**
- * MIDI key for a drum pad, or `null` when that key is not a pad.
- *
- * Kept separate from {@link midiKeyFor} rather than merged into it: a pad is
- * not transposed by the octave shift (a kick is key 36, always), and folding
- * the two maps together would make that an exception instead of a fact.
- */
-export function drumPadKeyFor(code: string): number | null {
-  return DRUM_PAD_KEYS[code] ?? null;
-}
+// Drum pads (C/V/B/N one-shots) were dropped deliberately: the FL two-octave
+// piano layout above already owns those keys, so pads never got wired into
+// the listener and carry no mapping here.
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'] as const;
 
@@ -106,8 +90,8 @@ export function clampOctave(octave: number): number {
 }
 
 /**
- * MIDI key number for a physical key at a given octave, or `null` when that key
- * is not part of the piano.
+ * MIDI key number for a physical key at a given base octave, or `null` when
+ * that key is not part of the piano.
  *
  * Returns `null` rather than clamping for a key outside `0..=127`: silently
  * playing a different note than the one asked for is worse than playing none.
@@ -127,13 +111,27 @@ export function noteName(key: number): string {
 }
 
 /**
+ * Whether the computer-keyboard piano is listening.
+ *
+ * Off by default, like FL's "typing keyboard to piano" (Ctrl+T). The top-bar
+ * button and Ctrl+T flip this. When it is on, letter keys are notes and the
+ * piano roll's tool shortcuts (P/B/E/D/C) stand down.
+ */
+let typingPianoEnabled = false;
+
+/** Pause or resume the typing piano. */
+export function setTypingPianoEnabled(enabled: boolean): void {
+  typingPianoEnabled = enabled;
+}
+
+/**
  * Whether a keyboard event should reach the piano at all.
  *
- * Two rejections, both about not stealing keys that mean something else:
- * anything typed into a field, and anything held with a modifier (Ctrl+S must
- * stay Ctrl+S, not a D).
+ * Three rejections: the toggle is off, anything typed into a field, and
+ * anything held with a modifier (Ctrl+S must stay Ctrl+S, not a D).
  */
 export function isPianoEvent(event: KeyboardEvent): boolean {
+  if (!typingPianoEnabled) return false;
   if (event.ctrlKey || event.altKey || event.metaKey) return false;
   const target = event.target as HTMLElement | null;
   if (!target) return true;

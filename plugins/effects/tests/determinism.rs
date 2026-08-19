@@ -206,19 +206,41 @@ fn every_effect_is_bit_transparent_at_its_defaults_or_documents_why_not() {
         .collect();
     for info in registry.effects() {
         let out = render(&registry, info.type_id, &input, 96, |_| {}, no_edits);
-        if info.type_id == "effects.delay" {
+        if info.type_id == "effects.delay" || info.type_id == "effects.reverb" {
             // Scaled dry and nothing else: the line is empty for the first
             // repeat's worth of samples, so anything the wet path contributes
             // here would be a bug. Compared to a tolerance rather than to the
-            // bit because `30 % * 0.01` is not exactly `0.3` in `f32`.
-            let worst = input
+            // bit because `25 % * 0.01` is not exactly `0.25` in `f32`.
+            let dry = if info.type_id == "effects.reverb" {
+                0.75
+            } else {
+                0.7
+            };
+            let n = if info.type_id == "effects.reverb" {
+                480
+            } else {
+                input.len()
+            };
+            let worst = input[..n]
                 .iter()
-                .zip(&out)
-                .map(|(a, b)| (a[0] * 0.7 - b[0]).abs().max((a[1] * 0.7 - b[1]).abs()))
+                .zip(&out[..n])
+                .map(|(a, b)| (a[0] * dry - b[0]).abs().max((a[1] * dry - b[1]).abs()))
                 .fold(0.0_f32, f32::max);
             assert!(
                 worst < 1.0e-6,
-                "the delay's dry path is off by {worst}, or its line is not empty"
+                "{} dry path is off by {worst}, or its line is not empty",
+                info.type_id
+            );
+        } else if info.type_id == "effects.limiter" {
+            let latency = (0.001 * SR).round() as usize;
+            let worst = input
+                .iter()
+                .zip(out.iter().skip(latency))
+                .map(|(a, b)| (a[0] - b[0]).abs().max((a[1] - b[1]).abs()))
+                .fold(0.0_f32, f32::max);
+            assert!(
+                worst < 1.0e-5,
+                "the limiter delayed a quiet signal wrongly by {worst}"
             );
         } else if info.type_id == "effects.saturator" {
             // Late, not different: the output has to be lined up with the input

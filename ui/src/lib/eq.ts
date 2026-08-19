@@ -268,6 +268,121 @@ export function eqX(hz: number, width: number): number {
   return Math.min(1, Math.max(0, t)) * width;
 }
 
+/** Inverse of {@link eqX}: a pixel across a box of `width` → Hz. */
+export function eqHzFromX(x: number, width: number): number {
+  const t = Math.min(1, Math.max(0, width > 0 ? x / width : 0));
+  return EQ_MIN_HZ * (EQ_MAX_HZ / EQ_MIN_HZ) ** t;
+}
+
+/** dB → y in a box of `height`, 0 dB at the midline. */
+export function eqY(db: number, height: number, rangeDb: number): number {
+  const span = rangeDb > 0 ? rangeDb : 1;
+  const clamped = Math.min(span, Math.max(-span, db));
+  return height / 2 - (clamped / span) * (height / 2);
+}
+
+/** Inverse of {@link eqY}. */
+export function eqDbFromY(y: number, height: number, rangeDb: number): number {
+  const span = rangeDb > 0 ? rangeDb : 1;
+  if (height <= 0) return 0;
+  return Math.min(span, Math.max(-span, ((height / 2 - y) / (height / 2)) * span));
+}
+
+/** dB → Y for the live analyser: 0 dBFS at the top, `floorDb` at the bottom. */
+export function analyserY(db: number, height: number, floorDb = -90): number {
+  const t = (db - floorDb) / (0 - floorDb);
+  return (1 - Math.min(1, Math.max(0, t))) * height;
+}
+
+/**
+ * Filled analyser from the bottom of the box. Separate from {@link eqCurvePath}:
+ * the spectrum is a 0 dBFS landscape, the EQ curve is bipolar around 0 dB.
+ */
+export function analyserPath(
+  bins: readonly number[],
+  width: number,
+  height: number,
+  floorDb = -90,
+): string {
+  if (bins.length < 2) return '';
+  const step = width / (bins.length - 1);
+  const coords = bins.map((db, i) => `${(i * step).toFixed(2)} ${analyserY(db, height, floorDb).toFixed(2)}`);
+  return `M0 ${height} L${coords.join(' L')} L${width} ${height} Z`;
+}
+
+/** Ridge of {@link analyserPath}, so the fill can have a visible lip. */
+export function analyserLine(
+  bins: readonly number[],
+  width: number,
+  height: number,
+  floorDb = -90,
+): string {
+  if (bins.length < 2) return '';
+  const step = width / (bins.length - 1);
+  return bins
+    .map(
+      (db, i) =>
+        `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(2)} ${analyserY(db, height, floorDb).toFixed(2)}`,
+    )
+    .join(' ');
+}
+
+export function bandHandle(
+  values: EqValues,
+  bandId: string,
+  width: number,
+  height: number,
+  rangeDb: number,
+): { x: number; y: number; enabled: boolean } | null {
+  const freq = values.get(`${bandId}.freq`);
+  if (freq === undefined) return null;
+  const gain = values.get(`${bandId}.gain`) ?? 0;
+  return {
+    x: eqX(freq, width),
+    y: eqY(gain, height, rangeDb),
+    enabled: (values.get(`${bandId}.enabled`) ?? 0) >= 0.5,
+  };
+}
+
+/**
+ * Which band a click infers, from the Pro-Q heuristic the research adopted:
+ * far left → HP, below ~30 Hz → low shelf, above ~10 kHz → high shelf,
+ * otherwise the nearest free bell.
+ */
+export function inferBand(hz: number, x: number, width: number, values: EqValues): string {
+  if (width > 0 && x / width < 0.04) return 'hp';
+  if (hz < 30) return 'low';
+  if (hz > 10_000) return 'high';
+  const bells = ['bell1', 'bell2'] as const;
+  const free = bells.find((id) => (values.get(`${id}.enabled`) ?? 0) < 0.5);
+  if (free) return free;
+  const d1 = Math.abs(Math.log(hz / Math.max(1, values.get('bell1.freq') ?? 500)));
+  const d2 = Math.abs(Math.log(hz / Math.max(1, values.get('bell2.freq') ?? 3000)));
+  return d1 <= d2 ? 'bell1' : 'bell2';
+}
+
+/** Closest band handle within `radius` pixels, or `null`. */
+export function hitBand(
+  values: EqValues,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  rangeDb: number,
+  radius: number,
+): string | null {
+  let best: { id: string; d: number } | null = null;
+  for (const band of EQ_BANDS) {
+    const handle = bandHandle(values, band.id, width, height, rangeDb);
+    if (!handle) continue;
+    const dx = handle.x - x;
+    const dy = handle.y - y;
+    const d = Math.hypot(dx, dy);
+    if (d <= radius && (!best || d < best.d)) best = { id: band.id, d };
+  }
+  return best?.id ?? null;
+}
+
 /**
  * The sampled response as an SVG `path` command.
  *

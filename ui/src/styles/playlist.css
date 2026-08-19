@@ -224,21 +224,21 @@
   pointer-events: none;
 }
 
+/* Width and left offset are the file's own duration on the timeline, so a
+   shorter clip crops the wave (via .wv-clip overflow) instead of shrinking it. */
 .wv-clip__wave {
   position: absolute;
   top: 14px;
-  right: 0;
   bottom: 2px;
-  left: 0;
-  width: 100%;
   height: calc(100% - 16px);
   color: var(--txt2);
-  opacity: 0.55;
+  opacity: 0.85;
   pointer-events: none;
 }
 
 /* The pattern a clip plays, in miniature. Inert: the clip underneath is grabbed
-   through it, so a drag never depends on missing the marks. */
+   through it, so a drag never depends on missing the marks. One cycle is the
+   pattern's own duration; extra copies tile when the clip is longer. */
 .wv-clip__art {
   position: absolute;
   top: 15px;
@@ -246,6 +246,12 @@
   bottom: 3px;
   left: 0;
   pointer-events: none;
+}
+
+.wv-clip__cycle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
 }
 
 .wv-clip__mark {
@@ -277,7 +283,7 @@
   right: 0;
   bottom: 0;
   width: 7px;
-  background: rgb(0 0 0 / 16%);
+  background: var(--grip);
   cursor: ew-resize;
 }
 

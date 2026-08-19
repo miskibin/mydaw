@@ -58,6 +58,7 @@ pub struct InstrumentInfo {
 }
 
 /// One instrument: what to show, and what to build.
+#[derive(Clone)]
 struct Entry {
     info: InstrumentInfo,
     factory: Arc<SamplerFactory>,
@@ -69,6 +70,8 @@ pub struct SamplerRegistry {
     entries: ArcSwap<Vec<Entry>>,
     scanning: AtomicBool,
     generation: AtomicU64,
+    /// One-shots dropped onto the rack. A disk rescan must not forget them.
+    user: Mutex<Vec<Entry>>,
 }
 
 impl SamplerRegistry {
@@ -79,6 +82,7 @@ impl SamplerRegistry {
             entries: ArcSwap::from_pointee(Vec::new()),
             scanning: AtomicBool::new(false),
             generation: AtomicU64::new(0),
+            user: Mutex::new(Vec::new()),
         }
     }
 
@@ -176,6 +180,40 @@ impl SamplerRegistry {
             .map(|entry| entry.factory.create(sample_rate, max_block))
     }
 
+    /// Decode `path` into a oneshot instrument and keep it across rescans.
+    ///
+    /// The same path is installed once: a second drop of the same file reuses
+    /// the bank and the caller adds another channel on top of it.
+    pub fn install_file(&self, path: &Path) -> Result<InstrumentInfo, crate::LoadError> {
+        let id = crate::file_instrument_id(path);
+        if let Some(info) = self.instruments().into_iter().find(|info| info.id == id) {
+            return Ok(info);
+        }
+
+        let bank = SampleBank::oneshot_from_path(path)?;
+        let entry = entry_for(bank);
+        let info = entry.info.clone();
+        let type_id = info.type_id;
+
+        let mut user = self.user.lock();
+        if let Some(existing) = user.iter().find(|entry| entry.info.type_id == type_id) {
+            return Ok(existing.info.clone());
+        }
+        user.push(entry.clone());
+
+        let mut merged: Vec<Entry> = self
+            .entries
+            .load()
+            .iter()
+            .filter(|entry| entry.info.type_id != type_id)
+            .cloned()
+            .collect();
+        merged.push(entry);
+        self.entries.store(Arc::new(merged));
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        Ok(info)
+    }
+
     /// Rescan the root and publish what is there. **Blocking**, seconds for a
     /// piano; call it off any thread a user is waiting on.
     ///
@@ -183,25 +221,36 @@ impl SamplerRegistry {
     /// and the last one wins. Nothing is torn.
     pub fn rescan(&self) {
         self.scanning.store(true, Ordering::Release);
-        let entries = scan(&self.root);
-        let count = entries.len();
-        let bytes: usize = entries.iter().map(|entry| entry.info.bytes).sum();
-        self.entries.store(Arc::new(entries));
-        self.generation.fetch_add(1, Ordering::AcqRel);
-        self.scanning.store(false, Ordering::Release);
+        let mut entries = scan(&self.root);
+        {
+            let user = self.user.lock();
+            for entry in user.iter() {
+                if !entries
+                    .iter()
+                    .any(|existing| existing.info.type_id == entry.info.type_id)
+                {
+                    entries.push(entry.clone());
+                }
+            }
+            let count = entries.len();
+            let bytes: usize = entries.iter().map(|entry| entry.info.bytes).sum();
+            self.entries.store(Arc::new(entries));
+            self.generation.fetch_add(1, Ordering::AcqRel);
+            self.scanning.store(false, Ordering::Release);
 
-        if count == 0 {
-            log::info!(
-                "sampler: no instruments under {}; \
-                 run scripts/fetch-assets.ps1 or use the in-app downloader to install them",
-                self.root.display()
-            );
-        } else {
-            log::info!(
-                "sampler: {count} instrument(s) loaded from {} ({:.1} MB of samples)",
-                self.root.display(),
-                bytes as f64 / 1e6
-            );
+            if count == 0 {
+                log::info!(
+                    "sampler: no instruments under {}; \
+                     run scripts/fetch-assets.ps1 or use the in-app downloader to install them",
+                    self.root.display()
+                );
+            } else {
+                log::info!(
+                    "sampler: {count} instrument(s) loaded from {} ({:.1} MB of samples)",
+                    self.root.display(),
+                    bytes as f64 / 1e6
+                );
+            }
         }
     }
 
@@ -445,6 +494,31 @@ mod tests {
         let found = registry.instruments();
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].id, "good");
+    }
+
+    #[test]
+    fn a_dropped_file_survives_a_rescan_and_is_not_decoded_twice() {
+        let temp = TempDir::new("user-oneshot");
+        let path = temp.path().join("rim.wav");
+        write_wav(&path, 8_000, 1, &[0.4_f32; 40]);
+
+        let registry = SamplerRegistry::detached();
+        let first = registry.install_file(&path).expect("installs");
+        assert_eq!(first.id, crate::file_instrument_id(&path));
+        assert!(first.type_id.starts_with("sampler:file:"));
+        assert_eq!(registry.instruments().len(), 1);
+
+        registry.rescan();
+        assert_eq!(
+            registry.instruments().len(),
+            1,
+            "a disk scan must not drop user oneshots"
+        );
+        assert!(registry.contains(first.type_id));
+
+        let again = registry.install_file(&path).expect("reuses");
+        assert_eq!(again.type_id, first.type_id);
+        assert_eq!(registry.instruments().len(), 1);
     }
 
     /// A directory whose manifest is fine but whose samples are all missing is

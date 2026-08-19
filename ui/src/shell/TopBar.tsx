@@ -1,6 +1,5 @@
 /**
- * The top bar: the project, the transport, the tempo, which pattern is being
- * edited, and which view is up.
+ * The top bar: the project, the transport, the tempo, and which view is up.
  *
  * The clock and the bar counter are painted on the shared frame loop rather
  * than from signals -- they change 60 times a second and must not touch the
@@ -8,21 +7,18 @@
  *
  * ## PAT / SONG lives here, next to the transport
  *
- * The mock implies the mode from the view: the rack plays the pattern, the
- * playlist plays the song. That is a trap. Looking at the mixer while a song
- * plays is the single most common thing a person does in a DAW, and a view
- * switch that silently stopped the arrangement and started looping one pattern
- * would be the worst kind of surprise -- a *hidden* mode change. So the mode is
- * an explicit, always-visible toggle next to the transport, exactly where FL
- * Studio puts it, and switching views never changes what plays.
+ * Opening Playlist switches to SONG; opening Rack switches to PAT. Mixer
+ * leaves the mode alone so you can mix the arrangement or the pattern without
+ * the view change stopping playback. The toggle is still here for an override
+ * on the current view.
  */
 
-import { Show, createSignal } from 'solid-js';
+import { Show, createSignal, onCleanup } from 'solid-js';
 
 import { NumberField } from '../ui/NumberField';
+import { bindWheel } from '../ui/drag';
 import { onFrame } from '../ui/frameLoop';
 import {
-  IconCaret,
   IconLoop,
   IconMoon,
   IconPause,
@@ -30,15 +26,16 @@ import {
   IconRecord,
   IconStop,
   IconSun,
+  IconTypingKeyboard,
   WaveMark,
 } from '../ui/icons';
 import { barsBeats, samplesToTicks } from '../lib/pattern';
+import { midiKeyFor, noteName, clampOctave } from '../lib/keyboard';
 import { formatTimecode } from '../lib/playhead';
 import { useAppState } from '../state';
 import { useTheme } from '../theme/ThemeProvider';
-import { trackColor } from '../theme/tokens';
 import { useView, type MainView } from './view';
-import { PatternMenu } from './PatternMenu';
+import { MasterVolume } from './MasterVolume';
 
 const MIN_BPM = 20;
 const MAX_BPM = 999;
@@ -54,7 +51,6 @@ export function TopBar(): ReturnType<typeof Show> {
   const view = useView();
   const theme = useTheme();
 
-  const [patternMenu, setPatternMenu] = createSignal(false);
   const [projectMenu, setProjectMenu] = createSignal(false);
 
   let clockEl: HTMLSpanElement | undefined;
@@ -68,11 +64,6 @@ export function TopBar(): ReturnType<typeof Show> {
     if (clockEl) clockEl.textContent = formatTimecode(samples / rate);
     if (barEl) barEl.textContent = barsBeats(samplesToTicks(samples, rate, app.bpm()));
   });
-
-  const activePattern = () => {
-    const id = app.sequencer()?.patternSet.activeId;
-    return app.patterns().find((pattern) => pattern.id === id);
-  };
 
   return (
     <header class="wv-top">
@@ -182,6 +173,37 @@ export function TopBar(): ReturnType<typeof Show> {
         >
           <IconLoop />
         </button>
+        <button
+          type="button"
+          class="wv-tbtn"
+          classList={{ 'is-active': view.typingKeyboard() }}
+          aria-pressed={view.typingKeyboard()}
+          title={
+            view.typingKeyboard()
+              ? `Typing keyboard on (Ctrl+T) — Q is ${noteName(midiKeyFor('KeyQ', app.octave()) ?? 60)}, 2 is the sharp, W is D. Scroll to change octave.`
+              : 'Typing keyboard to piano (Ctrl+T) — Q is C4, 2 is C#4, W is D4, Z is C3'
+          }
+          onClick={() => {
+            view.setTypingKeyboard((on) => !on);
+            app.say(
+              'Typing keyboard',
+              view.typingKeyboard()
+                ? `Q is ${noteName(midiKeyFor('KeyQ', app.octave()) ?? 60)}`
+                : 'off',
+            );
+          }}
+          ref={(el) =>
+            // bindWheel, per drag.ts's rule: a JSX onWheel may end up passive
+            // and its preventDefault a silent no-op.
+            onCleanup(
+              bindWheel(el, (notches) => {
+                app.setOctave(clampOctave(app.octave() + notches));
+              }),
+            )
+          }
+        >
+          <IconTypingKeyboard />
+        </button>
       </div>
 
       <div class="wv-clock">
@@ -218,7 +240,7 @@ export function TopBar(): ReturnType<typeof Show> {
         </div>
       </Show>
 
-      <div class="wv-seg" title="What the transport plays. Independent of which view is open.">
+      <div class="wv-seg" title="What the transport plays. Playlist switches to SONG, Rack to PAT; Mixer leaves it.">
         <button
           type="button"
           class="wv-seg__btn wv-seg__btn--mode"
@@ -237,30 +259,9 @@ export function TopBar(): ReturnType<typeof Show> {
         </button>
       </div>
 
-      <div class="wv-patsel">
-        <button
-          type="button"
-          class="wv-patsel__btn"
-          classList={{ 'is-open': patternMenu() }}
-          title="The pattern the rack and the piano roll are editing"
-          onClick={() => setPatternMenu((open) => !open)}
-        >
-          <span
-            class="wv-swatch"
-            style={{ background: activePattern()?.color ?? trackColor(activePattern()?.id ?? 0) }}
-          />
-          <span class="wv-patsel__text">
-            <span class="wv-patsel__name">{activePattern()?.name ?? '—'}</span>
-            <span class="wv-patsel__tag">PATTERN</span>
-          </span>
-          <IconCaret />
-        </button>
-        <Show when={patternMenu()}>
-          <PatternMenu onClose={() => setPatternMenu(false)} />
-        </Show>
-      </div>
-
       <div class="wv-spacer" />
+
+      <MasterVolume />
 
       <div class="wv-seg">
         {VIEWS.map(([id, label, hotkey]) => (

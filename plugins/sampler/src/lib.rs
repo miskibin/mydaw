@@ -60,7 +60,10 @@ pub mod node;
 pub mod registry;
 pub mod test_support;
 
-pub use bank::{load_from_manifest, load_instrument, LoadError, LoadedSample, SampleBank};
+pub use bank::{
+    file_instrument_id, file_path_of, load_from_manifest, load_instrument, LoadError, LoadedSample,
+    SampleBank, ONESHOT_MAX_SECONDS,
+};
 pub use decode::{decode_file, DecodeError};
 pub use download::{
     AssetDownloader, AssetManifest, AssetState, AssetStatus, DownloadError, ASSET_MANIFEST_FILE,

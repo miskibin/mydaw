@@ -55,8 +55,6 @@ import {
   clampOctave,
   isPianoEvent,
   midiKeyFor,
-  OCTAVE_DOWN_CODE,
-  OCTAVE_UP_CODE,
 } from './lib/keyboard';
 import { Playhead } from './lib/playhead';
 import {
@@ -66,6 +64,7 @@ import {
   UndoStack,
   type PlaylistSnapshot,
 } from './lib/undo';
+import { clampDb, formatDb, MAX_DB, MIN_DB } from './panels/mixer/scale';
 
 /** How long a pattern edit waits for the next one before it is pushed. */
 const PATTERN_PUSH_DEBOUNCE_MS = 50;
@@ -73,6 +72,15 @@ const PATTERN_PUSH_DEBOUNCE_MS = 50;
 const READOUT_POLL_MS = 66;
 /** How long the parameter readout stays up after the last change. */
 const PARAM_TOAST_MS = 2600;
+/**
+ * How long a master-gain gesture may pause before we refetch the mixer.
+ *
+ * Same window as `WHEEL_COMMIT_MS` in `ui/drag.ts`: a drag has a release, a
+ * wheel does not, and one `get_tracks` per notch would sit a round trip between
+ * clicks. Kept as a number rather than imported, because this module must not
+ * depend on the view layer.
+ */
+const MASTER_GAIN_SETTLE_MS = 180;
 
 /**
  * The contributed panel the dev-only IPC benchmark announces itself with.
@@ -136,6 +144,7 @@ export interface AppState {
   assets: Accessor<AssetStatus[]>;
   playing: Accessor<boolean>;
   octave: Accessor<number>;
+  setOctave(octave: number): void;
   heldNotes: Accessor<number[]>;
   /** Bumped whenever the undo stack changes, so labels can be reactive. */
   undoRevision: Accessor<number>;
@@ -165,6 +174,15 @@ export interface AppState {
   seek(samplePos: number): void;
   setPlayMode(mode: PlayMode): void;
   setBpm(bpm: number): void;
+
+  /**
+   * Master output level, in dB. The navbar knob and the mixer fader both read
+   * this, including the value a gesture has already sent but the engine has not
+   * echoed yet.
+   */
+  masterGainDb: Accessor<number>;
+  /** Set the master fader. Optimistic; a quiet moment later it reconciles. */
+  setMasterGain(db: number): void;
 
   /** Run a command that answers with the whole mixer, and adopt it. */
   mixerCommand(run: (backend: Backend) => Promise<MixerState>): Promise<void>;
@@ -239,6 +257,7 @@ function createAppState(): AppState {
   const [snapshot, setSnapshot] = createSignal<UiSnapshot>();
   const [sequencer, setSequencer] = createSignal<SequencerState>();
   const [mixer, setMixer] = createSignal<MixerState>();
+  const [masterGainOverride, setMasterGainOverride] = createSignal<number | null>(null);
   const [effects, setEffects] = createSignal<EffectInfoDto[]>([]);
   const [sources, setSources] = createSignal<SourceDto[]>([]);
   const [audioSources, setAudioSources] = createSignal<AudioSourceDto[]>([]);
@@ -249,7 +268,7 @@ function createAppState(): AppState {
   const [streamInfo, setStreamInfo] = createSignal<StreamInfo>();
   const [assets, setAssets] = createSignal<AssetStatus[]>([]);
   const [playing, setPlaying] = createSignal(false);
-  const [octave, setOctave] = createSignal(DEFAULT_OCTAVE);
+  const [octave, setOctaveSignal] = createSignal(DEFAULT_OCTAVE);
   const [heldNotes, setHeldNotes] = createSignal<number[]>([]);
   const [param, setParam] = createSignal<ParamReadout | null>(null);
   const [undoRevision, setUndoRevision] = createSignal(0);
@@ -310,9 +329,10 @@ function createAppState(): AppState {
   }
 
   /**
-   * The plugin scan, kept out of `refresh` on purpose: the first VST3 call
-   * opens every installed module, which is seconds on a stocked machine. The
-   * browser asks for it when its Plugins tab is first opened.
+   * The plugin list, kept out of `refresh` on purpose. Opening a module runs
+   * vendor `init()`, which is how unlicensed plugins pop an activation window,
+   * so the first call only reads the on-disk cache. `rescan` is the Rescan
+   * button: that is the only path that opens plugins.
    */
   let devicesRequested = false;
   async function loadDevices(rescan = false): Promise<void> {
@@ -350,6 +370,29 @@ function createAppState(): AppState {
         // The refetch failing is already reported by the error above.
       }
     }
+  }
+
+  /**
+   * Master volume, the same number the mixer fader and the navbar knob share.
+   *
+   * A gesture writes here immediately and tells the engine in the same beat;
+   * `get_tracks` is asked for once the pointer or the wheel goes quiet, which
+   * is when the override drops and the engine's copy takes over.
+   */
+  const masterGainDb = (): number =>
+    masterGainOverride() ?? mixer()?.master.gainDb ?? 0;
+
+  let masterGainTimer: ReturnType<typeof setTimeout> | undefined;
+  function setMasterGain(db: number): void {
+    const mix = mixer();
+    const next = clampDb(db, mix?.minGainDb ?? MIN_DB, mix?.maxGainDb ?? MAX_DB);
+    setMasterGainOverride(next);
+    say('Master · Volume', `${formatDb(next)} dB`);
+    void backend.setMasterGain(next).catch(report);
+    clearTimeout(masterGainTimer);
+    masterGainTimer = setTimeout(() => {
+      void mixerCommand((b) => b.getTracks()).finally(() => setMasterGainOverride(null));
+    }, MASTER_GAIN_SETTLE_MS);
   }
 
   async function sequencerCommand(
@@ -717,16 +760,11 @@ function createAppState(): AppState {
 
   function onKeyDown(event: KeyboardEvent): void {
     if (!isPianoEvent(event) || event.repeat) return;
-    if (event.code === OCTAVE_DOWN_CODE || event.code === OCTAVE_UP_CODE) {
-      const next = clampOctave(octave() + (event.code === OCTAVE_UP_CODE ? 1 : -1));
-      setOctave(next);
-      say('Keyboard · Octave', `C${next}`);
-      return;
-    }
     const key = midiKeyFor(event.code, octave());
     if (key === null || held.has(event.code)) return;
+    event.preventDefault();
     held.set(event.code, key);
-    setHeldNotes([...held.values()]);
+    setHeldNotes([...held.values()].sort((a, b) => a - b));
     backend.noteOn(key, DEFAULT_VELOCITY).catch(report);
   }
 
@@ -734,7 +772,7 @@ function createAppState(): AppState {
     const key = held.get(event.code);
     if (key === undefined) return;
     held.delete(event.code);
-    setHeldNotes([...held.values()]);
+    setHeldNotes([...held.values()].sort((a, b) => a - b));
     backend.noteOff(key).catch(() => {});
   }
 
@@ -830,6 +868,7 @@ function createAppState(): AppState {
     clearInterval(readoutTimer);
     clearTimeout(pushTimer);
     clearTimeout(toastTimer);
+    clearTimeout(masterGainTimer);
     releaseHeldNotes();
     detach?.();
   });
@@ -855,6 +894,11 @@ function createAppState(): AppState {
     assets,
     playing,
     octave,
+    setOctave(next) {
+      const clamped = clampOctave(next);
+      setOctaveSignal(clamped);
+      say('Keyboard · Octave', `C${clamped}`);
+    },
     heldNotes,
     undoRevision,
     pattern,
@@ -876,6 +920,8 @@ function createAppState(): AppState {
     setPlayMode,
     setBpm,
     mixerCommand,
+    setMasterGain,
+    masterGainDb,
     sequencerCommand,
     startPatternGesture,
     editPattern,

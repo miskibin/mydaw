@@ -34,6 +34,7 @@
 //! slot stays a single unconditional node at a fixed position rather than
 //! becoming a member of a chain whose length changes.
 
+use std::sync::atomic::AtomicI32;
 use std::sync::Arc;
 
 use mydaw_plugin_effects::{EffectInfo, EffectRegistry, BYPASS_PARAM};
@@ -187,6 +188,8 @@ pub struct InsertDef {
     pub type_id: String,
     /// What the audio thread reads.
     pub params: Arc<ParamBlock>,
+    /// Hold-to-solo band index for the EQ, or -1. Not persisted.
+    pub listen: Arc<AtomicI32>,
 }
 
 impl InsertDef {
@@ -204,6 +207,7 @@ impl InsertDef {
             id,
             type_id: type_id.to_owned(),
             params,
+            listen: Arc::new(AtomicI32::new(-1)),
         })
     }
 
@@ -413,6 +417,29 @@ pub struct InsertReadoutsDto {
     pub readouts: Vec<ParamValueDto>,
 }
 
+/// One hop of analysis for the focused insert editor.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpectrumDto {
+    pub bins_pre: Vec<f32>,
+    pub bins_post: Vec<f32>,
+    pub scope_l: Vec<f32>,
+    pub scope_r: Vec<f32>,
+    pub correlation: f32,
+}
+
+impl From<mydaw_ipc_bridge::SpectrumFrame> for SpectrumDto {
+    fn from(frame: mydaw_ipc_bridge::SpectrumFrame) -> Self {
+        Self {
+            bins_pre: frame.bins_pre,
+            bins_post: frame.bins_post,
+            scope_l: frame.scope_l,
+            scope_r: frame.scope_r,
+            correlation: frame.correlation,
+        }
+    }
+}
+
 /// Every meter in one chain, in chain order.
 ///
 /// Inserts that publish nothing are **included with an empty list** rather than
@@ -465,8 +492,8 @@ mod tests {
     fn an_effect_this_build_does_not_have_is_refused_rather_than_substituted() {
         let registry = registry();
         assert_eq!(
-            InsertDef::new(0, "effects.reverb", &registry).unwrap_err(),
-            InsertError::UnknownEffect("effects.reverb".to_owned())
+            InsertDef::new(0, "effects.not-an-effect", &registry).unwrap_err(),
+            InsertError::UnknownEffect("effects.not-an-effect".to_owned())
         );
     }
 
@@ -512,7 +539,7 @@ mod tests {
     fn the_catalogue_carries_everything_a_generic_knob_panel_needs() {
         let registry = registry();
         let catalogue = catalogue(&registry);
-        assert_eq!(catalogue.len(), 5);
+        assert_eq!(catalogue.len(), 7);
 
         let eq = catalogue
             .iter()

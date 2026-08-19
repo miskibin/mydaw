@@ -709,7 +709,7 @@ fn an_insert_naming_an_effect_this_build_does_not_have_is_skipped_not_fatal() {
 
     // Rewrite the entry to name an effect that does not exist, the way a
     // project written by a later build would.
-    project.tracks[0].inserts[0].type_id = "effects.reverb".to_owned();
+    project.tracks[0].inserts[0].type_id = "effects.not-an-effect".to_owned();
     let rig = Rig::new(project);
     assert_eq!(rig.graph.node_count(), known - 1);
     let (left, _) = {

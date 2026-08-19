@@ -109,6 +109,7 @@ fn render(pattern: &Pattern, frames: usize, bpm: f64) -> (Vec<f32>, Arc<AudioIoS
         song: song_slot,
         meters: None,
         debug_tap: None,
+        spectrum: None,
         transport: Arc::new(TransportClock::new(SR)),
         sample_rate: SR,
         out_channels: 2,

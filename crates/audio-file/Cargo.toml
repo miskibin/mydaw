@@ -11,6 +11,10 @@ thiserror.workspace = true
 
 # Non-RT only: decoding happens when a file is loaded, never in the callback.
 symphonia.workspace = true
+# MP3 sits beside symphonia, not inside it: `symphonia-bundle-mp3` has no
+# released 0.6, and a user dropping an mp3 on the playlist is the common case
+# this crate exists to serve.
+minimp3 = "0.5"
 
 [dev-dependencies]
 hound.workspace = true

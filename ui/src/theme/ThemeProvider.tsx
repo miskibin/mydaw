@@ -85,8 +85,7 @@ export function ThemeProvider(props: { children: JSX.Element }): JSX.Element {
     for (const [property, value] of Object.entries(vars)) {
       root.style.setProperty(property, value);
     }
-    // `data-theme` is what the stylesheet keys its handful of non-token rules
-    // on -- scrollbar thumbs and the one shadow that differs between themes.
+    // `data-theme` is what `color-scheme` and any future non-token rules key on.
     root.dataset['theme'] = theme;
     root.style.colorScheme = theme;
   });

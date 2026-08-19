@@ -477,6 +477,21 @@ pub struct TrackEntry {
     /// Internal effects, in signal order.
     #[serde(default)]
     pub inserts: Vec<InsertEntry>,
+    /// Channel pitch in cents. Default 0 so older files stay at recorded pitch.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub pitch_cents: f32,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub sample_start_frames: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub sample_end_frames: u64,
+}
+
+fn is_zero_f32(value: &f32) -> bool {
+    *value == 0.0
+}
+
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
 }
 
 /// One internal effect on a chain.
@@ -917,6 +932,9 @@ impl ProjectFile {
                     pan: track.pan,
                     muted: track.muted,
                     soloed: track.soloed,
+                    pitch_cents: track.pitch_cents,
+                    sample_start_frames: track.sample_start_frames,
+                    sample_end_frames: track.sample_end_frames,
                     state_blob: track_states
                         .get(index)
                         .map_or_else(String::new, |bytes| to_base64(bytes)),
@@ -1056,6 +1074,9 @@ impl ProjectFile {
                 pan,
                 muted: entry.muted,
                 soloed: entry.soloed,
+                pitch_cents: entry.pitch_cents,
+                sample_start_frames: entry.sample_start_frames,
+                sample_end_frames: entry.sample_end_frames,
                 inserts: restore_chain(&entry.inserts, effects),
             });
         }
@@ -2708,7 +2729,7 @@ mod tests {
         let mut file = routed_file(&project);
         file.tracks[0].inserts.push(InsertEntry {
             id: 99,
-            type_id: "effects.reverb".to_owned(),
+            type_id: "effects.not-an-effect".to_owned(),
             params: BTreeMap::new(),
         });
         let (restored, _) = file

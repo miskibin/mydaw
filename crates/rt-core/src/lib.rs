@@ -36,6 +36,7 @@ pub mod mixer;
 mod node;
 mod notes;
 pub mod params;
+mod spectrum;
 mod transport;
 
 pub use buffers::{AudioBuffers, CHANNELS};
@@ -63,6 +64,10 @@ pub use notes::{
 pub use params::{
     smoothing_frames, AtomicF32, ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ParamSmoother,
     ReadoutDef, SmoothedParams, DEFAULT_SMOOTHING_MS,
+};
+pub use spectrum::{
+    process_inserts, spectrum_channel, SpectrumHop, SpectrumKind, SpectrumLoc, SpectrumTapRt,
+    SpectrumTarget, SpectrumWatch, SPECTRUM_HOP,
 };
 pub use transport::{
     clamp_bpm, PlayMode, TransportClock, TransportSnapshot, DEFAULT_BPM, MAX_BPM, MIN_BPM,

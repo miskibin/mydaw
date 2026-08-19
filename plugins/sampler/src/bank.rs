@@ -57,6 +57,11 @@ pub const MAX_SAMPLES: usize = NO_SAMPLE as usize;
 const KEYS: usize = 128;
 const VELOCITIES: usize = 128;
 
+/// One-shots longer than this stay on the playlist, not the rack.
+pub const ONESHOT_MAX_SECONDS: f32 = 15.0;
+/// Short fade so a dropped file does not click when the note ends.
+const ONESHOT_RELEASE_MS: f32 = 40.0;
+
 /// One decoded sample, padded so the interpolator never needs a bounds check.
 #[derive(Debug)]
 pub struct LoadedSample {
@@ -138,6 +143,10 @@ pub struct SampleBank {
     /// Files named by the manifest that were missing or unreadable.
     skipped: Vec<String>,
     bytes: usize,
+    /// Play every key at the recorded speed. A dropped kick is a drum, not a
+    /// pitched instrument: the rack's default row keys are GM drum notes, and
+    /// stretching a one-shot two octaves is the wrong sound.
+    unpitched: bool,
 }
 
 impl SampleBank {
@@ -186,6 +195,11 @@ impl SampleBank {
     /// measured against.
     pub const fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    /// Whether keys play at the recorded speed rather than in equal temperament.
+    pub const fn unpitched(&self) -> bool {
+        self.unpitched
     }
 
     /// The sample for `key` at `velocity`, or `None` where the instrument has
@@ -240,6 +254,78 @@ impl SampleBank {
             _ => None,
         }
     }
+
+    /// One audio file on every key, played at recorded speed.
+    ///
+    /// Channel-rack drops land on GM drum keys (36, 38, 42, 46). Pitching a
+    /// kick two octaves would make it unusable; `unpitched` keeps the file
+    /// sounding like itself on every pad.
+    pub fn oneshot(decoded: Decoded, id: String, name: String) -> Result<Arc<Self>, LoadError> {
+        if decoded.frames == 0 {
+            return Err(LoadError::NoSamples {
+                id: id.clone(),
+                dir: PathBuf::new(),
+                named: 1,
+            });
+        }
+        let sample = LoadedSample {
+            data: decoded.data,
+            frames: decoded.frames,
+            sample_rate: decoded.sample_rate,
+            root_key: 60,
+            tune_cents: 0.0,
+            vel_lo: MIN_VELOCITY,
+            vel_hi: 127,
+        };
+        let bytes = sample.bytes();
+        Ok(Arc::new(Self {
+            id,
+            name,
+            description: "Dropped audio file, played at recorded speed".to_owned(),
+            attribution: String::new(),
+            release_ms: ONESHOT_RELEASE_MS,
+            samples: vec![sample],
+            lookup: vec![0u16; KEYS * VELOCITIES].into_boxed_slice(),
+            skipped: Vec::new(),
+            bytes,
+            unpitched: true,
+        }))
+    }
+
+    /// Decode `path` into an unpitched oneshot bank. Id is `file:` + path.
+    pub fn oneshot_from_path(path: &Path) -> Result<Arc<Self>, LoadError> {
+        let max_frames_for =
+            |rate: f64| Some((f64::from(ONESHOT_MAX_SECONDS) * rate).round().max(1.0) as usize);
+        let stereo = mydaw_audio_file::decode_stereo(path, max_frames_for).map_err(|source| {
+            LoadError::File {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        if stereo.truncated {
+            return Err(LoadError::TooLong {
+                path: path.to_path_buf(),
+                max: ONESHOT_MAX_SECONDS,
+            });
+        }
+        let decoded = Decoded::from_stereo(stereo.data, stereo.sample_rate, 0.0, false);
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("Sample")
+            .to_owned();
+        Self::oneshot(decoded, file_instrument_id(path), name)
+    }
+}
+
+/// Wire id for a user-dropped file sampler (`file:C:\...`).
+pub fn file_instrument_id(path: &Path) -> String {
+    format!("file:{}", path.display())
+}
+
+/// The filesystem path inside a `file:` instrument id, if it is one.
+pub fn file_path_of(instrument_id: &str) -> Option<&Path> {
+    instrument_id.strip_prefix("file:").map(Path::new)
 }
 
 /// Why an instrument could not be loaded.
@@ -263,6 +349,17 @@ pub enum LoadError {
         "the instrument '{id}' names {named} samples, more than the {MAX_SAMPLES} a bank can hold"
     )]
     TooManySamples { id: String, named: usize },
+    #[error("could not decode {}: {source}", path.display())]
+    File {
+        path: PathBuf,
+        #[source]
+        source: DecodeError,
+    },
+    #[error(
+        "'{}' is longer than {max} seconds; drop it on a playlist lane instead",
+        path.display()
+    )]
+    TooLong { path: PathBuf, max: f32 },
 }
 
 /// Load the instrument in `dir`, reading `dir/manifest.json`.
@@ -369,6 +466,7 @@ pub fn load_from_manifest(
         lookup,
         skipped,
         bytes,
+        unpitched: false,
     }))
 }
 
@@ -476,6 +574,7 @@ impl From<DecodeError> for LoadError {
 mod tests {
     use super::*;
     use crate::manifest::SampleEntry;
+    use crate::test_support::{write_wav, TempDir};
 
     fn entry(file: &str, root: u8, lo: u8, hi: u8, vlo: u8, vhi: u8) -> SampleEntry {
         SampleEntry {
@@ -619,5 +718,35 @@ mod tests {
             vel_hi: 127,
         };
         assert_eq!(sample.taps(19, 0)[1], 1.0);
+    }
+
+    #[test]
+    fn a_oneshot_covers_every_key_and_plays_unpitched() {
+        let dir = TempDir::new("oneshot");
+        let path = dir.path().join("kick.wav");
+        write_wav(&path, 8_000, 1, &[0.5_f32; 80]);
+
+        let bank = SampleBank::oneshot_from_path(&path).expect("loads");
+        assert!(bank.unpitched());
+        assert_eq!(bank.id(), file_instrument_id(&path));
+        assert_eq!(bank.name(), "kick");
+        assert_eq!(bank.key_range(), Some((0, 127)));
+        assert!(bank.sample_for(36, 100).is_some(), "GM kick pad");
+        assert!(bank.sample_for(60, 1).is_some());
+        assert!(file_path_of(bank.id()).is_some());
+    }
+
+    #[test]
+    fn a_oneshot_longer_than_the_cap_is_refused() {
+        let dir = TempDir::new("oneshot-long");
+        let path = dir.path().join("loop.wav");
+        // 16 s at 100 Hz, past ONESHOT_MAX_SECONDS.
+        write_wav(&path, 100, 1, &vec![0.2_f32; 1_600]);
+
+        let err = SampleBank::oneshot_from_path(&path).unwrap_err();
+        assert!(
+            matches!(err, LoadError::TooLong { max, .. } if (max - ONESHOT_MAX_SECONDS).abs() < f32::EPSILON),
+            "{err}"
+        );
     }
 }

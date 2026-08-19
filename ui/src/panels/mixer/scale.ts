@@ -38,9 +38,18 @@ export function faderToDb(fraction: number): number {
   if (!Number.isFinite(fraction)) return 0;
   const clamped = Math.min(1, Math.max(0, fraction));
   const db = MIN_DB + clamped ** FADER_CURVE * (MAX_DB - MIN_DB);
-  // Rounded to a tenth: the readout shows one decimal, and a fader that reports
-  // -6.03 while displaying -6.0 makes a round trip look like a bug.
-  return Math.round(db * 10) / 10;
+  return clampDb(db);
+}
+
+/**
+ * A gain the readout can show: clamped into the throw and rounded to a tenth.
+ *
+ * The navbar knob and the mixer fader both go through here so a 0.03 dB
+ * disagreement never shows up as two different numbers for the same output.
+ */
+export function clampDb(db: number, min = MIN_DB, max = MAX_DB): number {
+  if (!Number.isFinite(db)) return min;
+  return Math.round(Math.min(max, Math.max(min, db)) * 10) / 10;
 }
 
 /** A gain for a readout: `0.0` at unity, `-inf` at the bottom of the scale. */

@@ -24,16 +24,22 @@
 //! for each module:
 //!     block-listed?          -> skip, never open it
 //!     fingerprint unchanged? -> answer from the cache, open nothing
-//!     otherwise              -> scan it in a child process
+//!     otherwise              -> `list_cached`: skip, wait for Rescan
+//!                            -> `scan_all`: open it in a child process
 //!         answered           -> remember it (success or refusal alike)
 //!         crashed / hung     -> block-list it, and carry on with the next one
 //! ```
 //!
-//! The middle line is what makes this affordable. The first scan of a machine
-//! pays a process per module; every scan after it pays a `stat` per module, and a
-//! plugin browser opens instantly. The last line is what makes it correct: before
-//! this, one plugin hanging inside `DllMain` poisoned the process-wide loader lock
-//! and every module after it was reported broken.
+//! Listing the browser must not run vendor `init()`. Unlicensed plugins pop an
+//! activation window the moment they load, and a tab that "just looks" is not
+//! consent to do that. [`ModuleScan::list_cached`] is the default path; Rescan
+//! is the only thing that calls [`ModuleScan::scan_all`].
+//!
+//! A warm list pays a `stat` per module. A Rescan of an unchanged machine still
+//! hits the cache and opens nothing; only new or replaced files start a child.
+//! The last line is what makes a Rescan survivable: before this, one plugin
+//! hanging inside `DllMain` poisoned the process-wide loader lock and every
+//! module after it was reported broken.
 
 pub mod blocklist;
 pub mod cache;
@@ -151,9 +157,9 @@ pub struct ScanPass<T> {
     pub found: Vec<T>,
     /// Modules that produced nothing, with the reason.
     pub failures: Vec<(PathBuf, ScanFailure)>,
-    /// Modules that were never opened: block-listed before the pass started, or
-    /// -- in the in-process fallback only -- after an earlier module wedged the
-    /// loader.
+    /// Modules that were never opened: block-listed, unknown to the cache
+    /// ([`ModuleScan::list_cached`]), or -- in the in-process fallback only --
+    /// after an earlier module wedged the loader.
     pub skipped: Vec<PathBuf>,
     /// Modules block-listed *by this pass*.
     pub newly_blocked: Vec<PathBuf>,
@@ -274,11 +280,37 @@ impl<T: ScanTarget> ModuleScan<T> {
         self.timeout
     }
 
+    /// List plugins already known to the cache. **Never opens a module.**
+    ///
+    /// Unknown or changed files are skipped, not scanned. That is the path a
+    /// plugin browser takes on open: showing last time's list must not run a
+    /// vendor's `init()`, because that is what pops a license window.
+    ///
+    /// Call [`scan_all`](Self::scan_all) only when the user asks to Rescan.
+    pub fn list_cached(&self, modules: &[PathBuf]) -> ScanPass<T> {
+        let started = Instant::now();
+        let mut pass = ScanPass::default();
+        for module in modules {
+            if self.blocklist.contains(module) {
+                pass.skipped.push(module.clone());
+                continue;
+            }
+            if !self.apply_cache_hit(module, &mut pass) {
+                pass.skipped.push(module.clone());
+            }
+        }
+        pass.elapsed = started.elapsed();
+        pass
+    }
+
     /// Scan every module in `modules`, in order.
     ///
     /// Never fails and never panics: a module that will not load, one that
     /// panics, one that crashes its child and one that hangs are all recorded and
     /// stepped over. The cache is written once at the end.
+    ///
+    /// This is Rescan: it starts a child for every module the cache does not
+    /// already know. Do not call it to populate a plugin list.
     pub fn scan_all(&self, modules: &[PathBuf]) -> ScanPass<T> {
         let started = Instant::now();
         let mut pass = ScanPass::default();
@@ -290,22 +322,11 @@ impl<T: ScanTarget> ModuleScan<T> {
                 continue;
             }
 
-            let fingerprint = Fingerprint::of(&T::fingerprint_path(module));
-            if let Some(known) = fingerprint.and_then(|print| self.cache.get(module, print)) {
-                pass.cache_hits += 1;
-                match known {
-                    Outcome::Found(plugins) => pass.found.extend(
-                        plugins
-                            .into_iter()
-                            .map(|plugin| plugin.with_module_path(module)),
-                    ),
-                    Outcome::Refused(message) => pass
-                        .failures
-                        .push((module.clone(), ScanFailure::Refused(message))),
-                }
+            if self.apply_cache_hit(module, &mut pass) {
                 continue;
             }
 
+            let fingerprint = Fingerprint::of(&T::fingerprint_path(module));
             let outcome = match self.read_one(module, &mut pass) {
                 Some(outcome) => outcome,
                 // No worker at all: the module was opened in this process, and
@@ -349,6 +370,27 @@ impl<T: ScanTarget> ModuleScan<T> {
         }
         pass.elapsed = started.elapsed();
         pass
+    }
+
+    /// Apply a cache hit for `module`. Returns `false` when the cache has
+    /// nothing for this fingerprint, so the caller can skip or scan.
+    fn apply_cache_hit(&self, module: &Path, pass: &mut ScanPass<T>) -> bool {
+        let fingerprint = Fingerprint::of(&T::fingerprint_path(module));
+        let Some(known) = fingerprint.and_then(|print| self.cache.get(module, print)) else {
+            return false;
+        };
+        pass.cache_hits += 1;
+        match known {
+            Outcome::Found(plugins) => pass.found.extend(
+                plugins
+                    .into_iter()
+                    .map(|plugin| plugin.with_module_path(module)),
+            ),
+            Outcome::Refused(message) => pass
+                .failures
+                .push((module.to_path_buf(), ScanFailure::Refused(message))),
+        }
+        true
     }
 
     /// Read one unknown module, out of process if that is possible.
@@ -631,6 +673,37 @@ mod tests {
         assert_eq!(third.cache_hits, 0);
         assert_eq!(spawned.load(Ordering::Relaxed), 2);
         assert_eq!(third.found[0].name, "Two and then some");
+    }
+
+    #[test]
+    fn listing_from_the_cache_never_opens_an_unknown_module() {
+        let dir = scratch_dir("list-cached");
+        let known = module(dir.path(), "known.fake", "Known");
+        let unknown = module(dir.path(), "unknown.fake", "Unknown");
+        let (scan, spawned) = counting_scan(|_, target| {
+            let json = serde_json::to_string(&serde_json::json!({
+                "status": "ok",
+                "v": 1,
+                "plugins": [{ "name": std::fs::read_to_string(target).unwrap().trim() }],
+            }))
+            .unwrap();
+            trivial_worker(&format!("echo {}{json}", worker::RESULT_PREFIX))
+        });
+
+        scan.scan_all(std::slice::from_ref(&known));
+        assert_eq!(spawned.load(Ordering::Relaxed), 1);
+
+        let listed = scan.list_cached(&[known.clone(), unknown.clone()]);
+        assert_eq!(listed.found.len(), 1);
+        assert_eq!(listed.found[0].name, "Known");
+        assert_eq!(listed.skipped, vec![unknown]);
+        assert_eq!(
+            spawned.load(Ordering::Relaxed),
+            1,
+            "an unknown module must wait for Rescan, not be opened to fill a list"
+        );
+        assert_eq!(listed.children, 0);
+        assert_eq!(listed.cache_hits, 1);
     }
 
     #[test]

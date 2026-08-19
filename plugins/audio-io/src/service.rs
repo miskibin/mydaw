@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
-use mydaw_ipc_bridge::MeterProducer;
+use mydaw_ipc_bridge::{MeterProducer, SpectrumProducer, SpectrumWatch};
 use mydaw_plugin_debug_tap::TapRtSide;
 use mydaw_plugin_sequencer::{
     song_channel, CompiledSong, SongHandle, SongInstallError, SONG_QUEUE_CAPACITY,
@@ -40,7 +40,7 @@ use mydaw_plugin_sequencer::{
 use mydaw_rt_core::{
     clamp_bpm, graph_channel, note_channel, rt_channel, GcThread, GraphHandle, GraphInstallError,
     GraphLimits, GraphSpec, LiveNote, NoteProducer, PlayMode, RtCommand, RtCommandProducer,
-    TransportClock, DEFAULT_NOTE_CAPACITY,
+    SpectrumTapRt, TransportClock, DEFAULT_NOTE_CAPACITY,
 };
 use parking_lot::Mutex;
 
@@ -158,6 +158,8 @@ struct Session {
     meters_returned: mpsc::Receiver<MeterProducer>,
     /// Same, for the debug capture tap.
     debug_tap_returned: mpsc::Receiver<TapRtSide>,
+    /// Same, for the analysis hop producer.
+    spectrum_returned: mpsc::Receiver<SpectrumProducer>,
 }
 
 /// Owns [`RtState`] inside the cpal closure and returns the borrowed RT halves
@@ -171,6 +173,7 @@ struct RtStateCarrier {
     state: RtState,
     meters_returned: mpsc::SyncSender<MeterProducer>,
     debug_tap_returned: mpsc::SyncSender<TapRtSide>,
+    spectrum_returned: mpsc::SyncSender<SpectrumProducer>,
 }
 
 impl Drop for RtStateCarrier {
@@ -182,6 +185,9 @@ impl Drop for RtStateCarrier {
         }
         if let Some(tap) = self.state.take_debug_tap() {
             let _ = self.debug_tap_returned.try_send(tap);
+        }
+        if let Some(tap) = self.state.take_spectrum() {
+            let _ = self.spectrum_returned.try_send(tap.take_producer());
         }
     }
 }
@@ -200,6 +206,10 @@ pub struct AudioIoService {
     meters: Mutex<Option<MeterProducer>>,
     /// The debug capture tap between stream lifetimes.
     debug_tap: Mutex<Option<TapRtSide>>,
+    /// Analysis hop producer between stream lifetimes.
+    spectrum: Mutex<Option<SpectrumProducer>>,
+    /// Shared watch word; cloned into each RT tap.
+    spectrum_watch: Mutex<Option<Arc<SpectrumWatch>>>,
     session: Mutex<Option<Session>>,
     /// Mirrors `session.is_some()` so [`Self::is_running`] needs no lock.
     running: AtomicBool,
@@ -220,6 +230,8 @@ impl AudioIoService {
             stats: Arc::new(AudioIoStats::default()),
             meters: Mutex::new(None),
             debug_tap: Mutex::new(None),
+            spectrum: Mutex::new(None),
+            spectrum_watch: Mutex::new(None),
             session: Mutex::new(None),
             running: AtomicBool::new(false),
         }
@@ -241,6 +253,12 @@ impl AudioIoService {
     /// `debug_capture` simply reports that the engine never started.
     pub fn attach_debug_tap(&self, tap: TapRtSide) {
         *self.debug_tap.lock() = Some(tap);
+    }
+
+    /// Give the service the analysis hop producer and the shared watch word.
+    pub fn attach_spectrum(&self, producer: SpectrumProducer, watch: Arc<SpectrumWatch>) {
+        *self.spectrum.lock() = Some(producer);
+        *self.spectrum_watch.lock() = Some(watch);
     }
 
     /// Whether a debug tap is parked here, waiting for the next stream.
@@ -475,6 +493,22 @@ impl AudioIoService {
             song_channel(self.config.song_queue_capacity, self.gc.handle());
         let (meters_return_tx, meters_returned) = mpsc::sync_channel(1);
         let (tap_return_tx, debug_tap_returned) = mpsc::sync_channel(1);
+        let (spectrum_return_tx, spectrum_returned) = mpsc::sync_channel(1);
+
+        let spectrum = match (
+            self.spectrum.lock().take(),
+            self.spectrum_watch.lock().as_ref().map(Arc::clone),
+        ) {
+            (Some(producer), Some(watch)) => {
+                Some(SpectrumTapRt::new(producer, watch, sample_rate as f64))
+            }
+            (producer, _) => {
+                if let Some(producer) = producer {
+                    *self.spectrum.lock() = Some(producer);
+                }
+                None
+            }
+        };
 
         let state = RtState::new(RtStateParams {
             graph: graph_slot,
@@ -484,6 +518,7 @@ impl AudioIoService {
             song: song_slot,
             meters: self.meters.lock().take(),
             debug_tap: self.debug_tap.lock().take(),
+            spectrum,
             transport: Arc::clone(&transport),
             sample_rate: sample_rate as f64,
             out_channels: channels as usize,
@@ -497,6 +532,7 @@ impl AudioIoService {
             state,
             meters_returned: meters_return_tx,
             debug_tap_returned: tap_return_tx,
+            spectrum_returned: spectrum_return_tx,
         };
         let out_channels = channels as usize;
         let error_stats = Arc::clone(&self.stats);
@@ -542,6 +578,7 @@ impl AudioIoService {
             info: info.clone(),
             meters_returned,
             debug_tap_returned,
+            spectrum_returned,
         });
         self.running.store(true, Ordering::Release);
 
@@ -582,6 +619,13 @@ impl AudioIoService {
         {
             Ok(tap) => *self.debug_tap.lock() = Some(tap),
             Err(_) => log::debug!("debug tap not returned by the audio callback"),
+        }
+        match session
+            .spectrum_returned
+            .recv_timeout(Duration::from_millis(250))
+        {
+            Ok(producer) => *self.spectrum.lock() = Some(producer),
+            Err(_) => log::debug!("spectrum producer not returned by the audio callback"),
         }
 
         log::info!("audio output stopped: {}", session.info.device_name);

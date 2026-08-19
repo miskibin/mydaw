@@ -29,7 +29,7 @@ use mydaw_plugin_debug_tap::TapRtSide;
 use mydaw_plugin_sequencer::{Scheduler, SongSlot, TransportWindow};
 use mydaw_rt_core::{
     disable_denormals, drain_commands, drain_notes, AudioBuffers, NoteConsumer, NoteEventBuffer,
-    ProcessCtx, RtCommandConsumer, RtGraphSlot, TransportClock, CHANNELS,
+    ProcessCtx, RtCommandConsumer, RtGraphSlot, SpectrumTapRt, TransportClock, CHANNELS,
 };
 
 use crate::priority::RealtimeToken;
@@ -125,6 +125,9 @@ pub struct RtStateParams {
     /// Debug capture tap, if `debug-tap` is wired up. Costs one relaxed atomic
     /// load per block while nobody is capturing.
     pub debug_tap: Option<TapRtSide>,
+    /// Analysis hop tap, if metering handed one over. Costs one relaxed atomic
+    /// load per insert while nobody is watching.
+    pub spectrum: Option<SpectrumTapRt>,
     /// Shared transport, advanced by the callback and read by everyone else.
     pub transport: Arc<TransportClock>,
     /// Device sample rate, in Hz.
@@ -155,6 +158,7 @@ pub struct RtState {
     scheduler: Scheduler,
     meters: Option<MeterProducer>,
     debug_tap: Option<TapRtSide>,
+    spectrum: Option<SpectrumTapRt>,
     transport: Arc<TransportClock>,
     buffers: AudioBuffers,
     sample_rate: f64,
@@ -188,6 +192,7 @@ impl RtState {
             scheduler: Scheduler::new(),
             meters: params.meters,
             debug_tap: params.debug_tap,
+            spectrum: params.spectrum,
             transport: params.transport,
             buffers: AudioBuffers::new(params.max_block.max(1)),
             sample_rate: params.sample_rate,
@@ -229,6 +234,11 @@ impl RtState {
     /// harness dead for the rest of the process.
     pub fn take_debug_tap(&mut self) -> Option<TapRtSide> {
         self.debug_tap.take()
+    }
+
+    /// Give the analysis tap back so a later `start()` can reuse its producer.
+    pub fn take_spectrum(&mut self) -> Option<SpectrumTapRt> {
+        self.spectrum.take()
     }
 
     /// Promote this thread and disable denormals. Idempotent; call from the
@@ -368,7 +378,9 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
             transport,
             state.note_events.as_slice(),
         );
-        state.graph.process(&mut ctx);
+        state
+            .graph
+            .process_with_spectrum(&mut ctx, state.spectrum.as_mut());
         ctx.frames
     };
 
@@ -508,6 +520,7 @@ mod tests {
             song: song_rx,
             meters: Some(meter_tx),
             debug_tap: Some(tap_rt),
+            spectrum: None,
             transport: Arc::clone(&transport),
             sample_rate: SR,
             out_channels,
@@ -764,6 +777,7 @@ mod tests {
             song: song_rx,
             meters: Some(meter_tx),
             debug_tap: None,
+            spectrum: None,
             transport: Arc::new(TransportClock::new(SR)),
             sample_rate: SR,
             out_channels: 2,
@@ -906,6 +920,7 @@ mod tests {
             song: song_rx,
             meters: Some(meter_tx),
             debug_tap: Some(tap_rt),
+            spectrum: None,
             transport: Arc::new(TransportClock::new(SR)),
             sample_rate: SR,
             out_channels: 2,

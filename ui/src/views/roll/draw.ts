@@ -33,6 +33,12 @@ export const ROW_H = 15;
 export const STEP_W = 22;
 /** Pointer distance from a note's right edge that means "resize". */
 export const GRIP_PX = 6;
+/** Thickness of the FL-style zoom scrollbars. */
+export const SCROLL_W = 12;
+/** How much of each thumb end is a zoom handle. */
+export const SCROLL_HANDLE = 7;
+/** Smallest thumb that still has two grabable ends. */
+const MIN_THUMB = 22;
 
 /** Where everything is, for one frame. */
 export interface RollGeometry {
@@ -50,7 +56,8 @@ export interface RollGeometry {
 export function geometryFor(
   width: number,
   height: number,
-  zoom: number,
+  zoomX: number,
+  zoomY: number,
   scrollX: number,
   scrollY: number,
 ): RollGeometry {
@@ -59,18 +66,18 @@ export function geometryFor(
     height,
     scrollX,
     scrollY,
-    pxPerTick: (STEP_W * zoom) / TICKS_PER_STEP,
-    rowH: ROW_H,
+    pxPerTick: (STEP_W * zoomX) / TICKS_PER_STEP,
+    rowH: ROW_H * zoomY,
   };
 }
 
-/** The grid's viewport, excluding the key column, ruler and velocity lane. */
+/** The grid's viewport, excluding the key column, ruler, velocity lane and scrollbars. */
 export function gridWidth(geo: RollGeometry): number {
-  return Math.max(0, geo.width - KEY_W);
+  return Math.max(0, geo.width - KEY_W - SCROLL_W);
 }
 
 export function gridHeight(geo: RollGeometry): number {
-  return Math.max(0, geo.height - RULER_H - VELO_H);
+  return Math.max(0, geo.height - RULER_H - VELO_H - SCROLL_W);
 }
 
 /** How wide and tall the scrollable content is. */
@@ -128,8 +135,100 @@ export function inKeys(x: number, y: number, geo: RollGeometry): boolean {
 }
 
 /** Whether a canvas point is on the ruler. */
-export function inRuler(x: number, y: number): boolean {
-  return x >= KEY_W && y < RULER_H;
+export function inRuler(x: number, y: number, geo: RollGeometry): boolean {
+  return x >= KEY_W && x < geo.width - SCROLL_W && y < RULER_H;
+}
+
+export type ScrollPart = 'track' | 'body' | 'start' | 'end';
+
+export interface ScrollBar {
+  track: { x: number; y: number; w: number; h: number };
+  thumb: { x: number; y: number; w: number; h: number };
+}
+
+/** Map a scroll offset onto a track: the thumb is the visible window. */
+function thumbSpan(
+  scroll: number,
+  viewport: number,
+  content: number,
+  track: number,
+): { start: number; size: number } {
+  if (track <= 0) return { start: 0, size: 0 };
+  if (content <= viewport) return { start: 0, size: track };
+  const size = Math.min(track, Math.max(MIN_THUMB, (viewport / content) * track));
+  const maxScroll = content - viewport;
+  const start = maxScroll <= 0 ? 0 : (scroll / maxScroll) * (track - size);
+  return { start, size };
+}
+
+/** Horizontal scrollbar, sitting between the grid and the velocity lane. */
+export function hScrollBar(geo: RollGeometry, patternTicks: number): ScrollBar {
+  const track = {
+    x: KEY_W,
+    y: RULER_H + gridHeight(geo),
+    w: gridWidth(geo),
+    h: SCROLL_W,
+  };
+  const { start, size } = thumbSpan(
+    geo.scrollX,
+    gridWidth(geo),
+    contentWidth(patternTicks, geo),
+    track.w,
+  );
+  return { track, thumb: { x: track.x + start, y: track.y + 2, w: size, h: track.h - 4 } };
+}
+
+/** Vertical scrollbar, on the right of the grid. */
+export function vScrollBar(geo: RollGeometry): ScrollBar {
+  const track = {
+    x: geo.width - SCROLL_W,
+    y: RULER_H,
+    w: SCROLL_W,
+    h: gridHeight(geo),
+  };
+  const { start, size } = thumbSpan(geo.scrollY, gridHeight(geo), contentHeight(geo), track.h);
+  return { track, thumb: { x: track.x + 2, y: track.y + start, w: track.w - 4, h: size } };
+}
+
+function hitThumb(pos: number, thumbStart: number, thumbSize: number): ScrollPart {
+  if (pos < thumbStart || pos > thumbStart + thumbSize) return 'track';
+  const handle = Math.min(SCROLL_HANDLE, thumbSize / 3);
+  if (pos <= thumbStart + handle) return 'start';
+  if (pos >= thumbStart + thumbSize - handle) return 'end';
+  return 'body';
+}
+
+/** Which part of the horizontal zoom-scrollbar `(x, y)` is on, or `null`. */
+export function hitHScroll(
+  x: number,
+  y: number,
+  geo: RollGeometry,
+  patternTicks: number,
+): ScrollPart | null {
+  const bar = hScrollBar(geo, patternTicks);
+  if (
+    x < bar.track.x ||
+    x > bar.track.x + bar.track.w ||
+    y < bar.track.y ||
+    y > bar.track.y + bar.track.h
+  ) {
+    return null;
+  }
+  return hitThumb(x, bar.thumb.x, bar.thumb.w);
+}
+
+/** Which part of the vertical zoom-scrollbar `(x, y)` is on, or `null`. */
+export function hitVScroll(x: number, y: number, geo: RollGeometry): ScrollPart | null {
+  const bar = vScrollBar(geo);
+  if (
+    x < bar.track.x ||
+    x > bar.track.x + bar.track.w ||
+    y < bar.track.y ||
+    y > bar.track.y + bar.track.h
+  ) {
+    return null;
+  }
+  return hitThumb(y, bar.thumb.y, bar.thumb.h);
 }
 
 /** Room at the top of the velocity lane for its label row. */
@@ -142,6 +241,46 @@ export function gripFor(note: MelodicNoteDto, tick: number, geo: RollGeometry): 
   const widthPx = note.length * geo.pxPerTick;
   if (widthPx < GRIP_PX * 2) return 'move';
   return (note.start + note.length - tick) * geo.pxPerTick <= GRIP_PX ? 'resize' : 'move';
+}
+
+/**
+ * Tick where a cut line crosses `note`'s row, or `null` if it does not.
+ *
+ * FL slices at the intersection of the dragged line with each note, so a
+ * diagonal cut lands at a different time on every pitch. A horizontal line
+ * (no unique crossing) uses the overlap's midpoint, which is the only honest
+ * answer a degenerate line has.
+ */
+export function cutTickForNote(
+  note: MelodicNoteDto,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+  geo: RollGeometry,
+): number | null {
+  const yTop = keyToY(note.key, geo);
+  const yBot = yTop + geo.rowH;
+  const nLeft = tickToX(note.start, geo);
+  const nRight = tickToX(note.start + note.length, geo);
+  let xCut: number;
+  if (Math.abs(y1 - y0) < 0.5) {
+    if (y0 < yTop || y0 > yBot) return null;
+    const xLo = Math.max(Math.min(x0, x1), nLeft);
+    const xHi = Math.min(Math.max(x0, x1), nRight);
+    if (xHi <= xLo) return null;
+    xCut = (xLo + xHi) / 2;
+  } else {
+    const yMid = yTop + geo.rowH / 2;
+    const t = (yMid - y0) / (y1 - y0);
+    if (t < 0 || t > 1) return null;
+    xCut = x0 + t * (x1 - x0);
+    if (xCut <= nLeft || xCut >= nRight) return null;
+    const yLo = Math.min(y0, y1);
+    const yHi = Math.max(y0, y1);
+    if (yHi < yTop || yLo > yBot) return null;
+  }
+  return xToTick(xCut, geo);
 }
 
 /** Which note is under a canvas point, or `-1`. Reverse scan: topmost wins. */
@@ -185,8 +324,12 @@ export interface RollScene {
   playheadTick: number | null;
   /** The marquee being dragged, in canvas pixels. */
   marquee: { x: number; y: number; w: number; h: number } | null;
+  /** The slice tool's cut line, in canvas pixels, or `null`. */
+  cutLine: { x0: number; y0: number; x1: number; y1: number } | null;
   /** Whether a note wide enough gets its name written on it. */
   labels: boolean;
+  /** MIDI keys currently sounding from the typing keyboard or a click-preview. */
+  heldKeys: ReadonlySet<number>;
   palette: Palette;
   dark: boolean;
 }
@@ -213,10 +356,16 @@ export class RollRenderer {
 
   resize(cssWidth: number, cssHeight: number, dpr: number): void {
     this.dpr = dpr;
-    this.canvas.width = Math.max(1, Math.round(cssWidth * dpr));
-    this.canvas.height = Math.max(1, Math.round(cssHeight * dpr));
-    this.canvas.style.width = `${cssWidth}px`;
-    this.canvas.style.height = `${cssHeight}px`;
+    const width = Math.max(1, Math.round(cssWidth * dpr));
+    const height = Math.max(1, Math.round(cssHeight * dpr));
+    // Assigning width/height discards the bitmap even when the value is the
+    // same, and this runs on every paint — only touch them on a real change.
+    if (this.canvas.width !== width) this.canvas.width = width;
+    if (this.canvas.height !== height) this.canvas.height = height;
+    const styleWidth = `${cssWidth}px`;
+    const styleHeight = `${cssHeight}px`;
+    if (this.canvas.style.width !== styleWidth) this.canvas.style.width = styleWidth;
+    if (this.canvas.style.height !== styleHeight) this.canvas.style.height = styleHeight;
   }
 
   draw(geo: RollGeometry, scene: RollScene): void {
@@ -229,11 +378,13 @@ export class RollRenderer {
     for (const layer of scene.ghosts) this.drawNotes(geo, scene, layer.notes, layer.colour, true);
     this.drawNotes(geo, scene, scene.notes, scene.colour, false);
     this.drawMarquee(geo, scene);
+    this.drawCutLine(geo, scene);
     this.drawPlayhead(geo, scene);
     this.drawVelocity(geo, scene);
     // Last, so scrolled content cannot leak under them.
     this.drawRuler(geo, scene);
     this.drawKeys(geo, scene);
+    this.drawScrollbars(geo, scene);
   }
 
   /** The horizontal key lanes, black keys shaded. */
@@ -249,9 +400,15 @@ export class RollRenderer {
     for (let key = first; key <= last; key += 1) {
       const y = keyToY(key, geo);
       if (y + geo.rowH < top || y > bottom) continue;
+      const rowTop = Math.max(top, y);
+      const rowH = Math.min(bottom, y + geo.rowH) - rowTop;
       if (isBlackKey(key)) {
-        ctx.fillStyle = scene.dark ? 'rgba(255,255,255,.028)' : 'rgba(0,0,0,.045)';
-        ctx.fillRect(KEY_W, Math.max(top, y), gridWidth(geo), geo.rowH);
+        ctx.fillStyle = scene.palette.keyLane;
+        ctx.fillRect(KEY_W, rowTop, gridWidth(geo), rowH);
+      }
+      if (scene.heldKeys.has(key)) {
+        ctx.fillStyle = fade(scene.colour, scene.dark ? 0.22 : 0.18);
+        ctx.fillRect(KEY_W, rowTop, gridWidth(geo), rowH);
       }
       ctx.fillStyle = key % 12 === 0 ? scene.palette.grid2 : scene.palette.grid1;
       const line = Math.round(y + geo.rowH) - 0.5;
@@ -324,15 +481,13 @@ export class RollRenderer {
       ctx.strokeStyle = ghost
         ? fade(colour, 0.3)
         : selected
-          ? scene.dark
-            ? '#ffffff'
-            : '#14171c'
-          : 'rgba(0,0,0,.45)';
+          ? scene.palette.txt
+          : scene.palette.noteStroke;
       roundRect(ctx, x + 0.5, y + 0.5, w - 1, h - 1, 3);
       ctx.stroke();
 
       if (!ghost && scene.labels && w >= 34 && h >= 9) {
-        ctx.fillStyle = scene.dark ? 'rgba(6,10,14,.85)' : 'rgba(255,255,255,.95)';
+        ctx.fillStyle = scene.palette.noteInk;
         ctx.font = `500 ${Math.min(9.5, h - 3)}px 'Geist Mono Variable', ui-monospace, monospace`;
         ctx.textBaseline = 'middle';
         ctx.fillText(noteName(note.key), x + 4, y + h / 2 + 0.5);
@@ -350,6 +505,25 @@ export class RollRenderer {
     ctx.strokeStyle = scene.accent;
     ctx.lineWidth = 1;
     ctx.strokeRect(x + 0.5, y + 0.5, w, h);
+  }
+
+  /** The slice tool's cut, clipped to the grid so it cannot run under the keys. */
+  private drawCutLine(geo: RollGeometry, scene: RollScene): void {
+    if (!scene.cutLine) return;
+    const ctx = this.ctx;
+    const { x0, y0, x1, y1 } = scene.cutLine;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(KEY_W, RULER_H, gridWidth(geo), gridHeight(geo));
+    ctx.clip();
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.strokeStyle = scene.accent;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private drawPlayhead(geo: RollGeometry, scene: RollScene): void {
@@ -402,7 +576,7 @@ export class RollRenderer {
       const height = note.velocity * laneHeight;
       ctx.fillStyle = fade(scene.colour, selected ? 1 : 0.55);
       ctx.fillRect(x, laneTop + laneHeight - height, barWidth, height);
-      ctx.fillStyle = selected ? (scene.dark ? '#ffffff' : '#14171c') : fade(scene.colour, 0.9);
+      ctx.fillStyle = selected ? scene.palette.txt : fade(scene.colour, 0.9);
       ctx.fillRect(x - 1, laneTop + laneHeight - height - 3, barWidth + 2, 3);
     });
     ctx.restore();
@@ -442,43 +616,132 @@ export class RollRenderer {
     ctx.fillRect(KEY_W - 1, 0, 1, RULER_H);
   }
 
-  /** The keyboard down the left, playable and always on top. */
+  /**
+   * The keyboard down the left: equal-height chromatic rows (a piano roll, not
+   * a geometric piano), but staggered like the real thing — black keys stop
+   * short so the ivory fronts of the whites wrap around them.
+   *
+   * `palette.ink` is text-on-accent, white in the light theme, so it must not
+   * be used as the black-key fill.
+   */
   private drawKeys(geo: RollGeometry, scene: RollScene): void {
     const ctx = this.ctx;
     const top = RULER_H;
     const height = gridHeight(geo);
+    const blackW = Math.round(KEY_W * 0.58);
+    const ivory = scene.palette.ivory;
+    const ebony = scene.palette.ebony;
+    const ivoryEdge = scene.palette.ivoryEdge;
+
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, top, KEY_W, height);
     ctx.clip();
-    ctx.fillStyle = scene.palette.panel;
+    ctx.fillStyle = ivory;
     ctx.fillRect(0, top, KEY_W, height);
 
     const first = Math.max(0, yToKey(top + height, geo));
     const last = Math.min(TOP_KEY, yToKey(top, geo));
+
+    for (let key = first; key <= last; key += 1) {
+      if (isBlackKey(key)) continue;
+      const y = keyToY(key, geo);
+      const pressed = scene.heldKeys.has(key);
+      ctx.fillStyle = pressed ? scene.colour : ivory;
+      ctx.fillRect(0, y, KEY_W, geo.rowH);
+      if (pressed) {
+        ctx.fillStyle = scene.palette.sheen;
+        ctx.fillRect(0, y, KEY_W, 1);
+      }
+      ctx.fillStyle = pressed ? fade(scene.colour, 0.65) : ivoryEdge;
+      ctx.fillRect(0, Math.round(y + geo.rowH) - 1, KEY_W, 1);
+      if (key % 12 === 0) {
+        ctx.fillStyle = fade(scene.accent, pressed ? 0.95 : 0.7);
+        ctx.fillRect(0, Math.round(y + geo.rowH) - 1, KEY_W, 1);
+      }
+    }
+
+    for (let key = first; key <= last; key += 1) {
+      if (!isBlackKey(key)) continue;
+      const y = keyToY(key, geo);
+      const pressed = scene.heldKeys.has(key);
+      ctx.fillStyle = pressed ? scene.colour : ebony;
+      ctx.fillRect(0, y, blackW, geo.rowH);
+      if (!pressed) {
+        ctx.fillStyle = scene.palette.sheen;
+        ctx.fillRect(0, y, blackW, 1);
+        ctx.fillStyle = scene.palette.noteStroke;
+        ctx.fillRect(blackW - 1, y, 1, geo.rowH);
+      } else {
+        ctx.fillStyle = scene.palette.keyLane;
+        ctx.fillRect(0, y, blackW, geo.rowH);
+        ctx.fillStyle = scene.palette.sheen;
+        ctx.fillRect(0, y, blackW, 1);
+      }
+    }
+
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'right';
     for (let key = first; key <= last; key += 1) {
+      if (isBlackKey(key)) continue;
+      const isC = key % 12 === 0;
+      if (geo.rowH < 11 && !isC) continue;
       const y = keyToY(key, geo);
-      const black = isBlackKey(key);
-      ctx.fillStyle = black ? scene.palette.ink : scene.dark ? '#e9ecf1' : '#ffffff';
-      ctx.fillRect(0, y, KEY_W, geo.rowH - 1);
-      ctx.fillStyle = scene.dark ? 'rgba(0,0,0,.5)' : 'rgba(0,0,0,.08)';
-      ctx.fillRect(0, y + geo.rowH - 1, KEY_W, 1);
-      if (!black) {
-        ctx.fillStyle = scene.dark ? '#3a4048' : '#6a7280';
-        ctx.font = "400 8.5px 'Geist Mono Variable', ui-monospace, monospace";
-        ctx.fillText(noteName(key), KEY_W - 7, y + geo.rowH / 2);
-      }
-      if (key % 12 === 0) {
-        ctx.fillStyle = fade(scene.accent, 0.5);
-        ctx.fillRect(0, y + geo.rowH - 1, KEY_W, 1);
-      }
+      const pressed = scene.heldKeys.has(key);
+      ctx.fillStyle = pressed
+        ? scene.palette.ink
+        : isC
+          ? scene.palette.txt
+          : scene.palette.dim2;
+      ctx.font = `${isC ? 600 : 400} ${isC ? 9 : 8}px 'Geist Mono Variable', ui-monospace, monospace`;
+      ctx.fillText(noteName(key), KEY_W - 6, y + geo.rowH / 2);
     }
+
     ctx.textAlign = 'left';
     ctx.fillStyle = scene.palette.line2;
     ctx.fillRect(KEY_W - 1, top, 1, height);
     ctx.restore();
+  }
+
+  /**
+   * FL-style scrollbars: the thumb is the visible window, and each end is a
+   * zoom handle. Drawn last so they sit on top of the grid's right/bottom edge.
+   */
+  private drawScrollbars(geo: RollGeometry, scene: RollScene): void {
+    const ctx = this.ctx;
+    const h = hScrollBar(geo, scene.patternTicks);
+    const v = vScrollBar(geo);
+    ctx.fillStyle = scene.palette.sunk;
+    ctx.fillRect(h.track.x, h.track.y, h.track.w, h.track.h);
+    ctx.fillRect(v.track.x, v.track.y, v.track.w, v.track.h);
+    ctx.fillStyle = scene.palette.panel;
+    ctx.fillRect(0, h.track.y, KEY_W, SCROLL_W);
+    ctx.fillRect(v.track.x, h.track.y, SCROLL_W, SCROLL_W);
+    this.paintThumb(h.thumb, scene, 'h');
+    this.paintThumb(v.thumb, scene, 'v');
+  }
+
+  private paintThumb(
+    thumb: { x: number; y: number; w: number; h: number },
+    scene: RollScene,
+    axis: 'h' | 'v',
+  ): void {
+    const ctx = this.ctx;
+    ctx.fillStyle = scene.palette.line2;
+    roundRect(ctx, thumb.x, thumb.y, thumb.w, thumb.h, 3);
+    ctx.fill();
+    ctx.fillStyle = scene.palette.thumbMark;
+    if (axis === 'h') {
+      const inset = thumb.y + 2;
+      const tall = Math.max(1, thumb.h - 4);
+      ctx.fillRect(thumb.x + 2, inset, 2, tall);
+      ctx.fillRect(thumb.x + thumb.w - 4, inset, 2, tall);
+    } else {
+      const inset = thumb.x + 2;
+      const wide = Math.max(1, thumb.w - 4);
+      ctx.fillRect(inset, thumb.y + 2, wide, 2);
+      ctx.fillRect(inset, thumb.y + thumb.h - 4, wide, 2);
+    }
   }
 }
 

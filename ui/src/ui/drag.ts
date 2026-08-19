@@ -106,13 +106,27 @@ export function startDrag(event: PointerEvent, options: DragOptions): void {
 }
 
 /**
- * Pixels of travel for the whole of a fader's throw.
+ * Fallback pixels of travel for a fader that has not laid out yet.
  *
- * Roughly a strip's height, so a fader crosses its range in one comfortable
- * gesture rather than three. The strip is ~150 px of fader; 180 gives a little
- * more resolution than one-to-one without ever feeling slow.
+ * The live mixer measures the rendered track instead — see {@link faderThrowPx}.
+ * A constant here used to be the *only* throw, which multiplied handle motion
+ * on any strip taller than 180 px (the mixer fills the window).
  */
 export const FADER_TRAVEL_PX = 180;
+
+/** Height of `.wv-fader__handle`. The throw is the track minus this. */
+export const FADER_HANDLE_PX = 12;
+
+/**
+ * Pixels of pointer travel that cover a fader's whole throw.
+ *
+ * Must match how the handle is positioned: `(1 - fraction) * (track - handle)`.
+ * Any other distance moves the handle by a constant multiple of the pointer.
+ */
+export function faderThrowPx(trackPx: number, handlePx = FADER_HANDLE_PX): number {
+  const throwPx = trackPx - handlePx;
+  return throwPx > 0 ? throwPx : FADER_TRAVEL_PX;
+}
 
 /** Pixels of travel from hard left to hard right on a pan knob. */
 export const KNOB_TRAVEL_PX = 140;

@@ -397,6 +397,8 @@ fn dense_audio_arrangement(source: &Arc<AudioSource>, count: u64) -> CompiledAud
                 start_ticks: index * 240,
                 length_ticks: 4 * bar,
                 offset_frames: index % 64,
+                end_frames: 0,
+                pitch_ratio: 1.0,
                 gain: 0.5,
             })
             .collect(),

@@ -383,6 +383,9 @@ fn an_audio_clip_comes_out_of_the_device_on_the_song_timeline() {
         .expect("the tone must load");
     assert_eq!(tone.sample_rate(), f64::from(TONE_RATE));
 
+    let _ = state.ensure_audio_clip_channel(source.id());
+    let _ = state.ensure_audio_clip_channel(tone.id());
+
     state
         .edit_playlist(|list| {
             list.add_audio_clip(source.id(), 1, CLIP_BAR * bar, CLIP_BARS * bar, 0, 0.0)

@@ -19,7 +19,8 @@
         "minHeight": 560,
         "resizable": true,
         "center": true,
-        "zoomHotkeysEnabled": true
+        "zoomHotkeysEnabled": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {
@@ -34,6 +35,7 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": ["../assets/packs"]
   }
 }

@@ -430,20 +430,18 @@ impl ClapHostService {
         }
     }
 
-    /// Plugin list, scanning at most once per process.
+    /// Plugin list, opening nothing.
     ///
-    /// The first call performs a full [`scan`](Self::scan); later calls return the
-    /// same list without touching the filesystem or loading anything. Use
-    /// [`refresh`](Self::refresh) after the user installs a plugin.
+    /// Answers from the on-disk cache for modules whose fingerprint still
+    /// matches. Unknown or replaced files are skipped until
+    /// [`refresh`](Self::refresh). Opening the plugin browser must not run a
+    /// vendor `init()` — that is what pops a license window.
     pub fn cached_scan(&self) -> Arc<[ClapPluginInfo]> {
         if let Some(cached) = self.cache.lock().clone() {
             return cached;
         }
-        // Deliberately scanning outside the lock: a scan runs vendor code and can
-        // take a while, and blocking every other caller behind it would turn one
-        // slow plugin into a frozen UI. A concurrent double scan is wasteful but
-        // harmless -- the last writer wins and both callers get a valid list.
-        let scanned: Arc<[ClapPluginInfo]> = self.scan().into();
+        let scanned: Arc<[ClapPluginInfo]> =
+            self.scanner.list_cached(&self.bundle_paths()).found.into();
         *self.cache.lock() = Some(Arc::clone(&scanned));
         scanned
     }
@@ -463,16 +461,27 @@ impl ClapHostService {
     /// Load and instantiate the plugin with CLAP id `id`, found via
     /// [`cached_scan`](Self::cached_scan).
     ///
+    /// A miss falls back to a full [`refresh`](Self::refresh): the cache only
+    /// covers modules a previous scan fingerprinted, and instantiating is
+    /// already the moment the user accepted vendor code running -- a plugin
+    /// installed five minutes ago must resolve, not error.
+    ///
     /// # Errors
     /// [`ClapHostError::UnknownPluginId`] when nothing scanned has that id, plus
     /// anything [`LoadedClapPlugin::load`] can report.
     pub fn instantiate_by_id(&self, id: &str) -> Result<LoadedClapPlugin, ClapHostError> {
         let plugins = self.cached_scan();
-        let found = plugins
-            .iter()
-            .find(|plugin| plugin.id == id)
-            .ok_or_else(|| ClapHostError::UnknownPluginId(id.to_owned()))?;
-        LoadedClapPlugin::load(&found.path, id)
+        let found = plugins.iter().find(|plugin| plugin.id == id);
+        let path = match found {
+            Some(plugin) => plugin.path.clone(),
+            None => self
+                .refresh()
+                .iter()
+                .find(|plugin| plugin.id == id)
+                .map(|plugin| plugin.path.clone())
+                .ok_or_else(|| ClapHostError::UnknownPluginId(id.to_owned()))?,
+        };
+        LoadedClapPlugin::load(&path, id)
     }
 
     /// Load and instantiate a plugin from an explicit bundle path.

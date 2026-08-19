@@ -297,16 +297,18 @@ impl Vst3HostService {
         self.scanner.scan_all(&self.module_paths()).into()
     }
 
-    /// Plugin list, scanning at most once per process.
+    /// Plugin list, opening nothing.
+    ///
+    /// Answers from the on-disk cache for modules whose fingerprint still
+    /// matches. Unknown or replaced files are skipped until
+    /// [`refresh`](Self::refresh). Opening the plugin browser must not run a
+    /// vendor `init()` — that is what pops a license window.
     pub fn cached_scan(&self) -> Arc<[Vst3PluginInfo]> {
         if let Some(cached) = self.cache.lock().clone() {
             return cached;
         }
-        // Deliberately scanning outside the lock, as the CLAP host does: a scan
-        // runs vendor code and can take a while, and blocking every other caller
-        // behind it would turn one slow plugin into a frozen UI. A concurrent
-        // double scan is wasteful but harmless.
-        let scanned: Arc<[Vst3PluginInfo]> = self.scan().into();
+        let scanned: Arc<[Vst3PluginInfo]> =
+            self.scanner.list_cached(&self.module_paths()).found.into();
         *self.cache.lock() = Some(Arc::clone(&scanned));
         scanned
     }

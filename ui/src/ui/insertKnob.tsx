@@ -24,6 +24,9 @@ import { Knob } from './Knob';
 export interface InsertKnobs {
   /** What to draw for one parameter -- the live value while it is being dragged. */
   valueOf(def: ParamDefDto): number;
+  setParam(id: string, value: number): void;
+  /** Refetch the mixer after a canvas gesture ends. */
+  commit(): void;
   /** A knob wired to one of this insert's parameters. */
   Param(props: {
     def: ParamDefDto;
@@ -49,16 +52,27 @@ export function createInsertKnobs(source: {
    * from -- is only refetched when the gesture ends. Without this the knob would
    * not move under the pointer.
    */
-  const [dragging, setDragging] = createSignal<{ id: string; value: number } | null>(null);
+  const [dragging, setDragging] = createSignal<Record<string, number>>({});
 
   const target = () => insertTargetFor(source.strip());
 
   function valueOf(def: ParamDefDto): number {
-    const held = dragging();
-    if (held?.id === def.id) return held.value;
+    const held = dragging()[def.id];
+    if (held !== undefined) return held;
     return (
       source.insert().params.find((value) => value.id === def.id)?.value ?? def.defaultValue
     );
+  }
+
+  function setParam(id: string, value: number): void {
+    setDragging((prev) => ({ ...prev, [id]: value }));
+    void app.backend
+      .setInsertParam(target(), source.insert().index, id, value)
+      .catch(app.report);
+  }
+
+  function commit(): void {
+    void app.mixerCommand((backend) => backend.getTracks()).finally(() => setDragging({}));
   }
 
   function Param(props: { def: ParamDefDto; size?: number; label?: string }): JSX.Element {
@@ -73,20 +87,11 @@ export function createInsertKnobs(source: {
         value={() => valueOf(props.def)}
         // Per frame, and one atomic store: the engine answers with what it
         // actually kept, which the next whole-mixer reply carries.
-        onInput={(value) => {
-          setDragging({ id: props.def.id, value });
-          void app.backend
-            .setInsertParam(target(), source.insert().index, props.def.id, value)
-            .catch(app.report);
-        }}
-        onCommit={() => {
-          void app
-            .mixerCommand((backend) => backend.getTracks())
-            .finally(() => setDragging(null));
-        }}
+        onInput={(value) => setParam(props.def.id, value)}
+        onCommit={commit}
       />
     );
   }
 
-  return { valueOf, Param };
+  return { valueOf, setParam, commit, Param };
 }

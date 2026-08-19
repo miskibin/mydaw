@@ -18,9 +18,11 @@
 
 mod dto;
 mod meter;
+mod spectrum;
 
 pub use dto::{PanelManifestDto, PluginStateDto, PluginStatusDto, UiSnapshot};
 pub use meter::{MeterFrame, MeterThrottle, TrackMeter, DEFAULT_METER_HZ};
+pub use spectrum::{SpectrumAnalyzer, SpectrumFrame, SCOPE_POINTS, SPECTRUM_BINS};
 
 /// Tracks a [`MeterFrame`] can carry. The engine's own limit, re-exported so the
 /// UI side has one number to mirror.
@@ -30,6 +32,15 @@ pub use mydaw_rt_core::MAX_TRACKS;
 pub type MeterProducer = rtrb::Producer<MeterFrame>;
 /// Consumer half of the meter queue; owned by [`MeterThrottle`].
 pub type MeterConsumer = rtrb::Consumer<MeterFrame>;
+
+/// Producer half of the analysis hop queue; lives on the audio thread.
+pub type SpectrumProducer = rtrb::Producer<mydaw_rt_core::SpectrumHop>;
+/// Consumer half; owned by the shell's poll.
+pub type SpectrumConsumer = rtrb::Consumer<mydaw_rt_core::SpectrumHop>;
+
+pub use mydaw_rt_core::{
+    spectrum_channel, SpectrumHop, SpectrumTarget, SpectrumWatch, SPECTRUM_HOP,
+};
 
 /// Create the audio-thread -> UI meter queue.
 ///

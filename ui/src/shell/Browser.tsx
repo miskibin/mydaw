@@ -1,25 +1,25 @@
 /**
  * The browser: what you can put on a track, and where audio comes from.
  *
- * Three trees, and each of them is the engine's own list rather than a menu the
- * shell keeps: `get_sources` for the instruments, the plugin scan for CLAP and
- * VST3, and the session's loaded audio files. Nothing here is decorative -- a
- * row that cannot do anything is drawn `.wv-disabled` with a `title` saying why.
+ * Three trees: `get_sources` for the instruments, the plugin scan for CLAP and
+ * VST3, and the sample library (factory Packs, extra-search folders, and the
+ * session's loaded files). Nothing here is decorative -- a row that cannot do
+ * anything is drawn `.wv-disabled` with a `title` saying why.
  *
  * Two deliberate departures from `.design/wave-studio.html`:
  *
  * - The mock's third tab is **Presets**. The engine has no preset system at all,
- *   so drawing one would be a tab that answers nothing. It is **Audio** instead,
- *   which is a real thing the engine holds and the playlist paints with.
- * - The mock's footer is a waveform preview of the highlighted row. The engine
- *   renders a waveform for a *loaded audio source* (`get_audio_waveform`) and for
- *   nothing else, so a preview of an instrument would be a drawing. The footer is
- *   the asset-download row instead, which is real and has nowhere else to live.
+ *   so drawing one would be a tab that answers nothing. It is **Audio** instead:
+ *   a filesystem index of samples, the same idea as FL Studio's Browser.
+ * - The mock's footer is a waveform preview of the highlighted row. Clicking a
+ *   sample auditions it through the engine; the footer is the asset-download
+ *   row, which is real and has nowhere else to live.
  */
 
 import { createMemo, createSignal, For, Index, onCleanup, onMount, Show, type JSX } from 'solid-js';
 
-import type { AudioSourceDto, SourceDto } from '../api/types';
+import type { AudioSourceDto, LibraryEntryDto, LibraryRootDto, SourceDto } from '../api/types';
+import { encodeDrop } from '../lib/dnd';
 import { useAppState } from '../state';
 import { trackColor } from '../theme/tokens';
 import { IconChevron, IconClose } from '../ui/icons';
@@ -130,14 +130,19 @@ function BrowserBody(): JSX.Element {
 /** A directory row: a chevron that turns, a name and how many leaves are under it. */
 function DirRow(props: {
   label: string;
-  count: number;
+  count?: number | undefined;
+  extra?: boolean | undefined;
+  depth?: number | undefined;
   open: boolean;
   onToggle: () => void;
+  remove?: { title: string; run: () => void } | undefined;
 }): JSX.Element {
   return (
     <button
       type="button"
       class="wv-row wv-tree__dir"
+      classList={{ 'wv-tree__dir--extra': props.extra === true }}
+      style={{ 'padding-left': `${8 + (props.depth ?? 0) * 10}px` }}
       aria-expanded={props.open}
       onClick={() => props.onToggle()}
     >
@@ -148,7 +153,24 @@ function DirRow(props: {
         {props.label}
       </span>
       <span class="wv-spacer" />
-      <span class="wv-row__meta">{props.count}</span>
+      <Show when={props.count !== undefined}>
+        <span class="wv-row__meta">{props.count}</span>
+      </Show>
+      <Show when={props.remove}>
+        {(remove) => (
+          <span
+            class="wv-tree__btn wv-tree__btn--danger"
+            title={remove().title}
+            role="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              remove().run();
+            }}
+          >
+            <IconClose />
+          </span>
+        )}
+      </Show>
     </button>
   );
 }
@@ -165,6 +187,7 @@ function LeafRow(props: {
   color: string;
   title: string;
   dragData: string;
+  depth?: number;
   active?: boolean;
   dim?: boolean;
   /** Absent when the row has nothing to do on a click -- an unplaced plugin has
@@ -178,6 +201,7 @@ function LeafRow(props: {
     <div
       class="wv-row wv-tree__leaf"
       classList={{ 'is-active': props.active === true, 'wv-tree__leaf--dim': props.dim === true }}
+      style={{ 'padding-left': `${22 + (props.depth ?? 0) * 10}px` }}
       role={props.onClick ? 'button' : undefined}
       tabindex={props.onClick ? 0 : undefined}
       draggable={true}
@@ -400,12 +424,11 @@ interface PluginRow {
 }
 
 /**
- * The plugin scan, in two folders.
+ * The plugin list, in two folders.
  *
- * The scan is slow -- the first VST3 call opens every installed module in a
- * child process -- so it is asked for here, when this tab is first looked at,
- * rather than at startup. `loadDevices()` is idempotent; only the Rescan button
- * pays for it twice.
+ * Opening a module runs vendor `init()`, which is how unlicensed plugins pop an
+ * activation window, so this tab only reads the on-disk cache. Rescan is the
+ * one control that opens plugins.
  */
 function PluginsTree(): JSX.Element {
   const app = useAppState();
@@ -476,7 +499,7 @@ function PluginsTree(): JSX.Element {
           type="button"
           class="wv-chip wv-can-disable"
           disabled={app.scanning()}
-          title="Scan the plugin directories again"
+          title="Open each new plugin to catalogue it. Unlicensed plugins may show an activation window — only click this when you want that."
           onClick={() => void app.loadDevices(true)}
         >
           {app.scanning() ? 'Scanning…' : 'Rescan'}
@@ -495,8 +518,8 @@ function PluginsTree(): JSX.Element {
         when={anyRows() || app.scanning()}
         fallback={
           <div class="wv-empty">
-            No plugins found.
-            <span class="wv-empty__hint">nothing in the CLAP or VST3 directories</span>
+            No plugins listed.
+            <span class="wv-empty__hint">Rescan opens each module — unlicensed plugins may ask to activate</span>
           </div>
         }
       >
@@ -574,29 +597,46 @@ export function formatRate(rate: number): string {
 }
 
 /**
- * The audio files loaded this session.
+ * Factory packs, extra-search folders, and the session's loaded files.
  *
- * This is the *session's* list and not a file browser: the engine decodes a file
- * into memory and gives it an id, and everything downstream -- a clip, a brush,
- * a waveform -- addresses that id. So the first row is the only way in.
+ * The tree is a filesystem index: expanding a folder lists it, clicking a
+ * sample auditions it, dragging it onto a playlist lane loads it. Decode
+ * happens on use, not when the row is drawn.
  */
 function AudioTree(): JSX.Element {
   const app = useAppState();
   const view = useView();
+  const [roots, setRoots] = createSignal<LibraryRootDto[]>([]);
+  const [loadedOpen, setLoadedOpen] = createSignal(true);
 
   const brushId = () => {
     const brush = view.brush();
     return brush?.kind === 'audio' ? brush.id : null;
   };
 
-  function load(): void {
+  function refreshRoots(): void {
+    app.backend.getLibraryRoots().then(setRoots).catch(app.report);
+  }
+
+  onMount(refreshRoots);
+
+  function loadFile(): void {
     app.backend
       .openAudioFile()
       .then(async (source) => {
-        // `null` is a cancelled dialog. That is an answer, not a failure.
         if (source === null) return;
         await app.refreshAudioSources();
         view.setBrush({ kind: 'audio', id: source.id });
+      })
+      .catch(app.report);
+  }
+
+  function addFolder(): void {
+    app.backend
+      .addLibraryFolder()
+      .then((next) => {
+        if (next === null) return;
+        setRoots(next);
       })
       .catch(app.report);
   }
@@ -608,58 +648,185 @@ function AudioTree(): JSX.Element {
         if (brushId() === source.id) view.setBrush(null);
         return app.refreshAudioSources();
       })
-      // Refused while a clip still plays it, and the message says how many.
       .catch(app.report);
   }
 
   return (
     <>
-      <button type="button" class="wv-row wv-tree__load" onClick={load}>
+      <button type="button" class="wv-row wv-tree__load" onClick={addFolder}>
         <span class="wv-tree__plus" aria-hidden="true">
           +
         </span>
-        <span class="wv-row__name">Load audio file…</span>
+        <span class="wv-row__name">Add folder…</span>
         <span class="wv-spacer" />
-        {/* Exactly what this build decodes -- see `AUDIO_EXTENSIONS` in
-            `crates/audio-file`. MP3 is deliberately absent: the decoder crate
-            has no released 0.6, so offering it would be a dialog that accepts
-            files the engine then refuses. */}
-        <span class="wv-row__meta">wav · flac · ogg</span>
+        <span class="wv-row__meta">stays on launch</span>
+      </button>
+      <button type="button" class="wv-row wv-tree__load" onClick={loadFile}>
+        <span class="wv-tree__plus" aria-hidden="true">
+          +
+        </span>
+        <span class="wv-row__name">Load file…</span>
+        <span class="wv-spacer" />
+        <span class="wv-row__meta">wav · flac · ogg · mp3</span>
       </button>
 
-      <Show
-        when={app.audioSources().length > 0}
-        fallback={
-          <div class="wv-empty">
-            No audio loaded.
-            <span class="wv-empty__hint">load a file to paint it onto the playlist</span>
-          </div>
-        }
-      >
-        <Index each={app.audioSources()}>
-          {(source) => (
-            <LeafRow
-              name={source().name}
-              meta={
-                source().missing
-                  ? 'missing'
-                  : `${formatDuration(source().durationSeconds)} · ${formatRate(source().sampleRate)}`
-              }
-              color={source().missing ? 'var(--rec)' : trackColor(source().id)}
-              title={`${source().path}${source().missing ? '\nThe file has moved: its clips stay and are silent.' : ''}\nClick to load the brush, or drag onto a playlist lane.`}
-              dragData={`audio::${source().id}`}
-              active={brushId() === source().id}
-              dim={source().missing}
-              onClick={() => view.setBrush({ kind: 'audio', id: source().id })}
-              remove={{
-                title: 'Unload — refused while a clip still plays it',
-                run: () => unload(source()),
-              }}
-            />
-          )}
-        </Index>
+      <For each={roots()}>
+        {(root) => (
+          <LibraryDir
+            rootId={root.id}
+            relPath=""
+            label={root.name}
+            extra={root.kind === 'extra'}
+            depth={0}
+            autoOpen={root.kind === 'packs'}
+            remove={
+              root.kind === 'extra'
+                ? {
+                    title: 'Remove this folder from the browser — files on disk are not deleted',
+                    run: () => {
+                      app.backend
+                        .removeLibraryFolder(root.id)
+                        .then(setRoots)
+                        .catch(app.report);
+                    },
+                  }
+                : undefined
+            }
+          />
+        )}
+      </For>
+
+      <DirRow
+        label="Loaded"
+        count={app.audioSources().length}
+        open={loadedOpen()}
+        onToggle={() => setLoadedOpen((open) => !open)}
+      />
+      <Show when={loadedOpen()}>
+        <Show
+          when={app.audioSources().length > 0}
+          fallback={
+            <div class="wv-empty">
+              Nothing in this project yet.
+              <span class="wv-empty__hint">drag a sample onto a playlist lane</span>
+            </div>
+          }
+        >
+          <Index each={app.audioSources()}>
+            {(source) => (
+              <LeafRow
+                name={source().name}
+                meta={
+                  source().missing
+                    ? 'missing'
+                    : `${formatDuration(source().durationSeconds)} · ${formatRate(source().sampleRate)}`
+                }
+                color={source().missing ? 'var(--rec)' : trackColor(source().id)}
+                title={`${source().path}${source().missing ? '\nThe file has moved: its clips stay and are silent.' : ''}\nClick to load the brush, or drag onto a playlist lane.`}
+                dragData={encodeDrop('audio', source().id)}
+                active={brushId() === source().id}
+                dim={source().missing}
+                onClick={() => view.setBrush({ kind: 'audio', id: source().id })}
+                remove={{
+                  title: 'Unload — refused while a clip still plays it',
+                  run: () => unload(source()),
+                }}
+              />
+            )}
+          </Index>
+        </Show>
       </Show>
     </>
+  );
+}
+
+function LibraryDir(props: {
+  rootId: string;
+  relPath: string;
+  label: string;
+  extra?: boolean | undefined;
+  depth: number;
+  autoOpen?: boolean | undefined;
+  remove?: { title: string; run: () => void } | undefined;
+}): JSX.Element {
+  const app = useAppState();
+  const [open, setOpen] = createSignal(false);
+  const [entries, setEntries] = createSignal<LibraryEntryDto[] | null>(null);
+
+  function load(): void {
+    app.backend
+      .listLibraryDir(props.rootId, props.relPath)
+      .then(setEntries)
+      .catch(app.report);
+  }
+
+  function toggle(): void {
+    const next = !open();
+    setOpen(next);
+    if (next && entries() === null) load();
+  }
+
+  onMount(() => {
+    if (props.autoOpen) {
+      setOpen(true);
+      load();
+    }
+  });
+
+  return (
+    <>
+      <DirRow
+        label={props.label}
+        extra={props.extra}
+        depth={props.depth}
+        open={open()}
+        onToggle={toggle}
+        remove={props.remove}
+      />
+      <Show when={open()}>
+        <Show when={entries()} fallback={<div class="wv-row wv-tree__note">listing…</div>}>
+          {(listed) => (
+            <Show
+              when={listed().length > 0}
+              fallback={<div class="wv-row wv-tree__note">empty</div>}
+            >
+              <For each={listed()}>
+                {(entry) =>
+                  entry.kind === 'dir' ? (
+                    <LibraryDir
+                      rootId={props.rootId}
+                      relPath={entry.relPath}
+                      label={entry.name}
+                      extra={props.extra}
+                      depth={props.depth + 1}
+                    />
+                  ) : (
+                    <LibraryFile entry={entry} depth={props.depth + 1} />
+                  )
+                }
+              </For>
+            </Show>
+          )}
+        </Show>
+      </Show>
+    </>
+  );
+}
+
+function LibraryFile(props: { entry: LibraryEntryDto; depth: number }): JSX.Element {
+  const app = useAppState();
+  return (
+    <LeafRow
+      name={props.entry.name}
+      meta=""
+      color="var(--acc)"
+      title={`${props.entry.path}\nClick to preview. Drag onto a playlist lane.`}
+      dragData={encodeDrop('file', props.entry.path)}
+      depth={props.depth}
+      onClick={() => {
+        app.backend.previewAudioFile(props.entry.path).catch(app.report);
+      }}
+    />
   );
 }
 

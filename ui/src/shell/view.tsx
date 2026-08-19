@@ -10,6 +10,7 @@
 
 import { createContext, createSignal, useContext, type Accessor, type JSX, type Setter } from 'solid-js';
 
+import { setTypingPianoEnabled } from '../lib/keyboard';
 import type { StripRef } from '../state';
 
 /** The three main views. The piano roll is a fullscreen overlay on top of one. */
@@ -31,7 +32,7 @@ export type Brush =
   | null;
 
 /**
- * Which insert the fullscreen effect editor is showing.
+ * Which insert a floating plugin window is showing.
  *
  * By **id** and not by chain position, because the editor can reorder the chain
  * it is looking at: an index would leave it pointed at whatever moved into that
@@ -102,15 +103,24 @@ export interface ViewState {
   closeRoll(): void;
 
   /**
-   * The insert whose full editor is up, or `null`.
-   *
-   * A second fullscreen layer, over the same three views the roll covers. Only
-   * ever one of the two: opening either closes the other, so Escape can never be
-   * ambiguous about which layer it is leaving.
+   * Open plugin windows, keyed by insert id so reordering does not lose one.
+   * Several can sit on the desktop at once, like hosted VSTs.
    */
-  insertEditor: Accessor<InsertEditorRef | null>;
+  insertEditors: Accessor<InsertEditorRef[]>;
+  focusedInsertId: Accessor<number | null>;
   openInsertEditor(ref: InsertEditorRef): void;
-  closeInsertEditor(): void;
+  focusInsertEditor(insertId: number): void;
+  closeInsertEditor(insertId?: number): void;
+
+  /**
+   * The rack channel whose sample/instrument window is up, or `null`.
+   *
+   * Built-ins and the sampler have no native editor, so this is that window.
+   * Opening a plugin GUI does not use it — those are OS windows.
+   */
+  sampleEditor: Accessor<number | null>;
+  openSampleEditor(channel: number): void;
+  closeSampleEditor(): void;
 
   browserOpen: Accessor<boolean>;
   setBrowserOpen: Setter<boolean>;
@@ -140,6 +150,15 @@ export interface ViewState {
   setRollSnap: Setter<number>;
   rollZoom: Accessor<number>;
   setRollZoom: Setter<number>;
+  /** Vertical zoom: how tall each key row is, independent of time zoom. */
+  rollZoomY: Accessor<number>;
+  setRollZoomY: Setter<number>;
+  /**
+   * FL's "typing keyboard to piano" (Ctrl+T). When on, Q is C4 (at the default
+   * octave) and letter keys play notes instead of being view shortcuts.
+   */
+  typingKeyboard: Accessor<boolean>;
+  setTypingKeyboard: Setter<boolean>;
   ghosts: Accessor<boolean>;
   setGhosts: Setter<boolean>;
   /** Indices into the edited channel's note list. */
@@ -179,7 +198,9 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [previousView, setPreviousView] = createSignal<MainView>('rack');
   const [rollOpen, setRollOpen] = createSignal(false);
   const [rollChannel, setRollChannel] = createSignal(0);
-  const [insertEditor, setInsertEditor] = createSignal<InsertEditorRef | null>(null);
+  const [insertEditors, setInsertEditors] = createSignal<InsertEditorRef[]>([]);
+  const [focusedInsertId, setFocusedInsertId] = createSignal<number | null>(null);
+  const [sampleEditor, setSampleEditor] = createSignal<number | null>(null);
   const [browserOpen, setBrowserOpen] = createSignal(true);
   const [browserTab, setBrowserTab] = createSignal<BrowserTab>('sounds');
   const [sideOpen, setSideOpen] = createSignal(true);
@@ -191,6 +212,8 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [rollTool, setRollTool] = createSignal<RollTool>('draw');
   const [rollSnap, setRollSnap] = createSignal(ROLL_SNAPS[0]![0]);
   const [rollZoom, setRollZoom] = createSignal(1);
+  const [rollZoomY, setRollZoomY] = createSignal(1);
+  const [typingKeyboard, setTypingKeyboardSignal] = createSignal(false);
   const [ghosts, setGhosts] = createSignal(true);
   const [selection, setSelection] = createSignal<number[]>([]);
   const [playlistTool, setPlaylistTool] = createSignal<PlaylistTool>('paint');
@@ -208,9 +231,16 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const state: ViewState = {
     view,
     go(next) {
+      // Playlist lands on the picker so a brush is in front for painting.
+      // Inspector stays one click away; we do not overwrite it if Playlist is
+      // already up (F5 while painting, for example).
+      if (next === 'playlist' && view() !== next) {
+        setSideTab('picker');
+        setSideOpen(true);
+      }
       setView(next);
       setRollOpen(false);
-      setInsertEditor(null);
+      setSampleEditor(null);
       setPreviousView(next);
     },
     previousView,
@@ -220,20 +250,41 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
       setPreviousView(view());
       setRollChannel(channel);
       setSelection([]);
-      setInsertEditor(null);
+      setSampleEditor(null);
       setRollOpen(true);
     },
     closeRoll() {
       setRollOpen(false);
       setSelection([]);
     },
-    insertEditor,
+    insertEditors,
+    focusedInsertId,
     openInsertEditor(ref) {
-      setRollOpen(false);
-      setInsertEditor(ref);
+      setInsertEditors((open) => {
+        if (open.some((entry) => entry.insertId === ref.insertId)) return open;
+        return [...open, ref];
+      });
+      setFocusedInsertId(ref.insertId);
     },
-    closeInsertEditor() {
-      setInsertEditor(null);
+    focusInsertEditor(insertId) {
+      setFocusedInsertId(insertId);
+    },
+    closeInsertEditor(insertId) {
+      setInsertEditors((open) => {
+        const next = insertId === undefined ? [] : open.filter((entry) => entry.insertId !== insertId);
+        const focused = focusedInsertId();
+        if (focused === null || insertId === undefined || focused === insertId) {
+          setFocusedInsertId(next.at(-1)?.insertId ?? null);
+        }
+        return next;
+      });
+    },
+    sampleEditor,
+    openSampleEditor(channel) {
+      setSampleEditor(channel);
+    },
+    closeSampleEditor() {
+      setSampleEditor(null);
     },
     browserOpen,
     setBrowserOpen,
@@ -257,6 +308,14 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     setRollSnap,
     rollZoom,
     setRollZoom,
+    rollZoomY,
+    setRollZoomY,
+    typingKeyboard,
+    setTypingKeyboard(value) {
+      const next = setTypingKeyboardSignal(value);
+      setTypingPianoEnabled(next);
+      return next;
+    },
     ghosts,
     setGhosts,
     selection,

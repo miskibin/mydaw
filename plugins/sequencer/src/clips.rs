@@ -128,6 +128,12 @@ pub struct CompiledAudioClip {
     pub length_ticks: u64,
     /// Where in the file playback begins, in the file's own frames.
     pub offset_frames: u64,
+    /// Exclusive end in the file's own frames. `0` means the file's last frame.
+    pub end_frames: u64,
+    /// Playback-rate multiplier on top of the file/device ratio. `1.0` is
+    /// recorded pitch; `2.0` is an octave up. Channel pitch is baked in here
+    /// so the voice does one multiply, not a policy.
+    pub pitch_ratio: f64,
     /// Linear, already converted from the clip's dB.
     pub gain: f32,
 }
@@ -140,9 +146,21 @@ impl CompiledAudioClip {
 
     /// Whether this clip would produce no sound at all.
     pub fn is_silent(&self) -> bool {
+        let end = self.playable_end();
         self.source.frames() == 0
             || self.gain == 0.0
-            || self.offset_frames >= self.source.frames() as u64
+            || self.offset_frames >= end
+            || self.pitch_ratio <= 0.0
+    }
+
+    /// Exclusive end frame in the file, after the channel region is applied.
+    pub fn playable_end(&self) -> u64 {
+        let frames = self.source.frames() as u64;
+        if self.end_frames == 0 || self.end_frames > frames {
+            frames
+        } else {
+            self.end_frames
+        }
     }
 }
 
@@ -154,6 +172,8 @@ impl std::fmt::Debug for CompiledAudioClip {
             .field("start_ticks", &self.start_ticks)
             .field("length_ticks", &self.length_ticks)
             .field("offset_frames", &self.offset_frames)
+            .field("end_frames", &self.end_frames)
+            .field("pitch_ratio", &self.pitch_ratio)
             .field("gain", &self.gain)
             .finish()
     }
@@ -195,6 +215,20 @@ impl CompiledAudioSong {
         self.clips.len()
     }
 
+    /// The clips of one audio file, as their own arrangement.
+    ///
+    /// Each audio-clip channel's node only plays that file, so the bus filters
+    /// the song rather than teaching the voice pool about mixer routing.
+    pub fn for_source(&self, source_id: u64) -> Self {
+        Self::new(
+            self.clips
+                .iter()
+                .filter(|clip| clip.source.id() == source_id)
+                .cloned()
+                .collect(),
+        )
+    }
+
     /// Whether the arrangement has no audio in it.
     pub fn is_empty(&self) -> bool {
         self.clips.is_empty()
@@ -224,6 +258,35 @@ impl std::fmt::Debug for CompiledAudioSong {
     }
 }
 
+/// Channel-level playback for every clip of one file: pitch and the SMP region.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioClipTune {
+    /// Fine + coarse pitch, in cents. `0` is recorded pitch. `±1200` is an octave.
+    pub pitch_cents: f32,
+    /// Frames skipped at the start of the file, added to each clip's own offset.
+    pub start_frames: u64,
+    /// Exclusive end in the file. `0` means the file's last frame.
+    pub end_frames: u64,
+}
+
+impl Default for AudioClipTune {
+    fn default() -> Self {
+        Self {
+            pitch_cents: 0.0,
+            start_frames: 0,
+            end_frames: 0,
+        }
+    }
+}
+
+/// Playback-rate multiplier for `cents` of channel pitch.
+pub fn pitch_ratio(cents: f32) -> f64 {
+    if !cents.is_finite() {
+        return 1.0;
+    }
+    2f64.powf(f64::from(cents.clamp(-2_400.0, 2_400.0)) / 1_200.0)
+}
+
 /// Resolve a playlist's audio clips against `lookup`. **Non-RT.**
 ///
 /// `lookup` answers "the source with this id", which is
@@ -236,16 +299,29 @@ pub fn compile_audio_clips(
     playlist: &Playlist,
     lookup: impl Fn(u64) -> Option<Arc<AudioSource>>,
 ) -> CompiledAudioSong {
+    compile_audio_clips_with(playlist, lookup, |_| AudioClipTune::default())
+}
+
+/// [`compile_audio_clips`], with per-file pitch and region from the channel.
+pub fn compile_audio_clips_with(
+    playlist: &Playlist,
+    lookup: impl Fn(u64) -> Option<Arc<AudioSource>>,
+    tune_of: impl Fn(u64) -> AudioClipTune,
+) -> CompiledAudioSong {
     let clips = playlist
         .audible_audio_clips()
         .into_iter()
         .filter_map(|clip| {
+            let source = lookup(clip.source_id)?;
+            let tune = tune_of(clip.source_id);
             Some(CompiledAudioClip {
                 clip_id: clip.id,
-                source: lookup(clip.source_id)?,
+                source,
                 start_ticks: clip.start_ticks,
                 length_ticks: clip.length_ticks,
-                offset_frames: clip.offset_frames,
+                offset_frames: clip.offset_frames.saturating_add(tune.start_frames),
+                end_frames: tune.end_frames,
+                pitch_ratio: pitch_ratio(tune.pitch_cents),
                 gain: db_to_gain(clip.gain_db),
             })
         })
@@ -578,7 +654,7 @@ impl AudioClipNode {
         let Some(compiled) = song.clips().get(clip) else {
             return;
         };
-        let step = playback_step(compiled.source.sample_rate(), ctx_rate);
+        let step = playback_step(compiled.source.sample_rate(), ctx_rate) * compiled.pitch_ratio;
         let gain = compiled.gain;
         let clip_id = compiled.clip_id;
         let source_id = compiled.source.id();
@@ -735,7 +811,7 @@ impl AudioClipNode {
             let clip_start = tick_boundary(clip.start_ticks, step_len);
             let clip_end = tick_boundary(clip.end_ticks(), step_len);
             let source_rate = clip.source.sample_rate();
-            let source_frames = clip.source.frames() as u64;
+            let source_frames = clip.playable_end();
             let offset = clip.offset_frames;
 
             // Sorted by start tick, so once a clip begins after this block, so
@@ -747,12 +823,13 @@ impl AudioClipNode {
                 continue;
             }
 
-            let step = playback_step(source_rate, sample_rate);
+            let step = playback_step(source_rate, sample_rate) * clip.pitch_ratio;
             if step <= 0.0 || offset >= source_frames {
                 continue;
             }
-            // Where the file runs out, in output frames from the clip's start.
-            // `ceil` so the last partial frame is played rather than dropped.
+            // Where the file (or the SMP region) runs out, in output frames
+            // from the clip's start. `ceil` so the last partial frame is played
+            // rather than dropped.
             let playable = ((source_frames - offset) as f64 / step).ceil() as u64;
             let end = clip_end.min(clip_start.saturating_add(playable));
             if end <= clip_start {
@@ -819,7 +896,7 @@ impl AudioClipNode {
                 continue;
             };
             let padded = clip.source.padded();
-            let source_frames = clip.source.frames() as f64;
+            let source_end = clip.playable_end() as f64;
 
             // Sample-accurate: a voice due part-way through the block is silent
             // until its own frame. Past this block entirely is a voice the
@@ -831,7 +908,7 @@ impl AudioClipNode {
             let first = voice.start_at.saturating_sub(block_start) as usize;
 
             for frame in first..frames {
-                if voice.position >= source_frames || voice.position < 0.0 {
+                if voice.position >= source_end || voice.position < 0.0 {
                     voice.active = false;
                     break;
                 }
@@ -996,6 +1073,8 @@ mod tests {
             start_ticks: start,
             length_ticks: length,
             offset_frames: 0,
+            end_frames: 0,
+            pitch_ratio: 1.0,
             gain: 1.0,
         }
     }
@@ -1265,6 +1344,8 @@ mod tests {
             start_ticks: BAR,
             length_ticks: 4 * BAR,
             offset_frames: 1_000,
+            end_frames: 0,
+            pitch_ratio: 1.0,
             gain: 1.0,
         }]);
         let mut rig = Rig::new(song, 512);
@@ -1553,5 +1634,42 @@ mod tests {
         let loaded = flat_source(1, 48_000.0, 48_000, 0.5);
         let song = compile_audio_clips(&playlist, |_| Some(Arc::clone(&loaded)));
         assert!((song.clips()[0].gain - db_to_gain(-6.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn compiling_bakes_channel_pitch_and_region_into_the_clip() {
+        let mut playlist = Playlist::default();
+        playlist.add_audio_clip(1, 0, 0, BAR, 100, 0.0).expect("ok");
+        let loaded = flat_source(1, 48_000.0, 48_000, 0.5);
+        let song = compile_audio_clips_with(
+            &playlist,
+            |_| Some(Arc::clone(&loaded)),
+            |_| AudioClipTune {
+                pitch_cents: 1_200.0,
+                start_frames: 50,
+                end_frames: 10_000,
+            },
+        );
+        let clip = &song.clips()[0];
+        assert_eq!(clip.offset_frames, 150);
+        assert_eq!(clip.end_frames, 10_000);
+        assert!(
+            (clip.pitch_ratio - 2.0).abs() < 1e-9,
+            "{}",
+            clip.pitch_ratio
+        );
+    }
+
+    #[test]
+    fn for_source_keeps_only_that_file() {
+        let a = flat_source(1, 48_000.0, 1_000, 0.5);
+        let b = flat_source(2, 48_000.0, 1_000, 0.5);
+        let song = CompiledAudioSong::new(vec![
+            clip(1, Arc::clone(&a), 0, BAR),
+            clip(2, Arc::clone(&b), BAR, BAR),
+        ]);
+        assert_eq!(song.for_source(1).len(), 1);
+        assert_eq!(song.for_source(1).clips()[0].clip_id, 1);
+        assert!(song.for_source(9).is_empty());
     }
 }

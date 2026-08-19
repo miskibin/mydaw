@@ -318,7 +318,11 @@ impl SamplerNode {
 
         self.counter = self.counter.wrapping_add(1);
         let slot = self.allocate();
-        let step = playback_step(key, root_key, tune_cents, sample_rate, self.sample_rate);
+        let step = if self.bank.unpitched() {
+            sample_rate / self.sample_rate
+        } else {
+            playback_step(key, root_key, tune_cents, sample_rate, self.sample_rate)
+        };
         let amplitude = layer_gain(velocity, vel_lo, vel_hi) * VOICE_GAIN;
 
         self.voices[slot] = Voice {

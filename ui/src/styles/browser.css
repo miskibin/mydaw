@@ -95,6 +95,10 @@
   color: var(--txt);
 }
 
+.wv-browser .wv-tree__dir--extra .wv-row__name {
+  color: var(--live);
+}
+
 .wv-tree__chev {
   display: flex;
   flex: none;

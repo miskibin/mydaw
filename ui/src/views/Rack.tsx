@@ -21,13 +21,10 @@
  *
  * ## Where in the loop we are
  *
- * Two overlays are laid over the whole stack of rows -- a column the width of
- * one cell over the step that is sounding, and a hairline at the exact
- * position -- rather than a class on the cell in every lane. One `translateX`
- * per frame instead of one per row per frame, and the roll-mode previews get
- * the moving line for free because they share the lane's coordinate system.
- * See {@link soundingStep} for what the rack claims to know in SONG mode, which
- * is deliberately less than in PAT mode.
+ * A tick sits above the first lane, the width of the step that is sounding --
+ * one `translateX` per step, not a wash down every row. See
+ * {@link soundingStep} for what the rack claims to know in SONG mode, which is
+ * deliberately less than in PAT mode.
  */
 
 import { For, Index, Show, createEffect, createSignal, onCleanup } from 'solid-js';
@@ -45,8 +42,15 @@ import {
   stepCells,
   stepsToNotes,
   withChannel,
+  withClearedChannel,
+  withFilledSteps,
+  withInvertedSteps,
+  withRandomSteps,
+  withShiftedSteps,
   withToggledStep,
 } from '../lib/pattern';
+import { channelKind, hasSampleWindow, isAudioClipChannel } from '../lib/channel';
+import { allowDrop, droppedAudioFile, droppedAudioPath, importDroppedFile, parseDrop } from '../lib/dnd';
 import { useAppState } from '../state';
 import { useView } from '../shell/view';
 import { alpha, trackColor } from '../theme/tokens';
@@ -55,12 +59,12 @@ import { IconCaret, IconRoll, IconWarn, IconX } from '../ui/icons';
 import { InstrumentMenu } from './InstrumentMenu';
 
 /** A step cell, in pixels. Fixed: see the module docs. */
-const CELL_W = 13;
-const CELL_H = 22;
-/** Between two cells of the same bar. From the mock's rack lane. */
-const CELL_GAP = 1.5;
-/** Between two bars -- the only gap, because the beat is shown by colour. */
-const BAR_GAP = 5;
+const CELL_W = 18;
+const CELL_H = 24;
+/** Between two cells of the same bar. */
+const CELL_GAP = 3;
+/** Between two bars — the only gap, because the beat is shown by colour. */
+const BAR_GAP = 8;
 /** Cells in one bar of 4/4 at a sixteenth per cell. */
 const CELLS_PER_BAR = 16;
 /** Cells in one beat, which is what gets the brighter fill. */
@@ -71,6 +75,38 @@ const BAR_PITCH = CELLS_PER_BAR * CELL_W + (CELLS_PER_BAR - 1) * CELL_GAP + BAR_
 
 /** The lengths a pattern may be, which is what the picker offers. */
 const LENGTHS = [16, 32, 64];
+
+/**
+ * Fill spacings the channel menu offers, in cells.
+ *
+ * A cell is a sixteenth, so 4 is a hit on each beat, 2 is eighths, 16 is the
+ * downbeat of each bar. 3 and 6 are the FL extras for patterns that are not
+ * on the beat.
+ */
+const FILL_INTERVALS: { interval: number; meta: string }[] = [
+  { interval: 2, meta: '1/8' },
+  { interval: 3, meta: '' },
+  { interval: 4, meta: 'beat' },
+  { interval: 6, meta: '' },
+  { interval: 8, meta: '1/2' },
+  { interval: 16, meta: 'bar' },
+];
+
+/** Where the channel-name menu opens, and who it is talking about. */
+interface ChannelMenuState {
+  channel: number;
+  name: string;
+  x: number;
+  y: number;
+}
+
+/** Keep a context menu inside the window, matching the mixer's effect picker. */
+function menuPosition(event: MouseEvent, width: number, height: number): { x: number; y: number } {
+  return {
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - width - 8)),
+    y: Math.max(8, Math.min(event.clientY, window.innerHeight - height - 8)),
+  };
+}
 
 /** Where cell `index`'s left edge sits inside a lane, in pixels. */
 function cellX(index: number): number {
@@ -83,25 +119,13 @@ function laneWidth(steps: number): number {
   return steps <= 0 ? 0 : cellX(steps - 1) + CELL_W;
 }
 
-/**
- * Where a *fractional* step position sits, in pixels.
- *
- * Interpolated between one cell's left edge and the next rather than from a
- * pixels-per-tick constant, so the hairline stays inside the cell the column is
- * highlighting even across a bar gap, which is wider than a cell gap.
- */
-function positionX(step: number): number {
-  const whole = Math.floor(step);
-  const left = cellX(whole);
-  return left + (step - whole) * (cellX(whole + 1) - left);
-}
-
 export function Rack(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
   const [instrumentFor, setInstrumentFor] = createSignal<number | null>(null);
   const [renaming, setRenaming] = createSignal<number | null>(null);
   const [dragOver, setDragOver] = createSignal(false);
+  const [channelMenu, setChannelMenu] = createSignal<ChannelMenuState | null>(null);
 
   const pattern = () => app.pattern();
   const activeId = () => app.sequencer()?.patternSet.activeId ?? 0;
@@ -113,8 +137,7 @@ export function Rack(): ReturnType<typeof Show> {
   // --- where in the loop we are --------------------------------------------
 
   let rowsEl: HTMLDivElement | undefined;
-  let columnEl: HTMLDivElement | undefined;
-  let lineEl: HTMLDivElement | undefined;
+  let pipEl: HTMLDivElement | undefined;
 
   /**
    * How far the lanes start from the left edge of the row stack.
@@ -181,8 +204,7 @@ export function Rack(): ReturnType<typeof Show> {
   }
 
   function hidePosition(): void {
-    if (columnEl) columnEl.style.display = 'none';
-    if (lineEl) lineEl.style.display = 'none';
+    if (pipEl) pipEl.style.display = 'none';
   }
 
   // Subscribed to the frame loop only while the transport runs: a stopped rack
@@ -201,9 +223,8 @@ export function Rack(): ReturnType<typeof Show> {
       return;
     }
     let lastStep = -1;
-    let lastX = Number.NaN;
     const paint = () => {
-      if (!columnEl || !lineEl) return;
+      if (!pipEl) return;
       const position = soundingStep(current);
       if (position === null) {
         hidePosition();
@@ -211,22 +232,13 @@ export function Rack(): ReturnType<typeof Show> {
         return;
       }
       // An explicit value, not `''`: the stylesheet's own `display: none` is
-      // what hides these, so clearing the inline style would un-hide nothing.
-      columnEl.style.display = 'block';
-      lineEl.style.display = 'block';
+      // what hides this, so clearing the inline style would un-hide nothing.
       const left = laneOffset();
-      // The column moves once per step; the line moves every frame. Writing
-      // only what changed keeps a stopped-on-a-step rack down to one property.
       const step = Math.min(current.steps - 1, Math.max(0, Math.floor(position)));
-      if (step !== lastStep) {
-        lastStep = step;
-        columnEl.style.transform = `translateX(${left + cellX(step)}px)`;
-      }
-      const x = left + positionX(position);
-      if (x !== lastX) {
-        lastX = x;
-        lineEl.style.transform = `translateX(${x}px)`;
-      }
+      if (step === lastStep) return;
+      lastStep = step;
+      pipEl.style.display = 'block';
+      pipEl.style.transform = `translateX(${left + cellX(step)}px)`;
     };
 
     paint();
@@ -310,17 +322,46 @@ export function Rack(): ReturnType<typeof Show> {
   function addFromDrop(event: DragEvent): void {
     event.preventDefault();
     setDragOver(false);
-    const raw = event.dataTransfer?.getData('text/plain') ?? '';
-    const [kind, ref] = raw.split('::');
-    if (kind === 'audio') {
-      // Honest refusal: an audio file is a clip on a lane, not an instrument.
-      app.report(
-        new Error('Audio files go on a playlist lane, not the rack — switch to PLAYLIST and drop it there'),
-      );
+    const filePath = droppedAudioPath(event);
+    if (filePath) {
+      placeSample(filePath);
       return;
     }
-    if (kind !== 'inst' || !ref) return;
-    placeSource(ref);
+    // An OS drop arrives as bytes, not a path; import them, then place the
+    // written file exactly as a library `file::` drop would be.
+    const file = droppedAudioFile(event);
+    if (file) {
+      void importDroppedFile(file, (name, bytes) => app.backend.importDroppedAudio(name, bytes))
+        .then((path) => placeSample(path))
+        .catch(app.report);
+      return;
+    }
+    const payload = parseDrop(event.dataTransfer?.getData('text/plain') ?? '');
+    if (!payload) return;
+    if (payload.kind === 'audio') {
+      const source = app.audioSources().find((entry) => String(entry.id) === payload.ref);
+      if (source?.path) {
+        placeSample(source.path);
+        return;
+      }
+      app.report(new Error('That audio file is no longer loaded'));
+      return;
+    }
+    if (payload.kind === 'file') {
+      app.report(new Error('That file is not an audio sample this build can play'));
+      return;
+    }
+    if (payload.kind === 'pattern') {
+      app.report(new Error('A pattern goes on a playlist lane, not the rack'));
+      return;
+    }
+    placeSource(payload.ref);
+  }
+
+  function placeSample(path: string): void {
+    void app.mixerCommand((backend) => backend.addSampleChannel(path)).then(() => {
+      void app.refreshAudioSources();
+    });
   }
 
   /** Add a channel playing `sourceId`, hosted plugins included. */
@@ -446,7 +487,7 @@ export function Rack(): ReturnType<typeof Show> {
       <div
         class="wv-rack"
         onDragOver={(event) => {
-          event.preventDefault();
+          allowDrop(event);
           if (!dragOver()) setDragOver(true);
         }}
         onDragLeave={(event) => {
@@ -456,11 +497,7 @@ export function Rack(): ReturnType<typeof Show> {
         onDrop={addFromDrop}
       >
         <div class="wv-rack__rows" ref={rowsEl}>
-          {/* Under the cells in the source order but painted over them, which
-              is what makes it read as a wash on the column rather than a block
-              in front of it. Both are inert to the pointer. */}
-          <div class="wv-rack__col" ref={columnEl} style={{ width: `${CELL_W}px` }} />
-          <div class="wv-rack__line" ref={lineEl} />
+          <div class="wv-rack__pip" ref={pipEl} style={{ width: `${CELL_W}px` }} />
 
           <Index each={app.tracks()}>
             {(track) => (
@@ -478,8 +515,17 @@ export function Rack(): ReturnType<typeof Show> {
                   view.openRoll(track().index);
                 }}
                 onInstrument={() => setInstrumentFor(track().index)}
+                onOpenSample={() => view.openSampleEditor(track().index)}
                 onToggleMode={() => toggleMode(track().index, track().name)}
                 onRemove={() => removeChannel(track())}
+                onChannelMenu={(event) => {
+                  selectChannel(track().index);
+                  setChannelMenu({
+                    channel: track().index,
+                    name: track().name,
+                    ...menuPosition(event, 216, 448),
+                  });
+                }}
                 canRemove={app.tracks().length > 1}
               />
             )}
@@ -507,6 +553,10 @@ export function Rack(): ReturnType<typeof Show> {
           onAdd={placeSource}
         />
       </Show>
+
+      <Show when={channelMenu()}>
+        {(menu) => <ChannelMenu menu={menu()} close={() => setChannelMenu(null)} />}
+      </Show>
     </div>
   );
 }
@@ -521,8 +571,10 @@ function RackRow(props: {
   onToggleStep: (index: number, accent: boolean) => void;
   onOpenRoll: () => void;
   onInstrument: () => void;
+  onOpenSample: () => void;
   onToggleMode: () => void;
   onRemove: () => void;
+  onChannelMenu: (event: MouseEvent) => void;
 }): ReturnType<typeof Show> {
   const app = useAppState();
   const colour = () => trackColor(props.track.id);
@@ -553,22 +605,39 @@ function RackRow(props: {
         }}
       />
 
-      <div class="wv-chrow__name">
+      <div
+        class="wv-chrow__name"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          props.onChannelMenu(event);
+        }}
+      >
+        <span
+          class={`wv-chrow__kind wv-chrow__kind--${channelKind(props.track).kind}`}
+          title={channelKind(props.track).title}
+        >
+          {channelKind(props.track).badge}
+        </span>
         <button
           type="button"
           class="wv-chrow__label"
-          title={
+          title={`${
             props.track.clap?.hasEditor || props.track.vst3?.hasEditor
               ? 'Open this instrument’s own window'
-              : props.track.sourceLabel
-          }
+              : hasSampleWindow(props.track)
+                ? 'Open the sample window'
+                : channelKind(props.track).title
+          } · right-click to fill the grid`}
           onClick={(event) => {
             event.stopPropagation();
             props.onSelect();
             const slot = props.track.clap ?? props.track.vst3;
             if (slot?.hasEditor) {
               app.toggleGui({ slot: 'track', index: props.track.index }, !slot.guiOpen);
+              return;
             }
+            if (hasSampleWindow(props.track)) props.onOpenSample();
           }}
         >
           {props.track.name}
@@ -596,9 +665,15 @@ function RackRow(props: {
         type="button"
         class="wv-chrow__roll"
         classList={{ 'is-on': isRoll() }}
-        title="Open the piano roll for this channel (F7)"
+        disabled={isAudioClipChannel(props.track)}
+        title={
+          isAudioClipChannel(props.track)
+            ? 'Audio clips play from the playlist, not the piano roll'
+            : 'Open the piano roll for this channel (F7)'
+        }
         onClick={(event) => {
           event.stopPropagation();
+          if (isAudioClipChannel(props.track)) return;
           props.onOpenRoll();
         }}
       >
@@ -606,6 +681,18 @@ function RackRow(props: {
       </button>
 
       <div class="wv-chrow__lane" style={{ width: `${laneWidth(length())}px` }}>
+        <Show
+          when={!isAudioClipChannel(props.track)}
+          fallback={
+            <div
+              class="wv-chrow__clip"
+              style={{ width: `${laneWidth(length())}px` }}
+              title="This channel plays playlist clips of its file"
+            >
+              playlist
+            </div>
+          }
+        >
         <Show
           when={!isRoll()}
           fallback={
@@ -665,18 +752,23 @@ function RackRow(props: {
             }}
           </Index>
         </Show>
+        </Show>
       </div>
 
       <button
         type="button"
         class="wv-chrow__mode"
+        disabled={isAudioClipChannel(props.track)}
         title={
-          isRoll()
-            ? 'Fold these notes back onto the step grid — one key, no note lengths'
-            : 'Turn these steps into notes and edit them in the piano roll'
+          isAudioClipChannel(props.track)
+            ? 'Audio clips have no step grid'
+            : isRoll()
+              ? 'Fold these notes back onto the step grid — one key, no note lengths'
+              : 'Turn these steps into notes and edit them in the piano roll'
         }
         onClick={(event) => {
           event.stopPropagation();
+          if (isAudioClipChannel(props.track)) return;
           props.onToggleMode();
         }}
       >
@@ -700,6 +792,157 @@ function RackRow(props: {
       >
         <IconX />
       </button>
+    </div>
+  );
+}
+
+/**
+ * Right-click on a channel name. The fills are FL's: every Nth cell on, the
+ * rest off, starting at the left edge. Invert / shift / random rewrite the
+ * same grid. Notes go with them — the compiler would play both.
+ */
+function ChannelMenu(props: {
+  menu: ChannelMenuState;
+  close: () => void;
+}): ReturnType<typeof Show> {
+  const app = useAppState();
+  const view = useView();
+
+  function edit(
+    label: string,
+    run: (pattern: PatternDto, key: number) => PatternDto,
+    detail: string,
+  ): void {
+    const key = app.channelKey(props.menu.channel);
+    app.editPatternOnce(label, (current) => run(current, key));
+    app.say(`${props.menu.name} · ${label}`, detail);
+    props.close();
+  }
+
+  function fill(interval: number, meta: string): void {
+    const label = interval === 1 ? 'Fill all' : `Fill every ${interval}`;
+    const detail = meta || (interval === 1 ? 'every step' : `every ${interval} steps`);
+    edit(label, (current, key) => withFilledSteps(current, props.menu.channel, interval, key), detail);
+  }
+
+  function invert(): void {
+    edit(
+      'Invert',
+      (current, key) => withInvertedSteps(current, props.menu.channel, key),
+      'on ↔ off',
+    );
+  }
+
+  function shift(delta: number): void {
+    const label = delta < 0 ? 'Shift left' : 'Shift right';
+    edit(label, (current, key) => withShiftedSteps(current, props.menu.channel, delta, key), '1 step');
+  }
+
+  function randomise(): void {
+    edit(
+      'Random',
+      (current, key) => withRandomSteps(current, props.menu.channel, Date.now(), key),
+      'new pattern',
+    );
+  }
+
+  function clear(): void {
+    edit(
+      'Clear',
+      (current, key) => withClearedChannel(current, props.menu.channel, key),
+      'empty',
+    );
+  }
+
+  return (
+    <div
+      class="wv-scrim"
+      onClick={props.close}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        props.close();
+      }}
+    >
+      <div
+        class="wv-menu wv-menu--chrow"
+        style={{ left: `${props.menu.x}px`, top: `${props.menu.y}px` }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <For each={FILL_INTERVALS}>
+          {(entry) => (
+            <button
+              type="button"
+              class="wv-menu__row"
+              title={`Turn on step 1 and every ${entry.interval} after — the rest off`}
+              onClick={() => fill(entry.interval, entry.meta)}
+            >
+              <span>Fill every {entry.interval}</span>
+              <span class="wv-spacer" />
+              <Show when={entry.meta}>
+                <span class="wv-menu__meta">{entry.meta}</span>
+              </Show>
+            </button>
+          )}
+        </For>
+        <button
+          type="button"
+          class="wv-menu__row"
+          title="Turn every step on"
+          onClick={() => fill(1, 'every step')}
+        >
+          <span>Fill all</span>
+        </button>
+        <div class="wv-menu__rule" />
+        <button type="button" class="wv-menu__row" title="Flip every step" onClick={invert}>
+          Invert
+        </button>
+        <button
+          type="button"
+          class="wv-menu__row"
+          title="Move every hit one step earlier"
+          onClick={() => shift(-1)}
+        >
+          Shift left
+        </button>
+        <button
+          type="button"
+          class="wv-menu__row"
+          title="Move every hit one step later"
+          onClick={() => shift(1)}
+        >
+          Shift right
+        </button>
+        <button
+          type="button"
+          class="wv-menu__row"
+          title="A new random pattern on this channel"
+          onClick={randomise}
+        >
+          Random
+        </button>
+        <button
+          type="button"
+          class="wv-menu__row"
+          title="Turn every step off and drop any notes"
+          onClick={clear}
+        >
+          Clear
+        </button>
+        <div class="wv-menu__rule" />
+        <button
+          type="button"
+          class="wv-menu__row"
+          title="Open the piano roll for this channel (F7)"
+          onClick={() => {
+            view.openRoll(props.menu.channel);
+            props.close();
+          }}
+        >
+          <span>Piano roll</span>
+          <span class="wv-spacer" />
+          <span class="wv-menu__meta">F7</span>
+        </button>
+      </div>
     </div>
   );
 }

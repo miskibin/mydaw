@@ -3,10 +3,12 @@
  *
  * One stylesheet per region rather than one long file: six views are edited
  * independently, and a single sheet is where merge conflicts and dead rules
- * accumulate. `base.css` is the shared vocabulary every other file builds on
- * and must be first.
+ * accumulate. `tailwind.css` is utilities (no Preflight) over the same tokens;
+ * `base.css` is the shared vocabulary every other file builds on and must be
+ * next.
  */
 
+@import './tailwind.css';
 @import './base.css';
 @import './top.css';
 @import './browser.css';
