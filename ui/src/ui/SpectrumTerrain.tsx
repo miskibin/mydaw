@@ -75,11 +75,10 @@ export function SpectrumTerrain(props: {
       if (acc === accNow && sunk === sunkNow) return;
       accNow = acc;
       sunkNow = sunk;
-      const r = (sunk >> 16) & 255;
-      const g = (sunk >> 8) & 255;
-      const b = sunk & 255;
-      const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      const ink = luma < 80 ? sunk : 0x0b1220;
+      // The terrain must follow the active UI surface in both dark and light
+      // themes. Previously bright --sunk values were replaced with a hardcoded
+      // navy background, leaving the 3D spectrum dark in light mode.
+      const ink = sunk;
       (scene.fog as THREE.Fog).color.setHex(ink);
       (scene.background as THREE.Color).setHex(ink);
       renderer.setClearColor(ink, 1);
