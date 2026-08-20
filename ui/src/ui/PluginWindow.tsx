@@ -17,13 +17,17 @@ export function PluginWindow(props: {
   onClose: () => void;
   children: JSX.Element;
 }): JSX.Element {
+  const initialWidth = Math.min(props.defaultWidth, Math.max(320, window.innerWidth - 16));
+  const initialHeight = Math.min(props.defaultHeight, Math.max(260, window.innerHeight - 16));
   const [pos, setPos] = createSignal({
-    x: 72 + props.offset * 28,
-    y: 56 + props.offset * 24,
+    x: Math.max(8, Math.min(72 + props.offset * 28, window.innerWidth - initialWidth - 8)),
+    y: Math.max(8, Math.min(56 + props.offset * 24, window.innerHeight - initialHeight - 8)),
   });
   const [size, setSize] = createSignal({
-    w: props.defaultWidth,
-    h: props.defaultHeight,
+    // An editor must fit on first open. Its content can scroll, but the title
+    // bar and resize handle must never start outside a small laptop viewport.
+    w: initialWidth,
+    h: initialHeight,
   });
 
   function drag(event: PointerEvent, move: (dx: number, dy: number) => void): void {
@@ -103,8 +107,8 @@ export function PluginWindow(props: {
           origin.h = size().h;
           drag(event, (dx, dy) =>
             setSize({
-              w: Math.max(480, origin.w + dx),
-              h: Math.max(320, origin.h + dy),
+              w: Math.max(Math.min(480, window.innerWidth - 16), origin.w + dx),
+              h: Math.max(Math.min(320, window.innerHeight - 16), origin.h + dy),
             }),
           );
         }}
