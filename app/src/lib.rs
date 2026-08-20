@@ -282,6 +282,7 @@ pub fn run() -> ExitCode {
             commands::set_track_pan,
             commands::set_track_pitch,
             commands::set_track_sample_region,
+            commands::set_track_fades,
             commands::set_track_mute,
             commands::set_track_solo,
             commands::set_master_gain,

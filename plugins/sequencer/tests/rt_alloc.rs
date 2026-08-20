@@ -405,6 +405,10 @@ fn dense_audio_arrangement(source: &Arc<AudioSource>, count: u64) -> CompiledAud
                 end_frames: 0,
                 pitch_ratio: 1.0,
                 gain: 0.5,
+                // A real fade on every clip, so the allocation claim covers the
+                // envelope path and not only the anti-click ramp.
+                fade_in_ms: 25.0,
+                fade_out_ms: 120.0,
             })
             .collect(),
     )

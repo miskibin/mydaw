@@ -137,6 +137,8 @@ export interface Backend {
   setTrackPan(track: number, pan: number): Promise<MixerState>;
   /** Channel pitch in cents (`-1200..=1200`) for clip and one-shot tracks. */
   setTrackPitch(track: number, cents: number): Promise<MixerState>;
+  /** Channel fade in and out, in milliseconds. One call, one republish. */
+  setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState>;
   /** SMP region in the file's frames. `endFrames` of `0` means the whole file. */
   setTrackSampleRegion(
     track: number,
@@ -496,6 +498,10 @@ class TauriBackend implements Backend {
 
   setTrackPitch(track: number, cents: number): Promise<MixerState> {
     return this.call('set_track_pitch', { track, cents });
+  }
+
+  setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {
+    return this.call('set_track_fades', { track, fadeInMs, fadeOutMs });
   }
 
   setTrackSampleRegion(

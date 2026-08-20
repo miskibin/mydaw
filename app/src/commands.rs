@@ -214,6 +214,24 @@ pub fn set_track_pitch(
     Ok(state.mixer_state())
 }
 
+/// Channel fade in and out for an audio-clip or one-shot track, in ms.
+///
+/// A fade is a *time*, so it is milliseconds and not frames: the same 30 ms
+/// means the same thing on a 44.1 kHz take and a 48 kHz one. Clamped to
+/// `0..=10000`; a clip shorter than its fade-out fades from its first frame.
+#[tauri::command]
+pub fn set_track_fades(
+    state: State<'_, AppState>,
+    track: usize,
+    fade_in_ms: f32,
+    fade_out_ms: f32,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_fades(track, fade_in_ms, fade_out_ms)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
 /// SMP region for an audio-clip or one-shot track, in the file's own frames.
 ///
 /// `endFrames` of `0` means the file's last frame.

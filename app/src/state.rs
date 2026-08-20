@@ -1279,6 +1279,23 @@ impl AppState {
         self.apply_sample_play(track)
     }
 
+    /// Channel fades for an audio-clip or one-shot track, in milliseconds.
+    ///
+    /// One command for both, because they are one gesture's worth of the same
+    /// idea and setting them separately would republish the arrangement twice.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_track_fades(
+        &self,
+        track: usize,
+        fade_in_ms: f32,
+        fade_out_ms: f32,
+    ) -> Result<(), MixerError> {
+        self.tracks.set_fades(track, fade_in_ms, fade_out_ms)?;
+        self.apply_sample_play(track)
+    }
+
     /// SMP region for an audio-clip or one-shot track, in the file's frames.
     ///
     /// # Errors

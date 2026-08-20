@@ -40,6 +40,12 @@ struct Voice {
     gain: f32,
     env: f32,
     env_step: f32,
+    /// The rate the channel's own fade-out runs at. A note-off, a steal and a
+    /// stop all override it with the anti-click ramp, which is faster.
+    release_step: f32,
+    /// Source frame the channel's fade-out begins at, so the last sample of the
+    /// region is the last sample of the fade. `f64::MAX` when there is none.
+    release_from: f64,
     releasing: bool,
     /// Note-ons seen when this voice started, so "oldest" is a number.
     age: u64,
@@ -56,6 +62,8 @@ impl Voice {
             gain: 0.0,
             env: 0.0,
             env_step: 0.0,
+            release_step: 0.0,
+            release_from: f64::MAX,
             releasing: false,
             age: 0,
             pending: None,
@@ -75,9 +83,31 @@ impl Voice {
         self.gain = pending.gain;
         self.env = pending.env_step.min(1.0);
         self.env_step = pending.env_step;
+        self.release_step = pending.env_step;
+        self.release_from = f64::MAX;
         self.releasing = false;
         true
     }
+}
+
+/// Output frames a fade of `ms` covers. `0` when there is no fade.
+#[inline]
+fn fade_output_frames(ms: f32, sample_rate: f64) -> f64 {
+    if !sample_rate.is_finite() || sample_rate <= 0.0 || !ms.is_finite() || ms <= 0.0 {
+        return 0.0;
+    }
+    f64::from(ms) / 1_000.0 * sample_rate
+}
+
+/// Envelope step per output frame for a fade of `ms`. `1.0` when there is none,
+/// which the caller floors with the anti-click ramp.
+#[inline]
+fn fade_rate(ms: f32, sample_rate: f64) -> f32 {
+    let frames = fade_output_frames(ms, sample_rate);
+    if frames < 1.0 {
+        return 1.0;
+    }
+    (1.0 / frames) as f32
 }
 
 /// Note-driven player of one loaded audio file.
@@ -86,6 +116,10 @@ pub struct OneShotNode {
     start_frames: u64,
     end_frames: u64,
     pitch_cents: f32,
+    /// The channel's fade in and out, in milliseconds. The same pair the
+    /// arrangement's clips get, applied to each *note* instead of each clip:
+    /// they are one channel's settings and a one-shot is the same file.
+    fades: (f32, f32),
     voices: [Voice; ONESHOT_VOICES],
     /// Note-ons seen, so "oldest" is a number rather than a guess.
     next_age: u64,
@@ -97,12 +131,14 @@ impl OneShotNode {
         start_frames: u64,
         end_frames: u64,
         pitch_cents: f32,
+        fades: (f32, f32),
     ) -> Self {
         Self {
             source,
             start_frames,
             end_frames,
             pitch_cents,
+            fades,
             voices: [Voice::idle(); ONESHOT_VOICES],
             next_age: 0,
         }
@@ -131,6 +167,17 @@ impl OneShotNode {
             return;
         }
         let gain = velocity.clamp(0.0, 1.0);
+        // A fade is a length of *time*, so it is that many output frames --
+        // which is `step` times as many source frames, because a note played an
+        // octave up walks the file twice as fast.
+        let in_step = ramp.min(fade_rate(self.fades.0, sample_rate));
+        let out_step = ramp.min(fade_rate(self.fades.1, sample_rate));
+        let out_frames = fade_output_frames(self.fades.1, sample_rate) * step;
+        let release_from = if out_frames > 0.0 {
+            (end as f64 - out_frames).max(start as f64)
+        } else {
+            f64::MAX
+        };
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1);
         let Some(slot) = self.voices.iter().position(|voice| !voice.active) else {
@@ -154,7 +201,7 @@ impl OneShotNode {
                 key,
                 step,
                 gain,
-                env_step: ramp,
+                env_step: in_step,
             });
             return;
         };
@@ -164,8 +211,10 @@ impl OneShotNode {
             position: start as f64,
             step,
             gain,
-            env: ramp.min(1.0),
-            env_step: ramp,
+            env: in_step.min(1.0),
+            env_step: in_step,
+            release_step: out_step,
+            release_from,
             releasing: false,
             age,
             pending: None,
@@ -198,6 +247,10 @@ impl OneShotNode {
             for frame in 0..frames {
                 if (voice.position >= end || voice.position < 0.0) && !voice.finish(start) {
                     break;
+                }
+                if !voice.releasing && voice.position >= voice.release_from {
+                    voice.releasing = true;
+                    voice.env_step = voice.release_step;
                 }
                 let index = voice.position as usize;
                 let fraction = (voice.position - voice.position.floor()) as f32;
@@ -304,7 +357,7 @@ mod tests {
 
     #[test]
     fn a_note_on_makes_the_file_audible() {
-        let mut node = OneShotNode::new(source(4_000), 0, 0, 0.0);
+        let mut node = OneShotNode::new(source(4_000), 0, 0, 0.0, (0.0, 0.0));
         let mut buffers = AudioBuffers::new(64);
         let events = [NoteEvent::note_on(0, ONESHOT_ROOT_KEY, 1.0)];
         let mut ctx = ProcessCtx::with_events(
@@ -340,7 +393,7 @@ mod tests {
             48_000.0,
             data,
         ));
-        let mut node = OneShotNode::new(source, 50, 0, 0.0);
+        let mut node = OneShotNode::new(source, 50, 0, 0.0, (0.0, 0.0));
         let mut buffers = AudioBuffers::new(128);
         let events = [NoteEvent::note_on(0, ONESHOT_ROOT_KEY, 1.0)];
         let mut ctx = ProcessCtx::with_events(
@@ -365,7 +418,7 @@ mod tests {
 
     #[test]
     fn a_note_starts_at_its_frame_offset_and_not_at_the_start_of_the_block() {
-        let mut node = OneShotNode::new(source(4_000), 0, 0, 0.0);
+        let mut node = OneShotNode::new(source(4_000), 0, 0, 0.0, (0.0, 0.0));
         let out = run(
             &mut node,
             128,
@@ -383,7 +436,7 @@ mod tests {
 
     #[test]
     fn a_note_on_and_off_in_one_block_still_sounds_the_samples_onset() {
-        let mut node = OneShotNode::new(source(4_000), 0, 0, 0.0);
+        let mut node = OneShotNode::new(source(4_000), 0, 0, 0.0, (0.0, 0.0));
         let out = run(
             &mut node,
             256,
@@ -404,7 +457,7 @@ mod tests {
     #[test]
     fn a_steal_fades_the_oldest_voice_instead_of_cutting_it() {
         let ramp = ramp_step(CLIP_RAMP_MS, 48_000.0);
-        let mut node = OneShotNode::new(source(48_000), 0, 0, 0.0);
+        let mut node = OneShotNode::new(source(48_000), 0, 0, 0.0, (0.0, 0.0));
 
         // Fill the pool and let every fade-in finish (2 ms is 96 frames).
         let fills: Vec<NoteEvent> = (0..ONESHOT_VOICES)

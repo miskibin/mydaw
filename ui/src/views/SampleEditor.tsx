@@ -61,6 +61,16 @@ const DRAG_SLOP_PX = 3;
 
 const PAN_DEF = spec('pan', 'Pan', '', -1, 1, 0);
 const PITCH_DEF = spec('pitch', 'Pitch', 'ct', -1200, 1200, 0);
+/**
+ * The fades, in milliseconds.
+ *
+ * Two seconds of travel rather than the engine's ten-second ceiling: a fade
+ * knob is used for tens of milliseconds far more often than for seconds, and a
+ * range ten times longer than the useful one is a knob you cannot set to 20 ms.
+ * The engine still accepts up to ten seconds from a project file.
+ */
+const FADE_IN_DEF = spec('fadeIn', 'Fade in', 'ms', 0, 2_000, 0);
+const FADE_OUT_DEF = spec('fadeOut', 'Fade out', 'ms', 0, 2_000, 0);
 
 /** Which edge of the region a pointer gesture is moving. */
 type Grab = 'start' | 'end' | 'new';
@@ -77,6 +87,7 @@ export function SampleEditor(): JSX.Element {
   const [localDb, setLocalDb] = createSignal<number | null>(null);
   const [localPan, setLocalPan] = createSignal<number | null>(null);
   const [localCents, setLocalCents] = createSignal<number | null>(null);
+  const [localFades, setLocalFades] = createSignal<[number, number] | null>(null);
   const [localRegion, setLocalRegion] = createSignal<Region | null>(null);
 
   const track = (): TrackDto | undefined => {
@@ -95,6 +106,7 @@ export function SampleEditor(): JSX.Element {
       setLocalDb(null);
       setLocalPan(null);
       setLocalCents(null);
+      setLocalFades(null);
       setLocalRegion(null);
     });
   });
@@ -119,6 +131,7 @@ export function SampleEditor(): JSX.Element {
       setLocalDb(null);
       setLocalPan(null);
       setLocalCents(null);
+      setLocalFades(null);
       setLocalRegion(null);
     }),
   );
@@ -353,6 +366,8 @@ export function SampleEditor(): JSX.Element {
   const gainDb = () => localDb() ?? track()?.gainDb ?? 0;
   const pan = () => localPan() ?? track()?.pan ?? 0;
   const cents = () => localCents() ?? track()?.pitchCents ?? 0;
+  const fadeIn = () => localFades()?.[0] ?? track()?.fadeInMs ?? 0;
+  const fadeOut = () => localFades()?.[1] ?? track()?.fadeOutMs ?? 0;
 
   function setGain(db: number): void {
     const current = track();
@@ -377,6 +392,22 @@ export function SampleEditor(): JSX.Element {
     const next = Math.round(value);
     setLocalCents(next);
     void app.backend.setTrackPitch(current.index, next).catch(app.report);
+    settle();
+  }
+
+  /**
+   * Both fades in one call, because the engine takes them together.
+   *
+   * Setting one at a time would republish the arrangement twice per gesture --
+   * a fade edit recompiles every clip of the file, which is the one thing on
+   * this window that is not a single atomic store.
+   */
+  function setFades(fadeInMs: number, fadeOutMs: number): void {
+    const current = track();
+    if (!current) return;
+    const next: [number, number] = [Math.max(0, Math.round(fadeInMs)), Math.max(0, Math.round(fadeOutMs))];
+    setLocalFades(next);
+    void app.backend.setTrackFades(current.index, next[0], next[1]).catch(app.report);
     settle();
   }
 
@@ -512,6 +543,24 @@ export function SampleEditor(): JSX.Element {
                 color={colour()}
               />
               <Show when={samplePlay()}>
+                <Knob
+                  def={FADE_IN_DEF}
+                  value={fadeIn}
+                  onInput={(ms) => setFades(ms, fadeOut())}
+                  owner={owner()}
+                  size={38}
+                  color={colour()}
+                  title="Fade in — every clip (or note) of this channel starts from silence over this long"
+                />
+                <Knob
+                  def={FADE_OUT_DEF}
+                  value={fadeOut}
+                  onInput={(ms) => setFades(fadeIn(), ms)}
+                  owner={owner()}
+                  size={38}
+                  color={colour()}
+                  title="Fade out — silence is reached at the clip's end, not after it"
+                />
                 <div class="wv-sample__pitch">
                   <Knob
                     def={PITCH_DEF}

@@ -976,6 +976,8 @@ mod tests {
             pitch_cents: 0.0,
             sample_start_frames: 0,
             sample_end_frames: 0,
+            fade_in_ms: 0.0,
+            fade_out_ms: 0.0,
         }
     }
 

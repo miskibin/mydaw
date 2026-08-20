@@ -484,6 +484,12 @@ pub struct TrackEntry {
     pub sample_start_frames: u64,
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub sample_end_frames: u64,
+    /// Channel fade in, in milliseconds. Default 0: an older file had none.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub fade_in_ms: f32,
+    /// Channel fade out, in milliseconds.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub fade_out_ms: f32,
 }
 
 fn is_zero_f32(value: &f32) -> bool {
@@ -935,6 +941,8 @@ impl ProjectFile {
                     pitch_cents: track.pitch_cents,
                     sample_start_frames: track.sample_start_frames,
                     sample_end_frames: track.sample_end_frames,
+                    fade_in_ms: track.fade_in_ms,
+                    fade_out_ms: track.fade_out_ms,
                     state_blob: track_states
                         .get(index)
                         .map_or_else(String::new, |bytes| to_base64(bytes)),
@@ -1077,6 +1085,8 @@ impl ProjectFile {
                 pitch_cents: entry.pitch_cents,
                 sample_start_frames: entry.sample_start_frames,
                 sample_end_frames: entry.sample_end_frames,
+                fade_in_ms: entry.fade_in_ms.max(0.0),
+                fade_out_ms: entry.fade_out_ms.max(0.0),
                 inserts: restore_chain(&entry.inserts, effects),
             });
         }

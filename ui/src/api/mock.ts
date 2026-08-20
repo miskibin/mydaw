@@ -497,6 +497,8 @@ function saveMockFolders(folders: LibraryRootDto[]): void {
 /** Default pitch/region for a mixer strip that is not a sample channel. */
 const SAMPLE_PLAY = {
   pitchCents: 0,
+  fadeInMs: 0,
+  fadeOutMs: 0,
   sampleStartFrames: 0,
   sampleEndFrames: 0,
 } as const;
@@ -1033,6 +1035,14 @@ export class MockBackend implements Backend {
   async setTrackPitch(track: number, cents: number): Promise<MixerState> {
     const value = Number.isFinite(cents) ? Math.min(1_200, Math.max(-1_200, cents)) : 0;
     this.track(track).pitchCents = value;
+    return this.mixerState();
+  }
+
+  async setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {
+    const sane = (ms: number) => (Number.isFinite(ms) ? Math.min(10_000, Math.max(0, ms)) : 0);
+    const entry = this.track(track);
+    entry.fadeInMs = sane(fadeInMs);
+    entry.fadeOutMs = sane(fadeOutMs);
     return this.mixerState();
   }
 

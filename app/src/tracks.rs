@@ -54,6 +54,13 @@ use mydaw_rt_core::basedrop::Handle;
 use mydaw_rt_core::{BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, MAX_TRACKS};
 use parking_lot::Mutex;
 
+/// The longest fade a channel may have, in milliseconds.
+///
+/// Ten seconds. Long enough for anything anyone would call a fade, short enough
+/// that a knob dragged to the top is still a fade rather than a mute -- and a
+/// bound is what keeps a NaN or a typo from silencing a channel for a minute.
+pub const MAX_FADE_MS: f32 = 10_000.0;
+
 use crate::clap_bridge::ClapBoard;
 use crate::effects::{InsertDef, InsertError, InsertTarget};
 use crate::graph::track_chain;
@@ -617,6 +624,34 @@ impl TrackHost {
         self.edit(track, |def| def.pitch_cents = cents)
     }
 
+    /// Fade in and out for an audio-clip or one-shot track, in milliseconds.
+    ///
+    /// Negative and non-finite values become zero rather than an error: this is
+    /// reachable from a webview knob, and "no fade" is the only sane reading of
+    /// a fade of NaN.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_fades(
+        &self,
+        track: usize,
+        fade_in_ms: f32,
+        fade_out_ms: f32,
+    ) -> Result<(), TrackError> {
+        let sane = |ms: f32| {
+            if ms.is_finite() {
+                ms.clamp(0.0, MAX_FADE_MS)
+            } else {
+                0.0
+            }
+        };
+        let (fade_in, fade_out) = (sane(fade_in_ms), sane(fade_out_ms));
+        self.edit(track, |def| {
+            def.fade_in_ms = fade_in;
+            def.fade_out_ms = fade_out;
+        })
+    }
+
     /// SMP region for an audio-clip or one-shot track, in the file's frames.
     ///
     /// `end == 0` means the file's last frame.
@@ -647,7 +682,7 @@ impl TrackHost {
         if audio.stream_info().is_none() {
             return Ok(());
         }
-        let (source, start, end, pitch) = {
+        let (source, start, end, pitch, fades) = {
             let project = self.project.lock();
             let def = project
                 .tracks
@@ -658,12 +693,15 @@ impl TrackHost {
                 def.sample_start_frames,
                 def.sample_end_frames,
                 def.pitch_cents,
+                (def.fade_in_ms, def.fade_out_ms),
             )
         };
         let Source::OneShot { source_id } = source else {
             return Ok(());
         };
-        let node = self.audio_clips.oneshot_node(source_id, start, end, pitch);
+        let node = self
+            .audio_clips
+            .oneshot_node(source_id, start, end, pitch, fades);
         self.install_source(track, source, node)?;
         Ok(())
     }
@@ -748,7 +786,9 @@ impl TrackHost {
                 // an offline render (the channel window's preview) makes sound.
                 // The graph builders pass the track's crop and pitch to the
                 // same node themselves; this path has no track to read.
-                Ok(self.audio_clips.oneshot_node(*source_id, 0, 0, 0.0))
+                Ok(self
+                    .audio_clips
+                    .oneshot_node(*source_id, 0, 0, 0.0, (0.0, 0.0)))
             }
             Source::Sampler(reference) => {
                 let type_id = reference.wire_id();
@@ -795,7 +835,7 @@ impl TrackHost {
         }
         self.ensure_file_sampler(&source);
         let info = audio.stream_info().ok_or(AudioIoError::NotRunning)?;
-        let (start, end, pitch) = {
+        let (start, end, pitch, fades) = {
             let project = self.project.lock();
             let def = project
                 .tracks
@@ -805,15 +845,16 @@ impl TrackHost {
                 def.sample_start_frames,
                 def.sample_end_frames,
                 def.pitch_cents,
+                (def.fade_in_ms, def.fade_out_ms),
             )
         };
         let node = match &source {
             Source::AudioClip { source_id } => self
                 .audio_clips
                 .open_for_source(*source_id, audio.gc_handle()),
-            Source::OneShot { source_id } => {
-                self.audio_clips.oneshot_node(*source_id, start, end, pitch)
-            }
+            Source::OneShot { source_id } => self
+                .audio_clips
+                .oneshot_node(*source_id, start, end, pitch, fades),
             other => self.build_node(other, f64::from(info.sample_rate), info.max_block)?,
         };
         self.install_source(track, source, node)?;
@@ -955,6 +996,7 @@ impl TrackHost {
                     def.sample_start_frames,
                     def.sample_end_frames,
                     def.pitch_cents,
+                    (def.fade_in_ms, def.fade_out_ms),
                 ),
                 other => match self.build_node(other, limits.sample_rate, limits.max_block) {
                     Ok(node) => node,

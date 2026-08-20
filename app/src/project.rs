@@ -82,6 +82,14 @@ pub struct TrackDef {
     pub sample_start_frames: u64,
     /// SMP region end, exclusive. `0` means the file's last frame.
     pub sample_end_frames: u64,
+    /// Fade in at the start of every clip (or note) of this channel, in ms.
+    ///
+    /// In milliseconds rather than frames, unlike the region either side of it:
+    /// a region is a place *in a file* and a fade is a length of *time*, and
+    /// the same 30 ms has to mean the same thing whatever the file's rate.
+    pub fade_in_ms: f32,
+    /// Fade out into the end of every clip (or note), in milliseconds.
+    pub fade_out_ms: f32,
     /// Internal effects, in signal order, between the source and the gate.
     ///
     /// The parameter blocks inside these are shared with the nodes the graph is
@@ -104,6 +112,8 @@ impl TrackDef {
             pitch_cents: 0.0,
             sample_start_frames: 0,
             sample_end_frames: 0,
+            fade_in_ms: 0.0,
+            fade_out_ms: 0.0,
             inserts: Vec::new(),
         }
     }
@@ -865,6 +875,8 @@ impl Project {
                 pitch_cents: track.pitch_cents,
                 start_frames: track.sample_start_frames,
                 end_frames: track.sample_end_frames,
+                fade_in_ms: track.fade_in_ms,
+                fade_out_ms: track.fade_out_ms,
             })
             .unwrap_or_default()
     }
@@ -1140,6 +1152,10 @@ pub struct TrackDto {
     pub inserts: Vec<InsertDto>,
     /// Channel pitch in cents. Meaningful for audio-clip and one-shot channels.
     pub pitch_cents: f32,
+    /// Fade in, in milliseconds. Audio-clip and one-shot channels.
+    pub fade_in_ms: f32,
+    /// Fade out, in milliseconds. Audio-clip and one-shot channels.
+    pub fade_out_ms: f32,
     /// SMP region start, in the file's own frames.
     pub sample_start_frames: u64,
     /// SMP region end, exclusive. `0` means the whole file.
@@ -1297,6 +1313,8 @@ pub fn mixer_state_dto(
                 missing: missing.track(index),
                 inserts: chain_dto(&track.inserts, effects),
                 pitch_cents: track.pitch_cents,
+                fade_in_ms: track.fade_in_ms,
+                fade_out_ms: track.fade_out_ms,
                 sample_start_frames: track.sample_start_frames,
                 sample_end_frames: track.sample_end_frames,
                 audio_source_id: track.source.sample_file_id(),
@@ -1662,6 +1680,8 @@ mod tests {
             [
                 "clap",
                 "engine",
+                "fadeInMs",
+                "fadeOutMs",
                 "gainDb",
                 "id",
                 "index",

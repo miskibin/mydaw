@@ -136,6 +136,11 @@ pub struct CompiledAudioClip {
     pub pitch_ratio: f64,
     /// Linear, already converted from the clip's dB.
     pub gain: f32,
+    /// Fade in, in milliseconds. `0` is the anti-click ramp and nothing more.
+    pub fade_in_ms: f32,
+    /// Fade out, in milliseconds. Measured *back from the clip's end*, so a
+    /// fade longer than the clip starts at its first frame.
+    pub fade_out_ms: f32,
 }
 
 impl CompiledAudioClip {
@@ -175,6 +180,8 @@ impl std::fmt::Debug for CompiledAudioClip {
             .field("end_frames", &self.end_frames)
             .field("pitch_ratio", &self.pitch_ratio)
             .field("gain", &self.gain)
+            .field("fade_in_ms", &self.fade_in_ms)
+            .field("fade_out_ms", &self.fade_out_ms)
             .finish()
     }
 }
@@ -267,6 +274,14 @@ pub struct AudioClipTune {
     pub start_frames: u64,
     /// Exclusive end in the file. `0` means the file's last frame.
     pub end_frames: u64,
+    /// Fade in at the start of every clip of this file, in milliseconds.
+    ///
+    /// Milliseconds rather than frames because a fade is a *time*: the same
+    /// number has to mean the same thing on a 44.1 kHz take and a 48 kHz one,
+    /// and the device rate is not known until the node runs.
+    pub fade_in_ms: f32,
+    /// Fade out into the end of every clip of this file, in milliseconds.
+    pub fade_out_ms: f32,
 }
 
 impl Default for AudioClipTune {
@@ -275,6 +290,8 @@ impl Default for AudioClipTune {
             pitch_cents: 0.0,
             start_frames: 0,
             end_frames: 0,
+            fade_in_ms: 0.0,
+            fade_out_ms: 0.0,
         }
     }
 }
@@ -323,6 +340,8 @@ pub fn compile_audio_clips_with(
                 end_frames: tune.end_frames,
                 pitch_ratio: pitch_ratio(tune.pitch_cents),
                 gain: db_to_gain(clip.gain_db),
+                fade_in_ms: tune.fade_in_ms.max(0.0),
+                fade_out_ms: tune.fade_out_ms.max(0.0),
             })
         })
         .collect();
@@ -399,6 +418,12 @@ struct ClipVoice {
     env: f32,
     /// Added to `env` each frame while fading in, subtracted while fading out.
     env_step: f32,
+    /// The rate the *clip's own* fade-out runs at, which may be far slower than
+    /// the anti-click ramp. Kept apart from `env_step` because a stop, a steal
+    /// or a swap has to be able to override it with the fast ramp -- a musical
+    /// fade is a property of the clip, an emergency fade is a property of the
+    /// moment.
+    release_step: f32,
     /// Whether the fade is running down (and the voice ends at the bottom).
     releasing: bool,
     /// Absolute sample position the fade-out must *begin* at, so that silence is
@@ -423,6 +448,7 @@ impl ClipVoice {
             position: 0.0,
             step: 1.0,
             gain: 0.0,
+            release_step: 1.0,
             env: 0.0,
             env_step: 0.0,
             releasing: false,
@@ -585,7 +611,13 @@ impl AudioClipNode {
     /// position, every block -- which is why nothing accumulates and why a tempo
     /// change mid-clip lands the fade in the right place rather than the place
     /// the old tempo implied.
-    fn refresh_ends(&mut self, block_start: u64, step_len: f64, ramp_frames: u64) {
+    fn refresh_ends(
+        &mut self,
+        block_start: u64,
+        step_len: f64,
+        ramp_frames: u64,
+        sample_rate: f64,
+    ) {
         let Some(song) = self.song.as_deref() else {
             return;
         };
@@ -604,7 +636,10 @@ impl AudioClipNode {
                 u64::MAX
             };
             let end = clip_end.min(source_end);
-            voice.release_at = end.saturating_sub(ramp_frames);
+            // Back from the end by the clip's own fade, so silence is reached
+            // *at* the end rather than after it.
+            voice.release_at =
+                end.saturating_sub(fade_frames(clip.fade_out_ms, sample_rate, ramp_frames));
         }
     }
 
@@ -639,6 +674,7 @@ impl AudioClipNode {
 
     /// Start `clip` at source frame `position`, first sounding at absolute
     /// sample `start_at` and beginning its fade-out at `release_at`.
+    #[allow(clippy::too_many_arguments)]
     fn start(
         &mut self,
         clip: usize,
@@ -646,6 +682,7 @@ impl AudioClipNode {
         start_at: u64,
         release_at: u64,
         ramp: f32,
+        fades: (f32, f32),
         ctx_rate: f64,
     ) {
         let Some(song) = self.song.as_deref() else {
@@ -675,13 +712,14 @@ impl AudioClipNode {
             position,
             step,
             gain,
-            // The first frame is already one ramp step above silence rather
+            // The first frame is already one fade step above silence rather
             // than at it, so that "the clip sounds here" and "the fade starts
             // here" are the same sample. A step of 1/96th of the clip's own
             // level is far below anything a click detector -- or an ear --
             // would call an edge.
-            env: ramp.min(1.0),
-            env_step: ramp,
+            env: fades.0.min(1.0),
+            env_step: fades.0,
+            release_step: fades.1,
             releasing: false,
             release_at,
             age,
@@ -719,6 +757,19 @@ pub fn ramp_step(ms: f32, sample_rate: f64) -> f32 {
     }
     let frames = (f64::from(ms) / 1_000.0 * sample_rate).round().max(1.0);
     (1.0 / frames) as f32
+}
+
+/// Frames a fade of `ms` covers at `sample_rate`, at least `floor`.
+///
+/// The floor is the anti-click ramp: "no fade" still means a couple of
+/// milliseconds, because a clip that started at full level on its first sample
+/// would click and no user asked for that.
+#[inline]
+pub fn fade_frames(ms: f32, sample_rate: f64, floor: u64) -> u64 {
+    if !sample_rate.is_finite() || sample_rate <= 0.0 || !ms.is_finite() || ms <= 0.0 {
+        return floor;
+    }
+    ((f64::from(ms) / 1_000.0 * sample_rate).round() as u64).max(floor)
 }
 
 impl RtNode for AudioClipNode {
@@ -759,7 +810,7 @@ impl RtNode for AudioClipNode {
 
         if arranging && usable && self.song.is_some() {
             let ramp_frames = ((1.0 / f64::from(ramp)).round() as u64).max(1);
-            self.refresh_ends(block_start, step_len, ramp_frames);
+            self.refresh_ends(block_start, step_len, ramp_frames, ctx.sample_rate);
             // A play edge, a seek or a switch *into* song mode is "put the
             // playhead here and play what is here", which includes starting
             // part-way into a clip. A block that merely follows the last one
@@ -836,8 +887,15 @@ impl AudioClipNode {
                 continue;
             }
             // Silence is reached *at* the end, so the fade has to begin before
-            // it. A clip shorter than one ramp fades from its own first frame.
-            let release_at = end.saturating_sub(ramp_frames).max(clip_start);
+            // it. A clip shorter than its fade fades from its own first frame.
+            let out_frames = fade_frames(clip.fade_out_ms, sample_rate, ramp_frames);
+            let release_at = end.saturating_sub(out_frames).max(clip_start);
+            // A fade is a rate, and the rate is one over its length in frames.
+            // Never faster than the anti-click ramp, which is what `ramp` is.
+            let fades = (
+                ramp.min(1.0 / fade_frames(clip.fade_in_ms, sample_rate, ramp_frames) as f32),
+                ramp.min(1.0 / out_frames as f32),
+            );
 
             if derive {
                 if block_start >= clip_start && block_start < end {
@@ -846,7 +904,15 @@ impl AudioClipNode {
                     if position < source_frames as f64 {
                         // A derived voice is already under the playhead, so its
                         // first frame is this block's first frame.
-                        self.start(index, position, block_start, release_at, ramp, sample_rate);
+                        self.start(
+                            index,
+                            position,
+                            block_start,
+                            release_at,
+                            ramp,
+                            fades,
+                            sample_rate,
+                        );
                     }
                 }
                 continue;
@@ -862,6 +928,7 @@ impl AudioClipNode {
                     clip_start,
                     release_at,
                     ramp,
+                    fades,
                     sample_rate,
                 );
             }
@@ -916,7 +983,11 @@ impl AudioClipNode {
                 // block, so a tempo change moves it.
                 if !voice.releasing && block_start + frame as u64 >= voice.release_at {
                     voice.releasing = true;
-                    voice.env_step = voice.env_step.max(ramp);
+                    // The clip's own fade, which is slower than the anti-click
+                    // ramp whenever the user asked for one. `max` with what is
+                    // already running so a voice mid-emergency-fade is not
+                    // slowed down by reaching its musical fade point.
+                    voice.env_step = voice.release_step.max(ramp.min(voice.env_step));
                 }
 
                 // `position` is finite and below `frames`, so this is in range.
@@ -1076,6 +1147,8 @@ mod tests {
             end_frames: 0,
             pitch_ratio: 1.0,
             gain: 1.0,
+            fade_in_ms: 0.0,
+            fade_out_ms: 0.0,
         }
     }
 
@@ -1347,6 +1420,8 @@ mod tests {
             end_frames: 0,
             pitch_ratio: 1.0,
             gain: 1.0,
+            fade_in_ms: 0.0,
+            fade_out_ms: 0.0,
         }]);
         let mut rig = Rig::new(song, 512);
 
@@ -1648,6 +1723,7 @@ mod tests {
                 pitch_cents: 1_200.0,
                 start_frames: 50,
                 end_frames: 10_000,
+                ..AudioClipTune::default()
             },
         );
         let clip = &song.clips()[0];
@@ -1671,5 +1747,84 @@ mod tests {
         assert_eq!(song.for_source(1).len(), 1);
         assert_eq!(song.for_source(1).clips()[0].clip_id, 1);
         assert!(song.for_source(9).is_empty());
+    }
+
+    #[test]
+    fn a_fade_in_takes_the_time_it_says_and_a_fade_out_ends_at_the_clip() {
+        // Both fades measured against the flat source they are applied to: at
+        // half the fade-in the envelope is half open, and the clip's last
+        // sample is the bottom of the fade-out rather than a cut.
+        let rate = 48_000.0;
+        let bpm = 120.0;
+        let step_len = step_len_samples(rate, bpm);
+        let end = tick_boundary(BAR, step_len) as usize;
+        let amplitude = 0.5_f32;
+        let source = flat_source(1, rate, (rate * 8.0) as usize, amplitude);
+        let fade_ms = 200.0_f32;
+        let fade_frames = (f64::from(fade_ms) / 1_000.0 * rate) as usize;
+
+        let mut clip = clip(1, source, 0, BAR);
+        clip.fade_in_ms = fade_ms;
+        clip.fade_out_ms = fade_ms;
+        let mut rig = Rig::new(CompiledAudioSong::new(vec![clip]), 256);
+        let out = rig.run((end / 256) + 4, 256, rate, bpm);
+
+        let at = |frame: usize| out[frame].abs();
+        assert!(
+            at(0) < amplitude * 0.05,
+            "the clip starts from silence: {}",
+            at(0)
+        );
+        let half = at(fade_frames / 2);
+        assert!(
+            (half - amplitude * 0.5).abs() < amplitude * 0.05,
+            "half way through a {fade_ms} ms fade-in the level is half: {half}"
+        );
+        let full = at(fade_frames + 100);
+        assert!(
+            (full - amplitude).abs() < amplitude * 0.02,
+            "the fade-in is over after {fade_ms} ms: {full}"
+        );
+
+        let before_end = at(end - fade_frames / 2);
+        assert!(
+            (before_end - amplitude * 0.5).abs() < amplitude * 0.08,
+            "half way through the fade-out the level is half: {before_end}"
+        );
+        assert!(
+            at(end.saturating_sub(1)) < amplitude * 0.05,
+            "silence is reached at the clip's end, not after it: {}",
+            at(end - 1)
+        );
+    }
+
+    #[test]
+    fn a_fade_longer_than_its_clip_still_reaches_silence_at_the_end() {
+        // The degenerate case a knob can produce in one drag: ten seconds of
+        // fade on a half-second clip. It must not run past the clip, and it
+        // must not click.
+        let rate = 48_000.0;
+        let bpm = 120.0;
+        let step_len = step_len_samples(rate, bpm);
+        let end = tick_boundary(BAR, step_len) as usize;
+        let source = flat_source(1, rate, (rate * 8.0) as usize, 0.5);
+        let mut clip = clip(1, source, 0, BAR);
+        clip.fade_in_ms = 10_000.0;
+        clip.fade_out_ms = 10_000.0;
+        let mut rig = Rig::new(CompiledAudioSong::new(vec![clip]), 256);
+        let out = rig.run((end / 256) + 4, 256, rate, bpm);
+
+        for (frame, pair) in out.windows(2).enumerate().take(end) {
+            assert!(
+                (pair[1] - pair[0]).abs() <= 0.5 * ramp_step(CLIP_RAMP_MS, rate) + 1e-6,
+                "step at frame {frame}: {} -> {}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(
+            out[end..].iter().all(|s| s.abs() < 1e-6),
+            "silent past the clip"
+        );
     }
 }

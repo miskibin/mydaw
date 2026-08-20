@@ -105,6 +105,7 @@ impl AudioClipBus {
         start_frames: u64,
         end_frames: u64,
         pitch_cents: f32,
+        fades: (f32, f32),
     ) -> Box<dyn RtNode> {
         let sources = self.sources.lock();
         match sources.as_ref().and_then(|reg| reg.get(source_id)) {
@@ -113,6 +114,7 @@ impl AudioClipBus {
                 start_frames,
                 end_frames,
                 pitch_cents,
+                fades,
             )),
             None => Box::new(SilentNode),
         }
@@ -237,6 +239,8 @@ mod tests {
             end_frames: 0,
             pitch_ratio: 1.0,
             gain: 1.0,
+            fade_in_ms: 0.0,
+            fade_out_ms: 0.0,
         }])
     }
 

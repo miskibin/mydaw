@@ -624,6 +624,16 @@ export interface TrackDto {
   inserts: InsertDto[];
   /** Channel pitch in cents. Meaningful for `clip` and `sample` engines. */
   pitchCents: number;
+  /**
+   * Channel fade in, in milliseconds, applied to every clip (or note) of it.
+   *
+   * Milliseconds and not frames, unlike the region: a region is a place in a
+   * file and a fade is a length of time, so the same number has to mean the
+   * same thing whatever the file's own rate is.
+   */
+  fadeInMs: number;
+  /** Channel fade out, in milliseconds. */
+  fadeOutMs: number;
   /** SMP region start, in the file's own frames. */
   sampleStartFrames: number;
   /** SMP region end, exclusive. `0` means the whole file. */
