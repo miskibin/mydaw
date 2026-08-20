@@ -57,10 +57,26 @@ pub fn trivial_worker(script: &str) -> std::io::Result<Child> {
 /// A worker that will still be running when any sane deadline passes.
 pub fn sleeping_worker() -> std::io::Result<Child> {
     #[cfg(windows)]
-    let script = "ping -n 120 127.0.0.1";
+    let mut command = {
+        let mut command = Command::new("ping");
+        command.args(["-n", "120", "127.0.0.1"]);
+        command
+    };
     #[cfg(not(windows))]
-    let script = "sleep 120";
-    trivial_worker(script)
+    let mut command = {
+        let mut command = Command::new("sleep");
+        command.arg("120");
+        command
+    };
+
+    // Spawn the sleeper itself, not `shell -> sleeper`. The timeout path kills
+    // the returned child; a sleeper behind a shell wrapper would survive as an
+    // orphaned grandchild holding stdout open after its parent was killed.
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
 }
 
 #[cfg(windows)]

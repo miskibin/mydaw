@@ -1823,7 +1823,7 @@ impl AppState {
     ///
     /// The channels come from the *mixer*, because that is what a pattern
     /// addresses, and their step keys from what is on them -- so a new pattern
-    /// in a session of four drums and a piano opens with four drum grids and a
+    /// in a session of five drums and a piano opens with five drum grids and a
     /// piano grid rather than with nothing.
     ///
     /// # Errors
@@ -2499,8 +2499,8 @@ mod tests {
     #[test]
     fn a_new_pattern_opens_with_a_grid_on_every_rack_channel() {
         // The channels come from the mixer, and the step keys from what is on
-        // them -- a session of four drums and a synth opens a new pattern with
-        // four drum grids and one on middle C, not with nothing.
+        // them -- a session of five drums and a synth opens a new pattern with
+        // five drum grids and one on middle C, not with nothing.
         let (_kernel, state) = state();
         let id = state.add_pattern(Some("Verse".to_owned())).unwrap();
         let set = state.sequencer().patterns();

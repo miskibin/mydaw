@@ -5,6 +5,7 @@
 //!   ----------    -----------    -------------    -----------------------------
 //!   kick          Kick           KickVoice        pitch, +/- 12 semitones
 //!   snare         Snare          SnareVoice       body-tone pitch, +/- 12
+//!   clap          Clap           ClapVoice        nothing
 //!   hat-closed    Hat Closed     HatVoice         nothing (a hat has no pitch)
 //!   hat-open      Hat Open       HatVoice         nothing
 //! ```
@@ -18,7 +19,7 @@
 //! kick, and the pattern row for that channel has to carry a key per hit to say
 //! *which* drum, which is the one thing a step grid is not shaped to express.
 //!
-//! So the default project has four drum channels rather than one kit channel,
+//! So the default project has five drum channels rather than one kit channel,
 //! and each of them is a single-voice instrument that answers to **any** key.
 //! The kit is kept -- a project saved before this change names `drum-kit`, and a
 //! project file that no longer opens is worse than an instrument nobody

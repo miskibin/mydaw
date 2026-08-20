@@ -386,7 +386,7 @@ impl Default for Project {
 }
 
 impl Project {
-    /// The rack a fresh session opens with: four drums and a melodic channel.
+    /// The rack a fresh session opens with: five drums and a melodic channel.
     ///
     /// One instrument per channel, which is the whole reason the drum kit was
     /// split ([`SingleDrum`](mydaw_plugin_instruments::SingleDrum)): a channel
@@ -394,7 +394,7 @@ impl Project {
     /// turned down independently of the hats is not a channel, it is four
     /// channels wearing a coat.
     ///
-    /// Five rather than two because this is a rack now rather than a proof that
+    /// Six rather than two because this is a rack now rather than a proof that
     /// two tracks sum, and because a drum pattern you can immediately click in
     /// is the point of the first screen. Still well short of
     /// [`MAX_TRACKS`], so there is room to add.

@@ -8,10 +8,16 @@
 //! - the worker exists, runs, and speaks the protocol;
 //! - a file that is not a module comes back as a *refusal*, remembered and shown,
 //!   rather than as a crash that block-lists it;
-//! - and on a machine that has real plugins, scanning them in child processes
-//!   finds exactly what scanning them in-process finds. That last one is the
-//!   claim the whole change rests on, and it is skip-if-absent because CI has no
-//!   VST3 plugins.
+//! - and, in opt-in hardware checks, a real module is cached and scanning
+//!   installed plugins in child processes finds exactly what scanning them
+//!   in-process finds.
+//!
+//! Normal workspace tests never load installed plugins. Run the hardware checks
+//! explicitly and serially with:
+//!
+//! ```text
+//! cargo test -p mydaw-plugin-host-vst3 --test scan_isolation -- --ignored --nocapture --test-threads=1
+//! ```
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -104,6 +110,7 @@ fn a_file_that_is_not_a_module_is_refused_by_the_worker_and_remembered() {
 }
 
 #[test]
+#[ignore = "requires an installed VST3 module; run explicitly and serially"]
 fn a_module_the_worker_can_read_is_cached_and_never_opened_twice() {
     let Some(module) = one_readable_module() else {
         println!("{}", skip_message());
@@ -130,6 +137,7 @@ fn a_module_the_worker_can_read_is_cached_and_never_opened_twice() {
 }
 
 #[test]
+#[ignore = "loads installed VST3 modules in-process; run explicitly and serially"]
 fn out_of_process_and_in_process_find_the_same_plugins_on_this_machine() {
     let modules = installed_modules();
     if modules.is_empty() {

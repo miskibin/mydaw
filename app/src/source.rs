@@ -326,7 +326,7 @@ impl Source {
     /// and the list comes from the scan
     /// ([`AppState::sources`](crate::AppState::sources)).
     ///
-    /// The synth leads because it is the default; the four drums follow in the
+    /// The synth leads because it is the default; the five drums follow in the
     /// order a kit is racked; the legacy kit and the test tone trail, because
     /// neither is something to reach for.
     pub const BUILT_IN: [Self; 8] = [
@@ -483,7 +483,7 @@ impl Source {
     ///
     /// | badge | source |
     /// | --- | --- |
-    /// | `synth` | the poly synth, the four drums, the legacy kit |
+    /// | `synth` | the poly synth, the five single drums, the legacy kit |
     /// | `sampler` | a sampled instrument from `assets/instruments` |
     /// | `clap` / `vst3` | a hosted plugin, of that format |
     /// | `tone` | the diagnostic sine |

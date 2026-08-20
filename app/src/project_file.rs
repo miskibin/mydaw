@@ -1668,7 +1668,7 @@ mod tests {
         // node, so the thing that has to survive a save is the block -- and the
         // thing that has to survive a load is the values landing back in a
         // block the next graph will hand to the next node.
-        let mut project = Project::default();
+        let project = Project::default();
         let synth = project.len() - 1;
         assert_eq!(project.tracks[synth].source, Source::PolySynth);
         let block = project.tracks[synth]

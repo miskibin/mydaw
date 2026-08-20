@@ -533,6 +533,9 @@ struct LibraryHandle {
 impl LibraryHandle {
     fn load(binary: &Path) -> Result<Self, Vst3ModuleError> {
         use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::System::Diagnostics::Debug::{
+            GetThreadErrorMode, SetThreadErrorMode, SEM_FAILCRITICALERRORS, SEM_NOOPENFILEERRORBOX,
+        };
         use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
 
         let wide: Vec<u16> = binary
@@ -540,14 +543,35 @@ impl LibraryHandle {
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
+        // Windows otherwise presents loader failures (a corrupt binary, wrong
+        // architecture, or missing dependency) as a modal system dialog. A scan
+        // worker cannot answer that dialog, so it would sit behind it until the
+        // parent's deadline expired. Suppress only those loader dialogs for this
+        // thread and restore whatever mode its caller had immediately afterward.
+        //
         // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the call.
         // Loading runs the module's entry point and its static initialisers --
-        // third-party code, unavoidably.
-        let handle = unsafe { LoadLibraryW(wide.as_ptr()) };
-        if handle.is_null() {
+        // third-party code, unavoidably. The error-mode APIs operate only on the
+        // current thread, and `previous_mode` is a valid out pointer.
+        let (handle, load_error) = unsafe {
+            let previous_mode = GetThreadErrorMode();
+            let quiet_mode = previous_mode | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX;
+            let mode_changed = SetThreadErrorMode(quiet_mode, std::ptr::null_mut()) != 0;
+
+            let handle = LoadLibraryW(wide.as_ptr());
+            // Restoring the mode is another Win32 call and may replace the last
+            // error, so preserve the loader's explanation first.
+            let load_error = handle.is_null().then(std::io::Error::last_os_error);
+
+            if mode_changed {
+                SetThreadErrorMode(previous_mode, std::ptr::null_mut());
+            }
+            (handle, load_error)
+        };
+        if let Some(error) = load_error {
             return Err(Vst3ModuleError::Load {
                 path: binary.to_path_buf(),
-                message: std::io::Error::last_os_error().to_string(),
+                message: error.to_string(),
             });
         }
         Ok(Self {

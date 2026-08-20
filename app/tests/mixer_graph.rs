@@ -380,7 +380,7 @@ fn adding_a_track_mid_play_does_not_interrupt_the_others() {
 }
 
 #[test]
-fn the_shells_starter_rack_is_four_drums_and_a_synth_and_is_silent_until_played() {
+fn the_shells_starter_rack_is_five_drums_and_a_synth_and_is_silent_until_played() {
     let rig_project = Project::default();
     assert_eq!(
         rig_project
@@ -388,7 +388,14 @@ fn the_shells_starter_rack_is_four_drums_and_a_synth_and_is_silent_until_played(
             .iter()
             .map(|t| t.source.id())
             .collect::<Vec<_>>(),
-        vec!["kick", "snare", "hat-closed", "hat-open", "poly-synth"],
+        vec![
+            "kick",
+            "snare",
+            "clap",
+            "hat-closed",
+            "hat-open",
+            "poly-synth"
+        ],
         "one instrument per channel"
     );
 

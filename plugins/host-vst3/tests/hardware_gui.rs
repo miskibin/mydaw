@@ -3,7 +3,8 @@
 //!
 //! The VST3 counterpart of `host-clap`'s `fixture_gui`, with one difference that
 //! is not a choice: there is no fixture plugin, so this drives whatever is
-//! installed and is **skip-if-absent** like the rest of `hardware.rs`.
+//! installed and is **opt-in and skip-if-absent** like the rest of
+//! `hardware.rs`. A normal test run must never open third-party GUI windows.
 //!
 //! Nothing here is mocked. The module is loaded through the OS loader, the view
 //! comes from the plugin's own `IEditController::createView`, it is attached to a
@@ -12,7 +13,7 @@
 //! `mydaw-plugin-windows`.
 //!
 //! ```text
-//! cargo test -p mydaw-plugin-host-vst3 --test hardware_gui -- --nocapture --test-threads=1
+//! cargo test -p mydaw-plugin-host-vst3 --test hardware_gui -- --ignored --nocapture --test-threads=1
 //! MYDAW_VST3_GUI_HOLD=20 cargo test ...    # leave the editor up, to look at or photograph
 //! ```
 
@@ -78,6 +79,7 @@ fn is_window(handle: isize) -> bool {
 
 /// (d) A real plugin's editor opens in a MYDAW window, embeds, and closes.
 #[test]
+#[ignore = "opens an installed plugin GUI; run this hardware test explicitly"]
 fn a_real_plugin_editor_opens_embeds_and_closes() {
     if installed_plugins().is_empty() {
         eprintln!("{}", missing_plugins_message());

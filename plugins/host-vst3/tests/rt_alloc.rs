@@ -14,9 +14,14 @@
 //! armed per-thread, so the rest of the test binary (and Rust's own harness,
 //! which allocates freely) is not counted.
 //!
-//! **Skip-if-absent**, like the rest of the VST3 hardware tests: there is no
-//! fixture plugin, so with nothing installed this prints why and passes. See
-//! `test_util`.
+//! The two real-plugin checks are **opt-in and skip-if-absent**, like the rest
+//! of the VST3 hardware tests: there is no fixture plugin, and normal workspace
+//! tests must not execute untrusted installed plugin code. Run them explicitly
+//! and serially with:
+//!
+//! ```text
+//! cargo test -p mydaw-plugin-host-vst3 --test rt_alloc -- --ignored --nocapture --test-threads=1
+//! ```
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -114,6 +119,7 @@ fn the_counting_allocator_actually_counts() {
 }
 
 #[test]
+#[ignore = "requires an installed VST3 effect; run explicitly and serially"]
 fn processing_a_vst3_effect_node_allocates_nothing() {
     let candidates = scanned_effects();
     if candidates.is_empty() {
@@ -185,6 +191,7 @@ fn processing_a_vst3_effect_node_allocates_nothing() {
 }
 
 #[test]
+#[ignore = "requires an installed VST3 instrument; run explicitly and serially"]
 fn dispatching_note_events_to_a_vst3_instrument_allocates_nothing() {
     // The claim that matters for the note path. Translating a `NoteEvent` into
     // VST3's wire format pushes into a `Vec` reserved at activation, and *will*

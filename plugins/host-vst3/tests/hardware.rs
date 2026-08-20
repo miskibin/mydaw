@@ -1,14 +1,14 @@
 //! Step 7's hardware verification: the host, against the plugins actually
 //! installed on this machine.
 //!
-//! Every test here is **skip-if-absent**. A machine with no VST3 plugins prints
-//! why and passes, because the alternative -- a red CI on every runner that is
-//! not a musician's workstation -- would mean nobody ran them at all. What they
-//! prove when they *do* run is the whole point of the spike, so they print a
-//! compatibility table rather than only asserting: run them with
+//! Every test here is **opt-in and skip-if-absent**. A normal workspace run must
+//! not execute arbitrary installed plugin code: a vendor module can block in
+//! initialisation or processing, and these tests also need to run serially.
+//! What they prove when explicitly enabled is the whole point of the spike, so
+//! they print a compatibility table rather than only asserting: run them with
 //!
 //! ```text
-//! cargo test -p mydaw-plugin-host-vst3 --test hardware -- --nocapture --test-threads=1
+//! cargo test -p mydaw-plugin-host-vst3 --test hardware -- --ignored --nocapture --test-threads=1
 //! ```
 //!
 //! `--test-threads=1` matters. Several of these load large third-party modules,
@@ -30,6 +30,7 @@ const MAX_BLOCK: usize = 512;
 
 /// (a) What is installed, and what the scanner made of it.
 #[test]
+#[ignore = "requires installed VST3 plugins; run the hardware suite explicitly and serially"]
 fn the_scan_finds_and_classifies_what_is_installed() {
     let plugins = installed_plugins();
     if plugins.is_empty() {
@@ -84,6 +85,7 @@ fn the_scan_finds_and_classifies_what_is_installed() {
 /// output, because "it activated" is not evidence that audio flowed -- see
 /// [`probe_each`](mydaw_plugin_host_vst3::test_util::probe_each).
 #[test]
+#[ignore = "requires installed VST3 plugins; run the hardware suite explicitly and serially"]
 fn a_real_effect_processes_sixty_four_blocks_of_silence_and_sine() {
     let candidates = scanned_effects();
     if candidates.is_empty() {
@@ -273,6 +275,7 @@ fn run_effect(plugin: &mut mydaw_plugin_host_vst3::LoadedVst3Plugin) -> Result<E
 
 /// (c) A real instrument, played by MYDAW's own note events.
 #[test]
+#[ignore = "requires installed VST3 plugins; run the hardware suite explicitly and serially"]
 fn a_real_instrument_sounds_when_it_is_played() {
     let candidates = scanned_instruments();
     if candidates.is_empty() {
@@ -443,6 +446,7 @@ fn play_note(plugin: &mut mydaw_plugin_host_vst3::LoadedVst3Plugin) -> Result<No
 
 /// State survives a save/restore round trip on a real plugin.
 #[test]
+#[ignore = "requires installed VST3 plugins; run the hardware suite explicitly and serially"]
 fn state_round_trips_through_a_real_plugin() {
     let candidates = scanned_effects();
     if candidates.is_empty() {
@@ -502,6 +506,7 @@ fn state_round_trips_through_a_real_plugin() {
 
 /// Teardown after a full activate/process/retire cycle leaves nothing active.
 #[test]
+#[ignore = "requires installed VST3 plugins; run the hardware suite explicitly and serially"]
 fn a_full_cycle_tears_down_cleanly() {
     let candidates = scanned_effects();
     if candidates.is_empty() {
