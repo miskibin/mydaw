@@ -80,7 +80,6 @@ const MAX_WAVEFORM_BINS = 4096;
 const PPQ = 960;
 const TICKS_PER_STEP = 240;
 const TICKS_PER_BAR = 3840;
-const DEFAULT_CLIP_TICKS = TICKS_PER_BAR * 4;
 const PATTERN_LENGTHS = [16, 32, 64];
 const DEFAULT_STEPS = 16;
 const STEP_VELOCITY = 0.78;
@@ -1238,6 +1237,7 @@ export class MockBackend implements Backend {
 
   async removeTrack(track: number): Promise<MixerState> {
     const removed = this.track(track);
+    const selectedBefore = this.selected;
     if (this.tracks.length === 1) throw new Error('a project must keep at least one track');
     if (removed.engine === 'clip' && removed.audioSourceId != null) {
       const sourceId = removed.audioSourceId;
@@ -1262,7 +1262,12 @@ export class MockBackend implements Backend {
           : send,
       );
     this.openEditors = MockBackend.reindexEditors(this.openEditors, track);
-    if (this.selected >= this.tracks.length) this.selected = this.tracks.length - 1;
+    this.selected =
+      selectedBefore === track
+        ? Math.max(0, track - 1)
+        : selectedBefore > track
+          ? selectedBefore - 1
+          : selectedBefore;
     return this.mixerState();
   }
 
@@ -1883,7 +1888,7 @@ export class MockBackend implements Backend {
   ): Promise<SequencerState> {
     this.pattern(patternId);
     this.lane(track);
-    const span = length ?? DEFAULT_CLIP_TICKS;
+    const span = length ?? this.pattern(patternId).steps * TICKS_PER_STEP;
     this.checkClipBounds(start, span);
     this.clips.push({ id: this.nextClipId++, kind: 'pattern', track, start, length: span, patternId });
     return this.sequencerState();

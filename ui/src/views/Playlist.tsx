@@ -589,10 +589,14 @@ export function Playlist(): ReturnType<typeof Show> {
       return;
     }
     app.startPlaylistGesture(brush.kind === 'pattern' ? 'Paint pattern clip' : 'Paint audio clip');
+    const patternTicks =
+      brush.kind === 'pattern'
+        ? app.sequencer()?.patternSet.patterns.find((pattern) => pattern.id === brush.id)?.lengthTicks
+        : undefined;
     void app
       .sequencerCommand((backend) =>
         brush.kind === 'pattern'
-          ? backend.addPatternClip(brush.id, lane, start)
+          ? backend.addPatternClip(brush.id, lane, start, patternTicks)
           : backend.addAudioClip(brush.id, lane, start),
       )
       .then(() => app.commitPlaylistGesture());

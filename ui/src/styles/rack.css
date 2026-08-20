@@ -214,6 +214,14 @@
   box-shadow: inset 0 0 0 1px var(--dim2);
 }
 
+.wv-step.is-unused {
+  opacity: 0.38;
+}
+
+.wv-step.is-unused:hover {
+  opacity: 0.7;
+}
+
 .wv-step.is-on,
 .wv-step.is-on.is-beat {
   box-shadow: inset 0 -2px 0 var(--shade);
@@ -256,6 +264,15 @@
   transform: translateY(-50%);
 }
 
+.wv-chrow__tail {
+  position: absolute;
+  inset-block: 0;
+  right: 0;
+  background: color-mix(in srgb, var(--bg) 52%, transparent);
+  border-left: 1px solid var(--line2);
+  pointer-events: none;
+}
+
 .wv-chrow__clip {
   display: flex;
   align-items: center;
@@ -278,6 +295,27 @@
 .wv-chrow__mode:hover {
   background: var(--chip);
   color: var(--txt2);
+}
+
+.wv-chrow__repeat {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font: 500 12px 'Geist Mono Variable';
+  color: var(--faint);
+}
+
+.wv-chrow__repeat:hover:not(:disabled) {
+  background: var(--chip);
+  color: var(--acc);
+}
+
+.wv-chrow__repeat:disabled {
+  opacity: 0.25;
 }
 
 .wv-chrow__del {

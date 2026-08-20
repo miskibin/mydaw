@@ -43,9 +43,12 @@ import {
   stepsToNotes,
   withChannel,
   withClearedChannel,
+  withContentLength,
   withFilledSteps,
+  withLength,
   withInvertedSteps,
   withRandomSteps,
+  withRepeatedFirstBar,
   withShiftedSteps,
   withToggledStep,
 } from '../lib/pattern';
@@ -75,6 +78,8 @@ const BAR_PITCH = CELLS_PER_BAR * CELL_W + (CELLS_PER_BAR - 1) * CELL_GAP + BAR_
 
 /** The lengths a pattern may be, which is what the picker offers. */
 const LENGTHS = [16, 32, 64];
+/** FL-style rack workspace: the real loop ends earlier, but all four bars stay visible. */
+const DISPLAY_STEPS = 64;
 
 /**
  * Fill spacings the channel menu offers, in cells.
@@ -256,10 +261,44 @@ export function Rack(): ReturnType<typeof Show> {
 
   function toggleStep(channel: number, index: number, accent: boolean): void {
     const key = app.channelKey(channel);
-    app.editPatternOnce(accent ? 'Accent step' : 'Toggle step', (current) =>
-      withToggledStep(current, channel, index, accent, key),
-    );
+    app.editPatternOnce(accent ? 'Accent step' : 'Toggle step', (current) => {
+      const needed = index < 16 ? 16 : index < 32 ? 32 : 64;
+      const resized = needed > current.steps ? withLength(current, needed) : current;
+      return withContentLength(withToggledStep(resized, channel, index, accent, key));
+    });
   }
+
+  function repeatFirstBar(channel: number, name: string): void {
+    const key = app.channelKey(channel);
+    app.editPatternOnce('Repeat first bar', (current) =>
+      withRepeatedFirstBar(current, channel, key),
+    );
+    app.say(`${name} · Repeat`, 'first bar copied through the pattern');
+  }
+
+  /** FL-style Ctrl+Shift+Left/Right: rotate the selected channel by one step. */
+  createEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      const strip = view.strip();
+      if (strip.kind !== 'track') return;
+      event.preventDefault();
+      const delta = event.key === 'ArrowLeft' ? -1 : 1;
+      const key = app.channelKey(strip.index);
+      app.editPatternOnce(delta < 0 ? 'Shift steps left' : 'Shift steps right', (current) =>
+        withShiftedSteps(current, strip.index, delta, key),
+      );
+      app.say(
+        `${app.tracks()[strip.index]?.name ?? 'Channel'} · Shift`,
+        delta < 0 ? '1 step left' : '1 step right',
+      );
+    };
+    window.addEventListener('keydown', onKeyDown);
+    onCleanup(() => window.removeEventListener('keydown', onKeyDown));
+  });
 
   // --- the mode button -----------------------------------------------------
 
@@ -312,7 +351,21 @@ export function Rack(): ReturnType<typeof Show> {
 
   function removeChannel(track: TrackDto): void {
     if (app.tracks().length <= 1) return;
-    void app.mixerCommand((backend) => backend.removeTrack(track.index));
+    const strip = view.strip();
+    const selected = strip.kind === 'track' ? strip.index : null;
+    const nextSelected =
+      selected === null
+        ? null
+        : selected === track.index
+          ? Math.max(0, track.index - 1)
+          : selected > track.index
+            ? selected - 1
+            : selected;
+    if (nextSelected !== null) view.setStrip({ kind: 'track', index: nextSelected });
+    void app.mixerCommand(async (backend) => {
+      const state = await backend.removeTrack(track.index);
+      return nextSelected === null ? state : backend.setSelectedTrack(nextSelected);
+    });
     // Removing a track renumbers every pattern's channels, so no entry below
     // could be replayed against the arrangement that is left.
     app.clearHistory(`removing ${track.name}`);
@@ -517,6 +570,7 @@ export function Rack(): ReturnType<typeof Show> {
                 onInstrument={() => setInstrumentFor(track().index)}
                 onOpenSample={() => view.openSampleEditor(track().index)}
                 onToggleMode={() => toggleMode(track().index, track().name)}
+                onRepeat={() => repeatFirstBar(track().index, track().name)}
                 onRemove={() => removeChannel(track())}
                 onChannelMenu={(event) => {
                   selectChannel(track().index);
@@ -573,6 +627,7 @@ function RackRow(props: {
   onInstrument: () => void;
   onOpenSample: () => void;
   onToggleMode: () => void;
+  onRepeat: () => void;
   onRemove: () => void;
   onChannelMenu: (event: MouseEvent) => void;
 }): ReturnType<typeof Show> {
@@ -582,7 +637,7 @@ function RackRow(props: {
   const isRoll = () => displayMode(clip()) === 'roll';
   const length = () => props.pattern?.steps ?? 16;
   /** Always a full lane -- see `stepCells` for the three ways a clip arrives. */
-  const steps = () => stepCells(clip(), length());
+  const steps = () => stepCells(clip(), DISPLAY_STEPS);
 
   return (
     <div
@@ -663,6 +718,19 @@ function RackRow(props: {
 
       <button
         type="button"
+        class="wv-chrow__repeat"
+        disabled={length() <= 16 || isAudioClipChannel(props.track)}
+        title="Repeat this channel's first bar through the pattern"
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onRepeat();
+        }}
+      >
+        ↪
+      </button>
+
+      <button
+        type="button"
         class="wv-chrow__roll"
         classList={{ 'is-on': isRoll() }}
         disabled={isAudioClipChannel(props.track)}
@@ -680,13 +748,13 @@ function RackRow(props: {
         <IconRoll />
       </button>
 
-      <div class="wv-chrow__lane" style={{ width: `${laneWidth(length())}px` }}>
+      <div class="wv-chrow__lane" style={{ width: `${laneWidth(DISPLAY_STEPS)}px` }}>
         <Show
           when={!isAudioClipChannel(props.track)}
           fallback={
             <div
               class="wv-chrow__clip"
-              style={{ width: `${laneWidth(length())}px` }}
+              style={{ width: `${laneWidth(DISPLAY_STEPS)}px` }}
               title="This channel plays playlist clips of its file"
             >
               playlist
@@ -700,7 +768,7 @@ function RackRow(props: {
               type="button"
               class="wv-chrow__preview"
               style={{
-                width: `${laneWidth(length())}px`,
+                width: `${laneWidth(DISPLAY_STEPS)}px`,
                 'background-size': `${BAR_PITCH}px 100%`,
               }}
               title="Open the piano roll for this channel"
@@ -710,6 +778,12 @@ function RackRow(props: {
               }}
             >
               <NotePreview clip={clip()} pattern={props.pattern} colour={colour()} />
+              <Show when={length() < DISPLAY_STEPS}>
+                <span
+                  class="wv-chrow__tail"
+                  style={{ left: `${cellX(length()) - BAR_GAP}px` }}
+                />
+              </Show>
             </button>
           }
         >
@@ -726,6 +800,7 @@ function RackRow(props: {
                   class="wv-step"
                   classList={{
                     'is-beat': beat,
+                    'is-unused': index >= length(),
                     'is-on': cell().on,
                     'is-accent': cell().on && isAccent(cell().velocity),
                   }}
@@ -954,7 +1029,7 @@ function NotePreview(props: {
   colour: string;
 }): ReturnType<typeof Show> {
   const notes = () => props.clip?.notes ?? [];
-  const span = () => (props.pattern ? patternTicks(props.pattern) : 3840);
+  const span = () => DISPLAY_STEPS * TICKS_PER_STEP;
   const range = () => {
     const keys = notes().map((note) => note.key);
     const low = keys.length > 0 ? Math.min(...keys) : 60;
