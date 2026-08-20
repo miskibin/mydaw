@@ -17,27 +17,46 @@ export function LimiterEditor(props: {
   const gr = () => Math.abs(props.live.find((r) => r.id === 'gr_max')?.value ?? 0);
   const ceiling = () => props.values.get('ceiling') ?? 0;
   const drive = () => props.values.get('gain') ?? 0;
-  const crush = () => Math.min(1, gr() / 12);
+  const reduction = () => Math.min(12, gr());
+  const transferPath = () => {
+    const points = Array.from({ length: 25 }, (_, index) => {
+      const input = -24 + index * 1.25;
+      const output = Math.min(input + drive(), ceiling());
+      const x = 12 + ((input + 24) / 30) * 176;
+      const y = 108 - ((output + 24) / 30) * 88;
+      return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
+    });
+    return points.join(' ');
+  };
 
   return (
     <>
       <div class="wv-fx__display wv-fx__display--comp">
         <SpectrumTerrain bins={props.spectrum} />
         <div class="wv-fx__compbody">
-          <div class="wv-fx__limitread" title="Ceiling is the loudest sample that may leave. GR is how hard it is catching.">
-            <svg class="wv-fx__limitsvg" viewBox="0 0 120 82" aria-hidden="true">
-              <path class="wv-fx__limitwave wv-fx__limitwave--in" d="M2 41 C12 4 24 4 34 41 S56 78 66 41 S88 4 98 41 S112 78 118 41" />
-              <path class="wv-fx__limitceil" d="M0 18 H120 M0 64 H120" />
-              <path class="wv-fx__limitwave" style={{ opacity: 0.45 + crush() * 0.5 }} d="M2 41 C12 18 24 18 34 41 S56 64 66 41 S88 18 98 41 S112 64 118 41" />
+          <div class="wv-fx__limitread" title="Transfer curve: input level on the horizontal axis, output level on the vertical axis. The ceiling clips peaks above the limit.">
+            <div class="wv-fx__limithead">
+              <span>LIMITER RESPONSE</span>
+              <strong>{reduction() < 0.05 ? 'NO REDUCTION' : `−${reduction().toFixed(1)} dB GAIN REDUCTION`}</strong>
+            </div>
+            <svg class="wv-fx__limitsvg" viewBox="0 0 200 126" role="img" aria-label="Limiter input to output transfer curve">
+              <path class="wv-fx__limitgrid" d="M12 20H188 M12 64H188 M12 108H188 M12 20V108 M71 20V108 M130 20V108 M188 20V108" />
+              <path class="wv-fx__limitunity" d="M12 108L188 20" />
+              <path class="wv-fx__limitceil" d={`M12 ${(108 - ((ceiling() + 24) / 30) * 88).toFixed(1)}H188`} />
+              <path class="wv-fx__limitcurve" d={transferPath()} />
+              <circle class="wv-fx__limitpoint" cx="176" cy="31" r="3" />
+              <text x="12" y="121">−24</text><text x="179" y="121">+6 dB IN</text>
+              <text x="14" y="15">OUT</text>
             </svg>
-            <span>ceiling {ceiling().toFixed(1)} dB · input {drive().toFixed(1)} dB</span>
-            <span>{gr() < 0.05 ? 'open' : `−${gr().toFixed(1)} dB GR`}</span>
+            <div class="wv-fx__limitlegend">
+              <span><i class="wv-fx__legendline wv-fx__legendline--unity" /> 1:1 signal</span>
+              <span><i class="wv-fx__legendline wv-fx__legendline--curve" /> limited output</span>
+              <span><i class="wv-fx__legendline wv-fx__legendline--ceiling" /> ceiling {ceiling().toFixed(1)} dB</span>
+            </div>
           </div>
           <div class="wv-fx__gr" title="Peak gain reduction this block.">
-            <div
-              class="wv-fx__grfill"
-              style={{ height: `${Math.min(100, (gr() / Math.max(12, gr())) * 100)}%` }}
-            />
+            <span class="wv-fx__grlabel">GAIN REDUCTION</span>
+            <div class="wv-fx__grtrack"><div class="wv-fx__grfill" style={{ width: `${(reduction() / 12) * 100}%` }} /></div>
             <span class="wv-fx__grnum">{gr() < 0.05 ? '0.0' : `−${gr().toFixed(1)}`} dB</span>
           </div>
         </div>

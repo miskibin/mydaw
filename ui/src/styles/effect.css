@@ -390,6 +390,28 @@
   cursor: pointer;
 }
 
+/* --- limiter transfer view ------------------------------------------------ */
+.wv-fx__limitread { flex: 1; min-width: 0; padding: 10px 12px 8px; color: var(--dim); }
+.wv-fx__limithead, .wv-fx__limitlegend { display: flex; align-items: center; justify-content: space-between; gap: 12px; font: 8px 'Geist Mono Variable'; letter-spacing: .05em; }
+.wv-fx__limithead strong { color: var(--txt); font-weight: 600; }
+.wv-fx__limitsvg { display: block; width: 100%; height: 150px; margin-top: 5px; overflow: visible; }
+.wv-fx__limitsvg text { fill: var(--dim2); font: 7px 'Geist Mono Variable'; }
+.wv-fx__limitgrid { fill: none; stroke: var(--grid1); stroke-width: 1; }
+.wv-fx__limitunity { fill: none; stroke: var(--dim2); stroke-width: 1; stroke-dasharray: 3 3; opacity: .75; }
+.wv-fx__limitceil { fill: none; stroke: var(--acc); stroke-width: 1; stroke-dasharray: 5 3; opacity: .9; }
+.wv-fx__limitcurve { fill: none; stroke: var(--txt); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.wv-fx__limitpoint { fill: var(--acc); stroke: var(--sunk); stroke-width: 2; }
+.wv-fx__limitlegend { justify-content: flex-start; flex-wrap: wrap; color: var(--dim2); }
+.wv-fx__limitlegend span { display: inline-flex; align-items: center; gap: 4px; }
+.wv-fx__legendline { width: 14px; border-top: 1px solid var(--dim2); }
+.wv-fx__legendline--curve { border-top: 2px solid var(--txt); }
+.wv-fx__legendline--ceiling { border-top-color: var(--acc); border-top-style: dashed; }
+.wv-fx__gr { display: flex; flex-direction: column; gap: 5px; min-width: 92px; padding: 10px 12px; }
+.wv-fx__grlabel { color: var(--dim2); font: 8px 'Geist Mono Variable'; letter-spacing: .05em; }
+.wv-fx__grtrack { height: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--sunk); }
+.wv-fx__grfill { position: relative; inset: auto; width: 0; height: 100%; background: var(--acc); opacity: 1; transition: width 120ms ease-out; }
+.wv-fx__grnum { color: var(--txt); font: 600 13px 'Geist Mono Variable'; }
+
 /* --- the magnitude curve ------------------------------------------------- */
 
 .wv-eqc {
