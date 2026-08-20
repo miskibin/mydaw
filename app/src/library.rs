@@ -475,6 +475,31 @@ mod tests {
     }
 
     #[test]
+    fn resolve_packs_dir_falls_back_to_workspace_assets() {
+        let path = resolve_packs_dir(None);
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("packs")
+        );
+        assert!(path.ends_with(Path::new("assets").join("packs")));
+    }
+
+    #[test]
+    fn resolve_packs_dir_prefers_an_existing_resource_subdir() {
+        let dir = TempDir::new("resource");
+        let packs = dir.path().join("packs");
+        fs::create_dir(&packs).unwrap();
+        assert_eq!(resolve_packs_dir(Some(dir.path())), packs);
+    }
+
+    #[test]
+    fn resolve_packs_dir_skips_a_resource_dir_that_has_no_packs() {
+        let dir = TempDir::new("empty-resource");
+        let fallback = resolve_packs_dir(None);
+        assert_eq!(resolve_packs_dir(Some(dir.path())), fallback);
+    }
+
+    #[test]
     fn packs_are_first_and_cannot_be_removed() {
         let dir = TempDir::new("roots");
         let extra = dir.path().join("mine");

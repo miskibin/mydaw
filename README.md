@@ -132,7 +132,9 @@ gitignored and the piano is 131 MB. What *is* committed is
 specific upstream commit.
 
 **A checkout with no assets builds, tests and runs.** The sampler starts, reports zero instruments,
-and logs a hint. Install the content either way you like:
+and logs a hint. The Browser's Packs root is `assets/packs` (also gitignored); drop kits in there
+when you have them. A missing or empty folder is fine — the pane just has nothing to list. Install
+the sampled piano either way you like:
 
 ```sh
 pwsh -File scripts/fetch-assets.ps1          # idempotent; -Verify re-hashes, -Force re-downloads
