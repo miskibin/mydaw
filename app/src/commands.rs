@@ -30,7 +30,7 @@ use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
 use crate::source::{Source, SourceDto};
 use crate::state::AppState;
 use crate::vst3_bridge::Vst3GuiStatusDto;
-use mydaw_plugin_sequencer::{PlayMode, DEFAULT_CLIP_TICKS};
+use mydaw_plugin_sequencer::PlayMode;
 use mydaw_rt_core::StripId;
 
 /// Plugins and panels, as of boot. Called once by the UI on startup.
@@ -1040,7 +1040,7 @@ pub fn set_playlist_track_mute(
 ///
 /// `start` and `length` are in **ticks** (960 to the quarter note, 3840 to the
 /// bar). A length longer than the pattern loops it; shorter trims it. `length`
-/// absent means four bars.
+/// absent means exactly one cycle of the referenced pattern.
 #[tauri::command]
 pub fn add_pattern_clip(
     state: State<'_, AppState>,
@@ -1049,7 +1049,15 @@ pub fn add_pattern_clip(
     start: u64,
     length: Option<u64>,
 ) -> Result<SequencerStateDto, String> {
-    let length = length.unwrap_or(DEFAULT_CLIP_TICKS);
+    let length = match length {
+        Some(length) => length,
+        None => state
+            .sequencer()
+            .patterns()
+            .get(pattern_id)
+            .map(|pattern| u64::from(pattern.ticks()))
+            .ok_or_else(|| format!("there is no pattern {pattern_id}"))?,
+    };
     state
         .edit_playlist(|list| list.add_pattern_clip(pattern_id, track, start, length))
         .map_err(|err| err.to_string())?;

@@ -46,6 +46,7 @@ import {
   withFilledSteps,
   withInvertedSteps,
   withRandomSteps,
+  withRepeatedFirstBar,
   withShiftedSteps,
   withToggledStep,
 } from '../lib/pattern';
@@ -260,6 +261,38 @@ export function Rack(): ReturnType<typeof Show> {
       withToggledStep(current, channel, index, accent, key),
     );
   }
+
+  function repeatFirstBar(channel: number, name: string): void {
+    const key = app.channelKey(channel);
+    app.editPatternOnce('Repeat first bar', (current) =>
+      withRepeatedFirstBar(current, channel, key),
+    );
+    app.say(`${name} · Repeat`, 'first bar copied through the pattern');
+  }
+
+  /** FL-style Ctrl+Shift+Left/Right: rotate the selected channel by one step. */
+  createEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      const strip = view.strip();
+      if (strip.kind !== 'track') return;
+      event.preventDefault();
+      const delta = event.key === 'ArrowLeft' ? -1 : 1;
+      const key = app.channelKey(strip.index);
+      app.editPatternOnce(delta < 0 ? 'Shift steps left' : 'Shift steps right', (current) =>
+        withShiftedSteps(current, strip.index, delta, key),
+      );
+      app.say(
+        `${app.tracks()[strip.index]?.name ?? 'Channel'} · Shift`,
+        delta < 0 ? '1 step left' : '1 step right',
+      );
+    };
+    window.addEventListener('keydown', onKeyDown);
+    onCleanup(() => window.removeEventListener('keydown', onKeyDown));
+  });
 
   // --- the mode button -----------------------------------------------------
 
@@ -517,6 +550,7 @@ export function Rack(): ReturnType<typeof Show> {
                 onInstrument={() => setInstrumentFor(track().index)}
                 onOpenSample={() => view.openSampleEditor(track().index)}
                 onToggleMode={() => toggleMode(track().index, track().name)}
+                onRepeat={() => repeatFirstBar(track().index, track().name)}
                 onRemove={() => removeChannel(track())}
                 onChannelMenu={(event) => {
                   selectChannel(track().index);
@@ -573,6 +607,7 @@ function RackRow(props: {
   onInstrument: () => void;
   onOpenSample: () => void;
   onToggleMode: () => void;
+  onRepeat: () => void;
   onRemove: () => void;
   onChannelMenu: (event: MouseEvent) => void;
 }): ReturnType<typeof Show> {
@@ -660,6 +695,19 @@ function RackRow(props: {
           <IconCaret />
         </button>
       </div>
+
+      <button
+        type="button"
+        class="wv-chrow__repeat"
+        disabled={length() <= 16 || isAudioClipChannel(props.track)}
+        title="Repeat this channel's first bar through the pattern"
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onRepeat();
+        }}
+      >
+        ↪
+      </button>
 
       <button
         type="button"

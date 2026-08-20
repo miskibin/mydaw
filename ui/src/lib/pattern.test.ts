@@ -11,11 +11,13 @@ import {
   lengthForTicks,
   notesOf,
   withClearedChannel,
+  withContentLength,
   withFilledSteps,
   withGrownLength,
   withInvertedSteps,
   withNotes,
   withRandomSteps,
+  withRepeatedFirstBar,
   withShiftedSteps,
 } from './pattern';
 
@@ -173,6 +175,19 @@ describe('withGrownLength', () => {
   });
 });
 
+describe('withContentLength', () => {
+  it('shrinks to the last event and trims step rows to the wire length', () => {
+    const pattern: PatternDto = {
+      ...blank(64),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 64), notes: [] }],
+    };
+    pattern.channels[0]!.steps!.steps[20] = { on: true, velocity: 0.8 };
+    const shrunk = withContentLength(pattern);
+    expect(shrunk.steps).toBe(32);
+    expect(shrunk.channels[0]!.steps!.steps).toHaveLength(32);
+  });
+});
+
 describe('withNotes', () => {
   it('grows the pattern to hold a note written past the loop', () => {
     const grown = withNotes(
@@ -196,7 +211,7 @@ describe('withNotes', () => {
     expect(notesOf(grown, 0)[0]!.length).toBe(TICKS_PER_BAR);
   });
 
-  it('never shrinks, and clamps past the longest pattern instead of growing further', () => {
+  it('clamps past the longest pattern instead of growing further', () => {
     const long = withNotes(
       blank(64),
       0,
@@ -205,6 +220,61 @@ describe('withNotes', () => {
     );
     expect(long.steps).toBe(64);
     expect(notesOf(long, 0)[0]!.length).toBe(TICKS_PER_BAR);
-    expect(withNotes(blank(64), 0, [], 60).steps).toBe(64);
+  });
+
+  it('shrinks after the notes that extended it are deleted', () => {
+    const extended = withNotes(
+      blank(),
+      0,
+      [{ key: 60, start: TICKS_PER_BAR, length: TICKS_PER_STEP, velocity: 0.8 }],
+      60,
+    );
+    expect(extended.steps).toBe(32);
+    expect(withNotes(extended, 0, [], 60).steps).toBe(16);
+  });
+
+  it('does not shrink past content on another channel', () => {
+    const pattern: PatternDto = {
+      ...blank(64),
+      channels: [
+        { channel: 0, mode: 'roll', notes: [], steps: null },
+        {
+          channel: 1,
+          mode: 'roll',
+          notes: [{ key: 67, start: TICKS_PER_BAR, length: 120, velocity: 0.8 }],
+          steps: null,
+        },
+      ],
+    };
+    expect(withNotes(pattern, 0, [], 60).steps).toBe(32);
+  });
+});
+
+describe('withRepeatedFirstBar', () => {
+  it('copies first-bar steps into every bar with their velocities', () => {
+    const pattern: PatternDto = {
+      ...blank(64),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 64), notes: [] }],
+    };
+    pattern.channels[0]!.steps!.steps[3] = { on: true, velocity: 0.91 };
+    const repeated = withRepeatedFirstBar(pattern, 0, 60);
+    expect(ons(repeated)).toEqual([3, 19, 35, 51]);
+    expect(repeated.channels[0]!.steps!.steps[51]!.velocity).toBe(0.91);
+  });
+
+  it('copies first-bar piano-roll notes through the whole pattern', () => {
+    const pattern: PatternDto = {
+      ...blank(32),
+      channels: [{ channel: 0, mode: 'roll', steps: null, notes: [
+        { key: 64, start: 240, length: 120, velocity: 0.7 },
+      ] }],
+    };
+    const starts = withRepeatedFirstBar(pattern, 0, 60).channels[0]!.notes.map((note) => note.start);
+    expect(starts).toEqual([240, TICKS_PER_BAR + 240]);
+  });
+
+  it('is a no-op for a one-bar pattern', () => {
+    const pattern = blank();
+    expect(withRepeatedFirstBar(pattern, 0, 60)).toBe(pattern);
   });
 });

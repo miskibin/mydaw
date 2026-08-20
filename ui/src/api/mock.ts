@@ -80,7 +80,6 @@ const MAX_WAVEFORM_BINS = 4096;
 const PPQ = 960;
 const TICKS_PER_STEP = 240;
 const TICKS_PER_BAR = 3840;
-const DEFAULT_CLIP_TICKS = TICKS_PER_BAR * 4;
 const PATTERN_LENGTHS = [16, 32, 64];
 const DEFAULT_STEPS = 16;
 const STEP_VELOCITY = 0.78;
@@ -1883,7 +1882,7 @@ export class MockBackend implements Backend {
   ): Promise<SequencerState> {
     this.pattern(patternId);
     this.lane(track);
-    const span = length ?? DEFAULT_CLIP_TICKS;
+    const span = length ?? this.pattern(patternId).steps * TICKS_PER_STEP;
     this.checkClipBounds(start, span);
     this.clips.push({ id: this.nextClipId++, kind: 'pattern', track, start, length: span, patternId });
     return this.sequencerState();

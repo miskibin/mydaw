@@ -280,6 +280,27 @@
   color: var(--txt2);
 }
 
+.wv-chrow__repeat {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  font: 500 12px 'Geist Mono Variable';
+  color: var(--faint);
+}
+
+.wv-chrow__repeat:hover:not(:disabled) {
+  background: var(--chip);
+  color: var(--acc);
+}
+
+.wv-chrow__repeat:disabled {
+  opacity: 0.25;
+}
+
 .wv-chrow__del {
   display: flex;
   flex: none;

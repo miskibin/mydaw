@@ -341,6 +341,33 @@ export function withShiftedSteps(
   });
 }
 
+/** Copy one channel's first bar into every later bar of the pattern. */
+export function withRepeatedFirstBar(
+  pattern: PatternDto,
+  channel: number,
+  fallbackKey: number,
+): PatternDto {
+  if (pattern.steps <= 16) return pattern;
+  return withChannel(pattern, channel, fallbackKey, (clip) => {
+    const sourceCells = stepCells(clip, pattern.steps).slice(0, 16);
+    const steps = clip.steps
+      ? {
+          ...clip.steps,
+          steps: Array.from({ length: pattern.steps }, (_, at) => sourceCells[at % 16]!),
+        }
+      : clip.steps;
+    const sourceNotes = clip.notes.filter((note) => note.start < TICKS_PER_BAR);
+    const notes = Array.from({ length: pattern.steps / 16 }, (_, bar) =>
+      sourceNotes.map((note) => ({ ...note, start: note.start + bar * TICKS_PER_BAR })),
+    )
+      .flat()
+      .map((note) => clampNote(note, pattern))
+      .filter((note): note is MelodicNoteDto => note !== null)
+      .slice(0, MAX_NOTES);
+    return { ...clip, steps, notes };
+  });
+}
+
 /**
  * Independently switch each cell on or off. Seeded so the same press is a
  * repeatable undo entry, not a new roll every time the stack is replayed.
@@ -480,6 +507,37 @@ export function withGrownLength(pattern: PatternDto, ticks: number): PatternDto 
   return withLength(pattern, lengthForTicks(ticks));
 }
 
+/**
+ * Shrink a pattern to the shortest supported length that contains its events.
+ *
+ * The piano roll remains four bars wide; this only moves the loop/shaded edge.
+ * Step-row array lengths follow the wire contract when the loop gets shorter.
+ */
+export function withContentLength(pattern: PatternDto): PatternDto {
+  const needed = pattern.channels.reduce((end, clip) => {
+    const noteEnd = clip.notes.reduce(
+      (latest, note) => Math.max(latest, Math.round(note.start) + Math.round(note.length)),
+      0,
+    );
+    const stepEnd = clip.steps?.steps.reduce(
+      (latest, cell, index) => (cell.on ? Math.max(latest, (index + 1) * TICKS_PER_STEP) : latest),
+      0,
+    ) ?? 0;
+    return Math.max(end, noteEnd, stepEnd);
+  }, 0);
+  const steps = lengthForTicks(needed);
+  if (steps >= pattern.steps) return pattern;
+  return {
+    ...pattern,
+    steps,
+    channels: pattern.channels.map((clip) =>
+      clip.steps
+        ? { ...clip, steps: { ...clip.steps, steps: clip.steps.steps.slice(0, steps) } }
+        : clip,
+    ),
+  };
+}
+
 /** Clamp a note into the pattern, or reject it outright. */
 export function clampNote(note: MelodicNoteDto, pattern: PatternDto): MelodicNoteDto | null {
   const limit = patternTicks(pattern);
@@ -523,7 +581,8 @@ export function withNotes(
     if (fitted) clean.push(fitted);
     if (clean.length >= MAX_NOTES) break;
   }
-  return withChannel(grown, channel, fallbackKey, (clip) => ({ ...clip, notes: clean }));
+  const edited = withChannel(grown, channel, fallbackKey, (clip) => ({ ...clip, notes: clean }));
+  return withContentLength(edited);
 }
 
 /**
