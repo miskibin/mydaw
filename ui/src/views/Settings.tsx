@@ -1,7 +1,7 @@
 import { For, Show } from 'solid-js';
 
 import { useTheme } from '../theme/ThemeProvider';
-import { THEME_OPTIONS, type ThemeName } from '../theme/tokens';
+import { THEME_OPTIONS, accentFor, paletteFor, type ThemeName } from '../theme/tokens';
 import { useView } from '../shell/view';
 import '../styles/settings.css';
 
@@ -31,7 +31,11 @@ export function Settings() {
         <div class="wv-theme-grid">
           <For each={THEME_OPTIONS}>{(option) => (
             <button type="button" class="wv-theme-card" classList={{ 'is-active': theme.name() === option.name }} aria-pressed={theme.name() === option.name} onClick={() => theme.setTheme(option.name as ThemeName)}>
-              <span class={`wv-theme-card__preview wv-theme-card__preview--${option.name}`}><i /><i /><i /></span>
+              <span class="wv-theme-card__preview" style={{ background: paletteFor(option.name).sunk }}>
+                <i style={{ background: accentFor(theme.accent(), option.name) }} />
+                <i style={{ background: paletteFor(option.name).line2 }} />
+                <i style={{ background: paletteFor(option.name).live }} />
+              </span>
               <span class="wv-theme-card__copy"><strong>{option.label}</strong><small>{option.description}</small></span>
               <Show when={theme.name() === option.name}><span class="wv-theme-card__check">●</span></Show>
             </button>
