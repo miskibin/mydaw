@@ -34,11 +34,52 @@
  * would make a shortened clip look sped up. Audio clips do the same for the
  * waveform: it is drawn at the file's own duration, so trimming crops the
  * wave instead of squeezing it.
+ *
+ * ## Clicking a clip picks it up
+ *
+ * FL's rule, and the one thing every arrangement gesture is built on: the clip
+ * you last touched is the clip the brush holds. Click the `A` already on the
+ * timeline and the next click on empty lane paints another `A` -- no trip to
+ * the picker, no hunting for which of eleven patterns this one was. A pattern
+ * clip also makes its pattern the active one, so the rack, the picker and the
+ * brush cannot disagree about what "the current pattern" means.
+ *
+ * Shift (or ctrl) while dragging a clip **copies** it instead of moving it.
+ *
+ * ## The viewport, and the wheel
+ *
+ * Shift used to zoom, which left the arrangement with no horizontal wheel
+ * scroll at all -- the one gesture every OS already spends on sideways travel
+ * -- so getting back to bar 1 meant finding a scrollbar. The wheel now reads
+ * the way it does everywhere else:
+ *
+ * | gesture | what it does |
+ * | --- | --- |
+ * | wheel | scroll the lanes vertically |
+ * | shift + wheel, or a sideways wheel | scroll the timeline |
+ * | ctrl / alt + wheel | zoom **about the pointer**, so the bar under the cursor stays put |
+ * | middle-drag | pan both ways |
+ * | `Home` / `End` | the start of the song, and the end of the arrangement |
+ * | `Delete` / `Escape` | remove the selected clip, and drop the selection |
+ *
+ * The ruler is a scrub: press and drag moves the playhead, snapped to the
+ * playlist's own snap (alt for free positioning). The playhead is drawn twice,
+ * as a line under the lane headers and as a marker in the ruler above them,
+ * and it scrolls the view along with it while the transport runs -- until you
+ * scroll yourself, which parks the follow for a moment so a view you pulled
+ * sideways on purpose is not yanked back.
  */
 
-import { For, Index, Show, createEffect, createSignal, onCleanup } from 'solid-js';
+import { For, Index, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 
-import type { ClipDto, PatternDto, PlaylistTrackDto, WaveformDto } from '../api/types';
+import type { Backend } from '../api/backend';
+import type {
+  ClipDto,
+  PatternDto,
+  PlaylistTrackDto,
+  SequencerState,
+  WaveformDto,
+} from '../api/types';
 import {
   TICKS_PER_BAR,
   TICKS_PER_STEP,
@@ -49,6 +90,13 @@ import {
   ticksToSamples,
 } from '../lib/pattern';
 import { allowDrop, droppedAudioFile, droppedAudioPath, importDroppedFile, parseDrop } from '../lib/dnd';
+import {
+  clampScroll,
+  followScroll,
+  wheelIntent,
+  wheelPixels,
+  zoomAnchoredScroll,
+} from '../lib/timeline';
 import { useAppState } from '../state';
 import {
   DEFAULT_LANE_H,
@@ -59,11 +107,12 @@ import {
   nextSnap,
   snapLabel,
   useView,
+  type Brush,
   type PlaylistTool,
 } from '../shell/view';
 import { trackColor, wash } from '../theme/tokens';
 import { onFrame } from '../ui/frameLoop';
-import { IconEraseTool, IconPaintTool, IconSelectTool, IconX } from '../ui/icons';
+import { IconEraseTool, IconPaintTool, IconRewind, IconSelectTool, IconX } from '../ui/icons';
 
 /** Pixels one bar covers at zoom 1. */
 const BAR_PX = 48;
@@ -87,6 +136,10 @@ const MIN_ART_PX = 22;
 const TAIL_BARS = 8;
 /** The fewest bars ever drawn, so an empty arrangement still has a ruler. */
 const MIN_BARS = 32;
+/** What one notch of a zooming wheel, or one press of the zoom buttons, is worth. */
+const ZOOM_STEP = 1.15;
+/** How long a scroll of your own parks the playhead-follow. */
+const FOLLOW_HOLD_MS = 2_500;
 
 const TOOLS: readonly [PlaylistTool, string, () => ReturnType<typeof IconPaintTool>][] = [
   ['paint', 'Paint clips — click a lane to place the brush', IconPaintTool],
@@ -159,6 +212,8 @@ export function Playlist(): ReturnType<typeof Show> {
   const pendingPatterns = new Set<number>();
 
   let playheadEl: HTMLDivElement | undefined;
+  /** The playhead's marker in the ruler, above the sticky lane headers. */
+  let cursorEl: HTMLDivElement | undefined;
   let scrollEl: HTMLDivElement | undefined;
 
   const pxPerTick = () => (BAR_PX * view.playlistZoom()) / TICKS_PER_BAR;
@@ -168,6 +223,9 @@ export function Playlist(): ReturnType<typeof Show> {
     return Math.max(MIN_BARS, Math.ceil(end / TICKS_PER_BAR) + TAIL_BARS);
   };
   const laneWidth = () => bars() * BAR_PX * view.playlistZoom();
+  /** The widest the scroller can be pushed, headers included. */
+  const maxScroll = () =>
+    Math.max(0, HEAD_W + laneWidth() - (scrollEl?.clientWidth ?? 0));
 
   /** The waveform for one source, fetched once and remembered. */
   function waveformFor(sourceId: number): WaveformDto | undefined {
@@ -255,29 +313,248 @@ export function Playlist(): ReturnType<typeof Show> {
     return null;
   }
 
+  // --- the viewport --------------------------------------------------------
+
+  /** The last sideways position this view put there itself. */
+  let knownScroll = 0;
+  /** Wall clock after which the follow may move the view again. */
+  let heldUntil = 0;
+
+  /**
+   * Park the follow when *you* scrolled sideways.
+   *
+   * Compared against what the follow last wrote rather than acting on every
+   * `scroll` event, because scrolling the lanes **vertically** fires one too --
+   * and a follow that switched itself off every time you looked at a lane
+   * further down would be off for good.
+   */
+  function onScroll(): void {
+    if (!scrollEl) return;
+    const left = scrollEl.scrollLeft;
+    if (Math.abs(left - knownScroll) <= 1) return;
+    knownScroll = left;
+    heldUntil = performance.now() + FOLLOW_HOLD_MS;
+  }
+
+  /** Scroll to `left` without the follow reading it back as a hand on the wheel. */
+  function scrollTo(left: number): void {
+    if (!scrollEl) return;
+    scrollEl.scrollLeft = clampScroll(left, maxScroll());
+    knownScroll = scrollEl.scrollLeft;
+  }
+
+  /**
+   * Zoom about a point, `clientX` in the window or the middle of the timeline.
+   *
+   * Zooming and leaving `scrollLeft` alone -- what the buttons used to do --
+   * zooms about bar 1, which throws whatever you were looking at off the side
+   * of the screen and turns every zoom into a hunt for your place again.
+   */
+  function zoomBy(factor: number, clientX?: number): void {
+    const before = pxPerTick();
+    const next = clampZoom(view.playlistZoom() * factor);
+    if (next === view.playlistZoom()) return;
+    const box = scrollEl?.getBoundingClientRect();
+    const pointerOffset =
+      clientX !== undefined && box
+        ? clientX - box.left
+        : HEAD_W + Math.max(0, ((box?.width ?? 0) - HEAD_W) / 2);
+    const scrollLeft = scrollEl?.scrollLeft ?? 0;
+    view.setPlaylistZoom(next);
+    app.say('Playlist · Zoom', `${Math.round(next * 100)}%`);
+    if (!scrollEl) return;
+    const nextPxPerTick = (BAR_PX * next) / TICKS_PER_BAR;
+    scrollTo(
+      zoomAnchoredScroll({
+        scrollLeft,
+        pointerOffset,
+        headerPx: HEAD_W,
+        pxPerTick: before,
+        nextPxPerTick,
+        // From the numbers rather than from `scrollWidth`, which is only right
+        // once the browser has laid the wider lanes out.
+        maxScroll: Math.max(0, HEAD_W + bars() * BAR_PX * next - scrollEl.clientWidth),
+      }),
+    );
+  }
+
+  /** The playhead to bar 1, and the view with it. */
+  function toStart(): void {
+    app.seek(0);
+    scrollTo(0);
+    heldUntil = 0;
+    app.say('Transport · Seek', 'bar 1');
+  }
+
+  function seekTicks(ticks: number): void {
+    app.seek(ticksToSamples(Math.max(0, ticks), app.playhead.getSampleRate(), app.bpm()));
+    app.say('Transport · Seek', `bar ${(Math.max(0, ticks) / TICKS_PER_BAR + 1).toFixed(2)}`);
+  }
+
+  /**
+   * Middle-drag pans, the way it does in every DAW and every map.
+   *
+   * On the scroller rather than on the lanes, so panning works over the ruler
+   * and the headers too -- and past a lane's right edge, which is where you end
+   * up when the thing you were dragging towards is off screen.
+   */
+  function onPanPointerDown(event: PointerEvent): void {
+    if (event.button !== 1 || !scrollEl) return;
+    const el = scrollEl;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const fromLeft = el.scrollLeft;
+    const fromTop = el.scrollTop;
+    const onMove = (move: PointerEvent) => {
+      el.scrollLeft = clampScroll(fromLeft - (move.clientX - startX), maxScroll());
+      el.scrollTop = Math.max(0, fromTop - (move.clientY - startY));
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.style.removeProperty('cursor');
+    };
+    document.body.style.setProperty('cursor', 'grabbing');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  // Registered by hand with `{ passive: false }`: a JSX `onWheel` may end up
+  // passive, and a passive `preventDefault()` is a silent no-op -- see `drag.ts`.
+  onMount(() => {
+    const el = scrollEl;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      const intent = wheelIntent(event);
+      // Plain wheel is the lanes scrolling vertically, which the browser
+      // already does better than we would.
+      if (intent === 'scrollY') return;
+      event.preventDefault();
+      if (intent === 'zoom') {
+        const delta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
+        if (delta === 0) return;
+        zoomBy(delta < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, event.clientX);
+        return;
+      }
+      el.scrollLeft = clampScroll(el.scrollLeft + wheelPixels(event), maxScroll());
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onCleanup(() => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('scroll', onScroll);
+    });
+  });
+
   // The playhead is written to the DOM on the frame loop: it moves every frame
   // and must not go through a signal. It is only meaningful in SONG mode --
   // in PAT mode the transport is looping a pattern, not running the timeline.
   onFrame(() => {
-    if (!playheadEl) return;
-    if (app.playMode() !== 'song') {
-      playheadEl.style.display = 'none';
-      return;
-    }
-    playheadEl.style.display = '';
+    const song = app.playMode() === 'song';
+    if (playheadEl) playheadEl.style.display = song ? '' : 'none';
+    if (cursorEl) cursorEl.style.display = song ? '' : 'none';
+    if (!song) return;
     const ticks = samplesToTicks(
       app.playhead.positionSamples(),
       app.playhead.getSampleRate(),
       app.bpm(),
     );
-    playheadEl.style.transform = `translateX(${ticks * pxPerTick()}px)`;
+    const x = ticks * pxPerTick();
+    if (playheadEl) playheadEl.style.transform = `translateX(${x}px)`;
+    if (cursorEl) cursorEl.style.transform = `translateX(${x}px)`;
+
+    if (!scrollEl || !app.playing() || !view.playlistFollow()) return;
+    if (performance.now() < heldUntil) return;
+    const next = followScroll({
+      playheadPx: x,
+      scrollLeft: scrollEl.scrollLeft,
+      viewportPx: scrollEl.clientWidth,
+      headerPx: HEAD_W,
+      maxScroll: maxScroll(),
+    });
+    if (next === null) return;
+    scrollTo(next);
   });
 
-  const onWheel = (event: WheelEvent) => {
-    if (!event.shiftKey) return;
+  // --- the keyboard --------------------------------------------------------
+
+  onMount(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      switch (event.key) {
+        case 'Home':
+          event.preventDefault();
+          toStart();
+          break;
+        case 'End': {
+          event.preventDefault();
+          const end = playlist()?.endTicks ?? 0;
+          seekTicks(end);
+          scrollTo(end * pxPerTick() - 200);
+          break;
+        }
+        case 'Delete':
+        case 'Backspace': {
+          const clip = playlist()?.clips.find((entry) => entry.id === view.selectedClip());
+          if (!clip) return;
+          event.preventDefault();
+          removeClip(clip);
+          view.setSelectedClip(null);
+          break;
+        }
+        case 'Escape':
+          view.setSelectedClip(null);
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    onCleanup(() => window.removeEventListener('keydown', onKeyDown));
+  });
+
+  /**
+   * Move the playhead from the ruler, and keep moving it with the pointer.
+   *
+   * Snapped to the playlist's snap, which is what makes bar 1 reachable: with
+   * the ruler reading raw pixels, "the start" was a single pixel somewhere
+   * under the lane headers, and every click near it landed on bar 1.03.
+   */
+  function onRulerPointerDown(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    const track = event.currentTarget as HTMLElement;
     event.preventDefault();
-    view.setPlaylistZoom((zoom) => clampZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)));
-  };
+    let last = -1;
+    const seekAt = (clientX: number, free: boolean) => {
+      // Measured per move, not once: the ruler scrolls under the pointer when
+      // the wheel or the follow moves the view mid-drag.
+      const rect = track.getBoundingClientRect();
+      const raw = Math.max(0, (clientX - rect.left) / pxPerTick());
+      const ticks = free ? Math.round(raw) : snapTicks(raw, view.playlistSnap());
+      if (ticks === last) return;
+      last = ticks;
+      seekTicks(ticks);
+    };
+    seekAt(event.clientX, event.altKey);
+    const onMove = (move: PointerEvent) => seekAt(move.clientX, move.altKey);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.style.removeProperty('cursor');
+      document.body.style.removeProperty('user-select');
+    };
+    document.body.style.setProperty('cursor', 'ew-resize');
+    document.body.style.setProperty('user-select', 'none');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
 
   // --- placing -------------------------------------------------------------
 
@@ -288,7 +565,22 @@ export function Playlist(): ReturnType<typeof Show> {
     return snapTicks(Math.max(0, raw), view.playlistSnap(), true);
   }
 
-  function place(lane: number, start: number, brush = view.brush()): void {
+  /**
+   * What painting places: the brush, or the pattern the rack is editing.
+   *
+   * There is always a current pattern, so "no brush" was never a state worth
+   * refusing a click over -- it only ever meant *the shell* had not been told
+   * which one, and the engine had. Falling back to the active pattern is also
+   * what makes the picker optional: click a clip, paint another one.
+   */
+  const brushOrActive = (): Brush => {
+    const picked = view.brush();
+    if (picked) return picked;
+    const active = app.sequencer()?.patternSet.activeId;
+    return active === undefined ? null : { kind: 'pattern', id: active };
+  };
+
+  function place(lane: number, start: number, brush = brushOrActive()): void {
     if (!brush) {
       app.say('Playlist', 'no brush — pick a pattern or a file in the Picker');
       return;
@@ -304,7 +596,12 @@ export function Playlist(): ReturnType<typeof Show> {
   }
 
   function onLanePointerDown(event: PointerEvent, lane: number): void {
-    if (event.button !== 0 || view.playlistTool() !== 'paint') return;
+    if (event.button !== 0) return;
+    // Empty lane, select tool: the selection is a thing you can put down.
+    if (view.playlistTool() !== 'paint') {
+      view.setSelectedClip(null);
+      return;
+    }
     place(lane, tickAt(event.clientX, event.currentTarget as HTMLElement));
   }
 
@@ -362,6 +659,10 @@ export function Playlist(): ReturnType<typeof Show> {
       return;
     }
     view.setSelectedClip(clip.id);
+    pickUp(clip);
+    // FL's clone: hold shift (or ctrl) and the drag leaves the original where
+    // it was and drops a copy where you let go.
+    const copying = mode === 'move' && (event.shiftKey || event.ctrlKey);
     const startX = event.clientX;
     const startY = event.clientY;
     const originStart = clip.start;
@@ -381,7 +682,9 @@ export function Playlist(): ReturnType<typeof Show> {
       },
     );
 
-    app.startPlaylistGesture(mode === 'move' ? 'Move clip' : 'Resize clip');
+    app.startPlaylistGesture(
+      mode === 'resize' ? 'Resize clip' : copying ? 'Copy clip' : 'Move clip',
+    );
 
     const paint = (): void => {
       if (!clipEl) return;
@@ -434,6 +737,20 @@ export function Playlist(): ReturnType<typeof Show> {
       }
       if (!moved) {
         app.commitPlaylistGesture();
+        activate(clip);
+        return;
+      }
+      if (copying) {
+        // The original never moved, so put its box back: the drag painted it
+        // to the drop point and only the *engine's* answer redraws a clip.
+        if (clipEl) {
+          clipEl.style.left = `${originStart * pxPerTick()}px`;
+          clipEl.style.transform = '';
+          clipEl.style.zIndex = '';
+        }
+        void app
+          .sequencerCommand((backend) => cloneClip(backend, clip, lastLane, lastStart))
+          .then(() => app.commitPlaylistGesture());
         return;
       }
       const run =
@@ -445,6 +762,87 @@ export function Playlist(): ReturnType<typeof Show> {
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+  }
+
+  /**
+   * Load the brush from a clip, the way clicking a clip does in FL.
+   *
+   * Local and instant: no round trip, because this runs on *pointer down* and
+   * a state echo landing mid-gesture would rebuild the very element the drag is
+   * holding. What the engine has to be told -- which pattern is now the current
+   * one -- waits for {@link activate}, on a press that turned out to be a click.
+   */
+  function pickUp(clip: ClipDto): void {
+    const brush: Brush =
+      clip.kind === 'pattern' && clip.patternId !== undefined
+        ? { kind: 'pattern', id: clip.patternId }
+        : clip.kind === 'audio' && clip.sourceId !== undefined
+          ? { kind: 'audio', id: clip.sourceId }
+          : null;
+    if (!brush) return;
+    const already = view.brush();
+    view.setBrush(brush);
+    if (already?.kind !== brush.kind || already.id !== brush.id) {
+      app.say('Playlist · Brush', clipName(clip));
+    }
+  }
+
+  /**
+   * A click on a pattern clip makes its pattern the current one.
+   *
+   * So the rack, the picker and the brush share one idea of "current" -- click
+   * the clip, then F6, and you are editing what you clicked.
+   */
+  function activate(clip: ClipDto): void {
+    if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
+    if (app.sequencer()?.patternSet.activeId === clip.patternId) return;
+    void app.sequencerCommand((backend) => backend.setActivePattern(clip.patternId!));
+  }
+
+  /** The same clip again at `lane`/`start`, length, offset and trim kept. */
+  function cloneClip(
+    backend: Backend,
+    clip: ClipDto,
+    lane: number,
+    start: number,
+  ): Promise<SequencerState> {
+    if (clip.kind === 'pattern') {
+      return backend.addPatternClip(clip.patternId!, lane, start, clip.length);
+    }
+    return backend.addAudioClip(
+      clip.sourceId!,
+      lane,
+      start,
+      clip.length,
+      clip.offsetFrames ?? 0,
+      clip.gainDb ?? 0,
+    );
+  }
+
+  /**
+   * Open the sample window for an audio clip, from the playlist.
+   *
+   * The channel is looked up twice on purpose: `add_audio_clip` creates the
+   * Audio Clip channel but answers with the *sequencer* state, so a clip
+   * dropped a moment ago is on a channel this shell's mixer copy has never
+   * heard of. One refetch turns "nothing happens when I double-click" into the
+   * window it should have opened.
+   */
+  async function openSample(sourceId: number): Promise<void> {
+    const find = () =>
+      app.tracks().find((entry) => entry.engine === 'clip' && entry.audioSourceId === sourceId);
+    let channel = find();
+    if (!channel) {
+      await app.mixerCommand((backend) => backend.getTracks());
+      channel = find();
+    }
+    if (!channel) {
+      app.say('Playlist', 'that file has no channel yet');
+      return;
+    }
+    const index = channel.index;
+    await app.mixerCommand((backend) => backend.setSelectedTrack(index));
+    view.openSampleEditor(index);
   }
 
   function clipName(clip: ClipDto): string {
@@ -471,7 +869,7 @@ export function Playlist(): ReturnType<typeof Show> {
   }
 
   const brushLabel = () => {
-    const brush = view.brush();
+    const brush = brushOrActive();
     if (!brush) return 'No brush — pick one on the right';
     if (brush.kind === 'pattern') {
       return `Brush · ${app.patterns().find((p) => p.id === brush.id)?.name ?? '?'}`;
@@ -480,7 +878,7 @@ export function Playlist(): ReturnType<typeof Show> {
   };
 
   const brushColour = () => {
-    const brush = view.brush();
+    const brush = brushOrActive();
     if (!brush) return 'var(--dim)';
     if (brush.kind === 'pattern') {
       const pattern = app.patterns().find((p) => p.id === brush.id);
@@ -512,27 +910,49 @@ export function Playlist(): ReturnType<typeof Show> {
         </div>
         <button
           type="button"
+          class="wv-tool"
+          title="Back to the start (Home)"
+          onClick={toStart}
+        >
+          <IconRewind />
+        </button>
+        <button
+          type="button"
           class="wv-chip wv-chip--sunk"
-          title="What clip edges snap to"
+          title="What clip edges and the ruler snap to — hold alt on the ruler for none"
           onClick={() => view.setPlaylistSnap(nextSnap(PLAYLIST_SNAPS, view.playlistSnap()))}
         >
           <span class="wv-chip__tag">SNAP</span>
           {snapLabel(PLAYLIST_SNAPS, view.playlistSnap())}
         </button>
+        <button
+          type="button"
+          class="wv-chip wv-chip--sunk"
+          classList={{ 'is-active': view.playlistFollow() }}
+          title="Scroll the arrangement along with the playhead while it plays"
+          onClick={() => {
+            const on = !view.playlistFollow();
+            view.setPlaylistFollow(on);
+            app.say('Playlist · Follow', on ? 'on' : 'off');
+          }}
+        >
+          <span class="wv-chip__tag">FOLLOW</span>
+          {view.playlistFollow() ? 'on' : 'off'}
+        </button>
         <div class="wv-zoom">
           <button
             type="button"
             class="wv-zoom__btn"
-            title="Zoom out (shift-scroll)"
-            onClick={() => view.setPlaylistZoom((zoom) => clampZoom(zoom / 1.25))}
+            title="Zoom out (ctrl-scroll over the lanes)"
+            onClick={() => zoomBy(1 / 1.25)}
           >
             −
           </button>
           <button
             type="button"
             class="wv-zoom__btn"
-            title="Zoom in (shift-scroll)"
-            onClick={() => view.setPlaylistZoom((zoom) => clampZoom(zoom * 1.25))}
+            title="Zoom in (ctrl-scroll over the lanes)"
+            onClick={() => zoomBy(1.25)}
           >
             +
           </button>
@@ -544,24 +964,29 @@ export function Playlist(): ReturnType<typeof Show> {
         </span>
       </div>
 
-      <div class="wv-pl" ref={scrollEl} onWheel={onWheel}>
+      <div
+        class="wv-pl"
+        ref={scrollEl}
+        onPointerDown={onPanPointerDown}
+        onAuxClick={(event) => event.button === 1 && event.preventDefault()}
+      >
         <div class="wv-pl__inner" style={{ width: `${HEAD_W + laneWidth()}px` }}>
           <div class="wv-pl__ruler">
-            <div class="wv-pl__corner" style={{ width: `${HEAD_W}px` }}>
+            <button
+              type="button"
+              class="wv-pl__corner"
+              style={{ width: `${HEAD_W}px` }}
+              title="Back to the start (Home)"
+              onClick={toStart}
+            >
+              <IconRewind />
               {playlist()?.tracks.length ?? 0} lanes · {playlist()?.clips.length ?? 0} clips
-            </div>
+            </button>
             <div
               class="wv-pl__ruler-track"
               style={{ width: `${laneWidth()}px` }}
-              title="Click to move the playhead"
-              onPointerDown={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const ticks = Math.max(0, (event.clientX - rect.left) / pxPerTick());
-                app.seek(
-                  ticksToSamples(ticks, app.playhead.getSampleRate(), app.bpm()),
-                );
-                app.say('Transport · Seek', `bar ${(ticks / TICKS_PER_BAR + 1).toFixed(2)}`);
-              }}
+              title="Drag to move the playhead — snapped, hold alt for none"
+              onPointerDown={onRulerPointerDown}
             >
               <Index each={Array.from({ length: bars() })}>
                 {(_, bar) => (
@@ -577,6 +1002,7 @@ export function Playlist(): ReturnType<typeof Show> {
                   </span>
                 )}
               </Index>
+              <div class="wv-pl__cursor" ref={cursorEl} />
             </div>
           </div>
 
@@ -680,18 +1106,7 @@ export function Playlist(): ReturnType<typeof Show> {
                         onDelete={() => removeClip(clip)}
                         onOpen={() => {
                           if (clip.kind === 'audio' && clip.sourceId !== undefined) {
-                            const channel = app
-                              .tracks()
-                              .find(
-                                (entry) =>
-                                  entry.engine === 'clip' && entry.audioSourceId === clip.sourceId,
-                              );
-                            if (channel) {
-                              void app.mixerCommand((backend) =>
-                                backend.setSelectedTrack(channel.index),
-                              );
-                              view.openSampleEditor(channel.index);
-                            }
+                            void openSample(clip.sourceId).catch(app.report);
                             return;
                           }
                           if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
@@ -736,8 +1151,9 @@ export function Playlist(): ReturnType<typeof Show> {
           <div class="wv-pl__hint">
             <strong>The arrangement is empty.</strong>
             <span class="wv-empty__hint">
-              Pick a pattern in the Picker on the right, then click a lane with the paint tool — or
-              drag one straight onto a lane. Switch the transport to SONG to hear it.
+              Click a lane with the paint tool to place the current pattern — or drag one from the
+              Picker. Afterwards, clicking any clip loads it into the brush, so the next click
+              paints the same thing. Switch the transport to SONG to hear it.
             </span>
           </div>
         </Show>
@@ -898,8 +1314,8 @@ function Clip(props: {
       }}
       title={
         props.clip.kind === 'pattern'
-          ? `${props.name} — drag to move, drag the right edge to resize, double-click to edit, right-click to delete`
-          : `${props.name} — audio clip. Audio clips play into the master bus; per-lane routing is not implemented yet.`
+          ? `${props.name} — click to load the brush, drag to move (shift-drag to copy), drag the right edge to resize, double-click to open it in the rack, right-click to delete`
+          : `${props.name} — click to load the brush, drag to move (shift-drag to copy), double-click to open the sample window, right-click to delete. Audio clips play through their own channel's strip.`
       }
     >
       <span class="wv-clip__label">{props.name}</span>

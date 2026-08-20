@@ -52,7 +52,7 @@
 }
 
 .wv-sample__wave.is-edit {
-  cursor: ew-resize;
+  cursor: crosshair;
 }
 
 .wv-sample__svg {
@@ -76,14 +76,113 @@
   right: 0;
 }
 
+/*
+ * The two ends of the played region.
+ *
+ * A grab width rather than the drawn width: the line is 2 px, and a 2 px
+ * pointer target is a control nobody can hit. The line itself is the ::before.
+ */
 .wv-sample__handle {
   position: absolute;
   top: 0;
   bottom: 0;
+  z-index: 2;
+  width: 14px;
+  margin-left: -7px;
+  cursor: ew-resize;
+}
+
+.wv-sample__handle::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
   width: 2px;
-  margin-left: -1px;
-  background: var(--acc);
+  background: currentColor;
+  content: '';
+}
+
+.wv-sample__handle:hover::before {
+  box-shadow: 0 0 0 1px currentColor;
+}
+
+.wv-sample__flag {
+  position: absolute;
+  top: 4px;
+  left: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  font: 400 9px 'Geist Mono Variable';
+  color: var(--txt2);
+  white-space: nowrap;
+  opacity: 0;
   pointer-events: none;
+  transition: opacity 90ms ease;
+}
+
+.wv-sample__handle--end .wv-sample__flag {
+  right: 9px;
+  left: auto;
+}
+
+.wv-sample__wave:hover .wv-sample__flag,
+.wv-sample__handle:hover .wv-sample__flag {
+  opacity: 1;
+}
+
+/* The zero line, so a quiet sample still reads as a sample. */
+.wv-sample__axis {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+
+/* The file behind the channel, next to its badge. */
+.wv-sample__file {
+  min-width: 0;
+  overflow: hidden;
+  font: 500 11px 'Geist Variable';
+  color: var(--txt2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Pitch: the knob, whole-semitone steps, and what the two add up to. */
+.wv-sample__pitch {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: center;
+}
+
+.wv-sample__steps {
+  display: flex;
+  gap: 3px;
+}
+
+.wv-sample__step {
+  min-width: 22px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--chip);
+  font: 500 9.5px 'Geist Mono Variable';
+  color: var(--dim);
+}
+
+.wv-sample__step:hover {
+  background: var(--accSoft);
+  color: var(--acc);
+}
+
+.wv-sample__pitchlabel {
+  font: 400 9.5px 'Geist Mono Variable';
+  color: var(--dim2);
 }
 
 .wv-sample__msg {
@@ -101,9 +200,9 @@
 .wv-sample__knobs {
   display: flex;
   flex: none;
-  gap: 18px;
+  gap: 26px;
   justify-content: center;
-  align-items: flex-end;
+  align-items: flex-start;
   padding: 4px 12px 10px;
 }
 
