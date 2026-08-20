@@ -22,11 +22,12 @@
 
 use mydaw_plugin_debug_tap::{spectrum, Spectrum};
 use mydaw_plugin_instruments::drum_kit::{
-    CLOSED_HAT_KEY, KICK_KEY, OPEN_HAT_KEY, SNARE_KEY, SNARE_TONE_HZ,
+    CLAP_BAND_HIGH_HZ, CLAP_BAND_LOW_HZ, CLAP_BURSTS, CLAP_SPACING_MS, CLOSED_HAT_KEY, KICK_END_HZ,
+    KICK_KEY, OPEN_HAT_KEY, SNARE_KEY, SNARE_TONE_HZ,
 };
 use mydaw_plugin_instruments::poly_synth::SUB_MIX;
 use mydaw_plugin_instruments::test_support::{peak, render, rms};
-use mydaw_plugin_instruments::{key_to_hz, DrumKitNode, PolySynthNode};
+use mydaw_plugin_instruments::{key_to_hz, DrumKitNode, PolySynthNode, SingleDrum, SingleDrumNode};
 use mydaw_rt_core::NoteEvent;
 
 const SR: f64 = 48_000.0;
@@ -36,6 +37,31 @@ const BLOCK: usize = 256;
 fn hit(key: u8, frames: usize) -> Vec<f32> {
     let mut node = DrumKitNode::new(SR);
     render(&mut node, frames, BLOCK, &[NoteEvent::note_on(0, key, 1.0)]).0
+}
+
+/// Render one hit of a per-drum instrument, at its own base key.
+fn single(drum: SingleDrum, frames: usize) -> Vec<f32> {
+    let mut node = SingleDrumNode::new(drum, SR);
+    render(
+        &mut node,
+        frames,
+        BLOCK,
+        &[NoteEvent::note_on(0, drum.base_key(), 1.0)],
+    )
+    .0
+}
+
+/// Sign changes per second: a frequency estimate that needs no window.
+///
+/// The FFT cannot answer "what pitch is the first eight milliseconds" -- eight
+/// milliseconds is two bins wide -- and the kick's attack is precisely that
+/// short. Counting zero crossings can.
+fn crossing_hz(samples: &[f32]) -> f64 {
+    let crossings = samples
+        .windows(2)
+        .filter(|pair| (pair[0] < 0.0) != (pair[1] < 0.0))
+        .count();
+    crossings as f64 / 2.0 / (samples.len() as f64 / SR)
 }
 
 /// Sum of squared magnitudes in `[low, high)` Hz, excluding DC.
@@ -139,6 +165,95 @@ fn the_kick_decays_instead_of_sustaining() {
     assert!(
         levels[5] < levels[0] * 0.1,
         "after 300 ms the kick should be at least 20 dB down, got {levels:?}"
+    );
+}
+
+#[test]
+fn the_kick_starts_far_above_where_it_lands() {
+    // The punch. One sweep can be the beater or the body and not both, so the
+    // attack is measured on its own: the first eight milliseconds have to be
+    // several times the frequency of the tail, or there is no attack there.
+    let samples = hit(KICK_KEY, 24_000);
+    let attack = crossing_hz(&samples[..(SR * 0.008) as usize]);
+    let body = crossing_hz(&samples[(SR * 0.15) as usize..(SR * 0.30) as usize]);
+    eprintln!("[kick] attack {attack:.0} Hz, body {body:.0} Hz");
+
+    assert!(
+        attack > 200.0,
+        "the kick's attack is at {attack:.0} Hz; it should start near \
+         {KICK_PUNCH_HZ_DOC} Hz and fall from there"
+    );
+    assert!(
+        attack > body * 3.0,
+        "the attack ({attack:.0} Hz) is barely above the body ({body:.0} Hz); \
+         the punch sweep is missing"
+    );
+    assert!(
+        (body - f64::from(KICK_END_HZ)).abs() < 15.0,
+        "the kick should land on {KICK_END_HZ} Hz, not {body:.0} Hz"
+    );
+}
+
+/// Named for the message above; the constant itself is the DSP's.
+const KICK_PUNCH_HZ_DOC: f64 = 420.0;
+
+// The kick's soft clipper is measured as arithmetic rather than as a spectrum:
+// see `drum_kit::tests::the_soft_clipper_bends_without_moving_the_ends`.
+// Saturation is amplitude-dependent, so on a decaying drum every spectral
+// measurement of it is really a measurement of where the window was put.
+
+#[test]
+fn a_clap_is_several_bursts_and_not_one() {
+    // What makes a clap a clap. Three impacts a few milliseconds apart, then
+    // the room: an envelope with one peak is a snare with the wires off.
+    let samples = single(SingleDrum::Clap, 24_000);
+    // 2 ms windows across the first 45 ms -- fine enough to separate bursts
+    // 10 ms apart, coarse enough not to count individual noise samples.
+    let window = (SR * 0.002) as usize;
+    let levels: Vec<f32> = (0..22)
+        .map(|i| rms(&samples[i * window..(i + 1) * window]))
+        .collect();
+    let rises = levels
+        .windows(3)
+        .filter(|w| w[1] > w[0] * 1.3 && w[1] >= w[2])
+        .count();
+    eprintln!("[clap] 2 ms RMS windows: {levels:?} -> {rises} attacks");
+
+    assert!(
+        rises >= CLAP_BURSTS - 1,
+        "a clap of {CLAP_BURSTS} bursts {CLAP_SPACING_MS} ms apart should show \
+         at least {} attacks after the first; found {rises} in {levels:?}",
+        CLAP_BURSTS - 1
+    );
+    // And it has to outlive them: the tail is the room the hands are in.
+    let tail = rms(&samples[(SR * 0.08) as usize..(SR * 0.15) as usize]);
+    assert!(tail > 1e-4, "the clap has no tail at all: {tail:.3e}");
+}
+
+#[test]
+fn a_clap_sits_in_the_band_hands_do() {
+    let samples = single(SingleDrum::Clap, 24_000);
+    let spectrum = spectrum(&samples, SR);
+    let inside = band_energy(
+        &spectrum,
+        f64::from(CLAP_BAND_LOW_HZ) * 0.5,
+        f64::from(CLAP_BAND_HIGH_HZ) * 1.5,
+    ) / total_energy(&spectrum);
+    let centroid = spectral_centroid(&spectrum);
+    eprintln!(
+        "[clap] centroid {centroid:.0} Hz, {:.1}% inside the band, peak {:.3}",
+        inside * 100.0,
+        peak(&samples)
+    );
+
+    assert!(
+        inside > 0.7,
+        "only {:.1}% of the clap is in its band; the filters are not working",
+        inside * 100.0
+    );
+    assert!(
+        (800.0..6_000.0).contains(&centroid),
+        "a centroid of {centroid:.0} Hz is a kick or a hi-hat, not a clap"
     );
 }
 

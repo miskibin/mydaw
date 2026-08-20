@@ -10,6 +10,7 @@
 //! | [`PolySynthNode`] | `poly-synth` | Eight voices of polyBLEP saw + sine sub, ADSR, one-pole lowpass. |
 //! | [`SingleDrumNode`] | `kick` | One synthesised kick, any key, tunable +/- an octave. |
 //! | [`SingleDrumNode`] | `snare` | One synthesised snare, any key, tunable +/- an octave. |
+//! | [`SingleDrumNode`] | `clap` | One synthesised hand clap, any key, unpitched. |
 //! | [`SingleDrumNode`] | `hat-closed` | One closed hi-hat, any key, unpitched. |
 //! | [`SingleDrumNode`] | `hat-open` | One open hi-hat, any key, unpitched. |
 //! | [`DrumKitNode`] | `drum-kit` | All four in one node on General MIDI keys 36/38/42/46. **Kept for old projects; nothing creates one.** |
@@ -76,8 +77,8 @@ pub use drum_kit::{
 pub use dsp::{key_to_hz, Noise, OnePole};
 pub use poly_synth::{PolySynthFactory, PolySynthNode, VOICES};
 pub use single_drum::{
-    pitch_ratio, SingleDrum, SingleDrumFactory, SingleDrumNode, CLOSED_HAT_TYPE_ID, KICK_TYPE_ID,
-    OPEN_HAT_TYPE_ID, PITCH_RANGE_SEMITONES, SNARE_TYPE_ID,
+    pitch_ratio, SingleDrum, SingleDrumFactory, SingleDrumNode, CLAP_TYPE_ID, CLOSED_HAT_TYPE_ID,
+    KICK_TYPE_ID, OPEN_HAT_TYPE_ID, PITCH_RANGE_SEMITONES, SNARE_TYPE_ID,
 };
 
 use std::sync::Arc;
@@ -275,6 +276,7 @@ mod tests {
             drum_kit::NODE_TYPE_ID,
             KICK_TYPE_ID,
             SNARE_TYPE_ID,
+            CLAP_TYPE_ID,
             CLOSED_HAT_TYPE_ID,
             OPEN_HAT_TYPE_ID,
         ] {
@@ -303,6 +305,7 @@ mod tests {
                 "poly-synth",
                 "kick",
                 "snare",
+                "clap",
                 "hat-closed",
                 "hat-open",
                 "drum-kit"

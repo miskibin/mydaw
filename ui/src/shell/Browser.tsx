@@ -28,7 +28,7 @@ import { useView, type BrowserTab } from './view';
 import '../styles/browser.css';
 
 /** The drum sources, by the ids `app/src/source.rs` gives them. */
-const DRUM_IDS = new Set(['kick', 'snare', 'hat-closed', 'hat-open', 'drum-kit']);
+const DRUM_IDS = new Set(['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'drum-kit']);
 /** The melodic built-ins. */
 const SYNTH_IDS = new Set(['poly-synth', 'test-tone']);
 /** The groups, in the order they are drawn. */

@@ -317,7 +317,8 @@ const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
   {
     id: 'kick',
     label: 'Kick',
-    description: 'Synthesised kick: 150 -> 50 Hz sine sweep with a noise click, tunable',
+    description:
+      'Synthesised kick: 420 -> 50 Hz two-stage sweep, punch envelope, soft clip, tunable',
     kind: 'internal',
     vendor: '',
     bundlePath: null,
@@ -327,7 +328,18 @@ const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
   {
     id: 'snare',
     label: 'Snare',
-    description: 'Synthesised snare: highpassed noise over a 180 Hz body, tunable',
+    description:
+      'Synthesised snare: a crack over a wire buzz, two body modes at 180 Hz, tunable',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'clap',
+    label: 'Clap',
+    description: 'Synthesised clap: three offset noise bursts into a room tail',
     kind: 'internal',
     vendor: '',
     bundlePath: null,
@@ -337,7 +349,7 @@ const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
   {
     id: 'hat-closed',
     label: 'Hat Closed',
-    description: 'Synthesised closed hi-hat: highpassed noise, 60 ms decay',
+    description: 'Synthesised closed hi-hat: six-oscillator metal, 60 ms decay',
     kind: 'internal',
     vendor: '',
     bundlePath: null,
@@ -347,7 +359,7 @@ const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
   {
     id: 'hat-open',
     label: 'Hat Open',
-    description: 'Synthesised open hi-hat: highpassed noise, 350 ms decay',
+    description: 'Synthesised open hi-hat: six-oscillator metal, 350 ms decay',
     kind: 'internal',
     vendor: '',
     bundlePath: null,
@@ -503,7 +515,7 @@ const SAMPLE_PLAY = {
   sampleEndFrames: 0,
 } as const;
 function starterTracks(): TrackDto[] {
-  const wanted = ['kick', 'snare', 'hat-closed', 'hat-open', 'sampler:salamander-piano'];
+  const wanted = ['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'sampler:salamander-piano'];
   return wanted.map((sourceId, index) => {
     const source = INTERNAL_SOURCES.find((entry) => entry.id === sourceId)!;
     return {

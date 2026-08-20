@@ -1372,16 +1372,23 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_project_is_four_drum_channels_and_a_melodic_one() {
+    fn a_fresh_project_is_a_drum_channel_each_and_a_melodic_one() {
         let project = Project::default();
-        assert_eq!(project.len(), 5);
+        assert_eq!(project.len(), 6);
         assert_eq!(
             project
                 .tracks
                 .iter()
                 .map(|t| t.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Kick", "Snare", "Hat Closed", "Hat Open", "Poly Synth"],
+            vec![
+                "Kick",
+                "Snare",
+                "Clap",
+                "Hat Closed",
+                "Hat Open",
+                "Poly Synth"
+            ],
             "one instrument per channel, named after the instrument"
         );
         assert_eq!(
@@ -1393,6 +1400,7 @@ mod tests {
             vec![
                 Source::Drum(SingleDrum::Kick),
                 Source::Drum(SingleDrum::Snare),
+                Source::Drum(SingleDrum::Clap),
                 Source::Drum(SingleDrum::ClosedHat),
                 Source::Drum(SingleDrum::OpenHat),
                 Source::PolySynth,
@@ -1406,9 +1414,9 @@ mod tests {
         // Ids are dense and start at zero, and the next one continues past them.
         assert_eq!(
             project.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec![0, 1, 2, 3, 4]
+            vec![0, 1, 2, 3, 4, 5]
         );
-        assert_eq!(project.next_id(), 5);
+        assert_eq!(project.next_id(), 6);
         assert!(
             project.len() < MAX_TRACKS,
             "a starter rack must leave room to add to"
@@ -1432,15 +1440,16 @@ mod tests {
         let empty = SamplerRegistry::detached();
         assert_eq!(default_piano(&empty), Source::PolySynth);
         assert_eq!(
-            Project::starter(default_piano(&empty)).tracks[4].name,
+            Project::starter(default_piano(&empty)).tracks[SingleDrum::ALL.len()].name,
             "Poly Synth"
         );
 
         // And when there is one, the channel takes its name too.
         let piano = Source::Sampler(SamplerSourceRef::new("salamander-piano").named("Piano"));
         let project = Project::starter(piano.clone());
-        assert_eq!(project.tracks[4].source, piano);
-        assert_eq!(project.tracks[4].name, "Piano");
+        let melodic = SingleDrum::ALL.len();
+        assert_eq!(project.tracks[melodic].source, piano);
+        assert_eq!(project.tracks[melodic].name, "Piano");
     }
 
     #[test]
@@ -1544,13 +1553,13 @@ mod tests {
             .add(Source::TestTone, Some("Tone".to_owned()))
             .unwrap();
         let ids: Vec<u32> = project.tracks.iter().map(|t| t.id).collect();
-        assert_eq!(ids, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(ids, vec![0, 1, 2, 3, 4, 5, 6]);
 
         let removed = project.remove(0).unwrap();
         assert_eq!(removed.name, "Kick");
         assert_eq!(
             project.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec![1, 2, 3, 4, 5],
+            vec![1, 2, 3, 4, 5, 6],
             "ids are stable; only the index -- and therefore the note channel -- moved"
         );
 

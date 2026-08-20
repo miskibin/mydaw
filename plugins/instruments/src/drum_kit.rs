@@ -1,11 +1,29 @@
 //! `drum-kit` -- four synthesised drum voices, no samples anywhere.
 //!
 //! ```text
-//!   key 36  kick        sine, 150 -> 50 Hz sweep + 2 ms noise click
-//!   key 38  snare       highpassed noise burst + a 180 Hz body tone
-//!   key 42  closed hat  highpassed noise, short  -- chokes the open hat
-//!   key 46  open hat    highpassed noise, long
+//!   key 36  kick        two-stage 420 -> 150 -> 50 Hz sweep, punch envelope, soft clip
+//!   key 38  snare       two body modes + a crack layer over a longer buzz
+//!   key 42  closed hat  six-oscillator metal bank, highpassed, short -- chokes the open hat
+//!   key 46  open hat    the same bank, long
 //! ```
+//!
+//! # What the voices are made of, and why they were changed
+//!
+//! The first pass at these was the textbook minimum: a sine with one sweep, a
+//! noise burst with a tone under it, and white noise through a highpass. Each
+//! one is *recognisable* as its drum and none of them is one anybody would keep.
+//! What was missing is what the ear actually identifies:
+//!
+//! - a kick's **punch** is a second, much faster pitch and amplitude envelope on
+//!   top of the body, and its weight is the harmonics a little saturation adds;
+//! - a snare's **crack** is a short, bright noise layer over the longer buzz,
+//!   and a real drum rings on two modes rather than one;
+//! - a hi-hat is **metal**, not wind: inharmonic partials from a bank of square
+//!   oscillators, which is what every drum machine since the 808 has used, and
+//!   the reason white noise through a highpass sounds like a hiss instead.
+//!
+//! [`ClapVoice`] is new: three offset noise bursts into one longer tail, which
+//! is what a clap is -- several hands not quite together, in a room.
 //!
 //! # Why synthesised
 //! A sampled kit would be better-sounding and much worse for this project: it
@@ -75,12 +93,35 @@ pub const KICK_START_HZ: f32 = 150.0;
 pub const KICK_END_HZ: f32 = 50.0;
 /// Time for the sweep to cover 95% of its range. The "thump" is this envelope.
 pub const KICK_SWEEP_MS: f32 = 40.0;
+/// Where the kick's *attack* sweep starts, on top of the body sweep.
+///
+/// A kick has two pitch envelopes, not one: a very fast drop from a few hundred
+/// hertz that the ear hears as the beater, and the slower drop into the body.
+/// One envelope can be either the attack or the thump and not both -- a single
+/// 150 Hz start is why the old kick read as a soft sine bump.
+pub const KICK_PUNCH_HZ: f32 = 420.0;
+/// Time for that attack sweep to cover 95% of its range.
+pub const KICK_PUNCH_MS: f32 = 7.0;
+/// -60 dB time of the extra amplitude the attack carries.
+///
+/// The "punch": the first 30 ms are louder than the body under them, which is
+/// what makes a kick cut through a mix rather than sit under it.
+pub const KICK_PUNCH_DECAY_MS: f32 = 30.0;
+/// How much louder, relative to the body.
+pub const KICK_PUNCH_MIX: f32 = 0.55;
 /// -60 dB time of the kick's amplitude envelope.
 pub const KICK_DECAY_MS: f32 = 250.0;
 /// Length of the noise transient that gives the kick its attack.
 pub const KICK_CLICK_MS: f32 = 2.0;
 /// Amplitude of that transient relative to the body.
 pub const KICK_CLICK_GAIN: f32 = 0.3;
+/// How hard the kick is driven into its soft clipper.
+///
+/// `tanh` at this drive, normalised so full scale stays full scale. A sine
+/// through it grows a third and a fifth harmonic, which is what a kick played
+/// through anything real has and a bare sine does not -- and it is what makes
+/// the drum audible on a laptop speaker that cannot reproduce 50 Hz at all.
+pub const KICK_DRIVE: f32 = 1.9;
 /// Peak amplitude of the kick at velocity 1.0.
 ///
 /// The four gain constants are set together, so that the worst case a player
@@ -99,8 +140,26 @@ pub const SNARE_NOISE_DECAY_MS: f32 = 150.0;
 pub const SNARE_TONE_DECAY_MS: f32 = 110.0;
 /// The snare's body frequency.
 pub const SNARE_TONE_HZ: f32 = 180.0;
+/// The snare's second mode, as a ratio of the first.
+///
+/// A drum head is a membrane, and a membrane's modes are not a harmonic series
+/// -- 1.59 is the first two circular modes of an ideal one, which is why a
+/// snare reads as a *drum* and a single sine reads as a tom that lost its way.
+pub const SNARE_MODE_RATIO: f32 = 1.59;
+/// How loud that second mode is against the first.
+pub const SNARE_MODE_MIX: f32 = 0.45;
 /// Highpass applied to the snare's noise, so the wires sit above the body.
 pub const SNARE_HIGHPASS_HZ: f32 = 1_000.0;
+/// Highpass on the snare's short attack layer.
+///
+/// The "crack": the first 35 ms of a snare are far brighter than its tail, and
+/// a single noise decay cannot be both. This layer is what a listener hears as
+/// the stick hitting rather than the wires answering.
+pub const SNARE_CRACK_HIGHPASS_HZ: f32 = 3_800.0;
+/// -60 dB time of that layer.
+pub const SNARE_CRACK_DECAY_MS: f32 = 35.0;
+/// Its level against the buzz.
+pub const SNARE_CRACK_MIX: f32 = 0.7;
 /// Noise-to-tone balance.
 pub const SNARE_NOISE_MIX: f32 = 0.8;
 pub const SNARE_TONE_MIX: f32 = 0.5;
@@ -111,6 +170,22 @@ pub const SNARE_GAIN: f32 = 0.35;
 
 /// Highpass applied to both hats. Metal, not wind.
 pub const HAT_HIGHPASS_HZ: f32 = 6_000.0;
+/// The metal bank's six oscillator frequencies, in hertz.
+///
+/// Six square waves at deliberately *inharmonic* intervals, filtered high --
+/// the 808's hi-hat circuit, and the reason its hat still sounds like a hat
+/// fifty years later. The ratios matter more than the absolute numbers: no two
+/// of them share a harmonic, so what comes out has no pitch to hear.
+///
+/// A square rather than a sine because the highpass is at 6 kHz and these
+/// fundamentals are not: what survives the filter is their harmonic series, and
+/// a sine has none to give.
+pub const HAT_PARTIALS_HZ: [f32; 6] = [325.0, 465.0, 621.0, 784.0, 1_003.0, 1_299.0];
+/// How much plain noise is mixed under the bank.
+///
+/// A real hi-hat is two cymbals rattling as well as ringing. A little noise is
+/// the rattle; more than this and the metal disappears back into hiss.
+pub const HAT_NOISE_MIX: f32 = 0.35;
 /// -60 dB time of the closed hat.
 pub const CLOSED_HAT_DECAY_MS: f32 = 60.0;
 /// -60 dB time of the open hat.
@@ -122,7 +197,12 @@ pub const OPEN_HAT_DECAY_MS: f32 = 350.0;
 /// it does not replace a ringing hat with a click.
 pub const CHOKE_MS: f32 = 4.0;
 /// Peak amplitude of either hat at velocity 1.0. See [`KICK_GAIN`].
-pub const HAT_GAIN: f32 = 0.2;
+///
+/// Higher than the white-noise hat's 0.2 because the metal bank loses far more
+/// to the highpass than noise does: the oscillators put their energy at 325 Hz
+/// to 1.3 kHz and only their harmonics survive the filter, so the same audible
+/// level needs more amplitude in front of it.
+pub const HAT_GAIN: f32 = 0.42;
 
 // --- noise seeds ------------------------------------------------------------
 //
@@ -133,8 +213,34 @@ pub const HAT_GAIN: f32 = 0.2;
 
 pub(crate) const KICK_SEED: u32 = 0x4B49_434B; // "KICK"
 pub(crate) const SNARE_SEED: u32 = 0x534E_4152; // "SNAR"
+pub(crate) const SNARE_CRACK_SEED: u32 = 0x4352_434B; // "CRCK"
 pub(crate) const CLOSED_HAT_SEED: u32 = 0x4348_4154; // "CHAT"
 pub(crate) const OPEN_HAT_SEED: u32 = 0x4F48_4154; // "OHAT"
+pub(crate) const CLAP_SEED: u32 = 0x434C_4150; // "CLAP"
+
+// --- clap -------------------------------------------------------------------
+
+/// General MIDI hand clap.
+pub const CLAP_KEY: u8 = 39;
+/// How many short bursts a clap is made of before its tail.
+///
+/// Three. A clap is several hands that did not quite land together; one burst
+/// is a snare with the wires off, and a dozen is applause.
+pub const CLAP_BURSTS: usize = 3;
+/// How far apart those bursts are, in milliseconds.
+pub const CLAP_SPACING_MS: f32 = 10.0;
+/// -60 dB time of each burst.
+pub const CLAP_BURST_DECAY_MS: f32 = 12.0;
+/// -60 dB time of the tail the last burst leaves behind: the room.
+pub const CLAP_TAIL_DECAY_MS: f32 = 190.0;
+/// Level of that tail against a burst.
+pub const CLAP_TAIL_MIX: f32 = 0.5;
+/// Centre of the clap's band. Hands are mid-range; below this is a snare.
+pub const CLAP_BAND_LOW_HZ: f32 = 900.0;
+/// The top of it. Above this a clap turns into a hi-hat.
+pub const CLAP_BAND_HIGH_HZ: f32 = 5_500.0;
+/// Peak amplitude of the clap at velocity 1.0. See [`KICK_GAIN`].
+pub const CLAP_GAIN: f32 = 0.32;
 
 /// A drum this kit can play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -190,6 +296,12 @@ pub(crate) struct KickVoice {
     /// Sweep position, 1.0 at the transient and decaying to 0.0.
     sweep: f32,
     sweep_coefficient: f32,
+    /// The faster attack sweep, on top of the body one. See [`KICK_PUNCH_HZ`].
+    punch: f32,
+    punch_coefficient: f32,
+    /// Extra amplitude for the first tens of milliseconds. See [`KICK_PUNCH_MIX`].
+    punch_amplitude: f32,
+    punch_decay_coefficient: f32,
     amplitude: f32,
     decay_coefficient: f32,
     /// Click envelope, a linear ramp from 1.0 to 0.0.
@@ -217,6 +329,11 @@ impl KickVoice {
             // the constant mean what its name says.
             sweep_coefficient: 0.05_f32
                 .powf(1.0 / ((KICK_SWEEP_MS / 1000.0) * sample_rate).max(1.0)),
+            punch: 0.0,
+            punch_coefficient: 0.05_f32
+                .powf(1.0 / ((KICK_PUNCH_MS / 1000.0) * sample_rate).max(1.0)),
+            punch_amplitude: 0.0,
+            punch_decay_coefficient: decay_coefficient(KICK_PUNCH_DECAY_MS, sample_rate),
             amplitude: 0.0,
             decay_coefficient: decay_coefficient(KICK_DECAY_MS, sample_rate),
             click: 0.0,
@@ -238,7 +355,9 @@ impl KickVoice {
         // needs no attack ramp -- the click is deliberate, a discontinuity is not.
         self.phase = 0.0;
         self.sweep = 1.0;
+        self.punch = 1.0;
         self.amplitude = 1.0;
+        self.punch_amplitude = 1.0;
         self.click = 1.0;
         self.noise.reseed(KICK_SEED);
         self.velocity = velocity;
@@ -262,20 +381,29 @@ impl KickVoice {
                 self.active = false;
                 return;
             }
-            let hz = (KICK_END_HZ + (KICK_START_HZ - KICK_END_HZ) * self.sweep) * self.pitch_ratio;
-            let body = (self.phase * TAU).sin() * self.amplitude;
+            // Two sweeps, summed: the body drops 150 -> 50 Hz over 40 ms and the
+            // attack drops another 270 Hz on top of it in seven. The ear reads
+            // the fast one as the beater and the slow one as the drum.
+            let hz = (KICK_END_HZ
+                + (KICK_START_HZ - KICK_END_HZ) * self.sweep
+                + (KICK_PUNCH_HZ - KICK_START_HZ) * self.punch)
+                * self.pitch_ratio;
+            let envelope = self.amplitude + self.punch_amplitude * KICK_PUNCH_MIX;
+            let body = (self.phase * TAU).sin() * envelope;
             let click = self.noise.next_bipolar() * self.click * KICK_CLICK_GAIN;
-            *sample += (body + click) * gain;
+            *sample += soft_clip(body + click, KICK_DRIVE) * gain;
 
             self.phase = advance_phase(self.phase, hz * self.inverse_sample_rate);
             self.sweep *= self.sweep_coefficient;
+            self.punch *= self.punch_coefficient;
             self.amplitude *= self.decay_coefficient;
+            self.punch_amplitude *= self.punch_decay_coefficient;
             self.click = (self.click - self.click_step).max(0.0);
         }
     }
 }
 
-/// Highpassed noise plus a decaying 180 Hz body tone.
+/// Two membrane modes under a bright crack and a longer wire buzz.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SnareVoice {
     active: bool,
@@ -283,10 +411,19 @@ pub(crate) struct SnareVoice {
     highpass: OnePole,
     noise_amplitude: f32,
     noise_coefficient: f32,
+    /// The short bright layer: its own noise stream, filter and envelope, so it
+    /// can be brighter *and* shorter than the buzz rather than a compromise.
+    crack: Noise,
+    crack_highpass: OnePole,
+    crack_amplitude: f32,
+    crack_coefficient: f32,
     tone_phase: f32,
     /// Phase increment at the drum's own pitch, before the per-hit ratio.
     base_increment: f32,
     tone_increment: f32,
+    /// The second membrane mode, at [`SNARE_MODE_RATIO`] times the first.
+    mode_phase: f32,
+    mode_increment: f32,
     tone_amplitude: f32,
     tone_coefficient: f32,
     velocity: f32,
@@ -300,9 +437,15 @@ impl SnareVoice {
             highpass: OnePole::new(SNARE_HIGHPASS_HZ, sample_rate),
             noise_amplitude: 0.0,
             noise_coefficient: decay_coefficient(SNARE_NOISE_DECAY_MS, sample_rate),
+            crack: Noise::new(SNARE_CRACK_SEED),
+            crack_highpass: OnePole::new(SNARE_CRACK_HIGHPASS_HZ, sample_rate),
+            crack_amplitude: 0.0,
+            crack_coefficient: decay_coefficient(SNARE_CRACK_DECAY_MS, sample_rate),
             tone_phase: 0.0,
             base_increment: SNARE_TONE_HZ / sample_rate,
             tone_increment: SNARE_TONE_HZ / sample_rate,
+            mode_phase: 0.0,
+            mode_increment: SNARE_TONE_HZ * SNARE_MODE_RATIO / sample_rate,
             tone_amplitude: 0.0,
             tone_coefficient: decay_coefficient(SNARE_TONE_DECAY_MS, sample_rate),
             velocity: 0.0,
@@ -323,8 +466,13 @@ impl SnareVoice {
         self.noise.reseed(SNARE_SEED);
         self.highpass.reset();
         self.noise_amplitude = 1.0;
+        self.crack.reseed(SNARE_CRACK_SEED);
+        self.crack_highpass.reset();
+        self.crack_amplitude = 1.0;
         self.tone_phase = 0.0;
+        self.mode_phase = 0.0;
         self.tone_increment = self.base_increment * pitch_ratio;
+        self.mode_increment = self.base_increment * SNARE_MODE_RATIO * pitch_ratio;
         self.tone_amplitude = 1.0;
         self.velocity = velocity;
     }
@@ -349,26 +497,47 @@ impl SnareVoice {
             let wires = self.highpass.high(self.noise.next_bipolar())
                 * self.noise_amplitude
                 * SNARE_NOISE_MIX;
-            let body = (self.tone_phase * TAU).sin() * self.tone_amplitude * SNARE_TONE_MIX;
-            *sample += (wires + body) * gain;
+            let crack = self.crack_highpass.high(self.crack.next_bipolar())
+                * self.crack_amplitude
+                * SNARE_CRACK_MIX;
+            // Two modes of the head, not one: the second is what stops the body
+            // reading as a sine with a rattle stuck to it.
+            let body = ((self.tone_phase * TAU).sin()
+                + (self.mode_phase * TAU).sin() * SNARE_MODE_MIX)
+                * self.tone_amplitude
+                * SNARE_TONE_MIX;
+            *sample += (wires + crack + body) * gain;
 
             self.tone_phase = advance_phase(self.tone_phase, self.tone_increment);
+            self.mode_phase = advance_phase(self.mode_phase, self.mode_increment);
             self.noise_amplitude *= self.noise_coefficient;
+            self.crack_amplitude *= self.crack_coefficient;
             self.tone_amplitude *= self.tone_coefficient;
         }
     }
 }
 
-/// Highpassed noise with an exponential decay. Both hats, one type.
+/// Six inharmonic square oscillators, highpassed, with a little noise under
+/// them. Both hats, one type.
 ///
 /// The only difference between a closed and an open hat here is the decay time,
 /// which is also the only difference a listener can name.
+///
+/// The bank is what makes it *metal*. White noise through a highpass is a hiss
+/// with a hat-shaped envelope: correct in every measurable way (bright, short,
+/// broadband) and wrong to anyone who has heard a drum machine. Six squares at
+/// frequencies that share no harmonic produce a dense, atonal, ringing spectrum
+/// -- the 808's trick, and still the cheapest hi-hat worth having.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct HatVoice {
     active: bool,
     noise: Noise,
     seed: u32,
     highpass: OnePole,
+    /// Phase of each oscillator in the bank, `0.0..1.0`.
+    phases: [f32; HAT_PARTIALS_HZ.len()],
+    /// Its increment per sample, precomputed from the rate.
+    increments: [f32; HAT_PARTIALS_HZ.len()],
     amplitude: f32,
     /// The coefficient in use, which the choke temporarily replaces.
     coefficient: f32,
@@ -379,11 +548,17 @@ pub(crate) struct HatVoice {
 
 impl HatVoice {
     pub(crate) fn new(decay_ms: f32, seed: u32, sample_rate: f32) -> Self {
+        let mut increments = [0.0; HAT_PARTIALS_HZ.len()];
+        for (increment, hz) in increments.iter_mut().zip(HAT_PARTIALS_HZ) {
+            *increment = hz / sample_rate;
+        }
         Self {
             active: false,
             noise: Noise::new(seed),
             seed,
             highpass: OnePole::new(HAT_HIGHPASS_HZ, sample_rate),
+            phases: [0.0; HAT_PARTIALS_HZ.len()],
+            increments,
             amplitude: 0.0,
             coefficient: decay_coefficient(decay_ms, sample_rate),
             open_coefficient: decay_coefficient(decay_ms, sample_rate),
@@ -396,6 +571,12 @@ impl HatVoice {
         self.active = true;
         self.noise.reseed(self.seed);
         self.highpass.reset();
+        // Every oscillator restarted at a *different* phase, spread evenly.
+        // From zero they would all rise together and the first millisecond of
+        // the hat would be a click at six times the amplitude of the rest.
+        for (index, phase) in self.phases.iter_mut().enumerate() {
+            *phase = index as f32 / HAT_PARTIALS_HZ.len() as f32;
+        }
         self.amplitude = 1.0;
         // A retrigger cancels a choke: hitting the open hat again reopens it.
         self.coefficient = self.open_coefficient;
@@ -424,10 +605,138 @@ impl HatVoice {
                 self.active = false;
                 return;
             }
-            *sample += self.highpass.high(self.noise.next_bipolar()) * self.amplitude * gain;
+            let mut metal = 0.0;
+            for (phase, increment) in self.phases.iter_mut().zip(self.increments) {
+                // A naive square, on purpose. Its aliases land *above* 6 kHz
+                // among partials that are already inharmonic and already meant
+                // to be dense -- which is the one place in this engine where
+                // aliasing is indistinguishable from the intended sound, and
+                // band-limiting six oscillators per sample would cost more than
+                // the whole rest of the kit.
+                metal += if *phase < 0.5 { 1.0 } else { -1.0 };
+                *phase = advance_phase(*phase, increment);
+            }
+            metal /= HAT_PARTIALS_HZ.len() as f32;
+            let rattle = self.noise.next_bipolar() * HAT_NOISE_MIX;
+            *sample += self.highpass.high(metal + rattle) * self.amplitude * gain;
             self.amplitude *= self.coefficient;
         }
     }
+}
+
+/// Three offset noise bursts into a longer tail: a hand clap.
+///
+/// Not a snare with a different filter. What makes a clap a clap is that it is
+/// *several* impacts a few milliseconds apart -- a group of people never lands
+/// together -- followed by the room answering. Three bursts spaced 10 ms apart
+/// is the arrangement every drum machine settled on, and the tail is the room.
+///
+/// The band is a one-pole pair rather than a resonant filter: hands are
+/// mid-range, and what is wanted is "not a kick, not a hi-hat", which two
+/// six-decibel slopes say adequately.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ClapVoice {
+    active: bool,
+    noise: Noise,
+    highpass: OnePole,
+    /// Two poles, not one. A single six-decibel slope leaves so much above the
+    /// band that the clap reads as a hi-hat: measured, 40% of its energy was
+    /// outside the band it is supposed to occupy.
+    lowpass: [OnePole; 2],
+    /// Amplitude of the burst envelope, restarted at each burst.
+    burst: f32,
+    burst_coefficient: f32,
+    /// The tail under the bursts, which outlives them.
+    tail: f32,
+    tail_coefficient: f32,
+    /// Frames until the next burst fires, and how many are left to fire.
+    next_burst_in: u32,
+    bursts_left: u32,
+    burst_spacing_frames: u32,
+    velocity: f32,
+}
+
+impl ClapVoice {
+    pub(crate) fn new(sample_rate: f32) -> Self {
+        Self {
+            active: false,
+            noise: Noise::new(CLAP_SEED),
+            highpass: OnePole::new(CLAP_BAND_LOW_HZ, sample_rate),
+            lowpass: [OnePole::new(CLAP_BAND_HIGH_HZ, sample_rate); 2],
+            burst: 0.0,
+            burst_coefficient: decay_coefficient(CLAP_BURST_DECAY_MS, sample_rate),
+            tail: 0.0,
+            tail_coefficient: decay_coefficient(CLAP_TAIL_DECAY_MS, sample_rate),
+            next_burst_in: 0,
+            bursts_left: 0,
+            burst_spacing_frames: ((CLAP_SPACING_MS / 1_000.0) * sample_rate).max(1.0) as u32,
+            velocity: 0.0,
+        }
+    }
+
+    pub(crate) fn trigger(&mut self, velocity: f32) {
+        self.active = true;
+        self.noise.reseed(CLAP_SEED);
+        self.highpass.reset();
+        for pole in &mut self.lowpass {
+            pole.reset();
+        }
+        self.burst = 1.0;
+        self.tail = 1.0;
+        // The first burst is this one; the rest are still to come.
+        self.bursts_left = CLAP_BURSTS as u32 - 1;
+        self.next_burst_in = self.burst_spacing_frames;
+        self.velocity = velocity;
+    }
+
+    pub(crate) const fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(crate) fn render(&mut self, span: &mut [f32]) {
+        if !self.active {
+            return;
+        }
+        let gain = self.velocity * CLAP_GAIN;
+        for sample in span.iter_mut() {
+            // The tail outlives every burst, so it alone decides when the voice
+            // ends -- per sample, as everywhere else here.
+            if self.tail < SILENCE_THRESHOLD {
+                self.active = false;
+                return;
+            }
+            if self.bursts_left > 0 {
+                self.next_burst_in = self.next_burst_in.saturating_sub(1);
+                if self.next_burst_in == 0 {
+                    self.burst = 1.0;
+                    self.bursts_left -= 1;
+                    self.next_burst_in = self.burst_spacing_frames;
+                }
+            }
+            let source = self.noise.next_bipolar();
+            let mut band = self.highpass.high(source);
+            for pole in &mut self.lowpass {
+                band = pole.low(band);
+            }
+            *sample += band * (self.burst + self.tail * CLAP_TAIL_MIX) * gain;
+            self.burst *= self.burst_coefficient;
+            self.tail *= self.tail_coefficient;
+        }
+    }
+}
+
+/// `tanh` soft clipping at `drive`, normalised so full scale stays full scale.
+///
+/// The cheapest way to turn a sine into something with harmonics, which is what
+/// separates a kick from a test tone. Normalising matters: without it, raising
+/// the drive would also raise the level, and the gain constants downstream are
+/// set against a peak of one.
+#[inline]
+fn soft_clip(sample: f32, drive: f32) -> f32 {
+    if drive <= 0.0 {
+        return sample;
+    }
+    (sample * drive).tanh() / drive.tanh()
 }
 
 /// The kit: four voices summed to a mono signal and fanned out to stereo.
@@ -583,6 +892,38 @@ mod tests {
     use crate::test_support::{peak, render};
 
     const SR: f64 = 48_000.0;
+
+    #[test]
+    fn the_soft_clipper_bends_without_moving_the_ends() {
+        // What the kick's drive has to do, as arithmetic: leave silence alone,
+        // leave full scale at full scale, and lift everything between -- which
+        // is the same thing as saying the wave comes out fuller than it went in.
+        assert_eq!(soft_clip(0.0, KICK_DRIVE), 0.0);
+        assert!((soft_clip(1.0, KICK_DRIVE) - 1.0).abs() < 1e-6);
+        assert!((soft_clip(-1.0, KICK_DRIVE) + 1.0).abs() < 1e-6);
+
+        // Odd symmetry, so it adds odd harmonics and no DC.
+        for x in [0.1_f32, 0.35, 0.6, 0.9] {
+            assert!((soft_clip(x, KICK_DRIVE) + soft_clip(-x, KICK_DRIVE)).abs() < 1e-6);
+            assert!(
+                soft_clip(x, KICK_DRIVE) > x,
+                "{x} should come out louder, not quieter"
+            );
+        }
+
+        // Monotonic: a transfer curve that folded back would not be saturation,
+        // it would be a ring modulator with a temper.
+        let mut previous = f32::NEG_INFINITY;
+        for step in 0..=200 {
+            let x = -1.0 + step as f32 / 100.0;
+            let y = soft_clip(x, KICK_DRIVE);
+            assert!(y > previous, "not monotonic at {x}");
+            previous = y;
+        }
+
+        // And a drive of zero is a wire.
+        assert_eq!(soft_clip(0.42, 0.0), 0.42);
+    }
 
     #[test]
     fn general_midi_keys_map_to_the_drums_they_name() {

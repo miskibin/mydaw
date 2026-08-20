@@ -55,8 +55,8 @@
 use mydaw_rt_core::{NoteEvent, NoteKind, ProcessCtx, RtNode, RtNodeFactory};
 
 use crate::drum_kit::{
-    HatVoice, KickVoice, SnareVoice, CLOSED_HAT_DECAY_MS, CLOSED_HAT_KEY, CLOSED_HAT_SEED,
-    HAT_GAIN, KICK_KEY, OPEN_HAT_DECAY_MS, OPEN_HAT_KEY, OPEN_HAT_SEED, SNARE_KEY,
+    ClapVoice, HatVoice, KickVoice, SnareVoice, CLAP_KEY, CLOSED_HAT_DECAY_MS, CLOSED_HAT_KEY,
+    CLOSED_HAT_SEED, HAT_GAIN, KICK_KEY, OPEN_HAT_DECAY_MS, OPEN_HAT_KEY, OPEN_HAT_SEED, SNARE_KEY,
 };
 use crate::dsp::usable_sample_rate;
 
@@ -68,6 +68,8 @@ pub const SNARE_TYPE_ID: &str = "snare";
 pub const CLOSED_HAT_TYPE_ID: &str = "hat-closed";
 /// Node type id of the open hi-hat instrument.
 pub const OPEN_HAT_TYPE_ID: &str = "hat-open";
+/// Node type id of the hand-clap instrument.
+pub const CLAP_TYPE_ID: &str = "clap";
 
 /// How far a key may detune a pitched drum, in semitones either way.
 ///
@@ -85,19 +87,30 @@ pub const PITCH_RANGE_SEMITONES: i32 = 12;
 pub enum SingleDrum {
     Kick,
     Snare,
+    Clap,
     ClosedHat,
     OpenHat,
 }
 
 impl SingleDrum {
     /// Every per-drum instrument, in the order a fresh project racks them.
-    pub const ALL: [Self; 4] = [Self::Kick, Self::Snare, Self::ClosedHat, Self::OpenHat];
+    ///
+    /// Kick, snare, clap, hats: the order a drum machine's rows are laid out,
+    /// and the order anyone reaches for them in.
+    pub const ALL: [Self; 5] = [
+        Self::Kick,
+        Self::Snare,
+        Self::Clap,
+        Self::ClosedHat,
+        Self::OpenHat,
+    ];
 
     /// The node factory's `type_id`.
     pub const fn type_id(self) -> &'static str {
         match self {
             Self::Kick => KICK_TYPE_ID,
             Self::Snare => SNARE_TYPE_ID,
+            Self::Clap => CLAP_TYPE_ID,
             Self::ClosedHat => CLOSED_HAT_TYPE_ID,
             Self::OpenHat => OPEN_HAT_TYPE_ID,
         }
@@ -111,6 +124,7 @@ impl SingleDrum {
         match self {
             Self::Kick => "Kick",
             Self::Snare => "Snare",
+            Self::Clap => "Clap",
             Self::ClosedHat => "Hat Closed",
             Self::OpenHat => "Hat Open",
         }
@@ -119,10 +133,15 @@ impl SingleDrum {
     /// One line for a tooltip.
     pub const fn description(self) -> &'static str {
         match self {
-            Self::Kick => "Synthesised kick: 150 -> 50 Hz sine sweep with a noise click, tunable",
-            Self::Snare => "Synthesised snare: highpassed noise over a 180 Hz body, tunable",
-            Self::ClosedHat => "Synthesised closed hi-hat: highpassed noise, 60 ms decay",
-            Self::OpenHat => "Synthesised open hi-hat: highpassed noise, 350 ms decay",
+            Self::Kick => {
+                "Synthesised kick: 420 -> 50 Hz two-stage sweep, punch envelope, soft clip, tunable"
+            }
+            Self::Snare => {
+                "Synthesised snare: a crack over a wire buzz, two body modes at 180 Hz, tunable"
+            }
+            Self::Clap => "Synthesised clap: three offset noise bursts into a room tail",
+            Self::ClosedHat => "Synthesised closed hi-hat: six-oscillator metal, 60 ms decay",
+            Self::OpenHat => "Synthesised open hi-hat: six-oscillator metal, 350 ms decay",
         }
     }
 
@@ -134,6 +153,7 @@ impl SingleDrum {
         match self {
             Self::Kick => KICK_KEY,
             Self::Snare => SNARE_KEY,
+            Self::Clap => CLAP_KEY,
             Self::ClosedHat => CLOSED_HAT_KEY,
             Self::OpenHat => OPEN_HAT_KEY,
         }
@@ -168,6 +188,7 @@ pub fn pitch_ratio(drum: SingleDrum, key: u8) -> f32 {
 enum Voice {
     Kick(KickVoice),
     Snare(SnareVoice),
+    Clap(ClapVoice),
     Hat(HatVoice),
 }
 
@@ -194,6 +215,7 @@ impl SingleDrumNode {
         let voice = match drum {
             SingleDrum::Kick => Voice::Kick(KickVoice::new(sample_rate)),
             SingleDrum::Snare => Voice::Snare(SnareVoice::new(sample_rate)),
+            SingleDrum::Clap => Voice::Clap(ClapVoice::new(sample_rate)),
             SingleDrum::ClosedHat => Voice::Hat(HatVoice::new(
                 CLOSED_HAT_DECAY_MS,
                 CLOSED_HAT_SEED,
@@ -220,6 +242,7 @@ impl SingleDrumNode {
         match &self.voice {
             Voice::Kick(voice) => voice.is_active(),
             Voice::Snare(voice) => voice.is_active(),
+            Voice::Clap(voice) => voice.is_active(),
             Voice::Hat(voice) => voice.is_active(),
         }
     }
@@ -243,6 +266,7 @@ impl SingleDrumNode {
         match &mut self.voice {
             Voice::Kick(voice) => voice.trigger_pitched(velocity, ratio),
             Voice::Snare(voice) => voice.trigger_pitched(velocity, ratio),
+            Voice::Clap(voice) => voice.trigger(velocity),
             Voice::Hat(voice) => voice.trigger(velocity),
         }
     }
@@ -263,6 +287,7 @@ impl SingleDrumNode {
         match &mut self.voice {
             Voice::Kick(voice) => voice.render(span),
             Voice::Snare(voice) => voice.render(span),
+            Voice::Clap(voice) => voice.render(span),
             Voice::Hat(voice) => voice.render(span, HAT_GAIN),
         }
     }
@@ -329,9 +354,9 @@ mod tests {
     const SR: f64 = 48_000.0;
 
     #[test]
-    fn the_four_type_ids_are_the_documented_ones_and_are_all_different() {
+    fn the_type_ids_are_the_documented_ones_and_are_all_different() {
         let ids: Vec<&str> = SingleDrum::ALL.iter().map(|d| d.type_id()).collect();
-        assert_eq!(ids, vec!["kick", "snare", "hat-closed", "hat-open"]);
+        assert_eq!(ids, vec!["kick", "snare", "clap", "hat-closed", "hat-open"]);
         // Project files store these; a collision with the kit or the synth would
         // silently load the wrong instrument.
         for id in &ids {
@@ -341,7 +366,7 @@ mod tests {
         let mut sorted = ids.clone();
         sorted.sort_unstable();
         sorted.dedup();
-        assert_eq!(sorted.len(), 4);
+        assert_eq!(sorted.len(), SingleDrum::ALL.len());
     }
 
     #[test]

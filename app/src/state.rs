@@ -2161,6 +2161,7 @@ mod tests {
                 "poly-synth",
                 "kick",
                 "snare",
+                "clap",
                 "hat-closed",
                 "hat-open",
                 "drum-kit",
@@ -2383,15 +2384,15 @@ mod tests {
                 .iter()
                 .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
                 .collect::<Vec<_>>(),
-            vec![36, 38, 42, 46, mydaw_plugin_sequencer::DEFAULT_STEP_KEY],
-            "the four drums get their General MIDI keys, the synth middle C"
+            vec![36, 38, 39, 42, 46, mydaw_plugin_sequencer::DEFAULT_STEP_KEY],
+            "each drum gets its General MIDI key, the synth middle C"
         );
         assert!(dto.pattern_set.active.channels.iter().all(|clip| clip
             .steps
             .as_ref()
             .is_none_or(|row| row.steps.iter().all(|step| !step.on))));
         assert_eq!(
-            dto.pattern_set.active.channels[2]
+            dto.pattern_set.active.channels[3]
                 .steps
                 .as_ref()
                 .unwrap()
@@ -2487,7 +2488,7 @@ mod tests {
                 .iter()
                 .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
                 .collect::<Vec<_>>(),
-            vec![36, 38, 42, 46, mydaw_plugin_sequencer::DEFAULT_STEP_KEY]
+            vec![36, 38, 39, 42, 46, mydaw_plugin_sequencer::DEFAULT_STEP_KEY]
         );
 
         state.set_active_pattern_for_test(id);

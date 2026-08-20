@@ -329,10 +329,11 @@ impl Source {
     /// The synth leads because it is the default; the four drums follow in the
     /// order a kit is racked; the legacy kit and the test tone trail, because
     /// neither is something to reach for.
-    pub const BUILT_IN: [Self; 7] = [
+    pub const BUILT_IN: [Self; 8] = [
         Self::PolySynth,
         Self::Drum(SingleDrum::Kick),
         Self::Drum(SingleDrum::Snare),
+        Self::Drum(SingleDrum::Clap),
         Self::Drum(SingleDrum::ClosedHat),
         Self::Drum(SingleDrum::OpenHat),
         Self::DrumKit,
@@ -996,6 +997,7 @@ mod tests {
                 "poly-synth",
                 "kick",
                 "snare",
+                "clap",
                 "hat-closed",
                 "hat-open",
                 "drum-kit",

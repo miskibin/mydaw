@@ -6,7 +6,7 @@
 //! actually shows: the samples the node produces for one hit, folded into
 //! min/max bins the webview already knows how to draw.
 
-use mydaw_plugin_instruments::{CLOSED_HAT_KEY, KICK_KEY, OPEN_HAT_KEY, SNARE_KEY};
+use mydaw_plugin_instruments::KICK_KEY;
 use mydaw_plugin_sequencer::MAX_WAVEFORM_BINS;
 use mydaw_rt_core::{AudioBuffers, NoteEvent, ProcessCtx, RtNode, TransportSnapshot};
 use serde::Serialize;
@@ -132,12 +132,9 @@ fn preview_events(source: &Source, frames: usize) -> Vec<NoteEvent> {
         Source::TestTone => Vec::new(),
         Source::DrumKit => vec![NoteEvent::note_on(0, KICK_KEY, PREVIEW_VELOCITY)],
         Source::Drum(drum) => {
-            let key = match drum {
-                mydaw_plugin_instruments::SingleDrum::Kick => KICK_KEY,
-                mydaw_plugin_instruments::SingleDrum::Snare => SNARE_KEY,
-                mydaw_plugin_instruments::SingleDrum::ClosedHat => CLOSED_HAT_KEY,
-                mydaw_plugin_instruments::SingleDrum::OpenHat => OPEN_HAT_KEY,
-            };
+            // The drum's own base key, so each instrument previews at the pitch
+            // it was designed at rather than at whatever this list remembered.
+            let key = drum.base_key();
             vec![NoteEvent::note_on(0, key, PREVIEW_VELOCITY)]
         }
         Source::PolySynth | Source::Sampler(_) => {

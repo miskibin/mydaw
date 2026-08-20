@@ -1286,7 +1286,14 @@ mod tests {
                 .iter()
                 .map(|t| t.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Kick", "Snare", "Hat Closed", "Hat Open", "Poly Synth"]
+            vec![
+                "Kick",
+                "Snare",
+                "Clap",
+                "Hat Closed",
+                "Hat Open",
+                "Poly Synth"
+            ]
         );
         assert_eq!(file.patterns.len(), 1, "one empty pattern to start from");
         assert!(file.patterns[0].channels.iter().all(|clip| clip

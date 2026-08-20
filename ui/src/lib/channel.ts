@@ -9,7 +9,7 @@
 
 import type { TrackDto } from '../api/types';
 
-const DRUM_IDS = new Set(['kick', 'snare', 'hat-closed', 'hat-open', 'drum-kit']);
+const DRUM_IDS = new Set(['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'drum-kit']);
 
 export type ChannelKind = 'plugin' | 'sample' | 'drum' | 'synth' | 'tone';
 

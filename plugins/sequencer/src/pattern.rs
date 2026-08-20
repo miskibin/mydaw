@@ -177,6 +177,7 @@ pub fn row_label(key: u8) -> String {
     match key {
         36 => "Kick".to_owned(),
         38 => "Snare".to_owned(),
+        39 => "Clap".to_owned(),
         42 => "CH".to_owned(),
         46 => "OH".to_owned(),
         other => format!("Key {other}"),
