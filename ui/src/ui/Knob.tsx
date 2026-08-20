@@ -47,18 +47,8 @@ import {
   KNOB_TRAVEL_PX,
   startDrag,
   WHEEL_COMMIT_MS,
+  WHEEL_NORMALISED_STEP,
 } from './drag';
-
-/**
- * How much of a parameter's range one notch of the wheel covers.
- *
- * A fiftieth, of the *normalised* position: a `log` frequency therefore moves
- * by a constant musical interval per notch and a linear one by a constant
- * amount, which is the same promise the drag makes. Fifty notches end to end is
- * a couple of comfortable flicks -- fewer and a filter sweep is a wrist
- * exercise, more and the wheel overshoots everything.
- */
-const WHEEL_NORMALISED_STEP = 0.02;
 
 export interface KnobProps {
   /** The parameter's metadata. Synthesise one for anything not an insert. */

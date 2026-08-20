@@ -81,15 +81,19 @@ export function knobAngle(t: number): number {
 /**
  * A value in its own unit, as the readout and the parameter toast write it.
  *
- * The unit strings are the engine's: `dB`, `Hz`, `ms`, `%`, `:1`, `samples`, or
- * empty. Anything else is printed after the number unchanged rather than
- * guessed at.
+ * The unit strings are the engine's: `dB`, `Hz`, `ms`, `%`, `:1`, `samples`,
+ * `ct`, or empty. Anything else is printed after the number unchanged rather
+ * than guessed at.
  */
 export function formatValue(unit: string, value: number): string {
   if (!Number.isFinite(value)) return '--';
   switch (unit) {
     case 'dB':
       return `${value > 0 ? '+' : ''}${value.toFixed(1)} dB`;
+    case 'ct': {
+      const rounded = Math.round(value);
+      return `${rounded > 0 ? '+' : ''}${rounded} ct`;
+    }
     case 'Hz':
       return value >= 1000
         ? `${(value / 1000).toFixed(value >= 10_000 ? 1 : 2)} kHz`
@@ -105,6 +109,13 @@ export function formatValue(unit: string, value: number): string {
     default:
       return `${value.toFixed(2)} ${unit}`;
   }
+}
+
+/** Pan as `C`, `L40`, `R12` — what a mixer readout says, not `0.40`. */
+export function formatPan(pan: number): string {
+  if (!Number.isFinite(pan) || Math.abs(pan) < 0.005) return 'C';
+  const pct = Math.round(Math.abs(pan) * 100);
+  return pan < 0 ? `L${pct}` : `R${pct}`;
 }
 
 /**

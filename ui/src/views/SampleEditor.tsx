@@ -4,17 +4,25 @@
  * Clip and one-shot channels share this editor: waveform, start/end, volume,
  * pan and pitch. Everything else — a kick, a piano, the test tone — still
  * opens here for a preview of one hit.
+ *
+ * The sliders write the engine per frame and draw from a local overlay until a
+ * debounced `get_tracks` comes back. Routing every pixel through `mixerCommand`
+ * is how a control only moves as fast as the round trip — the same defect the
+ * mixer's faders and the inspector knobs already had to be cured of.
  */
 
 import { Show, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js';
 
-import type { SourcePreviewDto, TrackDto, WaveformDto } from '../api/types';
+import type { ParamDefDto, SourcePreviewDto, TrackDto, WaveformDto } from '../api/types';
 import { channelKind, isAudioClipChannel } from '../lib/channel';
+import { formatPan, formatValue } from '../lib/param';
 import { useAppState } from '../state';
 import { useView } from '../shell/view';
-import { Knob, spec } from '../ui/Knob';
+import { debounce, WHEEL_COMMIT_MS } from '../ui/drag';
 import { PluginWindow } from '../ui/PluginWindow';
+import { Slider } from '../ui/Slider';
 import { IconPlay } from '../ui/icons';
+import { spec } from '../ui/Knob';
 import { trackColor } from '../theme/tokens';
 
 import '../styles/sample.css';
@@ -27,7 +35,15 @@ const AUDITION_KEY = 60;
 const KIT_KEY = 36;
 
 const PAN_DEF = spec('pan', 'Pan', '', -1, 1, 0);
-const PITCH_DEF = spec('pitch', 'Pitch', 'ct', -1200, 1200, 0);
+const PITCH_DEF: ParamDefDto = { ...spec('pitch', 'Pitch', 'ct', -1200, 1200, 0), step: 1 };
+
+interface SampleDraft {
+  gainDb?: number;
+  pan?: number;
+  pitchCents?: number;
+  startFrames?: number;
+  endFrames?: number;
+}
 
 export function SampleEditor(): JSX.Element {
   const app = useAppState();
@@ -36,6 +52,7 @@ export function SampleEditor(): JSX.Element {
   const [preview, setPreview] = createSignal<SourcePreviewDto | null>(null);
   const [error, setError] = createSignal<string | null>(null);
   const [loading, setLoading] = createSignal(false);
+  const [draft, setDraft] = createSignal<SampleDraft>({});
 
   const track = (): TrackDto | undefined => {
     const index = view.sampleEditor();
@@ -51,7 +68,7 @@ export function SampleEditor(): JSX.Element {
   /**
    * What the waveform panel shows, as a stable key — not the `TrackDto`
    * itself, which is a fresh object on every mixer echo. Keying the fetch on
-   * the object would flash "rendering…" and refetch on every knob commit.
+   * the object would flash "rendering…" and refetch on every slider commit.
    */
   const sourceKey = createMemo((): string | null => {
     const current = track();
@@ -63,6 +80,7 @@ export function SampleEditor(): JSX.Element {
 
   createEffect(
     on(sourceKey, (key) => {
+      setDraft({});
       if (key === null) {
         setFileWave(null);
         setPreview(null);
@@ -134,7 +152,15 @@ export function SampleEditor(): JSX.Element {
     void app.mixerCommand((backend) => backend.setSelectedTrack(current.index));
     if (isAudioClipChannel(current)) {
       const path = app.audioSources().find((source) => source.id === current.audioSourceId)?.path;
-      if (path) void app.backend.previewAudioFile(path).catch(app.report);
+      if (path) {
+        void app.backend
+          .previewAudioFile(path, {
+            pitchCents: pitchCents(),
+            startFrames: startFrames(),
+            endFrames: current.sampleEndFrames === 0 ? 0 : endFrames(),
+          })
+          .catch(app.report);
+      }
       return;
     }
     clearTimeout(timer);
@@ -177,8 +203,10 @@ export function SampleEditor(): JSX.Element {
   };
 
   const totalFrames = (): number => fileWave()?.frames ?? 0;
-  const startFrames = (): number => track()?.sampleStartFrames ?? 0;
+  const startFrames = (): number => draft().startFrames ?? track()?.sampleStartFrames ?? 0;
   const endFrames = (): number => {
+    const overlay = draft().endFrames;
+    if (overlay !== undefined) return overlay;
     const current = track();
     const total = totalFrames();
     if (!current || current.sampleEndFrames === 0) return total;
@@ -193,6 +221,49 @@ export function SampleEditor(): JSX.Element {
     return total > 0 ? (endFrames() / total) * 100 : 100;
   };
 
+  const gainDb = (): number => draft().gainDb ?? track()?.gainDb ?? 0;
+  const pan = (): number => draft().pan ?? track()?.pan ?? 0;
+  const pitchCents = (): number => draft().pitchCents ?? track()?.pitchCents ?? 0;
+
+  const mixer = () => app.mixer();
+  const minGain = () => mixer()?.minGainDb ?? -60;
+  const maxGain = () => mixer()?.maxGainDb ?? 6;
+  const volDef = () => spec('vol', 'Vol', 'dB', minGain(), maxGain(), 0);
+  const startDef = (): ParamDefDto =>
+    spec('start', 'Start', '', 0, Math.max(1, totalFrames()), 0);
+  const endDef = (): ParamDefDto =>
+    spec('end', 'End', '', 0, Math.max(1, totalFrames()), Math.max(1, totalFrames()));
+
+  const settle = debounce(WHEEL_COMMIT_MS, () => {
+    void app.mixerCommand((backend) => backend.getTracks()).finally(() => setDraft({}));
+  });
+  onCleanup(() => settle.cancel());
+
+  function patch(next: SampleDraft): void {
+    setDraft((prev) => ({ ...prev, ...next }));
+  }
+
+  function setGain(db: number): void {
+    const current = track();
+    if (!current) return;
+    patch({ gainDb: db });
+    void app.backend.setTrackGain(current.index, db).catch(app.report);
+  }
+
+  function setPan(value: number): void {
+    const current = track();
+    if (!current) return;
+    patch({ pan: value });
+    void app.backend.setTrackPan(current.index, value).catch(app.report);
+  }
+
+  function setPitch(cents: number): void {
+    const current = track();
+    if (!current) return;
+    patch({ pitchCents: cents });
+    void app.backend.setTrackPitch(current.index, cents).catch(app.report);
+  }
+
   function setRegion(start: number, end: number): void {
     const current = track();
     if (!current) return;
@@ -201,6 +272,7 @@ export function SampleEditor(): JSX.Element {
     let hi = Math.max(0, Math.min(end, total));
     if (hi > 0 && hi <= lo) hi = total;
     const storedEnd = hi >= total ? 0 : hi;
+    patch({ startFrames: Math.floor(lo), endFrames: hi >= total ? total : Math.floor(hi) });
     void app.backend
       .setTrackSampleRegion(current.index, Math.floor(lo), Math.floor(storedEnd))
       .catch(app.report);
@@ -212,6 +284,7 @@ export function SampleEditor(): JSX.Element {
     const total = totalFrames();
     if (total <= 0) return;
     event.preventDefault();
+    settle.cancel();
     const framesAt = (clientX: number) => {
       const rect = target.getBoundingClientRect();
       const x = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
@@ -232,16 +305,12 @@ export function SampleEditor(): JSX.Element {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
+      settle();
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
   }
-
-  const mixer = () => app.mixer();
-  const minGain = () => mixer()?.minGainDb ?? -60;
-  const maxGain = () => mixer()?.maxGainDb ?? 6;
-  const volDef = () => spec('vol', 'Vol', 'dB', minGain(), maxGain(), 0);
 
   return (
     <Show when={track()}>
@@ -251,8 +320,8 @@ export function SampleEditor(): JSX.Element {
           color={colour()}
           z={80}
           focused
-          defaultWidth={640}
-          defaultHeight={420}
+          defaultWidth={560}
+          defaultHeight={samplePlay() ? 460 : 400}
           offset={0}
           onFocus={() => {}}
           onClose={() => view.closeSampleEditor()}
@@ -269,6 +338,11 @@ export function SampleEditor(): JSX.Element {
                   </span>
                 )}
               </Show>
+              <span class="wv-sample__hint">
+                {samplePlay()
+                  ? 'Drag the wave to crop · sliders write the channel'
+                  : 'Preview one hit through this channel'}
+              </span>
               <span class="wv-spacer" />
               <button
                 type="button"
@@ -314,38 +388,56 @@ export function SampleEditor(): JSX.Element {
               </Show>
             </div>
 
-            <div class="wv-sample__knobs">
-              <Knob
+            <div class="wv-sample__sliders">
+              <Show when={samplePlay() && totalFrames() > 0}>
+                <Slider
+                  def={startDef()}
+                  value={() => startFrames()}
+                  onInput={(frames) => setRegion(frames, endFrames())}
+                  onCommit={() => settle()}
+                  owner={owner()}
+                  color={colour()}
+                  format={(frames) => Math.round(frames).toLocaleString()}
+                  title="Region start — drag the wave or this slider"
+                />
+                <Slider
+                  def={endDef()}
+                  value={() => endFrames()}
+                  onInput={(frames) => setRegion(startFrames(), frames)}
+                  onCommit={() => settle()}
+                  owner={owner()}
+                  color={colour()}
+                  format={(frames) => Math.round(frames).toLocaleString()}
+                  title="Region end — drag the wave or this slider"
+                />
+              </Show>
+              <Slider
                 def={volDef()}
-                value={() => current().gainDb}
-                onInput={(db) =>
-                  void app.backend.setTrackGain(current().index, db).catch(app.report)
-                }
+                value={() => gainDb()}
+                onInput={setGain}
+                onCommit={() => settle()}
                 owner={owner()}
-                size={36}
                 color={colour()}
               />
-              <Knob
+              <Slider
                 def={PAN_DEF}
-                value={() => current().pan}
-                onInput={(pan) =>
-                  void app.backend.setTrackPan(current().index, pan).catch(app.report)
-                }
+                value={() => pan()}
+                onInput={setPan}
+                onCommit={() => settle()}
                 owner={owner()}
-                size={36}
                 color={colour()}
+                format={formatPan}
+                title="Pan — click or drag, double-click to centre"
               />
               <Show when={samplePlay()}>
-                <Knob
+                <Slider
                   def={PITCH_DEF}
-                  value={() => current().pitchCents}
-                  onInput={(cents) =>
-                    void app.backend.setTrackPitch(current().index, cents).catch(app.report)
-                  }
+                  value={() => pitchCents()}
+                  onInput={setPitch}
+                  onCommit={() => settle()}
                   owner={owner()}
-                  size={36}
                   color={colour()}
-                  title="Pitch in cents — shift for fine"
+                  title="Pitch in cents — resample, not stretch. Shift for fine."
                 />
               </Show>
             </div>
@@ -353,13 +445,20 @@ export function SampleEditor(): JSX.Element {
             <div class="wv-sample__foot">
               <span class="wv-sample__desc">{current().sourceLabel}</span>
               <span class="wv-spacer" />
+              <Show when={samplePlay()}>
+                <span class="wv-sample__meta">{formatValue('ct', pitchCents())}</span>
+              </Show>
               <Show when={fileWave()}>
                 {(wave) => (
                   <span class="wv-sample__meta">
                     {wave().frames.toLocaleString()} frames
                     {samplePlay()
                       ? ` · ${Math.round(startFrames())}–${
-                          current().sampleEndFrames === 0 ? 'end' : Math.round(endFrames())
+                          (draft().endFrames === undefined
+                            ? current().sampleEndFrames === 0
+                            : endFrames() >= totalFrames())
+                            ? 'end'
+                            : Math.round(endFrames())
                         }`
                       : ''}
                   </span>

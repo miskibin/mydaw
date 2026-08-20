@@ -25,7 +25,7 @@
 .wv-pl__corner {
   position: sticky;
   left: 0;
-  z-index: 7;
+  z-index: 9;
   display: flex;
   flex: none;
   align-items: center;
@@ -36,6 +36,11 @@
   border-right: 1px solid var(--line2);
   font: 400 9px 'Geist Mono Variable';
   color: var(--dim2);
+  cursor: pointer;
+}
+
+.wv-pl__corner:hover {
+  color: var(--txt2);
 }
 
 .wv-pl__ruler-track {
@@ -172,12 +177,35 @@
 
 .wv-pl__playhead {
   position: absolute;
-  top: 0;
+  top: 26px;
   bottom: 0;
-  z-index: 5;
+  z-index: 3;
   width: 1px;
   background: var(--playhead);
   pointer-events: none;
+}
+
+.wv-pl__playhead-cap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 12px;
+  height: 14px;
+  margin-left: -6px;
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+
+.wv-pl__playhead-cap::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  border-top: 10px solid var(--playhead);
+  border-right: 6px solid transparent;
+  border-left: 6px solid transparent;
+  content: '';
+  transform: translateX(-50%);
 }
 
 .wv-pl__hint {

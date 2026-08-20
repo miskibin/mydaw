@@ -143,6 +143,13 @@ export const KNOB_TRAVEL_PX = 140;
 export const FINE_FACTOR = 0.2;
 
 /**
+ * How much of a parameter's range one notch of the wheel covers, as a
+ * normalised fraction. Shared by knobs and sliders so a wheel that moved a
+ * filter also moves a pitch slider by the same musical interval per click.
+ */
+export const WHEEL_NORMALISED_STEP = 0.02;
+
+/**
  * How many notches one wheel event is worth. `+1` is up, i.e. *more*.
  *
  * **The magnitude of a wheel event is not a measurement of anything.** The same

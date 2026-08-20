@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { channelKind, engineOf, hasSampleWindow, isAudioClipChannel } from './channel';
+import { channelKind, clipChannelForSource, engineOf, hasSampleWindow, isAudioClipChannel } from './channel';
 
 describe('engineOf', () => {
   it('reads the prefix the engine puts on a wire id', () => {
@@ -52,5 +52,27 @@ describe('channelKind', () => {
     expect(isAudioClipChannel({ sourceId: 'clip:1', engine: 'clip' })).toBe(true);
     expect(isAudioClipChannel({ sourceId: 'oneshot:1', engine: 'sample' })).toBe(false);
     expect(isAudioClipChannel({ sourceId: 'kick', engine: 'synth' })).toBe(false);
+  });
+});
+
+describe('clipChannelForSource', () => {
+  it('prefers the clip-engine channel of that file', () => {
+    const tracks = [
+      { engine: 'synth' as const, index: 0 },
+      { engine: 'clip' as const, audioSourceId: 3, index: 1 },
+      { engine: 'sample' as const, audioSourceId: 3, index: 2 },
+    ];
+    expect(clipChannelForSource(tracks, 3)).toBe(1);
+  });
+
+  it('falls back to a one-shot of the same file', () => {
+    const tracks = [{ engine: 'sample' as const, audioSourceId: 8, index: 4 }];
+    expect(clipChannelForSource(tracks, 8)).toBe(4);
+  });
+
+  it('returns nothing when no channel plays that file', () => {
+    expect(clipChannelForSource([{ engine: 'clip' as const, audioSourceId: 1, index: 0 }], 9)).toBe(
+      undefined,
+    );
   });
 });

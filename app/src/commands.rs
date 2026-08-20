@@ -1338,10 +1338,24 @@ pub fn import_dropped_audio(
 }
 
 /// Audition a file without loading it into the project.
+///
+/// Pitch and region are the sample window's: omitted, the file plays as
+/// recorded (the browser's click-to-preview).
 #[tauri::command]
-pub fn preview_audio_file(state: State<'_, AppState>, path: String) -> Result<(), String> {
+pub fn preview_audio_file(
+    state: State<'_, AppState>,
+    path: String,
+    pitch_cents: Option<f32>,
+    start_frames: Option<u64>,
+    end_frames: Option<u64>,
+) -> Result<(), String> {
     state
-        .preview_audio_file(std::path::Path::new(&path))
+        .preview_audio_file(
+            std::path::Path::new(&path),
+            start_frames.unwrap_or(0),
+            end_frames.unwrap_or(0),
+            pitch_cents.unwrap_or(0.0),
+        )
         .map_err(|err| err.to_string())
 }
 

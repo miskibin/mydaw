@@ -457,6 +457,85 @@ button:disabled.wv-can-disable {
   box-shadow: inset 0 0 0 1px var(--dim2);
 }
 
+.wv-slider {
+  display: grid;
+  flex: none;
+  grid-template-columns: 44px minmax(0, 1fr) 64px;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  min-height: 22px;
+}
+
+.wv-slider.wv-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.wv-slider__name {
+  overflow: hidden;
+  font: 500 10px 'Geist Mono Variable';
+  color: var(--dim);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-slider__track {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--sunk);
+  box-shadow: inset 0 0 0 1px var(--line2);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.wv-slider__fill {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  border-radius: 4px;
+  background: var(--slider-acc, var(--acc));
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.wv-slider__center {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 50%;
+  width: 1px;
+  margin-left: -0.5px;
+  background: var(--line2);
+  pointer-events: none;
+}
+
+.wv-slider__thumb {
+  position: absolute;
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 50%;
+  background: var(--txt);
+  box-shadow: 0 0 0 1px var(--line2);
+  pointer-events: none;
+}
+
+.wv-slider__track:hover .wv-slider__thumb {
+  background: var(--slider-acc, var(--acc));
+}
+
+.wv-slider__value {
+  overflow: hidden;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--txt2);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .wv-knob__pointer {
   position: absolute;
   top: 3px;

@@ -403,6 +403,16 @@ export interface AudioSourceDto {
   bytes: number;
 }
 
+/** Optional pitch and crop for `previewAudioFile`. Omitted means as-recorded. */
+export interface AudioPreviewOpts {
+  /** Channel pitch in cents (`-1200..=1200`). */
+  pitchCents?: number;
+  /** SMP region start, in the file's frames. */
+  startFrames?: number;
+  /** SMP region end, exclusive. `0` means the whole file. */
+  endFrames?: number;
+}
+
 /** A root in the sample library: bundled Packs, or a user extra-search folder. */
 export interface LibraryRootDto {
   id: string;

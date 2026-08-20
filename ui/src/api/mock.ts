@@ -1998,8 +1998,16 @@ export class MockBackend implements Backend {
     return [];
   }
 
-  async previewAudioFile(path: string): Promise<void> {
-    console.info(`[mock] preview ${path}`);
+  async previewAudioFile(
+    path: string,
+    opts?: { pitchCents?: number; startFrames?: number; endFrames?: number },
+  ): Promise<void> {
+    const extra =
+      opts &&
+      (opts.pitchCents || opts.startFrames || opts.endFrames)
+        ? ` pitch=${opts.pitchCents ?? 0} region=${opts.startFrames ?? 0}–${opts.endFrames ?? 'end'}`
+        : '';
+    console.info(`[mock] preview ${path}${extra}`);
   }
 
   private ensureClipChannel(sourceId: number): void {

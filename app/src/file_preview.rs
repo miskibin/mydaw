@@ -21,7 +21,9 @@ use std::sync::Arc;
 
 use mydaw_audio_file::{cubic, decode_stereo, taps, DecodeError, CHANNELS};
 use mydaw_plugin_audio_io::AudioIoError;
-use mydaw_plugin_sequencer::{playback_step, ramp_step, AudioSource, CLIP_RAMP_MS};
+use mydaw_plugin_sequencer::{
+    pitch_ratio, playback_step, ramp_step, AudioSource, CLIP_RAMP_MS,
+};
 use mydaw_rt_core::basedrop::{Handle, Owned};
 use mydaw_rt_core::{ProcessCtx, RtNode};
 use parking_lot::Mutex;
@@ -39,7 +41,14 @@ const PREVIEW_QUEUE_CAPACITY: usize = 8;
 const PREVIEW_MAX_SECONDS: f64 = 15.0;
 
 /// What crosses the RT wall: a new take, or silence.
-type PreviewMsg = Option<Arc<AudioSource>>;
+struct PreviewTake {
+    source: Arc<AudioSource>,
+    start: f64,
+    end: f64,
+    ratio: f64,
+}
+
+type PreviewMsg = Option<PreviewTake>;
 
 /// Non-RT end, for one open stream.
 struct PreviewSender {
@@ -89,8 +98,38 @@ impl FilePreviewBus {
     /// # Errors
     /// A decode failure, or [`AudioIoError::NotRunning`] when no stream is open.
     pub fn play(&self, path: &Path) -> Result<(), PreviewFileError> {
+        self.play_tuned(path, 0, 0, 0.0)
+    }
+
+    /// Decode `path` and play it at `pitch_cents`, cropped to the SMP region.
+    ///
+    /// `end_frames == 0` means the file's last frame. Same crop and resample
+    /// the sample window writes onto the channel, so Preview there is the
+    /// channel, not a second opinion about the file.
+    ///
+    /// # Errors
+    /// A decode failure, or [`AudioIoError::NotRunning`] when no stream is open.
+    pub fn play_tuned(
+        &self,
+        path: &Path,
+        start_frames: u64,
+        end_frames: u64,
+        pitch_cents: f32,
+    ) -> Result<(), PreviewFileError> {
         let source = decode_preview(path)?;
-        self.install(Some(Arc::new(source)))?;
+        let frames = source.frames() as u64;
+        let start = start_frames.min(frames) as f64;
+        let end = if end_frames == 0 || end_frames > frames {
+            frames as f64
+        } else {
+            end_frames as f64
+        };
+        self.install(Some(PreviewTake {
+            source: Arc::new(source),
+            start,
+            end: end.max(start),
+            ratio: pitch_ratio(pitch_cents),
+        }))?;
         Ok(())
     }
 
@@ -170,8 +209,9 @@ impl FilePreviewNode {
             return;
         };
         if latest.as_ref().is_some() {
+            let start = latest.as_ref().as_ref().map(|take| take.start).unwrap_or(0.0);
             self.current = Some(latest);
-            self.position = 0.0;
+            self.position = start;
             self.env = ramp.min(1.0);
             self.releasing = false;
         } else {
@@ -184,19 +224,19 @@ impl FilePreviewNode {
         // RT-side `Arc` clone: once `current` is queued to the collector, a
         // clone could become the last reference, and its drop would free the
         // decoded audio inside the callback.
-        let Some(source) = self.current.as_ref().and_then(|owned| owned.as_ref()) else {
+        let Some(take) = self.current.as_ref().and_then(|owned| owned.as_ref()) else {
             return;
         };
-        if source.frames() == 0 {
+        if take.source.frames() == 0 {
             return;
         }
         let frames = ctx.frames;
         if frames == 0 {
             return;
         }
-        let padded = source.padded();
-        let source_frames = source.frames() as f64;
-        let step = playback_step(source.sample_rate(), ctx.sample_rate);
+        let padded = take.source.padded();
+        let end = take.end;
+        let step = playback_step(take.source.sample_rate(), ctx.sample_rate) * take.ratio;
         if step <= 0.0 {
             return;
         }
@@ -204,11 +244,11 @@ impl FilePreviewNode {
 
         let mut finished = false;
         for frame in 0..frames {
-            if self.position >= source_frames || self.position < 0.0 {
+            if self.position >= end || self.position < take.start {
                 finished = true;
                 break;
             }
-            if !self.releasing && self.position + step >= source_frames {
+            if !self.releasing && self.position + step >= end {
                 self.releasing = true;
             }
             let index = self.position as usize;
@@ -250,10 +290,20 @@ impl RtNode for FilePreviewNode {
 mod tests {
     use super::*;
     use mydaw_rt_core::basedrop::Collector;
-    use mydaw_rt_core::{AudioBuffers, PlayMode, ProcessCtx, TransportSnapshot};
+    use mydaw_rt_core::{AudioBuffers, PlayMode, ProcessCtx, RtNode, TransportSnapshot};
 
     const SR: f64 = 48_000.0;
     const BLOCK: usize = 256;
+
+    fn take(source: Arc<AudioSource>, ratio: f64) -> PreviewTake {
+        let end = source.frames() as f64;
+        PreviewTake {
+            source,
+            start: 0.0,
+            end,
+            ratio,
+        }
+    }
 
     #[test]
     fn a_detached_bus_refuses_to_publish_rather_than_panicking() {
@@ -280,7 +330,7 @@ mod tests {
             SR,
             vec![0.25; 2_000 * CHANNELS],
         ));
-        bus.install(Some(source)).expect("publishes");
+        bus.install(Some(take(source, 1.0))).expect("publishes");
 
         let mut buffers = AudioBuffers::new(BLOCK);
         let mut ctx = ProcessCtx::new(
@@ -322,7 +372,8 @@ mod tests {
             SR,
             vec![0.25; 300 * CHANNELS],
         ));
-        bus.install(Some(Arc::clone(&source))).expect("publishes");
+        bus.install(Some(take(Arc::clone(&source), 1.0)))
+            .expect("publishes");
 
         let mut buffers = AudioBuffers::new(BLOCK);
         // 300 frames plus the 2 ms fade fit in two blocks; render a third so
@@ -354,5 +405,58 @@ mod tests {
             1,
             "the collector must be the one that frees it"
         );
+    }
+
+    #[test]
+    fn a_plus_octave_preview_consumes_the_file_in_half_the_blocks() {
+        let collector = Collector::new();
+        let bus = Arc::new(FilePreviewBus::new());
+        let mut node = bus.open(collector.handle());
+        let frames = 200;
+        let source = Arc::new(AudioSource::from_stereo(
+            0,
+            Path::new("octave.wav"),
+            SR,
+            vec![0.25; frames * CHANNELS],
+        ));
+        bus.install(Some(take(source, 2.0))).expect("publishes");
+
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let mut ctx = ProcessCtx::new(
+            &mut buffers,
+            SR,
+            BLOCK,
+            TransportSnapshot {
+                sample_pos: 0,
+                playing: false,
+                bpm: 120.0,
+                mode: PlayMode::Pattern,
+            },
+        );
+        ctx.buffers.silence();
+        node.process(&mut ctx);
+        // 200 frames at ratio 2 is 100 output frames plus the 2 ms fade,
+        // which fits in one 256-frame block.
+        assert!(
+            node_is_idle(&mut node, &mut buffers),
+            "octave-up preview must finish inside one block of 256"
+        );
+    }
+
+    fn node_is_idle(node: &mut Box<dyn RtNode>, buffers: &mut AudioBuffers) -> bool {
+        let mut ctx = ProcessCtx::new(
+            buffers,
+            SR,
+            BLOCK,
+            TransportSnapshot {
+                sample_pos: 0,
+                playing: false,
+                bpm: 120.0,
+                mode: PlayMode::Pattern,
+            },
+        );
+        ctx.buffers.silence();
+        node.process(&mut ctx);
+        buffers.as_slices()[0].iter().all(|sample| *sample == 0.0)
     }
 }

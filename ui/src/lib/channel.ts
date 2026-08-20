@@ -72,3 +72,23 @@ export function isAudioClipChannel(
 ): boolean {
   return track.engine === 'clip' || track.sourceId.startsWith('clip:');
 }
+
+/**
+ * The rack/mixer channel a playlist audio clip opens the sample window on.
+ *
+ * Same file, same channel: clip-engine first, then a one-shot of that file, so
+ * a sampler dropped on the rack is still reachable from an arrangement clip of
+ * the same source.
+ */
+export function clipChannelForSource(
+  tracks: readonly Pick<TrackDto, 'engine' | 'audioSourceId' | 'index'>[],
+  sourceId: number,
+): number | undefined {
+  const clip = tracks.find(
+    (track) => track.engine === 'clip' && track.audioSourceId === sourceId,
+  );
+  if (clip) return clip.index;
+  return tracks.find(
+    (track) => track.engine === 'sample' && track.audioSourceId === sourceId,
+  )?.index;
+}

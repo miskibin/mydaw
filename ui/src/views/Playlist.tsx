@@ -36,7 +36,7 @@
  * wave instead of squeezing it.
  */
 
-import { For, Index, Show, createEffect, createSignal, onCleanup } from 'solid-js';
+import { For, Index, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 
 import type { ClipDto, PatternDto, PlaylistTrackDto, WaveformDto } from '../api/types';
 import {
@@ -49,6 +49,7 @@ import {
   ticksToSamples,
 } from '../lib/pattern';
 import { allowDrop, droppedAudioFile, droppedAudioPath, importDroppedFile, parseDrop } from '../lib/dnd';
+import { clipChannelForSource } from '../lib/channel';
 import { useAppState } from '../state';
 import {
   DEFAULT_LANE_H,
@@ -63,6 +64,7 @@ import {
 } from '../shell/view';
 import { trackColor, wash } from '../theme/tokens';
 import { onFrame } from '../ui/frameLoop';
+import { wheelNotches } from '../ui/drag';
 import { IconEraseTool, IconPaintTool, IconSelectTool, IconX } from '../ui/icons';
 
 /** Pixels one bar covers at zoom 1. */
@@ -159,7 +161,9 @@ export function Playlist(): ReturnType<typeof Show> {
   const pendingPatterns = new Set<number>();
 
   let playheadEl: HTMLDivElement | undefined;
+  let playheadCapEl: HTMLDivElement | undefined;
   let scrollEl: HTMLDivElement | undefined;
+  let rulerTrackEl: HTMLDivElement | undefined;
 
   const pxPerTick = () => (BAR_PX * view.playlistZoom()) / TICKS_PER_BAR;
   const playlist = () => app.playlist();
@@ -259,25 +263,97 @@ export function Playlist(): ReturnType<typeof Show> {
   // and must not go through a signal. It is only meaningful in SONG mode --
   // in PAT mode the transport is looping a pattern, not running the timeline.
   onFrame(() => {
-    if (!playheadEl) return;
-    if (app.playMode() !== 'song') {
-      playheadEl.style.display = 'none';
-      return;
-    }
-    playheadEl.style.display = '';
     const ticks = samplesToTicks(
       app.playhead.positionSamples(),
       app.playhead.getSampleRate(),
       app.bpm(),
     );
-    playheadEl.style.transform = `translateX(${ticks * pxPerTick()}px)`;
+    const x = `${ticks * pxPerTick()}px`;
+    if (playheadEl) {
+      playheadEl.style.display = app.playMode() === 'song' ? '' : 'none';
+      playheadEl.style.transform = `translateX(${x})`;
+    }
+    if (playheadCapEl) {
+      playheadCapEl.style.display = app.playMode() === 'song' ? '' : 'none';
+      playheadCapEl.style.transform = `translateX(${x})`;
+    }
   });
 
-  const onWheel = (event: WheelEvent) => {
-    if (!event.shiftKey) return;
+  /** Song position under a pointer on the ruler-track, in ticks. */
+  function ticksFromClientX(clientX: number): number {
+    const el = rulerTrackEl;
+    if (!el) return 0;
+    const rect = el.getBoundingClientRect();
+    return Math.max(0, (clientX - rect.left) / pxPerTick());
+  }
+
+  function seekTicks(ticks: number): void {
+    app.seek(ticksToSamples(ticks, app.playhead.getSampleRate(), app.bpm()));
+    app.say('Transport · Seek', `bar ${(ticks / TICKS_PER_BAR + 1).toFixed(2)}`);
+    if (ticks <= 0.5 && scrollEl) scrollEl.scrollLeft = 0;
+  }
+
+  /** Click-drag the ruler (or the playhead cap) to scrub the song position. */
+  function onSeekPointerDown(event: PointerEvent): void {
+    if (event.button !== 0) return;
     event.preventDefault();
-    view.setPlaylistZoom((zoom) => clampZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)));
-  };
+    event.stopPropagation();
+    const apply = (clientX: number) => {
+      seekTicks(ticksFromClientX(clientX));
+      if (!scrollEl) return;
+      const box = scrollEl.getBoundingClientRect();
+      const left = box.left + HEAD_W;
+      const edge = 36;
+      if (clientX < left + edge) {
+        scrollEl.scrollLeft = Math.max(0, scrollEl.scrollLeft - 28);
+      } else if (clientX > box.right - edge) {
+        scrollEl.scrollLeft += 28;
+      }
+    };
+    apply(event.clientX);
+    const onMove = (move: PointerEvent) => apply(move.clientX);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.style.removeProperty('cursor');
+      document.body.style.removeProperty('user-select');
+    };
+    document.body.style.setProperty('cursor', 'ew-resize');
+    document.body.style.setProperty('user-select', 'none');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  onMount(() => {
+    const el = scrollEl;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        const notches = wheelNotches(event);
+        if (notches === 0) return;
+        view.setPlaylistZoom((zoom) => clampZoom(zoom * (notches > 0 ? 1.1 : 1 / 1.1)));
+        return;
+      }
+      const overHeader = (event.target as HTMLElement | null)?.closest(
+        '.wv-pl__head, .wv-pl__corner, .wv-pl__add',
+      );
+      if (overHeader) return;
+      event.preventDefault();
+      // Mouse wheel is deltaY only: pan the timeline (FL's playlist). A
+      // trackpad swipe sends deltaX for time and deltaY for lanes.
+      if (event.deltaX !== 0) {
+        el.scrollLeft += event.deltaX;
+        el.scrollTop += event.deltaY;
+      } else {
+        el.scrollLeft += event.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    onCleanup(() => el.removeEventListener('wheel', onWheel));
+  });
 
   // --- placing -------------------------------------------------------------
 
@@ -354,9 +430,29 @@ export function Playlist(): ReturnType<typeof Show> {
 
   // --- moving and resizing -------------------------------------------------
 
+  function openClip(clip: ClipDto): void {
+    if (clip.kind === 'audio' && clip.sourceId !== undefined) {
+      const index = clipChannelForSource(app.tracks(), clip.sourceId);
+      if (index === undefined) {
+        app.say('Sample', 'no channel plays that file yet');
+        return;
+      }
+      void app.mixerCommand((backend) => backend.setSelectedTrack(index));
+      view.openSampleEditor(index);
+      return;
+    }
+    if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
+    void app.sequencerCommand((backend) => backend.setActivePattern(clip.patternId!));
+    view.go('rack');
+  }
+
   function onClipPointerDown(event: PointerEvent, clip: ClipDto, mode: 'move' | 'resize'): void {
     event.stopPropagation();
     if (event.button !== 0) return;
+    if (event.detail >= 2) {
+      openClip(clip);
+      return;
+    }
     if (view.playlistTool() === 'delete') {
       removeClip(clip);
       return;
@@ -523,7 +619,7 @@ export function Playlist(): ReturnType<typeof Show> {
           <button
             type="button"
             class="wv-zoom__btn"
-            title="Zoom out (shift-scroll)"
+            title="Zoom out (shift-scroll or ctrl-scroll)"
             onClick={() => view.setPlaylistZoom((zoom) => clampZoom(zoom / 1.25))}
           >
             −
@@ -531,7 +627,7 @@ export function Playlist(): ReturnType<typeof Show> {
           <button
             type="button"
             class="wv-zoom__btn"
-            title="Zoom in (shift-scroll)"
+            title="Zoom in (shift-scroll or ctrl-scroll)"
             onClick={() => view.setPlaylistZoom((zoom) => clampZoom(zoom * 1.25))}
           >
             +
@@ -544,24 +640,26 @@ export function Playlist(): ReturnType<typeof Show> {
         </span>
       </div>
 
-      <div class="wv-pl" ref={scrollEl} onWheel={onWheel}>
+      <div class="wv-pl" ref={scrollEl}>
         <div class="wv-pl__inner" style={{ width: `${HEAD_W + laneWidth()}px` }}>
           <div class="wv-pl__ruler">
-            <div class="wv-pl__corner" style={{ width: `${HEAD_W}px` }}>
+            <div
+              class="wv-pl__corner"
+              style={{ width: `${HEAD_W}px` }}
+              title="Click to jump the timeline to bar 1"
+              onClick={() => {
+                if (scrollEl) scrollEl.scrollLeft = 0;
+                seekTicks(0);
+              }}
+            >
               {playlist()?.tracks.length ?? 0} lanes · {playlist()?.clips.length ?? 0} clips
             </div>
             <div
               class="wv-pl__ruler-track"
+              ref={rulerTrackEl}
               style={{ width: `${laneWidth()}px` }}
-              title="Click to move the playhead"
-              onPointerDown={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const ticks = Math.max(0, (event.clientX - rect.left) / pxPerTick());
-                app.seek(
-                  ticksToSamples(ticks, app.playhead.getSampleRate(), app.bpm()),
-                );
-                app.say('Transport · Seek', `bar ${(ticks / TICKS_PER_BAR + 1).toFixed(2)}`);
-              }}
+              title="Drag to move the playhead"
+              onPointerDown={onSeekPointerDown}
             >
               <Index each={Array.from({ length: bars() })}>
                 {(_, bar) => (
@@ -577,6 +675,12 @@ export function Playlist(): ReturnType<typeof Show> {
                   </span>
                 )}
               </Index>
+              <div
+                class="wv-pl__playhead-cap"
+                ref={playheadCapEl}
+                title="Drag the playhead"
+                onPointerDown={onSeekPointerDown}
+              />
             </div>
           </div>
 
@@ -678,28 +782,7 @@ export function Playlist(): ReturnType<typeof Show> {
                         selected={view.selectedClip() === clip.id}
                         onDown={(event, mode) => onClipPointerDown(event, clip, mode)}
                         onDelete={() => removeClip(clip)}
-                        onOpen={() => {
-                          if (clip.kind === 'audio' && clip.sourceId !== undefined) {
-                            const channel = app
-                              .tracks()
-                              .find(
-                                (entry) =>
-                                  entry.engine === 'clip' && entry.audioSourceId === clip.sourceId,
-                              );
-                            if (channel) {
-                              void app.mixerCommand((backend) =>
-                                backend.setSelectedTrack(channel.index),
-                              );
-                              view.openSampleEditor(channel.index);
-                            }
-                            return;
-                          }
-                          if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
-                          void app.sequencerCommand((backend) =>
-                            backend.setActivePattern(clip.patternId!),
-                          );
-                          view.go('rack');
-                        }}
+                        onOpen={() => openClip(clip)}
                       />
                     )}
                   </For>
@@ -899,7 +982,7 @@ function Clip(props: {
       title={
         props.clip.kind === 'pattern'
           ? `${props.name} — drag to move, drag the right edge to resize, double-click to edit, right-click to delete`
-          : `${props.name} — audio clip. Audio clips play into the master bus; per-lane routing is not implemented yet.`
+          : `${props.name} — audio clip. Double-click to open the sample window, drag to move, right-click to delete`
       }
     >
       <span class="wv-clip__label">{props.name}</span>

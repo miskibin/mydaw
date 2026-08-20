@@ -1695,8 +1695,13 @@ impl AppState {
     pub fn preview_audio_file(
         &self,
         path: &std::path::Path,
+        start_frames: u64,
+        end_frames: u64,
+        pitch_cents: f32,
     ) -> Result<(), crate::file_preview::PreviewFileError> {
-        self.tracks.file_preview().play(path)
+        self.tracks
+            .file_preview()
+            .play_tuned(path, start_frames, end_frames, pitch_cents)
     }
 
     /// How long a clip covering the whole of `source_id` should be, in ticks.

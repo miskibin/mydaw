@@ -98,13 +98,20 @@
   text-align: center;
 }
 
-.wv-sample__knobs {
+.wv-sample__hint {
+  overflow: hidden;
+  font: 400 10px 'Geist Variable';
+  color: var(--dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-sample__sliders {
   display: flex;
   flex: none;
-  gap: 18px;
-  justify-content: center;
-  align-items: flex-end;
-  padding: 4px 12px 10px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 14px 10px;
 }
 
 .wv-sample__foot {

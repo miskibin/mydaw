@@ -1,6 +1,7 @@
 import type {
   AssetStatus,
   AssetStatusDto,
+  AudioPreviewOpts,
   AudioSourceDto,
   ClapGuiStatus,
   ClapPluginInfoDto,
@@ -319,8 +320,13 @@ export interface Backend {
   addLibraryFolder(): Promise<LibraryRootDto[] | null>;
   removeLibraryFolder(id: string): Promise<LibraryRootDto[]>;
   listLibraryDir(rootId: string, relPath: string): Promise<LibraryEntryDto[]>;
-  /** Audition a file without loading it into the project. */
-  previewAudioFile(path: string): Promise<void>;
+  /**
+   * Audition a file without loading it into the project.
+   *
+   * `opts` is the sample window's pitch and crop; omitted, the file plays as
+   * recorded (the browser's click-to-preview).
+   */
+  previewAudioFile(path: string, opts?: AudioPreviewOpts): Promise<void>;
   /** Place an audio file on the timeline. `length` absent means the whole file. */
   addAudioClip(
     sourceId: number,
@@ -810,8 +816,13 @@ class TauriBackend implements Backend {
     return this.call('list_library_dir', { rootId, relPath });
   }
 
-  previewAudioFile(path: string): Promise<void> {
-    return this.call('preview_audio_file', { path });
+  previewAudioFile(path: string, opts?: AudioPreviewOpts): Promise<void> {
+    return this.call('preview_audio_file', {
+      path,
+      pitchCents: opts?.pitchCents ?? null,
+      startFrames: opts?.startFrames ?? null,
+      endFrames: opts?.endFrames ?? null,
+    });
   }
 
   addAudioClip(
