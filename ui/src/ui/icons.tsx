@@ -117,6 +117,15 @@ export function IconLoop(): JSX.Element {
   );
 }
 
+export function IconSettings(): JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M6.6 1.8h2.8l.4 1.7c.4.15.8.38 1.14.66l1.65-.62 1.4 2.42-1.25 1.2c.05.4.05.82 0 1.22l1.25 1.2-1.4 2.42-1.65-.62c-.34.28-.74.5-1.14.66l-.4 1.7H6.6l-.4-1.7a5 5 0 0 1-1.14-.66l-1.65.62-1.4-2.42 1.25-1.2a5 5 0 0 1 0-1.22l-1.25-1.2 1.4-2.42 1.65.62c.34-.28.74-.5 1.14-.66z" />
+      <circle cx="8" cy="7.8" r="2.05" />
+    </svg>
+  );
+}
+
 export function IconSun(): JSX.Element {
   return (
     <svg

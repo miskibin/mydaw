@@ -211,24 +211,20 @@
 .wv-settingsbtn {
   display: flex;
   flex: none;
-  gap: 5px;
   align-items: center;
+  justify-content: center;
+  width: 28px;
   height: 26px;
-  padding: 0 8px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 6px;
   color: var(--dim);
-  font: 600 9px 'Geist Mono Variable';
-  letter-spacing: 0.08em;
 }
 
-.wv-settingsbtn:hover {
+.wv-settingsbtn:hover,
+.wv-settingsbtn:focus-visible {
+  border-color: var(--line2);
   background: var(--chip);
   color: var(--txt);
-}
-
-.wv-settingsbtn__label {
-  font-family: 'Geist Variable';
 }
 
 .wv-themebtn {

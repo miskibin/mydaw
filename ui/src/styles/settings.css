@@ -4,7 +4,9 @@
 .wv-settings h1 { margin: 0; font-size: clamp(28px, 4vw, 44px); letter-spacing: -.04em; }
 .wv-settings__lede, .wv-settings__section-head p { margin: 10px 0 0; color: var(--dim); line-height: 1.5; }
 .wv-settings__close { flex: none; padding: 9px 13px; border: 1px solid var(--line); border-radius: 6px; color: var(--txt2); font-size: 11px; }
-.wv-settings__close:hover { background: var(--chip); color: var(--txt); }
+.wv-settings__close:hover,
+.wv-settings__close:focus-visible { background: var(--chip); color: var(--txt); border-color: var(--line2); }
+.wv-settings button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 .wv-settings__section { max-width: 980px; margin: 0 auto; padding: 24px 0 30px; border-top: 1px solid var(--line); }
 .wv-settings__section-head { display: flex; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
 .wv-settings h2 { margin: 0; font-size: 15px; }
