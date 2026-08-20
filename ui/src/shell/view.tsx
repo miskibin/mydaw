@@ -175,6 +175,15 @@ export interface ViewState {
   selectedClip: Accessor<number | null>;
   setSelectedClip: Setter<number | null>;
   /**
+   * Whether the arrangement scrolls to keep up with a playing playhead.
+   *
+   * Lives here rather than inside `Playlist` because the view is unmounted
+   * every time you look at the rack, and a follow toggle that reset itself on
+   * F6/F5 would be a setting nobody could turn off.
+   */
+  playlistFollow: Accessor<boolean>;
+  setPlaylistFollow: Setter<boolean>;
+  /**
    * How tall each playlist lane is drawn, in pixels, by **lane id**.
    *
    * By id and not by index, because removing a lane shifts every index above it
@@ -220,6 +229,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [playlistSnap, setPlaylistSnap] = createSignal(PLAYLIST_SNAPS[0]![0]);
   const [playlistZoom, setPlaylistZoom] = createSignal(1);
   const [selectedClip, setSelectedClip] = createSignal<number | null>(null);
+  const [playlistFollow, setPlaylistFollow] = createSignal(true);
   const [laneHeights, setLaneHeights] = createSignal<Record<number, number>>({});
   const [wideBar, setWideBar] = createSignal(
     typeof window === 'undefined' ? true : window.innerWidth >= WIDE_BAR_PX,
@@ -328,6 +338,8 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     setPlaylistZoom,
     selectedClip,
     setSelectedClip,
+    playlistFollow,
+    setPlaylistFollow,
     laneHeights,
     setLaneHeights,
     wideBar,

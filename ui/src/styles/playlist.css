@@ -28,6 +28,7 @@
   z-index: 7;
   display: flex;
   flex: none;
+  gap: 6px;
   align-items: center;
   overflow: hidden;
   padding-left: 10px;
@@ -38,10 +39,49 @@
   color: var(--dim2);
 }
 
+.wv-pl__corner:hover {
+  color: var(--acc);
+}
+
+.wv-pl__corner svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+
 .wv-pl__ruler-track {
   position: relative;
   flex: none;
-  cursor: pointer;
+  cursor: ew-resize;
+}
+
+/*
+ * The playhead's head, drawn in the ruler.
+ *
+ * A second element rather than the top of the line, because the two live on
+ * opposite sides of the sticky lane headers: the line has to pass *under* them
+ * (see `.wv-pl__playhead`) and the marker has to sit above the ruler's bar
+ * numbers. One element cannot be both.
+ */
+.wv-pl__cursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--playhead);
+  pointer-events: none;
+}
+
+.wv-pl__cursor::after {
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border-top: 6px solid var(--playhead);
+  border-right: 5px solid transparent;
+  border-left: 5px solid transparent;
+  content: '';
 }
 
 .wv-pl__mark {
@@ -170,11 +210,18 @@
   background: var(--sunk);
 }
 
+/*
+ * The line down the lanes.
+ *
+ * Under the lane headers (`z-index: 4`) and over the clips: at bar 1 with the
+ * arrangement scrolled right, a playhead above the headers drew a red stripe
+ * across every lane name.
+ */
 .wv-pl__playhead {
   position: absolute;
   top: 0;
   bottom: 0;
-  z-index: 5;
+  z-index: 3;
   width: 1px;
   background: var(--playhead);
   pointer-events: none;
