@@ -1,7 +1,6 @@
 import type { JSX } from 'solid-js';
 import type { EffectInfoDto } from '../../api/types';
 import { EqCurve } from '../../ui/EqCurve';
-import { SpectrumTerrain } from '../../ui/SpectrumTerrain';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { bandGainRangeDb } from '../../lib/effectLayout';
 import { Advanced, PrimaryRow } from './chrome';
@@ -21,13 +20,13 @@ export function EqEditor(props: {
     <>
       <div class="wv-fx__display wv-fx__display--eq">
         <div class="wv-fx__stage">
-          <SpectrumTerrain bins={props.spectrum} />
           <EqCurve
             values={props.values}
             rangeDb={bandGainRangeDb(props.info)}
             height={320}
             detailed
             muted={props.muted}
+            spectrum={props.spectrum}
             onParam={(id, value) => props.knobs.setParam(id, value)}
             onCommit={() => props.knobs.commit()}
             onListen={props.onListen}

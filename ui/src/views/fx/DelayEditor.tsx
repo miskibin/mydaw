@@ -5,7 +5,6 @@ import { DIVISION_LABELS, MODIFIER_LABELS, delayFilterMagDb, delayTimeMs } from 
 import { eqCurvePath, EQ_MAX_HZ, EQ_MIN_HZ } from '../../lib/eq';
 import { formatValue } from '../../lib/param';
 import { Segmented } from '../../ui/Segmented';
-import { SpectrumTerrain } from '../../ui/SpectrumTerrain';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { Advanced, PrimaryRow } from './chrome';
 
@@ -28,6 +27,11 @@ export function DelayEditor(props: {
     delayTimeMs(sync(), at('division', 3), at('modifier', 0), at('time_ms', 375), props.bpm);
   const feedback = () => Math.max(0, Math.min(95, at('feedback', 35)));
   const tapOpacity = (tap: number) => Math.max(0.12, (feedback() / 100) ** (tap - 1));
+  const taps = () => {
+    const ratio = Math.max(0.08, feedback() / 100);
+    const count = Math.max(3, Math.min(10, Math.ceil(Math.log(0.08) / Math.log(ratio))));
+    return Array.from({ length: count }, (_, index) => index + 1);
+  };
 
   const filterPath = () => {
     const points = 120;
@@ -68,11 +72,15 @@ export function DelayEditor(props: {
           </span>
         </div>
         <div class="wv-fx__stage" style={{ 'min-height': '200px' }}>
-          <SpectrumTerrain bins={props.spectrum} />
-          <div class="wv-fx__delaytaps" title="Echo taps get quieter with feedback; the filter curve shows each repeat being darkened or thinned.">
-            <For each={[1, 2, 3, 4, 5]}>
-              {(tap) => <i style={{ left: `${12 + tap * 14}%`, height: `${64 * tapOpacity(tap)}%`, opacity: tapOpacity(tap) }} />}
-            </For>
+          <div class="wv-fx__timeline" classList={{ 'is-off': props.muted }} title="Each marker is a repeat, spaced by the selected delay time and faded by feedback.">
+            <div class="wv-fx__vizhead"><span>DRY · ECHOES</span><strong>{sync() ? 'BEAT GRID' : 'MILLISECONDS'} →</strong></div>
+            <div class="wv-fx__delaytaps">
+              <i class="is-dry" style={{ left: '5%', height: '76%' }}><b>DRY</b></i>
+              <For each={taps()}>
+                {(tap, index) => <i style={{ left: `${14 + index() * (80 / Math.max(1, taps().length - 1))}%`, height: `${70 * tapOpacity(tap)}%`, opacity: tapOpacity(tap) }}><b>{tap}</b></i>}
+              </For>
+            </div>
+            <div class="wv-fx__timelineaxis"><span>0</span><span>{formatValue('ms', timeMs())} intervals</span><span>{formatValue('ms', timeMs() * taps().length)}</span></div>
           </div>
           <div class="wv-eqc wv-eqc--detailed wv-eqc--overlay" title="In-loop HP and LP. Each repeat is filtered again.">
             <svg class="wv-eqc__svg" viewBox="0 0 1000 100" preserveAspectRatio="none">
