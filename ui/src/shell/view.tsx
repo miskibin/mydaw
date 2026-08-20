@@ -14,7 +14,7 @@ import { setTypingPianoEnabled } from '../lib/keyboard';
 import type { StripRef } from '../state';
 
 /** The three main views. The piano roll is a fullscreen overlay on top of one. */
-export type MainView = 'playlist' | 'rack' | 'mixer';
+export type MainView = 'playlist' | 'rack' | 'mixer' | 'settings';
 
 /** Which tree the browser is showing. */
 export type BrowserTab = 'sounds' | 'plugins' | 'audio';

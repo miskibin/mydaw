@@ -21,6 +21,7 @@ import { onFrame } from '../ui/frameLoop';
 import {
   IconLoop,
   IconMoon,
+  IconSettings,
   IconPause,
   IconPlay,
   IconRecord,
@@ -297,6 +298,10 @@ export function TopBar(): ReturnType<typeof Show> {
           </button>
         ))}
       </div>
+
+      <button type="button" class="wv-settingsbtn" title="Open settings" aria-label="Open settings" onClick={() => view.go('settings')}>
+        <IconSettings />
+      </button>
 
       <button
         type="button"
