@@ -28,7 +28,7 @@
 
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js';
 
-import type { SourcePreviewDto, TrackDto, WaveformDto } from '../api/types';
+import type { ParamDefDto, SourcePreviewDto, TrackDto, WaveformDto } from '../api/types';
 import { channelKind, isAudioClipChannel } from '../lib/channel';
 import {
   dragRegion,
@@ -88,6 +88,8 @@ export function SampleEditor(): JSX.Element {
   const [localPan, setLocalPan] = createSignal<number | null>(null);
   const [localCents, setLocalCents] = createSignal<number | null>(null);
   const [localFades, setLocalFades] = createSignal<[number, number] | null>(null);
+  /** Instrument knobs mid-drag, by parameter id. See `setSourceParam`. */
+  const [localParams, setLocalParams] = createSignal<Record<string, number>>({});
   const [localRegion, setLocalRegion] = createSignal<Region | null>(null);
 
   const track = (): TrackDto | undefined => {
@@ -107,6 +109,7 @@ export function SampleEditor(): JSX.Element {
       setLocalPan(null);
       setLocalCents(null);
       setLocalFades(null);
+      setLocalParams({});
       setLocalRegion(null);
     });
   });
@@ -132,6 +135,7 @@ export function SampleEditor(): JSX.Element {
       setLocalPan(null);
       setLocalCents(null);
       setLocalFades(null);
+      setLocalParams({});
       setLocalRegion(null);
     }),
   );
@@ -411,6 +415,29 @@ export function SampleEditor(): JSX.Element {
     settle();
   }
 
+  // --- the instrument's own knobs ------------------------------------------
+  //
+  // The generic panel: the engine sends what the instrument declares (id, range,
+  // curve, default) and this draws a knob per declaration, exactly as the
+  // inspector does for an effect. Nothing here knows what a poly synth is, which
+  // is what makes the *next* instrument's window free.
+
+  const paramDefs = (): ParamDefDto[] => track()?.sourceParamDefs ?? [];
+
+  const paramValue = (def: ParamDefDto): number => {
+    const held = localParams()[def.id];
+    if (held !== undefined) return held;
+    return track()?.sourceParams.find((entry) => entry.id === def.id)?.value ?? def.defaultValue;
+  };
+
+  function setParam(def: ParamDefDto, value: number): void {
+    const current = track();
+    if (!current) return;
+    setLocalParams((prev) => ({ ...prev, [def.id]: value }));
+    void app.backend.setSourceParam(current.index, def.id, value).catch(app.report);
+    settle();
+  }
+
   function transpose(delta: number): void {
     const next = stepSemitone(cents(), delta);
     if (next === cents()) return;
@@ -524,6 +551,24 @@ export function SampleEditor(): JSX.Element {
                 </div>
               </Show>
             </div>
+
+            <Show when={paramDefs().length > 0}>
+              <div class="wv-sample__inst">
+                <For each={paramDefs()}>
+                  {(def) => (
+                    <Knob
+                      def={def}
+                      typeId={current().sourceId}
+                      value={() => paramValue(def)}
+                      onInput={(value) => setParam(def, value)}
+                      owner={owner()}
+                      size={34}
+                      color={colour()}
+                    />
+                  )}
+                </For>
+              </div>
+            </Show>
 
             <div class="wv-sample__knobs">
               <Knob

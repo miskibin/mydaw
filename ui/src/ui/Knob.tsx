@@ -241,7 +241,11 @@ export function Knob(props: KnobProps): ReturnType<typeof Show> {
           />
         </span>
       </Show>
-      <span class="wv-param__value">{reading()}</span>
+      {/* A switch's button already *is* its reading; printing it twice under
+          itself was the one place this layout said everything twice. */}
+      <Show when={!isSwitch(props.def)}>
+        <span class="wv-param__value">{reading()}</span>
+      </Show>
       <span class="wv-param__name">{props.label ?? props.def.name}</span>
     </div>
   );

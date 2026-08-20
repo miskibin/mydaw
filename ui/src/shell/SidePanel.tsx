@@ -716,7 +716,9 @@ function InstrumentCard(props: { track: TrackDto }): JSX.Element {
             <span class="wv-insp__line">
               {description()}
               {description().length > 0 ? ' ' : ''}
-              This instrument exposes no parameters to the host.
+              {props.track.sourceParamDefs.length > 0
+                ? `${props.track.sourceParamDefs.length} controls — double-click the channel to open them.`
+                : 'This instrument exposes no parameters to the host.'}
             </span>
           }
         >

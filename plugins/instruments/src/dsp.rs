@@ -228,6 +228,77 @@ pub fn poly_blep_saw(phase: f32, increment: f32) -> f32 {
     2.0 * phase - 1.0 - poly_blep(phase, increment)
 }
 
+/// One band-limited square sample, in `-1.0..=1.0`.
+///
+/// Two saws half a cycle apart: `saw(p) - saw(p + 0.5)` is a square, and doing
+/// it this way means the *same* polyBLEP that band-limits a saw's one
+/// discontinuity band-limits a square's two, with no second correction to get
+/// right.
+pub fn poly_blep_square(phase: f32, increment: f32) -> f32 {
+    let opposite = if phase < 0.5 {
+        phase + 0.5
+    } else {
+        phase - 0.5
+    };
+    poly_blep_saw(phase, increment) - poly_blep_saw(opposite, increment)
+}
+
+/// A two-pole state-variable filter, topology-preserving.
+///
+/// The one-pole this replaced could not resonate, and a lowpass without
+/// resonance is a tone control rather than an instrument's filter: everything
+/// anyone reaches a cutoff knob *for* -- the vocal quality at the corner, the
+/// squelch of a fast envelope -- lives in the peak. Zavalishin's TPT form, which
+/// stays stable when the cutoff is swept every few samples (which is exactly
+/// what an envelope does to it).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Svf {
+    a1: f32,
+    a2: f32,
+    a3: f32,
+    ic1: f32,
+    ic2: f32,
+}
+
+impl Svf {
+    /// A filter at `cutoff_hz` with quality `q`, with no state.
+    pub fn new(cutoff_hz: f32, q: f32, sample_rate: f32) -> Self {
+        let mut filter = Self::default();
+        filter.set(cutoff_hz, q, sample_rate);
+        filter
+    }
+
+    /// Re-aim the filter. Cheap enough to call at control rate, which is what
+    /// makes a filter envelope possible; `tan` is the only real cost.
+    pub fn set(&mut self, cutoff_hz: f32, q: f32, sample_rate: f32) {
+        // Held below a fifth of the rate: `tan` goes to infinity at Nyquist and
+        // a cutoff a knob can reach must not be able to produce one.
+        let nyquist_fifth = sample_rate * 0.2;
+        let cutoff = cutoff_hz.clamp(10.0, nyquist_fifth.max(20.0));
+        let g = (std::f32::consts::PI * cutoff / sample_rate).tan();
+        let k = 1.0 / q.clamp(0.4, 20.0);
+        self.a1 = 1.0 / (1.0 + g * (g + k));
+        self.a2 = g * self.a1;
+        self.a3 = g * self.a2;
+    }
+
+    /// Forget the state. For a voice being restarted from silence.
+    pub fn reset(&mut self) {
+        self.ic1 = 0.0;
+        self.ic2 = 0.0;
+    }
+
+    /// One lowpass sample.
+    pub fn low(&mut self, input: f32) -> f32 {
+        let v3 = input - self.ic2;
+        let v1 = self.a1 * self.ic1 + self.a2 * v3;
+        let v2 = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
+        self.ic1 = 2.0 * v1 - self.ic1;
+        self.ic2 = 2.0 * v2 - self.ic2;
+        v2
+    }
+}
+
 /// Advance a normalised phase, wrapping into `0.0..1.0`.
 ///
 /// Subtraction rather than `%`: the increment is always well below 1.0 for any

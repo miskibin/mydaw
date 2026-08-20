@@ -139,6 +139,11 @@ export interface Backend {
   setTrackPitch(track: number, cents: number): Promise<MixerState>;
   /** Channel fade in and out, in milliseconds. One call, one republish. */
   setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState>;
+  /**
+   * Set one of a channel's **instrument** parameters. Answers with what was
+   * actually stored, so a knob can snap to a clamped value.
+   */
+  setSourceParam(track: number, paramId: string, value: number): Promise<number>;
   /** SMP region in the file's frames. `endFrames` of `0` means the whole file. */
   setTrackSampleRegion(
     track: number,
@@ -502,6 +507,10 @@ class TauriBackend implements Backend {
 
   setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {
     return this.call('set_track_fades', { track, fadeInMs, fadeOutMs });
+  }
+
+  setSourceParam(track: number, paramId: string, value: number): Promise<number> {
+    return this.call('set_source_param', { track, paramId, value });
   }
 
   setTrackSampleRegion(

@@ -35,13 +35,17 @@ use mydaw_plugin_instruments::SingleDrum;
 use mydaw_plugin_sampler::SamplerRegistry;
 use mydaw_plugin_sequencer::AudioClipTune;
 use mydaw_rt_core::{
-    db_to_gain, gain_to_db, max_send_db, MixerParams, StripId, MAX_BUSES, MAX_GAIN_DB,
+    db_to_gain, gain_to_db, max_send_db, MixerParams, ParamBlock, StripId, MAX_BUSES, MAX_GAIN_DB,
     MAX_SEND_LEVEL, MAX_TRACKS, SILENCE_DB,
 };
 use serde::Serialize;
+use std::sync::Arc;
 
 use crate::clap_bridge::{ClapBoard, ClapSlotDto};
-use crate::effects::{chain_dto, InsertDef, InsertDto, InsertError, InsertTarget, MAX_INSERTS};
+use crate::effects::{
+    chain_dto, InsertDef, InsertDto, InsertError, InsertTarget, ParamDefDto, ParamValueDto,
+    MAX_INSERTS,
+};
 use crate::source::{SamplerSourceRef, Source};
 use crate::vst3_bridge::{Vst3Board, Vst3SlotDto};
 
@@ -62,7 +66,7 @@ pub fn default_piano(sampler: &SamplerRegistry) -> Source {
 }
 
 /// One track, as the session holds it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TrackDef {
     /// Stable across renumbering, so the UI can key a list by it. Not the note
     /// channel -- see [`Project`].
@@ -90,6 +94,15 @@ pub struct TrackDef {
     pub fade_in_ms: f32,
     /// Fade out into the end of every clip (or note), in milliseconds.
     pub fade_out_ms: f32,
+    /// The instrument's own knobs, shared with the node that is reading them.
+    ///
+    /// `None` for a source with no parameters (every drum, the test tone, a
+    /// hosted plugin, which keeps its own state), and `None` for a synth until
+    /// the first time a graph is built for it -- the block is created where the
+    /// instrument registry is, which is not here. Shared by `Arc` for the same
+    /// reason an insert's block is: a graph rebuild hands the *same* block to
+    /// the new node, so adding a track does not reset a filter.
+    pub source_params: Option<Arc<ParamBlock>>,
     /// Internal effects, in signal order, between the source and the gate.
     ///
     /// The parameter blocks inside these are shared with the nodes the graph is
@@ -98,12 +111,59 @@ pub struct TrackDef {
     pub inserts: Vec<InsertDef>,
 }
 
+/// Two tracks are the same when they are the same channel at the same
+/// settings, knobs included.
+///
+/// Hand-written for the reason [`InsertDef`]'s is: a [`ParamBlock`] holds
+/// atomics and cannot derive `PartialEq`, and comparing the `Arc`s by pointer
+/// would make a loaded project unequal to the one that saved it.
+impl PartialEq for TrackDef {
+    fn eq(&self, other: &Self) -> bool {
+        let params = |track: &Self| {
+            track
+                .source_params
+                .as_ref()
+                .map(|block| block.snapshot())
+                .unwrap_or_default()
+        };
+        self.id == other.id
+            && self.name == other.name
+            && self.source == other.source
+            && self.gain_db == other.gain_db
+            && self.pan == other.pan
+            && self.muted == other.muted
+            && self.soloed == other.soloed
+            && self.pitch_cents == other.pitch_cents
+            && self.sample_start_frames == other.sample_start_frames
+            && self.sample_end_frames == other.sample_end_frames
+            && self.fade_in_ms == other.fade_in_ms
+            && self.fade_out_ms == other.fade_out_ms
+            && self.inserts == other.inserts
+            && params(self) == params(other)
+    }
+}
+
 impl TrackDef {
+    /// A fresh parameter block for whatever `source` declares, or `None`.
+    ///
+    /// Built here rather than where the graph is, so a track has its knobs from
+    /// the moment it exists -- a project loaded with no audio device still has
+    /// somewhere to put the values its file carries.
+    pub fn params_for(source: &Source) -> Option<Arc<ParamBlock>> {
+        let type_id = source.instrument_type_id()?;
+        let defs = mydaw_plugin_instruments::param_defs(type_id);
+        if defs.is_empty() {
+            return None;
+        }
+        Some(Arc::new(ParamBlock::new(defs)))
+    }
+
     /// A track at unity gain, centred, unmuted, with an empty chain.
     pub fn new(id: u32, name: impl Into<String>, source: Source) -> Self {
         Self {
             id,
             name: name.into(),
+            source_params: Self::params_for(&source),
             source,
             gain_db: 0.0,
             pan: 0.0,
@@ -116,6 +176,20 @@ impl TrackDef {
             fade_out_ms: 0.0,
             inserts: Vec::new(),
         }
+    }
+
+    /// Point this track at a different instrument, giving it that
+    /// instrument's knobs.
+    ///
+    /// The old block goes with the old instrument: a filter cutoff is a
+    /// property of the synth that has a filter, and carrying one across a
+    /// change of instrument would be applying a saw's settings to a kick.
+    pub fn set_source(&mut self, source: Source) {
+        if self.source == source {
+            return;
+        }
+        self.source_params = Self::params_for(&source);
+        self.source = source;
     }
 
     /// The linear multiplier this track's fader asks for.
@@ -1156,6 +1230,13 @@ pub struct TrackDto {
     pub fade_in_ms: f32,
     /// Fade out, in milliseconds. Audio-clip and one-shot channels.
     pub fade_out_ms: f32,
+    /// What the instrument at the head of this channel exposes as knobs, and
+    /// where they are. Empty for an instrument with none -- every drum, the
+    /// test tone, a sampled instrument, and a hosted plugin (which has its own
+    /// editor window).
+    pub source_param_defs: Vec<ParamDefDto>,
+    /// Their current values, in the same order.
+    pub source_params: Vec<ParamValueDto>,
     /// SMP region start, in the file's own frames.
     pub sample_start_frames: u64,
     /// SMP region end, exclusive. `0` means the whole file.
@@ -1315,6 +1396,30 @@ pub fn mixer_state_dto(
                 pitch_cents: track.pitch_cents,
                 fade_in_ms: track.fade_in_ms,
                 fade_out_ms: track.fade_out_ms,
+                source_param_defs: track
+                    .source
+                    .instrument_type_id()
+                    .map(|type_id| {
+                        mydaw_plugin_instruments::param_defs(type_id)
+                            .iter()
+                            .map(ParamDefDto::from)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                source_params: track
+                    .source_params
+                    .as_ref()
+                    .map(|block| {
+                        block
+                            .snapshot()
+                            .into_iter()
+                            .map(|(id, value)| ParamValueDto {
+                                id: id.to_owned(),
+                                value,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 sample_start_frames: track.sample_start_frames,
                 sample_end_frames: track.sample_end_frames,
                 audio_source_id: track.source.sample_file_id(),
@@ -1707,6 +1812,8 @@ mod tests {
                 "soloed",
                 "sourceId",
                 "sourceLabel",
+                "sourceParamDefs",
+                "sourceParams",
                 "vst3"
             ]
         );

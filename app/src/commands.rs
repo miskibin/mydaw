@@ -214,6 +214,22 @@ pub fn set_track_pitch(
     Ok(state.mixer_state())
 }
 
+/// Set one of a channel's *instrument* parameters, by id.
+///
+/// The same contract `set_insert_param` has, one node earlier in the chain:
+/// one atomic store, no rebuild, and the answer is what was actually stored.
+#[tauri::command]
+pub fn set_source_param(
+    state: State<'_, AppState>,
+    track: usize,
+    param_id: String,
+    value: f32,
+) -> Result<f32, String> {
+    state
+        .set_source_param(track, &param_id, value)
+        .map_err(|err| err.to_string())
+}
+
 /// Channel fade in and out for an audio-clip or one-shot track, in ms.
 ///
 /// A fade is a *time*, so it is milliseconds and not frames: the same 30 ms

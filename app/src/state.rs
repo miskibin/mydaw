@@ -1279,6 +1279,37 @@ impl AppState {
         self.apply_sample_play(track)
     }
 
+    /// Set one of the instrument's own knobs, returning what was stored.
+    ///
+    /// One atomic store: no rebuild, no allocation, and the audio thread reads
+    /// it on its next block with the parameter's own ramp. The answer is the
+    /// *sanitised* value, so a knob that sent 40 kHz to an 18 kHz cutoff can
+    /// snap itself to the top rather than draw where the engine is not.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`], or [`InsertError::NoSuchParam`] for a track
+    /// whose instrument has no such knob -- including one that has none at all.
+    pub fn set_source_param(
+        &self,
+        track: usize,
+        param_id: &str,
+        value: f32,
+    ) -> Result<f32, MixerError> {
+        let project = self.tracks.project();
+        let def = project
+            .tracks
+            .get(track)
+            .ok_or(TrackError::NoSuchTrack(track))?;
+        let missing = || InsertError::NoSuchParam {
+            effect: def.source.label(),
+            param: param_id.to_owned(),
+        };
+        let block = def.source_params.as_ref().ok_or_else(missing)?;
+        block
+            .set_by_id(param_id, value)
+            .ok_or_else(|| missing().into())
+    }
+
     /// Channel fades for an audio-clip or one-shot track, in milliseconds.
     ///
     /// One command for both, because they are one gesture's worth of the same

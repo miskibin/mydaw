@@ -44,10 +44,15 @@
 
 use std::f32::consts::TAU;
 
-use mydaw_rt_core::{NoteEvent, NoteKind, ProcessCtx, RtNode, RtNodeFactory};
+use std::sync::Arc;
+
+use mydaw_rt_core::{
+    NoteEvent, NoteKind, ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ProcessCtx, RtNode,
+    RtNodeFactory, SmoothedParams, DEFAULT_SMOOTHING_MS,
+};
 
 use crate::dsp::{
-    advance_phase, key_to_hz, linear_step, poly_blep_saw, usable_sample_rate, OnePole,
+    advance_phase, key_to_hz, linear_step, poly_blep_saw, poly_blep_square, usable_sample_rate, Svf,
 };
 
 /// RT node type id, as stored in project files. Stable across builds.
@@ -82,6 +87,211 @@ pub const FILTER_CUTOFF_HZ: f32 = 3_000.0;
 /// Sub-oscillator level relative to the saw. -6.02 dB.
 pub const SUB_MIX: f32 = 0.5;
 
+/// How far the filter envelope can open the cutoff, in octaves at 100%.
+///
+/// Four. Enough that a fast envelope on a closed filter is the whole point of
+/// having one, and bounded so that "100%" means something a knob can reach
+/// rather than "as far as the arithmetic goes".
+pub const ENV_OCTAVES: f32 = 4.0;
+
+/// Samples between filter-coefficient updates.
+///
+/// The cutoff moves with the envelope, and recomputing `tan` per sample per
+/// voice would be the most expensive thing in the engine by an order of
+/// magnitude. Sixteen samples is a 3 kHz control rate: an envelope stepping at
+/// 0.3 ms is not something an ear resolves, and it is 1/16th of the cost.
+const CONTROL_FRAMES: usize = 16;
+
+/// Parameter ids, in the order [`PARAMS`] declares them.
+pub mod param {
+    pub const WAVE: &str = "wave";
+    pub const DETUNE: &str = "detune";
+    pub const SUB: &str = "sub";
+    pub const CUTOFF: &str = "cutoff";
+    pub const RESONANCE: &str = "resonance";
+    pub const ENV_AMOUNT: &str = "envAmount";
+    pub const ATTACK: &str = "attack";
+    pub const DECAY: &str = "decay";
+    pub const SUSTAIN: &str = "sustain";
+    pub const RELEASE: &str = "release";
+}
+
+/// What the synth exposes, in the order a panel should draw it.
+///
+/// The same [`ParamDef`] the effects use, so the shell's generic knob panel
+/// draws this instrument without knowing anything about it -- an instrument is
+/// not a different kind of thing from an effect as far as a knob is concerned,
+/// and giving it a second parameter system would have been two of everything.
+pub static PARAMS: &[ParamDef] = &[
+    ParamDef {
+        id: param::WAVE,
+        name: "Wave",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        curve: ParamCurve::Linear,
+        step: Some(1.0),
+        // A switch: there is no waveform half way between a saw and a square,
+        // and ramping towards one would spend 10 ms at a shape that does not
+        // exist.
+        smoothing_ms: 0.0,
+    },
+    ParamDef {
+        id: param::DETUNE,
+        name: "Detune",
+        unit: "ct",
+        min: 0.0,
+        max: 50.0,
+        default: 0.0,
+        curve: ParamCurve::Linear,
+        step: None,
+        smoothing_ms: DEFAULT_SMOOTHING_MS,
+    },
+    ParamDef {
+        id: param::SUB,
+        name: "Sub",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        default: SUB_MIX,
+        curve: ParamCurve::Linear,
+        step: None,
+        smoothing_ms: DEFAULT_SMOOTHING_MS,
+    },
+    ParamDef {
+        id: param::CUTOFF,
+        name: "Cutoff",
+        unit: "Hz",
+        min: 60.0,
+        max: 18_000.0,
+        default: FILTER_CUTOFF_HZ,
+        curve: ParamCurve::Log,
+        step: None,
+        smoothing_ms: DEFAULT_SMOOTHING_MS,
+    },
+    ParamDef {
+        id: param::RESONANCE,
+        name: "Res",
+        unit: "",
+        min: 0.5,
+        max: 12.0,
+        default: 0.8,
+        curve: ParamCurve::Log,
+        step: None,
+        smoothing_ms: DEFAULT_SMOOTHING_MS,
+    },
+    ParamDef {
+        id: param::ENV_AMOUNT,
+        name: "Env",
+        unit: "%",
+        min: -100.0,
+        max: 100.0,
+        default: 0.0,
+        curve: ParamCurve::Linear,
+        step: None,
+        smoothing_ms: DEFAULT_SMOOTHING_MS,
+    },
+    ParamDef {
+        id: param::ATTACK,
+        name: "Attack",
+        unit: "ms",
+        min: 1.0,
+        max: 2_000.0,
+        default: ATTACK_MS,
+        curve: ParamCurve::Log,
+        step: None,
+        smoothing_ms: 0.0,
+    },
+    ParamDef {
+        id: param::DECAY,
+        name: "Decay",
+        unit: "ms",
+        min: 1.0,
+        max: 4_000.0,
+        default: DECAY_MS,
+        curve: ParamCurve::Log,
+        step: None,
+        smoothing_ms: 0.0,
+    },
+    ParamDef {
+        id: param::SUSTAIN,
+        name: "Sustain",
+        unit: "",
+        min: 0.0,
+        max: 1.0,
+        default: SUSTAIN,
+        curve: ParamCurve::Linear,
+        step: None,
+        smoothing_ms: 0.0,
+    },
+    ParamDef {
+        id: param::RELEASE,
+        name: "Release",
+        unit: "ms",
+        min: 1.0,
+        max: 4_000.0,
+        default: RELEASE_MS,
+        curve: ParamCurve::Log,
+        step: None,
+        smoothing_ms: 0.0,
+    },
+];
+
+/// Where each parameter sits in [`PARAMS`], resolved once.
+#[derive(Debug, Clone, Copy)]
+struct Indices {
+    wave: usize,
+    detune: usize,
+    sub: usize,
+    cutoff: usize,
+    resonance: usize,
+    env_amount: usize,
+    attack: usize,
+    decay: usize,
+    sustain: usize,
+    release: usize,
+}
+
+impl Indices {
+    fn new(block: &ParamBlock) -> Self {
+        let at = |id: &str| block.index_of(id).unwrap_or(0);
+        Self {
+            wave: at(param::WAVE),
+            detune: at(param::DETUNE),
+            sub: at(param::SUB),
+            cutoff: at(param::CUTOFF),
+            resonance: at(param::RESONANCE),
+            env_amount: at(param::ENV_AMOUNT),
+            attack: at(param::ATTACK),
+            decay: at(param::DECAY),
+            sustain: at(param::SUSTAIN),
+            release: at(param::RELEASE),
+        }
+    }
+}
+
+/// Everything a voice needs from the parameters for one block.
+///
+/// Read once per block and handed down, rather than every voice reaching into
+/// the parameter block eight times per sample: the settings cannot change
+/// inside a block anyway, and this way the inner loop touches one struct on the
+/// stack.
+#[derive(Debug, Clone, Copy)]
+struct Settings {
+    adsr: Adsr,
+    /// `0` saw, `1` square.
+    wave: usize,
+    /// Frequency ratio of the second oscillator, from the detune in cents.
+    detune_ratio: f32,
+    sub: f32,
+    cutoff_hz: f32,
+    resonance: f32,
+    /// Octaves the envelope adds to the cutoff at full envelope.
+    env_octaves: f32,
+    sample_rate: f32,
+}
+
 /// Amplitude of one voice at velocity 1.0, before the envelope.
 ///
 /// Chosen so a four-note chord at full velocity stays well clear of full scale
@@ -106,25 +316,47 @@ enum Stage {
     Release,
 }
 
-/// Envelope rates, derived once from the sample rate and shared by every voice.
+/// Envelope rates, derived from the parameters and shared by every voice.
 #[derive(Debug, Clone, Copy)]
 struct Adsr {
     attack: f32,
     decay: f32,
+    sustain: f32,
     release: f32,
 }
 
 impl Adsr {
-    fn new(sample_rate: f32) -> Self {
+    /// The rates the four knobs ask for.
+    ///
+    /// Each segment crosses exactly the range it is responsible for in exactly
+    /// its stated time -- attack `0 -> 1`, decay `1 -> sustain`, release
+    /// `sustain -> 0` -- which is what makes the numbers on the knobs mean what
+    /// a reader assumes.
+    fn from_times(
+        attack_ms: f32,
+        decay_ms: f32,
+        sustain: f32,
+        release_ms: f32,
+        sample_rate: f32,
+    ) -> Self {
+        let sustain = sustain.clamp(0.0, 1.0);
         Self {
-            attack: linear_step(1.0, ATTACK_MS, sample_rate),
-            decay: linear_step(1.0 - SUSTAIN, DECAY_MS, sample_rate),
-            release: linear_step(SUSTAIN, RELEASE_MS, sample_rate),
+            attack: linear_step(1.0, attack_ms, sample_rate),
+            // A sustain of 1.0 leaves the decay nothing to cross; a rate of zero
+            // would be an envelope that never leaves the decay stage, so the
+            // range is floored at a hair rather than at nothing.
+            decay: linear_step((1.0 - sustain).max(1e-4), decay_ms, sample_rate),
+            sustain,
+            release: linear_step(sustain.max(1e-4), release_ms, sample_rate),
         }
+    }
+
+    fn defaults(sample_rate: f32) -> Self {
+        Self::from_times(ATTACK_MS, DECAY_MS, SUSTAIN, RELEASE_MS, sample_rate)
     }
 }
 
-/// One saw + sub voice.
+/// One voice: two oscillators, a sub, an envelope and a filter.
 #[derive(Debug, Clone, Copy)]
 struct Voice {
     stage: Stage,
@@ -132,12 +364,15 @@ struct Voice {
     channel: u8,
     phase: f32,
     increment: f32,
+    /// The detuned partner of `phase`. Silent-by-identity when the detune is
+    /// zero: it runs at the same frequency and the pair sums to the same saw.
+    phase_b: f32,
     sub_phase: f32,
     sub_increment: f32,
     envelope: f32,
     /// `velocity * VOICE_GAIN`, fixed for the life of the note.
     amplitude: f32,
-    filter: OnePole,
+    filter: Svf,
     /// Note-ons seen when this voice started, for stealing the oldest.
     age: u64,
 }
@@ -150,11 +385,12 @@ impl Voice {
             channel: 0,
             phase: 0.0,
             increment: 0.0,
+            phase_b: 0.0,
             sub_phase: 0.0,
             sub_increment: 0.0,
             envelope: 0.0,
             amplitude: 0.0,
-            filter: OnePole::new(FILTER_CUTOFF_HZ, sample_rate),
+            filter: Svf::new(FILTER_CUTOFF_HZ, 0.8, sample_rate),
             age: 0,
         }
     }
@@ -185,6 +421,13 @@ impl Voice {
     ) {
         if fresh {
             self.phase = 0.0;
+            // *Together*, not spread. At a detune of zero the pair has to be
+            // bit-identical to the single oscillator it replaced -- two saws a
+            // quarter cycle apart sum to a quieter fundamental, which would make
+            // "no detune" a different sound rather than the same one. They drift
+            // apart on their own the moment the detune is anything but zero,
+            // which is what the effect is.
+            self.phase_b = 0.0;
             self.sub_phase = 0.0;
             self.envelope = 0.0;
             self.filter.reset();
@@ -207,10 +450,13 @@ impl Voice {
     }
 
     /// Add this voice's contribution to `span`.
-    fn render(&mut self, span: &mut [f32], adsr: &Adsr) {
+    fn render(&mut self, span: &mut [f32], set: &Settings) {
         if !self.is_active() {
             return;
         }
+        let adsr = &set.adsr;
+        let increment_b = self.increment * set.detune_ratio;
+        let mut until_update = 0_usize;
         for sample in span.iter_mut() {
             // Advance the envelope first, so a voice released exactly at this
             // frame starts falling here rather than one frame late.
@@ -224,8 +470,8 @@ impl Voice {
                 }
                 Stage::Decay => {
                     self.envelope -= adsr.decay;
-                    if self.envelope <= SUSTAIN {
-                        self.envelope = SUSTAIN;
+                    if self.envelope <= adsr.sustain {
+                        self.envelope = adsr.sustain;
                         self.stage = Stage::Sustain;
                     }
                 }
@@ -243,11 +489,31 @@ impl Voice {
                 Stage::Idle => return,
             }
 
-            let saw = poly_blep_saw(self.phase, self.increment);
-            let sub = (self.sub_phase * TAU).sin() * SUB_MIX;
-            *sample += self.filter.low(saw + sub) * self.envelope * self.amplitude;
+            // The filter follows the envelope, so its coefficients have to move
+            // with it -- at control rate, not per sample. See `CONTROL_FRAMES`.
+            if until_update == 0 {
+                let octaves = set.env_octaves * self.envelope;
+                let cutoff = set.cutoff_hz * 2f32.powf(octaves);
+                self.filter.set(cutoff, set.resonance, set.sample_rate);
+                until_update = CONTROL_FRAMES;
+            }
+            until_update -= 1;
+
+            let osc = |phase: f32, increment: f32| {
+                if set.wave == 0 {
+                    poly_blep_saw(phase, increment)
+                } else {
+                    poly_blep_square(phase, increment)
+                }
+            };
+            // Two oscillators at half level each: a detune of zero has to sound
+            // exactly as loud as the single oscillator it replaced.
+            let pair = 0.5 * (osc(self.phase, self.increment) + osc(self.phase_b, increment_b));
+            let sub = (self.sub_phase * TAU).sin() * set.sub;
+            *sample += self.filter.low(pair + sub) * self.envelope * self.amplitude;
 
             self.phase = advance_phase(self.phase, self.increment);
+            self.phase_b = advance_phase(self.phase_b, increment_b);
             self.sub_phase = advance_phase(self.sub_phase, self.sub_increment);
         }
     }
@@ -259,6 +525,11 @@ impl Voice {
 /// only ever valid at the head of a chain.
 pub struct PolySynthNode {
     voices: [Voice; VOICES],
+    /// The knobs, read once per block. `None` for a synth built without a
+    /// parameter block -- an offline preview, a test -- which runs at the
+    /// defaults for ever.
+    params: Option<SmoothedParams>,
+    index: Indices,
     adsr: Adsr,
     sample_rate: f32,
     /// Note-ons seen, so "oldest" is a number rather than a guess.
@@ -276,10 +547,58 @@ impl PolySynthNode {
         let sample_rate = usable_sample_rate(sample_rate);
         Self {
             voices: [Voice::new(sample_rate); VOICES],
-            adsr: Adsr::new(sample_rate),
+            params: None,
+            index: Indices::new(&ParamBlock::new(PARAMS)),
+            adsr: Adsr::defaults(sample_rate),
             sample_rate,
             counter: 0,
             stolen_voices: 0,
+        }
+    }
+
+    /// A synth reading `params`, which the shell owns and keeps across graph
+    /// rebuilds -- so a rebuilt graph picks the knobs up where they were.
+    ///
+    /// **Non-RT**: allocates.
+    pub fn with_params(params: Arc<ParamBlock>, sample_rate: f64) -> Self {
+        let index = Indices::new(&params);
+        let mut node = Self::new(sample_rate);
+        node.params = Some(SmoothedParams::new(params, f64::from(node.sample_rate)));
+        node.index = index;
+        node.adsr = node.settings().adsr;
+        node
+    }
+
+    /// What the parameters say right now, or the defaults without them.
+    fn settings(&self) -> Settings {
+        let Some(params) = self.params.as_ref() else {
+            return Settings {
+                adsr: Adsr::defaults(self.sample_rate),
+                wave: 0,
+                detune_ratio: 1.0,
+                sub: SUB_MIX,
+                cutoff_hz: FILTER_CUTOFF_HZ,
+                resonance: 0.8,
+                env_octaves: 0.0,
+                sample_rate: self.sample_rate,
+            };
+        };
+        let cents = params.value(self.index.detune);
+        Settings {
+            adsr: Adsr::from_times(
+                params.value(self.index.attack),
+                params.value(self.index.decay),
+                params.value(self.index.sustain),
+                params.value(self.index.release),
+                self.sample_rate,
+            ),
+            wave: params.choice(self.index.wave),
+            detune_ratio: 2f32.powf(cents / 1_200.0),
+            sub: params.value(self.index.sub),
+            cutoff_hz: params.value(self.index.cutoff),
+            resonance: params.value(self.index.resonance),
+            env_octaves: params.value(self.index.env_amount) / 100.0 * ENV_OCTAVES,
+            sample_rate: self.sample_rate,
         }
     }
 
@@ -342,10 +661,9 @@ impl PolySynthNode {
         }
     }
 
-    fn render(&mut self, span: &mut [f32]) {
-        let adsr = self.adsr;
+    fn render(&mut self, span: &mut [f32], set: &Settings) {
         for voice in &mut self.voices {
-            voice.render(span, &adsr);
+            voice.render(span, set);
         }
     }
 
@@ -373,6 +691,16 @@ impl RtNode for PolySynthNode {
     fn process(&mut self, ctx: &mut ProcessCtx) {
         let events = ctx.events;
         let frames = ctx.frames;
+
+        // One read of the knobs per block. A parameter cannot change inside a
+        // block anyway, and a voice that had to reach into shared atomics eight
+        // times per sample would be paying for a race it cannot have.
+        if let Some(params) = self.params.as_mut() {
+            params.begin_block();
+        }
+        let settings = self.settings();
+        self.adsr = settings.adsr;
+
         let [left, right] = ctx.buffers.as_mut_slices();
         left.fill(0.0);
 
@@ -382,12 +710,18 @@ impl RtNode for PolySynthNode {
         for event in events {
             let at = (event.frame_offset as usize).min(frames);
             if at > cursor {
-                self.render(&mut left[cursor..at]);
+                self.render(&mut left[cursor..at], &settings);
                 cursor = at;
             }
             self.apply(event);
         }
-        self.render(&mut left[cursor..]);
+        self.render(&mut left[cursor..], &settings);
+
+        // The ramps still have to advance, or `value()` would sit at the block's
+        // first reading for ever and a knob drag would never arrive.
+        if let Some(params) = self.params.as_mut() {
+            params.skip_all(frames);
+        }
 
         right.copy_from_slice(left);
     }
@@ -410,6 +744,21 @@ impl RtNodeFactory for PolySynthFactory {
 
     fn create(&self, sample_rate: f64, _max_block: usize) -> Box<dyn RtNode> {
         Box::new(PolySynthNode::new(sample_rate))
+    }
+}
+
+impl ParamNodeFactory for PolySynthFactory {
+    fn params(&self) -> &'static [ParamDef] {
+        PARAMS
+    }
+
+    fn create_with_params(
+        &self,
+        sample_rate: f64,
+        _max_block: usize,
+        params: Arc<ParamBlock>,
+    ) -> Box<dyn RtNode> {
+        Box::new(PolySynthNode::with_params(params, sample_rate))
     }
 }
 
@@ -450,9 +799,9 @@ mod tests {
 
     #[test]
     fn the_envelope_segments_take_the_advertised_time() {
-        let adsr = Adsr::new(48_000.0);
+        let adsr = Adsr::defaults(48_000.0);
         assert!(
-            (1.0 / adsr.attack - 240.0).abs() < 1e-3,
+            (1.0 / adsr.attack - 240.0_f32).abs() < 1e-3,
             "5 ms at 48 kHz is 240 frames"
         );
         assert!(

@@ -776,6 +776,23 @@ impl TrackHost {
         sample_rate: f64,
         max_block: usize,
     ) -> Result<Box<dyn RtNode>, SourceError> {
+        self.build_node_with_params(source, None, sample_rate, max_block)
+    }
+
+    /// The same, against a parameter block the caller owns.
+    ///
+    /// `None` builds the instrument at its defaults, which is what an offline
+    /// preview wants: it renders one note of a sound nobody has tweaked yet.
+    ///
+    /// # Errors
+    /// [`SourceError::MissingInstrument`] for a `type_id` this build lacks.
+    pub fn build_node_with_params(
+        &self,
+        source: &Source,
+        params: Option<Arc<mydaw_rt_core::ParamBlock>>,
+        sample_rate: f64,
+        max_block: usize,
+    ) -> Result<Box<dyn RtNode>, SourceError> {
         match source {
             Source::TestTone => Ok(self.tone.create(sample_rate, max_block)),
             Source::Clap(_) | Source::Vst3(_) | Source::AudioClip { .. } => {
@@ -808,9 +825,14 @@ impl TrackHost {
                 let type_id = other
                     .instrument_type_id()
                     .expect("every non-hosted, non-tone source names a built-in instrument");
-                self.instruments
-                    .create(type_id, sample_rate, max_block)
-                    .ok_or(SourceError::MissingInstrument(type_id))
+                match params {
+                    Some(block) => {
+                        self.instruments
+                            .create_with_params(type_id, sample_rate, max_block, block)
+                    }
+                    None => self.instruments.create(type_id, sample_rate, max_block),
+                }
+                .ok_or(SourceError::MissingInstrument(type_id))
             }
         }
     }
@@ -848,6 +870,10 @@ impl TrackHost {
                 (def.fade_in_ms, def.fade_out_ms),
             )
         };
+        // The new instrument's knobs, created *before* its node so the two share
+        // one block: the node reads what the shell writes, and the shell writes
+        // what a project file restores.
+        let params = TrackDef::params_for(&source);
         let node = match &source {
             Source::AudioClip { source_id } => self
                 .audio_clips
@@ -855,9 +881,14 @@ impl TrackHost {
             Source::OneShot { source_id } => self
                 .audio_clips
                 .oneshot_node(*source_id, start, end, pitch, fades),
-            other => self.build_node(other, f64::from(info.sample_rate), info.max_block)?,
+            other => self.build_node_with_params(
+                other,
+                params.clone(),
+                f64::from(info.sample_rate),
+                info.max_block,
+            )?,
         };
-        self.install_source(track, source, node)?;
+        self.install_source_with_params(track, source, params, node)?;
         Ok(())
     }
 
@@ -882,11 +913,43 @@ impl TrackHost {
             .ok_or(TrackError::NoSuchTrack(track))?;
         handle.install(node, source.clone())?;
 
+        let params = TrackDef::params_for(&source);
+        self.record_source(track, source, params)
+    }
+
+    /// The same, for a caller that already built the node against a block.
+    ///
+    /// Which is what [`set_source`](Self::set_source) does, and why it cannot
+    /// use the plain version: the block the node is reading and the block the
+    /// track hands the UI have to be the *same* one, and a second
+    /// `params_for` would make two.
+    pub fn install_source_with_params(
+        &self,
+        track: usize,
+        source: Source,
+        params: Option<Arc<mydaw_rt_core::ParamBlock>>,
+        node: Box<dyn RtNode>,
+    ) -> Result<(), MixerError> {
+        let handle = self
+            .handles
+            .get(track)
+            .ok_or(TrackError::NoSuchTrack(track))?;
+        handle.install(node, source.clone())?;
+        self.record_source(track, source, params)
+    }
+
+    fn record_source(
+        &self,
+        track: usize,
+        source: Source,
+        params: Option<Arc<mydaw_rt_core::ParamBlock>>,
+    ) -> Result<(), MixerError> {
         let mut project = self.project.lock();
         let Some(def) = project.tracks.get_mut(track) else {
             return Err(TrackError::NoSuchTrack(track).into());
         };
         def.source = source;
+        def.source_params = params;
         Ok(())
     }
 
@@ -998,7 +1061,15 @@ impl TrackHost {
                     def.pitch_cents,
                     (def.fade_in_ms, def.fade_out_ms),
                 ),
-                other => match self.build_node(other, limits.sample_rate, limits.max_block) {
+                // The track's own block, so a rebuilt graph picks the synth up
+                // where the last one left it -- the argument `MixerParams`
+                // makes for faders, at knob granularity.
+                other => match self.build_node_with_params(
+                    other,
+                    def.source_params.clone(),
+                    limits.sample_rate,
+                    limits.max_block,
+                ) {
                     Ok(node) => node,
                     Err(err) => {
                         log::warn!(

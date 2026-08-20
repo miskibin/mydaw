@@ -125,6 +125,9 @@ const SWITCH_LABELS: Readonly<Record<string, readonly string[]>> = {
   'effects.delay/mode': ['Stereo', 'Ping-pong'],
   'effects.saturator/type': ['Tape', 'Tube', 'Clip'],
   'effects.saturator/oversample': ['Off', '2x', '4x'],
+  // Instruments declare parameters the same way effects do, so their switches
+  // are named here too.
+  'poly-synth/wave': ['Saw', 'Square'],
 };
 
 /** How a switch's current position reads. */

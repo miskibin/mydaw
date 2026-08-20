@@ -978,6 +978,7 @@ mod tests {
             sample_end_frames: 0,
             fade_in_ms: 0.0,
             fade_out_ms: 0.0,
+            source_params: Default::default(),
         }
     }
 

@@ -7,7 +7,7 @@
 //!
 //! | Node | `type_id` | What it is |
 //! | --- | --- | --- |
-//! | [`PolySynthNode`] | `poly-synth` | Eight voices of polyBLEP saw + sine sub, ADSR, one-pole lowpass. |
+//! | [`PolySynthNode`] | `poly-synth` | Eight voices: two polyBLEP oscillators with detune, a sine sub, an ADSR and a resonant filter with envelope. Ten knobs. |
 //! | [`SingleDrumNode`] | `kick` | One synthesised kick, any key, tunable +/- an octave. |
 //! | [`SingleDrumNode`] | `snare` | One synthesised snare, any key, tunable +/- an octave. |
 //! | [`SingleDrumNode`] | `clap` | One synthesised hand clap, any key, unpitched. |
@@ -45,12 +45,14 @@
 //! with a counting global allocator over event-heavy blocks rather than
 //! asserting it by inspection.
 //!
-//! # What is deliberately missing
-//! Every parameter is a constant. There is no cutoff knob, no tuning, no
-//! per-drum level, and no preset. Parameters need a parameter queue, smoothing
-//! and automation, which is the mixer phase's work; a knob wired to a field with
-//! no smoothing would click, and a knob wired to nothing would be a lie. See
-//! `docs/superpowers/specs/2026-08-19-step3-internal-instruments.md`.
+//! # Knobs, and which of these have them
+//! The synth declares [`ParamDef`]s and is built against a `ParamBlock` the
+//! shell owns -- the same parameter system the effects use, because as far as a
+//! knob is concerned an instrument is not a different kind of thing from an
+//! effect, and giving instruments a second one would have been two of
+//! everything. The drums are still constants: each is one sound with one job,
+//! and the controls a drum wants (tune, decay, snap) are a later step.
+//! Automation is not implemented for either.
 //!
 //! # Using it
 //! ```no_run
@@ -84,7 +86,7 @@ pub use single_drum::{
 use std::sync::Arc;
 
 use mydaw_kernel::{KernelCtx, Plugin, PluginManifest};
-use mydaw_rt_core::{RtNode, RtNodeFactory};
+use mydaw_rt_core::{ParamDef, ParamNodeFactory, RtNode, RtNodeFactory};
 
 /// Kernel id of this plugin.
 pub const PLUGIN_ID: &str = "instruments";
@@ -108,6 +110,20 @@ pub struct InstrumentInfo {
     pub description: &'static str,
 }
 
+/// The knobs an instrument declares, from its `type_id` alone.
+///
+/// A free function as well as a registry method because the *project* has to
+/// answer this -- a track owns its instrument's parameter block, and a project
+/// file is loaded on a thread that has no registry, no audio device and no
+/// graph. The declaration is `&'static` data on the node type, so there is
+/// nothing a registry instance could add to the answer.
+pub fn param_defs(type_id: &str) -> &'static [ParamDef] {
+    match type_id {
+        poly_synth::NODE_TYPE_ID => poly_synth::PARAMS,
+        _ => &[],
+    }
+}
+
 /// The built-in instruments, by `type_id`.
 ///
 /// # Why a service and not just two factories
@@ -119,6 +135,12 @@ pub struct InstrumentInfo {
 /// depend on them being right.
 pub struct InstrumentRegistry {
     entries: Vec<(InstrumentInfo, Arc<dyn RtNodeFactory>)>,
+    /// The subset of them that declare knobs, by `type_id`.
+    ///
+    /// A second list rather than a wider entry, because a `dyn RtNodeFactory`
+    /// cannot be asked whether it is also a `dyn ParamNodeFactory` -- and most
+    /// of these are drums, which have nothing to declare.
+    tweakable: Vec<(&'static str, Arc<dyn ParamNodeFactory>)>,
 }
 
 impl Default for InstrumentRegistry {
@@ -138,7 +160,8 @@ impl InstrumentRegistry {
             InstrumentInfo {
                 type_id: poly_synth::NODE_TYPE_ID,
                 name: poly_synth::DISPLAY_NAME,
-                description: "Eight-voice saw + sub with an ADSR and a 3 kHz lowpass",
+                description: "Eight voices: two oscillators with detune, a sub, \
+                              an ADSR and a resonant filter with its own envelope",
             },
             Arc::new(PolySynthFactory::new()),
         )];
@@ -161,7 +184,45 @@ impl InstrumentRegistry {
             },
             Arc::new(DrumKitFactory::new()),
         ));
-        Self { entries }
+        Self {
+            entries,
+            tweakable: vec![(
+                poly_synth::NODE_TYPE_ID,
+                Arc::new(PolySynthFactory::new()) as Arc<dyn ParamNodeFactory>,
+            )],
+        }
+    }
+
+    /// What `type_id` exposes as knobs. Empty for an instrument with none.
+    pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
+        self.tweakable
+            .iter()
+            .find(|(id, _)| *id == type_id)
+            .map_or(&[][..], |(_, factory)| factory.params())
+    }
+
+    /// The same answer without a registry to hand. See [`param_defs`].
+    pub fn defs_for(type_id: &str) -> &'static [ParamDef] {
+        param_defs(type_id)
+    }
+
+    /// Instantiate an instrument against a parameter block the caller owns.
+    ///
+    /// Falls back to [`create`](Self::create) for an instrument with no
+    /// parameters, so a caller does not have to ask which kind it has.
+    ///
+    /// **Non-RT**: allocates.
+    pub fn create_with_params(
+        &self,
+        type_id: &str,
+        sample_rate: f64,
+        max_block: usize,
+        params: Arc<mydaw_rt_core::ParamBlock>,
+    ) -> Option<Box<dyn RtNode>> {
+        match self.tweakable.iter().find(|(id, _)| *id == type_id) {
+            Some((_, factory)) => Some(factory.create_with_params(sample_rate, max_block, params)),
+            None => self.create(type_id, sample_rate, max_block),
+        }
     }
 
     /// Every built-in instrument, in menu order.

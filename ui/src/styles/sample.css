@@ -152,6 +152,26 @@
   white-space: nowrap;
 }
 
+/*
+ * The instrument's own knobs: whatever the engine declared, in a grid.
+ *
+ * A grid rather than a row because ten knobs in a row is a window nobody can
+ * make narrow, and the declaration order is meaningful (oscillator, filter,
+ * envelope) so the wrap keeps related knobs together.
+ */
+.wv-sample__inst {
+  display: grid;
+  flex: none;
+  gap: 10px 14px;
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
+  justify-items: center;
+  margin: 0 12px 6px;
+  padding: 10px 12px 8px;
+  border-radius: 8px;
+  background: var(--sunk);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
 /* Pitch: the knob, whole-semitone steps, and what the two add up to. */
 .wv-sample__pitch {
   display: flex;

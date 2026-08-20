@@ -490,6 +490,13 @@ pub struct TrackEntry {
     /// Channel fade out, in milliseconds.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub fade_out_ms: f32,
+    /// The instrument's own knobs, by id. Empty for an instrument with none.
+    ///
+    /// Written whole rather than only the moved ones, for the reason an
+    /// insert's parameters are: a default that changes in a later build must
+    /// not silently change a saved sound.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub source_params: BTreeMap<String, f32>,
 }
 
 fn is_zero_f32(value: &f32) -> bool {
@@ -943,6 +950,17 @@ impl ProjectFile {
                     sample_end_frames: track.sample_end_frames,
                     fade_in_ms: track.fade_in_ms,
                     fade_out_ms: track.fade_out_ms,
+                    source_params: track
+                        .source_params
+                        .as_ref()
+                        .map(|block| {
+                            block
+                                .snapshot()
+                                .into_iter()
+                                .map(|(id, value)| (id.to_owned(), value))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                     state_blob: track_states
                         .get(index)
                         .map_or_else(String::new, |bytes| to_base64(bytes)),
@@ -1077,6 +1095,7 @@ impl ProjectFile {
             defs.push(TrackDef {
                 id: entry.id,
                 name: entry.name.clone(),
+                source_params: restore_source_params(&source, &entry.source_params),
                 source,
                 gain_db,
                 pan,
@@ -1290,6 +1309,20 @@ impl ProjectFile {
 // ---------------------------------------------------------------------------
 
 /// Rebuild one insert chain, leaving out any effect this build does not have.
+/// The instrument's knobs, as the file left them.
+///
+/// Ids this build does not know are ignored and missing ones keep their
+/// defaults -- rule 1 at parameter granularity, exactly as an insert's
+/// parameters are restored. A source with no knobs answers `None`.
+fn restore_source_params(
+    source: &Source,
+    values: &BTreeMap<String, f32>,
+) -> Option<std::sync::Arc<mydaw_rt_core::ParamBlock>> {
+    let block = TrackDef::params_for(source)?;
+    block.apply(values.iter().map(|(id, value)| (id.as_str(), *value)));
+    Some(block)
+}
+
 fn restore_chain(entries: &[InsertEntry], effects: &EffectRegistry) -> Vec<InsertDef> {
     entries
         .iter()
@@ -1627,6 +1660,45 @@ mod tests {
                 state_blob: String::new(),
             }),
         )
+    }
+
+    #[test]
+    fn an_instruments_knobs_survive_the_file() {
+        // A synth's parameters live in a block the *track* owns, not in the
+        // node, so the thing that has to survive a save is the block -- and the
+        // thing that has to survive a load is the values landing back in a
+        // block the next graph will hand to the next node.
+        let mut project = Project::default();
+        let synth = project.len() - 1;
+        assert_eq!(project.tracks[synth].source, Source::PolySynth);
+        let block = project.tracks[synth]
+            .source_params
+            .clone()
+            .expect("the synth declares parameters");
+        block.set_by_id("cutoff", 640.0).expect("a cutoff knob");
+        block.set_by_id("resonance", 6.0).expect("a resonance knob");
+        block.set_by_id("wave", 1.0).expect("a wave switch");
+
+        let file = ProjectFile::capture(&project, 0, 130.0, &empty_song(), &[], None);
+        let json = file.to_json().unwrap();
+        assert!(json.contains("\"cutoff\": 640.0"), "{json}");
+
+        let restored = parse_project(&json).unwrap();
+        let (loaded, _) = restored.to_project(&EffectRegistry::new()).unwrap();
+        let back = loaded.tracks[synth]
+            .source_params
+            .as_ref()
+            .expect("and they come back");
+        assert_eq!(back.get_by_id("cutoff"), Some(640.0));
+        assert_eq!(back.get_by_id("resonance"), Some(6.0));
+        assert_eq!(back.get_by_id("wave"), Some(1.0));
+        // Everything the file did not mention is at its default, not at zero.
+        assert_eq!(back.get_by_id("sustain"), Some(0.6));
+        assert_eq!(loaded.tracks[synth], project.tracks[synth]);
+
+        // A drum has no knobs, and its entry says nothing about any.
+        assert!(project.tracks[0].source_params.is_none());
+        assert!(file.tracks[0].source_params.is_empty());
     }
 
     #[test]

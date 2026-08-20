@@ -506,6 +506,32 @@ function saveMockFolders(folders: LibraryRootDto[]): void {
   }
 }
 
+
+/**
+ * What the poly synth exposes, mirroring `poly_synth::PARAMS` in the engine.
+ *
+ * The browser mock has to answer the same shape the engine does, or the synth
+ * window would only exist inside Tauri -- which is where it is hardest to look
+ * at it.
+ */
+const SYNTH_PARAMS: readonly ParamDefDto[] = [
+  { id: 'wave', name: 'Wave', unit: '', min: 0, max: 1, defaultValue: 0, curve: 'linear', step: 1, smoothingMs: 0 },
+  { id: 'detune', name: 'Detune', unit: 'ct', min: 0, max: 50, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 10 },
+  { id: 'sub', name: 'Sub', unit: '', min: 0, max: 1, defaultValue: 0.5, curve: 'linear', step: null, smoothingMs: 10 },
+  { id: 'cutoff', name: 'Cutoff', unit: 'Hz', min: 60, max: 18_000, defaultValue: 3_000, curve: 'log', step: null, smoothingMs: 10 },
+  { id: 'resonance', name: 'Res', unit: '', min: 0.5, max: 12, defaultValue: 0.8, curve: 'log', step: null, smoothingMs: 10 },
+  { id: 'envAmount', name: 'Env', unit: '%', min: -100, max: 100, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 10 },
+  { id: 'attack', name: 'Attack', unit: 'ms', min: 1, max: 2_000, defaultValue: 5, curve: 'log', step: null, smoothingMs: 0 },
+  { id: 'decay', name: 'Decay', unit: 'ms', min: 1, max: 4_000, defaultValue: 80, curve: 'log', step: null, smoothingMs: 0 },
+  { id: 'sustain', name: 'Sustain', unit: '', min: 0, max: 1, defaultValue: 0.6, curve: 'linear', step: null, smoothingMs: 0 },
+  { id: 'release', name: 'Release', unit: 'ms', min: 1, max: 4_000, defaultValue: 120, curve: 'log', step: null, smoothingMs: 0 },
+];
+
+/** The knobs an instrument declares, by source id. */
+function sourceParamDefs(sourceId: string): ParamDefDto[] {
+  return sourceId === 'poly-synth' ? SYNTH_PARAMS.map((def) => ({ ...def })) : [];
+}
+
 /** Default pitch/region for a mixer strip that is not a sample channel. */
 const SAMPLE_PLAY = {
   pitchCents: 0,
@@ -514,6 +540,11 @@ const SAMPLE_PLAY = {
   sampleStartFrames: 0,
   sampleEndFrames: 0,
 } as const;
+
+/** The instrument-knob half of a strip that has no instrument knobs. */
+function noSourceParams(): Pick<TrackDto, 'sourceParamDefs' | 'sourceParams'> {
+  return { sourceParamDefs: [], sourceParams: [] };
+}
 function starterTracks(): TrackDto[] {
   const wanted = ['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'sampler:salamander-piano'];
   return wanted.map((sourceId, index) => {
@@ -539,6 +570,11 @@ function starterTracks(): TrackDto[] {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      sourceParamDefs: sourceParamDefs(sourceId),
+      sourceParams: sourceParamDefs(sourceId).map((def) => ({
+        id: def.id,
+        value: def.defaultValue,
+      })),
     };
   });
 }
@@ -863,6 +899,13 @@ export class MockBackend implements Backend {
     def.clap = null;
     def.vst3 = null;
     def.audioSourceId = null;
+    // A change of instrument is a change of knobs: the old ones belonged to the
+    // old sound (see `TrackDef::set_source` in the engine).
+    def.sourceParamDefs = sourceParamDefs(wanted.id);
+    def.sourceParams = def.sourceParamDefs.map((entry) => ({
+      id: entry.id,
+      value: entry.defaultValue,
+    }));
     this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
     return this.mixerState();
   }
@@ -1115,6 +1158,11 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      sourceParamDefs: sourceParamDefs(wanted.id),
+      sourceParams: sourceParamDefs(wanted.id).map((def) => ({
+        id: def.id,
+        value: def.defaultValue,
+      })),
     });
     // A new rack channel gets a grid in every pattern, the way the engine's
     // `PatternSet::add_channel` does -- otherwise the row would be missing
@@ -1165,6 +1213,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      ...noSourceParams(),
       audioSourceId: loaded.id,
     });
     for (const pattern of this.patterns) {
@@ -1476,6 +1525,21 @@ export class MockBackend implements Backend {
     if (slot) slot.value = stored;
     else insert.params.push({ id: paramId, value: stored });
     if (paramId === 'bypass') insert.bypassed = stored >= 0.5;
+    return stored;
+  }
+
+  async setSourceParam(track: number, paramId: string, value: number): Promise<number> {
+    const entry = this.track(track);
+    const def = entry.sourceParamDefs.find((candidate) => candidate.id === paramId);
+    if (!def) throw new Error(`${entry.name} has no parameter '${paramId}'`);
+    const clamped = Math.min(def.max, Math.max(def.min, value));
+    const stored =
+      def.step && def.step > 0
+        ? Math.min(def.max, def.min + Math.round((clamped - def.min) / def.step) * def.step)
+        : clamped;
+    const slot = entry.sourceParams.find((candidate) => candidate.id === paramId);
+    if (slot) slot.value = stored;
+    else entry.sourceParams.push({ id: paramId, value: stored });
     return stored;
   }
 
@@ -2059,6 +2123,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      ...noSourceParams(),
       audioSourceId: sourceId,
     });
     for (const pattern of this.patterns) {

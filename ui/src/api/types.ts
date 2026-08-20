@@ -634,6 +634,18 @@ export interface TrackDto {
   fadeInMs: number;
   /** Channel fade out, in milliseconds. */
   fadeOutMs: number;
+  /**
+   * What the instrument at the head of this channel exposes as knobs.
+   *
+   * Empty for an instrument with none -- every drum, the test tone, a sampled
+   * instrument, and a hosted plugin, which has its own editor window. The defs
+   * travel with the track rather than in a catalogue because they are what the
+   * generic knob panel draws from, and a panel that had to join two messages
+   * to draw one window is a panel that can draw half of one.
+   */
+  sourceParamDefs: ParamDefDto[];
+  /** Their current values, in declaration order. */
+  sourceParams: ParamValueDto[];
   /** SMP region start, in the file's own frames. */
   sampleStartFrames: number;
   /** SMP region end, exclusive. `0` means the whole file. */
