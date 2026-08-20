@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   clampScroll,
+  foldToLoop,
   followScroll,
   timelinePxAt,
   wheelIntent,
@@ -113,5 +114,20 @@ describe('wheelPixels', () => {
     expect(wheelPixels({ deltaX: 0, deltaY: 1, deltaMode: 2 })).toBe(320);
     expect(wheelPixels({ deltaX: -20, deltaY: 100, deltaMode: 0 })).toBe(-20);
     expect(wheelPixels({ deltaX: 0, deltaY: 0, deltaMode: 0 })).toBe(0);
+  });
+});
+
+describe('foldToLoop', () => {
+  it('folds a rising position back into the loop', () => {
+    expect(foldToLoop(0, 3840)).toBe(0);
+    expect(foldToLoop(3840, 3840)).toBe(0);
+    expect(foldToLoop(3841, 3840)).toBe(1);
+    expect(foldToLoop(3840 * 7 + 100, 3840)).toBe(100);
+  });
+
+  it('leaves the position alone when there is no loop to fold into', () => {
+    expect(foldToLoop(9_000, 0)).toBe(9_000);
+    expect(foldToLoop(9_000, -1)).toBe(9_000);
+    expect(foldToLoop(Number.POSITIVE_INFINITY, 100)).toBe(Number.POSITIVE_INFINITY);
   });
 });

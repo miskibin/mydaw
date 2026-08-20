@@ -611,6 +611,7 @@ export class MockBackend implements Backend {
   private samplePos = 0;
   private bpm = DEFAULT_BPM;
   private playMode: PlayMode = 'pat';
+  private looping = true;
 
   private tracks: TrackDto[] = starterTracks();
   private buses: MockBus[] = [];
@@ -780,6 +781,11 @@ export class MockBackend implements Backend {
       throw new Error(`'${mode}' is not a play mode; expected 'pat' or 'song'`);
     }
     this.playMode = mode;
+    return this.sequencerState();
+  }
+
+  async setLoop(looping: boolean): Promise<SequencerState> {
+    this.looping = looping;
     return this.sequencerState();
   }
 
@@ -1579,6 +1585,7 @@ export class MockBackend implements Backend {
       bpm: this.bpm,
       sampleRate: SAMPLE_RATE,
       playMode: this.playMode,
+      looping: this.looping,
       ppq: PPQ,
       ticksPerStep: TICKS_PER_STEP,
       ticksPerBar: TICKS_PER_BAR,

@@ -103,6 +103,8 @@ export interface Backend {
   transportSeek(samplePos: number): Promise<void>;
   /** Switch the transport between the active pattern and the arrangement. */
   setPlayMode(mode: PlayMode): Promise<SequencerState>;
+  /** Repeat the arrangement, or stop at the end of the last clip. */
+  setLoop(looping: boolean): Promise<SequencerState>;
 
   /**
    * Play a note on one track's instrument. `velocity` is `0..1`. Sounds whether
@@ -446,6 +448,10 @@ class TauriBackend implements Backend {
 
   setPlayMode(mode: PlayMode): Promise<SequencerState> {
     return this.call('set_play_mode', { mode });
+  }
+
+  setLoop(looping: boolean): Promise<SequencerState> {
+    return this.call('set_loop', { looping });
   }
 
   async noteOn(key: number, velocity: number): Promise<void> {

@@ -200,6 +200,7 @@ fn scheduling_allocates_nothing_across_modes_tempos_rates_and_block_sizes() {
                                     bpm,
                                     playing: true,
                                     mode,
+                                    looping: false,
                                 },
                                 &mut buffer,
                             );
@@ -240,6 +241,7 @@ fn switching_mode_every_block_allocates_nothing() {
                     bpm: DEFAULT_BPM,
                     playing: true,
                     mode,
+                    looping: false,
                 },
                 &mut buffer,
             );
@@ -274,6 +276,7 @@ fn the_stop_flush_and_the_seek_flush_allocate_nothing() {
                         bpm: DEFAULT_BPM,
                         playing,
                         mode: PlayMode::Pattern,
+                        looping: false,
                     },
                     &mut buffer,
                 );
@@ -308,6 +311,7 @@ fn a_full_event_buffer_does_not_make_the_scheduler_allocate() {
                     bpm: 999.0,
                     playing: true,
                     mode: PlayMode::Pattern,
+                    looping: false,
                 },
                 &mut buffer,
             );
@@ -351,6 +355,7 @@ fn swapping_the_song_on_the_audio_thread_neither_allocates_nor_frees() {
                     bpm: DEFAULT_BPM,
                     playing: true,
                     mode: PlayMode::Song,
+                    looping: false,
                 },
                 &mut buffer,
             );

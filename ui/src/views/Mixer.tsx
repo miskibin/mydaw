@@ -658,7 +658,7 @@ function Strip(props: StripProps): JSX.Element {
           kind: 'fx',
           fx,
           label: fx.name,
-          title: `${fx.name} — click opens it in the inspector · right-click removes it · the dot bypasses it`,
+          title: `${fx.name} — drag to reorder the chain · click opens it in the inspector · right-click removes it · the dot bypasses it`,
         });
       } else if (i === chain.length) {
         rows.push({ kind: 'add', label: '+ effect', title: 'Put an internal effect on this chain' });
@@ -679,6 +679,12 @@ function Strip(props: StripProps): JSX.Element {
 
   function onSlot(row: SlotRow, event: MouseEvent): void {
     event.stopPropagation();
+    // The release that ended a reorder is also a click. It must not also open
+    // the inspector on whatever the effect landed next to.
+    if (dragged) {
+      dragged = false;
+      return;
+    }
     if (row.kind === 'add') {
       props.onPickEffect(target(), name(), event);
       return;
@@ -687,6 +693,69 @@ function Strip(props: StripProps): JSX.Element {
     if (row.kind === 'blank') return;
     view.setSideTab('inspector');
     view.setSideOpen(true);
+  }
+
+  // --- reordering the chain ------------------------------------------------
+  //
+  // The chain *is* the signal path: an EQ before a compressor and one after it
+  // are different sounds, and the strip is where you look at that order. The
+  // engine has had `move_insert` since the routing step and the inspector's
+  // arrows have used it; the strip could only add and remove, so rearranging
+  // meant deleting an effect and building it again from scratch.
+
+  /** The slot being dragged, and the slot it would land in. */
+  const [dragIndex, setDragIndex] = createSignal<number | null>(null);
+  const [dropIndex, setDropIndex] = createSignal<number | null>(null);
+  /** Whether the gesture that is ending was a drag rather than a click. */
+  let dragged = false;
+
+  function onSlotPointerDown(event: PointerEvent, row: SlotRow): void {
+    const fx = row.fx;
+    if (event.button !== 0 || row.kind !== 'fx' || !fx) return;
+    const list = (event.currentTarget as HTMLElement).closest<HTMLElement>('.wv-mixer__slots');
+    if (!list || inserts().length < 2) return;
+    const startY = event.clientY;
+    let moved = false;
+
+    /** Which chain position the pointer is over, by each row's own box. */
+    const indexAt = (clientY: number): number => {
+      const last = inserts().length - 1;
+      const rows = Array.from(list.querySelectorAll<HTMLElement>('.wv-mixer__slot'));
+      for (let i = 0; i <= last && i < rows.length; i++) {
+        const box = rows[i]!.getBoundingClientRect();
+        if (clientY < box.top + box.height / 2) return i;
+      }
+      return last;
+    };
+
+    const onMove = (move: PointerEvent) => {
+      if (!moved && Math.abs(move.clientY - startY) < 4) return;
+      if (!moved) {
+        moved = true;
+        setDragIndex(fx.index);
+        document.body.style.setProperty('cursor', 'grabbing');
+      }
+      setDropIndex(indexAt(move.clientY));
+    };
+
+    const onUp = (up: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.style.removeProperty('cursor');
+      setDragIndex(null);
+      setDropIndex(null);
+      if (!moved) return;
+      dragged = true;
+      const to = indexAt(up.clientY);
+      if (to === fx.index) return;
+      void app.mixerCommand((b) => b.moveInsert(target(), fx.index, to));
+      app.say(`${name()} · ${fx.name}`, `slot ${to + 1} of ${inserts().length}`);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   }
 
   function onSlotContext(row: SlotRow, event: MouseEvent): void {
@@ -982,8 +1051,14 @@ function Strip(props: StripProps): JSX.Element {
                 'is-add': row().kind === 'add',
                 'is-blank': row().kind === 'blank',
                 'is-more': row().kind === 'more',
+                'is-dragging': dragIndex() !== null && dragIndex() === row().fx?.index,
+                'is-drop':
+                  dragIndex() !== null &&
+                  dropIndex() === row().fx?.index &&
+                  dropIndex() !== dragIndex(),
               }}
               title={row().title}
+              onPointerDown={(event) => onSlotPointerDown(event, row())}
               onClick={(event) => onSlot(row(), event)}
               onContextMenu={(event) => onSlotContext(row(), event)}
             >

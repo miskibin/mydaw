@@ -345,6 +345,7 @@ pub fn run() -> ExitCode {
             commands::set_pattern_length,
             commands::set_active_pattern,
             commands::set_play_mode,
+            commands::set_loop,
             commands::add_playlist_track,
             commands::remove_playlist_track,
             commands::rename_playlist_track,

@@ -469,6 +469,15 @@ export interface SequencerState {
    */
   sampleRate: number;
   playMode: PlayMode;
+  /**
+   * Whether SONG repeats the arrangement instead of stopping at the last clip.
+   *
+   * PAT loops whatever this says -- a pattern is a loop by definition. The
+   * engine implements the repeat as an offset in *ticks* rather than a seek, so
+   * the transport position keeps rising past the end of the song and a view
+   * that draws a playhead has to fold it back (`loopedTicks`).
+   */
+  looping: boolean;
   /** Ticks per quarter note: 960. Sent so there is one definition of the grid. */
   ppq: number;
   /** Ticks in one step of the grid (a sixteenth): 240. */

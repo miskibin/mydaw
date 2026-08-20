@@ -132,3 +132,18 @@ export function wheelPixels(event: { deltaX: number; deltaY: number; deltaMode: 
   const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 320 : 1;
   return raw * scale;
 }
+
+/**
+ * Fold a rising position into a loop of `span`. `span <= 0` leaves it alone.
+ *
+ * The engine loops the arrangement by *repeating* it rather than by seeking:
+ * pass `k` is every clip offset by `k` song-lengths, so the transport position
+ * keeps climbing and nothing has to be flushed at the wrap (see the
+ * scheduler's `emit_song_pass`). The cost of that is here -- anything drawing a
+ * playhead has to fold the position back into the loop itself.
+ */
+export function foldToLoop(position: number, span: number): number {
+  if (!(span > 0) || !Number.isFinite(position)) return position;
+  const folded = position % span;
+  return folded < 0 ? folded + span : folded;
+}

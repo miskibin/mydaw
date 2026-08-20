@@ -319,7 +319,22 @@ export interface RollScene {
   /** The edited channel's colour. */
   colour: string;
   accent: string;
+  /**
+   * Where the pattern's loop ends. Past this is shaded: it is drawable, and
+   * drawing there grows the pattern (see `withGrownLength`), but it is not
+   * part of the loop *yet* and has to look like it.
+   */
   patternTicks: number;
+  /**
+   * How far the grid is drawn and scrolled, which is the longest a pattern may
+   * be rather than however long this one is.
+   *
+   * A roll that stopped at the loop was a roll you could not write past -- the
+   * grid, the ruler and the scrollbar all ended there, so "add a bar" meant
+   * finding the length control first. FL's roll is simply longer than the
+   * pattern, and the pattern grows to meet what you write.
+   */
+  drawTicks: number;
   /** Where the transport is inside the loop, or `null` when it is not playing. */
   playheadTick: number | null;
   /** The marquee being dragged, in canvas pixels. */
@@ -433,7 +448,7 @@ export class RollRenderer {
     const height = gridHeight(geo);
     const stepPx = TICKS_PER_STEP * geo.pxPerTick;
     const firstTick = Math.max(0, Math.floor(xToTick(KEY_W, geo) / TICKS_PER_STEP) * TICKS_PER_STEP);
-    const lastTick = Math.min(scene.patternTicks, xToTick(geo.width, geo));
+    const lastTick = Math.min(scene.drawTicks, xToTick(geo.width, geo));
     const drawSteps = stepPx >= 8;
 
     for (let tick = firstTick; tick <= lastTick; tick += TICKS_PER_STEP) {
@@ -560,7 +575,7 @@ export class RollRenderer {
 
     // Beat lines, so a velocity bar can be read against the bar it is in.
     const firstTick = Math.max(0, Math.floor(xToTick(KEY_W, geo) / PPQ) * PPQ);
-    for (let tick = firstTick; tick <= scene.patternTicks; tick += PPQ) {
+    for (let tick = firstTick; tick <= scene.drawTicks; tick += PPQ) {
       const x = Math.round(tickToX(tick, geo)) - 0.5;
       if (x < KEY_W) continue;
       if (x > geo.width) break;
@@ -595,7 +610,7 @@ export class RollRenderer {
     ctx.clip();
     const firstBeat = Math.max(0, Math.floor(xToTick(KEY_W, geo) / PPQ) * PPQ);
     ctx.textBaseline = 'middle';
-    for (let tick = firstBeat; tick <= scene.patternTicks; tick += PPQ) {
+    for (let tick = firstBeat; tick <= scene.drawTicks; tick += PPQ) {
       const x = Math.round(tickToX(tick, geo)) - 0.5;
       if (x > geo.width) break;
       const isBar = tick % TICKS_PER_BAR === 0;
@@ -709,7 +724,7 @@ export class RollRenderer {
    */
   private drawScrollbars(geo: RollGeometry, scene: RollScene): void {
     const ctx = this.ctx;
-    const h = hScrollBar(geo, scene.patternTicks);
+    const h = hScrollBar(geo, scene.drawTicks);
     const v = vScrollBar(geo);
     ctx.fillStyle = scene.palette.sunk;
     ctx.fillRect(h.track.x, h.track.y, h.track.w, h.track.h);

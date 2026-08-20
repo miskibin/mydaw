@@ -70,7 +70,8 @@ pub use spectrum::{
     SpectrumTarget, SpectrumWatch, SPECTRUM_HOP,
 };
 pub use transport::{
-    clamp_bpm, PlayMode, TransportClock, TransportSnapshot, DEFAULT_BPM, MAX_BPM, MIN_BPM,
+    clamp_bpm, PlayMode, TransportClock, TransportSnapshot, DEFAULT_BPM, DEFAULT_LOOPING, MAX_BPM,
+    MIN_BPM,
 };
 
 /// Re-exported so downstream crates can name `basedrop` types (`Handle`, `Owned`)

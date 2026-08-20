@@ -447,6 +447,9 @@ impl AppState {
         if let Err(err) = self.audio.set_play_mode(self.sequencer.play_mode()) {
             log::warn!("could not publish the play mode to the new stream: {err}");
         }
+        if let Err(err) = self.audio.set_looping(self.sequencer.is_looping()) {
+            log::warn!("could not publish the song loop to the new stream: {err}");
+        }
     }
 
     /// Change what plays at the head of the **selected** track, while the engine
@@ -1619,6 +1622,7 @@ impl AppState {
             bpm: self.sequencer.bpm(),
             sample_rate: self.audio.sample_rate().unwrap_or(0.0),
             play_mode: self.sequencer.play_mode().id(),
+            looping: self.sequencer.is_looping(),
             ppq: mydaw_plugin_sequencer::PPQ,
             ticks_per_step: mydaw_plugin_sequencer::TICKS_PER_STEP,
             ticks_per_bar: mydaw_plugin_sequencer::TICKS_PER_BAR,
@@ -1842,6 +1846,26 @@ impl AppState {
     pub fn set_play_mode(&self, mode: PlayMode) -> Result<(), SequencerError> {
         self.sequencer.set_play_mode(mode);
         match self.audio.set_play_mode(mode) {
+            Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    /// Whether song mode repeats the arrangement rather than stopping at it.
+    pub fn is_looping(&self) -> bool {
+        self.sequencer.is_looping()
+    }
+
+    /// Turn the song loop on or off.
+    ///
+    /// Session first, engine second, for the reason the mode is: a loop setting
+    /// must survive a device that is not open yet.
+    ///
+    /// # Errors
+    /// [`SequencerError::Audio`] when the command queue is full.
+    pub fn set_looping(&self, looping: bool) -> Result<(), SequencerError> {
+        self.sequencer.set_looping(looping);
+        match self.audio.set_looping(looping) {
             Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
             Err(err) => Err(err.into()),
         }

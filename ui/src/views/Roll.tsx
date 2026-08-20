@@ -15,6 +15,7 @@ import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount }
 
 import type { MelodicNoteDto } from '../api/types';
 import {
+  MAX_PATTERN_TICKS,
   chord,
   glueNotes,
   humanize,
@@ -139,10 +140,23 @@ export function Roll(): ReturnType<typeof Show> {
     const pattern = app.pattern();
     return pattern ? notesOf(pattern, channel()) : [];
   };
+  /** Where the pattern's loop ends: the shaded edge, and where PAT wraps. */
   const loopTicks = () => {
     const pattern = app.pattern();
     return pattern ? patternTicks(pattern) : 3840;
   };
+
+  /**
+   * How far you may write, which is the longest a pattern may *become*.
+   *
+   * The roll used to end where the pattern ended: the grid stopped, the
+   * scrollbar stopped, and a note aimed past the last bar was dropped on the
+   * floor. It is FL's behaviour that is wanted here -- the roll is four bars
+   * wide whatever the pattern is, and writing in bar three makes the pattern
+   * three bars long (rounded up to a length the engine allows). The growth
+   * itself is in `withNotes`, so every gesture gets it.
+   */
+  const editTicks = () => MAX_PATTERN_TICKS;
 
   const geometry = (): RollGeometry =>
     geometryFor(
@@ -241,6 +255,7 @@ export function Roll(): ReturnType<typeof Show> {
       colour: colour(),
       accent: theme.accentDrawn(),
       patternTicks: loopTicks(),
+      drawTicks: editTicks(),
       playheadTick:
         playing && pattern
           ? patternTick(
@@ -294,7 +309,7 @@ export function Roll(): ReturnType<typeof Show> {
     const { x, y } = pointerPos(event);
     lastPointer = { x, y };
     const geo = geometry();
-    const hHit = hitHScroll(x, y, geo, loopTicks());
+    const hHit = hitHScroll(x, y, geo, editTicks());
     if (hHit && event.button !== 1) {
       onHScroll(event, geo, hHit);
       return;
@@ -438,7 +453,7 @@ export function Roll(): ReturnType<typeof Show> {
         clampScroll(
           originX - (moveEvent.clientX - startX),
           gridWidth(geo),
-          contentWidth(loopTicks(), geo),
+          contentWidth(editTicks(), geo),
         ),
       );
       setScrollY(
@@ -456,7 +471,7 @@ export function Roll(): ReturnType<typeof Show> {
    */
   function onHScroll(event: PointerEvent, geo: RollGeometry, part: ScrollPart): void {
     if (event.button !== 0) return;
-    const pattern = loopTicks();
+    const pattern = editTicks();
     const bar = hScrollBar(geo, pattern);
     const viewport = gridWidth(geo);
 
@@ -554,7 +569,7 @@ export function Roll(): ReturnType<typeof Show> {
   function applyTimeWindow(leftTick: number, rightTick: number, anchor: 'left' | 'right'): void {
     const geo = geometry();
     const viewport = gridWidth(geo);
-    const pattern = loopTicks();
+    const pattern = editTicks();
     const left = Math.max(0, Math.min(leftTick, rightTick));
     const right = Math.max(left + 1, Math.max(leftTick, rightTick));
     const zoom = clampZoom((viewport / (right - left)) * (TICKS_PER_STEP / STEP_W));
@@ -680,8 +695,8 @@ export function Roll(): ReturnType<typeof Show> {
   function onDrawPlace(event: PointerEvent, geo: RollGeometry, x: number, y: number): void {
     const key = Math.min(127, Math.max(0, yToKey(y, geo)));
     const start = snap(Math.max(0, xToTick(x, geo)), true, event.altKey);
-    if (start >= loopTicks()) return;
-    const length = Math.max(1, Math.min(lastLength(), loopTicks() - start));
+    if (start >= editTicks()) return;
+    const length = Math.max(1, Math.min(lastLength(), editTicks() - start));
     const index = notes().length;
 
     app.startPatternGesture('Draw note');
@@ -696,7 +711,7 @@ export function Roll(): ReturnType<typeof Show> {
   function onDrawStretch(event: PointerEvent, geo: RollGeometry, x: number, y: number): void {
     const key = Math.min(127, Math.max(0, yToKey(y, geo)));
     const start = snap(Math.max(0, xToTick(x, geo)), true, event.altKey);
-    if (start >= loopTicks()) return;
+    if (start >= editTicks()) return;
     const length = Math.max(view.rollSnap() || TICKS_PER_STEP, lastLength());
     const index = notes().length;
 
@@ -718,7 +733,7 @@ export function Roll(): ReturnType<typeof Show> {
       const current = notes().slice();
       const note = current[index];
       if (!note) return;
-      current[index] = { ...note, length: Math.min(next, loopTicks() - note.start) };
+      current[index] = { ...note, length: Math.min(next, editTicks() - note.start) };
       commitNotes(current);
       app.say(`${track()?.name ?? 'Channel'} · Length`, lengthLabel(next));
     };
@@ -744,7 +759,7 @@ export function Roll(): ReturnType<typeof Show> {
       if (!inGrid(x, y, geo)) return;
       const key = Math.min(127, Math.max(0, yToKey(y, geo)));
       const start = snapTicks(Math.max(0, xToTick(x, geo)), step, true);
-      if (start >= loopTicks()) return;
+      if (start >= editTicks()) return;
       if (monophonic) {
         if (monoAt.get(start) === key) return;
         monoAt.set(start, key);
@@ -753,7 +768,7 @@ export function Roll(): ReturnType<typeof Show> {
         if (placed.has(id)) return;
         placed.add(id);
       }
-      const span = Math.min(length, loopTicks() - start);
+      const span = Math.min(length, editTicks() - start);
       if (monophonic) {
         const kept = notes().filter(
           (note) => note.start + note.length <= start || note.start >= start + step,
@@ -798,7 +813,7 @@ export function Roll(): ReturnType<typeof Show> {
     let origin = notes().map((note) => ({ ...note }));
     const startX = event.clientX;
     const startY = event.clientY;
-    const limit = loopTicks();
+    const limit = editTicks();
     let moved = false;
     let cloned = false;
     let sounding: number | undefined = options?.preview;
@@ -1169,7 +1184,7 @@ export function Roll(): ReturnType<typeof Show> {
   function nudge(dTicks: number, dKeys: number, label: string): void {
     const group = view.selection();
     if (group.length === 0) return;
-    const limit = loopTicks();
+    const limit = editTicks();
     const next = notes().map((note, at) => {
       if (!group.includes(at)) return note;
       const start = Math.max(0, Math.min(limit - 1, note.start + dTicks));
@@ -1222,7 +1237,7 @@ export function Roll(): ReturnType<typeof Show> {
       clampScroll(
         tick * next.pxPerTick - (originX - KEY_W),
         gridWidth(next),
-        contentWidth(loopTicks(), next),
+        contentWidth(editTicks(), next),
       ),
     );
     setScrollY(
@@ -1379,7 +1394,7 @@ export function Roll(): ReturnType<typeof Show> {
     lastPointer = { x, y };
     if (gestureActive || event.buttons !== 0) return;
     const geo = geometry();
-    const hHit = hitHScroll(x, y, geo, loopTicks());
+    const hHit = hitHScroll(x, y, geo, editTicks());
     if (hHit) {
       canvas.style.cursor =
         hHit === 'start' || hHit === 'end' ? 'ew-resize' : hHit === 'body' ? 'grab' : 'default';
@@ -1424,7 +1439,7 @@ export function Roll(): ReturnType<typeof Show> {
       );
       return;
     }
-    if (hitHScroll(x, y, geo, loopTicks())) {
+    if (hitHScroll(x, y, geo, editTicks())) {
       event.preventDefault();
       if (notches === 0) return;
       zoomAt(notches > 0 ? 1.1 : 1 / 1.1, KEY_W + gridWidth(geo) / 2, y);
@@ -1458,7 +1473,7 @@ export function Roll(): ReturnType<typeof Show> {
         clampScroll(
           sx + (event.ctrlKey ? event.deltaY : event.deltaX),
           gridWidth(geo),
-          contentWidth(loopTicks(), geo),
+          contentWidth(editTicks(), geo),
         ),
       );
       return;

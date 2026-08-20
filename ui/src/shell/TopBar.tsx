@@ -29,7 +29,8 @@ import {
   IconTypingKeyboard,
   WaveMark,
 } from '../ui/icons';
-import { barsBeats, samplesToTicks } from '../lib/pattern';
+import { barsBeats, samplesToTicks, ticksToSamples } from '../lib/pattern';
+import { foldToLoop } from '../lib/timeline';
 import { midiKeyFor, noteName, clampOctave } from '../lib/keyboard';
 import { formatTimecode } from '../lib/playhead';
 import { useAppState } from '../state';
@@ -56,10 +57,24 @@ export function TopBar(): ReturnType<typeof Show> {
   let clockEl: HTMLSpanElement | undefined;
   let barEl: HTMLSpanElement | undefined;
 
+  /**
+   * The span the readouts fold into, in samples, or `0` for none.
+   *
+   * A looping arrangement is *repeated* by the engine rather than seeked, so the
+   * raw position climbs for ever -- a clock reading 3:20 on the fourth time
+   * round an eight-bar loop is telling the truth about the transport and lying
+   * about the music.
+   */
+  const loopSpanSamples = (): number => {
+    if (app.playMode() !== 'song' || !app.looping()) return 0;
+    const end = app.playlist()?.endTicks ?? 0;
+    return end > 0 ? ticksToSamples(end, app.playhead.getSampleRate(), app.bpm()) : 0;
+  };
+
   // One read of the playhead per frame: `positionSamples` advances its own
   // error correction, so calling it twice would double-correct.
   onFrame(() => {
-    const samples = app.playhead.positionSamples();
+    const samples = foldToLoop(app.playhead.positionSamples(), loopSpanSamples());
     const rate = app.playhead.getSampleRate();
     if (clockEl) clockEl.textContent = formatTimecode(samples / rate);
     if (barEl) barEl.textContent = barsBeats(samplesToTicks(samples, rate, app.bpm()));
@@ -167,9 +182,15 @@ export function TopBar(): ReturnType<typeof Show> {
         </button>
         <button
           type="button"
-          class="wv-tbtn wv-can-disable"
-          disabled
-          title="Loop points are not implemented yet — PAT mode already loops the pattern, and SONG mode plays to the end of the arrangement"
+          class="wv-tbtn"
+          classList={{ 'is-active': app.looping() }}
+          aria-pressed={app.looping()}
+          title={
+            app.looping()
+              ? 'Song loop on — SONG repeats the arrangement. Click to play it once and stop.'
+              : 'Song loop off — SONG plays to the end of the last clip and stops. Click to repeat it.'
+          }
+          onClick={() => app.setLoop(!app.looping())}
         >
           <IconLoop />
         </button>

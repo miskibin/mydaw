@@ -434,6 +434,22 @@ impl AudioIoService {
         self.send_command(RtCommand::SetPlayMode(mode))
     }
 
+    /// Repeat the arrangement, or stop at the end of it.
+    ///
+    /// # Errors
+    /// [`AudioIoError::NotRunning`] with no stream open, or a full queue.
+    pub fn set_looping(&self, looping: bool) -> Result<(), AudioIoError> {
+        self.send_command(RtCommand::SetLooping(looping))
+    }
+
+    /// Whether the audio thread is looping the song, or `None` while stopped.
+    pub fn is_looping(&self) -> Option<bool> {
+        self.session
+            .lock()
+            .as_ref()
+            .map(|s| s.transport.is_looping())
+    }
+
     /// The mode the audio thread is in, or `None` while stopped.
     pub fn play_mode(&self) -> Option<PlayMode> {
         self.session

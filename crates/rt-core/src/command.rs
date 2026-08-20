@@ -30,6 +30,11 @@ pub enum RtCommand {
     /// effect on the *next block*, at the same latency as pressing play, and it
     /// must not wait for a song recompile that has nothing to do with it.
     SetPlayMode(PlayMode),
+    /// Repeat the arrangement, or stop at the end of it.
+    ///
+    /// A transport command for the same reason the mode is: it changes what the
+    /// *clock* does at the end of the song, not what the song contains.
+    SetLooping(bool),
 }
 
 /// Producer half, lives on the non-RT side.
@@ -58,6 +63,7 @@ pub fn drain_commands(rx: &mut RtCommandConsumer, transport: &crate::TransportCl
                 transport.set_bpm(bpm);
             }
             RtCommand::SetPlayMode(mode) => transport.set_play_mode(mode),
+            RtCommand::SetLooping(looping) => transport.set_looping(looping),
         }
     }
 }

@@ -756,6 +756,9 @@ pub struct SequencerStateDto {
     pub sample_rate: f64,
     /// `pat` or `song`.
     pub play_mode: &'static str,
+    /// Whether song mode repeats the arrangement instead of stopping at the
+    /// end of the last clip. Pattern mode loops whatever this says.
+    pub looping: bool,
     /// Ticks per quarter note. Sent rather than hard-coded in the UI so there is
     /// one definition of the grid.
     pub ppq: u32,
@@ -980,6 +983,7 @@ mod tests {
             bpm: 130.0,
             sample_rate: 44_100.0,
             play_mode: "pat",
+            looping: true,
             ppq: mydaw_plugin_sequencer::PPQ,
             ticks_per_step: mydaw_plugin_sequencer::TICKS_PER_STEP,
             ticks_per_bar: TICKS_PER_BAR,
@@ -990,6 +994,7 @@ mod tests {
         assert_eq!(json["bpm"], 130.0);
         assert_eq!(json["sampleRate"], 44_100.0);
         assert_eq!(json["playMode"], "pat");
+        assert_eq!(json["looping"], true);
         assert_eq!(json["ppq"], 960);
         assert_eq!(json["ticksPerStep"], 240);
         assert_eq!(json["ticksPerBar"], 3_840);
@@ -1006,6 +1011,7 @@ mod tests {
             keys,
             [
                 "bpm",
+                "looping",
                 "patternSet",
                 "playMode",
                 "playlist",

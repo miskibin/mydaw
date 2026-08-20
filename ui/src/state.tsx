@@ -173,6 +173,9 @@ export interface AppState {
   togglePlay(): void;
   seek(samplePos: number): void;
   setPlayMode(mode: PlayMode): void;
+  /** Whether SONG repeats the arrangement. PAT loops regardless. */
+  looping: Accessor<boolean>;
+  setLoop(looping: boolean): void;
   setBpm(bpm: number): void;
 
   /**
@@ -444,6 +447,11 @@ function createAppState(): AppState {
   function setPlayMode(mode: PlayMode): void {
     void sequencerCommand((b) => b.setPlayMode(mode));
     say('Transport · Mode', mode === 'pat' ? 'Pattern' : 'Song');
+  }
+
+  function setLoop(looping: boolean): void {
+    void sequencerCommand((b) => b.setLoop(looping));
+    say('Transport · Loop', looping ? 'Song repeats' : 'Plays once');
   }
 
   function setBpm(next: number): void {
@@ -918,6 +926,8 @@ function createAppState(): AppState {
     togglePlay,
     seek,
     setPlayMode,
+    looping: () => sequencer()?.looping ?? true,
+    setLoop,
     setBpm,
     mixerCommand,
     setMasterGain,

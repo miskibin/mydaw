@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest';
 
 import type { PatternDto } from '../api/types';
 import {
+  MAX_PATTERN_TICKS,
   TICKS_PER_BAR,
   TICKS_PER_STEP,
   audioWaveLayout,
   clipArtLayout,
   emptyRow,
+  lengthForTicks,
+  notesOf,
   withClearedChannel,
   withFilledSteps,
+  withGrownLength,
   withInvertedSteps,
+  withNotes,
   withRandomSteps,
   withShiftedSteps,
 } from './pattern';
@@ -134,5 +139,72 @@ describe('audioWaveLayout', () => {
 
   it('is unshifted when the file has no frames', () => {
     expect(audioWaveLayout(fourBars, 0, 100, px).offsetPx).toBe(0);
+  });
+});
+
+describe('lengthForTicks', () => {
+  it('picks the shortest legal length that holds the ticks', () => {
+    expect(lengthForTicks(0)).toBe(16);
+    expect(lengthForTicks(TICKS_PER_BAR)).toBe(16);
+    expect(lengthForTicks(TICKS_PER_BAR + 1)).toBe(32);
+    expect(lengthForTicks(3 * TICKS_PER_BAR)).toBe(64);
+  });
+
+  it('stops at four bars rather than inventing a length the engine refuses', () => {
+    expect(lengthForTicks(99 * TICKS_PER_BAR)).toBe(64);
+    expect(MAX_PATTERN_TICKS).toBe(4 * TICKS_PER_BAR);
+  });
+});
+
+describe('withGrownLength', () => {
+  it('leaves a pattern that already fits alone, by reference', () => {
+    const pattern = blank();
+    expect(withGrownLength(pattern, TICKS_PER_BAR)).toBe(pattern);
+  });
+
+  it('pads every step row to the new length, which is what the engine demands', () => {
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 16), notes: [] }],
+    };
+    const grown = withGrownLength(pattern, TICKS_PER_BAR + 1);
+    expect(grown.steps).toBe(32);
+    expect(grown.channels[0]!.steps!.steps).toHaveLength(32);
+  });
+});
+
+describe('withNotes', () => {
+  it('grows the pattern to hold a note written past the loop', () => {
+    const grown = withNotes(
+      blank(),
+      0,
+      [{ key: 60, start: 2 * TICKS_PER_BAR, length: TICKS_PER_STEP, velocity: 0.8 }],
+      60,
+    );
+    expect(grown.steps).toBe(64);
+    expect(notesOf(grown, 0)).toHaveLength(1);
+  });
+
+  it('grows for a note that starts inside the loop and runs past it', () => {
+    const grown = withNotes(
+      blank(),
+      0,
+      [{ key: 60, start: TICKS_PER_BAR - TICKS_PER_STEP, length: TICKS_PER_BAR, velocity: 0.8 }],
+      60,
+    );
+    expect(grown.steps).toBe(32);
+    expect(notesOf(grown, 0)[0]!.length).toBe(TICKS_PER_BAR);
+  });
+
+  it('never shrinks, and clamps past the longest pattern instead of growing further', () => {
+    const long = withNotes(
+      blank(64),
+      0,
+      [{ key: 60, start: 3 * TICKS_PER_BAR, length: 4 * TICKS_PER_BAR, velocity: 0.8 }],
+      60,
+    );
+    expect(long.steps).toBe(64);
+    expect(notesOf(long, 0)[0]!.length).toBe(TICKS_PER_BAR);
+    expect(withNotes(blank(64), 0, [], 60).steps).toBe(64);
   });
 });

@@ -92,6 +92,7 @@ import {
 import { allowDrop, droppedAudioFile, droppedAudioPath, importDroppedFile, parseDrop } from '../lib/dnd';
 import {
   clampScroll,
+  foldToLoop,
   followScroll,
   wheelIntent,
   wheelPixels,
@@ -457,10 +458,12 @@ export function Playlist(): ReturnType<typeof Show> {
     if (playheadEl) playheadEl.style.display = song ? '' : 'none';
     if (cursorEl) cursorEl.style.display = song ? '' : 'none';
     if (!song) return;
-    const ticks = samplesToTicks(
-      app.playhead.positionSamples(),
-      app.playhead.getSampleRate(),
-      app.bpm(),
+    // The engine loops the arrangement by repeating it, so the position it
+    // reports keeps climbing past the end of the song; the playhead has to be
+    // folded back into the loop or it walks off the timeline.
+    const ticks = foldToLoop(
+      samplesToTicks(app.playhead.positionSamples(), app.playhead.getSampleRate(), app.bpm()),
+      app.looping() ? (playlist()?.endTicks ?? 0) : 0,
     );
     const x = ticks * pxPerTick();
     if (playheadEl) playheadEl.style.transform = `translateX(${x}px)`;

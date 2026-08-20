@@ -21,6 +21,8 @@ export const TICKS_PER_BAR = 3840;
 export const STEPS_PER_BEAT = 4;
 /** The lengths a pattern may be. Mirrors `PATTERN_LENGTHS`. */
 export const PATTERN_LENGTHS = [16, 32, 64] as const;
+/** Ticks in the longest pattern the engine allows: four bars of 4/4. */
+export const MAX_PATTERN_TICKS = PATTERN_LENGTHS[PATTERN_LENGTHS.length - 1]! * TICKS_PER_STEP;
 /** Velocity a freshly switched-on step gets. Mirrors `DEFAULT_STEP_VELOCITY`. */
 export const STEP_VELOCITY = 0.78;
 /** Velocity a shift-clicked step gets. */
@@ -432,6 +434,52 @@ export function notesToSteps(
 // Notes
 // ---------------------------------------------------------------------------
 
+/**
+ * The shortest allowed length that holds `ticks`, capped at the longest.
+ *
+ * A pattern may be one, two or four bars and nothing else (the engine's
+ * `PATTERN_LENGTHS`), so "long enough" is a choice from three, not a number.
+ */
+export function lengthForTicks(ticks: number): number {
+  for (const steps of PATTERN_LENGTHS) {
+    if (steps * TICKS_PER_STEP >= ticks) return steps;
+  }
+  return PATTERN_LENGTHS[PATTERN_LENGTHS.length - 1]!;
+}
+
+/**
+ * Grow `pattern` to `steps`, padding every step row to match.
+ *
+ * The engine **rejects** a pattern whose step rows are not exactly as long as
+ * the pattern claims to be (`PatternError::WrongRowLength`), so a length change
+ * that did not carry the rows with it would be refused at the wall and the edit
+ * would silently roll back. Never shortens: this is the growth path, and
+ * shortening is a deliberate command with its own non-destructive rules.
+ */
+export function withLength(pattern: PatternDto, steps: number): PatternDto {
+  if (steps <= pattern.steps) return pattern;
+  return {
+    ...pattern,
+    steps,
+    channels: pattern.channels.map((clip) =>
+      clip.steps ? { ...clip, steps: { ...clip.steps, steps: stepCells(clip, steps) } } : clip,
+    ),
+  };
+}
+
+/**
+ * Grow `pattern` so that `ticks` fits inside it. Same reference when it does.
+ *
+ * This is what makes the piano roll's grid bigger than the pattern honest: you
+ * can draw in the fourth bar of a one-bar pattern, and the pattern becomes four
+ * bars long rather than the note being thrown away at the wall. Past four bars
+ * there is nowhere to grow to, and the note is clamped as it always was.
+ */
+export function withGrownLength(pattern: PatternDto, ticks: number): PatternDto {
+  if (ticks <= patternTicks(pattern)) return pattern;
+  return withLength(pattern, lengthForTicks(ticks));
+}
+
 /** Clamp a note into the pattern, or reject it outright. */
 export function clampNote(note: MelodicNoteDto, pattern: PatternDto): MelodicNoteDto | null {
   const limit = patternTicks(pattern);
@@ -460,13 +508,22 @@ export function withNotes(
   notes: readonly MelodicNoteDto[],
   fallbackKey: number,
 ): PatternDto {
+  // The pattern grows to whatever was written before anything is clamped to
+  // it: a note drawn in bar three of a one-bar pattern is a longer pattern,
+  // not a note to throw away. Every roll gesture goes through here -- draw,
+  // paint, drag, resize, paste, the note operations -- so all of them extend.
+  const needed = notes.reduce(
+    (end, note) => Math.max(end, Math.round(note.start) + Math.round(note.length)),
+    0,
+  );
+  const grown = withGrownLength(pattern, needed);
   const clean: MelodicNoteDto[] = [];
   for (const note of notes) {
-    const fitted = clampNote(note, pattern);
+    const fitted = clampNote(note, grown);
     if (fitted) clean.push(fitted);
     if (clean.length >= MAX_NOTES) break;
   }
-  return withChannel(pattern, channel, fallbackKey, (clip) => ({ ...clip, notes: clean }));
+  return withChannel(grown, channel, fallbackKey, (clip) => ({ ...clip, notes: clean }));
 }
 
 /**

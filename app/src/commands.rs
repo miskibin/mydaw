@@ -863,6 +863,15 @@ pub fn set_active_pattern(
     Ok(state.sequencer_state())
 }
 
+/// Repeat the arrangement, or stop at the end of the last clip.
+///
+/// Song mode only: a pattern is a loop by definition and PAT ignores this.
+#[tauri::command]
+pub fn set_loop(state: State<'_, AppState>, looping: bool) -> Result<SequencerStateDto, String> {
+    state.set_looping(looping).map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
 /// The whole sequencer: patterns, the arrangement, the tempo, the mode and the
 /// tick geometry. Called once at startup.
 #[tauri::command]

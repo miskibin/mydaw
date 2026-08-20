@@ -347,16 +347,20 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
             bpm: transport.bpm,
             playing: transport.playing,
             mode: transport.mode,
+            // Read from the clock rather than the snapshot: the loop is the
+            // scheduler's business and no node in the graph has any use for it.
+            looping: state.transport.is_looping(),
         },
         &mut state.note_events,
     );
 
-    // Song mode plays to the end of the last clip and stops, which is FL's
-    // default and the only one that does not need a loop region to be
-    // meaningful. The scheduler cannot do this itself -- it has no clock, on
-    // purpose -- so it reports and the callback acts. One relaxed store; the
-    // stop edge on the *next* block is what flushes the owed note-offs, which
-    // is exactly the same path a user pressing Stop takes.
+    // With the loop off, song mode plays to the end of the last clip and stops.
+    // (With it on the scheduler simply keeps emitting -- a repeat is an offset
+    // in ticks, not a jump, so the transport never has to be touched and there
+    // is no wrap edge to flush.) The scheduler cannot stop the transport itself
+    // -- it has no clock, on purpose -- so it reports and the callback acts. One
+    // relaxed store; the stop edge on the *next* block is what flushes the owed
+    // note-offs, which is exactly the same path a user pressing Stop takes.
     if state.scheduler.song_ended() {
         state.transport.set_playing(false);
     }

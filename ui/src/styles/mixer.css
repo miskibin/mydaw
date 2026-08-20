@@ -166,6 +166,16 @@
 .wv-mixer__slot.is-filled {
   background: var(--chip);
   box-shadow: none;
+  cursor: grab;
+}
+
+/* Reordering: the row being carried, and where it would land. */
+.wv-mixer__slot.is-dragging {
+  opacity: 0.4;
+}
+
+.wv-mixer__slot.is-drop {
+  box-shadow: inset 0 0 0 1px var(--acc);
 }
 
 .wv-mixer__slot.is-filled.is-bypassed {

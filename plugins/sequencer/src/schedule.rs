@@ -104,6 +104,15 @@ pub use mydaw_rt_core::PlayMode;
 /// stream; running out is counted rather than assumed away.
 pub const MAX_PENDING: usize = 4 * 1_024;
 
+/// Passes of a looping arrangement one block may emit.
+///
+/// A bound on a degenerate song rather than an expected case: the shortest
+/// arrangement anyone can build is one clip of one bar, which at the fastest
+/// tempo this transport allows is still 2 648 samples -- so a 4 096-frame block
+/// spans two passes at most. Four is that with room, and it is what keeps a
+/// hypothetical one-tick song from turning a block into a thousand passes.
+pub const MAX_LOOP_PASSES: u64 = 4;
+
 const _: () = assert!(MAX_PENDING >= MAX_NOTES * 2);
 const _: () = assert!(MAX_PENDING >= MAX_PATTERN_CHANNELS * crate::pattern::MAX_STEPS);
 
@@ -160,6 +169,9 @@ pub struct TransportWindow {
     pub playing: bool,
     /// Pattern or song.
     pub mode: PlayMode,
+    /// Whether song mode repeats the arrangement instead of stopping at its
+    /// end. Pattern mode ignores it: a pattern is a loop by definition.
+    pub looping: bool,
 }
 
 impl TransportWindow {
@@ -344,45 +356,79 @@ impl Scheduler {
             }
             PlayMode::Song => {
                 let song_end = song.end_ticks();
-                if song_end > 0 && start >= tick_boundary(song_end, step_len) {
-                    // Past the last clip. Nothing left to emit, and the engine
-                    // is told so it can stop the transport.
-                    self.song_ended = true;
+                if song_end == 0 {
                     return dropped;
                 }
-                // A linear pass over the clips. They are sorted by start tick
-                // but may overlap, so an earlier clip can still be sounding
-                // under a later one and there is nothing to binary-search past;
-                // two comparisons per clip against a list bounded at
-                // `MAX_CLIPS` is a few hundred nanoseconds, and the alternative
-                // (an interval tree) would be a data structure to get wrong in
-                // exchange for nothing measurable.
-                for clip in song.clips() {
-                    let Some(pattern) = song.pattern(clip.pattern) else {
-                        continue;
-                    };
-                    let clip_start = tick_boundary(clip.start_ticks, step_len);
-                    if clip_start >= end {
-                        // Sorted by start tick, so every later clip is later
-                        // still.
-                        break;
+                let loop_len = tick_boundary(song_end, step_len);
+                if !window.looping || loop_len == 0 {
+                    if start >= loop_len {
+                        // Past the last clip. Nothing left to emit, and the
+                        // engine is told so it can stop the transport.
+                        self.song_ended = true;
+                        return dropped;
                     }
-                    if tick_boundary(clip.end_ticks(), step_len) <= start {
-                        continue;
-                    }
-                    dropped += self.emit_run(
-                        pattern,
-                        clip.start_ticks,
-                        Some(clip.end_ticks()),
-                        start,
-                        end,
-                        step_len,
-                        out,
-                    );
+                    dropped += self.emit_song_pass(song, 0, start, end, step_len, out);
+                    return dropped;
+                }
+                // Looping is *repetition*, not a seek: the transport position
+                // keeps rising and pass `k` of the arrangement is simply every
+                // clip offset by `k * song_end` ticks. No wrap edge, so nothing
+                // to flush and nothing to phase-lock -- and because the offset
+                // is in ticks rather than in rounded samples, the thousandth
+                // pass lands on the same grid as the first.
+                let first = (start / loop_len).saturating_sub(1);
+                let last = ((end - 1) / loop_len).min(first + MAX_LOOP_PASSES);
+                for pass in first..=last {
+                    dropped +=
+                        self.emit_song_pass(song, pass * song_end, start, end, step_len, out);
                 }
             }
         }
 
+        dropped
+    }
+
+    /// Emit one pass of the arrangement, offset by `base_ticks`.
+    ///
+    /// A linear walk of the clips. They are sorted by start tick but may
+    /// overlap, so an earlier clip can still be sounding under a later one and
+    /// there is nothing to binary-search past; two comparisons per clip against
+    /// a list bounded at [`MAX_CLIPS`](crate::MAX_CLIPS) is a few hundred
+    /// nanoseconds, and the alternative (an interval tree) would be a data
+    /// structure to get wrong in exchange for nothing measurable.
+    fn emit_song_pass(
+        &mut self,
+        song: &CompiledSong,
+        base_ticks: u64,
+        start: u64,
+        end: u64,
+        step_len: f64,
+        out: &mut NoteEventBuffer,
+    ) -> usize {
+        let mut dropped = 0;
+        for clip in song.clips() {
+            let Some(pattern) = song.pattern(clip.pattern) else {
+                continue;
+            };
+            let clip_start_ticks = base_ticks + clip.start_ticks;
+            let clip_end_ticks = base_ticks + clip.end_ticks();
+            if tick_boundary(clip_start_ticks, step_len) >= end {
+                // Sorted by start tick, so every later clip is later still.
+                break;
+            }
+            if tick_boundary(clip_end_ticks, step_len) <= start {
+                continue;
+            }
+            dropped += self.emit_run(
+                pattern,
+                clip_start_ticks,
+                Some(clip_end_ticks),
+                start,
+                end,
+                step_len,
+                out,
+            );
+        }
         dropped
     }
 
@@ -636,7 +682,41 @@ mod tests {
             bpm,
             playing,
             mode,
+            looping: false,
         }
+    }
+
+    /// The same block, with the arrangement set to repeat.
+    fn looping_window(start: u64, frames: usize, bpm: f64, mode: PlayMode) -> TransportWindow {
+        TransportWindow {
+            looping: true,
+            ..window(start, frames, bpm, true, mode)
+        }
+    }
+
+    /// Run a looping song and collect `(absolute sample, event)`.
+    fn run_looping(
+        scheduler: &mut Scheduler,
+        song: &CompiledSong,
+        blocks: usize,
+        frames: usize,
+        bpm: f64,
+    ) -> Vec<(u64, NoteEvent)> {
+        let mut buffer = NoteEventBuffer::new(8_192);
+        let mut collected = Vec::new();
+        for block in 0..blocks {
+            let start = (block * frames) as u64;
+            buffer.clear();
+            scheduler.schedule(
+                Some(song),
+                &looping_window(start, frames, bpm, PlayMode::Song),
+                &mut buffer,
+            );
+            for event in buffer.as_slice() {
+                collected.push((start + u64::from(event.frame_offset), *event));
+            }
+        }
+        collected
     }
 
     /// A one-channel pattern whose step row hits the given steps.
@@ -690,6 +770,7 @@ mod tests {
                 bpm,
                 playing: true,
                 mode,
+                looping: false,
             };
             assert_eq!(
                 scheduler.schedule(Some(song), &window, &mut buffer),
@@ -733,6 +814,11 @@ mod tests {
             .filter(|(_, e)| e.kind.is_note_on())
             .map(|(at, _)| *at)
             .collect()
+    }
+
+    /// The first `count` onsets, for a run that deliberately overshoots.
+    fn first_onsets(events: &[(u64, NoteEvent)], count: usize) -> Vec<u64> {
+        onsets(events).into_iter().take(count).collect()
     }
 
     /// Onsets on one channel.
@@ -1601,5 +1687,109 @@ mod tests {
         assert!(text.contains("Pattern"), "{text}");
         assert!(text.contains("pending: 0"), "{text}");
         assert!(text.len() < 200);
+    }
+
+    // ------------------------------------------------------- the song loop
+
+    #[test]
+    fn a_looping_arrangement_repeats_instead_of_ending() {
+        // Two bars of song, one hit at the top of each. Four bars of transport
+        // is therefore two passes: bars 1, 2, 1, 2.
+        let song = arranged(stepped(1, 36, 0, &[0]), &[(0, 1), (1, 1)]);
+        let mut scheduler = Scheduler::new();
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        let events = run_looping(
+            &mut scheduler,
+            &song,
+            blocks_for(4 * bar_samples(DEFAULT_BPM), 512),
+            512,
+            DEFAULT_BPM,
+        );
+        assert_eq!(
+            first_onsets(&events, 4),
+            (0..4)
+                .map(|bar| tick_boundary(bar * BAR, step_len))
+                .collect::<Vec<_>>(),
+            "every pass of a two-bar song lands on the same grid as the first"
+        );
+        assert!(!scheduler.song_ended(), "a loop never ends");
+    }
+
+    #[test]
+    fn a_loop_wrap_lands_on_the_grid_at_every_block_size() {
+        // The wrap is a tick offset, not a seek, so it cannot fall between two
+        // samples however the blocks happen to be cut.
+        let song = arranged(stepped(1, 36, 0, &[0]), &[(0, 1)]);
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        for frames in [64, 128, 333, 512, 1024] {
+            let mut scheduler = Scheduler::new();
+            let events = run_looping(
+                &mut scheduler,
+                &song,
+                blocks_for(3 * bar_samples(DEFAULT_BPM), frames),
+                frames,
+                DEFAULT_BPM,
+            );
+            assert_eq!(
+                first_onsets(&events, 3),
+                (0..3)
+                    .map(|bar| tick_boundary(bar * BAR, step_len))
+                    .collect::<Vec<_>>(),
+                "{frames} frames"
+            );
+        }
+    }
+
+    #[test]
+    fn the_thousandth_pass_has_not_drifted() {
+        // The whole reason a wrap is an offset in ticks: a loop that added a
+        // rounded sample count per pass would be a bar late after an hour.
+        let song = arranged(stepped(1, 36, 0, &[0]), &[(0, 1)]);
+        let mut scheduler = Scheduler::new();
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        let bar = bar_samples(DEFAULT_BPM);
+        let pass = 1_000_u64;
+        let from = pass * tick_boundary(BAR, step_len);
+        let mut buffer = NoteEventBuffer::new(8_192);
+        // One block over the pass boundary, wherever the boundary landed.
+        let mut found = None;
+        for block in 0..4 {
+            let start = from.saturating_sub(2 * 512) + (block * 512) as u64;
+            buffer.clear();
+            scheduler.schedule(
+                Some(&song),
+                &looping_window(start, 512, DEFAULT_BPM, PlayMode::Song),
+                &mut buffer,
+            );
+            for event in buffer.as_slice() {
+                if event.kind.is_note_on() {
+                    found = Some(start + u64::from(event.frame_offset));
+                }
+            }
+        }
+        let at = found.expect("the thousandth pass sounds");
+        assert_eq!(
+            at,
+            tick_boundary(pass * BAR, step_len),
+            "one bar is {bar} samples; a pass may not accumulate a rounding"
+        );
+    }
+
+    #[test]
+    fn a_song_that_does_not_loop_still_ends() {
+        let song = arranged(stepped(1, 36, 0, &[0]), &[(0, 1)]);
+        let mut scheduler = Scheduler::new();
+        let mut buffer = NoteEventBuffer::new(64);
+        let step_len = step_len_samples(SR, DEFAULT_BPM);
+        let end = tick_boundary(BAR, step_len);
+        scheduler.schedule(
+            Some(&song),
+            &window(end, 512, DEFAULT_BPM, true, PlayMode::Song),
+            &mut buffer,
+        );
+        assert!(
+            scheduler.song_ended(),
+            "the loop is off and the song is over"
+        );
     }
 }

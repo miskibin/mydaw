@@ -146,6 +146,10 @@ struct SongState {
     playlist: Playlist,
     bpm: f64,
     mode: PlayMode,
+    /// Whether song mode repeats the arrangement. Mirrors the transport's own
+    /// flag so the shell can answer without a device open, exactly as `mode`
+    /// does.
+    looping: bool,
 }
 
 impl Default for SequencerService {
@@ -170,6 +174,7 @@ impl SequencerService {
                 playlist,
                 bpm: DEFAULT_BPM,
                 mode: PlayMode::default(),
+                looping: mydaw_rt_core::DEFAULT_LOOPING,
             }),
         }
     }
@@ -315,6 +320,16 @@ impl SequencerService {
     /// Set the play mode.
     pub fn set_play_mode(&self, mode: PlayMode) {
         self.state.lock().mode = mode;
+    }
+
+    /// Whether song mode repeats the arrangement rather than stopping at it.
+    pub fn is_looping(&self) -> bool {
+        self.state.lock().looping
+    }
+
+    /// Turn the song loop on or off.
+    pub fn set_looping(&self, looping: bool) {
+        self.state.lock().looping = looping;
     }
 
     /// The whole song, compiled for the audio thread. **Non-RT.**

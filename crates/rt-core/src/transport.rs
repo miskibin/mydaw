@@ -81,6 +81,13 @@ impl PlayMode {
     }
 }
 
+/// Whether a fresh session loops the arrangement.
+///
+/// On, because a playlist that plays once and stops is a playlist you restart
+/// by hand every eight bars while you are writing the thing. Every DAW loops
+/// the arrangement while you work; FL calls it song loop and has it on.
+pub const DEFAULT_LOOPING: bool = true;
+
 /// Tempo a fresh session starts at.
 ///
 /// 130 rather than 120: this is a DAW for making dance music on, and the first
@@ -128,6 +135,12 @@ pub struct TransportSnapshot {
     pub mode: PlayMode,
 }
 
+// The song loop is deliberately **not** in the snapshot. Every node in the
+// graph reads a snapshot per block, and none of them has any business knowing
+// whether the arrangement repeats -- only the scheduler does, and it is handed
+// a `TransportWindow` the callback builds. Putting it here would have added a
+// field to every offline render in the test suite to say nothing to any of them.
+
 impl Default for TransportSnapshot {
     /// Stopped at zero, at [`DEFAULT_BPM`].
     ///
@@ -154,6 +167,8 @@ impl Default for TransportSnapshot {
 pub struct TransportClock {
     sample_pos: AtomicU64,
     playing: AtomicBool,
+    /// Whether song mode repeats the arrangement. See [`DEFAULT_LOOPING`].
+    looping: AtomicBool,
     /// `f64::to_bits` of the tempo. See the module docs.
     bpm_bits: AtomicU64,
     /// [`PlayMode`] as a byte. One relaxed load per block, like the tempo.
@@ -172,6 +187,7 @@ impl TransportClock {
         Self {
             sample_pos: AtomicU64::new(0),
             playing: AtomicBool::new(false),
+            looping: AtomicBool::new(DEFAULT_LOOPING),
             bpm_bits: AtomicU64::new(clamp_bpm(bpm).to_bits()),
             mode: AtomicU8::new(PlayMode::Pattern.as_u8()),
             sample_rate,
@@ -241,6 +257,16 @@ impl TransportClock {
     /// Set the play mode. Takes effect on the audio thread's next block.
     pub fn set_play_mode(&self, mode: PlayMode) {
         self.mode.store(mode.as_u8(), Ordering::Relaxed);
+    }
+
+    /// Whether song mode repeats the arrangement rather than stopping at it.
+    pub fn is_looping(&self) -> bool {
+        self.looping.load(Ordering::Relaxed)
+    }
+
+    /// Turn the song loop on or off. Takes effect on the next block.
+    pub fn set_looping(&self, looping: bool) {
+        self.looping.store(looping, Ordering::Relaxed);
     }
 
     /// Current position in seconds, for display purposes.
