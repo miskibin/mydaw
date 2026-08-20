@@ -186,22 +186,30 @@
 
 .wv-fx__display--comp {
   flex-direction: column;
-}
-
-.wv-fx__display--comp .wv-fx__terrain {
-  position: relative;
-  flex: none;
-  height: 120px;
-}
-
-.wv-fx__compbody {
-  display: flex;
-  flex: 1;
-  flex-direction: row;
-  gap: 10px;
-  align-items: stretch;
+  gap: 0;
   min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel);
+  overflow: hidden;
 }
+
+.wv-fx__display--comp .wv-fx__limitread {
+  width: 100%;
+  padding: 12px 14px 8px;
+}
+
+.wv-fx__display--comp .wv-fx__gr {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 14px 11px;
+  border-top: 1px solid var(--line);
+}
+
+.wv-fx__display--comp .wv-fx__grtrack { width: 100%; }
 
 .wv-fx__display--util {
   min-height: 280px;

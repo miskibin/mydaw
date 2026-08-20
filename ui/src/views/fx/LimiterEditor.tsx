@@ -1,5 +1,4 @@
 import type { EffectInfoDto, ParamValueDto } from '../../api/types';
-import { SpectrumTerrain } from '../../ui/SpectrumTerrain';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { Advanced, PrimaryRow } from './chrome';
 import type { JSX } from 'solid-js';
@@ -32,8 +31,6 @@ export function LimiterEditor(props: {
   return (
     <>
       <div class="wv-fx__display wv-fx__display--comp">
-        <SpectrumTerrain bins={props.spectrum} />
-        <div class="wv-fx__compbody">
           <div class="wv-fx__limitread" title="Transfer curve: input level on the horizontal axis, output level on the vertical axis. The ceiling clips peaks above the limit.">
             <div class="wv-fx__limithead">
               <span>LIMITER RESPONSE</span>
@@ -59,7 +56,6 @@ export function LimiterEditor(props: {
             <div class="wv-fx__grtrack"><div class="wv-fx__grfill" style={{ width: `${(reduction() / 12) * 100}%` }} /></div>
             <span class="wv-fx__grnum">{gr() < 0.05 ? '0.0' : `−${gr().toFixed(1)}`} dB</span>
           </div>
-        </div>
       </div>
       <PrimaryRow params={props.primary} knobs={props.knobs} oversized="gain" />
       <Advanced params={props.advanced} knobs={props.knobs} />
