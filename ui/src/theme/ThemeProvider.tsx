@@ -39,17 +39,30 @@ export interface Theme {
   toggle(): void;
   setTheme(name: ThemeName): void;
   setAccent(accent: string): void;
+  readonly font: Accessor<FontName>;
+  setFont(font: FontName): void;
 }
+
+export type FontName = 'geist' | 'inter' | 'mono';
 
 const ThemeContext = createContext<Theme>();
 
 const THEME_KEY = 'mydaw.theme';
 const ACCENT_KEY = 'mydaw.accent';
+const FONT_KEY = 'mydaw.font';
+
+function storedFont(): FontName {
+  try {
+    const value = localStorage.getItem(FONT_KEY);
+    return value === 'inter' || value === 'mono' ? value : 'geist';
+  } catch { return 'geist'; }
+}
 
 /** What was stored last session, or the default when nothing legible is there. */
 function storedTheme(): ThemeName {
   try {
-    return localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark';
+    const value = localStorage.getItem(THEME_KEY);
+    return value === 'light' || value === 'ocean' || value === 'ember' || value === 'mono' ? value : 'dark';
   } catch {
     // Private-mode browsers throw on `localStorage`; a theme is not worth a
     // blank screen.
@@ -77,6 +90,7 @@ function remember(key: string, value: string): void {
 export function ThemeProvider(props: { children: JSX.Element }): JSX.Element {
   const [name, setName] = createSignal<ThemeName>(storedTheme());
   const [accent, setAccentSignal] = createSignal<string>(storedAccent());
+  const [font, setFontSignal] = createSignal<FontName>(storedFont());
 
   createEffect(() => {
     const theme = name();
@@ -88,6 +102,8 @@ export function ThemeProvider(props: { children: JSX.Element }): JSX.Element {
     // `data-theme` is what `color-scheme` and any future non-token rules key on.
     root.dataset['theme'] = theme;
     root.style.colorScheme = theme;
+    root.dataset['font'] = font();
+    root.style.setProperty('--ui-font', font() === 'inter' ? 'Inter Variable' : font() === 'mono' ? 'Geist Mono Variable' : 'Geist Variable');
   });
 
   const theme: Theme = {
@@ -110,6 +126,11 @@ export function ThemeProvider(props: { children: JSX.Element }): JSX.Element {
     setAccent(next) {
       remember(ACCENT_KEY, next);
       setAccentSignal(next);
+    },
+    font,
+    setFont(next) {
+      remember(FONT_KEY, next);
+      setFontSignal(next);
     },
   };
 
