@@ -62,7 +62,7 @@ function storedFont(): FontName {
 function storedTheme(): ThemeName {
   try {
     const value = localStorage.getItem(THEME_KEY);
-    return value === 'light' || value === 'ocean' || value === 'ember' || value === 'mono' ? value : 'dark';
+    return value === 'light' || value === 'paper' || value === 'ocean' || value === 'ember' || value === 'mono' ? value : 'dark';
   } catch {
     // Private-mode browsers throw on `localStorage`; a theme is not worth a
     // blank screen.
