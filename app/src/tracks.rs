@@ -993,17 +993,23 @@ impl TrackHost {
     /// [`TrackError::NoSuchTrack`], [`TrackError::LastTrack`], and whatever the
     /// rebuild reported.
     pub fn remove_track(&self, track: usize, audio: &AudioIoService) -> Result<(), MixerError> {
+        let selected_before = self.selected.load(Ordering::Relaxed);
         {
             let mut project = self.project.lock();
             project.remove(track)?;
             project.publish(&self.params);
         }
-        // The selection may now point past the end.
-        let count = self.project.lock().len();
-        if self.selected.load(Ordering::Relaxed) >= count {
-            self.selected
-                .store(count.saturating_sub(1), Ordering::Relaxed);
-        }
+        // Keep the same instrument selected when a lower row disappears. If
+        // the selected instrument itself was removed, choose its predecessor
+        // rather than silently jumping to the row that moved underneath it.
+        let selected_after = if selected_before == track {
+            track.saturating_sub(1)
+        } else if selected_before > track {
+            selected_before - 1
+        } else {
+            selected_before
+        };
+        self.selected.store(selected_after, Ordering::Relaxed);
         self.rebuild(audio)
     }
 
@@ -1441,5 +1447,24 @@ mod tests {
             host.remove_track(0, &audio),
             Err(MixerError::Track(TrackError::LastTrack))
         ));
+    }
+
+    #[test]
+    fn removing_tracks_preserves_selection_by_instrument_and_prefers_the_previous_row() {
+        let host = host();
+        let audio = mydaw_plugin_audio_io::AudioIoService::default();
+        let _ = host.add_track(Source::TestTone, Some("Two".to_owned()), &audio);
+        let _ = host.add_track(Source::TestTone, Some("Three".to_owned()), &audio);
+
+        host.set_selected(2).unwrap();
+        let _ = host.remove_track(0, &audio);
+        assert_eq!(host.selected(), 1, "the same instrument moved up one row");
+
+        let _ = host.remove_track(1, &audio);
+        assert_eq!(
+            host.selected(),
+            0,
+            "a removed selection falls back to the row above"
+        );
     }
 }

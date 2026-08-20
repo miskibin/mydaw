@@ -1237,6 +1237,7 @@ export class MockBackend implements Backend {
 
   async removeTrack(track: number): Promise<MixerState> {
     const removed = this.track(track);
+    const selectedBefore = this.selected;
     if (this.tracks.length === 1) throw new Error('a project must keep at least one track');
     if (removed.engine === 'clip' && removed.audioSourceId != null) {
       const sourceId = removed.audioSourceId;
@@ -1261,7 +1262,12 @@ export class MockBackend implements Backend {
           : send,
       );
     this.openEditors = MockBackend.reindexEditors(this.openEditors, track);
-    if (this.selected >= this.tracks.length) this.selected = this.tracks.length - 1;
+    this.selected =
+      selectedBefore === track
+        ? Math.max(0, track - 1)
+        : selectedBefore > track
+          ? selectedBefore - 1
+          : selectedBefore;
     return this.mixerState();
   }
 
