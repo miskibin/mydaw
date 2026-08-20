@@ -22,6 +22,7 @@ import { Playlist } from './views/Playlist';
 import { Rack } from './views/Rack';
 import { Roll } from './views/Roll';
 import { SampleEditor } from './views/SampleEditor';
+import { Settings } from './views/Settings';
 
 export function App(): ReturnType<typeof Show> {
   const app = useAppState();
@@ -114,6 +115,9 @@ export function App(): ReturnType<typeof Show> {
           </Show>
 
           <Switch fallback={<Rack />}>
+            <Match when={view.view() === 'settings'}>
+              <Settings />
+            </Match>
             <Match when={view.view() === 'playlist'}>
               <Playlist />
             </Match>

@@ -208,6 +208,25 @@
   color: var(--dim2);
 }
 
+.wv-settingsbtn {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--dim);
+}
+
+.wv-settingsbtn:hover,
+.wv-settingsbtn:focus-visible {
+  border-color: var(--line2);
+  background: var(--chip);
+  color: var(--txt);
+}
+
 .wv-themebtn {
   display: flex;
   flex: none;

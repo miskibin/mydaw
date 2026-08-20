@@ -30,7 +30,7 @@ body,
 body {
   background: var(--bg);
   color: var(--txt);
-  font: 400 12px 'Geist Variable', ui-sans-serif, system-ui, sans-serif;
+  font: 400 12px var(--ui-font, 'Geist Variable'), ui-sans-serif, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
