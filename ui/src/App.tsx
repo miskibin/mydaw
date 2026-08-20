@@ -38,6 +38,20 @@ export function App(): ReturnType<typeof Show> {
     });
   });
 
+  // The current pattern is the playlist brush, unless an audio clip is armed.
+  // FL's pattern picker and playlist paint source are the same thing: picking
+  // Pattern A in the rack is how you paint A next, without a trip to the Picker.
+  createEffect(() => {
+    const active = app.sequencer()?.patternSet.activeId;
+    if (active == null || active <= 0) return;
+    untrack(() => {
+      const brush = view.brush();
+      if (brush?.kind === 'audio') return;
+      if (brush?.kind === 'pattern' && brush.id === active) return;
+      view.setBrush({ kind: 'pattern', id: active });
+    });
+  });
+
   // UI zoom is the webview's own (`zoomHotkeysEnabled` in tauri.conf.json):
   // Ctrl+= / Ctrl+- / Ctrl+0 are handled natively by WebView2, which scales
   // viewport units and fixed positioning correctly — a CSS `zoom` on the body

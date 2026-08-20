@@ -141,7 +141,7 @@
   opacity: 0.45;
 }
 
-.wv-pl__lane.is-painting {
+.wv-pl__lane.is-painting .wv-clip:not(.is-ghost) {
   cursor: copy;
 }
 
@@ -212,6 +212,16 @@
 
 .wv-clip.is-selected {
   z-index: 2;
+}
+
+.wv-clip.is-armed:not(.is-selected) {
+  z-index: 1;
+}
+
+.wv-clip.is-ghost {
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.55;
 }
 
 .wv-clip__label {

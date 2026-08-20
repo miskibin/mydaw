@@ -1,6 +1,11 @@
 /**
  * The arrangement: pattern clips and audio clips along a timeline.
  *
+ * Pointer grammar is FL's, in {@link resolvePlaylistGesture}: clicking a clip
+ * loads it as the brush, clicking empty stamps a clip of that source's own
+ * length, dragging paints a run. The picker is a source of brushes, not the
+ * only one.
+ *
  * Geometry is one number -- {@link BAR_PX} pixels per bar at zoom 1 -- and
  * everything else is derived from the engine's own tick constants, so the
  * ruler, the clips and the playhead cannot disagree about where bar 5 is.
@@ -59,11 +64,22 @@ import {
   nextSnap,
   snapLabel,
   useView,
+  type Brush,
   type PlaylistTool,
 } from '../shell/view';
 import { trackColor, wash } from '../theme/tokens';
 import { onFrame } from '../ui/frameLoop';
 import { IconEraseTool, IconPaintTool, IconSelectTool, IconX } from '../ui/icons';
+import {
+  PLAYLIST_TOOL_BY_CODE,
+  brushFromClip,
+  clipMatchesBrush,
+  paintStarts,
+  playlistHoverCursor,
+  resolvePlaylistGesture,
+  stretchLength,
+  stretchStart,
+} from './playlist/gestures';
 
 /** Pixels one bar covers at zoom 1. */
 const BAR_PX = 48;
@@ -89,10 +105,21 @@ const TAIL_BARS = 8;
 const MIN_BARS = 32;
 
 const TOOLS: readonly [PlaylistTool, string, () => ReturnType<typeof IconPaintTool>][] = [
-  ['paint', 'Paint clips — click a lane to place the brush', IconPaintTool],
-  ['select', 'Select and move clips', IconSelectTool],
-  ['delete', 'Delete clips', IconEraseTool],
+  [
+    'paint',
+    'Paint (P) — click empty to place, click a clip to paint that next, drag a run, Shift-drag to stretch',
+    IconPaintTool,
+  ],
+  ['select', 'Select (E) — move clips. Clicking one also loads it as the brush', IconSelectTool],
+  ['delete', 'Delete (D) — click a clip, or right-drag to erase', IconEraseTool],
 ];
+
+/** A ghost of the clip the paint tool would stamp, in lane / tick coordinates. */
+interface ClipPreview {
+  lane: number;
+  start: number;
+  length: number;
+}
 
 /** One mark inside a clip miniature: fractions of the clip, and a colour. */
 interface ClipMark {
@@ -157,6 +184,9 @@ export function Playlist(): ReturnType<typeof Show> {
   const pending = new Set<number>();
   const [contents, setContents] = createSignal<Record<number, PatternDto>>({});
   const pendingPatterns = new Set<number>();
+  const [previews, setPreviews] = createSignal<ClipPreview[]>([]);
+  /** True while a paint / grab / erase gesture owns the pointer, so hover ghosts stand down. */
+  let gestureLive = false;
 
   let playheadEl: HTMLDivElement | undefined;
   let scrollEl: HTMLDivElement | undefined;
@@ -281,6 +311,29 @@ export function Playlist(): ReturnType<typeof Show> {
 
   // --- placing -------------------------------------------------------------
 
+  /**
+   * The brush painting will actually use.
+   *
+   * Falls back to the active pattern, so a new project paints Pattern 1
+   * without a trip to the picker — FL always has a current clip.
+   */
+  function activeBrush(): Exclude<Brush, null> | null {
+    const brush = view.brush();
+    if (brush) return brush;
+    const id = app.sequencer()?.patternSet.activeId;
+    return id ? { kind: 'pattern', id } : null;
+  }
+
+  /** Ticks one stamp of `brush` covers: the pattern's loop, or the file. */
+  function brushSpan(brush = activeBrush()): number {
+    if (!brush) return TICKS_PER_BAR;
+    if (brush.kind === 'pattern') {
+      return app.patterns().find((pattern) => pattern.id === brush.id)?.lengthTicks ?? TICKS_PER_BAR;
+    }
+    const ticks = app.audioSources().find((source) => source.id === brush.id)?.durationTicks ?? 0;
+    return ticks > 0 ? ticks : TICKS_PER_BAR;
+  }
+
   /** Where in the song a pointer at `clientX` is, snapped. */
   function tickAt(clientX: number, lane: HTMLElement): number {
     const rect = lane.getBoundingClientRect();
@@ -288,24 +341,200 @@ export function Playlist(): ReturnType<typeof Show> {
     return snapTicks(Math.max(0, raw), view.playlistSnap(), true);
   }
 
-  function place(lane: number, start: number, brush = view.brush()): void {
+  function laneElements(): { index: number; top: number; bottom: number; el: HTMLElement }[] {
+    return Array.from(scrollEl?.querySelectorAll<HTMLElement>('.wv-pl__lane') ?? []).map((lane) => {
+      const box = lane.getBoundingClientRect();
+      return { index: Number(lane.dataset.lane), top: box.top, bottom: box.bottom, el: lane };
+    });
+  }
+
+  function armBrush(clip: ClipDto): void {
+    view.setSelectedClip(clip.id);
+    const brush = brushFromClip(clip);
+    if (!brush) return;
+    view.setBrush(brush);
+    view.setPickerTab(brush.kind === 'pattern' ? 'patterns' : 'audio');
+    if (view.sideTab() === 'inspector') view.setSideTab('picker');
+    if (brush.kind === 'pattern' && app.sequencer()?.patternSet.activeId !== brush.id) {
+      void app.sequencerCommand((backend) => backend.setActivePattern(brush.id));
+    }
+    app.say('Brush', clipName(clip));
+  }
+
+  function stamp(
+    lane: number,
+    start: number,
+    brush: Exclude<Brush, null>,
+    length?: number,
+  ): Promise<void> {
+    const span = length ?? (brush.kind === 'pattern' ? brushSpan(brush) : undefined);
+    return app.sequencerCommand((backend) =>
+      brush.kind === 'pattern'
+        ? backend.addPatternClip(brush.id, lane, start, span)
+        : backend.addAudioClip(brush.id, lane, start, span),
+    );
+  }
+
+  async function paintClips(
+    lane: number,
+    starts: readonly number[],
+    brush: Exclude<Brush, null>,
+    length?: number,
+  ): Promise<void> {
+    if (starts.length === 0) return;
+    const many = starts.length > 1;
+    app.startPlaylistGesture(
+      many ? 'Paint clips' : brush.kind === 'pattern' ? 'Paint pattern clip' : 'Paint audio clip',
+    );
+    for (const start of starts) {
+      await stamp(lane, start, brush, length);
+    }
+    app.commitPlaylistGesture();
+    const last = starts[starts.length - 1]!;
+    const placed = [...(playlist()?.clips ?? [])]
+      .filter((clip) => clip.track === lane && clip.start === last && clipMatchesBrush(clip, brush))
+      .sort((a, b) => b.id - a.id)[0];
+    if (placed) view.setSelectedClip(placed.id);
+  }
+
+  function place(lane: number, start: number, brush = activeBrush()): void {
     if (!brush) {
       app.say('Playlist', 'no brush — pick a pattern or a file in the Picker');
       return;
     }
-    app.startPlaylistGesture(brush.kind === 'pattern' ? 'Paint pattern clip' : 'Paint audio clip');
-    void app
-      .sequencerCommand((backend) =>
-        brush.kind === 'pattern'
-          ? backend.addPatternClip(brush.id, lane, start)
-          : backend.addAudioClip(brush.id, lane, start),
-      )
-      .then(() => app.commitPlaylistGesture());
+    view.setBrush(brush);
+    void paintClips(lane, [start], brush);
+  }
+
+  function previewAt(clientX: number, clientY: number): void {
+    const brush = activeBrush();
+    if (!brush || view.playlistTool() !== 'paint' || gestureLive) {
+      if (!gestureLive) setPreviews([]);
+      return;
+    }
+    const target = document.elementFromPoint(clientX, clientY) as HTMLElement | null;
+    if (target?.closest('.wv-clip') && !target.closest('.wv-clip.is-ghost')) {
+      setPreviews([]);
+      return;
+    }
+    const lanes = laneElements();
+    const lane = laneUnder(clientY, lanes);
+    if (lane === null) {
+      setPreviews([]);
+      return;
+    }
+    const box = lanes.find((entry) => entry.index === lane);
+    if (!box) return;
+    setPreviews([{ lane, start: tickAt(clientX, box.el), length: brushSpan(brush) }]);
   }
 
   function onLanePointerDown(event: PointerEvent, lane: number): void {
-    if (event.button !== 0 || view.playlistTool() !== 'paint') return;
-    place(lane, tickAt(event.clientX, event.currentTarget as HTMLElement));
+    const hit = (event.target as HTMLElement).closest('.wv-clip') ? 'clip' : 'empty';
+    const gesture = resolvePlaylistGesture({
+      tool: view.playlistTool(),
+      button: event.button,
+      ctrl: event.ctrlKey || event.metaKey,
+      hit,
+    });
+    if (gesture.kind === 'deselect') {
+      view.setSelectedClip(null);
+      return;
+    }
+    if (gesture.kind === 'erase-drag') {
+      event.preventDefault();
+      beginEraseDrag(event);
+      return;
+    }
+    if (gesture.kind !== 'place') return;
+    event.preventDefault();
+    const brush = activeBrush();
+    if (!brush) {
+      app.say('Playlist', 'no brush — pick a pattern or a file in the Picker');
+      return;
+    }
+    view.setBrush(brush);
+    const origin = tickAt(event.clientX, event.currentTarget as HTMLElement);
+    const stretch = event.shiftKey;
+    const span = brushSpan(brush);
+    let cursor = origin;
+    let lastLane = lane;
+    let moved = false;
+    gestureLive = true;
+    setPreviews([{ lane, start: origin, length: span }]);
+
+    const onMove = (move: PointerEvent) => {
+      const lanes = laneElements();
+      lastLane = laneUnder(move.clientY, lanes) ?? lastLane;
+      const box = lanes.find((entry) => entry.index === lastLane);
+      if (!box) return;
+      cursor = tickAt(move.clientX, box.el);
+      if (!moved && Math.abs(move.clientX - event.clientX) < 3 && Math.abs(move.clientY - event.clientY) < 3) {
+        return;
+      }
+      moved = true;
+      if (stretch) {
+        setPreviews([
+          {
+            lane: lastLane,
+            start: stretchStart(origin, cursor),
+            length: stretchLength(origin, cursor, view.playlistSnap()),
+          },
+        ]);
+        return;
+      }
+      setPreviews(paintStarts(origin, cursor, span).map((start) => ({ lane: lastLane, start, length: span })));
+    };
+
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      gestureLive = false;
+      setPreviews([]);
+      if (stretch && moved) {
+        void paintClips(
+          lastLane,
+          [stretchStart(origin, cursor)],
+          brush,
+          stretchLength(origin, cursor, view.playlistSnap()),
+        );
+        return;
+      }
+      const starts = moved ? paintStarts(origin, cursor, span) : [origin];
+      void paintClips(lastLane, starts, brush);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
+
+  function beginEraseDrag(event: PointerEvent): void {
+    gestureLive = true;
+    const removed = new Set<number>();
+    app.startPlaylistGesture('Delete clips');
+    const hit = (clientX: number, clientY: number) => {
+      const id = Number(
+        (document.elementFromPoint(clientX, clientY) as HTMLElement | null)
+          ?.closest<HTMLElement>('[data-clip-id]')
+          ?.dataset.clipId,
+      );
+      if (!Number.isFinite(id) || removed.has(id)) return;
+      const clip = playlist()?.clips.find((entry) => entry.id === id);
+      if (!clip) return;
+      removed.add(id);
+      void app.sequencerCommand((backend) => backend.removeClip(id));
+      if (view.selectedClip() === id) view.setSelectedClip(null);
+      app.say(clipName(clip), 'deleted');
+    };
+    hit(event.clientX, event.clientY);
+    const onMove = (move: PointerEvent) => hit(move.clientX, move.clientY);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      gestureLive = false;
+      app.commitPlaylistGesture();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
   }
 
   function onLaneDrop(event: DragEvent, lane: number): void {
@@ -356,12 +585,23 @@ export function Playlist(): ReturnType<typeof Show> {
 
   function onClipPointerDown(event: PointerEvent, clip: ClipDto, mode: 'move' | 'resize'): void {
     event.stopPropagation();
-    if (event.button !== 0) return;
-    if (view.playlistTool() === 'delete') {
+    const gesture = resolvePlaylistGesture({
+      tool: view.playlistTool(),
+      button: event.button,
+      ctrl: event.ctrlKey || event.metaKey,
+      hit: mode === 'resize' ? 'resize' : 'clip',
+    });
+    if (gesture.kind === 'ignore') return;
+    if (gesture.kind === 'erase') {
+      event.preventDefault();
       removeClip(clip);
       return;
     }
-    view.setSelectedClip(clip.id);
+    if (gesture.kind !== 'grab' && gesture.kind !== 'resize') return;
+    if (event.button !== 0) return;
+
+    armBrush(clip);
+    const clone = (event.ctrlKey || event.metaKey) && gesture.kind === 'grab';
     const startX = event.clientX;
     const startY = event.clientY;
     const originStart = clip.start;
@@ -374,14 +614,7 @@ export function Playlist(): ReturnType<typeof Show> {
     const clipEl = (event.currentTarget as HTMLElement).closest<HTMLElement>('.wv-clip');
     const originLaneEl = clipEl?.closest<HTMLElement>('.wv-pl__lane');
     const originTop = originLaneEl?.getBoundingClientRect().top ?? 0;
-    const laneBoxes = Array.from(scrollEl?.querySelectorAll<HTMLElement>('.wv-pl__lane') ?? []).map(
-      (lane) => {
-        const box = lane.getBoundingClientRect();
-        return { index: Number(lane.dataset.lane), top: box.top, bottom: box.bottom };
-      },
-    );
-
-    app.startPlaylistGesture(mode === 'move' ? 'Move clip' : 'Resize clip');
+    const laneBoxes = laneElements();
 
     const paint = (): void => {
       if (!clipEl) return;
@@ -392,7 +625,7 @@ export function Playlist(): ReturnType<typeof Show> {
         return;
       }
       clipEl.style.left = `${lastStart * pxPerTick()}px`;
-      const target = laneBoxes.find((lane) => lane.index === lastLane);
+      const target = laneBoxes.find((entry) => entry.index === lastLane);
       clipEl.style.transform = target ? `translateY(${target.top - originTop}px)` : '';
     };
 
@@ -408,7 +641,13 @@ export function Playlist(): ReturnType<typeof Show> {
       if (!moved && Math.abs(moveEvent.clientX - startX) < 3 && Math.abs(moveEvent.clientY - startY) < 3) {
         return;
       }
-      moved = true;
+      if (!moved) {
+        moved = true;
+        gestureLive = true;
+        app.startPlaylistGesture(
+          mode === 'resize' ? 'Resize clip' : clone ? 'Clone clip' : 'Move clip',
+        );
+      }
       if (mode === 'resize') {
         const snap = view.playlistSnap() || 1;
         lastLength = Math.max(snap, snapTicks(originLength + dx, view.playlistSnap()));
@@ -427,24 +666,49 @@ export function Playlist(): ReturnType<typeof Show> {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      gestureLive = false;
       if (clipEl) {
         clipEl.style.pointerEvents = '';
         if (!moved || lastLane === originLane) clipEl.style.transform = '';
         if (!moved) clipEl.style.zIndex = '';
       }
-      if (!moved) {
-        app.commitPlaylistGesture();
-        return;
-      }
+      if (!moved) return;
       const run =
         mode === 'resize'
           ? app.sequencerCommand((backend) => backend.resizeClip(clip.id, lastLength))
-          : app.sequencerCommand((backend) => backend.moveClip(clip.id, lastLane, lastStart));
+          : clone
+            ? cloneClip(clip, lastLane, lastStart).then(() => {
+                if (clipEl) {
+                  clipEl.style.left = `${originStart * pxPerTick()}px`;
+                  clipEl.style.transform = '';
+                  clipEl.style.zIndex = '';
+                }
+              })
+            : app.sequencerCommand((backend) => backend.moveClip(clip.id, lastLane, lastStart));
       void run.then(() => app.commitPlaylistGesture());
     };
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+  }
+
+  async function cloneClip(clip: ClipDto, lane: number, start: number): Promise<void> {
+    const brush = brushFromClip(clip);
+    if (!brush) return;
+    await app.sequencerCommand((backend) =>
+      brush.kind === 'pattern'
+        ? backend.addPatternClip(brush.id, lane, start, clip.length)
+        : backend.addAudioClip(brush.id, lane, start, clip.length, clip.offsetFrames, clip.gainDb),
+    );
+  }
+
+  function duplicateSelected(): void {
+    const id = view.selectedClip();
+    if (id === null) return;
+    const clip = playlist()?.clips.find((entry) => entry.id === id);
+    if (!clip) return;
+    app.startPlaylistGesture('Duplicate clip');
+    void cloneClip(clip, clip.track, clip.start + clip.length).then(() => app.commitPlaylistGesture());
   }
 
   function clipName(clip: ClipDto): string {
@@ -455,6 +719,7 @@ export function Playlist(): ReturnType<typeof Show> {
   }
 
   function removeClip(clip: ClipDto): void {
+    if (view.selectedClip() === clip.id) view.setSelectedClip(null);
     app.startPlaylistGesture('Delete clip');
     void app
       .sequencerCommand((backend) => backend.removeClip(clip.id))
@@ -471,7 +736,7 @@ export function Playlist(): ReturnType<typeof Show> {
   }
 
   const brushLabel = () => {
-    const brush = view.brush();
+    const brush = activeBrush();
     if (!brush) return 'No brush — pick one on the right';
     if (brush.kind === 'pattern') {
       return `Brush · ${app.patterns().find((p) => p.id === brush.id)?.name ?? '?'}`;
@@ -480,7 +745,7 @@ export function Playlist(): ReturnType<typeof Show> {
   };
 
   const brushColour = () => {
-    const brush = view.brush();
+    const brush = activeBrush();
     if (!brush) return 'var(--dim)';
     if (brush.kind === 'pattern') {
       const pattern = app.patterns().find((p) => p.id === brush.id);
@@ -489,7 +754,39 @@ export function Playlist(): ReturnType<typeof Show> {
     return trackColor(brush.id);
   };
 
-  onCleanup(() => pending.clear());
+  function onKeyDown(event: KeyboardEvent): void {
+    const target = event.target as HTMLElement | null;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+      return;
+    }
+    const ctrl = event.ctrlKey || event.metaKey;
+    if (ctrl && !event.altKey && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      duplicateSelected();
+      return;
+    }
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      const id = view.selectedClip();
+      if (id === null) return;
+      const clip = playlist()?.clips.find((entry) => entry.id === id);
+      if (!clip) return;
+      event.preventDefault();
+      removeClip(clip);
+      return;
+    }
+    if (ctrl || event.altKey || event.shiftKey || view.typingKeyboard()) return;
+    const tool = PLAYLIST_TOOL_BY_CODE[event.code];
+    if (!tool) return;
+    event.preventDefault();
+    view.setPlaylistTool(tool);
+    app.say('Tool', tool);
+  }
+
+  onCleanup(() => {
+    pending.clear();
+    window.removeEventListener('keydown', onKeyDown);
+  });
+  window.addEventListener('keydown', onKeyDown);
 
   return (
     <div class="wv-main">
@@ -544,7 +841,15 @@ export function Playlist(): ReturnType<typeof Show> {
         </span>
       </div>
 
-      <div class="wv-pl" ref={scrollEl} onWheel={onWheel}>
+      <div
+        class="wv-pl"
+        ref={scrollEl}
+        onWheel={onWheel}
+        onPointerMove={(event) => previewAt(event.clientX, event.clientY)}
+        onPointerLeave={() => {
+          if (!gestureLive) setPreviews([]);
+        }}
+      >
         <div class="wv-pl__inner" style={{ width: `${HEAD_W + laneWidth()}px` }}>
           <div class="wv-pl__ruler">
             <div class="wv-pl__corner" style={{ width: `${HEAD_W}px` }}>
@@ -634,6 +939,7 @@ export function Playlist(): ReturnType<typeof Show> {
                     width: `${laneWidth()}px`,
                     height: `${laneHeight(lane().id)}px`,
                     'background-size': `${BAR_PX * view.playlistZoom() * 4}px 100%, ${BAR_PX * view.playlistZoom()}px 100%`,
+                    cursor: playlistHoverCursor(view.playlistTool(), 'empty'),
                   }}
                   onPointerDown={(event) => onLanePointerDown(event, index)}
                   onDragOver={(event) => allowDrop(event)}
@@ -676,8 +982,12 @@ export function Playlist(): ReturnType<typeof Show> {
                             : 0
                         }
                         selected={view.selectedClip() === clip.id}
+                        armed={clipMatchesBrush(clip, activeBrush())}
+                        cursor={playlistHoverCursor(
+                          view.playlistTool(),
+                          'clip',
+                        )}
                         onDown={(event, mode) => onClipPointerDown(event, clip, mode)}
-                        onDelete={() => removeClip(clip)}
                         onOpen={() => {
                           if (clip.kind === 'audio' && clip.sourceId !== undefined) {
                             const channel = app
@@ -701,6 +1011,21 @@ export function Playlist(): ReturnType<typeof Show> {
                           view.go('rack');
                         }}
                       />
+                    )}
+                  </For>
+                  <For each={previews().filter((preview) => preview.lane === index)}>
+                    {(preview) => (
+                      <div
+                        class="wv-clip is-ghost"
+                        style={{
+                          left: `${preview.start * pxPerTick()}px`,
+                          width: `${Math.max(6, preview.length * pxPerTick() - 2)}px`,
+                          background: wash(brushColour(), 0.1),
+                          'box-shadow': `inset 0 0 0 1px ${wash(brushColour(), 0.7)}`,
+                        }}
+                      >
+                        <span class="wv-clip__label">{brushLabel().replace(/^Brush · /, '')}</span>
+                      </div>
                     )}
                   </For>
                 </div>
@@ -736,8 +1061,8 @@ export function Playlist(): ReturnType<typeof Show> {
           <div class="wv-pl__hint">
             <strong>The arrangement is empty.</strong>
             <span class="wv-empty__hint">
-              Pick a pattern in the Picker on the right, then click a lane with the paint tool — or
-              drag one straight onto a lane. Switch the transport to SONG to hear it.
+              Click a clip to load it as the brush, then click empty space to stamp another — or
+              pick one in the Picker. Drag paints a run. Switch the transport to SONG to hear it.
             </span>
           </div>
         </Show>
@@ -852,8 +1177,10 @@ function Clip(props: {
   /** Ticks in one loop of the pattern; 0 when this is not a pattern clip. */
   patternTicks: number;
   selected: boolean;
+  /** Same source as the loaded brush — what the next empty click will stamp. */
+  armed: boolean;
+  cursor: string;
   onDown: (event: PointerEvent, mode: 'move' | 'resize') => void;
-  onDelete: () => void;
   onOpen: () => void;
 }): ReturnType<typeof Show> {
   /** The waveform as one SVG path, drawn from the engine's own min/max pairs. */
@@ -882,24 +1209,25 @@ function Clip(props: {
   return (
     <div
       class="wv-clip"
-      classList={{ 'is-selected': props.selected }}
+      data-clip-id={props.clip.id}
+      classList={{ 'is-selected': props.selected, 'is-armed': props.armed }}
       style={{
         left: `${props.clip.start * props.pxPerTick}px`,
         width: `${Math.max(6, props.clip.length * props.pxPerTick - 2)}px`,
         background: wash(props.colour, 0.18),
-        'box-shadow': `inset 0 0 0 1px ${wash(props.colour, props.selected ? 1 : 0.55)}`,
+        'box-shadow': `inset 0 0 0 1px ${wash(props.colour, props.selected ? 1 : props.armed ? 0.85 : 0.55)}`,
+        cursor: props.cursor,
       }}
       onPointerDown={(event) => props.onDown(event, 'move')}
       onDblClick={() => props.onOpen()}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        props.onDelete();
       }}
       title={
         props.clip.kind === 'pattern'
-          ? `${props.name} — drag to move, drag the right edge to resize, double-click to edit, right-click to delete`
-          : `${props.name} — audio clip. Audio clips play into the master bus; per-lane routing is not implemented yet.`
+          ? `${props.name} — click to paint this next, drag to move, drag the right edge to resize, double-click to edit, right-click to delete`
+          : `${props.name} — click to paint this next. Audio clips play into the master bus; per-lane routing is not implemented yet.`
       }
     >
       <span class="wv-clip__label">{props.name}</span>
@@ -945,7 +1273,13 @@ function Clip(props: {
           </For>
         </div>
       </Show>
-      <span class="wv-clip__grip" onPointerDown={(event) => props.onDown(event, 'resize')} />
+      <span
+        class="wv-clip__grip"
+        onPointerDown={(event) => {
+          event.stopPropagation();
+          props.onDown(event, 'resize');
+        }}
+      />
     </div>
   );
 }

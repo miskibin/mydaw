@@ -206,7 +206,7 @@ function Picker(): JSX.Element {
       </div>
 
       <div class="wv-picker__foot">
-        Drag onto a playlist track — or click to load the brush, then click a lane.
+        Drag onto a playlist track — click a clip already there to paint it next.
       </div>
     </div>
   );
@@ -215,9 +215,13 @@ function Picker(): JSX.Element {
 /** Load a brush, arm the paint tool, and go where painting happens. */
 function useBrushClick(): (brush: { kind: 'pattern' | 'audio'; id: number }) => void {
   const view = useView();
+  const app = useAppState();
   return (brush) => {
     view.setBrush(brush);
     view.setPlaylistTool('paint');
+    if (brush.kind === 'pattern' && app.sequencer()?.patternSet.activeId !== brush.id) {
+      void app.sequencerCommand((backend) => backend.setActivePattern(brush.id));
+    }
     // The rack cannot paint, so a click there means "take me to the playlist".
     if (view.view() === 'rack') view.go('playlist');
   };

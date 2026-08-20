@@ -27,14 +27,20 @@ export function StatusBar(): ReturnType<typeof Show> {
       .map(noteName)
       .join(' · ');
 
-  const hint = () =>
-    view.rollOpen()
-      ? view.typingKeyboard()
+  const hint = () => {
+    if (view.rollOpen()) {
+      return view.typingKeyboard()
         ? `typing keyboard on · Q is ${qName()} · tools off · Esc closes`
-        : 'left draw · shift stretch · right erase · ctrl select · alt unsnap · scrollbar edges zoom · P/B/E/D/C'
-      : view.typingKeyboard()
-        ? `typing keyboard on · Q is ${qName()} · 2 is C# · W is D · scroll the key button for octave · Ctrl+T off`
-        : 'F5 playlist · F6 rack · F7 piano roll · F9 mixer · Space play · Ctrl+T keys · Ctrl+Z undo';
+        : 'left draw · shift stretch · right erase · ctrl select · alt unsnap · scrollbar edges zoom · P/B/E/D/C';
+    }
+    if (view.typingKeyboard()) {
+      return `typing keyboard on · Q is ${qName()} · 2 is C# · W is D · scroll the key button for octave · Ctrl+T off`;
+    }
+    if (view.view() === 'playlist') {
+      return 'click a clip to paint it next · drag a run · Shift-drag stretch · P/B paint · E select · D delete · Ctrl+B duplicate';
+    }
+    return 'F5 playlist · F6 rack · F7 piano roll · F9 mixer · Space play · Ctrl+T keys · Ctrl+Z undo';
+  };
 
   return (
     <footer class="wv-status">
