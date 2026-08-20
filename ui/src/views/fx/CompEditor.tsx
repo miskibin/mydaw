@@ -1,6 +1,5 @@
 import type { EffectInfoDto, ParamValueDto } from '../../api/types';
 import { compressorOutputDb, inputDbFromGr, reductionDb } from '../../lib/compressor';
-import { SpectrumTerrain } from '../../ui/SpectrumTerrain';
 import { TransferCurve } from '../../ui/TransferCurve';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { Advanced, PrimaryRow } from './chrome';
@@ -28,11 +27,31 @@ export function CompEditor(props: {
     const x = inputDbFromGr(reduction, threshold(), ratio(), knee());
     return { x, y: compressorOutputDb(x, threshold(), ratio(), knee(), makeup()) };
   };
+  const attack = () => at('attack', 10);
+  const release = () => at('release', 100);
+  const envelopePath = () => {
+    const a = Math.min(34, 8 + Math.log10(attack() + 1) * 12);
+    const r = Math.min(92, a + 22 + Math.log10(release() + 1) * 13);
+    return `M4 72 L24 72 L28 18 L${(28 + a).toFixed(1)} 38 L${r.toFixed(1)} 66 L96 72`;
+  };
+  const reductionPath = () => {
+    const depth = Math.min(38, 5 + gr() * 2.5);
+    return `M4 78 L28 78 L${(36 + attack() / 10).toFixed(1)} ${78 - depth} L${Math.min(94, 52 + release() / 35).toFixed(1)} 78 Z`;
+  };
 
   return (
     <>
       <div class="wv-fx__display wv-fx__display--comp">
-        <SpectrumTerrain bins={props.spectrum} />
+        <div class="wv-fx__timeview" classList={{ 'is-off': props.muted }} role="img" aria-label="Compression over time: input transient and gain reduction">
+          <div class="wv-fx__vizhead"><span>ENVELOPE</span><strong>TIME →</strong></div>
+          <svg viewBox="0 0 100 86" preserveAspectRatio="none" aria-hidden="true">
+            <path class="wv-fx__vgrid" d="M0 22H100 M0 50H100 M25 0V86 M50 0V86 M75 0V86" />
+            <path class="wv-fx__threshold" d={`M0 ${Math.max(10, 76 + threshold()).toFixed(1)}H100`} />
+            <path class="wv-fx__grarea" d={reductionPath()} />
+            <path class="wv-fx__envelope" d={envelopePath()} />
+          </svg>
+          <div class="wv-fx__vizlegend"><span><i class="is-input" /> input envelope</span><span><i class="is-gr" /> gain reduction</span></div>
+        </div>
         <div class="wv-fx__compbody">
           <TransferCurve
             min={-60}

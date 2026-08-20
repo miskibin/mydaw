@@ -49,6 +49,7 @@
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  container-type: inline-size;
 }
 
 .wv-plug__tools {
@@ -130,6 +131,8 @@
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 10px 12px 14px;
 }
 
@@ -192,6 +195,110 @@
   border-radius: 6px;
   background: var(--panel);
   overflow: hidden;
+}
+
+/* Every effect owns a semantic model of its DSP. Shared chrome is deliberately
+ * quiet so the envelope, taps, harmonics and room remain the visual nouns. */
+.wv-fx__vizhead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 25px;
+  padding: 0 9px;
+  font: 500 8px 'Geist Mono Variable';
+  letter-spacing: .12em;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.wv-fx__vizhead span,
+.wv-fx__vizhead strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wv-fx__vizhead strong { font-weight: 500; color: var(--txt2); }
+.wv-fx__timeview, .wv-fx__timeline, .wv-fx__harmonics, .wv-fx__vizpanel, .wv-fx__decay {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--sunk);
+}
+.wv-fx__display--comp:has(.wv-fx__timeview) {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(210px, .75fr);
+  gap: 8px;
+  min-height: 230px;
+  border: 0;
+  background: transparent;
+  overflow: visible;
+}
+.wv-fx__timeview { min-height: 0; }
+.wv-fx__timeview svg, .wv-fx__decay svg { display: block; width: 100%; height: 105px; }
+.wv-fx__compbody {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+.wv-fx__compbody > .wv-xfer { min-height: 0; }
+.wv-fx__compbody > .wv-fx__gr { width: auto; min-width: 0; }
+.wv-fx__vgrid { fill: none; stroke: var(--line); stroke-width: .5; vector-effect: non-scaling-stroke; }
+.wv-fx__threshold { fill: none; stroke: var(--warn); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+.wv-fx__envelope { fill: none; stroke: var(--txt); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.wv-fx__grarea { fill: color-mix(in srgb, var(--acc) 42%, transparent); stroke: var(--acc); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.wv-fx__vizlegend { display: flex; justify-content: space-between; gap: 8px; padding: 5px 9px 8px; font: 500 8px 'Geist Mono Variable'; color: var(--dim); text-transform: uppercase; }
+.wv-fx__vizlegend i { display: inline-block; width: 13px; height: 2px; margin: 0 3px 2px 0; background: var(--txt); }
+.wv-fx__vizlegend i.is-gr { background: var(--acc); }
+
+.wv-fx__satviz { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(170px, .95fr); gap: 8px; min-height: 210px; }
+.wv-fx__vizpanel { display: flex; flex-direction: column; }
+.wv-fx__vizpanel .wv-xfer { flex: 1; border: 0; border-radius: 0; }
+.wv-fx__harmonics { display: flex; flex-direction: column; }
+.wv-fx__harmbars { display: flex; flex: 1; gap: 7%; align-items: end; padding: 16px 12px 25px; background-image: linear-gradient(var(--line) 1px, transparent 1px); background-size: 100% 25%; }
+.wv-fx__harmbars i { position: relative; flex: 1; min-height: 2px; border-radius: 2px 2px 0 0; background: linear-gradient(to top, var(--acc), var(--good)); box-shadow: 0 0 12px color-mix(in srgb, var(--acc) 25%, transparent); }
+.wv-fx__harmbars b { position: absolute; top: calc(100% + 7px); left: 50%; translate: -50% 0; font: 500 8px 'Geist Mono Variable'; color: var(--dim); }
+
+.wv-fx__timeline { position: absolute; inset: 0 0 34px; }
+.wv-fx__delaytaps { position: absolute; inset: 26px 0 20px; border-bottom: 1px solid var(--line2); background-image: linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 10% 100%; }
+.wv-fx__delaytaps i { position: absolute; bottom: 0; width: 3px; min-height: 5px; border-radius: 2px 2px 0 0; background: var(--acc); box-shadow: 0 0 10px var(--acc); }
+.wv-fx__delaytaps i.is-dry { background: var(--txt); box-shadow: none; }
+.wv-fx__delaytaps b { position: absolute; top: -13px; left: 50%; translate: -50% 0; font: 500 7px 'Geist Mono Variable'; color: var(--txt2); }
+.wv-fx__timelineaxis { position: absolute; right: 8px; bottom: 5px; left: 8px; display: flex; justify-content: space-between; font: 500 7px 'Geist Mono Variable'; color: var(--dim); }
+
+.wv-fx__display:has(> .wv-fx__room) { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(180px, .65fr); gap: 8px; }
+.wv-fx__display:has(> .wv-fx__room) > .wv-fx__topo { grid-column: 1 / -1; }
+.wv-fx__room { min-height: 180px; border: 1px solid var(--line); }
+.wv-fx__roomsvg { top: 25px; height: calc(100% - 25px); }
+.wv-fx__decay { min-height: 180px; }
+.wv-fx__decayarea { fill: color-mix(in srgb, var(--acc) 26%, transparent); stroke: var(--acc); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.wv-fx__predelay { stroke: var(--warn); stroke-width: 1; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
+.wv-fx__particle { fill: var(--good); filter: drop-shadow(0 0 2px var(--good)); animation: wv-room-particle 2.1s linear infinite; }
+@keyframes wv-room-particle { 0% { opacity: 0; translate: -5px 4px; } 20% { opacity: 1; } 100% { opacity: 0; translate: 18px -9px; } }
+
+.is-off.wv-fx__timeview, .is-off.wv-fx__timeline, .is-off.wv-fx__harmonics, .is-off.wv-fx__decay { opacity: .36; }
+@media (prefers-reduced-motion: reduce) { .wv-fx__particle { animation: none; } .wv-fx__grfill { transition: none; } }
+
+@container (max-width: 580px) {
+  .wv-fx__satviz,
+  .wv-fx__display:has(> .wv-fx__room),
+  .wv-fx__display--comp:has(.wv-fx__timeview) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wv-fx__timeview,
+  .wv-fx__room,
+  .wv-fx__decay {
+    min-height: 150px;
+  }
+
+  .wv-fx__display:has(> .wv-fx__room) > .wv-fx__topo {
+    grid-column: 1;
+  }
 }
 
 .wv-fx__display--comp .wv-fx__limitread {
@@ -694,4 +801,51 @@
   stroke: var(--txt);
   stroke-width: 1.2;
   stroke-dasharray: 5 3;
+}
+
+/* Semantic effect views live after the legacy compact-card rules on purpose:
+ * these selectors are scoped to the full editor and must not inherit the old
+ * absolute tap layout or vertical meter geometry. */
+.wv-fx__timeline > .wv-fx__delaytaps {
+  inset: 26px 0 20px;
+  border-bottom: 1px solid var(--line2);
+  background-image: linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 10% 100%;
+}
+
+.wv-fx__timeline > .wv-fx__delaytaps::before {
+  display: none;
+}
+
+.wv-fx__timeline > .wv-fx__delaytaps i {
+  bottom: 0;
+  width: 3px;
+  min-height: 5px;
+  border-radius: 2px 2px 0 0;
+  transform: none;
+}
+
+.wv-fx__compbody > .wv-fx__gr {
+  position: relative;
+  display: block;
+  width: auto;
+  min-width: 0;
+  padding: 0;
+}
+
+.wv-fx__compbody > .wv-fx__gr .wv-fx__grfill {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+}
+
+.wv-fx__compbody > .wv-fx__gr .wv-fx__grnum {
+  position: absolute;
+  inset: auto 0 6px;
+  font-size: 9px;
+  text-align: center;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
 }

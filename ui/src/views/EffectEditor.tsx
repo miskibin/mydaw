@@ -27,12 +27,12 @@ import { Advanced, PrimaryRow } from './fx/chrome';
 import '../styles/effect.css';
 
 const WINDOW_SIZE: Record<string, { w: number; h: number }> = {
-  eq: { w: 860, h: 560 },
-  compressor: { w: 620, h: 460 },
-  saturator: { w: 560, h: 440 },
-  delay: { w: 640, h: 460 },
-  limiter: { w: 560, h: 420 },
-  reverb: { w: 620, h: 460 },
+  eq: { w: 860, h: 600 },
+  compressor: { w: 720, h: 540 },
+  saturator: { w: 680, h: 520 },
+  delay: { w: 720, h: 540 },
+  limiter: { w: 620, h: 500 },
+  reverb: { w: 760, h: 540 },
   utility: { w: 520, h: 480 },
   generic: { w: 520, h: 400 },
 };
