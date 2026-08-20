@@ -1,4 +1,4 @@
-import { Show, type JSX } from 'solid-js';
+import { For, Show, type JSX } from 'solid-js';
 
 import type { EffectInfoDto } from '../../api/types';
 import { DIVISION_LABELS, MODIFIER_LABELS, delayFilterMagDb, delayTimeMs } from '../../lib/delayTime';
@@ -26,6 +26,8 @@ export function DelayEditor(props: {
   const modifier = () => props.info.params.find((d) => d.id === 'modifier')!;
   const timeMs = () =>
     delayTimeMs(sync(), at('division', 3), at('modifier', 0), at('time_ms', 375), props.bpm);
+  const feedback = () => Math.max(0, Math.min(95, at('feedback', 35)));
+  const tapOpacity = (tap: number) => Math.max(0.12, (feedback() / 100) ** (tap - 1));
 
   const filterPath = () => {
     const points = 120;
@@ -67,6 +69,11 @@ export function DelayEditor(props: {
         </div>
         <div class="wv-fx__stage" style={{ 'min-height': '200px' }}>
           <SpectrumTerrain bins={props.spectrum} />
+          <div class="wv-fx__delaytaps" title="Echo taps get quieter with feedback; the filter curve shows each repeat being darkened or thinned.">
+            <For each={[1, 2, 3, 4, 5]}>
+              {(tap) => <i style={{ left: `${12 + tap * 14}%`, height: `${64 * tapOpacity(tap)}%`, opacity: tapOpacity(tap) }} />}
+            </For>
+          </div>
           <div class="wv-eqc wv-eqc--detailed wv-eqc--overlay" title="In-loop HP and LP. Each repeat is filtered again.">
             <svg class="wv-eqc__svg" viewBox="0 0 1000 100" preserveAspectRatio="none">
               <path class="wv-eqc__zero" d="M0 50 H1000" vector-effect="non-scaling-stroke" />
