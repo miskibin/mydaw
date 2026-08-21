@@ -18,6 +18,7 @@ import { useView } from './shell/view';
 import { useAppState } from './state';
 import { IconChevron } from './ui/icons';
 import { EffectEditors } from './views/EffectEditor';
+import { Landing } from './views/Landing';
 import { Mixer } from './views/Mixer';
 import { Playlist } from './views/Playlist';
 import { Rack } from './views/Rack';
@@ -26,6 +27,8 @@ import { SampleEditor } from './views/SampleEditor';
 import { Settings } from './views/Settings';
 
 export function App(): ReturnType<typeof Show> {
+  if (window.location.pathname === '/' && !window.location.hash) return <Landing />;
+
   const app = useAppState();
   const view = useView();
 
