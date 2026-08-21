@@ -3,9 +3,10 @@
  * the three knobs a sampled channel has.
  *
  * Clip and one-shot channels share it -- they are the same file behind
- * different triggers -- and everything else (a kick, a piano, the test tone)
- * still opens here for a preview of one hit, minus the region controls it has
- * no frames to apply to.
+ * different triggers. Sounds-tab drums are one-shots too, so Kick/Snare get
+ * the waveform, fades and region. Poly Synth keeps its own editor; the test
+ * tone still opens here for a preview of one hit, minus the region controls
+ * it has no frames to apply to.
  *
  * ## Why the knobs keep a local copy
  *
@@ -28,8 +29,16 @@
 
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js';
 
-import type { ParamDefDto, SourcePreviewDto, TrackDto, WaveformDto } from '../api/types';
-import { channelKind, isAudioClipChannel } from '../lib/channel';
+import type { ParamDefDto, PitchAnalysis, SourcePreviewDto, TrackDto, WaveformDto } from '../api/types';
+import { channelColor, channelKind } from '../lib/channel';
+import { noteName } from '../lib/pattern';
+import {
+  decideWaveformAction,
+  formatDetectedPitch,
+  noPitchReasonCopy,
+  pitchAnalysisKey,
+  targetTransposeCents,
+} from '../lib/samplePitch';
 import {
   dragRegion,
   formatFrames,
@@ -40,13 +49,16 @@ import {
   stepSemitone,
   type Region,
 } from '../lib/sampleRegion';
+import { stereoWaveformPaths } from '../lib/sampleWaveform';
+import { usesPolySynthEditor } from '../lib/polySynth';
 import { useAppState } from '../state';
 import { useView } from '../shell/view';
 import { Knob, spec } from '../ui/Knob';
 import { PluginWindow } from '../ui/PluginWindow';
+import { SampleKeyboard } from '../ui/SampleKeyboard';
 import { WHEEL_COMMIT_MS, debounce } from '../ui/drag';
-import { IconPlay, IconX } from '../ui/icons';
-import { trackColor } from '../theme/tokens';
+import { IconX } from '../ui/icons';
+import { PolySynthEditor } from './synth/PolySynthEditor';
 
 import '../styles/sample.css';
 
@@ -58,6 +70,7 @@ const AUDITION_KEY = 60;
 const KIT_KEY = 36;
 /** Travel under this is a click, not a drag: it must not redraw the region. */
 const DRAG_SLOP_PX = 3;
+const TARGET_NOTES = Array.from({ length: 61 }, (_, index) => 36 + index);
 
 const PAN_DEF = spec('pan', 'Pan', '', -1, 1, 0);
 const PITCH_DEF = spec('pitch', 'Pitch', 'ct', -1200, 1200, 0);
@@ -91,6 +104,16 @@ export function SampleEditor(): JSX.Element {
   /** Instrument knobs mid-drag, by parameter id. See `setSourceParam`. */
   const [localParams, setLocalParams] = createSignal<Record<string, number>>({});
   const [localRegion, setLocalRegion] = createSignal<Region | null>(null);
+  const [analyzing, setAnalyzing] = createSignal(false);
+  const [analysis, setAnalysis] = createSignal<{ key: string; result: PitchAnalysis } | null>(
+    null,
+  );
+  const [kbCenter, setKbCenter] = createSignal(60);
+  const [targetNote, setTargetNote] = createSignal(60);
+  let pendingSampleEdit: Promise<void> = Promise.resolve();
+  let noteGate: Promise<void> = Promise.resolve();
+  let analysisGen = 0;
+  const sampleEditFailed = Symbol('sample edit failed');
 
   const track = (): TrackDto | undefined => {
     const index = view.sampleEditor();
@@ -103,15 +126,30 @@ export function SampleEditor(): JSX.Element {
     return !!current && (current.engine === 'clip' || current.engine === 'sample');
   };
 
+  async function waitForSampleEdits(): Promise<void> {
+    for (;;) {
+      const pending = pendingSampleEdit;
+      await pending.catch(() => undefined);
+      if (pending === pendingSampleEdit) return;
+    }
+  }
+
   const settle = debounce(WHEEL_COMMIT_MS, () => {
-    void app.mixerCommand((backend) => backend.getTracks()).finally(() => {
-      setLocalDb(null);
-      setLocalPan(null);
-      setLocalCents(null);
-      setLocalFades(null);
-      setLocalParams({});
-      setLocalRegion(null);
-    });
+    const trackId = track()?.id;
+    void waitForSampleEdits()
+      .then(() => {
+        if (track()?.id !== trackId) return;
+        return app.mixerCommand((backend) => backend.getTracks());
+      })
+      .finally(() => {
+        if (track()?.id !== trackId) return;
+        setLocalDb(null);
+        setLocalPan(null);
+        setLocalCents(null);
+        setLocalFades(null);
+        setLocalParams({});
+        setLocalRegion(null);
+      });
   });
   onCleanup(() => settle.cancel());
 
@@ -137,6 +175,24 @@ export function SampleEditor(): JSX.Element {
       setLocalFades(null);
       setLocalParams({});
       setLocalRegion(null);
+      setAnalysis(null);
+      setAnalyzing(false);
+      analysisGen += 1;
+      const current = track();
+      const detected = current?.detectedPitch;
+      if (detected && current && (current.engine === 'clip' || current.engine === 'sample')) {
+        setAnalysis({
+          key: pitchAnalysisKey(
+            current.id,
+            current.audioSourceId,
+            current.sampleStartFrames,
+            current.sampleEndFrames,
+          ),
+          result: { kind: 'detected', ...detected },
+        });
+        setKbCenter(detected.midiNote);
+        setTargetNote(detected.midiNote);
+      }
     }),
   );
 
@@ -171,6 +227,11 @@ export function SampleEditor(): JSX.Element {
       } else {
         const sourceId = key.slice('inst:'.length);
         setFileWave(null);
+        if (sourceId === 'poly-synth') {
+          setPreview(null);
+          setLoading(false);
+          return;
+        }
         app.backend
           .previewSource(sourceId, 512)
           .then((wave) => {
@@ -199,6 +260,21 @@ export function SampleEditor(): JSX.Element {
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let held: number | null = null;
+  let auditionTimer: ReturnType<typeof setTimeout> | undefined;
+  let skipWaveAudition = false;
+
+  function queueSampleEdit(trackId: number, operation: (index: number) => Promise<unknown>): void {
+    pendingSampleEdit = pendingSampleEdit.catch(() => undefined).then(async () => {
+      const latest = app.mixer()?.tracks.find((entry) => entry.id === trackId);
+      if (!latest) return;
+      try {
+        await operation(latest.index);
+      } catch (error) {
+        app.report(error);
+        throw sampleEditFailed;
+      }
+    });
+  }
 
   function release(): void {
     if (held === null) return;
@@ -207,25 +283,53 @@ export function SampleEditor(): JSX.Element {
     app.backend.noteOff(key).catch(() => {});
   }
 
+  function auditionWave(): void {
+    const current = track();
+    if (!current || !samplePlay()) return;
+    const trackId = current.id;
+    void pendingSampleEdit
+      .then(async () => {
+        if (track()?.id !== trackId) return;
+        const latest = app.mixer()?.tracks.find((entry) => entry.id === trackId);
+        if (!latest) return;
+        await app.backend.previewTrackSample(latest.index);
+      })
+      .catch((error: unknown) => {
+        if (error !== sampleEditFailed) app.report(error);
+      });
+  }
+
   function audition(): void {
     const current = track();
     if (!current) return;
-    void app.mixerCommand((backend) => backend.setSelectedTrack(current.index));
-    if (isAudioClipChannel(current)) {
-      const path = app.audioSources().find((source) => source.id === current.audioSourceId)?.path;
-      if (path) void app.backend.previewAudioFile(path).catch(app.report);
+    if (samplePlay()) {
+      auditionWave();
       return;
     }
-    clearTimeout(timer);
-    release();
-    const key = current.sourceId === 'drum-kit' ? KIT_KEY : AUDITION_KEY;
-    held = key;
-    app.backend.noteOn(key, 0.9).catch(app.report);
-    timer = setTimeout(release, AUDITION_MS);
+    const trackId = current.id;
+    void pendingSampleEdit
+      .then(async () => {
+        if (track()?.id !== trackId) return;
+        const latest = app.mixer()?.tracks.find((entry) => entry.id === trackId);
+        if (!latest) return;
+        await app.mixerCommand((backend) => backend.setSelectedTrack(latest.index));
+        const selected = track();
+        if (!selected || selected.id !== trackId) return;
+        clearTimeout(timer);
+        release();
+        const key = selected.sourceId === 'drum-kit' ? KIT_KEY : AUDITION_KEY;
+        held = key;
+        await app.backend.noteOn(key, 0.9);
+        timer = setTimeout(release, AUDITION_MS);
+      })
+      .catch((error: unknown) => {
+        if (error !== sampleEditFailed) app.report(error);
+      });
   }
 
   onCleanup(() => {
     clearTimeout(timer);
+    clearTimeout(auditionTimer);
     release();
   });
 
@@ -233,30 +337,13 @@ export function SampleEditor(): JSX.Element {
     const current = track();
     return current ? channelKind(current) : null;
   };
-  const colour = () => trackColor(track()?.id ?? 0);
+  const colour = () => channelColor(track());
   const owner = () => track()?.name ?? 'Sample';
+  const synthEditor = () => usesPolySynthEditor(track()?.sourceId, track()?.sourceParamDefs.length ?? 0);
   const file = () => app.audioSources().find((source) => source.id === track()?.audioSourceId);
   const sampleRate = () => file()?.sampleRate ?? 0;
 
   const peaks = (): [number, number][] => fileWave()?.peaks ?? preview()?.peaks ?? [];
-  const peak = (): number => {
-    const pairs = peaks();
-    let max = 0.0001;
-    for (const pair of pairs) max = Math.max(max, Math.abs(pair[0]), Math.abs(pair[1]));
-    return max;
-  };
-  const path = (): string => {
-    const pairs = peaks();
-    if (pairs.length === 0) return '';
-    const scale = peak();
-    const step = 100 / pairs.length;
-    const top = pairs.map((pair, index) => `${index * step},${50 - (pair[1] / scale) * 46}`);
-    const bottom = pairs
-      .map((pair, index) => `${index * step},${50 - (pair[0] / scale) * 46}`)
-      .reverse();
-    return `M${top.join(' L')} L${bottom.join(' L')} Z`;
-  };
-
   // --- the region ----------------------------------------------------------
 
   const totalFrames = (): number => fileWave()?.frames ?? 0;
@@ -284,9 +371,9 @@ export function SampleEditor(): JSX.Element {
     const current = track();
     if (!current) return;
     setLocalRegion({ start: next.start, end: next.end });
-    void app.backend
-      .setTrackSampleRegion(current.index, next.start, next.storedEnd)
-      .catch(app.report);
+    queueSampleEdit(current.id, (index) =>
+      app.backend.setTrackSampleRegion(index, next.start, next.storedEnd),
+    );
     settle();
   }
 
@@ -339,13 +426,29 @@ export function SampleEditor(): JSX.Element {
       moved = true;
       apply(next.clientX);
     };
-    const onUp = () => {
+    const onUp = (event: PointerEvent) => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
       document.body.style.removeProperty('cursor');
       document.body.style.removeProperty('user-select');
-      if (!moved) {
+      const movedPx = Math.abs(event.clientX - startX);
+      const action = decideWaveformAction({
+        kind: grab === 'new' ? 'body' : 'handle',
+        movedPx,
+        slopPx: DRAG_SLOP_PX,
+        doubleClick: false,
+      });
+      if (action === 'audition') {
+        setLocalRegion(null);
+        if (skipWaveAudition) return;
+        clearTimeout(auditionTimer);
+        auditionTimer = setTimeout(() => {
+          if (!skipWaveAudition) auditionWave();
+        }, 280);
+        return;
+      }
+      if (!moved && grab === 'new') {
         setLocalRegion(null);
         return;
       }
@@ -372,6 +475,22 @@ export function SampleEditor(): JSX.Element {
   const cents = () => localCents() ?? track()?.pitchCents ?? 0;
   const fadeIn = () => localFades()?.[0] ?? track()?.fadeInMs ?? 0;
   const fadeOut = () => localFades()?.[1] ?? track()?.fadeOutMs ?? 0;
+  const wavePaths = createMemo(() => {
+    return stereoWaveformPaths(peaks(), {
+      gainDb: gainDb(),
+      pan: pan(),
+      pitchCents: cents(),
+      fadeInMs: fadeIn(),
+      fadeOutMs: fadeOut(),
+      sampleRate: sampleRate(),
+      totalFrames: totalFrames(),
+      // This large editor keeps the whole source under the region handles.
+      // The compact inspector crops to the region; here the shades must still
+      // line up with the original file behind them.
+      startFrames: 0,
+      endFrames: totalFrames(),
+    });
+  });
 
   function setGain(db: number): void {
     const current = track();
@@ -395,7 +514,7 @@ export function SampleEditor(): JSX.Element {
     if (!current) return;
     const next = Math.round(value);
     setLocalCents(next);
-    void app.backend.setTrackPitch(current.index, next).catch(app.report);
+    queueSampleEdit(current.id, (index) => app.backend.setTrackPitch(index, next));
     settle();
   }
 
@@ -411,7 +530,7 @@ export function SampleEditor(): JSX.Element {
     if (!current) return;
     const next: [number, number] = [Math.max(0, Math.round(fadeInMs)), Math.max(0, Math.round(fadeOutMs))];
     setLocalFades(next);
-    void app.backend.setTrackFades(current.index, next[0], next[1]).catch(app.report);
+    queueSampleEdit(current.id, (index) => app.backend.setTrackFades(index, next[0], next[1]));
     settle();
   }
 
@@ -419,8 +538,9 @@ export function SampleEditor(): JSX.Element {
   //
   // The generic panel: the engine sends what the instrument declares (id, range,
   // curve, default) and this draws a knob per declaration, exactly as the
-  // inspector does for an effect. Nothing here knows what a poly synth is, which
-  // is what makes the *next* instrument's window free.
+  // inspector does for an effect. Poly synth is the one exception -- it has
+  // pictures of its oscillators, filter and envelope in PolySynthEditor -- so
+  // the next instrument's window stays free.
 
   const paramDefs = (): ParamDefDto[] => track()?.sourceParamDefs ?? [];
 
@@ -445,6 +565,112 @@ export function SampleEditor(): JSX.Element {
     app.say(`${owner()} · Pitch`, pitchLabel(next));
   }
 
+  const analysisKeyNow = (): string => {
+    const current = track();
+    if (!current) return '';
+    const { start, end } = region();
+    return pitchAnalysisKey(current.id, current.audioSourceId, start, end);
+  };
+
+  const detectedPitch = () => {
+    const held = analysis();
+    if (!held || held.key !== analysisKeyNow() || held.result.kind !== 'detected') return null;
+    return held.result;
+  };
+
+  const pitchStatus = (): string | null => {
+    const held = analysis();
+    if (!held || held.key !== analysisKeyNow()) return analyzing() ? 'Listening…' : null;
+    if (held.result.kind === 'detected') {
+      const source =
+        held.result.source === 'metadata'
+          ? 'metadata'
+          : held.result.source === 'filename'
+            ? 'filename'
+            : 'analysis';
+      return `${formatDetectedPitch(held.result)} · ${source}`;
+    }
+    return noPitchReasonCopy(held.result.reason);
+  };
+
+  async function findPitch(): Promise<void> {
+    const current = track();
+    if (!current || !samplePlay()) return;
+    await waitForSampleEdits();
+    const key = analysisKeyNow();
+    const gen = ++analysisGen;
+    setAnalyzing(true);
+    try {
+      const result = await app.backend.analyzeTrackPitch(current.index);
+      if (gen !== analysisGen || analysisKeyNow() !== key) return;
+      setAnalysis({ key, result });
+      if (result.kind === 'detected') {
+        setKbCenter(result.midiNote);
+        setTargetNote(result.midiNote);
+        app.say(`${owner()} · Pitch`, formatDetectedPitch(result));
+      } else {
+        app.say(`${owner()} · Pitch`, noPitchReasonCopy(result.reason));
+      }
+    } catch (error) {
+      app.report(error);
+    } finally {
+      if (gen === analysisGen) setAnalyzing(false);
+    }
+  }
+
+  function useAsRoot(found: { midiNote: number; cents: number }): void {
+    const current = track();
+    if (!current) return;
+    queueSampleEdit(current.id, (index) =>
+      app.mixerCommand((backend) =>
+        backend.setTrackSampleRoot(index, found.midiNote, found.cents, 'detected'),
+      ),
+    );
+    settle();
+    setKbCenter(found.midiNote);
+    app.say(`${owner()} · Root`, `${noteName(found.midiNote)}`);
+  }
+
+  function enqueueNote(work: () => Promise<void>): void {
+    noteGate = noteGate.catch(() => undefined).then(work);
+  }
+
+  function playSampleNote(key: number, velocity: number): void {
+    const current = track();
+    if (!current) return;
+    const index = current.index;
+    enqueueNote(async () => {
+      if (app.mixer()?.selected !== index) {
+        await app.mixerCommand((backend) => backend.setSelectedTrack(index));
+      }
+      await app.backend.noteOn(key, velocity);
+    });
+  }
+
+  function releaseSampleNote(key: number): void {
+    enqueueNote(async () => {
+      await app.backend.noteOff(key);
+    });
+  }
+
+  function retuneTo(found: { midiNote: number; cents: number }, target: number): void {
+    setPitch(targetTransposeCents(found.midiNote, found.cents, target));
+    app.say(`${owner()} · Pitch`, pitchLabel(targetTransposeCents(found.midiNote, found.cents, target)));
+  }
+
+  createEffect(
+    on(
+      () => track()?.id,
+      (id) => {
+        if (id == null || !samplePlay()) return;
+        const current = track();
+        if (!current) return;
+        void app.mixerCommand((backend) => backend.setSelectedTrack(current.index));
+        setKbCenter(current.rootKey);
+      },
+    ),
+  );
+
   return (
     <Show when={track()}>
       {(current) => (
@@ -453,10 +679,15 @@ export function SampleEditor(): JSX.Element {
           color={colour()}
           z={80}
           focused
-          defaultWidth={660}
-          defaultHeight={440}
+          defaultWidth={synthEditor() ? 760 : 660}
+          defaultHeight={synthEditor() ? 760 : 520}
           offset={0}
-          onFocus={() => {}}
+          onFocus={() => {
+            if (!synthEditor()) return;
+            const index = track()?.index;
+            if (index === undefined) return;
+            void app.backend.watchSpectrum({ kind: 'track', index }, null).catch(() => {});
+          }}
           onClose={() => view.closeSampleEditor()}
         >
           <div class="wv-sample wv-sample--window">
@@ -464,11 +695,10 @@ export function SampleEditor(): JSX.Element {
               <Show when={kind()}>
                 {(info) => (
                   <span
-                    class={`wv-chrow__kind wv-chrow__kind--${info().kind}`}
+                    class="wv-chrow__kind"
+                    style={{ background: colour() }}
                     title={info().title}
-                  >
-                    {info().badge}
-                  </span>
+                  />
                 )}
               </Show>
               <span class="wv-sample__file" title={file()?.path ?? current().sourceLabel}>
@@ -486,27 +716,82 @@ export function SampleEditor(): JSX.Element {
                   Full file
                 </button>
               </Show>
-              <button
-                type="button"
-                class="wv-sample__play"
-                title="Preview this sound through the selected channel"
-                onClick={audition}
-              >
-                <IconPlay />
-                Preview
-              </button>
+              <Show when={samplePlay()}>
+                <button
+                  type="button"
+                  class="wv-chip"
+                  disabled={analyzing()}
+                  title="Detect the sample's root pitch. Unpitched sounds are reported, never forced to C."
+                  onClick={() => void findPitch()}
+                >
+                  {analyzing() ? 'Finding…' : 'Find pitch'}
+                </button>
+                <Show when={pitchStatus()}>
+                  {(copy) => <span class="wv-sample__pitchfind">{copy()}</span>}
+                </Show>
+                <Show when={detectedPitch()}>
+                  {(found) => (
+                    <>
+                      <button
+                        type="button"
+                        class="wv-chip"
+                        title="Calibrate the keyboard and piano roll to this pitch without changing transpose"
+                        onClick={() => useAsRoot(found())}
+                      >
+                        Use as root
+                      </button>
+                      <label class="wv-sample__target">
+                        Target
+                        <select
+                          value={String(targetNote())}
+                          onChange={(event) => {
+                            const note = Number(event.currentTarget.value);
+                            setTargetNote(note);
+                            retuneTo(found(), note);
+                          }}
+                        >
+                          <For each={TARGET_NOTES}>
+                            {(note) => <option value={String(note)}>{noteName(note)}</option>}
+                          </For>
+                        </select>
+                      </label>
+                    </>
+                  )}
+                </Show>
+                <span class="wv-sample__root">
+                  Root {noteName(track()?.rootKey ?? 60)}
+                  {Math.round(track()?.rootFineCents ?? 0) !== 0
+                    ? ` ${Math.round(track()?.rootFineCents ?? 0) > 0 ? '+' : ''}${Math.round(track()?.rootFineCents ?? 0)} ct`
+                    : ''}
+                </span>
+              </Show>
             </div>
 
+            <Show
+              when={synthEditor()}
+              fallback={
+                <>
             <div
               class="wv-sample__wave"
               classList={{ 'is-edit': samplePlay() }}
               style={{ color: colour() }}
               ref={waveEl}
-              onPointerDown={(event) => onRegionPointer(event, 'new')}
-              onDblClick={() => samplePlay() && resetRegion()}
+              onPointerDown={(event) => {
+                if (samplePlay()) onRegionPointer(event, 'new');
+                else if (event.button === 0) audition();
+              }}
+              onDblClick={() => {
+                if (!samplePlay()) return;
+                skipWaveAudition = true;
+                clearTimeout(auditionTimer);
+                resetRegion();
+                window.setTimeout(() => {
+                  skipWaveAudition = false;
+                }, 350);
+              }}
               title={
                 samplePlay()
-                  ? 'Drag across the wave to set the played region, drag a handle to move one end, double-click for the whole file'
+                  ? 'Click to preview, drag to set the played region, drag a handle to move one end, double-click for the whole file'
                   : undefined
               }
             >
@@ -524,7 +809,8 @@ export function SampleEditor(): JSX.Element {
               <Show when={!loading() && peaks().length > 0}>
                 <span class="wv-sample__axis" />
                 <svg class="wv-sample__svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-                  <path d={path()} fill="currentColor" />
+                  <path d={wavePaths().left} fill="currentColor" />
+                  <path d={wavePaths().right} fill="currentColor" opacity="0.72" />
                 </svg>
               </Show>
               <Show when={samplePlay() && peaks().length > 0 && totalFrames() > 0}>
@@ -568,6 +854,20 @@ export function SampleEditor(): JSX.Element {
                   )}
                 </For>
               </div>
+            </Show>
+                </>
+              }
+            >
+              <PolySynthEditor
+                defs={paramDefs()}
+                owner={owner()}
+                color={colour()}
+                paramValue={paramValue}
+                setParam={setParam}
+                sampleRate={app.sequencer()?.sampleRate ?? app.streamInfo()?.sampleRate ?? 0}
+                trackIndex={current().index}
+                onPreview={audition}
+              />
             </Show>
 
             <div class="wv-sample__knobs">
@@ -637,6 +937,17 @@ export function SampleEditor(): JSX.Element {
               </Show>
             </div>
 
+            <Show when={samplePlay()}>
+              <SampleKeyboard
+                trackToken={sourceKey() ?? ''}
+                center={kbCenter()}
+                heldNotes={app.heldNotes()}
+                rootKey={track()?.rootKey ?? 60}
+                onCenter={setKbCenter}
+                noteOn={playSampleNote}
+                noteOff={releaseSampleNote}
+              />
+            </Show>
             <div class="wv-sample__foot">
               <span class="wv-sample__desc">{current().sourceLabel}</span>
               <span class="wv-spacer" />

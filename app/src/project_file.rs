@@ -87,7 +87,7 @@ use mydaw_plugin_effects::EffectRegistry;
 use mydaw_plugin_host_vst3::ClassId;
 use mydaw_plugin_sequencer::{
     AudioClip, Clip, Pattern, PatternClip, PatternError, PatternSet, PlayMode, Playlist,
-    PlaylistError, PlaylistTrack,
+    PlaylistError, PlaylistTrack, SamplePlaybackParams,
 };
 use mydaw_rt_core::{StripId, MAX_BPM, MAX_BUSES, MAX_GAIN_DB, MAX_TRACKS, MIN_BPM, SILENCE_DB};
 use serde::{Deserialize, Serialize};
@@ -95,7 +95,9 @@ use serde::{Deserialize, Serialize};
 use crate::clap_bridge::{from_base64, to_base64};
 use crate::dto::{ChannelClipDto, MelodicNoteDto, PatternDto, StepDto, StepRowDto};
 use crate::effects::InsertDef;
-use crate::project::{check_gain_db, check_pan, BusDef, Project, SendDef, TrackDef};
+use crate::project::{
+    check_gain_db, check_pan, BusDef, Project, RootMode, RootPitchDto, SendDef, TrackDef,
+};
 use crate::source::{ClapSourceRef, Source, Vst3SourceRef};
 
 /// The format this build writes, and the highest it will read.
@@ -214,6 +216,8 @@ pub struct PlaylistTrackEntry {
     pub name: String,
     #[serde(default)]
     pub muted: bool,
+    #[serde(default)]
+    pub soloed: bool,
 }
 
 /// One clip.
@@ -490,6 +494,18 @@ pub struct TrackEntry {
     /// Channel fade out, in milliseconds.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub fade_out_ms: f32,
+    /// MIDI note at which the file plays at recorded pitch. Default C4.
+    #[serde(
+        default = "default_root_key",
+        skip_serializing_if = "is_default_root_key"
+    )]
+    pub root_key: u8,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub root_fine_cents: f32,
+    #[serde(default, skip_serializing_if = "is_default_root_mode")]
+    pub root_mode: RootMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected_pitch: Option<RootPitchDto>,
     /// The instrument's own knobs, by id. Empty for an instrument with none.
     ///
     /// Written whole rather than only the moved ones, for the reason an
@@ -505,6 +521,18 @@ fn is_zero_f32(value: &f32) -> bool {
 
 fn is_zero_u64(value: &u64) -> bool {
     *value == 0
+}
+
+fn default_root_key() -> u8 {
+    mydaw_plugin_sequencer::ONESHOT_ROOT_KEY
+}
+
+fn is_default_root_key(value: &u8) -> bool {
+    *value == mydaw_plugin_sequencer::ONESHOT_ROOT_KEY
+}
+
+fn is_default_root_mode(value: &RootMode) -> bool {
+    *value == RootMode::Default
 }
 
 /// One internal effect on a chain.
@@ -950,6 +978,10 @@ impl ProjectFile {
                     sample_end_frames: track.sample_end_frames,
                     fade_in_ms: track.fade_in_ms,
                     fade_out_ms: track.fade_out_ms,
+                    root_key: track.root_key,
+                    root_fine_cents: track.root_fine_cents,
+                    root_mode: track.root_mode,
+                    detected_pitch: track.detected_pitch,
                     source_params: track
                         .source_params
                         .as_ref()
@@ -1005,6 +1037,7 @@ impl ProjectFile {
                         id: track.id,
                         name: track.name.clone(),
                         muted: track.muted,
+                        soloed: track.soloed,
                     })
                     .collect(),
                 clips: song
@@ -1088,6 +1121,21 @@ impl ProjectFile {
             let source = entry.source.to_source().map_err(&bad)?;
             let gain_db = check_gain_db(entry.gain_db).map_err(|err| bad(err.to_string()))?;
             let pan = check_pan(entry.pan).map_err(|err| bad(err.to_string()))?;
+            let pitch_cents = if entry.pitch_cents.is_finite() {
+                entry.pitch_cents.clamp(-1_200.0, 1_200.0)
+            } else {
+                0.0
+            };
+            let root_key = if entry.root_key <= 127 {
+                entry.root_key
+            } else {
+                mydaw_plugin_sequencer::ONESHOT_ROOT_KEY
+            };
+            let root_fine_cents = if entry.root_fine_cents.is_finite() {
+                entry.root_fine_cents.clamp(-50.0, 50.0)
+            } else {
+                0.0
+            };
             // Rejected rather than skipped: a blob that is not base64 means the
             // file has been damaged, and loading the track without its state
             // would silently give the user a plugin at its defaults.
@@ -1101,11 +1149,23 @@ impl ProjectFile {
                 pan,
                 muted: entry.muted,
                 soloed: entry.soloed,
-                pitch_cents: entry.pitch_cents,
+                pitch_cents,
                 sample_start_frames: entry.sample_start_frames,
                 sample_end_frames: entry.sample_end_frames,
                 fade_in_ms: entry.fade_in_ms.max(0.0),
                 fade_out_ms: entry.fade_out_ms.max(0.0),
+                root_key,
+                root_fine_cents,
+                root_mode: entry.root_mode,
+                detected_pitch: entry.detected_pitch,
+                sample_play: std::sync::Arc::new(SamplePlaybackParams::with_root(
+                    entry.sample_start_frames,
+                    entry.sample_end_frames,
+                    pitch_cents,
+                    (entry.fade_in_ms.max(0.0), entry.fade_out_ms.max(0.0)),
+                    root_key,
+                    root_fine_cents,
+                )),
                 inserts: restore_chain(&entry.inserts, effects),
             });
         }
@@ -1226,6 +1286,7 @@ impl ProjectFile {
                     track.name.clone()
                 },
                 muted: track.muted,
+                soloed: track.soloed,
             })
             .collect();
         let clips: Vec<Clip> = self
@@ -1601,6 +1662,7 @@ mod tests {
         let mut playlist = Playlist::default();
         playlist.rename_track(0, "Drums").unwrap();
         playlist.set_track_muted(3, true).unwrap();
+        playlist.set_track_soloed(0, true).unwrap();
         playlist.add_pattern_clip(1, 0, 0, 2 * 3_840).unwrap();
         playlist
             .add_pattern_clip(1, 0, 4 * 3_840, 2 * 3_840)
@@ -1717,6 +1779,51 @@ mod tests {
         );
         assert_eq!(FORMAT_VERSION, 4, "buses, sends and insert chains");
         assert!(json.ends_with("}\n"), "the file ends with a newline");
+    }
+
+    #[test]
+    fn a_track_written_before_root_fields_opens_at_c4() {
+        let json = r#"{
+            "id": 0,
+            "name": "Kick",
+            "source": { "kind": "internal", "id": "kick" },
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "muted": false,
+            "soloed": false
+        }"#;
+        let entry: TrackEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.root_key, 60);
+        assert_eq!(entry.root_fine_cents, 0.0);
+        assert_eq!(entry.root_mode, RootMode::Default);
+        assert!(entry.detected_pitch.is_none());
+    }
+
+    #[test]
+    fn a_saved_root_survives_the_file() {
+        let mut project = Project::default();
+        project.tracks[0].root_key = 54;
+        project.tracks[0].root_fine_cents = 12.0;
+        project.tracks[0].root_mode = RootMode::Detected;
+        project.tracks[0].detected_pitch = Some(RootPitchDto {
+            midi_note: 54,
+            cents: 12.0,
+            confidence: 0.92,
+            voiced_coverage: 0.8,
+            source: crate::project::PitchSourceDto::Analysis,
+        });
+        project.tracks[0].sample_play.set_root(54, 12.0);
+
+        let file = ProjectFile::capture(&project, 0, 120.0, &empty_song(), &[], None);
+        let json = file.to_json().unwrap();
+        assert!(json.contains("\"root_key\": 54"), "{json}");
+        let restored = parse_project(&json).unwrap();
+        let (loaded, _) = restored.to_project(&EffectRegistry::new()).unwrap();
+        assert_eq!(loaded.tracks[0].root_key, 54);
+        assert_eq!(loaded.tracks[0].root_fine_cents, 12.0);
+        assert_eq!(loaded.tracks[0].root_mode, RootMode::Detected);
+        assert_eq!(loaded.tracks[0].detected_pitch.unwrap().midi_note, 54);
+        assert_eq!(loaded.tracks[0], project.tracks[0]);
     }
 
     #[test]
@@ -2302,8 +2409,17 @@ mod tests {
         assert_eq!(playlist.tracks().len(), 4);
         assert_eq!(playlist.tracks()[0].name, "Drums");
         assert!(playlist.tracks()[3].muted, "the mute is arrangement data");
+        assert!(playlist.tracks()[0].soloed, "the solo is arrangement data");
         assert_eq!(playlist.clips().len(), 3);
         assert_eq!(playlist.end_ticks(), 8 * 3_840);
+    }
+
+    #[test]
+    fn a_lane_saved_before_solo_loads_unsoloed() {
+        let json = r#"{"id":1,"name":"Drums","muted":true}"#;
+        let entry: PlaylistTrackEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.muted);
+        assert!(!entry.soloed);
     }
 
     #[test]

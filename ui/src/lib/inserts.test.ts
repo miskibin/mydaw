@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { addedInsertId, insertsOnStrip } from './inserts';
+import { addedInsertId, insertMove, insertsOnStrip } from './inserts';
 import type { MixerState } from '../api/types';
 
 describe('addedInsertId', () => {
@@ -12,6 +12,20 @@ describe('addedInsertId', () => {
   it('returns undefined when nothing was added', () => {
     const before = new Set([1, 2]);
     expect(addedInsertId(before, [{ id: 1 }, { id: 2 }])).toBeUndefined();
+  });
+});
+
+describe('insertMove', () => {
+  const chain = [{ id: 7 }, { id: 2 }, { id: 9 }];
+
+  it('addresses a reorder by stable ids', () => {
+    expect(insertMove(chain, 9, 7)).toEqual({ from: 2, to: 0 });
+    expect(insertMove(chain, 7, 2)).toEqual({ from: 0, to: 1 });
+  });
+
+  it('ignores a self-drop or an insert that disappeared', () => {
+    expect(insertMove(chain, 2, 2)).toBeUndefined();
+    expect(insertMove(chain, 99, 2)).toBeUndefined();
   });
 });
 

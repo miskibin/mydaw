@@ -7,7 +7,7 @@
 //!
 //! | Node | `type_id` | What it is |
 //! | --- | --- | --- |
-//! | [`PolySynthNode`] | `poly-synth` | Eight voices: two polyBLEP oscillators with detune, a sine sub, an ADSR and a resonant filter with envelope. Ten knobs. |
+//! | [`PolySynthNode`] | `poly-synth` | Eight voices: three analog oscillators (shape, coarse, fine, mix) into an ADSR and a resonant filter with envelope. |
 //! | [`SingleDrumNode`] | `kick` | One synthesised kick, any key, tunable +/- an octave. |
 //! | [`SingleDrumNode`] | `snare` | One synthesised snare, any key, tunable +/- an octave. |
 //! | [`SingleDrumNode`] | `clap` | One synthesised hand clap, any key, unpitched. |

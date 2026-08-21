@@ -16,13 +16,21 @@
  *   row, which is real and has nowhere else to live.
  */
 
-import { createMemo, createSignal, For, Index, onCleanup, onMount, Show, type JSX } from 'solid-js';
+import { createMemo, createSignal, For, Index, onMount, Show, type JSX } from 'solid-js';
 
 import type { AudioSourceDto, LibraryEntryDto, LibraryRootDto, SourceDto } from '../api/types';
+import {
+  clampBrowserWidth,
+  DEFAULT_BROWSER_WIDTH,
+  MAX_BROWSER_WIDTH,
+  MIN_BROWSER_WIDTH,
+} from '../lib/browserSize';
 import { encodeDrop } from '../lib/dnd';
+import { classifyLibraryEntry, type LibrarySemantic } from '../lib/librarySemantics';
 import { useAppState } from '../state';
-import { trackColor } from '../theme/tokens';
+import { startDrag } from '../ui/drag';
 import { IconChevron, IconClose } from '../ui/icons';
+import { LibraryIcon } from '../ui/LibraryIcon';
 import { useView, type BrowserTab } from './view';
 
 import '../styles/browser.css';
@@ -34,10 +42,46 @@ const SYNTH_IDS = new Set(['poly-synth', 'test-tone']);
 /** The groups, in the order they are drawn. */
 const SOUND_GROUPS = ['Drums', 'Synths', 'Sampler', 'Other'] as const;
 
-/** Middle C, at a comfortable velocity: what an audition plays. */
-const PREVIEW_KEY = 60;
-/** How long an audition is held before it is released. */
-const PREVIEW_MS = 400;
+const GENERIC_FOLDER_SEMANTIC: LibrarySemantic = {
+  primary: 'audio',
+  shape: null,
+  content: null,
+  format: null,
+  evidence: 'name',
+  label: 'Folder',
+};
+
+const GENERIC_INSTRUMENT_SEMANTIC: LibrarySemantic = {
+  primary: 'synth',
+  shape: null,
+  content: 'synth',
+  format: null,
+  evidence: 'name',
+  label: 'Instrument plugin',
+};
+
+const EFFECT_SEMANTIC: LibrarySemantic = {
+  primary: 'fx',
+  shape: null,
+  content: 'fx',
+  format: null,
+  evidence: 'name',
+  label: 'Effect plugin',
+};
+
+const GENERIC_PLUGIN_SEMANTIC: LibrarySemantic = {
+  primary: 'audio',
+  shape: null,
+  content: null,
+  format: null,
+  evidence: 'name',
+  label: 'Plugin',
+};
+
+function instrumentPluginSemantic(name: string): LibrarySemantic {
+  const inferred = classifyLibraryEntry({ name, relPath: name, kind: 'file' });
+  return inferred.primary === 'audio' ? GENERIC_INSTRUMENT_SEMANTIC : inferred;
+}
 
 const BROWSER_TABS: readonly { id: BrowserTab; label: string }[] = [
   { id: 'sounds', label: 'Sounds' },
@@ -73,8 +117,25 @@ function BrowserRail(): JSX.Element {
 
 function BrowserBody(): JSX.Element {
   const view = useView();
+
+  function setWidth(width: number): void {
+    view.setBrowserWidth(clampBrowserWidth(width, window.innerWidth, view.sideOpen()));
+  }
+
+  function resizeByKeyboard(event: KeyboardEvent): void {
+    const step = event.shiftKey ? 32 : 8;
+    let next: number | null = null;
+    if (event.key === 'ArrowLeft') next = view.browserWidth() - step;
+    if (event.key === 'ArrowRight') next = view.browserWidth() + step;
+    if (event.key === 'Home') next = MIN_BROWSER_WIDTH;
+    if (event.key === 'End') next = MAX_BROWSER_WIDTH;
+    if (next === null) return;
+    event.preventDefault();
+    setWidth(next);
+  }
+
   return (
-    <aside class="wv-browser">
+    <aside class="wv-browser" style={{ width: `${view.browserWidth()}px` }}>
       <div class="wv-browser__head">
         <span class="wv-browser__title">BROWSER</span>
         <span class="wv-spacer" />
@@ -119,6 +180,34 @@ function BrowserBody(): JSX.Element {
       </div>
 
       <AssetFooter />
+      <div
+        class="wv-browser__resize"
+        role="separator"
+        tabindex="0"
+        aria-label="Resize browser"
+        aria-orientation="vertical"
+        aria-valuemin={MIN_BROWSER_WIDTH}
+        aria-valuemax={clampBrowserWidth(
+          MAX_BROWSER_WIDTH,
+          window.innerWidth,
+          view.sideOpen(),
+        )}
+        aria-valuenow={view.browserWidth()}
+        title="Drag to resize · double-click to reset"
+        onPointerDown={(event) => {
+          startDrag(event, {
+            axis: 'horizontal',
+            from: view.browserWidth(),
+            perPixel: 1,
+            min: MIN_BROWSER_WIDTH,
+            max: clampBrowserWidth(MAX_BROWSER_WIDTH, window.innerWidth, view.sideOpen()),
+            fineFactor: 1,
+            onChange: (width) => view.setBrowserWidth(Math.round(width)),
+          });
+        }}
+        onKeyDown={resizeByKeyboard}
+        onDblClick={() => setWidth(DEFAULT_BROWSER_WIDTH)}
+      />
     </aside>
   );
 }
@@ -135,6 +224,7 @@ function DirRow(props: {
   depth?: number | undefined;
   open: boolean;
   onToggle: () => void;
+  semantic: LibrarySemantic;
   remove?: { title: string; run: () => void } | undefined;
 }): JSX.Element {
   return (
@@ -142,13 +232,11 @@ function DirRow(props: {
       type="button"
       class="wv-row wv-tree__dir"
       classList={{ 'wv-tree__dir--extra': props.extra === true }}
-      style={{ 'padding-left': `${8 + (props.depth ?? 0) * 10}px` }}
+      style={{ 'padding-left': `${6 + (props.depth ?? 0) * 8}px` }}
       aria-expanded={props.open}
       onClick={() => props.onToggle()}
     >
-      <span class="wv-tree__chev" classList={{ 'is-open': props.open }}>
-        <IconChevron direction="right" />
-      </span>
+      <LibraryIcon semantic={props.semantic} kind="dir" open={props.open} />
       <span class="wv-row__name" classList={{ 'is-open': props.open }}>
         {props.label}
       </span>
@@ -184,7 +272,7 @@ function DirRow(props: {
 function LeafRow(props: {
   name: string;
   meta: string;
-  color: string;
+  semantic?: LibrarySemantic | undefined;
   title: string;
   dragData: string;
   depth?: number;
@@ -197,11 +285,20 @@ function LeafRow(props: {
   add?: { title: string; disabled: boolean; run: () => void };
   remove?: { title: string; run: () => void };
 }): JSX.Element {
+  const semantic = createMemo(
+    () =>
+      props.semantic ??
+      classifyLibraryEntry({ name: props.name, relPath: props.name, kind: 'file' }),
+  );
   return (
     <div
       class="wv-row wv-tree__leaf"
-      classList={{ 'is-active': props.active === true, 'wv-tree__leaf--dim': props.dim === true }}
-      style={{ 'padding-left': `${22 + (props.depth ?? 0) * 10}px` }}
+      classList={{
+        'is-active': props.active === true,
+        'wv-tree__leaf--dim': props.dim === true,
+        'wv-tree__leaf--semantic': true,
+      }}
+      style={{ 'padding-left': `${8 + (props.depth ?? 0) * 8}px` }}
       role={props.onClick ? 'button' : undefined}
       tabindex={props.onClick ? 0 : undefined}
       draggable={true}
@@ -218,8 +315,7 @@ function LeafRow(props: {
         if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
       }}
     >
-      <span class="wv-tree__guide" aria-hidden="true" />
-      <span class="wv-swatch" style={{ background: props.color }} />
+      <LibraryIcon semantic={semantic()} kind="file" />
       <span class="wv-row__name">{props.name}</span>
       <span class="wv-spacer" />
       <span class="wv-row__meta">{props.meta}</span>
@@ -318,43 +414,12 @@ function SoundsTree(): JSX.Element {
     return mixer !== undefined && mixer.tracks.length >= mixer.maxTracks;
   };
 
-  /** The instrument a preview will actually be heard through. */
-  const liveSource = () => app.sources().find((source) => source.selected);
-
-  // Live input is addressed to the *selected track's* channel -- `note_on` takes
-  // a key and a velocity and nothing else -- so an audition is honest about
-  // whose instrument it plays rather than pretending to solo the clicked row.
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let held: number | null = null;
-
-  function release(): void {
-    if (held === null) return;
-    const key = held;
-    held = null;
-    app.backend.noteOff(key).catch(() => {});
-  }
-
   function preview(source: SourceDto): void {
-    if (!source.takesNotes) return;
-    clearTimeout(timer);
-    release();
-    held = PREVIEW_KEY;
-    app.backend.noteOn(PREVIEW_KEY, 0.8).catch(app.report);
-    timer = setTimeout(release, PREVIEW_MS);
+    void app.backend.previewInstrument(source.id).catch(app.report);
   }
 
-  onCleanup(() => {
-    clearTimeout(timer);
-    release();
-  });
-
-  const rowTitle = (source: SourceDto) => {
-    const live = liveSource();
-    const heard = live ? live.label : 'the selected track';
-    return source.takesNotes
-      ? `${source.description}\nClick auditions through ${heard} — live input plays the selected track, not a browser row.\nDrag onto the rack, or + for a channel of its own.`
-      : `${source.description}\nNo audition: this source takes no notes.\nDrag onto the rack, or + for a channel of its own.`;
-  };
+  const rowTitle = (source: SourceDto) =>
+    `${source.description}\nClick to preview ${source.label}. Drag onto the rack, or + for a channel of its own.`;
 
   return (
     <Show
@@ -374,6 +439,11 @@ function SoundsTree(): JSX.Element {
               count={group().sources.length}
               open={isOpen(group().name)}
               onToggle={() => toggle(group().name)}
+              semantic={classifyLibraryEntry({
+                name: group().name,
+                relPath: group().name,
+                kind: 'dir',
+              })}
             />
             <Show when={isOpen(group().name)}>
               <Index each={group().sources}>
@@ -381,7 +451,6 @@ function SoundsTree(): JSX.Element {
                   <LeafRow
                     name={source().label}
                     meta={source().takesNotes ? 'keys' : 'tone'}
-                    color={source().selected ? 'var(--acc)' : 'var(--dim)'}
                     title={rowTitle(source())}
                     dragData={`inst::${source().id}`}
                     active={source().selected}
@@ -531,6 +600,7 @@ function PluginsTree(): JSX.Element {
                 count={folder().rows.length}
                 open={isOpen(folder().name)}
                 onToggle={() => toggle(folder().name)}
+                semantic={GENERIC_FOLDER_SEMANTIC}
               />
               <Show when={isOpen(folder().name)}>
                 <Index each={folder().rows}>
@@ -539,11 +609,17 @@ function PluginsTree(): JSX.Element {
                       when={row().instrument}
                       fallback={
                         <div
-                          class="wv-row wv-tree__leaf wv-disabled"
+                          class="wv-row wv-tree__leaf wv-tree__leaf--semantic wv-disabled"
                           title="Effects are added from the Inspector's + buttons"
                         >
-                          <span class="wv-tree__guide" aria-hidden="true" />
-                          <span class="wv-swatch" style={{ background: 'var(--faint)' }} />
+                          <LibraryIcon
+                            semantic={
+                              row().kind === 'audio-effect'
+                                ? EFFECT_SEMANTIC
+                                : GENERIC_PLUGIN_SEMANTIC
+                            }
+                            kind="file"
+                          />
                           <span class="wv-row__name">{row().name}</span>
                           <span class="wv-spacer" />
                           <span class="wv-badge">{row().kind}</span>
@@ -553,7 +629,7 @@ function PluginsTree(): JSX.Element {
                       <LeafRow
                         name={row().name}
                         meta={row().kind}
-                        color="var(--acc)"
+                        semantic={instrumentPluginSemantic(row().name)}
                         title={`${row().name}${row().vendor.length > 0 ? ` — ${row().vendor}` : ''}\n${row().path}\nDrag onto the rack, or + for a channel of its own.`}
                         dragData={`inst::${row().format === 'CLAP' ? 'clap' : 'vst3'}:${row().pluginId}`}
                         add={{
@@ -701,6 +777,7 @@ function AudioTree(): JSX.Element {
         count={app.audioSources().length}
         open={loadedOpen()}
         onToggle={() => setLoadedOpen((open) => !open)}
+        semantic={GENERIC_FOLDER_SEMANTIC}
       />
       <Show when={loadedOpen()}>
         <Show
@@ -713,26 +790,35 @@ function AudioTree(): JSX.Element {
           }
         >
           <Index each={app.audioSources()}>
-            {(source) => (
-              <LeafRow
-                name={source().name}
-                meta={
-                  source().missing
-                    ? 'missing'
-                    : `${formatDuration(source().durationSeconds)} · ${formatRate(source().sampleRate)}`
-                }
-                color={source().missing ? 'var(--rec)' : trackColor(source().id)}
-                title={`${source().path}${source().missing ? '\nThe file has moved: its clips stay and are silent.' : ''}\nClick to load the brush, or drag onto a playlist lane.`}
-                dragData={encodeDrop('audio', source().id)}
-                active={brushId() === source().id}
-                dim={source().missing}
-                onClick={() => view.setBrush({ kind: 'audio', id: source().id })}
-                remove={{
-                  title: 'Unload — refused while a clip still plays it',
-                  run: () => unload(source()),
-                }}
-              />
-            )}
+            {(source) => {
+              const semantic = createMemo(() =>
+                classifyLibraryEntry({
+                  name: source().name,
+                  relPath: source().path,
+                  kind: 'file',
+                }),
+              );
+              return (
+                <LeafRow
+                  name={source().name}
+                  meta={
+                    source().missing
+                      ? 'missing'
+                      : `${formatDuration(source().durationSeconds)} · ${formatRate(source().sampleRate)}`
+                  }
+                  semantic={semantic()}
+                  title={`${source().path}\n${semantic().label} — inferred from ${semantic().evidence}.${source().missing ? '\nThe file has moved: its clips stay and are silent.' : ''}\nClick to load the brush, or drag onto a playlist lane.`}
+                  dragData={encodeDrop('audio', source().id)}
+                  active={brushId() === source().id}
+                  dim={source().missing}
+                  onClick={() => view.setBrush({ kind: 'audio', id: source().id })}
+                  remove={{
+                    title: 'Unload — refused while a clip still plays it',
+                    run: () => unload(source()),
+                  }}
+                />
+              );
+            }}
           </Index>
         </Show>
       </Show>
@@ -752,6 +838,11 @@ function LibraryDir(props: {
   const app = useAppState();
   const [open, setOpen] = createSignal(false);
   const [entries, setEntries] = createSignal<LibraryEntryDto[] | null>(null);
+  const semantic = classifyLibraryEntry({
+    name: props.label,
+    relPath: props.relPath || props.label,
+    kind: 'dir',
+  });
 
   function load(): void {
     app.backend
@@ -781,6 +872,7 @@ function LibraryDir(props: {
         depth={props.depth}
         open={open()}
         onToggle={toggle}
+        semantic={semantic}
         remove={props.remove}
       />
       <Show when={open()}>
@@ -815,12 +907,17 @@ function LibraryDir(props: {
 
 function LibraryFile(props: { entry: LibraryEntryDto; depth: number }): JSX.Element {
   const app = useAppState();
+  const semantic = classifyLibraryEntry({
+    name: props.entry.name,
+    relPath: props.entry.relPath,
+    kind: 'file',
+  });
   return (
     <LeafRow
       name={props.entry.name}
       meta=""
-      color="var(--acc)"
-      title={`${props.entry.path}\nClick to preview. Drag onto a playlist lane.`}
+      semantic={semantic}
+      title={`${props.entry.path}\n${semantic.label} — inferred from ${semantic.evidence}.\nClick to preview. Drag onto a playlist lane.`}
       dragData={encodeDrop('file', props.entry.path)}
       depth={props.depth}
       onClick={() => {

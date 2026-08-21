@@ -12,11 +12,12 @@ use mydaw_plugin_sampler::AssetStatus;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::State;
 
+use crate::audio_settings::{self, AudioSettings};
 use crate::clap_bridge::{ClapGuiStatusDto, ClapTarget};
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{
-    AudioSourceDto, ClapPluginInfoDto, MeterFrameDto, PatternDto, SequencerStateDto, StreamInfoDto,
-    Vst3PluginInfoDto, WaveformDto,
+    AudioOutputDto, AudioSourceDto, ClapPluginInfoDto, MeterFrameDto, PatternDto,
+    SequencerStateDto, StreamInfoDto, Vst3PluginInfoDto, WaveformDto,
 };
 use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueDto};
 use crate::ipc_bench::{
@@ -24,12 +25,14 @@ use crate::ipc_bench::{
 };
 use crate::library::{self, LibraryEntryDto, LibraryRootDto};
 use crate::preview::SourcePreviewDto;
-use crate::project::MixerStateDto;
+use crate::preview_settings::{self, PreviewSettings};
+use crate::project::{MixerStateDto, PitchAnalysisDto, RootMode};
 use crate::project_bridge::ProjectInfoDto;
 use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
 use crate::source::{Source, SourceDto};
 use crate::state::AppState;
 use crate::vst3_bridge::Vst3GuiStatusDto;
+use mydaw_plugin_midi_io::{MidiPortDto, MidiStatusDto};
 use mydaw_plugin_sequencer::PlayMode;
 use mydaw_rt_core::StripId;
 
@@ -210,6 +213,38 @@ pub fn set_track_pitch(
 ) -> Result<MixerStateDto, String> {
     state
         .set_track_pitch_cents(track, cents)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Detect the root pitch of an audio-file channel's selected region.
+#[tauri::command]
+pub async fn analyze_track_pitch(
+    app: tauri::AppHandle,
+    track: usize,
+) -> Result<PitchAnalysisDto, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state
+            .analyze_track_pitch(track)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Calibrate an audio-file channel's playback root (MIDI note + fine cents).
+#[tauri::command]
+pub fn set_track_sample_root(
+    state: State<'_, AppState>,
+    track: usize,
+    key: u8,
+    fine_cents: f32,
+    mode: RootMode,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_sample_root(track, key, fine_cents, mode)
         .map_err(|err| err.to_string())?;
     Ok(state.mixer_state())
 }
@@ -1036,6 +1071,23 @@ pub fn set_playlist_track_mute(
     Ok(state.sequencer_state())
 }
 
+/// Solo or un-solo a lane.
+///
+/// Same rule as mixer solo, resolved at compile time: if any lane is soloed,
+/// only soloed lanes play in SONG. A soloed muted lane stays audible. Does not
+/// shorten the song.
+#[tauri::command]
+pub fn set_playlist_track_solo(
+    state: State<'_, AppState>,
+    track: usize,
+    soloed: bool,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.set_track_soloed(track, soloed))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
 /// Place a pattern on the timeline.
 ///
 /// `start` and `length` are in **ticks** (960 to the quarter note, 3840 to the
@@ -1182,6 +1234,22 @@ fn library_json(app: &tauri::AppHandle) -> PathBuf {
         .join("library.json")
 }
 
+fn preview_json(app: &tauri::AppHandle) -> PathBuf {
+    use tauri::Manager;
+    app.path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("mydaw"))
+        .join("preview.json")
+}
+
+fn audio_json(app: &tauri::AppHandle) -> PathBuf {
+    use tauri::Manager;
+    app.path()
+        .app_config_dir()
+        .unwrap_or_else(|_| std::env::temp_dir().join("mydaw"))
+        .join("audio.json")
+}
+
 fn packs_dir(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
     let resource = app.path().resource_dir().ok();
@@ -1263,6 +1331,41 @@ pub fn preview_source(
     state
         .preview_source(&source_id, target_bins.unwrap_or(512))
         .map_err(|err| err.to_string())
+}
+
+/// Audition a built-in or sampled instrument through the preview slot.
+///
+/// Plays **that** source, not the selected rack channel. Stop fades it out.
+#[tauri::command]
+pub fn preview_instrument(state: State<'_, AppState>, source_id: String) -> Result<(), String> {
+    state.preview_instrument(&source_id)
+}
+
+/// Current browser preview level, as a percent of master.
+#[tauri::command]
+pub fn get_preview_settings(state: State<'_, AppState>) -> PreviewSettings {
+    let percent = (state.tracks().file_preview().gain() * 100.0).round();
+    let mut settings = PreviewSettings::default();
+    settings.set_volume_percent(percent);
+    settings
+}
+
+/// Set and persist the browser preview level. `percent` is `0..=100` of master.
+#[tauri::command]
+pub fn set_preview_volume(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    percent: f32,
+) -> Result<PreviewSettings, String> {
+    let path = preview_json(&app);
+    let mut settings = preview_settings::load_settings(&path);
+    settings.set_volume_percent(percent);
+    preview_settings::save_settings(&path, &settings).map_err(|err| err.to_string())?;
+    state
+        .tracks()
+        .file_preview()
+        .set_gain(settings.linear_gain());
+    Ok(settings)
 }
 
 /// The sample library roots: bundled Packs, then extra-search folders.
@@ -1396,6 +1499,14 @@ pub fn preview_audio_file(state: State<'_, AppState>, path: String) -> Result<()
         .map_err(|err| err.to_string())
 }
 
+/// Audition an audio-file channel with its current region, pitch and fades.
+#[tauri::command]
+pub fn preview_track_sample(state: State<'_, AppState>, track: usize) -> Result<(), String> {
+    state
+        .preview_track_sample(track)
+        .map_err(|err| err.to_string())
+}
+
 /// Place an audio file on the timeline.
 ///
 /// `start` and `length` are in **ticks**; `offsetFrames` is in frames of the
@@ -1481,6 +1592,72 @@ pub fn get_stream_info(state: State<'_, AppState>) -> StreamInfoDto {
         .audio()
         .stream_info()
         .map_or_else(StreamInfoDto::stopped, StreamInfoDto::from)
+}
+
+fn audio_output_dto(state: &AppState, settings: &AudioSettings) -> AudioOutputDto {
+    AudioOutputDto {
+        version: settings.version,
+        prefer_asio: settings.prefer_asio,
+        buffer_frames: settings.buffer_frames,
+        asio_compiled: mydaw_plugin_audio_io::asio_compiled(),
+        stream: state
+            .audio()
+            .stream_info()
+            .map_or_else(StreamInfoDto::stopped, StreamInfoDto::from),
+    }
+}
+
+/// WASAPI/ASIO preference, requested buffer, and the stream they produced.
+#[tauri::command]
+pub fn get_audio_settings(app: tauri::AppHandle, state: State<'_, AppState>) -> AudioOutputDto {
+    let settings = audio_settings::load_settings(&audio_json(&app));
+    audio_output_dto(&state, &settings)
+}
+
+/// Persist output preferences and reopen the stream so they take effect.
+#[tauri::command]
+pub fn set_audio_settings(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    prefer_asio: bool,
+    buffer_frames: u32,
+) -> Result<AudioOutputDto, String> {
+    let path = audio_json(&app);
+    let mut settings = audio_settings::load_settings(&path);
+    settings.prefer_asio = prefer_asio;
+    settings.set_buffer_frames(buffer_frames);
+    audio_settings::save_settings(&path, &settings).map_err(|err| err.to_string())?;
+    state
+        .apply_output_request(settings.to_request())
+        .map_err(|err| err.to_string())?;
+    Ok(audio_output_dto(&state, &settings))
+}
+
+/// MIDI input ports the Settings list draws: OS-visible plus unpaired-offline
+/// pairings. Reconciles first so a Refresh button does not need a second call.
+#[tauri::command]
+pub fn list_midi_ports(state: State<'_, AppState>) -> Vec<MidiPortDto> {
+    state.midi().reconcile();
+    state.midi().list_ports()
+}
+
+/// Pair or unpair one input. Returns the whole list, same shape as mixer edits.
+#[tauri::command]
+pub fn set_midi_port_enabled(
+    state: State<'_, AppState>,
+    name: String,
+    enabled: bool,
+) -> Result<Vec<MidiPortDto>, String> {
+    state
+        .midi()
+        .set_enabled(&name, enabled)
+        .map_err(|err| err.to_string())
+}
+
+/// Activity timestamp and how many ports are paired, for the status-bar lamp.
+#[tauri::command]
+pub fn get_midi_status(state: State<'_, AppState>) -> MidiStatusDto {
+    state.midi().status()
 }
 
 /// Capture `seconds` of the engine's output and write a WAV, an annotated PNG

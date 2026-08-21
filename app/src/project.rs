@@ -33,12 +33,12 @@
 use mydaw_plugin_effects::EffectRegistry;
 use mydaw_plugin_instruments::SingleDrum;
 use mydaw_plugin_sampler::SamplerRegistry;
-use mydaw_plugin_sequencer::AudioClipTune;
+use mydaw_plugin_sequencer::{AudioClipTune, SamplePlaybackParams, ONESHOT_ROOT_KEY};
 use mydaw_rt_core::{
     db_to_gain, gain_to_db, max_send_db, MixerParams, ParamBlock, StripId, MAX_BUSES, MAX_GAIN_DB,
     MAX_SEND_LEVEL, MAX_TRACKS, SILENCE_DB,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::clap_bridge::{ClapBoard, ClapSlotDto};
@@ -94,6 +94,20 @@ pub struct TrackDef {
     pub fade_in_ms: f32,
     /// Fade out into the end of every clip (or note), in milliseconds.
     pub fade_out_ms: f32,
+    /// MIDI note at which the file plays at recorded pitch. Default C4.
+    pub root_key: u8,
+    /// Fine offset of that root, in cents. Independent of creative transpose.
+    pub root_fine_cents: f32,
+    /// How the root was last set.
+    pub root_mode: RootMode,
+    /// Last successful detection, when the user has run Find pitch.
+    pub detected_pitch: Option<RootPitchDto>,
+    /// Live one-shot defaults shared with the note-driven player.
+    ///
+    /// The scalar fields above remain the project-file source of truth. This
+    /// block is their RT-safe mirror so edits do not require replacing the
+    /// player and dropping its active voices.
+    pub sample_play: Arc<SamplePlaybackParams>,
     /// The instrument's own knobs, shared with the node that is reading them.
     ///
     /// `None` for a source with no parameters (every drum, the test tone, a
@@ -138,6 +152,10 @@ impl PartialEq for TrackDef {
             && self.sample_end_frames == other.sample_end_frames
             && self.fade_in_ms == other.fade_in_ms
             && self.fade_out_ms == other.fade_out_ms
+            && self.root_key == other.root_key
+            && self.root_fine_cents == other.root_fine_cents
+            && self.root_mode == other.root_mode
+            && self.detected_pitch == other.detected_pitch
             && self.inserts == other.inserts
             && params(self) == params(other)
     }
@@ -174,6 +192,11 @@ impl TrackDef {
             sample_end_frames: 0,
             fade_in_ms: 0.0,
             fade_out_ms: 0.0,
+            root_key: ONESHOT_ROOT_KEY,
+            root_fine_cents: 0.0,
+            root_mode: RootMode::Default,
+            detected_pitch: None,
+            sample_play: Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0))),
             inserts: Vec::new(),
         }
     }
@@ -299,6 +322,142 @@ pub enum TrackError {
     InvalidGain(f32),
     #[error("pan {0} is not a number between -1.0 and 1.0")]
     InvalidPan(f32),
+    #[error("root key {0} is not a MIDI note 0..=127")]
+    InvalidRootKey(u8),
+    #[error("root fine cents {0} is not a finite number between -50 and 50")]
+    InvalidRootFine(f32),
+    #[error("track {0} is not an audio-file channel")]
+    NotASampleChannel(usize),
+}
+
+/// MIDI note 0..=127.
+pub fn check_root_key(key: u8) -> Result<u8, TrackError> {
+    if key <= 127 {
+        Ok(key)
+    } else {
+        Err(TrackError::InvalidRootKey(key))
+    }
+}
+
+/// Fine cents of a root note. Non-finite values are refused; out of range is
+/// clamped, matching the pitch knob.
+pub fn check_root_fine(cents: f32) -> Result<f32, TrackError> {
+    if cents.is_finite() {
+        Ok(cents.clamp(-50.0, 50.0))
+    } else {
+        Err(TrackError::InvalidRootFine(cents))
+    }
+}
+
+/// How a sample channel's playback root was last set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RootMode {
+    #[default]
+    Default,
+    Detected,
+    Manual,
+}
+
+/// Where a detected root pitch came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PitchSourceDto {
+    Metadata,
+    Filename,
+    Analysis,
+}
+
+/// Why analysis could not name a root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NoPitchReasonDto {
+    Silent,
+    TooShort,
+    Unvoiced,
+    Unstable,
+    Polyphonic,
+}
+
+/// A named root: MIDI note plus remaining cents.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RootPitchDto {
+    pub midi_note: u8,
+    pub cents: f32,
+    pub confidence: f32,
+    pub voiced_coverage: f32,
+    pub source: PitchSourceDto,
+}
+
+/// Result of `analyze_track_pitch`. Never invents C for unpitched material.
+///
+/// Variant *and* field names are camelCase: serde's enum `rename_all` only
+/// renames variants, so each struct variant repeats it for `midiNote`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PitchAnalysisDto {
+    #[serde(rename_all = "camelCase")]
+    Detected {
+        midi_note: u8,
+        cents: f32,
+        confidence: f32,
+        voiced_coverage: f32,
+        source: PitchSourceDto,
+    },
+    #[serde(rename_all = "camelCase")]
+    NoStablePitch { reason: NoPitchReasonDto },
+}
+
+impl From<mydaw_pitch_analysis::PitchSource> for PitchSourceDto {
+    fn from(source: mydaw_pitch_analysis::PitchSource) -> Self {
+        match source {
+            mydaw_pitch_analysis::PitchSource::Metadata => Self::Metadata,
+            mydaw_pitch_analysis::PitchSource::Filename => Self::Filename,
+            mydaw_pitch_analysis::PitchSource::Analysis => Self::Analysis,
+        }
+    }
+}
+
+impl From<mydaw_pitch_analysis::NoPitchReason> for NoPitchReasonDto {
+    fn from(reason: mydaw_pitch_analysis::NoPitchReason) -> Self {
+        match reason {
+            mydaw_pitch_analysis::NoPitchReason::Silent => Self::Silent,
+            mydaw_pitch_analysis::NoPitchReason::TooShort => Self::TooShort,
+            mydaw_pitch_analysis::NoPitchReason::Unvoiced => Self::Unvoiced,
+            mydaw_pitch_analysis::NoPitchReason::Unstable => Self::Unstable,
+            mydaw_pitch_analysis::NoPitchReason::Polyphonic => Self::Polyphonic,
+        }
+    }
+}
+
+impl From<mydaw_pitch_analysis::RootPitch> for RootPitchDto {
+    fn from(pitch: mydaw_pitch_analysis::RootPitch) -> Self {
+        Self {
+            midi_note: pitch.midi_note,
+            cents: pitch.cents,
+            confidence: pitch.confidence,
+            voiced_coverage: pitch.voiced_coverage,
+            source: pitch.source.into(),
+        }
+    }
+}
+
+impl From<mydaw_pitch_analysis::PitchOutcome> for PitchAnalysisDto {
+    fn from(outcome: mydaw_pitch_analysis::PitchOutcome) -> Self {
+        match outcome {
+            mydaw_pitch_analysis::PitchOutcome::Detected(pitch) => Self::Detected {
+                midi_note: pitch.midi_note,
+                cents: pitch.cents,
+                confidence: pitch.confidence,
+                voiced_coverage: pitch.voiced_coverage,
+                source: pitch.source.into(),
+            },
+            mydaw_pitch_analysis::PitchOutcome::NoStablePitch(reason) => Self::NoStablePitch {
+                reason: reason.into(),
+            },
+        }
+    }
 }
 
 /// Why a bus or send edit was refused.
@@ -1241,6 +1400,14 @@ pub struct TrackDto {
     pub sample_start_frames: u64,
     /// SMP region end, exclusive. `0` means the whole file.
     pub sample_end_frames: u64,
+    /// MIDI note at which the file plays at recorded pitch. Default 60 (C4).
+    pub root_key: u8,
+    /// Fine offset of that root, in cents.
+    pub root_fine_cents: f32,
+    /// How the root was last set.
+    pub root_mode: RootMode,
+    /// Last successful detection, when one has been stored.
+    pub detected_pitch: Option<RootPitchDto>,
     /// Numeric audio-file id when this channel is `clip:` or `oneshot:`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_source_id: Option<u64>,
@@ -1422,6 +1589,10 @@ pub fn mixer_state_dto(
                     .unwrap_or_default(),
                 sample_start_frames: track.sample_start_frames,
                 sample_end_frames: track.sample_end_frames,
+                root_key: track.root_key,
+                root_fine_cents: track.root_fine_cents,
+                root_mode: track.root_mode,
+                detected_pitch: track.detected_pitch,
                 audio_source_id: track.source.sample_file_id(),
             })
             .collect(),
@@ -1793,6 +1964,7 @@ mod tests {
             track_keys,
             [
                 "clap",
+                "detectedPitch",
                 "engine",
                 "fadeInMs",
                 "fadeOutMs",
@@ -1805,6 +1977,9 @@ mod tests {
                 "name",
                 "pan",
                 "pitchCents",
+                "rootFineCents",
+                "rootKey",
+                "rootMode",
                 "sampleEndFrames",
                 "sampleStartFrames",
                 "selected",
@@ -1817,9 +1992,36 @@ mod tests {
                 "vst3"
             ]
         );
+        assert_eq!(dto.tracks[0].root_key, 60);
+        assert_eq!(dto.tracks[0].root_fine_cents, 0.0);
+        assert_eq!(dto.tracks[0].root_mode, RootMode::Default);
+        assert!(dto.tracks[0].detected_pitch.is_none());
         assert_eq!(json["master"]["gainDb"], 0.0);
         assert!(json["tracks"][0]["missing"].is_null());
         assert!(json["master"]["missing"].is_null());
+    }
+
+    #[test]
+    fn pitch_analysis_dto_is_camel_case_on_the_wire() {
+        let detected = serde_json::to_value(PitchAnalysisDto::Detected {
+            midi_note: 54,
+            cents: 12.0,
+            confidence: 0.92,
+            voiced_coverage: 0.8,
+            source: PitchSourceDto::Analysis,
+        })
+        .unwrap();
+        assert_eq!(detected["kind"], "detected");
+        assert_eq!(detected["midiNote"], 54);
+        assert!((detected["voicedCoverage"].as_f64().unwrap() - 0.8).abs() < 1e-5);
+        assert!(detected.get("midi_note").is_none());
+
+        let none = serde_json::to_value(PitchAnalysisDto::NoStablePitch {
+            reason: NoPitchReasonDto::Unvoiced,
+        })
+        .unwrap();
+        assert_eq!(none["kind"], "noStablePitch");
+        assert_eq!(none["reason"], "unvoiced");
     }
 
     #[test]

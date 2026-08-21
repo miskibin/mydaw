@@ -8,8 +8,18 @@
  * convenience.
  */
 
-import { createContext, createSignal, useContext, type Accessor, type JSX, type Setter } from 'solid-js';
+import {
+  createContext,
+  createEffect,
+  createSignal,
+  onCleanup,
+  useContext,
+  type Accessor,
+  type JSX,
+  type Setter,
+} from 'solid-js';
 
+import { clampBrowserWidth, DEFAULT_BROWSER_WIDTH } from '../lib/browserSize';
 import { setTypingPianoEnabled } from '../lib/keyboard';
 import type { StripRef } from '../state';
 
@@ -75,9 +85,9 @@ export const MIN_ZOOM = 0.4;
 export const MAX_ZOOM = 4;
 
 /** How tall a playlist lane is before anyone drags it. */
-export const DEFAULT_LANE_H = 48;
-/** Below this a clip's label has nowhere to go; above it, the lane is a wall. */
-export const MIN_LANE_H = 30;
+export const DEFAULT_LANE_H = 72;
+/** Below this the S/M row has nowhere to go; above it, the lane is a wall. */
+export const MIN_LANE_H = 56;
 export const MAX_LANE_H = 160;
 
 /** A lane's drawn height, from the map the playlist keeps. */
@@ -124,6 +134,9 @@ export interface ViewState {
 
   browserOpen: Accessor<boolean>;
   setBrowserOpen: Setter<boolean>;
+  /** Session-persistent width; survives collapsing and reopening the pane. */
+  browserWidth: Accessor<number>;
+  setBrowserWidth: Setter<number>;
   browserTab: Accessor<BrowserTab>;
   setBrowserTab: Setter<BrowserTab>;
 
@@ -171,9 +184,9 @@ export interface ViewState {
   setPlaylistSnap: Setter<number>;
   playlistZoom: Accessor<number>;
   setPlaylistZoom: Setter<number>;
-  /** The clip the playlist has selected, by id. */
-  selectedClip: Accessor<number | null>;
-  setSelectedClip: Setter<number | null>;
+  /** Clip ids the playlist has selected. Empty means none. */
+  selectedClips: Accessor<number[]>;
+  setSelectedClips: Setter<number[]>;
   /**
    * Whether the arrangement scrolls to keep up with a playing playhead.
    *
@@ -193,6 +206,10 @@ export interface ViewState {
   laneHeights: Accessor<Record<number, number>>;
   setLaneHeights: Setter<Record<number, number>>;
 
+  /** Pattern id whose name is being typed, or `null`. Driven by F2. */
+  renamingPattern: Accessor<number | null>;
+  setRenamingPattern: Setter<number | null>;
+
   /** Whether the window is wide enough for the top bar's optional readouts. */
   wideBar: Accessor<boolean>;
 }
@@ -211,6 +228,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [focusedInsertId, setFocusedInsertId] = createSignal<number | null>(null);
   const [sampleEditor, setSampleEditor] = createSignal<number | null>(null);
   const [browserOpen, setBrowserOpen] = createSignal(true);
+  const [browserWidth, setBrowserWidth] = createSignal(DEFAULT_BROWSER_WIDTH);
   const [browserTab, setBrowserTab] = createSignal<BrowserTab>('sounds');
   const [sideOpen, setSideOpen] = createSignal(true);
   const [sideTab, setSideTab] = createSignal<SideTab>('inspector');
@@ -228,30 +246,50 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [playlistTool, setPlaylistTool] = createSignal<PlaylistTool>('paint');
   const [playlistSnap, setPlaylistSnap] = createSignal(PLAYLIST_SNAPS[0]![0]);
   const [playlistZoom, setPlaylistZoom] = createSignal(1);
-  const [selectedClip, setSelectedClip] = createSignal<number | null>(null);
+  const [selectedClips, setSelectedClips] = createSignal<number[]>([]);
   const [playlistFollow, setPlaylistFollow] = createSignal(true);
   const [laneHeights, setLaneHeights] = createSignal<Record<number, number>>({});
+  const [renamingPattern, setRenamingPattern] = createSignal<number | null>(null);
   const [wideBar, setWideBar] = createSignal(
     typeof window === 'undefined' ? true : window.innerWidth >= WIDE_BAR_PX,
   );
+  const [viewportWidth, setViewportWidth] = createSignal(
+    typeof window === 'undefined' ? 1_600 : window.innerWidth,
+  );
 
-  const onResize = () => setWideBar(window.innerWidth >= WIDE_BAR_PX);
+  const onResize = () => {
+    setWideBar(window.innerWidth >= WIDE_BAR_PX);
+    setViewportWidth(window.innerWidth);
+  };
   window.addEventListener('resize', onResize);
+  onCleanup(() => window.removeEventListener('resize', onResize));
+
+  createEffect(() => {
+    const viewport = viewportWidth();
+    const inspectorOpen = sideOpen();
+    setBrowserWidth((width) => clampBrowserWidth(width, viewport, inspectorOpen));
+  });
 
   const state: ViewState = {
     view,
     go(next) {
+      const current = view();
       // Playlist lands on the picker so a brush is in front for painting.
       // Inspector stays one click away; we do not overwrite it if Playlist is
       // already up (F5 while painting, for example).
-      if (next === 'playlist' && view() !== next) {
+      if (next === 'playlist' && current !== next) {
         setSideTab('picker');
         setSideOpen(true);
       }
+      // Settings is an overlay on the studio: remember where Escape should land.
+      // Sample editors stay up across Playlist/Rack/Mixer so a clip opened from
+      // the arrangement is not dismissed by glancing at the mixer.
+      if (next === 'settings' && current !== 'settings') {
+        setPreviousView(current);
+      }
       setView(next);
       setRollOpen(false);
-      setSampleEditor(null);
-      setPreviousView(next);
+      setRenamingPattern(null);
     },
     previousView,
     rollOpen,
@@ -298,6 +336,8 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     },
     browserOpen,
     setBrowserOpen,
+    browserWidth,
+    setBrowserWidth,
     browserTab,
     setBrowserTab,
     sideOpen,
@@ -336,12 +376,14 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     setPlaylistSnap,
     playlistZoom,
     setPlaylistZoom,
-    selectedClip,
-    setSelectedClip,
+    selectedClips,
+    setSelectedClips,
     playlistFollow,
     setPlaylistFollow,
     laneHeights,
     setLaneHeights,
+    renamingPattern,
+    setRenamingPattern,
     wideBar,
   };
 

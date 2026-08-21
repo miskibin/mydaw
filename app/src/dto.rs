@@ -516,6 +516,7 @@ pub struct PlaylistTrackDto {
     pub id: u64,
     pub name: String,
     pub muted: bool,
+    pub soloed: bool,
 }
 
 impl From<&PlaylistTrack> for PlaylistTrackDto {
@@ -524,6 +525,7 @@ impl From<&PlaylistTrack> for PlaylistTrackDto {
             id: track.id,
             name: track.name.clone(),
             muted: track.muted,
+            soloed: track.soloed,
         }
     }
 }
@@ -709,7 +711,7 @@ pub struct WaveformDto {
     /// Frames the whole waveform spans.
     pub frames: u64,
     /// Pairs actually returned, which may be fewer than asked for when the file
-    /// has less detail than that.
+    /// has fewer frames than that.
     pub bins: usize,
     /// The most bins this build will ever return.
     pub max_bins: usize,
@@ -776,6 +778,9 @@ pub struct SequencerStateDto {
 /// rather than a failure: the UI shows a dash and says so. `latency_ms` is
 /// derived here rather than in the webview so the two never disagree about
 /// which block size the figure was computed from.
+///
+/// `buffer_frames` is the **callback** the device asked for, not the engine's
+/// allocation ceiling (`max_buffer_frames`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamInfoDto {
@@ -783,12 +788,31 @@ pub struct StreamInfoDto {
     pub device_name: String,
     pub sample_rate: f64,
     pub channels: u32,
-    /// Largest block the callback can be handed, in frames.
+    /// Frames the last callback was handed (the BUFFER readout).
     pub buffer_frames: u32,
-    /// One block's worth of time, in milliseconds. `0` while stopped.
+    /// Engine allocation ceiling. Not the BUFFER readout.
+    pub max_buffer_frames: u32,
+    /// What Settings requested. `0` = host default.
+    pub requested_buffer_frames: u32,
+    /// One callback's worth of time, in milliseconds. `0` while stopped.
     pub latency_ms: f64,
+    /// `"wasapi"` or `"asio"`.
+    pub backend: &'static str,
+    /// Why the opened backend is not what was asked for, or empty.
+    pub note: String,
     /// Whether a stream is open at all.
     pub running: bool,
+}
+
+/// Live audio preferences plus the stream they produced.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioOutputDto {
+    pub version: u32,
+    pub prefer_asio: bool,
+    pub buffer_frames: u32,
+    pub asio_compiled: bool,
+    pub stream: StreamInfoDto,
 }
 
 impl StreamInfoDto {
@@ -799,8 +823,20 @@ impl StreamInfoDto {
             sample_rate: 0.0,
             channels: 0,
             buffer_frames: 0,
+            max_buffer_frames: 0,
+            requested_buffer_frames: 0,
             latency_ms: 0.0,
+            backend: "wasapi",
+            note: String::new(),
             running: false,
+        }
+    }
+
+    fn latency_ms(buffer_frames: u32, sample_rate: f64) -> f64 {
+        if sample_rate > 0.0 {
+            f64::from(buffer_frames) / sample_rate * 1000.0
+        } else {
+            0.0
         }
     }
 }
@@ -808,18 +844,16 @@ impl StreamInfoDto {
 impl From<mydaw_plugin_audio_io::StreamInfo> for StreamInfoDto {
     fn from(info: mydaw_plugin_audio_io::StreamInfo) -> Self {
         let sample_rate = f64::from(info.sample_rate);
-        let buffer_frames = info.max_block as u32;
-        let latency_ms = if sample_rate > 0.0 {
-            f64::from(buffer_frames) / sample_rate * 1000.0
-        } else {
-            0.0
-        };
         Self {
             device_name: info.device_name,
             sample_rate,
             channels: u32::from(info.channels),
-            buffer_frames,
-            latency_ms,
+            buffer_frames: info.buffer_frames,
+            max_buffer_frames: info.max_block as u32,
+            requested_buffer_frames: info.requested_buffer_frames,
+            latency_ms: Self::latency_ms(info.buffer_frames, sample_rate),
+            backend: info.backend.as_str(),
+            note: info.note,
             running: true,
         }
     }
@@ -1292,5 +1326,27 @@ mod tests {
         assert_eq!(summary.channel_count, 2);
         assert_eq!(summary.hit_count, 4);
         assert_eq!(summary.note_count, 1);
+    }
+
+    #[test]
+    fn stream_info_latency_uses_the_callback_not_the_engine_ceiling() {
+        let dto = StreamInfoDto::from(mydaw_plugin_audio_io::StreamInfo {
+            device_name: "Speakers".into(),
+            sample_rate: 48_000,
+            channels: 2,
+            max_block: 4096,
+            buffer_frames: 256,
+            requested_buffer_frames: 256,
+            backend: mydaw_plugin_audio_io::AudioBackend::Wasapi,
+            note: String::new(),
+        });
+        assert_eq!(dto.buffer_frames, 256);
+        assert_eq!(dto.max_buffer_frames, 4096);
+        assert!((dto.latency_ms - 256.0 / 48.0).abs() < 1e-9);
+        assert_eq!(dto.backend, "wasapi");
+        let json: serde_json::Value = serde_json::to_value(&dto).unwrap();
+        assert_eq!(json["bufferFrames"], 256);
+        assert_eq!(json["maxBufferFrames"], 4096);
+        assert_eq!(json["backend"], "wasapi");
     }
 }

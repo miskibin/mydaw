@@ -127,7 +127,9 @@ const SWITCH_LABELS: Readonly<Record<string, readonly string[]>> = {
   'effects.saturator/oversample': ['Off', '2x', '4x'],
   // Instruments declare parameters the same way effects do, so their switches
   // are named here too.
-  'poly-synth/wave': ['Saw', 'Square'],
+  'poly-synth/wave': ['Saw', 'Square', 'Sine', 'Triangle', 'Noise'],
+  'poly-synth/osc2Wave': ['Saw', 'Square', 'Sine', 'Triangle', 'Noise'],
+  'poly-synth/osc3Wave': ['Saw', 'Square', 'Sine', 'Triangle', 'Noise'],
 };
 
 /** How a switch's current position reads. */

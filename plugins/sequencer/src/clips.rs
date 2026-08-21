@@ -418,17 +418,15 @@ struct ClipVoice {
     env: f32,
     /// Added to `env` each frame while fading in, subtracted while fading out.
     env_step: f32,
-    /// The rate the *clip's own* fade-out runs at, which may be far slower than
-    /// the anti-click ramp. Kept apart from `env_step` because a stop, a steal
-    /// or a swap has to be able to override it with the fast ramp -- a musical
-    /// fade is a property of the clip, an emergency fade is a property of the
-    /// moment.
-    release_step: f32,
-    /// Whether the fade is running down (and the voice ends at the bottom).
+    /// The clip's absolute end and musical fade length. The musical tail is
+    /// applied as a ceiling over `env`; `releasing` remains reserved for a
+    /// stop, steal or swap that must force the voice down with the anti-click
+    /// ramp. Keeping those envelopes independent makes overlapping user fades
+    /// meet in the middle instead of cancelling on their first frame.
+    end_at: u64,
+    fade_out_frames: u64,
+    /// Whether an emergency fade is running down.
     releasing: bool,
-    /// Absolute sample position the fade-out must *begin* at, so that silence is
-    /// reached exactly at the clip's end.
-    release_at: u64,
     /// Voices started when this one did, so "oldest" is a number rather than a
     /// scan of positions.
     age: u64,
@@ -448,11 +446,11 @@ impl ClipVoice {
             position: 0.0,
             step: 1.0,
             gain: 0.0,
-            release_step: 1.0,
             env: 0.0,
             env_step: 0.0,
+            end_at: u64::MAX,
+            fade_out_frames: 1,
             releasing: false,
-            release_at: u64::MAX,
             age: 0,
         }
     }
@@ -636,10 +634,8 @@ impl AudioClipNode {
                 u64::MAX
             };
             let end = clip_end.min(source_end);
-            // Back from the end by the clip's own fade, so silence is reached
-            // *at* the end rather than after it.
-            voice.release_at =
-                end.saturating_sub(fade_frames(clip.fade_out_ms, sample_rate, ramp_frames));
+            voice.end_at = end;
+            voice.fade_out_frames = fade_frames(clip.fade_out_ms, sample_rate, ramp_frames);
         }
     }
 
@@ -673,16 +669,17 @@ impl AudioClipNode {
     }
 
     /// Start `clip` at source frame `position`, first sounding at absolute
-    /// sample `start_at` and beginning its fade-out at `release_at`.
+    /// sample `start_at` and ending at `end_at`.
     #[allow(clippy::too_many_arguments)]
     fn start(
         &mut self,
         clip: usize,
         position: f64,
         start_at: u64,
-        release_at: u64,
+        end_at: u64,
         ramp: f32,
-        fades: (f32, f32),
+        fade_in_step: f32,
+        fade_out_frames: u64,
         ctx_rate: f64,
     ) {
         let Some(song) = self.song.as_deref() else {
@@ -717,11 +714,11 @@ impl AudioClipNode {
             // here" are the same sample. A step of 1/96th of the clip's own
             // level is far below anything a click detector -- or an ear --
             // would call an edge.
-            env: fades.0.min(1.0),
-            env_step: fades.0,
-            release_step: fades.1,
+            env: fade_in_step.min(1.0),
+            env_step: fade_in_step,
+            end_at,
+            fade_out_frames,
             releasing: false,
-            release_at,
             age,
         };
         self.stats.voices_started.fetch_add(1, Ordering::Relaxed);
@@ -827,7 +824,7 @@ impl RtNode for AudioClipNode {
             );
         }
 
-        self.render(ctx, ramp);
+        self.render(ctx);
     }
 }
 
@@ -889,13 +886,10 @@ impl AudioClipNode {
             // Silence is reached *at* the end, so the fade has to begin before
             // it. A clip shorter than its fade fades from its own first frame.
             let out_frames = fade_frames(clip.fade_out_ms, sample_rate, ramp_frames);
-            let release_at = end.saturating_sub(out_frames).max(clip_start);
             // A fade is a rate, and the rate is one over its length in frames.
             // Never faster than the anti-click ramp, which is what `ramp` is.
-            let fades = (
-                ramp.min(1.0 / fade_frames(clip.fade_in_ms, sample_rate, ramp_frames) as f32),
-                ramp.min(1.0 / out_frames as f32),
-            );
+            let fade_in_step =
+                ramp.min(1.0 / fade_frames(clip.fade_in_ms, sample_rate, ramp_frames) as f32);
 
             if derive {
                 if block_start >= clip_start && block_start < end {
@@ -908,9 +902,10 @@ impl AudioClipNode {
                             index,
                             position,
                             block_start,
-                            release_at,
+                            end,
                             ramp,
-                            fades,
+                            fade_in_step,
+                            out_frames,
                             sample_rate,
                         );
                     }
@@ -926,9 +921,10 @@ impl AudioClipNode {
                     index,
                     offset as f64,
                     clip_start,
-                    release_at,
+                    end,
                     ramp,
-                    fades,
+                    fade_in_step,
+                    out_frames,
                     sample_rate,
                 );
             }
@@ -939,7 +935,7 @@ impl AudioClipNode {
     ///
     /// One pass per voice over the block. Adds; never clears -- see the type's
     /// docs on why this node is not a generator.
-    fn render(&mut self, ctx: &mut ProcessCtx, ramp: f32) {
+    fn render(&mut self, ctx: &mut ProcessCtx) {
         let frames = ctx.frames;
         if frames == 0 {
             return;
@@ -979,21 +975,18 @@ impl AudioClipNode {
                     voice.active = false;
                     break;
                 }
-                // The clip's own end, recomputed from the absolute tick every
-                // block, so a tempo change moves it.
-                if !voice.releasing && block_start + frame as u64 >= voice.release_at {
-                    voice.releasing = true;
-                    // The clip's own fade, which is slower than the anti-click
-                    // ramp whenever the user asked for one. `max` with what is
-                    // already running so a voice mid-emergency-fade is not
-                    // slowed down by reaching its musical fade point.
-                    voice.env_step = voice.release_step.max(ramp.min(voice.env_step));
+                let now = block_start + frame as u64;
+                if now >= voice.end_at {
+                    voice.active = false;
+                    break;
                 }
 
                 // `position` is finite and below `frames`, so this is in range.
                 let index = voice.position as usize;
                 let fraction = (voice.position - voice.position.floor()) as f32;
-                let gain = voice.gain * voice.env;
+                let tail =
+                    voice.end_at.saturating_sub(now) as f32 / voice.fade_out_frames.max(1) as f32;
+                let gain = voice.gain * voice.env.min(tail.clamp(0.0, 1.0));
 
                 left[frame] += cubic(taps(padded, index, 0), fraction) * gain;
                 if CHANNELS > 1 {
@@ -1703,6 +1696,19 @@ mod tests {
     }
 
     #[test]
+    fn compiling_drops_a_non_soloed_lanes_clips_when_any_lane_is_soloed() {
+        let mut playlist = Playlist::default();
+        playlist.add_audio_clip(1, 0, 0, BAR, 0, 0.0).expect("ok");
+        playlist.add_audio_clip(1, 1, 0, BAR, 0, 0.0).expect("ok");
+        playlist.set_track_soloed(1, true).expect("solos");
+        let loaded = flat_source(1, 48_000.0, 48_000, 0.5);
+
+        let song = compile_audio_clips(&playlist, |_| Some(Arc::clone(&loaded)));
+        assert_eq!(song.len(), 1);
+        assert_eq!(song.clips()[0].clip_id, 2);
+    }
+
+    #[test]
     fn compiling_converts_the_clips_decibels_to_a_linear_gain() {
         let mut playlist = Playlist::default();
         playlist.add_audio_clip(1, 0, 0, BAR, 0, -6.0).expect("ok");
@@ -1814,6 +1820,13 @@ mod tests {
         let mut rig = Rig::new(CompiledAudioSong::new(vec![clip]), 256);
         let out = rig.run((end / 256) + 4, 256, rate, bpm);
 
+        let peak = out[..end]
+            .iter()
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+        assert!(
+            peak > 0.04,
+            "overlapping fades must leave the clip audible, peak was {peak}"
+        );
         for (frame, pair) in out.windows(2).enumerate().take(end) {
             assert!(
                 (pair[1] - pair[0]).abs() <= 0.5 * ramp_step(CLIP_RAMP_MS, rate) + 1e-6,

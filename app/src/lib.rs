@@ -52,11 +52,13 @@
 //! pnpm --dir ui build && cargo run -p mydaw-app --features custom-protocol
 //! ```
 
+mod audio_settings;
 pub mod clap_bridge;
 pub mod clap_host;
 pub mod clips;
 mod commands;
 pub mod debug_capture;
+mod drum_samples;
 mod dto;
 pub mod effects;
 mod file_preview;
@@ -66,6 +68,7 @@ pub mod ipc_bench;
 mod library;
 mod meters;
 mod preview;
+mod preview_settings;
 pub mod project;
 pub mod project_bridge;
 pub mod project_file;
@@ -90,10 +93,10 @@ pub use debug_capture::{
     REPORT_END,
 };
 pub use dto::{
-    ticks_for_seconds, AudioSourceDto, ChannelClipDto, ClapPluginInfoDto, ClipDto, MelodicNoteDto,
-    MeterFrameDto, PatternDto, PatternSetDto, PatternSummaryDto, PlaylistDto, PlaylistTrackDto,
-    SequencerStateDto, StepDto, StepRowDto, StreamInfoDto, TrackMeterDto, Vst3PluginInfoDto,
-    WaveformDto,
+    ticks_for_seconds, AudioOutputDto, AudioSourceDto, ChannelClipDto, ClapPluginInfoDto, ClipDto,
+    MelodicNoteDto, MeterFrameDto, PatternDto, PatternSetDto, PatternSummaryDto, PlaylistDto,
+    PlaylistTrackDto, SequencerStateDto, StepDto, StepRowDto, StreamInfoDto, TrackMeterDto,
+    Vst3PluginInfoDto, WaveformDto,
 };
 pub use effects::{
     catalogue, chain_dto, chain_readouts_dto, insert_dto, EffectInfoDto, InsertDef, InsertDto,
@@ -110,8 +113,9 @@ pub use meters::{FrameSink, MeterPump, POLL_INTERVAL};
 pub use preview::{PreviewError, SourcePreviewDto};
 pub use project::{
     check_gain_db, check_pan, check_send_level, mixer_state_dto, BusDef, BusDto, MasterDto,
-    MissingPluginDto, MissingPlugins, MixerStateDto, Project, RouteError, SendDef, SendDto,
-    TrackDef, TrackDto, TrackError,
+    MissingPluginDto, MissingPlugins, MixerStateDto, NoPitchReasonDto, PitchAnalysisDto,
+    PitchSourceDto, Project, RootMode, RootPitchDto, RouteError, SendDef, SendDto, TrackDef,
+    TrackDto, TrackError,
 };
 pub use project_bridge::{
     ProjectAnswer, ProjectBridge, ProjectCommand, ProjectInfoDto, PROJECT_TIMEOUT,
@@ -170,6 +174,9 @@ pub fn run() -> ExitCode {
         }
     };
 
+    let audio_prefs = crate::audio_settings::load_settings(&crate::audio_settings::store_path());
+    state.audio().set_output_request(audio_prefs.to_request());
+
     // The session's own tracks -- drums and a synth.
     //
     // Except in headless capture mode, which presses Play and records whatever
@@ -223,6 +230,7 @@ pub fn run() -> ExitCode {
     // into Tauri.
     let meters = std::sync::Arc::clone(state.meters());
     let audio = std::sync::Arc::clone(state.audio());
+    let midi = std::sync::Arc::clone(state.midi());
     // The CLAP path: the one mailbox a command posts to, the mixer it edits, and
     // the device it needs. All `Arc`s, cloned before `state` moves into Tauri's
     // managed state.
@@ -281,6 +289,8 @@ pub fn run() -> ExitCode {
             commands::set_track_gain,
             commands::set_track_pan,
             commands::set_track_pitch,
+            commands::analyze_track_pitch,
+            commands::set_track_sample_root,
             commands::set_track_sample_region,
             commands::set_track_fades,
             commands::set_source_param,
@@ -352,6 +362,7 @@ pub fn run() -> ExitCode {
             commands::remove_playlist_track,
             commands::rename_playlist_track,
             commands::set_playlist_track_mute,
+            commands::set_playlist_track_solo,
             commands::add_pattern_clip,
             commands::remove_clip,
             commands::move_clip,
@@ -362,17 +373,26 @@ pub fn run() -> ExitCode {
             commands::unload_audio_source,
             commands::get_audio_waveform,
             commands::preview_source,
+            commands::preview_instrument,
+            commands::get_preview_settings,
+            commands::set_preview_volume,
             commands::get_library_roots,
             commands::add_library_folder,
             commands::remove_library_folder,
             commands::list_library_dir,
             commands::import_dropped_audio,
             commands::preview_audio_file,
+            commands::preview_track_sample,
             commands::add_audio_clip,
             commands::set_clip_gain,
             commands::set_clip_offset,
             commands::set_bpm,
             commands::get_stream_info,
+            commands::get_audio_settings,
+            commands::set_audio_settings,
+            commands::list_midi_ports,
+            commands::set_midi_port_enabled,
+            commands::get_midi_status,
             // The project file: New / Open / Save / Save As, plus the name and
             // the missing-plugin warnings the title and status bars draw.
             commands::get_project_info,
@@ -401,6 +421,7 @@ pub fn run() -> ExitCode {
             clap_bridge.set_served(false);
             vst3_bridge.set_served(false);
             project_bridge.set_served(false);
+            midi.stop();
             meters.shutdown();
             audio.stop();
             vst3_host.shutdown();
@@ -427,6 +448,26 @@ pub fn run() -> ExitCode {
         project_bridge.set_waker(Box::new(move || {
             let _ = handle.run_on_main_thread(|| {});
         }));
+    }
+
+    {
+        use tauri::Manager;
+        let midi_path = app
+            .path()
+            .app_config_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("mydaw"))
+            .join("midi.json");
+        app.state::<AppState>().midi().attach_store(midi_path);
+        let preview_path = app
+            .path()
+            .app_config_dir()
+            .unwrap_or_else(|_| std::env::temp_dir().join("mydaw"))
+            .join("preview.json");
+        let preview = crate::preview_settings::load_settings(&preview_path);
+        app.state::<AppState>()
+            .tracks()
+            .file_preview()
+            .set_gain(preview.linear_gain());
     }
 
     // The run loop owns the kernel. `RunEvent::Exit` fires after the last window
@@ -486,6 +527,7 @@ pub fn run() -> ExitCode {
             clap_bridge.set_served(false);
             vst3_bridge.set_served(false);
             project_bridge.set_served(false);
+            midi.stop();
             meters.shutdown();
             // Closing the stream retires the graph, which is what eventually
             // drops the CLAP nodes and sends their processors back here. Only
@@ -509,6 +551,7 @@ pub fn run() -> ExitCode {
 /// The headless paths (capture mode, a window that would not open) never create
 /// a [`ClapHost`], so there is nothing hosted to destroy here.
 fn shutdown(state: &AppState, kernel: &mut mydaw_kernel::Kernel) {
+    state.midi().stop();
     state.meters().shutdown();
     state.audio().stop();
     kernel.shutdown();

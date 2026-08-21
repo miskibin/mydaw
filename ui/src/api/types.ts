@@ -339,6 +339,7 @@ export interface PlaylistTrackDto {
   id: number;
   name: string;
   muted: boolean;
+  soloed: boolean;
 }
 
 /**
@@ -598,6 +599,29 @@ export interface InsertTarget {
   index: number;
 }
 
+/** How a sample channel's playback root was last set. */
+export type RootMode = 'default' | 'detected' | 'manual';
+
+/** Where a detected root pitch came from. */
+export type PitchSource = 'metadata' | 'filename' | 'analysis';
+
+/** Why analysis could not name a root. */
+export type NoPitchReason = 'silent' | 'tooShort' | 'unvoiced' | 'unstable' | 'polyphonic';
+
+/** A named root: MIDI note plus remaining cents. */
+export interface DetectedPitch {
+  midiNote: number;
+  cents: number;
+  confidence: number;
+  voicedCoverage: number;
+  source: PitchSource;
+}
+
+/** Result of `analyzeTrackPitch`. Never invents C for unpitched material. */
+export type PitchAnalysis =
+  | ({ kind: 'detected' } & DetectedPitch)
+  | { kind: 'noStablePitch'; reason: NoPitchReason };
+
 /** One mixer track. `index` is the track's position *and* its note channel. */
 export interface TrackDto {
   index: number;
@@ -650,6 +674,14 @@ export interface TrackDto {
   sampleStartFrames: number;
   /** SMP region end, exclusive. `0` means the whole file. */
   sampleEndFrames: number;
+  /** MIDI note at which the file plays at recorded pitch. Default 60 (C4). */
+  rootKey: number;
+  /** Fine offset of that root, in cents. */
+  rootFineCents: number;
+  /** How the root was last set. */
+  rootMode: RootMode;
+  /** Last successful detection, when one has been stored. */
+  detectedPitch?: DetectedPitch | null;
   /** Numeric audio-file id when this channel is `clip:` or `oneshot:`. */
   audioSourceId?: number | null;
 }
@@ -741,10 +773,53 @@ export interface StreamInfo {
   deviceName: string;
   sampleRate: number;
   channels: number;
-  /** Largest block the callback can be handed, in frames: the BUFFER readout. */
+  /** Frames the last callback was handed: the BUFFER readout. */
   bufferFrames: number;
+  /** Engine allocation ceiling. Not the BUFFER readout. */
+  maxBufferFrames: number;
+  /** What Settings requested. `0` = host default. */
+  requestedBufferFrames: number;
   latencyMs: number;
+  /** `"wasapi"` or `"asio"`. */
+  backend: 'wasapi' | 'asio';
+  /** Why the opened backend is not what was asked for, or empty. */
+  note: string;
   running: boolean;
+}
+
+/** WASAPI/ASIO preference plus the stream currently open. */
+export interface AudioOutput {
+  version: number;
+  preferAsio: boolean;
+  bufferFrames: number;
+  asioCompiled: boolean;
+  stream: StreamInfo;
+}
+
+/** One MIDI input port, as Settings draws it. */
+export type MidiPortStatus = 'connected' | 'offline' | 'error' | 'available';
+
+export interface MidiPortDto {
+  name: string;
+  /** Currently open (paired and present). */
+  connected: boolean;
+  /** The user has paired it. */
+  enabled: boolean;
+  status: MidiPortStatus;
+  lastError?: string;
+}
+
+/** Status-bar MIDI lamp. `activityAtMs` is Unix ms of the last event, 0 = never. */
+export interface MidiStatusDto {
+  activityAtMs: number;
+  enabledCount: number;
+  activeName: string | null;
+}
+
+/** Browser / Sounds audition level, as a percent of the current master volume. */
+export interface PreviewSettings {
+  version: number;
+  volumePercent: number;
 }
 
 /** One downloadable instrument asset, as the browser's download row reads it. */

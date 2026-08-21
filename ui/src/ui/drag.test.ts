@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { FADER_HANDLE_PX, FADER_TRAVEL_PX, faderThrowPx } from './drag';
+import { dragTravel, FADER_HANDLE_PX, FADER_TRAVEL_PX, faderThrowPx } from './drag';
+
+describe('dragTravel', () => {
+  it('reads only horizontal travel for a pane separator', () => {
+    expect(dragTravel('horizontal', 24, -80)).toBe(24);
+    expect(dragTravel('horizontal', -12, 40)).toBe(-12);
+  });
+});
 
 describe('faderThrowPx', () => {
   it('moves the handle one pixel for each pixel the pointer travels on that track', () => {

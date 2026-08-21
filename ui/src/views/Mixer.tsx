@@ -46,6 +46,8 @@ import type {
   SendDto,
   TrackDto,
 } from '../api/types';
+import { channelColor } from '../lib/channel';
+import { mixerSlotOpensEditor, mixerStripDestination } from '../lib/navigate';
 import { faderFraction, faderToDb, formatDb, panLabel } from '../panels/mixer/scale';
 import { addedInsertId, insertsOnStrip } from '../lib/inserts';
 import { useView } from '../shell/view';
@@ -351,7 +353,7 @@ function MixerBar(): JSX.Element {
     if (!state || ref.kind === 'master') return 'var(--txt2)';
     if (ref.kind === 'track') {
       const track = state.tracks[ref.index];
-      return track ? trackColor(track.id) : 'var(--dim)';
+      return track ? channelColor(track) : 'var(--dim)';
     }
     const bus = state.buses[ref.index];
     return bus ? (bus.color ?? trackColor(bus.id)) : 'var(--dim)';
@@ -497,7 +499,7 @@ function Strip(props: StripProps): JSX.Element {
   /** The colour the engine has no opinion about. Buses may carry their own. */
   const color = () => {
     const asTrack = track();
-    if (asTrack) return trackColor(asTrack.id);
+    if (asTrack) return channelColor(asTrack);
     const asBus = bus();
     if (asBus) return asBus.color ?? trackColor(asBus.id);
     return 'var(--txt2)';
@@ -658,7 +660,7 @@ function Strip(props: StripProps): JSX.Element {
           kind: 'fx',
           fx,
           label: fx.name,
-          title: `${fx.name} — drag to reorder the chain · click opens it in the inspector · right-click removes it · the dot bypasses it`,
+          title: `${fx.name} — drag to reorder the chain · click opens it in the inspector · double-click opens the editor · right-click removes it · the dot bypasses it`,
         });
       } else if (i === chain.length) {
         rows.push({ kind: 'add', label: '+ effect', title: 'Put an internal effect on this chain' });
@@ -984,7 +986,20 @@ function Strip(props: StripProps): JSX.Element {
           fallback={<span class="wv-mixer__mastername">MASTER</span>}
         >
           <span class="wv-swatch" style={{ background: color() }} />
-          <span class="wv-mixer__name" title={name()}>
+          <span
+            class="wv-mixer__name"
+            title={
+              track()
+                ? `${name()} — double-click to open this channel in the rack`
+                : name()
+            }
+            onDblClick={(event) => {
+              event.stopPropagation();
+              if (!track() || mixerStripDestination('track') === null) return;
+              select();
+              view.go('rack');
+            }}
+          >
             {name()}
           </span>
         </Show>
@@ -1060,6 +1075,13 @@ function Strip(props: StripProps): JSX.Element {
               title={row().title}
               onPointerDown={(event) => onSlotPointerDown(event, row())}
               onClick={(event) => onSlot(row(), event)}
+              onDblClick={(event) => {
+                event.stopPropagation();
+                const current = row();
+                if (!mixerSlotOpensEditor(current.kind) || !current.fx) return;
+                select();
+                view.openInsertEditor({ strip: stripRef(), insertId: current.fx.id });
+              }}
               onContextMenu={(event) => onSlotContext(row(), event)}
             >
               <Show when={row().fx}>

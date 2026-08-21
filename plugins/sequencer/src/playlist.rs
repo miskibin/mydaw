@@ -13,11 +13,13 @@
 //! [`PatternSet`](crate::PatternSet), or an **audio clip**, which plays a file.
 //!
 //! # Playlist tracks are lanes, not mixer channels
-//! A playlist track has a name and a mute and **nothing else**: no fader, no
-//! pan, no insert chain, no output. It exists so that overlapping clips can be
-//! drawn on separate rows and muted in groups -- which is what FL's playlist
-//! tracks are, and it is why a project can have five rack channels and twelve
-//! playlist lanes without either number meaning anything to the other.
+//! A playlist track has a name, a mute, a solo and **nothing else**: no fader,
+//! no pan, no insert chain, no output. It exists so that overlapping clips can
+//! be drawn on separate rows and muted or soloed in groups -- which is what
+//! FL's playlist tracks are, and it is why a project can have five rack
+//! channels and twelve playlist lanes without either number meaning anything
+//! to the other. Solo is the mixer's rule, resolved here: if any lane is
+//! soloed, only soloed lanes compile. The audio thread never sees the flag.
 //!
 //! A pattern clip's audio goes wherever its pattern's channels go: to the rack
 //! channels, and therefore to their mixer strips. An audio clip of file *N*
@@ -72,18 +74,23 @@ pub struct PlaylistTrack {
     /// but the UI keys its list on this so a removal animates correctly.
     pub id: u64,
     pub name: String,
-    /// Silences every clip on this lane. Applied when the song is compiled, so
-    /// the audio thread never has to ask.
+    /// Silences every clip on this lane unless a solo overrides it. Applied
+    /// when the song is compiled, so the audio thread never has to ask.
     pub muted: bool,
+    /// Isolates this lane in SONG mode. Same rule as mixer solo: if any lane
+    /// is soloed, only soloed lanes compile, and a soloed+muted lane stays
+    /// audible.
+    pub soloed: bool,
 }
 
 impl PlaylistTrack {
-    /// An unmuted lane.
+    /// An unmuted, unsoloed lane.
     pub fn new(id: u64, name: impl Into<String>) -> Self {
         Self {
             id,
             name: name.into(),
             muted: false,
+            soloed: false,
         }
     }
 }
@@ -396,6 +403,37 @@ impl Playlist {
         Ok(())
     }
 
+    /// Solo or un-solo lane `index`. Additive: several lanes may be soloed.
+    ///
+    /// # Errors
+    /// [`PlaylistError::NoSuchTrack`].
+    pub fn set_track_soloed(&mut self, index: usize, soloed: bool) -> Result<(), PlaylistError> {
+        self.track_mut(index)?.soloed = soloed;
+        Ok(())
+    }
+
+    /// Whether any lane is soloed.
+    pub fn any_soloed(&self) -> bool {
+        self.tracks.iter().any(|track| track.soloed)
+    }
+
+    /// Whether lane `index` is silent right now, solo included.
+    ///
+    /// This is the whole of the solo rule, and it is the mixer's: with nothing
+    /// soloed a lane is audible unless it is muted; with anything soloed a lane
+    /// is audible only if it is itself soloed. A soloed *and* muted lane stays
+    /// audible — solo is an override, not a vote. Unknown indices are silent.
+    pub fn lane_silenced(&self, index: usize) -> bool {
+        let Some(track) = self.tracks.get(index) else {
+            return true;
+        };
+        if self.any_soloed() {
+            !track.soloed
+        } else {
+            track.muted
+        }
+    }
+
     fn track_mut(&mut self, index: usize) -> Result<&mut PlaylistTrack, PlaylistError> {
         self.tracks
             .get_mut(index)
@@ -656,16 +694,17 @@ impl Playlist {
 
     /// Resolve the pattern clips into the shape the scheduler walks.
     ///
-    /// **Non-RT.** Muted lanes and clips naming a pattern that is not in the set
-    /// are dropped here, so the callback never has to ask either question. Audio
-    /// clips are not in the result: they are rendered rather than scheduled, and
-    /// go through [`crate::audio`].
+    /// **Non-RT.** Silenced lanes (mute, or another lane's solo) and clips
+    /// naming a pattern that is not in the set are dropped here, so the
+    /// callback never has to ask either question. Audio clips are not in the
+    /// result: they are rendered rather than scheduled, and go through
+    /// [`crate::audio`].
     pub fn compile_pattern_clips(&self, patterns: &PatternSet) -> Vec<crate::CompiledPatternClip> {
         self.clips
             .iter()
             .filter_map(|clip| match clip {
                 Clip::Pattern(pattern) => {
-                    if self.tracks.get(pattern.track).is_some_and(|t| t.muted) {
+                    if self.lane_silenced(pattern.track) {
                         return None;
                     }
                     Some(crate::CompiledPatternClip {
@@ -679,13 +718,13 @@ impl Playlist {
             .collect()
     }
 
-    /// The audio clips, with muted lanes dropped. **Non-RT.**
+    /// The audio clips, with silenced lanes dropped. **Non-RT.**
     pub fn audible_audio_clips(&self) -> Vec<AudioClip> {
         self.clips
             .iter()
             .filter_map(|clip| match clip {
                 Clip::Audio(audio) => {
-                    if self.tracks.get(audio.track).is_some_and(|t| t.muted) {
+                    if self.lane_silenced(audio.track) {
                         return None;
                     }
                     Some(*audio)
@@ -721,7 +760,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["Track 1", "Track 2", "Track 3", "Track 4"]
         );
-        assert!(playlist.tracks().iter().all(|t| !t.muted));
+        assert!(playlist.tracks().iter().all(|t| !t.muted && !t.soloed));
         assert!(playlist.clips().is_empty());
         assert_eq!(playlist.end_ticks(), 0, "an empty song ends at zero");
         playlist.validate(&patterns()).unwrap();
@@ -1018,6 +1057,39 @@ mod tests {
             playlist.end_ticks(),
             8 * BAR,
             "muting silences a lane; it does not shorten the song"
+        );
+    }
+
+    #[test]
+    fn compiling_keeps_only_soloed_lanes_when_any_lane_is_soloed() {
+        let set = patterns();
+        let second = set.patterns()[1].id;
+        let mut playlist = Playlist::default();
+        playlist.add_pattern_clip(1, 0, 0, 4 * BAR).unwrap();
+        playlist
+            .add_pattern_clip(second, 1, 4 * BAR, 4 * BAR)
+            .unwrap();
+        playlist.add_audio_clip(1, 2, 0, BAR, 0, 0.0).unwrap();
+
+        playlist.set_track_soloed(1, true).unwrap();
+        assert_eq!(playlist.compile_pattern_clips(&set).len(), 1);
+        assert_eq!(playlist.compile_pattern_clips(&set)[0].pattern, 1);
+        assert!(playlist.audible_audio_clips().is_empty());
+        assert_eq!(
+            playlist.end_ticks(),
+            8 * BAR,
+            "soloing silences a lane; it does not shorten the song"
+        );
+
+        playlist.set_track_soloed(2, true).unwrap();
+        assert_eq!(playlist.compile_pattern_clips(&set).len(), 1);
+        assert_eq!(playlist.audible_audio_clips().len(), 1);
+
+        playlist.set_track_muted(1, true).unwrap();
+        assert_eq!(
+            playlist.compile_pattern_clips(&set).len(),
+            1,
+            "a soloed muted lane stays audible, the way mixer solo does"
         );
     }
 

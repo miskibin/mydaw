@@ -243,6 +243,49 @@ pub fn poly_blep_square(phase: f32, increment: f32) -> f32 {
     poly_blep_saw(phase, increment) - poly_blep_saw(opposite, increment)
 }
 
+/// Waveform indices for [`analog_wave`]. `0`/`1` stay saw/square so old
+/// `wave` values in project files keep their sound.
+pub const WAVE_SAW: usize = 0;
+pub const WAVE_SQUARE: usize = 1;
+pub const WAVE_SINE: usize = 2;
+pub const WAVE_TRIANGLE: usize = 3;
+pub const WAVE_NOISE: usize = 4;
+pub const WAVE_COUNT: u32 = 5;
+
+/// Frequency ratio of one oscillator: `2^(coarse/12 + fine/1200)`.
+pub fn pitch_ratio(coarse_semitones: f32, fine_cents: f32) -> f32 {
+    let coarse = if coarse_semitones.is_finite() {
+        coarse_semitones.clamp(-24.0, 24.0)
+    } else {
+        0.0
+    };
+    let fine = if fine_cents.is_finite() {
+        fine_cents.clamp(-100.0, 100.0)
+    } else {
+        0.0
+    };
+    2f32.powf(coarse / 12.0 + fine / 1_200.0)
+}
+
+/// One sample of a classic analog shape. Saw and square are polyBLEP; sine
+/// has no aliases to correct; triangle's harmonics fall fast enough that a
+/// naive fold is honest at musical pitches; noise is the voice's xorshift.
+pub fn analog_wave(wave: usize, phase: f32, increment: f32, noise: &mut Noise) -> f32 {
+    match wave {
+        WAVE_SQUARE => poly_blep_square(phase, increment),
+        WAVE_SINE => (phase * TAU).sin(),
+        WAVE_TRIANGLE => {
+            if phase < 0.5 {
+                4.0 * phase - 1.0
+            } else {
+                3.0 - 4.0 * phase
+            }
+        }
+        WAVE_NOISE => noise.next_bipolar(),
+        _ => poly_blep_saw(phase, increment),
+    }
+}
+
 /// A two-pole state-variable filter, topology-preserving.
 ///
 /// The one-pole this replaced could not resonate, and a lowpass without
@@ -470,6 +513,36 @@ mod tests {
             assert_eq!(poly_blep(phase, increment), 0.0);
             assert_eq!(poly_blep_saw(phase, increment), 2.0 * phase - 1.0);
         }
+    }
+
+    #[test]
+    fn analog_wave_keeps_saw_and_square_and_adds_sine_triangle_noise() {
+        let increment = 440.0 / SR;
+        let mut noise = Noise::new(1);
+        assert_eq!(
+            analog_wave(WAVE_SAW, 0.3, increment, &mut noise),
+            poly_blep_saw(0.3, increment)
+        );
+        assert_eq!(
+            analog_wave(WAVE_SQUARE, 0.3, increment, &mut noise),
+            poly_blep_square(0.3, increment)
+        );
+        assert!((analog_wave(WAVE_SINE, 0.0, increment, &mut noise)).abs() < 1e-6);
+        assert!((analog_wave(WAVE_SINE, 0.25, increment, &mut noise) - 1.0).abs() < 1e-5);
+        assert!((analog_wave(WAVE_TRIANGLE, 0.0, increment, &mut noise) + 1.0).abs() < 1e-6);
+        assert!((analog_wave(WAVE_TRIANGLE, 0.25, increment, &mut noise)).abs() < 1e-6);
+        let a = analog_wave(WAVE_NOISE, 0.0, increment, &mut Noise::new(3));
+        let b = analog_wave(WAVE_NOISE, 0.0, increment, &mut Noise::new(3));
+        assert_eq!(a, b);
+        assert!(a.abs() <= 1.0);
+    }
+
+    #[test]
+    fn pitch_ratio_is_an_octave_at_plus_twelve_and_unity_at_zero() {
+        assert!((pitch_ratio(0.0, 0.0) - 1.0).abs() < 1e-6);
+        assert!((pitch_ratio(12.0, 0.0) - 2.0).abs() < 1e-5);
+        assert!((pitch_ratio(-12.0, 0.0) - 0.5).abs() < 1e-5);
+        assert!(pitch_ratio(0.0, 100.0) > 1.0);
     }
 
     /// The whole point of polyBLEP, measured rather than asserted: a high saw

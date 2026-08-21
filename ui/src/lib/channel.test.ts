@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { channelKind, engineOf, hasSampleWindow, isAudioClipChannel } from './channel';
+import { CHANNEL_KIND_COLORS } from '../theme/tokens';
+import { channelColor, channelKind, engineOf, hasSampleWindow, isAudioClipChannel } from './channel';
+
+const SOURCE = { clap: null, vst3: null } as const;
 
 describe('engineOf', () => {
   it('reads the prefix the engine puts on a wire id', () => {
@@ -52,5 +55,29 @@ describe('channelKind', () => {
     expect(isAudioClipChannel({ sourceId: 'clip:1', engine: 'clip' })).toBe(true);
     expect(isAudioClipChannel({ sourceId: 'oneshot:1', engine: 'sample' })).toBe(false);
     expect(isAudioClipChannel({ sourceId: 'kick', engine: 'synth' })).toBe(false);
+  });
+});
+
+describe('channelColor', () => {
+  it('paints every drum the same colour, independent of which drum it is', () => {
+    const kick = channelColor({ sourceId: 'kick', engine: 'synth', ...SOURCE });
+    const snare = channelColor({ sourceId: 'snare', engine: 'synth', ...SOURCE });
+    expect(kick).toBe(snare);
+    expect(kick).toBe(CHANNEL_KIND_COLORS.drum);
+  });
+
+  it('gives drums, synths, samples, plugins and tones distinct colours', () => {
+    const colours = [
+      channelColor({ sourceId: 'kick', engine: 'synth', ...SOURCE }),
+      channelColor({ sourceId: 'poly-synth', engine: 'synth', ...SOURCE }),
+      channelColor({ sourceId: 'oneshot:1', engine: 'sample', ...SOURCE }),
+      channelColor({ sourceId: 'clap:x', engine: 'clap', ...SOURCE }),
+      channelColor({ sourceId: 'test-tone', engine: 'tone', ...SOURCE }),
+    ];
+    expect(new Set(colours).size).toBe(5);
+  });
+
+  it('falls back to the synth colour when the track is missing', () => {
+    expect(channelColor(undefined)).toBe(CHANNEL_KIND_COLORS.synth);
   });
 });

@@ -44,6 +44,7 @@ use mydaw_rt_core::{
 };
 use parking_lot::Mutex;
 
+use crate::output::{buffer_size_of, choose_host, AudioBackend, OutputRequest};
 use crate::rt::{run_block, AudioIoStats, RtState, RtStateParams};
 
 /// Everything that can go wrong on the non-RT side of audio I/O.
@@ -133,13 +134,22 @@ impl Default for AudioIoConfig {
 }
 
 /// What the device negotiated when the stream came up.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StreamInfo {
     pub device_name: String,
     pub sample_rate: u32,
     pub channels: u16,
-    /// Largest block the callback can process without truncating.
+    /// Largest block the callback can process without truncating. Allocation
+    /// ceiling, not the BUFFER readout.
     pub max_block: usize,
+    /// Frames the device asked for on the last callback, or the requested size
+    /// before the first callback, or `0` if neither is known yet.
+    pub buffer_frames: u32,
+    /// What Settings asked for. `0` = host default.
+    pub requested_buffer_frames: u32,
+    pub backend: AudioBackend,
+    /// Why the opened backend is not what was asked for, or empty.
+    pub note: String,
 }
 
 /// Live stream, plus every non-RT half that belongs to it.
@@ -211,6 +221,8 @@ pub struct AudioIoService {
     /// Shared watch word; cloned into each RT tap.
     spectrum_watch: Mutex<Option<Arc<SpectrumWatch>>>,
     session: Mutex<Option<Session>>,
+    /// Next start: ASIO vs WASAPI, and the buffer we will request.
+    request: Mutex<OutputRequest>,
     /// Mirrors `session.is_some()` so [`Self::is_running`] needs no lock.
     running: AtomicBool,
 }
@@ -233,6 +245,7 @@ impl AudioIoService {
             spectrum: Mutex::new(None),
             spectrum_watch: Mutex::new(None),
             session: Mutex::new(None),
+            request: Mutex::new(OutputRequest::default()),
             running: AtomicBool::new(false),
         }
     }
@@ -283,9 +296,28 @@ impl AudioIoService {
         self.running.load(Ordering::Acquire)
     }
 
+    /// What the next [`Self::start`] will ask for.
+    pub fn output_request(&self) -> OutputRequest {
+        *self.request.lock()
+    }
+
+    /// Replace the next start's host and buffer request. Takes effect on the
+    /// following [`Self::start`]; a live stream is left alone.
+    pub fn set_output_request(&self, request: OutputRequest) {
+        *self.request.lock() = request;
+    }
+
     /// Negotiated device configuration, or `None` while stopped.
+    ///
+    /// `buffer_frames` is the last callback's size once the device has run,
+    /// not [`AudioIoConfig::max_block`].
     pub fn stream_info(&self) -> Option<StreamInfo> {
-        self.session.lock().as_ref().map(|s| s.info.clone())
+        let mut info = self.session.lock().as_ref()?.info.clone();
+        let last = self.stats.last_callback_frames();
+        if last > 0 {
+            info.buffer_frames = last;
+        }
+        Some(info)
     }
 
     /// Device sample rate, or `None` while stopped.
@@ -463,10 +495,10 @@ impl AudioIoService {
         self.session.lock().as_ref().map(|s| s.transport.bpm())
     }
 
-    /// Open the default output device and start the audio callback.
+    /// Open the output device and start the audio callback.
     ///
-    /// The device's default configuration is used as-is: negotiating buffer sizes
-    /// and rates is a settings-panel feature, and Phase 0 has no settings panel.
+    /// Host and buffer come from [`Self::set_output_request`]. ASIO falls back
+    /// to WASAPI with a note rather than leaving the app silent.
     ///
     /// # Errors
     /// [`AudioIoError::AlreadyRunning`] if a stream is live,
@@ -479,10 +511,58 @@ impl AudioIoService {
             return Err(AudioIoError::AlreadyRunning);
         }
 
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or(AudioIoError::NoOutputDevice)?;
+        let request = *self.request.lock();
+        let choice = choose_host(request.prefer_asio);
+        self.stats.reset_callback_frames();
+
+        match self.open_session(&choice.host, request) {
+            Ok(mut session) => {
+                session.info.backend = choice.backend;
+                if session.info.note.is_empty() {
+                    session.info.note = choice.note;
+                }
+                let info = session.info.clone();
+                log::info!(
+                    "audio output started: {} ({}) @ {} Hz, {} ch, buffer {} (max {})",
+                    info.device_name,
+                    info.backend.as_str(),
+                    info.sample_rate,
+                    info.channels,
+                    info.buffer_frames,
+                    info.max_block
+                );
+                *guard = Some(session);
+                self.running.store(true, Ordering::Release);
+                Ok(info)
+            }
+            Err(err) if request.prefer_asio && choice.backend == AudioBackend::Asio => {
+                log::warn!("ASIO stream failed ({err}); falling back to WASAPI");
+                let wasapi = choose_host(false);
+                let mut session = self.open_session(&wasapi.host, request)?;
+                session.info.backend = AudioBackend::Wasapi;
+                session.info.note =
+                    format!("ASIO opened a driver but the stream failed ({err}). Using WASAPI.");
+                let info = session.info.clone();
+                log::info!(
+                    "audio output started: {} (wasapi, after ASIO) @ {} Hz, {} ch",
+                    info.device_name,
+                    info.sample_rate,
+                    info.channels
+                );
+                *guard = Some(session);
+                self.running.store(true, Ordering::Release);
+                Ok(info)
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn open_session(
+        &self,
+        host: &cpal::Host,
+        request: OutputRequest,
+    ) -> Result<Session, AudioIoError> {
+        let device = output_device(host)?;
         let supported = device.default_output_config()?;
 
         if supported.sample_format() != SampleFormat::F32 {
@@ -491,7 +571,8 @@ impl AudioIoService {
             ));
         }
 
-        let config: StreamConfig = supported.config();
+        let mut config: StreamConfig = supported.config();
+        config.buffer_size = buffer_size_of(request.buffer_frames);
         let sample_rate = config.sample_rate;
         let channels = config.channels;
         let device_name = device
@@ -499,7 +580,6 @@ impl AudioIoService {
             .map(|d| d.name().to_owned())
             .unwrap_or_else(|_| "<unknown output device>".to_owned());
 
-        // --- build both sides of the wall, on this (non-RT) thread ---
         let transport = Arc::new(TransportClock::new(sample_rate as f64));
         let (graph_handle, graph_slot) =
             graph_channel(self.config.graph_queue_capacity, self.gc.handle());
@@ -542,8 +622,6 @@ impl AudioIoService {
             stats: Arc::clone(&self.stats),
         });
 
-        // Everything RT now lives in `carrier`, which moves into the closure and
-        // is never touched from this side again.
         let mut carrier = RtStateCarrier {
             state,
             meters_returned: meters_return_tx,
@@ -553,52 +631,68 @@ impl AudioIoService {
         let out_channels = channels as usize;
         let error_stats = Arc::clone(&self.stats);
 
-        let stream = device.build_output_stream::<f32, _, _>(
+        let stream = match device.build_output_stream::<f32, _, _>(
             config,
             move |output: &mut [f32], _info| {
-                // The entire callback body. Promotion is a no-op after block one.
                 let frames = output.len().checked_div(out_channels).unwrap_or(0);
                 carrier.state.ensure_realtime(frames);
                 run_block(&mut carrier.state, output);
             },
             move |_err| {
-                // Audio thread: count, do not log. `stats().stream_errors()` is
-                // how the app finds out.
                 error_stats.record_stream_error();
             },
             None,
-        )?;
-        stream.play()?;
+        ) {
+            Ok(stream) => stream,
+            Err(err) => {
+                recover_parked(
+                    &self.meters,
+                    &self.debug_tap,
+                    &self.spectrum,
+                    meters_returned,
+                    debug_tap_returned,
+                    spectrum_returned,
+                );
+                return Err(err.into());
+            }
+        };
+        if let Err(err) = stream.play() {
+            drop(stream);
+            recover_parked(
+                &self.meters,
+                &self.debug_tap,
+                &self.spectrum,
+                meters_returned,
+                debug_tap_returned,
+                spectrum_returned,
+            );
+            return Err(err.into());
+        }
 
+        let requested = request.buffer_frames.unwrap_or(0);
         let info = StreamInfo {
             device_name,
             sample_rate,
             channels,
             max_block: self.config.max_block,
+            buffer_frames: requested,
+            requested_buffer_frames: requested,
+            backend: AudioBackend::Wasapi,
+            note: String::new(),
         };
 
-        log::info!(
-            "audio output started: {} @ {} Hz, {} ch",
-            info.device_name,
-            info.sample_rate,
-            info.channels
-        );
-
-        *guard = Some(Session {
+        Ok(Session {
             stream,
             transport,
             graph: graph_handle,
             commands: command_tx,
             notes: note_tx,
             song: song_handle,
-            info: info.clone(),
+            info,
             meters_returned,
             debug_tap_returned,
             spectrum_returned,
-        });
-        self.running.store(true, Ordering::Release);
-
-        Ok(info)
+        })
     }
 
     /// Stop the stream and release the device. Idempotent.
@@ -645,6 +739,36 @@ impl AudioIoService {
         }
 
         log::info!("audio output stopped: {}", session.info.device_name);
+    }
+}
+
+fn output_device(host: &cpal::Host) -> Result<cpal::Device, AudioIoError> {
+    if let Some(device) = host.default_output_device() {
+        return Ok(device);
+    }
+    host.output_devices()
+        .ok()
+        .and_then(|mut devices| devices.next())
+        .ok_or(AudioIoError::NoOutputDevice)
+}
+
+fn recover_parked(
+    meters: &Mutex<Option<MeterProducer>>,
+    debug_tap: &Mutex<Option<TapRtSide>>,
+    spectrum: &Mutex<Option<SpectrumProducer>>,
+    meters_returned: mpsc::Receiver<MeterProducer>,
+    debug_tap_returned: mpsc::Receiver<TapRtSide>,
+    spectrum_returned: mpsc::Receiver<SpectrumProducer>,
+) {
+    const WAIT: Duration = Duration::from_millis(250);
+    if let Ok(producer) = meters_returned.recv_timeout(WAIT) {
+        *meters.lock() = Some(producer);
+    }
+    if let Ok(tap) = debug_tap_returned.recv_timeout(WAIT) {
+        *debug_tap.lock() = Some(tap);
+    }
+    if let Ok(producer) = spectrum_returned.recv_timeout(WAIT) {
+        *spectrum.lock() = Some(producer);
     }
 }
 
@@ -744,5 +868,25 @@ mod tests {
         assert!(config.command_queue_capacity >= 64);
         assert_eq!(config.song_queue_capacity, SONG_QUEUE_CAPACITY);
         assert_eq!(config.note_queue_capacity, DEFAULT_NOTE_CAPACITY);
+    }
+
+    #[test]
+    fn output_request_defaults_to_wasapi_and_the_device_buffer() {
+        let service = AudioIoService::default();
+        let request = service.output_request();
+        assert!(!request.prefer_asio);
+        assert_eq!(request.buffer_frames, None);
+    }
+
+    #[test]
+    fn output_request_can_be_set_while_stopped() {
+        let service = AudioIoService::default();
+        service.set_output_request(OutputRequest {
+            prefer_asio: true,
+            buffer_frames: Some(256),
+        });
+        let request = service.output_request();
+        assert!(request.prefer_asio);
+        assert_eq!(request.buffer_frames, Some(256));
     }
 }

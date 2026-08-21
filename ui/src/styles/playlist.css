@@ -1,15 +1,42 @@
 /* The arrangement: a sticky ruler, sticky lane headers, and clips. */
 
+/*
+ * Same stack as the channel rack: the lanes are the scroller, the add-lane
+ * button sits under them, leftover panel is below the button. `overflow: auto`
+ * on the lanes box puts both scrollbars on that box's bottom/right edge —
+ * directly above the add row, never under it. `flex-shrink: 1` + `min-height: 0`
+ * is what lets a tall arrangement compress instead of clipping the button.
+ */
 .wv-pl {
   position: relative;
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--sunk);
+}
+
+/*
+ * Hug the lanes so the horizontal bar sits under the last row, not at the
+ * bottom of the panel — same stack as `.wv-rack__rows`. The inner must not
+ * grow (`flex: none`); leftover panel stays below the add button.
+ */
+.wv-pl__scroll {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
-  background: var(--sunk);
 }
 
 .wv-pl__inner {
   position: relative;
+  flex: none;
+  min-width: max-content;
 }
 
 .wv-pl__ruler {
@@ -28,10 +55,10 @@
   z-index: 7;
   display: flex;
   flex: none;
-  gap: 6px;
-  align-items: center;
+  gap: 8px;
+  align-items: baseline;
   overflow: hidden;
-  padding-left: 10px;
+  padding: 0 12px;
   white-space: nowrap;
   background: var(--panel);
   border-right: 1px solid var(--line2);
@@ -43,10 +70,10 @@
   color: var(--acc);
 }
 
-.wv-pl__corner svg {
-  flex: none;
-  width: 12px;
-  height: 12px;
+.wv-pl__corner-bar {
+  font: 600 10px 'Geist Mono Variable';
+  color: var(--txt2);
+  letter-spacing: 0.06em;
 }
 
 .wv-pl__ruler-track {
@@ -105,7 +132,13 @@
 
 .wv-pl__row {
   display: flex;
+  flex: none;
   align-items: stretch;
+  min-width: max-content;
+}
+
+.wv-pl__row.is-silenced {
+  opacity: 0.45;
 }
 
 .wv-pl__head {
@@ -114,20 +147,35 @@
   z-index: 4;
   display: flex;
   flex: none;
-  gap: 8px;
-  align-items: center;
-  padding: 0 9px 0 10px;
+  flex-direction: column;
+  gap: 6px;
+  justify-content: center;
+  padding: 8px 10px 10px;
   background: var(--panel);
   border-right: 1px solid var(--line2);
   border-bottom: 1px solid var(--line);
+}
+
+.wv-pl__head-top {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.wv-pl__num {
+  flex: none;
+  width: 1.1em;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--faint);
 }
 
 .wv-pl__name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  font: 500 11.5px 'Geist Variable';
-  color: var(--txt2);
+  font: 500 12px 'Geist Variable';
+  color: var(--txt);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -140,14 +188,21 @@
   border: 0;
   border-bottom: 1px solid var(--acc);
   background: transparent;
-  font: 500 11.5px 'Geist Variable';
+  font: 500 12px 'Geist Variable';
   outline: none;
 }
 
-.wv-pl__count {
-  flex: none;
-  font: 400 8.5px 'Geist Mono Variable';
-  color: var(--faint);
+.wv-pl__head-btns {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding-left: calc(1.1em + 8px);
+}
+
+.wv-pl__head .wv-pill {
+  width: 18px;
+  height: 16px;
+  font-size: 9px;
 }
 
 .wv-pl__del {
@@ -159,6 +214,12 @@
   height: 18px;
   border-radius: 4px;
   color: var(--faint);
+  opacity: 0;
+}
+
+.wv-pl__head:hover .wv-pl__del,
+.wv-pl__del:focus-visible {
+  opacity: 1;
 }
 
 .wv-pl__del:hover:not(:disabled) {
@@ -169,7 +230,7 @@
 .wv-pl__lane {
   position: relative;
   flex: none;
-  background-color: var(--lane);
+  background-color: var(--sunk);
   background-image:
     repeating-linear-gradient(90deg, var(--grid2) 0 1px, transparent 1px 100%),
     repeating-linear-gradient(90deg, var(--grid1) 0 1px, transparent 1px 100%);
@@ -177,37 +238,30 @@
   border-bottom: 1px solid var(--line);
 }
 
-.wv-pl__lane.is-muted {
-  opacity: 0.45;
-}
-
 .wv-pl__lane.is-painting {
   cursor: copy;
 }
 
 .wv-pl__add {
-  position: sticky;
-  left: 0;
-  z-index: 4;
   display: flex;
   flex: none;
+  gap: 7px;
   align-items: center;
   justify-content: center;
-  height: 38px;
-  background: var(--panel);
-  border-right: 1px solid var(--line2);
-  font: 500 10.5px 'Geist Variable';
-  color: var(--dim);
+  width: 100%;
+  height: 34px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--faint);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
 }
 
 .wv-pl__add:hover:not(:disabled) {
+  border-color: var(--acc);
+  background: var(--accSoft);
   color: var(--acc);
-}
-
-.wv-pl__addfill {
-  flex: none;
-  height: 38px;
-  background: var(--sunk);
 }
 
 /*
@@ -250,10 +304,10 @@
 
 .wv-clip {
   position: absolute;
-  top: 4px;
-  bottom: 4px;
+  top: 6px;
+  bottom: 6px;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: 8px;
   cursor: grab;
 }
 
@@ -261,12 +315,20 @@
   z-index: 2;
 }
 
+.wv-pl__marquee {
+  position: fixed;
+  z-index: 30;
+  pointer-events: none;
+  border: 1px solid var(--acc);
+  background: color-mix(in srgb, var(--acc) 16%, transparent);
+}
+
 .wv-clip__label {
   position: absolute;
-  top: 3px;
-  left: 6px;
+  top: 4px;
+  left: 7px;
   z-index: 2;
-  font: 500 9px 'Geist Mono Variable';
+  font: 500 10px 'Geist Variable';
   color: var(--txt);
   pointer-events: none;
 }
@@ -275,11 +337,11 @@
    shorter clip crops the wave (via .wv-clip overflow) instead of shrinking it. */
 .wv-clip__wave {
   position: absolute;
-  top: 14px;
-  bottom: 2px;
-  height: calc(100% - 16px);
-  color: var(--txt2);
-  opacity: 0.85;
+  top: 16px;
+  bottom: 3px;
+  height: calc(100% - 19px);
+  color: var(--txt);
+  opacity: 0.92;
   pointer-events: none;
 }
 
@@ -288,9 +350,9 @@
    pattern's own duration; extra copies tile when the clip is longer. */
 .wv-clip__art {
   position: absolute;
-  top: 15px;
+  top: 16px;
   right: 0;
-  bottom: 3px;
+  bottom: 4px;
   left: 0;
   pointer-events: none;
 }
@@ -304,7 +366,7 @@
 .wv-clip__mark {
   position: absolute;
   min-width: 2px;
-  height: 2px;
+  height: 4px;
   border-radius: 1px;
 }
 

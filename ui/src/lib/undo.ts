@@ -11,7 +11,7 @@
  * | --- | --- |
  * | steps, notes, every note operation | mixer: faders, pan, mute, solo, sends |
  * | clips: paint, move, resize, delete | insert chains and their parameters |
- * | lane mute and rename | patterns and lanes being created or destroyed |
+ * | lane mute, solo and rename | patterns and lanes being created or destroyed |
  *
  * The uncovered structural operations do not merely go unrecorded -- they
  * **clear** the stack, because an entry that names a pattern id which no longer
@@ -184,7 +184,7 @@ function clipKey(clip: ClipDto): string {
  *
  * Four passes, in an order that cannot lose work: surplus clips go first (so a
  * lane about to be removed is already empty and the removal is not silently
- * taking clips with it), then the lane count, then lane names and mutes, then
+ * taking clips with it), then the lane count, then lane names, mutes and solos, then
  * the clips that are missing. An edit that moved one clip therefore costs two
  * commands, not a rebuild.
  */
@@ -222,13 +222,14 @@ export async function restorePlaylist(
     lanes += 1;
   }
 
-  // Pass 3: names and mutes, which are cheap and idempotent.
+  // Pass 3: names, mutes and solos, which are cheap and idempotent.
   const after = (await backend.getPattern()).playlist;
   for (const [index, want] of target.tracks.entries()) {
     const have = after.tracks[index];
     if (!have) continue;
     if (have.name !== want.name) await backend.renamePlaylistTrack(index, want.name);
     if (have.muted !== want.muted) await backend.setPlaylistTrackMute(index, want.muted);
+    if (have.soloed !== want.soloed) await backend.setPlaylistTrackSolo(index, want.soloed);
   }
 
   // Pass 4: whatever the target has that the engine now does not.

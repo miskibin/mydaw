@@ -21,7 +21,7 @@
 //! the thread and disables denormals. It allocates and calls into the OS, and it
 //! runs exactly once, on the first callback, before any audio is produced.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use mydaw_ipc_bridge::{MeterFrame, MeterProducer};
@@ -47,6 +47,8 @@ pub struct AudioIoStats {
     note_events_dropped: AtomicU64,
     stream_errors: AtomicU64,
     priority_promotion_failures: AtomicU64,
+    /// Frames the device asked for on the last callback. 0 = no callback yet.
+    last_callback_frames: AtomicU32,
 }
 
 impl AudioIoStats {
@@ -97,9 +99,24 @@ impl AudioIoStats {
         self.priority_promotion_failures.load(Ordering::Relaxed)
     }
 
+    /// Frames the last callback was handed. 0 until the device has run once.
+    ///
+    /// This is the BUFFER / LATENCY readout, not [`crate::AudioIoConfig::max_block`].
+    pub fn last_callback_frames(&self) -> u32 {
+        self.last_callback_frames.load(Ordering::Relaxed)
+    }
+
     /// Record a stream error. Called from cpal's error callback (audio thread).
     pub(crate) fn record_stream_error(&self) {
         self.stream_errors.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_callback_frames(&self, frames: u32) {
+        self.last_callback_frames.store(frames, Ordering::Relaxed);
+    }
+
+    pub(crate) fn reset_callback_frames(&self) {
+        self.last_callback_frames.store(0, Ordering::Relaxed);
     }
 }
 
@@ -321,6 +338,9 @@ pub fn run_block(state: &mut RtState, output: &mut [f32]) {
     }
 
     let requested = output.len() / out_channels;
+    state
+        .stats
+        .record_callback_frames(u32::try_from(requested).unwrap_or(u32::MAX));
     state.graph.poll_swap();
     state.song.poll_swap();
     drain_commands(&mut state.commands, &state.transport);
@@ -580,6 +600,11 @@ mod tests {
         run_block(&mut rig.state, &mut out);
 
         assert!(out.iter().all(|s| *s == 0.0), "no graph means silence");
+        assert_eq!(
+            rig.stats.last_callback_frames(),
+            128,
+            "the status bar must report the device's callback, not the engine ceiling"
+        );
         let frame = rig.throttle.poll(Instant::now()).expect("frame expected");
         assert_eq!(frame.peak_l, 0.0);
         assert_eq!(frame.rms_l, 0.0);

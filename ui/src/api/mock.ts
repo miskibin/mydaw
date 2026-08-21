@@ -40,15 +40,21 @@ import type {
   ParamValueDto,
   PatternDto,
   PatternSetDto,
+  PitchAnalysis,
   PlayMode,
   PlaylistDto,
   PlaylistTrackDto,
   ProjectInfo,
+  RootMode,
   SendDto,
   SequencerState,
   SourceDto,
   SpectrumDto,
   StreamInfo,
+  MidiPortDto,
+  MidiStatusDto,
+  PreviewSettings,
+  AudioOutput,
   TrackDto,
   UiSnapshot,
   Unsubscribe,
@@ -59,6 +65,8 @@ import type {
   SourcePreviewDto,
 } from './types';
 import { engineOf } from '../lib/channel';
+import { snapAudioBufferFrames } from '../lib/audioOutput';
+import { clampPreviewVolumePercent } from '../lib/previewVolume';
 
 // ---------------------------------------------------------------------------
 // Engine constants, mirrored
@@ -89,8 +97,38 @@ const MAX_BPM = 999;
 const SAMPLE_RATE = 48_000;
 const FRAME_HZ = 30;
 
-/** The General MIDI keys the starter rack's channels trigger. */
-const DEFAULT_ROW_KEYS = [36, 38, 42, 46, 60];
+/** One-shot drums and the synth all fire C4, so a hit plays at recorded pitch. */
+const DEFAULT_ROW_KEYS = [60, 60, 60, 60, 60];
+const FACTORY_DRUM_IDS = ['kick', 'snare', 'clap', 'hat-closed', 'hat-open'] as const;
+
+function isFactoryDrum(id: string): boolean {
+  return (FACTORY_DRUM_IDS as readonly string[]).includes(id);
+}
+
+function factoryDrumPath(id: string): string {
+  return `C:\\WAVE Studio\\factory-drums\\${id}.wav`;
+}
+
+function factoryLabelFor(sample: AudioSourceDto): string | undefined {
+  const normalised = sample.path.replace(/\\/g, '/');
+  const drumId = FACTORY_DRUM_IDS.find((id) => normalised.endsWith(`/${id}.wav`));
+  return drumId ? INTERNAL_SOURCES.find((entry) => entry.id === drumId)?.label : undefined;
+}
+
+function factoryDrumAudio(id: number, drumId: string): AudioSourceDto {
+  const seconds = 0.4;
+  return {
+    id,
+    path: factoryDrumPath(drumId),
+    name: `${drumId}.wav`,
+    frames: Math.round(seconds * 48_000),
+    sampleRate: 48_000,
+    durationSeconds: seconds,
+    durationTicks: Math.ceil((seconds * DEFAULT_BPM * PPQ) / 60),
+    missing: false,
+    bytes: Math.round(seconds * 48_000 * 8),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // The effect catalogue, mirrored from `plugins/effects`
@@ -306,7 +344,7 @@ const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
   {
     id: 'poly-synth',
     label: 'Poly Synth',
-    description: 'Eight-voice saw + sub synth, played from the keyboard',
+    description: 'Eight-voice synth: three analog oscillators into a filter',
     kind: 'internal',
     vendor: '',
     bundlePath: null,
@@ -484,6 +522,13 @@ const MOCK_DRUMS = [
   'stick-m.wav',
   'tom-m.wav',
 ] as const;
+const MOCK_LOOP_FILES = [
+  'KSHMR_Kick_Loop_124.wav',
+  'No_Kick_Drum_Loop_123bpm.wav',
+  'WarmSynthPad120BPM.flac',
+] as const;
+const MOCK_ONE_SHOTS = ['PM_GB_Crash_One_Shot_123_BPM.wav', 'VFP_one_shot_snare_96.wav'] as const;
+const MOCK_SONGSTARTERS = ['KSHMR_HH_Chill_SS_Better.wav', 'KSHMR_HH_Chill_SS_Dust.wav'] as const;
 const MOCK_FOLDERS_KEY = 'mydaw.mock.libraryFolders';
 
 function loadMockFolders(): LibraryRootDto[] {
@@ -514,9 +559,17 @@ function saveMockFolders(folders: LibraryRootDto[]): void {
  * at it.
  */
 const SYNTH_PARAMS: readonly ParamDefDto[] = [
-  { id: 'wave', name: 'Wave', unit: '', min: 0, max: 1, defaultValue: 0, curve: 'linear', step: 1, smoothingMs: 0 },
-  { id: 'detune', name: 'Detune', unit: 'ct', min: 0, max: 50, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 10 },
-  { id: 'sub', name: 'Sub', unit: '', min: 0, max: 1, defaultValue: 0.5, curve: 'linear', step: null, smoothingMs: 10 },
+  { id: 'wave', name: 'Wave', unit: '', min: 0, max: 4, defaultValue: 0, curve: 'linear', step: 1, smoothingMs: 0 },
+  { id: 'osc1Coarse', name: 'Coarse', unit: 'st', min: -24, max: 24, defaultValue: 0, curve: 'linear', step: 1, smoothingMs: 10 },
+  { id: 'osc1Fine', name: 'Fine', unit: 'ct', min: -100, max: 100, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 10 },
+  { id: 'osc2Wave', name: 'Wave', unit: '', min: 0, max: 4, defaultValue: 0, curve: 'linear', step: 1, smoothingMs: 0 },
+  { id: 'osc2Coarse', name: 'Coarse', unit: 'st', min: -24, max: 24, defaultValue: 0, curve: 'linear', step: 1, smoothingMs: 10 },
+  { id: 'osc2Fine', name: 'Fine', unit: 'ct', min: -100, max: 100, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 10 },
+  { id: 'osc2Mix', name: 'Mix', unit: '', min: 0, max: 1, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 10 },
+  { id: 'osc3Wave', name: 'Wave', unit: '', min: 0, max: 4, defaultValue: 2, curve: 'linear', step: 1, smoothingMs: 0 },
+  { id: 'osc3Coarse', name: 'Coarse', unit: 'st', min: -24, max: 24, defaultValue: -12, curve: 'linear', step: 1, smoothingMs: 10 },
+  { id: 'osc3Fine', name: 'Fine', unit: 'ct', min: -100, max: 100, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 10 },
+  { id: 'osc3Mix', name: 'Mix', unit: '', min: 0, max: 1, defaultValue: 0.5, curve: 'linear', step: null, smoothingMs: 10 },
   { id: 'cutoff', name: 'Cutoff', unit: 'Hz', min: 60, max: 18_000, defaultValue: 3_000, curve: 'log', step: null, smoothingMs: 10 },
   { id: 'resonance', name: 'Res', unit: '', min: 0.5, max: 12, defaultValue: 0.8, curve: 'log', step: null, smoothingMs: 10 },
   { id: 'envAmount', name: 'Env', unit: '%', min: -100, max: 100, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 10 },
@@ -538,6 +591,10 @@ const SAMPLE_PLAY = {
   fadeOutMs: 0,
   sampleStartFrames: 0,
   sampleEndFrames: 0,
+  rootKey: 60,
+  rootFineCents: 0,
+  rootMode: 'default' as RootMode,
+  detectedPitch: null,
 } as const;
 
 /** The instrument-knob half of a strip that has no instrument knobs. */
@@ -548,6 +605,30 @@ function starterTracks(): TrackDto[] {
   const wanted = ['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'sampler:salamander-piano'];
   return wanted.map((sourceId, index) => {
     const source = INTERNAL_SOURCES.find((entry) => entry.id === sourceId)!;
+    if (isFactoryDrum(sourceId)) {
+      const sample = factoryDrumAudio(index + 1, sourceId);
+      return {
+        index,
+        id: index,
+        name: source.label,
+        sourceId: `oneshot:${sample.id}`,
+        sourceLabel: source.label,
+        engine: 'sample',
+        gainDb: 0,
+        pan: 0,
+        muted: false,
+        soloed: false,
+        silenced: false,
+        selected: index === 0,
+        clap: null,
+        vst3: null,
+        missing: null,
+        inserts: [],
+        ...SAMPLE_PLAY,
+        ...noSourceParams(),
+        audioSourceId: sample.id,
+      };
+    }
     return {
       index,
       id: index,
@@ -563,9 +644,6 @@ function starterTracks(): TrackDto[] {
       selected: index === 0,
       clap: null,
       vst3: null,
-      // Never set by the mock: every plugin it knows about is a fixture, and a
-      // fixture cannot be uninstalled between a save and a load. The badge is
-      // deliberately unreachable here rather than faked.
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
@@ -677,9 +755,12 @@ export class MockBackend implements Backend {
     id: index + 1,
     name: `Track ${index + 1}`,
     muted: false,
+    soloed: false,
   }));
   private clips: ClipDto[] = [];
-  private audioSources: AudioSourceDto[] = [];
+  private audioSources: AudioSourceDto[] = FACTORY_DRUM_IDS.map((id, index) =>
+    factoryDrumAudio(index + 1, id),
+  );
 
   private nextTrackId = 5;
   private nextBusId = 0;
@@ -688,7 +769,7 @@ export class MockBackend implements Backend {
   private nextPatternId = 2;
   private nextLaneId = 5;
   private nextClipId = 1;
-  private nextAudioId = 1;
+  private nextAudioId = 6;
   private nextInstance = 1;
   private inventedAudio = 0;
   private extraFolders: LibraryRootDto[] = loadMockFolders();
@@ -715,6 +796,20 @@ export class MockBackend implements Backend {
       error: null,
     },
   ];
+
+  private midiPorts: MidiPortDto[] = [
+    { name: 'Mock MIDI Keyboard', connected: false, enabled: false, status: 'available' },
+    { name: 'loopMIDI Port', connected: false, enabled: false, status: 'available' },
+  ];
+  private midiActivityAtMs = 0;
+  private previewVolumePercent = 80;
+  private preferAsio = false;
+  private audioBufferFrames = 256;
+  /** Last Sounds / Audio audition, for tests. Cleared by transport stop. */
+  lastPreview: string | null = null;
+  lastNoteOn: { key: number; velocity: number } | null = null;
+  private spectrumWatch: { target: InsertTarget; index: number | null } | null = null;
+  private noteUntilMs = 0;
 
   async getUiSnapshot(): Promise<UiSnapshot> {
     return structuredClone(MOCK_SNAPSHOT);
@@ -819,6 +914,8 @@ export class MockBackend implements Backend {
 
   async transportStop(): Promise<void> {
     this.playing = false;
+    this.lastPreview = null;
+    this.noteUntilMs = 0;
   }
 
   async transportSeek(samplePos: number): Promise<void> {
@@ -839,10 +936,13 @@ export class MockBackend implements Backend {
   }
 
   async noteOn(key: number, velocity: number): Promise<void> {
+    this.lastNoteOn = { key, velocity };
+    this.noteUntilMs = Number.POSITIVE_INFINITY;
     console.info(`[mock] note_on key=${key} velocity=${velocity.toFixed(2)}`);
   }
 
   async noteOff(key: number): Promise<void> {
+    this.noteUntilMs = performance.now() + 500;
     console.info(`[mock] note_off key=${key}`);
   }
 
@@ -886,9 +986,26 @@ export class MockBackend implements Backend {
   }
 
   async setTrackSource(track: number, source: string): Promise<MixerState> {
+    if (isFactoryDrum(source)) {
+      const sample = this.ensureFactoryDrum(source);
+      return this.setTrackSource(track, `oneshot:${sample.id}`);
+    }
+    const sampleId = /^oneshot:(\d+)$/.exec(source)?.[1];
+    const sample = sampleId
+      ? this.audioSources.find((entry) => entry.id === Number(sampleId))
+      : undefined;
     const wanted =
       INTERNAL_SOURCES.find((entry) => entry.id === source) ??
-      this.fileSamplers.find((entry) => entry.id === source);
+      this.fileSamplers.find((entry) => entry.id === source) ??
+      (sample
+        ? {
+            id: source,
+            label: factoryLabelFor(sample) ?? sample.name,
+            description: sample.path,
+            kind: 'internal' as const,
+            takesNotes: true,
+          }
+        : undefined);
     if (!wanted) throw new Error(`unknown source '${source}'`);
     const def = this.track(track);
     def.sourceId = wanted.id;
@@ -897,7 +1014,7 @@ export class MockBackend implements Backend {
     def.name = wanted.label;
     def.clap = null;
     def.vst3 = null;
-    def.audioSourceId = null;
+    def.audioSourceId = sample?.id ?? null;
     // A change of instrument is a change of knobs: the old ones belonged to the
     // old sound (see `TrackDef::set_source` in the engine).
     def.sourceParamDefs = sourceParamDefs(wanted.id);
@@ -1092,6 +1209,83 @@ export class MockBackend implements Backend {
     return this.mixerState();
   }
 
+  async analyzeTrackPitch(track: number): Promise<PitchAnalysis> {
+    const entry = this.track(track);
+    if (entry.engine !== 'clip' && entry.engine !== 'sample') {
+      throw new Error(`track ${track} is not an audio-file channel`);
+    }
+    const source = this.audioSources.find((item) => item.id === entry.audioSourceId);
+    const path = source?.path ?? '';
+    const name = path.split(/[\\/]/).pop() ?? path;
+    if (/noise/i.test(name)) {
+      return { kind: 'noStablePitch', reason: 'unvoiced' };
+    }
+    if (/tone-A4/i.test(name) || /(^|[^A-Za-z0-9])A4([^A-Za-z0-9]|$)/.test(name.replace(/\.[^.]+$/, ''))) {
+      const detected = {
+        kind: 'detected' as const,
+        midiNote: 69,
+        cents: 0,
+        confidence: 1,
+        voicedCoverage: 1,
+        source: /tone-A4/i.test(name) ? ('analysis' as const) : ('filename' as const),
+      };
+      entry.detectedPitch = detected;
+      return detected;
+    }
+    const token = name.match(/(?:^|[^A-Za-z0-9])([A-Ga-g])([#b]?)_?([0-9])(?:$|[^A-Za-z0-9])/);
+    if (token) {
+      const letter = token[1]!.toUpperCase();
+      const accidental = token[2] === '#' ? 1 : token[2] === 'b' || token[2] === 'B' ? -1 : 0;
+      const octave = Number(token[3]);
+      const natural = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[letter] ?? 0;
+      const midi = (octave + 1) * 12 + natural + accidental;
+      if (midi >= 0 && midi <= 127) {
+        const detected = {
+          kind: 'detected' as const,
+          midiNote: midi,
+          cents: 0,
+          confidence: 1,
+          voicedCoverage: 1,
+          source: 'filename' as const,
+        };
+        entry.detectedPitch = detected;
+        return detected;
+      }
+    }
+    return { kind: 'noStablePitch', reason: 'unvoiced' };
+  }
+
+  async setTrackSampleRoot(
+    track: number,
+    key: number,
+    fineCents: number,
+    mode: RootMode,
+  ): Promise<MixerState> {
+    const entry = this.track(track);
+    if (entry.engine !== 'clip' && entry.engine !== 'sample') {
+      throw new Error(`track ${track} is not an audio-file channel`);
+    }
+    if (!Number.isInteger(key) || key < 0 || key > 127) {
+      throw new Error(`root key ${key} is not a MIDI note 0..=127`);
+    }
+    if (!Number.isFinite(fineCents)) {
+      throw new Error(`root fine cents ${fineCents} is not a finite number between -50 and 50`);
+    }
+    entry.rootKey = key;
+    entry.rootFineCents = Math.min(50, Math.max(-50, fineCents));
+    entry.rootMode = mode;
+    if (mode === 'detected') {
+      entry.detectedPitch = {
+        midiNote: key,
+        cents: entry.rootFineCents,
+        confidence: entry.detectedPitch?.confidence ?? 1,
+        voicedCoverage: entry.detectedPitch?.voicedCoverage ?? 1,
+        source: entry.detectedPitch?.source ?? 'analysis',
+      };
+    }
+    return this.mixerState();
+  }
+
   async setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {
     const sane = (ms: number) => (Number.isFinite(ms) ? Math.min(10_000, Math.max(0, ms)) : 0);
     const entry = this.track(track);
@@ -1136,6 +1330,11 @@ export class MockBackend implements Backend {
     if (this.tracks.length >= MAX_TRACKS) {
       throw new Error(`a project may have at most ${MAX_TRACKS} tracks`);
     }
+    if (isFactoryDrum(source)) {
+      const sample = this.ensureFactoryDrum(source);
+      const wanted = INTERNAL_SOURCES.find((entry) => entry.id === source)!;
+      return this.pushOneshotTrack(sample, name ?? wanted.label);
+    }
     const wanted = INTERNAL_SOURCES.find((entry) => entry.id === source);
     if (!wanted) throw new Error(`unknown source '${source}'`);
     const index = this.tracks.length;
@@ -1173,6 +1372,59 @@ export class MockBackend implements Backend {
           mode: 'steps',
           steps: {
             key: DEFAULT_ROW_KEYS[index] ?? 60,
+            label: '',
+            steps: Array.from({ length: pattern.steps }, () => ({
+              on: false,
+              velocity: STEP_VELOCITY,
+            })),
+          },
+          notes: [],
+        });
+      }
+    }
+    return this.mixerState();
+  }
+
+  private ensureFactoryDrum(drumId: string): AudioSourceDto {
+    const path = factoryDrumPath(drumId);
+    const existing = this.audioSources.find((entry) => entry.path === path);
+    if (existing) return existing;
+    const sample = factoryDrumAudio(this.nextAudioId++, drumId);
+    this.audioSources.push(sample);
+    return sample;
+  }
+
+  private pushOneshotTrack(sample: AudioSourceDto, name: string): MixerState {
+    const index = this.tracks.length;
+    const id = `oneshot:${sample.id}`;
+    this.tracks.push({
+      index,
+      id: this.nextTrackId++,
+      name,
+      sourceId: id,
+      sourceLabel: name,
+      engine: 'sample',
+      gainDb: 0,
+      pan: 0,
+      muted: false,
+      soloed: false,
+      silenced: false,
+      selected: false,
+      clap: null,
+      vst3: null,
+      missing: null,
+      inserts: [],
+      ...SAMPLE_PLAY,
+      ...noSourceParams(),
+      audioSourceId: sample.id,
+    });
+    for (const pattern of this.patterns) {
+      if (!pattern.channels.some((clip) => clip.channel === index)) {
+        pattern.channels.push({
+          channel: index,
+          mode: 'steps',
+          steps: {
+            key: 60,
             label: '',
             steps: Array.from({ length: pattern.steps }, () => ({
               on: false,
@@ -1587,10 +1839,8 @@ export class MockBackend implements Backend {
     }));
   }
 
-  private spectrumWatch: { target: InsertTarget; index: number } | null = null;
-
   async watchSpectrum(target: InsertTarget | null, index: number | null): Promise<void> {
-    this.spectrumWatch = target && index !== null ? { target, index } : null;
+    this.spectrumWatch = target ? { target, index } : null;
   }
 
   async getInsertSpectrum(): Promise<SpectrumDto | null> {
@@ -1605,7 +1855,9 @@ export class MockBackend implements Backend {
       const air = 5 * Math.max(0, t - 0.78) * (0.5 + 0.5 * Math.sin(now * 2.4));
       return Math.max(-90, body + kick + presence + air);
     });
-    const scope = Array.from({ length: 64 }, (_, i) => Math.sin(now + i * 0.2) * 0.4);
+    const sounding = this.playing || performance.now() < this.noteUntilMs;
+    const amp = sounding ? 0.4 : 0;
+    const scope = Array.from({ length: 64 }, (_, i) => Math.sin(now + i * 0.2) * amp);
     return {
       binsPre: binsPost.map((d) => d - 3),
       binsPost,
@@ -1844,6 +2096,7 @@ export class MockBackend implements Backend {
       id: this.nextLaneId++,
       name: name?.trim() || `Track ${this.playlistTracks.length + 1}`,
       muted: false,
+      soloed: false,
     });
     return this.sequencerState();
   }
@@ -1868,6 +2121,11 @@ export class MockBackend implements Backend {
 
   async setPlaylistTrackMute(track: number, muted: boolean): Promise<SequencerState> {
     this.lane(track).muted = muted;
+    return this.sequencerState();
+  }
+
+  async setPlaylistTrackSolo(track: number, soloed: boolean): Promise<SequencerState> {
+    this.lane(track).soloed = soloed;
     return this.sequencerState();
   }
 
@@ -2072,6 +2330,24 @@ export class MockBackend implements Backend {
           relPath: 'Drums',
           path: `${MOCK_PACKS}\\Drums`,
         },
+        {
+          name: 'Drum Loops',
+          kind: 'dir',
+          relPath: 'Drum Loops',
+          path: `${MOCK_PACKS}\\Drum Loops`,
+        },
+        {
+          name: 'One Shots',
+          kind: 'dir',
+          relPath: 'One Shots',
+          path: `${MOCK_PACKS}\\One Shots`,
+        },
+        {
+          name: 'Songstarters',
+          kind: 'dir',
+          relPath: 'Songstarters',
+          path: `${MOCK_PACKS}\\Songstarters`,
+        },
       ];
     }
     if (rootId === 'packs' && relPath === 'Drums') {
@@ -2080,6 +2356,22 @@ export class MockBackend implements Backend {
         kind: 'file' as const,
         relPath: `Drums/${name}`,
         path: `${MOCK_PACKS}\\Drums\\${name}`,
+      }));
+    }
+    const mockCategory =
+      relPath === 'Drum Loops'
+        ? MOCK_LOOP_FILES
+        : relPath === 'One Shots'
+          ? MOCK_ONE_SHOTS
+          : relPath === 'Songstarters'
+            ? MOCK_SONGSTARTERS
+            : null;
+    if (rootId === 'packs' && mockCategory !== null) {
+      return mockCategory.map((name) => ({
+        name,
+        kind: 'file' as const,
+        relPath: `${relPath}/${name}`,
+        path: `${MOCK_PACKS}\\${relPath}\\${name}`,
       }));
     }
     if (this.extraFolders.some((folder) => folder.id === rootId) && relPath === '') {
@@ -2097,7 +2389,47 @@ export class MockBackend implements Backend {
   }
 
   async previewAudioFile(path: string): Promise<void> {
+    this.lastPreview = path;
     console.info(`[mock] preview ${path}`);
+  }
+
+  async previewTrackSample(track: number): Promise<void> {
+    const entry = this.track(track);
+    if (entry.audioSourceId == null || (entry.engine !== 'clip' && entry.engine !== 'sample')) {
+      throw new Error(`track ${track} is not an audio-file channel`);
+    }
+    this.lastPreview = `track:${track}`;
+    console.info(`[mock] preview edited sample on track ${track}`);
+  }
+
+  async previewInstrument(sourceId: string): Promise<void> {
+    this.lastPreview = sourceId;
+    console.info(`[mock] preview instrument ${sourceId}`);
+  }
+
+  async getPreviewSettings(): Promise<PreviewSettings> {
+    return { version: 1, volumePercent: this.previewVolumePercent };
+  }
+
+  async setPreviewVolume(percent: number): Promise<PreviewSettings> {
+    this.previewVolumePercent = clampPreviewVolumePercent(percent);
+    return this.getPreviewSettings();
+  }
+
+  async getAudioSettings(): Promise<AudioOutput> {
+    return {
+      version: 1,
+      preferAsio: this.preferAsio,
+      bufferFrames: this.audioBufferFrames,
+      asioCompiled: false,
+      stream: await this.getStreamInfo(),
+    };
+  }
+
+  async setAudioSettings(preferAsio: boolean, bufferFrames: number): Promise<AudioOutput> {
+    this.preferAsio = preferAsio;
+    this.audioBufferFrames = snapAudioBufferFrames(bufferFrames);
+    return this.getAudioSettings();
   }
 
   private ensureClipChannel(sourceId: number): void {
@@ -2267,6 +2599,7 @@ export class MockBackend implements Backend {
       id: index + 1,
       name: `Track ${index + 1}`,
       muted: false,
+      soloed: false,
     }));
     this.clips = [];
     this.bpm = DEFAULT_BPM;
@@ -2319,14 +2652,43 @@ export class MockBackend implements Backend {
    * permanently reading "no device" would leave the readouts unrehearsable.
    */
   async getStreamInfo(): Promise<StreamInfo> {
-    const bufferFrames = 256;
+    const bufferFrames = this.audioBufferFrames > 0 ? this.audioBufferFrames : 256;
     return {
       deviceName: 'Mock Output (browser)',
       sampleRate: SAMPLE_RATE,
       channels: 2,
       bufferFrames,
+      maxBufferFrames: 4096,
+      requestedBufferFrames: this.audioBufferFrames,
       latencyMs: (bufferFrames / SAMPLE_RATE) * 1000,
+      backend: 'wasapi',
+      note: this.preferAsio
+        ? 'ASIO was requested, but this WAVE build has no ASIO host. Using WASAPI — other apps keep playing, and the buffer size still applies.'
+        : '',
       running: true,
+    };
+  }
+
+  async listMidiPorts(): Promise<MidiPortDto[]> {
+    return structuredClone(this.midiPorts);
+  }
+
+  async setMidiPortEnabled(name: string, enabled: boolean): Promise<MidiPortDto[]> {
+    const port = this.midiPorts.find((entry) => entry.name === name);
+    if (!port) throw new Error(`there is no MIDI port '${name}'`);
+    port.enabled = enabled;
+    port.connected = enabled;
+    port.status = enabled ? 'connected' : 'available';
+    if (enabled) this.midiActivityAtMs = Date.now();
+    return this.listMidiPorts();
+  }
+
+  async getMidiStatus(): Promise<MidiStatusDto> {
+    const enabled = this.midiPorts.filter((port) => port.enabled);
+    return {
+      activityAtMs: this.midiActivityAtMs,
+      enabledCount: enabled.length,
+      activeName: enabled[0]?.name ?? null,
     };
   }
 

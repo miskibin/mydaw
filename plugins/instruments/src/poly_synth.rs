@@ -1,25 +1,20 @@
-//! `poly-synth` -- eight voices of band-limited saw with a sine sub-oscillator.
+//! `poly-synth` -- eight voices of three stacked analog oscillators.
 //!
 //! ```text
-//!   note on ──> voice ──> polyBLEP saw ──┐
-//!                    └──> sine, -1 oct ──┴─> one-pole LP 3 kHz ──> ADSR ──> mix
+//!   note on ──> voice ──> osc 1 + osc 2 + osc 3 ──> TPT SVF LP ──> ADSR ──> mix
 //! ```
 //!
-//! # The oscillator
-//! A sawtooth is the useful default waveform: it contains every harmonic, so it
-//! is the one a filter has something to work with. Generated naively -- `2t - 1`
-//! sampled -- it also contains every harmonic *above* Nyquist, which folds back
-//! down as inharmonic aliasing that gets worse the higher you play and that no
-//! later filter can remove, because the aliases are below the cutoff. PolyBLEP
-//! ([`poly_blep`](crate::dsp::poly_blep)) replaces the samples either side of
-//! the wrap with a band-limited step, which costs one branch and two multiplies
-//! and buys 20-30 dB. `tests/spectral.rs` measures the difference rather than
-//! claiming it.
+//! # The oscillators
+//! Three independent oscillators, the same job FL Studio's 3x Osc does: each
+//! has a shape, a coarse/fine pitch and a mix, and they sum before the filter.
+//! Osc 1 has no mix knob -- it is always the bed -- and osc 2 / osc 3 mix in
+//! on top. Defaults keep the old "saw plus sine sub" sound: osc 3 is a sine
+//! an octave down at half mix.
 //!
-//! The sub-oscillator is a sine an octave down at -6 dB. It is a sine and not a
-//! second saw on purpose: one partial, at a frequency the 3 kHz lowpass passes
-//! untouched, so it adds weight without adding anything for the filter to
-//! smear. Every classic poly synth has one for the same reason.
+//! A sawtooth is the useful default waveform: it contains every harmonic, so
+//! the filter has something to work with. Saw and square are polyBLEP
+//! ([`poly_blep`](crate::dsp::poly_blep)); `tests/spectral.rs` measures the
+//! aliasing rather than claiming it.
 //!
 //! # The envelope
 //! Linear ADSR, fixed at 5 ms / 80 ms / 0.6 / 120 ms. Each segment crosses
@@ -42,8 +37,6 @@
 //! Fixed-size arrays, no allocation, no locks, no syscalls in
 //! [`PolySynthNode::process`]. Measured in `tests/rt_alloc.rs`.
 
-use std::f32::consts::TAU;
-
 use std::sync::Arc;
 
 use mydaw_rt_core::{
@@ -52,7 +45,8 @@ use mydaw_rt_core::{
 };
 
 use crate::dsp::{
-    advance_phase, key_to_hz, linear_step, poly_blep_saw, poly_blep_square, usable_sample_rate, Svf,
+    advance_phase, analog_wave, key_to_hz, linear_step, pitch_ratio, usable_sample_rate, Noise,
+    Svf, WAVE_COUNT, WAVE_SINE,
 };
 
 /// RT node type id, as stored in project files. Stable across builds.
@@ -84,29 +78,25 @@ pub const RELEASE_MS: f32 = 120.0;
 /// rather than relying on the filter.
 pub const FILTER_CUTOFF_HZ: f32 = 3_000.0;
 
-/// Sub-oscillator level relative to the saw. -6.02 dB.
+/// Oscillators stacked on one voice.
+pub const OSCS: usize = 3;
+
+/// Sub-oscillator mix, kept as osc 3's default so a new synth still has weight.
 pub const SUB_MIX: f32 = 0.5;
-
-/// How far the filter envelope can open the cutoff, in octaves at 100%.
-///
-/// Four. Enough that a fast envelope on a closed filter is the whole point of
-/// having one, and bounded so that "100%" means something a knob can reach
-/// rather than "as far as the arithmetic goes".
-pub const ENV_OCTAVES: f32 = 4.0;
-
-/// Samples between filter-coefficient updates.
-///
-/// The cutoff moves with the envelope, and recomputing `tan` per sample per
-/// voice would be the most expensive thing in the engine by an order of
-/// magnitude. Sixteen samples is a 3 kHz control rate: an envelope stepping at
-/// 0.3 ms is not something an ear resolves, and it is 1/16th of the cost.
-const CONTROL_FRAMES: usize = 16;
 
 /// Parameter ids, in the order [`PARAMS`] declares them.
 pub mod param {
     pub const WAVE: &str = "wave";
-    pub const DETUNE: &str = "detune";
-    pub const SUB: &str = "sub";
+    pub const OSC1_COARSE: &str = "osc1Coarse";
+    pub const OSC1_FINE: &str = "osc1Fine";
+    pub const OSC2_WAVE: &str = "osc2Wave";
+    pub const OSC2_COARSE: &str = "osc2Coarse";
+    pub const OSC2_FINE: &str = "osc2Fine";
+    pub const OSC2_MIX: &str = "osc2Mix";
+    pub const OSC3_WAVE: &str = "osc3Wave";
+    pub const OSC3_COARSE: &str = "osc3Coarse";
+    pub const OSC3_FINE: &str = "osc3Fine";
+    pub const OSC3_MIX: &str = "osc3Mix";
     pub const CUTOFF: &str = "cutoff";
     pub const RESONANCE: &str = "resonance";
     pub const ENV_AMOUNT: &str = "envAmount";
@@ -116,49 +106,35 @@ pub mod param {
     pub const RELEASE: &str = "release";
 }
 
+const fn osc_wave(id: &'static str, name: &'static str, default: u32) -> ParamDef {
+    ParamDef::choice(id, name, WAVE_COUNT, default)
+}
+
+const fn osc_coarse(id: &'static str, default: f32) -> ParamDef {
+    ParamDef::new(id, "Coarse", "st", -24.0, 24.0, default, ParamCurve::Linear).stepped(1.0)
+}
+
+const fn osc_fine(id: &'static str) -> ParamDef {
+    ParamDef::new(id, "Fine", "ct", -100.0, 100.0, 0.0, ParamCurve::Linear)
+}
+
+const fn osc_mix(id: &'static str, default: f32) -> ParamDef {
+    ParamDef::new(id, "Mix", "", 0.0, 1.0, default, ParamCurve::Linear)
+}
+
 /// What the synth exposes, in the order a panel should draw it.
-///
-/// The same [`ParamDef`] the effects use, so the shell's generic knob panel
-/// draws this instrument without knowing anything about it -- an instrument is
-/// not a different kind of thing from an effect as far as a knob is concerned,
-/// and giving it a second parameter system would have been two of everything.
 pub static PARAMS: &[ParamDef] = &[
-    ParamDef {
-        id: param::WAVE,
-        name: "Wave",
-        unit: "",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        curve: ParamCurve::Linear,
-        step: Some(1.0),
-        // A switch: there is no waveform half way between a saw and a square,
-        // and ramping towards one would spend 10 ms at a shape that does not
-        // exist.
-        smoothing_ms: 0.0,
-    },
-    ParamDef {
-        id: param::DETUNE,
-        name: "Detune",
-        unit: "ct",
-        min: 0.0,
-        max: 50.0,
-        default: 0.0,
-        curve: ParamCurve::Linear,
-        step: None,
-        smoothing_ms: DEFAULT_SMOOTHING_MS,
-    },
-    ParamDef {
-        id: param::SUB,
-        name: "Sub",
-        unit: "",
-        min: 0.0,
-        max: 1.0,
-        default: SUB_MIX,
-        curve: ParamCurve::Linear,
-        step: None,
-        smoothing_ms: DEFAULT_SMOOTHING_MS,
-    },
+    osc_wave(param::WAVE, "Wave", 0),
+    osc_coarse(param::OSC1_COARSE, 0.0),
+    osc_fine(param::OSC1_FINE),
+    osc_wave(param::OSC2_WAVE, "Wave", 0),
+    osc_coarse(param::OSC2_COARSE, 0.0),
+    osc_fine(param::OSC2_FINE),
+    osc_mix(param::OSC2_MIX, 0.0),
+    osc_wave(param::OSC3_WAVE, "Wave", WAVE_SINE as u32),
+    osc_coarse(param::OSC3_COARSE, -12.0),
+    osc_fine(param::OSC3_FINE),
+    osc_mix(param::OSC3_MIX, SUB_MIX),
     ParamDef {
         id: param::CUTOFF,
         name: "Cutoff",
@@ -238,12 +214,28 @@ pub static PARAMS: &[ParamDef] = &[
     },
 ];
 
+/// How far the filter envelope can open the cutoff, in octaves at 100%.
+///
+/// Four. Enough that a fast envelope on a closed filter is the whole point of
+/// having one, and bounded so that "100%" means something a knob can reach
+/// rather than "as far as the arithmetic goes".
+pub const ENV_OCTAVES: f32 = 4.0;
+
+/// Samples between filter-coefficient updates.
+///
+/// The cutoff moves with the envelope, and recomputing `tan` per sample per
+/// voice would be the most expensive thing in the engine by an order of
+/// magnitude. Sixteen samples is a 3 kHz control rate: an envelope stepping at
+/// 0.3 ms is not something an ear resolves, and it is 1/16th of the cost.
+const CONTROL_FRAMES: usize = 16;
+
 /// Where each parameter sits in [`PARAMS`], resolved once.
 #[derive(Debug, Clone, Copy)]
 struct Indices {
-    wave: usize,
-    detune: usize,
-    sub: usize,
+    wave: [usize; OSCS],
+    coarse: [usize; OSCS],
+    fine: [usize; OSCS],
+    mix: [usize; OSCS],
     cutoff: usize,
     resonance: usize,
     env_amount: usize,
@@ -257,9 +249,19 @@ impl Indices {
     fn new(block: &ParamBlock) -> Self {
         let at = |id: &str| block.index_of(id).unwrap_or(0);
         Self {
-            wave: at(param::WAVE),
-            detune: at(param::DETUNE),
-            sub: at(param::SUB),
+            wave: [at(param::WAVE), at(param::OSC2_WAVE), at(param::OSC3_WAVE)],
+            coarse: [
+                at(param::OSC1_COARSE),
+                at(param::OSC2_COARSE),
+                at(param::OSC3_COARSE),
+            ],
+            fine: [
+                at(param::OSC1_FINE),
+                at(param::OSC2_FINE),
+                at(param::OSC3_FINE),
+            ],
+            // Osc 1 has no mix knob: it is always the bed.
+            mix: [usize::MAX, at(param::OSC2_MIX), at(param::OSC3_MIX)],
             cutoff: at(param::CUTOFF),
             resonance: at(param::RESONANCE),
             env_amount: at(param::ENV_AMOUNT),
@@ -271,25 +273,53 @@ impl Indices {
     }
 }
 
+/// One oscillator's settings for this block.
+#[derive(Debug, Clone, Copy)]
+struct OscSet {
+    wave: usize,
+    ratio: f32,
+    mix: f32,
+}
+
 /// Everything a voice needs from the parameters for one block.
-///
-/// Read once per block and handed down, rather than every voice reaching into
-/// the parameter block eight times per sample: the settings cannot change
-/// inside a block anyway, and this way the inner loop touches one struct on the
-/// stack.
 #[derive(Debug, Clone, Copy)]
 struct Settings {
     adsr: Adsr,
-    /// `0` saw, `1` square.
-    wave: usize,
-    /// Frequency ratio of the second oscillator, from the detune in cents.
-    detune_ratio: f32,
-    sub: f32,
+    oscs: [OscSet; OSCS],
     cutoff_hz: f32,
     resonance: f32,
     /// Octaves the envelope adds to the cutoff at full envelope.
     env_octaves: f32,
     sample_rate: f32,
+}
+
+impl Settings {
+    fn defaults(sample_rate: f32) -> Self {
+        Self {
+            adsr: Adsr::defaults(sample_rate),
+            oscs: [
+                OscSet {
+                    wave: 0,
+                    ratio: 1.0,
+                    mix: 1.0,
+                },
+                OscSet {
+                    wave: 0,
+                    ratio: 1.0,
+                    mix: 0.0,
+                },
+                OscSet {
+                    wave: WAVE_SINE,
+                    ratio: 0.5,
+                    mix: SUB_MIX,
+                },
+            ],
+            cutoff_hz: FILTER_CUTOFF_HZ,
+            resonance: 0.8,
+            env_octaves: 0.0,
+            sample_rate,
+        }
+    }
 }
 
 /// Amplitude of one voice at velocity 1.0, before the envelope.
@@ -356,19 +386,14 @@ impl Adsr {
     }
 }
 
-/// One voice: two oscillators, a sub, an envelope and a filter.
+/// One voice: three oscillators, an envelope and a filter.
 #[derive(Debug, Clone, Copy)]
 struct Voice {
     stage: Stage,
     key: u8,
     channel: u8,
-    phase: f32,
-    increment: f32,
-    /// The detuned partner of `phase`. Silent-by-identity when the detune is
-    /// zero: it runs at the same frequency and the pair sums to the same saw.
-    phase_b: f32,
-    sub_phase: f32,
-    sub_increment: f32,
+    phase: [f32; OSCS],
+    noise: [Noise; OSCS],
     envelope: f32,
     /// `velocity * VOICE_GAIN`, fixed for the life of the note.
     amplitude: f32,
@@ -383,11 +408,8 @@ impl Voice {
             stage: Stage::Idle,
             key: 0,
             channel: 0,
-            phase: 0.0,
-            increment: 0.0,
-            phase_b: 0.0,
-            sub_phase: 0.0,
-            sub_increment: 0.0,
+            phase: [0.0; OSCS],
+            noise: [Noise::new(1), Noise::new(2), Noise::new(3)],
             envelope: 0.0,
             amplitude: 0.0,
             filter: Svf::new(FILTER_CUTOFF_HZ, 0.8, sample_rate),
@@ -415,29 +437,21 @@ impl Voice {
         channel: u8,
         key: u8,
         velocity: f32,
-        sample_rate: f32,
+        _sample_rate: f32,
         age: u64,
         fresh: bool,
     ) {
         if fresh {
-            self.phase = 0.0;
-            // *Together*, not spread. At a detune of zero the pair has to be
-            // bit-identical to the single oscillator it replaced -- two saws a
-            // quarter cycle apart sum to a quieter fundamental, which would make
-            // "no detune" a different sound rather than the same one. They drift
-            // apart on their own the moment the detune is anything but zero,
-            // which is what the effect is.
-            self.phase_b = 0.0;
-            self.sub_phase = 0.0;
+            self.phase = [0.0; OSCS];
             self.envelope = 0.0;
             self.filter.reset();
+            for (index, noise) in self.noise.iter_mut().enumerate() {
+                noise.reseed(0xA500_0001u32.wrapping_add((index as u32) << 8) ^ u32::from(key));
+            }
         }
-        let hz = key_to_hz(key);
         self.stage = Stage::Attack;
         self.key = key;
         self.channel = channel;
-        self.increment = hz / sample_rate;
-        self.sub_increment = hz / (2.0 * sample_rate);
         self.amplitude = velocity * VOICE_GAIN;
         self.age = age;
     }
@@ -455,11 +469,14 @@ impl Voice {
             return;
         }
         let adsr = &set.adsr;
-        let increment_b = self.increment * set.detune_ratio;
+        let hz = key_to_hz(self.key);
+        let increments = [
+            hz * set.oscs[0].ratio / set.sample_rate,
+            hz * set.oscs[1].ratio / set.sample_rate,
+            hz * set.oscs[2].ratio / set.sample_rate,
+        ];
         let mut until_update = 0_usize;
         for sample in span.iter_mut() {
-            // Advance the envelope first, so a voice released exactly at this
-            // frame starts falling here rather than one frame late.
             match self.stage {
                 Stage::Attack => {
                     self.envelope += adsr.attack;
@@ -479,8 +496,6 @@ impl Voice {
                 Stage::Release => {
                     self.envelope -= adsr.release;
                     if self.envelope <= 0.0 {
-                        // Exactly zero, then gone: "released" has to mean
-                        // digital silence, not "quiet enough".
                         self.envelope = 0.0;
                         self.stage = Stage::Idle;
                         return;
@@ -489,8 +504,6 @@ impl Voice {
                 Stage::Idle => return,
             }
 
-            // The filter follows the envelope, so its coefficients have to move
-            // with it -- at control rate, not per sample. See `CONTROL_FRAMES`.
             if until_update == 0 {
                 let octaves = set.env_octaves * self.envelope;
                 let cutoff = set.cutoff_hz * 2f32.powf(octaves);
@@ -499,22 +512,21 @@ impl Voice {
             }
             until_update -= 1;
 
-            let osc = |phase: f32, increment: f32| {
-                if set.wave == 0 {
-                    poly_blep_saw(phase, increment)
-                } else {
-                    poly_blep_square(phase, increment)
+            let mut mix = 0.0_f32;
+            for (index, increment) in increments.iter().copied().enumerate() {
+                let osc = set.oscs[index];
+                if osc.mix > 1e-4 {
+                    mix += osc.mix
+                        * analog_wave(
+                            osc.wave,
+                            self.phase[index],
+                            increment,
+                            &mut self.noise[index],
+                        );
                 }
-            };
-            // Two oscillators at half level each: a detune of zero has to sound
-            // exactly as loud as the single oscillator it replaced.
-            let pair = 0.5 * (osc(self.phase, self.increment) + osc(self.phase_b, increment_b));
-            let sub = (self.sub_phase * TAU).sin() * set.sub;
-            *sample += self.filter.low(pair + sub) * self.envelope * self.amplitude;
-
-            self.phase = advance_phase(self.phase, self.increment);
-            self.phase_b = advance_phase(self.phase_b, increment_b);
-            self.sub_phase = advance_phase(self.sub_phase, self.sub_increment);
+                self.phase[index] = advance_phase(self.phase[index], increment);
+            }
+            *sample += self.filter.low(mix) * self.envelope * self.amplitude;
         }
     }
 }
@@ -572,18 +584,20 @@ impl PolySynthNode {
     /// What the parameters say right now, or the defaults without them.
     fn settings(&self) -> Settings {
         let Some(params) = self.params.as_ref() else {
-            return Settings {
-                adsr: Adsr::defaults(self.sample_rate),
-                wave: 0,
-                detune_ratio: 1.0,
-                sub: SUB_MIX,
-                cutoff_hz: FILTER_CUTOFF_HZ,
-                resonance: 0.8,
-                env_octaves: 0.0,
-                sample_rate: self.sample_rate,
-            };
+            return Settings::defaults(self.sample_rate);
         };
-        let cents = params.value(self.index.detune);
+        let osc = |index: usize, default_mix: f32| OscSet {
+            wave: params.choice(self.index.wave[index]),
+            ratio: pitch_ratio(
+                params.value(self.index.coarse[index]),
+                params.value(self.index.fine[index]),
+            ),
+            mix: if self.index.mix[index] == usize::MAX {
+                default_mix
+            } else {
+                params.value(self.index.mix[index]).clamp(0.0, 1.0)
+            },
+        };
         Settings {
             adsr: Adsr::from_times(
                 params.value(self.index.attack),
@@ -592,9 +606,7 @@ impl PolySynthNode {
                 params.value(self.index.release),
                 self.sample_rate,
             ),
-            wave: params.choice(self.index.wave),
-            detune_ratio: 2f32.powf(cents / 1_200.0),
-            sub: params.value(self.index.sub),
+            oscs: [osc(0, 1.0), osc(1, 0.0), osc(2, SUB_MIX)],
             cutoff_hz: params.value(self.index.cutoff),
             resonance: params.value(self.index.resonance),
             env_octaves: params.value(self.index.env_amount) / 100.0 * ENV_OCTAVES,
@@ -956,6 +968,24 @@ mod tests {
         render(&mut node, 256, 256, &[NoteEvent::note_off(0, A4)]);
         render(&mut node, 19_200, 256, &[]);
         assert_eq!(node.active_voices(), 1);
+    }
+
+    #[test]
+    fn a_second_oscillator_mixes_in_and_can_sit_an_octave_up() {
+        let quiet = Arc::new(ParamBlock::new(PARAMS));
+        let stacked = Arc::new(ParamBlock::new(PARAMS));
+        stacked.set_by_id(param::OSC2_MIX, 1.0);
+        stacked.set_by_id(param::OSC2_COARSE, 12.0);
+        let mut a = PolySynthNode::with_params(quiet, SR);
+        let mut b = PolySynthNode::with_params(stacked, SR);
+        let (dry, _) = render(&mut a, 14_400, 256, &[NoteEvent::note_on(0, A4, 1.0)]);
+        let (wet, _) = render(&mut b, 14_400, 256, &[NoteEvent::note_on(0, A4, 1.0)]);
+        assert!(
+            peak(&wet) > peak(&dry) * 1.05,
+            "mixing a second oscillator an octave up should be louder, dry {} wet {}",
+            peak(&dry),
+            peak(&wet)
+        );
     }
 
     #[test]

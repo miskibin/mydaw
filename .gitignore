@@ -19,3 +19,6 @@ assets/
 
 # Agent scratch: session settings and other agents' worktrees. Never source.
 .claude/
+
+# Local pnpm content-addressable store created by some agent environments.
+.pnpm-store/

@@ -10,7 +10,7 @@ import {
   zoomAnchoredScroll,
 } from './timeline';
 
-const HEAD = 176;
+const HEAD = 200;
 
 describe('clampScroll', () => {
   it('holds a scroll inside its content and survives a NaN', () => {

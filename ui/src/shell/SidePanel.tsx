@@ -6,12 +6,10 @@
  * brush. The **inspector** is one strip: its instrument, its insert chain, and
  * whatever meters that chain publishes.
  *
- * One deliberate departure from `.design/wave-studio.html`: the mock's inspector
- * draws four knobs for the instrument. **There are no per-instrument parameters
- * on the wire.** `SourceDto` carries a label, a description and a `takesNotes`
- * flag; the internal instruments expose nothing else, and a hosted plugin's
- * parameters live behind its own editor window rather than in a DTO. So the card
- * says so in a sentence instead of drawing four knobs that would move nothing.
+ * Sample channels are the exception to an instrument's own parameter list: the
+ * strip owns their volume, pan, pitch, fades and region.  The inspector draws
+ * those shared values with the decoded file waveform, so selecting the sample
+ * from either the rack or playlist points at one truthful set of controls.
  */
 
 import {
@@ -20,6 +18,7 @@ import {
   createSignal,
   For,
   Index,
+  on,
   onCleanup,
   Show,
   type JSX,
@@ -33,23 +32,34 @@ import type {
   PatternSummaryDto,
   TrackDto,
   Vst3PluginInfoDto,
+  WaveformDto,
 } from '../api/types';
 import { bandGainRangeDb, compactBody } from '../lib/effectLayout';
-import { addedInsertId } from '../lib/inserts';
+import { addedInsertId, insertMove } from '../lib/inserts';
+import { channelColor } from '../lib/channel';
 import { formatValue, switchLabel } from '../lib/param';
+import { pitchLabel, resolveRegion } from '../lib/sampleRegion';
+import { stereoWaveformPaths } from '../lib/sampleWaveform';
 import { insertTargetFor, useAppState, type StripRef } from '../state';
 import { trackColor } from '../theme/tokens';
 import { EqCurve } from '../ui/EqCurve';
+import { WHEEL_COMMIT_MS, debounce } from '../ui/drag';
 import { IconChevron, IconClose, IconPopOut } from '../ui/icons';
 import { createInsertKnobs } from '../ui/insertKnob';
+import { Knob, spec } from '../ui/Knob';
 import { ReadoutBars } from '../ui/ReadoutBars';
 import { formatDuration, formatRate } from './Browser';
+import { usePatternNav } from './patternNav';
 import { useView, type PickerTab, type SideTab } from './view';
 
 import '../styles/side.css';
 
 /** As many marks as a 62 px preview can show before it is a smear. */
 const MAX_MARKS = 96;
+const SAMPLE_PAN_DEF = spec('pan', 'Pan', '', -1, 1, 0);
+const SAMPLE_PITCH_DEF = spec('pitch', 'Pitch', 'ct', -1_200, 1_200, 0);
+const SAMPLE_FADE_IN_DEF = spec('fadeIn', 'Fade in', 'ms', 0, 2_000, 0);
+const SAMPLE_FADE_OUT_DEF = spec('fadeOut', 'Fade out', 'ms', 0, 2_000, 0);
 
 const SIDE_TABS: readonly { id: SideTab; label: string }[] = [
   { id: 'picker', label: 'Picker' },
@@ -206,20 +216,18 @@ function Picker(): JSX.Element {
       </div>
 
       <div class="wv-picker__foot">
-        Drag onto a playlist track — or click to load the brush, then click a lane.
+        Click to load the brush · double-click a pattern to edit it · drag onto a lane
       </div>
     </div>
   );
 }
 
-/** Load a brush, arm the paint tool, and go where painting happens. */
+/** Load a brush and arm the paint tool. Does not change the main view. */
 function useBrushClick(): (brush: { kind: 'pattern' | 'audio'; id: number }) => void {
   const view = useView();
   return (brush) => {
     view.setBrush(brush);
     view.setPlaylistTool('paint');
-    // The rack cannot paint, so a click there means "take me to the playlist".
-    if (view.view() === 'rack') view.go('playlist');
   };
 }
 
@@ -227,6 +235,7 @@ function PatternRows(): JSX.Element {
   const app = useAppState();
   const view = useView();
   const pick = useBrushClick();
+  const nav = usePatternNav();
 
   const brushId = () => {
     const brush = view.brush();
@@ -265,16 +274,23 @@ function PatternRows(): JSX.Element {
             return (
               <div
                 class="wv-pick"
-                classList={{ 'is-active': brushId() === pattern().id }}
+                classList={{
+                  'is-active': brushId() === pattern().id,
+                  'is-editing': isActive(),
+                }}
                 role="button"
                 tabindex={0}
                 draggable={true}
                 title={
                   isActive()
-                    ? `${pattern().name} — the pattern being edited, so its content is drawn.`
-                    : `${pattern().name} — only the pattern being edited has its content on the wire, so this preview is a plain bar.`
+                    ? `${pattern().name} — the pattern being edited. Click loads the brush; double-click opens it.`
+                    : `${pattern().name} — click to paint with this pattern · double-click to edit it`
                 }
                 onClick={() => pick({ kind: 'pattern', id: pattern().id })}
+                onDblClick={(event) => {
+                  pick({ kind: 'pattern', id: pattern().id });
+                  void nav.openPattern(pattern().id, { altKey: event.altKey, surface: 'picker' });
+                }}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter' && event.key !== ' ') return;
                   event.preventDefault();
@@ -425,7 +441,7 @@ function Inspector(): JSX.Element {
 
   const color = () => {
     const current = track();
-    if (current) return trackColor(current.id);
+    if (current) return channelColor(current);
     const strip = bus();
     if (strip) return strip.color ?? trackColor(strip.id);
     return 'var(--txt2)';
@@ -474,6 +490,20 @@ function Inspector(): JSX.Element {
   const maxInserts = () => app.mixer()?.maxInserts ?? 0;
   const chainFull = () => maxInserts() > 0 && chain().length >= maxInserts();
 
+  function moveInsert(from: number, to: number): void {
+    if (from === to) return;
+    const moving = chain()[from];
+    if (!moving) return;
+    const strip = view.strip();
+    void app.mixerCommand((backend) => backend.moveInsert(insertTargetFor(strip), from, to));
+    app.say(`${name()} · Effects`, `${moving.name} → ${to + 1}`);
+  }
+
+  function dropInsert(draggedId: number, targetId: number): void {
+    const move = insertMove(chain(), draggedId, targetId);
+    if (move) moveInsert(move.from, move.to);
+  }
+
   return (
     <div class="wv-insp">
       <div class="wv-insp__head">
@@ -501,7 +531,14 @@ function Inspector(): JSX.Element {
 
           <Index each={chain()}>
             {(insert) => (
-              <InsertCard strip={view.strip()} stripName={name()} insert={insert()} />
+              <InsertCard
+                strip={view.strip()}
+                stripName={name()}
+                insert={insert()}
+                count={chain().length}
+                onMove={moveInsert}
+                onDrop={dropInsert}
+              />
             )}
           </Index>
 
@@ -735,6 +772,161 @@ function InstrumentCard(props: { track: TrackDto }): JSX.Element {
             </span>
           )}
         </Show>
+        <Show
+          when={
+            (props.track.engine === 'clip' || props.track.engine === 'sample') &&
+            props.track.audioSourceId != null
+          }
+        >
+          <SampleInspector track={props.track} />
+        </Show>
+      </div>
+    </div>
+  );
+}
+
+/** The compact, always-linked version of the floating sample window. */
+function SampleInspector(props: { track: TrackDto }): JSX.Element {
+  const app = useAppState();
+  const view = useView();
+  const [wave, setWave] = createSignal<WaveformDto | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const [localDb, setLocalDb] = createSignal<number | null>(null);
+  const [localPan, setLocalPan] = createSignal<number | null>(null);
+  const [localPitch, setLocalPitch] = createSignal<number | null>(null);
+  const [localFades, setLocalFades] = createSignal<[number, number] | null>(null);
+
+  const settle = debounce(WHEEL_COMMIT_MS, () => {
+    void app.mixerCommand((backend) => backend.getTracks()).finally(() => {
+      setLocalDb(null);
+      setLocalPan(null);
+      setLocalPitch(null);
+      setLocalFades(null);
+    });
+  });
+  onCleanup(() => settle.cancel());
+
+  createEffect(
+    on(
+      () => props.track.audioSourceId,
+      (sourceId) => {
+        setWave(null);
+        setError(null);
+        if (sourceId == null) return;
+        let cancelled = false;
+        app.backend
+          .getAudioWaveform(sourceId, 512)
+          .then((next) => !cancelled && setWave(next))
+          .catch((reason: unknown) => {
+            if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+          });
+        onCleanup(() => {
+          cancelled = true;
+        });
+      },
+    ),
+  );
+
+  const source = () =>
+    app.audioSources().find((entry) => entry.id === props.track.audioSourceId);
+  const gainDb = () => localDb() ?? props.track.gainDb;
+  const pan = () => localPan() ?? props.track.pan;
+  const pitch = () => localPitch() ?? props.track.pitchCents;
+  const fadeIn = () => localFades()?.[0] ?? props.track.fadeInMs;
+  const fadeOut = () => localFades()?.[1] ?? props.track.fadeOutMs;
+  const totalFrames = () => wave()?.frames ?? 0;
+  const region = () =>
+    resolveRegion(props.track.sampleStartFrames, props.track.sampleEndFrames, totalFrames());
+  const paths = createMemo(() =>
+    stereoWaveformPaths(wave()?.peaks ?? [], {
+      gainDb: gainDb(),
+      pan: pan(),
+      pitchCents: pitch(),
+      fadeInMs: fadeIn(),
+      fadeOutMs: fadeOut(),
+      sampleRate: source()?.sampleRate ?? 0,
+      totalFrames: totalFrames(),
+      startFrames: region().start,
+      endFrames: region().end,
+    }),
+  );
+  const colour = () => channelColor(props.track);
+  const owner = () => props.track.name;
+  const volumeDef = () =>
+    spec(
+      'volume',
+      'Volume',
+      'dB',
+      app.mixer()?.minGainDb ?? -60,
+      app.mixer()?.maxGainDb ?? 6,
+      0,
+    );
+
+  function setGain(value: number): void {
+    setLocalDb(value);
+    void app.backend.setTrackGain(props.track.index, value).catch(app.report);
+    settle();
+  }
+  function setPan(value: number): void {
+    const next = Math.round(value * 100) / 100;
+    setLocalPan(next);
+    void app.backend.setTrackPan(props.track.index, next).catch(app.report);
+    settle();
+  }
+  function setPitch(value: number): void {
+    const next = Math.round(value);
+    setLocalPitch(next);
+    void app.backend.setTrackPitch(props.track.index, next).catch(app.report);
+    settle();
+  }
+  function setFades(fadeInMs: number, fadeOutMs: number): void {
+    const next: [number, number] = [Math.round(fadeInMs), Math.round(fadeOutMs)];
+    setLocalFades(next);
+    void app.backend.setTrackFades(props.track.index, next[0], next[1]).catch(app.report);
+    settle();
+  }
+
+  return (
+    <div class="wv-sample-insp">
+      <button
+        type="button"
+        class="wv-sample-insp__wave"
+        style={{ color: colour() }}
+        title="Real decoded waveform — click for start/end editing and preview"
+        onClick={() => view.openSampleEditor(props.track.index)}
+      >
+        <Show when={wave()} fallback={<span>{error() ?? 'loading waveform…'}</span>}>
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+            <path d={paths().left} fill="currentColor" />
+            <path d={paths().right} fill="currentColor" opacity="0.72" />
+          </svg>
+          <span class="wv-sample-insp__lr">L<br />R</span>
+        </Show>
+      </button>
+      <div class="wv-sample-insp__meta">
+        <span>{source()?.name ?? props.track.sourceLabel}</span>
+        <span>{pitchLabel(pitch())}</span>
+      </div>
+      <div class="wv-sample-insp__knobs">
+        <Knob def={volumeDef()} value={gainDb} onInput={setGain} owner={owner()} size={31} color={colour()} />
+        <Knob def={SAMPLE_PAN_DEF} value={pan} onInput={setPan} owner={owner()} size={31} color={colour()} />
+        <Knob def={SAMPLE_PITCH_DEF} value={pitch} onInput={setPitch} owner={owner()} size={31} color={colour()} />
+        <Knob
+          def={SAMPLE_FADE_IN_DEF}
+          value={fadeIn}
+          onInput={(value) => setFades(value, fadeOut())}
+          owner={owner()}
+          size={31}
+          color={colour()}
+        />
+        <Knob
+          def={SAMPLE_FADE_OUT_DEF}
+          value={fadeOut}
+          onInput={(value) => setFades(fadeIn(), value)}
+          owner={owner()}
+          size={31}
+          color={colour()}
+        />
       </div>
     </div>
   );
@@ -752,6 +944,9 @@ function InsertCard(props: {
   strip: StripRef;
   stripName: string;
   insert: InsertDto;
+  count: number;
+  onMove: (from: number, to: number) => void;
+  onDrop: (draggedId: number, targetId: number) => void;
 }): JSX.Element {
   const app = useAppState();
   const view = useView();
@@ -791,13 +986,34 @@ function InsertCard(props: {
   return (
     <div
       class="wv-card wv-card--insert"
+      onDragOver={(event) => {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        const id = Number(event.dataTransfer?.getData('text/plain'));
+        if (Number.isFinite(id)) props.onDrop(id, props.insert.id);
+      }}
       onClick={(event) => {
         const el = event.target as HTMLElement;
-        if (el.closest('button, .wv-param')) return;
+        if (el.closest('button, .wv-param, .wv-card__drag')) return;
         view.openInsertEditor({ strip: props.strip, insertId: props.insert.id });
       }}
     >
       <div class="wv-card__head">
+        <span
+          class="wv-card__drag"
+          draggable
+          title={`Drag to change signal order — ${props.insert.name} is ${props.insert.index + 1} of ${props.count}`}
+          onDragStart={(event) => {
+            event.dataTransfer?.setData('text/plain', String(props.insert.id));
+            if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+          }}
+        >
+          ⋮⋮
+        </span>
+        <span class="wv-card__order" title="Signal order">{props.insert.index + 1}</span>
         <button
           type="button"
           class="wv-dot"
@@ -815,6 +1031,26 @@ function InsertCard(props: {
           {props.insert.name}
         </span>
         <span class="wv-spacer" />
+        <button
+          type="button"
+          class="wv-card__icon"
+          disabled={props.insert.index === 0}
+          title="Move this effect earlier in the signal chain"
+          aria-label={`Move ${props.insert.name} earlier`}
+          onClick={() => props.onMove(props.insert.index, props.insert.index - 1)}
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          class="wv-card__icon"
+          disabled={props.insert.index >= props.count - 1}
+          title="Move this effect later in the signal chain"
+          aria-label={`Move ${props.insert.name} later`}
+          onClick={() => props.onMove(props.insert.index, props.insert.index + 1)}
+        >
+          ↓
+        </button>
         <button
           type="button"
           class="wv-card__icon wv-card__icon--accent"

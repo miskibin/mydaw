@@ -17,6 +17,8 @@
  */
 
 /** How the drag turns pointer travel into a value. */
+export type DragAxis = 'vertical' | 'horizontal' | 'both';
+
 export interface DragOptions {
   /** The value when the gesture started. */
   from: number;
@@ -40,7 +42,7 @@ export interface DragOptions {
    * natural as dragging it up, and demanding one or the other is a control that
    * feels stuck.
    */
-  axis?: 'vertical' | 'both';
+  axis?: DragAxis;
   /**
    * Multiplier applied while a fine-adjust modifier is held. `1` disables it.
    * Shift is the modifier, as it is in every plugin editor.
@@ -79,7 +81,7 @@ export function startDrag(event: PointerEvent, options: DragOptions): void {
     const dx = moveEvent.clientX - lastX;
     lastX = moveEvent.clientX;
     lastY = moveEvent.clientY;
-    const travel = axis === 'vertical' ? dy : dy + dx;
+    const travel = dragTravel(axis, dx, dy);
     const scale = moveEvent.shiftKey ? fineFactor : 1;
     value = clamp(value + travel * options.perPixel * scale);
     options.onChange(value);
@@ -103,6 +105,11 @@ export function startDrag(event: PointerEvent, options: DragOptions): void {
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', up);
   window.addEventListener('pointercancel', up);
+}
+
+/** Convert pointer deltas to the positive-direction travel for one control. */
+export function dragTravel(axis: DragAxis, dx: number, dy: number): number {
+  return axis === 'vertical' ? dy : axis === 'horizontal' ? dx : dy + dx;
 }
 
 /**

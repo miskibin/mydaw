@@ -9,7 +9,8 @@
  * slivers, and a grid you cannot hit is not a grid. So a cell is always
  * {@link CELL_W} x {@link CELL_H}, cells are grouped in fours by a beat gap and
  * in sixteens by a bar gap, and the lane scrolls horizontally when the pattern
- * is longer than the window.
+ * is longer than the window. Past the loop sits one extra grayed bar — paint
+ * it to grow the pattern — rather than the rest of the four-bar workspace.
  *
  * ## The mode button is a conversion, not a view switch
  *
@@ -18,6 +19,8 @@
  * rather than just change what is drawn -- leaving the cells switched on under
  * a converted melody would double every hit. Both directions carry as much as
  * the other representation can hold, and the readout says what was lost.
+ * Opening the piano roll (F7, the channel menu) does the same conversion first,
+ * so a row of steps is not an empty roll.
  *
  * ## Where in the loop we are
  *
@@ -32,33 +35,40 @@ import { For, Index, Show, createEffect, createSignal, onCleanup } from 'solid-j
 import type { ChannelClipDto, PatternDto, TrackDto } from '../api/types';
 import {
   TICKS_PER_STEP,
+  channelClip,
+  channelScore,
   displayMode,
   emptyRow,
   isAccent,
   notesToSteps,
   patternTick,
   patternTicks,
+  rackDisplaySteps,
   samplesToTicks,
   stepCells,
-  stepsToNotes,
   withChannel,
   withClearedChannel,
   withContentLength,
   withFilledSteps,
   withLength,
   withInvertedSteps,
+  withPastedScore,
   withRandomSteps,
   withRepeatedFirstBar,
+  withSetStep,
   withShiftedSteps,
-  withToggledStep,
+  withStepsConvertedToNotes,
+  type ChannelScore,
 } from '../lib/pattern';
-import { channelKind, hasSampleWindow, isAudioClipChannel } from '../lib/channel';
+import { channelColor, channelKind, hasSampleWindow, isAudioClipChannel } from '../lib/channel';
 import { allowDrop, droppedAudioFile, droppedAudioPath, importDroppedFile, parseDrop } from '../lib/dnd';
 import { useAppState } from '../state';
+import { usePatternNav } from '../shell/patternNav';
 import { useView } from '../shell/view';
 import { alpha, trackColor } from '../theme/tokens';
 import { onFrame } from '../ui/frameLoop';
-import { IconCaret, IconRoll, IconWarn, IconX } from '../ui/icons';
+import { Knob, spec } from '../ui/Knob';
+import { IconWarn, IconX } from '../ui/icons';
 import { InstrumentMenu } from './InstrumentMenu';
 
 /** A step cell, in pixels. Fixed: see the module docs. */
@@ -78,8 +88,6 @@ const BAR_PITCH = CELLS_PER_BAR * CELL_W + (CELLS_PER_BAR - 1) * CELL_GAP + BAR_
 
 /** The lengths a pattern may be, which is what the picker offers. */
 const LENGTHS = [16, 32, 64];
-/** FL-style rack workspace: the real loop ends earlier, but all four bars stay visible. */
-const DISPLAY_STEPS = 64;
 
 /**
  * Fill spacings the channel menu offers, in cells.
@@ -105,6 +113,21 @@ interface ChannelMenuState {
   y: number;
 }
 
+/**
+ * In-memory channel-score clipboard: survives switching patterns and closing
+ * the menu, not a restart. The piano roll keeps its own note clipboard.
+ */
+let channelScoreClipboard: ChannelScore | null = null;
+
+function scoreDetail(score: ChannelScore): string {
+  const hits = score.steps.filter((cell) => cell.on).length;
+  const notes = score.notes.length;
+  if (notes > 0 && hits > 0) return `${hits} steps · ${notes} notes`;
+  if (notes > 0) return `${notes} note${notes === 1 ? '' : 's'}`;
+  if (hits > 0) return `${hits} step${hits === 1 ? '' : 's'}`;
+  return 'empty';
+}
+
 /** Keep a context menu inside the window, matching the mixer's effect picker. */
 function menuPosition(event: MouseEvent, width: number, height: number): { x: number; y: number } {
   return {
@@ -127,8 +150,8 @@ function laneWidth(steps: number): number {
 export function Rack(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
+  const nav = usePatternNav();
   const [instrumentFor, setInstrumentFor] = createSignal<number | null>(null);
-  const [renaming, setRenaming] = createSignal<number | null>(null);
   const [dragOver, setDragOver] = createSignal(false);
   const [channelMenu, setChannelMenu] = createSignal<ChannelMenuState | null>(null);
 
@@ -147,10 +170,10 @@ export function Rack(): ReturnType<typeof Show> {
   /**
    * How far the lanes start from the left edge of the row stack.
    *
-   * Measured rather than added up from the LED, the name box and the roll
-   * button, because a constant here would be a second opinion about the row's
-   * layout that the CSS could drift away from without anything failing. Cached:
-   * it only moves when the row's chrome does.
+   * Measured rather than added up from the LED and the name box, because a
+   * constant here would be a second opinion about the row's layout that the
+   * CSS could drift away from without anything failing. Cached: it only
+   * moves when the row's chrome does.
    */
   let laneLeft = -1;
   function laneOffset(): number {
@@ -254,17 +277,19 @@ export function Rack(): ReturnType<typeof Show> {
 
   function selectChannel(index: number): void {
     view.setStrip({ kind: 'track', index });
+    view.setSideOpen(true);
+    view.setSideTab('inspector');
     app.selectTrack(index);
   }
 
   // --- steps ---------------------------------------------------------------
 
-  function toggleStep(channel: number, index: number, accent: boolean): void {
+  function paintStep(channel: number, index: number, on: boolean, accent: boolean): void {
     const key = app.channelKey(channel);
-    app.editPatternOnce(accent ? 'Accent step' : 'Toggle step', (current) => {
+    app.editPattern((current) => {
       const needed = index < 16 ? 16 : index < 32 ? 32 : 64;
       const resized = needed > current.steps ? withLength(current, needed) : current;
-      return withContentLength(withToggledStep(resized, channel, index, accent, key));
+      return withContentLength(withSetStep(resized, channel, index, on, accent, key));
     });
   }
 
@@ -276,25 +301,58 @@ export function Rack(): ReturnType<typeof Show> {
     app.say(`${name} · Repeat`, 'first bar copied through the pattern');
   }
 
-  /** FL-style Ctrl+Shift+Left/Right: rotate the selected channel by one step. */
+  /**
+   * FL Channel Rack keys while this view is mounted (the roll unmounts it):
+   * Ctrl+C / Ctrl+X / Ctrl+V copy, cut and paste the selected channel's score;
+   * Ctrl+Shift+Left/Right rotate its steps.
+   */
   createEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
-      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey || event.altKey) return;
-      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+      if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
       const strip = view.strip();
       if (strip.kind !== 'track') return;
+      const track = app.tracks()[strip.index];
+      if (!track || isAudioClipChannel(track)) return;
+
+      if (event.shiftKey) {
+        if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+        event.preventDefault();
+        const delta = event.key === 'ArrowLeft' ? -1 : 1;
+        const key = app.channelKey(strip.index);
+        app.editPatternOnce(delta < 0 ? 'Shift steps left' : 'Shift steps right', (current) =>
+          withShiftedSteps(current, strip.index, delta, key),
+        );
+        app.say(`${track.name} · Shift`, delta < 0 ? '1 step left' : '1 step right');
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+      if (key !== 'c' && key !== 'x' && key !== 'v') return;
       event.preventDefault();
-      const delta = event.key === 'ArrowLeft' ? -1 : 1;
-      const key = app.channelKey(strip.index);
-      app.editPatternOnce(delta < 0 ? 'Shift steps left' : 'Shift steps right', (current) =>
-        withShiftedSteps(current, strip.index, delta, key),
+      const current = pattern();
+      if (!current) return;
+      if (key === 'c' || key === 'x') {
+        channelScoreClipboard = channelScore(current, strip.index);
+        app.say(`${track.name} · ${key === 'x' ? 'Cut' : 'Copy'}`, scoreDetail(channelScoreClipboard));
+        if (key === 'c') return;
+        const trigger = app.channelKey(strip.index);
+        app.editPatternOnce('Cut', (target) => withClearedChannel(target, strip.index, trigger));
+        return;
+      }
+      const score = channelScoreClipboard;
+      if (!score) return;
+      const trigger = app.channelKey(strip.index);
+      app.editPatternOnce('Paste', (target) =>
+        withPastedScore(target, strip.index, score, trigger),
       );
-      app.say(
-        `${app.tracks()[strip.index]?.name ?? 'Channel'} · Shift`,
-        delta < 0 ? '1 step left' : '1 step right',
-      );
+      app.say(`${track.name} · Paste`, scoreDetail(score));
     };
     window.addEventListener('keydown', onKeyDown);
     onCleanup(() => window.removeEventListener('keydown', onKeyDown));
@@ -310,21 +368,14 @@ export function Rack(): ReturnType<typeof Show> {
     const toRoll = displayMode(clip) === 'steps';
 
     if (toRoll) {
-      const row = clip?.steps;
-      const converted = row ? stepsToNotes(row, current.steps) : [];
+      const after = withStepsConvertedToNotes(current, channel, key);
       app.editPatternOnce('Convert to piano roll', (target) =>
-        withChannel(target, channel, key, (existing) => ({
-          ...existing,
-          // The cells are cleared, not kept: the compiler would play both.
-          steps: existing.steps
-            ? { ...existing.steps, steps: existing.steps.steps.map((cell) => ({ ...cell, on: false })) }
-            : existing.steps,
-          notes: converted,
-        })),
+        withStepsConvertedToNotes(target, channel, key),
       );
+      const count = channelClip(after, channel)?.notes.length ?? 0;
       app.say(
         `${name} · Mode`,
-        converted.length > 0 ? `Piano roll — ${converted.length} steps became notes` : 'Piano roll',
+        count > 0 ? `Piano roll — ${count} steps became notes` : 'Piano roll',
       );
       return;
     }
@@ -411,6 +462,71 @@ export function Rack(): ReturnType<typeof Show> {
     placeSource(payload.ref);
   }
 
+  /** Decode a file first, then atomically swap this row to its one-shot source. */
+  async function replaceWithSample(track: TrackDto, path: string): Promise<void> {
+    const loaded = await app.backend.loadAudioSource(path);
+    await app.mixerCommand((backend) =>
+      backend.setTrackSource(track.index, `oneshot:${loaded.id}`),
+    );
+    await app.refreshAudioSources();
+    selectChannel(track.index);
+    app.say(`${track.name} · Replace`, loaded.name);
+  }
+
+  /** Replace an existing row with a browser instrument, including hosted ones. */
+  async function replaceWithSource(track: TrackDto, sourceId: string): Promise<void> {
+    const source = app.sources().find((entry) => entry.id === sourceId);
+    const vst3 = app.vst3Plugins().find((plugin) => `vst3:${plugin.id}` === sourceId);
+    await app.mixerCommand((backend) => {
+      if (source?.kind === 'clap' && source.bundlePath && source.pluginId) {
+        return backend.setTrackSourceClap(track.index, source.bundlePath, source.pluginId);
+      }
+      if (vst3) return backend.setTrackSourceVst3(track.index, vst3.path, vst3.id);
+      return backend.setTrackSource(track.index, sourceId);
+    });
+    selectChannel(track.index);
+    app.say(`${track.name} · Replace`, source?.label ?? vst3?.name ?? sourceId);
+  }
+
+  /** A drop on a row replaces that row; the rack background still adds a row. */
+  function replaceFromDrop(event: DragEvent, track: TrackDto): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragOver(false);
+
+    const filePath = droppedAudioPath(event);
+    if (filePath) {
+      void replaceWithSample(track, filePath).catch(app.report);
+      return;
+    }
+
+    // Capture the File synchronously: WebView2 clears DataTransfer after this
+    // handler returns, before its bytes have been read.
+    const file = droppedAudioFile(event);
+    if (file) {
+      void importDroppedFile(file, (name, bytes) => app.backend.importDroppedAudio(name, bytes))
+        .then((path) => replaceWithSample(track, path))
+        .catch(app.report);
+      return;
+    }
+
+    const payload = parseDrop(event.dataTransfer?.getData('text/plain') ?? '');
+    if (!payload) return;
+    if (payload.kind === 'audio') {
+      const source = app.audioSources().find((entry) => String(entry.id) === payload.ref);
+      if (source?.path) void replaceWithSample(track, source.path).catch(app.report);
+      else app.report(new Error('That audio file is no longer loaded'));
+      return;
+    }
+    if (payload.kind === 'inst') {
+      void replaceWithSource(track, payload.ref).catch(app.report);
+      return;
+    }
+    if (payload.kind === 'pattern') {
+      app.report(new Error('A pattern goes on a playlist lane, not a rack channel'));
+    }
+  }
+
   function placeSample(path: string): void {
     void app.mixerCommand((backend) => backend.addSampleChannel(path)).then(() => {
       void app.refreshAudioSources();
@@ -446,58 +562,33 @@ export function Rack(): ReturnType<typeof Show> {
         <div class="wv-pattabs">
           <For each={app.patterns()}>
             {(summary) => (
-              <Show
-                when={renaming() === summary.id}
-                fallback={
-                  <button
-                    type="button"
-                    class="wv-pattab"
-                    classList={{ 'is-active': summary.id === activeId() }}
-                    style={
-                      summary.id === activeId()
-                        ? {
-                            background: alpha(summary.color ?? trackColor(summary.id), 0.16),
-                            'box-shadow': `inset 0 0 0 1px ${alpha(summary.color ?? trackColor(summary.id), 0.6)}`,
-                          }
-                        : undefined
-                    }
-                    title="Click to edit this pattern · double-click to rename"
-                    onClick={() =>
-                      void app.sequencerCommand((backend) => backend.setActivePattern(summary.id))
-                    }
-                    onDblClick={() => setRenaming(summary.id)}
-                  >
-                    <span
-                      class="wv-swatch"
-                      style={{ background: summary.color ?? trackColor(summary.id) }}
-                    />
-                    {summary.name}
-                  </button>
+              <button
+                type="button"
+                class="wv-pattab"
+                classList={{ 'is-active': summary.id === activeId() }}
+                style={
+                  summary.id === activeId()
+                    ? {
+                        background: alpha(summary.color ?? trackColor(summary.id), 0.16),
+                        'box-shadow': `inset 0 0 0 1px ${alpha(summary.color ?? trackColor(summary.id), 0.6)}`,
+                      }
+                    : undefined
                 }
+                title="Click to edit this pattern · double-click for the piano roll · F2 to rename"
+                onClick={() =>
+                  void app.sequencerCommand((backend) => backend.setActivePattern(summary.id))
+                }
+                onDblClick={(event) => {
+                  event.preventDefault();
+                  void nav.openPattern(summary.id, { altKey: event.altKey, surface: 'tab' });
+                }}
               >
-                <input
-                  class="wv-pattab__input"
-                  value={summary.name}
-                  ref={(el) => queueMicrotask(() => el.select())}
-                  onKeyDown={(event) => {
-                    event.stopPropagation();
-                    if (event.key === 'Escape') setRenaming(null);
-                    if (event.key !== 'Enter') return;
-                    const name = event.currentTarget.value.trim();
-                    setRenaming(null);
-                    if (name && name !== summary.name) {
-                      void app.sequencerCommand((b) => b.renamePattern(summary.id, name));
-                    }
-                  }}
-                  onBlur={(event) => {
-                    const name = event.currentTarget.value.trim();
-                    setRenaming(null);
-                    if (name && name !== summary.name) {
-                      void app.sequencerCommand((b) => b.renamePattern(summary.id, name));
-                    }
-                  }}
+                <span
+                  class="wv-swatch"
+                  style={{ background: summary.color ?? trackColor(summary.id) }}
                 />
-              </Show>
+                {summary.name}
+              </button>
             )}
           </For>
           <button
@@ -562,13 +653,14 @@ export function Rack(): ReturnType<typeof Show> {
                   return strip.kind === 'track' && strip.index === track().index;
                 })()}
                 onSelect={() => selectChannel(track().index)}
-                onToggleStep={(index, accent) => toggleStep(track().index, index, accent)}
+                onPaintStep={(index, on, accent) => paintStep(track().index, index, on, accent)}
                 onOpenRoll={() => {
                   selectChannel(track().index);
+                  app.promoteStepsToRoll(track().index);
                   view.openRoll(track().index);
                 }}
-                onInstrument={() => setInstrumentFor(track().index)}
                 onOpenSample={() => view.openSampleEditor(track().index)}
+                onReplaceDrop={(event) => replaceFromDrop(event, track())}
                 onToggleMode={() => toggleMode(track().index, track().name)}
                 onRepeat={() => repeatFirstBar(track().index, track().name)}
                 onRemove={() => removeChannel(track())}
@@ -577,7 +669,7 @@ export function Rack(): ReturnType<typeof Show> {
                   setChannelMenu({
                     channel: track().index,
                     name: track().name,
-                    ...menuPosition(event, 216, 448),
+                    ...menuPosition(event, 216, 560),
                   });
                 }}
                 canRemove={app.tracks().length > 1}
@@ -609,48 +701,163 @@ export function Rack(): ReturnType<typeof Show> {
       </Show>
 
       <Show when={channelMenu()}>
-        {(menu) => <ChannelMenu menu={menu()} close={() => setChannelMenu(null)} />}
+        {(menu) => (
+          <ChannelMenu
+            menu={menu()}
+            close={() => setChannelMenu(null)}
+            onReplace={() => setInstrumentFor(menu().channel)}
+          />
+        )}
       </Show>
     </div>
   );
 }
 
-/** One channel: LED, name, roll button, its lane, the mode button, delete. */
+/** One channel: LED, name, volume, its lane, the mode button, delete. */
 function RackRow(props: {
   track: TrackDto;
   pattern: PatternDto | undefined;
   selected: boolean;
   canRemove: boolean;
   onSelect: () => void;
-  onToggleStep: (index: number, accent: boolean) => void;
+  onPaintStep: (index: number, on: boolean, accent: boolean) => void;
   onOpenRoll: () => void;
-  onInstrument: () => void;
   onOpenSample: () => void;
+  onReplaceDrop: (event: DragEvent) => void;
   onToggleMode: () => void;
   onRepeat: () => void;
   onRemove: () => void;
   onChannelMenu: (event: MouseEvent) => void;
 }): ReturnType<typeof Show> {
   const app = useAppState();
-  const colour = () => trackColor(props.track.id);
+  const colour = () => channelColor(props.track);
   const clip = () => props.pattern?.channels.find((entry) => entry.channel === props.track.index);
   const isRoll = () => displayMode(clip()) === 'roll';
   const length = () => props.pattern?.steps ?? 16;
+  /** Looping cells plus one grayed bar -- see `rackDisplaySteps`. */
+  const shown = () => rackDisplaySteps(length());
   /** Always a full lane -- see `stepCells` for the three ways a clip arrives. */
-  const steps = () => stepCells(clip(), DISPLAY_STEPS);
+  const steps = () => stepCells(clip(), shown());
+  const [localDb, setLocalDb] = createSignal<number | null>(null);
+  const [replaceOver, setReplaceOver] = createSignal(false);
+  const gainDb = () => localDb() ?? props.track.gainDb;
+  const volumeDef = () =>
+    spec(
+      'volume',
+      'Volume',
+      'dB',
+      app.mixer()?.minGainDb ?? -60,
+      app.mixer()?.maxGainDb ?? 6,
+      0,
+    );
+
+  function setGain(value: number): void {
+    setLocalDb(value);
+    void app.backend.setTrackGain(props.track.index, value).catch(app.report);
+  }
+
+  function commitGain(): void {
+    void app.mixerCommand((backend) => backend.getTracks()).finally(() => setLocalDb(null));
+  }
+
+  let laneEl: HTMLDivElement | undefined;
+  let paint: { on: boolean; accent: boolean; seen: Set<number>; last: number } | null = null;
+
+  function stepAt(clientX: number, clientY: number): number | null {
+    const hit = document.elementFromPoint(clientX, clientY);
+    const step = hit instanceof Element ? hit.closest('.wv-step') : null;
+    if (!step || !laneEl?.contains(step)) return null;
+    const index = Number((step as HTMLElement).dataset.index);
+    return Number.isInteger(index) ? index : null;
+  }
+
+  function applyPaint(index: number): void {
+    if (!paint) return;
+    const from = paint.last;
+    const lo = Math.min(from, index);
+    const hi = Math.max(from, index);
+    for (let step = lo; step <= hi; step += 1) {
+      if (paint.seen.has(step)) continue;
+      paint.seen.add(step);
+      props.onPaintStep(step, paint.on, paint.accent);
+    }
+    paint.last = index;
+  }
+
+  function beginPaint(event: PointerEvent, index: number, wasOn: boolean): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const accent = event.shiftKey;
+    const on = !wasOn;
+    paint = { on, accent, seen: new Set(), last: index };
+    app.startPatternGesture(on ? (accent ? 'Accent steps' : 'Paint steps') : 'Erase steps');
+    applyPaint(index);
+
+    const move = (moveEvent: PointerEvent) => {
+      const next = stepAt(moveEvent.clientX, moveEvent.clientY);
+      if (next !== null) applyPaint(next);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      document.body.style.removeProperty('user-select');
+      paint = null;
+      app.commitPatternGesture();
+    };
+    document.body.style.setProperty('user-select', 'none');
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+  }
+
+  onCleanup(() => {
+    if (!paint) return;
+    paint = null;
+    app.commitPatternGesture();
+  });
 
   return (
     <div
       class="wv-chrow"
-      classList={{ 'is-selected': props.selected, 'is-muted': props.track.muted }}
+      classList={{
+        'is-selected': props.selected,
+        'is-muted': props.track.muted,
+        'is-replace': replaceOver(),
+      }}
       onClick={() => props.onSelect()}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        props.onChannelMenu(event);
+      }}
+      onDragOver={(event) => {
+        event.stopPropagation();
+        allowDrop(event);
+        if (!replaceOver()) setReplaceOver(true);
+      }}
+      onDragLeave={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node)) return;
+        setReplaceOver(false);
+      }}
+      onDrop={(event) => {
+        setReplaceOver(false);
+        props.onReplaceDrop(event);
+      }}
     >
+      <Show when={replaceOver()}>
+        <span class="wv-chrow__replace">REPLACE {props.track.name}</span>
+      </Show>
       <button
         type="button"
         class="wv-led"
         classList={{ 'is-muted': props.track.muted }}
         style={{ background: props.track.muted ? 'transparent' : colour() }}
-        title={props.track.muted ? 'Unmute this channel' : 'Mute this channel'}
+        title={
+          props.track.muted
+            ? `Unmute this channel · ${channelKind(props.track).title}`
+            : `Mute this channel · ${channelKind(props.track).title}`
+        }
         onClick={(event) => {
           event.stopPropagation();
           void app.mixerCommand((backend) =>
@@ -660,38 +867,26 @@ function RackRow(props: {
         }}
       />
 
-      <div
-        class="wv-chrow__name"
-        onContextMenu={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          props.onChannelMenu(event);
-        }}
-      >
-        <span
-          class={`wv-chrow__kind wv-chrow__kind--${channelKind(props.track).kind}`}
-          title={channelKind(props.track).title}
-        >
-          {channelKind(props.track).badge}
-        </span>
+      <div class="wv-chrow__name">
         <button
           type="button"
           class="wv-chrow__label"
           title={`${
             props.track.clap?.hasEditor || props.track.vst3?.hasEditor
               ? 'Open this instrument’s own window'
-              : hasSampleWindow(props.track)
-                ? 'Open the sample window'
-                : channelKind(props.track).title
-          } · right-click to fill the grid`}
+              : 'Select this channel · double-click for the instrument window'
+          } · right-click for piano roll and fills`}
           onClick={(event) => {
             event.stopPropagation();
             props.onSelect();
             const slot = props.track.clap ?? props.track.vst3;
             if (slot?.hasEditor) {
               app.toggleGui({ slot: 'track', index: props.track.index }, !slot.guiOpen);
-              return;
             }
+          }}
+          onDblClick={(event) => {
+            event.stopPropagation();
+            props.onSelect();
             if (hasSampleWindow(props.track)) props.onOpenSample();
           }}
         >
@@ -702,18 +897,19 @@ function RackRow(props: {
             <IconWarn />
           </span>
         </Show>
-        <button
-          type="button"
-          class="wv-chrow__caret"
-          title="Replace this channel's instrument"
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onSelect();
-            props.onInstrument();
-          }}
-        >
-          <IconCaret />
-        </button>
+      </div>
+
+      <div class="wv-chrow__vol" onClick={(event) => event.stopPropagation()}>
+        <Knob
+          def={volumeDef()}
+          value={gainDb}
+          onInput={setGain}
+          onCommit={commitGain}
+          owner={props.track.name}
+          size={22}
+          color={colour()}
+          title={`Channel volume ${gainDb().toFixed(1)} dB — linked to the sample inspector and mixer`}
+        />
       </div>
 
       <button
@@ -729,32 +925,13 @@ function RackRow(props: {
         ↪
       </button>
 
-      <button
-        type="button"
-        class="wv-chrow__roll"
-        classList={{ 'is-on': isRoll() }}
-        disabled={isAudioClipChannel(props.track)}
-        title={
-          isAudioClipChannel(props.track)
-            ? 'Audio clips play from the playlist, not the piano roll'
-            : 'Open the piano roll for this channel (F7)'
-        }
-        onClick={(event) => {
-          event.stopPropagation();
-          if (isAudioClipChannel(props.track)) return;
-          props.onOpenRoll();
-        }}
-      >
-        <IconRoll />
-      </button>
-
-      <div class="wv-chrow__lane" style={{ width: `${laneWidth(DISPLAY_STEPS)}px` }}>
+      <div class="wv-chrow__lane" ref={laneEl} style={{ width: `${laneWidth(shown())}px` }}>
         <Show
           when={!isAudioClipChannel(props.track)}
           fallback={
             <div
               class="wv-chrow__clip"
-              style={{ width: `${laneWidth(DISPLAY_STEPS)}px` }}
+              style={{ width: `${laneWidth(shown())}px` }}
               title="This channel plays playlist clips of its file"
             >
               playlist
@@ -768,7 +945,7 @@ function RackRow(props: {
               type="button"
               class="wv-chrow__preview"
               style={{
-                width: `${laneWidth(DISPLAY_STEPS)}px`,
+                width: `${laneWidth(shown())}px`,
                 'background-size': `${BAR_PITCH}px 100%`,
               }}
               title="Open the piano roll for this channel"
@@ -778,7 +955,7 @@ function RackRow(props: {
               }}
             >
               <NotePreview clip={clip()} pattern={props.pattern} colour={colour()} />
-              <Show when={length() < DISPLAY_STEPS}>
+              <Show when={length() < shown()}>
                 <span
                   class="wv-chrow__tail"
                   style={{ left: `${cellX(length()) - BAR_GAP}px` }}
@@ -798,6 +975,7 @@ function RackRow(props: {
                 <button
                   type="button"
                   class="wv-step"
+                  data-index={index}
                   classList={{
                     'is-beat': beat,
                     'is-unused': index >= length(),
@@ -817,11 +995,12 @@ function RackRow(props: {
                         : alpha(colour(), 0.8)
                       : undefined,
                   }}
-                  title={`Step ${index + 1} — click to toggle, shift-click for an accent`}
-                  onClick={(event) => {
+                  title={`Step ${index + 1} — drag to paint, shift-drag for an accent`}
+                  onPointerDown={(event) => {
                     event.stopPropagation();
-                    props.onToggleStep(index, event.shiftKey);
+                    beginPaint(event, index, cell().on);
                   }}
+                  onClick={(event) => event.stopPropagation()}
                 />
               );
             }}
@@ -872,16 +1051,24 @@ function RackRow(props: {
 }
 
 /**
- * Right-click on a channel name. The fills are FL's: every Nth cell on, the
- * rest off, starting at the left edge. Invert / shift / random rewrite the
- * same grid. Notes go with them — the compiler would play both.
+ * Right-click on a channel. Piano roll and replace live here so the name box
+ * stays a name. The fills are FL's: every Nth cell on, the rest off, starting
+ * at the left edge. Copy / paste move the score between channels or patterns.
+ * Invert / shift / random rewrite the same grid. Notes go with them — the
+ * compiler would play both.
  */
 function ChannelMenu(props: {
   menu: ChannelMenuState;
   close: () => void;
+  onReplace: () => void;
 }): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
+  const track = () => app.tracks()[props.menu.channel];
+  const clipLocked = () => {
+    const current = track();
+    return !current || isAudioClipChannel(current);
+  };
 
   function edit(
     label: string,
@@ -929,6 +1116,32 @@ function ChannelMenu(props: {
     );
   }
 
+  function copy(): void {
+    const current = app.pattern();
+    if (!current || clipLocked()) return;
+    channelScoreClipboard = channelScore(current, props.menu.channel);
+    app.say(`${props.menu.name} · Copy`, scoreDetail(channelScoreClipboard));
+    props.close();
+  }
+
+  function cut(): void {
+    const current = app.pattern();
+    if (!current || clipLocked()) return;
+    const score = channelScore(current, props.menu.channel);
+    channelScoreClipboard = score;
+    edit('Cut', (pattern, key) => withClearedChannel(pattern, props.menu.channel, key), scoreDetail(score));
+  }
+
+  function paste(): void {
+    const score = channelScoreClipboard;
+    if (!score || clipLocked()) return;
+    edit(
+      'Paste',
+      (current, key) => withPastedScore(current, props.menu.channel, score, key),
+      scoreDetail(score),
+    );
+  }
+
   return (
     <div
       class="wv-scrim"
@@ -943,6 +1156,51 @@ function ChannelMenu(props: {
         style={{ left: `${props.menu.x}px`, top: `${props.menu.y}px` }}
         onClick={(event) => event.stopPropagation()}
       >
+        <button
+          type="button"
+          class="wv-menu__row"
+          disabled={clipLocked()}
+          title={
+            clipLocked()
+              ? 'Audio clips play from the playlist, not the piano roll'
+              : 'Turn these steps into notes and open the piano roll (F7)'
+          }
+          onClick={() => {
+            if (clipLocked()) return;
+            app.promoteStepsToRoll(props.menu.channel);
+            view.openRoll(props.menu.channel);
+            props.close();
+          }}
+        >
+          <span>Piano roll</span>
+          <span class="wv-spacer" />
+          <span class="wv-menu__meta">F7</span>
+        </button>
+        <button
+          type="button"
+          class="wv-menu__row"
+          title="Replace this channel's instrument"
+          onClick={() => {
+            props.close();
+            props.onReplace();
+          }}
+        >
+          Replace instrument
+        </button>
+        <Show when={track() && hasSampleWindow(track()!)}>
+          <button
+            type="button"
+            class="wv-menu__row"
+            title="Open the sample window for this channel"
+            onClick={() => {
+              view.openSampleEditor(props.menu.channel);
+              props.close();
+            }}
+          >
+            Sample editor
+          </button>
+        </Show>
+        <div class="wv-menu__rule" />
         <For each={FILL_INTERVALS}>
           {(entry) => (
             <button
@@ -968,6 +1226,53 @@ function ChannelMenu(props: {
           <span>Fill all</span>
         </button>
         <div class="wv-menu__rule" />
+        <button
+          type="button"
+          class="wv-menu__row"
+          disabled={clipLocked()}
+          title={
+            clipLocked()
+              ? 'Audio clips play from the playlist, not a step score'
+              : "Copy this channel's steps and notes (Ctrl+C)"
+          }
+          onClick={copy}
+        >
+          <span>Copy</span>
+          <span class="wv-spacer" />
+          <span class="wv-menu__meta">Ctrl+C</span>
+        </button>
+        <button
+          type="button"
+          class="wv-menu__row"
+          disabled={clipLocked()}
+          title={
+            clipLocked()
+              ? 'Audio clips play from the playlist, not a step score'
+              : "Cut this channel's steps and notes (Ctrl+X)"
+          }
+          onClick={cut}
+        >
+          <span>Cut</span>
+          <span class="wv-spacer" />
+          <span class="wv-menu__meta">Ctrl+X</span>
+        </button>
+        <button
+          type="button"
+          class="wv-menu__row"
+          disabled={clipLocked() || channelScoreClipboard === null}
+          title={
+            clipLocked()
+              ? 'Audio clips play from the playlist, not a step score'
+              : channelScoreClipboard === null
+                ? 'Copy a channel first'
+                : 'Paste the copied steps and notes onto this channel (Ctrl+V)'
+          }
+          onClick={paste}
+        >
+          <span>Paste</span>
+          <span class="wv-spacer" />
+          <span class="wv-menu__meta">Ctrl+V</span>
+        </button>
         <button type="button" class="wv-menu__row" title="Flip every step" onClick={invert}>
           Invert
         </button>
@@ -1003,33 +1308,19 @@ function ChannelMenu(props: {
         >
           Clear
         </button>
-        <div class="wv-menu__rule" />
-        <button
-          type="button"
-          class="wv-menu__row"
-          title="Open the piano roll for this channel (F7)"
-          onClick={() => {
-            view.openRoll(props.menu.channel);
-            props.close();
-          }}
-        >
-          <span>Piano roll</span>
-          <span class="wv-spacer" />
-          <span class="wv-menu__meta">F7</span>
-        </button>
       </div>
     </div>
   );
 }
 
-/** A channel's notes at a glance, laid out over the pattern's whole length. */
+/** A channel's notes at a glance, laid out over the same span as the step lane. */
 function NotePreview(props: {
   clip: ChannelClipDto | undefined;
   pattern: PatternDto | undefined;
   colour: string;
 }): ReturnType<typeof Show> {
   const notes = () => props.clip?.notes ?? [];
-  const span = () => DISPLAY_STEPS * TICKS_PER_STEP;
+  const span = () => rackDisplaySteps(props.pattern?.steps ?? 16) * TICKS_PER_STEP;
   const range = () => {
     const keys = notes().map((note) => note.key);
     const low = keys.length > 0 ? Math.min(...keys) : 60;

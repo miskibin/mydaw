@@ -23,10 +23,11 @@ use mydaw_audio_file::{cubic, decode_stereo, taps, DecodeError, CHANNELS};
 use mydaw_plugin_audio_io::AudioIoError;
 use mydaw_plugin_sequencer::{playback_step, ramp_step, AudioSource, CLIP_RAMP_MS};
 use mydaw_rt_core::basedrop::{Handle, Owned};
-use mydaw_rt_core::{ProcessCtx, RtNode};
+use mydaw_rt_core::{AtomicF32, ProcessCtx, RtNode};
 use parking_lot::Mutex;
 use rtrb::{Consumer, Producer};
 
+use crate::preview_settings::DEFAULT_PREVIEW_GAIN;
 use crate::source::SourceError;
 
 /// In-flight preview swaps. A click-click-click through the browser is the
@@ -50,6 +51,9 @@ struct PreviewSender {
 /// The shell's handle on the preview player. `Send + Sync`.
 pub struct FilePreviewBus {
     sender: Mutex<Option<PreviewSender>>,
+    /// Linear fraction of master, `0..=1`. Shared with the RT node so a Settings
+    /// drag is heard on the next block, the same way a fader is.
+    gain: Arc<AtomicF32>,
 }
 
 impl Default for FilePreviewBus {
@@ -59,10 +63,11 @@ impl Default for FilePreviewBus {
 }
 
 impl FilePreviewBus {
-    /// An empty, detached bus.
+    /// An empty, detached bus at the default preview level.
     pub fn new() -> Self {
         Self {
             sender: Mutex::new(None),
+            gain: Arc::new(AtomicF32::new(DEFAULT_PREVIEW_GAIN)),
         }
     }
 
@@ -76,7 +81,23 @@ impl FilePreviewBus {
             position: 0.0,
             env: 0.0,
             releasing: false,
+            gain: Arc::clone(&self.gain),
         })
+    }
+
+    /// Linear preview gain, `0..=1`.
+    pub fn gain(&self) -> f32 {
+        self.gain.get()
+    }
+
+    /// Set the linear preview gain. Non-finite values become silence.
+    pub fn set_gain(&self, gain: f32) {
+        let gain = if gain.is_finite() {
+            gain.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        self.gain.set(gain);
     }
 
     /// Forget the current stream's channel. Called when audio stops.
@@ -90,6 +111,14 @@ impl FilePreviewBus {
     /// A decode failure, or [`AudioIoError::NotRunning`] when no stream is open.
     pub fn play(&self, path: &Path) -> Result<(), PreviewFileError> {
         let source = decode_preview(path)?;
+        self.play_source(source)
+    }
+
+    /// Play an already-decoded take. Replaces whatever was previewing.
+    ///
+    /// # Errors
+    /// [`AudioIoError::NotRunning`] when no stream is open, or a full queue.
+    pub fn play_source(&self, source: AudioSource) -> Result<(), PreviewFileError> {
         self.install(Some(Arc::new(source)))?;
         Ok(())
     }
@@ -158,6 +187,7 @@ struct FilePreviewNode {
     position: f64,
     env: f32,
     releasing: bool,
+    gain: Arc<AtomicF32>,
 }
 
 impl FilePreviewNode {
@@ -218,15 +248,26 @@ impl FilePreviewNode {
             if CHANNELS > 1 {
                 right[frame] += cubic(taps(padded, index, 1), fraction) * gain;
             }
-            if self.releasing {
-                self.env -= ramp;
-                if self.env <= 0.0 {
-                    self.env = 0.0;
-                    finished = true;
-                    break;
+            let target = if self.releasing {
+                0.0
+            } else {
+                let level = self.gain.get();
+                if level.is_finite() {
+                    level.clamp(0.0, 1.0)
+                } else {
+                    0.0
                 }
-            } else if self.env < 1.0 {
-                self.env = (self.env + ramp).min(1.0);
+            };
+            if self.releasing && self.env <= ramp {
+                self.env = 0.0;
+                finished = true;
+                break;
+            } else if (self.env - target).abs() <= ramp {
+                self.env = target;
+            } else if self.env < target {
+                self.env += ramp;
+            } else {
+                self.env -= ramp;
             }
             self.position += step;
         }
@@ -274,6 +315,7 @@ mod tests {
         let mut node = file_preview_node(&bus, collector.handle());
         assert!(bus.is_open());
 
+        bus.set_gain(1.0);
         let source = Arc::new(AudioSource::from_stereo(
             0,
             Path::new("kick.wav"),
@@ -353,6 +395,91 @@ mod tests {
             Arc::strong_count(&source),
             1,
             "the collector must be the one that frees it"
+        );
+    }
+
+    fn process_block(node: &mut Box<dyn RtNode>, buffers: &mut AudioBuffers, fill: f32) {
+        let mut ctx = ProcessCtx::new(
+            buffers,
+            SR,
+            BLOCK,
+            TransportSnapshot {
+                sample_pos: 0,
+                playing: false,
+                bpm: 120.0,
+                mode: PlayMode::Pattern,
+            },
+        );
+        for channel in ctx.buffers.as_mut_slices() {
+            channel.fill(fill);
+        }
+        node.process(&mut ctx);
+    }
+
+    #[test]
+    fn preview_gain_scales_the_voice_before_it_hits_the_bus() {
+        let collector = Collector::new();
+        let bus = Arc::new(FilePreviewBus::new());
+        assert!((bus.gain() - 0.8).abs() < 1e-6, "default is 80% of master");
+
+        let mut unity = bus.open(collector.handle());
+        bus.set_gain(1.0);
+        let source =
+            || AudioSource::from_stereo(0, Path::new("hit.wav"), SR, vec![0.5; 2_000 * CHANNELS]);
+        bus.play_source(source()).expect("publishes");
+        let mut buffers = AudioBuffers::new(BLOCK);
+        process_block(&mut unity, &mut buffers, 0.0);
+        let full = buffers.as_slices()[0]
+            .iter()
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+
+        let collector = Collector::new();
+        let bus = Arc::new(FilePreviewBus::new());
+        let mut quiet = bus.open(collector.handle());
+        bus.set_gain(0.5);
+        bus.play_source(source()).expect("publishes");
+        process_block(&mut quiet, &mut buffers, 0.0);
+        let half = buffers.as_slices()[0]
+            .iter()
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+
+        assert!(full > 0.3, "unity preview must be audible, peak {full}");
+        assert!(
+            (half - full * 0.5).abs() < 0.05,
+            "half gain should be half as loud: half {half} vs full {full}"
+        );
+    }
+
+    #[test]
+    fn stop_fades_the_preview_out() {
+        let collector = Collector::new();
+        let bus = Arc::new(FilePreviewBus::new());
+        let mut node = bus.open(collector.handle());
+        bus.set_gain(1.0);
+        bus.play_source(AudioSource::from_stereo(
+            0,
+            Path::new("loop.wav"),
+            SR,
+            vec![0.5; 48_000 * CHANNELS],
+        ))
+        .expect("publishes");
+
+        let mut buffers = AudioBuffers::new(BLOCK);
+        process_block(&mut node, &mut buffers, 0.0);
+        let sounding = buffers.as_slices()[0]
+            .iter()
+            .any(|sample| sample.abs() > 0.1);
+        assert!(sounding, "the take must start");
+
+        bus.stop().expect("stop publishes");
+        // Several blocks so the 2 ms fade can finish.
+        for _ in 0..8 {
+            process_block(&mut node, &mut buffers, 0.0);
+        }
+        let silent = buffers.as_slices()[0].iter().all(|sample| *sample == 0.0);
+        assert!(
+            silent,
+            "stop must leave the bus at whatever was already there"
         );
     }
 }

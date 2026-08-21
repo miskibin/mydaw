@@ -416,7 +416,7 @@ impl Source {
 
     /// Whether this source plays note events.
     pub const fn takes_notes(&self) -> bool {
-        !matches!(self, Self::TestTone | Self::AudioClip { .. })
+        !matches!(self, Self::TestTone)
     }
 
     /// Whether this source is a hosted CLAP plugin, and therefore needs the
@@ -1051,7 +1051,7 @@ mod tests {
         let clip = Source::AudioClip { source_id: 9 };
         assert_eq!(clip.id(), "clip:9");
         assert_eq!(Source::parse("clip:9").unwrap(), clip);
-        assert!(!clip.takes_notes());
+        assert!(clip.takes_notes());
         assert_eq!(clip.sample_file_id(), Some(9));
 
         let shot = Source::OneShot { source_id: 9 };

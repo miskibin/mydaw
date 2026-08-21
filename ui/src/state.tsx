@@ -64,6 +64,7 @@ import {
   UndoStack,
   type PlaylistSnapshot,
 } from './lib/undo';
+import { channelClip, withStepsConvertedToNotes } from './lib/pattern';
 import { clampDb, formatDb, MAX_DB, MIN_DB } from './panels/mixer/scale';
 
 /** How long a pattern edit waits for the next one before it is pushed. */
@@ -141,6 +142,7 @@ export interface AppState {
   scanning: Accessor<boolean>;
   project: Accessor<ProjectInfo>;
   streamInfo: Accessor<StreamInfo | undefined>;
+  refreshStreamInfo(): Promise<void>;
   assets: Accessor<AssetStatus[]>;
   playing: Accessor<boolean>;
   octave: Accessor<number>;
@@ -159,6 +161,15 @@ export interface AppState {
   bpm: Accessor<number>;
   /** The MIDI key a rack channel's grid triggers, for a note the roll adds. */
   channelKey(channel: number): number;
+  /**
+   * Turn this channel's switched-on steps into one-step piano-roll notes.
+   *
+   * Opening the roll on a sequencer row would otherwise be empty: the engine
+   * stores steps and notes separately, and the roll only draws notes. Same
+   * no-op-by-reference contract as the other pattern edits. Returns how many
+   * notes were created.
+   */
+  promoteStepsToRoll(channel: number): number;
 
   // --- the parameter readout -----------------------------------------------
   param: Accessor<ParamReadout | null>;
@@ -328,6 +339,14 @@ function createAppState(): AppState {
       setAudioSources(await backend.getAudioSources());
     } catch (error) {
       report(error);
+    }
+  }
+
+  async function refreshStreamInfo(): Promise<void> {
+    try {
+      setStreamInfo(await backend.getStreamInfo());
+    } catch {
+      /* the status bar is a readout, not an error surface */
     }
   }
 
@@ -899,6 +918,7 @@ function createAppState(): AppState {
     scanning,
     project,
     streamInfo,
+    refreshStreamInfo,
     assets,
     playing,
     octave,
@@ -917,6 +937,22 @@ function createAppState(): AppState {
     bpm: () => sequencer()?.bpm ?? 130,
     channelKey: (channel: number) =>
       pattern()?.channels.find((clip) => clip.channel === channel)?.steps?.key ?? 60,
+    promoteStepsToRoll(channel: number): number {
+      const current = pattern();
+      if (!current) return 0;
+      const key =
+        current.channels.find((clip) => clip.channel === channel)?.steps?.key ?? 60;
+      const after = withStepsConvertedToNotes(current, channel, key);
+      if (after === current) return 0;
+      editPatternOnce('Convert to piano roll', (target) =>
+        withStepsConvertedToNotes(target, channel, key),
+      );
+      const count = channelClip(after, channel)?.notes.length ?? 0;
+      const name =
+        mixer()?.tracks.find((track) => track.index === channel)?.name ?? 'Channel';
+      say(`${name} · Piano roll`, `${count} steps became notes`);
+      return count;
+    },
     param,
     say,
     refresh,

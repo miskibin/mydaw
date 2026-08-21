@@ -10,6 +10,7 @@ import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, o
 
 import type { EffectInfoDto, InsertDto, InsertTarget, SpectrumDto } from '../api/types';
 import { editorLayout } from '../lib/effectLayout';
+import { channelColor } from '../lib/channel';
 import { useView, type InsertEditorRef } from '../shell/view';
 import { insertTargetFor, useAppState } from '../state';
 import { trackColor } from '../theme/tokens';
@@ -113,7 +114,7 @@ function EffectEditor(props: {
     const ref = props.editor.strip;
     if (ref.kind === 'track') {
       const track = mixer.tracks[ref.index];
-      return track && { name: track.name, color: trackColor(track.id), chain: track.inserts };
+      return track && { name: track.name, color: channelColor(track), chain: track.inserts };
     }
     if (ref.kind === 'bus') {
       const bus = mixer.buses[ref.index];

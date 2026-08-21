@@ -6,12 +6,15 @@
 //! Region start/end is the SMP crop, shared with the sample window.
 //!
 //! Voices are the clip player's cubic interpolator and 2 ms ramps, minus the
-//! song. RT-safe: array reads and multiplies, no allocation.
+//! song. Playback rate is channel pitch plus `(note - root key)` minus the
+//! root's fine cents, so a detected F♯3 +12 ct plays concert F♯3 at MIDI 54.
+//! RT-safe: array reads and multiplies, no allocation.
 
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use mydaw_audio_file::{cubic, taps};
-use mydaw_rt_core::{NoteKind, ProcessCtx, RtNode, CHANNELS};
+use mydaw_rt_core::{AtomicF32, NoteKind, ProcessCtx, RtNode, CHANNELS};
 
 use crate::audio::AudioSource;
 use crate::clips::{pitch_ratio, playback_step, ramp_step, CLIP_RAMP_MS};
@@ -19,33 +22,163 @@ use crate::clips::{pitch_ratio, playback_step, ramp_step, CLIP_RAMP_MS};
 /// Voices one sampler channel may hold at once.
 pub const ONESHOT_VOICES: usize = 8;
 
-/// MIDI key at which the file plays at recorded pitch (C4).
+/// MIDI key at which an uncalibrated file plays at recorded pitch (C4).
 pub const ONESHOT_ROOT_KEY: u8 = 60;
+
+/// Live defaults for one sample channel.
+///
+/// A note snapshots these atomics when it starts. Editing the channel therefore
+/// changes the next hit without replacing the node or reshaping voices that are
+/// already sounding. Region frames are packed as two `u32`s: loaded sources are
+/// capped at ten minutes, well below that frame count even at supported rates.
+#[derive(Debug)]
+pub struct SamplePlaybackParams {
+    region: AtomicU64,
+    pitch_cents: AtomicF32,
+    fades: AtomicU64,
+    root_key: AtomicU32,
+    root_fine_cents: AtomicF32,
+}
+
+#[derive(Clone, Copy)]
+struct SamplePlaybackSnapshot {
+    start_frames: u64,
+    end_frames: u64,
+    pitch_cents: f32,
+    fades: (f32, f32),
+    root_key: u8,
+    root_fine_cents: f32,
+}
+
+impl SamplePlaybackParams {
+    pub fn new(start_frames: u64, end_frames: u64, pitch_cents: f32, fades: (f32, f32)) -> Self {
+        Self::with_root(
+            start_frames,
+            end_frames,
+            pitch_cents,
+            fades,
+            ONESHOT_ROOT_KEY,
+            0.0,
+        )
+    }
+
+    pub fn with_root(
+        start_frames: u64,
+        end_frames: u64,
+        pitch_cents: f32,
+        fades: (f32, f32),
+        root_key: u8,
+        root_fine_cents: f32,
+    ) -> Self {
+        Self {
+            region: AtomicU64::new(pack_region(start_frames, end_frames)),
+            pitch_cents: AtomicF32::new(sane_pitch(pitch_cents)),
+            fades: AtomicU64::new(pack_fades(fades.0, fades.1)),
+            root_key: AtomicU32::new(u32::from(sane_root_key(root_key))),
+            root_fine_cents: AtomicF32::new(sane_root_fine(root_fine_cents)),
+        }
+    }
+
+    pub fn set_region(&self, start_frames: u64, end_frames: u64) {
+        self.region
+            .store(pack_region(start_frames, end_frames), Ordering::Relaxed);
+    }
+
+    pub fn set_pitch_cents(&self, pitch_cents: f32) {
+        self.pitch_cents.set(sane_pitch(pitch_cents));
+    }
+
+    pub fn set_fades(&self, fade_in_ms: f32, fade_out_ms: f32) {
+        self.fades
+            .store(pack_fades(fade_in_ms, fade_out_ms), Ordering::Relaxed);
+    }
+
+    pub fn set_root(&self, root_key: u8, root_fine_cents: f32) {
+        self.root_key
+            .store(u32::from(sane_root_key(root_key)), Ordering::Relaxed);
+        self.root_fine_cents.set(sane_root_fine(root_fine_cents));
+    }
+
+    fn snapshot(&self) -> SamplePlaybackSnapshot {
+        let region = self.region.load(Ordering::Relaxed);
+        let fades = self.fades.load(Ordering::Relaxed);
+        SamplePlaybackSnapshot {
+            start_frames: region >> 32,
+            end_frames: region & u64::from(u32::MAX),
+            pitch_cents: self.pitch_cents.get(),
+            fades: (
+                f32::from_bits((fades >> 32) as u32),
+                f32::from_bits(fades as u32),
+            ),
+            root_key: sane_root_key(self.root_key.load(Ordering::Relaxed) as u8),
+            root_fine_cents: sane_root_fine(self.root_fine_cents.get()),
+        }
+    }
+}
+
+fn pack_region(start_frames: u64, end_frames: u64) -> u64 {
+    (start_frames.min(u64::from(u32::MAX)) << 32) | end_frames.min(u64::from(u32::MAX))
+}
+
+fn pack_fades(fade_in_ms: f32, fade_out_ms: f32) -> u64 {
+    (u64::from(sane_fade(fade_in_ms).to_bits()) << 32) | u64::from(sane_fade(fade_out_ms).to_bits())
+}
+
+fn sane_pitch(cents: f32) -> f32 {
+    if cents.is_finite() {
+        cents.clamp(-1_200.0, 1_200.0)
+    } else {
+        0.0
+    }
+}
+
+fn sane_fade(ms: f32) -> f32 {
+    if ms.is_finite() {
+        ms.max(0.0)
+    } else {
+        0.0
+    }
+}
+
+fn sane_root_key(key: u8) -> u8 {
+    key.min(127)
+}
+
+fn sane_root_fine(cents: f32) -> f32 {
+    if cents.is_finite() {
+        cents.clamp(-50.0, 50.0)
+    } else {
+        0.0
+    }
+}
 
 /// A note waiting behind a steal's fade-out. See [`OneShotNode::start`].
 #[derive(Clone, Copy)]
 struct Pending {
     key: u8,
+    start: f64,
+    end: f64,
     step: f64,
     gain: f32,
     env_step: f32,
+    fade_out_frames: f64,
 }
 
 #[derive(Clone, Copy)]
 struct Voice {
     active: bool,
     key: u8,
+    start: f64,
+    end: f64,
     position: f64,
     step: f64,
     gain: f32,
     env: f32,
     env_step: f32,
-    /// The rate the channel's own fade-out runs at. A note-off, a steal and a
-    /// stop all override it with the anti-click ramp, which is faster.
-    release_step: f32,
-    /// Source frame the channel's fade-out begins at, so the last sample of the
-    /// region is the last sample of the fade. `f64::MAX` when there is none.
-    release_from: f64,
+    /// Source frames occupied by the channel's fade-out. The musical tail is a
+    /// ceiling over the attack envelope, so overlapping fades meet instead of
+    /// subtracting from each other and cancelling the voice.
+    fade_out_frames: f64,
     releasing: bool,
     /// Note-ons seen when this voice started, so "oldest" is a number.
     age: u64,
@@ -57,13 +190,14 @@ impl Voice {
         Self {
             active: false,
             key: 0,
+            start: 0.0,
+            end: 0.0,
             position: 0.0,
             step: 1.0,
             gain: 0.0,
             env: 0.0,
             env_step: 0.0,
-            release_step: 0.0,
-            release_from: f64::MAX,
+            fade_out_frames: 0.0,
             releasing: false,
             age: 0,
             pending: None,
@@ -72,19 +206,20 @@ impl Voice {
 
     /// Hand the slot to the note waiting behind a steal's fade-out, or free it.
     /// Returns whether the voice is still sounding.
-    fn finish(&mut self, start: f64) -> bool {
+    fn finish(&mut self) -> bool {
         let Some(pending) = self.pending.take() else {
             self.active = false;
             return false;
         };
         self.key = pending.key;
-        self.position = start;
+        self.start = pending.start;
+        self.end = pending.end;
+        self.position = pending.start;
         self.step = pending.step;
         self.gain = pending.gain;
         self.env = pending.env_step.min(1.0);
         self.env_step = pending.env_step;
-        self.release_step = pending.env_step;
-        self.release_from = f64::MAX;
+        self.fade_out_frames = pending.fade_out_frames;
         self.releasing = false;
         true
     }
@@ -113,13 +248,7 @@ fn fade_rate(ms: f32, sample_rate: f64) -> f32 {
 /// Note-driven player of one loaded audio file.
 pub struct OneShotNode {
     source: Arc<AudioSource>,
-    start_frames: u64,
-    end_frames: u64,
-    pitch_cents: f32,
-    /// The channel's fade in and out, in milliseconds. The same pair the
-    /// arrangement's clips get, applied to each *note* instead of each clip:
-    /// they are one channel's settings and a one-shot is the same file.
-    fades: (f32, f32),
+    params: Arc<SamplePlaybackParams>,
     voices: [Voice; ONESHOT_VOICES],
     /// Note-ons seen, so "oldest" is a number rather than a guess.
     next_age: u64,
@@ -133,36 +262,45 @@ impl OneShotNode {
         pitch_cents: f32,
         fades: (f32, f32),
     ) -> Self {
+        Self::with_params(
+            source,
+            Arc::new(SamplePlaybackParams::new(
+                start_frames,
+                end_frames,
+                pitch_cents,
+                fades,
+            )),
+        )
+    }
+
+    pub fn with_params(source: Arc<AudioSource>, params: Arc<SamplePlaybackParams>) -> Self {
         Self {
             source,
-            start_frames,
-            end_frames,
-            pitch_cents,
-            fades,
+            params,
             voices: [Voice::idle(); ONESHOT_VOICES],
             next_age: 0,
         }
     }
 
-    fn playable_end(&self) -> u64 {
+    fn playable_end(&self, requested: u64) -> u64 {
         let frames = self.source.frames() as u64;
-        if self.end_frames == 0 || self.end_frames > frames {
+        if requested == 0 || requested > frames {
             frames
         } else {
-            self.end_frames
+            requested
         }
     }
 
     fn start(&mut self, key: u8, velocity: f32, sample_rate: f64, ramp: f32) {
-        let start = self.start_frames;
-        let end = self.playable_end();
+        let params = self.params.snapshot();
+        let start = params.start_frames;
+        let end = self.playable_end(params.end_frames);
         if start >= end || self.source.frames() == 0 {
             return;
         }
-        let semitones = f64::from(key) - f64::from(ONESHOT_ROOT_KEY);
-        let step = playback_step(self.source.sample_rate(), sample_rate)
-            * pitch_ratio(self.pitch_cents)
-            * 2f64.powf(semitones / 12.0);
+        let cents = params.pitch_cents + (f32::from(key) - f32::from(params.root_key)) * 100.0
+            - params.root_fine_cents;
+        let step = playback_step(self.source.sample_rate(), sample_rate) * pitch_ratio(cents);
         if step <= 0.0 {
             return;
         }
@@ -170,14 +308,8 @@ impl OneShotNode {
         // A fade is a length of *time*, so it is that many output frames --
         // which is `step` times as many source frames, because a note played an
         // octave up walks the file twice as fast.
-        let in_step = ramp.min(fade_rate(self.fades.0, sample_rate));
-        let out_step = ramp.min(fade_rate(self.fades.1, sample_rate));
-        let out_frames = fade_output_frames(self.fades.1, sample_rate) * step;
-        let release_from = if out_frames > 0.0 {
-            (end as f64 - out_frames).max(start as f64)
-        } else {
-            f64::MAX
-        };
+        let in_step = ramp.min(fade_rate(params.fades.0, sample_rate));
+        let out_frames = fade_output_frames(params.fades.1, sample_rate) * step;
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1);
         let Some(slot) = self.voices.iter().position(|voice| !voice.active) else {
@@ -199,22 +331,26 @@ impl OneShotNode {
             voice.age = age;
             voice.pending = Some(Pending {
                 key,
+                start: start as f64,
+                end: end as f64,
                 step,
                 gain,
                 env_step: in_step,
+                fade_out_frames: out_frames,
             });
             return;
         };
         self.voices[slot] = Voice {
             active: true,
             key,
+            start: start as f64,
+            end: end as f64,
             position: start as f64,
             step,
             gain,
             env: in_step.min(1.0),
             env_step: in_step,
-            release_step: out_step,
-            release_from,
+            fade_out_frames: out_frames,
             releasing: false,
             age,
             pending: None,
@@ -236,8 +372,6 @@ impl OneShotNode {
         if frames == 0 {
             return;
         }
-        let start = self.start_frames as f64;
-        let end = self.playable_end() as f64;
         let padded = self.source.padded();
 
         for voice in &mut self.voices {
@@ -245,16 +379,17 @@ impl OneShotNode {
                 continue;
             }
             for frame in 0..frames {
-                if (voice.position >= end || voice.position < 0.0) && !voice.finish(start) {
+                if (voice.position >= voice.end || voice.position < 0.0) && !voice.finish() {
                     break;
-                }
-                if !voice.releasing && voice.position >= voice.release_from {
-                    voice.releasing = true;
-                    voice.env_step = voice.release_step;
                 }
                 let index = voice.position as usize;
                 let fraction = (voice.position - voice.position.floor()) as f32;
-                let gain = voice.gain * voice.env;
+                let tail = if voice.fade_out_frames > 0.0 {
+                    ((voice.end - voice.position) / voice.fade_out_frames).clamp(0.0, 1.0) as f32
+                } else {
+                    1.0
+                };
+                let gain = voice.gain * voice.env.min(tail);
                 left[frame] += cubic(taps(padded, index, 0), fraction) * gain;
                 if CHANNELS > 1 {
                     right[frame] += cubic(taps(padded, index, 1), fraction) * gain;
@@ -265,7 +400,7 @@ impl OneShotNode {
                         voice.env = 0.0;
                         // A steal's pending note begins where the fade reached
                         // silence, so the handover is a fade, not a cut.
-                        if !voice.finish(start) {
+                        if !voice.finish() {
                             break;
                         }
                         continue;
@@ -316,8 +451,7 @@ impl std::fmt::Debug for OneShotNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("OneShotNode")
             .field("source", &self.source.id())
-            .field("start_frames", &self.start_frames)
-            .field("end_frames", &self.end_frames)
+            .field("params", &self.params)
             .finish()
     }
 }
@@ -455,6 +589,69 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_fades_do_not_cancel_a_short_pitched_sample() {
+        // At +12 st this 100 ms source lasts 50 ms. Both requested fades are
+        // much longer than that, so their curves overlap for the whole hit.
+        // The attack and tail must meet in the middle instead of the fade-out
+        // subtracting from the first tiny attack step and killing the voice.
+        let mut node = OneShotNode::new(source(4_800), 0, 0, 1_200.0, (1_000.0, 1_000.0));
+        let out = run(
+            &mut node,
+            2_500,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY, 1.0)],
+        );
+        let peak = out
+            .iter()
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+
+        assert!(
+            peak > 0.005,
+            "overlapping fades must leave an audible hit, peak was {peak}"
+        );
+        assert!(
+            out[0] < peak * 0.1,
+            "the attack must still start near silence"
+        );
+        assert!(
+            out[2_399].abs() < peak * 0.1,
+            "the tail must still reach silence"
+        );
+    }
+
+    #[test]
+    fn live_parameter_edits_preserve_the_sounding_voice_and_apply_to_the_next() {
+        let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+        let mut node = OneShotNode::with_params(source(48_000), Arc::clone(&params));
+
+        let attack = run(
+            &mut node,
+            256,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY, 1.0)],
+        );
+        assert!(attack[200] > 0.45, "the first voice must be sounding");
+
+        params.set_pitch_cents(1_200.0);
+        params.set_fades(1_000.0, 1_000.0);
+        params.set_root(54, 12.0);
+        let continuing = run(&mut node, 256, &[]);
+        assert!(
+            continuing[200] > 0.45,
+            "editing defaults must not replace or reshape a voice already sounding"
+        );
+
+        let _ = run(&mut node, 256, &[NoteEvent::note_off(0, ONESHOT_ROOT_KEY)]);
+        let next = run(
+            &mut node,
+            256,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY + 1, 1.0)],
+        );
+        assert!(
+            next[200] < 0.01,
+            "the next voice must use the newly requested long fade"
+        );
+    }
+
+    #[test]
     fn a_steal_fades_the_oldest_voice_instead_of_cutting_it() {
         let ramp = ramp_step(CLIP_RAMP_MS, 48_000.0);
         let mut node = OneShotNode::new(source(48_000), 0, 0, 0.0, (0.0, 0.0));
@@ -488,6 +685,78 @@ mod tests {
         assert!(
             after.iter().all(|s| *s > 0.0),
             "the pending note must have taken the faded slot"
+        );
+    }
+
+    fn concert_hz(note: u8) -> f64 {
+        440.0 * 2f64.powf((f64::from(note) - 69.0) / 12.0)
+    }
+
+    fn sine_source(hz: f64, frames: usize) -> Arc<AudioSource> {
+        let rate = 48_000.0;
+        let mut data = Vec::with_capacity(frames * CHANNELS);
+        for frame in 0..frames {
+            let value = ((frame as f64 / rate) * hz * std::f64::consts::TAU).sin() as f32 * 0.5;
+            data.push(value);
+            data.push(value);
+        }
+        Arc::new(AudioSource::from_stereo(
+            1,
+            std::path::Path::new("tone.wav"),
+            rate,
+            data,
+        ))
+    }
+
+    fn estimate_hz(samples: &[f32], rate: f64) -> f64 {
+        let mut crossings = 0_usize;
+        for pair in samples.windows(2) {
+            if pair[0] <= 0.0 && pair[1] > 0.0 {
+                crossings += 1;
+            }
+        }
+        crossings as f64 * rate / samples.len() as f64
+    }
+
+    #[test]
+    fn a_detected_fs3_root_plays_concert_fs3_at_key_54() {
+        let recorded = concert_hz(54) * 2f64.powf(12.0 / 1_200.0);
+        let params = Arc::new(SamplePlaybackParams::with_root(
+            0,
+            0,
+            0.0,
+            (0.0, 0.0),
+            54,
+            12.0,
+        ));
+        let mut node = OneShotNode::with_params(sine_source(recorded, 48_000), params);
+        let out = run(&mut node, 12_000, &[NoteEvent::note_on(0, 54, 1.0)]);
+        let hz = estimate_hz(&out[400..], 48_000.0);
+        let expected = concert_hz(54);
+        assert!(
+            (hz - expected).abs() < 2.0,
+            "key 54 should play concert F#3 ({expected:.2} Hz), got {hz:.2}"
+        );
+    }
+
+    #[test]
+    fn channel_transpose_stacks_on_top_of_root_calibration() {
+        let recorded = concert_hz(54) * 2f64.powf(12.0 / 1_200.0);
+        let params = Arc::new(SamplePlaybackParams::with_root(
+            0,
+            0,
+            100.0,
+            (0.0, 0.0),
+            54,
+            12.0,
+        ));
+        let mut node = OneShotNode::with_params(sine_source(recorded, 48_000), params);
+        let out = run(&mut node, 12_000, &[NoteEvent::note_on(0, 54, 1.0)]);
+        let hz = estimate_hz(&out[400..], 48_000.0);
+        let expected = concert_hz(55);
+        assert!(
+            (hz - expected).abs() < 2.5,
+            "root-calibrated F#3 plus +100 ct should play G3 ({expected:.2} Hz), got {hz:.2}"
         );
     }
 }

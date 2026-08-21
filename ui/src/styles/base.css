@@ -251,6 +251,11 @@ button:disabled.wv-can-disable {
   color: var(--ink);
 }
 
+.wv-tool--fit {
+  margin-left: 2px;
+  box-shadow: -1px 0 0 var(--line);
+}
+
 /* A small, quiet button: SNAP, zoom, Ghost notes, note operations. */
 .wv-chip {
   display: flex;
@@ -408,6 +413,12 @@ button:disabled.wv-can-disable {
 .wv-pill--solo.is-on {
   background: var(--solo);
   color: var(--soloInk);
+}
+
+.wv-pill--mute.is-on {
+  background: var(--chip);
+  color: var(--txt);
+  box-shadow: inset 0 0 0 1px var(--line2);
 }
 
 .wv-pill--rec.is-on {
@@ -668,6 +679,14 @@ button:disabled.wv-can-disable {
   background: var(--chip);
 }
 
+.wv-menu__row:disabled {
+  opacity: 0.42;
+}
+
+.wv-menu__row:disabled:hover {
+  background: transparent;
+}
+
 .wv-menu__row.is-active {
   background: var(--accSoft);
 }
@@ -819,6 +838,23 @@ button:disabled.wv-can-disable {
 
 .wv-status__value {
   color: var(--txt2);
+}
+
+.wv-status__midi {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.wv-status__midi-lamp {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dim2);
+}
+
+.wv-status__midi-lamp.is-live {
+  background: var(--live);
 }
 
 .wv-status__error {

@@ -13,6 +13,7 @@ import { SidePanel } from './shell/SidePanel';
 import { StatusBar } from './shell/StatusBar';
 import { TopBar } from './shell/TopBar';
 import { midiKeyFor, noteName } from './lib/keyboard';
+import { f7PatternId, rollChannelFromStrip, tabCounterpart } from './lib/navigate';
 import { useView } from './shell/view';
 import { useAppState } from './state';
 import { IconChevron } from './ui/icons';
@@ -47,7 +48,7 @@ export function App(): ReturnType<typeof Show> {
   /** The view hotkeys. F7 opens the roll on whichever channel is selected. */
   function onKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
-    if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
     if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 't') {
       event.preventDefault();
       view.setTypingKeyboard((on) => !on);
@@ -59,7 +60,28 @@ export function App(): ReturnType<typeof Show> {
       );
       return;
     }
+    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      event.preventDefault();
+      const current = view.rollOpen() ? view.previousView() : view.view();
+      view.go(tabCounterpart(current));
+      return;
+    }
     switch (event.key) {
+      case 'Escape':
+        if (view.view() === 'settings') {
+          event.preventDefault();
+          const back = view.previousView();
+          view.go(back === 'settings' ? 'rack' : back);
+        }
+        break;
+      case 'F2': {
+        if (view.rollOpen() || view.view() === 'settings') break;
+        const id = app.sequencer()?.patternSet.activeId;
+        if (id === undefined) break;
+        event.preventDefault();
+        view.setRenamingPattern(id);
+        break;
+      }
       case 'F5':
         event.preventDefault();
         view.go('playlist');
@@ -68,14 +90,29 @@ export function App(): ReturnType<typeof Show> {
         event.preventDefault();
         view.go('rack');
         break;
+      case 'F8':
+        event.preventDefault();
+        view.setBrowserOpen((open) => !open);
+        break;
       case 'F9':
         event.preventDefault();
         view.go('mixer');
         break;
       case 'F7': {
         event.preventDefault();
-        const strip = view.strip();
-        view.openRoll(strip.kind === 'track' ? strip.index : (app.mixer()?.selected ?? 0));
+        const selected = view.selectedClips();
+        const clips = (app.playlist()?.clips ?? []).filter((clip) => selected.includes(clip.id));
+        const patternId = f7PatternId(view.view(), clips);
+        const channel = rollChannelFromStrip(view.strip(), app.mixer()?.selected ?? 0);
+        if (patternId !== null) {
+          void app.sequencerCommand((backend) => backend.setActivePattern(patternId)).then(() => {
+            app.promoteStepsToRoll(channel);
+            view.openRoll(channel);
+          });
+          break;
+        }
+        app.promoteStepsToRoll(channel);
+        view.openRoll(channel);
         break;
       }
       default:

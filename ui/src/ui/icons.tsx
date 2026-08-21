@@ -294,6 +294,26 @@ export function IconMaximise(): JSX.Element {
   );
 }
 
+/** Frame the notes currently in the piano roll. */
+export function IconFitNotes(): JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.4"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3.4 1.8H1.8v1.6M8.6 1.8h1.6V3.4M1.8 8.6v1.6h1.6M10.2 8.6v1.6H8.6" />
+      <path d="M5.1 8.4V3.8l2.6 1.2" />
+    </svg>
+  );
+}
+
 export function IconClose(): JSX.Element {
   return (
     <svg

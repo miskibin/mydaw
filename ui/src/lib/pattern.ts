@@ -19,6 +19,8 @@ export const TICKS_PER_STEP = 240;
 export const TICKS_PER_BAR = 3840;
 /** Steps in one beat. */
 export const STEPS_PER_BEAT = 4;
+/** Steps in one bar of 4/4 at a sixteenth per cell. */
+export const STEPS_PER_BAR = 16;
 /** The lengths a pattern may be. Mirrors `PATTERN_LENGTHS`. */
 export const PATTERN_LENGTHS = [16, 32, 64] as const;
 /** Ticks in the longest pattern the engine allows: four bars of 4/4. */
@@ -156,6 +158,20 @@ export function stepCells(clip: ChannelClipDto | undefined, length: number): Ste
   return Array.from({ length }, (_, index) => row?.[index] ?? emptyStep());
 }
 
+/**
+ * How many step cells the channel rack draws for a looping `length`.
+ *
+ * One extra bar stays on screen past the loop, grayed, so a 16-step pattern
+ * shows 32 pads and a 32-step pattern shows 48. Painting into that bar grows
+ * the loop. At four bars the engine will not grow further, so the lane is
+ * exactly the pattern.
+ */
+export function rackDisplaySteps(length: number): number {
+  const loop = Number.isFinite(length) ? Math.max(0, Math.floor(length)) : STEPS_PER_BAR;
+  const max = PATTERN_LENGTHS[PATTERN_LENGTHS.length - 1]!;
+  return Math.min(loop + STEPS_PER_BAR, max);
+}
+
 /** How a channel draws: notes win, because a grid cannot show a note length. */
 export function displayMode(clip: ChannelClipDto | undefined): 'steps' | 'roll' {
   return clip && clip.notes.length > 0 ? 'roll' : 'steps';
@@ -237,6 +253,50 @@ export function withToggledStep(
   });
 }
 
+/**
+ * Paint one cell on or off. A drag across the lane calls this per cell; the
+ * no-op-by-reference contract is what keeps a gesture that stays on a cell
+ * already in the right state from becoming an undo entry of its own.
+ *
+ * Painting a regular hit onto an accent leaves the accent: the fill is "make
+ * sure this cell sounds", not "reset its velocity".
+ */
+export function withSetStep(
+  pattern: PatternDto,
+  channel: number,
+  index: number,
+  on: boolean,
+  accent: boolean,
+  fallbackKey: number,
+): PatternDto {
+  return withChannel(pattern, channel, fallbackKey, (clip) => {
+    if (index < 0 || index >= pattern.steps) return clip;
+    const existing = clip.steps;
+    const row =
+      existing && existing.steps.length === pattern.steps
+        ? existing
+        : {
+            ...(existing ?? emptyRow(fallbackKey, pattern.steps)),
+            steps: stepCells(clip, pattern.steps),
+          };
+    const cell = row.steps[index]!;
+    if (on) {
+      if (cell.on && (!accent || isAccent(cell.velocity))) return clip;
+    } else if (!cell.on) {
+      return clip;
+    }
+    const next: StepDto = on
+      ? {
+          on: true,
+          velocity: accent ? ACCENT_VELOCITY : Math.max(cell.velocity, STEP_VELOCITY),
+        }
+      : { on: false, velocity: cell.velocity };
+    const steps = row.steps.slice();
+    steps[index] = next;
+    return { ...clip, steps: { ...row, steps } };
+  });
+}
+
 /** Empty every cell and drop every note on `channel`. */
 export function withClearedChannel(
   pattern: PatternDto,
@@ -249,6 +309,83 @@ export function withClearedChannel(
       : clip.steps;
     if (clip.notes.length === 0 && emptyRow === clip.steps) return clip;
     return { ...clip, steps: emptyRow, notes: [] };
+  });
+}
+
+/**
+ * One channel's pattern data: the step grid and the piano-roll notes.
+ *
+ * This is what FL copies with Ctrl+C on the Channel Rack — the score, not the
+ * instrument. `steps` is always a full row for the source pattern's length;
+ * a silent channel is an all-off grid and no notes.
+ */
+export interface ChannelScore {
+  steps: StepDto[];
+  notes: MelodicNoteDto[];
+}
+
+/** Snapshot of what `pattern` says to `channel`, cloned so a later edit cannot alias it. */
+export function channelScore(pattern: PatternDto, channel: number): ChannelScore {
+  const clip = channelClip(pattern, channel);
+  return {
+    steps: stepCells(clip, pattern.steps).map((cell) => ({ ...cell })),
+    notes: (clip?.notes ?? []).map((note) => ({ ...note })),
+  };
+}
+
+/**
+ * Write `score` onto `channel`, padded or truncated to this pattern's length.
+ *
+ * Notes that start on or after the destination loop are dropped — paste must
+ * not grow the pattern the way drawing in the roll does. The destination's
+ * trigger key and label stay put: copying a kick onto a snare keeps the snare.
+ */
+export function withPastedScore(
+  pattern: PatternDto,
+  channel: number,
+  score: ChannelScore,
+  fallbackKey: number,
+): PatternDto {
+  return withChannel(pattern, channel, fallbackKey, (clip) => {
+    const length = pattern.steps;
+    const steps = Array.from({ length }, (_, index) => {
+      const cell = score.steps[index];
+      return cell ? { on: cell.on, velocity: cell.velocity } : emptyStep();
+    });
+    const notes: MelodicNoteDto[] = [];
+    for (const note of score.notes) {
+      const fitted = clampNote(note, pattern);
+      if (fitted) notes.push(fitted);
+      if (notes.length >= MAX_NOTES) break;
+    }
+    const current = stepCells(clip, length);
+    const sameGrid =
+      current.length === length &&
+      current.every(
+        (cell, index) =>
+          cell.on === steps[index]!.on && cell.velocity === steps[index]!.velocity,
+      );
+    const sameNotes =
+      clip.notes.length === notes.length &&
+      clip.notes.every((note, index) => {
+        const other = notes[index]!;
+        return (
+          note.key === other.key &&
+          note.start === other.start &&
+          note.length === other.length &&
+          note.velocity === other.velocity
+        );
+      });
+    if (sameGrid && sameNotes && clip.steps && clip.steps.steps.length === length) return clip;
+    const row = clip.steps
+      ? { ...clip.steps, steps }
+      : { ...emptyRow(fallbackKey, length), steps };
+    return {
+      ...clip,
+      mode: notes.length > 0 ? 'roll' : 'steps',
+      steps: row,
+      notes,
+    };
   });
 }
 
@@ -421,6 +558,34 @@ export function stepsToNotes(row: StepRowDto, length: number): MelodicNoteDto[] 
     });
   });
   return notes;
+}
+
+/**
+ * Piano roll from the step grid: each hit becomes a one-step note at the row
+ * key (C4 / 60 on a sampler), and the cells go off so the compiler does not
+ * double them.
+ *
+ * Same reference when there is nothing to convert — an empty grid, or a
+ * channel that already has notes. Opening the roll on a melody must not
+ * flatten it back onto C4.
+ */
+export function withStepsConvertedToNotes(
+  pattern: PatternDto,
+  channel: number,
+  fallbackKey: number,
+): PatternDto {
+  return withChannel(pattern, channel, fallbackKey, (clip) => {
+    if (clip.notes.length > 0) return clip;
+    const row = clip.steps;
+    if (!row) return clip;
+    const notes = stepsToNotes(row, pattern.steps);
+    if (notes.length === 0) return clip;
+    return {
+      ...clip,
+      steps: { ...row, steps: row.steps.map((cell) => ({ ...cell, on: false })) },
+      notes,
+    };
+  });
 }
 
 /**

@@ -15,7 +15,7 @@
 
 import { Show, createSignal, onCleanup } from 'solid-js';
 
-import { NumberField } from '../ui/NumberField';
+import { TempoField } from '../ui/TempoField';
 import { bindWheel } from '../ui/drag';
 import { onFrame } from '../ui/frameLoop';
 import {
@@ -38,9 +38,7 @@ import { useAppState } from '../state';
 import { useTheme } from '../theme/ThemeProvider';
 import { useView, type MainView } from './view';
 import { MasterVolume } from './MasterVolume';
-
-const MIN_BPM = 20;
-const MAX_BPM = 999;
+import { PatternSelector } from './PatternSelector';
 
 const VIEWS: readonly [MainView, string, string][] = [
   ['playlist', 'PLAYLIST', 'F5'],
@@ -242,16 +240,9 @@ export function TopBar(): ReturnType<typeof Show> {
       <Show when={view.wideBar()}>
         <div class="wv-meta">
           <div class="wv-meta__item">
-            <NumberField
-              class="wv-meta__value wv-meta__value--drag"
+            <TempoField
               value={app.bpm}
               onInput={(value) => app.setBpm(value)}
-              min={MIN_BPM}
-              max={MAX_BPM}
-              step={0.5}
-              format={(value) => value.toFixed(2)}
-              title="Tempo — drag, scroll, or double-click to type"
-              aria-label="Tempo in beats per minute"
             />
             <span class="wv-meta__tag">BPM</span>
           </div>
@@ -280,6 +271,8 @@ export function TopBar(): ReturnType<typeof Show> {
           SONG
         </button>
       </div>
+
+      <PatternSelector />
 
       <div class="wv-spacer" />
 

@@ -17,6 +17,10 @@ arc-swap = "1"      # atomic Arc publish; reserved for non-RT shared config snap
 # --- audio I/O ---
 cpal = "0.18"                    # cross-platform device I/O; WASAPI on Windows
 audio_thread_priority = "0.37"   # promote the callback thread to MMCSS/Pro Audio
+# MIDI input. WinMM on Windows (the default); listing creates a fresh client
+# each time so virtual ports that appear after launch are visible without a
+# restart. Hot-plug is polled -- WinMM does not notify.
+midir = "0.11"
 # --- plugin hosting ---
 clack-host = "0.1"  # safe CLAP host bindings (discovery in Phase 0, hosting in spike 2)
 # --- sampled instruments (non-RT only: decoding and fetching happen at load) ---
@@ -73,6 +77,7 @@ mydaw-ipc-bridge = { path = "crates/ipc-bridge" }
 # Decoding one audio file into memory, shared by the sampler (an instrument's
 # recordings) and the sequencer (an audio clip on the playlist).
 mydaw-audio-file = { path = "crates/audio-file" }
+mydaw-pitch-analysis = { path = "crates/pitch-analysis" }
 # Out-of-process plugin scanning: the worker protocol, the metadata cache and the
 # block list, shared by both plugin hosts.
 mydaw-plugin-scan = { path = "crates/plugin-scan" }
@@ -86,6 +91,7 @@ mydaw-plugin-effects = { path = "plugins/effects" }
 mydaw-plugin-sampler = { path = "plugins/sampler" }
 mydaw-plugin-sequencer = { path = "plugins/sequencer" }
 mydaw-plugin-audio-io = { path = "plugins/audio-io" }
+mydaw-plugin-midi-io = { path = "plugins/midi-io" }
 mydaw-plugin-host-clap = { path = "plugins/host-clap" }
 mydaw-plugin-host-vst3 = { path = "plugins/host-vst3" }
 mydaw-plugin-windows = { path = "plugins/plugin-windows" }

@@ -103,6 +103,10 @@
   box-shadow: inset 0 0 0 1px var(--acc);
 }
 
+.wv-pick.is-editing:not(.is-active) {
+  box-shadow: inset 3px 0 0 var(--acc), inset 0 0 0 1px var(--line);
+}
+
 .wv-pick__text {
   display: flex;
   flex: 1;
@@ -287,6 +291,126 @@
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
+}
+
+/* A sample channel's decoded, processed preview.  L/R are stacked so moving
+   pan is visible instead of being a knob whose only feedback is its number. */
+.wv-sample-insp {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
+}
+
+.wv-sample-insp__wave {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 88px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--sunk);
+  box-shadow: inset 0 0 0 1px var(--line);
+  font: 400 9px 'Geist Mono Variable';
+  color: var(--dim);
+}
+
+.wv-sample-insp__wave:hover {
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+
+.wv-sample-insp__wave::after {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: var(--line);
+  content: '';
+}
+
+.wv-sample-insp__wave svg {
+  position: absolute;
+  inset: 5px 8px;
+  width: calc(100% - 16px);
+  height: calc(100% - 10px);
+}
+
+.wv-sample-insp__lr {
+  position: absolute;
+  top: 12px;
+  left: 4px;
+  z-index: 1;
+  font: 500 7px/38px 'Geist Mono Variable';
+  color: var(--faint);
+  pointer-events: none;
+}
+
+.wv-sample-insp__meta {
+  display: flex;
+  justify-content: space-between;
+  overflow: hidden;
+  font: 400 8.5px 'Geist Mono Variable';
+  color: var(--dim);
+}
+
+.wv-sample-insp__meta span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-sample-insp__knobs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.wv-sample-insp__knobs .wv-param {
+  min-width: 0;
+}
+
+.wv-sample-insp__knobs .wv-param__value,
+.wv-sample-insp__knobs .wv-param__name {
+  max-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Insert ordering is signal flow, so the position and drag affordance are
+   explicit even when the chain is too short to make the arrows useful. */
+.wv-card__drag {
+  flex: none;
+  width: 13px;
+  font: 600 11px 'Geist Mono Variable';
+  color: var(--faint);
+  cursor: grab;
+  user-select: none;
+}
+
+.wv-card__drag:active {
+  cursor: grabbing;
+}
+
+.wv-card__order {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--sunk);
+  font: 500 8px 'Geist Mono Variable';
+  color: var(--dim2);
+}
+
+.wv-card__icon:disabled {
+  opacity: 0.25;
 }
 
 /* --- readouts ------------------------------------------------------------ */

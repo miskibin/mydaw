@@ -794,6 +794,15 @@ impl CompiledGraph {
                 // A track's input is silence; its source generates into it.
                 track_ctx.buffers.silence();
                 source.process(&mut track_ctx);
+                if tap
+                    .as_ref()
+                    .is_some_and(|tap| tap.watching_track_source(index))
+                {
+                    if let Some(tap) = tap.as_mut() {
+                        tap.capture_pre(track_ctx.buffers);
+                        tap.capture_post(track_ctx.buffers);
+                    }
+                }
                 crate::process_inserts(
                     inserts,
                     &mut track_ctx,
@@ -2224,6 +2233,34 @@ mod tests {
         assert!(
             (hop.post_l[10] - 0.35).abs() < 1e-5,
             "post should be after the insert, got {}",
+            hop.post_l[10]
+        );
+    }
+
+    #[test]
+    fn the_spectrum_tap_can_copy_the_track_source_without_an_insert() {
+        let mut graph = GraphSpec::new()
+            .with_limits(limits(256))
+            .with(Box::new(ConstNode(0.4)))
+            .compile();
+        let (tx, mut rx) = crate::spectrum_channel(4);
+        let watch = std::sync::Arc::new(crate::SpectrumWatch::new());
+        watch.set(crate::SpectrumTarget::track_source(0));
+        let mut tap = crate::SpectrumTapRt::new(tx, watch, SR);
+        let mut buffers = AudioBuffers::new(256);
+        for _ in 0..(crate::SPECTRUM_HOP / 256) {
+            let mut ctx = ProcessCtx::new(&mut buffers, SR, 256, TransportSnapshot::default());
+            graph.process_with_spectrum(&mut ctx, Some(&mut tap));
+        }
+        let hop = rx.pop().expect("a full hop should have been pushed");
+        assert!(
+            (hop.pre_l[10] - 0.4).abs() < 1e-5,
+            "source tap pre should be the instrument, got {}",
+            hop.pre_l[10]
+        );
+        assert!(
+            (hop.post_l[10] - 0.4).abs() < 1e-5,
+            "source tap post matches pre when there is no insert, got {}",
             hop.post_l[10]
         );
     }

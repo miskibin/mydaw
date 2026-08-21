@@ -32,6 +32,13 @@ log.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
 
+[features]
+default = []
+# cpal's ASIO host: Steinberg SDK + LLVM/Clang (bindgen). Off by default so
+# CI and machines without LLVM still build. `choose_host(true)` falls back to
+# WASAPI and explains itself when this is off or no driver is installed.
+asio = ["cpal/asio"]
+
 [dev-dependencies]
 # The RT-path test drives a real node through `run_block`. No audio device is
 # opened, so this suite runs on a headless CI machine.

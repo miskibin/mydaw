@@ -51,6 +51,7 @@ pub mod compiled;
 pub mod oneshot;
 pub mod pattern;
 pub mod playlist;
+pub mod sample_channel;
 pub mod schedule;
 pub mod set;
 
@@ -72,7 +73,7 @@ pub use compiled::{
 /// crate. Re-exported so the shell can reach it without depending on
 /// `mydaw-audio-file` directly for one constant.
 pub use mydaw_audio_file::AUDIO_EXTENSIONS;
-pub use oneshot::{OneShotNode, ONESHOT_ROOT_KEY, ONESHOT_VOICES};
+pub use oneshot::{OneShotNode, SamplePlaybackParams, ONESHOT_ROOT_KEY, ONESHOT_VOICES};
 pub use pattern::{
     row_label, ChannelClip, ChannelDisplay, MelodicNote, Pattern, PatternError, Step, StepRow,
     ACCENT_THRESHOLD, ACCENT_VELOCITY, DEFAULT_ROW_KEYS, DEFAULT_STEPS, DEFAULT_STEP_KEY,
@@ -83,6 +84,7 @@ pub use playlist::{
     AudioClip, Clip, PatternClip, Playlist, PlaylistError, PlaylistTrack, DEFAULT_CLIP_TICKS,
     MAX_CLIPS, MAX_PLAYLIST_TRACKS, MAX_SONG_TICKS,
 };
+pub use sample_channel::SampleChannelHead;
 pub use schedule::{
     step_boundary, step_len_samples, tick_boundary, ticks_at_sample, PlayMode, Scheduler,
     TransportWindow, MAX_PENDING,

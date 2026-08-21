@@ -19,8 +19,9 @@ use std::sync::Arc;
 
 use mydaw_plugin_audio_io::AudioIoError;
 use mydaw_plugin_sequencer::{
-    audio_clip_channel, AudioClipHandle, AudioClipInstallError, AudioClipStats,
-    AudioSourceRegistry, CompiledAudioSong, OneShotNode, AUDIO_CLIP_QUEUE_CAPACITY,
+    audio_clip_channel, AudioClipHandle, AudioClipInstallError, AudioClipNode, AudioClipStats,
+    AudioSourceRegistry, CompiledAudioSong, OneShotNode, SampleChannelHead, SamplePlaybackParams,
+    AUDIO_CLIP_QUEUE_CAPACITY,
 };
 use mydaw_rt_core::basedrop::Handle;
 use mydaw_rt_core::RtNode;
@@ -73,15 +74,24 @@ impl AudioClipBus {
 
     /// Unfiltered node: every clip. Used by tests.
     pub fn open(&self, gc: Handle) -> Box<dyn RtNode> {
-        self.open_filtered(None, gc)
+        Box::new(self.open_filtered(None, gc))
     }
 
-    /// Node that plays only clips of `source_id`, for that channel's strip head.
-    pub fn open_for_source(&self, source_id: u64, gc: Handle) -> Box<dyn RtNode> {
-        self.open_filtered(Some(source_id), gc)
+    /// Node that plays only clips of `source_id`, plus gated notes of that file.
+    pub fn open_for_source(
+        &self,
+        source_id: u64,
+        params: Arc<SamplePlaybackParams>,
+        gc: Handle,
+    ) -> Box<dyn RtNode> {
+        let arrangement = self.open_filtered(Some(source_id), gc);
+        match self.note_player(source_id, params) {
+            Some(notes) => Box::new(SampleChannelHead::new(arrangement, notes)),
+            None => Box::new(arrangement),
+        }
     }
 
-    fn open_filtered(&self, source_id: Option<u64>, gc: Handle) -> Box<dyn RtNode> {
+    fn open_filtered(&self, source_id: Option<u64>, gc: Handle) -> AudioClipNode {
         let (mut handle, node) = audio_clip_channel(AUDIO_CLIP_QUEUE_CAPACITY, gc);
         if let Some(song) = self.last.lock().clone() {
             let slice = match source_id {
@@ -95,28 +105,34 @@ impl AudioClipBus {
         *self.stats.lock() = Some(Arc::clone(handle.stats()));
         self.slots.lock().push(Slot { source_id, handle });
         self.attached.store(true, Ordering::Release);
-        Box::new(node)
+        node
+    }
+
+    fn note_player(
+        &self,
+        source_id: u64,
+        params: Arc<SamplePlaybackParams>,
+    ) -> Option<OneShotNode> {
+        let sources = self.sources.lock();
+        sources
+            .as_ref()
+            .and_then(|reg| reg.get(source_id))
+            .map(|source| OneShotNode::with_params(source, params))
     }
 
     /// A note-driven player of `source_id`, or silence if the file is not loaded.
     pub fn oneshot_node(
         &self,
         source_id: u64,
-        start_frames: u64,
-        end_frames: u64,
-        pitch_cents: f32,
-        fades: (f32, f32),
+        params: Arc<SamplePlaybackParams>,
     ) -> Box<dyn RtNode> {
         let sources = self.sources.lock();
         match sources.as_ref().and_then(|reg| reg.get(source_id)) {
-            Some(source) => Box::new(OneShotNode::new(
-                source,
-                start_frames,
-                end_frames,
-                pitch_cents,
-                fades,
-            )),
-            None => Box::new(SilentNode),
+            Some(source) => Box::new(OneShotNode::with_params(source, params)),
+            None => {
+                log::warn!("audio source {source_id} is not loaded; the sample channel is silent");
+                Box::new(SilentNode)
+            }
         }
     }
 

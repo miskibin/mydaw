@@ -13,8 +13,10 @@ import type {
   MeterFrame,
   MixerState,
   PatternDto,
+  PitchAnalysis,
   PlayMode,
   ProjectInfo,
+  RootMode,
   SequencerState,
   SourceDto,
   SpectrumDto,
@@ -25,6 +27,10 @@ import type {
   Vst3PluginInfoDto,
   WaveformDto,
   SourcePreviewDto,
+  MidiPortDto,
+  MidiStatusDto,
+  PreviewSettings,
+  AudioOutput,
 } from './types';
 
 /**
@@ -137,6 +143,18 @@ export interface Backend {
   setTrackPan(track: number, pan: number): Promise<MixerState>;
   /** Channel pitch in cents (`-1200..=1200`) for clip and one-shot tracks. */
   setTrackPitch(track: number, cents: number): Promise<MixerState>;
+  /** Detect the root pitch of an audio-file channel's selected region. */
+  analyzeTrackPitch(track: number): Promise<PitchAnalysis>;
+  /**
+   * Calibrate an audio-file channel's playback root without changing transpose.
+   * `key` is MIDI 0..=127; `fineCents` is typically -50..=50.
+   */
+  setTrackSampleRoot(
+    track: number,
+    key: number,
+    fineCents: number,
+    mode: RootMode,
+  ): Promise<MixerState>;
   /** Channel fade in and out, in milliseconds. One call, one republish. */
   setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState>;
   /**
@@ -231,8 +249,9 @@ export interface Backend {
    */
   getChainReadouts(target: InsertTarget): Promise<InsertReadoutsDto[]>;
   /**
-   * Arm the analysis tap on one insert, or `null`/`null` to silence it.
-   * Only the focused fullscreen editor should hold this.
+   * Arm the analysis tap. `index` is the insert; omit it (`null`) on a track
+   * to listen to the instrument itself. `null`/`null` silences the tap.
+   * Only one editor should hold this at a time.
    */
   watchSpectrum(target: InsertTarget | null, index: number | null): Promise<void>;
   /** Latest hop from the armed tap, or `null` when nothing is watched. */
@@ -282,6 +301,7 @@ export interface Backend {
   removePlaylistTrack(track: number): Promise<SequencerState>;
   renamePlaylistTrack(track: number, name: string): Promise<SequencerState>;
   setPlaylistTrackMute(track: number, muted: boolean): Promise<SequencerState>;
+  setPlaylistTrackSolo(track: number, soloed: boolean): Promise<SequencerState>;
   /** Place a pattern on the timeline. `start`/`length` are ticks. */
   addPatternClip(
     patternId: number,
@@ -330,6 +350,19 @@ export interface Backend {
   listLibraryDir(rootId: string, relPath: string): Promise<LibraryEntryDto[]>;
   /** Audition a file without loading it into the project. */
   previewAudioFile(path: string): Promise<void>;
+  /** Audition an audio-file channel with its current region, pitch and fades. */
+  previewTrackSample(track: number): Promise<void>;
+  /**
+   * Audition a built-in or sampled instrument through the same preview slot.
+   * Plays that source, not the selected rack channel.
+   */
+  previewInstrument(sourceId: string): Promise<void>;
+  /** Browser preview level as a percent of master. Default 80. */
+  getPreviewSettings(): Promise<PreviewSettings>;
+  setPreviewVolume(percent: number): Promise<PreviewSettings>;
+  /** WASAPI/ASIO preference and the stream they produced. */
+  getAudioSettings(): Promise<AudioOutput>;
+  setAudioSettings(preferAsio: boolean, bufferFrames: number): Promise<AudioOutput>;
   /** Place an audio file on the timeline. `length` absent means the whole file. */
   addAudioClip(
     sourceId: number,
@@ -357,6 +390,13 @@ export interface Backend {
 
   /** What the open audio device is. Answers `running: false` rather than failing. */
   getStreamInfo(): Promise<StreamInfo>;
+
+  /** MIDI input ports for Settings. Reconciles with the OS on each call. */
+  listMidiPorts(): Promise<MidiPortDto[]>;
+  /** Pair or unpair one input. Returns the whole list. */
+  setMidiPortEnabled(name: string, enabled: boolean): Promise<MidiPortDto[]>;
+  /** Activity timestamp and paired count, for the status-bar lamp. */
+  getMidiStatus(): Promise<MidiStatusDto>;
 
   /** Downloadable instrument assets. */
   getAssetStatus(): Promise<AssetStatus[]>;
@@ -503,6 +543,19 @@ class TauriBackend implements Backend {
 
   setTrackPitch(track: number, cents: number): Promise<MixerState> {
     return this.call('set_track_pitch', { track, cents });
+  }
+
+  analyzeTrackPitch(track: number): Promise<PitchAnalysis> {
+    return this.call('analyze_track_pitch', { track });
+  }
+
+  setTrackSampleRoot(
+    track: number,
+    key: number,
+    fineCents: number,
+    mode: RootMode,
+  ): Promise<MixerState> {
+    return this.call('set_track_sample_root', { track, key, fineCents, mode });
   }
 
   setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {
@@ -759,6 +812,10 @@ class TauriBackend implements Backend {
     return this.call('set_playlist_track_mute', { track, muted });
   }
 
+  setPlaylistTrackSolo(track: number, soloed: boolean): Promise<SequencerState> {
+    return this.call('set_playlist_track_solo', { track, soloed });
+  }
+
   addPatternClip(
     patternId: number,
     track: number,
@@ -835,6 +892,30 @@ class TauriBackend implements Backend {
     return this.call('preview_audio_file', { path });
   }
 
+  previewTrackSample(track: number): Promise<void> {
+    return this.call('preview_track_sample', { track });
+  }
+
+  previewInstrument(sourceId: string): Promise<void> {
+    return this.call('preview_instrument', { sourceId });
+  }
+
+  getPreviewSettings(): Promise<PreviewSettings> {
+    return this.call('get_preview_settings');
+  }
+
+  setPreviewVolume(percent: number): Promise<PreviewSettings> {
+    return this.call('set_preview_volume', { percent });
+  }
+
+  getAudioSettings(): Promise<AudioOutput> {
+    return this.call('get_audio_settings');
+  }
+
+  setAudioSettings(preferAsio: boolean, bufferFrames: number): Promise<AudioOutput> {
+    return this.call('set_audio_settings', { preferAsio, bufferFrames });
+  }
+
   addAudioClip(
     sourceId: number,
     track: number,
@@ -882,6 +963,18 @@ class TauriBackend implements Backend {
 
   getStreamInfo(): Promise<StreamInfo> {
     return this.call('get_stream_info');
+  }
+
+  listMidiPorts(): Promise<MidiPortDto[]> {
+    return this.call('list_midi_ports');
+  }
+
+  setMidiPortEnabled(name: string, enabled: boolean): Promise<MidiPortDto[]> {
+    return this.call('set_midi_port_enabled', { name, enabled });
+  }
+
+  getMidiStatus(): Promise<MidiStatusDto> {
+    return this.call('get_midi_status');
   }
 
   /** Map the sampler's single-download DTO onto the UI's per-asset rows. */

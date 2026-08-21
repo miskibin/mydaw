@@ -24,6 +24,8 @@ const KIND_SHIFT: u32 = 24;
 const STRIP_SHIFT: u32 = 16;
 const KIND_MASK: u32 = 0x3;
 const BYTE_MASK: u32 = 0xFF;
+/// Insert index meaning "the track source, before any insert".
+const SOURCE_INSERT: u8 = 255;
 
 /// Which chain the tap is sitting on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +54,15 @@ impl SpectrumTarget {
 
     pub const fn master(insert: usize) -> Option<Self> {
         Self::pack(SpectrumKind::Master, 0, insert)
+    }
+
+    /// The instrument itself, before the insert chain.
+    pub const fn track_source(strip: usize) -> Option<Self> {
+        Self::pack(SpectrumKind::Track, strip, SOURCE_INSERT as usize)
+    }
+
+    pub const fn is_source(self) -> bool {
+        self.insert == SOURCE_INSERT
     }
 
     const fn pack(kind: SpectrumKind, strip: usize, insert: usize) -> Option<Self> {
@@ -202,7 +213,22 @@ impl SpectrumTapRt {
             (SpectrumKind::Master, SpectrumLoc::Master) => true,
             _ => false,
         };
+        if target.is_source() {
+            return None;
+        }
         matches.then_some(usize::from(target.insert))
+    }
+
+    /// True when the tap should copy this track's source output.
+    pub fn watching_track_source(&self, track: usize) -> bool {
+        match self.watch.get() {
+            Some(target) => {
+                target.kind == SpectrumKind::Track
+                    && usize::from(target.strip) == track
+                    && target.is_source()
+            }
+            None => false,
+        }
     }
 
     /// Copy the buffer *before* the watched insert runs.
@@ -298,6 +324,16 @@ mod tests {
         assert_eq!(watch.get(), SpectrumTarget::track(0, 0));
         watch.set(None);
         assert_eq!(watch.get(), None);
+    }
+
+    #[test]
+    fn track_source_is_not_insert_zero() {
+        let source = SpectrumTarget::track_source(2).expect("fits");
+        assert!(source.is_source());
+        assert_ne!(source, SpectrumTarget::track(2, 0).expect("fits"));
+        let watch = SpectrumWatch::new();
+        watch.set(Some(source));
+        assert_eq!(watch.get(), Some(source));
     }
 
     #[test]

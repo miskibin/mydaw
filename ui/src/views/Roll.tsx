@@ -35,10 +35,10 @@ import {
   barsBeats,
   STEP_VELOCITY,
 } from '../lib/pattern';
+import { channelColor } from '../lib/channel';
 import { useAppState } from '../state';
 import { ROLL_SNAPS, clampZoom, nextSnap, snapLabel, useView, type RollTool } from '../shell/view';
 import { useTheme } from '../theme/ThemeProvider';
-import { trackColor } from '../theme/tokens';
 import { onFrame } from '../ui/frameLoop';
 import { wheelNotches } from '../ui/drag';
 import {
@@ -46,6 +46,7 @@ import {
   IconCaret,
   IconDrawTool,
   IconEraseTool,
+  IconFitNotes,
   IconPaintTool,
   IconSelectTool,
   IconSliceTool,
@@ -77,6 +78,7 @@ import {
   type RollGeometry,
   type ScrollPart,
 } from './roll/draw';
+import { fitNotes } from './roll/fit';
 import {
   ROLL_TOOL_BY_CODE,
   hoverCursor,
@@ -135,7 +137,7 @@ export function Roll(): ReturnType<typeof Show> {
 
   const channel = () => view.rollChannel();
   const track = () => app.tracks()[channel()];
-  const colour = () => trackColor(track()?.id ?? channel());
+  const colour = () => channelColor(track());
   const notes = (): MelodicNoteDto[] => {
     const pattern = app.pattern();
     return pattern ? notesOf(pattern, channel()) : [];
@@ -177,7 +179,7 @@ export function Roll(): ReturnType<typeof Show> {
       .filter((clip) => clip.channel !== channel() && clip.notes.length > 0)
       .map((clip) => ({
         notes: clip.notes,
-        colour: trackColor(app.tracks()[clip.channel]?.id ?? clip.channel),
+        colour: channelColor(app.tracks()[clip.channel]),
       }));
   });
 
@@ -596,6 +598,27 @@ export function Roll(): ReturnType<typeof Show> {
     const scroll = anchor === 'top' ? top * row : bot * row - viewport;
     setScrollY(clampScroll(scroll, viewport, content));
     app.say('Zoom', `${Math.round(zoom * 100)}% keys`);
+  }
+
+  function zoomToNotes(): void {
+    const indices = targets();
+    const picked = indices.map((index) => notes()[index]!).filter(Boolean);
+    const geo = geometry();
+    const fit = fitNotes(picked, gridWidth(geo), gridHeight(geo), editTicks());
+    if (!fit) {
+      app.say('Zoom', 'no notes to frame');
+      return;
+    }
+    view.setRollZoom(fit.zoomX);
+    view.setRollZoomY(fit.zoomY);
+    setScrollX(fit.scrollX);
+    setScrollY(fit.scrollY);
+    app.say(
+      'Zoom',
+      view.selection().length > 0
+        ? `${view.selection().length} selected`
+        : `${picked.length} notes`,
+    );
   }
 
   function onSeek(event: PointerEvent, geo: RollGeometry): void {
@@ -1323,6 +1346,12 @@ export function Roll(): ReturnType<typeof Show> {
       return;
     }
 
+    if (!ctrl && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      zoomToNotes();
+      return;
+    }
+
     if (!ctrl && !event.altKey && !event.shiftKey && !view.typingKeyboard()) {
       const tool = ROLL_TOOL_BY_CODE[event.code];
       if (tool) {
@@ -1523,11 +1552,12 @@ export function Roll(): ReturnType<typeof Show> {
                       classList={{ 'is-active': candidate.index === channel() }}
                       onClick={() => {
                         setChannelMenu(false);
+                        app.promoteStepsToRoll(candidate.index);
                         view.openRoll(candidate.index);
                         app.selectTrack(candidate.index);
                       }}
                     >
-                      <span class="wv-swatch" style={{ background: trackColor(candidate.id) }} />
+                      <span class="wv-swatch" style={{ background: channelColor(candidate) }} />
                       {candidate.name}
                       <span class="wv-spacer" />
                       <span class="wv-menu__meta">
@@ -1562,6 +1592,14 @@ export function Roll(): ReturnType<typeof Show> {
               </button>
             )}
           </For>
+          <button
+            type="button"
+            class="wv-tool wv-tool--fit"
+            title="Zoom to notes (F) — selected notes, or all if none are selected"
+            onClick={() => zoomToNotes()}
+          >
+            <IconFitNotes />
+          </button>
         </div>
 
         <button

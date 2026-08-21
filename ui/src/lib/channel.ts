@@ -1,6 +1,6 @@
 /**
- * What a rack channel *is*, for a badge and for which window a name-click
- * opens.
+ * What a rack channel *is*, for its colour across the shell and for which
+ * window a name-click opens.
  *
  * Derived from the engine's `Source::engine()` plus the drum ids, so a
  * synthesised kick is a drum (the thing a step sequencer is for) and Analog
@@ -8,6 +8,7 @@
  */
 
 import type { TrackDto } from '../api/types';
+import { CHANNEL_KIND_COLORS } from '../theme/tokens';
 
 const DRUM_IDS = new Set(['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'drum-kit']);
 
@@ -15,7 +16,7 @@ export type ChannelKind = 'plugin' | 'sample' | 'drum' | 'synth' | 'tone';
 
 export interface ChannelKindInfo {
   kind: ChannelKind;
-  /** Short rack badge: `CLAP`, `VST3`, `CLIP`, `SMP`, `DRM`, `SYN`, `TONE`. */
+  /** Short label kept for tooltips and the sample window, not drawn on the rack. */
   badge: string;
   /** Longer tooltip. */
   title: string;
@@ -57,6 +58,17 @@ export function channelKind(
     return { kind: 'drum', badge: 'DRM', title: 'Synthesised drum' };
   }
   return { kind: 'synth', badge: 'SYN', title: 'Built-in synthesizer' };
+}
+
+/**
+ * The colour this channel wears everywhere: rack LED, mixer strip, piano roll,
+ * playlist marks. Same kind → same colour, regardless of track id.
+ */
+export function channelColor(
+  track: Pick<TrackDto, 'sourceId' | 'engine' | 'clap' | 'vst3'> | undefined | null,
+): string {
+  if (!track) return CHANNEL_KIND_COLORS.synth;
+  return CHANNEL_KIND_COLORS[channelKind(track).kind];
 }
 
 /** Whether clicking the channel name should open the sample/instrument window. */

@@ -50,10 +50,15 @@
 //! println!("{} @ {} Hz", info.device_name, info.sample_rate);
 //! ```
 
+mod output;
 mod priority;
 pub mod rt;
 pub mod service;
 
+pub use output::{
+    asio_compiled, buffer_size_of, choose_host, fallback_note, AudioBackend, HostChoice,
+    OutputRequest,
+};
 pub use rt::{run_block, AudioIoStats, RtState, RtStateParams};
 pub use service::{AudioIoConfig, AudioIoError, AudioIoService, StreamInfo};
 

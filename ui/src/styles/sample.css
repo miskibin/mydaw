@@ -16,28 +16,108 @@
 .wv-sample__tools {
   display: flex;
   flex: none;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 8px 8px;
   align-items: center;
-  height: 36px;
-  padding: 0 12px;
+  min-height: 36px;
+  padding: 4px 12px;
 }
 
-.wv-sample__play {
+.wv-sample__pitchfind,
+.wv-sample__root {
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.wv-sample__target {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font: 500 10px 'Geist Variable';
+  color: var(--dim);
+}
+
+.wv-sample__target select {
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--chip);
+  font: 500 10px 'Geist Mono Variable';
+  color: var(--txt);
+}
+
+.wv-sample__kb {
   display: flex;
   flex: none;
   gap: 6px;
-  align-items: center;
-  height: 24px;
-  padding: 0 10px 0 8px;
-  border-radius: 6px;
-  background: var(--accSoft);
-  font: 500 11px 'Geist Variable';
+  align-items: stretch;
+  height: 52px;
+  margin: 0 12px 8px;
+}
+
+.wv-sample__kb.is-off {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.wv-sample__kb-oct {
+  flex: none;
+  width: 22px;
+  border-radius: 4px;
+  background: var(--chip);
+  font: 600 13px 'Geist Variable';
+  color: var(--dim);
+}
+
+.wv-sample__kb-oct:hover {
   color: var(--acc);
 }
 
-.wv-sample__play:hover {
+.wv-sample__kb-keys {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.wv-sample__kb-whites {
+  display: flex;
+  height: 100%;
+}
+
+.wv-sample__kb-w {
+  flex: 1;
+  min-width: 0;
+  border-radius: 0 0 3px 3px;
+  background: color-mix(in srgb, var(--txt) 88%, var(--panel));
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.wv-sample__kb-w.is-on,
+.wv-sample__kb-b.is-on {
   background: var(--acc);
-  color: var(--ink);
+}
+
+.wv-sample__kb-w.is-root:not(.is-on),
+.wv-sample__kb-b.is-root:not(.is-on) {
+  box-shadow: inset 0 0 0 2px var(--acc);
+}
+
+.wv-sample__kb-blacks {
+  position: absolute;
+  inset: 0 0 38% 0;
+  pointer-events: none;
+}
+
+.wv-sample__kb-b {
+  position: absolute;
+  top: 0;
+  width: 4.2%;
+  height: 100%;
+  transform: translateX(-50%);
+  border-radius: 0 0 2px 2px;
+  background: var(--ink);
+  pointer-events: auto;
 }
 
 .wv-sample__wave {
@@ -142,7 +222,15 @@
   pointer-events: none;
 }
 
-/* The file behind the channel, next to its badge. */
+/* A kind colour chip — the same gold/violet/teal as the rack LED. */
+.wv-sample__tools .wv-chrow__kind {
+  flex: none;
+  width: 3px;
+  height: 14px;
+  border-radius: 1px;
+}
+
+/* The file behind the channel, next to its kind colour. */
 .wv-sample__file {
   min-width: 0;
   overflow: hidden;

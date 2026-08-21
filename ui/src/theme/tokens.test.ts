@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { DEFAULT_ACCENT, DARK, LIGHT, cssVariables, type Palette } from './tokens';
+import { DEFAULT_ACCENT, DARK, LIGHT, CHANNEL_KIND_COLORS, cssVariables, type Palette } from './tokens';
 
 const STYLES_DIR = join(dirname(fileURLToPath(import.meta.url)), '../styles');
 
@@ -114,6 +114,8 @@ describe('theme config is the only colour source', () => {
     expect(vars['--acc']).toBeDefined();
     expect(vars['--accSoft']).toBeDefined();
     expect(vars['--meter']).toContain(DARK.meterMid);
+    expect(vars['--ch-drum']).toBe(CHANNEL_KIND_COLORS.drum);
+    expect(vars['--ch-synth']).toBe(CHANNEL_KIND_COLORS.synth);
   });
 
   it('keeps hex and rgb out of stylesheets', () => {

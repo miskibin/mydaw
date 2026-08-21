@@ -376,6 +376,20 @@ impl ProjectHost {
         // 2. Strip: nothing hosted may survive into the new session.
         strip(session, hosts, stream, &mut report);
 
+        // Decode every named file *before* the graph is built. A one-shot node
+        // snapshots the buffer at construction; restoring afterwards leaves the
+        // rack channel in place and silent. Factory drums are real wavs too, so
+        // load this table first so their ids cannot collide with restored clips,
+        // then turn any remaining synthesised Kick/Snare/Hats into those samples.
+        restore_audio_sources(session.sources, file, &mut report.warnings);
+        let mut patterns = patterns;
+        crate::drum_samples::realize_drum_tracks(
+            &mut project,
+            Some(&mut patterns),
+            session.tracks,
+            session.sources,
+        );
+
         // 3. Rebuild.
         session.tracks.set_project(project);
         match session.tracks.install_graph(session.audio) {
@@ -388,10 +402,6 @@ impl ProjectHost {
         // reject; publishing them to the stream can, and a busy queue is not a
         // reason to fail a load.
         let _ = session.sequencer.set_song(patterns, playlist);
-        // Before the arrangement is published: a clip whose source is not loaded
-        // yet compiles to nothing, and the publish below is what carries the
-        // audio across the RT wall.
-        restore_audio_sources(session.sources, file, &mut report.warnings);
         let _ = session.audio.install_song(session.sequencer.compile());
         let project = session.tracks.project();
         let _ = session.tracks.audio_clips().install(
@@ -864,7 +874,7 @@ fn named(path: &Path, err: &ProjectFileError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project_file::{ClapEntry, TrackEntry};
+    use crate::project_file::{ClapEntry, SourceEntry, TrackEntry};
     use crate::source::{ClapSourceRef, Source};
     use mydaw_plugin_instruments::InstrumentRegistry;
     use mydaw_plugin_sequencer::PatternSet;
@@ -906,16 +916,19 @@ mod tests {
     impl Rig {
         fn new() -> Self {
             let windows = Arc::new(PluginWindowService::new());
+            let sources = Arc::new(AudioSourceRegistry::new());
+            let tracks = Arc::new(TrackHost::new(
+                Arc::new(TestToneFactory::new()),
+                Arc::new(InstrumentRegistry::new()),
+                Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
+                Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
+            ));
+            tracks.audio_clips().bind_sources(Arc::clone(&sources));
             Self {
-                tracks: Arc::new(TrackHost::new(
-                    Arc::new(TestToneFactory::new()),
-                    Arc::new(InstrumentRegistry::new()),
-                    Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
-                    Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
-                )),
+                tracks,
                 audio: Arc::new(AudioIoService::default()),
                 sequencer: Arc::new(SequencerService::new()),
-                sources: Arc::new(AudioSourceRegistry::new()),
+                sources,
                 clap: ClapHost::new(Arc::clone(&windows)),
                 clap_board: ClapBoard::new(),
                 vst3: Vst3Host::new(windows),
@@ -978,6 +991,10 @@ mod tests {
             sample_end_frames: 0,
             fade_in_ms: 0.0,
             fade_out_ms: 0.0,
+            root_key: mydaw_plugin_sequencer::ONESHOT_ROOT_KEY,
+            root_fine_cents: 0.0,
+            root_mode: crate::project::RootMode::Default,
+            detected_pitch: None,
             source_params: Default::default(),
         }
     }
@@ -1016,10 +1033,18 @@ mod tests {
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
         assert_eq!(report.missing_count(), 0);
 
-        assert_eq!(rig.tracks.project(), project);
+        let loaded = rig.tracks.project();
+        assert_eq!(loaded.len(), project.len());
+        assert_eq!(loaded.tracks[0].name, "Kick");
+        assert_eq!(loaded.tracks[0].gain_db, -9.5);
+        assert_eq!(loaded.tracks[0].pan, -0.75);
+        assert!(loaded.tracks[0].muted);
+        assert!(loaded.tracks[1].soloed);
+        assert_eq!(loaded.tracks[2].gain_db, 4.0);
+        assert_eq!(loaded.master_gain_db, -2.5);
+        assert_eq!(loaded.tracks[6].source, Source::TestTone);
         assert_eq!(rig.tracks.selected(), 2);
         assert_eq!(rig.sequencer.bpm(), 147.0);
-        assert_eq!(rig.sequencer.patterns(), patterns);
         assert_eq!(rig.sequencer.playlist(), playlist);
         assert_eq!(
             rig.sequencer.play_mode(),
@@ -1062,8 +1087,15 @@ mod tests {
         );
         rig.load(&file).unwrap();
         let recaptured = rig.capture();
-        assert_eq!(recaptured, file);
-        assert_eq!(recaptured.to_json().unwrap(), file.to_json().unwrap());
+        // First open may migrate synth drums into sample channels. The second
+        // save of that session is the document, and it must be stable.
+        let mut again = Rig::new();
+        again.load(&recaptured).unwrap();
+        assert_eq!(again.capture(), recaptured);
+        assert_eq!(
+            again.capture().to_json().unwrap(),
+            recaptured.to_json().unwrap()
+        );
     }
 
     #[test]
@@ -1182,7 +1214,10 @@ mod tests {
         assert_eq!(info.name, crate::project_file::UNTITLED);
         assert!(info.path.is_none());
         assert_eq!(info.missing_plugins, 0);
-        assert_eq!(rig.tracks.project(), Project::default());
+        let loaded = rig.tracks.project();
+        assert_eq!(loaded.len(), Project::default().len());
+        assert_eq!(loaded.tracks[0].name, "Kick");
+        assert_eq!(loaded.tracks[5].source, Source::PolySynth);
         assert_eq!(rig.sequencer.bpm(), DEFAULT_BPM);
         assert!(rig.sequencer.active_pattern().is_empty());
         assert_eq!(rig.tracks.selected(), 0);
@@ -1463,6 +1498,88 @@ mod tests {
         assert!(
             Arc::ptr_eq(&first, &second),
             "re-opening the same project must not re-decode its takes"
+        );
+    }
+
+    #[test]
+    fn a_library_sample_channel_plays_after_save_and_load() {
+        // The graph snapshots the decoded file when it builds a one-shot node.
+        // Restoring `audio_sources` after that build leaves the channel in the
+        // rack (the source id survived) but silent (the node is a placeholder).
+        let dir = TempDir::new("oneshot-roundtrip");
+        let take = dir.0.join("library-hit.wav");
+        write_take(&take);
+
+        let mut saved = Rig::new();
+        let source = saved.sources.load(&take).expect("decode");
+        let source_id = source.id();
+        {
+            let mut project = Project::empty();
+            project
+                .add(Source::OneShot { source_id }, Some("Library Hit".into()))
+                .unwrap();
+            saved.tracks.set_project(project);
+        }
+        let file = saved.capture();
+        assert!(
+            file.audio_sources.iter().any(|entry| entry.id == source_id),
+            "the sample must be written into the project file: {:?}",
+            file.audio_sources
+        );
+        let expected_id = format!("oneshot:{source_id}");
+        assert!(
+            file.tracks.iter().any(|track| {
+                matches!(&track.source, SourceEntry::Internal { id } if id == &expected_id)
+            }),
+            "the rack channel must round-trip as a one-shot, got {:?}",
+            file.tracks
+                .iter()
+                .map(|track| &track.source)
+                .collect::<Vec<_>>()
+        );
+
+        let mut loaded = Rig::new();
+        let report = loaded.load(&file).expect("reopens");
+        assert!(
+            report
+                .warnings
+                .iter()
+                .all(|warning| !warning.contains("silent")),
+            "the sample is still on disk: {:?}",
+            report.warnings
+        );
+        assert_eq!(
+            loaded.tracks.project().tracks[0].source,
+            Source::OneShot { source_id }
+        );
+
+        let params = Arc::clone(&loaded.tracks.project().tracks[0].sample_play);
+        let mut node = loaded.tracks.audio_clips().oneshot_node(source_id, params);
+        let mut buffers = mydaw_rt_core::AudioBuffers::new(256);
+        let events = [mydaw_rt_core::NoteEvent::note_on(
+            0,
+            mydaw_plugin_sequencer::ONESHOT_ROOT_KEY,
+            1.0,
+        )];
+        let mut ctx = mydaw_rt_core::ProcessCtx::with_events(
+            &mut buffers,
+            48_000.0,
+            256,
+            mydaw_rt_core::TransportSnapshot {
+                sample_pos: 0,
+                playing: true,
+                bpm: 120.0,
+                mode: mydaw_rt_core::PlayMode::Pattern,
+            },
+            &events,
+        );
+        node.process(&mut ctx);
+        let peak = buffers.as_slices()[0]
+            .iter()
+            .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
+        assert!(
+            peak > 0.01,
+            "a reopened library sample must play; peak was {peak}"
         );
     }
 

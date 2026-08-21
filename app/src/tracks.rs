@@ -49,6 +49,7 @@ use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
 use mydaw_plugin_effects::EffectRegistry;
 use mydaw_plugin_instruments::InstrumentRegistry;
 use mydaw_plugin_sampler::{file_path_of, SamplerRegistry};
+use mydaw_plugin_sequencer::SamplePlaybackParams;
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_rt_core::basedrop::Handle;
 use mydaw_rt_core::{BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, MAX_TRACKS};
@@ -621,7 +622,10 @@ impl TrackHost {
         } else {
             0.0
         };
-        self.edit(track, |def| def.pitch_cents = cents)
+        self.edit(track, |def| {
+            def.pitch_cents = cents;
+            def.sample_play.set_pitch_cents(cents);
+        })
     }
 
     /// Fade in and out for an audio-clip or one-shot track, in milliseconds.
@@ -649,7 +653,60 @@ impl TrackHost {
         self.edit(track, |def| {
             def.fade_in_ms = fade_in;
             def.fade_out_ms = fade_out;
+            def.sample_play.set_fades(fade_in, fade_out);
         })
+    }
+
+    /// Playback root for an audio-clip or one-shot track.
+    ///
+    /// Updates the scalar project fields and the shared RT atomics without
+    /// replacing the sounding node, so a held note keeps going.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`], [`TrackError::InvalidRootKey`], or
+    /// [`TrackError::InvalidRootFine`].
+    pub fn set_sample_root(
+        &self,
+        track: usize,
+        key: u8,
+        fine_cents: f32,
+        mode: crate::project::RootMode,
+    ) -> Result<(), TrackError> {
+        let key = crate::project::check_root_key(key)?;
+        let fine = crate::project::check_root_fine(fine_cents)?;
+        self.edit(track, |def| {
+            def.root_key = key;
+            def.root_fine_cents = fine;
+            def.root_mode = mode;
+            if mode == crate::project::RootMode::Detected {
+                let previous = def.detected_pitch;
+                def.detected_pitch = Some(crate::project::RootPitchDto {
+                    midi_note: key,
+                    cents: fine,
+                    confidence: previous.map(|pitch| pitch.confidence).unwrap_or(1.0),
+                    voiced_coverage: previous.map(|pitch| pitch.voiced_coverage).unwrap_or(1.0),
+                    source: previous
+                        .map(|pitch| pitch.source)
+                        .unwrap_or(crate::project::PitchSourceDto::Analysis),
+                });
+            }
+            def.sample_play.set_root(key, fine);
+        })
+    }
+
+    /// Remember the last successful pitch detection on this channel.
+    ///
+    /// Does not change playback root. [`set_sample_root`](Self::set_sample_root)
+    /// is what calibrates the keyboard.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_detected_pitch(
+        &self,
+        track: usize,
+        pitch: Option<crate::project::RootPitchDto>,
+    ) -> Result<(), TrackError> {
+        self.edit(track, |def| def.detected_pitch = pitch)
     }
 
     /// SMP region for an audio-clip or one-shot track, in the file's frames.
@@ -667,43 +724,8 @@ impl TrackHost {
         self.edit(track, |def| {
             def.sample_start_frames = start_frames;
             def.sample_end_frames = end_frames;
+            def.sample_play.set_region(start_frames, end_frames);
         })
-    }
-
-    /// Rebuild the one-shot node so a pitch or region edit is audible.
-    ///
-    /// A no-op when the track is not a one-shot, or when no device is open:
-    /// the project already holds the values, and the next graph install
-    /// builds the node from them.
-    ///
-    /// # Errors
-    /// [`TrackError::NoSuchTrack`], or whatever swapping the node reported.
-    pub fn refresh_oneshot(&self, track: usize, audio: &AudioIoService) -> Result<(), MixerError> {
-        if audio.stream_info().is_none() {
-            return Ok(());
-        }
-        let (source, start, end, pitch, fades) = {
-            let project = self.project.lock();
-            let def = project
-                .tracks
-                .get(track)
-                .ok_or(TrackError::NoSuchTrack(track))?;
-            (
-                def.source.clone(),
-                def.sample_start_frames,
-                def.sample_end_frames,
-                def.pitch_cents,
-                (def.fade_in_ms, def.fade_out_ms),
-            )
-        };
-        let Source::OneShot { source_id } = source else {
-            return Ok(());
-        };
-        let node = self
-            .audio_clips
-            .oneshot_node(source_id, start, end, pitch, fades);
-        self.install_source(track, source, node)?;
-        Ok(())
     }
 
     /// Set the master fader, in dB.
@@ -803,9 +825,10 @@ impl TrackHost {
                 // an offline render (the channel window's preview) makes sound.
                 // The graph builders pass the track's crop and pitch to the
                 // same node themselves; this path has no track to read.
-                Ok(self
-                    .audio_clips
-                    .oneshot_node(*source_id, 0, 0, 0.0, (0.0, 0.0)))
+                Ok(self.audio_clips.oneshot_node(
+                    *source_id,
+                    Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0))),
+                ))
             }
             Source::Sampler(reference) => {
                 let type_id = reference.wire_id();
@@ -857,30 +880,25 @@ impl TrackHost {
         }
         self.ensure_file_sampler(&source);
         let info = audio.stream_info().ok_or(AudioIoError::NotRunning)?;
-        let (start, end, pitch, fades) = {
+        let sample_play = {
             let project = self.project.lock();
             let def = project
                 .tracks
                 .get(track)
                 .ok_or(TrackError::NoSuchTrack(track))?;
-            (
-                def.sample_start_frames,
-                def.sample_end_frames,
-                def.pitch_cents,
-                (def.fade_in_ms, def.fade_out_ms),
-            )
+            Arc::clone(&def.sample_play)
         };
         // The new instrument's knobs, created *before* its node so the two share
         // one block: the node reads what the shell writes, and the shell writes
         // what a project file restores.
         let params = TrackDef::params_for(&source);
         let node = match &source {
-            Source::AudioClip { source_id } => self
-                .audio_clips
-                .open_for_source(*source_id, audio.gc_handle()),
-            Source::OneShot { source_id } => self
-                .audio_clips
-                .oneshot_node(*source_id, start, end, pitch, fades),
+            Source::AudioClip { source_id } => self.audio_clips.open_for_source(
+                *source_id,
+                Arc::clone(&sample_play),
+                audio.gc_handle(),
+            ),
+            Source::OneShot { source_id } => self.audio_clips.oneshot_node(*source_id, sample_play),
             other => self.build_node_with_params(
                 other,
                 params.clone(),
@@ -1057,16 +1075,14 @@ impl TrackHost {
 
         for (index, def) in project.tracks.iter().enumerate() {
             let node = match &def.source {
-                Source::AudioClip { source_id } => {
-                    self.audio_clips.open_for_source(*source_id, gc.clone())
-                }
-                Source::OneShot { source_id } => self.audio_clips.oneshot_node(
+                Source::AudioClip { source_id } => self.audio_clips.open_for_source(
                     *source_id,
-                    def.sample_start_frames,
-                    def.sample_end_frames,
-                    def.pitch_cents,
-                    (def.fade_in_ms, def.fade_out_ms),
+                    Arc::clone(&def.sample_play),
+                    gc.clone(),
                 ),
+                Source::OneShot { source_id } => self
+                    .audio_clips
+                    .oneshot_node(*source_id, Arc::clone(&def.sample_play)),
                 // The track's own block, so a rebuilt graph picks the synth up
                 // where the last one left it -- the argument `MixerParams`
                 // makes for faders, at knob granularity.

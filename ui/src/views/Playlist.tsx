@@ -7,16 +7,17 @@
  *
  * ## What a lane is, and is not
  *
- * A playlist lane is **not** a mixer track. It has a name, a mute and an
- * ordering, and that is all the engine gives it. The mock's lane header also
- * carries a volume slider, a solo and a record-arm; none of those exist for a
- * lane, so rather than draw three dead controls this header shows what the lane
- * actually has plus its clip count. A clip's *sound* is the channel's, and its
- * fader is in the mixer. The lane's **height**, though, is nobody's but the
- * view's and costs the engine nothing, so it is draggable: the grip along the
- * bottom edge of the header resizes that one lane, and a double-click puts it
- * back. Heights are kept by lane **id**, because an index would slide onto the
- * neighbour the moment a lane below was removed.
+ * A playlist lane is **not** a mixer track. It has a name, a mute, a solo and
+ * an ordering, and that is all the engine gives it. Volume, pan and record-arm
+ * live on mixer strips — a pattern clip on this row plays through the channels
+ * it contains, so there is no single fader for the lane. Mute and solo are
+ * arrangement-scope: they drop the lane's clips at compile time the same way
+ * mixer solo folds into an effective mute. A clip's *sound* is the channel's,
+ * and its fader is in the mixer. The lane's **height**, though, is nobody's
+ * but the view's and costs the engine nothing, so it is draggable: the grip
+ * along the bottom edge of the header resizes that one lane, and a
+ * double-click puts it back. Heights are kept by lane **id**, because an
+ * index would slide onto the neighbour the moment a lane below was removed.
  *
  * ## A pattern clip draws the pattern
  *
@@ -44,7 +45,15 @@
  * clip also makes its pattern the active one, so the rack, the picker and the
  * brush cannot disagree about what "the current pattern" means.
  *
- * Shift (or ctrl) while dragging a clip **copies** it instead of moving it.
+ * Shift while dragging a clip **copies** it instead of moving it. Ctrl while
+ * the paint tool is up drops into select, the way FL's draw tool does.
+ *
+ * ## Selection
+ *
+ * The playlist keeps a set of clip ids, not a single highlight. The select
+ * tool (or paint + Ctrl) rubber-bands a marquee; Shift adds. Ctrl+C / X / V
+ * copy, cut and paste the set; Ctrl+B duplicates it to the right; Ctrl+D and
+ * a click on empty lane drop it. Dragging a selected clip moves the group.
  *
  * ## The viewport, and the wheel
  *
@@ -60,7 +69,12 @@
  * | ctrl / alt + wheel | zoom **about the pointer**, so the bar under the cursor stays put |
  * | middle-drag | pan both ways |
  * | `Home` / `End` | the start of the song, and the end of the arrangement |
- * | `Delete` / `Escape` | remove the selected clip, and drop the selection |
+ * | `Delete` / `Escape` | remove the selected clips, and drop the selection |
+ * | `Ctrl+A / C / X / V / B / D` | select all, copy, cut, paste, duplicate right, deselect |
+ *
+ * The lanes are the scroller and the add-lane row sits under them, the same
+ * stack as the channel rack: both scrollbars land on the lanes box, directly
+ * above the button, and leftover panel is below it rather than swallowing it.
  *
  * The ruler is a scrub: press and drag moves the playhead, snapped to the
  * playlist's own snap (alt for free positioning). The playhead is drawn twice,
@@ -89,6 +103,17 @@ import {
   snapTicks,
   ticksToSamples,
 } from '../lib/pattern';
+import {
+  clampGroupMove,
+  clipScore,
+  clipsIntersecting,
+  duplicateToRight,
+  pasteAtPlayhead,
+  unionClipIds,
+  type PlaylistClipScore,
+} from '../lib/playlistEdit';
+import { channelColor } from '../lib/channel';
+import { overviewWaveformPath } from '../lib/sampleWaveform';
 import { allowDrop, droppedAudioFile, droppedAudioPath, importDroppedFile, parseDrop } from '../lib/dnd';
 import {
   clampScroll,
@@ -98,7 +123,9 @@ import {
   wheelPixels,
   zoomAnchoredScroll,
 } from '../lib/timeline';
+import { laneSilenced } from '../lib/playlistLane';
 import { useAppState } from '../state';
+import { usePatternNav } from '../shell/patternNav';
 import {
   DEFAULT_LANE_H,
   PLAYLIST_SNAPS,
@@ -118,7 +145,7 @@ import { IconEraseTool, IconPaintTool, IconRewind, IconSelectTool, IconX } from 
 /** Pixels one bar covers at zoom 1. */
 const BAR_PX = 48;
 /** How wide a lane header is. */
-const HEAD_W = 176;
+const HEAD_W = 200;
 /**
  * The key window a clip miniature maps onto its height: `C2` to `B6`.
  *
@@ -143,10 +170,13 @@ const ZOOM_STEP = 1.15;
 const FOLLOW_HOLD_MS = 2_500;
 
 const TOOLS: readonly [PlaylistTool, string, () => ReturnType<typeof IconPaintTool>][] = [
-  ['paint', 'Paint clips — click a lane to place the brush', IconPaintTool],
-  ['select', 'Select and move clips', IconSelectTool],
+  ['paint', 'Paint clips — click a lane to place the brush. Hold Ctrl to select.', IconPaintTool],
+  ['select', 'Select clips — drag a box, Shift to add, then move or Shift-drag to copy', IconSelectTool],
   ['delete', 'Delete clips', IconEraseTool],
 ];
+
+/** In-memory clip clipboard: survives switching views, not a restart. */
+let playlistClipboard: PlaylistClipScore[] = [];
 
 /** One mark inside a clip miniature: fractions of the clip, and a colour. */
 interface ClipMark {
@@ -207,10 +237,14 @@ function clipMarks(pattern: PatternDto, colourOf: (channel: number) => string): 
 export function Playlist(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
+  const nav = usePatternNav();
   const [waveforms, setWaveforms] = createSignal<Record<number, WaveformDto>>({});
   const pending = new Set<number>();
   const [contents, setContents] = createSignal<Record<number, PatternDto>>({});
   const pendingPatterns = new Set<number>();
+  const [marquee, setMarquee] = createSignal<{ x: number; y: number; w: number; h: number } | null>(
+    null,
+  );
 
   let playheadEl: HTMLDivElement | undefined;
   /** The playhead's marker in the ruler, above the sticky lane headers. */
@@ -227,6 +261,8 @@ export function Playlist(): ReturnType<typeof Show> {
   /** The widest the scroller can be pushed, headers included. */
   const maxScroll = () =>
     Math.max(0, HEAD_W + laneWidth() - (scrollEl?.clientWidth ?? 0));
+  const lanesFull = () =>
+    (playlist()?.tracks.length ?? 0) >= (playlist()?.maxTracks ?? 16);
 
   /** The waveform for one source, fetched once and remembered. */
   function waveformFor(sourceId: number): WaveformDto | undefined {
@@ -300,6 +336,14 @@ export function Playlist(): ReturnType<typeof Show> {
   // --- lane heights --------------------------------------------------------
 
   const laneHeight = (laneId: number) => laneHeightOf(view.laneHeights(), laneId);
+
+  createEffect(() => {
+    const have = new Set((playlist()?.clips ?? []).map((clip) => clip.id));
+    const current = view.selectedClips();
+    const next = current.filter((id) => have.has(id));
+    if (next.length === current.length) return;
+    view.setSelectedClips(next);
+  });
 
   /**
    * Which lane the pointer is over, by Y against each lane's box.
@@ -487,8 +531,47 @@ export function Playlist(): ReturnType<typeof Show> {
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+      const ctrl = event.ctrlKey || event.metaKey;
+      if (ctrl && !event.altKey && !event.shiftKey) {
+        const key = event.key.toLowerCase();
+        if (key === 'a') {
+          event.preventDefault();
+          selectAllClips();
+          return;
+        }
+        if (key === 'c') {
+          event.preventDefault();
+          copySelection();
+          return;
+        }
+        if (key === 'x') {
+          event.preventDefault();
+          void cutSelection();
+          return;
+        }
+        if (key === 'v') {
+          event.preventDefault();
+          void pasteClipboard();
+          return;
+        }
+        if (key === 'b') {
+          event.preventDefault();
+          void duplicateSelection();
+          return;
+        }
+        if (key === 'd') {
+          event.preventDefault();
+          deselectClips();
+          return;
+        }
+      }
+      if (ctrl || event.altKey) return;
       switch (event.key) {
         case 'Home':
           event.preventDefault();
@@ -502,16 +585,12 @@ export function Playlist(): ReturnType<typeof Show> {
           break;
         }
         case 'Delete':
-        case 'Backspace': {
-          const clip = playlist()?.clips.find((entry) => entry.id === view.selectedClip());
-          if (!clip) return;
+        case 'Backspace':
           event.preventDefault();
-          removeClip(clip);
-          view.setSelectedClip(null);
+          void deleteSelection();
           break;
-        }
         case 'Escape':
-          view.setSelectedClip(null);
+          deselectClips();
           break;
         default:
           break;
@@ -568,6 +647,97 @@ export function Playlist(): ReturnType<typeof Show> {
     return snapTicks(Math.max(0, raw), view.playlistSnap(), true);
   }
 
+  /** Select tool, or paint with Ctrl held (FL: draw drops into select). */
+  function isSelectGesture(event: PointerEvent): boolean {
+    if (view.playlistTool() === 'select') return true;
+    return view.playlistTool() === 'paint' && (event.ctrlKey || event.metaKey) && !event.shiftKey;
+  }
+
+  function laneBoxesNow(): { index: number; top: number; bottom: number }[] {
+    return Array.from(scrollEl?.querySelectorAll<HTMLElement>('.wv-pl__lane') ?? []).map((lane) => {
+      const box = lane.getBoundingClientRect();
+      return { index: Number(lane.dataset.lane), top: box.top, bottom: box.bottom };
+    });
+  }
+
+  function rawTickAt(clientX: number): number {
+    const lane = scrollEl?.querySelector<HTMLElement>('.wv-pl__lane');
+    if (!lane) return 0;
+    const rect = lane.getBoundingClientRect();
+    return Math.max(0, (clientX - rect.left) / pxPerTick());
+  }
+
+  function playheadTicks(): number {
+    return foldToLoop(
+      samplesToTicks(app.playhead.positionSamples(), app.playhead.getSampleRate(), app.bpm()),
+      app.playMode() === 'song' && app.looping() ? (playlist()?.endTicks ?? 0) : 0,
+    );
+  }
+
+  function selectedClipDtos(): ClipDto[] {
+    const ids = new Set(view.selectedClips());
+    return (playlist()?.clips ?? []).filter((clip) => ids.has(clip.id));
+  }
+
+  /**
+   * Rubber-band on an empty lane. A click (no drag) deselects; Shift keeps
+   * the current set and unions whatever the box covers.
+   */
+  function beginMarquee(event: PointerEvent, originLane: number): void {
+    event.preventDefault();
+    const originX = event.clientX;
+    const originY = event.clientY;
+    const originTick = rawTickAt(originX);
+    const additive = event.shiftKey;
+    let dragged = false;
+
+    const paintBox = (clientX: number, clientY: number): void => {
+      const x = Math.min(originX, clientX);
+      const y = Math.min(originY, clientY);
+      setMarquee({
+        x,
+        y,
+        w: Math.abs(clientX - originX),
+        h: Math.abs(clientY - originY),
+      });
+    };
+
+    const onMove = (move: PointerEvent) => {
+      if (!dragged && Math.abs(move.clientX - originX) < 4 && Math.abs(move.clientY - originY) < 4) {
+        return;
+      }
+      dragged = true;
+      paintBox(move.clientX, move.clientY);
+    };
+
+    const onUp = (up: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.style.removeProperty('user-select');
+      setMarquee(null);
+      if (!dragged) {
+        if (!additive) deselectClips();
+        return;
+      }
+      const endLane = laneUnder(up.clientY, laneBoxesNow()) ?? originLane;
+      const hits = clipsIntersecting(playlist()?.clips ?? [], {
+        track0: originLane,
+        track1: endLane,
+        start: originTick,
+        end: rawTickAt(up.clientX),
+      });
+      const next = additive ? unionClipIds(view.selectedClips(), hits) : hits;
+      view.setSelectedClips(next);
+      app.say('Playlist · Select', next.length === 0 ? 'none' : `${next.length}`);
+    };
+
+    document.body.style.setProperty('user-select', 'none');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
   /**
    * What painting places: the brush, or the pattern the rack is editing.
    *
@@ -604,11 +774,11 @@ export function Playlist(): ReturnType<typeof Show> {
 
   function onLanePointerDown(event: PointerEvent, lane: number): void {
     if (event.button !== 0) return;
-    // Empty lane, select tool: the selection is a thing you can put down.
-    if (view.playlistTool() !== 'paint') {
-      view.setSelectedClip(null);
+    if (isSelectGesture(event)) {
+      beginMarquee(event, lane);
       return;
     }
+    if (view.playlistTool() !== 'paint') return;
     place(lane, tickAt(event.clientX, event.currentTarget as HTMLElement));
   }
 
@@ -665,11 +835,26 @@ export function Playlist(): ReturnType<typeof Show> {
       removeClip(clip);
       return;
     }
-    view.setSelectedClip(clip.id);
+
+    const shift = event.shiftKey;
+    const current = view.selectedClips();
+    if (shift && mode === 'move') {
+      view.setSelectedClips(unionClipIds(current, [clip.id]));
+    } else if (!current.includes(clip.id)) {
+      view.setSelectedClips([clip.id]);
+    }
+
     pickUp(clip);
-    // FL's clone: hold shift (or ctrl) and the drag leaves the original where
-    // it was and drops a copy where you let go.
-    const copying = mode === 'move' && (event.shiftKey || event.ctrlKey);
+
+    const groupIds = new Set(
+      mode === 'resize'
+        ? [clip.id]
+        : view.selectedClips().includes(clip.id)
+          ? view.selectedClips()
+          : [clip.id],
+    );
+    const group = (playlist()?.clips ?? []).filter((entry) => groupIds.has(entry.id));
+    const copying = mode === 'move' && event.shiftKey;
     const startX = event.clientX;
     const startY = event.clientY;
     const originStart = clip.start;
@@ -679,38 +864,70 @@ export function Playlist(): ReturnType<typeof Show> {
     let lastStart = originStart;
     let lastLane = originLane;
     let lastLength = originLength;
+    let lastDelta = { dTrack: 0, dStart: 0 };
     const clipEl = (event.currentTarget as HTMLElement).closest<HTMLElement>('.wv-clip');
-    const originLaneEl = clipEl?.closest<HTMLElement>('.wv-pl__lane');
-    const originTop = originLaneEl?.getBoundingClientRect().top ?? 0;
-    const laneBoxes = Array.from(scrollEl?.querySelectorAll<HTMLElement>('.wv-pl__lane') ?? []).map(
-      (lane) => {
-        const box = lane.getBoundingClientRect();
-        return { index: Number(lane.dataset.lane), top: box.top, bottom: box.bottom };
-      },
-    );
+    const laneBoxes = laneBoxesNow();
+    const ghosts = group.map((entry) => {
+      const el = scrollEl?.querySelector<HTMLElement>(`[data-clip-id="${entry.id}"]`);
+      const laneEl = el?.closest<HTMLElement>('.wv-pl__lane');
+      return {
+        clip: entry,
+        el,
+        originTop: laneEl?.getBoundingClientRect().top ?? 0,
+        originLeft: entry.start,
+        originTrack: entry.track,
+      };
+    });
 
     app.startPlaylistGesture(
-      mode === 'resize' ? 'Resize clip' : copying ? 'Copy clip' : 'Move clip',
+      mode === 'resize'
+        ? 'Resize clip'
+        : copying
+          ? group.length > 1
+            ? 'Copy clips'
+            : 'Copy clip'
+          : group.length > 1
+            ? 'Move clips'
+            : 'Move clip',
     );
 
     const paint = (): void => {
-      if (!clipEl) return;
-      clipEl.style.pointerEvents = 'none';
-      clipEl.style.zIndex = '8';
       if (mode === 'resize') {
+        if (!clipEl) return;
+        clipEl.style.pointerEvents = 'none';
+        clipEl.style.zIndex = '8';
         clipEl.style.width = `${Math.max(4, lastLength * pxPerTick() - 2)}px`;
         return;
       }
-      clipEl.style.left = `${lastStart * pxPerTick()}px`;
-      const target = laneBoxes.find((lane) => lane.index === lastLane);
-      clipEl.style.transform = target ? `translateY(${target.top - originTop}px)` : '';
+      for (const ghost of ghosts) {
+        if (!ghost.el) continue;
+        ghost.el.style.pointerEvents = 'none';
+        ghost.el.style.zIndex = '8';
+        ghost.el.style.left = `${(ghost.originLeft + lastDelta.dStart) * pxPerTick()}px`;
+        const target = laneBoxes.find((lane) => lane.index === ghost.originTrack + lastDelta.dTrack);
+        ghost.el.style.transform = target ? `translateY(${target.top - ghost.originTop}px)` : '';
+      }
+    };
+
+    const resetGhosts = (keepTransform: boolean): void => {
+      for (const ghost of ghosts) {
+        if (!ghost.el) continue;
+        ghost.el.style.pointerEvents = '';
+        if (!keepTransform) {
+          ghost.el.style.left = `${ghost.originLeft * pxPerTick()}px`;
+          ghost.el.style.transform = '';
+          ghost.el.style.zIndex = '';
+        } else if (lastDelta.dTrack === 0) {
+          ghost.el.style.transform = '';
+        }
+      }
     };
 
     let announced = '';
     const announce = (value: string): void => {
       if (value === announced) return;
       announced = value;
-      app.say(clipName(clip), value);
+      app.say(group.length > 1 ? `${group.length} clips` : clipName(clip), value);
     };
 
     const onMove = (moveEvent: PointerEvent) => {
@@ -728,6 +945,14 @@ export function Playlist(): ReturnType<typeof Show> {
       }
       lastLane = laneUnder(moveEvent.clientY, laneBoxes) ?? lastLane;
       lastStart = snapTicks(Math.max(0, originStart + dx), view.playlistSnap());
+      lastDelta = clampGroupMove(
+        group,
+        lastLane - originLane,
+        lastStart - originStart,
+        playlist()?.tracks.length ?? 0,
+      );
+      lastStart = originStart + lastDelta.dStart;
+      lastLane = originLane + lastDelta.dTrack;
       announce(
         `bar ${(lastStart / TICKS_PER_BAR + 1).toFixed(2)} · ${playlist()?.tracks[lastLane]?.name ?? ''}`,
       );
@@ -737,34 +962,50 @@ export function Playlist(): ReturnType<typeof Show> {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
-      if (clipEl) {
-        clipEl.style.pointerEvents = '';
-        if (!moved || lastLane === originLane) clipEl.style.transform = '';
-        if (!moved) clipEl.style.zIndex = '';
-      }
       if (!moved) {
+        resetGhosts(false);
+        if (clipEl) clipEl.style.width = '';
         app.commitPlaylistGesture();
         activate(clip);
         return;
       }
-      if (copying) {
-        // The original never moved, so put its box back: the drag painted it
-        // to the drop point and only the *engine's* answer redraws a clip.
+      if (mode === 'resize') {
         if (clipEl) {
-          clipEl.style.left = `${originStart * pxPerTick()}px`;
-          clipEl.style.transform = '';
+          clipEl.style.pointerEvents = '';
           clipEl.style.zIndex = '';
         }
         void app
-          .sequencerCommand((backend) => cloneClip(backend, clip, lastLane, lastStart))
+          .sequencerCommand((backend) => backend.resizeClip(clip.id, lastLength))
           .then(() => app.commitPlaylistGesture());
         return;
       }
-      const run =
-        mode === 'resize'
-          ? app.sequencerCommand((backend) => backend.resizeClip(clip.id, lastLength))
-          : app.sequencerCommand((backend) => backend.moveClip(clip.id, lastLane, lastStart));
-      void run.then(() => app.commitPlaylistGesture());
+      if (copying) {
+        resetGhosts(false);
+        void placeScores(
+          group.map((entry) => ({
+            ...clipScore(entry),
+            track: entry.track + lastDelta.dTrack,
+            start: entry.start + lastDelta.dStart,
+          })),
+          group.length > 1 ? 'Copy clips' : 'Copy clip',
+          false,
+        ).then(() => app.commitPlaylistGesture());
+        return;
+      }
+      resetGhosts(true);
+      void app
+        .sequencerCommand(async (backend) => {
+          let state = await backend.getPattern();
+          for (const entry of group) {
+            state = await backend.moveClip(
+              entry.id,
+              entry.track + lastDelta.dTrack,
+              entry.start + lastDelta.dStart,
+            );
+          }
+          return state;
+        })
+        .then(() => app.commitPlaylistGesture());
     };
 
     window.addEventListener('pointermove', onMove);
@@ -801,29 +1042,121 @@ export function Playlist(): ReturnType<typeof Show> {
    * the clip, then F6, and you are editing what you clicked.
    */
   function activate(clip: ClipDto): void {
+    if (clip.kind === 'audio' && clip.sourceId !== undefined) {
+      void focusSampleChannel(clip.sourceId).catch(app.report);
+      return;
+    }
     if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
-    if (app.sequencer()?.patternSet.activeId === clip.patternId) return;
-    void app.sequencerCommand((backend) => backend.setActivePattern(clip.patternId!));
+    if (app.sequencer()?.patternSet.activeId !== clip.patternId) {
+      void app.sequencerCommand((backend) => backend.setActivePattern(clip.patternId!));
+    }
   }
 
   /** The same clip again at `lane`/`start`, length, offset and trim kept. */
-  function cloneClip(
-    backend: Backend,
-    clip: ClipDto,
-    lane: number,
-    start: number,
-  ): Promise<SequencerState> {
-    if (clip.kind === 'pattern') {
-      return backend.addPatternClip(clip.patternId!, lane, start, clip.length);
+  function cloneScore(backend: Backend, score: PlaylistClipScore): Promise<SequencerState> {
+    const lanes = playlist()?.tracks.length ?? 1;
+    const track = Math.min(Math.max(0, score.track), Math.max(0, lanes - 1));
+    if (score.kind === 'pattern' && score.patternId !== undefined) {
+      return backend.addPatternClip(score.patternId, track, score.start, score.length);
     }
+    if (score.sourceId === undefined) return backend.getPattern();
     return backend.addAudioClip(
-      clip.sourceId!,
-      lane,
-      start,
-      clip.length,
-      clip.offsetFrames ?? 0,
-      clip.gainDb ?? 0,
+      score.sourceId,
+      track,
+      score.start,
+      score.length,
+      score.offsetFrames ?? 0,
+      score.gainDb ?? 0,
     );
+  }
+
+  async function placeScores(
+    scores: PlaylistClipScore[],
+    label: string,
+    startGesture = true,
+  ): Promise<number[]> {
+    if (scores.length === 0) return [];
+    const before = new Set((playlist()?.clips ?? []).map((clip) => clip.id));
+    if (startGesture) app.startPlaylistGesture(label);
+    await app.sequencerCommand(async (backend) => {
+      let state = await backend.getPattern();
+      for (const score of scores) {
+        state = await cloneScore(backend, score);
+      }
+      return state;
+    });
+    if (startGesture) app.commitPlaylistGesture();
+    const created = (playlist()?.clips ?? [])
+      .filter((clip) => !before.has(clip.id))
+      .map((clip) => clip.id);
+    if (created.length > 0) view.setSelectedClips(created);
+    return created;
+  }
+
+  function deselectClips(): void {
+    if (view.selectedClips().length === 0) return;
+    view.setSelectedClips([]);
+    app.say('Playlist · Select', 'none');
+  }
+
+  function selectAllClips(): void {
+    const ids = (playlist()?.clips ?? []).map((clip) => clip.id);
+    view.setSelectedClips(ids);
+    app.say('Playlist · Select', ids.length === 0 ? 'none' : `${ids.length}`);
+  }
+
+  function copySelection(): void {
+    const clips = selectedClipDtos();
+    if (clips.length === 0) return;
+    playlistClipboard = clips.map(clipScore);
+    app.say('Playlist · Copy', `${clips.length} clip${clips.length > 1 ? 's' : ''}`);
+  }
+
+  async function removeSelected(label: string): Promise<number> {
+    const clips = selectedClipDtos();
+    if (clips.length === 0) return 0;
+    app.startPlaylistGesture(label);
+    await app.sequencerCommand(async (backend) => {
+      let state = await backend.getPattern();
+      for (const clip of clips) {
+        state = await backend.removeClip(clip.id);
+      }
+      return state;
+    });
+    app.commitPlaylistGesture();
+    view.setSelectedClips([]);
+    return clips.length;
+  }
+
+  async function cutSelection(): Promise<void> {
+    const clips = selectedClipDtos();
+    if (clips.length === 0) return;
+    playlistClipboard = clips.map(clipScore);
+    const count = await removeSelected(clips.length > 1 ? 'Cut clips' : 'Cut clip');
+    app.say('Playlist · Cut', `${count} clip${count > 1 ? 's' : ''}`);
+  }
+
+  async function pasteClipboard(): Promise<void> {
+    if (playlistClipboard.length === 0) return;
+    const placed = pasteAtPlayhead(playlistClipboard, playheadTicks());
+    await placeScores(placed, placed.length > 1 ? 'Paste clips' : 'Paste clip');
+    app.say('Playlist · Paste', `${placed.length} clip${placed.length > 1 ? 's' : ''}`);
+  }
+
+  async function duplicateSelection(): Promise<void> {
+    const clips = selectedClipDtos();
+    if (clips.length === 0) return;
+    const copies = duplicateToRight(clips.map(clipScore));
+    await placeScores(copies, copies.length > 1 ? 'Duplicate clips' : 'Duplicate clip');
+    app.say('Playlist · Duplicate', `${copies.length} clip${copies.length > 1 ? 's' : ''}`);
+  }
+
+  async function deleteSelection(): Promise<void> {
+    const count = await removeSelected(
+      view.selectedClips().length > 1 ? 'Delete clips' : 'Delete clip',
+    );
+    if (count === 0) return;
+    app.say('Playlist · Delete', `${count} clip${count > 1 ? 's' : ''}`);
   }
 
   /**
@@ -836,6 +1169,12 @@ export function Playlist(): ReturnType<typeof Show> {
    * window it should have opened.
    */
   async function openSample(sourceId: number): Promise<void> {
+    const channel = await focusSampleChannel(sourceId);
+    if (channel !== null) view.openSampleEditor(channel);
+  }
+
+  /** Point the rack, mixer and inspector at the channel that owns this file. */
+  async function focusSampleChannel(sourceId: number): Promise<number | null> {
     const find = () =>
       app.tracks().find((entry) => entry.engine === 'clip' && entry.audioSourceId === sourceId);
     let channel = find();
@@ -845,11 +1184,14 @@ export function Playlist(): ReturnType<typeof Show> {
     }
     if (!channel) {
       app.say('Playlist', 'that file has no channel yet');
-      return;
+      return null;
     }
     const index = channel.index;
+    view.setStrip({ kind: 'track', index });
+    view.setSideOpen(true);
+    view.setSideTab('inspector');
     await app.mixerCommand((backend) => backend.setSelectedTrack(index));
-    view.openSampleEditor(index);
+    return index;
   }
 
   function clipName(clip: ClipDto): string {
@@ -971,13 +1313,14 @@ export function Playlist(): ReturnType<typeof Show> {
         </span>
       </div>
 
-      <div
-        class="wv-pl"
-        ref={scrollEl}
-        onPointerDown={onPanPointerDown}
-        onAuxClick={(event) => event.button === 1 && event.preventDefault()}
-      >
-        <div class="wv-pl__inner" style={{ width: `${HEAD_W + laneWidth()}px` }}>
+      <div class="wv-pl">
+        <div
+          class="wv-pl__scroll"
+          ref={scrollEl}
+          onPointerDown={onPanPointerDown}
+          onAuxClick={(event) => event.button === 1 && event.preventDefault()}
+        >
+          <div class="wv-pl__inner" style={{ width: `${HEAD_W + laneWidth()}px` }}>
           <div class="wv-pl__ruler">
             <button
               type="button"
@@ -986,7 +1329,7 @@ export function Playlist(): ReturnType<typeof Show> {
               title="Back to the start (Home)"
               onClick={toStart}
             >
-              <IconRewind />
+              <span class="wv-pl__corner-bar">BAR</span>
               {playlist()?.tracks.length ?? 0} lanes · {playlist()?.clips.length ?? 0} clips
             </button>
             <div
@@ -1015,54 +1358,87 @@ export function Playlist(): ReturnType<typeof Show> {
 
           <Index each={playlist()?.tracks ?? []}>
             {(lane, index) => (
-              <div class="wv-pl__row">
+              <div
+                class="wv-pl__row"
+                classList={{ 'is-silenced': laneSilenced(playlist()?.tracks ?? [], index) }}
+              >
                 <div
                   class="wv-pl__head"
                   style={{ width: `${HEAD_W}px`, height: `${laneHeight(lane().id)}px` }}
                 >
-                  <button
-                    type="button"
-                    class="wv-led"
-                    classList={{ 'is-muted': lane().muted }}
-                    title={lane().muted ? 'Unmute this lane' : 'Mute this lane'}
-                    onClick={() => {
-                      void app.sequencerCommand((backend) =>
-                        backend.setPlaylistTrackMute(index, !lane().muted),
-                      );
-                      app.say(`${lane().name} · Lane`, lane().muted ? 'Active' : 'Muted');
-                    }}
-                  />
-                  <LaneName
-                    name={lane().name}
-                    onRename={(name) =>
-                      void app.sequencerCommand((backend) =>
-                        backend.renamePlaylistTrack(index, name),
-                      )
-                    }
-                  />
-                  <span class="wv-pl__count">
-                    {playlist()?.clips.filter((clip) => clip.track === index).length ?? 0}
-                  </span>
-                  <button
-                    type="button"
-                    class="wv-pl__del"
-                    disabled={(playlist()?.tracks.length ?? 1) <= 1}
-                    classList={{ 'wv-disabled': (playlist()?.tracks.length ?? 1) <= 1 }}
-                    title={
-                      (playlist()?.tracks.length ?? 1) <= 1
-                        ? 'An arrangement must keep at least one lane'
-                        : 'Remove this lane and every clip on it'
-                    }
-                    onClick={() => removeLane(index, lane().name)}
-                  >
-                    <IconX />
-                  </button>
+                  <div class="wv-pl__head-top">
+                    <span class="wv-pl__num">{index + 1}</span>
+                    <LaneName
+                      name={lane().name}
+                      onRename={(name) =>
+                        void app.sequencerCommand((backend) =>
+                          backend.renamePlaylistTrack(index, name),
+                        )
+                      }
+                    />
+                    <button
+                      type="button"
+                      class="wv-pl__del"
+                      disabled={(playlist()?.tracks.length ?? 1) <= 1}
+                      classList={{ 'wv-disabled': (playlist()?.tracks.length ?? 1) <= 1 }}
+                      title={
+                        (playlist()?.tracks.length ?? 1) <= 1
+                          ? 'An arrangement must keep at least one lane'
+                          : 'Remove this lane and every clip on it'
+                      }
+                      onClick={() => removeLane(index, lane().name)}
+                    >
+                      <IconX />
+                    </button>
+                  </div>
+                  <div class="wv-pl__head-btns">
+                    <button
+                      type="button"
+                      class="wv-pill wv-pill--solo"
+                      classList={{ 'is-on': lane().soloed }}
+                      title={
+                        lane().soloed
+                          ? 'Unsolo this lane'
+                          : 'Solo this lane — other lanes silent in SONG'
+                      }
+                      aria-pressed={lane().soloed}
+                      onClick={() => {
+                        app.startPlaylistGesture(`${lane().name} · Solo`);
+                        void app
+                          .sequencerCommand((backend) =>
+                            backend.setPlaylistTrackSolo(index, !lane().soloed),
+                          )
+                          .then(() => app.commitPlaylistGesture());
+                        app.say(`${lane().name} · Lane`, lane().soloed ? 'Active' : 'Soloed');
+                      }}
+                    >
+                      S
+                    </button>
+                    <button
+                      type="button"
+                      class="wv-pill wv-pill--mute"
+                      classList={{ 'is-on': lane().muted }}
+                      title={lane().muted ? 'Unmute this lane' : 'Mute this lane'}
+                      aria-pressed={lane().muted}
+                      onClick={() => {
+                        app.startPlaylistGesture(`${lane().name} · Mute`);
+                        void app
+                          .sequencerCommand((backend) =>
+                            backend.setPlaylistTrackMute(index, !lane().muted),
+                          )
+                          .then(() => app.commitPlaylistGesture());
+                        app.say(`${lane().name} · Lane`, lane().muted ? 'Active' : 'Muted');
+                      }}
+                    >
+                      M
+                    </button>
+                  </div>
                   <LaneGrip lane={lane()} height={laneHeight(lane().id)} />
                 </div>
                 <div
                   class="wv-pl__lane"
                   data-lane={index}
-                  classList={{ 'is-muted': lane().muted, 'is-painting': view.playlistTool() === 'paint' }}
+                  classList={{ 'is-painting': view.playlistTool() === 'paint' }}
                   style={{
                     width: `${laneWidth()}px`,
                     height: `${laneHeight(lane().id)}px`,
@@ -1099,7 +1475,7 @@ export function Playlist(): ReturnType<typeof Show> {
                           if (!content) return [];
                           return clipMarks(content, (channel) => {
                             const track = app.tracks()[channel];
-                            return track ? trackColor(track.id) : trackColor(channel);
+                            return track ? channelColor(track) : trackColor(channel);
                           });
                         }}
                         patternTicks={
@@ -1108,19 +1484,16 @@ export function Playlist(): ReturnType<typeof Show> {
                                 ?.lengthTicks ?? 0)
                             : 0
                         }
-                        selected={view.selectedClip() === clip.id}
+                        selected={view.selectedClips().includes(clip.id)}
                         onDown={(event, mode) => onClipPointerDown(event, clip, mode)}
                         onDelete={() => removeClip(clip)}
-                        onOpen={() => {
+                        onOpen={(altKey) => {
                           if (clip.kind === 'audio' && clip.sourceId !== undefined) {
                             void openSample(clip.sourceId).catch(app.report);
                             return;
                           }
                           if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
-                          void app.sequencerCommand((backend) =>
-                            backend.setActivePattern(clip.patternId!),
-                          );
-                          view.go('rack');
+                          void nav.openPattern(clip.patternId, { altKey, surface: 'clip' });
                         }}
                       />
                     )}
@@ -1130,29 +1503,25 @@ export function Playlist(): ReturnType<typeof Show> {
             )}
           </Index>
 
-          <div class="wv-pl__row">
-            <button
-              type="button"
-              class="wv-pl__add"
-              style={{ width: `${HEAD_W}px` }}
-              disabled={(playlist()?.tracks.length ?? 0) >= (playlist()?.maxTracks ?? 16)}
-              classList={{
-                'wv-disabled': (playlist()?.tracks.length ?? 0) >= (playlist()?.maxTracks ?? 16),
-              }}
-              title={
-                (playlist()?.tracks.length ?? 0) >= (playlist()?.maxTracks ?? 16)
-                  ? 'The engine allows no more lanes'
-                  : 'Add a lane'
-              }
-              onClick={() => void app.sequencerCommand((backend) => backend.addPlaylistTrack())}
-            >
-              + Add lane
-            </button>
-            <div class="wv-pl__addfill" style={{ width: `${laneWidth()}px` }} />
-          </div>
-
           <div class="wv-pl__playhead" ref={playheadEl} style={{ left: `${HEAD_W}px` }} />
+          </div>
         </div>
+
+        <button
+          type="button"
+          class="wv-pl__add wv-can-disable"
+          disabled={lanesFull()}
+          title={
+            lanesFull()
+              ? `The engine allows ${playlist()?.maxTracks ?? 16} lanes, and they are all in use`
+              : 'Add a lane'
+          }
+          onClick={() => void app.sequencerCommand((backend) => backend.addPlaylistTrack())}
+        >
+          {lanesFull()
+            ? `the engine allows ${playlist()?.maxTracks ?? 16} lanes, and they are all in use`
+            : '+ add a lane'}
+        </button>
 
         <Show when={(playlist()?.clips.length ?? 0) === 0}>
           <div class="wv-pl__hint">
@@ -1163,6 +1532,19 @@ export function Playlist(): ReturnType<typeof Show> {
               paints the same thing. Switch the transport to SONG to hear it.
             </span>
           </div>
+        </Show>
+        <Show when={marquee()}>
+          {(box) => (
+            <div
+              class="wv-pl__marquee"
+              style={{
+                left: `${box().x}px`,
+                top: `${box().y}px`,
+                width: `${Math.max(1, box().w)}px`,
+                height: `${Math.max(1, box().h)}px`,
+              }}
+            />
+          )}
         </Show>
       </div>
     </div>
@@ -1277,20 +1659,10 @@ function Clip(props: {
   selected: boolean;
   onDown: (event: PointerEvent, mode: 'move' | 'resize') => void;
   onDelete: () => void;
-  onOpen: () => void;
+  onOpen: (altKey: boolean) => void;
 }): ReturnType<typeof Show> {
   /** The waveform as one SVG path, drawn from the engine's own min/max pairs. */
-  const path = () => {
-    const wave = props.waveform;
-    if (!wave || wave.peaks.length === 0) return '';
-    const step = 100 / wave.peaks.length;
-    const top = wave.peaks.map((pair, index) => `${index * step},${50 - pair[1] * 46}`);
-    const bottom = wave.peaks
-      .map((pair, index) => `${(wave.peaks.length - 1 - index) * step},${50 - pair[0] * 46}`)
-      .reverse()
-      .reverse();
-    return `M${top.join(' L')} L${bottom.join(' L')} Z`;
-  };
+  const path = () => overviewWaveformPath(props.waveform?.peaks ?? []);
 
   const art = () => clipArtLayout(props.clip.length, props.patternTicks, props.pxPerTick);
   const wave = () =>
@@ -1305,15 +1677,16 @@ function Clip(props: {
   return (
     <div
       class="wv-clip"
+      data-clip-id={props.clip.id}
       classList={{ 'is-selected': props.selected }}
       style={{
         left: `${props.clip.start * props.pxPerTick}px`,
-        width: `${Math.max(6, props.clip.length * props.pxPerTick - 2)}px`,
-        background: wash(props.colour, 0.18),
-        'box-shadow': `inset 0 0 0 1px ${wash(props.colour, props.selected ? 1 : 0.55)}`,
+        width: `${Math.max(6, props.clip.length * props.pxPerTick - 4)}px`,
+        background: wash(props.colour, 0.28),
+        'box-shadow': `inset 0 0 0 ${props.selected ? 2 : 1}px ${wash(props.colour, props.selected ? 1 : 0.7)}`,
       }}
       onPointerDown={(event) => props.onDown(event, 'move')}
-      onDblClick={() => props.onOpen()}
+      onDblClick={(event) => props.onOpen(event.altKey)}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -1321,7 +1694,7 @@ function Clip(props: {
       }}
       title={
         props.clip.kind === 'pattern'
-          ? `${props.name} — click to load the brush, drag to move (shift-drag to copy), drag the right edge to resize, double-click to open it in the rack, right-click to delete`
+          ? `${props.name} — click to load the brush, drag to move (shift-drag to copy), drag the right edge to resize, double-click to edit (Alt for the rack), right-click to delete`
           : `${props.name} — click to load the brush, drag to move (shift-drag to copy), double-click to open the sample window, right-click to delete. Audio clips play through their own channel's strip.`
       }
     >

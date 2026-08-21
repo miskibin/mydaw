@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import type { PatternDto } from '../api/types';
 import {
+  ACCENT_VELOCITY,
   MAX_PATTERN_TICKS,
+  STEP_VELOCITY,
   TICKS_PER_BAR,
   TICKS_PER_STEP,
   audioWaveLayout,
@@ -10,15 +12,21 @@ import {
   emptyRow,
   lengthForTicks,
   notesOf,
+  rackDisplaySteps,
+  stepsToNotes,
+  channelScore,
   withClearedChannel,
   withContentLength,
   withFilledSteps,
   withGrownLength,
   withInvertedSteps,
   withNotes,
+  withPastedScore,
   withRandomSteps,
   withRepeatedFirstBar,
+  withSetStep,
   withShiftedSteps,
+  withStepsConvertedToNotes,
 } from './pattern';
 
 function blank(steps = 16): PatternDto {
@@ -96,6 +104,126 @@ describe('withClearedChannel', () => {
   });
 });
 
+describe('channelScore / withPastedScore', () => {
+  it('copies one channel onto another without taking the instrument key', () => {
+    const kick = withFilledSteps(blank(), 0, 4, 36);
+    const score = channelScore(kick, 0);
+    const snare = withPastedScore(kick, 1, score, 40);
+    expect(ons(snare, 0)).toEqual([0, 4, 8, 12]);
+    expect(ons(snare, 1)).toEqual([0, 4, 8, 12]);
+    expect(snare.channels.find((clip) => clip.channel === 1)?.steps?.key).toBe(40);
+  });
+
+  it('replaces the destination steps and notes instead of merging', () => {
+    const source = withSetStep(blank(), 0, 0, true, false, 60);
+    const dest = withSetStep(blank(), 1, 7, true, true, 62);
+    const after = withPastedScore(dest, 1, channelScore(source, 0), 62);
+    expect(ons(after, 1)).toEqual([0]);
+    expect(after.channels.find((clip) => clip.channel === 1)?.steps?.steps[7]?.on).toBe(false);
+  });
+
+  it('carries piano-roll notes with the grid', () => {
+    const before: PatternDto = {
+      ...blank(),
+      channels: [
+        {
+          channel: 0,
+          mode: 'roll',
+          steps: emptyRow(60, 16),
+          notes: [{ key: 64, start: 240, length: 480, velocity: 0.5 }],
+        },
+      ],
+    };
+    const after = withPastedScore(blank(), 1, channelScore(before, 0), 48);
+    expect(notesOf(after, 1)).toEqual([{ key: 64, start: 240, length: 480, velocity: 0.5 }]);
+    expect(ons(after, 1)).toEqual([]);
+  });
+
+  it('pads a short grid to the destination length', () => {
+    const short = withFilledSteps(blank(16), 0, 4, 60);
+    const long = withPastedScore(blank(32), 0, channelScore(short, 0), 60);
+    expect(ons(long)).toEqual([0, 4, 8, 12]);
+    expect(long.channels[0]!.steps!.steps).toHaveLength(32);
+  });
+
+  it('drops notes that start past the destination loop', () => {
+    const source: PatternDto = {
+      ...blank(32),
+      channels: [
+        {
+          channel: 0,
+          mode: 'roll',
+          steps: emptyRow(60, 32),
+          notes: [
+            { key: 60, start: 0, length: 240, velocity: 0.8 },
+            { key: 62, start: 16 * TICKS_PER_STEP, length: 240, velocity: 0.8 },
+          ],
+        },
+      ],
+    };
+    expect(notesOf(withPastedScore(blank(16), 0, channelScore(source, 0), 60), 0)).toEqual([
+      { key: 60, start: 0, length: 240, velocity: 0.8 },
+    ]);
+  });
+
+  it('truncates a long grid to the destination pattern', () => {
+    const long = withFilledSteps(blank(32), 0, 8, 60);
+    const short = withPastedScore(blank(16), 0, channelScore(long, 0), 60);
+    expect(ons(short)).toEqual([0, 8]);
+    expect(short.channels[0]!.steps!.steps).toHaveLength(16);
+  });
+
+  it('keeps accents and does not alias the snapshot to the live row', () => {
+    const accented = withSetStep(blank(), 0, 1, true, true, 60);
+    const score = channelScore(accented, 0);
+    accented.channels[0]!.steps!.steps[1] = { on: false, velocity: STEP_VELOCITY };
+    const pasted = withPastedScore(blank(), 1, score, 60);
+    expect(pasted.channels.find((clip) => clip.channel === 0)).toBeUndefined();
+    expect(pasted.channels.find((clip) => clip.channel === 1)?.steps?.steps[1]).toEqual({
+      on: true,
+      velocity: ACCENT_VELOCITY,
+    });
+  });
+
+  it('returns the same object when the destination already holds that score', () => {
+    const filled = withFilledSteps(blank(), 0, 4, 60);
+    const score = channelScore(filled, 0);
+    expect(withPastedScore(filled, 0, score, 60)).toBe(filled);
+  });
+
+  it('pastes an empty score as a clear', () => {
+    const filled = withFilledSteps(blank(), 0, 4, 60);
+    expect(ons(withPastedScore(filled, 0, channelScore(blank(), 0), 60))).toEqual([]);
+  });
+});
+
+describe('withSetStep', () => {
+  it('turns a cell on without touching its neighbours', () => {
+    expect(ons(withSetStep(blank(), 0, 2, true, false, 60))).toEqual([2]);
+  });
+
+  it('returns the same object when the cell is already in that state', () => {
+    const on = withSetStep(blank(), 0, 2, true, false, 60);
+    expect(withSetStep(on, 0, 2, true, false, 60)).toBe(on);
+  });
+
+  it('paints an accent onto an empty cell', () => {
+    const cell = withSetStep(blank(), 0, 1, true, true, 60).channels[0]!.steps!.steps[1]!;
+    expect(cell.on).toBe(true);
+    expect(cell.velocity).toBe(1);
+  });
+
+  it('does not downgrade an accent when painting a regular hit over it', () => {
+    const accented = withSetStep(blank(), 0, 1, true, true, 60);
+    expect(withSetStep(accented, 0, 1, true, false, 60)).toBe(accented);
+  });
+
+  it('turns a cell off', () => {
+    const on = withSetStep(blank(), 0, 2, true, false, 60);
+    expect(ons(withSetStep(on, 0, 2, false, false, 60))).toEqual([]);
+  });
+});
+
 describe('clipArtLayout', () => {
   const oneBar = 16 * TICKS_PER_STEP;
   const px = TICKS_PER_BAR / 48;
@@ -141,6 +269,17 @@ describe('audioWaveLayout', () => {
 
   it('is unshifted when the file has no frames', () => {
     expect(audioWaveLayout(fourBars, 0, 100, px).offsetPx).toBe(0);
+  });
+});
+
+describe('rackDisplaySteps', () => {
+  it('keeps one extra grayed bar past the loop, like FL Studio', () => {
+    expect(rackDisplaySteps(16)).toBe(32);
+    expect(rackDisplaySteps(32)).toBe(48);
+  });
+
+  it('stops at four bars when the pattern is already as long as the engine allows', () => {
+    expect(rackDisplaySteps(64)).toBe(64);
   });
 });
 
@@ -247,6 +386,66 @@ describe('withNotes', () => {
       ],
     };
     expect(withNotes(pattern, 0, [], 60).steps).toBe(32);
+  });
+});
+
+describe('stepsToNotes', () => {
+  it('turns each switched-on cell into a one-step note at the row key', () => {
+    const row = emptyRow(60, 16);
+    row.steps[0] = { on: true, velocity: STEP_VELOCITY };
+    row.steps[8] = { on: true, velocity: ACCENT_VELOCITY };
+    expect(stepsToNotes(row, 16)).toEqual([
+      { key: 60, start: 0, length: TICKS_PER_STEP, velocity: STEP_VELOCITY },
+      { key: 60, start: 8 * TICKS_PER_STEP, length: TICKS_PER_STEP, velocity: ACCENT_VELOCITY },
+    ]);
+  });
+});
+
+describe('withStepsConvertedToNotes', () => {
+  it('replaces switched-on steps with one-step C4 notes and clears the grid', () => {
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 16), notes: [] }],
+    };
+    pattern.channels[0]!.steps!.steps[0] = { on: true, velocity: STEP_VELOCITY };
+    pattern.channels[0]!.steps!.steps[8] = { on: true, velocity: ACCENT_VELOCITY };
+
+    const after = withStepsConvertedToNotes(pattern, 0, 60);
+    expect(after.channels[0]!.notes).toEqual([
+      { key: 60, start: 0, length: TICKS_PER_STEP, velocity: STEP_VELOCITY },
+      { key: 60, start: 8 * TICKS_PER_STEP, length: TICKS_PER_STEP, velocity: ACCENT_VELOCITY },
+    ]);
+    expect(after.channels[0]!.steps!.steps.some((cell) => cell.on)).toBe(false);
+  });
+
+  it('leaves a silent grid and an existing melody alone, by reference', () => {
+    const empty: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 16), notes: [] }],
+    };
+    expect(withStepsConvertedToNotes(empty, 0, 60)).toBe(empty);
+
+    const melody: PatternDto = {
+      ...blank(),
+      channels: [
+        {
+          channel: 0,
+          mode: 'roll',
+          steps: emptyRow(60, 16),
+          notes: [{ key: 64, start: 0, length: TICKS_PER_STEP, velocity: 0.8 }],
+        },
+      ],
+    };
+    expect(withStepsConvertedToNotes(melody, 0, 60)).toBe(melody);
+  });
+
+  it('keeps a drum row on its own key so conversion does not transpose the hit', () => {
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(36, 16), notes: [] }],
+    };
+    pattern.channels[0]!.steps!.steps[0] = { on: true, velocity: STEP_VELOCITY };
+    expect(withStepsConvertedToNotes(pattern, 0, 36).channels[0]!.notes[0]!.key).toBe(36);
   });
 });
 

@@ -317,6 +317,18 @@ impl AudioSource {
         &self.data
     }
 
+    /// Interleaved stereo content, excluding interpolator padding. **Non-RT.**
+    pub fn stereo(&self) -> &[f32] {
+        let start = PAD_LEAD * CHANNELS;
+        let end = start.saturating_add(self.frames.saturating_mul(CHANNELS));
+        let end = end.min(self.data.len());
+        if start >= end {
+            &[]
+        } else {
+            &self.data[start..end]
+        }
+    }
+
     /// The mip levels built at load, finest first.
     pub fn mips(&self) -> &[WaveformMip] {
         &self.mips
@@ -327,36 +339,41 @@ impl AudioSource {
     /// Served from the coarsest mip level that still has *at least* `target_bins`
     /// bins, then folded down by whole bins -- so the answer is always the
     /// true min and max of the frames it covers, never a resample of a resample.
-    /// A request for more bins than the finest level holds is answered from the
-    /// finest level, at its own resolution: there is no information below it,
-    /// and inventing bins would be drawing a waveform the file does not have.
+    /// A request for more bins than the finest mip is answered from the samples
+    /// themselves: mip 0 is a 256-frame overview for clips, and a short kick in
+    /// the sample editor needs the actual envelope, not that overview stretched.
+    /// Past one bin per frame there is nothing to add.
     ///
     /// Clamped to [`MAX_WAVEFORM_BINS`]. Empty for a missing file.
     pub fn waveform(&self, target_bins: usize) -> Vec<(f32, f32)> {
         let target = target_bins.clamp(1, MAX_WAVEFORM_BINS);
-        // Coarsest level that still has enough bins; the finest as a fallback,
-        // because that is all the detail there is.
+        let Some(finest) = self.mips.first() else {
+            return Vec::new();
+        };
+        if finest.is_empty() || self.frames == 0 {
+            return Vec::new();
+        }
+        if target > finest.len() {
+            return fold_padded_peaks(&self.data, self.frames, target.min(self.frames));
+        }
+        // Coarsest level that still has enough bins.
         let level = self
             .mips
             .iter()
             .rev()
             .find(|mip| mip.len() >= target)
-            .or_else(|| self.mips.first());
-        let Some(level) = level else {
-            return Vec::new();
-        };
-        if level.is_empty() {
-            return Vec::new();
-        }
+            .unwrap_or(finest);
 
-        let mut out = Vec::with_capacity(target.min(level.len()));
         let bins = level.len();
-        for bin in 0..target.min(bins) {
+        let out_bins = target.min(bins);
+        let mut out = Vec::with_capacity(out_bins);
+        for bin in 0..out_bins {
             // Whole-bin spans, so every source bin lands in exactly one output
-            // bin and none is skipped: `bin * bins / target` is the standard
-            // integer partition and is monotone.
-            let start = bin * bins / target;
-            let end = ((bin + 1) * bins / target).max(start + 1).min(bins);
+            // bin and none is skipped. The partition uses `out_bins`, not the
+            // (possibly larger) request: dividing by `target` while looping
+            // `bins` times only scanned the start of a short file.
+            let start = bin * bins / out_bins;
+            let end = ((bin + 1) * bins / out_bins).max(start + 1).min(bins);
             let mut min = f32::INFINITY;
             let mut max = f32::NEG_INFINITY;
             for index in start..end {
@@ -367,6 +384,28 @@ impl AudioSource {
         }
         out
     }
+}
+
+/// Min/max pairs over padded stereo `data`, one pair per output bin.
+fn fold_padded_peaks(data: &[f32], frames: usize, bins: usize) -> Vec<(f32, f32)> {
+    let bins = bins.max(1).min(frames);
+    let mut out = Vec::with_capacity(bins);
+    for bin in 0..bins {
+        let start = bin * frames / bins;
+        let end = ((bin + 1) * frames / bins).max(start + 1).min(frames);
+        let mut lo = f32::INFINITY;
+        let mut hi = f32::NEG_INFINITY;
+        for frame in start..end {
+            let base = (frame + PAD_LEAD) * CHANNELS;
+            for channel in 0..CHANNELS {
+                let sample = data[base + channel];
+                lo = lo.min(sample);
+                hi = hi.max(sample);
+            }
+        }
+        out.push((lo, hi));
+    }
+    out
 }
 
 /// Build [`MIP_LEVELS`] levels over padded stereo `data`.
@@ -489,7 +528,10 @@ impl AudioSourceRegistry {
     /// [`AudioSourceError::TooManySources`].
     pub fn load(&self, path: &Path) -> Result<Arc<AudioSource>, AudioSourceError> {
         if let Some(existing) = self.find_by_path(path) {
-            return Ok(existing);
+            if !existing.is_missing() {
+                return Ok(existing);
+            }
+            return self.load_with_id(existing.id(), path);
         }
         // The id is reserved first and the decode runs *outside* the lock:
         // reading a hundred megabytes off a disk must not stop a command thread
@@ -502,7 +544,12 @@ impl AudioSourceRegistry {
                 .values()
                 .find(|candidate| candidate.path() == path)
             {
-                return Ok(Arc::clone(existing));
+                if !existing.is_missing() {
+                    return Ok(Arc::clone(existing));
+                }
+                let id = existing.id();
+                drop(table);
+                return self.load_with_id(id, path);
             }
             if table.by_id.len() >= MAX_SOURCES {
                 return Err(AudioSourceError::TooManySources);
@@ -521,7 +568,9 @@ impl AudioSourceRegistry {
             .values()
             .find(|candidate| candidate.path() == path)
         {
-            return Ok(Arc::clone(existing));
+            if !existing.is_missing() {
+                return Ok(Arc::clone(existing));
+            }
         }
         table.by_id.insert(id, Arc::clone(&source));
         Ok(source)
@@ -839,14 +888,15 @@ mod tests {
     fn a_waveform_query_matches_a_brute_force_scan_of_the_samples() {
         let dir = TempDir::new("waveform");
         let path = dir.path().join("wave.wav");
-        // A whole number of base bins, and a bin count that divides it, so the
-        // mipmap's answer and a direct scan cover exactly the same frames.
+        // A whole number of base bins, and bin counts that divide it, so a mip
+        // fold and a direct scan cover exactly the same frames. Counts above
+        // the finest mip (64 here) take the sample-scan path.
         let frames = MIP_BASE_FRAMES * 64;
         let samples = sine(23.0, 8_000, frames);
         write_wav(&path, 8_000, 1, &samples);
         let source = AudioSource::load(1, &path).expect("loads");
 
-        for bins in [8_usize, 16, 64] {
+        for bins in [8_usize, 16, 64, 256, 1_024] {
             let mipped = source.waveform(bins);
             let direct = brute_force(&samples, bins);
             assert_eq!(mipped.len(), bins);
@@ -877,14 +927,71 @@ mod tests {
     }
 
     #[test]
-    fn asking_for_more_bins_than_the_file_has_detail_for_gives_what_there_is() {
-        let dir = TempDir::new("waveform-tiny");
-        let path = dir.path().join("tiny.wav");
-        write_wav(&path, 8_000, 1, &sine(50.0, 8_000, MIP_BASE_FRAMES * 3));
-        let source = AudioSource::load(1, &path).expect("loads");
+    fn asking_for_more_bins_than_frames_gives_one_bin_per_frame() {
+        let frames = 50;
+        let source = AudioSource::from_stereo(
+            1,
+            Path::new("tiny.wav"),
+            8_000.0,
+            sine(50.0, 8_000, frames)
+                .into_iter()
+                .flat_map(|sample| [sample, sample])
+                .collect(),
+        );
 
         let wave = source.waveform(10_000);
-        assert_eq!(wave.len(), 3, "three base bins is all the detail there is");
+        assert_eq!(
+            wave.len(),
+            frames,
+            "finer than one bin per frame would invent samples"
+        );
+    }
+
+    #[test]
+    fn a_short_decaying_sample_keeps_its_shape_when_the_ui_asks_for_dense_bins() {
+        // Kick-length: a few thousand frames, so mip 0 has a handful of 256-frame
+        // bins while the sample editor asks for 1024. Folding with `target` as the
+        // denominator and `mip.len()` as the loop bound only scanned the attack,
+        // so the picture was a solid bar.
+        let frames = MIP_BASE_FRAMES * 8;
+        let samples: Vec<f32> = (0..frames)
+            .map(|n| 0.9 * (-6.0 * n as f32 / frames as f32).exp())
+            .collect();
+        let source = AudioSource::from_stereo(
+            1,
+            Path::new("kick.wav"),
+            48_000.0,
+            samples
+                .iter()
+                .copied()
+                .flat_map(|sample| [sample, sample])
+                .collect(),
+        );
+
+        let wave = source.waveform(1_024);
+        assert!(
+            wave.len() > source.mips()[0].len(),
+            "the sample editor needs the samples, not the overview mip; got {} bins",
+            wave.len()
+        );
+        assert_eq!(wave.len(), 1_024.min(frames));
+
+        let quarter = wave.len() / 4;
+        let head = wave[..quarter]
+            .iter()
+            .fold(0.0_f32, |acc, pair| acc.max(pair.1));
+        let tail = wave[wave.len() - quarter..]
+            .iter()
+            .fold(0.0_f32, |acc, pair| acc.max(pair.1));
+        assert!(
+            head > tail * 2.0,
+            "a decaying hit must stay decaying; head {head} vs tail {tail}"
+        );
+        let last = wave.last().expect("non-empty").1;
+        assert!(
+            last < 0.2,
+            "the last bin must be the quiet end, not another copy of the attack ({last})"
+        );
     }
 
     #[test]
@@ -957,6 +1064,24 @@ mod tests {
         let placeholder = registry.register_missing(9, Path::new("D:/moved/vox.wav"));
         assert!(placeholder.is_missing());
         assert_eq!(registry.get(9).expect("is there").frames(), 0);
+    }
+
+    #[test]
+    fn loading_a_path_that_was_missing_replaces_the_placeholder() {
+        let dir = TempDir::new("registry-reload-missing");
+        let path = dir.path().join("found.wav");
+        let registry = AudioSourceRegistry::new();
+        let placeholder = registry.register_missing(9, &path);
+        assert!(placeholder.is_missing());
+
+        write_wav(&path, 8_000, 1, &sine(100.0, 8_000, 800));
+        let restored = registry
+            .load(&path)
+            .expect("decodes the file that appeared");
+        assert_eq!(restored.id(), 9);
+        assert!(!restored.is_missing());
+        assert!(restored.frames() > 0);
+        assert!(Arc::ptr_eq(&registry.get(9).expect("same id"), &restored));
     }
 
     #[test]

@@ -27,6 +27,8 @@
 //! deleting the active pattern moves it rather than dangling, and an empty set
 //! is not representable ([`remove`](PatternSet::remove) refuses the last one).
 
+use mydaw_rt_core::MAX_KEY;
+
 use crate::pattern::{Pattern, PatternError};
 
 /// Most patterns one project may hold.
@@ -343,6 +345,34 @@ impl PatternSet {
         }
     }
 
+    /// Move every step-row key and piano-roll note on `channel` by `to - from`
+    /// semitones, clamped to the MIDI range.
+    ///
+    /// Used when a channel's instrument root changes — replacing a GM kick
+    /// (key 36) with a one-shot rooted at C4 (key 60) — so the grid keeps its
+    /// rhythm and the sample plays at recorded pitch.
+    pub fn shift_channel_keys(&mut self, channel: u8, from: u8, to: u8) {
+        if from == to {
+            return;
+        }
+        let delta = i16::from(to) - i16::from(from);
+        for pattern in &mut self.patterns {
+            let Some(clip) = pattern
+                .channels
+                .iter_mut()
+                .find(|clip| clip.channel == channel)
+            else {
+                continue;
+            };
+            if let Some(row) = clip.steps.as_mut() {
+                row.key = shift_key(row.key, delta);
+            }
+            for note in &mut clip.notes {
+                note.key = shift_key(note.key, delta);
+            }
+        }
+    }
+
     /// Check every pattern.
     ///
     /// # Errors
@@ -362,6 +392,10 @@ impl PatternSet {
     pub fn compile(&self) -> Vec<crate::CompiledPattern> {
         self.patterns.iter().map(Pattern::compile).collect()
     }
+}
+
+fn shift_key(key: u8, delta: i16) -> u8 {
+    (i16::from(key) + delta).clamp(0, i16::from(MAX_KEY)) as u8
 }
 
 #[cfg(test)]
@@ -655,5 +689,24 @@ mod tests {
         );
         // ...and a file with no patterns at all still gives an editable set.
         assert_eq!(PatternSet::restored(Vec::new(), 0).len(), 1);
+    }
+
+    #[test]
+    fn shifting_a_channel_moves_its_step_key_and_notes_by_the_same_interval() {
+        let mut set = PatternSet::starter(&[0, 1], |_| 36);
+        set.patterns[0].channels[0]
+            .notes
+            .push(MelodicNote::new(48, 0, 240));
+        set.shift_channel_keys(0, 36, 60);
+        let clip = &set.active().channels[0];
+        assert_eq!(clip.steps.as_ref().unwrap().key, 60);
+        assert_eq!(clip.notes[0].key, 72);
+        assert_eq!(
+            set.active().channels[1].steps.as_ref().unwrap().key,
+            36,
+            "the other channel is not moved"
+        );
+        set.shift_channel_keys(0, 60, 60);
+        assert_eq!(set.active().channels[0].steps.as_ref().unwrap().key, 60);
     }
 }

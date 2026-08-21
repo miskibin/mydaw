@@ -1,16 +1,22 @@
 //! Kernel boot and the state the Tauri commands run against.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use mydaw_ipc_bridge::{PanelManifestDto, UiSnapshot};
 use mydaw_kernel::{Kernel, KernelError};
-use mydaw_plugin_audio_io::{AudioIoError, AudioIoPlugin, AudioIoService, StreamInfo};
+use mydaw_plugin_audio_io::{
+    AudioIoError, AudioIoPlugin, AudioIoService, OutputRequest, StreamInfo,
+};
 use mydaw_plugin_debug_tap::{DebugTapPlugin, DebugTapService};
 use mydaw_plugin_effects::{EffectRegistry, EffectsPlugin};
 use mydaw_plugin_host_clap::{ClapHostService, HostClapPlugin};
 use mydaw_plugin_host_vst3::{HostVst3Plugin, Vst3HostService};
 use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin, SpectrumHandoff, SpectrumOutput};
+use mydaw_plugin_midi_io::{MidiIoPlugin, MidiIoService, MidiNoteSink};
 use mydaw_plugin_sampler::{
     AssetDownloader, AssetState, AssetStatus, SamplerPlugin, SamplerRegistry,
 };
@@ -32,7 +38,9 @@ use crate::dto::{
 use crate::effects::{EffectInfoDto, InsertError, InsertTarget};
 use crate::ipc_bench;
 use crate::meters::MeterPump;
-use crate::project::{MixerStateDto, Project, RouteError, TrackError};
+use crate::project::{
+    MixerStateDto, PitchAnalysisDto, Project, RootMode, RootPitchDto, RouteError, TrackError,
+};
 use crate::project_bridge::{ProjectBridge, ProjectCommand, ProjectInfoDto};
 use crate::source::{check_bundle_path, Source, SourceDto, SourceError};
 use crate::spectrum::SpectrumPump;
@@ -141,6 +149,7 @@ pub fn boot_kernel() -> Result<Kernel, KernelError> {
     kernel.add_plugin(Box::new(SamplerPlugin::new()))?;
     kernel.add_plugin(Box::new(SequencerPlugin::new()))?;
     kernel.add_plugin(Box::new(AudioIoPlugin::new()))?;
+    kernel.add_plugin(Box::new(MidiIoPlugin::new()))?;
     kernel.add_plugin(Box::new(HostClapPlugin::new()))?;
     kernel.add_plugin(Box::new(HostVst3Plugin::new()))?;
     kernel.add_plugin(Box::new(PluginWindowsPlugin::new()))?;
@@ -185,6 +194,50 @@ pub fn ui_snapshot(kernel: &Kernel) -> UiSnapshot {
         });
     }
     snapshot
+}
+
+/// Live MIDI notes: same path as the typing keyboard, onto the selected track.
+///
+/// Note-off is pinned to the channel the matching on used. Changing the
+/// selected strip while a controller key is held must not send the off to the
+/// new track and leave the old one ringing.
+struct EngineNoteSink {
+    audio: Arc<AudioIoService>,
+    tracks: Arc<TrackHost>,
+    sounding: Mutex<HashMap<u8, u8>>,
+}
+
+fn midi_event_channel(sounding: &mut HashMap<u8, u8>, selected: u8, key: u8, on: bool) -> u8 {
+    if on {
+        sounding.insert(key, selected);
+        selected
+    } else {
+        sounding.remove(&key).unwrap_or(selected)
+    }
+}
+
+impl MidiNoteSink for EngineNoteSink {
+    fn note_on(&self, key: u8, velocity: f32) {
+        let selected = self.tracks.selected().min(mydaw_rt_core::MAX_TRACKS - 1) as u8;
+        let channel = midi_event_channel(&mut self.sounding.lock(), selected, key, true);
+        if let Err(err) = self
+            .audio
+            .send_note(LiveNote::note_on(key, velocity).on_channel(channel))
+        {
+            log::debug!("MIDI note-on dropped: {err}");
+        }
+    }
+
+    fn note_off(&self, key: u8) {
+        let selected = self.tracks.selected().min(mydaw_rt_core::MAX_TRACKS - 1) as u8;
+        let channel = midi_event_channel(&mut self.sounding.lock(), selected, key, false);
+        if let Err(err) = self
+            .audio
+            .send_note(LiveNote::note_off(key).on_channel(channel))
+        {
+            log::debug!("MIDI note-off dropped: {err}");
+        }
+    }
 }
 
 /// What the Tauri commands are allowed to touch.
@@ -239,6 +292,9 @@ pub struct AppState {
     /// also has it, because the source picker lists from here and the asset
     /// downloader's completion callback rescans it.
     sampler: Arc<SamplerRegistry>,
+    /// MIDI input ports. Notes go through [`EngineNoteSink`] onto the selected
+    /// track; the webview only lists and pairs devices.
+    midi: Arc<MidiIoService>,
     /// Installs the sample content on demand.
     ///
     /// `None` only if this build's `assets-manifest.json` is unusable, which
@@ -297,6 +353,9 @@ impl AppState {
         let debug_tap = services
             .get::<DebugTapService>()
             .ok_or(StartupError::MissingService("DebugTapService"))?;
+        let midi = services
+            .get::<MidiIoService>()
+            .ok_or(StartupError::MissingService("MidiIoService"))?;
         // Resolved here so a missing plugin-windows registration is a boot error
         // rather than a mystery when the user first clicks "Open GUI".
         if !services.contains::<PluginWindowService>() {
@@ -331,6 +390,16 @@ impl AppState {
             effects,
         ));
         tracks.audio_clips().bind_sources(Arc::clone(&sources));
+        {
+            let mut project = tracks.project();
+            crate::drum_samples::realize_drum_tracks(&mut project, None, &tracks, &sources);
+            tracks.set_project(project);
+        }
+        midi.set_sink(Arc::new(EngineNoteSink {
+            audio: Arc::clone(&audio),
+            tracks: Arc::clone(&tracks),
+            sounding: Mutex::new(HashMap::new()),
+        }));
         // The rack and the pattern set have to agree from the first frame: the
         // sequencer plugin publishes an empty set (it has no idea what channels
         // exist), and this is the one place that knows both. A rejected seed
@@ -359,6 +428,7 @@ impl AppState {
             spectrum_watch,
             debug_tap,
             sampler,
+            midi,
             assets,
         })
     }
@@ -452,6 +522,36 @@ impl AppState {
         }
     }
 
+    /// Apply a new host/buffer request: stop, reopen, republish the graph.
+    ///
+    /// Playhead and playing-state survive the restart so a buffer tweak mid-song
+    /// does not throw the user back to bar one.
+    pub fn apply_output_request(&self, request: OutputRequest) -> Result<StreamInfo, AudioIoError> {
+        let (playing, pos) = match self.audio.transport() {
+            Some(clock) => {
+                let snap = clock.snapshot();
+                (snap.playing, snap.sample_pos)
+            }
+            None => (false, 0),
+        };
+        self.audio.set_output_request(request);
+        if self.audio.is_running() {
+            self.audio.stop();
+        }
+        let info = self.start_audio_with(self.tracks.project())?;
+        if pos > 0 {
+            if let Err(err) = self.audio.seek(pos) {
+                log::warn!("could not restore the playhead after an audio restart: {err}");
+            }
+        }
+        if playing {
+            if let Err(err) = self.audio.set_playing(true) {
+                log::warn!("could not resume playback after an audio restart: {err}");
+            }
+        }
+        Ok(info)
+    }
+
     /// Change what plays at the head of the **selected** track, while the engine
     /// runs.
     ///
@@ -478,33 +578,46 @@ impl AppState {
     /// # Errors
     /// See [`set_source`](Self::set_source).
     pub fn set_track_source(&self, track: usize, source: Source) -> Result<(), SourceError> {
+        let old_key = self
+            .tracks
+            .project()
+            .tracks
+            .get(track)
+            .map(|def| crate::drum_samples::natural_step_key(&def.source));
+        let source = crate::drum_samples::realize_source(&self.tracks, &self.sources, source)
+            .map_err(|err| SourceError::SampleFile(err.to_string()))?;
+        let new_key = crate::drum_samples::natural_step_key(&source);
         if self.clap_bridge.board().track(track).is_some() {
-            return self
-                .clap_command(ClapCommand::SetTrackBuiltIn {
-                    track,
-                    source_id: source.id(),
-                })
-                .map(|_| ());
-        }
-        if self.vst3_bridge.board().track(track).is_some() {
-            return self
-                .vst3_command(Vst3Command::SetTrackBuiltIn {
-                    track,
-                    source_id: source.id(),
-                })
-                .map(|_| ());
-        }
-        let id = source.id();
-        match self.tracks.set_source(track, source, &self.audio) {
-            Ok(()) => {
-                log::info!("track {track} source is now '{id}'");
-                Ok(())
+            self.clap_command(ClapCommand::SetTrackBuiltIn {
+                track,
+                source_id: source.id(),
+            })?;
+        } else if self.vst3_bridge.board().track(track).is_some() {
+            self.vst3_command(Vst3Command::SetTrackBuiltIn {
+                track,
+                source_id: source.id(),
+            })?;
+        } else {
+            let id = source.id();
+            match self.tracks.set_source(track, source, &self.audio) {
+                Ok(()) => {
+                    log::info!("track {track} source is now '{id}'");
+                }
+                Err(MixerError::Source(err)) => return Err(err),
+                Err(MixerError::Audio(err)) => return Err(SourceError::Audio(err)),
+                // A bad index is a UI bug; it reaches the status bar as itself.
+                Err(other) => return Err(SourceError::MainThread(other.to_string())),
             }
-            Err(MixerError::Source(err)) => Err(err),
-            Err(MixerError::Audio(err)) => Err(SourceError::Audio(err)),
-            // A bad index is a UI bug; it reaches the status bar as itself.
-            Err(other) => Err(SourceError::MainThread(other.to_string())),
         }
+        if let Some(old_key) = old_key {
+            if old_key != new_key {
+                let _ = self.edit_patterns(|set| {
+                    set.shift_channel_keys(track as u8, old_key, new_key);
+                    Ok(())
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Put a hosted CLAP instrument at the head of one track.
@@ -873,6 +986,13 @@ impl AppState {
         &self.tracks
     }
 
+    pub(crate) fn audio_source(
+        &self,
+        source_id: u64,
+    ) -> Option<Arc<mydaw_plugin_sequencer::AudioSource>> {
+        self.sources.get(source_id)
+    }
+
     /// The mixer, in the shape the webview reads.
     pub fn mixer_state(&self) -> MixerStateDto {
         self.tracks.state(
@@ -1104,13 +1224,15 @@ impl AppState {
         self.tracks.set_insert_param(target, index, param_id, value)
     }
 
-    /// Arm the analysis tap on one insert, or silence it.
+    /// Arm the analysis tap on one insert, the track source (`index` omitted),
+    /// or silence it.
     pub fn watch_spectrum(
         &self,
         target: Option<InsertTarget>,
         index: Option<usize>,
     ) -> Result<(), InsertError> {
         let packed = match (target, index) {
+            (Some(InsertTarget::Track(strip)), None) => SpectrumTarget::track_source(strip),
             (Some(target), Some(index)) => {
                 let _ = self.tracks.insert_readouts(target, index)?;
                 match target {
@@ -1279,6 +1401,80 @@ impl AppState {
         self.apply_sample_play(track)
     }
 
+    /// Detect the root pitch of an audio-file channel's selected region.
+    ///
+    /// Prefers embedded WAV `smpl` metadata, then a filename note token, then
+    /// bounded YIN analysis. Never invents C for unpitched material.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`], [`TrackError::NotASampleChannel`], or a
+    /// missing decoded file.
+    pub fn analyze_track_pitch(&self, track: usize) -> Result<PitchAnalysisDto, MixerError> {
+        let project = self.tracks.project();
+        let def = project
+            .tracks
+            .get(track)
+            .ok_or(TrackError::NoSuchTrack(track))?;
+        let source_id = def
+            .source
+            .sample_file_id()
+            .ok_or(TrackError::NotASampleChannel(track))?;
+        let start = def.sample_start_frames as usize;
+        let end = def.sample_end_frames as usize;
+        let source = self.audio_source(source_id).ok_or_else(|| {
+            MixerError::Source(SourceError::SampleFile(format!(
+                "audio source {source_id} is not loaded"
+            )))
+        })?;
+        if let Some(hint) = mydaw_pitch_analysis::root_hint(source.path()) {
+            let stored = RootPitchDto::from(hint);
+            self.tracks.set_detected_pitch(track, Some(stored))?;
+            return Ok(mydaw_pitch_analysis::PitchOutcome::Detected(hint).into());
+        }
+        let frames = source.frames();
+        let range = if end == 0 || end > frames {
+            start.min(frames)..frames
+        } else {
+            start.min(end)..end
+        };
+        let outcome = mydaw_pitch_analysis::detect_root_pitch(
+            source.stereo(),
+            frames,
+            source.sample_rate(),
+            range,
+        );
+        if let mydaw_pitch_analysis::PitchOutcome::Detected(pitch) = outcome {
+            self.tracks
+                .set_detected_pitch(track, Some(RootPitchDto::from(pitch)))?;
+        }
+        Ok(outcome.into())
+    }
+
+    /// Calibrate an audio-file channel's playback root without changing transpose.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`], [`TrackError::NotASampleChannel`],
+    /// [`TrackError::InvalidRootKey`], or [`TrackError::InvalidRootFine`].
+    pub fn set_track_sample_root(
+        &self,
+        track: usize,
+        key: u8,
+        fine_cents: f32,
+        mode: RootMode,
+    ) -> Result<(), MixerError> {
+        let project = self.tracks.project();
+        let def = project
+            .tracks
+            .get(track)
+            .ok_or(TrackError::NoSuchTrack(track))?;
+        if def.source.sample_file_id().is_none() {
+            return Err(TrackError::NotASampleChannel(track).into());
+        }
+        drop(project);
+        self.tracks.set_sample_root(track, key, fine_cents, mode)?;
+        Ok(())
+    }
+
     /// Set one of the instrument's own knobs, returning what was stored.
     ///
     /// One atomic store: no rebuild, no allocation, and the audio thread reads
@@ -1354,7 +1550,10 @@ impl AppState {
                 self.publish_audio_clips();
                 Ok(())
             }
-            Some(Source::OneShot { .. }) => self.tracks.refresh_oneshot(track, &self.audio),
+            // One-shot nodes share the track's atomic sample-play block. The
+            // setters above already published the new defaults, so replacing
+            // the node here would only destroy voices that are still sounding.
+            Some(Source::OneShot { .. }) => Ok(()),
             _ => Ok(()),
         }
     }
@@ -1412,6 +1611,8 @@ impl AppState {
     /// the hosted path, [`SourceError::MainThread`] carrying what the main
     /// thread said.
     pub fn add_track(&self, source: Source, name: Option<String>) -> Result<usize, MixerError> {
+        let source = crate::drum_samples::realize_source(&self.tracks, &self.sources, source)
+            .map_err(|err| MixerError::Source(SourceError::SampleFile(err.to_string())))?;
         let outcome = self.place_track(source, name);
         // One call site for all three paths, and deliberately outside the `?`.
         //
@@ -1589,9 +1790,17 @@ impl AppState {
 
     /// Start or stop the transport.
     ///
+    /// Stopping also fades the browser preview: Stop means silence, including a
+    /// sample or instrument that was still auditioning with the song already
+    /// parked. Play leaves a preview running so a file can be judged against
+    /// the mix.
+    ///
     /// # Errors
     /// [`AudioIoError::NotRunning`] when no device was opened.
     pub fn set_playing(&self, playing: bool) -> Result<(), AudioIoError> {
+        if !playing {
+            let _ = self.tracks.file_preview().stop();
+        }
         self.audio.set_playing(playing)
     }
 
@@ -1730,12 +1939,24 @@ impl AppState {
         &self,
         path: &std::path::Path,
     ) -> Result<Arc<mydaw_plugin_sequencer::AudioSource>, SequencerError> {
+        let was_missing = self
+            .sources
+            .find_by_path(path)
+            .is_some_and(|source| source.is_missing());
         let source = self.sources.load(path)?;
         // A file that was missing when the project loaded and has now been
         // re-loaded under a *new* id changes nothing about existing clips, but a
         // reload of the same id does -- so republish either way. It is one
         // compile of a list a human can count.
         self.publish_audio_clips();
+        if was_missing {
+            // OneShotNode snapshots Arc<AudioSource> at graph construction.
+            // Republishing clips updates the playlist player; notes stay bound
+            // to the silent placeholder unless the rack nodes are rebuilt.
+            if let Err(err) = self.rebuild_graph() {
+                log::warn!("could not rebuild sample players after reloading {path:?}: {err}");
+            }
+        }
         Ok(source)
     }
 
@@ -1749,6 +1970,22 @@ impl AppState {
         path: &std::path::Path,
     ) -> Result<(), crate::file_preview::PreviewFileError> {
         self.tracks.file_preview().play(path)
+    }
+
+    /// Audition one hit of a built-in or sampled instrument through the same
+    /// preview slot files use. Does not change the selected rack channel.
+    ///
+    /// # Errors
+    /// A hosted plugin, an unknown id, a missing instrument, a decode-style
+    /// refusal from the preview bus, or no audio device.
+    pub fn preview_instrument(&self, source_id: &str) -> Result<(), String> {
+        let take = self
+            .source_hit_audio(source_id)
+            .map_err(|err| err.to_string())?;
+        self.tracks
+            .file_preview()
+            .play_source(take)
+            .map_err(|err| err.to_string())
     }
 
     /// How long a clip covering the whole of `source_id` should be, in ticks.
@@ -2009,6 +2246,10 @@ impl AppState {
         &self.audio
     }
 
+    pub fn midi(&self) -> &Arc<MidiIoService> {
+        &self.midi
+    }
+
     /// The audio capture harness behind `debug_capture` and
     /// `MYDAW_DEBUG_CAPTURE`.
     pub fn debug_tap(&self) -> &Arc<DebugTapService> {
@@ -2020,6 +2261,15 @@ impl AppState {
 mod tests {
     use super::*;
     use mydaw_ipc_bridge::PluginStateDto;
+
+    #[test]
+    fn midi_off_stays_on_the_channel_the_note_started_on() {
+        let mut sounding = HashMap::new();
+        assert_eq!(midi_event_channel(&mut sounding, 2, 60, true), 2);
+        assert_eq!(midi_event_channel(&mut sounding, 5, 60, false), 2);
+        assert!(sounding.is_empty());
+        assert_eq!(midi_event_channel(&mut sounding, 4, 64, false), 4);
+    }
 
     #[test]
     fn boots_the_full_plugin_set_in_dependency_order() {
@@ -2038,9 +2288,10 @@ mod tests {
                 "host-vst3",
                 "plugin-windows",
                 "audio-io",
+                "midi-io",
             ],
-            "audio-io waits for metering and debug-tap; Kahn's algorithm keeps \
-             the rest in registration order"
+            "audio-io waits for metering and debug-tap; midi-io waits for \
+             audio-io; Kahn's algorithm keeps the rest in registration order"
         );
         assert!(kernel
             .plugin_statuses()
@@ -2053,7 +2304,7 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let snapshot = ui_snapshot(&kernel);
 
-        assert_eq!(snapshot.plugins.len(), 11);
+        assert_eq!(snapshot.plugins.len(), 12);
         assert!(snapshot
             .plugins
             .iter()
@@ -2172,12 +2423,14 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let state = AppState::from_kernel(&kernel).unwrap();
 
-        // Track 0 of the default project is the kick, and track 0 is what the
-        // keyboard and the selector address until the user says otherwise.
+        // Track 0 of the default project is the kick sample, and track 0 is
+        // what the keyboard and the selector address until the user says
+        // otherwise.
         assert_eq!(state.selected_track(), 0);
-        assert_eq!(
-            state.current_source(),
-            Source::Drum(mydaw_plugin_instruments::SingleDrum::Kick)
+        assert_eq!(state.mixer_state().tracks[0].name, "Kick");
+        assert!(
+            matches!(state.current_source(), Source::OneShot { .. }),
+            "starter drums are one-shot samples, not synthesizers"
         );
         let sources = state.sources();
         // The built-ins come first and in a fixed order; whatever CLAP
@@ -2211,15 +2464,16 @@ mod tests {
             .filter(|s| s.selected)
             .map(|s| s.id.as_str())
             .collect();
-        assert_eq!(selected, vec!["kick"], "exactly one is playing");
+        assert!(
+            selected.is_empty(),
+            "a one-shot kick is not the synthesizer entry in the picker: {selected:?}"
+        );
 
-        // Selecting another channel changes what the list marks, with no audio
+        // Selecting another channel changes what is playing, with no audio
         // device involved at all.
         state.set_selected_track(1).unwrap();
-        assert_eq!(
-            state.current_source(),
-            Source::Drum(mydaw_plugin_instruments::SingleDrum::Snare)
-        );
+        assert_eq!(state.mixer_state().tracks[1].name, "Snare");
+        assert!(matches!(state.current_source(), Source::OneShot { .. }));
     }
 
     #[test]
@@ -2280,10 +2534,10 @@ mod tests {
                 "{id} produced {err:?}"
             );
         }
-        assert_eq!(
-            state.current_source(),
-            Source::Drum(mydaw_plugin_instruments::SingleDrum::Kick),
-            "a failed switch must not change what the UI is told is playing"
+        assert!(
+            matches!(state.current_source(), Source::OneShot { .. }),
+            "a failed switch must not change what the UI is told is playing: {:?}",
+            state.current_source()
         );
     }
 
@@ -2415,8 +2669,8 @@ mod tests {
                 .iter()
                 .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
                 .collect::<Vec<_>>(),
-            vec![36, 38, 39, 42, 46, mydaw_plugin_sequencer::DEFAULT_STEP_KEY],
-            "each drum gets its General MIDI key, the synth middle C"
+            vec![mydaw_plugin_sequencer::DEFAULT_STEP_KEY; 6],
+            "sample drums and the synth all fire C4, so a hit plays at recorded pitch"
         );
         assert!(dto.pattern_set.active.channels.iter().all(|clip| clip
             .steps
@@ -2428,7 +2682,8 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .label,
-            "CH"
+            "Key 60",
+            "sample drums fire C4; the GM drum names follow the key, not the channel"
         );
         assert_eq!(dto.play_mode, "pat");
         assert_eq!(dto.pattern_set.patterns.len(), 1);
@@ -2442,7 +2697,7 @@ mod tests {
         let (_kernel, state) = state();
         let mut pattern = state.sequencer().active_pattern();
         pattern.channels[0].steps =
-            Some(mydaw_plugin_sequencer::StepRow::empty(36).with_steps(&[0, 4, 8, 12]));
+            Some(mydaw_plugin_sequencer::StepRow::empty(60).with_steps(&[0, 4, 8, 12]));
         state
             .set_pattern(pattern.clone())
             .expect("no device needed");
@@ -2472,7 +2727,7 @@ mod tests {
     fn a_rejected_pattern_leaves_the_session_exactly_as_it_was() {
         let (_kernel, state) = state();
         let mut good = state.sequencer().active_pattern();
-        good.channels[0].steps = Some(mydaw_plugin_sequencer::StepRow::empty(36).with_steps(&[0]));
+        good.channels[0].steps = Some(mydaw_plugin_sequencer::StepRow::empty(60).with_steps(&[0]));
         state.set_pattern(good.clone()).unwrap();
 
         let bad = PatternDto {
@@ -2484,7 +2739,7 @@ mod tests {
                 channel: 0,
                 mode: String::new(),
                 steps: Some(crate::dto::StepRowDto {
-                    key: 36,
+                    key: 60,
                     label: String::new(),
                     steps: Vec::new(),
                 }),
@@ -2519,7 +2774,7 @@ mod tests {
                 .iter()
                 .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
                 .collect::<Vec<_>>(),
-            vec![36, 38, 39, 42, 46, mydaw_plugin_sequencer::DEFAULT_STEP_KEY]
+            vec![mydaw_plugin_sequencer::DEFAULT_STEP_KEY; 6]
         );
 
         state.set_active_pattern_for_test(id);
@@ -2666,5 +2921,94 @@ mod tests {
             1,
             "unchanged"
         );
+    }
+
+    fn write_tone_wav(name: &str, hz: f64) -> std::path::PathBuf {
+        let path =
+            std::env::temp_dir().join(format!("mydaw-pitch-{name}-{}.wav", std::process::id()));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 44_100,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("wav");
+        for frame in 0..44_100 {
+            let sample =
+                ((frame as f64 * hz * std::f64::consts::TAU) / 44_100.0).sin() as f32 * 0.5;
+            writer.write_sample(sample).unwrap();
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+        path
+    }
+
+    fn add_headless_sample(state: &AppState, path: &std::path::Path) -> usize {
+        let before = state.mixer_state().tracks.len();
+        match state.add_sample_channel(path) {
+            Ok(index) => index,
+            Err(MixerError::Audio(AudioIoError::NotRunning)) => {
+                assert_eq!(state.mixer_state().tracks.len(), before + 1);
+                before
+            }
+            Err(err) => panic!("sample channel: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn analyze_track_pitch_names_missing_and_wrong_source_tracks() {
+        let (_kernel, state) = state();
+        assert!(matches!(
+            state.analyze_track_pitch(99),
+            Err(MixerError::Track(TrackError::NoSuchTrack(99)))
+        ));
+        let synth = state
+            .mixer_state()
+            .tracks
+            .iter()
+            .position(|track| track.engine != "sample" && track.engine != "clip")
+            .expect("a non-sample channel");
+        assert!(matches!(
+            state.analyze_track_pitch(synth),
+            Err(MixerError::Track(TrackError::NotASampleChannel(_)))
+        ));
+    }
+
+    #[test]
+    fn analyze_track_pitch_detects_a_tone_and_rejects_noise_by_filename() {
+        let (_kernel, state) = state();
+        let tone = write_tone_wav("tone", 440.0);
+        let track = add_headless_sample(&state, &tone);
+        match state.analyze_track_pitch(track).expect("analysis") {
+            PitchAnalysisDto::Detected {
+                midi_note, cents, ..
+            } => {
+                assert_eq!(midi_note, 69);
+                assert!(cents.abs() < 15.0, "A4 cents were {cents}");
+            }
+            other => panic!("expected a detected A4, got {other:?}"),
+        }
+        state
+            .set_track_sample_root(track, 69, 0.0, RootMode::Detected)
+            .expect("root");
+        let stored = &state.mixer_state().tracks[track];
+        assert_eq!(stored.root_key, 69);
+        assert_eq!(stored.root_mode, RootMode::Detected);
+        let _ = std::fs::remove_file(tone);
+    }
+
+    #[test]
+    fn set_track_sample_root_refuses_a_synth_channel() {
+        let (_kernel, state) = state();
+        let synth = state
+            .mixer_state()
+            .tracks
+            .iter()
+            .position(|track| track.engine != "sample" && track.engine != "clip")
+            .expect("a non-sample channel");
+        assert!(matches!(
+            state.set_track_sample_root(synth, 60, 0.0, RootMode::Manual),
+            Err(MixerError::Track(TrackError::NotASampleChannel(_)))
+        ));
     }
 }

@@ -32,6 +32,7 @@ mydaw-plugin-effects.workspace = true
 mydaw-plugin-sampler.workspace = true
 mydaw-plugin-sequencer.workspace = true
 mydaw-plugin-audio-io.workspace = true
+mydaw-plugin-midi-io.workspace = true
 mydaw-plugin-host-clap.workspace = true
 mydaw-plugin-host-vst3.workspace = true
 mydaw-plugin-windows.workspace = true
@@ -39,6 +40,7 @@ mydaw-plugin-windows.workspace = true
 # shipped single binary is its own scan worker and no sidecar has to be bundled.
 mydaw-plugin-scan.workspace = true
 mydaw-audio-file.workspace = true
+mydaw-pitch-analysis.workspace = true
 
 # --- shell ---
 tauri = { version = "2", features = [] }
@@ -57,6 +59,9 @@ log.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
 env_logger = "0.11"
+# Factory drum one-shots are written as 32-bit float WAVs, then decoded back
+# through the same path a dropped sample uses.
+hound.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
@@ -68,9 +73,6 @@ mydaw-fixture-clap-gain = { path = "../test-fixtures/clap-gain" }
 mydaw-plugin-test-tone.workspace = true
 mydaw-plugin-debug-tap.workspace = true
 mydaw-plugin-windows.workspace = true
-# Writes the synthetic takes the audio-clip tests load, so the suite needs no
-# committed audio.
-hound.workspace = true
 
 [features]
 # Set by the Tauri CLI for production builds; it switches `generate_context!`
@@ -79,6 +81,10 @@ hound.workspace = true
 #   cargo run -p mydaw-app --features custom-protocol
 # DO NOT REMOVE.
 custom-protocol = ["tauri/custom-protocol"]
+# cpal ASIO host. Needs LLVM/Clang (bindgen) and the Steinberg ASIO SDK
+# (downloaded at build, or CPAL_ASIO_DIR). Without this feature the Settings
+# ASIO switch is remembered and WAVE stays on WASAPI with an honest note.
+asio = ["mydaw-plugin-audio-io/asio"]
 
 # The spike-3 smoke test drives the editor window the way a user's mouse would
 # (a programmatic SetWindowPos) and reads back what the plugin painted.

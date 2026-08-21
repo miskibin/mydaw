@@ -261,8 +261,26 @@ export function cssVariables(theme: ThemeName, accent: string): Record<string, s
   vars['--acc'] = acc;
   vars['--accSoft'] = alpha(acc, meta.accSoft);
   vars['--meter'] = `linear-gradient(180deg,${palette.meterHi},${palette.meterMid} 26%,${palette.meterLo})`;
+  for (const [kind, color] of Object.entries(CHANNEL_KIND_COLORS)) {
+    vars[`--ch-${kind}`] = color;
+  }
   return vars;
 }
+
+/**
+ * One colour per *kind* of rack channel: drums stay gold in the mixer, the
+ * playlist marks, and the piano roll, not just next to the name.
+ *
+ * Distinct from {@link TRACK_COLORS}, which still paints patterns, buses and
+ * audio files that have no instrument kind.
+ */
+export const CHANNEL_KIND_COLORS = {
+  plugin: DEFAULT_ACCENT,
+  sample: SEMANTIC.live,
+  drum: SEMANTIC.solo,
+  synth: '#7c8cf8',
+  tone: '#8b93a1',
+} as const;
 
 /**
  * The per-track colours, in the order tracks are created.

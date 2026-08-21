@@ -21,13 +21,15 @@ use std::sync::Arc;
 
 use mydaw_plugin_sequencer::{
     audio_clip_channel, song_channel, AudioSource, ChannelClip, CompiledAudioClip,
-    CompiledAudioSong, CompiledPatternClip, CompiledSong, MelodicNote, Pattern, PlayMode,
-    Scheduler, Step, StepRow, TransportWindow, AUDIO_CLIP_VOICES, MAX_NOTES, MAX_PATTERN_CHANNELS,
-    MAX_STEPS, TICKS_PER_BAR,
+    CompiledAudioSong, CompiledPatternClip, CompiledSong, MelodicNote, OneShotNode, Pattern,
+    PlayMode, SampleChannelHead, SamplePlaybackParams, Scheduler, Step, StepRow, TransportWindow,
+    AUDIO_CLIP_QUEUE_CAPACITY, AUDIO_CLIP_VOICES, MAX_NOTES, MAX_PATTERN_CHANNELS, MAX_STEPS,
+    TICKS_PER_BAR,
 };
 use mydaw_rt_core::basedrop::Collector;
 use mydaw_rt_core::{
-    AudioBuffers, NoteEventBuffer, ProcessCtx, RtNode, TransportSnapshot, CHANNELS, DEFAULT_BPM,
+    AudioBuffers, NoteEvent, NoteEventBuffer, ProcessCtx, RtNode, TransportSnapshot, CHANNELS,
+    DEFAULT_BPM,
 };
 
 thread_local! {
@@ -529,5 +531,110 @@ fn swapping_the_arrangement_on_the_audio_thread_neither_allocates_nor_frees() {
         collector.alloc_count(),
         1,
         "only the current arrangement survives"
+    );
+}
+
+#[test]
+fn reading_live_one_shot_parameters_allocates_nothing() {
+    let source = Arc::new(AudioSource::from_stereo(
+        1,
+        std::path::Path::new("hit.wav"),
+        48_000.0,
+        vec![0.5; 48_000 * CHANNELS],
+    ));
+    let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+    let mut node = OneShotNode::with_params(source, Arc::clone(&params));
+    let mut buffers = AudioBuffers::new(256);
+
+    let first = [NoteEvent::note_on(0, 60, 1.0)];
+    let mut ctx = ProcessCtx::with_events(
+        &mut buffers,
+        48_000.0,
+        256,
+        TransportSnapshot::default(),
+        &first,
+    );
+    assert_eq!(count_allocations(|| node.process(&mut ctx)), 0);
+
+    params.set_pitch_cents(1_200.0);
+    params.set_fades(250.0, 500.0);
+    params.set_region(24, 24_000);
+    params.set_root(54, 12.0);
+    let second = [NoteEvent::note_on(0, 61, 0.8)];
+    let mut ctx = ProcessCtx::with_events(
+        &mut buffers,
+        48_000.0,
+        256,
+        TransportSnapshot::default(),
+        &second,
+    );
+    assert_eq!(
+        count_allocations(|| node.process(&mut ctx)),
+        0,
+        "snapshotting edited one-shot parameters must remain RT-safe"
+    );
+}
+
+#[test]
+fn a_sample_channel_head_note_and_root_change_allocates_nothing() {
+    let source = Arc::new(AudioSource::from_stereo(
+        1,
+        std::path::Path::new("hit.wav"),
+        48_000.0,
+        vec![0.5; 48_000 * CHANNELS],
+    ));
+    let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+    let song = CompiledAudioSong::new(vec![CompiledAudioClip {
+        clip_id: 1,
+        source: Arc::clone(&source),
+        start_ticks: 0,
+        length_ticks: TICKS_PER_BAR as u64,
+        offset_frames: 0,
+        end_frames: 0,
+        pitch_ratio: 1.0,
+        gain: 1.0,
+        fade_in_ms: 0.0,
+        fade_out_ms: 0.0,
+    }]);
+    let collector = Collector::new();
+    let (mut handle, arrangement) =
+        audio_clip_channel(AUDIO_CLIP_QUEUE_CAPACITY, collector.handle());
+    handle.install(song).unwrap();
+    let notes = OneShotNode::with_params(source, Arc::clone(&params));
+    let mut node = SampleChannelHead::new(arrangement, notes);
+    let mut buffers = AudioBuffers::new(256);
+    let on = [NoteEvent::note_on(0, 54, 1.0)];
+    let mut ctx = ProcessCtx::with_events(
+        &mut buffers,
+        48_000.0,
+        256,
+        TransportSnapshot {
+            sample_pos: 0,
+            playing: true,
+            bpm: 120.0,
+            mode: PlayMode::Song,
+        },
+        &on,
+    );
+    assert_eq!(count_allocations(|| node.process(&mut ctx)), 0);
+
+    params.set_root(54, 12.0);
+    let off = [NoteEvent::note_off(0, 54)];
+    let mut ctx = ProcessCtx::with_events(
+        &mut buffers,
+        48_000.0,
+        256,
+        TransportSnapshot {
+            sample_pos: 256,
+            playing: true,
+            bpm: 120.0,
+            mode: PlayMode::Song,
+        },
+        &off,
+    );
+    assert_eq!(
+        count_allocations(|| node.process(&mut ctx)),
+        0,
+        "Audio Clip notes after a root change must remain RT-safe"
     );
 }
