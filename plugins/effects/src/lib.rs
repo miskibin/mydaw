@@ -300,7 +300,12 @@ impl EffectRegistry {
             .map(|(_, factory)| factory.create_with_params(sample_rate, max_block, params))
     }
 
-    /// Same as [`create`](Self::create), handing the EQ its hold-to-solo word.
+    /// Same as [`create`](Self::create), handing an effect the per-insert
+    /// routing state the shell owns alongside its parameters.
+    ///
+    /// Two effects want something that is not a knob: the EQ its hold-to-solo
+    /// band, and the compressor its key source and the bus that carries the key
+    /// signals. Everything else ignores both.
     pub fn create_in_chain(
         &self,
         type_id: &str,
@@ -308,9 +313,19 @@ impl EffectRegistry {
         max_block: usize,
         params: Arc<ParamBlock>,
         listen: Arc<std::sync::atomic::AtomicI32>,
+        sidechain: Arc<std::sync::atomic::AtomicI32>,
+        keys: Option<Arc<mydaw_rt_core::SidechainBus>>,
     ) -> Option<Box<dyn RtNode>> {
         if type_id == eq::NODE_TYPE_ID {
             Some(EqFactory::new().create_with_listen(sample_rate, max_block, params, listen))
+        } else if type_id == compressor::NODE_TYPE_ID {
+            Some(CompressorFactory::new().create_with_key(
+                sample_rate,
+                max_block,
+                params,
+                sidechain,
+                keys,
+            ))
         } else {
             self.create(type_id, sample_rate, max_block, params)
         }

@@ -337,6 +337,7 @@ pub fn run() -> ExitCode {
             commands::watch_spectrum,
             commands::get_insert_spectrum,
             commands::set_insert_listen,
+            commands::set_insert_sidechain,
             // Hosted CLAP plugins: the picker, the master insert, the editors
             // and the state groundwork the project file will use.
             commands::set_track_source_clap,

@@ -560,6 +560,51 @@ pub struct InsertEntry {
     /// [`ParamBlock::apply`](mydaw_rt_core::ParamBlock::apply).
     #[serde(default)]
     pub params: BTreeMap<String, f32>,
+    /// The strip this insert's detector keys off, for a compressor with a
+    /// sidechain source. Absent for every insert that has none, which is nearly
+    /// all of them -- so a project written before sidechain existed is
+    /// byte-identical after a load and a save, and the format version does not
+    /// move.
+    ///
+    /// A *route*, not a parameter, which is why it is not in `params`: it names
+    /// a strip by position and has no range, no curve and no default worth
+    /// interpolating. See [`InsertDef::sidechain`](crate::effects::InsertDef).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<StripEntry>,
+}
+
+/// A strip named by position, as an insert's key source records one.
+///
+/// The same `(kind, index)` pair a [`SendEntry`] uses for its source, and for
+/// the same reason: the file reads the way the command surface talks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StripEntry {
+    /// `track` or `bus`. Anything else loads as no route at all, with a warning.
+    pub kind: String,
+    pub index: usize,
+}
+
+impl StripEntry {
+    fn capture(strip: StripId) -> Self {
+        Self {
+            kind: if strip.is_bus() { "bus" } else { "track" }.to_owned(),
+            index: strip.index(),
+        }
+    }
+
+    fn restore(&self) -> Option<StripId> {
+        match self.kind.as_str() {
+            "track" => Some(StripId::Track(self.index)),
+            "bus" => Some(StripId::Bus(self.index)),
+            other => {
+                log::warn!(
+                    "an insert keys off a '{other}', which this build does not know; \
+                     leaving it unrouted"
+                );
+                None
+            }
+        }
+    }
 }
 
 impl InsertEntry {
@@ -573,6 +618,7 @@ impl InsertEntry {
                 .into_iter()
                 .map(|(id, value)| (id.to_owned(), value))
                 .collect(),
+            sidechain: def.sidechain_source().map(StripEntry::capture),
         }
     }
 
@@ -588,6 +634,10 @@ impl InsertEntry {
             Ok(def) => {
                 def.params
                     .apply(self.params.iter().map(|(id, value)| (id.as_str(), *value)));
+                // Only the *shape* is checked here; whether the strip exists is
+                // a question about the whole project, and is answered by
+                // `Project::clamp_sidechains` once every track and bus is back.
+                def.set_sidechain_source(self.sidechain.as_ref().and_then(StripEntry::restore));
                 Some(def)
             }
             Err(err) => {
@@ -1245,16 +1295,18 @@ impl ProjectFile {
         }
 
         let selected = self.selected_track.min(defs.len() - 1);
-        Ok((
-            Project::restored_with(
-                defs,
-                self.master_gain_db,
-                buses,
-                sends,
-                restore_chain(&self.master_inserts, effects),
-            ),
-            selected,
-        ))
+        let mut project = Project::restored_with(
+            defs,
+            self.master_gain_db,
+            buses,
+            sends,
+            restore_chain(&self.master_inserts, effects),
+        );
+        // The same rule the sends above follow, for the other kind of route: a
+        // key naming a strip this project does not have is unrouted with a
+        // warning rather than left pointing at whatever now sits at that index.
+        project.clamp_sidechains();
+        Ok((project, selected))
     }
 
     /// The step grid this file describes.
@@ -2920,6 +2972,55 @@ mod tests {
     }
 
     #[test]
+    fn a_sidechain_route_survives_a_round_trip_and_is_absent_when_there_is_none() {
+        let project = routed_session();
+        // The trap move: the compressor on the drum bus keys off the drum track.
+        project.buses[0].inserts[0].set_sidechain_source(Some(StripId::Track(0)));
+
+        let saved = routed_file(&project).to_json().expect("serialises");
+        assert!(
+            saved.contains(r#""sidechain": {"#),
+            "the route has to be in the file: {saved}"
+        );
+        // And nowhere else: an insert with no key writes no key, so a project
+        // from before sidechain existed round-trips byte for byte.
+        assert_eq!(saved.matches(r#""sidechain""#).count(), 1);
+
+        let (restored, _) = parse_project(&saved)
+            .expect("parses")
+            .to_project(&EffectRegistry::new())
+            .expect("opens");
+        assert_eq!(
+            restored.buses[0].inserts[0].sidechain_source(),
+            Some(StripId::Track(0))
+        );
+        assert_eq!(restored.tracks[0].inserts[0].sidechain_source(), None);
+    }
+
+    #[test]
+    fn a_key_naming_a_strip_the_file_does_not_carry_opens_unrouted() {
+        // A file written on a machine with more tracks, or hand-edited. The
+        // same rule a dangling send follows: drop the route, keep the project.
+        let project = routed_session();
+        let mut file = routed_file(&project);
+        file.buses[0].inserts[0].sidechain = Some(StripEntry {
+            kind: "track".to_owned(),
+            index: 11,
+        });
+        let (restored, _) = file.to_project(&EffectRegistry::new()).expect("opens");
+        assert_eq!(restored.buses[0].inserts[0].sidechain_source(), None);
+
+        // And a kind this build has never heard of is unrouted, not guessed at.
+        let mut file = routed_file(&project);
+        file.buses[0].inserts[0].sidechain = Some(StripEntry {
+            kind: "aux".to_owned(),
+            index: 0,
+        });
+        let (restored, _) = file.to_project(&EffectRegistry::new()).expect("opens");
+        assert_eq!(restored.buses[0].inserts[0].sidechain_source(), None);
+    }
+
+    #[test]
     fn an_effect_this_build_does_not_have_is_skipped_rather_than_fatal() {
         // The missing-plugin policy, one level down: the project opens, that
         // effect is simply not in the chain, and the entry is still in the file.
@@ -2929,6 +3030,7 @@ mod tests {
             id: 99,
             type_id: "effects.not-an-effect".to_owned(),
             params: BTreeMap::new(),
+            sidechain: None,
         });
         let (restored, _) = file
             .to_project(&EffectRegistry::new())

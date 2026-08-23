@@ -804,6 +804,34 @@ pub fn set_insert_listen(
         .map_err(|err| err.to_string())
 }
 
+/// Point one insert's detector at another strip, returning the whole mixer.
+///
+/// One atomic store and no rebuild -- a key can be repointed while the transport
+/// runs, which is how a user auditions "which drum should this duck under". The
+/// whole mixer comes back rather than an acknowledgement because the route is
+/// part of the insert every strip draws, on the same terms as the bypass switch.
+///
+/// `source_kind` is `"track"` or `"bus"`; pass `null` to unroute.
+#[tauri::command]
+pub fn set_insert_sidechain(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    index: usize,
+    source_kind: Option<String>,
+    source_index: usize,
+) -> Result<MixerStateDto, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    let source = match source_kind.as_deref() {
+        None => None,
+        Some(kind) => Some(parse_strip(kind, source_index)?),
+    };
+    state
+        .set_insert_sidechain(target, index, source)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
 /// `"track"` / `"bus"` plus an index, as the webview sends a send's source.
 fn parse_strip(kind: &str, index: usize) -> Result<StripId, String> {
     match kind {

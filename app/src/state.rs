@@ -1273,6 +1273,20 @@ impl AppState {
         self.tracks.set_insert_listen(target, index, band)
     }
 
+    /// Point one insert's detector at another strip, or unroute it with `None`.
+    ///
+    /// # Errors
+    /// As [`set_insert_param`](Self::set_insert_param), plus
+    /// [`InsertError::NoSuchKeySource`] for a source strip that is not there.
+    pub fn set_insert_sidechain(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        source: Option<mydaw_rt_core::StripId>,
+    ) -> Result<(), InsertError> {
+        self.tracks.set_insert_sidechain(target, index, source)
+    }
+
     /// Turn one insert's bypass on or off.
     ///
     /// A parameter like any other -- every effect declares `bypass` and does the

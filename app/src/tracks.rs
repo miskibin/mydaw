@@ -52,7 +52,10 @@ use mydaw_plugin_sampler::{file_path_of, SamplerRegistry};
 use mydaw_plugin_sequencer::SamplePlaybackParams;
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_rt_core::basedrop::Handle;
-use mydaw_rt_core::{BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, MAX_TRACKS};
+use mydaw_rt_core::{
+    BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, SidechainBus, StripId,
+    MAX_TRACKS,
+};
 use parking_lot::Mutex;
 
 /// The longest fade a channel may have, in milliseconds.
@@ -111,6 +114,11 @@ pub struct TrackHost {
     /// What the audio thread reads. Shared with every graph compiled from this
     /// host, so a rebuild never resets a fader.
     params: Arc<MixerParams>,
+    /// The key bus: every strip's post-insert, pre-fader block, for the
+    /// compressors that key off one. Shared with every graph and with every
+    /// compressor node for the same reason `params` is -- a rebuild must not
+    /// break a subscription. See [`SidechainBus`].
+    sidechain: Arc<SidechainBus>,
     project: Mutex<Project>,
     /// One head-of-chain handle per track *slot*, created once and reused for
     /// the process lifetime -- a handle outlives the streams it is attached to
@@ -168,6 +176,11 @@ impl TrackHost {
             sampler,
             effects,
             params,
+            // Sized once, to the block size the audio config caps at, because
+            // the bus outlives the streams that come and go underneath it. A
+            // device asking for a longer block gets a truncated key rather than
+            // an allocation on the audio thread.
+            sidechain: Arc::new(SidechainBus::new(mydaw_rt_core::DEFAULT_MAX_BLOCK)),
             handles: (0..MAX_TRACKS)
                 .map(|index| {
                     let source = project
@@ -191,6 +204,11 @@ impl TrackHost {
     /// The parameter block the audio thread reads.
     pub fn params(&self) -> &Arc<MixerParams> {
         &self.params
+    }
+
+    /// The key bus every compressor with a sidechain source reads.
+    pub fn sidechain(&self) -> &Arc<SidechainBus> {
+        &self.sidechain
     }
 
     /// The internal effect catalogue.
@@ -558,6 +576,44 @@ impl TrackHost {
         };
         def.listen
             .store(value, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Point one insert's detector at another strip, or unroute it with `None`.
+    ///
+    /// A no-op on an effect that has no key input, in the same spirit as
+    /// [`set_insert_listen`](Self::set_insert_listen) on a non-EQ: the command
+    /// surface addresses inserts, not effect types, and refusing here would make
+    /// a UI check the type before it could clear a route.
+    ///
+    /// Takes effect on the audio thread's **next block plus one** -- see
+    /// [`SidechainBus`] -- with no graph rebuild, so a user can audition
+    /// sources by clicking down a list while the transport runs.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchTrack`] / [`InsertError::NoSuchBus`] /
+    /// [`InsertError::NoSuchInsert`] for a chain or a slot that is not there,
+    /// and [`InsertError::NoSuchKeySource`] for a source strip that is not.
+    pub fn set_insert_sidechain(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        source: Option<StripId>,
+    ) -> Result<(), InsertError> {
+        let project = self.project.lock();
+        // Validated against the *live* project, not against MAX_TRACKS: a
+        // selector pointing at a strip that does not exist would be a route the
+        // mixer cannot draw and the engine cannot feed.
+        if let Some(strip) = source {
+            let exists = match strip {
+                StripId::Track(track) => track < project.tracks.len(),
+                StripId::Bus(bus) => bus < project.buses.len(),
+            };
+            if !exists {
+                return Err(InsertError::NoSuchKeySource(strip));
+            }
+        }
+        Self::insert_at(&project, target, index)?.set_sidechain_source(source);
         Ok(())
     }
 
@@ -1079,6 +1135,7 @@ impl TrackHost {
 
         let mut spec = GraphSpec::new()
             .with_params(Arc::clone(&self.params))
+            .with_sidechain(Arc::clone(&self.sidechain))
             .with_limits(*limits);
 
         for (index, def) in project.tracks.iter().enumerate() {
@@ -1171,6 +1228,8 @@ impl TrackHost {
                     limits.max_block,
                     Arc::clone(&def.params),
                     Arc::clone(&def.listen),
+                    Arc::clone(&def.sidechain),
+                    Some(Arc::clone(&self.sidechain)),
                 );
                 if node.is_none() {
                     log::warn!(
@@ -1228,6 +1287,63 @@ mod tests {
             Arc::new(SamplerRegistry::detached()),
             Arc::new(EffectRegistry::new()),
         )
+    }
+
+    #[test]
+    fn a_key_can_be_pointed_at_any_live_strip_and_at_nothing_else() {
+        let host = host();
+        {
+            let registry = EffectRegistry::new();
+            let mut project = host.project.lock();
+            project
+                .add_insert(
+                    InsertTarget::Track(1),
+                    "effects.compressor",
+                    None,
+                    &registry,
+                )
+                .expect("adds");
+        }
+        // Kick is track 0 in the starter project; the compressor is on track 1.
+        assert!(host
+            .set_insert_sidechain(InsertTarget::Track(1), 0, Some(StripId::Track(0)))
+            .is_ok());
+        assert_eq!(
+            host.project.lock().tracks[1].inserts[0].sidechain_source(),
+            Some(StripId::Track(0))
+        );
+
+        // A strip that is not there is named rather than accepted, and the
+        // route that *is* there is left alone.
+        assert!(matches!(
+            host.set_insert_sidechain(InsertTarget::Track(1), 0, Some(StripId::Track(99))),
+            Err(InsertError::NoSuchKeySource(StripId::Track(99)))
+        ));
+        assert!(matches!(
+            host.set_insert_sidechain(InsertTarget::Track(1), 0, Some(StripId::Bus(0))),
+            Err(InsertError::NoSuchKeySource(StripId::Bus(0)))
+        ));
+        assert_eq!(
+            host.project.lock().tracks[1].inserts[0].sidechain_source(),
+            Some(StripId::Track(0)),
+            "a refused edit must not clear the route it refused to replace"
+        );
+
+        // And `None` unroutes.
+        host.set_insert_sidechain(InsertTarget::Track(1), 0, None)
+            .expect("unroutes");
+        assert_eq!(
+            host.project.lock().tracks[1].inserts[0].sidechain_source(),
+            None
+        );
+
+        // A chain or a slot that is not there is an error, not a panic.
+        assert!(host
+            .set_insert_sidechain(InsertTarget::Track(1), 7, None)
+            .is_err());
+        assert!(host
+            .set_insert_sidechain(InsertTarget::Bus(0), 0, None)
+            .is_err());
     }
 
     #[test]

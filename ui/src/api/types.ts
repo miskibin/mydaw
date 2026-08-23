@@ -522,6 +522,20 @@ export interface InsertDto {
   params: ParamValueDto[];
   /** Every meter's current value. Empty for the effects that publish none. */
   readouts: ParamValueDto[];
+  /**
+   * Which strip feeds this insert's detector, or `null`.
+   *
+   * A **route**, not a parameter: only the compressor reads it, it names a
+   * strip by position, and it is set with `setInsertSidechain` rather than by
+   * moving a knob. Every other effect reports `null`.
+   */
+  sidechain: StripRef | null;
+}
+
+/** A strip named by position. The same pair a send's source uses. */
+export interface StripRef {
+  kind: 'track' | 'bus';
+  index: number;
 }
 
 /** Every meter on one insert, as the polling call returns them. */
