@@ -16,8 +16,9 @@ use crate::audio_settings::{self, AudioSettings};
 use crate::clap_bridge::{ClapGuiStatusDto, ClapTarget};
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{
-    AudioOutputDto, AudioSourceDto, ClapPluginInfoDto, MeterFrameDto, PatternDto,
-    SequencerStateDto, StreamInfoDto, Vst3PluginInfoDto, WaveformDto,
+    AudioOutputDto, AudioSourceDto, ClapPluginInfoDto, InputDeviceDto, InputStatusDto,
+    MeterFrameDto, PatternDto, RecordedTakeDto, SequencerStateDto, StreamInfoDto,
+    Vst3PluginInfoDto, WaveformDto,
 };
 use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueDto};
 use crate::ipc_bench::{
@@ -1636,6 +1637,142 @@ pub fn set_audio_settings(
         .apply_output_request(settings.to_request())
         .map_err(|err| err.to_string())?;
     Ok(audio_output_dto(&state, &settings))
+}
+
+// --- audio input and recording ---------------------------------------------
+//
+// Seven commands, one state machine: idle -> armed -> recording -> armed.
+// `get_input_status` is the only one the UI polls, and only while the device is
+// open; the rest are gestures. See `mydaw_plugin_audio_io::record`.
+
+/// Every capture device the default host can offer.
+///
+/// An empty list is a real answer, not a failure: a headless machine, an RDP
+/// session or a laptop with the microphone disabled all produce one, and
+/// Settings draws an empty state for it.
+#[tauri::command]
+pub fn get_input_devices(state: State<'_, AppState>) -> Vec<InputDeviceDto> {
+    state
+        .recorder()
+        .devices()
+        .into_iter()
+        .map(InputDeviceDto::from)
+        .collect()
+}
+
+/// Choose the capture device and remember it in `audio.json`.
+///
+/// `null` follows the system default, which is also what a remembered device
+/// that is no longer plugged in falls back to -- with the reason on
+/// [`InputStatusDto::fault`] rather than as an error, because the user asking
+/// for the *status* of a missing device should not be handed an exception.
+///
+/// Refused mid-take: swapping the device under a running take would splice two
+/// recordings together.
+#[tauri::command]
+pub fn set_input_device(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    device_id: Option<String>,
+) -> Result<InputStatusDto, String> {
+    state
+        .recorder()
+        .select_device(device_id.as_deref())
+        .map_err(|err| err.to_string())?;
+
+    let path = audio_json(&app);
+    let mut settings = audio_settings::load_settings(&path);
+    settings.input_device_id = device_id;
+    audio_settings::save_settings(&path, &settings).map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// What the REC button and the input meter draw.
+///
+/// Polled while the device is open (and only then -- see `state.tsx`), so it is
+/// deliberately cheap: atomics and one buffer length, no device enumeration.
+/// The one exception is [`InputStatusDto::has_devices`], which the transport bar
+/// needs in order to disable the button with a reason; it is computed from the
+/// cached list the UI already holds rather than by re-scanning the host.
+#[tauri::command]
+pub fn get_input_status(state: State<'_, AppState>) -> InputStatusDto {
+    // A device that has gone has no callback left to notice its own death, so
+    // the transition out of `recording` happens here, on the polling thread.
+    // Whatever the take had already captured is written rather than thrown away.
+    if let Some(finished) = state.reap_recording_fault() {
+        log::info!(
+            "salvaged take loaded as source {}",
+            finished.source.id()
+        );
+    }
+    input_status_dto(&state)
+}
+
+/// Arm or disarm the capture device.
+///
+/// Arming opens the device and starts the meter; disarming releases it. WAVE
+/// deliberately does not hold the microphone while idle -- that is what stops a
+/// conferencing app from working and lights the OS privacy indicator for
+/// nothing.
+///
+/// Disarming while a take is running discards it. That is the teardown path as
+/// well as a user gesture, and a shutdown that refused to release the device
+/// would leave it held by a dead process.
+#[tauri::command]
+pub fn set_input_armed(state: State<'_, AppState>, armed: bool) -> Result<InputStatusDto, String> {
+    if armed {
+        state.recorder().arm().map_err(|err| err.to_string())?;
+    } else {
+        state.recorder().disarm();
+    }
+    Ok(input_status_dto(&state))
+}
+
+/// Start a take, arming the device first if it is not open yet.
+#[tauri::command]
+pub fn start_recording(state: State<'_, AppState>) -> Result<InputStatusDto, String> {
+    state.recorder().start().map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// End the take, write it, and load it as an audio source.
+///
+/// Answers with the source **and** what went wrong on the way: a take with
+/// dropped samples or one the length cap ended is still worth keeping, and the
+/// moment to say so is the moment the channel appears.
+///
+/// Placing it is a separate command (`add_sample_channel`), on purpose: a
+/// recorded take and a dropped WAV must reach the rack by the same path.
+///
+/// `async` because writing a five-minute WAV is disk I/O and must not block the
+/// main thread.
+#[tauri::command]
+pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordedTakeDto, String> {
+    let finished = state.finish_recording().map_err(|err| err.to_string())?;
+    Ok(RecordedTakeDto {
+        source: AudioSourceDto::of(&finished.source, state.bpm()),
+        dropped_samples: finished.dropped_samples,
+        limit_reached: finished.limit_reached,
+        peak: finished.peak,
+    })
+}
+
+/// Throw the take away. The device stays armed for another attempt.
+#[tauri::command]
+pub fn cancel_recording(state: State<'_, AppState>) -> Result<InputStatusDto, String> {
+    state.recorder().cancel().map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// The status plus the one thing it cannot know: whether any device exists.
+fn input_status_dto(state: &AppState) -> InputStatusDto {
+    let recorder = state.recorder();
+    let status = recorder.status();
+    // Enumerating costs a host round-trip, so it is skipped whenever the answer
+    // is already known: a device that is open is proof that one exists.
+    let has_devices = status.state != mydaw_plugin_audio_io::RecordState::Idle
+        || !recorder.devices().is_empty();
+    InputStatusDto::of(status, has_devices)
 }
 
 /// MIDI input ports the Settings list draws: OS-visible plus unpaired-offline

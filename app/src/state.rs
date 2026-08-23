@@ -8,7 +8,8 @@ use parking_lot::Mutex;
 use mydaw_ipc_bridge::{PanelManifestDto, UiSnapshot};
 use mydaw_kernel::{Kernel, KernelError};
 use mydaw_plugin_audio_io::{
-    AudioIoError, AudioIoPlugin, AudioIoService, OutputRequest, StreamInfo,
+    AudioIoError, AudioIoPlugin, AudioIoService, OutputRequest, RecordError, RecordService,
+    RecordedTake, StreamInfo,
 };
 use mydaw_plugin_debug_tap::{DebugTapPlugin, DebugTapService};
 use mydaw_plugin_effects::{EffectRegistry, EffectsPlugin};
@@ -248,6 +249,13 @@ impl MidiNoteSink for EngineNoteSink {
 pub struct AppState {
     snapshot: UiSnapshot,
     audio: Arc<AudioIoService>,
+    /// Audio *input*: the capture device and the take being built on it.
+    ///
+    /// Not a kernel service, unlike [`audio`](Self::audio): nothing in the graph
+    /// reads the input, so there is no RT half for the kernel to wire up and no
+    /// plugin needs to resolve it. It is created here and lives as long as the
+    /// shell does, holding no device until the user arms one.
+    recorder: Arc<RecordService>,
     /// The authoritative pattern and tempo. The audio thread runs copies of
     /// both; this is the original (and, one day, what a project file holds).
     sequencer: Arc<SequencerService>,
@@ -415,6 +423,7 @@ impl AppState {
         Ok(Self {
             snapshot: ui_snapshot(kernel),
             audio,
+            recorder: Arc::new(RecordService::new()),
             sequencer,
             sources,
             tracks,
@@ -488,6 +497,10 @@ impl AppState {
         self.tracks.set_project(project);
         self.tracks.install_graph(&self.audio)?;
         self.publish_sequencer();
+        // A take is converted to the rate the arrangement runs at, and that rate
+        // is only known once a device has negotiated one. Publishing it here
+        // means a buffer change or a device swap moves the recorder with it.
+        self.recorder.set_engine_sample_rate(f64::from(info.sample_rate));
         Ok(info)
     }
 
@@ -2249,6 +2262,104 @@ impl AppState {
     pub fn debug_tap(&self) -> &Arc<DebugTapService> {
         &self.debug_tap
     }
+
+    /// The microphone / line-in recorder behind the transport bar's REC button.
+    pub fn recorder(&self) -> &Arc<RecordService> {
+        &self.recorder
+    }
+
+    /// End the take, write it, and load it as an audio source.
+    ///
+    /// The three steps are one method because they are one gesture: a take that
+    /// was captured but not written is lost the moment the process exits, and a
+    /// take written but not loaded is a file the user has to go and find. What
+    /// this deliberately does *not* do is place the source anywhere -- that is
+    /// `add_sample_channel`, so recording reuses the same path a dropped WAV
+    /// takes and the two cannot drift.
+    ///
+    /// # Errors
+    /// [`RecordingError::Record`] for everything the engine refuses (nothing
+    /// recorded, device lost), [`RecordingError::Write`] when the WAV cannot be
+    /// written, and [`RecordingError::Load`] when the file that was just written
+    /// cannot be decoded -- which would be a bug here, not a user error, and is
+    /// reported as such rather than silently swallowed.
+    pub fn finish_recording(&self) -> Result<FinishedTake, RecordingError> {
+        let take = self.recorder.stop()?;
+        log::info!(
+            "take finished: {:.2} s, peak {:.3}, {} dropped",
+            take.duration_seconds(),
+            take.peak(),
+            take.dropped
+        );
+        self.write_and_load(&take)
+    }
+
+    /// Salvage a take whose device died, if there is one worth keeping.
+    ///
+    /// The capture callback cannot notice its own death, so the transition out
+    /// of `Recording` happens on whichever thread next asks for the status. When
+    /// that thread finds a half-finished take, this is what turns it into a file
+    /// rather than throwing away the part of the performance that did arrive.
+    pub fn reap_recording_fault(&self) -> Option<FinishedTake> {
+        let take = self.recorder.reap_fault()?;
+        match self.write_and_load(&take) {
+            Ok(finished) => {
+                log::warn!(
+                    "the input device died mid-take; {:.2} s were salvaged",
+                    take.duration_seconds()
+                );
+                Some(finished)
+            }
+            Err(err) => {
+                log::warn!("a salvaged take could not be kept: {err}");
+                None
+            }
+        }
+    }
+
+    /// Write one take under the next free name and decode it back in.
+    fn write_and_load(&self, take: &RecordedTake) -> Result<FinishedTake, RecordingError> {
+        let dir = crate::recording::recordings_dir();
+        let path = crate::recording::next_take_path(&dir, std::time::SystemTime::now())?;
+        crate::recording::write_take(take, &path)?;
+        log::info!("take written: {}", path.display());
+        Ok(FinishedTake {
+            source: self.load_audio_source(&path)?,
+            dropped_samples: take.dropped,
+            limit_reached: take.limit_reached,
+            peak: take.peak(),
+        })
+    }
+}
+
+/// A take that made it to disk and back into the session.
+///
+/// Carries the two things the source itself cannot say -- whether the capture
+/// dropped anything, and whether the length cap ended it -- because the moment
+/// to tell the user is the moment the channel appears, not later.
+#[derive(Debug, Clone)]
+pub struct FinishedTake {
+    pub source: Arc<mydaw_plugin_sequencer::AudioSource>,
+    pub dropped_samples: u64,
+    pub limit_reached: bool,
+    pub peak: f32,
+}
+
+/// Why a take did not become an audio source.
+///
+/// Three separate failures with three separate fixes, kept apart so the status
+/// bar can say which one happened: "nothing was recorded" is the user's cable,
+/// "could not write" is their disk, and "could not decode" is our bug.
+#[derive(Debug, thiserror::Error)]
+pub enum RecordingError {
+    #[error(transparent)]
+    Record(#[from] RecordError),
+
+    #[error(transparent)]
+    Write(#[from] crate::recording::TakeWriteError),
+
+    #[error("the take was written but could not be read back: {0}")]
+    Load(#[from] SequencerError),
 }
 
 #[cfg(test)]

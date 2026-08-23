@@ -796,6 +796,78 @@ export interface AudioOutput {
   stream: StreamInfo;
 }
 
+/**
+ * One capture device, as the input picker in Settings lists it.
+ *
+ * `channels` and `sampleRate` are `0` for a device whose configuration the host
+ * would not report. Such a device is still listed rather than hidden: it is
+ * plugged in and the user can see it, so "it is there but it will not open" is
+ * more useful than an empty list.
+ */
+export interface InputDeviceDto {
+  id: string;
+  name: string;
+  channels: number;
+  sampleRate: number;
+  isDefault: boolean;
+}
+
+/**
+ * What the recorder is doing.
+ *
+ * `idle` holds no device at all — WAVE does not sit on the microphone while you
+ * are not recording. `armed` has the device open and metered so a level can be
+ * set. `recording` is additionally keeping what arrives.
+ */
+export type RecordState = 'idle' | 'armed' | 'recording';
+
+/** Everything the REC button and the input meter draw, in one message. */
+export interface InputStatusDto {
+  state: RecordState;
+  /** The device that is open, or empty while idle. */
+  deviceName: string;
+  /** The device Settings chose. `null` follows the system default. */
+  deviceId: string | null;
+  /** Rate the open device runs at. `0` while idle. */
+  deviceSampleRate: number;
+  /** Channels the open device delivers. `0` while idle. */
+  deviceChannels: number;
+  /** Rate the take is written at — the engine's, not the device's. */
+  sampleRate: number;
+  /** Peak of the last blocks, linear, with a 20 dB/s hold. `0` while idle. */
+  peak: number;
+  /** RMS of the last block, linear. `0` while idle. */
+  rms: number;
+  /** Seconds recorded so far. `0` unless recording. */
+  elapsedSeconds: number;
+  /** Longest take this build keeps, in seconds. */
+  maxSeconds: number;
+  /** Samples the capture callback dropped. Non-zero means holes in the take. */
+  droppedSamples: number;
+  /** Whether the length cap ended the take rather than the user. */
+  limitReached: boolean;
+  /** Why the device is unhappy, or empty. Non-empty means the stream is gone. */
+  fault: string;
+  /** Whether the machine has any capture device at all. */
+  hasDevices: boolean;
+}
+
+/**
+ * A finished take: the source it became, plus what the status bar should say.
+ *
+ * The source alone is not enough — a take that dropped samples, or that the
+ * length cap ended, is still usable but the user has to be told, and the moment
+ * to tell them is the moment the channel appears.
+ */
+export interface RecordedTakeDto {
+  source: AudioSourceDto;
+  droppedSamples: number;
+  limitReached: boolean;
+  /** Largest absolute sample. Near zero is a silent take: wrong input, or a
+   * cable out. */
+  peak: number;
+}
+
 /** One MIDI input port, as Settings draws it. */
 export type MidiPortStatus = 'connected' | 'offline' | 'error' | 'available';
 

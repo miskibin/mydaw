@@ -16,6 +16,18 @@
 //!   what lets the whole audio path be unit-tested on a machine with no sound
 //!   card (see the tests in `rt.rs`).
 //!
+//! Audio **input** is a third, independent pair with the same shape:
+//!
+//! - [`record`] -- non-RT. [`RecordService`] opens the capture device, runs the
+//!   worker that drains it, and hands back a [`RecordedTake`].
+//! - [`input`] -- real-time. [`InputRtSide`] is everything the capture callback
+//!   owns, and it takes a slice rather than a device, so the fold, the ring and
+//!   the rate conversion are unit-tested with no microphone in the room.
+//!
+//! Input and output share nothing but the engine's sample rate. Recording must
+//! never be able to interrupt playback, and a machine with an output device and
+//! no input (or the reverse) has to work.
+//!
 //! ```text
 //!            app / UI (non-RT)                    cpal audio thread (RT)
 //!   ------------------------------------   --------------------------------
@@ -50,14 +62,24 @@
 //! println!("{} @ {} Hz", info.device_name, info.sample_rate);
 //! ```
 
+pub mod input;
 mod output;
 mod priority;
+pub mod record;
 pub mod rt;
 pub mod service;
 
+pub use input::{
+    fold_frame, peak_decay_for, InputConsumer, InputFault, InputRtSide, InputShared, RateConverter,
+    INPUT_QUEUE_CAPACITY,
+};
 pub use output::{
     asio_compiled, buffer_size_of, choose_host, fallback_note, AudioBackend, HostChoice,
     OutputRequest,
+};
+pub use record::{
+    InputDeviceInfo, InputStatus, RecordError, RecordService, RecordState, RecordedTake,
+    MAX_RECORD_SECONDS,
 };
 pub use rt::{run_block, AudioIoStats, RtState, RtStateParams};
 pub use service::{AudioIoConfig, AudioIoError, AudioIoService, StreamInfo};

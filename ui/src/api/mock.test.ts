@@ -195,3 +195,105 @@ describe('spectrum tap', () => {
     expect(await backend.getInsertSpectrum()).toBeNull();
   });
 });
+
+describe('audio input and recording', () => {
+  /** Long enough that the mock's minimum-length refusal does not fire. */
+  const takeLength = () => new Promise((resolve) => setTimeout(resolve, 80));
+
+  it('offers a device list including one the host will not describe', async () => {
+    const backend = new MockBackend();
+    const devices = await backend.getInputDevices();
+    expect(devices.length).toBeGreaterThan(1);
+    expect(devices.filter((device) => device.isDefault)).toHaveLength(1);
+    expect(devices.some((device) => device.channels === 0)).toBe(true);
+  });
+
+  it('starts idle with no device open and no level', async () => {
+    const backend = new MockBackend();
+    const status = await backend.getInputStatus();
+    expect(status.state).toBe('idle');
+    expect(status.deviceName).toBe('');
+    expect(status.peak).toBe(0);
+    expect(status.hasDevices).toBe(true);
+  });
+
+  it('mirrors the engine and refuses a device that is not there', async () => {
+    const backend = new MockBackend();
+    await expect(backend.setInputDevice('no-such-device')).rejects.toThrow(/not available/);
+    expect((await backend.getInputStatus()).deviceId).toBeNull();
+  });
+
+  it('refuses a device that reports no usable configuration', async () => {
+    const backend = new MockBackend();
+    await backend.setInputDevice('mock-broken');
+    await expect(backend.setInputArmed(true)).rejects.toThrow(/no usable configuration/);
+  });
+
+  it('meters only while the device is open', async () => {
+    const backend = new MockBackend();
+    expect((await backend.getInputStatus()).peak).toBe(0);
+    await backend.setInputArmed(true);
+    const armed = await backend.getInputStatus();
+    expect(armed.state).toBe('armed');
+    expect(armed.peak).toBeGreaterThan(0);
+    expect(armed.deviceName).toBe('Microphone (Realtek Audio)');
+    await backend.setInputArmed(false);
+    expect((await backend.getInputStatus()).peak).toBe(0);
+  });
+
+  it('records a take and loads it as an audio source', async () => {
+    const backend = new MockBackend();
+    await backend.startRecording();
+    expect((await backend.getInputStatus()).state).toBe('recording');
+    await takeLength();
+
+    const take = await backend.stopRecording();
+    expect(take.source.name).toBe('Recording 1.wav');
+    expect(take.source.durationSeconds).toBeGreaterThan(0);
+    expect(take.limitReached).toBe(false);
+    // Still armed, so a retake needs no second gesture.
+    expect((await backend.getInputStatus()).state).toBe('armed');
+
+    // The take is a real source: it is listed, and it has a waveform to draw.
+    const sources = await backend.getAudioSources();
+    expect(sources.some((source) => source.id === take.source.id)).toBe(true);
+    const waveform = await backend.getAudioWaveform(take.source.id, 64);
+    expect(waveform.peaks).toHaveLength(64);
+
+    // And the same command a dropped WAV uses puts it on the rack.
+    const mixer = await backend.addSampleChannel(take.source.path);
+    const channel = mixer.tracks.at(-1)!;
+    expect(channel.name).toBe('Recording 1.wav');
+    expect(channel.audioSourceId).toBe(take.source.id);
+  });
+
+  it('numbers takes in order', async () => {
+    const backend = new MockBackend();
+    for (const expected of ['Recording 1.wav', 'Recording 2.wav']) {
+      await backend.startRecording();
+      await takeLength();
+      expect((await backend.stopRecording()).source.name).toBe(expected);
+    }
+  });
+
+  it('refuses to stop or cancel when nothing is being recorded', async () => {
+    const backend = new MockBackend();
+    await expect(backend.stopRecording()).rejects.toThrow(/nothing is being recorded/);
+    await expect(backend.cancelRecording()).rejects.toThrow(/nothing is being recorded/);
+  });
+
+  it('cancels back to armed without producing a source', async () => {
+    const backend = new MockBackend();
+    const before = (await backend.getAudioSources()).length;
+    await backend.startRecording();
+    await takeLength();
+    expect((await backend.cancelRecording()).state).toBe('armed');
+    expect((await backend.getAudioSources()).length).toBe(before);
+  });
+
+  it('refuses a device change under a running take', async () => {
+    const backend = new MockBackend();
+    await backend.startRecording();
+    await expect(backend.setInputDevice('mock-usb')).rejects.toThrow(/stop the take/);
+  });
+});

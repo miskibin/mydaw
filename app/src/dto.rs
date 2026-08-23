@@ -815,6 +815,117 @@ pub struct AudioOutputDto {
     pub stream: StreamInfoDto,
 }
 
+/// One capture device, as the input picker in Settings lists it.
+///
+/// `channels` and `sample_rate` are `0` for a device whose configuration the
+/// host would not report. Such a device is still listed rather than hidden: it
+/// is plugged in, the user can see it, and "it is there but it will not open" is
+/// a more useful thing to be told than an empty list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputDeviceDto {
+    pub id: String,
+    pub name: String,
+    pub channels: u32,
+    pub sample_rate: u32,
+    pub is_default: bool,
+}
+
+impl From<mydaw_plugin_audio_io::InputDeviceInfo> for InputDeviceDto {
+    fn from(info: mydaw_plugin_audio_io::InputDeviceInfo) -> Self {
+        Self {
+            id: info.id,
+            name: info.name,
+            channels: u32::from(info.channels),
+            sample_rate: info.sample_rate,
+            is_default: info.is_default,
+        }
+    }
+}
+
+/// Everything the REC button and the input meter draw, in one message.
+///
+/// Answers with an `"idle"` shape rather than an error when nothing is armed,
+/// for the same reason [`StreamInfoDto::stopped`] exists: that is an ordinary
+/// state a transport bar has to draw, not a failure to report.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputStatusDto {
+    /// `"idle"`, `"armed"` or `"recording"`.
+    pub state: &'static str,
+    /// The device that is open, or empty while idle.
+    pub device_name: String,
+    /// The device Settings chose. `null` follows the system default.
+    pub device_id: Option<String>,
+    /// Rate the open device runs at. `0` while idle.
+    pub device_sample_rate: u32,
+    /// Channels the open device delivers. `0` while idle.
+    pub device_channels: u32,
+    /// Rate the take is written at -- the engine's, not the device's.
+    pub sample_rate: f64,
+    /// Peak of the last blocks, linear, with a 20 dB/s hold. `0` while idle.
+    pub peak: f32,
+    /// RMS of the last block, linear. `0` while idle.
+    pub rms: f32,
+    /// Seconds recorded so far. `0` unless recording.
+    pub elapsed_seconds: f64,
+    /// Longest take this build keeps, in seconds.
+    pub max_seconds: f64,
+    /// Samples the capture callback dropped during this take. Non-zero means
+    /// the take has holes, which is worth saying out loud.
+    pub dropped_samples: u64,
+    /// Whether the length cap ended the take rather than the user.
+    pub limit_reached: bool,
+    /// Why the device is unhappy, or empty. Non-empty means the stream is gone.
+    pub fault: String,
+    /// Whether the machine has any capture device at all. `false` is what
+    /// disables the REC button, with the reason in its tooltip.
+    pub has_devices: bool,
+}
+
+impl InputStatusDto {
+    /// Build the DTO from an engine status plus the device count, which the
+    /// status itself does not carry (enumerating on every poll would hit the
+    /// host twenty times a second).
+    pub fn of(status: mydaw_plugin_audio_io::InputStatus, has_devices: bool) -> Self {
+        Self {
+            state: status.state.as_str(),
+            device_name: status.device_name,
+            device_id: status.device_id,
+            device_sample_rate: status.device_sample_rate,
+            device_channels: u32::from(status.device_channels),
+            sample_rate: status.sample_rate,
+            peak: status.peak,
+            rms: status.rms,
+            elapsed_seconds: status.elapsed_seconds,
+            max_seconds: status.max_seconds,
+            dropped_samples: status.dropped_samples,
+            limit_reached: status.limit_reached,
+            fault: status.fault,
+            has_devices,
+        }
+    }
+}
+
+/// A finished take: the source it became, plus what the status bar should say
+/// about it.
+///
+/// The source alone is not enough. A take that dropped samples, or that the
+/// five-minute cap ended, is still a usable recording -- but the user has to be
+/// told, and the moment to tell them is the moment it lands on the rack.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordedTakeDto {
+    pub source: AudioSourceDto,
+    /// Samples the capture callback dropped. Non-zero means holes in the take.
+    pub dropped_samples: u64,
+    /// Whether the length cap ended the take.
+    pub limit_reached: bool,
+    /// Largest absolute sample. Near zero is a silent take, which almost always
+    /// means the wrong input was selected or a cable is out.
+    pub peak: f32,
+}
+
 impl StreamInfoDto {
     /// The "no device" answer: what the status bar draws before audio starts.
     pub fn stopped() -> Self {

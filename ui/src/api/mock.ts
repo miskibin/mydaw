@@ -55,6 +55,10 @@ import type {
   MidiStatusDto,
   PreviewSettings,
   AudioOutput,
+  InputDeviceDto,
+  InputStatusDto,
+  RecordState,
+  RecordedTakeDto,
   TrackDto,
   UiSnapshot,
   Unsubscribe,
@@ -96,6 +100,8 @@ const MIN_BPM = 20;
 const MAX_BPM = 999;
 const SAMPLE_RATE = 48_000;
 const FRAME_HZ = 30;
+/** Mirrors `MAX_RECORD_SECONDS` in `plugins/audio-io/src/record.rs`. */
+const MAX_RECORD_SECONDS = 300;
 
 /** One-shot drums and the synth all fire C4, so a hit plays at recorded pitch. */
 const DEFAULT_ROW_KEYS = [60, 60, 60, 60, 60];
@@ -675,6 +681,8 @@ const VST3_PLUGINS: readonly Vst3PluginInfoDto[] = [
 const UNTITLED = 'Untitled';
 const PROJECT_DIR = 'D:\\Songs';
 const MOCK_PACKS = 'D:\\MYDAW\\assets\\packs';
+/** Where the real build writes takes; see `app/src/recording.rs`. */
+const MOCK_RECORDINGS = 'C:\\Users\\wave\\AppData\\Local\\WAVE Studio\\recordings';
 const MOCK_DRUMS = [
   'clap.wav',
   'hihat-closed.wav',
@@ -989,6 +997,23 @@ export class MockBackend implements Backend {
   private previewVolumePercent = 80;
   private preferAsio = false;
   private audioBufferFrames = 256;
+
+  /**
+   * A plausible capture rig: the built-in microphone the OS defaults to, an
+   * interface at a *different* sample rate (so the rate-conversion copy in
+   * Settings has something to be about), and a device the host will not
+   * describe — the state that is otherwise impossible to look at.
+   */
+  private inputDevices: InputDeviceDto[] = [
+    { id: 'mock-builtin', name: 'Microphone (Realtek Audio)', channels: 2, sampleRate: 48_000, isDefault: true },
+    { id: 'mock-usb', name: 'Focusrite Scarlett Solo', channels: 1, sampleRate: 44_100, isDefault: false },
+    { id: 'mock-broken', name: 'Line In (unavailable)', channels: 0, sampleRate: 0, isDefault: false },
+  ];
+  private inputDeviceId: string | null = null;
+  private recordState: RecordState = 'idle';
+  /** `performance.now()` when the take started, for the elapsed readout. */
+  private recordStartedMs = 0;
+  private takesRecorded = 0;
   /** Last Sounds / Audio audition, for tests. Cleared by transport stop. */
   lastPreview: string | null = null;
   lastNoteOn: { key: number; velocity: number } | null = null;
@@ -2870,6 +2895,137 @@ export class MockBackend implements Backend {
         : '',
       running: true,
     };
+  }
+
+  // --- audio input and recording -------------------------------------------
+
+  async getInputDevices(): Promise<InputDeviceDto[]> {
+    return structuredClone(this.inputDevices);
+  }
+
+  async setInputDevice(deviceId: string | null): Promise<InputStatusDto> {
+    if (this.recordState === 'recording') {
+      throw new Error('stop the take before changing the input device');
+    }
+    if (deviceId !== null && !this.inputDevices.some((device) => device.id === deviceId)) {
+      throw new Error(`input device '${deviceId}' is not available`);
+    }
+    this.inputDeviceId = deviceId;
+    return this.getInputStatus();
+  }
+
+  /** The device that would be opened: the chosen one, or the host default. */
+  private activeInputDevice(): InputDeviceDto | undefined {
+    return this.inputDeviceId === null
+      ? this.inputDevices.find((device) => device.isDefault)
+      : this.inputDevices.find((device) => device.id === this.inputDeviceId);
+  }
+
+  /**
+   * A fake level: two slow sines beating against each other, so the meter moves
+   * the way a voice does rather than sitting still. Zero while idle, because an
+   * unopened device cannot be hearing anything.
+   */
+  private inputLevel(): { peak: number; rms: number } {
+    if (this.recordState === 'idle') return { peak: 0, rms: 0 };
+    const t = performance.now() / 1000;
+    const envelope = 0.45 + 0.4 * Math.abs(Math.sin(t * 1.7)) * (0.6 + 0.4 * Math.sin(t * 0.31));
+    const peak = Math.min(0.99, Math.max(0, envelope));
+    return { peak, rms: peak * 0.62 };
+  }
+
+  async getInputStatus(): Promise<InputStatusDto> {
+    const device = this.activeInputDevice();
+    const open = this.recordState !== 'idle';
+    const { peak, rms } = this.inputLevel();
+    const elapsed =
+      this.recordState === 'recording'
+        ? Math.min(MAX_RECORD_SECONDS, (performance.now() - this.recordStartedMs) / 1000)
+        : 0;
+    return {
+      state: this.recordState,
+      deviceName: open ? (device?.name ?? '') : '',
+      deviceId: this.inputDeviceId,
+      deviceSampleRate: open ? (device?.sampleRate ?? 0) : 0,
+      deviceChannels: open ? (device?.channels ?? 0) : 0,
+      sampleRate: SAMPLE_RATE,
+      peak,
+      rms,
+      elapsedSeconds: elapsed,
+      maxSeconds: MAX_RECORD_SECONDS,
+      droppedSamples: 0,
+      limitReached: elapsed >= MAX_RECORD_SECONDS,
+      fault: '',
+      hasDevices: this.inputDevices.length > 0,
+    };
+  }
+
+  async setInputArmed(armed: boolean): Promise<InputStatusDto> {
+    if (!armed) {
+      this.recordState = 'idle';
+      return this.getInputStatus();
+    }
+    const device = this.activeInputDevice();
+    if (!device) throw new Error('no audio input device is available');
+    // Mirrors the engine's refusal: a device the host will not describe is a
+    // device that will not open.
+    if (device.channels === 0) {
+      throw new Error(`input device error: ${device.name} reported no usable configuration`);
+    }
+    this.recordState = 'armed';
+    console.info(`[mock] armed ${device.name}; the level is invented`);
+    return this.getInputStatus();
+  }
+
+  async startRecording(): Promise<InputStatusDto> {
+    if (this.recordState === 'recording') throw new Error('a take is already being recorded');
+    if (this.recordState === 'idle') await this.setInputArmed(true);
+    this.recordState = 'recording';
+    this.recordStartedMs = performance.now();
+    return this.getInputStatus();
+  }
+
+  /**
+   * There is no capture device in a browser, so the take is *invented* at the
+   * length the button was actually held -- which is what makes the whole
+   * gesture (record, channel, sample editor with a waveform) demonstrable
+   * without hardware. The same trade `openAudioFile` makes for the dialog.
+   */
+  async stopRecording(): Promise<RecordedTakeDto> {
+    if (this.recordState !== 'recording') throw new Error('nothing is being recorded');
+    const seconds = Math.min(MAX_RECORD_SECONDS, (performance.now() - this.recordStartedMs) / 1000);
+    this.recordState = 'armed';
+    if (seconds < 0.05) {
+      throw new Error('nothing was recorded; the input device produced no audio');
+    }
+
+    this.takesRecorded += 1;
+    const name = `Recording ${this.takesRecorded}.wav`;
+    const source: AudioSourceDto = {
+      id: this.nextAudioId++,
+      path: `${MOCK_RECORDINGS}\\${name}`,
+      name,
+      frames: Math.round(seconds * SAMPLE_RATE),
+      sampleRate: SAMPLE_RATE,
+      durationSeconds: seconds,
+      durationTicks: this.ticksFor(seconds),
+      missing: false,
+      bytes: Math.round(seconds * SAMPLE_RATE * 8),
+    };
+    this.audioSources.push(source);
+    console.info(`[mock] no capture device outside Tauri, invented ${name} (${seconds.toFixed(2)} s)`);
+    return {
+      source: { ...source },
+      droppedSamples: 0,
+      limitReached: seconds >= MAX_RECORD_SECONDS,
+      peak: 0.82,
+    };
+  }
+
+  async cancelRecording(): Promise<InputStatusDto> {
+    if (this.recordState !== 'recording') throw new Error('nothing is being recorded');
+    this.recordState = 'armed';
+    return this.getInputStatus();
   }
 
   async listMidiPorts(): Promise<MidiPortDto[]> {

@@ -50,6 +50,18 @@
 .wv-audio-readout, .wv-audio-note { margin: 12px 0 0; max-width: 620px; font-size: 12px; line-height: 1.5; color: var(--dim); }
 .wv-audio-note { color: var(--txt2); }
 
+/* The input picker reuses the MIDI row: same gesture (pick a device), same
+   lamp (it is live), so the two device lists read as one idea. */
+.wv-input-list { display: flex; flex-direction: column; gap: 6px; max-width: 620px; }
+.wv-input-list .wv-midi-row:disabled { opacity: 0.55; }
+/* Level check, next to the picker: the meter is the only honest answer to
+   "is this the right input", and it belongs where the input is chosen. */
+.wv-input-monitor { display: flex; align-items: center; gap: 12px; max-width: 620px; margin-top: 12px; }
+.wv-input-monitor .wv-settings__refresh { flex: none; margin-top: 0; }
+.wv-input-monitor .wv-rec__meter { flex: 1; min-width: 0; height: 8px; }
+.wv-input-monitor__db { flex: none; min-width: 62px; text-align: right; color: var(--dim); font: 10px 'Geist Mono Variable', monospace; font-variant-numeric: tabular-nums; }
+.wv-input-monitor__hint { color: var(--dim); font-size: 12px; line-height: 1.5; }
+
 .wv-preview-vol {
   display: flex;
   align-items: center;
