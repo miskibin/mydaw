@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { COMPACT_CARDS, editorKind, editorLayout, editorWindowSize } from './effectLayout';
+import { COMPACT_CARDS, editorKind, editorLayout } from './effectLayout';
 import type { EffectInfoDto, ParamDefDto } from '../api/types';
 
 function param(id: string, extra: Partial<ParamDefDto> = {}): ParamDefDto {
@@ -39,13 +39,13 @@ describe('editorLayout', () => {
     expect(layout.advanced.some((d) => d.id === 'bypass')).toBe(false);
   });
 
-  it('puts compressor threshold and ratio on the primary row next to the curve', () => {
+  it('keeps compressor threshold off the primary row so the curve owns it', () => {
     const layout = editorLayout(
       info('effects.compressor', ['threshold', 'ratio', 'attack', 'release', 'mix', 'makeup']),
     );
     expect(layout.kind).toBe('compressor');
-    expect(layout.primary.map((d) => d.id)).toEqual(['threshold', 'ratio', 'attack', 'release']);
-    expect(layout.advanced.map((d) => d.id)).toEqual(['mix', 'makeup']);
+    expect(layout.primary.map((d) => d.id)).toEqual(['attack', 'release', 'mix']);
+    expect(layout.advanced.map((d) => d.id)).toContain('threshold');
   });
 
   it('falls back to the first four knobs for an unknown effect', () => {
@@ -118,11 +118,5 @@ describe('editorLayout', () => {
     for (const typeId of Object.keys(COMPACT_CARDS)) {
       expect(editorKind(typeId)).not.toBe('generic');
     }
-  });
-
-  it('gives saturator and utility windows that can hold their viz plus primary knobs', () => {
-    expect(editorWindowSize('saturator').h).toBeGreaterThanOrEqual(560);
-    expect(editorWindowSize('utility').h).toBeGreaterThanOrEqual(520);
-    expect(editorWindowSize('eq').w).toBeGreaterThan(editorWindowSize('utility').w);
   });
 });

@@ -134,9 +134,7 @@ export interface ParamGroup {
  *
  * The display *is* the editor; these are the few parameters the research named
  * as things you still reach for with a hand, not a pointer on the curve.
- * Compressor threshold and ratio live here so the curve is not an illustration
- * of knobs buried in Advanced. An unknown effect keeps the first four as
- * primary so it still has a body.
+ * An unknown effect keeps the first four as primary so it still has a body.
  */
 export const EDITOR_PRIMARY: Readonly<Record<string, readonly string[]>> = {
   'effects.eq': ['output'],
@@ -206,26 +204,6 @@ export function editorKind(typeId: string | undefined): EditorKind {
     default:
       return 'generic';
   }
-}
-
-/**
- * Default floating window for each editor. Sized so the display plus the
- * primary knobs fit without a scrollbar when Advanced is closed, on a 1280×720
- * inner viewport (the window is still clamped to the host).
- */
-export const EDITOR_WINDOW: Readonly<Record<EditorKind, { w: number; h: number }>> = {
-  eq: { w: 860, h: 560 },
-  compressor: { w: 720, h: 520 },
-  saturator: { w: 700, h: 560 },
-  delay: { w: 720, h: 520 },
-  limiter: { w: 620, h: 500 },
-  reverb: { w: 760, h: 520 },
-  utility: { w: 560, h: 520 },
-  generic: { w: 520, h: 400 },
-};
-
-export function editorWindowSize(kind: EditorKind): { w: number; h: number } {
-  return EDITOR_WINDOW[kind];
 }
 
 /** Primary knobs and the leftover Advanced list for one catalogue entry. */

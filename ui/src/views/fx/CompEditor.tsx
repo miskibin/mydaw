@@ -2,7 +2,6 @@ import { For, Show, createEffect, createMemo, createSignal, createUniqueId, type
 
 import type { EffectInfoDto, ParamValueDto, StripRef } from '../../api/types';
 import { compressorOutputDb, inputDbFromGr, reductionDb } from '../../lib/compressor';
-import { normalisedScope, signalPath } from '../../lib/polySynth';
 import { TransferCurve } from '../../ui/TransferCurve';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { Advanced, PrimaryRow } from './chrome';

@@ -173,7 +173,7 @@ function EffectEditor(props: {
     return fromSequencer > 0 ? fromSequencer : (app.streamInfo()?.sampleRate ?? 48_000);
   };
   const focused = () => view.focusedInsertId() === props.editor.insertId;
-  const windowSize = () => editorWindowSize(layout().kind);
+  const windowSize = () => WINDOW_SIZE[layout().kind] ?? WINDOW_SIZE.generic!;
 
   function onListen(bandId: string | null): void {
     const current = insert();
