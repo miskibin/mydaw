@@ -149,6 +149,31 @@ answers with the whole `MixerState` and every sequencer command with the whole
 | **`open_audio_file`** | no args → `AudioSourceDto`, or **`null` if the user cancelled** — the native dialog |
 | `get_audio_sources` / `unload_audio_source` | unloading is **refused** while a clip still plays the file |
 | `get_audio_waveform` | `{ sourceId, targetBins }` → `[min, max]` pairs; `targetBins` is a request, not a promise |
+| `add_sample_channel` | `{ path }` — decode a file as a one-shot and give it a rack channel |
+
+### Destructive sample edits, and resampling
+
+The sample editor's `EDIT FILE` row rewrites the **file**, not the channel's view
+of it. Every edit is copy-on-write: the engine writes a new 32-bit float WAV
+under `WAVE Studio/sample-edits`, loads it as a new source, and repoints only
+the edited channel and that channel's own playlist clips — so a second channel
+on the same take is untouched, and the original stays loaded, which is what
+makes undo a pointer swap rather than a re-decode.
+
+| Command | Shape |
+| --- | --- |
+| `edit_track_sample` | `{ track, op }` where `op` is `{kind:'reverse'\|'normalize'\|'trim'}` or `{kind:'gain', db}` → `SampleEditDto` carrying **both** pointers |
+| `set_track_audio_source` | `{ track, sourceId, startFrames, endFrames, clipOffsetShiftFrames }` — the inverse half, and how Ctrl+Z works |
+| `render_pattern_to_sample` | no args → `RenderToSampleDto`; renders one loop of the active pattern offline through the whole mixer and lands it as a new sample channel |
+
+Normalize targets **−0.3 dBFS** over the whole file (not the region: a
+region-relative normalize would leave the audio outside it above full scale).
+Trim crops to the played region, resets the region, and shifts this lane's clip
+offsets by the crop — which the undo negates. A render is exactly one pattern
+loop, so it drops back on the grid seamlessly, and **hosted CLAP/VST3 channels
+are silent in it** — only the main thread can instantiate one. `hostedChannels`
+says how many, and the status bar repeats it rather than leaving the user to
+wonder where the lead went.
 
 ### Hosted plugins and the project file
 

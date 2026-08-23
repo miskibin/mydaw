@@ -66,6 +66,7 @@ import {
   snapshotPlaylist,
   UndoStack,
   type PlaylistSnapshot,
+  type UndoEntry,
 } from './lib/undo';
 import { channelClip, withStepsConvertedToNotes } from './lib/pattern';
 import { clampDb, formatDb, MAX_DB, MIN_DB } from './panels/mixer/scale';
@@ -220,6 +221,16 @@ export interface AppState {
   startPlaylistGesture(label: string): void;
   commitPlaylistGesture(): void;
 
+  /**
+   * Record a gesture that has **already been applied**, from a view that owns
+   * its own inverse.
+   *
+   * The pattern and playlist gestures above snapshot for you; a destructive
+   * sample edit cannot be snapshotted (the "before" is a file), so the engine
+   * hands back both pointers and the sample editor builds the entry itself. See
+   * `sampleEditEntry`.
+   */
+  pushUndo(entry: UndoEntry): void;
   /** Undo/redo, reporting what was undone in the status bar. */
   undoLast(): void;
   redoLast(): void;
@@ -633,6 +644,11 @@ function createAppState(): AppState {
     const after = snapshotPlaylist(current);
     if (JSON.stringify(before) === JSON.stringify(after)) return;
     undo.push(playlistEntry(backend, label, before, after));
+    setUndoRevision(undo.revision);
+  }
+
+  function pushUndo(entry: UndoEntry): void {
+    undo.push(entry);
     setUndoRevision(undo.revision);
   }
 
@@ -1158,6 +1174,7 @@ function createAppState(): AppState {
     editPatternOnce,
     startPlaylistGesture,
     commitPlaylistGesture,
+    pushUndo,
     undoLast,
     redoLast,
     clearHistory,

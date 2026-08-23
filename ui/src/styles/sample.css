@@ -47,6 +47,54 @@
   color: var(--txt);
 }
 
+/*
+ * The destructive-edit row.
+ *
+ * A second, quieter tool row under the first, separated by a rule rather than a
+ * heading: these rewrite the file, and putting them among the pitch controls
+ * (which do not) would blur the one distinction a user has to keep straight.
+ */
+.wv-sample__ops {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 0 12px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.wv-sample__opslabel {
+  font: 500 9px 'Geist Variable';
+  color: var(--dim);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wv-sample__ops .wv-chip.is-busy {
+  opacity: 0.7;
+}
+
+.wv-sample__gain {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.wv-sample__gainstep {
+  height: 22px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--chip);
+  font: 500 10px 'Geist Mono Variable';
+  color: var(--txt);
+}
+
+.wv-sample__opsbusy {
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--dim);
+}
+
 .wv-sample__kb {
   display: flex;
   flex: none;

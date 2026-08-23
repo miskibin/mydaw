@@ -91,6 +91,33 @@ impl AudioClipBus {
         }
     }
 
+    /// The same node, **not** joined to the live stream's fan-out.
+    ///
+    /// An offline render (`crate::resample`) needs a clip channel loaded with
+    /// the arrangement as it stands, but it must not become one of the slots
+    /// [`install`](Self::install) publishes to: the render is over in a few
+    /// hundred milliseconds and its nodes are dropped, and a slot list that
+    /// collected them would be publishing the arrangement into dead queues.
+    pub fn detached_for_source(
+        &self,
+        source_id: u64,
+        params: Arc<SamplePlaybackParams>,
+        gc: Handle,
+    ) -> Box<dyn RtNode> {
+        let (mut handle, node) = audio_clip_channel(AUDIO_CLIP_QUEUE_CAPACITY, gc);
+        if let Some(song) = self.last.lock().clone() {
+            if let Err(err) = handle.install(song.for_source(source_id)) {
+                log::warn!("could not load the arrangement into an offline render: {err}");
+            }
+        }
+        // The handle is dropped here on purpose: the node keeps whatever was
+        // installed, and an offline render never publishes a second version.
+        match self.note_player(source_id, params) {
+            Some(notes) => Box::new(SampleChannelHead::new(node, notes)),
+            None => Box::new(node),
+        }
+    }
+
     fn open_filtered(&self, source_id: Option<u64>, gc: Handle) -> AudioClipNode {
         let (mut handle, node) = audio_clip_channel(AUDIO_CLIP_QUEUE_CAPACITY, gc);
         if let Some(song) = self.last.lock().clone() {

@@ -45,7 +45,10 @@ import type {
   PlaylistDto,
   PlaylistTrackDto,
   ProjectInfo,
+  RenderToSampleDto,
   RootMode,
+  SampleEditDto,
+  SampleOp,
   SendDto,
   SequencerState,
   SourceDto,
@@ -90,6 +93,55 @@ const MAX_CLIPS = 512;
 const MAX_SONG_TICKS = 3_840 * 512;
 const MAX_NOTES = 1024;
 const MAX_WAVEFORM_BINS = 4096;
+
+/**
+ * Bins the mock stores per source.
+ *
+ * The engine keeps samples and folds them to whatever the caller asks for; the
+ * mock keeps one fixed-resolution envelope and folds that. A thousand-odd bins
+ * is finer than any window draws, so a fold never invents detail.
+ */
+const MOCK_ENVELOPE_BINS = 1024;
+
+/** Peak a Normalize lands on, matching `app/src/sample_edit.rs`. */
+const NORMALIZE_TARGET_DBFS = -0.3;
+
+/** Largest gain one destructive Gain edit applies, matching the engine. */
+const MAX_EDIT_GAIN_DB = 24;
+
+/** Where the engine writes destructive edits, mirrored for plausible paths. */
+const SAMPLE_EDIT_DIR = 'C:\\Users\\wave\\AppData\\Local\\WAVE Studio\\sample-edits';
+
+/** Where the engine writes pattern renders. */
+const RENDER_DIR = 'C:\\Users\\wave\\AppData\\Local\\WAVE Studio\\renders';
+
+/** What the status bar calls each destructive edit. */
+const OP_LABELS: Record<SampleOp['kind'], string> = {
+  reverse: 'Reverse',
+  normalize: 'Normalize',
+  trim: 'Trim',
+  gain: 'Gain',
+};
+
+/** Fold a stored envelope down to `bins` min/max pairs. */
+function foldPeaks(peaks: readonly [number, number][], bins: number): [number, number][] {
+  const out: [number, number][] = [];
+  const count = Math.max(1, Math.min(bins, peaks.length));
+  for (let bin = 0; bin < count; bin++) {
+    const from = Math.floor((bin * peaks.length) / count);
+    const to = Math.max(from + 1, Math.floor(((bin + 1) * peaks.length) / count));
+    let lo = 0;
+    let hi = 0;
+    for (let index = from; index < to && index < peaks.length; index++) {
+      const pair = peaks[index];
+      if (!pair) continue;
+      lo = Math.min(lo, pair[0]);
+      hi = Math.max(hi, pair[1]);
+    }
+    out.push([lo, hi]);
+  }
+  return out;
+}
 const PPQ = 960;
 const TICKS_PER_STEP = 240;
 const TICKS_PER_BAR = 3840;
@@ -973,6 +1025,14 @@ export class MockBackend implements Backend {
   private audioSources: AudioSourceDto[] = FACTORY_DRUM_IDS.map((id, index) =>
     factoryDrumAudio(index + 1, id),
   );
+  /**
+   * Each source's envelope, by id.
+   *
+   * The mock owns *shapes* rather than samples, and a destructive edit rewrites
+   * the shape -- see `envelope`. Filled lazily, so a session that never opens a
+   * sample editor never builds one.
+   */
+  private waveforms = new Map<number, [number, number][]>();
 
   private nextTrackId = 5;
   private nextBusId = 0;
@@ -2544,19 +2604,242 @@ export class MockBackend implements Backend {
     return this.getAudioSources();
   }
 
+  /**
+   * The envelope of one source, at full mock resolution.
+   *
+   * Generated once per source and then **kept**, because the destructive edits
+   * ([`editTrackSample`](MockBackend.editTrackSample)) transform it: a mock
+   * that regenerated the shape from the source id on every request would draw
+   * the same waveform after a Reverse as before it, and the flow the UI is
+   * being exercised for would prove nothing.
+   */
+  private envelope(sourceId: number): [number, number][] {
+    const held = this.waveforms.get(sourceId);
+    if (held) return held;
+    const made: [number, number][] = Array.from({ length: MOCK_ENVELOPE_BINS }, (_, index) => {
+      const t = index / MOCK_ENVELOPE_BINS;
+      const envelope =
+        (0.35 + 0.65 * Math.abs(Math.sin(t * Math.PI * (2 + sourceId)))) * (1 - t * 0.45);
+      const level = Math.min(0.98, envelope * (0.7 + 0.3 * Math.abs(Math.sin(t * 47))));
+      return [-level, level] as [number, number];
+    });
+    this.waveforms.set(sourceId, made);
+    return made;
+  }
+
   /** A plausible envelope: a decaying, wobbling take, deterministic per source. */
   async getAudioWaveform(sourceId: number, targetBins?: number): Promise<WaveformDto> {
     const source = this.audioSources.find((entry) => entry.id === sourceId);
     if (!source) throw new Error(`there is no audio source ${sourceId}`);
     const bins = Math.min(MAX_WAVEFORM_BINS, Math.max(1, targetBins ?? 1024));
-    const peaks: [number, number][] = Array.from({ length: bins }, (_, index) => {
-      const t = index / bins;
-      const envelope =
-        (0.35 + 0.65 * Math.abs(Math.sin(t * Math.PI * (2 + sourceId)))) * (1 - t * 0.45);
-      const level = Math.min(0.98, envelope * (0.7 + 0.3 * Math.abs(Math.sin(t * 47))));
-      return [-level, level];
-    });
+    const peaks = foldPeaks(this.envelope(sourceId), bins);
     return { sourceId, frames: source.frames, bins, maxBins: MAX_WAVEFORM_BINS, peaks };
+  }
+
+  // --- destructive sample edits --------------------------------------------
+  //
+  // The engine writes a new WAV and loads it as a new source; the mock does the
+  // same to its stored envelope. Both ends agree on the shape that matters to
+  // the UI: a new source id, the old one still listed, and a waveform that
+  // actually changed.
+
+  async editTrackSample(track: number, op: SampleOp): Promise<SampleEditDto> {
+    const def = this.track(track);
+    const previousSourceId = def.audioSourceId;
+    if (previousSourceId == null) {
+      throw new Error(`track ${track} plays no audio file`);
+    }
+    const source = this.audioSources.find((entry) => entry.id === previousSourceId);
+    if (!source) throw new Error(`audio source ${previousSourceId} is not loaded`);
+
+    const peaks = this.envelope(previousSourceId);
+    const frames = source.frames;
+    // Captured before `repoint` writes over them: `def` is the live track, and
+    // reading the "previous" region out of it afterwards would report the new
+    // one and make every undo a no-op.
+    const previousStartFrames = def.sampleStartFrames;
+    const previousEndFrames = def.sampleEndFrames;
+    const start = def.sampleStartFrames;
+    const end = def.sampleEndFrames === 0 || def.sampleEndFrames > frames
+      ? frames
+      : def.sampleEndFrames;
+
+    let next = peaks;
+    let nextFrames = frames;
+    let region: [number, number] = [def.sampleStartFrames, def.sampleEndFrames];
+    let shift = 0;
+    let suffix: string;
+    switch (op.kind) {
+      case 'reverse': {
+        next = peaks.slice().reverse();
+        region = start === 0 && end === frames ? [0, 0] : [frames - end, frames - start];
+        suffix = 'reversed';
+        break;
+      }
+      case 'normalize': {
+        const peak = peaks.reduce((worst, [lo, hi]) => Math.max(worst, Math.abs(lo), Math.abs(hi)), 0);
+        if (peak <= 1e-6) throw new Error(`${source.name} is silent; there is nothing to normalize`);
+        const scale = 10 ** (NORMALIZE_TARGET_DBFS / 20) / peak;
+        next = peaks.map(([lo, hi]) => [lo * scale, hi * scale] as [number, number]);
+        suffix = 'normalized';
+        break;
+      }
+      case 'trim': {
+        if (start >= end || (start === 0 && end === frames)) {
+          throw new Error(
+            'Trim needs a region shorter than the whole file — drag one on the waveform first',
+          );
+        }
+        const first = Math.floor((start / frames) * peaks.length);
+        const last = Math.max(first + 1, Math.ceil((end / frames) * peaks.length));
+        next = peaks.slice(first, last);
+        nextFrames = end - start;
+        region = [0, 0];
+        shift = -start;
+        suffix = 'trimmed';
+        break;
+      }
+      case 'gain': {
+        const db = Math.max(-MAX_EDIT_GAIN_DB, Math.min(MAX_EDIT_GAIN_DB, op.db));
+        const scale = 10 ** (db / 20);
+        next = peaks.map(([lo, hi]) => [lo * scale, hi * scale] as [number, number]);
+        suffix = `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+        break;
+      }
+    }
+
+    const stem = source.name.replace(/\.[^.]+$/, '');
+    const seconds = source.sampleRate > 0 ? nextFrames / source.sampleRate : source.durationSeconds;
+    const written: AudioSourceDto = {
+      id: this.nextAudioId++,
+      path: `${SAMPLE_EDIT_DIR}\\${stem} (${suffix}).wav`,
+      name: `${stem} (${suffix}).wav`,
+      frames: nextFrames,
+      sampleRate: source.sampleRate,
+      durationSeconds: seconds,
+      durationTicks: this.ticksFor(seconds),
+      missing: false,
+      bytes: nextFrames * 8,
+    };
+    this.audioSources.push(written);
+    this.waveforms.set(written.id, next);
+
+    this.repoint(track, written.id, region[0], region[1], shift);
+    return {
+      track,
+      op: OP_LABELS[op.kind],
+      source: written,
+      previousSourceId,
+      startFrames: region[0],
+      endFrames: region[1],
+      previousStartFrames,
+      previousEndFrames,
+      clipOffsetShiftFrames: shift,
+      mixer: this.mixerState(),
+    };
+  }
+
+  async setTrackAudioSource(
+    track: number,
+    sourceId: number,
+    startFrames: number,
+    endFrames: number,
+    clipOffsetShiftFrames: number,
+  ): Promise<MixerState> {
+    if (!this.audioSources.some((entry) => entry.id === sourceId)) {
+      throw new Error(`audio source ${sourceId} is not loaded`);
+    }
+    this.repoint(track, sourceId, startFrames, endFrames, clipOffsetShiftFrames);
+    return this.mixerState();
+  }
+
+  /** Point one channel (and only its own clips) at a different loaded file. */
+  private repoint(
+    track: number,
+    sourceId: number,
+    startFrames: number,
+    endFrames: number,
+    clipOffsetShiftFrames: number,
+  ): void {
+    const def = this.track(track);
+    const from = def.audioSourceId;
+    def.audioSourceId = sourceId;
+    def.sourceId = def.sourceId.startsWith('clip:') ? `clip:${sourceId}` : `oneshot:${sourceId}`;
+    def.sampleStartFrames = Math.max(0, Math.floor(startFrames));
+    def.sampleEndFrames = Math.max(0, Math.floor(endFrames));
+    if (from == null || from === sourceId) return;
+    for (const clip of this.clips) {
+      if (clip.sourceId === from && clip.track === track) {
+        clip.sourceId = sourceId;
+        clip.offsetFrames = Math.max(0, (clip.offsetFrames ?? 0) + clipOffsetShiftFrames);
+      }
+    }
+  }
+
+  /**
+   * Render one loop of the active pattern and land it as a sample channel.
+   *
+   * The mock has no DSP, so the "render" is a synthetic envelope built from the
+   * steps that are actually on: every switched-on step becomes a decaying hit at
+   * its own position in the loop. That is enough for the flow under test -- a
+   * new channel appears, its waveform is of *this* pattern, and an empty grid
+   * refuses rather than adding a channel of silence, exactly as the engine does.
+   */
+  async renderPatternToSample(): Promise<RenderToSampleDto> {
+    if (this.tracks.length >= MAX_TRACKS) {
+      throw new Error(`a project may have at most ${MAX_TRACKS} tracks`);
+    }
+    const pattern = this.patterns.find((entry) => entry.id === this.activePattern);
+    if (!pattern) throw new Error('there is no active pattern');
+
+    const hits: number[] = [];
+    for (const channel of pattern.channels) {
+      channel.steps?.steps.forEach((step, index) => {
+        if (step.on) hits.push(index / pattern.steps);
+      });
+      for (const note of channel.notes) hits.push(note.start / (pattern.steps * TICKS_PER_STEP));
+    }
+    if (hits.length === 0) {
+      throw new Error(
+        'the rendered pattern is silent — check that a channel is unmuted and has steps',
+      );
+    }
+
+    const peaks: [number, number][] = Array.from({ length: MOCK_ENVELOPE_BINS }, (_, index) => {
+      const t = index / MOCK_ENVELOPE_BINS;
+      let level = 0;
+      for (const hit of hits) {
+        const since = t - hit;
+        if (since >= 0 && since < 0.12) level = Math.max(level, 0.9 * Math.exp(-since * 40));
+      }
+      return [-level, level] as [number, number];
+    });
+
+    const seconds = (pattern.steps / 4) * (60 / this.bpm);
+    const source: AudioSourceDto = {
+      id: this.nextAudioId++,
+      path: `${RENDER_DIR}\\${pattern.name}.wav`,
+      name: `${pattern.name}.wav`,
+      frames: Math.round(seconds * 48_000),
+      sampleRate: 48_000,
+      durationSeconds: seconds,
+      durationTicks: this.ticksFor(seconds),
+      missing: false,
+      bytes: Math.round(seconds * 48_000 * 8),
+    };
+    this.audioSources.push(source);
+    this.waveforms.set(source.id, peaks);
+    const track = this.tracks.length;
+    this.pushOneshotTrack(source, source.name);
+    return {
+      track,
+      name: source.name,
+      frames: source.frames,
+      sampleRate: source.sampleRate,
+      peak: 0.9,
+      hostedChannels: this.tracks.filter((entry) => entry.clap || entry.vst3).length,
+      mixer: this.mixerState(),
+    };
   }
 
   async previewSource(sourceId: string, targetBins?: number): Promise<SourcePreviewDto> {

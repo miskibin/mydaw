@@ -646,6 +646,67 @@ impl Playlist {
         before - self.clips.len()
     }
 
+    /// Point every clip that plays `from` at `to` instead. Returns how many moved.
+    ///
+    /// `lane` narrows it to one playlist lane, which is what a **destructive
+    /// sample edit** wants: reversing the file on one channel produces a new
+    /// source and must carry that channel's clips across, while leaving alone
+    /// any other lane that legitimately still plays the original take.
+    /// `None` retargets every clip, which is what a project-load fixup wants.
+    ///
+    /// Offsets are untouched: they are positions in a recording, and every
+    /// operation that keeps the file's length (reverse, normalize, gain) keeps
+    /// them meaningful. A crop moves them, so the caller that crops passes the
+    /// shift itself -- see [`shift_audio_offsets`](Self::shift_audio_offsets).
+    pub fn retarget_audio_source(&mut self, from: u64, to: u64, lane: Option<usize>) -> usize {
+        if from == to {
+            return 0;
+        }
+        let mut moved = 0;
+        for clip in &mut self.clips {
+            if let Clip::Audio(audio) = clip {
+                if audio.source_id == from && lane.is_none_or(|index| audio.track == index) {
+                    audio.source_id = to;
+                    moved += 1;
+                }
+            }
+        }
+        moved
+    }
+
+    /// Move every audio clip of `source_id` on `lane` by `delta` frames inside
+    /// its file. Returns how many moved.
+    ///
+    /// The other half of a destructive **Trim**: the file lost its first
+    /// `start` frames, so a clip that began a bar into the take has to begin a
+    /// bar *minus the crop* into the new one, or the arrangement would jump.
+    /// Undoing the trim passes the same number the other way and lands exactly
+    /// where it started.
+    ///
+    /// Saturating at zero: a clip whose offset was inside the cropped-away head
+    /// now starts at the beginning, which is the nearest audio that still
+    /// exists.
+    pub fn shift_audio_offsets(&mut self, source_id: u64, lane: usize, delta: i64) -> usize {
+        if delta == 0 {
+            return 0;
+        }
+        let magnitude = delta.unsigned_abs();
+        let mut moved = 0;
+        for clip in &mut self.clips {
+            if let Clip::Audio(audio) = clip {
+                if audio.source_id == source_id && audio.track == lane {
+                    audio.offset_frames = if delta < 0 {
+                        audio.offset_frames.saturating_sub(magnitude)
+                    } else {
+                        audio.offset_frames.saturating_add(magnitude)
+                    };
+                    moved += 1;
+                }
+            }
+        }
+        moved
+    }
+
     /// Remove every clip that plays audio source `source_id`.
     pub fn drop_audio_source(&mut self, source_id: u64) -> usize {
         let before = self.clips.len();

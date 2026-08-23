@@ -29,7 +29,14 @@
 
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js';
 
-import type { ParamDefDto, PitchAnalysis, SourcePreviewDto, TrackDto, WaveformDto } from '../api/types';
+import type {
+  ParamDefDto,
+  PitchAnalysis,
+  SampleOp,
+  SourcePreviewDto,
+  TrackDto,
+  WaveformDto,
+} from '../api/types';
 import { channelColor, channelKind } from '../lib/channel';
 import { noteName } from '../lib/pattern';
 import {
@@ -50,6 +57,7 @@ import {
   type Region,
 } from '../lib/sampleRegion';
 import { stereoWaveformPaths } from '../lib/sampleWaveform';
+import { sampleEditEntry } from '../lib/undo';
 import { usesPolySynthEditor } from '../lib/polySynth';
 import { useAppState } from '../state';
 import { useView } from '../shell/view';
@@ -70,6 +78,17 @@ const AUDITION_KEY = 60;
 const KIT_KEY = 36;
 /** Travel under this is a click, not a drag: it must not redraw the region. */
 const DRAG_SLOP_PX = 3;
+/**
+ * The gain the +/- chips apply, in dB.
+ *
+ * Three: audible on one press, and four presses to double the level, which is
+ * the granularity a destructive trim wants. The engine clamps at ±24 dB.
+ */
+const DEFAULT_EDIT_GAIN_DB = 3;
+/** Gains the step control offers. Symmetrical, and all of them useful. */
+const EDIT_GAIN_STEPS = [0.5, 1, 3, 6, 12];
+/** Where Normalize lands the peak. Mirrors `NORMALIZE_TARGET_DBFS` in Rust. */
+const NORMALIZE_TARGET_DBFS = -0.3;
 const TARGET_NOTES = Array.from({ length: 61 }, (_, index) => 36 + index);
 
 const PAN_DEF = spec('pan', 'Pan', '', -1, 1, 0);
@@ -110,6 +129,9 @@ export function SampleEditor(): JSX.Element {
   );
   const [kbCenter, setKbCenter] = createSignal(60);
   const [targetNote, setTargetNote] = createSignal(60);
+  /** The destructive edit currently running, by name. Only one at a time. */
+  const [editing, setEditing] = createSignal<string | null>(null);
+  const [gainStep, setGainStep] = createSignal(DEFAULT_EDIT_GAIN_DB);
   let pendingSampleEdit: Promise<void> = Promise.resolve();
   let noteGate: Promise<void> = Promise.resolve();
   let analysisGen = 0;
@@ -382,6 +404,59 @@ export function SampleEditor(): JSX.Element {
     if (total <= 0) return;
     commitRegion({ start: 0, end: total, storedEnd: 0 });
     app.say(`${owner()} · Region`, 'whole file');
+  }
+
+  // --- destructive edits ---------------------------------------------------
+  //
+  // These change the *file*, not the channel's view of it. The engine is copy
+  // on write -- it writes a new WAV, loads it as a new source and repoints this
+  // channel -- so the reply carries the old pointer as well as the new one and
+  // this pushes the pair as a single undo entry. Ctrl+Z puts the take back
+  // without decoding anything.
+  //
+  // Only one runs at a time, and the chips say which: a second Normalize
+  // launched while the first is still encoding would race two repoints of the
+  // same channel, and the loser would be the one the user sees.
+
+  /** Why an operation cannot run right now, or `null` when it can. */
+  function editBlocked(op: SampleOp['kind']): string | null {
+    if (!samplePlay()) return 'This channel plays an instrument, not a file';
+    if (!file()) return 'This channel has no file loaded yet';
+    if (totalFrames() <= 0) return 'This file has no audio to edit';
+    const running = editing();
+    if (running) return `${running} is still running`;
+    if (op === 'trim' && !trimmed()) {
+      return 'Drag a region on the waveform first — there is nothing to trim to';
+    }
+    return null;
+  }
+
+  function runEdit(op: SampleOp, verb: string): void {
+    const current = track();
+    if (!current || editBlocked(op.kind)) return;
+    const trackId = current.id;
+    setEditing(verb);
+    void waitForSampleEdits()
+      .then(() => {
+        const latest = app.mixer()?.tracks.find((entry) => entry.id === trackId);
+        if (!latest) return undefined;
+        return app.backend.editTrackSample(latest.index, op);
+      })
+      .then((edit) => {
+        if (!edit) return;
+        app.pushUndo(sampleEditEntry(app.mixerCommand, edit));
+        // The reply already carries the mixer, but the *source list* is what
+        // names the file under the waveform, and a new file has just appeared
+        // in it. Both, in one settle, so the window redraws once.
+        return app
+          .mixerCommand(async () => edit.mixer)
+          .then(() => app.refreshAudioSources())
+          .then(() => {
+            app.say(`${owner()} · ${edit.op}`, edit.source.name);
+          });
+      })
+      .catch(app.report)
+      .finally(() => setEditing(null));
   }
 
   /**
@@ -658,17 +733,36 @@ export function SampleEditor(): JSX.Element {
     app.say(`${owner()} · Pitch`, pitchLabel(targetTransposeCents(found.midiNote, found.cents, target)));
   }
 
+  /**
+   * The channel this window is pointed at, as a value that only changes when
+   * the *channel* does.
+   *
+   * `on(() => track()?.id, …)` looked like it did this, but Solid's `on` has no
+   * equality gate: it re-runs its body every time a tracked read changes, and
+   * `track()` reads `app.tracks()`, a fresh array on every mixer echo. The body
+   * below sends `setSelectedTrack`, `mixerCommand` publishes a new `MixerState`,
+   * `app.tracks()` changes identity, and the effect fires again — a select /
+   * echo / select loop with nothing to stop it. Against the real engine each
+   * turn costs an IPC round trip so it merely pinned a core; in the browser mock
+   * every turn resolves in a microtask, so the loop starves the event loop and
+   * the tab stops painting entirely. (The poly-synth channel escaped it only
+   * because `samplePlay()` is false there and the body returns early.)
+   *
+   * A memo has the equality gate, so the effect now runs once per channel.
+   */
+  const selectedTrackId = createMemo(() => track()?.id);
+
   createEffect(
-    on(
-      () => track()?.id,
-      (id) => {
-        if (id == null || !samplePlay()) return;
-        const current = track();
-        if (!current) return;
+    on(selectedTrackId, (id) => {
+      if (id == null || !samplePlay()) return;
+      const current = track();
+      if (!current) return;
+      // Belt and braces: never re-send a selection the engine already holds.
+      if (app.mixer()?.selected !== current.index) {
         void app.mixerCommand((backend) => backend.setSelectedTrack(current.index));
-        setKbCenter(current.rootKey);
-      },
-    ),
+      }
+      setKbCenter(current.rootKey);
+    }),
   );
 
   return (
@@ -766,6 +860,89 @@ export function SampleEditor(): JSX.Element {
                 </span>
               </Show>
             </div>
+
+            <Show when={samplePlay()}>
+              <div class="wv-sample__ops">
+                <span class="wv-sample__opslabel" title="These rewrite the file, not the channel. One Ctrl+Z puts the take back.">
+                  Edit file
+                </span>
+                <For
+                  each={
+                    [
+                      [
+                        { kind: 'reverse' },
+                        'Reverse',
+                        'Write the file backwards. The played region turns around with it.',
+                      ],
+                      [
+                        { kind: 'normalize' },
+                        'Normalize',
+                        `Scale the whole file so its loudest sample lands on ${NORMALIZE_TARGET_DBFS} dBFS.`,
+                      ],
+                      [
+                        { kind: 'trim' },
+                        'Trim',
+                        'Crop the file to the played region, then play the whole of what is left.',
+                      ],
+                    ] as const satisfies readonly (readonly [SampleOp, string, string])[]
+                  }
+                >
+                  {([op, verb, why]) => (
+                    <button
+                      type="button"
+                      class="wv-chip"
+                      classList={{ 'is-busy': editing() === verb }}
+                      disabled={editBlocked(op.kind) !== null}
+                      title={editBlocked(op.kind) ?? why}
+                      onClick={() => runEdit(op, verb)}
+                    >
+                      {editing() === verb ? `${verb}…` : verb}
+                    </button>
+                  )}
+                </For>
+                <div class="wv-sample__gain">
+                  <button
+                    type="button"
+                    class="wv-chip"
+                    disabled={editBlocked('gain') !== null}
+                    title={
+                      editBlocked('gain') ??
+                      `Write the file ${gainStep()} dB quieter. Destructive, and undoable.`
+                    }
+                    onClick={() => runEdit({ kind: 'gain', db: -gainStep() }, 'Gain')}
+                  >
+                    −
+                  </button>
+                  <select
+                    class="wv-sample__gainstep"
+                    value={String(gainStep())}
+                    disabled={!samplePlay() || editing() !== null}
+                    title="How much one press of + or − writes into the file"
+                    onChange={(event) => setGainStep(Number(event.currentTarget.value))}
+                  >
+                    <For each={EDIT_GAIN_STEPS}>
+                      {(step) => <option value={String(step)}>{step} dB</option>}
+                    </For>
+                  </select>
+                  <button
+                    type="button"
+                    class="wv-chip"
+                    disabled={editBlocked('gain') !== null}
+                    title={
+                      editBlocked('gain') ??
+                      `Write the file ${gainStep()} dB louder. Destructive, and undoable.`
+                    }
+                    onClick={() => runEdit({ kind: 'gain', db: gainStep() }, 'Gain')}
+                  >
+                    +
+                  </button>
+                </div>
+                <span class="wv-spacer" />
+                <Show when={editing()}>
+                  {(verb) => <span class="wv-sample__opsbusy">{verb()}…</span>}
+                </Show>
+              </div>
+            </Show>
 
             <Show
               when={synthEditor()}

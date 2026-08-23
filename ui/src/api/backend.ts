@@ -16,7 +16,10 @@ import type {
   PitchAnalysis,
   PlayMode,
   ProjectInfo,
+  RenderToSampleDto,
   RootMode,
+  SampleEditDto,
+  SampleOp,
   SequencerState,
   SourceDto,
   SpectrumDto,
@@ -172,6 +175,31 @@ export interface Backend {
     startFrames: number,
     endFrames: number,
   ): Promise<MixerState>;
+  /**
+   * Apply a **destructive** edit to the file behind a sample channel.
+   *
+   * Copy-on-write: a new file is written and this channel (with its playlist
+   * clips) repointed at it, so another channel on the same take is unaffected.
+   * The answer carries the old pointer too — replay it through
+   * {@link Backend.setTrackAudioSource} and the edit is undone in one step.
+   */
+  editTrackSample(track: number, op: SampleOp): Promise<SampleEditDto>;
+  /**
+   * Point a sample channel at a different **already loaded** file and region.
+   * The inverse of {@link Backend.editTrackSample}, and how undo works.
+   */
+  setTrackAudioSource(
+    track: number,
+    sourceId: number,
+    startFrames: number,
+    endFrames: number,
+    clipOffsetShiftFrames: number,
+  ): Promise<MixerState>;
+  /**
+   * Render one loop of the active pattern through the whole mixer, offline, and
+   * add it as a new sample channel. "Resampling".
+   */
+  renderPatternToSample(): Promise<RenderToSampleDto>;
   setTrackMute(track: number, muted: boolean): Promise<MixerState>;
   setTrackSolo(track: number, soloed: boolean): Promise<MixerState>;
   setMasterGain(db: number): Promise<MixerState>;
@@ -629,6 +657,30 @@ class TauriBackend implements Backend {
     endFrames: number,
   ): Promise<MixerState> {
     return this.call('set_track_sample_region', { track, startFrames, endFrames });
+  }
+
+  editTrackSample(track: number, op: SampleOp): Promise<SampleEditDto> {
+    return this.call('edit_track_sample', { track, op });
+  }
+
+  setTrackAudioSource(
+    track: number,
+    sourceId: number,
+    startFrames: number,
+    endFrames: number,
+    clipOffsetShiftFrames: number,
+  ): Promise<MixerState> {
+    return this.call('set_track_audio_source', {
+      track,
+      sourceId,
+      startFrames,
+      endFrames,
+      clipOffsetShiftFrames,
+    });
+  }
+
+  renderPatternToSample(): Promise<RenderToSampleDto> {
+    return this.call('render_pattern_to_sample');
   }
 
   setTrackMute(track: number, muted: boolean): Promise<MixerState> {

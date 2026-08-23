@@ -30,6 +30,7 @@ use crate::preview_settings::{self, PreviewSettings};
 use crate::project::{MixerStateDto, PitchAnalysisDto, RootMode};
 use crate::project_bridge::ProjectInfoDto;
 use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
+use crate::sample_edit::{SampleEditDto, SampleOp};
 use crate::source::{Source, SourceDto};
 use crate::state::AppState;
 use crate::vst3_bridge::Vst3GuiStatusDto;
@@ -303,6 +304,100 @@ pub fn set_track_sample_region(
         .set_track_sample_region(track, start_frames, end_frames)
         .map_err(|err| err.to_string())?;
     Ok(state.mixer_state())
+}
+
+/// Apply one **destructive** edit to the file behind a sample channel.
+///
+/// Reverse, Normalize, Trim and Gain. Copy-on-write: a new WAV is written, the
+/// channel (and this lane's playlist clips) are repointed at it, and everything
+/// else that plays the original take is untouched. The answer carries both the
+/// new pointer and the old one, so the shell records the pair as a single undo
+/// entry replayed through [`set_track_audio_source`].
+///
+/// `async` so Tauri runs it off the main thread: encoding ten minutes of audio
+/// is not work to do inside a window's event loop.
+#[tauri::command]
+pub async fn edit_track_sample(
+    state: State<'_, AppState>,
+    track: usize,
+    op: SampleOp,
+) -> Result<SampleEditDto, String> {
+    state
+        .edit_track_sample(track, op)
+        .map_err(|err| err.to_string())
+}
+
+/// Point a sample channel at a different **already loaded** file, with a region.
+///
+/// The inverse half of [`edit_track_sample`], and how Ctrl+Z restores a take
+/// without re-decoding it. `clipOffsetShiftFrames` moves this lane's playlist
+/// clips inside the file, which only undoing (or redoing) a Trim needs.
+#[tauri::command]
+pub async fn set_track_audio_source(
+    state: State<'_, AppState>,
+    track: usize,
+    source_id: u64,
+    start_frames: u64,
+    end_frames: u64,
+    clip_offset_shift_frames: i64,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_audio_source(
+            track,
+            source_id,
+            start_frames,
+            end_frames,
+            clip_offset_shift_frames,
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Render one loop of the active pattern offline and add it as a sample channel.
+///
+/// "Resampling": the whole rack, through the mixer, bounced to a file and
+/// dropped back in as a one-shot the sample editor can trim, reverse and pitch.
+/// Hosted CLAP/VST3 channels are silent in the render — only the main thread can
+/// instantiate one — and `hostedChannels` says how many, so the shell can tell
+/// the user rather than let them wonder why a lead is missing.
+///
+/// `async` for the same reason as the sample edits: it renders and encodes.
+#[tauri::command]
+pub async fn render_pattern_to_sample(
+    state: State<'_, AppState>,
+) -> Result<RenderToSampleDto, String> {
+    let outcome = state
+        .render_pattern_to_sample()
+        .map_err(|err| err.to_string())?;
+    Ok(RenderToSampleDto {
+        track: outcome.track,
+        name: outcome
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        frames: outcome.frames as u64,
+        sample_rate: outcome.sample_rate,
+        peak: outcome.peak,
+        hosted_channels: outcome.hosted_channels,
+        mixer: state.mixer_state(),
+    })
+}
+
+/// What [`render_pattern_to_sample`] produced.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderToSampleDto {
+    /// The rack channel the render landed on.
+    pub track: usize,
+    /// The file's name, for the status bar.
+    pub name: String,
+    pub frames: u64,
+    pub sample_rate: f64,
+    pub peak: f32,
+    /// Channels that were silent because their instrument is a hosted plugin.
+    pub hosted_channels: usize,
+    pub mixer: MixerStateDto,
 }
 
 /// Mute or unmute a track. A mute is a 10 ms fade, not a cut.

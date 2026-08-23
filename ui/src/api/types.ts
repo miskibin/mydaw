@@ -404,6 +404,61 @@ export interface AudioSourceDto {
   bytes: number;
 }
 
+/**
+ * One destructive edit to the file behind a sample channel.
+ *
+ * The engine takes these as an internally tagged value, so the wire shape is
+ * `{ kind: 'gain', db: -3 }` and adding an operation is one variant here and
+ * one arm in `app/src/sample_edit.rs`.
+ */
+export type SampleOp =
+  | { kind: 'reverse' }
+  | { kind: 'normalize' }
+  | { kind: 'trim' }
+  | { kind: 'gain'; db: number };
+
+/**
+ * What a destructive edit did, and everything needed to undo it.
+ *
+ * Edits are copy-on-write: the engine writes a new file, loads it as a new
+ * source and repoints this channel at it. So the inverse is a single
+ * `setTrackAudioSource` back to `previousSourceId` — no re-encode, one Ctrl+Z.
+ */
+export interface SampleEditDto {
+  track: number;
+  /** `Reverse`, `Normalize`, `Trim`, `Gain` — what the status bar says. */
+  op: string;
+  /** The file the channel now plays. */
+  source: AudioSourceDto;
+  /** The file it played before. Still loaded, which is what makes undo cheap. */
+  previousSourceId: number;
+  startFrames: number;
+  endFrames: number;
+  previousStartFrames: number;
+  previousEndFrames: number;
+  /** How far this lane's clips moved in the file. Non-zero only for a trim. */
+  clipOffsetShiftFrames: number;
+  mixer: MixerState;
+}
+
+/** What "Render to sample" produced. */
+export interface RenderToSampleDto {
+  /** The rack channel the render landed on. */
+  track: number;
+  /** The written file's name. */
+  name: string;
+  frames: number;
+  sampleRate: number;
+  peak: number;
+  /**
+   * Channels that were silent in the render because their instrument is a
+   * hosted CLAP or VST3 plugin — only the main thread can instantiate one, so
+   * an offline render cannot include them. Surfaced rather than hidden.
+   */
+  hostedChannels: number;
+  mixer: MixerState;
+}
+
 /** A root in the sample library: bundled Packs, or a user extra-search folder. */
 export interface LibraryRootDto {
   id: string;
