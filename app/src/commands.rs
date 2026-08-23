@@ -113,27 +113,32 @@ pub fn get_sources(state: State<'_, AppState>) -> Vec<SourceDto> {
     state.sources()
 }
 
-/// Whether the bundled sample content is installed, and what the downloader is
-/// doing about it.
+/// Every downloadable instrument, whether it is installed, and what its
+/// downloader is doing about it.
 ///
 /// Polled by the shell while a download runs, which is what draws the
-/// percentage. Cheap: file metadata plus three atomic loads, never a hash.
+/// percentage. Cheap: file metadata plus three atomic loads per instrument,
+/// never a hash.
 #[tauri::command]
-pub fn get_asset_status(state: State<'_, AppState>) -> AssetStatus {
+pub fn get_asset_status(state: State<'_, AppState>) -> Vec<AssetStatus> {
     state.asset_status()
 }
 
-/// Download the bundled sample content.
+/// Download one instrument's sample content.
 ///
-/// Returns as soon as the transfer has *started*; the shell polls
-/// [`get_asset_status`] for progress. When it finishes, the sampler rescans and
-/// the new instrument appears in [`get_sources`] with no restart.
+/// `id` is an `instrumentId` from [`get_asset_status`]. Returns as soon as the
+/// transfer has *started*; the shell polls [`get_asset_status`] for progress.
+/// When it finishes, the sampler rescans and the new instrument appears in
+/// [`get_sources`] with no restart.
 ///
 /// Nothing calls this except a user pressing the button. See the consent note
 /// in `mydaw_plugin_sampler::download`.
 #[tauri::command]
-pub fn start_asset_download(state: State<'_, AppState>) -> Result<AssetStatus, String> {
-    state.start_asset_download()?;
+pub fn start_asset_download(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<AssetStatus>, String> {
+    state.start_asset_download(&id)?;
     Ok(state.asset_status())
 }
 

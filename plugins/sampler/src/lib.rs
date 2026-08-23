@@ -66,7 +66,8 @@ pub use bank::{
 };
 pub use decode::{decode_file, DecodeError};
 pub use download::{
-    AssetDownloader, AssetManifest, AssetState, AssetStatus, DownloadError, ASSET_MANIFEST_FILE,
+    AssetCatalog, AssetDownloader, AssetManifest, AssetState, AssetStatus, CatalogEntry,
+    DownloadError, ASSET_MANIFEST_FILE,
 };
 pub use manifest::{
     InstrumentManifest, ManifestError, SampleEntry, DEFAULT_RELEASE_MS, MANIFEST_FILE_NAME,
@@ -128,12 +129,20 @@ pub fn assets_root() -> PathBuf {
         return PathBuf::from(dir);
     }
     if let Ok(cwd) = std::env::current_dir() {
-        // `Cargo.lock` marks the workspace root; `assets` catches an installed
-        // layout that has one already. Five levels is deeper than this
-        // workspace nests.
+        // `Cargo.lock` marks the workspace root; an existing `assets/instruments`
+        // catches an installed layout that has one already. Five levels is
+        // deeper than this workspace nests.
+        //
+        // The second test looks for `<dir>/assets/instruments`, not for
+        // `<dir>/instruments`: `plugins/instruments` is the *synthesised*
+        // instruments crate, and matching on its name made a `cargo test` run
+        // from `plugins/sampler` resolve the assets root to
+        // `plugins/assets` -- so every asset-dependent test skipped itself,
+        // silently, on a machine where the content was installed.
         for dir in cwd.ancestors().take(5) {
-            if dir.join("Cargo.lock").is_file() || dir.join(INSTRUMENTS_DIR).is_dir() {
-                return dir.join("assets");
+            let assets = dir.join("assets");
+            if dir.join("Cargo.lock").is_file() || assets.join(INSTRUMENTS_DIR).is_dir() {
+                return assets;
             }
         }
     }

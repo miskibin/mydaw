@@ -140,15 +140,6 @@ pub struct AssetManifest {
 }
 
 impl AssetManifest {
-    /// The manifest this build was compiled with.
-    ///
-    /// # Errors
-    /// [`DownloadError::Manifest`] if the committed file is not valid --
-    /// which is a repository error, caught by this crate's own tests.
-    pub fn embedded() -> Result<Self, DownloadError> {
-        Self::parse(ASSET_MANIFEST_JSON.as_bytes())
-    }
-
     /// Parse a manifest from JSON.
     ///
     /// # Errors
@@ -194,6 +185,126 @@ impl AssetManifest {
     /// Total size of the install, in bytes.
     pub fn total_bytes(&self) -> u64 {
         self.samples.iter().map(|entry| entry.bytes).sum()
+    }
+}
+
+/// One instrument in the catalogue, and the exact bytes to write beside its
+/// samples as `manifest.json`.
+///
+/// The JSON is carried rather than re-derived because the runtime manifest is
+/// the download manifest *unfiltered*: it keeps the `url`, `sha256`, `bytes`
+/// and `note` fields the loader ignores, so there is one description of an
+/// instrument in the repository rather than two that can drift.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatalogEntry {
+    pub manifest: AssetManifest,
+    pub json: String,
+}
+
+/// Every instrument `assets-manifest.json` offers.
+///
+/// # Two shapes, one file
+/// The file began as a single instrument object and grew a second, third and
+/// sixth. Rather than split it -- which would mean an `include_str!` per kit
+/// and a build that silently forgets one -- it grew a container:
+///
+/// ```json
+/// { "schema": 2, "instruments": [ { "id": "…", "samples": [ … ] }, … ] }
+/// ```
+///
+/// A document with a top-level `samples` array is still read as a
+/// one-instrument catalogue, so a manifest written before the container
+/// existed, or hand-cut down to one kit, still installs.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetCatalog {
+    entries: Vec<CatalogEntry>,
+}
+
+impl AssetCatalog {
+    /// The catalogue this build was compiled with.
+    ///
+    /// # Errors
+    /// [`DownloadError::Manifest`] if the committed file is not valid --
+    /// which is a repository error, caught by this crate's own tests.
+    pub fn embedded() -> Result<Self, DownloadError> {
+        Self::parse(ASSET_MANIFEST_JSON.as_bytes())
+    }
+
+    /// Parse a catalogue from JSON, in either shape.
+    ///
+    /// # Errors
+    /// [`DownloadError::Manifest`] for malformed JSON, an empty instrument
+    /// list, a duplicate instrument id, or anything
+    /// [`AssetManifest::parse`] rejects -- each message naming the instrument
+    /// it came from, because "one of your two hundred and fifty samples is
+    /// wrong" is not a usable error.
+    pub fn parse(bytes: &[u8]) -> Result<Self, DownloadError> {
+        let document: serde_json::Value =
+            serde_json::from_slice(bytes).map_err(|err| DownloadError::Manifest(err.to_string()))?;
+
+        let instruments: Vec<&serde_json::Value> = match document.get("instruments") {
+            Some(serde_json::Value::Array(list)) => list.iter().collect(),
+            Some(_) => {
+                return Err(DownloadError::Manifest(
+                    "'instruments' is present but is not an array".to_owned(),
+                ))
+            }
+            // Schema 1: the whole document is one instrument.
+            None => vec![&document],
+        };
+        if instruments.is_empty() {
+            return Err(DownloadError::Manifest(
+                "'instruments' is empty; there is nothing to install".to_owned(),
+            ));
+        }
+
+        let mut entries = Vec::with_capacity(instruments.len());
+        for value in instruments {
+            // Pretty-printed rather than compact: this string is what lands in
+            // `assets/instruments/<id>/manifest.json`, where a person debugging
+            // a kit reads it.
+            let json = serde_json::to_string_pretty(value)
+                .map_err(|err| DownloadError::Manifest(err.to_string()))?;
+            let manifest = AssetManifest::parse(json.as_bytes()).map_err(|err| match err {
+                DownloadError::Manifest(reason) => {
+                    let id = value
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("<unnamed>");
+                    DownloadError::Manifest(format!("instrument '{id}': {reason}"))
+                }
+                other => other,
+            })?;
+            if entries
+                .iter()
+                .any(|entry: &CatalogEntry| entry.manifest.id == manifest.id)
+            {
+                return Err(DownloadError::Manifest(format!(
+                    "two instruments share the id '{}'; ids are directory names",
+                    manifest.id
+                )));
+            }
+            entries.push(CatalogEntry { manifest, json });
+        }
+        Ok(Self { entries })
+    }
+
+    /// The instruments, in the order the file lists them.
+    pub fn entries(&self) -> &[CatalogEntry] {
+        &self.entries
+    }
+
+    /// One instrument by id.
+    pub fn get(&self, id: &str) -> Option<&CatalogEntry> {
+        self.entries.iter().find(|entry| entry.manifest.id == id)
+    }
+
+    /// Total size of installing everything, in bytes.
+    pub fn total_bytes(&self) -> u64 {
+        self.entries
+            .iter()
+            .map(|entry| entry.manifest.total_bytes())
+            .sum()
     }
 }
 
@@ -454,19 +565,36 @@ pub struct AssetDownloader {
 }
 
 impl AssetDownloader {
-    /// A downloader for the embedded manifest, installing under
-    /// `instruments_root`.
+    /// One downloader per instrument in this build's catalogue, all installing
+    /// under `instruments_root`.
+    ///
+    /// Per instrument rather than one for everything: the kits are separate
+    /// products -- a producer who wants the 808 should not be made to fetch a
+    /// marimba first -- and a per-instrument downloader is what lets the shell
+    /// show a row and a button for each.
+    ///
+    /// They share one [`HttpFetcher`], so they share its connection pool and
+    /// its TLS session cache, and the warning about disabled verification is
+    /// logged once rather than once per kit.
     ///
     /// # Errors
     /// [`DownloadError::Manifest`] if this build's committed manifest is not
     /// usable.
-    pub fn new(instruments_root: PathBuf) -> Result<Self, DownloadError> {
-        Ok(Self::with_parts(
-            AssetManifest::embedded()?,
-            ASSET_MANIFEST_JSON.to_owned(),
-            instruments_root,
-            Arc::new(HttpFetcher::new()),
-        ))
+    pub fn catalog(instruments_root: PathBuf) -> Result<Vec<Arc<Self>>, DownloadError> {
+        let catalog = AssetCatalog::embedded()?;
+        let fetcher: Arc<dyn Fetcher> = Arc::new(HttpFetcher::new());
+        Ok(catalog
+            .entries()
+            .iter()
+            .map(|entry| {
+                Arc::new(Self::with_parts(
+                    entry.manifest.clone(),
+                    entry.json.clone(),
+                    instruments_root.clone(),
+                    Arc::clone(&fetcher),
+                ))
+            })
+            .collect())
     }
 
     /// A downloader over an explicit manifest and fetcher. The tests' entry
@@ -822,40 +950,103 @@ mod tests {
         AssetDownloader::with_parts(manifest, json, temp.path().join("instruments"), fetcher)
     }
 
-    /// The manifest this build ships must be usable, or nothing else matters.
+    /// The catalogue this build ships must be usable, or nothing else matters.
     #[test]
     fn the_committed_asset_manifest_is_valid() {
-        let manifest = AssetManifest::embedded().expect("assets-manifest.json must parse");
-        assert!(!manifest.id.trim().is_empty());
-        assert!(!manifest.samples.is_empty());
+        let catalog = AssetCatalog::embedded().expect("assets-manifest.json must parse");
         assert!(
-            !manifest.attribution.trim().is_empty(),
-            "CC-BY content must carry its attribution"
+            !catalog.entries().is_empty(),
+            "the catalogue must offer something"
         );
+        for entry in catalog.entries() {
+            let manifest = &entry.manifest;
+            let id = &manifest.id;
+            assert!(!manifest.samples.is_empty(), "{id} has no samples");
+            assert!(
+                !manifest.attribution.trim().is_empty(),
+                "{id} must carry its attribution, whatever its licence"
+            );
+            assert!(
+                manifest.source.commit.len() >= 7,
+                "{id} must be pinned to a commit, got '{}'",
+                manifest.source.commit
+            );
+            assert!(
+                !manifest.source.license.trim().is_empty(),
+                "{id} must name its licence"
+            );
+            assert!(
+                manifest
+                    .samples
+                    .iter()
+                    .all(|file| file.url.contains(&manifest.source.commit)),
+                "{id}: every URL must be pinned to the commit the source names"
+            );
+        }
         assert!(
-            manifest.source.commit.len() >= 7,
-            "the source must be pinned to a commit, got '{}'",
-            manifest.source.commit
+            catalog.get("salamander-piano").is_some(),
+            "the piano must survive every rearrangement of this file"
         );
-        assert!(!manifest.source.license.trim().is_empty());
     }
 
-    /// The same file must parse as an instrument manifest too -- that is the
-    /// whole reason it is copied verbatim rather than transformed.
+    /// Every instrument's slice of the file must parse as an instrument
+    /// manifest too -- that is the whole reason it is copied verbatim rather
+    /// than transformed.
     #[test]
-    fn the_committed_manifest_is_also_a_valid_instrument_manifest() {
-        let instrument = crate::manifest::InstrumentManifest::parse(
-            ASSET_MANIFEST_JSON.as_bytes(),
-            Path::new(ASSET_MANIFEST_FILE),
-        )
-        .expect("the download manifest must also be a runtime manifest");
-        let download = AssetManifest::embedded().unwrap();
-        assert_eq!(instrument.id, download.id);
-        assert_eq!(instrument.samples.len(), download.samples.len());
-        assert!(
-            instrument.max_seconds.is_some(),
-            "the shipped piano must declare a memory budget"
-        );
+    fn every_catalogued_instrument_is_also_a_valid_instrument_manifest() {
+        let catalog = AssetCatalog::embedded().unwrap();
+        for entry in catalog.entries() {
+            let path = PathBuf::from(ASSET_MANIFEST_FILE);
+            let instrument =
+                crate::manifest::InstrumentManifest::parse(entry.json.as_bytes(), &path)
+                    .unwrap_or_else(|err| {
+                        panic!("'{}' must also be a runtime manifest: {err}", entry.manifest.id)
+                    });
+            assert_eq!(instrument.id, entry.manifest.id);
+            assert_eq!(instrument.samples.len(), entry.manifest.samples.len());
+            assert!(
+                instrument.max_seconds.is_some(),
+                "'{}' must declare a memory budget",
+                entry.manifest.id
+            );
+        }
+    }
+
+    /// A manifest written before the container existed still installs.
+    #[test]
+    fn a_single_instrument_document_is_a_one_instrument_catalogue() {
+        let (_, json, _) = fixture(false);
+        let catalog = AssetCatalog::parse(json.as_bytes()).expect("schema 1 must still parse");
+        assert_eq!(catalog.entries().len(), 1);
+        assert_eq!(catalog.entries()[0].manifest.id, "test-piano");
+        assert_eq!(catalog.total_bytes(), catalog.entries()[0].manifest.total_bytes());
+    }
+
+    #[test]
+    fn a_catalogue_names_the_instrument_a_bad_entry_came_from() {
+        let (_, json, _) = fixture(false);
+        let mut broken: serde_json::Value = serde_json::from_str(&json).unwrap();
+        broken["samples"][0]["url"] = serde_json::json!("http://example.invalid/a.wav");
+        let document = serde_json::json!({ "schema": 2, "instruments": [broken] });
+        let err = AssetCatalog::parse(document.to_string().as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("test-piano"), "{err}");
+        assert!(err.to_string().contains("not https"), "{err}");
+    }
+
+    #[test]
+    fn two_instruments_may_not_share_a_directory_name() {
+        let (_, json, _) = fixture(false);
+        let one: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let document = serde_json::json!({ "schema": 2, "instruments": [one.clone(), one] });
+        let err = AssetCatalog::parse(document.to_string().as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("share the id"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_catalogue_is_refused() {
+        let document = serde_json::json!({ "schema": 2, "instruments": [] });
+        let err = AssetCatalog::parse(document.to_string().as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("nothing to install"), "{err}");
     }
 
     #[test]

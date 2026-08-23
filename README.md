@@ -127,27 +127,46 @@ which is why `cargo test --workspace` is green on a fresh clone and in CI.
 ## Sample content
 
 `plugins/sampler` plays recordings, and recordings are not in this repository: `assets/` is
-gitignored and the piano is 131 MB. What *is* committed is
+gitignored and the piano alone is 131 MB. What *is* committed is
 [`assets-manifest.json`](assets-manifest.json), which pins every file's URL and SHA-256 against a
 specific upstream commit.
+
+Seven instruments are offered — the Salamander piano and the six kits of **WAVE Factory Vol. 1**
+(see [`docs/factory-library.md`](docs/factory-library.md)) — and each is a **separate download**:
+
+| Instrument | Samples | Download | Licence |
+| --- | ---: | ---: | --- |
+| Salamander Grand Piano | 90 | 131 MiB | CC-BY-3.0 |
+| 808 Kit | 30 | 2.1 MiB | CC0-1.0 |
+| 808 Bass | 10 | 2.1 MiB | CC0-1.0 |
+| Percussion & FX | 55 | 14.4 MiB | CC0-1.0 |
+| Studio Drums | 36 | 21.9 MiB | CC0-1.0 |
+| Marimba | 20 | 21.1 MiB | CC0-1.0 |
+| Glockenspiel | 10 | 8.9 MiB | CC0-1.0 |
 
 **A checkout with no assets builds, tests and runs.** The sampler starts, reports zero instruments,
 and logs a hint. The Browser's Packs root is `assets/packs` (also gitignored); drop kits in there
 when you have them. A missing or empty folder is fine — the pane just has nothing to list. Install
-the sampled piano either way you like:
+whichever instruments you want, either way you like:
 
 ```sh
-pwsh -File scripts/fetch-assets.ps1          # idempotent; -Verify re-hashes, -Force re-downloads
+pwsh -File scripts/fetch-assets.ps1 -List                 # what is on offer
+pwsh -File scripts/fetch-assets.ps1                       # all of it
+pwsh -File scripts/fetch-assets.ps1 -Instrument 808-kit,808-bass
 ```
 
-…or from inside the running app: the status bar offers
-`Download Salamander Grand Piano (131 MB)`. Nothing downloads without that click. Both installers
-read the same manifest, verify every file against its SHA-256, and write each one atomically
-(`<name>.part`, then rename) so an interrupted run never leaves a truncated sample behind. When it
-finishes, the instrument appears in the track source picker **without a restart**.
+…or from inside the running app: the Browser's footer lists every instrument with a `Download`
+button and a progress bar. Nothing downloads without that click. Both installers read the same
+manifest, verify every file against its SHA-256, and write each one atomically (`<name>.part`, then
+rename) so an interrupted run never leaves a truncated sample behind. When one finishes, that
+instrument appears in the track source picker **without a restart**.
 
-`scripts/gen-asset-manifest.ps1` regenerates the manifest from the upstream SFZ mapping. It is a
-maintenance tool, not part of a normal install.
+`scripts/gen-asset-manifest.ps1` regenerates the piano's entry from the upstream SFZ mapping;
+`scripts/gen-factory-kits.mjs` regenerates the six factory kits from their curation tables. Both are
+maintenance tools rather than part of a normal install — and both *merge* into the manifest, so
+running one never drops what the other owns. The Node generator also writes each kit's runtime
+`manifest.json`, which makes it a working cross-platform installer for the kits on a machine with no
+PowerShell.
 
 ### If your network inspects TLS
 
@@ -180,6 +199,12 @@ CC-BY-3.0 is an attribution licence. MYDAW does not redistribute these files —
 the source above — but **anything you export that contains their sound carries the credit
 requirement**. `scripts/fetch-assets.ps1` writes `assets/ATTRIBUTION.md` beside the samples, and the
 credit is also carried in the manifest and surfaced by the sampler at runtime.
+
+Every kit of WAVE Factory Vol. 1 is **CC0-1.0** — public domain, no credit required and no
+share-alike — from [tidalcycles/sounds-tr808-fischer](https://github.com/tidalcycles/sounds-tr808-fischer)
+(Michael Fischer, 1994) and the [Versilian Community Sample Library](https://github.com/sgossner/VCSL)
+(Versilian Studios LLC). The credits are written anyway, into the same `assets/ATTRIBUTION.md`;
+[`docs/factory-library.md`](docs/factory-library.md) has the full table and the key maps.
 
 Design notes, the manifest format, the memory budget and the measured verification numbers are in
 [`docs/superpowers/specs/2026-08-19-sampler-plugin.md`](docs/superpowers/specs/2026-08-19-sampler-plugin.md).

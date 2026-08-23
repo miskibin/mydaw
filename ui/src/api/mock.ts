@@ -433,6 +433,69 @@ const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
     pluginId: null,
     takesNotes: true,
   },
+  // WAVE Factory Vol. 1. In a real session these appear only once their
+  // instrument has been downloaded and decoded; the mock offers them all, so
+  // browser-only development can reach every source the shell can show.
+  {
+    id: 'sampler:808-kit',
+    label: '808 Kit',
+    description: '30 analogue drum-machine one-shots on a General MIDI drum map',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:808-bass',
+    label: '808 Bass',
+    description: 'Long-decay analogue kick played chromatically, C1-B3, two tail lengths',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:percussion-fx',
+    label: 'Percussion & FX',
+    description: 'Hand percussion on a General MIDI map, velocity-layered where recorded',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:studio-drums',
+    label: 'Studio Drums',
+    description: 'Acoustic kit on a General MIDI map, up to four velocity layers per pad',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:marimba',
+    label: 'Marimba',
+    description: 'Five octaves, wholetone-sampled, two dynamics',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:glockenspiel',
+    label: 'Glockenspiel',
+    description: 'Two and a half octaves, two dynamics',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
 ];
 
 const FIXTURE_GAIN_ID = 'dev.mydaw.fixture.gain';
@@ -785,6 +848,10 @@ export class MockBackend implements Backend {
   private saved = new Map<string, MockSession>();
   private lastSavedPath: string | null = null;
 
+  // One row per downloadable instrument, matching `assets-manifest.json`. The
+  // piano is installed and the factory kits are not, which is the state the
+  // download footer has the most to render: a tick, six buttons, and a
+  // progress bar as soon as one is pressed.
   private assets: AssetStatus[] = [
     {
       id: 'salamander-piano',
@@ -795,6 +862,24 @@ export class MockBackend implements Backend {
       bytesDone: 148_000_000,
       error: null,
     },
+    ...(
+      [
+        ['808-kit', '808 Kit', 2_300_000],
+        ['808-bass', '808 Bass', 2_200_000],
+        ['percussion-fx', 'Percussion & FX', 14_900_000],
+        ['studio-drums', 'Studio Drums', 23_000_000],
+        ['marimba', 'Marimba', 22_100_000],
+        ['glockenspiel', 'Glockenspiel', 9_300_000],
+      ] as const
+    ).map(([id, name, bytesTotal]) => ({
+      id,
+      name,
+      state: 'absent' as const,
+      progress: 0,
+      bytesTotal,
+      bytesDone: 0,
+      error: null,
+    })),
   ];
 
   private midiPorts: MidiPortDto[] = [
@@ -962,9 +1047,18 @@ export class MockBackend implements Backend {
       pluginId: plugin.id,
       takesNotes: true,
     }));
+    // A sampled instrument is only offered once its content is installed and
+    // decoded -- that is what makes pressing Download in the browser footer do
+    // something visible, here as in the real shell.
+    const ready = new Set(
+      this.assets.filter((asset) => asset.state === 'ready').map((asset) => `sampler:${asset.id}`),
+    );
+    const builtIn = INTERNAL_SOURCES.filter(
+      (source) => !source.id.startsWith('sampler:') || ready.has(source.id),
+    );
     // Built-ins, then samplers, then CLAP instruments -- and **no VST3**, which
     // reach the UI through `get_vst3_plugins` instead. Mirrors `state.rs`.
-    return [...INTERNAL_SOURCES, ...this.fileSamplers, ...scanned].map((source) => ({
+    return [...builtIn, ...this.fileSamplers, ...scanned].map((source) => ({
       ...source,
       selected: source.id === current,
     }));

@@ -17,9 +17,7 @@ use mydaw_plugin_host_vst3::{HostVst3Plugin, Vst3HostService};
 use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin, SpectrumHandoff, SpectrumOutput};
 use mydaw_plugin_midi_io::{MidiIoPlugin, MidiIoService, MidiNoteSink};
-use mydaw_plugin_sampler::{
-    AssetDownloader, AssetState, AssetStatus, SamplerPlugin, SamplerRegistry,
-};
+use mydaw_plugin_sampler::{AssetDownloader, AssetStatus, SamplerPlugin, SamplerRegistry};
 use mydaw_plugin_sequencer::{
     AudioSourceError, AudioSourceRegistry, Pattern, PatternError, PatternSet, PatternSetError,
     PlayMode, Playlist, PlaylistError, SequencerPlugin, SequencerService, SongError,
@@ -295,13 +293,15 @@ pub struct AppState {
     /// MIDI input ports. Notes go through [`EngineNoteSink`] onto the selected
     /// track; the webview only lists and pairs devices.
     midi: Arc<MidiIoService>,
-    /// Installs the sample content on demand.
+    /// Installs the sample content on demand -- one downloader per instrument
+    /// the catalogue offers, because the kits are separate downloads and the
+    /// shell shows a row and a button for each.
     ///
-    /// `None` only if this build's `assets-manifest.json` is unusable, which
+    /// Empty only if this build's `assets-manifest.json` is unusable, which
     /// the sampler crate's own tests make impossible -- but a boot failure over
-    /// an optional download would be the wrong trade, so it degrades to "the
-    /// button is not offered".
-    assets: Option<Arc<AssetDownloader>>,
+    /// an optional download would be the wrong trade, so it degrades to "no
+    /// buttons are offered".
+    assets: Vec<Arc<AssetDownloader>>,
 }
 
 impl AppState {
@@ -375,11 +375,11 @@ impl AppState {
         // A manifest this build cannot read means the in-app download is not
         // offered; everything else, including a piano installed by the script,
         // still works. So it is a warning, not a boot failure.
-        let assets = match AssetDownloader::new(mydaw_plugin_sampler::instruments_root()) {
-            Ok(downloader) => Some(Arc::new(downloader)),
+        let assets = match AssetDownloader::catalog(mydaw_plugin_sampler::instruments_root()) {
+            Ok(downloaders) => downloaders,
             Err(err) => {
                 log::warn!("the in-app asset downloader is unavailable: {err}");
-                None
+                Vec::new()
             }
         };
 
@@ -911,37 +911,28 @@ impl AppState {
         &self.sampler
     }
 
-    /// Whether the bundled sample content is installed, and what the downloader
-    /// is doing about it.
+    /// Every downloadable instrument, whether it is installed, and what its
+    /// downloader is doing about it.
     ///
-    /// Reports [`AssetState::Error`] with a sentence when this build has no
-    /// usable manifest, rather than `None`: the shell has one thing to render
-    /// either way.
-    pub fn asset_status(&self) -> AssetStatus {
-        let mut status = match self.assets.as_ref() {
-            Some(downloader) => downloader.status(),
-            None => AssetStatus {
-                installed: false,
-                instrument_ready: false,
-                state: AssetState::Error,
-                total_bytes: 0,
-                downloaded_bytes: 0,
-                files_done: 0,
-                file_count: 0,
-                instrument_id: String::new(),
-                instrument_name: String::new(),
-                error: "this build has no usable asset manifest".to_owned(),
-            },
-        };
-        // The fact the picker actually depends on: files on disk are not an
-        // instrument until the background scan has decoded them.
-        status.instrument_ready = self
-            .sampler
-            .contains(&mydaw_plugin_sampler::source_id(&status.instrument_id));
-        status
+    /// An empty list means this build has no usable manifest -- a repository
+    /// error the sampler crate's tests already catch -- and the shell renders
+    /// it as "nothing to install" rather than as a failure.
+    pub fn asset_status(&self) -> Vec<AssetStatus> {
+        self.assets
+            .iter()
+            .map(|downloader| {
+                let mut status = downloader.status();
+                // The fact the picker actually depends on: files on disk are
+                // not an instrument until the background scan has decoded them.
+                status.instrument_ready = self
+                    .sampler
+                    .contains(&mydaw_plugin_sampler::source_id(&status.instrument_id));
+                status
+            })
+            .collect()
     }
 
-    /// Start downloading the bundled sample content.
+    /// Start downloading one instrument's sample content.
     ///
     /// **Only ever called from a user's click.** Nothing here runs on its own:
     /// see the consent note in [`mydaw_plugin_sampler::download`].
@@ -951,22 +942,25 @@ impl AppState {
     /// and without this function waiting for a decode.
     ///
     /// # Errors
-    /// A sentence, for a build with no manifest or a download already running.
-    pub fn start_asset_download(&self) -> Result<(), String> {
+    /// A sentence, for an id this build does not offer or a download already
+    /// running.
+    pub fn start_asset_download(&self, instrument_id: &str) -> Result<(), String> {
         let downloader = self
             .assets
-            .as_ref()
-            .ok_or("this build has no usable asset manifest")?;
+            .iter()
+            .find(|downloader| downloader.manifest().id == instrument_id)
+            .ok_or_else(|| format!("this build does not offer an instrument '{instrument_id}'"))?;
         let sampler = Arc::clone(&self.sampler);
+        let id = instrument_id.to_owned();
         downloader
             .start(move |result| match result {
                 Ok(()) => {
-                    log::info!("sampler: assets installed; rescanning instruments");
+                    log::info!("sampler: '{id}' installed; rescanning instruments");
                     sampler.rescan_in_background();
                 }
                 // The error is already recorded in the downloader's status,
                 // which is where the UI reads it from.
-                Err(err) => log::warn!("sampler: asset install failed: {err}"),
+                Err(err) => log::warn!("sampler: installing '{id}' failed: {err}"),
             })
             .map_err(|err| err.to_string())
     }

@@ -877,9 +877,29 @@ function createAppState(): AppState {
   window.addEventListener('blur', releaseHeldNotes);
 
   // Keep polling while a download is in flight, and only then.
+  //
+  // An instrument that becomes ready has to reach the source picker without the
+  // user going and touching something else: installing is a background job that
+  // finishes minutes after the click, and `mixerCommand` -- the only other
+  // place that refetches sources -- may not run for the rest of the session. So
+  // the poll watches for the transition itself and refetches once, on the tick
+  // that sees it, rather than on every tick.
   const assetTimer = setInterval(() => {
     if (!assets().some((asset) => asset.state === 'downloading')) return;
-    backend.getAssetStatus().then(setAssets).catch(() => {});
+    const before = assets()
+      .filter((asset) => asset.state === 'ready')
+      .map((asset) => asset.id);
+    backend
+      .getAssetStatus()
+      .then((next) => {
+        setAssets(next);
+        const appeared = next.some(
+          (asset) => asset.state === 'ready' && !before.includes(asset.id),
+        );
+        if (appeared) return backend.getSources().then(setSources);
+        return undefined;
+      })
+      .catch(() => {});
   }, 500);
 
   createEffect(() => {

@@ -118,10 +118,21 @@ impl SampleEntry {
         // except next to itself. `Path::components` is what makes this a real
         // check rather than a scan for "..": it normalises separators, so
         // `..\\x`, `../x` and `/x` all fail the same way on every platform.
-        let path = Path::new(&self.file);
-        let mut components = path.components();
-        let only = components.next();
-        if components.next().is_some() || !matches!(only, Some(std::path::Component::Normal(_))) {
+        //
+        // Both separators are rejected on *every* platform, not only the one
+        // whose separator they are. `Path::components` alone is not enough:
+        // `..\secrets.wav` is a single legal file name on Unix, so a manifest
+        // written to escape a Windows install passed this check when it was
+        // read on Linux -- and a rule that holds only where the attack does not
+        // work is not a rule. A name a downloaded manifest may use is one with
+        // no separator in it at all.
+        if self.file.contains(['/', '\\'])
+            || Path::new(&self.file).components().count() != 1
+            || !matches!(
+                Path::new(&self.file).components().next(),
+                Some(std::path::Component::Normal(_))
+            )
+        {
             return Err(format!(
                 "'file' must be a plain file name in the manifest's directory, not '{}'",
                 self.file

@@ -31,3 +31,7 @@ sha2.workspace = true
 # reads. `hound` writes the synthetic WAVs the asset-free tests decode.
 mydaw-plugin-debug-tap.workspace = true
 hound.workspace = true
+# `tests/factory_kits.rs` re-derives 808 Bass's root pitch from the installed
+# recordings rather than trusting the number in the manifest -- with the same
+# analyser the sample browser uses, so the two can never disagree.
+mydaw-pitch-analysis.workspace = true

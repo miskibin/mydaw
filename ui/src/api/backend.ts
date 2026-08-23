@@ -977,8 +977,8 @@ class TauriBackend implements Backend {
     return this.call('get_midi_status');
   }
 
-  /** Map the sampler's single-download DTO onto the UI's per-asset rows. */
-  private static assetRows(dto: AssetStatusDto): AssetStatus[] {
+  /** Map one downloader's DTO onto the UI's asset row. */
+  private static assetRow(dto: AssetStatusDto): AssetStatus {
     const downloading =
       dto.state === 'downloading' ||
       dto.state === 'verifying' ||
@@ -993,26 +993,26 @@ class TauriBackend implements Backend {
           : downloading
             ? 'downloading'
             : 'absent';
-    return [
-      {
-        id: dto.instrumentId,
-        name: dto.instrumentName,
-        state,
-        progress:
-          state === 'ready' ? 1 : dto.totalBytes > 0 ? dto.downloadedBytes / dto.totalBytes : 0,
-        bytesTotal: dto.totalBytes,
-        bytesDone: dto.downloadedBytes,
-        error: dto.error.length > 0 ? dto.error : null,
-      },
-    ];
+    return {
+      id: dto.instrumentId,
+      name: dto.instrumentName,
+      state,
+      progress:
+        state === 'ready' ? 1 : dto.totalBytes > 0 ? dto.downloadedBytes / dto.totalBytes : 0,
+      bytesTotal: dto.totalBytes,
+      bytesDone: dto.downloadedBytes,
+      error: dto.error.length > 0 ? dto.error : null,
+    };
   }
 
   async getAssetStatus(): Promise<AssetStatus[]> {
-    return TauriBackend.assetRows(await this.call<AssetStatusDto>('get_asset_status'));
+    return (await this.call<AssetStatusDto[]>('get_asset_status')).map(TauriBackend.assetRow);
   }
 
-  async startAssetDownload(_id: string): Promise<AssetStatus[]> {
-    return TauriBackend.assetRows(await this.call<AssetStatusDto>('start_asset_download'));
+  async startAssetDownload(id: string): Promise<AssetStatus[]> {
+    return (await this.call<AssetStatusDto[]>('start_asset_download', { id })).map(
+      TauriBackend.assetRow,
+    );
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {

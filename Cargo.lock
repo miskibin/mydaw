@@ -2542,6 +2542,7 @@ dependencies = [
  "log",
  "mydaw-audio-file",
  "mydaw-kernel",
+ "mydaw-pitch-analysis",
  "mydaw-plugin-debug-tap",
  "mydaw-rt-core",
  "parking_lot",
