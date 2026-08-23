@@ -110,6 +110,29 @@
   padding: 2px 2px 6px;
 }
 
+/*
+ * The instrument search.
+ *
+ * Takes the leftover width so Rescan keeps its size, and wears the chip's own
+ * height and radius: they sit on one row, and two heights on one row is the
+ * kind of thing you only notice once and then cannot stop seeing.
+ */
+.wv-browser__search {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--sunk);
+  font: 500 10.5px 'Geist Variable';
+  color: var(--txt);
+}
+
+.wv-browser__search::placeholder {
+  color: var(--dim);
+}
+
 /* A greyed row must not also light up on hover: it is not a target. */
 .wv-browser .wv-disabled[title]:hover {
   background: transparent;

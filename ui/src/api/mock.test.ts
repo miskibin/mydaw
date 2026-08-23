@@ -21,29 +21,25 @@ describe('rack sample replacement', () => {
     expect(track.inserts).toHaveLength(1);
   });
 
-  it('starts the rack drums as sample channels', async () => {
+  it('starts the rack as a kit channel and a melodic one', async () => {
     const backend = new MockBackend();
     const mixer = await backend.getTracks();
-    expect(mixer.tracks[0]?.engine).toBe('sample');
-    expect(mixer.tracks[0]?.audioSourceId).toBe(1);
-    expect(mixer.tracks[1]?.engine).toBe('sample');
+    expect(mixer.tracks).toHaveLength(2);
+    expect(mixer.tracks[0]?.sourceId).toBe('sampler:808-kit');
+    expect(mixer.tracks[0]?.engine).toBe('sampler');
+    expect(mixer.tracks[1]?.sourceId).toBe('sampler:salamander-piano');
+
+    // The kit is on a General MIDI map, so its grid fires the GM kick; the
+    // melodic channel fires middle C.
     const pattern = (await backend.getPattern()).patternSet.active;
-    expect(pattern.channels.map((clip) => clip.steps?.key)).toEqual([60, 60, 60, 60, 60]);
+    expect(pattern.channels.map((clip) => clip.steps?.key)).toEqual([36, 60]);
   });
 
-  it('places a Sounds-tab drum as a sample channel', async () => {
+  it('refuses a drum id the engine no longer has', async () => {
     const backend = new MockBackend();
-    const mixer = await backend.addTrack('snare', 'Snare');
-    const track = mixer.tracks.at(-1)!;
-    expect(track.engine).toBe('sample');
-    expect(track.sourceId).toMatch(/^oneshot:/);
-    expect(track.audioSourceId).toBeGreaterThan(0);
-    expect(track.name).toBe('Snare');
-
-    const kit = await backend.addTrack('drum-kit', 'Drum Kit');
-    const placed = kit.tracks.at(-1)!;
-    expect(placed.engine).toBe('synth');
-    expect(placed.sourceId).toBe('drum-kit');
+    for (const gone of ['kick', 'snare', 'drum-kit']) {
+      await expect(backend.addTrack(gone, 'Drums')).rejects.toThrow(`unknown source '${gone}'`);
+    }
   });
 });
 
@@ -79,9 +75,9 @@ describe('browser preview', () => {
   it('auditions the clicked instrument id, not the selected rack source', async () => {
     const backend = new MockBackend();
     const sources = await backend.getSources();
-    expect(sources.some((source) => source.id === 'kick')).toBe(true);
-    await backend.previewInstrument('snare');
-    expect(backend.lastPreview).toBe('snare');
+    expect(sources.some((source) => source.id === 'sampler:808-kit')).toBe(true);
+    await backend.previewInstrument('poly-synth');
+    expect(backend.lastPreview).toBe('poly-synth');
   });
 
   it('stops a preview when the transport stops', async () => {
@@ -459,6 +455,20 @@ describe('audio input and recording', () => {
 });
 
 describe('destructive sample edits', () => {
+  /**
+   * A session whose channel 0 is a one-shot over a loaded file.
+   *
+   * The starter rack is a sampled *instrument* and a synth, neither of which is
+   * an editable take, so these build the channel they need. The returned id is
+   * the source the channel plays.
+   */
+  async function withSample(): Promise<{ backend: MockBackend; sourceId: number }> {
+    const backend = new MockBackend();
+    const sample = await backend.loadAudioSource('C:\samples\take.wav');
+    await backend.setTrackSource(0, `oneshot:${sample.id}`);
+    return { backend, sourceId: sample.id };
+  }
+
   /** The loudest point of a source's drawn envelope. */
   async function peakOf(backend: MockBackend, sourceId: number): Promise<number> {
     const wave = await backend.getAudioWaveform(sourceId, 512);
@@ -466,7 +476,7 @@ describe('destructive sample edits', () => {
   }
 
   it('writes a new source and leaves the original loaded', async () => {
-    const backend = new MockBackend();
+    const { backend } = await withSample();
     const before = (await backend.getTracks()).tracks[0]!.audioSourceId!;
     const edit = await backend.editTrackSample(0, { kind: 'reverse' });
 
@@ -478,8 +488,8 @@ describe('destructive sample edits', () => {
   });
 
   it('actually turns the waveform around', async () => {
-    const backend = new MockBackend();
-    const before = await backend.getAudioWaveform(1, 64);
+    const { backend, sourceId } = await withSample();
+    const before = await backend.getAudioWaveform(sourceId, 64);
     const edit = await backend.editTrackSample(0, { kind: 'reverse' });
     const after = await backend.getAudioWaveform(edit.source.id, 64);
     expect(after.peaks).not.toEqual(before.peaks);
@@ -489,15 +499,15 @@ describe('destructive sample edits', () => {
   });
 
   it('normalizes to the same target the engine uses', async () => {
-    const backend = new MockBackend();
+    const { backend } = await withSample();
     const edit = await backend.editTrackSample(0, { kind: 'normalize' });
     const peak = await peakOf(backend, edit.source.id);
     expect(20 * Math.log10(peak)).toBeCloseTo(-0.3, 2);
   });
 
   it('applies a gain in dB and clamps an absurd one', async () => {
-    const backend = new MockBackend();
-    const before = await peakOf(backend, 1);
+    const { backend, sourceId } = await withSample();
+    const before = await peakOf(backend, sourceId);
     const quieter = await backend.editTrackSample(0, { kind: 'gain', db: -6 });
     expect(await peakOf(backend, quieter.source.id)).toBeCloseTo(before * 10 ** (-6 / 20), 4);
     expect(quieter.source.name).toContain('-6.0 dB');
@@ -507,8 +517,8 @@ describe('destructive sample edits', () => {
   });
 
   it('trims to the region, clears it, and reports the clip shift', async () => {
-    const backend = new MockBackend();
-    const source = (await backend.getAudioSources()).find((entry) => entry.id === 1)!;
+    const { backend, sourceId } = await withSample();
+    const source = (await backend.getAudioSources()).find((entry) => entry.id === sourceId)!;
     const start = Math.floor(source.frames / 4);
     const end = Math.floor(source.frames / 2);
     await backend.setTrackSampleRegion(0, start, end);
@@ -522,7 +532,7 @@ describe('destructive sample edits', () => {
   });
 
   it('refuses a trim with no region, and any edit on a synth channel', async () => {
-    const backend = new MockBackend();
+    const { backend } = await withSample();
     await expect(backend.editTrackSample(0, { kind: 'trim' })).rejects.toThrow('region');
     const synth = (await backend.getTracks()).tracks.find(
       (entry) => entry.engine !== 'sample' && entry.engine !== 'clip',
@@ -533,7 +543,7 @@ describe('destructive sample edits', () => {
   });
 
   it('undoes in one repoint, region and all', async () => {
-    const backend = new MockBackend();
+    const { backend } = await withSample();
     const before = (await backend.getTracks()).tracks[0]!;
     await backend.setTrackSampleRegion(0, 100, 4_000);
     const edit = await backend.editTrackSample(0, { kind: 'trim' });
@@ -552,7 +562,7 @@ describe('destructive sample edits', () => {
   });
 
   it('leaves another channel on the same take alone', async () => {
-    const backend = new MockBackend();
+    const { backend } = await withSample();
     const shared = (await backend.getTracks()).tracks[0]!.audioSourceId!;
     const twin = (await backend.setTrackSource(1, `oneshot:${shared}`)).tracks[1]!;
     expect(twin.audioSourceId).toBe(shared);

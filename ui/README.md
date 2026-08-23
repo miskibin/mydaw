@@ -38,10 +38,10 @@ inside Tauri never pulls the fixture file into the bundle.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ TopBar   WAVE · transport · clock · BPM · PAT/SONG · pattern · views · ☀ │
 ├──────────┬────────────────────────────────────────────┬──────────────────┤
-│ Browser  │  PLAYLIST (F5) | RACK (F6) | MIXER (F9)    │ Picker           │
-│ Sounds   │                                            │ Inspector        │
-│ Plugins  │        or the fullscreen PIANO ROLL (F7)   │  instrument      │
-│ Audio    │                                            │  insert cards    │
+│ Browser     │  PLAYLIST (F5) | RACK (F6) | MIXER (F9) │ Picker           │
+│ Instruments │                                         │ Inspector        │
+│ Files       │     or the fullscreen PIANO ROLL (F7)    │  instrument      │
+│             │                                         │  insert cards    │
 ├──────────┴────────────────────────────────────────────┴──────────────────┤
 │ StatusBar  device · buffer · latency · ⟨parameter readout⟩ · hint/error   │
 └──────────────────────────────────────────────────────────────────────────┘
@@ -179,7 +179,7 @@ wonder where the lead went.
 
 | Command | Shape |
 | --- | --- |
-| `get_clap_plugins` / `get_vst3_plugins` | `{ rescan }`. **Slow on the first call**, so the browser only asks when the Plugins tab is first opened |
+| `get_clap_plugins` / `get_vst3_plugins` | `{ rescan }`. **Slow on the first call**, so the browser only asks when the Instruments tab is first opened |
 | `open_clap_gui` / `close_clap_gui` / `open_vst3_gui` / `close_vst3_gui` | `{ target }` (`{slot:'track',index}` or `{slot:'master'}`). Native windows, several at once |
 | `save_clap_state` / `load_clap_state` | an empty string means the plugin has no state extension |
 | `get_project_info` | `ProjectInfo { path, name, missingPlugins, warnings }` |

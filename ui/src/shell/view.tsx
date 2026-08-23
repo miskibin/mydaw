@@ -27,7 +27,7 @@ import type { StripRef } from '../state';
 export type MainView = 'playlist' | 'rack' | 'mixer' | 'settings';
 
 /** Which tree the browser is showing. */
-export type BrowserTab = 'sounds' | 'plugins' | 'audio';
+export type BrowserTab = 'instruments' | 'files';
 
 /** Which half of the right-hand panel is up. */
 export type SideTab = 'picker' | 'inspector';
@@ -248,7 +248,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [sampleEditor, setSampleEditor] = createSignal<number | null>(null);
   const [browserOpen, setBrowserOpen] = createSignal(true);
   const [browserWidth, setBrowserWidth] = createSignal(DEFAULT_BROWSER_WIDTH);
-  const [browserTab, setBrowserTab] = createSignal<BrowserTab>('sounds');
+  const [browserTab, setBrowserTab] = createSignal<BrowserTab>('instruments');
   const [sideOpen, setSideOpen] = createSignal(true);
   const [sideTab, setSideTab] = createSignal<SideTab>('inspector');
   const [pickerTab, setPickerTab] = createSignal<PickerTab>('patterns');

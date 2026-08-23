@@ -5,10 +5,10 @@ audio I/O, metering, CLAP/VST3 hosting and UI panels all register against the sa
 Tauri v2 + SolidJS on the front, a lock-free real-time audio graph behind the wall.
 
 Status: **Phase 1 — the engine plays.** It boots, lists its plugins, streams meters to the UI, and
-you can play it: a built-in eight-voice synth, a synthesised drum kit, a 440 Hz test tone or a
-hosted CLAP instrument, chosen from the transport bar and driven from the computer keyboard
-(`A W S E D F T G Y H U J`, `Z`/`X` for the octave; `C V B N` are drum pads when the kit is
-selected). No sequencing, no mixer, no project files yet.
+you can play it: a built-in eight-voice synth, the sampled factory instruments, a 440 Hz test
+tone or a hosted CLAP instrument, chosen from the browser and driven from the computer keyboard
+(`A W S E D F T G Y H U J`, `Z`/`X` for the octave). No sequencing, no mixer, no project files
+yet.
 See [`docs/superpowers/specs/2026-08-19-step3-internal-instruments.md`](docs/superpowers/specs/2026-08-19-step3-internal-instruments.md).
 
 Seeing what it plays, without speakers:
@@ -43,7 +43,7 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `plugins/metering` | Owns the audio-thread → UI meter queue and the Meters panel |
 | `plugins/debug-tap` | RT-safe capture of the output bus, plus WAV / annotated PNG / statistics — so the engine can be *inspected* without ears |
 | `plugins/test-tone` | 440 Hz sine `RtNode`; the vehicle for the Phase 1 RT spike |
-| `plugins/instruments` | The built-in instruments: four synthesised drums (one per channel), a legacy drum kit and a polyBLEP poly synth, driven by note events. No assets, bit-deterministic, zero-alloc |
+| `plugins/instruments` | The polyBLEP poly synth, driven by note events. No assets, bit-deterministic, zero-alloc — which makes it the honest fallback when the sampled instruments are not installed. The drums used to be here; they are `sampler:808-kit` now |
 | `plugins/effects` | The mixer effects that ship inside the DAW: EQ, compressor, delay, saturator and utility, driven by the parameter system. Transparent at their defaults, click-free on bypass, zero-alloc. See [`the spec`](docs/superpowers/specs/2026-08-19-param-system-effects-v1.md) |
 | `plugins/sequencer` | Patterns, the playlist and the scheduler: a set of named patterns, an arrangement of clips, and PAT/SONG playback that is drift-free by construction. See [`the spec`](docs/superpowers/specs/2026-08-19-engine-patterns-playlist.md) |
 | `plugins/sampler` | The sampled instrument: a manifest-driven, 32-voice sample player, plus the checksummed fetcher that installs its content. See [Sample content](#sample-content) |
@@ -145,8 +145,9 @@ Seven instruments are offered — the Salamander piano and the six kits of **WAV
 | Glockenspiel | 10 | 8.9 MiB | CC0-1.0 |
 
 **A checkout with no assets builds, tests and runs.** The sampler starts, reports zero instruments,
-and logs a hint. The Browser's Packs root is `assets/packs` (also gitignored); drop kits in there
-when you have them. A missing or empty folder is fine — the pane just has nothing to list. Install
+and logs a hint. The Files tab lists `assets/instruments` as a read-only **Factory** root, so a
+single kick can be dragged out of a kit as a one-shot; its **Packs** root is `assets/packs` (also
+gitignored), where you drop kits of your own. A missing or empty folder is fine — the pane just has nothing to list. Install
 whichever instruments you want, either way you like:
 
 ```sh

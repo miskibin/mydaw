@@ -1,16 +1,30 @@
 /**
- * The browser: what you can put on a track, and where audio comes from.
+ * The browser: what a channel can play, and where audio comes from.
  *
- * Three trees: `get_sources` for the instruments, the plugin scan for CLAP and
- * VST3, and the sample library (factory Packs, extra-search folders, and the
- * session's loaded files). Nothing here is decorative -- a row that cannot do
- * anything is drawn `.wv-disabled` with a `title` saying why.
+ * Two tabs. **Instruments** is one searched list of everything that can sit at
+ * the head of a channel -- the built-ins, the sampled instruments, and every
+ * scanned CLAP and VST3 -- with the format as a badge on the row rather than as
+ * a tab of its own. **Files** is the sample library: the read-only Factory root,
+ * the Packs drop folder, extra-search folders, and the session's loaded files.
+ *
+ * Nothing here is decorative -- a row that cannot do anything is drawn
+ * `.wv-disabled` with a `title` saying why.
+ *
+ * # Why not three tabs
+ * There were: Sounds, Plugins, Audio. That sorted instruments by *who wrote
+ * them*, which is not a question anyone asks while writing music -- and it was
+ * not even true, since Poly Synth and the sampler are plugins too. `InstrumentMenu`
+ * had already merged the same list for the same reason.
+ *
+ * # Why effects are not here
+ * They are added from the mixer's insert picker, where you are already looking
+ * at the strip you want one on. A browser tab for them would be a second place
+ * to look for something you reach for from one place.
  *
  * Two deliberate departures from `.design/wave-studio.html`:
  *
  * - The mock's third tab is **Presets**. The engine has no preset system at all,
- *   so drawing one would be a tab that answers nothing. It is **Audio** instead:
- *   a filesystem index of samples, the same idea as FL Studio's Browser.
+ *   so drawing one would be a tab that answers nothing.
  * - The mock's footer is a waveform preview of the highlighted row. Clicking a
  *   sample auditions it through the engine; the footer is the asset-download
  *   row, which is real and has nowhere else to live.
@@ -18,7 +32,7 @@
 
 import { createMemo, createSignal, For, Index, onMount, Show, type JSX } from 'solid-js';
 
-import type { AudioSourceDto, LibraryEntryDto, LibraryRootDto, SourceDto } from '../api/types';
+import type { AudioSourceDto, LibraryEntryDto, LibraryRootDto } from '../api/types';
 import {
   clampBrowserWidth,
   DEFAULT_BROWSER_WIDTH,
@@ -26,6 +40,11 @@ import {
   MIN_BROWSER_WIDTH,
 } from '../lib/browserSize';
 import { encodeDrop } from '../lib/dnd';
+import {
+  filterInstruments,
+  instrumentRows,
+  type InstrumentRow,
+} from '../lib/instruments';
 import { classifyLibraryEntry, type LibrarySemantic } from '../lib/librarySemantics';
 import { useAppState } from '../state';
 import { startDrag } from '../ui/drag';
@@ -34,13 +53,6 @@ import { LibraryIcon } from '../ui/LibraryIcon';
 import { useView, type BrowserTab } from './view';
 
 import '../styles/browser.css';
-
-/** The drum sources, by the ids `app/src/source.rs` gives them. */
-const DRUM_IDS = new Set(['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'drum-kit']);
-/** The melodic built-ins. */
-const SYNTH_IDS = new Set(['poly-synth', 'test-tone']);
-/** The groups, in the order they are drawn. */
-const SOUND_GROUPS = ['Drums', 'Synths', 'Sampler', 'Other'] as const;
 
 const GENERIC_FOLDER_SEMANTIC: LibrarySemantic = {
   primary: 'audio',
@@ -60,33 +72,14 @@ const GENERIC_INSTRUMENT_SEMANTIC: LibrarySemantic = {
   label: 'Instrument plugin',
 };
 
-const EFFECT_SEMANTIC: LibrarySemantic = {
-  primary: 'fx',
-  shape: null,
-  content: 'fx',
-  format: null,
-  evidence: 'name',
-  label: 'Effect plugin',
-};
-
-const GENERIC_PLUGIN_SEMANTIC: LibrarySemantic = {
-  primary: 'audio',
-  shape: null,
-  content: null,
-  format: null,
-  evidence: 'name',
-  label: 'Plugin',
-};
-
 function instrumentPluginSemantic(name: string): LibrarySemantic {
   const inferred = classifyLibraryEntry({ name, relPath: name, kind: 'file' });
   return inferred.primary === 'audio' ? GENERIC_INSTRUMENT_SEMANTIC : inferred;
 }
 
 const BROWSER_TABS: readonly { id: BrowserTab; label: string }[] = [
-  { id: 'sounds', label: 'Sounds' },
-  { id: 'plugins', label: 'Plugins' },
-  { id: 'audio', label: 'Audio' },
+  { id: 'instruments', label: 'Instruments' },
+  { id: 'files', label: 'Files' },
 ];
 
 export function Browser(): JSX.Element {
@@ -168,14 +161,11 @@ function BrowserBody(): JSX.Element {
       </div>
 
       <div class="wv-browser__tree">
-        <Show when={view.browserTab() === 'sounds'}>
-          <SoundsTree />
+        <Show when={view.browserTab() === 'instruments'}>
+          <InstrumentsTree />
         </Show>
-        <Show when={view.browserTab() === 'plugins'}>
-          <PluginsTree />
-        </Show>
-        <Show when={view.browserTab() === 'audio'}>
-          <AudioTree />
+        <Show when={view.browserTab() === 'files'}>
+          <FilesTree />
         </Show>
       </div>
 
@@ -356,185 +346,28 @@ function LeafRow(props: {
   );
 }
 
-/** Open/closed state for a set of directory rows, defaulting to open. */
-function useFolders(): [(key: string) => boolean, (key: string) => void] {
-  const [closed, setClosed] = createSignal<Record<string, true>>({});
-  const isOpen = (key: string) => closed()[key] === undefined;
-  const toggle = (key: string) =>
-    setClosed((current) => {
-      const next = { ...current };
-      if (next[key] === undefined) next[key] = true;
-      else delete next[key];
-      return next;
-    });
-  return [isOpen, toggle];
-}
-
 // ---------------------------------------------------------------------------
-// Sounds
+// Instruments
 // ---------------------------------------------------------------------------
-
-/** Which folder an engine source belongs in. Hosted plugins are not in this tree. */
-function groupOf(source: SourceDto): (typeof SOUND_GROUPS)[number] | null {
-  if (source.kind !== 'internal') return null;
-  if (DRUM_IDS.has(source.id)) return 'Drums';
-  if (SYNTH_IDS.has(source.id)) return 'Synths';
-  if (source.id.startsWith('sampler:')) return 'Sampler';
-  return 'Other';
-}
 
 /**
- * The instrument tree.
+ * Everything a channel can play, in one searched list.
  *
- * Hosted CLAP and VST3 sources are deliberately left out even though
- * `get_sources` offers them: they are in the Plugins tab with their format
- * badge, and a plugin listed twice under two names is a browser you cannot
- * trust.
+ * The rows are built by `lib/instruments`, which is where the ordering and the
+ * search live; this draws them and places them. Rescan sits at the top because
+ * it is the one control that opens plugin bundles, and the count next to it is
+ * the answer to "did the scan find my plugins".
  */
-function SoundsTree(): JSX.Element {
+function InstrumentsTree(): JSX.Element {
   const app = useAppState();
-  const [isOpen, toggle] = useFolders();
-
-  const groups = createMemo(() => {
-    const buckets = new Map<string, SourceDto[]>();
-    for (const source of app.sources()) {
-      const group = groupOf(source);
-      if (group === null) continue;
-      const bucket = buckets.get(group);
-      if (bucket) bucket.push(source);
-      else buckets.set(group, [source]);
-    }
-    return SOUND_GROUPS.map((name) => ({ name, sources: buckets.get(name) ?? [] })).filter(
-      (group) => group.sources.length > 0,
-    );
-  });
-
-  const full = () => {
-    const mixer = app.mixer();
-    return mixer !== undefined && mixer.tracks.length >= mixer.maxTracks;
-  };
-
-  function preview(source: SourceDto): void {
-    void app.backend.previewInstrument(source.id).catch(app.report);
-  }
-
-  const rowTitle = (source: SourceDto) =>
-    `${source.description}\nClick to preview ${source.label}. Drag onto the rack, or + for a channel of its own.`;
-
-  return (
-    <Show
-      when={groups().length > 0}
-      fallback={
-        <div class="wv-empty">
-          No instruments.
-          <span class="wv-empty__hint">the engine reported an empty source list</span>
-        </div>
-      }
-    >
-      <Index each={groups()}>
-        {(group) => (
-          <>
-            <DirRow
-              label={group().name}
-              count={group().sources.length}
-              open={isOpen(group().name)}
-              onToggle={() => toggle(group().name)}
-              semantic={classifyLibraryEntry({
-                name: group().name,
-                relPath: group().name,
-                kind: 'dir',
-              })}
-            />
-            <Show when={isOpen(group().name)}>
-              <Index each={group().sources}>
-                {(source) => (
-                  <LeafRow
-                    name={source().label}
-                    meta={source().takesNotes ? 'keys' : 'tone'}
-                    title={rowTitle(source())}
-                    dragData={`inst::${source().id}`}
-                    active={source().selected}
-                    onClick={() => preview(source())}
-                    add={{
-                      title: full()
-                        ? `The rack is full (${app.mixer()?.maxTracks ?? 0} channels)`
-                        : `Add a rack channel playing ${source().label}`,
-                      disabled: full(),
-                      run: () =>
-                        void app.mixerCommand((backend) =>
-                          backend.addTrack(source().id, source().label),
-                        ),
-                    }}
-                  />
-                )}
-              </Index>
-            </Show>
-          </>
-        )}
-      </Index>
-    </Show>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Plugins
-// ---------------------------------------------------------------------------
-
-/** One scanned plugin, flattened out of the two format-specific DTOs. */
-interface PluginRow {
-  key: string;
-  format: 'CLAP' | 'VST3';
-  name: string;
-  vendor: string;
-  path: string;
-  pluginId: string;
-  kind: string;
-  instrument: boolean;
-}
-
-/**
- * The plugin list, in two folders.
- *
- * Opening a module runs vendor `init()`, which is how unlicensed plugins pop an
- * activation window, so this tab only reads the on-disk cache. Rescan is the
- * one control that opens plugins.
- */
-function PluginsTree(): JSX.Element {
-  const app = useAppState();
-  const [isOpen, toggle] = useFolders();
+  const [query, setQuery] = createSignal('');
 
   onMount(() => void app.loadDevices());
 
-  const clap = createMemo<PluginRow[]>(() =>
-    app.clapPlugins().map((plugin) => ({
-      key: `clap:${plugin.path}:${plugin.id}`,
-      format: 'CLAP',
-      name: plugin.name.length > 0 ? plugin.name : plugin.id,
-      vendor: plugin.vendor,
-      path: plugin.path,
-      pluginId: plugin.id,
-      kind: plugin.kind,
-      instrument: plugin.kind === 'instrument',
-    })),
+  const rows = createMemo(() =>
+    instrumentRows(app.sources(), app.clapPlugins(), app.vst3Plugins()),
   );
-
-  const vst3 = createMemo<PluginRow[]>(() =>
-    app.vst3Plugins().map((plugin) => ({
-      key: `vst3:${plugin.path}:${plugin.id}`,
-      format: 'VST3',
-      name: plugin.name.length > 0 ? plugin.name : plugin.id,
-      vendor: plugin.vendor,
-      path: plugin.path,
-      pluginId: plugin.id,
-      kind: plugin.kind,
-      instrument: plugin.kind === 'instrument',
-    })),
-  );
-
-  const folders = createMemo(() => [
-    { name: 'CLAP', rows: clap() },
-    { name: 'VST3', rows: vst3() },
-  ]);
+  const shown = createMemo(() => filterInstruments(rows(), query()));
 
   const full = () => {
     const mixer = app.mixer();
@@ -542,28 +375,51 @@ function PluginsTree(): JSX.Element {
   };
 
   /**
-   * Add a channel and put the plugin at its head, as one command.
+   * Add a channel and put the instrument at its head.
    *
-   * `add_track` only takes a built-in source id, so the plugin has to be placed
-   * afterwards -- and both calls go inside one `mixerCommand` so that only the
-   * *final* state is adopted. Adopting the intermediate one would flash a track
-   * called "Diva" playing the poly synth.
+   * A built-in is one call. A plugin is two, because `add_track` only takes a
+   * built-in source id -- and both go inside one `mixerCommand` so that only the
+   * *final* state is adopted. Adopting the intermediate one would flash a
+   * channel called "Diva" playing the poly synth.
    */
-  function addPluginTrack(row: PluginRow): void {
+  function add(row: InstrumentRow): void {
     void app.mixerCommand(async (backend) => {
-      const placed = await backend.addTrack('poly-synth', row.name);
+      if (row.place.via === 'source') {
+        return backend.addTrack(row.place.id, row.label);
+      }
+      const placed = await backend.addTrack('poly-synth', row.label);
       const index = placed.tracks.length - 1;
-      return row.format === 'CLAP'
-        ? backend.setTrackSourceClap(index, row.path, row.pluginId)
-        : backend.setTrackSourceVst3(index, row.path, row.pluginId);
+      return row.place.via === 'clap'
+        ? backend.setTrackSourceClap(index, row.place.path, row.place.pluginId)
+        : backend.setTrackSourceVst3(index, row.place.path, row.place.pluginId);
     });
   }
 
-  const anyRows = () => clap().length > 0 || vst3().length > 0;
+  /** Built-ins render offline, so only they can be auditioned from a row. */
+  function preview(row: InstrumentRow): void {
+    if (row.place.via !== 'source') return;
+    void app.backend.previewInstrument(row.place.id).catch(app.report);
+  }
+
+  function title(row: InstrumentRow): string {
+    const action =
+      row.place.via === 'source'
+        ? `Click to preview ${row.label}. Drag onto the rack, or + for a channel of its own.`
+        : 'Drag onto the rack, or + for a channel of its own.';
+    return `${row.detail}\n${action}`;
+  }
 
   return (
     <>
       <div class="wv-browser__bar">
+        <input
+          type="search"
+          class="wv-browser__search"
+          placeholder="Search instruments"
+          aria-label="Search instruments"
+          value={query()}
+          onInput={(event) => setQuery(event.currentTarget.value)}
+        />
         <button
           type="button"
           class="wv-chip wv-can-disable"
@@ -573,8 +429,6 @@ function PluginsTree(): JSX.Element {
         >
           {app.scanning() ? 'Scanning…' : 'Rescan'}
         </button>
-        <span class="wv-spacer" />
-        <span class="wv-row__meta">{clap().length + vst3().length} found</span>
       </div>
 
       <Show when={app.scanning()}>
@@ -584,67 +438,38 @@ function PluginsTree(): JSX.Element {
       </Show>
 
       <Show
-        when={anyRows() || app.scanning()}
+        when={shown().length > 0}
         fallback={
           <div class="wv-empty">
-            No plugins listed.
-            <span class="wv-empty__hint">Rescan opens each module — unlicensed plugins may ask to activate</span>
+            {query().trim().length > 0 ? 'Nothing matches.' : 'No instruments.'}
+            <span class="wv-empty__hint">
+              {query().trim().length > 0
+                ? 'clear the search to see everything'
+                : 'Rescan opens each module — unlicensed plugins may ask to activate'}
+            </span>
           </div>
         }
       >
-        <Index each={folders()}>
-          {(folder) => (
-            <Show when={folder().rows.length > 0}>
-              <DirRow
-                label={folder().name}
-                count={folder().rows.length}
-                open={isOpen(folder().name)}
-                onToggle={() => toggle(folder().name)}
-                semantic={GENERIC_FOLDER_SEMANTIC}
-              />
-              <Show when={isOpen(folder().name)}>
-                <Index each={folder().rows}>
-                  {(row) => (
-                    <Show
-                      when={row().instrument}
-                      fallback={
-                        <div
-                          class="wv-row wv-tree__leaf wv-tree__leaf--semantic wv-disabled"
-                          title="Effects are added from the Inspector's + buttons"
-                        >
-                          <LibraryIcon
-                            semantic={
-                              row().kind === 'audio-effect'
-                                ? EFFECT_SEMANTIC
-                                : GENERIC_PLUGIN_SEMANTIC
-                            }
-                            kind="file"
-                          />
-                          <span class="wv-row__name">{row().name}</span>
-                          <span class="wv-spacer" />
-                          <span class="wv-badge">{row().kind}</span>
-                        </div>
-                      }
-                    >
-                      <LeafRow
-                        name={row().name}
-                        meta={row().kind}
-                        semantic={instrumentPluginSemantic(row().name)}
-                        title={`${row().name}${row().vendor.length > 0 ? ` — ${row().vendor}` : ''}\n${row().path}\nDrag onto the rack, or + for a channel of its own.`}
-                        dragData={`inst::${row().format === 'CLAP' ? 'clap' : 'vst3'}:${row().pluginId}`}
-                        add={{
-                          title: full()
-                            ? `The rack is full (${app.mixer()?.maxTracks ?? 0} channels)`
-                            : `Add a rack channel hosting ${row().name}`,
-                          disabled: full(),
-                          run: () => addPluginTrack(row()),
-                        }}
-                      />
-                    </Show>
-                  )}
-                </Index>
-              </Show>
-            </Show>
+        <Index each={shown()}>
+          {(row) => (
+            <LeafRow
+              name={row().label}
+              meta={row().badge}
+              semantic={
+                row().builtIn ? undefined : instrumentPluginSemantic(row().label)
+              }
+              title={title(row())}
+              dragData={row().dragData}
+              active={row().selected}
+              {...(row().place.via === 'source' ? { onClick: () => preview(row()) } : {})}
+              add={{
+                title: full()
+                  ? `The rack is full (${app.mixer()?.maxTracks ?? 0} channels)`
+                  : `Add a rack channel playing ${row().label}`,
+                disabled: full(),
+                run: () => add(row()),
+              }}
+            />
           )}
         </Index>
       </Show>
@@ -652,8 +477,9 @@ function PluginsTree(): JSX.Element {
   );
 }
 
+
 // ---------------------------------------------------------------------------
-// Audio
+// Files
 // ---------------------------------------------------------------------------
 
 /** `2:07` or `4.20s`, from the file's own duration. */
@@ -679,7 +505,7 @@ export function formatRate(rate: number): string {
  * sample auditions it, dragging it onto a playlist lane loads it. Decode
  * happens on use, not when the row is drawn.
  */
-function AudioTree(): JSX.Element {
+function FilesTree(): JSX.Element {
   const app = useAppState();
   const view = useView();
   const [roots, setRoots] = createSignal<LibraryRootDto[]>([]);

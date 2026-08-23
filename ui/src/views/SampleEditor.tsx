@@ -3,10 +3,10 @@
  * the three knobs a sampled channel has.
  *
  * Clip and one-shot channels share it -- they are the same file behind
- * different triggers. Sounds-tab drums are one-shots too, so Kick/Snare get
- * the waveform, fades and region. Poly Synth keeps its own editor; the test
- * tone still opens here for a preview of one hit, minus the region controls
- * it has no frames to apply to.
+ * different triggers -- so a factory kick dragged out of the Files tab gets the
+ * waveform, fades and region. Poly Synth keeps its own editor; the test tone
+ * still opens here for a preview of one hit, minus the region controls it has
+ * no frames to apply to.
  *
  * ## Why the knobs keep a local copy
  *

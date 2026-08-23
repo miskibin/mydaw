@@ -465,7 +465,12 @@ export interface RenderToSampleDto {
 export interface LibraryRootDto {
   id: string;
   name: string;
-  kind: 'packs' | 'extra';
+  /**
+   * `factory` is the sampled instruments' own directory and `packs` the drop
+   * folder; both are read-only and neither can be removed. `extra` is a folder
+   * the user added.
+   */
+  kind: 'factory' | 'packs' | 'extra';
   path: string;
 }
 

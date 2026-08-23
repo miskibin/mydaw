@@ -162,43 +162,22 @@ const STEP_VELOCITY = 0.78;
 const DEFAULT_BPM = 130;
 const MIN_BPM = 20;
 const MAX_BPM = 999;
+/** Mirrors `KIT_ID` in `app/src/project.rs`. */
+const KIT_SOURCE_ID = 'sampler:808-kit';
+/** Mirrors `KIT_STEP_KEY`: the General MIDI kick, which is what the kit maps. */
+const KIT_STEP_KEY = 36;
 const SAMPLE_RATE = 48_000;
 const FRAME_HZ = 30;
 /** Mirrors `MAX_RECORD_SECONDS` in `plugins/audio-io/src/record.rs`. */
 const MAX_RECORD_SECONDS = 300;
 
-/** One-shot drums and the synth all fire C4, so a hit plays at recorded pitch. */
-const DEFAULT_ROW_KEYS = [60, 60, 60, 60, 60];
-const FACTORY_DRUM_IDS = ['kick', 'snare', 'clap', 'hat-closed', 'hat-open'] as const;
-
-function isFactoryDrum(id: string): boolean {
-  return (FACTORY_DRUM_IDS as readonly string[]).includes(id);
-}
-
-function factoryDrumPath(id: string): string {
-  return `C:\\WAVE Studio\\factory-drums\\${id}.wav`;
-}
-
-function factoryLabelFor(sample: AudioSourceDto): string | undefined {
-  const normalised = sample.path.replace(/\\/g, '/');
-  const drumId = FACTORY_DRUM_IDS.find((id) => normalised.endsWith(`/${id}.wav`));
-  return drumId ? INTERNAL_SOURCES.find((entry) => entry.id === drumId)?.label : undefined;
-}
-
-function factoryDrumAudio(id: number, drumId: string): AudioSourceDto {
-  const seconds = 0.4;
-  return {
-    id,
-    path: factoryDrumPath(drumId),
-    name: `${drumId}.wav`,
-    frames: Math.round(seconds * 48_000),
-    sampleRate: 48_000,
-    durationSeconds: seconds,
-    durationTicks: Math.ceil((seconds * DEFAULT_BPM * PPQ) / 60),
-    missing: false,
-    bytes: Math.round(seconds * 48_000 * 8),
-  };
-}
+/**
+ * The key each starter channel's grid fires, mirroring `starter_pattern_set`.
+ *
+ * The kit is on a General MIDI map, so its channel fires the GM kick; anything
+ * else fires middle C and plays at recorded pitch.
+ */
+const DEFAULT_ROW_KEYS = [KIT_STEP_KEY, 60];
 
 // ---------------------------------------------------------------------------
 // The effect catalogue, mirrored from `plugins/effects`
@@ -521,68 +500,6 @@ const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
     takesNotes: true,
   },
   {
-    id: 'kick',
-    label: 'Kick',
-    description:
-      'Synthesised kick: 420 -> 50 Hz two-stage sweep, punch envelope, soft clip, tunable',
-    kind: 'internal',
-    vendor: '',
-    bundlePath: null,
-    pluginId: null,
-    takesNotes: true,
-  },
-  {
-    id: 'snare',
-    label: 'Snare',
-    description:
-      'Synthesised snare: a crack over a wire buzz, two body modes at 180 Hz, tunable',
-    kind: 'internal',
-    vendor: '',
-    bundlePath: null,
-    pluginId: null,
-    takesNotes: true,
-  },
-  {
-    id: 'clap',
-    label: 'Clap',
-    description: 'Synthesised clap: three offset noise bursts into a room tail',
-    kind: 'internal',
-    vendor: '',
-    bundlePath: null,
-    pluginId: null,
-    takesNotes: true,
-  },
-  {
-    id: 'hat-closed',
-    label: 'Hat Closed',
-    description: 'Synthesised closed hi-hat: six-oscillator metal, 60 ms decay',
-    kind: 'internal',
-    vendor: '',
-    bundlePath: null,
-    pluginId: null,
-    takesNotes: true,
-  },
-  {
-    id: 'hat-open',
-    label: 'Hat Open',
-    description: 'Synthesised open hi-hat: six-oscillator metal, 350 ms decay',
-    kind: 'internal',
-    vendor: '',
-    bundlePath: null,
-    pluginId: null,
-    takesNotes: true,
-  },
-  {
-    id: 'drum-kit',
-    label: 'Drum Kit',
-    description: 'Synthesised kick, snare and hi-hats on GM keys 36/38/42/46',
-    kind: 'internal',
-    vendor: '',
-    bundlePath: null,
-    pluginId: null,
-    takesNotes: true,
-  },
-  {
     id: 'test-tone',
     label: 'Test Tone',
     description: '440 Hz sine, gated on the transport',
@@ -745,6 +662,12 @@ const VST3_PLUGINS: readonly Vst3PluginInfoDto[] = [
 const UNTITLED = 'Untitled';
 const PROJECT_DIR = 'D:\\Songs';
 const MOCK_PACKS = 'D:\\MYDAW\\assets\\packs';
+const MOCK_FACTORY = 'D:\\MYDAW\\assets\\instruments';
+/** The instrument directories the Factory root lists, and a few of each. */
+const MOCK_FACTORY_KITS = {
+  '808-kit': ['kick-tone50-decay50.wav', 'snare-tone50-snap25.wav', 'hat-closed.wav'],
+  'salamander-piano': ['A0v4.flac', 'C4v8.flac'],
+} as const;
 /** Where the real build writes takes; see `app/src/recording.rs`. */
 const MOCK_RECORDINGS = 'C:\\Users\\wave\\AppData\\Local\\WAVE Studio\\recordings';
 const MOCK_DRUMS = [
@@ -905,35 +828,17 @@ const SAMPLE_PLAY = {
 function noSourceParams(): Pick<TrackDto, 'sourceParamDefs' | 'sourceParams'> {
   return { sourceParamDefs: [], sourceParams: [] };
 }
+/**
+ * The rack a fresh session opens with: a kit channel and a melodic one.
+ *
+ * The same two `Project::starter` builds -- and both are present here because
+ * the mock has every instrument "installed", where a real fresh clone has none
+ * and gets the melodic channel alone.
+ */
 function starterTracks(): TrackDto[] {
-  const wanted = ['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'sampler:salamander-piano'];
+  const wanted = [KIT_SOURCE_ID, 'sampler:salamander-piano'];
   return wanted.map((sourceId, index) => {
     const source = INTERNAL_SOURCES.find((entry) => entry.id === sourceId)!;
-    if (isFactoryDrum(sourceId)) {
-      const sample = factoryDrumAudio(index + 1, sourceId);
-      return {
-        index,
-        id: index,
-        name: source.label,
-        sourceId: `oneshot:${sample.id}`,
-        sourceLabel: source.label,
-        engine: 'sample',
-        gainDb: 0,
-        pan: 0,
-        muted: false,
-        soloed: false,
-        silenced: false,
-        selected: index === 0,
-        clap: null,
-        vst3: null,
-        missing: null,
-        inserts: [],
-        ...SAMPLE_PLAY,
-        slices: noSlices(),
-        ...noSourceParams(),
-        audioSourceId: sample.id,
-      };
-    }
     return {
       index,
       id: index,
@@ -970,7 +875,9 @@ function emptyPattern(id: number, name: string, channels: readonly number[]): Pa
       mode: 'steps',
       steps: {
         key: DEFAULT_ROW_KEYS[channel] ?? 60,
-        label: ['Kick', 'Snare', 'CH', 'OH'][channel] ?? '',
+        // The engine labels a grid row by its key, not by the channel it sits
+        // on, so a row is "Key 36" until the roll gives it a name.
+        label: '',
         steps: Array.from({ length: DEFAULT_STEPS }, () => ({
           on: false,
           velocity: STEP_VELOCITY,
@@ -1052,7 +959,7 @@ export class MockBackend implements Backend {
   private masterVst3: Vst3Slot | null = null;
   private selected = 0;
 
-  private patterns: PatternDto[] = [emptyPattern(1, 'Pattern 1', [0, 1, 2, 3, 4])];
+  private patterns: PatternDto[] = [emptyPattern(1, 'Pattern 1', [0, 1])];
   private activePattern = 1;
   private playlistTracks: PlaylistTrackDto[] = Array.from({ length: 4 }, (_, index) => ({
     id: index + 1,
@@ -1061,9 +968,7 @@ export class MockBackend implements Backend {
     soloed: false,
   }));
   private clips: ClipDto[] = [];
-  private audioSources: AudioSourceDto[] = FACTORY_DRUM_IDS.map((id, index) =>
-    factoryDrumAudio(index + 1, id),
-  );
+  private audioSources: AudioSourceDto[] = [];
   /**
    * Each source's envelope, by id.
    *
@@ -1080,7 +985,8 @@ export class MockBackend implements Backend {
   private nextPatternId = 2;
   private nextLaneId = 5;
   private nextClipId = 1;
-  private nextAudioId = 6;
+  /** Ids start at 1: nothing is loaded until a session loads it. */
+  private nextAudioId = 1;
   private nextInstance = 1;
   private inventedAudio = 0;
   private extraFolders: LibraryRootDto[] = loadMockFolders();
@@ -1112,20 +1018,24 @@ export class MockBackend implements Backend {
     },
     ...(
       [
-        ['808-kit', '808 Kit', 2_300_000],
-        ['808-bass', '808 Bass', 2_200_000],
-        ['percussion-fx', 'Percussion & FX', 14_900_000],
-        ['studio-drums', 'Studio Drums', 23_000_000],
-        ['marimba', 'Marimba', 22_100_000],
-        ['glockenspiel', 'Glockenspiel', 9_300_000],
+        // The kit is bundled -- `tauri.conf.json` ships `assets/instruments` --
+        // so it is installed before anyone presses anything, which is what lets
+        // the starter rack put it on a channel. The rest are downloads, so the
+        // browser footer's Download button still does something visible.
+        ['808-kit', '808 Kit', 2_300_000, 'ready'],
+        ['808-bass', '808 Bass', 2_200_000, 'absent'],
+        ['percussion-fx', 'Percussion & FX', 14_900_000, 'absent'],
+        ['studio-drums', 'Studio Drums', 23_000_000, 'absent'],
+        ['marimba', 'Marimba', 22_100_000, 'absent'],
+        ['glockenspiel', 'Glockenspiel', 9_300_000, 'absent'],
       ] as const
-    ).map(([id, name, bytesTotal]) => ({
+    ).map(([id, name, bytesTotal, state]) => ({
       id,
       name,
-      state: 'absent' as const,
-      progress: 0,
+      state: state as AssetStatus['state'],
+      progress: state === 'ready' ? 1 : 0,
       bytesTotal,
-      bytesDone: 0,
+      bytesDone: state === 'ready' ? bytesTotal : 0,
       error: null,
     })),
   ];
@@ -1345,10 +1255,6 @@ export class MockBackend implements Backend {
   }
 
   async setTrackSource(track: number, source: string): Promise<MixerState> {
-    if (isFactoryDrum(source)) {
-      const sample = this.ensureFactoryDrum(source);
-      return this.setTrackSource(track, `oneshot:${sample.id}`);
-    }
     const sampleId = /^oneshot:(\d+)$/.exec(source)?.[1];
     const sample = sampleId
       ? this.audioSources.find((entry) => entry.id === Number(sampleId))
@@ -1359,7 +1265,7 @@ export class MockBackend implements Backend {
       (sample
         ? {
             id: source,
-            label: factoryLabelFor(sample) ?? sample.name,
+            label: sample.name,
             description: sample.path,
             kind: 'internal' as const,
             takesNotes: true,
@@ -1805,11 +1711,6 @@ export class MockBackend implements Backend {
     if (this.tracks.length >= MAX_TRACKS) {
       throw new Error(`a project may have at most ${MAX_TRACKS} tracks`);
     }
-    if (isFactoryDrum(source)) {
-      const sample = this.ensureFactoryDrum(source);
-      const wanted = INTERNAL_SOURCES.find((entry) => entry.id === source)!;
-      return this.pushOneshotTrack(sample, name ?? wanted.label);
-    }
     const wanted = INTERNAL_SOURCES.find((entry) => entry.id === source);
     if (!wanted) throw new Error(`unknown source '${source}'`);
     const index = this.tracks.length;
@@ -1856,15 +1757,6 @@ export class MockBackend implements Backend {
       }
     }
     return this.mixerState();
-  }
-
-  private ensureFactoryDrum(drumId: string): AudioSourceDto {
-    const path = factoryDrumPath(drumId);
-    const existing = this.audioSources.find((entry) => entry.path === path);
-    if (existing) return existing;
-    const sample = factoryDrumAudio(this.nextAudioId++, drumId);
-    this.audioSources.push(sample);
-    return sample;
   }
 
   private pushOneshotTrack(sample: AudioSourceDto, name: string): MixerState {
@@ -3110,7 +3002,13 @@ export class MockBackend implements Backend {
   }
 
   async getLibraryRoots(): Promise<LibraryRootDto[]> {
-    return [{ id: 'packs', name: 'Packs', kind: 'packs', path: MOCK_PACKS }, ...this.extraFolders];
+    // Factory first, then Packs, then the folders the user added -- the order
+    // `library::roots` produces.
+    return [
+      { id: 'factory', name: 'Factory', kind: 'factory', path: MOCK_FACTORY },
+      { id: 'packs', name: 'Packs', kind: 'packs', path: MOCK_PACKS },
+      ...this.extraFolders,
+    ];
   }
 
   async addLibraryFolder(): Promise<LibraryRootDto[] | null> {
@@ -3127,7 +3025,11 @@ export class MockBackend implements Backend {
   }
 
   async removeLibraryFolder(id: string): Promise<LibraryRootDto[]> {
-    if (id === 'packs') throw new Error("there is no library folder 'packs'");
+    // Neither built-in root is a folder the user added, so neither can be taken
+    // away -- the engine answers both the same way.
+    if (id === 'factory' || id === 'packs') {
+      throw new Error(`there is no library folder '${id}'`);
+    }
     const before = this.extraFolders.length;
     this.extraFolders = this.extraFolders.filter((folder) => folder.id !== id);
     if (this.extraFolders.length === before) {
@@ -3138,6 +3040,28 @@ export class MockBackend implements Backend {
   }
 
   async listLibraryDir(rootId: string, relPath: string): Promise<LibraryEntryDto[]> {
+    if (rootId === 'factory') {
+      // One directory per installed instrument, and the samples inside it: a
+      // kit is an instrument you play *and* a folder of one-shots you can drag
+      // out or chop, which is the whole reason this root is listed.
+      const installed = this.assets.filter((asset) => asset.state === 'ready');
+      if (relPath === '') {
+        return installed.map((asset) => ({
+          name: asset.id,
+          kind: 'dir' as const,
+          relPath: asset.id,
+          path: `${MOCK_FACTORY}${String.fromCharCode(92)}${asset.id}`,
+        }));
+      }
+      const files = MOCK_FACTORY_KITS[relPath as keyof typeof MOCK_FACTORY_KITS];
+      if (files === undefined || !installed.some((asset) => asset.id === relPath)) return [];
+      return files.map((name) => ({
+        name,
+        kind: 'file' as const,
+        relPath: `${relPath}/${name}`,
+        path: `${MOCK_FACTORY}${String.fromCharCode(92)}${relPath}${String.fromCharCode(92)}${name}`,
+      }));
+    }
     if (rootId === 'packs' && relPath === '') {
       return [
         {
@@ -3409,7 +3333,7 @@ export class MockBackend implements Backend {
     this.masterInserts = [];
     this.masterClap = null;
     this.masterVst3 = null;
-    this.patterns = [emptyPattern(1, 'Pattern 1', [0, 1, 2, 3, 4])];
+    this.patterns = [emptyPattern(1, 'Pattern 1', [0, 1])];
     this.activePattern = 1;
     this.nextPatternId = 2;
     this.playlistTracks = Array.from({ length: 4 }, (_, index) => ({
