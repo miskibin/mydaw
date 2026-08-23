@@ -27,7 +27,9 @@ use crate::ipc_bench::{
 use crate::library::{self, LibraryEntryDto, LibraryRootDto};
 use crate::preview::SourcePreviewDto;
 use crate::preview_settings::{self, PreviewSettings};
-use crate::project::{MixerStateDto, PitchAnalysisDto, RootMode};
+use crate::project::{
+    MixerStateDto, PitchAnalysisDto, RootMode, SliceAnalysisDto, SliceMode, SliceStateDto,
+};
 use crate::project_bridge::ProjectInfoDto;
 use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
 use crate::sample_edit::{SampleEditDto, SampleOp};
@@ -239,6 +241,46 @@ pub async fn analyze_track_pitch(
     })
     .await
     .map_err(|err| err.to_string())?
+}
+
+/// Where an audio-file channel's slices would fall, without installing them.
+///
+/// `mode` is `transient` or `grid`; `sensitivity` (`0..=1`) drives the first
+/// and `division` (4, 8 or 16 slices to the bar) the second. The range is the
+/// channel's SMP region. Blocking: an onset pass over a two-minute break is
+/// tens of milliseconds, which is a frame the UI thread should not lose.
+#[tauri::command]
+pub async fn analyze_slices(
+    app: tauri::AppHandle,
+    track: usize,
+    mode: SliceMode,
+    sensitivity: f32,
+    division: u32,
+) -> Result<SliceAnalysisDto, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state
+            .analyze_track_slices(track, mode, sensitivity, division)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Install (or clear) an audio-file channel's chop.
+///
+/// Answers with what was stored, not with what was asked for: markers are
+/// sorted, deduped, clamped to the file and capped at the engine's table size.
+#[tauri::command]
+pub fn set_track_slices(
+    state: State<'_, AppState>,
+    track: usize,
+    slices: SliceStateDto,
+) -> Result<SliceStateDto, String> {
+    state
+        .set_track_slices(track, slices)
+        .map_err(|err| err.to_string())
 }
 
 /// Calibrate an audio-file channel's playback root (MIDI note + fine cents).

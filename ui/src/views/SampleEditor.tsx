@@ -25,6 +25,16 @@
  * every step of the gesture. The region is not -- setting it recompiles the
  * arrangement (a clip channel) or rebuilds the RT node (a one-shot) -- so the
  * drag paints locally and the engine hears about it once, on release.
+ *
+ * ## Region and Slices are two modes of one stage
+ *
+ * The waveform answers to whichever mode the channel is in, and only that one.
+ * In Region mode it has two handles and a shaded outside; in Slices mode it
+ * has markers, numbered pads and no handles at all. Showing both at once would
+ * put two drag targets on the same pixel at the region start -- the head
+ * marker sits exactly where the start handle does -- and the user would have
+ * no way to say which one they meant. Switching mode is one click, and the
+ * chop survives the round trip.
  */
 
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js';
@@ -33,6 +43,7 @@ import type {
   ParamDefDto,
   PitchAnalysis,
   SampleOp,
+  SliceState,
   SourcePreviewDto,
   TrackDto,
   WaveformDto,
@@ -58,6 +69,17 @@ import {
 } from '../lib/sampleRegion';
 import { stereoWaveformPaths } from '../lib/sampleWaveform';
 import { sampleEditEntry } from '../lib/undo';
+import {
+  MAX_SLICES,
+  markerNear,
+  resolveSlices,
+  sliceLabel,
+  sliceTitle,
+  withMarkerAdded,
+  withMarkerMoved,
+  withMarkerRemoved,
+  type Slice,
+} from '../lib/slices';
 import { usesPolySynthEditor } from '../lib/polySynth';
 import { useAppState } from '../state';
 import { useView } from '../shell/view';
@@ -90,6 +112,15 @@ const EDIT_GAIN_STEPS = [0.5, 1, 3, 6, 12];
 /** Where Normalize lands the peak. Mirrors `NORMALIZE_TARGET_DBFS` in Rust. */
 const NORMALIZE_TARGET_DBFS = -0.3;
 const TARGET_NOTES = Array.from({ length: 61 }, (_, index) => 36 + index);
+/** How near a marker a pointer counts as grabbing it, in pixels. */
+const MARKER_GRAB_PX = 6;
+/** A sensitivity drag re-runs detection this long after it stops moving. */
+const SLICE_ANALYSIS_MS = 120;
+/** How long a slice-pad audition is held. */
+const SLICE_AUDITION_MS = 300;
+/** The grid picker, in slices to the bar. Mirrors `GRID_DIVISIONS`. */
+const GRID_DIVISIONS = [4, 8, 16] as const;
+const DIVISION_LABELS: Record<number, string> = { 4: '1/4', 8: '1/8', 16: '1/16' };
 
 const PAN_DEF = spec('pan', 'Pan', '', -1, 1, 0);
 const PITCH_DEF = spec('pitch', 'Pitch', 'ct', -1200, 1200, 0);
@@ -132,6 +163,26 @@ export function SampleEditor(): JSX.Element {
   /** The destructive edit currently running, by name. Only one at a time. */
   const [editing, setEditing] = createSignal<string | null>(null);
   const [gainStep, setGainStep] = createSignal(DEFAULT_EDIT_GAIN_DB);
+  // The chop, while the engine's copy catches up. `localSlicing` is the view
+  // mode: `null` means "whatever the channel says", which is what a freshly
+  // opened window shows.
+  const [localSlicing, setLocalSlicing] = createSignal<boolean | null>(null);
+  const [localSliceMode, setLocalSliceMode] = createSignal<'transient' | 'grid' | null>(null);
+  const [localSliceFrames, setLocalSliceFrames] = createSignal<number[] | null>(null);
+  const [localSensitivity, setLocalSensitivity] = createSignal<number | null>(null);
+  const [localDivision, setLocalDivision] = createSignal<number | null>(null);
+  /**
+   * Keys this window is sounding, which `app.heldNotes()` does not know about.
+   *
+   * That signal is the *computer* keyboard's -- the on-screen keys and the
+   * slice pads go straight to `noteOn`, exactly as `SampleKeyboard` does with
+   * its own local hold. A slice has to light whichever of the three started
+   * it, so the pads read the union.
+   */
+  const [windowHeld, setWindowHeld] = createSignal<ReadonlySet<number>>(new Set<number>());
+  const [slicing, setSlicing] = createSignal(false);
+  const [sliceNote, setSliceNote] = createSignal<string | null>(null);
+  let sliceGen = 0;
   let pendingSampleEdit: Promise<void> = Promise.resolve();
   let noteGate: Promise<void> = Promise.resolve();
   let analysisGen = 0;
@@ -171,6 +222,11 @@ export function SampleEditor(): JSX.Element {
         setLocalFades(null);
         setLocalParams({});
         setLocalRegion(null);
+        setLocalSlicing(null);
+        setLocalSliceMode(null);
+        setLocalSliceFrames(null);
+        setLocalSensitivity(null);
+        setLocalDivision(null);
       });
   });
   onCleanup(() => settle.cancel());
@@ -197,6 +253,15 @@ export function SampleEditor(): JSX.Element {
       setLocalFades(null);
       setLocalParams({});
       setLocalRegion(null);
+      setLocalSlicing(null);
+      setLocalSliceMode(null);
+      setLocalSliceFrames(null);
+      setLocalSensitivity(null);
+      setLocalDivision(null);
+      setSliceNote(null);
+      setSlicing(false);
+      setWindowHeld(new Set<number>());
+      sliceGen += 1;
       setAnalysis(null);
       setAnalyzing(false);
       analysisGen += 1;
@@ -538,6 +603,262 @@ export function SampleEditor(): JSX.Element {
 
   let waveEl: HTMLDivElement | undefined;
 
+  // --- the chop ------------------------------------------------------------
+  //
+  // Detection and installation are two calls: the slider re-runs the first on
+  // every step of a drag, and the second is what the keyboard starts playing.
+  // Everything below paints from `local*` until a `get_tracks` reconciles it,
+  // exactly as the knobs do -- a marker that does not follow the pointer reads
+  // as a marker you cannot move.
+
+  const emptyChop: SliceState = {
+    mode: 'off',
+    frames: [],
+    sensitivity: 0.5,
+    division: 16,
+    keytrack: false,
+  };
+  const chop = (): SliceState => track()?.slices ?? emptyChop;
+  /** Whether this channel is one a chop makes sense for. */
+  const sliceable = (): boolean =>
+    samplePlay() && (track()?.audioSourceId ?? null) !== null && totalFrames() > 0;
+  const sliced = (): boolean => localSlicing() ?? chop().mode !== 'off';
+  const sliceMode = (): 'transient' | 'grid' => {
+    const mode = localSliceMode() ?? chop().mode;
+    return mode === 'grid' ? 'grid' : 'transient';
+  };
+  const sliceFrames = (): number[] => localSliceFrames() ?? chop().frames;
+  const sensitivity = (): number => localSensitivity() ?? chop().sensitivity;
+  const division = (): number => localDivision() ?? chop().division;
+  const keytrack = (): boolean => chop().keytrack;
+  /** The markers as playable slices, ends and keys resolved. */
+  const slices = createMemo((): Slice[] =>
+    resolveSlices(sliceFrames(), region().end, track()?.rootKey ?? 60),
+  );
+  /** Which slices are sounding, so the pad lights while the key is held. */
+  const litSlice = (slice: Slice): boolean =>
+    slice.key !== null && (app.heldNotes().includes(slice.key) || windowHeld().has(slice.key));
+
+  /** Send the chop to the engine, painting it locally until the echo lands. */
+  function commitSlices(next: SliceState): void {
+    const current = track();
+    if (!current) return;
+    setLocalSliceFrames(next.frames);
+    setLocalSliceMode(next.mode === 'grid' ? 'grid' : 'transient');
+    setLocalSlicing(next.mode !== 'off');
+    setLocalSensitivity(next.sensitivity);
+    setLocalDivision(next.division);
+    queueSampleEdit(current.id, async (index) => {
+      const stored = await app.backend.setTrackSlices(index, next);
+      // What the engine kept, which is not always what was asked for: markers
+      // are sorted, deduped and capped at 128 on the way in.
+      setLocalSliceFrames(stored.frames);
+    });
+    settle();
+  }
+
+  /** The chop as it stands, with `patch` applied. */
+  function chopNow(patch: Partial<SliceState>): SliceState {
+    return {
+      mode: sliced() ? sliceMode() : 'off',
+      frames: sliceFrames(),
+      sensitivity: sensitivity(),
+      division: division(),
+      keytrack: keytrack(),
+      ...patch,
+    };
+  }
+
+  /**
+   * Re-detect and install, for a mode / sensitivity / division change.
+   *
+   * Generation-counted, because a sensitivity drag can have two passes in
+   * flight and the slower one must not overwrite the newer answer.
+   */
+  async function detectSlices(mode: 'transient' | 'grid'): Promise<void> {
+    const current = track();
+    if (!current || !sliceable()) return;
+    const gen = ++sliceGen;
+    setSlicing(true);
+    try {
+      await waitForSampleEdits();
+      if (gen !== sliceGen || track()?.id !== current.id) return;
+      const latest = app.mixer()?.tracks.find((entry) => entry.id === current.id);
+      if (!latest) return;
+      const found = await app.backend.analyzeSlices(
+        latest.index,
+        mode,
+        sensitivity(),
+        division(),
+      );
+      if (gen !== sliceGen || track()?.id !== current.id) return;
+      const bars =
+        found.mode === 'grid' && found.bars > 0
+          ? `${found.bars} bar${found.bars === 1 ? '' : 's'} @ ${Math.round(app.bpm())}`
+          : null;
+      setSliceNote(
+        found.truncated
+          ? `${MAX_SLICES} slices — the file has more than the engine can hold`
+          : bars,
+      );
+      commitSlices(chopNow({ mode: found.mode, frames: found.frames }));
+      app.say(
+        `${owner()} · Slices`,
+        `${found.frames.length} slice${found.frames.length === 1 ? '' : 's'}`,
+      );
+    } catch (error) {
+      if (error !== sampleEditFailed) app.report(error);
+    } finally {
+      if (gen === sliceGen) setSlicing(false);
+    }
+  }
+
+  const reDetect = debounce(SLICE_ANALYSIS_MS, () => {
+    void detectSlices(sliceMode());
+  });
+  onCleanup(() => reDetect.cancel());
+
+  /** Region <-> Slices. Entering with no chop yet runs a first detection. */
+  function setSliceView(on: boolean): void {
+    if (!sliceable()) return;
+    setLocalSlicing(on);
+    if (!on) {
+      // The frames stay in the project: coming back must not mean re-detecting
+      // over markers the user moved by hand.
+      commitSlices(chopNow({ mode: 'off' }));
+      app.say(`${owner()} · Mode`, 'region');
+      return;
+    }
+    app.say(`${owner()} · Mode`, 'slices');
+    if (sliceFrames().length > 0) {
+      commitSlices(chopNow({ mode: sliceMode() }));
+      return;
+    }
+    void detectSlices(sliceMode());
+  }
+
+  function setSliceModeTo(mode: 'transient' | 'grid'): void {
+    if (mode === sliceMode()) return;
+    setLocalSliceMode(mode);
+    void detectSlices(mode);
+  }
+
+  function setSensitivity(value: number): void {
+    const next = Math.min(1, Math.max(0, value));
+    setLocalSensitivity(next);
+    app.say(`${owner()} · Sensitivity`, `${Math.round(next * 100)}%`);
+    reDetect();
+  }
+
+  function setDivision(value: number): void {
+    if (value === division()) return;
+    setLocalDivision(value);
+    void detectSlices('grid');
+  }
+
+  function setKeytrack(on: boolean): void {
+    commitSlices(chopNow({ keytrack: on }));
+    app.say(`${owner()} · Keytrack`, on ? 'slices transpose' : 'recorded pitch');
+  }
+
+  /** Play one slice, the same way the keyboard does. */
+  function auditionSlice(slice: Slice): void {
+    if (slice.key === null) return;
+    const key = slice.key;
+    playSampleNote(key, 0.9);
+    window.setTimeout(() => releaseSampleNote(key), SLICE_AUDITION_MS);
+  }
+
+  function dumpToRoll(): void {
+    const current = track();
+    if (!current) return;
+    const count = slices().length;
+    if (count === 0) return;
+    const written = app.dumpSlicesToRoll(current.index, current.rootKey, count);
+    if (written === 0) app.say(`${owner()} · Piano roll`, 'already laid out');
+  }
+
+  /**
+   * Drag a marker, or add one where the pointer landed.
+   *
+   * One handler for the whole stage: a press within [`MARKER_GRAB_PX`] of a
+   * marker moves it, and a press anywhere else splits the slice it is in. The
+   * head marker is pinned to the region start -- see `withMarkerMoved`.
+   */
+  function onSlicePointer(event: PointerEvent): void {
+    if (event.button !== 0 || !sliced()) return;
+    const total = totalFrames();
+    const box = waveEl?.getBoundingClientRect();
+    if (total <= 0 || !box) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const at = (clientX: number) => frameAt((clientX - box.left) / box.width, total);
+    const bounds = region();
+    const rate = sampleRate();
+    const frames = sliceFrames();
+    const tolerance = (MARKER_GRAB_PX / Math.max(1, box.width)) * total;
+    const grabbed = markerNear(frames, at(event.clientX), tolerance);
+
+    if (grabbed <= 0) {
+      // Nothing to grab (or the pinned head): a press in the body is a split.
+      const next = withMarkerAdded(frames, at(event.clientX), bounds.start, bounds.end, rate);
+      if (next === frames) {
+        app.say(
+          `${owner()} · Slices`,
+          frames.length >= MAX_SLICES ? 'the table is full' : 'too close to a marker',
+        );
+        return;
+      }
+      commitSlices(chopNow({ frames: next }));
+      app.say(`${owner()} · Slices`, `${next.length} slices`);
+      return;
+    }
+
+    let latest = frames;
+    let moved = false;
+    const apply = (clientX: number) => {
+      latest = withMarkerMoved(latest, grabbed, at(clientX), bounds.start, bounds.end, rate);
+      setLocalSliceFrames(latest);
+      app.say(
+        `${owner()} · Slice ${sliceLabel(grabbed)}`,
+        formatFrames(latest[grabbed] ?? 0, rate),
+      );
+    };
+    const onMove = (next: PointerEvent) => {
+      if (!moved && Math.abs(next.clientX - event.clientX) < DRAG_SLOP_PX) return;
+      moved = true;
+      apply(next.clientX);
+    };
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.style.removeProperty('cursor');
+      document.body.style.removeProperty('user-select');
+      if (!moved) {
+        setLocalSliceFrames(null);
+        return;
+      }
+      commitSlices(chopNow({ frames: latest }));
+    };
+    document.body.style.setProperty('cursor', 'ew-resize');
+    document.body.style.setProperty('user-select', 'none');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  function removeMarker(index: number): void {
+    const frames = sliceFrames();
+    const next = withMarkerRemoved(frames, index);
+    if (next === frames) {
+      app.say(`${owner()} · Slices`, 'the first marker is the start of the chop');
+      return;
+    }
+    commitSlices(chopNow({ frames: next }));
+    app.say(`${owner()} · Slices`, `${next.length} slices`);
+  }
+
   // --- the knobs -----------------------------------------------------------
 
   const mixer = () => app.mixer();
@@ -714,6 +1035,7 @@ export function SampleEditor(): JSX.Element {
     const current = track();
     if (!current) return;
     const index = current.index;
+    setWindowHeld((held) => (held.has(key) ? held : new Set(held).add(key)));
     enqueueNote(async () => {
       if (app.mixer()?.selected !== index) {
         await app.mixerCommand((backend) => backend.setSelectedTrack(index));
@@ -723,6 +1045,12 @@ export function SampleEditor(): JSX.Element {
   }
 
   function releaseSampleNote(key: number): void {
+    setWindowHeld((held) => {
+      if (!held.has(key)) return held;
+      const next = new Set(held);
+      next.delete(key);
+      return next;
+    });
     enqueueNote(async () => {
       await app.backend.noteOff(key);
     });
@@ -798,8 +1126,34 @@ export function SampleEditor(): JSX.Element {
               <span class="wv-sample__file" title={file()?.path ?? current().sourceLabel}>
                 {file()?.name ?? current().sourceLabel}
               </span>
+              <Show when={sliceable()}>
+                <div class="wv-seg wv-seg--plain" role="radiogroup" aria-label="Sample mode">
+                  <button
+                    type="button"
+                    class="wv-seg__btn"
+                    classList={{ 'is-active': !sliced() }}
+                    role="radio"
+                    aria-checked={!sliced()}
+                    title="Region — one sound, played from every key, trimmed by the two handles"
+                    onClick={() => setSliceView(false)}
+                  >
+                    Region
+                  </button>
+                  <button
+                    type="button"
+                    class="wv-seg__btn"
+                    classList={{ 'is-active': sliced() }}
+                    role="radio"
+                    aria-checked={sliced()}
+                    title="Slices — chop the sample and lay the pieces out across the keys from the root up"
+                    onClick={() => setSliceView(true)}
+                  >
+                    Slices
+                  </button>
+                </div>
+              </Show>
               <span class="wv-spacer" />
-              <Show when={samplePlay() && trimmed()}>
+              <Show when={samplePlay() && trimmed() && !sliced()}>
                 <button
                   type="button"
                   class="wv-chip"
@@ -944,6 +1298,103 @@ export function SampleEditor(): JSX.Element {
               </div>
             </Show>
 
+            <Show when={sliceable() && sliced()}>
+              <div class="wv-sample__slicebar">
+                <div class="wv-seg wv-seg--plain" role="radiogroup" aria-label="Slice detection">
+                  <button
+                    type="button"
+                    class="wv-seg__btn"
+                    classList={{ 'is-active': sliceMode() === 'transient' }}
+                    role="radio"
+                    aria-checked={sliceMode() === 'transient'}
+                    title="Cut where a new sound arrives — spectral-flux onset detection"
+                    onClick={() => setSliceModeTo('transient')}
+                  >
+                    Transient
+                  </button>
+                  <button
+                    type="button"
+                    class="wv-seg__btn"
+                    classList={{ 'is-active': sliceMode() === 'grid' }}
+                    role="radio"
+                    aria-checked={sliceMode() === 'grid'}
+                    title="Cut the loop into equal pieces — for a quantised loop whose hits are buried"
+                    onClick={() => setSliceModeTo('grid')}
+                  >
+                    Grid
+                  </button>
+                </div>
+
+                <Show when={sliceMode() === 'transient'}>
+                  <label class="wv-sample__sens" title="How eagerly the detector cuts. Higher finds ghost notes; lower keeps only the obvious hits.">
+                    Sensitivity
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={sensitivity()}
+                      aria-label="Slice sensitivity"
+                      onInput={(event) => setSensitivity(Number(event.currentTarget.value))}
+                    />
+                    <span class="wv-sample__sensval">{Math.round(sensitivity() * 100)}%</span>
+                  </label>
+                </Show>
+
+                <Show when={sliceMode() === 'grid'}>
+                  <div class="wv-seg wv-seg--plain" role="radiogroup" aria-label="Grid division">
+                    <For each={GRID_DIVISIONS}>
+                      {(value) => (
+                        <button
+                          type="button"
+                          class="wv-seg__btn"
+                          classList={{ 'is-active': division() === value }}
+                          role="radio"
+                          aria-checked={division() === value}
+                          title={`${DIVISION_LABELS[value]} of a bar per slice`}
+                          onClick={() => setDivision(value)}
+                        >
+                          {DIVISION_LABELS[value]}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </Show>
+
+                <button
+                  type="button"
+                  class="wv-chip"
+                  classList={{ 'is-active': keytrack() }}
+                  aria-pressed={keytrack()}
+                  title="Keytrack — off, a slice plays at recorded pitch on every key; on, it transposes like an instrument"
+                  onClick={() => setKeytrack(!keytrack())}
+                >
+                  Keytrack
+                </button>
+
+                <span class="wv-spacer" />
+
+                <span class="wv-sample__slicecount">
+                  {slicing()
+                    ? 'slicing…'
+                    : `${slices().length} slice${slices().length === 1 ? '' : 's'}`}
+                </span>
+                <Show when={sliceNote()}>
+                  {(copy) => <span class="wv-sample__slicenote">{copy()}</span>}
+                </Show>
+
+                <button
+                  type="button"
+                  class="wv-chip"
+                  disabled={slices().length === 0}
+                  title="Write one note per slice into this channel's pattern, in order, on sixteenths — the break as it was recorded, ready to rearrange"
+                  onClick={dumpToRoll}
+                >
+                  To piano roll
+                </button>
+              </div>
+            </Show>
+
             <Show
               when={synthEditor()}
               fallback={
@@ -954,11 +1405,12 @@ export function SampleEditor(): JSX.Element {
               style={{ color: colour() }}
               ref={waveEl}
               onPointerDown={(event) => {
-                if (samplePlay()) onRegionPointer(event, 'new');
+                if (sliced()) onSlicePointer(event);
+                else if (samplePlay()) onRegionPointer(event, 'new');
                 else if (event.button === 0) audition();
               }}
               onDblClick={() => {
-                if (!samplePlay()) return;
+                if (!samplePlay() || sliced()) return;
                 skipWaveAudition = true;
                 clearTimeout(auditionTimer);
                 resetRegion();
@@ -967,9 +1419,11 @@ export function SampleEditor(): JSX.Element {
                 }, 350);
               }}
               title={
-                samplePlay()
-                  ? 'Click to preview, drag to set the played region, drag a handle to move one end, double-click for the whole file'
-                  : undefined
+                sliced()
+                  ? 'Click a slice to split it, drag a marker to nudge, double-click a marker to remove it. The numbered pad plays the slice.'
+                  : samplePlay()
+                    ? 'Click to preview, drag to set the played region, drag a handle to move one end, double-click for the whole file'
+                    : undefined
               }
             >
               <Show when={loading()}>
@@ -990,7 +1444,58 @@ export function SampleEditor(): JSX.Element {
                   <path d={wavePaths().right} fill="currentColor" opacity="0.72" />
                 </svg>
               </Show>
-              <Show when={samplePlay() && peaks().length > 0 && totalFrames() > 0}>
+              <Show when={sliceable() && sliced() && peaks().length > 0}>
+                <For each={slices()}>
+                  {(slice) => (
+                    <div
+                      class="wv-sample__slice"
+                      classList={{ 'is-lit': litSlice(slice), 'is-alt': slice.index % 2 === 1 }}
+                      style={{
+                        left: `${framePercent(slice.start, totalFrames())}%`,
+                        width: `${framePercent(slice.end - slice.start, totalFrames())}%`,
+                      }}
+                      title={sliceTitle(slice, sampleRate())}
+                    >
+                      <button
+                        type="button"
+                        class="wv-sample__pad"
+                        title={
+                          slice.key === null
+                            ? 'Past MIDI 127 — no key plays this slice'
+                            : `Play slice ${sliceLabel(slice.index)} (${noteName(slice.key)})`
+                        }
+                        disabled={slice.key === null}
+                        onPointerDown={(event) => {
+                          event.stopPropagation();
+                          event.preventDefault();
+                          auditionSlice(slice);
+                        }}
+                      >
+                        {sliceLabel(slice.index)}
+                      </button>
+                    </div>
+                  )}
+                </For>
+                <For each={sliceFrames()}>
+                  {(frame, index) => (
+                    <div
+                      class="wv-sample__marker"
+                      classList={{ 'is-head': index() === 0 }}
+                      style={{ left: `${framePercent(frame, totalFrames())}%` }}
+                      title={
+                        index() === 0
+                          ? 'The start of the chop — move it with the region, not on its own'
+                          : 'Drag to nudge, double-click to remove'
+                      }
+                      onDblClick={(event) => {
+                        event.stopPropagation();
+                        removeMarker(index());
+                      }}
+                    />
+                  )}
+                </For>
+              </Show>
+              <Show when={samplePlay() && !sliced() && peaks().length > 0 && totalFrames() > 0}>
                 <div class="wv-sample__shade" style={{ width: `${startPct()}%` }} />
                 <div
                   class="wv-sample__shade wv-sample__shade--end"

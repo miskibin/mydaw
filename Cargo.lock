@@ -2357,6 +2357,7 @@ dependencies = [
  "mydaw-plugin-test-tone",
  "mydaw-plugin-windows",
  "mydaw-rt-core",
+ "mydaw-slice-analysis",
  "parking_lot",
  "rtrb",
  "serde",
@@ -2605,6 +2606,13 @@ dependencies = [
  "basedrop",
  "rtrb",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "mydaw-slice-analysis"
+version = "0.1.0"
+dependencies = [
+ "realfft",
 ]
 
 [[package]]

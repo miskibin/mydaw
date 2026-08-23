@@ -589,6 +589,53 @@ export function withStepsConvertedToNotes(
 }
 
 /**
+ * Lay a chop out across the roll: slice `n` on key `rootKey + n`, one per
+ * sixteenth, in order.
+ *
+ * The starting point every slicer gives you — the break played back as it was
+ * recorded — which is then something to reorder, delete from and shuffle
+ * rather than a blank roll to draw a break into by ear. Sixteenths because a
+ * chop is a rhythm at the resolution the grid already uses; the pattern grows
+ * to hold them (`withNotes`), and a chop longer than four bars is truncated
+ * there rather than silently wrapping.
+ *
+ * The channel's step cells go off, for the reason
+ * [`withStepsConvertedToNotes`] turns them off: the engine sounds a channel's
+ * grid *and* its notes, so leaving the cells on would double every hit.
+ *
+ * Same reference when there is nothing to lay out.
+ */
+export function withSlicesAsNotes(
+  pattern: PatternDto,
+  channel: number,
+  rootKey: number,
+  sliceCount: number,
+): PatternDto {
+  const count = Math.max(0, Math.min(sliceCount, MAX_NOTES));
+  if (count === 0) return pattern;
+  const notes: MelodicNoteDto[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const key = rootKey + index;
+    // Past MIDI 127 there is no key to play the slice from, so there is no
+    // honest note to write for it.
+    if (key > 127) break;
+    notes.push({
+      key,
+      start: index * TICKS_PER_STEP,
+      length: TICKS_PER_STEP,
+      velocity: STEP_VELOCITY,
+    });
+  }
+  if (notes.length === 0) return pattern;
+  const withRoll = withNotes(pattern, channel, notes, rootKey);
+  return withChannel(withRoll, channel, rootKey, (clip) =>
+    clip.steps && clip.steps.steps.some((cell) => cell.on)
+      ? { ...clip, steps: { ...clip.steps, steps: clip.steps.steps.map((cell) => ({ ...cell, on: false })) } }
+      : clip,
+  );
+}
+
+/**
  * Fold notes back onto the grid: each lands on its nearest step, at its own
  * velocity, and the row's key becomes the one most of them used.
  *

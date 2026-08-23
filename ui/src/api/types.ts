@@ -692,6 +692,52 @@ export type PitchAnalysis =
   | { kind: 'noStablePitch'; reason: NoPitchReason };
 
 /** One mixer track. `index` is the track's position *and* its note channel. */
+/**
+ * How a sample channel's slice table was made.
+ *
+ * `off` is the channel as it has always been: one region, played from every
+ * key. `transient` cut where a new sound arrives; `grid` cut the loop into
+ * equal pieces. Mirrors `SliceMode` in `app/src/project.rs`.
+ */
+export type SliceMode = 'off' | 'transient' | 'grid';
+
+/**
+ * A channel's chop: where the slices are and how they were asked for.
+ *
+ * `frames` are absolute positions in the file, ascending, each the **start**
+ * of a slice — the last one runs to the region's end, so `n` frames are `n`
+ * playable slices. Key `rootKey + n` plays slice `n`; anything outside the map
+ * is silent. Capped at `MAX_SLICES` (128) by the engine.
+ *
+ * The sensitivity and division are remembered in every mode, so reopening the
+ * window puts the slider and the picker back where they were left, and the
+ * frames survive a trip back to Region mode rather than being re-detected
+ * (which would throw away markers the user nudged by hand).
+ */
+export interface SliceState {
+  mode: SliceMode;
+  frames: number[];
+  /** The transient slider, `0..=1`. */
+  sensitivity: number;
+  /** The grid picker: 4, 8 or 16 slices to the bar. */
+  division: number;
+  /** Whether a slice also transposes with the key that played it. */
+  keytrack: boolean;
+}
+
+/** What one slicing run found. Nothing is installed until `setTrackSlices`. */
+export interface SliceAnalysis {
+  frames: number[];
+  mode: SliceMode;
+  /** Bars the range was taken to be. Grid mode only; `0` for transients. */
+  bars: number;
+  /** Whether the engine's 128-slice table could not hold everything found. */
+  truncated: boolean;
+  /** The range analysed — the channel's SMP region. */
+  rangeStart: number;
+  rangeEnd: number;
+}
+
 export interface TrackDto {
   index: number;
   /** Stable identity across renumbering. Key a UI list on this. */
@@ -751,6 +797,8 @@ export interface TrackDto {
   rootMode: RootMode;
   /** Last successful detection, when one has been stored. */
   detectedPitch?: DetectedPitch | null;
+  /** The channel's chop. `mode: 'off'` and no frames when it has none. */
+  slices: SliceState;
   /** Numeric audio-file id when this channel is `clip:` or `oneshot:`. */
   audioSourceId?: number | null;
 }
