@@ -217,7 +217,10 @@ mod tests {
         let path = next_take_path(&dir.0, SystemTime::UNIX_EPOCH).expect("names");
         let name = path.file_name().unwrap().to_string_lossy();
         assert!(name.starts_with(TAKE_STEM), "{name}");
-        assert!(name.len() < 24, "a channel row cannot show a long name: {name}");
+        assert!(
+            name.len() < 24,
+            "a channel row cannot show a long name: {name}"
+        );
     }
 
     #[test]
@@ -233,8 +236,14 @@ mod tests {
         assert_eq!(spec.sample_rate, 44_100);
         assert_eq!(spec.bits_per_sample, BITS_PER_SAMPLE);
         assert_eq!(spec.sample_format, SampleFormat::Float);
-        let samples: Vec<f32> = reader.samples::<f32>().map(|s| s.expect("sample")).collect();
-        assert_eq!(samples, original.samples, "float must not quantise the take");
+        let samples: Vec<f32> = reader
+            .samples::<f32>()
+            .map(|s| s.expect("sample"))
+            .collect();
+        assert_eq!(
+            samples, original.samples,
+            "float must not quantise the take"
+        );
     }
 
     #[test]
@@ -246,7 +255,11 @@ mod tests {
         write_take(&hot, &path).expect("writes");
 
         let mut reader = hound::WavReader::open(&path).expect("reads back");
-        let first: f32 = reader.samples::<f32>().next().expect("a sample").expect("ok");
+        let first: f32 = reader
+            .samples::<f32>()
+            .next()
+            .expect("a sample")
+            .expect("ok");
         assert_eq!(first, 1.8, "the overload is the evidence; it must survive");
     }
 
@@ -283,7 +296,10 @@ mod tests {
     #[test]
     fn the_recordings_folder_sits_under_the_shared_wave_cache_root() {
         let dir = recordings_dir();
-        assert!(dir.ends_with(Path::new("WAVE Studio").join("recordings")), "{dir:?}");
+        assert!(
+            dir.ends_with(Path::new("WAVE Studio").join("recordings")),
+            "{dir:?}"
+        );
     }
 
     #[test]

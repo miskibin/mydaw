@@ -180,7 +180,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mydaw-audio-legacy-{}", std::process::id()));
         let path = dir.join("audio.json");
         fs::create_dir_all(&dir).expect("scratch");
-        fs::write(&path, br#"{"version":1,"preferAsio":true,"bufferFrames":256}"#).expect("write");
+        fs::write(
+            &path,
+            br#"{"version":1,"preferAsio":true,"bufferFrames":256}"#,
+        )
+        .expect("write");
 
         let loaded = load_settings(&path);
         assert!(loaded.prefer_asio);
@@ -212,7 +216,10 @@ mod tests {
         let loaded = load_settings(&path);
         assert!(loaded.prefer_asio);
         assert_eq!(loaded.buffer_frames, 512);
-        assert_eq!(loaded.input_device_id.as_deref(), Some("wasapi:{0.0.1.0000}"));
+        assert_eq!(
+            loaded.input_device_id.as_deref(),
+            Some("wasapi:{0.0.1.0000}")
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

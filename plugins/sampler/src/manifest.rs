@@ -341,9 +341,7 @@ impl InstrumentManifest {
         // number is a broken file rather than a forward-compatible one.
         for (id, value) in &self.default_params {
             if !value.is_finite() {
-                return Err(invalid(format!(
-                    "default_params['{id}'] is not a number"
-                )));
+                return Err(invalid(format!("default_params['{id}'] is not a number")));
             }
         }
         for (index, entry) in self.samples.iter().enumerate() {

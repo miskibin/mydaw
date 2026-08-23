@@ -58,6 +58,7 @@
 use std::path::{Path, PathBuf};
 
 use mydaw_plugin_audio_io::{AudioIoError, AudioIoService};
+use mydaw_plugin_sampler::SamplerRegistry;
 use mydaw_plugin_sequencer::{AudioSourceRegistry, PlayMode, Playlist, SequencerService};
 use mydaw_rt_core::DEFAULT_BPM;
 
@@ -262,7 +263,7 @@ impl ProjectHost {
         bridge: &ProjectBridge,
         hosts: &mut Hosts<'_>,
     ) -> Result<ProjectInfoDto, String> {
-        let file = default_project_file();
+        let file = default_project_file(session.tracks.sampler());
         let report = self
             .load(session, hosts, &file)
             .map_err(|err| err.to_string())?;
@@ -378,17 +379,8 @@ impl ProjectHost {
 
         // Decode every named file *before* the graph is built. A one-shot node
         // snapshots the buffer at construction; restoring afterwards leaves the
-        // rack channel in place and silent. Factory drums are real wavs too, so
-        // load this table first so their ids cannot collide with restored clips,
-        // then turn any remaining synthesised Kick/Snare/Hats into those samples.
+        // rack channel in place and silent.
         restore_audio_sources(session.sources, file, &mut report.warnings);
-        let mut patterns = patterns;
-        crate::drum_samples::realize_drum_tracks(
-            &mut project,
-            Some(&mut patterns),
-            session.tracks,
-            session.sources,
-        );
 
         // 3. Rebuild.
         session.tracks.set_project(project);
@@ -844,8 +836,14 @@ fn file_has_plugins(file: &ProjectFile) -> bool {
 ///
 /// A file rather than a special case, so New and Open reset exactly the same
 /// things -- see the module docs.
-pub fn default_project_file() -> ProjectFile {
-    let project = Project::default();
+///
+/// `sampler` is asked whether the factory kit is installed, exactly as the boot
+/// path asks, so New gives you the rack a fresh launch gives you.
+pub fn default_project_file(sampler: &SamplerRegistry) -> ProjectFile {
+    let project = Project::starter(
+        crate::project::default_kit(sampler),
+        crate::project::default_piano(sampler),
+    );
     let patterns = crate::state::starter_pattern_set(&project);
     ProjectFile::capture(
         &project,
@@ -917,11 +915,15 @@ mod tests {
         fn new() -> Self {
             let windows = Arc::new(PluginWindowService::new());
             let sources = Arc::new(AudioSourceRegistry::new());
-            let tracks = Arc::new(TrackHost::new(
+            // Six channels rather than the starter's: a test process has no
+            // samples installed, so the starter is one channel, and these tests
+            // move gain, pan and solo *between* strips.
+            let tracks = Arc::new(TrackHost::with_project(
                 Arc::new(TestToneFactory::new()),
                 Arc::new(InstrumentRegistry::new()),
                 Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached()),
                 Arc::new(mydaw_plugin_effects::EffectRegistry::new()),
+                Project::rack(6),
             ));
             tracks.audio_clips().bind_sources(Arc::clone(&sources));
             Self {
@@ -1009,7 +1011,7 @@ mod tests {
         // The whole non-plugin half of a project, which is most of it, and none
         // of which needs a sound card.
         let mut rig = Rig::new();
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project
             .add(Source::TestTone, Some("Tone".to_owned()))
             .unwrap();
@@ -1040,7 +1042,7 @@ mod tests {
 
         let loaded = rig.tracks.project();
         assert_eq!(loaded.len(), project.len());
-        assert_eq!(loaded.tracks[0].name, "Kick");
+        assert_eq!(loaded.tracks[0].name, "Channel 1");
         assert_eq!(loaded.tracks[0].gain_db, -9.5);
         assert_eq!(loaded.tracks[0].pan, -0.75);
         assert!(loaded.tracks[0].muted);
@@ -1071,7 +1073,7 @@ mod tests {
     #[test]
     fn a_load_round_trips_through_capture_unchanged() {
         let mut rig = Rig::new();
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].gain_db = -6.5;
         project.tracks[1].pan = 0.5;
         project.master_gain_db = 1.5;
@@ -1150,7 +1152,7 @@ mod tests {
         // one of its plugins still opens, and still remembers the plugin.
         let mut rig = Rig::new();
         let missing = std::env::temp_dir().join("mydaw-no-such-bundle-a71c.clap");
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[1].source =
             Source::Clap(ClapSourceRef::new(&missing, "com.acme.thing").named("Acme Thing"));
         let (patterns, playlist) = beat(&[0]);
@@ -1199,7 +1201,9 @@ mod tests {
     #[test]
     fn a_project_with_no_plugins_and_no_device_produces_no_warnings_at_all() {
         let mut rig = Rig::new();
-        let report = rig.load(&default_project_file()).unwrap();
+        let report = rig
+            .load(&default_project_file(&SamplerRegistry::detached()))
+            .unwrap();
         assert!(report.warnings.is_empty(), "{:?}", report.warnings);
     }
 
@@ -1221,8 +1225,8 @@ mod tests {
         assert_eq!(info.missing_plugins, 0);
         let loaded = rig.tracks.project();
         assert_eq!(loaded.len(), Project::default().len());
-        assert_eq!(loaded.tracks[0].name, "Kick");
-        assert_eq!(loaded.tracks[5].source, Source::PolySynth);
+        assert_eq!(loaded.tracks[0].name, "Poly Synth");
+        assert_eq!(loaded.tracks[0].source, Source::PolySynth);
         assert_eq!(rig.sequencer.bpm(), DEFAULT_BPM);
         assert!(rig.sequencer.active_pattern().is_empty());
         assert_eq!(rig.tracks.selected(), 0);
@@ -1301,7 +1305,7 @@ mod tests {
         // What a headless capture of a plugin-headed project looks like: the
         // locator is there, the state is not, and nothing pretends otherwise.
         let mut rig = Rig::new();
-        let mut file = default_project_file();
+        let mut file = default_project_file(&SamplerRegistry::detached());
         file.tracks.push(clap_track(2, r"C:\CLAP\Thing.clap"));
         rig.load(&file).unwrap();
 
@@ -1316,7 +1320,7 @@ mod tests {
 
     #[test]
     fn the_default_project_file_is_the_shells_own_starting_session() {
-        let file = default_project_file();
+        let file = default_project_file(&SamplerRegistry::detached());
         assert_eq!(file.format_version, crate::project_file::FORMAT_VERSION);
         assert_eq!(file.bpm, DEFAULT_BPM);
         assert_eq!(file.bpm, 130.0);
@@ -1327,14 +1331,8 @@ mod tests {
                 .iter()
                 .map(|t| t.name.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "Kick",
-                "Snare",
-                "Clap",
-                "Hat Closed",
-                "Hat Open",
-                "Poly Synth"
-            ]
+            vec!["Poly Synth"],
+            "a detached registry has no factory kit, so New is the synth alone"
         );
         assert_eq!(file.patterns.len(), 1, "one empty pattern to start from");
         assert!(file.patterns[0].channels.iter().all(|clip| clip
@@ -1418,7 +1416,7 @@ mod tests {
 
     /// A file with `audio_sources` naming `paths`.
     fn file_with_sources(paths: &[&Path]) -> ProjectFile {
-        let mut file = default_project_file();
+        let mut file = default_project_file(&SamplerRegistry::detached());
         file.audio_sources = paths
             .iter()
             .enumerate()

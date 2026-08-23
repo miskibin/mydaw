@@ -31,14 +31,22 @@ fn frames(ms: f64) -> usize {
 ///
 /// Rooted at C4 and covering the keyboard, so C4 plays at step 1.0 and C5 at
 /// exactly 2.0 -- the two ends of the glide tests.
-fn flat(seconds: f64) -> (mydaw_plugin_sampler::test_support::TempDir, Arc<mydaw_plugin_sampler::SampleBank>) {
+fn flat(
+    seconds: f64,
+) -> (
+    mydaw_plugin_sampler::test_support::TempDir,
+    Arc<mydaw_plugin_sampler::SampleBank>,
+) {
     flat_with(seconds, false)
 }
 
 fn flat_with(
     seconds: f64,
     one_shot: bool,
-) -> (mydaw_plugin_sampler::test_support::TempDir, Arc<mydaw_plugin_sampler::SampleBank>) {
+) -> (
+    mydaw_plugin_sampler::test_support::TempDir,
+    Arc<mydaw_plugin_sampler::SampleBank>,
+) {
     let count = (seconds * SR) as usize;
     InstrumentBuilder::new("flat")
         .one_shot(one_shot)
@@ -85,7 +93,12 @@ fn the_amplifier_draws_the_shape_its_knobs_describe() {
     ]);
     let mut node = SamplerNode::with_params(Arc::clone(&bank), params, SR);
 
-    let (out, _) = render(&mut node, frames(400.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
+    let (out, _) = render(
+        &mut node,
+        frames(400.0),
+        64,
+        &[NoteEvent::note_on(0, C4, 1.0)],
+    );
     let expect = |ms: f64, level: f32| {
         let measured = level_at(&out, ms);
         let want = level * VOICE_GAIN;
@@ -124,7 +137,12 @@ fn the_amplifier_draws_the_shape_its_knobs_describe() {
 fn the_default_envelope_leaves_a_recording_alone() {
     let (_dir, bank) = flat(2.0);
     let mut node = SamplerNode::new(Arc::clone(&bank), SR);
-    let (out, _) = render(&mut node, frames(100.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
+    let (out, _) = render(
+        &mut node,
+        frames(100.0),
+        64,
+        &[NoteEvent::note_on(0, C4, 1.0)],
+    );
 
     assert!(
         (out[0] - VOICE_GAIN).abs() < 1e-6,
@@ -153,7 +171,12 @@ fn a_one_shot_ignores_note_off_and_plays_its_recording_out() {
     let (_dir, bank) = flat_with(0.5, true);
     let mut node = SamplerNode::new(Arc::clone(&bank), SR);
 
-    render(&mut node, frames(10.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
+    render(
+        &mut node,
+        frames(10.0),
+        64,
+        &[NoteEvent::note_on(0, C4, 1.0)],
+    );
     let (after, _) = render(&mut node, frames(200.0), 64, &[NoteEvent::note_off(0, C4)]);
     assert_eq!(
         node.held_voices(),
@@ -176,7 +199,12 @@ fn a_one_shot_ignores_note_off_and_plays_its_recording_out() {
 fn an_instrument_that_is_not_a_one_shot_still_answers_its_key() {
     let (_dir, bank) = flat(2.0);
     let mut node = SamplerNode::new(Arc::clone(&bank), SR);
-    render(&mut node, frames(10.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
+    render(
+        &mut node,
+        frames(10.0),
+        64,
+        &[NoteEvent::note_on(0, C4, 1.0)],
+    );
     render(&mut node, frames(50.0), 64, &[NoteEvent::note_off(0, C4)]);
     assert_eq!(node.held_voices(), 0, "the key came up");
     assert_eq!(node.active_voices(), 1, "and the release is running");
@@ -212,7 +240,12 @@ fn a_mono_glide_reaches_the_new_key_in_the_time_it_advertises() {
         let params = knobs(&[(param::MONO, 1.0), (param::GLIDE, glide_ms as f32)]);
         let mut node = SamplerNode::with_params(Arc::clone(&bank), params, SR);
 
-        render(&mut node, frames(20.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
+        render(
+            &mut node,
+            frames(20.0),
+            64,
+            &[NoteEvent::note_on(0, C4, 1.0)],
+        );
         assert_eq!(node.sounding_steps(), vec![1.0], "the first note is C4");
 
         // The second note starts the glide; from there it is time passing.
@@ -261,12 +294,22 @@ fn a_legato_note_bends_the_voice_without_retriggering_it() {
     ]);
     let mut node = SamplerNode::with_params(Arc::clone(&bank), params, SR);
 
-    render(&mut node, frames(500.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
+    render(
+        &mut node,
+        frames(500.0),
+        64,
+        &[NoteEvent::note_on(0, C4, 1.0)],
+    );
     let before = node.envelopes();
     assert_eq!(before.len(), 1);
     assert!(before[0] > 0.95, "the attack has finished: {:?}", before);
 
-    let (slide, _) = render(&mut node, frames(120.0), 64, &[NoteEvent::note_on(0, C5, 1.0)]);
+    let (slide, _) = render(
+        &mut node,
+        frames(120.0),
+        64,
+        &[NoteEvent::note_on(0, C5, 1.0)],
+    );
     assert_eq!(node.active_voices(), 1, "the slide reuses the voice");
     assert!(
         node.envelopes()[0] > 0.95,
@@ -286,7 +329,11 @@ fn a_legato_note_bends_the_voice_without_retriggering_it() {
         "letting go of the key that was slid *from* must not stop the note"
     );
     render(&mut node, frames(20.0), 64, &[NoteEvent::note_off(0, C5)]);
-    assert_eq!(node.held_voices(), 0, "letting go of the key that sounds does");
+    assert_eq!(
+        node.held_voices(),
+        0,
+        "letting go of the key that sounds does"
+    );
 }
 
 /// Mono off is the sampler it has always been: two keys, two voices, no glide.
@@ -296,8 +343,18 @@ fn without_mono_two_keys_are_two_voices_at_their_own_pitches() {
     let params = knobs(&[(param::MONO, 0.0), (param::GLIDE, 100.0)]);
     let mut node = SamplerNode::with_params(Arc::clone(&bank), params, SR);
 
-    render(&mut node, frames(20.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
-    render(&mut node, frames(20.0), 64, &[NoteEvent::note_on(0, C5, 1.0)]);
+    render(
+        &mut node,
+        frames(20.0),
+        64,
+        &[NoteEvent::note_on(0, C4, 1.0)],
+    );
+    render(
+        &mut node,
+        frames(20.0),
+        64,
+        &[NoteEvent::note_on(0, C5, 1.0)],
+    );
     assert_eq!(node.held_voices(), 2);
 
     let mut steps = node.sounding_steps();
@@ -321,11 +378,21 @@ fn a_mono_note_after_a_release_starts_again_rather_than_bending() {
     ]);
     let mut node = SamplerNode::with_params(Arc::clone(&bank), params, SR);
 
-    render(&mut node, frames(20.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
+    render(
+        &mut node,
+        frames(20.0),
+        64,
+        &[NoteEvent::note_on(0, C4, 1.0)],
+    );
     render(&mut node, frames(20.0), 64, &[NoteEvent::note_off(0, C4)]);
     assert_eq!(node.held_voices(), 0, "the long release is still fading");
 
-    render(&mut node, frames(5.0), 64, &[NoteEvent::note_on(0, C5, 1.0)]);
+    render(
+        &mut node,
+        frames(5.0),
+        64,
+        &[NoteEvent::note_on(0, C5, 1.0)],
+    );
     assert_eq!(node.held_voices(), 1);
     let steps = node.sounding_steps();
     assert!(
@@ -346,9 +413,19 @@ fn a_knob_moved_between_blocks_is_read_on_the_next_one() {
     let params = knobs(&[(param::MONO, 0.0)]);
     let mut node = SamplerNode::with_params(Arc::clone(&bank), Arc::clone(&params), SR);
 
-    render(&mut node, frames(20.0), 64, &[NoteEvent::note_on(0, C4, 1.0)]);
+    render(
+        &mut node,
+        frames(20.0),
+        64,
+        &[NoteEvent::note_on(0, C4, 1.0)],
+    );
     params.set_by_id(param::MONO, 1.0).expect("mono exists");
-    render(&mut node, frames(20.0), 64, &[NoteEvent::note_on(0, C5, 1.0)]);
+    render(
+        &mut node,
+        frames(20.0),
+        64,
+        &[NoteEvent::note_on(0, C5, 1.0)],
+    );
     assert_eq!(
         node.held_voices(),
         1,

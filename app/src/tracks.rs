@@ -186,7 +186,10 @@ impl TrackHost {
         sampler: Arc<SamplerRegistry>,
         effects: Arc<EffectRegistry>,
     ) -> Self {
-        let project = Project::starter(crate::project::default_piano(&sampler));
+        let project = Project::starter(
+            crate::project::default_kit(&sampler),
+            crate::project::default_piano(&sampler),
+        );
         Self::with_project(tone, instruments, sampler, effects, project)
     }
 
@@ -313,6 +316,15 @@ impl TrackHost {
                     .min(project.len().saturating_sub(1)),
             )
             .map_or(Source::DEFAULT, |track| track.source.clone())
+    }
+
+    /// The sampled instruments this host builds sources from.
+    ///
+    /// Exposed so "New project" can build the same starter rack the boot path
+    /// does -- both have to ask whether the factory kit is installed, and a New
+    /// that quietly differs from a fresh launch is a bug nobody reports.
+    pub fn sampler(&self) -> &SamplerRegistry {
+        &self.sampler
     }
 
     /// Decode any `sampler:file:...` sources that are not loaded yet.
@@ -965,15 +977,14 @@ impl TrackHost {
                     }
                     None => self.sampler.create(&type_id, sample_rate, max_block),
                 };
-                Ok(built
-                    .unwrap_or_else(|| {
-                        log::warn!(
-                            "the sampled instrument '{}' is not installed; \
+                Ok(built.unwrap_or_else(|| {
+                    log::warn!(
+                        "the sampled instrument '{}' is not installed; \
                              this track will be silent until its assets are downloaded",
-                            reference.instrument_id
-                        );
-                        Box::new(SilentNode)
-                    }))
+                        reference.instrument_id
+                    );
+                    Box::new(SilentNode)
+                }))
             }
             other => {
                 let type_id = other
@@ -1130,11 +1141,10 @@ impl TrackHost {
             Arc::clone(&project.tracks[track].sample_play)
         };
         let node: Box<dyn RtNode> = match &source {
-            Source::AudioClip { source_id } => self.audio_clips.open_for_source(
-                *source_id,
-                sample_play,
-                audio.gc_handle(),
-            ),
+            Source::AudioClip { source_id } => {
+                self.audio_clips
+                    .open_for_source(*source_id, sample_play, audio.gc_handle())
+            }
             _ => self.audio_clips.oneshot_node(source_id, sample_play),
         };
         let handle = self
@@ -1344,7 +1354,10 @@ impl TrackHost {
                 },
             };
             let (handle, gate) = match offline.as_deref_mut() {
-                None => (Arc::clone(&self.handles[index]), Arc::clone(&self.gates[index])),
+                None => (
+                    Arc::clone(&self.handles[index]),
+                    Arc::clone(&self.gates[index]),
+                ),
                 Some(held) => {
                     let handle = Arc::new(SourceHandle::new(def.source.clone()));
                     held.push(Arc::clone(&handle));
@@ -1466,12 +1479,19 @@ mod tests {
         ClapSourceRef::new(r"C:\plugins\thing.clap", "com.acme.thing").named("Acme Thing")
     }
 
+    /// A host on a six-channel rack.
+    ///
+    /// `TrackHost::new` builds the *starter*, which on a machine with no samples
+    /// installed -- which is what `SamplerRegistry::detached` is -- is a single
+    /// channel. These tests move gain, pan, mutes and selection between strips,
+    /// so they need strips.
     fn host() -> TrackHost {
-        TrackHost::new(
+        TrackHost::with_project(
             Arc::new(mydaw_plugin_test_tone::TestToneFactory::new()),
             Arc::new(InstrumentRegistry::new()),
             Arc::new(SamplerRegistry::detached()),
             Arc::new(EffectRegistry::new()),
+            crate::project::Project::rack(6),
         )
     }
 
@@ -1537,13 +1557,10 @@ mod tests {
         // The parameter block has to be right from the first block the audio
         // thread runs, which is before any command has arrived.
         let host = host();
-        let count = Project::default().len();
+        let count = Project::rack(6).len();
         assert_eq!(host.track_count(), count);
         assert_eq!(host.selected(), 0);
-        assert_eq!(
-            host.selected_source(),
-            Source::Drum(mydaw_plugin_instruments::SingleDrum::Kick)
-        );
+        assert_eq!(host.selected_source(), Source::PolySynth);
 
         let params = host.params();
         assert_eq!(params.track_gain(0), 1.0);
@@ -1609,16 +1626,10 @@ mod tests {
     #[test]
     fn the_selected_track_is_what_the_keyboard_and_the_selector_address() {
         let host = host();
-        assert_eq!(
-            host.selected_source(),
-            Source::Drum(mydaw_plugin_instruments::SingleDrum::Kick)
-        );
+        assert_eq!(host.selected_source(), Source::PolySynth);
         host.set_selected(1).unwrap();
         assert_eq!(host.selected(), 1);
-        assert_eq!(
-            host.selected_source(),
-            Source::Drum(mydaw_plugin_instruments::SingleDrum::Snare)
-        );
+        assert_eq!(host.selected_source(), Source::PolySynth);
         let board = ClapBoard::new();
         let missing = MissingPlugins::new();
         assert!(host.state(&board, &Vst3Board::new(), &missing).tracks[1].selected);
@@ -1645,7 +1656,7 @@ mod tests {
         let collector = mydaw_rt_core::basedrop::Collector::new();
         let spec = host.build_spec(&LIMITS, collector.handle());
 
-        let count = Project::default().len();
+        let count = Project::rack(6).len();
         assert_eq!(spec.track_count(), count);
         // Source slot plus transport gate per track, plus the two master-bus
         // nodes: the file-preview player and the master insert slot.
@@ -1693,7 +1704,7 @@ mod tests {
         ));
         assert_eq!(
             host.track_count(),
-            Project::default().len() + 1,
+            Project::rack(6).len() + 1,
             "the project edit happened"
         );
     }
@@ -1733,7 +1744,7 @@ mod tests {
             host.add_track(Source::PolySynth, None, &audio),
             Err(MixerError::Audio(AudioIoError::NotRunning))
         ));
-        let added = Project::default().len();
+        let added = Project::rack(6).len();
         assert_eq!(host.track_count(), added + 1);
         assert!(
             !host.params().track_muted(added),

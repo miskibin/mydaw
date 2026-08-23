@@ -366,7 +366,7 @@ fn partials(samples: &[f32]) -> String {
 fn authored_project(bundle: &Path) -> Project {
     let mut project = Project::empty();
     project
-        .add(Source::DrumKit, Some("Kit".to_owned()))
+        .add(Source::PolySynth, Some("Kit".to_owned()))
         .expect("room");
     project
         .add(
@@ -467,7 +467,7 @@ fn a_whole_session_survives_a_save_and_a_load_into_a_fresh_engine() {
             .collect::<Vec<_>>(),
         vec!["Kit", "Lead", "Ref"]
     );
-    assert_eq!(restored.tracks[0].source, Source::DrumKit);
+    assert_eq!(restored.tracks[0].source, Source::PolySynth);
     assert_eq!(restored.tracks[2].source, Source::TestTone);
     assert_eq!(
         restored.tracks[1].source.clap_ref().unwrap().plugin_id,
@@ -623,7 +623,7 @@ fn a_project_whose_plugin_is_gone_still_opens_with_everything_else_intact() {
 
     let mut project = Project::empty();
     project
-        .add(Source::DrumKit, Some("Kit".to_owned()))
+        .add(Source::PolySynth, Some("Kit".to_owned()))
         .expect("room");
     project
         .add(
@@ -675,11 +675,14 @@ fn a_project_whose_plugin_is_gone_still_opens_with_everything_else_intact() {
     assert_eq!(second.sequencer.bpm(), 112.0);
     assert_eq!(second.sequencer.active_pattern(), authored_pattern());
     assert_eq!(second.tracks.project().tracks[0].gain_db, -3.0);
-    assert_eq!(second.tracks.project().tracks[0].source, Source::DrumKit);
+    assert_eq!(second.tracks.project().tracks[0].source, Source::PolySynth);
 
     // The plugin did not, and says so, on the track that asked for it.
     assert_eq!(report.missing_count(), 1);
-    assert!(second.missing.track(0).is_none(), "the kit is fine");
+    assert!(
+        second.missing.track(0).is_none(),
+        "the synth channel is fine"
+    );
     let warning = second.missing.track(1).expect("track 1 asked for a plugin");
     assert_eq!(warning.name, "MYDAW Fixture Synth");
     assert_eq!(warning.format, "clap");
@@ -695,7 +698,7 @@ fn a_project_whose_plugin_is_gone_still_opens_with_everything_else_intact() {
         0.0,
         "a track whose plugin is missing must be silent"
     );
-    // ...while the drum kit still plays.
+    // ...while the other channel still plays.
     let kit = second.capture_audio(&[(0, 36)]);
     assert!(peak(&kit) > 0.01, "the rest of the project still sounds");
 

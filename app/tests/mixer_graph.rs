@@ -379,23 +379,18 @@ fn adding_a_track_mid_play_does_not_interrupt_the_others() {
     assert_eq!(rig.host.project().tracks[0].gain_db, -6.0206);
 }
 
+/// A rack is silent until it is played, and a note reaches one channel only.
+///
+/// The channel-per-instrument claim is the point: a note addressed to channel 0
+/// cannot leak into channel 1, whatever is loaded on either.
 #[test]
-fn the_shells_starter_rack_is_five_drums_and_a_synth_and_is_silent_until_played() {
-    let rig_project = Project::default();
-    assert_eq!(
+fn a_rack_is_silent_until_played_and_a_note_reaches_one_channel_only() {
+    let rig_project = Project::rack(6);
+    assert!(
         rig_project
             .tracks
             .iter()
-            .map(|t| t.source.id())
-            .collect::<Vec<_>>(),
-        vec![
-            "kick",
-            "snare",
-            "clap",
-            "hat-closed",
-            "hat-open",
-            "poly-synth"
-        ],
+            .all(|t| t.source == Source::PolySynth),
         "one instrument per channel"
     );
 
@@ -406,15 +401,12 @@ fn the_shells_starter_rack_is_five_drums_and_a_synth_and_is_silent_until_played(
     assert_eq!(peak(&right), 0.0);
     assert_eq!(rig.peaks().len(), count);
 
-    // A note on channel 0 reaches the kick channel, and nothing else -- which
-    // is the point of the split: a channel is one instrument, and a note
-    // addressed to it cannot leak into the snare.
-    rig.render_with(true, &[NoteEvent::note_on(0, 36, 1.0)]);
+    rig.render_with(true, &[NoteEvent::note_on(0, 60, 1.0)]);
     for _ in 0..8 {
         rig.render(true);
     }
     let peaks = rig.peaks();
-    assert!(peaks[0].peak_l > 0.01, "the kick answered");
+    assert!(peaks[0].peak_l > 0.01, "channel 0 answered");
     for (index, peak) in peaks.iter().enumerate().skip(1) {
         assert_eq!(
             *peak,

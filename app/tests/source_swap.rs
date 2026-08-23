@@ -20,8 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use mydaw_app::{source_chain, Source, SourceHandle};
-use mydaw_plugin_instruments::drum_kit::KICK_KEY;
-use mydaw_plugin_instruments::{DrumKitNode, PolySynthNode};
+use mydaw_plugin_instruments::PolySynthNode;
 use mydaw_plugin_test_tone::{TestToneFactory, DEFAULT_AMPLITUDE};
 use mydaw_rt_core::basedrop::Collector;
 use mydaw_rt_core::{
@@ -142,16 +141,16 @@ fn an_insert_survives_a_source_change_and_keeps_processing() {
     // Swap to the drum kit and hit it. The same `HalveNode` instance is still
     // in the chain -- it was never rebuilt.
     rig.handle
-        .install(Box::new(DrumKitNode::new(SR)), Source::DrumKit)
+        .install(Box::new(PolySynthNode::new(SR)), Source::PolySynth)
         .expect("the swap installs");
-    let hit = rig.block(false, &[NoteEvent::note_on(0, KICK_KEY, 1.0)]);
+    let hit = rig.block(false, &[NoteEvent::note_on(0, 60, 1.0)]);
 
     // Compare against the same kit, same event, rendered on its own: the
     // instruments are bit-deterministic, so "the insert ran" is an exact claim.
-    let mut bare = DrumKitNode::new(SR);
+    let mut bare = PolySynthNode::new(SR);
     let mut buffers = AudioBuffers::new(BLOCK);
     {
-        let events = [NoteEvent::note_on(0, KICK_KEY, 1.0)];
+        let events = [NoteEvent::note_on(0, 60, 1.0)];
         let mut ctx = ProcessCtx::with_events(
             &mut buffers,
             SR,
@@ -244,7 +243,7 @@ fn a_superseded_source_is_freed_by_the_collector_and_not_by_the_audio_thread() {
     assert!(before >= 2);
 
     rig.handle
-        .install(Box::new(DrumKitNode::new(SR)), Source::DrumKit)
+        .install(Box::new(PolySynthNode::new(SR)), Source::PolySynth)
         .expect("installs");
     assert_eq!(rig.collector.alloc_count(), before + 1);
 

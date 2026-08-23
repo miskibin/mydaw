@@ -239,8 +239,8 @@ impl AssetCatalog {
     /// it came from, because "one of your two hundred and fifty samples is
     /// wrong" is not a usable error.
     pub fn parse(bytes: &[u8]) -> Result<Self, DownloadError> {
-        let document: serde_json::Value =
-            serde_json::from_slice(bytes).map_err(|err| DownloadError::Manifest(err.to_string()))?;
+        let document: serde_json::Value = serde_json::from_slice(bytes)
+            .map_err(|err| DownloadError::Manifest(err.to_string()))?;
 
         let instruments: Vec<&serde_json::Value> = match document.get("instruments") {
             Some(serde_json::Value::Array(list)) => list.iter().collect(),
@@ -1000,7 +1000,10 @@ mod tests {
             let instrument =
                 crate::manifest::InstrumentManifest::parse(entry.json.as_bytes(), &path)
                     .unwrap_or_else(|err| {
-                        panic!("'{}' must also be a runtime manifest: {err}", entry.manifest.id)
+                        panic!(
+                            "'{}' must also be a runtime manifest: {err}",
+                            entry.manifest.id
+                        )
                     });
             assert_eq!(instrument.id, entry.manifest.id);
             assert_eq!(instrument.samples.len(), entry.manifest.samples.len());
@@ -1019,7 +1022,10 @@ mod tests {
         let catalog = AssetCatalog::parse(json.as_bytes()).expect("schema 1 must still parse");
         assert_eq!(catalog.entries().len(), 1);
         assert_eq!(catalog.entries()[0].manifest.id, "test-piano");
-        assert_eq!(catalog.total_bytes(), catalog.entries()[0].manifest.total_bytes());
+        assert_eq!(
+            catalog.total_bytes(),
+            catalog.entries()[0].manifest.total_bytes()
+        );
     }
 
     #[test]

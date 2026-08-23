@@ -98,7 +98,11 @@ fn no_two_entries_shadow_each_other() {
 fn drum_pads_play_at_their_recorded_pitch() {
     let catalog = catalog();
     for id in DRUM_KITS {
-        let manifest = instrument(catalog.get(id).unwrap_or_else(|| panic!("'{id}' is catalogued")));
+        let manifest = instrument(
+            catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("'{id}' is catalogued")),
+        );
         for sample in &manifest.samples {
             assert_eq!(
                 (sample.key_lo, sample.key_hi),
@@ -124,7 +128,9 @@ fn every_key_that_sounds_at_all_sounds_at_every_velocity() {
         let mut keys: HashMap<u8, Vec<(u8, u8)>> = HashMap::new();
         for sample in &manifest.samples {
             for key in sample.key_lo..=sample.key_hi {
-                keys.entry(key).or_default().push((sample.vel_lo, sample.vel_hi));
+                keys.entry(key)
+                    .or_default()
+                    .push((sample.vel_lo, sample.vel_hi));
             }
         }
         for (key, mut spans) in keys {
@@ -156,7 +162,9 @@ fn every_key_that_sounds_at_all_sounds_at_every_velocity() {
 fn every_factory_file_names_its_source_and_licence() {
     let catalog = catalog();
     for id in FACTORY_KITS {
-        let entry = catalog.get(id).unwrap_or_else(|| panic!("'{id}' is catalogued"));
+        let entry = catalog
+            .get(id)
+            .unwrap_or_else(|| panic!("'{id}' is catalogued"));
         let source = &entry.manifest.source;
         assert_eq!(
             source.license, "CC0-1.0",
@@ -196,7 +204,11 @@ fn every_factory_file_names_its_source_and_licence() {
 fn every_drum_kit_declares_itself_a_one_shot_and_no_kit_fakes_one() {
     let catalog = catalog();
     for id in FACTORY_KITS {
-        let manifest = instrument(catalog.get(id).unwrap_or_else(|| panic!("'{id}' is catalogued")));
+        let manifest = instrument(
+            catalog
+                .get(id)
+                .unwrap_or_else(|| panic!("'{id}' is catalogued")),
+        );
         assert_eq!(
             manifest.one_shot,
             DRUM_KITS.contains(id),
@@ -403,7 +415,11 @@ fn dominant_partial_hz(mono: &[f32], sample_rate: f64) -> f64 {
 /// Decimate to about 1.5 kHz with a box average, which is both the anti-alias
 /// filter and the speed-up: nothing above 700 Hz matters to a 50 Hz tone, and
 /// the projection above is O(candidates x samples).
-fn decimated_mono(stereo: &[f32], range: std::ops::Range<usize>, sample_rate: f64) -> (Vec<f32>, f64) {
+fn decimated_mono(
+    stereo: &[f32],
+    range: std::ops::Range<usize>,
+    sample_rate: f64,
+) -> (Vec<f32>, f64) {
     let factor = (sample_rate / 1_500.0).round().max(1.0) as usize;
     let mut out = Vec::with_capacity(range.len() / factor + 1);
     let mut frame = range.start;
@@ -482,7 +498,8 @@ fn the_808_bass_roots_match_what_the_recordings_actually_sound() {
             claimed,
             measured - claimed,
             match analyser {
-                PitchOutcome::Detected(pitch) => format!("{} {:+.1}c", pitch.midi_note, pitch.cents),
+                PitchOutcome::Detected(pitch) =>
+                    format!("{} {:+.1}c", pitch.midi_note, pitch.cents),
                 PitchOutcome::NoStablePitch(reason) => format!("{reason:?}"),
             }
         );

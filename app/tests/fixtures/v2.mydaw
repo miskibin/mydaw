@@ -9,7 +9,7 @@
       "name": "Drums",
       "source": {
         "kind": "internal",
-        "id": "drum-kit"
+        "id": "poly-synth"
       },
       "gain_db": -6.5,
       "pan": -0.25,

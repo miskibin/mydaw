@@ -133,7 +133,7 @@ impl AppState {
         }
         let frames = data.len() / CHANNELS;
 
-        let dir = crate::drum_samples::sample_cache_dir().join("renders");
+        let dir = crate::user_dirs::sample_cache_dir().join("renders");
         std::fs::create_dir_all(&dir).map_err(|err| {
             RenderError::Write(SampleEditError::Io {
                 path: dir.display().to_string(),
@@ -421,4 +421,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-

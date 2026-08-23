@@ -39,7 +39,7 @@
 //! # Where the files go
 //!
 //! Beside the factory drum renders, under the same cache root
-//! (`crate::drum_samples`): `WAVE Studio/sample-edits/`. Names follow the file
+//! (`crate::user_dirs`): `WAVE Studio/sample-edits/`. Names follow the file
 //! that was edited — `Kick (reversed).wav`, `Kick (+3.0 dB).wav` — and collide
 //! into ` 2`, ` 3` rather than overwriting, because the registry keys sources
 //! by path and reusing a path with different audio behind it would hand the
@@ -270,7 +270,11 @@ pub fn crop(data: &[f32], start_frames: u64, end_frames: u64) -> Vec<f32> {
 /// first second of the take backwards.
 pub fn mirror_region(start: u64, end: u64, frames: u64) -> (u64, u64) {
     let start = start.min(frames);
-    let end = if end == 0 || end > frames { frames } else { end };
+    let end = if end == 0 || end > frames {
+        frames
+    } else {
+        end
+    };
     if start >= end {
         return (0, 0);
     }
@@ -289,7 +293,7 @@ pub fn mirror_region(start: u64, end: u64, frames: u64) -> (u64, u64) {
 
 /// Where edited copies are written. Beside the factory drum renders.
 pub fn edits_dir() -> PathBuf {
-    crate::drum_samples::sample_cache_dir().join("sample-edits")
+    crate::user_dirs::sample_cache_dir().join("sample-edits")
 }
 
 /// `Kick.wav` + `reversed` -> `<dir>/Kick (reversed).wav`, never overwriting.
@@ -386,12 +390,16 @@ impl AppState {
                 (reverse(stereo), start, end, 0)
             }
             SampleOp::Normalize => {
-                let data =
-                    normalize(stereo, NORMALIZE_TARGET_DBFS).ok_or(SampleEditError::Silent(name))?;
+                let data = normalize(stereo, NORMALIZE_TARGET_DBFS)
+                    .ok_or(SampleEditError::Silent(name))?;
                 (data, start, end, 0)
             }
             SampleOp::Trim => {
-                let end_frame = if end == 0 || end > frames { frames } else { end };
+                let end_frame = if end == 0 || end > frames {
+                    frames
+                } else {
+                    end
+                };
                 if start >= end_frame || (start == 0 && end_frame == frames) {
                     return Err(SampleEditError::NothingToTrim);
                 }
@@ -473,7 +481,10 @@ impl AppState {
             // one decoded file for another needs no device, and a machine with
             // no sound card must not end up with the edit written to disk and
             // not applied. See that method for the whole argument.
-            if let Err(err) = self.tracks().repoint_sample_source(track, source_id, self.audio()) {
+            if let Err(err) = self
+                .tracks()
+                .repoint_sample_source(track, source_id, self.audio())
+            {
                 if !err.is_only_no_device() {
                     return Err(err.into());
                 }
@@ -648,14 +659,63 @@ mod tests {
     // -----------------------------------------------------------------------
     // The command, against a booted session
     //
-    // The starter rack's Kick is a real one-shot channel over a real factory
-    // WAV, so these run the whole path: decode, edit, encode, register, repoint.
+    // Channel 0 is a real one-shot channel over a real WAV, so these run the
+    // whole path: decode, edit, encode, register, repoint.
     // -----------------------------------------------------------------------
 
-    /// A booted shell whose channel 0 is the Kick one-shot.
+    /// A short WAV to edit: a quiet sine that is not silent anywhere.
+    ///
+    /// Written rather than taken from the factory content, because `assets/` is
+    /// gitignored and these tests have to run on a fresh clone.
+    fn write_take() -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "mydaw-edit-take-{}-{:?}.wav",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 48_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("wav");
+        for frame in 0..24_000 {
+            let t = frame as f64 / 48_000.0;
+            // Fading, so reverse and trim are visible in the samples.
+            let sample = ((t * 220.0 * std::f64::consts::TAU).sin() * (1.0 - t)) as f32 * 0.5;
+            writer.write_sample(sample).unwrap();
+            writer.write_sample(sample).unwrap();
+        }
+        writer.finalize().unwrap();
+        path
+    }
+
+    /// A booted shell whose channel 0 is a one-shot over [`write_take`].
+    ///
+    /// The starter rack is whatever the machine has installed -- on a fresh
+    /// clone, the poly synth alone -- so the sample channel is added and the
+    /// synth channel dropped, leaving the one-shot at index 0 where every test
+    /// below addresses it.
     fn session() -> (mydaw_kernel::Kernel, AppState) {
         let kernel = crate::boot_kernel().expect("kernel boots");
         let state = AppState::from_kernel(&kernel).expect("services present");
+        let path = write_take();
+        match state.add_sample_channel(&path) {
+            Ok(_) => {}
+            // No device in a test process: the track is added, the graph is not.
+            Err(crate::tracks::MixerError::Audio(
+                mydaw_plugin_audio_io::AudioIoError::NotRunning,
+            )) => {}
+            Err(err) => panic!("sample channel: {err:?}"),
+        }
+        match state.remove_track(0) {
+            Ok(()) => {}
+            Err(crate::tracks::MixerError::Audio(
+                mydaw_plugin_audio_io::AudioIoError::NotRunning,
+            )) => {}
+            Err(err) => panic!("dropping the synth channel: {err:?}"),
+        }
         assert_eq!(state.mixer_state().tracks[0].engine, "sample");
         (kernel, state)
     }
@@ -689,7 +749,11 @@ mod tests {
             state.mixer_state().tracks[0].audio_source_id,
             Some(edit.source.id)
         );
-        assert!(edit.source.name.contains("(reversed)"), "{}", edit.source.name);
+        assert!(
+            edit.source.name.contains("(reversed)"),
+            "{}",
+            edit.source.name
+        );
         clean_up(&state, before);
     }
 
@@ -760,7 +824,9 @@ mod tests {
             .set_track_sample_region(0, start, end)
             .expect("the region is set");
 
-        let edit = state.edit_track_sample(0, SampleOp::Trim).expect("it trims");
+        let edit = state
+            .edit_track_sample(0, SampleOp::Trim)
+            .expect("it trims");
         assert_eq!(
             state.audio_source(edit.source.id).unwrap().frames() as u64,
             end - start,
@@ -792,12 +858,21 @@ mod tests {
     #[test]
     fn a_channel_with_no_file_is_refused_rather_than_silently_ignored() {
         let (_kernel, state) = session();
+        // The session is one-shot channels only, so put a synthesiser on the end
+        // to be refused.
+        match state.add_track(crate::source::Source::PolySynth, None) {
+            Ok(_) => {}
+            Err(crate::tracks::MixerError::Audio(
+                mydaw_plugin_audio_io::AudioIoError::NotRunning,
+            )) => {}
+            Err(err) => panic!("adding a synth channel: {err:?}"),
+        }
         let synth = state
             .mixer_state()
             .tracks
             .iter()
             .position(|track| track.engine == "synth")
-            .expect("the starter rack has a synthesiser");
+            .expect("the channel just added is a synthesiser");
         assert!(matches!(
             state.edit_track_sample(synth, SampleOp::Reverse),
             Err(SampleEditError::NotASampleChannel(_))

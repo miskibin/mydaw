@@ -9,7 +9,6 @@
 use std::path::Path;
 
 use mydaw_audio_file::{cubic, taps, CHANNELS};
-use mydaw_plugin_instruments::KICK_KEY;
 use mydaw_plugin_sequencer::{pitch_ratio, AudioClipTune, AudioSource, MAX_WAVEFORM_BINS};
 use mydaw_rt_core::{AudioBuffers, NoteEvent, ProcessCtx, RtNode, TransportSnapshot};
 use serde::Serialize;
@@ -283,19 +282,13 @@ impl std::error::Error for PreviewError {}
 /// The note events the first block of a preview should see.
 ///
 /// The test tone is free-running and gated on the transport in the graph; an
-/// offline render has no gate, so it just sings. Drums are one-shots (a
-/// note-off must not choke them). The kit answers only on GM keys. Everything
-/// else gets middle C, held then released, so a synth's envelope is visible.
+/// offline render has no gate, so it just sings. Everything else gets middle C,
+/// held then released, so a synth's envelope is visible -- a sampled kit maps
+/// that key to whatever its manifest put there, and a one-shot ignores the
+/// note-off rather than being choked by it.
 fn preview_events(source: &Source, frames: usize) -> Vec<NoteEvent> {
     match source {
         Source::TestTone => Vec::new(),
-        Source::DrumKit => vec![NoteEvent::note_on(0, KICK_KEY, PREVIEW_VELOCITY)],
-        Source::Drum(drum) => {
-            // The drum's own base key, so each instrument previews at the pitch
-            // it was designed at rather than at whatever this list remembered.
-            let key = drum.base_key();
-            vec![NoteEvent::note_on(0, key, PREVIEW_VELOCITY)]
-        }
         Source::PolySynth | Source::Sampler(_) => {
             let off = ((frames as f64 * RELEASE_AT) as u32).min(frames.saturating_sub(1) as u32);
             vec![
@@ -411,19 +404,22 @@ mod tests {
     }
 
     #[test]
-    fn a_kick_preview_has_a_real_hit_not_a_flat_line() {
+    fn a_synth_preview_has_a_real_note_not_a_flat_line() {
         with_state(|state| {
-            let preview = state.preview_source("kick", 256).expect("kick renders");
-            assert_eq!(preview.source_id, "kick");
+            let preview = state
+                .preview_source("poly-synth", 256)
+                .expect("the synth renders");
+            assert_eq!(preview.source_id, "poly-synth");
             assert_eq!(preview.engine, "synth");
             assert!(
                 preview.peak > 0.1,
-                "a kick must move the needle, peak was {}",
+                "a held note must move the needle, peak was {}",
                 preview.peak
             );
             assert_eq!(preview.bins, preview.peaks.len());
             assert!(preview.bins >= 64, "enough bins to draw a shape");
-            // The kick decays: the first quarter is louder than the last.
+            // The note is released three quarters of the way in, so the tail
+            // has to be quieter than the sustain that preceded it.
             let quarter = preview.bins / 4;
             let head = preview.peaks[..quarter]
                 .iter()
@@ -433,7 +429,7 @@ mod tests {
                 .fold(0.0_f32, |acc, pair| acc.max(pair[1].abs()));
             assert!(
                 head > tail,
-                "a kick decays; head {head} should outrank tail {tail}"
+                "a released note decays; head {head} should outrank tail {tail}"
             );
         });
     }
@@ -462,25 +458,27 @@ mod tests {
     }
 
     #[test]
-    fn a_snare_hit_is_not_the_selected_tracks_kick() {
+    fn the_synth_previews_as_a_note_and_the_tone_as_a_tone() {
         with_state(|state| {
-            let kick = state.source_hit_audio("kick").expect("kick renders");
-            let snare = state.source_hit_audio("snare").expect("snare renders");
-            assert!(kick.frames() > 0 && snare.frames() > 0);
-            let kick_peak = kick
-                .padded()
-                .iter()
-                .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
-            let snare_peak = snare
-                .padded()
-                .iter()
-                .fold(0.0_f32, |acc, sample| acc.max(sample.abs()));
-            assert!(kick_peak > 0.1, "kick peak {kick_peak}");
-            assert!(snare_peak > 0.1, "snare peak {snare_peak}");
+            let synth = state
+                .source_hit_audio("poly-synth")
+                .expect("the synth renders");
+            let tone = state
+                .source_hit_audio("test-tone")
+                .expect("the tone renders");
+            assert!(synth.frames() > 0 && tone.frames() > 0);
+            let peak = |audio: &AudioSource| {
+                audio
+                    .padded()
+                    .iter()
+                    .fold(0.0_f32, |acc, sample| acc.max(sample.abs()))
+            };
+            assert!(peak(&synth) > 0.05, "the synth must make a sound");
+            assert!(peak(&tone) > 0.05, "the tone must make a sound");
             assert_ne!(
-                kick.padded(),
-                snare.padded(),
-                "clicking snare must not bounce the kick"
+                synth.padded(),
+                tone.padded(),
+                "two instruments must not render the same samples"
             );
         });
     }

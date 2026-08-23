@@ -58,7 +58,6 @@ pub mod clap_host;
 pub mod clips;
 mod commands;
 pub mod debug_capture;
-mod drum_samples;
 mod dto;
 pub mod effects;
 mod file_preview;
@@ -69,17 +68,18 @@ mod library;
 mod meters;
 mod preview;
 mod preview_settings;
-pub mod recording;
 pub mod project;
 pub mod project_bridge;
 pub mod project_file;
 pub mod project_host;
+pub mod recording;
 pub mod resample;
 pub mod sample_edit;
 pub mod source;
 pub mod spectrum;
 mod state;
 pub mod tracks;
+mod user_dirs;
 pub mod vst3_bridge;
 pub mod vst3_host;
 
@@ -134,11 +134,11 @@ pub use project_host::{
     attach, capture as capture_project, default_project_file, Hosts, LoadReport, ProjectHost,
     Session,
 };
+pub use recording::{next_take_path, recordings_dir, write_take, TakeWriteError};
 pub use source::{
     check_bundle_path, ClapSourceRef, SamplerSourceRef, SilentNode, Source, SourceDto, SourceError,
     SourceHandle, SourceKindDto, SourceSlot, Vst3SourceRef, SAMPLER_SOURCE_PREFIX,
 };
-pub use recording::{next_take_path, recordings_dir, write_take, TakeWriteError};
 pub use state::{
     boot_kernel, ui_snapshot, AppState, FinishedTake, NoteError, RecordingError, SequencerError,
     StartupError, KERNEL_STATUS_PANEL, MIXER_PANEL,
@@ -185,7 +185,9 @@ pub fn run() -> ExitCode {
     // this project was recorded on is often not the one it is opened on.
     if let Some(id) = audio_prefs.input_device_id.as_deref() {
         if let Err(err) = state.recorder().select_device(Some(id)) {
-            log::warn!("the remembered input device is unavailable ({err}); using the system default");
+            log::warn!(
+                "the remembered input device is unavailable ({err}); using the system default"
+            );
         }
     }
 

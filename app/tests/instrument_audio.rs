@@ -31,7 +31,6 @@ use std::time::Duration;
 
 use mydaw_app::{boot_kernel, capture_root, capture_to_disk, AppState, CaptureOutcome, Source};
 use mydaw_plugin_debug_tap::ChannelStats;
-use mydaw_plugin_instruments::drum_kit::{CLOSED_HAT_KEY, KICK_KEY, OPEN_HAT_KEY, SNARE_KEY};
 use mydaw_plugin_instruments::key_to_hz;
 
 /// One second is ~44 100 frames, which gives the FFT enough resolution to
@@ -236,97 +235,6 @@ fn a_chord_on_the_poly_synth_puts_every_note_into_the_spectrum() {
     assert_eq!(
         released.stats.per_channel[0].peak, 0.0,
         "every voice must release"
-    );
-
-    rig.tear_down();
-}
-
-#[test]
-#[ignore = "opens the audio device and plays audible drums"]
-fn the_drum_kit_puts_each_drum_where_it_belongs_in_the_spectrum() {
-    let Some(rig) = rig(Source::DrumKit) else {
-        return;
-    };
-
-    let idle = rig.capture("drums-idle", 0.2);
-    assert_eq!(
-        idle.stats.per_channel[0].peak, 0.0,
-        "an untriggered kit must be digitally silent"
-    );
-
-    // --- kick: everything below 100 Hz -------------------------------------
-    rig.state.note_on(KICK_KEY, 1.0).expect("queue accepts");
-    let kick = rig.capture("drums-kick", 0.5);
-    let channel = &kick.stats.per_channel[0];
-    let dominant = channel.dominant_hz.expect("a kick has a fundamental");
-    assert!(
-        dominant < 100.0,
-        "the kick's loudest partial is at {dominant:.1} Hz; it sweeps to 50 Hz"
-    );
-    assert!(
-        channel.peak > 0.1,
-        "the kick must be audible, got {}",
-        channel.peak
-    );
-    assert_eq!(channel.clipped, 0);
-
-    // --- snare: broadband, with energy well above the kick ------------------
-    sleep(Duration::from_millis(500));
-    rig.state.note_on(SNARE_KEY, 1.0).expect("queue accepts");
-    let snare = rig.capture("drums-snare", 0.3);
-    let channel = &snare.stats.per_channel[0];
-    // The kick reads as a pure tone (flatness ~0); the snare must not.
-    assert!(
-        channel.spectral_flatness > 0.2,
-        "a snare must read as broadband, got flatness {}",
-        channel.spectral_flatness
-    );
-    // Its loudest single partial is the 180 Hz body tone, by design -- the
-    // noise is louder in total but spread across the whole spectrum.
-    let dominant = channel.dominant_hz.expect("a snare has peaks");
-    assert!(
-        (dominant - 180.0).abs() < 5.0,
-        "the snare's body tone should be at 180 Hz, measured {dominant:.1} Hz"
-    );
-    // And the wires: real peaks above 1 kHz, which the kick has none of.
-    assert!(
-        channel
-            .top_bins
-            .iter()
-            .any(|peak| peak.frequency_hz > 1_000.0),
-        "the snare's noise is missing above 1 kHz; peaks were {:?}",
-        channel
-            .top_bins
-            .iter()
-            .map(|peak| peak.frequency_hz.round())
-            .collect::<Vec<_>>()
-    );
-    assert!(channel.peak > 0.1, "the snare must be audible");
-
-    // --- hats: high, and the closed one chokes the open one -----------------
-    sleep(Duration::from_millis(400));
-    rig.state.note_on(OPEN_HAT_KEY, 1.0).expect("queue accepts");
-    let hat = rig.capture("drums-open-hat", 0.3);
-    let channel = &hat.stats.per_channel[0];
-    assert!(
-        channel.dominant_hz.expect("a hat has peaks") > 4_000.0,
-        "an open hat belongs at the top of the spectrum, measured {:?}",
-        channel.dominant_hz
-    );
-    assert!(channel.peak > 0.05, "the hat must be audible");
-
-    // Retrigger the open hat, then choke it 100 ms in: 200 ms later the tail
-    // must be gone, where an unchoked 350 ms hat would still be ringing.
-    rig.state.note_on(OPEN_HAT_KEY, 1.0).expect("queue accepts");
-    sleep(Duration::from_millis(100));
-    rig.state
-        .note_on(CLOSED_HAT_KEY, 1.0)
-        .expect("queue accepts");
-    sleep(Duration::from_millis(200));
-    let choked = rig.capture("drums-choke", 0.2);
-    assert_eq!(
-        choked.stats.per_channel[0].peak, 0.0,
-        "a choked open hat and a 60 ms closed hat are both long gone by now"
     );
 
     rig.tear_down();

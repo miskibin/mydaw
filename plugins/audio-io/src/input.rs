@@ -446,7 +446,8 @@ impl RateConverter {
     /// mean "leave it alone", which is what a driver reporting nonsense should
     /// cost: an unconverted take, not a panic.
     pub fn new(from_rate: f64, to_rate: f64) -> Self {
-        let usable = from_rate.is_finite() && from_rate > 0.0 && to_rate.is_finite() && to_rate > 0.0;
+        let usable =
+            from_rate.is_finite() && from_rate > 0.0 && to_rate.is_finite() && to_rate > 0.0;
         let passthrough = !usable || (from_rate - to_rate).abs() < f64::EPSILON;
         Self {
             step: if usable { from_rate / to_rate } else { 1.0 },
@@ -547,7 +548,10 @@ mod tests {
         assert_eq!(consumer.available(), 0, "not recording means not copying");
         assert_eq!(rt.shared().dropped(), 0, "not copying is not dropping");
         assert_eq!(rt.shared().frames_seen(), 2);
-        assert!((rt.shared().peak() - 0.5).abs() < 1e-6, "the meter is live while armed");
+        assert!(
+            (rt.shared().peak() - 0.5).abs() < 1e-6,
+            "the meter is live while armed"
+        );
     }
 
     #[test]
@@ -649,7 +653,10 @@ mod tests {
         ] {
             shared.set_fault(fault);
             assert_eq!(shared.fault(), fault);
-            assert!(!shared.fault().message().is_empty(), "{fault:?} needs a sentence");
+            assert!(
+                !shared.fault().message().is_empty(),
+                "{fault:?} needs a sentence"
+            );
             assert!(shared.fault().is_fatal());
         }
         shared.clear_fault();
@@ -673,7 +680,11 @@ mod tests {
         rt.push_interleaved(&[1.0, 1.0, 2.0, 2.0, 3.0, 3.0]);
         let mut out = vec![9.0];
         assert_eq!(consumer.drain_into(&mut out, 2), 2);
-        assert_eq!(out, vec![9.0, 1.0, 1.0], "the limit counts appended samples");
+        assert_eq!(
+            out,
+            vec![9.0, 1.0, 1.0],
+            "the limit counts appended samples"
+        );
         assert_eq!(consumer.available(), 4);
     }
 
@@ -782,7 +793,11 @@ mod tests {
         };
         let one = render(64);
         let other = render(377);
-        assert_eq!(one.len(), other.len(), "block size must not change the length");
+        assert_eq!(
+            one.len(),
+            other.len(),
+            "block size must not change the length"
+        );
         for (a, b) in one.iter().zip(&other) {
             assert!((a - b).abs() < 1e-5, "{a} vs {b}");
         }

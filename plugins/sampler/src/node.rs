@@ -1184,7 +1184,10 @@ mod tests {
     #[test]
     fn the_parameter_list_is_the_six_a_sampled_instrument_needs() {
         let ids: Vec<&str> = PARAMS.iter().map(|def| def.id).collect();
-        assert_eq!(ids, ["attack", "decay", "sustain", "release", "glide", "mono"]);
+        assert_eq!(
+            ids,
+            ["attack", "decay", "sustain", "release", "glide", "mono"]
+        );
 
         let at = |id: &str| PARAMS.iter().find(|def| def.id == id).expect(id);
         assert_eq!(at(param::ATTACK).default, 0.0);

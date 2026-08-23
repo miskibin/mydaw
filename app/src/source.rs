@@ -57,7 +57,6 @@ use std::sync::Arc;
 use mydaw_plugin_audio_io::AudioIoError;
 use mydaw_plugin_host_clap::ClapPluginInfo;
 use mydaw_plugin_host_vst3::{ClassId, Vst3PluginInfo};
-use mydaw_plugin_instruments::SingleDrum;
 use mydaw_rt_core::basedrop::{Handle, Owned};
 use mydaw_rt_core::{ProcessCtx, RtNode};
 use parking_lot::Mutex;
@@ -288,17 +287,6 @@ pub enum Source {
     TestTone,
     /// The built-in [`poly-synth`](mydaw_plugin_instruments::PolySynthNode).
     PolySynth,
-    /// One built-in drum, as a whole instrument
-    /// ([`SingleDrumNode`](mydaw_plugin_instruments::SingleDrumNode)).
-    ///
-    /// A channel is one instrument, so each drum is its own source rather than
-    /// one key of a shared kit -- see `mydaw_plugin_instruments::single_drum`.
-    Drum(SingleDrum),
-    /// The built-in [`drum-kit`](mydaw_plugin_instruments::DrumKitNode).
-    ///
-    /// **Legacy.** Kept so a project saved before the kit was split still
-    /// opens; nothing creates one, and the default project does not use it.
-    DrumKit,
     /// A sampled instrument loaded from `assets/instruments`.
     ///
     /// **Internal, not hosted.** It is built by a `Send + Sync` factory on the
@@ -326,22 +314,12 @@ impl Source {
     /// and the list comes from the scan
     /// ([`AppState::sources`](crate::AppState::sources)).
     ///
-    /// The synth leads because it is the default; the five drums follow in the
-    /// order a kit is racked; the legacy kit and the test tone trail, because
-    /// neither is something to reach for.
-    pub const BUILT_IN: [Self; 8] = [
-        Self::PolySynth,
-        Self::Drum(SingleDrum::Kick),
-        Self::Drum(SingleDrum::Snare),
-        Self::Drum(SingleDrum::Clap),
-        Self::Drum(SingleDrum::ClosedHat),
-        Self::Drum(SingleDrum::OpenHat),
-        Self::DrumKit,
-        Self::TestTone,
-    ];
+    /// The synth leads because it is the default and the tone trails, because a
+    /// continuous sine is a diagnostic and not something to reach for. The
+    /// drums are not here: they are `sampler:808-kit`, discovered at runtime
+    /// like every other sampled instrument.
+    pub const BUILT_IN: [Self; 2] = [Self::PolySynth, Self::TestTone];
 
-    /// The source a fresh session's synth track starts on.
-    ///
     /// The poly synth rather than the test tone: a DAW that greets you with a
     /// playable instrument is telling the truth about what it is, and a
     /// continuous sine is a diagnostic, not a welcome. The tone is still one
@@ -353,8 +331,6 @@ impl Source {
         match self {
             Self::TestTone => "test-tone".to_owned(),
             Self::PolySynth => "poly-synth".to_owned(),
-            Self::Drum(drum) => drum.type_id().to_owned(),
-            Self::DrumKit => "drum-kit".to_owned(),
             Self::Sampler(reference) => reference.wire_id(),
             Self::Clap(reference) => reference.wire_id(),
             Self::Vst3(reference) => reference.wire_id(),
@@ -368,8 +344,6 @@ impl Source {
         match self {
             Self::TestTone => "Test Tone".to_owned(),
             Self::PolySynth => "Poly Synth".to_owned(),
-            Self::Drum(drum) => drum.display_name().to_owned(),
-            Self::DrumKit => "Drum Kit".to_owned(),
             Self::Sampler(reference) => reference.label().to_owned(),
             Self::Clap(reference) => reference.label().to_owned(),
             Self::Vst3(reference) => reference.label(),
@@ -383,10 +357,6 @@ impl Source {
         match self {
             Self::TestTone => "440 Hz sine, gated on the transport".to_owned(),
             Self::PolySynth => "Eight-voice saw + sub synth, played from the keyboard".to_owned(),
-            Self::Drum(drum) => drum.description().to_owned(),
-            Self::DrumKit => {
-                "Synthesised kick, snare and hi-hats on GM keys 36/38/42/46".to_owned()
-            }
             Self::Sampler(reference) => {
                 format!("Sampled instrument '{}'", reference.instrument_id)
             }
@@ -468,8 +438,6 @@ impl Source {
     pub const fn instrument_type_id(&self) -> Option<&'static str> {
         match self {
             Self::PolySynth => Some(mydaw_plugin_instruments::poly_synth::NODE_TYPE_ID),
-            Self::Drum(drum) => Some(drum.type_id()),
-            Self::DrumKit => Some(mydaw_plugin_instruments::drum_kit::NODE_TYPE_ID),
             _ => None,
         }
     }
@@ -483,14 +451,14 @@ impl Source {
     ///
     /// | badge | source |
     /// | --- | --- |
-    /// | `synth` | the poly synth, the five single drums, the legacy kit |
+    /// | `synth` | the poly synth |
     /// | `sampler` | a sampled instrument from `assets/instruments` |
     /// | `clap` / `vst3` | a hosted plugin, of that format |
     /// | `tone` | the diagnostic sine |
     pub const fn engine(&self) -> &'static str {
         match self {
             Self::TestTone => "tone",
-            Self::PolySynth | Self::Drum(_) | Self::DrumKit => "synth",
+            Self::PolySynth => "synth",
             Self::Sampler(_) => "sampler",
             Self::Clap(_) => "clap",
             Self::Vst3(_) => "vst3",
@@ -564,8 +532,9 @@ impl Source {
 #[derive(Debug, thiserror::Error)]
 pub enum SourceError {
     #[error(
-        "unknown source '{0}'; expected one of poly-synth, kick, snare, hat-closed, \
-         hat-open, drum-kit, test-tone or sampler:<instrument>"
+        "unknown source '{0}'; expected poly-synth, test-tone or \
+         sampler:<instrument>. The synthesised drums are gone; \
+         sampler:808-kit replaces them."
     )]
     Unknown(String),
     /// A sampled instrument that is not loaded -- most often because the
@@ -993,30 +962,17 @@ mod tests {
         // a breaking change, so they are pinned here.
         assert_eq!(
             Source::BUILT_IN.map(|source| source.id()).as_slice(),
-            [
-                "poly-synth",
-                "kick",
-                "snare",
-                "clap",
-                "hat-closed",
-                "hat-open",
-                "drum-kit",
-                "test-tone"
-            ]
+            ["poly-synth", "test-tone"]
         );
         assert_eq!(Source::DEFAULT, Source::PolySynth);
     }
 
     #[test]
     fn the_engine_badge_says_what_actually_makes_the_sound() {
-        // The UI draws this on a channel. A synthesised kick badges as `synth`,
-        // not as a drum machine nobody sampled -- the design mock's "Kick 909"
-        // is a label, and this is the truth behind it.
+        // The UI draws this on a channel. A drum is a `sampler` now, because a
+        // sampler is what plays it -- the design mock's "Kick 909" is a label,
+        // and this is the truth behind it.
         assert_eq!(Source::PolySynth.engine(), "synth");
-        for drum in SingleDrum::ALL {
-            assert_eq!(Source::Drum(drum).engine(), "synth");
-        }
-        assert_eq!(Source::DrumKit.engine(), "synth");
         assert_eq!(Source::TestTone.engine(), "tone");
         assert_eq!(
             Source::Sampler(SamplerSourceRef::new("salamander-piano")).engine(),
@@ -1032,18 +988,25 @@ mod tests {
     }
 
     #[test]
-    fn each_drum_is_its_own_source_backed_by_its_own_factory() {
-        for drum in SingleDrum::ALL {
-            let source = Source::Drum(drum);
-            assert_eq!(source.id(), drum.type_id());
-            assert_eq!(source.instrument_type_id(), Some(drum.type_id()));
-            assert!(source.takes_notes());
-            assert!(!source.gated());
-            assert!(!source.is_hosted());
-            assert_eq!(Source::parse(&source.id()).unwrap(), source);
+    fn the_synthesised_drum_ids_are_gone_and_say_where_to_look() {
+        // A project saved before the drums were removed names one of these. It
+        // must fail rather than silently open with a different sound, and the
+        // message has to point at what replaced them.
+        for id in [
+            "kick",
+            "snare",
+            "clap",
+            "hat-closed",
+            "hat-open",
+            "drum-kit",
+        ] {
+            let err = Source::parse(id).expect_err("a removed drum must not parse");
+            assert!(matches!(err, SourceError::Unknown(ref got) if got == id));
+            assert!(
+                err.to_string().contains("sampler:808-kit"),
+                "the error has to name the replacement, got: {err}"
+            );
         }
-        // ...and the legacy kit is still parseable, so an old project opens.
-        assert_eq!(Source::parse("drum-kit").unwrap(), Source::DrumKit);
     }
 
     #[test]
@@ -1197,7 +1160,7 @@ mod tests {
         assert!(!Source::TestTone.takes_notes());
         for source in [
             Source::PolySynth,
-            Source::DrumKit,
+            Source::Sampler(SamplerSourceRef::new("808-kit")),
             Source::Clap(fixture_ref()),
         ] {
             assert!(
@@ -1212,7 +1175,8 @@ mod tests {
     #[test]
     fn the_built_in_sources_name_the_instrument_factories_that_exist() {
         let registry = mydaw_plugin_instruments::InstrumentRegistry::new();
-        for source in [Source::PolySynth, Source::DrumKit] {
+        {
+            let source = Source::PolySynth;
             let type_id = source.instrument_type_id().expect("built-in");
             assert!(
                 registry.contains(type_id),
@@ -1324,7 +1288,7 @@ mod tests {
         assert_eq!(collector.alloc_count(), 1);
 
         handle
-            .install(Box::new(ConstNode(2.0)), Source::DrumKit)
+            .install(Box::new(ConstNode(2.0)), Source::PolySynth)
             .unwrap();
         assert_eq!(collector.alloc_count(), 2);
 

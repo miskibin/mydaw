@@ -1807,7 +1807,7 @@ mod tests {
     /// The project the round-trip tests use: three tracks, one of them hosted,
     /// every mixer control off its default.
     fn session() -> (Project, PatternSet, Playlist) {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project
             .add(Source::TestTone, Some("Tone".to_owned()))
             .expect("room");
@@ -1815,6 +1815,9 @@ mod tests {
         project.tracks[0].pan = -0.25;
         project.tracks[0].muted = true;
         project.tracks[1].source = clap_source();
+        // The knob block belongs to the source, so swapping one by hand has to
+        // swap the other -- a hosted plugin declares none through this path.
+        project.tracks[1].source_params = TrackDef::params_for(&project.tracks[1].source);
         project.tracks[1].name = "Fixture".to_owned();
         project.tracks[1].gain_db = 3.0;
         project.tracks[1].soloed = true;
@@ -1861,7 +1864,11 @@ mod tests {
         // node, so the thing that has to survive a save is the block -- and the
         // thing that has to survive a load is the values landing back in a
         // block the next graph will hand to the next node.
-        let project = Project::default();
+        let mut project = Project::rack(6);
+        // Channel 0 is the one with nothing to declare, for the assertion at the
+        // end: not every source has knobs, and the file must not invent any.
+        project.tracks[0].source = Source::TestTone;
+        project.tracks[0].source_params = TrackDef::params_for(&Source::TestTone);
         let synth = project.len() - 1;
         assert_eq!(project.tracks[synth].source, Source::PolySynth);
         let block = project.tracks[synth]
@@ -1889,7 +1896,7 @@ mod tests {
         assert_eq!(back.get_by_id("sustain"), Some(0.6));
         assert_eq!(loaded.tracks[synth], project.tracks[synth]);
 
-        // A drum has no knobs, and its entry says nothing about any.
+        // The tone has no knobs, and its entry says nothing about any.
         assert!(project.tracks[0].source_params.is_none());
         assert!(file.tracks[0].source_params.is_empty());
     }
@@ -1917,7 +1924,7 @@ mod tests {
         let json = r#"{
             "id": 0,
             "name": "Kick",
-            "source": { "kind": "internal", "id": "kick" },
+            "source": { "kind": "internal", "id": "test-tone" },
             "gain_db": 0.0,
             "pan": 0.0,
             "muted": false,
@@ -1932,7 +1939,7 @@ mod tests {
 
     #[test]
     fn a_saved_root_survives_the_file() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].root_key = 54;
         project.tracks[0].root_fine_cents = 12.0;
         project.tracks[0].root_mode = RootMode::Detected;
@@ -1959,7 +1966,7 @@ mod tests {
 
     #[test]
     fn a_chop_survives_the_file_and_reaches_the_player() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].slices = crate::project::SliceStateDto {
             mode: crate::project::SliceMode::Transient,
             frames: vec![0, 4_800, 9_600, 14_400],
@@ -1995,7 +2002,7 @@ mod tests {
 
     #[test]
     fn a_chop_with_the_mode_off_keeps_its_markers_but_plays_the_region() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].slices = crate::project::SliceStateDto {
             mode: crate::project::SliceMode::Off,
             frames: vec![0, 1_200],
@@ -2023,7 +2030,7 @@ mod tests {
         let json = r#"{
             "id": 0,
             "name": "Kick",
-            "source": { "kind": "internal", "id": "kick" },
+            "source": { "kind": "internal", "id": "test-tone" },
             "gain_db": 0.0,
             "pan": 0.0,
             "muted": false,
@@ -2045,7 +2052,7 @@ mod tests {
         let json = r#"{
             "id": 0,
             "name": "Break",
-            "source": { "kind": "internal", "id": "kick" },
+            "source": { "kind": "internal", "id": "test-tone" },
             "gain_db": 0.0,
             "pan": 0.0,
             "muted": false,
@@ -2113,7 +2120,7 @@ mod tests {
     fn awkward_floats_survive_the_trip_exactly() {
         // A fader is dragged to arbitrary values; a tempo is typed. Both have to
         // come back as the same bits, or a reload would silently change the mix.
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].gain_db = -6.020_6;
         project.tracks[0].pan = 0.333_333_34;
         project.tracks[1].gain_db = SILENCE_DB;
@@ -2169,8 +2176,8 @@ mod tests {
             assert!(!entry.is_hosted());
             assert_eq!(entry.to_source().unwrap(), source);
         }
-        let json = serde_json::to_string(&SourceEntry::capture(&Source::DrumKit)).unwrap();
-        assert_eq!(json, r#"{"kind":"internal","id":"drum-kit"}"#);
+        let json = serde_json::to_string(&SourceEntry::capture(&Source::TestTone)).unwrap();
+        assert_eq!(json, r#"{"kind":"internal","id":"test-tone"}"#);
     }
 
     /// A sampled instrument persists for free, and that is the point: its id is
@@ -2270,7 +2277,7 @@ mod tests {
         value["tracks"][0]["colour"] = serde_json::json!("#ff8800");
         value["tracks"][0]["source"]["latency_hint"] = serde_json::json!(128);
         let parsed = parse_project(&value.to_string()).expect("unknown fields are tolerated");
-        assert_eq!(parsed.tracks[0].name, "Kick");
+        assert_eq!(parsed.tracks[0].name, "Channel 1");
         assert_eq!(parsed, captured());
     }
 
@@ -2969,7 +2976,7 @@ mod tests {
         let registry = EffectRegistry::new();
         let mut project = Project::empty();
         project
-            .add(Source::DrumKit, Some("Drums".to_owned()))
+            .add(Source::TestTone, Some("Drums".to_owned()))
             .unwrap();
         project
             .add(Source::PolySynth, Some("Lead".to_owned()))

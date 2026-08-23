@@ -1552,11 +1552,16 @@ pub fn set_preview_volume(
     Ok(settings)
 }
 
-/// The sample library roots: bundled Packs, then extra-search folders.
+/// The sample library roots: the read-only Factory instruments, the bundled
+/// Packs drop folder, then extra-search folders.
 #[tauri::command]
 pub fn get_library_roots(app: tauri::AppHandle) -> Vec<LibraryRootDto> {
     let settings = library::load_settings(&library_json(&app));
-    library::roots(&packs_dir(&app), &settings)
+    library::roots(
+        &mydaw_plugin_sampler::instruments_root(),
+        &packs_dir(&app),
+        &settings,
+    )
 }
 
 /// Ask for a folder with the native dialog and remember it as an extra-search
@@ -1572,10 +1577,14 @@ pub async fn add_library_folder(
     let mut settings = library::load_settings(&settings_path);
     library::add_folder(&mut settings, path).map_err(|err| err.to_string())?;
     library::save_settings(&settings_path, &settings).map_err(|err| err.to_string())?;
-    Ok(Some(library::roots(&packs_dir(&app), &settings)))
+    Ok(Some(library::roots(
+        &mydaw_plugin_sampler::instruments_root(),
+        &packs_dir(&app),
+        &settings,
+    )))
 }
 
-/// Forget an extra-search folder. Packs cannot be removed.
+/// Forget an extra-search folder. Factory and Packs cannot be removed.
 #[tauri::command]
 pub fn remove_library_folder(
     app: tauri::AppHandle,
@@ -1585,7 +1594,11 @@ pub fn remove_library_folder(
     let mut settings = library::load_settings(&settings_path);
     library::remove_folder(&mut settings, &id).map_err(|err| err.to_string())?;
     library::save_settings(&settings_path, &settings).map_err(|err| err.to_string())?;
-    Ok(library::roots(&packs_dir(&app), &settings))
+    Ok(library::roots(
+        &mydaw_plugin_sampler::instruments_root(),
+        &packs_dir(&app),
+        &settings,
+    ))
 }
 
 /// One level of a library root: directories and audio files.
@@ -1596,7 +1609,11 @@ pub fn list_library_dir(
     rel_path: String,
 ) -> Result<Vec<LibraryEntryDto>, String> {
     let settings = library::load_settings(&library_json(&app));
-    let roots = library::roots(&packs_dir(&app), &settings);
+    let roots = library::roots(
+        &mydaw_plugin_sampler::instruments_root(),
+        &packs_dir(&app),
+        &settings,
+    );
     let root = roots
         .iter()
         .find(|root| root.id == root_id)
@@ -1878,10 +1895,7 @@ pub fn get_input_status(state: State<'_, AppState>) -> InputStatusDto {
     // the transition out of `recording` happens here, on the polling thread.
     // Whatever the take had already captured is written rather than thrown away.
     if let Some(finished) = state.reap_recording_fault() {
-        log::info!(
-            "salvaged take loaded as source {}",
-            finished.source.id()
-        );
+        log::info!("salvaged take loaded as source {}", finished.source.id());
     }
     input_status_dto(&state)
 }
@@ -1948,8 +1962,8 @@ fn input_status_dto(state: &AppState) -> InputStatusDto {
     let status = recorder.status();
     // Enumerating costs a host round-trip, so it is skipped whenever the answer
     // is already known: a device that is open is proof that one exists.
-    let has_devices = status.state != mydaw_plugin_audio_io::RecordState::Idle
-        || !recorder.devices().is_empty();
+    let has_devices =
+        status.state != mydaw_plugin_audio_io::RecordState::Idle || !recorder.devices().is_empty();
     InputStatusDto::of(status, has_devices)
 }
 

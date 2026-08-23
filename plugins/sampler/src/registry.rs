@@ -196,7 +196,11 @@ impl SamplerRegistry {
             .load()
             .iter()
             .find(|entry| entry.info.type_id == type_id)
-            .map(|entry| entry.factory.create_with_params(sample_rate, max_block, params))
+            .map(|entry| {
+                entry
+                    .factory
+                    .create_with_params(sample_rate, max_block, params)
+            })
     }
 
     /// Decode `path` into a oneshot instrument and keep it across rescans.

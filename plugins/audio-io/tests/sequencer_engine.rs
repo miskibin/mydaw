@@ -12,7 +12,7 @@
 //!   Pattern -> compile -> PatternHandle ==> PatternSlot -> Scheduler
 //!                                                             |
 //!                                              NoteEventBuffer v
-//!   samples <- run_block <- DrumKitNode <- ProcessCtx::events
+//!   samples <- run_block <- Click <- ProcessCtx::events
 //!      |
 //!      '-> detect_onsets -> align_grid -> "every hit within N ms of the grid"
 //! ```
@@ -24,15 +24,119 @@ use std::sync::Arc;
 
 use mydaw_plugin_audio_io::{run_block, AudioIoStats, RtState, RtStateParams};
 use mydaw_plugin_debug_tap::{align_grid, detect_onsets, GridReport, Onset, OnsetConfig};
-use mydaw_plugin_instruments::DrumKitNode;
 use mydaw_plugin_sequencer::{
     song_channel, step_boundary, step_len_samples, ChannelClip, CompiledSong, MelodicNote, Pattern,
     StepRow, DEFAULT_STEPS, SONG_QUEUE_CAPACITY, STEP_GATE_TICKS, TICKS_PER_STEP,
 };
 use mydaw_rt_core::{
-    graph_channel, note_channel, rt_channel, GcThread, GraphSpec, RtCommand, TransportClock,
-    DEFAULT_BPM,
+    graph_channel, note_channel, rt_channel, GcThread, GraphSpec, ProcessCtx, RtCommand, RtNode,
+    TransportClock, DEFAULT_BPM,
 };
+
+/// A percussive click: one decaying burst per note-on, in one of three bands.
+///
+/// The instrument here has to be an *impulse* generator, because what is under
+/// test is when the scheduler delivers an event, measured by an onset detector.
+/// A sustaining instrument smears every hit into the next, and a sampled one
+/// would need `assets/`, which is gitignored.
+///
+/// **One voice per band, not one voice.** The General MIDI kick is 55 Hz, the
+/// snare 220 Hz, and the hats 6 kHz -- and each gets its own voice so a hat
+/// landing on a ringing kick does not cut it. A single shared voice would put a
+/// discontinuity in the low band on every hat, which the low detector reads as
+/// a kick that was never played.
+struct Click {
+    sample_rate: f64,
+    /// Low, mid and high: one sounding voice each, or none.
+    voices: [Option<Voice>; 3],
+}
+
+#[derive(Clone, Copy)]
+struct Voice {
+    phase: f64,
+    step: f64,
+    envelope: f64,
+    decay: f64,
+}
+
+impl Click {
+    fn new(sample_rate: f64) -> Self {
+        Self {
+            sample_rate,
+            voices: [None; 3],
+        }
+    }
+
+    /// Which band a drum key belongs to, and what it sounds like there.
+    fn band_of(key: u8) -> usize {
+        match key {
+            ..=36 => 0,
+            37..=40 => 1,
+            _ => 2,
+        }
+    }
+
+    fn voice_for(&self, band: usize) -> Voice {
+        let (hz, seconds) = match band {
+            0 => (55.0, 0.12),
+            1 => (220.0, 0.08),
+            _ => (6_000.0, 0.02),
+        };
+        Voice {
+            // A quarter turn in, so the first sample of a hit is its peak: an
+            // attack, and a sample the "the hit starts here" assertions can
+            // find by looking for the first non-zero one.
+            phase: std::f64::consts::FRAC_PI_2,
+            step: hz * std::f64::consts::TAU / self.sample_rate,
+            envelope: 1.0,
+            decay: 1.0 / (seconds * self.sample_rate),
+        }
+    }
+}
+
+impl RtNode for Click {
+    fn process(&mut self, ctx: &mut ProcessCtx) {
+        let frames = ctx.frames;
+        let mut voices = self.voices;
+        let [left, right] = ctx.buffers.as_mut_slices();
+        left[..frames].fill(0.0);
+        let mut next = 0;
+        for event in ctx.events {
+            let at = (event.frame_offset as usize).min(frames);
+            sum_voices(&mut voices, &mut left[next..at]);
+            next = at;
+            if event.kind.is_note_on() {
+                if let Some(key) = event.kind.key() {
+                    let band = Self::band_of(key);
+                    voices[band] = Some(self.voice_for(band));
+                }
+            }
+        }
+        sum_voices(&mut voices, &mut left[next..frames]);
+        self.voices = voices;
+        right[..frames].copy_from_slice(&left[..frames]);
+    }
+}
+
+/// Advance every sounding voice across one span, summing into `out`.
+///
+/// `out` is already zeroed, so this adds rather than assigns -- three bands
+/// have to be able to sound at once.
+fn sum_voices(voices: &mut [Option<Voice>; 3], out: &mut [f32]) {
+    for voice in voices.iter_mut() {
+        let Some(state) = voice.as_mut() else {
+            continue;
+        };
+        for slot in out.iter_mut() {
+            *slot += (state.phase.sin() * state.envelope) as f32 * 0.4;
+            state.phase += state.step;
+            state.envelope = (state.envelope - state.decay).max(0.0);
+        }
+        if state.envelope <= 0.0 {
+            *voice = None;
+        }
+    }
+}
 
 const SR: f64 = 48_000.0;
 const BLOCK: usize = 256;
@@ -51,11 +155,14 @@ fn demo_beat() -> Pattern {
     // Everything on **channel 0**, as notes rather than as three step rows.
     //
     // Two reasons, both about what this file is testing. It renders a single
-    // `DrumKitNode` inside one track chain, and a track chain only sees its own
+    // instrument inside one track chain, and a track chain only sees its own
     // channel -- three channels would mean two thirds of the beat never
     // arriving. And a pattern holds one clip per channel, so one channel cannot
-    // have three step rows at three keys; the kit picks its drum from the key,
-    // which is exactly the arrangement the per-drum instruments replaced.
+    // have three step rows at three keys.
+    //
+    // The keys are still General MIDI drum numbers, because [`Click`] tunes its
+    // burst from the key and the onset detector looks in a low band and a high
+    // one.
     //
     // Steps compile to notes anyway (see `mydaw_plugin_sequencer::pattern`), so
     // writing them as notes here changes nothing about the timing claim under
@@ -93,7 +200,7 @@ fn render(pattern: &Pattern, frames: usize, bpm: f64) -> (Vec<f32>, Arc<AudioIoS
     let stats = Arc::new(AudioIoStats::default());
 
     graph
-        .install(GraphSpec::new().with(Box::new(DrumKitNode::new(SR))))
+        .install(GraphSpec::new().with(Box::new(Click::new(SR))))
         .expect("the graph should install");
     song_tx
         .install(CompiledSong::new(vec![pattern.compile()], 0, Vec::new()))
@@ -259,8 +366,8 @@ fn the_hits_land_on_the_samples_the_scheduler_computed() {
     let (left, _) = render(&pattern, two_bars(bpm), bpm);
     let bar = step_boundary(DEFAULT_STEPS as u64, step_len) as usize;
 
-    // The kick's first sample is its noise click, so the very first non-zero
-    // sample of each hit is the hit.
+    // A hit's first sample is its own attack, so the very first non-zero sample
+    // of each hit is the hit.
     assert_ne!(left[0], 0.0, "step 0 of bar 0 starts at sample 0");
     let second = left[1..]
         .iter()

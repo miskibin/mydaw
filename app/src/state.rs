@@ -113,17 +113,21 @@ pub enum SequencerError {
 /// on every rack channel.
 ///
 /// Lives here rather than in the sequencer because it needs to know what is
-/// *on* each channel to pick the grid's key -- a drum channel gets its General
-/// MIDI number so a row entered at its default key plays the drum untransposed,
-/// and anything else gets middle C. The sequencer crate deliberately does not
-/// depend on the instruments one.
+/// *on* each channel to pick the grid's key -- the drum kit gets the General
+/// MIDI kick, so a row entered at its default key plays a kick untransposed and
+/// the rest of the map is a scroll away in the roll. Anything else gets middle
+/// C. The sequencer crate deliberately does not depend on the sampler one.
 pub fn starter_pattern_set(project: &Project) -> PatternSet {
     let channels: Vec<u8> = (0..project.len().min(mydaw_rt_core::MAX_TRACKS))
         .map(|index| index as u8)
         .collect();
     PatternSet::starter(&channels, |channel| {
         match project.tracks.get(channel as usize).map(|t| &t.source) {
-            Some(Source::Drum(drum)) => drum.base_key(),
+            Some(Source::Sampler(reference))
+                if reference.instrument_id == crate::project::KIT_ID =>
+            {
+                crate::project::KIT_STEP_KEY
+            }
             _ => mydaw_plugin_sequencer::DEFAULT_STEP_KEY,
         }
     })
@@ -399,11 +403,6 @@ impl AppState {
             effects,
         ));
         tracks.audio_clips().bind_sources(Arc::clone(&sources));
-        {
-            let mut project = tracks.project();
-            crate::drum_samples::realize_drum_tracks(&mut project, None, &tracks, &sources);
-            tracks.set_project(project);
-        }
         midi.set_sink(Arc::new(EngineNoteSink {
             audio: Arc::clone(&audio),
             tracks: Arc::clone(&tracks),
@@ -501,7 +500,8 @@ impl AppState {
         // A take is converted to the rate the arrangement runs at, and that rate
         // is only known once a device has negotiated one. Publishing it here
         // means a buffer change or a device swap moves the recorder with it.
-        self.recorder.set_engine_sample_rate(f64::from(info.sample_rate));
+        self.recorder
+            .set_engine_sample_rate(f64::from(info.sample_rate));
         Ok(info)
     }
 
@@ -592,15 +592,6 @@ impl AppState {
     /// # Errors
     /// See [`set_source`](Self::set_source).
     pub fn set_track_source(&self, track: usize, source: Source) -> Result<(), SourceError> {
-        let old_key = self
-            .tracks
-            .project()
-            .tracks
-            .get(track)
-            .map(|def| crate::drum_samples::natural_step_key(&def.source));
-        let source = crate::drum_samples::realize_source(&self.tracks, &self.sources, source)
-            .map_err(|err| SourceError::SampleFile(err.to_string()))?;
-        let new_key = crate::drum_samples::natural_step_key(&source);
         if self.clap_bridge.board().track(track).is_some() {
             self.clap_command(ClapCommand::SetTrackBuiltIn {
                 track,
@@ -621,14 +612,6 @@ impl AppState {
                 Err(MixerError::Audio(err)) => return Err(SourceError::Audio(err)),
                 // A bad index is a UI bug; it reaches the status bar as itself.
                 Err(other) => return Err(SourceError::MainThread(other.to_string())),
-            }
-        }
-        if let Some(old_key) = old_key {
-            if old_key != new_key {
-                let _ = self.edit_patterns(|set| {
-                    set.shift_channel_keys(track as u8, old_key, new_key);
-                    Ok(())
-                });
             }
         }
         Ok(())
@@ -1741,8 +1724,6 @@ impl AppState {
     /// the hosted path, [`SourceError::MainThread`] carrying what the main
     /// thread said.
     pub fn add_track(&self, source: Source, name: Option<String>) -> Result<usize, MixerError> {
-        let source = crate::drum_samples::realize_source(&self.tracks, &self.sources, source)
-            .map_err(|err| MixerError::Source(SourceError::SampleFile(err.to_string())))?;
         let outcome = self.place_track(source, name);
         // One call site for all three paths, and deliberately outside the `?`.
         //
@@ -2268,7 +2249,11 @@ impl AppState {
             .get(channel)
             .map(|track| track.source.clone());
         match source {
-            Some(Source::Drum(drum)) => drum.base_key(),
+            Some(Source::Sampler(reference))
+                if reference.instrument_id == crate::project::KIT_ID =>
+            {
+                crate::project::KIT_STEP_KEY
+            }
             _ => mydaw_plugin_sequencer::DEFAULT_STEP_KEY,
         }
     }
@@ -2516,7 +2501,6 @@ pub enum RecordingError {
 mod tests {
     use super::*;
     use mydaw_ipc_bridge::PluginStateDto;
-    use mydaw_plugin_instruments::SingleDrum;
 
     #[test]
     fn midi_off_stays_on_the_channel_the_note_started_on() {
@@ -2679,15 +2663,13 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let state = AppState::from_kernel(&kernel).unwrap();
 
-        // Track 0 of the default project is the kick sample, and track 0 is
-        // what the keyboard and the selector address until the user says
-        // otherwise.
+        // A test process has no assets installed, so the starter is the
+        // melodic channel alone -- and track 0 is what the keyboard and the
+        // selector address until the user says otherwise.
         assert_eq!(state.selected_track(), 0);
-        assert_eq!(state.mixer_state().tracks[0].name, "Kick");
-        assert!(
-            matches!(state.current_source(), Source::OneShot { .. }),
-            "starter drums are one-shot samples, not synthesizers"
-        );
+        assert_eq!(state.mixer_state().tracks[0].name, "Poly Synth");
+        assert!(matches!(state.current_source(), Source::PolySynth));
+
         let sources = state.sources();
         // The built-ins come first and in a fixed order; whatever CLAP
         // instruments this machine has follow (CI: none).
@@ -2697,16 +2679,7 @@ mod tests {
                 .take(Source::BUILT_IN.len())
                 .map(|s| s.id.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "poly-synth",
-                "kick",
-                "snare",
-                "clap",
-                "hat-closed",
-                "hat-open",
-                "drum-kit",
-                "test-tone"
-            ]
+            vec!["poly-synth", "test-tone"]
         );
         assert!(
             sources
@@ -2720,16 +2693,11 @@ mod tests {
             .filter(|s| s.selected)
             .map(|s| s.id.as_str())
             .collect();
-        assert!(
-            selected.is_empty(),
-            "a one-shot kick is not the synthesizer entry in the picker: {selected:?}"
+        assert_eq!(
+            selected,
+            vec!["poly-synth"],
+            "the picker marks what the selected channel is playing"
         );
-
-        // Selecting another channel changes what is playing, with no audio
-        // device involved at all.
-        state.set_selected_track(1).unwrap();
-        assert_eq!(state.mixer_state().tracks[1].name, "Snare");
-        assert!(matches!(state.current_source(), Source::OneShot { .. }));
     }
 
     #[test]
@@ -2783,7 +2751,7 @@ mod tests {
 
         // Headless: the instruments are all registered, there is simply nowhere
         // to install them.
-        for id in ["drum-kit", "test-tone", "poly-synth", "snare", "hat-open"] {
+        for id in ["test-tone", "poly-synth"] {
             let err = state.set_source_id(id).unwrap_err();
             assert!(
                 matches!(err, SourceError::Audio(AudioIoError::NotRunning)),
@@ -2791,7 +2759,7 @@ mod tests {
             );
         }
         assert!(
-            matches!(state.current_source(), Source::OneShot { .. }),
+            matches!(state.current_source(), Source::PolySynth),
             "a failed switch must not change what the UI is told is playing: {:?}",
             state.current_source()
         );
@@ -2925,21 +2893,21 @@ mod tests {
                 .iter()
                 .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
                 .collect::<Vec<_>>(),
-            vec![mydaw_plugin_sequencer::DEFAULT_STEP_KEY; 6],
-            "sample drums and the synth all fire C4, so a hit plays at recorded pitch"
+            vec![mydaw_plugin_sequencer::DEFAULT_STEP_KEY; 1],
+            "a test process has no assets, so the starter is the synth alone, on C4"
         );
         assert!(dto.pattern_set.active.channels.iter().all(|clip| clip
             .steps
             .as_ref()
             .is_none_or(|row| row.steps.iter().all(|step| !step.on))));
         assert_eq!(
-            dto.pattern_set.active.channels[3]
+            dto.pattern_set.active.channels[0]
                 .steps
                 .as_ref()
                 .unwrap()
                 .label,
             "Key 60",
-            "sample drums fire C4; the GM drum names follow the key, not the channel"
+            "a grid row is labelled by its key, not by the channel it sits on"
         );
         assert_eq!(dto.play_mode, "pat");
         assert_eq!(dto.pattern_set.patterns.len(), 1);
@@ -3030,7 +2998,7 @@ mod tests {
                 .iter()
                 .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
                 .collect::<Vec<_>>(),
-            vec![mydaw_plugin_sequencer::DEFAULT_STEP_KEY; 6]
+            vec![mydaw_plugin_sequencer::DEFAULT_STEP_KEY; 1]
         );
 
         state.set_active_pattern_for_test(id);
@@ -3253,30 +3221,59 @@ mod tests {
         let _ = std::fs::remove_file(tone);
     }
 
-    /// A four-bar break made of real factory drums, at known frame positions.
+    /// One drum hit for the slicer tests.
     ///
-    /// The factory kick/snare/hat are what the Sounds tab actually renders to
-    /// disk, so this is the material the slicer meets in the product rather
-    /// than a click track that flatters the detector.
-    fn write_break_wav(
-        state: &AppState,
-        hits: &[(usize, SingleDrum)],
-    ) -> (std::path::PathBuf, usize) {
+    /// Synthesised here rather than rendered from an instrument: `assets/` is
+    /// gitignored, so a sampled kit is not there to render on a fresh clone, and
+    /// a slicer test that silently skips itself is worse than no test. What the
+    /// detector needs is a sharp transient followed by a decay, which both of
+    /// these have.
+    #[derive(Clone, Copy)]
+    enum Hit {
+        Kick,
+        Snare,
+    }
+
+    impl Hit {
+        /// One hit, 48 kHz mono, decaying to silence.
+        fn render(self) -> Vec<f32> {
+            let rate = 48_000.0_f32;
+            let (len, decay) = match self {
+                Self::Kick => (12_000, 28.0),
+                Self::Snare => (8_000, 45.0),
+            };
+            // A fixed xorshift, so the noise is the same on every machine and
+            // run: a slicer assertion that depends on the weather is not one.
+            let mut noise: u32 = 0x1234_5678;
+            (0..len)
+                .map(|index| {
+                    let t = index as f32 / rate;
+                    let envelope = (-decay * t).exp();
+                    let body = match self {
+                        Self::Kick => (std::f32::consts::TAU * 55.0 * t).sin(),
+                        Self::Snare => {
+                            noise ^= noise << 13;
+                            noise ^= noise >> 17;
+                            noise ^= noise << 5;
+                            (noise as f32 / u32::MAX as f32) * 2.0 - 1.0
+                        }
+                    };
+                    body * envelope * 0.8
+                })
+                .collect()
+        }
+    }
+
+    /// A four-bar break at known frame positions, for the slicer.
+    fn write_break_wav(_state: &AppState, hits: &[(usize, Hit)]) -> (std::path::PathBuf, usize) {
         let rate = 48_000_usize;
         let frames = rate * 2;
         let mut left = vec![0.0_f32; frames];
         let mut right = vec![0.0_f32; frames];
-        for (at, drum) in hits {
-            let (hit_l, hit_r) =
-                crate::preview::render_source_pcm(state.tracks(), &Source::Drum(*drum))
-                    .expect("the factory drums render with no device");
-            for (offset, sample) in hit_l.iter().enumerate() {
+        for (at, hit) in hits {
+            for (offset, sample) in hit.render().iter().enumerate() {
                 if at + offset < frames {
                     left[at + offset] += sample;
-                }
-            }
-            for (offset, sample) in hit_r.iter().enumerate() {
-                if at + offset < frames {
                     right[at + offset] += sample;
                 }
             }
@@ -3321,13 +3318,13 @@ mod tests {
     }
 
     #[test]
-    fn transient_slicing_finds_the_hits_of_a_factory_drum_break() {
+    fn transient_slicing_finds_the_hits_of_a_drum_break() {
         let (_kernel, state) = state();
         let hits = [
-            (0_usize, SingleDrum::Kick),
-            (24_000, SingleDrum::Snare),
-            (48_000, SingleDrum::Kick),
-            (72_000, SingleDrum::Snare),
+            (0_usize, Hit::Kick),
+            (24_000, Hit::Snare),
+            (48_000, Hit::Kick),
+            (72_000, Hit::Snare),
         ];
         let (path, _frames) = write_break_wav(&state, &hits);
         let track = add_headless_sample(&state, &path);
@@ -3375,7 +3372,7 @@ mod tests {
     #[test]
     fn grid_slicing_divides_the_region_and_a_cleared_mode_keeps_the_markers() {
         let (_kernel, state) = state();
-        let (path, frames) = write_break_wav(&state, &[(0, SingleDrum::Kick)]);
+        let (path, frames) = write_break_wav(&state, &[(0, Hit::Kick)]);
         let track = add_headless_sample(&state, &path);
         assert_eq!(frames, 96_000, "two seconds at 48 kHz");
 
@@ -3422,7 +3419,7 @@ mod tests {
     #[test]
     fn a_dragged_marker_is_sorted_deduped_and_capped_before_it_reaches_the_player() {
         let (_kernel, state) = state();
-        let (path, _frames) = write_break_wav(&state, &[(0, SingleDrum::Kick)]);
+        let (path, _frames) = write_break_wav(&state, &[(0, Hit::Kick)]);
         let track = add_headless_sample(&state, &path);
         let mut asked = vec![9_000_u64, 1_000, 5_000, 1_000, 10_000_000];
         asked.extend((0..200).map(|index| 20_000 + index * 100));

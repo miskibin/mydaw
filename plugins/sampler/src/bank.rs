@@ -311,10 +311,7 @@ impl SampleBank {
             // gate is what the ear hears rather than the ramp -- which is also
             // where its Release knob starts.
             one_shot: false,
-            default_params: vec![(
-                crate::node::param::RELEASE.to_owned(),
-                ONESHOT_RELEASE_MS,
-            )],
+            default_params: vec![(crate::node::param::RELEASE.to_owned(), ONESHOT_RELEASE_MS)],
             samples: vec![sample],
             lookup: vec![0u16; KEYS * VELOCITIES].into_boxed_slice(),
             skipped: Vec::new(),
@@ -480,10 +477,7 @@ pub fn load_from_manifest(
     // marimba rings and a piano damps, and the number that says which is which
     // has to survive the arrival of a knob that can override it. Anything the
     // kit states explicitly is applied after, and so wins.
-    let mut default_params = vec![(
-        crate::node::param::RELEASE.to_owned(),
-        manifest.release_ms,
-    )];
+    let mut default_params = vec![(crate::node::param::RELEASE.to_owned(), manifest.release_ms)];
     default_params.extend(
         manifest
             .default_params

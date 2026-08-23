@@ -348,7 +348,9 @@ impl Session {
         let deadline = Instant::now() + FLUSH_TIMEOUT;
         while self.buffer.flushed.load(Ordering::Acquire) == before {
             if Instant::now() >= deadline {
-                log::warn!("the input drain did not flush within {FLUSH_TIMEOUT:?}; keeping what it had");
+                log::warn!(
+                    "the input drain did not flush within {FLUSH_TIMEOUT:?}; keeping what it had"
+                );
                 break;
             }
             thread::sleep(Duration::from_millis(1));
@@ -455,7 +457,9 @@ impl RecordService {
     /// and arming can explain why it will not open.
     pub fn devices(&self) -> Vec<InputDeviceInfo> {
         let host = cpal::default_host();
-        let default_key = host.default_input_device().map(|device| device_key(&device));
+        let default_key = host
+            .default_input_device()
+            .map(|device| device_key(&device));
         let Ok(devices) = host.input_devices() else {
             return Vec::new();
         };
@@ -846,12 +850,7 @@ fn run_worker(
 }
 
 /// Convert one drained block into the take, stopping at the length cap.
-fn append(
-    buffer: &TakeBuffer,
-    converter: &mut RateConverter,
-    scratch: &[f32],
-    max_samples: usize,
-) {
+fn append(buffer: &TakeBuffer, converter: &mut RateConverter, scratch: &[f32], max_samples: usize) {
     let mut samples = buffer.samples.lock();
     if samples.len() >= max_samples {
         return;
@@ -1042,7 +1041,9 @@ mod tests {
     #[test]
     fn selecting_the_system_default_is_always_allowed() {
         let service = RecordService::new();
-        service.select_device(None).expect("the default is always selectable");
+        service
+            .select_device(None)
+            .expect("the default is always selectable");
         assert_eq!(service.selected_device(), None);
     }
 
@@ -1051,7 +1052,10 @@ mod tests {
         // The list may legitimately be empty here; what matters is that asking
         // does not panic and every entry it does produce is self-describing.
         for device in RecordService::new().devices() {
-            assert!(!device.id.is_empty(), "a device needs an id to be selectable");
+            assert!(
+                !device.id.is_empty(),
+                "a device needs an id to be selectable"
+            );
             assert!(!device.name.is_empty(), "a device needs a name to be shown");
         }
     }
@@ -1110,7 +1114,10 @@ mod tests {
         assert_eq!(take.frames(), 2);
         assert!((take.duration_seconds() - 2.0 / 48_000.0).abs() < 1e-12);
         assert!((take.peak() - 0.75).abs() < 1e-6);
-        assert!(format!("{take:?}").contains("frames: 2"), "Debug must not print samples");
+        assert!(
+            format!("{take:?}").contains("frames: 2"),
+            "Debug must not print samples"
+        );
     }
 
     #[test]
@@ -1155,7 +1162,10 @@ mod tests {
         // Five minutes of stereo f32 at 48 kHz. The point of the assertion is
         // that raising MAX_RECORD_SECONDS makes somebody look at the number.
         let bytes = (MAX_RECORD_SECONDS * 48_000.0) as usize * CHANNELS * 4;
-        assert!(bytes < 200 * 1024 * 1024, "a take must not be able to eat the machine");
+        assert!(
+            bytes < 200 * 1024 * 1024,
+            "a take must not be able to eat the machine"
+        );
     }
 
     /// Spin until `ready` or the deadline, so the worker tests wait for a
@@ -1251,12 +1261,20 @@ mod tests {
         harness.play(1_024, 0.5);
         let take = harness.end_take();
 
-        assert_eq!(take.len(), 1_024 * CHANNELS, "every frame of the take is kept");
+        assert_eq!(
+            take.len(),
+            1_024 * CHANNELS,
+            "every frame of the take is kept"
+        );
         assert!(
             take.iter().all(|sample| (*sample - 0.5).abs() < 1e-6),
             "no audio from before the take may survive"
         );
-        assert_eq!(harness.shared.dropped(), 0, "the ring must not have overflowed");
+        assert_eq!(
+            harness.shared.dropped(),
+            0,
+            "the ring must not have overflowed"
+        );
     }
 
     #[test]
@@ -1291,7 +1309,11 @@ mod tests {
         thread::sleep(DRAIN_INTERVAL * 3);
         harness.play(256, -0.5);
         let second = harness.end_take();
-        assert_eq!(second.len(), 256 * CHANNELS, "the second take is its own length");
+        assert_eq!(
+            second.len(),
+            256 * CHANNELS,
+            "the second take is its own length"
+        );
         assert!(second.iter().all(|sample| (*sample + 0.5).abs() < 1e-6));
     }
 

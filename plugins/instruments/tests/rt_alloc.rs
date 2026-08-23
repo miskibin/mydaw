@@ -14,8 +14,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use mydaw_plugin_instruments::drum_kit::{CLOSED_HAT_KEY, KICK_KEY, OPEN_HAT_KEY, SNARE_KEY};
-use mydaw_plugin_instruments::{DrumKitNode, PolySynthNode, SingleDrum, SingleDrumNode};
+use mydaw_plugin_instruments::PolySynthNode;
 use mydaw_rt_core::{AudioBuffers, NoteEvent, ProcessCtx, RtNode, TransportSnapshot};
 
 thread_local! {
@@ -121,74 +120,6 @@ fn the_allocation_counter_actually_counts() {
 }
 
 #[test]
-fn the_drum_kit_allocates_nothing_across_event_heavy_blocks() {
-    let mut node = DrumKitNode::new(48_000.0);
-    let mut buffers = AudioBuffers::new(1_024);
-
-    // Built before arming: an event slice is the host's, not the node's.
-    let events: Vec<NoteEvent> = vec![
-        NoteEvent::note_on(0, KICK_KEY, 1.0),
-        NoteEvent::note_on(0, OPEN_HAT_KEY, 0.8),
-        // A choke, in the middle of a block.
-        NoteEvent::note_on(1, CLOSED_HAT_KEY, 0.9),
-        NoteEvent::note_on(1, SNARE_KEY, 0.7),
-        // A key the kit has no drum for, so the counting branch is taken too.
-        NoteEvent::note_on(2, 60, 1.0),
-        NoteEvent::note_off(2, KICK_KEY),
-        NoteEvent::note_on(3, KICK_KEY, 0.5),
-        NoteEvent::note_on(3, SNARE_KEY, 0.5),
-    ];
-
-    let count = count_allocations(|| {
-        for size in BLOCK_SIZES {
-            for pass in 0..8 {
-                // Alternate loaded and empty blocks so both the "apply an
-                // event" and the "voice ran out and freed itself" paths run.
-                let block_events: &[NoteEvent] = if pass % 2 == 0 { &events } else { &[] };
-                run_block(&mut node, &mut buffers, size, block_events);
-            }
-        }
-    });
-
-    assert_eq!(count, 0, "the drum kit allocated {count} times");
-    assert!(node.unmapped_notes() > 0, "the diagnostic path really ran");
-}
-
-#[test]
-fn the_per_drum_instruments_allocate_nothing_across_event_heavy_blocks() {
-    // Every key is a trigger here, so the event stream is deliberately spread
-    // across the range -- including the ones that clamp the pitch, which is the
-    // only branch these nodes have that the kit does not.
-    let events: Vec<NoteEvent> = vec![
-        NoteEvent::note_on(0, 0, 1.0),
-        NoteEvent::note_on(1, 36, 0.8),
-        NoteEvent::note_on(2, 60, 0.9),
-        NoteEvent::note_off(2, 60),
-        NoteEvent::note_on(3, 127, 0.7),
-        NoteEvent::note_on(3, 24, 0.5),
-    ];
-
-    for drum in SingleDrum::ALL {
-        let mut node = SingleDrumNode::new(drum, 48_000.0);
-        let mut buffers = AudioBuffers::new(1_024);
-
-        let count = count_allocations(|| {
-            for size in BLOCK_SIZES {
-                for pass in 0..8 {
-                    // Alternate loaded and empty blocks so both the "apply an
-                    // event" and the "voice ran out and freed itself" paths run.
-                    let block_events: &[NoteEvent] = if pass % 2 == 0 { &events } else { &[] };
-                    run_block(&mut node, &mut buffers, size, block_events);
-                }
-            }
-        });
-
-        assert_eq!(count, 0, "{} allocated {count} times", drum.display_name());
-        assert!(node.triggers() > 0, "the trigger path really ran");
-    }
-}
-
-#[test]
 fn the_poly_synth_allocates_nothing_across_event_heavy_blocks() {
     let mut node = PolySynthNode::new(48_000.0);
     let mut buffers = AudioBuffers::new(1_024);
@@ -218,34 +149,28 @@ fn the_poly_synth_allocates_nothing_across_event_heavy_blocks() {
 }
 
 #[test]
-fn a_long_run_through_both_instruments_allocates_nothing() {
+fn a_long_run_through_the_synth_allocates_nothing() {
     // The steady state: a note held for a second, then released, then silence.
     // Nothing may allocate when a voice frees itself, and nothing may allocate
     // in the empty-buffer path either.
-    let mut drums = DrumKitNode::new(48_000.0);
     let mut synth = PolySynthNode::new(48_000.0);
     let mut buffers = AudioBuffers::new(512);
 
     let on = [NoteEvent::note_on(0, 69, 0.9)];
-    let kick = [NoteEvent::note_on(0, KICK_KEY, 0.9)];
     let off = [NoteEvent::note_off(0, 69)];
 
     let count = count_allocations(|| {
         run_block(&mut synth, &mut buffers, 512, &on);
-        run_block(&mut drums, &mut buffers, 512, &kick);
         // ~2 seconds of blocks with no events at all.
         for _ in 0..180 {
             run_block(&mut synth, &mut buffers, 512, &[]);
-            run_block(&mut drums, &mut buffers, 512, &[]);
         }
         run_block(&mut synth, &mut buffers, 512, &off);
         for _ in 0..180 {
             run_block(&mut synth, &mut buffers, 512, &[]);
-            run_block(&mut drums, &mut buffers, 512, &[]);
         }
     });
 
     assert_eq!(count, 0, "a steady-state run allocated {count} times");
     assert_eq!(synth.active_voices(), 0, "the note released");
-    assert_eq!(drums.active_voices(), 0, "the kick finished");
 }

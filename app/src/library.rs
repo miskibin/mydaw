@@ -19,6 +19,9 @@ use mydaw_plugin_sequencer::AUDIO_EXTENSIONS;
 /// `library.json`.
 pub const PACKS_ROOT_ID: &str = "packs";
 
+/// The id of the read-only Factory root: the sampled instruments' own files.
+pub const FACTORY_ROOT_ID: &str = "factory";
+
 /// How many children one listing will return. A folder of ten thousand takes
 /// is a real thing; drawing them all is not.
 pub const MAX_DIR_ENTRIES: usize = 500;
@@ -186,14 +189,32 @@ pub fn remove_folder(settings: &mut LibrarySettings, id: &str) -> Result<(), Lib
     Ok(())
 }
 
-/// Roots the browser draws: Packs first, then extra folders in add order.
-pub fn roots(packs_dir: &Path, settings: &LibrarySettings) -> Vec<LibraryRootDto> {
-    let mut out = vec![LibraryRootDto {
-        id: PACKS_ROOT_ID.to_owned(),
-        name: "Packs".to_owned(),
-        kind: "packs".to_owned(),
-        path: packs_dir.to_string_lossy().into_owned(),
-    }];
+/// Roots the browser draws: Factory, Packs, then extra folders in add order.
+///
+/// The Factory root is the sampled instruments' own directory. It is listed
+/// because a kit is two things at once -- an instrument you play from the
+/// keyboard, and a folder of one-shots you drag onto a channel or chop -- and
+/// without it the second is unreachable. It is read-only: nothing in the browser
+/// writes, and [`remove_folder`] refuses it along with Packs.
+pub fn roots(
+    factory_dir: &Path,
+    packs_dir: &Path,
+    settings: &LibrarySettings,
+) -> Vec<LibraryRootDto> {
+    let mut out = vec![
+        LibraryRootDto {
+            id: FACTORY_ROOT_ID.to_owned(),
+            name: "Factory".to_owned(),
+            kind: "factory".to_owned(),
+            path: factory_dir.to_string_lossy().into_owned(),
+        },
+        LibraryRootDto {
+            id: PACKS_ROOT_ID.to_owned(),
+            name: "Packs".to_owned(),
+            kind: "packs".to_owned(),
+            path: packs_dir.to_string_lossy().into_owned(),
+        },
+    ];
     for folder in &settings.folders {
         out.push(LibraryRootDto {
             id: folder.id.clone(),
@@ -500,21 +521,32 @@ mod tests {
     }
 
     #[test]
-    fn packs_are_first_and_cannot_be_removed() {
+    fn the_built_in_roots_lead_and_cannot_be_removed() {
         let dir = TempDir::new("roots");
         let extra = dir.path().join("mine");
         fs::create_dir(&extra).unwrap();
         let mut settings = LibrarySettings::default();
         add_folder(&mut settings, extra).unwrap();
 
-        let listed = roots(Path::new("/app/packs"), &settings);
-        assert_eq!(listed[0].id, PACKS_ROOT_ID);
-        assert_eq!(listed[0].kind, "packs");
-        assert_eq!(listed[1].kind, "extra");
+        let listed = roots(
+            Path::new("/app/instruments"),
+            Path::new("/app/packs"),
+            &settings,
+        );
+        assert_eq!(listed[0].id, FACTORY_ROOT_ID);
+        assert_eq!(listed[0].kind, "factory");
+        assert_eq!(listed[0].name, "Factory");
+        assert_eq!(listed[1].id, PACKS_ROOT_ID);
+        assert_eq!(listed[1].kind, "packs");
+        assert_eq!(listed[2].kind, "extra");
 
-        let err = remove_folder(&mut settings, PACKS_ROOT_ID).unwrap_err();
-        assert!(matches!(err, LibraryError::UnknownRoot(_)));
-        remove_folder(&mut settings, &listed[1].id).expect("removes extra");
+        // Neither built-in root is a folder the user added, so neither can be
+        // taken away.
+        for built_in in [FACTORY_ROOT_ID, PACKS_ROOT_ID] {
+            let err = remove_folder(&mut settings, built_in).unwrap_err();
+            assert!(matches!(err, LibraryError::UnknownRoot(_)), "{built_in}");
+        }
+        remove_folder(&mut settings, &listed[2].id).expect("removes extra");
         assert!(settings.folders.is_empty());
     }
 }

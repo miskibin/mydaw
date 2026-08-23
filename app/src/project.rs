@@ -31,7 +31,6 @@
 //! *is* muting.
 
 use mydaw_plugin_effects::EffectRegistry;
-use mydaw_plugin_instruments::SingleDrum;
 use mydaw_plugin_sampler::SamplerRegistry;
 use mydaw_plugin_sequencer::{AudioClipTune, SamplePlaybackParams, ONESHOT_ROOT_KEY};
 use mydaw_rt_core::{
@@ -49,20 +48,47 @@ use crate::effects::{
 use crate::source::{SamplerSourceRef, Source};
 use crate::vst3_bridge::{Vst3Board, Vst3SlotDto};
 
+/// The sampled piano, by id.
+///
+/// Named rather than positional. This used to take the first instrument the
+/// registry had, which was the Salamander piano back when it was the only one;
+/// the factory library made the first one alphabetically an 808 bass, and a
+/// fresh project's melodic channel became a drum machine.
+const PIANO_ID: &str = "salamander-piano";
+
+/// The drum kit a fresh project starts with, by id.
+pub(crate) const KIT_ID: &str = "808-kit";
+
+/// The key a kit channel's grid fires: General MIDI kick, which is what
+/// [`KIT_ID`] is mapped on.
+pub const KIT_STEP_KEY: u8 = 36;
+
 /// What a fresh project puts on its melodic channel.
 ///
-/// The first sampled instrument the registry has, if any -- in practice the
-/// Salamander piano -- and otherwise the poly synth. A channel promising a
-/// piano on a machine whose samples have not been downloaded would be five
-/// minutes of silence and a bug report, and the honest fallback is a synth that
-/// says it is one.
+/// The sampled piano when its assets are installed, and otherwise the poly
+/// synth. A channel promising a piano on a machine whose samples have not been
+/// downloaded would be five minutes of silence and a bug report, and the honest
+/// fallback is a synth that says it is one.
 pub fn default_piano(sampler: &SamplerRegistry) -> Source {
+    sampled(sampler, PIANO_ID).unwrap_or(Source::PolySynth)
+}
+
+/// What a fresh project puts on its drum channel, if anything.
+///
+/// `None` on a machine with no assets downloaded -- `assets/` is gitignored, so
+/// that is every fresh clone. A starter with a silent drum channel would be
+/// worse than a starter with none, so the channel is simply not created.
+pub fn default_kit(sampler: &SamplerRegistry) -> Option<Source> {
+    sampled(sampler, KIT_ID)
+}
+
+/// The sampled instrument with this id, if it is loaded.
+fn sampled(sampler: &SamplerRegistry, id: &str) -> Option<Source> {
     sampler
         .instruments()
-        .first()
-        .map_or(Source::PolySynth, |info| {
-            Source::Sampler(SamplerSourceRef::from(info))
-        })
+        .iter()
+        .find(|info| info.id == id)
+        .map(|info| Source::Sampler(SamplerSourceRef::from(info)))
 }
 
 /// One track, as the session holds it.
@@ -667,48 +693,66 @@ pub struct Project {
 }
 
 impl Default for Project {
-    /// The starter rack, with the poly synth standing in for the piano.
+    /// The starter rack with nothing sampled installed: the melodic channel
+    /// alone.
     ///
-    /// [`Project::starter`] is the real constructor; this is the one the tests
-    /// and the offline paths use, where there is no sampler registry to ask
-    /// whether the piano is installed.
+    /// [`Project::starter`] is the real constructor. This is what the offline
+    /// paths get, where there is no sampler registry to ask whether the factory
+    /// content is on the disk.
     fn default() -> Self {
-        Self::starter(Source::PolySynth)
+        Self::starter(None, Source::PolySynth)
     }
 }
 
 impl Project {
-    /// The rack a fresh session opens with: five drums and a melodic channel.
+    /// The rack a fresh session opens with.
     ///
-    /// One instrument per channel, which is the whole reason the drum kit was
-    /// split ([`SingleDrum`](mydaw_plugin_instruments::SingleDrum)): a channel
-    /// has one fader, one pan and one insert chain, and a kick that cannot be
-    /// turned down independently of the hats is not a channel, it is four
-    /// channels wearing a coat.
+    /// A drum channel and a melodic one: the two things you reach for first, and
+    /// well short of [`MAX_TRACKS`], so there is room to add.
     ///
-    /// Six rather than two because this is a rack now rather than a proof that
-    /// two tracks sum, and because a drum pattern you can immediately click in
-    /// is the point of the first screen. Still well short of
-    /// [`MAX_TRACKS`], so there is room to add.
+    /// **One kit channel, not one per drum.** The four-drum starter existed
+    /// because each synthesised drum was its own instrument; a sampled kit is
+    /// one instrument on a General MIDI map, so the roll gives every drum as a
+    /// row of the same channel.
     ///
-    /// `piano` is whatever the caller found for the melodic channel --
-    /// [`default_piano`] picks the sampled piano when its assets are installed
-    /// and the poly synth when they are not. The name on that channel follows
-    /// the source, so a session with no samples says "Poly Synth" rather than
+    /// Both sources come from the caller -- [`default_kit`] and
+    /// [`default_piano`] -- so this is deterministic and the tests never depend
+    /// on what is installed. `kit` is `None` when its samples are not, and the
+    /// project is then the melodic channel alone. Each channel's name follows
+    /// its source, so a session with no samples says "Poly Synth" rather than
     /// promising a piano it does not have.
-    pub fn starter(piano: Source) -> Self {
-        let mut tracks: Vec<TrackDef> = SingleDrum::ALL
-            .iter()
-            .enumerate()
-            .map(|(index, drum)| {
-                TrackDef::new(index as u32, drum.display_name(), Source::Drum(*drum))
-            })
-            .collect();
-        let id = tracks.len() as u32;
-        tracks.push(TrackDef::new(id, piano.label(), piano));
+    pub fn starter(kit: Option<Source>, melodic: Source) -> Self {
+        let mut tracks = Vec::new();
+        for source in kit.into_iter().chain(std::iter::once(melodic)) {
+            tracks.push(TrackDef::new(tracks.len() as u32, source.label(), source));
+        }
+        let next_id = tracks.len() as u32;
         Self {
             tracks,
-            next_id: id + 1,
+            next_id,
+            ..Self::empty()
+        }
+    }
+
+    /// `channels` poly-synth channels, named "Channel 1" upward.
+    ///
+    /// A fixture. The tests need a rack with several strips to move gain, pan,
+    /// mutes, sends and inserts between, and they should not have to care which
+    /// instruments happen to ship -- what they are testing is the rack, not the
+    /// sound. [`Project::starter`] is what a user actually opens.
+    pub fn rack(channels: usize) -> Self {
+        let tracks = (0..channels)
+            .map(|index| {
+                TrackDef::new(
+                    index as u32,
+                    format!("Channel {}", index + 1),
+                    Source::PolySynth,
+                )
+            })
+            .collect();
+        Self {
+            tracks,
+            next_id: channels as u32,
             ..Self::empty()
         }
     }
@@ -1862,24 +1906,18 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_project_is_a_drum_channel_each_and_a_melodic_one() {
-        let project = Project::default();
-        assert_eq!(project.len(), 6);
+    fn a_fresh_project_is_a_kit_channel_and_a_melodic_one() {
+        let kit = Source::Sampler(SamplerSourceRef::new("808-kit").named("808 Kit"));
+        let project = Project::starter(Some(kit.clone()), Source::PolySynth);
+        assert_eq!(project.len(), 2);
         assert_eq!(
             project
                 .tracks
                 .iter()
                 .map(|t| t.name.as_str())
                 .collect::<Vec<_>>(),
-            vec![
-                "Kick",
-                "Snare",
-                "Clap",
-                "Hat Closed",
-                "Hat Open",
-                "Poly Synth"
-            ],
-            "one instrument per channel, named after the instrument"
+            vec!["808 Kit", "Poly Synth"],
+            "each channel is named after the instrument on it"
         );
         assert_eq!(
             project
@@ -1887,14 +1925,7 @@ mod tests {
                 .iter()
                 .map(|t| t.source.clone())
                 .collect::<Vec<_>>(),
-            vec![
-                Source::Drum(SingleDrum::Kick),
-                Source::Drum(SingleDrum::Snare),
-                Source::Drum(SingleDrum::Clap),
-                Source::Drum(SingleDrum::ClosedHat),
-                Source::Drum(SingleDrum::OpenHat),
-                Source::PolySynth,
-            ]
+            vec![kit, Source::PolySynth]
         );
         assert!(project
             .tracks
@@ -1904,23 +1935,24 @@ mod tests {
         // Ids are dense and start at zero, and the next one continues past them.
         assert_eq!(
             project.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
-            vec![0, 1, 2, 3, 4, 5]
+            vec![0, 1]
         );
-        assert_eq!(project.next_id(), 6);
+        assert_eq!(project.next_id(), 2);
         assert!(
             project.len() < MAX_TRACKS,
             "a starter rack must leave room to add to"
         );
     }
 
-    /// The kit is not gone, only unused: a project saved before the split names
-    /// it, and that project has to open.
+    /// `assets/` is gitignored, so a fresh clone has no kit. A silent channel
+    /// promising drums would be worse than no channel at all.
     #[test]
-    fn the_starter_rack_does_not_use_the_legacy_kit() {
-        assert!(Project::default()
-            .tracks
-            .iter()
-            .all(|t| t.source != Source::DrumKit));
+    fn with_no_kit_installed_the_starter_is_the_melodic_channel_alone() {
+        let empty = SamplerRegistry::detached();
+        assert_eq!(default_kit(&empty), None);
+        let project = Project::starter(default_kit(&empty), default_piano(&empty));
+        assert_eq!(project.len(), 1);
+        assert_eq!(project.tracks[0].name, "Poly Synth");
     }
 
     #[test]
@@ -1929,17 +1961,12 @@ mod tests {
         // answer is the synth -- and the channel is named after it.
         let empty = SamplerRegistry::detached();
         assert_eq!(default_piano(&empty), Source::PolySynth);
-        assert_eq!(
-            Project::starter(default_piano(&empty)).tracks[SingleDrum::ALL.len()].name,
-            "Poly Synth"
-        );
 
         // And when there is one, the channel takes its name too.
         let piano = Source::Sampler(SamplerSourceRef::new("salamander-piano").named("Piano"));
-        let project = Project::starter(piano.clone());
-        let melodic = SingleDrum::ALL.len();
-        assert_eq!(project.tracks[melodic].source, piano);
-        assert_eq!(project.tracks[melodic].name, "Piano");
+        let project = Project::starter(None, piano.clone());
+        assert_eq!(project.tracks[0].source, piano);
+        assert_eq!(project.tracks[0].name, "Piano");
     }
 
     /// A sampled instrument is an instrument: it has knobs, the strip declares
@@ -1981,7 +2008,7 @@ mod tests {
 
     #[test]
     fn solo_silences_everything_that_is_not_soloed_and_un_solo_restores() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.add(Source::TestTone, None).unwrap();
         let count = project.len();
         assert!(!project.any_soloed());
@@ -2007,7 +2034,7 @@ mod tests {
     fn a_soloed_track_is_audible_even_if_it_is_also_muted() {
         // Solo is an override, not a vote: every DAW does this, and the
         // alternative is a solo button that sometimes does nothing.
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].muted = true;
         project.tracks[0].soloed = true;
         assert!(!project.effective_mute(0));
@@ -2016,7 +2043,7 @@ mod tests {
 
     #[test]
     fn a_mute_only_matters_while_nothing_is_soloed() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].muted = true;
         assert!(project.effective_mute(0));
         assert!(!project.effective_mute(1));
@@ -2028,7 +2055,7 @@ mod tests {
 
     #[test]
     fn publishing_pushes_every_track_and_mutes_the_slots_that_have_none() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].gain_db = -6.0206;
         project.tracks[1].pan = -1.0;
         project.tracks[1].muted = true;
@@ -2051,7 +2078,7 @@ mod tests {
 
     #[test]
     fn tracks_are_added_up_to_the_engines_limit_and_never_past_it() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         while project.len() < MAX_TRACKS {
             project.add(Source::PolySynth, None).unwrap();
         }
@@ -2064,7 +2091,7 @@ mod tests {
 
     #[test]
     fn removing_a_track_renumbers_the_ones_after_it_but_keeps_their_ids() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project
             .add(Source::TestTone, Some("Tone".to_owned()))
             .unwrap();
@@ -2072,7 +2099,7 @@ mod tests {
         assert_eq!(ids, vec![0, 1, 2, 3, 4, 5, 6]);
 
         let removed = project.remove(0).unwrap();
-        assert_eq!(removed.name, "Kick");
+        assert_eq!(removed.name, "Channel 1");
         assert_eq!(
             project.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
             vec![1, 2, 3, 4, 5, 6],
@@ -2089,8 +2116,8 @@ mod tests {
     #[test]
     fn a_new_track_is_named_after_its_source_unless_told_otherwise() {
         let mut project = Project::empty();
-        let index = project.add(Source::DrumKit, None).unwrap();
-        assert_eq!(project.tracks[index].name, "Drum Kit");
+        let index = project.add(Source::TestTone, None).unwrap();
+        assert_eq!(project.tracks[index].name, "Test Tone");
         let index = project
             .add(Source::TestTone, Some("Ref".to_owned()))
             .unwrap();
@@ -2139,7 +2166,7 @@ mod tests {
 
     #[test]
     fn the_wire_shape_carries_what_the_mixer_panel_draws() {
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[0].soloed = true;
         let dto = mixer_state_dto(
             &project,
@@ -2155,7 +2182,7 @@ mod tests {
         assert_eq!(dto.max_tracks, MAX_TRACKS);
         assert_eq!(dto.min_gain_db, SILENCE_DB);
         assert_eq!(dto.tracks[0].index, 0);
-        assert_eq!(dto.tracks[0].source_id, "kick");
+        assert_eq!(dto.tracks[0].source_id, "poly-synth");
         assert!(dto.tracks[0].soloed && !dto.tracks[0].silenced);
         assert!(
             dto.tracks[1].silenced && !dto.tracks[1].muted,
@@ -2269,7 +2296,7 @@ mod tests {
     fn a_plugin_the_project_could_not_load_reaches_the_strip_that_asked_for_it() {
         // What a mixer needs in order to draw a warning badge rather than an
         // inexplicably silent track.
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[1].source = Source::Clap(clap_ref());
 
         let missing = MissingPlugins::new();
@@ -2327,7 +2354,7 @@ mod tests {
         // look like every track being replaced.
         let restored = Project::restored(
             vec![
-                TrackDef::new(7, "Kit", Source::DrumKit),
+                TrackDef::new(7, "Kit", Source::Sampler(SamplerSourceRef::new("808-kit"))),
                 TrackDef::new(3, "Lead", Source::PolySynth),
             ],
             -3.0,
@@ -2349,7 +2376,7 @@ mod tests {
     fn a_hosted_plugin_reaches_the_strip_that_holds_it_and_nothing_else() {
         // The mixer draws an editor button from this, so a plugin appearing on
         // the wrong strip would put the button on the wrong strip too.
-        let mut project = Project::default();
+        let mut project = Project::rack(6);
         project.tracks[1].source = Source::Clap(clap_ref());
 
         let board = ClapBoard::new();

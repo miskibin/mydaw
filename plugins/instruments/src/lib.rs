@@ -2,34 +2,27 @@
 //!
 //! Step 2 gave the engine a note path and proved it against a CLAP fixture.
 //! This crate is what makes that path *useful* without any third-party plugin
-//! installed: two [`RtNode`](mydaw_rt_core::RtNode)s that read
-//! [`ProcessCtx::events`](mydaw_rt_core::ProcessCtx) and make a sound.
+//! installed: an [`RtNode`](mydaw_rt_core::RtNode) that reads
+//! [`ProcessCtx::events`](mydaw_rt_core::ProcessCtx) and makes a sound.
 //!
 //! | Node | `type_id` | What it is |
 //! | --- | --- | --- |
 //! | [`PolySynthNode`] | `poly-synth` | Eight voices: three analog oscillators (shape, coarse, fine, mix) into an ADSR and a resonant filter with envelope. |
-//! | [`SingleDrumNode`] | `kick` | One synthesised kick, any key, tunable +/- an octave. |
-//! | [`SingleDrumNode`] | `snare` | One synthesised snare, any key, tunable +/- an octave. |
-//! | [`SingleDrumNode`] | `clap` | One synthesised hand clap, any key, unpitched. |
-//! | [`SingleDrumNode`] | `hat-closed` | One closed hi-hat, any key, unpitched. |
-//! | [`SingleDrumNode`] | `hat-open` | One open hi-hat, any key, unpitched. |
-//! | [`DrumKitNode`] | `drum-kit` | All four in one node on General MIDI keys 36/38/42/46. **Kept for old projects; nothing creates one.** |
 //!
-//! # One channel, one instrument
-//! A rack channel has one fader, one pan, one insert chain and one row in a
-//! pattern. A four-drum node behind all of them means the snare cannot be turned
-//! down, the hats cannot be panned, and the pattern row has to carry a key per
-//! hit to say which drum -- which is the one thing a step grid is not shaped to
-//! express. So the kit was split: [`single_drum`] gives each drum its own
-//! factory, reusing the kit's own voices, and a fresh project racks four drum
-//! channels instead of one kit channel. The kit stays because a project file
-//! that no longer opens is worse than an instrument nobody chooses.
+//! # Where the drums went
+//! There were five synthesised drums and a kit node here. They are gone: the
+//! sampled `808-kit` is the same machine, recorded rather than approximated, and
+//! keeping both meant the browser offered two kicks with nothing to say which
+//! one to reach for. A project file naming one of the old ids now fails to load
+//! and says what replaced it, which is better than opening silently with a
+//! different sound.
 //!
-//! # Three properties both of them hold
+//! # Three properties it holds
 //!
-//! **No assets.** Everything is generated from oscillators and a seeded noise
-//! source. Nothing to ship, nothing to load, nothing to fail at startup, and no
-//! licence to track.
+//! **No assets.** Everything is generated from oscillators. Nothing to ship,
+//! nothing to load, nothing to fail at startup, and no licence to track -- which
+//! is what makes this the honest fallback when the sampled instruments are not
+//! downloaded.
 //!
 //! **Bit-determinism.** The same note events at the same offsets produce the
 //! same samples, exactly. That is not an aesthetic preference: it is what makes
@@ -39,7 +32,7 @@
 //! only randomness in the crate is [`dsp::Noise`], and every voice re-seeds it
 //! from a constant on every trigger.
 //!
-//! **No allocation on the audio thread.** Both nodes are fixed-size structs;
+//! **No allocation on the audio thread.** The node is a fixed-size struct;
 //! everything that costs -- an `exp`, a `powf`, a filter coefficient -- is
 //! computed in the factory, off the RT thread. `tests/rt_alloc.rs` measures this
 //! with a counting global allocator over event-heavy blocks rather than
@@ -50,9 +43,7 @@
 //! shell owns -- the same parameter system the effects use, because as far as a
 //! knob is concerned an instrument is not a different kind of thing from an
 //! effect, and giving instruments a second one would have been two of
-//! everything. The drums are still constants: each is one sound with one job,
-//! and the controls a drum wants (tune, decay, snap) are a later step.
-//! Automation is not implemented for either.
+//! everything. Automation is not implemented.
 //!
 //! # Using it
 //! ```no_run
@@ -67,21 +58,12 @@
 //! let node = registry.create("poly-synth", 48_000.0, 512).unwrap();
 //! ```
 
-pub mod drum_kit;
 pub mod dsp;
 pub mod poly_synth;
-pub mod single_drum;
 pub mod test_support;
 
-pub use drum_kit::{
-    Drum, DrumKitFactory, DrumKitNode, CLOSED_HAT_KEY, KICK_KEY, OPEN_HAT_KEY, SNARE_KEY,
-};
 pub use dsp::{key_to_hz, Noise, OnePole};
 pub use poly_synth::{PolySynthFactory, PolySynthNode, VOICES};
-pub use single_drum::{
-    pitch_ratio, SingleDrum, SingleDrumFactory, SingleDrumNode, CLAP_TYPE_ID, CLOSED_HAT_TYPE_ID,
-    KICK_TYPE_ID, OPEN_HAT_TYPE_ID, PITCH_RANGE_SEMITONES, SNARE_TYPE_ID,
-};
 
 use std::sync::Arc;
 
@@ -138,8 +120,7 @@ pub struct InstrumentRegistry {
     /// The subset of them that declare knobs, by `type_id`.
     ///
     /// A second list rather than a wider entry, because a `dyn RtNodeFactory`
-    /// cannot be asked whether it is also a `dyn ParamNodeFactory` -- and most
-    /// of these are drums, which have nothing to declare.
+    /// cannot be asked whether it is also a `dyn ParamNodeFactory`.
     tweakable: Vec<(&'static str, Arc<dyn ParamNodeFactory>)>,
 }
 
@@ -151,12 +132,8 @@ impl Default for InstrumentRegistry {
 
 impl InstrumentRegistry {
     /// The registry every [`InstrumentsPlugin`] publishes.
-    ///
-    /// Menu order: the synth first (it is the default source), then the four
-    /// drums in the order a kit is usually racked, then the legacy kit last --
-    /// it is there so an old project opens, not so anyone picks it.
     pub fn new() -> Self {
-        let mut entries: Vec<(InstrumentInfo, Arc<dyn RtNodeFactory>)> = vec![(
+        let entries: Vec<(InstrumentInfo, Arc<dyn RtNodeFactory>)> = vec![(
             InstrumentInfo {
                 type_id: poly_synth::NODE_TYPE_ID,
                 name: poly_synth::DISPLAY_NAME,
@@ -165,25 +142,6 @@ impl InstrumentRegistry {
             },
             Arc::new(PolySynthFactory::new()),
         )];
-        for drum in SingleDrum::ALL {
-            entries.push((
-                InstrumentInfo {
-                    type_id: drum.type_id(),
-                    name: drum.display_name(),
-                    description: drum.description(),
-                },
-                Arc::new(SingleDrumFactory::new(drum)),
-            ));
-        }
-        entries.push((
-            InstrumentInfo {
-                type_id: drum_kit::NODE_TYPE_ID,
-                name: drum_kit::DISPLAY_NAME,
-                description: "All four drums in one channel. Kept for projects saved before \
-                              they were split; new projects use the individual drums",
-            },
-            Arc::new(DrumKitFactory::new()),
-        ));
         Self {
             entries,
             tweakable: vec![(
@@ -276,7 +234,7 @@ impl std::fmt::Debug for InstrumentRegistry {
     }
 }
 
-/// Contributes the `poly-synth` and `drum-kit` node factories, plus the
+/// Contributes the `poly-synth` node factory, plus the
 /// [`InstrumentRegistry`] service. No panels: choosing an instrument is a
 /// property of a track, and there are no tracks yet -- the shell's source
 /// selector is a step-3 affordance living in the transport bar.
@@ -299,10 +257,6 @@ impl Plugin for InstrumentsPlugin {
         // file names a `type_id`, and the graph builder resolves it against the
         // kernel's factory list without knowing which plugin contributed it.
         ctx.register_rt_node_factory(Box::new(PolySynthFactory::new()));
-        ctx.register_rt_node_factory(Box::new(DrumKitFactory::new()));
-        for drum in SingleDrum::ALL {
-            ctx.register_rt_node_factory(Box::new(SingleDrumFactory::new(drum)));
-        }
         let _ = ctx.services.provide(Arc::new(InstrumentRegistry::new()));
     }
 
@@ -332,21 +286,12 @@ mod tests {
     #[test]
     fn every_factory_is_registered_under_its_type_id() {
         let kernel = booted();
-        for type_id in [
-            poly_synth::NODE_TYPE_ID,
-            drum_kit::NODE_TYPE_ID,
-            KICK_TYPE_ID,
-            SNARE_TYPE_ID,
-            CLAP_TYPE_ID,
-            CLOSED_HAT_TYPE_ID,
-            OPEN_HAT_TYPE_ID,
-        ] {
-            let factory = kernel
-                .ctx()
-                .rt_node_factory(type_id)
-                .unwrap_or_else(|| panic!("'{type_id}' should be contributed"));
-            assert_eq!(factory.type_id(), type_id);
-        }
+        let type_id = poly_synth::NODE_TYPE_ID;
+        let factory = kernel
+            .ctx()
+            .rt_node_factory(type_id)
+            .unwrap_or_else(|| panic!("'{type_id}' should be contributed"));
+        assert_eq!(factory.type_id(), type_id);
         assert!(kernel.ctx().rt_node_factory("no-such-instrument").is_none());
     }
 
@@ -362,16 +307,8 @@ mod tests {
         let ids: Vec<&str> = registry.instruments().iter().map(|i| i.type_id).collect();
         assert_eq!(
             ids,
-            vec![
-                "poly-synth",
-                "kick",
-                "snare",
-                "clap",
-                "hat-closed",
-                "hat-open",
-                "drum-kit"
-            ],
-            "the synth leads (it is the default source) and the legacy kit trails"
+            vec!["poly-synth"],
+            "the drums are sampled now; this crate synthesises the synth alone"
         );
         for info in registry.instruments() {
             assert!(!info.name.is_empty());
@@ -397,23 +334,6 @@ mod tests {
             &[NoteEvent::note_on(0, 69, 1.0)],
         );
         assert!(peak(&out) > 0.05, "the synth should have made a sound");
-
-        let mut drums = registry.create("drum-kit", SR, 512).expect("built");
-        let (out, _) = render(
-            drums.as_mut(),
-            9_600,
-            512,
-            &[NoteEvent::note_on(0, KICK_KEY, 1.0)],
-        );
-        assert!(peak(&out) > 0.05, "the kit should have made a sound");
-
-        // And every per-drum instrument, on a key that is not its own -- they
-        // answer to all of them.
-        for drum in SingleDrum::ALL {
-            let mut node = registry.create(drum.type_id(), SR, 512).expect("built");
-            let (out, _) = render(node.as_mut(), 9_600, 512, &[NoteEvent::note_on(0, 60, 1.0)]);
-            assert!(peak(&out) > 0.05, "{} was silent", drum.display_name());
-        }
     }
 
     #[test]
@@ -429,10 +349,6 @@ mod tests {
         assert_eq!(PLUGIN_ID, "instruments");
         // Project files reference these; renaming one invalidates saved graphs.
         assert_eq!(poly_synth::NODE_TYPE_ID, "poly-synth");
-        assert_eq!(drum_kit::NODE_TYPE_ID, "drum-kit");
-        assert_eq!(KICK_TYPE_ID, "kick");
-        assert_eq!(SNARE_TYPE_ID, "snare");
-        assert_eq!(CLOSED_HAT_TYPE_ID, "hat-closed");
-        assert_eq!(OPEN_HAT_TYPE_ID, "hat-open");
+        assert_eq!(poly_synth::NODE_TYPE_ID, "poly-synth");
     }
 }
