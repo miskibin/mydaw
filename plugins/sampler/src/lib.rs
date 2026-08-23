@@ -73,9 +73,10 @@ pub use manifest::{
     InstrumentManifest, ManifestError, SampleEntry, DEFAULT_RELEASE_MS, MANIFEST_FILE_NAME,
 };
 pub use node::{
-    cubic, layer_gain, playback_step, SamplerFactory, SamplerNode, CHOKE_MS, LAYER_FLOOR, VOICES,
+    cubic, layer_gain, param, playback_step, SamplerFactory, SamplerNode, CHOKE_MS,
+    DEFAULT_ATTACK_MS, DEFAULT_DECAY_MS, DEFAULT_SUSTAIN, LAYER_FLOOR, PARAMS, VOICES,
 };
-pub use registry::{InstrumentInfo, SamplerRegistry};
+pub use registry::{instrument_defaults, InstrumentInfo, SamplerRegistry};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

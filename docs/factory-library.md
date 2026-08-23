@@ -194,18 +194,36 @@ takes that already differ by more than a crossfade can hide, and a low marimba C
 rings for eleven seconds — the third layer costs 10 MB of download for the least
 audible third of the dynamic range.
 
-## Known compromise: one-shots and note-off
+## One-shots, and what each kit asks of the sampler
 
-The sampler starts a linear release on note-off, over the manifest's
-`release_ms`. A sixteenth-note kick on a step sequencer would therefore be cut
-off mid-tail. The drum kits work around this with `release_ms: 30000` — a ramp
-so long it is still near 1.0 when the sound has finished decaying on its own
-(a tenth of a decibel over a 3 s tail).
+A drum pad is triggered, not held: a sixteenth-note kick on a step sequencer
+must not be cut off mid-tail by the note-off that follows it. The three drum
+kits therefore declare `"one_shot": true`, which
+[`SamplerNode::note_off`](../plugins/sampler/src/node.rs) honours by ignoring
+note-off entirely — the voice ends when the recording does, and is still
+stealable and still choked by a retrigger of the same pad. (Earlier revisions
+faked this with `release_ms: 30000`, a ramp so long it had not moved by the time
+the sound was over. The flag replaced it.)
 
-It is the only knob the manifest has for "this is a one-shot". **A real
-`one_shot` flag on `InstrumentManifest`, honoured by `SamplerNode::note_off`,
-would be the better answer**; it was left out here because it is a DSP change
-outside the scope this library was approved under.
+Everything else is played rather than triggered, and its `release_ms` is where
+its Release knob starts:
+
+| kit | one-shot | release | other defaults |
+| --- | --- | --- | --- |
+| 808 Kit | yes | 250 ms | — |
+| 808 Bass | no | 150 ms | `mono: 1`, `glide: 60` |
+| Percussion & FX | yes | 250 ms | — |
+| Studio Drums | yes | 250 ms | — |
+| Marimba | no | 1200 ms | — |
+| Glockenspiel | no | 1200 ms | — |
+
+`default_params` carries the rest of the sampler's knobs (`attack`, `decay`,
+`sustain`, `release`, `glide`, `mono`) for a kit that wants them somewhere other
+than the sampler's own defaults. They are *starting positions*: the track owns
+them from the moment it exists, and the user's edits are theirs. 808 Bass ships
+mono with a 60 ms glide because that — one voice, and an overlapping note
+sliding to the new pitch instead of stacking on it — is what makes a chromatic
+kick a trap 808 rather than a kick played chromatically.
 
 ## Regenerating
 

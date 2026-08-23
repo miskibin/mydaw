@@ -554,21 +554,23 @@ const GLOCKENSPIEL = tileKeys(GLOCKENSPIEL_NOTES).flatMap((note) =>
 
 // ---------------------------------------------------------------------- kits
 
-// A drum pad has to survive a short gate. The sampler starts a linear release
-// on note-off, and a sixteenth-note kick on a step sequencer would otherwise be
-// cut off mid-tail. A release far longer than any sample here means the ramp is
-// still near 1.0 when the sound has finished decaying on its own -- 30 s over a
-// 3 s tail is a tenth of a decibel. It is the only knob the manifest has for
-// "this is a one-shot"; a real `one_shot` flag would be the better answer.
-const ONE_SHOT_RELEASE_MS = 30_000;
-
+// A drum pad is triggered, not held: `one_shot` makes the sampler ignore
+// note-off and play the recording out, so a sixteenth-note gate on a step
+// sequencer cannot cut a 3 s 808 tail in half. The kits used to say this with a
+// 30-second release -- a ramp still near 1.0 by the time the sound was over --
+// which was a workaround for the flag not existing rather than a release time
+// anybody wanted on a knob.
+//
+// `release_ms` on a one-shot is therefore only where its Release knob starts,
+// for the day the user turns the pad into something they play.
 const KITS = [
   {
     id: '808-kit',
     name: '808 Kit',
     description: '30 analogue drum-machine one-shots on a General MIDI drum map',
     source: 'tr808',
-    release_ms: ONE_SHOT_RELEASE_MS,
+    one_shot: true,
+    release_ms: 250,
     // Nothing here is longer than the 4 s cymbal; the cap is a bound, not a cut.
     max_seconds: 6.0,
     fade_out_seconds: 0.25,
@@ -579,8 +581,15 @@ const KITS = [
     name: '808 Bass',
     description: 'Long-decay analogue kick played chromatically, C1-B3, two tail lengths',
     source: 'tr808',
-    // A bass note is played, not triggered: it stops when the key does.
-    release_ms: 120,
+    // A bass note is played, not triggered: it stops when the key does. 150 ms
+    // is long enough that a released note does not click and short enough that
+    // consecutive notes do not overlap into mud.
+    release_ms: 150,
+    // What makes this a trap 808 rather than a chromatic kick: one voice, and
+    // an overlapping note slides to the new pitch instead of stacking on top
+    // of it. 60 ms is the slide length a note-length grid at 140 BPM reads as
+    // a bend rather than as a portamento effect.
+    default_params: { mono: 1, glide: 60 },
     max_seconds: 6.0,
     fade_out_seconds: 0.25,
     samples: BASS_808,
@@ -590,7 +599,8 @@ const KITS = [
     name: 'Percussion & FX',
     description: 'Hand percussion on a General MIDI map, velocity-layered where recorded',
     source: 'vcsl',
-    release_ms: ONE_SHOT_RELEASE_MS,
+    one_shot: true,
+    release_ms: 250,
     max_seconds: 8.0,
     fade_out_seconds: 0.5,
     samples: PERCUSSION,
@@ -600,7 +610,8 @@ const KITS = [
     name: 'Studio Drums',
     description: 'Acoustic kit on a General MIDI map, up to four velocity layers per pad',
     source: 'vcsl',
-    release_ms: ONE_SHOT_RELEASE_MS,
+    one_shot: true,
+    release_ms: 250,
     max_seconds: 8.0,
     fade_out_seconds: 0.5,
     samples: STUDIO_DRUMS,
@@ -630,6 +641,16 @@ const KITS = [
 
 // ------------------------------------------------------------------ validate
 
+/**
+ * The knobs a sampled instrument has. Mirrors `PARAMS` in
+ * `plugins/sampler/src/node.rs`.
+ *
+ * Kept here as a list rather than trusted: an unknown id in `default_params` is
+ * ignored at load -- the forward-compatibility rule every manifest field
+ * follows -- so a typo would be a default that silently never applied.
+ */
+const SAMPLER_PARAMS = new Set(['attack', 'decay', 'sustain', 'release', 'glide', 'mono']);
+
 /** Refuse a curation that cannot mean anything, before a byte is downloaded. */
 function checkCuration() {
   const problems = [];
@@ -639,6 +660,10 @@ function checkCuration() {
     ids.add(kit.id);
     if (!SOURCES[kit.source]) problems.push(`${kit.id}: unknown source '${kit.source}'`);
     if (kit.samples.length === 0) problems.push(`${kit.id}: no samples`);
+    for (const [id, value] of Object.entries(kit.default_params ?? {})) {
+      if (!SAMPLER_PARAMS.has(id)) problems.push(`${kit.id}: '${id}' is not a sampler knob`);
+      if (!Number.isFinite(value)) problems.push(`${kit.id}: default for '${id}' is not a number`);
+    }
 
     const files = new Set();
     const zones = new Map();
@@ -736,6 +761,11 @@ function instrumentOf(kit, samples) {
     name: kit.name,
     description: kit.description,
     release_ms: kit.release_ms,
+    // Omitted where they are the default, so a kit's JSON says only what is
+    // true of it: the loader reads a missing flag as false and missing
+    // defaults as none.
+    ...(kit.one_shot ? { one_shot: true } : {}),
+    ...(kit.default_params ? { default_params: kit.default_params } : {}),
     max_seconds: kit.max_seconds,
     fade_out_seconds: kit.fade_out_seconds,
     attribution: source.credit,

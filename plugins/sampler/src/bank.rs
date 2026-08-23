@@ -135,6 +135,14 @@ pub struct SampleBank {
     description: String,
     attribution: String,
     release_ms: f32,
+    /// Note-off is ignored: the recording is the note. See
+    /// [`InstrumentManifest::one_shot`](crate::manifest::InstrumentManifest::one_shot).
+    one_shot: bool,
+    /// Where this instrument wants the sampler's knobs, by parameter id.
+    ///
+    /// Read by the shell when a track picks the instrument up, never by the
+    /// audio thread -- the knobs it reads are the track's own block.
+    default_params: Vec<(String, f32)>,
     samples: Vec<LoadedSample>,
     /// `key * VELOCITIES + velocity` -> index into `samples`, [`NO_SAMPLE`] for
     /// a note this instrument does not cover. 32 KB, built once, shared by
@@ -174,6 +182,20 @@ impl SampleBank {
     /// Note-off fade, in milliseconds.
     pub const fn release_ms(&self) -> f32 {
         self.release_ms
+    }
+
+    /// Whether a note plays to the end of its recording whatever the key does.
+    pub const fn one_shot(&self) -> bool {
+        self.one_shot
+    }
+
+    /// Where this instrument wants the sampler's knobs, by parameter id.
+    ///
+    /// Empty for an instrument that is happy with the sampler's own defaults
+    /// except for its release, which every instrument states and which is
+    /// always the first pair here.
+    pub fn default_params(&self) -> &[(String, f32)] {
+        &self.default_params
     }
 
     /// Samples actually loaded. Fewer than the manifest named if files were
@@ -284,6 +306,15 @@ impl SampleBank {
             description: "Dropped audio file, played at recorded speed".to_owned(),
             attribution: String::new(),
             release_ms: ONESHOT_RELEASE_MS,
+            // Not a declared one-shot: a dropped file is gated by whatever put
+            // it on the rack, and its 40 ms release is short enough that the
+            // gate is what the ear hears rather than the ramp -- which is also
+            // where its Release knob starts.
+            one_shot: false,
+            default_params: vec![(
+                crate::node::param::RELEASE.to_owned(),
+                ONESHOT_RELEASE_MS,
+            )],
             samples: vec![sample],
             lookup: vec![0u16; KEYS * VELOCITIES].into_boxed_slice(),
             skipped: Vec::new(),
@@ -445,6 +476,21 @@ pub fn load_from_manifest(
         });
     }
 
+    // The manifest's release is the default position of the release *knob*: a
+    // marimba rings and a piano damps, and the number that says which is which
+    // has to survive the arrival of a knob that can override it. Anything the
+    // kit states explicitly is applied after, and so wins.
+    let mut default_params = vec![(
+        crate::node::param::RELEASE.to_owned(),
+        manifest.release_ms,
+    )];
+    default_params.extend(
+        manifest
+            .default_params
+            .iter()
+            .map(|(id, value)| (id.clone(), *value)),
+    );
+
     let lookup = build_lookup(manifest, &bank_index);
     let description = if manifest.description.trim().is_empty() {
         format!(
@@ -462,6 +508,8 @@ pub fn load_from_manifest(
         description,
         attribution: manifest.attribution.clone(),
         release_ms: manifest.release_ms,
+        one_shot: manifest.one_shot,
+        default_params,
         samples,
         lookup,
         skipped,
@@ -594,6 +642,8 @@ mod tests {
             name: "T".to_owned(),
             description: String::new(),
             release_ms: 300.0,
+            one_shot: false,
+            default_params: Default::default(),
             max_seconds: None,
             fade_out_seconds: None,
             attribution: String::new(),

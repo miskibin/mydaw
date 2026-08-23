@@ -749,9 +749,53 @@ const SYNTH_PARAMS: readonly ParamDefDto[] = [
   { id: 'release', name: 'Release', unit: 'ms', min: 1, max: 4_000, defaultValue: 120, curve: 'log', step: null, smoothingMs: 0 },
 ];
 
+/**
+ * The sampler's knobs. Mirrors `PARAMS` in `plugins/sampler/src/node.rs`, in
+ * that order -- the same mock/live parity the synth list above keeps.
+ */
+const SAMPLER_PARAMS: ParamDefDto[] = [
+  { id: 'attack', name: 'Attack', unit: 'ms', min: 0, max: 2_000, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 0 },
+  { id: 'decay', name: 'Decay', unit: 'ms', min: 1, max: 8_000, defaultValue: 1_000, curve: 'log', step: null, smoothingMs: 0 },
+  { id: 'sustain', name: 'Sustain', unit: '', min: 0, max: 1, defaultValue: 1, curve: 'linear', step: null, smoothingMs: 0 },
+  { id: 'release', name: 'Release', unit: 'ms', min: 1, max: 8_000, defaultValue: 300, curve: 'log', step: null, smoothingMs: 0 },
+  { id: 'glide', name: 'Glide', unit: 'ms', min: 0, max: 1_000, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 0 },
+  { id: 'mono', name: 'Mono', unit: '', min: 0, max: 1, defaultValue: 0, curve: 'linear', step: 1, smoothingMs: 0 },
+];
+
+/**
+ * Where each installed instrument wants those knobs, by source id.
+ *
+ * The live engine reads this from the instrument's manifest -- `release_ms` and
+ * `default_params` in `assets-manifest.json` -- and applies it when a track
+ * selects the instrument. Mirrored here so the browser shows an 808 Bass as the
+ * mono, gliding instrument it ships as rather than as a bare sampler.
+ */
+const SAMPLER_DEFAULTS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  'sampler:salamander-piano': { release: 400 },
+  'sampler:808-kit': { release: 250 },
+  'sampler:808-bass': { release: 150, mono: 1, glide: 60 },
+  'sampler:percussion-fx': { release: 250 },
+  'sampler:studio-drums': { release: 250 },
+  'sampler:marimba': { release: 1_200 },
+  'sampler:glockenspiel': { release: 1_200 },
+};
+
 /** The knobs an instrument declares, by source id. */
 function sourceParamDefs(sourceId: string): ParamDefDto[] {
-  return sourceId === 'poly-synth' ? SYNTH_PARAMS.map((def) => ({ ...def })) : [];
+  if (sourceId === 'poly-synth') return SYNTH_PARAMS.map((def) => ({ ...def }));
+  // Every sampled instrument has the same knobs; only their starting positions
+  // differ. See `source_param_defs` in `app/src/project.rs`.
+  if (sourceId.startsWith('sampler:')) return SAMPLER_PARAMS.map((def) => ({ ...def }));
+  return [];
+}
+
+/** Where a track's knobs start when it selects `sourceId`. */
+function sourceParamValues(sourceId: string): ParamValueDto[] {
+  const wanted = SAMPLER_DEFAULTS[sourceId] ?? {};
+  return sourceParamDefs(sourceId).map((def) => ({
+    id: def.id,
+    value: wanted[def.id] ?? def.defaultValue,
+  }));
 }
 
 /** Default pitch/region for a mixer strip that is not a sample channel. */
@@ -818,10 +862,7 @@ function starterTracks(): TrackDto[] {
       inserts: [],
       ...SAMPLE_PLAY,
       sourceParamDefs: sourceParamDefs(sourceId),
-      sourceParams: sourceParamDefs(sourceId).map((def) => ({
-        id: def.id,
-        value: def.defaultValue,
-      })),
+      sourceParams: sourceParamValues(sourceId),
     };
   });
 }
@@ -1236,10 +1277,7 @@ export class MockBackend implements Backend {
     // A change of instrument is a change of knobs: the old ones belonged to the
     // old sound (see `TrackDef::set_source` in the engine).
     def.sourceParamDefs = sourceParamDefs(wanted.id);
-    def.sourceParams = def.sourceParamDefs.map((entry) => ({
-      id: entry.id,
-      value: entry.defaultValue,
-    }));
+    def.sourceParams = sourceParamValues(wanted.id);
     this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
     return this.mixerState();
   }
@@ -1575,10 +1613,7 @@ export class MockBackend implements Backend {
       inserts: [],
       ...SAMPLE_PLAY,
       sourceParamDefs: sourceParamDefs(wanted.id),
-      sourceParams: sourceParamDefs(wanted.id).map((def) => ({
-        id: def.id,
-        value: def.defaultValue,
-      })),
+      sourceParams: sourceParamValues(wanted.id),
     });
     // A new rack channel gets a grid in every pattern, the way the engine's
     // `PatternSet::add_channel` does -- otherwise the row would be missing
