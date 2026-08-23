@@ -839,6 +839,7 @@ impl Project {
                 }
             }
         }
+        self.retarget_sidechains(StripId::Bus(bus));
         Ok(self.buses.remove(bus))
     }
 
@@ -1034,6 +1035,70 @@ impl Project {
         }
     }
 
+    /// Fix every compressor's key source after a strip has been removed.
+    ///
+    /// Exactly the argument [`remove_bus`](Self::remove_bus) makes for sends: a
+    /// strip index is a **position**, so a key left pointing at the number of a
+    /// strip that has moved into the gap would silently duck one instrument
+    /// under a different one -- a fault with no visible symptom, which is the
+    /// worst kind a mixer can have. A key on the removed strip itself becomes
+    /// unrouted; keys on later strips are renumbered down.
+    fn retarget_sidechains(&mut self, removed: StripId) {
+        let renumber = |source: Option<StripId>| -> Option<StripId> {
+            match (source?, removed) {
+                (StripId::Track(track), StripId::Track(gone)) => match track.cmp(&gone) {
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(StripId::Track(track - 1)),
+                    std::cmp::Ordering::Less => Some(StripId::Track(track)),
+                },
+                (StripId::Bus(bus), StripId::Bus(gone)) => match bus.cmp(&gone) {
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(StripId::Bus(bus - 1)),
+                    std::cmp::Ordering::Less => Some(StripId::Bus(bus)),
+                },
+                (other, _) => Some(other),
+            }
+        };
+        for insert in self.all_inserts() {
+            insert.set_sidechain_source(renumber(insert.sidechain_source()));
+        }
+    }
+
+    /// Every insert on every chain: tracks, buses, then the master.
+    ///
+    /// Shared iteration for the two passes that have to touch all of them --
+    /// key retargeting, and the load-time check that no key points at a strip
+    /// the file does not carry.
+    fn all_inserts(&self) -> impl Iterator<Item = &InsertDef> {
+        self.tracks
+            .iter()
+            .flat_map(|track| track.inserts.iter())
+            .chain(self.buses.iter().flat_map(|bus| bus.inserts.iter()))
+            .chain(self.master_inserts.iter())
+    }
+
+    /// Unroute every key that names a strip this project does not have.
+    ///
+    /// Run after a load: a file written on a machine with more tracks, or
+    /// hand-edited, must degrade to "no sidechain" rather than to somebody
+    /// else's kick.
+    pub fn clamp_sidechains(&mut self) {
+        let tracks = self.tracks.len();
+        let buses = self.buses.len();
+        for insert in self.all_inserts() {
+            let source = insert.sidechain_source().filter(|strip| match strip {
+                StripId::Track(index) => *index < tracks,
+                StripId::Bus(index) => *index < buses,
+            });
+            if source != insert.sidechain_source() {
+                log::warn!(
+                    "an insert keys off a strip this project does not have; leaving it unrouted"
+                );
+                insert.set_sidechain_source(source);
+            }
+        }
+    }
+
     /// Tracks in this project.
     pub fn len(&self) -> usize {
         self.tracks.len()
@@ -1128,6 +1193,7 @@ impl Project {
             return Err(TrackError::LastTrack);
         }
         self.retarget_sends_after_removing_track(index);
+        self.retarget_sidechains(StripId::Track(index));
         Ok(self.tracks.remove(index))
     }
 
@@ -2267,6 +2333,105 @@ mod tests {
             "track 1's send followed it down to index 0"
         );
         assert_eq!(project.sends[0].dest, 1);
+    }
+
+    /// `routed()` with a compressor on track 1 keyed off track 0 -- the trap
+    /// move, at its smallest: duck the bass under the kick.
+    fn ducked() -> Project {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        project
+            .add_insert(
+                InsertTarget::Track(1),
+                "effects.compressor",
+                None,
+                &registry,
+            )
+            .unwrap();
+        project.tracks[1].inserts[0].set_sidechain_source(Some(StripId::Track(0)));
+        project
+    }
+
+    #[test]
+    fn removing_the_track_a_compressor_keys_off_unroutes_it_rather_than_repointing_it() {
+        // The failure this exists to prevent has no visible symptom: a key left
+        // pointing at index 0 after track 0 is deleted would duck the bass under
+        // whatever moved into the gap, silently and for ever.
+        let mut project = ducked();
+        project.remove(0).unwrap();
+        assert_eq!(project.tracks[0].inserts[0].sidechain_source(), None);
+    }
+
+    #[test]
+    fn a_key_on_a_later_track_follows_it_down_when_one_below_is_removed() {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        project
+            .add(Source::PolySynth, Some("Bass".to_owned()))
+            .unwrap();
+        project
+            .add_insert(
+                InsertTarget::Track(2),
+                "effects.compressor",
+                None,
+                &registry,
+            )
+            .unwrap();
+        // Track 2 keys off track 1; removing track 0 makes those 1 and 0.
+        project.tracks[2].inserts[0].set_sidechain_source(Some(StripId::Track(1)));
+        project.remove(0).unwrap();
+        assert_eq!(
+            project.tracks[1].inserts[0].sidechain_source(),
+            Some(StripId::Track(0)),
+            "the key followed the strip it names, not the number it had"
+        );
+    }
+
+    #[test]
+    fn removing_a_bus_retargets_the_keys_that_name_one_the_way_it_retargets_sends() {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        project
+            .add_insert(
+                InsertTarget::Track(0),
+                "effects.compressor",
+                None,
+                &registry,
+            )
+            .unwrap();
+        project
+            .add_insert(InsertTarget::Master, "effects.compressor", None, &registry)
+            .unwrap();
+        project.tracks[0].inserts[0].set_sidechain_source(Some(StripId::Bus(1)));
+        project.master_inserts[0].set_sidechain_source(Some(StripId::Bus(0)));
+
+        project.remove_bus(0).unwrap();
+        assert_eq!(
+            project.tracks[0].inserts[0].sidechain_source(),
+            Some(StripId::Bus(0)),
+            "bus 1 became bus 0"
+        );
+        assert_eq!(
+            project.master_inserts[0].sidechain_source(),
+            None,
+            "the bus it keyed off is gone"
+        );
+    }
+
+    #[test]
+    fn clamping_unroutes_a_key_that_names_a_strip_this_project_does_not_have() {
+        let mut project = ducked();
+        project.tracks[1].inserts[0].set_sidechain_source(Some(StripId::Track(9)));
+        project.clamp_sidechains();
+        assert_eq!(project.tracks[1].inserts[0].sidechain_source(), None);
+
+        // And a route that *is* valid is left exactly where it was.
+        project.tracks[1].inserts[0].set_sidechain_source(Some(StripId::Bus(1)));
+        project.clamp_sidechains();
+        assert_eq!(
+            project.tracks[1].inserts[0].sidechain_source(),
+            Some(StripId::Bus(1))
+        );
     }
 
     #[test]

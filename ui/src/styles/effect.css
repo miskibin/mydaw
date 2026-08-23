@@ -251,12 +251,88 @@
 .wv-fx__compbody > .wv-xfer { min-height: 0; }
 .wv-fx__compbody > .wv-fx__gr { width: auto; min-width: 0; }
 .wv-fx__vgrid { fill: none; stroke: var(--line); stroke-width: .5; vector-effect: non-scaling-stroke; }
-.wv-fx__threshold { fill: none; stroke: var(--warn); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
+/* `--warn` has never been in the palette, so the threshold line has been
+ * drawing in the SVG default -- black, i.e. invisible on every theme. It is
+ * load-bearing now that the traces beside it are measurements, so it falls back
+ * to the amber the rest of the shell warns in. */
+.wv-fx__threshold { fill: none; stroke: var(--warn, var(--solo)); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
 .wv-fx__envelope { fill: none; stroke: var(--txt); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
 .wv-fx__grarea { fill: color-mix(in srgb, var(--acc) 42%, transparent); stroke: var(--acc); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.wv-fx__envelope.is-key { stroke: var(--live); }
 .wv-fx__vizlegend { display: flex; justify-content: space-between; gap: 8px; padding: 5px 9px 8px; font: 500 8px 'Geist Mono Variable'; color: var(--dim); text-transform: uppercase; }
 .wv-fx__vizlegend i { display: inline-block; width: 13px; height: 2px; margin: 0 3px 2px 0; background: var(--txt); }
 .wv-fx__vizlegend i.is-gr { background: var(--acc); }
+.wv-fx__vizlegend i.is-key { background: var(--live); }
+
+/* The key badge sits between the display's name and its axis label, so the one
+ * thing that changes what the picture *means* is inside the picture's own head
+ * rather than only in the selector below it. */
+.wv-fx__keybadge {
+  flex: none;
+  padding: 2px 5px;
+  border: 1px solid color-mix(in srgb, var(--live) 55%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--live) 16%, transparent);
+  font-style: normal;
+  color: var(--live);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The sidechain row: a routing control, not a knob, so it reads as a line of
+ * settings rather than joining the knob row underneath it. */
+.wv-fx__key {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  margin-top: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--sunk);
+}
+
+.wv-fx__key.is-routed {
+  border-color: color-mix(in srgb, var(--live) 45%, var(--line));
+}
+
+.wv-fx__keylabel {
+  flex: none;
+  font: 500 8px 'Geist Mono Variable';
+  letter-spacing: .12em;
+  color: var(--dim);
+  text-transform: uppercase;
+}
+
+.wv-fx__keypick {
+  flex: none;
+  max-width: 210px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--line2);
+  border-radius: 4px;
+  background: var(--chip);
+  font: 500 10px 'Geist Mono Variable';
+  color: var(--txt);
+}
+
+.wv-fx__key.is-routed .wv-fx__keypick { color: var(--live); }
+
+.wv-fx__keyhint {
+  min-width: 0;
+  overflow: hidden;
+  font: 500 9px 'Geist Variable';
+  color: var(--dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wv-fx__keyhint b { font-weight: 600; color: var(--txt2); }
+.wv-fx__keyhint.is-warn { color: var(--solo); }
 
 .wv-fx__satviz { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(170px, .95fr); gap: 8px; min-height: 210px; }
 .wv-fx__vizpanel { display: flex; flex-direction: column; }

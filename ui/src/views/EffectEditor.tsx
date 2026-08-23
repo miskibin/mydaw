@@ -8,7 +8,7 @@
 
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js';
 
-import type { EffectInfoDto, InsertDto, InsertTarget, SpectrumDto } from '../api/types';
+import type { EffectInfoDto, InsertDto, InsertTarget, SpectrumDto, StripRef } from '../api/types';
 import { editorLayout } from '../lib/effectLayout';
 import { channelColor } from '../lib/channel';
 import { useView, type InsertEditorRef } from '../shell/view';
@@ -16,7 +16,7 @@ import { insertTargetFor, useAppState } from '../state';
 import { trackColor } from '../theme/tokens';
 import { PluginWindow } from '../ui/PluginWindow';
 import { createInsertKnobs } from '../ui/insertKnob';
-import { CompEditor } from './fx/CompEditor';
+import { CompEditor, type KeyStrip } from './fx/CompEditor';
 import { DelayEditor } from './fx/DelayEditor';
 import { EqEditor } from './fx/EqEditor';
 import { LimiterEditor } from './fx/LimiterEditor';
@@ -29,7 +29,10 @@ import '../styles/effect.css';
 
 const WINDOW_SIZE: Record<string, { w: number; h: number }> = {
   eq: { w: 860, h: 600 },
-  compressor: { w: 720, h: 540 },
+  // Taller than the other display-first editors by one row: the compressor is
+  // the only effect with a routing control, and the sidechain selector has to
+  // be reachable without opening Advanced or scrolling the sheet.
+  compressor: { w: 720, h: 596 },
   saturator: { w: 680, h: 520 },
   delay: { w: 720, h: 540 },
   limiter: { w: 620, h: 500 },
@@ -168,6 +171,35 @@ function EffectEditor(props: {
     void app.backend.setInsertListen(target(), current.index, bandId).catch(app.report);
   }
 
+  /**
+   * Every strip a compressor can key off, in mixer order.
+   *
+   * Read from the live mixer rather than remembered, so a renamed track is
+   * renamed in the selector and a removed one simply stops being offered. The
+   * master is not here: keying a master insert off the master is a loop, and
+   * keying a track off it is a mix-wide pump nobody asks for by name.
+   */
+  const keyStrips = createMemo<KeyStrip[]>(() => {
+    const mixer = app.mixer();
+    if (!mixer) return [];
+    return [
+      ...mixer.tracks.map<KeyStrip>((track) => ({
+        kind: 'track',
+        index: track.index,
+        name: track.name,
+      })),
+      ...mixer.buses.map<KeyStrip>((bus) => ({ kind: 'bus', index: bus.index, name: bus.name })),
+    ];
+  });
+
+  function onSidechain(source: StripRef | null): void {
+    const current = insert();
+    if (!current) return;
+    void app.mixerCommand((backend) =>
+      backend.setInsertSidechain(target(), current.index, source),
+    );
+  }
+
   return (
     <Show when={insert()}>
       {(current) => (
@@ -264,6 +296,9 @@ function EffectEditor(props: {
                       advanced={layout().advanced}
                       muted={current().bypassed}
                       spectrum={props.spectrum?.binsPost ?? null}
+                      strips={keyStrips()}
+                      sidechain={current().sidechain}
+                      onSidechain={onSidechain}
                     />
                   )}
                 </Match>

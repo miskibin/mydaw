@@ -18,8 +18,9 @@ use std::sync::Arc;
 
 use mydaw_rt_core::basedrop::Collector;
 use mydaw_rt_core::{
-    graph_channel, AudioBuffers, BusSpec, GraphLimits, GraphSpec, MixerParams, NoteEvent, NoteKind,
-    ProcessCtx, RtNode, SendSpec, StripId, TrackSpec, TransportSnapshot, MAX_BUSES, MAX_TRACKS,
+    graph_channel, key_slot, AudioBuffers, BusSpec, GraphLimits, GraphSpec, MixerParams, NoteEvent,
+    NoteKind, ProcessCtx, RtNode, SendSpec, SidechainBus, StripId, TrackSpec, TransportSnapshot,
+    MAX_BUSES, MAX_TRACKS,
 };
 
 thread_local! {
@@ -387,4 +388,102 @@ fn a_graph_swap_on_the_audio_thread_frees_nothing() {
 
     collector.collect();
     assert!(collector.alloc_count() < before, "the collector freed it");
+}
+
+/// Reads one key slot every block, the way a keyed compressor does.
+struct KeyReadingNode {
+    bus: Arc<SidechainBus>,
+    slot: usize,
+}
+
+impl RtNode for KeyReadingNode {
+    fn process(&mut self, _ctx: &mut ProcessCtx) {
+        self.bus.request(self.slot);
+        for frame in 0..self.bus.frames(self.slot) {
+            let _ = self.bus.read(self.slot, frame);
+        }
+    }
+}
+
+#[test]
+fn every_strip_publishing_a_key_and_every_track_reading_one_allocates_nothing() {
+    // The sidechain step's worst case: all sixteen tracks and all eight buses
+    // armed, so the graph copies twenty-four full stereo blocks, and every track
+    // reading one back. The copies are relaxed atomic stores over buffers the
+    // bus allocated in `SidechainBus::new`, and this is the measurement that
+    // says so rather than the comment.
+    let collector = Collector::new();
+    let (mut handle, mut slot) = graph_channel(2, collector.handle());
+    let params = Arc::new(MixerParams::new());
+    let bus = Arc::new(SidechainBus::new(BLOCK));
+
+    let mut spec = GraphSpec::new()
+        .with_params(Arc::clone(&params))
+        .with_sidechain(Arc::clone(&bus))
+        .with_limits(GraphLimits {
+            sample_rate: SR,
+            max_block: BLOCK,
+            max_events: EVENTS,
+        });
+    for track in 0..MAX_TRACKS {
+        // Each track keys off the next one round, so the reads span the whole
+        // slot map rather than hammering one cache line.
+        let source = key_slot(StripId::Track((track + 1) % MAX_TRACKS)).expect("a slot");
+        spec = spec.with_track(
+            TrackSpec::new(Box::new(EventCountingNode {
+                value: 0.01 * (track + 1) as f32,
+                seen: 0,
+            }))
+            .with_insert(Box::new(KeyReadingNode {
+                bus: Arc::clone(&bus),
+                slot: source,
+            })),
+        );
+    }
+    for index in 0..MAX_BUSES {
+        // Something has to ask for the bus slots, or the graph would skip them.
+        bus.request(key_slot(StripId::Bus(index)).expect("a slot"));
+        spec.push_bus(BusSpec::new());
+    }
+    handle.install(spec).expect("install");
+    slot.poll_swap();
+
+    let mut buffers = AudioBuffers::new(BLOCK);
+    let events = block_events();
+    let mut render = |slot: &mut mydaw_rt_core::RtGraphSlot| {
+        for index in 0..MAX_BUSES {
+            bus.request(key_slot(StripId::Bus(index)).expect("a slot"));
+        }
+        let mut ctx = ProcessCtx::with_events(
+            &mut buffers,
+            SR,
+            BLOCK,
+            TransportSnapshot::default(),
+            &events,
+        );
+        slot.process(&mut ctx);
+    };
+    // Warm-up outside the measurement, as above: two blocks, because a
+    // subscription is promoted at the block after it is asked for.
+    render(&mut slot);
+    render(&mut slot);
+
+    let observed = count_allocations(|| {
+        for _ in 0..32 {
+            render(&mut slot);
+        }
+    });
+    assert_eq!(
+        observed, 0,
+        "publishing and reading the key bus allocated {observed} time(s)"
+    );
+    // And the copies really happened, or the measurement above measured nothing.
+    assert_eq!(
+        bus.frames(key_slot(StripId::Track(0)).expect("a slot")),
+        BLOCK
+    );
+    assert_eq!(
+        bus.frames(key_slot(StripId::Bus(0)).expect("a slot")),
+        BLOCK
+    );
 }

@@ -51,6 +51,7 @@ import type {
   SourceDto,
   SpectrumDto,
   StreamInfo,
+  StripRef,
   MidiPortDto,
   MidiStatusDto,
   PreviewSettings,
@@ -1734,6 +1735,7 @@ export class MockBackend implements Backend {
       bypassed: false,
       params: info.params.map<ParamValueDto>((def) => ({ id: def.id, value: def.defaultValue })),
       readouts: info.readouts.map<ParamValueDto>((def) => ({ id: def.id, value: 0 })),
+      sidechain: null,
     };
     const at = position === undefined ? chain.length : Math.min(chain.length, Math.max(0, position));
     chain.splice(at, 0, insert);
@@ -1825,11 +1827,18 @@ export class MockBackend implements Backend {
       id: insert.id,
       readouts: effectInfo(insert.typeId).readouts.map<ParamValueDto>((def) => {
         if (!this.playing || insert.bypassed) return { id: def.id, value: 0 };
-        if (def.id === 'gr') {
-          return { id: def.id, value: 3 + 4 * Math.abs(Math.sin(now * 2.1 + index)) };
-        }
-        if (def.id === 'gr_max') {
-          return { id: def.id, value: 4 + 5 * Math.abs(Math.sin(now * 1.4 + index)) };
+        if (def.id === 'gr' || def.id === 'gr_max') {
+          const peak = def.id === 'gr_max';
+          if (insert.sidechain) {
+            // Keyed: the reduction follows the key's own envelope, so the
+            // display's two traces line up the way they do with an engine
+            // behind them. That is the whole point of the demo -- a duck you
+            // can see arriving on the beat.
+            const duck = 18 * MockBackend.keyEnvelope(now, index);
+            return { id: def.id, value: peak ? duck : duck * 0.86 };
+          }
+          const base = peak ? 4 + 5 * Math.abs(Math.sin(now * 1.4 + index)) : 3 + 4 * Math.abs(Math.sin(now * 2.1 + index));
+          return { id: def.id, value: base };
         }
         if (def.id === 'latency') return { id: def.id, value: 32 };
         if (def.id === 'auto_gain_db') return { id: def.id, value: -((this.playing ? 6 : 0) as number) };
@@ -1838,6 +1847,19 @@ export class MockBackend implements Backend {
       }),
     }));
   }
+
+  /**
+   * A four-to-the-floor envelope, 0..1, for the mock's key signal.
+   *
+   * Two beats a second with a fast attack and a ~180 ms tail: recognisably a
+   * kick, so a screenshot of the editor shows the shape a reader expects rather
+   * than an abstract wobble.
+   */
+  private static keyEnvelope(now: number, offset: number): number {
+    const phase = (now * 2 + offset * 0.13) % 1;
+    return Math.exp(-phase * 5.5) * (1 - Math.exp(-phase * 90));
+  }
+
 
   async watchSpectrum(target: InsertTarget | null, index: number | null): Promise<void> {
     this.spectrumWatch = target ? { target, index } : null;
@@ -1869,6 +1891,26 @@ export class MockBackend implements Backend {
 
   async setInsertListen(_target: InsertTarget, _index: number, _band: string | null): Promise<void> {
     // The mock has no audio path; solo is a no-op that must still resolve.
+  }
+
+  async setInsertSidechain(
+    target: InsertTarget,
+    index: number,
+    source: StripRef | null,
+  ): Promise<MixerState> {
+    const insert = this.chain(target)[index];
+    if (!insert) throw new Error(`there is no insert ${index} on that chain`);
+    if (source) {
+      const exists =
+        source.kind === 'track'
+          ? source.index < this.tracks.length
+          : source.index < this.buses.length;
+      if (!exists) {
+        throw new Error(`there is no ${source.kind} ${source.index} to key off`);
+      }
+    }
+    insert.sidechain = source;
+    return this.mixerState();
   }
 
   // --- patterns ------------------------------------------------------------

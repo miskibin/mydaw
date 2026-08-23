@@ -21,6 +21,7 @@ import type {
   SourceDto,
   SpectrumDto,
   StreamInfo,
+  StripRef,
   UiSnapshot,
   Unsubscribe,
   Vst3GuiStatus,
@@ -258,6 +259,20 @@ export interface Backend {
   getInsertSpectrum(): Promise<SpectrumDto | null>;
   /** EQ band-solo of the source. `band` is a prefix, or `null` to stop. */
   setInsertListen(target: InsertTarget, index: number, band: string | null): Promise<void>;
+
+  /**
+   * Point one insert's detector at another strip, or unroute it with `null`.
+   *
+   * The compressor's external key. One atomic store in the engine and no graph
+   * rebuild, so a source can be changed while the transport runs -- which is
+   * how a user finds out which drum the bass should duck under. Returns the
+   * whole mixer, because the route is part of the insert every strip draws.
+   */
+  setInsertSidechain(
+    target: InsertTarget,
+    index: number,
+    source: StripRef | null,
+  ): Promise<MixerState>;
 
   // --- patterns ------------------------------------------------------------
 
@@ -749,6 +764,20 @@ class TauriBackend implements Backend {
       targetIndex: target.index,
       index,
       band,
+    });
+  }
+
+  setInsertSidechain(
+    target: InsertTarget,
+    index: number,
+    source: StripRef | null,
+  ): Promise<MixerState> {
+    return this.call('set_insert_sidechain', {
+      target: target.kind,
+      targetIndex: target.index,
+      index,
+      sourceKind: source?.kind ?? null,
+      sourceIndex: source?.index ?? 0,
     });
   }
 
