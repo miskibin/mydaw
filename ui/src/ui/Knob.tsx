@@ -183,9 +183,16 @@ export function Knob(props: KnobProps): ReturnType<typeof Show> {
     }
 
     const scaled = event.shiftKey ? notches * FINE_FACTOR : notches;
-    const next = props.wheelStep
+    let next = props.wheelStep
       ? snapToStep(props.def, props.wheelStep(current, scaled))
       : fromNormalised(props.def, toNormalised(props.def, current) + scaled * WHEEL_NORMALISED_STEP);
+    if (next === current && props.def.step && props.def.step > 0) {
+      // A stepped continuous parameter -- a bit depth of 1..24, a downsampling
+      // ratio -- can have a grid coarser than 2 % of its range, and then every
+      // notch rounds straight back to where it started and the wheel does
+      // nothing at all. A notch means "one position, that way", so give it one.
+      next = snapToStep(props.def, current + Math.sign(scaled) * props.def.step);
+    }
     if (next === current) return;
     apply(next);
     commitSoon();

@@ -16,10 +16,15 @@ import { insertTargetFor, useAppState } from '../state';
 import { trackColor } from '../theme/tokens';
 import { PluginWindow } from '../ui/PluginWindow';
 import { createInsertKnobs } from '../ui/insertKnob';
+import { AutoFilterEditor } from './fx/AutoFilterEditor';
+import { BitcrusherEditor } from './fx/BitcrusherEditor';
+import { ChorusEditor } from './fx/ChorusEditor';
 import { CompEditor } from './fx/CompEditor';
 import { DelayEditor } from './fx/DelayEditor';
 import { EqEditor } from './fx/EqEditor';
+import { FlangerEditor } from './fx/FlangerEditor';
 import { LimiterEditor } from './fx/LimiterEditor';
+import { PhaserEditor } from './fx/PhaserEditor';
 import { ReverbEditor } from './fx/ReverbEditor';
 import { SatEditor } from './fx/SatEditor';
 import { UtilityEditor } from './fx/UtilityEditor';
@@ -35,6 +40,11 @@ const WINDOW_SIZE: Record<string, { w: number; h: number }> = {
   limiter: { w: 620, h: 500 },
   reverb: { w: 760, h: 540 },
   utility: { w: 520, h: 560 },
+  chorus: { w: 720, h: 520 },
+  flanger: { w: 720, h: 520 },
+  phaser: { w: 720, h: 540 },
+  autofilter: { w: 880, h: 600 },
+  bitcrusher: { w: 720, h: 520 },
   generic: { w: 520, h: 400 },
 };
 
@@ -319,6 +329,76 @@ function EffectEditor(props: {
                       primary={layout().primary}
                       advanced={layout().advanced}
                       muted={current().bypassed}
+                      spectrum={props.spectrum?.binsPost ?? null}
+                    />
+                  )}
+                </Match>
+                <Match when={layout().kind === 'chorus' && info()}>
+                  {(catalogue) => (
+                    <ChorusEditor
+                      info={catalogue()}
+                      knobs={knobs}
+                      values={values()}
+                      primary={layout().primary}
+                      advanced={layout().advanced}
+                      muted={current().bypassed}
+                    />
+                  )}
+                </Match>
+                <Match when={layout().kind === 'flanger' && info()}>
+                  {(catalogue) => (
+                    <FlangerEditor
+                      info={catalogue()}
+                      knobs={knobs}
+                      values={values()}
+                      primary={layout().primary}
+                      advanced={layout().advanced}
+                      muted={current().bypassed}
+                      spectrum={props.spectrum?.binsPost ?? null}
+                    />
+                  )}
+                </Match>
+                <Match when={layout().kind === 'phaser' && info()}>
+                  {(catalogue) => (
+                    <PhaserEditor
+                      info={catalogue()}
+                      knobs={knobs}
+                      values={values()}
+                      primary={layout().primary}
+                      advanced={layout().advanced}
+                      muted={current().bypassed}
+                      sampleRate={sampleRate()}
+                      spectrum={props.spectrum?.binsPost ?? null}
+                    />
+                  )}
+                </Match>
+                <Match when={layout().kind === 'autofilter' && info()}>
+                  {(catalogue) => (
+                    <AutoFilterEditor
+                      info={catalogue()}
+                      knobs={knobs}
+                      values={values()}
+                      live={live()}
+                      primary={layout().primary}
+                      advanced={layout().advanced}
+                      muted={current().bypassed}
+                      bpm={app.sequencer()?.bpm ?? 120}
+                      sampleRate={sampleRate()}
+                      spectrum={props.spectrum?.binsPost ?? null}
+                      onAnnounce={(name, value) => app.say(`${owner()} · ${name}`, value)}
+                    />
+                  )}
+                </Match>
+                <Match when={layout().kind === 'bitcrusher' && info()}>
+                  {(catalogue) => (
+                    <BitcrusherEditor
+                      info={catalogue()}
+                      knobs={knobs}
+                      values={values()}
+                      primary={layout().primary}
+                      advanced={layout().advanced}
+                      muted={current().bypassed}
+                      sampleRate={sampleRate()}
                       spectrum={props.spectrum?.binsPost ?? null}
                     />
                   )}

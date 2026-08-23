@@ -100,6 +100,14 @@ export function formatValue(unit: string, value: number): string {
       return `${value.toFixed(0)} %`;
     case ':1':
       return `${value.toFixed(1)}:1`;
+    case 'bits':
+      // A bit depth is a count. The engine's knob is stepped to whole bits, so
+      // a decimal point here would only ever show the 10 ms it spends between
+      // two of them.
+      return `${value.toFixed(0)} bit`;
+    case 'x':
+      // A downsampling ratio: "8x" reads as one sample in eight.
+      return `${value.toFixed(0)}x`;
     case '':
       return value.toFixed(2);
     default:
@@ -124,6 +132,10 @@ const SWITCH_LABELS: Readonly<Record<string, readonly string[]>> = {
   'effects.delay/modifier': ['Straight', 'Dotted', 'Triplet'],
   'effects.delay/mode': ['Stereo', 'Ping-pong'],
   'effects.saturator/type': ['Tape', 'Tube', 'Clip'],
+  'effects.chorus/voices': ['2 voices', '3 voices'],
+  'effects.phaser/stages': ['4', '6', '8'],
+  'effects.autofilter/mode': ['Lowpass', 'Highpass', 'Bandpass'],
+  'effects.autofilter/lfo_div': ['1/1', '1/2', '1/4', '1/8', '1/16', '1/32', '1/64'],
   'effects.saturator/oversample': ['Off', '2x', '4x'],
   // Instruments declare parameters the same way effects do, so their switches
   // are named here too.
