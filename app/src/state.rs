@@ -117,19 +117,36 @@ pub enum SequencerError {
 /// MIDI kick, so a row entered at its default key plays a kick untransposed and
 /// the rest of the map is a scroll away in the roll. Anything else gets middle
 /// C. The sequencer crate deliberately does not depend on the sampler one.
+/// The key a channel's grid should fire so `source` sounds as it was recorded.
+///
+/// The drum kit is the one source that is not middle C: it is on a General MIDI
+/// map, so its channel fires the GM kick and the rest of the map is a scroll
+/// away in the roll.
+///
+/// A property of the *source*, so the two paths that need it agree: the one that
+/// gives a new channel its grid, and the one that moves an existing channel's
+/// grid when its instrument changes. They disagreed once, and the symptom was a
+/// channel whose lit steps played nothing.
+pub fn natural_step_key(source: &Source) -> u8 {
+    match source {
+        Source::Sampler(reference) if reference.instrument_id == crate::project::KIT_ID => {
+            crate::project::KIT_STEP_KEY
+        }
+        _ => mydaw_plugin_sequencer::DEFAULT_STEP_KEY,
+    }
+}
+
 pub fn starter_pattern_set(project: &Project) -> PatternSet {
     let channels: Vec<u8> = (0..project.len().min(mydaw_rt_core::MAX_TRACKS))
         .map(|index| index as u8)
         .collect();
     PatternSet::starter(&channels, |channel| {
-        match project.tracks.get(channel as usize).map(|t| &t.source) {
-            Some(Source::Sampler(reference))
-                if reference.instrument_id == crate::project::KIT_ID =>
-            {
-                crate::project::KIT_STEP_KEY
-            }
-            _ => mydaw_plugin_sequencer::DEFAULT_STEP_KEY,
-        }
+        project
+            .tracks
+            .get(channel as usize)
+            .map_or(mydaw_plugin_sequencer::DEFAULT_STEP_KEY, |track| {
+                natural_step_key(&track.source)
+            })
     })
 }
 
@@ -592,6 +609,12 @@ impl AppState {
     /// # Errors
     /// See [`set_source`](Self::set_source).
     pub fn set_track_source(&self, track: usize, source: Source) -> Result<(), SourceError> {
+        // Read before the swap: the grid has to move with the instrument. A kit
+        // fires the General MIDI kick and everything else middle C, so a channel
+        // switched between the two would otherwise keep firing a key the new
+        // instrument has no sample at -- lit steps, and silence.
+        let old_key = self.step_key_for(track);
+        let new_key = natural_step_key(&source);
         if self.clap_bridge.board().track(track).is_some() {
             self.clap_command(ClapCommand::SetTrackBuiltIn {
                 track,
@@ -613,6 +636,12 @@ impl AppState {
                 // A bad index is a UI bug; it reaches the status bar as itself.
                 Err(other) => return Err(SourceError::MainThread(other.to_string())),
             }
+        }
+        if old_key != new_key {
+            let _ = self.edit_patterns(|set| {
+                set.shift_channel_keys(track as u8, old_key, new_key);
+                Ok(())
+            });
         }
         Ok(())
     }
@@ -2236,26 +2265,18 @@ impl AppState {
         Ok(ids)
     }
 
-    /// The step key a new channel's grid gets: the drum's General MIDI number
-    /// when the channel is one of the first four, middle C otherwise.
+    /// The step key a channel's grid should fire, from what is on it.
     ///
     /// Derived from the *source* rather than from the position, so a rack whose
     /// first channel is a synth does not get a grid on key 36.
     fn step_key_for(&self, channel: usize) -> u8 {
-        let source = self
-            .tracks
+        self.tracks
             .project()
             .tracks
             .get(channel)
-            .map(|track| track.source.clone());
-        match source {
-            Some(Source::Sampler(reference))
-                if reference.instrument_id == crate::project::KIT_ID =>
-            {
-                crate::project::KIT_STEP_KEY
-            }
-            _ => mydaw_plugin_sequencer::DEFAULT_STEP_KEY,
-        }
+            .map_or(mydaw_plugin_sequencer::DEFAULT_STEP_KEY, |track| {
+                natural_step_key(&track.source)
+            })
     }
 
     /// Whether the transport plays the active pattern or the arrangement.
@@ -2877,6 +2898,70 @@ mod tests {
         let kernel = boot_kernel().unwrap();
         let state = AppState::from_kernel(&kernel).unwrap();
         (kernel, state)
+    }
+
+    /// The kit is the only source whose natural key is not middle C, and it is
+    /// the reason `natural_step_key` exists. Asserted against the manifest's own
+    /// map rather than against a repeat of the constant.
+    #[test]
+    fn the_kit_fires_the_gm_kick_and_everything_else_middle_c() {
+        let kit = Source::Sampler(crate::source::SamplerSourceRef::new("808-kit"));
+        assert_eq!(natural_step_key(&kit), 36, "General MIDI kick");
+        for other in [
+            Source::PolySynth,
+            Source::TestTone,
+            Source::Sampler(crate::source::SamplerSourceRef::new("salamander-piano")),
+            Source::OneShot { source_id: 7 },
+        ] {
+            assert_eq!(
+                natural_step_key(&other),
+                mydaw_plugin_sequencer::DEFAULT_STEP_KEY,
+                "{} should fire middle C",
+                other.id()
+            );
+        }
+    }
+
+    /// A rack with the kit on it opens with that channel's grid on the kick, and
+    /// its neighbours on middle C.
+    #[test]
+    fn a_starter_pattern_puts_the_kit_channel_on_the_kick() {
+        let kit = Source::Sampler(crate::source::SamplerSourceRef::new("808-kit").named("808 Kit"));
+        let project = Project::starter(Some(kit), Source::PolySynth);
+        let set = starter_pattern_set(&project);
+        let keys: Vec<u8> = set
+            .active()
+            .channels
+            .iter()
+            .filter_map(|clip| clip.steps.as_ref().map(|row| row.key))
+            .collect();
+        assert_eq!(keys, vec![36, 60]);
+    }
+
+    /// `old_key` is read from the project, so the grid follows whatever is
+    /// actually on the channel rather than what the caller thinks is.
+    ///
+    /// The swap itself needs an audio device -- `TrackHost::set_source` returns
+    /// `NotRunning` before it touches the project, so with no device nothing
+    /// changes and there is nothing to shift. What is checked here is the half
+    /// that decides *where* the grid should go.
+    #[test]
+    fn a_channels_step_key_is_read_from_what_is_on_it() {
+        let (_kernel, state) = state();
+        assert_eq!(
+            state.step_key_for(0),
+            60,
+            "the starter channel is the synth"
+        );
+
+        let mut project = state.tracks().project();
+        project.tracks[0].source = Source::Sampler(crate::source::SamplerSourceRef::new("808-kit"));
+        state.tracks().set_project(project);
+        assert_eq!(state.step_key_for(0), 36, "the channel now plays the kit");
+
+        // And a channel that is not there at all answers with middle C rather
+        // than panicking on the index.
+        assert_eq!(state.step_key_for(99), 60);
     }
 
     #[test]

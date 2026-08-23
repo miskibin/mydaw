@@ -3050,7 +3050,7 @@ export class MockBackend implements Backend {
           name: asset.id,
           kind: 'dir' as const,
           relPath: asset.id,
-          path: `${MOCK_FACTORY}${String.fromCharCode(92)}${asset.id}`,
+          path: `${MOCK_FACTORY}\\${asset.id}`,
         }));
       }
       const files = MOCK_FACTORY_KITS[relPath as keyof typeof MOCK_FACTORY_KITS];
@@ -3059,7 +3059,7 @@ export class MockBackend implements Backend {
         name,
         kind: 'file' as const,
         relPath: `${relPath}/${name}`,
-        path: `${MOCK_FACTORY}${String.fromCharCode(92)}${relPath}${String.fromCharCode(92)}${name}`,
+        path: `${MOCK_FACTORY}\\${relPath}\\${name}`,
       }));
     }
     if (rootId === 'packs' && relPath === '') {

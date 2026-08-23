@@ -114,7 +114,7 @@ describe('theme config is the only colour source', () => {
     expect(vars['--acc']).toBeDefined();
     expect(vars['--accSoft']).toBeDefined();
     expect(vars['--meter']).toContain(DARK.meterMid);
-    expect(vars['--ch-drum']).toBe(CHANNEL_KIND_COLORS.drum);
+    expect(vars['--ch-sample']).toBe(CHANNEL_KIND_COLORS.sample);
     expect(vars['--ch-synth']).toBe(CHANNEL_KIND_COLORS.synth);
   });
 

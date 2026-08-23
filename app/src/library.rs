@@ -178,8 +178,8 @@ pub fn add_folder(
 /// Drop an extra folder from the library. Does not touch the disk.
 ///
 /// # Errors
-/// [`LibraryError::UnknownRoot`] when `id` is not an extra folder. Packs cannot
-/// be removed.
+/// [`LibraryError::UnknownRoot`] when `id` is not an extra folder. Factory and
+/// Packs cannot be removed.
 pub fn remove_folder(settings: &mut LibrarySettings, id: &str) -> Result<(), LibraryError> {
     let before = settings.folders.len();
     settings.folders.retain(|folder| folder.id != id);

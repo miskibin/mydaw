@@ -2,17 +2,19 @@
  * What a rack channel *is*, for its colour across the shell and for which
  * window a name-click opens.
  *
- * Derived from the engine's `Source::engine()` plus the drum ids, so a
- * synthesised kick is a drum (the thing a step sequencer is for) and Analog
- * Lab is a plugin (the thing that has its own window).
+ * Derived from the engine's `Source::engine()`, so a sampled kit is a sample
+ * (the thing the sample window opens on) and Analog Lab is a plugin (the thing
+ * that has its own window).
+ *
+ * There used to be a `drum` kind for the synthesised drums. They are gone --
+ * `sampler:808-kit` replaced them -- and a kit is a `sample`, so the kind went
+ * with them rather than staying as a branch no source can reach.
  */
 
 import type { TrackDto } from '../api/types';
 import { CHANNEL_KIND_COLORS } from '../theme/tokens';
 
-const DRUM_IDS = new Set(['kick', 'snare', 'clap', 'hat-closed', 'hat-open', 'drum-kit']);
-
-export type ChannelKind = 'plugin' | 'sample' | 'drum' | 'synth' | 'tone';
+export type ChannelKind = 'plugin' | 'sample' | 'synth' | 'tone';
 
 export interface ChannelKindInfo {
   kind: ChannelKind;
@@ -53,9 +55,6 @@ export function channelKind(
   }
   if (track.engine === 'tone' || track.sourceId === 'test-tone') {
     return { kind: 'tone', badge: 'TONE', title: 'Diagnostic test tone' };
-  }
-  if (DRUM_IDS.has(track.sourceId)) {
-    return { kind: 'drum', badge: 'DRM', title: 'Synthesised drum' };
   }
   return { kind: 'synth', badge: 'SYN', title: 'Built-in synthesizer' };
 }

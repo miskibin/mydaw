@@ -54,27 +54,30 @@ describe('channelKind', () => {
   it('treats only clip: channels as playlist audio-clip rows', () => {
     expect(isAudioClipChannel({ sourceId: 'clip:1', engine: 'clip' })).toBe(true);
     expect(isAudioClipChannel({ sourceId: 'oneshot:1', engine: 'sample' })).toBe(false);
-    expect(isAudioClipChannel({ sourceId: 'kick', engine: 'synth' })).toBe(false);
+    expect(isAudioClipChannel({ sourceId: 'poly-synth', engine: 'synth' })).toBe(false);
   });
 });
 
 describe('channelColor', () => {
-  it('paints every drum the same colour, independent of which drum it is', () => {
-    const kick = channelColor({ sourceId: 'kick', engine: 'synth', ...SOURCE });
-    const snare = channelColor({ sourceId: 'snare', engine: 'synth', ...SOURCE });
-    expect(kick).toBe(snare);
-    expect(kick).toBe(CHANNEL_KIND_COLORS.drum);
+  it('paints every sampled channel the same colour, whatever is on it', () => {
+    // A kit, a one-shot and a playlist clip are all "a file plays here", which
+    // is the thing the colour is telling you.
+    const kit = channelColor({ sourceId: 'sampler:808-kit', engine: 'sampler', ...SOURCE });
+    const oneShot = channelColor({ sourceId: 'oneshot:1', engine: 'sample', ...SOURCE });
+    const clip = channelColor({ sourceId: 'clip:1', engine: 'clip', ...SOURCE });
+    expect(kit).toBe(oneShot);
+    expect(kit).toBe(clip);
+    expect(kit).toBe(CHANNEL_KIND_COLORS.sample);
   });
 
-  it('gives drums, synths, samples, plugins and tones distinct colours', () => {
+  it('gives synths, samples, plugins and tones distinct colours', () => {
     const colours = [
-      channelColor({ sourceId: 'kick', engine: 'synth', ...SOURCE }),
       channelColor({ sourceId: 'poly-synth', engine: 'synth', ...SOURCE }),
       channelColor({ sourceId: 'oneshot:1', engine: 'sample', ...SOURCE }),
       channelColor({ sourceId: 'clap:x', engine: 'clap', ...SOURCE }),
       channelColor({ sourceId: 'test-tone', engine: 'tone', ...SOURCE }),
     ];
-    expect(new Set(colours).size).toBe(5);
+    expect(new Set(colours).size).toBe(4);
   });
 
   it('falls back to the synth colour when the track is missing', () => {

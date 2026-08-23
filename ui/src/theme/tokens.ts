@@ -268,8 +268,8 @@ export function cssVariables(theme: ThemeName, accent: string): Record<string, s
 }
 
 /**
- * One colour per *kind* of rack channel: drums stay gold in the mixer, the
- * playlist marks, and the piano roll, not just next to the name.
+ * One colour per *kind* of rack channel, so a channel keeps its colour in the
+ * mixer, the playlist marks and the piano roll, not just next to the name.
  *
  * Distinct from {@link TRACK_COLORS}, which still paints patterns, buses and
  * audio files that have no instrument kind.
@@ -277,7 +277,6 @@ export function cssVariables(theme: ThemeName, accent: string): Record<string, s
 export const CHANNEL_KIND_COLORS = {
   plugin: DEFAULT_ACCENT,
   sample: SEMANTIC.live,
-  drum: SEMANTIC.solo,
   synth: '#7c8cf8',
   tone: '#8b93a1',
 } as const;
