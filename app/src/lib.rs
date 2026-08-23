@@ -73,6 +73,8 @@ pub mod project;
 pub mod project_bridge;
 pub mod project_file;
 pub mod project_host;
+pub mod resample;
+pub mod sample_edit;
 pub mod source;
 pub mod spectrum;
 mod state;
@@ -301,6 +303,9 @@ pub fn run() -> ExitCode {
             commands::set_track_source,
             commands::add_track,
             commands::add_sample_channel,
+            commands::edit_track_sample,
+            commands::set_track_audio_source,
+            commands::render_pattern_to_sample,
             commands::remove_track,
             // --- buses, sends and insert chains ---
             commands::get_effects,

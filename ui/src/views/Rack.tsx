@@ -153,6 +153,8 @@ export function Rack(): ReturnType<typeof Show> {
   const nav = usePatternNav();
   const [instrumentFor, setInstrumentFor] = createSignal<number | null>(null);
   const [dragOver, setDragOver] = createSignal(false);
+  /** Whether a render-to-sample is in flight. One at a time. */
+  const [rendering, setRendering] = createSignal(false);
   const [channelMenu, setChannelMenu] = createSignal<ChannelMenuState | null>(null);
 
   const pattern = () => app.pattern();
@@ -527,6 +529,47 @@ export function Rack(): ReturnType<typeof Show> {
     }
   }
 
+  /**
+   * Bounce this pattern through the mixer and drop it back in as a channel.
+   *
+   * "Resampling", the second half of what a sample editor is for: a hat pattern
+   * with its filter and reverb becomes one file you can reverse, trim and pitch
+   * as a unit. The engine renders one loop offline through the real graph and
+   * lands the result exactly as a dropped sample lands — so the new channel is
+   * a normal one-shot, and this opens its editor the way an import would.
+   *
+   * Deliberately **not** undoable: it adds a channel, and adding or removing
+   * channels is the one structural edit `ui/lib/undo.ts` cannot replay. Clearing
+   * the history for a purely additive operation would cost the user their note
+   * edits, so the entry is simply never recorded — the channel's own delete
+   * button is the way back.
+   */
+  function renderToSample(): void {
+    if (rendering()) return;
+    setRendering(true);
+    void app.backend
+      .renderPatternToSample()
+      .then((result) =>
+        app
+          .mixerCommand(async () => result.mixer)
+          .then(() => app.refreshAudioSources())
+          .then(() => {
+            view.openSampleEditor(result.track);
+            const seconds = result.sampleRate > 0 ? result.frames / result.sampleRate : 0;
+            app.say(
+              'Render to sample',
+              result.hostedChannels > 0
+                ? `${result.name} · ${seconds.toFixed(2)} s · ${result.hostedChannels} hosted plugin${
+                    result.hostedChannels === 1 ? '' : 's'
+                  } could not be rendered`
+                : `${result.name} · ${seconds.toFixed(2)} s`,
+            );
+          }),
+      )
+      .catch(app.report)
+      .finally(() => setRendering(false));
+  }
+
   function placeSample(path: string): void {
     void app.mixerCommand((backend) => backend.addSampleChannel(path)).then(() => {
       void app.refreshAudioSources();
@@ -622,6 +665,19 @@ export function Rack(): ReturnType<typeof Show> {
         </div>
 
         <div class="wv-spacer" />
+        <button
+          type="button"
+          class="wv-chip"
+          disabled={rendering() || app.tracks().length === 0}
+          title={
+            rendering()
+              ? 'Rendering this pattern…'
+              : 'Render to sample — bounce one loop of this pattern through the mixer and drop it back in as a new sample channel'
+          }
+          onClick={renderToSample}
+        >
+          {rendering() ? 'Rendering…' : 'Render to sample'}
+        </button>
         <span class="wv-viewbar__meta">
           {app.tracks().length} ch · {(pattern()?.steps ?? 16) / 16} bar
           {(pattern()?.steps ?? 16) / 16 === 1 ? '' : 's'}
