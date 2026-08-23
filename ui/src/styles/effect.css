@@ -866,3 +866,347 @@
   writing-mode: vertical-rl;
   transform: rotate(180deg);
 }
+
+/* --- shared response curve (flanger, phaser, auto-filter) ----------------- */
+/*
+ * Same rule as `.wv-xfer__svg` and `.wv-synth__svg`: the SVG is out of flow so
+ * the picture never sets the panel's height. An in-flow SVG with `height: 100%`
+ * inside an auto-height column resolves against its own viewBox ratio, and a
+ * 900px-wide box becomes 900px tall and pushes the knobs out of the window.
+ */
+.wv-resp {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 190px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--sunk);
+}
+
+.wv-resp__box {
+  position: relative;
+  flex: 1;
+  min-height: 150px;
+}
+
+.wv-resp__svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.wv-resp__grid {
+  fill: none;
+  stroke: var(--grid1);
+  stroke-width: 1;
+}
+
+.wv-resp__grid.is-decade {
+  stroke: var(--grid2);
+}
+
+.wv-resp__zero {
+  fill: none;
+  stroke: var(--line2);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.wv-resp__mark {
+  fill: none;
+  stroke: color-mix(in srgb, var(--solo) 60%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+}
+
+/* The measurement behind the drawing is a backdrop, not the subject: at the
+ * EQ's weight it buries a filter curve that spans the whole box. */
+.wv-resp .wv-eqc__spec,
+.wv-crush__stage .wv-eqc__spec {
+  fill: color-mix(in srgb, var(--acc) 26%, transparent);
+}
+
+.wv-resp .wv-eqc__specline,
+.wv-crush__stage .wv-eqc__specline {
+  stroke: color-mix(in srgb, var(--acc) 70%, var(--txt));
+  stroke-width: 1;
+}
+
+.wv-resp__band {
+  fill: color-mix(in srgb, var(--acc) 16%, transparent);
+  stroke: none;
+}
+
+.wv-resp__area {
+  fill: color-mix(in srgb, var(--txt) 9%, transparent);
+  stroke: none;
+}
+
+.wv-resp__line {
+  fill: none;
+  stroke: var(--txt);
+  stroke-width: 2.1;
+  stroke-linejoin: round;
+}
+
+.wv-resp__ghost {
+  fill: none;
+  stroke: var(--acc);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  stroke-linejoin: round;
+}
+
+.wv-resp.is-off .wv-resp__line,
+.wv-resp.is-off .wv-resp__ghost {
+  stroke: var(--dim);
+}
+
+.wv-resp.is-off .wv-resp__band,
+.wv-resp.is-off .wv-resp__area {
+  fill: transparent;
+}
+
+/* Axis labels are HTML for the reason the EQ's are: the box is stretched
+ * horizontally and a stretched glyph is unreadable in a way a stretched path
+ * is not. */
+.wv-resp__hz,
+.wv-resp__db {
+  position: absolute;
+  font: 400 8.5px 'Geist Mono Variable';
+  color: var(--dim2);
+  pointer-events: none;
+}
+
+.wv-resp__hz {
+  bottom: 3px;
+  transform: translateX(-50%);
+}
+
+.wv-resp__hz--start {
+  left: 3px;
+  transform: none;
+}
+
+.wv-resp__hz--end {
+  /* Anchored to the right edge rather than to `left: 100%`: a transform does
+   * not shrink the scroll box, so the left-anchored version made the panel
+   * 8 px wider than itself. Clear of the dB label in the corner. */
+  right: 44px;
+  transform: none;
+}
+
+.wv-resp__db {
+  top: 3px;
+  right: 6px;
+}
+
+.wv-resp__db--bottom {
+  top: auto;
+  bottom: 3px;
+}
+
+/* The auto-filter's cutoff handle: the EQ's band dot, with one job. */
+.wv-resp__handle {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: var(--acc);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--acc) 55%, transparent);
+  pointer-events: none;
+}
+
+.wv-resp__handle.is-off {
+  background: var(--dim);
+  box-shadow: none;
+}
+
+/* Where the modulation has the cutoff right now, from the engine's readout. */
+.wv-resp__live {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed color-mix(in srgb, var(--acc) 75%, transparent);
+  pointer-events: none;
+}
+
+.wv-fx__display--filter .wv-resp__box {
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.wv-fx__display--filter,
+.wv-fx__display--chorus,
+.wv-fx__display--crush {
+  flex: 1;
+  min-height: 0;
+}
+
+/* --- chorus: one oscillator, several taps -------------------------------- */
+
+.wv-fx__display--chorus {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(150px, 1fr) auto;
+  gap: 8px;
+}
+
+.wv-fx__display--chorus > .wv-fx__satmeta {
+  grid-column: 1 / -1;
+}
+
+.wv-chorus__stage {
+  position: relative;
+  flex: 1;
+  min-height: 90px;
+  margin: 0 10px;
+}
+
+.wv-chorus__svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.wv-chorus__wave {
+  fill: none;
+  stroke: var(--txt2);
+  stroke-width: 1.4;
+}
+
+.wv-chorus__dot {
+  position: absolute;
+  display: flex;
+  width: 15px;
+  height: 15px;
+  margin: -7.5px 0 0 -7.5px;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--sunk);
+  border-radius: 50%;
+  background: var(--acc);
+  font: 700 8px 'Geist Mono Variable';
+  color: var(--ink);
+}
+
+.wv-chorus__dot.is-right {
+  background: var(--live);
+}
+
+/* The delay axis: every tap's position on a millisecond ruler. */
+.wv-chorus__axis {
+  position: relative;
+  flex: 1;
+  min-height: 90px;
+  margin: 6px 12px 0;
+  border-bottom: 1px solid var(--line2);
+  background-image: linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 10% 100%;
+}
+
+.wv-chorus__tap {
+  position: absolute;
+  top: 12%;
+  bottom: 0;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: 2px 2px 0 0;
+  background: var(--acc);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--acc) 45%, transparent);
+}
+
+.wv-chorus__tap.is-right {
+  top: 46%;
+  background: var(--live);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--live) 45%, transparent);
+}
+
+.wv-chorus__tap b {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  translate: -50% 0;
+  font: 500 7.5px 'Geist Mono Variable';
+  color: var(--txt2);
+}
+
+.wv-chorus__base {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1px dashed var(--dim2);
+}
+
+.wv-fx__display--chorus .wv-fx__vizlegend i { background: var(--acc); }
+.wv-fx__vizlegend i.is-right { background: var(--live); }
+.wv-fx__vizlegend i.is-ghost { background: var(--dim2); }
+
+/* --- bitcrusher: the staircase and the images it makes -------------------- */
+
+.wv-fx__display--crush {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  gap: 8px;
+}
+
+.wv-crush__stage {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  margin: 0 8px;
+}
+
+.wv-crush__svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.wv-crush__level {
+  fill: none;
+  stroke: var(--grid1);
+  stroke-width: 1;
+}
+
+.wv-crush__clean {
+  fill: none;
+  stroke: var(--dim2);
+  stroke-width: 1.2;
+  stroke-dasharray: 4 3;
+}
+
+.wv-crush__step {
+  fill: none;
+  stroke: var(--acc);
+  stroke-width: 1.8;
+  stroke-linejoin: miter;
+}
+
+.wv-crush__idle {
+  position: absolute;
+  inset: auto 0 40%;
+  font: 400 9px 'Geist Mono Variable';
+  color: var(--dim2);
+  text-align: center;
+}
+
+@container (max-width: 620px) {
+  .wv-fx__display--chorus,
+  .wv-fx__display--crush {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

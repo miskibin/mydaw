@@ -1,7 +1,7 @@
 //! `mydaw-plugin-effects` -- the mixer effects that ship inside the DAW.
 //!
-//! Five internal [`RtNode`](mydaw_rt_core::RtNode)s that can go on any track's
-//! insert chain or on the master bus, driven by the parameter system in
+//! A dozen internal [`RtNode`](mydaw_rt_core::RtNode)s that can go on any
+//! track's insert chain or on the master bus, driven by the parameter system in
 //! [`mydaw_rt_core::params`].
 //!
 //! | Node | `type_id` | What it is |
@@ -12,11 +12,20 @@
 //! | [`SaturatorNode`](saturator::SaturatorNode) | `effects.saturator` | Tape/tube/clip shapers, 4x oversampled, drive-compensated. |
 //! | [`LimiterNode`](limiter::LimiterNode) | `effects.limiter` | Stereo-linked peak limiter with lookahead. |
 //! | [`ReverbNode`](reverb::ReverbNode) | `effects.reverb` | Algorithmic room: decay, size, damp, mix. |
+//! | [`UtilityNode`](utility::UtilityNode) | `effects.utility` | Gain, pan, width, mono, polarity, DC blocker. |
+//! | [`ChorusNode`](chorus::ChorusNode) | `effects.chorus` | Two or three modulated delay voices, stereo spread. |
+//! | [`FlangerNode`](flanger::FlangerNode) | `effects.flanger` | Swept short delay with bipolar feedback. |
+//! | [`PhaserNode`](phaser::PhaserNode) | `effects.phaser` | Four to eight swept all-pass stages with feedback. |
+//! | [`AutoFilterNode`](autofilter::AutoFilterNode) | `effects.autofilter` | SVF with LFO and envelope on its cutoff. |
+//! | [`BitcrusherNode`](bitcrusher::BitcrusherNode) | `effects.bitcrusher` | Bit-depth reduction, decimation, lo-fi filter. |
 //!
 //! # Five properties all of them hold
 //!
 //! **Transparent when fresh.** A freshly inserted effect is a null-test-clean
-//! pass-through at its defaults. Users complain when a "default" carries
+//! pass-through at its defaults, with the documented exception of the effects
+//! whose whole point is a wet signal -- the delay, the reverb and the three
+//! modulation effects ship with a mix knob off zero, because one that started
+//! silent would read as broken. Users complain when a "default" carries
 //! leftovers, and an effect that changes the sound before you touch it makes
 //! every A/B afterwards dishonest.
 //!
@@ -60,24 +69,34 @@
 //! let node = registry.create("effects.eq", 48_000.0, 512, params).unwrap();
 //! ```
 
+pub mod autofilter;
 pub mod biquad;
+pub mod bitcrusher;
+pub mod chorus;
 pub mod compressor;
 pub mod delay;
 pub mod dsp;
 pub mod effect;
 pub mod eq;
+pub mod flanger;
 pub mod limiter;
 pub mod oversample;
+pub mod phaser;
 pub mod reverb;
 pub mod saturator;
 pub mod test_support;
 pub mod utility;
 
+pub use autofilter::{AutoFilterFactory, AutoFilterNode};
+pub use bitcrusher::{BitcrusherFactory, BitcrusherNode};
+pub use chorus::{ChorusFactory, ChorusNode};
 pub use compressor::{CompressorFactory, CompressorNode};
 pub use delay::{DelayFactory, DelayNode};
 pub use effect::{Bypass, BypassState, BYPASS_PARAM, MIX_PARAM};
 pub use eq::{EqFactory, EqNode};
+pub use flanger::{FlangerFactory, FlangerNode};
 pub use limiter::{LimiterFactory, LimiterNode};
+pub use phaser::{PhaserFactory, PhaserNode};
 pub use reverb::{ReverbFactory, ReverbNode};
 pub use saturator::{SaturatorFactory, SaturatorNode, Shaper};
 pub use utility::{UtilityFactory, UtilityNode};
@@ -135,7 +154,8 @@ impl EffectRegistry {
     /// The registry every [`EffectsPlugin`] publishes.
     ///
     /// The order is the order a menu should offer them: the two everybody
-    /// reaches for first, then the two that colour, then the one that fixes.
+    /// reaches for first, then the two that colour, then the ones that fix,
+    /// then the modulation shelf and the two that damage on purpose.
     pub fn new() -> Self {
         Self {
             entries: vec![
@@ -180,6 +200,36 @@ impl EffectRegistry {
                     utility::DISPLAY_NAME,
                     utility::DESCRIPTION,
                     Arc::new(UtilityFactory::new()),
+                ),
+                Self::entry(
+                    chorus::NODE_TYPE_ID,
+                    chorus::DISPLAY_NAME,
+                    chorus::DESCRIPTION,
+                    Arc::new(ChorusFactory::new()),
+                ),
+                Self::entry(
+                    flanger::NODE_TYPE_ID,
+                    flanger::DISPLAY_NAME,
+                    flanger::DESCRIPTION,
+                    Arc::new(FlangerFactory::new()),
+                ),
+                Self::entry(
+                    phaser::NODE_TYPE_ID,
+                    phaser::DISPLAY_NAME,
+                    phaser::DESCRIPTION,
+                    Arc::new(PhaserFactory::new()),
+                ),
+                Self::entry(
+                    autofilter::NODE_TYPE_ID,
+                    autofilter::DISPLAY_NAME,
+                    autofilter::DESCRIPTION,
+                    Arc::new(AutoFilterFactory::new()),
+                ),
+                Self::entry(
+                    bitcrusher::NODE_TYPE_ID,
+                    bitcrusher::DISPLAY_NAME,
+                    bitcrusher::DESCRIPTION,
+                    Arc::new(BitcrusherFactory::new()),
                 ),
             ],
         }
@@ -282,8 +332,7 @@ impl std::fmt::Debug for EffectRegistry {
     }
 }
 
-/// Contributes the five effect node factories plus the [`EffectRegistry`]
-/// service.
+/// Contributes every effect node factory plus the [`EffectRegistry`] service.
 ///
 /// No panels: an effect's editor belongs to whatever draws the mixer, and the
 /// parameter metadata this publishes is what it draws from.
@@ -312,6 +361,11 @@ impl Plugin for EffectsPlugin {
         ctx.register_rt_node_factory(Box::new(LimiterFactory::new()));
         ctx.register_rt_node_factory(Box::new(ReverbFactory::new()));
         ctx.register_rt_node_factory(Box::new(UtilityFactory::new()));
+        ctx.register_rt_node_factory(Box::new(ChorusFactory::new()));
+        ctx.register_rt_node_factory(Box::new(FlangerFactory::new()));
+        ctx.register_rt_node_factory(Box::new(PhaserFactory::new()));
+        ctx.register_rt_node_factory(Box::new(AutoFilterFactory::new()));
+        ctx.register_rt_node_factory(Box::new(BitcrusherFactory::new()));
         let _ = ctx.services.provide(Arc::new(EffectRegistry::new()));
     }
 
@@ -349,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn the_registry_is_a_service_and_lists_all_five_in_menu_order() {
+    fn the_registry_is_a_service_and_lists_every_effect_in_menu_order() {
         let kernel = booted();
         let registry = kernel
             .ctx()
@@ -367,6 +421,11 @@ mod tests {
                 "effects.limiter",
                 "effects.reverb",
                 "effects.utility",
+                "effects.chorus",
+                "effects.flanger",
+                "effects.phaser",
+                "effects.autofilter",
+                "effects.bitcrusher",
             ]
         );
     }
@@ -451,5 +510,10 @@ mod tests {
         assert_eq!(limiter::NODE_TYPE_ID, "effects.limiter");
         assert_eq!(reverb::NODE_TYPE_ID, "effects.reverb");
         assert_eq!(utility::NODE_TYPE_ID, "effects.utility");
+        assert_eq!(chorus::NODE_TYPE_ID, "effects.chorus");
+        assert_eq!(flanger::NODE_TYPE_ID, "effects.flanger");
+        assert_eq!(phaser::NODE_TYPE_ID, "effects.phaser");
+        assert_eq!(autofilter::NODE_TYPE_ID, "effects.autofilter");
+        assert_eq!(bitcrusher::NODE_TYPE_ID, "effects.bitcrusher");
     }
 }

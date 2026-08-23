@@ -751,3 +751,211 @@ impl FixedDelay {
         y
     }
 }
+
+/// A two-pole state-variable filter in topology-preserving transposed form.
+///
+/// Zavalishin's TPT structure, the same one the poly synth's voice filter uses
+/// (`mydaw_plugin_instruments::dsp::Svf`) and written out again here because the
+/// effects crate does not depend on the instruments crate -- and because an
+/// *effect's* filter needs two things a voice's does not: all three outputs, and
+/// a cutoff that can reach the top of the audio band rather than stopping a fifth
+/// of the way up the spectrum.
+///
+/// # Why a state variable filter and not a biquad
+/// The auto-filter sweeps its cutoff continuously, several times a second. An
+/// RBJ biquad's coefficients are a `cos`, a `sin` and four divisions, and its
+/// direct-form state is *not* invariant under a coefficient change: modulating
+/// one fast produces the zipper and the transient that every "my filter sweep
+/// clicks" report is about. The TPT SVF's state is two integrator capacitors
+/// with a physical meaning, so re-aiming it mid-sweep is exactly what it is for,
+/// and its three outputs -- lowpass, bandpass, highpass -- come out of the same
+/// two multiplies, so a mode switch is a choice of output rather than a filter
+/// redesign.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Svf {
+    a1: f32,
+    a2: f32,
+    a3: f32,
+    /// `1/Q`, kept so the bandpass can be normalised to unity at the corner.
+    k: f32,
+    ic1: f32,
+    ic2: f32,
+}
+
+/// Lowest cutoff an [`Svf`] will accept, in Hz.
+pub const SVF_MIN_HZ: f32 = 10.0;
+
+impl Svf {
+    /// A filter at `cutoff_hz` with quality `q`, with no state.
+    pub fn new(cutoff_hz: f32, q: f32, sample_rate: f32) -> Self {
+        let mut filter = Self::default();
+        filter.set(cutoff_hz, q, sample_rate);
+        filter
+    }
+
+    /// Re-aim the filter. One `tan` and three divisions; cheap enough for the
+    /// control rate an LFO or an envelope moves at.
+    ///
+    /// The cutoff is held below `0.49 · fs` because `tan` goes to infinity at
+    /// Nyquist, and a knob that reaches 20 kHz on a 44.1 kHz device must not be
+    /// able to ask for one.
+    pub fn set(&mut self, cutoff_hz: f32, q: f32, sample_rate: f32) {
+        let rate = if sample_rate.is_finite() && sample_rate > 0.0 {
+            sample_rate
+        } else {
+            FALLBACK_SAMPLE_RATE as f32
+        };
+        let ceiling = (rate * 0.49).max(SVF_MIN_HZ * 2.0);
+        let cutoff = if cutoff_hz.is_finite() {
+            cutoff_hz.clamp(SVF_MIN_HZ, ceiling)
+        } else {
+            ceiling
+        };
+        let g = (std::f32::consts::PI * cutoff / rate).tan();
+        let k = 1.0
+            / if q.is_finite() {
+                q.clamp(0.3, 24.0)
+            } else {
+                0.7
+            };
+        self.k = k;
+        self.a1 = 1.0 / (1.0 + g * (g + k));
+        self.a2 = g * self.a1;
+        self.a3 = g * self.a2;
+    }
+
+    /// Forget the two integrator states.
+    pub fn reset(&mut self) {
+        self.ic1 = 0.0;
+        self.ic2 = 0.0;
+    }
+
+    /// All three outputs for one sample: `(low, band, high)`.
+    ///
+    /// One pass of the structure produces every mode, so an effect that offers a
+    /// mode switch pays for one filter and not three.
+    #[inline]
+    pub fn process(&mut self, input: f32) -> (f32, f32, f32) {
+        let v3 = input - self.ic2;
+        let v1 = self.a1 * self.ic1 + self.a2 * v3;
+        let v2 = self.ic2 + self.a2 * self.ic1 + self.a3 * v3;
+        self.ic1 = 2.0 * v1 - self.ic1;
+        self.ic2 = 2.0 * v2 - self.ic2;
+        // Denormals: an SVF fed silence after a loud passage decays towards zero
+        // and can sit in the subnormal range for a long time.
+        if self.ic1.abs() < 1.0e-20 {
+            self.ic1 = 0.0;
+        }
+        if self.ic2.abs() < 1.0e-20 {
+            self.ic2 = 0.0;
+        }
+        let low = v2;
+        let band = v1;
+        let high = input - self.k * v1 - v2;
+        (low, band, high)
+    }
+
+    /// The output for one sample in `mode`: 0 lowpass, 1 highpass, 2 bandpass.
+    ///
+    /// The bandpass is scaled by `1/Q` so its peak is unity rather than `Q`,
+    /// which is what makes a resonance knob a *shape* control in every mode
+    /// instead of a volume control in one of them.
+    #[inline]
+    pub fn mode(&mut self, input: f32, mode: usize) -> f32 {
+        let k = self.k;
+        let (low, band, high) = self.process(input);
+        match mode {
+            1 => high,
+            2 => band * k,
+            _ => low,
+        }
+    }
+}
+
+/// A sine low-frequency oscillator with an explicit phase.
+///
+/// Phase is normalised to `0.0..1.0` and advanced per sample, so an effect can
+/// read a second voice at a fixed offset (a chorus's three taps, a stereo
+/// spread) without running a second oscillator, and so the phase is a *position*
+/// a display can be told about rather than a filter state that only exists
+/// inside the loop.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Lfo {
+    phase: f32,
+    increment: f32,
+}
+
+impl Lfo {
+    /// An oscillator at rest at phase zero.
+    pub const fn new() -> Self {
+        Self {
+            phase: 0.0,
+            increment: 0.0,
+        }
+    }
+
+    /// Set the rate in Hz. Non-finite and negative rates stop the oscillator
+    /// rather than running it backwards at an undefined speed.
+    pub fn set_rate(&mut self, hz: f32, sample_rate: f32) {
+        let rate = if sample_rate.is_finite() && sample_rate > 0.0 {
+            sample_rate
+        } else {
+            FALLBACK_SAMPLE_RATE as f32
+        };
+        self.increment = if hz.is_finite() && hz > 0.0 {
+            (hz / rate).min(0.5)
+        } else {
+            0.0
+        };
+    }
+
+    /// Put the oscillator back at the top of its cycle.
+    pub fn reset(&mut self) {
+        self.phase = 0.0;
+    }
+
+    /// The phase right now, in `0.0..1.0`.
+    pub const fn phase(&self) -> f32 {
+        self.phase
+    }
+
+    /// Advance one sample and return the new phase.
+    #[inline]
+    pub fn advance(&mut self) -> f32 {
+        self.phase += self.increment;
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+        }
+        self.phase
+    }
+
+    /// A sine of the phase `offset` turns ahead of this one, in `-1.0..=1.0`.
+    ///
+    /// The offset is what makes one oscillator serve several voices: a chorus's
+    /// three taps are `0`, `1/3` and `2/3`, and a stereo spread is `±spread/2`.
+    #[inline]
+    pub fn sine_at(&self, offset: f32) -> f32 {
+        let mut phase = self.phase + offset;
+        phase -= phase.floor();
+        (TAU * phase).sin()
+    }
+
+    /// A sine of the current phase.
+    #[inline]
+    pub fn sine(&self) -> f32 {
+        self.sine_at(0.0)
+    }
+}
+
+/// Round `x` onto a grid of `2^bits` levels spanning `-1..1`.
+///
+/// The mid-tread quantiser a converter uses: zero is a level, so silence stays
+/// silent instead of dithering between the two levels either side of it. At one
+/// bit the grid is `{-1, 0, 1}` and the result is the three-level waveform the
+/// effect is named after; at twenty-four the step is 120 nanovolts of full scale
+/// and the quantiser is switched out entirely (see `bitcrusher`).
+#[inline]
+pub fn quantise(x: f32, bits: f32) -> f32 {
+    let levels = (2.0_f32).powf(bits.clamp(1.0, 32.0) - 1.0);
+    (x * levels).round() / levels
+}

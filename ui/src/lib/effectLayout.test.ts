@@ -49,10 +49,36 @@ describe('editorLayout', () => {
   });
 
   it('falls back to the first four knobs for an unknown effect', () => {
-    const layout = editorLayout(info('effects.chorus', ['a', 'b', 'c', 'd', 'e']));
+    const layout = editorLayout(info('effects.vocoder', ['a', 'b', 'c', 'd', 'e']));
     expect(layout.kind).toBe('generic');
     expect(layout.primary.map((d) => d.id)).toEqual(['a', 'b', 'c', 'd']);
     expect(layout.advanced.map((d) => d.id)).toEqual(['e']);
+  });
+
+  it('gives the modulation effects their own displays and knob rows', () => {
+    const flanger = editorLayout(
+      info('effects.flanger', ['rate', 'depth', 'delay', 'feedback', 'spread', 'mix']),
+    );
+    expect(flanger.kind).toBe('flanger');
+    expect(flanger.primary.map((d) => d.id)).toEqual([
+      'delay',
+      'rate',
+      'depth',
+      'feedback',
+      'mix',
+    ]);
+    expect(flanger.advanced.map((d) => d.id)).toEqual(['spread']);
+
+    // The auto-filter's cutoff and resonance are dragged on the curve, so they
+    // belong in the drawer rather than on the row under it -- but they must
+    // still be there, because a curve is not a keyboard.
+    const filter = editorLayout(
+      info('effects.autofilter', ['mode', 'cutoff', 'res', 'lfo_amount', 'lfo_rate', 'mix']),
+    );
+    expect(filter.kind).toBe('autofilter');
+    expect(filter.primary.map((d) => d.id)).toEqual(['lfo_amount', 'lfo_rate', 'mix']);
+    expect(filter.advanced.map((d) => d.id)).toContain('cutoff');
+    expect(filter.advanced.map((d) => d.id)).toContain('res');
   });
 
   it('puts the limiter ceiling on the primary row next to gain', () => {
@@ -72,15 +98,25 @@ describe('editorLayout', () => {
   it('still has a compact card table for every built-in effect', () => {
     expect(Object.keys(COMPACT_CARDS).sort()).toEqual(
       [
+        'effects.autofilter',
+        'effects.bitcrusher',
+        'effects.chorus',
         'effects.compressor',
         'effects.delay',
         'effects.eq',
+        'effects.flanger',
         'effects.limiter',
+        'effects.phaser',
         'effects.reverb',
         'effects.saturator',
         'effects.utility',
       ].sort(),
     );
     expect(editorKind('effects.delay')).toBe('delay');
+    // Every effect with a compact card also has a bespoke editor, or the
+    // window would open on a generic knob grid the card already implied.
+    for (const typeId of Object.keys(COMPACT_CARDS)) {
+      expect(editorKind(typeId)).not.toBe('generic');
+    }
   });
 });

@@ -539,7 +539,7 @@ mod tests {
     fn the_catalogue_carries_everything_a_generic_knob_panel_needs() {
         let registry = registry();
         let catalogue = catalogue(&registry);
-        assert_eq!(catalogue.len(), 7);
+        assert_eq!(catalogue.len(), 12);
 
         let eq = catalogue
             .iter()

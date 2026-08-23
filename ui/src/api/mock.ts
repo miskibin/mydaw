@@ -170,6 +170,21 @@ function toggle(id: string, name: string, on: boolean): ParamDefDto {
   return choice(id, name, 2, on ? 1 : 0);
 }
 
+/**
+ * `ParamDef::stepped(..)` / `::smoothed(..)` -- a continuous knob that lands on
+ * a grid, or one whose ramp is longer than the standard 10 ms.
+ *
+ * Both matter to the shell: `step` is what a drag quantises to, and a
+ * `smoothingMs` of zero is how the engine declares a switch, so a stepped knob
+ * that kept the default ramp would be drawn as a segmented control.
+ */
+function shaped(
+  def: ParamDefDto,
+  extra: { step?: number; smoothingMs?: number },
+): ParamDefDto {
+  return { ...def, ...extra };
+}
+
 const EFFECTS: readonly EffectInfoDto[] = [
   {
     typeId: 'effects.eq',
@@ -311,6 +326,90 @@ const EFFECTS: readonly EffectInfoDto[] = [
       toggle('dc_block', 'DC Filter', false),
     ],
     readouts: [{ id: 'correlation', name: 'Correlation', unit: '' }],
+  },
+  {
+    typeId: 'effects.chorus',
+    name: 'Chorus',
+    description: 'Two or three modulated delay voices with stereo spread -- ensemble, not echo',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('rate', 'Rate', 'Hz', 0.01, 10, 0.6, 'log'),
+      shaped(param('depth', 'Depth', 'ms', 0, 10, 2.5, 'linear'), { smoothingMs: 150 }),
+      shaped(param('delay', 'Delay', 'ms', 1, 30, 9, 'log'), { smoothingMs: 150 }),
+      choice('voices', 'Voices', 2, 1),
+      param('spread', 'Spread', '%', 0, 100, 50, 'linear'),
+      param('mix', 'Mix', '%', 0, 100, 50, 'linear'),
+    ],
+    readouts: [],
+  },
+  {
+    typeId: 'effects.flanger',
+    name: 'Flanger',
+    description: 'A swept short delay with bipolar feedback -- the comb filter you can hear moving',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('rate', 'Rate', 'Hz', 0.01, 10, 0.25, 'log'),
+      shaped(param('depth', 'Depth', 'ms', 0, 10, 3, 'linear'), { smoothingMs: 150 }),
+      shaped(param('delay', 'Manual', 'ms', 0.1, 10, 1, 'log'), { smoothingMs: 150 }),
+      param('feedback', 'Feedback', '%', -95, 95, 40, 'linear'),
+      param('spread', 'Spread', '%', 0, 100, 0, 'linear'),
+      param('mix', 'Mix', '%', 0, 100, 50, 'linear'),
+    ],
+    readouts: [],
+  },
+  {
+    typeId: 'effects.phaser',
+    name: 'Phaser',
+    description: 'Four to eight swept all-pass stages with resonant feedback -- notches that breathe',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('rate', 'Rate', 'Hz', 0.01, 10, 0.5, 'log'),
+      param('depth', 'Depth', '%', 0, 100, 70, 'linear'),
+      shaped(param('freq', 'Centre', 'Hz', 100, 8000, 800, 'log'), { smoothingMs: 150 }),
+      choice('stages', 'Stages', 3, 0),
+      param('feedback', 'Feedback', '%', 0, 90, 30, 'linear'),
+      param('spread', 'Spread', '%', 0, 100, 0, 'linear'),
+      param('mix', 'Mix', '%', 0, 100, 50, 'linear'),
+    ],
+    readouts: [],
+  },
+  {
+    typeId: 'effects.autofilter',
+    name: 'Auto Filter',
+    description:
+      'Resonant lowpass, highpass or bandpass swept by a synced LFO and an envelope follower',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      choice('mode', 'Mode', 3, 0),
+      shaped(param('cutoff', 'Cutoff', 'Hz', 30, 20000, 20000, 'log'), { smoothingMs: 60 }),
+      param('res', 'Resonance', '%', 0, 100, 0, 'linear'),
+      param('lfo_amount', 'LFO Amount', '%', 0, 100, 0, 'linear'),
+      toggle('lfo_sync', 'LFO Sync', false),
+      param('lfo_rate', 'LFO Rate', 'Hz', 0.01, 20, 1, 'log'),
+      choice('lfo_div', 'LFO Division', 7, 2),
+      param('spread', 'Spread', '%', 0, 100, 0, 'linear'),
+      param('env_amount', 'Env Amount', '%', -100, 100, 0, 'linear'),
+      param('env_attack', 'Env Attack', 'ms', 0.1, 100, 5, 'log'),
+      param('env_release', 'Env Release', 'ms', 10, 1000, 120, 'log'),
+      param('mix', 'Mix', '%', 0, 100, 100, 'linear'),
+    ],
+    readouts: [
+      { id: 'cutoff', name: 'Cutoff', unit: 'Hz' },
+      { id: 'env', name: 'Envelope', unit: '' },
+    ],
+  },
+  {
+    typeId: 'effects.bitcrusher',
+    name: 'Bitcrusher',
+    description: 'Bit-depth reduction, sample-rate decimation and a lo-fi filter, with a dry blend',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      shaped(param('bits', 'Bit Depth', 'bits', 1, 24, 24, 'linear'), { step: 1 }),
+      shaped(param('downsample', 'Downsample', 'x', 1, 64, 1, 'log'), { step: 1 }),
+      shaped(param('tone', 'Filter', 'Hz', 200, 20000, 20000, 'log'), { smoothingMs: 40 }),
+      param('mix', 'Mix', '%', 0, 100, 100, 'linear'),
+    ],
+    readouts: [],
   },
 ];
 
@@ -1928,6 +2027,16 @@ export class MockBackend implements Backend {
         if (def.id === 'latency') return { id: def.id, value: 32 };
         if (def.id === 'auto_gain_db') return { id: def.id, value: -((this.playing ? 6 : 0) as number) };
         if (def.id === 'correlation') return { id: def.id, value: 0.72 };
+        // The auto-filter's two: a cutoff that breathes an octave either side
+        // of where the knob is, and the follower that is moving it.
+        if (def.id === 'cutoff') {
+          const knob =
+            insert.params.find((entry) => entry.id === 'cutoff')?.value ?? 20_000;
+          return { id: def.id, value: knob * 2 ** Math.sin(now * 1.6 + index) };
+        }
+        if (def.id === 'env') {
+          return { id: def.id, value: 0.5 + 0.45 * Math.sin(now * 2.7 + index) };
+        }
         return { id: def.id, value: 0 };
       }),
     }));
