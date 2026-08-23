@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use mydaw_rt_core::{RtNode, RtNodeFactory};
+use mydaw_rt_core::{ParamNodeFactory, RtNode, RtNodeFactory};
 use parking_lot::Mutex;
 
 use crate::bank::{load_instrument, SampleBank};
@@ -178,6 +178,25 @@ impl SamplerRegistry {
             .iter()
             .find(|entry| entry.info.type_id == type_id)
             .map(|entry| entry.factory.create(sample_rate, max_block))
+    }
+
+    /// The same, reading the knobs in `params`.
+    ///
+    /// The block belongs to the track and outlives the node, which is what
+    /// makes a graph rebuild pick the instrument up where it was -- the same
+    /// contract the synthesised instruments have.
+    pub fn create_with_params(
+        &self,
+        type_id: &str,
+        sample_rate: f64,
+        max_block: usize,
+        params: Arc<mydaw_rt_core::ParamBlock>,
+    ) -> Option<Box<dyn RtNode>> {
+        self.entries
+            .load()
+            .iter()
+            .find(|entry| entry.info.type_id == type_id)
+            .map(|entry| entry.factory.create_with_params(sample_rate, max_block, params))
     }
 
     /// Decode `path` into a oneshot instrument and keep it across rescans.
@@ -332,6 +351,7 @@ fn scan(root: &Path) -> Vec<Entry> {
 
 fn entry_for(bank: Arc<SampleBank>) -> Entry {
     let type_id = intern(&source_id(bank.id()));
+    publish_defaults(type_id, bank.default_params());
     let info = InstrumentInfo {
         type_id,
         id: bank.id().to_owned(),
@@ -354,6 +374,43 @@ fn entry_for(bank: Arc<SampleBank>) -> Entry {
         info,
         factory: Arc::new(SamplerFactory::new(type_id, bank)),
     }
+}
+
+/// Every loaded instrument's starting knob positions, by `type_id`.
+///
+/// Process-wide for the same reason [`intern`] is: the shell builds a track's
+/// parameter block in `TrackDef::params_for` (`app/src/project.rs`) -- a pure
+/// data type with no registry to ask -- and the answer is a property
+/// of the *instrument*, discovered when its manifest was read. Published on
+/// load rather than looked up through a service so that the two places a track
+/// can come from (a new channel, and a project file being restored) cannot
+/// disagree about where an 808's knobs start.
+///
+/// Bounded by the number of instruments installed, and overwritten rather than
+/// appended to on a rescan.
+static DEFAULTS: Mutex<Option<HashMap<&'static str, InstrumentDefaults>>> = Mutex::new(None);
+
+/// One instrument's starting knob positions: `(parameter id, value)` pairs.
+pub type InstrumentDefaults = Arc<[(String, f32)]>;
+
+fn publish_defaults(type_id: &'static str, params: &[(String, f32)]) {
+    let mut guard = DEFAULTS.lock();
+    guard
+        .get_or_insert_with(HashMap::new)
+        .insert(type_id, params.into());
+}
+
+/// Where the instrument `type_id` wants the sampler's knobs, by parameter id.
+///
+/// Empty for an instrument that is not loaded -- which is not an error: a
+/// project can name an instrument whose samples are not installed yet, and its
+/// track keeps the sampler's own defaults until they are.
+pub fn instrument_defaults(type_id: &str) -> InstrumentDefaults {
+    DEFAULTS
+        .lock()
+        .as_ref()
+        .and_then(|map| map.get(type_id).cloned())
+        .unwrap_or_else(|| Arc::from([]))
 }
 
 /// Leak `id` once and return the same `&'static str` for it ever after.
@@ -390,6 +447,8 @@ mod tests {
             name: name.to_owned(),
             description: String::new(),
             release_ms: 120.0,
+            one_shot: false,
+            default_params: Default::default(),
             max_seconds: None,
             fade_out_seconds: None,
             attribution: "Test content".to_owned(),

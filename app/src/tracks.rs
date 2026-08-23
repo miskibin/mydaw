@@ -832,9 +832,17 @@ impl TrackHost {
             }
             Source::Sampler(reference) => {
                 let type_id = reference.wire_id();
-                Ok(self
-                    .sampler
-                    .create(&type_id, sample_rate, max_block)
+                // The track's own block, so a rebuilt graph picks the
+                // instrument up where the last one left it -- and so the knobs
+                // the UI is drawing are the knobs the voices are reading.
+                let built = match params {
+                    Some(block) => {
+                        self.sampler
+                            .create_with_params(&type_id, sample_rate, max_block, block)
+                    }
+                    None => self.sampler.create(&type_id, sample_rate, max_block),
+                };
+                Ok(built
                     .unwrap_or_else(|| {
                         log::warn!(
                             "the sampled instrument '{}' is not installed; \

@@ -167,7 +167,19 @@ impl TrackDef {
     /// Built here rather than where the graph is, so a track has its knobs from
     /// the moment it exists -- a project loaded with no audio device still has
     /// somewhere to put the values its file carries.
+    ///
+    /// A sampled instrument's block starts at *its* defaults rather than at the
+    /// sampler's: the release a piano damps over and the mono glide that makes
+    /// an 808 an 808 are properties of the content, and they are read from the
+    /// manifest that shipped with it. A project file's saved values are applied
+    /// on top of this, so a user's edits still win.
     pub fn params_for(source: &Source) -> Option<Arc<ParamBlock>> {
+        if let Some(reference) = source.sampler_ref() {
+            let block = ParamBlock::new(mydaw_plugin_sampler::PARAMS);
+            let defaults = mydaw_plugin_sampler::instrument_defaults(&reference.wire_id());
+            block.apply(defaults.iter().map(|(id, value)| (id.as_str(), *value)));
+            return Some(Arc::new(block));
+        }
         let type_id = source.instrument_type_id()?;
         let defs = mydaw_plugin_instruments::param_defs(type_id);
         if defs.is_empty() {
@@ -1524,6 +1536,24 @@ pub struct MixerStateDto {
     pub max_send_db: f32,
 }
 
+/// The knobs the instrument at the head of a track exposes.
+///
+/// Every sampled instrument exposes the sampler's own list -- an amplifier and
+/// a glide belong to the engine, not to a kit -- while a synthesised one
+/// exposes whatever its type declares. Empty for a source with no knobs: the
+/// test tone, and a hosted plugin, which has its own editor window.
+///
+/// The same answer [`TrackDef::params_for`] builds a block from, so the defs
+/// the UI lays out and the values it reads can never be two different lists.
+fn source_param_defs(source: &Source) -> &'static [mydaw_rt_core::ParamDef] {
+    if source.sampler_ref().is_some() {
+        return mydaw_plugin_sampler::PARAMS;
+    }
+    source
+        .instrument_type_id()
+        .map_or(&[], mydaw_plugin_instruments::param_defs)
+}
+
 /// Render `project` for the webview.
 ///
 /// `board` is the main thread's published record of which hosted plugin sits
@@ -1563,16 +1593,10 @@ pub fn mixer_state_dto(
                 pitch_cents: track.pitch_cents,
                 fade_in_ms: track.fade_in_ms,
                 fade_out_ms: track.fade_out_ms,
-                source_param_defs: track
-                    .source
-                    .instrument_type_id()
-                    .map(|type_id| {
-                        mydaw_plugin_instruments::param_defs(type_id)
-                            .iter()
-                            .map(ParamDefDto::from)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                source_param_defs: source_param_defs(&track.source)
+                    .iter()
+                    .map(ParamDefDto::from)
+                    .collect(),
                 source_params: track
                     .source_params
                     .as_ref()
@@ -1726,6 +1750,32 @@ mod tests {
         let melodic = SingleDrum::ALL.len();
         assert_eq!(project.tracks[melodic].source, piano);
         assert_eq!(project.tracks[melodic].name, "Piano");
+    }
+
+    /// A sampled instrument is an instrument: it has knobs, the strip declares
+    /// them, and the block the UI writes into is the one the voices read.
+    #[test]
+    fn a_sampled_track_carries_the_samplers_own_knobs() {
+        let source = Source::Sampler(SamplerSourceRef::new("salamander-piano"));
+        let defs = source_param_defs(&source);
+        assert_eq!(
+            defs.iter().map(|def| def.id).collect::<Vec<_>>(),
+            ["attack", "decay", "sustain", "release", "glide", "mono"]
+        );
+
+        let track = TrackDef::new(0, "Piano", source);
+        let block = track
+            .source_params
+            .as_ref()
+            .expect("a sampled track has a parameter block");
+        assert_eq!(block.len(), defs.len());
+        // Whatever the installed instrument asks for -- and the sampler's own
+        // defaults when it is not installed, which is what a fresh clone has.
+        assert!(block.get_by_id("release").is_some_and(|ms| ms > 0.0));
+        assert_eq!(block.get_by_id("mono"), Some(0.0));
+
+        // A source with no knobs still says so.
+        assert!(source_param_defs(&Source::TestTone).is_empty());
     }
 
     #[test]

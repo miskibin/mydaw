@@ -37,6 +37,7 @@
 //!    more than no instrument at all -- and a partial download is exactly the
 //!    state the asset fetcher can leave behind.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -188,6 +189,29 @@ pub struct InstrumentManifest {
     /// Note-off fade, in milliseconds.
     #[serde(default = "default_release_ms")]
     pub release_ms: f32,
+    /// Whether a note plays to the end of its recording whatever the key does.
+    ///
+    /// A drum pad is triggered, not held: a sixteenth-note gate on a step
+    /// sequencer must not cut a 3 s 808 tail in half. `true` makes the sampler
+    /// ignore note-off entirely -- the voice ends when the sample does, and is
+    /// still stealable and still choked by a retrigger of the same pad.
+    ///
+    /// False for anything played rather than triggered, where the whole point
+    /// of a release is that letting go stops the note.
+    #[serde(default)]
+    pub one_shot: bool,
+    /// Starting positions for this instrument's own knobs, by parameter id.
+    ///
+    /// The knobs themselves are the sampler's ([`crate::node::PARAMS`]) and are
+    /// the same for every instrument; what differs is where a *kit* wants them.
+    /// An 808 bass is a mono, gliding instrument with a short release; a
+    /// marimba is neither. Applied when a track selects the instrument, so a
+    /// user's edits are theirs from then on -- this is a default, not a lock.
+    ///
+    /// Ids this build does not know are ignored, exactly as a project file's
+    /// saved parameters are.
+    #[serde(default)]
+    pub default_params: BTreeMap<String, f32>,
     /// Hard cap on how much of each sample is kept in memory, in seconds.
     ///
     /// The memory budget, expressed as data rather than as a constant in the
@@ -312,6 +336,16 @@ impl InstrumentManifest {
         {
             return Err(invalid("fade_out_seconds must not be negative".to_owned()));
         }
+        // An unknown id is ignored where the defaults are applied -- a manifest
+        // written by a later build must still load -- but a value that is not a
+        // number is a broken file rather than a forward-compatible one.
+        for (id, value) in &self.default_params {
+            if !value.is_finite() {
+                return Err(invalid(format!(
+                    "default_params['{id}'] is not a number"
+                )));
+            }
+        }
         for (index, entry) in self.samples.iter().enumerate() {
             entry.check().map_err(|reason| ManifestError::Sample {
                 path: path.to_path_buf(),
@@ -365,6 +399,11 @@ mod tests {
         assert_eq!(manifest.max_seconds, None);
         assert_eq!(manifest.fade_out_seconds, None);
         assert!(manifest.attribution.is_empty());
+        assert!(
+            !manifest.one_shot,
+            "an instrument is played until it is said to be triggered"
+        );
+        assert!(manifest.default_params.is_empty());
 
         let entry = &manifest.samples[0];
         assert_eq!(entry.root_key, 60);
@@ -506,6 +545,30 @@ mod tests {
                 "{field}={value}: {err}"
             );
         }
+    }
+
+    /// The two fields a kit uses to say what *kind* of instrument it is.
+    #[test]
+    fn a_kit_can_declare_itself_a_one_shot_and_where_its_knobs_start() {
+        let mut value = minimal();
+        value["one_shot"] = serde_json::json!(true);
+        value["default_params"] = serde_json::json!({ "mono": 1.0, "glide": 60.0 });
+
+        let manifest = parse(&value).expect("a curated kit is valid");
+        assert!(manifest.one_shot);
+        assert_eq!(manifest.default_params.get("mono"), Some(&1.0));
+        assert_eq!(manifest.default_params.get("glide"), Some(&60.0));
+    }
+
+    #[test]
+    fn a_default_that_is_not_a_number_is_refused() {
+        let mut value = minimal();
+        value["default_params"] = serde_json::json!({ "glide": "quite fast" });
+        let err = parse(&value).unwrap_err();
+        assert!(
+            matches!(err, ManifestError::Json { .. }),
+            "a string where a number belongs is a JSON error: {err}"
+        );
     }
 
     #[test]

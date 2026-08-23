@@ -250,6 +250,42 @@ fn a_long_run_through_the_sampler_allocates_nothing() {
     assert_eq!(node.active_voices(), 0, "the chord released");
 }
 
+/// The knob-reading path, which the plain constructor never touches: a block
+/// read per block, a mono glide running per voice, and a parameter moved from
+/// the shell while the audio thread is inside `process`.
+#[test]
+fn reading_the_knobs_and_gliding_allocates_nothing() {
+    let (_dir, bank) = fixture();
+    let params = Arc::new(mydaw_rt_core::ParamBlock::new(mydaw_plugin_sampler::PARAMS));
+    params.set_by_id(mydaw_plugin_sampler::param::MONO, 1.0);
+    params.set_by_id(mydaw_plugin_sampler::param::GLIDE, 80.0);
+    params.set_by_id(mydaw_plugin_sampler::param::ATTACK, 20.0);
+    params.set_by_id(mydaw_plugin_sampler::param::SUSTAIN, 0.7);
+    let mut node = SamplerNode::with_params(bank, Arc::clone(&params), 48_000.0);
+    let mut buffers = AudioBuffers::new(512);
+
+    let slide: Vec<NoteEvent> = vec![
+        NoteEvent::note_on(0, 60, 0.9),
+        NoteEvent::note_on(64, 67, 0.9),
+        NoteEvent::note_on(192, 55, 0.9),
+    ];
+
+    let count = count_allocations(|| {
+        for pass in 0..24 {
+            run_block(&mut node, &mut buffers, 512, &slide);
+            // A knob moving between blocks is the ordinary case, not an edge.
+            params.set_by_id(
+                mydaw_plugin_sampler::param::GLIDE,
+                40.0 + (pass % 5) as f32 * 30.0,
+            );
+            run_block(&mut node, &mut buffers, 512, &[]);
+        }
+    });
+
+    assert_eq!(count, 0, "the parameter path allocated {count} times");
+    assert_eq!(node.held_voices(), 1, "mono is one voice");
+}
+
 /// Building a node is *not* on the audio thread and is allowed to allocate --
 /// but it must not decode anything, or changing a track's instrument would
 /// stall the UI for seconds. One `Arc` clone and one voice array, nothing that

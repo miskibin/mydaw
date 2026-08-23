@@ -179,6 +179,7 @@ pub struct InstrumentBuilder {
     id: String,
     name: String,
     release_ms: f32,
+    one_shot: bool,
     max_seconds: Option<f32>,
     fade_out_seconds: Option<f32>,
     entries: Vec<(crate::manifest::SampleEntry, u32, u16, Vec<f32>)>,
@@ -191,6 +192,7 @@ impl InstrumentBuilder {
             id: id.to_owned(),
             name: id.to_owned(),
             release_ms: crate::manifest::DEFAULT_RELEASE_MS,
+            one_shot: false,
             max_seconds: None,
             fade_out_seconds: None,
             entries: Vec::new(),
@@ -200,6 +202,14 @@ impl InstrumentBuilder {
     #[must_use]
     pub fn release_ms(mut self, ms: f32) -> Self {
         self.release_ms = ms;
+        self
+    }
+
+    /// Make it a triggered instrument: note-off is ignored and the sample
+    /// plays out. What a drum kit declares.
+    #[must_use]
+    pub fn one_shot(mut self, one_shot: bool) -> Self {
+        self.one_shot = one_shot;
         self
     }
 
@@ -268,6 +278,8 @@ impl InstrumentBuilder {
             name: self.name,
             description: String::new(),
             release_ms: self.release_ms,
+            one_shot: self.one_shot,
+            default_params: Default::default(),
             max_seconds: self.max_seconds,
             fade_out_seconds: self.fade_out_seconds,
             attribution: String::new(),

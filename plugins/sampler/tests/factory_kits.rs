@@ -187,6 +187,71 @@ fn every_factory_file_names_its_source_and_licence() {
     }
 }
 
+/// A pad is triggered and a note is played, and the manifest has to say which.
+///
+/// Without `one_shot` a sixteenth-note gate cuts a 3 s 808 tail in half, which
+/// is why the kits used to carry a 30-second release instead -- a workaround
+/// this asserts is gone as much as it asserts the flag is there.
+#[test]
+fn every_drum_kit_declares_itself_a_one_shot_and_no_kit_fakes_one() {
+    let catalog = catalog();
+    for id in FACTORY_KITS {
+        let manifest = instrument(catalog.get(id).unwrap_or_else(|| panic!("'{id}' is catalogued")));
+        assert_eq!(
+            manifest.one_shot,
+            DRUM_KITS.contains(id),
+            "{id}: a drum map is triggered and everything else is played"
+        );
+        assert!(
+            manifest.release_ms <= mydaw_plugin_sampler::node::MAX_ENVELOPE_MS,
+            "{id}: a {} ms release is a one-shot workaround, not a release",
+            manifest.release_ms
+        );
+    }
+}
+
+/// 808 Bass is the kit whose *instrument* the sampler's knobs make: mono, with
+/// a glide, is the difference between a trap 808 and a kick played
+/// chromatically.
+#[test]
+fn the_808_bass_ships_the_settings_that_make_it_an_808() {
+    let catalog = catalog();
+    let manifest = instrument(catalog.get("808-bass").expect("'808-bass' is catalogued"));
+    assert_eq!(manifest.default_params.get("mono"), Some(&1.0));
+    let glide = *manifest
+        .default_params
+        .get("glide")
+        .expect("808 Bass slides");
+    assert!(
+        (20.0..=150.0).contains(&glide),
+        "a {glide} ms glide is not a slide"
+    );
+    assert!(
+        manifest.release_ms <= 300.0,
+        "a bass note stops when the key does"
+    );
+}
+
+/// A default nothing reads is a default that silently does not apply.
+#[test]
+fn every_declared_default_names_a_knob_the_sampler_has() {
+    for entry in catalog().entries() {
+        let manifest = instrument(entry);
+        for (id, value) in &manifest.default_params {
+            let def = mydaw_plugin_sampler::PARAMS
+                .iter()
+                .find(|def| def.id == id)
+                .unwrap_or_else(|| panic!("{}: '{id}' is not a sampler knob", manifest.id));
+            assert_eq!(
+                def.sanitise(*value),
+                *value,
+                "{}: '{id}' = {value} is outside what the knob can hold",
+                manifest.id
+            );
+        }
+    }
+}
+
 /// A kit's name is what a user reads in the source picker. "808" is a size of
 /// sound; the manufacturer's name and model number are provenance, and belong
 /// in the credits rather than on the label.
