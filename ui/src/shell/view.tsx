@@ -212,12 +212,31 @@ export interface ViewState {
 
   /** Whether the window is wide enough for the top bar's optional readouts. */
   wideBar: Accessor<boolean>;
+  /**
+   * Whether the top bar has room for the record readout -- the input meter, the
+   * take counter and the release button.
+   *
+   * A second, higher breakpoint rather than {@link wideBar}, because the readout
+   * is only mounted while the capture device is open and its budget is therefore
+   * *on top of* the bar's widest layout. Below it the REC button stands alone:
+   * it still shows armed and recording, and the status bar reports the take.
+   */
+  recordBar: Accessor<boolean>;
 }
 
 const ViewContext = createContext<ViewState>();
 
 /** Below this the top bar drops its tempo, signature and position readouts. */
 const WIDE_BAR_PX = 1100;
+
+/**
+ * Below this the top bar drops the record readout and keeps only the button.
+ *
+ * Measured, not guessed: the widest layout of the bar is about 1200 px of
+ * content, and the readout adds about 80 more while a take is running. Anything
+ * narrower than this and the view tabs would start sliding off the right edge.
+ */
+const RECORD_BAR_PX = 1280;
 
 export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [view, setView] = createSignal<MainView>('rack');
@@ -253,12 +272,16 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [wideBar, setWideBar] = createSignal(
     typeof window === 'undefined' ? true : window.innerWidth >= WIDE_BAR_PX,
   );
+  const [recordBar, setRecordBar] = createSignal(
+    typeof window === 'undefined' ? true : window.innerWidth >= RECORD_BAR_PX,
+  );
   const [viewportWidth, setViewportWidth] = createSignal(
     typeof window === 'undefined' ? 1_600 : window.innerWidth,
   );
 
   const onResize = () => {
     setWideBar(window.innerWidth >= WIDE_BAR_PX);
+    setRecordBar(window.innerWidth >= RECORD_BAR_PX);
     setViewportWidth(window.innerWidth);
   };
   window.addEventListener('resize', onResize);
@@ -385,6 +408,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     renamingPattern,
     setRenamingPattern,
     wideBar,
+    recordBar,
   };
 
   return <ViewContext.Provider value={state}>{props.children}</ViewContext.Provider>;

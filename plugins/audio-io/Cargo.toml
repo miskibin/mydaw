@@ -22,6 +22,16 @@ mydaw-plugin-debug-tap.workspace = true
 # needs -- the RT side owns a `PatternSlot` created here, exactly like the graph
 # and note queues, and the *pattern* it carries comes from the shell.
 mydaw-plugin-sequencer.workspace = true
+# For `cubic`, the interpolation kernel a recorded take is rate-converted with.
+# The sampler plays pitched files through the same one; a take that used a
+# different (worse) kernel would sound different from the same audio dropped in
+# from disk.
+mydaw-audio-file.workspace = true
+
+# The ring between the capture callback and the recorder's worker. The output
+# path gets its queues from `rt-core`; the input one is the only ring this crate
+# builds itself, because nothing in the graph reads it.
+rtrb.workspace = true
 
 cpal.workspace = true
 # cpal's own `realtime` feature is off (it is not a default), so promotion is

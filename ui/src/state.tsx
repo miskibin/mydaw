@@ -33,6 +33,8 @@ import type {
   ClapPluginInfoDto,
   ClapTarget,
   EffectInfoDto,
+  InputDeviceDto,
+  InputStatusDto,
   InsertReadoutsDto,
   InsertTarget,
   MeterFrame,
@@ -42,6 +44,7 @@ import type {
   PlaylistDto,
   PlayMode,
   ProjectInfo,
+  RecordedTakeDto,
   SequencerState,
   SourceDto,
   StreamInfo,
@@ -230,6 +233,35 @@ export interface AppState {
   watchReadouts(target: InsertTarget | null): void;
   readouts: Accessor<InsertReadoutsDto[]>;
 
+  // --- recording -----------------------------------------------------------
+  //
+  // The whole input path lives here rather than in the transport bar, for the
+  // reason everything else does: views do not talk to the engine. The bar reads
+  // `inputStatus()` and calls these; Settings reads `inputDevices()`.
+
+  /** Capture devices, as of the last {@link refreshInputDevices}. */
+  inputDevices: Accessor<InputDeviceDto[]>;
+  /** What the recorder is doing. `undefined` until the first answer arrives. */
+  inputStatus: Accessor<InputStatusDto | undefined>;
+  /** Re-enumerate. Called on mount and by Settings' Refresh button. */
+  refreshInputDevices(): Promise<void>;
+  /** Choose the capture device. `null` follows the system default. */
+  setInputDevice(deviceId: string | null): Promise<void>;
+  /** Open the capture device and start metering, or release it. */
+  setInputArmed(armed: boolean): Promise<void>;
+  /** Start a take, arming first if needed. */
+  startRecording(): Promise<void>;
+  /**
+   * Stop, load the take, and add a rack channel that plays it.
+   *
+   * Resolves with the new channel's index so the caller can open its sample
+   * editor — one gesture from REC to a playable, editable channel. `null` when
+   * the take could not be kept, with the reason already in the status bar.
+   */
+  finishRecording(): Promise<number | null>;
+  /** Throw the take away. The device stays armed. */
+  cancelRecording(): Promise<void>;
+
   loadDevices(rescan?: boolean): Promise<void>;
   refreshAudioSources(): Promise<void>;
   startAssetDownload(id: string): void;
@@ -287,6 +319,8 @@ function createAppState(): AppState {
   const [param, setParam] = createSignal<ParamReadout | null>(null);
   const [undoRevision, setUndoRevision] = createSignal(0);
   const [readouts, setReadouts] = createSignal<InsertReadoutsDto[]>([]);
+  const [inputDevices, setInputDevices] = createSignal<InputDeviceDto[]>([]);
+  const [inputStatus, setInputStatus] = createSignal<InputStatusDto>();
 
   function report(error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
@@ -639,6 +673,126 @@ function createAppState(): AppState {
     void flushPush().then(() => replay('redo'));
   }
 
+  // --- recording -----------------------------------------------------------
+
+  /**
+   * How often the input level and the elapsed time are re-read.
+   *
+   * Only while the device is open. A meter wants to look continuous, and 16 Hz
+   * is the slowest that still does for a bar that is 40 px wide; the reason it
+   * is a poll rather than a `Channel` (which the mixer meters use) is that the
+   * meter pump is single-subscription and one number twice a second more than
+   * pays for a second stream.
+   */
+  const INPUT_POLL_MS = 60;
+  let inputTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** Keep the poll running exactly while the device is open. */
+  function syncInputPoll(status: InputStatusDto | undefined): void {
+    const open = status !== undefined && status.state !== 'idle';
+    if (open === (inputTimer !== undefined)) return;
+    if (!open) {
+      clearInterval(inputTimer);
+      inputTimer = undefined;
+      return;
+    }
+    inputTimer = setInterval(() => {
+      backend
+        .getInputStatus()
+        .then(adoptInputStatus)
+        // A readout, not an error surface: a failed poll is the next poll's
+        // problem, and the status bar has better things to say.
+        .catch(() => {});
+    }, INPUT_POLL_MS);
+  }
+
+  function adoptInputStatus(status: InputStatusDto): void {
+    setInputStatus(status);
+    syncInputPoll(status);
+    // The device died under a running take. The engine has already salvaged
+    // whatever it captured; all that is left is to say so, once.
+    if (status.fault && status.fault !== lastInputFault) {
+      report(new Error(status.fault));
+    }
+    lastInputFault = status.fault;
+  }
+  let lastInputFault = '';
+
+  async function refreshInputDevices(): Promise<void> {
+    try {
+      const [devices, status] = await Promise.all([
+        backend.getInputDevices(),
+        backend.getInputStatus(),
+      ]);
+      setInputDevices(devices);
+      adoptInputStatus(status);
+    } catch (error) {
+      report(error);
+    }
+  }
+
+  /** Run one input gesture, adopting the status it answers with. */
+  async function inputCommand(
+    run: (backend: Backend) => Promise<InputStatusDto>,
+  ): Promise<boolean> {
+    try {
+      adoptInputStatus(await run(backend));
+      setKernelError(null);
+      return true;
+    } catch (error) {
+      report(error);
+      // The engine's state machine is the authority; a refused gesture must not
+      // leave the button drawing a state the engine is not in.
+      await syncInputStatus();
+      return false;
+    }
+  }
+
+  /** Re-read the status, so the button never draws a state the engine is not in. */
+  async function syncInputStatus(): Promise<void> {
+    await backend.getInputStatus().then(adoptInputStatus).catch(() => {});
+  }
+
+  async function finishRecording(): Promise<number | null> {
+    let take: RecordedTakeDto;
+    try {
+      take = await backend.stopRecording();
+      setKernelError(null);
+    } catch (error) {
+      report(error);
+      await syncInputStatus();
+      return null;
+    }
+    await syncInputStatus();
+
+    // The same command a dropped WAV takes, so a take and an import cannot
+    // produce two different kinds of channel.
+    let channel: number | null = null;
+    try {
+      const next = await backend.addSampleChannel(take.source.path);
+      setMixer(next);
+      channel = next.tracks.length - 1;
+      setSources(await backend.getSources());
+    } catch (error) {
+      // The take is on disk and loaded either way -- it is in the Audio
+      // browser -- so this is a partial success, not a lost recording.
+      report(error);
+    }
+    await refreshAudioSources();
+
+    const seconds = take.source.durationSeconds;
+    if (take.limitReached) {
+      say(take.source.name, `${seconds.toFixed(1)} s — stopped at the length limit`);
+    } else if (take.droppedSamples > 0) {
+      say(take.source.name, `${seconds.toFixed(1)} s — ${take.droppedSamples} samples dropped`);
+    } else if (take.peak < 0.001) {
+      say(take.source.name, `${seconds.toFixed(1)} s — silent, check the input`);
+    } else {
+      say(take.source.name, `${seconds.toFixed(1)} s recorded`);
+    }
+    return channel;
+  }
+
   // --- selection and plugins -----------------------------------------------
 
   function selectTrack(index: number): void {
@@ -854,6 +1008,9 @@ function createAppState(): AppState {
   void refresh().then(() => {
     void resubscribeMeters();
     backend.getAssetStatus().then(setAssets).catch(() => {});
+    // Once, at startup: the transport bar needs to know whether a REC button is
+    // worth offering, and that is the only thing this answers while idle.
+    void refreshInputDevices();
     // The dev-only IPC benchmark announces itself as a contributed panel; the
     // chunk is lazy, so a normal session never downloads it.
     if (snapshot()?.panels.some((panel) => panel.id === IPC_BENCH_AUTO_PANEL)) {
@@ -893,6 +1050,12 @@ function createAppState(): AppState {
     window.removeEventListener('blur', releaseHeldNotes);
     clearInterval(assetTimer);
     clearInterval(readoutTimer);
+    clearInterval(inputTimer);
+    // Release the capture device with the window. A microphone still held by a
+    // reloading webview is one the next session cannot open.
+    if (inputStatus()?.state !== 'idle') {
+      void backend.setInputArmed(false).catch(() => {});
+    }
     clearTimeout(pushTimer);
     clearTimeout(toastTimer);
     clearTimeout(masterGainTimer);
@@ -982,6 +1145,32 @@ function createAppState(): AppState {
     toggleGui,
     watchReadouts,
     readouts,
+    inputDevices,
+    inputStatus,
+    refreshInputDevices,
+    async setInputDevice(deviceId) {
+      if (await inputCommand((b) => b.setInputDevice(deviceId))) {
+        const name =
+          deviceId === null
+            ? 'System default'
+            : (inputDevices().find((device) => device.id === deviceId)?.name ?? deviceId);
+        say('Audio input', name);
+      }
+    },
+    async setInputArmed(armed) {
+      if (await inputCommand((b) => b.setInputArmed(armed))) {
+        say('Audio input', armed ? `Armed · ${inputStatus()?.deviceName ?? ''}` : 'Released');
+      }
+    },
+    async startRecording() {
+      await inputCommand((b) => b.startRecording());
+    },
+    finishRecording,
+    async cancelRecording() {
+      if (await inputCommand((b) => b.cancelRecording())) {
+        say('Recording', 'take discarded');
+      }
+    },
     loadDevices,
     refreshAudioSources,
     startAssetDownload,

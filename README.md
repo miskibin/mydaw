@@ -47,7 +47,7 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `plugins/effects` | The mixer effects that ship inside the DAW: EQ, compressor, delay, saturator and utility, driven by the parameter system. Transparent at their defaults, click-free on bypass, zero-alloc. See [`the spec`](docs/superpowers/specs/2026-08-19-param-system-effects-v1.md) |
 | `plugins/sequencer` | Patterns, the playlist and the scheduler: a set of named patterns, an arrangement of clips, and PAT/SONG playback that is drift-free by construction. See [`the spec`](docs/superpowers/specs/2026-08-19-engine-patterns-playlist.md) |
 | `plugins/sampler` | The sampled instrument: a manifest-driven, 32-voice sample player, plus the checksummed fetcher that installs its content. See [Sample content](#sample-content) |
-| `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
+| `plugins/audio-io` | cpal/WASAPI devices in **both** directions: the output callback with its transport and graph plumbing, and the capture path behind the REC button — device list, RT-safe input ring, rate conversion to the engine's clock, and the take it builds. See [Recording](#recording) |
 | `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
 | `plugins/host-vst3` | VST3 discovery **and hosting**: scans modules, runs a plugin instance as a `Vst3Node` in the RT graph (step 7) |
 | `plugins/plugin-windows` | Native top-level windows for external plugin GUIs, pumped by the shell's own message loop (Phase 1 spike 3) |
@@ -209,6 +209,50 @@ in the same file inserts the fixture CLAP plugin and asserts the master peak hal
 
 CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
+## Recording
+
+The REC button in the transport bar captures a microphone or a line input and lands it on the rack
+as a playable sample channel. Three states, one button:
+
+```text
+   idle       no device is open at all -- WAVE does not sit on the microphone
+   armed      the device is open and metered, so a level can be set before the take
+   recording  the take is being kept; the counter and the meter are on the bar
+```
+
+```text
+  capture thread (RT)                         worker (non-RT)                 shell
+  -------------------                         ---------------                 -----
+  build_input_stream                          RecordService::arm
+    |-- fold_frame -> L R      ==rtrb=====>   drain + RateConverter    -->  Vec<f32>
+    |-- peak / RMS -> atomics                 (device rate -> engine rate)        |
+    '-- (dropped counter)                                                         v
+                                              RecordService::stop -> RecordedTake
+                                                     |
+   <cache>/WAVE Studio/recordings/Recording N.wav  <-'  32-bit float stereo
+                                                     |
+                        load_audio_source -> AudioSource -> add_sample_channel -> rack
+```
+
+- **The callback allocates nothing.** It folds the device's frames to the engine's stereo, writes
+  them into a pre-allocated `rtrb` ring, and updates two atomics for the meter. A full ring costs
+  whole frames and a counter, never a blocked capture thread.
+- **Takes are converted to the project's rate** as they are captured (`mydaw_audio_file::cubic`, the
+  same kernel the sampler plays pitched files with), so an interface running at 44.1 kHz against a
+  48 kHz session still lines up frame for frame. Equal rates are a bit-exact copy.
+- **Integer devices are supported.** I8/U8/I16/U16/I32 are converted to `f32` in the callback over a
+  pre-allocated scratch buffer; refusing them would make recording impossible on most shared-mode
+  Windows inputs.
+- **Input never touches the output stream.** Separate devices, separate callbacks; the two share only
+  the engine's sample rate. Input always uses the platform default host — an ASIO driver hands out one
+  instance for both directions and cpal opens the two halves separately.
+- Takes are capped at five minutes (`MAX_RECORD_SECONDS`) and written as 32-bit float, so an overload
+  survives to be looked at rather than being clipped on the way to disk.
+
+The device is chosen in **Settings › Audio input**, persisted in `audio.json` by its host-stable id,
+and metered there before a take. Commands: `get_input_devices`, `set_input_device`,
+`get_input_status`, `set_input_armed`, `start_recording`, `stop_recording`, `cancel_recording`.
+
 ## How the shell fits together
 
 ```text
@@ -219,6 +263,7 @@ app/src/graph.rs          per track: SourceSlot -> [inserts] -> TransportGate
                           master:    sum -> [CLAP effect] -> master fader   ->  AudioIoService::install_graph
 app/src/meters.rs         MeterThrottle -> pump thread (interval/4) -> Channel<MeterFrameDto>
 app/src/debug_capture.rs  DebugTapService -> WAV + PNG + stats.json under .debug/captures/
+app/src/recording.rs      RecordedTake -> "Recording N.wav" under <cache>/WAVE Studio/recordings/
 app/src/commands.rs       get_ui_snapshot | get_clap_plugins | transport_play | transport_stop |
                           note_on | note_off | get_sources | set_source |
                           get_tracks | set_track_gain | set_track_pan | set_track_mute |

@@ -24,7 +24,6 @@ import {
   IconSettings,
   IconPause,
   IconPlay,
-  IconRecord,
   IconStop,
   IconSun,
   IconTypingKeyboard,
@@ -39,6 +38,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { useView, type MainView } from './view';
 import { MasterVolume } from './MasterVolume';
 import { PatternSelector } from './PatternSelector';
+import { RecordControl } from './RecordControl';
 
 const VIEWS: readonly [MainView, string, string][] = [
   ['playlist', 'PLAYLIST', 'F5'],
@@ -171,14 +171,7 @@ export function TopBar(): ReturnType<typeof Show> {
         >
           <IconStop />
         </button>
-        <button
-          type="button"
-          class="wv-tbtn wv-tbtn--rec wv-can-disable"
-          disabled
-          title="Recording is not implemented yet — the engine has no capture path"
-        >
-          <IconRecord />
-        </button>
+        <RecordControl />
         <button
           type="button"
           class="wv-tbtn"

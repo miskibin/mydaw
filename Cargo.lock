@@ -2426,6 +2426,7 @@ dependencies = [
  "audio_thread_priority",
  "cpal",
  "log",
+ "mydaw-audio-file",
  "mydaw-ipc-bridge",
  "mydaw-kernel",
  "mydaw-plugin-debug-tap",
@@ -2435,6 +2436,7 @@ dependencies = [
  "mydaw-plugin-test-tone",
  "mydaw-rt-core",
  "parking_lot",
+ "rtrb",
  "serde_json",
  "thiserror 2.0.20",
 ]

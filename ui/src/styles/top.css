@@ -93,6 +93,106 @@
   color: var(--rec);
 }
 
+/* Armed: the device is open and metering, nothing is being kept yet. A ring
+   rather than a fill, so "ready" and "running" are never confused. */
+.wv-tbtn--rec.is-armed {
+  box-shadow: inset 0 0 0 1px var(--rec);
+}
+
+.wv-tbtn--rec.is-recording {
+  background: var(--rec);
+  color: var(--ink);
+}
+
+/* --- the record readout: elapsed, level, and a way out ------------------- */
+
+/* Only mounted while the device is open, so an idle session pays nothing for
+   it. See `shell/RecordControl.tsx`.
+
+   The one shrinkable item on the bar: every other group is `flex: none`, so on
+   a narrow window this gives up meter width rather than pushing the tempo and
+   the view tabs off the edge. The counter and the release button never shrink —
+   a take with no visible length, or no way to stop it, would be worse than a
+   short meter. */
+.wv-rec {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 5px;
+  align-items: center;
+  min-width: 0;
+  height: 26px;
+  padding: 0 3px 0 5px;
+  border-radius: 7px;
+  background: var(--chip);
+}
+
+.wv-rec.is-recording {
+  background: color-mix(in srgb, var(--rec) 16%, transparent);
+}
+
+.wv-rec__clock {
+  flex: none;
+  min-width: 28px;
+  font: 500 11px 'Geist Mono Variable';
+  color: var(--txt);
+  font-variant-numeric: tabular-nums;
+}
+
+.wv-rec__clock.is-near-limit {
+  color: var(--rec);
+}
+
+/* A single horizontal bar: RMS as the fill, peak as a hairline on top. Two
+   stacked channel bars at this size would be four pixels of noise. */
+.wv-rec__meter {
+  position: relative;
+  display: block;
+  flex: 0 1 40px;
+  min-width: 12px;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--sunk);
+}
+
+.wv-rec__rms {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  border-radius: 3px;
+  background: var(--meter);
+}
+
+.wv-rec__peak {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: var(--txt);
+}
+
+.wv-rec__cancel {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.wv-rec__cancel:hover,
+.wv-rec__cancel:focus-visible {
+  background: var(--panel2);
+  color: var(--txt);
+}
+
 /* --- the clock ----------------------------------------------------------- */
 
 .wv-clock {

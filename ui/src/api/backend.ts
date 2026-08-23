@@ -31,6 +31,9 @@ import type {
   MidiStatusDto,
   PreviewSettings,
   AudioOutput,
+  InputDeviceDto,
+  InputStatusDto,
+  RecordedTakeDto,
 } from './types';
 
 /**
@@ -390,6 +393,45 @@ export interface Backend {
 
   /** What the open audio device is. Answers `running: false` rather than failing. */
   getStreamInfo(): Promise<StreamInfo>;
+
+  // --- audio input and recording -------------------------------------------
+  //
+  // Seven commands, one state machine: idle -> armed -> recording -> armed.
+  // `getInputStatus` is the only one worth polling, and only while the device
+  // is open; the rest are gestures. `state.tsx` owns that poll.
+
+  /**
+   * Every capture device the default host can offer. An empty list is a real
+   * answer — a headless machine or a disabled microphone produces one — and
+   * Settings draws an empty state for it rather than an error.
+   */
+  getInputDevices(): Promise<InputDeviceDto[]>;
+  /**
+   * Choose the capture device and remember it. `null` follows the system
+   * default. **Refused** while a take is running.
+   */
+  setInputDevice(deviceId: string | null): Promise<InputStatusDto>;
+  /** What the REC button and the input meter draw. Cheap enough to poll. */
+  getInputStatus(): Promise<InputStatusDto>;
+  /**
+   * Open the capture device and start metering, or release it.
+   *
+   * WAVE does not hold the microphone while idle: that is what stops a
+   * conferencing app from working and lights the OS privacy indicator for
+   * nothing. Disarming mid-take discards the take.
+   */
+  setInputArmed(armed: boolean): Promise<InputStatusDto>;
+  /** Start a take, arming the device first if it is not open yet. */
+  startRecording(): Promise<InputStatusDto>;
+  /**
+   * End the take, write it, and load it as an audio source.
+   *
+   * Placing it is `addSampleChannel`, on purpose: a recorded take and a dropped
+   * WAV reach the rack by the same path.
+   */
+  stopRecording(): Promise<RecordedTakeDto>;
+  /** Throw the take away. The device stays armed for another attempt. */
+  cancelRecording(): Promise<InputStatusDto>;
 
   /** MIDI input ports for Settings. Reconciles with the OS on each call. */
   listMidiPorts(): Promise<MidiPortDto[]>;
@@ -963,6 +1005,36 @@ class TauriBackend implements Backend {
 
   getStreamInfo(): Promise<StreamInfo> {
     return this.call('get_stream_info');
+  }
+
+  getInputDevices(): Promise<InputDeviceDto[]> {
+    return this.call('get_input_devices');
+  }
+
+  // `deviceId: null` rather than an omitted key, for the reason `openProject`
+  // passes `path: null`: that is what asks Rust for the system default.
+  setInputDevice(deviceId: string | null): Promise<InputStatusDto> {
+    return this.call('set_input_device', { deviceId });
+  }
+
+  getInputStatus(): Promise<InputStatusDto> {
+    return this.call('get_input_status');
+  }
+
+  setInputArmed(armed: boolean): Promise<InputStatusDto> {
+    return this.call('set_input_armed', { armed });
+  }
+
+  startRecording(): Promise<InputStatusDto> {
+    return this.call('start_recording');
+  }
+
+  stopRecording(): Promise<RecordedTakeDto> {
+    return this.call('stop_recording');
+  }
+
+  cancelRecording(): Promise<InputStatusDto> {
+    return this.call('cancel_recording');
   }
 
   listMidiPorts(): Promise<MidiPortDto[]> {
