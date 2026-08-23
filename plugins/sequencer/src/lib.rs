@@ -73,7 +73,10 @@ pub use compiled::{
 /// crate. Re-exported so the shell can reach it without depending on
 /// `mydaw-audio-file` directly for one constant.
 pub use mydaw_audio_file::AUDIO_EXTENSIONS;
-pub use oneshot::{OneShotNode, SamplePlaybackParams, ONESHOT_ROOT_KEY, ONESHOT_VOICES};
+pub use oneshot::{
+    OneShotNode, SamplePlaybackParams, SliceTable, MAX_SLICES, ONESHOT_ROOT_KEY, ONESHOT_VOICES,
+    SLICE_DECLICK_MS,
+};
 pub use pattern::{
     row_label, ChannelClip, ChannelDisplay, MelodicNote, Pattern, PatternError, Step, StepRow,
     ACCENT_THRESHOLD, ACCENT_VELOCITY, DEFAULT_ROW_KEYS, DEFAULT_STEPS, DEFAULT_STEP_KEY,

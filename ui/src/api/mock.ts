@@ -48,6 +48,9 @@ import type {
   RootMode,
   SendDto,
   SequencerState,
+  SliceAnalysis,
+  SliceMode,
+  SliceState,
   SourceDto,
   SpectrumDto,
   StreamInfo,
@@ -85,6 +88,12 @@ const MAX_CLIPS = 512;
 const MAX_SONG_TICKS = 3_840 * 512;
 const MAX_NOTES = 1024;
 const MAX_WAVEFORM_BINS = 4096;
+/** `MAX_SLICES` in `plugins/sequencer/src/oneshot.rs`. */
+const MAX_SLICES = 128;
+const DEFAULT_SLICE_SENSITIVITY = 0.5;
+const DEFAULT_SLICE_DIVISION = 16;
+/** `MIN_GAP_MS` in `crates/slice-analysis`. */
+const SLICE_MIN_GAP_MS = 30;
 const PPQ = 960;
 const TICKS_PER_STEP = 240;
 const TICKS_PER_BAR = 3840;
@@ -584,6 +593,32 @@ function sourceParamDefs(sourceId: string): ParamDefDto[] {
   return sourceId === 'poly-synth' ? SYNTH_PARAMS.map((def) => ({ ...def })) : [];
 }
 
+/** The grid division the engine offers that is closest to `division`. */
+function nearestDivision(division: number): number {
+  const wanted = Number.isFinite(division) ? division : DEFAULT_SLICE_DIVISION;
+  return [4, 8, 16].reduce((best, candidate) =>
+    Math.abs(candidate - wanted) < Math.abs(best - wanted) ? candidate : best,
+  );
+}
+
+/** How many 4/4 bars `span` frames is at `bpm`, rounded and floored at one. */
+function assumedBars(span: number, sampleRate: number, bpm: number): number {
+  if (!(bpm > 0) || !(sampleRate > 0)) return 1;
+  const barFrames = (sampleRate * 4 * 60) / bpm;
+  return Math.min(64, Math.max(1, Math.round(span / barFrames)));
+}
+
+/** An unsliced channel. Mirrors `SliceStateDto::default()`. */
+function noSlices(): SliceState {
+  return {
+    mode: 'off',
+    frames: [],
+    sensitivity: DEFAULT_SLICE_SENSITIVITY,
+    division: DEFAULT_SLICE_DIVISION,
+    keytrack: false,
+  };
+}
+
 /** Default pitch/region for a mixer strip that is not a sample channel. */
 const SAMPLE_PLAY = {
   pitchCents: 0,
@@ -625,6 +660,7 @@ function starterTracks(): TrackDto[] {
         missing: null,
         inserts: [],
         ...SAMPLE_PLAY,
+        slices: noSlices(),
         ...noSourceParams(),
         audioSourceId: sample.id,
       };
@@ -647,6 +683,7 @@ function starterTracks(): TrackDto[] {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       sourceParamDefs: sourceParamDefs(sourceId),
       sourceParams: sourceParamDefs(sourceId).map((def) => ({
         id: def.id,
@@ -1015,6 +1052,9 @@ export class MockBackend implements Backend {
     def.clap = null;
     def.vst3 = null;
     def.audioSourceId = sample?.id ?? null;
+    // And a change of file is a change of chop: a slice is a frame position in
+    // one file (see `TrackDef::set_source` in the engine).
+    def.slices = noSlices();
     // A change of instrument is a change of knobs: the old ones belonged to the
     // old sound (see `TrackDef::set_source` in the engine).
     def.sourceParamDefs = sourceParamDefs(wanted.id);
@@ -1286,6 +1326,122 @@ export class MockBackend implements Backend {
     return this.mixerState();
   }
 
+  /**
+   * Where the slices would fall — the mock's stand-in for the Rust detector.
+   *
+   * Not a spectral-flux pass: there is no PCM in the browser, only the
+   * envelope `getAudioWaveform` invents. What it *does* reproduce is every
+   * property the window depends on — onsets at plausible places in the file,
+   * a sensitivity that adds hits as it rises and never takes them away, the
+   * 30 ms minimum gap, the region as the range, the 128-slice ceiling, and the
+   * grid's exact division of the assumed bar.
+   */
+  async analyzeSlices(
+    track: number,
+    mode: SliceMode,
+    sensitivity: number,
+    division: number,
+  ): Promise<SliceAnalysis> {
+    const entry = this.track(track);
+    if (entry.engine !== 'clip' && entry.engine !== 'sample') {
+      throw new Error(`track ${track} is not an audio-file channel`);
+    }
+    const source = this.audioSources.find((item) => item.id === entry.audioSourceId);
+    if (!source) throw new Error(`audio source ${entry.audioSourceId} is not loaded`);
+    const total = source.frames;
+    const start = Math.min(Math.max(0, Math.floor(entry.sampleStartFrames)), total);
+    const rawEnd = Math.floor(entry.sampleEndFrames);
+    const end = rawEnd <= 0 || rawEnd > total ? total : Math.max(start, rawEnd);
+    const span = end - start;
+    if (span <= 0) {
+      return {
+        frames: [start],
+        mode: mode === 'grid' ? 'grid' : 'transient',
+        bars: 0,
+        truncated: false,
+        rangeStart: start,
+        rangeEnd: end,
+      };
+    }
+
+    if (mode === 'grid') {
+      const picked = nearestDivision(division);
+      const bars = assumedBars(span, source.sampleRate, this.bpm);
+      const wanted = Math.max(1, bars * picked);
+      const count = Math.min(wanted, MAX_SLICES);
+      return {
+        frames: Array.from(
+          { length: count },
+          (_, index) => start + Math.round((span * index) / wanted),
+        ),
+        mode: 'grid',
+        bars,
+        truncated: wanted > count,
+        rangeStart: start,
+        rangeEnd: end,
+      };
+    }
+
+    // Sixteen candidate onsets across the range, each with a fixed "strength"
+    // that a rising sensitivity progressively admits. The set only ever grows,
+    // which is the property the slider's readout promises.
+    const level = Number.isFinite(sensitivity) ? Math.min(1, Math.max(0, sensitivity)) : 0.5;
+    const minGap = Math.max(1, Math.round((SLICE_MIN_GAP_MS / 1000) * source.sampleRate));
+    const candidates = Array.from({ length: 16 }, (_, index) => ({
+      frame: start + Math.round((span * index) / 16),
+      // Downbeats are strong, offbeats weaker, sixteenths weakest: a plausible
+      // break, and deterministic so a test can name the counts.
+      strength: index % 4 === 0 ? 0.95 : index % 2 === 0 ? 0.55 : 0.25,
+    }));
+    const frames: number[] = [start];
+    for (const candidate of candidates) {
+      if (candidate.strength < 1 - level) continue;
+      const last = frames[frames.length - 1]!;
+      if (candidate.frame - last < minGap) continue;
+      frames.push(candidate.frame);
+      if (frames.length >= MAX_SLICES) break;
+    }
+    return {
+      frames,
+      mode: 'transient',
+      bars: 0,
+      truncated: false,
+      rangeStart: start,
+      rangeEnd: end,
+    };
+  }
+
+  async setTrackSlices(track: number, slices: SliceState): Promise<SliceState> {
+    const entry = this.track(track);
+    if (entry.engine !== 'clip' && entry.engine !== 'sample') {
+      throw new Error(`track ${track} is not an audio-file channel`);
+    }
+    const source = this.audioSources.find((item) => item.id === entry.audioSourceId);
+    const limit = source?.frames ?? 0xffffffff;
+    const frames = [
+      ...new Set(
+        (slices.frames ?? [])
+          .map((frame) => Math.max(0, Math.floor(frame)))
+          .filter((frame) => frame <= limit),
+      ),
+    ]
+      .sort((a, b) => a - b)
+      .slice(0, MAX_SLICES);
+    const sensitivity = Number.isFinite(slices.sensitivity)
+      ? Math.min(1, Math.max(0, slices.sensitivity))
+      : DEFAULT_SLICE_SENSITIVITY;
+    // A mode with nothing in it is not a mode -- the engine says the same.
+    const mode: SliceMode = frames.length === 0 ? 'off' : slices.mode;
+    entry.slices = {
+      mode,
+      frames,
+      sensitivity,
+      division: nearestDivision(slices.division),
+      keytrack: !!slices.keytrack,
+    };
+    return { ...entry.slices, frames: [...frames] };
+  }
+
   async setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {
     const sane = (ms: number) => (Number.isFinite(ms) ? Math.min(10_000, Math.max(0, ms)) : 0);
     const entry = this.track(track);
@@ -1356,6 +1512,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       sourceParamDefs: sourceParamDefs(wanted.id),
       sourceParams: sourceParamDefs(wanted.id).map((def) => ({
         id: def.id,
@@ -1415,6 +1572,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       ...noSourceParams(),
       audioSourceId: sample.id,
     });
@@ -1464,6 +1622,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       ...noSourceParams(),
       audioSourceId: loaded.id,
     });
@@ -2460,6 +2619,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       ...noSourceParams(),
       audioSourceId: sourceId,
     });

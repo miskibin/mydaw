@@ -728,6 +728,43 @@ impl TrackHost {
         })
     }
 
+    /// Install (or clear) a channel's chop.
+    ///
+    /// The frames are sanitised by [`check_slices`](crate::project::check_slices)
+    /// first: sorted, deduped, capped at the engine's table size and clamped to
+    /// `limit` (the file's frame count). Turning the mode off keeps the frames
+    /// in the project so that switching back does not lose the chop, but hands
+    /// the audio thread an empty table -- the region plays again immediately,
+    /// with no rebuild and no dropped voice.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_slices(
+        &self,
+        track: usize,
+        mut state: crate::project::SliceStateDto,
+        limit: u64,
+    ) -> Result<crate::project::SliceStateDto, TrackError> {
+        state.frames = crate::project::check_slices(&state.frames, limit);
+        state.sensitivity = if state.sensitivity.is_finite() {
+            state.sensitivity.clamp(0.0, 1.0)
+        } else {
+            crate::project::DEFAULT_SLICE_SENSITIVITY
+        };
+        state.division = mydaw_slice_analysis::nearest_division(state.division);
+        if state.mode != crate::project::SliceMode::Off && state.frames.is_empty() {
+            // A mode with nothing in it is not a mode: an empty table plays the
+            // region, and the window would be drawing a chop that is not there.
+            state.mode = crate::project::SliceMode::Off;
+        }
+        let stored = state.clone();
+        self.edit(track, move |def| {
+            def.sample_play.set_slices(state.playable(), state.keytrack);
+            def.slices = state;
+        })?;
+        Ok(stored)
+    }
+
     /// Set the master fader, in dB.
     ///
     /// # Errors

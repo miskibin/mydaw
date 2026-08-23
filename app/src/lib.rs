@@ -292,6 +292,8 @@ pub fn run() -> ExitCode {
             commands::analyze_track_pitch,
             commands::set_track_sample_root,
             commands::set_track_sample_region,
+            commands::analyze_slices,
+            commands::set_track_slices,
             commands::set_track_fades,
             commands::set_source_param,
             commands::set_track_mute,

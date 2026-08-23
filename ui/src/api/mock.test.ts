@@ -177,6 +177,166 @@ describe('sample root pitch', () => {
   });
 });
 
+describe('slice mode', () => {
+  it('finds more hits as sensitivity rises and never fewer', async () => {
+    const backend = new MockBackend();
+    const mixer = await backend.addSampleChannel('C:\\breaks\\amen.wav');
+    const track = mixer.tracks.at(-1)!;
+    const counts: number[] = [];
+    for (let step = 0; step <= 10; step += 1) {
+      const found = await backend.analyzeSlices(track.index, 'transient', step / 10, 16);
+      counts.push(found.frames.length);
+      expect(found.mode).toBe('transient');
+      expect(found.frames[0]).toBe(0);
+      expect([...found.frames].sort((a, b) => a - b)).toEqual(found.frames);
+    }
+    expect(counts.every((count, index) => index === 0 || count >= counts[index - 1]!)).toBe(true);
+    expect(counts.at(-1)!).toBeGreaterThan(counts[0]!);
+  });
+
+  it('divides the assumed bar exactly in grid mode', async () => {
+    const backend = new MockBackend();
+    const source = await backend.loadAudioSource('C:\\breaks\\loop.wav');
+    const mixer = await backend.setTrackSource(0, `oneshot:${source.id}`);
+    const track = mixer.tracks[0]!;
+    await backend.setBpm(120);
+    const quarters = await backend.analyzeSlices(track.index, 'grid', 0.5, 4);
+    expect(quarters.mode).toBe('grid');
+    expect(quarters.bars).toBeGreaterThanOrEqual(1);
+    expect(quarters.frames).toHaveLength(quarters.bars * 4);
+    const span = quarters.rangeEnd - quarters.rangeStart;
+    quarters.frames.forEach((frame, index) => {
+      expect(frame).toBe(Math.round((span * index) / (quarters.bars * 4)));
+    });
+    const sixteenths = await backend.analyzeSlices(track.index, 'grid', 0.5, 16);
+    expect(sixteenths.frames).toHaveLength(quarters.frames.length * 4);
+  });
+
+  it('slices the region rather than the file once the sample is trimmed', async () => {
+    const backend = new MockBackend();
+    const mixer = await backend.addSampleChannel('C:\\breaks\\amen.wav');
+    const track = mixer.tracks.at(-1)!;
+    const whole = await backend.analyzeSlices(track.index, 'grid', 0.5, 4);
+    expect(whole.rangeStart).toBe(0);
+
+    const source = (await backend.getAudioSources()).find((item) => item.id === track.audioSourceId)!;
+    const half = Math.floor(source.frames / 2);
+    await backend.setTrackSampleRegion(track.index, half, 0);
+    const trimmed = await backend.analyzeSlices(track.index, 'grid', 0.5, 4);
+    expect(trimmed.rangeStart).toBe(half);
+    expect(trimmed.rangeEnd).toBe(source.frames);
+    expect(trimmed.frames[0]).toBe(half);
+    expect(trimmed.frames.every((frame) => frame >= half)).toBe(true);
+  });
+
+  it('stores a chop, repairs a damaged one, and answers with what it kept', async () => {
+    const backend = new MockBackend();
+    const mixer = await backend.addSampleChannel('C:\\breaks\\amen.wav');
+    const track = mixer.tracks.at(-1)!;
+    expect(track.slices).toEqual({
+      mode: 'off',
+      frames: [],
+      sensitivity: 0.5,
+      division: 16,
+      keytrack: false,
+    });
+
+    const stored = await backend.setTrackSlices(track.index, {
+      mode: 'transient',
+      frames: [900, 100, 500, 100, 99_999_999],
+      sensitivity: 4,
+      division: 5,
+      keytrack: true,
+    });
+    expect(stored.frames).toEqual([100, 500, 900]);
+    expect(stored.sensitivity).toBe(1);
+    expect(stored.division).toBe(4);
+    expect(stored.keytrack).toBe(true);
+    expect((await backend.getTracks()).tracks[track.index]!.slices.frames).toEqual([100, 500, 900]);
+  });
+
+  it('caps the table at the engine size', async () => {
+    const backend = new MockBackend();
+    const mixer = await backend.addSampleChannel('C:\\breaks\\amen.wav');
+    const track = mixer.tracks.at(-1)!;
+    const stored = await backend.setTrackSlices(track.index, {
+      mode: 'grid',
+      frames: Array.from({ length: 400 }, (_, index) => index * 10),
+      sensitivity: 0.5,
+      division: 16,
+      keytrack: false,
+    });
+    expect(stored.frames).toHaveLength(128);
+  });
+
+  it('keeps the markers when the mode goes back to off, and forgets them on a new file', async () => {
+    const backend = new MockBackend();
+    const mixer = await backend.addSampleChannel('C:\\breaks\\amen.wav');
+    const track = mixer.tracks.at(-1)!;
+    const found = await backend.analyzeSlices(track.index, 'transient', 0.9, 16);
+    await backend.setTrackSlices(track.index, {
+      mode: 'transient',
+      frames: found.frames,
+      sensitivity: 0.9,
+      division: 16,
+      keytrack: false,
+    });
+
+    const off = await backend.setTrackSlices(track.index, {
+      mode: 'off',
+      frames: found.frames,
+      sensitivity: 0.9,
+      division: 16,
+      keytrack: false,
+    });
+    expect(off.mode).toBe('off');
+    expect(off.frames).toEqual(found.frames);
+    expect(off.sensitivity).toBe(0.9);
+
+    // A mode with nothing in it is not a mode.
+    const empty = await backend.setTrackSlices(track.index, {
+      mode: 'transient',
+      frames: [],
+      sensitivity: 0.9,
+      division: 16,
+      keytrack: false,
+    });
+    expect(empty.mode).toBe('off');
+
+    // A different file is a different chop.
+    await backend.setTrackSlices(track.index, {
+      mode: 'transient',
+      frames: found.frames,
+      sensitivity: 0.9,
+      division: 16,
+      keytrack: false,
+    });
+    const other = await backend.loadAudioSource('C:\\breaks\\other.wav');
+    const swapped = await backend.setTrackSource(track.index, `oneshot:${other.id}`);
+    expect(swapped.tracks[track.index]!.slices.frames).toEqual([]);
+    expect(swapped.tracks[track.index]!.slices.mode).toBe('off');
+  });
+
+  it('refuses a chop on a synth channel', async () => {
+    const backend = new MockBackend();
+    const synth = (await backend.getTracks()).tracks.find(
+      (entry) => entry.engine !== 'sample' && entry.engine !== 'clip',
+    )!;
+    await expect(backend.analyzeSlices(synth.index, 'transient', 0.5, 16)).rejects.toThrow(
+      'audio-file channel',
+    );
+    await expect(
+      backend.setTrackSlices(synth.index, {
+        mode: 'transient',
+        frames: [0],
+        sensitivity: 0.5,
+        division: 16,
+        keytrack: false,
+      }),
+    ).rejects.toThrow('audio-file channel');
+  });
+});
+
 describe('spectrum tap', () => {
   it('arms a track source without an insert index', async () => {
     const backend = new MockBackend();

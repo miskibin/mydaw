@@ -96,7 +96,7 @@ use crate::clap_bridge::{from_base64, to_base64};
 use crate::dto::{ChannelClipDto, MelodicNoteDto, PatternDto, StepDto, StepRowDto};
 use crate::effects::InsertDef;
 use crate::project::{
-    check_gain_db, check_pan, BusDef, Project, RootMode, RootPitchDto, SendDef, TrackDef,
+    check_gain_db, check_pan, BusDef, Project, RootMode, RootPitchDto, SendDef, SliceMode, TrackDef,
 };
 use crate::source::{ClapSourceRef, Source, Vst3SourceRef};
 
@@ -506,6 +506,32 @@ pub struct TrackEntry {
     pub root_mode: RootMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detected_pitch: Option<RootPitchDto>,
+    /// How this channel's chop was made. Absent means it has none.
+    #[serde(default, skip_serializing_if = "is_default_slice_mode")]
+    pub slice_mode: SliceMode,
+    /// Slice starts, in the file's own frames.
+    ///
+    /// Written whenever there are any, even with the mode off: a musician who
+    /// flips back to Region to hear the whole break and saves has not thrown
+    /// their chop away, and re-running detection to get it back would give a
+    /// different answer than the markers they had nudged by hand.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slices: Vec<u64>,
+    /// Where the sensitivity slider was left, `0..=1`.
+    #[serde(
+        default = "default_slice_sensitivity",
+        skip_serializing_if = "is_default_slice_sensitivity"
+    )]
+    pub slice_sensitivity: f32,
+    /// Where the grid picker was left: 4, 8 or 16 to the bar.
+    #[serde(
+        default = "default_slice_division",
+        skip_serializing_if = "is_default_slice_division"
+    )]
+    pub slice_division: u32,
+    /// Whether a slice transposes with the key that played it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub slice_keytrack: bool,
     /// The instrument's own knobs, by id. Empty for an instrument with none.
     ///
     /// Written whole rather than only the moved ones, for the reason an
@@ -533,6 +559,30 @@ fn is_default_root_key(value: &u8) -> bool {
 
 fn is_default_root_mode(value: &RootMode) -> bool {
     *value == RootMode::Default
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_default_slice_mode(value: &SliceMode) -> bool {
+    *value == SliceMode::Off
+}
+
+fn default_slice_sensitivity() -> f32 {
+    crate::project::DEFAULT_SLICE_SENSITIVITY
+}
+
+fn is_default_slice_sensitivity(value: &f32) -> bool {
+    *value == crate::project::DEFAULT_SLICE_SENSITIVITY
+}
+
+fn default_slice_division() -> u32 {
+    crate::project::DEFAULT_SLICE_DIVISION
+}
+
+fn is_default_slice_division(value: &u32) -> bool {
+    *value == crate::project::DEFAULT_SLICE_DIVISION
 }
 
 /// One internal effect on a chain.
@@ -982,6 +1032,11 @@ impl ProjectFile {
                     root_fine_cents: track.root_fine_cents,
                     root_mode: track.root_mode,
                     detected_pitch: track.detected_pitch,
+                    slice_mode: track.slices.mode,
+                    slices: track.slices.frames.clone(),
+                    slice_sensitivity: track.slices.sensitivity,
+                    slice_division: track.slices.division,
+                    slice_keytrack: track.slices.keytrack,
                     source_params: track
                         .source_params
                         .as_ref()
@@ -1136,6 +1191,25 @@ impl ProjectFile {
             } else {
                 0.0
             };
+            // A chop from a file is sanitised exactly as one from the window
+            // is: sorted, deduped and capped. The frame *ceiling* is not known
+            // here -- the sample may not be decoded yet, and a project opened
+            // away from its files must keep its markers -- so positions are
+            // clamped at playback instead, against the source that is loaded.
+            let mut slices = crate::project::SliceStateDto {
+                mode: entry.slice_mode,
+                frames: crate::project::check_slices(&entry.slices, u64::from(u32::MAX)),
+                sensitivity: if entry.slice_sensitivity.is_finite() {
+                    entry.slice_sensitivity.clamp(0.0, 1.0)
+                } else {
+                    crate::project::DEFAULT_SLICE_SENSITIVITY
+                },
+                division: mydaw_slice_analysis::nearest_division(entry.slice_division),
+                keytrack: entry.slice_keytrack,
+            };
+            if slices.frames.is_empty() {
+                slices.mode = crate::project::SliceMode::Off;
+            }
             // Rejected rather than skipped: a blob that is not base64 means the
             // file has been damaged, and loading the track without its state
             // would silently give the user a plugin at its defaults.
@@ -1158,14 +1232,19 @@ impl ProjectFile {
                 root_fine_cents,
                 root_mode: entry.root_mode,
                 detected_pitch: entry.detected_pitch,
-                sample_play: std::sync::Arc::new(SamplePlaybackParams::with_root(
-                    entry.sample_start_frames,
-                    entry.sample_end_frames,
-                    pitch_cents,
-                    (entry.fade_in_ms.max(0.0), entry.fade_out_ms.max(0.0)),
-                    root_key,
-                    root_fine_cents,
-                )),
+                slices: slices.clone(),
+                sample_play: {
+                    let params = SamplePlaybackParams::with_root(
+                        entry.sample_start_frames,
+                        entry.sample_end_frames,
+                        pitch_cents,
+                        (entry.fade_in_ms.max(0.0), entry.fade_out_ms.max(0.0)),
+                        root_key,
+                        root_fine_cents,
+                    );
+                    params.set_slices(slices.playable(), slices.keytrack);
+                    std::sync::Arc::new(params)
+                },
                 inserts: restore_chain(&entry.inserts, effects),
             });
         }
@@ -1824,6 +1903,116 @@ mod tests {
         assert_eq!(loaded.tracks[0].root_mode, RootMode::Detected);
         assert_eq!(loaded.tracks[0].detected_pitch.unwrap().midi_note, 54);
         assert_eq!(loaded.tracks[0], project.tracks[0]);
+    }
+
+    #[test]
+    fn a_chop_survives_the_file_and_reaches_the_player() {
+        let mut project = Project::default();
+        project.tracks[0].slices = crate::project::SliceStateDto {
+            mode: crate::project::SliceMode::Transient,
+            frames: vec![0, 4_800, 9_600, 14_400],
+            sensitivity: 0.72,
+            division: 8,
+            keytrack: true,
+        };
+        project.tracks[0]
+            .sample_play
+            .set_slices(&[0, 4_800, 9_600, 14_400], true);
+
+        let file = ProjectFile::capture(&project, 0, 120.0, &empty_song(), &[], None);
+        let json = file.to_json().unwrap();
+        assert!(json.contains("\"slice_mode\": \"transient\""), "{json}");
+        assert!(json.contains("\"slice_keytrack\": true"), "{json}");
+
+        let restored = parse_project(&json).unwrap();
+        let (loaded, _) = restored.to_project(&EffectRegistry::new()).unwrap();
+        let track = &loaded.tracks[0];
+        assert_eq!(track.slices.frames, vec![0, 4_800, 9_600, 14_400]);
+        assert_eq!(track.slices.mode, crate::project::SliceMode::Transient);
+        assert!((track.slices.sensitivity - 0.72).abs() < 1e-6);
+        assert_eq!(track.slices.division, 8);
+        assert!(track.slices.keytrack);
+        assert_eq!(
+            track.sample_play.slices.frames(),
+            vec![0, 4_800, 9_600, 14_400],
+            "the loaded table has to be the one the audio thread reads"
+        );
+        assert!(track.sample_play.slices.keytrack());
+        assert_eq!(*track, project.tracks[0]);
+    }
+
+    #[test]
+    fn a_chop_with_the_mode_off_keeps_its_markers_but_plays_the_region() {
+        let mut project = Project::default();
+        project.tracks[0].slices = crate::project::SliceStateDto {
+            mode: crate::project::SliceMode::Off,
+            frames: vec![0, 1_200],
+            ..Default::default()
+        };
+        let file = ProjectFile::capture(&project, 0, 120.0, &empty_song(), &[], None);
+        let json = file.to_json().unwrap();
+        assert!(
+            !json.contains("slice_mode"),
+            "the default mode is not written: {json}"
+        );
+        let (loaded, _) = parse_project(&json)
+            .unwrap()
+            .to_project(&EffectRegistry::new())
+            .unwrap();
+        assert_eq!(loaded.tracks[0].slices.frames, vec![0, 1_200]);
+        assert!(
+            loaded.tracks[0].sample_play.slices.is_empty(),
+            "with the mode off the player has no table"
+        );
+    }
+
+    #[test]
+    fn a_track_written_before_slicing_opens_unsliced_with_the_default_controls() {
+        let json = r#"{
+            "id": 0,
+            "name": "Kick",
+            "source": { "kind": "internal", "id": "kick" },
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "muted": false,
+            "soloed": false
+        }"#;
+        let entry: TrackEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.slice_mode, SliceMode::Off);
+        assert!(entry.slices.is_empty());
+        assert_eq!(
+            entry.slice_sensitivity,
+            crate::project::DEFAULT_SLICE_SENSITIVITY
+        );
+        assert_eq!(entry.slice_division, crate::project::DEFAULT_SLICE_DIVISION);
+        assert!(!entry.slice_keytrack);
+    }
+
+    #[test]
+    fn a_damaged_chop_is_repaired_rather_than_refusing_the_project() {
+        let json = r#"{
+            "id": 0,
+            "name": "Break",
+            "source": { "kind": "internal", "id": "kick" },
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "muted": false,
+            "soloed": false,
+            "slice_mode": "grid",
+            "slices": [900, 100, 500, 100],
+            "slice_sensitivity": 7.5,
+            "slice_division": 3
+        }"#;
+        let entry: TrackEntry = serde_json::from_str(json).unwrap();
+        let file = ProjectFile {
+            tracks: vec![entry],
+            ..captured()
+        };
+        let (loaded, _) = file.to_project(&EffectRegistry::new()).unwrap();
+        let slices = &loaded.tracks[0].slices;
+        assert_eq!(slices.frames, vec![100, 500, 900], "sorted and deduped");
+        assert_eq!(slices.sensitivity, 1.0, "clamped, not refused");
+        assert_eq!(slices.division, 4, "pulled to a division the engine offers");
     }
 
     #[test]

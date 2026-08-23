@@ -18,6 +18,9 @@ import type {
   ProjectInfo,
   RootMode,
   SequencerState,
+  SliceAnalysis,
+  SliceMode,
+  SliceState,
   SourceDto,
   SpectrumDto,
   StreamInfo,
@@ -155,6 +158,28 @@ export interface Backend {
     fineCents: number,
     mode: RootMode,
   ): Promise<MixerState>;
+  /**
+   * Where an audio-file channel's slices would fall — without installing them.
+   *
+   * Analysis and installation are two calls on purpose: the sensitivity slider
+   * re-runs this on every step of a drag, and a chop the user is still shaping
+   * should not be what the keyboard plays until they stop. The range analysed
+   * is the channel's SMP region.
+   */
+  analyzeSlices(
+    track: number,
+    mode: SliceMode,
+    sensitivity: number,
+    division: number,
+  ): Promise<SliceAnalysis>;
+  /**
+   * Install (or clear) an audio-file channel's chop.
+   *
+   * Answers with what was **stored**, not what was asked for: markers are
+   * sorted, deduped, clamped to the file and capped at 128, so the window can
+   * draw the table the engine is actually playing.
+   */
+  setTrackSlices(track: number, slices: SliceState): Promise<SliceState>;
   /** Channel fade in and out, in milliseconds. One call, one republish. */
   setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState>;
   /**
@@ -556,6 +581,19 @@ class TauriBackend implements Backend {
     mode: RootMode,
   ): Promise<MixerState> {
     return this.call('set_track_sample_root', { track, key, fineCents, mode });
+  }
+
+  analyzeSlices(
+    track: number,
+    mode: SliceMode,
+    sensitivity: number,
+    division: number,
+  ): Promise<SliceAnalysis> {
+    return this.call('analyze_slices', { track, mode, sensitivity, division });
+  }
+
+  setTrackSlices(track: number, slices: SliceState): Promise<SliceState> {
+    return this.call('set_track_slices', { track, slices });
   }
 
   setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {

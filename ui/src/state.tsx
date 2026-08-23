@@ -64,7 +64,7 @@ import {
   UndoStack,
   type PlaylistSnapshot,
 } from './lib/undo';
-import { channelClip, withStepsConvertedToNotes } from './lib/pattern';
+import { channelClip, withSlicesAsNotes, withStepsConvertedToNotes } from './lib/pattern';
 import { clampDb, formatDb, MAX_DB, MIN_DB } from './panels/mixer/scale';
 
 /** How long a pattern edit waits for the next one before it is pushed. */
@@ -170,6 +170,15 @@ export interface AppState {
    * notes were created.
    */
   promoteStepsToRoll(channel: number): number;
+  /**
+   * Lay a sliced channel's chop across the roll: one note per slice, in order,
+   * on sixteenths, from `rootKey` up.
+   *
+   * The break played back as it was recorded, which is what a slicer hands you
+   * to start rearranging. Returns how many notes were written -- fewer than
+   * `sliceCount` only when the chop runs past MIDI 127.
+   */
+  dumpSlicesToRoll(channel: number, rootKey: number, sliceCount: number): number;
 
   // --- the parameter readout -----------------------------------------------
   param: Accessor<ParamReadout | null>;
@@ -951,6 +960,20 @@ function createAppState(): AppState {
       const name =
         mixer()?.tracks.find((track) => track.index === channel)?.name ?? 'Channel';
       say(`${name} · Piano roll`, `${count} steps became notes`);
+      return count;
+    },
+    dumpSlicesToRoll(channel: number, rootKey: number, sliceCount: number): number {
+      const current = pattern();
+      if (!current) return 0;
+      const after = withSlicesAsNotes(current, channel, rootKey, sliceCount);
+      if (after === current) return 0;
+      editPatternOnce('Slices to piano roll', (target) =>
+        withSlicesAsNotes(target, channel, rootKey, sliceCount),
+      );
+      const count = channelClip(after, channel)?.notes.length ?? 0;
+      const name =
+        mixer()?.tracks.find((track) => track.index === channel)?.name ?? 'Channel';
+      say(`${name} · Piano roll`, `${count} slice${count === 1 ? '' : 's'} became notes`);
       return count;
     },
     param,

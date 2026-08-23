@@ -211,6 +211,152 @@
   opacity: 1;
 }
 
+/* --- the chop ------------------------------------------------------------
+ *
+ * A slice is a band across the waveform with a numbered pad at its head. The
+ * band is what a press splits and the pad is what plays it, so the two are
+ * different targets with different cursors rather than one ambiguous one.
+ */
+
+.wv-sample__slicebar {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 0 12px 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--sunk);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.wv-sample__sens {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  font: 500 10px 'Geist Variable';
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+.wv-sample__sens input[type='range'] {
+  width: 118px;
+  height: 18px;
+  accent-color: var(--acc);
+  cursor: ew-resize;
+}
+
+.wv-sample__sensval {
+  min-width: 30px;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--txt2);
+  text-align: right;
+}
+
+.wv-sample__slicecount {
+  font: 500 10px 'Geist Mono Variable';
+  color: var(--txt2);
+  white-space: nowrap;
+}
+
+.wv-sample__slicenote {
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.wv-sample__slice {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  cursor: crosshair;
+}
+
+/* Alternating tint, so where one slice ends is readable without counting. */
+.wv-sample__slice.is-alt {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.wv-sample__slice.is-lit {
+  background: color-mix(in srgb, var(--acc) 26%, transparent);
+}
+
+.wv-sample__pad {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  min-width: 15px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--panel) 84%, transparent);
+  font: 500 9px 'Geist Mono Variable';
+  color: var(--txt2);
+  cursor: pointer;
+}
+
+.wv-sample__pad:hover:not(:disabled) {
+  background: var(--acc);
+  color: var(--ink);
+}
+
+.wv-sample__pad:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.wv-sample__slice.is-lit .wv-sample__pad {
+  background: var(--acc);
+  color: var(--ink);
+}
+
+/*
+ * The cut itself. A 14 px grab band over a 1 px line, the same trade the
+ * region handles make -- a 1 px pointer target is not a control.
+ */
+.wv-sample__marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 14px;
+  margin-left: -7px;
+  cursor: ew-resize;
+}
+
+.wv-sample__marker::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 6px;
+  width: 1px;
+  background: color-mix(in srgb, currentColor 75%, var(--txt));
+  content: '';
+}
+
+.wv-sample__marker:hover::before {
+  width: 2px;
+  background: currentColor;
+  box-shadow: 0 0 0 1px currentColor;
+}
+
+/* The head of the chop moves with the region, so it is not a grab target. */
+.wv-sample__marker.is-head {
+  cursor: default;
+}
+
+.wv-sample__marker.is-head::before {
+  background: var(--dim);
+}
+
+.wv-sample__marker.is-head:hover::before {
+  width: 1px;
+  background: var(--dim);
+  box-shadow: none;
+}
+
 /* The zero line, so a quiet sample still reads as a sample. */
 .wv-sample__axis {
   position: absolute;
