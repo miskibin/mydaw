@@ -995,6 +995,11 @@ mod tests {
             root_fine_cents: 0.0,
             root_mode: crate::project::RootMode::Default,
             detected_pitch: None,
+            slice_mode: crate::project::SliceMode::Off,
+            slices: Vec::new(),
+            slice_sensitivity: crate::project::DEFAULT_SLICE_SENSITIVITY,
+            slice_division: crate::project::DEFAULT_SLICE_DIVISION,
+            slice_keytrack: false,
             source_params: Default::default(),
         }
     }

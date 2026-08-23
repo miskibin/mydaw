@@ -256,6 +256,47 @@ fn every_effect_is_bit_transparent_at_its_defaults_or_documents_why_not() {
                 worst < 1.0e-3,
                 "the saturator changed a quiet signal by {worst}"
             );
+        } else if info.type_id == "effects.chorus" || info.type_id == "effects.flanger" {
+            // The same story as the delay, and documented in the same place: a
+            // modulation effect whose mix started at zero would read as broken,
+            // so both ship at 50 % wet. Their lines are empty for the first
+            // few milliseconds -- the shortest reach either can be set to is
+            // 1 ms -- so what must hold at the top of the capture is the dry
+            // half *exactly*. Anything else is the wet path inventing audio it
+            // was never given.
+            let n = 32;
+            let worst = input[..n]
+                .iter()
+                .zip(&out[..n])
+                .map(|(a, b)| (a[0] * 0.5 - b[0]).abs().max((a[1] * 0.5 - b[1]).abs()))
+                .fold(0.0_f32, f32::max);
+            assert!(
+                worst < 1.0e-6,
+                "{} dry path is off by {worst}, or its line is not empty",
+                info.type_id
+            );
+        } else if info.type_id == "effects.phaser" {
+            // The one effect in the pack with no transparency claim at all, and
+            // for a structural reason rather than a chosen default: an all-pass
+            // cascade is in the path from the first sample and has no
+            // "empty line" to be transparent during. What *can* be asserted is
+            // that a fresh phaser is a phase rotation and not a gain stage --
+            // summing the rotated copy with the dry one at 50 % costs about
+            // 3 dB on broadband material and must not do anything wilder.
+            let energy = |frames: &[[f32; 2]]| -> f32 {
+                (frames
+                    .iter()
+                    .map(|f| f[0] * f[0] + f[1] * f[1])
+                    .sum::<f32>()
+                    / frames.len() as f32)
+                    .sqrt()
+            };
+            assert!(out.iter().all(|f| f[0].is_finite() && f[1].is_finite()));
+            let ratio = 20.0 * (energy(&out) / energy(&input)).log10();
+            assert!(
+                (-10.0..=1.0).contains(&ratio),
+                "a fresh phaser changed the level by {ratio:.1} dB"
+            );
         } else {
             assert_eq!(out, input, "{} is not transparent when fresh", info.type_id);
         }

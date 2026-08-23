@@ -191,7 +191,6 @@ Write-Progress -Activity 'Fetching samples' -Completed
 # what each entry is; project the value out first.
 $bytes = ($samples | ForEach-Object { $_.bytes } | Measure-Object -Sum).Sum
 $manifest = [ordered]@{
-    schema      = 1
     id          = $InstrumentId
     name        = $InstrumentName
     description = "Yamaha C5 grand, $($regions.Count) sampled notes x $($kept.Count) velocity layers"
@@ -209,8 +208,30 @@ $manifest = [ordered]@{
     samples     = $samples
 }
 
-$manifest | ConvertTo-Json -Depth 6 | Set-Content -Path $ManifestOut -Encoding utf8NoBOM
+# Merge, rather than replace: assets-manifest.json also carries the factory
+# kits, whose generator is scripts/gen-factory-kits.mjs. Every instrument this
+# script does not own is copied through untouched, and the file is written in
+# the container shape (`schema: 2`) whether or not it was in one before.
+$existing = if (Test-Path $ManifestOut) {
+    Get-Content -Path $ManifestOut -Raw | ConvertFrom-Json
+} else { $null }
+$others = if ($null -eq $existing) {
+    @()
+} elseif ($existing.PSObject.Properties.Name -contains 'instruments') {
+    @($existing.instruments | Where-Object { $_.id -ne $InstrumentId })
+} elseif ($existing.id -ne $InstrumentId) {
+    @($existing)
+} else {
+    @()
+}
+
+[ordered]@{
+    schema      = 2
+    instruments = @($manifest) + $others
+} | ConvertTo-Json -Depth 8 | Set-Content -Path $ManifestOut -Encoding utf8NoBOM
+
 Write-Host ''
 Write-Host "Wrote $ManifestOut"
+Write-Host "  $(1 + $others.Count) instrument(s); $($others.Count) left untouched"
 Write-Host "  $($samples.Count) samples, $([math]::Round($bytes / 1MB, 1)) MB on disk"
 Write-Host "  decoded worst case: $([math]::Round($samples.Count * $MaxSeconds * 48000 * 2 * 4 / 1MB, 0)) MB"

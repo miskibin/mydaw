@@ -2357,6 +2357,7 @@ dependencies = [
  "mydaw-plugin-test-tone",
  "mydaw-plugin-windows",
  "mydaw-rt-core",
+ "mydaw-slice-analysis",
  "parking_lot",
  "rtrb",
  "serde",
@@ -2426,6 +2427,7 @@ dependencies = [
  "audio_thread_priority",
  "cpal",
  "log",
+ "mydaw-audio-file",
  "mydaw-ipc-bridge",
  "mydaw-kernel",
  "mydaw-plugin-debug-tap",
@@ -2435,6 +2437,7 @@ dependencies = [
  "mydaw-plugin-test-tone",
  "mydaw-rt-core",
  "parking_lot",
+ "rtrb",
  "serde_json",
  "thiserror 2.0.20",
 ]
@@ -2542,6 +2545,7 @@ dependencies = [
  "log",
  "mydaw-audio-file",
  "mydaw-kernel",
+ "mydaw-pitch-analysis",
  "mydaw-plugin-debug-tap",
  "mydaw-rt-core",
  "parking_lot",
@@ -2602,6 +2606,13 @@ dependencies = [
  "basedrop",
  "rtrb",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "mydaw-slice-analysis"
+version = "0.1.0"
+dependencies = [
+ "realfft",
 ]
 
 [[package]]

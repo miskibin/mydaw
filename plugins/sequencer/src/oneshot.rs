@@ -9,6 +9,20 @@
 //! song. Playback rate is channel pitch plus `(note - root key)` minus the
 //! root's fine cents, so a detected F♯3 +12 ct plays concert F♯3 at MIDI 54.
 //! RT-safe: array reads and multiplies, no allocation.
+//!
+//! # Slice mode
+//!
+//! With a slice table installed ([`SliceTable`]) the same node becomes a
+//! chopper: key `root + n` plays slice `n` of the file, from its own frame to
+//! the next slice's, and the keyboard walks the break instead of transposing
+//! it. That is the Fruity Slicer / Simpler-slice convention, and the reason
+//! repitch is **off** by default -- a chopped break has to keep its own pitch
+//! whichever pad it lands on. `keytrack` puts the transposition back for the
+//! musician who wants a sliced vocal to be playable as an instrument.
+//!
+//! An unmapped key is silent, not a whole-file hit: a slice map is a pad
+//! layout, and a stray key should do nothing rather than dump the entire break
+//! into the mix.
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -25,6 +39,101 @@ pub const ONESHOT_VOICES: usize = 8;
 /// MIDI key at which an uncalibrated file plays at recorded pitch (C4).
 pub const ONESHOT_ROOT_KEY: u8 = 60;
 
+/// Slices one channel may hold.
+///
+/// Fixed, because the table lives in the node the audio thread is reading and
+/// growing it would mean allocating there. 128 is every MIDI key above the
+/// root and about eight bars of sixteenths -- past that a musician is asking
+/// for a different tool, and the analysis says so rather than silently
+/// dropping the tail.
+pub const MAX_SLICES: usize = 128;
+
+/// Anti-click fade applied to both ends of a slice, in milliseconds.
+///
+/// A slice boundary is a cut through whatever the waveform happened to be
+/// doing, so both edges get a ramp. The same 2 ms the clip player uses: short
+/// enough to keep a hat's attack, long enough that the step is inaudible.
+pub const SLICE_DECLICK_MS: f32 = CLIP_RAMP_MS;
+
+/// Where this channel's slices start, shared with the node that plays them.
+///
+/// A fixed array of atomics rather than a swapped `Arc`: the audio thread must
+/// read this without allocating, and a swap would either free the old table on
+/// the audio thread or need the garbage-collector thread for a 512-byte array.
+/// Writes come from the UI thread and are rare (an analysis, a marker drag);
+/// `len` is published last with `Release` so a reader that sees `n` slices sees
+/// `n` written positions. A read that straddles an edit gets a mix of old and
+/// new frames, which is one hit playing from the wrong place -- never an
+/// out-of-range index, because playback clamps every position to the source.
+#[derive(Debug)]
+pub struct SliceTable {
+    /// Slices installed. `0` means the channel plays its region as before.
+    len: AtomicU32,
+    /// Whether a slice also transposes with the key. Off by default.
+    keytrack: AtomicU32,
+    starts: [AtomicU32; MAX_SLICES],
+}
+
+impl Default for SliceTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SliceTable {
+    pub fn new() -> Self {
+        Self {
+            len: AtomicU32::new(0),
+            keytrack: AtomicU32::new(0),
+            starts: std::array::from_fn(|_| AtomicU32::new(0)),
+        }
+    }
+
+    /// Install `starts` (ascending frame positions), keeping at most
+    /// [`MAX_SLICES`]. An empty table turns slice mode off.
+    pub fn set(&self, starts: &[u64], keytrack: bool) {
+        let len = starts.len().min(MAX_SLICES);
+        // Retract first: a shrinking table must never leave a reader pointing
+        // at a stale position past the new end.
+        self.len.store(0, Ordering::Release);
+        self.keytrack.store(u32::from(keytrack), Ordering::Relaxed);
+        for (slot, frame) in self.starts.iter().zip(starts.iter().take(len)) {
+            slot.store((*frame).min(u64::from(u32::MAX)) as u32, Ordering::Relaxed);
+        }
+        self.len.store(len as u32, Ordering::Release);
+    }
+
+    /// Turn slice mode off, leaving the region to play as it did.
+    pub fn clear(&self) {
+        self.len.store(0, Ordering::Release);
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        (self.len.load(Ordering::Acquire) as usize).min(MAX_SLICES)
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    #[inline]
+    pub fn keytrack(&self) -> bool {
+        self.keytrack.load(Ordering::Relaxed) != 0
+    }
+
+    #[inline]
+    fn start(&self, index: usize) -> u64 {
+        u64::from(self.starts[index].load(Ordering::Relaxed))
+    }
+
+    /// The installed positions, for a DTO or a save. **Non-RT** -- allocates.
+    pub fn frames(&self) -> Vec<u64> {
+        (0..self.len()).map(|index| self.start(index)).collect()
+    }
+}
+
 /// Live defaults for one sample channel.
 ///
 /// A note snapshots these atomics when it starts. Editing the channel therefore
@@ -38,6 +147,8 @@ pub struct SamplePlaybackParams {
     fades: AtomicU64,
     root_key: AtomicU32,
     root_fine_cents: AtomicF32,
+    /// The chop, when this channel has one. See [`SliceTable`].
+    pub slices: SliceTable,
 }
 
 #[derive(Clone, Copy)]
@@ -76,7 +187,13 @@ impl SamplePlaybackParams {
             fades: AtomicU64::new(pack_fades(fades.0, fades.1)),
             root_key: AtomicU32::new(u32::from(sane_root_key(root_key))),
             root_fine_cents: AtomicF32::new(sane_root_fine(root_fine_cents)),
+            slices: SliceTable::new(),
         }
+    }
+
+    /// Install a slice table, or clear it with an empty slice.
+    pub fn set_slices(&self, starts: &[u64], keytrack: bool) {
+        self.slices.set(starts, keytrack);
     }
 
     pub fn set_region(&self, start_frames: u64, end_frames: u64) {
@@ -291,15 +408,53 @@ impl OneShotNode {
         }
     }
 
+    /// The `[start, end)` a key plays, and whether the key transposes it.
+    ///
+    /// In slice mode the key picks a slice: `root + n` is slice `n`, running to
+    /// the next slice's frame (or the region's end, for the last one). A key
+    /// below the root or past the last slice is `None` -- silence, not the
+    /// whole file. Without a slice table this is the region, as it always was.
+    fn span_for(&self, key: u8, params: &SamplePlaybackSnapshot) -> Option<(u64, u64, bool)> {
+        let region_start = params.start_frames;
+        let region_end = self.playable_end(params.end_frames);
+        let count = self.params.slices.len();
+        if count == 0 {
+            return Some((region_start, region_end, true));
+        }
+        let offset = i32::from(key) - i32::from(params.root_key);
+        if offset < 0 || offset as usize >= count {
+            return None;
+        }
+        let index = offset as usize;
+        let start = self.params.slices.start(index).clamp(0, region_end);
+        let end = if index + 1 < count {
+            self.params.slices.start(index + 1).clamp(0, region_end)
+        } else {
+            region_end
+        };
+        if start >= end {
+            return None;
+        }
+        Some((start, end, self.params.slices.keytrack()))
+    }
+
     fn start(&mut self, key: u8, velocity: f32, sample_rate: f64, ramp: f32) {
         let params = self.params.snapshot();
-        let start = params.start_frames;
-        let end = self.playable_end(params.end_frames);
+        let Some((start, end, transposes)) = self.span_for(key, &params) else {
+            return;
+        };
         if start >= end || self.source.frames() == 0 {
             return;
         }
-        let cents = params.pitch_cents + (f32::from(key) - f32::from(params.root_key)) * 100.0
-            - params.root_fine_cents;
+        let interval = if transposes {
+            (f32::from(key) - f32::from(params.root_key)) * 100.0 - params.root_fine_cents
+        } else {
+            // A chopped break keeps its own pitch on every pad. The channel's
+            // own transpose still applies -- that is a deliberate setting, not
+            // a consequence of which key was pressed.
+            0.0
+        };
+        let cents = params.pitch_cents + interval;
         let step = playback_step(self.source.sample_rate(), sample_rate) * pitch_ratio(cents);
         if step <= 0.0 {
             return;
@@ -308,8 +463,20 @@ impl OneShotNode {
         // A fade is a length of *time*, so it is that many output frames --
         // which is `step` times as many source frames, because a note played an
         // octave up walks the file twice as fast.
-        let in_step = ramp.min(fade_rate(params.fades.0, sample_rate));
-        let out_frames = fade_output_frames(params.fades.1, sample_rate) * step;
+        let sliced = !self.params.slices.is_empty();
+        let (fade_in_ms, fade_out_ms) = if sliced {
+            // A slice is a cut, so it gets a declick at both ends even when the
+            // channel asked for no fades. A longer channel fade still wins:
+            // that is a musical choice about this sound.
+            (
+                params.fades.0.max(SLICE_DECLICK_MS),
+                params.fades.1.max(SLICE_DECLICK_MS),
+            )
+        } else {
+            params.fades
+        };
+        let in_step = ramp.min(fade_rate(fade_in_ms, sample_rate));
+        let out_frames = fade_output_frames(fade_out_ms, sample_rate) * step;
         let age = self.next_age;
         self.next_age = self.next_age.wrapping_add(1);
         let Some(slot) = self.voices.iter().position(|voice| !voice.active) else {
@@ -686,6 +853,194 @@ mod tests {
             after.iter().all(|s| *s > 0.0),
             "the pending note must have taken the faded slot"
         );
+    }
+
+    // ---------------------------------------------------------------- slices
+
+    /// Four 1000-frame blocks, each a different DC level, so which slice
+    /// played is readable straight off the bus.
+    fn stepped_source(levels: &[f32], block: usize) -> Arc<AudioSource> {
+        let mut data = Vec::with_capacity(levels.len() * block * CHANNELS);
+        for level in levels {
+            for _ in 0..block {
+                data.push(*level);
+                data.push(*level);
+            }
+        }
+        Arc::new(AudioSource::from_stereo(
+            1,
+            std::path::Path::new("break.wav"),
+            48_000.0,
+            data,
+        ))
+    }
+
+    /// The level a voice settled on, past the declick ramp.
+    fn settled(out: &[f32]) -> f32 {
+        let tail = &out[out.len() / 2..];
+        tail.iter().fold(0.0_f32, |acc, s| acc.max(s.abs()))
+    }
+
+    #[test]
+    fn each_key_above_the_root_plays_its_own_slice() {
+        let levels = [0.2_f32, 0.4, 0.6, 0.8];
+        let block = 4_800;
+        let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+        params.set_slices(&[0, 4_800, 9_600, 14_400], false);
+        let mut node = OneShotNode::with_params(stepped_source(&levels, block), params);
+
+        for (index, level) in levels.iter().enumerate() {
+            let key = ONESHOT_ROOT_KEY + index as u8;
+            let out = run(&mut node, 2_048, &[NoteEvent::note_on(0, key, 1.0)]);
+            let heard = settled(&out);
+            assert!(
+                (heard - level).abs() < 0.02,
+                "key {key} should play slice {index} at {level}, heard {heard}"
+            );
+            let _ = run(&mut node, 512, &[NoteEvent::note_off(0, key)]);
+            let _ = run(&mut node, 512, &[]);
+        }
+    }
+
+    #[test]
+    fn a_slice_stops_at_the_next_slices_frame_instead_of_running_on() {
+        let levels = [0.25_f32, 0.9];
+        let block = 2_400; // 50 ms
+        let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+        params.set_slices(&[0, 2_400], false);
+        let mut node = OneShotNode::with_params(stepped_source(&levels, block), params);
+        // Long enough to have reached the second block if the slice end were
+        // not honoured.
+        let out = run(
+            &mut node,
+            4_800,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY, 1.0)],
+        );
+        assert!(
+            out.iter().all(|sample| sample.abs() < 0.3),
+            "slice 0 leaked into slice 1's louder block"
+        );
+        assert_eq!(
+            out[4_000], 0.0,
+            "the voice must be finished once its slice ends"
+        );
+    }
+
+    #[test]
+    fn a_slice_is_declicked_at_both_ends_even_with_no_channel_fades() {
+        // One block of full-scale DC: every boundary is a step of 1.0 unless
+        // the declick ramps it.
+        let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+        params.set_slices(&[0, 4_800], false);
+        let mut node = OneShotNode::with_params(stepped_source(&[1.0, 1.0], 4_800), params);
+        let out = run(
+            &mut node,
+            6_000,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY, 1.0)],
+        );
+        // 2 ms at 48 kHz is 96 frames, so no adjacent pair may step by more
+        // than roughly 1/96 -- a raw cut would be a step of 1.0.
+        let limit = 1.0 / (SLICE_DECLICK_MS / 1_000.0 * 48_000.0) * 1.6;
+        let mut ends_quiet = false;
+        for (index, pair) in out.windows(2).enumerate() {
+            let jump = (pair[1] - pair[0]).abs();
+            assert!(jump <= limit, "frame {index}: step of {jump} is a click");
+            if index > 4_600 && pair[1].abs() < 0.05 {
+                ends_quiet = true;
+            }
+        }
+        assert!(ends_quiet, "the slice must fade out into its own end");
+        assert!(out[0].abs() < 0.05, "and fade in from silence");
+    }
+
+    #[test]
+    fn a_key_outside_the_slice_map_is_silent_rather_than_the_whole_file() {
+        let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+        params.set_slices(&[0, 4_800], false);
+        let mut node = OneShotNode::with_params(stepped_source(&[0.5, 0.5], 4_800), params);
+        for key in [ONESHOT_ROOT_KEY - 1, ONESHOT_ROOT_KEY + 2, 127] {
+            let out = run(&mut node, 512, &[NoteEvent::note_on(0, key, 1.0)]);
+            assert!(
+                out.iter().all(|sample| *sample == 0.0),
+                "key {key} maps to no slice and must be silent"
+            );
+        }
+    }
+
+    #[test]
+    fn slices_keep_their_own_pitch_unless_keytrack_is_on() {
+        let recorded = concert_hz(60);
+        let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+        params.set_slices(&[0, 24_000], false);
+        let mut node = OneShotNode::with_params(sine_source(recorded, 48_000), Arc::clone(&params));
+        // Slice 1 -- one key above the root, which would be +100 cents if the
+        // chop transposed.
+        let out = run(
+            &mut node,
+            12_000,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY + 1, 1.0)],
+        );
+        let hz = estimate_hz(&out[400..], 48_000.0);
+        assert!(
+            (hz - recorded).abs() < 5.0,
+            "a slice must play at recorded pitch, got {hz:.2} for {recorded:.2}"
+        );
+
+        let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+        params.set_slices(&[0, 24_000], true);
+        let mut node = OneShotNode::with_params(sine_source(recorded, 48_000), params);
+        let out = run(
+            &mut node,
+            12_000,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY + 1, 1.0)],
+        );
+        let hz = estimate_hz(&out[400..], 48_000.0);
+        let expected = concert_hz(61);
+        assert!(
+            (hz - expected).abs() < 5.0,
+            "with keytrack on, slice 1 plays a semitone up: expected {expected:.2}, got {hz:.2}"
+        );
+    }
+
+    #[test]
+    fn clearing_the_table_gives_the_region_back() {
+        let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
+        params.set_slices(&[0, 4_800], false);
+        let mut node = OneShotNode::with_params(stepped_source(&[0.5, 0.9], 4_800), params.clone());
+        let sliced = run(
+            &mut node,
+            2_048,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY + 5, 1.0)],
+        );
+        assert!(sliced.iter().all(|sample| *sample == 0.0));
+
+        params.slices.clear();
+        let whole = run(
+            &mut node,
+            2_048,
+            &[NoteEvent::note_on(0, ONESHOT_ROOT_KEY + 5, 1.0)],
+        );
+        assert!(
+            whole.iter().any(|sample| sample.abs() > 0.1),
+            "with no table the key transposes the whole region again"
+        );
+    }
+
+    #[test]
+    fn the_table_is_capped_and_reports_what_it_kept() {
+        let table = SliceTable::new();
+        let many: Vec<u64> = (0..MAX_SLICES as u64 + 40)
+            .map(|index| index * 100)
+            .collect();
+        table.set(&many, false);
+        assert_eq!(table.len(), MAX_SLICES);
+        assert_eq!(table.frames().len(), MAX_SLICES);
+        assert_eq!(
+            table.frames()[MAX_SLICES - 1],
+            (MAX_SLICES as u64 - 1) * 100
+        );
+        table.set(&[], false);
+        assert!(table.is_empty());
     }
 
     fn concert_hz(note: u8) -> f64 {

@@ -12,6 +12,7 @@
  * | steps, notes, every note operation | mixer: faders, pan, mute, solo, sends |
  * | clips: paint, move, resize, delete | insert chains and their parameters |
  * | lane mute, solo and rename | patterns and lanes being created or destroyed |
+ * | destructive sample edits (see below) | render to sample: it adds a channel |
  *
  * The uncovered structural operations do not merely go unrecorded -- they
  * **clear** the stack, because an entry that names a pattern id which no longer
@@ -20,7 +21,20 @@
  */
 
 import type { Backend } from '../api/backend';
-import type { ClipDto, PatternDto, PlaylistDto, PlaylistTrackDto } from '../api/types';
+import type {
+  ClipDto,
+  MixerState,
+  PatternDto,
+  PlaylistDto,
+  PlaylistTrackDto,
+  SampleEditDto,
+} from '../api/types';
+
+/**
+ * The shell's mixer funnel: run a command that answers with the whole mixer and
+ * adopt what came back. `AppState.mixerCommand` is the only implementation.
+ */
+export type MixerRunner = (run: (backend: Backend) => Promise<MixerState>) => Promise<void>;
 
 /** How many gestures the stack remembers. */
 export const UNDO_DEPTH = 50;
@@ -136,6 +150,50 @@ export function patternEntry(
     redo: async () => {
       await backend.setPattern(after);
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Destructive sample edits
+// ---------------------------------------------------------------------------
+
+/**
+ * An entry that restores the take a destructive edit replaced.
+ *
+ * The one place the table at the top of this file gains a row. Reverse,
+ * Normalize, Trim and Gain are **copy on write** in the engine: they write a
+ * new file, load it as a new source and repoint the channel at it, leaving the
+ * original loaded. So the inverse is not "decode the old file again", it is one
+ * `setTrackAudioSource` back to the pointer and region the channel had — the
+ * same shape as every other entry here, and cheap enough that Ctrl+Z after a
+ * ten-minute take is instant.
+ *
+ * The clip shift is negated on the way back: a Trim moved this lane's clips
+ * `-start` frames into the shortened file, and undoing it moves them back.
+ *
+ * `run` is the shell's `mixerCommand` funnel rather than the raw backend: the
+ * other entries here replay *sequencer* commands and `replay` refetches the
+ * pattern for them, but nothing refetches the mixer, so an entry that swapped a
+ * channel's file behind the UI's back would undo the engine and leave the
+ * window drawing the edited waveform.
+ */
+export function sampleEditEntry(run: MixerRunner, edit: SampleEditDto): UndoEntry {
+  const repoint = (sourceId: number, start: number, end: number, shift: number) => () =>
+    run((backend) => backend.setTrackAudioSource(edit.track, sourceId, start, end, shift));
+  return {
+    label: edit.op,
+    undo: repoint(
+      edit.previousSourceId,
+      edit.previousStartFrames,
+      edit.previousEndFrames,
+      -edit.clipOffsetShiftFrames,
+    ),
+    redo: repoint(
+      edit.source.id,
+      edit.startFrames,
+      edit.endFrames,
+      edit.clipOffsetShiftFrames,
+    ),
   };
 }
 

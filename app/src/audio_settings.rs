@@ -1,9 +1,10 @@
-//! App-global audio output: WASAPI vs ASIO, and the buffer we request.
+//! App-global audio devices: WASAPI vs ASIO, the buffer we request, and which
+//! input the recorder captures from.
 //!
 //! Persists in `audio.json` next to `midi.json` / `preview.json`. Missing file
-//! = WASAPI, device-default buffer. That is the previous behaviour, so an
-//! upgrade does not change what people hear — only the status bar starts
-//! telling the truth about the callback that was already running.
+//! = WASAPI, device-default buffer, system-default input. That is the previous
+//! behaviour, so an upgrade does not change what people hear — only the status
+//! bar starts telling the truth about the callback that was already running.
 
 use std::fs;
 use std::io;
@@ -41,6 +42,15 @@ pub struct AudioSettings {
     /// Frames to request. `0` = host default.
     #[serde(default)]
     pub buffer_frames: u32,
+    /// Capture device the recorder arms. `None` follows the system default.
+    ///
+    /// Stored by the host's stable device id, not by name: two identical
+    /// interfaces have the same name, and a name is what changes when the OS
+    /// relabels a port. A remembered id that is no longer present falls back to
+    /// the system default rather than refusing to arm — see
+    /// [`crate::commands::set_input_device`].
+    #[serde(default)]
+    pub input_device_id: Option<String>,
 }
 
 fn default_version() -> u32 {
@@ -53,6 +63,7 @@ impl Default for AudioSettings {
             version: AUDIO_SETTINGS_VERSION,
             prefer_asio: false,
             buffer_frames: 0,
+            input_device_id: None,
         }
     }
 }
@@ -158,7 +169,24 @@ mod tests {
         let settings = load_settings(Path::new("no-such-audio-9f2a.json"));
         assert!(!settings.prefer_asio);
         assert_eq!(settings.buffer_frames, 0);
+        assert_eq!(settings.input_device_id, None);
         assert_eq!(settings.to_request(), OutputRequest::default());
+    }
+
+    #[test]
+    fn an_audio_json_written_before_input_selection_still_loads() {
+        // The upgrade path: the field is absent, and the answer must be the
+        // system default rather than a parse failure that resets the buffer.
+        let dir = std::env::temp_dir().join(format!("mydaw-audio-legacy-{}", std::process::id()));
+        let path = dir.join("audio.json");
+        fs::create_dir_all(&dir).expect("scratch");
+        fs::write(&path, br#"{"version":1,"preferAsio":true,"bufferFrames":256}"#).expect("write");
+
+        let loaded = load_settings(&path);
+        assert!(loaded.prefer_asio);
+        assert_eq!(loaded.buffer_frames, 256);
+        assert_eq!(loaded.input_device_id, None);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -176,6 +204,7 @@ mod tests {
         let path = dir.join("audio.json");
         let mut settings = AudioSettings {
             prefer_asio: true,
+            input_device_id: Some("wasapi:{0.0.1.0000}".to_owned()),
             ..AudioSettings::default()
         };
         settings.set_buffer_frames(512);
@@ -183,6 +212,7 @@ mod tests {
         let loaded = load_settings(&path);
         assert!(loaded.prefer_asio);
         assert_eq!(loaded.buffer_frames, 512);
+        assert_eq!(loaded.input_device_id.as_deref(), Some("wasapi:{0.0.1.0000}"));
         let _ = fs::remove_dir_all(&dir);
     }
 }

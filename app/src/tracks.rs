@@ -52,7 +52,10 @@ use mydaw_plugin_sampler::{file_path_of, SamplerRegistry};
 use mydaw_plugin_sequencer::SamplePlaybackParams;
 use mydaw_plugin_test_tone::TestToneFactory;
 use mydaw_rt_core::basedrop::Handle;
-use mydaw_rt_core::{BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, MAX_TRACKS};
+use mydaw_rt_core::{
+    BusSpec, GraphSpec, MixerParams, RtNode, RtNodeFactory, SendSpec, SidechainBus, StripId,
+    MAX_TRACKS,
+};
 use parking_lot::Mutex;
 
 /// The longest fade a channel may have, in milliseconds.
@@ -95,6 +98,36 @@ pub enum MixerError {
     Audio(#[from] AudioIoError),
 }
 
+impl MixerError {
+    /// Whether the **edit landed** and only publishing it to the audio thread
+    /// was refused, because no stream is open.
+    ///
+    /// A mixer edit changes the project first and installs a new graph second.
+    /// With no device the second step fails, but the project has already moved
+    /// -- which is why `add_track` returns the index anyway and `publish_song`
+    /// treats the same condition as success. A caller that needs the project to
+    /// be right (a sample edit, an offline render) checks this instead of
+    /// undoing work that did happen.
+    pub fn is_only_no_device(&self) -> bool {
+        matches!(
+            self,
+            Self::Audio(AudioIoError::NotRunning)
+                | Self::Source(SourceError::Audio(AudioIoError::NotRunning))
+        )
+    }
+}
+
+/// A graph built for an offline render, plus the handles that keep it alive.
+///
+/// See [`TrackHost::build_offline_spec`]. The handles are inert — nothing ever
+/// installs through them — but they own the non-RT end of each track's source
+/// queue, and a dropped sender abandons that queue.
+pub struct OfflineGraph {
+    pub spec: GraphSpec,
+    /// Hold these for as long as the graph is being rendered.
+    pub handles: Vec<Arc<SourceHandle>>,
+}
+
 /// The shell's mixer. `Send + Sync`, so every Tauri command reaches it directly.
 pub struct TrackHost {
     tone: Arc<TestToneFactory>,
@@ -111,6 +144,11 @@ pub struct TrackHost {
     /// What the audio thread reads. Shared with every graph compiled from this
     /// host, so a rebuild never resets a fader.
     params: Arc<MixerParams>,
+    /// The key bus: every strip's post-insert, pre-fader block, for the
+    /// compressors that key off one. Shared with every graph and with every
+    /// compressor node for the same reason `params` is -- a rebuild must not
+    /// break a subscription. See [`SidechainBus`].
+    sidechain: Arc<SidechainBus>,
     project: Mutex<Project>,
     /// One head-of-chain handle per track *slot*, created once and reused for
     /// the process lifetime -- a handle outlives the streams it is attached to
@@ -168,6 +206,11 @@ impl TrackHost {
             sampler,
             effects,
             params,
+            // Sized once, to the block size the audio config caps at, because
+            // the bus outlives the streams that come and go underneath it. A
+            // device asking for a longer block gets a truncated key rather than
+            // an allocation on the audio thread.
+            sidechain: Arc::new(SidechainBus::new(mydaw_rt_core::DEFAULT_MAX_BLOCK)),
             handles: (0..MAX_TRACKS)
                 .map(|index| {
                     let source = project
@@ -191,6 +234,11 @@ impl TrackHost {
     /// The parameter block the audio thread reads.
     pub fn params(&self) -> &Arc<MixerParams> {
         &self.params
+    }
+
+    /// The key bus every compressor with a sidechain source reads.
+    pub fn sidechain(&self) -> &Arc<SidechainBus> {
+        &self.sidechain
     }
 
     /// The internal effect catalogue.
@@ -561,6 +609,44 @@ impl TrackHost {
         Ok(())
     }
 
+    /// Point one insert's detector at another strip, or unroute it with `None`.
+    ///
+    /// A no-op on an effect that has no key input, in the same spirit as
+    /// [`set_insert_listen`](Self::set_insert_listen) on a non-EQ: the command
+    /// surface addresses inserts, not effect types, and refusing here would make
+    /// a UI check the type before it could clear a route.
+    ///
+    /// Takes effect on the audio thread's **next block plus one** -- see
+    /// [`SidechainBus`] -- with no graph rebuild, so a user can audition
+    /// sources by clicking down a list while the transport runs.
+    ///
+    /// # Errors
+    /// [`InsertError::NoSuchTrack`] / [`InsertError::NoSuchBus`] /
+    /// [`InsertError::NoSuchInsert`] for a chain or a slot that is not there,
+    /// and [`InsertError::NoSuchKeySource`] for a source strip that is not.
+    pub fn set_insert_sidechain(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        source: Option<StripId>,
+    ) -> Result<(), InsertError> {
+        let project = self.project.lock();
+        // Validated against the *live* project, not against MAX_TRACKS: a
+        // selector pointing at a strip that does not exist would be a route the
+        // mixer cannot draw and the engine cannot feed.
+        if let Some(strip) = source {
+            let exists = match strip {
+                StripId::Track(track) => track < project.tracks.len(),
+                StripId::Bus(bus) => bus < project.buses.len(),
+            };
+            if !exists {
+                return Err(InsertError::NoSuchKeySource(strip));
+            }
+        }
+        Self::insert_at(&project, target, index)?.set_sidechain_source(source);
+        Ok(())
+    }
+
     fn insert_at(
         project: &Project,
         target: InsertTarget,
@@ -728,6 +814,43 @@ impl TrackHost {
         })
     }
 
+    /// Install (or clear) a channel's chop.
+    ///
+    /// The frames are sanitised by [`check_slices`](crate::project::check_slices)
+    /// first: sorted, deduped, capped at the engine's table size and clamped to
+    /// `limit` (the file's frame count). Turning the mode off keeps the frames
+    /// in the project so that switching back does not lose the chop, but hands
+    /// the audio thread an empty table -- the region plays again immediately,
+    /// with no rebuild and no dropped voice.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`].
+    pub fn set_slices(
+        &self,
+        track: usize,
+        mut state: crate::project::SliceStateDto,
+        limit: u64,
+    ) -> Result<crate::project::SliceStateDto, TrackError> {
+        state.frames = crate::project::check_slices(&state.frames, limit);
+        state.sensitivity = if state.sensitivity.is_finite() {
+            state.sensitivity.clamp(0.0, 1.0)
+        } else {
+            crate::project::DEFAULT_SLICE_SENSITIVITY
+        };
+        state.division = mydaw_slice_analysis::nearest_division(state.division);
+        if state.mode != crate::project::SliceMode::Off && state.frames.is_empty() {
+            // A mode with nothing in it is not a mode: an empty table plays the
+            // region, and the window would be drawing a chop that is not there.
+            state.mode = crate::project::SliceMode::Off;
+        }
+        let stored = state.clone();
+        self.edit(track, move |def| {
+            def.sample_play.set_slices(state.playable(), state.keytrack);
+            def.slices = state;
+        })?;
+        Ok(stored)
+    }
+
     /// Set the master fader, in dB.
     ///
     /// # Errors
@@ -832,9 +955,17 @@ impl TrackHost {
             }
             Source::Sampler(reference) => {
                 let type_id = reference.wire_id();
-                Ok(self
-                    .sampler
-                    .create(&type_id, sample_rate, max_block)
+                // The track's own block, so a rebuilt graph picks the
+                // instrument up where the last one left it -- and so the knobs
+                // the UI is drawing are the knobs the voices are reading.
+                let built = match params {
+                    Some(block) => {
+                        self.sampler
+                            .create_with_params(&type_id, sample_rate, max_block, block)
+                    }
+                    None => self.sampler.create(&type_id, sample_rate, max_block),
+                };
+                Ok(built
                     .unwrap_or_else(|| {
                         log::warn!(
                             "the sampled instrument '{}' is not installed; \
@@ -956,6 +1087,64 @@ impl TrackHost {
         self.record_source(track, source, params)
     }
 
+    /// Point a **sample** channel at a different loaded file.
+    ///
+    /// Narrower than [`set_source`](Self::set_source) on purpose. That call
+    /// swaps an instrument for another instrument and needs the open stream's
+    /// rate and block size to build one, so it refuses before it changes
+    /// anything when no device is open. Repointing a one-shot or clip channel
+    /// needs neither: the node reads a decoded buffer, not a device. Making a
+    /// destructive sample edit go through `set_source` would mean the edit
+    /// wrote a file and then silently did not apply on a machine with no sound
+    /// card -- exactly the half-done state this codebase refuses elsewhere.
+    ///
+    /// So the project moves first and the node follows if there is somewhere to
+    /// send it. `Err(AudioIoError::NotRunning)` therefore means "recorded, not
+    /// yet audible", which is the contract `publish_song` already has.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`], [`TrackError::NotASampleChannel`], or
+    /// [`AudioIoError::NotRunning`] after the project was already updated.
+    pub fn repoint_sample_source(
+        &self,
+        track: usize,
+        source_id: u64,
+        audio: &AudioIoService,
+    ) -> Result<(), MixerError> {
+        let source = {
+            let mut project = self.project.lock();
+            let def = project
+                .tracks
+                .get_mut(track)
+                .ok_or(TrackError::NoSuchTrack(track))?;
+            let source = match def.source {
+                Source::AudioClip { .. } => Source::AudioClip { source_id },
+                Source::OneShot { .. } => Source::OneShot { source_id },
+                _ => return Err(TrackError::NotASampleChannel(track).into()),
+            };
+            def.source = source.clone();
+            source
+        };
+        let sample_play = {
+            let project = self.project.lock();
+            Arc::clone(&project.tracks[track].sample_play)
+        };
+        let node: Box<dyn RtNode> = match &source {
+            Source::AudioClip { source_id } => self.audio_clips.open_for_source(
+                *source_id,
+                sample_play,
+                audio.gc_handle(),
+            ),
+            _ => self.audio_clips.oneshot_node(source_id, sample_play),
+        };
+        let handle = self
+            .handles
+            .get(track)
+            .ok_or(TrackError::NoSuchTrack(track))?;
+        handle.install(node, source)?;
+        Ok(())
+    }
+
     fn record_source(
         &self,
         track: usize,
@@ -1064,18 +1253,70 @@ impl TrackHost {
     /// render the graph the shell actually runs rather than a copy of it that
     /// can drift.
     pub fn build_spec(&self, limits: &mydaw_rt_core::GraphLimits, gc: Handle) -> GraphSpec {
+        self.assemble(limits, gc, None)
+    }
+
+    /// The same graph, wired to **nothing the live stream owns**.
+    ///
+    /// [`build_spec`](Self::build_spec) hands each track's head to the session's
+    /// own [`SourceHandle`], which is how a later instrument swap reaches the
+    /// audio thread. Building it a second time for an offline render would
+    /// therefore repoint every one of those handles at a graph nobody is
+    /// listening to: the stream would keep playing, and the next knob or source
+    /// change would land in a queue with no consumer.
+    ///
+    /// So an offline render gets its own handles. They are returned in
+    /// [`OfflineGraph::handles`] and must outlive the render — dropping a
+    /// `SourceHandle` abandons its queue, and an abandoned queue is a slot that
+    /// stops accepting the node it already has.
+    ///
+    /// What an offline graph does **not** carry, deliberately:
+    ///
+    /// - the **file-preview** node, which is the browser's audition player. A
+    ///   render is of the project, not of whatever the user last clicked in the
+    ///   file list.
+    /// - a **hosted CLAP or VST3** plugin. `build_spec` cannot carry one either
+    ///   (only the main thread may instantiate one, and it re-attaches them
+    ///   after the graph is installed), so an offline render is of the built-in
+    ///   chain. The caller says so rather than pretending otherwise.
+    pub fn build_offline_spec(
+        &self,
+        limits: &mydaw_rt_core::GraphLimits,
+        gc: Handle,
+    ) -> OfflineGraph {
+        let mut handles = Vec::new();
+        let spec = self.assemble(limits, gc, Some(&mut handles));
+        OfflineGraph { spec, handles }
+    }
+
+    /// The body of both. `offline` present means "detach from the session".
+    fn assemble(
+        &self,
+        limits: &mydaw_rt_core::GraphLimits,
+        gc: Handle,
+        mut offline: Option<&mut Vec<Arc<SourceHandle>>>,
+    ) -> GraphSpec {
+        let live = offline.is_none();
         let project = self.project.lock();
         project.publish(&self.params);
 
-        self.audio_clips.begin_rebuild();
+        if live {
+            self.audio_clips.begin_rebuild();
+        }
 
         let mut spec = GraphSpec::new()
             .with_params(Arc::clone(&self.params))
+            .with_sidechain(Arc::clone(&self.sidechain))
             .with_limits(*limits);
 
         for (index, def) in project.tracks.iter().enumerate() {
             let node = match &def.source {
-                Source::AudioClip { source_id } => self.audio_clips.open_for_source(
+                Source::AudioClip { source_id } if live => self.audio_clips.open_for_source(
+                    *source_id,
+                    Arc::clone(&def.sample_play),
+                    gc.clone(),
+                ),
+                Source::AudioClip { source_id } => self.audio_clips.detached_for_source(
                     *source_id,
                     Arc::clone(&def.sample_play),
                     gc.clone(),
@@ -1102,9 +1343,15 @@ impl TrackHost {
                     }
                 },
             };
-            let gate = Arc::clone(&self.gates[index]);
-            let slot =
-                self.handles[index].open(node, def.source.clone(), gc.clone(), Arc::clone(&gate));
+            let (handle, gate) = match offline.as_deref_mut() {
+                None => (Arc::clone(&self.handles[index]), Arc::clone(&self.gates[index])),
+                Some(held) => {
+                    let handle = Arc::new(SourceHandle::new(def.source.clone()));
+                    held.push(Arc::clone(&handle));
+                    (handle, Arc::new(AtomicBool::new(false)))
+                }
+            };
+            let slot = handle.open(node, def.source.clone(), gc.clone(), Arc::clone(&gate));
             spec.push_track(track_chain(
                 slot,
                 self.build_chain(&def.inserts, limits),
@@ -1122,10 +1369,12 @@ impl TrackHost {
             spec.push_send(SendSpec::new(send.source, send.dest));
         }
 
-        spec.push_master_insert(crate::file_preview::file_preview_node(
-            &self.file_preview,
-            gc.clone(),
-        ));
+        if live {
+            spec.push_master_insert(crate::file_preview::file_preview_node(
+                &self.file_preview,
+                gc.clone(),
+            ));
+        }
 
         // The master's *internal* chain runs first and the one hosted insert
         // last. That order keeps the hosted slot a single unconditional node at
@@ -1136,7 +1385,9 @@ impl TrackHost {
         for node in self.build_chain(&project.master_inserts, limits) {
             spec.push_master_insert(node);
         }
-        spec.push_master_insert(crate::insert::insert_slot(&self.master_insert, gc));
+        if live {
+            spec.push_master_insert(crate::insert::insert_slot(&self.master_insert, gc));
+        }
         spec
     }
 
@@ -1163,6 +1414,8 @@ impl TrackHost {
                     limits.max_block,
                     Arc::clone(&def.params),
                     Arc::clone(&def.listen),
+                    Arc::clone(&def.sidechain),
+                    Some(Arc::clone(&self.sidechain)),
                 );
                 if node.is_none() {
                     log::warn!(
@@ -1220,6 +1473,63 @@ mod tests {
             Arc::new(SamplerRegistry::detached()),
             Arc::new(EffectRegistry::new()),
         )
+    }
+
+    #[test]
+    fn a_key_can_be_pointed_at_any_live_strip_and_at_nothing_else() {
+        let host = host();
+        {
+            let registry = EffectRegistry::new();
+            let mut project = host.project.lock();
+            project
+                .add_insert(
+                    InsertTarget::Track(1),
+                    "effects.compressor",
+                    None,
+                    &registry,
+                )
+                .expect("adds");
+        }
+        // Kick is track 0 in the starter project; the compressor is on track 1.
+        assert!(host
+            .set_insert_sidechain(InsertTarget::Track(1), 0, Some(StripId::Track(0)))
+            .is_ok());
+        assert_eq!(
+            host.project.lock().tracks[1].inserts[0].sidechain_source(),
+            Some(StripId::Track(0))
+        );
+
+        // A strip that is not there is named rather than accepted, and the
+        // route that *is* there is left alone.
+        assert!(matches!(
+            host.set_insert_sidechain(InsertTarget::Track(1), 0, Some(StripId::Track(99))),
+            Err(InsertError::NoSuchKeySource(StripId::Track(99)))
+        ));
+        assert!(matches!(
+            host.set_insert_sidechain(InsertTarget::Track(1), 0, Some(StripId::Bus(0))),
+            Err(InsertError::NoSuchKeySource(StripId::Bus(0)))
+        ));
+        assert_eq!(
+            host.project.lock().tracks[1].inserts[0].sidechain_source(),
+            Some(StripId::Track(0)),
+            "a refused edit must not clear the route it refused to replace"
+        );
+
+        // And `None` unroutes.
+        host.set_insert_sidechain(InsertTarget::Track(1), 0, None)
+            .expect("unroutes");
+        assert_eq!(
+            host.project.lock().tracks[1].inserts[0].sidechain_source(),
+            None
+        );
+
+        // A chain or a slot that is not there is an error, not a panic.
+        assert!(host
+            .set_insert_sidechain(InsertTarget::Track(1), 7, None)
+            .is_err());
+        assert!(host
+            .set_insert_sidechain(InsertTarget::Bus(0), 0, None)
+            .is_err());
     }
 
     #[test]

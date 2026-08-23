@@ -102,6 +102,12 @@ pub struct TrackDef {
     pub root_mode: RootMode,
     /// Last successful detection, when the user has run Find pitch.
     pub detected_pitch: Option<RootPitchDto>,
+    /// The channel's chop: slice frames plus how they were asked for.
+    ///
+    /// The project-file source of truth, mirrored into
+    /// [`sample_play`](Self::sample_play)'s RT table the same way the region
+    /// and the root are.
+    pub slices: SliceStateDto,
     /// Live one-shot defaults shared with the note-driven player.
     ///
     /// The scalar fields above remain the project-file source of truth. This
@@ -156,6 +162,7 @@ impl PartialEq for TrackDef {
             && self.root_fine_cents == other.root_fine_cents
             && self.root_mode == other.root_mode
             && self.detected_pitch == other.detected_pitch
+            && self.slices == other.slices
             && self.inserts == other.inserts
             && params(self) == params(other)
     }
@@ -167,7 +174,19 @@ impl TrackDef {
     /// Built here rather than where the graph is, so a track has its knobs from
     /// the moment it exists -- a project loaded with no audio device still has
     /// somewhere to put the values its file carries.
+    ///
+    /// A sampled instrument's block starts at *its* defaults rather than at the
+    /// sampler's: the release a piano damps over and the mono glide that makes
+    /// an 808 an 808 are properties of the content, and they are read from the
+    /// manifest that shipped with it. A project file's saved values are applied
+    /// on top of this, so a user's edits still win.
     pub fn params_for(source: &Source) -> Option<Arc<ParamBlock>> {
+        if let Some(reference) = source.sampler_ref() {
+            let block = ParamBlock::new(mydaw_plugin_sampler::PARAMS);
+            let defaults = mydaw_plugin_sampler::instrument_defaults(&reference.wire_id());
+            block.apply(defaults.iter().map(|(id, value)| (id.as_str(), *value)));
+            return Some(Arc::new(block));
+        }
         let type_id = source.instrument_type_id()?;
         let defs = mydaw_plugin_instruments::param_defs(type_id);
         if defs.is_empty() {
@@ -196,6 +215,7 @@ impl TrackDef {
             root_fine_cents: 0.0,
             root_mode: RootMode::Default,
             detected_pitch: None,
+            slices: SliceStateDto::default(),
             sample_play: Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0))),
             inserts: Vec::new(),
         }
@@ -207,12 +227,18 @@ impl TrackDef {
     /// The old block goes with the old instrument: a filter cutoff is a
     /// property of the synth that has a filter, and carrying one across a
     /// change of instrument would be applying a saw's settings to a kick.
+    ///
+    /// The chop goes with it for the same reason, and more bluntly: a slice is
+    /// a frame position *in one file*, and keeping it across a replace would
+    /// point the pads at arbitrary places in a sample nobody sliced.
     pub fn set_source(&mut self, source: Source) {
         if self.source == source {
             return;
         }
         self.source_params = Self::params_for(&source);
         self.source = source;
+        self.slices = SliceStateDto::default();
+        self.sample_play.set_slices(&[], false);
     }
 
     /// The linear multiplier this track's fader asks for.
@@ -366,6 +392,113 @@ pub enum PitchSourceDto {
     Metadata,
     Filename,
     Analysis,
+}
+
+// ------------------------------------------------------------------- slicing
+
+/// How a sample channel's slice table was made.
+///
+/// `Off` is the channel as it has always been: one region, played from every
+/// key. The other two are the chop, and they are remembered separately from
+/// the frames so that reopening the window puts the slider and the division
+/// picker back where the user left them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SliceMode {
+    #[default]
+    Off,
+    Transient,
+    Grid,
+}
+
+/// A channel's chop: where the slices are and how they were asked for.
+///
+/// The frames are absolute positions in the file, ascending, and each one is
+/// the *start* of a slice -- the last slice runs to the region's end. The
+/// engine's fixed table is [`mydaw_plugin_sequencer::MAX_SLICES`] long, and
+/// [`check_slices`] is what enforces that before anything reaches the audio
+/// thread.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SliceStateDto {
+    pub mode: SliceMode,
+    /// Slice starts, in the file's own frames. Empty when `mode` is `off`.
+    pub frames: Vec<u64>,
+    /// The transient slider's position, `0.0..=1.0`. Remembered in every mode.
+    pub sensitivity: f32,
+    /// The grid picker: 4, 8 or 16 slices to the bar.
+    pub division: u32,
+    /// Whether a slice also transposes with the key it was played from.
+    pub keytrack: bool,
+}
+
+/// The transient slider's position when a channel has never been sliced.
+pub const DEFAULT_SLICE_SENSITIVITY: f32 = 0.5;
+/// The grid picker's position when a channel has never been sliced.
+pub const DEFAULT_SLICE_DIVISION: u32 = 16;
+
+impl Default for SliceStateDto {
+    fn default() -> Self {
+        Self {
+            mode: SliceMode::Off,
+            frames: Vec::new(),
+            sensitivity: DEFAULT_SLICE_SENSITIVITY,
+            division: DEFAULT_SLICE_DIVISION,
+            keytrack: false,
+        }
+    }
+}
+
+impl SliceStateDto {
+    /// Whether this channel is playing slices right now.
+    pub fn is_sliced(&self) -> bool {
+        self.mode != SliceMode::Off && !self.frames.is_empty()
+    }
+
+    /// The frames the engine should be told about: none unless sliced.
+    pub fn playable(&self) -> &[u64] {
+        if self.is_sliced() {
+            &self.frames
+        } else {
+            &[]
+        }
+    }
+}
+
+/// Sort, dedupe, clamp and cap a proposed slice table.
+///
+/// Rejects nothing: every input here is reachable from a drag on a waveform,
+/// and refusing a marker the user just dropped one frame from its neighbour
+/// would be a window that eats gestures. Out-of-order markers are sorted (a
+/// drag past a neighbour is a reorder, not an error), coincident ones are
+/// merged, and anything past [`mydaw_plugin_sequencer::MAX_SLICES`] is dropped
+/// -- the caller reports the count it got back.
+pub fn check_slices(frames: &[u64], limit: u64) -> Vec<u64> {
+    let mut clean: Vec<u64> = frames
+        .iter()
+        .copied()
+        .filter(|frame| *frame <= limit)
+        .collect();
+    clean.sort_unstable();
+    clean.dedup();
+    clean.truncate(mydaw_plugin_sequencer::MAX_SLICES);
+    clean
+}
+
+/// What one slicing run found. See `AppState::analyze_track_slices`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SliceAnalysisDto {
+    pub frames: Vec<u64>,
+    pub mode: SliceMode,
+    /// Bars the range was taken to be. Grid mode only; `0` for transients.
+    pub bars: u32,
+    /// Whether the engine's table could not hold everything that was found.
+    pub truncated: bool,
+    /// The range that was analysed, so the window can draw without asking
+    /// again what the region currently is.
+    pub range_start: u64,
+    pub range_end: u64,
 }
 
 /// Why analysis could not name a root.
@@ -839,6 +972,7 @@ impl Project {
                 }
             }
         }
+        self.retarget_sidechains(StripId::Bus(bus));
         Ok(self.buses.remove(bus))
     }
 
@@ -1034,6 +1168,70 @@ impl Project {
         }
     }
 
+    /// Fix every compressor's key source after a strip has been removed.
+    ///
+    /// Exactly the argument [`remove_bus`](Self::remove_bus) makes for sends: a
+    /// strip index is a **position**, so a key left pointing at the number of a
+    /// strip that has moved into the gap would silently duck one instrument
+    /// under a different one -- a fault with no visible symptom, which is the
+    /// worst kind a mixer can have. A key on the removed strip itself becomes
+    /// unrouted; keys on later strips are renumbered down.
+    fn retarget_sidechains(&mut self, removed: StripId) {
+        let renumber = |source: Option<StripId>| -> Option<StripId> {
+            match (source?, removed) {
+                (StripId::Track(track), StripId::Track(gone)) => match track.cmp(&gone) {
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(StripId::Track(track - 1)),
+                    std::cmp::Ordering::Less => Some(StripId::Track(track)),
+                },
+                (StripId::Bus(bus), StripId::Bus(gone)) => match bus.cmp(&gone) {
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(StripId::Bus(bus - 1)),
+                    std::cmp::Ordering::Less => Some(StripId::Bus(bus)),
+                },
+                (other, _) => Some(other),
+            }
+        };
+        for insert in self.all_inserts() {
+            insert.set_sidechain_source(renumber(insert.sidechain_source()));
+        }
+    }
+
+    /// Every insert on every chain: tracks, buses, then the master.
+    ///
+    /// Shared iteration for the two passes that have to touch all of them --
+    /// key retargeting, and the load-time check that no key points at a strip
+    /// the file does not carry.
+    fn all_inserts(&self) -> impl Iterator<Item = &InsertDef> {
+        self.tracks
+            .iter()
+            .flat_map(|track| track.inserts.iter())
+            .chain(self.buses.iter().flat_map(|bus| bus.inserts.iter()))
+            .chain(self.master_inserts.iter())
+    }
+
+    /// Unroute every key that names a strip this project does not have.
+    ///
+    /// Run after a load: a file written on a machine with more tracks, or
+    /// hand-edited, must degrade to "no sidechain" rather than to somebody
+    /// else's kick.
+    pub fn clamp_sidechains(&mut self) {
+        let tracks = self.tracks.len();
+        let buses = self.buses.len();
+        for insert in self.all_inserts() {
+            let source = insert.sidechain_source().filter(|strip| match strip {
+                StripId::Track(index) => *index < tracks,
+                StripId::Bus(index) => *index < buses,
+            });
+            if source != insert.sidechain_source() {
+                log::warn!(
+                    "an insert keys off a strip this project does not have; leaving it unrouted"
+                );
+                insert.set_sidechain_source(source);
+            }
+        }
+    }
+
     /// Tracks in this project.
     pub fn len(&self) -> usize {
         self.tracks.len()
@@ -1128,6 +1326,7 @@ impl Project {
             return Err(TrackError::LastTrack);
         }
         self.retarget_sends_after_removing_track(index);
+        self.retarget_sidechains(StripId::Track(index));
         Ok(self.tracks.remove(index))
     }
 
@@ -1408,6 +1607,8 @@ pub struct TrackDto {
     pub root_mode: RootMode,
     /// Last successful detection, when one has been stored.
     pub detected_pitch: Option<RootPitchDto>,
+    /// The channel's chop. `mode: "off"` and no frames when it has none.
+    pub slices: SliceStateDto,
     /// Numeric audio-file id when this channel is `clip:` or `oneshot:`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_source_id: Option<u64>,
@@ -1524,6 +1725,24 @@ pub struct MixerStateDto {
     pub max_send_db: f32,
 }
 
+/// The knobs the instrument at the head of a track exposes.
+///
+/// Every sampled instrument exposes the sampler's own list -- an amplifier and
+/// a glide belong to the engine, not to a kit -- while a synthesised one
+/// exposes whatever its type declares. Empty for a source with no knobs: the
+/// test tone, and a hosted plugin, which has its own editor window.
+///
+/// The same answer [`TrackDef::params_for`] builds a block from, so the defs
+/// the UI lays out and the values it reads can never be two different lists.
+fn source_param_defs(source: &Source) -> &'static [mydaw_rt_core::ParamDef] {
+    if source.sampler_ref().is_some() {
+        return mydaw_plugin_sampler::PARAMS;
+    }
+    source
+        .instrument_type_id()
+        .map_or(&[], mydaw_plugin_instruments::param_defs)
+}
+
 /// Render `project` for the webview.
 ///
 /// `board` is the main thread's published record of which hosted plugin sits
@@ -1563,16 +1782,10 @@ pub fn mixer_state_dto(
                 pitch_cents: track.pitch_cents,
                 fade_in_ms: track.fade_in_ms,
                 fade_out_ms: track.fade_out_ms,
-                source_param_defs: track
-                    .source
-                    .instrument_type_id()
-                    .map(|type_id| {
-                        mydaw_plugin_instruments::param_defs(type_id)
-                            .iter()
-                            .map(ParamDefDto::from)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
+                source_param_defs: source_param_defs(&track.source)
+                    .iter()
+                    .map(ParamDefDto::from)
+                    .collect(),
                 source_params: track
                     .source_params
                     .as_ref()
@@ -1593,6 +1806,7 @@ pub fn mixer_state_dto(
                 root_fine_cents: track.root_fine_cents,
                 root_mode: track.root_mode,
                 detected_pitch: track.detected_pitch,
+                slices: track.slices.clone(),
                 audio_source_id: track.source.sample_file_id(),
             })
             .collect(),
@@ -1726,6 +1940,32 @@ mod tests {
         let melodic = SingleDrum::ALL.len();
         assert_eq!(project.tracks[melodic].source, piano);
         assert_eq!(project.tracks[melodic].name, "Piano");
+    }
+
+    /// A sampled instrument is an instrument: it has knobs, the strip declares
+    /// them, and the block the UI writes into is the one the voices read.
+    #[test]
+    fn a_sampled_track_carries_the_samplers_own_knobs() {
+        let source = Source::Sampler(SamplerSourceRef::new("salamander-piano"));
+        let defs = source_param_defs(&source);
+        assert_eq!(
+            defs.iter().map(|def| def.id).collect::<Vec<_>>(),
+            ["attack", "decay", "sustain", "release", "glide", "mono"]
+        );
+
+        let track = TrackDef::new(0, "Piano", source);
+        let block = track
+            .source_params
+            .as_ref()
+            .expect("a sampled track has a parameter block");
+        assert_eq!(block.len(), defs.len());
+        // Whatever the installed instrument asks for -- and the sampler's own
+        // defaults when it is not installed, which is what a fresh clone has.
+        assert!(block.get_by_id("release").is_some_and(|ms| ms > 0.0));
+        assert_eq!(block.get_by_id("mono"), Some(0.0));
+
+        // A source with no knobs still says so.
+        assert!(source_param_defs(&Source::TestTone).is_empty());
     }
 
     #[test]
@@ -1984,6 +2224,7 @@ mod tests {
                 "sampleStartFrames",
                 "selected",
                 "silenced",
+                "slices",
                 "soloed",
                 "sourceId",
                 "sourceLabel",
@@ -2267,6 +2508,105 @@ mod tests {
             "track 1's send followed it down to index 0"
         );
         assert_eq!(project.sends[0].dest, 1);
+    }
+
+    /// `routed()` with a compressor on track 1 keyed off track 0 -- the trap
+    /// move, at its smallest: duck the bass under the kick.
+    fn ducked() -> Project {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        project
+            .add_insert(
+                InsertTarget::Track(1),
+                "effects.compressor",
+                None,
+                &registry,
+            )
+            .unwrap();
+        project.tracks[1].inserts[0].set_sidechain_source(Some(StripId::Track(0)));
+        project
+    }
+
+    #[test]
+    fn removing_the_track_a_compressor_keys_off_unroutes_it_rather_than_repointing_it() {
+        // The failure this exists to prevent has no visible symptom: a key left
+        // pointing at index 0 after track 0 is deleted would duck the bass under
+        // whatever moved into the gap, silently and for ever.
+        let mut project = ducked();
+        project.remove(0).unwrap();
+        assert_eq!(project.tracks[0].inserts[0].sidechain_source(), None);
+    }
+
+    #[test]
+    fn a_key_on_a_later_track_follows_it_down_when_one_below_is_removed() {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        project
+            .add(Source::PolySynth, Some("Bass".to_owned()))
+            .unwrap();
+        project
+            .add_insert(
+                InsertTarget::Track(2),
+                "effects.compressor",
+                None,
+                &registry,
+            )
+            .unwrap();
+        // Track 2 keys off track 1; removing track 0 makes those 1 and 0.
+        project.tracks[2].inserts[0].set_sidechain_source(Some(StripId::Track(1)));
+        project.remove(0).unwrap();
+        assert_eq!(
+            project.tracks[1].inserts[0].sidechain_source(),
+            Some(StripId::Track(0)),
+            "the key followed the strip it names, not the number it had"
+        );
+    }
+
+    #[test]
+    fn removing_a_bus_retargets_the_keys_that_name_one_the_way_it_retargets_sends() {
+        let registry = EffectRegistry::new();
+        let mut project = routed();
+        project
+            .add_insert(
+                InsertTarget::Track(0),
+                "effects.compressor",
+                None,
+                &registry,
+            )
+            .unwrap();
+        project
+            .add_insert(InsertTarget::Master, "effects.compressor", None, &registry)
+            .unwrap();
+        project.tracks[0].inserts[0].set_sidechain_source(Some(StripId::Bus(1)));
+        project.master_inserts[0].set_sidechain_source(Some(StripId::Bus(0)));
+
+        project.remove_bus(0).unwrap();
+        assert_eq!(
+            project.tracks[0].inserts[0].sidechain_source(),
+            Some(StripId::Bus(0)),
+            "bus 1 became bus 0"
+        );
+        assert_eq!(
+            project.master_inserts[0].sidechain_source(),
+            None,
+            "the bus it keyed off is gone"
+        );
+    }
+
+    #[test]
+    fn clamping_unroutes_a_key_that_names_a_strip_this_project_does_not_have() {
+        let mut project = ducked();
+        project.tracks[1].inserts[0].set_sidechain_source(Some(StripId::Track(9)));
+        project.clamp_sidechains();
+        assert_eq!(project.tracks[1].inserts[0].sidechain_source(), None);
+
+        // And a route that *is* valid is left exactly where it was.
+        project.tracks[1].inserts[0].set_sidechain_source(Some(StripId::Bus(1)));
+        project.clamp_sidechains();
+        assert_eq!(
+            project.tracks[1].inserts[0].sidechain_source(),
+            Some(StripId::Bus(1))
+        );
     }
 
     #[test]

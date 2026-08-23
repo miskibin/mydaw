@@ -36,6 +36,7 @@ pub mod mixer;
 mod node;
 mod notes;
 pub mod params;
+mod sidechain;
 mod spectrum;
 mod transport;
 
@@ -64,6 +65,9 @@ pub use notes::{
 pub use params::{
     smoothing_frames, AtomicF32, ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ParamSmoother,
     ReadoutDef, SmoothedParams, DEFAULT_SMOOTHING_MS,
+};
+pub use sidechain::{
+    decode_key, encode_key, key_slot, key_source, KeySource, SidechainBus, KEY_NONE, MAX_KEY_SLOTS,
 };
 pub use spectrum::{
     process_inserts, spectrum_channel, SpectrumHop, SpectrumKind, SpectrumLoc, SpectrumTapRt,

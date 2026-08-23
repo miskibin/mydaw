@@ -324,41 +324,39 @@ export function PolySynthEditor(props: {
                     />
                   </svg>
                 </div>
+                <Show when={waveDef()}>
+                  {(def) => (
+                    <div class="wv-synth__switch">
+                      <Segmented
+                        def={def()}
+                        typeId="poly-synth"
+                        value={props.paramValue(def())}
+                        labels={WAVE_LABELS}
+                        onChange={(value) => {
+                          setHot(pane());
+                          write(osc.wave, value);
+                        }}
+                      />
+                    </div>
+                  )}
+                </Show>
                 <div class="wv-synth__knobs">
-                  <Show when={waveDef()}>
+                  <For each={knobs()}>
                     {(def) => (
-                      <div class="wv-synth__switch">
-                        <Segmented
-                          def={def()}
-                          typeId="poly-synth"
-                          value={props.paramValue(def())}
-                          labels={WAVE_LABELS}
-                          onChange={(value) => {
-                            setHot(pane());
-                            write(osc.wave, value);
-                          }}
-                        />
-                      </div>
+                      <Knob
+                        def={def}
+                        typeId="poly-synth"
+                        value={() => props.paramValue(def)}
+                        onInput={(value) => {
+                          setHot(pane());
+                          props.setParam(def, value);
+                        }}
+                        owner={props.owner}
+                        size={32}
+                        color={props.color}
+                      />
                     )}
-                  </Show>
-                  <div class="wv-synth__knobs-row">
-                    <For each={knobs()}>
-                      {(def) => (
-                        <Knob
-                          def={def}
-                          typeId="poly-synth"
-                          value={() => props.paramValue(def)}
-                          onInput={(value) => {
-                            setHot(pane());
-                            props.setParam(def, value);
-                          }}
-                          owner={props.owner}
-                          size={28}
-                          color={props.color}
-                        />
-                      )}
-                    </For>
-                  </div>
+                  </For>
                 </div>
               </section>
             );

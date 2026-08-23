@@ -125,12 +125,22 @@ pub fn ensure_drum_sample(
     Ok(sources.load(&path)?)
 }
 
-fn factory_drum_dir() -> PathBuf {
+/// Where WAVE writes the audio it generates: factory drums, destructive sample
+/// edits (`crate::sample_edit`) and pattern renders (`crate::resample`).
+///
+/// One root for all three so a user who wants to clear the cache has one folder
+/// to delete, and so a project that references a generated file finds it in the
+/// same place on the next run.
+pub fn sample_cache_dir() -> PathBuf {
     let root = std::env::var_os("LOCALAPPDATA")
         .or_else(|| std::env::var_os("XDG_CACHE_HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    root.join("WAVE Studio").join("factory-drums")
+    root.join("WAVE Studio")
+}
+
+fn factory_drum_dir() -> PathBuf {
+    sample_cache_dir().join("factory-drums")
 }
 
 fn factory_drum_path(drum: SingleDrum) -> PathBuf {

@@ -16,11 +16,18 @@ import type {
   PitchAnalysis,
   PlayMode,
   ProjectInfo,
+  RenderToSampleDto,
   RootMode,
+  SampleEditDto,
+  SampleOp,
   SequencerState,
+  SliceAnalysis,
+  SliceMode,
+  SliceState,
   SourceDto,
   SpectrumDto,
   StreamInfo,
+  StripRef,
   UiSnapshot,
   Unsubscribe,
   Vst3GuiStatus,
@@ -31,6 +38,9 @@ import type {
   MidiStatusDto,
   PreviewSettings,
   AudioOutput,
+  InputDeviceDto,
+  InputStatusDto,
+  RecordedTakeDto,
 } from './types';
 
 /**
@@ -155,6 +165,28 @@ export interface Backend {
     fineCents: number,
     mode: RootMode,
   ): Promise<MixerState>;
+  /**
+   * Where an audio-file channel's slices would fall — without installing them.
+   *
+   * Analysis and installation are two calls on purpose: the sensitivity slider
+   * re-runs this on every step of a drag, and a chop the user is still shaping
+   * should not be what the keyboard plays until they stop. The range analysed
+   * is the channel's SMP region.
+   */
+  analyzeSlices(
+    track: number,
+    mode: SliceMode,
+    sensitivity: number,
+    division: number,
+  ): Promise<SliceAnalysis>;
+  /**
+   * Install (or clear) an audio-file channel's chop.
+   *
+   * Answers with what was **stored**, not what was asked for: markers are
+   * sorted, deduped, clamped to the file and capped at 128, so the window can
+   * draw the table the engine is actually playing.
+   */
+  setTrackSlices(track: number, slices: SliceState): Promise<SliceState>;
   /** Channel fade in and out, in milliseconds. One call, one republish. */
   setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState>;
   /**
@@ -168,6 +200,31 @@ export interface Backend {
     startFrames: number,
     endFrames: number,
   ): Promise<MixerState>;
+  /**
+   * Apply a **destructive** edit to the file behind a sample channel.
+   *
+   * Copy-on-write: a new file is written and this channel (with its playlist
+   * clips) repointed at it, so another channel on the same take is unaffected.
+   * The answer carries the old pointer too — replay it through
+   * {@link Backend.setTrackAudioSource} and the edit is undone in one step.
+   */
+  editTrackSample(track: number, op: SampleOp): Promise<SampleEditDto>;
+  /**
+   * Point a sample channel at a different **already loaded** file and region.
+   * The inverse of {@link Backend.editTrackSample}, and how undo works.
+   */
+  setTrackAudioSource(
+    track: number,
+    sourceId: number,
+    startFrames: number,
+    endFrames: number,
+    clipOffsetShiftFrames: number,
+  ): Promise<MixerState>;
+  /**
+   * Render one loop of the active pattern through the whole mixer, offline, and
+   * add it as a new sample channel. "Resampling".
+   */
+  renderPatternToSample(): Promise<RenderToSampleDto>;
   setTrackMute(track: number, muted: boolean): Promise<MixerState>;
   setTrackSolo(track: number, soloed: boolean): Promise<MixerState>;
   setMasterGain(db: number): Promise<MixerState>;
@@ -258,6 +315,20 @@ export interface Backend {
   getInsertSpectrum(): Promise<SpectrumDto | null>;
   /** EQ band-solo of the source. `band` is a prefix, or `null` to stop. */
   setInsertListen(target: InsertTarget, index: number, band: string | null): Promise<void>;
+
+  /**
+   * Point one insert's detector at another strip, or unroute it with `null`.
+   *
+   * The compressor's external key. One atomic store in the engine and no graph
+   * rebuild, so a source can be changed while the transport runs -- which is
+   * how a user finds out which drum the bass should duck under. Returns the
+   * whole mixer, because the route is part of the insert every strip draws.
+   */
+  setInsertSidechain(
+    target: InsertTarget,
+    index: number,
+    source: StripRef | null,
+  ): Promise<MixerState>;
 
   // --- patterns ------------------------------------------------------------
 
@@ -395,6 +466,45 @@ export interface Backend {
 
   /** What the open audio device is. Answers `running: false` rather than failing. */
   getStreamInfo(): Promise<StreamInfo>;
+
+  // --- audio input and recording -------------------------------------------
+  //
+  // Seven commands, one state machine: idle -> armed -> recording -> armed.
+  // `getInputStatus` is the only one worth polling, and only while the device
+  // is open; the rest are gestures. `state.tsx` owns that poll.
+
+  /**
+   * Every capture device the default host can offer. An empty list is a real
+   * answer — a headless machine or a disabled microphone produces one — and
+   * Settings draws an empty state for it rather than an error.
+   */
+  getInputDevices(): Promise<InputDeviceDto[]>;
+  /**
+   * Choose the capture device and remember it. `null` follows the system
+   * default. **Refused** while a take is running.
+   */
+  setInputDevice(deviceId: string | null): Promise<InputStatusDto>;
+  /** What the REC button and the input meter draw. Cheap enough to poll. */
+  getInputStatus(): Promise<InputStatusDto>;
+  /**
+   * Open the capture device and start metering, or release it.
+   *
+   * WAVE does not hold the microphone while idle: that is what stops a
+   * conferencing app from working and lights the OS privacy indicator for
+   * nothing. Disarming mid-take discards the take.
+   */
+  setInputArmed(armed: boolean): Promise<InputStatusDto>;
+  /** Start a take, arming the device first if it is not open yet. */
+  startRecording(): Promise<InputStatusDto>;
+  /**
+   * End the take, write it, and load it as an audio source.
+   *
+   * Placing it is `addSampleChannel`, on purpose: a recorded take and a dropped
+   * WAV reach the rack by the same path.
+   */
+  stopRecording(): Promise<RecordedTakeDto>;
+  /** Throw the take away. The device stays armed for another attempt. */
+  cancelRecording(): Promise<InputStatusDto>;
 
   /** MIDI input ports for Settings. Reconciles with the OS on each call. */
   listMidiPorts(): Promise<MidiPortDto[]>;
@@ -563,6 +673,19 @@ class TauriBackend implements Backend {
     return this.call('set_track_sample_root', { track, key, fineCents, mode });
   }
 
+  analyzeSlices(
+    track: number,
+    mode: SliceMode,
+    sensitivity: number,
+    division: number,
+  ): Promise<SliceAnalysis> {
+    return this.call('analyze_slices', { track, mode, sensitivity, division });
+  }
+
+  setTrackSlices(track: number, slices: SliceState): Promise<SliceState> {
+    return this.call('set_track_slices', { track, slices });
+  }
+
   setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {
     return this.call('set_track_fades', { track, fadeInMs, fadeOutMs });
   }
@@ -577,6 +700,30 @@ class TauriBackend implements Backend {
     endFrames: number,
   ): Promise<MixerState> {
     return this.call('set_track_sample_region', { track, startFrames, endFrames });
+  }
+
+  editTrackSample(track: number, op: SampleOp): Promise<SampleEditDto> {
+    return this.call('edit_track_sample', { track, op });
+  }
+
+  setTrackAudioSource(
+    track: number,
+    sourceId: number,
+    startFrames: number,
+    endFrames: number,
+    clipOffsetShiftFrames: number,
+  ): Promise<MixerState> {
+    return this.call('set_track_audio_source', {
+      track,
+      sourceId,
+      startFrames,
+      endFrames,
+      clipOffsetShiftFrames,
+    });
+  }
+
+  renderPatternToSample(): Promise<RenderToSampleDto> {
+    return this.call('render_pattern_to_sample');
   }
 
   setTrackMute(track: number, muted: boolean): Promise<MixerState> {
@@ -754,6 +901,20 @@ class TauriBackend implements Backend {
       targetIndex: target.index,
       index,
       band,
+    });
+  }
+
+  setInsertSidechain(
+    target: InsertTarget,
+    index: number,
+    source: StripRef | null,
+  ): Promise<MixerState> {
+    return this.call('set_insert_sidechain', {
+      target: target.kind,
+      targetIndex: target.index,
+      index,
+      sourceKind: source?.kind ?? null,
+      sourceIndex: source?.index ?? 0,
     });
   }
 
@@ -974,6 +1135,36 @@ class TauriBackend implements Backend {
     return this.call('get_stream_info');
   }
 
+  getInputDevices(): Promise<InputDeviceDto[]> {
+    return this.call('get_input_devices');
+  }
+
+  // `deviceId: null` rather than an omitted key, for the reason `openProject`
+  // passes `path: null`: that is what asks Rust for the system default.
+  setInputDevice(deviceId: string | null): Promise<InputStatusDto> {
+    return this.call('set_input_device', { deviceId });
+  }
+
+  getInputStatus(): Promise<InputStatusDto> {
+    return this.call('get_input_status');
+  }
+
+  setInputArmed(armed: boolean): Promise<InputStatusDto> {
+    return this.call('set_input_armed', { armed });
+  }
+
+  startRecording(): Promise<InputStatusDto> {
+    return this.call('start_recording');
+  }
+
+  stopRecording(): Promise<RecordedTakeDto> {
+    return this.call('stop_recording');
+  }
+
+  cancelRecording(): Promise<InputStatusDto> {
+    return this.call('cancel_recording');
+  }
+
   listMidiPorts(): Promise<MidiPortDto[]> {
     return this.call('list_midi_ports');
   }
@@ -986,8 +1177,8 @@ class TauriBackend implements Backend {
     return this.call('get_midi_status');
   }
 
-  /** Map the sampler's single-download DTO onto the UI's per-asset rows. */
-  private static assetRows(dto: AssetStatusDto): AssetStatus[] {
+  /** Map one downloader's DTO onto the UI's asset row. */
+  private static assetRow(dto: AssetStatusDto): AssetStatus {
     const downloading =
       dto.state === 'downloading' ||
       dto.state === 'verifying' ||
@@ -1002,26 +1193,26 @@ class TauriBackend implements Backend {
           : downloading
             ? 'downloading'
             : 'absent';
-    return [
-      {
-        id: dto.instrumentId,
-        name: dto.instrumentName,
-        state,
-        progress:
-          state === 'ready' ? 1 : dto.totalBytes > 0 ? dto.downloadedBytes / dto.totalBytes : 0,
-        bytesTotal: dto.totalBytes,
-        bytesDone: dto.downloadedBytes,
-        error: dto.error.length > 0 ? dto.error : null,
-      },
-    ];
+    return {
+      id: dto.instrumentId,
+      name: dto.instrumentName,
+      state,
+      progress:
+        state === 'ready' ? 1 : dto.totalBytes > 0 ? dto.downloadedBytes / dto.totalBytes : 0,
+      bytesTotal: dto.totalBytes,
+      bytesDone: dto.downloadedBytes,
+      error: dto.error.length > 0 ? dto.error : null,
+    };
   }
 
   async getAssetStatus(): Promise<AssetStatus[]> {
-    return TauriBackend.assetRows(await this.call<AssetStatusDto>('get_asset_status'));
+    return (await this.call<AssetStatusDto[]>('get_asset_status')).map(TauriBackend.assetRow);
   }
 
-  async startAssetDownload(_id: string): Promise<AssetStatus[]> {
-    return TauriBackend.assetRows(await this.call<AssetStatusDto>('start_asset_download'));
+  async startAssetDownload(id: string): Promise<AssetStatus[]> {
+    return (await this.call<AssetStatusDto[]>('start_asset_download', { id })).map(
+      TauriBackend.assetRow,
+    );
   }
 
   async subscribeMeters(onFrame: (frame: MeterFrame) => void): Promise<Unsubscribe> {

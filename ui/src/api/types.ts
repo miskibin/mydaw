@@ -406,6 +406,61 @@ export interface AudioSourceDto {
   bytes: number;
 }
 
+/**
+ * One destructive edit to the file behind a sample channel.
+ *
+ * The engine takes these as an internally tagged value, so the wire shape is
+ * `{ kind: 'gain', db: -3 }` and adding an operation is one variant here and
+ * one arm in `app/src/sample_edit.rs`.
+ */
+export type SampleOp =
+  | { kind: 'reverse' }
+  | { kind: 'normalize' }
+  | { kind: 'trim' }
+  | { kind: 'gain'; db: number };
+
+/**
+ * What a destructive edit did, and everything needed to undo it.
+ *
+ * Edits are copy-on-write: the engine writes a new file, loads it as a new
+ * source and repoints this channel at it. So the inverse is a single
+ * `setTrackAudioSource` back to `previousSourceId` — no re-encode, one Ctrl+Z.
+ */
+export interface SampleEditDto {
+  track: number;
+  /** `Reverse`, `Normalize`, `Trim`, `Gain` — what the status bar says. */
+  op: string;
+  /** The file the channel now plays. */
+  source: AudioSourceDto;
+  /** The file it played before. Still loaded, which is what makes undo cheap. */
+  previousSourceId: number;
+  startFrames: number;
+  endFrames: number;
+  previousStartFrames: number;
+  previousEndFrames: number;
+  /** How far this lane's clips moved in the file. Non-zero only for a trim. */
+  clipOffsetShiftFrames: number;
+  mixer: MixerState;
+}
+
+/** What "Render to sample" produced. */
+export interface RenderToSampleDto {
+  /** The rack channel the render landed on. */
+  track: number;
+  /** The written file's name. */
+  name: string;
+  frames: number;
+  sampleRate: number;
+  peak: number;
+  /**
+   * Channels that were silent in the render because their instrument is a
+   * hosted CLAP or VST3 plugin — only the main thread can instantiate one, so
+   * an offline render cannot include them. Surfaced rather than hidden.
+   */
+  hostedChannels: number;
+  mixer: MixerState;
+}
+
 /** A root in the sample library: bundled Packs, or a user extra-search folder. */
 export interface LibraryRootDto {
   id: string;
@@ -524,6 +579,20 @@ export interface InsertDto {
   params: ParamValueDto[];
   /** Every meter's current value. Empty for the effects that publish none. */
   readouts: ParamValueDto[];
+  /**
+   * Which strip feeds this insert's detector, or `null`.
+   *
+   * A **route**, not a parameter: only the compressor reads it, it names a
+   * strip by position, and it is set with `setInsertSidechain` rather than by
+   * moving a knob. Every other effect reports `null`.
+   */
+  sidechain: StripRef | null;
+}
+
+/** A strip named by position. The same pair a send's source uses. */
+export interface StripRef {
+  kind: 'track' | 'bus';
+  index: number;
 }
 
 /** Every meter on one insert, as the polling call returns them. */
@@ -625,6 +694,52 @@ export type PitchAnalysis =
   | { kind: 'noStablePitch'; reason: NoPitchReason };
 
 /** One mixer track. `index` is the track's position *and* its note channel. */
+/**
+ * How a sample channel's slice table was made.
+ *
+ * `off` is the channel as it has always been: one region, played from every
+ * key. `transient` cut where a new sound arrives; `grid` cut the loop into
+ * equal pieces. Mirrors `SliceMode` in `app/src/project.rs`.
+ */
+export type SliceMode = 'off' | 'transient' | 'grid';
+
+/**
+ * A channel's chop: where the slices are and how they were asked for.
+ *
+ * `frames` are absolute positions in the file, ascending, each the **start**
+ * of a slice — the last one runs to the region's end, so `n` frames are `n`
+ * playable slices. Key `rootKey + n` plays slice `n`; anything outside the map
+ * is silent. Capped at `MAX_SLICES` (128) by the engine.
+ *
+ * The sensitivity and division are remembered in every mode, so reopening the
+ * window puts the slider and the picker back where they were left, and the
+ * frames survive a trip back to Region mode rather than being re-detected
+ * (which would throw away markers the user nudged by hand).
+ */
+export interface SliceState {
+  mode: SliceMode;
+  frames: number[];
+  /** The transient slider, `0..=1`. */
+  sensitivity: number;
+  /** The grid picker: 4, 8 or 16 slices to the bar. */
+  division: number;
+  /** Whether a slice also transposes with the key that played it. */
+  keytrack: boolean;
+}
+
+/** What one slicing run found. Nothing is installed until `setTrackSlices`. */
+export interface SliceAnalysis {
+  frames: number[];
+  mode: SliceMode;
+  /** Bars the range was taken to be. Grid mode only; `0` for transients. */
+  bars: number;
+  /** Whether the engine's 128-slice table could not hold everything found. */
+  truncated: boolean;
+  /** The range analysed — the channel's SMP region. */
+  rangeStart: number;
+  rangeEnd: number;
+}
+
 export interface TrackDto {
   index: number;
   /** Stable identity across renumbering. Key a UI list on this. */
@@ -684,6 +799,8 @@ export interface TrackDto {
   rootMode: RootMode;
   /** Last successful detection, when one has been stored. */
   detectedPitch?: DetectedPitch | null;
+  /** The channel's chop. `mode: 'off'` and no frames when it has none. */
+  slices: SliceState;
   /** Numeric audio-file id when this channel is `clip:` or `oneshot:`. */
   audioSourceId?: number | null;
 }
@@ -796,6 +913,78 @@ export interface AudioOutput {
   bufferFrames: number;
   asioCompiled: boolean;
   stream: StreamInfo;
+}
+
+/**
+ * One capture device, as the input picker in Settings lists it.
+ *
+ * `channels` and `sampleRate` are `0` for a device whose configuration the host
+ * would not report. Such a device is still listed rather than hidden: it is
+ * plugged in and the user can see it, so "it is there but it will not open" is
+ * more useful than an empty list.
+ */
+export interface InputDeviceDto {
+  id: string;
+  name: string;
+  channels: number;
+  sampleRate: number;
+  isDefault: boolean;
+}
+
+/**
+ * What the recorder is doing.
+ *
+ * `idle` holds no device at all — WAVE does not sit on the microphone while you
+ * are not recording. `armed` has the device open and metered so a level can be
+ * set. `recording` is additionally keeping what arrives.
+ */
+export type RecordState = 'idle' | 'armed' | 'recording';
+
+/** Everything the REC button and the input meter draw, in one message. */
+export interface InputStatusDto {
+  state: RecordState;
+  /** The device that is open, or empty while idle. */
+  deviceName: string;
+  /** The device Settings chose. `null` follows the system default. */
+  deviceId: string | null;
+  /** Rate the open device runs at. `0` while idle. */
+  deviceSampleRate: number;
+  /** Channels the open device delivers. `0` while idle. */
+  deviceChannels: number;
+  /** Rate the take is written at — the engine's, not the device's. */
+  sampleRate: number;
+  /** Peak of the last blocks, linear, with a 20 dB/s hold. `0` while idle. */
+  peak: number;
+  /** RMS of the last block, linear. `0` while idle. */
+  rms: number;
+  /** Seconds recorded so far. `0` unless recording. */
+  elapsedSeconds: number;
+  /** Longest take this build keeps, in seconds. */
+  maxSeconds: number;
+  /** Samples the capture callback dropped. Non-zero means holes in the take. */
+  droppedSamples: number;
+  /** Whether the length cap ended the take rather than the user. */
+  limitReached: boolean;
+  /** Why the device is unhappy, or empty. Non-empty means the stream is gone. */
+  fault: string;
+  /** Whether the machine has any capture device at all. */
+  hasDevices: boolean;
+}
+
+/**
+ * A finished take: the source it became, plus what the status bar should say.
+ *
+ * The source alone is not enough — a take that dropped samples, or that the
+ * length cap ended, is still usable but the user has to be told, and the moment
+ * to tell them is the moment the channel appears.
+ */
+export interface RecordedTakeDto {
+  source: AudioSourceDto;
+  droppedSamples: number;
+  limitReached: boolean;
+  /** Largest absolute sample. Near zero is a silent take: wrong input, or a
+   * cable out. */
+  peak: number;
 }
 
 /** One MIDI input port, as Settings draws it. */

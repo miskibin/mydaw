@@ -45,16 +45,27 @@ import type {
   PlaylistDto,
   PlaylistTrackDto,
   ProjectInfo,
+  RenderToSampleDto,
   RootMode,
+  SampleEditDto,
+  SampleOp,
   SendDto,
   SequencerState,
+  SliceAnalysis,
+  SliceMode,
+  SliceState,
   SourceDto,
   SpectrumDto,
   StreamInfo,
+  StripRef,
   MidiPortDto,
   MidiStatusDto,
   PreviewSettings,
   AudioOutput,
+  InputDeviceDto,
+  InputStatusDto,
+  RecordState,
+  RecordedTakeDto,
   TrackDto,
   UiSnapshot,
   Unsubscribe,
@@ -86,6 +97,62 @@ const MAX_CLIPS = 512;
 const MAX_SONG_TICKS = 3_840 * 512;
 const MAX_NOTES = 1024;
 const MAX_WAVEFORM_BINS = 4096;
+
+/**
+ * Bins the mock stores per source.
+ *
+ * The engine keeps samples and folds them to whatever the caller asks for; the
+ * mock keeps one fixed-resolution envelope and folds that. A thousand-odd bins
+ * is finer than any window draws, so a fold never invents detail.
+ */
+const MOCK_ENVELOPE_BINS = 1024;
+
+/** Peak a Normalize lands on, matching `app/src/sample_edit.rs`. */
+const NORMALIZE_TARGET_DBFS = -0.3;
+
+/** Largest gain one destructive Gain edit applies, matching the engine. */
+const MAX_EDIT_GAIN_DB = 24;
+
+/** Where the engine writes destructive edits, mirrored for plausible paths. */
+const SAMPLE_EDIT_DIR = 'C:\\Users\\wave\\AppData\\Local\\WAVE Studio\\sample-edits';
+
+/** Where the engine writes pattern renders. */
+const RENDER_DIR = 'C:\\Users\\wave\\AppData\\Local\\WAVE Studio\\renders';
+
+/** What the status bar calls each destructive edit. */
+const OP_LABELS: Record<SampleOp['kind'], string> = {
+  reverse: 'Reverse',
+  normalize: 'Normalize',
+  trim: 'Trim',
+  gain: 'Gain',
+};
+
+/** Fold a stored envelope down to `bins` min/max pairs. */
+function foldPeaks(peaks: readonly [number, number][], bins: number): [number, number][] {
+  const out: [number, number][] = [];
+  const count = Math.max(1, Math.min(bins, peaks.length));
+  for (let bin = 0; bin < count; bin++) {
+    const from = Math.floor((bin * peaks.length) / count);
+    const to = Math.max(from + 1, Math.floor(((bin + 1) * peaks.length) / count));
+    let lo = 0;
+    let hi = 0;
+    for (let index = from; index < to && index < peaks.length; index++) {
+      const pair = peaks[index];
+      if (!pair) continue;
+      lo = Math.min(lo, pair[0]);
+      hi = Math.max(hi, pair[1]);
+    }
+    out.push([lo, hi]);
+  }
+  return out;
+}
+
+/** `MAX_SLICES` in `plugins/sequencer/src/oneshot.rs`. */
+const MAX_SLICES = 128;
+const DEFAULT_SLICE_SENSITIVITY = 0.5;
+const DEFAULT_SLICE_DIVISION = 16;
+/** `MIN_GAP_MS` in `crates/slice-analysis`. */
+const SLICE_MIN_GAP_MS = 30;
 const PPQ = 960;
 const TICKS_PER_STEP = 240;
 const TICKS_PER_BAR = 3840;
@@ -97,6 +164,8 @@ const MIN_BPM = 20;
 const MAX_BPM = 999;
 const SAMPLE_RATE = 48_000;
 const FRAME_HZ = 30;
+/** Mirrors `MAX_RECORD_SECONDS` in `plugins/audio-io/src/record.rs`. */
+const MAX_RECORD_SECONDS = 300;
 
 /** One-shot drums and the synth all fire C4, so a hit plays at recorded pitch. */
 const DEFAULT_ROW_KEYS = [60, 60, 60, 60, 60];
@@ -169,6 +238,21 @@ function choice(id: string, name: string, count: number, defaultValue: number): 
 
 function toggle(id: string, name: string, on: boolean): ParamDefDto {
   return choice(id, name, 2, on ? 1 : 0);
+}
+
+/**
+ * `ParamDef::stepped(..)` / `::smoothed(..)` -- a continuous knob that lands on
+ * a grid, or one whose ramp is longer than the standard 10 ms.
+ *
+ * Both matter to the shell: `step` is what a drag quantises to, and a
+ * `smoothingMs` of zero is how the engine declares a switch, so a stepped knob
+ * that kept the default ramp would be drawn as a segmented control.
+ */
+function shaped(
+  def: ParamDefDto,
+  extra: { step?: number; smoothingMs?: number },
+): ParamDefDto {
+  return { ...def, ...extra };
 }
 
 const EFFECTS: readonly EffectInfoDto[] = [
@@ -313,6 +397,90 @@ const EFFECTS: readonly EffectInfoDto[] = [
     ],
     readouts: [{ id: 'correlation', name: 'Correlation', unit: '' }],
   },
+  {
+    typeId: 'effects.chorus',
+    name: 'Chorus',
+    description: 'Two or three modulated delay voices with stereo spread -- ensemble, not echo',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('rate', 'Rate', 'Hz', 0.01, 10, 0.6, 'log'),
+      shaped(param('depth', 'Depth', 'ms', 0, 10, 2.5, 'linear'), { smoothingMs: 150 }),
+      shaped(param('delay', 'Delay', 'ms', 1, 30, 9, 'log'), { smoothingMs: 150 }),
+      choice('voices', 'Voices', 2, 1),
+      param('spread', 'Spread', '%', 0, 100, 50, 'linear'),
+      param('mix', 'Mix', '%', 0, 100, 50, 'linear'),
+    ],
+    readouts: [],
+  },
+  {
+    typeId: 'effects.flanger',
+    name: 'Flanger',
+    description: 'A swept short delay with bipolar feedback -- the comb filter you can hear moving',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('rate', 'Rate', 'Hz', 0.01, 10, 0.25, 'log'),
+      shaped(param('depth', 'Depth', 'ms', 0, 10, 3, 'linear'), { smoothingMs: 150 }),
+      shaped(param('delay', 'Manual', 'ms', 0.1, 10, 1, 'log'), { smoothingMs: 150 }),
+      param('feedback', 'Feedback', '%', -95, 95, 40, 'linear'),
+      param('spread', 'Spread', '%', 0, 100, 0, 'linear'),
+      param('mix', 'Mix', '%', 0, 100, 50, 'linear'),
+    ],
+    readouts: [],
+  },
+  {
+    typeId: 'effects.phaser',
+    name: 'Phaser',
+    description: 'Four to eight swept all-pass stages with resonant feedback -- notches that breathe',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      param('rate', 'Rate', 'Hz', 0.01, 10, 0.5, 'log'),
+      param('depth', 'Depth', '%', 0, 100, 70, 'linear'),
+      shaped(param('freq', 'Centre', 'Hz', 100, 8000, 800, 'log'), { smoothingMs: 150 }),
+      choice('stages', 'Stages', 3, 0),
+      param('feedback', 'Feedback', '%', 0, 90, 30, 'linear'),
+      param('spread', 'Spread', '%', 0, 100, 0, 'linear'),
+      param('mix', 'Mix', '%', 0, 100, 50, 'linear'),
+    ],
+    readouts: [],
+  },
+  {
+    typeId: 'effects.autofilter',
+    name: 'Auto Filter',
+    description:
+      'Resonant lowpass, highpass or bandpass swept by a synced LFO and an envelope follower',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      choice('mode', 'Mode', 3, 0),
+      shaped(param('cutoff', 'Cutoff', 'Hz', 30, 20000, 20000, 'log'), { smoothingMs: 60 }),
+      param('res', 'Resonance', '%', 0, 100, 0, 'linear'),
+      param('lfo_amount', 'LFO Amount', '%', 0, 100, 0, 'linear'),
+      toggle('lfo_sync', 'LFO Sync', false),
+      param('lfo_rate', 'LFO Rate', 'Hz', 0.01, 20, 1, 'log'),
+      choice('lfo_div', 'LFO Division', 7, 2),
+      param('spread', 'Spread', '%', 0, 100, 0, 'linear'),
+      param('env_amount', 'Env Amount', '%', -100, 100, 0, 'linear'),
+      param('env_attack', 'Env Attack', 'ms', 0.1, 100, 5, 'log'),
+      param('env_release', 'Env Release', 'ms', 10, 1000, 120, 'log'),
+      param('mix', 'Mix', '%', 0, 100, 100, 'linear'),
+    ],
+    readouts: [
+      { id: 'cutoff', name: 'Cutoff', unit: 'Hz' },
+      { id: 'env', name: 'Envelope', unit: '' },
+    ],
+  },
+  {
+    typeId: 'effects.bitcrusher',
+    name: 'Bitcrusher',
+    description: 'Bit-depth reduction, sample-rate decimation and a lo-fi filter, with a dry blend',
+    params: [
+      toggle('bypass', 'Bypass', false),
+      shaped(param('bits', 'Bit Depth', 'bits', 1, 24, 24, 'linear'), { step: 1 }),
+      shaped(param('downsample', 'Downsample', 'x', 1, 64, 1, 'log'), { step: 1 }),
+      shaped(param('tone', 'Filter', 'Hz', 200, 20000, 20000, 'log'), { smoothingMs: 40 }),
+      param('mix', 'Mix', '%', 0, 100, 100, 'linear'),
+    ],
+    readouts: [],
+  },
 ];
 
 function effectInfo(typeId: string): EffectInfoDto {
@@ -434,6 +602,69 @@ const INTERNAL_SOURCES: readonly Omit<SourceDto, 'selected'>[] = [
     pluginId: null,
     takesNotes: true,
   },
+  // WAVE Factory Vol. 1. In a real session these appear only once their
+  // instrument has been downloaded and decoded; the mock offers them all, so
+  // browser-only development can reach every source the shell can show.
+  {
+    id: 'sampler:808-kit',
+    label: '808 Kit',
+    description: '30 analogue drum-machine one-shots on a General MIDI drum map',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:808-bass',
+    label: '808 Bass',
+    description: 'Long-decay analogue kick played chromatically, C1-B3, two tail lengths',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:percussion-fx',
+    label: 'Percussion & FX',
+    description: 'Hand percussion on a General MIDI map, velocity-layered where recorded',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:studio-drums',
+    label: 'Studio Drums',
+    description: 'Acoustic kit on a General MIDI map, up to four velocity layers per pad',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:marimba',
+    label: 'Marimba',
+    description: 'Five octaves, wholetone-sampled, two dynamics',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
+  {
+    id: 'sampler:glockenspiel',
+    label: 'Glockenspiel',
+    description: 'Two and a half octaves, two dynamics',
+    kind: 'internal',
+    vendor: '',
+    bundlePath: null,
+    pluginId: null,
+    takesNotes: true,
+  },
 ];
 
 const FIXTURE_GAIN_ID = 'dev.mydaw.fixture.gain';
@@ -514,6 +745,8 @@ const VST3_PLUGINS: readonly Vst3PluginInfoDto[] = [
 const UNTITLED = 'Untitled';
 const PROJECT_DIR = 'D:\\Songs';
 const MOCK_PACKS = 'D:\\MYDAW\\assets\\packs';
+/** Where the real build writes takes; see `app/src/recording.rs`. */
+const MOCK_RECORDINGS = 'C:\\Users\\wave\\AppData\\Local\\WAVE Studio\\recordings';
 const MOCK_DRUMS = [
   'clap.wav',
   'hihat-closed.wav',
@@ -580,9 +813,79 @@ const SYNTH_PARAMS: readonly ParamDefDto[] = [
   { id: 'release', name: 'Release', unit: 'ms', min: 1, max: 4_000, defaultValue: 120, curve: 'log', step: null, smoothingMs: 0 },
 ];
 
+/**
+ * The sampler's knobs. Mirrors `PARAMS` in `plugins/sampler/src/node.rs`, in
+ * that order -- the same mock/live parity the synth list above keeps.
+ */
+const SAMPLER_PARAMS: ParamDefDto[] = [
+  { id: 'attack', name: 'Attack', unit: 'ms', min: 0, max: 2_000, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 0 },
+  { id: 'decay', name: 'Decay', unit: 'ms', min: 1, max: 8_000, defaultValue: 1_000, curve: 'log', step: null, smoothingMs: 0 },
+  { id: 'sustain', name: 'Sustain', unit: '', min: 0, max: 1, defaultValue: 1, curve: 'linear', step: null, smoothingMs: 0 },
+  { id: 'release', name: 'Release', unit: 'ms', min: 1, max: 8_000, defaultValue: 300, curve: 'log', step: null, smoothingMs: 0 },
+  { id: 'glide', name: 'Glide', unit: 'ms', min: 0, max: 1_000, defaultValue: 0, curve: 'linear', step: null, smoothingMs: 0 },
+  { id: 'mono', name: 'Mono', unit: '', min: 0, max: 1, defaultValue: 0, curve: 'linear', step: 1, smoothingMs: 0 },
+];
+
+/**
+ * Where each installed instrument wants those knobs, by source id.
+ *
+ * The live engine reads this from the instrument's manifest -- `release_ms` and
+ * `default_params` in `assets-manifest.json` -- and applies it when a track
+ * selects the instrument. Mirrored here so the browser shows an 808 Bass as the
+ * mono, gliding instrument it ships as rather than as a bare sampler.
+ */
+const SAMPLER_DEFAULTS: Readonly<Record<string, Readonly<Record<string, number>>>> = {
+  'sampler:salamander-piano': { release: 400 },
+  'sampler:808-kit': { release: 250 },
+  'sampler:808-bass': { release: 150, mono: 1, glide: 60 },
+  'sampler:percussion-fx': { release: 250 },
+  'sampler:studio-drums': { release: 250 },
+  'sampler:marimba': { release: 1_200 },
+  'sampler:glockenspiel': { release: 1_200 },
+};
+
 /** The knobs an instrument declares, by source id. */
 function sourceParamDefs(sourceId: string): ParamDefDto[] {
-  return sourceId === 'poly-synth' ? SYNTH_PARAMS.map((def) => ({ ...def })) : [];
+  if (sourceId === 'poly-synth') return SYNTH_PARAMS.map((def) => ({ ...def }));
+  // Every sampled instrument has the same knobs; only their starting positions
+  // differ. See `source_param_defs` in `app/src/project.rs`.
+  if (sourceId.startsWith('sampler:')) return SAMPLER_PARAMS.map((def) => ({ ...def }));
+  return [];
+}
+
+/** Where a track's knobs start when it selects `sourceId`. */
+function sourceParamValues(sourceId: string): ParamValueDto[] {
+  const wanted = SAMPLER_DEFAULTS[sourceId] ?? {};
+  return sourceParamDefs(sourceId).map((def) => ({
+    id: def.id,
+    value: wanted[def.id] ?? def.defaultValue,
+  }));
+}
+
+/** The grid division the engine offers that is closest to `division`. */
+function nearestDivision(division: number): number {
+  const wanted = Number.isFinite(division) ? division : DEFAULT_SLICE_DIVISION;
+  return [4, 8, 16].reduce((best, candidate) =>
+    Math.abs(candidate - wanted) < Math.abs(best - wanted) ? candidate : best,
+  );
+}
+
+/** How many 4/4 bars `span` frames is at `bpm`, rounded and floored at one. */
+function assumedBars(span: number, sampleRate: number, bpm: number): number {
+  if (!(bpm > 0) || !(sampleRate > 0)) return 1;
+  const barFrames = (sampleRate * 4 * 60) / bpm;
+  return Math.min(64, Math.max(1, Math.round(span / barFrames)));
+}
+
+/** An unsliced channel. Mirrors `SliceStateDto::default()`. */
+function noSlices(): SliceState {
+  return {
+    mode: 'off',
+    frames: [],
+    sensitivity: DEFAULT_SLICE_SENSITIVITY,
+    division: DEFAULT_SLICE_DIVISION,
+    keytrack: false,
+  };
 }
 
 /** Default pitch/region for a mixer strip that is not a sample channel. */
@@ -626,6 +929,7 @@ function starterTracks(): TrackDto[] {
         missing: null,
         inserts: [],
         ...SAMPLE_PLAY,
+        slices: noSlices(),
         ...noSourceParams(),
         audioSourceId: sample.id,
       };
@@ -648,11 +952,9 @@ function starterTracks(): TrackDto[] {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       sourceParamDefs: sourceParamDefs(sourceId),
-      sourceParams: sourceParamDefs(sourceId).map((def) => ({
-        id: def.id,
-        value: def.defaultValue,
-      })),
+      sourceParams: sourceParamValues(sourceId),
     };
   });
 }
@@ -762,6 +1064,14 @@ export class MockBackend implements Backend {
   private audioSources: AudioSourceDto[] = FACTORY_DRUM_IDS.map((id, index) =>
     factoryDrumAudio(index + 1, id),
   );
+  /**
+   * Each source's envelope, by id.
+   *
+   * The mock owns *shapes* rather than samples, and a destructive edit rewrites
+   * the shape -- see `envelope`. Filled lazily, so a session that never opens a
+   * sample editor never builds one.
+   */
+  private waveforms = new Map<number, [number, number][]>();
 
   private nextTrackId = 5;
   private nextBusId = 0;
@@ -786,6 +1096,10 @@ export class MockBackend implements Backend {
   private saved = new Map<string, MockSession>();
   private lastSavedPath: string | null = null;
 
+  // One row per downloadable instrument, matching `assets-manifest.json`. The
+  // piano is installed and the factory kits are not, which is the state the
+  // download footer has the most to render: a tick, six buttons, and a
+  // progress bar as soon as one is pressed.
   private assets: AssetStatus[] = [
     {
       id: 'salamander-piano',
@@ -796,6 +1110,24 @@ export class MockBackend implements Backend {
       bytesDone: 148_000_000,
       error: null,
     },
+    ...(
+      [
+        ['808-kit', '808 Kit', 2_300_000],
+        ['808-bass', '808 Bass', 2_200_000],
+        ['percussion-fx', 'Percussion & FX', 14_900_000],
+        ['studio-drums', 'Studio Drums', 23_000_000],
+        ['marimba', 'Marimba', 22_100_000],
+        ['glockenspiel', 'Glockenspiel', 9_300_000],
+      ] as const
+    ).map(([id, name, bytesTotal]) => ({
+      id,
+      name,
+      state: 'absent' as const,
+      progress: 0,
+      bytesTotal,
+      bytesDone: 0,
+      error: null,
+    })),
   ];
 
   private midiPorts: MidiPortDto[] = [
@@ -806,6 +1138,23 @@ export class MockBackend implements Backend {
   private previewVolumePercent = 80;
   private preferAsio = false;
   private audioBufferFrames = 256;
+
+  /**
+   * A plausible capture rig: the built-in microphone the OS defaults to, an
+   * interface at a *different* sample rate (so the rate-conversion copy in
+   * Settings has something to be about), and a device the host will not
+   * describe — the state that is otherwise impossible to look at.
+   */
+  private inputDevices: InputDeviceDto[] = [
+    { id: 'mock-builtin', name: 'Microphone (Realtek Audio)', channels: 2, sampleRate: 48_000, isDefault: true },
+    { id: 'mock-usb', name: 'Focusrite Scarlett Solo', channels: 1, sampleRate: 44_100, isDefault: false },
+    { id: 'mock-broken', name: 'Line In (unavailable)', channels: 0, sampleRate: 0, isDefault: false },
+  ];
+  private inputDeviceId: string | null = null;
+  private recordState: RecordState = 'idle';
+  /** `performance.now()` when the take started, for the elapsed readout. */
+  private recordStartedMs = 0;
+  private takesRecorded = 0;
   /** Last Sounds / Audio audition, for tests. Cleared by transport stop. */
   lastPreview: string | null = null;
   lastNoteOn: { key: number; velocity: number } | null = null;
@@ -963,9 +1312,18 @@ export class MockBackend implements Backend {
       pluginId: plugin.id,
       takesNotes: true,
     }));
+    // A sampled instrument is only offered once its content is installed and
+    // decoded -- that is what makes pressing Download in the browser footer do
+    // something visible, here as in the real shell.
+    const ready = new Set(
+      this.assets.filter((asset) => asset.state === 'ready').map((asset) => `sampler:${asset.id}`),
+    );
+    const builtIn = INTERNAL_SOURCES.filter(
+      (source) => !source.id.startsWith('sampler:') || ready.has(source.id),
+    );
     // Built-ins, then samplers, then CLAP instruments -- and **no VST3**, which
     // reach the UI through `get_vst3_plugins` instead. Mirrors `state.rs`.
-    return [...INTERNAL_SOURCES, ...this.fileSamplers, ...scanned].map((source) => ({
+    return [...builtIn, ...this.fileSamplers, ...scanned].map((source) => ({
       ...source,
       selected: source.id === current,
     }));
@@ -1016,13 +1374,13 @@ export class MockBackend implements Backend {
     def.clap = null;
     def.vst3 = null;
     def.audioSourceId = sample?.id ?? null;
+    // And a change of file is a change of chop: a slice is a frame position in
+    // one file (see `TrackDef::set_source` in the engine).
+    def.slices = noSlices();
     // A change of instrument is a change of knobs: the old ones belonged to the
     // old sound (see `TrackDef::set_source` in the engine).
     def.sourceParamDefs = sourceParamDefs(wanted.id);
-    def.sourceParams = def.sourceParamDefs.map((entry) => ({
-      id: entry.id,
-      value: entry.defaultValue,
-    }));
+    def.sourceParams = sourceParamValues(wanted.id);
     this.openEditors.delete(MockBackend.targetKey({ slot: 'track', index: track }));
     return this.mixerState();
   }
@@ -1287,6 +1645,122 @@ export class MockBackend implements Backend {
     return this.mixerState();
   }
 
+  /**
+   * Where the slices would fall — the mock's stand-in for the Rust detector.
+   *
+   * Not a spectral-flux pass: there is no PCM in the browser, only the
+   * envelope `getAudioWaveform` invents. What it *does* reproduce is every
+   * property the window depends on — onsets at plausible places in the file,
+   * a sensitivity that adds hits as it rises and never takes them away, the
+   * 30 ms minimum gap, the region as the range, the 128-slice ceiling, and the
+   * grid's exact division of the assumed bar.
+   */
+  async analyzeSlices(
+    track: number,
+    mode: SliceMode,
+    sensitivity: number,
+    division: number,
+  ): Promise<SliceAnalysis> {
+    const entry = this.track(track);
+    if (entry.engine !== 'clip' && entry.engine !== 'sample') {
+      throw new Error(`track ${track} is not an audio-file channel`);
+    }
+    const source = this.audioSources.find((item) => item.id === entry.audioSourceId);
+    if (!source) throw new Error(`audio source ${entry.audioSourceId} is not loaded`);
+    const total = source.frames;
+    const start = Math.min(Math.max(0, Math.floor(entry.sampleStartFrames)), total);
+    const rawEnd = Math.floor(entry.sampleEndFrames);
+    const end = rawEnd <= 0 || rawEnd > total ? total : Math.max(start, rawEnd);
+    const span = end - start;
+    if (span <= 0) {
+      return {
+        frames: [start],
+        mode: mode === 'grid' ? 'grid' : 'transient',
+        bars: 0,
+        truncated: false,
+        rangeStart: start,
+        rangeEnd: end,
+      };
+    }
+
+    if (mode === 'grid') {
+      const picked = nearestDivision(division);
+      const bars = assumedBars(span, source.sampleRate, this.bpm);
+      const wanted = Math.max(1, bars * picked);
+      const count = Math.min(wanted, MAX_SLICES);
+      return {
+        frames: Array.from(
+          { length: count },
+          (_, index) => start + Math.round((span * index) / wanted),
+        ),
+        mode: 'grid',
+        bars,
+        truncated: wanted > count,
+        rangeStart: start,
+        rangeEnd: end,
+      };
+    }
+
+    // Sixteen candidate onsets across the range, each with a fixed "strength"
+    // that a rising sensitivity progressively admits. The set only ever grows,
+    // which is the property the slider's readout promises.
+    const level = Number.isFinite(sensitivity) ? Math.min(1, Math.max(0, sensitivity)) : 0.5;
+    const minGap = Math.max(1, Math.round((SLICE_MIN_GAP_MS / 1000) * source.sampleRate));
+    const candidates = Array.from({ length: 16 }, (_, index) => ({
+      frame: start + Math.round((span * index) / 16),
+      // Downbeats are strong, offbeats weaker, sixteenths weakest: a plausible
+      // break, and deterministic so a test can name the counts.
+      strength: index % 4 === 0 ? 0.95 : index % 2 === 0 ? 0.55 : 0.25,
+    }));
+    const frames: number[] = [start];
+    for (const candidate of candidates) {
+      if (candidate.strength < 1 - level) continue;
+      const last = frames[frames.length - 1]!;
+      if (candidate.frame - last < minGap) continue;
+      frames.push(candidate.frame);
+      if (frames.length >= MAX_SLICES) break;
+    }
+    return {
+      frames,
+      mode: 'transient',
+      bars: 0,
+      truncated: false,
+      rangeStart: start,
+      rangeEnd: end,
+    };
+  }
+
+  async setTrackSlices(track: number, slices: SliceState): Promise<SliceState> {
+    const entry = this.track(track);
+    if (entry.engine !== 'clip' && entry.engine !== 'sample') {
+      throw new Error(`track ${track} is not an audio-file channel`);
+    }
+    const source = this.audioSources.find((item) => item.id === entry.audioSourceId);
+    const limit = source?.frames ?? 0xffffffff;
+    const frames = [
+      ...new Set(
+        (slices.frames ?? [])
+          .map((frame) => Math.max(0, Math.floor(frame)))
+          .filter((frame) => frame <= limit),
+      ),
+    ]
+      .sort((a, b) => a - b)
+      .slice(0, MAX_SLICES);
+    const sensitivity = Number.isFinite(slices.sensitivity)
+      ? Math.min(1, Math.max(0, slices.sensitivity))
+      : DEFAULT_SLICE_SENSITIVITY;
+    // A mode with nothing in it is not a mode -- the engine says the same.
+    const mode: SliceMode = frames.length === 0 ? 'off' : slices.mode;
+    entry.slices = {
+      mode,
+      frames,
+      sensitivity,
+      division: nearestDivision(slices.division),
+      keytrack: !!slices.keytrack,
+    };
+    return { ...entry.slices, frames: [...frames] };
+  }
+
   async setTrackFades(track: number, fadeInMs: number, fadeOutMs: number): Promise<MixerState> {
     const sane = (ms: number) => (Number.isFinite(ms) ? Math.min(10_000, Math.max(0, ms)) : 0);
     const entry = this.track(track);
@@ -1357,11 +1831,9 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       sourceParamDefs: sourceParamDefs(wanted.id),
-      sourceParams: sourceParamDefs(wanted.id).map((def) => ({
-        id: def.id,
-        value: def.defaultValue,
-      })),
+      sourceParams: sourceParamValues(wanted.id),
     });
     // A new rack channel gets a grid in every pattern, the way the engine's
     // `PatternSet::add_channel` does -- otherwise the row would be missing
@@ -1416,6 +1888,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       ...noSourceParams(),
       audioSourceId: sample.id,
     });
@@ -1465,6 +1938,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       ...noSourceParams(),
       audioSourceId: loaded.id,
     });
@@ -1735,6 +2209,7 @@ export class MockBackend implements Backend {
       bypassed: false,
       params: info.params.map<ParamValueDto>((def) => ({ id: def.id, value: def.defaultValue })),
       readouts: info.readouts.map<ParamValueDto>((def) => ({ id: def.id, value: 0 })),
+      sidechain: null,
     };
     const at = position === undefined ? chain.length : Math.min(chain.length, Math.max(0, position));
     chain.splice(at, 0, insert);
@@ -1826,19 +2301,49 @@ export class MockBackend implements Backend {
       id: insert.id,
       readouts: effectInfo(insert.typeId).readouts.map<ParamValueDto>((def) => {
         if (!this.playing || insert.bypassed) return { id: def.id, value: 0 };
-        if (def.id === 'gr') {
-          return { id: def.id, value: 3 + 4 * Math.abs(Math.sin(now * 2.1 + index)) };
-        }
-        if (def.id === 'gr_max') {
-          return { id: def.id, value: 4 + 5 * Math.abs(Math.sin(now * 1.4 + index)) };
+        if (def.id === 'gr' || def.id === 'gr_max') {
+          const peak = def.id === 'gr_max';
+          if (insert.sidechain) {
+            // Keyed: the reduction follows the key's own envelope, so the
+            // display's two traces line up the way they do with an engine
+            // behind them. That is the whole point of the demo -- a duck you
+            // can see arriving on the beat.
+            const duck = 18 * MockBackend.keyEnvelope(now, index);
+            return { id: def.id, value: peak ? duck : duck * 0.86 };
+          }
+          const base = peak ? 4 + 5 * Math.abs(Math.sin(now * 1.4 + index)) : 3 + 4 * Math.abs(Math.sin(now * 2.1 + index));
+          return { id: def.id, value: base };
         }
         if (def.id === 'latency') return { id: def.id, value: 32 };
         if (def.id === 'auto_gain_db') return { id: def.id, value: -((this.playing ? 6 : 0) as number) };
         if (def.id === 'correlation') return { id: def.id, value: 0.72 };
+        // The auto-filter's two: a cutoff that breathes an octave either side
+        // of where the knob is, and the follower that is moving it.
+        if (def.id === 'cutoff') {
+          const knob =
+            insert.params.find((entry) => entry.id === 'cutoff')?.value ?? 20_000;
+          return { id: def.id, value: knob * 2 ** Math.sin(now * 1.6 + index) };
+        }
+        if (def.id === 'env') {
+          return { id: def.id, value: 0.5 + 0.45 * Math.sin(now * 2.7 + index) };
+        }
         return { id: def.id, value: 0 };
       }),
     }));
   }
+
+  /**
+   * A four-to-the-floor envelope, 0..1, for the mock's key signal.
+   *
+   * Two beats a second with a fast attack and a ~180 ms tail: recognisably a
+   * kick, so a screenshot of the editor shows the shape a reader expects rather
+   * than an abstract wobble.
+   */
+  private static keyEnvelope(now: number, offset: number): number {
+    const phase = (now * 2 + offset * 0.13) % 1;
+    return Math.exp(-phase * 5.5) * (1 - Math.exp(-phase * 90));
+  }
+
 
   async watchSpectrum(target: InsertTarget | null, index: number | null): Promise<void> {
     this.spectrumWatch = target ? { target, index } : null;
@@ -1870,6 +2375,26 @@ export class MockBackend implements Backend {
 
   async setInsertListen(_target: InsertTarget, _index: number, _band: string | null): Promise<void> {
     // The mock has no audio path; solo is a no-op that must still resolve.
+  }
+
+  async setInsertSidechain(
+    target: InsertTarget,
+    index: number,
+    source: StripRef | null,
+  ): Promise<MixerState> {
+    const insert = this.chain(target)[index];
+    if (!insert) throw new Error(`there is no insert ${index} on that chain`);
+    if (source) {
+      const exists =
+        source.kind === 'track'
+          ? source.index < this.tracks.length
+          : source.index < this.buses.length;
+      if (!exists) {
+        throw new Error(`there is no ${source.kind} ${source.index} to key off`);
+      }
+    }
+    insert.sidechain = source;
+    return this.mixerState();
   }
 
   // --- patterns ------------------------------------------------------------
@@ -2307,19 +2832,242 @@ export class MockBackend implements Backend {
     return this.getAudioSources();
   }
 
+  /**
+   * The envelope of one source, at full mock resolution.
+   *
+   * Generated once per source and then **kept**, because the destructive edits
+   * ([`editTrackSample`](MockBackend.editTrackSample)) transform it: a mock
+   * that regenerated the shape from the source id on every request would draw
+   * the same waveform after a Reverse as before it, and the flow the UI is
+   * being exercised for would prove nothing.
+   */
+  private envelope(sourceId: number): [number, number][] {
+    const held = this.waveforms.get(sourceId);
+    if (held) return held;
+    const made: [number, number][] = Array.from({ length: MOCK_ENVELOPE_BINS }, (_, index) => {
+      const t = index / MOCK_ENVELOPE_BINS;
+      const envelope =
+        (0.35 + 0.65 * Math.abs(Math.sin(t * Math.PI * (2 + sourceId)))) * (1 - t * 0.45);
+      const level = Math.min(0.98, envelope * (0.7 + 0.3 * Math.abs(Math.sin(t * 47))));
+      return [-level, level] as [number, number];
+    });
+    this.waveforms.set(sourceId, made);
+    return made;
+  }
+
   /** A plausible envelope: a decaying, wobbling take, deterministic per source. */
   async getAudioWaveform(sourceId: number, targetBins?: number): Promise<WaveformDto> {
     const source = this.audioSources.find((entry) => entry.id === sourceId);
     if (!source) throw new Error(`there is no audio source ${sourceId}`);
     const bins = Math.min(MAX_WAVEFORM_BINS, Math.max(1, targetBins ?? 1024));
-    const peaks: [number, number][] = Array.from({ length: bins }, (_, index) => {
-      const t = index / bins;
-      const envelope =
-        (0.35 + 0.65 * Math.abs(Math.sin(t * Math.PI * (2 + sourceId)))) * (1 - t * 0.45);
-      const level = Math.min(0.98, envelope * (0.7 + 0.3 * Math.abs(Math.sin(t * 47))));
-      return [-level, level];
-    });
+    const peaks = foldPeaks(this.envelope(sourceId), bins);
     return { sourceId, frames: source.frames, bins, maxBins: MAX_WAVEFORM_BINS, peaks };
+  }
+
+  // --- destructive sample edits --------------------------------------------
+  //
+  // The engine writes a new WAV and loads it as a new source; the mock does the
+  // same to its stored envelope. Both ends agree on the shape that matters to
+  // the UI: a new source id, the old one still listed, and a waveform that
+  // actually changed.
+
+  async editTrackSample(track: number, op: SampleOp): Promise<SampleEditDto> {
+    const def = this.track(track);
+    const previousSourceId = def.audioSourceId;
+    if (previousSourceId == null) {
+      throw new Error(`track ${track} plays no audio file`);
+    }
+    const source = this.audioSources.find((entry) => entry.id === previousSourceId);
+    if (!source) throw new Error(`audio source ${previousSourceId} is not loaded`);
+
+    const peaks = this.envelope(previousSourceId);
+    const frames = source.frames;
+    // Captured before `repoint` writes over them: `def` is the live track, and
+    // reading the "previous" region out of it afterwards would report the new
+    // one and make every undo a no-op.
+    const previousStartFrames = def.sampleStartFrames;
+    const previousEndFrames = def.sampleEndFrames;
+    const start = def.sampleStartFrames;
+    const end = def.sampleEndFrames === 0 || def.sampleEndFrames > frames
+      ? frames
+      : def.sampleEndFrames;
+
+    let next = peaks;
+    let nextFrames = frames;
+    let region: [number, number] = [def.sampleStartFrames, def.sampleEndFrames];
+    let shift = 0;
+    let suffix: string;
+    switch (op.kind) {
+      case 'reverse': {
+        next = peaks.slice().reverse();
+        region = start === 0 && end === frames ? [0, 0] : [frames - end, frames - start];
+        suffix = 'reversed';
+        break;
+      }
+      case 'normalize': {
+        const peak = peaks.reduce((worst, [lo, hi]) => Math.max(worst, Math.abs(lo), Math.abs(hi)), 0);
+        if (peak <= 1e-6) throw new Error(`${source.name} is silent; there is nothing to normalize`);
+        const scale = 10 ** (NORMALIZE_TARGET_DBFS / 20) / peak;
+        next = peaks.map(([lo, hi]) => [lo * scale, hi * scale] as [number, number]);
+        suffix = 'normalized';
+        break;
+      }
+      case 'trim': {
+        if (start >= end || (start === 0 && end === frames)) {
+          throw new Error(
+            'Trim needs a region shorter than the whole file — drag one on the waveform first',
+          );
+        }
+        const first = Math.floor((start / frames) * peaks.length);
+        const last = Math.max(first + 1, Math.ceil((end / frames) * peaks.length));
+        next = peaks.slice(first, last);
+        nextFrames = end - start;
+        region = [0, 0];
+        shift = -start;
+        suffix = 'trimmed';
+        break;
+      }
+      case 'gain': {
+        const db = Math.max(-MAX_EDIT_GAIN_DB, Math.min(MAX_EDIT_GAIN_DB, op.db));
+        const scale = 10 ** (db / 20);
+        next = peaks.map(([lo, hi]) => [lo * scale, hi * scale] as [number, number]);
+        suffix = `${db >= 0 ? '+' : ''}${db.toFixed(1)} dB`;
+        break;
+      }
+    }
+
+    const stem = source.name.replace(/\.[^.]+$/, '');
+    const seconds = source.sampleRate > 0 ? nextFrames / source.sampleRate : source.durationSeconds;
+    const written: AudioSourceDto = {
+      id: this.nextAudioId++,
+      path: `${SAMPLE_EDIT_DIR}\\${stem} (${suffix}).wav`,
+      name: `${stem} (${suffix}).wav`,
+      frames: nextFrames,
+      sampleRate: source.sampleRate,
+      durationSeconds: seconds,
+      durationTicks: this.ticksFor(seconds),
+      missing: false,
+      bytes: nextFrames * 8,
+    };
+    this.audioSources.push(written);
+    this.waveforms.set(written.id, next);
+
+    this.repoint(track, written.id, region[0], region[1], shift);
+    return {
+      track,
+      op: OP_LABELS[op.kind],
+      source: written,
+      previousSourceId,
+      startFrames: region[0],
+      endFrames: region[1],
+      previousStartFrames,
+      previousEndFrames,
+      clipOffsetShiftFrames: shift,
+      mixer: this.mixerState(),
+    };
+  }
+
+  async setTrackAudioSource(
+    track: number,
+    sourceId: number,
+    startFrames: number,
+    endFrames: number,
+    clipOffsetShiftFrames: number,
+  ): Promise<MixerState> {
+    if (!this.audioSources.some((entry) => entry.id === sourceId)) {
+      throw new Error(`audio source ${sourceId} is not loaded`);
+    }
+    this.repoint(track, sourceId, startFrames, endFrames, clipOffsetShiftFrames);
+    return this.mixerState();
+  }
+
+  /** Point one channel (and only its own clips) at a different loaded file. */
+  private repoint(
+    track: number,
+    sourceId: number,
+    startFrames: number,
+    endFrames: number,
+    clipOffsetShiftFrames: number,
+  ): void {
+    const def = this.track(track);
+    const from = def.audioSourceId;
+    def.audioSourceId = sourceId;
+    def.sourceId = def.sourceId.startsWith('clip:') ? `clip:${sourceId}` : `oneshot:${sourceId}`;
+    def.sampleStartFrames = Math.max(0, Math.floor(startFrames));
+    def.sampleEndFrames = Math.max(0, Math.floor(endFrames));
+    if (from == null || from === sourceId) return;
+    for (const clip of this.clips) {
+      if (clip.sourceId === from && clip.track === track) {
+        clip.sourceId = sourceId;
+        clip.offsetFrames = Math.max(0, (clip.offsetFrames ?? 0) + clipOffsetShiftFrames);
+      }
+    }
+  }
+
+  /**
+   * Render one loop of the active pattern and land it as a sample channel.
+   *
+   * The mock has no DSP, so the "render" is a synthetic envelope built from the
+   * steps that are actually on: every switched-on step becomes a decaying hit at
+   * its own position in the loop. That is enough for the flow under test -- a
+   * new channel appears, its waveform is of *this* pattern, and an empty grid
+   * refuses rather than adding a channel of silence, exactly as the engine does.
+   */
+  async renderPatternToSample(): Promise<RenderToSampleDto> {
+    if (this.tracks.length >= MAX_TRACKS) {
+      throw new Error(`a project may have at most ${MAX_TRACKS} tracks`);
+    }
+    const pattern = this.patterns.find((entry) => entry.id === this.activePattern);
+    if (!pattern) throw new Error('there is no active pattern');
+
+    const hits: number[] = [];
+    for (const channel of pattern.channels) {
+      channel.steps?.steps.forEach((step, index) => {
+        if (step.on) hits.push(index / pattern.steps);
+      });
+      for (const note of channel.notes) hits.push(note.start / (pattern.steps * TICKS_PER_STEP));
+    }
+    if (hits.length === 0) {
+      throw new Error(
+        'the rendered pattern is silent — check that a channel is unmuted and has steps',
+      );
+    }
+
+    const peaks: [number, number][] = Array.from({ length: MOCK_ENVELOPE_BINS }, (_, index) => {
+      const t = index / MOCK_ENVELOPE_BINS;
+      let level = 0;
+      for (const hit of hits) {
+        const since = t - hit;
+        if (since >= 0 && since < 0.12) level = Math.max(level, 0.9 * Math.exp(-since * 40));
+      }
+      return [-level, level] as [number, number];
+    });
+
+    const seconds = (pattern.steps / 4) * (60 / this.bpm);
+    const source: AudioSourceDto = {
+      id: this.nextAudioId++,
+      path: `${RENDER_DIR}\\${pattern.name}.wav`,
+      name: `${pattern.name}.wav`,
+      frames: Math.round(seconds * 48_000),
+      sampleRate: 48_000,
+      durationSeconds: seconds,
+      durationTicks: this.ticksFor(seconds),
+      missing: false,
+      bytes: Math.round(seconds * 48_000 * 8),
+    };
+    this.audioSources.push(source);
+    this.waveforms.set(source.id, peaks);
+    const track = this.tracks.length;
+    this.pushOneshotTrack(source, source.name);
+    return {
+      track,
+      name: source.name,
+      frames: source.frames,
+      sampleRate: source.sampleRate,
+      peak: 0.9,
+      hostedChannels: this.tracks.filter((entry) => entry.clap || entry.vst3).length,
+      mixer: this.mixerState(),
+    };
   }
 
   async previewSource(sourceId: string, targetBins?: number): Promise<SourcePreviewDto> {
@@ -2528,6 +3276,7 @@ export class MockBackend implements Backend {
       missing: null,
       inserts: [],
       ...SAMPLE_PLAY,
+      slices: noSlices(),
       ...noSourceParams(),
       audioSourceId: sourceId,
     });
@@ -2735,6 +3484,137 @@ export class MockBackend implements Backend {
         : '',
       running: true,
     };
+  }
+
+  // --- audio input and recording -------------------------------------------
+
+  async getInputDevices(): Promise<InputDeviceDto[]> {
+    return structuredClone(this.inputDevices);
+  }
+
+  async setInputDevice(deviceId: string | null): Promise<InputStatusDto> {
+    if (this.recordState === 'recording') {
+      throw new Error('stop the take before changing the input device');
+    }
+    if (deviceId !== null && !this.inputDevices.some((device) => device.id === deviceId)) {
+      throw new Error(`input device '${deviceId}' is not available`);
+    }
+    this.inputDeviceId = deviceId;
+    return this.getInputStatus();
+  }
+
+  /** The device that would be opened: the chosen one, or the host default. */
+  private activeInputDevice(): InputDeviceDto | undefined {
+    return this.inputDeviceId === null
+      ? this.inputDevices.find((device) => device.isDefault)
+      : this.inputDevices.find((device) => device.id === this.inputDeviceId);
+  }
+
+  /**
+   * A fake level: two slow sines beating against each other, so the meter moves
+   * the way a voice does rather than sitting still. Zero while idle, because an
+   * unopened device cannot be hearing anything.
+   */
+  private inputLevel(): { peak: number; rms: number } {
+    if (this.recordState === 'idle') return { peak: 0, rms: 0 };
+    const t = performance.now() / 1000;
+    const envelope = 0.45 + 0.4 * Math.abs(Math.sin(t * 1.7)) * (0.6 + 0.4 * Math.sin(t * 0.31));
+    const peak = Math.min(0.99, Math.max(0, envelope));
+    return { peak, rms: peak * 0.62 };
+  }
+
+  async getInputStatus(): Promise<InputStatusDto> {
+    const device = this.activeInputDevice();
+    const open = this.recordState !== 'idle';
+    const { peak, rms } = this.inputLevel();
+    const elapsed =
+      this.recordState === 'recording'
+        ? Math.min(MAX_RECORD_SECONDS, (performance.now() - this.recordStartedMs) / 1000)
+        : 0;
+    return {
+      state: this.recordState,
+      deviceName: open ? (device?.name ?? '') : '',
+      deviceId: this.inputDeviceId,
+      deviceSampleRate: open ? (device?.sampleRate ?? 0) : 0,
+      deviceChannels: open ? (device?.channels ?? 0) : 0,
+      sampleRate: SAMPLE_RATE,
+      peak,
+      rms,
+      elapsedSeconds: elapsed,
+      maxSeconds: MAX_RECORD_SECONDS,
+      droppedSamples: 0,
+      limitReached: elapsed >= MAX_RECORD_SECONDS,
+      fault: '',
+      hasDevices: this.inputDevices.length > 0,
+    };
+  }
+
+  async setInputArmed(armed: boolean): Promise<InputStatusDto> {
+    if (!armed) {
+      this.recordState = 'idle';
+      return this.getInputStatus();
+    }
+    const device = this.activeInputDevice();
+    if (!device) throw new Error('no audio input device is available');
+    // Mirrors the engine's refusal: a device the host will not describe is a
+    // device that will not open.
+    if (device.channels === 0) {
+      throw new Error(`input device error: ${device.name} reported no usable configuration`);
+    }
+    this.recordState = 'armed';
+    console.info(`[mock] armed ${device.name}; the level is invented`);
+    return this.getInputStatus();
+  }
+
+  async startRecording(): Promise<InputStatusDto> {
+    if (this.recordState === 'recording') throw new Error('a take is already being recorded');
+    if (this.recordState === 'idle') await this.setInputArmed(true);
+    this.recordState = 'recording';
+    this.recordStartedMs = performance.now();
+    return this.getInputStatus();
+  }
+
+  /**
+   * There is no capture device in a browser, so the take is *invented* at the
+   * length the button was actually held -- which is what makes the whole
+   * gesture (record, channel, sample editor with a waveform) demonstrable
+   * without hardware. The same trade `openAudioFile` makes for the dialog.
+   */
+  async stopRecording(): Promise<RecordedTakeDto> {
+    if (this.recordState !== 'recording') throw new Error('nothing is being recorded');
+    const seconds = Math.min(MAX_RECORD_SECONDS, (performance.now() - this.recordStartedMs) / 1000);
+    this.recordState = 'armed';
+    if (seconds < 0.05) {
+      throw new Error('nothing was recorded; the input device produced no audio');
+    }
+
+    this.takesRecorded += 1;
+    const name = `Recording ${this.takesRecorded}.wav`;
+    const source: AudioSourceDto = {
+      id: this.nextAudioId++,
+      path: `${MOCK_RECORDINGS}\\${name}`,
+      name,
+      frames: Math.round(seconds * SAMPLE_RATE),
+      sampleRate: SAMPLE_RATE,
+      durationSeconds: seconds,
+      durationTicks: this.ticksFor(seconds),
+      missing: false,
+      bytes: Math.round(seconds * SAMPLE_RATE * 8),
+    };
+    this.audioSources.push(source);
+    console.info(`[mock] no capture device outside Tauri, invented ${name} (${seconds.toFixed(2)} s)`);
+    return {
+      source: { ...source },
+      droppedSamples: 0,
+      limitReached: seconds >= MAX_RECORD_SECONDS,
+      peak: 0.82,
+    };
+  }
+
+  async cancelRecording(): Promise<InputStatusDto> {
+    if (this.recordState !== 'recording') throw new Error('nothing is being recorded');
+    this.recordState = 'armed';
+    return this.getInputStatus();
   }
 
   async listMidiPorts(): Promise<MidiPortDto[]> {

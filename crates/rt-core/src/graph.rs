@@ -309,6 +309,7 @@ pub struct GraphSpec {
     sends: Vec<SendSpec>,
     master_inserts: Vec<Box<dyn RtNode>>,
     params: Option<Arc<MixerParams>>,
+    sidechain: Option<Arc<crate::SidechainBus>>,
     limits: Option<GraphLimits>,
 }
 
@@ -407,6 +408,25 @@ impl GraphSpec {
     pub fn with_params(mut self, params: Arc<MixerParams>) -> Self {
         self.params = Some(params);
         self
+    }
+
+    /// Publish every strip's post-insert signal into `bus`, for the
+    /// compressors that key off one.
+    ///
+    /// Shared by `Arc` for the same reason [`with_params`](Self::with_params)
+    /// is: the compressors hold the same bus, and a rebuild must not drop the
+    /// subscription between them. Left unset -- which is every offline render
+    /// and every test that is not about sidechain -- nothing is published and a
+    /// compressor keyed off a strip simply hears silence.
+    #[must_use]
+    pub fn with_sidechain(mut self, bus: Arc<crate::SidechainBus>) -> Self {
+        self.sidechain = Some(bus);
+        self
+    }
+
+    /// The key bus this spec will compile with, if it was given one.
+    pub fn sidechain(&self) -> Option<&Arc<crate::SidechainBus>> {
+        self.sidechain.as_ref()
     }
 
     /// Pin the sizes the compiled graph allocates for.
@@ -553,6 +573,7 @@ impl GraphSpec {
             master_inserts: self.master_inserts,
             master,
             params,
+            sidechain: self.sidechain,
         }
     }
 }
@@ -712,6 +733,9 @@ pub struct CompiledGraph {
     master_inserts: Vec<Box<dyn RtNode>>,
     master: MasterStrip,
     params: Arc<MixerParams>,
+    /// Where each strip's post-insert, pre-fader block is published for the
+    /// compressors keyed off it. See [`crate::SidechainBus`].
+    sidechain: Option<Arc<crate::SidechainBus>>,
     /// Last block's post-strip peak per track, for the meter path.
     peaks: TrackPeaks,
     /// Last block's post-strip peak per bus.
@@ -745,9 +769,17 @@ impl CompiledGraph {
             master_inserts,
             master,
             params,
+            sidechain,
             peaks,
             bus_peaks,
         } = self;
+
+        // Flip the key bus's banks before anything renders, so every reader in
+        // this block sees exactly the previous block's signal whatever order the
+        // strips run in. See [`crate::SidechainBus`].
+        if let Some(keys) = sidechain.as_deref() {
+            keys.begin_block();
+        }
 
         // The bus starts silent: it is a *sum*, and whatever the previous block
         // left in it is not part of this one.
@@ -813,6 +845,13 @@ impl CompiledGraph {
             };
             debug_assert!(frames <= ctx.frames);
 
+            // The key tap: post-insert, pre-fader, for the reasons in
+            // [`crate::SidechainBus`]. A no-op unless a compressor asked for
+            // this strip.
+            if let Some(keys) = sidechain.as_deref() {
+                keys.write(index, scratch);
+            }
+
             // Pre-fader taps read the chain's output *before* the strip, so a
             // track pulled to silence still feeds its reverb.
             for tap in sends.iter_mut() {
@@ -860,6 +899,12 @@ impl CompiledGraph {
                     tap.as_deref_mut(),
                     crate::SpectrumLoc::Bus(index),
                 );
+            }
+
+            if let Some(keys) = sidechain.as_deref() {
+                if let Some(slot) = crate::key_slot(StripId::Bus(index)) {
+                    keys.write(slot, &buses[index].input);
+                }
             }
 
             let tap_count = buses[index].sends.len();
@@ -1113,6 +1158,19 @@ mod tests {
         }
     }
 
+    /// Scales what is already on the bus, so a test can tell an insert's output
+    /// from its input.
+    struct GainNode(f32);
+    impl RtNode for GainNode {
+        fn process(&mut self, ctx: &mut ProcessCtx) {
+            for ch in ctx.buffers.as_mut_slices() {
+                for s in ch.iter_mut() {
+                    *s *= self.0;
+                }
+            }
+        }
+    }
+
     /// Adds a constant, to verify serial ordering / accumulation.
     struct AddNode(f32);
     impl RtNode for AddNode {
@@ -1163,6 +1221,86 @@ mod tests {
         let mut ctx = ProcessCtx::new(buffers, SR, frames, TransportSnapshot::default());
         slot.process(&mut ctx);
         buffers.as_slices()[0][0]
+    }
+
+    /// A node that reads one key slot and records what it saw, so a test can
+    /// ask what a compressor *would* have keyed off at that point in the graph.
+    struct KeyReader {
+        bus: Arc<crate::SidechainBus>,
+        slot: usize,
+        seen: Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    impl RtNode for KeyReader {
+        fn process(&mut self, _ctx: &mut ProcessCtx) {
+            self.bus.request(self.slot);
+            let mut peak = 0.0_f32;
+            for frame in 0..self.bus.frames(self.slot) {
+                let [left, right] = self.bus.read(self.slot, frame);
+                peak = peak.max(left.abs().max(right.abs()));
+            }
+            self.seen
+                .store(peak.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn a_strip_publishes_its_key_after_its_inserts_and_before_its_fader() {
+        // The tap's contract, in one graph: track 0 makes 0.5 and doubles it to
+        // 1.0 in an insert, then its fader is pulled right down. What a keyed
+        // compressor on track 1 sees must be the insert's output and not the
+        // fader's, or muting the kick would stop the bass ducking.
+        let collector = Collector::new();
+        let bus = Arc::new(crate::SidechainBus::new(16));
+        let seen = Arc::new(std::sync::atomic::AtomicU32::new(0));
+
+        let params = Arc::new(MixerParams::new());
+        params.set_track_gain(0, 0.0);
+
+        let mut spec = GraphSpec::new()
+            .with_params(Arc::clone(&params))
+            .with_sidechain(Arc::clone(&bus))
+            .with_limits(limits(16));
+        spec.push_track(
+            TrackSpec::new(Box::new(ConstNode(0.5))).with_insert(Box::new(GainNode(2.0))),
+        );
+        spec.push_track(
+            TrackSpec::new(Box::new(ConstNode(0.0))).with_insert(Box::new(KeyReader {
+                bus: Arc::clone(&bus),
+                slot: crate::key_slot(StripId::Track(0)).expect("a slot"),
+                seen: Arc::clone(&seen),
+            })),
+        );
+
+        let (mut handle, mut slot) = graph_channel(2, collector.handle());
+        handle.install(spec).expect("installs");
+        let mut buffers = AudioBuffers::new(16);
+        slot.poll_swap();
+
+        // Block 1 arms the subscription, block 2 publishes, block 3 reads it.
+        for _ in 0..3 {
+            render(&mut slot, &mut buffers, 16);
+        }
+        let peak = f32::from_bits(seen.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            (peak - 1.0).abs() < 1.0e-6,
+            "post-insert and pre-fader: expected 1.0, saw {peak}"
+        );
+    }
+
+    #[test]
+    fn a_graph_with_no_key_bus_runs_exactly_as_it_did_before_one_existed() {
+        // Every offline render and every test that predates sidechain compiles
+        // without a bus, and must be untouched by its existence.
+        let collector = Collector::new();
+        let mut spec = GraphSpec::new().with_limits(limits(8));
+        spec.push_track(TrackSpec::new(Box::new(ConstNode(0.25))));
+        assert!(spec.sidechain().is_none());
+        let (mut handle, mut slot) = graph_channel(2, collector.handle());
+        handle.install(spec).unwrap();
+        let mut buffers = AudioBuffers::new(8);
+        slot.poll_swap();
+        assert_eq!(render(&mut slot, &mut buffers, 8), 0.25);
     }
 
     #[test]

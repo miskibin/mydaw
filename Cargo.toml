@@ -78,6 +78,8 @@ mydaw-ipc-bridge = { path = "crates/ipc-bridge" }
 # recordings) and the sequencer (an audio clip on the playlist).
 mydaw-audio-file = { path = "crates/audio-file" }
 mydaw-pitch-analysis = { path = "crates/pitch-analysis" }
+# Onset detection and grid slicing behind the sample window's Slices mode.
+mydaw-slice-analysis = { path = "crates/slice-analysis" }
 # Out-of-process plugin scanning: the worker protocol, the metadata cache and the
 # block list, shared by both plugin hosts.
 mydaw-plugin-scan = { path = "crates/plugin-scan" }

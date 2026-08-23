@@ -26,6 +26,7 @@ import {
   withRepeatedFirstBar,
   withSetStep,
   withShiftedSteps,
+  withSlicesAsNotes,
   withStepsConvertedToNotes,
   occupiedChannels,
   canSplitByChannel,
@@ -448,6 +449,61 @@ describe('withStepsConvertedToNotes', () => {
     };
     pattern.channels[0]!.steps!.steps[0] = { on: true, velocity: STEP_VELOCITY };
     expect(withStepsConvertedToNotes(pattern, 0, 36).channels[0]!.notes[0]!.key).toBe(36);
+  });
+});
+
+describe('withSlicesAsNotes', () => {
+  it('lays one note per slice on sixteenths, climbing from the root', () => {
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 16), notes: [] }],
+    };
+    const after = withSlicesAsNotes(pattern, 0, 60, 4);
+    expect(after.channels[0]!.notes).toEqual([
+      { key: 60, start: 0, length: TICKS_PER_STEP, velocity: STEP_VELOCITY },
+      { key: 61, start: TICKS_PER_STEP, length: TICKS_PER_STEP, velocity: STEP_VELOCITY },
+      { key: 62, start: 2 * TICKS_PER_STEP, length: TICKS_PER_STEP, velocity: STEP_VELOCITY },
+      { key: 63, start: 3 * TICKS_PER_STEP, length: TICKS_PER_STEP, velocity: STEP_VELOCITY },
+    ]);
+  });
+
+  it('grows the pattern so a long chop is not thrown away at the wall', () => {
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 16), notes: [] }],
+    };
+    expect(pattern.steps).toBe(16);
+    const after = withSlicesAsNotes(pattern, 0, 60, 24);
+    expect(after.steps).toBe(32);
+    expect(after.channels[0]!.notes).toHaveLength(24);
+    expect(after.channels[0]!.steps!.steps).toHaveLength(32);
+  });
+
+  it('clears the step cells so the engine does not sound the grid underneath', () => {
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 16), notes: [] }],
+    };
+    pattern.channels[0]!.steps!.steps[0] = { on: true, velocity: STEP_VELOCITY };
+    const after = withSlicesAsNotes(pattern, 0, 60, 3);
+    expect(after.channels[0]!.steps!.steps.some((cell) => cell.on)).toBe(false);
+  });
+
+  it('stops at MIDI 127 rather than writing notes no key can play', () => {
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(126, 16), notes: [] }],
+    };
+    const after = withSlicesAsNotes(pattern, 0, 126, 6);
+    expect(after.channels[0]!.notes.map((note) => note.key)).toEqual([126, 127]);
+  });
+
+  it('answers by reference when there is no chop to lay out', () => {
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 0, mode: 'steps', steps: emptyRow(60, 16), notes: [] }],
+    };
+    expect(withSlicesAsNotes(pattern, 0, 60, 0)).toBe(pattern);
   });
 });
 

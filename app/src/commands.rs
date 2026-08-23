@@ -16,8 +16,9 @@ use crate::audio_settings::{self, AudioSettings};
 use crate::clap_bridge::{ClapGuiStatusDto, ClapTarget};
 use crate::debug_capture::{capture_root, capture_to_disk, CaptureReportDto};
 use crate::dto::{
-    AudioOutputDto, AudioSourceDto, ClapPluginInfoDto, MeterFrameDto, PatternDto,
-    SequencerStateDto, StreamInfoDto, Vst3PluginInfoDto, WaveformDto,
+    AudioOutputDto, AudioSourceDto, ClapPluginInfoDto, InputDeviceDto, InputStatusDto,
+    MeterFrameDto, PatternDto, RecordedTakeDto, SequencerStateDto, StreamInfoDto,
+    Vst3PluginInfoDto, WaveformDto,
 };
 use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueDto};
 use crate::ipc_bench::{
@@ -26,9 +27,12 @@ use crate::ipc_bench::{
 use crate::library::{self, LibraryEntryDto, LibraryRootDto};
 use crate::preview::SourcePreviewDto;
 use crate::preview_settings::{self, PreviewSettings};
-use crate::project::{MixerStateDto, PitchAnalysisDto, RootMode};
+use crate::project::{
+    MixerStateDto, PitchAnalysisDto, RootMode, SliceAnalysisDto, SliceMode, SliceStateDto,
+};
 use crate::project_bridge::ProjectInfoDto;
 use crate::project_file::{PROJECT_EXTENSION, UNTITLED};
+use crate::sample_edit::{SampleEditDto, SampleOp};
 use crate::source::{Source, SourceDto};
 use crate::state::AppState;
 use crate::vst3_bridge::Vst3GuiStatusDto;
@@ -113,27 +117,32 @@ pub fn get_sources(state: State<'_, AppState>) -> Vec<SourceDto> {
     state.sources()
 }
 
-/// Whether the bundled sample content is installed, and what the downloader is
-/// doing about it.
+/// Every downloadable instrument, whether it is installed, and what its
+/// downloader is doing about it.
 ///
 /// Polled by the shell while a download runs, which is what draws the
-/// percentage. Cheap: file metadata plus three atomic loads, never a hash.
+/// percentage. Cheap: file metadata plus three atomic loads per instrument,
+/// never a hash.
 #[tauri::command]
-pub fn get_asset_status(state: State<'_, AppState>) -> AssetStatus {
+pub fn get_asset_status(state: State<'_, AppState>) -> Vec<AssetStatus> {
     state.asset_status()
 }
 
-/// Download the bundled sample content.
+/// Download one instrument's sample content.
 ///
-/// Returns as soon as the transfer has *started*; the shell polls
-/// [`get_asset_status`] for progress. When it finishes, the sampler rescans and
-/// the new instrument appears in [`get_sources`] with no restart.
+/// `id` is an `instrumentId` from [`get_asset_status`]. Returns as soon as the
+/// transfer has *started*; the shell polls [`get_asset_status`] for progress.
+/// When it finishes, the sampler rescans and the new instrument appears in
+/// [`get_sources`] with no restart.
 ///
 /// Nothing calls this except a user pressing the button. See the consent note
 /// in `mydaw_plugin_sampler::download`.
 #[tauri::command]
-pub fn start_asset_download(state: State<'_, AppState>) -> Result<AssetStatus, String> {
-    state.start_asset_download()?;
+pub fn start_asset_download(
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Vec<AssetStatus>, String> {
+    state.start_asset_download(&id)?;
     Ok(state.asset_status())
 }
 
@@ -234,6 +243,46 @@ pub async fn analyze_track_pitch(
     .map_err(|err| err.to_string())?
 }
 
+/// Where an audio-file channel's slices would fall, without installing them.
+///
+/// `mode` is `transient` or `grid`; `sensitivity` (`0..=1`) drives the first
+/// and `division` (4, 8 or 16 slices to the bar) the second. The range is the
+/// channel's SMP region. Blocking: an onset pass over a two-minute break is
+/// tens of milliseconds, which is a frame the UI thread should not lose.
+#[tauri::command]
+pub async fn analyze_slices(
+    app: tauri::AppHandle,
+    track: usize,
+    mode: SliceMode,
+    sensitivity: f32,
+    division: u32,
+) -> Result<SliceAnalysisDto, String> {
+    use tauri::Manager;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state
+            .analyze_track_slices(track, mode, sensitivity, division)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Install (or clear) an audio-file channel's chop.
+///
+/// Answers with what was stored, not with what was asked for: markers are
+/// sorted, deduped, clamped to the file and capped at the engine's table size.
+#[tauri::command]
+pub fn set_track_slices(
+    state: State<'_, AppState>,
+    track: usize,
+    slices: SliceStateDto,
+) -> Result<SliceStateDto, String> {
+    state
+        .set_track_slices(track, slices)
+        .map_err(|err| err.to_string())
+}
+
 /// Calibrate an audio-file channel's playback root (MIDI note + fine cents).
 #[tauri::command]
 pub fn set_track_sample_root(
@@ -297,6 +346,100 @@ pub fn set_track_sample_region(
         .set_track_sample_region(track, start_frames, end_frames)
         .map_err(|err| err.to_string())?;
     Ok(state.mixer_state())
+}
+
+/// Apply one **destructive** edit to the file behind a sample channel.
+///
+/// Reverse, Normalize, Trim and Gain. Copy-on-write: a new WAV is written, the
+/// channel (and this lane's playlist clips) are repointed at it, and everything
+/// else that plays the original take is untouched. The answer carries both the
+/// new pointer and the old one, so the shell records the pair as a single undo
+/// entry replayed through [`set_track_audio_source`].
+///
+/// `async` so Tauri runs it off the main thread: encoding ten minutes of audio
+/// is not work to do inside a window's event loop.
+#[tauri::command]
+pub async fn edit_track_sample(
+    state: State<'_, AppState>,
+    track: usize,
+    op: SampleOp,
+) -> Result<SampleEditDto, String> {
+    state
+        .edit_track_sample(track, op)
+        .map_err(|err| err.to_string())
+}
+
+/// Point a sample channel at a different **already loaded** file, with a region.
+///
+/// The inverse half of [`edit_track_sample`], and how Ctrl+Z restores a take
+/// without re-decoding it. `clipOffsetShiftFrames` moves this lane's playlist
+/// clips inside the file, which only undoing (or redoing) a Trim needs.
+#[tauri::command]
+pub async fn set_track_audio_source(
+    state: State<'_, AppState>,
+    track: usize,
+    source_id: u64,
+    start_frames: u64,
+    end_frames: u64,
+    clip_offset_shift_frames: i64,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_track_audio_source(
+            track,
+            source_id,
+            start_frames,
+            end_frames,
+            clip_offset_shift_frames,
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
+}
+
+/// Render one loop of the active pattern offline and add it as a sample channel.
+///
+/// "Resampling": the whole rack, through the mixer, bounced to a file and
+/// dropped back in as a one-shot the sample editor can trim, reverse and pitch.
+/// Hosted CLAP/VST3 channels are silent in the render — only the main thread can
+/// instantiate one — and `hostedChannels` says how many, so the shell can tell
+/// the user rather than let them wonder why a lead is missing.
+///
+/// `async` for the same reason as the sample edits: it renders and encodes.
+#[tauri::command]
+pub async fn render_pattern_to_sample(
+    state: State<'_, AppState>,
+) -> Result<RenderToSampleDto, String> {
+    let outcome = state
+        .render_pattern_to_sample()
+        .map_err(|err| err.to_string())?;
+    Ok(RenderToSampleDto {
+        track: outcome.track,
+        name: outcome
+            .path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        frames: outcome.frames as u64,
+        sample_rate: outcome.sample_rate,
+        peak: outcome.peak,
+        hosted_channels: outcome.hosted_channels,
+        mixer: state.mixer_state(),
+    })
+}
+
+/// What [`render_pattern_to_sample`] produced.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderToSampleDto {
+    /// The rack channel the render landed on.
+    pub track: usize,
+    /// The file's name, for the status bar.
+    pub name: String,
+    pub frames: u64,
+    pub sample_rate: f64,
+    pub peak: f32,
+    /// Channels that were silent because their instrument is a hosted plugin.
+    pub hosted_channels: usize,
+    pub mixer: MixerStateDto,
 }
 
 /// Mute or unmute a track. A mute is a 10 ms fade, not a cut.
@@ -796,6 +939,34 @@ pub fn set_insert_listen(
     state
         .set_insert_listen(target, index, band.as_deref())
         .map_err(|err| err.to_string())
+}
+
+/// Point one insert's detector at another strip, returning the whole mixer.
+///
+/// One atomic store and no rebuild -- a key can be repointed while the transport
+/// runs, which is how a user auditions "which drum should this duck under". The
+/// whole mixer comes back rather than an acknowledgement because the route is
+/// part of the insert every strip draws, on the same terms as the bypass switch.
+///
+/// `source_kind` is `"track"` or `"bus"`; pass `null` to unroute.
+#[tauri::command]
+pub fn set_insert_sidechain(
+    state: State<'_, AppState>,
+    target: String,
+    target_index: usize,
+    index: usize,
+    source_kind: Option<String>,
+    source_index: usize,
+) -> Result<MixerStateDto, String> {
+    let target = parse_insert_target(&target, target_index)?;
+    let source = match source_kind.as_deref() {
+        None => None,
+        Some(kind) => Some(parse_strip(kind, source_index)?),
+    };
+    state
+        .set_insert_sidechain(target, index, source)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
 }
 
 /// `"track"` / `"bus"` plus an index, as the webview sends a send's source.
@@ -1644,6 +1815,142 @@ pub fn set_audio_settings(
         .apply_output_request(settings.to_request())
         .map_err(|err| err.to_string())?;
     Ok(audio_output_dto(&state, &settings))
+}
+
+// --- audio input and recording ---------------------------------------------
+//
+// Seven commands, one state machine: idle -> armed -> recording -> armed.
+// `get_input_status` is the only one the UI polls, and only while the device is
+// open; the rest are gestures. See `mydaw_plugin_audio_io::record`.
+
+/// Every capture device the default host can offer.
+///
+/// An empty list is a real answer, not a failure: a headless machine, an RDP
+/// session or a laptop with the microphone disabled all produce one, and
+/// Settings draws an empty state for it.
+#[tauri::command]
+pub fn get_input_devices(state: State<'_, AppState>) -> Vec<InputDeviceDto> {
+    state
+        .recorder()
+        .devices()
+        .into_iter()
+        .map(InputDeviceDto::from)
+        .collect()
+}
+
+/// Choose the capture device and remember it in `audio.json`.
+///
+/// `null` follows the system default, which is also what a remembered device
+/// that is no longer plugged in falls back to -- with the reason on
+/// [`InputStatusDto::fault`] rather than as an error, because the user asking
+/// for the *status* of a missing device should not be handed an exception.
+///
+/// Refused mid-take: swapping the device under a running take would splice two
+/// recordings together.
+#[tauri::command]
+pub fn set_input_device(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    device_id: Option<String>,
+) -> Result<InputStatusDto, String> {
+    state
+        .recorder()
+        .select_device(device_id.as_deref())
+        .map_err(|err| err.to_string())?;
+
+    let path = audio_json(&app);
+    let mut settings = audio_settings::load_settings(&path);
+    settings.input_device_id = device_id;
+    audio_settings::save_settings(&path, &settings).map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// What the REC button and the input meter draw.
+///
+/// Polled while the device is open (and only then -- see `state.tsx`), so it is
+/// deliberately cheap: atomics and one buffer length, no device enumeration.
+/// The one exception is [`InputStatusDto::has_devices`], which the transport bar
+/// needs in order to disable the button with a reason; it is computed from the
+/// cached list the UI already holds rather than by re-scanning the host.
+#[tauri::command]
+pub fn get_input_status(state: State<'_, AppState>) -> InputStatusDto {
+    // A device that has gone has no callback left to notice its own death, so
+    // the transition out of `recording` happens here, on the polling thread.
+    // Whatever the take had already captured is written rather than thrown away.
+    if let Some(finished) = state.reap_recording_fault() {
+        log::info!(
+            "salvaged take loaded as source {}",
+            finished.source.id()
+        );
+    }
+    input_status_dto(&state)
+}
+
+/// Arm or disarm the capture device.
+///
+/// Arming opens the device and starts the meter; disarming releases it. WAVE
+/// deliberately does not hold the microphone while idle -- that is what stops a
+/// conferencing app from working and lights the OS privacy indicator for
+/// nothing.
+///
+/// Disarming while a take is running discards it. That is the teardown path as
+/// well as a user gesture, and a shutdown that refused to release the device
+/// would leave it held by a dead process.
+#[tauri::command]
+pub fn set_input_armed(state: State<'_, AppState>, armed: bool) -> Result<InputStatusDto, String> {
+    if armed {
+        state.recorder().arm().map_err(|err| err.to_string())?;
+    } else {
+        state.recorder().disarm();
+    }
+    Ok(input_status_dto(&state))
+}
+
+/// Start a take, arming the device first if it is not open yet.
+#[tauri::command]
+pub fn start_recording(state: State<'_, AppState>) -> Result<InputStatusDto, String> {
+    state.recorder().start().map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// End the take, write it, and load it as an audio source.
+///
+/// Answers with the source **and** what went wrong on the way: a take with
+/// dropped samples or one the length cap ended is still worth keeping, and the
+/// moment to say so is the moment the channel appears.
+///
+/// Placing it is a separate command (`add_sample_channel`), on purpose: a
+/// recorded take and a dropped WAV must reach the rack by the same path.
+///
+/// `async` because writing a five-minute WAV is disk I/O and must not block the
+/// main thread.
+#[tauri::command]
+pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordedTakeDto, String> {
+    let finished = state.finish_recording().map_err(|err| err.to_string())?;
+    Ok(RecordedTakeDto {
+        source: AudioSourceDto::of(&finished.source, state.bpm()),
+        dropped_samples: finished.dropped_samples,
+        limit_reached: finished.limit_reached,
+        peak: finished.peak,
+    })
+}
+
+/// Throw the take away. The device stays armed for another attempt.
+#[tauri::command]
+pub fn cancel_recording(state: State<'_, AppState>) -> Result<InputStatusDto, String> {
+    state.recorder().cancel().map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// The status plus the one thing it cannot know: whether any device exists.
+fn input_status_dto(state: &AppState) -> InputStatusDto {
+    let recorder = state.recorder();
+    let status = recorder.status();
+    // Enumerating costs a host round-trip, so it is skipped whenever the answer
+    // is already known: a device that is open is proof that one exists.
+    let has_devices = status.state != mydaw_plugin_audio_io::RecordState::Idle
+        || !recorder.devices().is_empty();
+    InputStatusDto::of(status, has_devices)
 }
 
 /// MIDI input ports the Settings list draws: OS-visible plus unpaired-offline

@@ -31,10 +31,12 @@ export type CompactBody =
  *   EQ's twenty parameters is an arbitrary quarter of an EQ, whereas the curve
  *   is *all* of it at a glance. `curveParam` is what the card watches.
  * - **Compressor** -- threshold, ratio, attack, release: the four that define the
- *   static curve and the ballistics. Knee, detector, sidechain, makeup and mix
- *   are all refinements of a decision these four have already made. The GR bar
- *   rides underneath because the research asks for it "large and always
- *   visible".
+ *   static curve and the ballistics. Knee, detector, the sidechain filter,
+ *   makeup and mix are all refinements of a decision these four have already
+ *   made. The GR bar rides underneath because the research asks for it "large
+ *   and always visible". The external key is **not** here, and not a knob at
+ *   all: it is routing, it lives on its own row in the editor, and a card this
+ *   size cannot show a strip list without becoming a menu.
  * - **Delay** -- division, feedback, mix, and a badge saying what the division
  *   resolved to. The research's own summary of the category is that time,
  *   feedback and mix are the three controls, and that the sync state must never
@@ -60,6 +62,11 @@ export const COMPACT_CARDS: Readonly<
   'effects.limiter': { params: ['gain', 'ceiling', 'release'] },
   'effects.reverb': { params: ['mix', 'decay', 'size', 'damp'] },
   'effects.utility': { params: ['gain', 'pan', 'width', 'mono'] },
+  'effects.chorus': { params: ['rate', 'depth', 'mix'] },
+  'effects.flanger': { params: ['rate', 'depth', 'feedback', 'mix'] },
+  'effects.phaser': { params: ['rate', 'depth', 'feedback', 'mix'] },
+  'effects.autofilter': { params: ['cutoff', 'res', 'lfo_amount', 'env_amount'] },
+  'effects.bitcrusher': { params: ['bits', 'downsample', 'tone', 'mix'] },
 };
 
 /** Every parameter except `bypass`, which is the dot in the card's head. */
@@ -133,12 +140,25 @@ export interface ParamGroup {
  */
 export const EDITOR_PRIMARY: Readonly<Record<string, readonly string[]>> = {
   'effects.eq': ['output'],
-  'effects.compressor': ['threshold', 'ratio', 'attack', 'release'],
+  // Attack and release stay primary now that the compressor has an external
+  // key: they are the two knobs a ducking patch is actually dialled with, and
+  // the sidechain row sits directly above them so the pair reads as one setup.
+  'effects.compressor': ['attack', 'release', 'mix'],
   'effects.delay': ['feedback', 'duck', 'mix'],
   'effects.saturator': ['drive', 'type', 'mix'],
   'effects.limiter': ['gain', 'ceiling', 'release'],
   'effects.reverb': ['mix', 'decay', 'size', 'damp'],
   'effects.utility': ['gain'],
+  // The three modulation effects put the same four under the display, because
+  // the display is the filter and these are the things that move it.
+  'effects.chorus': ['rate', 'depth', 'delay', 'mix'],
+  'effects.flanger': ['delay', 'rate', 'depth', 'feedback', 'mix'],
+  'effects.phaser': ['freq', 'rate', 'depth', 'feedback', 'mix'],
+  // The auto-filter's cutoff and resonance are dragged on the curve, so the row
+  // underneath is what the curve cannot hold: how far and how fast it moves.
+  'effects.autofilter': ['lfo_amount', 'lfo_rate', 'env_amount', 'mix'],
+  // `lfo_rate` leaves the row while the LFO is synced -- see `AutoFilterEditor`.
+  'effects.bitcrusher': ['bits', 'downsample', 'tone', 'mix'],
 };
 
 /** Which display a type_id owns. Unknown effects get a generic knob grid. */
@@ -150,6 +170,11 @@ export type EditorKind =
   | 'limiter'
   | 'reverb'
   | 'utility'
+  | 'chorus'
+  | 'flanger'
+  | 'phaser'
+  | 'autofilter'
+  | 'bitcrusher'
   | 'generic';
 
 export function editorKind(typeId: string | undefined): EditorKind {
@@ -168,6 +193,16 @@ export function editorKind(typeId: string | undefined): EditorKind {
       return 'reverb';
     case 'effects.utility':
       return 'utility';
+    case 'effects.chorus':
+      return 'chorus';
+    case 'effects.flanger':
+      return 'flanger';
+    case 'effects.phaser':
+      return 'phaser';
+    case 'effects.autofilter':
+      return 'autofilter';
+    case 'effects.bitcrusher':
+      return 'bitcrusher';
     default:
       return 'generic';
   }

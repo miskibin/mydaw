@@ -1,12 +1,31 @@
 //! `effects.compressor` -- a feed-forward, log-domain compressor.
 //!
 //! ```text
+//!   key ─────┐ (external, optional)
+//!            ▼
 //!            ┌──────────── detector ────────────┐
 //!   in ──┬──▶│ SC HPF ▸ peak|RMS ▸ dB ▸ knee/ratio ▸ ballistics │──┐
 //!        │   └──────────────────────────────────┘                  │ gain (dB)
 //!        └────────────────────────── delay-free ───────────────────▼
 //!                                              × ▸ makeup ▸ mix ▸ out
 //! ```
+//!
+//! # The external key, and why it is not a parameter
+//! Ducking a bass under a kick is the one thing people install a compressor to
+//! do that its own knobs cannot express, because the missing piece is a *route*,
+//! not a value. So the source lives where the shell keeps routing -- an
+//! `AtomicI32` per insert, next to the EQ's hold-to-solo word -- and the signal
+//! itself arrives through [`SidechainBus`], the key bus every strip publishes
+//! its post-insert, pre-fader block into.
+//!
+//! When a source is selected the detector reads **that** signal and the gain it
+//! computes is applied to this insert's own audio, unchanged. Everything
+//! downstream of the detector -- the sidechain highpass, peak/RMS, the knee, the
+//! ballistics, both gain-reduction meters -- is the same code either way, which
+//! is the point: keying does not fork the DSP, it moves one wire.
+//!
+//! The key is **one block old**; see [`SidechainBus`] for why that is a
+//! deliberate trade for order-independence rather than an oversight.
 //!
 //! # Topology, and the paper that chose it
 //! Giannoulis, Massberg & Reiss, *"Digital Dynamic Range Compressor Design -- A
@@ -50,11 +69,12 @@
 //! here because the other half of the forum wants it; the default is off because
 //! that half is louder.
 
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 use mydaw_rt_core::{
-    ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ProcessCtx, ReadoutDef, RtNode,
-    RtNodeFactory, SmoothedParams,
+    decode_key, key_slot, ParamBlock, ParamCurve, ParamDef, ParamNodeFactory, ProcessCtx,
+    ReadoutDef, RtNode, RtNodeFactory, SidechainBus, SmoothedParams, KEY_NONE,
 };
 
 use crate::biquad::{highpass, Biquad, BiquadCoeffs};
@@ -144,6 +164,14 @@ pub static PARAMS: &[ParamDef] = &[
 ];
 
 /// What the compressor publishes back.
+///
+/// Two, and deliberately still two now that there is a key input. A detector
+/// level would be a third, and the shell draws every declared readout as a bar
+/// on a `0..24 dB` scale -- right for a reduction, backwards for a level, where
+/// silence would peg the bar. The display recovers the level it needs from
+/// `gr_max` through the static curve instead, which is the same inversion the
+/// transfer curve's live dot already uses and is exact wherever the compressor
+/// is doing anything.
 pub static READOUTS: &[ReadoutDef] = &[
     ReadoutDef::new("gr", "Gain Reduction", "dB"),
     ReadoutDef::new("gr_max", "Max Gain Reduction", "dB"),
@@ -282,11 +310,38 @@ pub struct CompressorNode {
     fast: Branch,
     /// The second, slower branch the auto-release option runs alongside it.
     slow: Branch,
+    /// Which strip feeds the detector, as a [`SidechainBus`] slot, or
+    /// [`KEY_NONE`]. Written by the shell, read once per block.
+    key: Arc<AtomicI32>,
+    /// Where the key signals are published. `None` for a node built outside a
+    /// mixer graph -- an offline render, a test -- which then simply has no key
+    /// available and falls back to its own input.
+    keys: Option<Arc<SidechainBus>>,
 }
 
 impl CompressorNode {
-    /// **Non-RT**: allocates.
+    /// **Non-RT**: allocates. No external key; see
+    /// [`new_with_key`](Self::new_with_key).
     pub fn new(params: Arc<ParamBlock>, sample_rate: f64, max_block: usize) -> Self {
+        Self::new_with_key(
+            params,
+            sample_rate,
+            max_block,
+            Arc::new(AtomicI32::new(KEY_NONE)),
+            None,
+        )
+    }
+
+    /// **Non-RT**: allocates. Shares the shell's key selector and the graph's
+    /// key bus, which is what makes sidechain a routing change rather than a
+    /// rebuild -- the selector can move while the engine runs.
+    pub fn new_with_key(
+        params: Arc<ParamBlock>,
+        sample_rate: f64,
+        max_block: usize,
+        key: Arc<AtomicI32>,
+        keys: Option<Arc<SidechainBus>>,
+    ) -> Self {
         let index = Indices::new(&params);
         let smoothed = SmoothedParams::new(params, sample_rate);
         let rate = usable_sample_rate(sample_rate);
@@ -302,9 +357,27 @@ impl CompressorNode {
             mean_square: 0.0,
             fast: Branch::default(),
             slow: Branch::default(),
+            key,
+            keys,
         };
         node.refresh_sidechain();
         node
+    }
+
+    /// The key slot this block reads, if an external source is both selected and
+    /// reachable. RT-safe: two relaxed loads.
+    ///
+    /// A selector naming a strip this build has no slot for resolves to `None`
+    /// -- the insert's own input -- rather than to a different strip. A project
+    /// saved with more tracks than this build carries therefore goes quiet on
+    /// the key, which is the honest failure.
+    fn key_slot_now(&self) -> Option<usize> {
+        let bus = self.keys.as_deref()?;
+        let slot = decode_key(self.key.load(Ordering::Relaxed)).and_then(key_slot)?;
+        // Re-asserted every block: a compressor that is removed, or repointed,
+        // stops the copy with nothing to unregister. See `SidechainBus`.
+        bus.request(slot);
+        Some(slot)
     }
 
     fn reset(&mut self) {
@@ -355,6 +428,18 @@ impl CompressorNode {
         let mut peak_reduction = 0.0_f32;
         let mut last_reduction = 0.0_f32;
 
+        // Resolved once per block, off the sample loop: a routing change lands
+        // on a block boundary, exactly like the detector and bypass switches.
+        let key = self.key_slot_now();
+        // A field borrow, disjoint from the `self.params` the loop advances --
+        // and not an `Arc::clone`, which would put refcount traffic on the audio
+        // thread for nothing.
+        let keys: Option<&SidechainBus> = self.keys.as_deref();
+        let key_frames = match (key, keys) {
+            (Some(slot), Some(bus)) => bus.frames(slot),
+            _ => 0,
+        };
+
         let channels = ctx.buffers.as_mut_slices();
         let [left, right] = channels;
         for frame in 0..frames {
@@ -376,8 +461,22 @@ impl CompressorNode {
             // --- detector ------------------------------------------------
             // Stereo-linked: one gain for both channels, so a hard-panned
             // transient cannot shift the image by ducking one side.
-            let mut det_l = dry_l;
-            let mut det_r = dry_r;
+            //
+            // With a key selected the detector reads the key and *nothing else*
+            // changes: the reduction it computes is still applied to `dry_l` /
+            // `dry_r` below. Past the end of the key's published block -- a
+            // source that is not sounding, or the two blocks after a routing
+            // change -- the key is silence, so the compressor opens rather than
+            // falling back to the insert's own signal. Half-keyed would be a
+            // detector nobody could reason about.
+            let (mut det_l, mut det_r) = match (key, keys) {
+                (Some(slot), Some(bus)) if frame < key_frames => {
+                    let [key_l, key_r] = bus.read(slot, frame);
+                    (key_l, key_r)
+                }
+                (Some(_), Some(_)) => (0.0, 0.0),
+                _ => (dry_l, dry_r),
+            };
             if sc_on {
                 det_l = self.sc_state[0].process(f64::from(det_l), &self.sc_coeffs) as f32;
                 det_r = self.sc_state[1].process(f64::from(det_r), &self.sc_coeffs) as f32;
@@ -442,6 +541,12 @@ impl RtNode for CompressorNode {
             self.params.skip_all(ctx.frames);
             // A bypassed compressor is not compressing, and its meter must say
             // so rather than freezing at whatever it last showed.
+            //
+            // The *subscription* is a different question, and is renewed here:
+            // a compressor is very often switched out while its routing is being
+            // set up, and letting the key copy lapse would make switching it back
+            // in silent for two blocks.
+            self.key_slot_now();
             let block = self.params.block();
             block.set_readout(READOUT_GR, 0.0);
             block.set_readout(READOUT_GR_MAX, 0.0);
@@ -471,6 +576,27 @@ impl RtNodeFactory for CompressorFactory {
     }
 }
 
+impl CompressorFactory {
+    /// Same as [`create_with_params`](ParamNodeFactory::create_with_params),
+    /// handing the node its key selector and the graph's key bus.
+    pub fn create_with_key(
+        &self,
+        sample_rate: f64,
+        max_block: usize,
+        params: Arc<ParamBlock>,
+        key: Arc<AtomicI32>,
+        keys: Option<Arc<SidechainBus>>,
+    ) -> Box<dyn RtNode> {
+        Box::new(CompressorNode::new_with_key(
+            params,
+            sample_rate,
+            max_block,
+            key,
+            keys,
+        ))
+    }
+}
+
 impl ParamNodeFactory for CompressorFactory {
     fn params(&self) -> &'static [ParamDef] {
         PARAMS
@@ -496,11 +622,333 @@ mod tests {
     use crate::test_support::{
         db, peak_mono, render_mono, render_stereo, rms_mono, silence, sine, Harness,
     };
+    use mydaw_rt_core::{
+        encode_key, AudioBuffers, ParamNodeFactory, StripId, TransportSnapshot, MAX_KEY_SLOTS,
+    };
 
     const SR: f64 = 48_000.0;
 
     fn harness() -> Harness {
         Harness::new(&CompressorFactory::new(), SR, 512)
+    }
+
+    /// A compressor wired to a key bus, driven the way the graph drives one.
+    ///
+    /// Each block: flip the bus, publish the key strip's block, then run the
+    /// compressor. That is the order `CompiledGraph::process` uses, and the
+    /// double buffer means it would measure the same if the two were swapped --
+    /// which is the property the double buffer exists for.
+    struct Keyed {
+        params: Arc<ParamBlock>,
+        node: Box<dyn RtNode>,
+        key: Arc<AtomicI32>,
+        bus: Arc<SidechainBus>,
+        buffers: AudioBuffers,
+        key_buffers: AudioBuffers,
+        block: usize,
+    }
+
+    /// The strip the tests key off: track 3, so a slot index that is neither
+    /// zero nor the compressor's own would show up if it were confused.
+    const KEY_TRACK: usize = 3;
+
+    impl Keyed {
+        fn new(block: usize) -> Self {
+            let factory = CompressorFactory::new();
+            let params = factory.default_params();
+            let key = Arc::new(AtomicI32::new(KEY_NONE));
+            let bus = Arc::new(SidechainBus::new(block));
+            let node = factory.create_with_key(
+                SR,
+                block,
+                Arc::clone(&params),
+                Arc::clone(&key),
+                Some(Arc::clone(&bus)),
+            );
+            Self {
+                params,
+                node,
+                key,
+                bus,
+                buffers: AudioBuffers::new(block),
+                key_buffers: AudioBuffers::new(block),
+                block,
+            }
+        }
+
+        fn set(&mut self, id: &str, value: f32) {
+            assert!(self.params.set_by_id(id, value).is_some(), "no '{id}'");
+        }
+
+        fn readout(&self, id: &str) -> f32 {
+            let index = self.params.readout_index_of(id).expect("a readout");
+            self.params.readout(index)
+        }
+
+        fn select(&self, source: Option<StripId>) {
+            self.key.store(encode_key(source), Ordering::Relaxed);
+        }
+
+        /// Render `insert` through the compressor while `key` plays on the key
+        /// strip. Both are mono and are duplicated to both channels.
+        fn render(&mut self, insert: &[f32], key: &[f32]) -> Vec<f32> {
+            let mut out = Vec::with_capacity(insert.len());
+            let mut at = 0;
+            while at < insert.len() {
+                let frames = self.block.min(insert.len() - at);
+                self.bus.begin_block();
+
+                self.key_buffers.set_frames(frames);
+                for channel in self.key_buffers.as_mut_slices() {
+                    for (frame, sample) in channel.iter_mut().enumerate() {
+                        *sample = key.get(at + frame).copied().unwrap_or(0.0);
+                    }
+                }
+                let slot = key_slot(StripId::Track(KEY_TRACK)).expect("a slot");
+                self.bus.write(slot, &self.key_buffers);
+
+                self.buffers.set_frames(frames);
+                for channel in self.buffers.as_mut_slices() {
+                    for (frame, sample) in channel.iter_mut().enumerate() {
+                        *sample = insert[at + frame];
+                    }
+                }
+                {
+                    let mut ctx = ProcessCtx::new(
+                        &mut self.buffers,
+                        SR,
+                        frames,
+                        TransportSnapshot {
+                            playing: true,
+                            ..TransportSnapshot::default()
+                        },
+                    );
+                    self.node.process(&mut ctx);
+                }
+                out.extend_from_slice(&self.buffers.as_slices()[0][..frames]);
+                at += frames;
+            }
+            out
+        }
+    }
+
+    /// A compressor set up the way the editor's tooltip recommends for ducking.
+    fn ducker(block: usize) -> Keyed {
+        let mut keyed = Keyed::new(block);
+        keyed.set("threshold", -30.0);
+        keyed.set("ratio", 8.0);
+        keyed.set("attack", 1.0);
+        keyed.set("release", 80.0);
+        keyed
+    }
+
+    #[test]
+    fn the_key_drives_the_reduction_and_the_inserts_own_signal_does_not() {
+        // The claim sidechain exists to make, in both directions.
+        let mut keyed = ducker(256);
+        keyed.select(Some(StripId::Track(KEY_TRACK)));
+
+        // Silence on the insert, a loud tone on the key: the detector must fire.
+        let quiet = silence(24_000);
+        let loud = sine(80.0, 24_000, SR, 0.9);
+        keyed.render(&quiet, &loud);
+        assert!(
+            keyed.readout("gr_max") > 12.0,
+            "a full-scale key at -30 dB and 8:1 should be well over 12 dB: {}",
+            keyed.readout("gr_max")
+        );
+
+        // And the reverse: a loud insert with a silent key must not compress at
+        // all, however loud the insert is. That is the half that proves the
+        // detector really moved rather than merely gained a second input.
+        let mut keyed = ducker(256);
+        keyed.select(Some(StripId::Track(KEY_TRACK)));
+        let out = keyed.render(&loud, &quiet);
+        assert_eq!(keyed.readout("gr"), 0.0);
+        assert_eq!(keyed.readout("gr_max"), 0.0);
+        assert!(
+            (peak_mono(&out[8_000..]) - peak_mono(&loud[8_000..])).abs() < 1.0e-6,
+            "a compressor with a silent key is a wire"
+        );
+    }
+
+    #[test]
+    fn the_reduction_lands_on_the_inserts_signal_not_on_the_key() {
+        // Both playing: the *output* is the insert, ducked. The key never
+        // reaches the audio path, so no 80 Hz appears in a 3 kHz insert.
+        let mut keyed = ducker(256);
+        keyed.select(Some(StripId::Track(KEY_TRACK)));
+        let insert = sine(3_000.0, 24_000, SR, 0.2);
+        let key = sine(80.0, 24_000, SR, 0.9);
+        let out = keyed.render(&insert, &key);
+
+        let tail = &out[12_000..];
+        assert!(
+            crate::test_support::amplitude_at(tail, 80.0, SR) < 1.0e-3,
+            "the key must not be audible in the output"
+        );
+        let ducked = db(rms_mono(tail));
+        let dry = db(rms_mono(&insert[12_000..]));
+        assert!(
+            ducked < dry - 10.0,
+            "a 0.2 insert under a 0.9 key should duck hard: {dry:.1} dB -> {ducked:.1} dB"
+        );
+    }
+
+    #[test]
+    fn no_source_selected_leaves_the_compressor_exactly_as_it_was() {
+        // Sidechain off must be the *same* compressor, not a near-copy: the
+        // whole design is one detector with a movable input.
+        let mut keyed = ducker(256);
+        let insert = sine(1_000.0, 24_000, SR, 0.8);
+        let keyed_out = keyed.render(&insert, &silence(24_000));
+
+        let mut plain = Harness::new(&CompressorFactory::new(), SR, 256).with_block(256);
+        plain.set("threshold", -30.0);
+        plain.set("ratio", 8.0);
+        plain.set("attack", 1.0);
+        plain.set("release", 80.0);
+        let plain_out = render_mono(&mut plain, &insert);
+
+        assert_eq!(keyed_out, plain_out, "an unrouted key must change nothing");
+    }
+
+    #[test]
+    fn the_key_arrives_one_block_late_and_no_later() {
+        // The documented latency, measured rather than asserted. With a 256
+        // frame block and the fastest attack, a key that starts at frame 0
+        // cannot move the meter during its own block and must have moved it by
+        // the end of the next one.
+        let block = 256;
+        let mut keyed = ducker(block);
+        keyed.set("attack", MIN_ATTACK_MS);
+        keyed.select(Some(StripId::Track(KEY_TRACK)));
+        // One block of quiet first, so the subscription is armed before the key
+        // starts -- a request is promoted at the *next* block.
+        let mut key = silence(block);
+        key.extend(sine(200.0, block * 4, SR, 0.9));
+        let quiet = silence(key.len());
+
+        keyed.render(&quiet[..block * 2], &key[..block * 2]);
+        assert_eq!(
+            keyed.readout("gr_max"),
+            0.0,
+            "a key must not reach the detector in the block it was published in"
+        );
+        // Block 2 reads block 1's key, which is the first loud one.
+        keyed.render(&quiet[block * 2..block * 3], &key[block * 2..block * 3]);
+        assert!(
+            keyed.readout("gr_max") > 6.0,
+            "one block late, and no later: {}",
+            keyed.readout("gr_max")
+        );
+    }
+
+    #[test]
+    fn a_selector_pointing_at_a_strip_that_publishes_nothing_is_silence_not_a_guess() {
+        // A removed track, or a project saved on a build with more of them. The
+        // key goes quiet -- the compressor opens -- and it never picks up a
+        // different strip's signal, which is the failure that would be
+        // impossible to hear as a fault.
+        let mut keyed = ducker(256);
+        let loud = sine(80.0, 12_000, SR, 0.9);
+        // Publishing on track 3 while the selector names track 9.
+        keyed.select(Some(StripId::Track(9)));
+        keyed.render(&silence(12_000), &loud);
+        assert_eq!(
+            keyed.readout("gr_max"),
+            0.0,
+            "routed, just not sounding -- and never somebody else's signal"
+        );
+
+        // And a selector no slot can decode falls back to the insert's own
+        // input rather than to slot zero.
+        keyed.key.store(MAX_KEY_SLOTS as i32 + 4, Ordering::Relaxed);
+        keyed.render(&sine(1_000.0, 12_000, SR, 0.9), &silence(12_000));
+        assert!(
+            keyed.readout("gr_max") > 6.0,
+            "the internal detector is back"
+        );
+    }
+
+    #[test]
+    fn the_sidechain_filter_and_the_key_are_the_same_detector() {
+        // The SC highpass has to act on whatever the detector is fed, or the
+        // "key off the kick, ignore its sub" case has no control.
+        let key: Vec<f32> = (0..24_000)
+            .map(|n| {
+                let t = n as f64 / SR;
+                (0.9 * (std::f64::consts::TAU * 40.0 * t).sin()) as f32
+            })
+            .collect();
+
+        let reduction = |filtered: bool| {
+            let mut keyed = ducker(256);
+            keyed.set("threshold", -24.0);
+            keyed.set("sc_hpf_on", if filtered { 1.0 } else { 0.0 });
+            keyed.set("sc_hpf", 400.0);
+            keyed.select(Some(StripId::Track(KEY_TRACK)));
+            keyed.render(&silence(24_000), &key);
+            keyed.readout("gr_max")
+        };
+
+        let open = reduction(false);
+        let filtered = reduction(true);
+        assert!(
+            filtered < open - 6.0,
+            "the filter took the key from {open:.1} dB to {filtered:.1} dB"
+        );
+    }
+
+    #[test]
+    fn a_bypassed_compressor_keeps_its_subscription_so_switching_it_back_in_is_instant() {
+        // Setting the routing up is exactly when a compressor is switched out.
+        // A lapsed subscription would make the first two blocks after switching
+        // it back in silent on the key -- an audible hiccup with no cause on
+        // screen.
+        let mut keyed = ducker(256);
+        keyed.select(Some(StripId::Track(KEY_TRACK)));
+        keyed.set("bypass", 1.0);
+        let key = sine(80.0, 12_000, SR, 0.9);
+        keyed.render(&silence(12_000), &key);
+        assert_eq!(keyed.readout("gr"), 0.0, "bypassed is not compressing");
+        assert_eq!(keyed.readout("gr_max"), 0.0);
+
+        keyed.set("bypass", 0.0);
+        keyed.render(&silence(2_048), &key[..2_048]);
+        assert!(
+            keyed.readout("gr_max") > 6.0,
+            "the key was there the whole time: {}",
+            keyed.readout("gr_max")
+        );
+    }
+
+    #[test]
+    fn the_meter_the_display_inverts_reads_the_key_and_not_the_insert() {
+        // The envelope display recovers the detector's level from `gr_max`
+        // through the static curve (see `ui/src/lib/compressor.ts`), so the
+        // reduction has to be the key's story and not the insert's. A loud
+        // insert under a quiet key must read *low*, which is the reading a
+        // level meter on the insert could never give.
+        let mut internal = ducker(256);
+        internal.render(
+            &sine(1_000.0, 12_000, SR, 0.5),
+            &sine(80.0, 12_000, SR, 0.02),
+        );
+
+        let mut external = ducker(256);
+        external.select(Some(StripId::Track(KEY_TRACK)));
+        external.render(
+            &sine(1_000.0, 12_000, SR, 0.5),
+            &sine(80.0, 12_000, SR, 0.02),
+        );
+
+        assert!(
+            external.readout("gr_max") < internal.readout("gr_max") - 6.0,
+            "keyed {:.1} dB vs internal {:.1} dB",
+            external.readout("gr_max"),
+            internal.readout("gr_max")
+        );
     }
 
     /// Steady-state output level for a steady sine at `in_db`.

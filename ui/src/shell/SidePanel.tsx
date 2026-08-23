@@ -928,9 +928,17 @@ function SampleInspector(props: { track: TrackDto }): JSX.Element {
   });
   onCleanup(() => settle.cancel());
 
+  /**
+   * A memo, not a bare accessor: `on` re-runs on any notify from the signals
+   * its dependency reads, without comparing what they returned. Reading
+   * `props.track` reads the mixer, so a bare accessor here re-fetched and
+   * re-drew the whole waveform on every fader move.
+   */
+  const inspectedSourceId = createMemo(() => props.track.audioSourceId);
+
   createEffect(
     on(
-      () => props.track.audioSourceId,
+      inspectedSourceId,
       (sourceId) => {
         setWave(null);
         setError(null);

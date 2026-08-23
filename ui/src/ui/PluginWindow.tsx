@@ -3,7 +3,7 @@
  * drag the title bar, resize the corner, close with the X or Escape.
  */
 
-import { createSignal, onCleanup, type JSX } from 'solid-js';
+import { createSignal, onCleanup, onMount, type JSX } from 'solid-js';
 
 export function PluginWindow(props: {
   title: string;
@@ -17,17 +17,42 @@ export function PluginWindow(props: {
   onClose: () => void;
   children: JSX.Element;
 }): JSX.Element {
+  let root: HTMLDivElement | undefined;
+
+  // The window is absolutely positioned inside `.wv-body`, which sits below
+  // the top bar — so the viewport is the wrong frame of reference: a window
+  // clamped to `innerHeight` hangs its bottom edge below the screen by the
+  // top bar's height. Everything clamps against the positioned ancestor.
+  const host = (): { w: number; h: number } => {
+    const el = root?.offsetParent as HTMLElement | null;
+    return {
+      w: el?.clientWidth ?? window.innerWidth,
+      h: el?.clientHeight ?? window.innerHeight,
+    };
+  };
+
   const initialWidth = Math.min(props.defaultWidth, Math.max(320, window.innerWidth - 16));
   const initialHeight = Math.min(props.defaultHeight, Math.max(260, window.innerHeight - 16));
   const [pos, setPos] = createSignal({
     x: Math.max(8, Math.min(72 + props.offset * 28, window.innerWidth - initialWidth - 8)),
-    y: Math.max(8, Math.min(56 + props.offset * 24, window.innerHeight - initialHeight - 8)),
+    y: Math.max(8, Math.min(24 + props.offset * 24, window.innerHeight - initialHeight - 8)),
   });
   const [size, setSize] = createSignal({
     // An editor must fit on first open. Its content can scroll, but the title
     // bar and resize handle must never start outside a small laptop viewport.
     w: initialWidth,
     h: initialHeight,
+  });
+
+  onMount(() => {
+    const bounds = host();
+    const w = Math.min(size().w, Math.max(320, bounds.w - 16));
+    const h = Math.min(size().h, Math.max(260, bounds.h - 16));
+    setSize({ w, h });
+    setPos((held) => ({
+      x: Math.max(8, Math.min(held.x, bounds.w - w - 8)),
+      y: Math.max(8, Math.min(held.y, bounds.h - h - 8)),
+    }));
   });
 
   function drag(event: PointerEvent, move: (dx: number, dy: number) => void): void {
@@ -68,6 +93,7 @@ export function PluginWindow(props: {
 
   return (
     <div
+      ref={root}
       class="wv-plug"
       classList={{ 'is-focused': props.focused }}
       style={{
@@ -84,12 +110,13 @@ export function PluginWindow(props: {
         onPointerDown={(event) => {
           origin.x = pos().x;
           origin.y = pos().y;
-          drag(event, (dx, dy) =>
+          drag(event, (dx, dy) => {
+            const bounds = host();
             setPos({
-              x: Math.max(8, Math.min(origin.x + dx, window.innerWidth - 96)),
-              y: Math.max(8, Math.min(origin.y + dy, window.innerHeight - 64)),
-            }),
-          );
+              x: Math.max(8, Math.min(origin.x + dx, bounds.w - 96)),
+              y: Math.max(8, Math.min(origin.y + dy, bounds.h - 64)),
+            });
+          });
         }}
       >
         <span class="wv-swatch" style={{ background: props.color }} />
@@ -105,12 +132,13 @@ export function PluginWindow(props: {
         onPointerDown={(event) => {
           origin.w = size().w;
           origin.h = size().h;
-          drag(event, (dx, dy) =>
+          drag(event, (dx, dy) => {
+            const bounds = host();
             setSize({
-              w: Math.max(Math.min(480, window.innerWidth - 16), origin.w + dx),
-              h: Math.max(Math.min(320, window.innerHeight - 16), origin.h + dy),
-            }),
-          );
+              w: Math.max(Math.min(480, bounds.w - 16), origin.w + dx),
+              h: Math.max(Math.min(320, bounds.h - 16), origin.h + dy),
+            });
+          });
         }}
       />
     </div>

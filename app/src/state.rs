@@ -8,7 +8,8 @@ use parking_lot::Mutex;
 use mydaw_ipc_bridge::{PanelManifestDto, UiSnapshot};
 use mydaw_kernel::{Kernel, KernelError};
 use mydaw_plugin_audio_io::{
-    AudioIoError, AudioIoPlugin, AudioIoService, OutputRequest, StreamInfo,
+    AudioIoError, AudioIoPlugin, AudioIoService, OutputRequest, RecordError, RecordService,
+    RecordedTake, StreamInfo,
 };
 use mydaw_plugin_debug_tap::{DebugTapPlugin, DebugTapService};
 use mydaw_plugin_effects::{EffectRegistry, EffectsPlugin};
@@ -17,9 +18,7 @@ use mydaw_plugin_host_vst3::{HostVst3Plugin, Vst3HostService};
 use mydaw_plugin_instruments::{InstrumentRegistry, InstrumentsPlugin};
 use mydaw_plugin_metering::{MeterOutput, MeteringPlugin, SpectrumHandoff, SpectrumOutput};
 use mydaw_plugin_midi_io::{MidiIoPlugin, MidiIoService, MidiNoteSink};
-use mydaw_plugin_sampler::{
-    AssetDownloader, AssetState, AssetStatus, SamplerPlugin, SamplerRegistry,
-};
+use mydaw_plugin_sampler::{AssetDownloader, AssetStatus, SamplerPlugin, SamplerRegistry};
 use mydaw_plugin_sequencer::{
     AudioSourceError, AudioSourceRegistry, Pattern, PatternError, PatternSet, PatternSetError,
     PlayMode, Playlist, PlaylistError, SequencerPlugin, SequencerService, SongError,
@@ -39,7 +38,8 @@ use crate::effects::{EffectInfoDto, InsertError, InsertTarget};
 use crate::ipc_bench;
 use crate::meters::MeterPump;
 use crate::project::{
-    MixerStateDto, PitchAnalysisDto, Project, RootMode, RootPitchDto, RouteError, TrackError,
+    MixerStateDto, PitchAnalysisDto, Project, RootMode, RootPitchDto, RouteError, SliceAnalysisDto,
+    SliceMode, SliceStateDto, TrackError,
 };
 use crate::project_bridge::{ProjectBridge, ProjectCommand, ProjectInfoDto};
 use crate::source::{check_bundle_path, Source, SourceDto, SourceError};
@@ -250,6 +250,13 @@ impl MidiNoteSink for EngineNoteSink {
 pub struct AppState {
     snapshot: UiSnapshot,
     audio: Arc<AudioIoService>,
+    /// Audio *input*: the capture device and the take being built on it.
+    ///
+    /// Not a kernel service, unlike [`audio`](Self::audio): nothing in the graph
+    /// reads the input, so there is no RT half for the kernel to wire up and no
+    /// plugin needs to resolve it. It is created here and lives as long as the
+    /// shell does, holding no device until the user arms one.
+    recorder: Arc<RecordService>,
     /// The authoritative pattern and tempo. The audio thread runs copies of
     /// both; this is the original (and, one day, what a project file holds).
     sequencer: Arc<SequencerService>,
@@ -295,13 +302,15 @@ pub struct AppState {
     /// MIDI input ports. Notes go through [`EngineNoteSink`] onto the selected
     /// track; the webview only lists and pairs devices.
     midi: Arc<MidiIoService>,
-    /// Installs the sample content on demand.
+    /// Installs the sample content on demand -- one downloader per instrument
+    /// the catalogue offers, because the kits are separate downloads and the
+    /// shell shows a row and a button for each.
     ///
-    /// `None` only if this build's `assets-manifest.json` is unusable, which
+    /// Empty only if this build's `assets-manifest.json` is unusable, which
     /// the sampler crate's own tests make impossible -- but a boot failure over
-    /// an optional download would be the wrong trade, so it degrades to "the
-    /// button is not offered".
-    assets: Option<Arc<AssetDownloader>>,
+    /// an optional download would be the wrong trade, so it degrades to "no
+    /// buttons are offered".
+    assets: Vec<Arc<AssetDownloader>>,
 }
 
 impl AppState {
@@ -375,11 +384,11 @@ impl AppState {
         // A manifest this build cannot read means the in-app download is not
         // offered; everything else, including a piano installed by the script,
         // still works. So it is a warning, not a boot failure.
-        let assets = match AssetDownloader::new(mydaw_plugin_sampler::instruments_root()) {
-            Ok(downloader) => Some(Arc::new(downloader)),
+        let assets = match AssetDownloader::catalog(mydaw_plugin_sampler::instruments_root()) {
+            Ok(downloaders) => downloaders,
             Err(err) => {
                 log::warn!("the in-app asset downloader is unavailable: {err}");
-                None
+                Vec::new()
             }
         };
 
@@ -415,6 +424,7 @@ impl AppState {
         Ok(Self {
             snapshot: ui_snapshot(kernel),
             audio,
+            recorder: Arc::new(RecordService::new()),
             sequencer,
             sources,
             tracks,
@@ -488,6 +498,10 @@ impl AppState {
         self.tracks.set_project(project);
         self.tracks.install_graph(&self.audio)?;
         self.publish_sequencer();
+        // A take is converted to the rate the arrangement runs at, and that rate
+        // is only known once a device has negotiated one. Publishing it here
+        // means a buffer change or a device swap moves the recorder with it.
+        self.recorder.set_engine_sample_rate(f64::from(info.sample_rate));
         Ok(info)
     }
 
@@ -911,37 +925,28 @@ impl AppState {
         &self.sampler
     }
 
-    /// Whether the bundled sample content is installed, and what the downloader
-    /// is doing about it.
+    /// Every downloadable instrument, whether it is installed, and what its
+    /// downloader is doing about it.
     ///
-    /// Reports [`AssetState::Error`] with a sentence when this build has no
-    /// usable manifest, rather than `None`: the shell has one thing to render
-    /// either way.
-    pub fn asset_status(&self) -> AssetStatus {
-        let mut status = match self.assets.as_ref() {
-            Some(downloader) => downloader.status(),
-            None => AssetStatus {
-                installed: false,
-                instrument_ready: false,
-                state: AssetState::Error,
-                total_bytes: 0,
-                downloaded_bytes: 0,
-                files_done: 0,
-                file_count: 0,
-                instrument_id: String::new(),
-                instrument_name: String::new(),
-                error: "this build has no usable asset manifest".to_owned(),
-            },
-        };
-        // The fact the picker actually depends on: files on disk are not an
-        // instrument until the background scan has decoded them.
-        status.instrument_ready = self
-            .sampler
-            .contains(&mydaw_plugin_sampler::source_id(&status.instrument_id));
-        status
+    /// An empty list means this build has no usable manifest -- a repository
+    /// error the sampler crate's tests already catch -- and the shell renders
+    /// it as "nothing to install" rather than as a failure.
+    pub fn asset_status(&self) -> Vec<AssetStatus> {
+        self.assets
+            .iter()
+            .map(|downloader| {
+                let mut status = downloader.status();
+                // The fact the picker actually depends on: files on disk are
+                // not an instrument until the background scan has decoded them.
+                status.instrument_ready = self
+                    .sampler
+                    .contains(&mydaw_plugin_sampler::source_id(&status.instrument_id));
+                status
+            })
+            .collect()
     }
 
-    /// Start downloading the bundled sample content.
+    /// Start downloading one instrument's sample content.
     ///
     /// **Only ever called from a user's click.** Nothing here runs on its own:
     /// see the consent note in [`mydaw_plugin_sampler::download`].
@@ -951,22 +956,25 @@ impl AppState {
     /// and without this function waiting for a decode.
     ///
     /// # Errors
-    /// A sentence, for a build with no manifest or a download already running.
-    pub fn start_asset_download(&self) -> Result<(), String> {
+    /// A sentence, for an id this build does not offer or a download already
+    /// running.
+    pub fn start_asset_download(&self, instrument_id: &str) -> Result<(), String> {
         let downloader = self
             .assets
-            .as_ref()
-            .ok_or("this build has no usable asset manifest")?;
+            .iter()
+            .find(|downloader| downloader.manifest().id == instrument_id)
+            .ok_or_else(|| format!("this build does not offer an instrument '{instrument_id}'"))?;
         let sampler = Arc::clone(&self.sampler);
+        let id = instrument_id.to_owned();
         downloader
             .start(move |result| match result {
                 Ok(()) => {
-                    log::info!("sampler: assets installed; rescanning instruments");
+                    log::info!("sampler: '{id}' installed; rescanning instruments");
                     sampler.rescan_in_background();
                 }
                 // The error is already recorded in the downloader's status,
                 // which is where the UI reads it from.
-                Err(err) => log::warn!("sampler: asset install failed: {err}"),
+                Err(err) => log::warn!("sampler: installing '{id}' failed: {err}"),
             })
             .map_err(|err| err.to_string())
     }
@@ -1266,6 +1274,20 @@ impl AppState {
         self.tracks.set_insert_listen(target, index, band)
     }
 
+    /// Point one insert's detector at another strip, or unroute it with `None`.
+    ///
+    /// # Errors
+    /// As [`set_insert_param`](Self::set_insert_param), plus
+    /// [`InsertError::NoSuchKeySource`] for a source strip that is not there.
+    pub fn set_insert_sidechain(
+        &self,
+        target: InsertTarget,
+        index: usize,
+        source: Option<mydaw_rt_core::StripId>,
+    ) -> Result<(), InsertError> {
+        self.tracks.set_insert_sidechain(target, index, source)
+    }
+
     /// Turn one insert's bypass on or off.
     ///
     /// A parameter like any other -- every effect declares `bypass` and does the
@@ -1536,6 +1558,114 @@ impl AppState {
         self.tracks
             .set_sample_region(track, start_frames, end_frames)?;
         self.apply_sample_play(track)
+    }
+
+    /// Where an audio-file channel's slices would fall, without installing them.
+    ///
+    /// Analysis and installation are two commands on purpose: the sensitivity
+    /// slider re-runs the first on every step of a drag, and a chop the user is
+    /// still shaping should not be what the keyboard plays until they stop.
+    /// The range is the channel's SMP region, so trimming the sample also
+    /// narrows the chop.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`], [`TrackError::NotASampleChannel`], or a
+    /// missing decoded file.
+    pub fn analyze_track_slices(
+        &self,
+        track: usize,
+        mode: SliceMode,
+        sensitivity: f32,
+        division: u32,
+    ) -> Result<SliceAnalysisDto, MixerError> {
+        let project = self.tracks.project();
+        let def = project
+            .tracks
+            .get(track)
+            .ok_or(TrackError::NoSuchTrack(track))?;
+        let source_id = def
+            .source
+            .sample_file_id()
+            .ok_or(TrackError::NotASampleChannel(track))?;
+        let (start, end) = (
+            def.sample_start_frames as usize,
+            def.sample_end_frames as usize,
+        );
+        drop(project);
+        let source = self.audio_source(source_id).ok_or_else(|| {
+            MixerError::Source(SourceError::SampleFile(format!(
+                "audio source {source_id} is not loaded"
+            )))
+        })?;
+        let frames = source.frames();
+        let range = if end == 0 || end > frames {
+            start.min(frames)..frames
+        } else {
+            start.min(end)..end
+        };
+        let request = match mode {
+            // "Analyse for a mode that is off" is what the window asks when it
+            // opens the Slices tab on a channel that has never been sliced, so
+            // it answers with the default chop rather than an error.
+            SliceMode::Off | SliceMode::Transient => mydaw_slice_analysis::SliceMode::Transient(
+                mydaw_slice_analysis::Sensitivity::new(sensitivity),
+            ),
+            SliceMode::Grid => mydaw_slice_analysis::SliceMode::Grid { division },
+        };
+        let analysis = mydaw_slice_analysis::analyze(
+            source.stereo(),
+            frames,
+            source.sample_rate(),
+            range.clone(),
+            self.bpm(),
+            request,
+            mydaw_plugin_sequencer::MAX_SLICES,
+        );
+        Ok(SliceAnalysisDto {
+            frames: analysis.frames,
+            mode: if mode == SliceMode::Grid {
+                SliceMode::Grid
+            } else {
+                SliceMode::Transient
+            },
+            bars: analysis.bars,
+            truncated: analysis.truncated,
+            range_start: range.start as u64,
+            range_end: range.end as u64,
+        })
+    }
+
+    /// Install (or clear) an audio-file channel's chop.
+    ///
+    /// Returns what was actually stored: markers are sorted, deduped, clamped
+    /// to the file and capped at the engine's table size, so the window draws
+    /// the table the engine is playing rather than the one it asked for.
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`] or [`TrackError::NotASampleChannel`].
+    pub fn set_track_slices(
+        &self,
+        track: usize,
+        state: SliceStateDto,
+    ) -> Result<SliceStateDto, MixerError> {
+        let project = self.tracks.project();
+        let def = project
+            .tracks
+            .get(track)
+            .ok_or(TrackError::NoSuchTrack(track))?;
+        let source_id = def
+            .source
+            .sample_file_id()
+            .ok_or(TrackError::NotASampleChannel(track))?;
+        drop(project);
+        // A file that is not loaded (a project opened away from its samples)
+        // still gets to keep its markers -- they are frames, not pointers, and
+        // clamping them to zero would destroy the chop the file's return would
+        // make playable again.
+        let limit = self
+            .audio_source(source_id)
+            .map_or(u64::from(u32::MAX), |source| source.frames() as u64);
+        Ok(self.tracks.set_slices(track, state, limit)?)
     }
 
     fn apply_sample_play(&self, track: usize) -> Result<(), MixerError> {
@@ -2282,12 +2412,111 @@ impl AppState {
     pub fn debug_tap(&self) -> &Arc<DebugTapService> {
         &self.debug_tap
     }
+
+    /// The microphone / line-in recorder behind the transport bar's REC button.
+    pub fn recorder(&self) -> &Arc<RecordService> {
+        &self.recorder
+    }
+
+    /// End the take, write it, and load it as an audio source.
+    ///
+    /// The three steps are one method because they are one gesture: a take that
+    /// was captured but not written is lost the moment the process exits, and a
+    /// take written but not loaded is a file the user has to go and find. What
+    /// this deliberately does *not* do is place the source anywhere -- that is
+    /// `add_sample_channel`, so recording reuses the same path a dropped WAV
+    /// takes and the two cannot drift.
+    ///
+    /// # Errors
+    /// [`RecordingError::Record`] for everything the engine refuses (nothing
+    /// recorded, device lost), [`RecordingError::Write`] when the WAV cannot be
+    /// written, and [`RecordingError::Load`] when the file that was just written
+    /// cannot be decoded -- which would be a bug here, not a user error, and is
+    /// reported as such rather than silently swallowed.
+    pub fn finish_recording(&self) -> Result<FinishedTake, RecordingError> {
+        let take = self.recorder.stop()?;
+        log::info!(
+            "take finished: {:.2} s, peak {:.3}, {} dropped",
+            take.duration_seconds(),
+            take.peak(),
+            take.dropped
+        );
+        self.write_and_load(&take)
+    }
+
+    /// Salvage a take whose device died, if there is one worth keeping.
+    ///
+    /// The capture callback cannot notice its own death, so the transition out
+    /// of `Recording` happens on whichever thread next asks for the status. When
+    /// that thread finds a half-finished take, this is what turns it into a file
+    /// rather than throwing away the part of the performance that did arrive.
+    pub fn reap_recording_fault(&self) -> Option<FinishedTake> {
+        let take = self.recorder.reap_fault()?;
+        match self.write_and_load(&take) {
+            Ok(finished) => {
+                log::warn!(
+                    "the input device died mid-take; {:.2} s were salvaged",
+                    take.duration_seconds()
+                );
+                Some(finished)
+            }
+            Err(err) => {
+                log::warn!("a salvaged take could not be kept: {err}");
+                None
+            }
+        }
+    }
+
+    /// Write one take under the next free name and decode it back in.
+    fn write_and_load(&self, take: &RecordedTake) -> Result<FinishedTake, RecordingError> {
+        let dir = crate::recording::recordings_dir();
+        let path = crate::recording::next_take_path(&dir, std::time::SystemTime::now())?;
+        crate::recording::write_take(take, &path)?;
+        log::info!("take written: {}", path.display());
+        Ok(FinishedTake {
+            source: self.load_audio_source(&path)?,
+            dropped_samples: take.dropped,
+            limit_reached: take.limit_reached,
+            peak: take.peak(),
+        })
+    }
+}
+
+/// A take that made it to disk and back into the session.
+///
+/// Carries the two things the source itself cannot say -- whether the capture
+/// dropped anything, and whether the length cap ended it -- because the moment
+/// to tell the user is the moment the channel appears, not later.
+#[derive(Debug, Clone)]
+pub struct FinishedTake {
+    pub source: Arc<mydaw_plugin_sequencer::AudioSource>,
+    pub dropped_samples: u64,
+    pub limit_reached: bool,
+    pub peak: f32,
+}
+
+/// Why a take did not become an audio source.
+///
+/// Three separate failures with three separate fixes, kept apart so the status
+/// bar can say which one happened: "nothing was recorded" is the user's cable,
+/// "could not write" is their disk, and "could not decode" is our bug.
+#[derive(Debug, thiserror::Error)]
+pub enum RecordingError {
+    #[error(transparent)]
+    Record(#[from] RecordError),
+
+    #[error(transparent)]
+    Write(#[from] crate::recording::TakeWriteError),
+
+    #[error("the take was written but could not be read back: {0}")]
+    Load(#[from] SequencerError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use mydaw_ipc_bridge::PluginStateDto;
+    use mydaw_plugin_instruments::SingleDrum;
 
     #[test]
     fn midi_off_stays_on_the_channel_the_note_started_on() {
@@ -3022,6 +3251,211 @@ mod tests {
         assert_eq!(stored.root_key, 69);
         assert_eq!(stored.root_mode, RootMode::Detected);
         let _ = std::fs::remove_file(tone);
+    }
+
+    /// A four-bar break made of real factory drums, at known frame positions.
+    ///
+    /// The factory kick/snare/hat are what the Sounds tab actually renders to
+    /// disk, so this is the material the slicer meets in the product rather
+    /// than a click track that flatters the detector.
+    fn write_break_wav(
+        state: &AppState,
+        hits: &[(usize, SingleDrum)],
+    ) -> (std::path::PathBuf, usize) {
+        let rate = 48_000_usize;
+        let frames = rate * 2;
+        let mut left = vec![0.0_f32; frames];
+        let mut right = vec![0.0_f32; frames];
+        for (at, drum) in hits {
+            let (hit_l, hit_r) =
+                crate::preview::render_source_pcm(state.tracks(), &Source::Drum(*drum))
+                    .expect("the factory drums render with no device");
+            for (offset, sample) in hit_l.iter().enumerate() {
+                if at + offset < frames {
+                    left[at + offset] += sample;
+                }
+            }
+            for (offset, sample) in hit_r.iter().enumerate() {
+                if at + offset < frames {
+                    right[at + offset] += sample;
+                }
+            }
+        }
+        let path = std::env::temp_dir().join(format!("mydaw-break-{}.wav", std::process::id()));
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: rate as u32,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let mut writer = hound::WavWriter::create(&path, spec).expect("wav");
+        for frame in 0..frames {
+            writer.write_sample(left[frame].clamp(-1.0, 1.0)).unwrap();
+            writer.write_sample(right[frame].clamp(-1.0, 1.0)).unwrap();
+        }
+        writer.finalize().unwrap();
+        (path, frames)
+    }
+
+    #[test]
+    fn analyze_slices_names_missing_and_wrong_source_tracks() {
+        let (_kernel, state) = state();
+        assert!(matches!(
+            state.analyze_track_slices(99, SliceMode::Transient, 0.5, 16),
+            Err(MixerError::Track(TrackError::NoSuchTrack(99)))
+        ));
+        let synth = state
+            .mixer_state()
+            .tracks
+            .iter()
+            .position(|track| track.engine != "sample" && track.engine != "clip")
+            .expect("a non-sample channel");
+        assert!(matches!(
+            state.analyze_track_slices(synth, SliceMode::Transient, 0.5, 16),
+            Err(MixerError::Track(TrackError::NotASampleChannel(_)))
+        ));
+        assert!(matches!(
+            state.set_track_slices(synth, Default::default()),
+            Err(MixerError::Track(TrackError::NotASampleChannel(_)))
+        ));
+    }
+
+    #[test]
+    fn transient_slicing_finds_the_hits_of_a_factory_drum_break() {
+        let (_kernel, state) = state();
+        let hits = [
+            (0_usize, SingleDrum::Kick),
+            (24_000, SingleDrum::Snare),
+            (48_000, SingleDrum::Kick),
+            (72_000, SingleDrum::Snare),
+        ];
+        let (path, _frames) = write_break_wav(&state, &hits);
+        let track = add_headless_sample(&state, &path);
+
+        let analysis = state
+            .analyze_track_slices(track, SliceMode::Transient, 0.5, 16)
+            .expect("analysis");
+        assert_eq!(
+            analysis.frames.len(),
+            hits.len(),
+            "one slice per hit, got {:?}",
+            analysis.frames
+        );
+        // 5 ms: the file is real drums with real decay tails, so the budget is
+        // wider than the synthetic click test in `mydaw-slice-analysis`.
+        let budget = (0.005 * 48_000.0) as i64;
+        for ((expected, _), actual) in hits.iter().zip(&analysis.frames) {
+            let error = (*actual as i64 - *expected as i64).abs();
+            assert!(error <= budget, "hit at {expected} reported at {actual}");
+        }
+        assert_eq!(analysis.range_start, 0);
+        assert!(!analysis.truncated);
+
+        // Installing it is what the audio thread sees.
+        let stored = state
+            .set_track_slices(
+                track,
+                crate::project::SliceStateDto {
+                    mode: SliceMode::Transient,
+                    frames: analysis.frames.clone(),
+                    sensitivity: 0.5,
+                    division: 16,
+                    keytrack: false,
+                },
+            )
+            .expect("install");
+        assert_eq!(stored.frames, analysis.frames);
+        assert_eq!(
+            state.mixer_state().tracks[track].slices.frames,
+            stored.frames
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn grid_slicing_divides_the_region_and_a_cleared_mode_keeps_the_markers() {
+        let (_kernel, state) = state();
+        let (path, frames) = write_break_wav(&state, &[(0, SingleDrum::Kick)]);
+        let track = add_headless_sample(&state, &path);
+        assert_eq!(frames, 96_000, "two seconds at 48 kHz");
+
+        // Two seconds is one bar at 120 BPM; the default session is 130, so
+        // ask for the tempo the fixture was written at.
+        state.set_bpm(120.0).expect("tempo");
+        let analysis = state
+            .analyze_track_slices(track, SliceMode::Grid, 0.5, 4)
+            .expect("analysis");
+        assert_eq!(analysis.bars, 1);
+        assert_eq!(analysis.frames, vec![0, 24_000, 48_000, 72_000]);
+
+        state
+            .set_track_slices(
+                track,
+                crate::project::SliceStateDto {
+                    mode: SliceMode::Grid,
+                    frames: analysis.frames.clone(),
+                    sensitivity: 0.5,
+                    division: 4,
+                    keytrack: false,
+                },
+            )
+            .expect("install");
+
+        // Back to Region: the markers stay in the project, the player does not.
+        let off = state
+            .set_track_slices(
+                track,
+                crate::project::SliceStateDto {
+                    mode: SliceMode::Off,
+                    frames: analysis.frames.clone(),
+                    sensitivity: 0.5,
+                    division: 4,
+                    keytrack: false,
+                },
+            )
+            .expect("clear");
+        assert_eq!(off.frames, analysis.frames, "the chop is not thrown away");
+        assert!(!off.is_sliced());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_dragged_marker_is_sorted_deduped_and_capped_before_it_reaches_the_player() {
+        let (_kernel, state) = state();
+        let (path, _frames) = write_break_wav(&state, &[(0, SingleDrum::Kick)]);
+        let track = add_headless_sample(&state, &path);
+        let mut asked = vec![9_000_u64, 1_000, 5_000, 1_000, 10_000_000];
+        asked.extend((0..200).map(|index| 20_000 + index * 100));
+        let stored = state
+            .set_track_slices(
+                track,
+                crate::project::SliceStateDto {
+                    mode: SliceMode::Transient,
+                    frames: asked,
+                    sensitivity: 2.0,
+                    division: 5,
+                    keytrack: true,
+                },
+            )
+            .expect("install");
+        assert_eq!(
+            stored.frames.len(),
+            mydaw_plugin_sequencer::MAX_SLICES,
+            "the engine's table is the ceiling"
+        );
+        assert!(
+            stored.frames.windows(2).all(|pair| pair[0] < pair[1]),
+            "sorted and deduped: {:?}",
+            &stored.frames[..6]
+        );
+        assert!(
+            !stored.frames.contains(&10_000_000),
+            "a marker past the end of the file is dropped"
+        );
+        assert_eq!(stored.sensitivity, 1.0);
+        assert_eq!(stored.division, 4);
+        assert!(stored.keytrack);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

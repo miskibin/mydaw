@@ -47,7 +47,7 @@ Architecture and roadmap: [`docs/superpowers/specs/2026-08-18-mydaw-scaffold-des
 | `plugins/effects` | The mixer effects that ship inside the DAW: EQ, compressor, delay, saturator and utility, driven by the parameter system. Transparent at their defaults, click-free on bypass, zero-alloc. See [`the spec`](docs/superpowers/specs/2026-08-19-param-system-effects-v1.md) |
 | `plugins/sequencer` | Patterns, the playlist and the scheduler: a set of named patterns, an arrangement of clips, and PAT/SONG playback that is drift-free by construction. See [`the spec`](docs/superpowers/specs/2026-08-19-engine-patterns-playlist.md) |
 | `plugins/sampler` | The sampled instrument: a manifest-driven, 32-voice sample player, plus the checksummed fetcher that installs its content. See [Sample content](#sample-content) |
-| `plugins/audio-io` | cpal/WASAPI device, the real-time callback, transport and graph plumbing |
+| `plugins/audio-io` | cpal/WASAPI devices in **both** directions: the output callback with its transport and graph plumbing, and the capture path behind the REC button — device list, RT-safe input ring, rate conversion to the engine's clock, and the take it builds. See [Recording](#recording) |
 | `plugins/host-clap` | CLAP discovery **and hosting**: scans bundles, runs a plugin instance as a `ClapNode` in the RT graph |
 | `plugins/host-vst3` | VST3 discovery **and hosting**: scans modules, runs a plugin instance as a `Vst3Node` in the RT graph (step 7) |
 | `plugins/plugin-windows` | Native top-level windows for external plugin GUIs, pumped by the shell's own message loop (Phase 1 spike 3) |
@@ -127,27 +127,46 @@ which is why `cargo test --workspace` is green on a fresh clone and in CI.
 ## Sample content
 
 `plugins/sampler` plays recordings, and recordings are not in this repository: `assets/` is
-gitignored and the piano is 131 MB. What *is* committed is
+gitignored and the piano alone is 131 MB. What *is* committed is
 [`assets-manifest.json`](assets-manifest.json), which pins every file's URL and SHA-256 against a
 specific upstream commit.
+
+Seven instruments are offered — the Salamander piano and the six kits of **WAVE Factory Vol. 1**
+(see [`docs/factory-library.md`](docs/factory-library.md)) — and each is a **separate download**:
+
+| Instrument | Samples | Download | Licence |
+| --- | ---: | ---: | --- |
+| Salamander Grand Piano | 90 | 131 MiB | CC-BY-3.0 |
+| 808 Kit | 30 | 2.1 MiB | CC0-1.0 |
+| 808 Bass | 10 | 2.1 MiB | CC0-1.0 |
+| Percussion & FX | 55 | 14.4 MiB | CC0-1.0 |
+| Studio Drums | 36 | 21.9 MiB | CC0-1.0 |
+| Marimba | 20 | 21.1 MiB | CC0-1.0 |
+| Glockenspiel | 10 | 8.9 MiB | CC0-1.0 |
 
 **A checkout with no assets builds, tests and runs.** The sampler starts, reports zero instruments,
 and logs a hint. The Browser's Packs root is `assets/packs` (also gitignored); drop kits in there
 when you have them. A missing or empty folder is fine — the pane just has nothing to list. Install
-the sampled piano either way you like:
+whichever instruments you want, either way you like:
 
 ```sh
-pwsh -File scripts/fetch-assets.ps1          # idempotent; -Verify re-hashes, -Force re-downloads
+pwsh -File scripts/fetch-assets.ps1 -List                 # what is on offer
+pwsh -File scripts/fetch-assets.ps1                       # all of it
+pwsh -File scripts/fetch-assets.ps1 -Instrument 808-kit,808-bass
 ```
 
-…or from inside the running app: the status bar offers
-`Download Salamander Grand Piano (131 MB)`. Nothing downloads without that click. Both installers
-read the same manifest, verify every file against its SHA-256, and write each one atomically
-(`<name>.part`, then rename) so an interrupted run never leaves a truncated sample behind. When it
-finishes, the instrument appears in the track source picker **without a restart**.
+…or from inside the running app: the Browser's footer lists every instrument with a `Download`
+button and a progress bar. Nothing downloads without that click. Both installers read the same
+manifest, verify every file against its SHA-256, and write each one atomically (`<name>.part`, then
+rename) so an interrupted run never leaves a truncated sample behind. When one finishes, that
+instrument appears in the track source picker **without a restart**.
 
-`scripts/gen-asset-manifest.ps1` regenerates the manifest from the upstream SFZ mapping. It is a
-maintenance tool, not part of a normal install.
+`scripts/gen-asset-manifest.ps1` regenerates the piano's entry from the upstream SFZ mapping;
+`scripts/gen-factory-kits.mjs` regenerates the six factory kits from their curation tables. Both are
+maintenance tools rather than part of a normal install — and both *merge* into the manifest, so
+running one never drops what the other owns. The Node generator also writes each kit's runtime
+`manifest.json`, which makes it a working cross-platform installer for the kits on a machine with no
+PowerShell.
 
 ### If your network inspects TLS
 
@@ -181,6 +200,12 @@ the source above — but **anything you export that contains their sound carries
 requirement**. `scripts/fetch-assets.ps1` writes `assets/ATTRIBUTION.md` beside the samples, and the
 credit is also carried in the manifest and surfaced by the sampler at runtime.
 
+Every kit of WAVE Factory Vol. 1 is **CC0-1.0** — public domain, no credit required and no
+share-alike — from [tidalcycles/sounds-tr808-fischer](https://github.com/tidalcycles/sounds-tr808-fischer)
+(Michael Fischer, 1994) and the [Versilian Community Sample Library](https://github.com/sgossner/VCSL)
+(Versilian Studios LLC). The credits are written anyway, into the same `assets/ATTRIBUTION.md`;
+[`docs/factory-library.md`](docs/factory-library.md) has the full table and the key maps.
+
 Design notes, the manifest format, the memory budget and the measured verification numbers are in
 [`docs/superpowers/specs/2026-08-19-sampler-plugin.md`](docs/superpowers/specs/2026-08-19-sampler-plugin.md).
 
@@ -209,6 +234,50 @@ in the same file inserts the fixture CLAP plugin and asserts the master peak hal
 
 CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
+## Recording
+
+The REC button in the transport bar captures a microphone or a line input and lands it on the rack
+as a playable sample channel. Three states, one button:
+
+```text
+   idle       no device is open at all -- WAVE does not sit on the microphone
+   armed      the device is open and metered, so a level can be set before the take
+   recording  the take is being kept; the counter and the meter are on the bar
+```
+
+```text
+  capture thread (RT)                         worker (non-RT)                 shell
+  -------------------                         ---------------                 -----
+  build_input_stream                          RecordService::arm
+    |-- fold_frame -> L R      ==rtrb=====>   drain + RateConverter    -->  Vec<f32>
+    |-- peak / RMS -> atomics                 (device rate -> engine rate)        |
+    '-- (dropped counter)                                                         v
+                                              RecordService::stop -> RecordedTake
+                                                     |
+   <cache>/WAVE Studio/recordings/Recording N.wav  <-'  32-bit float stereo
+                                                     |
+                        load_audio_source -> AudioSource -> add_sample_channel -> rack
+```
+
+- **The callback allocates nothing.** It folds the device's frames to the engine's stereo, writes
+  them into a pre-allocated `rtrb` ring, and updates two atomics for the meter. A full ring costs
+  whole frames and a counter, never a blocked capture thread.
+- **Takes are converted to the project's rate** as they are captured (`mydaw_audio_file::cubic`, the
+  same kernel the sampler plays pitched files with), so an interface running at 44.1 kHz against a
+  48 kHz session still lines up frame for frame. Equal rates are a bit-exact copy.
+- **Integer devices are supported.** I8/U8/I16/U16/I32 are converted to `f32` in the callback over a
+  pre-allocated scratch buffer; refusing them would make recording impossible on most shared-mode
+  Windows inputs.
+- **Input never touches the output stream.** Separate devices, separate callbacks; the two share only
+  the engine's sample rate. Input always uses the platform default host — an ASIO driver hands out one
+  instance for both directions and cpal opens the two halves separately.
+- Takes are capped at five minutes (`MAX_RECORD_SECONDS`) and written as 32-bit float, so an overload
+  survives to be looked at rather than being clipped on the way to disk.
+
+The device is chosen in **Settings › Audio input**, persisted in `audio.json` by its host-stable id,
+and metered there before a take. Commands: `get_input_devices`, `set_input_device`,
+`get_input_status`, `set_input_armed`, `start_recording`, `stop_recording`, `cancel_recording`.
+
 ## How the shell fits together
 
 ```text
@@ -219,6 +288,7 @@ app/src/graph.rs          per track: SourceSlot -> [inserts] -> TransportGate
                           master:    sum -> [CLAP effect] -> master fader   ->  AudioIoService::install_graph
 app/src/meters.rs         MeterThrottle -> pump thread (interval/4) -> Channel<MeterFrameDto>
 app/src/debug_capture.rs  DebugTapService -> WAV + PNG + stats.json under .debug/captures/
+app/src/recording.rs      RecordedTake -> "Recording N.wav" under <cache>/WAVE Studio/recordings/
 app/src/commands.rs       get_ui_snapshot | get_clap_plugins | transport_play | transport_stop |
                           note_on | note_off | get_sources | set_source |
                           get_tracks | set_track_gain | set_track_pan | set_track_mute |

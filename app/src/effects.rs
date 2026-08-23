@@ -34,11 +34,13 @@
 //! slot stays a single unconditional node at a fixed position rather than
 //! becoming a member of a chain whose length changes.
 
-use std::sync::atomic::AtomicI32;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Arc;
 
 use mydaw_plugin_effects::{EffectInfo, EffectRegistry, BYPASS_PARAM};
-use mydaw_rt_core::{ParamBlock, ParamCurve, ParamDef, ReadoutDef};
+use mydaw_rt_core::{
+    decode_key, encode_key, ParamBlock, ParamCurve, ParamDef, ReadoutDef, StripId, KEY_NONE,
+};
 use serde::Serialize;
 
 /// Inserts one chain may hold.
@@ -161,6 +163,8 @@ pub enum InsertError {
     TooManyInserts,
     #[error("'{effect}' has no parameter called '{param}'")]
     NoSuchParam { effect: String, param: String },
+    #[error("there is no {} {} to key off", if .0.is_bus() { "bus" } else { "track" }, .0.index())]
+    NoSuchKeySource(StripId),
 }
 
 impl InsertError {
@@ -190,6 +194,17 @@ pub struct InsertDef {
     pub params: Arc<ParamBlock>,
     /// Hold-to-solo band index for the EQ, or -1. Not persisted.
     pub listen: Arc<AtomicI32>,
+    /// Which strip feeds the compressor's detector, as a
+    /// [`SidechainBus`](mydaw_rt_core::SidechainBus) slot, or
+    /// [`KEY_NONE`]. **Persisted** -- unlike `listen`, this is a route the user
+    /// drew and expects to find again, not a momentary gesture.
+    ///
+    /// An `Arc<AtomicI32>` and not a parameter for the same reason `listen` is
+    /// not one: the value is a strip index, it has no range, no curve and no
+    /// ramp, and a project file that recorded it as a float would be recording
+    /// a pointer as a knob. The node reads it once per block, so repointing a
+    /// sidechain is a store rather than a graph rebuild.
+    pub sidechain: Arc<AtomicI32>,
 }
 
 impl InsertDef {
@@ -208,7 +223,21 @@ impl InsertDef {
             type_id: type_id.to_owned(),
             params,
             listen: Arc::new(AtomicI32::new(-1)),
+            sidechain: Arc::new(AtomicI32::new(KEY_NONE)),
         })
+    }
+
+    /// Which strip this insert keys off, if any.
+    ///
+    /// Decoded rather than indexed, so a value this build has no slot for comes
+    /// back as `None` instead of as some other strip.
+    pub fn sidechain_source(&self) -> Option<StripId> {
+        decode_key(self.sidechain.load(Ordering::Relaxed))
+    }
+
+    /// Point this insert's key at `source`, or unroute it with `None`.
+    pub fn set_sidechain_source(&self, source: Option<StripId>) {
+        self.sidechain.store(encode_key(source), Ordering::Relaxed);
     }
 
     /// Whether this insert's bypass switch is on.
@@ -230,7 +259,10 @@ impl InsertDef {
 /// to the one that saved it.
 impl PartialEq for InsertDef {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.type_id == other.type_id && self.values() == other.values()
+        self.id == other.id
+            && self.type_id == other.type_id
+            && self.values() == other.values()
+            && self.sidechain_source() == other.sidechain_source()
     }
 }
 
@@ -354,6 +386,30 @@ pub struct InsertDto {
     pub params: Vec<ParamValueDto>,
     /// Every meter's current value. Empty for the effects that publish none.
     pub readouts: Vec<ParamValueDto>,
+    /// Which strip feeds this insert's detector, or `null`. Only the compressor
+    /// reads it; every other effect reports `null` for ever.
+    pub sidechain: Option<StripRefDto>,
+}
+
+/// A strip, as the webview names one. The same two words a send's source uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StripRefDto {
+    /// `"track"` or `"bus"`.
+    pub kind: &'static str,
+    pub index: usize,
+}
+
+impl From<StripId> for StripRefDto {
+    fn from(strip: StripId) -> Self {
+        match strip {
+            StripId::Track(index) => Self {
+                kind: "track",
+                index,
+            },
+            StripId::Bus(index) => Self { kind: "bus", index },
+        }
+    }
 }
 
 /// Render one insert for the webview.
@@ -388,6 +444,7 @@ pub fn insert_dto(index: usize, def: &InsertDef, registry: &EffectRegistry) -> I
                 value,
             })
             .collect(),
+        sidechain: def.sidechain_source().map(StripRefDto::from),
     }
 }
 
@@ -539,7 +596,7 @@ mod tests {
     fn the_catalogue_carries_everything_a_generic_knob_panel_needs() {
         let registry = registry();
         let catalogue = catalogue(&registry);
-        assert_eq!(catalogue.len(), 7);
+        assert_eq!(catalogue.len(), 12);
 
         let eq = catalogue
             .iter()

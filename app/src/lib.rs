@@ -69,10 +69,13 @@ mod library;
 mod meters;
 mod preview;
 mod preview_settings;
+pub mod recording;
 pub mod project;
 pub mod project_bridge;
 pub mod project_file;
 pub mod project_host;
+pub mod resample;
+pub mod sample_edit;
 pub mod source;
 pub mod spectrum;
 mod state;
@@ -94,9 +97,9 @@ pub use debug_capture::{
 };
 pub use dto::{
     ticks_for_seconds, AudioOutputDto, AudioSourceDto, ChannelClipDto, ClapPluginInfoDto, ClipDto,
-    MelodicNoteDto, MeterFrameDto, PatternDto, PatternSetDto, PatternSummaryDto, PlaylistDto,
-    PlaylistTrackDto, SequencerStateDto, StepDto, StepRowDto, StreamInfoDto, TrackMeterDto,
-    Vst3PluginInfoDto, WaveformDto,
+    InputDeviceDto, InputStatusDto, MelodicNoteDto, MeterFrameDto, PatternDto, PatternSetDto,
+    PatternSummaryDto, PlaylistDto, PlaylistTrackDto, RecordedTakeDto, SequencerStateDto, StepDto,
+    StepRowDto, StreamInfoDto, TrackMeterDto, Vst3PluginInfoDto, WaveformDto,
 };
 pub use effects::{
     catalogue, chain_dto, chain_readouts_dto, insert_dto, EffectInfoDto, InsertDef, InsertDto,
@@ -135,9 +138,10 @@ pub use source::{
     check_bundle_path, ClapSourceRef, SamplerSourceRef, SilentNode, Source, SourceDto, SourceError,
     SourceHandle, SourceKindDto, SourceSlot, Vst3SourceRef, SAMPLER_SOURCE_PREFIX,
 };
+pub use recording::{next_take_path, recordings_dir, write_take, TakeWriteError};
 pub use state::{
-    boot_kernel, ui_snapshot, AppState, NoteError, SequencerError, StartupError,
-    KERNEL_STATUS_PANEL, MIXER_PANEL,
+    boot_kernel, ui_snapshot, AppState, FinishedTake, NoteError, RecordingError, SequencerError,
+    StartupError, KERNEL_STATUS_PANEL, MIXER_PANEL,
 };
 pub use tracks::{MixerError, TrackHost};
 pub use vst3_bridge::{
@@ -176,6 +180,14 @@ pub fn run() -> ExitCode {
 
     let audio_prefs = crate::audio_settings::load_settings(&crate::audio_settings::store_path());
     state.audio().set_output_request(audio_prefs.to_request());
+    // The remembered capture device, if it is still plugged in. A missing one is
+    // a log line and the system default, never a refusal to start: the interface
+    // this project was recorded on is often not the one it is opened on.
+    if let Some(id) = audio_prefs.input_device_id.as_deref() {
+        if let Err(err) = state.recorder().select_device(Some(id)) {
+            log::warn!("the remembered input device is unavailable ({err}); using the system default");
+        }
+    }
 
     // The session's own tracks -- drums and a synth.
     //
@@ -231,6 +243,7 @@ pub fn run() -> ExitCode {
     let meters = std::sync::Arc::clone(state.meters());
     let audio = std::sync::Arc::clone(state.audio());
     let midi = std::sync::Arc::clone(state.midi());
+    let recorder = std::sync::Arc::clone(state.recorder());
     // The CLAP path: the one mailbox a command posts to, the mixer it edits, and
     // the device it needs. All `Arc`s, cloned before `state` moves into Tauri's
     // managed state.
@@ -292,6 +305,8 @@ pub fn run() -> ExitCode {
             commands::analyze_track_pitch,
             commands::set_track_sample_root,
             commands::set_track_sample_region,
+            commands::analyze_slices,
+            commands::set_track_slices,
             commands::set_track_fades,
             commands::set_source_param,
             commands::set_track_mute,
@@ -301,6 +316,9 @@ pub fn run() -> ExitCode {
             commands::set_track_source,
             commands::add_track,
             commands::add_sample_channel,
+            commands::edit_track_sample,
+            commands::set_track_audio_source,
+            commands::render_pattern_to_sample,
             commands::remove_track,
             // --- buses, sends and insert chains ---
             commands::get_effects,
@@ -326,6 +344,7 @@ pub fn run() -> ExitCode {
             commands::watch_spectrum,
             commands::get_insert_spectrum,
             commands::set_insert_listen,
+            commands::set_insert_sidechain,
             // Hosted CLAP plugins: the picker, the master insert, the editors
             // and the state groundwork the project file will use.
             commands::set_track_source_clap,
@@ -391,6 +410,14 @@ pub fn run() -> ExitCode {
             commands::get_stream_info,
             commands::get_audio_settings,
             commands::set_audio_settings,
+            // Audio input: the device picker in Settings and the REC button.
+            commands::get_input_devices,
+            commands::set_input_device,
+            commands::get_input_status,
+            commands::set_input_armed,
+            commands::start_recording,
+            commands::stop_recording,
+            commands::cancel_recording,
             commands::list_midi_ports,
             commands::set_midi_port_enabled,
             commands::get_midi_status,
@@ -424,6 +451,7 @@ pub fn run() -> ExitCode {
             project_bridge.set_served(false);
             midi.stop();
             meters.shutdown();
+            recorder.disarm();
             audio.stop();
             vst3_host.shutdown();
             clap_host.shutdown();
@@ -530,6 +558,9 @@ pub fn run() -> ExitCode {
             project_bridge.set_served(false);
             midi.stop();
             meters.shutdown();
+            // Before the output device, so the OS privacy indicator goes out at
+            // the moment the window does.
+            recorder.disarm();
             // Closing the stream retires the graph, which is what eventually
             // drops the CLAP nodes and sends their processors back here. Only
             // then can the plugins be deactivated on this (main) thread --
@@ -554,6 +585,9 @@ pub fn run() -> ExitCode {
 fn shutdown(state: &AppState, kernel: &mut mydaw_kernel::Kernel) {
     state.midi().stop();
     state.meters().shutdown();
+    // Before the output device, so the OS privacy indicator goes out at the
+    // moment the window does rather than whenever the process is collected.
+    state.recorder().disarm();
     state.audio().stop();
     kernel.shutdown();
 }
