@@ -6,28 +6,31 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   min-height: 0;
-  padding: 0 12px 8px;
+  padding: 0 12px 6px;
   container-type: inline-size;
 }
 
+/* The row minima are each pane's minimum content (head + stage floor + the
+ * control rows), so a pane never clips its knobs even at the smallest window
+ * the editor opens at. Extra height goes to the stages via flex. */
 .wv-synth__display {
   display: grid;
   flex: 1;
   gap: 8px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  min-height: 160px;
+  min-height: 186px;
 }
 
 .wv-synth__display--tail {
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  min-height: 180px;
+  min-height: 188px;
 }
 
 .wv-synth__pane--stack {
   flex: none;
-  min-height: 148px;
+  min-height: 112px;
 }
 
 .wv-synth__pane {
@@ -69,7 +72,7 @@
 .wv-synth__stage {
   position: relative;
   flex: 1;
-  min-height: 120px;
+  min-height: 88px;
   margin: 0 8px;
   overflow: hidden;
   border-radius: 6px;
@@ -82,7 +85,12 @@
   touch-action: none;
 }
 
+/* Absolutely positioned so the picture never sets the pane's height: an
+ * auto-height flex pane around an in-flow SVG resolves `height: 100%` to the
+ * viewBox's square aspect ratio, and a 700px-wide pane becomes 700px tall. */
 .wv-synth__svg {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -177,28 +185,24 @@
 .wv-synth__knobs {
   display: flex;
   flex: none;
-  flex-wrap: wrap;
   gap: 8px 12px;
   align-items: flex-end;
   justify-content: center;
-  min-height: 72px;
-  padding: 8px 6px 10px;
+  padding: 4px 6px 8px;
 }
 
+/* The wave picker sits on its own row: five segments plus three knobs never
+ * fit one row at a third of the window, and a wrapped row clips mid-knob. */
 .wv-synth__switch {
   display: flex;
-  flex-direction: column;
+  flex: none;
   justify-content: center;
-  min-height: 52px;
-}
-
-.wv-synth .wv-seg {
-  height: 26px;
+  padding-top: 6px;
 }
 
 .wv-synth .wv-seg__btn {
   min-width: 28px;
-  padding: 0 5px;
+  padding: 5px;
   font: 500 9px 'Geist Variable';
 }
 
@@ -209,17 +213,17 @@
 
 .wv-synth__pane--signal {
   flex: none;
-  min-height: 148px;
+  min-height: 112px;
 }
 
 .wv-synth__stage--signal {
-  min-height: 108px;
+  min-height: 80px;
   margin-bottom: 8px;
   cursor: pointer;
 }
 
 .wv-synth__stage--mini {
-  min-height: 72px;
+  min-height: 56px;
 }
 
 .wv-synth__trace {

@@ -323,23 +323,23 @@ export function PolySynthEditor(props: {
                     />
                   </svg>
                 </div>
+                <Show when={waveDef()}>
+                  {(def) => (
+                    <div class="wv-synth__switch">
+                      <Segmented
+                        def={def()}
+                        typeId="poly-synth"
+                        value={props.paramValue(def())}
+                        labels={WAVE_LABELS}
+                        onChange={(value) => {
+                          setHot(pane());
+                          write(osc.wave, value);
+                        }}
+                      />
+                    </div>
+                  )}
+                </Show>
                 <div class="wv-synth__knobs">
-                  <Show when={waveDef()}>
-                    {(def) => (
-                      <div class="wv-synth__switch">
-                        <Segmented
-                          def={def()}
-                          typeId="poly-synth"
-                          value={props.paramValue(def())}
-                          labels={WAVE_LABELS}
-                          onChange={(value) => {
-                            setHot(pane());
-                            write(osc.wave, value);
-                          }}
-                        />
-                      </div>
-                    )}
-                  </Show>
                   <For each={knobs()}>
                     {(def) => (
                       <Knob

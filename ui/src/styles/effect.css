@@ -178,6 +178,9 @@
   position: absolute;
   inset: 0;
   z-index: 1;
+  /* The stage decides the height; without this the --detailed min-height wins
+   * over inset and the curve spills below the stage onto the row under it. */
+  min-height: 0;
   margin: 0;
   background: transparent;
   pointer-events: none;
@@ -457,6 +460,7 @@
 }
 
 .wv-xfer {
+  position: relative;
   flex: 1;
   min-height: 180px;
   border: 1px solid var(--line);
@@ -464,7 +468,12 @@
   background: var(--sunk);
 }
 
+/* Out of flow so the curve never sets the panel's height: in an auto-height
+ * column the SVG's `height: 100%` falls back to the square viewBox ratio and
+ * inflates the whole sheet past the window. */
 .wv-xfer__svg {
+  position: absolute;
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
@@ -529,7 +538,15 @@
 .wv-fx__grlabel { color: var(--dim2); font: 8px 'Geist Mono Variable'; letter-spacing: .05em; }
 .wv-fx__grtrack { height: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--sunk); }
 .wv-fx__grfill { position: relative; inset: auto; width: 0; height: 100%; background: var(--acc); opacity: 1; transition: width 120ms ease-out; }
-.wv-fx__grnum { color: var(--txt); font: 600 13px 'Geist Mono Variable'; }
+.wv-fx__grnum {
+  /* Reset the legacy vertical-meter geometry above: in this horizontal row the
+   * absolute + vertical-rl rules stack the digits on top of the label. */
+  position: static;
+  color: var(--txt);
+  font: 600 13px 'Geist Mono Variable';
+  writing-mode: horizontal-tb;
+  transform: none;
+}
 
 /* --- the magnitude curve ------------------------------------------------- */
 

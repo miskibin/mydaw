@@ -34,7 +34,7 @@ const WINDOW_SIZE: Record<string, { w: number; h: number }> = {
   delay: { w: 720, h: 540 },
   limiter: { w: 620, h: 500 },
   reverb: { w: 760, h: 540 },
-  utility: { w: 520, h: 480 },
+  utility: { w: 520, h: 560 },
   generic: { w: 520, h: 400 },
 };
 
