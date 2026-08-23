@@ -1,12 +1,12 @@
 /**
- * The poly synth's own window: three oscillators stacked on one picture, then
- * the shared filter and envelope.
+ * The poly synth's own window: live output on top, then the three oscillators,
+ * filter and envelope in one frame.
  */
 
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js';
 
 import type { ParamDefDto, SpectrumDto } from '../../api/types';
-import { eqCurvePath, eqX, eqY } from '../../lib/eq';
+import { analyserLine, analyserPath, eqCurvePath, eqX, eqY } from '../../lib/eq';
 import { formatParam, snapToStep } from '../../lib/param';
 import {
   FILTER_RANGE_DB,
@@ -16,6 +16,7 @@ import {
   envSweepActive,
   filterFromPointer,
   hitAdsrHandle,
+  normalisedScope,
   oscillatorPath,
   oscillatorStack,
   oscSample,
@@ -145,14 +146,14 @@ export function PolySynthEditor(props: {
   }));
   const ads = createMemo(() => adsrLayout(envelope(), ADSR_BOX, ADSR_BOX));
 
-  const liveScope = createMemo(() => {
-    const frame = live();
-    if (!frame) return null;
-    const left = frame.scopeL;
-    if (left.length < 2) return null;
-    const peak = left.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
-    if (peak < 0.012) return null;
-    return left.map((value) => value / peak);
+  const liveScope = createMemo(() => normalisedScope(live()?.scopeL));
+  const liveSpec = createMemo(() => {
+    const bins = live()?.binsPost;
+    if (!bins || bins.length < 2) return { fill: '', ridge: '' };
+    return {
+      fill: analyserPath(bins, VIEW_W, VIEW_H),
+      ridge: analyserLine(bins, VIEW_W, VIEW_H),
+    };
   });
 
   const insertOwnsTap = () => {
@@ -257,13 +258,13 @@ export function PolySynthEditor(props: {
         onPointerEnter={() => setHot('mix')}
       >
         <div class="wv-synth__head">
-          <span>STACK</span>
-          <strong>OSC 1 + 2 + 3</strong>
+          <span>LIVE</span>
+          <strong>OUTPUT</strong>
         </div>
         <div
           class="wv-synth__stage wv-synth__stage--signal"
           role="img"
-          aria-label="Three oscillators stacked on one cycle. Click to preview."
+          aria-label="Live output. Click to preview."
           title="Click to preview"
           onPointerDown={(event) => {
             if (event.button !== 0) return;
@@ -340,22 +341,24 @@ export function PolySynthEditor(props: {
                       </div>
                     )}
                   </Show>
-                  <For each={knobs()}>
-                    {(def) => (
-                      <Knob
-                        def={def}
-                        typeId="poly-synth"
-                        value={() => props.paramValue(def)}
-                        onInput={(value) => {
-                          setHot(pane());
-                          props.setParam(def, value);
-                        }}
-                        owner={props.owner}
-                        size={32}
-                        color={props.color}
-                      />
-                    )}
-                  </For>
+                  <div class="wv-synth__knobs-row">
+                    <For each={knobs()}>
+                      {(def) => (
+                        <Knob
+                          def={def}
+                          typeId="poly-synth"
+                          value={() => props.paramValue(def)}
+                          onInput={(value) => {
+                            setHot(pane());
+                            props.setParam(def, value);
+                          }}
+                          owner={props.owner}
+                          size={28}
+                          color={props.color}
+                        />
+                      )}
+                    </For>
+                  </div>
                 </div>
               </section>
             );
@@ -386,6 +389,10 @@ export function PolySynthEditor(props: {
                 )}
               </For>
               <path class="wv-synth__zero" d={`M0 ${VIEW_H / 2} H${VIEW_W}`} />
+              <Show when={liveSpec().fill}>
+                <path class="wv-synth__spec" d={liveSpec().fill} />
+                <path class="wv-synth__specline" d={liveSpec().ridge} />
+              </Show>
               <Show when={sweepPath()}>{(d) => <path class="wv-synth__sweep" d={d()} />}</Show>
               <Show when={envPath()}>{(d) => <path class="wv-synth__ghost" d={d()} />}</Show>
               <path class="wv-synth__area" d={restArea()} />
@@ -401,22 +408,24 @@ export function PolySynthEditor(props: {
             <span class="wv-synth__dot" style={{ left: `${handleX()}%`, top: `${handleY()}%` }} />
           </div>
           <div class="wv-synth__knobs">
-            <For each={filtKnobs()}>
-              {(def) => (
-                <Knob
-                  def={def}
-                  typeId="poly-synth"
-                  value={() => props.paramValue(def)}
-                  onInput={(value) => {
-                    setHot('filt');
-                    props.setParam(def, value);
-                  }}
-                  owner={props.owner}
-                  size={32}
-                  color={props.color}
-                />
-              )}
-            </For>
+            <div class="wv-synth__knobs-row">
+              <For each={filtKnobs()}>
+                {(def) => (
+                  <Knob
+                    def={def}
+                    typeId="poly-synth"
+                    value={() => props.paramValue(def)}
+                    onInput={(value) => {
+                      setHot('filt');
+                      props.setParam(def, value);
+                    }}
+                    owner={props.owner}
+                    size={28}
+                    color={props.color}
+                  />
+                )}
+              </For>
+            </div>
           </div>
         </section>
 
@@ -456,22 +465,24 @@ export function PolySynthEditor(props: {
             </For>
           </div>
           <div class="wv-synth__knobs">
-            <For each={envKnobs()}>
-              {(def) => (
-                <Knob
-                  def={def}
-                  typeId="poly-synth"
-                  value={() => props.paramValue(def)}
-                  onInput={(value) => {
-                    setHot('env');
-                    props.setParam(def, value);
-                  }}
-                  owner={props.owner}
-                  size={32}
-                  color={props.color}
-                />
-              )}
-            </For>
+            <div class="wv-synth__knobs-row">
+              <For each={envKnobs()}>
+                {(def) => (
+                  <Knob
+                    def={def}
+                    typeId="poly-synth"
+                    value={() => props.paramValue(def)}
+                    onInput={(value) => {
+                      setHot('env');
+                      props.setParam(def, value);
+                    }}
+                    owner={props.owner}
+                    size={28}
+                    color={props.color}
+                  />
+                )}
+              </For>
+            </div>
           </div>
         </section>
       </div>

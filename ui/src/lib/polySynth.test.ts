@@ -21,6 +21,7 @@ import {
   svfLowpassCurveDb,
   svfLowpassMagDb,
   usesPolySynthEditor,
+  normalisedScope,
 } from './polySynth';
 
 describe('usesPolySynthEditor', () => {
@@ -183,6 +184,18 @@ describe('signalPath', () => {
     const raised = signalPath(samples, 100, 100, 0.1);
     expect(centre.startsWith('M')).toBe(true);
     expect(raised).not.toBe(centre);
+  });
+});
+
+describe('normalisedScope', () => {
+  it('keeps a quiet or silent hop visible instead of hiding the trace', () => {
+    expect(normalisedScope([0, 0, 0])).toEqual([0, 0, 0]);
+    expect(normalisedScope([0.004, -0.004])).toEqual([1, -1]);
+  });
+
+  it('scales a playing hop to ±1 by peak', () => {
+    expect(normalisedScope([-0.5, 0.25])).toEqual([-1, 0.5]);
+    expect(normalisedScope([0.8])).toBeNull();
   });
 });
 

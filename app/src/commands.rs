@@ -857,6 +857,19 @@ pub fn clone_pattern(
     Ok(state.sequencer_state())
 }
 
+/// Split a pattern into one pattern per occupied rack channel, and spread
+/// its playlist clips onto consecutive lanes (adding lanes when needed).
+#[tauri::command]
+pub fn split_pattern_by_channel(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+) -> Result<SequencerStateDto, String> {
+    state
+        .split_pattern_by_channel(pattern_id)
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
 /// Delete a pattern **and every playlist clip that played it**.
 ///
 /// The two are one command because they must not be separable: a set without

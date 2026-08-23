@@ -142,7 +142,7 @@
   order: -1;
   flex-direction: column;
   gap: 8px;
-  min-height: 180px;
+  min-height: 160px;
   width: 100%;
 }
 
@@ -157,7 +157,7 @@
   display: flex;
   flex: 1;
   flex-direction: column;
-  min-height: 220px;
+  min-height: 168px;
 }
 
 .wv-fx__terrain {
@@ -231,13 +231,13 @@
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(210px, .75fr);
   gap: 8px;
-  min-height: 230px;
+  min-height: 188px;
   border: 0;
   background: transparent;
   overflow: visible;
 }
 .wv-fx__timeview { min-height: 0; }
-.wv-fx__timeview svg, .wv-fx__decay svg { display: block; width: 100%; height: 105px; }
+.wv-fx__timeview svg, .wv-fx__decay svg { display: block; width: 100%; height: 96px; }
 .wv-fx__compbody {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 52px;
@@ -250,12 +250,21 @@
 .wv-fx__vgrid { fill: none; stroke: var(--line); stroke-width: .5; vector-effect: non-scaling-stroke; }
 .wv-fx__threshold { fill: none; stroke: var(--warn); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
 .wv-fx__envelope { fill: none; stroke: var(--txt); stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.wv-fx__envelope--live { stroke: var(--live); stroke-width: 1.5; }
+.wv-fx__timeview:has(.wv-fx__envelope--live) .wv-fx__envelope:not(.wv-fx__envelope--live) { opacity: .28; }
+.wv-fx__livescope {
+  position: absolute;
+  inset: 26px 8px 22px;
+  width: auto;
+  height: auto;
+  pointer-events: none;
+}
 .wv-fx__grarea { fill: color-mix(in srgb, var(--acc) 42%, transparent); stroke: var(--acc); stroke-width: 1; vector-effect: non-scaling-stroke; }
 .wv-fx__vizlegend { display: flex; justify-content: space-between; gap: 8px; padding: 5px 9px 8px; font: 500 8px 'Geist Mono Variable'; color: var(--dim); text-transform: uppercase; }
 .wv-fx__vizlegend i { display: inline-block; width: 13px; height: 2px; margin: 0 3px 2px 0; background: var(--txt); }
 .wv-fx__vizlegend i.is-gr { background: var(--acc); }
 
-.wv-fx__satviz { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(170px, .95fr); gap: 8px; min-height: 210px; }
+.wv-fx__satviz { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(170px, .95fr); gap: 8px; min-height: 168px; }
 .wv-fx__vizpanel { display: flex; flex-direction: column; }
 .wv-fx__vizpanel .wv-xfer { flex: 1; border: 0; border-radius: 0; }
 .wv-fx__harmonics { display: flex; flex-direction: column; }
@@ -272,9 +281,9 @@
 
 .wv-fx__display:has(> .wv-fx__room) { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(180px, .65fr); gap: 8px; }
 .wv-fx__display:has(> .wv-fx__room) > .wv-fx__topo { grid-column: 1 / -1; }
-.wv-fx__room { min-height: 180px; border: 1px solid var(--line); }
+.wv-fx__room { min-height: 160px; border: 1px solid var(--line); }
 .wv-fx__roomsvg { top: 25px; height: calc(100% - 25px); }
-.wv-fx__decay { min-height: 180px; }
+.wv-fx__decay { min-height: 160px; }
 .wv-fx__decayarea { fill: color-mix(in srgb, var(--acc) 26%, transparent); stroke: var(--acc); stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .wv-fx__predelay { stroke: var(--warn); stroke-width: 1; stroke-dasharray: 2 2; vector-effect: non-scaling-stroke; }
 .wv-fx__particle { fill: var(--good); filter: drop-shadow(0 0 2px var(--good)); animation: wv-room-particle 2.1s linear infinite; }
@@ -319,7 +328,7 @@
 .wv-fx__display--comp .wv-fx__grtrack { width: 100%; }
 
 .wv-fx__display--util {
-  min-height: 280px;
+  min-height: 180px;
 }
 
 .wv-fx__primary {
@@ -458,7 +467,7 @@
 
 .wv-xfer {
   flex: 1;
-  min-height: 180px;
+  min-height: 148px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--sunk);
@@ -498,7 +507,7 @@
 .wv-gonio {
   flex: 1;
   width: 100%;
-  min-height: 240px;
+  min-height: 168px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--sunk);
@@ -627,7 +636,7 @@
 
 .wv-eqc--detailed {
   flex: 1;
-  min-height: 220px;
+  min-height: 180px;
 }
 
 .wv-eqc--overlay {
@@ -691,7 +700,7 @@
 .wv-fx__room {
   position: relative;
   flex: 1;
-  min-height: 210px;
+  min-height: 160px;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;

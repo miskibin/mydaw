@@ -440,6 +440,63 @@ impl Playlist {
             .ok_or(PlaylistError::NoSuchTrack(index))
     }
 
+    /// Place the extra voices of a split under each instance of `original_id`.
+    ///
+    /// `pattern_ids[0]` is the rewritten original (already on those clips).
+    /// Each further id is painted on the next lane down, same start and length.
+    /// Missing lanes are appended. A pattern that is not on the playlist is a
+    /// no-op: splitting in the picker must not invent arrangement.
+    ///
+    /// Bounds are checked before any lane or clip is added, so a refusal leaves
+    /// the playlist as it was.
+    ///
+    /// # Errors
+    /// [`PlaylistError::TooManyTracks`] or [`PlaylistError::TooManyClips`].
+    pub fn spread_split_clips(
+        &mut self,
+        original_id: u64,
+        pattern_ids: &[u64],
+    ) -> Result<(), PlaylistError> {
+        if pattern_ids.len() < 2 {
+            return Ok(());
+        }
+        let extra = pattern_ids.len() - 1;
+        let instances: Vec<(usize, u64, u64)> = self
+            .clips
+            .iter()
+            .filter_map(|clip| match clip {
+                Clip::Pattern(placed) if placed.pattern_id == original_id => {
+                    Some((placed.track, placed.start_ticks, placed.length_ticks))
+                }
+                _ => None,
+            })
+            .collect();
+        if instances.is_empty() {
+            return Ok(());
+        }
+        let needed = instances
+            .iter()
+            .map(|(track, _, _)| track + extra)
+            .max()
+            .unwrap_or(0);
+        if needed >= MAX_PLAYLIST_TRACKS {
+            return Err(PlaylistError::TooManyTracks);
+        }
+        let adding = instances.len() * extra;
+        if self.clips.len() + adding > MAX_CLIPS {
+            return Err(PlaylistError::TooManyClips);
+        }
+        while self.tracks.len() <= needed {
+            self.add_track(None)?;
+        }
+        for (track, start_ticks, length_ticks) in instances {
+            for (offset, &pattern_id) in pattern_ids.iter().enumerate().skip(1) {
+                self.add_pattern_clip(pattern_id, track + offset, start_ticks, length_ticks)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Place a pattern on the timeline, returning the new clip's id.
     ///
     /// # Errors
@@ -1124,5 +1181,50 @@ mod tests {
         assert_eq!(TICKS_PER_BAR, 3_840);
         assert_eq!(MAX_SONG_TICKS, 1_024 * 3_840);
         assert_eq!(DEFAULT_CLIP_TICKS, 4 * 3_840);
+    }
+
+    #[test]
+    fn spreading_a_split_places_each_voice_on_consecutive_lanes_and_adds_lanes() {
+        let mut playlist = Playlist::empty();
+        playlist.add_track(Some("A".into())).unwrap();
+        playlist.add_pattern_clip(1, 0, 0, BAR).unwrap();
+        playlist.add_pattern_clip(1, 0, 4 * BAR, BAR).unwrap();
+
+        playlist.spread_split_clips(1, &[1, 2, 3]).unwrap();
+        assert_eq!(
+            playlist.tracks().len(),
+            3,
+            "two extra voices need two extra lanes"
+        );
+        let clips: Vec<(u64, usize, u64)> = playlist
+            .clips()
+            .iter()
+            .filter_map(|clip| match clip {
+                Clip::Pattern(p) => Some((p.pattern_id, p.track, p.start_ticks)),
+                Clip::Audio(_) => None,
+            })
+            .collect();
+        assert_eq!(
+            clips,
+            vec![
+                (1, 0, 0),
+                (1, 0, 4 * BAR),
+                (2, 1, 0),
+                (3, 2, 0),
+                (2, 1, 4 * BAR),
+                (3, 2, 4 * BAR),
+            ]
+        );
+    }
+
+    #[test]
+    fn spreading_a_split_does_not_add_lanes_that_already_exist() {
+        let mut playlist = Playlist::default();
+        playlist.add_pattern_clip(1, 0, 0, BAR).unwrap();
+        let before = playlist.tracks().len();
+        playlist.spread_split_clips(1, &[1, 2]).unwrap();
+        assert_eq!(playlist.tracks().len(), before);
+        assert_eq!(playlist.clips().len(), 2);
+        assert_eq!(playlist.clips()[1].track(), 1);
     }
 }

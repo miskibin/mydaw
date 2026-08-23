@@ -1,8 +1,8 @@
 /**
  * Open a pattern's editor from anywhere in the shell.
  *
- * The destination (rack vs roll) is a pure function of the pattern's contents
- * and the surface it was opened from; this hook is the one place that then
+ * The destination (rack vs roll) is a pure function of the surface it was
+ * opened from and whether Alt was held; this hook is the one place that then
  * talks to the engine and `view.tsx`.
  */
 

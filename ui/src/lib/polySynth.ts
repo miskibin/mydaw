@@ -192,6 +192,18 @@ export function oscillatorPath(samples: readonly number[], width: number, height
 }
 
 /**
+ * Peak-normalise a scope hop so a quiet note still draws, instead of vanishing
+ * under a noise gate. A single sample cannot make a polyline.
+ */
+export function normalisedScope(samples: readonly number[] | null | undefined): number[] | null {
+  if (!samples || samples.length < 2) return null;
+  let peak = 0;
+  for (const value of samples) peak = Math.max(peak, Math.abs(value));
+  if (peak < 1e-9) return samples.map(() => 0);
+  return samples.map((value) => value / peak);
+}
+
+/**
  * A time-domain trace. `offset` shifts the midline as a fraction of height so
  * stacked layers don't sit on top of each other.
  */

@@ -1,6 +1,6 @@
 import type { JSX } from 'solid-js';
 import type { EffectInfoDto, ParamValueDto } from '../../api/types';
-import { saturatorOut, saturatorType } from '../../lib/saturator';
+import { saturatorOut, saturatorType, liveDriveSample, spectrumBarHeights } from '../../lib/saturator';
 import { formatValue } from '../../lib/param';
 import { Segmented } from '../../ui/Segmented';
 import { TransferCurve } from '../../ui/TransferCurve';
@@ -16,6 +16,7 @@ export function SatEditor(props: {
   advanced: EffectInfoDto['params'];
   muted: boolean;
   spectrum: readonly number[] | null;
+  scopeL?: readonly number[];
 }): JSX.Element {
   const typeDef = () => props.info.params.find((d) => d.id === 'type')!;
   const kind = () => saturatorType(props.values.get('type') ?? 0);
@@ -23,6 +24,9 @@ export function SatEditor(props: {
   const auto = () => props.live.find((r) => r.id === 'auto_gain_db')?.value ?? 0;
   const knobsWithoutType = () => props.primary.filter((d) => d.id !== 'type');
   const harmonics = () => {
+    if (props.spectrum && props.spectrum.length >= 2) {
+      return spectrumBarHeights(props.spectrum, 8);
+    }
     const amount = Math.min(1, Math.max(0, drive() / 24));
     const odd = kind() === 'clip' ? 1 : 0.72;
     return Array.from({ length: 8 }, (_, i) => {
@@ -30,6 +34,10 @@ export function SatEditor(props: {
       const parity = harmonic % 2 === 0 ? (kind() === 'tube' ? 0.78 : 0.28) : odd;
       return harmonic === 1 ? 1 : amount * parity / harmonic ** 0.72;
     });
+  };
+  const shaped = () => {
+    const peak = liveDriveSample(props.scopeL ?? []);
+    return { x: peak, y: saturatorOut(kind(), peak, drive()) };
   };
 
   return (
@@ -40,13 +48,13 @@ export function SatEditor(props: {
           min={-1.5}
           max={1.5}
           yAt={(x) => saturatorOut(kind(), x, drive())}
-          live={{ x: 1, y: saturatorOut(kind(), 1, drive()) }}
+          live={shaped()}
           marks={[0]}
           muted={props.muted}
-          title="Input sample → shaped sample. The dot is 0 dBFS after drive."
+          title="Input sample → shaped sample. The dot is this block's peak sample after drive."
         /></div>
-        <div class="wv-fx__harmonics" classList={{ 'is-off': props.muted }} role="img" aria-label="Harmonics introduced by saturation">
-          <div class="wv-fx__vizhead"><span>ADDED HARMONICS</span><strong>FREQUENCY →</strong></div>
+        <div class="wv-fx__harmonics" classList={{ 'is-off': props.muted }} role="img" aria-label="Live output spectrum">
+          <div class="wv-fx__vizhead"><span>OUTPUT</span><strong>SPECTRUM</strong></div>
           <div class="wv-fx__harmbars">{harmonics().map((height, index) => <i style={{ height: `${height * 88}%` }}><b>{index + 1}</b></i>)}</div>
         </div></div>
         <div class="wv-fx__satmeta">

@@ -463,6 +463,8 @@ pub struct PatternSummaryDto {
     pub hit_count: usize,
     /// Melodic notes, across every channel.
     pub note_count: usize,
+    /// Occupied rack channels — what split-by-channel would turn into patterns.
+    pub voice_count: usize,
 }
 
 impl From<&Pattern> for PatternSummaryDto {
@@ -476,6 +478,7 @@ impl From<&Pattern> for PatternSummaryDto {
             channel_count: pattern.channels.len(),
             hit_count: pattern.hit_count(),
             note_count: pattern.note_count(),
+            voice_count: pattern.occupied_channels().len(),
         }
     }
 }
@@ -1326,6 +1329,7 @@ mod tests {
         assert_eq!(summary.channel_count, 2);
         assert_eq!(summary.hit_count, 4);
         assert_eq!(summary.note_count, 1);
+        assert_eq!(summary.voice_count, 2);
     }
 
     #[test]

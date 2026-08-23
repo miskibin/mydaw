@@ -1,9 +1,10 @@
 import type { EffectInfoDto, ParamValueDto } from '../../api/types';
 import { compressorOutputDb, inputDbFromGr, reductionDb } from '../../lib/compressor';
+import { normalisedScope, signalPath } from '../../lib/polySynth';
 import { TransferCurve } from '../../ui/TransferCurve';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { Advanced, PrimaryRow } from './chrome';
-import type { JSX } from 'solid-js';
+import { Show, createMemo, type JSX } from 'solid-js';
 
 export function CompEditor(props: {
   info: EffectInfoDto;
@@ -13,7 +14,7 @@ export function CompEditor(props: {
   primary: EffectInfoDto['params'];
   advanced: EffectInfoDto['params'];
   muted: boolean;
-  spectrum: readonly number[] | null;
+  scopeL?: readonly number[];
 }): JSX.Element {
   const at = (id: string, fallback: number) => props.values.get(id) ?? fallback;
   const gr = () => Math.abs(props.live.find((r) => r.id === 'gr_max')?.value ?? 0);
@@ -29,6 +30,7 @@ export function CompEditor(props: {
   };
   const attack = () => at('attack', 10);
   const release = () => at('release', 100);
+  const liveWave = createMemo(() => normalisedScope(props.scopeL));
   const envelopePath = () => {
     const a = Math.min(34, 8 + Math.log10(attack() + 1) * 12);
     const r = Math.min(92, a + 22 + Math.log10(release() + 1) * 13);
@@ -49,6 +51,11 @@ export function CompEditor(props: {
             <path class="wv-fx__threshold" d={`M0 ${Math.max(10, 76 + threshold()).toFixed(1)}H100`} />
             <path class="wv-fx__grarea" d={reductionPath()} />
             <path class="wv-fx__envelope" d={envelopePath()} />
+            <Show when={liveWave()}>
+              {(wave) => (
+                <path class="wv-fx__envelope wv-fx__envelope--live" d={signalPath(wave(), 100, 86)} />
+              )}
+            </Show>
           </svg>
           <div class="wv-fx__vizlegend"><span><i class="is-input" /> input envelope</span><span><i class="is-gr" /> gain reduction</span></div>
         </div>

@@ -137,7 +137,7 @@ answers with the whole `MixerState` and every sequencer command with the whole
 | `get_pattern` | `SequencerState { bpm, sampleRate, playMode, ppq, ticksPerStep, ticksPerBar, patternSet, playlist }` |
 | `set_pattern` | `{ pattern }` — whole-pattern replacement; `id: 0` means the active one |
 | `add_pattern` | **does not switch to it** — that is `set_active_pattern` |
-| `clone_pattern` / `remove_pattern` / `rename_pattern` / `set_pattern_color` | `{ patternId, … }`; removing takes **every clip that played it** |
+| `clone_pattern` / `split_pattern_by_channel` / `remove_pattern` / `rename_pattern` / `set_pattern_color` | `{ patternId, … }`; split makes one pattern per occupied channel and spreads playlist clips onto consecutive lanes; removing takes **every clip that played it** |
 | `set_pattern_length` | `{ patternId, steps }` (16/32/64); shortening is not destructive |
 | `set_active_pattern` | what the rack, the roll and PAT mode address |
 | `add_playlist_track` / `remove_playlist_track` / `rename_playlist_track` / `set_playlist_track_mute` | removing a lane takes its clips |

@@ -284,6 +284,11 @@ export interface Backend {
   /** Add an empty pattern. **Does not switch to it** -- that is `setActivePattern`. */
   addPattern(name?: string): Promise<SequencerState>;
   clonePattern(patternId: number, name?: string): Promise<SequencerState>;
+  /**
+   * Split a pattern into one pattern per occupied rack channel, and spread
+   * its playlist clips onto consecutive lanes (adding lanes when needed).
+   */
+  splitPatternByChannel(patternId: number): Promise<SequencerState>;
   /** Delete a pattern **and every playlist clip that played it**. */
   removePattern(patternId: number): Promise<SequencerState>;
   renamePattern(patternId: number, name: string): Promise<SequencerState>;
@@ -770,6 +775,10 @@ class TauriBackend implements Backend {
 
   clonePattern(patternId: number, name?: string): Promise<SequencerState> {
     return this.call('clone_pattern', { patternId, name: name ?? null });
+  }
+
+  splitPatternByChannel(patternId: number): Promise<SequencerState> {
+    return this.call('split_pattern_by_channel', { patternId });
   }
 
   removePattern(patternId: number): Promise<SequencerState> {

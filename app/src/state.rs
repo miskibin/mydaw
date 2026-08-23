@@ -2098,6 +2098,33 @@ impl AppState {
         Ok(dropped)
     }
 
+    /// Split a pattern into one pattern per occupied rack channel.
+    ///
+    /// Names come from the mixer: `"Loop - Kick"`. Playlist instances of the
+    /// original are spread onto consecutive lanes, and missing lanes are
+    /// appended.
+    ///
+    /// # Errors
+    /// As [`edit_patterns`](Self::edit_patterns).
+    pub fn split_pattern_by_channel(&self, id: u64) -> Result<Vec<u64>, SequencerError> {
+        let names: Vec<String> = self
+            .tracks
+            .project()
+            .tracks
+            .iter()
+            .map(|track| track.name.clone())
+            .collect();
+        let ids = self.sequencer.split_pattern_by_channel(id, |channel| {
+            names
+                .get(channel as usize)
+                .cloned()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| format!("Channel {}", channel + 1))
+        })?;
+        self.publish_song()?;
+        Ok(ids)
+    }
+
     /// The step key a new channel's grid gets: the drum's General MIDI number
     /// when the channel is one of the first four, middle C otherwise.
     ///

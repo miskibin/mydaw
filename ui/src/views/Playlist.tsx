@@ -47,6 +47,7 @@
  *
  * Shift while dragging a clip **copies** it instead of moving it. Ctrl while
  * the paint tool is up drops into select, the way FL's draw tool does.
+ * Double-click opens the rack (Alt for the piano roll) and must not paint.
  *
  * ## Selection
  *
@@ -124,6 +125,8 @@ import {
   zoomAnchoredScroll,
 } from '../lib/timeline';
 import { laneSilenced } from '../lib/playlistLane';
+import { canSplitByChannel } from '../lib/pattern';
+import { isRepeatClick } from '../lib/navigate';
 import { useAppState } from '../state';
 import { usePatternNav } from '../shell/patternNav';
 import {
@@ -245,6 +248,11 @@ export function Playlist(): ReturnType<typeof Show> {
   const [marquee, setMarquee] = createSignal<{ x: number; y: number; w: number; h: number } | null>(
     null,
   );
+  const [clipMenu, setClipMenu] = createSignal<{
+    clip: ClipDto;
+    x: number;
+    y: number;
+  } | null>(null);
 
   let playheadEl: HTMLDivElement | undefined;
   /** The playhead's marker in the ruler, above the sticky lane headers. */
@@ -774,6 +782,7 @@ export function Playlist(): ReturnType<typeof Show> {
 
   function onLanePointerDown(event: PointerEvent, lane: number): void {
     if (event.button !== 0) return;
+    if (isRepeatClick(event.detail)) return;
     if (isSelectGesture(event)) {
       beginMarquee(event, lane);
       return;
@@ -831,6 +840,7 @@ export function Playlist(): ReturnType<typeof Show> {
   function onClipPointerDown(event: PointerEvent, clip: ClipDto, mode: 'move' | 'resize'): void {
     event.stopPropagation();
     if (event.button !== 0) return;
+    if (isRepeatClick(event.detail)) return;
     if (view.playlistTool() === 'delete') {
       removeClip(clip);
       return;
@@ -1208,6 +1218,23 @@ export function Playlist(): ReturnType<typeof Show> {
       .then(() => app.commitPlaylistGesture());
   }
 
+  function clipCanSplit(clip: ClipDto): boolean {
+    if (clip.kind !== 'pattern' || clip.patternId === undefined) return false;
+    const content = patternContent(clip.patternId);
+    if (content) return canSplitByChannel(content);
+    return (app.patterns().find((pattern) => pattern.id === clip.patternId)?.voiceCount ?? 0) > 1;
+  }
+
+  function openClipMenu(event: MouseEvent, clip: ClipDto): void {
+    event.preventDefault();
+    event.stopPropagation();
+    setClipMenu({
+      clip,
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 180)),
+    });
+  }
+
   // --- lanes ---------------------------------------------------------------
 
   function removeLane(index: number, name: string): void {
@@ -1449,54 +1476,81 @@ export function Playlist(): ReturnType<typeof Show> {
                   onDrop={(event) => onLaneDrop(event, index)}
                   onContextMenu={(event) => event.preventDefault()}
                 >
-                  <For each={playlist()?.clips.filter((clip) => clip.track === index) ?? []}>
-                    {(clip) => (
-                      <Clip
-                        clip={clip}
-                        pxPerTick={pxPerTick()}
-                        name={clipName(clip)}
-                        colour={
-                          clip.kind === 'pattern'
-                            ? (app.patterns().find((p) => p.id === clip.patternId)?.color ??
-                              trackColor(clip.patternId ?? 0))
-                            : trackColor(clip.sourceId ?? 0)
-                        }
-                        waveform={clip.kind === 'audio' ? waveformFor(clip.sourceId!) : undefined}
-                        waveTicks={
-                          clip.kind === 'audio'
-                            ? (app.audioSources().find((source) => source.id === clip.sourceId)
-                                ?.durationTicks ?? 0)
-                            : 0
-                        }
-                        marks={() => {
-                          if (clip.kind !== 'pattern' || clip.patternId === undefined) return [];
-                          if (clip.length * pxPerTick() < MIN_ART_PX) return [];
-                          const content = patternContent(clip.patternId);
-                          if (!content) return [];
-                          return clipMarks(content, (channel) => {
-                            const track = app.tracks()[channel];
-                            return track ? channelColor(track) : trackColor(channel);
-                          });
-                        }}
-                        patternTicks={
-                          clip.kind === 'pattern'
-                            ? (app.patterns().find((pattern) => pattern.id === clip.patternId)
-                                ?.lengthTicks ?? 0)
-                            : 0
-                        }
-                        selected={view.selectedClips().includes(clip.id)}
-                        onDown={(event, mode) => onClipPointerDown(event, clip, mode)}
-                        onDelete={() => removeClip(clip)}
-                        onOpen={(altKey) => {
-                          if (clip.kind === 'audio' && clip.sourceId !== undefined) {
-                            void openSample(clip.sourceId).catch(app.report);
-                            return;
-                          }
-                          if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
-                          void nav.openPattern(clip.patternId, { altKey, surface: 'clip' });
-                        }}
-                      />
+                  <For
+                    each={(playlist()?.clips.filter((clip) => clip.track === index) ?? []).map(
+                      (clip) => clip.id,
                     )}
+                  >
+                    {(id) => {
+                      const clip = () => playlist()?.clips.find((entry) => entry.id === id);
+                      return (
+                        <Show when={clip()}>
+                          {(current) => (
+                            <Clip
+                              clip={current()}
+                              pxPerTick={pxPerTick()}
+                              name={clipName(current())}
+                              colour={
+                                current().kind === 'pattern'
+                                  ? (app.patterns().find((p) => p.id === current().patternId)
+                                      ?.color ?? trackColor(current().patternId ?? 0))
+                                  : trackColor(current().sourceId ?? 0)
+                              }
+                              waveform={
+                                current().kind === 'audio'
+                                  ? waveformFor(current().sourceId!)
+                                  : undefined
+                              }
+                              waveTicks={
+                                current().kind === 'audio'
+                                  ? (app.audioSources().find(
+                                      (source) => source.id === current().sourceId,
+                                    )?.durationTicks ?? 0)
+                                  : 0
+                              }
+                              marks={() => {
+                                const patternId = current().patternId;
+                                if (current().kind !== 'pattern' || patternId === undefined) {
+                                  return [];
+                                }
+                                if (current().length * pxPerTick() < MIN_ART_PX) return [];
+                                const content = patternContent(patternId);
+                                if (!content) return [];
+                                return clipMarks(content, (channel) => {
+                                  const track = app.tracks()[channel];
+                                  return track ? channelColor(track) : trackColor(channel);
+                                });
+                              }}
+                              patternTicks={
+                                current().kind === 'pattern' && current().patternId !== undefined
+                                  ? (app.patterns().find(
+                                      (pattern) => pattern.id === current().patternId,
+                                    )?.lengthTicks ?? 0)
+                                  : 0
+                              }
+                              selected={view.selectedClips().includes(current().id)}
+                              onDown={(event, mode) => onClipPointerDown(event, current(), mode)}
+                              onMenu={(event) => openClipMenu(event, current())}
+                              onOpen={(altKey) => {
+                                const sourceId = current().sourceId;
+                                if (current().kind === 'audio' && sourceId !== undefined) {
+                                  void openSample(sourceId).catch(app.report);
+                                  return;
+                                }
+                                const patternId = current().patternId;
+                                if (current().kind !== 'pattern' || patternId === undefined) {
+                                  return;
+                                }
+                                void nav.openPattern(patternId, {
+                                  altKey,
+                                  surface: 'clip',
+                                });
+                              }}
+                            />
+                          )}
+                        </Show>
+                      );
+                    }}
                   </For>
                 </div>
               </div>
@@ -1544,6 +1598,82 @@ export function Playlist(): ReturnType<typeof Show> {
                 height: `${Math.max(1, box().h)}px`,
               }}
             />
+          )}
+        </Show>
+        <Show when={clipMenu()}>
+          {(menu) => (
+            <>
+              <div class="wv-scrim" onClick={() => setClipMenu(null)} onContextMenu={(event) => {
+                event.preventDefault();
+                setClipMenu(null);
+              }} />
+              <div
+                class="wv-menu wv-menu--clip"
+                style={{ left: `${menu().x}px`, top: `${menu().y}px` }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  class="wv-menu__row"
+                  onClick={() => {
+                    const clip = menu().clip;
+                    setClipMenu(null);
+                    if (clip.kind === 'audio' && clip.sourceId !== undefined) {
+                      void openSample(clip.sourceId).catch(app.report);
+                      return;
+                    }
+                    if (clip.kind !== 'pattern' || clip.patternId === undefined) return;
+                    void nav.openPattern(clip.patternId, { altKey: false, surface: 'clip' });
+                  }}
+                >
+                  Open
+                </button>
+                <Show when={menu().clip.kind === 'pattern' && menu().clip.patternId !== undefined}>
+                  <button
+                    type="button"
+                    class="wv-menu__row"
+                    onClick={() => {
+                      const id = menu().clip.patternId;
+                      setClipMenu(null);
+                      if (id === undefined) return;
+                      void nav.openPattern(id, { altKey: true, surface: 'clip' });
+                    }}
+                  >
+                    Open piano roll
+                  </button>
+                  <button
+                    type="button"
+                    class="wv-menu__row wv-can-disable"
+                    disabled={!clipCanSplit(menu().clip)}
+                    title={
+                      clipCanSplit(menu().clip)
+                        ? 'One pattern per channel, spread onto consecutive lanes'
+                        : 'Needs a pattern that speaks for more than one channel'
+                    }
+                    onClick={() => {
+                      const id = menu().clip.patternId;
+                      setClipMenu(null);
+                      if (id === undefined) return;
+                      app.splitPatternByChannel(id);
+                    }}
+                  >
+                    Split by channel
+                  </button>
+                </Show>
+                <div class="wv-menu__rule" />
+                <button
+                  type="button"
+                  class="wv-menu__row wv-menu__row--danger"
+                  onClick={() => {
+                    const clip = menu().clip;
+                    setClipMenu(null);
+                    removeClip(clip);
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            </>
           )}
         </Show>
       </div>
@@ -1658,7 +1788,7 @@ function Clip(props: {
   patternTicks: number;
   selected: boolean;
   onDown: (event: PointerEvent, mode: 'move' | 'resize') => void;
-  onDelete: () => void;
+  onMenu: (event: MouseEvent) => void;
   onOpen: (altKey: boolean) => void;
 }): ReturnType<typeof Show> {
   /** The waveform as one SVG path, drawn from the engine's own min/max pairs. */
@@ -1690,12 +1820,12 @@ function Clip(props: {
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
-        props.onDelete();
+        props.onMenu(event);
       }}
       title={
         props.clip.kind === 'pattern'
-          ? `${props.name} — click to load the brush, drag to move (shift-drag to copy), drag the right edge to resize, double-click to edit (Alt for the rack), right-click to delete`
-          : `${props.name} — click to load the brush, drag to move (shift-drag to copy), double-click to open the sample window, right-click to delete. Audio clips play through their own channel's strip.`
+          ? `${props.name} — click to load the brush, drag to move (shift-drag to copy), drag the right edge to resize, double-click to edit (Alt for the piano roll), right-click for more`
+          : `${props.name} — click to load the brush, drag to move (shift-drag to copy), double-click to open the sample window, right-click for more. Audio clips play through their own channel's strip.`
       }
     >
       <span class="wv-clip__label">{props.name}</span>

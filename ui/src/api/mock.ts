@@ -65,6 +65,7 @@ import type {
   SourcePreviewDto,
 } from './types';
 import { engineOf } from '../lib/channel';
+import { occupiedChannels } from '../lib/pattern';
 import { snapAudioBufferFrames } from '../lib/audioOutput';
 import { clampPreviewVolumePercent } from '../lib/previewVolume';
 
@@ -1893,6 +1894,7 @@ export class MockBackend implements Backend {
           0,
         ),
         noteCount: pattern.channels.reduce((total, clip) => total + clip.notes.length, 0),
+        voiceCount: occupiedChannels(pattern).length,
       })),
       activeId: this.activePattern,
       active: this.derivedPattern(this.pattern(this.activePattern)),
@@ -2014,6 +2016,72 @@ export class MockBackend implements Backend {
     const copy = structuredClone({ ...source, id, name: name?.trim() || `${source.name} copy` });
     this.patterns.splice(this.patterns.indexOf(source) + 1, 0, copy);
     return this.sequencerState();
+  }
+
+  async splitPatternByChannel(patternId: number): Promise<SequencerState> {
+    const source = this.pattern(patternId);
+    const voices = occupiedChannels(source);
+    if (voices.length < 2) {
+      throw new Error('split by channel needs a pattern that speaks for more than one channel');
+    }
+    const extra = voices.length - 1;
+    if (this.patterns.length + extra > MAX_PATTERNS) {
+      throw new Error(`a project may have at most ${MAX_PATTERNS} patterns`);
+    }
+    const instances = this.clips
+      .filter((clip) => clip.kind === 'pattern' && clip.patternId === patternId)
+      .map((clip) => ({ track: clip.track, start: clip.start, length: clip.length }));
+    const needed = instances.reduce((max, clip) => Math.max(max, clip.track + extra), 0);
+    if (instances.length > 0 && needed >= MAX_PLAYLIST_TRACKS) {
+      throw new Error(`a playlist may have at most ${MAX_PLAYLIST_TRACKS} tracks`);
+    }
+    if (this.clips.length + instances.length * extra > MAX_CLIPS) {
+      throw new Error(`a playlist may hold at most ${MAX_CLIPS} clips`);
+    }
+
+    const baseName = source.name;
+    const copies: PatternDto[] = voices.slice(1).map((channel) => {
+      const id = this.nextPatternId++;
+      return structuredClone({
+        ...source,
+        id,
+        name: `${baseName} - ${this.channelLabel(channel)}`,
+        channels: source.channels.filter((clip) => clip.channel === channel),
+      });
+    });
+    source.name = `${baseName} - ${this.channelLabel(voices[0]!)}`;
+    source.channels = source.channels.filter((clip) => clip.channel === voices[0]);
+    this.patterns.splice(this.patterns.indexOf(source) + 1, 0, ...copies);
+
+    const ids = [patternId, ...copies.map((pattern) => pattern.id)];
+    while (instances.length > 0 && this.playlistTracks.length <= needed) {
+      this.playlistTracks.push({
+        id: this.nextLaneId++,
+        name: `Track ${this.playlistTracks.length + 1}`,
+        muted: false,
+        soloed: false,
+      });
+    }
+    for (const instance of instances) {
+      for (let offset = 1; offset < ids.length; offset += 1) {
+        const splitId = ids[offset];
+        if (splitId === undefined) continue;
+        this.clips.push({
+          id: this.nextClipId++,
+          kind: 'pattern',
+          track: instance.track + offset,
+          start: instance.start,
+          length: instance.length,
+          patternId: splitId,
+        });
+      }
+    }
+    return this.sequencerState();
+  }
+
+  private channelLabel(channel: number): string {
+    const name = this.tracks[channel]?.name.trim();
+    return name || `Channel ${channel + 1}`;
   }
 
   async removePattern(patternId: number): Promise<SequencerState> {

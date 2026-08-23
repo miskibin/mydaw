@@ -223,6 +223,11 @@
   white-space: nowrap;
 }
 
+.wv-insp__pattern {
+  flex: none;
+  padding: 0 12px 8px;
+}
+
 .wv-insp__body {
   display: flex;
   flex: 1;

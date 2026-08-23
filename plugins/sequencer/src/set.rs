@@ -50,6 +50,8 @@ pub enum PatternSetError {
     TooManyPatterns,
     #[error("a project must keep at least one pattern")]
     LastPattern,
+    #[error("split by channel needs a pattern that speaks for more than one channel")]
+    TooFewChannels,
     #[error(transparent)]
     Pattern(#[from] PatternError),
 }
@@ -239,6 +241,59 @@ impl PatternSet {
             self.active += 1;
         }
         Ok(new_id)
+    }
+
+    /// Turn one multi-channel pattern into one pattern per occupied channel.
+    ///
+    /// The original id is rewritten to the first voice and kept, so playlist
+    /// clips that already named it keep playing — now only that voice. New
+    /// patterns for the rest land immediately after it, named
+    /// `"{name} - {channel}"`. Silent channels are skipped. The active cursor
+    /// stays on whatever pattern it was on.
+    ///
+    /// # Errors
+    /// [`PatternSetError::NoSuchPattern`], [`PatternSetError::TooFewChannels`]
+    /// when there is nothing to split, or [`PatternSetError::TooManyPatterns`].
+    pub fn split_by_channel(
+        &mut self,
+        id: u64,
+        name_for: impl Fn(u8) -> String,
+    ) -> Result<Vec<u64>, PatternSetError> {
+        let index = self
+            .index_of(id)
+            .ok_or(PatternSetError::NoSuchPattern(id))?;
+        let source = self.patterns[index].clone();
+        let occupied = source.occupied_channels();
+        if occupied.len() < 2 {
+            return Err(PatternSetError::TooFewChannels);
+        }
+        let extra = occupied.len() - 1;
+        if self.patterns.len() + extra > MAX_PATTERNS {
+            return Err(PatternSetError::TooManyPatterns);
+        }
+
+        let base_name = source.name.clone();
+        let mut ids = Vec::with_capacity(occupied.len());
+        ids.push(id);
+
+        for (offset, &channel) in occupied.iter().enumerate().skip(1) {
+            let mut copy = source.clone();
+            copy.id = self.next_id;
+            self.next_id += 1;
+            copy.name = format!("{} - {}", base_name, name_for(channel));
+            copy.keep_only_channel(channel);
+            let insert_at = index + offset;
+            self.patterns.insert(insert_at, copy);
+            ids.push(self.patterns[insert_at].id);
+            if self.active > index {
+                self.active += 1;
+            }
+        }
+
+        let original = &mut self.patterns[index];
+        original.name = format!("{} - {}", base_name, name_for(occupied[0]));
+        original.keep_only_channel(occupied[0]);
+        Ok(ids)
     }
 
     /// Remove `id`.
@@ -708,5 +763,70 @@ mod tests {
         );
         set.shift_channel_keys(0, 60, 60);
         assert_eq!(set.active().channels[0].steps.as_ref().unwrap().key, 60);
+    }
+
+    #[test]
+    fn split_by_channel_makes_one_pattern_per_occupied_channel() {
+        let mut set = starter();
+        set.get_mut(1).unwrap().name = "Loop".to_owned();
+        set.get_mut(1).unwrap().channels[0].steps =
+            Some(StepRow::empty(36).with_steps(&[0, 4, 8, 12]));
+        set.get_mut(1).unwrap().channels[1].steps = Some(StepRow::empty(38).with_steps(&[4, 12]));
+        set.get_mut(1).unwrap().channels[2]
+            .notes
+            .push(MelodicNote::new(60, 0, 240));
+        // Channel 3 stays silent: it must not become a pattern.
+
+        let ids = set
+            .split_by_channel(1, |channel| format!("ch{channel}"))
+            .unwrap();
+        assert_eq!(ids, vec![1, 2, 3]);
+        assert_eq!(set.len(), 3);
+        assert_eq!(set.get(1).unwrap().name, "Loop - ch0");
+        assert_eq!(set.get(2).unwrap().name, "Loop - ch1");
+        assert_eq!(set.get(3).unwrap().name, "Loop - ch2");
+        assert_eq!(
+            set.patterns().iter().map(|p| p.id).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "the split patterns sit next to each other"
+        );
+        assert_eq!(set.get(1).unwrap().channels.len(), 1);
+        assert_eq!(set.get(1).unwrap().channels[0].channel, 0);
+        assert_eq!(set.get(1).unwrap().hit_count(), 4);
+        assert_eq!(set.get(2).unwrap().channels[0].channel, 1);
+        assert_eq!(set.get(2).unwrap().hit_count(), 2);
+        assert_eq!(set.get(3).unwrap().channels[0].channel, 2);
+        assert_eq!(set.get(3).unwrap().note_count(), 1);
+        assert_eq!(set.active_id(), 1, "splitting does not change the cursor");
+    }
+
+    #[test]
+    fn split_by_channel_refuses_a_single_voice_and_an_unknown_id() {
+        let mut set = starter();
+        set.get_mut(1).unwrap().channels[0].steps = Some(StepRow::empty(36).with_steps(&[0]));
+        assert_eq!(
+            set.split_by_channel(1, |_| "x".to_owned()),
+            Err(PatternSetError::TooFewChannels)
+        );
+        assert_eq!(set.len(), 1, "a refused split changes nothing");
+        assert_eq!(
+            set.split_by_channel(99, |_| "x".to_owned()),
+            Err(PatternSetError::NoSuchPattern(99))
+        );
+    }
+
+    #[test]
+    fn split_by_channel_refuses_when_the_new_patterns_would_not_fit() {
+        let mut set = starter();
+        set.get_mut(1).unwrap().channels[0].steps = Some(StepRow::empty(36).with_steps(&[0]));
+        set.get_mut(1).unwrap().channels[1].steps = Some(StepRow::empty(38).with_steps(&[1]));
+        while set.len() < MAX_PATTERNS {
+            set.add(None, &[], drum_key).unwrap();
+        }
+        assert_eq!(
+            set.split_by_channel(1, |_| "x".to_owned()),
+            Err(PatternSetError::TooManyPatterns)
+        );
+        assert_eq!(set.len(), MAX_PATTERNS);
     }
 }

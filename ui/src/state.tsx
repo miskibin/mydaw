@@ -222,6 +222,8 @@ export interface AppState {
   redoLast(): void;
   /** Throw the history away, e.g. after an edit no inverse could survive. */
   clearHistory(reason: string): void;
+  /** One pattern per occupied rack channel; playlist clips spread onto new lanes. */
+  splitPatternByChannel(patternId: number): void;
 
   selectTrack(index: number): void;
   toggleGui(target: ClapTarget, open: boolean): void;
@@ -609,6 +611,18 @@ function createAppState(): AppState {
     say('Undo history', `cleared by ${reason}`);
   }
 
+  function splitPatternByChannel(patternId: number): void {
+    const before = new Set((sequencer()?.patternSet.patterns ?? []).map((pattern) => pattern.id));
+    void sequencerCommand((backend) => backend.splitPatternByChannel(patternId)).then(() => {
+      const created = (sequencer()?.patternSet.patterns ?? []).filter(
+        (pattern) => !before.has(pattern.id),
+      );
+      if (created.length === 0) return;
+      clearHistory('splitting by channel');
+      say('Split by channel', `${created.length + 1} patterns`);
+    });
+  }
+
   async function replay(direction: 'undo' | 'redo'): Promise<void> {
     try {
       const label =
@@ -978,6 +992,7 @@ function createAppState(): AppState {
     undoLast,
     redoLast,
     clearHistory,
+    splitPatternByChannel,
     selectTrack,
     toggleGui,
     watchReadouts,

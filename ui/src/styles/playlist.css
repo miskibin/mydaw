@@ -396,6 +396,11 @@
   cursor: ew-resize;
 }
 
+.wv-menu.wv-menu--clip {
+  position: fixed;
+  width: 208px;
+}
+
 /* The brush indicator in the view bar. */
 .wv-brush {
   display: flex;

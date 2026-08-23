@@ -37,6 +37,7 @@ import type {
 import { bandGainRangeDb, compactBody } from '../lib/effectLayout';
 import { addedInsertId, insertMove } from '../lib/inserts';
 import { channelColor } from '../lib/channel';
+import { canSplitByChannel } from '../lib/pattern';
 import { formatValue, switchLabel } from '../lib/param';
 import { pitchLabel, resolveRegion } from '../lib/sampleRegion';
 import { stereoWaveformPaths } from '../lib/sampleWaveform';
@@ -216,7 +217,7 @@ function Picker(): JSX.Element {
       </div>
 
       <div class="wv-picker__foot">
-        Click to load the brush · double-click a pattern to edit it · drag onto a lane
+        Click to load the brush · double-click a pattern to open the rack · drag onto a lane
       </div>
     </div>
   );
@@ -245,6 +246,13 @@ function PatternRows(): JSX.Element {
   const activeId = () => app.sequencer()?.patternSet.activeId ?? -1;
   const maxPatterns = () => app.sequencer()?.patternSet.maxPatterns ?? 0;
   const full = () => maxPatterns() > 0 && app.patterns().length >= maxPatterns();
+  const [menu, setMenu] = createSignal<{ id: number; x: number; y: number } | null>(null);
+
+  function splitBlocked(id: number): boolean {
+    const voices = app.patterns().find((row) => row.id === id)?.voiceCount ?? 0;
+    const max = maxPatterns();
+    return voices < 2 || (max > 0 && app.patterns().length + Math.max(0, voices - 1) > max);
+  }
 
   const marks = createMemo<Mark[]>(() => {
     const pattern = app.pattern();
@@ -283,8 +291,8 @@ function PatternRows(): JSX.Element {
                 draggable={true}
                 title={
                   isActive()
-                    ? `${pattern().name} — the pattern being edited. Click loads the brush; double-click opens it.`
-                    : `${pattern().name} — click to paint with this pattern · double-click to edit it`
+                    ? `${pattern().name} — the pattern being edited. Click loads the brush; double-click opens the rack.`
+                    : `${pattern().name} — click to paint with this pattern · double-click to open the rack`
                 }
                 onClick={() => pick({ kind: 'pattern', id: pattern().id })}
                 onDblClick={(event) => {
@@ -300,6 +308,14 @@ function PatternRows(): JSX.Element {
                   event.dataTransfer?.setData('text/plain', `pattern::${pattern().id}`);
                   if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
                   view.setBrush({ kind: 'pattern', id: pattern().id });
+                }}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setMenu({
+                    id: pattern().id,
+                    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)),
+                    y: Math.max(8, Math.min(event.clientY, window.innerHeight - 140)),
+                  });
                 }}
               >
                 <span class="wv-swatch" style={{ background: color() }} />
@@ -342,6 +358,55 @@ function PatternRows(): JSX.Element {
       >
         + New pattern
       </button>
+      <Show when={menu()}>
+        {(open) => (
+          <>
+            <div
+              class="wv-scrim"
+              onClick={() => setMenu(null)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setMenu(null);
+              }}
+            />
+            <div
+              class="wv-menu wv-menu--clip"
+              style={{ left: `${open().x}px`, top: `${open().y}px` }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                class="wv-menu__row"
+                onClick={() => {
+                  const id = open().id;
+                  setMenu(null);
+                  pick({ kind: 'pattern', id });
+                  void nav.openPattern(id, { altKey: false, surface: 'picker' });
+                }}
+              >
+                Open
+              </button>
+              <button
+                type="button"
+                class="wv-menu__row wv-can-disable"
+                disabled={splitBlocked(open().id)}
+                title={
+                  splitBlocked(open().id)
+                    ? 'Needs a pattern that speaks for more than one channel'
+                    : 'One pattern per channel, spread onto consecutive playlist lanes'
+                }
+                onClick={() => {
+                  const id = open().id;
+                  setMenu(null);
+                  app.splitPatternByChannel(id);
+                }}
+              >
+                Split by channel
+              </button>
+            </div>
+          </>
+        )}
+      </Show>
     </>
   );
 }
@@ -516,6 +581,14 @@ function Inspector(): JSX.Element {
         </div>
         <span class="wv-insp__meta">{meta()}</span>
       </div>
+
+      <Show when={app.pattern()}>
+        {(current) => (
+          <div class="wv-insp__pattern">
+            <PatternCard pattern={current()} />
+          </div>
+        )}
+      </Show>
 
       <Show
         when={exists()}
@@ -702,6 +775,55 @@ function HostedMasterEffect(): JSX.Element {
             </Show>
           </div>
         </Show>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The pattern being edited: split-by-channel lives here because the inspector
+ * is where you look at what you just selected on the playlist.
+ */
+function PatternCard(props: { pattern: PatternDto }): JSX.Element {
+  const app = useAppState();
+  const voices = () =>
+    app.patterns().find((row) => row.id === props.pattern.id)?.voiceCount ??
+    (canSplitByChannel(props.pattern) ? 2 : 1);
+  const maxPatterns = () => app.sequencer()?.patternSet.maxPatterns ?? 0;
+  const blocked = () => {
+    const max = maxPatterns();
+    return (
+      voices() < 2 ||
+      (max > 0 && app.patterns().length + Math.max(0, voices() - 1) > max)
+    );
+  };
+
+  return (
+    <div class="wv-card">
+      <div class="wv-card__head">
+        <span class="wv-card__tag">PATTERN</span>
+        <span class="wv-spacer" />
+        <span class="wv-card__tag">{props.pattern.name}</span>
+      </div>
+      <div class="wv-insp__card-body">
+        <span class="wv-insp__line">
+          {voices() < 2
+            ? 'One channel — nothing to split.'
+            : `${voices()} channels. Split puts each on its own pattern and playlist lane.`}
+        </span>
+        <button
+          type="button"
+          class="wv-chip wv-can-disable"
+          disabled={blocked()}
+          title={
+            blocked()
+              ? 'Needs a pattern that speaks for more than one channel'
+              : 'One pattern per channel, spread onto consecutive playlist lanes'
+          }
+          onClick={() => app.splitPatternByChannel(props.pattern.id)}
+        >
+          Split by channel
+        </button>
       </div>
     </div>
   );

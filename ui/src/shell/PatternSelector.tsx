@@ -27,13 +27,24 @@ export function PatternSelector(): ReturnType<typeof Show> {
 
   const activeId = () => app.sequencer()?.patternSet.activeId ?? -1;
   const active = () => app.patterns().find((row) => row.id === activeId());
+  const maxPatterns = () => app.sequencer()?.patternSet.maxPatterns ?? 0;
   const full = () => {
-    const max = app.sequencer()?.patternSet.maxPatterns ?? 0;
+    const max = maxPatterns();
     return max > 0 && app.patterns().length >= max;
   };
   const onlyOne = () => app.patterns().length <= 1;
   const colour = (id: number, color: string | null | undefined) => color ?? trackColor(id);
   const renaming = () => view.renamingPattern() === activeId();
+  const activeVoices = () =>
+    app.patterns().find((row) => row.id === activeId())?.voiceCount ?? 0;
+  const splitBlocked = () => {
+    const max = maxPatterns();
+    return (
+      activeId() < 0 ||
+      activeVoices() < 2 ||
+      (max > 0 && app.patterns().length + Math.max(0, activeVoices() - 1) > max)
+    );
+  };
 
   createEffect(() => {
     if (view.renamingPattern() !== null) setMenu(false);
@@ -114,7 +125,7 @@ export function PatternSelector(): ReturnType<typeof Show> {
                   type="button"
                   class="wv-menu__row"
                   classList={{ 'is-active': summary.id === activeId() }}
-                  title="Click to make this the active pattern · double-click to open it"
+                  title="Click to make this the active pattern · double-click to open the rack"
                   onClick={() => {
                     void app.sequencerCommand((backend) => backend.setActivePattern(summary.id));
                   }}
@@ -155,6 +166,24 @@ export function PatternSelector(): ReturnType<typeof Show> {
               }}
             >
               Clone
+            </button>
+            <button
+              type="button"
+              class="wv-menu__row wv-can-disable"
+              disabled={splitBlocked()}
+              title={
+                activeVoices() < 2
+                  ? 'Needs a pattern that speaks for more than one channel'
+                  : 'One pattern per channel, spread onto consecutive playlist lanes'
+              }
+              onClick={() => {
+                const id = activeId();
+                setMenu(false);
+                if (id < 0) return;
+                app.splitPatternByChannel(id);
+              }}
+            >
+              Split by channel
             </button>
             <button
               type="button"

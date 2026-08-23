@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   f7PatternId,
+  isRepeatClick,
   mixerSlotOpensEditor,
   mixerStripDestination,
   patternEditorTarget,
@@ -11,13 +12,13 @@ import {
 } from './navigate';
 
 describe('patternEditorTarget', () => {
-  it('opens the piano roll when the pattern has notes', () => {
+  it('opens the rack from a playlist clip, even when the pattern has notes', () => {
     expect(
       patternEditorTarget({ hitCount: 0, noteCount: 4 }, { altKey: false, surface: 'clip' }),
-    ).toBe('roll');
+    ).toBe('rack');
     expect(
       patternEditorTarget({ hitCount: 8, noteCount: 1 }, { altKey: false, surface: 'picker' }),
-    ).toBe('roll');
+    ).toBe('rack');
   });
 
   it('opens the rack when the pattern is empty or only has steps', () => {
@@ -29,10 +30,13 @@ describe('patternEditorTarget', () => {
     ).toBe('rack');
   });
 
-  it('opens the rack when Alt is held, even if the pattern has notes', () => {
+  it('opens the piano roll when Alt is held', () => {
     expect(
       patternEditorTarget({ hitCount: 0, noteCount: 8 }, { altKey: true, surface: 'clip' }),
-    ).toBe('rack');
+    ).toBe('roll');
+    expect(
+      patternEditorTarget({ hitCount: 12, noteCount: 0 }, { altKey: true, surface: 'picker' }),
+    ).toBe('roll');
   });
 
   it('opens the piano roll from a rack tab, because the rack is already showing', () => {
@@ -42,6 +46,14 @@ describe('patternEditorTarget', () => {
     expect(
       patternEditorTarget({ hitCount: 0, noteCount: 0 }, { altKey: true, surface: 'tab' }),
     ).toBe('roll');
+  });
+});
+
+describe('isRepeatClick', () => {
+  it('treats the second press of a double-click as a repeat, not a new paint', () => {
+    expect(isRepeatClick(1)).toBe(false);
+    expect(isRepeatClick(2)).toBe(true);
+    expect(isRepeatClick(3)).toBe(true);
   });
 });
 

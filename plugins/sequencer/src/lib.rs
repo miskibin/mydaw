@@ -290,6 +290,42 @@ impl SequencerService {
         Ok(state.playlist.drop_pattern(id))
     }
 
+    /// Split `id` into one pattern per occupied channel and spread playlist
+    /// clips onto consecutive lanes, adding lanes when they are missing.
+    ///
+    /// One lock, one rollback: a refused lane or clip budget restores the
+    /// patterns as well, so the picker never shows voices the arrangement
+    /// could not place.
+    ///
+    /// # Errors
+    /// [`PatternSetError::NoSuchPattern`], [`PatternSetError::TooFewChannels`],
+    /// [`PatternSetError::TooManyPatterns`], [`PlaylistError::TooManyTracks`]
+    /// or [`PlaylistError::TooManyClips`].
+    pub fn split_pattern_by_channel(
+        &self,
+        id: u64,
+        name_for: impl Fn(u8) -> String,
+    ) -> Result<Vec<u64>, SongError> {
+        let mut state = self.state.lock();
+        let patterns_snap = state.patterns.clone();
+        let playlist_snap = state.playlist.clone();
+        let result = (|| {
+            let ids = state.patterns.split_by_channel(id, &name_for)?;
+            state.playlist.spread_split_clips(id, &ids)?;
+            state.patterns.validate()?;
+            state.playlist.validate(&state.patterns)?;
+            Ok(ids)
+        })();
+        match result {
+            Ok(ids) => Ok(ids),
+            Err(err) => {
+                state.patterns = patterns_snap;
+                state.playlist = playlist_snap;
+                Err(err)
+            }
+        }
+    }
+
     /// Give every pattern a step row on a newly added rack channel.
     pub fn add_channel(&self, channel: u8, key: u8) {
         self.state.lock().patterns.add_channel(channel, key);
@@ -721,5 +757,38 @@ mod tests {
         assert!(text.contains("patterns: 1"), "{text}");
         assert!(text.contains("Pattern"), "{text}");
         assert!(text.len() < 250);
+    }
+
+    #[test]
+    fn split_by_channel_spreads_playlist_clips_and_adds_lanes() {
+        let service = SequencerService::with_song(
+            PatternSet::starter(&[0, 1], |c| if c == 0 { 36 } else { 38 }),
+            Playlist::empty(),
+        );
+        service
+            .edit_patterns(|set| {
+                set.get_mut(1)?.name = "Loop".to_owned();
+                set.get_mut(1)?.channels[0].steps = Some(StepRow::empty(36).with_steps(&[0]));
+                set.get_mut(1)?.channels[1].steps = Some(StepRow::empty(38).with_steps(&[4]));
+                Ok(())
+            })
+            .unwrap();
+        service
+            .edit_playlist(|list| list.add_track(Some("A".into())))
+            .unwrap();
+        service
+            .edit_playlist(|list| list.add_pattern_clip(1, 0, 0, BAR))
+            .unwrap();
+
+        let ids = service
+            .split_pattern_by_channel(1, |ch| format!("ch{ch}"))
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(service.patterns().len(), 2);
+        assert_eq!(service.patterns().get(1).unwrap().name, "Loop - ch0");
+        assert_eq!(service.patterns().get(2).unwrap().name, "Loop - ch1");
+        assert_eq!(service.playlist().tracks().len(), 2);
+        assert_eq!(service.playlist().clips().len(), 2);
+        assert_eq!(service.playlist().clips()[1].track(), 1);
     }
 }

@@ -745,6 +745,29 @@ impl Pattern {
         self.channels.iter().all(|clip| clip.is_empty(length))
     }
 
+    /// Rack channels this pattern actually plays, in rack order.
+    ///
+    /// A channel with an all-off grid and no notes is silent and is not a
+    /// voice. [`PatternSet::split_by_channel`] uses this list: one new pattern
+    /// per entry.
+    #[must_use]
+    pub fn occupied_channels(&self) -> Vec<u8> {
+        let length = self.length_steps as usize;
+        let mut channels: Vec<u8> = self
+            .channels
+            .iter()
+            .filter(|clip| !clip.is_empty(length))
+            .map(|clip| clip.channel)
+            .collect();
+        channels.sort_unstable();
+        channels
+    }
+
+    /// Drop every channel clip except `channel`.
+    pub fn keep_only_channel(&mut self, channel: u8) {
+        self.channels.retain(|clip| clip.channel == channel);
+    }
+
     /// Steps switched on inside the loop, across every channel. Diagnostics and
     /// tests; melodic notes are counted by [`note_count`](Self::note_count).
     pub fn hit_count(&self) -> usize {

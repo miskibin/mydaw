@@ -2,8 +2,9 @@ import { For, Show, type JSX } from 'solid-js';
 
 import type { EffectInfoDto } from '../../api/types';
 import { DIVISION_LABELS, MODIFIER_LABELS, delayFilterMagDb, delayTimeMs } from '../../lib/delayTime';
-import { eqCurvePath, EQ_MAX_HZ, EQ_MIN_HZ } from '../../lib/eq';
+import { analyserLine, analyserPath, eqCurvePath, EQ_MAX_HZ, EQ_MIN_HZ } from '../../lib/eq';
 import { formatValue } from '../../lib/param';
+import { normalisedScope, signalPath } from '../../lib/polySynth';
 import { Segmented } from '../../ui/Segmented';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { Advanced, PrimaryRow } from './chrome';
@@ -18,6 +19,7 @@ export function DelayEditor(props: {
   bpm: number;
   sampleRate: number;
   spectrum: readonly number[] | null;
+  scopeL?: readonly number[];
 }): JSX.Element {
   const at = (id: string, fallback: number) => props.values.get(id) ?? fallback;
   const sync = () => at('sync', 1) >= 0.5;
@@ -71,9 +73,16 @@ export function DelayEditor(props: {
             {formatValue('ms', timeMs())}
           </span>
         </div>
-        <div class="wv-fx__stage" style={{ 'min-height': '200px' }}>
+        <div class="wv-fx__stage" style={{ 'min-height': '168px' }}>
           <div class="wv-fx__timeline" classList={{ 'is-off': props.muted }} title="Each marker is a repeat, spaced by the selected delay time and faded by feedback.">
             <div class="wv-fx__vizhead"><span>DRY · ECHOES</span><strong>{sync() ? 'BEAT GRID' : 'MILLISECONDS'} →</strong></div>
+            <Show when={normalisedScope(props.scopeL)}>
+              {(wave) => (
+                <svg class="wv-fx__livescope" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
+                  <path class="wv-fx__envelope wv-fx__envelope--live" d={signalPath(wave(), 100, 40)} />
+                </svg>
+              )}
+            </Show>
             <div class="wv-fx__delaytaps">
               <i class="is-dry" style={{ left: '5%', height: '76%' }}><b>DRY</b></i>
               <For each={taps()}>
@@ -85,6 +94,10 @@ export function DelayEditor(props: {
           <div class="wv-eqc wv-eqc--detailed wv-eqc--overlay" title="In-loop HP and LP. Each repeat is filtered again.">
             <svg class="wv-eqc__svg" viewBox="0 0 1000 100" preserveAspectRatio="none">
               <path class="wv-eqc__zero" d="M0 50 H1000" vector-effect="non-scaling-stroke" />
+              <Show when={props.spectrum && props.spectrum.length > 1}>
+                <path class="wv-eqc__spec" d={analyserPath(props.spectrum ?? [], 1000, 100)} />
+                <path class="wv-eqc__specline" d={analyserLine(props.spectrum ?? [], 1000, 100)} />
+              </Show>
               <path class="wv-eqc__line" d={filterPath()} vector-effect="non-scaling-stroke" />
             </svg>
           </div>

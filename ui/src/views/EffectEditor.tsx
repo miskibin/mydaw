@@ -9,7 +9,7 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, type JSX } from 'solid-js';
 
 import type { EffectInfoDto, InsertDto, InsertTarget, SpectrumDto } from '../api/types';
-import { editorLayout } from '../lib/effectLayout';
+import { editorLayout, editorWindowSize } from '../lib/effectLayout';
 import { channelColor } from '../lib/channel';
 import { useView, type InsertEditorRef } from '../shell/view';
 import { insertTargetFor, useAppState } from '../state';
@@ -27,16 +27,6 @@ import { Advanced, PrimaryRow } from './fx/chrome';
 
 import '../styles/effect.css';
 
-const WINDOW_SIZE: Record<string, { w: number; h: number }> = {
-  eq: { w: 860, h: 600 },
-  compressor: { w: 720, h: 540 },
-  saturator: { w: 680, h: 520 },
-  delay: { w: 720, h: 540 },
-  limiter: { w: 620, h: 500 },
-  reverb: { w: 760, h: 540 },
-  utility: { w: 520, h: 480 },
-  generic: { w: 520, h: 400 },
-};
 
 export function EffectEditors(): JSX.Element {
   const app = useAppState();
@@ -160,7 +150,7 @@ function EffectEditor(props: {
     return fromSequencer > 0 ? fromSequencer : (app.streamInfo()?.sampleRate ?? 48_000);
   };
   const focused = () => view.focusedInsertId() === props.editor.insertId;
-  const windowSize = () => WINDOW_SIZE[layout().kind] ?? WINDOW_SIZE.generic!;
+  const windowSize = () => editorWindowSize(layout().kind);
 
   function onListen(bandId: string | null): void {
     const current = insert();
@@ -263,7 +253,7 @@ function EffectEditor(props: {
                       primary={layout().primary}
                       advanced={layout().advanced}
                       muted={current().bypassed}
-                      spectrum={props.spectrum?.binsPost ?? null}
+                      scopeL={props.spectrum?.scopeL ?? []}
                     />
                   )}
                 </Match>
@@ -278,6 +268,7 @@ function EffectEditor(props: {
                       advanced={layout().advanced}
                       muted={current().bypassed}
                       spectrum={props.spectrum?.binsPost ?? null}
+                      scopeL={props.spectrum?.scopeL ?? []}
                     />
                   )}
                 </Match>
@@ -293,6 +284,7 @@ function EffectEditor(props: {
                       bpm={app.sequencer()?.bpm ?? 120}
                       sampleRate={sampleRate()}
                       spectrum={props.spectrum?.binsPost ?? null}
+                      scopeL={props.spectrum?.scopeL ?? []}
                     />
                   )}
                 </Match>
@@ -306,7 +298,6 @@ function EffectEditor(props: {
                       primary={layout().primary}
                       advanced={layout().advanced}
                       muted={current().bypassed}
-                      spectrum={props.spectrum?.binsPost ?? null}
                     />
                   )}
                 </Match>

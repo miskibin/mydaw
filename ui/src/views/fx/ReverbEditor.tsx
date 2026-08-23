@@ -1,7 +1,8 @@
 import type { EffectInfoDto } from '../../api/types';
+import { analyserLine, analyserPath } from '../../lib/eq';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { Advanced, PrimaryRow } from './chrome';
-import type { JSX } from 'solid-js';
+import { Show, type JSX } from 'solid-js';
 
 export function ReverbEditor(props: {
   info: EffectInfoDto;
@@ -43,6 +44,10 @@ export function ReverbEditor(props: {
           <div class="wv-fx__vizhead"><span>ENERGY DECAY</span><strong>RT60 {decay().toFixed(1)} s</strong></div>
           <svg viewBox="0 0 100 82" preserveAspectRatio="none" aria-hidden="true">
             <path class="wv-fx__vgrid" d="M0 20H100 M0 48H100 M25 0V82 M50 0V82 M75 0V82" />
+            <Show when={props.spectrum && props.spectrum.length > 1}>
+              <path class="wv-eqc__spec" d={analyserPath(props.spectrum ?? [], 100, 82)} />
+              <path class="wv-eqc__specline" d={analyserLine(props.spectrum ?? [], 100, 82)} />
+            </Show>
             <path class="wv-fx__decayarea" d={decayPath()} />
             <path class="wv-fx__predelay" d={`M${Math.min(24, 5 + predelay() / 10)} 5V78`} />
           </svg>

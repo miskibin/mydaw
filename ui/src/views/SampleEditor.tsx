@@ -679,8 +679,8 @@ export function SampleEditor(): JSX.Element {
           color={colour()}
           z={80}
           focused
-          defaultWidth={synthEditor() ? 760 : 660}
-          defaultHeight={synthEditor() ? 760 : 520}
+          defaultWidth={synthEditor() ? 880 : 660}
+          defaultHeight={synthEditor() ? 540 : 520}
           offset={0}
           onFocus={() => {
             if (!synthEditor()) return;
@@ -691,6 +691,7 @@ export function SampleEditor(): JSX.Element {
           onClose={() => view.closeSampleEditor()}
         >
           <div class="wv-sample wv-sample--window">
+          <Show when={!synthEditor()}>
             <div class="wv-sample__tools">
               <Show when={kind()}>
                 {(info) => (
@@ -766,6 +767,7 @@ export function SampleEditor(): JSX.Element {
                 </span>
               </Show>
             </div>
+          </Show>
 
             <Show
               when={synthEditor()}
@@ -870,6 +872,7 @@ export function SampleEditor(): JSX.Element {
               />
             </Show>
 
+            <Show when={!synthEditor()}>
             <div class="wv-sample__knobs">
               <Knob
                 def={volDef()}
@@ -963,6 +966,7 @@ export function SampleEditor(): JSX.Element {
                 )}
               </Show>
             </div>
+            </Show>
           </div>
         </PluginWindow>
       )}

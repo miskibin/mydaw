@@ -23,7 +23,7 @@ export function EqEditor(props: {
           <EqCurve
             values={props.values}
             rangeDb={bandGainRangeDb(props.info)}
-            height={320}
+            height={260}
             detailed
             muted={props.muted}
             spectrum={props.spectrum}

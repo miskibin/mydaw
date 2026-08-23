@@ -1,6 +1,6 @@
 /**
  * Where a gesture should take the musician, as a pure function of what they
- * clicked and what that object contains.
+ * clicked and which modifier they held.
  *
  * The shell's views are exclusive (playlist / rack / mixer / roll), so the
  * cheap way to make them feel connected is this map: click selects or paints,
@@ -18,20 +18,26 @@ export interface PatternCounts {
  * Where the pattern was double-clicked from.
  *
  * A rack tab is already the rack, so that surface always opens the roll.
- * Playlist clips, the picker and the top-bar chip follow Automatic: roll when
- * there are notes, rack when there are only steps (or nothing), Alt for rack.
+ * Playlist clips, the picker and the top-bar chip open the rack — the pattern
+ * view. Alt (or F7) opens the piano roll. A rack tab is already the rack, so
+ * that surface always opens the roll.
  */
 export type PatternNavSurface = 'clip' | 'picker' | 'tab' | 'menu';
 
 export type PatternEditor = 'rack' | 'roll';
 
 export function patternEditorTarget(
-  counts: PatternCounts,
+  _counts: PatternCounts,
   opts: { altKey: boolean; surface: PatternNavSurface },
 ): PatternEditor {
   if (opts.surface === 'tab') return 'roll';
-  if (opts.altKey) return 'rack';
-  return counts.noteCount > 0 ? 'roll' : 'rack';
+  if (opts.altKey) return 'roll';
+  return 'rack';
+}
+
+/** The second (or later) press of a double-click. Must not paint or drag. */
+export function isRepeatClick(detail: number): boolean {
+  return detail >= 2;
 }
 
 /** Whether a picker gesture is allowed to leave the current main view. */

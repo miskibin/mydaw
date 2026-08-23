@@ -114,6 +114,29 @@ export function channelClip(pattern: PatternDto, channel: number): ChannelClipDt
   return pattern.channels.find((clip) => clip.channel === channel);
 }
 
+/**
+ * Rack channels this pattern actually plays, in rack order.
+ *
+ * A channel with an all-off grid and no notes is silent and is not a voice.
+ * Split-by-channel uses this list: one new pattern per entry.
+ */
+export function occupiedChannels(pattern: PatternDto): number[] {
+  const length = pattern.steps;
+  const voices = pattern.channels
+    .filter((clip) => {
+      const notes = clip.notes.length > 0;
+      const hits = clip.steps?.steps.slice(0, length).some((cell) => cell.on) === true;
+      return notes || hits;
+    })
+    .map((clip) => clip.channel);
+  return [...new Set(voices)].sort((left, right) => left - right);
+}
+
+/** Whether split-by-channel would produce more than one pattern. */
+export function canSplitByChannel(pattern: PatternDto): boolean {
+  return occupiedChannels(pattern).length > 1;
+}
+
 /** The notes `pattern` puts on `channel`. Never `undefined`, so callers can map. */
 export function notesOf(pattern: PatternDto, channel: number): MelodicNoteDto[] {
   return channelClip(pattern, channel)?.notes ?? [];

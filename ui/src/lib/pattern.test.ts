@@ -27,6 +27,8 @@ import {
   withSetStep,
   withShiftedSteps,
   withStepsConvertedToNotes,
+  occupiedChannels,
+  canSplitByChannel,
 } from './pattern';
 
 function blank(steps = 16): PatternDto {
@@ -475,5 +477,38 @@ describe('withRepeatedFirstBar', () => {
   it('is a no-op for a one-bar pattern', () => {
     const pattern = blank();
     expect(withRepeatedFirstBar(pattern, 0, 60)).toBe(pattern);
+  });
+});
+
+describe('occupiedChannels', () => {
+  it('names every channel that has a hit or a note inside the loop', () => {
+    const kick = emptyRow(36, 16);
+    kick.steps[0] = { on: true, velocity: 0.8 };
+    const pattern: PatternDto = {
+      ...blank(),
+      channels: [
+        { channel: 0, mode: 'steps', steps: kick, notes: [] },
+        { channel: 1, mode: 'steps', steps: emptyRow(38, 16), notes: [] },
+        {
+          channel: 4,
+          mode: 'roll',
+          steps: null,
+          notes: [{ key: 60, start: 0, length: 240, velocity: 0.7 }],
+        },
+      ],
+    };
+    expect(occupiedChannels(pattern)).toEqual([0, 4]);
+    expect(canSplitByChannel(pattern)).toBe(true);
+  });
+
+  it('refuses a silent pattern and a one-voice pattern', () => {
+    expect(canSplitByChannel(blank())).toBe(false);
+    const snare = emptyRow(36, 16);
+    snare.steps[0] = { on: true, velocity: 0.8 };
+    const one: PatternDto = {
+      ...blank(),
+      channels: [{ channel: 2, mode: 'steps', steps: snare, notes: [] }],
+    };
+    expect(canSplitByChannel(one)).toBe(false);
   });
 });

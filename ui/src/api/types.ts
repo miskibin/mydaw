@@ -324,6 +324,8 @@ export interface PatternSummaryDto {
   channelCount: number;
   hitCount: number;
   noteCount: number;
+  /** Occupied rack channels — what split-by-channel would turn into patterns. */
+  voiceCount: number;
 }
 
 /** The pattern picker's whole state, plus the pattern being edited. */

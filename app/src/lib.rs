@@ -351,6 +351,7 @@ pub fn run() -> ExitCode {
             commands::set_pattern,
             commands::add_pattern,
             commands::clone_pattern,
+            commands::split_pattern_by_channel,
             commands::remove_pattern,
             commands::rename_pattern,
             commands::set_pattern_color,

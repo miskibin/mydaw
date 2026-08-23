@@ -1,4 +1,5 @@
 import type { EffectInfoDto, ParamValueDto } from '../../api/types';
+import { limiterOutputDb, limiterTransferPoint } from '../../lib/limiter';
 import type { InsertKnobs } from '../../ui/insertKnob';
 import { Advanced, PrimaryRow } from './chrome';
 import type { JSX } from 'solid-js';
@@ -11,7 +12,6 @@ export function LimiterEditor(props: {
   primary: EffectInfoDto['params'];
   advanced: EffectInfoDto['params'];
   muted: boolean;
-  spectrum: readonly number[] | null;
 }): JSX.Element {
   const gr = () => Math.abs(props.live.find((r) => r.id === 'gr_max')?.value ?? 0);
   const ceiling = () => props.values.get('ceiling') ?? 0;
@@ -20,12 +20,19 @@ export function LimiterEditor(props: {
   const transferPath = () => {
     const points = Array.from({ length: 25 }, (_, index) => {
       const input = -24 + index * 1.25;
-      const output = Math.min(input + drive(), ceiling());
+      const output = limiterOutputDb(input, drive(), ceiling());
       const x = 12 + ((input + 24) / 30) * 176;
       const y = 108 - ((output + 24) / 30) * 88;
       return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${y.toFixed(1)}`;
     });
     return points.join(' ');
+  };
+  const livePoint = () => {
+    const point = limiterTransferPoint(drive(), ceiling(), gr());
+    return {
+      x: Math.min(188, Math.max(12, 12 + ((point.x + 24) / 30) * 176)),
+      y: Math.min(108, Math.max(20, 108 - ((point.y + 24) / 30) * 88)),
+    };
   };
 
   return (
@@ -41,7 +48,7 @@ export function LimiterEditor(props: {
               <path class="wv-fx__limitunity" d="M12 108L188 20" />
               <path class="wv-fx__limitceil" d={`M12 ${(108 - ((ceiling() + 24) / 30) * 88).toFixed(1)}H188`} />
               <path class="wv-fx__limitcurve" d={transferPath()} />
-              <circle class="wv-fx__limitpoint" cx="176" cy="31" r="3" />
+              <circle class="wv-fx__limitpoint" cx={livePoint().x} cy={livePoint().y} r="3" />
               <text x="12" y="121">−24</text><text x="179" y="121">+6 dB IN</text>
               <text x="14" y="15">OUT</text>
             </svg>
