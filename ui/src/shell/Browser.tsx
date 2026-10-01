@@ -1,829 +1,1347 @@
-/**
- * The browser: what a channel can play, and where audio comes from.
- *
- * Two tabs. **Instruments** is one searched list of everything that can sit at
- * the head of a channel -- the built-ins, the sampled instruments, and every
- * scanned CLAP and VST3 -- with the format as a badge on the row rather than as
- * a tab of its own. **Files** is the sample library: the read-only Factory root,
- * the Packs drop folder, extra-search folders, and the session's loaded files.
- *
- * Nothing here is decorative -- a row that cannot do anything is drawn
- * `.wv-disabled` with a `title` saying why.
- *
- * # Why not three tabs
- * There were: Sounds, Plugins, Audio. That sorted instruments by *who wrote
- * them*, which is not a question anyone asks while writing music -- and it was
- * not even true, since Poly Synth and the sampler are plugins too. `InstrumentMenu`
- * had already merged the same list for the same reason.
- *
- * # Why effects are not here
- * They are added from the mixer's insert picker, where you are already looking
- * at the strip you want one on. A browser tab for them would be a second place
- * to look for something you reach for from one place.
- *
- * Two deliberate departures from `.design/wave-studio.html`:
- *
- * - The mock's third tab is **Presets**. The engine has no preset system at all,
- *   so drawing one would be a tab that answers nothing.
- * - The mock's footer is a waveform preview of the highlighted row. Clicking a
- *   sample auditions it through the engine; the footer is the asset-download
- *   row, which is real and has nowhere else to live.
- */
-
-import { createMemo, createSignal, For, Index, onMount, Show, type JSX } from 'solid-js';
-
-import type { AudioSourceDto, LibraryEntryDto, LibraryRootDto } from '../api/types';
+/** FL-style Browser: find, audition, replace, then keep writing. */
+import {
+  createContext,
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+  useContext,
+  type Accessor,
+  type JSX,
+} from 'solid-js';
+import type {
+  BrowserPreviewDto,
+  LibraryEntryDto,
+  LibraryRootDto,
+  LibrarySearchDto,
+} from '../api/types';
 import {
   clampBrowserWidth,
   DEFAULT_BROWSER_WIDTH,
-  MAX_BROWSER_WIDTH,
   MIN_BROWSER_WIDTH,
+  MAX_BROWSER_WIDTH,
 } from '../lib/browserSize';
+import { LatestRequest, sampleKeyAction, waveformPath } from '../lib/browserWorkflow';
 import { encodeDrop } from '../lib/dnd';
-import {
-  filterInstruments,
-  instrumentRows,
-  type InstrumentRow,
-} from '../lib/instruments';
-import { classifyLibraryEntry, type LibrarySemantic } from '../lib/librarySemantics';
+import { filterInstruments, instrumentRows, type InstrumentRow } from '../lib/instruments';
 import { useAppState } from '../state';
 import { startDrag } from '../ui/drag';
-import { IconChevron, IconClose } from '../ui/icons';
-import { LibraryIcon } from '../ui/LibraryIcon';
+import {
+  IconCaret,
+  IconChevron,
+  IconClose,
+  IconMore,
+  IconPlay,
+  IconRefresh,
+  IconSearch,
+  IconStop,
+  IconVolume,
+  IconWaveform,
+} from '../ui/icons';
 import { useView, type BrowserTab } from './view';
-
+import { usePatternNav } from './patternNav';
 import '../styles/browser.css';
 
-const GENERIC_FOLDER_SEMANTIC: LibrarySemantic = {
-  primary: 'audio',
-  shape: null,
-  content: null,
-  format: null,
-  evidence: 'name',
-  label: 'Folder',
-};
-
-const GENERIC_INSTRUMENT_SEMANTIC: LibrarySemantic = {
-  primary: 'synth',
-  shape: null,
-  content: 'synth',
-  format: null,
-  evidence: 'name',
-  label: 'Instrument plugin',
-};
-
-function instrumentPluginSemantic(name: string): LibrarySemantic {
-  const inferred = classifyLibraryEntry({ name, relPath: name, kind: 'file' });
-  return inferred.primary === 'audio' ? GENERIC_INSTRUMENT_SEMANTIC : inferred;
-}
-
-const BROWSER_TABS: readonly { id: BrowserTab; label: string }[] = [
-  { id: 'instruments', label: 'Instruments' },
-  { id: 'files', label: 'Files' },
-];
-
-export function Browser(): JSX.Element {
-  const view = useView();
-  return (
-    <Show when={view.browserOpen()} fallback={<BrowserRail />}>
-      <BrowserBody />
-    </Show>
-  );
-}
-
-/** What the collapsed pane leaves behind: the thing that brings it back. */
-function BrowserRail(): JSX.Element {
-  const view = useView();
-  return (
-    <button
-      type="button"
-      class="wv-rail wv-rail--left"
-      title="Show the browser"
-      aria-label="Show the browser"
-      onClick={() => view.setBrowserOpen(true)}
-    >
-      <IconChevron direction="right" />
-      <span class="wv-rail__label">BROWSER</span>
-    </button>
-  );
-}
-
-function BrowserBody(): JSX.Element {
-  const view = useView();
-
-  function setWidth(width: number): void {
-    view.setBrowserWidth(clampBrowserWidth(width, window.innerWidth, view.sideOpen()));
-  }
-
-  function resizeByKeyboard(event: KeyboardEvent): void {
-    const step = event.shiftKey ? 32 : 8;
-    let next: number | null = null;
-    if (event.key === 'ArrowLeft') next = view.browserWidth() - step;
-    if (event.key === 'ArrowRight') next = view.browserWidth() + step;
-    if (event.key === 'Home') next = MIN_BROWSER_WIDTH;
-    if (event.key === 'End') next = MAX_BROWSER_WIDTH;
-    if (next === null) return;
-    event.preventDefault();
-    setWidth(next);
-  }
-
-  return (
-    <aside class="wv-browser" style={{ width: `${view.browserWidth()}px` }}>
-      <div class="wv-browser__head">
-        <span class="wv-browser__title">BROWSER</span>
-        <span class="wv-spacer" />
-        <button
-          type="button"
-          class="wv-browser__collapse"
-          title="Collapse the browser"
-          aria-label="Collapse the browser"
-          onClick={() => view.setBrowserOpen(false)}
-        >
-          <IconChevron direction="left" />
-        </button>
-      </div>
-
-      <div class="wv-browser__tabs wv-tabs" role="tablist" aria-label="Browser sections">
-        <For each={BROWSER_TABS}>
-          {(tab) => (
-            <button
-              type="button"
-              role="tab"
-              class="wv-tab"
-              classList={{ 'is-active': view.browserTab() === tab.id }}
-              aria-selected={view.browserTab() === tab.id}
-              onClick={() => view.setBrowserTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          )}
-        </For>
-      </div>
-
-      <div class="wv-browser__tree">
-        <Show when={view.browserTab() === 'instruments'}>
-          <InstrumentsTree />
-        </Show>
-        <Show when={view.browserTab() === 'files'}>
-          <FilesTree />
-        </Show>
-      </div>
-
-      <AssetFooter />
-      <div
-        class="wv-browser__resize"
-        role="separator"
-        tabindex="0"
-        aria-label="Resize browser"
-        aria-orientation="vertical"
-        aria-valuemin={MIN_BROWSER_WIDTH}
-        aria-valuemax={clampBrowserWidth(
-          MAX_BROWSER_WIDTH,
-          window.innerWidth,
-          view.sideOpen(),
-        )}
-        aria-valuenow={view.browserWidth()}
-        title="Drag to resize · double-click to reset"
-        onPointerDown={(event) => {
-          startDrag(event, {
-            axis: 'horizontal',
-            from: view.browserWidth(),
-            perPixel: 1,
-            min: MIN_BROWSER_WIDTH,
-            max: clampBrowserWidth(MAX_BROWSER_WIDTH, window.innerWidth, view.sideOpen()),
-            fineFactor: 1,
-            onChange: (width) => view.setBrowserWidth(Math.round(width)),
-          });
-        }}
-        onKeyDown={resizeByKeyboard}
-        onDblClick={() => setWidth(DEFAULT_BROWSER_WIDTH)}
-      />
-    </aside>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Shared row furniture
-// ---------------------------------------------------------------------------
-
-/** A directory row: a chevron that turns, a name and how many leaves are under it. */
-function DirRow(props: {
-  label: string;
-  count?: number | undefined;
-  extra?: boolean | undefined;
-  depth?: number | undefined;
-  open: boolean;
-  onToggle: () => void;
-  semantic: LibrarySemantic;
-  remove?: { title: string; run: () => void } | undefined;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      class="wv-row wv-tree__dir"
-      classList={{ 'wv-tree__dir--extra': props.extra === true }}
-      style={{ 'padding-left': `${6 + (props.depth ?? 0) * 8}px` }}
-      aria-expanded={props.open}
-      onClick={() => props.onToggle()}
-    >
-      <LibraryIcon semantic={props.semantic} kind="dir" open={props.open} />
-      <span class="wv-row__name" classList={{ 'is-open': props.open }}>
-        {props.label}
-      </span>
-      <span class="wv-spacer" />
-      <Show when={props.count !== undefined}>
-        <span class="wv-row__meta">{props.count}</span>
-      </Show>
-      <Show when={props.remove}>
-        {(remove) => (
-          <span
-            class="wv-tree__btn wv-tree__btn--danger"
-            title={remove().title}
-            role="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              remove().run();
-            }}
-          >
-            <IconClose />
-          </span>
-        )}
-      </Show>
-    </button>
-  );
-}
-
-/**
- * A leaf row: draggable, clickable, with an indent guide and a `+`.
- *
- * A `div` rather than a `button` because it carries a button of its own and is a
- * drag source; the role and the keyboard handler put back what that costs.
- */
-function LeafRow(props: {
-  name: string;
-  meta: string;
-  semantic?: LibrarySemantic | undefined;
-  title: string;
-  dragData: string;
-  depth?: number;
-  active?: boolean;
-  dim?: boolean;
-  /** Absent when the row has nothing to do on a click -- an unplaced plugin has
-      no audition, and a row that says "press me" and then does nothing is worse
-      than a row that only drags. */
-  onClick?: () => void;
-  add?: { title: string; disabled: boolean; run: () => void };
-  remove?: { title: string; run: () => void };
-}): JSX.Element {
-  const semantic = createMemo(
-    () =>
-      props.semantic ??
-      classifyLibraryEntry({ name: props.name, relPath: props.name, kind: 'file' }),
-  );
-  return (
-    <div
-      class="wv-row wv-tree__leaf"
-      classList={{
-        'is-active': props.active === true,
-        'wv-tree__leaf--dim': props.dim === true,
-        'wv-tree__leaf--semantic': true,
-      }}
-      style={{ 'padding-left': `${8 + (props.depth ?? 0) * 8}px` }}
-      role={props.onClick ? 'button' : undefined}
-      tabindex={props.onClick ? 0 : undefined}
-      draggable={true}
-      title={props.title}
-      onClick={() => props.onClick?.()}
-      onKeyDown={(event) => {
-        if (!props.onClick) return;
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        props.onClick();
-      }}
-      onDragStart={(event) => {
-        event.dataTransfer?.setData('text/plain', props.dragData);
-        if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
-      }}
-    >
-      <LibraryIcon semantic={semantic()} kind="file" />
-      <span class="wv-row__name">{props.name}</span>
-      <span class="wv-spacer" />
-      <span class="wv-row__meta">{props.meta}</span>
-      <Show when={props.add}>
-        {(add) => (
-          <button
-            type="button"
-            class="wv-tree__btn wv-can-disable"
-            disabled={add().disabled}
-            title={add().title}
-            aria-label={add().title}
-            onClick={(event) => {
-              event.stopPropagation();
-              add().run();
-            }}
-          >
-            +
-          </button>
-        )}
-      </Show>
-      <Show when={props.remove}>
-        {(remove) => (
-          <button
-            type="button"
-            class="wv-tree__btn wv-tree__btn--danger"
-            title={remove().title}
-            aria-label={remove().title}
-            onClick={(event) => {
-              event.stopPropagation();
-              remove().run();
-            }}
-          >
-            <IconClose />
-          </button>
-        )}
-      </Show>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Instruments
-// ---------------------------------------------------------------------------
-
-/**
- * Everything a channel can play, in one searched list.
- *
- * The rows are built by `lib/instruments`, which is where the ordering and the
- * search live; this draws them and places them. Rescan sits at the top because
- * it is the one control that opens plugin bundles, and the count next to it is
- * the answer to "did the scan find my plugins".
- */
-function InstrumentsTree(): JSX.Element {
-  const app = useAppState();
-  const [query, setQuery] = createSignal('');
-
-  onMount(() => void app.loadDevices());
-
-  const rows = createMemo(() =>
-    instrumentRows(app.sources(), app.clapPlugins(), app.vst3Plugins()),
-  );
-  const shown = createMemo(() => filterInstruments(rows(), query()));
-
-  const full = () => {
-    const mixer = app.mixer();
-    return mixer !== undefined && mixer.tracks.length >= mixer.maxTracks;
-  };
-
-  /**
-   * Add a channel and put the instrument at its head.
-   *
-   * A built-in is one call. A plugin is two, because `add_track` only takes a
-   * built-in source id -- and both go inside one `mixerCommand` so that only the
-   * *final* state is adopted. Adopting the intermediate one would flash a
-   * channel called "Diva" playing the poly synth.
-   */
-  function add(row: InstrumentRow): void {
-    void app.mixerCommand(async (backend) => {
-      if (row.place.via === 'source') {
-        return backend.addTrack(row.place.id, row.label);
-      }
-      const placed = await backend.addTrack('poly-synth', row.label);
-      const index = placed.tracks.length - 1;
-      return row.place.via === 'clap'
-        ? backend.setTrackSourceClap(index, row.place.path, row.place.pluginId)
-        : backend.setTrackSourceVst3(index, row.place.path, row.place.pluginId);
-    });
-  }
-
-  /** Built-ins render offline, so only they can be auditioned from a row. */
-  function preview(row: InstrumentRow): void {
-    if (row.place.via !== 'source') return;
-    void app.backend.previewInstrument(row.place.id).catch(app.report);
-  }
-
-  function title(row: InstrumentRow): string {
-    const action =
-      row.place.via === 'source'
-        ? `Click to preview ${row.label}. Drag onto the rack, or + for a channel of its own.`
-        : 'Drag onto the rack, or + for a channel of its own.';
-    return `${row.detail}\n${action}`;
-  }
-
-  return (
-    <>
-      <div class="wv-browser__bar">
-        <input
-          type="search"
-          class="wv-browser__search"
-          placeholder="Search instruments"
-          aria-label="Search instruments"
-          value={query()}
-          onInput={(event) => setQuery(event.currentTarget.value)}
-        />
-        <button
-          type="button"
-          class="wv-chip wv-can-disable"
-          disabled={app.scanning()}
-          title="Open each new plugin to catalogue it. Unlicensed plugins may show an activation window — only click this when you want that."
-          onClick={() => void app.loadDevices(true)}
-        >
-          {app.scanning() ? 'Scanning…' : 'Rescan'}
-        </button>
-      </div>
-
-      <Show when={app.scanning()}>
-        <div class="wv-row wv-tree__note">
-          <span class="wv-row__name">scanning…</span>
-        </div>
-      </Show>
-
-      <Show
-        when={shown().length > 0}
-        fallback={
-          <div class="wv-empty">
-            {query().trim().length > 0 ? 'Nothing matches.' : 'No instruments.'}
-            <span class="wv-empty__hint">
-              {query().trim().length > 0
-                ? 'clear the search to see everything'
-                : 'Rescan opens each module — unlicensed plugins may ask to activate'}
-            </span>
-          </div>
-        }
-      >
-        <Index each={shown()}>
-          {(row) => (
-            <LeafRow
-              name={row().label}
-              meta={row().badge}
-              semantic={
-                row().builtIn ? undefined : instrumentPluginSemantic(row().label)
-              }
-              title={title(row())}
-              dragData={row().dragData}
-              active={row().selected}
-              {...(row().place.via === 'source' ? { onClick: () => preview(row()) } : {})}
-              add={{
-                title: full()
-                  ? `The rack is full (${app.mixer()?.maxTracks ?? 0} channels)`
-                  : `Add a rack channel playing ${row().label}`,
-                disabled: full(),
-                run: () => add(row()),
-              }}
-            />
-          )}
-        </Index>
-      </Show>
-    </>
-  );
-}
-
-
-// ---------------------------------------------------------------------------
-// Files
-// ---------------------------------------------------------------------------
-
-/** `2:07` or `4.20s`, from the file's own duration. */
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '--';
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds - minutes * 60;
-  return minutes > 0
-    ? `${minutes}:${Math.floor(rest).toString().padStart(2, '0')}`
-    : `${rest.toFixed(2)}s`;
+  return seconds >= 60
+    ? `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60)
+        .toString()
+        .padStart(2, '0')}`
+    : `${seconds.toFixed(2)}s`;
 }
-
-/** `48k`, `44.1k`. */
 export function formatRate(rate: number): string {
   if (!Number.isFinite(rate) || rate <= 0) return '--';
   return `${(rate / 1000).toFixed(rate % 1000 === 0 ? 0 : 1)}k`;
 }
 
-/**
- * Factory packs, extra-search folders, and the session's loaded files.
- *
- * The tree is a filesystem index: expanding a folder lists it, clicking a
- * sample auditions it, dragging it onto a playlist lane loads it. Decode
- * happens on use, not when the row is drawn.
- */
-function FilesTree(): JSX.Element {
-  const app = useAppState();
+interface BrowserActions {
+  selected: Accessor<{ path: string; name: string } | null>;
+  select(path: string, name: string): void;
+  place(path: string, replace: boolean): void;
+  audition(): void;
+  menu(event: MouseEvent, path: string, name: string): void;
+}
+const BrowserContext = createContext<BrowserActions>();
+function useBrowser(): BrowserActions {
+  return useContext(BrowserContext)!;
+}
+
+export function Browser(): JSX.Element {
   const view = useView();
-  const [roots, setRoots] = createSignal<LibraryRootDto[]>([]);
-  const [loadedOpen, setLoadedOpen] = createSignal(true);
-
-  const brushId = () => {
-    const brush = view.brush();
-    return brush?.kind === 'audio' ? brush.id : null;
-  };
-
-  function refreshRoots(): void {
-    app.backend.getLibraryRoots().then(setRoots).catch(app.report);
-  }
-
-  onMount(refreshRoots);
-
-  function loadFile(): void {
-    app.backend
-      .openAudioFile()
-      .then(async (source) => {
-        if (source === null) return;
-        await app.refreshAudioSources();
-        view.setBrush({ kind: 'audio', id: source.id });
-      })
-      .catch(app.report);
-  }
-
-  function addFolder(): void {
-    app.backend
-      .addLibraryFolder()
-      .then((next) => {
-        if (next === null) return;
-        setRoots(next);
-      })
-      .catch(app.report);
-  }
-
-  function unload(source: AudioSourceDto): void {
-    app.backend
-      .unloadAudioSource(source.id)
-      .then(() => {
-        if (brushId() === source.id) view.setBrush(null);
-        return app.refreshAudioSources();
-      })
-      .catch(app.report);
-  }
-
+  // Keep the tree and query mounted when hidden or when the roll is opened.
   return (
     <>
-      <button type="button" class="wv-row wv-tree__load" onClick={addFolder}>
-        <span class="wv-tree__plus" aria-hidden="true">
-          +
-        </span>
-        <span class="wv-row__name">Add folder…</span>
-        <span class="wv-spacer" />
-        <span class="wv-row__meta">stays on launch</span>
-      </button>
-      <button type="button" class="wv-row wv-tree__load" onClick={loadFile}>
-        <span class="wv-tree__plus" aria-hidden="true">
-          +
-        </span>
-        <span class="wv-row__name">Load file…</span>
-        <span class="wv-spacer" />
-        <span class="wv-row__meta">wav · flac · ogg · mp3</span>
-      </button>
-
-      <For each={roots()}>
-        {(root) => (
-          <LibraryDir
-            rootId={root.id}
-            relPath=""
-            label={root.name}
-            extra={root.kind === 'extra'}
-            depth={0}
-            autoOpen={root.kind === 'packs'}
-            remove={
-              root.kind === 'extra'
-                ? {
-                    title: 'Remove this folder from the browser — files on disk are not deleted',
-                    run: () => {
-                      app.backend
-                        .removeLibraryFolder(root.id)
-                        .then(setRoots)
-                        .catch(app.report);
-                    },
-                  }
-                : undefined
-            }
-          />
-        )}
-      </For>
-
-      <DirRow
-        label="Loaded"
-        count={app.audioSources().length}
-        open={loadedOpen()}
-        onToggle={() => setLoadedOpen((open) => !open)}
-        semantic={GENERIC_FOLDER_SEMANTIC}
-      />
-      <Show when={loadedOpen()}>
-        <Show
-          when={app.audioSources().length > 0}
-          fallback={
-            <div class="wv-empty">
-              Nothing in this project yet.
-              <span class="wv-empty__hint">drag a sample onto a playlist lane</span>
-            </div>
-          }
+      <Show when={!view.browserOpen()}>
+        <button
+          type="button"
+          class="wv-rail wv-rail--left"
+          aria-label="Show browser"
+          title="Browser (Alt+F8)"
+          onClick={() => view.setBrowserOpen(true)}
         >
-          <Index each={app.audioSources()}>
-            {(source) => {
-              const semantic = createMemo(() =>
-                classifyLibraryEntry({
-                  name: source().name,
-                  relPath: source().path,
-                  kind: 'file',
-                }),
-              );
-              return (
-                <LeafRow
-                  name={source().name}
-                  meta={
-                    source().missing
-                      ? 'missing'
-                      : `${formatDuration(source().durationSeconds)} · ${formatRate(source().sampleRate)}`
-                  }
-                  semantic={semantic()}
-                  title={`${source().path}\n${semantic().label} — inferred from ${semantic().evidence}.${source().missing ? '\nThe file has moved: its clips stay and are silent.' : ''}\nClick to load the brush, or drag onto a playlist lane.`}
-                  dragData={encodeDrop('audio', source().id)}
-                  active={brushId() === source().id}
-                  dim={source().missing}
-                  onClick={() => view.setBrush({ kind: 'audio', id: source().id })}
-                  remove={{
-                    title: 'Unload — refused while a clip still plays it',
-                    run: () => unload(source()),
-                  }}
-                />
+          <IconChevron direction="right" />
+          <span class="wv-rail__label">BROWSER</span>
+        </button>
+      </Show>
+      <BrowserBody />
+    </>
+  );
+}
+
+function BrowserBody(): JSX.Element {
+  const app = useAppState();
+  const view = useView();
+  const [query, setQuery] = createSignal('');
+  const [roots, setRoots] = createSignal<LibraryRootDto[]>([]);
+  const [revision, setRevision] = createSignal(0);
+  const [rootError, setRootError] = createSignal<string | null>(null);
+  const [selected, setSelected] = createSignal<{ path: string; name: string } | null>(null);
+  const [preview, setPreview] = createSignal<BrowserPreviewDto | null>(null);
+  const [previewError, setPreviewError] = createSignal<string | null>(null);
+  const [previewBusy, setPreviewBusy] = createSignal(false);
+  const [autoPreview, setAutoPreview] = createSignal(true);
+  const [previewInfo, setPreviewInfo] = createSignal(false);
+  const [optionsMenu, setOptionsMenu] = createSignal<{ x: number; y: number } | null>(null);
+  const [volume, setVolume] = createSignal(80);
+  const [placing, setPlacing] = createSignal(false);
+  const [menu, setMenu] = createSignal<{ path: string; name: string; x: number; y: number } | null>(
+    null,
+  );
+  const requests = new LatestRequest();
+  let searchInput: HTMLInputElement | undefined;
+  let tree: HTMLDivElement | undefined;
+  let volumeTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastAudibleVolume = 80;
+
+  function changePreviewVolume(percent: number): void {
+    setVolume(percent);
+    if (percent > 0) lastAudibleVolume = percent;
+    clearTimeout(volumeTimer);
+    volumeTimer = setTimeout(
+      () => void app.backend.setPreviewVolume(percent).catch(app.report),
+      100,
+    );
+  }
+
+  function toggleAutoPreview(): void {
+    setAutoPreview((on) => !on);
+    if (!autoPreview()) {
+      requests.cancel();
+      setPreviewBusy(false);
+      void app.backend.stopBrowserPreview().catch(app.report);
+    }
+  }
+
+  function refresh(): void {
+    setRootError(null);
+    void app.backend
+      .getLibraryRoots()
+      .then(setRoots)
+      .catch((error) => setRootError(String(error)));
+    setRevision((n) => n + 1);
+  }
+  onMount(() => {
+    refresh();
+    void app.backend
+      .getPreviewSettings()
+      .then((settings) => {
+        setVolume(settings.volumePercent);
+        if (settings.volumePercent > 0) lastAudibleVolume = settings.volumePercent;
+      })
+      .catch(app.report);
+    void app.loadDevices();
+  });
+  onCleanup(() => {
+    requests.cancel();
+    clearTimeout(volumeTimer);
+  });
+
+  async function select(path: string, name: string, forceAudition = false): Promise<void> {
+    setSelected({ path, name });
+    setPreview(null);
+    setPreviewError(null);
+    setPreviewBusy(true);
+    const ticket = requests.begin();
+    try {
+      const result = await app.backend.previewBrowserFile(path, forceAudition || autoPreview());
+      if (requests.current(ticket)) setPreview(result);
+    } catch (error) {
+      if (requests.current(ticket)) setPreviewError(String(error));
+    } finally {
+      if (requests.current(ticket)) setPreviewBusy(false);
+    }
+  }
+
+  async function place(path: string, replace: boolean): Promise<void> {
+    if (placing()) return;
+    const chosen = app.tracks().find((track) => track.index === app.mixer()?.selected);
+    if (replace && !chosen) return;
+    setPlacing(true);
+    let applied = false;
+    try {
+      if (replace) {
+        const source = await app.backend.loadAudioSource(path);
+        await app.mixerCommand(async (backend) => {
+          const next = await backend.setTrackSource(chosen!.index, `oneshot:${source.id}`);
+          applied = true;
+          return next;
+        });
+        if (!applied) return;
+        app.say('Replace sample', `${chosen!.name} → ${source.name}`);
+      } else {
+        await app.mixerCommand(async (backend) => {
+          const next = await backend.addSampleChannel(path);
+          applied = true;
+          return backend.setSelectedTrack(next.tracks.length - 1);
+        });
+        if (!applied) return;
+        view.setStrip({ kind: 'track', index: app.mixer()?.selected ?? 0 });
+        app.say('New sampler channel', path.split(/[\\/]/).at(-1) ?? path);
+      }
+      await app.refresh();
+      // A source replacement changes the meaning of old notes; expose this
+      // established structural-history boundary instead of stale inverse edits.
+      app.clearHistory(replace ? 'replacing a channel sample' : 'adding a sampler channel');
+    } catch (error) {
+      app.report(error);
+    } finally {
+      setPlacing(false);
+    }
+  }
+
+  const actions: BrowserActions = {
+    selected,
+    select: (path, name) => void select(path, name),
+    place: (path, replace) => void place(path, replace),
+    audition: () => {
+      const item = selected();
+      if (item) void select(item.path, item.name, true);
+    },
+    menu: (event, path, name) => {
+      event.preventDefault();
+      setSelected({ path, name });
+      // Loading visual data does not change the song or selected channel.
+      void select(path, name);
+      setMenu({
+        path,
+        name,
+        x: Math.max(8, Math.min(event.clientX, window.innerWidth - 230)),
+        y: Math.max(8, Math.min(event.clientY, window.innerHeight - 150)),
+      });
+    },
+  };
+
+  function keyDown(event: KeyboardEvent): void {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      event.stopPropagation();
+      searchInput?.focus();
+      searchInput?.select();
+      return;
+    }
+    if (event.key === 'Escape') {
+      if (optionsMenu()) {
+        event.preventDefault();
+        event.stopPropagation();
+        setOptionsMenu(null);
+      } else if (menu()) {
+        event.preventDefault();
+        event.stopPropagation();
+        setMenu(null);
+      } else if (query()) {
+        event.preventDefault();
+        event.stopPropagation();
+        setQuery('');
+      }
+      return;
+    }
+    if (event.target instanceof HTMLInputElement && event.target !== searchInput) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      const rows = Array.from(
+        tree?.querySelectorAll<HTMLElement>('[data-browser-file]') ?? [],
+      ).filter((row) => row.getClientRects().length > 0);
+      if (rows.length === 0) return;
+      const current = rows.findIndex((row) => row === document.activeElement);
+      const next = Math.max(
+        0,
+        Math.min(
+          rows.length - 1,
+          current < 0
+            ? event.key === 'ArrowUp'
+              ? rows.length - 1
+              : 0
+            : current + (event.key === 'ArrowDown' ? 1 : -1),
+        ),
+      );
+      const row = rows[next]!;
+      event.preventDefault();
+      event.stopPropagation();
+      row.focus();
+      row.scrollIntoView({ block: 'nearest' });
+      const path = row.dataset.browserFile;
+      if (path) void select(path, row.dataset.browserName ?? path);
+      if (event.shiftKey && path) void place(path, true);
+      return;
+    }
+    // Search typing and action buttons retain their native keyboard behavior.
+    if (
+      event.target === searchInput ||
+      !(event.target instanceof HTMLElement) ||
+      !event.target.hasAttribute('data-browser-file')
+    )
+      return;
+    const action = sampleKeyAction(event.key, event.shiftKey);
+    if (action) {
+      event.preventDefault();
+      event.stopPropagation();
+      const path = event.target.dataset.browserFile!;
+      if (action === 'preview') void select(path, event.target.dataset.browserName ?? path, true);
+      else void place(path, action === 'replace');
+    }
+  }
+
+  function width(value: number): void {
+    view.setBrowserWidth(
+      clampBrowserWidth(
+        value,
+        window.innerWidth,
+        view.sideOpen(),
+        view.view() === 'playlist' && !view.rollOpen(),
+      ),
+    );
+  }
+  const tabs: { id: BrowserTab; label: string }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'files', label: 'Samples' },
+    { id: 'instruments', label: 'Instruments' },
+  ];
+
+  return (
+    <BrowserContext.Provider value={actions}>
+      <aside
+        class="wv-browser"
+        style={{ width: `${view.browserWidth()}px`, display: view.browserOpen() ? 'flex' : 'none' }}
+        aria-label="Browser"
+        onKeyDown={keyDown}
+      >
+        <div class="wv-browser__head">
+          <div class="wv-browser__tabs wv-tabs" role="tablist" aria-label="Browser sections">
+            <For each={tabs}>
+              {(tab) => (
+                <button
+                  type="button"
+                  role="tab"
+                  class="wv-tab"
+                  classList={{ 'is-active': view.browserTab() === tab.id }}
+                  aria-label={tab.label}
+                  title={tab.label}
+                  aria-selected={view.browserTab() === tab.id}
+                  onClick={() => view.setBrowserTab(tab.id)}
+                >
+                  <span classList={{ 'wv-browser__tab-full': tab.id === 'instruments' }}>
+                    {tab.label}
+                  </span>
+                  <Show when={tab.id === 'instruments'}>
+                    <span class="wv-browser__tab-short" aria-hidden="true">
+                      Inst.
+                    </span>
+                  </Show>
+                </button>
+              )}
+            </For>
+          </div>
+          <button
+            type="button"
+            class="wv-browser__collapse"
+            aria-label="Refresh browser"
+            title="Refresh folders and search"
+            onClick={refresh}
+          >
+            <IconRefresh />
+          </button>
+          <button
+            type="button"
+            class="wv-browser__collapse"
+            aria-label="Browser options"
+            aria-expanded={optionsMenu() !== null}
+            title="Browser options"
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              setOptionsMenu((open) =>
+                open ? null : { x: Math.max(8, rect.right - 216), y: rect.bottom + 6 },
               );
             }}
-          </Index>
+          >
+            <IconMore />
+          </button>
+        </div>
+        <div class="wv-browser__searchbar">
+          <span class="wv-browser__search-icon" aria-hidden="true">
+            <IconSearch />
+          </span>
+          <input
+            ref={searchInput}
+            type="search"
+            class="wv-browser__search"
+            placeholder="Search sounds…"
+            aria-label="Search browser"
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+          />
+          <Show when={query()}>
+            <button
+              type="button"
+              class="wv-tree__btn wv-browser__clear-search"
+              aria-label="Clear search"
+              onClick={() => {
+                setQuery('');
+                searchInput?.focus();
+              }}
+            >
+              <IconClose />
+            </button>
+          </Show>
+        </div>
+        <div class="wv-browser__tree" ref={tree}>
+          <Show when={rootError()}>
+            {(error) => (
+              <div class="wv-empty" role="alert">
+                {error()}
+                <button type="button" class="wv-chip" onClick={refresh}>
+                  Retry
+                </button>
+              </div>
+            )}
+          </Show>
+          <div style={{ display: view.browserTab() === 'instruments' ? 'none' : 'contents' }}>
+            <div class="wv-browser__actions">
+              <button
+                type="button"
+                class="wv-chip"
+                title="Add your sample pack folder"
+                onClick={() =>
+                  void app.backend
+                    .addLibraryFolder()
+                    .then((next) => {
+                      if (next) {
+                        setRoots(next);
+                        setRevision((n) => n + 1);
+                      }
+                    })
+                    .catch(app.report)
+                }
+              >
+                + Folder
+              </button>
+              <button
+                type="button"
+                class="wv-chip"
+                title="Import a sample into a new channel"
+                onClick={() =>
+                  void app.backend
+                    .openAudioFile()
+                    .then((source) => {
+                      if (source) void place(source.path, false);
+                    })
+                    .catch(app.report)
+                }
+              >
+                Import sample…
+              </button>
+            </div>
+            <Show when={query().trim()}>
+              <SearchFiles query={query().trim()} revision={revision()} />
+            </Show>
+            <div style={{ display: query().trim() ? 'none' : 'contents' }}>
+              <div style={{ display: view.browserTab() === 'all' ? 'contents' : 'none' }}>
+                <ProjectTree />
+              </div>
+              <For each={roots()}>
+                {(root) => (
+                  <LibraryDir
+                    root={root}
+                    relPath=""
+                    label={root.name}
+                    depth={0}
+                    revision={revision()}
+                    initiallyOpen={root.kind !== 'extra'}
+                    remove={
+                      root.kind === 'extra'
+                        ? () =>
+                            void app.backend
+                              .removeLibraryFolder(root.id)
+                              .then(setRoots)
+                              .catch(app.report)
+                        : undefined
+                    }
+                  />
+                )}
+              </For>
+            </div>
+          </div>
+          <div style={{ display: view.browserTab() === 'files' ? 'none' : 'contents' }}>
+            <InstrumentsTree
+              query={query()}
+              collapsed={view.browserTab() === 'all' && !query().trim()}
+            />
+          </div>
+        </div>
+        <AssetFooter />
+
+        <div class="wv-browser__preview">
+          <div class="wv-browser__preview-tabs" role="group" aria-label="Sample details">
+            <button
+              type="button"
+              class="wv-chip"
+              classList={{ 'is-active': !previewInfo() }}
+              aria-pressed={!previewInfo()}
+              onClick={() => setPreviewInfo(false)}
+            >
+              Audition
+            </button>
+            <button
+              type="button"
+              class="wv-chip"
+              classList={{ 'is-active': previewInfo() }}
+              aria-pressed={previewInfo()}
+              onClick={() => setPreviewInfo(true)}
+            >
+              Info
+            </button>
+          </div>
+          <Show
+            when={selected()}
+            fallback={
+              <div class="wv-browser__preview-hint">
+                Select a sample to listen.
+                <br />
+                Drag to the rack or playlist.
+              </div>
+            }
+          >
+            {(item) => (
+              <>
+                <div class="wv-browser__preview-name" title={item().path}>
+                  {item().name}
+                </div>
+                <Show when={previewBusy()}>
+                  <div class="wv-tree__note" role="status">
+                    Loading preview…
+                  </div>
+                </Show>
+                <Show when={previewError()}>
+                  {(error) => (
+                    <div class="wv-browser__preview-error" role="alert">
+                      {error()}
+                    </div>
+                  )}
+                </Show>
+                <Show
+                  when={previewInfo()}
+                  fallback={
+                    <Show when={preview()}>
+                      {(wave) => (
+                        <>
+                          <svg
+                            class="wv-browser__waveform"
+                            viewBox="0 0 256 48"
+                            preserveAspectRatio="none"
+                            role="img"
+                            aria-label={`Waveform of ${item().name}`}
+                          >
+                            <path
+                              d={waveformPath(wave().peaks)}
+                              fill="none"
+                              stroke="currentColor"
+                              stroke-width="1"
+                            />
+                          </svg>
+                          <span class="wv-row__meta wv-browser__preview-meta">
+                            {wave().truncated ? 'First ' : ''}
+                            {formatDuration(wave().durationSeconds)} ·{' '}
+                            {formatRate(wave().sampleRate)}Hz
+                          </span>
+                        </>
+                      )}
+                    </Show>
+                  }
+                >
+                  <dl class="wv-browser__info">
+                    <dt>File</dt>
+                    <dd class="wv-browser__info-path" title={item().path}>
+                      {item().path}
+                    </dd>
+                    <Show when={preview()}>
+                      {(wave) => (
+                        <>
+                          <dt>Preview</dt>
+                          <dd>
+                            {wave().truncated ? 'First ' : ''}
+                            {formatDuration(wave().durationSeconds)}
+                          </dd>
+                          <dt>Sample rate</dt>
+                          <dd>{wave().sampleRate.toLocaleString()} Hz</dd>
+                        </>
+                      )}
+                    </Show>
+                  </dl>
+                </Show>
+              </>
+            )}
+          </Show>
+          <div class="wv-browser__preview-controls">
+            <button
+              type="button"
+              class="wv-browser__preview-button"
+              aria-label="Play sample preview"
+              title="Play selected sample"
+              disabled={!selected()}
+              onClick={actions.audition}
+            >
+              <IconPlay />
+            </button>
+            <button
+              type="button"
+              class="wv-browser__preview-button"
+              aria-label="Stop sample preview"
+              title="Stop preview; keep the song playing"
+              onClick={() => {
+                requests.cancel();
+                setPreviewBusy(false);
+                void app.backend.stopBrowserPreview().catch(app.report);
+              }}
+            >
+              <IconStop />
+            </button>
+            <button
+              type="button"
+              class="wv-browser__volume-button"
+              aria-label="Mute sample preview"
+              aria-pressed={volume() === 0}
+              title={volume() === 0 ? 'Restore preview volume' : 'Mute preview'}
+              onClick={() => changePreviewVolume(volume() === 0 ? lastAudibleVolume : 0)}
+            >
+              <IconVolume muted={volume() === 0} />
+            </button>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={volume()}
+              style={{ '--preview-level': `${volume()}%` }}
+              aria-label="Preview volume"
+              title={`Preview volume ${volume()}%`}
+              onInput={(event) => changePreviewVolume(Number(event.currentTarget.value))}
+            />
+          </div>
+          <div class="wv-browser__sample-actions">
+            <button
+              type="button"
+              class="wv-chip"
+              disabled={
+                !selected() || placing() || app.tracks().length >= (app.mixer()?.maxTracks ?? 16)
+              }
+              title="New sampler channel (Shift+Enter or double-click)"
+              onClick={() => {
+                const item = selected();
+                if (item) void place(item.path, false);
+              }}
+            >
+              + Channel
+            </button>
+            <button
+              type="button"
+              class="wv-chip"
+              disabled={!selected() || placing() || !app.tracks().length}
+              title={`Send to ${app.tracks()[app.mixer()?.selected ?? 0]?.name ?? 'selected channel'} (Enter)`}
+              onClick={() => {
+                const item = selected();
+                if (item) void place(item.path, true);
+              }}
+            >
+              Replace
+            </button>
+          </div>
+        </div>
+        <Show when={optionsMenu()}>
+          {(position) => (
+            <div class="wv-scrim" onClick={() => setOptionsMenu(null)}>
+              <div
+                class="wv-menu"
+                role="menu"
+                style={{
+                  position: 'fixed',
+                  left: `${position().x}px`,
+                  top: `${position().y}px`,
+                  width: '216px',
+                }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  class="wv-menu__row"
+                  role="menuitemcheckbox"
+                  aria-checked={autoPreview()}
+                  onClick={() => {
+                    toggleAutoPreview();
+                    setOptionsMenu(null);
+                  }}
+                >
+                  Audition on selection
+                  <span class="wv-spacer" />
+                  <span class="wv-menu__meta">{autoPreview() ? 'On' : 'Off'}</span>
+                </button>
+                <button
+                  type="button"
+                  class="wv-menu__row"
+                  role="menuitem"
+                  onClick={() => {
+                    changePreviewVolume(80);
+                    setOptionsMenu(null);
+                  }}
+                >
+                  Reset preview volume
+                  <span class="wv-spacer" />
+                  <span class="wv-menu__meta">80%</span>
+                </button>
+                <div class="wv-menu__rule" />
+                <button
+                  type="button"
+                  class="wv-menu__row"
+                  role="menuitem"
+                  onClick={() => {
+                    setOptionsMenu(null);
+                    view.setBrowserOpen(false);
+                  }}
+                >
+                  Hide Browser
+                  <span class="wv-spacer" />
+                  <span class="wv-menu__meta">F8</span>
+                </button>
+              </div>
+            </div>
+          )}
         </Show>
+        <div
+          class="wv-browser__resize"
+          role="separator"
+          tabindex="0"
+          aria-label="Resize browser"
+          aria-orientation="vertical"
+          aria-valuemin={MIN_BROWSER_WIDTH}
+          aria-valuemax={MAX_BROWSER_WIDTH}
+          aria-valuenow={view.browserWidth()}
+          title="Drag to resize · double-click to reset"
+          onPointerDown={(event) =>
+            startDrag(event, {
+              from: view.browserWidth(),
+              perPixel: 1,
+              min: MIN_BROWSER_WIDTH,
+              max: MAX_BROWSER_WIDTH,
+              axis: 'horizontal',
+              fineFactor: 1,
+              onChange: width,
+            })
+          }
+          onDblClick={() => width(DEFAULT_BROWSER_WIDTH)}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+              event.preventDefault();
+              event.stopPropagation();
+              width(
+                view.browserWidth() +
+                  (event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 32 : 8),
+              );
+            }
+          }}
+        />
+      </aside>
+      <Show when={menu()}>
+        {(item) => (
+          <div
+            class="wv-scrim"
+            onClick={() => setMenu(null)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setMenu(null);
+            }}
+          >
+            <div
+              class="wv-menu"
+              style={{
+                position: 'fixed',
+                left: `${item().x}px`,
+                top: `${item().y}px`,
+                width: '222px',
+              }}
+              onClick={(e) => e.stopPropagation()}
+              role="menu"
+            >
+              <button
+                type="button"
+                class="wv-menu__row"
+                role="menuitem"
+                onClick={() => {
+                  actions.audition();
+                  setMenu(null);
+                }}
+              >
+                Preview
+                <span class="wv-spacer" />
+                <span class="wv-menu__meta">Space</span>
+              </button>
+              <button
+                type="button"
+                class="wv-menu__row"
+                role="menuitem"
+                disabled={placing() || !app.tracks().length}
+                onClick={() => {
+                  void place(item().path, true);
+                  setMenu(null);
+                }}
+              >
+                Send to selected channel
+                <span class="wv-spacer" />
+                <span class="wv-menu__meta">Enter</span>
+              </button>
+              <button
+                type="button"
+                class="wv-menu__row"
+                role="menuitem"
+                disabled={placing() || app.tracks().length >= (app.mixer()?.maxTracks ?? 16)}
+                onClick={() => {
+                  void place(item().path, false);
+                  setMenu(null);
+                }}
+              >
+                Open in new channel
+                <span class="wv-spacer" />
+                <span class="wv-menu__meta">⇧ Enter</span>
+              </button>
+            </div>
+          </div>
+        )}
       </Show>
-    </>
+    </BrowserContext.Provider>
+  );
+}
+
+function Folder(props: {
+  label: string;
+  open: boolean;
+  toggle(): void;
+  depth?: number;
+  count?: number;
+  remove?: (() => void) | undefined;
+}): JSX.Element {
+  return (
+    <div class="wv-browser__folder-row">
+      <button
+        type="button"
+        class="wv-row wv-tree__dir"
+        style={{ 'padding-left': `${8 + (props.depth ?? 0) * 12}px` }}
+        aria-expanded={props.open}
+        onClick={props.toggle}
+        onKeyDown={(e) => {
+          if ((e.key === 'ArrowRight' && !props.open) || (e.key === 'ArrowLeft' && props.open)) {
+            e.preventDefault();
+            e.stopPropagation();
+            props.toggle();
+          }
+        }}
+      >
+        <span class="wv-tree__chev" classList={{ 'is-open': props.open }}>
+          <IconChevron direction="right" />
+        </span>
+        <span class="wv-row__name">{props.label}</span>
+        <span class="wv-spacer" />
+        <Show when={props.count !== undefined}>
+          <span class="wv-row__meta">{props.count}</span>
+        </Show>
+      </button>
+      <Show when={props.remove}>
+        <button
+          type="button"
+          class="wv-tree__btn"
+          aria-label={`Remove folder ${props.label}`}
+          title="Remove from Browser; keep files on disk"
+          onClick={props.remove}
+        >
+          <IconClose />
+        </button>
+      </Show>
+    </div>
+  );
+}
+
+function SampleRow(props: {
+  entry: LibraryEntryDto;
+  depth?: number;
+  location?: string;
+}): JSX.Element {
+  const browser = useBrowser();
+  return (
+    <div
+      class="wv-row wv-tree__leaf wv-browser__sample"
+      classList={{ 'is-active': browser.selected()?.path === props.entry.path }}
+      style={{ 'padding-left': `${22 + (props.depth ?? 0) * 12}px` }}
+      role="button"
+      tabindex="0"
+      aria-label={props.entry.name}
+      data-browser-file={props.entry.path}
+      data-browser-name={props.entry.name}
+      draggable="true"
+      title={`${props.entry.path}\nClick: preview · Double-click: new channel · Enter: replace selected · Drag: rack or playlist`}
+      onClick={() => browser.select(props.entry.path, props.entry.name)}
+      onDblClick={() => browser.place(props.entry.path, false)}
+      onContextMenu={(e) => browser.menu(e, props.entry.path, props.entry.name)}
+      onDragStart={(e) => {
+        e.dataTransfer?.setData('text/plain', encodeDrop('file', props.entry.path));
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
+      }}
+    >
+      <span class="wv-browser__file-icon" aria-hidden="true">
+        <IconWaveform />
+      </span>
+      <span class="wv-browser__file-text">
+        <span class="wv-row__name">{props.entry.name}</span>
+        <Show when={props.location}>
+          <span class="wv-browser__location">{props.location}</span>
+        </Show>
+      </span>
+      <button
+        type="button"
+        class="wv-tree__btn wv-browser__add"
+        aria-label={`Actions for ${props.entry.name}`}
+        title="Preview, replace or add channel"
+        onClick={(e) => {
+          e.stopPropagation();
+          browser.menu(e, props.entry.path, props.entry.name);
+        }}
+        onDblClick={(event) => event.stopPropagation()}
+      >
+        <IconMore />
+      </button>
+    </div>
   );
 }
 
 function LibraryDir(props: {
-  rootId: string;
+  root: LibraryRootDto;
   relPath: string;
   label: string;
-  extra?: boolean | undefined;
   depth: number;
-  autoOpen?: boolean | undefined;
-  remove?: { title: string; run: () => void } | undefined;
+  revision: number;
+  initiallyOpen?: boolean;
+  remove?: (() => void) | undefined;
 }): JSX.Element {
   const app = useAppState();
-  const [open, setOpen] = createSignal(false);
+  const [open, setOpen] = createSignal(props.initiallyOpen ?? false);
   const [entries, setEntries] = createSignal<LibraryEntryDto[] | null>(null);
-  const semantic = classifyLibraryEntry({
-    name: props.label,
-    relPath: props.relPath || props.label,
-    kind: 'dir',
-  });
-
-  function load(): void {
-    app.backend
-      .listLibraryDir(props.rootId, props.relPath)
-      .then(setEntries)
-      .catch(app.report);
-  }
-
-  function toggle(): void {
-    const next = !open();
-    setOpen(next);
-    if (next && entries() === null) load();
-  }
-
-  onMount(() => {
-    if (props.autoOpen) {
-      setOpen(true);
-      load();
+  const [error, setError] = createSignal<string | null>(null);
+  const requests = new LatestRequest();
+  let loadedRevision = -1;
+  async function load(): Promise<void> {
+    const ticket = requests.begin();
+    setError(null);
+    try {
+      const listed = await app.backend.listLibraryDir(props.root.id, props.relPath);
+      if (requests.current(ticket)) {
+        setEntries(listed);
+        loadedRevision = props.revision;
+      }
+    } catch (err) {
+      if (requests.current(ticket)) setError(String(err));
     }
+  }
+  createEffect(() => {
+    const revision = props.revision;
+    if (open() && revision !== loadedRevision) void load();
   });
-
+  onCleanup(() => requests.cancel());
   return (
     <>
-      <DirRow
+      <Folder
         label={props.label}
-        extra={props.extra}
         depth={props.depth}
         open={open()}
-        onToggle={toggle}
-        semantic={semantic}
+        toggle={() => setOpen((value) => !value)}
         remove={props.remove}
       />
-      <Show when={open()}>
-        <Show when={entries()} fallback={<div class="wv-row wv-tree__note">listing…</div>}>
+      {/* Hiding keeps already visited folders and samples intact. */}
+      <div style={{ display: open() ? 'contents' : 'none' }}>
+        <Show when={error()}>
+          {(message) => (
+            <div class="wv-empty" role="alert">
+              Folder unavailable.<span class="wv-empty__hint">{message()}</span>
+              <button type="button" class="wv-chip" onClick={() => void load()}>
+                Retry
+              </button>
+            </div>
+          )}
+        </Show>
+        <Show
+          when={entries()}
+          fallback={
+            <div class="wv-tree__note" role="status">
+              Loading folder…
+            </div>
+          }
+        >
           {(listed) => (
-            <Show
-              when={listed().length > 0}
-              fallback={<div class="wv-row wv-tree__note">empty</div>}
-            >
+            <>
+              <Show when={listed().length === 0 && !error()}>
+                <div class="wv-tree__note">
+                  {props.root.kind === 'packs' && !props.relPath
+                    ? 'Add a sample folder or import a file.'
+                    : 'No audio files here.'}
+                </div>
+              </Show>
+              <Show when={listed().length >= 500}>
+                <div class="wv-tree__note">Showing up to 500 items. Use search for more.</div>
+              </Show>
               <For each={listed()}>
                 {(entry) =>
                   entry.kind === 'dir' ? (
                     <LibraryDir
-                      rootId={props.rootId}
+                      root={props.root}
                       relPath={entry.relPath}
                       label={entry.name}
-                      extra={props.extra}
                       depth={props.depth + 1}
+                      revision={props.revision}
                     />
                   ) : (
-                    <LibraryFile entry={entry} depth={props.depth + 1} />
+                    <SampleRow entry={entry} depth={props.depth + 1} />
                   )
                 }
               </For>
-            </Show>
+            </>
           )}
         </Show>
+      </div>
+    </>
+  );
+}
+
+function SearchFiles(props: { query: string; revision: number }): JSX.Element {
+  const app = useAppState();
+  const [result, setResult] = createSignal<LibrarySearchDto | null>(null);
+  const [error, setError] = createSignal<string | null>(null);
+  const requests = new LatestRequest();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  createEffect(() => {
+    const query = props.query;
+    props.revision;
+    const ticket = requests.begin();
+    clearTimeout(timer);
+    setResult(null);
+    setError(null);
+    timer = setTimeout(
+      () =>
+        void app.backend
+          .searchLibrary(query)
+          .then((next) => {
+            if (requests.current(ticket)) setResult(next);
+          })
+          .catch((err) => {
+            if (requests.current(ticket)) setError(String(err));
+          }),
+      180,
+    );
+  });
+  onCleanup(() => {
+    clearTimeout(timer);
+    requests.cancel();
+  });
+  return (
+    <>
+      <Show when={error()}>
+        {(message) => (
+          <div class="wv-empty" role="alert">
+            Search failed.<span class="wv-empty__hint">{message()}</span>
+          </div>
+        )}
+      </Show>
+      <Show
+        when={result()}
+        fallback={
+          <Show when={!error()}>
+            <div class="wv-tree__note" role="status">
+              Searching samples…
+            </div>
+          </Show>
+        }
+      >
+        {(found) => (
+          <>
+            <div class="wv-browser__section-label">{found().entries.length} samples</div>
+            <Show when={found().truncated}>
+              <div class="wv-tree__note">Search limit reached. Narrow your search.</div>
+            </Show>
+            <Show when={found().unavailableRoots.length}>
+              <div class="wv-tree__note">Unavailable: {found().unavailableRoots.join(', ')}</div>
+            </Show>
+            <Show when={!found().entries.length}>
+              <div class="wv-empty">
+                No matching samples.
+                <span class="wv-empty__hint">Try a name like kick, clap or hat.</span>
+              </div>
+            </Show>
+            <For each={found().entries}>
+              {(row) => (
+                <SampleRow
+                  entry={row.entry}
+                  location={`${row.rootName} / ${row.entry.relPath.split('/').slice(0, -1).join('/')}`}
+                />
+              )}
+            </For>
+          </>
+        )}
       </Show>
     </>
   );
 }
 
-function LibraryFile(props: { entry: LibraryEntryDto; depth: number }): JSX.Element {
+function InstrumentsTree(props: { query: string; collapsed: boolean }): JSX.Element {
   const app = useAppState();
-  const semantic = classifyLibraryEntry({
-    name: props.entry.name,
-    relPath: props.entry.relPath,
-    kind: 'file',
-  });
+  const view = useView();
+  const [open, setOpen] = createSignal(false);
+  const [busy, setBusy] = createSignal(false);
+  const rows = createMemo(() =>
+    filterInstruments(
+      instrumentRows(app.sources(), app.clapPlugins(), app.vst3Plugins()),
+      props.query,
+    ),
+  );
+  async function add(row: InstrumentRow): Promise<void> {
+    if (busy() || app.tracks().length >= (app.mixer()?.maxTracks ?? 16)) return;
+    setBusy(true);
+    let applied = false;
+    try {
+      await app.mixerCommand(async (backend) => {
+        const added = await backend.addTrack(
+          row.place.via === 'source' ? row.place.id : 'poly-synth',
+          row.label,
+        );
+        const index = added.tracks.length - 1;
+        try {
+          if (row.place.via === 'clap')
+            await backend.setTrackSourceClap(index, row.place.path, row.place.pluginId);
+          if (row.place.via === 'vst3')
+            await backend.setTrackSourceVst3(index, row.place.path, row.place.pluginId);
+        } catch (error) {
+          await backend.removeTrack(index);
+          throw error;
+        }
+        applied = true;
+        return backend.setSelectedTrack(index);
+      });
+      if (!applied) return;
+      view.setStrip({ kind: 'track', index: app.mixer()?.selected ?? 0 });
+      app.clearHistory('adding an instrument channel');
+    } finally {
+      setBusy(false);
+    }
+  }
   return (
-    <LeafRow
-      name={props.entry.name}
-      meta=""
-      semantic={semantic}
-      title={`${props.entry.path}\n${semantic.label} — inferred from ${semantic.evidence}.\nClick to preview. Drag onto a playlist lane.`}
-      dragData={encodeDrop('file', props.entry.path)}
-      depth={props.depth}
-      onClick={() => {
-        app.backend.previewAudioFile(props.entry.path).catch(app.report);
-      }}
-    />
+    <>
+      <Show when={props.collapsed}>
+        <Folder
+          label="Instruments"
+          count={rows().length}
+          open={open()}
+          toggle={() => setOpen((value) => !value)}
+        />
+      </Show>
+      <div style={{ display: !props.collapsed || open() ? 'contents' : 'none' }}>
+        <div class="wv-browser__actions">
+          <span class="wv-browser__section-label">Instruments</span>
+          <span class="wv-spacer" />
+          <button
+            type="button"
+            class="wv-chip"
+            disabled={app.scanning()}
+            onClick={() => void app.loadDevices(true)}
+            title="Scan installed instrument plugins"
+          >
+            {app.scanning() ? 'Scanning…' : 'Rescan'}
+          </button>
+        </div>
+        <Show when={!rows().length}>
+          <div class="wv-empty">No matching instruments.</div>
+        </Show>
+        <For each={rows()}>
+          {(row) => (
+            <div
+              class="wv-row wv-tree__leaf"
+              role="button"
+              tabindex="0"
+              aria-label={row.label}
+              draggable="true"
+              title={`${row.detail}\nDouble-click or +: new channel. Drag to rack.`}
+              onClick={() => {
+                if (row.place.via === 'source')
+                  void app.backend.previewInstrument(row.place.id).catch(app.report);
+              }}
+              onDblClick={() => void add(row)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void add(row);
+                }
+              }}
+              onDragStart={(e) => {
+                e.dataTransfer?.setData('text/plain', row.dragData);
+                if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
+              }}
+            >
+              <span class="wv-browser__file-icon" aria-hidden="true">
+                <IconWaveform />
+              </span>
+              <span class="wv-row__name">{row.label}</span>
+              <span class="wv-row__meta">{row.badge}</span>
+              <button
+                type="button"
+                class="wv-tree__btn"
+                aria-label={`Add ${row.label} to rack`}
+                disabled={busy() || app.tracks().length >= (app.mixer()?.maxTracks ?? 16)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void add(row);
+                }}
+              >
+                +
+              </button>
+            </div>
+          )}
+        </For>
+      </div>
+    </>
   );
 }
 
-// ---------------------------------------------------------------------------
-// The asset footer
-// ---------------------------------------------------------------------------
+function ProjectTree(): JSX.Element {
+  const app = useAppState();
+  const view = useView();
+  const nav = usePatternNav();
+  const [open, setOpen] = createSignal(false);
+  return (
+    <>
+      <Folder label="Current project" open={open()} toggle={() => setOpen((value) => !value)} />
+      <div style={{ display: open() ? 'contents' : 'none' }}>
+        <div class="wv-browser__section-label">Patterns</div>
+        <For each={app.patterns()}>
+          {(pattern) => (
+            <button
+              type="button"
+              class="wv-row wv-tree__leaf"
+              draggable="true"
+              title="Click to paint this pattern · double-click to edit"
+              onClick={() => {
+                view.setBrush({ kind: 'pattern', id: pattern.id });
+                view.setPlaylistTool('paint');
+              }}
+              onDblClick={(e) =>
+                void nav.openPattern(pattern.id, { surface: 'picker', altKey: e.altKey })
+              }
+              onDragStart={(e) => {
+                e.dataTransfer?.setData('text/plain', encodeDrop('pattern', pattern.id));
+                if (e.dataTransfer) e.dataTransfer.effectAllowed = 'copy';
+              }}
+            >
+              <span class="wv-swatch" style={{ background: pattern.color ?? 'var(--acc)' }} />
+              <span class="wv-row__name">{pattern.name}</span>
+            </button>
+          )}
+        </For>
+        <div class="wv-browser__section-label">Channels</div>
+        <For each={app.tracks()}>
+          {(track) => (
+            <button
+              type="button"
+              class="wv-row wv-tree__leaf"
+              title="Select channel · double-click for piano roll"
+              onClick={() => {
+                app.selectTrack(track.index);
+                view.setStrip({ kind: 'track', index: track.index });
+              }}
+              onDblClick={() => {
+                app.promoteStepsToRoll(track.index);
+                view.openRoll(track.index);
+              }}
+            >
+              <span class="wv-row__name">{track.name}</span>
+            </button>
+          )}
+        </For>
+        <Show when={app.audioSources().length}>
+          <div class="wv-browser__section-label">Project audio</div>
+          <For each={app.audioSources()}>
+            {(source) => (
+              <SampleRow
+                entry={{ name: source.name, path: source.path, relPath: source.name, kind: 'file' }}
+              />
+            )}
+          </For>
+        </Show>
+      </div>
+    </>
+  );
+}
 
-/**
- * The downloadable instruments.
- *
- * Absent from most builds -- `assets()` is empty until the sampler has something
- * to fetch -- and the whole footer goes with it rather than leaving a heading
- * over nothing.
- */
 function AssetFooter(): JSX.Element {
   const app = useAppState();
+  const available = () => app.assets().filter((asset) => asset.state !== 'ready');
   return (
-    <Show when={app.assets().length > 0}>
-      <div class="wv-browser__foot">
-        <Index each={app.assets()}>
-          {(asset) => (
-            <div class="wv-asset">
-              <div class="wv-asset__row">
-                <span class="wv-asset__name" title={asset().name}>
-                  {asset().name}
-                </span>
-                <span class="wv-spacer" />
-                <Show when={asset().state === 'ready'}>
-                  <span class="wv-asset__tick" title="Installed and playable">
-                    ✓
+    <Show when={available().length}>
+      <details class="wv-browser__downloads">
+        <summary title={`${available().length} sound packs available`}>
+          <span class="wv-browser__get-sounds">
+            <IconWaveform />
+            Get more sounds
+          </span>
+          <IconCaret />
+        </summary>
+        <div class="wv-browser__download-list">
+          <For each={available()}>
+            {(asset) => (
+              <div class="wv-asset">
+                <div class="wv-asset__row">
+                  <span class="wv-asset__name" title={asset.name}>
+                    {asset.name}
+                  </span>
+                  <span class="wv-spacer" />
+                  <Show
+                    when={asset.state === 'downloading'}
+                    fallback={
+                      <button
+                        type="button"
+                        class="wv-chip"
+                        title={`Download ${asset.name} (${Math.round(asset.bytesTotal / 1_000_000)} MB)`}
+                        onClick={() => app.startAssetDownload(asset.id)}
+                      >
+                        {asset.state === 'failed' ? 'Retry' : 'Get'}
+                      </button>
+                    }
+                  >
+                    <span class="wv-row__meta">{Math.round(asset.progress * 100)}%</span>
+                  </Show>
+                </div>
+                <Show when={asset.error}>
+                  <span class="wv-asset__error" role="alert">
+                    {asset.error}
                   </span>
                 </Show>
-                <Show when={asset().state === 'downloading'}>
-                  <span class="wv-row__meta">{Math.round(asset().progress * 100)}%</span>
-                </Show>
-                <Show when={asset().state === 'absent' || asset().state === 'failed'}>
-                  <button
-                    type="button"
-                    class="wv-chip"
-                    title={
-                      asset().error ??
-                      `Download ${asset().name}${
-                        asset().bytesTotal > 0
-                          ? ` (${Math.round(asset().bytesTotal / 1_000_000)} MB)`
-                          : ''
-                      }`
-                    }
-                    onClick={() => app.startAssetDownload(asset().id)}
-                  >
-                    {asset().state === 'failed' ? 'Retry' : 'Download'}
-                  </button>
-                </Show>
               </div>
-              <Show when={asset().state === 'downloading'}>
-                <div
-                  class="wv-progress"
-                  role="progressbar"
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(asset().progress * 100)}
-                >
-                  <span
-                    class="wv-progress__fill"
-                    style={{ width: `${Math.round(asset().progress * 100)}%` }}
-                  />
-                </div>
-              </Show>
-              <Show when={asset().state === 'failed' && asset().error}>
-                {(error) => <span class="wv-asset__error">{error()}</span>}
-              </Show>
-            </div>
-          )}
-        </Index>
-      </div>
+            )}
+          </For>
+        </div>
+      </details>
     </Show>
   );
 }

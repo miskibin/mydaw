@@ -5,6 +5,7 @@
 //! is listed one level at a time, and nothing here touches the audio-source
 //! registry. Decode happens when a file is previewed or dropped on the playlist.
 
+use std::collections::VecDeque;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -66,6 +67,125 @@ pub struct LibraryEntryDto {
     pub rel_path: String,
     /// Absolute path, for drag payloads and preview.
     pub path: String,
+}
+
+/// Bounded, recursive sample search. No decoding or registry writes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySearchEntryDto {
+    pub root_name: String,
+    pub entry: LibraryEntryDto,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySearchDto {
+    pub entries: Vec<LibrarySearchEntryDto>,
+    pub truncated: bool,
+    pub unavailable_roots: Vec<String>,
+}
+
+const MAX_SEARCH_ENTRIES: usize = 50_000;
+const MAX_SEARCH_DIRS: usize = 2_000;
+const MAX_SEARCH_RESULTS: usize = 256;
+
+/// Search every root lazily, without following symlinks or junctions. The
+/// budgets bound both memory and I/O, and the response tells the UI when the
+/// search is partial instead of claiming that an unseen file does not exist.
+pub fn search(roots: &[LibraryRootDto], query: &str) -> LibrarySearchDto {
+    let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+    let mut result = LibrarySearchDto {
+        entries: Vec::new(),
+        truncated: false,
+        unavailable_roots: Vec::new(),
+    };
+    if words.is_empty() {
+        return result;
+    }
+    let mut queue = VecDeque::new();
+    for root in roots {
+        let path = PathBuf::from(&root.path);
+        if path.is_dir() {
+            queue.push_back((root, path, String::new()));
+        } else if root.kind == "extra" {
+            result.unavailable_roots.push(root.name.clone());
+        }
+    }
+    let mut visited_dirs = 0;
+    let mut visited_entries = 0;
+    'walk: while let Some((root, dir, rel)) = queue.pop_front() {
+        if visited_dirs >= MAX_SEARCH_DIRS {
+            result.truncated = true;
+            break;
+        }
+        visited_dirs += 1;
+        let Ok(children) = fs::read_dir(&dir) else {
+            if !result.unavailable_roots.contains(&root.name) {
+                result.unavailable_roots.push(root.name.clone());
+            }
+            continue;
+        };
+        for child in children.flatten() {
+            visited_entries += 1;
+            if visited_entries > MAX_SEARCH_ENTRIES {
+                result.truncated = true;
+                break 'walk;
+            }
+            let Ok(kind) = child.file_type() else {
+                continue;
+            };
+            let name = child.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') || kind.is_symlink() {
+                continue;
+            }
+            let path = child.path();
+            // Windows junctions advertise a directory type but are reparse
+            // points. Following them can leave the root or form a cycle.
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                if child
+                    .metadata()
+                    .is_ok_and(|m| m.file_attributes() & 0x400 != 0)
+                {
+                    continue;
+                }
+            }
+            let child_rel = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            if kind.is_dir() {
+                if visited_dirs + queue.len() < MAX_SEARCH_DIRS {
+                    queue.push_back((root, path, child_rel));
+                } else {
+                    result.truncated = true;
+                }
+            } else if kind.is_file() && is_audio_path(&path) {
+                let haystack = format!("{} {child_rel}", root.name).to_lowercase();
+                if words.iter().all(|word| haystack.contains(word)) {
+                    if result.entries.len() >= MAX_SEARCH_RESULTS {
+                        result.truncated = true;
+                        break 'walk;
+                    }
+                    result.entries.push(LibrarySearchEntryDto {
+                        root_name: root.name.clone(),
+                        entry: LibraryEntryDto {
+                            name,
+                            kind: "file".into(),
+                            rel_path: child_rel,
+                            path: path.to_string_lossy().into_owned(),
+                        },
+                    });
+                }
+            }
+        }
+    }
+    result
+        .entries
+        .sort_by_key(|row| row.entry.name.to_lowercase());
+    result
 }
 
 /// Why a library operation was refused.
@@ -386,6 +506,59 @@ mod tests {
 
     fn touch(dir: &Path, name: &str) {
         fs::write(dir.join(name), b"x").unwrap();
+    }
+
+    fn search_root(path: &Path) -> LibraryRootDto {
+        LibraryRootDto {
+            id: "test".into(),
+            name: "My Samples".into(),
+            kind: "extra".into(),
+            path: path.to_string_lossy().into_owned(),
+        }
+    }
+
+    #[test]
+    fn search_matches_all_words_across_nested_paths_and_ignores_non_audio() {
+        let dir = TempDir::new("search-nested");
+        let nested = dir.path().join("Drums/Żółte");
+        fs::create_dir_all(&nested).unwrap();
+        touch(&nested, "KICK.WAV");
+        touch(&nested, "kick.txt");
+        touch(dir.path(), "kick.wav");
+        let found = search(&[search_root(dir.path())], "samples drums ŻÓŁTE kick");
+        assert_eq!(found.entries.len(), 1);
+        assert_eq!(found.entries[0].entry.rel_path, "Drums/Żółte/KICK.WAV");
+        assert!(!found.truncated);
+        assert!(search(&[search_root(dir.path())], "  ").entries.is_empty());
+    }
+
+    #[test]
+    fn search_reaches_files_beyond_the_directory_listing_limit() {
+        let dir = TempDir::new("search-large");
+        for index in 0..600 {
+            touch(dir.path(), &format!("hit-{index:04}.wav"));
+        }
+        let found = search(&[search_root(dir.path())], "hit-0599");
+        assert_eq!(found.entries.len(), 1);
+        assert!(!found.truncated);
+        let bounded = search(&[search_root(dir.path())], "hit");
+        assert_eq!(bounded.entries.len(), MAX_SEARCH_RESULTS);
+        assert!(bounded.truncated);
+    }
+
+    #[test]
+    fn a_missing_user_folder_is_reported_without_hiding_other_results() {
+        let dir = TempDir::new("search-missing");
+        touch(dir.path(), "snare.wav");
+        let found = search(
+            &[
+                search_root(&dir.path().join("gone")),
+                search_root(dir.path()),
+            ],
+            "snare",
+        );
+        assert_eq!(found.entries.len(), 1);
+        assert_eq!(found.unavailable_roots, ["My Samples"]);
     }
 
     #[test]

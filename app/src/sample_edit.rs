@@ -605,7 +605,7 @@ mod tests {
 
     #[test]
     fn gain_in_db_is_the_ratio_it_says() {
-        let doubled = scale(&buffer(), db_to_linear(6.020_599_9));
+        let doubled = scale(&buffer(), db_to_linear(6.020_6));
         for (out, original) in doubled.iter().zip(buffer()) {
             assert!(
                 (out - original * 2.0).abs() < 1.0e-5,
@@ -613,7 +613,7 @@ mod tests {
                 original * 2.0
             );
         }
-        let halved = scale(&buffer(), db_to_linear(-6.020_599_9));
+        let halved = scale(&buffer(), db_to_linear(-6.020_6));
         for (out, original) in halved.iter().zip(buffer()) {
             assert!((out - original * 0.5).abs() < 1.0e-5);
         }

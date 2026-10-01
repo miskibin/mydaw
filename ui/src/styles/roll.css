@@ -11,6 +11,7 @@
   display: flex;
   flex: 1;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   background: var(--lane);
 }
@@ -45,6 +46,7 @@
 .wv-roll__host {
   position: relative;
   flex: 1;
+  min-width: 0;
   min-height: 0;
   background: var(--sunk);
 }
@@ -85,13 +87,13 @@
 .wv-roll__foot {
   display: flex;
   flex: none;
-  gap: 14px;
+  gap: 10px;
   align-items: center;
-  height: 36px;
+  min-height: 44px;
   padding: 0 12px;
   overflow-x: auto;
   background: var(--panel);
-  border-top: 1px solid var(--line);
+  border-top: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
 }
 
 .wv-roll__field {
@@ -116,4 +118,46 @@
 
 .wv-roll__fieldval.is-empty {
   color: var(--dim2);
+}
+
+.wv-roll__foot .wv-chip {
+  height: 30px;
+  gap: 6px;
+  background: var(--panel2);
+}
+.wv-roll__foot .wv-chip:hover:not(:disabled) {
+  background: var(--chip);
+}
+.wv-roll__foot .wv-chip:disabled {
+  opacity: 0.42;
+}
+.wv-roll__ops {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+.wv-roll__foot .wv-spacer {
+  min-width: 0;
+}
+.wv-roll__fieldval {
+  min-width: 28px;
+}
+@media (max-width: 1100px) {
+  .wv-roll > .wv-viewbar {
+    height: auto;
+    min-height: 40px;
+    flex-wrap: wrap;
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .wv-roll__foot {
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 6px 8px;
+    overflow-x: visible;
+  }
+  .wv-roll__ops {
+    flex-wrap: wrap;
+    gap: 5px;
+  }
 }

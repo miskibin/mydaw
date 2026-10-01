@@ -16,6 +16,14 @@
   border-left: 1px solid var(--line);
 }
 
+.wv-playlist-picker { display: flex; flex: none; flex-direction: column; width: 176px; min-height: 0; border-right: 1px solid var(--line); background: var(--panel); }
+.wv-playlist-picker__head { display: flex; align-items: center; height: 40px; flex: none; padding: 0 10px; border-bottom: 1px solid var(--line); color: var(--dim); font: 500 10px 'Geist Mono Variable'; letter-spacing: .06em; }
+.wv-playlist-picker .wv-pick { height: 38px; gap: 6px; }
+.wv-playlist-picker .wv-pick__art { width: 28px; }
+.wv-playlist-picker .wv-picker__foot { font-family: inherit; font-size: 10px; }
+.wv-playlist-picker .wv-picker__tabs { padding-left: 6px; padding-right: 6px; }
+@media (max-width: 1050px) { .wv-playlist-picker { width: 144px; } .wv-playlist-picker .wv-pick__art { display: none; } }
+
 .wv-side__head {
   display: flex;
   flex: none;

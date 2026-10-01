@@ -1,17 +1,30 @@
-/* The top bar: brand, transport, clock, tempo, play mode, views. */
+/* One row for transport, project actions and native window chrome. */
 
 .wv-top {
   display: flex;
   flex: none;
-  gap: 14px;
+  gap: 8px;
   align-items: center;
-  height: 50px;
-  padding: 0 12px;
+  height: 40px;
+  padding: 0 0 0 8px;
   background: var(--top);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
 }
 
-.wv-brand {
+.wv-top [data-tauri-drag-region],
+.wv-top[data-tauri-drag-region] {
+  app-region: drag;
+}
+.wv-top button,
+.wv-top input,
+.wv-top [role='slider'] {
+  app-region: no-drag;
+}
+.wv-top > .wv-spacer {
+  min-width: 16px;
+  align-self: stretch;
+}
+.wv-projectmenu {
   position: relative;
   display: flex;
   flex: none;
@@ -19,52 +32,26 @@
   align-items: center;
 }
 
-.wv-brand__text {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  align-items: flex-start;
-}
-
-.wv-brand__name {
-  font: 600 12.5px 'Geist Variable';
-  letter-spacing: 0.04em;
-  color: var(--txt);
-}
-
-.wv-brand__project {
-  max-width: 130px;
-  overflow: hidden;
-  font: 400 9.5px 'Geist Mono Variable';
-  color: var(--dim2);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wv-brand__project:hover {
-  color: var(--acc);
-}
-
 .wv-menu--project {
-  top: 42px;
-  left: 0;
+  top: 40px;
+  left: 8px;
   width: 200px;
 }
 
 /* --- the transport ------------------------------------------------------- */
 
 .wv-transport {
-  padding: 3px;
-  border-radius: 9px;
+  padding: 2px;
+  border-radius: 6px;
 }
 
 .wv-tbtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 26px;
-  border-radius: 6px;
+  width: 32px;
+  height: 28px;
+  border-radius: 5px;
   color: var(--dim);
 }
 
@@ -74,7 +61,7 @@
 }
 
 .wv-tbtn--play {
-  width: 32px;
+  width: 36px;
   background: var(--chip);
   color: var(--txt);
 }
@@ -204,14 +191,14 @@
 
 .wv-clock__time {
   min-width: 96px;
-  font: 500 20px/1 'Geist Mono Variable';
+  font: 500 18px/1 'Geist Mono Variable';
   color: var(--txt);
   font-variant-numeric: tabular-nums;
 }
 
 .wv-clock__bar {
-  min-width: 62px;
-  font: 400 10.5px 'Geist Mono Variable';
+  min-width: 48px;
+  font: 400 9px 'Geist Mono Variable';
   color: var(--dim);
   font-variant-numeric: tabular-nums;
 }
@@ -221,11 +208,11 @@
 .wv-meta {
   display: flex;
   flex: none;
-  gap: 16px;
+  gap: 10px;
   align-items: center;
-  height: 36px;
-  padding-left: 14px;
-  border-left: 1px solid var(--line);
+  height: 30px;
+  padding-left: 8px;
+  border-left: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
 }
 
 .wv-meta__item {
@@ -332,9 +319,9 @@
   gap: 2px;
   align-items: center;
   justify-content: center;
-  height: 38px;
+  height: 34px;
   margin-right: 2px;
-  padding: 0 10px 0 4px;
+  padding: 0 6px 0 2px;
   border-right: 1px solid var(--line);
   outline: none;
   cursor: ns-resize;
@@ -396,8 +383,8 @@
 /* Active pattern, always on the bar. */
 .wv-patselect {
   position: relative;
-  flex: none;
-  min-width: 0;
+  flex: 0 1 auto;
+  min-width: 100px;
 }
 
 .wv-patselect__btn,
@@ -406,10 +393,11 @@
   gap: 7px;
   align-items: center;
   max-width: 168px;
+  width: 100%;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
+  border-radius: 6px;
   background: var(--sunk);
   color: var(--txt);
   font: 600 11px 'Geist Variable';
@@ -440,4 +428,163 @@
   width: 220px;
   max-height: min(360px, calc(100vh - 64px));
   overflow: auto;
+}
+
+.wv-projectmenu__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+.wv-projectmenu__button:hover {
+  background: var(--chip);
+}
+.wv-history {
+  display: flex;
+  flex: none;
+  gap: 3px;
+}
+.wv-history__button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  color: var(--txt2);
+  background: var(--panel2);
+  border-radius: 5px;
+}
+.wv-history__button:hover:not(:disabled) {
+  background: var(--chip);
+}
+.wv-history__button:disabled {
+  opacity: 0.45;
+}
+.wv-tbtn > svg {
+  width: 14px;
+  height: 14px;
+}
+.wv-playmode .wv-seg__btn {
+  height: 28px;
+  min-width: 40px;
+}
+.wv-viewtabs .wv-seg__btn {
+  height: 28px;
+  padding: 0 10px;
+  letter-spacing: 0.02em;
+}
+.wv-tempo__compact {
+  min-width: 40px;
+  height: 18px;
+  color: var(--txt);
+  font: 500 12.5px 'Geist Mono Variable';
+  text-align: left;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.wv-tempo__compact:hover {
+  color: var(--acc);
+}
+.wv-settingsbtn,
+.wv-themebtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  background: var(--panel2);
+}
+.wv-settingsbtn > svg,
+.wv-themebtn > svg {
+  width: 16px;
+  height: 16px;
+}
+.wv-vol {
+  border-right-color: color-mix(in srgb, var(--line) 38%, transparent);
+}
+
+.wv-viewtabs__icon {
+  display: none;
+}
+.wv-window-controls {
+  display: flex;
+  flex: none;
+  align-self: stretch;
+  border-left: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
+}
+.wv-window-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  color: var(--dim);
+}
+.wv-window-button:hover,
+.wv-window-button:focus-visible {
+  background: var(--chip);
+  color: var(--txt);
+}
+.wv-window-button--close:hover,
+.wv-window-button--close:focus-visible {
+  background: var(--rec);
+  color: var(--ink);
+}
+
+@media (max-width: 1150px) {
+  .wv-top {
+    gap: 6px;
+  }
+  .wv-viewtabs__label,
+  .wv-viewtabs .wv-seg__hot {
+    display: none;
+  }
+  .wv-viewtabs__icon {
+    display: flex;
+  }
+  .wv-viewtabs .wv-seg__btn {
+    width: 30px;
+    padding: 0;
+  }
+  .wv-meta__signature {
+    display: none;
+  }
+  .wv-patselect__btn,
+  .wv-patselect__input {
+    max-width: 140px;
+  }
+}
+
+@media (max-width: 950px) {
+  .wv-top {
+    gap: 4px;
+  }
+  .wv-tbtn {
+    width: 28px;
+  }
+  .wv-tbtn--play {
+    width: 30px;
+  }
+  .wv-history__button {
+    width: 24px;
+  }
+  .wv-playmode .wv-seg__btn {
+    min-width: 35px;
+    padding: 0 6px;
+  }
+  .wv-window-button {
+    width: 34px;
+  }
+  .wv-clock__time {
+    min-width: 88px;
+    font-size: 16px;
+  }
+  .wv-patselect__btn,
+  .wv-patselect__input {
+    max-width: 120px;
+  }
+  .wv-top > .wv-spacer {
+    min-width: 8px;
+  }
 }

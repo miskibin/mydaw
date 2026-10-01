@@ -135,14 +135,13 @@ import {
   clampLaneHeight,
   clampZoom,
   laneHeightOf,
-  nextSnap,
-  snapLabel,
   useView,
   type Brush,
   type PlaylistTool,
 } from '../shell/view';
 import { trackColor, wash } from '../theme/tokens';
 import { onFrame } from '../ui/frameLoop';
+import { SnapSelect } from '../ui/SnapSelect';
 import { IconEraseTool, IconPaintTool, IconRewind, IconSelectTool, IconX } from '../ui/icons';
 
 /** Pixels one bar covers at zoom 1. */
@@ -539,9 +538,13 @@ export function Playlist(): ReturnType<typeof Show> {
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
+      if (event.defaultPrevented || target?.closest('[aria-label="Browser"], .wv-playlist-picker')) return;
       if (
         target &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
       ) {
         return;
       }
@@ -1292,15 +1295,7 @@ export function Playlist(): ReturnType<typeof Show> {
         >
           <IconRewind />
         </button>
-        <button
-          type="button"
-          class="wv-chip wv-chip--sunk"
-          title="What clip edges and the ruler snap to — hold alt on the ruler for none"
-          onClick={() => view.setPlaylistSnap(nextSnap(PLAYLIST_SNAPS, view.playlistSnap()))}
-        >
-          <span class="wv-chip__tag">SNAP</span>
-          {snapLabel(PLAYLIST_SNAPS, view.playlistSnap())}
-        </button>
+        <SnapSelect value={view.playlistSnap()} choices={PLAYLIST_SNAPS} onChange={view.setPlaylistSnap} label="Playlist snap" />
         <button
           type="button"
           class="wv-chip wv-chip--sunk"
@@ -1581,9 +1576,8 @@ export function Playlist(): ReturnType<typeof Show> {
           <div class="wv-pl__hint">
             <strong>The arrangement is empty.</strong>
             <span class="wv-empty__hint">
-              Click a lane with the paint tool to place the current pattern — or drag one from the
-              Picker. Afterwards, clicking any clip loads it into the brush, so the next click
-              paints the same thing. Switch the transport to SONG to hear it.
+              Select a pattern on the left, then click a lane to place it.
+              Switch to SONG and press Space to hear the arrangement.
             </span>
           </div>
         </Show>

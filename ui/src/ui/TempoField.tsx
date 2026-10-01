@@ -16,11 +16,13 @@ import { bindWheel, debounce, startDrag, WHEEL_COMMIT_MS } from './drag';
  * Dragging or scrolling the integer never rewrites `.47`. Dragging the
  * hundredths never jumps a whole beat. Double-click either side to type the
  * full tempo.
+ * The compact transport variant uses one readout, with Shift for hundredths.
  */
 export interface TempoFieldProps {
   value: () => number;
   onInput: (value: number) => void;
   onCommit?: (value: number) => void;
+  compact?: boolean;
 }
 
 export function TempoField(props: TempoFieldProps): JSX.Element {
@@ -28,6 +30,7 @@ export function TempoField(props: TempoFieldProps): JSX.Element {
   let input: HTMLInputElement | undefined;
   let unbindWhole: (() => void) | undefined;
   let unbindCents: (() => void) | undefined;
+  let unbindCompact: (() => void) | undefined;
 
   const parts = () => tempoParts(props.value());
   const display = () => quantizeBpm(props.value()).toFixed(2);
@@ -62,6 +65,7 @@ export function TempoField(props: TempoFieldProps): JSX.Element {
   onCleanup(() => {
     unbindWhole?.();
     unbindCents?.();
+    unbindCompact?.();
     commitSoon.cancel();
   });
 
@@ -106,43 +110,110 @@ export function TempoField(props: TempoFieldProps): JSX.Element {
     });
   }
 
+  function dragCompact(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    commitSoon.cancel();
+    startDrag(event, {
+      from: props.value(),
+      perPixel: 1,
+      min: MIN_BPM,
+      max: MAX_BPM,
+      axis: 'vertical',
+      fineFactor: 0.01,
+      onChange: (value) => setBpm(value, false),
+      onCommit: () => props.onCommit?.(props.value()),
+    });
+  }
+
   return (
     <Show
       when={editing()}
       fallback={
-        <div class="wv-tempo">
+        <Show
+          when={props.compact}
+          fallback={
+            <div class="wv-tempo">
+              <button
+                ref={bindWhole}
+                type="button"
+                class="wv-tempo__slide"
+                title="Whole BPM — drag or scroll by 1. Double-click to type."
+                aria-label="Tempo, whole beats per minute"
+                onPointerDown={dragWhole}
+                onDblClick={beginEdit}
+              >
+                <span class="wv-tempo__value">{parts().whole}</span>
+                <span class="wv-tempo__bar" aria-hidden="true">
+                  <span
+                    class="wv-tempo__fill"
+                    style={{ width: `${((parts().whole - MIN_BPM) / (MAX_BPM - MIN_BPM)) * 100}%` }}
+                  />
+                </span>
+              </button>
+              <button
+                ref={bindCents}
+                type="button"
+                class="wv-tempo__slide wv-tempo__slide--fine"
+                title="Hundredths of a BPM — drag or scroll by 0.01. Double-click to type."
+                aria-label="Tempo, hundredths of a beat per minute"
+                onPointerDown={dragCents}
+                onDblClick={beginEdit}
+              >
+                <span class="wv-tempo__value">.{String(parts().cents).padStart(2, '0')}</span>
+                <span class="wv-tempo__bar" aria-hidden="true">
+                  <span
+                    class="wv-tempo__fill"
+                    style={{ width: `${(parts().cents / 99) * 100}%` }}
+                  />
+                </span>
+              </button>
+            </div>
+          }
+        >
           <button
-            ref={bindWhole}
             type="button"
-            class="wv-tempo__slide"
-            title="Whole BPM — drag or scroll by 1. Double-click to type."
-            aria-label="Tempo, whole beats per minute"
-            onPointerDown={dragWhole}
+            class="wv-tempo__compact"
+            role="slider"
+            aria-label="Tempo in beats per minute"
+            aria-valuemin={MIN_BPM}
+            aria-valuemax={MAX_BPM}
+            aria-valuenow={props.value()}
+            aria-orientation="vertical"
+            title="Tempo — drag or scroll to adjust. Shift: 0.01 BPM. Double-click to type."
+            ref={(el) => {
+              unbindCompact?.();
+              unbindCompact = bindWheel(el, (notches, event) => {
+                setBpm(props.value() + notches * (event.shiftKey ? 0.01 : 1), false);
+                commitSoon();
+              });
+            }}
+            onPointerDown={dragCompact}
             onDblClick={beginEdit}
+            onKeyDown={(event) => {
+              const delta =
+                event.key === 'ArrowUp' || event.key === 'ArrowRight'
+                  ? 1
+                  : event.key === 'ArrowDown' || event.key === 'ArrowLeft'
+                    ? -1
+                    : event.key === 'PageUp'
+                      ? 10
+                      : event.key === 'PageDown'
+                        ? -10
+                        : 0;
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                event.stopPropagation();
+                beginEdit();
+              } else if (delta) {
+                event.preventDefault();
+                event.stopPropagation();
+                setBpm(props.value() + delta * (event.shiftKey ? 0.01 : 1), true);
+              }
+            }}
           >
-            <span class="wv-tempo__value">{parts().whole}</span>
-            <span class="wv-tempo__bar" aria-hidden="true">
-              <span
-                class="wv-tempo__fill"
-                style={{ width: `${((parts().whole - MIN_BPM) / (MAX_BPM - MIN_BPM)) * 100}%` }}
-              />
-            </span>
+            {parts().cents === 0 ? parts().whole : display()}
           </button>
-          <button
-            ref={bindCents}
-            type="button"
-            class="wv-tempo__slide wv-tempo__slide--fine"
-            title="Hundredths of a BPM — drag or scroll by 0.01. Double-click to type."
-            aria-label="Tempo, hundredths of a beat per minute"
-            onPointerDown={dragCents}
-            onDblClick={beginEdit}
-          >
-            <span class="wv-tempo__value">.{String(parts().cents).padStart(2, '0')}</span>
-            <span class="wv-tempo__bar" aria-hidden="true">
-              <span class="wv-tempo__fill" style={{ width: `${(parts().cents / 99) * 100}%` }} />
-            </span>
-          </button>
-        </div>
+        </Show>
       }
     >
       <input

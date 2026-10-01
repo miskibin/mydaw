@@ -482,6 +482,21 @@ export interface LibraryEntryDto {
   path: string;
 }
 
+export interface LibrarySearchDto {
+  entries: { rootName: string; entry: LibraryEntryDto }[];
+  truncated: boolean;
+  unavailableRoots: string[];
+}
+
+export interface BrowserPreviewDto {
+  path: string;
+  durationSeconds: number;
+  sampleRate: number;
+  peaks: [number, number][];
+  /** Waveform and audition cover at most the first 15 seconds. */
+  truncated: boolean;
+}
+
 /**
  * A source's waveform at the resolution that was asked for: one `[min, max]`
  * pair per bin, over **both** channels, so the outer bound never hides a

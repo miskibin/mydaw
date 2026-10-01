@@ -306,6 +306,9 @@ impl EffectRegistry {
     /// Two effects want something that is not a knob: the EQ its hold-to-solo
     /// band, and the compressor its key source and the bus that carries the key
     /// signals. Everything else ignores both.
+    // These are independent RT services owned by the shell; keep the factory
+    // signature aligned with its graph builder rather than hiding ownership.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_in_chain(
         &self,
         type_id: &str,

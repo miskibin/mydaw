@@ -7,10 +7,7 @@
  *
  * ## PAT / SONG lives here, next to the transport
  *
- * Opening Playlist switches to SONG; opening Rack switches to PAT. Mixer
- * leaves the mode alone so you can mix the arrangement or the pattern without
- * the view change stopping playback. The toggle is still here for an override
- * on the current view.
+ * Editor navigation leaves playback alone. The toggle chooses what plays.
  */
 
 import { Show, createSignal, onCleanup } from 'solid-js';
@@ -27,7 +24,10 @@ import {
   IconStop,
   IconSun,
   IconTypingKeyboard,
-  WaveMark,
+  IconRoll,
+  IconUndo,
+  IconView,
+  IconCaret,
 } from '../ui/icons';
 import { barsBeats, samplesToTicks, ticksToSamples } from '../lib/pattern';
 import { foldToLoop } from '../lib/timeline';
@@ -35,12 +35,13 @@ import { midiKeyFor, noteName, clampOctave } from '../lib/keyboard';
 import { formatTimecode } from '../lib/playhead';
 import { useAppState } from '../state';
 import { useTheme } from '../theme/ThemeProvider';
-import { useView, type MainView } from './view';
+import { useView } from './view';
 import { MasterVolume } from './MasterVolume';
 import { PatternSelector } from './PatternSelector';
 import { RecordControl } from './RecordControl';
+import { WindowControls } from './WindowControls';
 
-const VIEWS: readonly [MainView, string, string][] = [
+const VIEWS: readonly ['playlist' | 'rack' | 'mixer', string, string][] = [
   ['playlist', 'PLAYLIST', 'F5'],
   ['rack', 'RACK', 'F6'],
   ['mixer', 'MIXER', 'F9'],
@@ -52,6 +53,22 @@ export function TopBar(): ReturnType<typeof Show> {
   const theme = useTheme();
 
   const [projectMenu, setProjectMenu] = createSignal(false);
+  const undoLabel = () => {
+    app.undoRevision();
+    return app.undo.undoLabel();
+  };
+  const redoLabel = () => {
+    app.undoRevision();
+    return app.undo.redoLabel();
+  };
+
+  function toggleTypingKeyboard(): void {
+    view.setTypingKeyboard((on) => !on);
+    app.say(
+      'Typing keyboard',
+      view.typingKeyboard() ? `Q is ${noteName(midiKeyFor('KeyQ', app.octave()) ?? 60)}` : 'off',
+    );
+  }
 
   let clockEl: HTMLSpanElement | undefined;
   let barEl: HTMLSpanElement | undefined;
@@ -80,25 +97,24 @@ export function TopBar(): ReturnType<typeof Show> {
   });
 
   return (
-    <header class="wv-top">
-      <div class="wv-brand">
-        <WaveMark />
-        <div class="wv-brand__text">
-          <span class="wv-brand__name">WAVE</span>
-          <Show when={view.wideBar()}>
-            <button
-              type="button"
-              class="wv-brand__project"
-              title="Project — New, Open, Save"
-              onClick={() => setProjectMenu((open) => !open)}
-            >
-              {app.project().name}
-            </button>
-          </Show>
-        </div>
+    <header class="wv-top" data-tauri-drag-region>
+      <div class="wv-projectmenu">
+        <button
+          type="button"
+          class="wv-projectmenu__button"
+          aria-label={`Project and playback options: ${app.project().name}`}
+          aria-expanded={projectMenu()}
+          title={`${app.project().name} — project and playback options`}
+          onClick={() => setProjectMenu((open) => !open)}
+        >
+          File <IconCaret />
+        </button>
         <Show when={projectMenu()}>
           <div class="wv-scrim" onClick={() => setProjectMenu(false)}>
             <div class="wv-menu wv-menu--project" onClick={(event) => event.stopPropagation()}>
+              <div class="wv-menu__heading" title={app.project().name}>
+                {app.project().name}
+              </div>
               <button
                 type="button"
                 class="wv-menu__row"
@@ -107,7 +123,8 @@ export function TopBar(): ReturnType<typeof Show> {
                   app.newProject();
                 }}
               >
-                New<span class="wv-spacer" />
+                New
+                <span class="wv-spacer" />
                 <span class="wv-menu__meta">Ctrl+N</span>
               </button>
               <button
@@ -118,7 +135,8 @@ export function TopBar(): ReturnType<typeof Show> {
                   app.openProject();
                 }}
               >
-                Open…<span class="wv-spacer" />
+                Open…
+                <span class="wv-spacer" />
                 <span class="wv-menu__meta">Ctrl+O</span>
               </button>
               <button
@@ -129,7 +147,8 @@ export function TopBar(): ReturnType<typeof Show> {
                   app.saveProject();
                 }}
               >
-                Save<span class="wv-spacer" />
+                Save
+                <span class="wv-spacer" />
                 <span class="wv-menu__meta">Ctrl+S</span>
               </button>
               <button
@@ -140,8 +159,35 @@ export function TopBar(): ReturnType<typeof Show> {
                   app.saveProjectAs();
                 }}
               >
-                Save As…<span class="wv-spacer" />
+                Save As…
+                <span class="wv-spacer" />
                 <span class="wv-menu__meta">Ctrl+Shift+S</span>
+              </button>
+              <div class="wv-menu__rule" />
+              <button
+                type="button"
+                class="wv-menu__row"
+                aria-pressed={app.looping()}
+                title="Repeat the song arrangement when it reaches the end"
+                onClick={() => app.setLoop(!app.looping())}
+              >
+                <IconLoop /> Loop song <span class="wv-spacer" />
+                <span class="wv-menu__meta">{app.looping() ? 'On' : 'Off'}</span>
+              </button>
+              <button
+                type="button"
+                class="wv-menu__row"
+                aria-pressed={view.typingKeyboard()}
+                title="Typing keyboard to piano (Ctrl+T). Scroll to change octave."
+                onClick={toggleTypingKeyboard}
+                ref={(el) =>
+                  onCleanup(
+                    bindWheel(el, (notches) => app.setOctave(clampOctave(app.octave() + notches))),
+                  )
+                }
+              >
+                <IconTypingKeyboard /> Typing keyboard <span class="wv-spacer" />
+                <span class="wv-menu__meta">{view.typingKeyboard() ? 'On' : 'Off'}</span>
               </button>
             </div>
           </div>
@@ -172,85 +218,65 @@ export function TopBar(): ReturnType<typeof Show> {
           <IconStop />
         </button>
         <RecordControl />
+      </div>
+
+      <div class="wv-history" aria-label="Edit history">
         <button
           type="button"
-          class="wv-tbtn"
-          classList={{ 'is-active': app.looping() }}
-          aria-pressed={app.looping()}
-          title={
-            app.looping()
-              ? 'Song loop on — SONG repeats the arrangement. Click to play it once and stop.'
-              : 'Song loop off — SONG plays to the end of the last clip and stops. Click to repeat it.'
-          }
-          onClick={() => app.setLoop(!app.looping())}
+          class="wv-history__button"
+          disabled={!undoLabel()}
+          aria-label="Undo"
+          title={undoLabel() ? `Undo ${undoLabel()} (Ctrl+Z)` : 'Nothing to undo'}
+          onClick={() => app.undoLast()}
         >
-          <IconLoop />
+          <IconUndo />
         </button>
         <button
           type="button"
-          class="wv-tbtn"
-          classList={{ 'is-active': view.typingKeyboard() }}
-          aria-pressed={view.typingKeyboard()}
-          title={
-            view.typingKeyboard()
-              ? `Typing keyboard on (Ctrl+T) — Q is ${noteName(midiKeyFor('KeyQ', app.octave()) ?? 60)}, 2 is the sharp, W is D. Scroll to change octave.`
-              : 'Typing keyboard to piano (Ctrl+T) — Q is C4, 2 is C#4, W is D4, Z is C3'
-          }
-          onClick={() => {
-            view.setTypingKeyboard((on) => !on);
-            app.say(
-              'Typing keyboard',
-              view.typingKeyboard()
-                ? `Q is ${noteName(midiKeyFor('KeyQ', app.octave()) ?? 60)}`
-                : 'off',
-            );
-          }}
-          ref={(el) =>
-            // bindWheel, per drag.ts's rule: a JSX onWheel may end up passive
-            // and its preventDefault a silent no-op.
-            onCleanup(
-              bindWheel(el, (notches) => {
-                app.setOctave(clampOctave(app.octave() + notches));
-              }),
-            )
-          }
+          class="wv-history__button"
+          disabled={!redoLabel()}
+          aria-label="Redo"
+          title={redoLabel() ? `Redo ${redoLabel()} (Ctrl+Shift+Z)` : 'Nothing to redo'}
+          onClick={() => app.redoLast()}
         >
-          <IconTypingKeyboard />
+          <IconUndo redo />
         </button>
       </div>
 
-      <div class="wv-clock">
-        <span class="wv-clock__time" ref={clockEl}>
+      <div class="wv-clock" data-tauri-drag-region>
+        <span class="wv-clock__time" ref={clockEl} data-tauri-drag-region>
           00:00.000
         </span>
         <Show when={view.wideBar()}>
-          <span class="wv-clock__bar" ref={barEl}>
+          <span class="wv-clock__bar" ref={barEl} data-tauri-drag-region>
             001.1.1
           </span>
         </Show>
       </div>
 
-      <Show when={view.wideBar()}>
-        <div class="wv-meta">
-          <div class="wv-meta__item">
-            <TempoField
-              value={app.bpm}
-              onInput={(value) => app.setBpm(value)}
-            />
-            <span class="wv-meta__tag">BPM</span>
-          </div>
-          <div class="wv-meta__item" title="The engine's grid is 4/4; other signatures are not implemented yet">
-            <span class="wv-meta__value wv-disabled">4/4</span>
-            <span class="wv-meta__tag">SIG</span>
-          </div>
+      <div class="wv-meta">
+        <div class="wv-meta__item">
+          <TempoField compact value={app.bpm} onInput={(value) => app.setBpm(value)} />
+          <span class="wv-meta__tag">BPM</span>
         </div>
-      </Show>
+        <div
+          class="wv-meta__item wv-meta__signature"
+          title="The engine's grid is 4/4; other signatures are not implemented yet"
+        >
+          <span class="wv-meta__value wv-disabled">4/4</span>
+          <span class="wv-meta__tag">SIG</span>
+        </div>
+      </div>
 
-      <div class="wv-seg" title="What the transport plays. Playlist switches to SONG, Rack to PAT; Mixer leaves it.">
+      <div
+        class="wv-seg wv-playmode"
+        title="Choose what plays: the current pattern or the whole song. Opening an editor keeps this mode."
+      >
         <button
           type="button"
           class="wv-seg__btn wv-seg__btn--mode"
           classList={{ 'is-active': app.playMode() === 'pat' }}
+          aria-pressed={app.playMode() === 'pat'}
           onClick={() => app.setPlayMode('pat')}
         >
           PAT
@@ -259,6 +285,7 @@ export function TopBar(): ReturnType<typeof Show> {
           type="button"
           class="wv-seg__btn wv-seg__btn--mode"
           classList={{ 'is-active': app.playMode() === 'song' }}
+          aria-pressed={app.playMode() === 'song'}
           onClick={() => app.setPlayMode('song')}
         >
           SONG
@@ -267,25 +294,54 @@ export function TopBar(): ReturnType<typeof Show> {
 
       <PatternSelector />
 
-      <div class="wv-spacer" />
+      <div class="wv-spacer" data-tauri-drag-region />
 
       <MasterVolume />
 
-      <div class="wv-seg">
+      <div class="wv-seg wv-viewtabs">
         {VIEWS.map(([id, label, hotkey]) => (
           <button
             type="button"
             class="wv-seg__btn"
             classList={{ 'is-active': view.view() === id && !view.rollOpen() }}
+            title={`${label} (${hotkey})`}
+            aria-label={`${label} (${hotkey})`}
             onClick={() => view.go(id)}
           >
-            {label}
+            <span class="wv-viewtabs__icon">
+              <IconView kind={id} />
+            </span>
+            <span class="wv-viewtabs__label">{label}</span>
             <span class="wv-seg__hot">{hotkey}</span>
           </button>
         ))}
+        <button
+          type="button"
+          class="wv-seg__btn"
+          classList={{ 'is-active': view.rollOpen() }}
+          title="Piano roll (F7)"
+          aria-label="Piano roll (F7)"
+          onClick={() => {
+            if (view.rollOpen()) view.closeRoll();
+            else {
+              const channel = app.mixer()?.selected ?? 0;
+              app.promoteStepsToRoll(channel);
+              view.openRoll(channel);
+            }
+          }}
+        >
+          <IconRoll />
+          <span class="wv-seg__hot">F7</span>
+        </button>
       </div>
 
-      <button type="button" class="wv-settingsbtn" title="Open settings" aria-label="Open settings" onClick={() => view.go('settings')}>
+      <button
+        type="button"
+        class="wv-settingsbtn"
+        title="Open settings"
+        aria-label="Open settings"
+        onClick={() => view.go('settings')}
+      >
         <IconSettings />
       </button>
 
@@ -299,6 +355,7 @@ export function TopBar(): ReturnType<typeof Show> {
           <IconSun />
         </Show>
       </button>
+      <WindowControls />
     </header>
   );
 }

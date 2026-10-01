@@ -145,6 +145,8 @@ export interface AppState {
   vst3Plugins: Accessor<Vst3PluginInfoDto[]>;
   scanning: Accessor<boolean>;
   project: Accessor<ProjectInfo>;
+  /** Changes only when a different session is created or opened. */
+  projectRevision: Accessor<number>;
   streamInfo: Accessor<StreamInfo | undefined>;
   refreshStreamInfo(): Promise<void>;
   assets: Accessor<AssetStatus[]>;
@@ -333,6 +335,7 @@ function createAppState(): AppState {
   const [vst3Plugins, setVst3Plugins] = createSignal<Vst3PluginInfoDto[]>([]);
   const [scanning, setScanning] = createSignal(false);
   const [project, setProject] = createSignal<ProjectInfo>(UNTITLED_PROJECT);
+  const [projectRevision, setProjectRevision] = createSignal(0);
   const [streamInfo, setStreamInfo] = createSignal<StreamInfo>();
   const [assets, setAssets] = createSignal<AssetStatus[]>([]);
   const [playing, setPlaying] = createSignal(false);
@@ -920,6 +923,7 @@ function createAppState(): AppState {
       undo.clear();
       setUndoRevision(undo.revision);
       await refresh();
+      if (label === 'new' || label === 'opened') setProjectRevision((revision) => revision + 1);
       say('Project', `${label} ${info.name}`);
       for (const warning of info.warnings) console.warn('[mydaw]', warning);
       if (info.warnings.length > 0) setKernelError(info.warnings.join(' · '));
@@ -1003,10 +1007,11 @@ function createAppState(): AppState {
   // a user means from anywhere.
 
   function onAccelerator(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
     const typing =
       target !== null &&
-      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable);
     if ((event.ctrlKey || event.metaKey) && !event.altKey) {
       const key = event.key.toLowerCase();
       if (key === 'n') {
@@ -1036,7 +1041,8 @@ function createAppState(): AppState {
         return;
       }
     }
-    if (event.code === 'Space' && !typing && !event.ctrlKey && !event.metaKey) {
+    const controlOwnsSpace = target?.closest('button, [role="button"], [role="slider"], [role="menuitem"]');
+    if (event.code === 'Space' && !typing && !controlOwnsSpace && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
       togglePlay();
     }
@@ -1139,6 +1145,7 @@ function createAppState(): AppState {
     vst3Plugins,
     scanning,
     project,
+    projectRevision,
     streamInfo,
     refreshStreamInfo,
     assets,

@@ -23,6 +23,12 @@ describe('browser width', () => {
     expect(maxBrowserWidth(900, false)).toBe(MAX_BROWSER_WIDTH);
   });
 
+  it('also reserves the left pattern picker in the playlist', () => {
+    expect(maxBrowserWidth(900, false, true)).toBe(406);
+    expect(maxBrowserWidth(1280, true, true)).toBe(420);
+    expect(clampBrowserWidth(420, 900, false, true)).toBe(406);
+  });
+
   it('never shrinks below the usable browser minimum', () => {
     expect(maxBrowserWidth(600, true)).toBe(MIN_BROWSER_WIDTH);
     expect(clampBrowserWidth(20, 1_600, true)).toBe(MIN_BROWSER_WIDTH);

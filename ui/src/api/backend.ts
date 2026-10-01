@@ -10,6 +10,8 @@ import type {
   InsertTarget,
   LibraryEntryDto,
   LibraryRootDto,
+  LibrarySearchDto,
+  BrowserPreviewDto,
   MeterFrame,
   MixerState,
   PatternDto,
@@ -424,6 +426,9 @@ export interface Backend {
   addLibraryFolder(): Promise<LibraryRootDto[] | null>;
   removeLibraryFolder(id: string): Promise<LibraryRootDto[]>;
   listLibraryDir(rootId: string, relPath: string): Promise<LibraryEntryDto[]>;
+  searchLibrary(query: string): Promise<LibrarySearchDto>;
+  previewBrowserFile(path: string, audition: boolean): Promise<BrowserPreviewDto>;
+  stopBrowserPreview(): Promise<void>;
   /** Audition a file without loading it into the project. */
   previewAudioFile(path: string): Promise<void>;
   /** Audition an audio-file channel with its current region, pitch and fades. */
@@ -1056,6 +1061,18 @@ class TauriBackend implements Backend {
 
   listLibraryDir(rootId: string, relPath: string): Promise<LibraryEntryDto[]> {
     return this.call('list_library_dir', { rootId, relPath });
+  }
+
+  searchLibrary(query: string): Promise<LibrarySearchDto> {
+    return this.call('search_library', { query });
+  }
+
+  previewBrowserFile(path: string, audition: boolean): Promise<BrowserPreviewDto> {
+    return this.call('preview_browser_file', { path, audition });
+  }
+
+  stopBrowserPreview(): Promise<void> {
+    return this.call('stop_browser_preview');
   }
 
   previewAudioFile(path: string): Promise<void> {

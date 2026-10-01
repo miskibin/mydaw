@@ -162,6 +162,25 @@ export function Knob(props: KnobProps): ReturnType<typeof Show> {
     props.onCommit?.(props.def.defaultValue);
   }
 
+  function onKeyDown(event: KeyboardEvent): void {
+    if (props.disabled) return;
+    let next: number;
+    if (event.key === 'Home') next = props.def.min;
+    else if (event.key === 'End') next = props.def.max;
+    else {
+      const direction = ['ArrowUp', 'ArrowRight', 'PageUp'].includes(event.key) ? 1
+        : ['ArrowDown', 'ArrowLeft', 'PageDown'].includes(event.key) ? -1 : 0;
+      if (!direction) return;
+      const scale = event.shiftKey ? FINE_FACTOR : event.key.startsWith('Page') ? 5 : 1;
+      next = fromNormalised(props.def, toNormalised(props.def, props.value()) + direction * scale * WHEEL_NORMALISED_STEP);
+      if (next === props.value() && props.def.step) next = snapToStep(props.def, next + direction * props.def.step);
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    apply(next);
+    props.onCommit?.(next);
+  }
+
   function onWheel(notches: number, event: WheelEvent): void {
     if (props.disabled) return;
     const current = props.value();
@@ -223,10 +242,17 @@ export function Knob(props: KnobProps): ReturnType<typeof Show> {
         fallback={
           <button
             type="button"
-            class="wv-param__switch"
+          class="wv-param__switch"
+            aria-label={`${props.owner} ${props.label ?? props.def.name}`}
             classList={{ 'is-on': props.value() > props.def.min }}
             disabled={props.disabled}
             onPointerDown={onPointerDown}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault(); event.stopPropagation();
+              const next = switchValue((switchIndex() + 1) % switchPositions(props.def));
+              apply(next); props.onCommit?.(next);
+            }}
           >
             {reading()}
           </button>
@@ -234,9 +260,19 @@ export function Knob(props: KnobProps): ReturnType<typeof Show> {
       >
         <span
           class="wv-knob"
+          role="slider"
+          tabindex={props.disabled ? -1 : 0}
+          aria-label={`${props.owner} ${props.label ?? props.def.name}`}
+          aria-valuemin={props.def.min}
+          aria-valuemax={props.def.max}
+          aria-valuenow={props.value()}
+          aria-valuetext={reading()}
+          aria-disabled={props.disabled ?? false}
+          aria-orientation="vertical"
           style={{ width: `${size()}px`, height: `${size()}px` }}
           onPointerDown={onPointerDown}
           onDblClick={onDoubleClick}
+          onKeyDown={onKeyDown}
         >
           <span
             class="wv-knob__pointer"

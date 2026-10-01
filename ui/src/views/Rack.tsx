@@ -279,7 +279,6 @@ export function Rack(): ReturnType<typeof Show> {
 
   function selectChannel(index: number): void {
     view.setStrip({ kind: 'track', index });
-    view.setSideOpen(true);
     view.setSideTab('inspector');
     app.selectTrack(index);
   }
@@ -769,7 +768,7 @@ export function Rack(): ReturnType<typeof Show> {
   );
 }
 
-/** One channel: LED, name, volume, its lane, the mode button, delete. */
+/** Keep channel controls visible while scrolling a long pattern. */
 function RackRow(props: {
   track: TrackDto;
   pattern: PatternDto | undefined;
@@ -795,8 +794,11 @@ function RackRow(props: {
   /** Always a full lane -- see `stepCells` for the three ways a clip arrives. */
   const steps = () => stepCells(clip(), shown());
   const [localDb, setLocalDb] = createSignal<number | null>(null);
+  const [localPan, setLocalPan] = createSignal<number | null>(null);
   const [replaceOver, setReplaceOver] = createSignal(false);
   const gainDb = () => localDb() ?? props.track.gainDb;
+  const pan = () => localPan() ?? props.track.pan;
+  const panDef = spec('pan', 'Pan', '', -1, 1, 0);
   const volumeDef = () =>
     spec(
       'volume',
@@ -814,6 +816,15 @@ function RackRow(props: {
 
   function commitGain(): void {
     void app.mixerCommand((backend) => backend.getTracks()).finally(() => setLocalDb(null));
+  }
+
+  function setPan(value: number): void {
+    setLocalPan(value);
+    void app.backend.setTrackPan(props.track.index, value).catch(app.report);
+  }
+
+  function commitPan(): void {
+    void app.mixerCommand((backend) => backend.getTracks()).finally(() => setLocalPan(null));
   }
 
   let laneEl: HTMLDivElement | undefined;
@@ -904,9 +915,11 @@ function RackRow(props: {
       <Show when={replaceOver()}>
         <span class="wv-chrow__replace">REPLACE {props.track.name}</span>
       </Show>
+      <div class="wv-chrow__controls">
       <button
         type="button"
         class="wv-led"
+        aria-label={`${props.track.muted ? 'Unmute' : 'Mute'} ${props.track.name}`}
         classList={{ 'is-muted': props.track.muted }}
         style={{ background: props.track.muted ? 'transparent' : colour() }}
         title={
@@ -957,6 +970,18 @@ function RackRow(props: {
 
       <div class="wv-chrow__vol" onClick={(event) => event.stopPropagation()}>
         <Knob
+          def={panDef}
+          value={pan}
+          onInput={setPan}
+          onCommit={commitPan}
+          owner={props.track.name}
+          size={22}
+          color={colour()}
+          title="Channel pan — double-click to centre"
+        />
+      </div>
+      <div class="wv-chrow__vol" onClick={(event) => event.stopPropagation()}>
+        <Knob
           def={volumeDef()}
           value={gainDb}
           onInput={setGain}
@@ -981,6 +1006,7 @@ function RackRow(props: {
         ↪
       </button>
 
+      </div>
       <div class="wv-chrow__lane" ref={laneEl} style={{ width: `${laneWidth(shown())}px` }}>
         <Show
           when={!isAudioClipChannel(props.track)}
@@ -1052,11 +1078,20 @@ function RackRow(props: {
                       : undefined,
                   }}
                   title={`Step ${index + 1} — drag to paint, shift-drag for an accent`}
+                  aria-label={`${props.track.name} step ${index + 1}`}
+                  aria-pressed={cell().on}
                   onPointerDown={(event) => {
                     event.stopPropagation();
                     beginPaint(event, index, cell().on);
                   }}
                   onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    event.preventDefault(); event.stopPropagation();
+                    app.startPatternGesture(cell().on ? 'Erase step' : 'Add step');
+                    props.onPaintStep(index, !cell().on, event.shiftKey);
+                    app.commitPatternGesture();
+                  }}
                 />
               );
             }}

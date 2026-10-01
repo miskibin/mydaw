@@ -223,6 +223,12 @@ function Picker(): JSX.Element {
   );
 }
 
+/** The FL-style picker belongs beside the arrangement, within easy reach of
+ * the lanes. The optional right panel remains available for the inspector. */
+export function PlaylistPicker(): JSX.Element {
+  return <aside class="wv-playlist-picker" aria-label="Playlist picker"><div class="wv-playlist-picker__head">PATTERNS & AUDIO</div><Picker /></aside>;
+}
+
 /** Load a brush and arm the paint tool. Does not change the main view. */
 function useBrushClick(): (brush: { kind: 'pattern' | 'audio'; id: number }) => void {
   const view = useView();

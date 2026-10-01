@@ -24,7 +24,7 @@ use crate::effects::{EffectInfoDto, InsertReadoutsDto, InsertTarget, ParamValueD
 use crate::ipc_bench::{
     self, BenchPayload, BenchReport, BenchRunInput, EpochSample, EpochSync, StreamConfig,
 };
-use crate::library::{self, LibraryEntryDto, LibraryRootDto};
+use crate::library::{self, LibraryEntryDto, LibraryRootDto, LibrarySearchDto};
 use crate::preview::SourcePreviewDto;
 use crate::preview_settings::{self, PreviewSettings};
 use crate::project::{
@@ -1621,6 +1621,18 @@ pub fn list_library_dir(
     library::list_dir(std::path::Path::new(&root.path), &rel_path).map_err(|err| err.to_string())
 }
 
+/// Filesystem work runs on the blocking pool, never the window or audio thread.
+#[tauri::command]
+pub async fn search_library(
+    app: tauri::AppHandle,
+    query: String,
+) -> Result<LibrarySearchDto, String> {
+    let roots = get_library_roots(app);
+    tauri::async_runtime::spawn_blocking(move || library::search(&roots, &query))
+        .await
+        .map_err(|err| err.to_string())
+}
+
 /// Longest OS-dropped file the webview may hand over, in bytes. The bytes
 /// travel in one JSON IPC message; past this the message stalls the webview.
 const MAX_IMPORT_BYTES: usize = 100 * 1024 * 1024;
@@ -1698,6 +1710,34 @@ pub fn preview_audio_file(state: State<'_, AppState>, path: String) -> Result<()
     state
         .preview_audio_file(std::path::Path::new(&path))
         .map_err(|err| err.to_string())
+}
+
+/// Decode once for both the Browser waveform and its independent audition.
+#[tauri::command]
+pub async fn preview_browser_file(
+    state: State<'_, AppState>,
+    path: String,
+    audition: bool,
+) -> Result<crate::file_preview::BrowserPreviewDto, String> {
+    let bus = std::sync::Arc::clone(state.tracks().file_preview());
+    let request = bus.begin_request();
+    tauri::async_runtime::spawn_blocking(move || {
+        bus.browser_preview(std::path::Path::new(&path), audition, request)
+            .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+/// Stop sample audition without pausing the song or changing its playhead.
+#[tauri::command]
+pub fn stop_browser_preview(state: State<'_, AppState>) -> Result<(), String> {
+    let bus = state.tracks().file_preview();
+    match bus.stop() {
+        Ok(()) => Ok(()),
+        Err(_) if !bus.is_open() => Ok(()),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 /// Audition an audio-file channel with its current region, pitch and fades.

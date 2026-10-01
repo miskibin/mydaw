@@ -17,6 +17,7 @@
 //! transparent while idle. A new preview replaces the current one.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use mydaw_audio_file::{cubic, decode_stereo, taps, DecodeError, CHANNELS};
@@ -54,6 +55,18 @@ pub struct FilePreviewBus {
     /// Linear fraction of master, `0..=1`. Shared with the RT node so a Settings
     /// drag is heard on the next block, the same way a fader is.
     gain: Arc<AtomicF32>,
+    request: AtomicU64,
+}
+
+/// The waveform is of the bounded preview, not a registered project source.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserPreviewDto {
+    pub path: String,
+    pub duration_seconds: f64,
+    pub sample_rate: f64,
+    pub peaks: Vec<[f32; 2]>,
+    pub truncated: bool,
 }
 
 impl Default for FilePreviewBus {
@@ -68,6 +81,7 @@ impl FilePreviewBus {
         Self {
             sender: Mutex::new(None),
             gain: Arc::new(AtomicF32::new(DEFAULT_PREVIEW_GAIN)),
+            request: AtomicU64::new(0),
         }
     }
 
@@ -102,6 +116,7 @@ impl FilePreviewBus {
 
     /// Forget the current stream's channel. Called when audio stops.
     pub fn close(&self) {
+        self.begin_request();
         *self.sender.lock() = None;
     }
 
@@ -110,8 +125,10 @@ impl FilePreviewBus {
     /// # Errors
     /// A decode failure, or [`AudioIoError::NotRunning`] when no stream is open.
     pub fn play(&self, path: &Path) -> Result<(), PreviewFileError> {
+        let request = self.begin_request();
         let source = decode_preview(path)?;
-        self.play_source(source)
+        self.install_checked(Some(Arc::new(source)), Some(request))?;
+        Ok(())
     }
 
     /// Play an already-decoded take. Replaces whatever was previewing.
@@ -119,8 +136,39 @@ impl FilePreviewBus {
     /// # Errors
     /// [`AudioIoError::NotRunning`] when no stream is open, or a full queue.
     pub fn play_source(&self, source: AudioSource) -> Result<(), PreviewFileError> {
-        self.install(Some(Arc::new(source)))?;
+        let request = self.begin_request();
+        self.install_checked(Some(Arc::new(source)), Some(request))?;
         Ok(())
+    }
+
+    /// Reserve before dispatching disk work so an older decode cannot interrupt
+    /// a newer click, an instrument preview, or a Stop gesture.
+    pub fn begin_request(&self) -> u64 {
+        self.request.fetch_add(1, Ordering::SeqCst).wrapping_add(1)
+    }
+
+    pub fn browser_preview(
+        &self,
+        path: &Path,
+        audition: bool,
+        request: u64,
+    ) -> Result<BrowserPreviewDto, PreviewFileError> {
+        let source = decode_preview(path)?;
+        let dto = BrowserPreviewDto {
+            path: path.to_string_lossy().into_owned(),
+            duration_seconds: source.seconds(),
+            sample_rate: source.sample_rate(),
+            peaks: source
+                .waveform(256)
+                .into_iter()
+                .map(|(min, max)| [min, max])
+                .collect(),
+            truncated: source.seconds() >= PREVIEW_MAX_SECONDS,
+        };
+        if audition {
+            self.install_checked(Some(Arc::new(source)), Some(request))?;
+        }
+        Ok(dto)
     }
 
     /// Cut the current preview.
@@ -128,7 +176,8 @@ impl FilePreviewBus {
     /// # Errors
     /// [`AudioIoError::NotRunning`] when no stream is open.
     pub fn stop(&self) -> Result<(), PreviewFileError> {
-        self.install(None)?;
+        let request = self.begin_request();
+        self.install_checked(None, Some(request))?;
         Ok(())
     }
 
@@ -137,8 +186,16 @@ impl FilePreviewBus {
         self.sender.lock().is_some()
     }
 
+    #[cfg(test)]
     fn install(&self, msg: PreviewMsg) -> Result<(), SourceError> {
+        self.install_checked(msg, None)
+    }
+
+    fn install_checked(&self, msg: PreviewMsg, request: Option<u64>) -> Result<(), SourceError> {
         let mut guard = self.sender.lock();
+        if request.is_some_and(|id| id != self.request.load(Ordering::SeqCst)) {
+            return Ok(());
+        }
         let sender = guard.as_mut().ok_or(AudioIoError::NotRunning)?;
         let owned = Owned::new(&sender.gc, msg);
         sender.tx.push(owned).map_err(|err| match err {
@@ -295,6 +352,61 @@ mod tests {
 
     const SR: f64 = 48_000.0;
     const BLOCK: usize = 256;
+
+    #[test]
+    fn a_slow_old_decode_cannot_replace_a_newer_preview() {
+        let collector = Collector::new();
+        let bus = Arc::new(FilePreviewBus::new());
+        let mut node = bus.open(collector.handle());
+        bus.set_gain(1.0);
+        let older = bus.begin_request();
+        let newer = bus.begin_request();
+        let voice = |level| {
+            Arc::new(AudioSource::from_stereo(
+                0,
+                Path::new("hit.wav"),
+                SR,
+                vec![level; 2_000 * CHANNELS],
+            ))
+        };
+        bus.install_checked(Some(voice(0.2)), Some(newer)).unwrap();
+        bus.install_checked(Some(voice(0.8)), Some(older)).unwrap();
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, TransportSnapshot::default());
+        node.process(&mut ctx);
+        let peak = buffers.as_slices()[0]
+            .iter()
+            .copied()
+            .fold(0.0_f32, f32::max);
+        assert!(
+            peak > 0.1 && peak <= 0.21,
+            "only the newer voice should sound: {peak}"
+        );
+    }
+
+    #[test]
+    fn stop_cancels_a_preview_decode_that_has_not_finished_yet() {
+        let collector = Collector::new();
+        let bus = Arc::new(FilePreviewBus::new());
+        let mut node = bus.open(collector.handle());
+        let pending = bus.begin_request();
+        bus.stop().unwrap();
+        let source = Arc::new(AudioSource::from_stereo(
+            0,
+            Path::new("hit.wav"),
+            SR,
+            vec![0.8; 2_000 * CHANNELS],
+        ));
+        bus.install_checked(Some(source), Some(pending)).unwrap();
+        let mut buffers = AudioBuffers::new(BLOCK);
+        let mut ctx = ProcessCtx::new(&mut buffers, SR, BLOCK, TransportSnapshot::default());
+        node.process(&mut ctx);
+        assert!(buffers
+            .as_slices()
+            .iter()
+            .flat_map(|channel| channel.iter())
+            .all(|sample| *sample == 0.0));
+    }
 
     #[test]
     fn a_detached_bus_refuses_to_publish_rather_than_panicking() {

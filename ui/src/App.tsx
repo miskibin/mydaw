@@ -1,22 +1,20 @@
 /**
  * The shell.
  *
- * Three main views and a fullscreen piano roll over them. Playlist and Rack
- * also set what the transport plays (song vs pattern). Mixer leaves the mode
- * alone so you can mix whichever is already going.
+ * Editors share the Browser. PAT/SONG is an explicit transport choice, so
+ * opening the rack or piano roll while a song plays never interrupts it.
  */
 
-import { Match, Show, Switch, createEffect, onCleanup, untrack } from 'solid-js';
+import { Match, Show, Switch, createEffect, on, onCleanup } from 'solid-js';
 
 import { Browser } from './shell/Browser';
-import { SidePanel } from './shell/SidePanel';
+import { SidePanel, PlaylistPicker } from './shell/SidePanel';
 import { StatusBar } from './shell/StatusBar';
 import { TopBar } from './shell/TopBar';
 import { midiKeyFor, noteName } from './lib/keyboard';
 import { f7PatternId, rollChannelFromStrip, tabCounterpart } from './lib/navigate';
 import { useView } from './shell/view';
 import { useAppState } from './state';
-import { IconChevron } from './ui/icons';
 import { EffectEditors } from './views/EffectEditor';
 import { Mixer } from './views/Mixer';
 import { Playlist } from './views/Playlist';
@@ -29,16 +27,17 @@ export function App(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
 
-  // Playlist plays the arrangement; Rack loops the pattern. Mixer does not
-  // touch the mode. `untrack` so a manual PAT/SONG click on the current view
-  // is not immediately overwritten.
-  createEffect(() => {
-    const next = view.view();
-    untrack(() => {
-      if (next === 'playlist' && app.playMode() !== 'song') app.setPlayMode('song');
-      else if (next === 'rack' && app.playMode() !== 'pat') app.setPlayMode('pat');
-    });
-  });
+  // Restore the selected channel after Open/New without changing a mixer bus
+  // selection on every ordinary engine refresh.
+  createEffect(on([app.projectRevision, () => app.mixer() !== undefined], () => {
+    const index = app.mixer()?.selected;
+    if (index === undefined) return;
+    view.setStrip({ kind: 'track', index });
+    view.setSelectedClips([]);
+    view.closeRoll();
+    view.closeSampleEditor();
+    view.closeInsertEditor();
+  }));
 
   // UI zoom is the webview's own (`zoomHotkeysEnabled` in tauri.conf.json):
   // Ctrl+= / Ctrl+- / Ctrl+0 are handled natively by WebView2, which scales
@@ -48,7 +47,7 @@ export function App(): ReturnType<typeof Show> {
   /** The view hotkeys. F7 opens the roll on whichever channel is selected. */
   function onKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
     if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 't') {
       event.preventDefault();
       view.setTypingKeyboard((on) => !on);
@@ -60,7 +59,14 @@ export function App(): ReturnType<typeof Show> {
       );
       return;
     }
-    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    if (event.defaultPrevented) return;
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+      event.preventDefault();
+      view.setBrowserOpen(true);
+      const search = document.querySelector<HTMLInputElement>('[aria-label="Search browser"]');
+      search?.focus(); search?.select(); return;
+    }
+    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey && !target?.closest('button, a, [tabindex], select')) {
       event.preventDefault();
       const current = view.rollOpen() ? view.previousView() : view.view();
       view.go(tabCounterpart(current));
@@ -100,6 +106,7 @@ export function App(): ReturnType<typeof Show> {
         break;
       case 'F7': {
         event.preventDefault();
+        if (view.rollOpen()) { view.closeRoll(); break; }
         const selected = view.selectedClips();
         const clips = (app.playlist()?.clips ?? []).filter((clip) => selected.includes(clip.id));
         const patternId = f7PatternId(view.view(), clips);
@@ -126,68 +133,21 @@ export function App(): ReturnType<typeof Show> {
   return (
     <div class="wv-shell">
       <TopBar />
-      <Show
-        when={!view.rollOpen()}
-        fallback={
-          <div class="wv-body">
-            <Roll />
-          </div>
-        }
-      >
-        <div class="wv-body">
-          <Show
-            when={view.browserOpen()}
-            fallback={
-              <div
-                class="wv-rail wv-rail--left"
-                onClick={() => view.setBrowserOpen(true)}
-                title="Show the browser"
-              >
-                <IconChevron direction="right" />
-                <span class="wv-rail__label">BROWSER</span>
-              </div>
-            }
-          >
-            <Browser />
-          </Show>
-
+      <div class="wv-body">
+        <Browser />
+        <Show when={!view.rollOpen() && view.view() === 'playlist'}><PlaylistPicker /></Show>
+        <Show when={view.rollOpen()} fallback={
           <Switch fallback={<Rack />}>
-            <Match when={view.view() === 'settings'}>
-              <Settings />
-            </Match>
-            <Match when={view.view() === 'playlist'}>
-              <Playlist />
-            </Match>
-            <Match when={view.view() === 'rack'}>
-              <Rack />
-            </Match>
-            <Match when={view.view() === 'mixer'}>
-              <Mixer />
-            </Match>
+            <Match when={view.view() === 'settings'}><Settings /></Match>
+            <Match when={view.view() === 'playlist'}><Playlist /></Match>
+            <Match when={view.view() === 'rack'}><Rack /></Match>
+            <Match when={view.view() === 'mixer'}><Mixer /></Match>
           </Switch>
-
-          <Show
-            when={view.sideOpen()}
-            fallback={
-              <div
-                class="wv-rail wv-rail--right"
-                onClick={() => view.setSideOpen(true)}
-                title="Show the picker and inspector"
-              >
-                <IconChevron direction="left" />
-                <span class="wv-rail__label">PICKER · INSPECTOR</span>
-              </div>
-            }
-          >
-            <SidePanel />
-          </Show>
-
-          <EffectEditors />
-          <Show when={view.sampleEditor() !== null}>
-            <SampleEditor />
-          </Show>
-        </div>
-      </Show>
+        }><Roll /></Show>
+        <Show when={!view.rollOpen()}><SidePanel /></Show>
+        <EffectEditors />
+        <Show when={view.sampleEditor() !== null}><SampleEditor /></Show>
+      </div>
       <StatusBar />
     </div>
   );

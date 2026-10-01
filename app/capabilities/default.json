@@ -1,7 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Baseline permissions for the MYDAW main window. Commands defined by this app (get_ui_snapshot, transport_*, subscribe_meters, the project commands) are always allowed; this covers the built-in core plugins, plus the file dialogs the project commands open. Only `dialog:allow-open` and `dialog:allow-save` are granted -- the app never shows a message or confirm box, and a permission nothing uses is a permission that can be misused.",
+  "description": "Baseline permissions for the main window, project file dialogs and the custom title bar. Window mutations are limited to dragging, minimizing, toggling maximization and closing.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging"
+  ]
 }

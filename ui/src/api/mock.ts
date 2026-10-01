@@ -33,6 +33,8 @@ import type {
   InsertTarget,
   LibraryEntryDto,
   LibraryRootDto,
+  LibrarySearchDto,
+  BrowserPreviewDto,
   MasterDto,
   MeterFrame,
   MixerState,
@@ -3131,6 +3133,44 @@ export class MockBackend implements Backend {
   async previewAudioFile(path: string): Promise<void> {
     this.lastPreview = path;
     console.info(`[mock] preview ${path}`);
+  }
+
+  async searchLibrary(query: string): Promise<LibrarySearchDto> {
+    const words = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    const result: LibrarySearchDto = { entries: [], truncated: false, unavailableRoots: [] };
+    if (words.length === 0) return result;
+    for (const root of await this.getLibraryRoots()) {
+      const pending = [''];
+      while (pending.length > 0) {
+        const dir = pending.shift()!;
+        for (const entry of await this.listLibraryDir(root.id, dir)) {
+          if (entry.kind === 'dir') pending.push(entry.relPath);
+          else if (words.every((word) => `${root.name} ${entry.relPath}`.toLowerCase().includes(word))) {
+            result.entries.push({ rootName: root.name, entry });
+          }
+        }
+      }
+    }
+    result.entries.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
+    result.truncated = result.entries.length > 256;
+    result.entries = result.entries.slice(0, 256);
+    return result;
+  }
+
+  async previewBrowserFile(path: string, audition: boolean): Promise<BrowserPreviewDto> {
+    if (audition) await this.previewAudioFile(path);
+    // Browser fixtures contain no decoded audio. This is visual QA only.
+    return {
+      path, durationSeconds: 0.6, sampleRate: 48000, truncated: false,
+      peaks: Array.from({ length: 128 }, (_, i) => {
+        const amp = Math.exp(-i / 24) * (0.2 + Math.abs(Math.sin(i * 1.7)) * 0.7);
+        return [-amp, amp];
+      }),
+    };
+  }
+
+  async stopBrowserPreview(): Promise<void> {
+    this.lastPreview = null;
   }
 
   async previewTrackSample(track: number): Promise<void> {

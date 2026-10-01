@@ -27,7 +27,7 @@ import type { StripRef } from '../state';
 export type MainView = 'playlist' | 'rack' | 'mixer' | 'settings';
 
 /** Which tree the browser is showing. */
-export type BrowserTab = 'instruments' | 'files';
+export type BrowserTab = 'all' | 'instruments' | 'files';
 
 /** Which half of the right-hand panel is up. */
 export type SideTab = 'picker' | 'inspector';
@@ -248,8 +248,8 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [sampleEditor, setSampleEditor] = createSignal<number | null>(null);
   const [browserOpen, setBrowserOpen] = createSignal(true);
   const [browserWidth, setBrowserWidth] = createSignal(DEFAULT_BROWSER_WIDTH);
-  const [browserTab, setBrowserTab] = createSignal<BrowserTab>('instruments');
-  const [sideOpen, setSideOpen] = createSignal(true);
+  const [browserTab, setBrowserTab] = createSignal<BrowserTab>('all');
+  const [sideOpen, setSideOpen] = createSignal(false);
   const [sideTab, setSideTab] = createSignal<SideTab>('inspector');
   const [pickerTab, setPickerTab] = createSignal<PickerTab>('patterns');
   const [brush, setBrush] = createSignal<Brush>(null);
@@ -290,20 +290,14 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   createEffect(() => {
     const viewport = viewportWidth();
     const inspectorOpen = sideOpen();
-    setBrowserWidth((width) => clampBrowserWidth(width, viewport, inspectorOpen));
+    const pickerOpen = view() === 'playlist' && !rollOpen();
+    setBrowserWidth((width) => clampBrowserWidth(width, viewport, inspectorOpen, pickerOpen));
   });
 
   const state: ViewState = {
     view,
     go(next) {
       const current = view();
-      // Playlist lands on the picker so a brush is in front for painting.
-      // Inspector stays one click away; we do not overwrite it if Playlist is
-      // already up (F5 while painting, for example).
-      if (next === 'playlist' && current !== next) {
-        setSideTab('picker');
-        setSideOpen(true);
-      }
       // Settings is an overlay on the studio: remember where Escape should land.
       // Sample editors stay up across Playlist/Rack/Mixer so a clip opened from
       // the arrangement is not dismissed by glancing at the mixer.

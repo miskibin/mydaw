@@ -132,7 +132,7 @@ export function StatusBar(): ReturnType<typeof Show> {
         </span>
       </Show>
       <Show when={!app.kernelError()}>
-        <span>{hint()}</span>
+        <span class="wv-status__hint">{hint()}</span>
       </Show>
 
       <Show when={app.backend.kind === 'mock'}>

@@ -37,7 +37,8 @@ import {
 } from '../lib/pattern';
 import { channelColor } from '../lib/channel';
 import { useAppState } from '../state';
-import { ROLL_SNAPS, clampZoom, nextSnap, snapLabel, useView, type RollTool } from '../shell/view';
+import { ROLL_SNAPS, clampZoom, useView, type RollTool } from '../shell/view';
+import { SnapSelect } from '../ui/SnapSelect';
 import { useTheme } from '../theme/ThemeProvider';
 import { onFrame } from '../ui/frameLoop';
 import { wheelNotches } from '../ui/drag';
@@ -50,6 +51,7 @@ import {
   IconPaintTool,
   IconSelectTool,
   IconSliceTool,
+  IconNoteOperation,
 } from '../ui/icons';
 import {
   KEY_W,
@@ -1276,7 +1278,8 @@ export function Roll(): ReturnType<typeof Show> {
 
   function onKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
-    if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
+    if (event.defaultPrevented || target?.closest('[aria-label="Browser"]')) return;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.isContentEditable)) return;
     const ctrl = event.ctrlKey || event.metaKey;
 
     if (event.key === 'Escape') {
@@ -1602,15 +1605,7 @@ export function Roll(): ReturnType<typeof Show> {
           </button>
         </div>
 
-        <button
-          type="button"
-          class="wv-chip wv-chip--sunk"
-          title="What notes snap to"
-          onClick={() => view.setRollSnap(nextSnap(ROLL_SNAPS, view.rollSnap()))}
-        >
-          <span class="wv-chip__tag">SNAP</span>
-          {snapLabel(ROLL_SNAPS, view.rollSnap())}
-        </button>
+        <SnapSelect value={view.rollSnap()} choices={ROLL_SNAPS} onChange={view.setRollSnap} label="Piano roll snap" />
 
         <div class="wv-zoom">
           <button
@@ -1636,6 +1631,7 @@ export function Roll(): ReturnType<typeof Show> {
           class="wv-chip"
           classList={{ 'is-active': view.ghosts() }}
           title="Show the other channels' notes of this pattern, faded (Alt+V)"
+          aria-pressed={view.ghosts()}
           onClick={() => view.setGhosts((on) => !on)}
         >
           Ghost notes
@@ -1694,13 +1690,16 @@ export function Roll(): ReturnType<typeof Show> {
           )}
         </For>
         <div class="wv-spacer" />
+        <div class="wv-roll__ops">
         <For each={OPS}>
           {([name, title, run]) => (
-            <button type="button" class="wv-chip" title={title} onClick={() => run()}>
+            <button type="button" class="wv-chip" title={title} disabled={notes().length === 0} onClick={() => run()}>
+              <IconNoteOperation kind={name === 'Quantize' ? 'quantize' : name === 'Legato' ? 'legato' : name === 'Len ×2' ? 'lengthen' : name === 'Len ÷2' ? 'shorten' : name === 'Chord' ? 'chord' : 'humanize'} />
               {name}
             </button>
           )}
         </For>
+        </div>
       </div>
     </div>
   );

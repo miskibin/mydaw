@@ -2,6 +2,32 @@ import { describe, expect, it } from 'vitest';
 
 import { MockBackend } from './mock';
 
+describe('browser sample workflow', () => {
+  it('finds samples inside unopened factory folders using all query words', async () => {
+    const backend = new MockBackend();
+    const found = await backend.searchLibrary('factory 808 kick');
+    expect(found.entries.length).toBeGreaterThan(0);
+    expect(found.entries.every((row) => row.entry.relPath.includes('808-kit/') && row.entry.name.includes('kick'))).toBe(true);
+    expect((await backend.searchLibrary('missing-brass-file')).entries).toEqual([]);
+  });
+
+  it('auditions and stops without registering files or changing the project', async () => {
+    const backend = new MockBackend();
+    const before = await backend.getAudioSources();
+    const tracks = await backend.getTracks();
+    const path = 'C:\\samples\\kick.wav';
+    const preview = await backend.previewBrowserFile(path, false);
+    expect(preview.peaks.length).toBeGreaterThan(0);
+    expect(backend.lastPreview).toBeNull();
+    await backend.previewBrowserFile(path, true);
+    expect(backend.lastPreview).toBe(path);
+    await backend.stopBrowserPreview();
+    expect(backend.lastPreview).toBeNull();
+    expect(await backend.getAudioSources()).toEqual(before);
+    expect(await backend.getTracks()).toEqual(tracks);
+  });
+});
+
 describe('rack sample replacement', () => {
   it('swaps only the source and preserves the row mixer state and inserts', async () => {
     const backend = new MockBackend();

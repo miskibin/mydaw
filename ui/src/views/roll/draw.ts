@@ -17,7 +17,7 @@
 
 import type { MelodicNoteDto } from '../../api/types';
 import { isBlackKey, noteName, PPQ, TICKS_PER_BAR, TICKS_PER_STEP } from '../../lib/pattern';
-import type { Palette } from '../../theme/tokens';
+import { mix, type Palette } from '../../theme/tokens';
 
 /** Width of the key column, in CSS pixels. */
 export const KEY_W = 74;
@@ -457,7 +457,7 @@ export class RollRenderer {
       const isBar = tick % TICKS_PER_BAR === 0;
       const isBeat = tick % PPQ === 0;
       if (!isBeat && !drawSteps) continue;
-      ctx.fillStyle = isBar ? scene.palette.line2 : isBeat ? scene.palette.grid2 : scene.palette.grid1;
+      ctx.fillStyle = isBar ? mix(scene.palette.line2, scene.palette.lane, 0.5) : isBeat ? scene.palette.grid2 : scene.palette.grid1;
       ctx.fillRect(x, top, 1, height);
     }
   }
@@ -579,7 +579,7 @@ export class RollRenderer {
       const x = Math.round(tickToX(tick, geo)) - 0.5;
       if (x < KEY_W) continue;
       if (x > geo.width) break;
-      ctx.fillStyle = tick % TICKS_PER_BAR === 0 ? scene.palette.line2 : scene.palette.grid2;
+      ctx.fillStyle = tick % TICKS_PER_BAR === 0 ? mix(scene.palette.line2, scene.palette.panel, 0.5) : scene.palette.grid2;
       ctx.fillRect(x, laneTop, 1, laneHeight);
     }
 
@@ -601,7 +601,7 @@ export class RollRenderer {
     const ctx = this.ctx;
     ctx.fillStyle = scene.palette.panel;
     ctx.fillRect(0, 0, geo.width, RULER_H);
-    ctx.fillStyle = scene.palette.line2;
+    ctx.fillStyle = mix(scene.palette.line2, scene.palette.panel, 0.55);
     ctx.fillRect(0, RULER_H - 1, geo.width, 1);
 
     ctx.save();
@@ -614,7 +614,7 @@ export class RollRenderer {
       const x = Math.round(tickToX(tick, geo)) - 0.5;
       if (x > geo.width) break;
       const isBar = tick % TICKS_PER_BAR === 0;
-      ctx.fillStyle = isBar ? scene.palette.line2 : scene.palette.line;
+      ctx.fillStyle = mix(isBar ? scene.palette.line2 : scene.palette.line, scene.palette.panel, 0.55);
       ctx.fillRect(x, 0, 1, RULER_H);
       if (isBar) {
         ctx.fillStyle = scene.palette.txt2;
