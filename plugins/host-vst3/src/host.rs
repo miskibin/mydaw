@@ -31,12 +31,11 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use vst3::Steinberg::Vst::{
     Event, IComponentHandler, IComponentHandlerTrait, IEventList, IEventListTrait,
-    IHostApplication, IHostApplicationTrait, IParamValueQueue, IParameterChanges,
-    IParameterChangesTrait, ParamID, ParamValue, String128,
+    IHostApplication, IHostApplicationTrait, ParamID, ParamValue, String128,
 };
 use vst3::Steinberg::{
     int32, int64, FUnknown, IBStream, IBStreamTrait, IPlugFrame, IPlugFrameTrait, IPlugView,
@@ -68,6 +67,7 @@ pub const MAX_BLOCK_EVENTS: usize = mydaw_rt_core::DEFAULT_NOTE_CAPACITY;
 /// host does with `clap_host->request_*`.
 #[derive(Debug, Default)]
 pub struct Vst3HostRequests {
+    pub(crate) parameters: OnceLock<Arc<mydaw_plugin_params::ParameterBank>>,
     /// OR of every `restartComponent` flag seen since the last read.
     restart_flags: AtomicI32,
     /// Parameter edit gestures in flight. Counted rather than acted on: MYDAW
@@ -197,8 +197,8 @@ impl IComponentHandlerTrait for Vst3HostContext {
 
     unsafe fn performEdit(
         &self,
-        _id: ParamID,
-        _value_normalized: ParamValue,
+        id: ParamID,
+        value_normalized: ParamValue,
     ) -> vst3::Steinberg::tresult {
         self.requests
             .edits_performed
@@ -207,6 +207,9 @@ impl IComponentHandlerTrait for Vst3HostContext {
         // last saved. Recorded, not acted on -- a host that saved on every
         // gesture would write a megabyte per drag.
         self.requests.dirty.store(true, Ordering::Release);
+        if let Some(parameters) = self.requests.parameters.get() {
+            parameters.publish(id, value_normalized);
+        }
         kResultOk
     }
 
@@ -394,36 +397,7 @@ impl IEventListTrait for HostEventList {
 /// removes the entire class of problem.
 ///
 /// Step 7 automates no parameters; when it does, this becomes a real queue.
-#[derive(Debug, Default)]
-pub struct NoParameterChanges;
-
-impl NoParameterChanges {
-    pub fn new() -> ComWrapper<Self> {
-        ComWrapper::new(Self)
-    }
-}
-
-impl Class for NoParameterChanges {
-    type Interfaces = (IParameterChanges,);
-}
-
-impl IParameterChangesTrait for NoParameterChanges {
-    unsafe fn getParameterCount(&self) -> int32 {
-        0
-    }
-
-    unsafe fn getParameterData(&self, _index: int32) -> *mut IParamValueQueue {
-        std::ptr::null_mut()
-    }
-
-    unsafe fn addParameterData(
-        &self,
-        _id: *const ParamID,
-        _index: *mut int32,
-    ) -> *mut IParamValueQueue {
-        std::ptr::null_mut()
-    }
-}
+pub use crate::parameters::ParameterChanges as NoParameterChanges;
 
 // ---------------------------------------------------------------------------
 // IBStream
@@ -596,6 +570,7 @@ mod tests {
     use super::*;
     use vst3::ComPtr;
     use vst3::Steinberg::Vst::IEventList;
+    use vst3::Steinberg::Vst::{IParameterChanges, IParameterChangesTrait};
 
     #[test]
     fn the_host_reports_its_name_as_utf16() {
@@ -770,7 +745,8 @@ mod tests {
             assert!(changes.getParameterData(0).is_null());
             let id: ParamID = 3;
             let mut index: int32 = 0;
-            assert!(changes.addParameterData(&id, &mut index).is_null());
+            assert!(!changes.addParameterData(&id, &mut index).is_null());
+            assert_eq!(changes.getParameterCount(), 1);
         }
     }
 

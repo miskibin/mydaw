@@ -15,6 +15,7 @@ clack-extensions = { version = "0.1.1", features = [
     "audio-ports",
     "note-ports",
     "state",
+    "params",
     "gui",
     "timer",
 ] }

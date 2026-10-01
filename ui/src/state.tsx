@@ -559,6 +559,7 @@ function createAppState(): AppState {
 
   let pushTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingPush: PatternDto | undefined;
+  let pendingExpected: PatternDto | undefined;
 
   /**
    * Push the pattern the user has been editing.
@@ -569,14 +570,17 @@ function createAppState(): AppState {
    * it. A failed push refetches, because then the engine is the one that is
    * right.
    */
-  function schedulePush(next: PatternDto): void {
+  function schedulePush(next: PatternDto, expected: PatternDto): void {
+    pendingExpected ??= structuredClone(expected);
     pendingPush = next;
     clearTimeout(pushTimer);
     pushTimer = setTimeout(() => {
       const payload = pendingPush;
+      const expected = pendingExpected;
       pendingPush = undefined;
+      pendingExpected = undefined;
       if (!payload) return;
-      backend.setPattern(payload).catch((error) => {
+      backend.setPattern(payload, expected).catch((error) => {
         report(error);
         backend.getPattern().then(adoptSequencer).catch(() => {});
       });
@@ -587,12 +591,15 @@ function createAppState(): AppState {
   async function flushPush(): Promise<void> {
     clearTimeout(pushTimer);
     const payload = pendingPush;
+    const expected = pendingExpected;
     pendingPush = undefined;
+    pendingExpected = undefined;
     if (!payload) return;
     try {
-      await backend.setPattern(payload);
+      await backend.setPattern(payload, expected);
     } catch (error) {
       report(error);
+      await backend.getPattern().then(adoptSequencer).catch(() => {});
     }
   }
 
@@ -603,6 +610,7 @@ function createAppState(): AppState {
     const current = pattern();
     if (!current) return;
     gestureLabel = label;
+    backend.setHistoryGroup(label);
     gestureBefore = structuredClone(current);
   }
 
@@ -614,7 +622,7 @@ function createAppState(): AppState {
     // which is what makes a drag that stays inside one cell free.
     if (next === current) return;
     setLocalPattern(next);
-    schedulePush(next);
+    schedulePush(next, current);
   }
 
   function commitPatternGesture(): void {
@@ -623,9 +631,10 @@ function createAppState(): AppState {
     gestureBefore = null;
     gestureLabel = null;
     const after = pattern();
-    if (!before || !label || !after) return;
-    if (JSON.stringify(before) === JSON.stringify(after)) return;
+    if (!before || !label || !after) { backend.setHistoryGroup(); return; }
+    if (JSON.stringify(before) === JSON.stringify(after)) { backend.setHistoryGroup(); return; }
     void flushPush();
+    backend.setHistoryGroup();
     undo.push(patternEntry(backend, label, before, structuredClone(after)));
     setUndoRevision(undo.revision);
   }
@@ -645,6 +654,7 @@ function createAppState(): AppState {
     const current = sequencer()?.playlist;
     if (!current) return;
     playlistLabel = label;
+    backend.setHistoryGroup(label);
     playlistBefore = snapshotPlaylist(current);
   }
 
@@ -653,6 +663,7 @@ function createAppState(): AppState {
     const label = playlistLabel;
     playlistBefore = null;
     playlistLabel = null;
+    backend.setHistoryGroup();
     const current = sequencer()?.playlist;
     if (!before || !label || !current) return;
     const after = snapshotPlaylist(current);
@@ -667,6 +678,7 @@ function createAppState(): AppState {
   }
 
   function clearHistory(reason: string): void {
+    if (backend.sharedHistory) return;
     if (undo.undoLabel() === null && undo.redoLabel() === null) return;
     undo.clear();
     setUndoRevision(undo.revision);
@@ -688,7 +700,12 @@ function createAppState(): AppState {
   async function replay(direction: 'undo' | 'redo'): Promise<void> {
     try {
       const label =
-        direction === 'undo' ? await undo.undo() : await undo.redo();
+        backend.sharedHistory ? (direction === 'undo' ? undo.undoLabel() : undo.redoLabel()) :
+          direction === 'undo' ? await undo.undo() : await undo.redo();
+      if (backend.sharedHistory) {
+        undo.setShared(await backend.replaySessionHistory(direction));
+        await refresh();
+      }
       setUndoRevision(undo.revision);
       if (label === null) {
         say(direction === 'undo' ? 'Undo' : 'Redo', 'nothing to do');
@@ -951,6 +968,21 @@ function createAppState(): AppState {
   // --- the meter stream ----------------------------------------------------
 
   let detach: (() => void) | undefined;
+  let detachSession: (() => void) | undefined;
+  if (backend.sharedHistory) {
+    undo.setShared({ undoLabel: null, redoLabel: null });
+    void backend.getSessionHistory().then((history) => {
+      undo.setShared(history);
+      setUndoRevision(undo.revision);
+    }).catch(report);
+    void backend.subscribeSession((change) => {
+      undo.setShared(change.history);
+      setUndoRevision(undo.revision);
+      if (change.origin !== 'gui') {
+        void flushPush().then(refresh).catch(report);
+      }
+    }).then((unsubscribe) => { detachSession = unsubscribe; }).catch(report);
+  }
 
   function handleMeterFrame(frame: MeterFrame): void {
     meters.push(frame);
@@ -1126,6 +1158,7 @@ function createAppState(): AppState {
     clearTimeout(masterGainTimer);
     releaseHeldNotes();
     detach?.();
+    detachSession?.();
   });
 
   return {

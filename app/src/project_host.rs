@@ -168,7 +168,7 @@ impl ProjectHost {
         }
         for (command, channel) in pending {
             let answer = self.serve(command, session, bridge, hosts);
-            reply(&channel, answer.map(ProjectAnswer::Info));
+            reply(&channel, answer);
         }
         hosts.clap.publish(session.tracks, hosts.clap_board);
         hosts.vst3.publish(session.tracks, hosts.vst3_board);
@@ -180,11 +180,39 @@ impl ProjectHost {
         session: &Session<'_>,
         bridge: &ProjectBridge,
         hosts: &mut Hosts<'_>,
-    ) -> Result<ProjectInfoDto, String> {
+    ) -> Result<ProjectAnswer, String> {
         match command {
-            ProjectCommand::New => self.new_project(session, bridge, hosts),
-            ProjectCommand::Open { path } => self.open(session, bridge, hosts, &path),
-            ProjectCommand::Save { path } => self.save(session, bridge, hosts, &path),
+            ProjectCommand::New => self
+                .new_project(session, bridge, hosts)
+                .map(ProjectAnswer::Info),
+            ProjectCommand::Open { path } => self
+                .open(session, bridge, hosts, &path)
+                .map(ProjectAnswer::Info),
+            ProjectCommand::Save { path } => self
+                .save(session, bridge, hosts, &path)
+                .map(ProjectAnswer::Info),
+            ProjectCommand::Snapshot => {
+                let (file, warnings) = capture(session, hosts);
+                if !warnings.is_empty() {
+                    return Err(warnings.join("; "));
+                }
+                Ok(ProjectAnswer::Snapshot(Box::new(file)))
+            }
+            ProjectCommand::Restore { file } => {
+                let report = self
+                    .load(session, hosts, &file)
+                    .map_err(|e| e.to_string())?;
+                let path = self.path.clone();
+                let info = self.publish_loaded(bridge, path.as_deref(), &report);
+                if report.missing_count() > 0 || !report.warnings.is_empty() {
+                    return Err(format!(
+                        "snapshot restore was incomplete: {} missing plugin(s); {}",
+                        report.missing_count(),
+                        report.warnings.join("; ")
+                    ));
+                }
+                Ok(ProjectAnswer::Info(info))
+            }
         }
     }
 
@@ -550,6 +578,12 @@ fn save_state_at(
     label: &str,
     warnings: &mut Vec<String>,
 ) -> Vec<u8> {
+    if hosts.clap.instance_at(target).is_some() && hosts.vst3.instance_at(target).is_some() {
+        warnings.push(format!(
+            "{label}: both plugin hosts claim the same slot; state capture was refused"
+        ));
+        return Vec::new();
+    }
     if let Some(instance) = hosts.clap.instance_at(target) {
         return match hosts.clap.instances_mut().save_state(instance) {
             Ok(bytes) => bytes,

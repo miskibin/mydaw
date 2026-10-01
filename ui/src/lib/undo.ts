@@ -1,24 +1,4 @@
-/**
- * Undo and redo, kept in the UI.
- *
- * **The engine has no undo.** Every command it takes is a forward edit, so the
- * stack here is a stack of *inverse commands* the shell replays. That buys
- * Ctrl+Z over the two things a user edits constantly -- pattern content and the
- * arrangement -- for the cost of one snapshot per gesture, and it is honest
- * about what it cannot reach:
- *
- * | covered | not covered |
- * | --- | --- |
- * | steps, notes, every note operation | mixer: faders, pan, mute, solo, sends |
- * | clips: paint, move, resize, delete | insert chains and their parameters |
- * | lane mute, solo and rename | patterns and lanes being created or destroyed |
- * | destructive sample edits (see below) | render to sample: it adds a channel |
- *
- * The uncovered structural operations do not merely go unrecorded -- they
- * **clear** the stack, because an entry that names a pattern id which no longer
- * exists cannot be replayed and a half-applied undo is worse than none. The
- * status bar says so when it happens.
- */
+/** Native sessions mirror the shared Rust history. The browser mock replays local inverse commands. */
 
 import type { Backend } from '../api/backend';
 import type {
@@ -55,6 +35,11 @@ export interface UndoEntry {
  * than by a switch here that has to be kept in step with the views.
  */
 export class UndoStack {
+  private shared?: { undoLabel: string | null; redoLabel: string | null };
+  setShared(history: { undoLabel: string | null; redoLabel: string | null }): void {
+    this.shared = history;
+    this.version += 1;
+  }
   private readonly past: UndoEntry[] = [];
   private readonly future: UndoEntry[] = [];
   /** Bumped on every mutation so a Solid signal can track the pair of labels. */
@@ -62,6 +47,7 @@ export class UndoStack {
 
   /** Record a gesture that has **already been applied**. Drops the redo branch. */
   push(entry: UndoEntry): void {
+    if (this.shared) return;
     this.past.push(entry);
     if (this.past.length > UNDO_DEPTH) this.past.shift();
     this.future.length = 0;
@@ -80,10 +66,12 @@ export class UndoStack {
   }
 
   undoLabel(): string | null {
+    if (this.shared) return this.shared.undoLabel;
     return this.past.at(-1)?.label ?? null;
   }
 
   redoLabel(): string | null {
+    if (this.shared) return this.shared.redoLabel;
     return this.future.at(-1)?.label ?? null;
   }
 

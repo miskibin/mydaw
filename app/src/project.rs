@@ -402,7 +402,9 @@ pub fn check_root_fine(cents: f32) -> Result<f32, TrackError> {
 }
 
 /// How a sample channel's playback root was last set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum RootMode {
     #[default]
@@ -428,7 +430,9 @@ pub enum PitchSourceDto {
 /// key. The other two are the chop, and they are remembered separately from
 /// the frames so that reopening the window puts the slider and the division
 /// picker back where the user left them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "camelCase")]
 pub enum SliceMode {
     #[default]
@@ -444,7 +448,7 @@ pub enum SliceMode {
 /// engine's fixed table is [`mydaw_plugin_sequencer::MAX_SLICES`] long, and
 /// [`check_slices`] is what enforces that before anything reaches the audio
 /// thread.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SliceStateDto {
     pub mode: SliceMode,

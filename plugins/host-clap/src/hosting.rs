@@ -53,15 +53,18 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use clack_extensions::audio_ports::PluginAudioPorts;
 use clack_extensions::gui::{GuiSize, HostGui, HostGuiImpl};
 use clack_extensions::note_ports::PluginNotePorts;
+use clack_extensions::params::{
+    HostParams, HostParamsImplMainThread, HostParamsImplShared, ParamClearFlags, ParamRescanFlags,
+};
 use clack_extensions::state::{HostState, HostStateImpl};
 use clack_extensions::timer::{HostTimer, HostTimerImpl, PluginTimer, TimerId};
-use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent};
+use clack_host::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
 use clack_host::events::io::EventBuffer;
 use clack_host::events::{Match, Pckn};
 use clack_host::prelude::*;
@@ -168,12 +171,18 @@ pub enum ClapHostError {
 /// locking, no allocation, no logging. The main thread reads and clears them.
 #[derive(Debug, Default)]
 pub struct ClapHostRequests {
+    pub(crate) parameters: OnceLock<Arc<mydaw_plugin_params::ParameterBank>>,
     restart: AtomicBool,
     process: AtomicBool,
     callback: AtomicBool,
 }
 
 impl ClapHostRequests {
+    pub fn parameters_bank(&self) -> &mydaw_plugin_params::ParameterBank {
+        self.parameters
+            .get()
+            .expect("initialized before plugin creation")
+    }
     /// Take the "please deactivate and reactivate me" flag, clearing it.
     pub fn take_restart(&self) -> bool {
         self.restart.swap(false, Ordering::AcqRel)
@@ -330,6 +339,20 @@ pub struct ClapHostMainThread {
     state_dirty: Arc<AtomicBool>,
 }
 
+impl HostParamsImplShared for ClapHostShared {
+    fn request_flush(&self) {
+        self.requests.process.store(true, Ordering::Release);
+    }
+}
+impl HostParamsImplMainThread for ClapHostMainThread {
+    fn rescan(&mut self, _flags: ParamRescanFlags) {
+        self.state_dirty.store(true, Ordering::Release);
+    }
+    fn clear(&mut self, _id: ClapId, _flags: ParamClearFlags) {
+        self.state_dirty.store(true, Ordering::Release);
+    }
+}
+
 impl MainThreadHandler<'_> for ClapHostMainThread {}
 
 impl HostStateImpl for ClapHostMainThread {
@@ -386,6 +409,7 @@ impl HostHandlers for MydawClapHost {
         builder.register::<HostGui>();
         builder.register::<HostTimer>();
         builder.register::<HostState>();
+        builder.register::<HostParams>();
     }
 }
 
@@ -493,10 +517,10 @@ pub struct LoadedClapPlugin {
     /// Kept alive explicitly. `clack` also stores a clone inside the instance --
     /// unloading the library out from under a live plugin would be fatal.
     _entry: PluginEntry,
-    instance: PluginInstance<MydawClapHost>,
+    pub(crate) instance: PluginInstance<MydawClapHost>,
     info: ClapPluginInfo,
     layout: ClapPortLayout,
-    requests: Arc<ClapHostRequests>,
+    pub(crate) requests: Arc<ClapHostRequests>,
     gui_requests: Arc<ClapGuiRequests>,
     timers: Arc<ClapTimers>,
     /// Latched `clap_host_state->mark_dirty`. See [`crate::state`].
@@ -558,6 +582,9 @@ impl LoadedClapPlugin {
             };
 
             let requests = Arc::new(ClapHostRequests::default());
+            let bank = mydaw_plugin_params::ParameterBank::new(vec![])
+                .map_err(|message| ClapHostError::InvalidAudioConfiguration { message })?;
+            let _ = requests.parameters.set(Arc::new(bank));
             let gui_requests = Arc::new(ClapGuiRequests::default());
             let timers = Arc::new(ClapTimers::new());
             let state_dirty = Arc::new(AtomicBool::new(false));
@@ -771,6 +798,25 @@ impl LoadedClapPlugin {
         sample_rate: f64,
         max_block: usize,
     ) -> Result<ClapNode, ClapHostError> {
+        self.parameters()
+            .map_err(|message| ClapHostError::InvalidAudioConfiguration { message })?;
+        if std::env::var_os("MYDAW_RENDER_WORKER").is_some() {
+            use clack_extensions::render::{PluginRender, RenderMode};
+            let mut handle = self.instance.plugin_handle();
+            if let Some(render) = handle.get_extension::<PluginRender>() {
+                if render.has_realtime_requirement(&mut handle) {
+                    return Err(ClapHostError::Activate {
+                        message: "plugin requires realtime hardware; offline export is unavailable"
+                            .into(),
+                    });
+                }
+                render.set(&mut handle, RenderMode::Offline).map_err(|e| {
+                    ClapHostError::Activate {
+                        message: e.to_string(),
+                    }
+                })?;
+            }
+        }
         // Do this first: a node retired since the last call frees the instance.
         self.collect_retired();
 
@@ -1147,6 +1193,19 @@ impl ClapNode {
     /// buffer was warmed with, so `push` only writes into existing capacity.
     fn fill_events(&mut self, events: &[mydaw_rt_core::NoteEvent], frames: usize) -> usize {
         self.events_in.clear();
+        let bank = self
+            .requests
+            .parameters
+            .get()
+            .expect("initialized before activation");
+        let mut changes = [(0, 0.0); mydaw_plugin_params::MAX_CHANGES_PER_BLOCK];
+        let count = bank.drain_input(&mut changes);
+        for &(id, value) in &changes[..count] {
+            if let Some(id) = ClapId::from_raw(id) {
+                self.events_in
+                    .push(&crate::parameters::value_event(id, value));
+            }
+        }
         if !self.layout.has_note_input() || events.is_empty() {
             return 0;
         }
@@ -1157,7 +1216,9 @@ impl ClapNode {
         let last_frame = (frames - 1) as u32;
         let mut dropped = 0;
         for event in events {
-            if self.events_in.len() as usize >= MAX_BLOCK_EVENTS {
+            if self.events_in.len() as usize
+                >= MAX_BLOCK_EVENTS + mydaw_plugin_params::MAX_CHANGES_PER_BLOCK
+            {
                 dropped += 1;
                 continue;
             }
@@ -1202,8 +1263,11 @@ pub const MAX_BLOCK_EVENTS: usize = DEFAULT_NOTE_CAPACITY;
 /// non-RT thread.
 fn warmed_event_buffer(capacity: usize) -> EventBuffer {
     let mut buffer = EventBuffer::new();
-    for _ in 0..capacity {
-        buffer.push(&NoteOnEvent::new(0, pckn(0, 0), 0.0));
+    for _ in 0..capacity + mydaw_plugin_params::MAX_CHANGES_PER_BLOCK {
+        buffer.push(&crate::parameters::value_event(
+            ClapId::from_raw(0).expect("valid id"),
+            0.0,
+        ));
     }
     buffer.clear();
     buffer
@@ -1304,14 +1368,48 @@ impl RtNode for ClapNode {
         // whereas an `EventBuffer` output would grow without bound if a plugin
         // emitted more than we reserved -- on the audio thread. Nothing consumes
         // a plugin's note output yet, so the safe option costs nothing.
-        let mut events_out = OutputEvents::void();
+        let bank = self
+            .requests
+            .parameters
+            .get()
+            .expect("initialized before activation");
+        let mut feedback = crate::parameters::ParameterOutput(bank);
+        let mut events_out = OutputEvents::from_buffer(&mut feedback);
+        use clack_host::events::event_types::{TransportEvent, TransportFlags};
+        use clack_host::events::EventHeader;
+        use clack_host::utils::{BeatTime, SecondsTime};
+        let seconds = ctx.transport.sample_pos as f64 / ctx.sample_rate;
+        let beats = seconds * ctx.transport.bpm / 60.0;
+        let mut flags = TransportFlags::HAS_TEMPO
+            | TransportFlags::HAS_BEATS_TIMELINE
+            | TransportFlags::HAS_SECONDS_TIMELINE
+            | TransportFlags::HAS_TIME_SIGNATURE;
+        if ctx.transport.playing {
+            flags |= TransportFlags::IS_PLAYING;
+        }
+        let transport = TransportEvent {
+            header: EventHeader::new_core(0, clack_host::events::EventFlags::empty()),
+            flags,
+            song_pos_beats: BeatTime::from_float(beats),
+            song_pos_seconds: SecondsTime::from_float(seconds),
+            tempo: ctx.transport.bpm,
+            tempo_inc: 0.0,
+            loop_start_beats: BeatTime::from_float(0.0),
+            loop_end_beats: BeatTime::from_float(0.0),
+            loop_start_seconds: SecondsTime::from_float(0.0),
+            loop_end_seconds: SecondsTime::from_float(0.0),
+            bar_start: BeatTime::from_float((beats / 4.0).floor() * 4.0),
+            bar_number: (beats / 4.0).floor() as i32,
+            time_signature_numerator: 4,
+            time_signature_denominator: 4,
+        };
         let status = processor.process(
             &audio_in,
             &mut audio_out,
             &events_in.as_input(),
             &mut events_out,
             Some(*steady_time),
-            None,
+            Some(&transport),
         );
         // Must never decrease and must grow by at least the block size.
         *steady_time = steady_time.wrapping_add(frames as u64);
@@ -1322,6 +1420,13 @@ impl RtNode for ClapNode {
         }
         match status {
             Ok(status) => {
+                for event in self.events_in.iter() {
+                    if let Some(value) = event.as_event::<ParamValueEvent>() {
+                        if let Some(id) = value.param_id() {
+                            bank.acknowledge(id.get(), value.value());
+                        }
+                    }
+                }
                 if status == ProcessStatus::Sleep {
                     self.stats.sleep_requests.fetch_add(1, Ordering::Relaxed);
                 }

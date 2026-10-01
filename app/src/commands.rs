@@ -40,6 +40,261 @@ use mydaw_plugin_midi_io::{MidiPortDto, MidiStatusDto};
 use mydaw_plugin_sequencer::PlayMode;
 use mydaw_rt_core::StripId;
 
+// Generated from the signatures in this file, including their Serde schemas.
+include!(concat!(env!("OUT_DIR"), "/control_dispatch.rs"));
+
+/// Render the unsaved session in an isolated worker; retrieve artifacts with job_status.
+#[tauri::command]
+pub fn render(
+    state: State<'_, AppState>,
+    options: crate::jobs::RenderOptions,
+) -> Result<serde_json::Value, String> {
+    state
+        .jobs()
+        .render(&state, options, state.control().revision())
+}
+/// Analyze a WAV in a worker; images are generated only when requested.
+#[tauri::command]
+pub fn analyze(
+    state: State<'_, AppState>,
+    path: String,
+    images: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    state.jobs().analyze(
+        PathBuf::from(path),
+        images.unwrap_or(false),
+        state.control().revision(),
+    )
+}
+/// Read one render or analysis job without returning logs or large binary data.
+#[tauri::command]
+pub fn job_status(state: State<'_, AppState>, job_id: String) -> Result<serde_json::Value, String> {
+    state.jobs().status(&job_id)
+}
+/// Cancel this session's worker; live audio and other jobs are unaffected.
+#[tauri::command]
+pub fn cancel_job(state: State<'_, AppState>, job_id: String) -> Result<serde_json::Value, String> {
+    state.jobs().cancel(&job_id)
+}
+
+fn plugin_values(
+    state: &AppState,
+    format: &str,
+    target: ClapTarget,
+) -> Result<Vec<mydaw_plugin_params::ParameterInfo>, String> {
+    match format {
+        "clap" => match state
+            .clap_bridge()
+            .request(crate::ClapCommand::Parameters(target))?
+        {
+            crate::ClapAnswer::Parameters(values) => Ok(values),
+            _ => Err("invalid parameter response".into()),
+        },
+        "vst3" => match state
+            .vst3_bridge()
+            .request(crate::Vst3Command::Parameters(target))?
+        {
+            crate::Vst3Answer::Parameters(values) => Ok(values),
+            _ => Err("invalid parameter response".into()),
+        },
+        _ => Err("format must be clap or vst3".into()),
+    }
+}
+fn plugin_target(state: &AppState, track_id: Option<u32>) -> Result<ClapTarget, String> {
+    match track_id {
+        None => Ok(ClapTarget::Master),
+        Some(id) => state
+            .tracks()
+            .project()
+            .tracks
+            .iter()
+            .position(|t| t.id == id)
+            .map(|index| ClapTarget::Track { index })
+            .ok_or_else(|| format!("track id {id} does not exist")),
+    }
+}
+
+/// Search parameter names and displayed values; trackId null addresses the master plugin.
+#[tauri::command]
+pub fn plugin_parameters(
+    state: State<'_, AppState>,
+    format: String,
+    track_id: Option<u32>,
+    query: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<serde_json::Value, String> {
+    let values = plugin_values(&state, &format, plugin_target(&state, track_id)?)?;
+    let query = query.unwrap_or_default().to_lowercase();
+    let values: Vec<_> = values
+        .into_iter()
+        .filter(|p| {
+            format!("{} {}", p.name, p.module)
+                .to_lowercase()
+                .contains(&query)
+        })
+        .collect();
+    let offset = offset.unwrap_or(0);
+    let total = values.len();
+    Ok(
+        serde_json::json!({"total": total, "offset": offset, "parameters": values.into_iter().skip(offset).take(limit.unwrap_or(32).min(100)).collect::<Vec<_>>(),
+        "capabilities": {"setValue": true,"setText": true,"sampleAccurateAutomation": false,"vendorPresetBrowser": "editor"}}),
+    )
+}
+
+/// Set a real plugin parameter and wait until the audio processor applies it.
+#[tauri::command]
+pub fn set_plugin_parameter(
+    state: State<'_, AppState>,
+    format: String,
+    track_id: Option<u32>,
+    param_id: u32,
+    value: Option<f64>,
+    text: Option<String>,
+) -> Result<mydaw_plugin_params::ParameterInfo, String> {
+    let target = plugin_target(&state, track_id)?;
+    match format.as_str() {
+        "clap" => {
+            state
+                .clap_bridge()
+                .request(crate::ClapCommand::SetParameter {
+                    target,
+                    id: param_id,
+                    value,
+                    text,
+                })?;
+        }
+        "vst3" => {
+            state
+                .vst3_bridge()
+                .request(crate::Vst3Command::SetParameter {
+                    target,
+                    id: param_id,
+                    value,
+                    text,
+                })?;
+        }
+        _ => return Err("format must be clap or vst3".into()),
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let parameter = plugin_values(&state, &format, target)?
+            .into_iter()
+            .find(|p| p.id == param_id)
+            .ok_or("parameter disappeared after setting its value")?;
+        if !parameter.pending {
+            return Ok(parameter);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(
+                "audio did not acknowledge the parameter; the edit will be rolled back".into(),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Save an opaque plugin preset to a file, keeping large state blobs out of CLI responses.
+#[tauri::command]
+pub fn save_plugin_preset(
+    state: State<'_, AppState>,
+    format: String,
+    track_id: Option<u32>,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    let target = plugin_target(&state, track_id)?;
+    let bytes = match format.as_str() {
+        "clap" => state
+            .clap_bridge()
+            .request(crate::ClapCommand::SaveState(target))?
+            .into_state()?,
+        "vst3" => state
+            .vst3_bridge()
+            .request(crate::Vst3Command::SaveState(target))?
+            .into_state()?,
+        _ => return Err("format must be clap or vst3".into()),
+    };
+    if bytes.is_empty() {
+        return Err("this plugin exposes no persistable state".into());
+    }
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({"path": path,"bytes":bytes.len(),"format":format}))
+}
+
+/// Restore a saved plugin preset through the same plugin state interface used by project files.
+#[tauri::command]
+pub fn load_plugin_preset(
+    state: State<'_, AppState>,
+    format: String,
+    track_id: Option<u32>,
+    path: String,
+) -> Result<(), String> {
+    let target = plugin_target(&state, track_id)?;
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    file.take(64 * 1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 64 * 1024 * 1024 {
+        return Err("preset exceeds 64 MiB limit".into());
+    }
+    match format.as_str() {
+        "clap" => {
+            state.clap_bridge().request(crate::ClapCommand::LoadState {
+                target,
+                state: bytes,
+            })?;
+        }
+        "vst3" => {
+            state.vst3_bridge().request(crate::Vst3Command::LoadState {
+                target,
+                state: bytes,
+            })?;
+        }
+        _ => return Err("format must be clap or vst3".into()),
+    }
+    Ok(())
+}
+
+/// Edit one instrument's notes while preserving every other channel and clip.
+#[tauri::command]
+pub fn patch_notes(
+    state: State<'_, AppState>,
+    pattern_id: u64,
+    track_id: u32,
+    notes: Vec<crate::MelodicNoteDto>,
+    append: bool,
+) -> Result<SequencerStateDto, String> {
+    let project = state.tracks().project();
+    let channel = project
+        .tracks
+        .iter()
+        .position(|t| t.id == track_id)
+        .ok_or_else(|| format!("track id {track_id} does not exist"))? as u8;
+    state
+        .edit_patterns(|patterns| {
+            let pattern = patterns.get_mut(pattern_id)?;
+            let clip =
+                if let Some(index) = pattern.channels.iter().position(|c| c.channel == channel) {
+                    &mut pattern.channels[index]
+                } else {
+                    pattern
+                        .channels
+                        .push(mydaw_plugin_sequencer::ChannelClip::melodic(channel));
+                    pattern.channels.last_mut().expect("just inserted")
+                };
+            if !append {
+                clip.notes.clear();
+            }
+            clip.notes
+                .extend(notes.iter().map(mydaw_plugin_sequencer::MelodicNote::from));
+            Ok(())
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(state.sequencer_state())
+}
+
 /// Plugins and panels, as of boot. Called once by the UI on startup.
 #[tauri::command]
 pub fn get_ui_snapshot(state: State<'_, AppState>) -> UiSnapshot {

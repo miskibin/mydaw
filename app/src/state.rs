@@ -161,13 +161,21 @@ pub fn starter_pattern_set(project: &Project) -> PatternSet {
 /// or a cycle. All three are wiring bugs, and all three fail before any plugin
 /// code runs.
 pub fn boot_kernel() -> Result<Kernel, KernelError> {
+    boot_kernel_with_sampler(SamplerPlugin::new())
+}
+
+pub(crate) fn boot_render_kernel() -> Result<Kernel, KernelError> {
+    boot_kernel_with_sampler(SamplerPlugin::without_discovery())
+}
+
+fn boot_kernel_with_sampler(sampler: SamplerPlugin) -> Result<Kernel, KernelError> {
     let mut kernel = Kernel::new();
     kernel.add_plugin(Box::new(MeteringPlugin::new()))?;
     kernel.add_plugin(Box::new(DebugTapPlugin::new()))?;
     kernel.add_plugin(Box::new(TestTonePlugin::new()))?;
     kernel.add_plugin(Box::new(InstrumentsPlugin::new()))?;
     kernel.add_plugin(Box::new(EffectsPlugin::new()))?;
-    kernel.add_plugin(Box::new(SamplerPlugin::new()))?;
+    kernel.add_plugin(Box::new(sampler))?;
     kernel.add_plugin(Box::new(SequencerPlugin::new()))?;
     kernel.add_plugin(Box::new(AudioIoPlugin::new()))?;
     kernel.add_plugin(Box::new(MidiIoPlugin::new()))?;
@@ -269,6 +277,8 @@ impl MidiNoteSink for EngineNoteSink {
 /// UI needs is either an immutable snapshot taken at boot or an `Arc` to a
 /// service that was designed to be shared.
 pub struct AppState {
+    control: crate::control::SessionControl,
+    jobs: Arc<crate::jobs::Jobs>,
     snapshot: UiSnapshot,
     audio: Arc<AudioIoService>,
     /// Audio *input*: the capture device and the take being built on it.
@@ -335,6 +345,29 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub fn control(&self) -> &crate::control::SessionControl {
+        &self.control
+    }
+    pub fn jobs(&self) -> &Arc<crate::jobs::Jobs> {
+        &self.jobs
+    }
+
+    pub(crate) fn restore_control_song(
+        &self,
+        file: &crate::ProjectFile,
+        looping: bool,
+    ) -> Result<(), String> {
+        let (patterns, playlist) = file.to_song().map_err(|e| e.to_string())?;
+        self.sequencer
+            .set_song(patterns, playlist)
+            .map_err(|e| e.to_string())?;
+        self.set_bpm(file.bpm).map_err(|e| e.to_string())?;
+        self.set_play_mode(file.to_play_mode())
+            .map_err(|e| e.to_string())?;
+        self.set_looping(looping).map_err(|e| e.to_string())?;
+        self.publish_song().map_err(|e| e.to_string())
+    }
+
     /// Collect the shell's state from a booted kernel.
     ///
     /// Claims the metering plugin's throttle here, once, so the pump owns it for
@@ -438,6 +471,8 @@ impl AppState {
         }
 
         Ok(Self {
+            control: crate::control::SessionControl::new(),
+            jobs: Arc::new(crate::jobs::Jobs::default()),
             snapshot: ui_snapshot(kernel),
             audio,
             recorder: Arc::new(RecordService::new()),

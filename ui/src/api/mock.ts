@@ -17,6 +17,7 @@
  */
 
 import type { Backend } from './backend';
+import type { SharedHistory } from './session';
 import type {
   AssetStatus,
   AudioSourceDto,
@@ -945,6 +946,15 @@ interface MockSession {
 
 export class MockBackend implements Backend {
   readonly kind = 'mock' as const;
+  readonly sharedHistory = false;
+  setHistoryGroup(_label?: string): void {}
+  async getSessionHistory(): Promise<SharedHistory> {
+    return { revision: 0, undoLabel: null, redoLabel: null, undoCount: 0, redoCount: 0 };
+  }
+  async replaySessionHistory(_direction: 'undo' | 'redo'): Promise<SharedHistory> {
+    throw new Error('Shared session history requires the native app; browser edits use local undo.');
+  }
+  async subscribeSession(): Promise<() => void> { return () => {}; }
 
   private playing = false;
   private samplePos = 0;

@@ -4,11 +4,10 @@ An FL Studio-style DAW built as a tiny Rust microkernel with **everything else a
 audio I/O, metering, CLAP/VST3 hosting and UI panels all register against the same contract.
 Tauri v2 + SolidJS on the front, a lock-free real-time audio graph behind the wall.
 
-Status: **Phase 1 — the engine plays.** It boots, lists its plugins, streams meters to the UI, and
-you can play it: a built-in eight-voice synth, the sampled factory instruments, a 440 Hz test
-tone or a hosted CLAP instrument, chosen from the browser and driven from the computer keyboard
-(`A W S E D F T G Y H U J`, `Z`/`X` for the octave). No sequencing, no mixer, no project files
-yet.
+The app includes a sequencer, piano roll, playlist, mixer, project files and CLAP/VST3
+hosting. The **[live session CLI](docs/cli.md)** lets agents edit the same unsaved project
+as the musician, with shared undo, revision checks, plugin parameters and independent
+snapshot rendering/analysis.
 See [`docs/superpowers/specs/2026-08-19-step3-internal-instruments.md`](docs/superpowers/specs/2026-08-19-step3-internal-instruments.md).
 
 Seeing what it plays, without speakers:

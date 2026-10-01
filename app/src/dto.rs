@@ -200,7 +200,7 @@ impl From<&Vst3PluginInfo> for Vst3PluginInfoDto {
 ///
 /// `velocity` is carried even for a cell that is off, so toggling a step in the
 /// UI and toggling it back does not silently reset an accent.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StepDto {
     pub on: bool,
@@ -228,7 +228,7 @@ impl From<&Step> for StepDto {
 /// ("Kick", "CH") is a rendering of that key. It is sent so the UI does not have
 /// to keep a second copy of the General MIDI drum map, and ignored on the way
 /// back in.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StepRowDto {
     /// MIDI key every switched-on cell triggers.
@@ -267,7 +267,7 @@ impl StepRowDto {
 ///
 /// **No channel.** The note lives inside a [`ChannelClipDto`], which knows which
 /// channel it is; carrying it twice was two facts that could disagree.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MelodicNoteDto {
     /// MIDI key, `0..=127`. 60 is middle C.
@@ -307,7 +307,7 @@ impl From<&MelodicNoteDto> for MelodicNote {
 /// `mode` is **derived** from whether there are notes (see
 /// [`ChannelClip::display_mode`]), and is sent so the UI does not have to
 /// re-derive the rule. It is ignored on the way in: the content decides.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelClipDto {
     /// The rack channel, the mixer strip and the note channel: one index.
@@ -335,7 +335,7 @@ impl ChannelClipDto {
 }
 
 /// A whole pattern, as the grid and the roll read and write it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PatternDto {
     /// Stable across a save and load. Playlist clips reference it.

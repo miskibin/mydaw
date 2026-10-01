@@ -89,13 +89,19 @@ use clack_extensions::note_ports::{
     NoteDialect, NoteDialects, NotePortInfo, NotePortInfoWriter, PluginNotePorts,
     PluginNotePortsImpl,
 };
+use clack_extensions::params::{
+    ParamDisplayWriter, ParamInfo, ParamInfoFlags, ParamInfoWriter, PluginAudioProcessorParams,
+    PluginMainThreadParams, PluginParams,
+};
 use clack_extensions::state::{PluginState, PluginStateImpl};
-use clack_plugin::events::event_types::{NoteOffEvent, NoteOnEvent};
+use clack_plugin::events::event_types::{NoteOffEvent, NoteOnEvent, ParamValueEvent};
+use clack_plugin::events::io::{InputEvents, OutputEvents};
 use clack_plugin::events::spaces::CoreEventSpace;
 use clack_plugin::events::Match;
 use clack_plugin::plugin::PluginError;
 use clack_plugin::prelude::*;
 use clack_plugin::stream::{InputStream, OutputStream};
+use clack_plugin::utils::Cookie;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -335,6 +341,7 @@ impl Plugin for SynthPlugin {
         // the module docs. The gain plugin stays state-less so the host's
         // "plugin cannot be saved" path has a subject.
         builder.register::<PluginState>();
+        builder.register::<PluginParams>();
     }
 }
 
@@ -355,6 +362,64 @@ impl<'a> SynthMainThread<'a> {
 }
 
 impl<'a> PluginMainThread<'a, SynthShared> for SynthMainThread<'a> {}
+
+fn apply_parameter_events(shared: &SynthShared, input: &InputEvents) {
+    for event in input {
+        if let Some(value) = event.as_event::<ParamValueEvent>() {
+            if value.param_id() == Some(ClapId::new(0)) {
+                shared.set_detune(value.value() as f32);
+            }
+        }
+    }
+}
+impl PluginMainThreadParams for SynthMainThread<'_> {
+    fn count(&mut self) -> u32 {
+        1
+    }
+    fn get_info(&mut self, index: u32, writer: &mut ParamInfoWriter) {
+        if index == 0 {
+            writer.set(&ParamInfo {
+                id: ClapId::new(0),
+                flags: ParamInfoFlags::IS_AUTOMATABLE,
+                cookie: Cookie::empty(),
+                name: b"Detune",
+                module: b"Pitch",
+                min_value: -24.0,
+                max_value: 24.0,
+                default_value: 0.0,
+            });
+        }
+    }
+    fn get_value(&mut self, id: ClapId) -> Option<f64> {
+        (id == ClapId::new(0)).then(|| f64::from(self.shared.detune()))
+    }
+    fn value_to_text(
+        &mut self,
+        id: ClapId,
+        value: f64,
+        writer: &mut ParamDisplayWriter,
+    ) -> core::fmt::Result {
+        use core::fmt::Write;
+        if id != ClapId::new(0) {
+            return Err(core::fmt::Error);
+        }
+        write!(writer, "{value} st")
+    }
+    fn text_to_value(&mut self, id: ClapId, text: &std::ffi::CStr) -> Option<f64> {
+        if id != ClapId::new(0) {
+            return None;
+        }
+        text.to_str().ok()?.trim_end_matches(" st").parse().ok()
+    }
+    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
+        apply_parameter_events(self.shared, input);
+    }
+}
+impl PluginAudioProcessorParams for SynthProcessor<'_> {
+    fn flush(&mut self, input: &InputEvents, _output: &mut OutputEvents) {
+        apply_parameter_events(self.shared, input);
+    }
+}
 
 /// The CLAP `state` extension: eight bytes in, eight bytes out.
 impl PluginStateImpl for SynthMainThread<'_> {
@@ -616,6 +681,7 @@ impl<'a> PluginAudioProcessor<'a, SynthShared, SynthMainThread<'a>> for SynthPro
         mut audio: Audio,
         events: Events,
     ) -> Result<ProcessStatus, PluginError> {
+        apply_parameter_events(self.shared, events.input);
         // One atomic load per block, then every sounding voice is re-derived
         // from its base frequency. Allocation-free, and O(VOICES).
         self.retune();

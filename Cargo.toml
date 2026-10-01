@@ -69,6 +69,11 @@ log = "0.4"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"   # DTO wire-shape tests, and the debug-tap axis/stats sidecars
+schemars = { version = "1", features = ["derive"] }
+interprocess = "2.4"
+uuid = { version = "1", features = ["v4"] }
+mydaw-control-protocol = { path = "crates/control-protocol" }
+mydaw-plugin-params = { path = "crates/plugin-params" }
 
 # --- internal crates ---
 mydaw-kernel = { path = "crates/kernel" }

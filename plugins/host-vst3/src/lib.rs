@@ -63,6 +63,8 @@ pub mod host;
 pub mod hosting;
 pub mod instances;
 pub mod module;
+mod parameters;
+mod preset;
 pub mod scan;
 pub mod test_util;
 

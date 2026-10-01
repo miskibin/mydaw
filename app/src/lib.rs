@@ -57,6 +57,8 @@ pub mod clap_bridge;
 pub mod clap_host;
 pub mod clips;
 mod commands;
+pub mod control;
+mod control_server;
 pub mod debug_capture;
 mod dto;
 pub mod effects;
@@ -64,6 +66,7 @@ mod file_preview;
 mod graph;
 pub mod insert;
 pub mod ipc_bench;
+pub mod jobs;
 mod library;
 mod meters;
 mod preview;
@@ -150,6 +153,7 @@ pub use vst3_bridge::{
 pub use vst3_host::Vst3Host;
 
 use std::process::ExitCode;
+use tauri::Manager;
 
 /// Boot the kernel, open the window, run until the user closes it.
 ///
@@ -159,6 +163,9 @@ use std::process::ExitCode;
 /// the UI still boots and says so.
 pub fn run() -> ExitCode {
     init_logging();
+    if let Some(path) = std::env::var_os("MYDAW_RENDER_WORKER") {
+        return jobs::run_worker(std::path::Path::new(&path));
+    }
 
     let mut kernel = match boot_kernel() {
         Ok(kernel) => kernel,
@@ -287,163 +294,15 @@ pub fn run() -> ExitCode {
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
-            commands::get_ui_snapshot,
-            commands::get_clap_plugins,
-            commands::transport_play,
-            commands::transport_stop,
-            commands::transport_seek,
-            commands::note_on,
-            commands::note_off,
-            commands::get_sources,
-            commands::set_source,
-            // The bundled sample content: is it installed, and install it.
-            commands::get_asset_status,
-            commands::start_asset_download,
-            // The mixer.
-            commands::get_tracks,
-            commands::set_track_gain,
-            commands::set_track_pan,
-            commands::set_track_pitch,
-            commands::analyze_track_pitch,
-            commands::set_track_sample_root,
-            commands::set_track_sample_region,
-            commands::analyze_slices,
-            commands::set_track_slices,
-            commands::set_track_fades,
-            commands::set_source_param,
-            commands::set_track_mute,
-            commands::set_track_solo,
-            commands::set_master_gain,
-            commands::set_selected_track,
-            commands::set_track_source,
-            commands::add_track,
-            commands::add_sample_channel,
-            commands::edit_track_sample,
-            commands::set_track_audio_source,
-            commands::render_pattern_to_sample,
-            commands::remove_track,
-            // --- buses, sends and insert chains ---
-            commands::get_effects,
-            commands::add_bus,
-            commands::remove_bus,
-            commands::rename_bus,
-            commands::set_bus_color,
-            commands::set_bus_gain,
-            commands::set_bus_pan,
-            commands::set_bus_mute,
-            commands::set_bus_solo,
-            commands::add_send,
-            commands::remove_send,
-            commands::set_send_level,
-            commands::set_send_pre,
-            commands::add_insert,
-            commands::remove_insert,
-            commands::move_insert,
-            commands::set_insert_param,
-            commands::set_insert_bypass,
-            commands::get_insert_readouts,
-            commands::get_chain_readouts,
-            commands::watch_spectrum,
-            commands::get_insert_spectrum,
-            commands::set_insert_listen,
-            commands::set_insert_sidechain,
-            // Hosted CLAP plugins: the picker, the master insert, the editors
-            // and the state groundwork the project file will use.
-            commands::set_track_source_clap,
-            commands::get_master_effects,
-            commands::set_master_effect_clap,
-            commands::clear_master_effect,
-            commands::open_clap_gui,
-            commands::close_clap_gui,
-            commands::save_clap_state,
-            commands::load_clap_state,
-            // Hosted VST3 plugins: the same surface, one format over.
-            commands::get_vst3_plugins,
-            commands::get_vst3_master_effects,
-            commands::set_track_source_vst3,
-            commands::set_master_effect_vst3,
-            commands::open_vst3_gui,
-            commands::close_vst3_gui,
-            commands::save_vst3_state,
-            commands::load_vst3_state,
-            // Patterns, the arrangement and the play mode.
-            commands::get_pattern,
-            commands::get_pattern_content,
-            commands::set_pattern,
-            commands::add_pattern,
-            commands::clone_pattern,
-            commands::split_pattern_by_channel,
-            commands::remove_pattern,
-            commands::rename_pattern,
-            commands::set_pattern_color,
-            commands::set_pattern_length,
-            commands::set_active_pattern,
-            commands::set_play_mode,
-            commands::set_loop,
-            commands::add_playlist_track,
-            commands::remove_playlist_track,
-            commands::rename_playlist_track,
-            commands::set_playlist_track_mute,
-            commands::set_playlist_track_solo,
-            commands::add_pattern_clip,
-            commands::remove_clip,
-            commands::move_clip,
-            commands::resize_clip,
-            commands::load_audio_source,
-            commands::open_audio_file,
-            commands::get_audio_sources,
-            commands::unload_audio_source,
-            commands::get_audio_waveform,
-            commands::preview_source,
-            commands::preview_instrument,
-            commands::get_preview_settings,
-            commands::set_preview_volume,
-            commands::get_library_roots,
-            commands::add_library_folder,
-            commands::remove_library_folder,
-            commands::list_library_dir,
-            commands::search_library,
-            commands::import_dropped_audio,
-            commands::preview_audio_file,
-            commands::preview_browser_file,
-            commands::stop_browser_preview,
-            commands::preview_track_sample,
-            commands::add_audio_clip,
-            commands::set_clip_gain,
-            commands::set_clip_offset,
-            commands::set_bpm,
-            commands::get_stream_info,
-            commands::get_audio_settings,
-            commands::set_audio_settings,
-            // Audio input: the device picker in Settings and the REC button.
-            commands::get_input_devices,
-            commands::set_input_device,
-            commands::get_input_status,
-            commands::set_input_armed,
-            commands::start_recording,
-            commands::stop_recording,
-            commands::cancel_recording,
-            commands::list_midi_ports,
-            commands::set_midi_port_enabled,
-            commands::get_midi_status,
-            // The project file: New / Open / Save / Save As, plus the name and
-            // the missing-plugin warnings the title and status bars draw.
-            commands::get_project_info,
-            commands::new_project,
-            commands::open_project,
-            commands::save_project,
-            commands::debug_capture,
+            control::control_call,
             commands::subscribe_meters,
-            // Spike 4's benchmark surface. Registered unconditionally (an
-            // unused match arm is free); reachable only when the bench panel is
-            // in the snapshot, which takes an environment variable.
             commands::bench_ping,
             commands::bench_ping_async,
             commands::bench_plan,
             commands::bench_sync,
             commands::bench_stream,
             commands::bench_meter_stamp,
-            commands::bench_finish,
+            commands::bench_finish
         ])
         .build(tauri::generate_context!());
 
@@ -504,11 +363,19 @@ pub fn run() -> ExitCode {
             .set_gain(preview.linear_gain());
     }
 
+    let control_server = match control_server::ControlServer::start(app.handle().clone()) {
+        Ok(server) => Some(server),
+        Err(error) => {
+            log::warn!("local CLI control unavailable: {error}");
+            None
+        }
+    };
+
     // The run loop owns the kernel. `RunEvent::Exit` fires after the last window
     // is gone, which is where the process tears itself down in order: stop
     // pushing frames at a dead webview, close the device, then stop plugins in
     // reverse dependency order.
-    app.run(move |_handle, event| match event {
+    app.run(move |handle, event| match event {
         // Every pass of the event loop, and therefore the whole CLAP heartbeat:
         // the requests the webview queued, every open editor's resize
         // negotiation, every plugin's `clap.timer-support` timers and
@@ -524,6 +391,8 @@ pub fn run() -> ExitCode {
             // The other direction is inside `Vst3Host::place_master_effect`,
             // which is handed the CLAP host for exactly this reason.
             let clap_master_before = clap_host.instance_at(ClapTarget::Master);
+            let clap_tracks_before: [_; mydaw_rt_core::MAX_TRACKS] =
+                std::array::from_fn(|index| clap_host.instance_at(ClapTarget::Track { index }));
             clap_host.tick(&track_host, &audio, &clap_bridge);
             let clap_master_now = clap_host.instance_at(ClapTarget::Master);
             if clap_master_now.is_some() && clap_master_now != clap_master_before {
@@ -531,7 +400,45 @@ pub fn run() -> ExitCode {
                 vst3_host.publish(&track_host, vst3_bridge.board());
             }
 
+            let mut vst_evicted = false;
+            for (index, before) in clap_tracks_before
+                .iter()
+                .enumerate()
+                .take(track_host.track_count())
+            {
+                let now = clap_host.instance_at(ClapTarget::Track { index });
+                if now.is_some() && now != *before {
+                    vst_evicted |= vst3_host.evict_track(index);
+                }
+            }
+            if vst_evicted {
+                vst3_host.publish(&track_host, vst3_bridge.board());
+            }
+
+            let vst_tracks_before: [_; mydaw_rt_core::MAX_TRACKS] =
+                std::array::from_fn(|index| vst3_host.instance_at(ClapTarget::Track { index }));
             vst3_host.tick(&track_host, &audio, &vst3_bridge, &mut clap_host);
+            let mut clap_evicted = false;
+            for (index, before) in vst_tracks_before
+                .iter()
+                .enumerate()
+                .take(track_host.track_count())
+            {
+                let now = vst3_host.instance_at(ClapTarget::Track { index });
+                if now.is_some() && now != *before {
+                    clap_evicted |= clap_host.evict_track(index);
+                }
+            }
+            if clap_evicted {
+                clap_host.publish(&track_host, clap_bridge.board());
+            }
+            let native_changed = clap_host.take_editor_changes() | vst3_host.take_editor_changes();
+            if native_changed {
+                handle
+                    .state::<AppState>()
+                    .control()
+                    .native_editor_changed(handle);
+            }
 
             // Last, and after both plugin hosts have had their turn: a project
             // load destroys and recreates everything either of them is holding,
@@ -556,6 +463,10 @@ pub fn run() -> ExitCode {
         }
         tauri::RunEvent::Exit => {
             log::info!("shutting down");
+            if let Some(server) = &control_server {
+                server.stop();
+            }
+            handle.state::<AppState>().jobs().stop();
             // A command that arrives during teardown must be told, not left to
             // time out against a loop that will never turn again.
             clap_bridge.set_served(false);

@@ -117,7 +117,8 @@ use crate::source::{ClapSourceRef, Source, Vst3SourceRef};
 /// the user's file. An insert chain and a routing graph are required for correct
 /// playback, which is step 8's own stated bump condition, so refusing the file
 /// by name is the correct outcome.
-pub const FORMAT_VERSION: u32 = 4;
+/// Version 5 preserves VST3 component and controller state in a versioned envelope.
+pub const FORMAT_VERSION: u32 = 5;
 
 /// File extension, without the dot. The native dialogs filter on it.
 pub const PROJECT_EXTENSION: &str = "mydaw";
@@ -1915,7 +1916,7 @@ mod tests {
             format!(r#""format_version": {FORMAT_VERSION},"#),
             "{json}"
         );
-        assert_eq!(FORMAT_VERSION, 4, "buses, sends and insert chains");
+        assert_eq!(FORMAT_VERSION, 5, "complete VST3 plugin state");
         assert!(json.ends_with("}\n"), "the file ends with a newline");
     }
 
@@ -2374,7 +2375,7 @@ mod tests {
 
         let saved = migrated.to_json().unwrap();
         assert!(
-            saved.contains(r#""format_version": 4"#),
+            saved.contains(r#""format_version": 5"#),
             "a save writes the current format"
         );
         assert!(
@@ -3072,7 +3073,7 @@ mod tests {
         // A save then writes version 4, with the new fields present rather than
         // omitted -- so the file says what it will sound like.
         let saved = parsed.to_json().unwrap();
-        assert!(saved.contains(r#""format_version": 4"#), "{saved}");
+        assert!(saved.contains(r#""format_version": 5"#), "{saved}");
         assert!(saved.contains(r#""buses": []"#) && saved.contains(r#""sends": []"#));
         assert!(saved.contains(r#""master_inserts": []"#));
         assert!(saved.contains(r#""inserts": []"#));
@@ -3085,10 +3086,14 @@ mod tests {
 
     #[test]
     fn a_project_file_from_the_future_is_refused_by_name() {
-        let future = V3_PROJECT.replace(r#""format_version": 3"#, r#""format_version": 5"#);
+        let future_version = FORMAT_VERSION + 1;
+        let future = V3_PROJECT.replace(
+            r#""format_version": 3"#,
+            &format!("\"format_version\": {future_version}"),
+        );
         assert!(matches!(
             parse_project(&future),
-            Err(ProjectFileError::FutureVersion { found: 5 })
+            Err(ProjectFileError::FutureVersion { found }) if found == future_version
         ));
     }
 

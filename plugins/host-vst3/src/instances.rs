@@ -401,6 +401,7 @@ impl Vst3InstanceHost {
         let mut closing: Vec<Vst3InstanceId> = Vec::new();
 
         for instance in &mut self.instances {
+            instance.plugin.sync_parameter_feedback();
             if let Some(session) = instance.session.as_mut() {
                 if session.pump(&mut instance.plugin, &windows).close_requested {
                     closing.push(instance.id);
@@ -417,6 +418,12 @@ impl Vst3InstanceHost {
             self.close_gui(id);
         }
         closed
+    }
+
+    pub fn take_editor_changes(&self) -> bool {
+        self.instances.iter().fold(false, |changed, instance| {
+            instance.plugin.requests().take_dirty() | changed
+        })
     }
 
     /// Deactivate every instance that has a node waiting to come home.

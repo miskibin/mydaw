@@ -30,6 +30,39 @@ use mydaw_rt_core::{AudioBuffers, NoteEvent, ProcessCtx, RtNode, TransportSnapsh
 const SAMPLE_RATE: f64 = 48_000.0;
 const MAX_BLOCK: usize = 256;
 
+#[test]
+fn parameters_change_the_processor_and_survive_state_roundtrip() {
+    let (_dir, bundle) = fixture("params").expect("the workspace must build its fixture");
+    let mut plugin = LoadedClapPlugin::load(&bundle, SYNTH_ID).unwrap();
+    let mut node = plugin.create_node(SAMPLE_RATE, MAX_BLOCK).unwrap();
+    let mut buffers = AudioBuffers::new(MAX_BLOCK);
+    plugin.set_parameter(0, None, Some("12 st")).unwrap();
+    assert!(plugin.parameters().unwrap()[0].pending);
+    let events = [NoteEvent::note_on(0, 69, 0.8)];
+    node.process(&mut ProcessCtx::with_events(
+        &mut buffers,
+        SAMPLE_RATE,
+        MAX_BLOCK,
+        TransportSnapshot::default(),
+        &events,
+    ));
+    let parameter = plugin.parameters().unwrap().remove(0);
+    assert!(!parameter.pending);
+    assert_eq!(parameter.value, 12.0);
+    let bytes = plugin.save_state().unwrap();
+    assert_eq!(
+        mydaw_fixture_clap_gain::synth::parse_state(&bytes),
+        Some(12.0)
+    );
+    assert!(plugin.set_parameter(0, Some(25.0), None).is_err());
+    assert!(plugin.set_parameter(99, Some(0.0), None).is_err());
+    drop(node);
+    assert!(plugin.shutdown());
+    let mut restored = LoadedClapPlugin::load(&bundle, SYNTH_ID).unwrap();
+    restored.load_state(&bytes).unwrap();
+    assert_eq!(restored.parameters().unwrap()[0].value, 12.0);
+}
+
 /// Self-deleting scratch directory (same three lines as the unit tests; a
 /// `tempfile` dependency for this would be heavier than the code).
 struct TempDir(PathBuf);

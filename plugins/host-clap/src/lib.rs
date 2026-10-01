@@ -37,6 +37,7 @@
 pub mod gui;
 pub mod hosting;
 pub mod instances;
+mod parameters;
 pub mod state;
 pub mod test_util;
 pub mod timers;

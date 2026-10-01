@@ -117,6 +117,8 @@ const RETIRE_POLL: Duration = Duration::from_millis(25);
 /// session.
 #[derive(Debug, thiserror::Error)]
 pub enum Vst3HostError {
+    #[error("plugin parameter operation failed: {0}")]
+    Parameter(String),
     /// The module would not open. Carries the loader's own reason.
     #[error(transparent)]
     Module(#[from] Vst3ModuleError),
@@ -319,6 +321,9 @@ impl LoadedVst3Plugin {
             })?;
 
         let requests = Arc::new(Vst3HostRequests::default());
+        let _ = requests.parameters.set(Arc::new(
+            mydaw_plugin_params::ParameterBank::new(vec![]).map_err(Vst3HostError::Parameter)?,
+        ));
         let gui_requests = Arc::new(Vst3GuiRequests::default());
         let context = Vst3HostContext::new(Arc::clone(&requests));
         let context_ptr = host_context_ptr(&context);
@@ -519,6 +524,119 @@ impl LoadedVst3Plugin {
         self.controller.is_some()
     }
 
+    /// Owner-thread metadata with native normalized values and plugin formatting.
+    pub fn parameters(&self) -> Result<Vec<mydaw_plugin_params::ParameterInfo>, String> {
+        use vst3::Steinberg::Vst::{ParameterInfo, ParameterInfo_::ParameterFlags_};
+        let Some(controller) = self.controller.as_ref() else {
+            return Ok(vec![]);
+        };
+        let bank = self
+            .requests
+            .parameters
+            .get()
+            .expect("initialized before plugin creation");
+        // SAFETY: controller metadata calls are made on the instance owner thread.
+        let count = unsafe { controller.getParameterCount() };
+        if count < 0 || count as usize > mydaw_plugin_params::MAX_PARAMETERS {
+            return Err("invalid plugin parameter count".into());
+        }
+        let mut result = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let mut info: ParameterInfo = unsafe { std::mem::zeroed() };
+            if unsafe { controller.getParameterInfo(index, &mut info) } != kResultOk {
+                continue;
+            }
+            let value = unsafe { controller.getParamNormalized(info.id) };
+            bank.register(info.id, value)?;
+            let mut display = [0; 128];
+            let _ = unsafe { controller.getParamStringByValue(info.id, value, &mut display) };
+            let utf16 = |text: &[u16]| {
+                String::from_utf16_lossy(
+                    &text[..text.iter().position(|v| *v == 0).unwrap_or(text.len())],
+                )
+            };
+            result.push(mydaw_plugin_params::ParameterInfo {
+                id: info.id,
+                name: utf16(&info.title),
+                module: format!("unit {}", info.unitId),
+                value,
+                min: 0.0,
+                max: 1.0,
+                default: info.defaultNormalizedValue,
+                display: utf16(&display),
+                value_domain: "normalized".into(),
+                read_only: info.flags & ParameterFlags_::kIsReadOnly != 0,
+                stepped: info.stepCount > 0,
+                automatable: info.flags & ParameterFlags_::kCanAutomate != 0,
+                pending: bank.is_pending(info.id),
+            });
+        }
+        Ok(result)
+    }
+    pub fn set_parameter(
+        &self,
+        id: u32,
+        value: Option<f64>,
+        text: Option<&str>,
+    ) -> Result<(), String> {
+        let controller = self
+            .controller
+            .as_ref()
+            .ok_or("plugin has no parameter controller")?;
+        let metadata = self
+            .parameters()?
+            .into_iter()
+            .find(|p| p.id == id)
+            .ok_or("parameter ID is not present")?;
+        let value = match (value, text) {
+            (Some(value), None) => value,
+            (None, Some(text)) => {
+                let mut input: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+                let mut value = 0.0;
+                if unsafe { controller.getParamValueByString(id, input.as_mut_ptr(), &mut value) }
+                    != kResultOk
+                {
+                    return Err("plugin could not parse parameter text".into());
+                }
+                value
+            }
+            _ => return Err("provide exactly one of value or text".into()),
+        };
+        metadata.check(value)?;
+        if unsafe { controller.setParamNormalized(id, value) } != kResultOk {
+            return Err("plugin refused parameter value".into());
+        }
+        if !self
+            .requests
+            .parameters
+            .get()
+            .expect("initialized")
+            .publish(id, value)
+        {
+            return Err("parameter event could not be queued".into());
+        }
+        Ok(())
+    }
+    pub fn parameter_change_count(&self) -> u64 {
+        self.requests
+            .parameters
+            .get()
+            .map_or(0, |b| b.change_count())
+    }
+    pub fn sync_parameter_feedback(&self) {
+        let Some(controller) = self.controller.as_ref() else {
+            return;
+        };
+        let Some(bank) = self.requests.parameters.get() else {
+            return;
+        };
+        let mut values = [(0, 0.0); mydaw_plugin_params::MAX_CHANGES_PER_BLOCK];
+        let count = bank.drain_output(&mut values);
+        for (id, value) in &values[..count] {
+            let _ = unsafe { controller.setParamNormalized(*id, *value) };
+        }
+    }
+
     /// The plugin's edit controller, if it has one. `[main-thread]`.
     pub(crate) fn controller(&self) -> Option<&ComPtr<IEditController>> {
         self.controller.as_ref()
@@ -541,6 +659,7 @@ impl LoadedVst3Plugin {
         sample_rate: f64,
         max_block: usize,
     ) -> Result<Vst3Node, Vst3HostError> {
+        self.parameters().map_err(Vst3HostError::Parameter)?;
         // Do this first: a node retired since the last call frees the instance.
         self.collect_retired();
 
@@ -613,7 +732,11 @@ impl LoadedVst3Plugin {
                 }
 
                 let mut setup = ProcessSetup {
-                    processMode: ProcessModes_::kRealtime as i32,
+                    processMode: if std::env::var_os("MYDAW_RENDER_WORKER").is_some() {
+                        ProcessModes_::kOffline as i32
+                    } else {
+                        ProcessModes_::kRealtime as i32
+                    },
                     symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
                     maxSamplesPerBlock: max_samples,
                     sampleRate: sample_rate,
@@ -672,6 +795,7 @@ impl LoadedVst3Plugin {
             max_block,
             layout,
             self.retire_tx.clone(),
+            Arc::clone(self.requests.parameters.get().expect("initialized")),
         ))
     }
 
@@ -811,7 +935,22 @@ impl LoadedVst3Plugin {
                 result,
             });
         }
-        Ok(stream.contents())
+        let controller_state = if let Some(controller) = &self.controller {
+            let stream = MemoryStream::empty();
+            let bstream = stream
+                .as_com_ref::<IBStream>()
+                .ok_or_else(|| Vst3HostError::Parameter("state stream unavailable".into()))?;
+            // SAFETY: owner thread, stream remains alive for the controller call.
+            if unsafe { controller.getState(bstream.as_ptr()) } == kResultOk {
+                stream.contents()
+            } else {
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+        crate::preset::encode(&stream.contents(), &controller_state)
+            .map_err(Vst3HostError::Parameter)
     }
 
     /// Restore the plugin from a blob produced by [`save_state`](Self::save_state).
@@ -829,7 +968,9 @@ impl LoadedVst3Plugin {
         let Some(component) = self.component.as_ref() else {
             return Ok(());
         };
-        let stream = MemoryStream::reading(bytes);
+        let (component_bytes, controller_bytes) =
+            crate::preset::decode(bytes).map_err(Vst3HostError::Parameter)?;
+        let stream = MemoryStream::reading(component_bytes);
         let Some(bstream) = stream.as_com_ref::<IBStream>() else {
             return Ok(());
         };
@@ -844,6 +985,12 @@ impl LoadedVst3Plugin {
                     let mut position = 0_i64;
                     let _ = bstream.seek(0, 0, &mut position);
                     let _ = controller.setComponentState(bstream.as_ptr());
+                    if !controller_bytes.is_empty() {
+                        let editor_stream = MemoryStream::reading(controller_bytes);
+                        if let Some(editor_stream) = editor_stream.as_com_ref::<IBStream>() {
+                            let _ = controller.setState(editor_stream.as_ptr());
+                        }
+                    }
                 }
             }
             result
@@ -1062,6 +1209,9 @@ impl Vst3NodeStats {
 /// thread. See the module docs. Consequently a node may safely be dropped by the
 /// `basedrop` collector thread, which is exactly what the graph does.
 pub struct Vst3Node {
+    parameter_bank: Arc<mydaw_plugin_params::ParameterBank>,
+    output_parameters: ComWrapper<NoParameterChanges>,
+    process_mode: i32,
     /// `None` only after drop has sent it home.
     processor: Option<ComPtr<IAudioProcessor>>,
     /// Stereo scratch. VST3 wants distinct input and output buffers, and the
@@ -1098,8 +1248,16 @@ impl Vst3Node {
         max_block: usize,
         layout: Vst3BusLayout,
         retire_tx: Sender<ComPtr<IAudioProcessor>>,
+        parameter_bank: Arc<mydaw_plugin_params::ParameterBank>,
     ) -> Self {
         Self {
+            parameter_bank,
+            output_parameters: NoParameterChanges::new(),
+            process_mode: if std::env::var_os("MYDAW_RENDER_WORKER").is_some() {
+                ProcessModes_::kOffline as i32
+            } else {
+                ProcessModes_::kRealtime as i32
+            },
             processor: Some(processor),
             input: [vec![0.0; max_block], vec![0.0; max_block]],
             output: [vec![0.0; max_block], vec![0.0; max_block]],
@@ -1240,6 +1398,8 @@ impl RtNode for Vst3Node {
                 .fetch_add(dropped as u64, Ordering::Relaxed);
         }
         let sent = self.events.len() as u64;
+        self.parameters.fill(&self.parameter_bank);
+        self.output_parameters.clear();
 
         {
             let bus = ctx.buffers.as_slices();
@@ -1298,7 +1458,7 @@ impl RtNode for Vst3Node {
             .map_or(std::ptr::null_mut(), |changes| changes.as_ptr());
 
         let mut data = ProcessData {
-            processMode: ProcessModes_::kRealtime as i32,
+            processMode: self.process_mode,
             symbolicSampleSize: SymbolicSampleSizes_::kSample32 as i32,
             numSamples: frames as i32,
             numInputs: num_inputs,
@@ -1309,7 +1469,10 @@ impl RtNode for Vst3Node {
             // Output parameter changes are discarded: MYDAW records no
             // automation yet, and a null here is what the specification expects
             // from a host that does not.
-            outputParameterChanges: std::ptr::null_mut(),
+            outputParameterChanges: self
+                .output_parameters
+                .as_com_ref::<vst3::Steinberg::Vst::IParameterChanges>()
+                .map_or(std::ptr::null_mut(), |c| c.as_ptr()),
             inputEvents: events_ptr,
             outputEvents: std::ptr::null_mut(),
             processContext: &raw mut context,
@@ -1321,6 +1484,10 @@ impl RtNode for Vst3Node {
         // each channel array has `CHANNELS` entries of at least `frames` samples,
         // and `numSamples <= maxSamplesPerBlock` from `setupProcessing`.
         let result = unsafe { processor.process(&mut data) };
+        if result == kResultOk {
+            self.parameters.acknowledge(&self.parameter_bank);
+            self.output_parameters.reflect(&self.parameter_bank);
+        }
 
         self.stats.process_calls.fetch_add(1, Ordering::Relaxed);
         if sent > 0 {

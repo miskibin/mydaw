@@ -445,6 +445,7 @@ impl ClapInstanceHost {
                 }
             }
             let work = instance.plugin.tick_main_thread();
+            instance.plugin.flush_inactive_parameters();
             total.timers_fired += work.timers_fired;
             total.callback |= work.callback;
             total.restart_requested |= work.restart_requested;
@@ -456,6 +457,13 @@ impl ClapInstanceHost {
             self.close_gui(id);
         }
         total
+    }
+
+    /// Native editors may change opaque state independently of the DAW GUI.
+    pub fn take_editor_changes(&self) -> bool {
+        self.instances.iter().fold(false, |changed, instance| {
+            instance.plugin.take_state_dirty() | changed
+        })
     }
 
     /// Deactivate every instance that has a node waiting to come home.

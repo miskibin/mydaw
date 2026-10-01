@@ -68,7 +68,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 /// mixer surface is indexed and mixing the two would be a bug waiting for a
 /// track removal. The main thread renumbers its own placements when the layout
 /// changes, so the two never disagree.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "slot")]
 pub enum ClapTarget {
     /// The instrument at the head of a track.
@@ -87,8 +87,15 @@ impl std::fmt::Display for ClapTarget {
 }
 
 /// What the UI can ask the main thread to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ClapCommand {
+    Parameters(ClapTarget),
+    SetParameter {
+        target: ClapTarget,
+        id: u32,
+        value: Option<f64>,
+        text: Option<String>,
+    },
     /// Create an instance of `plugin_id` from `bundle_path` and make it the
     /// source of `track`, destroying whatever was there.
     SetTrackSource {
@@ -108,7 +115,10 @@ pub enum ClapCommand {
     /// `Send + Sync` factory -- but destroying the instance it displaces does,
     /// and leaving one hosted with nothing pointing at it is a leak nobody can
     /// see. So the pair travels together.
-    SetTrackBuiltIn { track: usize, source_id: String },
+    SetTrackBuiltIn {
+        track: usize,
+        source_id: String,
+    },
     /// Empty the master insert and destroy its instance.
     ClearMasterEffect,
     /// Open a plugin's editor in its own native window.
@@ -118,7 +128,10 @@ pub enum ClapCommand {
     /// Serialise a plugin. Groundwork for the project file (step 8).
     SaveState(ClapTarget),
     /// Restore a plugin from a blob produced by [`ClapCommand::SaveState`].
-    LoadState { target: ClapTarget, state: Vec<u8> },
+    LoadState {
+        target: ClapTarget,
+        state: Vec<u8>,
+    },
     /// Append a track and rebuild the graph, re-attaching every hosted plugin.
     AddTrack {
         source_id: String,
@@ -126,7 +139,9 @@ pub enum ClapCommand {
     },
     /// Remove a track and rebuild the graph, re-attaching every hosted plugin
     /// and renumbering the placements after it.
-    RemoveTrack { track: usize },
+    RemoveTrack {
+        track: usize,
+    },
     /// Install a graph built from the project **as it now stands**, and
     /// re-attach every hosted plugin into it.
     ///
@@ -145,8 +160,9 @@ pub enum ClapCommand {
 /// Deliberately small: the *state* the UI draws comes from [`ClapBoard`] and the
 /// mixer DTO, which every mixer command returns anyway. An answer only has to
 /// carry what is specific to the operation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ClapAnswer {
+    Parameters(Vec<mydaw_plugin_params::ParameterInfo>),
     /// The operation succeeded and has nothing to report.
     Done,
     /// The editor's state after an open or close.

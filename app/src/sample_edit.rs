@@ -76,7 +76,7 @@ pub const MAX_EDIT_GAIN_DB: f32 = 24.0;
 const SILENCE_PEAK: f32 = 1.0e-6;
 
 /// One destructive operation, as the webview names it.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SampleOp {
     /// Play the file backwards. The played region is mirrored with it, so what

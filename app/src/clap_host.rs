@@ -155,6 +155,9 @@ impl ClapHost {
     pub fn open_editors(&self) -> usize {
         self.instances.open_editors()
     }
+    pub fn take_editor_changes(&self) -> bool {
+        self.instances.take_editor_changes()
+    }
 
     /// The instance behind a target, for tests that need to reach past the
     /// command surface.
@@ -191,6 +194,15 @@ impl ClapHost {
         }
     }
 
+    /// The other host already swapped this track's node; retire its old owner.
+    pub fn evict_track(&mut self, track: usize) -> bool {
+        if let Some(instance) = self.tracks.get_mut(track).and_then(Option::take) {
+            self.instances.destroy(instance);
+            return true;
+        }
+        false
+    }
+
     // ------------------------------------------------------------- dispatch
 
     fn serve(
@@ -200,6 +212,31 @@ impl ClapHost {
         audio: &AudioIoService,
     ) -> Result<ClapAnswer, String> {
         match command {
+            ClapCommand::Parameters(target) => {
+                let id = self
+                    .instance_at(target)
+                    .ok_or("no CLAP plugin in this slot")?;
+                self.instances
+                    .plugin_mut(id)
+                    .ok_or("plugin was removed")?
+                    .parameters()
+                    .map(ClapAnswer::Parameters)
+            }
+            ClapCommand::SetParameter {
+                target,
+                id,
+                value,
+                text,
+            } => {
+                let instance = self
+                    .instance_at(target)
+                    .ok_or("no CLAP plugin in this slot")?;
+                self.instances
+                    .plugin_mut(instance)
+                    .ok_or("plugin was removed")?
+                    .set_parameter(id, value, text.as_deref())?;
+                Ok(ClapAnswer::Done)
+            }
             ClapCommand::SetTrackSource {
                 track,
                 bundle_path,

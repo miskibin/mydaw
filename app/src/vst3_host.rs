@@ -135,6 +135,9 @@ impl Vst3Host {
     pub fn open_editors(&self) -> usize {
         self.instances.open_editors()
     }
+    pub fn take_editor_changes(&self) -> bool {
+        self.instances.take_editor_changes()
+    }
 
     /// The instance behind a target.
     pub fn instance_at(&self, target: Vst3Target) -> Option<Vst3InstanceId> {
@@ -167,6 +170,15 @@ impl Vst3Host {
         }
     }
 
+    /// The other host already swapped this track's node; retire its old owner.
+    pub fn evict_track(&mut self, track: usize) -> bool {
+        if let Some(instance) = self.tracks.get_mut(track).and_then(Option::take) {
+            self.instances.destroy(instance);
+            return true;
+        }
+        false
+    }
+
     // ------------------------------------------------------------- dispatch
 
     fn serve(
@@ -177,6 +189,31 @@ impl Vst3Host {
         clap: &mut ClapHost,
     ) -> Result<Vst3Answer, String> {
         match command {
+            Vst3Command::Parameters(target) => {
+                let id = self
+                    .instance_at(target)
+                    .ok_or("no VST3 plugin in this slot")?;
+                self.instances
+                    .plugin_mut(id)
+                    .ok_or("plugin was removed")?
+                    .parameters()
+                    .map(Vst3Answer::Parameters)
+            }
+            Vst3Command::SetParameter {
+                target,
+                id,
+                value,
+                text,
+            } => {
+                let instance = self
+                    .instance_at(target)
+                    .ok_or("no VST3 plugin in this slot")?;
+                self.instances
+                    .plugin_mut(instance)
+                    .ok_or("plugin was removed")?
+                    .set_parameter(id, value, text.as_deref())?;
+                Ok(Vst3Answer::Done)
+            }
             Vst3Command::SetTrackSource {
                 track,
                 module_path,

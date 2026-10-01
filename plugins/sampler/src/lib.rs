@@ -164,14 +164,31 @@ pub fn instruments_root() -> PathBuf {
 ///
 /// No panels: choosing an instrument is a property of a track, and the shell's
 /// source picker already lists whatever the registry reports.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SamplerPlugin {
     registry: Option<Arc<SamplerRegistry>>,
+    discover: bool,
+}
+
+impl Default for SamplerPlugin {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SamplerPlugin {
     pub const fn new() -> Self {
-        Self { registry: None }
+        Self {
+            registry: None,
+            discover: true,
+        }
+    }
+    /// A snapshot worker installs only the banks its project references.
+    pub const fn without_discovery() -> Self {
+        Self {
+            registry: None,
+            discover: false,
+        }
     }
 }
 
@@ -190,7 +207,7 @@ impl Plugin for SamplerPlugin {
         // Off the boot path: decoding a piano takes seconds, and a DAW whose
         // window appears late because of an instrument nobody has asked for yet
         // is a DAW that feels broken. See the crate docs.
-        if let Some(registry) = self.registry.as_ref() {
+        if let Some(registry) = self.registry.as_ref().filter(|_| self.discover) {
             registry.rescan_in_background();
         }
     }

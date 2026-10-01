@@ -294,6 +294,11 @@ fn dispatching_note_events_to_an_instrument_allocates_nothing() {
     let mut event_buffer = NoteEventBuffer::new(64);
     let observed = count_allocations(|| {
         for block in 0..64_usize {
+            // Atomics stand in for a simultaneous control-thread parameter edit.
+            assert!(plugin
+                .requests()
+                .parameters_bank()
+                .publish(0, (block % 24) as f64));
             let frames = 1 + (block * 7) % MAX_BLOCK;
             event_buffer.clear();
             for voice in 0..8_u8 {
@@ -324,7 +329,7 @@ fn dispatching_note_events_to_an_instrument_allocates_nothing() {
     );
     assert_eq!(node.stats().process_calls(), 65);
     assert_eq!(node.stats().process_errors(), 0);
-    assert_eq!(node.stats().events_sent(), 8 * 64 + 1);
+    assert_eq!(node.stats().events_sent(), 9 * 64 + 1);
     assert_eq!(node.stats().events_dropped(), 0);
 
     drop(node);

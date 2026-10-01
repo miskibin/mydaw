@@ -17,6 +17,7 @@ path = "src/bin/mydaw-clap-scan-worker.rs"
 [dependencies]
 mydaw-kernel.workspace = true
 mydaw-rt-core.workspace = true
+mydaw-plugin-params.workspace = true
 # Out-of-process scanning: the worker protocol, the metadata cache and the block
 # list. Shared with the VST3 host, because a plugin crashing the scanner is not a
 # format-specific problem.
@@ -33,6 +34,9 @@ clack-extensions = { version = "0.1.1", features = [
     "gui",
     "state",
     "timer",
+    "params",
+    "render",
+    "latency",
 ] }
 log.workspace = true
 parking_lot.workspace = true

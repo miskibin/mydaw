@@ -17,6 +17,7 @@ path = "src/bin/mydaw-vst3-scan-worker.rs"
 [dependencies]
 mydaw-kernel.workspace = true
 mydaw-rt-core.workspace = true
+mydaw-plugin-params.workspace = true
 # Out-of-process scanning: the worker protocol, the metadata cache and the block
 # list. Shared with the CLAP host, because a plugin crashing the scanner is not a
 # format-specific problem.

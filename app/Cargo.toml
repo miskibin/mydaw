@@ -18,6 +18,9 @@ path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
 
 [dependencies]
 # --- workspace ---
@@ -56,6 +59,12 @@ rtrb.workspace = true
 serde.workspace = true
 # The debug-capture command writes stats.json and the headless report.
 serde_json.workspace = true
+schemars.workspace = true
+interprocess.workspace = true
+uuid.workspace = true
+mydaw-control-protocol.workspace = true
+mydaw-plugin-params.workspace = true
+tokio = { version = "1", features = ["sync"] }
 log.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true

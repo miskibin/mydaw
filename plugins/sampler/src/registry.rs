@@ -214,13 +214,44 @@ impl SamplerRegistry {
         }
 
         let bank = SampleBank::oneshot_from_path(path)?;
+        Ok(self.install_bank(bank))
+    }
+
+    /// Load one bank synchronously for an offline worker, without scanning the
+    /// rest of the library. Never called from the audio callback.
+    pub fn install_instrument(&self, id: &str) -> Result<InstrumentInfo, String> {
+        let mut components = Path::new(id).components();
+        if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+            || components.next().is_some()
+        {
+            return Err("instrument ID must be one directory name".into());
+        }
+        if let Some(info) = self.instruments().into_iter().find(|info| info.id == id) {
+            if info.skipped != 0 {
+                return Err(format!(
+                    "instrument {id} is missing {} samples",
+                    info.skipped
+                ));
+            }
+            return Ok(info);
+        }
+        let bank = load_instrument(&self.root.join(id)).map_err(|e| e.to_string())?;
+        if bank.id() != id || !bank.skipped().is_empty() {
+            return Err(format!(
+                "instrument {id} has a mismatched ID or missing samples"
+            ));
+        }
+        Ok(self.install_bank(bank))
+    }
+
+    fn install_bank(&self, bank: Arc<SampleBank>) -> InstrumentInfo {
         let entry = entry_for(bank);
         let info = entry.info.clone();
         let type_id = info.type_id;
 
         let mut user = self.user.lock();
         if let Some(existing) = user.iter().find(|entry| entry.info.type_id == type_id) {
-            return Ok(existing.info.clone());
+            return existing.info.clone();
         }
         user.push(entry.clone());
 
@@ -234,7 +265,7 @@ impl SamplerRegistry {
         merged.push(entry);
         self.entries.store(Arc::new(merged));
         self.generation.fetch_add(1, Ordering::AcqRel);
-        Ok(info)
+        info
     }
 
     /// Rescan the root and publish what is there. **Blocking**, seconds for a
@@ -518,6 +549,25 @@ mod tests {
             .is_some());
         assert!(registry.create("sampler:nothing", 48_000.0, 512).is_none());
         assert!(registry.bank("sampler:alpha-piano").is_some());
+    }
+
+    #[test]
+    fn a_worker_loads_only_the_requested_complete_bank() {
+        let temp = TempDir::new("selective-bank");
+        let root = temp.path().join("instruments");
+        instrument(&root, "drums", "Drums");
+        instrument(&root, "unrelated", "Unrelated");
+        let registry = SamplerRegistry::new(root.clone());
+        let drums = registry.install_instrument("drums").unwrap();
+        assert_eq!(drums.id, "drums");
+        assert_eq!(registry.instruments().len(), 1);
+        assert!(!registry.contains("sampler:unrelated"));
+        let generation = registry.generation();
+        registry.install_instrument("drums").unwrap();
+        assert_eq!(registry.generation(), generation);
+        assert!(registry.install_instrument("../unrelated").is_err());
+        std::fs::remove_file(root.join("unrelated/a.wav")).unwrap();
+        assert!(registry.install_instrument("unrelated").is_err());
     }
 
     /// The hot-load path: instruments appear without anything being rebuilt.

@@ -44,8 +44,15 @@ use crate::clap_bridge::{ClapTarget, REQUEST_TIMEOUT};
 pub type Vst3Target = ClapTarget;
 
 /// What the UI can ask the main thread to do.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Vst3Command {
+    Parameters(Vst3Target),
+    SetParameter {
+        target: Vst3Target,
+        id: u32,
+        value: Option<f64>,
+        text: Option<String>,
+    },
     /// Create an instance of `cid` from `module_path` and make it the source of
     /// `track`, destroying whatever was there.
     SetTrackSource {
@@ -55,10 +62,16 @@ pub enum Vst3Command {
     },
     /// Create an instance and make it the master insert, displacing a CLAP one
     /// if that is what was there.
-    SetMasterEffect { module_path: PathBuf, cid: String },
+    SetMasterEffect {
+        module_path: PathBuf,
+        cid: String,
+    },
     /// Put a **built-in** source at the head of a track that currently holds a
     /// hosted VST3 plugin, and destroy that plugin.
-    SetTrackBuiltIn { track: usize, source_id: String },
+    SetTrackBuiltIn {
+        track: usize,
+        source_id: String,
+    },
     /// Empty the master insert and destroy its instance.
     ClearMasterEffect,
     /// Open a plugin's editor in its own native window.
@@ -68,7 +81,10 @@ pub enum Vst3Command {
     /// Serialise a plugin's component state.
     SaveState(Vst3Target),
     /// Restore a plugin from a blob produced by [`Vst3Command::SaveState`].
-    LoadState { target: Vst3Target, state: Vec<u8> },
+    LoadState {
+        target: Vst3Target,
+        state: Vec<u8>,
+    },
     /// Append a track and rebuild the graph, re-attaching every hosted plugin of
     /// **both** formats.
     AddTrack {
@@ -76,7 +92,9 @@ pub enum Vst3Command {
         name: Option<String>,
     },
     /// Remove a track and rebuild, likewise.
-    RemoveTrack { track: usize },
+    RemoveTrack {
+        track: usize,
+    },
     /// Install a graph from the project as it now stands and re-attach every
     /// hosted plugin of both formats. See
     /// [`ClapCommand::Rebuild`](crate::ClapCommand::Rebuild).
@@ -84,8 +102,9 @@ pub enum Vst3Command {
 }
 
 /// What the main thread answers with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Vst3Answer {
+    Parameters(Vec<mydaw_plugin_params::ParameterInfo>),
     /// The operation succeeded and has nothing to report.
     Done,
     /// The editor's state after an open or close.

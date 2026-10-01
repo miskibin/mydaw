@@ -43,7 +43,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::project::MissingPlugins;
-use crate::project_file::{project_name, UNTITLED};
+use crate::project_file::{project_name, ProjectFile, UNTITLED};
 
 /// How long a Tauri command waits for a project operation.
 ///
@@ -53,24 +53,33 @@ use crate::project_file::{project_name, UNTITLED};
 pub const PROJECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What the UI can ask the main thread to do with the project.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProjectCommand {
     /// Reset the session to a fresh default project.
     New,
     /// Read `path` and rebuild the whole session from it.
-    Open { path: PathBuf },
+    Open {
+        path: PathBuf,
+    },
     /// Write the session to `path`, which becomes the current project.
     ///
     /// One command for both Save and Save As: the difference between them is
     /// entirely in *where the path comes from* (the current one, or a dialog),
     /// which is a question for the command layer and not for the main thread.
-    Save { path: PathBuf },
+    Save {
+        path: PathBuf,
+    },
+    Snapshot,
+    Restore {
+        file: Box<ProjectFile>,
+    },
 }
 
 /// What the main thread answers with: the project, as it now stands.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ProjectAnswer {
     Info(ProjectInfoDto),
+    Snapshot(Box<ProjectFile>),
 }
 
 impl ProjectAnswer {
@@ -83,6 +92,7 @@ impl ProjectAnswer {
     pub fn into_info(self) -> Result<ProjectInfoDto, String> {
         match self {
             Self::Info(info) => Ok(info),
+            Self::Snapshot(_) => Err("expected project information, received a snapshot".into()),
         }
     }
 }

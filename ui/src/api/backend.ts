@@ -1,3 +1,4 @@
+import { SessionClient, type SessionChange, type SharedHistory } from './session';
 import type {
   AssetStatus,
   AssetStatusDto,
@@ -70,6 +71,11 @@ import type {
 export interface Backend {
   /** Human-readable kind, shown in the status bar. */
   readonly kind: 'tauri' | 'mock';
+  readonly sharedHistory: boolean;
+  setHistoryGroup(label?: string): void;
+  getSessionHistory(): Promise<SharedHistory>;
+  replaySessionHistory(direction: 'undo' | 'redo'): Promise<SharedHistory>;
+  subscribeSession(onChange: (change: SessionChange) => void): Promise<Unsubscribe>;
   /** One-shot fetch of plugins + contributed panels. */
   getUiSnapshot(): Promise<UiSnapshot>;
 
@@ -353,7 +359,7 @@ export interface Backend {
    * a few kilobytes of JSON and one message per edit is a protocol with no
    * ordering problems and no diff to get wrong.
    */
-  setPattern(pattern: PatternDto): Promise<SequencerState>;
+  setPattern(pattern: PatternDto, expected?: PatternDto): Promise<SequencerState>;
   /** Add an empty pattern. **Does not switch to it** -- that is `setActivePattern`. */
   addPattern(name?: string): Promise<SequencerState>;
   clonePattern(patternId: number, name?: string): Promise<SequencerState>;
@@ -546,6 +552,20 @@ export function isTauri(): boolean {
  */
 class TauriBackend implements Backend {
   readonly kind = 'tauri' as const;
+  readonly sharedHistory = true;
+  private readonly session = new SessionClient(async <T,>(request: Parameters<import('./session').ControlInvoke>[0]) => {
+    const { invoke } = await this.core();
+    return invoke<{ revision: number; data: T; error?: { code: string; message: string } }>('control_call', { request });
+  });
+  setHistoryGroup(label?: string): void { this.session.setGroup(label); }
+  async getSessionHistory(): Promise<SharedHistory> {
+    return (await this.call<{ history: SharedHistory }>('history')).history;
+  }
+  replaySessionHistory(direction: 'undo' | 'redo'): Promise<SharedHistory> { return this.call(direction); }
+  async subscribeSession(onChange: (change: SessionChange) => void): Promise<Unsubscribe> {
+    const { listen } = await import('@tauri-apps/api/event');
+    return listen<SessionChange>('mydaw:control-changed', (event) => onChange(event.payload));
+  }
 
   private async core(): Promise<typeof import('@tauri-apps/api/core')> {
     return import('@tauri-apps/api/core');
@@ -553,8 +573,11 @@ class TauriBackend implements Backend {
 
   /** One invoke, so every method below is a one-liner naming its command. */
   private async call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
-    const { invoke } = await this.core();
-    return invoke<T>(command, args);
+    if (command.startsWith('bench_')) {
+      const { invoke } = await this.core();
+      return invoke<T>(command, args);
+    }
+    return this.session.call<T>(command, args);
   }
 
   getUiSnapshot(): Promise<UiSnapshot> {
@@ -923,16 +946,20 @@ class TauriBackend implements Backend {
     });
   }
 
-  getPattern(): Promise<SequencerState> {
-    return this.call('get_pattern');
+  async getPattern(): Promise<SequencerState> {
+    const result = await this.call<SequencerState>('get_pattern');
+    this.session.observe(result.patternSet.active);
+    return result;
   }
 
-  getPatternContent(patternId: number): Promise<PatternDto> {
-    return this.call('get_pattern_content', { patternId });
+  async getPatternContent(patternId: number): Promise<PatternDto> {
+    const result = await this.call<PatternDto>('get_pattern_content', { patternId });
+    this.session.observe(result);
+    return result;
   }
 
-  setPattern(pattern: PatternDto): Promise<SequencerState> {
-    return this.call('set_pattern', { pattern });
+  setPattern(pattern: PatternDto, expected?: PatternDto): Promise<SequencerState> {
+    return this.session.call('set_pattern', { pattern }, expected);
   }
 
   addPattern(name?: string): Promise<SequencerState> {
