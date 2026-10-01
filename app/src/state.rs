@@ -1916,19 +1916,19 @@ impl AppState {
                 Ok(())
             });
         }
-        // See `add_track` for why the VST3 host is asked first.
-        if !self.vst3_bridge.board().is_empty() {
-            self.vst3_command(Vst3Command::RemoveTrack { track })
-                .map_err(MixerError::Source)?;
-            return Ok(());
-        }
-        if self.tracks.has_hosted_node() {
-            self.clap_command(ClapCommand::RemoveTrack { track })
-                .map_err(MixerError::Source)?;
-            return Ok(());
-        }
+        // Every host route must run the same pattern retargeting below.
         let before = self.tracks.track_count();
-        let outcome = self.tracks.remove_track(track, &self.audio);
+        let outcome = if !self.vst3_bridge.board().is_empty() {
+            self.vst3_command(Vst3Command::RemoveTrack { track })
+                .map(|_| ())
+                .map_err(MixerError::Source)
+        } else if self.tracks.has_hosted_node() {
+            self.clap_command(ClapCommand::RemoveTrack { track })
+                .map(|_| ())
+                .map_err(MixerError::Source)
+        } else {
+            self.tracks.remove_track(track, &self.audio)
+        };
         // As in `add_track`: the project edit happens before the graph install,
         // so what decides is whether the rack actually shrank.
         if self.tracks.track_count() < before {
@@ -3158,6 +3158,67 @@ mod tests {
             (0..before as u8).collect::<Vec<_>>(),
             "the channels above the removed one shifted down"
         );
+    }
+
+    #[test]
+    fn hosted_track_removal_preserves_note_owners_in_every_pattern() {
+        use crate::vst3_bridge::{reply, Vst3Answer, Vst3SlotDto};
+        use mydaw_plugin_sequencer::MelodicNote;
+
+        // Exercise the host mailbox route, including a graph failure after
+        // the project has already shrunk. No vendor binary or device needed.
+        for host_failed in [false, true] {
+            let (_kernel, state) = state();
+            let _ = state.add_track(Source::PolySynth, None);
+            let _ = state.add_track(Source::PolySynth, None);
+            let survivor = state.tracks.project().tracks[2].id;
+            let first = state.sequencer.patterns().active_id();
+            let second = state.add_pattern(None).unwrap();
+            let note = MelodicNote::new(66, 240, 720);
+            state
+                .edit_patterns(|set| {
+                    for id in [first, second] {
+                        set.get_mut(id)?.channel_mut(2)?.notes.push(note);
+                    }
+                    Ok(())
+                })
+                .unwrap();
+
+            let bridge = state.vst3_bridge.clone();
+            bridge.set_served(true);
+            bridge
+                .board()
+                .publish(vec![Some(Vst3SlotDto::default()), None, None], None);
+            let weak_bridge = Arc::downgrade(&bridge);
+            let tracks = state.tracks.clone();
+            let audio = state.audio.clone();
+            bridge.set_waker(Box::new(move || {
+                let bridge = weak_bridge.upgrade().unwrap();
+                for (command, sender) in bridge.drain() {
+                    let Vst3Command::RemoveTrack { track } = command else {
+                        panic!("unexpected host command");
+                    };
+                    let _ = tracks.remove_track(track, &audio);
+                    reply(
+                        &sender,
+                        if host_failed {
+                            Err("graph install failed after removal".to_owned())
+                        } else {
+                            Ok(Vst3Answer::Done)
+                        },
+                    );
+                }
+            }));
+
+            assert_eq!(state.remove_track(0).is_err(), host_failed);
+            assert_eq!(state.tracks.project().tracks[1].id, survivor);
+            let patterns = state.sequencer.patterns();
+            for id in [first, second] {
+                let pattern = patterns.get(id).unwrap();
+                assert_eq!(pattern.channel(1).unwrap().notes, vec![note]);
+                assert!(pattern.channel(2).is_none());
+            }
+        }
     }
 
     #[test]
