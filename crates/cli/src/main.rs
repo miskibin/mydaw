@@ -12,7 +12,9 @@ mydaw apply --file FILE --if-revision N [--label TEXT]\n\
 mydaw undo|redo --if-revision N\n\
 mydaw render --args '{\"options\":{\"mode\":\"pattern\",\"bars\":4}}'\n\
 mydaw analyze --args JSON\n\n\
-Global options: --session ID, --timeout SECONDS, --pretty. Render/analyze wait\n\
+mydaw diagnose --file diagnose.json\n\
+mydaw help mixing (offline guide)\n\n\
+Global options: --session ID, --timeout SECONDS, --pretty. Render/analyze/diagnose wait\n\
 for artifacts by default; --no-wait returns a job ID immediately. Output is JSON;\n\
 logs use stderr. Edits require the revision returned by context. Command args\n\
 use camelCase; schema describes exact types and musical units.\n\
@@ -101,7 +103,7 @@ fn parse(arguments: Vec<String>) -> Result<Option<Options>, String> {
         }
         "status" => "session_info".into(),
         "context" | "catalog" | "apply" | "history" | "undo" | "redo" | "render" | "analyze"
-        | "sessions" => command.clone(),
+        | "diagnose" | "sessions" => command.clone(),
         _ => {
             return Err(format!(
                 "unknown command {command}; use call COMMAND for catalog operations"
@@ -185,7 +187,10 @@ fn run(options: Options) -> Result<(Value, bool), String> {
         }
         live.into_iter().next().unwrap().0
     };
-    let worker = matches!(options.request.command.as_str(), "render" | "analyze") && options.wait;
+    let worker = matches!(
+        options.request.command.as_str(),
+        "render" | "analyze" | "diagnose"
+    ) && options.wait;
     let mut reply = call(endpoint.clone(), options.request, options.timeout)?;
     if worker && reply.error.is_none() {
         let job = reply.data["jobId"]
@@ -223,7 +228,21 @@ fn run(options: Options) -> Result<(Value, bool), String> {
     ))
 }
 fn main() -> std::process::ExitCode {
-    let options = match parse(std::env::args().skip(1).collect()) {
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if arguments.first().is_some_and(|arg| arg == "help") {
+        match arguments.get(1).map(String::as_str) {
+            None if arguments.len() == 1 => print!("{HELP}"),
+            Some("mixing") if arguments.len() == 2 => {
+                print!("{}", include_str!("../../../docs/mixing.md"))
+            }
+            _ => {
+                eprintln!("usage: mydaw help [mixing]");
+                return std::process::ExitCode::from(2);
+            }
+        }
+        return std::process::ExitCode::SUCCESS;
+    }
+    let options = match parse(arguments) {
         Ok(Some(options)) => options,
         Ok(None) => {
             print!("{HELP}");
@@ -277,5 +296,19 @@ mod tests {
         assert_eq!(options.request.if_revision, Some(42));
         assert_eq!(options.request.args["bpm"], 140);
         assert!(parse(vec!["context".into(), "--typo".into(), "x".into()]).is_err());
+    }
+    #[test]
+    fn diagnostic_alias_waits_and_has_read_only_arguments() {
+        let options = parse(vec![
+            "diagnose".into(),
+            "--args".into(),
+            r#"{"options":{"mode":"song"},"trackIds":[4,7]}"#.into(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert_eq!(options.request.command, "diagnose");
+        assert!(options.wait);
+        assert_eq!(options.request.if_revision, None);
+        assert_eq!(options.request.args["trackIds"], json!([4, 7]));
     }
 }

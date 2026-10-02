@@ -168,6 +168,12 @@ pub(crate) fn boot_render_kernel() -> Result<Kernel, KernelError> {
     boot_kernel_with_sampler(SamplerPlugin::without_discovery())
 }
 
+pub(crate) fn boot_render_kernel_with_registry(
+    registry: Arc<SamplerRegistry>,
+) -> Result<Kernel, KernelError> {
+    boot_kernel_with_sampler(SamplerPlugin::with_registry(registry))
+}
+
 fn boot_kernel_with_sampler(sampler: SamplerPlugin) -> Result<Kernel, KernelError> {
     let mut kernel = Kernel::new();
     kernel.add_plugin(Box::new(MeteringPlugin::new()))?;
@@ -3459,7 +3465,7 @@ mod tests {
                 }
             }
         }
-        let path = std::env::temp_dir().join(format!("mydaw-break-{}.wav", std::process::id()));
+        let path = std::env::temp_dir().join(format!("mydaw-break-{}.wav", uuid::Uuid::new_v4()));
         let spec = hound::WavSpec {
             channels: 2,
             sample_rate: rate as u32,

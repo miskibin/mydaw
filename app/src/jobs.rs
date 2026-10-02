@@ -28,6 +28,11 @@ pub struct RenderOptions {
     /// Solo a stable track ID through its routing and master effects.
     pub track_id: Option<u32>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DiagnosticOptions {
+    options: RenderOptions,
+    track_ids: Vec<u32>,
+}
 #[derive(Serialize, Deserialize)]
 struct WorkerInput {
     #[serde(default)]
@@ -36,6 +41,8 @@ struct WorkerInput {
     render: Option<RenderOptions>,
     input_path: Option<PathBuf>,
     images: bool,
+    #[serde(default)]
+    diagnostic: Option<DiagnosticOptions>,
 }
 struct Job {
     status: Value,
@@ -76,29 +83,7 @@ impl Jobs {
         revision: u64,
     ) -> Result<Value, String> {
         validate_options(&options)?;
-        let live = state.tracks().project();
-        for (index, track) in live.tracks.iter().enumerate() {
-            if (track.source.is_clap() && state.clap_bridge().board().track(index).is_none())
-                || (track.source.is_vst3() && state.vst3_bridge().board().track(index).is_none())
-            {
-                return Err(format!("track {} has no live plugin state to snapshot; load its plugin and audio engine first", track.id));
-            }
-        }
-        if state.project_bridge().missing().master().is_some()
-            && state.clap_bridge().board().master().is_none()
-            && state.vst3_bridge().board().master().is_none()
-        {
-            return Err(
-                "the master plugin is missing; restore or replace it before rendering".into(),
-            );
-        }
-        let project = match state
-            .project_bridge()
-            .request(crate::ProjectCommand::Snapshot)?
-        {
-            crate::ProjectAnswer::Snapshot(file) => *file,
-            _ => return Err("snapshot was not returned".into()),
-        };
+        let project = snapshot(state)?;
         self.start(
             WorkerInput {
                 assets_root: state.sampler().root().parent().map(Path::to_path_buf),
@@ -106,6 +91,29 @@ impl Jobs {
                 render: Some(options),
                 input_path: None,
                 images: true,
+                diagnostic: None,
+            },
+            revision,
+        )
+    }
+    pub fn diagnose(
+        self: &Arc<Self>,
+        state: &AppState,
+        options: RenderOptions,
+        track_ids: Vec<u32>,
+        images: bool,
+        revision: u64,
+    ) -> Result<Value, String> {
+        let project = snapshot(state)?;
+        let diagnostic = diagnostic_options(&project, options, track_ids)?;
+        self.start(
+            WorkerInput {
+                assets_root: state.sampler().root().parent().map(Path::to_path_buf),
+                project: Some(project),
+                render: None,
+                input_path: None,
+                images,
+                diagnostic: Some(diagnostic),
             },
             revision,
         )
@@ -126,6 +134,7 @@ impl Jobs {
                 render: None,
                 input_path: Some(path),
                 images,
+                diagnostic: None,
             },
             revision,
         )
@@ -233,6 +242,58 @@ impl Jobs {
         Ok(status)
     }
 }
+fn snapshot(state: &AppState) -> Result<ProjectFile, String> {
+    let live = state.tracks().project();
+    for (index, track) in live.tracks.iter().enumerate() {
+        if (track.source.is_clap() && state.clap_bridge().board().track(index).is_none())
+            || (track.source.is_vst3() && state.vst3_bridge().board().track(index).is_none())
+        {
+            return Err(format!("track {} has no live plugin state to snapshot; load its plugin and audio engine first", track.id));
+        }
+    }
+    if state.project_bridge().missing().master().is_some()
+        && state.clap_bridge().board().master().is_none()
+        && state.vst3_bridge().board().master().is_none()
+    {
+        return Err("the master plugin is missing; restore or replace it before rendering".into());
+    }
+    match state
+        .project_bridge()
+        .request(crate::ProjectCommand::Snapshot)?
+    {
+        crate::ProjectAnswer::Snapshot(file) => Ok(*file),
+        _ => Err("snapshot was not returned".into()),
+    }
+}
+
+fn diagnostic_options(
+    project: &ProjectFile,
+    mut options: RenderOptions,
+    track_ids: Vec<u32>,
+) -> Result<DiagnosticOptions, String> {
+    options.bars = Some(options.bars.unwrap_or(2));
+    options.tail_seconds = Some(options.tail_seconds.unwrap_or(0.5));
+    validate_options(&options)?;
+    if options.track_id.is_some()
+        || options.bars.unwrap() > 8
+        || options.tail_seconds.unwrap() > 3.0
+    {
+        return Err(
+            "diagnose accepts 1..8 bars, tailSeconds 0..3 and trackIds instead of options.trackId"
+                .into(),
+        );
+    }
+    if track_ids.is_empty() || track_ids.len() > 4 {
+        return Err("diagnose requires 1..4 stable trackIds".into());
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    for id in &track_ids {
+        if !unique.insert(*id) || !project.tracks.iter().any(|t| t.id == *id) {
+            return Err(format!("trackId {id} is duplicated or does not exist"));
+        }
+    }
+    Ok(DiagnosticOptions { options, track_ids })
+}
 fn validate_options(options: &RenderOptions) -> Result<(), String> {
     if !matches!(options.mode.as_str(), "pattern" | "song") {
         return Err("mode must be pattern or song".into());
@@ -256,6 +317,14 @@ pub fn run_worker(path: &Path) -> std::process::ExitCode {
         let input: WorkerInput =
             serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
+        if let Some(diagnostic) = input.diagnostic {
+            return diagnose_snapshot(
+                &input.project.ok_or("missing diagnostic snapshot")?,
+                diagnostic,
+                dir,
+                input.images,
+            );
+        }
         let capture = if let (Some(project), Some(options)) = (input.project, input.render) {
             render_snapshot(&project, &options)?
         } else {
@@ -279,7 +348,7 @@ pub fn run_worker(path: &Path) -> std::process::ExitCode {
         };
         Ok(
             json!({"status":"completed","audio":wav,"analysis":stats_path,"image":image,"sampleRate":capture.sample_rate,"frames":capture.frames(),"seconds":capture.duration_seconds(),
-            "summary":stats.per_channel,"envelope":capture.sparkline(64)}),
+            "summary":stats.per_channel,"diagnostics":crate::mix_diagnostics::measure(&capture),"envelope":capture.sparkline(64)}),
         )
     })();
     let failed = result.is_err();
@@ -296,6 +365,123 @@ pub fn run_worker(path: &Path) -> std::process::ExitCode {
     } else {
         std::process::ExitCode::SUCCESS
     }
+}
+
+fn without_master(file: &ProjectFile) -> ProjectFile {
+    let mut file = file.clone();
+    file.master_gain_db = 0.0;
+    file.master_inserts.clear();
+    file.master_effect = None;
+    file
+}
+
+fn diagnostic_artifact(
+    file: &ProjectFile,
+    options: &RenderOptions,
+    dir: &Path,
+    name: &str,
+    images: bool,
+    registry: &Arc<mydaw_plugin_sampler::SamplerRegistry>,
+) -> Result<Value, String> {
+    let capture = render_snapshot_with_registry(file, options, Some(Arc::clone(registry)))?;
+    let audio = dir.join(format!("{name}.wav"));
+    capture.write_wav(&audio).map_err(|e| e.to_string())?;
+    let metrics = crate::mix_diagnostics::measure(&capture);
+    let analysis = dir.join(format!("{name}.analysis.json"));
+    std::fs::write(
+        &analysis,
+        serde_json::to_vec_pretty(&json!({"metrics":metrics,"channels":capture.stats()}))
+            .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let image = if images {
+        let path = dir.join(format!("{name}.png"));
+        capture.render_png(&path).map_err(|e| e.to_string())?;
+        Some(path)
+    } else {
+        None
+    };
+    Ok(
+        json!({"audio":audio,"analysis":analysis,"image":image,"seconds":capture.duration_seconds(),"metrics":metrics}),
+    )
+}
+
+fn diagnose_snapshot(
+    file: &ProjectFile,
+    diagnostic: DiagnosticOptions,
+    dir: &Path,
+    images: bool,
+) -> Result<Value, String> {
+    let diagnostic = diagnostic_options(file, diagnostic.options, diagnostic.track_ids)?;
+    // Per-job cache: IDs are fixed by one snapshot, only immutable decoded
+    // banks are reused, no voices/effect state survives a stage, and everything
+    // is freed with this worker. A subsequent job decodes current asset files.
+    let registry = Arc::new(mydaw_plugin_sampler::SamplerRegistry::new(
+        mydaw_plugin_sampler::instruments_root(),
+    ));
+    let premaster_file = without_master(file);
+    let mix = diagnostic_artifact(file, &diagnostic.options, dir, "mix", images, &registry)?;
+    let premaster = diagnostic_artifact(
+        &premaster_file,
+        &diagnostic.options,
+        dir,
+        "premaster",
+        images,
+        &registry,
+    )?;
+    let mut tracks = Vec::new();
+    for id in &diagnostic.track_ids {
+        let index = file
+            .tracks
+            .iter()
+            .position(|t| t.id == *id)
+            .ok_or("track is unavailable")?;
+        let track = &file.tracks[index];
+        let mut options = diagnostic.options.clone();
+        options.track_id = Some(*id);
+        let processed = diagnostic_artifact(
+            &premaster_file,
+            &options,
+            dir,
+            &format!("track-{id}"),
+            images,
+            &registry,
+        )?;
+        let mut dry = premaster_file.clone();
+        dry.sends.clear();
+        dry.buses.clear();
+        for track in &mut dry.tracks {
+            track.inserts.clear();
+        }
+        dry.tracks[index].gain_db = 0.0;
+        dry.tracks[index].pan = 0.0;
+        dry.tracks[index].muted = false;
+        let source = diagnostic_artifact(
+            &dry,
+            &options,
+            dir,
+            &format!("source-{id}"),
+            images,
+            &registry,
+        )?;
+        tracks.push(
+            json!({"trackId":id,"name":track.name,"gainDb":track.gain_db,"muted":track.muted,
+            "sourceDescription":track.source,"source":source,"track":processed}),
+        );
+    }
+    let report = json!({"version":1,"options":diagnostic.options,"tracks":tracks,"premaster":premaster,"mix":mix,
+        "limitations":["Metrics are evidence, not an audible distortion or mix-quality verdict.",
+            "Source renders preserve velocity and instrument patch; they are not raw sample files.",
+            "Isolated tracks change sidechain/nonlinear bus context; they do not sum to the mastered mix.",
+            "Native LUFS and true peak are unavailable; use a standards-based meter on final exports.",
+            "Existing renderer has no plugin delay compensation or sample-accurate plugin automation."]});
+    let path = dir.join("diagnostic-report.json");
+    std::fs::write(
+        &path,
+        serde_json::to_vec_pretty(&report).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(json!({"status":"completed","report":path,"diagnostics":report}))
 }
 
 fn analyze_file(path: &Path) -> Result<mydaw_plugin_debug_tap::Capture, String> {
@@ -319,6 +505,14 @@ pub fn render_snapshot(
     file: &ProjectFile,
     options: &RenderOptions,
 ) -> Result<mydaw_plugin_debug_tap::Capture, String> {
+    render_snapshot_with_registry(file, options, None)
+}
+
+fn render_snapshot_with_registry(
+    file: &ProjectFile,
+    options: &RenderOptions,
+    registry: Option<Arc<mydaw_plugin_sampler::SamplerRegistry>>,
+) -> Result<mydaw_plugin_debug_tap::Capture, String> {
     use mydaw_plugin_audio_io::{run_block, AudioIoStats, RtState, RtStateParams};
     use mydaw_plugin_sequencer::{song_channel, step_len_samples, PlayMode};
     use mydaw_rt_core::{
@@ -326,7 +520,12 @@ pub fn render_snapshot(
     };
     validate_options(options)?;
     file.validate().map_err(|e| e.to_string())?;
-    let mut kernel = crate::state::boot_render_kernel().map_err(|e| e.to_string())?;
+    let cached = registry.is_some();
+    let mut kernel = match registry {
+        Some(registry) => crate::state::boot_render_kernel_with_registry(registry),
+        None => crate::state::boot_render_kernel(),
+    }
+    .map_err(|e| e.to_string())?;
     let state = AppState::from_kernel(&kernel).map_err(|e| e.to_string())?;
     // Normal GUI boot discovers banks asynchronously. A worker cannot race that
     // scan or silently render missing instruments: load its required banks now.
@@ -335,6 +534,27 @@ pub fn render_snapshot(
             if let Some(instrument) = id.strip_prefix("sampler:") {
                 if !instrument.starts_with("file:") && !state.sampler().contains(id) {
                     state.sampler().install_instrument(instrument)?;
+                } else if cached && !state.sampler().contains(id) {
+                    if let Some(path) = mydaw_plugin_sampler::file_path_of(instrument) {
+                        state
+                            .sampler()
+                            .install_file(path)
+                            .map_err(|e| e.to_string())?;
+                    }
+                }
+                if cached
+                    && state
+                        .sampler()
+                        .instruments()
+                        .iter()
+                        .map(|bank| bank.bytes)
+                        .fold(0usize, usize::saturating_add)
+                        > 512 * 1024 * 1024
+                {
+                    return Err(
+                        "diagnostic decoded sample banks exceed the 512 MiB per-job cache limit"
+                            .into(),
+                    );
                 }
             }
         }
@@ -705,5 +925,81 @@ mod tests {
             .unwrap_err()
             .contains("master plugin is missing"));
         kernel.shutdown();
+    }
+
+    #[test]
+    fn diagnostic_bounds_and_ids_fail_before_rendering() {
+        let file = file();
+        let id = file.tracks[0].id;
+        assert!(diagnostic_options(&file, options(), vec![]).is_err());
+        assert!(diagnostic_options(&file, options(), vec![id, id]).is_err());
+        assert!(diagnostic_options(&file, options(), vec![u32::MAX]).is_err());
+        let mut long = options();
+        long.bars = Some(9);
+        assert!(diagnostic_options(&file, long, vec![id]).is_err());
+        let mut ambiguous = options();
+        ambiguous.track_id = Some(id);
+        assert!(diagnostic_options(&file, ambiguous, vec![id]).is_err());
+    }
+
+    #[test]
+    fn diagnostic_reuses_decoded_banks_but_restarts_voices_and_new_jobs_reload_files() {
+        let mut file = file();
+        let directory =
+            std::env::temp_dir().join(format!("mydaw-bank-cache-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("tone.wav");
+        let source = mydaw_plugin_debug_tap::Capture::new(
+            (0..4800)
+                .flat_map(|i| {
+                    let sample = (std::f32::consts::TAU * 440.0 * i as f32 / 48000.0).sin() * 0.5;
+                    [sample, sample]
+                })
+                .collect(),
+            48000.0,
+            0,
+        );
+        source.write_wav(&path).unwrap();
+        let id = format!(
+            "sampler:{}",
+            mydaw_plugin_sampler::file_instrument_id(&path)
+        );
+        file.tracks[0].source = SourceEntry::Internal { id: id.clone() };
+        let registry = Arc::new(mydaw_plugin_sampler::SamplerRegistry::detached());
+        let first =
+            render_snapshot_with_registry(&file, &options(), Some(Arc::clone(&registry))).unwrap();
+        let bank = registry.bank(&id).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        let second =
+            render_snapshot_with_registry(&file, &options(), Some(Arc::clone(&registry))).unwrap();
+        assert_eq!(first.samples, second.samples);
+        assert!(Arc::ptr_eq(&bank, &registry.bank(&id).unwrap()));
+        assert!(render_snapshot(&file, &options()).is_err());
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn diagnostic_stages_expose_upstream_levels_without_changing_snapshot() {
+        let mut file = file();
+        let id = file.tracks[0].id;
+        file.tracks[0].gain_db = -12.0;
+        file.master_gain_db = -6.0;
+        let before = file.clone();
+        let directory =
+            std::env::temp_dir().join(format!("mydaw-diagnostic-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let options = diagnostic_options(&file, options(), vec![id]).unwrap();
+        let result = diagnose_snapshot(&file, options, &directory, false).unwrap();
+        assert_eq!(file, before);
+        let report = &result["diagnostics"];
+        let peak = |stage: &Value| stage["metrics"]["samplePeakDbfs"].as_f64().unwrap();
+        let source = &report["tracks"][0]["source"];
+        let track = &report["tracks"][0]["track"];
+        assert!((peak(source) - peak(track) - 12.0).abs() < 0.02);
+        assert!((peak(&report["premaster"]) - peak(&report["mix"]) - 6.0).abs() < 0.02);
+        assert!(source["image"].is_null());
+        assert!(Path::new(source["audio"].as_str().unwrap()).is_file());
+        assert!(Path::new(result["report"].as_str().unwrap()).is_file());
+        std::fs::remove_dir_all(&directory).unwrap();
     }
 }

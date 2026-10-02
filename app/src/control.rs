@@ -93,6 +93,7 @@ pub fn command_class(name: &str) -> CommandClass {
             name,
             "render"
                 | "analyze"
+                | "diagnose"
                 | "cancel_job"
                 | "save_plugin_preset"
                 | "save_project"
@@ -558,7 +559,7 @@ impl SessionControl {
                 return Ok(
                     json!({"total": matches.len(), "offset": offset, "commands": matches.into_iter().skip(offset).take(limit)
                     .map(|c| json!({"name": c.name,"description": c.description,"class": c.class})).collect::<Vec<_>>(),
-                    "sessionCommands": ["context","schema","apply","history","undo","redo","render","analyze"]}),
+                    "sessionCommands": ["context","schema","apply","history","undo","redo","render","analyze","diagnose"]}),
                 );
             }
             "schema" => {
@@ -688,7 +689,7 @@ impl SessionControl {
         }
         if request.origin.as_deref() != Some("gui")
             && (matches!(class, CommandClass::Project | CommandClass::Barrier)
-                || request.command == "render")
+                || matches!(request.command.as_str(), "render" | "diagnose"))
             && any_plugin_editor(&state)
         {
             return Err(ControlError::new("PLUGIN_EDITOR_OPEN","close native plugin editors before a CLI edit that snapshots or restores plugin state"));

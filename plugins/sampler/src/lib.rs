@@ -190,6 +190,14 @@ impl SamplerPlugin {
             discover: false,
         }
     }
+    /// Reuse immutable banks within one offline job, with fresh playback nodes.
+    /// Never discovers or rescans files; the job owns this registry's lifetime.
+    pub fn with_registry(registry: Arc<SamplerRegistry>) -> Self {
+        Self {
+            registry: Some(registry),
+            discover: false,
+        }
+    }
 }
 
 impl Plugin for SamplerPlugin {
@@ -198,7 +206,10 @@ impl Plugin for SamplerPlugin {
     }
 
     fn register(&mut self, ctx: &mut KernelCtx) {
-        let registry = Arc::new(SamplerRegistry::new(instruments_root()));
+        let registry = self
+            .registry
+            .clone()
+            .unwrap_or_else(|| Arc::new(SamplerRegistry::new(instruments_root())));
         self.registry = Some(Arc::clone(&registry));
         let _ = ctx.services.provide(registry);
     }

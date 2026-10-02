@@ -69,6 +69,7 @@ pub mod ipc_bench;
 pub mod jobs;
 mod library;
 mod meters;
+mod mix_diagnostics;
 mod preview;
 mod preview_settings;
 pub mod project;

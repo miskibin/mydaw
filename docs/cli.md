@@ -135,6 +135,24 @@ guarantees. A failed state checkpoint prevents an undoable edit from starting.
 
 ## Render, analysis and cancellation
 
+For gain staging and element-by-element audition, start with `mydaw help mixing`.
+This guide is bundled in the CLI and works without a running app. `mydaw diagnose`
+compares source, processed solo, premaster and final mix from one snapshot; see
+[the guide](mixing.md) for exact stage definitions and measurement limitations.
+
+```powershell
+mydaw schema diagnose
+# diagnose.json: {"options":{"mode":"song","startBar":8,"bars":2},"trackIds":[4,7],"images":false}
+mydaw diagnose --file diagnose.json --timeout 180
+```
+
+Diagnosis supports 1–4 stable track IDs and 1–8 bars, defaults to two bars with a
+0.5 s tail, and uses the same cancellable worker limit as render/analyze. It does
+not modify the live project's revision, playback or solo state. WAVs, detailed
+reports and optional images stay in the job directory; stdout contains compact
+metrics and paths. `analyze` and `render` also return a `diagnostics` field with
+these metrics. LUFS/true peak are explicitly unavailable in the native analyzer.
+
 ```powershell
 mydaw render --args '{"options":{"mode":"pattern","patternId":1,"bars":4,"tailSeconds":2}}'
 mydaw render --args '{"options":{"mode":"song","startBar":8,"bars":4,"trackId":0}}'

@@ -53,7 +53,23 @@ pub fn render(
         .jobs()
         .render(&state, options, state.control().revision())
 }
-/// Analyze a WAV in a worker; images are generated only when requested.
+/// Diagnose 1..4 tracks and a short mix excerpt from one unsaved snapshot; no live edits.
+#[tauri::command]
+pub fn diagnose(
+    state: State<'_, AppState>,
+    options: crate::jobs::RenderOptions,
+    track_ids: Vec<u32>,
+    images: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    state.jobs().diagnose(
+        &state,
+        options,
+        track_ids,
+        images.unwrap_or(false),
+        state.control().revision(),
+    )
+}
+/// Analyze an audio file in a worker; images are generated only when requested.
 #[tauri::command]
 pub fn analyze(
     state: State<'_, AppState>,
