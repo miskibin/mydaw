@@ -538,7 +538,7 @@ export function Playlist(): ReturnType<typeof Show> {
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (event.defaultPrevented || target?.closest('[aria-label="Browser"], .wv-playlist-picker')) return;
+      if (event.defaultPrevented || target?.closest('[aria-label="Browser"], .wv-playlist-picker, .wv-plug, .wv-menu, .wv-modal')) return;
       if (
         target &&
         (target.tagName === 'INPUT' ||
@@ -583,6 +583,15 @@ export function Playlist(): ReturnType<typeof Show> {
         }
       }
       if (ctrl || event.altKey) return;
+      if (!event.shiftKey && !view.typingKeyboard()) {
+        const tool = { KeyP: 'paint', KeyB: 'paint', KeyE: 'select', KeyD: 'delete' } as const;
+        const next = tool[event.code as keyof typeof tool];
+        if (next) {
+          event.preventDefault();
+          view.setPlaylistTool(next);
+          return;
+        }
+      }
       switch (event.key) {
         case 'Home':
           event.preventDefault();
@@ -596,9 +605,12 @@ export function Playlist(): ReturnType<typeof Show> {
           break;
         }
         case 'Delete':
-        case 'Backspace':
           event.preventDefault();
           void deleteSelection();
+          break;
+        case 'Backspace':
+          event.preventDefault();
+          view.togglePlaylistSnap();
           break;
         case 'Escape':
           deselectClips();
@@ -659,7 +671,7 @@ export function Playlist(): ReturnType<typeof Show> {
   }
 
   /** Select tool, or paint with Ctrl held (FL: draw drops into select). */
-  function isSelectGesture(event: PointerEvent): boolean {
+  function isSelectGesture(event: MouseEvent): boolean {
     if (view.playlistTool() === 'select') return true;
     return view.playlistTool() === 'paint' && (event.ctrlKey || event.metaKey) && !event.shiftKey;
   }
@@ -694,7 +706,7 @@ export function Playlist(): ReturnType<typeof Show> {
    * Rubber-band on an empty lane. A click (no drag) deselects; Shift keeps
    * the current set and unions whatever the box covers.
    */
-  function beginMarquee(event: PointerEvent, originLane: number): void {
+  function beginMarquee(event: MouseEvent, originLane: number): void {
     event.preventDefault();
     const originX = event.clientX;
     const originY = event.clientY;
@@ -783,7 +795,7 @@ export function Playlist(): ReturnType<typeof Show> {
       .then(() => app.commitPlaylistGesture());
   }
 
-  function onLanePointerDown(event: PointerEvent, lane: number): void {
+  function onLanePointerDown(event: MouseEvent, lane: number): void {
     if (event.button !== 0) return;
     if (isRepeatClick(event.detail)) return;
     if (isSelectGesture(event)) {
@@ -840,7 +852,7 @@ export function Playlist(): ReturnType<typeof Show> {
 
   // --- moving and resizing -------------------------------------------------
 
-  function onClipPointerDown(event: PointerEvent, clip: ClipDto, mode: 'move' | 'resize'): void {
+  function onClipPointerDown(event: MouseEvent, clip: ClipDto, mode: 'move' | 'resize'): void {
     event.stopPropagation();
     if (event.button !== 0) return;
     if (isRepeatClick(event.detail)) return;
@@ -977,7 +989,8 @@ export function Playlist(): ReturnType<typeof Show> {
       window.removeEventListener('pointerup', onUp);
       if (!moved) {
         resetGhosts(false);
-        if (clipEl) clipEl.style.width = '';
+        // No resize happened. Clearing Solid's inline width collapses this
+        // absolutely positioned clip, so the second click hits the lane.
         app.commitPlaylistGesture();
         activate(clip);
         return;
@@ -1466,7 +1479,14 @@ export function Playlist(): ReturnType<typeof Show> {
                     height: `${laneHeight(lane().id)}px`,
                     'background-size': `${BAR_PX * view.playlistZoom() * 4}px 100%, ${BAR_PX * view.playlistZoom()}px 100%`,
                   }}
-                  onPointerDown={(event) => onLanePointerDown(event, index)}
+                  // MouseEvent.detail carries the click count; PointerEvent.detail is 0.
+                  onMouseDown={(event) => onLanePointerDown(event, index)}
+                  onPointerDown={(event) => {
+                    if (event.pointerType !== 'mouse') {
+                      event.preventDefault(); // suppress the compatibility mousedown
+                      onLanePointerDown(event, index);
+                    }
+                  }}
                   onDragOver={(event) => allowDrop(event)}
                   onDrop={(event) => onLaneDrop(event, index)}
                   onContextMenu={(event) => event.preventDefault()}
@@ -1781,7 +1801,7 @@ function Clip(props: {
   /** Ticks in one loop of the pattern; 0 when this is not a pattern clip. */
   patternTicks: number;
   selected: boolean;
-  onDown: (event: PointerEvent, mode: 'move' | 'resize') => void;
+  onDown: (event: MouseEvent, mode: 'move' | 'resize') => void;
   onMenu: (event: MouseEvent) => void;
   onOpen: (altKey: boolean) => void;
 }): ReturnType<typeof Show> {
@@ -1809,8 +1829,18 @@ function Clip(props: {
         background: wash(props.colour, 0.28),
         'box-shadow': `inset 0 0 0 ${props.selected ? 2 : 1}px ${wash(props.colour, props.selected ? 1 : 0.7)}`,
       }}
-      onPointerDown={(event) => props.onDown(event, 'move')}
-      onDblClick={(event) => props.onOpen(event.altKey)}
+      onMouseDown={(event) => props.onDown(event, 'move')}
+      onPointerDown={(event) => {
+        if (event.pointerType !== 'mouse') {
+          event.preventDefault();
+          props.onDown(event, 'move');
+        }
+      }}
+      onDblClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        props.onOpen(event.altKey);
+      }}
       onContextMenu={(event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -1865,7 +1895,15 @@ function Clip(props: {
           </For>
         </div>
       </Show>
-      <span class="wv-clip__grip" onPointerDown={(event) => props.onDown(event, 'resize')} />
+      <span class="wv-clip__grip"
+        onMouseDown={(event) => props.onDown(event, 'resize')}
+        onPointerDown={(event) => {
+          if (event.pointerType !== 'mouse') {
+            event.preventDefault();
+            props.onDown(event, 'resize');
+          }
+        }}
+      />
     </div>
   );
 }

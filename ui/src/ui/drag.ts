@@ -60,6 +60,7 @@ export interface DragOptions {
  * silently stops halfway.
  */
 export function startDrag(event: PointerEvent, options: DragOptions): void {
+  if (event.button !== 0) return;
   event.preventDefault();
   event.stopPropagation();
 

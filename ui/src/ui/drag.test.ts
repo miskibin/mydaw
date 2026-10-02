@@ -1,6 +1,21 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { dragTravel, FADER_HANDLE_PX, FADER_TRAVEL_PX, faderThrowPx } from './drag';
+import { dragTravel, FADER_HANDLE_PX, FADER_TRAVEL_PX, faderThrowPx, startDrag } from './drag';
+
+describe('startDrag', () => {
+  it.each([1, 2])('leaves non-primary button %i to its own gesture', (button) => {
+    const event = { button, preventDefault: vi.fn(), stopPropagation: vi.fn() };
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+    startDrag(event as unknown as PointerEvent, {
+      from: 0, perPixel: 1, min: 0, max: 1, onChange, onCommit,
+    });
+    expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(event.stopPropagation).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+});
 
 describe('dragTravel', () => {
   it('reads only horizontal travel for a pane separator', () => {

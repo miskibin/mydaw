@@ -7,7 +7,7 @@
  * `dblclick` without flashing the menu). F2 turns the chip into a rename field.
  */
 
-import { For, Show, createEffect, createSignal } from 'solid-js';
+import { Index, Show, createEffect, createSignal, onCleanup } from 'solid-js';
 
 import { usePatternNav } from './patternNav';
 import { useAppState } from '../state';
@@ -15,15 +15,11 @@ import { trackColor } from '../theme/tokens';
 import { IconCaret } from '../ui/icons';
 import { useView } from './view';
 
-/** Windows' default double-click time. */
-const DOUBLE_CLICK_MS = 500;
-
 export function PatternSelector(): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
   const nav = usePatternNav();
   const [menu, setMenu] = createSignal(false);
-  let lastChipClick = 0;
 
   const activeId = () => app.sequencer()?.patternSet.activeId ?? -1;
   const active = () => app.patterns().find((row) => row.id === activeId());
@@ -63,22 +59,28 @@ export function PatternSelector(): ReturnType<typeof Show> {
     }
   }
 
+  const onEscape = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !menu() || event.defaultPrevented) return;
+    event.preventDefault();
+    setMenu(false);
+  };
+  window.addEventListener('keydown', onEscape, true);
+  onCleanup(() => window.removeEventListener('keydown', onEscape, true));
+
   function onChipClick(event: MouseEvent): void {
-    const now = Date.now();
-    if (now - lastChipClick < DOUBLE_CLICK_MS) {
-      lastChipClick = 0;
+    // Use the browser/OS click count rather than an independent timer.
+    if (event.detail > 1) {
       setMenu(false);
       const id = activeId();
       if (id < 0) return;
       void nav.openPattern(id, { altKey: event.altKey, surface: 'menu' });
       return;
     }
-    lastChipClick = now;
     setMenu((open) => !open);
   }
 
   return (
-    <div class="wv-patselect">
+    <div class="wv-patselect" classList={{ 'is-open': menu() }}>
       <Show
         when={renaming() && active()}
         fallback={
@@ -119,27 +121,27 @@ export function PatternSelector(): ReturnType<typeof Show> {
         <>
           <div class="wv-scrim" onClick={() => setMenu(false)} />
           <div class="wv-menu wv-menu--pattern">
-            <For each={app.patterns()}>
+            <Index each={app.patterns()}>
               {(summary) => (
                 <button
                   type="button"
                   class="wv-menu__row"
-                  classList={{ 'is-active': summary.id === activeId() }}
+                  classList={{ 'is-active': summary().id === activeId() }}
                   title="Click to make this the active pattern · double-click to open the rack"
                   onClick={() => {
-                    void app.sequencerCommand((backend) => backend.setActivePattern(summary.id));
+                    void app.sequencerCommand((backend) => backend.setActivePattern(summary().id));
                   }}
                   onDblClick={(event) => {
                     event.preventDefault();
                     setMenu(false);
-                    void nav.openPattern(summary.id, { altKey: event.altKey, surface: 'menu' });
+                    void nav.openPattern(summary().id, { altKey: event.altKey, surface: 'menu' });
                   }}
                 >
-                  <span class="wv-swatch" style={{ background: colour(summary.id, summary.color) }} />
-                  <span class="wv-patselect__name">{summary.name}</span>
+                  <span class="wv-swatch" style={{ background: colour(summary().id, summary().color) }} />
+                  <span class="wv-patselect__name">{summary().name}</span>
                 </button>
               )}
-            </For>
+            </Index>
             <div class="wv-menu__rule" />
             <button
               type="button"

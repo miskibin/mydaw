@@ -93,6 +93,7 @@ export function NumberField(props: NumberFieldProps): JSX.Element {
           title={props.title ?? 'Drag or scroll to change, double-click to type'}
           aria-label={props['aria-label']}
           onPointerDown={(event) => {
+            if (event.button !== 0) return;
             commitSoon.cancel();
             startDrag(event, {
               from: props.value(),

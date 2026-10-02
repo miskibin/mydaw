@@ -310,9 +310,10 @@ export function Rack(): ReturnType<typeof Show> {
   createEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
+      if (event.defaultPrevented || target?.closest('[aria-label="Browser"], .wv-plug, .wv-menu, .wv-modal')) return;
       if (
         target &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)
       ) {
         return;
       }
@@ -602,37 +603,37 @@ export function Rack(): ReturnType<typeof Show> {
       <div class="wv-viewbar">
         <span class="wv-viewbar__title">CHANNEL RACK</span>
         <div class="wv-pattabs">
-          <For each={app.patterns()}>
+          <Index each={app.patterns()}>
             {(summary) => (
               <button
                 type="button"
                 class="wv-pattab"
-                classList={{ 'is-active': summary.id === activeId() }}
+                classList={{ 'is-active': summary().id === activeId() }}
                 style={
-                  summary.id === activeId()
+                  summary().id === activeId()
                     ? {
-                        background: alpha(summary.color ?? trackColor(summary.id), 0.16),
-                        'box-shadow': `inset 0 0 0 1px ${alpha(summary.color ?? trackColor(summary.id), 0.6)}`,
+                        background: alpha(summary().color ?? trackColor(summary().id), 0.16),
+                        'box-shadow': `inset 0 0 0 1px ${alpha(summary().color ?? trackColor(summary().id), 0.6)}`,
                       }
                     : undefined
                 }
                 title="Click to edit this pattern · double-click for the piano roll · F2 to rename"
                 onClick={() =>
-                  void app.sequencerCommand((backend) => backend.setActivePattern(summary.id))
+                  void app.sequencerCommand((backend) => backend.setActivePattern(summary().id))
                 }
                 onDblClick={(event) => {
                   event.preventDefault();
-                  void nav.openPattern(summary.id, { altKey: event.altKey, surface: 'tab' });
+                  void nav.openPattern(summary().id, { altKey: event.altKey, surface: 'tab' });
                 }}
               >
                 <span
                   class="wv-swatch"
-                  style={{ background: summary.color ?? trackColor(summary.id) }}
+                  style={{ background: summary().color ?? trackColor(summary().id) }}
                 />
-                {summary.name}
+                {summary().name}
               </button>
             )}
-          </For>
+          </Index>
           <button
             type="button"
             class="wv-dashed"
@@ -943,20 +944,19 @@ function RackRow(props: {
           title={`${
             props.track.clap?.hasEditor || props.track.vst3?.hasEditor
               ? 'Open this instrument’s own window'
-              : 'Select this channel · double-click for the instrument window'
+              : 'Open this instrument’s window'
           } · right-click for piano roll and fills`}
           onClick={(event) => {
             event.stopPropagation();
+            // A double-click includes two clicks. Open/toggle only once.
+            if (event.detail > 1) return;
             props.onSelect();
             const slot = props.track.clap ?? props.track.vst3;
             if (slot?.hasEditor) {
               app.toggleGui({ slot: 'track', index: props.track.index }, !slot.guiOpen);
+            } else if (hasSampleWindow(props.track)) {
+              props.onOpenSample();
             }
-          }}
-          onDblClick={(event) => {
-            event.stopPropagation();
-            props.onSelect();
-            if (hasSampleWindow(props.track)) props.onOpenSample();
           }}
         >
           {props.track.name}

@@ -161,6 +161,7 @@ export interface ViewState {
   setRollTool: Setter<RollTool>;
   rollSnap: Accessor<number>;
   setRollSnap: Setter<number>;
+  toggleRollSnap(): void;
   rollZoom: Accessor<number>;
   setRollZoom: Setter<number>;
   /** Vertical zoom: how tall each key row is, independent of time zoom. */
@@ -182,6 +183,7 @@ export interface ViewState {
   setPlaylistTool: Setter<PlaylistTool>;
   playlistSnap: Accessor<number>;
   setPlaylistSnap: Setter<number>;
+  togglePlaylistSnap(): void;
   playlistZoom: Accessor<number>;
   setPlaylistZoom: Setter<number>;
   /** Clip ids the playlist has selected. Empty means none. */
@@ -264,6 +266,10 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   const [selection, setSelection] = createSignal<number[]>([]);
   const [playlistTool, setPlaylistTool] = createSignal<PlaylistTool>('paint');
   const [playlistSnap, setPlaylistSnap] = createSignal(PLAYLIST_SNAPS[0]![0]);
+  let lastRollSnap = rollSnap();
+  let lastPlaylistSnap = playlistSnap();
+  createEffect(() => { if (rollSnap() > 0) lastRollSnap = rollSnap(); });
+  createEffect(() => { if (playlistSnap() > 0) lastPlaylistSnap = playlistSnap(); });
   const [playlistZoom, setPlaylistZoom] = createSignal(1);
   const [selectedClips, setSelectedClips] = createSignal<number[]>([]);
   const [playlistFollow, setPlaylistFollow] = createSignal(true);
@@ -373,6 +379,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     setRollTool,
     rollSnap,
     setRollSnap,
+    toggleRollSnap() { setRollSnap((snap) => snap === 0 ? lastRollSnap : 0); },
     rollZoom,
     setRollZoom,
     rollZoomY,
@@ -391,6 +398,7 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
     setPlaylistTool,
     playlistSnap,
     setPlaylistSnap,
+    togglePlaylistSnap() { setPlaylistSnap((snap) => snap === 0 ? lastPlaylistSnap : 0); },
     playlistZoom,
     setPlaylistZoom,
     selectedClips,

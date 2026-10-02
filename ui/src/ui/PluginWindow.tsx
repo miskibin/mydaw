@@ -60,6 +60,7 @@ export function PluginWindow(props: {
     event.preventDefault();
     event.stopPropagation();
     props.onFocus();
+    root?.focus({ preventScroll: true });
     const startX = event.clientX;
     const startY = event.clientY;
     const onMove = (next: PointerEvent) => move(next.clientX - startX, next.clientY - startY);
@@ -95,6 +96,9 @@ export function PluginWindow(props: {
     <div
       ref={root}
       class="wv-plug"
+      role="dialog"
+      aria-label={props.title}
+      tabindex={-1}
       classList={{ 'is-focused': props.focused }}
       style={{
         left: `${pos().x}px`,
@@ -103,11 +107,19 @@ export function PluginWindow(props: {
         height: `${size().h}px`,
         'z-index': props.z,
       }}
-      onPointerDown={() => props.onFocus()}
+      onPointerDown={(event) => {
+        props.onFocus();
+        const target = event.target as HTMLElement;
+        const control = target.closest('button, input, textarea, select, a, [tabindex], [contenteditable="true"]');
+        if (!control || control === root) {
+          root?.focus({ preventScroll: true });
+        }
+      }}
     >
       <div
         class="wv-plug__bar"
         onPointerDown={(event) => {
+          if ((event.target as HTMLElement).closest('button')) return;
           origin.x = pos().x;
           origin.y = pos().y;
           drag(event, (dx, dy) => {

@@ -15,6 +15,20 @@ pnpm typecheck  # tsc --noEmit
 pnpm preview    # serve the built dist/
 ```
 
+### Interaction checks
+
+With `pnpm dev` running, `pnpm test:controls` exercises real mouse and keyboard
+input through `agent-browser`. Set `AGENT_BROWSER_BIN` to its executable when
+it is not on PATH. These checks require the browser-only MockBackend and refuse
+to edit a live Tauri project. Screenshots land in `.debug/controls/`.
+
+Channel buttons open instrument windows with one click. Double-click a playlist
+pattern clip to edit it in the rack; Alt-double-click or F7 opens the piano roll.
+Double-click a rack pattern tab to open the roll. In the playlist, P/B select
+paint, E selects, and D selects delete, while typing-piano mode is off. Delete
+removes the selection; Backspace toggles snap and restores the previous spacing.
+Floating editors own their editing keys, and Escape closes the active editor.
+
 ### `pnpm dev` runs standalone in a browser
 
 `getBackend()` checks for `window.__TAURI_INTERNALS__` and falls back to

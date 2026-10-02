@@ -5,7 +5,7 @@
  * opening the rack or piano roll while a song plays never interrupts it.
  */
 
-import { Match, Show, Switch, createEffect, on, onCleanup } from 'solid-js';
+import { Match, Show, Switch, createEffect, createMemo, on, onCleanup } from 'solid-js';
 
 import { Browser } from './shell/Browser';
 import { SidePanel, PlaylistPicker } from './shell/SidePanel';
@@ -29,7 +29,10 @@ export function App(): ReturnType<typeof Show> {
 
   // Restore the selected channel after Open/New without changing a mixer bus
   // selection on every ordinary engine refresh.
-  createEffect(on([app.projectRevision, () => app.mixer() !== undefined], () => {
+  // Memoize readiness: reading mixer() in a dependency function still reruns
+  // on every fresh DTO, even when that function keeps returning `true`.
+  const mixerReady = createMemo(() => app.mixer() !== undefined);
+  createEffect(on([app.projectRevision, mixerReady], () => {
     const index = app.mixer()?.selected;
     if (index === undefined) return;
     view.setStrip({ kind: 'track', index });
@@ -81,6 +84,7 @@ export function App(): ReturnType<typeof Show> {
         }
         break;
       case 'F2': {
+        if (target?.closest('.wv-plug, .wv-menu, .wv-modal')) break;
         if (view.rollOpen() || view.view() === 'settings') break;
         const id = app.sequencer()?.patternSet.activeId;
         if (id === undefined) break;

@@ -408,6 +408,12 @@
   color: var(--txt);
 }
 
+/* Keep the opener above its dismiss scrim so the second click reaches it. */
+.wv-patselect.is-open .wv-patselect__btn {
+  position: relative;
+  z-index: 111;
+}
+
 .wv-patselect__name {
   min-width: 0;
   overflow: hidden;

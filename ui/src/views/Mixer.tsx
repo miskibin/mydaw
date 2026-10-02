@@ -1371,6 +1371,7 @@ function EffectMenu(props: { menu: FxMenu; close: () => void }): JSX.Element {
       <div
         class="wv-menu wv-mixer__fxmenu"
         style={{ left: `${props.menu.x}px`, top: `${props.menu.y}px` }}
+        onClick={(event) => event.stopPropagation()}
       >
         <Index each={app.effects()}>
           {(effect) => (
@@ -1379,19 +1380,23 @@ function EffectMenu(props: { menu: FxMenu; close: () => void }): JSX.Element {
               class="wv-menu__row"
               title={effect().description}
               onClick={() => {
-                const target = props.menu.target;
+                // The menu can be dismissed before the engine answers. Keep
+                // plain values instead of reading its disposed Show accessor.
+                const { target, owner } = props.menu;
+                const chosen = effect();
                 const before = new Set(insertsOnStrip(app.mixer(), target).map((insert) => insert.id));
                 const strip: StripRef =
                   target.kind === 'master'
                     ? { kind: 'master' }
                     : { kind: target.kind, index: target.index };
+                props.close();
                 void app
-                  .mixerCommand((b) => b.addInsert(target, effect().typeId))
+                  .mixerCommand((b) => b.addInsert(target, chosen.typeId))
                   .then(() => {
                     const id = addedInsertId(before, insertsOnStrip(app.mixer(), target));
-                    if (id !== undefined) view.openInsertEditor({ strip, insertId: id });
-                    app.say(`${props.menu.owner} · Insert`, `${effect().name} added`);
-                    props.close();
+                    if (id === undefined) return;
+                    view.openInsertEditor({ strip, insertId: id });
+                    app.say(`${owner} · Insert`, `${chosen.name} added`);
                   });
               }}
             >

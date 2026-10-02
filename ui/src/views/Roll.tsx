@@ -1278,8 +1278,8 @@ export function Roll(): ReturnType<typeof Show> {
 
   function onKeyDown(event: KeyboardEvent): void {
     const target = event.target as HTMLElement | null;
-    if (event.defaultPrevented || target?.closest('[aria-label="Browser"]')) return;
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.isContentEditable)) return;
+    if (event.defaultPrevented || target?.closest('[aria-label="Browser"], .wv-plug, .wv-menu, .wv-modal')) return;
+    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
     const ctrl = event.ctrlKey || event.metaKey;
 
     if (event.key === 'Escape') {
@@ -1287,7 +1287,12 @@ export function Roll(): ReturnType<typeof Show> {
       view.closeRoll();
       return;
     }
-    if (event.key === 'Delete' || event.key === 'Backspace') {
+    if (event.key === 'Backspace' && !ctrl && !event.altKey) {
+      event.preventDefault();
+      view.toggleRollSnap();
+      return;
+    }
+    if (event.key === 'Delete') {
       if (view.selection().length === 0) return;
       event.preventDefault();
       deleteNotes(view.selection());
