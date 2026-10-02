@@ -82,7 +82,7 @@ export class Playhead {
     const snapThreshold = SNAP_THRESHOLD_SECONDS * this.sampleRate;
     // Transport state changes are always a hard cut -- no smoothing across them.
     this.pendingError =
-      this.playing !== playing || Math.abs(error) > snapThreshold ? 0 : error;
+      !playing || this.playing !== playing || Math.abs(error) > snapThreshold ? 0 : error;
 
     this.playing = playing;
     this.lastReadAtMs = nowMs;

@@ -1090,7 +1090,7 @@ function RackRow(props: {
                   }}
                   onClick={(event) => event.stopPropagation()}
                   onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return;
+                    if (event.key !== 'Enter' || event.repeat || event.ctrlKey || event.metaKey || event.altKey) return;
                     event.preventDefault(); event.stopPropagation();
                     app.startPatternGesture(cell().on ? 'Erase step' : 'Add step');
                     props.onPaintStep(index, !cell().on, event.shiftKey);

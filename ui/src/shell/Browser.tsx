@@ -236,6 +236,8 @@ function BrowserBody(): JSX.Element {
   };
 
   function keyDown(event: KeyboardEvent): void {
+    // Modified Space belongs to the host transport, not sample audition.
+    if (event.code === 'Space' && (event.ctrlKey || event.metaKey)) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
       event.preventDefault();
       event.stopPropagation();

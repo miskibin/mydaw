@@ -61,6 +61,13 @@ const backend = (expression) => evaluate(`(async () => {
   return ${expression};
 })()`);
 const patternState = () => backend('await backend.getPattern()');
+const transportFrame = () => backend(`await new Promise((resolve) => {
+  let detach;
+  backend.subscribeMeters(frame => {
+    detach?.();
+    resolve({ samplePos: frame.samplePos, playing: frame.playing });
+  }).then(unsubscribe => { detach = unsubscribe; });
+})`);
 const clipScores = (clips) => clips.map(({ id, ...score }) => score);
 function point(selector, x = 0.5, y = 0.5, index = 0) {
   return evaluate(`(() => {
@@ -86,6 +93,9 @@ try {
   command('open', url);
   command('set', 'viewport', '1600', '900');
   command('wait', '.wv-chrow__label');
+  command('snapshot', '-i');
+  command('screenshot', resolve(outputDir, 'transport-initial.png'));
+  assert.deepEqual(command('errors').errors, []);
   assert.equal(evaluate('!!window.__TAURI_INTERNALS__'), false,
     'Run this destructive fixture test only against MockBackend, never a live project.');
   evaluate(`(() => {
@@ -162,10 +172,10 @@ try {
   check('F5/F6/F7 change the playing scope, mixer and settings retain it', () => {
     click('.wv-rack-window .wv-viewbar__title');
     press('Space');
-    assert.equal(count('button[title="Pause (Space)"]'), 1);
+    assert.equal(count('.wv-tbtn--play.is-playing'), 1);
     press('F5');
     assert.equal(patternState().playMode, 'song');
-    assert.equal(count('button[title="Pause (Space)"]'), 1);
+    assert.equal(count('.wv-tbtn--play.is-playing'), 1);
     press('F7');
     assert.equal(patternState().playMode, 'pat');
     press('F7');
@@ -184,9 +194,90 @@ try {
     assert.equal(count('.wv-rack-window'), 1);
     click('.wv-rack-window .wv-viewbar__title');
     press('Space');
-    assert.equal(count('button[title="Pause (Space)"]'), 0);
+    assert.equal(count('.wv-tbtn--play.is-playing'), 0);
     press('F5');
     press('F6');
+  });
+
+  check('Space stops and rewinds; Ctrl+Space pauses without changing a focused step', () => {
+    const step = '[aria-label="808 Kit step 1"]';
+    const before = activeStep();
+    function activeStep() { return evaluate(`document.querySelector(${JSON.stringify(step)}).getAttribute('aria-pressed')`); }
+    evaluate(`document.querySelector(${JSON.stringify(step)}).focus()`);
+    press('Space');
+    command('wait', '250');
+    assert.equal(transportFrame().playing, true);
+    assert.equal(activeStep(), before);
+    press('Control+Space');
+    const paused = transportFrame();
+    assert.equal(paused.playing, false);
+    assert.ok(paused.samplePos > 0);
+    command('wait', '150');
+    assert.equal(transportFrame().samplePos, paused.samplePos);
+    assert.equal(activeStep(), before);
+    press('Control+Space');
+    const resumed = transportFrame();
+    assert.equal(resumed.playing, true);
+    assert.ok(resumed.samplePos > paused.samplePos);
+    press('Space');
+    assert.deepEqual(transportFrame(), { samplePos: 0, playing: false });
+    press('Space');
+    assert.equal(transportFrame().playing, true);
+    // A held key must not repeatedly stop and restart.
+    evaluate(`document.querySelector(${JSON.stringify(step)}).dispatchEvent(new KeyboardEvent('keydown', {
+      key: ' ', code: 'Space', repeat: true, bubbles: true, cancelable: true,
+    }))`);
+    assert.equal(transportFrame().playing, true);
+    press('Space');
+    assert.deepEqual(transportFrame(), { samplePos: 0, playing: false });
+  });
+
+  check('playlist ruler remembers a start without carrying it into the pattern', () => {
+    press('F5');
+    const p = point('.wv-pl__ruler-track', 0, 0.5);
+    p.x += 160;
+    command('mouse', 'move', String(p.x), String(p.y));
+    command('mouse', 'down', 'left');
+    command('mouse', 'up', 'left');
+    const start = transportFrame();
+    assert.ok(start.samplePos > 0);
+    press('Space');
+    assert.equal(transportFrame().playing, true);
+    press('Space');
+    assert.deepEqual(transportFrame(), start);
+    press('F6');
+    assert.deepEqual(transportFrame(), { samplePos: 0, playing: false });
+    press('F5');
+    assert.deepEqual(transportFrame(), start);
+    press('Home');
+    assert.deepEqual(transportFrame(), { samplePos: 0, playing: false });
+    press('F6');
+    // Space in a text input remains text entry.
+    evaluate(`document.querySelector('.wv-browser__search').focus()`);
+    press('Space');
+    assert.equal(transportFrame().playing, false);
+    press('Backspace');
+    click('.wv-rack-window .wv-viewbar__title');
+  });
+
+  check('Piano Roll and Rack share the remembered start; Home returns it to zero', () => {
+    press('F7');
+    const p = point('.wv-roll__canvas', 0, 0);
+    p.x += 220;
+    p.y += 10;
+    command('mouse', 'move', String(p.x), String(p.y));
+    command('mouse', 'down', 'left');
+    command('mouse', 'up', 'left');
+    const start = transportFrame();
+    assert.ok(start.samplePos > 0);
+    press('Space');
+    assert.equal(transportFrame().playing, true);
+    press('Space');
+    assert.deepEqual(transportFrame(), start);
+    press('F7');
+    assert.deepEqual(transportFrame(), start);
+    press('Home');
+    assert.deepEqual(transportFrame(), { samplePos: 0, playing: false });
   });
 
   check('viewport shrink keeps the rack controls and resize handle reachable', () => {

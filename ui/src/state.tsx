@@ -198,6 +198,7 @@ export interface AppState {
   play(): void;
   stop(): void;
   togglePlay(): void;
+  togglePause(): void;
   seek(samplePos: number): void;
   setPlayMode(mode: PlayMode): void;
   /** Whether SONG repeats the arrangement. PAT loops regardless. */
@@ -378,7 +379,7 @@ function createAppState(): AppState {
         backend.getAudioSources(),
       ]);
       setSnapshot(snap);
-      setSequencer(seq);
+      adoptSequencer(seq);
       setMixer(mix);
       setEffects(catalogue);
       setSources(sourceList);
@@ -494,6 +495,9 @@ function createAppState(): AppState {
   }
 
   function adoptSequencer(next: SequencerState): void {
+    if (sequencer()?.patternSet.active.id !== next.patternSet.active.id) {
+      transportControl.resetStart('pat');
+    }
     setSequencer(next);
     if (next.sampleRate > 0) playhead.setSampleRate(next.sampleRate);
   }
@@ -508,7 +512,12 @@ function createAppState(): AppState {
     },
     play: () => backend.transportPlay(),
     stop: () => backend.transportStop(),
+    seek: (position) => backend.transportSeek(position),
+    isPlaying: playing,
+    position: () => playhead.positionSamples(),
+    samplesPerBeat: () => playhead.getSampleRate() * 60 / (sequencer()?.bpm ?? 130),
     playing: setPlaying,
+    move: (position, running) => playhead.reset(position, running),
     report,
   });
 
@@ -525,11 +534,12 @@ function createAppState(): AppState {
   }
 
   function seek(samplePos: number): void {
-    const position = Math.max(0, Math.round(samplePos));
-    backend.transportSeek(position).catch(report);
-    // Move the drawn playhead now rather than waiting for the next packet: a
-    // click on a ruler that takes 30 ms to land reads as a dropped click.
-    playhead.reset(position, playing());
+    transportControl.seek(samplePos);
+  }
+
+  function togglePause(): void {
+    if (playing()) transportControl.pause();
+    else play();
   }
 
   function setPlayMode(mode: PlayMode): void {
@@ -950,7 +960,10 @@ function createAppState(): AppState {
       undo.clear();
       setUndoRevision(undo.revision);
       await refresh();
-      if (label === 'new' || label === 'opened') setProjectRevision((revision) => revision + 1);
+      if (label === 'new' || label === 'opened') {
+        transportControl.reset();
+        setProjectRevision((revision) => revision + 1);
+      }
       say('Project', `${label} ${info.name}`);
       for (const warning of info.warnings) console.warn('[mydaw]', warning);
       if (info.warnings.length > 0) setKernelError(info.warnings.join(' · '));
@@ -996,6 +1009,8 @@ function createAppState(): AppState {
 
   function handleMeterFrame(frame: MeterFrame): void {
     meters.push(frame);
+    // Ignore packets from before a queued Stop/Seek/Play has reached the engine.
+    if (transportControl.busy()) return;
     playhead.update(frame.samplePos, frame.playing);
     // Only when it actually changed: this runs 30 times a second.
     if (frame.playing !== playing()) setPlaying(frame.playing);
@@ -1083,10 +1098,19 @@ function createAppState(): AppState {
         return;
       }
     }
-    const controlOwnsSpace = target?.closest('button, [role="button"], [role="slider"], [role="menuitem"]');
-    if (event.code === 'Space' && !typing && !controlOwnsSpace && !event.ctrlKey && !event.metaKey) {
+    const controlOwnsSpace = target?.closest('[role="menuitem"], [role="menu"], .wv-menu, .wv-browser');
+    if (event.key === 'Home' && editorPlayMode === 'pat' && !typing && !controlOwnsSpace &&
+        !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
       event.preventDefault();
-      togglePlay();
+      seek(0);
+      return;
+    }
+    if (event.code === 'Space' && !typing && !event.altKey && !event.shiftKey &&
+        (!controlOwnsSpace || event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      if (event.repeat) return;
+      if (event.ctrlKey || event.metaKey) togglePause();
+      else togglePlay();
     }
   }
 
@@ -1246,6 +1270,7 @@ function createAppState(): AppState {
     play,
     stop,
     togglePlay,
+    togglePause,
     seek,
     setPlayMode,
     looping: () => sequencer()?.looping ?? true,

@@ -17,7 +17,6 @@ import {
   IconLoop,
   IconMoon,
   IconSettings,
-  IconPause,
   IconPlay,
   IconStop,
   IconSun,
@@ -197,21 +196,16 @@ export function TopBar(): ReturnType<typeof Show> {
           type="button"
           class="wv-tbtn wv-tbtn--play"
           classList={{ 'is-playing': app.playing() }}
-          title={app.playing() ? 'Pause (Space)' : `Play ${view.playbackMode() === 'pat' ? 'pattern' : 'playlist'} (Space)`}
+          title={app.playing() ? 'Stop and return to start (Space) · Pause: Ctrl+Space' : `Play ${view.playbackMode() === 'pat' ? 'pattern' : 'playlist'} (Space) · Resume: Ctrl+Space`}
           onClick={() => app.togglePlay()}
         >
-          <Show when={app.playing()} fallback={<IconPlay />}>
-            <IconPause />
-          </Show>
+          <IconPlay />
         </button>
         <button
           type="button"
           class="wv-tbtn"
-          title="Stop and rewind to the start"
-          onClick={() => {
-            app.stop();
-            app.seek(0);
-          }}
+          title="Stop and return to start (Space) · Home: beginning"
+          onClick={() => app.stop()}
         >
           <IconStop />
         </button>

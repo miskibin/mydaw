@@ -26,7 +26,7 @@ Waveforms cover up to the first 15 seconds; longer
 files are marked. The full file is loaded when added to a channel or Playlist.
 
 Paint drum steps in the Rack; right-click a channel for fills and Piano Roll.
-Pan and volume remain visible when scrolling long patterns. Enter or Space
+Pan and volume remain visible when scrolling long patterns. Enter
 toggles a focused step. Knobs also accept arrows, Shift for finer changes,
 Home/End, and double-click to reset.
 
@@ -38,6 +38,19 @@ and plugin windows retain the last musical editor's playback scope. Space and
 the Play button use that scope, including after external CLI changes; editor
 activation also changes scope while playback is running.
 Automatic GUI scope changes do not add Undo entries or clear Redo.
+
+**Space** and the main Play button start/stop, returning to the editor's start
+point on Stop. **Ctrl+Space** pauses/resumes at the exact engine position instead
+of rewinding. Pattern and Playlist have separate start points, initially zero;
+clicking or dragging their time ruler remembers a new start point. Switching
+between these scopes starts at that scope's start point, including while playing.
+Rack and Piano Roll share the pattern start point. Selecting another pattern
+resets its start point to zero; opening or creating a project resets both.
+**Home** in a musical editor moves its start point to zero. Start points stay on
+their musical beats when the tempo changes. Held Space does not repeatedly
+toggle the transport. Space starts/stops even when an editor step, button or
+knob has keyboard focus; Enter activates that control. Text inputs, menus and
+sample audition keep their local Space behavior; Ctrl+Space pauses the transport.
 
 The Rack is a floating window over the Playlist or Mixer. Drag the empty space
 or **CHANNEL RACK** label in its toolbar; controls retain their usual gestures.
@@ -69,6 +82,8 @@ this machine. Open it with Ctrl+O and use Save As for your own version.
 
 The interaction choices follow the official [FL Studio Browser](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/browser.htm),
 [Channel Rack](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/channelrack.htm)
+and [transport controls](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/toolbar_panels.htm),
+with [keyboard shortcuts](https://www.image-line.com/fl-studio-learning/fl-studio-online-manual/html/basics_shortcuts.htm)
 and [workflow](https://www.image-line.com/fl-studio-learning-content/fl-studio-online-manual/html/basics_workflow.htm)
 manuals. The explicit search and folder behavior were also checked against
 [Ableton's Browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/).
