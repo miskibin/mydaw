@@ -5,9 +5,7 @@
  * than from signals -- they change 60 times a second and must not touch the
  * reactive scheduler.
  *
- * ## PAT / SONG lives here, next to the transport
- *
- * Editor navigation leaves playback alone. The toggle chooses what plays.
+ * Playback follows the active musical editor; there is no separate mode switch.
  */
 
 import { Show, createSignal, onCleanup } from 'solid-js';
@@ -199,7 +197,7 @@ export function TopBar(): ReturnType<typeof Show> {
           type="button"
           class="wv-tbtn wv-tbtn--play"
           classList={{ 'is-playing': app.playing() }}
-          title={app.playing() ? 'Pause (Space)' : 'Play (Space)'}
+          title={app.playing() ? 'Pause (Space)' : `Play ${view.playbackMode() === 'pat' ? 'pattern' : 'playlist'} (Space)`}
           onClick={() => app.togglePlay()}
         >
           <Show when={app.playing()} fallback={<IconPlay />}>
@@ -266,30 +264,6 @@ export function TopBar(): ReturnType<typeof Show> {
           <span class="wv-meta__value wv-disabled">4/4</span>
           <span class="wv-meta__tag">SIG</span>
         </div>
-      </div>
-
-      <div
-        class="wv-seg wv-playmode"
-        title="Choose what plays: the current pattern or the whole song. Opening an editor keeps this mode."
-      >
-        <button
-          type="button"
-          class="wv-seg__btn wv-seg__btn--mode"
-          classList={{ 'is-active': app.playMode() === 'pat' }}
-          aria-pressed={app.playMode() === 'pat'}
-          onClick={() => app.setPlayMode('pat')}
-        >
-          PAT
-        </button>
-        <button
-          type="button"
-          class="wv-seg__btn wv-seg__btn--mode"
-          classList={{ 'is-active': app.playMode() === 'song' }}
-          aria-pressed={app.playMode() === 'song'}
-          onClick={() => app.setPlayMode('song')}
-        >
-          SONG
-        </button>
       </div>
 
       <PatternSelector />

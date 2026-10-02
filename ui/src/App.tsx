@@ -1,8 +1,8 @@
 /**
  * The shell.
  *
- * Editors share the Browser. PAT/SONG is an explicit transport choice, so
- * opening the rack or piano roll while a song plays never interrupts it.
+ * Editors share the Browser. Playback follows the last musical editor used;
+ * the channel rack floats above the playlist or mixer.
  */
 
 import { Match, Show, Switch, createEffect, createMemo, on, onCleanup } from 'solid-js';
@@ -22,6 +22,8 @@ import { Rack } from './views/Rack';
 import { Roll } from './views/Roll';
 import { SampleEditor } from './views/SampleEditor';
 import { Settings } from './views/Settings';
+import { PluginWindow } from './ui/PluginWindow';
+import { bindPointerActivation } from './ui/pointerActivation';
 
 export function App(): ReturnType<typeof Show> {
   const app = useAppState();
@@ -32,6 +34,7 @@ export function App(): ReturnType<typeof Show> {
   // Memoize readiness: reading mixer() in a dependency function still reruns
   // on every fresh DTO, even when that function keeps returning `true`.
   const mixerReady = createMemo(() => app.mixer() !== undefined);
+  const initialRackHeight = () => Math.min(480, Math.max(180, app.tracks().length * 42 + 104));
   createEffect(on([app.projectRevision, mixerReady], () => {
     const index = app.mixer()?.selected;
     if (index === undefined) return;
@@ -40,6 +43,7 @@ export function App(): ReturnType<typeof Show> {
     view.closeRoll();
     view.closeSampleEditor();
     view.closeInsertEditor();
+    app.setPlayMode(view.playbackMode());
   }));
 
   // UI zoom is the webview's own (`zoomHotkeysEnabled` in tauri.conf.json):
@@ -84,7 +88,7 @@ export function App(): ReturnType<typeof Show> {
         }
         break;
       case 'F2': {
-        if (target?.closest('.wv-plug, .wv-menu, .wv-modal')) break;
+        if (target?.closest('.wv-plug:not(.wv-rack-window), .wv-menu, .wv-modal')) break;
         if (view.rollOpen() || view.view() === 'settings') break;
         const id = app.sequencer()?.patternSet.activeId;
         if (id === undefined) break;
@@ -139,16 +143,34 @@ export function App(): ReturnType<typeof Show> {
       <TopBar />
       <div class="wv-body">
         <Browser />
-        <Show when={!view.rollOpen() && view.view() === 'playlist'}><PlaylistPicker /></Show>
-        <Show when={view.rollOpen()} fallback={
-          <Switch fallback={<Rack />}>
-            <Match when={view.view() === 'settings'}><Settings /></Match>
-            <Match when={view.view() === 'playlist'}><Playlist /></Match>
-            <Match when={view.view() === 'rack'}><Rack /></Match>
-            <Match when={view.view() === 'mixer'}><Mixer /></Match>
-          </Switch>
-        }><Roll /></Show>
+        <Show when={!view.rollOpen() && view.workspaceView() === 'playlist'}><PlaylistPicker /></Show>
+        <div class="wv-workspace" ref={(element) => bindPointerActivation(element, view.focusWorkspace)} onFocusIn={() => view.focusWorkspace()}>
+          <Show when={view.rollOpen()} fallback={
+            <Switch fallback={<Playlist />}>
+              <Match when={view.workspaceView() === 'settings'}><Settings /></Match>
+              <Match when={view.workspaceView() === 'playlist'}><Playlist /></Match>
+              <Match when={view.workspaceView() === 'mixer'}><Mixer /></Match>
+            </Switch>
+          }><Roll /></Show>
+        </div>
         <Show when={!view.rollOpen()}><SidePanel /></Show>
+        <Show when={mixerReady() && view.rackOpen() && !view.rollOpen() && view.workspaceView() !== 'settings'}>
+          <PluginWindow
+            title="Channel Rack"
+            class="wv-rack-window"
+            embeddedHeader
+            focused={view.view() === 'rack'}
+            z={30}
+            defaultWidth={1000}
+            defaultHeight={initialRackHeight()}
+            minHeight={180}
+            offset={0}
+            geometry={view.rackGeometry() ?? { x: view.browserWidth() + 192, y: 56, w: 1000, h: initialRackHeight() }}
+            onGeometryChange={view.setRackGeometry}
+            onFocus={() => view.go('rack')}
+            onClose={() => view.closeRack()}
+          ><Rack onClose={() => view.closeRack()} /></PluginWindow>
+        </Show>
         <EffectEditors />
         <Show when={view.sampleEditor() !== null}><SampleEditor /></Show>
       </div>

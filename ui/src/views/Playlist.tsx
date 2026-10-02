@@ -537,6 +537,7 @@ export function Playlist(): ReturnType<typeof Show> {
 
   onMount(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (view.view() !== 'playlist' || view.rollOpen()) return;
       const target = event.target as HTMLElement | null;
       if (event.defaultPrevented || target?.closest('[aria-label="Browser"], .wv-playlist-picker, .wv-plug, .wv-menu, .wv-modal')) return;
       if (
@@ -1597,7 +1598,7 @@ export function Playlist(): ReturnType<typeof Show> {
             <strong>The arrangement is empty.</strong>
             <span class="wv-empty__hint">
               Select a pattern on the left, then click a lane to place it.
-              Switch to SONG and press Space to hear the arrangement.
+                  Press Space in the playlist to hear the arrangement.
             </span>
           </div>
         </Show>

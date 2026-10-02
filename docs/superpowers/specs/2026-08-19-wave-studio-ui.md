@@ -18,9 +18,9 @@ does, and what it deliberately refuses to draw.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ TopBar   WAVE · transport · clock · BPM · PAT/SONG · pattern · views · ☀ │
+│ TopBar   transport · clock · BPM · pattern · views · window controls · ☀ │
 ├──────────┬────────────────────────────────────────────┬──────────────────┤
-│ Browser  │  PLAYLIST | RACK | MIXER                   │ Picker           │
+│ Browser  │  PLAYLIST | MIXER + floating RACK          │ Picker           │
 │ Sounds   │                                            │ Inspector        │
 │ Plugins  │        (or the fullscreen PIANO ROLL,      │  instrument      │
 │ Audio    │         which covers all three)            │  insert cards    │
@@ -30,8 +30,10 @@ does, and what it deliberately refuses to draw.
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-Three main views (F5 / F6 / F9) and a fullscreen piano roll (F7, Escape to
-leave). Both side panes collapse to a rail.
+Playlist (F5), a floating Channel Rack (F6), Mixer (F9) and a fullscreen piano
+roll (F7, Escape to leave). The rack remembers its dragged position and resized
+dimensions within the session, and shares its toolbar with the window handle.
+See [the current workflow](../../fl-workflow.md) for activation and playback.
 
 Files:
 
@@ -66,7 +68,7 @@ against `api/mock.ts`.
 | Clock, bar counter | `MeterFrame.samplePos` via `Playhead`, painted on the frame loop |
 | BPM | `set_bpm` (rejects out of range; optimistic with rollback) |
 | SIG `4/4` | **disabled readout** — the engine's `ticksPerBar` is 4/4 only |
-| PAT / SONG | `set_play_mode` |
+| Musical editor activation | `set_play_mode` |
 | Pattern selector | `set_active_pattern`; the menu also does `add_pattern`, `clone_pattern`, `rename_pattern`, `set_pattern_color`, `remove_pattern` |
 | Project name → menu | `new_project`, `open_project`, `save_project`, `save_project(saveAs)` |
 | Theme | local, persisted to `localStorage` |
@@ -179,17 +181,20 @@ disabled control is a promise and these are not owed:
 
 ## 4. UX decisions
 
-### 4.1 PAT / SONG is explicit, and view-independent
+### 4.1 Playback follows musical editor activation
 
-The mock implies the mode from the view: the rack plays the pattern, the
-playlist plays the song. That is a hidden mode change, and the case it breaks is
-the most ordinary one there is — opening the mixer while the arrangement plays
-would have stopped the song and started looping a pattern.
+Updated 2026-10-02: the requested workflow replaces the separate PAT/SONG
+toggle. Activating the Rack or Piano Roll selects pattern playback; activating
+the Playlist selects arrangement playback. Activation includes pointer and
+keyboard focus, as well as F5/F6/F7. With both the floating rack and playlist
+visible, the editor used most recently supplies the scope. Mixer, Settings,
+Browser and plugin editors retain that scope, so inspecting the mix never
+changes the musical source.
 
-So the mode is a visible toggle next to the transport, exactly where FL Studio
-puts it, and **switching views never changes what plays**. The playlist's
-playhead is drawn only in SONG mode, because in PAT mode it would be pointing at
-a timeline the transport is not running.
+Mode commands are ordered before Play, and Stop cancels a Play still waiting
+for a mode command. External CLI mode changes are left alone while the GUI is
+idle; the next musical editor activation or GUI Play restores the UI context.
+The playlist playhead is drawn only in song mode.
 
 ### 4.2 The rack's `steps` / `roll` button is a conversion
 

@@ -304,12 +304,6 @@
   color: var(--dim2);
 }
 
-/* PAT / SONG. Narrower than a view tab: it is a mode, not a destination. */
-.wv-seg__btn--mode {
-  padding: 0 9px;
-  font-size: 9.5px;
-}
-
 /* Master volume — the FL-style knob that lives on the bar, not the mixer. */
 
 .wv-vol {

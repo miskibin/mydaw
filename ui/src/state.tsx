@@ -60,6 +60,7 @@ import {
   midiKeyFor,
 } from './lib/keyboard';
 import { Playhead } from './lib/playhead';
+import { createTransportControl } from './lib/transportControl';
 import {
   playlistEntry,
   patternEntry,
@@ -499,15 +500,24 @@ function createAppState(): AppState {
 
   // --- transport -----------------------------------------------------------
 
-  function play(): void {
-    backend.transportPlay().catch(report);
-    setPlaying(true);
-  }
+  const transportControl = createTransportControl({
+    mode: () => sequencer()?.playMode ?? 'pat',
+    setMode: async (mode) => {
+      adoptSequencer(await backend.setPlayMode(mode));
+      setKernelError(null);
+    },
+    play: () => backend.transportPlay(),
+    stop: () => backend.transportStop(),
+    playing: setPlaying,
+    report,
+  });
 
-  function stop(): void {
-    backend.transportStop().catch(report);
-    setPlaying(false);
+  let editorPlayMode: PlayMode | undefined;
+  function play(): void {
+    if (editorPlayMode !== undefined) transportControl.setMode(editorPlayMode);
+    transportControl.play();
   }
+  const stop = transportControl.stop;
 
   function togglePlay(): void {
     if (playing()) stop();
@@ -523,8 +533,8 @@ function createAppState(): AppState {
   }
 
   function setPlayMode(mode: PlayMode): void {
-    void sequencerCommand((b) => b.setPlayMode(mode));
-    say('Transport · Mode', mode === 'pat' ? 'Pattern' : 'Song');
+    editorPlayMode = mode;
+    transportControl.setMode(mode);
   }
 
   function setLoop(looping: boolean): void {

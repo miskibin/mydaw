@@ -3,7 +3,9 @@
  * drag the title bar, resize the corner, close with the X or Escape.
  */
 
-import { createSignal, onCleanup, onMount, type JSX } from 'solid-js';
+import { Show, createSignal, onCleanup, onMount, type JSX } from 'solid-js';
+import { fitWindow, type WindowGeometry } from './windowGeometry';
+import { bindPointerActivation } from './pointerActivation';
 
 export function PluginWindow(props: {
   title: string;
@@ -13,6 +15,12 @@ export function PluginWindow(props: {
   defaultWidth: number;
   defaultHeight: number;
   offset: number;
+  class?: string;
+  /** An editor's own toolbar can serve as its drag handle without a second row. */
+  embeddedHeader?: boolean;
+  minHeight?: number;
+  geometry?: WindowGeometry | undefined;
+  onGeometryChange?: (geometry: WindowGeometry) => void;
   onFocus: () => void;
   onClose: () => void;
   children: JSX.Element;
@@ -33,30 +41,40 @@ export function PluginWindow(props: {
 
   const initialWidth = Math.min(props.defaultWidth, Math.max(320, window.innerWidth - 16));
   const initialHeight = Math.min(props.defaultHeight, Math.max(260, window.innerHeight - 16));
-  const [pos, setPos] = createSignal({
+  const [pos, setPos] = createSignal(props.geometry ? { x: props.geometry.x, y: props.geometry.y } : {
     x: Math.max(8, Math.min(72 + props.offset * 28, window.innerWidth - initialWidth - 8)),
     y: Math.max(8, Math.min(24 + props.offset * 24, window.innerHeight - initialHeight - 8)),
   });
   const [size, setSize] = createSignal({
     // An editor must fit on first open. Its content can scroll, but the title
     // bar and resize handle must never start outside a small laptop viewport.
-    w: initialWidth,
-    h: initialHeight,
+    w: props.geometry?.w ?? initialWidth,
+    h: props.geometry?.h ?? initialHeight,
   });
 
+  function update(held: WindowGeometry): void {
+    const next = fitWindow(held, host(), props.minHeight);
+    setPos({ x: next.x, y: next.y });
+    setSize({ w: next.w, h: next.h });
+    props.onGeometryChange?.(next);
+  }
+
   onMount(() => {
-    const bounds = host();
-    const w = Math.min(size().w, Math.max(320, bounds.w - 16));
-    const h = Math.min(size().h, Math.max(260, bounds.h - 16));
-    setSize({ w, h });
-    setPos((held) => ({
-      x: Math.max(8, Math.min(held.x, bounds.w - w - 8)),
-      y: Math.max(8, Math.min(held.y, bounds.h - h - 8)),
-    }));
+    const fit = () => update({ ...pos(), ...size() });
+    fit();
+    const observer = new ResizeObserver(fit);
+    const parent = root?.offsetParent;
+    if (parent instanceof HTMLElement) observer.observe(parent);
+    onCleanup(() => observer.disconnect());
+    if (props.embeddedHeader && props.focused) root?.focus({ preventScroll: true });
   });
+
+  let cancelDrag: (() => void) | undefined;
+  onCleanup(() => cancelDrag?.());
 
   function drag(event: PointerEvent, move: (dx: number, dy: number) => void): void {
     if (event.button !== 0) return;
+    cancelDrag?.();
     event.preventDefault();
     event.stopPropagation();
     props.onFocus();
@@ -68,10 +86,18 @@ export function PluginWindow(props: {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
+      cancelDrag = undefined;
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
+    cancelDrag = onUp;
+  }
+
+  function dragTitle(event: PointerEvent): void {
+    origin.x = pos().x;
+    origin.y = pos().y;
+    drag(event, (dx, dy) => update({ x: origin.x + dx, y: origin.y + dy, ...size() }));
   }
 
   function onKeyDown(event: KeyboardEvent): void {
@@ -81,6 +107,9 @@ export function PluginWindow(props: {
     // event and every other open window stands down — one Escape, one close.
     if (event.defaultPrevented) return;
     const target = event.target as HTMLElement | null;
+    // The rack must not consume Escape meant for a plugin or a popup above it.
+    const overlay = target?.closest('.wv-plug, .wv-menu, .wv-modal');
+    if (props.embeddedHeader && overlay && overlay !== root) return;
     if (target && (target.tagName === 'INPUT' || target.isContentEditable)) return;
     event.preventDefault();
     event.stopPropagation();
@@ -94,8 +123,11 @@ export function PluginWindow(props: {
 
   return (
     <div
-      ref={root}
-      class="wv-plug"
+      ref={(element) => {
+        root = element;
+        bindPointerActivation(element, () => props.onFocus());
+      }}
+      class={`wv-plug ${props.class ?? ''}`}
       role="dialog"
       aria-label={props.title}
       tabindex={-1}
@@ -108,36 +140,31 @@ export function PluginWindow(props: {
         'z-index': props.z,
       }}
       onPointerDown={(event) => {
-        props.onFocus();
         const target = event.target as HTMLElement;
         const control = target.closest('button, input, textarea, select, a, [tabindex], [contenteditable="true"]');
         if (!control || control === root) {
           root?.focus({ preventScroll: true });
+          if (props.embeddedHeader && target.closest('[data-window-drag]')) dragTitle(event);
         }
       }}
+      onFocusIn={() => props.onFocus()}
     >
-      <div
-        class="wv-plug__bar"
-        onPointerDown={(event) => {
-          if ((event.target as HTMLElement).closest('button')) return;
-          origin.x = pos().x;
-          origin.y = pos().y;
-          drag(event, (dx, dy) => {
-            const bounds = host();
-            setPos({
-              x: Math.max(8, Math.min(origin.x + dx, bounds.w - 96)),
-              y: Math.max(8, Math.min(origin.y + dy, bounds.h - 64)),
-            });
-          });
-        }}
-      >
-        <span class="wv-swatch" style={{ background: props.color }} />
-        <span class="wv-plug__title">{props.title}</span>
-        <span class="wv-spacer" />
-        <button type="button" class="wv-chip" title="Close" onClick={() => props.onClose()}>
-          ×
-        </button>
-      </div>
+      <Show when={!props.embeddedHeader}>
+        <div
+          class="wv-plug__bar"
+          onPointerDown={(event) => {
+            if ((event.target as HTMLElement).closest('button')) return;
+            dragTitle(event);
+          }}
+        >
+          <span class="wv-swatch" style={{ background: props.color }} />
+          <span class="wv-plug__title">{props.title}</span>
+          <span class="wv-spacer" />
+          <button type="button" class="wv-chip" title="Close" onClick={() => props.onClose()}>
+            ×
+          </button>
+        </div>
+      </Show>
       <div class="wv-plug__body">{props.children}</div>
       <div
         class="wv-plug__resize"
@@ -145,11 +172,7 @@ export function PluginWindow(props: {
           origin.w = size().w;
           origin.h = size().h;
           drag(event, (dx, dy) => {
-            const bounds = host();
-            setSize({
-              w: Math.max(Math.min(480, bounds.w - 16), origin.w + dx),
-              h: Math.max(Math.min(320, bounds.h - 16), origin.h + dy),
-            });
+            update({ ...pos(), w: origin.w + dx, h: origin.h + dy });
           });
         }}
       />

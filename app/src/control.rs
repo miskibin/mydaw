@@ -655,20 +655,25 @@ impl SessionControl {
         for operation in &operations {
             crate::commands::control_validate(&operation.command, operation.args.clone())?;
         }
-        let class = if operations
-            .iter()
-            .any(|o| command_class(&o.command) == CommandClass::Project)
-            || (operations
+        // GUI mode changes follow editor activation. Navigation must neither
+        // consume Undo nor discard Redo; explicit CLI edits retain their class.
+        let class =
+            if request.command == "set_play_mode" && request.origin.as_deref() == Some("gui") {
+                CommandClass::Transient
+            } else if operations
                 .iter()
-                .any(|o| command_class(&o.command) == CommandClass::Mixer)
-                && operations
+                .any(|o| command_class(&o.command) == CommandClass::Project)
+                || (operations
                     .iter()
-                    .any(|o| command_class(&o.command) == CommandClass::Song))
-        {
-            CommandClass::Project
-        } else {
-            command_class(&operations[0].command)
-        };
+                    .any(|o| command_class(&o.command) == CommandClass::Mixer)
+                    && operations
+                        .iter()
+                        .any(|o| command_class(&o.command) == CommandClass::Song))
+            {
+                CommandClass::Project
+            } else {
+                command_class(&operations[0].command)
+            };
         let editable = matches!(
             class,
             CommandClass::Song

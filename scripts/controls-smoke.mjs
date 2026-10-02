@@ -62,9 +62,9 @@ const backend = (expression) => evaluate(`(async () => {
 })()`);
 const patternState = () => backend('await backend.getPattern()');
 const clipScores = (clips) => clips.map(({ id, ...score }) => score);
-function point(selector, x = 0.5, y = 0.5) {
+function point(selector, x = 0.5, y = 0.5, index = 0) {
   return evaluate(`(() => {
-    const box = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+    const box = document.querySelectorAll(${JSON.stringify(selector)})[${index}].getBoundingClientRect();
     return { x: Math.round(box.x + box.width * ${x}), y: Math.round(box.y + box.height * ${y}) };
   })()`);
 }
@@ -96,22 +96,130 @@ try {
     }));
   })()`);
 
+  check('floating rack drags, resizes and remembers its geometry after reopening', () => {
+    assert.equal(count('.wv-playmode'), 0);
+    assert.equal(count('.wv-rack-window'), 1);
+    assert.equal(count('.wv-workspace .wv-pl__lane'), 4);
+    const before = evaluate('document.querySelector(".wv-rack-window").style.left');
+    drag('.wv-rack-window .wv-viewbar__title', 40, 20);
+    const moved = evaluate('document.querySelector(".wv-rack-window").style.left');
+    assert.notEqual(moved, before);
+    const height = evaluate('document.querySelector(".wv-rack-window").style.height');
+    drag('.wv-rack-window .wv-plug__resize', 24, 28);
+    assert.notEqual(evaluate('document.querySelector(".wv-rack-window").style.height'), height);
+    const geometry = evaluate('document.querySelector(".wv-rack-window").getAttribute("style")');
+    click('[aria-label="Close Channel Rack"]');
+    assert.equal(count('.wv-rack-window'), 0);
+    assert.equal(patternState().playMode, 'song');
+    press('F6');
+    assert.equal(evaluate('document.querySelector(".wv-rack-window").getAttribute("style")'), geometry);
+    command('screenshot', resolve(outputDir, 'floating-rack.png'));
+  });
+
+  check('pointer and keyboard focus choose playback without dismissing the other editor', () => {
+    click('.wv-workspace .wv-viewbar__title');
+    assert.equal(patternState().playMode, 'song');
+    assert.equal(count('.wv-rack-window'), 1);
+    click('.wv-rack-window .wv-viewbar__title');
+    assert.equal(patternState().playMode, 'pat');
+    evaluate(`document.querySelector('button[title^="Paint clips"]').focus()`);
+    assert.equal(patternState().playMode, 'song');
+    evaluate(`document.querySelector('[aria-label="808 Kit step 1"]').focus()`);
+    assert.equal(patternState().playMode, 'pat');
+  });
+
+  check('painting steps and playlist clips activates scope before child handlers stop propagation', () => {
+    click('.wv-workspace .wv-viewbar__title');
+    assert.equal(patternState().playMode, 'song');
+    click('[aria-label="808 Kit step 1"]');
+    assert.equal(patternState().playMode, 'pat');
+    click('[aria-label="808 Kit step 1"]');
+    press('F5');
+    click('.wv-playlist-picker .wv-pick');
+    press('F6');
+    assert.equal(patternState().playMode, 'pat');
+    const before = patternState().playlist.clips;
+    const p = evaluate(`(() => {
+      const lane = document.querySelectorAll('.wv-pl__lane')[3];
+      const box = lane.getBoundingClientRect();
+      for (let y = box.top + 8; y < Math.min(box.bottom, innerHeight - 32); y += 8) {
+        for (let x = box.left + 8; x < Math.min(box.right, innerWidth - 40); x += 32) {
+          if (document.elementFromPoint(x, y)?.closest('.wv-pl__lane') === lane) return { x, y };
+        }
+      }
+      throw new Error('No exposed playlist lane');
+    })()`);
+    command('mouse', 'move', String(p.x), String(p.y));
+    command('mouse', 'down', 'left');
+    command('mouse', 'up', 'left');
+    assert.equal(patternState().playMode, 'song');
+    assert.equal(patternState().playlist.clips.length, before.length + 1);
+    press('Control+z');
+    assert.deepEqual(clipScores(patternState().playlist.clips), clipScores(before));
+    press('F6');
+  });
+
+  check('F5/F6/F7 change the playing scope, mixer and settings retain it', () => {
+    click('.wv-rack-window .wv-viewbar__title');
+    press('Space');
+    assert.equal(count('button[title="Pause (Space)"]'), 1);
+    press('F5');
+    assert.equal(patternState().playMode, 'song');
+    assert.equal(count('button[title="Pause (Space)"]'), 1);
+    press('F7');
+    assert.equal(patternState().playMode, 'pat');
+    press('F7');
+    assert.equal(patternState().playMode, 'song');
+    press('F9');
+    assert.equal(patternState().playMode, 'song');
+    click('[aria-label="Open settings"]');
+    assert.equal(patternState().playMode, 'song');
+    press('Escape');
+    press('F6');
+    assert.equal(patternState().playMode, 'pat');
+    assert.equal(count('.wv-mixer'), 1);
+    click('[aria-label="Open settings"]');
+    press('Escape');
+    assert.equal(count('.wv-mixer'), 1);
+    assert.equal(count('.wv-rack-window'), 1);
+    click('.wv-rack-window .wv-viewbar__title');
+    press('Space');
+    assert.equal(count('button[title="Pause (Space)"]'), 0);
+    press('F5');
+    press('F6');
+  });
+
+  check('viewport shrink keeps the rack controls and resize handle reachable', () => {
+    command('set', 'viewport', '800', '600');
+    wait();
+    const fits = evaluate(`(() => {
+      const rack = document.querySelector('.wv-rack-window').getBoundingClientRect();
+      const host = document.querySelector('.wv-body').getBoundingClientRect();
+      return rack.left >= host.left && rack.top >= host.top && rack.right <= host.right && rack.bottom <= host.bottom;
+    })()`);
+    assert.equal(fits, true);
+    const close = evaluate(`document.querySelector('[aria-label="Close Channel Rack"]').getBoundingClientRect().right <= document.querySelector('.wv-rack-window').getBoundingClientRect().right`);
+    assert.equal(close, true);
+    command('screenshot', resolve(outputDir, 'floating-rack-small.png'));
+    command('set', 'viewport', '1600', '900');
+  });
+
   check('instrument click stays open through mixer echoes and view navigation', () => {
     click('.wv-chrow__label');
     wait();
-    assert.equal(count('.wv-plug'), 1);
-    const before = evaluate('document.querySelector(".wv-plug").style.left');
+    assert.equal(count('.wv-plug:not(.wv-rack-window)'), 1);
+    const before = evaluate('document.querySelector(".wv-plug:not(.wv-rack-window)").style.left');
     drag('.wv-plug__title', 36, 12);
-    const moved = evaluate('document.querySelector(".wv-plug").style.left');
+    const moved = evaluate('document.querySelector(".wv-plug:not(.wv-rack-window)").style.left');
     assert.notEqual(moved, before);
     press('F9');
     click('[aria-label="Master volume"]');
     press('ArrowDown');
     wait();
-    assert.equal(count('.wv-plug'), 1);
-    assert.equal(evaluate('document.querySelector(".wv-plug").style.left'), moved);
+    assert.equal(count('.wv-plug:not(.wv-rack-window)'), 1);
+    assert.equal(evaluate('document.querySelector(".wv-plug:not(.wv-rack-window)").style.left'), moved);
     click('.wv-plug button[title="Close"]');
-    assert.equal(count('.wv-plug'), 0);
+    assert.equal(count('.wv-plug:not(.wv-rack-window)'), 0);
   });
 
   check('rack tab survives the first click and opens piano roll on double-click', () => {
@@ -133,7 +241,7 @@ try {
   check('top selector and its rows accept double-click, Escape dismisses the list', () => {
     press('F5');
     doubleClick('.wv-patselect__btn');
-    assert.equal(evaluate('document.querySelector(".wv-viewbar__title").textContent'), 'CHANNEL RACK');
+    assert.equal(evaluate('document.querySelector(".wv-rack-window .wv-viewbar__title").textContent'), 'CHANNEL RACK');
     click('.wv-patselect__btn');
     assert.equal(count('.wv-menu--pattern'), 1);
     press('Escape');
@@ -141,7 +249,7 @@ try {
     press('F5');
     click('.wv-patselect__btn');
     doubleClick('.wv-menu--pattern .wv-menu__row:first-child');
-    assert.equal(evaluate('document.querySelector(".wv-viewbar__title").textContent'), 'CHANNEL RACK');
+    assert.equal(evaluate('document.querySelector(".wv-rack-window .wv-viewbar__title").textContent'), 'CHANNEL RACK');
   });
 
   check('playlist double-click edits the pattern without removing or moving its clip', () => {
@@ -157,7 +265,7 @@ try {
     click('.wv-clip');
     assert.equal(evaluate('document.querySelector(".wv-clip").getBoundingClientRect().width'), widthBefore);
     doubleClick('.wv-clip');
-    assert.equal(evaluate('document.querySelector(".wv-viewbar__title").textContent'), 'CHANNEL RACK');
+    assert.equal(evaluate('document.querySelector(".wv-rack-window .wv-viewbar__title").textContent'), 'CHANNEL RACK');
     assert.deepEqual(patternState().playlist.clips, before);
     press('F5');
     assert.equal(count('.wv-clip'), 1);
@@ -204,17 +312,17 @@ try {
     click('[aria-label="808 Kit strip"] .wv-mixer__slot.is-add');
     click('.wv-mixer__fxmenu .wv-menu__row:first-child');
     wait();
-    assert.equal(count('.wv-plug'), 1);
+    assert.equal(count('.wv-plug:not(.wv-rack-window)'), 1);
     click('.wv-plug .wv-plug__tools button:first-child');
     click('[aria-label="Master volume"]');
     press('ArrowDown');
     wait();
-    assert.equal(count('.wv-plug'), 1);
+    assert.equal(count('.wv-plug:not(.wv-rack-window)'), 1);
     press('Escape');
-    assert.equal(count('.wv-plug'), 0);
+    assert.equal(count('.wv-plug:not(.wv-rack-window)'), 0);
     doubleClick('[aria-label="808 Kit strip"] .wv-mixer__slot.is-filled');
     wait();
-    assert.equal(count('.wv-plug'), 1);
+    assert.equal(count('.wv-plug:not(.wv-rack-window)'), 1);
     command('screenshot', resolve(outputDir, 'effect-window.png'));
     click('.wv-plug button[title="Close"]');
   });
@@ -225,7 +333,7 @@ try {
     click('button[aria-label^="Project and playback options"]');
     click('.wv-menu--project button.wv-menu__row');
     wait();
-    assert.equal(count('.wv-plug'), 0);
+    assert.equal(count('.wv-plug:not(.wv-rack-window)'), 0);
     press('F5');
     assert.equal(count('.wv-clip.is-selected'), 0);
   });

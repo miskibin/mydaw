@@ -6,6 +6,12 @@
  * push the row wider instead of squeezing the cells.
  */
 
+.wv-rack-window .wv-main { min-height: 0; }
+.wv-rack-window .wv-viewbar { gap: 8px; cursor: grab; user-select: none; touch-action: none; }
+.wv-rack-window .wv-viewbar:active { cursor: grabbing; }
+.wv-rack-window .wv-pattabs { min-width: 0; flex: 1; }
+.wv-rack-window .wv-viewbar__meta { display: none; }
+
 .wv-rack {
   display: flex;
   flex: 1;

@@ -23,6 +23,7 @@ import {
   Show,
   type JSX,
 } from 'solid-js';
+import { bindPointerActivation } from '../ui/pointerActivation';
 
 import type {
   ClapPluginInfoDto,
@@ -226,7 +227,8 @@ function Picker(): JSX.Element {
 /** The FL-style picker belongs beside the arrangement, within easy reach of
  * the lanes. The optional right panel remains available for the inspector. */
 export function PlaylistPicker(): JSX.Element {
-  return <aside class="wv-playlist-picker" aria-label="Playlist picker"><div class="wv-playlist-picker__head">PATTERNS & AUDIO</div><Picker /></aside>;
+  const view = useView();
+  return <aside class="wv-playlist-picker" aria-label="Playlist picker" ref={(element) => bindPointerActivation(element, view.focusWorkspace)} onFocusIn={() => view.focusWorkspace()}><div class="wv-playlist-picker__head">PATTERNS & AUDIO</div><Picker /></aside>;
 }
 
 /** Load a brush and arm the paint tool. Does not change the main view. */

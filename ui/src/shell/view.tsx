@@ -21,10 +21,13 @@ import {
 
 import { clampBrowserWidth, DEFAULT_BROWSER_WIDTH } from '../lib/browserSize';
 import { setTypingPianoEnabled } from '../lib/keyboard';
-import type { StripRef } from '../state';
+import { useAppState, type StripRef } from '../state';
+import type { PlayMode } from '../api/types';
+import type { WindowGeometry } from '../ui/windowGeometry';
 
-/** The three main views. The piano roll is a fullscreen overlay on top of one. */
+/** The active editor; the rack floats over the workspace, the roll covers it. */
 export type MainView = 'playlist' | 'rack' | 'mixer' | 'settings';
+export type WorkspaceView = Exclude<MainView, 'rack'>;
 
 /** Which tree the browser is showing. */
 export type BrowserTab = 'all' | 'instruments' | 'files';
@@ -101,6 +104,14 @@ export function clampLaneHeight(height: number): number {
 }
 
 export interface ViewState {
+  /** The editor behind the floating rack; focusing the rack never replaces it. */
+  workspaceView: Accessor<WorkspaceView>;
+  focusWorkspace(): void;
+  rackOpen: Accessor<boolean>;
+  closeRack(): void;
+  rackGeometry: Accessor<WindowGeometry | undefined>;
+  setRackGeometry: Setter<WindowGeometry | undefined>;
+  playbackMode: Accessor<PlayMode>;
   view: Accessor<MainView>;
   go(view: MainView): void;
   /** The view the roll will fall back to, so Escape lands where you came from. */
@@ -241,7 +252,13 @@ const WIDE_BAR_PX = 1100;
 const RECORD_BAR_PX = 1280;
 
 export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
+  const app = useAppState();
   const [view, setView] = createSignal<MainView>('rack');
+  const [workspaceView, setWorkspaceView] = createSignal<WorkspaceView>('playlist');
+  const [previousWorkspaceView, setPreviousWorkspaceView] = createSignal<WorkspaceView>('playlist');
+  const [rackOpen, setRackOpen] = createSignal(true);
+  const [rackGeometry, setRackGeometry] = createSignal<WindowGeometry>();
+  const [playbackMode, setPlaybackMode] = createSignal<PlayMode>('pat');
   const [previousView, setPreviousView] = createSignal<MainView>('rack');
   const [rollOpen, setRollOpen] = createSignal(false);
   const [rollChannel, setRollChannel] = createSignal(0);
@@ -296,11 +313,35 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
   createEffect(() => {
     const viewport = viewportWidth();
     const inspectorOpen = sideOpen();
-    const pickerOpen = view() === 'playlist' && !rollOpen();
+    const pickerOpen = workspaceView() === 'playlist' && !rollOpen();
     setBrowserWidth((width) => clampBrowserWidth(width, viewport, inspectorOpen, pickerOpen));
   });
 
+  function activatePlayback(mode: PlayMode): void {
+    setPlaybackMode(mode);
+    app.setPlayMode(mode);
+  }
+
+  function focusWorkspace(): void {
+    if (rollOpen()) {
+      activatePlayback('pat');
+      return;
+    }
+    setView(workspaceView());
+    if (workspaceView() === 'playlist') activatePlayback('song');
+  }
+
   const state: ViewState = {
+    workspaceView,
+    focusWorkspace,
+    rackOpen,
+    closeRack() {
+      setRackOpen(false);
+      if (view() === 'rack') focusWorkspace();
+    },
+    rackGeometry,
+    setRackGeometry,
+    playbackMode,
     view,
     go(next) {
       const current = view();
@@ -309,8 +350,19 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
       // the arrangement is not dismissed by glancing at the mixer.
       if (next === 'settings' && current !== 'settings') {
         setPreviousView(current);
+        setPreviousWorkspaceView(workspaceView());
       }
       setView(next);
+      if (next === 'rack') {
+        setRackOpen(true);
+        // Return from Settings to the editor the settings covered.
+        if (workspaceView() === 'settings') setWorkspaceView(previousWorkspaceView());
+        activatePlayback('pat');
+      } else {
+        setRackOpen(false);
+        setWorkspaceView(next);
+        if (next === 'playlist') activatePlayback('song');
+      }
       setRollOpen(false);
       setRenamingPattern(null);
     },
@@ -323,10 +375,13 @@ export function ViewProvider(props: { children: JSX.Element }): JSX.Element {
       setSelection([]);
       setSampleEditor(null);
       setRollOpen(true);
+      activatePlayback('pat');
     },
     closeRoll() {
       setRollOpen(false);
       setSelection([]);
+      if (view() === 'rack') activatePlayback('pat');
+      else if (view() === 'playlist') activatePlayback('song');
     },
     insertEditors,
     focusedInsertId,

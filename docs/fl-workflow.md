@@ -31,8 +31,24 @@ toggles a focused step. Knobs also accept arrows, Shift for finer changes,
 Home/End, and double-click to reset.
 
 Choose a pattern from the picker on the **left** of Playlist, then paint it into
-a lane. Select **SONG** to play the arrangement or **PAT** to loop the current
-pattern. Opening another editor keeps that choice. The right inspector opens
+a lane. Playback follows the last musical editor you activate: the Rack and
+Piano Roll play the current pattern; the Playlist plays the arrangement. Click
+an editor or focus one of its controls to activate it. Mixer, Settings, Browser
+and plugin windows retain the last musical editor's playback scope. Space and
+the Play button use that scope, including after external CLI changes; editor
+activation also changes scope while playback is running.
+Automatic GUI scope changes do not add Undo entries or clear Redo.
+
+The Rack is a floating window over the Playlist or Mixer. Drag the empty space
+or **CHANNEL RACK** label in its toolbar; controls retain their usual gestures.
+Drag the bottom-right corner to resize. Close with **×** or Escape, and use F6
+to reopen at its remembered position and size for this session. F5 brings the
+Playlist forward and hides the Rack; clicking the Playlist behind an open Rack
+activates arrangement playback while keeping both visible. F7 opens the Piano
+Roll; closing it restores the editor you came from. Window bounds adjust to a
+smaller viewport, and a large rack scrolls its channels and steps.
+
+The right inspector opens
 from its rail when needed; selecting a Rack channel does not force it open.
 
 Undo and Redo are beside the transport and show the pending action in a tooltip.

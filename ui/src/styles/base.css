@@ -123,6 +123,13 @@ button:disabled.wv-can-disable {
 }
 
 /* The centre column, whichever view is in it. */
+.wv-workspace {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .wv-main {
   display: flex;
   flex: 1;

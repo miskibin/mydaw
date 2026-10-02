@@ -2,8 +2,8 @@
  * Where a gesture should take the musician, as a pure function of what they
  * clicked and which modifier they held.
  *
- * The shell's views are exclusive (playlist / rack / mixer / roll), so the
- * cheap way to make them feel connected is this map: click selects or paints,
+ * The rack floats over the playlist or mixer; the roll covers the workspace.
+ * This map connects their gestures: click selects or paints,
  * double-click opens the editor that object belongs in. Nothing here talks to
  * the engine or Solid; `App` and the views apply the answer.
  */

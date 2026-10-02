@@ -147,7 +147,7 @@ function laneWidth(steps: number): number {
   return steps <= 0 ? 0 : cellX(steps - 1) + CELL_W;
 }
 
-export function Rack(): ReturnType<typeof Show> {
+export function Rack(props: { onClose?: () => void } = {}): ReturnType<typeof Show> {
   const app = useAppState();
   const view = useView();
   const nav = usePatternNav();
@@ -303,14 +303,15 @@ export function Rack(): ReturnType<typeof Show> {
   }
 
   /**
-   * FL Channel Rack keys while this view is mounted (the roll unmounts it):
+   * Channel Rack keys while this editor has focus:
    * Ctrl+C / Ctrl+X / Ctrl+V copy, cut and paste the selected channel's score;
    * Ctrl+Shift+Left/Right rotate its steps.
    */
   createEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
-      if (event.defaultPrevented || target?.closest('[aria-label="Browser"], .wv-plug, .wv-menu, .wv-modal')) return;
+      if (view.view() !== 'rack' || view.rollOpen()) return;
+      if (event.defaultPrevented || target?.closest('[aria-label="Browser"], .wv-plug:not(.wv-rack-window), .wv-menu, .wv-modal')) return;
       if (
         target &&
         (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)
@@ -600,7 +601,7 @@ export function Rack(): ReturnType<typeof Show> {
 
   return (
     <div class="wv-main">
-      <div class="wv-viewbar">
+      <div class="wv-viewbar" data-window-drag>
         <span class="wv-viewbar__title">CHANNEL RACK</span>
         <div class="wv-pattabs">
           <Index each={app.patterns()}>
@@ -682,6 +683,9 @@ export function Rack(): ReturnType<typeof Show> {
           {app.tracks().length} ch · {(pattern()?.steps ?? 16) / 16} bar
           {(pattern()?.steps ?? 16) / 16 === 1 ? '' : 's'}
         </span>
+        <Show when={props.onClose}>
+          <button type="button" class="wv-chip" aria-label="Close Channel Rack" title="Close Channel Rack (F6 to reopen)" onClick={() => props.onClose?.()}>×</button>
+        </Show>
       </div>
 
       <div
