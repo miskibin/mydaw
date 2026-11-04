@@ -289,7 +289,8 @@ export interface AppState {
   startRecording(): Promise<void>;
   /**
    * End the take and land it on the playlist (one undo step). Resolves with
-   * the take, or `null` when it could not be kept (reason in the status bar).
+   * the take, or `null` when it could not be placed (reason in the status
+   * bar; a saved but unplaced take is in the Audio picker).
    */
   finishRecording(): Promise<RecordedTakeDto | null>;
   /** The last take that landed, so the playlist can select it. */
@@ -546,6 +547,12 @@ function createAppState(): AppState {
 
   let editorPlayMode: PlayMode | undefined;
   function play(): void {
+    // The last take is still being written: wait for it, then this Play is the
+    // next take rather than a playback that records nothing.
+    if (landing) {
+      void landing.then(() => play());
+      return;
+    }
     // Record mode: Play records. FL arms with REC and starts the take with the
     // transport, so the two can never be started a beat apart by hand.
     if (inputStatus()?.state === 'armed') {
@@ -592,6 +599,10 @@ function createAppState(): AppState {
 
   function setPlayMode(mode: PlayMode): void {
     editorPlayMode = mode;
+    // A take is placed by song position: opening the rack or the roll mid-take
+    // must not switch the transport under the singer. The editor's scope
+    // applies to the next Play.
+    if (inputStatus()?.state === 'recording') return;
     transportControl.setMode(mode);
   }
 
@@ -896,16 +907,22 @@ function createAppState(): AppState {
   }
 
   async function landTake(): Promise<RecordedTakeDto | null> {
-    let take: RecordedTakeDto;
     try {
-      take = await backend.stopRecording(transportControl.startSample('song'));
+      adoptInputStatus(await backend.stopRecording());
       setKernelError(null);
     } catch (error) {
       report(error);
       await syncInputStatus();
       return null;
     }
-    await syncInputStatus();
+    let take: RecordedTakeDto;
+    try {
+      take = await backend.placeRecordedTake(transportControl.startSample('song'));
+    } catch (error) {
+      report(error);
+      await refreshAudioSources();
+      return null;
+    }
     try {
       const [seq, mix] = await Promise.all([backend.getPattern(), backend.getTracks()]);
       adoptSequencer(seq);
@@ -953,6 +970,10 @@ function createAppState(): AppState {
         });
         return;
       case 'punch-in':
+        if (sequencer()?.playMode !== 'song') {
+          say('Record', 'takes go on the playlist — punch in while the song plays (F5)');
+          return;
+        }
         void inputCommand((b) => b.startRecording()).then((ok) => {
           if (ok) say('Recording', 'punched in · R punches out');
         });
@@ -1097,17 +1118,25 @@ function createAppState(): AppState {
     }).then((unsubscribe) => { detachSession = unsubscribe; }).catch(report);
   }
 
+  /** The engine's own playing flag, as of the last meter frame. */
+  let enginePlaying = false;
+
   function handleMeterFrame(frame: MeterFrame): void {
     meters.push(frame);
     // Ignore packets from before a queued Stop/Seek/Play has reached the engine.
     if (transportControl.busy()) return;
     playhead.update(frame.samplePos, frame.playing);
     // Only when it actually changed: this runs 30 times a second.
-    if (frame.playing !== playing()) {
-      setPlaying(frame.playing);
-      // The engine stopped on its own (the song ended): a running take ends
-      // with it, exactly as if Stop had been pressed.
-      if (!frame.playing && inputStatus()?.state === 'recording') void finishRecording();
+    if (frame.playing !== playing()) setPlaying(frame.playing);
+    // The engine stopped on its own (the song ended): a running take ends
+    // with it, exactly as if Stop had been pressed. Judged on the *engine's*
+    // own edge, frame to frame: a frame rendered before a fresh Play reached
+    // the engine still says "stopped", and must not end the take it started.
+    const wasPlaying = enginePlaying;
+    enginePlaying = frame.playing;
+    if (wasPlaying && !frame.playing && playing() === false &&
+        inputStatus()?.state === 'recording') {
+      void finishRecording();
     }
   }
 

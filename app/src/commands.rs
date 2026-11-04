@@ -2303,29 +2303,41 @@ pub fn start_recording(state: State<'_, AppState>) -> Result<InputStatusDto, Str
     Ok(input_status_dto(&state))
 }
 
-/// End the take, write it, and land it on the playlist as an audio clip.
+/// End the take and write it to disk, loaded and waiting for
+/// [`place_recorded_take`].
 ///
-/// FL Studio's "audio into the playlist": the clip starts at the song position
-/// the performer heard when the take began (input and output latency
-/// compensated from the devices' own timestamps), on the first lane free for
-/// its length, and plays through the recording channel -- created as "Vocal"
-/// by the session's first take. `fallback_sample` places a take recorded with
-/// the transport stopped; the UI passes the playlist start marker.
-///
-/// Answers with the placement **and** what went wrong on the way: a take with
-/// dropped samples or one the length cap ended is still worth keeping, and the
-/// moment to say so is the moment the clip appears. One command, so one undo
-/// step takes the whole take back.
+/// Deliberately outside the undo journal (a transient command): stopping the
+/// recorder must never wait on, or be rolled back by, a project checkpoint --
+/// the take is the one thing in the session that cannot be made again.
 ///
 /// `async` because writing a long WAV is disk I/O and must not block the main
 /// thread.
 #[tauri::command]
-pub async fn stop_recording(
+pub async fn stop_recording(state: State<'_, AppState>) -> Result<InputStatusDto, String> {
+    state.stop_take().map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// Land the take [`stop_recording`] wrote on the playlist as an audio clip.
+///
+/// FL Studio's "audio into the playlist": the clip starts at the song position
+/// the performer heard when the take began (input and output latency
+/// compensated from the devices' own timestamps), on the first audible lane
+/// free for its length, and plays through the recording channel -- created as
+/// "Vocal" by the session's first take. `fallback_sample` places a take
+/// recorded with the transport stopped; the UI passes the playlist start
+/// marker. One undo step.
+///
+/// Answers with the placement **and** what went wrong on the way: a take with
+/// dropped samples or one the length cap ended is still worth keeping, and the
+/// moment to say so is the moment the clip appears.
+#[tauri::command]
+pub fn place_recorded_take(
     state: State<'_, AppState>,
     fallback_sample: Option<u64>,
 ) -> Result<RecordedTakeDto, String> {
     let placed = state
-        .finish_take_to_playlist(fallback_sample.unwrap_or(0))
+        .place_recorded_take(fallback_sample.unwrap_or(0))
         .map_err(|err| err.to_string())?;
     Ok(RecordedTakeDto {
         source: AudioSourceDto::of(&placed.finished.source, state.bpm()),

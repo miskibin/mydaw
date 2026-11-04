@@ -658,7 +658,12 @@ impl RecordService {
             let anchor = session.shared.anchor();
             let samples = session.end_take();
             let start_sample = anchor.and_then(|(_, captured_ns)| {
-                take_start_sample(&PlaybackTimeline::global().read(), captured_ns, now_ns())
+                take_start_sample(
+                    PlaybackTimeline::global(),
+                    captured_ns,
+                    now_ns(),
+                    session.sample_rate,
+                )
             });
             (
                 RecordedTake {
@@ -714,7 +719,10 @@ impl RecordService {
         let engine_rate = self.engine_sample_rate();
         let guard = self.session.lock();
         let Some(session) = guard.as_ref() else {
-            return InputStatus::idle(selected, engine_rate, self.last_fault.lock().clone());
+            let mut idle = InputStatus::idle(selected, engine_rate, self.last_fault.lock().clone());
+            // The setting, not the device: Settings draws it while disarmed.
+            idle.monitoring = self.monitoring();
+            return idle;
         };
         let fault = session.shared.fault();
         let frames = session.buffer.frames();
@@ -944,21 +952,24 @@ fn run_worker(
     }
 }
 
-/// Where a take captured from `captured_ns` belongs on the song, given the
-/// output's current run (see [`crate::timeline`]).
+/// Where a take captured from `captured_ns` (until `ended_ns`) belongs on the
+/// song, in samples at `take_rate`, given the output's playback runs (see
+/// [`crate::timeline`]).
 ///
-/// `None` when the transport did not play at any point of the take: a take
-/// recorded over silence has no position of its own, and the caller places it
-/// at the playhead.
+/// `None` when no *song* run played during the take: a take over silence (or
+/// over a pattern loop, whose positions mean nothing on the playlist) has no
+/// position of its own, and the caller places it at the start marker.
 pub fn take_start_sample(
-    run: &crate::timeline::PlaybackRun,
+    timeline: &PlaybackTimeline,
     captured_ns: u64,
     ended_ns: u64,
+    take_rate: f64,
 ) -> Option<f64> {
-    if !run.overlaps(captured_ns, ended_ns) || run.sample_rate <= 0.0 {
+    let run = timeline.run_for_take(captured_ns, ended_ns)?;
+    if !run.song || run.sample_rate <= 0.0 || take_rate <= 0.0 {
         return None;
     }
-    Some(run.sample_at(captured_ns))
+    Some(run.sample_at(captured_ns) * take_rate / run.sample_rate)
 }
 
 /// Convert one drained block into the take, stopping at the length cap.
@@ -1455,50 +1466,37 @@ mod tests {
 mod alignment_tests {
     use super::*;
     use crate::input::input_channel;
-    use crate::timeline::PlaybackRun;
-
-    fn run(start_sample: u64, start_ns: u64, end_ns: u64) -> PlaybackRun {
-        PlaybackRun {
-            run: 1,
-            start_sample,
-            start_ns,
-            end_ns,
-            sample_rate: 48_000.0,
-            playing: end_ns == u64::MAX,
-        }
-    }
 
     #[test]
     fn a_take_captured_while_playing_lands_where_the_listener_was() {
         // The beat's sample 96 000 was audible at t = 2 s; the take's first
         // frame left the microphone 250 ms later.
-        let start = take_start_sample(
-            &run(96_000, 2_000_000_000, u64::MAX),
-            2_250_000_000,
-            9e9 as u64,
-        );
+        let timeline = PlaybackTimeline::new();
+        timeline.publish(true, true, 96_000, 480, 2_000_000_000, 48_000.0);
+        let start = take_start_sample(&timeline, 2_250_000_000, 9_000_000_000, 48_000.0);
         assert_eq!(start, Some(108_000.0));
+        // A take at another rate gets the same *time*, in its own samples.
+        let start = take_start_sample(&timeline, 2_250_000_000, 9_000_000_000, 44_100.0);
+        assert_eq!(start, Some(99_225.0));
     }
 
     #[test]
     fn a_take_started_before_play_reaches_back_before_the_run() {
-        let start = take_start_sample(&run(0, 1_000_000_000, u64::MAX), 900_000_000, 5e9 as u64);
+        let timeline = PlaybackTimeline::new();
+        timeline.publish(true, true, 0, 480, 1_000_000_000, 48_000.0);
+        let start = take_start_sample(&timeline, 900_000_000, 5_000_000_000, 48_000.0);
         assert_eq!(start, Some(-4_800.0));
     }
 
     #[test]
-    fn a_take_over_a_stopped_transport_has_no_position() {
-        // The last run ended before the take began.
-        assert_eq!(take_start_sample(&run(0, 0, 1_000), 5_000, 9_000), None);
-        let never = PlaybackRun {
-            run: 0,
-            start_sample: 0,
-            start_ns: 0,
-            end_ns: 0,
-            sample_rate: 0.0,
-            playing: false,
-        };
-        assert_eq!(take_start_sample(&never, 5_000, 9_000), None);
+    fn a_take_over_a_stopped_transport_or_a_pattern_loop_has_no_position() {
+        let timeline = PlaybackTimeline::new();
+        assert_eq!(take_start_sample(&timeline, 5_000, 9_000, 48_000.0), None);
+        timeline.publish(true, true, 0, 480, 0, 48_000.0);
+        timeline.publish(false, true, 480, 0, 1_000, 48_000.0);
+        assert_eq!(take_start_sample(&timeline, 5_000, 9_000, 48_000.0), None);
+        timeline.publish(true, false, 0, 480, 10_000, 48_000.0);
+        assert_eq!(take_start_sample(&timeline, 20_000, 90_000, 48_000.0), None);
     }
 
     #[test]

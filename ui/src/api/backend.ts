@@ -522,12 +522,18 @@ export interface Backend {
   /** Start a take, arming the device first if it is not open yet. */
   startRecording(): Promise<InputStatusDto>;
   /**
-   * End the take, write it, and land it on the playlist: an audio clip at the
-   * song position that was audible when it began (latency compensated), on the
-   * first free lane, through the recording channel. `fallbackSample` places a
-   * take recorded with the transport stopped. One undo step.
+   * End the take and write it to disk, loaded and waiting for
+   * {@link placeRecordedTake}. Outside the undo journal: stopping the recorder
+   * never waits on, or is rolled back by, a project checkpoint.
    */
-  stopRecording(fallbackSample?: number): Promise<RecordedTakeDto>;
+  stopRecording(): Promise<InputStatusDto>;
+  /**
+   * Land the waiting take on the playlist: an audio clip at the song position
+   * that was audible when it began (latency compensated), on the first free
+   * lane, through the recording channel. `fallbackSample` places a take
+   * recorded with the transport stopped. One undo step.
+   */
+  placeRecordedTake(fallbackSample?: number): Promise<RecordedTakeDto>;
   /** Hear the armed input through the recording channel (remembered). */
   setInputMonitoring(on: boolean): Promise<InputStatusDto>;
   /** Manual take offset in ms on top of latency compensation (remembered). */
@@ -1235,8 +1241,12 @@ class TauriBackend implements Backend {
     return this.call('start_recording');
   }
 
-  stopRecording(fallbackSample?: number): Promise<RecordedTakeDto> {
-    return this.call('stop_recording', {
+  stopRecording(): Promise<InputStatusDto> {
+    return this.call('stop_recording');
+  }
+
+  placeRecordedTake(fallbackSample?: number): Promise<RecordedTakeDto> {
+    return this.call('place_recorded_take', {
       fallbackSample: fallbackSample === undefined ? null : Math.max(0, Math.round(fallbackSample)),
     });
   }

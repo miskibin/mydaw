@@ -648,6 +648,7 @@ impl AudioIoService {
                 let rendered = frames.min(carrier.state.max_block()) as u64;
                 crate::timeline::PlaybackTimeline::global().publish(
                     after.playing,
+                    after.mode == mydaw_rt_core::PlayMode::Song,
                     after.sample_pos.saturating_sub(rendered),
                     rendered,
                     audible_ns,

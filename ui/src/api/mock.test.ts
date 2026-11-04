@@ -423,13 +423,14 @@ describe('audio input and recording', () => {
     expect((await backend.getInputStatus()).peak).toBe(0);
   });
 
-  it('records a take and loads it as an audio source', async () => {
+  it('records a take, loads it and lands it on the playlist', async () => {
     const backend = new MockBackend();
     await backend.startRecording();
     expect((await backend.getInputStatus()).state).toBe('recording');
     await takeLength();
 
-    const take = await backend.stopRecording();
+    expect((await backend.stopRecording()).state).toBe('armed');
+    const take = await backend.placeRecordedTake(0);
     expect(take.source.name).toBe('Recording 1.wav');
     expect(take.source.durationSeconds).toBeGreaterThan(0);
     expect(take.limitReached).toBe(false);
@@ -442,11 +443,13 @@ describe('audio input and recording', () => {
     const waveform = await backend.getAudioWaveform(take.source.id, 64);
     expect(waveform.peaks).toHaveLength(64);
 
-    // And the same command a dropped WAV uses puts it on the rack.
-    const mixer = await backend.addSampleChannel(take.source.path);
-    const channel = mixer.tracks.at(-1)!;
-    expect(channel.name).toBe('Recording 1.wav');
-    expect(channel.audioSourceId).toBe(take.source.id);
+    // It is an audio clip on the playlist, playing through an audio channel.
+    const playlist = (await backend.getPattern()).playlist;
+    const clip = playlist.clips.find((entry) => entry.id === take.clipId)!;
+    expect(clip.sourceId).toBe(take.source.id);
+    expect(clip.track).toBe(take.lane);
+    expect((await backend.getTracks()).tracks[take.channel]!.engine).toBe('clip');
+    await expect(backend.placeRecordedTake(0)).rejects.toThrow(/no recorded take waiting/);
   });
 
   it('numbers takes in order', async () => {
@@ -454,7 +457,8 @@ describe('audio input and recording', () => {
     for (const expected of ['Recording 1.wav', 'Recording 2.wav']) {
       await backend.startRecording();
       await takeLength();
-      expect((await backend.stopRecording()).source.name).toBe(expected);
+      await backend.stopRecording();
+      expect((await backend.placeRecordedTake(0)).source.name).toBe(expected);
     }
   });
 

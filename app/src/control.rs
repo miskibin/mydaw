@@ -110,6 +110,7 @@ pub fn command_class(name: &str) -> CommandClass {
                 | "set_input_monitoring"
                 | "set_record_offset"
                 | "start_recording"
+                | "stop_recording"
                 | "cancel_recording"
                 | "set_midi_port_enabled"
                 | "add_library_folder"

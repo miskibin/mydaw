@@ -294,6 +294,8 @@ pub struct AppState {
     /// plugin needs to resolve it. It is created here and lives as long as the
     /// shell does, holding no device until the user arms one.
     recorder: Arc<RecordService>,
+    /// The take [`AppState::stop_take`] wrote, until it is placed.
+    pending_take: Mutex<Option<PendingTake>>,
     /// The authoritative pattern and tempo. The audio thread runs copies of
     /// both; this is the original (and, one day, what a project file holds).
     sequencer: Arc<SequencerService>,
@@ -481,6 +483,7 @@ impl AppState {
             jobs: Arc::new(crate::jobs::Jobs::default()),
             snapshot: ui_snapshot(kernel),
             audio,
+            pending_take: Mutex::new(None),
             recorder: {
                 let recorder = Arc::new(RecordService::new());
                 tracks.bind_monitor(Arc::clone(recorder.monitor_slot()));
@@ -1911,18 +1914,26 @@ impl AppState {
     /// # Errors
     /// [`MixerError`] -- most usefully [`TrackError::LastTrack`].
     pub fn remove_track(&self, track: usize) -> Result<(), MixerError> {
-        let clip_source =
-            self.tracks
-                .project()
-                .tracks
-                .get(track)
-                .and_then(|def| match def.source {
-                    Source::AudioClip { source_id } => Some(source_id),
-                    _ => None,
-                });
-        if let Some(source_id) = clip_source {
+        // An audio channel takes its clips with it -- its own file's and every
+        // take routed through it, which would otherwise sit on the playlist
+        // silent (and come back on separate strips after a reload).
+        let clip_sources: Vec<u64> = self
+            .tracks
+            .project()
+            .tracks
+            .get(track)
+            .map(|def| match def.source {
+                Source::AudioClip { source_id } => std::iter::once(source_id)
+                    .chain(def.take_sources.iter().copied())
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .unwrap_or_default();
+        if !clip_sources.is_empty() {
             let _ = self.edit_playlist(|list| {
-                list.remove_clips_of_source(source_id);
+                for source_id in &clip_sources {
+                    list.remove_clips_of_source(*source_id);
+                }
                 Ok(())
             });
         }
@@ -2503,25 +2514,18 @@ impl AppState {
         self.write_and_load(&take)
     }
 
-    /// End the take and land it on the playlist, FL-style: an audio clip at the
-    /// song position the performer was hearing when the take began, on the
-    /// first lane free for its whole length, playing through the recording
-    /// channel.
+    /// End the take, write it and load it, and hold it for
+    /// [`place_recorded_take`](Self::place_recorded_take).
     ///
-    /// `fallback_sample` is where the take goes when the transport never
-    /// played during it (a take over silence): the playlist start marker.
-    ///
-    /// One command, so one undo step removes the clip, the source and -- for
-    /// the first take -- the channel it created.
+    /// Two commands rather than one so that stopping the recorder never sits
+    /// inside an undo checkpoint: a checkpoint that failed (or a placement
+    /// that failed and rolled the project back) must never cost a take, nor
+    /// stop the music under a punch-out. The take is on disk and in the Audio
+    /// picker the moment this returns.
     ///
     /// # Errors
-    /// As [`finish_recording`](Self::finish_recording), plus
-    /// [`RecordingError::Place`] when the playlist refuses the clip; the take
-    /// is on disk and loaded either way.
-    pub fn finish_take_to_playlist(
-        &self,
-        fallback_sample: u64,
-    ) -> Result<PlacedTake, RecordingError> {
+    /// As [`finish_recording`](Self::finish_recording).
+    pub fn stop_take(&self) -> Result<(), RecordingError> {
         let take = self.recorder.stop()?;
         log::info!(
             "take finished: {:.2} s, peak {:.3}, {} dropped, start {:?}",
@@ -2530,32 +2534,77 @@ impl AppState {
             take.dropped,
             take.start_sample
         );
-        self.land_take(&take, &crate::recording::recordings_dir(), fallback_sample)
+        self.stash_take(&take, &crate::recording::recordings_dir())
     }
 
-    /// The second half of [`finish_take_to_playlist`](Self::finish_take_to_playlist):
-    /// write `take` into `dir`, load it, route it and place it. Separate so the
-    /// whole landing can be exercised without a capture device.
+    /// Write `take` into `dir`, load it and hold it for placing.
+    pub fn stash_take(
+        &self,
+        take: &RecordedTake,
+        dir: &std::path::Path,
+    ) -> Result<(), RecordingError> {
+        let finished = self.write_and_load_in(take, dir)?;
+        *self.pending_take.lock() = Some(PendingTake {
+            finished,
+            frames: take.frames() as u64,
+            sample_rate: take.sample_rate,
+            start_sample: take.start_sample,
+        });
+        Ok(())
+    }
+
+    /// Land the take [`stop_take`](Self::stop_take) holds on the playlist,
+    /// FL-style: an audio clip at the song position the performer was hearing
+    /// when it began, on the first audible lane free for its whole length,
+    /// playing through the recording channel ("Vocal", created by the first
+    /// take). One undo step removes the clip and -- for the first take -- the
+    /// channel.
+    ///
+    /// `fallback_sample` places a take recorded over a stopped transport: the
+    /// playlist start marker.
+    ///
+    /// # Errors
+    /// [`RecordingError::Place`] when there is no take waiting or the playlist
+    /// refuses it; the take stays loaded either way.
+    pub fn place_recorded_take(&self, fallback_sample: u64) -> Result<PlacedTake, RecordingError> {
+        let pending =
+            self.pending_take.lock().take().ok_or_else(|| {
+                RecordingError::Place("there is no recorded take waiting".to_owned())
+            })?;
+        self.place_take(pending, fallback_sample)
+    }
+
+    /// [`stash_take`](Self::stash_take) then
+    /// [`place_recorded_take`](Self::place_recorded_take), for tests.
     pub fn land_take(
         &self,
         take: &RecordedTake,
         dir: &std::path::Path,
         fallback_sample: u64,
     ) -> Result<PlacedTake, RecordingError> {
-        let finished = self.write_and_load_in(take, dir)?;
+        self.stash_take(take, dir)?;
+        self.place_recorded_take(fallback_sample)
+    }
+
+    fn place_take(
+        &self,
+        pending: PendingTake,
+        fallback_sample: u64,
+    ) -> Result<PlacedTake, RecordingError> {
+        let finished = pending.finished;
         let source = Arc::clone(&finished.source);
 
         // Where it goes, in engine samples, with the manual offset applied.
-        let rate = take.sample_rate;
+        let rate = pending.sample_rate;
         let offset = self.recorder.offset_ms() * rate / 1_000.0;
-        let synced = take.start_sample.is_some();
-        let start = take
+        let synced = pending.start_sample.is_some();
+        let start = pending
             .start_sample
             .map(|start| start - offset)
             .unwrap_or(fallback_sample as f64);
         let placement = take_placement(
             start,
-            take.frames() as u64,
+            pending.frames,
             rate,
             self.bpm(),
             // Only a take the transport placed is folded: a looping song plays
@@ -2712,6 +2761,19 @@ impl AppState {
     }
 }
 
+/// A take on disk and loaded, waiting for
+/// [`AppState::place_recorded_take`].
+#[derive(Debug, Clone)]
+pub struct PendingTake {
+    pub finished: FinishedTake,
+    /// Frames in the take, at `sample_rate`.
+    pub frames: u64,
+    pub sample_rate: f64,
+    /// Song position (samples at `sample_rate`) the take began at, if the
+    /// transport was playing a song run.
+    pub start_sample: Option<f64>,
+}
+
 /// Name of the channel the session's first take creates.
 pub const RECORD_CHANNEL_NAME: &str = "Vocal";
 
@@ -2784,12 +2846,15 @@ pub fn take_placement(
 /// `start + length`, or `None` when every lane is taken there.
 pub fn free_lane(playlist: &Playlist, start: u64, length: u64) -> Option<usize> {
     let end = start.saturating_add(length);
+    // A muted lane (or one another lane's solo silences) would swallow the
+    // take the moment it landed.
     (0..playlist.tracks().len()).find(|lane| {
-        !playlist.clips().iter().any(|clip| {
-            clip.track() == *lane
-                && clip.start_ticks() < end
-                && clip.start_ticks().saturating_add(clip.length_ticks()) > start
-        })
+        !playlist.lane_silenced(*lane)
+            && !playlist.clips().iter().any(|clip| {
+                clip.track() == *lane
+                    && clip.start_ticks() < end
+                    && clip.start_ticks().saturating_add(clip.length_ticks()) > start
+            })
     })
 }
 

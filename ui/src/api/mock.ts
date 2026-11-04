@@ -3672,7 +3672,9 @@ export class MockBackend implements Backend {
    * gesture (record, channel, sample editor with a waveform) demonstrable
    * without hardware. The same trade `openAudioFile` makes for the dialog.
    */
-  async stopRecording(fallbackSample?: number): Promise<RecordedTakeDto> {
+  private pendingTake: AudioSourceDto | null = null;
+
+  async stopRecording(): Promise<InputStatusDto> {
     if (this.recordState !== 'recording') throw new Error('nothing is being recorded');
     const seconds = Math.min(MAX_RECORD_SECONDS, (performance.now() - this.recordStartedMs) / 1000);
     this.recordState = 'armed';
@@ -3695,6 +3697,15 @@ export class MockBackend implements Backend {
     };
     this.audioSources.push(source);
     console.info(`[mock] no capture device outside Tauri, invented ${name} (${seconds.toFixed(2)} s)`);
+    this.pendingTake = source;
+    return this.getInputStatus();
+  }
+
+  async placeRecordedTake(fallbackSample?: number): Promise<RecordedTakeDto> {
+    const source = this.pendingTake;
+    if (!source) throw new Error('the take was saved but could not be placed on the playlist: there is no recorded take waiting');
+    this.pendingTake = null;
+    const seconds = source.durationSeconds;
     // As the engine: the take lands where the transport was when it began
     // (here, where it is minus its length), on the first lane free for it.
     const startTicks = this.ticksFor(Math.max(0, (fallbackSample ?? 0) / SAMPLE_RATE));
