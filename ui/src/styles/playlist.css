@@ -398,9 +398,75 @@
   cursor: ew-resize;
 }
 
+/* An audio clip's head: dragging it trims the start and slips the offset. */
+.wv-clip__grip--left {
+  right: auto;
+  left: 0;
+}
+
+/* The slice tool: a crosshair over the lanes and the clips, and a line where
+   the click will cut. */
+.wv-pl__lane.is-slicing,
+.wv-pl__lane.is-slicing .wv-clip,
+.wv-pl__lane.is-slicing .wv-clip__grip {
+  cursor: crosshair;
+}
+
+.wv-clip__cut {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 1px;
+  margin-left: -1px;
+  background: var(--acc);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--acc) 30%, transparent);
+  pointer-events: none;
+}
+
+/* A clip's own volume, after its name, only when it is not 0 dB. */
+.wv-clip__gain {
+  margin-left: 6px;
+  white-space: nowrap;
+  font: 400 9.5px 'Geist Mono Variable';
+  color: var(--txt2);
+}
+
 .wv-menu.wv-menu--clip {
   position: fixed;
-  width: 208px;
+  width: 232px;
+}
+
+.wv-menu--clip .wv-menu__meta {
+  margin-left: auto;
+}
+
+.wv-clipgain {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  height: 32px;
+  padding: 0 6px 0 9px;
+  font: 500 11.5px 'Geist Variable';
+  color: var(--txt);
+}
+
+.wv-clipgain__label {
+  flex: none;
+}
+
+.wv-clipgain__slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--acc);
+}
+
+.wv-clipgain__value {
+  flex: none;
+  width: 62px;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--txt2);
+  text-align: right;
 }
 
 /* The brush indicator in the view bar. */

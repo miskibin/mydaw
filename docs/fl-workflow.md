@@ -30,6 +30,13 @@ Pan and volume remain visible when scrolling long patterns. Enter
 toggles a focused step. Knobs also accept arrows, Shift for finer changes,
 Home/End, and double-click to reset.
 
+Audio clips (a beat, a vocal take) edit in place, and the audio never moves in
+time. Drag a clip's **left** edge to trim its start, its right edge to trim its
+end. Press **C** for the slice tool and click a clip to cut it on the grid (Alt
+cuts off the grid); right-click a clip for **Split here**, **Split at playhead**
+and its own **Volume** in dB, which also shows after the clip's name. Each edit
+is one Undo step.
+
 Choose a pattern from the picker on the **left** of Playlist, then paint it into
 a lane. Playback follows the last musical editor you activate: the Rack and
 Piano Roll play the current pattern; the Playlist plays the arrangement. Click
