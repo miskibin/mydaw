@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.12.4",
     "@types/node": "^26.2.0",
     "@types/three": "^0.185.4",
     "tailwindcss": "^4.3.3",
