@@ -3303,7 +3303,8 @@ export class MockBackend implements Backend {
   async setClipGain(clipId: number, gainDb: number): Promise<SequencerState> {
     const clip = this.clip(clipId);
     if (clip.kind !== 'audio') throw new Error('a pattern clip has no gain of its own');
-    clip.gainDb = gainDb;
+    // As the engine: a non-finite trim is unity, not an error.
+    clip.gainDb = Number.isFinite(gainDb) ? gainDb : 0;
     return this.sequencerState();
   }
 

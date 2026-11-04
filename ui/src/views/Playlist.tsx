@@ -49,6 +49,21 @@
  * the paint tool is up drops into select, the way FL's draw tool does.
  * Double-click opens the rack (Alt for the piano roll) and must not paint.
  *
+ * ## Editing audio clips
+ *
+ * An audio clip is a window onto a recording, and every edit keeps the audio
+ * where it is in time -- the arithmetic is in `lib/playlistEdit.ts`:
+ *
+ * - the **left edge** slip-trims: start and length move, the file offset
+ *   advances by the same time, and the trim stops at the file's first frame;
+ * - the **slice tool** (`C`) cuts the clip under the pointer on the grid (Alt
+ *   for off it), and the clip menu cuts at the right-click or the playhead;
+ * - the clip menu's **volume** is the clip's own trim, shown after its name
+ *   and in the height of its waveform.
+ *
+ * Each is one undo entry. Pattern clips have no file offset, so trimming their
+ * head or slicing them would change the music; they keep the right edge only.
+ *
  * ## Selection
  *
  * The playlist keeps a set of clip ids, not a single highlight. The select
@@ -89,6 +104,7 @@ import { For, Index, Show, createEffect, createSignal, onCleanup, onMount } from
 
 import type { Backend } from '../api/backend';
 import type {
+  AudioSourceDto,
   ClipDto,
   PatternDto,
   PlaylistTrackDto,
@@ -105,12 +121,22 @@ import {
   ticksToSamples,
 } from '../lib/pattern';
 import {
+  CLIP_GAIN_MAX_DB,
+  CLIP_GAIN_MIN_DB,
+  clampClipGain,
   clampGroupMove,
   clipScore,
   clipsIntersecting,
   duplicateToRight,
+  formatClipGain,
+  gainPeaks,
+  latestOnly,
   pasteAtPlayhead,
+  splitAudioClip,
+  splitPoint,
+  trimClipStart,
   unionClipIds,
+  type AudioClipWindow,
   type PlaylistClipScore,
 } from '../lib/playlistEdit';
 import { channelColor } from '../lib/channel';
@@ -142,7 +168,15 @@ import {
 import { trackColor, wash } from '../theme/tokens';
 import { onFrame } from '../ui/frameLoop';
 import { SnapSelect } from '../ui/SnapSelect';
-import { IconEraseTool, IconPaintTool, IconRewind, IconSelectTool, IconX } from '../ui/icons';
+import { NumberField } from '../ui/NumberField';
+import {
+  IconEraseTool,
+  IconPaintTool,
+  IconRewind,
+  IconSelectTool,
+  IconSliceTool,
+  IconX,
+} from '../ui/icons';
 
 /** Pixels one bar covers at zoom 1. */
 const BAR_PX = 48;
@@ -174,6 +208,7 @@ const FOLLOW_HOLD_MS = 2_500;
 const TOOLS: readonly [PlaylistTool, string, () => ReturnType<typeof IconPaintTool>][] = [
   ['paint', 'Paint clips — click a lane to place the brush. Hold Ctrl to select.', IconPaintTool],
   ['select', 'Select clips — drag a box, Shift to add, then move or Shift-drag to copy', IconSelectTool],
+  ['slice', 'Slice audio clips (C) — click a clip to cut it on the grid, Alt to cut off the grid', IconSliceTool],
   ['delete', 'Delete clips', IconEraseTool],
 ];
 
@@ -251,7 +286,18 @@ export function Playlist(): ReturnType<typeof Show> {
     clip: ClipDto;
     x: number;
     y: number;
+    /** The song tick under the pointer when the menu opened: "Split here". */
+    tick: number;
   } | null>(null);
+  /**
+   * A left-edge trim in progress: the clip as it will be when the pointer is
+   * released. Drawn through the normal clip props rather than by poking the
+   * element, so the waveform shifts with the offset and a refused command
+   * snaps back by itself.
+   */
+  const [trimming, setTrimming] = createSignal<({ id: number } & AudioClipWindow) | null>(null);
+  /** Where the slice tool would cut the clip under the pointer. */
+  const [cutHover, setCutHover] = createSignal<{ id: number; at: number } | null>(null);
 
   let playheadEl: HTMLDivElement | undefined;
   /** The playhead's marker in the ruler, above the sticky lane headers. */
@@ -585,7 +631,13 @@ export function Playlist(): ReturnType<typeof Show> {
       }
       if (ctrl || event.altKey) return;
       if (!event.shiftKey && !view.typingKeyboard()) {
-        const tool = { KeyP: 'paint', KeyB: 'paint', KeyE: 'select', KeyD: 'delete' } as const;
+        const tool = {
+          KeyP: 'paint',
+          KeyB: 'paint',
+          KeyE: 'select',
+          KeyC: 'slice',
+          KeyD: 'delete',
+        } as const;
         const next = tool[event.code as keyof typeof tool];
         if (next) {
           event.preventDefault();
@@ -856,6 +908,11 @@ export function Playlist(): ReturnType<typeof Show> {
   function onClipPointerDown(event: MouseEvent, clip: ClipDto, mode: 'move' | 'resize'): void {
     event.stopPropagation();
     if (event.button !== 0) return;
+    // Before the repeat-click guard: two quick cuts in a row are two cuts.
+    if (view.playlistTool() === 'slice') {
+      sliceAtPointer(event, clip);
+      return;
+    }
     if (isRepeatClick(event.detail)) return;
     if (view.playlistTool() === 'delete') {
       removeClip(clip);
@@ -1037,6 +1094,192 @@ export function Playlist(): ReturnType<typeof Show> {
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+  }
+
+  // --- audio clip edits: trim the head, slice, volume ----------------------
+
+  function sourceOf(clip: ClipDto): AudioSourceDto | undefined {
+    return app.audioSources().find((source) => source.id === clip.sourceId);
+  }
+
+  function windowOf(clip: ClipDto): AudioClipWindow {
+    return { start: clip.start, length: clip.length, offsetFrames: clip.offsetFrames ?? 0 };
+  }
+
+  /**
+   * Drag an audio clip's left edge: FL's slip-trim.
+   *
+   * The start and the length move together so the right edge stays put, and
+   * the offset into the file advances by the same time, so the audio stays
+   * where it was on the timeline and only the window onto it changes. One undo
+   * entry for the whole drag. Pattern clips have no offset to advance -- trimming
+   * their head would shift the music -- so they have no left grip at all.
+   */
+  function onTrimPointerDown(event: MouseEvent, clip: ClipDto): void {
+    event.stopPropagation();
+    if (event.button !== 0) return;
+    const tool = view.playlistTool();
+    if (tool === 'slice') {
+      sliceAtPointer(event, clip);
+      return;
+    }
+    if (isRepeatClick(event.detail)) return;
+    if (tool === 'delete') {
+      removeClip(clip);
+      return;
+    }
+    if (clip.kind !== 'audio') return;
+    event.preventDefault();
+    if (!view.selectedClips().includes(clip.id)) view.setSelectedClips([clip.id]);
+    pickUp(clip);
+
+    const origin = windowOf(clip);
+    const source = sourceOf(clip);
+    const file = { frames: source?.frames ?? 0, sampleRate: source?.sampleRate ?? 0 };
+    const startX = event.clientX;
+    let moved = false;
+    let last = origin;
+    let announced = '';
+    app.startPlaylistGesture('Trim clip start');
+
+    const onMove = (move: PointerEvent) => {
+      if (!moved && Math.abs(move.clientX - startX) < 3) return;
+      moved = true;
+      const raw = origin.start + (move.clientX - startX) / pxPerTick();
+      last = trimClipStart(origin, file, app.bpm(), raw, view.playlistSnap(), move.altKey);
+      setTrimming({ id: clip.id, ...last });
+      const seconds = file.sampleRate > 0 ? last.offsetFrames / file.sampleRate : 0;
+      const value = `bar ${(last.start / TICKS_PER_BAR + 1).toFixed(2)} · ${seconds.toFixed(2)} s in`;
+      if (value !== announced) {
+        announced = value;
+        app.say(`${clipName(clip)} · Trim start`, value);
+      }
+    };
+
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.body.style.removeProperty('cursor');
+      document.body.style.removeProperty('user-select');
+      const final = last;
+      if (!moved || (final.start === origin.start && final.offsetFrames === origin.offsetFrames)) {
+        setTrimming(null);
+        app.commitPlaylistGesture();
+        if (!moved) activate(clip);
+        return;
+      }
+      void app
+        .sequencerCommand(async (backend) => {
+          // Shrink before moving right and move before growing left, so no
+          // step in between asks the engine for a clip past the song's end.
+          if (final.start > origin.start) {
+            await backend.resizeClip(clip.id, final.length);
+            await backend.moveClip(clip.id, clip.track, final.start);
+          } else {
+            await backend.moveClip(clip.id, clip.track, final.start);
+            await backend.resizeClip(clip.id, final.length);
+          }
+          return backend.setClipOffset(clip.id, final.offsetFrames);
+        })
+        .then(() => {
+          setTrimming(null);
+          app.commitPlaylistGesture();
+        });
+    };
+
+    document.body.style.setProperty('cursor', 'ew-resize');
+    document.body.style.setProperty('user-select', 'none');
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  /** A slice in flight: a second click must not cut the clip it is replacing. */
+  let slicing = false;
+
+  /**
+   * Cut an audio clip in two at song tick `at`, as one undo entry.
+   *
+   * The right half is added *before* the original is shortened, so an engine
+   * that refuses the new clip (the clip limit, say) leaves the arrangement as
+   * it was instead of with half a vocal missing. Gain carries over to both.
+   */
+  async function sliceClip(clip: ClipDto, at: number): Promise<void> {
+    if (slicing || clip.kind !== 'audio' || clip.sourceId === undefined) return;
+    const sourceId = clip.sourceId;
+    const { left, right } = splitAudioClip(
+      windowOf(clip),
+      at,
+      { sampleRate: sourceOf(clip)?.sampleRate ?? 0 },
+      app.bpm(),
+    );
+    slicing = true;
+    setCutHover(null);
+    app.startPlaylistGesture('Slice clip');
+    try {
+      await app.sequencerCommand(async (backend) => {
+        await backend.addAudioClip(
+          sourceId,
+          clip.track,
+          right.start,
+          right.length,
+          right.offsetFrames,
+          clip.gainDb ?? 0,
+        );
+        return backend.resizeClip(clip.id, left.length);
+      });
+    } finally {
+      app.commitPlaylistGesture();
+      slicing = false;
+    }
+    app.say(`${clipName(clip)} · Slice`, `bar ${(at / TICKS_PER_BAR + 1).toFixed(2)}`);
+  }
+
+  /** Where the slice tool cuts `clip` for a pointer at `clientX`, or `null`. */
+  function cutAt(clip: ClipDto, clientX: number, free: boolean): number | null {
+    return splitPoint(clip, rawTickAt(clientX), view.playlistSnap(), free);
+  }
+
+  function sliceAtPointer(event: MouseEvent, clip: ClipDto): void {
+    event.preventDefault();
+    if (clip.kind !== 'audio') {
+      app.say('Playlist · Slice', 'pattern clips always start at step 1 — slice cuts audio clips');
+      return;
+    }
+    const at = cutAt(clip, event.clientX, event.altKey);
+    if (at === null) {
+      app.say(`${clipName(clip)} · Slice`, 'that grid line is the clip’s edge — Alt cuts off the grid');
+      return;
+    }
+    void sliceClip(clip, at);
+  }
+
+  /** The slice tool's cut line follows the pointer over an audio clip. */
+  function hoverCut(event: PointerEvent | null, clip: ClipDto): void {
+    if (!event || view.playlistTool() !== 'slice' || clip.kind !== 'audio') {
+      if (cutHover()) setCutHover(null);
+      return;
+    }
+    const at = cutAt(clip, event.clientX, event.altKey);
+    const current = cutHover();
+    if (at === null) {
+      if (current) setCutHover(null);
+      return;
+    }
+    if (current?.id === clip.id && current.at === at) return;
+    setCutHover({ id: clip.id, at });
+  }
+
+  /**
+   * The playhead as a cut into `clip`, or `null` when it is not inside it.
+   *
+   * Only in SONG mode: in PAT mode the transport is counting through a
+   * pattern, and its position is not a place on the arrangement.
+   */
+  function playheadCut(clip: ClipDto): number | null {
+    if (app.playMode() !== 'song') return null;
+    return splitPoint(clip, playheadTicks(), 0, true);
   }
 
   /**
@@ -1247,10 +1490,35 @@ export function Playlist(): ReturnType<typeof Show> {
     event.stopPropagation();
     setClipMenu({
       clip,
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 220)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 180)),
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - 240)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - 220)),
+      tick: rawTickAt(event.clientX),
     });
   }
+
+  /** The menu's clip as the engine has it now, not as it was when it opened. */
+  const liveMenuClip = (): ClipDto | undefined => {
+    const id = clipMenu()?.clip.id;
+    return (playlist()?.clips ?? []).find((clip) => clip.id === id);
+  };
+  const menuCut = (): number | null => {
+    const menu = clipMenu();
+    const clip = liveMenuClip();
+    if (!menu || !clip) return null;
+    return splitPoint(clip, menu.tick, view.playlistSnap());
+  };
+  const menuPlayheadCut = (): number | null => {
+    const clip = liveMenuClip();
+    return clip ? playheadCut(clip) : null;
+  };
+
+  // A menu for a clip that has gone -- an undo rebuilt it under a new id, or a
+  // CLI edit removed it -- would act on nothing; close it instead.
+  createEffect(() => {
+    const menu = clipMenu();
+    if (!menu) return;
+    if (!(playlist()?.clips ?? []).some((clip) => clip.id === menu.clip.id)) setClipMenu(null);
+  });
 
   // --- lanes ---------------------------------------------------------------
 
@@ -1474,7 +1742,10 @@ export function Playlist(): ReturnType<typeof Show> {
                 <div
                   class="wv-pl__lane"
                   data-lane={index}
-                  classList={{ 'is-painting': view.playlistTool() === 'paint' }}
+                  classList={{
+                    'is-painting': view.playlistTool() === 'paint',
+                    'is-slicing': view.playlistTool() === 'slice',
+                  }}
                   style={{
                     width: `${laneWidth()}px`,
                     height: `${laneHeight(lane().id)}px`,
@@ -1503,7 +1774,24 @@ export function Playlist(): ReturnType<typeof Show> {
                         <Show when={clip()}>
                           {(current) => (
                             <Clip
-                              clip={current()}
+                              clip={(() => {
+                                const trim = trimming();
+                                const live = current();
+                                return trim?.id === live.id
+                                  ? {
+                                      ...live,
+                                      start: trim.start,
+                                      length: trim.length,
+                                      offsetFrames: trim.offsetFrames,
+                                    }
+                                  : live;
+                              })()}
+                              cutAt={
+                                view.playlistTool() === 'slice' && cutHover()?.id === current().id
+                                  ? (cutHover()?.at ?? null)
+                                  : null
+                              }
+                              onHover={(event) => hoverCut(event, current())}
                               pxPerTick={pxPerTick()}
                               name={clipName(current())}
                               colour={
@@ -1545,9 +1833,16 @@ export function Playlist(): ReturnType<typeof Show> {
                                   : 0
                               }
                               selected={view.selectedClips().includes(current().id)}
-                              onDown={(event, mode) => onClipPointerDown(event, current(), mode)}
+                              onDown={(event, mode) =>
+                                mode === 'trim'
+                                  ? onTrimPointerDown(event, current())
+                                  : onClipPointerDown(event, current(), mode)
+                              }
                               onMenu={(event) => openClipMenu(event, current())}
                               onOpen={(altKey) => {
+                                // Two quick cuts are a double-click; with the
+                                // slice tool up they mean "cut", not "open".
+                                if (view.playlistTool() === 'slice') return;
                                 const sourceId = current().sourceId;
                                 if (current().kind === 'audio' && sourceId !== undefined) {
                                   void openSample(sourceId).catch(app.report);
@@ -1675,6 +1970,49 @@ export function Playlist(): ReturnType<typeof Show> {
                     Split by channel
                   </button>
                 </Show>
+                <Show when={menu().clip.kind === 'audio'}>
+                  <button
+                    type="button"
+                    class="wv-menu__row wv-can-disable"
+                    disabled={menuCut() === null}
+                    title={
+                      menuCut() === null
+                        ? 'The nearest grid line is the clip’s own edge — right-click further in'
+                        : 'Cut the clip in two on the grid line nearest where you right-clicked'
+                    }
+                    onClick={() => {
+                      const at = menuCut();
+                      const clip = liveMenuClip();
+                      setClipMenu(null);
+                      if (clip && at !== null) void sliceClip(clip, at);
+                    }}
+                  >
+                    Split here
+                    <span class="wv-menu__meta">C tool</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="wv-menu__row wv-can-disable"
+                    disabled={menuPlayheadCut() === null}
+                    title={
+                      menuPlayheadCut() === null
+                        ? app.playMode() === 'song'
+                          ? 'The playhead is not inside this clip'
+                          : 'The playlist playhead runs in SONG mode'
+                        : 'Cut the clip in two where the playhead is'
+                    }
+                    onClick={() => {
+                      const clip = liveMenuClip();
+                      setClipMenu(null);
+                      if (!clip) return;
+                      const at = playheadCut(clip);
+                      if (at !== null) void sliceClip(clip, at);
+                    }}
+                  >
+                    Split at playhead
+                  </button>
+                  <ClipVolumeRow clipId={menu().clip.id} name={clipName(menu().clip)} />
+                </Show>
                 <div class="wv-menu__rule" />
                 <button
                   type="button"
@@ -1788,6 +2126,86 @@ function LaneGrip(props: { lane: PlaylistTrackDto; height: number }): ReturnType
   );
 }
 
+/**
+ * One audio clip's own volume, in the clip's right-click menu.
+ *
+ * A trim on top of the channel fader, for evening out takes on one lane: the
+ * loud chorus take down 3 dB without touching the verse on the same channel.
+ * The slider and the readout move it live, so it can be set by ear while the
+ * song plays; each drag, nudge or typed value is **one** undo entry. Values
+ * go to the engine newest-first through {@link latestOnly}, and the undo entry
+ * is taken only once the last of them has landed.
+ */
+function ClipVolumeRow(props: { clipId: number; name: string }): ReturnType<typeof Show> {
+  const app = useAppState();
+  const live = () => app.playlist()?.clips.find((clip) => clip.id === props.clipId)?.gainDb ?? 0;
+  const [local, setLocal] = createSignal<number | null>(null);
+  const value = () => local() ?? clampClipGain(live());
+  const send = latestOnly((db: number) =>
+    app.sequencerCommand((backend) => backend.setClipGain(props.clipId, db)),
+  );
+  let open = false;
+
+  const input = (db: number): void => {
+    const next = clampClipGain(db);
+    if (!open) {
+      open = true;
+      app.startPlaylistGesture('Clip volume');
+    }
+    setLocal(next);
+    send.push(next);
+    app.say(`${props.name} · Volume`, formatClipGain(next) || '0.0 dB');
+  };
+
+  const commit = async (): Promise<void> => {
+    if (!open) return;
+    open = false;
+    await send.settled();
+    setLocal(null);
+    app.commitPlaylistGesture();
+  };
+  // Closing the menu mid-gesture (a wheel nudge still waiting to commit) must
+  // not leave the gesture open.
+  onCleanup(() => void commit());
+
+  const format = (db: number) => `${db > 0 ? '+' : db < 0 ? '−' : ''}${Math.abs(db).toFixed(1)} dB`;
+
+  return (
+    <div class="wv-clipgain" title="This clip's volume, on top of its channel's fader. Double-click the slider for 0 dB.">
+      <span class="wv-clipgain__label">Volume</span>
+      <input
+        class="wv-clipgain__slider"
+        type="range"
+        min={CLIP_GAIN_MIN_DB}
+        max={CLIP_GAIN_MAX_DB}
+        step="0.1"
+        value={value()}
+        aria-label="Clip volume"
+        aria-valuetext={format(value())}
+        onInput={(event) => input(Number(event.currentTarget.value))}
+        onChange={() => void commit()}
+        onDblClick={() => {
+          input(0);
+          void commit();
+        }}
+      />
+      <NumberField
+        class="wv-clipgain__value"
+        value={value}
+        onInput={input}
+        onCommit={() => void commit()}
+        min={CLIP_GAIN_MIN_DB}
+        max={CLIP_GAIN_MAX_DB}
+        step={0.1}
+        wheelStep={0.5}
+        format={format}
+        title="Drag or scroll to change, double-click to type a dB value"
+        aria-label="Clip volume in dB"
+      />
+    </div>
+  );
+}
+
 /** One clip: a coloured block with either the pattern it plays or a waveform. */
 function Clip(props: {
   clip: ClipDto;
@@ -1802,12 +2220,20 @@ function Clip(props: {
   /** Ticks in one loop of the pattern; 0 when this is not a pattern clip. */
   patternTicks: number;
   selected: boolean;
-  onDown: (event: MouseEvent, mode: 'move' | 'resize') => void;
+  /** Where the slice tool would cut, in song ticks; `null` for no cut line. */
+  cutAt: number | null;
+  /** The pointer moving over the clip, or leaving it (`null`). */
+  onHover: (event: PointerEvent | null) => void;
+  onDown: (event: MouseEvent, mode: 'move' | 'resize' | 'trim') => void;
   onMenu: (event: MouseEvent) => void;
   onOpen: (altKey: boolean) => void;
 }): ReturnType<typeof Show> {
-  /** The waveform as one SVG path, drawn from the engine's own min/max pairs. */
-  const path = () => overviewWaveformPath(props.waveform?.peaks ?? []);
+  /**
+   * The waveform as one SVG path, drawn from the engine's own min/max pairs
+   * and scaled by the clip's volume, so a clip turned down looks it.
+   */
+  const path = () => overviewWaveformPath(gainPeaks(props.waveform?.peaks ?? [], props.clip.gainDb));
+  const gain = () => (props.clip.kind === 'audio' ? formatClipGain(props.clip.gainDb) : '');
 
   const art = () => clipArtLayout(props.clip.length, props.patternTicks, props.pxPerTick);
   const wave = () =>
@@ -1847,13 +2273,20 @@ function Clip(props: {
         event.stopPropagation();
         props.onMenu(event);
       }}
+      onPointerMove={(event) => props.onHover(event)}
+      onPointerLeave={() => props.onHover(null)}
       title={
         props.clip.kind === 'pattern'
           ? `${props.name} — click to load the brush, drag to move (shift-drag to copy), drag the right edge to resize, double-click to edit (Alt for the piano roll), right-click for more`
-          : `${props.name} — click to load the brush, drag to move (shift-drag to copy), double-click to open the sample window, right-click for more. Audio clips play through their own channel's strip.`
+          : `${props.name}${gain() ? ` (${gain()})` : ''} — click to load the brush, drag to move (shift-drag to copy), drag either edge to trim, C for the slice tool, double-click to open the sample window, right-click for volume and more. Audio clips play through their own channel's strip.`
       }
     >
-      <span class="wv-clip__label">{props.name}</span>
+      <span class="wv-clip__label">
+        {props.name}
+        <Show when={gain()}>
+          <span class="wv-clip__gain">{gain()}</span>
+        </Show>
+      </span>
       <Show when={props.clip.kind === 'audio' && props.waveform}>
         <svg
           class="wv-clip__wave"
@@ -1895,6 +2328,25 @@ function Clip(props: {
             )}
           </For>
         </div>
+      </Show>
+      <Show when={props.cutAt !== null}>
+        <span
+          class="wv-clip__cut"
+          style={{ left: `${((props.cutAt ?? 0) - props.clip.start) * props.pxPerTick}px` }}
+        />
+      </Show>
+      <Show when={props.clip.kind === 'audio'}>
+        <span
+          class="wv-clip__grip wv-clip__grip--left"
+          title="Drag to trim the start — the audio stays in place (Alt for off the grid)"
+          onMouseDown={(event) => props.onDown(event, 'trim')}
+          onPointerDown={(event) => {
+            if (event.pointerType !== 'mouse') {
+              event.preventDefault();
+              props.onDown(event, 'trim');
+            }
+          }}
+        />
       </Show>
       <span class="wv-clip__grip"
         onMouseDown={(event) => props.onDown(event, 'resize')}

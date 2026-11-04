@@ -60,7 +60,7 @@ export interface InsertEditorRef {
 export type RollTool = 'draw' | 'paint' | 'select' | 'delete' | 'slice';
 
 /** The playlist's pointer tools. */
-export type PlaylistTool = 'paint' | 'select' | 'delete';
+export type PlaylistTool = 'paint' | 'select' | 'slice' | 'delete';
 
 /** Which end of a send the mixer's knob row is showing. */
 export type SendMode = 'from' | 'into';
