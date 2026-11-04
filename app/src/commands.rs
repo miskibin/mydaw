@@ -2071,6 +2071,20 @@ pub fn set_clip_gain(
     Ok(state.sequencer_state())
 }
 
+/// Mute or unmute one audio clip -- FL's per-clip mute, used to set a take
+/// aside without deleting it.
+#[tauri::command]
+pub fn set_clip_muted(
+    state: State<'_, AppState>,
+    clip_id: u64,
+    muted: bool,
+) -> Result<SequencerStateDto, String> {
+    state
+        .edit_playlist(|list| list.set_clip_muted(clip_id, muted))
+        .map_err(|err| err.to_string())?;
+    Ok(state.sequencer_state())
+}
+
 /// Set how far into its file an audio clip begins, in the file's own frames.
 #[tauri::command]
 pub fn set_clip_offset(
@@ -2238,26 +2252,89 @@ pub fn start_recording(state: State<'_, AppState>) -> Result<InputStatusDto, Str
     Ok(input_status_dto(&state))
 }
 
-/// End the take, write it, and load it as an audio source.
+/// End the take, write it, and land it on the playlist as an audio clip.
 ///
-/// Answers with the source **and** what went wrong on the way: a take with
+/// FL Studio's "audio into the playlist": the clip starts at the song position
+/// the performer heard when the take began (input and output latency
+/// compensated from the devices' own timestamps), on the first lane free for
+/// its length, and plays through the recording channel -- created as "Vocal"
+/// by the session's first take. `fallback_sample` places a take recorded with
+/// the transport stopped; the UI passes the playlist start marker.
+///
+/// Answers with the placement **and** what went wrong on the way: a take with
 /// dropped samples or one the length cap ended is still worth keeping, and the
-/// moment to say so is the moment the channel appears.
+/// moment to say so is the moment the clip appears. One command, so one undo
+/// step takes the whole take back.
 ///
-/// Placing it is a separate command (`add_sample_channel`), on purpose: a
-/// recorded take and a dropped WAV must reach the rack by the same path.
-///
-/// `async` because writing a five-minute WAV is disk I/O and must not block the
-/// main thread.
+/// `async` because writing a long WAV is disk I/O and must not block the main
+/// thread.
 #[tauri::command]
-pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordedTakeDto, String> {
-    let finished = state.finish_recording().map_err(|err| err.to_string())?;
+pub async fn stop_recording(
+    state: State<'_, AppState>,
+    fallback_sample: Option<u64>,
+) -> Result<RecordedTakeDto, String> {
+    let placed = state
+        .finish_take_to_playlist(fallback_sample.unwrap_or(0))
+        .map_err(|err| err.to_string())?;
     Ok(RecordedTakeDto {
-        source: AudioSourceDto::of(&finished.source, state.bpm()),
-        dropped_samples: finished.dropped_samples,
-        limit_reached: finished.limit_reached,
-        peak: finished.peak,
+        source: AudioSourceDto::of(&placed.finished.source, state.bpm()),
+        dropped_samples: placed.finished.dropped_samples,
+        limit_reached: placed.finished.limit_reached,
+        peak: placed.finished.peak,
+        clip_id: placed.clip_id,
+        lane: placed.lane,
+        channel: placed.channel,
+        start_ticks: placed.start_ticks,
+        synced: placed.synced,
     })
+}
+
+/// Hear (or stop hearing) the armed input through the recording channel, and
+/// remember the choice in `audio.json`.
+///
+/// Off is for interfaces with a direct-monitor knob: hearing yourself twice,
+/// once late, is worse than hearing yourself once.
+#[tauri::command]
+pub fn set_input_monitoring(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    on: bool,
+) -> Result<InputStatusDto, String> {
+    state.set_input_monitoring(on);
+    let path = audio_json(&app);
+    let mut settings = audio_settings::load_settings(&path);
+    settings.input_monitoring = on;
+    audio_settings::save_settings(&path, &settings).map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// Nudge where takes land, in milliseconds, on top of the automatic latency
+/// compensation. Positive moves takes earlier. Remembered in `audio.json`.
+#[tauri::command]
+pub fn set_record_offset(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    offset_ms: f64,
+) -> Result<InputStatusDto, String> {
+    state.recorder().set_offset_ms(offset_ms);
+    let path = audio_json(&app);
+    let mut settings = audio_settings::load_settings(&path);
+    settings.record_offset_ms = state.recorder().offset_ms() as f32;
+    audio_settings::save_settings(&path, &settings).map_err(|err| err.to_string())?;
+    Ok(input_status_dto(&state))
+}
+
+/// Make an audio channel the one the input records to and is monitored
+/// through (the mixer's R button). `null` clears it.
+#[tauri::command]
+pub fn set_record_channel(
+    state: State<'_, AppState>,
+    track: Option<usize>,
+) -> Result<MixerStateDto, String> {
+    state
+        .set_record_channel(track)
+        .map_err(|err| err.to_string())?;
+    Ok(state.mixer_state())
 }
 
 /// Throw the take away. The device stays armed for another attempt.
@@ -2275,7 +2352,9 @@ fn input_status_dto(state: &AppState) -> InputStatusDto {
     // is already known: a device that is open is proof that one exists.
     let has_devices =
         status.state != mydaw_plugin_audio_io::RecordState::Idle || !recorder.devices().is_empty();
-    InputStatusDto::of(status, has_devices)
+    let mut dto = InputStatusDto::of(status, has_devices);
+    dto.offset_ms = recorder.offset_ms();
+    dto
 }
 
 /// MIDI input ports the Settings list draws: OS-visible plus unpaired-offline

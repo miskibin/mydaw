@@ -63,16 +63,19 @@
 //! ```
 
 pub mod input;
+pub mod monitor;
 mod output;
 mod priority;
 pub mod record;
 pub mod rt;
 pub mod service;
+pub mod timeline;
 
 pub use input::{
     fold_frame, peak_decay_for, InputConsumer, InputFault, InputRtSide, InputShared, RateConverter,
     INPUT_QUEUE_CAPACITY,
 };
+pub use monitor::{MonitorReader, MonitorSlot};
 pub use output::{
     asio_compiled, buffer_size_of, choose_host, fallback_note, AudioBackend, HostChoice,
     OutputRequest,
@@ -83,6 +86,7 @@ pub use record::{
 };
 pub use rt::{run_block, AudioIoStats, RtState, RtStateParams};
 pub use service::{AudioIoConfig, AudioIoError, AudioIoService, StreamInfo};
+pub use timeline::{PlaybackRun, PlaybackTimeline};
 
 use std::sync::Arc;
 

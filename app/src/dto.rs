@@ -566,6 +566,9 @@ pub struct ClipDto {
     /// faders of their own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gain_db: Option<f32>,
+    /// A muted audio clip: drawn dimmed, silent on playback.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
 }
 
 impl From<&Clip> for ClipDto {
@@ -580,6 +583,7 @@ impl From<&Clip> for ClipDto {
             source_id: None,
             offset_frames: None,
             gain_db: None,
+            muted: false,
         };
         match clip {
             Clip::Pattern(pattern) => Self {
@@ -590,6 +594,7 @@ impl From<&Clip> for ClipDto {
                 source_id: Some(audio.source_id),
                 offset_frames: Some(audio.offset_frames),
                 gain_db: Some(audio.gain_db),
+                muted: audio.muted,
                 ..base
             },
         }
@@ -884,6 +889,11 @@ pub struct InputStatusDto {
     /// Whether the machine has any capture device at all. `false` is what
     /// disables the REC button, with the reason in its tooltip.
     pub has_devices: bool,
+    /// Whether the armed input is heard through the recording channel.
+    pub monitoring: bool,
+    /// Manual recording offset in milliseconds, on top of the automatic
+    /// latency compensation. Positive moves takes earlier.
+    pub offset_ms: f64,
 }
 
 impl InputStatusDto {
@@ -906,6 +916,8 @@ impl InputStatusDto {
             limit_reached: status.limit_reached,
             fault: status.fault,
             has_devices,
+            monitoring: status.monitoring,
+            offset_ms: 0.0,
         }
     }
 }
@@ -927,6 +939,17 @@ pub struct RecordedTakeDto {
     /// Largest absolute sample. Near zero is a silent take, which almost always
     /// means the wrong input was selected or a cable is out.
     pub peak: f32,
+    /// The playlist clip the take became.
+    pub clip_id: u64,
+    /// The playlist lane it landed on.
+    pub lane: usize,
+    /// The mixer channel it plays through.
+    pub channel: usize,
+    /// Where it starts, in song ticks.
+    pub start_ticks: u64,
+    /// Whether that position came from the transport (latency compensated)
+    /// rather than the start marker.
+    pub synced: bool,
 }
 
 impl StreamInfoDto {

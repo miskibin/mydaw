@@ -258,6 +258,16 @@ impl RtState {
         self.spectrum.take()
     }
 
+    /// The transport this state advances, for the stream closure's timeline.
+    pub(crate) fn transport_clock(&self) -> &TransportClock {
+        &self.transport
+    }
+
+    /// Largest block the graph renders in one pass.
+    pub(crate) fn max_block(&self) -> usize {
+        self.buffers.max_block()
+    }
+
     /// Promote this thread and disable denormals. Idempotent; call from the
     /// callback.
     ///

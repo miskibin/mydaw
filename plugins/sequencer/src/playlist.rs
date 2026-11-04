@@ -133,6 +133,10 @@ pub struct AudioClip {
     pub length_ticks: u64,
     /// Per-clip trim, in dB. `0.0` is unity.
     pub gain_db: f32,
+    /// Silences this clip alone, FL's per-clip mute. A muted clip keeps its
+    /// place and is drawn dimmed, so an older take can be set aside without
+    /// losing it.
+    pub muted: bool,
 }
 
 /// One thing on the timeline.
@@ -542,6 +546,7 @@ impl Playlist {
             offset_frames,
             length_ticks,
             gain_db: if gain_db.is_finite() { gain_db } else { 0.0 },
+            muted: false,
         }));
         Ok(id)
     }
@@ -658,6 +663,25 @@ impl Playlist {
         match clip {
             Clip::Audio(audio) => {
                 audio.gain_db = if gain_db.is_finite() { gain_db } else { 0.0 };
+                Ok(())
+            }
+            Clip::Pattern(_) => Err(PlaylistError::NoSuchClip(id)),
+        }
+    }
+
+    /// Mute or unmute one audio clip.
+    ///
+    /// # Errors
+    /// [`PlaylistError::NoSuchClip`] -- including for a pattern clip.
+    pub fn set_clip_muted(&mut self, id: u64, muted: bool) -> Result<(), PlaylistError> {
+        let clip = self
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id() == id)
+            .ok_or(PlaylistError::NoSuchClip(id))?;
+        match clip {
+            Clip::Audio(audio) => {
+                audio.muted = muted;
                 Ok(())
             }
             Clip::Pattern(_) => Err(PlaylistError::NoSuchClip(id)),
@@ -842,7 +866,7 @@ impl Playlist {
             .iter()
             .filter_map(|clip| match clip {
                 Clip::Audio(audio) => {
-                    if self.lane_silenced(audio.track) {
+                    if audio.muted || self.lane_silenced(audio.track) {
                         return None;
                     }
                     Some(*audio)

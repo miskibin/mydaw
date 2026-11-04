@@ -155,6 +155,13 @@ pub struct TrackDef {
     /// running -- see [`crate::effects`] -- so cloning a `TrackDef` shares them
     /// rather than copying them, which is what a DTO and a save both want.
     pub inserts: Vec<InsertDef>,
+    /// Further audio files whose playlist clips play through this audio-clip
+    /// channel: the recorded takes, which all share the recording channel's
+    /// fader and effects instead of each taking a strip of its own.
+    pub take_sources: Vec<u64>,
+    /// Whether this is the channel the audio input records to and is
+    /// monitored through -- FL's armed mixer insert. At most one per project.
+    pub record_target: bool,
 }
 
 /// Two tracks are the same when they are the same channel at the same
@@ -190,6 +197,8 @@ impl PartialEq for TrackDef {
             && self.detected_pitch == other.detected_pitch
             && self.slices == other.slices
             && self.inserts == other.inserts
+            && self.take_sources == other.take_sources
+            && self.record_target == other.record_target
             && params(self) == params(other)
     }
 }
@@ -244,6 +253,8 @@ impl TrackDef {
             slices: SliceStateDto::default(),
             sample_play: Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0))),
             inserts: Vec::new(),
+            take_sources: Vec::new(),
+            record_target: false,
         }
     }
 
@@ -1326,20 +1337,89 @@ impl Project {
         Ok(self.tracks.len() - 1)
     }
 
-    /// The mixer channel that plays playlist clips of `source_id`, if any.
+    /// The mixer channel that plays playlist clips of `source_id`, if any:
+    /// the file's own audio-clip channel, or the channel a take is routed to.
     pub fn find_audio_clip_channel(&self, source_id: u64) -> Option<usize> {
+        self.tracks
+            .iter()
+            .position(|track| {
+                matches!(
+                    track.source,
+                    Source::AudioClip {
+                        source_id: id
+                    } if id == source_id
+                )
+            })
+            .or_else(|| {
+                self.tracks.iter().position(|track| {
+                    matches!(track.source, Source::AudioClip { .. })
+                        && track.take_sources.contains(&source_id)
+                })
+            })
+    }
+
+    /// The channel the audio input records to, if the session has one.
+    pub fn record_channel(&self) -> Option<usize> {
         self.tracks.iter().position(|track| {
-            matches!(
-                track.source,
-                Source::AudioClip {
-                    source_id: id
-                } if id == source_id
-            )
+            track.record_target && matches!(track.source, Source::AudioClip { .. })
         })
     }
 
+    /// Route `take` through the audio-clip channel at `index` and make that
+    /// channel the recording target. Idempotent.
+    pub fn route_take(&mut self, index: usize, take: u64) {
+        for (position, track) in self.tracks.iter_mut().enumerate() {
+            track.record_target = position == index;
+            if position != index {
+                track.take_sources.retain(|id| *id != take);
+            }
+        }
+        if let Some(track) = self.tracks.get_mut(index) {
+            let own = matches!(track.source, Source::AudioClip { source_id } if source_id == take);
+            if !own && !track.take_sources.contains(&take) {
+                track.take_sources.push(take);
+            }
+        }
+    }
+
+    /// Make the audio-clip channel at `index` the recording target (or clear
+    /// the target with `None`). Non-clip channels cannot be targets.
+    pub fn set_record_channel(&mut self, index: Option<usize>) -> bool {
+        if let Some(index) = index {
+            if !matches!(
+                self.tracks.get(index).map(|track| &track.source),
+                Some(Source::AudioClip { .. })
+            ) {
+                return false;
+            }
+        }
+        for (position, track) in self.tracks.iter_mut().enumerate() {
+            track.record_target = Some(position) == index;
+        }
+        true
+    }
+
     /// Channel pitch and SMP region for every playlist clip of `source_id`.
+    ///
+    /// A take routed through another file's channel gets that channel's pitch
+    /// and fades but never its region, which is a frame range of a different
+    /// file.
     pub fn audio_clip_tune(&self, source_id: u64) -> AudioClipTune {
+        if let Some(track) = self
+            .tracks
+            .iter()
+            .find(|track| track.take_sources.contains(&source_id))
+        {
+            if let Source::AudioClip { source_id: route } = track.source {
+                return AudioClipTune {
+                    pitch_cents: track.pitch_cents,
+                    fade_in_ms: track.fade_in_ms,
+                    fade_out_ms: track.fade_out_ms,
+                    route: Some(route),
+                    ..AudioClipTune::default()
+                };
+            }
+        }
         self.tracks
             .iter()
             .find(|track| {
@@ -1356,6 +1436,7 @@ impl Project {
                 end_frames: track.sample_end_frames,
                 fade_in_ms: track.fade_in_ms,
                 fade_out_ms: track.fade_out_ms,
+                route: None,
             })
             .unwrap_or_default()
     }
@@ -1660,6 +1741,11 @@ pub struct TrackDto {
     /// Numeric audio-file id when this channel is `clip:` or `oneshot:`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_source_id: Option<u64>,
+    /// Whether the audio input records to (and is monitored through) this
+    /// channel -- the mixer's lit R button.
+    pub record_target: bool,
+    /// Recorded takes playing through this channel besides its own file.
+    pub take_count: usize,
 }
 
 /// One bus strip, as the webview draws it.
@@ -1856,6 +1942,8 @@ pub fn mixer_state_dto(
                 detected_pitch: track.detected_pitch,
                 slices: track.slices.clone(),
                 audio_source_id: track.source.sample_file_id(),
+                record_target: track.record_target,
+                take_count: track.take_sources.len(),
             })
             .collect(),
         buses: project

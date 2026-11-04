@@ -106,6 +106,8 @@ pub fn command_class(name: &str) -> CommandClass {
                 | "set_audio_settings"
                 | "set_input_device"
                 | "set_input_armed"
+                | "set_input_monitoring"
+                | "set_record_offset"
                 | "start_recording"
                 | "cancel_recording"
                 | "set_midi_port_enabled"
@@ -126,6 +128,7 @@ pub fn command_class(name: &str) -> CommandClass {
             name,
             "set_clip_gain"
                 | "set_clip_offset"
+                | "set_clip_muted"
                 | "set_bpm"
                 | "set_loop"
                 | "set_play_mode"

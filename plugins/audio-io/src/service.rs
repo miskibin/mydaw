@@ -236,6 +236,7 @@ impl Default for AudioIoService {
 impl AudioIoService {
     /// Create the service. Spawns the basedrop collector thread; opens no device.
     pub fn new(config: AudioIoConfig) -> Self {
+        crate::timeline::init_clock();
         Self {
             config,
             gc: GcThread::spawn(),
@@ -633,10 +634,25 @@ impl AudioIoService {
 
         let stream = match device.build_output_stream::<f32, _, _>(
             config,
-            move |output: &mut [f32], _info| {
+            move |output: &mut [f32], info: &cpal::OutputCallbackInfo| {
                 let frames = output.len().checked_div(out_channels).unwrap_or(0);
                 carrier.state.ensure_realtime(frames);
+                // When this block's first frame reaches the DAC, on the clock the
+                // input stream also uses. See `crate::timeline`.
+                let stamp = info.timestamp();
+                let audible_ns = crate::timeline::now_ns().saturating_add(
+                    crate::timeline::duration_ns(stamp.playback.duration_since(stamp.callback)),
+                );
                 run_block(&mut carrier.state, output);
+                let after = carrier.state.transport_clock().snapshot();
+                let rendered = frames.min(carrier.state.max_block()) as u64;
+                crate::timeline::PlaybackTimeline::global().publish(
+                    after.playing,
+                    after.sample_pos.saturating_sub(rendered),
+                    rendered,
+                    audible_ns,
+                    f64::from(sample_rate),
+                );
             },
             move |_err| {
                 error_stats.record_stream_error();

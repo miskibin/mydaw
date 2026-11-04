@@ -481,7 +481,11 @@ impl AppState {
             jobs: Arc::new(crate::jobs::Jobs::default()),
             snapshot: ui_snapshot(kernel),
             audio,
-            recorder: Arc::new(RecordService::new()),
+            recorder: {
+                let recorder = Arc::new(RecordService::new());
+                tracks.bind_monitor(Arc::clone(recorder.monitor_slot()));
+                recorder
+            },
             sequencer,
             sources,
             tracks,
@@ -2491,6 +2495,144 @@ impl AppState {
         self.write_and_load(&take)
     }
 
+    /// End the take and land it on the playlist, FL-style: an audio clip at the
+    /// song position the performer was hearing when the take began, on the
+    /// first lane free for its whole length, playing through the recording
+    /// channel.
+    ///
+    /// `fallback_sample` is where the take goes when the transport never
+    /// played during it (a take over silence): the playlist start marker.
+    ///
+    /// One command, so one undo step removes the clip, the source and -- for
+    /// the first take -- the channel it created.
+    ///
+    /// # Errors
+    /// As [`finish_recording`](Self::finish_recording), plus
+    /// [`RecordingError::Place`] when the playlist refuses the clip; the take
+    /// is on disk and loaded either way.
+    pub fn finish_take_to_playlist(
+        &self,
+        fallback_sample: u64,
+    ) -> Result<PlacedTake, RecordingError> {
+        let take = self.recorder.stop()?;
+        log::info!(
+            "take finished: {:.2} s, peak {:.3}, {} dropped, start {:?}",
+            take.duration_seconds(),
+            take.peak(),
+            take.dropped,
+            take.start_sample
+        );
+        let finished = self.write_and_load(&take)?;
+        let source = Arc::clone(&finished.source);
+
+        // Where it goes, in engine samples, with the manual offset applied.
+        let rate = take.sample_rate;
+        let offset = self.recorder.offset_ms() * rate / 1_000.0;
+        let synced = take.start_sample.is_some();
+        let start = take
+            .start_sample
+            .map(|start| start - offset)
+            .unwrap_or(fallback_sample as f64);
+        let placement = take_placement(
+            start,
+            source.frames() as u64,
+            rate,
+            self.bpm(),
+            if self.sequencer.is_looping() {
+                self.sequencer.song_end_ticks()
+            } else {
+                0
+            },
+        )
+        .ok_or_else(|| RecordingError::Place("the take is shorter than one tick".to_owned()))?;
+
+        let channel = self.route_take_to_record_channel(source.id())?;
+
+        let (clip_id, lane) = self
+            .edit_playlist(|playlist| {
+                let lane = match free_lane(playlist, placement.start_ticks, placement.length_ticks)
+                {
+                    Some(lane) => lane,
+                    None => {
+                        playlist.add_track(None)?;
+                        playlist.tracks().len() - 1
+                    }
+                };
+                let id = playlist.add_audio_clip(
+                    source.id(),
+                    lane,
+                    placement.start_ticks,
+                    placement.length_ticks,
+                    placement.offset_frames,
+                    0.0,
+                )?;
+                Ok((id, lane))
+            })
+            .map_err(|err| RecordingError::Place(err.to_string()))?;
+
+        Ok(PlacedTake {
+            finished,
+            clip_id,
+            lane,
+            channel,
+            start_ticks: placement.start_ticks,
+            synced,
+        })
+    }
+
+    /// Route a new take through the recording channel, creating that channel
+    /// ("Vocal") for the session's first take. Returns its mixer index.
+    fn route_take_to_record_channel(&self, take: u64) -> Result<usize, RecordingError> {
+        let place = |err: MixerError| RecordingError::Place(err.to_string());
+        if let Some(index) = self.tracks.project().record_channel() {
+            self.tracks
+                .edit_project(|project| {
+                    project.route_take(index, take);
+                    Ok::<_, MixerError>(())
+                })
+                .map_err(place)?;
+            return Ok(index);
+        }
+        let index = self.ensure_audio_clip_channel(take).map_err(place)?;
+        self.tracks
+            .edit_project(|project| {
+                if let Some(track) = project.tracks.get_mut(index) {
+                    if track.name.starts_with(crate::recording::TAKE_STEM) {
+                        track.name = RECORD_CHANNEL_NAME.to_owned();
+                    }
+                }
+                project.route_take(index, take);
+                Ok::<_, MixerError>(())
+            })
+            .map_err(place)?;
+        // The monitor moves from the master bus to the new channel's head.
+        self.rebuild_graph().map_err(place)?;
+        Ok(index)
+    }
+
+    /// Make the audio-clip channel at `index` the one the input records to and
+    /// is monitored through. `None` clears it (the next take creates a fresh
+    /// channel).
+    ///
+    /// # Errors
+    /// [`TrackError::NoSuchTrack`] for an index that is not an audio channel.
+    pub fn set_record_channel(&self, index: Option<usize>) -> Result<(), MixerError> {
+        self.edit_structure(|project| {
+            if project.set_record_channel(index) {
+                Ok(())
+            } else {
+                Err(MixerError::Track(TrackError::NoSuchTrack(
+                    index.unwrap_or(0),
+                )))
+            }
+        })
+    }
+
+    /// Hear (or stop hearing) the armed input through the recording channel.
+    pub fn set_input_monitoring(&self, on: bool) {
+        self.recorder.set_monitoring(on);
+    }
+
     /// Salvage a take whose device died, if there is one worth keeping.
     ///
     /// The capture callback cannot notice its own death, so the transition out
@@ -2529,6 +2671,87 @@ impl AppState {
     }
 }
 
+/// Name of the channel the session's first take creates.
+pub const RECORD_CHANNEL_NAME: &str = "Vocal";
+
+/// A take placed on the playlist.
+#[derive(Debug, Clone)]
+pub struct PlacedTake {
+    pub finished: FinishedTake,
+    pub clip_id: u64,
+    pub lane: usize,
+    /// The mixer channel it plays through.
+    pub channel: usize,
+    pub start_ticks: u64,
+    /// Whether the position came from the transport (latency compensated)
+    /// rather than the start marker.
+    pub synced: bool,
+}
+
+/// Where a take lands, in playlist units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TakePlacement {
+    pub start_ticks: u64,
+    pub length_ticks: u64,
+    /// Frames trimmed off the take's head so its audio starts exactly on
+    /// `start_ticks` (ticks are coarser than samples, and a take that began
+    /// before song zero keeps only what follows it).
+    pub offset_frames: u64,
+}
+
+/// Turn a take's song position (engine samples, fractional, possibly
+/// negative) into a clip that plays it sample-accurately.
+///
+/// The clip starts on the first tick at or after the take's first frame and
+/// skips the frames before that tick, so nothing moves by rounding. With the
+/// song looping, a take begun on a later pass is folded back onto the song.
+pub fn take_placement(
+    start_sample: f64,
+    frames: u64,
+    sample_rate: f64,
+    bpm: f64,
+    loop_ticks: u64,
+) -> Option<TakePlacement> {
+    if !(sample_rate > 0.0 && bpm > 0.0 && start_sample.is_finite()) || frames == 0 {
+        return None;
+    }
+    let samples_per_tick = sample_rate * 60.0 / bpm / f64::from(mydaw_plugin_sequencer::PPQ);
+    let mut start_ticks = if start_sample <= 0.0 {
+        0
+    } else {
+        (start_sample / samples_per_tick).ceil() as u64
+    };
+    let offset = (start_ticks as f64 * samples_per_tick - start_sample).max(0.0);
+    let offset_frames = offset.round() as u64;
+    if offset_frames >= frames {
+        return None;
+    }
+    if loop_ticks > 0 && start_ticks >= loop_ticks {
+        start_ticks %= loop_ticks;
+    }
+    let remaining = (frames - offset_frames) as f64;
+    let max_length = mydaw_plugin_sequencer::MAX_SONG_TICKS.saturating_sub(start_ticks);
+    let length_ticks = ((remaining / samples_per_tick).ceil() as u64).clamp(1, max_length.max(1));
+    Some(TakePlacement {
+        start_ticks,
+        length_ticks,
+        offset_frames,
+    })
+}
+
+/// The first playlist lane with nothing on it between `start` and
+/// `start + length`, or `None` when every lane is taken there.
+pub fn free_lane(playlist: &Playlist, start: u64, length: u64) -> Option<usize> {
+    let end = start.saturating_add(length);
+    (0..playlist.tracks().len()).find(|lane| {
+        !playlist.clips().iter().any(|clip| {
+            clip.track() == *lane
+                && clip.start_ticks() < end
+                && clip.start_ticks().saturating_add(clip.length_ticks()) > start
+        })
+    })
+}
+
 /// A take that made it to disk and back into the session.
 ///
 /// Carries the two things the source itself cannot say -- whether the capture
@@ -2557,6 +2780,9 @@ pub enum RecordingError {
 
     #[error("the take was written but could not be read back: {0}")]
     Load(#[from] SequencerError),
+
+    #[error("the take was saved but could not be placed on the playlist: {0}")]
+    Place(String),
 }
 
 #[cfg(test)]
@@ -3655,5 +3881,94 @@ mod tests {
             state.set_track_sample_root(synth, 60, 0.0, RootMode::Manual),
             Err(MixerError::Track(TrackError::NotASampleChannel(_)))
         ));
+    }
+}
+
+#[cfg(test)]
+mod take_placement_tests {
+    use super::*;
+    use mydaw_plugin_sequencer::{PPQ, TICKS_PER_BAR};
+
+    const RATE: f64 = 48_000.0;
+    /// 120 BPM: a beat is 24 000 samples, a tick 25.
+    const BPM: f64 = 120.0;
+
+    #[test]
+    fn a_take_on_a_tick_starts_there_with_nothing_trimmed() {
+        let placed = take_placement(24_000.0, 48_000, RATE, BPM, 0).unwrap();
+        assert_eq!(placed.start_ticks, u64::from(PPQ));
+        assert_eq!(placed.offset_frames, 0);
+        assert_eq!(placed.length_ticks, 2 * u64::from(PPQ));
+    }
+
+    #[test]
+    fn a_take_between_ticks_starts_on_the_next_and_trims_its_head() {
+        // 10 samples before tick 961: the clip starts on 961 and skips those 10
+        // frames, so the audio lands exactly where it was performed.
+        let placed = take_placement(24_015.0, 48_000, RATE, BPM, 0).unwrap();
+        assert_eq!(placed.start_ticks, u64::from(PPQ) + 1);
+        assert_eq!(placed.offset_frames, 10);
+    }
+
+    #[test]
+    fn a_take_begun_before_song_zero_keeps_only_what_follows_it() {
+        let placed = take_placement(-4_800.0, 48_000, RATE, BPM, 0).unwrap();
+        assert_eq!(placed.start_ticks, 0);
+        assert_eq!(placed.offset_frames, 4_800);
+    }
+
+    #[test]
+    fn a_take_shorter_than_its_lead_in_is_refused() {
+        assert_eq!(take_placement(-48_000.0, 100, RATE, BPM, 0), None);
+        assert_eq!(take_placement(0.0, 0, RATE, BPM, 0), None);
+        assert_eq!(take_placement(f64::NAN, 100, RATE, BPM, 0), None);
+    }
+
+    #[test]
+    fn a_take_on_a_later_loop_pass_folds_back_onto_the_song() {
+        let loop_ticks = 4 * u64::from(TICKS_PER_BAR);
+        // Bar 5 of a four-bar loop is bar 1 again.
+        let at_bar_five = 4.0 * 4.0 * 24_000.0;
+        let placed = take_placement(at_bar_five, 48_000, RATE, BPM, loop_ticks).unwrap();
+        assert_eq!(placed.start_ticks, 0);
+    }
+
+    #[test]
+    fn takes_stack_on_the_first_lane_free_for_their_length() {
+        let mut playlist = Playlist::default();
+        playlist.add_track(None).unwrap();
+        playlist.add_track(None).unwrap();
+        let bar = u64::from(TICKS_PER_BAR);
+        // The beat on lane 0, bars 1-8.
+        playlist.add_audio_clip(1, 0, 0, 8 * bar, 0, 0.0).unwrap();
+        assert_eq!(free_lane(&playlist, 0, 2 * bar), Some(1));
+        playlist.add_audio_clip(2, 1, 0, 2 * bar, 0, 0.0).unwrap();
+        // A second take over the same bars goes below the first...
+        assert_eq!(free_lane(&playlist, bar, bar), Some(2));
+        // ...but one after the first take ends shares its lane.
+        assert_eq!(free_lane(&playlist, 2 * bar, bar), Some(1));
+        // Past the beat, lane 0 is free again.
+        assert_eq!(free_lane(&playlist, 8 * bar, bar), Some(0));
+    }
+
+    #[test]
+    fn takes_route_through_one_recording_channel() {
+        let mut project = Project::default();
+        let index = project
+            .add(Source::AudioClip { source_id: 10 }, Some("Vocal".into()))
+            .unwrap();
+        assert_eq!(project.record_channel(), None);
+        project.route_take(index, 10);
+        project.route_take(index, 11);
+        project.route_take(index, 12);
+        assert_eq!(project.record_channel(), Some(index));
+        assert_eq!(project.find_audio_clip_channel(11), Some(index));
+        assert_eq!(project.audio_clip_tune(12).route, Some(10));
+        assert_eq!(
+            project.audio_clip_tune(10).route,
+            None,
+            "the owner plays itself"
+        );
+        assert_eq!(project.tracks[index].take_sources, vec![11, 12]);
     }
 }

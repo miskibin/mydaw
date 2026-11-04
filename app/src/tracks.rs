@@ -160,6 +160,10 @@ pub struct TrackHost {
     /// The one insert point on the master bus. Present in every graph, empty
     /// until a plugin is chosen -- see [`crate::insert`].
     master_insert: Arc<InsertHandle>,
+    /// Where the armed audio input is read from for live monitoring. Rendered
+    /// at the head of the recording channel, or on the master bus while the
+    /// session has none yet. See [`crate::recording::MonitorNode`].
+    monitor: Mutex<Option<Arc<mydaw_plugin_audio_io::MonitorSlot>>>,
     /// The audio-clip player, which sits on the master bus *before* the insert
     /// point. Present in every graph for the same reason the insert slot is --
     /// see [`crate::clips`]. Owned here because this is what assembles the
@@ -227,6 +231,7 @@ impl TrackHost {
                 .map(|_| Arc::new(AtomicBool::new(false)))
                 .collect(),
             master_insert: Arc::new(InsertHandle::new()),
+            monitor: Mutex::new(None),
             audio_clips: Arc::new(crate::clips::AudioClipBus::new()),
             file_preview: Arc::new(crate::file_preview::FilePreviewBus::new()),
             selected: AtomicUsize::new(0),
@@ -237,6 +242,12 @@ impl TrackHost {
     /// The parameter block the audio thread reads.
     pub fn params(&self) -> &Arc<MixerParams> {
         &self.params
+    }
+
+    /// Hand the live graph the recorder's monitor slot. Called once at boot;
+    /// takes effect on the next graph install.
+    pub fn bind_monitor(&self, slot: Arc<mydaw_plugin_audio_io::MonitorSlot>) {
+        *self.monitor.lock() = Some(slot);
     }
 
     /// The key bus every compressor with a sidechain source reads.
@@ -1314,6 +1325,15 @@ impl TrackHost {
             self.audio_clips.begin_rebuild();
         }
 
+        // Only the live graph monitors: an offline render must never pick up
+        // whatever the microphone is doing.
+        let monitor = if live {
+            self.monitor.lock().as_ref().map(Arc::clone)
+        } else {
+            None
+        };
+        let record_channel = project.record_channel();
+
         let mut spec = GraphSpec::new()
             .with_params(Arc::clone(&self.params))
             .with_sidechain(Arc::clone(&self.sidechain))
@@ -1364,6 +1384,12 @@ impl TrackHost {
                     (handle, Arc::new(AtomicBool::new(false)))
                 }
             };
+            let node = match (&monitor, record_channel) {
+                (Some(slot), Some(record)) if record == index => {
+                    crate::recording::MonitorNode::wrap(node, Arc::clone(slot))
+                }
+                _ => node,
+            };
             let slot = handle.open(node, def.source.clone(), gc.clone(), Arc::clone(&gate));
             spec.push_track(track_chain(
                 slot,
@@ -1380,6 +1406,10 @@ impl TrackHost {
 
         for send in &project.sends {
             spec.push_send(SendSpec::new(send.source, send.dest));
+        }
+
+        if let (Some(slot), None) = (&monitor, record_channel) {
+            spec.push_master_insert(crate::recording::MonitorNode::master(Arc::clone(slot)));
         }
 
         if live {

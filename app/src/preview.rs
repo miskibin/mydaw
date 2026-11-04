@@ -61,6 +61,7 @@ fn audition_tune(
         end_frames,
         fade_in_ms,
         fade_out_ms,
+        route: None,
     }
 }
 
@@ -499,6 +500,7 @@ mod tests {
                 end_frames: 4_320,
                 fade_in_ms: 100.0,
                 fade_out_ms: 100.0,
+                route: None,
             },
         );
 

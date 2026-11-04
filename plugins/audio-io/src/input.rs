@@ -138,6 +138,17 @@ impl InputFault {
 #[derive(Debug)]
 pub struct InputShared {
     recording: AtomicBool,
+    /// Whether the callback also feeds the live-monitor ring.
+    monitoring: AtomicBool,
+    /// Raised by the callback once it has written the take's first frame; the
+    /// two fields below are valid only after it reads `true` (Acquire).
+    anchor_set: AtomicBool,
+    /// Ring-stream index (frames ever written) of the take's first frame.
+    anchor_frame: AtomicU64,
+    /// When that frame was captured, in [`crate::timeline::now_ns`] terms.
+    anchor_ns: AtomicU64,
+    /// Frames in the device's most recent block, for the monitor's latency.
+    block_frames: AtomicU32,
     dropped: AtomicU64,
     frames_seen: AtomicU64,
     peak_bits: AtomicU32,
@@ -149,6 +160,11 @@ impl Default for InputShared {
     fn default() -> Self {
         Self {
             recording: AtomicBool::new(false),
+            monitoring: AtomicBool::new(false),
+            anchor_set: AtomicBool::new(false),
+            anchor_frame: AtomicU64::new(0),
+            anchor_ns: AtomicU64::new(0),
+            block_frames: AtomicU32::new(0),
             dropped: AtomicU64::new(0),
             frames_seen: AtomicU64::new(0),
             peak_bits: AtomicU32::new(0),
@@ -162,17 +178,49 @@ impl InputShared {
     /// Whether the callback is currently copying into the ring.
     #[inline]
     pub fn is_recording(&self) -> bool {
-        self.recording.load(Ordering::Relaxed)
+        self.recording.load(Ordering::Acquire)
     }
 
     /// Start copying. Non-RT side only.
+    ///
+    /// Clears the take anchor first, so the callback's first kept block
+    /// re-anchors the new take. See [`Self::anchor`].
     pub fn start(&self) {
-        self.recording.store(true, Ordering::Relaxed);
+        self.anchor_set.store(false, Ordering::Release);
+        self.recording.store(true, Ordering::Release);
+    }
+
+    /// Where the current take begins: its first frame's index in the ring
+    /// stream and the instant it was captured. `None` until the callback has
+    /// written that frame.
+    pub fn anchor(&self) -> Option<(u64, u64)> {
+        if !self.anchor_set.load(Ordering::Acquire) {
+            return None;
+        }
+        Some((
+            self.anchor_frame.load(Ordering::Relaxed),
+            self.anchor_ns.load(Ordering::Relaxed),
+        ))
+    }
+
+    /// Feed (or stop feeding) the live-monitor ring.
+    pub fn set_monitoring(&self, on: bool) {
+        self.monitoring.store(on, Ordering::Relaxed);
+    }
+
+    /// Whether the callback feeds the live-monitor ring.
+    pub fn is_monitoring(&self) -> bool {
+        self.monitoring.load(Ordering::Relaxed)
+    }
+
+    /// Frames in the device's most recent capture block.
+    pub fn block_frames(&self) -> u32 {
+        self.block_frames.load(Ordering::Relaxed)
     }
 
     /// Stop copying. Non-RT side only.
     pub fn stop(&self) {
-        self.recording.store(false, Ordering::Relaxed);
+        self.recording.store(false, Ordering::Release);
     }
 
     /// Samples the callback threw away because the ring was full.
@@ -233,6 +281,10 @@ impl InputShared {
 /// into the output one. Nothing here allocates, locks or blocks.
 pub struct InputRtSide {
     producer: Producer<f32>,
+    /// The live-monitor ring, fed while [`InputShared::is_monitoring`].
+    monitor: Option<Producer<f32>>,
+    /// Frames ever written into `producer`; the index space of the take anchor.
+    written_frames: u64,
     shared: Arc<InputShared>,
     /// Channels the device delivers. Fixed for the stream's lifetime.
     channels: usize,
@@ -262,12 +314,46 @@ impl InputRtSide {
     /// capture callback is a click in the *output* stream sharing the machine.
     #[inline]
     pub fn push_interleaved(&mut self, data: &[f32]) {
+        self.push_block(data, crate::timeline::now_ns());
+    }
+
+    /// Attach the live-monitor ring. Non-RT, before the stream starts.
+    pub fn with_monitor(mut self, monitor: Producer<f32>) -> Self {
+        self.monitor = Some(monitor);
+        self
+    }
+
+    /// [`push_interleaved`](Self::push_interleaved), with the instant the
+    /// block's first frame was captured (see [`crate::timeline`]).
+    #[inline]
+    pub fn push_block(&mut self, data: &[f32], capture_ns: u64) {
         if self.channels == 0 {
             return;
         }
         let frames = data.len() / self.channels;
         if frames == 0 {
             return;
+        }
+        self.shared
+            .block_frames
+            .store(u32::try_from(frames).unwrap_or(u32::MAX), Ordering::Relaxed);
+        if self.shared.is_monitoring() {
+            if let Some(monitor) = self.monitor.as_mut() {
+                // A full monitor ring means nothing is reading it yet. Dropping
+                // is the right answer: live audio that arrives late is worse
+                // than none.
+                let fit = (monitor.slots() / CHANNELS).min(frames);
+                if fit > 0 {
+                    if let Ok(chunk) = monitor.write_chunk_uninit(fit * CHANNELS) {
+                        let channels = self.channels;
+                        chunk.fill_from_iter((0..fit).flat_map(|frame| {
+                            let base = frame * channels;
+                            let (left, right) = fold_frame(&data[base..base + channels]);
+                            [left, right]
+                        }));
+                    }
+                }
+            }
         }
         self.shared
             .frames_seen
@@ -298,6 +384,14 @@ impl InputRtSide {
                 });
                 chunk.fill_from_iter(folded);
                 written = fit;
+                if !self.shared.anchor_set.load(Ordering::Relaxed) {
+                    self.shared
+                        .anchor_frame
+                        .store(self.written_frames, Ordering::Relaxed);
+                    self.shared.anchor_ns.store(capture_ns, Ordering::Relaxed);
+                    self.shared.anchor_set.store(true, Ordering::Release);
+                }
+                self.written_frames += fit as u64;
             }
         }
 
@@ -338,6 +432,9 @@ impl InputRtSide {
 pub struct InputConsumer {
     consumer: Consumer<f32>,
     shared: Arc<InputShared>,
+    /// Samples ever read from the ring, so a take can start exactly at its
+    /// anchor frame however stale data and the start flag interleave.
+    consumed_samples: u64,
 }
 
 impl InputConsumer {
@@ -362,7 +459,10 @@ impl InputConsumer {
                 return;
             }
             match self.consumer.read_chunk(available) {
-                Ok(chunk) => chunk.commit_all(),
+                Ok(chunk) => {
+                    chunk.commit_all();
+                    self.consumed_samples += available as u64;
+                }
                 Err(_) => return,
             }
         }
@@ -386,8 +486,32 @@ impl InputConsumer {
             out.extend_from_slice(first);
             out.extend_from_slice(second);
             chunk.commit_all();
+            self.consumed_samples += take as u64;
         }
         out.len() - before
+    }
+
+    /// Frames ever read from the ring.
+    pub fn consumed_frames(&self) -> u64 {
+        self.consumed_samples / CHANNELS as u64
+    }
+
+    /// Throw away up to `frames` waiting frames. Returns how many went.
+    pub fn skip_frames(&mut self, frames: u64) -> u64 {
+        let wanted = usize::try_from(frames.saturating_mul(CHANNELS as u64)).unwrap_or(usize::MAX);
+        let available = self.consumer.slots().min(wanted);
+        let available = available - available % CHANNELS;
+        if available == 0 {
+            return 0;
+        }
+        match self.consumer.read_chunk(available) {
+            Ok(chunk) => {
+                chunk.commit_all();
+                self.consumed_samples += available as u64;
+                (available / CHANNELS) as u64
+            }
+            Err(_) => 0,
+        }
     }
 }
 
@@ -413,11 +537,17 @@ pub fn input_channel(
     (
         InputRtSide {
             producer,
+            monitor: None,
+            written_frames: 0,
             shared: Arc::clone(&shared),
             channels,
             decay: peak_decay_for(block_frames, sample_rate),
         },
-        InputConsumer { consumer, shared },
+        InputConsumer {
+            consumer,
+            shared,
+            consumed_samples: 0,
+        },
     )
 }
 

@@ -1037,6 +1037,8 @@ mod tests {
             slice_division: crate::project::DEFAULT_SLICE_DIVISION,
             slice_keytrack: false,
             source_params: Default::default(),
+            take_sources: Vec::new(),
+            record_target: false,
         }
     }
 

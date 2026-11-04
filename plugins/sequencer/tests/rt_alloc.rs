@@ -398,6 +398,7 @@ fn dense_audio_arrangement(source: &Arc<AudioSource>, count: u64) -> CompiledAud
         (0..count)
             .map(|index| CompiledAudioClip {
                 clip_id: index + 1,
+                route: source.id(),
                 source: Arc::clone(source),
                 // Staggered by a sixteenth, so a clip starts in almost every
                 // block and the pool is never quiet.
@@ -586,6 +587,7 @@ fn a_sample_channel_head_note_and_root_change_allocates_nothing() {
     let params = Arc::new(SamplePlaybackParams::new(0, 0, 0.0, (0.0, 0.0)));
     let song = CompiledAudioSong::new(vec![CompiledAudioClip {
         clip_id: 1,
+        route: source.id(),
         source: Arc::clone(&source),
         start_ticks: 0,
         length_ticks: TICKS_PER_BAR as u64,

@@ -275,6 +275,7 @@ mod tests {
     fn one_clip_song(value: f32) -> CompiledAudioSong {
         CompiledAudioSong::new(vec![CompiledAudioClip {
             clip_id: 1,
+            route: 1,
             source: source(48_000, value),
             start_ticks: 0,
             length_ticks: 3_840,

@@ -29,9 +29,11 @@
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use std::sync::Arc;
+
 use hound::{SampleFormat, WavSpec, WavWriter};
-use mydaw_plugin_audio_io::RecordedTake;
-use mydaw_rt_core::CHANNELS;
+use mydaw_plugin_audio_io::{MonitorSlot, RecordedTake};
+use mydaw_rt_core::{ProcessCtx, RtNode, CHANNELS};
 
 use crate::debug_capture::timestamp_utc;
 
@@ -139,6 +141,44 @@ pub fn write_take(take: &RecordedTake, path: &Path) -> Result<(), TakeWriteError
     writer.finalize().map_err(wav)
 }
 
+/// The live input, mixed into the graph while the recorder is armed.
+///
+/// At the head of the recording channel it rides *after* that channel's clip
+/// player and *before* its inserts, so the singer hears themselves through the
+/// same EQ, compressor and reverb the takes will play through -- FL's armed
+/// mixer insert. With no recording channel yet it sits on the master bus, so
+/// the very first take is monitored too.
+pub struct MonitorNode {
+    inner: Option<Box<dyn RtNode>>,
+    slot: Arc<MonitorSlot>,
+}
+
+impl MonitorNode {
+    /// `inner`, followed by the live input.
+    pub fn wrap(inner: Box<dyn RtNode>, slot: Arc<MonitorSlot>) -> Box<dyn RtNode> {
+        Box::new(Self {
+            inner: Some(inner),
+            slot,
+        })
+    }
+
+    /// The live input alone, added to whatever the bus already carries.
+    pub fn master(slot: Arc<MonitorSlot>) -> Box<dyn RtNode> {
+        Box::new(Self { inner: None, slot })
+    }
+}
+
+impl RtNode for MonitorNode {
+    fn process(&mut self, ctx: &mut ProcessCtx) {
+        if let Some(inner) = self.inner.as_mut() {
+            inner.process(ctx);
+        }
+        let rate = ctx.sample_rate;
+        let [left, right] = ctx.buffers.as_mut_slices();
+        self.slot.render_add(left, right, rate);
+    }
+}
+
 /// Clamp a rate into something a WAV header can hold.
 ///
 /// A take whose rate is nonsense is still worth keeping -- the samples are the
@@ -188,6 +228,7 @@ mod tests {
             dropped: 0,
             device_name: "Test Interface".to_owned(),
             limit_reached: false,
+            start_sample: None,
         }
     }
 

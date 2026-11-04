@@ -246,6 +246,9 @@ pub struct ClipEntry {
     pub offset_frames: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gain_db: Option<f32>,
+    /// A muted audio clip. Absent means audible.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub muted: bool,
 }
 
 impl ClipEntry {
@@ -261,6 +264,7 @@ impl ClipEntry {
             source_id: None,
             offset_frames: None,
             gain_db: None,
+            muted: false,
         };
         match clip {
             Clip::Pattern(pattern) => Self {
@@ -271,6 +275,7 @@ impl ClipEntry {
                 source_id: Some(audio.source_id),
                 offset_frames: Some(audio.offset_frames),
                 gain_db: Some(audio.gain_db),
+                muted: audio.muted,
                 ..base
             },
         }
@@ -309,6 +314,7 @@ impl ClipEntry {
                     offset_frames: self.offset_frames.unwrap_or(0),
                     length_ticks: self.length,
                     gain_db: self.gain_db.filter(|db| db.is_finite()).unwrap_or(0.0),
+                    muted: self.muted,
                 })),
                 None => {
                     log::warn!(
@@ -540,6 +546,13 @@ pub struct TrackEntry {
     /// not silently change a saved sound.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub source_params: BTreeMap<String, f32>,
+    /// Recorded takes that play through this audio-clip channel, by source id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub take_sources: Vec<u64>,
+    /// Whether the audio input records to (and is monitored through) this
+    /// channel.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub record_target: bool,
 }
 
 fn is_zero_f32(value: &f32) -> bool {
@@ -1088,6 +1101,8 @@ impl ProjectFile {
                     slice_sensitivity: track.slices.sensitivity,
                     slice_division: track.slices.division,
                     slice_keytrack: track.slices.keytrack,
+                    take_sources: track.take_sources.clone(),
+                    record_target: track.record_target,
                     source_params: track
                         .source_params
                         .as_ref()
@@ -1297,6 +1312,8 @@ impl ProjectFile {
                     std::sync::Arc::new(params)
                 },
                 inserts: restore_chain(&entry.inserts, effects),
+                take_sources: entry.take_sources.clone(),
+                record_target: entry.record_target,
             });
         }
 

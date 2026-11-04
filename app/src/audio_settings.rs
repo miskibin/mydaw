@@ -51,10 +51,22 @@ pub struct AudioSettings {
     /// [`crate::commands::set_input_device`].
     #[serde(default)]
     pub input_device_id: Option<String>,
+    /// Hear the armed input through the mixer (FL's insert input monitoring).
+    /// Off for interfaces with their own zero-latency direct monitoring.
+    #[serde(default = "default_true")]
+    pub input_monitoring: bool,
+    /// Manual recording offset, in milliseconds, on top of the automatic
+    /// latency compensation. Positive moves takes earlier.
+    #[serde(default)]
+    pub record_offset_ms: f32,
 }
 
 fn default_version() -> u32 {
     AUDIO_SETTINGS_VERSION
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AudioSettings {
@@ -64,6 +76,8 @@ impl Default for AudioSettings {
             prefer_asio: false,
             buffer_frames: 0,
             input_device_id: None,
+            input_monitoring: true,
+            record_offset_ms: 0.0,
         }
     }
 }

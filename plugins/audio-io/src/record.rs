@@ -45,7 +45,9 @@ use crate::input::{
     input_channel, InputConsumer, InputFault, InputRtSide, InputShared, RateConverter,
     INPUT_QUEUE_CAPACITY,
 };
+use crate::monitor::{monitor_channel, MonitorReader, MonitorSlot};
 use crate::priority::RealtimeToken;
+use crate::timeline::{duration_ns, now_ns, PlaybackTimeline};
 
 /// How often the worker looks at the ring.
 ///
@@ -56,11 +58,12 @@ pub const DRAIN_INTERVAL: Duration = Duration::from_millis(4);
 
 /// Longest take the recorder will build, in seconds.
 ///
-/// The take lives in RAM until it is written, at 8 bytes a frame: five minutes
-/// at 48 kHz is 115 MB, which is a lot but survivable. Hitting the limit stops
-/// the take and keeps it -- silently discarding twenty minutes of a performance
-/// because a button was left down would be the worst possible behaviour.
-pub const MAX_RECORD_SECONDS: f64 = 300.0;
+/// The take lives in RAM until it is written, at 8 bytes a frame: ten minutes
+/// at 48 kHz is 230 MB -- a whole song with room to spare, and the longest
+/// file the playlist's source registry accepts. Hitting the limit stops the
+/// take and keeps it -- silently discarding a performance because a button
+/// was left down would be the worst possible behaviour.
+pub const MAX_RECORD_SECONDS: f64 = 600.0;
 
 /// Rate a take is written at when no output stream has ever opened, so the
 /// engine rate is unknown. Only reachable on a machine with no audio output.
@@ -177,6 +180,11 @@ pub struct RecordedTake {
     pub device_name: String,
     /// Whether [`MAX_RECORD_SECONDS`] ended the take rather than the user.
     pub limit_reached: bool,
+    /// Transport position, in engine samples (fractional, possibly negative),
+    /// that was audible when the take's first frame was captured -- where the
+    /// take belongs on the song, with input and output latency compensated.
+    /// `None` when the transport never played during the take.
+    pub start_sample: Option<f64>,
 }
 
 /// Counts rather than a hundred megabytes of samples.
@@ -188,6 +196,7 @@ impl std::fmt::Debug for RecordedTake {
             .field("dropped", &self.dropped)
             .field("device_name", &self.device_name)
             .field("limit_reached", &self.limit_reached)
+            .field("start_sample", &self.start_sample)
             .finish()
     }
 }
@@ -256,6 +265,8 @@ pub struct InputStatus {
     pub max_seconds: f64,
     /// Why the device is unhappy, or empty. Non-empty means the stream is gone.
     pub fault: String,
+    /// Whether the input is heard through the mixer while the device is open.
+    pub monitoring: bool,
 }
 
 impl InputStatus {
@@ -276,6 +287,7 @@ impl InputStatus {
             limit_reached: false,
             max_seconds: MAX_RECORD_SECONDS,
             fault,
+            monitoring: false,
         }
     }
 }
@@ -390,6 +402,12 @@ pub struct RecordService {
     /// The last fault, kept after the session that reported it is gone -- a
     /// device that vanished mid-take must still be able to say so.
     last_fault: Mutex<String>,
+    /// Where the output graph reads the live input from.
+    monitor: Arc<MonitorSlot>,
+    /// Whether an open device is heard through the mixer.
+    monitoring: AtomicBool,
+    /// Manual placement offset in milliseconds, as `f64` bits.
+    offset_ms_bits: AtomicU64,
 }
 
 impl Default for RecordService {
@@ -401,13 +419,52 @@ impl Default for RecordService {
 impl RecordService {
     /// A stopped service. Opens no device and spawns no thread.
     pub fn new() -> Self {
+        crate::timeline::init_clock();
         Self {
             engine_rate_bits: AtomicU64::new(0),
             selected: Mutex::new(None),
             session: Mutex::new(None),
             state: AtomicU8::new(RecordState::Idle as u8),
             last_fault: Mutex::new(String::new()),
+            monitor: Arc::new(MonitorSlot::new()),
+            monitoring: AtomicBool::new(true),
+            offset_ms_bits: AtomicU64::new(0),
         }
+    }
+
+    /// The manual recording offset, in milliseconds. Positive moves takes
+    /// earlier, on top of the automatic latency compensation.
+    pub fn offset_ms(&self) -> f64 {
+        f64::from_bits(self.offset_ms_bits.load(Ordering::Relaxed))
+    }
+
+    /// Set the manual recording offset. Non-finite values reset it.
+    pub fn set_offset_ms(&self, offset_ms: f64) {
+        let value = if offset_ms.is_finite() {
+            offset_ms.clamp(-500.0, 500.0)
+        } else {
+            0.0
+        };
+        self.offset_ms_bits
+            .store(value.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The slot the output graph's monitor point renders the live input from.
+    pub fn monitor_slot(&self) -> &Arc<MonitorSlot> {
+        &self.monitor
+    }
+
+    /// Hear (or stop hearing) the input through the mixer while it is armed.
+    pub fn set_monitoring(&self, on: bool) {
+        self.monitoring.store(on, Ordering::Relaxed);
+        if let Some(session) = self.session.lock().as_ref() {
+            session.shared.set_monitoring(on);
+        }
+    }
+
+    /// Whether the input is heard through the mixer while it is armed.
+    pub fn monitoring(&self) -> bool {
+        self.monitoring.load(Ordering::Relaxed)
     }
 
     /// Tell the recorder what rate takes should be written at.
@@ -548,6 +605,7 @@ impl RecordService {
             return;
         };
         let name = session.device_name.clone();
+        self.monitor.install(None, None);
         session.close();
         self.set_state(RecordState::Idle);
         log::info!("audio input released: {name}");
@@ -597,7 +655,11 @@ impl RecordService {
         let (take, fault) = {
             let guard = self.session.lock();
             let session = guard.as_ref().ok_or(RecordError::NotRecording)?;
+            let anchor = session.shared.anchor();
             let samples = session.end_take();
+            let start_sample = anchor.and_then(|(_, captured_ns)| {
+                take_start_sample(&PlaybackTimeline::global().read(), captured_ns, now_ns())
+            });
             (
                 RecordedTake {
                     samples,
@@ -605,6 +667,7 @@ impl RecordService {
                     dropped: session.shared.dropped(),
                     device_name: session.device_name.clone(),
                     limit_reached: session.buffer.limit_reached.load(Ordering::Relaxed),
+                    start_sample,
                 },
                 session.shared.fault(),
             )
@@ -678,6 +741,7 @@ impl RecordService {
             limit_reached: session.buffer.limit_reached.load(Ordering::Relaxed),
             max_seconds: MAX_RECORD_SECONDS,
             fault: fault.message().to_owned(),
+            monitoring: self.monitoring(),
         }
     }
 
@@ -740,8 +804,24 @@ impl RecordService {
             f64::from(device_rate),
         );
         let shared = Arc::clone(rt.shared());
-        let stream = build_stream(&device, config, format, rt, Arc::clone(&shared))?;
-        stream.play()?;
+        let (monitor_tx, monitor_rx) = monitor_channel();
+        let rt = rt.with_monitor(monitor_tx);
+        shared.set_monitoring(self.monitoring());
+        self.monitor.install(
+            Some(MonitorReader::new(monitor_rx, f64::from(device_rate))),
+            Some(Arc::clone(&shared)),
+        );
+        let stream = match build_stream(&device, config, format, rt, Arc::clone(&shared)) {
+            Ok(stream) => stream,
+            Err(err) => {
+                self.monitor.install(None, None);
+                return Err(err);
+            }
+        };
+        if let Err(err) = stream.play() {
+            self.monitor.install(None, None);
+            return Err(err.into());
+        }
 
         let buffer = Arc::new(TakeBuffer::new());
         let worker = spawn_worker(
@@ -805,41 +885,56 @@ fn run_worker(
     let mut scratch: Vec<f32> = Vec::with_capacity(INPUT_QUEUE_CAPACITY);
     let max_samples = (MAX_RECORD_SECONDS * engine_rate) as usize * CHANNELS;
     let mut was_recording = false;
+    // Whether the ring has been wound forward to this take's anchor frame.
+    let mut aligned = false;
 
     loop {
         let stop = buffer.stopping.load(Ordering::Acquire);
         let recording = shared.is_recording() && !stop;
 
         if recording && !was_recording {
-            consumer.drain_all();
             converter = RateConverter::new(device_rate, engine_rate);
             buffer.limit_reached.store(false, Ordering::Relaxed);
             was_recording = true;
+            aligned = false;
         }
 
-        if recording {
-            scratch.clear();
-            consumer.drain_into(&mut scratch, INPUT_QUEUE_CAPACITY);
-            if !scratch.is_empty() {
-                append(&buffer, &mut converter, &scratch, max_samples);
+        if recording || was_recording {
+            // Anything in the ring before the anchor frame is the tail of an
+            // earlier take (a block the callback wrote just as it stopped). It
+            // is skipped by *index*, never by "drain whatever is there", which
+            // would race the callback and eat the take's first block.
+            if !aligned {
+                if let Some((anchor_frame, _)) = shared.anchor() {
+                    let behind = anchor_frame.saturating_sub(consumer.consumed_frames());
+                    if behind > 0 {
+                        consumer.skip_frames(behind);
+                    }
+                    aligned = consumer.consumed_frames() >= anchor_frame;
+                }
             }
-        } else if was_recording {
-            // Falling edge: whatever the callback pushed between the flag going
-            // down and this pass is still part of the take.
-            scratch.clear();
-            consumer.drain_into(&mut scratch, INPUT_QUEUE_CAPACITY);
-            append(&buffer, &mut converter, &scratch, max_samples);
+            if aligned {
+                scratch.clear();
+                consumer.drain_into(&mut scratch, INPUT_QUEUE_CAPACITY);
+                if !scratch.is_empty() {
+                    append(&buffer, &mut converter, &scratch, max_samples);
+                }
+            }
+        }
+
+        if !recording && was_recording {
+            // Falling edge: what the callback pushed before the flag went down
+            // was drained above; flush the converter's tail and hand over.
             {
                 let mut samples = buffer.samples.lock();
-                converter.finish(&mut samples);
+                if aligned {
+                    converter.finish(&mut samples);
+                }
                 samples.truncate(max_samples);
             }
             was_recording = false;
+            aligned = false;
             buffer.flushed.fetch_add(1, Ordering::Release);
-        } else {
-            // Armed and idle: keep the ring empty so the callback never has to
-            // drop, and the drop counter stays meaningful for the next take.
-            consumer.drain_all();
         }
 
         if stop {
@@ -847,6 +942,23 @@ fn run_worker(
         }
         thread::sleep(DRAIN_INTERVAL);
     }
+}
+
+/// Where a take captured from `captured_ns` belongs on the song, given the
+/// output's current run (see [`crate::timeline`]).
+///
+/// `None` when the transport did not play at any point of the take: a take
+/// recorded over silence has no position of its own, and the caller places it
+/// at the playhead.
+pub fn take_start_sample(
+    run: &crate::timeline::PlaybackRun,
+    captured_ns: u64,
+    ended_ns: u64,
+) -> Option<f64> {
+    if !run.overlaps(captured_ns, ended_ns) || run.sample_rate <= 0.0 {
+        return None;
+    }
+    Some(run.sample_at(captured_ns))
 }
 
 /// Convert one drained block into the take, stopping at the length cap.
@@ -909,9 +1021,19 @@ where
     let mut promoted = false;
     let error_shared = Arc::clone(&shared);
 
+    let frame_ns = if sample_rate > 0 {
+        1e9 / f64::from(sample_rate)
+    } else {
+        0.0
+    };
     device.build_input_stream::<T, _, _>(
         config,
-        move |data: &[T], _info| {
+        move |data: &[T], info: &cpal::InputCallbackInfo| {
+            // When this block's first frame was captured, on the clock the
+            // output stream also publishes against. See `crate::timeline`.
+            let stamp = info.timestamp();
+            let captured_ns =
+                now_ns().saturating_sub(duration_ns(stamp.callback.duration_since(stamp.capture)));
             if !promoted {
                 // Same trade the output callback makes in `RtState::ensure_realtime`:
                 // one allocation and one syscall on the first block buys correct
@@ -920,12 +1042,13 @@ where
                 disable_denormals();
                 priority.promote((data.len() / channels) as u32, sample_rate);
             }
-            for block in data.chunks(scratch_len) {
+            for (index, block) in data.chunks(scratch_len).enumerate() {
                 let out = &mut scratch[..block.len()];
                 for (dst, src) in out.iter_mut().zip(block) {
                     *dst = <f32 as cpal::FromSample<T>>::from_sample_(*src);
                 }
-                rt.push_interleaved(out);
+                let offset_frames = (index * scratch_len / channels) as f64;
+                rt.push_block(out, captured_ns + (offset_frames * frame_ns) as u64);
             }
         },
         move |err| error_shared.set_fault(fault_for(&err)),
@@ -1095,6 +1218,7 @@ mod tests {
             dropped: 0,
             device_name: "nothing".to_owned(),
             limit_reached: false,
+            start_sample: None,
         };
         assert!(take.is_empty());
         assert_eq!(take.frames(), 0);
@@ -1110,6 +1234,7 @@ mod tests {
             dropped: 3,
             device_name: "Interface".to_owned(),
             limit_reached: false,
+            start_sample: None,
         };
         assert_eq!(take.frames(), 2);
         assert!((take.duration_seconds() - 2.0 / 48_000.0).abs() < 1e-12);
@@ -1159,11 +1284,11 @@ mod tests {
 
     #[test]
     fn the_length_cap_is_the_documented_one_and_fits_in_memory() {
-        // Five minutes of stereo f32 at 48 kHz. The point of the assertion is
-        // that raising MAX_RECORD_SECONDS makes somebody look at the number.
+        // Ten minutes of stereo f32 at 48 kHz (a song, and the playlist source
+        // limit). Raising MAX_RECORD_SECONDS must make somebody look at this.
         let bytes = (MAX_RECORD_SECONDS * 48_000.0) as usize * CHANNELS * 4;
         assert!(
-            bytes < 200 * 1024 * 1024,
+            bytes < 256 * 1024 * 1024,
             "a take must not be able to eat the machine"
         );
     }
@@ -1323,5 +1448,92 @@ mod tests {
         // Nothing armed: reaping is a no-op and the status stays clean.
         assert!(service.reap_fault().is_none());
         assert!(service.status().fault.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::*;
+    use crate::input::input_channel;
+    use crate::timeline::PlaybackRun;
+
+    fn run(start_sample: u64, start_ns: u64, end_ns: u64) -> PlaybackRun {
+        PlaybackRun {
+            run: 1,
+            start_sample,
+            start_ns,
+            end_ns,
+            sample_rate: 48_000.0,
+            playing: end_ns == u64::MAX,
+        }
+    }
+
+    #[test]
+    fn a_take_captured_while_playing_lands_where_the_listener_was() {
+        // The beat's sample 96 000 was audible at t = 2 s; the take's first
+        // frame left the microphone 250 ms later.
+        let start = take_start_sample(
+            &run(96_000, 2_000_000_000, u64::MAX),
+            2_250_000_000,
+            9e9 as u64,
+        );
+        assert_eq!(start, Some(108_000.0));
+    }
+
+    #[test]
+    fn a_take_started_before_play_reaches_back_before_the_run() {
+        let start = take_start_sample(&run(0, 1_000_000_000, u64::MAX), 900_000_000, 5e9 as u64);
+        assert_eq!(start, Some(-4_800.0));
+    }
+
+    #[test]
+    fn a_take_over_a_stopped_transport_has_no_position() {
+        // The last run ended before the take began.
+        assert_eq!(take_start_sample(&run(0, 0, 1_000), 5_000, 9_000), None);
+        let never = PlaybackRun {
+            run: 0,
+            start_sample: 0,
+            start_ns: 0,
+            end_ns: 0,
+            sample_rate: 0.0,
+            playing: false,
+        };
+        assert_eq!(take_start_sample(&never, 5_000, 9_000), None);
+    }
+
+    #[test]
+    fn the_worker_starts_exactly_at_the_anchor_even_with_stale_frames_queued() {
+        let (mut rt, consumer) = input_channel(4_096, 2, 4, 48_000.0);
+        let shared = Arc::clone(rt.shared());
+        // A stale block from an earlier take: the flag is up, then down.
+        shared.start();
+        rt.push_block(&[9.0; 8], 1);
+        shared.stop();
+        // The new take.
+        shared.start();
+        rt.push_block(&[1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0], 1_000);
+        let (anchor_frame, anchor_ns) = shared.anchor().expect("anchored");
+        assert_eq!(anchor_frame, 4, "the stale block occupies frames 0..4");
+        assert_eq!(anchor_ns, 1_000);
+
+        let buffer = Arc::new(TakeBuffer::new());
+        let worker = {
+            let shared = Arc::clone(&shared);
+            let buffer = Arc::clone(&buffer);
+            thread::spawn(move || run_worker(consumer, shared, buffer, 48_000.0, 48_000.0))
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while buffer.frames() < 4 && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        shared.stop();
+        let before = buffer.flushed.load(Ordering::Acquire);
+        while buffer.flushed.load(Ordering::Acquire) == before && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(2));
+        }
+        buffer.stopping.store(true, Ordering::Release);
+        worker.join().unwrap();
+        let samples = buffer.samples.lock().clone();
+        assert_eq!(&samples[..8], &[1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0]);
     }
 }

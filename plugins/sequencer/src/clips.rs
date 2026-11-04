@@ -124,6 +124,11 @@ pub struct CompiledAudioClip {
     pub clip_id: u64,
     /// The file. An `Arc`, so forty clips of one vocal carry forty pointers.
     pub source: Arc<AudioSource>,
+    /// The audio-clip channel that plays this clip, named by the source id
+    /// that channel was created for. Usually the clip's own file; a recorded
+    /// take is routed to the channel of the session's recording channel, so
+    /// every take shares one strip (and its effects). See [`AudioClipTune::route`].
+    pub route: u64,
     pub start_ticks: u64,
     pub length_ticks: u64,
     /// Where in the file playback begins, in the file's own frames.
@@ -174,6 +179,7 @@ impl std::fmt::Debug for CompiledAudioClip {
         f.debug_struct("CompiledAudioClip")
             .field("clip_id", &self.clip_id)
             .field("source", &self.source.id())
+            .field("route", &self.route)
             .field("start_ticks", &self.start_ticks)
             .field("length_ticks", &self.length_ticks)
             .field("offset_frames", &self.offset_frames)
@@ -230,7 +236,7 @@ impl CompiledAudioSong {
         Self::new(
             self.clips
                 .iter()
-                .filter(|clip| clip.source.id() == source_id)
+                .filter(|clip| clip.route == source_id)
                 .cloned()
                 .collect(),
         )
@@ -282,6 +288,9 @@ pub struct AudioClipTune {
     pub fade_in_ms: f32,
     /// Fade out into the end of every clip of this file, in milliseconds.
     pub fade_out_ms: f32,
+    /// The channel this file's clips play through, as that channel's source
+    /// id. `None` is the file's own channel.
+    pub route: Option<u64>,
 }
 
 impl Default for AudioClipTune {
@@ -292,6 +301,7 @@ impl Default for AudioClipTune {
             end_frames: 0,
             fade_in_ms: 0.0,
             fade_out_ms: 0.0,
+            route: None,
         }
     }
 }
@@ -334,6 +344,7 @@ pub fn compile_audio_clips_with(
             Some(CompiledAudioClip {
                 clip_id: clip.id,
                 source,
+                route: tune.route.unwrap_or(clip.source_id),
                 start_ticks: clip.start_ticks,
                 length_ticks: clip.length_ticks,
                 offset_frames: clip.offset_frames.saturating_add(tune.start_frames),
@@ -1133,6 +1144,7 @@ mod tests {
     fn clip(clip_id: u64, source: Arc<AudioSource>, start: u64, length: u64) -> CompiledAudioClip {
         CompiledAudioClip {
             clip_id,
+            route: source.id(),
             source,
             start_ticks: start,
             length_ticks: length,
@@ -1406,6 +1418,7 @@ mod tests {
         ));
         let song = CompiledAudioSong::new(vec![CompiledAudioClip {
             clip_id: 1,
+            route: source.id(),
             source,
             start_ticks: BAR,
             length_ticks: 4 * BAR,
@@ -1715,6 +1728,41 @@ mod tests {
         let loaded = flat_source(1, 48_000.0, 48_000, 0.5);
         let song = compile_audio_clips(&playlist, |_| Some(Arc::clone(&loaded)));
         assert!((song.clips()[0].gain - db_to_gain(-6.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_routed_take_plays_through_its_route_and_not_its_own_channel() {
+        let mut playlist = Playlist::default();
+        playlist
+            .add_audio_clip(1, 0, 0, BAR, 0, 0.0)
+            .expect("first take");
+        playlist
+            .add_audio_clip(2, 0, BAR, BAR, 0, 0.0)
+            .expect("second take");
+        let one = flat_source(1, 48_000.0, 48_000, 0.5);
+        let two = flat_source(2, 48_000.0, 48_000, 0.5);
+        let song = compile_audio_clips_with(
+            &playlist,
+            |id| Some(Arc::clone(if id == 1 { &one } else { &two })),
+            |id| AudioClipTune {
+                route: (id == 2).then_some(1),
+                ..AudioClipTune::default()
+            },
+        );
+        assert_eq!(song.for_source(1).len(), 2, "both takes share channel 1");
+        assert!(song.for_source(2).is_empty());
+    }
+
+    #[test]
+    fn a_muted_clip_is_not_compiled() {
+        let mut playlist = Playlist::default();
+        let id = playlist.add_audio_clip(1, 0, 0, BAR, 0, 0.0).expect("ok");
+        playlist.add_audio_clip(1, 0, BAR, BAR, 0, 0.0).expect("ok");
+        playlist.set_clip_muted(id, true).expect("mute");
+        let loaded = flat_source(1, 48_000.0, 48_000, 0.5);
+        let song = compile_audio_clips(&playlist, |_| Some(Arc::clone(&loaded)));
+        assert_eq!(song.len(), 1);
+        assert_eq!(song.clips()[0].start_ticks, BAR);
     }
 
     #[test]

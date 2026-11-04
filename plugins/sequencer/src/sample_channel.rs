@@ -68,6 +68,7 @@ mod tests {
         let source = flat_source(0.4, 48_000);
         let song = CompiledAudioSong::new(vec![CompiledAudioClip {
             clip_id: 1,
+            route: source.id(),
             source: Arc::clone(&source),
             start_ticks: 0,
             length_ticks: TICKS_PER_BAR as u64,

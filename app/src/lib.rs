@@ -191,6 +191,12 @@ pub fn run() -> ExitCode {
     // The remembered capture device, if it is still plugged in. A missing one is
     // a log line and the system default, never a refusal to start: the interface
     // this project was recorded on is often not the one it is opened on.
+    state
+        .recorder()
+        .set_monitoring(audio_prefs.input_monitoring);
+    state
+        .recorder()
+        .set_offset_ms(f64::from(audio_prefs.record_offset_ms));
     if let Some(id) = audio_prefs.input_device_id.as_deref() {
         if let Err(err) = state.recorder().select_device(Some(id)) {
             log::warn!(
