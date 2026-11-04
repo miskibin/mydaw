@@ -2098,9 +2098,15 @@ impl AppState {
     /// already been applied to the session.
     fn publish_audio_clips(&self) {
         let project = self.tracks.project();
+        let loop_ticks = if self.sequencer.is_looping() {
+            self.sequencer.song_end_ticks()
+        } else {
+            0
+        };
         let song = self
             .sequencer
-            .compile_audio_with(&self.sources, |id| project.audio_clip_tune(id));
+            .compile_audio_with(&self.sources, |id| project.audio_clip_tune(id))
+            .with_loop(loop_ticks);
         if let Err(err) = self.tracks.audio_clips().install(song) {
             if !matches!(err, SourceError::Audio(AudioIoError::NotRunning)) {
                 log::warn!("could not publish the audio clips: {err}");
@@ -2358,6 +2364,8 @@ impl AppState {
     /// [`SequencerError::Audio`] when the command queue is full.
     pub fn set_looping(&self, looping: bool) -> Result<(), SequencerError> {
         self.sequencer.set_looping(looping);
+        // The audio clips replay with the loop, so they hear about it too.
+        self.publish_audio_clips();
         match self.audio.set_looping(looping) {
             Ok(()) | Err(AudioIoError::NotRunning) => Ok(()),
             Err(err) => Err(err.into()),
@@ -2522,7 +2530,19 @@ impl AppState {
             take.dropped,
             take.start_sample
         );
-        let finished = self.write_and_load(&take)?;
+        self.land_take(&take, &crate::recording::recordings_dir(), fallback_sample)
+    }
+
+    /// The second half of [`finish_take_to_playlist`](Self::finish_take_to_playlist):
+    /// write `take` into `dir`, load it, route it and place it. Separate so the
+    /// whole landing can be exercised without a capture device.
+    pub fn land_take(
+        &self,
+        take: &RecordedTake,
+        dir: &std::path::Path,
+        fallback_sample: u64,
+    ) -> Result<PlacedTake, RecordingError> {
+        let finished = self.write_and_load_in(take, dir)?;
         let source = Arc::clone(&finished.source);
 
         // Where it goes, in engine samples, with the manual offset applied.
@@ -2535,10 +2555,13 @@ impl AppState {
             .unwrap_or(fallback_sample as f64);
         let placement = take_placement(
             start,
-            source.frames() as u64,
+            take.frames() as u64,
             rate,
             self.bpm(),
-            if self.sequencer.is_looping() {
+            // Only a take the transport placed is folded: a looping song plays
+            // its later passes over the same bars, so that is where it was sung.
+            // The start marker is a position the user chose and is kept as is.
+            if synced && self.sequencer.is_looping() {
                 self.sequencer.song_end_ticks()
             } else {
                 0
@@ -2593,7 +2616,16 @@ impl AppState {
                 .map_err(place)?;
             return Ok(index);
         }
-        let index = self.ensure_audio_clip_channel(take).map_err(place)?;
+        // With no output stream the channel is still added and only the graph
+        // install fails; the take must land either way.
+        let index = match self.ensure_audio_clip_channel(take) {
+            Ok(index) => index,
+            Err(err) => self
+                .tracks
+                .project()
+                .find_audio_clip_channel(take)
+                .ok_or_else(|| place(err))?,
+        };
         self.tracks
             .edit_project(|project| {
                 if let Some(track) = project.tracks.get_mut(index) {
@@ -2606,7 +2638,9 @@ impl AppState {
             })
             .map_err(place)?;
         // The monitor moves from the master bus to the new channel's head.
-        self.rebuild_graph().map_err(place)?;
+        if let Err(err) = self.rebuild_graph() {
+            log::warn!("the graph did not pick up the recording channel yet: {err}");
+        }
         Ok(index)
     }
 
@@ -2658,8 +2692,15 @@ impl AppState {
 
     /// Write one take under the next free name and decode it back in.
     fn write_and_load(&self, take: &RecordedTake) -> Result<FinishedTake, RecordingError> {
-        let dir = crate::recording::recordings_dir();
-        let path = crate::recording::next_take_path(&dir, std::time::SystemTime::now())?;
+        self.write_and_load_in(take, &crate::recording::recordings_dir())
+    }
+
+    fn write_and_load_in(
+        &self,
+        take: &RecordedTake,
+        dir: &std::path::Path,
+    ) -> Result<FinishedTake, RecordingError> {
+        let path = crate::recording::next_take_path(dir, std::time::SystemTime::now())?;
         crate::recording::write_take(take, &path)?;
         log::info!("take written: {}", path.display());
         Ok(FinishedTake {
@@ -3949,6 +3990,108 @@ mod take_placement_tests {
         assert_eq!(free_lane(&playlist, 2 * bar, bar), Some(1));
         // Past the beat, lane 0 is free again.
         assert_eq!(free_lane(&playlist, 8 * bar, bar), Some(0));
+    }
+
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "wave-land-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn take(seconds: f64, start_sample: Option<f64>) -> RecordedTake {
+        RecordedTake {
+            samples: vec![0.25; (seconds * RATE) as usize * mydaw_rt_core::CHANNELS],
+            sample_rate: RATE,
+            dropped: 0,
+            device_name: "Test Mic".to_owned(),
+            limit_reached: false,
+            start_sample,
+        }
+    }
+
+    #[test]
+    fn takes_land_on_the_playlist_through_one_vocal_channel() {
+        let mut kernel = crate::boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        let dir = temp_dir("vocal");
+        let tracks_before = state.tracks.project().tracks.len();
+        let bar = u64::from(TICKS_PER_BAR);
+        let samples_per_bar = RATE * 60.0 / state.bpm() * 4.0;
+
+        // Sung from bar 2, with the transport running.
+        let first = state
+            .land_take(&take(2.0, Some(samples_per_bar)), &dir, 0)
+            .expect("the first take lands");
+        assert!(first.synced);
+        assert_eq!(first.start_ticks, bar);
+        assert_eq!(
+            first.lane, 0,
+            "an empty playlist takes it on its first lane"
+        );
+        let project = state.tracks.project();
+        assert_eq!(
+            project.tracks.len(),
+            tracks_before + 1,
+            "one channel for the first take"
+        );
+        assert_eq!(project.tracks[first.channel].name, RECORD_CHANNEL_NAME);
+        assert_eq!(project.record_channel(), Some(first.channel));
+        drop(project);
+
+        // A retake over the same bars stacks below and shares the channel.
+        let second = state
+            .land_take(&take(2.0, Some(samples_per_bar + 10.0)), &dir, 0)
+            .expect("the second take lands");
+        assert_eq!(second.channel, first.channel);
+        assert_eq!(second.lane, 1);
+        assert_eq!(state.tracks.project().tracks.len(), tracks_before + 1);
+
+        // A take over a stopped transport goes to the start marker.
+        let stopped = state
+            .land_take(&take(1.0, None), &dir, (8.0 * samples_per_bar) as u64)
+            .expect("lands at the marker");
+        assert!(!stopped.synced);
+        assert_eq!(stopped.start_ticks, 8 * bar);
+
+        let playlist = state.sequencer.playlist();
+        assert_eq!(playlist.clips().len(), 3);
+        // Every take compiles onto the Vocal channel's route.
+        let project = state.tracks.project();
+        let route = match project.tracks[first.channel].source {
+            Source::AudioClip { source_id } => source_id,
+            ref other => panic!("{other:?}"),
+        };
+        let song = state
+            .sequencer
+            .compile_audio_with(&state.sources, |id| project.audio_clip_tune(id));
+        assert_eq!(song.for_source(route).len(), 3);
+        drop(project);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        kernel.shutdown();
+    }
+
+    #[test]
+    fn the_recording_channel_survives_a_save_and_load() {
+        let mut kernel = crate::boot_kernel().unwrap();
+        let state = AppState::from_kernel(&kernel).unwrap();
+        let mut file = crate::default_project_file(state.sampler());
+        file.tracks.truncate(1);
+        file.tracks[0].source = crate::SourceEntry::capture(&Source::AudioClip { source_id: 4 });
+        file.tracks[0].source_params.clear();
+        file.tracks[0].take_sources = vec![5, 6];
+        file.tracks[0].record_target = true;
+        let json = serde_json::to_string(&file).unwrap();
+        let parsed: crate::ProjectFile = serde_json::from_str(&json).unwrap();
+        let (project, _) = parsed.to_project(state.tracks.effects()).unwrap();
+        assert_eq!(project.tracks[0].take_sources, vec![5, 6]);
+        assert_eq!(project.record_channel(), Some(0));
+        assert_eq!(project.find_audio_clip_channel(6), Some(0));
+        kernel.shutdown();
     }
 
     #[test]

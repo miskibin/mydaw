@@ -198,12 +198,30 @@ pub struct CompiledAudioSong {
     /// Sorted by `start_ticks`, which is what lets the node stop scanning at the
     /// first clip that starts after this block.
     clips: Vec<CompiledAudioClip>,
+    /// The song loop, in ticks: with the loop on, SONG mode replays the
+    /// arrangement every `loop_ticks` (the scheduler's song end), and the audio
+    /// clips have to replay with it. `0` plays once.
+    loop_ticks: u64,
 }
 
 impl CompiledAudioSong {
     /// Nothing to play.
     pub fn empty() -> Self {
-        Self { clips: Vec::new() }
+        Self {
+            clips: Vec::new(),
+            loop_ticks: 0,
+        }
+    }
+
+    /// The same arrangement, replaying every `loop_ticks` (`0` = once).
+    pub fn with_loop(mut self, loop_ticks: u64) -> Self {
+        self.loop_ticks = loop_ticks;
+        self
+    }
+
+    /// The song loop in ticks, `0` when the song plays once.
+    pub const fn loop_ticks(&self) -> u64 {
+        self.loop_ticks
     }
 
     /// Assemble an arrangement. **Non-RT.**
@@ -215,7 +233,10 @@ impl CompiledAudioSong {
     pub fn new(mut clips: Vec<CompiledAudioClip>) -> Self {
         clips.retain(|clip| clip.length_ticks > 0 && !clip.is_silent());
         clips.sort_unstable_by_key(|clip| (clip.start_ticks, clip.clip_id));
-        Self { clips }
+        Self {
+            clips,
+            loop_ticks: 0,
+        }
     }
 
     /// The clips, sorted by start tick.
@@ -240,6 +261,7 @@ impl CompiledAudioSong {
                 .cloned()
                 .collect(),
         )
+        .with_loop(self.loop_ticks)
     }
 
     /// Whether the arrangement has no audio in it.
@@ -791,7 +813,26 @@ impl RtNode for AudioClipNode {
         self.retire();
 
         let transport = ctx.transport;
-        let block_start = transport.sample_pos;
+        // With the song looping, a later pass plays the same bars again: fold
+        // the position onto the first pass, exactly as the scheduler offsets
+        // its notes. The fold reads as a seek at the wrap, which releases and
+        // re-derives the clips under the playhead -- one block, faded.
+        let block_start = match self.song.as_deref() {
+            Some(song) if song.loop_ticks() > 0 && transport.mode == PlayMode::Song => {
+                let step_len = step_len_samples(ctx.sample_rate, transport.bpm);
+                let loop_len = if step_len.is_finite() && step_len >= 1.0 {
+                    tick_boundary(song.loop_ticks(), step_len)
+                } else {
+                    0
+                };
+                if loop_len > 0 {
+                    transport.sample_pos % loop_len
+                } else {
+                    transport.sample_pos
+                }
+            }
+            _ => transport.sample_pos,
+        };
 
         // --- transport edges, before anything is started ---------------------
         //
@@ -835,7 +876,7 @@ impl RtNode for AudioClipNode {
             );
         }
 
-        self.render(ctx);
+        self.render(ctx, block_start);
     }
 }
 
@@ -946,12 +987,11 @@ impl AudioClipNode {
     ///
     /// One pass per voice over the block. Adds; never clears -- see the type's
     /// docs on why this node is not a generator.
-    fn render(&mut self, ctx: &mut ProcessCtx) {
+    fn render(&mut self, ctx: &mut ProcessCtx, block_start: u64) {
         let frames = ctx.frames;
         if frames == 0 {
             return;
         }
-        let block_start = ctx.transport.sample_pos;
         let block_end = block_start + frames as u64;
         let current = self.song.as_deref();
         let retiring = self.retiring.as_deref();
@@ -1268,6 +1308,42 @@ mod tests {
         rig.node.process(&mut ctx);
         let out = rig.buffers.as_slices()[0];
         assert!(out[100] > 0.5, "the track sum must survive: {}", out[100]);
+    }
+
+    #[test]
+    fn a_looping_song_replays_its_audio_clips_on_every_pass() {
+        // A beat that *is* the whole song, looping: the second pass must sound
+        // again from the top, as the patterns do, not fall silent.
+        let rate = 48_000.0;
+        let bpm = 120.0;
+        let step_len = step_len_samples(rate, bpm);
+        let loop_len = tick_boundary(2 * BAR, step_len) as usize;
+        let source = flat_source(1, rate, loop_len, 0.5);
+        let song = CompiledAudioSong::new(vec![clip(1, source, 0, 2 * BAR)]).with_loop(2 * BAR);
+        let mut rig = Rig::new(song, 256);
+        let blocks = loop_len * 2 / 256;
+        let out = rig.run(blocks, 256, rate, bpm);
+        let second_pass = &out[loop_len + 1_024..loop_len + 2_048];
+        assert!(
+            second_pass.iter().all(|s| s.abs() > 0.4),
+            "the second pass is silent: {:?}",
+            &second_pass[..4]
+        );
+    }
+
+    #[test]
+    fn a_song_that_plays_once_stays_silent_after_its_end() {
+        let rate = 48_000.0;
+        let bpm = 120.0;
+        let step_len = step_len_samples(rate, bpm);
+        let loop_len = tick_boundary(2 * BAR, step_len) as usize;
+        let source = flat_source(1, rate, loop_len, 0.5);
+        let song = CompiledAudioSong::new(vec![clip(1, source, 0, 2 * BAR)]);
+        let mut rig = Rig::new(song, 256);
+        let out = rig.run(loop_len * 2 / 256, 256, rate, bpm);
+        assert!(out[loop_len + 1_024..loop_len + 2_048]
+            .iter()
+            .all(|s| *s == 0.0));
     }
 
     #[test]

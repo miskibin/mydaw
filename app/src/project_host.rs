@@ -424,10 +424,16 @@ impl ProjectHost {
         let _ = session.sequencer.set_song(patterns, playlist);
         let _ = session.audio.install_song(session.sequencer.compile());
         let project = session.tracks.project();
+        let loop_ticks = if session.sequencer.is_looping() {
+            session.sequencer.song_end_ticks()
+        } else {
+            0
+        };
         let _ = session.tracks.audio_clips().install(
             session
                 .sequencer
-                .compile_audio_with(session.sources, |id| project.audio_clip_tune(id)),
+                .compile_audio_with(session.sources, |id| project.audio_clip_tune(id))
+                .with_loop(loop_ticks),
         );
         session.sequencer.set_bpm(bpm);
         let _ = session.audio.set_bpm(bpm);
