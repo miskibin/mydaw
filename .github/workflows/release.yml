@@ -38,8 +38,22 @@ jobs:
         run: pnpm --dir ui install --frozen-lockfile
 
       # Sample content is bundled into the installer (resources in tauri.conf.json).
+      - name: Cache bundled assets
+        uses: actions/cache@v4
+        with:
+          path: assets
+          key: assets-${{ hashFiles('assets-manifest.json') }}
+
+      # The script is idempotent, so a retry resumes where an upstream 503 stopped it.
       - name: Fetch bundled assets
-        run: pwsh scripts/fetch-assets.ps1
+        shell: pwsh
+        run: |
+          foreach ($i in 1..5) {
+            pwsh scripts/fetch-assets.ps1
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Start-Sleep -Seconds (15 * $i)
+          }
+          exit 1
 
       # The NSIS installer embeds the WebView2 bootstrapper, which installs the
       # WebView2 runtime on machines that lack it.
