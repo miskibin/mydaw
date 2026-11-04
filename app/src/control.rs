@@ -94,6 +94,7 @@ pub fn command_class(name: &str) -> CommandClass {
             "render"
                 | "analyze"
                 | "diagnose"
+                | "export_audio"
                 | "cancel_job"
                 | "save_plugin_preset"
                 | "save_project"
@@ -694,7 +695,10 @@ impl SessionControl {
         }
         if request.origin.as_deref() != Some("gui")
             && (matches!(class, CommandClass::Project | CommandClass::Barrier)
-                || matches!(request.command.as_str(), "render" | "diagnose"))
+                || matches!(
+                    request.command.as_str(),
+                    "render" | "diagnose" | "export_audio"
+                ))
             && any_plugin_editor(&state)
         {
             return Err(ControlError::new("PLUGIN_EDITOR_OPEN","close native plugin editors before a CLI edit that snapshots or restores plugin state"));
@@ -702,7 +706,7 @@ impl SessionControl {
         if request.origin.as_deref() != Some("gui") {
             if operations.iter().any(|o| {
                 matches!(o.command.as_str(), "open_audio_file" | "add_library_folder")
-                    || (o.command == "open_project"
+                    || (matches!(o.command.as_str(), "open_project" | "export_audio")
                         && o.args.get("path").is_none_or(Value::is_null))
             }) {
                 return Err(ControlError::new(

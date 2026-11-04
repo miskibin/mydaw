@@ -189,8 +189,22 @@ and the note representation provide evidence for musical decisions; they do not
 measure subjective quality or reconstruct a polyphonic score. Audio files and
 images are not inserted into every JSON reply.
 
+`export_audio` writes the finished song as a WAV, the same job the app's File ›
+Export WAV (Ctrl+R) runs. Song mode renders exactly to the end of the last
+playlist clip (pattern and audio clips), pattern mode one loop of the active
+pattern, both plus `tailSeconds`; an empty playlist is refused. `bitDepth` is
+16 (TPDF-dithered), 24 or 32 (float); `normalize` peaks the file at -0.1 dBFS.
+The CLI must pass an explicit `path`. The file is written as `<name>.part` and
+renamed when complete, so a failed or cancelled export leaves the destination
+untouched. Exports stream through a scratch file and may run up to an hour of
+audio (3 hours of worker wall time); `job_status` reports `progress` 0..1.
+
+```powershell
+mydaw call export_audio --args '{"options":{"mode":"song","sampleRate":44100,"bitDepth":24,"tailSeconds":2,"normalize":false},"path":"C:/Music/song.wav"}'
+```
+
 Work is bounded: 2 concurrent workers, 180 seconds of rendered/decoded audio
-and worker wall time, 0..30 seconds of tail, render rates 44.1/48/96 kHz, 256 MiB
+and worker wall time (exports: see above), 0..30 seconds of tail, render rates 44.1/48/96 kHz, 256 MiB
 analysis input, 16 cached job statuses, 50 history entries/64 MiB, 128 batch
 operations and 16 MiB IPC frames. Artifacts remain on disk after cache eviction
 or app exit and can be deleted when no longer needed.

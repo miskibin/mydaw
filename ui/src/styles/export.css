@@ -1,0 +1,135 @@
+/* File › Export › WAV: a compact settings-and-progress modal. */
+
+.wv-export {
+  width: 440px;
+  max-height: none;
+}
+
+.wv-export__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+}
+
+.wv-export__row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.wv-export__label {
+  flex: none;
+  width: 82px;
+  font: 600 9.5px 'Geist Variable';
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.wv-export .wv-seg__btn {
+  height: 24px;
+  padding: 0 9px;
+  letter-spacing: 0.02em;
+}
+
+.wv-export .wv-seg__btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.wv-export__note {
+  margin: -2px 0 2px 92px;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--dim2);
+}
+
+.wv-export__note.is-blocked {
+  color: var(--danger);
+}
+
+.wv-export__fine {
+  margin: 4px 0 0;
+  font: 400 10px/1.45 'Geist Variable';
+  color: var(--dim2);
+}
+
+.wv-export__status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 10px;
+  border-radius: 7px;
+  background: var(--sunk);
+  font: 500 11px 'Geist Variable';
+  color: var(--txt);
+}
+
+.wv-export__status p {
+  margin: 0;
+}
+
+.wv-export__line {
+  display: flex;
+  align-items: center;
+}
+
+.wv-export__mono {
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--txt2);
+}
+
+.wv-export__bar {
+  overflow: hidden;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--chip);
+}
+
+.wv-export__bar > div {
+  height: 100%;
+  background: var(--acc);
+  transition: width 0.2s linear;
+}
+
+.wv-export__path {
+  overflow: hidden;
+  font: 400 10px 'Geist Mono Variable';
+  color: var(--dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.wv-export__warning,
+.wv-export__error {
+  margin: 0;
+  font: 500 10.5px/1.4 'Geist Variable';
+  color: var(--danger);
+}
+
+.wv-export__foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+
+.wv-export__go {
+  background: var(--acc);
+  color: var(--ink);
+}
+
+.wv-export__go:hover {
+  color: var(--ink);
+  filter: brightness(1.08);
+}
+
+.wv-export__go:disabled {
+  cursor: default;
+  opacity: 0.45;
+  filter: none;
+}

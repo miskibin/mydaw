@@ -8,6 +8,7 @@
 import { Match, Show, Switch, createEffect, createMemo, on, onCleanup } from 'solid-js';
 
 import { Browser } from './shell/Browser';
+import { ExportDialog } from './shell/ExportDialog';
 import { SidePanel, PlaylistPicker } from './shell/SidePanel';
 import { StatusBar } from './shell/StatusBar';
 import { TopBar } from './shell/TopBar';
@@ -174,6 +175,7 @@ export function App(): ReturnType<typeof Show> {
         <EffectEditors />
         <Show when={view.sampleEditor() !== null}><SampleEditor /></Show>
       </div>
+      <Show when={app.exporter.open()}><ExportDialog /></Show>
       <StatusBar />
     </div>
   );

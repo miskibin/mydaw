@@ -59,6 +59,7 @@ import {
   isPianoEvent,
   midiKeyFor,
 } from './lib/keyboard';
+import { createExportController, type ExportController } from './lib/exportController';
 import { Playhead } from './lib/playhead';
 import { createTransportControl } from './lib/transportControl';
 import {
@@ -296,6 +297,8 @@ export interface AppState {
   saveProject(): void;
   saveProjectAs(): void;
   resubscribeMeters(): Promise<void>;
+  /** File › Export › WAV (Ctrl+R): the dialog, its options and the render job. */
+  exporter: ExportController;
 }
 
 const UNTITLED_PROJECT: ProjectInfo = {
@@ -363,6 +366,10 @@ function createAppState(): AppState {
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => setParam(null), PARAM_TOAST_MS);
   }
+
+  const exporter = createExportController(backend, (status) => {
+    if (status.status === 'completed' && status.path) say('Export WAV', `saved ${status.path}`);
+  });
 
   // --- fetching ------------------------------------------------------------
 
@@ -1081,6 +1088,12 @@ function createAppState(): AppState {
         openProject();
         return;
       }
+      // Also keeps Ctrl+R / Ctrl+Shift+R from reloading the webview mid-session.
+      if (key === 'r') {
+        event.preventDefault();
+        exporter.show();
+        return;
+      }
       if (key === 's') {
         event.preventDefault();
         if (event.shiftKey) saveProjectAs();
@@ -1190,6 +1203,7 @@ function createAppState(): AppState {
     clearTimeout(pushTimer);
     clearTimeout(toastTimer);
     clearTimeout(masterGainTimer);
+    exporter.dispose();
     releaseHeldNotes();
     detach?.();
     detachSession?.();
@@ -1329,5 +1343,6 @@ function createAppState(): AppState {
     saveProject,
     saveProjectAs,
     resubscribeMeters,
+    exporter,
   };
 }

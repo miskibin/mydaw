@@ -7,6 +7,8 @@ import type {
   ClapPluginInfoDto,
   ClapTarget,
   EffectInfoDto,
+  ExportJobStatus,
+  ExportOptions,
   InsertReadoutsDto,
   InsertTarget,
   LibraryEntryDto,
@@ -474,6 +476,18 @@ export interface Backend {
    * allowed to mean. `null` = cancelled.
    */
   saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null>;
+
+  // --- export --------------------------------------------------------------
+
+  /**
+   * Render the unsaved session to a WAV in a worker process, asking for the
+   * file with a save dialog when no `path` is given. `null` = cancelled.
+   * Resolves as soon as the worker starts; poll {@link getExportStatus}.
+   */
+  exportAudio(options: ExportOptions, path?: string | null): Promise<ExportJobStatus | null>;
+  getExportStatus(jobId: string): Promise<ExportJobStatus>;
+  /** Stop the worker. The destination is left as it was. */
+  cancelExport(jobId: string): Promise<ExportJobStatus>;
 
   /** What the open audio device is. Answers `running: false` rather than failing. */
   getStreamInfo(): Promise<StreamInfo>;
@@ -1173,6 +1187,18 @@ class TauriBackend implements Backend {
 
   saveProject(saveAs: boolean, path?: string | null): Promise<ProjectInfo | null> {
     return this.call('save_project', { saveAs, path: path ?? null });
+  }
+
+  exportAudio(options: ExportOptions, path?: string | null): Promise<ExportJobStatus | null> {
+    return this.call('export_audio', { options, path: path ?? null });
+  }
+
+  getExportStatus(jobId: string): Promise<ExportJobStatus> {
+    return this.call('job_status', { jobId });
+  }
+
+  cancelExport(jobId: string): Promise<ExportJobStatus> {
+    return this.call('cancel_job', { jobId });
   }
 
   getStreamInfo(): Promise<StreamInfo> {
