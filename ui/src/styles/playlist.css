@@ -481,3 +481,10 @@
   border-radius: 7px;
   font: 500 10px 'Geist Variable';
 }
+
+/* A muted clip keeps its place and its shape, faded: an older take set aside,
+   not deleted. */
+.wv-clip.is-muted {
+  opacity: 0.4;
+  filter: grayscale(0.7);
+}

@@ -634,7 +634,7 @@ mod tests {
             "the tone should be audible in the interleaved buffer"
         );
         // Stereo tone: both interleaved lanes carry the same sample.
-        for pair in out.chunks_exact(2) {
+        for pair in out.as_chunks::<2>().0 {
             assert_eq!(pair[0], pair[1]);
         }
 
@@ -789,7 +789,7 @@ mod tests {
         let mut out = vec![9.0_f32; 64 * 6];
         run_block(&mut rig.state, &mut out);
 
-        for frame in out.chunks_exact(6) {
+        for frame in out.as_chunks::<6>().0 {
             assert_eq!(frame[0], frame[1]);
             assert!(
                 frame[2..].iter().all(|s| *s == 0.0),
@@ -905,7 +905,7 @@ mod tests {
             64 * 2,
             "the tap mirrors the engine bus, not the device layout"
         );
-        for (frame, pair) in captured.chunks_exact(2).enumerate() {
+        for (frame, pair) in captured.as_chunks::<2>().0.iter().enumerate() {
             assert_eq!(pair[0], out[frame * 6]);
             assert_eq!(pair[1], out[frame * 6 + 1]);
         }

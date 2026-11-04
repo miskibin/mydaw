@@ -118,6 +118,8 @@ export function createTransportControl(commands: {
   return {
     setMode, play, stop, pause, seek,
     busy: () => queued > 0,
+    /** Where Play starts in `mode`, in engine samples. */
+    startSample: (mode: PlayMode) => startAt(mode),
     resetStart(mode: PlayMode): void { starts[mode] = 0; },
     reset(): void {
       starts.pat = 0;

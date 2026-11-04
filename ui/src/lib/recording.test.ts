@@ -26,6 +26,8 @@ function status(state: RecordState, over: Partial<InputStatusDto> = {}): InputSt
     limitReached: false,
     fault: '',
     hasDevices: true,
+    monitoring: true,
+    offsetMs: 0,
     ...over,
   };
 }
@@ -51,10 +53,16 @@ describe('elapsed take time', () => {
 });
 
 describe('the record button’s gesture', () => {
-  it('walks idle -> armed -> recording -> armed', () => {
+  it('arms when stopped and disarms when armed and stopped', () => {
     expect(recordAction(status('idle'), true)).toBe('arm');
-    expect(recordAction(status('armed'), true)).toBe('start');
-    expect(recordAction(status('recording'), true)).toBe('stop');
+    expect(recordAction(status('armed'), true)).toBe('disarm');
+  });
+
+  it('punches in while the transport runs and out while recording', () => {
+    expect(recordAction(status('idle'), true, true)).toBe('punch-in');
+    expect(recordAction(status('armed'), true, true)).toBe('punch-in');
+    expect(recordAction(status('recording'), true, true)).toBe('punch-out');
+    expect(recordAction(status('recording'), true, false)).toBe('punch-out');
   });
 
   it('offers arming before the first status has arrived', () => {
@@ -63,7 +71,7 @@ describe('the record button’s gesture', () => {
 
   it('is unavailable with no capture device, whatever the status says', () => {
     expect(recordAction(status('idle'), false)).toBe('unavailable');
-    expect(recordAction(undefined, false)).toBe('unavailable');
+    expect(recordAction(undefined, false, true)).toBe('unavailable');
   });
 });
 
@@ -82,6 +90,7 @@ describe('the record button’s tooltip', () => {
 
   it('names the device it will record from', () => {
     expect(recordTitle(status('armed'), true)).toContain('Scarlett Solo');
+    expect(recordTitle(status('armed'), true, true)).toContain('Scarlett Solo');
   });
 
   it('says what to do about a machine with no input', () => {

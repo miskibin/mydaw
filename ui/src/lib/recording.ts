@@ -30,21 +30,31 @@ export function formatElapsed(seconds: number): string {
   return hours > 0 ? `${hours}:${pad(minutes)}:${pad(secs)}` : `${minutes}:${pad(secs)}`;
 }
 
-/** What the REC button does next, given the state it is in. */
-export type RecordAction = 'unavailable' | 'arm' | 'start' | 'stop';
-
 /**
- * The gesture a click on REC performs.
+ * What the REC button does next.
  *
- * Three states and one button, FL's transport arrangement: arm to hear the
- * input, press again to keep it, press again to end the take.
+ * FL's record mode: REC arms (the input opens, is metered and monitored), and
+ * while armed the transport records -- Play starts a take, Stop lands it on the
+ * playlist. With the transport already running, REC punches in and out.
+ *
+ * - `unavailable` -- no capture device at all
+ * - `arm`         -- idle and stopped: enter record mode
+ * - `punch-in`    -- playing and not recording: start a take now
+ * - `punch-out`   -- recording: end the take, keep playing
+ * - `disarm`      -- armed and stopped: leave record mode
  */
-export function recordAction(status: InputStatusDto | undefined, hasDevices: boolean): RecordAction {
+export type RecordAction = 'unavailable' | 'arm' | 'punch-in' | 'punch-out' | 'disarm';
+
+export function recordAction(
+  status: InputStatusDto | undefined,
+  hasDevices: boolean,
+  playing = false,
+): RecordAction {
   if (!hasDevices) return 'unavailable';
-  if (!status) return 'arm';
-  if (status.state === 'recording') return 'stop';
-  if (status.state === 'armed') return 'start';
-  return 'arm';
+  const state = status?.state ?? 'idle';
+  if (state === 'recording') return 'punch-out';
+  if (playing) return 'punch-in';
+  return state === 'armed' ? 'disarm' : 'arm';
 }
 
 /**
@@ -54,16 +64,23 @@ export function recordAction(status: InputStatusDto | undefined, hasDevices: boo
  * disabled or armed record button with no explanation is the single most
  * confusing control a DAW has.
  */
-export function recordTitle(status: InputStatusDto | undefined, hasDevices: boolean): string {
-  switch (recordAction(status, hasDevices)) {
+export function recordTitle(
+  status: InputStatusDto | undefined,
+  hasDevices: boolean,
+  playing = false,
+): string {
+  const device = status?.deviceName || 'the input';
+  switch (recordAction(status, hasDevices, playing)) {
     case 'unavailable':
       return 'No audio input device — plug in an interface or a microphone, then open Settings › Audio input';
     case 'arm':
-      return 'Arm the input — opens the capture device so you can set a level. WAVE holds it only while armed.';
-    case 'start':
-      return `Record from ${status?.deviceName || 'the input'} — the take becomes a new sample channel`;
-    case 'stop':
-      return 'Stop and keep the take — it becomes a sample channel and opens in the editor';
+      return 'Record (R) — arm the input, then press Play: takes land on the playlist where you sang them';
+    case 'punch-in':
+      return `Punch in (R) — start recording from ${device} now`;
+    case 'punch-out':
+      return 'Punch out (R) — end this take and keep playing; Stop also ends it';
+    case 'disarm':
+      return `Armed: Play (Space) records from ${device}. Click to leave record mode (R)`;
   }
 }
 

@@ -2336,6 +2336,7 @@ mod tests {
                 "name",
                 "pan",
                 "pitchCents",
+                "recordTarget",
                 "rootFineCents",
                 "rootKey",
                 "rootMode",
@@ -2349,6 +2350,7 @@ mod tests {
                 "sourceLabel",
                 "sourceParamDefs",
                 "sourceParams",
+                "takeCount",
                 "vst3"
             ]
         );

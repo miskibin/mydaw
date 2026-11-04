@@ -94,3 +94,25 @@ with [keyboard shortcuts](https://www.image-line.com/fl-studio-learning/fl-studi
 and [workflow](https://www.image-line.com/fl-studio-learning-content/fl-studio-online-manual/html/basics_workflow.htm)
 manuals. The explicit search and folder behavior were also checked against
 [Ableton's Browser](https://www.ableton.com/en/live-manual/12/working-with-the-browser/).
+
+## Recording vocals over a beat
+
+| Action | Gesture |
+| --- | --- |
+| Put the beat on the playlist | Drag the MP3/WAV from Explorer or the Browser onto a lane |
+| Arm recording | REC button or R (with the typing keyboard off) |
+| Record a take | Space while armed: the song plays from the start marker and records |
+| Stop and keep the take | Space (or the Stop button); Ctrl+Space pauses and keeps it |
+| Punch in / out while playing | REC or R |
+| Discard the running take | × next to the input meter |
+| Hear yourself / don't | Headphones toggle next to the meter (remembered) |
+| Set an old take aside | Right-click › Mute |
+| Cut a take | C (slice tool), or right-click › Split here |
+| Remove the last take | Ctrl+Z |
+
+Takes land where you performed them, on the first lane free for their length,
+and play through one **Vocal** mixer channel created by the first take — put
+EQ, compression and reverb there once, and every take and your live monitor go
+through it. The mixer's **R** chooses a different audio channel. Settings ›
+Audio input has the input device, monitoring, and a manual offset in
+milliseconds for drivers that misreport their latency.

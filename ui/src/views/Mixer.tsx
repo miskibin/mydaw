@@ -13,9 +13,10 @@
  *   not measured anywhere in the engine, so the master shows the peak dBFS it
  *   actually has, held and decayed, rather than a number nobody computed.
  *
- * The one control that *is* drawn disabled is R (record arm), because a strip
- * without it looks like a strip with a missing button; it carries a `title`
- * saying the engine cannot record yet.
+ * R (record arm) picks the audio channel the input records to and is
+ * monitored through -- FL's armed insert. It is live on audio-clip channels
+ * and drawn disabled, with the reason, on instrument channels, because a strip
+ * without it looks like a strip with a missing button.
  *
  * Two rules run through the whole file:
  *
@@ -1045,8 +1046,21 @@ function Strip(props: StripProps): JSX.Element {
           <button
             type="button"
             class="wv-pill wv-pill--rec wv-can-disable"
-            disabled
-            title="Recording is not implemented yet"
+            classList={{ 'is-on': track()?.recordTarget === true }}
+            disabled={track()?.engine !== 'clip'}
+            aria-pressed={track()?.recordTarget === true}
+            title={
+              track()?.engine !== 'clip'
+                ? 'Takes record to an audio channel. The first take creates a Vocal channel; use R there to pick another.'
+                : track()?.recordTarget
+                  ? `Takes record to ${name()} and the input is monitored through its effects. Click to clear.`
+                  : `Record takes to ${name()} and monitor the input through its effects`
+            }
+            onClick={() => {
+              const index = track()?.index;
+              if (index === undefined) return;
+              app.setRecordChannel(track()?.recordTarget ? null : index);
+            }}
           >
             R
           </button>

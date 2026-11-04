@@ -333,7 +333,7 @@ mod tests {
 
         // Channel alignment survived: left values are non-negative, right
         // negated.
-        for frame in out.chunks_exact(2) {
+        for frame in out.as_chunks::<2>().0 {
             assert_eq!(frame[1], -frame[0]);
         }
     }

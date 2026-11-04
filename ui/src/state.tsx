@@ -61,6 +61,7 @@ import {
 } from './lib/keyboard';
 import { Playhead } from './lib/playhead';
 import { createTransportControl } from './lib/transportControl';
+import { recordAction } from './lib/recording';
 import {
   playlistEntry,
   patternEntry,
@@ -275,18 +276,33 @@ export interface AppState {
   setInputDevice(deviceId: string | null): Promise<void>;
   /** Open the capture device and start metering, or release it. */
   setInputArmed(armed: boolean): Promise<void>;
-  /** Start a take, arming first if needed. */
+  /** Whether any capture device exists, as far as the UI knows. */
+  hasInputDevices(): boolean;
+  /**
+   * The REC button (and R): FL's record mode. Arms when stopped, punches in
+   * while playing, punches out while recording, disarms when armed and
+   * stopped. While armed, Play records and Stop lands the take.
+   */
+  toggleRecord(): void;
+  /** Start a take now, arming first if needed. */
   startRecording(): Promise<void>;
   /**
-   * Stop, load the take, and add a rack channel that plays it.
-   *
-   * Resolves with the new channel's index so the caller can open its sample
-   * editor — one gesture from REC to a playable, editable channel. `null` when
-   * the take could not be kept, with the reason already in the status bar.
+   * End the take and land it on the playlist (one undo step). Resolves with
+   * the take, or `null` when it could not be kept (reason in the status bar).
    */
-  finishRecording(): Promise<number | null>;
+  finishRecording(): Promise<RecordedTakeDto | null>;
+  /** The last take that landed, so the playlist can select it. */
+  lastTake: Accessor<RecordedTakeDto | null>;
   /** Throw the take away. The device stays armed. */
   cancelRecording(): Promise<void>;
+  /** Hear the armed input through the recording channel. */
+  setInputMonitoring(on: boolean): Promise<void>;
+  /** Manual take offset in ms on top of latency compensation. */
+  setRecordOffset(offsetMs: number): Promise<void>;
+  /** Make an audio channel the recording target; `null` clears it. */
+  setRecordChannel(track: number | null): void;
+  /** Mute or unmute one audio clip, as one undo step. */
+  setClipMuted(clipIds: number[], muted: boolean): Promise<void>;
 
   loadDevices(rescan?: boolean): Promise<void>;
   refreshAudioSources(): Promise<void>;
@@ -523,10 +539,32 @@ function createAppState(): AppState {
 
   let editorPlayMode: PlayMode | undefined;
   function play(): void {
+    // Record mode: Play records. FL arms with REC and starts the take with the
+    // transport, so the two can never be started a beat apart by hand.
+    if (inputStatus()?.state === 'armed') {
+      void recordAndPlay();
+      return;
+    }
     if (editorPlayMode !== undefined) transportControl.setMode(editorPlayMode);
     transportControl.play();
   }
-  const stop = transportControl.stop;
+
+  function stop(): void {
+    const recording = inputStatus()?.state === 'recording';
+    transportControl.stop();
+    if (recording) void finishRecording();
+  }
+
+  /**
+   * Start a take and the song together. Always the *song*: a take lands on the
+   * playlist, and only song positions mean anything there.
+   */
+  async function recordAndPlay(): Promise<void> {
+    if (!(await inputCommand((b) => b.startRecording()))) return;
+    transportControl.setMode('song');
+    transportControl.play();
+    say('Recording', `${inputStatus()?.deviceName ?? 'input'} · Space stops and keeps the take`);
+  }
 
   function togglePlay(): void {
     if (playing()) stop();
@@ -538,8 +576,11 @@ function createAppState(): AppState {
   }
 
   function togglePause(): void {
-    if (playing()) transportControl.pause();
-    else play();
+    if (playing()) {
+      const recording = inputStatus()?.state === 'recording';
+      transportControl.pause();
+      if (recording) void finishRecording();
+    } else play();
   }
 
   function setPlayMode(mode: PlayMode): void {
@@ -832,10 +873,25 @@ function createAppState(): AppState {
     await backend.getInputStatus().then(adoptInputStatus).catch(() => {});
   }
 
-  async function finishRecording(): Promise<number | null> {
+  const [lastTake, setLastTake] = createSignal<RecordedTakeDto | null>(null);
+  let landing: Promise<RecordedTakeDto | null> | null = null;
+
+  /**
+   * End the take and land it on the playlist. Idempotent while in flight:
+   * Stop, the engine's own stop and a punch-out can all ask at once.
+   */
+  function finishRecording(): Promise<RecordedTakeDto | null> {
+    if (landing) return landing;
+    landing = landTake().finally(() => {
+      landing = null;
+    });
+    return landing;
+  }
+
+  async function landTake(): Promise<RecordedTakeDto | null> {
     let take: RecordedTakeDto;
     try {
-      take = await backend.stopRecording();
+      take = await backend.stopRecording(transportControl.startSample('song'));
       setKernelError(null);
     } catch (error) {
       report(error);
@@ -843,33 +899,60 @@ function createAppState(): AppState {
       return null;
     }
     await syncInputStatus();
-
-    // The same command a dropped WAV takes, so a take and an import cannot
-    // produce two different kinds of channel.
-    let channel: number | null = null;
     try {
-      const next = await backend.addSampleChannel(take.source.path);
-      setMixer(next);
-      channel = next.tracks.length - 1;
+      const [seq, mix] = await Promise.all([backend.getPattern(), backend.getTracks()]);
+      adoptSequencer(seq);
+      setMixer(mix);
       setSources(await backend.getSources());
     } catch (error) {
-      // The take is on disk and loaded either way -- it is in the Audio
-      // browser -- so this is a partial success, not a lost recording.
       report(error);
     }
     await refreshAudioSources();
+    setLastTake(take);
 
     const seconds = take.source.durationSeconds;
+    const where = `lane ${take.lane + 1}, bar ${Math.floor(take.startTicks / (sequencer()?.ticksPerBar ?? 3840)) + 1}`;
     if (take.limitReached) {
-      say(take.source.name, `${seconds.toFixed(1)} s — stopped at the length limit`);
+      say(take.source.name, `${seconds.toFixed(1)} s — stopped at the length limit · ${where}`);
     } else if (take.droppedSamples > 0) {
-      say(take.source.name, `${seconds.toFixed(1)} s — ${take.droppedSamples} samples dropped`);
+      say(take.source.name, `${seconds.toFixed(1)} s — ${take.droppedSamples} samples dropped · ${where}`);
     } else if (take.peak < 0.001) {
-      say(take.source.name, `${seconds.toFixed(1)} s — silent, check the input`);
+      say(take.source.name, `${seconds.toFixed(1)} s — silent, check the input · ${where}`);
+    } else if (!take.synced) {
+      say(take.source.name, `${seconds.toFixed(1)} s · transport was stopped, placed at the start marker`);
     } else {
-      say(take.source.name, `${seconds.toFixed(1)} s recorded`);
+      say(take.source.name, `${seconds.toFixed(1)} s · ${where} · Ctrl+Z removes it`);
     }
-    return channel;
+    return take;
+  }
+
+  function hasInputDevices(): boolean {
+    return inputDevices().length > 0 || (inputStatus()?.hasDevices ?? false);
+  }
+
+  function toggleRecord(): void {
+    switch (recordAction(inputStatus(), hasInputDevices(), playing())) {
+      case 'unavailable':
+        say('Record', 'no audio input — open Settings › Audio input');
+        return;
+      case 'arm':
+        void inputCommand((b) => b.setInputArmed(true)).then((ok) => {
+          if (ok) say('Record', `armed · ${inputStatus()?.deviceName ?? ''} · Space records`);
+        });
+        return;
+      case 'disarm':
+        void inputCommand((b) => b.setInputArmed(false)).then((ok) => {
+          if (ok) say('Record', 'off');
+        });
+        return;
+      case 'punch-in':
+        void inputCommand((b) => b.startRecording()).then((ok) => {
+          if (ok) say('Recording', 'punched in · R punches out');
+        });
+        return;
+      case 'punch-out':
+        void finishRecording();
+    }
   }
 
   // --- selection and plugins -----------------------------------------------
@@ -1013,7 +1096,12 @@ function createAppState(): AppState {
     if (transportControl.busy()) return;
     playhead.update(frame.samplePos, frame.playing);
     // Only when it actually changed: this runs 30 times a second.
-    if (frame.playing !== playing()) setPlaying(frame.playing);
+    if (frame.playing !== playing()) {
+      setPlaying(frame.playing);
+      // The engine stopped on its own (the song ended): a running take ends
+      // with it, exactly as if Stop had been pressed.
+      if (!frame.playing && inputStatus()?.state === 'recording') void finishRecording();
+    }
   }
 
   async function resubscribeMeters(): Promise<void> {
@@ -1312,10 +1400,37 @@ function createAppState(): AppState {
         say('Audio input', armed ? `Armed · ${inputStatus()?.deviceName ?? ''}` : 'Released');
       }
     },
+    hasInputDevices,
+    toggleRecord,
     async startRecording() {
       await inputCommand((b) => b.startRecording());
     },
     finishRecording,
+    lastTake,
+    async setInputMonitoring(on) {
+      if (await inputCommand((b) => b.setInputMonitoring(on))) {
+        say('Input monitoring', on ? 'on — you hear yourself through the Vocal channel' : 'off');
+      }
+    },
+    async setRecordOffset(offsetMs) {
+      if (await inputCommand((b) => b.setRecordOffset(offsetMs))) {
+        say('Recording offset', `${offsetMs.toFixed(0)} ms`);
+      }
+    },
+    setRecordChannel(track) {
+      void mixerCommand((b) => b.setRecordChannel(track)).then(() => {
+        const name = track === null ? 'none' : (mixer()?.tracks[track]?.name ?? '');
+        say('Record to', name || 'next take creates a Vocal channel');
+      });
+    },
+    async setClipMuted(clipIds, muted) {
+      if (clipIds.length === 0) return;
+      startPlaylistGesture(muted ? 'Mute clip' : 'Unmute clip');
+      for (const id of clipIds) {
+        await sequencerCommand((b) => b.setClipMuted(id, muted));
+      }
+      commitPlaylistGesture();
+    },
     async cancelRecording() {
       if (await inputCommand((b) => b.cancelRecording())) {
         say('Recording', 'take discarded');

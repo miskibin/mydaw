@@ -67,6 +67,13 @@ export function App(): ReturnType<typeof Show> {
       return;
     }
     if (event.defaultPrevented) return;
+    // FL's record toggle. Not while the typing keyboard is on: there R is a note.
+    if (event.code === 'KeyR' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&
+        !view.typingKeyboard() && !target?.closest('.wv-menu, .wv-modal, [role="menu"]')) {
+      event.preventDefault();
+      if (!event.repeat) app.toggleRecord();
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
       event.preventDefault();
       view.setBrowserOpen(true);

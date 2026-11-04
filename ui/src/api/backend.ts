@@ -508,12 +508,20 @@ export interface Backend {
   /** Start a take, arming the device first if it is not open yet. */
   startRecording(): Promise<InputStatusDto>;
   /**
-   * End the take, write it, and load it as an audio source.
-   *
-   * Placing it is `addSampleChannel`, on purpose: a recorded take and a dropped
-   * WAV reach the rack by the same path.
+   * End the take, write it, and land it on the playlist: an audio clip at the
+   * song position that was audible when it began (latency compensated), on the
+   * first free lane, through the recording channel. `fallbackSample` places a
+   * take recorded with the transport stopped. One undo step.
    */
-  stopRecording(): Promise<RecordedTakeDto>;
+  stopRecording(fallbackSample?: number): Promise<RecordedTakeDto>;
+  /** Hear the armed input through the recording channel (remembered). */
+  setInputMonitoring(on: boolean): Promise<InputStatusDto>;
+  /** Manual take offset in ms on top of latency compensation (remembered). */
+  setRecordOffset(offsetMs: number): Promise<InputStatusDto>;
+  /** Make an audio channel the recording target (`null` clears it). */
+  setRecordChannel(track: number | null): Promise<MixerState>;
+  /** Mute or unmute one audio clip. */
+  setClipMuted(clipId: number, muted: boolean): Promise<SequencerState>;
   /** Throw the take away. The device stays armed for another attempt. */
   cancelRecording(): Promise<InputStatusDto>;
 
@@ -1201,8 +1209,26 @@ class TauriBackend implements Backend {
     return this.call('start_recording');
   }
 
-  stopRecording(): Promise<RecordedTakeDto> {
-    return this.call('stop_recording');
+  stopRecording(fallbackSample?: number): Promise<RecordedTakeDto> {
+    return this.call('stop_recording', {
+      fallbackSample: fallbackSample === undefined ? null : Math.max(0, Math.round(fallbackSample)),
+    });
+  }
+
+  setInputMonitoring(on: boolean): Promise<InputStatusDto> {
+    return this.call('set_input_monitoring', { on });
+  }
+
+  setRecordOffset(offsetMs: number): Promise<InputStatusDto> {
+    return this.call('set_record_offset', { offsetMs });
+  }
+
+  setRecordChannel(track: number | null): Promise<MixerState> {
+    return this.call('set_record_channel', { track });
+  }
+
+  setClipMuted(clipId: number, muted: boolean): Promise<SequencerState> {
+    return this.call('set_clip_muted', { clipId, muted });
   }
 
   cancelRecording(): Promise<InputStatusDto> {

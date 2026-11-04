@@ -1077,6 +1077,8 @@ export class MockBackend implements Backend {
   /** `performance.now()` when the take started, for the elapsed readout. */
   private recordStartedMs = 0;
   private takesRecorded = 0;
+  private inputMonitoring = true;
+  private recordOffsetMs = 0;
   /** Last Sounds / Audio audition, for tests. Cleared by transport stop. */
   lastPreview: string | null = null;
   lastNoteOn: { key: number; velocity: number } | null = null;
@@ -3521,7 +3523,36 @@ export class MockBackend implements Backend {
       limitReached: elapsed >= MAX_RECORD_SECONDS,
       fault: '',
       hasDevices: this.inputDevices.length > 0,
+      monitoring: this.inputMonitoring,
+      offsetMs: this.recordOffsetMs,
     };
+  }
+
+  async setInputMonitoring(on: boolean): Promise<InputStatusDto> {
+    this.inputMonitoring = on;
+    return this.getInputStatus();
+  }
+
+  async setRecordOffset(offsetMs: number): Promise<InputStatusDto> {
+    this.recordOffsetMs = Number.isFinite(offsetMs) ? Math.max(-500, Math.min(500, offsetMs)) : 0;
+    return this.getInputStatus();
+  }
+
+  async setRecordChannel(track: number | null): Promise<MixerState> {
+    if (track !== null && this.tracks[track]?.engine !== 'clip') {
+      throw new Error(`there is no audio channel ${track}`);
+    }
+    this.tracks.forEach((def, index) => {
+      def.recordTarget = index === track;
+    });
+    return this.getTracks();
+  }
+
+  async setClipMuted(clipId: number, muted: boolean): Promise<SequencerState> {
+    const clip = this.clip(clipId);
+    if (clip.kind !== 'audio') throw new Error('a pattern clip cannot be muted on its own');
+    clip.muted = muted;
+    return this.sequencerState();
   }
 
   async setInputArmed(armed: boolean): Promise<InputStatusDto> {
@@ -3555,7 +3586,7 @@ export class MockBackend implements Backend {
    * gesture (record, channel, sample editor with a waveform) demonstrable
    * without hardware. The same trade `openAudioFile` makes for the dialog.
    */
-  async stopRecording(): Promise<RecordedTakeDto> {
+  async stopRecording(fallbackSample?: number): Promise<RecordedTakeDto> {
     if (this.recordState !== 'recording') throw new Error('nothing is being recorded');
     const seconds = Math.min(MAX_RECORD_SECONDS, (performance.now() - this.recordStartedMs) / 1000);
     this.recordState = 'armed';
@@ -3578,11 +3609,29 @@ export class MockBackend implements Backend {
     };
     this.audioSources.push(source);
     console.info(`[mock] no capture device outside Tauri, invented ${name} (${seconds.toFixed(2)} s)`);
+    // As the engine: the take lands where the transport was when it began
+    // (here, where it is minus its length), on the first lane free for it.
+    const startTicks = this.ticksFor(Math.max(0, (fallbackSample ?? 0) / SAMPLE_RATE));
+    const length = Math.max(1, source.durationTicks);
+    let lane = this.playlistTracks.findIndex((_, index) => !this.clips.some((clip) =>
+      clip.track === index && clip.start < startTicks + length && clip.start + clip.length > startTicks));
+    if (lane < 0) {
+      await this.addPlaylistTrack();
+      lane = this.playlistTracks.length - 1;
+    }
+    await this.addAudioClip(source.id, lane, startTicks, length);
+    const clip = this.clips[this.clips.length - 1]!;
+    const channel = this.tracks.findIndex((def) => def.audioSourceId === source.id);
     return {
       source: { ...source },
       droppedSamples: 0,
       limitReached: seconds >= MAX_RECORD_SECONDS,
       peak: 0.82,
+      clipId: clip.id,
+      lane,
+      channel,
+      startTicks,
+      synced: true,
     };
   }
 

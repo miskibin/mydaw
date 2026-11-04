@@ -236,47 +236,54 @@ CI runs the same gates on `windows-latest` ([`.github/workflows/ci.yml`](.github
 
 ## Recording
 
-The REC button in the transport bar captures a microphone or a line input and lands it on the rack
-as a playable sample channel. Three states, one button:
+FL Studio's "audio into the playlist", on one button:
+
+1. Drop the beat (WAV, FLAC, Ogg or **MP3**) from Explorer or the Browser onto a playlist lane.
+2. **REC** (or **R**) arms the input: the device opens, the bar shows its level, and you hear
+   yourself through the recording channel (the headphones toggle turns that off for interfaces
+   with direct monitoring).
+3. **Space** plays the song *and* records. **Space** again stops; the take lands as an audio clip
+   at the position you performed it, on the first lane free for its length, and is selected.
+   Record mode stays on, so Space again is the next take, stacked on the next lane.
+4. While the song is playing, **REC/R** punches in and out. **×** discards a running take.
+   **Ctrl+Space** pauses and keeps the take. A song that ends on its own ends the take with it.
+5. Right-click a take: **Mute** sets it aside, **Split here** / the **C** slice tool cut it,
+   **Volume** trims it, and the left edge trims its start. **Ctrl+Z** removes a whole take.
 
 ```text
-   idle       no device is open at all -- WAVE does not sit on the microphone
-   armed      the device is open and metered, so a level can be set before the take
-   recording  the take is being kept; the counter and the meter are on the bar
+  capture thread (RT)                worker (non-RT)                  output thread (RT)
+  -------------------                ---------------                  ------------------
+  build_input_stream                 RecordService                    build_output_stream
+    |-- capture instant -> anchor      drain from the anchor frame      |-- playback instant
+    |-- fold_frame -> L R ==rtrb==>    + RateConverter -> take          |-- transport run ->
+    |-- monitor ring ==rtrb==========================================>  MonitorNode (Vocal head)
+    '-- peak / RMS -> atomics                                          PlaybackTimeline
+                                             |                               |
+                     stop: take start = run start + (capture - audible) <----'
+                                             |
+   <cache>/WAVE Studio/recordings/Recording N.wav  -> audio clip on the playlist, routed to "Vocal"
 ```
 
-```text
-  capture thread (RT)                         worker (non-RT)                 shell
-  -------------------                         ---------------                 -----
-  build_input_stream                          RecordService::arm
-    |-- fold_frame -> L R      ==rtrb=====>   drain + RateConverter    -->  Vec<f32>
-    |-- peak / RMS -> atomics                 (device rate -> engine rate)        |
-    '-- (dropped counter)                                                         v
-                                              RecordService::stop -> RecordedTake
-                                                     |
-   <cache>/WAVE Studio/recordings/Recording N.wav  <-'  32-bit float stereo
-                                                     |
-                        load_audio_source -> AudioSource -> add_sample_channel -> rack
-```
+- **Latency compensated from the devices' own clocks.** The output callback publishes when each
+  block becomes audible and at which transport sample; the input callback stamps when the take's
+  first frame was captured. The difference places the take where the performer heard the song,
+  covering both output and input latency. Settings › Audio input has a manual offset for whatever a
+  driver does not report.
+- **One recording channel.** The first take creates a "Vocal" audio channel; every later take
+  plays through it (its fader, EQ, compressor, reverb), so takes never use up mixer strips. The
+  mixer's **R** picks another audio channel as the target.
+- **Live monitoring** reads a second ring through an adaptive resampler (the two devices' clocks
+  drift), at the head of the Vocal channel — before its inserts — or on the master bus before the
+  first take exists. It aims for the smallest latency the two callback schedules allow and backs off
+  on its own after an underrun.
+- **The callbacks allocate nothing.** Both rings are pre-allocated `rtrb` queues; the monitor slot
+  is a `try_lock`, so a re-arm costs one silent block, never a stalled callback.
+- Takes are converted to the project's rate as they are captured, are capped at ten minutes, and
+  are written as 32-bit float, so an overload survives to be looked at rather than being clipped.
 
-- **The callback allocates nothing.** It folds the device's frames to the engine's stereo, writes
-  them into a pre-allocated `rtrb` ring, and updates two atomics for the meter. A full ring costs
-  whole frames and a counter, never a blocked capture thread.
-- **Takes are converted to the project's rate** as they are captured (`mydaw_audio_file::cubic`, the
-  same kernel the sampler plays pitched files with), so an interface running at 44.1 kHz against a
-  48 kHz session still lines up frame for frame. Equal rates are a bit-exact copy.
-- **Integer devices are supported.** I8/U8/I16/U16/I32 are converted to `f32` in the callback over a
-  pre-allocated scratch buffer; refusing them would make recording impossible on most shared-mode
-  Windows inputs.
-- **Input never touches the output stream.** Separate devices, separate callbacks; the two share only
-  the engine's sample rate. Input always uses the platform default host — an ASIO driver hands out one
-  instance for both directions and cpal opens the two halves separately.
-- Takes are capped at five minutes (`MAX_RECORD_SECONDS`) and written as 32-bit float, so an overload
-  survives to be looked at rather than being clipped on the way to disk.
-
-The device is chosen in **Settings › Audio input**, persisted in `audio.json` by its host-stable id,
-and metered there before a take. Commands: `get_input_devices`, `set_input_device`,
-`get_input_status`, `set_input_armed`, `start_recording`, `stop_recording`, `cancel_recording`.
+Commands: `get_input_devices`, `set_input_device`, `get_input_status`, `set_input_armed`,
+`set_input_monitoring`, `set_record_offset`, `start_recording`, `stop_recording`,
+`cancel_recording`, `set_record_channel`, `set_clip_muted`.
 
 ## How the shell fits together
 

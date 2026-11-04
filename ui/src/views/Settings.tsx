@@ -258,7 +258,8 @@ export function Settings() {
           <div>
             <h2>Audio input</h2>
             <p>
-              Where the REC button records from. WAVE opens this device only while the transport is
+              Where REC records from. Arm with REC (or R), press Space, and each take lands on the
+              playlist where you performed it, latency compensated. WAVE opens this device only while
               armed, so nothing else on the machine loses the microphone in between. A take is
               converted to the project’s sample rate as it is captured, so an interface running at a
               different rate still lines up frame for frame.
@@ -359,6 +360,42 @@ export function Settings() {
         <Show when={!!inputStatus()?.fault}>
           <p class="wv-audio-note">{inputStatus()!.fault}</p>
         </Show>
+        <div class="wv-input-options">
+          <label class="wv-input-option">
+            <input
+              type="checkbox"
+              checked={inputStatus()?.monitoring ?? true}
+              disabled={inputBusy()}
+              onChange={(event) => {
+                const on = event.currentTarget.checked;
+                void runInput(() => app.setInputMonitoring(on));
+              }}
+            />
+            <span>
+              Hear the input through WAVE while armed
+              <small>Through the Vocal channel and its effects. Turn off if your interface has direct monitoring.</small>
+            </span>
+          </label>
+          <label class="wv-input-option">
+            <input
+              type="number"
+              class="wv-input-option__ms"
+              step="1"
+              min="-500"
+              max="500"
+              value={Math.round(inputStatus()?.offsetMs ?? 0)}
+              disabled={inputBusy()}
+              onChange={(event) => {
+                const ms = Number(event.currentTarget.value);
+                void runInput(() => app.setRecordOffset(Number.isFinite(ms) ? ms : 0));
+              }}
+            />
+            <span>
+              ms recording offset
+              <small>Takes are latency-compensated automatically. If they still sound late, raise this; early, lower it.</small>
+            </span>
+          </label>
+        </div>
         <Show when={inputStatus() && inputStatus()!.state !== 'idle'}>
           <p class="wv-audio-readout">
             Recording from {inputStatus()!.deviceName} ·{' '}

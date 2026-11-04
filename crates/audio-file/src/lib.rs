@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(decoded.frames, 4);
         assert_eq!(decoded.sample_rate, 8_000.0);
         assert!(!decoded.truncated);
-        for frame in decoded.data.chunks_exact(CHANNELS) {
+        for frame in decoded.data.as_chunks::<CHANNELS>().0 {
             assert_eq!(frame[0], frame[1], "mono must land on both channels");
         }
         assert!((decoded.data[0] - 0.25).abs() < 1e-6);

@@ -628,7 +628,8 @@ fn capture_master(hosts: &mut Hosts<'_>, warnings: &mut Vec<String>) -> Option<E
             .info(instance)
             .map_or_else(String::new, |info| info.name.clone());
         EffectRef::clap(path.to_string_lossy().into_owned(), plugin_id, name)
-    } else if let Some(instance) = hosts.vst3.instance_at(target) {
+    } else {
+        let instance = hosts.vst3.instance_at(target)?;
         let (path, cid) = hosts.vst3.instances_mut().locator(instance)?;
         let name = hosts
             .vst3
@@ -636,8 +637,6 @@ fn capture_master(hosts: &mut Hosts<'_>, warnings: &mut Vec<String>) -> Option<E
             .info(instance)
             .map_or_else(String::new, |info| info.name.clone());
         EffectRef::vst3(path.to_string_lossy().into_owned(), cid.to_hex(), name)
-    } else {
-        return None;
     };
 
     let bytes = save_state_at(hosts, target, "the master effect", warnings);

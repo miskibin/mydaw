@@ -1239,7 +1239,7 @@ impl ProjectFile {
                 name: entry.name.clone(),
                 reason,
             };
-            let source = entry.source.to_source().map_err(&bad)?;
+            let source = entry.source.to_source().map_err(bad)?;
             let gain_db = check_gain_db(entry.gain_db).map_err(|err| bad(err.to_string()))?;
             let pan = check_pan(entry.pan).map_err(|err| bad(err.to_string()))?;
             let pitch_cents = if entry.pitch_cents.is_finite() {
@@ -1279,7 +1279,7 @@ impl ProjectFile {
             // Rejected rather than skipped: a blob that is not base64 means the
             // file has been damaged, and loading the track without its state
             // would silently give the user a plugin at its defaults.
-            let _ = from_base64(&entry.state_blob).map_err(&bad)?;
+            let _ = from_base64(&entry.state_blob).map_err(bad)?;
             defs.push(TrackDef {
                 id: entry.id,
                 name: entry.name.clone(),

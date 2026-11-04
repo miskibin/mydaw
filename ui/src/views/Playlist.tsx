@@ -100,7 +100,7 @@
  * sideways on purpose is not yanked back.
  */
 
-import { For, Index, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { For, Index, Show, createEffect, createSignal, on, onCleanup, onMount } from 'solid-js';
 
 import type { Backend } from '../api/backend';
 import type {
@@ -306,6 +306,12 @@ export function Playlist(): ReturnType<typeof Show> {
 
   const pxPerTick = () => (BAR_PX * view.playlistZoom()) / TICKS_PER_BAR;
   const playlist = () => app.playlist();
+
+  // A take that just landed is selected, so Delete, Ctrl+Z's neighbour and the
+  // right-click Mute act on it with no hunting.
+  createEffect(on(app.lastTake, (take) => {
+    if (take) view.setSelectedClips([take.clipId]);
+  }, { defer: true }));
   const bars = () => {
     const end = playlist()?.endTicks ?? 0;
     return Math.max(MIN_BARS, Math.ceil(end / TICKS_PER_BAR) + TAIL_BARS);
@@ -1219,7 +1225,8 @@ export function Playlist(): ReturnType<typeof Show> {
     app.startPlaylistGesture('Slice clip');
     try {
       await app.sequencerCommand(async (backend) => {
-        await backend.addAudioClip(
+        const before = new Set((playlist()?.clips ?? []).map((other) => other.id));
+        const added = await backend.addAudioClip(
           sourceId,
           clip.track,
           right.start,
@@ -1227,6 +1234,9 @@ export function Playlist(): ReturnType<typeof Show> {
           right.offsetFrames,
           clip.gainDb ?? 0,
         );
+        // A muted take stays muted on both sides of the cut.
+        const fresh = added.playlist.clips.find((other) => !before.has(other.id));
+        if (clip.muted && fresh) await backend.setClipMuted(fresh.id, true);
         return backend.resizeClip(clip.id, left.length);
       });
     } finally {
@@ -2011,6 +2021,24 @@ export function Playlist(): ReturnType<typeof Show> {
                   >
                     Split at playhead
                   </button>
+                  <button
+                    type="button"
+                    class="wv-menu__row"
+                    title="Silence this clip (and the rest of the selection) without deleting it — set an older take aside"
+                    onClick={() => {
+                      const clip = liveMenuClip() ?? menu().clip;
+                      setClipMenu(null);
+                      const selected = view.selectedClips();
+                      const ids = selected.includes(clip.id)
+                        ? (playlist()?.clips ?? [])
+                            .filter((other) => other.kind === 'audio' && selected.includes(other.id))
+                            .map((other) => other.id)
+                        : [clip.id];
+                      void app.setClipMuted(ids, !clip.muted);
+                    }}
+                  >
+                    {menu().clip.muted ? 'Unmute' : 'Mute'}
+                  </button>
                   <ClipVolumeRow clipId={menu().clip.id} name={clipName(menu().clip)} />
                 </Show>
                 <div class="wv-menu__rule" />
@@ -2249,7 +2277,7 @@ function Clip(props: {
     <div
       class="wv-clip"
       data-clip-id={props.clip.id}
-      classList={{ 'is-selected': props.selected }}
+      classList={{ 'is-selected': props.selected, 'is-muted': props.clip.muted === true }}
       style={{
         left: `${props.clip.start * props.pxPerTick}px`,
         width: `${Math.max(6, props.clip.length * props.pxPerTick - 4)}px`,
@@ -2278,7 +2306,7 @@ function Clip(props: {
       title={
         props.clip.kind === 'pattern'
           ? `${props.name} — click to load the brush, drag to move (shift-drag to copy), drag the right edge to resize, double-click to edit (Alt for the piano roll), right-click for more`
-          : `${props.name}${gain() ? ` (${gain()})` : ''} — click to load the brush, drag to move (shift-drag to copy), drag either edge to trim, C for the slice tool, double-click to open the sample window, right-click for volume and more. Audio clips play through their own channel's strip.`
+          : `${props.clip.muted ? 'Muted · ' : ''}${props.name}${gain() ? ` (${gain()})` : ''} — click to load the brush, drag to move (shift-drag to copy), drag either edge to trim, C for the slice tool, double-click to open the sample window, right-click for volume and more. Audio clips play through their own channel's strip.`
       }
     >
       <span class="wv-clip__label">

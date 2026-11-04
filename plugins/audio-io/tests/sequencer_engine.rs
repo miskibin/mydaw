@@ -228,7 +228,7 @@ fn render(pattern: &Pattern, frames: usize, bpm: f64) -> (Vec<f32>, Arc<AudioIoS
     let mut left = Vec::with_capacity(frames);
     while left.len() < frames {
         run_block(&mut state, &mut interleaved);
-        left.extend(interleaved.chunks_exact(2).map(|pair| pair[0]));
+        left.extend(interleaved.as_chunks::<2>().0.iter().map(|pair| pair[0]));
     }
     left.truncate(frames);
     (left, stats)

@@ -63,7 +63,7 @@ pub fn measure(capture: &Capture) -> Value {
             }
             let mut run = 0;
             let mut last = 0.0_f32;
-            for frame in capture.samples.chunks_exact(2) {
+            for frame in capture.samples.as_chunks::<2>().0 {
                 let value = frame[channel];
                 if value.is_finite()
                     && f64::from(value.abs()) >= channel_peak * 0.9

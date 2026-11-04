@@ -368,6 +368,8 @@ export interface ClipDto {
   offsetFrames?: number;
   /** Per-clip trim in dB. Absent for a pattern clip. */
   gainDb?: number;
+  /** A muted audio clip: drawn dimmed, silent on playback. */
+  muted?: boolean;
 }
 
 /** The arrangement. */
@@ -823,6 +825,11 @@ export interface TrackDto {
   slices: SliceState;
   /** Numeric audio-file id when this channel is `clip:` or `oneshot:`. */
   audioSourceId?: number | null;
+  /** Whether the audio input records to (and is monitored through) this
+   * channel — the mixer's lit R button. */
+  recordTarget?: boolean;
+  /** Recorded takes playing through this channel besides its own file. */
+  takeCount?: number;
 }
 
 /** One bus. `index` is what a send's `dest` names. */
@@ -989,6 +996,11 @@ export interface InputStatusDto {
   fault: string;
   /** Whether the machine has any capture device at all. */
   hasDevices: boolean;
+  /** Whether the armed input is heard through the recording channel. */
+  monitoring: boolean;
+  /** Manual recording offset in ms on top of the automatic latency
+   * compensation. Positive moves takes earlier. */
+  offsetMs: number;
 }
 
 /**
@@ -1005,6 +1017,17 @@ export interface RecordedTakeDto {
   /** Largest absolute sample. Near zero is a silent take: wrong input, or a
    * cable out. */
   peak: number;
+  /** The playlist clip the take became. */
+  clipId: number;
+  /** The playlist lane it landed on. */
+  lane: number;
+  /** The mixer channel it plays through. */
+  channel: number;
+  /** Where it starts, in song ticks. */
+  startTicks: number;
+  /** Whether the position came from the transport (latency compensated)
+   * rather than the start marker. */
+  synced: boolean;
 }
 
 /** One MIDI input port, as Settings draws it. */

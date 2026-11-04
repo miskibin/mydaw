@@ -67,7 +67,7 @@ mod tests {
         assert_eq!(decoded.sample_rate, 8_000.0);
         // Padding aside, left and right must be identical.
         let content = &decoded.data[CHANNELS..decoded.data.len() - 2 * CHANNELS];
-        for frame in content.chunks_exact(CHANNELS) {
+        for frame in content.as_chunks::<CHANNELS>().0 {
             assert_eq!(frame[0], frame[1], "mono must land on both channels");
         }
         assert!((content[0] - 0.25).abs() < 1e-4, "{}", content[0]);

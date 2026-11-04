@@ -1,11 +1,11 @@
 /**
- * The transport bar's record control: one REC button with three states, a live
- * input meter, and a way out.
+ * The transport bar's record control: FL's record mode on one button, a live
+ * input meter, input monitoring, and a way out.
  *
  * ```text
- *   idle        [REC]                         click -> arm
- *   armed       [REC] ▮▮▯▯▯ [x]               click -> record
- *   recording   [REC] 0:07 ▮▮▮▯▯ [x]          click -> stop, keep the take
+ *   idle        [●]                              click/R -> arm
+ *   armed       [●] ▮▮▯▯▯ [🎧] [x]               Space records; click/R -> disarm
+ *   recording   [●] 0:07 ▮▮▮▯▯ [🎧] [x]          Space stops and lands the take
  * ```
  *
  * # Why arming is a state you can see
@@ -15,17 +15,11 @@
  * not, so it is drawn: the meter is the proof that the right input is selected
  * and the level is right, *before* the take rather than after it.
  *
- * # Why it is quiet
- * The meter and the counter appear only while the device is open, and take
- * about 50 px between them. A permanent recording panel would cost that space in
- * every session that never records one note. Per AGENTS.md: the control earns
- * its space by being information-bearing exactly when there is information.
- *
- * Below `view.recordBar` the readout is dropped entirely and only the button
- * remains: at that width the bar has no spare pixels, and a readout that pushed
- * the view tabs off the edge would cost more than it tells. The button still
- * shows armed and recording, the status bar reports the take, and Settings has a
- * full-width level meter for setting one.
+ * # Monitoring
+ * The headphones toggle is the one setting a singer changes mid-session: on
+ * when the interface has no direct monitoring (you hear yourself through the
+ * Vocal channel and its effects), off when it does (hearing yourself twice,
+ * once late, is worse). It is remembered.
  *
  * The meter and the counter are painted on the shared frame loop rather than
  * from signals -- they move continuously and must not drive the reactive
@@ -35,28 +29,32 @@
 import { Show, type JSX } from 'solid-js';
 
 import { peakFraction } from '../panels/mixer/scale';
-import {
-  cancelTitle,
-  formatElapsed,
-  nearLimit,
-  recordAction,
-  recordTitle,
-} from '../lib/recording';
+import { cancelTitle, formatElapsed, nearLimit, recordAction, recordTitle } from '../lib/recording';
 import { useAppState } from '../state';
 import { useView } from './view';
 import { onFrame } from '../ui/frameLoop';
 import { IconRecord } from '../ui/icons';
+
+function IconHeadphones(): JSX.Element {
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+      <path d="M2.5 11V8.5a5.5 5.5 0 0 1 11 0V11" />
+      <rect x="2" y="9.5" width="3" height="4.5" rx="1" fill="currentColor" />
+      <rect x="11" y="9.5" width="3" height="4.5" rx="1" fill="currentColor" />
+    </svg>
+  );
+}
 
 export function RecordControl(): JSX.Element {
   const app = useAppState();
   const view = useView();
 
   const status = () => app.inputStatus();
-  // The status carries `hasDevices`, but it is only refreshed while the device
-  // is open; the enumerated list is what is current while idle.
-  const hasDevices = () => app.inputDevices().length > 0 || (status()?.hasDevices ?? false);
-  const action = () => recordAction(status(), hasDevices());
-  const open = () => action() === 'start' || action() === 'stop';
+  const action = () => recordAction(status(), app.hasInputDevices(), app.playing());
+  const state = () => status()?.state ?? 'idle';
+  const open = () => state() !== 'idle';
+  const recording = () => state() === 'recording';
+  const monitoring = () => status()?.monitoring ?? true;
 
   let rmsEl: HTMLSpanElement | undefined;
   let peakEl: HTMLSpanElement | undefined;
@@ -70,28 +68,8 @@ export function RecordControl(): JSX.Element {
     if (clockEl) clockEl.textContent = formatElapsed(current.elapsedSeconds);
   });
 
-  function onRec(): void {
-    switch (action()) {
-      case 'unavailable':
-        return;
-      case 'arm':
-        void app.setInputArmed(true);
-        return;
-      case 'start':
-        void app.startRecording();
-        return;
-      case 'stop':
-        void app.finishRecording().then((channel) => {
-          // One gesture: record, and the take is a playable channel with its
-          // editor already up. `null` means the take was not kept, and the
-          // reason is already in the status bar.
-          if (channel !== null) view.openSampleEditor(channel);
-        });
-    }
-  }
-
   function onCancel(): void {
-    if (action() === 'stop') void app.cancelRecording();
+    if (recording()) void app.cancelRecording();
     else void app.setInputArmed(false);
   }
 
@@ -101,20 +79,21 @@ export function RecordControl(): JSX.Element {
         type="button"
         class="wv-tbtn wv-tbtn--rec wv-can-disable"
         classList={{
-          'is-armed': action() === 'start',
-          'is-recording': action() === 'stop',
+          'is-armed': state() === 'armed',
+          'is-recording': recording(),
         }}
         disabled={action() === 'unavailable'}
         aria-pressed={open()}
-        title={recordTitle(status(), hasDevices())}
-        onClick={onRec}
+        aria-label="Record"
+        title={recordTitle(status(), app.hasInputDevices(), app.playing())}
+        onClick={() => app.toggleRecord()}
       >
         <IconRecord />
       </button>
 
       <Show when={open() && view.recordBar()}>
-        <div class="wv-rec" classList={{ 'is-recording': action() === 'stop' }}>
-          <Show when={action() === 'stop'}>
+        <div class="wv-rec" classList={{ 'is-recording': recording() }}>
+          <Show when={recording()}>
             <span
               class="wv-rec__clock"
               classList={{ 'is-near-limit': nearLimit(status()) }}
@@ -136,6 +115,21 @@ export function RecordControl(): JSX.Element {
             <span class="wv-rec__rms" ref={rmsEl} />
             <span class="wv-rec__peak" ref={peakEl} />
           </span>
+          <button
+            type="button"
+            class="wv-rec__monitor"
+            classList={{ 'is-on': monitoring() }}
+            aria-pressed={monitoring()}
+            aria-label="Input monitoring"
+            title={
+              monitoring()
+                ? 'Monitoring on — you hear the input through the Vocal channel. Turn off if your interface monitors directly.'
+                : 'Monitoring off — turn on to hear yourself through WAVE (with the Vocal channel’s effects)'
+            }
+            onClick={() => void app.setInputMonitoring(!monitoring())}
+          >
+            <IconHeadphones />
+          </button>
           <button
             type="button"
             class="wv-rec__cancel"

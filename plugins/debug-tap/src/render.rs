@@ -1066,11 +1066,11 @@ mod tests {
         assert_eq!((width, height), (PNG_WIDTH, PNG_HEIGHT));
         assert_eq!(pixels.len(), (PNG_WIDTH * PNG_HEIGHT * 3) as usize);
         assert!(
-            pixels.chunks_exact(3).any(|p| p == LEFT_TRACE),
+            pixels.as_chunks::<3>().0.contains(&LEFT_TRACE),
             "the left channel trace colour should appear somewhere"
         );
         assert!(
-            pixels.chunks_exact(3).any(|p| p == MARKER),
+            pixels.as_chunks::<3>().0.contains(&MARKER),
             "the dominant-frequency marker should be drawn"
         );
     }
@@ -1159,7 +1159,7 @@ mod tests {
             .render_png(&path)
             .expect("render");
         let (_, _, pixels) = decode(&path);
-        assert!(pixels.chunks_exact(3).any(|p| p == WARNING));
+        assert!(pixels.as_chunks::<3>().0.contains(&WARNING));
     }
 
     #[test]
@@ -1174,7 +1174,7 @@ mod tests {
         capture.render_png(&path).expect("render");
         let (_, _, pixels) = decode(&path);
         assert!(
-            pixels.chunks_exact(3).any(|p| p == WARNING),
+            pixels.as_chunks::<3>().0.contains(&WARNING),
             "a NaN column must be visibly marked"
         );
     }
