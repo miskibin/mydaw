@@ -771,6 +771,7 @@ mod tests {
             source_id: Some(7),
             offset_frames: Some(0),
             gain_db: Some(0.0),
+            muted: false,
         }];
         let target = ExportTarget {
             options: options("song", 24, 0.5),
