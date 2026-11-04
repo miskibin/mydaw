@@ -1062,7 +1062,14 @@ where
                 rt.push_block(out, captured_ns + (offset_frames * frame_ns) as u64);
             }
         },
-        move |err| error_shared.set_fault(fault_for(&err)),
+        move |err| {
+            // Only a fatal error is stored: a glitch report must neither close
+            // the input nor clear a real fault reported before it.
+            let fault = fault_for(&err);
+            if fault.is_fatal() {
+                error_shared.set_fault(fault);
+            }
+        },
         None,
     )
 }
@@ -1075,6 +1082,11 @@ fn fault_for(error: &cpal::Error) -> InputFault {
         // A reroute is the host following the default device; the stream is
         // still live, so it is not a fault at all.
         ErrorKind::DeviceChanged => InputFault::None,
+        // A glitch, not a failure: WASAPI flags a capture discontinuity on
+        // most devices right after the stream starts, and a busy machine can
+        // drop a block mid-take. The stream keeps delivering either way --
+        // closing the input over it made recording impossible.
+        ErrorKind::Xrun | ErrorKind::RealtimeDenied => InputFault::None,
         _ => InputFault::Backend,
     }
 }
@@ -1278,6 +1290,15 @@ mod tests {
         assert_eq!(
             fault_for(&cpal::Error::new(ErrorKind::DeviceBusy)),
             InputFault::Backend
+        );
+        assert_eq!(
+            fault_for(&cpal::Error::new(ErrorKind::Xrun)),
+            InputFault::None,
+            "a capture discontinuity (WASAPI reports one at start) must not close the input"
+        );
+        assert_eq!(
+            fault_for(&cpal::Error::new(ErrorKind::RealtimeDenied)),
+            InputFault::None
         );
     }
 
