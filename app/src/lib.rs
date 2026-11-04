@@ -62,6 +62,7 @@ mod control_server;
 pub mod debug_capture;
 mod dto;
 pub mod effects;
+pub mod export;
 mod file_preview;
 mod graph;
 pub mod insert;

@@ -92,6 +92,57 @@ pub fn job_status(state: State<'_, AppState>, job_id: String) -> Result<serde_js
 pub fn cancel_job(state: State<'_, AppState>, job_id: String) -> Result<serde_json::Value, String> {
     state.jobs().cancel(&job_id)
 }
+/// Export the unsaved session to a WAV in a worker; path null asks with a save dialog (null = cancelled). Poll job_status, stop with cancel_job.
+#[tauri::command]
+pub async fn export_audio(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    options: crate::export::ExportOptions,
+    path: Option<String>,
+) -> Result<Option<serde_json::Value>, String> {
+    crate::export::validate(&options)?;
+    let Some(path) = path
+        .map(PathBuf::from)
+        .or_else(|| pick_export_path(&app, &state))
+    else {
+        return Ok(None);
+    };
+    let path = crate::export::ensure_wav_extension(path);
+    let revision = state.control().revision();
+    state
+        .jobs()
+        .export(&state, options, path, revision)
+        .map(Some)
+}
+/// The native "export WAV" dialog: the last export's folder, else the
+/// project's, else Documents, named after the project. `None` = cancelled.
+fn pick_export_path(app: &tauri::AppHandle, state: &AppState) -> Option<PathBuf> {
+    use tauri::Manager;
+    use tauri_plugin_dialog::DialogExt;
+    let project = state.project_path();
+    let folder = state
+        .jobs()
+        .last_export_dir()
+        .or_else(|| {
+            project
+                .as_deref()
+                .and_then(|p| p.parent())
+                .map(PathBuf::from)
+        })
+        .or_else(|| app.path().document_dir().ok());
+    let mut dialog = app
+        .dialog()
+        .file()
+        .add_filter("WAV audio", &["wav"])
+        .set_title("Export WAV")
+        .set_file_name(crate::export::default_file_name(project.as_deref()));
+    if let Some(folder) = folder {
+        dialog = dialog.set_directory(folder);
+    }
+    dialog
+        .blocking_save_file()
+        .and_then(|file| file.into_path().ok())
+}
 
 fn plugin_values(
     state: &AppState,

@@ -909,6 +909,44 @@ export interface ProjectInfo {
   warnings: string[];
 }
 
+/** File › Export › WAV settings. Mirrors Rust `export::ExportOptions`. */
+export interface ExportOptions {
+  /** `song`: the arrangement to its last clip. `pattern`: one loop of the active pattern. */
+  mode: 'song' | 'pattern';
+  sampleRate: 44100 | 48000;
+  /** 16 = PCM with TPDF dither, 24 = PCM, 32 = IEEE float. */
+  bitDepth: 16 | 24 | 32;
+  /** Seconds rendered past the end for reverb and delay tails, 0..30. */
+  tailSeconds: number;
+  /** Scale the file so its loudest sample peaks at −0.1 dBFS. */
+  normalize: boolean;
+}
+
+/**
+ * One export job, as `job_status` reports it. `progress` and `path` are there
+ * from the start; the measurements arrive with `completed`, `error` with
+ * `failed`/`cancelled`.
+ */
+export interface ExportJobStatus {
+  jobId: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  /** 0..1. */
+  progress?: number;
+  path?: string;
+  frames?: number;
+  seconds?: number;
+  sampleRate?: number;
+  bitDepth?: number;
+  /** Sample peak after Normalize; `null` for a silent file. */
+  peakDbfs?: number | null;
+  /** Samples beyond full scale: clipped in 16/24-bit, kept in 32-bit float. */
+  clippedSamples?: number;
+  normalizeGainDb?: number | null;
+  /** The render produced no signal at all. */
+  silent?: boolean;
+  error?: string;
+}
+
 /**
  * What the open audio device is.
  *

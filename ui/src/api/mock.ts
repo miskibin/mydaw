@@ -29,6 +29,8 @@ import type {
   ClapTarget,
   ClipDto,
   EffectInfoDto,
+  ExportJobStatus,
+  ExportOptions,
   InsertDto,
   InsertReadoutsDto,
   InsertTarget,
@@ -79,9 +81,15 @@ import type {
   SourcePreviewDto,
 } from './types';
 import { engineOf } from '../lib/channel';
-import { occupiedChannels } from '../lib/pattern';
+import { occupiedChannels, patternTicks } from '../lib/pattern';
 import { snapAudioBufferFrames } from '../lib/audioOutput';
 import { clampPreviewVolumePercent } from '../lib/previewVolume';
+import {
+  EXPORT_BIT_DEPTHS,
+  EXPORT_SAMPLE_RATES,
+  exportBodyTicks,
+  exportSeconds,
+} from '../lib/exportWav';
 
 // ---------------------------------------------------------------------------
 // Engine constants, mirrored
@@ -664,6 +672,8 @@ const VST3_PLUGINS: readonly Vst3PluginInfoDto[] = [
 
 const UNTITLED = 'Untitled';
 const PROJECT_DIR = 'D:\\Songs';
+/** Where an unsaved session's export dialog opens. */
+const MOCK_DOCUMENTS = 'C:\\Users\\wave\\Documents';
 const MOCK_PACKS = 'D:\\MYDAW\\assets\\packs';
 const MOCK_FACTORY = 'D:\\MYDAW\\assets\\instruments';
 /** The instrument directories the Factory root lists, and a few of each. */
@@ -3429,6 +3439,82 @@ export class MockBackend implements Backend {
     this.lastSavedPath = chosen;
     this.project = projectInfo(chosen);
     return this.getProjectInfo();
+  }
+
+  // --- export --------------------------------------------------------------
+  //
+  // No DSP, so no file: a job that "renders" at ~10× real time (bounded to a
+  // few seconds) and then reports plausible measurements. Validation and the
+  // empty-playlist refusal match the engine's, so the dialog's error states can
+  // be rehearsed in a browser.
+
+  private exports = new Map<
+    string,
+    { status: ExportJobStatus; path: string; started: number; durationMs: number }
+  >();
+  private exportCount = 0;
+
+  async exportAudio(options: ExportOptions, path?: string | null): Promise<ExportJobStatus | null> {
+    if (options.mode !== 'song' && options.mode !== 'pattern') throw new Error('mode must be song or pattern');
+    if (!(EXPORT_SAMPLE_RATES as readonly number[]).includes(options.sampleRate)) {
+      throw new Error('sampleRate must be 44100, 48000 or 96000');
+    }
+    if (!(EXPORT_BIT_DEPTHS as readonly number[]).includes(options.bitDepth)) {
+      throw new Error('bitDepth must be 16, 24 or 32');
+    }
+    if (!Number.isFinite(options.tailSeconds) || options.tailSeconds < 0 || options.tailSeconds > 30) {
+      throw new Error('tailSeconds must be 0..30');
+    }
+    const ticks = exportBodyTicks(
+      options.mode,
+      this.playlist().endTicks,
+      patternTicks(this.pattern(this.activePattern)),
+    );
+    if (options.mode === 'song' && ticks === 0) {
+      throw new Error('the playlist is empty; place clips in the playlist or render the pattern');
+    }
+    const stem = this.project.path === null ? UNTITLED : projectName(this.project.path);
+    const folder = this.project.path === null ? MOCK_DOCUMENTS : PROJECT_DIR;
+    const target = path ?? `${folder}\\${stem}.wav`;
+    const seconds = exportSeconds(ticks, this.bpm, options.tailSeconds);
+    this.exportCount += 1;
+    const jobId = `mock-export-${this.exportCount}`;
+    const frames = Math.round(seconds * options.sampleRate);
+    const status: ExportJobStatus = {
+      jobId,
+      status: 'completed',
+      progress: 1,
+      path: target,
+      frames,
+      seconds: frames / options.sampleRate,
+      sampleRate: options.sampleRate,
+      bitDepth: options.bitDepth,
+      peakDbfs: options.normalize ? -0.1 : -3.2,
+      clippedSamples: 0,
+      normalizeGainDb: options.normalize ? 3.1 : null,
+      silent: false,
+    };
+    const durationMs = Math.min(4000, Math.max(800, seconds * 100));
+    this.exports.set(jobId, { status, path: target, started: Date.now(), durationMs });
+    return this.getExportStatus(jobId);
+  }
+
+  async getExportStatus(jobId: string): Promise<ExportJobStatus> {
+    const job = this.exports.get(jobId);
+    if (!job) throw new Error('job is not available in this session');
+    if (job.status.status !== 'completed') return { ...job.status };
+    const progress = (Date.now() - job.started) / job.durationMs;
+    if (progress >= 1) return { ...job.status };
+    return { jobId, status: 'running', progress, path: job.path };
+  }
+
+  async cancelExport(jobId: string): Promise<ExportJobStatus> {
+    const job = this.exports.get(jobId);
+    if (!job) throw new Error('job is not available in this session');
+    if (Date.now() - job.started < job.durationMs) {
+      job.status = { jobId, status: 'cancelled', path: job.path, error: 'cancelled' };
+    }
+    return { ...job.status };
   }
 
   private invent(): string {

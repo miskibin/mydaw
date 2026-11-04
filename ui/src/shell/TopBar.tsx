@@ -160,6 +160,19 @@ export function TopBar(): ReturnType<typeof Show> {
                 <span class="wv-spacer" />
                 <span class="wv-menu__meta">Ctrl+Shift+S</span>
               </button>
+              <button
+                type="button"
+                class="wv-menu__row"
+                title="Render the song or pattern to a WAV file"
+                onClick={() => {
+                  setProjectMenu(false);
+                  app.exporter.show();
+                }}
+              >
+                Export WAV…
+                <span class="wv-spacer" />
+                <span class="wv-menu__meta">Ctrl+R</span>
+              </button>
               <div class="wv-menu__rule" />
               <button
                 type="button"

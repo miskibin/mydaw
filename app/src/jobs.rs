@@ -43,6 +43,8 @@ struct WorkerInput {
     images: bool,
     #[serde(default)]
     diagnostic: Option<DiagnosticOptions>,
+    #[serde(default)]
+    export: Option<crate::export::ExportTarget>,
 }
 struct Job {
     status: Value,
@@ -52,8 +54,54 @@ struct Job {
 #[derive(Default)]
 pub struct Jobs {
     jobs: Mutex<BTreeMap<String, Job>>,
+    /// Folder of the last export started this session; the next export dialog
+    /// opens there.
+    last_export_dir: Mutex<Option<PathBuf>>,
 }
+/// Wall-clock bound of a CLI render, diagnosis or analysis worker.
+const ANALYSIS_WALL: Duration = Duration::from_secs(180);
+/// Wall-clock bound of an export worker: a long song through heavy plugins can
+/// render slower than real time, and the user can always cancel.
+const EXPORT_WALL: Duration = Duration::from_secs(3 * 60 * 60);
 impl Jobs {
+    /// Folder of the last export started in this session.
+    pub fn last_export_dir(&self) -> Option<PathBuf> {
+        self.last_export_dir.lock().clone()
+    }
+    /// Export the unsaved session to `path` in an isolated worker.
+    ///
+    /// The destination is checked for writability before the snapshot, so a
+    /// read-only folder fails now rather than after the whole render.
+    pub fn export(
+        self: &Arc<Self>,
+        state: &AppState,
+        options: crate::export::ExportOptions,
+        path: PathBuf,
+        revision: u64,
+    ) -> Result<Value, String> {
+        crate::export::validate(&options)?;
+        crate::export::check_writable(&path)?;
+        let project = snapshot(state)?;
+        crate::export::precheck(&options, &project)?;
+        let status = self.start(
+            WorkerInput {
+                assets_root: state.sampler().root().parent().map(Path::to_path_buf),
+                project: Some(project),
+                render: None,
+                input_path: None,
+                images: false,
+                diagnostic: None,
+                export: Some(crate::export::ExportTarget {
+                    options,
+                    path: path.clone(),
+                }),
+            },
+            revision,
+            EXPORT_WALL,
+        )?;
+        *self.last_export_dir.lock() = path.parent().map(Path::to_path_buf);
+        Ok(status)
+    }
     pub fn status(&self, id: &str) -> Result<Value, String> {
         self.jobs
             .lock()
@@ -92,8 +140,10 @@ impl Jobs {
                 input_path: None,
                 images: true,
                 diagnostic: None,
+                export: None,
             },
             revision,
+            ANALYSIS_WALL,
         )
     }
     pub fn diagnose(
@@ -114,8 +164,10 @@ impl Jobs {
                 input_path: None,
                 images,
                 diagnostic: Some(diagnostic),
+                export: None,
             },
             revision,
+            ANALYSIS_WALL,
         )
     }
     pub fn analyze(
@@ -135,11 +187,18 @@ impl Jobs {
                 input_path: Some(path),
                 images,
                 diagnostic: None,
+                export: None,
             },
             revision,
+            ANALYSIS_WALL,
         )
     }
-    fn start(self: &Arc<Self>, input: WorkerInput, revision: u64) -> Result<Value, String> {
+    fn start(
+        self: &Arc<Self>,
+        input: WorkerInput,
+        revision: u64,
+        wall: Duration,
+    ) -> Result<Value, String> {
         let mut jobs = self.jobs.lock();
         if jobs
             .values()
@@ -192,8 +251,16 @@ impl Jobs {
         }
         let child = Arc::new(Mutex::new(command.spawn().map_err(|e| e.to_string())?));
         let cancel = Arc::new(AtomicBool::new(false));
-        let status =
+        let mut status =
             json!({"jobId":id,"status":"running","snapshotRevision":revision,"directory":dir});
+        // An export reports progress and owns a partial file next to its
+        // destination, which an unsuccessful end must not leave behind.
+        let partial = input.export.as_ref().map(|export| {
+            status["path"] = json!(export.path);
+            status["progress"] = json!(0.0);
+            crate::export::part_path(&export.path)
+        });
+        let progress = dir.join(crate::export::PROGRESS_FILE);
         jobs.insert(
             id.clone(),
             Job {
@@ -205,12 +272,23 @@ impl Jobs {
         drop(jobs);
         let registry = Arc::clone(self);
         std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(180);
+            let deadline = Instant::now() + wall;
+            let mut tick = 0_u32;
             let outcome = loop {
                 if cancel.load(Ordering::Acquire) || Instant::now() >= deadline {
                     let _ = child.lock().kill();
                     let _ = child.lock().wait();
-                    break json!({"status":if cancel.load(Ordering::Acquire){"cancelled"}else{"failed"},"error":"worker cancelled or exceeded 180 seconds"});
+                    let cancelled = cancel.load(Ordering::Acquire);
+                    break json!({"status":if cancelled {"cancelled"} else {"failed"},
+                        "error":if cancelled {"cancelled".to_owned()} else {format!("worker exceeded {} seconds", wall.as_secs())}});
+                }
+                tick = tick.wrapping_add(1);
+                if partial.is_some() && tick.is_multiple_of(5) {
+                    if let Some(value) = crate::export::read_progress(&progress) {
+                        if let Some(job) = registry.jobs.lock().get_mut(&id) {
+                            job.status["progress"] = json!(value);
+                        }
+                    }
                 }
                 let exit = child.lock().try_wait();
                 match exit {
@@ -233,6 +311,14 @@ impl Jobs {
                     }
                 }
             };
+            if let Some(partial) = partial {
+                // The worker removes its scratch render itself unless it was
+                // killed; a cancelled export must not leave either file behind.
+                let _ = std::fs::remove_file(progress.with_file_name(crate::export::SCRATCH_FILE));
+                if outcome["status"] != "completed" {
+                    let _ = std::fs::remove_file(partial);
+                }
+            }
             if let Some(job) = registry.jobs.lock().get_mut(&id) {
                 for (key, value) in outcome.as_object().into_iter().flatten() {
                     job.status[key] = value.clone();
@@ -317,6 +403,9 @@ pub fn run_worker(path: &Path) -> std::process::ExitCode {
         let input: WorkerInput =
             serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
+        if let (Some(project), Some(export)) = (input.project.as_ref(), input.export.as_ref()) {
+            return crate::export::run(project, export, dir);
+        }
         if let Some(diagnostic) = input.diagnostic {
             return diagnose_snapshot(
                 &input.project.ok_or("missing diagnostic snapshot")?,
@@ -513,6 +602,53 @@ fn render_snapshot_with_registry(
     options: &RenderOptions,
     registry: Option<Arc<mydaw_plugin_sampler::SamplerRegistry>>,
 ) -> Result<mydaw_plugin_debug_tap::Capture, String> {
+    let mut data = Vec::new();
+    let rate = render_into(
+        file,
+        options,
+        registry,
+        RenderLength::Bars {
+            max_seconds: MAX_ANALYSIS_SECONDS,
+        },
+        &mut |block, _, total| {
+            if data.is_empty() {
+                data.reserve_exact(total * 2);
+            }
+            data.extend_from_slice(block);
+            Ok(())
+        },
+    )?;
+    Ok(mydaw_plugin_debug_tap::Capture::new(data, rate, 0))
+}
+
+/// Longest audio a CLI render or diagnosis keeps in memory.
+const MAX_ANALYSIS_SECONDS: f64 = 180.0;
+
+/// How long a render runs past its start.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RenderLength {
+    /// `options.bars`, or the pattern/arrangement rounded up to whole bars.
+    Bars { max_seconds: f64 },
+    /// Exactly to the arrangement's last clip end (song) or one pattern loop,
+    /// unless `options.bars` says otherwise. Nothing to play is refused rather
+    /// than rendered as silence.
+    Exact { max_seconds: f64 },
+}
+
+/// Receives one rendered interleaved stereo block, the frames delivered so far
+/// (including this block) and the total frames the render will deliver.
+pub(crate) type RenderSink<'a> = dyn FnMut(&[f32], usize, usize) -> Result<(), String> + 'a;
+
+/// Render `file` offline into `sink`, block by block; returns the sample rate.
+///
+/// Streaming, so an export's length is bounded by disk rather than memory.
+pub(crate) fn render_into(
+    file: &ProjectFile,
+    options: &RenderOptions,
+    registry: Option<Arc<mydaw_plugin_sampler::SamplerRegistry>>,
+    length: RenderLength,
+    sink: &mut RenderSink<'_>,
+) -> Result<f64, String> {
     use mydaw_plugin_audio_io::{run_block, AudioIoStats, RtState, RtStateParams};
     use mydaw_plugin_sequencer::{song_channel, step_len_samples, PlayMode};
     use mydaw_rt_core::{
@@ -655,23 +791,45 @@ fn render_snapshot_with_registry(
     }
     let pattern = state.sequencer().active_pattern();
     let bar_frames = step_len_samples(rate, file.bpm) * 16.0;
-    let bars = options.bars.unwrap_or_else(|| {
-        if options.mode == "pattern" {
-            u32::from(pattern.length_steps) / 16
-        } else {
-            state
-                .sequencer()
-                .playlist()
-                .end_ticks()
-                .div_ceil(3840)
-                .max(1) as u32
-        }
-    });
+    let end_ticks = state.sequencer().playlist().end_ticks();
     let start = (f64::from(options.start_bar.unwrap_or(0)) * bar_frames).round() as usize;
-    let body = (f64::from(bars) * bar_frames).round() as usize;
+    let (body, max_seconds) = match length {
+        RenderLength::Exact { max_seconds } if options.bars.is_none() => {
+            let ticks = if options.mode == "pattern" {
+                u64::from(pattern.length_steps) * u64::from(mydaw_plugin_sequencer::TICKS_PER_STEP)
+            } else {
+                end_ticks
+            };
+            if ticks == 0 {
+                return Err(if options.mode == "pattern" {
+                    "the active pattern has no length; there is nothing to render".into()
+                } else {
+                    crate::export::EMPTY_PLAYLIST.into()
+                });
+            }
+            let ticks_per_bar = f64::from(mydaw_plugin_sequencer::TICKS_PER_BAR);
+            (
+                (ticks as f64 * bar_frames / ticks_per_bar).round() as usize,
+                max_seconds,
+            )
+        }
+        RenderLength::Exact { max_seconds } | RenderLength::Bars { max_seconds } => {
+            let bars = options.bars.unwrap_or_else(|| {
+                if options.mode == "pattern" {
+                    u32::from(pattern.length_steps) / 16
+                } else {
+                    end_ticks.div_ceil(3840).max(1) as u32
+                }
+            });
+            ((f64::from(bars) * bar_frames).round() as usize, max_seconds)
+        }
+    };
     let tail = (options.tail_seconds.unwrap_or(2.0) * rate).round() as usize;
-    if (start + body + tail) as f64 / rate > 180.0 {
-        return Err("snapshot render exceeds 180 seconds of audio; render a shorter range".into());
+    if (start + body + tail) as f64 / rate > max_seconds {
+        return Err(format!(
+            "render exceeds {} of audio; render a shorter range",
+            seconds_label(max_seconds)
+        ));
     }
     let (mut commands, command_rx) = rt_channel::<RtCommand>(8);
     let (_notes_tx, notes) = note_channel(mydaw_rt_core::DEFAULT_NOTE_CAPACITY);
@@ -707,14 +865,17 @@ fn render_snapshot_with_registry(
         max_block,
         stats: Arc::clone(&stats),
     });
-    let mut data = Vec::with_capacity((body + tail) * 2);
-    let mut block = vec![0.0; 256 * 2];
+    let total = body + tail;
+    let mut delivered = 0;
+    let mut failure = None;
+    let mut buffer = vec![0.0; 256 * 2];
     let mut position = 0;
     while position < start + body + tail {
         if position == start + body {
-            commands
-                .push(RtCommand::SetPlaying(false))
-                .map_err(|e| e.to_string())?;
+            if let Err(error) = commands.push(RtCommand::SetPlaying(false)) {
+                failure = Some(error.to_string());
+                break;
+            }
         }
         let boundary = if position < start {
             start
@@ -724,9 +885,18 @@ fn render_snapshot_with_registry(
             start + body + tail
         };
         let frames = (boundary - position).min(256);
-        run_block(&mut rt, &mut block[..frames * 2]);
+        let block = &mut buffer[..frames * 2];
+        run_block(&mut rt, block);
         if position >= start {
-            data.extend_from_slice(&block[..frames * 2]);
+            if block.iter().any(|v| !v.is_finite()) {
+                failure = Some("plugin produced non-finite audio".to_owned());
+                break;
+            }
+            delivered += frames;
+            if let Err(error) = sink(block, delivered, total) {
+                failure = Some(error);
+                break;
+            }
         }
         position += frames;
     }
@@ -737,13 +907,21 @@ fn render_snapshot_with_registry(
     hosts.vst3.shutdown();
     hosts.clap.shutdown();
     kernel.shutdown();
+    if let Some(error) = failure {
+        return Err(error);
+    }
     if dropped != 0 {
         return Err(format!("render dropped {dropped} note events"));
     }
-    if data.iter().any(|v| !v.is_finite()) {
-        return Err("plugin produced non-finite audio".into());
+    Ok(rate)
+}
+
+fn seconds_label(seconds: f64) -> String {
+    if seconds >= 120.0 {
+        format!("{} minutes", (seconds / 60.0).round())
+    } else {
+        format!("{seconds} seconds")
     }
-    Ok(mydaw_plugin_debug_tap::Capture::new(data, rate, 0))
 }
 
 #[cfg(test)]

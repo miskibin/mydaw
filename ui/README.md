@@ -198,6 +198,7 @@ wonder where the lead went.
 | `save_clap_state` / `load_clap_state` | an empty string means the plugin has no state extension |
 | `get_project_info` | `ProjectInfo { path, name, missingPlugins, warnings }` |
 | `new_project` / `open_project` / `save_project` | `open`/`save` take an optional explicit `path`; **`null` means the user cancelled** — not an error |
+| `export_audio` / `job_status` / `cancel_job` | File › Export › WAV (Ctrl+R). `export_audio { options: ExportOptions, path }` asks with a save dialog when `path` is null (`null` back = cancelled) and returns an `ExportJobStatus` as soon as the worker starts; poll `job_status { jobId }` for `progress` 0..1, then `completed` with `seconds`, `peakDbfs`, `clippedSamples`, or `failed` with `error` |
 
 The file dialogs are **Rust's, not the webview's**: the dialog plugin only
 exists inside the app, so a view raising one directly would be a blank screen in
