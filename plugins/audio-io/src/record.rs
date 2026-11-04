@@ -819,6 +819,9 @@ impl RecordService {
             Some(MonitorReader::new(monitor_rx, f64::from(device_rate))),
             Some(Arc::clone(&shared)),
         );
+        if let Ok(id) = device.id() {
+            crate::ducking::opt_out_of_ducking(id.id());
+        }
         let stream = match build_stream(&device, config, format, rt, Arc::clone(&shared)) {
             Ok(stream) => stream,
             Err(err) => {

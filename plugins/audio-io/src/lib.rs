@@ -62,6 +62,7 @@
 //! println!("{} @ {} Hz", info.device_name, info.sample_rate);
 //! ```
 
+mod ducking;
 pub mod input;
 pub mod monitor;
 mod output;

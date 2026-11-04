@@ -42,6 +42,11 @@ log.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true
 
+# The input opts out of Windows' call ducking (see `ducking.rs`). The same
+# version cpal's WASAPI host already builds, so it adds no compile.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_System_Com"] }
+
 [features]
 default = []
 # cpal's ASIO host: Steinberg SDK + LLVM/Clang (bindgen). Off by default so
