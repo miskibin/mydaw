@@ -173,8 +173,67 @@ fn recording_lands_as_a_clip_on_the_armed_track() {
     assert!((take.start - 8.0).abs() < 1e-9, "take starts at {}", take.start);
     let secs = take.len * 60.0 / p.bpm;
     assert!(secs > 0.8 && secs < 1.2, "take is {secs} s");
+    // Stop returns the shared playhead to the start marker (where this take began).
+    assert!((e.shared().beat() - 8.0).abs() < 1e-9, "playhead after stop is {}", e.shared().beat());
     assert!(e.undo());
     assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Audio));
+}
+
+/// Disarming the red Rec button (punch-out) must commit the take — otherwise the clip
+/// "disappears" when the mic stream closes and rebuilds the audio device.
+#[test]
+fn disarming_rec_commits_the_take_without_stop() {
+    let mut p = Project::demo();
+    for t in p.tracks.iter_mut() {
+        t.arm = false;
+    }
+    p.tracks[4].arm = true;
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    let mut rt = e.create_rt(48000.0, 256);
+    e.set_transport(None, Some(false), Some(true), None); // rec on, no count-in
+    e.play(4.0);
+    let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
+    let tone: Vec<f32> = (0..256).map(|i| (i as f32 * 0.1).sin() * 0.3).collect();
+    for _ in 0..((48000.0 * 1.0) as usize / 256) {
+        rt.process(&mut l, &mut r, Some((&tone, &tone)));
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
+    e.set_transport(None, None, Some(false), None); // unclick Rec
+    let project = e.project();
+    let take = project.clips.iter().find(|c| c.kind == ClipKind::Audio).expect("take vanished on disarm");
+    assert_eq!(take.track, 4);
+    assert!((take.start - 4.0).abs() < 1e-9);
+    assert!(e.state().transport.playing, "punch-out should not stop playback by itself");
+    e.stop();
+}
+
+/// Rebuilding the device mid-take (mic close) used to drop the ring and leave `take` set,
+/// so the next Play/Rec did nothing. The take must land as a clip and transport must run again.
+#[test]
+fn device_rebuild_during_recording_commits_take_and_unblocks_play() {
+    let mut p = Project::demo();
+    for t in p.tracks.iter_mut() {
+        t.arm = false;
+    }
+    p.tracks[4].arm = true;
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    let mut rt = e.create_rt(48000.0, 256);
+    e.set_transport(None, Some(false), Some(true), None);
+    e.play(0.0);
+    let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
+    let tone: Vec<f32> = (0..256).map(|i| (i as f32 * 0.07).sin() * 0.25).collect();
+    for _ in 0..((48000.0 * 0.8) as usize / 256) {
+        rt.process(&mut l, &mut r, Some((&tone, &tone)));
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
+    // Simulate audio-io reopening the device when the mic stream closes.
+    let mut rt2 = e.create_rt(48000.0, 256);
+    assert!(e.project().clips.iter().any(|c| c.kind == ClipKind::Audio), "take lost on device rebuild");
+    assert!(!e.state().transport.playing);
+    e.play(0.0);
+    assert!(e.state().transport.playing, "play stayed blocked after orphan take");
+    rt2.process(&mut l, &mut r, None);
+    e.stop();
 }
 
 #[test]

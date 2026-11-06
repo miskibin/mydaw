@@ -18,9 +18,10 @@ export async function play(from = U.start) {
   catch (e) { setU('playing', false); say('Błąd odtwarzania: ' + String(e)); }
 }
 export async function stop() {
+  // Stop returns the playhead to the start marker (ruler "start"), not where playback paused.
   setU('playing', false);
   try { await be().transportStop(); setTransport({ playing: false }); } catch (e) { console.warn(e); }
-  say('Stop');
+  say('Stop · ' + fmtPos(U.start));
 }
 export const togglePlay = () => (U.playing ? stop() : play());
 export function seek(b: number) {
@@ -34,8 +35,11 @@ export async function setTransportFlag(k: 'metro' | 'countIn' | 'rec' | 'monitor
 }
 export function toggleRec() {
   const on = !S.transport.rec;
+  const punchingOut = !on && U.playing;
   void setTransportFlag('rec', on);
-  say(on ? (U.playing ? '● Punch in' : 'Nagrywanie uzbrojone — Spacja startuje' + (S.transport.countIn ? ' (z count-in)' : '')) : 'Nagrywanie wyłączone');
+  say(on
+    ? (U.playing ? '● Punch in' : 'Nagrywanie uzbrojone — Spacja startuje' + (S.transport.countIn ? ' (z count-in)' : ''))
+    : (punchingOut ? 'Punch out — finalizuję take' : 'Nagrywanie wyłączone'));
 }
 export function toggleMonitor() {
   const on = !S.transport.monitor;

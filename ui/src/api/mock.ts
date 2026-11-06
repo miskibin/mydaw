@@ -172,7 +172,10 @@ export class MockBackend implements Backend {
   }
   async transportStop() {
     this.finishRec();
+    // Playhead returns to the start marker (same as the live engine).
     this.tr = { ...this.tr, playing: false };
+    this.playFrom = this.tr.startBeat;
+    this.playT0 = performance.now();
     this.changedTransport();
   }
   async transportSet(patch: Partial<TransportDto>) {

@@ -64,6 +64,9 @@ impl Shared {
     pub fn beat(&self) -> f64 {
         f64::from_bits(self.beat.load(Relaxed))
     }
+    pub fn set_beat(&self, beat: f64) {
+        self.beat.store(beat.to_bits(), Relaxed);
+    }
     pub fn take_meter(&self, idx: usize) -> (f32, f32) {
         let (l, r) = &self.meters[idx];
         (f32::from_bits(l.swap(0, Relaxed)), f32::from_bits(r.swap(0, Relaxed)))
@@ -241,6 +244,8 @@ pub enum Cmd {
     Params { fx: Id, params: Option<ParamBlock>, mix: f32 },
     Play { from: f64, count_in: f64, rec: bool },
     Stop,
+    /// Punch in/out while transport keeps running. `from` is the clip start when `on`.
+    Rec { on: bool, from: f64 },
     Flags { metro: bool, monitor: bool },
     Watch { ids: [Id; WATCH_SLOTS], n: u8 },
     Preview(Option<Box<Preview>>),
@@ -392,6 +397,14 @@ impl Rt {
                     self.shared.stopped_at_end.store(false, Relaxed);
                 }
                 Cmd::Stop => self.stop(false),
+                Cmd::Rec { on, from } => {
+                    self.rec = on;
+                    if on {
+                        self.rec_start = from;
+                    } else {
+                        self.shared.recording.store(false, Relaxed);
+                    }
+                }
                 Cmd::Flags { metro, monitor } => {
                     self.metro = metro;
                     self.monitor = monitor;

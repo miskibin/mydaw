@@ -185,6 +185,16 @@ impl Engine {
     /// blocks of at most `max_block`. Any previous `Rt` becomes inert: drop it
     /// (off the audio thread) once its stream has stopped.
     pub fn create_rt(&self, sample_rate: f32, max_block: usize) -> Rt {
+        // Closing the mic (Bluetooth headset profile) rebuilds the device and drops the
+        // old record ring. Commit any in-progress take against that ring first — otherwise
+        // the take vanishes and `play` refuses to start while `take` stays set.
+        let had_take = self.core.lock().take.is_some();
+        if had_take {
+            self.finish_take();
+            let c = self.core.lock();
+            self.changed(c);
+        }
+
         let max_block = max_block.clamp(16, 8192);
         let (cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(4096);
         let (gb_tx, gb_rx) = rtrb::RingBuffer::<Garbage>::new(4096);
@@ -217,7 +227,14 @@ impl Engine {
         let watch = watch_cmd(&c.watch);
         send(&mut c, flags);
         send(&mut c, watch);
+        // Mic open/close rebuilds the stream and drops the old callback — playback cannot continue.
+        let stopped = c.transport.playing;
         c.transport.playing = false;
+        if stopped {
+            let dto = self.dto(&c);
+            drop(c);
+            self.notify(dto);
+        }
         rt
     }
 
@@ -345,6 +362,17 @@ impl Engine {
     // ------------------------------------------------------------ transport
 
     pub fn play(&self, from: f64) {
+        // An orphan take (device rebuild while armed) used to make this a silent no-op, so
+        // play/record appeared permanently broken until restart. Finalize it first.
+        {
+            let c = self.core.lock();
+            if c.take.is_some() && !c.transport.playing {
+                drop(c);
+                self.finish_take();
+                let c = self.core.lock();
+                self.changed(c);
+            }
+        }
         let mut c = self.core.lock();
         if c.take.is_some() {
             return;
@@ -369,10 +397,13 @@ impl Engine {
         let mut c = self.core.lock();
         send(&mut c, Cmd::Stop);
         c.transport.playing = false;
+        // Playhead returns to the start marker (not the place playback stopped).
+        let start = c.transport.start_beat;
         drop(c);
         // give the callback a moment to flush the last input
         thread::sleep(Duration::from_millis(30));
         self.finish_take();
+        self.shared().set_beat(start);
         let c = self.core.lock();
         self.changed(c);
     }
@@ -384,7 +415,11 @@ impl Engine {
     }
 
     pub fn set_transport(&self, metro: Option<bool>, count_in: Option<bool>, rec: Option<bool>, monitor: Option<bool>) -> TransportDto {
+        // Playhead for punch-in: read before taking the core lock (create_rt locks shared→core).
+        let playhead = self.shared().beat().max(0.0);
+
         let mut c = self.core.lock();
+        let was_rec = c.transport.rec;
         if let Some(v) = metro {
             c.transport.metro = v;
         }
@@ -399,6 +434,31 @@ impl Engine {
         }
         let f = Cmd::Flags { metro: c.transport.metro, monitor: c.transport.monitor };
         send(&mut c, f);
+
+        // Punch out: disarming rec ends the take without requiring Stop first.
+        // (Toggling rec also closes the mic stream, which rebuilds the device — see create_rt.)
+        if was_rec && !c.transport.rec && c.take.is_some() {
+            send(&mut c, Cmd::Rec { on: false, from: 0.0 });
+            let t = c.transport.clone();
+            drop(c);
+            thread::sleep(Duration::from_millis(30));
+            self.finish_take();
+            let c = self.core.lock();
+            self.changed(c);
+            return t;
+        }
+
+        // Punch in: arming rec while already playing starts a take at the playhead.
+        if !was_rec && c.transport.rec && c.transport.playing && c.take.is_none() {
+            let track = c.project.tracks.iter().position(|t| t.arm);
+            if let (Some(track), Some(w)) = (track, c.wires.as_ref()) {
+                let sr = w.sr as u32;
+                let from = playhead;
+                c.take = Some(Take { track, start: from, sr, data: Vec::with_capacity(sr as usize * 2 * 60), peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) });
+                send(&mut c, Cmd::Rec { on: true, from });
+            }
+        }
+
         let t = c.transport.clone();
         self.changed(c);
         t
