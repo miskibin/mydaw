@@ -158,12 +158,21 @@ impl Engine {
         thread::Builder::new()
             .name("wave-housekeeping".into())
             .spawn(move || {
+                // fixed 60 Hz cadence (sleeping a fixed time *after* the work made frames uneven)
+                let period = Duration::from_micros(16_667);
+                let mut next = std::time::Instant::now();
                 let mut tick = 0u32;
                 while let Some(e) = weak.upgrade() {
                     e.housekeeping(tick);
                     drop(e);
                     tick = tick.wrapping_add(1);
-                    thread::sleep(Duration::from_millis(16));
+                    next += period;
+                    let now = std::time::Instant::now();
+                    if next > now {
+                        thread::sleep(next - now);
+                    } else {
+                        next = now;
+                    }
                 }
             })
             .expect("spawn housekeeping thread");
@@ -463,6 +472,7 @@ impl Engine {
                     pan: 0.0,
                     norm: false,
                     rev: false,
+                    tune: None,
                 });
                 clip_ids.push(cid);
             }
@@ -783,7 +793,7 @@ impl Engine {
             let c = &mut *guard;
             let Some(w) = c.wires.as_mut() else { return };
             while w.garbage.pop().is_ok() {}
-            let analysis = if tick % 2 == 0 { Some(w.analyzer.analyze(&c_watch(&c.watch), &shared)) } else { None };
+            let analysis = if c.watch.is_empty() { None } else { Some(w.analyzer.analyze(&c_watch(&c.watch), &shared)) };
             let w = c.wires.as_mut().unwrap();
             let sr = w.sr as u32;
             // drain recorded input
@@ -888,6 +898,7 @@ impl Engine {
             pan: 0.0,
             norm: false,
             rev: false,
+            tune: None,
         });
         push_undo(&mut c, before);
         c.revision += 1;
@@ -982,6 +993,8 @@ fn mix_state(p: &Project) -> MixState {
 /// thread keeps the running instance; everything else is created and prepared here.
 pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: usize, factory: &dyn PluginFactory, live_instances: bool, errs: &mut HashMap<Id, String>) -> Graph {
     let ins_state = audible_inserts(p);
+    let lat: Vec<usize> = p.inserts.iter().map(|m| m.fx.iter().map(|f| crate::catalog::latency(f, sr)).sum()).collect();
+    let max_lat = lat.iter().skip(1).copied().max().unwrap_or(0);
     let inserts = p
         .inserts
         .iter()
@@ -1014,7 +1027,9 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
                     FxSlot { id: f.id, bypass: f.bypass, proc, params }
                 })
                 .collect();
-            InsertRt::new(id, gain, pan, on, fx, max_block)
+            let k = p.inserts.iter().position(|x| x.id == id).unwrap_or(0);
+            let comp = if k == 0 { 0 } else { max_lat - lat[k] };
+            InsertRt::new(id, gain, pan, on, fx, max_block).with_delay(comp)
         })
         .collect();
     let track_state = audible_tracks(p);

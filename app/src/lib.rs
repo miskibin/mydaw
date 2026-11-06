@@ -106,7 +106,16 @@ async fn transport_set(app: St<'_>, metro: Option<bool>, count_in: Option<bool>,
     if let Some(b) = start_beat {
         app.engine.set_start(b);
     }
-    Ok(app.engine.set_transport(metro, count_in, rec, monitor))
+    let t = app.engine.set_transport(metro, count_in, rec, monitor);
+    // the mic is opened only while recording or monitoring is on (Bluetooth headphones
+    // drop to the low-quality headset profile whenever a mic stream is open)
+    if rec.is_some() || monitor.is_some() {
+        let need = t.rec || t.monitor;
+        let a = app.inner().clone();
+        let st = tauri::async_runtime::spawn_blocking(move || a.audio.set_input(need)).await.map_err(es)?;
+        *app.status.lock() = st;
+    }
+    Ok(t)
 }
 
 #[tauri::command]

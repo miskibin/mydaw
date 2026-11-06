@@ -121,7 +121,8 @@ f32 inLevel         // input peak since last frame (linear)
 f32 previewPos      // seconds into the previewed file, -1 when not previewing
 f32 cpu             // audio callback load 0..1
 u32 nIns  × { u32 insertId, f32 peakL, f32 peakR }            // linear peaks since last frame
-u32 nFx   × { u32 fxId, f32 inPeak, f32 outPeak, f32 grDb,     // only watched fx, only on analysis frames (≈30 Hz)
+u32 nFx   × { u32 fxId, f32 inPeak, f32 outPeak, f32 grDb,     // only watched fx (every frame, 60 Hz)
+              f32 meters[32],                                   // per-type live readings, see "Effect meters"
               f32 specIn[128], f32 specOut[128],               // dBFS, 128 log bands 20 Hz..20 kHz (reverb: specOut = wet only)
               f32 scopeIn[256], f32 scopeOut[256] }            // last samples, mono
 u32 rec             // 0, or 1 followed by:

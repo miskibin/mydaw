@@ -1,5 +1,8 @@
 //! The one interface every effect in an insert chain implements — built-in DSP and hosted VST3 alike.
 
+/// Live readings per effect for its visualisation.
+pub const METERS: usize = 32;
+
 /// What the audio thread knows about the moment being processed.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ProcessCtx {
@@ -35,6 +38,10 @@ pub trait Processor: Send {
         0.0
     }
 
+    /// Up to 32 live readings for the effect's visualisation (pitch, envelope, …);
+    /// meaning is per effect type, documented in docs/architecture.md.
+    fn meters(&self, _out: &mut [f32; METERS]) {}
+
     /// Mono tap of the wet signal only, for effects whose interesting output is
     /// not the mix (reverb). `None` → analysers use the processor output.
     fn wet_tap(&self) -> Option<&[f32]> {
@@ -48,15 +55,23 @@ pub trait Processor: Send {
 pub struct ParamBlock {
     /// Built-in effect parameters, in the order of the type's parameter list (see `fx::params`).
     pub values: [f32; 8],
-    /// EQ bands: on, type (0 lowcut … 4 highcut), f, g, q.
-    pub bands: [BandParams; 7],
+    /// EQ bands (unused slots have `on = false`).
+    pub bands: [BandParams; 24],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BandParams {
     pub on: bool,
+    /// 0 lowcut, 1 lowshelf, 2 peak, 3 highshelf, 4 highcut, 5 notch, 6 bandpass, 7 tilt
     pub kind: u8,
     pub f: f32,
     pub g: f32,
     pub q: f32,
+    /// biquad stages for cut filters (1..4)
+    pub stages: u8,
+    /// 0 stereo, 1 left, 2 right, 3 mid, 4 side
+    pub place: u8,
+    pub dynamic: bool,
+    pub range: f32,
+    pub thr: f32,
 }

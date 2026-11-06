@@ -272,8 +272,8 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
 fn validate_fx(fx: &Fx) -> Result<(), OpError> {
     if fx.kind == FxKind::Eq {
         match &fx.bands {
-            Some(b) if b.len() == 7 => {}
-            _ => return Err(OpError::Invalid("an EQ needs exactly 7 bands".into())),
+            Some(b) if b.len() <= MAX_BANDS => {}
+            _ => return Err(OpError::Invalid(format!("an EQ has 0..{MAX_BANDS} bands"))),
         }
     }
     if fx.kind == FxKind::Vst3 && fx.plugin.is_none() {

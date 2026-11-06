@@ -176,3 +176,22 @@ fn recording_lands_as_a_clip_on_the_armed_track() {
     assert!(e.undo());
     assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Audio));
 }
+
+#[test]
+fn latency_is_compensated_across_inserts() {
+    // a pitch corrector on one insert must not make that track late against the others
+    let mut p = Project::demo();
+    p.inserts[0].fx.clear();
+    let tune = wave_engine::catalog::new_fx(7000, FxKind::Tune, p.bpm);
+    p.inserts[6].fx = vec![tune];
+    p.tracks[5].muted = false;
+    let e = Engine::new(p.clone(), Arc::new(NoPlugins));
+    let with = e.render(0.0, 1.0, 0.0, 48000).unwrap();
+    let lat = wave_engine::vocal::tune_latency(48000.0);
+    // the kick on beat 1 should now start `lat` samples later than without the tuner
+    let mut q = p;
+    q.inserts[6].fx.clear();
+    let without = Engine::new(q, Arc::new(NoPlugins)).render(0.0, 1.0, 0.0, 48000).unwrap();
+    let onset = |x: &[f32]| x.chunks(2).position(|f| f[0].abs() > 0.05).unwrap();
+    assert_eq!(onset(&with), onset(&without) + lat);
+}

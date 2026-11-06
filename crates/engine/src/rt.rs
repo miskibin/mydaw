@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::model::{Id, Inst};
-use crate::processor::{ParamBlock, ProcessCtx, Processor};
+use crate::processor::{ParamBlock, ProcessCtx, Processor, METERS};
 use crate::sources::Audio;
 use crate::synth::{VoiceKind, VoicePool};
 
@@ -29,6 +29,7 @@ pub struct Shared {
     /// Per insert *index*: (L, R) peak since last read.
     meters: Vec<(AtomicU32, AtomicU32)>,
     gr: Vec<AtomicU32>,
+    fx_meters: Vec<[AtomicU32; METERS]>,
     pub sample_rate: AtomicU32,
 }
 
@@ -56,6 +57,7 @@ impl Shared {
             preview_pos: AtomicU32::new((-1f32).to_bits()),
             meters: (0..MAX_INSERTS).map(|_| (AtomicU32::new(0), AtomicU32::new(0))).collect(),
             gr: (0..WATCH_SLOTS).map(|_| AtomicU32::new(0)).collect(),
+            fx_meters: (0..WATCH_SLOTS).map(|_| std::array::from_fn(|_| AtomicU32::new(0))).collect(),
             sample_rate: AtomicU32::new(48000),
         }
     }
@@ -74,6 +76,9 @@ impl Shared {
     }
     pub fn preview_pos(&self) -> f32 {
         fget(&self.preview_pos)
+    }
+    pub fn fx_meters(&self, slot: usize) -> [f32; METERS] {
+        std::array::from_fn(|i| fget(&self.fx_meters[slot][i]))
     }
     pub fn gr(&self, slot: usize) -> f32 {
         fget(&self.gr[slot])
@@ -105,11 +110,24 @@ pub struct InsertRt {
     g_cur: f32,
     l: Vec<f32>,
     r: Vec<f32>,
+    /// Latency compensation: extra delay so this insert lines up with the slowest one.
+    pdc_l: Vec<f32>,
+    pdc_r: Vec<f32>,
+    pdc_w: usize,
 }
 
 impl InsertRt {
     pub fn new(id: Id, gain: f32, pan: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
-        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block] }
+        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0 }
+    }
+
+    /// Delays this insert's output by `samples` (allocates; call off the audio thread).
+    pub fn with_delay(mut self, samples: usize) -> Self {
+        if samples > 0 {
+            self.pdc_l = vec![0.0; samples];
+            self.pdc_r = vec![0.0; samples];
+        }
+        self
     }
 }
 
@@ -516,6 +534,18 @@ impl Rt {
                 fmax(&self.shared.meters[k].0, pl);
                 fmax(&self.shared.meters[k].1, pr);
             }
+            if !ins.pdc_l.is_empty() {
+                let d = ins.pdc_l.len();
+                for i in 0..n {
+                    let w = ins.pdc_w;
+                    let (a, b) = (ins.pdc_l[w], ins.pdc_r[w]);
+                    ins.pdc_l[w] = ins.l[i];
+                    ins.pdc_r[w] = ins.r[i];
+                    ins.l[i] = a;
+                    ins.r[i] = b;
+                    ins.pdc_w = if w + 1 == d { 0 } else { w + 1 };
+                }
+            }
             if k != 0 {
                 let master = &mut head[0];
                 for i in 0..n {
@@ -654,6 +684,13 @@ fn run_chain(ins: &mut InsertRt, n: usize, ctx: &ProcessCtx, watch: &[Id], taps:
             }
             let gr = if slot.bypass { 0.0 } else { slot.proc.as_ref().map(|p| p.gain_reduction_db()).unwrap_or(0.0) };
             fset(&shared.gr[w], gr);
+            let mut m = [0f32; METERS];
+            if let Some(p) = slot.proc.as_ref() {
+                p.meters(&mut m);
+            }
+            for (a, v) in shared.fx_meters[w].iter().zip(m) {
+                fset(a, v);
+            }
         }
     }
 }

@@ -29,6 +29,10 @@ export class ReverbViz implements Viz {
   private frames: Float32Array[] = [];
   private last = 0;
   private zeroRows = NS;
+  /** 0..1: how far the waterfall has scrolled toward the next row (smooth 60 fps motion). */
+  private phase = 0;
+  /** Freshest spectrum, drawn as the front edge every frame. */
+  private live = new Float32Array(K);
   private modelKey = '';
   private model: { pts: Float32Array; n: number }[] = [];
   private proj: ((x: number, y: number, z: number) => [number, number]) | null = null;
@@ -45,25 +49,33 @@ export class ReverbViz implements Viz {
 
   update(fx: Fx, a: FxFrame | null, now: number): boolean {
     const p = fx.params, Tmax = Math.max(0.6, ((p.pre ?? 0) / 1000 + (p.size ?? 2)) * 1.05);
-    const t = now / 1000;
+    const t = now / 1000, step = Tmax / (NS - 1);
     let changed = this.drawnView !== this.viewVersion;
-    if (t - this.last >= Tmax / (NS - 1) || t < this.last) {
-      this.last = t;
+    // the freshest spectrum, every frame
+    let any = false;
+    if (a && a.outPeak > 1e-6) {
+      for (let k = 0; k < K; k++) {
+        const [b0, b1] = KB[k];
+        let m = -200;
+        for (let b = b0; b <= b1; b++) if (a.specOut[b] > m) m = a.specOut[b];
+        const v = clamp((m + 4.5 * Math.log2(FK[k] / 1000) + 105) / 75, 0, 1);
+        // light smoothing so 30 Hz analysis frames don't flicker at 60 fps
+        this.live[k] += (v - this.live[k]) * 0.5;
+        if (this.live[k] > 0.002) any = true;
+      }
+    } else {
+      for (let k = 0; k < K; k++) this.live[k] *= 0.6;
+    }
+    if (t - this.last >= step || t < this.last) {
+      this.last = t < this.last ? t : this.last + step * Math.floor((t - this.last) / step);
       const row = this.frames.pop()!;
-      let any = false;
-      if (a && a.outPeak > 1e-6) {
-        for (let k = 0; k < K; k++) {
-          const [b0, b1] = KB[k];
-          let m = -200;
-          for (let b = b0; b <= b1; b++) if (a.specOut[b] > m) m = a.specOut[b];
-          const v = clamp((m + 4.5 * Math.log2(FK[k] / 1000) + 105) / 75, 0, 1);
-          row[k] = v; if (v > 0) any = true;
-        }
-      } else row.fill(0);
+      row.set(this.live);
       this.frames.unshift(row);
       this.zeroRows = any ? 0 : this.zeroRows + 1;
-      if (this.zeroRows <= NS) changed = true;
     }
+    this.phase = clamp((t - this.last) / step, 0, 1);
+    // keep animating while anything is still visible in the waterfall
+    if (any || this.zeroRows <= NS + 1) changed = true;
     return changed;
   }
 
@@ -110,16 +122,19 @@ export class ReverbViz implements Viz {
     g.drawImage(this.floor.get(W, H, mk + fx.bypass, c => drawFloor(c, P, Tmax, pre)) as CanvasImageSource, 0, 0, W, H);
     g.globalAlpha = fx.bypass ? 0.45 : 1;
     g.lineWidth = 1;
-    for (let i = NS - 1; i >= 0; i--) {
-      const z = i / (NS - 1), fr = 1 - z, row = this.frames[i];
+    // rows glide back continuously; the oldest one slides off the far edge
+    for (let i = NS; i >= 0; i--) {
+      const zRow = i === 0 ? 0 : (i - 1 + this.phase) / (NS - 1);
+      if (zRow > 1) continue;
+      const z = zRow, fr = 1 - z, row = i === 0 ? this.live : this.frames[i - 1];
       // live ridge (filled, occludes what is behind)
       g.beginPath(); let q = P(-1, 0, z); g.moveTo(q[0], q[1]);
       for (let k = 0; k < K; k++) { q = P(XK[k], row[k], z); g.lineTo(q[0], q[1]); }
       q = P(1, 0, z); g.lineTo(q[0], q[1]); g.closePath();
       g.fillStyle = 'rgba(12,14,18,.9)'; g.fill(); g.fillStyle = 'rgba(71,184,168,' + (0.03 + 0.12 * fr) + ')'; g.fill();
       g.strokeStyle = 'rgba(105,195,214,' + (0.18 + 0.75 * fr) + ')'; g.lineWidth = i === 0 ? 1.6 : 1; g.stroke();
-      // model ridge
-      const m = this.model[i];
+      // model ridge (time after the hit is fixed, so it does not scroll)
+      const m = i < NS ? this.model[i] : undefined;
       if (m && m.n > 0) {
         g.beginPath(); g.moveTo(m.pts[0], m.pts[1]);
         for (let k = 1; k < m.n; k++) g.lineTo(m.pts[2 * k], m.pts[2 * k + 1]);
