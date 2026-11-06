@@ -1,27 +1,31 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { be } from '../api/backend';
-import type { BandType, EqBand, Fx, Id, ParamDef, Vst3Param } from '../api/types';
-import { fx2x, x2f } from '../lib/eq';
-import { clamp, dbText, hzText } from '../lib/format';
-import { defaultBands, paramDefs, pFmt, pNorm, presetInfo, presetList, pVal } from '../lib/presets';
+import type { Fx, Id, ParamDef, Vst3Param } from '../api/types';
+import { clamp } from '../lib/format';
+import { NOTE_NAMES } from '../lib/pitch';
+import { paramDefs, pFmt, pNorm, presetInfo, presetList, pVal } from '../lib/presets';
 import * as A from '../state/actions';
+import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { findFx, insName, S } from '../state/store';
 import { tele } from '../state/telemetry';
-import { openMenu, say, setU, U, type PlugWin } from '../state/ui';
+import { openMenu, say, U, type PlugWin } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
-import { FxTile } from '../ui/icons';
-import { Knob } from '../ui/Knob';
-import { BAND_COLORS, type Viz } from './fx/common';
+import { FXMETA, FxTile } from '../ui/icons';
+import { Knob, MiniKnob, Segmented } from '../ui/Knob';
+import { theme } from '../ui/theme';
+import type { Viz } from './fx/common';
+import { deessDb, DeessViz, deessFx, deessGeom, deessXf, deessY } from './fx/deess';
 import { DynViz } from './fx/dyn';
-import { bandY, EqViz } from './fx/eq';
+import { EqViz } from './fx/eq';
+import { EqPanel, eqHover, eqLeave, eqPointerDown, eqWheel } from './fx/eqEdit';
+import { fetModes, FetViz, type FetMode } from './fx/fet';
 import { defaultView, ReverbViz, views3d } from './fx/reverb';
 import { DelayViz, SatViz } from './fx/satDelay';
+import { TuneViz } from './fx/tune';
 
 const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
-const BTYPE_ORDER: BandType[] = ['lowcut', 'lowshelf', 'peak', 'highshelf', 'highcut'];
-const BTYPE_LABEL: Record<BandType, string> = { lowcut: 'Low cut', lowshelf: 'Low shelf', peak: 'Bell', highshelf: 'High shelf', highcut: 'High cut' };
 
 function makeViz(f: Fx): Viz | null {
   switch (f.type) {
@@ -30,13 +34,27 @@ function makeViz(f: Fx): Viz | null {
     case 'sat': return new SatViz();
     case 'delay': return new DelayViz();
     case 'reverb': return new ReverbViz(f.id);
+    case 'tune': return new TuneViz();
+    case 'fet': return new FetViz(f.id);
+    case 'deess': return new DeessViz();
     default: return null;
   }
 }
+const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230 };
+/** Default window widths per type (actions.openPlug). */
+export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680 };
+
+const HINTS: Partial<Record<Fx['type'], string>> = {
+  eq: 'kółko = Q · PPM na punkcie = kształt / kanał / dynamika · PPM na tle = nowy band danego typu',
+  reverb: 'Przeciągnij = obrót 3D · 2× klik = reset',
+  deess: 'Przeciągnij linię THR = próg · uchwyt częstotliwości = pasmo detekcji',
+  fet: 'Klik na wskaźnik = GR / OUT',
+  tune: 'Retune: 0 ms = efekt robota, dłużej = naturalnie',
+};
 
 /** Move a fixed window by its header. */
 export function moveWindow(e: PointerEvent, get: () => { x: number; y: number; w: number }, set: (x: number, y: number) => void) {
-  if (e.button !== 0 || (e.target as HTMLElement).closest('button,select,input')) return;
+  if (e.button !== 0 || (e.target as HTMLElement).closest('button,select,input,.miniknob')) return;
   e.preventDefault();
   const sx = e.clientX, sy = e.clientY, o = { ...get() };
   track(ev => set(clamp(o.x + ev.clientX - sx, 80 - o.w, window.innerWidth - 80), clamp(o.y + ev.clientY - sy, 0, window.innerHeight - 40)), null, 'grabbing');
@@ -44,32 +62,33 @@ export function moveWindow(e: PointerEvent, get: () => { x: number; y: number; w
 
 export function FxWindow(props: { pw: PlugWin; z: number }) {
   const ff = () => findFx(props.pw.fxId);
-  const setPos = (x: number, y: number) => setU('plugs', p => p.fxId === props.pw.fxId, { x, y });
+  const setPos = (x: number, y: number) => A.movePlug(props.pw.fxId, x, y);
   return (
     <Show when={ff()}>
       {got => {
         const fx = () => got().f, m = () => got().m;
-        const isEq = () => fx().type === 'eq', isVerb = () => fx().type === 'reverb', isVst = () => fx().type === 'vst3';
+        const isVst = () => fx().type === 'vst3';
         const info = () => presetInfo(S.catalog, fx(), S.project.bpm);
         return (
-          <div class="win" style={{ left: props.pw.x + 'px', top: props.pw.y + 'px', width: props.pw.w + 'px', 'z-index': props.z }} data-fxwin={props.pw.fxId}
+          <div class="win fxwin" style={{ left: props.pw.x + 'px', top: props.pw.y + 'px', width: props.pw.w + 'px', 'z-index': props.z }} data-fxwin={props.pw.fxId}
             onPointerDown={() => A.plugFront(props.pw.fxId)}>
             <div class="winhd" onPointerDown={e => moveWindow(e, () => props.pw, setPos)}>
-              <button title="Włącz / bypass" style={{ width: '12px', height: '12px', flex: 'none', padding: 0, border: 0, 'border-radius': '50%', background: fx().bypass ? '#2c333d' : '#4ec08a', cursor: 'pointer' }}
+              <button class="pwr" classList={{ off: fx().bypass }} title={fx().bypass ? 'Bypass — kliknij, by włączyć' : 'Aktywny — kliknij = bypass'}
                 onPointerDown={e => { e.stopPropagation(); A.toggleBypass(fx().id); }} />
               <FxTile type={fx().type} size={20} icon={13} />
               <span class="title">{A.fxName(fx())}</span>
               <span style={{ width: '6px', height: '6px', flex: 'none', 'border-radius': '2px', background: m().color }} />
               <span class="sub">{insName(m())}</span>
-              <span class="mono" style={{ font: '600 9px var(--mono)', color: 'var(--amber)', 'letter-spacing': '.08em' }}>{fx().bypass ? 'BYPASS' : ''}</span>
+              <Show when={fx().bypass}><span class="bypasstag">BYPASS</span></Show>
               <div style={{ flex: 1 }} />
+              <MixControl fx={fx()} />
               <Show when={!isVst() && presetList(S.catalog, fx().type).length}>
                 <div class="presetbar">
                   <button class="arrow" title="Poprzedni preset" onClick={() => A.stepPreset(fx().id, -1)}>‹</button>
-                  <button class="name" title="Presety" style={{ color: info().mod ? '#e0a44a' : '#d5dae2' }} data-preset-name
+                  <button class="name" title="Presety" classList={{ mod: info().mod }} data-preset-name
                     onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openPresetMenu(fx().id, r.left, r.bottom + 4); }}>
                     <span class="ell" style={{ flex: 1, 'min-width': 0 }}>{info().name}{info().mod ? ' *' : ''}</span>
-                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#7d8592" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style={{ flex: 'none' }}><path d="M6 9l6 6 6-6" /></svg>
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style={{ flex: 'none' }}><path d="M6 9l6 6 6-6" /></svg>
                   </button>
                   <button class="arrow" title="Następny preset" onClick={() => A.stepPreset(fx().id, 1)}>›</button>
                 </div>
@@ -77,18 +96,32 @@ export function FxWindow(props: { pw: PlugWin; z: number }) {
               <button class="closebtn" title="Zamknij (Esc)" onClick={() => A.closePlug(fx().id)}>×</button>
             </div>
             <Show when={!isVst()} fallback={<Vst3Body fx={fx()} />}>
-              <VizCanvas fxId={props.pw.fxId} pw={props.pw} height={isEq() ? 250 : isVerb() ? 260 : 190} />
-              <Show when={isEq()}><EqBands fx={fx()} insId={m().id} /></Show>
-              <div class="knobs">
-                <For each={paramDefs(S.catalog, fx().type)}>{p => <ParamKnob fxId={fx().id} p={p} />}</For>
-                <div style={{ flex: 1 }} />
-                <span class="hint">{isEq() ? 'Przeciągnij punkt · kółko = Q · 2× klik = wł./wył. · PPM = typ' : isVerb() ? 'Przeciągnij = obrót 3D · 2× klik = reset' : ''}</span>
-              </div>
+              <VizCanvas fxId={props.pw.fxId} pw={props.pw} height={VIZ_H[fx().type] ?? 190} />
+              <Body fx={fx()} />
             </Show>
           </div>
         );
       }}
     </Show>
+  );
+}
+
+/** Dry/wet of the effect (fx.mix), automatable. */
+function MixControl(props: { fx: Fx }) {
+  const target = () => ({ kind: 'mix' as const, fxId: props.fx.id });
+  const val = () => autoDisplay(target()) ?? props.fx.mix ?? 1;
+  let g: Gesture | null = null;
+  const op = (v: number) => A.fxOp({ ...plain(findFx(props.fx.id)!.f), mix: Math.round(clamp(v, 0, 1) * 1000) / 1000 });
+  return (
+    <div class="mixctl" title="Mix (dry/wet) efektu">
+      <span class="lab">MIX</span>
+      <MiniKnob key={'mix' + props.fx.id} title="Mix (dry/wet) · przeciągnij ↕ · 2× klik = 100% · PPM = automatyzacja" t={val} automated={() => isAutomated(target())}
+        onStart={() => { g = new Gesture('Mix'); }} onChange={t => { g?.update([op(t)]); say(A.fxName(props.fx) + ' · Mix ' + Math.round(t * 100) + '%'); }}
+        onEnd={() => { g?.end(); g = null; }} onReset={() => commit([op(1)], 'Mix')}
+        onWheel={t => wheelEdit('mix' + props.fx.id, 'Mix', [op(t)])}
+        onMenu={(x, y) => paramMenu(x, y, target(), () => commit([op(1)], 'Mix'), FXMETA[props.fx.type].color)} />
+      <span class="v">{Math.round(val() * 100)}%</span>
+    </div>
   );
 }
 
@@ -99,23 +132,128 @@ function openPresetMenu(fxId: Id, x: number, y: number) {
     ...list.map((pr, i) => ({ t: 'item' as const, label: pr.name, kbd: i === info.idx ? (info.mod ? 'zmieniony' : '●') : '', act: () => A.loadPreset(fxId, i) }))], 40 + list.length * 26);
 }
 
-function ParamKnob(props: { fxId: Id; p: ParamDef }) {
+// ---- parameter controls ----
+function setParam(fxId: Id, id: string, v: number) {
+  const f = findFx(fxId)?.f; if (!f) return null;
+  return A.fxOp({ ...plain(f), params: { ...plain(f.params), [id]: v } });
+}
+const defOf = (fx: Fx, id: string) => paramDefs(S.catalog, fx.type).find(p => p.id === id);
+
+function ParamKnob(props: { fxId: Id; p: ParamDef; ends?: [string, string]; color?: string }) {
   const fx = () => findFx(props.fxId)?.f;
-  const val = () => fx()?.params[props.p.id] ?? props.p.def;
+  const target = () => ({ kind: 'fx' as const, fxId: props.fxId, param: props.p.id });
+  const val = () => autoDisplay(target()) ?? fx()?.params[props.p.id] ?? props.p.def;
   const p = props.p;
   let g: Gesture | null = null;
-  const setV = (v: number) => {
-    const f = fx(); if (!f) return null;
-    return A.fxOp({ ...plain(f), params: { ...plain(f.params), [p.id]: v } });
-  };
+  const reset = () => { const op = setParam(props.fxId, p.id, p.def); if (op) commit([op], p.label); };
   return (
-    <Knob key={props.fxId + p.id} label={p.label} t={() => clamp(pNorm(p, val()), 0, 1)}
+    <Knob key={props.fxId + p.id} label={p.label} t={() => clamp(pNorm(p, val()), 0, 1)} ends={props.ends} color={props.color}
+      automated={() => isAutomated(target())}
       zero={() => (p.min < 0 && p.max > 0 && !p.log ? pNorm(p, 0) : 0)} text={() => pFmt(p, val())}
       onStart={() => { g = new Gesture(p.label); }}
-      onChange={t => { const v = pVal(p, t); const op = setV(v); if (op) g?.update([op]); say(A.fxName(fx()!) + ' · ' + p.label + ' ' + pFmt(p, v)); }}
+      onChange={t => { const v = pVal(p, t); const op = setParam(props.fxId, p.id, v); if (op) g?.update([op]); say(A.fxName(fx()!) + ' · ' + p.label + ' ' + pFmt(p, v)); }}
       onEnd={() => { g?.end(); g = null; }}
-      onReset={() => { const op = setV(p.def); if (op) commit([op], p.label); }}
-      onWheel={t => { const v = pVal(p, t); const op = setV(v); if (op) wheelEdit('fx' + props.fxId + p.id, p.label, [op]); say(A.fxName(fx()!) + ' · ' + p.label + ' ' + pFmt(p, v)); }} />
+      onReset={reset}
+      onMenu={(x, y) => paramMenu(x, y, target(), reset, props.color)}
+      onWheel={t => { const v = pVal(p, t); const op = setParam(props.fxId, p.id, v); if (op) wheelEdit('fx' + props.fxId + p.id, p.label, [op]); say(A.fxName(fx()!) + ' · ' + p.label + ' ' + pFmt(p, v)); }} />
+  );
+}
+
+/** A choice parameter as segmented buttons (one click = one undo step). */
+function ParamChoice(props: { fxId: Id; p: ParamDef; danger?: number; color?: string; labels?: string[]; small?: boolean; hideLabel?: boolean }) {
+  const fx = () => findFx(props.fxId)?.f;
+  const target = () => ({ kind: 'fx' as const, fxId: props.fxId, param: props.p.id });
+  const val = () => autoDisplay(target()) ?? fx()?.params[props.p.id] ?? props.p.def;
+  const pick = (i: number) => {
+    if (Math.round(val()) === i) return;
+    const op = setParam(props.fxId, props.p.id, i); if (!op) return;
+    commit([op], props.p.label);
+    say(A.fxName(fx()!) + ' · ' + props.p.label + ': ' + props.p.options![i]);
+  };
+  return <Segmented label={props.hideLabel ? undefined : props.p.label} options={props.labels ?? props.p.options!} value={val} pick={pick} danger={props.danger} color={props.color} small={props.small}
+    onMenu={(x, y) => paramMenu(x, y, target(), () => pick(props.p.def), props.color)} />;
+}
+
+function Ctl(props: { fx: Fx; id: string; ends?: [string, string]; danger?: number; labels?: string[]; small?: boolean; hideLabel?: boolean }) {
+  const d = () => defOf(props.fx, props.id);
+  const color = () => FXMETA[props.fx.type].color;
+  return (
+    <Show when={d()}>
+      {p => p().options
+        ? <ParamChoice fxId={props.fx.id} p={p()} danger={props.danger} color={color()} labels={props.labels} small={props.small} hideLabel={props.hideLabel} />
+        : <ParamKnob fxId={props.fx.id} p={p()} ends={props.ends} />}
+    </Show>
+  );
+}
+
+function Hint(props: { fx: Fx }) { return <span class="hint">{HINTS[props.fx.type] ?? ''}</span>; }
+
+function Body(props: { fx: Fx }): JSX.Element {
+  const t = () => props.fx.type;
+  return (
+    <>
+      <Show when={t() === 'eq'}><EqPanel fx={props.fx} /></Show>
+      <Show when={t() === 'tune'}><TuneControls fx={props.fx} /></Show>
+      <Show when={t() === 'fet'}><FetControls fx={props.fx} /></Show>
+      <Show when={t() === 'deess'}>
+        <div class="knobs">
+          <For each={['thr', 'range', 'freq', 'look']}>{id => <Ctl fx={props.fx} id={id} />}</For>
+          <div class="vline" />
+          <Ctl fx={props.fx} id="mode" />
+          <Ctl fx={props.fx} id="listen" labels={['Off', 'Tylko S']} />
+          <div style={{ flex: 1 }} /><Hint fx={props.fx} />
+        </div>
+      </Show>
+      <Show when={!['eq', 'tune', 'fet', 'deess'].includes(t())}>
+        <div class="knobs">
+          <For each={paramDefs(S.catalog, t())}>{p => <Ctl fx={props.fx} id={p.id} />}</For>
+          <div style={{ flex: 1 }} /><Hint fx={props.fx} />
+        </div>
+      </Show>
+      <Show when={t() === 'eq'}>
+        <div class="knobs slim">
+          <For each={paramDefs(S.catalog, 'eq')}>{p => <Ctl fx={props.fx} id={p.id} />}</For>
+          <div style={{ flex: 1 }} /><Hint fx={props.fx} />
+        </div>
+      </Show>
+    </>
+  );
+}
+
+function TuneControls(props: { fx: Fx }) {
+  const color = FXMETA.tune.color;
+  return (
+    <>
+      <div class="ctlrow">
+        <Show when={defOf(props.fx, 'key')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={NOTE_NAMES} small />}</Show>
+        <Show when={defOf(props.fx, 'scale')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} small />}</Show>
+      </div>
+      <div class="knobs">
+        <Ctl fx={props.fx} id="retune" ends={['robot', 'natural']} />
+        <For each={['humanize', 'flex', 'vibrato']}>{id => <Ctl fx={props.fx} id={id} />}</For>
+        <div class="vline" />
+        <For each={['transpose', 'formant']}>{id => <Ctl fx={props.fx} id={id} />}</For>
+        <div style={{ flex: 1 }} /><Hint fx={props.fx} />
+      </div>
+    </>
+  );
+}
+
+function FetControls(props: { fx: Fx }) {
+  const mode = () => fetModes.get(props.fx.id);
+  const pick = (m: FetMode) => fetModes.set(props.fx.id, m);
+  return (
+    <div class="knobs">
+      <Ctl fx={props.fx} id="input" />
+      <div class="vline" />
+      <div class="stack">
+        <Ctl fx={props.fx} id="ratio" danger={4} />
+        <Segmented label="Wskaźnik" small options={['GR', 'OUT']} value={() => (mode() === 'gr' ? 0 : 1)} pick={i => pick(i ? 'out' : 'gr')} title="Co pokazuje wskaźnik: redukcję (GR) albo poziom wyjścia (VU)" />
+      </div>
+      <div class="vline" />
+      <For each={['attack', 'release', 'output', 'mix']}>{id => <Ctl fx={props.fx} id={id} />}</For>
+      <div style={{ flex: 1 }} /><Hint fx={props.fx} />
+    </div>
   );
 }
 
@@ -126,18 +264,18 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
   const viz = makeViz(ff()!.f);
   const height = createMemo(() => props.height);
   const pw = createMemo(() => props.pw);
-  let version = 0, drawnVersion = -1, lastW = 0, fontEpoch = -1;
+  let version = 0, drawnVersion = -1, lastW = 0, fontEpoch = -1, themeEpoch = -1;
   createEffect(() => { // anything param-ish changes → redraw
     const f = ff()?.f; if (!f) return;
-    f.bypass; for (const k in f.params) void f.params[k];
-    f.bands?.forEach(b => { b.on; b.type; b.f; b.g; b.q; });
-    U.eqSel[props.fxId]; S.project.bpm;
+    f.bypass; f.mix; for (const k in f.params) void f.params[k];
+    f.bands?.forEach(b => { b.on; b.type; b.f; b.g; b.q; b.slope; b.place; b.dynamic?.range; b.dynamic?.thr; });
+    f.bands?.length;
+    U.eqSel[props.fxId]; U.fetMode[props.fxId]; S.project.bpm;
     version++;
   });
   onMount(() => {
     const stop = addFrameTask(now => {
       const f = ff()?.f; if (!f || !viz) return;
-      // skip windows that are off-screen
       const w = pw();
       if (w.x > window.innerWidth || w.y > window.innerHeight || w.x + w.w < 0 || document.hidden) return;
       const raw = tele.fx.get(props.fxId) ?? null;
@@ -145,21 +283,64 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
       const changed = viz.update(f, a, now);
       const W = cv.clientWidth, H = height();
       if (!W) return;
-      if (!changed && version === drawnVersion && W === lastW && fontEpoch === fonts.epoch) return;
-      drawnVersion = version; lastW = W; fontEpoch = fonts.epoch;
+      if (!changed && version === drawnVersion && W === lastW && fontEpoch === fonts.epoch && themeEpoch === theme.epoch) return;
+      drawnVersion = version; lastW = W; fontEpoch = fonts.epoch; themeEpoch = theme.epoch;
       fitCanvas(cv, W, H);
       const g = cv.getContext('2d')!;
       const dpr = window.devicePixelRatio || 1;
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      viz.draw(g, W, H, f, a, { selBand: U.eqSel[props.fxId] ?? null, fxId: props.fxId });
+      viz.draw(g, W, H, f, a, { selBand: U.eqSel[props.fxId] ?? null, fxId: props.fxId, now });
     });
     onCleanup(stop);
   });
 
+  const rel = (e: PointerEvent | WheelEvent) => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top, W: r.width, H: r.height }; };
   const down = (e: PointerEvent) => {
-    const got = ff(); if (!got) return;
-    if (got.f.type === 'eq') eqDown(e, got.m.id, got.f);
+    const got = ff(); if (!got || !viz) return;
+    if (got.f.type === 'eq') eqPointerDown(e, cv, props.fxId, viz as EqViz);
     else if (got.f.type === 'reverb') verbDown(e);
+    else if (got.f.type === 'deess') deessDown(e, got.f);
+    else if (got.f.type === 'fet' && e.button === 0) {
+      const m = fetModes.get(props.fxId) === 'out' ? 'gr' : 'out';
+      fetModes.set(props.fxId, m); version++; say('Wskaźnik: ' + (m === 'gr' ? 'redukcja (GR)' : 'wyjście (VU)'));
+    }
+  };
+  const move = (e: PointerEvent) => {
+    const got = ff(); if (!got || !viz || e.buttons) return;
+    if (got.f.type === 'eq') eqHover(e, cv, props.fxId, viz as EqViz);
+    else if (got.f.type === 'deess') {
+      const d = viz as DeessViz, { x, y, W, H } = rel(e), G = deessGeom(W, H);
+      const onThr = x < G.hx + G.hw && Math.abs(y - deessY(got.f.params.thr ?? -32, H)) < 6;
+      const onF = x >= G.sx && Math.abs(x - deessFx(got.f.params.freq ?? 6000, W, H)) < 8;
+      if (onThr !== d.hoverThr || onF !== d.hoverFreq) { d.hoverThr = onThr; d.hoverFreq = onF; version++; }
+      cv.style.cursor = onThr ? 'ns-resize' : onF ? 'ew-resize' : 'default';
+    }
+  };
+  const leave = () => {
+    const got = ff(); if (!got || !viz) return;
+    if (got.f.type === 'eq') eqLeave(viz as EqViz);
+    if (got.f.type === 'deess') { const d = viz as DeessViz; d.hoverThr = d.hoverFreq = false; version++; }
+  };
+  const deessDown = (e: PointerEvent, f: Fx) => {
+    if (e.button !== 0) return;
+    const { x, y, W, H } = rel(e), G = deessGeom(W, H);
+    const thrP = defOf(f, 'thr'), frP = defOf(f, 'freq'); if (!thrP || !frP) return;
+    const onThr = x < G.hx + G.hw && Math.abs(y - deessY(f.params.thr ?? -32, H)) < 6;
+    const onF = x >= G.sx - 4;
+    if (!onThr && !onF) return;
+    e.preventDefault();
+    if (onThr && dblCheck('thr' + props.fxId)) { const op = setParam(props.fxId, 'thr', thrP.def); if (op) commit([op], 'Próg'); return; }
+    const g = new Gesture(onThr ? 'Próg' : 'Częstotliwość');
+    const r = cv.getBoundingClientRect();
+    track(ev => {
+      const op = onThr
+        ? setParam(props.fxId, 'thr', Math.round(clamp(deessDb(ev.clientY - r.top, H), thrP.min, thrP.max)))
+        : setParam(props.fxId, 'freq', Math.round(clamp(deessXf(ev.clientX - r.left, W, H), frP.min, frP.max)));
+      if (op) g.update([op]);
+      const nf = findFx(props.fxId)?.f;
+      say(onThr ? 'Próg ' + Math.round(nf?.params.thr ?? 0) + ' dB' : 'Pasmo detekcji od ' + Math.round(nf?.params.freq ?? 0) + ' Hz');
+    }, () => g.end(), onThr ? 'ns-resize' : 'ew-resize');
+    if (onF && !onThr) { const op = setParam(props.fxId, 'freq', Math.round(clamp(deessXf(x, W, H), frP.min, frP.max))); if (op) g.update([op]); }
   };
   const verbDown = (e: PointerEvent) => {
     if (e.button !== 0) return; e.preventDefault();
@@ -169,90 +350,12 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     let lx = e.clientX, ly = e.clientY;
     track(ev => { v!.yaw = clamp(v!.yaw + (ev.clientX - lx) * 0.008, -1.2, 1.2); v!.pitch = clamp(v!.pitch + (ev.clientY - ly) * 0.006, 0.1, 1.3); lx = ev.clientX; ly = ev.clientY; bump(); }, null, 'grabbing');
   };
-  const eqDown = (e: PointerEvent, insId: Id, f: Fx) => {
-    const r = cv.getBoundingClientRect(), W = r.width, H = r.height, px = e.clientX - r.left, py = e.clientY - r.top;
-    const bands = f.bands ?? [];
-    let best = -1, bd = 16;
-    bands.forEach((b, i) => { const d = Math.hypot(px - fx2x(b.f, W), py - bandY(b, H)); if (d < bd) { bd = d; best = i; } });
-    if (e.button === 2) { e.preventDefault(); if (best >= 0) openBandMenu(e.clientX, e.clientY, props.fxId, best); return; }
-    if (e.button !== 0 || best < 0) return;
-    e.preventDefault();
-    setU('eqSel', props.fxId, best);
-    if (dblCheck('band' + props.fxId + best)) { updBand(props.fxId, best, { on: !bands[best].on }); return; }
-    const g = new Gesture('Band EQ');
-    const b0 = { ...bands[best] }, sx = e.clientX, sy = e.clientY, x0 = fx2x(b0.f, W), y0 = bandY(b0, H), cut = b0.type.endsWith('cut');
-    track(ev => {
-      const k = ev.shiftKey ? 0.2 : 1;
-      const nf = clamp(x2f(x0 + (ev.clientX - sx) * k, W), 20, 20000);
-      const ng = cut ? b0.g : clamp(-((y0 + (ev.clientY - sy) * k) - H / 2) / ((H / 2) * 0.9) * 18, -18, 18);
-      const op = bandOp(props.fxId, best, { f: nf, g: ng, on: true }); if (op) g.update([op]);
-      say('Band ' + (best + 1) + ' · ' + hzText(nf) + (cut ? '' : ' · ' + dbText(ng)) + ' · kółko = Q');
-    }, () => g.end(), 'move');
-    void insId;
-  };
   const wheel = (e: WheelEvent) => {
-    const got = ff(); if (!got || got.f.type !== 'eq') return;
-    const i = U.eqSel[props.fxId]; if (i == null) return;
-    const d = e.deltaY || e.deltaX; if (!d) return;
-    e.preventDefault(); e.stopPropagation();
-    const b = got.f.bands![i], q = clamp(b.q * Math.pow(2, (d < 0 ? 1 : -1) * 0.15 * (e.shiftKey ? 0.2 : 1)), 0.1, 18);
-    const op = bandOp(props.fxId, i, { q }); if (op) wheelEdit('eqq' + props.fxId, 'Q', [op]);
-    say('Band ' + (i + 1) + ' · Q ' + q.toFixed(2));
+    const got = ff(); if (!got || !viz) return;
+    if (got.f.type === 'eq') eqWheel(e, props.fxId, viz as EqViz);
   };
   return <canvas ref={cv} class="vizcv" data-viz={props.fxId} style={{ height: props.height + 'px', cursor: viz?.cursor ?? 'default' }}
-    onPointerDown={down} onWheel={wheel} onContextMenu={e => e.preventDefault()} />;
-}
-
-function bandOp(fxId: Id, i: number, patch: Partial<EqBand>) {
-  const ff = findFx(fxId); if (!ff || !ff.f.bands) return null;
-  const f = plain(ff.f);
-  f.bands![i] = { ...f.bands![i], ...patch };
-  return A.fxOp(f, ff.m.id);
-}
-function updBand(fxId: Id, i: number, patch: Partial<EqBand>) { const op = bandOp(fxId, i, patch); if (op) commit([op], 'Band EQ'); }
-
-function openBandMenu(x: number, y: number, fxId: Id, i: number) {
-  const b = findFx(fxId)?.f.bands?.[i]; if (!b) return;
-  openMenu(x, y, [{ t: 'title', label: 'Band ' + (i + 1) },
-    ...BTYPE_ORDER.map(ty => ({ t: 'item' as const, label: BTYPE_LABEL[ty], kbd: b.type === ty ? '●' : '', act: () => updBand(fxId, i, { type: ty, on: true }) })),
-    { t: 'sep' },
-    { t: 'item', label: b.on ? 'Wyłącz band' : 'Włącz band', act: () => updBand(fxId, i, { on: !b.on }) },
-    { t: 'item', label: 'Reset bandu', act: () => updBand(fxId, i, { ...defaultBands()[i] }) }], 280);
-}
-
-function EqBands(props: { fx: Fx; insId: Id }) {
-  const field = (i: number, k: 'on' | 'type' | 'f' | 'g' | 'q') => (e: PointerEvent) => {
-    if (e.button !== 0) return; e.preventDefault(); e.stopPropagation();
-    setU('eqSel', props.fx.id, i);
-    const b0 = props.fx.bands![i];
-    if (k === 'type') return updBand(props.fx.id, i, { type: BTYPE_ORDER[(BTYPE_ORDER.indexOf(b0.type) + 1) % BTYPE_ORDER.length], on: true });
-    if (k === 'on') return updBand(props.fx.id, i, { on: !b0.on });
-    const g = new Gesture('Band EQ');
-    let v = b0[k], lx = e.clientX, ly = e.clientY;
-    track(ev => {
-      const d = ((ev.clientX - lx) + (ly - ev.clientY)) * (ev.shiftKey ? 0.2 : 1); lx = ev.clientX; ly = ev.clientY;
-      v = k === 'f' ? clamp(v * Math.pow(2, d / 60), 20, 20000) : k === 'g' ? clamp(v + d * 0.1, -18, 18) : clamp(v * Math.pow(2, d / 80), 0.1, 18);
-      const op = bandOp(props.fx.id, i, { [k]: v, on: true }); if (op) g.update([op]);
-    }, () => g.end(), 'ns-resize');
-  };
-  return (
-    <div class="bands">
-      <For each={props.fx.bands ?? []}>
-        {(b, i) => (
-          <div class="band" classList={{ on: U.eqSel[props.fx.id] === i() }}>
-            <div class="row" style={{ gap: '6px' }}>
-              <button title="Włącz / wyłącz band" onPointerDown={field(i(), 'on')} style={{ width: '10px', height: '10px', padding: 0, border: 0, 'border-radius': '50%', background: b.on ? BAND_COLORS[i()] : '#2c333d', cursor: 'pointer' }} />
-              <span class="mono" style={{ font: '600 10px var(--mono)', color: BAND_COLORS[i()] }}>{i() + 1}</span>
-            </div>
-            <button class="ty" title="Klik = zmień typ" onPointerDown={field(i(), 'type')}>{BTYPE_LABEL[b.type]}</button>
-            <span class="v" title="Przeciągnij" style={{ color: b.on ? '#f2f4f7' : '#5c6573' }} onPointerDown={field(i(), 'f')}>{hzText(b.f)}</span>
-            <span class="v" title="Przeciągnij" style={{ color: b.on ? '#f2f4f7' : '#5c6573' }} onPointerDown={field(i(), 'g')}>{b.type.endsWith('cut') ? '—' : dbText(b.g)}</span>
-            <span class="v" title="Przeciągnij" style={{ color: '#7d8592' }} onPointerDown={field(i(), 'q')}>{'Q ' + b.q.toFixed(2)}</span>
-          </div>
-        )}
-      </For>
-    </div>
-  );
+    onPointerDown={down} onPointerMove={move} onPointerLeave={leave} onWheel={wheel} onContextMenu={e => e.preventDefault()} />;
 }
 
 function Vst3Body(props: { fx: Fx }) {

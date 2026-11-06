@@ -16,11 +16,20 @@ export interface Track {
   vol: number; h: number; insert: Id;
 }
 
-export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'vst3';
+export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'vst3';
 export type BuiltinKind = Exclude<FxKind, 'vst3'>;
-export type BandType = 'lowcut' | 'lowshelf' | 'peak' | 'highshelf' | 'highcut';
+export type BandType = 'lowcut' | 'lowshelf' | 'peak' | 'highshelf' | 'highcut' | 'notch' | 'bandpass' | 'tilt';
+/** Which part of the stereo image a band works on. */
+export type Placement = 'stereo' | 'left' | 'right' | 'mid' | 'side';
+/** Dynamic EQ: the band's gain moves by up to `range` dB as its own level goes over `thr` dBFS. */
+export interface DynBand { range: number; thr: number }
 
-export interface EqBand { on: boolean; type: BandType; f: number; g: number; q: number }
+/** Up to 24 bands (MAX_BANDS). `slope` (cuts only): 12/24/36/48 dB/oct. Missing fields take the engine defaults. */
+export interface EqBand {
+  on: boolean; type: BandType; f: number; g: number; q: number;
+  slope?: number; place?: Placement; dynamic?: DynBand | null;
+}
+export const MAX_BANDS = 24;
 
 export interface PluginRef {
   format: string; path: string; cid: string; name: string; vendor: string; state?: string;
@@ -28,6 +37,8 @@ export interface PluginRef {
 
 export interface Fx {
   id: Id; type: FxKind; bypass: boolean;
+  /** Dry/wet 0..1 (1 = fully processed; missing = 1). */
+  mix?: number;
   preset?: number | null;
   params: Record<string, number>;
   bands?: EqBand[];
@@ -49,17 +60,41 @@ export interface Source {
   dur: number; sr: number; ch: number; peakDb: number;
 }
 
-export type ClipKind = 'pat' | 'audio';
+export type ClipKind = 'pat' | 'audio' | 'auto';
 export interface Clip {
   id: Id; track: number; start: number; len: number; offset: number;
   kind: ClipKind; ref: Id; muted: boolean; gain: number;
   fadeIn: number; fadeOut: number; pan: number; norm: boolean; rev: boolean;
+  /** Note-level pitch edits (the pitch editor); rendered offline by the engine. */
+  tune?: ClipTune | null;
 }
+
+/** Times in seconds of the source; `shift`/`formant` in cents, `drift` 0..1, `gain` dB. */
+export interface NoteEdit { start: number; end: number; shift: number; drift: number; formant: number; gain: number }
+/** `pencil`: hand-drawn `[seconds, midi]` points, sorted; gaps > 30 ms end a run. */
+export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][] }
+
+/** `pitch_analyze`: pitch every 1/rate s (null = unvoiced), levels 0..1, segmented notes (seconds of the source). */
+export interface NoteBlob { start: number; end: number; pitch: number; level: number }
+export interface PitchAnalysis { rate: number; curve: (number | null)[]; levels: number[]; notes: NoteBlob[] }
+
+/** What an automation moves. `param`: catalog param id, or `band:<i>:f|g|q` of an EQ. */
+export type AutoTarget =
+  | { kind: 'fx'; fxId: Id; param: string }
+  | { kind: 'mix'; fxId: Id }
+  | { kind: 'insertVol'; id: Id }
+  | { kind: 'insertPan'; id: Id }
+  | { kind: 'trackVol'; id: Id };
+/** `t` beats from the start of the automation, `v` normalised 0..1. */
+export interface AutoPoint { t: number; v: number }
+export interface Automation { id: Id; name: string; color: string; target: AutoTarget; points: AutoPoint[] }
 
 export interface Project {
   version: number; bpm: number;
   tracks: Track[]; inserts: Insert[]; patterns: Pattern[]; sources: Source[]; clips: Clip[];
   loop: LoopRange | null; nextId: Id;
+  /** Automation envelopes; played by clips of kind `auto` (`ref` = automation id). */
+  automations?: Automation[];
 }
 
 export type Op =
@@ -76,7 +111,9 @@ export type Op =
   | { op: 'putSource'; source: Source }
   | { op: 'removeSource'; id: Id }
   | { op: 'setBpm'; bpm: number }
-  | { op: 'setLoop'; loop: LoopRange | null };
+  | { op: 'setLoop'; loop: LoopRange | null }
+  | { op: 'putAutomation'; automation: Automation }
+  | { op: 'removeAutomation'; id: Id };
 
 export interface TransportDto {
   playing: boolean; rec: boolean; monitor: boolean; metro: boolean; countIn: boolean; startBeat: number;
@@ -87,7 +124,8 @@ export interface StateDto {
   transport: TransportDto; path: string | null; dirty: boolean;
 }
 
-export interface ParamDef { id: string; label: string; min: number; max: number; def: number; unit: string; log: boolean }
+/** `options`: a discrete choice (value = index), shown as buttons instead of a knob. */
+export interface ParamDef { id: string; label: string; min: number; max: number; def: number; unit: string; log: boolean; options?: string[] }
 export interface TypeDef { name: string; params: ParamDef[] }
 export interface Preset { name: string; params: Record<string, number>; bands?: EqBand[]; beats?: number }
 export interface Catalog {

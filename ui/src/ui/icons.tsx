@@ -19,9 +19,12 @@ export const FXMETA: Record<FxKind, { icon: string; color: string; tag: string }
   delay: { icon: 'M4 5v14 M9.5 8v11 M14.5 11v8 M19.5 14v5', color: '#7c8cf8', tag: 'echo' },
   reverb: { icon: 'M4 12h.01 M8 8.5a5 5 0 0 1 0 7 M11.5 5.5a9 9 0 0 1 0 13 M15 2.5a13 13 0 0 1 0 19', color: '#47b8a8', tag: 'przestrzeń' },
   limit: { icon: 'M3 4h18 M3 20l3-12 3 12 3-12 3 12 3-12 3 12', color: '#e05263', tag: 'głośność' },
+  tune: { icon: 'M3 18h5v-5h5V8h8 M3 15.5c3 0 3.5-5.5 7-5.5s3.5-3.5 7-3.5', color: '#5fbf8a', tag: 'strojenie' },
+  deess: { icon: 'M16.5 6.5C15.6 5 14 4.5 12 4.5c-2.8 0-4.5 1.4-4.5 3.4 0 4.6 9 2.8 9 7.8 0 2.2-2 3.8-4.6 3.8-2 0-3.6-.7-4.6-2.3 M3 12h18', color: '#6fd0e8', tag: 'sybilanty' },
+  fet: { icon: 'M3.5 17a8.5 8.5 0 0 1 17 0 M12 17l4.5-6.5 M6.2 11.2l1.2 1 M17.8 11.2l-1.2 1 M12 8.5v1.5', color: '#f07f4f', tag: 'kompresja FET' },
   vst3: { icon: ICONS.vst, color: '#9a8cf0', tag: 'plugin' },
 };
-export const FX_ORDER = ['eq', 'comp', 'sat', 'delay', 'reverb', 'limit'] as const;
+export const FX_ORDER = ['tune', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'] as const;
 export const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
 
 export function Icon(props: { d: string; size?: number; sw?: number }) {
@@ -35,7 +38,7 @@ export function Icon(props: { d: string; size?: number; sw?: number }) {
 export function FxTile(props: { type: FxKind; size: number; icon?: number; dim?: boolean }) {
   const m = () => FXMETA[props.type];
   return (
-    <span class="tile" style={{ width: props.size + 'px', height: props.size + 'px', background: props.dim ? '#1c2128' : m().color + '26', color: props.dim ? '#5c6573' : m().color }}>
+    <span class="tile" style={{ width: props.size + 'px', height: props.size + 'px', background: props.dim ? 'var(--bg6)' : m().color + '26', color: props.dim ? 'var(--fg5)' : m().color }}>
       <Icon d={m().icon} size={props.icon ?? 14} />
     </span>
   );

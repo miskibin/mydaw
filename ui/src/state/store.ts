@@ -45,16 +45,27 @@ export function replaceState(dto: StateDto) {
 
 // ---- optimistic local application (mutates in place so identities and signals stay fine-grained) ----
 function assignClip(dst: Clip, src: Clip) {
-  for (const k of Object.keys(src) as (keyof Clip)[]) if (dst[k] !== src[k]) (dst as unknown as Record<string, unknown>)[k] = src[k];
+  for (const k of Object.keys(src) as (keyof Clip)[]) {
+    if (k === 'tune') { if (JSON.stringify(dst.tune ?? null) !== JSON.stringify(src.tune ?? null)) dst.tune = src.tune ? structuredClone(src.tune) : null; continue; }
+    if (dst[k] !== src[k]) (dst as unknown as Record<string, unknown>)[k] = src[k];
+  }
+  if (!('tune' in src) && dst.tune) dst.tune = null;
 }
 function assignFx(dst: Fx, src: Fx) {
   if (dst.bypass !== src.bypass) dst.bypass = src.bypass;
+  if ((dst.mix ?? 1) !== (src.mix ?? 1)) dst.mix = src.mix ?? 1;
   if (dst.preset !== src.preset) dst.preset = src.preset ?? null;
   for (const k of Object.keys(src.params)) if (dst.params[k] !== src.params[k]) dst.params[k] = src.params[k];
   for (const k of Object.keys(dst.params)) if (!(k in src.params)) delete dst.params[k];
   if (src.bands) {
     if (!dst.bands || dst.bands.length !== src.bands.length) dst.bands = src.bands.map(b => ({ ...b }));
-    else src.bands.forEach((b, i) => { const d = dst.bands![i]; if (d.on !== b.on) d.on = b.on; if (d.type !== b.type) d.type = b.type; if (d.f !== b.f) d.f = b.f; if (d.g !== b.g) d.g = b.g; if (d.q !== b.q) d.q = b.q; });
+    else src.bands.forEach((b, i) => {
+      const d = dst.bands![i];
+      if (d.on !== b.on) d.on = b.on; if (d.type !== b.type) d.type = b.type; if (d.f !== b.f) d.f = b.f; if (d.g !== b.g) d.g = b.g; if (d.q !== b.q) d.q = b.q;
+      if (d.slope !== b.slope) d.slope = b.slope; if (d.place !== b.place) d.place = b.place;
+      const dd = d.dynamic ?? null, sd = b.dynamic ?? null;
+      if (!sd) { if (dd) d.dynamic = null; } else if (!dd || dd.range !== sd.range || dd.thr !== sd.thr) d.dynamic = { ...sd };
+    });
   }
   if (src.plugin) dst.plugin = { ...src.plugin };
 }
@@ -120,6 +131,18 @@ function applyInPlace(p: Project, op: Op) {
       return;
     case 'setBpm': p.bpm = op.bpm; return;
     case 'setLoop': p.loop = op.loop ? { ...op.loop } : null; return;
+    case 'putAutomation': {
+      const a = clone(op.automation); a.points.sort((x, y) => x.t - y.t);
+      if (!p.automations) p.automations = [];
+      const x = p.automations.find(q => q.id === a.id);
+      if (x) { x.name = a.name; x.color = a.color; x.target = a.target; x.points = a.points; } else p.automations.push(a);
+      if (a.id >= p.nextId) p.nextId = a.id + 1;
+      return;
+    }
+    case 'removeAutomation':
+      p.automations = (p.automations ?? []).filter(a => a.id !== op.id);
+      p.clips = p.clips.filter(c => !(c.kind === 'auto' && c.ref === op.id));
+      return;
   }
 }
 
@@ -135,10 +158,12 @@ export function findFx(fxId: Id): { m: Insert; f: Fx } | null {
   return null;
 }
 export const insertById = (id: Id) => S.project.inserts.find(m => m.id === id);
-export const srcOf = (c: Clip) => c.kind === 'pat' ? S.project.patterns.find(p => p.id === c.ref) : S.project.sources.find(s => s.id === c.ref);
+export const srcOf = (c: Clip) => c.kind === 'pat' ? S.project.patterns.find(p => p.id === c.ref) : c.kind === 'auto' ? S.project.automations?.find(a => a.id === c.ref) : S.project.sources.find(s => s.id === c.ref);
+export const autoById = (id: Id) => S.project.automations?.find(a => a.id === id);
 export const spb = () => 60 / S.project.bpm;
 export function srcLenBeats(kind: Clip['kind'], ref: Id): number {
   if (kind === 'pat') return S.project.patterns.find(p => p.id === ref)?.len ?? 4;
+  if (kind === 'auto') return Infinity; // an envelope holds its last value: auto clips can be any length
   const s = S.project.sources.find(x => x.id === ref);
   return s ? s.dur / spb() : 4;
 }
