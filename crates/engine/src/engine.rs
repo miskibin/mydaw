@@ -796,7 +796,7 @@ impl Engine {
                             t.data.push(x);
                         }
                         let per = (t.sr as usize / 100).max(1);
-                        while t.acc.2 * 2 < t.data.len() {
+                        while (t.acc.2 + 1) * 2 <= t.data.len() {
                             let f = t.acc.2;
                             let (l, r) = (t.data[f * 2], t.data[f * 2 + 1]);
                             let v = (l + r) * 0.5;
