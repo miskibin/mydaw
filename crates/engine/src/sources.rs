@@ -108,11 +108,15 @@ fn peaks_of(interleaved: &[f32], sr: u32) -> Vec<f32> {
 pub struct SourceStore {
     pub audio: HashMap<u64, Arc<Audio>>,
     derived: HashMap<(u64, bool, bool), Arc<Audio>>,
+    analysis: HashMap<(u64, bool, bool), Arc<crate::pitch::PitchAnalysis>>,
+    /// clip id → (hash of its edits, rendered audio)
+    tuned: HashMap<u64, (u64, Arc<Audio>)>,
 }
 
 impl SourceStore {
     pub fn insert(&mut self, id: u64, a: Arc<Audio>) {
         self.derived.retain(|k, _| k.0 != id);
+        self.analysis.retain(|k, _| k.0 != id);
         self.audio.insert(id, a);
     }
     pub fn get(&self, id: u64) -> Option<&Arc<Audio>> {
@@ -124,6 +128,44 @@ impl SourceStore {
             return Some(base);
         }
         Some(self.derived.entry((id, norm, rev)).or_insert_with(|| Arc::new(base.derived(norm, rev))).clone())
+    }
+}
+
+impl SourceStore {
+    /// Pitch analysis of a source variant (cached).
+    pub fn analysis(&mut self, id: u64, norm: bool, rev: bool) -> Option<Arc<crate::pitch::PitchAnalysis>> {
+        if let Some(a) = self.analysis.get(&(id, norm, rev)) {
+            return Some(a.clone());
+        }
+        let audio = self.variant(id, norm, rev)?;
+        let mono: Vec<f32> = audio.content().chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect();
+        let a = Arc::new(crate::pitch::analyze(&mono, audio.sr as f32));
+        self.analysis.insert((id, norm, rev), a.clone());
+        Some(a)
+    }
+
+    /// The audio a clip plays: source variant plus its pitch edits. While
+    /// `allow_stale` (a drag is in progress) a previous render is reused rather
+    /// than re-rendering the whole clip on every mouse move.
+    pub fn clip_audio(&mut self, c: &crate::model::Clip, allow_stale: bool) -> Option<Arc<Audio>> {
+        let base = self.variant(c.source, c.norm, c.rev)?;
+        let Some(tune) = c.tune.as_ref().filter(|t| !t.notes.is_empty() || !t.pencil.is_empty()) else { return Some(base) };
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (c.source, c.norm, c.rev).hash(&mut h);
+            serde_json::to_string(tune).unwrap_or_default().hash(&mut h);
+            h.finish()
+        };
+        if let Some((hh, a)) = self.tuned.get(&c.id) {
+            if *hh == hash || allow_stale {
+                return Some(a.clone());
+            }
+        }
+        let an = self.analysis(c.source, c.norm, c.rev)?;
+        let out = Arc::new(crate::tune_render::render(&base, &an, tune));
+        self.tuned.insert(c.id, (hash, out.clone()));
+        Some(out)
     }
 }
 

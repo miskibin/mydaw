@@ -153,6 +153,23 @@ async fn source_peaks(app: St<'_>, id: u64, norm: Option<bool>, rev: Option<bool
 }
 
 #[tauri::command]
+async fn pitch_analyze(app: St<'_>, clip_id: u64) -> R<std::sync::Arc<wave_engine::pitch::PitchAnalysis>> {
+    let e = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || e.pitch_analysis(clip_id)).await.map_err(es)?.map_err(es)
+}
+
+#[tauri::command]
+async fn clip_peaks(app: St<'_>, clip_id: u64) -> R<Response> {
+    let e = app.engine.clone();
+    let p = tauri::async_runtime::spawn_blocking(move || e.clip_peaks(clip_id)).await.map_err(es)?.ok_or("no such clip")?;
+    let mut b = Vec::with_capacity(p.len() * 4);
+    for x in p {
+        b.extend_from_slice(&x.to_le_bytes());
+    }
+    Ok(Response::new(b))
+}
+
+#[tauri::command]
 async fn trim_clip(app: St<'_>, clip_id: u64) -> R<Value> {
     let e = app.engine.clone();
     let id = tauri::async_runtime::spawn_blocking(move || e.trim_clip(clip_id)).await.map_err(es)?.map_err(es)?;
@@ -419,7 +436,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, trim_clip, preview_clip, preview_file, preview_stop,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, trim_clip, preview_clip, preview_file, preview_stop,
             audio_hosts, audio_devices, audio_get_config, audio_set_config,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save,

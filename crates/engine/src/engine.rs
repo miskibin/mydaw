@@ -311,6 +311,8 @@ impl Engine {
         if let Some(g) = c.gesture.take() {
             if g != c.project {
                 push_undo(&mut c, g);
+                // renders skipped during the drag (pitch edits) happen now
+                self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
                 self.changed(c);
             }
         }
@@ -482,6 +484,23 @@ impl Engine {
         self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
         self.changed(c);
         Ok((src_ids, clip_ids))
+    }
+
+    /// Pitch curve and notes of an audio clip's source (for the note editor).
+    pub fn pitch_analysis(&self, clip_id: Id) -> Result<Arc<crate::pitch::PitchAnalysis>, EngineError> {
+        let mut c = self.core.lock();
+        let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
+        if clip.kind != ClipKind::Audio {
+            return Err(EngineError::Msg("only audio clips have pitch".into()));
+        }
+        c.sources.analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))
+    }
+
+    /// Peaks of what the clip actually plays (including pitch edits), for drawing.
+    pub fn clip_peaks(&self, clip_id: Id) -> Option<Vec<f32>> {
+        let mut c = self.core.lock();
+        let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned()?;
+        c.sources.clip_audio(&clip, true).map(|a| a.peaks.clone())
     }
 
     /// [min,max] pairs at 100/s for drawing.
@@ -665,8 +684,8 @@ impl Engine {
             let mut map = HashMap::new();
             for clip in &c.project.clips {
                 if clip.kind == ClipKind::Audio {
-                    if let Some(a) = c.sources.variant(clip.source, clip.norm, clip.rev) {
-                        map.insert((clip.source, clip.norm, clip.rev), a);
+                    if let Some(a) = c.sources.clip_audio(clip, false) {
+                        map.insert(clip.id, a);
                     }
                 }
             }
@@ -689,7 +708,7 @@ impl Engine {
         let mut rt = Rt::new(sr, block, cmd_rx, gb_tx, Arc::new(Shared::new()), taps, rec_tx);
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
-        let mut tl = build_timeline(&project, &mut |id, n, r| store_snapshot.get(&(id, n, r)).cloned());
+        let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned());
         tl.loop_range = None;
         tl.song_end = TOTAL_BEATS;
         let _ = cmd_tx.push(Cmd::Graph(Box::new(graph)));
@@ -779,8 +798,10 @@ impl Engine {
             }
         }
         if d.timeline {
+            let gesture_open = c.gesture.is_some();
             let Core { project, sources, .. } = c;
-            let tl = build_timeline(project, &mut |id, n, r| sources.variant(id, n, r));
+            let stale = gesture_open;
+            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale));
             send(c, Cmd::Timeline(Box::new(tl)));
         }
     }
@@ -1042,7 +1063,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
     Graph::new(inserts, tracks, monitor_track(p), max_block)
 }
 
-pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(Id, bool, bool) -> Option<Arc<Audio>>) -> Timeline {
+pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option<Arc<Audio>>) -> Timeline {
     let pats: Vec<PatRt> = p
         .patterns
         .iter()
@@ -1061,7 +1082,7 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(Id, bool, bool) 
                 Some(i) => ClipSrc::Pat(i),
                 None => continue,
             },
-            ClipKind::Audio => match audio(c.source, c.norm, c.rev) {
+            ClipKind::Audio => match audio(c) {
                 Some(a) => ClipSrc::Audio(a),
                 None => continue,
             },

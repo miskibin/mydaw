@@ -16,6 +16,7 @@ pub mod engine;
 pub mod rt;
 pub mod sources;
 pub mod synth;
+pub mod tune_render;
 pub mod vocal;
 pub mod telemetry;
 
