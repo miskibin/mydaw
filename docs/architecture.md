@@ -61,7 +61,17 @@ All edits are "put" ops, applied atomically per batch:
 `putClips{clips}`, `removeClips{ids}`, `putTrack{track}`, `putInsert{insert}`,
 `removeInsert{id}`, `putFx{insertId,fx,index?}`, `removeFx{fxId}`,
 `moveFx{fxId,to}`, `putPattern{pattern}`, `putSource{source}`,
-`removeSource{id}`, `setBpm{bpm}`, `setLoop{loop}`. New ids come from the
+`removeSource{id}`, `putAutomation{automation}`, `removeAutomation{id}`,
+`setBpm{bpm}`, `setLoop{loop}`.
+
+Every effect has `mix` (0..1 dry/wet, default 1). Automation:
+`project.automations[] = {id, name, color, target, points:[{t, v}]}`; a clip of
+kind `auto` with `ref` = automation id plays it (`offset` in beats into it).
+Targets: `{kind:"fx", fxId, param}` (catalog id, or `band:<i>:f|g|q` for EQ:
+f log 20–20k, g −30..30 dB, q log 0.1–18), `{kind:"mix", fxId}`,
+`{kind:"insertVol"|"insertPan", id}`, `{kind:"trackVol", id}`. `v` is 0..1;
+log parameters are normalised logarithmically, vol is the fader position, pan
+maps −1..1 to 0..1. While playing, the engine applies automation every block. New ids come from the
 client: take them from `project.nextId` and increase locally (the engine bumps
 `nextId` past any id it sees).
 

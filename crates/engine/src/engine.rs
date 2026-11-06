@@ -112,7 +112,7 @@ struct Core {
     transport: TransportDto,
     /// Effect ids the audio thread currently holds a processor for.
     live_fx: HashSet<Id>,
-    sent_params: HashMap<Id, ParamBlock>,
+    sent_params: HashMap<Id, (Option<ParamBlock>, f32)>,
     fx_errors: HashMap<Id, String>,
     wires: Option<Wires>,
     take: Option<Take>,
@@ -779,22 +779,21 @@ impl Engine {
             let graph = build_graph(&c.project, &c.live_fx, sr, max_block, &*self.factory, true, &mut errs);
             c.fx_errors = errs;
             c.live_fx = graph.inserts.iter().flat_map(|i| i.fx.iter().map(|s| s.id)).collect();
-            c.sent_params = c.project.inserts.iter().flat_map(|m| m.fx.iter()).filter(|f| f.kind != FxKind::Vst3).map(|f| (f.id, param_block(f))).collect();
+            c.sent_params = c.project.inserts.iter().flat_map(|m| m.fx.iter()).map(|f| (f.id, fx_send(f))).collect();
             send(c, Cmd::Graph(Box::new(graph)));
         } else if d.params {
             send(c, Cmd::Mix(Box::new(mix_state(&c.project))));
-            let changed: Vec<(Id, ParamBlock)> = c
+            let changed: Vec<(Id, (Option<ParamBlock>, f32))> = c
                 .project
                 .inserts
                 .iter()
                 .flat_map(|m| m.fx.iter())
-                .filter(|f| f.kind != FxKind::Vst3)
-                .map(|f| (f.id, param_block(f)))
+                .map(|f| (f.id, fx_send(f)))
                 .filter(|(id, pb)| c.sent_params.get(id) != Some(pb))
                 .collect();
-            for (id, pb) in changed {
-                c.sent_params.insert(id, pb);
-                send(c, Cmd::Params { fx: id, params: pb });
+            for (id, (params, mix)) in changed {
+                c.sent_params.insert(id, (params, mix));
+                send(c, Cmd::Params { fx: id, params, mix });
             }
         }
         if d.timeline {
@@ -927,6 +926,10 @@ impl Engine {
     }
 }
 
+fn fx_send(f: &Fx) -> (Option<ParamBlock>, f32) {
+    (if f.kind == FxKind::Vst3 { None } else { Some(param_block(f)) }, f.mix.clamp(0.0, 1.0))
+}
+
 fn c_watch(w: &[Id]) -> Vec<Id> {
     w.to_vec()
 }
@@ -1045,7 +1048,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
                         Some(pr)
                     };
                     let params = if f.kind == FxKind::Vst3 { None } else { Some(param_block(f)) };
-                    FxSlot { id: f.id, bypass: f.bypass, proc, params }
+                    FxSlot { id: f.id, bypass: f.bypass, mix: f.mix.clamp(0.0, 1.0), proc, params }
                 })
                 .collect();
             let k = p.inserts.iter().position(|x| x.id == id).unwrap_or(0);
@@ -1072,6 +1075,15 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option
             notes: pt.notes.iter().map(|n| NoteRt { beat: n.step as f64 / 4.0, len: n.len as f64 / 4.0, inst: n.inst, key: n.p }).collect(),
         })
         .collect();
+    // automation envelopes whose target still exists
+    let mut autos = vec![];
+    let mut auto_idx = HashMap::new();
+    for a in &p.automations {
+        if let Some(target) = resolve_target(p, &a.target) {
+            auto_idx.insert(a.id, autos.len());
+            autos.push(AutoRt { target, env: a.clone() });
+        }
+    }
     let mut clips = vec![];
     for c in p.clips.iter().filter(|c| !c.muted) {
         if c.track as usize >= p.tracks.len() {
@@ -1082,6 +1094,10 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option
                 Some(i) => ClipSrc::Pat(i),
                 None => continue,
             },
+            ClipKind::Auto => match auto_idx.get(&c.source) {
+                Some(&i) => ClipSrc::Auto(i),
+                None => continue,
+            },
             ClipKind::Audio => match audio(c) {
                 Some(a) => ClipSrc::Audio(a),
                 None => continue,
@@ -1090,5 +1106,40 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option
         clips.push(ClipRt { track: c.track as usize, start: c.start, end: c.start + c.len, offset: c.offset, gain: c.gain, pan: c.pan, fade_in: c.fade_in, fade_out: c.fade_out, src });
     }
     clips.sort_by(|a, b| a.start.total_cmp(&b.start));
-    Timeline { bpm: p.bpm, clips, pats, loop_range: p.loop_range.map(|l| (l.a, l.b)), song_end: p.song_end() }
+    Timeline { bpm: p.bpm, clips, pats, autos, loop_range: p.loop_range.map(|l| (l.a, l.b)), song_end: p.song_end() }
+}
+
+/// Turns an automation target into graph indices; `None` if it no longer exists.
+fn resolve_target(p: &Project, t: &AutoTarget) -> Option<TargetRt> {
+    Some(match t {
+        AutoTarget::Fx { fx_id, param } => {
+            let (_, f) = p.find_fx(*fx_id)?;
+            if let Some(rest) = param.strip_prefix("band:") {
+                let mut it = rest.split(':');
+                let band: usize = it.next()?.parse().ok()?;
+                let field = match it.next()? {
+                    "f" => 0,
+                    "g" => 1,
+                    "q" => 2,
+                    _ => return None,
+                };
+                if band >= MAX_BANDS {
+                    return None;
+                }
+                TargetRt::Band { fx: *fx_id, band, field }
+            } else {
+                let defs = crate::catalog::params(f.kind);
+                let idx = defs.iter().position(|d| d.id == param)?;
+                let d = &defs[idx];
+                TargetRt::Param { fx: *fx_id, idx, min: d.min as f32, max: d.max as f32, log: d.log }
+            }
+        }
+        AutoTarget::Mix { fx_id } => {
+            p.find_fx(*fx_id)?;
+            TargetRt::Mix { fx: *fx_id }
+        }
+        AutoTarget::InsertVol { id } => TargetRt::InsVol(p.inserts.iter().position(|m| m.id == *id)?),
+        AutoTarget::InsertPan { id } => TargetRt::InsPan(p.inserts.iter().position(|m| m.id == *id)?),
+        AutoTarget::TrackVol { id } => TargetRt::TrackVol(p.tracks.iter().position(|x| x.id == *id)?),
+    })
 }

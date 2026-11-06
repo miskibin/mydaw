@@ -30,6 +30,10 @@ pub enum Op {
     /// Rename / recolour a source. Audio itself is changed with dedicated commands.
     PutSource { source: Source },
     RemoveSource { id: Id },
+    /// Insert or replace an automation envelope.
+    PutAutomation { automation: Automation },
+    /// Remove an automation and every clip that plays it.
+    RemoveAutomation { id: Id },
     SetBpm { bpm: f64 },
     SetLoop { #[serde(rename = "loop")] range: Option<LoopRange> },
 }
@@ -85,6 +89,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 let known = match c.kind {
                     ClipKind::Pat => p.patterns.iter().any(|x| x.id == c.source),
                     ClipKind::Audio => p.sources.iter().any(|x| x.id == c.source),
+                    ClipKind::Auto => p.automations.iter().any(|x| x.id == c.source),
                 };
                 if !known {
                     return Err(OpError::Missing { what: "clip source", id: c.source });
@@ -247,6 +252,27 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         Op::RemoveSource { id } => {
             p.sources.retain(|s| s.id != *id);
             p.clips.retain(|c| !(c.kind == ClipKind::Audio && c.source == *id));
+            d.timeline = true;
+        }
+        Op::PutAutomation { automation } => {
+            let mut a = automation.clone();
+            if a.points.iter().any(|q| !q.t.is_finite() || !q.v.is_finite()) {
+                return Err(OpError::Invalid("automation points must be numbers".into()));
+            }
+            a.points.sort_by(|x, y| x.t.total_cmp(&y.t));
+            for q in a.points.iter_mut() {
+                q.v = q.v.clamp(0.0, 1.0);
+            }
+            bump(p, a.id);
+            match p.automations.iter_mut().find(|x| x.id == a.id) {
+                Some(x) => *x = a,
+                None => p.automations.push(a),
+            }
+            d.timeline = true;
+        }
+        Op::RemoveAutomation { id } => {
+            p.automations.retain(|a| a.id != *id);
+            p.clips.retain(|c| !(c.kind == ClipKind::Auto && c.source == *id));
             d.timeline = true;
         }
         Op::SetBpm { bpm } => {

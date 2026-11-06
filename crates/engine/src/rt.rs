@@ -96,6 +96,8 @@ impl Default for Shared {
 pub struct FxSlot {
     pub id: Id,
     pub bypass: bool,
+    /// Dry/wet 0..1.
+    pub mix: f32,
     /// `None` = "take the running processor with this id from the current graph".
     pub proc: Option<Box<dyn Processor>>,
     pub params: Option<ParamBlock>,
@@ -114,11 +116,13 @@ pub struct InsertRt {
     pdc_l: Vec<f32>,
     pdc_r: Vec<f32>,
     pdc_w: usize,
+    dry_l: Vec<f32>,
+    dry_r: Vec<f32>,
 }
 
 impl InsertRt {
     pub fn new(id: Id, gain: f32, pan: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
-        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0 }
+        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block] }
     }
 
     /// Delays this insert's output by `samples` (allocates; call off the audio thread).
@@ -165,6 +169,24 @@ pub struct MixState {
 pub enum ClipSrc {
     Pat(usize),
     Audio(Arc<Audio>),
+    Auto(usize),
+}
+
+/// A resolved automation target (indices into the graph built from the same project).
+#[derive(Clone, Copy, Debug)]
+pub enum TargetRt {
+    Param { fx: Id, idx: usize, min: f32, max: f32, log: bool },
+    /// EQ band field: 0 freq, 1 gain, 2 Q.
+    Band { fx: Id, band: usize, field: u8 },
+    Mix { fx: Id },
+    InsVol(usize),
+    InsPan(usize),
+    TrackVol(usize),
+}
+
+pub struct AutoRt {
+    pub target: TargetRt,
+    pub env: crate::model::Automation,
 }
 
 pub struct ClipRt {
@@ -195,6 +217,7 @@ pub struct Timeline {
     pub bpm: f64,
     pub clips: Vec<ClipRt>,
     pub pats: Vec<PatRt>,
+    pub autos: Vec<AutoRt>,
     pub loop_range: Option<(f64, f64)>,
     pub song_end: f64,
 }
@@ -215,7 +238,7 @@ pub enum Cmd {
     Graph(Box<Graph>),
     Timeline(Box<Timeline>),
     Mix(Box<MixState>),
-    Params { fx: Id, params: ParamBlock },
+    Params { fx: Id, params: Option<ParamBlock>, mix: f32 },
     Play { from: f64, count_in: f64, rec: bool },
     Stop,
     Flags { metro: bool, monitor: bool },
@@ -273,7 +296,7 @@ impl Rt {
             garbage,
             shared,
             graph: Box::new(Graph::new(vec![], vec![], None, max_block)),
-            timeline: Box::new(Timeline { bpm: 120.0, clips: vec![], pats: vec![], loop_range: None, song_end: 4.0 }),
+            timeline: Box::new(Timeline { bpm: 120.0, clips: vec![], pats: vec![], autos: vec![], loop_range: None, song_end: 4.0 }),
             voices: VoicePool::new(sr),
             click: vec![0.0; max_block],
             tmp_l: vec![0.0; max_block],
@@ -347,11 +370,14 @@ impl Rt {
                     self.graph.monitor_track = m.monitor_track;
                     self.trash(Garbage::Mix(m));
                 }
-                Cmd::Params { fx, params } => {
+                Cmd::Params { fx, params, mix } => {
                     if let Some(s) = self.graph.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == fx) {
-                        s.params = Some(params);
-                        if let Some(p) = s.proc.as_mut() {
-                            p.set_params(&params);
+                        s.mix = mix;
+                        if let Some(params) = params {
+                            s.params = Some(params);
+                            if let Some(p) = s.proc.as_mut() {
+                                p.set_params(&params);
+                            }
                         }
                     }
                 }
@@ -471,6 +497,9 @@ impl Rt {
                     }
                 }
             }
+        }
+        if self.playing {
+            apply_automation(&self.timeline, &mut self.graph, block_beat);
         }
         let shared_beat = if self.playing { self.beat } else { block_beat };
         self.shared.beat.store(shared_beat.to_bits(), Relaxed);
@@ -632,6 +661,7 @@ impl Rt {
                         }
                     }
                 }
+                ClipSrc::Auto(_) => {}
                 ClipSrc::Audio(a) => {
                     let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else { continue };
                     let dur = (c.end - c.start) * spb;
@@ -671,9 +701,20 @@ fn run_chain(ins: &mut InsertRt, n: usize, ctx: &ProcessCtx, watch: &[Id], taps:
         if let Some(w) = w {
             push_tap(&mut taps.input[w], &ins.l[..n], &ins.r[..n]);
         }
-        if !slot.bypass {
+        if !slot.bypass && slot.mix > 0.0005 {
             if let Some(p) = slot.proc.as_mut() {
+                let mix = slot.mix.min(1.0);
+                if mix < 0.9995 {
+                    ins.dry_l[..n].copy_from_slice(&ins.l[..n]);
+                    ins.dry_r[..n].copy_from_slice(&ins.r[..n]);
+                }
                 p.process(&mut ins.l[..n], &mut ins.r[..n], ctx);
+                if mix < 0.9995 {
+                    for i in 0..n {
+                        ins.l[i] = ins.dry_l[i] + (ins.l[i] - ins.dry_l[i]) * mix;
+                        ins.r[i] = ins.dry_r[i] + (ins.r[i] - ins.dry_r[i]) * mix;
+                    }
+                }
             }
         }
         if let Some(w) = w {
@@ -710,5 +751,81 @@ fn push_mono(p: &mut rtrb::Producer<f32>, x: &[f32]) {
     }
     for &v in x {
         let _ = p.push(v);
+    }
+}
+
+fn slot(g: &mut Graph, fx: Id) -> Option<&mut FxSlot> {
+    g.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == fx)
+}
+
+/// Moves automated parameters to their value at `beat`. Allocation-free.
+fn apply_automation(tl: &Timeline, g: &mut Graph, beat: f64) {
+    for c in tl.clips.iter() {
+        let ClipSrc::Auto(ai) = c.src else { continue };
+        if beat < c.start || beat >= c.end {
+            continue;
+        }
+        let Some(a) = tl.autos.get(ai) else { continue };
+        let Some(v) = a.env.value_at(beat - c.start + c.offset) else { continue };
+        match a.target {
+            TargetRt::Param { fx, idx, min, max, log } => {
+                if let Some(s) = slot(g, fx) {
+                    let x = if log { min * (max / min).powf(v) } else { min + (max - min) * v };
+                    if let Some(pb) = s.params.as_mut() {
+                        if (pb.values[idx] - x).abs() > 1e-6 * x.abs().max(1.0) {
+                            pb.values[idx] = x;
+                            let pb = *pb;
+                            if let Some(p) = s.proc.as_mut() {
+                                p.set_params(&pb);
+                            }
+                        }
+                    }
+                }
+            }
+            TargetRt::Band { fx, band, field } => {
+                if let Some(s) = slot(g, fx) {
+                    if let Some(pb) = s.params.as_mut() {
+                        let b = &mut pb.bands[band];
+                        let x = match field {
+                            0 => 20.0 * 1000f32.powf(v),
+                            1 => -30.0 + 60.0 * v,
+                            _ => 0.1 * 180f32.powf(v),
+                        };
+                        let cur = match field {
+                            0 => &mut b.f,
+                            1 => &mut b.g,
+                            _ => &mut b.q,
+                        };
+                        if (*cur - x).abs() > 1e-4 {
+                            *cur = x;
+                            let pb = *pb;
+                            if let Some(p) = s.proc.as_mut() {
+                                p.set_params(&pb);
+                            }
+                        }
+                    }
+                }
+            }
+            TargetRt::Mix { fx } => {
+                if let Some(s) = slot(g, fx) {
+                    s.mix = v;
+                }
+            }
+            TargetRt::InsVol(i) => {
+                if let Some(ins) = g.inserts.get_mut(i) {
+                    ins.gain = crate::model::fader_gain(v);
+                }
+            }
+            TargetRt::InsPan(i) => {
+                if let Some(ins) = g.inserts.get_mut(i) {
+                    ins.pan = v * 2.0 - 1.0;
+                }
+            }
+            TargetRt::TrackVol(i) => {
+                if let Some(t) = g.tracks.get_mut(i) {
+                    t.gain = crate::model::fader_gain(v);
+                }
+            }
+        }
     }
 }

@@ -195,3 +195,43 @@ fn latency_is_compensated_across_inserts() {
     let onset = |x: &[f32]| x.chunks(2).position(|f| f[0].abs() > 0.05).unwrap();
     assert_eq!(onset(&with), onset(&without) + lat);
 }
+
+#[test]
+fn mix_zero_is_the_dry_signal() {
+    let mut p = Project::demo();
+    let dry = Engine::new(p.clone(), Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
+    let mut sat = wave_engine::catalog::new_fx(6000, FxKind::Sat, p.bpm);
+    sat.params.insert("drive".into(), 30.0);
+    sat.mix = 0.0;
+    p.inserts[1].fx.push(sat);
+    let out = Engine::new(p, Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
+    let diff = dry.iter().zip(&out).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+    assert!(diff < 1e-5, "mix 0 still changed the sound by {diff}");
+}
+
+#[test]
+fn automation_moves_volume_and_effect_params() {
+    let mut p = Project::demo();
+    p.inserts[0].fx.clear();
+    // drums insert volume: full for 2 beats, then silent
+    p.automations.push(Automation {
+        id: 8000,
+        name: "Drums vol".into(),
+        color: "#e0a44a".into(),
+        target: AutoTarget::InsertVol { id: 1 },
+        points: vec![AutoPoint { t: 0.0, v: VOL_UNITY }, AutoPoint { t: 1.99, v: VOL_UNITY }, AutoPoint { t: 2.0, v: 0.0 }],
+    });
+    // only drums audible
+    for t in p.tracks.iter_mut().skip(1) {
+        t.muted = true;
+    }
+    p.clips.push(Clip { id: 8001, track: 7, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Auto, source: 8000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None });
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    let out = e.render(0.0, 4.0, 0.0, 48000).unwrap();
+    let at = |b: f64| (b * 60.0 / 128.0 * 48000.0) as usize * 2;
+    assert!(rms(&out[at(0.0)..at(1.9)]) > 0.01, "silent before the automation drops");
+    assert!(rms(&out[at(2.05)..at(4.0)]) < 1e-4, "volume automation did nothing");
+    // removing the automation removes its clip
+    e.apply(&[Op::RemoveAutomation { id: 8000 }], false, None).unwrap();
+    assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Auto));
+}
