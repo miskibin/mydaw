@@ -11,8 +11,12 @@ import { FxWindow } from './views/FxWindow';
 import { Mixer } from './views/Mixer';
 import { Playlist } from './views/Playlist';
 import { SampleEditor } from './views/SampleEditor';
+import { PitchEditor } from './views/PitchEditor';
 import { Settings, VstPicker } from './views/Settings';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
+
+/** Stacking rank of a plugin window inside the window layer (1 = bottom). */
+function plugRank(z: number) { let r = 1; for (const p of U.plugs) if (p.z < z) r++; return r; }
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
@@ -22,10 +26,12 @@ function onKey(e: KeyboardEvent) {
   if (e.code === 'Space') { e.preventDefault(); (document.activeElement as HTMLElement | null)?.blur?.(); if (!e.repeat) void A.togglePlay(); return; }
   if (e.key === 'Escape') {
     if (U.menu) return closeMenu();
+    if (U.autoEdit != null) return setU('autoEdit', null);
     if (U.vstPicker) return setU('vstPicker', null);
     if (U.settings) return setU('settings', false);
     if (U.help) return setU('help', false);
-    if (U.plugs.length) return A.closePlug(U.plugs[U.plugs.length - 1].fxId);
+    if (U.plugs.length) return A.closePlug(A.topPlug()!.fxId);
+    if (U.pitchEd) return A.closePitchEditor();
     if (U.editor) return A.closeEditor();
     return setU('sel', []);
   }
@@ -89,7 +95,8 @@ export function App() {
   // effects whose windows are open → analysis in the engine (≤ 8)
   let lastWatch = '';
   createEffect(() => {
-    const ids = U.plugs.map(p => p.fxId).filter(id => { const f = findFx(id)?.f; return f && f.type !== 'vst3'; }).slice(-8);
+    // the 8 front-most windows (engine limit), in a stable order so focusing does not re-send
+    const ids = [...U.plugs].sort((a, b) => b.z - a.z).map(p => p.fxId).filter(id => { const f = findFx(id)?.f; return f && f.type !== 'vst3'; }).slice(0, 8).sort((a, b) => a - b);
     const key = ids.join(',');
     if (key !== lastWatch) { lastWatch = key; be().watchFx(ids).catch(e => console.warn(e)); }
   });
@@ -98,6 +105,7 @@ export function App() {
     const gone = U.plugs.filter(p => !findFx(p.fxId));
     if (gone.length) setU('plugs', U.plugs.filter(p => findFx(p.fxId)));
     if (U.editor && !S.project.clips.some(c => c.id === U.editor!.clipId)) setU('editor', null);
+    if (U.pitchEd && !S.project.clips.some(c => c.id === U.pitchEd!.clipId)) setU('pitchEd', null);
   });
   createEffect(() => { be().setTitle((S.path ? baseName(S.path) : 'Bez nazwy') + (S.dirty ? ' •' : '') + ' — WAVE'); });
 
@@ -111,7 +119,10 @@ export function App() {
       <Show when={U.mixOpen}><Mixer /></Show>
       <StatusBar />
       <SampleEditor />
-      <For each={U.plugs}>{(pw, i) => <FxWindow pw={pw} z={45 + i()} />}</For>
+      <PitchEditor />
+      <div class="winlayer">
+        <For each={U.plugs}>{pw => <FxWindow pw={pw} z={plugRank(pw.z)} />}</For>
+      </div>
       <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>
       <ContextMenu />
       <Help />

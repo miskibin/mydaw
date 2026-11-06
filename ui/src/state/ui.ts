@@ -4,7 +4,9 @@ import type { ClipKind, Id } from '../api/types';
 
 export type Tool = 'draw' | 'paint' | 'erase' | 'mute' | 'slice' | 'select';
 
-export interface PlugWin { fxId: Id; x: number; y: number; w: number }
+/** `z`: stacking order — the most recently opened/focused window has the highest. */
+export interface PlugWin { fxId: Id; x: number; y: number; w: number; z: number }
+export interface PitchWin { clipId: Id; x: number; y: number; w: number; h: number }
 export interface EditorWin { clipId: Id; x: number; y: number; w: number; h: number }
 
 export type MenuItem =
@@ -13,7 +15,9 @@ export type MenuItem =
   | { t: 'item'; label: string; kbd?: string; act: () => void; danger?: boolean; disabled?: boolean; icon?: string; iconColor?: string; title?: string }
   | { t: 'swatches'; current?: string; pick: (c: string) => void }
   | { t: 'gain'; clipId: Id }
-  | { t: 'rename'; value: string; done: (v: string) => void };
+  | { t: 'rename'; value: string; done: (v: string) => void }
+  /** A row of small toggle buttons (one click picks, menu stays coherent with the current value). */
+  | { t: 'chips'; label?: string; options: string[]; active: number; pick: (i: number) => void; disabled?: boolean; close?: boolean };
 
 export interface Menu { x: number; y: number; items: MenuItem[] }
 
@@ -29,6 +33,12 @@ export interface UiState {
   ghost: { x: number; y: number; name: string; color: string } | null;
   dragOver: boolean;
   eqSel: Record<number, number>;
+  fetMode: Record<number, 'gr' | 'out'>;
+  pitchEd: PitchWin | null;
+  /** automation clip whose envelope is being edited inline on the playlist */
+  autoEdit: Id | null;
+  /** next z for plugin windows (monotonic) */
+  zTop: number;
   marquee: { x0: number; y0: number; x1: number; y1: number } | null;
   /** True while the engine reports playback (from telemetry flags / transport replies). */
   playing: boolean;
@@ -43,7 +53,7 @@ export const [U, setU] = createStore<UiState>({
   plugs: [], editor: null, menu: null, help: false, settings: false, vstPicker: null,
   readout: 'Gotowe',
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
-  ghost: null, dragOver: false, eqSel: {}, marquee: null,
+  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, autoEdit: null, zTop: 1, marquee: null,
   playing: false, previewing: false, previewPath: null,
 });
 

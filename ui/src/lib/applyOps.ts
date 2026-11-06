@@ -1,7 +1,7 @@
 // A TS port of crates/engine/src/ops.rs `apply` — used by the in-browser mock backend.
 // The real engine is the source of truth; this only has to agree on the happy path and
 // reject the same obviously-invalid batches.
-import type { Id, Op, Project } from '../api/types';
+import { MAX_BANDS, type Id, type Op, type Project } from '../api/types';
 
 export class OpError extends Error {}
 
@@ -13,7 +13,7 @@ export function applyOp(p: Project, op: Op): void {
       for (const c of op.clips) {
         if (!(c.len > 0) || c.start < 0 || !isFinite(c.start) || !isFinite(c.len)) throw new OpError(`clip ${c.id} has an invalid range`);
         if (c.track >= p.tracks.length || c.track < 0) throw new OpError(`clip ${c.id} is on track ${c.track} which does not exist`);
-        const known = c.kind === 'pat' ? p.patterns.some(x => x.id === c.ref) : p.sources.some(x => x.id === c.ref);
+        const known = c.kind === 'pat' ? p.patterns.some(x => x.id === c.ref) : c.kind === 'auto' ? (p.automations ?? []).some(x => x.id === c.ref) : p.sources.some(x => x.id === c.ref);
         if (!known) throw new OpError(`no clip source with id ${c.ref}`);
       }
       for (const c of op.clips) {
@@ -61,7 +61,7 @@ export function applyOp(p: Project, op: Op): void {
     }
     case 'putFx': {
       const fx = op.fx;
-      if (fx.type === 'eq' && (!fx.bands || fx.bands.length !== 7)) throw new OpError('an EQ needs exactly 7 bands');
+      if (fx.type === 'eq' && (!fx.bands || fx.bands.length > MAX_BANDS)) throw new OpError(`an EQ has 0..${MAX_BANDS} bands`);
       if (fx.type === 'vst3' && !fx.plugin) throw new OpError('a VST3 slot needs `plugin`');
       for (const [k, v] of Object.entries(fx.params)) if (!isFinite(v)) throw new OpError(`parameter ${k} is not a number`);
       for (const m of p.inserts) {
@@ -117,6 +117,21 @@ export function applyOp(p: Project, op: Op): void {
     case 'setLoop':
       if (op.loop && !(op.loop.b > op.loop.a && op.loop.a >= 0)) throw new OpError('loop end must be after its start');
       p.loop = op.loop ? { ...op.loop } : null; return;
+    case 'putAutomation': {
+      const a = structuredClone(op.automation);
+      if (a.points.some(q => !isFinite(q.t) || !isFinite(q.v))) throw new OpError('automation points must be numbers');
+      a.points.sort((x, y) => x.t - y.t);
+      for (const q of a.points) q.v = Math.min(1, Math.max(0, q.v));
+      bump(p, a.id);
+      const list = p.automations ?? (p.automations = []);
+      const i = list.findIndex(x => x.id === a.id);
+      if (i >= 0) list[i] = a; else list.push(a);
+      return;
+    }
+    case 'removeAutomation':
+      p.automations = (p.automations ?? []).filter(a => a.id !== op.id);
+      p.clips = p.clips.filter(c => !(c.kind === 'auto' && c.ref === op.id));
+      return;
   }
 }
 

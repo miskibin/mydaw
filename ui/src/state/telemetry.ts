@@ -1,7 +1,7 @@
 // Telemetry stream → plain mutable objects read by the frame loop (no per-frame Solid churn).
 // Only edges (play/stop, preview on/off) are written into the reactive UI store.
 import { be } from '../api/backend';
-import { TelemetryDecoder } from '../api/telemetry';
+import { TelemetryDecoder, type FxFrame } from '../api/telemetry';
 import { setU, U } from './ui';
 
 export const tele = new TelemetryDecoder();
@@ -14,9 +14,21 @@ export const recState = {
   peaks: new Float32Array(4096), nPeaks: 0, version: 0,
 };
 
+/** Per-effect frame listeners: called for every decoded analysis frame (bursts included), not once per animation frame. */
+const fxListeners = new Map<number, Set<(a: FxFrame, at: number) => void>>();
+export function onFxFrame(id: number, cb: (a: FxFrame, at: number) => void): () => void {
+  let s = fxListeners.get(id); if (!s) fxListeners.set(id, s = new Set());
+  s.add(cb);
+  return () => { s!.delete(cb); };
+}
+
 function onFrame() {
   const f = tele.frame;
   teleClock.frames++; teleClock.lastAt = performance.now();
+  for (const id of f.fxIds) {
+    const ls = fxListeners.get(id), a = tele.fx.get(id);
+    if (ls && a) for (const cb of ls) { try { cb(a, teleClock.lastAt); } catch (e) { console.error(e); } }
+  }
   if (f.playing !== U.playing) setU('playing', f.playing);
   if (f.previewing !== U.previewing) setU('previewing', f.previewing);
   const r = f.rec;

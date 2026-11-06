@@ -3,6 +3,8 @@ import { be } from '../api/backend';
 import type { AudioConfig, AudioDevices, AudioHost, AudioStatus, CliStatus, Vst3Info } from '../api/types';
 import * as A from '../state/actions';
 import { say, setU, U } from '../state/ui';
+import { Segmented } from '../ui/Knob';
+import { setTheme, themeMode, type ThemeMode } from '../ui/theme';
 
 const RATES = [44100, 48000, 88200, 96000];
 const BUFFERS = [32, 64, 128, 256, 512, 1024, 2048];
@@ -43,7 +45,13 @@ function SettingsDialog() {
   return (
     <div class="overlay" onPointerDown={() => setU('settings', false)}>
       <div class="dialog" style={{ width: 'min(500px,92vw)' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
-        <div class="hd"><span>Ustawienia audio</span><button onClick={() => setU('settings', false)}>×</button></div>
+        <div class="hd"><span>Ustawienia</span><button onClick={() => setU('settings', false)}>×</button></div>
+        <div class="form" style={{ 'margin-bottom': '14px' }}>
+          <label>Wygląd</label>
+          <Segmented options={['Ciemny', 'Jasny', 'Systemowy']} value={() => (['dark', 'light', 'system'] as ThemeMode[]).indexOf(themeMode())}
+            pick={i => { const m = (['dark', 'light', 'system'] as ThemeMode[])[i]; setTheme(m); say('Motyw: ' + ['ciemny', 'jasny', 'systemowy'][i]); }} title="Zapamiętywane na tym komputerze" />
+        </div>
+        <div class="sechd">Audio</div>
         <Show when={st()} fallback={<span class="note">{err() ?? 'Wczytywanie…'}</span>}>
           {s => (
             <div class="form">
@@ -75,7 +83,7 @@ function SettingsDialog() {
                 <For each={BUFFERS}>{b => <option value={String(b)}>{b} próbek</option>}</For>
               </select>
               <label>Stan</label>
-              <span class="note mono" style={{ color: s().running ? '#4ec08a' : '#e8607a' }}>
+              <span class="note mono" style={{ color: s().running ? 'var(--green)' : 'var(--danger)' }}>
                 {s().running ? '● działa' : '● zatrzymane'} · {s().actualRate} Hz · {s().actualBuffer} próbek · {s().latencyMs.toFixed(1)} ms · wejść {s().inputChannels}
               </span>
               <Show when={s().error}><span /><span class="note err">{s().error}</span></Show>

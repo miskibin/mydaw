@@ -4,6 +4,8 @@ import { VOL_UNITY, type BuiltinKind, type Catalog, type Clip, type EqBand, type
 import { defaultBands, loadPreset, newFx } from '../lib/presets';
 
 const p = (id: string, label: string, min: number, max: number, def: number, unit: string, log = false): ParamDef => ({ id, label, min, max, def, unit, log });
+/** catalog.rs `choice`: a discrete parameter (value = index) shown as buttons. */
+const choice = (id: string, label: string, def: number, options: string[]): ParamDef => ({ id, label, min: 0, max: options.length - 1, def, unit: '', log: false, options });
 
 const PARAMS: Record<BuiltinKind, ParamDef[]> = {
   eq: [p('out', 'Output', -18, 18, 0, 'dB')],
@@ -14,8 +16,17 @@ const PARAMS: Record<BuiltinKind, ParamDef[]> = {
   reverb: [p('size', 'Decay', 0.3, 8, 2.2, 's', true), p('pre', 'Pre-delay', 0, 200, 20, 'ms'), p('lo', 'Low cut', 20, 1000, 120, 'Hz', true),
     p('hi', 'High cut', 1000, 20000, 8000, 'Hz', true), p('width', 'Width', 0, 100, 100, '%'), p('mix', 'Mix', 0, 100, 25, '%')],
   limit: [p('gain', 'Gain', 0, 24, 0, 'dB'), p('ceil', 'Ceiling', -12, 0, -0.3, 'dB')],
+  fet: [p('input', 'Input', 0, 36, 8, 'dB'), p('output', 'Output', -24, 12, 0, 'dB'), choice('ratio', 'Ratio', 0, ['4', '8', '12', '20', 'All']),
+    p('attack', 'Attack', 20, 800, 300, 'µs', true), p('release', 'Release', 50, 1100, 300, 'ms', true), p('mix', 'Mix', 0, 100, 100, '%')],
+  deess: [p('thr', 'Threshold', -60, 0, -32, 'dB'), p('range', 'Range', 0, 24, 8, 'dB'), p('freq', 'Freq', 2000, 16000, 6000, 'Hz', true),
+    choice('mode', 'Mode', 0, ['Split', 'Wide']), p('look', 'Lookahead', 0, 15, 5, 'ms'), choice('listen', 'Listen', 0, ['Off', 'S'])],
+  tune: [choice('key', 'Key', 0, ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']),
+    choice('scale', 'Scale', 0, ['Chromatic', 'Major', 'Minor', 'Maj pent', 'Min pent']),
+    p('retune', 'Retune', 0, 400, 20, 'ms'), p('humanize', 'Humanize', 0, 100, 0, '%'), p('flex', 'Flex', 0, 100, 0, '%'),
+    p('vibrato', 'Vibrato', 0, 100, 0, '%'), p('transpose', 'Transpose', -12, 12, 0, 'st'), p('formant', 'Formant', -12, 12, 0, 'st')],
 };
-const NAMES: Record<BuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter' };
+const NAMES: Record<BuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter',
+  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct' };
 
 type BandEdit = [number, boolean | null, number | null, number | null, number | null];
 function eqp(name: string, out: number, edits: BandEdit[]): Preset {
@@ -73,9 +84,31 @@ const PRESETS: Record<BuiltinKind, Preset[]> = {
     pr('Bezpieczny', { gain: 0, ceil: -0.3 }), pr('Streaming −1 dB', { gain: 3, ceil: -1 }),
     pr('Głośny master', { gain: 6, ceil: -0.3 }), pr('Bardzo głośny', { gain: 10, ceil: -0.1 }),
   ],
+  fet: [
+    pr('Wokal — klasyk', { input: 8, output: -2, ratio: 0, attack: 400, release: 250, mix: 100 }),
+    pr('Wokal — z przodu', { input: 12, output: -4, ratio: 1, attack: 200, release: 150, mix: 100 }),
+    pr('Bas — kontrola', { input: 10, output: -3, ratio: 2, attack: 600, release: 400, mix: 100 }),
+    pr('Równoległa kompresja', { input: 18, output: -6, ratio: 4, attack: 100, release: 120, mix: 45 }),
+    pr('All buttons — smash', { input: 20, output: -10, ratio: 4, attack: 60, release: 100, mix: 100 }),
+  ],
+  deess: [
+    pr('Wokal — domyślny', { thr: -32, range: 8, freq: 6000, mode: 0, look: 5, listen: 0 }),
+    pr('Ostre „s”', { thr: -36, range: 12, freq: 6500, mode: 0, look: 8, listen: 0 }),
+    pr('Delikatnie', { thr: -26, range: 5, freq: 7000, mode: 0, look: 5, listen: 0 }),
+    pr('Wokal żeński', { thr: -32, range: 8, freq: 8000, mode: 0, look: 6, listen: 0 }),
+    pr('Wokal męski', { thr: -32, range: 8, freq: 5000, mode: 0, look: 6, listen: 0 }),
+    pr('Szerokopasmowy', { thr: -30, range: 6, freq: 6000, mode: 1, look: 5, listen: 0 }),
+  ],
+  tune: [
+    pr('Naturalny', { retune: 40, humanize: 30, flex: 40, vibrato: 60 }),
+    pr('Delikatna korekta', { retune: 80, humanize: 50, flex: 70, vibrato: 80 }),
+    pr('Pop — mocno', { retune: 10, humanize: 10, flex: 10, vibrato: 30 }),
+    pr('Efekt robota', { retune: 0 }),
+  ],
 };
 
-export const BUILTIN: BuiltinKind[] = ['eq', 'comp', 'sat', 'delay', 'reverb', 'limit'];
+/** catalog.rs `BUILTIN` (also the order of the "add effect" menu). */
+export const BUILTIN: BuiltinKind[] = ['tune', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'];
 
 export function mockCatalog(): Catalog {
   return {
@@ -89,7 +122,7 @@ const COLORS = [0, 6, 5, 3, 4, 8, 9, 9];
 
 function base(names: string[], insNames: string[], cat: Catalog): Project {
   const p: Project = {
-    version: 2, bpm: 128, tracks: [], patterns: [], sources: [], clips: [], loop: null, nextId: 1000,
+    version: 2, bpm: 128, tracks: [], patterns: [], sources: [], clips: [], loop: null, nextId: 1000, automations: [],
     inserts: [{ id: 0, name: 'Master', color: '#d5dae2', vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] }],
   };
   insNames.forEach((name, i) => p.inserts.push({ id: i + 1, name, color: TC[COLORS[i]], vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] }));

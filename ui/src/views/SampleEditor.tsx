@@ -10,7 +10,8 @@ import { insName, S } from '../state/store';
 import { tele } from '../state/telemetry';
 import { say, setU, U } from '../state/ui';
 import { track } from '../ui/drag';
-import { addFrameTask, fitCanvas } from '../ui/frameLoop';
+import { addFrameTask, fitCanvas, Layer } from '../ui/frameLoop';
+import { rgba, T, theme } from '../ui/theme';
 import { Knob } from '../ui/Knob';
 import { moveWindow } from './FxWindow';
 
@@ -39,10 +40,14 @@ function EditorBody(props: { clip: Clip; src: Source }) {
   const fi = () => c().fadeIn / spb() * pxB(), fo = () => c().fadeOut / spb() * pxB();
   const tr = () => S.project.tracks[c().track];
 
-  let dirty = true;
+  // The waveform is a cached layer (keyed by size, peaks and gain); region and fades are drawn
+  // over it, so dragging a fade or a region edge costs the same for a 4 s or a 4 min file.
+  const wave = new Layer();
+  let dirty = true, themeEpoch = -1;
   createEffect(() => { W(); H(); c().offset; c().len; c().fadeIn; c().fadeOut; c().gain; c().norm; c().rev; src().color; peaksVersion(); dirty = true; });
   onMount(() => {
     const stop = addFrameTask(() => {
+      if (themeEpoch !== theme.epoch) { themeEpoch = theme.epoch; dirty = true; }
       if (dirty) { dirty = false; draw(); }
       const f = tele.frame;
       if (f.previewing && f.previewPos >= 0) { prevLine.style.opacity = '1'; prevLine.style.transform = `translateX(${f.previewPos / src().dur * W()}px)`; }
@@ -55,30 +60,32 @@ function EditorBody(props: { clip: Clip; src: Source }) {
     fitCanvas(cv, w, h);
     const g = cv.getContext('2d')!;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.fillStyle = '#0e1116'; g.fillRect(0, 0, w, h);
-    g.fillStyle = '#1c222a'; g.fillRect(0, Math.floor(h / 2), w, 1);
     const pk = getPeaks(src().id, c().norm, c().rev);
-    if (pk) {
-      const bins = pk.length / 2, mid = h / 2, gn = dbg(c().gain);
-      g.fillStyle = src().color; g.beginPath();
-      for (let x = 0; x < w; x++) {
-        const a = Math.floor(x / w * bins), b = Math.max(a + 1, Math.floor((x + 1) / w * bins));
+    const key = [src().id, c().norm, c().rev, c().gain, src().color, pk ? pk.length : 0, peaksVersion()].join('|');
+    g.drawImage(wave.get(w, h, key, (l, lw, lh) => {
+      l.fillStyle = T.viz; l.fillRect(0, 0, lw, lh);
+      l.fillStyle = T.vizGrid2; l.fillRect(0, Math.floor(lh / 2), lw, 1);
+      if (!pk) return;
+      const bins = pk.length / 2, mid = lh / 2, gn = dbg(c().gain);
+      l.fillStyle = src().color; l.beginPath();
+      for (let x = 0; x < lw; x++) {
+        const a = Math.floor(x / lw * bins), b = Math.max(a + 1, Math.floor((x + 1) / lw * bins));
         const [mn, mx] = peakRange(pk, a, b);
         const y1 = mid - clamp(mx * gn, 0, 1) * mid * 0.95, y2 = mid - clamp(mn * gn, -1, 0) * mid * 0.95;
-        g.rect(x, y1, 1, Math.max(0.6, y2 - y1));
+        l.rect(x, y1, 1, Math.max(0.6, y2 - y1));
       }
-      g.fill();
-    }
+      l.fill();
+    }) as CanvasImageSource, 0, 0, w, h);
     const a = x0(), b = x1(), fI = fi(), fO = fo();
-    g.fillStyle = 'rgba(0,0,0,.55)'; g.beginPath();
+    g.fillStyle = T.shade; g.beginPath();
     g.moveTo(a, h); g.lineTo(a + fI, 0); g.lineTo(a, 0); g.closePath();
     g.moveTo(b - fO, 0); g.lineTo(b, h); g.lineTo(b, 0); g.closePath(); g.fill();
-    g.strokeStyle = '#f2f4f7'; g.lineWidth = 1.5; g.beginPath();
+    g.strokeStyle = T.ink; g.lineWidth = 1.5; g.beginPath();
     if (fI) { g.moveTo(a, h); g.lineTo(a + fI, 0); }
     if (fO) { g.moveTo(b - fO, 0); g.lineTo(b, h); }
     g.stroke();
-    g.fillStyle = 'rgba(10,12,15,.72)'; g.fillRect(0, 0, a, h); g.fillRect(b, 0, w - b, h);
-    g.fillStyle = '#4f8ef7'; g.fillRect(Math.round(a), 0, 1, h); g.fillRect(Math.round(b) - 1, 0, 1, h);
+    g.fillStyle = rgba(T.viz, 0.78); g.fillRect(0, 0, a, h); g.fillRect(b, 0, w - b, h);
+    g.fillStyle = T.blue; g.fillRect(Math.round(a), 0, 1, h); g.fillRect(Math.round(b) - 1, 0, 1, h);
   };
 
   const put = (patch: Partial<Clip>) => ({ op: 'putClips' as const, clips: [{ ...plain(c()), ...patch }] });
@@ -127,13 +134,13 @@ function EditorBody(props: { clip: Clip; src: Source }) {
         <span>{src().dur.toFixed(3) + ' s · ' + src().sr + ' Hz · ' + (src().ch === 2 ? 'stereo' : 'mono') + ' · peak ' + src().peakDb.toFixed(1) + ' dBFS'}</span>
         <span>REGION {(c().offset * spb()).toFixed(3) + ' – ' + ((c().offset + c().len) * spb()).toFixed(3) + ' s'}</span>
       </div>
-      <div onPointerDown={waveDown} style={{ position: 'relative', flex: 'none', margin: '0 16px', width: W() + 'px', height: H() + 'px', border: '1px solid #252b34', 'border-radius': '3px', overflow: 'hidden' }}>
+      <div onPointerDown={waveDown} style={{ position: 'relative', flex: 'none', margin: '0 16px', width: W() + 'px', height: H() + 'px', border: '1px solid var(--line)', 'border-radius': '3px', overflow: 'hidden' }}>
         <canvas ref={cv} style={{ position: 'absolute', left: 0, top: 0, width: W() + 'px', height: H() + 'px', 'pointer-events': 'none' }} />
         {handle(x0, 'l', 'Początek regionu')}
         {handle(x1, 'r', 'Koniec regionu')}
-        <div data-ed="fi" title="Fade in — przeciągnij" style={{ position: 'absolute', top: 0, left: x0() + fi() + 'px', width: '11px', height: '11px', 'margin-left': '-1px', background: '#f2f4f7', 'border-radius': '0 0 4px 0', cursor: 'col-resize' }} />
-        <div data-ed="fo" title="Fade out — przeciągnij" style={{ position: 'absolute', top: 0, left: x1() - fo() + 'px', width: '11px', height: '11px', 'margin-left': '-10px', background: '#f2f4f7', 'border-radius': '0 0 0 4px', cursor: 'col-resize' }} />
-        <div ref={prevLine} style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: '1px', background: '#eef1f5', opacity: 0, 'pointer-events': 'none' }} />
+        <div data-ed="fi" title="Fade in — przeciągnij" style={{ position: 'absolute', top: 0, left: x0() + fi() + 'px', width: '11px', height: '11px', 'margin-left': '-1px', background: 'var(--fg-hi)', 'border-radius': '0 0 4px 0', cursor: 'col-resize' }} />
+        <div data-ed="fo" title="Fade out — przeciągnij" style={{ position: 'absolute', top: 0, left: x1() - fo() + 'px', width: '11px', height: '11px', 'margin-left': '-10px', background: 'var(--fg-hi)', 'border-radius': '0 0 0 4px', cursor: 'col-resize' }} />
+        <div ref={prevLine} style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: '1px', background: 'var(--playhead)', opacity: 0, 'pointer-events': 'none' }} />
       </div>
       <div style={{ flex: 1, 'min-height': 0, display: 'flex', 'flex-wrap': 'wrap', 'align-content': 'flex-start', 'align-items': 'center', gap: '12px 18px', padding: '14px 16px' }}>
         <div class="row" style={{ gap: '16px' }}>
@@ -153,15 +160,15 @@ function EditorBody(props: { clip: Clip; src: Source }) {
             }}
           </For>
         </div>
-        <div style={{ width: '1px', 'align-self': 'stretch', background: '#252b34' }} />
+        <div class="vline" />
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
           <ToggleBtn on={c().norm} label="NORMALIZE" title="Normalizuj do −0.3 dBFS (nieniszcząco)" onClick={() => { commit([put({ norm: !c().norm })], 'Normalize'); say(c().norm ? 'Normalize do −0.3 dBFS (nieniszcząco)' : 'Normalize wył.'); }} />
           <ToggleBtn on={c().rev} label="REVERSE" title="Odwróć (nieniszcząco)" onClick={() => { commit([put({ rev: !c().rev })], 'Reverse'); say(c().rev ? 'Reverse wł. (nieniszcząco)' : 'Reverse wył.'); }} />
         </div>
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
-          <button onClick={() => previewing() ? be().previewStop() : be().previewClip(c().id).catch(e => say(String(e)))}
-            style={{ height: '22px', padding: '0 12px', border: 0, 'border-radius': '3px', background: previewing() ? '#4ec08a' : '#252b34', color: previewing() ? '#07231a' : '#f2f4f7', font: '500 11px var(--sans)', cursor: 'pointer' }}>
+          <button class="smallbtn" classList={{ playing: previewing() }} style={{ height: '22px', padding: '0 12px' }} onClick={() => previewing() ? be().previewStop() : be().previewClip(c().id).catch(e => say(String(e)))}>
             {previewing() ? 'Stop' : 'Podgląd'}</button>
+          <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title="Edytor wysokości nut (strojenie, dryf, formanty)" onClick={() => A.openPitchEditor(c().id)}>Wysokość…</button>
           <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title="Wytnij wszystko poza regionem (nowa kopia pliku)"
             onClick={() => be().trimClip(c().id).then(() => say('Przycięto do regionu · zapisano jako kopię, oryginał nietknięty (Ctrl+Z cofa)')).catch(e => say('Nie przycięto: ' + String(e)))}>Przytnij</button>
         </div>
@@ -174,15 +181,15 @@ function EditorBody(props: { clip: Clip; src: Source }) {
           </select>
         </div>
       </div>
-      <div onPointerDown={resize} title="Zmień rozmiar" style={{ position: 'absolute', right: 0, bottom: 0, width: '14px', height: '14px', cursor: 'nwse-resize', background: 'linear-gradient(135deg,transparent 50%,#4a5360 50%,#4a5360 60%,transparent 60%,transparent 70%,#4a5360 70%,#4a5360 80%,transparent 80%)' }} />
+      <div class="resizer" onPointerDown={resize} title="Zmień rozmiar" />
     </div>
   );
 }
 
 function ToggleBtn(p: { on: boolean; label: string; title: string; onClick: () => void }) {
   return (
-    <button onClick={p.onClick} title={p.title} style={{ display: 'flex', 'align-items': 'center', gap: '7px', height: '22px', padding: '0 8px', border: 0, 'border-radius': '3px', background: '#0e1013', color: p.on ? '#f2f4f7' : '#9aa2ad', font: '600 10px var(--mono)', 'letter-spacing': '.06em', cursor: 'pointer', 'white-space': 'nowrap' }}>
-      <span style={{ width: '8px', height: '8px', 'border-radius': '2px', background: p.on ? '#4ec08a' : '#2c333d' }} />{p.label}
+    <button onClick={p.onClick} title={p.title} style={{ display: 'flex', 'align-items': 'center', gap: '7px', height: '22px', padding: '0 8px', border: 0, 'border-radius': '3px', background: 'var(--bg1)', color: p.on ? 'var(--fg-hi)' : 'var(--fg3)', font: '600 10px var(--mono)', 'letter-spacing': '.06em', cursor: 'pointer', 'white-space': 'nowrap' }}>
+      <span style={{ width: '8px', height: '8px', 'border-radius': '2px', background: p.on ? 'var(--green)' : 'var(--line2)' }} />{p.label}
     </button>
   );
 }
