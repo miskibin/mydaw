@@ -52,7 +52,6 @@ function SettingsDialog() {
                 <select class="sel" value={s().host} disabled={busy()} onChange={e => apply({ host: e.currentTarget.value })}>
                   <For each={hosts()}>{h => <option value={h.id}>{h.name}</option>}</For>
                 </select>
-                <Show when={s().host === 'asio'}><button class="smallbtn" style={{ height: '26px' }} onClick={() => be().asioControlPanel().catch(e => setErr(String(e)))}>Panel ASIO</button></Show>
               </div>
               <Show when={!s().asioCompiled}><span /><span class="note warn">ASIO nie jest wkompilowane w tę wersję — dostępne są pozostałe sterowniki.</span></Show>
               <label>Wyjście</label>

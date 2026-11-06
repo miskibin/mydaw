@@ -467,7 +467,7 @@ function openLaneMenu(x: number, y: number, i: number) {
     { t: 'sep' },
     { t: 'item', label: 'Wstaw ścieżkę powyżej', act: () => A.insertTrack(i) },
     { t: 'item', label: 'Wstaw ścieżkę poniżej', act: () => A.insertTrack(i + 1) },
-    { t: 'item', label: 'Usuń ścieżkę', danger: true, disabled: true, title: 'Silnik nie ma operacji usuwania ścieżki', act: () => {} },
+    { t: 'item', label: 'Usuń ścieżkę', danger: true, disabled: S.project.tracks.length < 2, act: () => A.removeTrack(t.id) },
   ], 400);
 }
 

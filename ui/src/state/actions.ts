@@ -149,6 +149,10 @@ export function armTrack(i: number) {
   commit(ops, 'Uzbrój');
   say(on ? 'Nagrywanie na: ' + S.project.tracks[i].name : 'Ścieżka rozbrojona');
 }
+export function removeTrack(id: number) {
+  commit([{ op: 'removeTrack', id }], 'Usuń ścieżkę');
+}
+
 export function insertTrack(i: number) {
   commit(insertTrackOps(plain(S.project), i, allocId()), 'Dodaj ścieżkę');
 }

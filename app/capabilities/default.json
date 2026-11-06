@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Main window: engine commands, events, file dialogs.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save", "core:window:allow-set-title"]
 }

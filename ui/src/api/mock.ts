@@ -339,7 +339,6 @@ export class MockBackend implements Backend {
     this.emit('audio-status', { ...this.audio });
     return { ...this.audio };
   }
-  async asioControlPanel() {}
 
   // ---------- library ----------
   async libraryList(): Promise<LibraryList> { await delay(); return { kits: this.kits.map(k => ({ ...k })), folders: [...this.folders] }; }

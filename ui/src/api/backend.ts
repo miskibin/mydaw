@@ -41,7 +41,6 @@ export interface Backend {
   audioDevices(host: string): Promise<AudioDevices>;
   audioGetConfig(): Promise<AudioStatus>;
   audioSetConfig(cfg: AudioConfig): Promise<AudioStatus>;
-  asioControlPanel(): Promise<void>;
   libraryList(): Promise<LibraryList>;
   libraryInstall(id: string): Promise<void>;
   libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]>;
@@ -110,7 +109,6 @@ export function tauriBackend(): Backend {
     audioGetConfig: () => invoke('audio_get_config'),
     // Sent both as `config` and flattened, so either command signature deserialises it.
     audioSetConfig: cfg => invoke('audio_set_config', { config: cfg, ...cfg }),
-    asioControlPanel: () => invoke('asio_control_panel'),
     libraryList: () => invoke('library_list'),
     libraryInstall: id => invoke('library_install', { id }),
     libraryFiles: q => invoke('library_files', { kit: q.kit ?? null, folder: q.folder ?? null }),

@@ -67,6 +67,7 @@ export type Op =
   | { op: 'removeClips'; ids: Id[] }
   | { op: 'putTrack'; track: Track }
   | { op: 'putInsert'; insert: Insert }
+  | { op: 'removeTrack'; id: Id }
   | { op: 'removeInsert'; id: Id }
   | { op: 'putFx'; insertId: Id; fx: Fx; index?: number }
   | { op: 'removeFx'; fxId: Id }

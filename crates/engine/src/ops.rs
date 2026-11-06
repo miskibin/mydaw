@@ -16,6 +16,8 @@ pub enum Op {
     RemoveClips { ids: Vec<Id> },
     /// Insert (new id) or replace a track. New tracks are appended.
     PutTrack { track: Track },
+    /// Remove a track (lane) with its clips; lanes below move up one.
+    RemoveTrack { id: Id },
     /// Insert or replace a mixer insert *without* touching its effect chain
     /// (`fx` in the payload is ignored for an existing insert).
     PutInsert { insert: Insert },
@@ -120,6 +122,21 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             }
             d.params = true;
             d.timeline = true;
+        }
+        Op::RemoveTrack { id } => {
+            let idx = p.tracks.iter().position(|t| t.id == *id).ok_or(OpError::Missing { what: "track", id: *id })? as u32;
+            if p.tracks.len() == 1 {
+                return Err(OpError::Invalid("the last track cannot be removed".into()));
+            }
+            p.tracks.remove(idx as usize);
+            p.clips.retain(|c| c.track != idx);
+            for c in p.clips.iter_mut() {
+                if c.track > idx {
+                    c.track -= 1;
+                }
+            }
+            d.timeline = true;
+            d.mixer = true;
         }
         Op::PutInsert { insert } => {
             bump(p, insert.id);

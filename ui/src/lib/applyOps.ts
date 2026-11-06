@@ -43,6 +43,15 @@ export function applyOp(p: Project, op: Op): void {
       }
       return;
     }
+    case 'removeTrack': {
+      const idx = p.tracks.findIndex(t => t.id === op.id);
+      if (idx < 0) throw new Error('no track ' + op.id);
+      if (p.tracks.length === 1) throw new Error('the last track cannot be removed');
+      p.tracks.splice(idx, 1);
+      p.clips = p.clips.filter(c => c.track !== idx);
+      for (const c of p.clips) if (c.track > idx) c.track -= 1;
+      return;
+    }
     case 'removeInsert': {
       if (op.id === 0) throw new OpError('the master cannot be removed');
       if (!p.inserts.some(m => m.id === op.id)) throw new OpError(`no insert with id ${op.id}`);
