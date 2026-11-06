@@ -31,5 +31,38 @@ fn main() {
     println!("voiced {:.1} s, notes {}, median midi {:.1}, range {:.1}–{:.1}", v.len() as f32 / an.rate, an.notes.len(), s[s.len() / 2], s[s.len() / 20], s[s.len() * 19 / 20]);
     println!("pitch classes: {}", (0..12).map(|i| format!("{}:{}", names[i], pc[i] as u32)).collect::<Vec<_>>().join(" "));
     println!("mean |deviation| from semitone grid: {dev:.1} cents");
-    println!("best keys: {:?}", &keys[..4]);
+    println!("best keys (frames): {:?}", &keys[..4]);
+    // note-based: each note's median pitch, weighted by its length; share in each major scale
+    let mut w = [0f32; 12];
+    for nb in &an.notes {
+        let (i0, i1) = ((nb.start * an.rate as f64) as usize, ((nb.end * an.rate as f64) as usize).min(an.curve.len()));
+        let mut v: Vec<f32> = an.curve[i0..i1].iter().copied().filter(|x| !x.is_nan()).collect();
+        let len = (nb.end - nb.start) as f32;
+        if v.len() < 3 || len < 0.1 {
+            continue;
+        }
+        v.sort_by(f32::total_cmp);
+        w[(v[v.len() / 2].round() as i32).rem_euclid(12) as usize] += len;
+    }
+    let total: f32 = w.iter().sum();
+    // intonation of the notes themselves (median of each note, ignoring glides into it)
+    let mut nd = vec![];
+    for nb in &an.notes {
+        let (i0, i1) = ((nb.start * an.rate as f64) as usize, ((nb.end * an.rate as f64) as usize).min(an.curve.len()));
+        let mut v: Vec<f32> = an.curve[i0..i1].iter().copied().filter(|x| !x.is_nan()).collect();
+        if v.len() >= 5 {
+            v.sort_by(f32::total_cmp);
+            let m = v[v.len() / 2];
+            nd.push(((m - m.round()) * 100.0).abs());
+        }
+    }
+    nd.sort_by(f32::total_cmp);
+    if !nd.is_empty() {
+        println!("note medians: {} notes, median |off| {:.1} cents, 80th pct {:.1} cents", nd.len(), nd[nd.len() / 2], nd[nd.len() * 4 / 5]);
+    }
+    let major = [0usize, 2, 4, 5, 7, 9, 11];
+    let mut fit: Vec<(f32, &str)> = (0..12).map(|k| (major.iter().map(|d| w[(k + d) % 12]).sum::<f32>() / total.max(1e-6), names[k])).collect();
+    fit.sort_by(|a, b| b.0.total_cmp(&a.0));
+    println!("note weights (s): {}", (0..12).map(|i| format!("{}:{:.1}", names[i], w[i])).collect::<Vec<_>>().join(" "));
+    println!("major scales by share of sung time in scale (relative minor = 6th degree): {:?}", &fit[..4]);
 }

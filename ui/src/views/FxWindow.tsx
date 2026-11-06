@@ -230,6 +230,7 @@ function TuneControls(props: { fx: Fx }) {
       <div class="ctlrow">
         <Show when={defOf(props.fx, 'key')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={NOTE_NAMES} small />}</Show>
         <Show when={defOf(props.fx, 'scale')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} small />}</Show>
+        <Show when={defOf(props.fx, 'voice')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={['Auto', 'Bas', 'Męski', 'Żeński', 'Sopran']} small />}</Show>
       </div>
       <div class="knobs">
         <Ctl fx={props.fx} id="retune" ends={['robot', 'natural']} />

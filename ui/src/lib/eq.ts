@@ -1,6 +1,6 @@
 // EQ response math — a port of crates/engine/src/dsp.rs (`Biquad::set`, `Eq::design`) so the
 // window draws exactly what the engine does: RBJ cookbook biquads, cut filters as cascades
-// (user Q on the first stage, 0.707 on the rest), notch = bell at −60 dB with Q ≥ 2,
+// (user Q on the first stage, 0.707 on the rest), notch = RBJ notch at the user Q,
 // tilt = high shelf (Q 0.5, gain g) followed by −g/2 dB.
 import type { BandType, EqBand, Placement } from '../api/types';
 
@@ -20,7 +20,7 @@ export const slopeOf = (b: EqBand) => b.slope ?? 12;
 /** Cascade length of a band (catalog.rs `param_block`: slope/12 clamped to 1..4; only cuts cascade). */
 export const stagesOf = (b: EqBand) => isCut(b.type) ? clampN(Math.floor(slopeOf(b) / 12), 1, 4) : 1;
 
-type Kind = 'lp' | 'hp' | 'bp' | 'peak' | 'ls' | 'hs';
+type Kind = 'lp' | 'hp' | 'bp' | 'notch' | 'peak' | 'ls' | 'hs';
 
 /** RBJ biquad, normalised [b0,b1,b2,a1,a2] (a0 = 1), as `Biquad::set`. */
 export function rbj(t: Kind, f: number, q: number, gainDb: number, sr = SR): [number, number, number, number, number] {
@@ -33,6 +33,7 @@ export function rbj(t: Kind, f: number, q: number, gainDb: number, sr = SR): [nu
     case 'lp': [b0, b1, b2, a0, a1, a2] = [(1 - cw) / 2, 1 - cw, (1 - cw) / 2, 1 + alpha, -2 * cw, 1 - alpha]; break;
     case 'hp': [b0, b1, b2, a0, a1, a2] = [(1 + cw) / 2, -(1 + cw), (1 + cw) / 2, 1 + alpha, -2 * cw, 1 - alpha]; break;
     case 'bp': [b0, b1, b2, a0, a1, a2] = [alpha, 0, -alpha, 1 + alpha, -2 * cw, 1 - alpha]; break;
+    case 'notch': [b0, b1, b2, a0, a1, a2] = [1, -2 * cw, 1, 1 + alpha, -2 * cw, 1 - alpha]; break;
     case 'peak': [b0, b1, b2, a0, a1, a2] = [1 + alpha * a, -2 * cw, 1 - alpha * a, 1 + alpha / a, -2 * cw, 1 - alpha / a]; break;
     case 'ls': {
       const s = 2 * Math.sqrt(a) * alpha;
@@ -63,7 +64,7 @@ export function design(b: EqBand, extraDb = 0, sr = SR): Design {
     case 'highcut': return { stages: cascade('lp'), offsetDb: 0 };
     case 'lowshelf': return { stages: [rbj('ls', f, q, g, sr)], offsetDb: 0 };
     case 'highshelf': return { stages: [rbj('hs', f, q, g, sr)], offsetDb: 0 };
-    case 'notch': return { stages: [rbj('peak', f, Math.max(q, 2), -60, sr)], offsetDb: 0 };
+    case 'notch': return { stages: [rbj('notch', f, q, 0, sr)], offsetDb: 0 };
     case 'bandpass': return { stages: [rbj('bp', f, q, 0, sr)], offsetDb: 0 };
     case 'tilt': return { stages: [rbj('hs', f, 0.5, g, sr)], offsetDb: -g / 2 };
     default: return { stages: [rbj('peak', f, q, g, sr)], offsetDb: 0 };

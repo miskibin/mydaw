@@ -90,6 +90,8 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("vibrato", "Vibrato", 0.0, 100.0, 0.0, "%", false),
         p("transpose", "Transpose", -12.0, 12.0, 0.0, "st", false),
         p("formant", "Formant", -12.0, 12.0, 0.0, "st", false),
+        // like Auto-Tune's input type: the pitch search range, so a loud harmonic can't be taken for the note
+        choice("voice", "Voice", 0.0, &["Auto", "Low male", "Male", "Female", "Soprano"]),
     ];
     const DENOISE: &[ParamDef] = &[
         p("reduction", "Reduction", 0.0, 40.0, 12.0, "dB", false),
@@ -342,7 +344,7 @@ pub fn catalog() -> Catalog {
 /// Resolves an effect's parameters to the fixed block the DSP reads.
 pub fn param_block(fx: &Fx) -> ParamBlock {
     let mut pb = ParamBlock::default();
-    for (i, d) in params(fx.kind).iter().enumerate().take(8) {
+    for (i, d) in params(fx.kind).iter().enumerate().take(12) {
         let v = fx.params.get(d.id).copied().unwrap_or(d.def).clamp(d.min, d.max);
         pb.values[i] = v as f32;
     }
