@@ -1,15 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Baseline permissions for the main window, project file dialogs and the custom title bar. Window mutations are limited to dragging, minimizing, toggling maximization and closing.",
+  "description": "Main window: engine commands, events, file dialogs.",
   "windows": ["main"],
-  "permissions": [
-    "core:default",
-    "dialog:allow-open",
-    "dialog:allow-save",
-    "core:window:allow-close",
-    "core:window:allow-minimize",
-    "core:window:allow-toggle-maximize",
-    "core:window:allow-start-dragging"
-  ]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save"]
 }

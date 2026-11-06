@@ -1,0 +1,2392 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#0e1013;overflow:hidden}
+*{box-sizing:border-box}
+a{color:#4f8ef7}
+a:hover{color:#8fb6ff}
+button,select,input{font:inherit}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:#0e1013}
+::-webkit-scrollbar-thumb{background:#2c333d;border:2px solid #0e1013;border-radius:6px}
+::-webkit-scrollbar-corner{background:#0e1013}
+</style>
+</helmet>
+<div ref="{{ rootRef }}" onContextMenu="{{ noCtx }}" onDragOver="{{ onDragOver }}" onDragLeave="{{ onDragLeave }}" onDrop="{{ onDrop }}" style="height:100vh;display:flex;flex-direction:column;background:#0e1013;color:#d5dae2;font-family:Geist,system-ui,sans-serif;font-size:12px;user-select:none">
+
+  <div data-screen-label="Toolbar" style="min-height:40px;flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px;padding:6px 8px;background:#171b21;border-bottom:1px solid #0a0c0f">
+    <button onClick="{{ togglePicker }}" title="Browser (F8)" style="width:28px;height:28px;border:0;border-radius:4px;background:{{ pickBtnBg }};color:#b4bac4;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="color:#f2f4f7">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg>
+    </button>
+    <div style="display:flex;gap:1px">
+      <button onClick="{{ undo }}" title="Cofnij (Ctrl+Z)" style="width:28px;height:28px;border:0;border-radius:4px;background:transparent;color:{{ undoFg }};cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#252b34">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14L4 9l5-5"></path><path d="M4 9h10a6 6 0 0 1 0 12h-3"></path></svg>
+      </button>
+      <button onClick="{{ redo }}" title="Ponów (Ctrl+Shift+Z)" style="width:28px;height:28px;border:0;border-radius:4px;background:transparent;color:{{ redoFg }};cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#252b34">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"></path><path d="M20 9H10a6 6 0 0 0 0 12h3"></path></svg>
+      </button>
+    </div>
+    <div style="width:1px;height:20px;background:#2c333d"></div>
+    <div style="display:flex;gap:1px;padding:2px;background:#0e1013;border:1px solid #252b34;border-radius:5px">
+      <button onClick="{{ togglePlay }}" title="Play / Stop (Spacja)" style="width:30px;height:24px;border:0;border-radius:3px;background:{{ playBg }};color:{{ playFg }};cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg width="11" height="11" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor"></path></svg>
+      </button>
+      <button onClick="{{ stop }}" title="Stop" style="width:30px;height:24px;border:0;border-radius:3px;background:transparent;color:#d5dae2;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#252b34">
+        <svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor"></rect></svg>
+      </button>
+      <button onClick="{{ toggleRec }}" title="Nagrywanie (R)" style="width:30px;height:24px;border:0;border-radius:3px;background:{{ recBg }};color:{{ recFg }};cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor"></circle></svg>
+      </button>
+      <button onClick="{{ toggleMonitor }}" title="Odsłuch wejścia" style="width:30px;height:24px;border:0;border-radius:3px;background:{{ monBg }};color:{{ monFg }};cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 15v-3a8 8 0 0 1 16 0v3"></path><rect x="3" y="14" width="4" height="7" rx="1"></rect><rect x="17" y="14" width="4" height="7" rx="1"></rect></svg>
+      </button>
+      <button onClick="{{ toggleMetro }}" title="Metronom" style="width:30px;height:24px;border:0;border-radius:3px;background:{{ metroBg }};color:{{ metroFg }};cursor:pointer;display:flex;align-items:center;justify-content:center">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6l4 18H5z"></path><path d="M12 16l6-9"></path></svg>
+      </button>
+      <button onClick="{{ toggleCount }}" title="Count-in: 1 takt przed nagrywaniem" style="height:24px;padding:0 6px;border:0;border-radius:3px;background:{{ countBg }};color:{{ countFg }};cursor:pointer;font:600 9px 'Geist Mono',monospace;letter-spacing:.04em;white-space:nowrap">1 BAR</button>
+    </div>
+    <sc-if value="{{ rec }}" hint-placeholder-val="{{ false }}">
+      <div title="Poziom wejścia" style="display:flex;align-items:center;gap:6px">
+        <span style="font:500 9px 'Geist Mono',monospace;color:#7d8592;letter-spacing:.08em">IN</span>
+        <div style="position:relative;width:64px;height:6px;background:#0a0c0f;border-radius:2px;overflow:hidden">
+          <div style="position:absolute;left:0;top:0;bottom:0;width:{{ inPct }}%;background:{{ inColor }}"></div>
+        </div>
+      </div>
+    </sc-if>
+    <div style="display:flex;align-items:center;gap:10px;height:28px;padding:0 10px;background:#0a0c0f;border:1px solid #252b34;border-radius:5px">
+      <span ref="{{ clockRef }}" style="font:500 14px 'Geist Mono',monospace;color:#f2f4f7;min-width:68px;font-variant-numeric:tabular-nums">{{ clock }}</span>
+      <div style="width:1px;height:14px;background:#252b34"></div>
+      <span data-wheel="bpm" onPointerDown="{{ bpmDown }}" title="Tempo — przeciągnij, kółko, Shift = setne" style="font:500 14px 'Geist Mono',monospace;color:#4f8ef7;cursor:ns-resize;touch-action:none;font-variant-numeric:tabular-nums">{{ bpmText }}</span>
+      <span style="font:500 9px 'Geist Mono',monospace;color:#7d8592;letter-spacing:.08em">BPM</span>
+    </div>
+    <div style="width:1px;height:20px;background:#2c333d"></div>
+    <div style="display:flex;gap:1px;padding:2px;background:#0e1013;border:1px solid #252b34;border-radius:5px">
+      <sc-for list="{{ tools }}" as="t" hint-placeholder-count="6">
+        <button onClick="{{ t.onClick }}" title="{{ t.title }}" style="width:28px;height:24px;border:0;border-radius:3px;background:{{ t.bg }};color:{{ t.fg }};cursor:pointer;display:flex;align-items:center;justify-content:center">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="{{ t.icon }}"></path></svg>
+        </button>
+      </sc-for>
+    </div>
+    <select onChange="{{ onSnap }}" value="{{ snapVal }}" title="Przyciąganie do siatki" style="height:28px;background:#0a0c0f;color:#d5dae2;border:1px solid #252b34;border-radius:5px;padding:0 6px;font:500 11px Geist,sans-serif;cursor:pointer">
+      <sc-for list="{{ snapOpts }}" as="o" hint-placeholder-count="5"><option value="{{ o.v }}">{{ o.label }}</option></sc-for>
+    </select>
+    <div style="flex:1 1 0;min-width:0"></div>
+    <span style="font:500 10px 'Geist Mono',monospace;color:{{ loopFg }};letter-spacing:.06em;white-space:nowrap">{{ loopText }}</span>
+    <button onClick="{{ toggleMixer }}" title="Mikser (F9)" style="height:26px;padding:0 8px;border:0;border-radius:4px;background:{{ mixBtnBg }};color:{{ mixBtnFg }};cursor:pointer;display:flex;align-items:center;gap:5px;font:500 11px Geist,sans-serif">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6"></path></svg>Mixer
+    </button>
+    <button onClick="{{ toggleFollow }}" title="Podążaj za głowicą (F)" style="height:26px;padding:0 8px;border:0;border-radius:4px;background:{{ followBg }};color:{{ followFg }};cursor:pointer;display:flex;align-items:center;gap:5px;font:500 11px Geist,sans-serif">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h11"></path><path d="M11 7l5 5-5 5"></path><path d="M20 4v16"></path></svg>Follow
+    </button>
+    <div style="display:flex;gap:1px">
+      <button onClick="{{ zoomOut }}" title="Oddal (Ctrl+−)" style="width:26px;height:26px;border:0;border-radius:4px;background:transparent;color:#b4bac4;cursor:pointer;font:500 14px Geist,sans-serif" style-hover="background:#252b34">−</button>
+      <button onClick="{{ zoomIn }}" title="Przybliż (Ctrl+=)" style="width:26px;height:26px;border:0;border-radius:4px;background:transparent;color:#b4bac4;cursor:pointer;font:500 14px Geist,sans-serif" style-hover="background:#252b34">+</button>
+    </div>
+    <button onClick="{{ toggleHelp }}" title="Skróty klawiszowe (?)" style="width:26px;height:26px;border:0;border-radius:4px;background:{{ helpBg }};color:#b4bac4;cursor:pointer;font:600 12px 'Geist Mono',monospace" style-hover="background:#252b34">?</button>
+  </div>
+
+  <div style="flex:1;min-height:0;display:flex">
+    <sc-if value="{{ pickOpen }}" hint-placeholder-val="{{ true }}">
+      <div data-screen-label="Browser" style="width:{{ pickW }}px;flex:none;display:flex;flex-direction:column;background:#14181e;overflow:auto">
+        <div style="height:28px;flex:none;display:flex;align-items:center;padding:0 10px;border-bottom:1px solid #0a0c0f;font:600 10px Geist,sans-serif;letter-spacing:.12em;color:#7d8592">PATTERNY</div>
+        <div style="display:flex;flex-direction:column;padding:4px 0">
+          <sc-for list="{{ pickPats }}" as="p" hint-placeholder-count="3">
+            <div onPointerDown="{{ p.onDown }}" title="Klik = wybierz · przeciągnij na ścieżkę" style="height:26px;display:flex;align-items:center;gap:8px;padding:0 10px;background:{{ p.bg }};cursor:grab" style-hover="background:#1c2128">
+              <span style="width:8px;height:8px;border-radius:2px;flex:none;background:{{ p.color }}"></span>
+              <span style="flex:1;font:500 12px Geist,sans-serif;color:{{ p.fg }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</span>
+              <span style="font:500 10px 'Geist Mono',monospace;color:#7d8592">{{ p.meta }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 10px;border-top:1px solid #0a0c0f;border-bottom:1px solid #0a0c0f;font:600 10px Geist,sans-serif;letter-spacing:.12em;color:#7d8592">
+          <span>AUDIO</span>
+          <label title="Importuj pliki audio" style="font:500 11px Geist,sans-serif;letter-spacing:0;color:#4f8ef7;cursor:pointer">Importuj<input type="file" accept="audio/*" multiple="multiple" onChange="{{ onFiles }}" style="display:none"></label>
+        </div>
+        <div style="display:flex;flex-direction:column;padding:4px 0">
+          <sc-for list="{{ pickSrcs }}" as="p" hint-placeholder-count="2">
+            <div onPointerDown="{{ p.onDown }}" title="Klik = wybierz · przeciągnij na ścieżkę" style="display:flex;flex-direction:column;gap:3px;padding:6px 10px;background:{{ p.bg }};cursor:grab" style-hover="background:#1c2128">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="width:8px;height:8px;border-radius:50%;flex:none;background:{{ p.color }}"></span>
+                <span style="flex:1;font:500 12px Geist,sans-serif;color:{{ p.fg }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.name }}</span>
+                <span style="font:500 10px 'Geist Mono',monospace;color:#7d8592">{{ p.meta }}</span>
+              </div>
+              <svg width="100%" height="14" viewBox="0 0 160 14" preserveAspectRatio="none" style="display:block"><path d="{{ p.wave }}" style="stroke:{{ p.color }};stroke-width:1px;fill:none;opacity:.7" vector-effect="non-scaling-stroke"></path></svg>
+            </div>
+          </sc-for>
+        </div>
+        <div style="padding:8px 10px 14px;font:11px Geist,sans-serif;color:#5c6573;text-wrap:pretty">Przeciągnij WAV / MP3 z dysku na ścieżkę lub tutaj.</div>
+      </div>
+      <div onPointerDown="{{ pickSplit }}" onDoubleClick="{{ togglePicker }}" title="Przeciągnij, aby zmienić szerokość" style="width:5px;flex:none;cursor:col-resize;background:#0a0c0f;border-left:1px solid #0a0c0f" style-hover="background:#4f8ef7"></div>
+    </sc-if>
+
+    <div style="flex:1;min-width:0;position:relative;display:flex">
+      <div ref="{{ scrollRef }}" style="flex:1;min-width:0;overflow:auto;position:relative;background:#111419">
+        <div style="width:{{ contentW }}px;position:relative">
+          <div style="position:sticky;top:0;z-index:5;display:flex;height:26px">
+            <div style="position:sticky;left:0;z-index:6;width:{{ headW }}px;flex:none;background:#171b21;border-right:1px solid #0a0c0f;border-bottom:1px solid #0a0c0f;display:flex;align-items:center;justify-content:space-between;padding:0 10px">
+              <span style="font:600 10px Geist,sans-serif;letter-spacing:.12em;color:#7d8592">PLAYLIST</span>
+              <span style="font:500 10px 'Geist Mono',monospace;color:#5c6573">{{ trackCount }}</span>
+            </div>
+            <div ref="{{ rulerRef }}" onPointerDown="{{ rulerDown }}" onDoubleClick="{{ clearLoop }}" title="Klik = start · przeciągnij = pętla · 2× klik = usuń pętlę" style="position:relative;flex:none;width:{{ gridW }}px;height:26px;background:#171b21;border-bottom:1px solid #0a0c0f;cursor:pointer;overflow:hidden">
+              <div style="position:absolute;left:0;right:0;bottom:0;height:5px;pointer-events:none;background-image:linear-gradient(to right,#3d4653 1px,transparent 1px);background-size:{{ beatPx }}px 100%"></div>
+              <sc-if value="{{ hasLoop }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;top:0;bottom:0;left:{{ loopX }}px;width:{{ loopW }}px;background:rgba(78,192,138,.16);border-left:1px solid #4ec08a;border-right:1px solid #4ec08a;pointer-events:none"></div>
+              </sc-if>
+              <sc-for list="{{ bars }}" as="b" hint-placeholder-count="16">
+                <span style="position:absolute;left:{{ b.left }}px;top:0;height:26px;display:flex;align-items:center;padding:0 0 4px 4px;border-left:1px solid #4a5360;font:500 10px 'Geist Mono',monospace;color:#9aa2ad;pointer-events:none">{{ b.n }}</span>
+              </sc-for>
+              <div style="position:absolute;top:0;left:{{ startX }}px;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-top:7px solid #4ec08a;transform:translateX(-5px);pointer-events:none"></div>
+              <div ref="{{ phRulerRef }}" style="position:absolute;top:0;bottom:0;left:{{ startX }}px;width:1px;background:#eef1f5;pointer-events:none"></div>
+            </div>
+          </div>
+          <div style="display:flex">
+            <div style="position:sticky;left:0;z-index:4;width:{{ headW }}px;flex:none;background:#161a21;border-right:1px solid #0a0c0f">
+              <sc-for list="{{ lanes }}" as="l" hint-placeholder-count="8">
+                <div onPointerDown="{{ l.onDown }}" style="position:relative;height:{{ l.h }}px;display:flex;border-bottom:1px solid #0a0c0f;background:{{ l.bg }}">
+                  <div style="width:3px;flex:none;background:{{ l.color }}"></div>
+                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:7px;padding:0 6px 0 7px">
+                    <div style="display:flex;align-items:center;gap:6px;min-width:0">
+                      <span style="width:14px;flex:none;font:500 10px 'Geist Mono',monospace;color:#5c6573">{{ l.num }}</span>
+                      <span onDoubleClick="{{ l.onRename }}" title="2× klik = zmień nazwę" style="flex:1;min-width:0;font:500 12px Geist,sans-serif;color:{{ l.fg }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ l.name }}</span>
+                      <div style="display:flex;gap:2px;flex:none">
+                        <button onClick="{{ l.onRoute }}" title="Kanał miksera" style="height:16px;min-width:24px;padding:0 4px;border:0;border-radius:2px;background:#0e1013;color:#8fb6ff;font:500 9px 'Geist Mono',monospace;cursor:pointer">{{ l.route }}</button>
+                        <button onClick="{{ l.onMute }}" title="Mute" style="width:18px;height:16px;padding:0;border:0;border-radius:2px;background:{{ l.mBg }};color:{{ l.mFg }};font:600 9px 'Geist Mono',monospace;cursor:pointer">M</button>
+                        <button onClick="{{ l.onSolo }}" title="Solo" style="width:18px;height:16px;padding:0;border:0;border-radius:2px;background:{{ l.sBg }};color:{{ l.sFg }};font:600 9px 'Geist Mono',monospace;cursor:pointer">S</button>
+                        <button onClick="{{ l.onArm }}" title="Uzbrój do nagrywania" style="width:18px;height:16px;padding:0;border:0;border-radius:2px;background:{{ l.rBg }};color:{{ l.rFg }};cursor:pointer;display:flex;align-items:center;justify-content:center">
+                          <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="currentColor"></circle></svg>
+                        </button>
+                      </div>
+                    </div>
+                    <sc-if value="{{ l.tall }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex;align-items:center;gap:6px;padding-left:20px">
+                        <div onPointerDown="{{ l.onVol }}" title="Głośność — przeciągnij, 2× klik = 0 dB" style="flex:1;height:12px;display:flex;align-items:center;cursor:ew-resize;touch-action:none">
+                          <div style="position:relative;width:100%;height:3px;background:#0a0c0f;border-radius:2px">
+                            <div style="position:absolute;left:0;top:0;bottom:0;width:{{ l.volPct }}%;background:{{ l.volColor }};border-radius:2px"></div>
+                            <div style="position:absolute;top:-3px;left:{{ l.volPct }}%;width:2px;height:9px;margin-left:-1px;background:#d5dae2;border-radius:1px"></div>
+                          </div>
+                        </div>
+                        <span style="width:44px;flex:none;text-align:right;font:500 9px 'Geist Mono',monospace;color:#7d8592">{{ l.volText }}</span>
+                      </div>
+                    </sc-if>
+                  </div>
+                  <div onPointerDown="{{ l.onResize }}" title="Przeciągnij = wysokość ścieżki" style="position:absolute;left:0;right:0;bottom:-3px;height:6px;cursor:row-resize;z-index:3"></div>
+                </div>
+              </sc-for>
+              <button onClick="{{ addTrack }}" style="width:100%;height:28px;border:0;background:transparent;color:#7d8592;font:500 11px Geist,sans-serif;cursor:pointer;text-align:left;padding:0 12px" style-hover="color:#f2f4f7;background:#1c2128">+ Dodaj ścieżkę</button>
+              <div onPointerDown="{{ headSplit }}" title="Przeciągnij = szerokość nagłówków" style="position:absolute;top:0;bottom:0;right:-3px;width:6px;cursor:col-resize;z-index:5"></div>
+            </div>
+            <div ref="{{ gridRef }}" onPointerDown="{{ gridDown }}" onDoubleClick="{{ gridDbl }}" style="position:relative;flex:none;width:{{ gridW }}px;height:{{ gridH }}px;cursor:{{ cursor }};touch-action:none">
+              <sc-for list="{{ lanes }}" as="l" hint-placeholder-count="8">
+                <div style="height:{{ l.h }}px;background:{{ l.lane }};border-bottom:1px solid #0b0d10"></div>
+              </sc-for>
+              <div style="position:absolute;inset:0;pointer-events:none;background-image:{{ gridBg }};background-size:{{ gridSize }}"></div>
+              <sc-if value="{{ hasLoop }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;top:0;bottom:0;left:{{ loopX }}px;width:{{ loopW }}px;background:rgba(78,192,138,.05);pointer-events:none"></div>
+              </sc-if>
+              <sc-for list="{{ clips }}" as="c" hint-placeholder-count="0">
+                <div data-clip="{{ c.id }}" style="position:absolute;left:{{ c.left }}px;top:{{ c.top }}px;width:{{ c.width }}px;height:{{ c.h }}px;border-radius:3px;background:{{ c.bg }};box-shadow:{{ c.ring }};opacity:{{ c.op }};overflow:hidden;cursor:{{ clipCursor }}">
+                  <div style="height:15px;display:flex;align-items:center;gap:5px;padding:0 5px;background:{{ c.head }};font:500 10px Geist,sans-serif;color:{{ c.headFg }};white-space:nowrap;overflow:hidden;pointer-events:none">
+                    <sc-if value="{{ c.muted }}" hint-placeholder-val="{{ false }}"><span style="font:600 9px 'Geist Mono',monospace;opacity:.8">M</span></sc-if>
+                    <span>{{ c.name }}</span>
+                    <span style="font:500 9px 'Geist Mono',monospace;opacity:.65">{{ c.gainText }}</span>
+                  </div>
+                  <div style="position:absolute;left:0;right:0;top:15px;bottom:0;pointer-events:none">
+                    <sc-for list="{{ c.rects }}" as="r" hint-placeholder-count="0">
+                      <div style="position:absolute;left:{{ r.x }}px;top:{{ r.y }}px;width:{{ r.w }}px;height:{{ r.h }}px;background:{{ c.ink }};border-radius:1px"></div>
+                    </sc-for>
+                    <sc-if value="{{ c.isAudio }}" hint-placeholder-val="{{ false }}">
+                      <svg width="{{ c.width }}" height="{{ c.bh }}" style="position:absolute;left:0;top:0;display:block"><path d="{{ c.wave }}" style="stroke:{{ c.ink }};stroke-width:1px;fill:none"></path><path d="{{ c.fadeFill }}" style="fill:rgba(0,0,0,.5);stroke:none"></path><path d="{{ c.fadeLine }}" style="stroke:#f2f4f7;stroke-width:1px;fill:none;opacity:.7"></path></svg>
+                    </sc-if>
+                  </div>
+                  <div data-edge="l" style="position:absolute;left:0;top:0;bottom:0;width:6px;cursor:{{ edgeCursor }}"></div>
+                  <div data-edge="r" style="position:absolute;right:0;top:0;bottom:0;width:6px;cursor:{{ edgeCursor }}"></div>
+                  <sc-if value="{{ c.showFade }}" hint-placeholder-val="{{ false }}">
+                    <div data-edge="fi" title="Fade in" style="position:absolute;top:15px;left:{{ c.fiX }}px;width:9px;height:9px;margin-left:-1px;background:#f2f4f7;border-radius:0 0 3px 0;cursor:col-resize;opacity:.85"></div>
+                    <div data-edge="fo" title="Fade out" style="position:absolute;top:15px;left:{{ c.foX }}px;width:9px;height:9px;margin-left:-8px;background:#f2f4f7;border-radius:0 0 0 3px;cursor:col-resize;opacity:.85"></div>
+                  </sc-if>
+                </div>
+              </sc-for>
+              <sc-if value="{{ hasRecClip }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:{{ rc.left }}px;top:{{ rc.top }}px;width:{{ rc.width }}px;height:{{ rc.h }}px;border-radius:3px;background:rgba(224,82,99,.14);box-shadow:inset 0 0 0 1px #e05263;overflow:hidden;pointer-events:none">
+                  <div style="height:15px;display:flex;align-items:center;gap:5px;padding:0 5px;background:#e05263;font:600 10px Geist,sans-serif;color:#12151a;white-space:nowrap">● REC {{ rc.time }}</div>
+                  <svg width="{{ rc.width }}" height="{{ rc.bh }}" style="position:absolute;left:0;top:15px;display:block"><path d="{{ rc.wave }}" style="stroke:#f08a96;stroke-width:1px;fill:none"></path></svg>
+                </div>
+              </sc-if>
+              <sc-if value="{{ hasMarquee }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:{{ mq.x }}px;top:{{ mq.y }}px;width:{{ mq.w }}px;height:{{ mq.h }}px;border:1px solid #4f8ef7;background:rgba(79,142,247,.10);pointer-events:none"></div>
+              </sc-if>
+              <div ref="{{ phGridRef }}" style="position:absolute;top:0;bottom:0;left:{{ startX }}px;width:1px;background:#eef1f5;pointer-events:none;z-index:2"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <sc-if value="{{ dragOver }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;inset:6px;z-index:20;border:1px solid #4f8ef7;border-radius:6px;background:rgba(79,142,247,.08);display:flex;align-items:center;justify-content:center;pointer-events:none">
+          <span style="padding:6px 12px;border-radius:4px;background:#1e242d;font:500 12px Geist,sans-serif;color:#f2f4f7">Upuść, aby wstawić audio w miejscu kursora</span>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <sc-if value="{{ mixOpen }}" hint-placeholder-val="{{ true }}">
+    <sc-if value="{{ mixBody }}" hint-placeholder-val="{{ true }}">
+      <div onPointerDown="{{ mixSplit }}" title="Przeciągnij = wysokość miksera" style="height:5px;flex:none;cursor:row-resize;background:#0a0c0f" style-hover="background:#4f8ef7"></div>
+    </sc-if>
+    <div style="height:26px;flex:none;display:flex;align-items:center;gap:10px;padding:0 4px 0 10px;background:#171b21;border-bottom:1px solid #0a0c0f">
+      <span style="font:600 10px Geist,sans-serif;letter-spacing:.12em;color:#9aa2ad">MIXER</span>
+      <span style="font:500 10px 'Geist Mono',monospace;color:#5c6573">{{ mixInfo }}</span>
+      <div style="flex:1"></div>
+      <button onClick="{{ toggleMixMin }}" title="{{ mixMinTitle }}" style="width:24px;height:20px;border:0;border-radius:3px;background:transparent;color:#9aa2ad;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#252b34;color:#f2f4f7">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ mixMinIcon }}"></path></svg>
+      </button>
+      <button onClick="{{ toggleMixer }}" title="Zamknij mikser (F9)" style="width:24px;height:20px;border:0;border-radius:3px;background:transparent;color:#9aa2ad;cursor:pointer;font-size:14px" style-hover="background:#252b34;color:#f2f4f7">×</button>
+    </div>
+    <sc-if value="{{ mixBody }}" hint-placeholder-val="{{ true }}">
+    <div data-screen-label="Mixer" style="height:{{ mixH }}px;flex:none;display:flex;background:#121519;min-height:0">
+      <div style="flex:1;min-width:0;display:flex;overflow-x:auto;overflow-y:hidden">
+        <sc-for list="{{ strips }}" as="m" hint-placeholder-count="9">
+          <div onPointerDown="{{ m.onSelect }}" style="width:80px;flex:none;display:flex;flex-direction:column;gap:6px;padding:0 6px 8px;background:{{ m.bg }};box-shadow:{{ m.ring }};border-right:1px solid #0a0c0f;min-height:0">
+            <div style="height:3px;margin:0 -6px;background:{{ m.color }}"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:4px">
+              <span style="font:500 9px 'Geist Mono',monospace;color:#7d8592">{{ m.label }}</span>
+              <span style="font:500 9px 'Geist Mono',monospace;color:#8fb6ff;white-space:nowrap">{{ m.fxText }}</span>
+            </div>
+            <span onDoubleClick="{{ m.onRename }}" title="2× klik = zmień nazwę · PPM = menu" style="font:500 11px Geist,sans-serif;color:{{ m.nameFg }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center">{{ m.name }}</span>
+            <div style="display:flex;flex-direction:column;align-items:center;gap:2px">
+              <div data-wheel="pan:{{ m.id }}" onPointerDown="{{ m.onPan }}" title="Panorama — przeciągnij, 2× klik = środek" style="position:relative;width:30px;height:30px;cursor:ns-resize;touch-action:none">
+                <svg width="30" height="30" viewBox="0 0 30 30" style="position:absolute;inset:0">
+                  <circle cx="15" cy="15" r="11" fill="none" transform="rotate(135 15 15)" style="stroke:#2c333d;stroke-width:2.5px;stroke-linecap:round;stroke-dasharray:51.84px 69.12px"></circle>
+                  <circle cx="15" cy="15" r="11" fill="none" transform="rotate(135 15 15)" style="stroke:#4f8ef7;stroke-width:2.5px;stroke-linecap:round;stroke-dasharray:{{ m.panDash }};stroke-dashoffset:{{ m.panOff }}px"></circle>
+                </svg>
+                <div style="position:absolute;left:8px;top:8px;width:14px;height:14px;border-radius:50%;background:#2c333d"></div>
+                <div style="position:absolute;left:14px;top:7px;width:2px;height:6px;border-radius:1px;background:#f2f4f7;transform-origin:1px 8px;transform:rotate({{ m.panAngle }}deg)"></div>
+              </div>
+              <span style="font:500 9px 'Geist Mono',monospace;color:#9aa2ad">{{ m.panText }}</span>
+            </div>
+            <div style="display:flex;gap:2px;justify-content:center">
+              <button onPointerDown="{{ stopProp }}" onClick="{{ m.onMute }}" title="Mute" style="width:22px;height:16px;padding:0;border:0;border-radius:2px;background:{{ m.mBg }};color:{{ m.mFg }};font:600 9px 'Geist Mono',monospace;cursor:pointer">M</button>
+              <sc-if value="{{ m.hasSolo }}" hint-placeholder-val="{{ true }}">
+                <button onPointerDown="{{ stopProp }}" onClick="{{ m.onSolo }}" title="Solo" style="width:22px;height:16px;padding:0;border:0;border-radius:2px;background:{{ m.sBg }};color:{{ m.sFg }};font:600 9px 'Geist Mono',monospace;cursor:pointer">S</button>
+              </sc-if>
+            </div>
+            <div style="flex:1;min-height:50px;display:flex;justify-content:center;gap:3px">
+              <div style="position:relative;width:4px;border-radius:1px;overflow:hidden;background:linear-gradient(0deg,#3f9e72,#4ec08a 62%,#f0c25a 88%,#e05263 97%)">
+                <div data-meter="{{ m.meterL }}" style="position:absolute;left:0;right:0;top:0;height:100%;background:#0a0c0f"></div>
+              </div>
+              <div style="position:relative;width:4px;border-radius:1px;overflow:hidden;background:linear-gradient(0deg,#3f9e72,#4ec08a 62%,#f0c25a 88%,#e05263 97%)">
+                <div data-meter="{{ m.meterR }}" style="position:absolute;left:0;right:0;top:0;height:100%;background:#0a0c0f"></div>
+              </div>
+              <div data-wheel="vol:{{ m.id }}" onPointerDown="{{ m.onFader }}" title="Głośność — przeciągnij, 2× klik = 0 dB" style="position:relative;width:24px;margin-left:4px;cursor:ns-resize;touch-action:none">
+                <div style="position:absolute;left:11px;top:7px;bottom:7px;width:2px;background:#0a0c0f;border-radius:1px"></div>
+                <div style="position:absolute;left:3px;right:3px;top:calc(0.2063 * (100% - 14px) + 7px);height:1px;background:#4a5360"></div>
+                <div style="position:absolute;left:0;top:calc({{ m.inv }} * (100% - 14px));width:24px;height:14px;border-radius:2px;background:#c9ced6;box-shadow:0 2px 4px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center">
+                  <div style="width:14px;height:1px;background:#252b34"></div>
+                </div>
+              </div>
+            </div>
+            <span style="font:500 10px 'Geist Mono',monospace;color:#d5dae2;text-align:center">{{ m.db }}</span>
+            <span title="{{ m.route }}" style="font:500 9px Geist,sans-serif;color:#5c6573;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ m.route }}</span>
+          </div>
+        </sc-for>
+        <button onClick="{{ addInsert }}" title="Dodaj kanał miksera" style="width:44px;flex:none;border:0;background:transparent;color:#5c6573;font:400 18px Geist,sans-serif;cursor:pointer" style-hover="color:#f2f4f7;background:#161a21">+</button>
+      </div>
+      <div data-screen-label="FX chain" style="width:320px;flex:none;display:flex;flex-direction:column;border-left:1px solid #0a0c0f;background:#161a21;min-height:0">
+        <div style="height:28px;flex:none;display:flex;align-items:center;gap:8px;padding:0 10px;border-bottom:1px solid #0a0c0f">
+          <span style="width:8px;height:8px;border-radius:2px;background:{{ fxColor }}"></span>
+          <span style="flex:1;font:600 11px Geist,sans-serif;color:#f2f4f7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ fxTitle }}</span>
+          <span style="font:500 10px 'Geist Mono',monospace;color:#5c6573">{{ fxRoute }}</span>
+        </div>
+        <div style="flex:1;min-height:0;overflow:auto">
+          <sc-for list="{{ fxSlots }}" as="f" hint-placeholder-count="4">
+            <div onPointerDown="{{ f.onSelect }}" title="{{ f.title }}" style="height:34px;display:flex;align-items:center;gap:8px;padding:0 6px 0 8px;background:{{ f.bg }};box-shadow:{{ f.ring }};border-bottom:1px solid #0e1116;cursor:{{ f.cursor }};touch-action:none" style-hover="background:#1c2128">
+              <span style="width:12px;flex:none;font:500 9px 'Geist Mono',monospace;color:#5c6573">{{ f.n }}</span>
+              <span style="width:22px;height:22px;flex:none;border-radius:5px;background:{{ f.iconBg }};color:{{ f.iconFg }};display:flex;align-items:center;justify-content:center">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ f.icon }}"></path></svg>
+              </span>
+              <sc-if value="{{ f.has }}" hint-placeholder-val="{{ true }}">
+                <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:1px">
+                  <span style="font:500 12px Geist,sans-serif;color:{{ f.fg }};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.name }}</span>
+                  <span style="font:500 9px 'Geist Mono',monospace;color:#7d8592;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.preset }}</span>
+                </div>
+                <button onPointerDown="{{ f.onBypass }}" title="Włącz / bypass" style="width:20px;height:20px;padding:0;border:0;border-radius:3px;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center" style-hover="background:#2c333d"><span style="width:9px;height:9px;border-radius:50%;background:{{ f.led }}"></span></button>
+                <button onPointerDown="{{ f.onRemove }}" title="Usuń efekt" style="width:20px;height:20px;padding:0;border:0;border-radius:3px;background:transparent;color:#7d8592;cursor:pointer;font-size:13px" style-hover="background:#2c333d;color:#e8607a">×</button>
+              </sc-if>
+              <sc-if value="{{ f.empty }}" hint-placeholder-val="{{ false }}">
+                <span style="flex:1;font:500 12px Geist,sans-serif;color:#4f8ef7">{{ f.addText }}</span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+    </sc-if>
+  </sc-if>
+
+  <div style="height:24px;flex:none;display:flex;align-items:center;gap:14px;padding:0 10px;background:#171b21;border-top:1px solid #0a0c0f;font:500 10px 'Geist Mono',monospace">
+    <span style="color:{{ statusDot }}">●</span>
+    <span style="color:#d5dae2">{{ readout }}</span>
+    <div style="flex:1"></div>
+    <sc-if value="{{ alt }}" hint-placeholder-val="{{ false }}">
+      <span style="padding:1px 6px;border-radius:3px;background:#e0a44a;color:#12151a;font:600 9px 'Geist Mono',monospace;letter-spacing:.06em">OFF GRID</span>
+    </sc-if>
+    <span style="color:#5c6573">{{ hint }}</span>
+  </div>
+
+  <sc-if value="{{ hasEditor }}" hint-placeholder-val="{{ false }}">
+    <div data-screen-label="Sample editor" style="position:fixed;left:{{ ed.x }}px;top:{{ ed.y }}px;width:{{ ed.w }}px;height:{{ ed.h }}px;z-index:40;display:flex;flex-direction:column;background:#161a21;border:1px solid #2e3641;border-radius:6px;box-shadow:0 18px 48px rgba(0,0,0,.55);overflow:hidden">
+      <div onPointerDown="{{ edMove }}" style="height:32px;flex:none;display:flex;align-items:center;gap:8px;padding:0 6px 0 12px;background:#1c2128;border-bottom:1px solid #0a0c0f;cursor:grab">
+        <span style="width:8px;height:8px;border-radius:50%;background:{{ ed.color }}"></span>
+        <span style="font:600 12px Geist,sans-serif;color:#f2f4f7">{{ ed.name }}</span>
+        <span style="font:500 11px Geist,sans-serif;color:#7d8592">{{ ed.track }}</span>
+        <div style="flex:1"></div>
+        <button onClick="{{ closeEditor }}" title="Zamknij (Esc)" style="width:26px;height:24px;border:0;border-radius:4px;background:transparent;color:#9aa2ad;cursor:pointer;font-size:15px" style-hover="background:#2c333d;color:#f2f4f7">×</button>
+      </div>
+      <div style="height:28px;flex:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 16px;font:500 10px 'Geist Mono',monospace;color:#7d8592">
+        <span>{{ ed.meta }}</span>
+        <span>REGION {{ ed.region }}</span>
+      </div>
+      <div ref="{{ edWaveRef }}" onPointerDown="{{ edDown }}" style="position:relative;flex:none;margin:0 16px;width:{{ ed.W }}px;height:{{ ed.H }}px;background:#0e1116;border:1px solid #252b34;border-radius:3px;overflow:hidden">
+        <div style="position:absolute;left:0;right:0;top:50%;height:1px;background:#1c222a"></div>
+        <svg width="{{ ed.W }}" height="{{ ed.H }}" style="position:absolute;left:0;top:0;display:block;pointer-events:none">
+          <path d="{{ ed.wave }}" style="stroke:{{ ed.color }};stroke-width:1px;fill:none"></path>
+          <path d="{{ ed.fadeFill }}" style="fill:rgba(0,0,0,.55);stroke:none"></path>
+          <path d="{{ ed.fadeLine }}" style="stroke:#f2f4f7;stroke-width:1.5px;fill:none"></path>
+        </svg>
+        <div style="position:absolute;left:0;top:0;bottom:0;width:{{ ed.x0 }}px;background:rgba(10,12,15,.72);pointer-events:none"></div>
+        <div style="position:absolute;right:0;top:0;bottom:0;width:{{ ed.dimR }}px;background:rgba(10,12,15,.72);pointer-events:none"></div>
+        <div data-ed="l" title="Początek regionu" style="position:absolute;top:0;bottom:0;left:{{ ed.x0 }}px;width:9px;margin-left:-4px;cursor:ew-resize;display:flex;justify-content:center"><div style="width:1px;height:100%;background:#4f8ef7;pointer-events:none"></div></div>
+        <div data-ed="r" title="Koniec regionu" style="position:absolute;top:0;bottom:0;left:{{ ed.x1 }}px;width:9px;margin-left:-4px;cursor:ew-resize;display:flex;justify-content:center"><div style="width:1px;height:100%;background:#4f8ef7;pointer-events:none"></div></div>
+        <div data-ed="fi" title="Fade in — przeciągnij" style="position:absolute;top:0;left:{{ ed.fiX }}px;width:11px;height:11px;margin-left:-1px;background:#f2f4f7;border-radius:0 0 4px 0;cursor:col-resize"></div>
+        <div data-ed="fo" title="Fade out — przeciągnij" style="position:absolute;top:0;left:{{ ed.foX }}px;width:11px;height:11px;margin-left:-10px;background:#f2f4f7;border-radius:0 0 0 4px;cursor:col-resize"></div>
+        <div data-edprev="1" style="position:absolute;top:0;bottom:0;left:0;width:1px;background:#eef1f5;opacity:0;pointer-events:none"></div>
+      </div>
+      <div style="flex:1;min-height:0;display:flex;flex-wrap:wrap;align-content:flex-start;align-items:center;gap:12px 18px;padding:14px 16px">
+        <div style="display:flex;gap:16px">
+          <sc-for list="{{ ed.knobs }}" as="k" hint-placeholder-count="4">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:3px;min-width:52px">
+              <div data-wheel="{{ k.wheel }}" onPointerDown="{{ k.onDown }}" title="Przeciągnij ↕ · Shift = precyzyjnie · 2× klik = reset" style="position:relative;width:36px;height:36px;cursor:ns-resize;touch-action:none">
+                <svg width="36" height="36" viewBox="0 0 36 36" style="position:absolute;inset:0">
+                  <circle cx="18" cy="18" r="13" fill="none" transform="rotate(135 18 18)" style="stroke:#2c333d;stroke-width:3px;stroke-linecap:round;stroke-dasharray:61.26px 81.68px"></circle>
+                  <circle cx="18" cy="18" r="13" fill="none" transform="rotate(135 18 18)" style="stroke:#4f8ef7;stroke-width:3px;stroke-linecap:round;stroke-dasharray:{{ k.dash }};stroke-dashoffset:{{ k.off }}px"></circle>
+                </svg>
+                <div style="position:absolute;left:9px;top:9px;width:18px;height:18px;border-radius:50%;background:#2c333d;box-shadow:0 1px 3px rgba(0,0,0,.4)"></div>
+                <div style="position:absolute;left:17px;top:9px;width:2px;height:7px;border-radius:1px;background:#f2f4f7;transform-origin:1px 9px;transform:rotate({{ k.angle }}deg)"></div>
+              </div>
+              <span style="font:500 10px 'Geist Mono',monospace;color:#f2f4f7;white-space:nowrap">{{ k.value }}</span>
+              <span style="font:600 9px Geist,sans-serif;color:#7d8592;letter-spacing:.08em;white-space:nowrap">{{ k.label }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="width:1px;align-self:stretch;background:#252b34"></div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <button onClick="{{ edNormalize }}" title="Normalizuj do −0.3 dBFS (nieniszcząco)" style="display:flex;align-items:center;gap:7px;height:22px;padding:0 8px;border:0;border-radius:3px;background:#0e1013;color:{{ ed.normFg }};font:600 10px 'Geist Mono',monospace;letter-spacing:.06em;cursor:pointer;white-space:nowrap"><span style="width:8px;height:8px;border-radius:2px;background:{{ ed.normLed }}"></span>NORMALIZE</button>
+          <button onClick="{{ edReverse }}" title="Odwróć (nieniszcząco)" style="display:flex;align-items:center;gap:7px;height:22px;padding:0 8px;border:0;border-radius:3px;background:#0e1013;color:{{ ed.revFg }};font:600 10px 'Geist Mono',monospace;letter-spacing:.06em;cursor:pointer;white-space:nowrap"><span style="width:8px;height:8px;border-radius:2px;background:{{ ed.revLed }}"></span>REVERSE</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <button onClick="{{ edPreview }}" style="height:22px;padding:0 12px;border:0;border-radius:3px;background:{{ ed.prevBg }};color:{{ ed.prevFg }};font:500 11px Geist,sans-serif;cursor:pointer">{{ ed.prevLabel }}</button>
+          <button onClick="{{ edTrim }}" title="Wytnij wszystko poza regionem (nowa kopia pliku)" style="height:22px;padding:0 12px;border:0;border-radius:3px;background:#252b34;color:#d5dae2;font:500 11px Geist,sans-serif;cursor:pointer" style-hover="background:#2c333d">Przytnij</button>
+        </div>
+        <div style="flex:1"></div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font:500 9px 'Geist Mono',monospace;color:#7d8592;letter-spacing:.08em">MIXER</span>
+          <select onChange="{{ edInsert }}" value="{{ ed.insertVal }}" style="height:26px;background:#0a0c0f;color:#d5dae2;border:1px solid #252b34;border-radius:4px;padding:0 6px;font:500 11px Geist,sans-serif;cursor:pointer">
+            <sc-for list="{{ edInserts }}" as="o" hint-placeholder-count="9"><option value="{{ o.v }}">{{ o.label }}</option></sc-for>
+          </select>
+        </div>
+      </div>
+      <div onPointerDown="{{ edResize }}" title="Zmień rozmiar" style="position:absolute;right:0;bottom:0;width:14px;height:14px;cursor:nwse-resize;background:linear-gradient(135deg,transparent 50%,#4a5360 50%,#4a5360 60%,transparent 60%,transparent 70%,#4a5360 70%,#4a5360 80%,transparent 80%)"></div>
+    </div>
+  </sc-if>
+
+  <sc-for list="{{ plugs }}" as="p" hint-placeholder-count="0">
+    <div data-screen-label="Plugin" onPointerDown="{{ p.onFront }}" style="position:fixed;left:{{ p.x }}px;top:{{ p.y }}px;width:{{ p.w }}px;z-index:{{ p.z }};display:flex;flex-direction:column;background:#161a21;border:1px solid #2e3641;border-radius:6px;box-shadow:0 18px 48px rgba(0,0,0,.55);overflow:hidden">
+      <div onPointerDown="{{ p.onMove }}" style="height:30px;flex:none;display:flex;align-items:center;gap:8px;padding:0 6px 0 10px;background:#1c2128;border-bottom:1px solid #0a0c0f;cursor:grab">
+        <button onPointerDown="{{ p.onBypass }}" title="Włącz / bypass" style="width:12px;height:12px;flex:none;padding:0;border:0;border-radius:50%;background:{{ p.led }};cursor:pointer"></button>
+        <span style="width:20px;height:20px;flex:none;border-radius:5px;background:{{ p.iconBg }};color:{{ p.iconFg }};display:flex;align-items:center;justify-content:center">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ p.icon }}"></path></svg>
+        </span>
+        <span style="font:600 12px Geist,sans-serif;color:#f2f4f7;white-space:nowrap">{{ p.name }}</span>
+        <span style="width:6px;height:6px;flex:none;border-radius:2px;background:{{ p.color }}"></span>
+        <span style="min-width:0;font:500 11px Geist,sans-serif;color:#7d8592;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.insName }}</span>
+        <span style="font:600 9px 'Geist Mono',monospace;color:#e0a44a;letter-spacing:.08em">{{ p.bypassText }}</span>
+        <div style="flex:1"></div>
+        <div style="display:flex;align-items:center;gap:1px;flex:none;padding:1px;background:#0e1013;border:1px solid #252b34;border-radius:4px">
+          <button onClick="{{ p.onPrevPreset }}" title="Poprzedni preset" style="width:20px;height:20px;padding:0;border:0;border-radius:3px;background:transparent;color:#9aa2ad;cursor:pointer;font:500 13px Geist,sans-serif" style-hover="background:#252b34;color:#f2f4f7">‹</button>
+          <button onClick="{{ p.onPresetMenu }}" title="Presety" style="width:150px;height:20px;padding:0 6px;border:0;border-radius:3px;background:transparent;color:{{ p.presetFg }};cursor:pointer;display:flex;align-items:center;gap:4px;font:500 11px Geist,sans-serif;text-align:left" style-hover="background:#252b34">
+            <span style="flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ p.presetName }}{{ p.presetMod }}</span>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#7d8592" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M6 9l6 6 6-6"></path></svg>
+          </button>
+          <button onClick="{{ p.onNextPreset }}" title="Następny preset" style="width:20px;height:20px;padding:0;border:0;border-radius:3px;background:transparent;color:#9aa2ad;cursor:pointer;font:500 13px Geist,sans-serif" style-hover="background:#252b34;color:#f2f4f7">›</button>
+        </div>
+        <button onClick="{{ p.onClose }}" title="Zamknij (Esc)" style="width:24px;height:22px;border:0;border-radius:3px;background:transparent;color:#9aa2ad;cursor:pointer;font-size:14px" style-hover="background:#2c333d;color:#f2f4f7">×</button>
+      </div>
+      <canvas data-viz="{{ p.fxId }}" data-wheel="{{ p.wheel }}" onPointerDown="{{ p.onViz }}" style="display:block;width:100%;height:{{ p.vh }}px;cursor:{{ p.vizCursor }};touch-action:none"></canvas>
+      <sc-if value="{{ p.isEq }}" hint-placeholder-val="{{ false }}">
+        <div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border-top:1px solid #0a0c0f">
+          <sc-for list="{{ p.bands }}" as="b" hint-placeholder-count="7">
+            <div style="display:flex;flex-direction:column;gap:3px;padding:6px 6px 8px;border-right:1px solid #0a0c0f;background:{{ b.bg }};min-width:0">
+              <div style="display:flex;align-items:center;gap:6px">
+                <button onPointerDown="{{ b.onOn }}" title="Włącz / wyłącz band" style="width:10px;height:10px;padding:0;border:0;border-radius:50%;background:{{ b.led }};cursor:pointer"></button>
+                <span style="font:600 10px 'Geist Mono',monospace;color:{{ b.color }}">{{ b.n }}</span>
+              </div>
+              <button onPointerDown="{{ b.onType }}" title="Klik = zmień typ" style="height:18px;padding:0 4px;border:0;border-radius:3px;background:#0e1013;color:#d5dae2;font:500 10px Geist,sans-serif;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ b.typeLabel }}</button>
+              <span onPointerDown="{{ b.onF }}" title="Przeciągnij" style="font:500 10px 'Geist Mono',monospace;color:{{ b.fg }};cursor:ns-resize;white-space:nowrap;touch-action:none">{{ b.f }}</span>
+              <span onPointerDown="{{ b.onG }}" title="Przeciągnij" style="font:500 10px 'Geist Mono',monospace;color:{{ b.fg }};cursor:ns-resize;white-space:nowrap;touch-action:none">{{ b.g }}</span>
+              <span onPointerDown="{{ b.onQ }}" title="Przeciągnij" style="font:500 10px 'Geist Mono',monospace;color:#7d8592;cursor:ns-resize;white-space:nowrap;touch-action:none">{{ b.q }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <div style="display:flex;align-items:center;gap:18px;padding:12px 14px;border-top:1px solid #0a0c0f;flex-wrap:wrap">
+        <sc-for list="{{ p.knobs }}" as="k" hint-placeholder-count="3">
+          <div style="display:flex;flex-direction:column;align-items:center;gap:3px;min-width:54px">
+            <div data-wheel="{{ k.wheel }}" onPointerDown="{{ k.onDown }}" title="Przeciągnij ↕ · Shift = precyzyjnie · 2× klik = domyślna" style="position:relative;width:36px;height:36px;cursor:ns-resize;touch-action:none">
+              <svg width="36" height="36" viewBox="0 0 36 36" style="position:absolute;inset:0">
+                <circle cx="18" cy="18" r="13" fill="none" transform="rotate(135 18 18)" style="stroke:#2c333d;stroke-width:3px;stroke-linecap:round;stroke-dasharray:61.26px 81.68px"></circle>
+                <circle cx="18" cy="18" r="13" fill="none" transform="rotate(135 18 18)" style="stroke:#4f8ef7;stroke-width:3px;stroke-linecap:round;stroke-dasharray:{{ k.dash }};stroke-dashoffset:{{ k.off }}px"></circle>
+              </svg>
+              <div style="position:absolute;left:9px;top:9px;width:18px;height:18px;border-radius:50%;background:#2c333d;box-shadow:0 1px 3px rgba(0,0,0,.4)"></div>
+              <div style="position:absolute;left:17px;top:9px;width:2px;height:7px;border-radius:1px;background:#f2f4f7;transform-origin:1px 9px;transform:rotate({{ k.angle }}deg)"></div>
+            </div>
+            <span style="font:500 10px 'Geist Mono',monospace;color:#f2f4f7;white-space:nowrap">{{ k.value }}</span>
+            <span style="font:600 9px Geist,sans-serif;color:#7d8592;letter-spacing:.06em;text-transform:uppercase;white-space:nowrap">{{ k.label }}</span>
+          </div>
+        </sc-for>
+        <div style="flex:1"></div>
+        <span style="font:11px Geist,sans-serif;color:#5c6573">{{ p.hint }}</span>
+      </div>
+    </div>
+  </sc-for>
+
+  <sc-if value="{{ micBlocked }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:65;width:min(460px,92vw);display:flex;gap:12px;align-items:flex-start;padding:12px 14px;background:#1e242d;border:1px solid #e05263;border-radius:6px;box-shadow:0 12px 32px rgba(0,0,0,.5)">
+      <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+        <span style="font:600 12px Geist,sans-serif;color:#f2f4f7">Podgląd blokuje mikrofon</span>
+        <span style="font:12px Geist,sans-serif;color:#b4bac4;text-wrap:pretty">To nie Windows — okno podglądu nie ma uprawnień do mikrofonu. Otwórz plik w osobnej karcie i zezwól na dostęp.</span>
+        <a href="Playlist v5.dc.html" target="_blank" rel="noopener" style="margin-top:4px;align-self:flex-start;padding:5px 10px;border-radius:4px;background:#4f8ef7;color:#0b1220;font:600 11px Geist,sans-serif;text-decoration:none">Otwórz w nowej karcie ↗</a>
+      </div>
+      <button onClick="{{ closeBlocked }}" style="border:0;background:transparent;color:#9aa2ad;cursor:pointer;font-size:16px">×</button>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ hasGhost }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed;left:{{ ghost.x }}px;top:{{ ghost.y }}px;z-index:60;pointer-events:none;padding:3px 8px;border-radius:3px;background:#1e242d;box-shadow:inset 0 0 0 1px {{ ghost.color }},0 6px 16px rgba(0,0,0,.45);color:#f2f4f7;font:500 11px Geist,sans-serif">{{ ghost.name }}</div>
+  </sc-if>
+
+  <sc-if value="{{ hasMenu }}" hint-placeholder-val="{{ false }}">
+    <div onPointerDown="{{ closeMenu }}" style="position:fixed;inset:0;z-index:50"></div>
+    <div onPointerDown="{{ stopProp }}" style="position:fixed;left:{{ menu.x }}px;top:{{ menu.y }}px;z-index:51;min-width:220px;padding:4px;background:#1e242d;border:1px solid #2e3641;border-radius:6px;box-shadow:0 12px 32px rgba(0,0,0,.5);display:flex;flex-direction:column">
+      <sc-for list="{{ menu.items }}" as="it" hint-placeholder-count="0">
+        <sc-if value="{{ it.isTitle }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:5px 8px;font:600 10px Geist,sans-serif;letter-spacing:.08em;color:#7d8592;text-transform:uppercase;white-space:nowrap">{{ it.label }}</div>
+        </sc-if>
+        <sc-if value="{{ it.isSep }}" hint-placeholder-val="{{ false }}">
+          <div style="height:1px;margin:3px 4px;background:#2e3641"></div>
+        </sc-if>
+        <sc-if value="{{ it.isItem }}" hint-placeholder-val="{{ false }}">
+          <button onClick="{{ it.onClick }}" style="display:flex;align-items:center;justify-content:space-between;gap:24px;height:26px;padding:0 8px;border:0;border-radius:3px;background:transparent;color:{{ it.fg }};font:500 12px Geist,sans-serif;cursor:pointer;text-align:left" style-hover="background:#2c333d">
+            <span style="display:flex;align-items:center;gap:8px">
+              <sc-if value="{{ it.hasIcon }}" hint-placeholder-val="{{ false }}">
+                <span style="width:18px;height:18px;flex:none;border-radius:4px;background:{{ it.iconBg }};color:{{ it.iconFg }};display:flex;align-items:center;justify-content:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ it.icon }}"></path></svg></span>
+              </sc-if>
+              <span>{{ it.label }}</span>
+            </span><span style="font:500 10px 'Geist Mono',monospace;color:#7d8592">{{ it.kbd }}</span>
+          </button>
+        </sc-if>
+        <sc-if value="{{ it.isSwatches }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;gap:4px;padding:5px 8px;flex-wrap:wrap">
+            <sc-for list="{{ it.swatches }}" as="sw" hint-placeholder-count="10">
+              <button onClick="{{ sw.onClick }}" title="Kolor" style="width:15px;height:15px;padding:0;border:0;border-radius:3px;background:{{ sw.color }};box-shadow:{{ sw.ring }};cursor:pointer"></button>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ it.isGain }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:6px;padding:3px 8px">
+            <span style="flex:1;font:500 12px Geist,sans-serif;color:#d5dae2">Głośność klipu</span>
+            <button onClick="{{ it.dec }}" style="width:22px;height:20px;border:0;border-radius:3px;background:#2c333d;color:#f2f4f7;cursor:pointer">−</button>
+            <span style="min-width:54px;text-align:center;font:500 11px 'Geist Mono',monospace;color:#4f8ef7">{{ it.value }}</span>
+            <button onClick="{{ it.inc }}" style="width:22px;height:20px;border:0;border-radius:3px;background:#2c333d;color:#f2f4f7;cursor:pointer">+</button>
+          </div>
+        </sc-if>
+        <sc-if value="{{ it.isRename }}" hint-placeholder-val="{{ false }}">
+          <input ref="{{ it.inputRef }}" onKeyDown="{{ it.onKey }}" style="margin:3px 4px;height:26px;padding:0 8px;background:#0a0c0f;color:#f2f4f7;border:1px solid #4f8ef7;border-radius:3px;outline:none;font:500 12px Geist,sans-serif">
+        </sc-if>
+      </sc-for>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ help }}" hint-placeholder-val="{{ false }}">
+    <div onPointerDown="{{ toggleHelp }}" style="position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center">
+      <div onPointerDown="{{ stopProp }}" style="width:min(680px,92vw);max-height:80vh;overflow:auto;padding:18px 22px;background:#1a1f26;border:1px solid #2e3641;border-radius:8px;box-shadow:0 20px 48px rgba(0,0,0,.55)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <span style="font:600 13px Geist,sans-serif;color:#f2f4f7">Skróty klawiszowe</span>
+          <button onClick="{{ toggleHelp }}" style="border:0;background:transparent;color:#9aa2ad;cursor:pointer;font-size:16px">×</button>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));column-gap:24px">
+          <sc-for list="{{ shortcuts }}" as="sc" hint-placeholder-count="20">
+            <div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid #252b34">
+              <span style="font:12px Geist,sans-serif;color:#d5dae2">{{ sc.a }}</span>
+              <span style="font:500 11px 'Geist Mono',monospace;color:#8fb6ff;white-space:nowrap">{{ sc.k }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const TOTAL = 128, VOL0 = 0.7937;
+const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
+const ICONS = {
+  draw: 'M4 20l4.5-1L19 8.5 15.5 5 5 15.5z M13.5 7l3.5 3.5',
+  paint: 'M18 3l3 3-9 9-3-3z M9 12c-3 0-4 2-4 4s-1 3-2 4c4 0 8-1 8-5',
+  erase: 'M8 20h12 M4.5 15.5L14 6l5 5-7.5 7.5H8z',
+  mute: 'M4 9h4l5-4v14l-5-4H4z M17 9l4 6 M21 9l-4 6',
+  slice: 'M12 2v20 M7 7l5-5 5 5',
+  select: 'M4 4h4 M12 4h4 M20 4v4 M20 12v4 M20 20h-4 M12 20H8 M4 20v-4 M4 12V8',
+};
+const TOOLS = [
+  ['draw', 'P', 'Rysuj'], ['paint', 'B', 'Maluj'], ['erase', 'D', 'Usuń'],
+  ['mute', 'T', 'Wycisz'], ['slice', 'C', 'Tnij'], ['select', 'E', 'Zaznacz'],
+];
+const TOOL_HINT = { draw: 'klik wstawia · przeciągnij przesuwa · krawędzie przycinają', paint: 'przeciągnij, aby powielać', erase: 'klik / przeciągnij usuwa', mute: 'klik przełącza mute klipu', slice: 'klik tnie na siatce · Alt = swobodnie', select: 'przeciągnij prostokąt' };
+const SNAPS = [['Snap: auto', -1], ['Snap: brak', 0], ['Snap: 1/4 beat', 0.25], ['Snap: 1/3 beat', 1 / 3], ['Snap: 1/2 beat', 0.5], ['Snap: beat', 1], ['Snap: bar', 4]];
+const SNAP_NAME = u => u === 0.25 ? '1/4 beat' : Math.abs(u - 1 / 3) < 1e-6 ? '1/3 beat' : u === 0.5 ? '1/2 beat' : u === 1 ? 'beat' : u === 2 ? '2 beaty' : u === 4 ? 'bar' : 'brak';
+const autoSnap = bw => [0.25, 0.5, 1, 2, 4].find(u => u * bw >= 10) || 4;
+const SHORTCUTS = [
+  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'F8'],
+  ['Rysuj · Maluj · Usuń', 'P · B · D'], ['Wycisz · Tnij · Zaznacz', 'T · C · E'],
+  ['Zaznacz prostokątem', 'Ctrl + przeciągnij'], ['Dodaj/usuń z zaznaczenia', 'Ctrl + klik'], ['Zaznacz wszystko', 'Ctrl+A'], ['Odznacz', 'Esc'],
+  ['Kopiuj przeciągając', 'Shift + przeciągnij'], ['Poza siatką (off grid)', 'trzymaj Alt'], ['Duplikuj za zaznaczeniem', 'Ctrl+B'],
+  ['Kopiuj · Wytnij · Wklej', 'Ctrl+C · X · V'], ['Usuń zaznaczone', 'Del'], ['Wycisz zaznaczone', 'Ctrl+M'],
+  ['Przesuń w czasie', 'Shift + ← →'], ['Przesuń między ścieżkami', 'Shift + ↑ ↓'], ['Cofnij · Ponów', 'Ctrl+Z · Ctrl+Shift+Z'],
+  ['Usuń klipy pod kursorem', 'PPM + przeciągnij'], ['Menu kontekstowe', 'PPM'], ['Zoom poziomy', 'Ctrl + kółko'], ['Wysokość wszystkich ścieżek', 'Alt + kółko'],
+  ['Wysokość jednej ścieżki', 'przeciągnij dolną krawędź'], ['Pętla', 'przeciągnij po linijce'], ['Zmień nazwę ścieżki', '2× klik w nazwę'],
+  ['Kolejność efektów', 'przeciągnij slot ↕'], ['Poprzedni / następny preset', '‹ › w oknie efektu'], ['Obrót widoku 3D (Reverb)', 'przeciągnij wizualizację'],
+];
+const PATTERNS0 = [
+  { id: 1, name: 'Beat', color: '#4f8ef7', len: 4, notes: [[0, 'kick'], [4, 'kick'], [8, 'kick'], [12, 'kick'], [10, 'kick'], [4, 'clap'], [12, 'clap']].map(([s, i]) => ({ inst: i, step: s, len: 1 })) },
+  { id: 2, name: 'Hats', color: '#e0a44a', len: 4, notes: [2, 6, 10, 14, 15, 7].map(s => ({ inst: 'hat', step: s, len: 1 })) },
+  { id: 3, name: 'Bass', color: '#7c8cf8', len: 8, notes: [[0, 3, 33], [4, 2, 33], [6, 2, 40], [8, 4, 36], [14, 2, 38], [16, 3, 29], [20, 2, 29], [22, 2, 36], [24, 6, 31], [30, 2, 34]].map(([s, l, p]) => ({ inst: 'bass', step: s, len: l, p })) },
+];
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const mod = (a, n) => ((a % n) + n) % n;
+const gainLin = t => 2 * t * t * t;
+const volText = t => { if (t < 0.002) return '-∞ dB'; const d = Math.round(20 * Math.log10(gainLin(t)) * 10) / 10; return (d > 0 ? '+' : '') + (d === 0 ? '0.0' : d.toFixed(1)) + ' dB'; };
+const dbText = g => (g >= 0 ? '+' : '') + g.toFixed(1) + ' dB';
+const mtof = p => 440 * Math.pow(2, (p - 69) / 12);
+const dbg = db => Math.pow(10, db / 20);
+const panText = v => { const p = Math.round(v * 100); return p === 0 ? 'C' : p < 0 ? (-p) + 'L' : p + 'R'; };
+const FXDEF = {
+  eq: { name: 'Parametric EQ', params: [['out', 'Output', -18, 18, 0, 'dB']] },
+  comp: { name: 'Compressor', params: [['thr', 'Thresh', -60, 0, -18, 'dB'], ['ratio', 'Ratio', 1, 20, 4, ':1', 1], ['att', 'Attack', 0.1, 100, 10, 'ms', 1], ['rel', 'Release', 10, 1000, 150, 'ms', 1], ['gain', 'Makeup', 0, 24, 0, 'dB']] },
+  sat: { name: 'Saturator', params: [['drive', 'Drive', 0, 36, 6, 'dB'], ['mix', 'Mix', 0, 100, 100, '%'], ['out', 'Output', -24, 6, 0, 'dB']] },
+  delay: { name: 'Delay', params: [['time', 'Time', 10, 1500, 375, 'ms', 1], ['fb', 'Feedback', 0, 95, 35, '%'], ['mix', 'Mix', 0, 100, 25, '%']] },
+  reverb: { name: 'Reverb', params: [['size', 'Decay', 0.3, 8, 2.2, 's', 1], ['pre', 'Pre-delay', 0, 200, 20, 'ms'], ['lo', 'Low cut', 20, 1000, 120, 'Hz', 1], ['hi', 'High cut', 1000, 20000, 8000, 'Hz', 1], ['width', 'Width', 0, 100, 100, '%'], ['mix', 'Mix', 0, 100, 25, '%']] },
+  limit: { name: 'Limiter', params: [['gain', 'Gain', 0, 24, 0, 'dB'], ['ceil', 'Ceiling', -12, 0, -0.3, 'dB']] },
+};
+const FX_ORDER = ['eq', 'comp', 'sat', 'delay', 'reverb', 'limit'];
+const FXMETA = {
+  eq: { icon: 'M2 17h4c2.5 0 3.5-10 6-10s3.5 10 6 10h4', color: '#5aa9e6', tag: 'barwa' },
+  comp: { icon: 'M4 12h16 M12 2v6 M9 5l3 3 3-3 M12 22v-6 M9 19l3-3 3 3', color: '#e0a44a', tag: 'dynamika' },
+  sat: { icon: 'M2 12c1.5-5 2.5-6 4.5-6h3c2 0 3 12 5 12h3c2 0 3-1 4.5-6', color: '#d9678f', tag: 'ciepło' },
+  delay: { icon: 'M4 5v14 M9.5 8v11 M14.5 11v8 M19.5 14v5', color: '#7c8cf8', tag: 'echo' },
+  reverb: { icon: 'M4 12h.01 M8 8.5a5 5 0 0 1 0 7 M11.5 5.5a9 9 0 0 1 0 13 M15 2.5a13 13 0 0 1 0 19', color: '#47b8a8', tag: 'przestrzeń' },
+  limit: { icon: 'M3 4h18 M3 20l3-12 3 12 3-12 3 12 3-12 3 12', color: '#e05263', tag: 'głośność' },
+};
+const ICON_PLUS = 'M12 5v14 M5 12h14';
+const EQ_BANDS = () => [
+  { on: false, type: 'lowcut', f: 30, g: 0, q: 0.71 }, { on: true, type: 'lowshelf', f: 90, g: 0, q: 0.71 }, { on: true, type: 'peak', f: 250, g: 0, q: 1 },
+  { on: true, type: 'peak', f: 1000, g: 0, q: 1 }, { on: true, type: 'peak', f: 3500, g: 0, q: 1 }, { on: true, type: 'highshelf', f: 9000, g: 0, q: 0.71 },
+  { on: false, type: 'highcut', f: 18000, g: 0, q: 0.71 },
+];
+const eqB = o => EQ_BANDS().map((b, i) => o[i] ? { ...b, ...o[i] } : b);
+const dly = (beats, fb, mix) => bpm => ({ time: Math.min(1500, Math.max(10, beats * 60000 / bpm)), fb, mix });
+const PRESETS = {
+  eq: [
+    { name: 'Flat', p: { out: 0, bands: EQ_BANDS() } },
+    { name: 'Wokal — obecność', p: { out: 0, bands: eqB({ 0: { on: true, f: 100 }, 2: { f: 300, g: -2.5, q: 1.2 }, 4: { f: 3500, g: 3, q: 0.9 }, 5: { f: 10000, g: 2.5 } }) } },
+    { name: 'Kick — punch', p: { out: 0, bands: eqB({ 0: { on: true, f: 30 }, 1: { f: 60, g: 3 }, 2: { f: 350, g: -4, q: 1.4 }, 4: { f: 4000, g: 3, q: 1.2 } }) } },
+    { name: 'Bas — czysty dół', p: { out: 0, bands: eqB({ 0: { on: true, f: 35 }, 1: { f: 80, g: 2 }, 2: { f: 250, g: -3 }, 6: { on: true, f: 8000 } }) } },
+    { name: 'Mud cut', p: { out: 0, bands: eqB({ 0: { on: true, f: 60 }, 2: { f: 300, g: -4, q: 1.5 } }) } },
+    { name: 'Air / połysk', p: { out: 0, bands: eqB({ 4: { f: 5000, g: 1 }, 5: { f: 12000, g: 4 } }) } },
+    { name: 'Telefon / lo-fi', p: { out: 2, bands: eqB({ 0: { on: true, f: 400 }, 3: { f: 1500, g: 4, q: 0.8 }, 6: { on: true, f: 3200 } }) } },
+    { name: 'Master — smile', p: { out: 0, bands: eqB({ 1: { f: 80, g: 1.5 }, 3: { f: 1000, g: -0.5, q: 0.6 }, 5: { f: 10000, g: 1.5 } }) } },
+  ],
+  comp: [
+    { name: 'Domyślny', p: { thr: -18, ratio: 4, att: 10, rel: 150, gain: 0 } },
+    { name: 'Wokal — wyrównanie', p: { thr: -20, ratio: 3, att: 5, rel: 120, gain: 4 } },
+    { name: 'Drum bus — glue', p: { thr: -14, ratio: 2, att: 30, rel: 200, gain: 2 } },
+    { name: 'Kick — punch', p: { thr: -16, ratio: 4, att: 25, rel: 80, gain: 3 } },
+    { name: 'Bas — kontrola', p: { thr: -22, ratio: 5, att: 3, rel: 90, gain: 4 } },
+    { name: 'Delikatny', p: { thr: -12, ratio: 1.5, att: 20, rel: 250, gain: 1 } },
+    { name: 'Smash', p: { thr: -35, ratio: 12, att: 0.5, rel: 60, gain: 12 } },
+  ],
+  sat: [
+    { name: 'Domyślny', p: { drive: 6, mix: 100, out: 0 } },
+    { name: 'Subtelny', p: { drive: 2, mix: 50, out: 0 } },
+    { name: 'Ciepła taśma', p: { drive: 4, mix: 100, out: -1 } },
+    { name: 'Lampa', p: { drive: 10, mix: 80, out: -3 } },
+    { name: 'Gruby bas', p: { drive: 18, mix: 60, out: -4 } },
+    { name: 'Rozwalony', p: { drive: 30, mix: 100, out: -8 } },
+  ],
+  delay: [
+    { name: 'Ósemka 1/8', p: dly(0.5, 35, 20) },
+    { name: 'Ćwierćnuta 1/4', p: dly(1, 30, 22) },
+    { name: 'Kropkowana 1/8', p: dly(0.75, 40, 22) },
+    { name: 'Triola 1/8T', p: dly(1 / 3, 35, 20) },
+    { name: 'Slapback', p: { time: 90, fb: 0, mix: 25 } },
+    { name: 'Długi dub', p: dly(1.5, 65, 30) },
+  ],
+  reverb: [
+    { name: 'Domyślny', p: { size: 2.2, pre: 20, lo: 120, hi: 8000, width: 100, mix: 25 } },
+    { name: 'Mały pokój', p: { size: 0.6, pre: 5, lo: 150, hi: 9000, width: 70, mix: 18 } },
+    { name: 'Bęben — krótki', p: { size: 0.9, pre: 0, lo: 200, hi: 8000, width: 60, mix: 15 } },
+    { name: 'Wokal plate', p: { size: 1.8, pre: 30, lo: 250, hi: 7000, width: 100, mix: 22 } },
+    { name: 'Duża sala', p: { size: 3.2, pre: 25, lo: 120, hi: 6500, width: 100, mix: 25 } },
+    { name: 'Ambient', p: { size: 5, pre: 120, lo: 300, hi: 12000, width: 100, mix: 45 } },
+    { name: 'Katedra', p: { size: 7, pre: 60, lo: 100, hi: 5000, width: 100, mix: 35 } },
+  ],
+  limit: [
+    { name: 'Bezpieczny', p: { gain: 0, ceil: -0.3 } },
+    { name: 'Streaming −1 dB', p: { gain: 3, ceil: -1 } },
+    { name: 'Głośny master', p: { gain: 6, ceil: -0.3 } },
+    { name: 'Bardzo głośny', p: { gain: 10, ceil: -0.1 } },
+  ],
+};
+const BAND_COLORS = ['#e05263', '#e0a44a', '#f0c25a', '#5fbf8a', '#47b8a8', '#5aa9e6', '#9a8cf0'];
+const BTYPE = { lowcut: 'highpass', lowshelf: 'lowshelf', peak: 'peaking', highshelf: 'highshelf', highcut: 'lowpass' };
+const BTYPE_ORDER = ['lowcut', 'lowshelf', 'peak', 'highshelf', 'highcut'];
+const BTYPE_LABEL = { lowcut: 'Low cut', lowshelf: 'Low shelf', peak: 'Bell', highshelf: 'High shelf', highcut: 'High cut' };
+const fx2x = (f, W) => Math.log(f / 20) / Math.log(1000) * W;
+const x2f = (x, W) => 20 * Math.pow(1000, x / W);
+const hzText = v => v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 1 : 2) + ' kHz' : Math.round(v) + ' Hz';
+const fxDefaults = type => { const o = Object.fromEntries(FXDEF[type].params.map(p => [p[0], p[4]])); if (type === 'eq') o.bands = EQ_BANDS(); return o; };
+const presetParams = (type, i, bpm) => { const pr = PRESETS[type][i], v = typeof pr.p === 'function' ? pr.p(bpm) : pr.p; return { ...fxDefaults(type), ...v, ...(v.bands ? { bands: v.bands.map(b => ({ ...b })) } : {}) }; };
+const near = (a, b) => Math.abs((a == null ? 0 : a) - b) <= 1e-3 * Math.max(1, Math.abs(b));
+const paramsEq = (a, b) => Object.keys(b).every(k => k === 'bands' ? !!a.bands && b.bands.every((x, i) => { const y = a.bands[i]; return y && y.on === x.on && y.type === x.type && near(y.f, x.f) && near(y.g, x.g) && near(y.q, x.q); }) : near(a[k], b[k]));
+const pNorm = (p, v) => p[6] ? Math.log(v / p[2]) / Math.log(p[3] / p[2]) : (v - p[2]) / (p[3] - p[2]);
+const pVal = (p, t) => p[6] ? p[2] * Math.pow(p[3] / p[2], t) : p[2] + t * (p[3] - p[2]);
+const pFmt = (p, v) => {
+  const u = p[5];
+  if (u === 'Hz') return v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 1 : 2) + ' kHz' : Math.round(v) + ' Hz';
+  if (u === 'ms') return (v < 10 ? v.toFixed(1) : Math.round(v)) + ' ms';
+  if (u === 's') return v.toFixed(2) + ' s';
+  if (u === '%') return Math.round(v) + '%';
+  if (u === ':1') return v.toFixed(1) + ':1';
+  if (u === 'dB') return (v > 0.05 ? '+' : '') + (Math.abs(v) < 0.05 ? '0.0' : v.toFixed(1)) + ' dB';
+  return v.toFixed(2);
+};
+function buildFx(ctx, fx) {
+  const input = ctx.createGain(), output = ctx.createGain(), last = {}, ext = {};
+  const anIn = ctx.createAnalyser(), anOut = ctx.createAnalyser();
+  anIn.fftSize = 4096; anOut.fftSize = 4096; anIn.smoothingTimeConstant = 0.8; anOut.smoothingTimeConstant = 0.8;
+  input.connect(anIn); output.connect(anOut);
+  const T = (param, v) => param.setTargetAtTime(v, ctx.currentTime, 0.015);
+  const wetDry = () => { const dry = ctx.createGain(), wet = ctx.createGain(); input.connect(dry); dry.connect(output); wet.connect(output); return { dry, wet }; };
+  let set = () => {};
+  if (fx.type === 'eq') {
+    const fl = [], calc = []; let cur = input;
+    for (let i = 0; i < 7; i++) { const f = ctx.createBiquadFilter(); cur.connect(f); cur = f; fl.push(f); calc.push(ctx.createBiquadFilter()); }
+    const og = ctx.createGain(); cur.connect(og); og.connect(output);
+    ext.calc = calc;
+    set = p => {
+      (p.bands || []).forEach((b, i) => {
+        const f = fl[i], c = calc[i], ty = b.on ? BTYPE[b.type] : 'peaking';
+        if (f.type !== ty) f.type = ty; if (c.type !== ty) c.type = ty;
+        T(f.frequency, b.f); T(f.Q, b.q); T(f.gain, b.on ? b.g : 0);
+        c.frequency.value = b.f; c.Q.value = b.q; c.gain.value = b.on ? b.g : 0;
+      });
+      T(og.gain, dbg(p.out || 0));
+    };
+  } else if (fx.type === 'comp') {
+    const c = ctx.createDynamicsCompressor(), mk = ctx.createGain(); c.knee.value = 6; ext.comp = c;
+    input.connect(c); c.connect(mk); mk.connect(output);
+    set = p => { T(c.threshold, p.thr); T(c.ratio, p.ratio); c.attack.value = p.att / 1000; c.release.value = p.rel / 1000; T(mk.gain, dbg(p.gain)); };
+  } else if (fx.type === 'sat') {
+    const { dry, wet } = wetDry(), pg = ctx.createGain(), ws = ctx.createWaveShaper(), og = ctx.createGain();
+    const curve = new Float32Array(2048); for (let i = 0; i < 2048; i++) { const x = i / 1023.5 - 1; curve[i] = Math.tanh(x * 2.5) / Math.tanh(2.5); }
+    ws.curve = curve; ws.oversample = '4x';
+    input.connect(pg); pg.connect(ws); ws.connect(og); og.connect(wet);
+    set = p => { T(pg.gain, dbg(p.drive)); T(og.gain, dbg(p.out) / Math.sqrt(dbg(p.drive))); T(wet.gain, p.mix / 100); T(dry.gain, 1 - p.mix / 100); };
+  } else if (fx.type === 'delay') {
+    const { dry, wet } = wetDry(), dl = ctx.createDelay(2), fb = ctx.createGain();
+    input.connect(dl); dl.connect(fb); fb.connect(dl); dl.connect(wet);
+    set = p => { T(dl.delayTime, p.time / 1000); T(fb.gain, p.fb / 100); T(wet.gain, p.mix / 100); };
+  } else if (fx.type === 'reverb') {
+    const { dry, wet } = wetDry(), pre = ctx.createDelay(1), conv = ctx.createConvolver(), hp = ctx.createBiquadFilter(), anWet = ctx.createAnalyser();
+    hp.type = 'highpass'; hp.Q.value = 0.707; anWet.fftSize = 2048; anWet.smoothingTimeConstant = 0.5;
+    input.connect(pre); pre.connect(conv); conv.connect(hp); hp.connect(wet); hp.connect(anWet);
+    ext.anWet = anWet;
+    let timer;
+    // IR: decorrelated noise, exponential decay to -60 dB at `sec`, HF damping that closes over time (fc: hi → 0.3·hi)
+    const ir = (sec, hi, width) => {
+      const sr = ctx.sampleRate, n = Math.max(64, Math.floor(sec * sr)), b = ctx.createBuffer(2, n, sr), w = width / 100;
+      const n0 = new Float32Array(n), n1 = new Float32Array(n);
+      for (let i = 0; i < n; i++) { n0[i] = Math.random() * 2 - 1; n1[i] = Math.random() * 2 - 1; }
+      const a0 = Math.exp(-2 * Math.PI * hi / sr), comp = Math.min(3, Math.sqrt((1 + a0) / (1 - a0)));
+      for (let c = 0; c < 2; c++) {
+        const d = b.getChannelData(c); let y = 0, a = a0;
+        for (let i = 0; i < n; i++) {
+          if ((i & 63) === 0) { const t = i / sr; a = Math.exp(-2 * Math.PI * Math.max(200, hi * Math.pow(0.3, t / sec)) / sr); }
+          const x = c ? w * n1[i] + (1 - w) * n0[i] : n0[i];
+          y = (1 - a) * x + a * y;
+          d[i] = y * comp * Math.exp(-6.9078 * i / n);
+        }
+      }
+      return b;
+    };
+    set = p => {
+      const lo = p.lo == null ? 120 : p.lo, hi = p.hi == null ? 8000 : p.hi, wd = p.width == null ? 100 : p.width;
+      T(pre.delayTime, p.pre / 1000); T(hp.frequency, lo); T(wet.gain, p.mix / 100 * 0.6); T(dry.gain, 1 - p.mix / 200);
+      const key = p.size + '|' + hi + '|' + wd;
+      if (last.key !== key) { last.key = key; clearTimeout(timer); timer = setTimeout(() => { conv.buffer = ir(p.size, hi, wd); }, conv.buffer ? 150 : 0); }
+    };
+  } else if (fx.type === 'limit') {
+    const g = ctx.createGain(), c = ctx.createDynamicsCompressor(), cg = ctx.createGain();
+    ext.comp = c; c.knee.value = 0; c.ratio.value = 20; c.attack.value = 0.001; c.release.value = 0.06;
+    input.connect(g); g.connect(c); c.connect(cg); cg.connect(output);
+    set = p => { T(g.gain, dbg(p.gain)); T(c.threshold, p.ceil); };
+  }
+  return { input, output, set, anIn, anOut, ...ext };
+}
+
+function makeBuffer(sec, fn, sr) {
+  sr = sr || 44100; const n = Math.floor(sec * sr);
+  const buf = new AudioBuffer({ length: n, sampleRate: sr, numberOfChannels: 1 });
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = fn(i / sr);
+  return buf;
+}
+function peaksOf(buf) {
+  const rate = 100, d = buf.getChannelData(0), per = Math.floor(buf.sampleRate / rate), bins = Math.ceil(d.length / per);
+  const out = new Float32Array(bins * 2);
+  for (let b = 0; b < bins; b++) {
+    let mn = 0, mx = 0;
+    for (let i = b * per, e = Math.min(d.length, i + per); i < e; i += 2) { const v = d[i]; if (v < mn) mn = v; if (v > mx) mx = v; }
+    out[2 * b] = mn; out[2 * b + 1] = mx;
+  }
+  return out;
+}
+
+class Component extends DCLogic {
+  rootRef = React.createRef(); scrollRef = React.createRef(); gridRef = React.createRef(); rulerRef = React.createRef();
+  phGridRef = React.createRef(); phRulerRef = React.createRef(); clockRef = React.createRef(); edWaveRef = React.createRef();
+  nid = 1000; takeN = 0; vizView = {}; verbHist = {}; derived = {}; derivedPeaks = {}; vizHist = {}; hist = []; fut = []; clipboard = []; buffers = {}; cache = new Map(); active = new Set(); trackNodes = {};
+  state = {
+    tracks: ['Drums', 'Hats', 'Bass', 'Pad', 'Perc', 'Vocal', 'Track 7', 'Track 8'].map((name, i) => ({ id: i + 1, name, color: TC[[0, 6, 5, 3, 4, 8, 9, 9][i]], muted: false, solo: false, arm: i === 5, vol: VOL0, h: 56, insert: i + 1 })),
+    inserts: [
+      { id: 0, name: 'Master', color: '#d5dae2', vol: VOL0, pan: 0, muted: false, solo: false, fx: [{ id: 900, type: 'limit', bypass: false, params: fxDefaults('limit') }] },
+      ...['Drums', 'Hats', 'Bass', 'Pad', 'Perc', 'Vocal', 'Insert 7', 'Insert 8'].map((name, i) => ({ id: i + 1, name, color: TC[[0, 6, 5, 3, 4, 8, 9, 9][i]], vol: VOL0, pan: 0, muted: false, solo: false,
+        fx: i === 5 ? [{ id: 902, type: 'eq', bypass: false, params: { out: 0, bands: EQ_BANDS().map((b, j) => j === 0 ? { ...b, on: true, f: 90 } : j === 2 ? { ...b, f: 400, g: -2.5 } : j === 5 ? { ...b, g: 3 } : b) } }, { id: 903, type: 'comp', bypass: false, params: fxDefaults('comp') }, { id: 904, type: 'reverb', bypass: false, params: fxDefaults('reverb') }]
+          : i === 0 ? [{ id: 905, type: 'comp', bypass: false, params: { thr: -12, ratio: 3, att: 20, rel: 120, gain: 2 } }] : [] })),
+    ],
+    mixOpen: true, mixMin: false, mixH: 300, mixSel: 6, fxSel: 903, editor: null, plugs: [], eqSel: {},
+    patterns: PATTERNS0, sources: [],
+    clips: [
+      { id: 1, track: 0, start: 0, len: 16, offset: 0, kind: 'pat', ref: 1, muted: false, gain: 0 },
+      { id: 2, track: 0, start: 16, len: 16, offset: 0, kind: 'pat', ref: 1, muted: false, gain: 0 },
+      { id: 3, track: 1, start: 8, len: 24, offset: 0, kind: 'pat', ref: 2, muted: false, gain: 0 },
+      { id: 4, track: 2, start: 0, len: 32, offset: 0, kind: 'pat', ref: 3, muted: false, gain: 0 },
+    ],
+    sel: [], cur: { kind: 'pat', ref: 1 }, tool: 'draw', snap: -1, bw: 22, fxDrag: null, bpm: 128, playing: false, start: 0, loop: null,
+    menu: null, marquee: null, ghost: null, help: false, readout: 'Gotowe', dragOver: false,
+    headW: 196, pickW: 220, pickOpen: true, rec: false, monitor: false, inLevel: 0, recClip: null,
+    follow: true, metro: false, countIn: true, alt: false, micBlocked: false,
+  };
+
+  componentDidMount() {
+    const spb = 60 / 128;
+    const chords = [[57, 60, 64], [53, 57, 60]];
+    const pad = makeBuffer(8 * spb, t => {
+      const bar = Math.floor(t / (4 * spb)) % 2, ph = (t % (spb / 2)) / (spb / 2);
+      const env = Math.exp(-ph * 3.2) * 0.8 + 0.2;
+      return chords[bar].reduce((a, p) => a + Math.sin(2 * Math.PI * mtof(p) * t), 0) * 0.22 * env;
+    });
+    let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5;
+    const perc = makeBuffer(4 * spb, t => {
+      const s16 = spb / 4, ph = (t % s16), k = Math.floor(t / s16) % 4, ph4 = t % spb;
+      return rnd() * Math.exp(-ph * 60) * (k === 2 ? 0.9 : 0.4) + Math.sin(2 * Math.PI * (110 - ph4 * 120) * ph4) * Math.exp(-ph4 * 14) * (Math.floor(t / spb) % 2 ? 0.7 : 0);
+    });
+    this.addSource('Pad Loop Am-F', pad, '#47b8a8', [32, 40, 48, 56].map(start => ({ track: 3, start })));
+    this.addSource('Perc Loop', perc, '#5fbf8a', [48, 52, 56, 60].map(start => ({ track: 4, start })));
+    this.scrollRef.current && this.scrollRef.current.addEventListener('wheel', this.onWheel, { passive: false });
+    this.rootRef.current && this.rootRef.current.addEventListener('wheel', this.onWheelBpm, { passive: false });
+    window.addEventListener('keydown', this.onKey);
+    window.addEventListener('keyup', this.onKeyUp);
+    window.addEventListener('blur', this.onBlurWin);
+    window.addEventListener('resize', this.onResize);
+  }
+  onResize = () => this.forceUpdate();
+  onKeyUp = e => { if (e.key === 'Alt') { e.preventDefault(); this.setState({ alt: false }); } };
+  onBlurWin = () => { if (this.state.alt) this.setState({ alt: false }); };
+  componentWillUnmount() {
+    window.removeEventListener('keydown', this.onKey);
+    window.removeEventListener('keyup', this.onKeyUp);
+    window.removeEventListener('blur', this.onBlurWin);
+    this.scrollRef.current && this.scrollRef.current.removeEventListener('wheel', this.onWheel);
+    this.stopAudio(); this.closeMic(); cancelAnimationFrame(this.meterRaf);
+  }
+  componentDidUpdate() { this.applyMixer(); this.applyTrackGains(); }
+
+  say(t) { this.setState({ readout: t }); }
+  snapshot() { const s = this.state; return { clips: s.clips, tracks: s.tracks, patterns: s.patterns, sources: s.sources, inserts: s.inserts }; }
+  commit() { this.hist.push(this.snapshot()); if (this.hist.length > 200) this.hist.shift(); this.fut = []; }
+  beginGesture() { this.gestureSnap = this.snapshot(); }
+  endGesture() { const g = this.gestureSnap; if (!g) return; const s = this.state; if (g.clips !== s.clips || g.tracks !== s.tracks || g.inserts !== s.inserts) { this.hist.push(g); this.fut = []; } this.gestureSnap = null; this.forceUpdate(); }
+  undo = () => { if (!this.hist.length) return; this.fut.push(this.snapshot()); const p = this.hist.pop(); this.setState({ ...p, sel: this.state.sel.filter(id => p.clips.some(c => c.id === id)) }); this.say('Cofnięto'); };
+  redo = () => { if (!this.fut.length) return; this.hist.push(this.snapshot()); const p = this.fut.pop(); this.setState({ ...p }); this.say('Ponowiono'); };
+
+  addSource(name, buf, color, places) {
+    const id = ++this.nid;
+    this.buffers[id] = buf;
+    const peaks = peaksOf(buf); let pk = 0; for (let i = 0; i < peaks.length; i++) { const a = Math.abs(peaks[i]); if (a > pk) pk = a; }
+    const src = { id, name, color, dur: buf.duration, peaks, sr: buf.sampleRate, ch: buf.numberOfChannels, peakDb: pk > 1e-5 ? (20 * Math.log10(pk)).toFixed(1) + ' dBFS' : '-∞' };
+    this.setState(s => {
+      const lenB = buf.duration / (60 / s.bpm);
+      const clips = (places || []).map(p => ({ id: ++this.nid, track: p.track, start: p.start, len: Math.min(lenB, TOTAL - p.start), offset: 0, kind: 'audio', ref: id, muted: false, gain: 0 }));
+      return { sources: [...s.sources, src], clips: [...s.clips, ...clips] };
+    });
+    return src;
+  }
+  srcOf(c) { const s = this.state; return c.kind === 'pat' ? s.patterns.find(p => p.id === c.ref) : s.sources.find(x => x.id === c.ref); }
+  srcLen(kind, ref) {
+    const s = this.state;
+    if (kind === 'pat') { const p = s.patterns.find(x => x.id === ref); return p ? p.len : 4; }
+    const x = s.sources.find(v => v.id === ref); return x ? x.dur / (60 / s.bpm) : 4;
+  }
+
+  async loadFiles(files, at) {
+    this.ensureCtx();
+    let k = 0;
+    for (const f of files) {
+      if (!f.type.startsWith('audio') && !/\.(wav|mp3|ogg|flac|m4a|aif+)$/i.test(f.name)) continue;
+      try {
+        const buf = await this.ctx.decodeAudioData(await f.arrayBuffer());
+        const place = at ? [{ track: clamp(at.track + k, 0, this.state.tracks.length - 1), start: at.beat }] : [];
+        if (place.length) this.commit();
+        const src = this.addSource(f.name.replace(/\.[^.]+$/, ''), buf, TC[(this.state.sources.length + 3) % TC.length], place);
+        this.setState({ cur: { kind: 'audio', ref: src.id } });
+        this.say('Wczytano ' + f.name + ' · ' + buf.duration.toFixed(2) + ' s · ' + buf.sampleRate + ' Hz');
+        k++;
+      } catch (err) { this.say('Nie udało się zdekodować ' + f.name); }
+    }
+  }
+  onFiles = e => { this.loadFiles([...e.target.files]); e.target.value = ''; };
+  onDragOver = e => { if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) { e.preventDefault(); if (!this.state.dragOver) this.setState({ dragOver: true }); } };
+  onDragLeave = e => { if (!this.rootRef.current.contains(e.relatedTarget)) this.setState({ dragOver: false }); };
+  onDrop = e => {
+    e.preventDefault(); this.setState({ dragOver: false });
+    const files = [...(e.dataTransfer ? e.dataTransfer.files : [])]; if (!files.length) return;
+    const g = this.gridRef.current.getBoundingClientRect();
+    const inGrid = e.clientX >= g.left && e.clientX <= g.right && e.clientY >= g.top && e.clientY <= g.bottom;
+    const pt = inGrid ? this.pt(e.clientX, e.clientY) : null;
+    this.loadFiles(files, pt && pt.track >= 0 ? { track: pt.track, beat: this.snapFloor(pt.beat, false) } : null);
+  };
+
+  tops() { const t = []; let y = 0; for (const tr of this.state.tracks) { t.push(y); y += tr.h; } t.push(y); return t; }
+  trackAtY(y) { const t = this.tops(); if (y < 0) return -1; for (let i = 0; i < t.length - 1; i++) if (y < t[i + 1]) return i; return -1; }
+  trackAtYClamped(y) { const n = this.state.tracks.length; if (y < 0) return 0; const i = this.trackAtY(y); return i < 0 ? n - 1 : i; }
+  snapRes() { const s = this.state; return s.snap < 0 ? autoSnap(s.bw) : s.snap; }
+  snapUnit(alt) { return alt || this.state.alt ? 0 : this.snapRes(); }
+  snapRound(b, alt) { const u = this.snapUnit(alt); return u ? Math.round(b / u) * u : Math.round(b * 64) / 64; }
+  snapFloor(b, alt) { const u = this.snapUnit(alt); return u ? Math.floor(b / u) * u : Math.round(b * 64) / 64; }
+  pt(x, y) { const r = this.gridRef.current.getBoundingClientRect(); return { beat: (x - r.left) / this.state.bw, track: this.trackAtY(y - r.top), x: x - r.left, y: y - r.top }; }
+  track(mv, up, cur) {
+    const u = ev => {
+      window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', u); window.removeEventListener('pointercancel', u);
+      document.body.style.cursor = ''; up && up(ev);
+    };
+    if (cur) document.body.style.cursor = cur;
+    window.addEventListener('pointermove', mv); window.addEventListener('pointerup', u); window.addEventListener('pointercancel', u);
+  }
+  setClips(fn) { this.setState(s => ({ clips: fn(s.clips) })); }
+  clipAt(x, y) { const el = document.elementFromPoint(x, y); const c = el && el.closest && el.closest('[data-clip]'); return c ? +c.dataset.clip : null; }
+
+  gridDown = e => {
+    const clipEl = e.target.closest('[data-clip]');
+    const id = clipEl ? +clipEl.dataset.clip : null;
+    const edge = e.target.dataset ? e.target.dataset.edge : null;
+    const p = this.pt(e.clientX, e.clientY);
+    const modK = e.ctrlKey || e.metaKey;
+    if (e.button === 2) return this.rightDown(e, id, p);
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const s = this.state;
+    let tool = s.tool;
+    if (modK && !id && (tool === 'draw' || tool === 'paint')) tool = 'select';
+    if (tool === 'erase') return this.eraseDrag(e, id);
+    if (tool === 'mute') return this.muteDrag(e, id);
+    if (tool === 'slice') { if (id) this.sliceAt(id, this.snapRound(p.beat, e.altKey)); return; }
+    if (tool === 'select' && (!id || modK)) return this.marqueeDrag(e, p, modK);
+    if (id) {
+      const clip = s.clips.find(c => c.id === id);
+      if (modK) { this.setState({ sel: s.sel.includes(id) ? s.sel.filter(x => x !== id) : [...s.sel, id] }); return; }
+      this.setState({ cur: { kind: clip.kind, ref: clip.ref } });
+      if (edge === 'fi' || edge === 'fo') return this.fadeDrag(e, clip, edge);
+      if (edge === 'l' || edge === 'r') return this.resizeDrag(e, clip, edge);
+      return this.moveDrag(e, clip, p, e.shiftKey);
+    }
+    if (p.track < 0) { this.setState({ sel: [] }); return; }
+    this.beginGesture();
+    const len = this.srcLen(s.cur.kind, s.cur.ref);
+    const start = clamp(this.snapFloor(p.beat, e.altKey), 0, TOTAL - Math.min(len, TOTAL));
+    const nc = { id: ++this.nid, track: p.track, start, len: Math.min(len, TOTAL - start), offset: 0, kind: s.cur.kind, ref: s.cur.ref, muted: false, gain: 0 };
+    this.setState({ clips: [...s.clips, nc], sel: [nc.id] });
+    if (tool === 'paint') return this.paintDrag(e, nc);
+    this.moveDrag(e, nc, p, false, true);
+  };
+
+  moveDrag(e, clip, p, clone, fresh) {
+    const s = this.state;
+    if (!fresh) this.beginGesture();
+    let ids = s.sel.includes(clip.id) ? s.sel : [clip.id];
+    let clips = s.clips;
+    if (clone) {
+      const copies = clips.filter(c => ids.includes(c.id)).map(c => ({ ...c, id: ++this.nid }));
+      const map = {}; clips.filter(c => ids.includes(c.id)).forEach((c, i) => { map[c.id] = copies[i].id; });
+      clip = { ...clip, id: map[clip.id] };
+      ids = copies.map(c => c.id); clips = [...clips, ...copies];
+    }
+    const orig = clips.filter(c => ids.includes(c.id)).map(c => ({ ...c }));
+    const minStart = Math.min(...orig.map(c => c.start)), maxEnd = Math.max(...orig.map(c => c.start + c.len));
+    const minT = Math.min(...orig.map(c => c.track)), maxT = Math.max(...orig.map(c => c.track));
+    const o = orig.find(c => c.id === clip.id);
+    const sx = e.clientX, sy = e.clientY, n = s.tracks.length;
+    const r0 = this.gridRef.current.getBoundingClientRect();
+    const t0 = this.trackAtYClamped(sy - r0.top);
+    this.setState({ clips, sel: ids });
+    let moved = false;
+    this.track(ev => {
+      if (!moved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 3) return;
+      moved = true;
+      const raw = (ev.clientX - sx) / this.state.bw;
+      let d = this.snapRound(o.start + raw, ev.altKey) - o.start;
+      d = clamp(d, -minStart, TOTAL - maxEnd);
+      const r = this.gridRef.current.getBoundingClientRect();
+      const dt = clamp(this.trackAtYClamped(ev.clientY - r.top) - t0, -minT, n - 1 - maxT);
+      const byId = {}; orig.forEach(c => { byId[c.id] = c; });
+      this.setClips(cs => cs.map(c => byId[c.id] ? { ...c, start: byId[c.id].start + d, track: byId[c.id].track + dt } : c));
+      const src = this.srcOf(o);
+      this.say((clone ? 'Kopia · ' : '') + (src ? src.name : '') + ' → ' + this.fmtPos(o.start + d) + ' · ' + this.state.tracks[o.track + dt].name);
+    }, () => this.endGesture(), 'grabbing');
+  }
+  resizeDrag(e, clip, edge) {
+    this.beginGesture();
+    const o = { ...clip }, sx = e.clientX;
+    const isAudio = o.kind === 'audio', srcLen = this.srcLen(o.kind, o.ref);
+    const minL = Math.max(1 / 16, this.snapRes() || 1 / 16);
+    this.track(ev => {
+      const raw = (ev.clientX - sx) / this.state.bw;
+      const n = { ...o };
+      if (edge === 'r') {
+        let len = Math.max(minL, this.snapRound(o.start + o.len + raw, ev.altKey) - o.start);
+        if (isAudio) len = Math.min(len, srcLen - o.offset);
+        n.len = Math.min(len, TOTAL - o.start);
+      } else {
+        const lo = isAudio ? o.start - o.offset : 0;
+        const ns = clamp(this.snapRound(o.start + raw, ev.altKey), Math.max(0, lo), o.start + o.len - minL);
+        n.start = ns; n.offset = o.offset + (ns - o.start); n.len = o.len - (ns - o.start);
+      }
+      this.setClips(cs => cs.map(c => c.id === o.id ? n : c));
+      this.say('Start ' + this.fmtPos(n.start) + ' · długość ' + n.len.toFixed(2) + ' beat');
+    }, () => this.endGesture(), 'ew-resize');
+  }
+  paintDrag(e, first) {
+    let lastEnd = first.start + first.len;
+    const tr = first.track, len = first.len;
+    this.track(ev => {
+      const b = this.pt(ev.clientX, ev.clientY).beat;
+      const add = [];
+      while (b >= lastEnd && lastEnd + len <= TOTAL) { add.push({ ...first, id: ++this.nid, start: lastEnd, track: tr }); lastEnd += len; }
+      if (add.length) this.setState(s => ({ clips: [...s.clips, ...add], sel: [...s.sel, ...add.map(c => c.id)] }));
+    }, () => this.endGesture(), 'copy');
+  }
+  eraseDrag(e, id) {
+    this.beginGesture();
+    const del = cid => { if (cid != null) this.setState(s => ({ clips: s.clips.filter(c => c.id !== cid), sel: s.sel.filter(x => x !== cid) })); };
+    del(id);
+    this.track(ev => del(this.clipAt(ev.clientX, ev.clientY)), () => this.endGesture(), 'not-allowed');
+  }
+  muteDrag(e, id) {
+    if (id == null) return;
+    this.beginGesture();
+    const val = !this.state.clips.find(c => c.id === id).muted;
+    const set = cid => { if (cid != null) this.setClips(cs => cs.map(c => c.id === cid && c.muted !== val ? { ...c, muted: val } : c)); };
+    set(id);
+    this.track(ev => set(this.clipAt(ev.clientX, ev.clientY)), () => this.endGesture());
+  }
+  marqueeDrag(e, p, additive) {
+    const base = additive ? this.state.sel : [];
+    const x0 = p.x, y0 = p.y;
+    this.setState({ marquee: { x0, y0, x1: x0, y1: y0 }, sel: base });
+    this.track(ev => {
+      const q = this.pt(ev.clientX, ev.clientY);
+      const s = this.state, bw = s.bw, tops = this.tops();
+      const ax = Math.min(x0, q.x), bx = Math.max(x0, q.x), ay = Math.min(y0, q.y), by = Math.max(y0, q.y);
+      const hit = s.clips.filter(c => c.start * bw < bx && (c.start + c.len) * bw > ax && tops[c.track] < by && tops[c.track + 1] > ay).map(c => c.id);
+      this.setState({ marquee: { x0, y0, x1: q.x, y1: q.y }, sel: [...new Set([...base, ...hit])] });
+    }, () => { this.setState({ marquee: null }); this.say('Zaznaczono ' + this.state.sel.length); }, 'crosshair');
+  }
+  rightDown(e, id, p) {
+    e.preventDefault();
+    const sx = e.clientX, sy = e.clientY;
+    let erasing = false;
+    this.beginGesture();
+    this.track(ev => {
+      if (!erasing && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 5) { erasing = true; document.body.style.cursor = 'not-allowed'; if (id != null) this.delIds([id], true); }
+      if (erasing) { const c = this.clipAt(ev.clientX, ev.clientY); if (c != null) this.delIds([c], true); }
+    }, () => {
+      this.endGesture();
+      if (!erasing) { if (id != null) this.openClipMenu(sx, sy, id, p); else this.openGridMenu(sx, sy, p); }
+    });
+  }
+  sliceAt(id, b) {
+    const c = this.state.clips.find(x => x.id === id);
+    if (!c || b <= c.start + 1e-6 || b >= c.start + c.len - 1e-6) return;
+    this.commit();
+    const a = { ...c, len: b - c.start }, z = { ...c, id: ++this.nid, start: b, len: c.start + c.len - b, offset: c.offset + (b - c.start) };
+    this.setClips(cs => cs.flatMap(x => x.id === id ? [a, z] : [x]));
+    this.say('Przecięto w ' + this.fmtPos(b));
+  }
+  delIds(ids, noCommit) {
+    if (!ids.length) return;
+    if (!noCommit) this.commit();
+    this.setState(s => ({ clips: s.clips.filter(c => !ids.includes(c.id)), sel: s.sel.filter(x => !ids.includes(x)) }));
+  }
+  selClips() { const s = this.state; return s.clips.filter(c => s.sel.includes(c.id)); }
+  duplicate = () => {
+    const cs = this.selClips(); if (!cs.length) return;
+    const a = Math.min(...cs.map(c => c.start)), b = Math.max(...cs.map(c => c.start + c.len));
+    const u = this.snapRes() || 1, span = Math.ceil((b - a) / u - 1e-6) * u;
+    if (b + span > TOTAL) return this.say('Brak miejsca na duplikat');
+    this.commit();
+    const copies = cs.map(c => ({ ...c, id: ++this.nid, start: c.start + span }));
+    this.setState(s => ({ clips: [...s.clips, ...copies], sel: copies.map(c => c.id) }));
+    this.say('Zduplikowano ' + copies.length);
+  };
+  copy = () => { const cs = this.selClips(); if (!cs.length) return; this.clipboard = cs.map(c => ({ ...c })); this.say('Skopiowano ' + cs.length); };
+  cut = () => { this.copy(); this.delIds(this.state.sel); };
+  paste = (at) => {
+    if (!this.clipboard.length) return;
+    const s = this.state, cb = this.clipboard;
+    const a = Math.min(...cb.map(c => c.start)), t0 = Math.min(...cb.map(c => c.track));
+    const beat = at ? at.beat : s.start, dt = at ? at.track - t0 : 0;
+    this.commit();
+    const copies = cb.map(c => ({ ...c, id: ++this.nid, start: clamp(c.start - a + beat, 0, TOTAL - c.len), track: clamp(c.track + dt, 0, s.tracks.length - 1) }));
+    this.setState({ clips: [...s.clips, ...copies], sel: copies.map(c => c.id) });
+    this.say('Wklejono ' + copies.length + ' w ' + this.fmtPos(beat));
+  };
+  toggleMuteSel = () => {
+    const cs = this.selClips(); if (!cs.length) return;
+    this.commit(); const val = !cs.every(c => c.muted);
+    this.setClips(all => all.map(c => this.state.sel.includes(c.id) ? { ...c, muted: val } : c));
+  };
+  nudge(db, dt) {
+    const cs = this.selClips(); if (!cs.length) return;
+    const n = this.state.tracks.length;
+    const minS = Math.min(...cs.map(c => c.start)), maxE = Math.max(...cs.map(c => c.start + c.len));
+    const minT = Math.min(...cs.map(c => c.track)), maxT = Math.max(...cs.map(c => c.track));
+    db = clamp(db, -minS, TOTAL - maxE); dt = clamp(dt, -minT, n - 1 - maxT);
+    if (!db && !dt) return;
+    this.commit();
+    this.setClips(all => all.map(c => this.state.sel.includes(c.id) ? { ...c, start: c.start + db, track: c.track + dt } : c));
+  }
+  makeUnique(clip) {
+    const p = this.state.patterns.find(x => x.id === clip.ref); if (!p) return;
+    this.commit();
+    const baseName = p.name.replace(/ #\d+$/, '');
+    const count = this.state.patterns.filter(x => x.name.startsWith(baseName)).length;
+    const np = { ...p, id: ++this.nid, name: baseName + ' #' + (count + 1), notes: p.notes.map(n => ({ ...n })) };
+    this.setState(s => ({ patterns: [...s.patterns, np], clips: s.clips.map(c => c.id === clip.id ? { ...c, ref: np.id } : c), cur: { kind: 'pat', ref: np.id } }));
+    this.say('Nowy pattern: ' + np.name);
+  }
+  setSrcProp(clip, patch) {
+    this.commit();
+    if (clip.kind === 'pat') this.setState(s => ({ patterns: s.patterns.map(p => p.id === clip.ref ? { ...p, ...patch } : p) }));
+    else this.setState(s => ({ sources: s.sources.map(p => p.id === clip.ref ? { ...p, ...patch } : p) }));
+  }
+  setTrack(i, patch, noCommit) { if (!noCommit) this.commit(); this.setState(s => ({ tracks: s.tracks.map((t, j) => j === i ? { ...t, ...patch } : t) })); }
+  newTrack(n) { return { id: ++this.nid, name: 'Track ' + (n + 1), color: '#8b93a1', muted: false, solo: false, arm: false, vol: VOL0, h: 56, insert: 0 }; }
+  insertTrack(i) {
+    this.commit();
+    this.setState(s => ({ tracks: [...s.tracks.slice(0, i), this.newTrack(s.tracks.length), ...s.tracks.slice(i)], clips: s.clips.map(c => c.track >= i ? { ...c, track: c.track + 1 } : c) }));
+  }
+  deleteTrack(i) {
+    if (this.state.tracks.length <= 1) return;
+    this.commit();
+    this.setState(s => ({ tracks: s.tracks.filter((_, j) => j !== i), clips: s.clips.filter(c => c.track !== i).map(c => c.track > i ? { ...c, track: c.track - 1 } : c) }));
+  }
+  addTrack = () => this.insertTrack(this.state.tracks.length);
+  armTrack(i) {
+    const on = !this.state.tracks[i].arm;
+    this.setState(s => ({ tracks: s.tracks.map((t, j) => ({ ...t, arm: j === i ? on : false })) }));
+    this.say(on ? 'Nagrywanie na: ' + this.state.tracks[i].name : 'Ścieżka rozbrojona');
+  }
+
+  menuPos(x, y, h) { return { x: Math.min(x, window.innerWidth - 240), y: Math.max(4, Math.min(y, window.innerHeight - h)) }; }
+  openClipMenu(x, y, id, p) {
+    const s = this.state, c = s.clips.find(v => v.id === id); if (!c) return;
+    if (!s.sel.includes(id)) this.setState({ sel: [id] });
+    const src = this.srcOf(c), isPat = c.kind === 'pat';
+    const items = [
+      { t: 'title', label: (isPat ? 'Pattern · ' : 'Audio · ') + (src ? src.name : '') },
+      { t: 'item', label: 'Zmień nazwę…', act: () => this.openRename(x, y, src ? src.name : '', v => this.setSrcProp(c, { name: v })) },
+      { t: 'swatches', current: src && src.color, pick: col => this.setSrcProp(c, { color: col }) },
+      { t: 'sep' },
+      { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: this.toggleMuteSel },
+      { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: this.duplicate },
+      { t: 'item', label: 'Kopiuj', kbd: 'Ctrl+C', act: this.copy },
+      { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: this.cut },
+      { t: 'item', label: 'Podziel tutaj', act: () => this.sliceAt(id, this.snapRound(p.beat)) },
+      { t: 'item', label: 'Podziel na głowicy', act: () => this.sliceAt(id, this.curBeat()) },
+      isPat ? { t: 'item', label: 'Make unique', act: () => this.makeUnique(c) } : { t: 'gain', clip: c },
+      ...(isPat ? [] : [{ t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => this.openEditor(id) }]),
+      { t: 'item', label: 'Kanał miksera…', act: () => this.openRouteMenu(c.track, x, y) },
+      { t: 'item', label: 'Zaznacz wszystkie z tego źródła', act: () => this.setState(st => ({ sel: st.clips.filter(v => v.kind === c.kind && v.ref === c.ref).map(v => v.id) })) },
+      { t: 'sep' },
+      { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => this.delIds(this.state.sel.includes(id) ? this.state.sel : [id]) },
+    ];
+    this.setState({ menu: { ...this.menuPos(x, y, 420), items } });
+  }
+  openGridMenu(x, y, p) {
+    const at = { beat: this.snapFloor(p.beat), track: clamp(p.track, 0, this.state.tracks.length - 1) };
+    const items = [
+      { t: 'title', label: 'Playlist · ' + this.fmtPos(at.beat) },
+      { t: 'item', label: 'Wklej tutaj', kbd: 'Ctrl+V', act: () => this.paste(at), disabled: !this.clipboard.length },
+      { t: 'item', label: 'Ustaw start tutaj', act: () => this.seek(at.beat) },
+      { t: 'item', label: 'Zaznacz wszystko', kbd: 'Ctrl+A', act: () => this.setState(s => ({ sel: s.clips.map(c => c.id) })) },
+      { t: 'item', label: 'Zaznacz ścieżkę', act: () => this.setState(s => ({ sel: s.clips.filter(c => c.track === at.track).map(c => c.id) })) },
+    ];
+    this.setState({ menu: { ...this.menuPos(x, y, 180), items } });
+  }
+  openLaneMenu(x, y, i) {
+    const t = this.state.tracks[i];
+    const items = [
+      { t: 'title', label: t.name },
+      { t: 'item', label: 'Zmień nazwę…', act: () => this.openRename(x, y, t.name, v => this.setTrack(i, { name: v })) },
+      { t: 'swatches', current: t.color, pick: col => this.setTrack(i, { color: col }) },
+      { t: 'sep' },
+      { t: 'item', label: t.muted ? 'Odcisz' : 'Wycisz', act: () => this.setTrack(i, { muted: !t.muted }) },
+      { t: 'item', label: t.solo ? 'Wyłącz solo' : 'Solo', act: () => this.setTrack(i, { solo: !t.solo }) },
+      { t: 'item', label: t.arm ? 'Rozbrój nagrywanie' : 'Uzbrój do nagrywania', act: () => this.armTrack(i) },
+      { t: 'item', label: 'Zaznacz klipy ścieżki', act: () => this.setState(s => ({ sel: s.clips.filter(c => c.track === i).map(c => c.id) })) },
+      { t: 'item', label: 'Wysokość: domyślna', act: () => this.setTrack(i, { h: 56 }) },
+      { t: 'sep' },
+      { t: 'item', label: 'Wstaw ścieżkę powyżej', act: () => this.insertTrack(i) },
+      { t: 'item', label: 'Wstaw ścieżkę poniżej', act: () => this.insertTrack(i + 1) },
+      { t: 'item', label: 'Usuń ścieżkę', danger: true, act: () => this.deleteTrack(i) },
+    ];
+    this.setState({ menu: { ...this.menuPos(x, y, 400), items } });
+  }
+  openRename(x, y, value, done) {
+    const ref = el => { if (el && !el._init) { el._init = true; el.value = value; setTimeout(() => { el.focus(); el.select(); }, 0); } };
+    const onKey = e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { const v = e.target.value.trim(); if (v) done(v); this.closeMenu(); }
+      if (e.key === 'Escape') this.closeMenu();
+    };
+    this.setState({ menu: { ...this.menuPos(x, y, 80), items: [{ t: 'title', label: 'Nazwa — Enter zatwierdza' }, { t: 'rename', inputRef: ref, onKey }] } });
+  }
+  closeMenu = () => { if (this.state.menu) this.setState({ menu: null }); };
+
+  laneDown(i, e) {
+    if (e.button === 2) { e.preventDefault(); return this.openLaneMenu(e.clientX, e.clientY, i); }
+    if (e.button === 0) { const id = this.state.tracks[i].insert, m = this.state.inserts.find(x => x.id === id); if (m && this.state.mixSel !== id) this.setState({ mixSel: id, fxSel: m.fx[0] ? m.fx[0].id : null }); }
+  }
+  laneResize(i, e) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    this.beginGesture();
+    const sy = e.clientY, h0 = this.state.tracks[i].h;
+    this.track(ev => { const h = clamp(Math.round(h0 + ev.clientY - sy), 28, 220); this.setTrack(i, { h }, true); this.say(this.state.tracks[i].name + ' · wysokość ' + h + ' px'); }, () => this.endGesture(), 'row-resize');
+  }
+  laneVol(i, e) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const now = performance.now();
+    if (this.lastVolDown && this.lastVolDown.i === i && now - this.lastVolDown.t < 320) { this.setTrack(i, { vol: VOL0 }); this.say(this.state.tracks[i].name + ' · 0.0 dB'); this.lastVolDown = null; return; }
+    this.lastVolDown = { i, t: now };
+    const bar = e.currentTarget.getBoundingClientRect();
+    this.beginGesture();
+    let v = this.state.tracks[i].vol, lx = e.clientX;
+    this.track(ev => {
+      v = clamp(v + (ev.clientX - lx) / bar.width * (ev.shiftKey ? 0.2 : 1), 0, 1); lx = ev.clientX;
+      this.setTrack(i, { vol: v }, true); this.say(this.state.tracks[i].name + ' · ' + volText(v));
+    }, () => this.endGesture(), 'ew-resize');
+  }
+  split(kind, e) {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const sx = e.clientX, w0 = kind === 'pick' ? this.state.pickW : this.state.headW;
+    this.track(ev => {
+      const w = kind === 'pick' ? clamp(w0 + ev.clientX - sx, 160, 460) : clamp(w0 + ev.clientX - sx, 150, 360);
+      this.setState(kind === 'pick' ? { pickW: w } : { headW: w });
+    }, null, 'col-resize');
+  }
+  togglePicker = () => this.setState(s => ({ pickOpen: !s.pickOpen }));
+
+  pickDown(kind, ref, e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    this.setState({ cur: { kind, ref } });
+    const src = kind === 'pat' ? this.state.patterns.find(p => p.id === ref) : this.state.sources.find(p => p.id === ref);
+    this.say('Wybrano: ' + src.name);
+    const sx = e.clientX, sy = e.clientY; let drag = false;
+    this.track(ev => {
+      if (!drag && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 4) drag = true;
+      if (drag) this.setState({ ghost: { x: ev.clientX + 12, y: ev.clientY + 8, name: src.name, color: src.color } });
+    }, ev => {
+      this.setState({ ghost: null });
+      if (!drag) return;
+      const g = this.gridRef.current.getBoundingClientRect();
+      if (ev.clientX < g.left || ev.clientX > g.right || ev.clientY < g.top || ev.clientY > g.bottom) return;
+      const p = this.pt(ev.clientX, ev.clientY);
+      if (p.track < 0) return;
+      this.commit();
+      const len = this.srcLen(kind, ref), start = clamp(this.snapFloor(p.beat, ev.altKey), 0, TOTAL - Math.min(len, TOTAL));
+      const nc = { id: ++this.nid, track: p.track, start, len: Math.min(len, TOTAL - start), offset: 0, kind, ref, muted: false, gain: 0 };
+      this.setState(s => ({ clips: [...s.clips, nc], sel: [nc.id] }));
+    }, 'grabbing');
+  }
+
+  rulerDown = e => {
+    if (e.button !== 0) return;
+    e.preventDefault(); this.closeMenu();
+    const r = this.rulerRef.current.getBoundingClientRect();
+    const b0 = clamp(this.snapRound((e.clientX - r.left) / this.state.bw, e.altKey), 0, TOTAL);
+    let dragged = false;
+    this.track(ev => {
+      const b1 = clamp(this.snapRound((ev.clientX - r.left) / this.state.bw, ev.altKey), 0, TOTAL);
+      if (Math.abs(ev.clientX - e.clientX) > 4) dragged = true;
+      if (dragged && b1 !== b0) this.setState({ loop: { a: Math.min(b0, b1), b: Math.max(b0, b1) } });
+    }, () => {
+      if (!dragged) this.seek(b0);
+      else if (this.state.loop) this.seek(this.state.loop.a);
+    }, 'ew-resize');
+  };
+  clearLoop = () => { this.setState({ loop: null }); this.say('Pętla usunięta'); };
+  gridDbl = e => {
+    const el = e.target.closest('[data-clip]'); if (!el) return;
+    const c = this.state.clips.find(x => x.id === +el.dataset.clip);
+    if (!c) return;
+    this.setState({ cur: { kind: c.kind, ref: c.ref } });
+    if (c.kind === 'audio') this.openEditor(c.id);
+  };
+  seek(b) {
+    const was = this.state.playing;
+    if (was) this.stopAudio();
+    this.setState({ start: b }, () => { if (was) this.play(); else this.paintHead(b); });
+    this.say('Start: ' + this.fmtPos(b));
+  }
+
+  setBpm(v) { const b = clamp(Math.round(v * 100) / 100, 20, 999); if (this.state.playing && this.ctx) { const now = this.ctx.currentTime; this.segs.push({ t: now, beat: this.beatAt(now), spb: 60 / b }); } this.setState({ bpm: b }); this.say('Tempo ' + b.toFixed(2) + ' BPM'); }
+  bpmDown = e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    let v = this.state.bpm, lx = e.clientX, ly = e.clientY;
+    this.track(ev => { const d = (ev.clientX - lx) + (ly - ev.clientY); lx = ev.clientX; ly = ev.clientY; v = clamp(v + d * (ev.shiftKey ? 0.05 : 0.5), 20, 999); this.setBpm(ev.shiftKey ? v : Math.round(v)); }, null, 'ns-resize');
+  };
+  onWheelBpm = e => {
+    const el = e.target.closest && e.target.closest('[data-wheel]'); if (!el) return;
+    const d = e.deltaY || e.deltaX; if (!d) return;
+    e.preventDefault(); e.stopPropagation();
+    const n = d < 0 ? 1 : -1, f = e.shiftKey ? 0.2 : 1, kind = el.dataset.wheel;
+    if (kind === 'bpm') return this.setBpm(this.state.bpm + n * (e.shiftKey ? 0.01 : 1));
+    const [k, id, id2] = kind.split(':');
+    if (k === 'pan') { const m = this.state.inserts.find(x => x.id === +id); const v = clamp(m.pan + n * 0.04 * f, -1, 1); this.setInsert(+id, { pan: v }, true); this.say(m.name + ' · pan ' + panText(v)); }
+    else if (k === 'vol') { const m = this.state.inserts.find(x => x.id === +id); const v = clamp(m.vol + n * 0.015 * f, 0, 1); this.setInsert(+id, { vol: v }, true); this.say(m.name + ' · ' + volText(v)); }
+    else if (k === 'fx') {
+      const ff = this.findFx(+id); if (!ff) return;
+      const p = FXDEF[ff.f.type].params.find(q => q[0] === id2); if (!p) return;
+      const v = pVal(p, clamp(pNorm(p, ff.f.params[id2]) + n * 0.02 * f, 0, 1));
+      this.updFx(ff.m.id, ff.f.id, fx => fx.map(x => x.id === ff.f.id ? { ...x, params: { ...x.params, [id2]: v } } : x), true);
+      this.say(FXDEF[ff.f.type].name + ' · ' + p[1] + ' ' + pFmt(p, v));
+    } else if (k === 'eq') {
+      const ff = this.findFx(+id); if (!ff) return; const i = this.state.eqSel[+id]; if (i == null) return;
+      const b = ff.f.params.bands[i], q = clamp(b.q * Math.pow(2, n * 0.15 * f), 0.1, 18);
+      this.updBand(ff.m.id, ff.f.id, i, { q }, true); this.say('Band ' + (i + 1) + ' · Q ' + q.toFixed(2));
+    } else if (k === 'ed') {
+      const c = this.edClip(); if (!c) return; const [lo, hi] = this.edKnobSpec(id, c, 60 / this.state.bpm);
+      const v = clamp((c[id] || 0) + n * 0.02 * f * (hi - lo), lo, hi);
+      this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, [id]: v } : x)); this.say(this.edKnobText(id, v));
+    }
+  };
+  selFxCtx() { const s = this.state, m = s.inserts.find(x => x.id === s.mixSel); const f = m && m.fx.find(x => x.id === s.fxSel); return f ? { m, f } : null; }
+  onWheel = e => {
+    const sc = this.scrollRef.current;
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      const r = sc.getBoundingClientRect(), mx = e.clientX - r.left - this.state.headW;
+      const beat = (sc.scrollLeft + mx) / this.state.bw;
+      const bw = clamp(this.state.bw * (e.deltaY < 0 ? 1.15 : 1 / 1.15), 4, 96);
+      this.setState({ bw }, () => { sc.scrollLeft = beat * bw - mx; this.paintHead(this.curBeat()); });
+    } else if (e.altKey) {
+      e.preventDefault();
+      const d = e.deltaY < 0 ? 6 : -6;
+      this.setState(s => ({ tracks: s.tracks.map(t => ({ ...t, h: clamp(t.h + d, 28, 220) })) }));
+    }
+  };
+  zoom(f) { this.setState(s => ({ bw: clamp(s.bw * f, 4, 96) }), () => this.paintHead(this.curBeat())); }
+  zoomIn = () => this.zoom(1.25); zoomOut = () => this.zoom(0.8);
+
+  ensureCtx() {
+    if (!this.ctx) {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+      this.mixNodes = {}; this.fxNodes = {};
+      this.clickOut = this.ctx.createGain(); this.clickOut.gain.value = 0.6; this.clickOut.connect(this.ctx.destination);
+      this.applyMixer();
+      this.master = this.insertIn(0);
+      this.meterRaf = requestAnimationFrame(this.meterLoop);
+      this.noise = makeBuffer(1, () => Math.random() * 2 - 1, this.ctx.sampleRate);
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    return this.ctx;
+  }
+  trackNode(id) {
+    if (!this.trackNodes[id]) { const t = this.state.tracks.find(x => x.id === id); const g = this.ctx.createGain(); g._route = t ? t.insert : 0; g.connect(this.insertIn(g._route)); this.trackNodes[id] = g; this.applyTrackGains(); }
+    return this.trackNodes[id];
+  }
+  applyTrackGains() {
+    if (!this.ctx) return;
+    const ts = this.state.tracks, anySolo = ts.some(t => t.solo);
+    ts.forEach(t => {
+      const g = this.trackNodes[t.id]; if (!g) return;
+      if (g._route !== t.insert) { g.disconnect(); g._route = t.insert; g.connect(this.insertIn(t.insert)); }
+      g.gain.setTargetAtTime(t.muted || (anySolo && !t.solo) ? 0 : gainLin(t.vol), this.ctx.currentTime, 0.01);
+    });
+    if (this.mic) this.mic.mon.gain.setTargetAtTime(this.state.monitor ? 1 : 0, this.ctx.currentTime, 0.01);
+  }
+  voice(inst, t, n, dest, spb) {
+    const ctx = this.ctx, g = ctx.createGain(); g.connect(dest);
+    let src;
+    if (inst === 'kick') {
+      src = ctx.createOscillator(); src.frequency.setValueAtTime(150, t); src.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+      g.gain.setValueAtTime(0.9, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.38); src.connect(g); src.start(t); src.stop(t + 0.4);
+    } else if (inst === 'bass') {
+      src = ctx.createOscillator(); src.type = 'sawtooth'; src.frequency.value = mtof(n.p);
+      const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(900, t); f.frequency.exponentialRampToValueAtTime(240, t + 0.2);
+      const d = n.len * spb / 4;
+      g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.28, t + 0.006); g.gain.setValueAtTime(0.28, t + d - 0.02); g.gain.linearRampToValueAtTime(0, t + d);
+      src.connect(f); f.connect(g); src.start(t); src.stop(t + d + 0.02);
+    } else {
+      src = ctx.createBufferSource(); src.buffer = this.noise;
+      const f = ctx.createBiquadFilter();
+      if (inst === 'hat') { f.type = 'highpass'; f.frequency.value = 7000; g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.05); }
+      else { f.type = 'bandpass'; f.frequency.value = 1400; f.Q.value = 0.9; g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(0.7, t + 0.003); g.gain.exponentialRampToValueAtTime(0.001, t + 0.2); }
+      src.connect(f); f.connect(g); src.start(t, Math.random() * 0.5); src.stop(t + 0.25);
+    }
+  }
+  click(t, accent) {
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = 'square'; o.frequency.value = accent ? 1760 : 1320;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.22, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    o.connect(g); g.connect(this.clickOut); o.start(t); o.stop(t + 0.06);
+  }
+  loopRange() {
+    const s = this.state;
+    if (this.recording) return { ls: 0, le: TOTAL };
+    if (s.loop && s.loop.b - s.loop.a > 0) return { ls: s.loop.a, le: s.loop.b };
+    const end = Math.max(4, ...s.clips.map(c => c.start + c.len));
+    return { ls: 0, le: Math.ceil(end / 4) * 4 };
+  }
+  beatAt(t) {
+    const sg = this.segs; if (!sg) return this.state.start; let seg = sg[0];
+    for (let i = sg.length - 1; i >= 0; i--) if (sg[i].t <= t) { seg = sg[i]; break; }
+    return t < seg.t ? seg.beat : seg.beat + (t - seg.t) / seg.spb;
+  }
+  curBeat() { return this.state.playing && this.ctx ? this.beatAt(this.ctx.currentTime) : this.state.start; }
+  scheduleRange(from, to, seg, mid) {
+    const s = this.state, at = b => seg.t + (b - seg.beat) * seg.spb;
+    for (let b = Math.ceil(from - 1e-9); b < to; b++) { if (s.metro || b < this.countEnd) this.click(Math.max(this.ctx.currentTime, at(b)), mod(b, 4) === 0); }
+    for (const c of s.clips) {
+      if (c.muted) continue;
+      const end = c.start + c.len; if (end <= from || c.start >= to) continue;
+      const tr = s.tracks[c.track]; if (!tr) continue;
+      const dest = this.trackNode(tr.id);
+      if (c.kind === 'audio') {
+        const buf = this.getBuf(c); if (!buf) continue;
+        let sb = null;
+        if (c.start >= from && c.start < to) sb = c.start; else if (mid && c.start < from && end > from) sb = from;
+        if (sb === null) continue;
+        const node = this.ctx.createBufferSource(); node.buffer = buf;
+        const g = this.ctx.createGain(), G = dbg(c.gain);
+        node.connect(g); if (c.pan) { const pn = this.ctx.createStereoPanner(); pn.pan.value = c.pan; g.connect(pn); pn.connect(dest); } else g.connect(dest);
+        const offSec = (c.offset + sb - c.start) * seg.spb, durSec = (end - sb) * seg.spb;
+        const w = Math.max(this.ctx.currentTime, at(sb)), T0 = at(c.start), T1 = at(end), fi = c.fadeIn || 0, fo = c.fadeOut || 0;
+        const lvl = t => { let v = G; if (fi > 0 && t < T0 + fi) v *= clamp((t - T0) / fi, 0, 1); if (fo > 0 && t > T1 - fo) v *= clamp((T1 - t) / fo, 0, 1); return v; };
+        g.gain.setValueAtTime(lvl(w), w);
+        if (fi > 0 && T0 + fi > w) g.gain.linearRampToValueAtTime(G, T0 + fi);
+        if (fo > 0) { const a = Math.max(w, T1 - fo); g.gain.setValueAtTime(lvl(a), a); g.gain.linearRampToValueAtTime(0, T1); }
+        node.start(w, Math.max(0, offSec), Math.max(0.001, durSec));
+        this.active.add(node); node.onended = () => this.active.delete(node);
+      } else {
+        const p = s.patterns.find(x => x.id === c.ref); if (!p) continue;
+        const L = p.len, base = c.start - c.offset, lo = Math.max(from, c.start), hi = Math.min(to, end);
+        for (let r = Math.floor((lo - base) / L) - 1; r <= Math.floor((hi - base) / L); r++) {
+          for (const n of p.notes) {
+            const b = base + r * L + n.step / 4;
+            if (b >= lo && b < hi) this.voice(n.inst, Math.max(this.ctx.currentTime, at(b)), n, dest, seg.spb);
+          }
+        }
+      }
+    }
+  }
+  sched = () => {
+    const now = this.ctx.currentTime, horizon = now + 0.15;
+    for (let guard = 0; guard < 4; guard++) {
+      const seg = this.segs[this.segs.length - 1];
+      const { ls, le } = this.loopRange();
+      const endBeat = seg.beat + (horizon - seg.t) / seg.spb;
+      const to = Math.min(endBeat, le);
+      if (to > this.schedBeat) { this.scheduleRange(this.schedBeat, to, seg, this.mid); this.mid = false; this.schedBeat = to; }
+      if (endBeat >= le) {
+        if (this.recording) { setTimeout(() => this.stop(), 0); break; }
+        this.segs.push({ t: seg.t + (le - seg.beat) * seg.spb, beat: ls, spb: seg.spb }); this.schedBeat = ls; this.mid = true;
+        if (this.segs.length > 16) this.segs.splice(0, this.segs.length - 16);
+      } else break;
+    }
+  };
+  frame = () => {
+    if (!this.state.playing) return;
+    const b = this.beatAt(this.ctx.currentTime);
+    this.paintHead(b);
+    if (this.state.follow && b >= 0) {
+      const sc = this.scrollRef.current, x = b * this.state.bw, view = sc.clientWidth - this.state.headW;
+      if (x > sc.scrollLeft + view - 40) sc.scrollLeft = x - 80;
+      else if (x < sc.scrollLeft) sc.scrollLeft = Math.max(0, x - 80);
+    }
+    this.raf = requestAnimationFrame(this.frame);
+  };
+  paintHead(b) {
+    const x = Math.max(0, b) * this.state.bw + 'px';
+    if (this.phGridRef.current) this.phGridRef.current.style.left = x;
+    if (this.phRulerRef.current) this.phRulerRef.current.style.left = x;
+    if (this.clockRef.current) this.clockRef.current.textContent = b < 0 ? 'COUNT ' + Math.ceil(-b) : this.fmtClock(b);
+  }
+  play() {
+    this.ensureCtx();
+    const s = this.state, lr = this.loopRange();
+    let start = s.start; if (!s.rec && start >= lr.le) start = lr.ls;
+    const pre = s.rec && s.countIn ? 4 : 0;
+    this.pendingPre = pre; this.countEnd = pre ? start : -Infinity;
+    this.segs = [{ t: this.ctx.currentTime + 0.06, beat: start - pre, spb: 60 / s.bpm }];
+    this.schedBeat = start - pre; this.mid = true;
+    this.sched(); this.timer = setInterval(this.sched, 25);
+    this.setState({ playing: true }, () => { this.raf = requestAnimationFrame(this.frame); if (this.state.rec) this.startRecording(); });
+  }
+  stopAudio() {
+    this.stopPreview();
+    if (this.recording) this.finishRecording();
+    clearInterval(this.timer); cancelAnimationFrame(this.raf);
+    this.active.forEach(n => { try { n.stop(); } catch (e) {} }); this.active.clear();
+    Object.values(this.trackNodes).forEach(g => g.disconnect()); this.trackNodes = {};
+  }
+  togglePlay = () => { if (this.state.playing) this.stop(); else { this.play(); this.say(this.state.rec ? '● Nagrywanie' : 'Play'); } };
+  stop = () => { this.stopAudio(); this.setState({ playing: false }, () => this.paintHead(this.state.start)); this.say('Stop'); };
+
+  micAllowed() { const fp = document.featurePolicy; return !(fp && fp.allowsFeature && !fp.allowsFeature('microphone')); }
+  async openMic() {
+    this.ensureCtx();
+    if (this.mic) return true;
+    if (!this.micAllowed()) { this.setState({ micBlocked: true, rec: false }); this.say('Podgląd blokuje mikrofon — otwórz plik w nowej karcie'); return false; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { this.say('Ta przeglądarka nie udostępnia mikrofonu'); this.setState({ rec: false }); return false; }
+    let stream;
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } }); }
+    catch (err) {
+      const msg = { NotAllowedError: 'Odmowa dostępu — zezwól na mikrofon (kłódka w pasku adresu) i w Windows: Ustawienia › Prywatność › Mikrofon', NotFoundError: 'Nie znaleziono mikrofonu', NotReadableError: 'Mikrofon jest zajęty przez inną aplikację', OverconstrainedError: 'Mikrofon nie obsługuje wymaganych ustawień' }[err.name] || ('Błąd mikrofonu: ' + err.name);
+      this.say(msg); this.setState({ rec: false, micBlocked: err.name === 'NotAllowedError' && window.top !== window }); return false;
+    }
+    const ctx = this.ctx;
+    let src;
+    try { src = ctx.createMediaStreamSource(stream); } catch (err) { stream.getTracks().forEach(t => t.stop()); this.say('Nie można podłączyć wejścia: ' + err.message); this.setState({ rec: false }); return false; }
+    const sink = ctx.createGain(); sink.gain.value = 0; sink.connect(ctx.destination);
+    const mon = ctx.createGain(); mon.gain.value = this.state.monitor ? 1 : 0; src.connect(mon); mon.connect(this.master);
+    let tap;
+    try {
+      if (!this.workletReady) {
+        const code = "class T extends AudioWorkletProcessor{process(i){const c=i[0]&&i[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('rec-tap',T)";
+        await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: 'application/javascript' })));
+        this.workletReady = true;
+      }
+      tap = new AudioWorkletNode(ctx, 'rec-tap'); tap.port.onmessage = ev => this.onChunk(ev.data);
+    } catch (err) {
+      tap = ctx.createScriptProcessor(2048, 1, 1); tap.onaudioprocess = ev => this.onChunk(ev.inputBuffer.getChannelData(0));
+    }
+    src.connect(tap); tap.connect(sink);
+    this.mic = { stream, src, proc: tap, sink, mon };
+    const tr = stream.getAudioTracks()[0];
+    this.say('Wejście: ' + (tr && tr.label ? tr.label : 'mikrofon') + ' · ' + ctx.sampleRate + ' Hz');
+    return true;
+  }
+  closeMic() {
+    const m = this.mic; if (!m) return;
+    if (m.proc.port) m.proc.port.onmessage = null; else m.proc.onaudioprocess = null;
+    [m.src, m.proc, m.mon, m.sink].forEach(n => n.disconnect());
+    m.stream.getTracks().forEach(t => t.stop()); this.mic = null;
+  }
+  onChunk(d) {
+    let pk = 0; for (let i = 0; i < d.length; i++) { const a = d[i] < 0 ? -d[i] : d[i]; if (a > pk) pk = a; }
+    this.levelPeak = Math.max(pk, (this.levelPeak || 0) * (d.length > 256 ? 0.8 : 0.985));
+    const r = this.recording;
+    if (r) {
+      r.chunks.push(new Float32Array(d)); r.samples += d.length;
+      for (let i = 0; i < d.length; i++) { const v = d[i]; if (v < r.mn) r.mn = v; if (v > r.mx) r.mx = v; if (++r.cnt >= r.per) { r.peaks.push(r.mn, r.mx); r.mn = 0; r.mx = 0; r.cnt = 0; } }
+    }
+    const now = performance.now();
+    if (now - (this.lastUi || 0) < 40) return;
+    this.lastUi = now;
+    if (r) this.setState({ recClip: { track: r.track, start: r.start, clipStart: r.clipStart, sec: r.samples / this.ctx.sampleRate, n: r.peaks.length }, inLevel: this.levelPeak });
+    else this.setState({ inLevel: this.levelPeak });
+  }
+  async startRecording() {
+    if (!(await this.openMic()) || !this.state.playing || this.recording) return;
+    const s = this.state, start = this.beatAt(this.ctx.currentTime);
+    const pre = this.pendingPre || 0; this.pendingPre = 0;
+    const clipStart = Math.max(0, start + pre);
+    let track = s.tracks.findIndex(t => t.arm);
+    if (track < 0) {
+      track = s.tracks.findIndex((t, i) => !s.clips.some(c => c.track === i && c.start + c.len > clipStart && c.start < clipStart + 16));
+      if (track < 0) { this.insertTrack(s.tracks.length); track = s.tracks.length; }
+      this.setState(st => ({ tracks: st.tracks.map((t, j) => ({ ...t, arm: j === track })) }));
+    }
+    this.recording = { track, start, clipStart, chunks: [], samples: 0, peaks: [], mn: 0, mx: 0, cnt: 0, per: Math.floor(this.ctx.sampleRate / 100), lat: (this.ctx.baseLatency || 0) + (this.ctx.outputLatency || 0) };
+    this.say('● Nagrywanie · ' + (this.state.tracks[track] ? this.state.tracks[track].name : 'nowa ścieżka') + ' od ' + this.fmtPos(clipStart) + (pre ? ' · count-in 1 bar' : ''));
+  }
+  finishRecording() {
+    const r = this.recording; if (!r) return;
+    this.recording = null;
+    if (r.samples < this.ctx.sampleRate * 0.05) { this.setState({ recClip: null }); return; }
+    const buf = new AudioBuffer({ length: r.samples, sampleRate: this.ctx.sampleRate, numberOfChannels: 1 });
+    const ch = buf.getChannelData(0); let o = 0; for (const c of r.chunks) { ch.set(c, o); o += c.length; }
+    this.commit();
+    const spb = 60 / this.state.bpm, off = r.lat / spb + (r.clipStart - r.start);
+    const len = Math.min(buf.duration / spb - off, TOTAL - r.clipStart);
+    if (len <= 0.05) { this.setState({ recClip: null }); this.say('Nagranie zakończone w trakcie count-in — nic nie zapisano'); return; }
+    const src = this.addSource('Take ' + (++this.takeN), buf, '#d9678f', []);
+    const clip = { id: ++this.nid, track: r.track, start: r.clipStart, len, offset: off, kind: 'audio', ref: src.id, muted: false, gain: 0 };
+    this.setState(s => ({ clips: [...s.clips, clip], recClip: null, sel: [clip.id] }));
+    this.say('Zapisano Take ' + this.takeN + ' · ' + buf.duration.toFixed(2) + ' s · kompensacja ' + Math.round(r.lat * 1000) + ' ms');
+  }
+  toggleRec = async () => {
+    if (!this.state.rec) {
+      this.setState({ rec: true });
+      if (!(await this.openMic())) return;
+      this.say(this.state.playing ? '● Punch in' : 'Nagrywanie uzbrojone — Spacja startuje' + (this.state.countIn ? ' (z count-in)' : ''));
+      if (this.state.playing) { this.pendingPre = 0; this.startRecording(); }
+    } else {
+      this.finishRecording(); this.closeMic();
+      this.setState({ rec: false, inLevel: 0 }); this.say('Nagrywanie wyłączone');
+    }
+  };
+  toggleMonitor = () => { this.setState(s => ({ monitor: !s.monitor })); this.say(this.state.monitor ? 'Odsłuch wyłączony' : 'Odsłuch włączony — uważaj na sprzężenie'); };
+
+  ensureInsert(m) {
+    let n = this.mixNodes[m.id]; if (n) return n;
+    const ctx = this.ctx;
+    n = { input: ctx.createGain(), pan: ctx.createStereoPanner(), fader: ctx.createGain(), split: ctx.createChannelSplitter(2), aL: ctx.createAnalyser(), aR: ctx.createAnalyser(), sig: null };
+    n.aL.fftSize = 512; n.aR.fftSize = 512;
+    n.input.connect(n.pan); n.pan.connect(n.fader); n.fader.connect(n.split); n.split.connect(n.aL, 0); n.split.connect(n.aR, 1);
+    this.mixNodes[m.id] = n;
+    n.fader.connect(m.id === 0 ? ctx.destination : this.ensureInsert(this.state.inserts[0]).input);
+    return n;
+  }
+  insertIn(id) { const ins = this.state.inserts; const m = ins.find(x => x.id === id) || ins[0]; return this.ensureInsert(m).input; }
+  applyMixer() {
+    if (!this.ctx || !this.mixNodes) return;
+    const ins = this.state.inserts, anySolo = ins.some(x => x.id !== 0 && x.solo), now = this.ctx.currentTime;
+    for (const m of ins) {
+      const n = this.ensureInsert(m);
+      const on = !m.muted && (m.id === 0 || !anySolo || m.solo);
+      n.fader.gain.setTargetAtTime(on ? gainLin(m.vol) : 0, now, 0.01);
+      n.pan.pan.setTargetAtTime(m.pan, now, 0.01);
+      for (const f of m.fx) { if (!this.fxNodes[f.id]) this.fxNodes[f.id] = buildFx(this.ctx, f); this.fxNodes[f.id].set(f.params); }
+      const sig = m.fx.map(f => f.id + (f.bypass ? 'b' : '')).join(',');
+      if (sig !== n.sig) {
+        n.sig = sig;
+        n.input.disconnect(); m.fx.forEach(f => this.fxNodes[f.id].output.disconnect());
+        let cur = n.input;
+        for (const f of m.fx) { if (f.bypass) continue; const fn = this.fxNodes[f.id]; cur.connect(fn.input); cur = fn.output; }
+        cur.connect(n.pan);
+      }
+    }
+    const live = new Set(ins.flatMap(m => m.fx.map(f => f.id)));
+    for (const id in this.fxNodes) if (!live.has(+id)) { this.fxNodes[id].output.disconnect(); delete this.fxNodes[id]; }
+    const liveIns = new Set(ins.map(m => m.id));
+    for (const id in this.mixNodes) if (!liveIns.has(+id)) { this.mixNodes[id].fader.disconnect(); delete this.mixNodes[id]; }
+  }
+  meterLoop = () => {
+    this.meterRaf = requestAnimationFrame(this.meterLoop);
+    const root = this.rootRef.current; if (!root || !this.ctx) return;
+    this.drawPlugins(root);
+    const els = root.querySelectorAll('[data-meter]'); if (!els.length) return;
+    const buf = this.meterBuf || (this.meterBuf = new Float32Array(512)); const hold = this.meterHold || (this.meterHold = {});
+    els.forEach(el => {
+      const key = el.dataset.meter, [id, ch] = key.split(':'), n = this.mixNodes[id]; if (!n) return;
+      (ch === '1' ? n.aR : n.aL).getFloatTimeDomainData(buf);
+      let pk = 0; for (let i = 0; i < buf.length; i++) { const a = buf[i] < 0 ? -buf[i] : buf[i]; if (a > pk) pk = a; }
+      const v = Math.max(pk, (hold[key] || 0) * 0.9); hold[key] = v;
+      const db = v > 1e-5 ? 20 * Math.log10(v) : -90;
+      el.style.height = (100 - clamp((db + 60) / 66, 0, 1) * 100) + '%';
+    });
+  };
+  setInsert(id, patch, noCommit) { if (!noCommit) this.commit(); this.setState(s => ({ inserts: s.inserts.map(m => m.id === id ? { ...m, ...patch } : m) })); }
+  insName(m) { const i = this.state.inserts.indexOf(m); return m.id === 0 ? 'Master' : 'Ins ' + i + ' · ' + m.name; }
+  dblCheck(key) { const now = performance.now(); const d = this.lastTap && this.lastTap.k === key && now - this.lastTap.t < 320; this.lastTap = d ? null : { k: key, t: now }; return d; }
+  stripSelect(id, e) {
+    if (e && e.button === 2) { e.preventDefault(); return this.openStripMenu(e.clientX, e.clientY, id); }
+    const m = this.state.inserts.find(x => x.id === id);
+    if (m && this.state.mixSel !== id) this.setState({ mixSel: id, fxSel: m.fx[0] ? m.fx[0].id : null });
+  }
+  openStripMenu(x, y, id) {
+    const m = this.state.inserts.find(v => v.id === id); if (!m) return;
+    const items = [
+      { t: 'title', label: this.insName(m) },
+      { t: 'item', label: 'Zmień nazwę…', act: () => this.openRename(x, y, m.name, v => this.setInsert(id, { name: v })) },
+      { t: 'swatches', current: m.color, pick: col => this.setInsert(id, { color: col }) },
+      { t: 'sep' },
+      { t: 'item', label: 'Dodaj efekt…', act: () => this.openFxMenu(x, y, id) },
+      { t: 'item', label: 'Reset głośności i panoramy', act: () => this.setInsert(id, { vol: VOL0, pan: 0 }) },
+      ...(id === 0 ? [] : [{ t: 'sep' }, { t: 'item', label: 'Usuń insert', danger: true, act: () => this.removeInsert(id) }]),
+    ];
+    this.setState({ menu: { ...this.menuPos(x, y, 260), items } });
+  }
+  addInsert = () => {
+    this.commit();
+    const m = { id: ++this.nid, name: 'Insert ' + this.state.inserts.length, color: '#8b93a1', vol: VOL0, pan: 0, muted: false, solo: false, fx: [] };
+    this.setState(s => ({ inserts: [...s.inserts, m], mixSel: m.id, fxSel: null }));
+  };
+  removeInsert(id) { this.commit(); this.setState(s => ({ inserts: s.inserts.filter(m => m.id !== id), tracks: s.tracks.map(t => t.insert === id ? { ...t, insert: 0 } : t), mixSel: s.mixSel === id ? 0 : s.mixSel })); }
+  stripPan(id, e) {
+    if (e.button !== 0) return; e.preventDefault(); e.stopPropagation(); this.stripSelect(id);
+    if (this.dblCheck('pan' + id)) return this.setInsert(id, { pan: 0 });
+    this.beginGesture(); let v = this.state.inserts.find(m => m.id === id).pan, ly = e.clientY;
+    this.track(ev => { v = clamp(v + (ly - ev.clientY) / 70 * (ev.shiftKey ? 0.2 : 1), -1, 1); ly = ev.clientY; this.setInsert(id, { pan: v }, true); this.say('Pan ' + panText(v)); }, () => this.endGesture(), 'ns-resize');
+  }
+  stripFader(id, e) {
+    if (e.button !== 0) return; e.preventDefault(); e.stopPropagation(); this.stripSelect(id);
+    if (this.dblCheck('vol' + id)) return this.setInsert(id, { vol: VOL0 });
+    const h = Math.max(40, e.currentTarget.getBoundingClientRect().height - 14);
+    this.beginGesture(); let v = this.state.inserts.find(m => m.id === id).vol, ly = e.clientY;
+    this.track(ev => { v = clamp(v + (ly - ev.clientY) / h * (ev.shiftKey ? 0.2 : 1), 0, 1); ly = ev.clientY; this.setInsert(id, { vol: v }, true); this.say('Głośność ' + volText(v)); }, () => this.endGesture(), 'ns-resize');
+  }
+  openFxMenu(x, y, insId) {
+    const items = [{ t: 'title', label: 'Dodaj efekt' }, ...FX_ORDER.map(type => ({ t: 'item', label: FXDEF[type].name, kbd: FXMETA[type].tag, icon: FXMETA[type].icon, iconColor: FXMETA[type].color, act: () => this.addFx(insId, type) }))];
+    this.setState({ menu: { ...this.menuPos(x, y, 300), items } });
+  }
+  addFx(insId, type) {
+    this.commit();
+    const f = { id: ++this.nid, type, bypass: false, preset: 0, params: presetParams(type, 0, this.state.bpm) };
+    this.setState(s => ({ inserts: s.inserts.map(m => m.id === insId ? { ...m, fx: [...m.fx, f] } : m), mixSel: insId, fxSel: f.id }), () => this.openPlug(insId, f.id));
+    this.say('Dodano ' + FXDEF[type].name + ' · preset: ' + PRESETS[type][0].name);
+  }
+  presetInfo(f) {
+    const list = PRESETS[f.type], bpm = this.state.bpm;
+    const hit = list.findIndex((_, i) => paramsEq(f.params, presetParams(f.type, i, bpm)));
+    if (hit >= 0) return { idx: hit, name: list[hit].name, mod: false };
+    if (f.preset != null && list[f.preset]) return { idx: f.preset, name: list[f.preset].name, mod: true };
+    return { idx: -1, name: 'Własne ustawienia', mod: false };
+  }
+  loadPreset(fxId, i) {
+    const ff = this.findFx(fxId); if (!ff) return;
+    const list = PRESETS[ff.f.type]; i = mod(i, list.length);
+    const params = presetParams(ff.f.type, i, this.state.bpm);
+    this.updFx(ff.m.id, fxId, fx => fx.map(x => x.id === fxId ? { ...x, params, preset: i } : x));
+    this.say(FXDEF[ff.f.type].name + ' · preset ' + (i + 1) + '/' + list.length + ': ' + list[i].name);
+  }
+  stepPreset(fxId, d) { const ff = this.findFx(fxId); if (!ff) return; const info = this.presetInfo(ff.f); this.loadPreset(fxId, info.idx < 0 ? (d > 0 ? 0 : -1) : info.idx + d); }
+  openPresetMenu(fxId, x, y) {
+    const ff = this.findFx(fxId); if (!ff) return;
+    const info = this.presetInfo(ff.f), list = PRESETS[ff.f.type];
+    const items = [{ t: 'title', label: 'Presety · ' + FXDEF[ff.f.type].name }, ...list.map((pr, i) => ({ t: 'item', label: pr.name, kbd: i === info.idx ? (info.mod ? 'zmieniony' : '●') : '', act: () => this.loadPreset(fxId, i) }))];
+    this.setState({ menu: { ...this.menuPos(x, y, 40 + list.length * 26), items } });
+  }
+  slotDown(insId, fxId, e) {
+    if (e.button !== 0 || e.target.closest('button')) return; e.preventDefault();
+    const sy = e.clientY, rowH = 34, ins0 = this.state.inserts.find(m => m.id === insId), i0 = ins0.fx.findIndex(x => x.id === fxId); let started = false;
+    this.setState({ fxSel: fxId });
+    this.track(ev => {
+      const dy = ev.clientY - sy;
+      if (!started) { if (Math.abs(dy) < 4) return; started = true; this.beginGesture(); this.setState({ fxDrag: fxId }); document.body.style.cursor = 'grabbing'; }
+      const ins = this.state.inserts.find(m => m.id === insId), cur = ins.fx.findIndex(x => x.id === fxId), to = clamp(i0 + Math.round(dy / rowH), 0, ins.fx.length - 1);
+      if (cur >= 0 && to !== cur) this.updFx(insId, fxId, fx => { const a = fx.filter(x => x.id !== fxId); a.splice(to, 0, fx[cur]); return a; }, true);
+    }, () => { if (started) { this.endGesture(); this.setState({ fxDrag: null }); this.say('Zmieniono kolejność efektów'); } else this.openPlug(insId, fxId); });
+  }
+  verbDown(fxId, e) {
+    if (e.button !== 0) return; e.preventDefault();
+    const v = this.vizView[fxId] || (this.vizView[fxId] = { yaw: -0.5, pitch: 0.55 });
+    if (this.dblCheck('verb' + fxId)) { v.yaw = -0.5; v.pitch = 0.55; this.say('Widok 3D zresetowany'); return; }
+    let lx = e.clientX, ly = e.clientY;
+    this.track(ev => { v.yaw = clamp(v.yaw + (ev.clientX - lx) * 0.008, -1.2, 1.2); v.pitch = clamp(v.pitch + (ev.clientY - ly) * 0.006, 0.1, 1.3); lx = ev.clientX; ly = ev.clientY; }, null, 'grabbing');
+  }
+  updFx(insId, fxId, fn, noCommit) { if (!noCommit) this.commit(); this.setState(s => ({ inserts: s.inserts.map(m => m.id === insId ? { ...m, fx: fn(m.fx) } : m) })); }
+  moveFx(insId, fxId, d) { this.updFx(insId, fxId, fx => { const i = fx.findIndex(x => x.id === fxId), j = i + d; if (j < 0 || j >= fx.length) return fx; const a = fx.slice(); [a[i], a[j]] = [a[j], a[i]]; return a; }); }
+  fxParamDown(insId, f, p, e) {
+    if (e.button !== 0) return; e.preventDefault(); e.stopPropagation();
+    const setV = v => this.updFx(insId, f.id, fx => fx.map(x => x.id === f.id ? { ...x, params: { ...x.params, [p[0]]: v } } : x), true);
+    if (this.dblCheck('fx' + f.id + p[0])) { this.commit(); setV(p[4]); return; }
+    this.beginGesture(); let t = pNorm(p, f.params[p[0]]), ly = e.clientY;
+    this.track(ev => { t = clamp(t + (ly - ev.clientY) / 150 * (ev.shiftKey ? 0.2 : 1), 0, 1); ly = ev.clientY; const v = pVal(p, t); setV(v); this.say(FXDEF[f.type].name + ' · ' + p[1] + ' ' + pFmt(p, v)); }, () => this.endGesture(), 'ns-resize');
+  }
+  mixSplit = e => { if (e.button !== 0) return; e.preventDefault(); const sy = e.clientY, h0 = this.state.mixH; this.track(ev => this.setState({ mixH: clamp(h0 - (ev.clientY - sy), 190, window.innerHeight - 200) }), null, 'row-resize'); };
+  toggleMixer = () => this.setState(s => ({ mixOpen: !s.mixOpen }));
+  openRouteMenu(i, x, y) {
+    const t = this.state.tracks[i]; if (!t) return;
+    const items = [{ t: 'title', label: t.name + ' → kanał miksera' }, ...this.state.inserts.map(m => ({ t: 'item', label: this.insName(m), kbd: t.insert === m.id ? '●' : '', act: () => { this.setTrack(i, { insert: m.id }); this.setState({ mixSel: m.id, fxSel: m.fx[0] ? m.fx[0].id : null }); this.say(t.name + ' → ' + this.insName(m)); } }))];
+    this.setState({ menu: { ...this.menuPos(x, y, 340), items } });
+  }
+  fadeDrag(e, clip, which) {
+    this.beginGesture();
+    const o = { ...clip }, sx = e.clientX, spb = 60 / this.state.bpm, max = o.len * spb;
+    this.track(ev => {
+      const d = (ev.clientX - sx) / this.state.bw * spb, n = { ...o };
+      if (which === 'fi') n.fadeIn = clamp((o.fadeIn || 0) + d, 0, max - (o.fadeOut || 0)); else n.fadeOut = clamp((o.fadeOut || 0) - d, 0, max - (o.fadeIn || 0));
+      this.setClips(cs => cs.map(x => x.id === o.id ? n : x));
+      this.say((which === 'fi' ? 'Fade in ' : 'Fade out ') + Math.round((which === 'fi' ? n.fadeIn : n.fadeOut) * 1000) + ' ms');
+    }, () => this.endGesture(), 'ew-resize');
+  }
+  openEditor(id) {
+    const c = this.state.clips.find(x => x.id === id); if (!c || c.kind !== 'audio') return;
+    this.stopPreview();
+    const w = Math.min(780, window.innerWidth - 40), h = Math.min(420, window.innerHeight - 100);
+    this.setState({ editor: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: 64, w, h }, sel: [id] });
+  }
+  closeEditor = () => { this.stopPreview(); this.setState({ editor: null }); };
+  edClip() { const s = this.state; return s.editor && s.clips.find(c => c.id === s.editor.clipId); }
+  edMove = e => {
+    if (e.button !== 0 || e.target.closest('button')) return; e.preventDefault();
+    const sx = e.clientX, sy = e.clientY, o = { ...this.state.editor };
+    this.track(ev => this.setState(s => ({ editor: s.editor && { ...s.editor, x: clamp(o.x + ev.clientX - sx, 120 - o.w, window.innerWidth - 120), y: clamp(o.y + ev.clientY - sy, 0, window.innerHeight - 40) } })), null, 'grabbing');
+  };
+  edResize = e => {
+    if (e.button !== 0) return; e.preventDefault(); e.stopPropagation();
+    const sx = e.clientX, sy = e.clientY, o = { ...this.state.editor };
+    this.track(ev => this.setState(s => ({ editor: s.editor && { ...s.editor, w: clamp(o.w + ev.clientX - sx, 600, window.innerWidth - 20), h: clamp(o.h + ev.clientY - sy, 340, window.innerHeight - 20) } })), null, 'nwse-resize');
+  };
+  edDown = e => {
+    if (e.button !== 0) return;
+    const c = this.edClip(); if (!c) return;
+    const kind = e.target.dataset ? e.target.dataset.ed : null; if (!kind) return;
+    e.preventDefault(); e.stopPropagation();
+    const src = this.srcOf(c), spb = 60 / this.state.bpm, durB = src.dur / spb;
+    const pxB = this.edWaveRef.current.getBoundingClientRect().width / durB, o = { ...c }, sx = e.clientX;
+    this.beginGesture();
+    this.track(ev => {
+      const dB = (ev.clientX - sx) / pxB, n = { ...o };
+      if (kind === 'l') { const no = clamp(o.offset + dB, Math.max(0, o.offset - o.start), o.offset + o.len - 1 / 16); n.offset = no; n.start = o.start + (no - o.offset); n.len = o.len - (no - o.offset); }
+      else if (kind === 'r') n.len = clamp(o.len + dB, 1 / 16, Math.min(durB - o.offset, TOTAL - o.start));
+      else if (kind === 'fi') n.fadeIn = clamp((o.fadeIn || 0) + dB * spb, 0, o.len * spb - (o.fadeOut || 0));
+      else if (kind === 'fo') n.fadeOut = clamp((o.fadeOut || 0) - dB * spb, 0, o.len * spb - (o.fadeIn || 0));
+      this.setClips(cs => cs.map(x => x.id === o.id ? n : x));
+      this.say(kind === 'fi' ? 'Fade in ' + Math.round(n.fadeIn * 1000) + ' ms' : kind === 'fo' ? 'Fade out ' + Math.round(n.fadeOut * 1000) + ' ms' : 'Region ' + (n.offset * spb).toFixed(3) + ' – ' + ((n.offset + n.len) * spb).toFixed(3) + ' s');
+    }, () => this.endGesture(), kind === 'l' || kind === 'r' ? 'ew-resize' : 'col-resize');
+  };
+  edNumDown(kind, e) {
+    if (e.button !== 0) return; e.preventDefault();
+    const c = this.edClip(); if (!c) return;
+    const spb = 60 / this.state.bpm, maxF = c.len * spb;
+    if (this.dblCheck('ed' + kind)) { this.commit(); this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, [kind]: 0 } : x)); return; }
+    this.beginGesture(); let v = c[kind] || 0, lx = e.clientX, ly = e.clientY;
+    this.track(ev => {
+      const d = (ev.clientX - lx) + (ly - ev.clientY); lx = ev.clientX; ly = ev.clientY; const f = ev.shiftKey ? 0.2 : 1;
+      v = kind === 'gain' ? clamp(v + d * 0.1 * f, -24, 12) : clamp(v + d * 0.005 * f, 0, maxF - (kind === 'fadeIn' ? (c.fadeOut || 0) : (c.fadeIn || 0)));
+      this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, [kind]: v } : x));
+    }, () => this.endGesture(), 'ew-resize');
+  }
+  newBuf(buf, len) { return new AudioBuffer({ length: Math.max(1, len), sampleRate: buf.sampleRate, numberOfChannels: buf.numberOfChannels }); }
+  replaceSource(c, nb, patch, what) {
+    const old = this.srcOf(c); this.commit();
+    const src = this.addSource(old.name, nb, old.color, []);
+    this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, ...patch, ref: src.id } : x));
+    this.say(what + ' · zapisano jako kopię, oryginał nietknięty (Ctrl+Z cofa)');
+  }
+  edNormalize = () => { const c = this.edClip(); if (!c) return; this.commit(); this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, norm: !x.norm } : x)); this.say(c.norm ? 'Normalize wył.' : 'Normalize do −0.3 dBFS (nieniszcząco)'); };
+  edReverse = () => { const c = this.edClip(); if (!c) return; this.commit(); this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, rev: !x.rev } : x)); this.say(c.rev ? 'Reverse wył.' : 'Reverse wł. (nieniszcząco)'); };
+  getBuf(c) {
+    const base = this.buffers[c.ref]; if (!base) return null;
+    if (!c.norm && !c.rev) return base;
+    const key = c.ref + (c.norm ? 'n' : '') + (c.rev ? 'r' : ''); if (this.derived[key]) return this.derived[key];
+    const n = base.length, nb = this.newBuf(base, n); let f = 1;
+    if (c.norm) { let pk = 0; for (let ch = 0; ch < base.numberOfChannels; ch++) { const d = base.getChannelData(ch); for (let i = 0; i < n; i++) { const a = d[i] < 0 ? -d[i] : d[i]; if (a > pk) pk = a; } } f = pk > 1e-6 ? dbg(-0.3) / pk : 1; }
+    for (let ch = 0; ch < base.numberOfChannels; ch++) { const s = base.getChannelData(ch), d = nb.getChannelData(ch); if (c.rev) for (let i = 0; i < n; i++) d[i] = s[n - 1 - i] * f; else for (let i = 0; i < n; i++) d[i] = s[i] * f; }
+    this.derived[key] = nb; return nb;
+  }
+  vPeaks(src, c) {
+    if (!c || (!c.norm && !c.rev)) return src.peaks;
+    const key = src.id + (c.norm ? 'n' : '') + (c.rev ? 'r' : '');
+    if (!this.derivedPeaks[key]) { const b = this.getBuf({ ref: src.id, norm: c.norm, rev: c.rev }); this.derivedPeaks[key] = b ? peaksOf(b) : src.peaks; }
+    return this.derivedPeaks[key];
+  }
+  edTrim = () => {
+    const c = this.edClip(); if (!c) return; const buf = this.getBuf(c), spb = 60 / this.state.bpm, sr = buf.sampleRate;
+    const a = Math.max(0, Math.round(c.offset * spb * sr)), b = Math.min(buf.length, Math.round((c.offset + c.len) * spb * sr)); if (b - a < 16) return;
+    const nb = this.newBuf(buf, b - a);
+    for (let ch = 0; ch < buf.numberOfChannels; ch++) nb.getChannelData(ch).set(buf.getChannelData(ch).subarray(a, b));
+    this.replaceSource(c, nb, { offset: 0, norm: false, rev: false }, 'Przycięto do regionu');
+  };
+  edPreview = () => {
+    if (this.preview) return this.stopPreview();
+    const c = this.edClip(); if (!c) return; this.ensureCtx();
+    const buf = this.getBuf(c), spb = 60 / this.state.bpm, tr = this.state.tracks[c.track];
+    const node = this.ctx.createBufferSource(); node.buffer = buf; const g = this.ctx.createGain(), pn = this.ctx.createStereoPanner(); pn.pan.value = c.pan || 0;
+    node.connect(g); g.connect(pn); pn.connect(this.insertIn(tr ? tr.insert : 0));
+    const now = this.ctx.currentTime + 0.02, dur = c.len * spb, G = dbg(c.gain), fi = c.fadeIn || 0, fo = c.fadeOut || 0;
+    g.gain.setValueAtTime(fi ? 0 : G, now); if (fi) g.gain.linearRampToValueAtTime(G, now + fi);
+    if (fo) { g.gain.setValueAtTime(G, now + dur - fo); g.gain.linearRampToValueAtTime(0, now + dur); }
+    node.start(now, c.offset * spb, dur);
+    this.preview = { node, t0: now, off: c.offset * spb, dur, srcDur: buf.duration };
+    node.onended = () => { if (this.preview && this.preview.node === node) this.stopPreview(); };
+    this.forceUpdate(); this.previewFrame();
+  };
+  previewFrame = () => {
+    const p = this.preview; if (!p) return;
+    const el = this.rootRef.current && this.rootRef.current.querySelector('[data-edprev]');
+    if (el) { const t = clamp(this.ctx.currentTime - p.t0, 0, p.dur); el.style.left = ((p.off + t) / p.srcDur * 100) + '%'; el.style.opacity = 1; }
+    this.prevRaf = requestAnimationFrame(this.previewFrame);
+  };
+  stopPreview() {
+    const p = this.preview; if (!p) return; this.preview = null;
+    try { p.node.stop(); } catch (e) {}
+    cancelAnimationFrame(this.prevRaf);
+    const el = this.rootRef.current && this.rootRef.current.querySelector('[data-edprev]'); if (el) el.style.opacity = 0;
+    this.forceUpdate();
+  }
+  fullPath(src, W, H, gain, c) {
+    const key = 'f' + src.id + (c && c.norm ? 'n' : '') + (c && c.rev ? 'r' : '') + '|' + W + '|' + H + '|' + gain; if (this.cache.has(key)) return this.cache.get(key);
+    const pk = this.vPeaks(src, c), bins = pk.length / 2, mid = H / 2, g = dbg(gain); let d = '';
+    for (let x = 0; x < W; x++) {
+      const a = Math.floor(x / W * bins), b = Math.max(a + 1, Math.floor((x + 1) / W * bins)); let mn = 0, mx = 0;
+      for (let i = a; i < b; i++) { if (pk[2 * i] < mn) mn = pk[2 * i]; if (pk[2 * i + 1] > mx) mx = pk[2 * i + 1]; }
+      const y1 = mid - clamp(mx * g, 0, 1) * mid * 0.95, y2 = mid - clamp(mn * g, -1, 0) * mid * 0.95;
+      d += 'M' + x + ' ' + y1.toFixed(1) + 'V' + Math.max(y2, y1 + 0.6).toFixed(1);
+    }
+    this.cache.set(key, d); return d;
+  }
+
+  findFx(fxId) { for (const m of this.state.inserts) { const f = m.fx.find(x => x.id === fxId); if (f) return { m, f }; } return null; }
+  openPlug(insId, fxId) {
+    this.ensureCtx();
+    this.setState(s => {
+      const ex = s.plugs.find(p => p.fxId === fxId), rest = s.plugs.filter(p => p.fxId !== fxId);
+      if (ex) return { plugs: [...rest, ex] };
+      const ff = this.findFx(fxId), ty = ff && ff.f.type;
+      const w = Math.min(ty === 'eq' ? 720 : ty === 'reverb' ? 640 : 580, window.innerWidth - 40), n = rest.length;
+      return { plugs: [...rest, { fxId, x: clamp(140 + n * 28, 10, window.innerWidth - w - 10), y: clamp(64 + n * 28, 10, window.innerHeight - 200), w }] };
+    });
+  }
+  closePlug(fxId) { this.setState(s => ({ plugs: s.plugs.filter(p => p.fxId !== fxId) })); }
+  plugFront(fxId) { const ps = this.state.plugs; if (ps.length && ps[ps.length - 1].fxId !== fxId) this.setState({ plugs: [...ps.filter(p => p.fxId !== fxId), ps.find(p => p.fxId === fxId)] }); }
+  plugMove(fxId, e) {
+    if (e.button !== 0 || e.target.closest('button')) return; e.preventDefault();
+    const p0 = this.state.plugs.find(p => p.fxId === fxId); if (!p0) return;
+    const sx = e.clientX, sy = e.clientY, o = { ...p0 };
+    this.track(ev => this.setState(s => ({ plugs: s.plugs.map(p => p.fxId === fxId ? { ...p, x: clamp(o.x + ev.clientX - sx, 80 - o.w, window.innerWidth - 80), y: clamp(o.y + ev.clientY - sy, 0, window.innerHeight - 40) } : p) })), null, 'grabbing');
+  }
+  bandY(b, H) { return b.type === 'lowcut' || b.type === 'highcut' ? H / 2 : H / 2 - b.g / 18 * (H / 2) * 0.9; }
+  dbY(db, H) { return clamp(H / 2 - db / 18 * (H / 2) * 0.9, -2, H + 2); }
+  updBand(insId, fxId, i, patch, noCommit) { this.updFx(insId, fxId, fx => fx.map(x => x.id === fxId ? { ...x, params: { ...x.params, bands: x.params.bands.map((b, j) => j === i ? { ...b, ...patch } : b) } } : x), noCommit); }
+  eqDown(fxId, e) {
+    const ff = this.findFx(fxId); if (!ff) return; const { m, f } = ff;
+    const r = e.currentTarget.getBoundingClientRect(), W = r.width, H = r.height, px = e.clientX - r.left, py = e.clientY - r.top;
+    let best = -1, bd = 16;
+    f.params.bands.forEach((b, i) => { const d = Math.hypot(px - fx2x(b.f, W), py - this.bandY(b, H)); if (d < bd) { bd = d; best = i; } });
+    if (e.button === 2) { e.preventDefault(); if (best >= 0) this.openBandMenu(e.clientX, e.clientY, m.id, fxId, best); return; }
+    if (e.button !== 0 || best < 0) return;
+    e.preventDefault();
+    this.setState(s => ({ eqSel: { ...s.eqSel, [fxId]: best } }));
+    if (this.dblCheck('band' + fxId + best)) { this.updBand(m.id, fxId, best, { on: !f.params.bands[best].on }); return; }
+    this.beginGesture();
+    const b0 = { ...f.params.bands[best] }, sx = e.clientX, sy = e.clientY, x0 = fx2x(b0.f, W), y0 = this.bandY(b0, H), cut = b0.type.endsWith('cut');
+    this.track(ev => {
+      const k = ev.shiftKey ? 0.2 : 1;
+      const nf = clamp(x2f(x0 + (ev.clientX - sx) * k, W), 20, 20000);
+      const ng = cut ? b0.g : clamp(-((y0 + (ev.clientY - sy) * k) - H / 2) / ((H / 2) * 0.9) * 18, -18, 18);
+      this.updBand(m.id, fxId, best, { f: nf, g: ng, on: true }, true);
+      this.say('Band ' + (best + 1) + ' · ' + hzText(nf) + (cut ? '' : ' · ' + dbText(ng)) + ' · kółko = Q');
+    }, () => this.endGesture(), 'move');
+  }
+  openBandMenu(x, y, insId, fxId, i) {
+    const b = this.findFx(fxId).f.params.bands[i];
+    const items = [{ t: 'title', label: 'Band ' + (i + 1) }, ...BTYPE_ORDER.map(ty => ({ t: 'item', label: BTYPE_LABEL[ty], kbd: b.type === ty ? '●' : '', act: () => this.updBand(insId, fxId, i, { type: ty, on: true }) })),
+      { t: 'sep' }, { t: 'item', label: b.on ? 'Wyłącz band' : 'Włącz band', act: () => this.updBand(insId, fxId, i, { on: !b.on }) }, { t: 'item', label: 'Reset bandu', act: () => this.updBand(insId, fxId, i, { ...EQ_BANDS()[i] }) }];
+    this.setState({ menu: { ...this.menuPos(x, y, 280), items } });
+  }
+  bandField(insId, fxId, i, field, e) {
+    if (e.button !== 0) return; e.preventDefault(); e.stopPropagation();
+    this.setState(s => ({ eqSel: { ...s.eqSel, [fxId]: i } }));
+    const b0 = this.findFx(fxId).f.params.bands[i];
+    if (field === 'type') return this.updBand(insId, fxId, i, { type: BTYPE_ORDER[(BTYPE_ORDER.indexOf(b0.type) + 1) % BTYPE_ORDER.length], on: true });
+    if (field === 'on') return this.updBand(insId, fxId, i, { on: !b0.on });
+    this.beginGesture(); let v = b0[field], lx = e.clientX, ly = e.clientY;
+    this.track(ev => {
+      const d = ((ev.clientX - lx) + (ly - ev.clientY)) * (ev.shiftKey ? 0.2 : 1); lx = ev.clientX; ly = ev.clientY;
+      v = field === 'f' ? clamp(v * Math.pow(2, d / 60), 20, 20000) : field === 'g' ? clamp(v + d * 0.1, -18, 18) : clamp(v * Math.pow(2, d / 80), 0.1, 18);
+      this.updBand(insId, fxId, i, { [field]: v, on: true }, true);
+    }, () => this.endGesture(), 'ns-resize');
+  }
+  edKnobSpec(kind, c, spb) { const mx = Math.max(0.01, c.len * spb); return { gain: [-24, 12, 0], pan: [-1, 1, 0], fadeIn: [0, mx, 0], fadeOut: [0, mx, 0] }[kind]; }
+  edKnobText(kind, v) { return kind === 'gain' ? 'Volume ' + dbText(v) : kind === 'pan' ? 'Pan ' + panText(v) : (kind === 'fadeIn' ? 'Fade in ' : 'Fade out ') + Math.round(v * 1000) + ' ms'; }
+  edKnobDown(kind, e) {
+    if (e.button !== 0) return; e.preventDefault(); e.stopPropagation();
+    const c = this.edClip(); if (!c) return; const spb = 60 / this.state.bpm, [lo, hi, def] = this.edKnobSpec(kind, c, spb);
+    if (this.dblCheck('edk' + kind)) { this.commit(); this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, [kind]: def } : x)); return; }
+    this.beginGesture(); let v = c[kind] || 0, ly = e.clientY;
+    this.track(ev => {
+      v = clamp(v + (ly - ev.clientY) / 150 * (hi - lo) * (ev.shiftKey ? 0.2 : 1), lo, hi); ly = ev.clientY;
+      const cc = this.edClip() || c;
+      if (kind === 'fadeIn') v = Math.min(v, cc.len * spb - (cc.fadeOut || 0)); if (kind === 'fadeOut') v = Math.min(v, cc.len * spb - (cc.fadeIn || 0));
+      this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, [kind]: v } : x)); this.say(this.edKnobText(kind, v));
+    }, () => this.endGesture(), 'ns-resize');
+  }
+  toggleMixMin = () => this.setState(s => ({ mixMin: !s.mixMin }));
+
+  drawPlugins(root) {
+    const cvs = root.querySelectorAll('canvas[data-viz]'); if (!cvs.length || !this.fxNodes) return;
+    const dpr = window.devicePixelRatio || 1;
+    cvs.forEach(cv => {
+      const id = +cv.dataset.viz, fn = this.fxNodes[id], ff = this.findFx(id); if (!fn || !ff) return;
+      const W = cv.clientWidth, H = cv.clientHeight; if (!W || !H) return;
+      if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+      const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.fillStyle = '#0c0e12'; g.fillRect(0, 0, W, H);
+      const t = ff.f.type;
+      if (t === 'eq') this.drawEq(g, W, H, fn, ff.f, id);
+      else if (t === 'comp' || t === 'limit') this.drawDyn(g, W, H, fn, ff.f, id);
+      else if (t === 'sat') this.drawSat(g, W, H, fn, ff.f);
+      else if (t === 'delay') this.drawDelay(g, W, H, fn, ff.f);
+      else if (t === 'reverb') this.drawVerb3D(g, W, H, fn, ff.f, id);
+    });
+  }
+  td() { return this._td || (this._td = new Float32Array(2048)); }
+  peakOf(an) { const td = this.td(); an.getFloatTimeDomainData(td); let pk = 0; for (let i = 0; i < td.length; i++) { const a = td[i] < 0 ? -td[i] : td[i]; if (a > pk) pk = a; } return pk; }
+  freqGrid(g, x0, W, H) {
+    g.font = '10px "Geist Mono", monospace'; g.lineWidth = 1;
+    [50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(f => { const x = x0 + fx2x(f, W); g.strokeStyle = f === 100 || f === 1000 || f === 10000 ? '#20262f' : '#161b22'; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke(); g.fillStyle = '#4a5360'; g.fillText(f >= 1000 ? f / 1000 + 'k' : String(f), x + 3, H - 5); });
+  }
+  specPath(g, an, x0, W, H, fill, stroke) {
+    const N = an.frequencyBinCount; if (!this._spec || this._spec.length !== N) this._spec = new Float32Array(N);
+    const buf = this._spec; an.getFloatFrequencyData(buf); const ny = this.ctx.sampleRate / 2, floor = -96;
+    g.beginPath(); g.moveTo(x0, H);
+    for (let x = 0; x <= W; x += 2) { const f = x2f(x, W), bin = Math.min(N - 1, Math.max(1, Math.round(f / ny * N))); const db = buf[bin] + 4.5 * Math.log2(f / 1000); g.lineTo(x0 + x, H - clamp((db - floor) / -floor, 0, 1) * H); }
+    g.lineTo(x0 + W, H); g.closePath();
+    if (fill) { g.fillStyle = fill; g.fill(); } if (stroke) { g.strokeStyle = stroke; g.lineWidth = 1; g.stroke(); }
+  }
+  scope(g, an, x0, y0, w, h, col) {
+    const td = this.td(); an.getFloatTimeDomainData(td);
+    let st = 0; for (let i = 1; i < 1024; i++) if (td[i - 1] < 0 && td[i] >= 0) { st = i; break; }
+    g.beginPath(); for (let i = 0; i < 1024; i++) { const x = x0 + i / 1023 * w, y = y0 + h / 2 - clamp(td[st + i] || 0, -1, 1) * h / 2 * 0.9; i ? g.lineTo(x, y) : g.moveTo(x, y); }
+    g.strokeStyle = col; g.lineWidth = 1.2; g.stroke();
+  }
+  drawEq(g, W, H, fn, f, id) {
+    this.freqGrid(g, 0, W, H);
+    g.font = '10px "Geist Mono", monospace';
+    [-12, -6, 6, 12].forEach(db => { const y = this.dbY(db, H); g.strokeStyle = '#161b22'; g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke(); g.fillStyle = '#4a5360'; g.fillText((db > 0 ? '+' : '') + db, 4, y - 3); });
+    g.strokeStyle = '#2a313b'; g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+    this.specPath(g, fn.anIn, 0, W, H, null, 'rgba(154,162,173,.28)');
+    this.specPath(g, fn.anOut, 0, W, H, 'rgba(79,142,247,.16)', 'rgba(143,182,255,.6)');
+    const n = Math.ceil(W / 2) + 1;
+    if (!fn.fr || fn.fr.length !== n) { fn.fr = new Float32Array(n); fn.mag = new Float32Array(n); fn.ph = new Float32Array(n); fn.tot = new Float32Array(n); for (let i = 0; i < n; i++) fn.fr[i] = x2f(i * 2, W); }
+    fn.tot.fill(0);
+    const bands = f.params.bands, sel = this.state.eqSel[id];
+    bands.forEach((b, i) => {
+      if (!b.on) return; fn.calc[i].getFrequencyResponse(fn.fr, fn.mag, fn.ph);
+      for (let k = 0; k < n; k++) fn.tot[k] += 20 * Math.log10(fn.mag[k] || 1e-6);
+      if (i === sel) { g.beginPath(); g.moveTo(0, H / 2); for (let k = 0; k < n; k++) g.lineTo(k * 2, this.dbY(20 * Math.log10(fn.mag[k] || 1e-6), H)); g.lineTo(W, H / 2); g.closePath(); g.fillStyle = BAND_COLORS[i] + '30'; g.fill(); }
+    });
+    const out = f.params.out || 0;
+    g.beginPath(); for (let k = 0; k < n; k++) { const y = this.dbY(fn.tot[k] + out, H); k ? g.lineTo(k * 2, y) : g.moveTo(0, y); }
+    g.strokeStyle = f.bypass ? '#4a5360' : '#f2f4f7'; g.lineWidth = 2; g.stroke();
+    g.textAlign = 'center';
+    bands.forEach((b, i) => {
+      const x = fx2x(b.f, W), y = this.bandY(b, H);
+      g.beginPath(); g.arc(x, y, i === sel ? 8.5 : 7, 0, Math.PI * 2);
+      if (b.on) { g.fillStyle = BAND_COLORS[i]; g.fill(); } else { g.fillStyle = '#0c0e12'; g.fill(); g.strokeStyle = BAND_COLORS[i]; g.lineWidth = 1.5; g.stroke(); }
+      if (i === sel) { g.strokeStyle = '#f2f4f7'; g.lineWidth = 1.5; g.stroke(); }
+      g.fillStyle = b.on ? '#0b1220' : BAND_COLORS[i]; g.font = '600 9px "Geist Mono", monospace'; g.fillText(String(i + 1), x, y + 3);
+    });
+    g.textAlign = 'left';
+  }
+  drawDyn(g, W, H, fn, f, id) {
+    const p = f.params, lim = f.type === 'limit', pk = this.peakOf(fn.anIn);
+    const inDb = pk > 1e-5 ? 20 * Math.log10(pk) : -90, gr = fn.comp ? fn.comp.reduction : 0;
+    const hs = this.vizHist[id] || (this.vizHist[id] = []); hs.push([inDb + (lim ? p.gain : 0), gr]); if (hs.length > 300) hs.shift();
+    const thr = lim ? p.ceil : p.thr, S = Math.min(H, W * 0.36), u = d => clamp((d + 60) / 60, 0, 1) * S;
+    const tf = d => lim ? Math.min(d + p.gain, thr) : (d < thr ? d : thr + (d - thr) / p.ratio) + p.gain;
+    g.lineWidth = 1; g.strokeStyle = '#161b22';
+    for (let d = -48; d < 0; d += 12) { const q = u(d); g.beginPath(); g.moveTo(q, 0); g.lineTo(q, S); g.moveTo(0, S - q); g.lineTo(S, S - q); g.stroke(); }
+    g.strokeStyle = '#2a313b'; g.strokeRect(0.5, 0.5, S - 1, S - 1);
+    g.strokeStyle = '#20262f'; g.beginPath(); g.moveTo(0, S); g.lineTo(S, 0); g.stroke();
+    g.beginPath(); for (let i = 0; i <= 120; i++) { const d = -60 + i / 2, x = u(d), y = S - u(tf(d)); i ? g.lineTo(x, y) : g.moveTo(x, y); }
+    g.strokeStyle = '#f2f4f7'; g.lineWidth = 2; g.stroke();
+    g.setLineDash([3, 3]); g.strokeStyle = '#e0a44a'; g.lineWidth = 1; g.beginPath(); g.moveTo(u(lim ? thr - p.gain : thr), 0); g.lineTo(u(lim ? thr - p.gain : thr), S); g.stroke(); g.setLineDash([]);
+    if (inDb > -60) { g.beginPath(); g.arc(u(inDb), S - u(tf(inDb)), 5, 0, Math.PI * 2); g.fillStyle = '#4f8ef7'; g.fill(); }
+    const x0 = S + 14, HW = W - x0 - 26, L = hs.length;
+    if (L > 1) {
+      g.beginPath(); g.moveTo(x0, H); hs.forEach((v, i) => g.lineTo(x0 + i / 299 * HW, H - clamp((v[0] + 60) / 60, 0, 1) * H)); g.lineTo(x0 + (L - 1) / 299 * HW, H); g.closePath();
+      g.fillStyle = 'rgba(79,142,247,.22)'; g.fill(); g.strokeStyle = 'rgba(143,182,255,.6)'; g.stroke();
+      g.beginPath(); g.moveTo(x0, 0); hs.forEach((v, i) => g.lineTo(x0 + i / 299 * HW, clamp(-v[1] / 24, 0, 1) * H)); g.lineTo(x0 + (L - 1) / 299 * HW, 0); g.closePath();
+      g.fillStyle = 'rgba(224,82,99,.4)'; g.fill();
+    }
+    const ty = H - clamp((thr + 60) / 60, 0, 1) * H; g.setLineDash([3, 3]); g.strokeStyle = '#e0a44a'; g.beginPath(); g.moveTo(x0, ty); g.lineTo(x0 + HW, ty); g.stroke(); g.setLineDash([]);
+    const gx = W - 16; g.fillStyle = '#161a21'; g.fillRect(gx, 0, 12, H); g.fillStyle = '#e05263'; g.fillRect(gx, 0, 12, clamp(-gr / 24, 0, 1) * H);
+    g.font = '500 11px "Geist Mono", monospace'; g.fillStyle = '#f2f4f7'; g.fillText('GR ' + (gr < -0.05 ? gr.toFixed(1) : '0.0') + ' dB', x0 + 6, 16);
+    g.fillStyle = '#7d8592'; g.fillText('IN ' + (inDb > -90 ? inDb.toFixed(1) : '-∞') + ' dB', x0 + 6, 30);
+  }
+  drawSat(g, W, H, fn, f) {
+    const S = Math.min(H, W * 0.36), dr = dbg(f.params.drive);
+    g.lineWidth = 1; g.strokeStyle = '#161b22'; g.beginPath(); g.moveTo(S / 2, 0); g.lineTo(S / 2, S); g.moveTo(0, S / 2); g.lineTo(S, S / 2); g.stroke();
+    g.strokeStyle = '#2a313b'; g.strokeRect(0.5, 0.5, S - 1, S - 1); g.strokeStyle = '#20262f'; g.beginPath(); g.moveTo(0, S); g.lineTo(S, 0); g.stroke();
+    g.beginPath(); for (let i = 0; i <= 100; i++) { const x = i / 50 - 1, y = Math.tanh(clamp(x * dr, -1, 1) * 2.5) / Math.tanh(2.5), px = i / 100 * S, py = S / 2 - y * S / 2 * 0.95; i ? g.lineTo(px, py) : g.moveTo(px, py); }
+    g.strokeStyle = '#e0a44a'; g.lineWidth = 2; g.stroke();
+    const x0 = S + 14, w = W - x0;
+    g.strokeStyle = '#161b22'; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, H / 2); g.lineTo(W, H / 2); g.stroke();
+    this.scope(g, fn.anIn, x0, 0, w, H, 'rgba(154,162,173,.35)');
+    this.scope(g, fn.anOut, x0, 0, w, H, '#e0a44a');
+  }
+  drawDelay(g, W, H, fn, f) {
+    const p = f.params, maxT = 2000, lvl = this.peakOf(fn.anIn), base = H - 16;
+    g.font = '10px "Geist Mono", monospace'; g.lineWidth = 1;
+    for (let t = 0; t <= maxT; t += 250) { const x = t / maxT * W; g.strokeStyle = '#161b22'; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, base); g.stroke(); if (t % 500 === 0) { g.fillStyle = '#4a5360'; g.fillText(t + ' ms', x + 3, H - 4); } }
+    this.scope(g, fn.anOut, 0, 0, W, base * 0.55, 'rgba(143,182,255,.35)');
+    g.fillStyle = '#f2f4f7'; g.fillRect(1, base - base * 0.85, 4, base * 0.85);
+    const a0 = 0.35 + 0.65 * Math.min(1, lvl * 3);
+    for (let k = 1; k < 24; k++) { const t = p.time * k; if (t > maxT) break; const a = p.mix / 100 * Math.pow(p.fb / 100, k - 1); if (a < 0.01) break; const x = t / maxT * W, bh = a * base * 0.85; g.fillStyle = 'rgba(79,142,247,' + a0 + ')'; g.fillRect(x - 2, base - bh, 4, bh); }
+  }
+  // 3D decay waterfall: X = frequency (log), Z = time after the hit (front = now), Y = level.
+  // Amber wireframe = what the current settings do (RT60, pre-delay, HF damping, low cut). Teal ridges = the real wet signal, recorded over time.
+  drawVerb3D(g, W, H, fn, f, id) {
+    const p = f.params, v = this.vizView[id] || (this.vizView[id] = { yaw: -0.5, pitch: 0.55 });
+    const pre = p.pre / 1000, size = p.size, lo = p.lo == null ? 120 : p.lo, hi = p.hi == null ? 8000 : p.hi;
+    const Tmax = Math.max(0.6, (pre + size) * 1.05), NS = 30, K = 72;
+    const st = this.verbHist[id] || (this.verbHist[id] = { frames: [], last: 0 });
+    if (!st.fk) { st.fk = new Float32Array(K); st.xk = new Float32Array(K); for (let k = 0; k < K; k++) { st.fk[k] = 20 * Math.pow(1000, k / (K - 1)); st.xk[k] = k / (K - 1) * 2 - 1; } }
+    const an = fn.anWet, now = performance.now() / 1000;
+    if (an && (now - st.last >= Tmax / (NS - 1) || now < st.last)) {
+      st.last = now; const N = an.frequencyBinCount, ny = this.ctx.sampleRate / 2;
+      if (!st.buf || st.buf.length !== N) st.buf = new Float32Array(N);
+      an.getFloatFrequencyData(st.buf); const row = new Float32Array(K);
+      for (let k = 0; k < K; k++) {
+        const f0 = st.fk[k], f1 = k < K - 1 ? st.fk[k + 1] : 20000, b0 = Math.max(1, Math.floor(f0 / ny * N)), b1 = Math.min(N - 1, Math.max(b0, Math.ceil(f1 / ny * N)));
+        let m = -200; for (let b = b0; b <= b1; b++) if (st.buf[b] > m) m = st.buf[b];
+        row[k] = clamp((m + 4.5 * Math.log2(f0 / 1000) + 105) / 75, 0, 1);
+      }
+      st.frames.unshift(row); if (st.frames.length > NS) st.frames.length = NS;
+    }
+    // camera: yaw/pitch orbit + mild perspective, auto-fit to the canvas
+    const cy = Math.cos(v.yaw), sy = Math.sin(v.yaw), cp = Math.cos(v.pitch), sp = Math.sin(v.pitch);
+    const raw = (x, y, z) => { const X = x * 1.25, Y = y * 0.62, Z = (z - 0.5) * 1.5, x1 = X * cy + Z * sy, z1 = -X * sy + Z * cy, y2 = Y * cp + z1 * sp, z2 = -Y * sp + z1 * cp, k = 4 / (4 + z2); return [x1 * k, -y2 * k]; };
+    let mnx = 1e9, mxx = -1e9, mny = 1e9, mxy = -1e9;
+    for (const x of [-1, 1]) for (const y of [0, 1]) for (const z of [0, 1]) { const q = raw(x, y, z); mnx = Math.min(mnx, q[0]); mxx = Math.max(mxx, q[0]); mny = Math.min(mny, q[1]); mxy = Math.max(mxy, q[1]); }
+    const sc = Math.min((W - 70) / (mxx - mnx), (H - 46) / (mxy - mny)), ox = W / 2 - (mnx + mxx) / 2 * sc, oy = 24 + (H - 46) / 2 - (mny + mxy) / 2 * sc;
+    const P = (x, y, z) => { const q = raw(x, y, z); return [ox + q[0] * sc, oy + q[1] * sc]; };
+    const seg = (a, b, col) => { g.strokeStyle = col; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); };
+    g.globalAlpha = f.bypass ? 0.45 : 1; g.lineWidth = 1; g.font = '10px "Geist Mono", monospace';
+    // floor + walls
+    const fl = [P(-1, 0, 0), P(1, 0, 0), P(1, 0, 1), P(-1, 0, 1)];
+    g.beginPath(); fl.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fillStyle = '#10141a'; g.fill();
+    [0.5, 1].forEach(y => seg(P(-1, y, 1), P(1, y, 1), '#161b22'));
+    seg(P(-1, 0, 1), P(-1, 1, 1), '#1c222a'); seg(P(1, 0, 1), P(1, 1, 1), '#1c222a');
+    const xOf = hz => Math.log(hz / 20) / Math.log(1000) * 2 - 1;
+    [50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(hz => seg(P(xOf(hz), 0, 0), P(xOf(hz), 0, 1), hz === 100 || hz === 1000 || hz === 10000 ? '#232a33' : '#181d24'));
+    const step = Tmax > 4 ? 1 : Tmax > 1.6 ? 0.5 : 0.25;
+    g.fillStyle = '#4a5360'; g.textAlign = 'left';
+    for (let t = 0; t <= Tmax + 1e-6; t += step) { const z = t / Tmax; seg(P(-1, 0, z), P(1, 0, z), '#181d24'); const q = P(1.05, 0, z); g.fillText((step < 1 ? t.toFixed(t % 1 ? 2 : 0) : t) + ' s', q[0] + 2, q[1] + 3); }
+    g.textAlign = 'center'; [[100, '100'], [1000, '1k'], [10000, '10k']].forEach(([hz, l]) => { const q = P(xOf(hz), 0, -0.07); g.fillText(l, q[0], q[1] + 8); });
+    // pre-delay gate on the floor
+    if (pre > 0.002) { const z = pre / Tmax, a = [P(-1, 0, 0), P(1, 0, 0), P(1, 0, z), P(-1, 0, z)]; g.beginPath(); a.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fillStyle = 'rgba(224,164,74,.07)'; g.fill(); }
+    // model: level(f, t) in dB → 0..1
+    const model = (hz, t) => { if (t < pre) return -1; const tt = t - pre, fc = Math.max(200, hi * Math.pow(0.3, tt / size)), r = (hz / lo) * (hz / lo); return clamp((-60 * tt / size - 10 * Math.log10(1 + (hz / fc) * (hz / fc)) + 20 * Math.log10(r / Math.sqrt(1 + r * r)) + 60) / 60, 0, 1); };
+    for (let i = NS - 1; i >= 0; i--) {
+      const z = i / (NS - 1), t = z * Tmax, fr = 1 - z, row = st.frames[i];
+      // live ridge (filled, occludes what is behind)
+      g.beginPath(); let q = P(-1, 0, z); g.moveTo(q[0], q[1]);
+      for (let k = 0; k < K; k++) { q = P(st.xk[k], row ? row[k] : 0, z); g.lineTo(q[0], q[1]); }
+      q = P(1, 0, z); g.lineTo(q[0], q[1]); g.closePath();
+      g.fillStyle = 'rgba(12,14,18,.9)'; g.fill(); g.fillStyle = 'rgba(71,184,168,' + (0.03 + 0.12 * fr) + ')'; g.fill();
+      g.strokeStyle = 'rgba(105,195,214,' + (0.18 + 0.75 * fr) + ')'; g.lineWidth = i === 0 ? 1.6 : 1; g.stroke();
+      // model ridge
+      g.beginPath(); let on = false;
+      for (let k = 0; k < K; k++) { const y = model(st.fk[k], t); if (y < 0) break; q = P(st.xk[k], y, z); on ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); on = true; }
+      if (on) { g.strokeStyle = 'rgba(224,164,74,' + (0.16 + 0.55 * fr) + ')'; g.lineWidth = 1; g.stroke(); }
+    }
+    g.globalAlpha = 1; g.textAlign = 'left';
+    g.font = '500 11px "Geist Mono", monospace'; g.fillStyle = '#f2f4f7'; g.fillText('RT60 ' + size.toFixed(2) + ' s', 10, 16);
+    g.fillStyle = '#7d8592'; g.fillText('PRE ' + Math.round(p.pre) + ' ms', 110, 16);
+    g.font = '10px "Geist Mono", monospace'; g.textAlign = 'right';
+    g.fillStyle = '#e0a44a'; g.fillText('— ustawienia', W - 96, 16); g.fillStyle = '#69c3d6'; g.fillText('— sygnał na żywo', W - 8, 16);
+    g.textAlign = 'left';
+  }
+
+  fmtPos(b) { return (Math.floor(b / 4) + 1) + '.' + (Math.floor(b) % 4 + 1) + (b % 1 ? '.' + (Math.floor((b % 1) * 4) + 1) : ''); }
+  fmtClock(b) { return (Math.floor(b / 4) + 1) + ':' + String(Math.floor(b) % 4 + 1).padStart(2, '0') + ':' + String(Math.floor((b % 1) * 4) + 1).padStart(2, '0'); }
+
+  onKey = e => {
+    if (e.key === 'Alt') { e.preventDefault(); if (!this.state.alt) this.setState({ alt: true }); return; }
+    const tg = e.target.tagName; if (tg === 'INPUT' || tg === 'SELECT' || tg === 'TEXTAREA') return;
+    const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey, s = this.state;
+    if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) this.togglePlay(); return; }
+    if (e.key === 'Escape') { if (s.menu) return this.closeMenu(); if (s.help) return this.setState({ help: false }); if (s.plugs.length) return this.setState({ plugs: s.plugs.slice(0, -1) }); if (s.editor) return this.closeEditor(); return this.setState({ sel: [] }); }
+    if (e.key === 'F8') { e.preventDefault(); return this.togglePicker(); }
+    if (e.key === 'F9') { e.preventDefault(); return this.toggleMixer(); }
+    if (m && k === 'z') { e.preventDefault(); return e.shiftKey ? this.redo() : this.undo(); }
+    if (m && k === 'y') { e.preventDefault(); return this.redo(); }
+    if (m && k === 'a') { e.preventDefault(); return this.setState({ sel: s.clips.map(c => c.id) }); }
+    if (m && k === 'b') { e.preventDefault(); return this.duplicate(); }
+    if (m && k === 'c') { e.preventDefault(); return this.copy(); }
+    if (m && k === 'x') { e.preventDefault(); return this.cut(); }
+    if (m && k === 'v') { e.preventDefault(); return this.paste(); }
+    if (m && k === 'm') { e.preventDefault(); return this.toggleMuteSel(); }
+    if (m && (k === '=' || k === '+')) { e.preventDefault(); return this.zoomIn(); }
+    if (m && k === '-') { e.preventDefault(); return this.zoomOut(); }
+    if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); return this.delIds(s.sel); }
+    if (e.key === 'Home') { e.preventDefault(); return this.seek(0); }
+    if (e.key === '?') return this.toggleHelp();
+    if (e.shiftKey && e.key.startsWith('Arrow')) {
+      e.preventDefault(); const u = this.snapRes() || 0.25;
+      if (e.key === 'ArrowLeft') this.nudge(-u, 0); if (e.key === 'ArrowRight') this.nudge(u, 0);
+      if (e.key === 'ArrowUp') this.nudge(0, -1); if (e.key === 'ArrowDown') this.nudge(0, 1);
+      return;
+    }
+    if (!m && !e.altKey) {
+      if (k === 'r') return this.toggleRec();
+      if (k === 'f') { this.setState({ follow: !s.follow }); return this.say(s.follow ? 'Podążanie za głowicą: wył.' : 'Podążanie za głowicą: wł.'); }
+      const t = TOOLS.find(x => x[1].toLowerCase() === k);
+      if (t) { this.setState({ tool: t[0] }); this.say('Narzędzie: ' + t[2]); }
+    }
+  };
+  toggleHelp = () => this.setState(s => ({ help: !s.help }));
+
+  patRects(p, offset, len, bw, h) {
+    const key = 'p' + p.id + '|' + offset + '|' + len + '|' + bw + '|' + h + '|' + p.notes.length;
+    if (this.cache.has(key)) return this.cache.get(key);
+    const drums = ['hat', 'clap', 'kick'];
+    const pitches = [...new Set(p.notes.filter(n => n.p != null).map(n => n.p))].sort((a, b) => b - a);
+    const rowsKeys = [...drums.filter(d => p.notes.some(n => n.inst === d)), ...pitches.map(x => 'p' + x)];
+    const rows = Math.max(rowsKeys.length, 3), rh = Math.max(1.5, Math.min(5, (h - 6) / rows));
+    const top = (h - rows * rh) / 2, out = [], W = len * bw;
+    for (let r = Math.floor(offset / p.len) - 1; r <= Math.ceil((offset + len) / p.len); r++) {
+      for (const n of p.notes) {
+        const b = r * p.len + n.step / 4 - offset;
+        if (b < 0 || b >= len) continue;
+        const ri = rowsKeys.indexOf(n.p != null ? 'p' + n.p : n.inst);
+        out.push({ x: b * bw, y: top + ri * rh, w: Math.max(1.5, Math.min(n.len / 4 * bw - 1, W - b * bw)), h: Math.max(1, rh - 1) });
+      }
+      if (out.length > 1500) break;
+    }
+    if (this.cache.size > 500) this.cache.clear();
+    this.cache.set(key, out);
+    return out;
+  }
+  peakPath(pk, offset, len, bw, h, g, spb) {
+    const rate = 100, W = Math.floor(len * bw), mid = h / 2;
+    let d = '';
+    for (let x = 0; x < W; x += 2) {
+      const i0 = Math.floor((offset + x / bw) * spb * rate), i1 = Math.floor((offset + (x + 2) / bw) * spb * rate);
+      if (i0 * 2 >= pk.length) break;
+      let mn = 0, mx = 0;
+      for (let j = i0; j <= Math.max(i0, i1 - 1) && j * 2 < pk.length; j++) { if (pk[2 * j] < mn) mn = pk[2 * j]; if (pk[2 * j + 1] > mx) mx = pk[2 * j + 1]; }
+      const y1 = mid - clamp(mx * g, 0, 1) * mid * 0.92, y2 = mid - clamp(mn * g, -1, 0) * mid * 0.92;
+      d += 'M' + x + ' ' + y1.toFixed(1) + 'V' + Math.max(y2, y1 + 0.6).toFixed(1);
+    }
+    return d;
+  }
+  wavePath(src, offset, len, bw, h, gain, spb, c) {
+    const key = 'w' + src.id + (c && c.norm ? 'n' : '') + (c && c.rev ? 'r' : '') + '|' + offset + '|' + len + '|' + bw + '|' + h + '|' + gain + '|' + spb;
+    if (this.cache.has(key)) return this.cache.get(key);
+    const d = this.peakPath(this.vPeaks(src, c), offset, len, bw, h, Math.pow(10, gain / 20), spb);
+    if (this.cache.size > 500) this.cache.clear();
+    this.cache.set(key, d);
+    return d;
+  }
+  thumbPath(src) {
+    const key = 't' + src.id; if (this.cache.has(key)) return this.cache.get(key);
+    const pk = src.peaks, bins = pk.length / 2, W = 160, mid = 7; let d = '';
+    for (let x = 0; x < W; x++) {
+      const a = Math.floor(x / W * bins), b = Math.max(a + 1, Math.floor((x + 1) / W * bins));
+      let mn = 0, mx = 0; for (let i = a; i < b; i++) { if (pk[2 * i] < mn) mn = pk[2 * i]; if (pk[2 * i + 1] > mx) mx = pk[2 * i + 1]; }
+      d += 'M' + x + ' ' + (mid - mx * mid).toFixed(1) + 'V' + Math.max(mid - mn * mid, mid - mx * mid + 0.6).toFixed(1);
+    }
+    this.cache.set(key, d); return d;
+  }
+
+  renderVals() {
+    const s = this.state, bw = s.bw, spb = 60 / s.bpm;
+    const anySolo = s.tracks.some(t => t.solo);
+    const tops = this.tops();
+    const swatches = (current, pick) => TC.map(color => ({ color, ring: color === current ? '0 0 0 2px #f2f4f7' : 'none', onClick: () => { pick(color); this.closeMenu(); } }));
+    const menu = s.menu ? {
+      x: s.menu.x, y: s.menu.y,
+      items: s.menu.items.map(it => {
+        const base = { isTitle: it.t === 'title', isSep: it.t === 'sep', isItem: it.t === 'item', isSwatches: it.t === 'swatches', isGain: it.t === 'gain', isRename: it.t === 'rename', label: it.label || '', kbd: it.kbd || '', hasIcon: !!it.icon, icon: it.icon || '', iconFg: it.iconColor || '#9aa2ad', iconBg: (it.iconColor || '#9aa2ad') + '26' };
+        if (it.t === 'item') { base.fg = it.disabled ? '#5c6573' : it.danger ? '#e8607a' : '#f2f4f7'; base.onClick = () => { if (it.disabled) return; this.closeMenu(); it.act(); }; }
+        if (it.t === 'swatches') base.swatches = swatches(it.current, it.pick);
+        if (it.t === 'gain') {
+          const c = s.clips.find(x => x.id === it.clip.id) || it.clip;
+          const set = d => { this.commit(); this.setClips(cs => cs.map(x => x.id === c.id ? { ...x, gain: clamp(x.gain + d, -24, 12) } : x)); };
+          base.value = dbText(c.gain); base.dec = () => set(-1); base.inc = () => set(1);
+        }
+        if (it.t === 'rename') { base.inputRef = it.inputRef; base.onKey = it.onKey; }
+        return base;
+      }),
+    } : null;
+    const cursorFor = { draw: 'crosshair', paint: 'copy', erase: 'not-allowed', mute: 'pointer', slice: 'col-resize', select: 'crosshair' };
+    const editable = s.tool === 'draw' || s.tool === 'paint' || s.tool === 'select';
+    const barStep = bw * 4 < 36 ? 4 : bw * 4 < 64 ? 2 : 1;
+    const mq = s.marquee ? { x: Math.min(s.marquee.x0, s.marquee.x1), y: Math.min(s.marquee.y0, s.marquee.y1), w: Math.abs(s.marquee.x1 - s.marquee.x0), h: Math.abs(s.marquee.y1 - s.marquee.y0) } : { x: 0, y: 0, w: 0, h: 0 };
+    // sub-beat lines follow the active snap, so what you see is where clips land
+    const snapR = this.snapRes(), snapLineU = snapR > 0 && snapR < 1 ? snapR : 0.25;
+    const stepLine = snapR > 0 && snapR < 1 && snapR * bw >= 6 ? '#1b2129' : bw >= 36 ? '#161b21' : 'transparent';
+    const btn = (on, bg, fg) => on ? { bg, fg } : { bg: '#252b34', fg: '#7d8592' };
+    let rc = { left: 0, top: 0, width: 0, h: 0, bh: 0, wave: '', time: '' };
+    if (s.recClip && this.recording) {
+      const r = s.recClip, tr = s.tracks[r.track] || { h: 56 }, h = tr.h - 2, skip = r.clipStart - r.start, lenB = Math.max(0, r.sec / spb - skip);
+      rc = { left: r.clipStart * bw, top: (tops[r.track] || 0) + 1, width: Math.max(2, lenB * bw), h, bh: h - 15, wave: lenB > 0 ? this.peakPath(this.recording.peaks, skip, lenB, bw, h - 15, 1, spb) : '', time: lenB > 0 ? (lenB * spb).toFixed(1) + ' s' : 'count-in' };
+    }
+    const inPct = Math.min(1, Math.sqrt(s.inLevel)) * 100;
+    const L30 = 51.84, C30 = 69.12, L36 = 61.26, C36 = 81.68;
+    const anyInsSolo = s.inserts.some(m => m.id !== 0 && m.solo);
+    const strips = s.inserts.map((m, idx) => {
+      const t = (m.pan + 1) / 2, mb = btn(m.muted, '#4f8ef7', '#0b1220'), sb = btn(m.solo, '#e0a44a', '#12151a');
+      const here = s.tracks.filter(tr => tr.insert === m.id).map(tr => tr.name);
+      const audible = !m.muted && (m.id === 0 || !anyInsSolo || m.solo);
+      return { id: m.id, label: m.id === 0 ? 'MASTER' : 'INS ' + idx, name: m.name, color: m.color, bg: s.mixSel === m.id ? '#1f252e' : '#161a21', ring: s.mixSel === m.id ? 'inset 0 0 0 1px #3a4554' : 'none', nameFg: audible ? '#f2f4f7' : '#7d8592',
+        fxText: m.fx.length ? m.fx.length + ' FX' : '', panDash: Math.abs(t - 0.5) * L30 + 'px ' + C30 + 'px', panOff: -Math.min(t, 0.5) * L30, panAngle: -135 + t * 270, panText: panText(m.pan),
+        mBg: mb.bg, mFg: mb.fg, sBg: sb.bg, sFg: sb.fg, hasSolo: m.id !== 0, inv: 1 - m.vol, db: volText(m.vol), meterL: m.id + ':0', meterR: m.id + ':1',
+        route: m.id === 0 ? 'OUT' : (here.length ? here.join(', ') : '—'),
+        onSelect: e => this.stripSelect(m.id, e), onPan: e => this.stripPan(m.id, e), onFader: e => this.stripFader(m.id, e),
+        onMute: () => this.setInsert(m.id, { muted: !m.muted }, true), onSolo: () => this.setInsert(m.id, { solo: !m.solo }, true), onRename: e => this.openRename(e.clientX, e.clientY, m.name, v => this.setInsert(m.id, { name: v })) };
+    });
+    const selIns = s.inserts.find(m => m.id === s.mixSel) || s.inserts[0];
+    const selFx = selIns.fx.find(f => f.id === s.fxSel);
+    const fxSlots = [...selIns.fx.map((f, i) => { const meta = FXMETA[f.type], pi = this.presetInfo(f), drag = s.fxDrag === f.id; return { n: i + 1, has: true, empty: false, name: FXDEF[f.type].name, preset: pi.name + (pi.mod ? ' *' : ''), led: f.bypass ? '#2c333d' : '#4ec08a', fg: f.bypass ? '#7d8592' : '#f2f4f7', bg: drag ? '#2a3240' : s.fxSel === f.id ? '#232a33' : 'transparent', ring: drag ? 'inset 0 0 0 1px #4f8ef7' : 'none', cursor: drag ? 'grabbing' : 'pointer', addText: '',
+        icon: meta.icon, iconFg: f.bypass ? '#5c6573' : meta.color, iconBg: f.bypass ? '#1c2128' : meta.color + '26', title: 'Klik = otwórz okno · przeciągnij ↕ = kolejność',
+        onSelect: e => this.slotDown(selIns.id, f.id, e),
+        onBypass: e => { e.stopPropagation(); this.updFx(selIns.id, f.id, fx => fx.map(x => x.id === f.id ? { ...x, bypass: !x.bypass } : x)); this.say(FXDEF[f.type].name + (f.bypass ? ' · aktywny' : ' · bypass')); },
+        onRemove: e => { e.stopPropagation(); this.closePlug(f.id); this.updFx(selIns.id, f.id, fx => fx.filter(x => x.id !== f.id)); if (s.fxSel === f.id) this.setState({ fxSel: null }); } }; }),
+      { n: selIns.fx.length + 1, has: false, empty: true, name: '', preset: '', led: '', fg: '', bg: 'transparent', ring: 'none', cursor: 'pointer', icon: ICON_PLUS, iconFg: '#4f8ef7', iconBg: 'rgba(79,142,247,.12)', title: 'Dodaj efekt — otworzy się od razu', addText: 'Dodaj efekt', onSelect: e => this.openFxMenu(e.clientX, e.clientY, selIns.id), onBypass: null, onRemove: null }];
+    const fxKnobs = selFx ? FXDEF[selFx.type].params.map(p => {
+      const t = clamp(pNorm(p, selFx.params[p[0]]), 0, 1), z = p[2] < 0 && p[3] > 0 && !p[6] ? pNorm(p, 0) : 0;
+      return { id: p[0], label: p[1], value: pFmt(p, selFx.params[p[0]]), dash: Math.abs(t - z) * L36 + 'px ' + C36 + 'px', off: -Math.min(t, z) * L36, angle: -135 + t * 270, onDown: e => this.fxParamDown(selIns.id, selFx, p, e) };
+    }) : [];
+    const knob36 = (t, z) => ({ dash: Math.abs(t - z) * L36 + 'px ' + C36 + 'px', off: -Math.min(t, z) * L36, angle: -135 + t * 270 });
+    const plugs = s.plugs.map((pw, i) => {
+      const ff = this.findFx(pw.fxId); if (!ff) return null; const { m, f } = ff, def = FXDEF[f.type], meta = FXMETA[f.type], isEq = f.type === 'eq', isVerb = f.type === 'reverb', sel = s.eqSel[pw.fxId], pi = this.presetInfo(f);
+      return { fxId: pw.fxId, x: pw.x, y: pw.y, w: pw.w, z: 45 + i, name: def.name, insName: this.insName(m), color: m.color, isEq, vh: isEq ? 250 : isVerb ? 260 : 190,
+        icon: meta.icon, iconFg: meta.color, iconBg: meta.color + '26', presetName: pi.name, presetMod: pi.mod ? ' *' : '', presetFg: pi.mod ? '#e0a44a' : '#d5dae2',
+        onPresetMenu: e => { const r = e.currentTarget.getBoundingClientRect(); this.openPresetMenu(pw.fxId, r.left, r.bottom + 4); }, onPrevPreset: () => this.stepPreset(pw.fxId, -1), onNextPreset: () => this.stepPreset(pw.fxId, 1),
+        led: f.bypass ? '#2c333d' : '#4ec08a', bypassText: f.bypass ? 'BYPASS' : '', wheel: isEq ? 'eq:' + pw.fxId : 'none', vizCursor: isEq ? 'pointer' : isVerb ? 'grab' : 'default',
+        hint: isEq ? 'Przeciągnij punkt · kółko = Q · 2× klik = wł./wył. · PPM = typ' : isVerb ? 'Przeciągnij = obrót 3D · 2× klik = reset' : '',
+        onFront: () => this.plugFront(pw.fxId), onMove: e => this.plugMove(pw.fxId, e), onClose: () => this.closePlug(pw.fxId),
+        onBypass: e => { e.stopPropagation(); this.updFx(m.id, f.id, fx => fx.map(x => x.id === f.id ? { ...x, bypass: !x.bypass } : x)); },
+        onViz: e => { if (isEq) this.eqDown(pw.fxId, e); else if (isVerb) this.verbDown(pw.fxId, e); },
+        knobs: def.params.map(p => { const t = clamp(pNorm(p, f.params[p[0]]), 0, 1), z = p[2] < 0 && p[3] > 0 && !p[6] ? pNorm(p, 0) : 0; return { label: p[1], value: pFmt(p, f.params[p[0]]), wheel: 'fx:' + f.id + ':' + p[0], ...knob36(t, z), onDown: e => this.fxParamDown(m.id, f, p, e) }; }),
+        bands: isEq ? f.params.bands.map((b, j) => ({ n: String(j + 1), color: BAND_COLORS[j], led: b.on ? BAND_COLORS[j] : '#2c333d', bg: sel === j ? '#1f252e' : 'transparent', typeLabel: BTYPE_LABEL[b.type], fg: b.on ? '#f2f4f7' : '#5c6573',
+          f: hzText(b.f), g: b.type.endsWith('cut') ? '—' : dbText(b.g), q: 'Q ' + b.q.toFixed(2),
+          onOn: e => this.bandField(m.id, f.id, j, 'on', e), onType: e => this.bandField(m.id, f.id, j, 'type', e), onF: e => this.bandField(m.id, f.id, j, 'f', e), onG: e => this.bandField(m.id, f.id, j, 'g', e), onQ: e => this.bandField(m.id, f.id, j, 'q', e) })) : [] };
+    }).filter(Boolean);
+    let edv = { x: 0, y: 0, w: 0, h: 0, W: 0, H: 0, knobs: [] };
+    const ec = this.edClip(), esrc = ec && this.srcOf(ec);
+    if (ec && esrc) {
+      const E = s.editor, W = E.w - 32, H = Math.max(80, E.h - 210), durB = esrc.dur / spb, pxB = W / durB, tr = s.tracks[ec.track];
+      const x0 = ec.offset * pxB, x1 = (ec.offset + ec.len) * pxB, fi = (ec.fadeIn || 0) / spb * pxB, fo = (ec.fadeOut || 0) / spb * pxB;
+      edv = { x: E.x, y: E.y, w: E.w, h: E.h, W, H, name: esrc.name, color: esrc.color, track: tr ? tr.name : '',
+        meta: esrc.dur.toFixed(3) + ' s · ' + esrc.sr + ' Hz · ' + (esrc.ch === 2 ? 'stereo' : 'mono') + ' · peak ' + esrc.peakDb,
+        region: (ec.offset * spb).toFixed(3) + ' – ' + ((ec.offset + ec.len) * spb).toFixed(3) + ' s',
+        wave: this.fullPath(esrc, Math.round(W), H, ec.gain, ec), x0, x1, rw: Math.max(1, x1 - x0), dimR: Math.max(0, W - x1),
+        fadeFill: 'M' + x0 + ' ' + H + 'L' + (x0 + fi) + ' 0L' + x0 + ' 0Z M' + (x1 - fo) + ' 0L' + x1 + ' ' + H + 'L' + x1 + ' 0Z',
+        fadeLine: (fi ? 'M' + x0 + ' ' + H + 'L' + (x0 + fi) + ' 0' : '') + (fo ? 'M' + (x1 - fo) + ' 0L' + x1 + ' ' + H : ''),
+        fiX: x0 + fi, foX: x1 - fo, gain: dbText(ec.gain), fadeIn: Math.round((ec.fadeIn || 0) * 1000) + ' ms', fadeOut: Math.round((ec.fadeOut || 0) * 1000) + ' ms',
+        knobs: ['gain', 'pan', 'fadeIn', 'fadeOut'].map(kind => { const [lo, hi] = this.edKnobSpec(kind, ec, spb), v = ec[kind] || 0, t = clamp((v - lo) / (hi - lo), 0, 1), z = lo < 0 ? -lo / (hi - lo) : 0; return { label: { gain: 'VOL', pan: 'PAN', fadeIn: 'FADE IN', fadeOut: 'FADE OUT' }[kind], value: kind === 'gain' ? dbText(v) : kind === 'pan' ? panText(v) : Math.round(v * 1000) + ' ms', wheel: 'ed:' + kind, ...knob36(t, z), onDown: e => this.edKnobDown(kind, e) }; }),
+        normLed: ec.norm ? '#4ec08a' : '#2c333d', revLed: ec.rev ? '#4ec08a' : '#2c333d', normFg: ec.norm ? '#f2f4f7' : '#9aa2ad', revFg: ec.rev ? '#f2f4f7' : '#9aa2ad',
+        insertVal: String(tr ? tr.insert : 0), prevLabel: this.preview ? 'Stop' : 'Podgląd', prevBg: this.preview ? '#4ec08a' : '#252b34', prevFg: this.preview ? '#07231a' : '#f2f4f7' };
+    }
+    return {
+      rootRef: this.rootRef, scrollRef: this.scrollRef, gridRef: this.gridRef, rulerRef: this.rulerRef, phGridRef: this.phGridRef, phRulerRef: this.phRulerRef, clockRef: this.clockRef,
+      noCtx: e => e.preventDefault(), stopProp: e => e.stopPropagation(), onDragOver: this.onDragOver, onDragLeave: this.onDragLeave, onDrop: this.onDrop, onFiles: this.onFiles,
+      undo: this.undo, redo: this.redo, undoFg: this.hist.length ? '#d5dae2' : '#4a5360', redoFg: this.fut.length ? '#d5dae2' : '#4a5360',
+      togglePlay: this.togglePlay, stop: this.stop, playBg: s.playing ? '#4ec08a' : 'transparent', playFg: s.playing ? '#07231a' : '#d5dae2',
+      toggleRec: this.toggleRec, rec: s.rec, recBg: s.rec ? '#e05263' : 'transparent', recFg: s.rec ? '#12151a' : '#e05263',
+      toggleMonitor: this.toggleMonitor, monBg: s.monitor ? '#2c333d' : 'transparent', monFg: s.monitor ? '#4ec08a' : '#7d8592',
+      toggleFollow: () => this.setState({ follow: !s.follow }), followBg: s.follow ? '#2f3a4b' : 'transparent', followFg: s.follow ? '#8fb6ff' : '#7d8592',
+      toggleMetro: () => this.setState({ metro: !s.metro }), metroBg: s.metro ? '#2f3a4b' : 'transparent', metroFg: s.metro ? '#8fb6ff' : '#7d8592',
+      toggleCount: () => this.setState({ countIn: !s.countIn }), countBg: s.countIn ? '#2f3a4b' : 'transparent', countFg: s.countIn ? '#8fb6ff' : '#7d8592',
+      alt: s.alt, micBlocked: s.micBlocked, closeBlocked: () => this.setState({ micBlocked: false }),
+      plugs, mixBody: !s.mixMin, toggleMixMin: this.toggleMixMin, mixMinIcon: s.mixMin ? 'M6 15l6-6 6 6' : 'M6 9l6 6 6-6', mixMinTitle: s.mixMin ? 'Rozwiń mikser' : 'Zwiń mikser',
+      mixInfo: (s.inserts.length - 1) + ' insertów', mixOpen: s.mixOpen, mixH: Math.round(Math.min(s.mixH, Math.max(170, window.innerHeight * 0.4))), strips, addInsert: this.addInsert, mixSplit: this.mixSplit, toggleMixer: this.toggleMixer, mixBtnBg: s.mixOpen ? '#2f3a4b' : 'transparent', mixBtnFg: s.mixOpen ? '#8fb6ff' : '#7d8592',
+      fxSlots, fxTitle: this.insName(selIns), fxColor: selIns.color, fxRoute: selIns.id === 0 ? '→ wyjście' : '→ Master', hasSelFx: !!selFx, noSelFx: !selFx, fxName: selFx ? FXDEF[selFx.type].name : '', fxKnobs,
+      fxBypassText: selFx && selFx.bypass ? 'BYPASS' : 'ON', fxBypassFg: selFx && selFx.bypass ? '#7d8592' : '#4ec08a',
+      hasEditor: !!(ec && esrc), ed: edv, edWaveRef: this.edWaveRef, edDown: this.edDown, edMove: this.edMove, edResize: this.edResize, closeEditor: this.closeEditor,
+      edNormalize: this.edNormalize, edReverse: this.edReverse, edTrim: this.edTrim, edPreview: this.edPreview,
+      edGainDown: e => this.edNumDown('gain', e), edFiDown: e => this.edNumDown('fadeIn', e), edFoDown: e => this.edNumDown('fadeOut', e),
+      edInserts: s.inserts.map(m => ({ v: String(m.id), label: this.insName(m) })), edInsert: e => { if (ec) { this.setTrack(ec.track, { insert: +e.target.value }); this.setState({ mixSel: +e.target.value }); } },
+      inPct, inColor: s.inLevel > 0.89 ? '#e05263' : s.inLevel > 0.5 ? '#f0c25a' : '#4ec08a',
+      clock: this.fmtClock(s.start), bpmText: s.bpm.toFixed(2), bpmDown: this.bpmDown,
+      tools: TOOLS.map(([id, key, title]) => ({ icon: ICONS[id], title: title + ' (' + key + ') — ' + TOOL_HINT[id], bg: s.tool === id ? '#2f3a4b' : 'transparent', fg: s.tool === id ? '#8fb6ff' : '#9aa2ad', onClick: () => this.setState({ tool: id }) })),
+      snapOpts: SNAPS.map(([label, v]) => ({ label: v < 0 ? 'Snap: auto · ' + SNAP_NAME(autoSnap(bw)) : label, v: String(v) })), snapVal: String(s.snap),
+      onSnap: e => { const v = parseFloat(e.target.value); this.setState({ snap: v }); this.say(v < 0 ? 'Snap auto — rozdzielczość zależy od zoomu (teraz ' + SNAP_NAME(autoSnap(bw)) + ')' : 'Snap: ' + SNAP_NAME(v)); },
+      zoomIn: this.zoomIn, zoomOut: this.zoomOut, toggleHelp: this.toggleHelp, help: s.help, helpBg: s.help ? '#2c333d' : 'transparent',
+      shortcuts: SHORTCUTS.map(([a, k]) => ({ a, k })),
+      togglePicker: this.togglePicker, pickOpen: s.pickOpen, pickW: s.pickW, pickBtnBg: s.pickOpen ? '#252b34' : 'transparent',
+      pickSplit: e => this.split('pick', e), headSplit: e => this.split('head', e), headW: s.headW,
+      pickPats: s.patterns.map(p => { const on = s.cur.kind === 'pat' && s.cur.ref === p.id; return { name: p.name, color: p.color, meta: (p.len / 4) + ' bar', bg: on ? '#232a33' : 'transparent', fg: on ? '#f2f4f7' : '#b4bac4', onDown: e => this.pickDown('pat', p.id, e) }; }),
+      pickSrcs: s.sources.map(p => { const on = s.cur.kind === 'audio' && s.cur.ref === p.id; return { name: p.name, color: p.color, meta: p.dur.toFixed(2) + 's', wave: this.thumbPath(p), bg: on ? '#232a33' : 'transparent', fg: on ? '#f2f4f7' : '#b4bac4', onDown: e => this.pickDown('audio', p.id, e) }; }),
+      dragOver: s.dragOver,
+      contentW: s.headW + TOTAL * bw, gridW: TOTAL * bw, gridH: tops[tops.length - 1], beatPx: bw,
+      trackCount: s.tracks.length + ' tr',
+      bars: Array.from({ length: Math.ceil(TOTAL / 4 / barStep) }, (_, i) => ({ n: i * barStep + 1, left: i * barStep * 4 * bw })),
+      gridBg: 'linear-gradient(to right,#2a313b 1px,transparent 1px),linear-gradient(to right,#1a1f27 1px,transparent 1px),linear-gradient(to right,' + stepLine + ' 1px,transparent 1px),linear-gradient(to right,rgba(255,255,255,.018) 50%,transparent 50%)',
+      gridSize: (bw * 4) + 'px 100%,' + bw + 'px 100%,' + (snapLineU * bw) + 'px 100%,' + (bw * 8) + 'px 100%',
+      startX: s.start * bw, hasLoop: !!s.loop, loopX: s.loop ? s.loop.a * bw : 0, loopW: s.loop ? (s.loop.b - s.loop.a) * bw : 0,
+      loopText: s.loop ? 'LOOP ' + this.fmtPos(s.loop.a) + ' – ' + this.fmtPos(s.loop.b) : 'SONG', loopFg: s.loop ? '#4ec08a' : '#5c6573',
+      rulerDown: this.rulerDown, clearLoop: this.clearLoop, gridDown: this.gridDown, gridDbl: this.gridDbl, addTrack: this.addTrack,
+      cursor: cursorFor[s.tool], clipCursor: editable ? 'grab' : cursorFor[s.tool], edgeCursor: editable ? 'ew-resize' : cursorFor[s.tool],
+      lanes: s.tracks.map((t, i) => {
+        const audible = !t.muted && (!anySolo || t.solo);
+        const mb = btn(t.muted, '#4f8ef7', '#0b1220'), sb = btn(t.solo, '#e0a44a', '#12151a'), rb = btn(t.arm, '#e05263', '#12151a');
+        return { num: i + 1, name: t.name, color: t.color, h: t.h, tall: t.h >= 50, fg: audible ? '#f2f4f7' : '#7d8592', bg: t.arm && s.rec ? '#1f1a1e' : '#161a21', lane: t.arm && s.rec ? '#16121a' : '#111419',
+          mBg: mb.bg, mFg: mb.fg, sBg: sb.bg, sFg: sb.fg, rBg: rb.bg, rFg: t.arm ? '#12151a' : '#e05263',
+          volPct: t.vol * 100, volText: volText(t.vol), volColor: audible ? t.color : '#4a5360',
+          onDown: e => this.laneDown(i, e), onResize: e => this.laneResize(i, e), onVol: e => this.laneVol(i, e),
+          route: (ri => ri <= 0 ? '→M' : '→' + ri)(s.inserts.findIndex(m => m.id === t.insert)), onRoute: e => { e.stopPropagation(); this.openRouteMenu(i, e.clientX, e.clientY); },
+          onMute: () => this.setTrack(i, { muted: !t.muted }, true), onSolo: () => this.setTrack(i, { solo: !t.solo }, true), onArm: () => this.armTrack(i),
+          onRename: e => this.openRename(e.clientX, e.clientY, t.name, v => this.setTrack(i, { name: v })) };
+      }),
+      clips: s.clips.map(c => {
+        const src = this.srcOf(c), tr = s.tracks[c.track]; if (!src || !tr) return null;
+        const sel = s.sel.includes(c.id), isAudio = c.kind === 'audio', w = Math.max(3, c.len * bw - 1), h = tr.h - 2, bh = h - 15;
+        return {
+          id: c.id, left: c.start * bw, top: tops[c.track] + 1, width: w, h, bh,
+          name: src.name, muted: c.muted, gainText: isAudio && c.gain ? dbText(c.gain) : '',
+          head: sel ? 'color-mix(in srgb, ' + src.color + ' 75%, #ffffff)' : 'color-mix(in srgb, ' + src.color + ' 42%, #12161c)',
+          headFg: sel ? '#0b1220' : '#f2f4f7', ink: 'color-mix(in srgb, ' + src.color + ' 80%, #ffffff)',
+          bg: 'color-mix(in srgb, ' + src.color + ' 14%, #101318)',
+          ring: sel ? 'inset 0 0 0 1px #f2f4f7' : 'inset 0 0 0 1px color-mix(in srgb, ' + src.color + ' 55%, #101318)',
+          op: c.muted ? 0.38 : 1, isAudio,
+          ...(fi => (fo => ({ fadeFill: fi || fo ? 'M0 ' + bh + 'L' + fi + ' 0L0 0Z M' + (w - fo) + ' 0L' + w + ' ' + bh + 'L' + w + ' 0Z' : '', fadeLine: (fi ? 'M0 ' + bh + 'L' + fi + ' 0' : '') + (fo ? 'M' + (w - fo) + ' 0L' + w + ' ' + bh : ''), showFade: isAudio && editable && w > 36, fiX: fi, foX: w - fo }))(isAudio ? (c.fadeOut || 0) / spb * bw : 0))(isAudio ? (c.fadeIn || 0) / spb * bw : 0),
+          rects: isAudio ? [] : this.patRects(src, mod(c.offset, src.len), c.len, bw, bh),
+          wave: isAudio ? this.wavePath(src, c.offset, c.len, bw, bh, c.gain, spb, c) : '',
+        };
+      }).filter(Boolean),
+      hasRecClip: !!(s.recClip && this.recording), rc,
+      hasMarquee: !!s.marquee, mq,
+      hasGhost: !!s.ghost, ghost: s.ghost || { x: 0, y: 0, name: '', color: '#000' },
+      hasMenu: !!s.menu, menu: menu || { x: 0, y: 0, items: [] }, closeMenu: this.closeMenu,
+      readout: s.readout, statusDot: this.recording ? '#e05263' : s.playing ? '#4ec08a' : '#4a5360',
+      hint: TOOLS.find(t => t[0] === s.tool)[2] + ': ' + TOOL_HINT[s.tool] + ' · snap ' + (s.alt ? 'off' : SNAP_NAME(this.snapRes())) + ' · ? skróty',
+    };
+  }
+}
+</script>
+</body>
+</html>

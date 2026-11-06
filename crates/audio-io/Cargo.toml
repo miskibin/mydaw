@@ -1,0 +1,20 @@
+[package]
+name = "wave-audio-io"
+description = "WAVE audio devices: WASAPI, ASIO (feature `asio`), CoreAudio, ALSA via cpal; duplex in/out feeding the engine."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Steinberg ASIO host (Windows). Needs LLVM/Clang for bindgen at build time; cpal's
+# asio-sys fetches the SDK itself (or set CPAL_ASIO_DIR). Release builds turn it on.
+asio = ["cpal/asio"]
+
+[dependencies]
+wave-engine.workspace = true
+cpal.workspace = true
+rtrb.workspace = true
+serde.workspace = true
+log.workspace = true

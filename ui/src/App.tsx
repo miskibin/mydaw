@@ -1,189 +1,119 @@
-/**
- * The shell.
- *
- * Editors share the Browser. Playback follows the last musical editor used;
- * the channel rack floats above the playlist or mixer.
- */
-
-import { Match, Show, Switch, createEffect, createMemo, on, onCleanup } from 'solid-js';
-
-import { Browser } from './shell/Browser';
-import { ExportDialog } from './shell/ExportDialog';
-import { SidePanel, PlaylistPicker } from './shell/SidePanel';
-import { StatusBar } from './shell/StatusBar';
-import { TopBar } from './shell/TopBar';
-import { midiKeyFor, noteName } from './lib/keyboard';
-import { f7PatternId, rollChannelFromStrip, tabCounterpart } from './lib/navigate';
-import { useView } from './shell/view';
-import { useAppState } from './state';
-import { EffectEditors } from './views/EffectEditor';
+import { createEffect, For, onCleanup, onMount, Show } from 'solid-js';
+import { be } from './api/backend';
+import { baseName } from './lib/format';
+import { snapRes } from './lib/snap';
+import * as A from './state/actions';
+import { findFx, S } from './state/store';
+import { closeMenu, say, setU, U } from './state/ui';
+import { ContextMenu } from './ui/Menu';
+import { Browser, importAt } from './views/Browser';
+import { FxWindow } from './views/FxWindow';
 import { Mixer } from './views/Mixer';
 import { Playlist } from './views/Playlist';
-import { Rack } from './views/Rack';
-import { Roll } from './views/Roll';
 import { SampleEditor } from './views/SampleEditor';
-import { Settings } from './views/Settings';
-import { PluginWindow } from './ui/PluginWindow';
-import { bindPointerActivation } from './ui/pointerActivation';
+import { Settings, VstPicker } from './views/Settings';
+import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 
-export function App(): ReturnType<typeof Show> {
-  const app = useAppState();
-  const view = useView();
-
-  // Restore the selected channel after Open/New without changing a mixer bus
-  // selection on every ordinary engine refresh.
-  // Memoize readiness: reading mixer() in a dependency function still reruns
-  // on every fresh DTO, even when that function keeps returning `true`.
-  const mixerReady = createMemo(() => app.mixer() !== undefined);
-  const initialRackHeight = () => Math.min(480, Math.max(180, app.tracks().length * 42 + 104));
-  createEffect(on([app.projectRevision, mixerReady], () => {
-    const index = app.mixer()?.selected;
-    if (index === undefined) return;
-    view.setStrip({ kind: 'track', index });
-    view.setSelectedClips([]);
-    view.closeRoll();
-    view.closeSampleEditor();
-    view.closeInsertEditor();
-    app.setPlayMode(view.playbackMode());
-  }));
-
-  // UI zoom is the webview's own (`zoomHotkeysEnabled` in tauri.conf.json):
-  // Ctrl+= / Ctrl+- / Ctrl+0 are handled natively by WebView2, which scales
-  // viewport units and fixed positioning correctly — a CSS `zoom` on the body
-  // did not (100vh stays viewport-sized while everything else grows).
-
-  /** The view hotkeys. F7 opens the roll on whichever channel is selected. */
-  function onKeyDown(event: KeyboardEvent): void {
-    const target = event.target as HTMLElement | null;
-    if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return;
-    if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === 't') {
-      event.preventDefault();
-      view.setTypingKeyboard((on) => !on);
-      app.say(
-        'Typing keyboard',
-        view.typingKeyboard()
-          ? `Q is ${noteName(midiKeyFor('KeyQ', app.octave()) ?? 60)}`
-          : 'off',
-      );
-      return;
-    }
-    if (event.defaultPrevented) return;
-    // FL's record toggle. Not while the typing keyboard is on: there R is a note.
-    if (event.code === 'KeyR' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey &&
-        !view.typingKeyboard() && !target?.closest('.wv-menu, .wv-modal, [role="menu"]')) {
-      event.preventDefault();
-      if (!event.repeat) app.toggleRecord();
-      return;
-    }
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
-      event.preventDefault();
-      view.setBrowserOpen(true);
-      const search = document.querySelector<HTMLInputElement>('[aria-label="Search browser"]');
-      search?.focus(); search?.select(); return;
-    }
-    if (event.key === 'Tab' && !event.ctrlKey && !event.altKey && !event.metaKey && !target?.closest('button, a, [tabindex], select')) {
-      event.preventDefault();
-      const current = view.rollOpen() ? view.previousView() : view.view();
-      view.go(tabCounterpart(current));
-      return;
-    }
-    switch (event.key) {
-      case 'Escape':
-        if (view.view() === 'settings') {
-          event.preventDefault();
-          const back = view.previousView();
-          view.go(back === 'settings' ? 'rack' : back);
-        }
-        break;
-      case 'F2': {
-        if (target?.closest('.wv-plug:not(.wv-rack-window), .wv-menu, .wv-modal')) break;
-        if (view.rollOpen() || view.view() === 'settings') break;
-        const id = app.sequencer()?.patternSet.activeId;
-        if (id === undefined) break;
-        event.preventDefault();
-        view.setRenamingPattern(id);
-        break;
-      }
-      case 'F5':
-        event.preventDefault();
-        view.go('playlist');
-        break;
-      case 'F6':
-        event.preventDefault();
-        view.go('rack');
-        break;
-      case 'F8':
-        event.preventDefault();
-        view.setBrowserOpen((open) => !open);
-        break;
-      case 'F9':
-        event.preventDefault();
-        view.go('mixer');
-        break;
-      case 'F7': {
-        event.preventDefault();
-        if (view.rollOpen()) { view.closeRoll(); break; }
-        const selected = view.selectedClips();
-        const clips = (app.playlist()?.clips ?? []).filter((clip) => selected.includes(clip.id));
-        const patternId = f7PatternId(view.view(), clips);
-        const channel = rollChannelFromStrip(view.strip(), app.mixer()?.selected ?? 0);
-        if (patternId !== null) {
-          void app.sequencerCommand((backend) => backend.setActivePattern(patternId)).then(() => {
-            app.promoteStepsToRoll(channel);
-            view.openRoll(channel);
-          });
-          break;
-        }
-        app.promoteStepsToRoll(channel);
-        view.openRoll(channel);
-        break;
-      }
-      default:
-        break;
-    }
+function onKey(e: KeyboardEvent) {
+  if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
+  const tg = (e.target as HTMLElement).tagName;
+  if (tg === 'INPUT' || tg === 'SELECT' || tg === 'TEXTAREA') return;
+  const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) void A.togglePlay(); return; }
+  if (e.key === 'Escape') {
+    if (U.menu) return closeMenu();
+    if (U.vstPicker) return setU('vstPicker', null);
+    if (U.settings) return setU('settings', false);
+    if (U.help) return setU('help', false);
+    if (U.plugs.length) return A.closePlug(U.plugs[U.plugs.length - 1].fxId);
+    if (U.editor) return A.closeEditor();
+    return setU('sel', []);
   }
+  if (e.key === 'F8') { e.preventDefault(); return setU('pickOpen', !U.pickOpen); }
+  if (e.key === 'F9') { e.preventDefault(); return setU('mixOpen', !U.mixOpen); }
+  if (m && k === 'z') { e.preventDefault(); return void (e.shiftKey ? A.redo() : A.undo()); }
+  if (m && k === 'y') { e.preventDefault(); return void A.redo(); }
+  if (m && k === 'n') { e.preventDefault(); return void A.projectNew(); }
+  if (m && k === 'o') { e.preventDefault(); return void A.projectOpen(); }
+  if (m && k === 's') { e.preventDefault(); return void A.projectSave(e.shiftKey); }
+  if (m && k === 'a') { e.preventDefault(); return A.selectAll(); }
+  if (m && k === 'b') { e.preventDefault(); return A.duplicate(); }
+  if (m && k === 'c') { e.preventDefault(); return A.copy(); }
+  if (m && k === 'x') { e.preventDefault(); return A.cut(); }
+  if (m && k === 'v') { e.preventDefault(); return A.paste(); }
+  if (m && k === 'm') { e.preventDefault(); return A.toggleMuteSel(); }
+  if (m && (k === '=' || k === '+')) { e.preventDefault(); return A.zoomAt(1.25); }
+  if (m && k === '-') { e.preventDefault(); return A.zoomAt(0.8); }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); return A.delIds([...U.sel]); }
+  if (e.key === 'Home') { e.preventDefault(); return A.seek(0); }
+  if (e.key === '?') return setU('help', !U.help);
+  if (e.shiftKey && e.key.startsWith('Arrow')) {
+    e.preventDefault();
+    const u = snapRes(U.snap, U.bw) || 0.25;
+    if (e.key === 'ArrowLeft') A.nudge(-u, 0);
+    if (e.key === 'ArrowRight') A.nudge(u, 0);
+    if (e.key === 'ArrowUp') A.nudge(0, -1);
+    if (e.key === 'ArrowDown') A.nudge(0, 1);
+    return;
+  }
+  if (!m && !e.altKey) {
+    if (k === 'r') return A.toggleRec();
+    if (k === 'f') { setU('follow', !U.follow); return say(U.follow ? 'Podążanie za głowicą: wł.' : 'Podążanie za głowicą: wył.'); }
+    const t = TOOLS.find(x => x[1].toLowerCase() === k);
+    if (t) { setU('tool', t[0]); say('Narzędzie: ' + t[2]); }
+  }
+}
+const onKeyUp = (e: KeyboardEvent) => { if (e.key === 'Alt') { e.preventDefault(); setU('alt', false); } };
+const onBlur = () => { if (U.alt) setU('alt', false); };
 
-  window.addEventListener('keydown', onKeyDown);
-  onCleanup(() => window.removeEventListener('keydown', onKeyDown));
+export function App() {
+  onMount(() => {
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
+    let offDrop: (() => void) | null = null;
+    be().onOsDrop(ev => {
+      if (ev.type === 'over') { if (!U.dragOver) setU('dragOver', true); }
+      else if (ev.type === 'leave') setU('dragOver', false);
+      else { setU('dragOver', false); if (ev.paths.length) void importAt(ev.paths, ev.x, ev.y, U.alt); }
+    }).then(u => { offDrop = u; });
+    onCleanup(() => {
+      window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur);
+      offDrop?.();
+    });
+  });
+
+  // effects whose windows are open → analysis in the engine (≤ 8)
+  let lastWatch = '';
+  createEffect(() => {
+    const ids = U.plugs.map(p => p.fxId).filter(id => { const f = findFx(id)?.f; return f && f.type !== 'vst3'; }).slice(-8);
+    const key = ids.join(',');
+    if (key !== lastWatch) { lastWatch = key; be().watchFx(ids).catch(e => console.warn(e)); }
+  });
+  // close windows of effects that disappeared (undo, CLI, …)
+  createEffect(() => {
+    const gone = U.plugs.filter(p => !findFx(p.fxId));
+    if (gone.length) setU('plugs', U.plugs.filter(p => findFx(p.fxId)));
+    if (U.editor && !S.project.clips.some(c => c.id === U.editor!.clipId)) setU('editor', null);
+  });
+  createEffect(() => { be().setTitle((S.path ? baseName(S.path) : 'Bez nazwy') + (S.dirty ? ' •' : '') + ' — WAVE'); });
 
   return (
-    <div class="wv-shell">
-      <TopBar />
-      <div class="wv-body">
-        <Browser />
-        <Show when={!view.rollOpen() && view.workspaceView() === 'playlist'}><PlaylistPicker /></Show>
-        <div class="wv-workspace" ref={(element) => bindPointerActivation(element, view.focusWorkspace)} onFocusIn={() => view.focusWorkspace()}>
-          <Show when={view.rollOpen()} fallback={
-            <Switch fallback={<Playlist />}>
-              <Match when={view.workspaceView() === 'settings'}><Settings /></Match>
-              <Match when={view.workspaceView() === 'playlist'}><Playlist /></Match>
-              <Match when={view.workspaceView() === 'mixer'}><Mixer /></Match>
-            </Switch>
-          }><Roll /></Show>
-        </div>
-        <Show when={!view.rollOpen()}><SidePanel /></Show>
-        <Show when={mixerReady() && view.rackOpen() && !view.rollOpen() && view.workspaceView() !== 'settings'}>
-          <PluginWindow
-            title="Channel Rack"
-            class="wv-rack-window"
-            embeddedHeader
-            focused={view.view() === 'rack'}
-            z={30}
-            defaultWidth={1000}
-            defaultHeight={initialRackHeight()}
-            minHeight={180}
-            offset={0}
-            geometry={view.rackGeometry() ?? { x: view.browserWidth() + 192, y: 56, w: 1000, h: initialRackHeight() }}
-            onGeometryChange={view.setRackGeometry}
-            onFocus={() => view.go('rack')}
-            onClose={() => view.closeRack()}
-          ><Rack onClose={() => view.closeRack()} /></PluginWindow>
-        </Show>
-        <EffectEditors />
-        <Show when={view.sampleEditor() !== null}><SampleEditor /></Show>
+    <div class="app" onContextMenu={e => e.preventDefault()}>
+      <Toolbar />
+      <div style={{ flex: 1, 'min-height': 0, display: 'flex' }}>
+        <Show when={U.pickOpen}><Browser /></Show>
+        <Playlist />
       </div>
-      <Show when={app.exporter.open()}><ExportDialog /></Show>
+      <Show when={U.mixOpen}><Mixer /></Show>
       <StatusBar />
+      <SampleEditor />
+      <For each={U.plugs}>{(pw, i) => <FxWindow pw={pw} z={45 + i()} />}</For>
+      <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>
+      <ContextMenu />
+      <Help />
+      <Settings />
+      <VstPicker />
     </div>
   );
 }

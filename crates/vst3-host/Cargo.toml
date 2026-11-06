@@ -1,0 +1,45 @@
+[package]
+name = "wave-vst3"
+description = "WAVE: VST3 effects as wave_engine::Processor insert effects, with crash-proof out-of-process scanning and native editor windows."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Optional dedicated scan worker. The app binary is its own worker (it calls
+# `wave_vst3::run_scan_worker_if_requested()` first thing in `main`), so shipping
+# this is not required; it starts in milliseconds instead of loading a webview,
+# and it is what the integration tests spawn.
+[[bin]]
+name = "wave-vst3-scan-worker"
+path = "src/bin/wave-vst3-scan-worker.rs"
+
+[dependencies]
+wave-engine.workspace = true
+wave-plugin-scan.workspace = true
+wave-plugin-windows = { path = "../plugin-windows" }
+# Raw COM-style bindings for the VST3 API (coupler-rs, MIT/Apache). The safe
+# layer over them is this crate.
+vst3 = "0.3"
+rtrb.workspace = true
+serde.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+
+# A VST3 module on Windows is a DLL: `LoadLibraryW` + `GetProcAddress`, loader
+# error dialogs suppressed, and an STA COM apartment on the loading thread.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Com",
+] }
+
+# On Linux it is a shared object: `dlopen` + `dlsym`.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+serde_json.workspace = true

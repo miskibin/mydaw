@@ -1,6 +1,6 @@
 [package]
-name = "mydaw-audio-file"
-description = "MYDAW: reading an audio file into memory as interleaved stereo f32, and the interpolation kernel that plays it back at another rate."
+name = "wave-audio-file"
+description = "WAVE: reading an audio file into memory as interleaved stereo f32, and the interpolation kernel that plays it back at another rate."
 edition.workspace = true
 version.workspace = true
 license.workspace = true

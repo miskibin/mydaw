@@ -1,0 +1,60 @@
+// UI-only state (not saved, not undone).
+import { createStore } from 'solid-js/store';
+import type { ClipKind, Id } from '../api/types';
+
+export type Tool = 'draw' | 'paint' | 'erase' | 'mute' | 'slice' | 'select';
+
+export interface PlugWin { fxId: Id; x: number; y: number; w: number }
+export interface EditorWin { clipId: Id; x: number; y: number; w: number; h: number }
+
+export type MenuItem =
+  | { t: 'title'; label: string }
+  | { t: 'sep' }
+  | { t: 'item'; label: string; kbd?: string; act: () => void; danger?: boolean; disabled?: boolean; icon?: string; iconColor?: string; title?: string }
+  | { t: 'swatches'; current?: string; pick: (c: string) => void }
+  | { t: 'gain'; clipId: Id }
+  | { t: 'rename'; value: string; done: (v: string) => void };
+
+export interface Menu { x: number; y: number; items: MenuItem[] }
+
+export interface UiState {
+  tool: Tool; snap: number; bw: number;
+  sel: Id[]; cur: { kind: ClipKind; ref: Id } | null;
+  start: number; follow: boolean; alt: boolean;
+  mixOpen: boolean; mixMin: boolean; mixH: number; mixSel: Id; fxSel: Id | null; fxDrag: Id | null;
+  plugs: PlugWin[]; editor: EditorWin | null; menu: Menu | null; help: boolean; settings: boolean;
+  vstPicker: { insId: Id } | null;
+  readout: string;
+  headW: number; pickW: number; pickOpen: boolean; browserTab: 'project' | 'library';
+  ghost: { x: number; y: number; name: string; color: string } | null;
+  dragOver: boolean;
+  eqSel: Record<number, number>;
+  marquee: { x0: number; y0: number; x1: number; y1: number } | null;
+  /** True while the engine reports playback (from telemetry flags / transport replies). */
+  playing: boolean;
+  previewing: boolean;
+  previewPath: string | null;
+}
+
+export const [U, setU] = createStore<UiState>({
+  tool: 'draw', snap: -1, bw: 22, sel: [], cur: { kind: 'pat', ref: 1 },
+  start: 0, follow: true, alt: false,
+  mixOpen: true, mixMin: false, mixH: 300, mixSel: 6, fxSel: 903, fxDrag: null,
+  plugs: [], editor: null, menu: null, help: false, settings: false, vstPicker: null,
+  readout: 'Gotowe',
+  headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
+  ghost: null, dragOver: false, eqSel: {}, marquee: null,
+  playing: false, previewing: false, previewPath: null,
+});
+
+export const say = (t: string) => setU('readout', t);
+export const closeMenu = () => { if (U.menu) setU('menu', null); };
+export function menuPos(x: number, y: number, h: number) {
+  return { x: Math.max(4, Math.min(x, window.innerWidth - 240)), y: Math.max(4, Math.min(y, window.innerHeight - h)) };
+}
+export function openMenu(x: number, y: number, items: MenuItem[], h = 300) {
+  setU('menu', { ...menuPos(x, y, h), items });
+}
+export function openRename(x: number, y: number, value: string, done: (v: string) => void) {
+  openMenu(x, y, [{ t: 'title', label: 'Nazwa — Enter zatwierdza' }, { t: 'rename', value, done }], 80);
+}
