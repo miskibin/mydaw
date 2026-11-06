@@ -66,7 +66,7 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("ceil", "Ceiling", -12.0, 0.0, -0.3, "dB", false),
     ];
     const FET: &[ParamDef] = &[
-        p("input", "Input", 0.0, 48.0, 12.0, "dB", false),
+        p("input", "Input", 0.0, 36.0, 8.0, "dB", false),
         p("output", "Output", -24.0, 12.0, 0.0, "dB", false),
         choice("ratio", "Ratio", 0.0, &["4", "8", "12", "20", "All"]),
         p("attack", "Attack", 20.0, 800.0, 300.0, "µs", true),
@@ -249,11 +249,11 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Bardzo głośny", &[("gain", 10.0), ("ceil", -0.1)]),
         ],
         FxKind::Fet => vec![
-            pr("Wokal — klasyk", &[("input", 18.0), ("output", -2.0), ("ratio", 0.0), ("attack", 400.0), ("release", 250.0), ("mix", 100.0)]),
-            pr("Wokal — z przodu", &[("input", 24.0), ("output", -4.0), ("ratio", 1.0), ("attack", 200.0), ("release", 150.0), ("mix", 100.0)]),
-            pr("Bas — kontrola", &[("input", 20.0), ("output", -3.0), ("ratio", 2.0), ("attack", 600.0), ("release", 400.0), ("mix", 100.0)]),
-            pr("Równoległa kompresja", &[("input", 30.0), ("output", -6.0), ("ratio", 4.0), ("attack", 100.0), ("release", 120.0), ("mix", 45.0)]),
-            pr("All buttons — smash", &[("input", 32.0), ("output", -10.0), ("ratio", 4.0), ("attack", 60.0), ("release", 100.0), ("mix", 100.0)]),
+            pr("Wokal — klasyk", &[("input", 8.0), ("output", -2.0), ("ratio", 0.0), ("attack", 400.0), ("release", 250.0), ("mix", 100.0)]),
+            pr("Wokal — z przodu", &[("input", 12.0), ("output", -4.0), ("ratio", 1.0), ("attack", 200.0), ("release", 150.0), ("mix", 100.0)]),
+            pr("Bas — kontrola", &[("input", 10.0), ("output", -3.0), ("ratio", 2.0), ("attack", 600.0), ("release", 400.0), ("mix", 100.0)]),
+            pr("Równoległa kompresja", &[("input", 18.0), ("output", -6.0), ("ratio", 4.0), ("attack", 100.0), ("release", 120.0), ("mix", 45.0)]),
+            pr("All buttons — smash", &[("input", 20.0), ("output", -10.0), ("ratio", 4.0), ("attack", 60.0), ("release", 100.0), ("mix", 100.0)]),
         ],
         FxKind::Deess => vec![
             pr("Wokal — domyślny", &[("thr", -32.0), ("range", 8.0), ("freq", 6000.0), ("mode", 0.0), ("look", 5.0), ("listen", 0.0)]),

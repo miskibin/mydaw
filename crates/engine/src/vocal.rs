@@ -40,7 +40,9 @@ impl Default for Fet {
     }
 }
 
-const FET_THRESHOLD_DB: f32 = -24.0;
+/// Fixed threshold (like the hardware): a vocal peaking around −10 dBFS starts
+/// compressing with the Input knob at about +6 dB.
+const FET_THRESHOLD_DB: f32 = -10.0;
 
 impl Fet {
     #[inline]
@@ -330,13 +332,15 @@ pub struct Tune {
     center: f32,
     held: f32,
     last_note: f32,
+    /// the current note was close enough to engage correction (flex hysteresis)
+    engaged: bool,
     m: [f32; 8],
     params: Option<ParamBlock>,
 }
 
 impl Default for Tune {
     fn default() -> Self {
-        Self { sr: 48000.0, det: None, psola_l: None, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, m: [0.0; 8], params: None }
+        Self { sr: 48000.0, det: None, psola_l: None, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, m: [0.0; 8], params: None }
     }
 }
 
@@ -378,7 +382,7 @@ impl Processor for Tune {
                     let m = hz_to_midi(det.hz);
                     self.period = sr / det.hz;
                     // vibrato-preserving centre: a slow average of the pitch
-                    if self.center == 0.0 || (m - self.center).abs() > 1.5 {
+                    if self.center == 0.0 || (m - self.center).abs() > 0.8 {
                         self.center = m;
                     }
                     self.center += (m - self.center) * (hop_s / 0.15).min(1.0);
@@ -387,13 +391,18 @@ impl Processor for Tune {
                     if note != self.last_note {
                         self.last_note = note;
                         self.held = 0.0;
+                        self.engaged = false;
                     } else {
                         self.held += hop_s;
                     }
                     let err = note - follow; // semitones to correct
-                    // flex: only correct within a window that shrinks as flex grows
-                    let window = 1.0 - 0.9 * self.flex; // semitones
-                    let want = if self.flex > 0.0 && err.abs() > window * 0.5 { 0.0 } else { err };
+                    // flex: only notes sung within ±(50 − 35·flex) cents of the target are corrected;
+                    // once a note engages it stays corrected (no flicker with vibrato)
+                    let half = 0.5 - 0.35 * self.flex; // semitones
+                    if self.flex <= 0.0 || err.abs() <= half {
+                        self.engaged = true;
+                    }
+                    let want = if self.engaged { err } else { 0.0 };
                     let mut tau = self.retune_ms / 1000.0;
                     if self.humanize > 0.0 && self.held > 0.25 {
                         tau += self.humanize * 0.4 * ((self.held - 0.25) / 0.5).min(1.0);
