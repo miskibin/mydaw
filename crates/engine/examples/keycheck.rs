@@ -45,6 +45,15 @@ fn main() {
         w[(v[v.len() / 2].round() as i32).rem_euclid(12) as usize] += len;
     }
     let total: f32 = w.iter().sum();
+    {
+        let mut ps: Vec<f32> = an.notes.iter().map(|n| n.pitch).collect();
+        ps.sort_by(f32::total_cmp);
+        if !ps.is_empty() {
+            let med = ps[ps.len() / 2];
+            let far = an.notes.iter().filter(|n| (n.pitch - med).abs() > 9.0).count();
+            println!("notes pitch min {:.1} max {:.1} median {:.1}; outlier notes (>9 st from median): {far}", ps[0], ps[ps.len() - 1], med);
+        }
+    }
     // intonation of the notes themselves (median of each note, ignoring glides into it)
     let mut nd = vec![];
     for nb in &an.notes {

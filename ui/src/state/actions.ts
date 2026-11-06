@@ -248,7 +248,12 @@ export function stepPreset(fxId: Id, d: number) {
 // ---------- windows ----------
 const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640 };
 /** Open (or bring to front) an effect window. The newest/most recently focused window is always on top. */
+/** Playlist to the front: effect windows go behind it (they keep their place and state). */
+export function playlistFront() { if (U.plugs.length && !U.plugsHidden) setU('plugsHidden', true); }
+export function showPlugs() { setU('plugsHidden', false); }
+
 export function openPlug(fxId: Id) {
+  if (U.plugsHidden) setU('plugsHidden', false);
   const ex = U.plugs.find(p => p.fxId === fxId);
   if (ex) { plugFront(fxId, true); return; }
   const ty = findFx(fxId)?.f.type ?? '';
@@ -260,6 +265,7 @@ export const closePlug = (fxId: Id) => setU('plugs', U.plugs.filter(p => p.fxId 
 /** Raise a window above all others (array order stays put, so canvases are never re-created). */
 export function plugFront(fxId: Id, force = false) {
   const p = U.plugs.find(x => x.fxId === fxId); if (!p) return;
+  if (U.plugsHidden) setU('plugsHidden', false);
   if (!force && p.z === U.zTop) return;
   const z = U.zTop + 1;
   setU('zTop', z);

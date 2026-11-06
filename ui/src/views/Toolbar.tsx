@@ -129,6 +129,12 @@ export function Toolbar() {
       <div data-drag class="dragfill" />
       <span data-drag class="projName" title={(S.path ?? 'Projekt niezapisany') + (S.dirty ? ' — niezapisane zmiany' : '')}>{projName()}<Show when={S.dirty}><span data-drag class="dirty">•</span></Show></span>
       <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : 'SONG'}</span>
+      <Show when={U.plugs.length}>
+        <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
+          title={U.plugsHidden ? `Pokaż okna efektów (F5) — ${U.plugs.length}` : 'Schowaj okna efektów za playlistę (F5, albo klik w playlistę)'}>
+          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} />Okna {U.plugs.length}
+        </button>
+      </Show>
       <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title="Mikser (F9)">
         <Icon d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6" size={13} />Mixer
       </button>
@@ -170,7 +176,7 @@ export function StatusBar() {
 }
 
 const SHORTCUTS: [string, string][] = [
-  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'F8'],
+  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów)', 'F5'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'F8'],
   ['Rysuj · Maluj · Usuń', 'P · B · D'], ['Wycisz · Tnij · Zaznacz', 'T · C · E'],
   ['Zaznacz prostokątem', 'Ctrl + przeciągnij'], ['Dodaj/usuń z zaznaczenia', 'Ctrl + klik'], ['Zaznacz wszystko', 'Ctrl+A'], ['Odznacz', 'Esc'],
   ['Kopiuj przeciągając', 'Shift + przeciągnij'], ['Poza siatką (off grid)', 'trzymaj Alt'], ['Duplikuj za zaznaczeniem', 'Ctrl+B'],

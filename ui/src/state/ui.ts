@@ -26,7 +26,10 @@ export interface UiState {
   sel: Id[]; cur: { kind: ClipKind; ref: Id } | null;
   start: number; follow: boolean; alt: boolean;
   mixOpen: boolean; mixMin: boolean; mixH: number; mixSel: Id; fxSel: Id | null; fxDrag: Id | null;
-  plugs: PlugWin[]; editor: EditorWin | null; menu: Menu | null; help: boolean; settings: boolean;
+  plugs: PlugWin[];
+  /** effect windows tucked behind the playlist (FL-style: clicking the playlist brings it to the front) */
+  plugsHidden: boolean;
+  editor: EditorWin | null; menu: Menu | null; help: boolean; settings: boolean;
   vstPicker: { insId: Id } | null;
   readout: string;
   headW: number; pickW: number; pickOpen: boolean; browserTab: 'project' | 'library';
@@ -50,7 +53,7 @@ export const [U, setU] = createStore<UiState>({
   tool: 'draw', snap: -1, bw: 22, sel: [], cur: { kind: 'pat', ref: 1 },
   start: 0, follow: true, alt: false,
   mixOpen: true, mixMin: false, mixH: 300, mixSel: 6, fxSel: 903, fxDrag: null,
-  plugs: [], editor: null, menu: null, help: false, settings: false, vstPicker: null,
+  plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, vstPicker: null,
   readout: 'Gotowe',
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
   ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, autoEdit: null, zTop: 1, marquee: null,

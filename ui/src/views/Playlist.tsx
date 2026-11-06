@@ -495,7 +495,7 @@ export function Playlist() {
   const mq = () => { const m = U.marquee; return m && { x: Math.min(m.x0, m.x1), y: Math.min(m.y0, m.y1), w: Math.abs(m.x1 - m.x0), h: Math.abs(m.y1 - m.y0) }; };
 
   return (
-    <div class="plwrap">
+    <div class="plwrap" onPointerDown={() => A.playlistFront()}>
       <div ref={scrollEl} class="plscroll">
         <div style={{ width: U.headW + gridW() + 'px', position: 'relative' }}>
           <div class="rulerRow">

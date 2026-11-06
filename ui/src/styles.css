@@ -309,6 +309,7 @@ select option { background: var(--bg4); color: var(--fg); }
 /* ---------- effect windows ---------- */
 .winlayer { position: fixed; inset: 0; z-index: 45; pointer-events: none; }
 .winlayer > .win { pointer-events: auto; }
+.winlayer.hidden { display: none; }
 .fxwin .winhd .pwr { width: 12px; height: 12px; flex: none; padding: 0; border: 0; border-radius: 50%; background: var(--green); cursor: pointer; box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 18%, transparent); }
 .fxwin .winhd .pwr.off { background: var(--line2); box-shadow: none; }
 .bypasstag { font: 600 9px var(--mono); color: var(--amber); letter-spacing: .08em; }
