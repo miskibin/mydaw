@@ -3,6 +3,8 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    # this session cannot push tags; a push to v2 publishes v<app version> (tauri-action creates the tag)
+    branches: [v2]
   workflow_dispatch:
 
 permissions:
@@ -43,8 +45,8 @@ jobs:
         with:
           projectPath: app
           args: ${{ matrix.features != '' && format('--features {0}', matrix.features) || '' }}
-          tagName: ${{ github.ref_name }}
-          releaseName: "WAVE ${{ github.ref_name }}"
+          tagName: v__VERSION__
+          releaseName: "WAVE v__VERSION__"
           releaseBody: |
             WAVE v2 — rewritten as a lean Tauri app.
             * Windows installer is built **with ASIO** (Settings → Audio → ASIO).
