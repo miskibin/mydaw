@@ -91,7 +91,15 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("transpose", "Transpose", -12.0, 12.0, 0.0, "st", false),
         p("formant", "Formant", -12.0, 12.0, 0.0, "st", false),
     ];
+    const DENOISE: &[ParamDef] = &[
+        p("reduction", "Reduction", 0.0, 40.0, 12.0, "dB", false),
+        p("sens", "Sensitivity", 0.0, 100.0, 50.0, "%", false),
+        p("smooth", "Smoothing", 0.0, 100.0, 50.0, "%", false),
+        choice("learn", "Profile", 0.0, &["Adaptive", "Hold"]),
+        choice("listen", "Listen", 0.0, &["Off", "Noise"]),
+    ];
     match kind {
+        FxKind::Denoise => DENOISE,
         FxKind::Fet => FET,
         FxKind::Deess => DEESS,
         FxKind::Tune => TUNE,
@@ -116,11 +124,12 @@ pub fn type_name(kind: FxKind) -> &'static str {
         FxKind::Fet => "FET Compressor",
         FxKind::Deess => "De-esser",
         FxKind::Tune => "Pitch Correct",
+        FxKind::Denoise => "Denoiser",
         FxKind::Vst3 => "VST3",
     }
 }
 
-pub const BUILTIN: [FxKind; 9] = [FxKind::Tune, FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 10] = [FxKind::Denoise, FxKind::Tune, FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
@@ -263,6 +272,12 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Wokal męski", &[("thr", -32.0), ("range", 8.0), ("freq", 5000.0), ("mode", 0.0), ("look", 6.0), ("listen", 0.0)]),
             pr("Szerokopasmowy", &[("thr", -30.0), ("range", 6.0), ("freq", 6000.0), ("mode", 1.0), ("look", 5.0), ("listen", 0.0)]),
         ],
+        FxKind::Denoise => vec![
+            pr("Wokal — delikatnie", &[("reduction", 8.0), ("sens", 35.0), ("smooth", 50.0)]),
+            pr("Wokal — szum pokoju", &[("reduction", 14.0), ("sens", 50.0), ("smooth", 60.0)]),
+            pr("Telefon / dyktafon", &[("reduction", 20.0), ("sens", 65.0), ("smooth", 70.0)]),
+            pr("Mocno", &[("reduction", 30.0), ("sens", 80.0), ("smooth", 80.0)]),
+        ],
         FxKind::Tune => vec![
             pr("Naturalny", &[("retune", 40.0), ("humanize", 30.0), ("flex", 40.0), ("vibrato", 60.0)]),
             pr("Delikatna korekta", &[("retune", 80.0), ("humanize", 50.0), ("flex", 70.0), ("vibrato", 80.0)]),
@@ -280,6 +295,7 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
     }
     match fx.kind {
         FxKind::Tune => crate::vocal::tune_latency(sample_rate),
+        FxKind::Denoise => crate::denoise::latency(sample_rate),
         // look-ahead delays the audio so the gain is already down when the "s" arrives
         FxKind::Deess => ((fx.params.get("look").copied().unwrap_or(5.0).clamp(0.0, 15.0) / 1000.0) * sample_rate as f64) as usize,
         _ => 0,

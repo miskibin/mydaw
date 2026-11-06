@@ -11,6 +11,7 @@ pub use model::*;
 pub use ops::{Dirty, Op, OpError};
 pub use processor::{BandParams, ParamBlock, ProcessCtx, Processor};
 pub mod analysis;
+pub mod denoise;
 pub mod dsp;
 pub mod engine;
 pub mod rt;

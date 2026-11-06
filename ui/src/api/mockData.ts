@@ -20,13 +20,15 @@ const PARAMS: Record<BuiltinKind, ParamDef[]> = {
     p('attack', 'Attack', 20, 800, 300, 'µs', true), p('release', 'Release', 50, 1100, 300, 'ms', true), p('mix', 'Mix', 0, 100, 100, '%')],
   deess: [p('thr', 'Threshold', -60, 0, -32, 'dB'), p('range', 'Range', 0, 24, 8, 'dB'), p('freq', 'Freq', 2000, 16000, 6000, 'Hz', true),
     choice('mode', 'Mode', 0, ['Split', 'Wide']), p('look', 'Lookahead', 0, 15, 5, 'ms'), choice('listen', 'Listen', 0, ['Off', 'S'])],
+  denoise: [p('reduction', 'Reduction', 0, 40, 12, 'dB'), p('sens', 'Sensitivity', 0, 100, 50, '%'), p('smooth', 'Smoothing', 0, 100, 50, '%'),
+    choice('learn', 'Profile', 0, ['Adaptive', 'Hold']), choice('listen', 'Listen', 0, ['Off', 'Noise'])],
   tune: [choice('key', 'Key', 0, ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']),
     choice('scale', 'Scale', 0, ['Chromatic', 'Major', 'Minor', 'Maj pent', 'Min pent']),
     p('retune', 'Retune', 0, 400, 20, 'ms'), p('humanize', 'Humanize', 0, 100, 0, '%'), p('flex', 'Flex', 0, 100, 0, '%'),
     p('vibrato', 'Vibrato', 0, 100, 0, '%'), p('transpose', 'Transpose', -12, 12, 0, 'st'), p('formant', 'Formant', -12, 12, 0, 'st')],
 };
 const NAMES: Record<BuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter',
-  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct' };
+  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser' };
 
 type BandEdit = [number, boolean | null, number | null, number | null, number | null];
 function eqp(name: string, out: number, edits: BandEdit[]): Preset {
@@ -99,6 +101,12 @@ const PRESETS: Record<BuiltinKind, Preset[]> = {
     pr('Wokal męski', { thr: -32, range: 8, freq: 5000, mode: 0, look: 6, listen: 0 }),
     pr('Szerokopasmowy', { thr: -30, range: 6, freq: 6000, mode: 1, look: 5, listen: 0 }),
   ],
+  denoise: [
+    pr('Wokal — delikatnie', { reduction: 8, sens: 35, smooth: 50 }),
+    pr('Wokal — szum pokoju', { reduction: 14, sens: 50, smooth: 60 }),
+    pr('Telefon / dyktafon', { reduction: 20, sens: 65, smooth: 70 }),
+    pr('Mocno', { reduction: 30, sens: 80, smooth: 80 }),
+  ],
   tune: [
     pr('Naturalny', { retune: 40, humanize: 30, flex: 40, vibrato: 60 }),
     pr('Delikatna korekta', { retune: 80, humanize: 50, flex: 70, vibrato: 80 }),
@@ -108,7 +116,7 @@ const PRESETS: Record<BuiltinKind, Preset[]> = {
 };
 
 /** catalog.rs `BUILTIN` (also the order of the "add effect" menu). */
-export const BUILTIN: BuiltinKind[] = ['tune', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'];
+export const BUILTIN: BuiltinKind[] = ['denoise', 'tune', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'];
 
 export function mockCatalog(): Catalog {
   return {

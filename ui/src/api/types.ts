@@ -16,7 +16,7 @@ export interface Track {
   vol: number; h: number; insert: Id;
 }
 
-export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'vst3';
+export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'vst3';
 export type BuiltinKind = Exclude<FxKind, 'vst3'>;
 export type BandType = 'lowcut' | 'lowshelf' | 'peak' | 'highshelf' | 'highcut' | 'notch' | 'bandpass' | 'tilt';
 /** Which part of the stereo image a band works on. */

@@ -37,6 +37,7 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
         FxKind::Fet => Box::new(crate::vocal::Fet::default()),
         FxKind::Deess => Box::new(crate::vocal::DeEss::default()),
         FxKind::Tune => Box::new(crate::vocal::Tune::default()),
+        FxKind::Denoise => Box::new(crate::denoise::Denoise::default()),
         FxKind::Vst3 => return None,
     })
 }
