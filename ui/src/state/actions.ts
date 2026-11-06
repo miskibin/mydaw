@@ -246,7 +246,7 @@ export function stepPreset(fxId: Id, d: number) {
 }
 
 // ---------- windows ----------
-const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680 };
+const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640 };
 /** Open (or bring to front) an effect window. The newest/most recently focused window is always on top. */
 export function openPlug(fxId: Id) {
   const ex = U.plugs.find(p => p.fxId === fxId);

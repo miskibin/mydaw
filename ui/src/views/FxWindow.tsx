@@ -17,6 +17,7 @@ import { Knob, MiniKnob, Segmented } from '../ui/Knob';
 import { theme } from '../ui/theme';
 import type { Viz } from './fx/common';
 import { deessDb, DeessViz, deessFx, deessGeom, deessXf, deessY } from './fx/deess';
+import { DenoiseViz } from './fx/denoise';
 import { DynViz } from './fx/dyn';
 import { EqViz } from './fx/eq';
 import { EqPanel, eqHover, eqLeave, eqPointerDown, eqWheel } from './fx/eqEdit';
@@ -37,18 +38,20 @@ function makeViz(f: Fx): Viz | null {
     case 'tune': return new TuneViz();
     case 'fet': return new FetViz(f.id);
     case 'deess': return new DeessViz();
+    case 'denoise': return new DenoiseViz();
     default: return null;
   }
 }
-const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230 };
+const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240 };
 /** Default window widths per type (actions.openPlug). */
-export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680 };
+export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640 };
 
 const HINTS: Partial<Record<Fx['type'], string>> = {
   eq: 'kółko = Q · PPM na punkcie = kształt / kanał / dynamika · PPM na tle = nowy band danego typu',
   reverb: 'Przeciągnij = obrót 3D · 2× klik = reset',
   deess: 'Przeciągnij linię THR = próg · uchwyt częstotliwości = pasmo detekcji',
   fet: 'Klik na wskaźnik = GR / OUT',
+  denoise: 'Profil szumu uczy się sam w przerwach · Hold = zamroź · Listen = posłuchaj, co jest usuwane',
   tune: 'Retune: 0 ms = efekt robota, dłużej = naturalnie',
 };
 
@@ -227,6 +230,7 @@ function TuneControls(props: { fx: Fx }) {
       <div class="ctlrow">
         <Show when={defOf(props.fx, 'key')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={NOTE_NAMES} small />}</Show>
         <Show when={defOf(props.fx, 'scale')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} small />}</Show>
+        <Show when={defOf(props.fx, 'voice')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={['Auto', 'Bas', 'Męski', 'Żeński', 'Sopran']} small />}</Show>
       </div>
       <div class="knobs">
         <Ctl fx={props.fx} id="retune" ends={['robot', 'natural']} />

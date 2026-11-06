@@ -323,6 +323,20 @@ export class MockBackend implements Backend {
       meters[0] = gr; meters[1] = Math.max(-120, inDb); meters[2] = Math.max(-120, outDb);
       out = dbg(outDb);
       for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (pr.input ?? 8) + gr + (pr.output ?? 0);
+    } else if (fx.type === 'denoise') {
+      // noise floor ~ −62 dB tilted toward the lows, per-band reduction where the input is near it
+      const red = pr.reduction ?? 12;
+      let tot = 0;
+      for (let b = 0; b < 16; b++) {
+        const f = 50 * Math.pow(320, (b + 0.5) / 16), nz = -58 - 10 * Math.log10(f / 50);
+        let near = 0, c = 0;
+        for (let k = 0; k < SPEC_BANDS; k++) if (BAND_F[k] >= 50 * Math.pow(320, b / 16) && BAND_F[k] < 50 * Math.pow(320, (b + 1) / 16)) { near += specIn[k]; c++; }
+        const lv = c ? near / c : -120, snr = lv - nz;
+        const gdb = -Math.min(red, Math.max(0, 10 - snr) * red / 10);
+        meters[b] = nz; meters[16 + b] = gdb; tot += gdb;
+      }
+      for (let k = 0; k < SPEC_BANDS; k++) { const b = Math.max(0, Math.min(15, Math.floor(Math.log(BAND_F[k] / 50) / Math.log(320) * 16))); specOut[k] = specIn[k] + meters[16 + b]; }
+      gr = tot / 16; out = level * dbg(gr * 0.3);
     } else if (fx.type === 'deess') {
       const sib = voc?.sib ?? 0, lv = voc?.level ?? 0;
       const hiDb = lv > 1e-4 ? 20 * Math.log10(lv) + (sib > 0 ? 3 + 4 * sib : -26 + (Math.random() - 0.5) * 3) : -120;

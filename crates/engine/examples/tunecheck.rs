@@ -8,7 +8,8 @@ fn main() {
     let sr = a.sr as f32;
     let x: Vec<f32> = a.content().chunks(2).map(|f| f[0]).collect();
     let mut fx = new_fx(1, FxKind::Tune, 120.0);
-    for (k, v) in [("retune", 0.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0)] {
+    let arg = |i: usize, d: f64| std::env::args().nth(i).and_then(|s| s.parse().ok()).unwrap_or(d);
+    for (k, v) in [("retune", 0.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0), ("key", arg(2, 0.0)), ("scale", arg(3, 0.0)), ("voice", arg(4, 0.0))] {
         fx.params.insert(k.into(), v);
     }
     let mut t = wave_engine::vocal::Tune::default();
@@ -24,6 +25,16 @@ fn main() {
         meters.push(m);
         y.extend(l);
     }
+    // summary: how often the corrector had a confident pitch, and how far its input was off
+    let (mut conf, mut tot, mut errsum) = (0usize, 0usize, 0f32);
+    for m in &meters {
+        tot += 1;
+        if m[0] > 0.0 {
+            conf += 1;
+            errsum += m[4].abs();
+        }
+    }
+    eprintln!("blocks with confident pitch: {:.0} %, mean |input − target| {:.0} cents", conf as f32 / tot as f32 * 100.0, errsum / conf.max(1) as f32);
     let (mut di, mut dout) = (Detector::new(sr), Detector::new(sr));
     let lat = wave_engine::vocal::tune_latency(sr);
     for (i, &s) in x.iter().enumerate() {

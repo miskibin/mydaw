@@ -319,6 +319,10 @@ pub struct Tune {
     sr: f32,
     det: Option<Detector>,
     psola_l: Option<Psola>,
+    /// delays the audio into PSOLA so the grain being shifted is the moment the
+    /// detector's estimate describes (the centre of its analysis window)
+    align: Vec<f32>,
+    align_w: usize,
     key: u32,
     mask: u16,
     retune_ms: f32,
@@ -334,19 +338,28 @@ pub struct Tune {
     last_note: f32,
     /// the current note was close enough to engage correction (flex hysteresis)
     engaged: bool,
+    /// last accepted pitch (MIDI) and how long a big jump away from it has lasted (s)
+    last_m: f32,
+    jump_t: f32,
     m: [f32; 8],
     params: Option<ParamBlock>,
 }
 
 impl Default for Tune {
     fn default() -> Self {
-        Self { sr: 48000.0, det: None, psola_l: None, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, m: [0.0; 8], params: None }
+        Self { sr: 48000.0, det: None, psola_l: None, align: vec![], align_w: 0, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, last_m: 0.0, jump_t: 0.0, m: [0.0; 8], params: None }
     }
 }
 
 /// Samples of delay the corrector adds at `sr` (reported for latency compensation).
 pub fn tune_latency(sr: f32) -> usize {
-    Psola::new(sr).latency()
+    Psola::new(sr).latency() + align_delay(sr)
+}
+
+/// Detector window centre minus PSOLA's own look-back: the pitch estimate refers to
+/// audio that much older than the grain PSOLA is shifting at the same moment.
+fn align_delay(sr: f32) -> usize {
+    Detector::new(sr).latency().saturating_sub(Psola::new(sr).half_grain())
 }
 
 impl Processor for Tune {
@@ -354,6 +367,8 @@ impl Processor for Tune {
         self.sr = sr;
         self.det = Some(Detector::new(sr));
         self.psola_l = Some(Psola::new(sr));
+        self.align = vec![0.0; align_delay(sr)];
+        self.align_w = 0;
         if let Some(p) = self.params {
             self.set_params(&p);
         }
@@ -369,6 +384,17 @@ impl Processor for Tune {
         self.vibrato = v[5] / 100.0;
         self.transpose = v[6];
         self.formant = v[7];
+        // input type → pitch search range
+        let (lo, hi) = match v[8].round() as i32 {
+            1 => (50.0, 260.0),
+            2 => (70.0, 400.0),
+            3 => (130.0, 800.0),
+            4 => (180.0, 1100.0),
+            _ => (crate::pitch::MIN_HZ, crate::pitch::MAX_HZ),
+        };
+        if let Some(d) = self.det.as_mut() {
+            d.set_range(lo, hi);
+        }
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
         let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola_l.as_mut()) else { return };
@@ -378,8 +404,22 @@ impl Processor for Tune {
             if det.push(x) {
                 // a new estimate every ~4 ms: update the correction target
                 let hop_s = 0.004f32;
-                if det.hz > 0.0 && det.confidence > 0.55 {
+                // a single estimate far from the line being sung is usually the detector
+                // locking onto a loud harmonic for a frame or two: hold course until the
+                // jump has lasted 40 ms (then it is a real leap)
+                let mut glitch = false;
+                if det.hz > 0.0 && det.confidence > 0.55 && self.last_m > 0.0 && (hz_to_midi(det.hz) - self.last_m).abs() > 5.0 {
+                    self.jump_t += 0.004;
+                    glitch = self.jump_t < 0.04;
+                } else {
+                    self.jump_t = 0.0;
+                }
+                if glitch {
+                    // keep period and correction as they are
+                } else if det.hz > 0.0 && det.confidence > 0.55 {
                     let m = hz_to_midi(det.hz);
+                    self.last_m = m;
+                    det.hint = det.hz;
                     self.period = sr / det.hz;
                     // vibrato-preserving centre: a slow average of the pitch
                     if self.center == 0.0 || (m - self.center).abs() > 0.8 {
@@ -414,12 +454,23 @@ impl Processor for Tune {
                     self.period = 0.0;
                     self.corr *= 0.9;
                     self.center = 0.0;
+                    self.last_m = 0.0;
+                    det.hint = 0.0;
                     self.m = [0.0, 0.0, 0.0, det.confidence, 0.0, 0.0, 0.0, 0.0];
                 }
             }
             let ratio = 2f32.powf((self.corr + self.transpose) / 12.0);
             let formant = 2f32.powf(self.formant / 12.0); // PSOLA keeps formants; this moves them on purpose
-            let y = ps.process(x, self.period, ratio, formant);
+            let n = self.align.len();
+            let xd = if n > 0 {
+                let d = self.align[self.align_w];
+                self.align[self.align_w] = x;
+                self.align_w = (self.align_w + 1) % n;
+                d
+            } else {
+                x
+            };
+            let y = ps.process(xd, self.period, ratio, formant);
             l[i] = y;
             r[i] = y;
         }
@@ -428,6 +479,7 @@ impl Processor for Tune {
         if let Some(p) = self.psola_l.as_mut() {
             p.reset();
         }
+        self.align.fill(0.0);
         self.corr = 0.0;
     }
     fn meters(&self, out: &mut [f32; METERS]) {
@@ -479,6 +531,32 @@ mod tests {
         let mut m = [0f32; METERS];
         p.meters(&mut m);
         assert!((m[1] - 220.0).abs() < 1.0, "target {}", m[1]);
+    }
+
+    #[test]
+    fn tune_corrects_a_phone_like_low_male_voice() {
+        // ~123 Hz, almost no fundamental, loud 3rd–5th harmonics (formant), sung 40 cents sharp
+        let sr = 44100.0;
+        for (f0, target) in [(123.47f32 * 2f32.powf(0.4 / 12.0), 123.47f32), (146.83 * 2f32.powf(-0.35 / 12.0), 146.83)] {
+            let mut fx = new_fx(1, FxKind::Tune, 120.0);
+            for (k, v) in [("retune", 0.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0), ("voice", 2.0)] {
+                fx.params.insert(k.into(), v);
+            }
+            let mut p = Tune::default();
+            p.prepare(sr, 256);
+            p.set_params(&param_block(&fx));
+            let amps = [0.03f32, 0.15, 0.9, 1.0, 0.7, 0.3, 0.2, 0.1, 0.08, 0.05];
+            let x: Vec<f32> = (0..44100)
+                .map(|i| amps.iter().enumerate().map(|(k, a)| a * (std::f32::consts::TAU * f0 * (k + 1) as f32 * i as f32 / sr).sin()).sum::<f32>() * 0.08)
+                .collect();
+            let y = run(&mut p, &x);
+            let mut d = Detector::new(sr);
+            for &s in &y[22050..] {
+                d.push(s);
+            }
+            let cents = 1200.0 * (d.hz / target).log2();
+            assert!(cents.abs() < 12.0, "{f0:.1} Hz → {:.1} Hz, still {cents:.1} cents off {target}", d.hz);
+        }
     }
 
     #[test]

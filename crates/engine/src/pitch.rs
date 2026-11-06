@@ -25,6 +25,8 @@ pub struct Detector {
     win: usize,
     tau_min: usize,
     tau_max: usize,
+    /// allocated maximum lag (`tau_max` can be narrowed by `set_range`)
+    tau_cap: usize,
     hop: usize,
     since: usize,
     d: Vec<f32>,
@@ -32,6 +34,9 @@ pub struct Detector {
     pub hz: f32,
     pub confidence: f32,
     pub rms: f32,
+    /// Pitch the caller expects (Hz, 0 = none): in frames without a clear dip the
+    /// dip nearest to it wins over a louder harmonic's.
+    pub hint: f32,
     sr_dec: f32,
 }
 
@@ -56,20 +61,29 @@ impl Detector {
             win,
             tau_min,
             tau_max,
+            tau_cap: tau_max,
             hop: (sr_dec * 0.004) as usize + 1,
             since: 0,
             d: vec![0.0; tau_max + 2],
             frame: vec![0.0; win + tau_max + 4],
             hz: 0.0,
             confidence: 0.0,
+            hint: 0.0,
             rms: 0.0,
             sr_dec,
         }
     }
 
     /// Latency of an estimate, in device samples (half the analysis window).
+    /// Search only between `lo` and `hi` Hz (within MIN_HZ‥MAX_HZ). Latency is unchanged.
+    pub fn set_range(&mut self, lo: f32, hi: f32) {
+        let (lo, hi) = (lo.clamp(MIN_HZ, MAX_HZ), hi.clamp(MIN_HZ, MAX_HZ));
+        self.tau_max = ((self.sr_dec / lo) as usize + 2).min(self.tau_cap);
+        self.tau_min = ((self.sr_dec / hi) as usize).max(2).min(self.tau_max.saturating_sub(4));
+    }
+
     pub fn latency(&self) -> usize {
-        (self.win + self.tau_max) / 2 * self.dec
+        (self.win + self.tau_cap) / 2 * self.dec
     }
 
     #[inline]
@@ -136,6 +150,53 @@ impl Detector {
         }
         if best == 0 {
             best = (tmin..tmax).min_by(|&a, &b| self.d[a].total_cmp(&self.d[b])).unwrap_or(tmin);
+            // no clear dip: a loud harmonic can win here; follow the line being sung instead
+            if self.hint > 0.0 {
+                let th = self.sr_dec / self.hint;
+                let (a, b) = (((th * 0.88) as usize).max(tmin), ((th * 1.14) as usize + 1).min(tmax - 1));
+                if a < b {
+                    let near = (a..=b).min_by(|&x, &y| self.d[x].total_cmp(&self.d[y])).unwrap_or(best);
+                    let is_dip = self.d[near] <= self.d[near - 1] && self.d[near] <= self.d[near + 1];
+                    if is_dip && self.d[near] < 0.45 {
+                        best = near;
+                    }
+                }
+            }
+        }
+        // Harmonic lock: with a weak fundamental and one loud harmonic (phone mics,
+        // low male voices) YIN can stop at T/2 or T/3. Tell them apart by the dip
+        // pattern at multiples of the candidate: the true period has dips at all of
+        // them, T/3 has none at 2·τ (= 2T/3) but one at 3·τ, T/2 none at 3·τ (odd
+        // harmonics present) or a much deeper one at 2·τ (only the 2nd is loud).
+        if best > 0 {
+            let dip = |k: usize| -> Option<f32> {
+                let c = best * k;
+                let span = k + 1;
+                if c + span >= tmax {
+                    return None;
+                }
+                Some((c - span..=c + span).map(|j| self.d[j]).fold(f32::MAX, f32::min))
+            };
+            let (l2, l3, l4) = (dip(2), dip(3), dip(4));
+            let low = |v: Option<f32>| v.is_some_and(|v| v < 0.25);
+            let high = |v: Option<f32>| v.is_some_and(|v| v > 0.4);
+            let k = if high(l2) && low(l3) {
+                3
+            } else if low(l2) && high(l3) && (l4.is_none() || low(l4)) {
+                2
+            } else if best >= 30 && self.d[best] > 0.03 && l2.is_some_and(|v| v < self.d[best] * 0.5) {
+                // loud 2nd harmonic: T/2 and 3T/2 look alike, but the true period is clearly deeper
+                2
+            } else if high(l2) && high(l3) && low(l4) {
+                4
+            } else {
+                1
+            };
+            if k > 1 {
+                let c = best * k;
+                let span = k + 1;
+                best = (c - span..=c + span).min_by(|&a, &b| self.d[a].total_cmp(&self.d[b])).unwrap_or(c);
+            }
         }
         let dv = self.d[best];
         // parabolic refinement
@@ -171,6 +232,11 @@ impl Psola {
 
     pub fn latency(&self) -> usize {
         2 * self.tmax
+    }
+
+    /// How far back (samples) the grain being shifted right now sits in the input.
+    pub fn half_grain(&self) -> usize {
+        self.tmax
     }
 
     pub fn reset(&mut self) {
@@ -426,6 +492,25 @@ mod tests {
             d.push((seed as f32 / u32::MAX as f32 - 0.5) * 0.5);
         }
         assert!(d.hz == 0.0 || d.confidence < 0.6, "noise read as {} Hz", d.hz);
+    }
+
+    #[test]
+    fn weak_fundamental_with_a_loud_harmonic_is_not_read_as_the_harmonic() {
+        // 120 Hz with almost no 1st/2nd harmonic and a huge 3rd (or 2nd) — a phone-mic male voice
+        for (amps, name) in [([0.05f32, 0.1, 1.0, 0.3, 0.25, 0.1], "loud 3rd"), ([0.05, 1.0, 0.2, 0.3, 0.1, 0.1], "loud 2nd")] {
+            let sr = 48000.0;
+            let x: Vec<f32> = (0..24000)
+                .map(|i| amps.iter().enumerate().map(|(k, a)| a * (std::f32::consts::TAU * 120.0 * (k + 1) as f32 * i as f32 / sr).sin()).sum::<f32>() * 0.2)
+                .collect();
+            let mut d = Detector::new(sr);
+            let mut wrong = 0;
+            for (i, &s) in x.iter().enumerate() {
+                if d.push(s) && i > 4800 && (d.hz - 120.0).abs() > 6.0 {
+                    wrong += 1;
+                }
+            }
+            assert_eq!(wrong, 0, "{name}: read as {} Hz", d.hz);
+        }
     }
 
     #[test]

@@ -92,6 +92,7 @@ pub enum FxKind {
     Fet,
     Deess,
     Tune,
+    Denoise,
     Vst3,
 }
 

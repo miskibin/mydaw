@@ -37,6 +37,7 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
         FxKind::Fet => Box::new(crate::vocal::Fet::default()),
         FxKind::Deess => Box::new(crate::vocal::DeEss::default()),
         FxKind::Tune => Box::new(crate::vocal::Tune::default()),
+        FxKind::Denoise => Box::new(crate::denoise::Denoise::default()),
         FxKind::Vst3 => return None,
     })
 }
@@ -66,6 +67,7 @@ pub enum FilterType {
     Lowpass,
     Highpass,
     Bandpass,
+    Notch,
     Peak,
     LowShelf,
     HighShelf,
@@ -83,6 +85,7 @@ impl Biquad {
             FilterType::Lowpass => ((1.0 - cw) / 2.0, 1.0 - cw, (1.0 - cw) / 2.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
             FilterType::Highpass => ((1.0 + cw) / 2.0, -(1.0 + cw), (1.0 + cw) / 2.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
             FilterType::Bandpass => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
+            FilterType::Notch => (1.0, -2.0 * cw, 1.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
             FilterType::Peak => (1.0 + alpha * a, -2.0 * cw, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cw, 1.0 - alpha / a),
             FilterType::LowShelf => {
                 let s = 2.0 * a.sqrt() * alpha;
@@ -221,7 +224,7 @@ impl Eq {
             1 => (FilterType::LowShelf, b.q, g, 1),
             3 => (FilterType::HighShelf, b.q, g, 1),
             4 => (FilterType::Lowpass, b.q, 0.0, b.stages as usize),
-            5 => (FilterType::Peak, b.q.max(2.0), -60.0, 1),
+            5 => (FilterType::Notch, b.q, 0.0, 1),
             6 => (FilterType::Bandpass, b.q, 0.0, 1),
             7 => (FilterType::HighShelf, 0.5, g, 1),
             _ => (FilterType::Peak, b.q, g, 1),
@@ -778,6 +781,25 @@ impl Processor for Limiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mag_db(q: &Biquad, f: f32, sr: f32) -> f32 {
+        let w = 2.0 * PI * f / sr;
+        let (c1, s1, c2, s2) = (w.cos(), -w.sin(), (2.0 * w).cos(), -(2.0 * w).sin());
+        let (nr, ni) = (q.b0 + q.b1 * c1 + q.b2 * c2, q.b1 * s1 + q.b2 * s2);
+        let (dr, di) = (1.0 + q.a1 * c1 + q.a2 * c2, q.a1 * s1 + q.a2 * s2);
+        10.0 * ((nr * nr + ni * ni) / (dr * dr + di * di)).log10()
+    }
+
+    #[test]
+    fn notch_is_narrow() {
+        let mut q = Biquad::default();
+        q.set(FilterType::Notch, 48000.0, 50.0, 6.0, 0.0);
+        assert!(mag_db(&q, 50.0, 48000.0) < -40.0);
+        // a 50 Hz hum notch must leave a voice's body alone
+        for f in [100.0, 160.0, 1000.0] {
+            assert!(mag_db(&q, f, 48000.0) > -0.3, "{f} Hz cut by {:.1} dB", mag_db(&q, f, 48000.0));
+        }
+    }
     use crate::catalog::{new_fx, param_block};
 
     fn run(kind: FxKind, input: impl Fn(usize) -> f32, n: usize) -> (Vec<f32>, Box<dyn Processor>) {

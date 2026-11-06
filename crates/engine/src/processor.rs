@@ -54,7 +54,7 @@ pub trait Processor: Send {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ParamBlock {
     /// Built-in effect parameters, in the order of the type's parameter list (see `fx::params`).
-    pub values: [f32; 8],
+    pub values: [f32; 12],
     /// EQ bands (unused slots have `on = false`).
     pub bands: [BandParams; 24],
 }
