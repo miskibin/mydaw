@@ -3,7 +3,9 @@ import { VOL_UNITY, type Fx, type Id, type Insert } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
 import { presetInfo } from '../lib/presets';
 import * as A from '../state/actions';
-import { Gesture, wheelEdit } from '../state/edit';
+import { commit, Gesture, wheelEdit } from '../state/edit';
+import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
+import { MiniKnob } from '../ui/Knob';
 import { insName, S } from '../state/store';
 import { tele } from '../state/telemetry';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
@@ -60,19 +62,23 @@ function Strip(props: { m: Insert; idx: number }) {
   const anySolo = () => S.project.inserts.some(x => x.id !== 0 && x.solo);
   const audible = () => !m().muted && (m().id === 0 || !anySolo() || m().solo);
   const route = () => { if (m().id === 0) return 'OUT'; const here = S.project.tracks.filter(t => t.insert === m().id).map(t => t.name); return here.length ? here.join(', ') : '—'; };
-  const pan = () => { const t = (m().pan + 1) / 2; return { dash: Math.abs(t - 0.5) * L30 + 'px ' + C30 + 'px', off: -Math.min(t, 0.5) * L30 + 'px', angle: -135 + t * 270 }; };
+  const panT = () => ({ kind: 'insertPan' as const, id: m().id }), volT = () => ({ kind: 'insertVol' as const, id: m().id });
+  const shownPan = () => autoDisplay(panT()) ?? m().pan, shownVol = () => autoDisplay(volT()) ?? m().vol;
+  const pan = () => { const t = (shownPan() + 1) / 2; return { dash: Math.abs(t - 0.5) * L30 + 'px ' + C30 + 'px', off: -Math.min(t, 0.5) * L30 + 'px', angle: -135 + t * 270 }; };
   const put = (patch: Partial<Insert>) => A.insertOp(m().id, patch)!;
   const select = (e: PointerEvent) => {
     if (e.button === 2) { e.preventDefault(); return openStripMenu(e.clientX, e.clientY, m().id); }
     A.selectInsert(m().id);
   };
   const panDown = (e: PointerEvent) => {
+    if (e.button === 2) { e.preventDefault(); e.stopPropagation(); return paramMenu(e.clientX, e.clientY, panT(), () => A.setInsert(m().id, { pan: 0 }, 'Panorama'), m().color); }
     if (e.button !== 0) return; e.preventDefault(); e.stopPropagation(); A.selectInsert(m().id);
     if (dblCheck('pan' + m().id)) return A.setInsert(m().id, { pan: 0 }, 'Panorama');
     const g = new Gesture('Panorama'); let v = m().pan, ly = e.clientY;
     track(ev => { v = clamp(v + (ly - ev.clientY) / 70 * (ev.shiftKey ? 0.2 : 1), -1, 1); ly = ev.clientY; g.update([put({ pan: v })]); say('Pan ' + panText(v)); }, () => g.end(), 'ns-resize');
   };
   const faderDown = (e: PointerEvent) => {
+    if (e.button === 2) { e.preventDefault(); e.stopPropagation(); return paramMenu(e.clientX, e.clientY, volT(), () => A.setInsert(m().id, { vol: VOL_UNITY }, 'Głośność'), m().color); }
     if (e.button !== 0) return; e.preventDefault(); e.stopPropagation(); A.selectInsert(m().id);
     if (dblCheck('vol' + m().id)) return A.setInsert(m().id, { vol: VOL_UNITY }, 'Głośność');
     const h = Math.max(40, (e.currentTarget as HTMLElement).getBoundingClientRect().height - 14);
@@ -94,35 +100,35 @@ function Strip(props: { m: Insert; idx: number }) {
         <span class="lbl">{m().id === 0 ? 'MASTER' : 'INS ' + props.idx}</span>
         <span class="fxn">{m().fx.length ? m().fx.length + ' FX' : ''}</span>
       </div>
-      <span class="nm" style={{ color: audible() ? '#f2f4f7' : '#7d8592' }} title="2× klik = zmień nazwę · PPM = menu"
+      <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę · PPM = menu"
         onDblClick={e => openRename(e.clientX, e.clientY, m().name, v => A.setInsert(m().id, { name: v }, 'Nazwa insertu'))}>{m().name}</span>
       <div style={{ display: 'flex', 'flex-direction': 'column', 'align-items': 'center', gap: '2px' }}>
-        <div onPointerDown={panDown} onWheel={wheel('pan')} title="Panorama — przeciągnij, 2× klik = środek" style={{ position: 'relative', width: '30px', height: '30px', cursor: 'ns-resize', 'touch-action': 'none' }}>
+        <div class="pandial" classList={{ auto: isAutomated(panT()) }} onPointerDown={panDown} onWheel={wheel('pan')} onContextMenu={e => e.preventDefault()} title="Panorama — przeciągnij, 2× klik = środek, PPM = automatyzacja">
           <svg width="30" height="30" viewBox="0 0 30 30" style={{ position: 'absolute', inset: 0 }}>
-            <circle cx="15" cy="15" r="11" fill="none" transform="rotate(135 15 15)" style={{ stroke: '#2c333d', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': '51.84px 69.12px' }} />
-            <circle cx="15" cy="15" r="11" fill="none" transform="rotate(135 15 15)" style={{ stroke: '#4f8ef7', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': pan().dash, 'stroke-dashoffset': pan().off }} />
+            <circle cx="15" cy="15" r="11" fill="none" transform="rotate(135 15 15)" style={{ stroke: 'var(--knob-track)', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': '51.84px 69.12px' }} />
+            <circle cx="15" cy="15" r="11" fill="none" transform="rotate(135 15 15)" style={{ stroke: 'var(--blue)', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': pan().dash, 'stroke-dashoffset': pan().off }} />
           </svg>
-          <div style={{ position: 'absolute', left: '8px', top: '8px', width: '14px', height: '14px', 'border-radius': '50%', background: '#2c333d' }} />
-          <div style={{ position: 'absolute', left: '14px', top: '7px', width: '2px', height: '6px', 'border-radius': '1px', background: '#f2f4f7', 'transform-origin': '1px 8px', transform: `rotate(${pan().angle}deg)` }} />
+          <div class="pcap" />
+          <div class="pptr" style={{ transform: `rotate(${pan().angle}deg)` }} />
         </div>
-        <span class="pantxt">{panText(m().pan)}</span>
+        <span class="pantxt">{panText(shownPan())}</span>
       </div>
       <div class="row" style={{ gap: '2px', 'justify-content': 'center' }}>
-        <button class="mini m mute" classList={{ on: m().muted }} title="Mute" onPointerDown={stop} onClick={() => A.setInsert(m().id, { muted: !m().muted }, 'Mute')}>M</button>
+        <button class="mini m mute" classList={{ on: m().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleInsertMute(m().id)}>M</button>
         <Show when={m().id !== 0}>
-          <button class="mini s mute" classList={{ on: m().solo }} title="Solo" onPointerDown={stop} onClick={() => A.setInsert(m().id, { solo: !m().solo }, 'Solo')}>S</button>
+          <button class="mini s mute" classList={{ on: m().solo }} title="Solo (wyłącza mute)" onPointerDown={stop} onClick={() => A.toggleInsertSolo(m().id)}>S</button>
         </Show>
       </div>
       <div style={{ flex: 1, 'min-height': '50px', display: 'flex', 'justify-content': 'center', gap: '3px' }}>
         <div class="meter"><div ref={fl} /></div>
         <div class="meter"><div ref={fr} /></div>
-        <div class="fader" onPointerDown={faderDown} onWheel={wheel('vol')} title="Głośność — przeciągnij, 2× klik = 0 dB">
+        <div class="fader" classList={{ auto: isAutomated(volT()) }} onPointerDown={faderDown} onWheel={wheel('vol')} onContextMenu={e => e.preventDefault()} title="Głośność — przeciągnij, 2× klik = 0 dB, PPM = automatyzacja">
           <div class="fslot" />
           <div class="unity" style={{ top: 'calc(0.2063 * (100% - 14px) + 7px)' }} />
-          <div class="cap" style={{ top: `calc(${1 - m().vol} * (100% - 14px))` }}><div /></div>
+          <div class="cap" style={{ top: `calc(${1 - shownVol()} * (100% - 14px))` }}><div /></div>
         </div>
       </div>
-      <span class="db">{volText(m().vol)}</span>
+      <span class="db">{volText(shownVol())}</span>
       <span class="route" title={route()}>{route()}</span>
     </div>
   );
@@ -131,8 +137,12 @@ function Strip(props: { m: Insert; idx: number }) {
 function FxSlot(props: { f: Fx; n: number; insId: Id }) {
   const f = () => props.f;
   const info = () => presetInfo(S.catalog, f(), S.project.bpm);
+  const mixT = () => ({ kind: 'mix' as const, fxId: f().id });
+  const mixV = () => autoDisplay(mixT()) ?? f().mix ?? 1;
+  let mg: Gesture | null = null;
+  const mixOp = (v: number) => A.fxOp({ ...JSON.parse(JSON.stringify(f())), mix: Math.round(clamp(v, 0, 1) * 1000) / 1000 }, props.insId);
   const down = (e: PointerEvent) => {
-    if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return;
+    if (e.button !== 0 || (e.target as HTMLElement).closest('button,.miniknob')) return;
     e.preventDefault();
     const sy = e.clientY, rowH = 34, ins0 = S.project.inserts.find(m => m.id === props.insId)!;
     const i0 = ins0.fx.findIndex(x => x.id === f().id), fxId = f().id;
@@ -154,13 +164,22 @@ function FxSlot(props: { f: Fx; n: number; insId: Id }) {
       <span class="n">{props.n}</span>
       <FxTile type={f().type} size={22} dim={f().bypass} />
       <div style={{ flex: 1, 'min-width': 0, display: 'flex', 'flex-direction': 'column', gap: '1px' }}>
-        <span class="ell" style={{ font: '500 12px var(--sans)', color: f().bypass ? '#7d8592' : '#f2f4f7' }}>{A.fxName(f())}</span>
+        <span class="ell" style={{ font: '500 12px var(--sans)', color: f().bypass ? 'var(--fg4)' : 'var(--fg-hi)' }}>{A.fxName(f())}</span>
         <span class="ell mono" style={{ 'font-size': '9px', color: 'var(--fg4)' }}>{f().type === 'vst3' ? (f().plugin?.vendor || 'VST3') : info().name + (info().mod ? ' *' : '')}</span>
       </div>
-      <button class="ledbtn" title="Włącz / bypass" onPointerDown={e => { e.stopPropagation(); A.toggleBypass(f().id); }}>
-        <span class="led" style={{ background: f().bypass ? '#2c333d' : '#4ec08a' }} />
+      <Show when={f().type !== 'vst3'}>
+        <div class="slotmix" title={'Mix ' + Math.round(mixV() * 100) + '%'}>
+          <MiniKnob key={'smix' + f().id} title={'Mix (dry/wet) ' + Math.round(mixV() * 100) + '% · przeciągnij ↕ · 2× klik = 100% · PPM = automatyzacja'} t={mixV} automated={() => isAutomated(mixT())}
+            onStart={() => { mg = new Gesture('Mix'); }} onChange={t => { mg?.update([mixOp(t)]); say(A.fxName(f()) + ' · Mix ' + Math.round(t * 100) + '%'); }}
+            onEnd={() => { mg?.end(); mg = null; }} onReset={() => commit([mixOp(1)], 'Mix')} onWheel={t => wheelEdit('smix' + f().id, 'Mix', [mixOp(t)])}
+            onMenu={(x, y) => paramMenu(x, y, mixT(), () => commit([mixOp(1)], 'Mix'), FXMETA[f().type].color)} />
+          <span class="mono">{Math.round(mixV() * 100)}</span>
+        </div>
+      </Show>
+      <button class="ledbtn" title={f().bypass ? 'Bypass — kliknij, by włączyć' : 'Aktywny — kliknij = bypass'} onPointerDown={e => { e.stopPropagation(); A.toggleBypass(f().id); }}>
+        <span class="led" style={{ background: f().bypass ? 'var(--line2)' : 'var(--green)' }} />
       </button>
-      <button class="ledbtn" title="Usuń efekt" style={{ color: '#7d8592', 'font-size': '13px' }} onPointerDown={e => { e.stopPropagation(); A.removeFx(f().id); }}>×</button>
+      <button class="ledbtn xdel" title="Usuń efekt" onPointerDown={e => { e.stopPropagation(); A.removeFx(f().id); }}>×</button>
     </div>
   );
 }
@@ -204,8 +223,8 @@ export function Mixer() {
                   <For each={ins().fx}>{(f, i) => <FxSlot f={f} n={i() + 1} insId={ins().id} />}</For>
                   <div class="slot" title="Dodaj efekt — otworzy się od razu" onPointerDown={e => { if (e.button === 0) openFxMenu(e.clientX, e.clientY, ins().id); }}>
                     <span class="n">{ins().fx.length + 1}</span>
-                    <span class="tile" style={{ width: '22px', height: '22px', background: 'rgba(79,142,247,.12)', color: '#4f8ef7' }}><Icon d={ICONS.plus} /></span>
-                    <span style={{ flex: 1, font: '500 12px var(--sans)', color: '#4f8ef7' }}>Dodaj efekt</span>
+                    <span class="tile addtile"><Icon d={ICONS.plus} /></span>
+                    <span style={{ flex: 1, font: '500 12px var(--sans)', color: 'var(--blue)' }}>Dodaj efekt</span>
                   </div>
                 </div>
               </div>

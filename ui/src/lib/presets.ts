@@ -32,6 +32,9 @@ export function paramsMatch(fx: Pick<Fx, 'params' | 'bands'>, r: ResolvedPreset)
     for (let i = 0; i < r.bands.length; i++) {
       const x = r.bands[i], y = fx.bands[i];
       if (y.on !== x.on || y.type !== x.type || !near(y.f, x.f) || !near(y.g, x.g) || !near(y.q, x.q)) return false;
+      if ((y.slope ?? 12) !== (x.slope ?? 12) || (y.place ?? 'stereo') !== (x.place ?? 'stereo')) return false;
+      const dx = x.dynamic ?? null, dy = y.dynamic ?? null;
+      if (!!dx !== !!dy || (dx && dy && (!near(dy.range, dx.range) || !near(dy.thr, dx.thr)))) return false;
     }
   }
   return true;
@@ -61,7 +64,7 @@ export function loadPreset(cat: Catalog, fx: Fx, i: number, bpm: number): Fx {
 
 /** Fallback EQ bands if the catalog carries none (mirrors catalog.rs default_bands). */
 export function defaultBands(): EqBand[] {
-  const b = (on: boolean, type: EqBand['type'], f: number, q: number): EqBand => ({ on, type, f, g: 0, q });
+  const b = (on: boolean, type: EqBand['type'], f: number, q: number): EqBand => ({ on, type, f, g: 0, q, slope: 12, place: 'stereo' });
   return [b(false, 'lowcut', 30, 0.71), b(true, 'lowshelf', 90, 0.71), b(true, 'peak', 250, 1), b(true, 'peak', 1000, 1),
     b(true, 'peak', 3500, 1), b(true, 'highshelf', 9000, 0.71), b(false, 'highcut', 18000, 0.71)];
 }
@@ -84,6 +87,9 @@ export function pFmt(p: ParamDef, v: number): string {
   if (u === 's') return v.toFixed(2) + ' s';
   if (u === '%') return Math.round(v) + '%';
   if (u === ':1') return v.toFixed(1) + ':1';
+  if (u === 'µs') return Math.round(v) + ' µs';
+  if (u === 'st') return (v > 0.05 ? '+' : '') + (Math.abs(v) < 0.05 ? '0' : v.toFixed(1)) + ' st';
+  if (p.options) return p.options[Math.round(Math.min(p.max, Math.max(p.min, v)))] ?? String(v);
   if (u === 'dB') return (v > 0.05 ? '+' : '') + (Math.abs(v) < 0.05 ? '0.0' : v.toFixed(1)) + ' dB';
   return v.toFixed(2) + (u ? ' ' + u : '');
 }

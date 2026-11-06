@@ -1,5 +1,6 @@
 // The one requestAnimationFrame loop. Everything that animates (playhead, clock, meters,
 // effect visualisations) registers a task here and writes straight to canvas/DOM.
+import { theme } from './theme';
 
 export type FrameTask = (now: number) => void;
 
@@ -66,7 +67,7 @@ export class Layer {
   key = '';
   get(W: number, H: number, key: string, draw: (g: CanvasRenderingContext2D, W: number, H: number) => void) {
     const dpr = window.devicePixelRatio || 1;
-    const fullKey = key + '|' + W + 'x' + H + '@' + dpr + '#' + fonts.epoch;
+    const fullKey = key + '|' + W + 'x' + H + '@' + dpr + '#' + fonts.epoch + 't' + theme.epoch;
     if (this.cv && this.key === fullKey) return this.cv;
     if (!this.cv) this.cv = document.createElement('canvas');
     const cv = this.cv as HTMLCanvasElement;

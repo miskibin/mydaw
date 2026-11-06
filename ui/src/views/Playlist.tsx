@@ -12,7 +12,11 @@ import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
-import { drawGrid, drawRuler, type View } from './playlistDraw';
+import { drawFades, drawGrid, drawRuler, type View } from './playlistDraw';
+import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
+import { sortPoints } from '../lib/automation';
+import { autoById } from '../state/store';
+import { T, theme } from '../ui/theme';
 
 const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -64,12 +68,17 @@ export function Playlist() {
   const editable = () => U.tool === 'draw' || U.tool === 'paint' || U.tool === 'select';
   const toolCursor = () => ({ draw: 'crosshair', paint: 'copy', erase: 'not-allowed', mute: 'pointer', slice: 'col-resize', select: 'crosshair' })[U.tool];
 
-  let dirtyGrid = true, dirtyRuler = true, lastRecV = -1, lastPhX = -1, fontEpoch = 0;
+  let dirtyGrid = true, dirtyFade = true, dirtyRuler = true, lastRecV = -1, lastPhX = -1, fontEpoch = 0, themeEpoch = -1;
+  /** Everything but the fade overlays, cached: a fade drag only re-composites (cost independent of clip length). */
+  const base = document.createElement('canvas');
+  const [autoHover, setAutoHover] = createSignal<number | null>(null);
   // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip
   createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; S.project.loop?.a; S.project.loop?.b; peaksVersion(); scroll(); cw(); ch(); dirtyGrid = true; });
   createEffect(() => { for (const _ of U.sel) void _; dirtyGrid = true; });
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
-  createEffect(() => { for (const c of S.project.clips) { c.start; c.len; c.track; c.offset; c.muted; c.gain; c.fadeIn; c.fadeOut; c.ref; c.kind; c.norm; c.rev; } dirtyGrid = true; });
+  createEffect(() => { for (const c of S.project.clips) { c.start; c.len; c.track; c.offset; c.muted; c.gain; c.ref; c.kind; c.norm; c.rev; c.tune; } dirtyGrid = true; });
+  createEffect(() => { for (const c of S.project.clips) { c.fadeIn; c.fadeOut; } dirtyFade = true; });
+  createEffect(() => { for (const a of S.project.automations ?? []) { a.color; a.name; for (const q of a.points) { q.t; q.v; } } U.autoEdit; autoHover(); dirtyGrid = true; });
   createEffect(() => {
     for (const p of S.project.patterns) { p.name; p.color; p.len; for (const n of p.notes) { n.step; n.len; n.p; } }
     for (const s of S.project.sources) { s.name; s.color; s.dur; }
@@ -87,16 +96,24 @@ export function Playlist() {
     if (recActive && recState.version !== lastRecV) { dirtyGrid = true; lastRecV = recState.version; }
     else if (!recActive && lastRecV !== -1) { dirtyGrid = true; lastRecV = -1; }
     const dpr = window.devicePixelRatio || 1;
-    if (fontEpoch !== fonts.epoch) { fontEpoch = fonts.epoch; dirtyGrid = dirtyRuler = true; }
-    if (dirtyGrid) {
-      dirtyGrid = false;
+    if (fontEpoch !== fonts.epoch || themeEpoch !== theme.epoch) { fontEpoch = fonts.epoch; themeEpoch = theme.epoch; dirtyGrid = dirtyRuler = true; }
+    if (dirtyGrid || dirtyFade) {
       const W = cw(), H = ch(), o = offsets();
+      const v: View = { offX: o.x, offY: o.y, W, H, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, autoEdit: U.autoEdit, autoHover: autoHover() };
+      if (dirtyGrid) {
+        fitCanvas(base, W, H);
+        const b = base.getContext('2d')!;
+        b.setTransform(dpr, 0, 0, dpr, 0, 0);
+        b.fillStyle = T.grid; b.fillRect(0, 0, W, H);
+        drawGrid(b, v, unwrap(S.project), recActive ? recState : null);
+      }
+      dirtyGrid = dirtyFade = false;
       fitCanvas(gridCv, W, H);
       const g = gridCv.getContext('2d')!;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.drawImage(base, 0, 0);
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      g.fillStyle = '#111419'; g.fillRect(0, 0, W, H);
-      const v: View = { offX: o.x, offY: o.y, W, H, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec };
-      drawGrid(g, v, unwrap(S.project), recActive ? recState : null);
+      drawFades(g, v, unwrap(S.project));
     }
     if (dirtyRuler) {
       dirtyRuler = false;
@@ -171,6 +188,13 @@ export function Playlist() {
   const hover = (e: PointerEvent) => {
     if (e.buttons) return;
     const p = pt(e), h = hit(p.x, p.y);
+    if (U.autoEdit != null && h && h.c.id === U.autoEdit && p.y > tops()[h.c.track] + 16) {
+      const i = envHit(h.c, p.x, p.y);
+      if (i !== autoHover()) setAutoHover(i < 0 ? null : i);
+      gridCv.style.cursor = i >= 0 ? 'move' : 'copy';
+      return;
+    }
+    if (autoHover() != null) setAutoHover(null);
     let cur = toolCursor();
     if (h) {
       if (h.edge === 'fi' || h.edge === 'fo') cur = 'col-resize';
@@ -184,6 +208,10 @@ export function Playlist() {
   const gridDown = (e: PointerEvent) => {
     const p = pt(e), h = hit(p.x, p.y), id = h?.c.id ?? null;
     const modK = e.ctrlKey || e.metaKey;
+    if (U.autoEdit != null) {
+      if (h && h.c.id === U.autoEdit && (e.button === 0 || e.button === 2) && envDown(e, h.c, p.x, p.y)) return;
+      if (!h || h.c.id !== U.autoEdit) setU('autoEdit', null);
+    }
     if (e.button === 2) return rightDown(e, h, p);
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
@@ -336,14 +364,76 @@ export function Playlist() {
 
   const gridDbl = (e: MouseEvent) => {
     const p = pt(e), h = hit(p.x, p.y); if (!h) return;
+    if (h.c.kind === 'auto') { setU({ autoEdit: h.c.id, sel: [h.c.id] }); say('Edycja automatyzacji: klik = punkt · przeciągnij = przesuń · PPM = usuń · Esc = koniec'); return; }
     setU('cur', { kind: h.c.kind, ref: h.c.ref });
     if (h.c.kind === 'audio') A.openEditor(h.c.id);
+  };
+
+  // ---------- automation envelope editing (inline, after a double-click on an automation clip) ----------
+  const envGeom = (c: Clip) => {
+    const t = tops(), tr = S.project.tracks[c.track], cy = t[c.track] + 1, by = cy + 15, bh = tr.h - 2 - 15, pad = 3;
+    return { by, bh, X: (tt: number) => (c.start + tt - c.offset) * U.bw, Y: (v: number) => by + pad + (1 - v) * (bh - 2 * pad), T: (x: number) => x / U.bw - c.start + c.offset, V: (y: number) => clamp(1 - (y - by - pad) / (bh - 2 * pad), 0, 1) };
+  };
+  const envHit = (c: Clip, x: number, y: number) => {
+    const a = autoById(c.ref); if (!a) return -1;
+    const G = envGeom(c);
+    let best = -1, bd = 8;
+    a.points.forEach((q, i) => { const d = Math.hypot(G.X(q.t) - x, G.Y(q.v) - y); if (d < bd) { bd = d; best = i; } });
+    return best;
+  };
+  const envDown = (e: PointerEvent, c: Clip, x: number, y: number): boolean => {
+    const a = autoById(c.ref); if (!a) return false;
+    const G = envGeom(c);
+    if (y < G.by) return false;
+    e.preventDefault();
+    let i = envHit(c, x, y);
+    if (e.button === 2) {
+      if (i >= 0 && a.points.length > 1) { commit([{ op: 'putAutomation', automation: { ...plain(a), points: a.points.filter((_, k) => k !== i).map(q => ({ ...q })) } }], 'Usuń punkt'); say('Usunięto punkt'); }
+      else if (i >= 0) say('Automatyzacja musi mieć co najmniej jeden punkt');
+      return true;
+    }
+    const g = new Gesture(i >= 0 ? 'Przesuń punkt' : 'Dodaj punkt');
+    let pts = plain(a.points);
+    if (i < 0) {
+      const nt = Math.max(0, snapRound(G.T(x) + c.start - c.offset, unit(e.altKey)) - c.start + c.offset);
+      pts = sortPoints([...pts, { t: nt, v: G.V(y) }]);
+      i = pts.findIndex(q => q.t === nt && Math.abs(q.v - G.V(y)) < 1e-9);
+      g.update([{ op: 'putAutomation', automation: { ...plain(a), points: pts } }]);
+    }
+    const idx = i, r = gridEl.getBoundingClientRect();
+    track(ev => {
+      const px = ev.clientX - r.left, py = ev.clientY - r.top;
+      const lo = idx > 0 ? pts[idx - 1].t : -Infinity, hi = idx < pts.length - 1 ? pts[idx + 1].t : Infinity;
+      const nt = clamp(snapRound(G.T(px) + c.start - c.offset, unit(ev.altKey)) - c.start + c.offset, Math.max(0, lo), hi);
+      const next = pts.map((q, k) => k === idx ? { t: nt, v: G.V(py) } : q);
+      g.update([{ op: 'putAutomation', automation: { ...plain(a), points: next } }]);
+      say(a.name + ' · ' + Math.round(G.V(py) * 100) + '% · ' + fmtPos(c.start + nt - c.offset));
+    }, () => g.end(), 'move');
+    return true;
   };
 
   // ---------- menus ----------
   function openClipMenu(x: number, y: number, c: Clip, p: { beat: number }) {
     if (!U.sel.includes(c.id)) setU('sel', [c.id]);
     const src = srcOf(c), isPat = c.kind === 'pat';
+    if (c.kind === 'auto') {
+      const a = autoById(c.ref);
+      openMenu(x, y, [
+        { t: 'title', label: 'Automatyzacja · ' + (a?.name ?? '') },
+        { t: 'item', label: 'Edytuj punkty', kbd: '2× klik', act: () => setU({ autoEdit: c.id }) },
+        { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, a?.name ?? '', v => A.setSrcProp(c, { name: v })) },
+        { t: 'swatches', current: a?.color, pick: col => A.setSrcProp(c, { color: col }) },
+        { t: 'sep' },
+        { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: A.toggleMuteSel },
+        { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: A.duplicate },
+        { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
+        { t: 'item', label: 'Zaznacz wszystkie z tej automatyzacji', act: () => setU('sel', S.project.clips.filter(v => v.kind === 'auto' && v.ref === c.ref).map(v => v.id)) },
+        { t: 'sep' },
+        { t: 'item', label: 'Usuń klip', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
+        { t: 'item', label: 'Usuń automatyzację (wszystkie klipy)', danger: true, act: () => { commit([{ op: 'removeAutomation', id: c.ref }], 'Usuń automatyzację'); setU('autoEdit', null); } },
+      ], 380);
+      return;
+    }
     const items: MenuItem[] = [
       { t: 'title', label: (isPat ? 'Pattern · ' : 'Audio · ') + (src?.name ?? '') },
       { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, src?.name ?? '', v => A.setSrcProp(c, { name: v })) },
@@ -356,7 +446,8 @@ export function Playlist() {
       { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
       { t: 'item', label: 'Podziel na głowicy', act: () => A.sliceAt(c.id, curBeat()) },
       isPat ? { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } : { t: 'gain', clipId: c.id },
-      ...(isPat ? [] : [{ t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem]),
+      ...(c.kind === 'audio' ? [{ t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem,
+        { t: 'item', label: 'Edytuj wysokość…', kbd: c.tune?.notes.length ? 'edytowany' : '', act: () => A.openPitchEditor(c.id) } as MenuItem] : []),
       { t: 'item', label: 'Kanał miksera…', act: () => openRouteMenu(c.track, x, y) },
       { t: 'item', label: 'Zaznacz wszystkie z tego źródła', act: () => setU('sel', S.project.clips.filter(v => v.kind === c.kind && v.ref === c.ref).map(v => v.id)) },
       { t: 'sep' },
@@ -459,8 +550,8 @@ function openLaneMenu(x: number, y: number, i: number) {
     { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, t.name, v => A.setTrack(i, { name: v }, 'Nazwa ścieżki')) },
     { t: 'swatches', current: t.color, pick: col => A.setTrack(i, { color: col }, 'Kolor ścieżki') },
     { t: 'sep' },
-    { t: 'item', label: t.muted ? 'Odcisz' : 'Wycisz', act: () => A.setTrack(i, { muted: !t.muted }, 'Mute') },
-    { t: 'item', label: t.solo ? 'Wyłącz solo' : 'Solo', act: () => A.setTrack(i, { solo: !t.solo }, 'Solo') },
+    { t: 'item', label: t.muted ? 'Odcisz' : 'Wycisz', act: () => A.toggleTrackMute(i) },
+    { t: 'item', label: t.solo ? 'Wyłącz solo' : 'Solo', act: () => A.toggleTrackSolo(i) },
     { t: 'item', label: t.arm ? 'Rozbrój nagrywanie' : 'Uzbrój do nagrywania', act: () => A.armTrack(i) },
     { t: 'item', label: 'Zaznacz klipy ścieżki', act: () => setU('sel', S.project.clips.filter(c => c.track === i).map(c => c.id)) },
     { t: 'item', label: 'Wysokość: domyślna', act: () => A.setTrack(i, { h: 56 }, 'Wysokość') },
@@ -491,7 +582,10 @@ function LaneHeader(props: { t: Track; i: number }) {
       say(t().name + ' · wysokość ' + h + ' px');
     }, () => g.end(), 'row-resize');
   };
+  const volTarget = () => ({ kind: 'trackVol' as const, id: t().id });
+  const shownVol = () => autoDisplay(volTarget()) ?? t().vol;
   const vol = (e: PointerEvent) => {
+    if (e.button === 2) { e.preventDefault(); e.stopPropagation(); paramMenu(e.clientX, e.clientY, volTarget(), () => A.setTrack(props.i, { vol: VOL_UNITY }, 'Głośność'), t().color); return; }
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     if (dblCheck('lvol' + props.i)) { A.setTrack(props.i, { vol: VOL_UNITY }, 'Głośność'); say(t().name + ' · 0.0 dB'); return; }
@@ -511,12 +605,12 @@ function LaneHeader(props: { t: Track; i: number }) {
       <div class="body">
         <div class="row" style={{ gap: '6px', 'min-width': 0 }}>
           <span class="num">{props.i + 1}</span>
-          <span class="nm" style={{ color: audible() ? '#f2f4f7' : '#7d8592' }} title="2× klik = zmień nazwę"
+          <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę"
             onDblClick={e => openRename(e.clientX, e.clientY, t().name, v => A.setTrack(props.i, { name: v }, 'Nazwa ścieżki'))}>{t().name}</span>
           <div class="row" style={{ gap: '2px', flex: 'none' }}>
             <button class="mini route" title="Kanał miksera" onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? '→M' : '→' + routeIdx()}</button>
-            <button class="mini m" classList={{ on: t().muted }} title="Mute" onPointerDown={stop} onClick={() => A.setTrack(props.i, { muted: !t().muted }, 'Mute')}>M</button>
-            <button class="mini s" classList={{ on: t().solo }} title="Solo" onPointerDown={stop} onClick={() => A.setTrack(props.i, { solo: !t().solo }, 'Solo')}>S</button>
+            <button class="mini m" classList={{ on: t().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
+            <button class="mini s" classList={{ on: t().solo }} title="Solo (wyłącza mute)" onPointerDown={stop} onClick={() => A.toggleTrackSolo(props.i)}>S</button>
             <button class="mini r" classList={{ on: t().arm }} title="Uzbrój do nagrywania" onPointerDown={stop} onClick={() => A.armTrack(props.i)}>
               <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="currentColor" /></svg>
             </button>
@@ -524,13 +618,13 @@ function LaneHeader(props: { t: Track; i: number }) {
         </div>
         <Show when={t().h >= 50}>
           <div class="row" style={{ gap: '6px', 'padding-left': '20px' }}>
-            <div class="lvol" onPointerDown={vol} title="Głośność — przeciągnij, 2× klik = 0 dB">
+            <div class="lvol" classList={{ auto: isAutomated(volTarget()) }} onPointerDown={vol} onContextMenu={e => e.preventDefault()} title="Głośność — przeciągnij, 2× klik = 0 dB, PPM = automatyzacja">
               <div class="track">
-                <div class="fill" style={{ width: t().vol * 100 + '%', background: audible() ? t().color : '#4a5360' }} />
-                <div class="thumb" style={{ left: t().vol * 100 + '%' }} />
+                <div class="fill" style={{ width: shownVol() * 100 + '%', background: audible() ? t().color : 'var(--fg6)' }} />
+                <div class="thumb" style={{ left: shownVol() * 100 + '%' }} />
               </div>
             </div>
-            <span class="mono" style={{ width: '44px', flex: 'none', 'text-align': 'right', 'font-size': '9px', color: 'var(--fg4)' }}>{volText(t().vol)}</span>
+            <span class="mono" style={{ width: '44px', flex: 'none', 'text-align': 'right', 'font-size': '9px', color: 'var(--fg4)' }}>{volText(shownVol())}</span>
           </div>
         </Show>
       </div>

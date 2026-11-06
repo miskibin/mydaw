@@ -21,6 +21,8 @@ export interface FxFrame {
   specIn: Float32Array; specOut: Float32Array; scopeIn: Float32Array; scopeOut: Float32Array;
   /** Telemetry seq of the last analysis frame that carried this fx. */
   seq: number;
+  /** performance.now() when that frame was decoded (for time-based, de-jittered scrolling). */
+  at: number;
 }
 
 export interface RecFrame {
@@ -81,7 +83,7 @@ export class TelemetryDecoder {
         const id = v.getUint32(o, true);
         let e = this.fx.get(id);
         if (!e) {
-          e = { id, inPeak: 0, outPeak: 0, grDb: 0, seq: 0, meters: new Float32Array(32),
+          e = { id, inPeak: 0, outPeak: 0, grDb: 0, seq: 0, at: 0, meters: new Float32Array(32),
             specIn: new Float32Array(SPEC_BANDS), specOut: new Float32Array(SPEC_BANDS),
             scopeIn: new Float32Array(SCOPE_LEN), scopeOut: new Float32Array(SCOPE_LEN) };
           this.fx.set(id, e);
@@ -96,6 +98,7 @@ export class TelemetryDecoder {
         o = readF32(v, o, e.scopeIn);
         o = readF32(v, o, e.scopeOut);
         e.seq = f.seq;
+        e.at = typeof performance !== 'undefined' ? performance.now() : 0;
         f.fxIds.push(id);
       }
       const rec = o + 4 <= buf.byteLength ? v.getUint32(o, true) : 0; o += 4;
