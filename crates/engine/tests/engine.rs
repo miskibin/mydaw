@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use wave_engine::catalog::new_fx;
@@ -234,4 +235,58 @@ fn automation_moves_volume_and_effect_params() {
     // removing the automation removes its clip
     e.apply(&[Op::RemoveAutomation { id: 8000 }], false, None).unwrap();
     assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Auto));
+}
+
+#[test]
+fn export_range_uses_song_or_loop() {
+    let mut p = Project::demo();
+    assert_eq!(Engine::export_range(&p, false), (0.0, 32.0));
+    assert_eq!(Engine::export_range(&p, true), (0.0, 32.0)); // no loop → song
+    p.loop_range = Some(LoopRange { a: 4.0, b: 12.0 });
+    assert_eq!(Engine::export_range(&p, false), (0.0, 32.0));
+    assert_eq!(Engine::export_range(&p, true), (4.0, 12.0));
+}
+
+#[test]
+fn export_writes_wav_that_round_trips() {
+    let dir = std::env::temp_dir().join(format!("wave-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bounce.wav");
+    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let (from, to) = Engine::export_range(&e.project(), false);
+    let audio = e.render(from, to, 0.5, 48000).unwrap();
+    wave_engine::sources::write_wav(&path, &audio, 48000).unwrap();
+    let mut reader = hound::WavReader::open(&path).unwrap();
+    let spec = reader.spec();
+    assert_eq!(spec.sample_rate, 48000);
+    assert_eq!(spec.channels, 2);
+    assert_eq!(spec.sample_format, hound::SampleFormat::Float);
+    assert_eq!(spec.bits_per_sample, 32);
+    let decoded: Vec<f32> = reader.samples::<f32>().map(|s| s.unwrap()).collect();
+    assert_eq!(decoded.len(), audio.len());
+    for (a, b) in audio.iter().zip(&decoded) {
+        assert!((a - b).abs() < 1e-5, "WAV round-trip drifted");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn export_tail_extends_length_and_cancel_aborts() {
+    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let no_tail = e.render(0.0, 4.0, 0.0, 48000).unwrap();
+    let with_tail = e.render(0.0, 4.0, 1.0, 48000).unwrap();
+    assert_eq!(no_tail.len(), ((4.0 * 60.0 / 128.0) * 48000.0) as usize * 2);
+    assert_eq!(with_tail.len(), no_tail.len() + 48000 * 2);
+
+    let cancel = AtomicBool::new(true);
+    let err = e.render_cancelable(0.0, 32.0, 2.0, 48000, &cancel).unwrap_err();
+    assert!(matches!(err, EngineError::Cancelled));
+
+    let mut p = Project::empty();
+    for t in p.tracks.iter_mut() {
+        t.muted = true;
+    }
+    let silent = Engine::new(p, Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
+    let peak = silent.iter().fold(0f32, |a, b| a.max(b.abs()));
+    assert!(peak < 1e-5, "empty project should be silent");
 }

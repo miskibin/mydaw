@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::Arc;
 use std::thread;
@@ -70,6 +71,9 @@ pub enum EngineError {
     Op(#[from] ops::OpError),
     #[error("{0}")]
     Msg(String),
+    /// Offline render was aborted by the caller before a file was written.
+    #[error("cancelled")]
+    Cancelled,
 }
 
 impl From<String> for EngineError {
@@ -674,9 +678,48 @@ impl Engine {
 
     // ------------------------------------------------------------ offline render
 
+    /// Beat range the UI and CLI use for a song or loop bounce.
+    ///
+    /// `song` is always `0..song_end`. `loop` uses the project's loop when one
+    /// exists; otherwise it falls back to the song so a missing loop never yields
+    /// an empty range.
+    pub fn export_range(project: &Project, use_loop: bool) -> (f64, f64) {
+        if use_loop {
+            if let Some(l) = project.loop_range {
+                if l.b > l.a {
+                    return (l.a, l.b);
+                }
+            }
+        }
+        (0.0, project.song_end())
+    }
+
     /// Renders `[from, to)` beats (plus `tail` seconds) of the current project to
     /// interleaved stereo at `sample_rate`, independently of the live device.
     pub fn render(&self, from: f64, to: f64, tail: f64, sample_rate: u32) -> Result<Vec<f32>, EngineError> {
+        self.render_cancelable(from, to, tail, sample_rate, &AtomicBool::new(false))
+    }
+
+    /// Same as [`Self::render`], but returns [`EngineError::Cancelled`] as soon as
+    /// `cancel` is set. Checked between DSP blocks so a long bounce can stop without
+    /// waiting for the whole file.
+    pub fn render_cancelable(
+        &self,
+        from: f64,
+        to: f64,
+        tail: f64,
+        sample_rate: u32,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<f32>, EngineError> {
+        if to <= from {
+            return Err(EngineError::Msg("`to` must be after `from`".into()));
+        }
+        if sample_rate < 8000 {
+            return Err(EngineError::Msg("sample rate must be at least 8000 Hz".into()));
+        }
+        if cancel.load(Relaxed) {
+            return Err(EngineError::Cancelled);
+        }
         let (project, store_snapshot) = {
             let mut guard = self.core.lock();
             let c = &mut *guard;
@@ -723,6 +766,9 @@ impl Engine {
         let mut done = 0;
         let mut stopped = false;
         while done < frames {
+            if cancel.load(Relaxed) {
+                return Err(EngineError::Cancelled);
+            }
             let n = block.min(frames - done);
             if !stopped && done + n > play_frames {
                 // stop exactly at `to`: render up to it, then let tails ring

@@ -3,7 +3,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, Id, ImportResult, LibFile,
+  AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, ExportResult, Id, ImportResult, LibFile,
   LibraryList, LibraryProgress, Op, PitchAnalysis, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
@@ -53,6 +53,10 @@ export interface Backend {
   projectNew(): Promise<StateDto>;
   projectOpen(path?: string): Promise<StateDto>;
   projectSave(saveAs?: boolean): Promise<{ path: string }>;
+  /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
+  exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number }): Promise<ExportResult>;
+  /** Abort an in-flight `exportAudio` before a file is written. */
+  exportCancel(): Promise<void>;
   vst3Scan(rescan: boolean): Promise<Vst3Info[]>;
   vst3Editor(fxId: Id, open: boolean): Promise<void>;
   vst3Params(fxId: Id): Promise<Vst3Param[]>;
@@ -148,6 +152,8 @@ export function tauriBackend(): Backend {
     projectNew: () => invoke('project_new'),
     projectOpen: path => invoke('project_open', { path: path ?? null }),
     projectSave: saveAs => invoke('project_save', { saveAs: !!saveAs }),
+    exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate }),
+    exportCancel: () => invoke('export_cancel'),
     vst3Scan: rescan => invoke('vst3_scan', { rescan }),
     vst3Editor: (fxId, open) => invoke('vst3_editor', { fxId, open }),
     vst3Params: fxId => invoke('vst3_params', { fxId }),

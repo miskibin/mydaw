@@ -55,6 +55,15 @@ export async function projectOpen() {
 export async function projectSave(saveAs = false) {
   try { const r = await enqueue(() => be().projectSave(saveAs)); say('Zapisano ' + r.path); await resync(); } catch (e) { say('Nie zapisano: ' + String(e)); }
 }
+/** Escape on the export dialog: abort an in-flight bounce, otherwise close. */
+export function cancelExportOrClose() {
+  if (!U.exportOpen) return;
+  if (U.exportBusy) {
+    void be().exportCancel().catch(() => {});
+    say('Eksport anulowany');
+  }
+  setU({ exportOpen: false, exportBusy: false });
+}
 function afterProjectLoad() {
   batch(() => {
     setU({ sel: [], plugs: [], editor: null, start: 0, menu: null });

@@ -5,6 +5,7 @@ import type { Clip } from '../api/types';
 import { applyAll, OpError } from './applyOps';
 import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resizeClip, sliceClip } from './clipOps';
 import { eqCurve } from './eq';
+import { exportRange, exportSeconds, fmtExportLen, songEnd } from './export';
 import { fmtClock, fmtPos, panText, volText } from './format';
 import { loadPreset, newFx, paramsMatch, presetInfo, pFmt, pNorm, pVal, resolvePreset } from './presets';
 import { autoSnap, snapFloor, snapLabel, snapRes, snapRound } from './snap';
@@ -188,5 +189,20 @@ describe('formatting & eq', () => {
     expect(Array.from(eqCurve(bands, 0, fr, new Float32Array(4))).every(v => Math.abs(v) < 0.05)).toBe(true);
     bands[3] = { ...bands[3], g: 6 };
     expect(eqCurve(bands, 0, Float32Array.from([1000]), new Float32Array(1))[0]).toBeCloseTo(6, 1);
+  });
+});
+
+describe('export range', () => {
+  it('uses song by default and loop when asked', () => {
+    const p = demoProject(cat);
+    expect(songEnd(p)).toBe(32);
+    expect(exportRange(p, false)).toEqual({ from: 0, to: 32 });
+    expect(exportRange(p, true)).toEqual({ from: 0, to: 32 });
+    p.loop = { a: 4, b: 12 };
+    expect(exportRange(p, false)).toEqual({ from: 0, to: 32 });
+    expect(exportRange(p, true)).toEqual({ from: 4, to: 12 });
+    expect(exportSeconds(0, 32, 128, 2)).toBeCloseTo(17, 5);
+    expect(fmtExportLen(17)).toBe('17 s');
+    expect(fmtExportLen(75)).toBe('1:15');
   });
 });

@@ -11,8 +11,9 @@ import { midiToHz, noteAt, scaleMask, snapNote } from '../lib/pitch';
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, Catalog, Clip, Fx, Id, LibFile, LibraryList, Op, PitchAnalysis, Project, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, Catalog, Clip, ExportResult, Fx, Id, LibFile, LibraryList, Op, PitchAnalysis, Project, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
+import { exportRange, exportSeconds } from '../lib/export';
 
 const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
 const BAND_F = new Float32Array(SPEC_BANDS).map((_, k) => 20 * Math.pow(1000, k / (SPEC_BANDS - 1)));
@@ -550,6 +551,37 @@ export class MockBackend implements Backend {
     this.savedRev = this.revision; this.emit('state', this.dto());
     return { path: this.path };
   }
+
+  private exportAbort = false;
+  async exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number }): Promise<ExportResult> {
+    this.exportAbort = false;
+    const { from, to } = exportRange(this.p, opts.useLoop);
+    const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
+    // Simulate a short offline bounce so the dialog's busy/cancel path is exercisable.
+    const steps = 8;
+    for (let i = 0; i < steps; i++) {
+      await delay(40);
+      if (this.exportAbort) return { cancelled: true };
+    }
+    const name = (this.path ? this.path.replace(/\.wave$/i, '') : 'C:\\Users\\michal\\Music\\Song') + '.wav';
+    const silent = this.p.clips.length === 0 || this.p.tracks.every(t => t.muted);
+    return {
+      out: name,
+      fromBeat: from,
+      toBeat: to,
+      tail: opts.tail,
+      stats: {
+        seconds: secs,
+        sampleRate: opts.sampleRate,
+        peakDbfs: silent ? -180 : -3.2,
+        rmsDbfs: silent ? -180 : -14.5,
+        crestDb: silent ? 0 : 11.3,
+        clippedSamples: 0,
+        silent,
+      },
+    };
+  }
+  async exportCancel() { this.exportAbort = true; }
 
   // ---------- VST3 ----------
   async vst3Scan(rescan: boolean): Promise<Vst3Info[]> {

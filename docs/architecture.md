@@ -104,6 +104,8 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group}]` |
 | `library_add_folder` / `library_remove_folder` | – (native dialog) / `{path}` | updated `folders` |
 | `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `StateDto` / `{path}` |
+| `export_audio` | `{useLoop, tail, sampleRate}` | `{out, fromBeat, toBeat, tail, stats}` or `{cancelled:true}`; native save dialog; offline master → 32-bit float stereo WAV |
+| `export_cancel` | – | – (abort an in-flight `export_audio` before a file is written) |
 | `vst3_scan` | `{rescan}` | `[{path,cid,name,vendor,category}]` |
 | `vst3_editor` | `{fxId, open}` | – (native window) |
 | `vst3_params` | `{fxId}` | `[{id,name,value,display,def}]` |

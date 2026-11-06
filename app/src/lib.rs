@@ -8,6 +8,7 @@ mod plugins;
 mod settings;
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -27,6 +28,8 @@ pub struct App {
     pub settings: Mutex<settings::Settings>,
     pub status: Mutex<AudioStatus>,
     pub cli: Mutex<CliStatus>,
+    /// Set while an offline bounce is running; flipped by `export_cancel`.
+    pub export_cancel: AtomicBool,
     session: Mutex<Option<wave_session::Server>>,
 }
 
@@ -328,6 +331,59 @@ async fn project_save(app: St<'_>, handle: AppHandle, save_as: Option<bool>) -> 
     Ok(json!({ "path": path.display().to_string() }))
 }
 
+/// Bounce the master mix to a 32-bit float stereo WAV (song or loop + tail).
+///
+/// Opens a native save dialog first. The render runs off the UI thread so playback
+/// keeps going; call `export_cancel` to abort before a file is written.
+#[tauri::command]
+async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32) -> R<Value> {
+    if !(sample_rate == 44_100 || sample_rate == 48_000) {
+        return Err("sample rate must be 44100 or 48000".into());
+    }
+    if !(tail == 0.0 || tail == 2.0 || tail == 8.0) {
+        return Err("tail must be 0, 2 or 8 seconds".into());
+    }
+    let st = app.engine.state();
+    let (from, to) = Engine::export_range(&st.project, use_loop);
+    let suggested = st
+        .path
+        .as_deref()
+        .and_then(|p| PathBuf::from(p).file_stem().map(|s| format!("{}.wav", s.to_string_lossy())))
+        .unwrap_or_else(|| "Song.wav".into());
+    let picked = handle
+        .dialog()
+        .file()
+        .add_filter("WAV audio", &["wav"])
+        .set_file_name(&suggested)
+        .blocking_save_file()
+        .and_then(|p| p.into_path().ok());
+    let Some(mut path) = picked else {
+        return Ok(json!({ "cancelled": true }));
+    };
+    if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("wav")) != Some(true) {
+        path.set_extension("wav");
+    }
+    app.export_cancel.store(false, Ordering::Relaxed);
+    let a = app.inner().clone();
+    let out = path.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        actions::render_to_file(&a, &out, from, to, tail, sample_rate, &a.export_cancel)
+    })
+    .await
+    .map_err(es)?;
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) if e == "cancelled" => Ok(json!({ "cancelled": true })),
+        Err(e) => Err(e),
+    }
+}
+
+#[tauri::command]
+async fn export_cancel(app: St<'_>) -> R<()> {
+    app.export_cancel.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
 // ---------------------------------------------------------------- plugins
 
 #[tauri::command]
@@ -386,6 +442,7 @@ pub fn run() {
         status: Mutex::new(AudioStatus::default()),
         settings: Mutex::new(settings),
         cli: Mutex::new(cli_shim::install()),
+        export_cancel: AtomicBool::new(false),
         session: Mutex::new(None),
     });
 
@@ -439,7 +496,7 @@ pub fn run() {
             import_audio, source_peaks, clip_peaks, pitch_analyze, trim_clip, preview_clip, preview_file, preview_stop,
             audio_hosts, audio_devices, audio_get_config, audio_set_config,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
-            project_new, project_open, project_save,
+            project_new, project_open, project_save, export_audio, export_cancel,
             vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status
         ])
         .build(tauri::generate_context!())

@@ -29,7 +29,9 @@ export interface UiState {
   plugs: PlugWin[];
   /** effect windows tucked behind the playlist (FL-style: clicking the playlist brings it to the front) */
   plugsHidden: boolean;
-  editor: EditorWin | null; menu: Menu | null; help: boolean; settings: boolean;
+  editor: EditorWin | null; menu: Menu | null; help: boolean; settings: boolean; exportOpen: boolean;
+  /** True while `exportAudio` is in flight (so Escape can abort and report). */
+  exportBusy: boolean;
   vstPicker: { insId: Id } | null;
   readout: string;
   headW: number; pickW: number; pickOpen: boolean; browserTab: 'project' | 'library';
@@ -53,7 +55,7 @@ export const [U, setU] = createStore<UiState>({
   tool: 'draw', snap: -1, bw: 22, sel: [], cur: { kind: 'pat', ref: 1 },
   start: 0, follow: true, alt: false,
   mixOpen: true, mixMin: false, mixH: 300, mixSel: 6, fxSel: 903, fxDrag: null,
-  plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, vstPicker: null,
+  plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null,
   readout: 'Gotowe',
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
   ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, autoEdit: null, zTop: 1, marquee: null,

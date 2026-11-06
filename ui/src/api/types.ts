@@ -148,6 +148,16 @@ export interface LibraryList { kits: Kit[]; folders: string[] }
 export interface LibFile { name: string; path: string; group: string }
 export interface LibraryProgress { id: string; done: number; total: number; error?: string }
 
+/** Level stats returned by an offline master bounce. */
+export interface ExportStats {
+  seconds: number; sampleRate: number; peakDbfs: number; rmsDbfs: number;
+  crestDb: number; clippedSamples: number; silent: boolean;
+}
+/** Result of `exportAudio`; `{ cancelled: true }` when the save dialog or render was aborted. */
+export type ExportResult =
+  | { cancelled: true }
+  | { cancelled?: false; out: string; fromBeat: number; toBeat: number; tail: number; stats: ExportStats };
+
 export interface ImportResult { sourceIds: Id[]; clipIds: Id[] }
 
 export interface Vst3Info { path: string; cid: string; name: string; vendor: string; category: string }
