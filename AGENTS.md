@@ -77,9 +77,12 @@ outweighs its visual and interaction cost.
 
 ## Architecture and Performance
 
-Respect the existing boundaries. `ui/src/state.tsx` owns engine interaction;
-views do not call Tauri directly. Keep Rust DTOs, the TypeScript `Backend`
-contract, `TauriBackend`, and `MockBackend` behavior aligned. Extend existing
+Respect the boundaries described in `docs/architecture.md`. The Rust engine
+owns the project and undo; the UI changes it only through ops (`apply_ops`) and
+reads it from `state` events. Views do not call Tauri directly: they go through
+`ui/src/api/backend.ts`, which has a matching in-browser mock (`ui/src/api/mock.ts`)
+that must keep behaving like the engine. The GUI and the `wave` CLI share one
+implementation of every action (`app/src/actions.rs`). Extend existing
 components and patterns instead of creating parallel implementations.
 
 Treat performance as a product feature:

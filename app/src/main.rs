@@ -1,26 +1,33 @@
-//! Binary entry point. All of the shell lives in the library so it can be tested;
-//! this file exists to call it, to set the Windows subsystem, and to answer the
-//! one request that must be answered before anything else starts.
-
-// Release builds are GUI apps: no console window behind the webview. Debug builds
-// keep the console, because that is where the kernel boot log lands.
+// Release builds are GUI apps on Windows (no console window behind the UI).
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() -> std::process::ExitCode {
-    // A plugin scan opens strangers' code in a process it is willing to lose, and
-    // this binary is what it spawns when no dedicated worker was shipped
-    // alongside it. If MYDAW was started that way, the call below reads the one
-    // module it was asked about, prints the answer and exits -- **before** an
-    // audio device, a window or a kernel exists, which is the whole point of
-    // being expendable. Otherwise it returns immediately, having recorded that
-    // this executable understands the protocol.
-    //
-    // See `mydaw_plugin_scan::worker`. Adding a format here is what makes it
-    // scannable in a shipped build.
-    mydaw_plugin_scan::run_worker_if_requested(&[
-        mydaw_plugin_host_vst3::scan_worker_handler(),
-        mydaw_plugin_host_clap::scan_worker_handler(),
-    ]);
-
-    mydaw_app::run()
+    // a VST3 scan worker (the app re-invokes itself to read unknown plugins safely)
+    if wave_vst3::run_scan_worker_if_requested() {
+        return std::process::ExitCode::SUCCESS;
+    }
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // `WAVE --cli …` is the `wave` command (see cli_shim): same binary, no window.
+    if args.first().map(String::as_str) == Some("--cli") {
+        attach_console();
+        return wave_cli::run_cli(args[1..].to_vec());
+    }
+    wave_app::run();
+    std::process::ExitCode::SUCCESS
 }
+
+/// A GUI-subsystem exe has no console; borrow the terminal it was started from
+/// so the CLI prints there (pipes and redirects work without this).
+#[cfg(windows)]
+fn attach_console() {
+    extern "system" {
+        fn AttachConsole(pid: u32) -> i32;
+    }
+    const ATTACH_PARENT_PROCESS: u32 = u32::MAX;
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_console() {}

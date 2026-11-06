@@ -1,66 +1,83 @@
-import { onCleanup } from 'solid-js';
+// The one requestAnimationFrame loop. Everything that animates (playhead, clock, meters,
+// effect visualisations) registers a task here and writes straight to canvas/DOM.
 
-/**
- * One animation-frame loop for the whole shell.
- *
- * Everything that moves on its own -- meter fills, the playhead, the clock, the
- * step highlight -- is driven from here by writing to the DOM directly rather
- * than through a signal. A 30-60 Hz meter stream routed through Solid would
- * re-run every dependent computation at that rate; this is the same reason
- * `MeterBus` is a plain mutable holder and not a store, and it is the rule the
- * old shell already worked to.
- *
- * One loop rather than one per component because twenty `requestAnimationFrame`
- * callbacks are twenty scheduler entries doing the work of one, and because a
- * single pass keeps every meter in a frame showing the *same* frame.
- *
- * The loop does not run when nothing is subscribed, so an idle window is idle.
- */
+export type FrameTask = (now: number) => void;
 
-type Painter = () => void;
+const tasks = new Set<FrameTask>();
+let raf = 0;
 
-const painters = new Set<Painter>();
-let handle = 0;
+// Work time per frame, for the performance check (window.__wavePerf).
+const N = 600;
+const work = new Float32Array(N);
+const gaps = new Float32Array(N);
+let wi = 0, wn = 0, lastStart = 0;
 
-/**
- * Painters that have already thrown.
- *
- * A broken painter must not stop the clock for the other nineteen, and it must
- * not log sixty times a second either -- but swallowing it in silence is worse
- * than both: a canvas that never draws then looks like a layout bug and costs
- * an hour. So the first throw is reported, once, and the rest are dropped.
- */
-const broken = new WeakSet<Painter & object>();
-
-function tick(): void {
-  handle = requestAnimationFrame(tick);
-  for (const paint of painters) {
-    try {
-      paint();
-    } catch (error) {
-      if (!broken.has(paint)) {
-        broken.add(paint);
-        console.error('[mydaw] a frame painter threw and will be reported only once:', error);
-      }
-    }
+function frame(now: number) {
+  raf = requestAnimationFrame(frame);
+  const t0 = performance.now();
+  for (const t of tasks) {
+    try { t(now); } catch (e) { console.error(e); }
   }
+  const t1 = performance.now();
+  work[wi] = t1 - t0;
+  gaps[wi] = lastStart ? t0 - lastStart : 16.7;
+  lastStart = t0;
+  wi = (wi + 1) % N; wn = Math.min(N, wn + 1);
 }
 
-/**
- * Run `paint` once per animation frame until the owning component is disposed.
- *
- * Call inside a component (or any reactive owner): the cleanup is registered for
- * you, which is what keeps a panel that has been switched away from off the
- * frame budget.
- */
-export function onFrame(paint: Painter): void {
-  painters.add(paint);
-  if (handle === 0) handle = requestAnimationFrame(tick);
-  onCleanup(() => {
-    painters.delete(paint);
-    if (painters.size === 0 && handle !== 0) {
-      cancelAnimationFrame(handle);
-      handle = 0;
-    }
-  });
+export function addFrameTask(t: FrameTask): () => void {
+  tasks.add(t);
+  if (!raf) raf = requestAnimationFrame(frame);
+  return () => { tasks.delete(t); };
+}
+
+function stats(a: Float32Array) {
+  const v = Array.from(a.subarray(0, wn)).sort((x, y) => x - y);
+  if (!v.length) return { avg: 0, p95: 0, max: 0 };
+  return { avg: v.reduce((s, x) => s + x, 0) / v.length, p95: v[Math.floor(v.length * 0.95)], max: v[v.length - 1] };
+}
+
+(window as unknown as { __wavePerf: unknown }).__wavePerf = {
+  reset() { wi = 0; wn = 0; lastStart = 0; },
+  get work() { return stats(work); },
+  get gaps() { return stats(gaps); },
+  get frames() { return wn; },
+};
+
+/** Size a canvas backing store to its CSS box × devicePixelRatio. Returns true if it changed. */
+export function fitCanvas(cv: HTMLCanvasElement, W: number, H: number): boolean {
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(W * dpr)), h = Math.max(1, Math.round(H * dpr));
+  if (cv.width === w && cv.height === h) return false;
+  cv.width = w; cv.height = h;
+  return true;
+}
+
+/** Bumped when web fonts finish loading, so canvases drawn with fallback glyphs redraw. */
+export const fonts = { epoch: 0 };
+if (typeof document !== 'undefined' && document.fonts) {
+  document.fonts.ready.then(() => { fonts.epoch++; });
+  document.fonts.addEventListener('loadingdone', () => { fonts.epoch++; });
+}
+
+/** Offscreen layer cache: re-rendered only when `key` changes. */
+export class Layer {
+  cv: HTMLCanvasElement | OffscreenCanvas | null = null;
+  key = '';
+  get(W: number, H: number, key: string, draw: (g: CanvasRenderingContext2D, W: number, H: number) => void) {
+    const dpr = window.devicePixelRatio || 1;
+    const fullKey = key + '|' + W + 'x' + H + '@' + dpr + '#' + fonts.epoch;
+    if (this.cv && this.key === fullKey) return this.cv;
+    if (!this.cv) this.cv = document.createElement('canvas');
+    const cv = this.cv as HTMLCanvasElement;
+    const w = Math.max(1, Math.round(W * dpr)), h = Math.max(1, Math.round(H * dpr));
+    if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+    const g = cv.getContext('2d')!;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, w, h);
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw(g, W, H);
+    this.key = fullKey;
+    return cv;
+  }
 }

@@ -1,36 +1,27 @@
 {
-  "name": "mydaw-ui",
+  "name": "wave-ui",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:controls": "node ../scripts/controls-smoke.mjs"
+    "test": "vitest run"
   },
   "dependencies": {
-    "@fontsource-variable/geist": "^5.3.0",
-    "@fontsource-variable/geist-mono": "^5.3.0",
+    "@fontsource-variable/geist": "^5.2.5",
+    "@fontsource-variable/geist-mono": "^5.2.5",
     "@tauri-apps/api": "^2.9.0",
-    "solid-js": "^1.9.9",
-    "three": "^0.185.1"
+    "solid-js": "^1.9.9"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^26.2.0",
-    "@types/three": "^0.185.4",
-    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",
     "vite": "^7.1.12",
     "vite-plugin-solid": "^2.11.9",
     "vitest": "^3.2.4"
   },
   "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ]
+    "onlyBuiltDependencies": ["esbuild"]
   }
 }

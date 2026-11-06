@@ -1,0 +1,22 @@
+[package]
+name = "wave-plugin-windows"
+description = "WAVE: native top-level windows for VST3 plugin editors, pumped by the app's own UI-thread event loop."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+log.workspace = true
+parking_lot.workspace = true
+thiserror.workspace = true
+
+# Raw Win32. See the crate docs for why this is not `tao`.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }

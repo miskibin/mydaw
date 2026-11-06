@@ -1,0 +1,18 @@
+[package]
+name = "wave-engine"
+description = "WAVE engine: project model, ops and undo, sequencer, instruments, built-in effects, mixer graph, recording, offline render and analysis."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wave-audio-file.workspace = true
+rtrb.workspace = true
+realfft.workspace = true
+hound.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+parking_lot.workspace = true
