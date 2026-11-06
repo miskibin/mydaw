@@ -14,8 +14,11 @@ pub type R<T> = Result<T, String>;
 fn arg<'a>(a: &'a Value, k: &str) -> Option<&'a Value> {
     a.get(k).filter(|v| !v.is_null())
 }
+fn as_index(v: &Value) -> Option<u64> {
+    v.as_u64().or_else(|| v.as_f64().filter(|f| *f >= 0.0 && f.fract() == 0.0).map(|f| f as u64))
+}
 fn need_u64(a: &Value, k: &str) -> R<u64> {
-    arg(a, k).and_then(Value::as_u64).ok_or(format!("`{k}` (number) is required"))
+    arg(a, k).and_then(as_index).ok_or(format!("`{k}` (whole number) is required"))
 }
 fn need_str<'a>(a: &'a Value, k: &str) -> R<&'a str> {
     arg(a, k).and_then(Value::as_str).ok_or(format!("`{k}` (string) is required"))
@@ -100,7 +103,7 @@ pub fn stats(x: &[f32], sr: u32) -> Value {
     let peak = x.iter().fold(0f32, |a, b| a.max(b.abs()));
     let rms = (x.iter().map(|v| (v * v) as f64).sum::<f64>() / n as f64).sqrt() as f32;
     let clipped = x.iter().filter(|v| v.abs() >= 0.999).count();
-    let db = |g: f32| if g > 1e-9 { (20.0 * g.log10() * 10.0).round() / 10.0 } else { -180.0 };
+    let db = |g: f32| if g > 1e-9 { (20.0 * (g as f64).log10() * 10.0).round() / 10.0 } else { -180.0 };
     json!({
         "seconds": x.len() as f64 / 2.0 / sr as f64,
         "sampleRate": sr,
@@ -233,7 +236,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         "import" => import(app, a),
         "add_fx" => {
             let kind = parse_kind(need_str(a, "type")?)?;
-            let (id, rev) = add_fx(app, need_u64(a, "insertId")?, kind, arg(a, "preset").and_then(Value::as_u64).map(|x| x as usize), None)?;
+            let (id, rev) = add_fx(app, need_u64(a, "insertId")?, kind, arg(a, "preset").and_then(as_index).map(|x| x as usize), None)?;
             Ok(json!({ "fxId": id, "revision": rev }))
         }
         "set_param" => set_param(app, need_u64(a, "fxId")?, need_str(a, "param")?, opt_f64(a, "value").ok_or("`value` is required")?, if_revision).map(ok_rev),
