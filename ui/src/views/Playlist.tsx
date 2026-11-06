@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { unwrap } from 'solid-js/store';
 import { VOL_UNITY, type Clip, type Id, type Op, type Track } from '../api/types';
 import { clampMove, moveClips, resizeClip, TOTAL } from '../lib/clipOps';
 import { clamp, fmtPos, volText } from '../lib/format';
@@ -10,7 +11,7 @@ import { allocId, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
-import { addFrameTask, fitCanvas } from '../ui/frameLoop';
+import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
 import { drawGrid, drawRuler, type View } from './playlistDraw';
 
 const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -63,13 +64,13 @@ export function Playlist() {
   const editable = () => U.tool === 'draw' || U.tool === 'paint' || U.tool === 'select';
   const toolCursor = () => ({ draw: 'crosshair', paint: 'copy', erase: 'not-allowed', mute: 'pointer', slice: 'col-resize', select: 'crosshair' })[U.tool];
 
-  let dirtyGrid = true, dirtyRuler = true, lastRecV = -1, lastPhX = -1;
+  let dirtyGrid = true, dirtyRuler = true, lastRecV = -1, lastPhX = -1, fontEpoch = 0;
+  // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip
+  createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; S.project.loop?.a; S.project.loop?.b; peaksVersion(); scroll(); cw(); ch(); dirtyGrid = true; });
+  createEffect(() => { for (const _ of U.sel) void _; dirtyGrid = true; });
+  createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
+  createEffect(() => { for (const c of S.project.clips) { c.start; c.len; c.track; c.offset; c.muted; c.gain; c.fadeIn; c.fadeOut; c.ref; c.kind; c.norm; c.rev; } dirtyGrid = true; });
   createEffect(() => {
-    // everything the grid canvas depends on (not mixer state)
-    U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; S.project.loop?.a; S.project.loop?.b; peaksVersion(); scroll(); cw(); ch();
-    for (const _ of U.sel) void _;
-    for (const t of S.project.tracks) { t.h; t.arm; }
-    for (const c of S.project.clips) { c.start; c.len; c.track; c.offset; c.muted; c.gain; c.fadeIn; c.fadeOut; c.ref; c.kind; c.norm; c.rev; }
     for (const p of S.project.patterns) { p.name; p.color; p.len; for (const n of p.notes) { n.step; n.len; n.p; } }
     for (const s of S.project.sources) { s.name; s.color; s.dur; }
     dirtyGrid = true;
@@ -86,6 +87,7 @@ export function Playlist() {
     if (recActive && recState.version !== lastRecV) { dirtyGrid = true; lastRecV = recState.version; }
     else if (!recActive && lastRecV !== -1) { dirtyGrid = true; lastRecV = -1; }
     const dpr = window.devicePixelRatio || 1;
+    if (fontEpoch !== fonts.epoch) { fontEpoch = fonts.epoch; dirtyGrid = dirtyRuler = true; }
     if (dirtyGrid) {
       dirtyGrid = false;
       const W = cw(), H = ch(), o = offsets();
@@ -94,7 +96,7 @@ export function Playlist() {
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       g.fillStyle = '#111419'; g.fillRect(0, 0, W, H);
       const v: View = { offX: o.x, offY: o.y, W, H, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec };
-      drawGrid(g, v, S.project, recActive ? recState : null);
+      drawGrid(g, v, unwrap(S.project), recActive ? recState : null);
     }
     if (dirtyRuler) {
       dirtyRuler = false;
@@ -148,8 +150,8 @@ export function Playlist() {
   const pt = (e: { clientX: number; clientY: number }) => gridPoint(e.clientX, e.clientY);
   function hit(x: number, y: number): Hit | null {
     const ti = trackAtY(y); if (ti < 0) return null;
-    const t = tops(), tr = S.project.tracks[ti], bw = U.bw, spb = 60 / S.project.bpm;
-    const cs = S.project.clips;
+    const P = unwrap(S.project), t = tops(), tr = P.tracks[ti], bw = U.bw, spb = 60 / P.bpm;
+    const cs = P.clips;
     for (let i = cs.length - 1; i >= 0; i--) {
       const c = cs[i]; if (c.track !== ti) continue;
       const cx = c.start * bw, cwid = Math.max(3, c.len * bw - 1), cy = t[ti] + 1;

@@ -2,6 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() -> std::process::ExitCode {
+    // a VST3 scan worker (the app re-invokes itself to read unknown plugins safely)
+    if wave_vst3::run_scan_worker_if_requested() {
+        return std::process::ExitCode::SUCCESS;
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     // `WAVE --cli …` is the `wave` command (see cli_shim): same binary, no window.
     if args.first().map(String::as_str) == Some("--cli") {

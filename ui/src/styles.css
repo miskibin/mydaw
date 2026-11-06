@@ -9,6 +9,8 @@
 html, body { margin: 0; height: 100%; background: var(--bg1); overflow: hidden; }
 * { box-sizing: border-box; }
 button, select, input { font: inherit; }
+button:focus { outline: none; }
+button:focus-visible { outline: 1px solid var(--blue); outline-offset: -1px; }
 a { color: var(--blue); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: var(--bg1); }

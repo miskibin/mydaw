@@ -19,7 +19,7 @@ function onKey(e: KeyboardEvent) {
   const tg = (e.target as HTMLElement).tagName;
   if (tg === 'INPUT' || tg === 'SELECT' || tg === 'TEXTAREA') return;
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
-  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) void A.togglePlay(); return; }
+  if (e.code === 'Space') { e.preventDefault(); (document.activeElement as HTMLElement | null)?.blur?.(); if (!e.repeat) void A.togglePlay(); return; }
   if (e.key === 'Escape') {
     if (U.menu) return closeMenu();
     if (U.vstPicker) return setU('vstPicker', null);
@@ -63,7 +63,10 @@ function onKey(e: KeyboardEvent) {
     if (t) { setU('tool', t[0]); say('Narzędzie: ' + t[2]); }
   }
 }
-const onKeyUp = (e: KeyboardEvent) => { if (e.key === 'Alt') { e.preventDefault(); setU('alt', false); } };
+const onKeyUp = (e: KeyboardEvent) => {
+  if (e.key === 'Alt') { e.preventDefault(); setU('alt', false); }
+  if (e.code === 'Space' && (e.target as HTMLElement).tagName === 'BUTTON') e.preventDefault(); // no button click on Space
+};
 const onBlur = () => { if (U.alt) setU('alt', false); };
 
 export function App() {

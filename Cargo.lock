@@ -4625,7 +4625,9 @@ dependencies = [
  "wave-audio-io",
  "wave-cli",
  "wave-engine",
+ "wave-plugin-windows",
  "wave-session",
+ "wave-vst3",
 ]
 
 [[package]]

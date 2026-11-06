@@ -275,7 +275,11 @@ pub(crate) fn client_size(id: WindowId, hwnd: isize) -> Result<WindowSize, Windo
     })
 }
 
-pub(crate) fn set_client_size(id: WindowId, hwnd: isize, size: WindowSize) -> Result<(), WindowError> {
+pub(crate) fn set_client_size(
+    id: WindowId,
+    hwnd: isize,
+    size: WindowSize,
+) -> Result<(), WindowError> {
     let hwnd = hwnd as HWND;
     // SAFETY: created by this module on this thread.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
@@ -433,7 +437,11 @@ mod tests {
 
     #[test]
     fn the_window_rectangle_is_larger_than_the_client_area_it_wraps() {
-        let rect = window_rect_for(WindowSize::new(400, 250), style_for(true), USER_DEFAULT_SCREEN_DPI);
+        let rect = window_rect_for(
+            WindowSize::new(400, 250),
+            style_for(true),
+            USER_DEFAULT_SCREEN_DPI,
+        );
         let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
         assert!(width >= 400 && height >= 250, "got {width}x{height}");
         assert!(height - 250 < 200, "implausible caption height");

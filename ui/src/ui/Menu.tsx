@@ -11,7 +11,7 @@ export function ContextMenu() {
     <Show when={U.menu}>
       {menu => (
         <>
-          <div class="backdrop" onPointerDown={closeMenu} onContextMenu={e => { e.preventDefault(); closeMenu(); }} />
+          <div class="backdrop" onPointerDown={closeMenu} onContextMenu={e => e.preventDefault()} />
           <div class="menu" style={{ left: menu().x + 'px', top: menu().y + 'px' }} onPointerDown={e => e.stopPropagation()}>
             <For each={menu().items}>
               {it => (

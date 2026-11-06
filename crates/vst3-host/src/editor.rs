@@ -98,11 +98,14 @@ impl EditorSession {
         }
         // SAFETY: the controller is live and initialised; `createView` returns
         // an addRef'ed view or null, which is `from_raw`'s contract.
-        let view = unsafe { ComPtr::<IPlugView>::from_raw(controller.createView(ViewType::kEditor)) }
-            .ok_or(Vst3Error::NoEditor)?;
+        let view =
+            unsafe { ComPtr::<IPlugView>::from_raw(controller.createView(ViewType::kEditor)) }
+                .ok_or(Vst3Error::NoEditor)?;
         // SAFETY: live view, static C string.
         if unsafe { view.isPlatformTypeSupported(PLATFORM_TYPE.0) } != kResultTrue {
-            return Err(Vst3Error::UnsupportedEditorApi { api: PLATFORM_TYPE.1 });
+            return Err(Vst3Error::UnsupportedEditorApi {
+                api: PLATFORM_TYPE.1,
+            });
         }
         requests.clear();
         // SAFETY: live view, live out-parameter.
@@ -175,7 +178,10 @@ impl EditorSession {
         self.window.set_client_size(self.size.clamped())?;
         self.window.show()?;
         if let Ok(false) = self.window.has_child_window() {
-            log::warn!("'{}': the VST3 editor reported a successful attach but embedded no window", self.window.id());
+            log::warn!(
+                "'{}': the VST3 editor reported a successful attach but embedded no window",
+                self.window.id()
+            );
         }
         Ok(())
     }
@@ -193,7 +199,10 @@ impl EditorSession {
     /// the window, in which case the caller calls [`close`](Self::close).
     pub(crate) fn pump(&mut self) -> bool {
         if let Some((width, height)) = self.requests.take_resize() {
-            let wanted = WindowSize::new(u32::try_from(width).unwrap_or(0), u32::try_from(height).unwrap_or(0));
+            let wanted = WindowSize::new(
+                u32::try_from(width).unwrap_or(0),
+                u32::try_from(height).unwrap_or(0),
+            );
             if wanted.width > 0 && wanted.height > 0 && wanted != self.size {
                 // Record first: the resize event this causes is our own echo.
                 self.size = wanted;
@@ -267,7 +276,11 @@ impl EditorSession {
             return;
         }
         self.scale = scale;
-        if let Some(scaling) = self.view.as_ref().and_then(|view| view.cast::<IPlugViewContentScaleSupport>()) {
+        if let Some(scaling) = self
+            .view
+            .as_ref()
+            .and_then(|view| view.cast::<IPlugViewContentScaleSupport>())
+        {
             // SAFETY: live interface, scalar argument.
             let _ = unsafe { scaling.setContentScaleFactor(scale) };
         }
@@ -306,19 +319,44 @@ mod tests {
 
     #[test]
     fn view_rects_and_window_sizes_convert_without_wrapping() {
-        let rect = ViewRect { left: 10, top: 20, right: 810, bottom: 620 };
+        let rect = ViewRect {
+            left: 10,
+            top: 20,
+            right: 810,
+            bottom: 620,
+        };
         assert_eq!(rect_to_size(&rect), WindowSize::new(800, 600));
         let at_origin = size_to_rect(WindowSize::new(640, 480));
-        assert_eq!((at_origin.left, at_origin.top, at_origin.right, at_origin.bottom), (0, 0, 640, 480));
-        let inverted = ViewRect { left: 800, top: 600, right: 0, bottom: 0 };
-        assert_eq!(rect_to_size(&inverted), WindowSize::new(0, 0), "no gigantic window from an underflow");
+        assert_eq!(
+            (
+                at_origin.left,
+                at_origin.top,
+                at_origin.right,
+                at_origin.bottom
+            ),
+            (0, 0, 640, 480)
+        );
+        let inverted = ViewRect {
+            left: 800,
+            top: 600,
+            right: 0,
+            bottom: 0,
+        };
+        assert_eq!(
+            rect_to_size(&inverted),
+            WindowSize::new(0, 0),
+            "no gigantic window from an underflow"
+        );
     }
 
     #[test]
     fn dpi_maps_to_the_scale_vst3_editors_expect() {
         assert!((scale_for_dpi(96) - 1.0).abs() < f32::EPSILON);
         assert!((scale_for_dpi(144) - 1.5).abs() < f32::EPSILON);
-        assert!((scale_for_dpi(0) - 1.0).abs() < f32::EPSILON, "never a 0.0 scale");
+        assert!(
+            (scale_for_dpi(0) - 1.0).abs() < f32::EPSILON,
+            "never a 0.0 scale"
+        );
         assert!(FALLBACK_SIZE.is_within_limits());
     }
 }

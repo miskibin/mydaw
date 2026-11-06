@@ -53,13 +53,20 @@ export function fitCanvas(cv: HTMLCanvasElement, W: number, H: number): boolean 
   return true;
 }
 
+/** Bumped when web fonts finish loading, so canvases drawn with fallback glyphs redraw. */
+export const fonts = { epoch: 0 };
+if (typeof document !== 'undefined' && document.fonts) {
+  document.fonts.ready.then(() => { fonts.epoch++; });
+  document.fonts.addEventListener('loadingdone', () => { fonts.epoch++; });
+}
+
 /** Offscreen layer cache: re-rendered only when `key` changes. */
 export class Layer {
   cv: HTMLCanvasElement | OffscreenCanvas | null = null;
   key = '';
   get(W: number, H: number, key: string, draw: (g: CanvasRenderingContext2D, W: number, H: number) => void) {
     const dpr = window.devicePixelRatio || 1;
-    const fullKey = key + '|' + W + 'x' + H + '@' + dpr;
+    const fullKey = key + '|' + W + 'x' + H + '@' + dpr + '#' + fonts.epoch;
     if (this.cv && this.key === fullKey) return this.cv;
     if (!this.cv) this.cv = document.createElement('canvas');
     const cv = this.cv as HTMLCanvasElement;

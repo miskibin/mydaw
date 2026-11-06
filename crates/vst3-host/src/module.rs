@@ -212,10 +212,7 @@ impl Module {
         // take seconds.
         let module = Arc::new(Self::open(path)?);
         Ok(Arc::clone(
-            modules
-                .lock()
-                .entry(path.to_path_buf())
-                .or_insert(module),
+            modules.lock().entry(path.to_path_buf()).or_insert(module),
         ))
     }
 
@@ -233,10 +230,12 @@ impl Module {
                     path: path.to_path_buf(),
                 });
             }
-            let get_factory = unsafe { library.symbol::<GetPluginFactoryFn>(b"GetPluginFactory\0") }
-                .ok_or_else(|| Vst3Error::NoEntryPoint {
-                    path: path.to_path_buf(),
-                })?;
+            let get_factory =
+                unsafe { library.symbol::<GetPluginFactoryFn>(b"GetPluginFactory\0") }.ok_or_else(
+                    || Vst3Error::NoEntryPoint {
+                        path: path.to_path_buf(),
+                    },
+                )?;
             // An already-addRef'ed pointer the caller owns: `from_raw`'s contract.
             unsafe { ComPtr::from_raw(get_factory()) }.ok_or_else(|| Vst3Error::NoFactory {
                 path: path.to_path_buf(),
@@ -334,7 +333,10 @@ impl LibraryHandle {
     unsafe fn symbol<F: Copy>(&self, name: &[u8]) -> Option<F> {
         use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
         debug_assert_eq!(name.last(), Some(&0));
-        debug_assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<*const c_void>());
+        debug_assert_eq!(
+            std::mem::size_of::<F>(),
+            std::mem::size_of::<*const c_void>()
+        );
         let address = GetProcAddress(self.handle.cast(), name.as_ptr())?;
         Some(std::mem::transmute_copy::<_, F>(&address))
     }
@@ -349,12 +351,11 @@ struct LibraryHandle {
 impl LibraryHandle {
     fn load(binary: &Path) -> Result<Self, Vst3Error> {
         use std::os::unix::ffi::OsStrExt;
-        let path = std::ffi::CString::new(binary.as_os_str().as_bytes()).map_err(|_| {
-            Vst3Error::Load {
+        let path =
+            std::ffi::CString::new(binary.as_os_str().as_bytes()).map_err(|_| Vst3Error::Load {
                 path: binary.to_path_buf(),
                 message: "the path contains a NUL byte".to_owned(),
-            }
-        })?;
+            })?;
         // SAFETY: `path` is NUL-terminated and outlives the call. Loading runs
         // the module's static initialisers -- third-party code, unavoidably.
         let handle = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
@@ -389,7 +390,10 @@ impl LibraryHandle {
     /// `F` must be the exact signature of the export and `name` NUL-terminated.
     unsafe fn symbol<F: Copy>(&self, name: &[u8]) -> Option<F> {
         debug_assert_eq!(name.last(), Some(&0));
-        debug_assert_eq!(std::mem::size_of::<F>(), std::mem::size_of::<*const c_void>());
+        debug_assert_eq!(
+            std::mem::size_of::<F>(),
+            std::mem::size_of::<*const c_void>()
+        );
         let address = libc::dlsym(self.handle, name.as_ptr().cast());
         if address.is_null() {
             None
@@ -443,7 +447,9 @@ pub(crate) fn enter_com_apartment() {
                 let result =
                     unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) };
                 if result != 0 && result != 1 {
-                    log::debug!("this thread is already in a different COM apartment ({result:#x})");
+                    log::debug!(
+                        "this thread is already in a different COM apartment ({result:#x})"
+                    );
                 }
             }
         });
@@ -490,7 +496,8 @@ pub(crate) fn scratch_dir(tag: &str) -> PathBuf {
     use std::sync::atomic::{AtomicU32, Ordering};
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!("wave-vst3-{tag}-{}-{unique}", std::process::id()));
+    let path =
+        std::env::temp_dir().join(format!("wave-vst3-{tag}-{}-{unique}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("scratch dir");
     path
@@ -513,12 +520,21 @@ mod tests {
         assert_eq!(ClassId::from_tuid(&id.to_tuid()), id);
         assert_eq!(id.to_string(), hex);
         let zero = ClassId([0; 16]);
-        assert_eq!(zero.to_hex(), "0".repeat(32), "a blank id still renders all 32 digits");
+        assert_eq!(
+            zero.to_hex(),
+            "0".repeat(32),
+            "a blank id still renders all 32 digits"
+        );
     }
 
     #[test]
     fn a_class_id_that_is_not_32_hex_digits_is_rejected_rather_than_padded() {
-        for bad in ["", "0123", "zzzz567890123456789012345678901f", &"0".repeat(33)] {
+        for bad in [
+            "",
+            "0123",
+            "zzzz567890123456789012345678901f",
+            &"0".repeat(33),
+        ] {
             assert!(ClassId::from_hex(bad).is_none(), "{bad} should be rejected");
         }
         assert_eq!(
@@ -594,7 +610,10 @@ mod tests {
             matches!(err, Vst3Error::Load { .. } | Vst3Error::UnsupportedPlatform),
             "got {err:?}"
         );
-        assert!(Module::shared(&bogus).is_err(), "failures are not cached as successes");
+        assert!(
+            Module::shared(&bogus).is_err(),
+            "failures are not cached as successes"
+        );
     }
 
     #[test]

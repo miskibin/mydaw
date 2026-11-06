@@ -22,7 +22,10 @@ const LEGACY_MAGIC: &[u8; 16] = b"MYDAW-VST-STATE1";
 const HEADER: usize = 24;
 
 pub(crate) fn encode(component: &[u8], controller: &[u8]) -> Result<Vec<u8>, Vst3Error> {
-    let total = component.len().saturating_add(controller.len()).saturating_add(HEADER);
+    let total = component
+        .len()
+        .saturating_add(controller.len())
+        .saturating_add(HEADER);
     if total > MAX_STATE_BYTES {
         return Err(Vst3Error::InvalidState(format!(
             "the plugin state is {total} bytes, past the {MAX_STATE_BYTES} byte limit"
@@ -54,9 +57,14 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<(&[u8], &[u8]), Vst3Error> {
     let component = u32::from_le_bytes([header[0], header[1], header[2], header[3]]) as usize;
     let controller = u32::from_le_bytes([header[4], header[5], header[6], header[7]]) as usize;
     if component.saturating_add(controller).saturating_add(HEADER) != bytes.len() {
-        return Err(Vst3Error::InvalidState("the state lengths do not match its size".to_owned()));
+        return Err(Vst3Error::InvalidState(
+            "the state lengths do not match its size".to_owned(),
+        ));
     }
-    Ok((&bytes[HEADER..HEADER + component], &bytes[HEADER + component..]))
+    Ok((
+        &bytes[HEADER..HEADER + component],
+        &bytes[HEADER + component..],
+    ))
 }
 
 #[cfg(test)]
@@ -67,7 +75,10 @@ mod tests {
     fn both_streams_round_trip_through_the_envelope() {
         let encoded = encode(b"processor", b"editor").unwrap();
         assert!(encoded.starts_with(MAGIC));
-        assert_eq!(decode(&encoded).unwrap(), (&b"processor"[..], &b"editor"[..]));
+        assert_eq!(
+            decode(&encoded).unwrap(),
+            (&b"processor"[..], &b"editor"[..])
+        );
         let empty = encode(b"", b"").unwrap();
         assert_eq!(decode(&empty).unwrap(), (&b""[..], &b""[..]));
     }

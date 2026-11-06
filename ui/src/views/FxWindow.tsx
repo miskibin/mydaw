@@ -10,7 +10,7 @@ import { findFx, insName, S } from '../state/store';
 import { tele } from '../state/telemetry';
 import { openMenu, say, setU, U, type PlugWin } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
-import { addFrameTask, fitCanvas } from '../ui/frameLoop';
+import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
 import { FxTile } from '../ui/icons';
 import { Knob } from '../ui/Knob';
 import { BAND_COLORS, type Viz } from './fx/common';
@@ -126,7 +126,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
   const viz = makeViz(ff()!.f);
   const height = createMemo(() => props.height);
   const pw = createMemo(() => props.pw);
-  let version = 0, drawnVersion = -1, lastW = 0;
+  let version = 0, drawnVersion = -1, lastW = 0, fontEpoch = -1;
   createEffect(() => { // anything param-ish changes → redraw
     const f = ff()?.f; if (!f) return;
     f.bypass; for (const k in f.params) void f.params[k];
@@ -145,8 +145,8 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
       const changed = viz.update(f, a, now);
       const W = cv.clientWidth, H = height();
       if (!W) return;
-      if (!changed && version === drawnVersion && W === lastW) return;
-      drawnVersion = version; lastW = W;
+      if (!changed && version === drawnVersion && W === lastW && fontEpoch === fonts.epoch) return;
+      drawnVersion = version; lastW = W; fontEpoch = fonts.epoch;
       fitCanvas(cv, W, H);
       const g = cv.getContext('2d')!;
       const dpr = window.devicePixelRatio || 1;

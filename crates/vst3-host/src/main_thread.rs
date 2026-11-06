@@ -45,9 +45,7 @@ static EXECUTOR: OnceLock<Executor> = OnceLock::new();
 /// ```
 ///
 /// Returns `false` (and changes nothing) if an executor was already installed.
-pub fn set_main_thread_executor(
-    post: impl Fn(MainThreadJob) + Send + Sync + 'static,
-) -> bool {
+pub fn set_main_thread_executor(post: impl Fn(MainThreadJob) + Send + Sync + 'static) -> bool {
     EXECUTOR
         .set(Executor {
             thread: std::thread::current().id(),

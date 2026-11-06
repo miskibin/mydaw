@@ -462,7 +462,10 @@ impl std::fmt::Debug for Window {
 impl Drop for Window {
     fn drop(&mut self) {
         if let Err(err) = self.close() {
-            log::error!("plugin {} dropped off the UI thread and leaked: {err}", self.id);
+            log::error!(
+                "plugin {} dropped off the UI thread and leaked: {err}",
+                self.id
+            );
         }
     }
 }
@@ -501,9 +504,15 @@ mod tests {
 
     #[test]
     fn sizes_are_clamped_into_the_supported_range() {
-        assert_eq!(WindowSize::new(400, 250).clamped(), WindowSize::new(400, 250));
+        assert_eq!(
+            WindowSize::new(400, 250).clamped(),
+            WindowSize::new(400, 250)
+        );
         assert_eq!(WindowSize::new(0, 0).clamped(), MIN_WINDOW_SIZE);
-        assert_eq!(WindowSize::new(u32::MAX, u32::MAX).clamped(), MAX_WINDOW_SIZE);
+        assert_eq!(
+            WindowSize::new(u32::MAX, u32::MAX).clamped(),
+            MAX_WINDOW_SIZE
+        );
         assert_eq!(
             WindowSize::new(1, 100_000).clamped(),
             WindowSize::new(MIN_WINDOW_SIZE.width, MAX_WINDOW_SIZE.height)
@@ -549,7 +558,7 @@ mod tests {
             .open_window(&WindowOptions::new("Editor", WindowSize::new(400, 250)))
             .unwrap_err();
         assert!(matches!(err, WindowError::Unsupported), "got {err:?}");
-        assert!(!crate::SUPPORTED);
+        const { assert!(!crate::SUPPORTED) };
     }
 
     /// A window bookkept by a service but with no native backing, so the
@@ -591,7 +600,10 @@ mod tests {
         drop(first);
         assert_eq!(service.open_count(), 1);
         assert_eq!(service.close_all(), 1);
-        assert!(!second.is_open(), "close_all destroys what its owner left open");
+        assert!(
+            !second.is_open(),
+            "close_all destroys what its owner left open"
+        );
         drop(second);
         assert_eq!(service.open_count(), 0);
     }
@@ -625,7 +637,10 @@ mod tests {
         assert_eq!(fired.get(), 1);
         assert_eq!(
             receiver.try_iter().collect::<Vec<_>>(),
-            vec![WindowEvent::Closed, WindowEvent::Resized(WindowSize::new(640, 480))]
+            vec![
+                WindowEvent::Closed,
+                WindowEvent::Resized(WindowSize::new(640, 480))
+            ]
         );
         drop(receiver);
         state.post(WindowEvent::Closed);

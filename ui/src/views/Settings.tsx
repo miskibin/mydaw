@@ -19,14 +19,15 @@ function SettingsDialog() {
   const [busy, setBusy] = createSignal(false);
   const [err, setErr] = createSignal<string | null>(null);
   const loadDevs = (host: string) => be().audioDevices(host).then(setDevs).catch(e => setErr(String(e)));
+  let off: (() => void) | null = null;
+  onCleanup(() => off?.());
   onMount(async () => {
     try {
       const [h, s] = await Promise.all([be().audioHosts(), be().audioGetConfig()]);
       setHosts(h); setSt(s); await loadDevs(s.host);
     } catch (e) { setErr(String(e)); }
     be().cliStatus().then(setCli).catch(() => {});
-    const off = await be().on('audio-status', s => setSt(s));
-    onCleanup(off);
+    off = await be().on('audio-status', s => setSt(s));
   });
   const apply = async (patch: Partial<AudioConfig>) => {
     const s = st(); if (!s) return;

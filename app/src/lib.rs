@@ -379,20 +379,25 @@ pub fn run() {
         Err(e) => log::warn!("CLI session unavailable: {e}"),
     }
 
-    // open the audio device off the UI thread
-    {
-        let a = app.clone();
-        std::thread::spawn(move || {
-            let cfg = a.settings.lock().audio.clone();
-            let st = a.audio.start(cfg);
-            *a.status.lock() = st;
-        });
-    }
-
+    let app_setup = app.clone();
+    let app_exit = app.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app.clone())
         .setup(move |tapp| {
+            // plugin work that must happen on the UI thread is posted here
+            let mh = tapp.handle().clone();
+            wave_vst3::set_main_thread_executor(move |job| {
+                let _ = mh.run_on_main_thread(job);
+            });
+            tapp.manage(wave_plugin_windows::Service::new());
+            // open the audio device off the UI thread
+            let a = app_setup.clone();
+            std::thread::spawn(move || {
+                let cfg = a.settings.lock().audio.clone();
+                let st = a.audio.start(cfg);
+                *a.status.lock() = st;
+            });
             let h = tapp.handle().clone();
             engine.on_change(move |dto| {
                 let _ = h.emit("state", dto);
@@ -411,7 +416,15 @@ pub fn run() {
             project_new, project_open, project_save,
             vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running WAVE");
-    app.audio.stop();
+        .build(tauri::generate_context!())
+        .expect("error while building WAVE")
+        .run(move |h, ev| {
+            if let tauri::RunEvent::Exit = ev {
+                // plugin editors detach first, then audio stops, then instances go
+                if let Some(w) = h.try_state::<wave_plugin_windows::Service>() {
+                    w.close_all();
+                }
+                app_exit.audio.stop();
+            }
+        });
 }

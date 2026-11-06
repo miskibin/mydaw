@@ -16,22 +16,23 @@ const FONT = '500 10px "Geist Variable", Geist, system-ui, sans-serif';
 const MONO9 = '500 9px "Geist Mono Variable", "Geist Mono", monospace';
 
 const patCache = new Map<string, Float32Array>();
-/** Note rectangles [x,y,w,h]* of a pattern clip body, cached by geometry. */
-function patRects(p: Pattern, offset: number, len: number, bw: number, h: number): Float32Array {
-  const key = p.id + '|' + offset + '|' + len + '|' + bw + '|' + h + '|' + p.len + '|' + p.notes.length + '|' + (p.notes[0]?.step ?? '');
+const patSig = (p: Pattern) => p.notes.map(n => n.inst + n.step + ':' + n.len + ':' + (n.p ?? '')).join(',');
+/** Note rectangles [beat, y, lenBeats, h]* of a pattern clip body, cached by geometry (zoom-independent). */
+function patRects(p: Pattern, sig: string, offset: number, len: number, h: number): Float32Array {
+  const key = p.id + '|' + offset + '|' + len + '|' + h + '|' + p.len + '|' + sig;
   let r = patCache.get(key);
   if (r) return r;
   const drums = ['hat', 'clap', 'kick'];
   const pitches = [...new Set(p.notes.filter(n => n.p != null).map(n => n.p!))].sort((a, b) => b - a);
   const rows = [...drums.filter(d => p.notes.some(n => n.inst === d)), ...pitches.map(x => 'p' + x)];
   const nr = Math.max(rows.length, 3), rh = Math.max(1.5, Math.min(5, (h - 6) / nr));
-  const top = (h - nr * rh) / 2, W = len * bw, out: number[] = [];
+  const top = (h - nr * rh) / 2, out: number[] = [];
   for (let k = Math.floor(offset / p.len) - 1; k <= Math.ceil((offset + len) / p.len); k++) {
     for (const n of p.notes) {
       const b = k * p.len + n.step / 4 - offset;
       if (b < 0 || b >= len) continue;
       const ri = rows.indexOf(n.p != null ? 'p' + n.p : n.inst);
-      out.push(b * bw, top + ri * rh, Math.max(1.5, Math.min(n.len / 4 * bw - 1, W - b * bw)), Math.max(1, rh - 1));
+      out.push(b, top + ri * rh, Math.min(n.len / 4, len - b), Math.max(1, rh - 1));
     }
     if (out.length > 6000) break;
   }
@@ -75,6 +76,7 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
   if (p.loop) { g.fillStyle = 'rgba(78,192,138,.05)'; g.fillRect(p.loop.a * bw, y0, (p.loop.b - p.loop.a) * bw, gridBottom - y0); }
   // clips
   const pats = new Map(p.patterns.map(x => [x.id, x]));
+  const sigs = new Map(p.patterns.map(x => [x.id, patSig(x)]));
   const srcs = new Map(p.sources.map(x => [x.id, x]));
   for (const c of p.clips) {
     const tr = p.tracks[c.track]; if (!tr) continue;
@@ -82,13 +84,13 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
     if (cx > x1 || cx + cw < x0 || cy > y1 || cy + ch < y0) continue;
     const src = c.kind === 'pat' ? pats.get(c.ref) : srcs.get(c.ref);
     if (!src) continue;
-    drawClip(g, v, c, src, cx, cy, cw, ch, x0, x1);
+    drawClip(g, v, c, src, sigs.get(c.ref) ?? '', cx, cy, cw, ch, x0, x1);
   }
   if (rec && p.tracks[rec.track]) drawRec(g, v, rec, p.tracks[rec.track].h);
   g.restore();
 }
 
-function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | Source, cx: number, cy: number, cw: number, ch: number, vx0: number, vx1: number) {
+function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | Source, sig: string, cx: number, cy: number, cw: number, ch: number, vx0: number, vx1: number) {
   const sel = v.sel.has(c.id), color = src.color, bh = ch - 15;
   g.save();
   if (c.muted) g.globalAlpha = 0.38;
@@ -113,11 +115,12 @@ function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | 
   const by = cy + 15;
   if (!isAudio) {
     const pat = src as Pattern;
-    const r = patRects(pat, mod(c.offset, pat.len), c.len, v.bw, bh);
+    const r = patRects(pat, sig, mod(c.offset, pat.len), c.len, bh), bw = v.bw;
     g.fillStyle = ink; g.beginPath();
     for (let i = 0; i < r.length; i += 4) {
-      const x = cx + r[i]; if (x > vis1 || x + r[i + 2] < vis0) continue;
-      g.rect(x, by + r[i + 1], r[i + 2], r[i + 3]);
+      const x = cx + r[i] * bw, w = Math.max(1.5, r[i + 2] * bw - (r[i + 2] * bw < (c.len - r[i]) * bw ? 1 : 0));
+      if (x > vis1 || x + w < vis0) continue;
+      g.rect(x, by + r[i + 1], w, r[i + 3]);
     }
     g.fill();
   } else {

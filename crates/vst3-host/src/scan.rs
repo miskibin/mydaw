@@ -98,7 +98,10 @@ impl Kind {
             .collect();
         if parts.is_empty() {
             Self::Unknown
-        } else if parts.iter().any(|part| part.eq_ignore_ascii_case("Instrument")) {
+        } else if parts
+            .iter()
+            .any(|part| part.eq_ignore_ascii_case("Instrument"))
+        {
             Self::Instrument
         } else if parts.iter().any(|part| part.eq_ignore_ascii_case("Fx")) {
             Self::Effect
@@ -140,7 +143,10 @@ impl ScanTarget for ScannedClass {
         let opened = Module::open(module).map_err(|err| err.to_string())?;
         let classes = read_classes(opened.factory(), module);
         if classes.is_empty() {
-            return Err(format!("VST3 module {} exports no audio plugin class", module.display()));
+            return Err(format!(
+                "VST3 module {} exports no audio plugin class",
+                module.display()
+            ));
         }
         Ok(classes)
     }
@@ -221,7 +227,12 @@ pub fn default_search_paths() -> Vec<PathBuf> {
             paths.push(PathBuf::from(common).join("VST3"));
         }
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            paths.push(PathBuf::from(local).join("Programs").join("Common").join("VST3"));
+            paths.push(
+                PathBuf::from(local)
+                    .join("Programs")
+                    .join("Common")
+                    .join("VST3"),
+            );
         }
     }
     #[cfg(target_os = "macos")]
@@ -293,7 +304,10 @@ fn dedicated_worker() -> Option<PathBuf> {
     if sibling.is_file() {
         return Some(sibling);
     }
-    if dir.file_name().is_some_and(|leaf| leaf == "deps" || leaf == "examples") {
+    if dir
+        .file_name()
+        .is_some_and(|leaf| leaf == "deps" || leaf == "examples")
+    {
         let up = dir.parent()?.join(&name);
         if up.is_file() {
             return Some(up);
@@ -421,16 +435,25 @@ mod tests {
 
     #[test]
     fn subcategories_decide_what_is_offered_as_an_insert_effect() {
-        assert_eq!(Kind::from_subcategories("Instrument|Synth"), Kind::Instrument);
+        assert_eq!(
+            Kind::from_subcategories("Instrument|Synth"),
+            Kind::Instrument
+        );
         assert_eq!(Kind::from_subcategories("Fx|Reverb"), Kind::Effect);
-        assert_eq!(Kind::from_subcategories("Fx|Instrument|Pitch Shift"), Kind::Instrument);
+        assert_eq!(
+            Kind::from_subcategories("Fx|Instrument|Pitch Shift"),
+            Kind::Instrument
+        );
         assert_eq!(Kind::from_subcategories(" FX | Delay "), Kind::Effect);
         assert_eq!(Kind::from_subcategories("Analyzer|Spectrum"), Kind::Other);
         assert_eq!(Kind::from_subcategories("  "), Kind::Unknown);
         assert_eq!(Kind::from_subcategories("Fx||Delay|"), Kind::Effect);
 
         assert!(class("Fx|Reverb").is_effect());
-        assert!(class("").is_effect(), "an unclassified plugin is still worth offering");
+        assert!(
+            class("").is_effect(),
+            "an unclassified plugin is still worth offering"
+        );
         assert!(!class("Instrument|Synth").is_effect());
         assert!(!class("Analyzer").is_effect());
     }
@@ -449,7 +472,10 @@ mod tests {
     #[test]
     fn the_cache_shape_matches_the_old_hosts_entries_and_omits_the_path() {
         let json = serde_json::to_value(class("Fx")).unwrap();
-        assert!(json.get("path").is_none(), "a child must not supply the module path");
+        assert!(
+            json.get("path").is_none(),
+            "a child must not supply the module path"
+        );
         assert_eq!(json["cid"], "07".repeat(16));
         // An entry written by the old host's cache still parses.
         let old = serde_json::json!({
@@ -505,8 +531,11 @@ mod tests {
         // In-process, so this unit test needs no worker binary; the
         // integration tests cover the child-process path.
         let scanner = ModuleScan::<ScannedClass>::in_memory().with_spawn(WorkerSpawn::InProcess);
-        assert!(scan_with(&scanner, &[dir.clone()], false).is_empty(), "listing opens nothing");
-        assert!(scan_with(&scanner, &[dir.clone()], true).is_empty());
+        assert!(
+            scan_with(&scanner, std::slice::from_ref(&dir), false).is_empty(),
+            "listing opens nothing"
+        );
+        assert!(scan_with(&scanner, std::slice::from_ref(&dir), true).is_empty());
         let err = ScannedClass::read_module(&dir.join("a.vst3")).unwrap_err();
         assert!(err.contains("a.vst3"), "{err}");
     }

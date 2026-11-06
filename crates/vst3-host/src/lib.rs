@@ -135,7 +135,9 @@ pub use effect::{instantiate, ParamInfo, Vst3Effect, Vst3Handle};
 pub use error::Vst3Error;
 pub use host::MAX_STATE_BYTES;
 pub use main_thread::{on_main_thread, set_main_thread_executor, MainThreadJob};
-pub use scan::{default_search_paths, run_scan_worker_if_requested, scan, PluginInfo, SCAN_WORKER_BIN};
+pub use scan::{
+    default_search_paths, run_scan_worker_if_requested, scan, PluginInfo, SCAN_WORKER_BIN,
+};
 
 /// Test seams. Not part of the API; used by this crate's integration tests.
 #[doc(hidden)]
@@ -150,8 +152,13 @@ pub mod testing {
     /// opening modules with `worker` (or in this process when `None`).
     /// Returns the effects found, the child processes started and the
     /// modules block-listed by this pass.
-    pub fn scan_roots(roots: &[PathBuf], worker: Option<&Path>) -> (Vec<crate::PluginInfo>, usize, Vec<PathBuf>) {
-        let spawn = worker.map_or(WorkerSpawn::InProcess, |path| WorkerSpawn::Program(path.to_path_buf()));
+    pub fn scan_roots(
+        roots: &[PathBuf],
+        worker: Option<&Path>,
+    ) -> (Vec<crate::PluginInfo>, usize, Vec<PathBuf>) {
+        let spawn = worker.map_or(WorkerSpawn::InProcess, |path| {
+            WorkerSpawn::Program(path.to_path_buf())
+        });
         let scanner = ModuleScan::<ScannedClass>::in_memory().with_spawn(spawn);
         let modules = crate::scan::module_paths(roots);
         let pass = scanner.scan_all(&modules);
