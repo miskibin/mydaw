@@ -16,6 +16,7 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         sources: vec![],
         clips: vec![],
         loop_range: None,
+        automations: vec![],
         next_id: 1000,
     };
     for (i, name) in ins_names.iter().enumerate() {
@@ -74,7 +75,7 @@ pub fn demo_project() -> Project {
     ];
     let clip = |id, track, start, len, pat| Clip {
         id, track, start, len, offset: 0.0, kind: ClipKind::Pat, source: pat, muted: false, gain: 0.0,
-        fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false,
+        fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None,
     };
     p.clips = vec![clip(1, 0, 0.0, 16.0, 1), clip(2, 0, 16.0, 16.0, 1), clip(3, 1, 8.0, 24.0, 2), clip(4, 2, 0.0, 32.0, 3)];
     // Vocal chain: EQ (custom) → comp → reverb, drum bus comp.

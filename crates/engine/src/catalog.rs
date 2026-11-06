@@ -21,10 +21,17 @@ pub struct ParamDef {
     pub unit: &'static str,
     /// Knob travel is logarithmic.
     pub log: bool,
+    /// Discrete choice (value = index): shown as buttons, not a knob.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<&'static [&'static str]>,
 }
 
 const fn p(id: &'static str, label: &'static str, min: f64, max: f64, def: f64, unit: &'static str, log: bool) -> ParamDef {
-    ParamDef { id, label, min, max, def, unit, log }
+    ParamDef { id, label, min, max, def, unit, log, options: None }
+}
+
+const fn choice(id: &'static str, label: &'static str, def: f64, options: &'static [&'static str]) -> ParamDef {
+    ParamDef { id, label, min: 0.0, max: (options.len() - 1) as f64, def, unit: "", log: false, options: Some(options) }
 }
 
 pub fn params(kind: FxKind) -> &'static [ParamDef] {
@@ -58,7 +65,36 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("gain", "Gain", 0.0, 24.0, 0.0, "dB", false),
         p("ceil", "Ceiling", -12.0, 0.0, -0.3, "dB", false),
     ];
+    const FET: &[ParamDef] = &[
+        p("input", "Input", 0.0, 36.0, 8.0, "dB", false),
+        p("output", "Output", -24.0, 12.0, 0.0, "dB", false),
+        choice("ratio", "Ratio", 0.0, &["4", "8", "12", "20", "All"]),
+        p("attack", "Attack", 20.0, 800.0, 300.0, "µs", true),
+        p("release", "Release", 50.0, 1100.0, 300.0, "ms", true),
+        p("mix", "Mix", 0.0, 100.0, 100.0, "%", false),
+    ];
+    const DEESS: &[ParamDef] = &[
+        p("thr", "Threshold", -60.0, 0.0, -32.0, "dB", false),
+        p("range", "Range", 0.0, 24.0, 8.0, "dB", false),
+        p("freq", "Freq", 2000.0, 16000.0, 6000.0, "Hz", true),
+        choice("mode", "Mode", 0.0, &["Split", "Wide"]),
+        p("look", "Lookahead", 0.0, 15.0, 5.0, "ms", false),
+        choice("listen", "Listen", 0.0, &["Off", "S"]),
+    ];
+    const TUNE: &[ParamDef] = &[
+        choice("key", "Key", 0.0, &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]),
+        choice("scale", "Scale", 0.0, &["Chromatic", "Major", "Minor", "Maj pent", "Min pent"]),
+        p("retune", "Retune", 0.0, 400.0, 20.0, "ms", false),
+        p("humanize", "Humanize", 0.0, 100.0, 0.0, "%", false),
+        p("flex", "Flex", 0.0, 100.0, 0.0, "%", false),
+        p("vibrato", "Vibrato", 0.0, 100.0, 0.0, "%", false),
+        p("transpose", "Transpose", -12.0, 12.0, 0.0, "st", false),
+        p("formant", "Formant", -12.0, 12.0, 0.0, "st", false),
+    ];
     match kind {
+        FxKind::Fet => FET,
+        FxKind::Deess => DEESS,
+        FxKind::Tune => TUNE,
         FxKind::Eq => EQ,
         FxKind::Comp => COMP,
         FxKind::Sat => SAT,
@@ -77,15 +113,18 @@ pub fn type_name(kind: FxKind) -> &'static str {
         FxKind::Delay => "Delay",
         FxKind::Reverb => "Reverb",
         FxKind::Limit => "Limiter",
+        FxKind::Fet => "FET Compressor",
+        FxKind::Deess => "De-esser",
+        FxKind::Tune => "Pitch Correct",
         FxKind::Vst3 => "VST3",
     }
 }
 
-pub const BUILTIN: [FxKind; 6] = [FxKind::Eq, FxKind::Comp, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 9] = [FxKind::Tune, FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
-    let b = |on, kind, f, q| EqBand { on, kind, f, g: 0.0, q };
+    let b = |on, kind, f, q| EqBand { on, kind, f, g: 0.0, q, slope: 12, place: Default::default(), dynamic: None };
     vec![
         b(false, Lowcut, 30.0, 0.71),
         b(true, Lowshelf, 90.0, 0.71),
@@ -103,7 +142,7 @@ pub fn default_params(kind: FxKind) -> BTreeMap<String, f64> {
 
 /// A fresh built-in effect loaded with its first preset.
 pub fn new_fx(id: Id, kind: FxKind, bpm: f64) -> Fx {
-    let mut fx = Fx { id, kind, bypass: false, preset: None, params: default_params(kind), bands: None, plugin: None };
+    let mut fx = Fx { id, kind, bypass: false, mix: 1.0, preset: None, params: default_params(kind), bands: None, plugin: None };
     if kind == FxKind::Eq {
         fx.bands = Some(default_bands());
     }
@@ -209,7 +248,41 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Głośny master", &[("gain", 6.0), ("ceil", -0.3)]),
             pr("Bardzo głośny", &[("gain", 10.0), ("ceil", -0.1)]),
         ],
+        FxKind::Fet => vec![
+            pr("Wokal — klasyk", &[("input", 8.0), ("output", -2.0), ("ratio", 0.0), ("attack", 400.0), ("release", 250.0), ("mix", 100.0)]),
+            pr("Wokal — z przodu", &[("input", 12.0), ("output", -4.0), ("ratio", 1.0), ("attack", 200.0), ("release", 150.0), ("mix", 100.0)]),
+            pr("Bas — kontrola", &[("input", 10.0), ("output", -3.0), ("ratio", 2.0), ("attack", 600.0), ("release", 400.0), ("mix", 100.0)]),
+            pr("Równoległa kompresja", &[("input", 18.0), ("output", -6.0), ("ratio", 4.0), ("attack", 100.0), ("release", 120.0), ("mix", 45.0)]),
+            pr("All buttons — smash", &[("input", 20.0), ("output", -10.0), ("ratio", 4.0), ("attack", 60.0), ("release", 100.0), ("mix", 100.0)]),
+        ],
+        FxKind::Deess => vec![
+            pr("Wokal — domyślny", &[("thr", -32.0), ("range", 8.0), ("freq", 6000.0), ("mode", 0.0), ("look", 5.0), ("listen", 0.0)]),
+            pr("Ostre „s”", &[("thr", -36.0), ("range", 12.0), ("freq", 6500.0), ("mode", 0.0), ("look", 8.0), ("listen", 0.0)]),
+            pr("Delikatnie", &[("thr", -26.0), ("range", 5.0), ("freq", 7000.0), ("mode", 0.0), ("look", 5.0), ("listen", 0.0)]),
+            pr("Wokal żeński", &[("thr", -32.0), ("range", 8.0), ("freq", 8000.0), ("mode", 0.0), ("look", 6.0), ("listen", 0.0)]),
+            pr("Wokal męski", &[("thr", -32.0), ("range", 8.0), ("freq", 5000.0), ("mode", 0.0), ("look", 6.0), ("listen", 0.0)]),
+            pr("Szerokopasmowy", &[("thr", -30.0), ("range", 6.0), ("freq", 6000.0), ("mode", 1.0), ("look", 5.0), ("listen", 0.0)]),
+        ],
+        FxKind::Tune => vec![
+            pr("Naturalny", &[("retune", 40.0), ("humanize", 30.0), ("flex", 40.0), ("vibrato", 60.0)]),
+            pr("Delikatna korekta", &[("retune", 80.0), ("humanize", 50.0), ("flex", 70.0), ("vibrato", 80.0)]),
+            pr("Pop — mocno", &[("retune", 10.0), ("humanize", 10.0), ("flex", 10.0), ("vibrato", 30.0)]),
+            pr("Efekt robota", &[("retune", 0.0)]),
+        ],
         FxKind::Vst3 => vec![],
+    }
+}
+
+/// Delay an effect adds, in samples (for latency compensation).
+pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
+    if fx.bypass {
+        return 0;
+    }
+    match fx.kind {
+        FxKind::Tune => crate::vocal::tune_latency(sample_rate),
+        // look-ahead delays the audio so the gain is already down when the "s" arrives
+        FxKind::Deess => ((fx.params.get("look").copied().unwrap_or(5.0).clamp(0.0, 15.0) / 1000.0) * sample_rate as f64) as usize,
+        _ => 0,
     }
 }
 
@@ -258,7 +331,7 @@ pub fn param_block(fx: &Fx) -> ParamBlock {
         pb.values[i] = v as f32;
     }
     if let Some(bands) = &fx.bands {
-        for (i, b) in bands.iter().enumerate().take(7) {
+        for (i, b) in bands.iter().enumerate().take(crate::model::MAX_BANDS) {
             pb.bands[i] = BandParams {
                 on: b.on,
                 kind: match b.kind {
@@ -267,10 +340,18 @@ pub fn param_block(fx: &Fx) -> ParamBlock {
                     BandType::Peak => 2,
                     BandType::Highshelf => 3,
                     BandType::Highcut => 4,
+                    BandType::Notch => 5,
+                    BandType::Bandpass => 6,
+                    BandType::Tilt => 7,
                 },
-                f: b.f.clamp(20.0, 20000.0) as f32,
-                g: b.g.clamp(-18.0, 18.0) as f32,
-                q: b.q.clamp(0.1, 18.0) as f32,
+                f: b.f.clamp(10.0, 22000.0) as f32,
+                g: b.g.clamp(-30.0, 30.0) as f32,
+                q: b.q.clamp(0.025, 40.0) as f32,
+                stages: (b.slope / 12).clamp(1, 4),
+                place: b.place as u8,
+                dynamic: b.dynamic.is_some(),
+                range: b.dynamic.map(|d| d.range.clamp(-30.0, 30.0) as f32).unwrap_or(0.0),
+                thr: b.dynamic.map(|d| d.thr.clamp(-80.0, 0.0) as f32).unwrap_or(0.0),
             };
         }
     }

@@ -5,6 +5,7 @@
 // and begin_gesture / apply_ops / end_gesture must reach the engine in the order we sent them.
 import { be } from '../api/backend';
 import type { Clip, Op, StateDto } from '../api/types';
+import { setGestureProbe } from './peaks';
 import { applyLocal, replaceState, S } from './store';
 import { say } from './ui';
 
@@ -12,6 +13,10 @@ let inflight = 0;          // queued/unanswered mutating requests
 let gestures = 0;          // gestures between begin and end
 let lastReplyRev = 0;      // newest revision the engine reported for one of *our* batches
 let stash: StateDto | null = null;
+
+/** True while a drag gesture is open (begin_gesture sent, end_gesture not yet answered). */
+export const inGesture = () => gestures > 0;
+setGestureProbe(inGesture);
 
 let queue: Promise<unknown> = Promise.resolve();
 /** Run `fn` after every previously queued engine call has finished. */
@@ -71,6 +76,7 @@ function opKey(op: Op): string {
     case 'putSource': return 's' + op.source.id;
     case 'setBpm': return 'bpm';
     case 'setLoop': return 'loop';
+    case 'putAutomation': return 'a' + op.automation.id;
     default: return op.op;
   }
 }

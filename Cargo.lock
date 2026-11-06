@@ -4610,7 +4610,7 @@ dependencies = [
 
 [[package]]
 name = "wave-app"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "log",
@@ -4632,7 +4632,7 @@ dependencies = [
 
 [[package]]
 name = "wave-audio-file"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hound",
  "minimp3",
@@ -4642,7 +4642,7 @@ dependencies = [
 
 [[package]]
 name = "wave-audio-io"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cpal",
  "log",
@@ -4653,7 +4653,7 @@ dependencies = [
 
 [[package]]
 name = "wave-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde_json",
  "wave-session",
@@ -4661,7 +4661,7 @@ dependencies = [
 
 [[package]]
 name = "wave-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hound",
  "log",
@@ -4676,7 +4676,7 @@ dependencies = [
 
 [[package]]
 name = "wave-plugin-scan"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "log",
  "parking_lot",
@@ -4686,7 +4686,7 @@ dependencies = [
 
 [[package]]
 name = "wave-plugin-windows"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "log",
  "parking_lot",
@@ -4696,7 +4696,7 @@ dependencies = [
 
 [[package]]
 name = "wave-session"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "interprocess",
  "log",
@@ -4707,7 +4707,7 @@ dependencies = [
 
 [[package]]
 name = "wave-vst3"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "log",

@@ -92,7 +92,12 @@ fn shell(script: &str) -> Command {
 
 #[cfg(not(windows))]
 fn shell(script: &str) -> Command {
+    // The scripts are written for `cmd`, whose `echo` prints its argument verbatim.
+    // `sh` would strip the JSON's double quotes, so print the text literally instead.
     let mut command = Command::new("sh");
-    command.arg("-c").arg(script);
+    match script.strip_prefix("echo ") {
+        Some(text) => command.arg("-c").arg("printf '%s\\n' \"$1\"").arg("sh").arg(text),
+        None => command.arg("-c").arg(script),
+    };
     command
 }

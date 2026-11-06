@@ -186,7 +186,7 @@ function LibraryTab() {
   return (
     <div class="scroll">
       <div class="bhead">ZESTAWY</div>
-      <Show when={lib.error}><div class="bnote" style={{ color: '#e8607a' }}>{lib.error}</div></Show>
+      <Show when={lib.error}><div class="bnote" style={{ color: 'var(--danger)' }}>{lib.error}</div></Show>
       <For each={lib.kits}>
         {k => {
           const prog = () => lib.progress[k.id];

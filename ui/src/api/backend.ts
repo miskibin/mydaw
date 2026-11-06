@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, Id, ImportResult, LibFile,
-  LibraryList, LibraryProgress, Op, StateDto, TransportDto, Vst3Info, Vst3Param,
+  LibraryList, LibraryProgress, Op, PitchAnalysis, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -33,6 +33,10 @@ export interface Backend {
   /** Native "open files" dialog for audio; null when cancelled. */
   pickAudioFiles(): Promise<string[] | null>;
   sourcePeaks(id: Id, norm?: boolean, rev?: boolean): Promise<Float32Array>;
+  /** Like sourcePeaks, but of what the clip actually plays (norm/rev/pitch edits applied); whole source length. */
+  clipPeaks(clipId: Id): Promise<Float32Array>;
+  /** Pitch curve, levels and note segmentation of an audio clip's source (seconds of the source). */
+  pitchAnalyze(clipId: Id): Promise<PitchAnalysis>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
   previewClip(clipId: Id): Promise<void>;
   previewFile(path: string): Promise<void>;
@@ -59,6 +63,30 @@ export interface Backend {
   onOsDrop(cb: (e: OsDropEvent) => void): Promise<() => void>;
   /** Window title (file name + dirty mark). */
   setTitle(title: string): void;
+  /** Native window controls for the custom title bar; null in the browser mock (no window chrome to drive). */
+  readonly win: WindowCtl | null;
+}
+
+export interface WindowCtl {
+  minimize(): Promise<void>;
+  toggleMaximize(): Promise<void>;
+  close(): Promise<void>;
+  isMaximized(): Promise<boolean>;
+  startDragging(): Promise<void>;
+  /** Called on every window resize (maximise state may have changed). */
+  onResized(cb: () => void): Promise<() => void>;
+}
+
+function tauriWindow(): WindowCtl {
+  const w = () => import('@tauri-apps/api/window').then(m => m.getCurrentWindow());
+  return {
+    minimize: async () => (await w()).minimize(),
+    toggleMaximize: async () => (await w()).toggleMaximize(),
+    close: async () => (await w()).close(),
+    isMaximized: async () => (await w()).isMaximized(),
+    startDragging: async () => (await w()).startDragging(),
+    onResized: async cb => (await w()).onResized(() => cb()),
+  };
 }
 
 const toF32 = (r: unknown): Float32Array => {
@@ -75,6 +103,7 @@ const toF32 = (r: unknown): Float32Array => {
 export function tauriBackend(): Backend {
   return {
     isMock: false,
+    win: tauriWindow(),
     getState: () => invoke('get_state'),
     applyOps: (ops, opts) => invoke('apply_ops', { ops, label: opts?.label ?? null, transient: opts?.transient ?? false }),
     beginGesture: label => invoke('begin_gesture', { label: label ?? null }),
@@ -100,6 +129,8 @@ export function tauriBackend(): Backend {
       return r == null ? null : Array.isArray(r) ? r : [r];
     },
     sourcePeaks: async (id, norm, rev) => toF32(await invoke('source_peaks', { id, norm: !!norm, rev: !!rev })),
+    clipPeaks: async clipId => toF32(await invoke('clip_peaks', { clipId })),
+    pitchAnalyze: clipId => invoke('pitch_analyze', { clipId }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
     previewClip: clipId => invoke('preview_clip', { clipId }),
     previewFile: path => invoke('preview_file', { path }),

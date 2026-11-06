@@ -129,7 +129,9 @@ export function makeUnique(clip: Clip) {
   say('Nowy pattern: ' + np.name);
 }
 export function setSrcProp(clip: Clip, patch: { name?: string; color?: string }) {
-  if (clip.kind === 'pat') {
+  if (clip.kind === 'auto') {
+    const a = S.project.automations?.find(x => x.id === clip.ref); if (a) commit([{ op: 'putAutomation', automation: { ...plain(a), ...patch } }], 'Automatyzacja');
+  } else if (clip.kind === 'pat') {
     const p = S.project.patterns.find(x => x.id === clip.ref); if (p) commit([{ op: 'putPattern', pattern: { ...plain(p), ...patch } }], 'Pattern');
   } else {
     const s = S.project.sources.find(x => x.id === clip.ref); if (s) commit([{ op: 'putSource', source: { ...plain(s), ...patch } }], 'Źródło');
@@ -148,6 +150,23 @@ export function armTrack(i: number) {
     .map(x => ({ op: 'putTrack', track: { ...plain(x.t), arm: x.arm } }) as Op);
   commit(ops, 'Uzbrój');
   say(on ? 'Nagrywanie na: ' + S.project.tracks[i].name : 'Ścieżka rozbrojona');
+}
+/** Mute and solo are mutually exclusive per channel: turning one on clears the other (one undo step). */
+export function toggleTrackMute(i: number) {
+  const t = S.project.tracks[i]; if (!t) return;
+  setTrack(i, t.muted ? { muted: false } : { muted: true, solo: false }, 'Mute');
+}
+export function toggleTrackSolo(i: number) {
+  const t = S.project.tracks[i]; if (!t) return;
+  setTrack(i, t.solo ? { solo: false } : { solo: true, muted: false }, 'Solo');
+}
+export function toggleInsertMute(id: Id) {
+  const m = S.project.inserts.find(x => x.id === id); if (!m) return;
+  setInsert(id, m.muted ? { muted: false } : { muted: true, solo: false }, 'Mute');
+}
+export function toggleInsertSolo(id: Id) {
+  const m = S.project.inserts.find(x => x.id === id); if (!m || id === 0) return;
+  setInsert(id, m.solo ? { solo: false } : { solo: true, muted: false }, 'Solo');
 }
 export function removeTrack(id: number) {
   commit([{ op: 'removeTrack', id }], 'Usuń ścieżkę');
@@ -227,18 +246,27 @@ export function stepPreset(fxId: Id, d: number) {
 }
 
 // ---------- windows ----------
+const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680 };
+/** Open (or bring to front) an effect window. The newest/most recently focused window is always on top. */
 export function openPlug(fxId: Id) {
   const ex = U.plugs.find(p => p.fxId === fxId);
-  if (ex) { setU('plugs', [...U.plugs.filter(p => p.fxId !== fxId), ex]); return; }
-  const ty = findFx(fxId)?.f.type;
-  const w = Math.min(ty === 'eq' ? 720 : ty === 'reverb' ? 640 : ty === 'vst3' ? 520 : 580, window.innerWidth - 40), n = U.plugs.length;
-  setU('plugs', [...U.plugs, { fxId, x: clamp(140 + n * 28, 10, window.innerWidth - w - 10), y: clamp(64 + n * 28, 10, window.innerHeight - 200), w }]);
+  if (ex) { plugFront(fxId, true); return; }
+  const ty = findFx(fxId)?.f.type ?? '';
+  const w = Math.min(PLUG_W[ty] ?? 580, window.innerWidth - 40), n = U.plugs.length;
+  const z = U.zTop + 1;
+  setU({ zTop: z, plugs: [...U.plugs, { fxId, x: clamp(140 + (n % 8) * 28, 10, window.innerWidth - w - 10), y: clamp(64 + (n % 8) * 28, 10, window.innerHeight - 200), w, z }] });
 }
 export const closePlug = (fxId: Id) => setU('plugs', U.plugs.filter(p => p.fxId !== fxId));
-export function plugFront(fxId: Id) {
-  const ps = U.plugs;
-  if (ps.length && ps[ps.length - 1].fxId !== fxId) { const p = ps.find(x => x.fxId === fxId); if (p) setU('plugs', [...ps.filter(x => x.fxId !== fxId), p]); }
+/** Raise a window above all others (array order stays put, so canvases are never re-created). */
+export function plugFront(fxId: Id, force = false) {
+  const p = U.plugs.find(x => x.fxId === fxId); if (!p) return;
+  if (!force && p.z === U.zTop) return;
+  const z = U.zTop + 1;
+  setU('zTop', z);
+  setU('plugs', x => x.fxId === fxId, 'z', z);
 }
+export const topPlug = () => U.plugs.reduce<typeof U.plugs[number] | null>((a, p) => (!a || p.z > a.z ? p : a), null);
+export function movePlug(fxId: Id, x: number, y: number) { setU('plugs', p => p.fxId === fxId, { x, y }); }
 export function openEditor(id: Id) {
   const c = S.project.clips.find(x => x.id === id); if (!c || c.kind !== 'audio') return;
   if (U.previewing) void be().previewStop();
@@ -246,6 +274,13 @@ export function openEditor(id: Id) {
   setU({ editor: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: 64, w, h }, sel: [id] });
 }
 export function closeEditor() { if (U.previewing) void be().previewStop(); setU('editor', null); }
+/** The note-based pitch editor of an audio clip. */
+export function openPitchEditor(id: Id) {
+  const c = S.project.clips.find(x => x.id === id); if (!c || c.kind !== 'audio') return;
+  const w = Math.min(1100, window.innerWidth - 40), h = Math.min(560, window.innerHeight - 90);
+  setU({ pitchEd: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: Math.max(44, (window.innerHeight - h) / 2 - 20), w, h }, sel: [id] });
+}
+export const closePitchEditor = () => setU('pitchEd', null);
 
 // ---------- view ----------
 export function zoomAt(f: number) { setU('bw', clamp(U.bw * f, 4, 96)); }

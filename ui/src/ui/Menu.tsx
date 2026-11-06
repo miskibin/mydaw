@@ -24,7 +24,7 @@ export function ContextMenu() {
                         onClick={() => { if (i().disabled) return; closeMenu(); i().act(); }}>
                         <span class="row" style={{ gap: '8px' }}>
                           <Show when={i().icon}>
-                            <span class="tile" style={{ width: '18px', height: '18px', 'border-radius': '4px', background: (i().iconColor ?? '#9aa2ad') + '26', color: i().iconColor ?? '#9aa2ad' }}>
+                            <span class="tile" style={{ width: '18px', height: '18px', 'border-radius': '4px', background: (i().iconColor ?? '#9aa2ad') + '26', color: i().iconColor ?? 'var(--fg3)' }}>
                               <Icon d={i().icon!} size={12} sw={2.2} />
                             </span>
                           </Show>
@@ -37,7 +37,7 @@ export function ContextMenu() {
                   <Match when={it.t === 'swatches' && it}>
                     {i => (
                       <div class="swatches">
-                        <For each={TC}>{c => <button title="Kolor" style={{ background: c, 'box-shadow': c === i().current ? '0 0 0 2px #f2f4f7' : 'none' }} onClick={() => { i().pick(c); closeMenu(); }} />}</For>
+                        <For each={TC}>{c => <button title="Kolor" style={{ background: c, 'box-shadow': c === i().current ? '0 0 0 2px var(--fg-hi)' : 'none' }} onClick={() => { i().pick(c); closeMenu(); }} />}</For>
                       </div>
                     )}
                   </Match>
@@ -54,6 +54,19 @@ export function ContextMenu() {
                         </div>
                       );
                     }}
+                  </Match>
+                  <Match when={it.t === 'chips' && it}>
+                    {i => (
+                      <div class="chiprow" classList={{ dis: !!i().disabled }}>
+                        <Show when={i().label}><span class="cl">{i().label}</span></Show>
+                        <div class="chips">
+                          <For each={i().options}>{(o, k) => (
+                            <button classList={{ on: i().active === k() }} disabled={i().disabled}
+                              onClick={() => { if (i().disabled) return; if (i().close !== false) closeMenu(); i().pick(k()); }}>{o}</button>
+                          )}</For>
+                        </div>
+                      </div>
+                    )}
                   </Match>
                   <Match when={it.t === 'rename' && it}>
                     {i => {

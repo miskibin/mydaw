@@ -108,6 +108,7 @@ pub fn devices(host: &str) -> DeviceList {
 
 enum Req {
     Start(AudioConfig, mpsc::Sender<AudioStatus>),
+    Input(bool, mpsc::Sender<AudioStatus>),
     Stop(mpsc::Sender<()>),
     Status(mpsc::Sender<AudioStatus>),
 }
@@ -126,31 +127,49 @@ impl AudioIo {
             .spawn(move || {
                 let mut cur: Option<Running> = None;
                 let mut status = AudioStatus { asio_compiled: asio_compiled(), ..Default::default() };
+                let mut cfg_now = AudioConfig::default();
+                // The microphone is opened only when it is needed (recording / monitoring):
+                // on Bluetooth headphones an open mic forces the low-quality "headset" profile.
+                let mut want_input = false;
                 while let Ok(req) = rx.recv() {
-                    match req {
-                        Req::Start(cfg, reply) => {
-                            drop(cur.take()); // stop the old streams before opening new ones (ASIO is exclusive)
-                            match open(&engine, &cfg) {
-                                Ok((run, st)) => {
-                                    cur = Some(run);
-                                    status = st;
-                                }
-                                Err(e) => {
-                                    status = AudioStatus { config: cfg, error: Some(e), asio_compiled: asio_compiled(), ..Default::default() };
-                                }
+                    let (cfg, reply) = match req {
+                        Req::Start(cfg, reply) => (cfg, reply),
+                        Req::Input(on, reply) => {
+                            if on == want_input && cur.is_some() {
+                                let _ = reply.send(status.clone());
+                                continue;
                             }
-                            let _ = reply.send(status.clone());
+                            want_input = on;
+                            (cfg_now.clone(), reply)
                         }
                         Req::Stop(reply) => {
                             drop(cur.take());
                             status.running = false;
                             let _ = reply.send(());
+                            continue;
                         }
                         Req::Status(reply) => {
                             if let Some(r) = cur.as_ref() {
                                 if let Some(e) = r.error.lock().ok().and_then(|g| g.clone()) {
                                     status.error = Some(e);
                                     status.running = false;
+                                }
+                            }
+                            let _ = reply.send(status.clone());
+                            continue;
+                        }
+                    };
+                    cfg_now = cfg.clone();
+                    {
+                        {
+                            drop(cur.take()); // stop the old streams before opening new ones (ASIO is exclusive)
+                            match open(&engine, &cfg, want_input) {
+                                Ok((run, st)) => {
+                                    cur = Some(run);
+                                    status = st;
+                                }
+                                Err(e) => {
+                                    status = AudioStatus { config: cfg, error: Some(e), asio_compiled: asio_compiled(), ..Default::default() };
                                 }
                             }
                             let _ = reply.send(status.clone());
@@ -165,6 +184,13 @@ impl AudioIo {
     pub fn start(&self, cfg: AudioConfig) -> AudioStatus {
         let (tx, rx) = mpsc::channel();
         let _ = self.tx.send(Req::Start(cfg, tx));
+        rx.recv().unwrap_or_default()
+    }
+
+    /// Opens or closes the input (microphone) without changing the device choice.
+    pub fn set_input(&self, on: bool) -> AudioStatus {
+        let (tx, rx) = mpsc::channel();
+        let _ = self.tx.send(Req::Input(on, tx));
         rx.recv().unwrap_or_default()
     }
 
@@ -193,7 +219,7 @@ fn find(devs: Result<impl Iterator<Item = cpal::Device>, cpal::Error>, name: &st
     devs.ok()?.find(|d| dev_name(d).map(|n| n == name).unwrap_or(false))
 }
 
-fn open(engine: &Arc<Engine>, cfg: &AudioConfig) -> Result<(Running, AudioStatus), String> {
+fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Running, AudioStatus), String> {
     let (host, mut note) = pick_host(&cfg.host);
     let out_dev = match cfg.output.as_deref().filter(|s| !s.is_empty()) {
         Some(n) => match find(host.output_devices(), n) {
@@ -223,8 +249,11 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig) -> Result<(Running, AudioStatus
 
     // ---- input (same host; on ASIO the same driver)
     let is_asio = host.id().name().eq_ignore_ascii_case("asio");
+    // ASIO inputs live on the same driver and cost nothing; elsewhere only open the mic on demand
     let in_dev = if is_asio {
         find(host.input_devices(), &out_name)
+    } else if !want_input {
+        None
     } else {
         match cfg.input.as_deref() {
             Some("") => None,

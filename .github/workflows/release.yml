@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   build:
+    # pushes to v2 publish only when the commit says so (this session cannot push tags)
+    if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[release]')
     strategy:
       fail-fast: false
       matrix:

@@ -17,6 +17,7 @@ pub struct FxAnalysis {
     pub in_peak: f32,
     pub out_peak: f32,
     pub gr: f32,
+    pub meters: [f32; crate::processor::METERS],
     pub spec_in: [f32; BANDS],
     pub spec_out: [f32; BANDS],
     pub scope_in: [f32; SCOPE],
@@ -133,7 +134,7 @@ impl Analyzer {
             let mut scope_out = [0f32; SCOPE];
             hin.last(&mut scope_in);
             hout.last(&mut scope_out);
-            res.push(FxAnalysis { id, in_peak: hin.peak, out_peak: hout.peak, gr: shared.gr(slot), spec_in, spec_out, scope_in, scope_out });
+            res.push(FxAnalysis { id, in_peak: hin.peak, out_peak: hout.peak, gr: shared.gr(slot), meters: shared.fx_meters(slot), spec_in, spec_out, scope_in, scope_out });
             self.hin[slot] = History { peak: 0.0, smooth: si, ..hin };
             self.hout[slot] = History { peak: 0.0, smooth: so, ..hout };
         }

@@ -85,6 +85,7 @@ pub fn vst3_add(app: &App, insert_id: u64, path: &str, cid: &str, index: Option<
         id,
         kind: FxKind::Vst3,
         bypass: false,
+        mix: 1.0,
         preset: None,
         params: Default::default(),
         bands: None,
@@ -174,6 +175,7 @@ pub fn context(app: &App, full: bool) -> Value {
 
 pub fn schema() -> Value {
     json!({
+        "automation": "an automation plays through a clip of kind `auto` whose `ref` is the automation id; points t = beats from the automation start, v = 0..1 normalised (log params normalised logarithmically)",
         "units": "time in beats (quarter notes); pattern note step/len in sixteenths; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
         "ids": "take new ids from context.nextId and count up",
         "ops": {
@@ -190,6 +192,8 @@ pub fn schema() -> Value {
             "removeSource": {"id": 0},
             "setBpm": {"bpm": 128},
             "setLoop": {"loop": {"a": 0, "b": 16}},
+            "putAutomation": {"automation": {"id": 0, "name": "Reverb mix", "color": "#e0a44a", "target": {"kind": "fx|mix|insertVol|insertPan|trackVol", "fxId": 0, "param": "mix or band:<i>:f|g|q", "id": "insert/track id for vol/pan"}, "points": [{"t": 0, "v": 0.2}, {"t": 8, "v": 0.8}]}},
+            "removeAutomation": {"id": 0},
         },
         "example": [{"op": "setBpm", "bpm": 140}, {"op": "removeClips", "ids": [3]}],
     })
@@ -216,7 +220,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -252,6 +256,10 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         "open" => {
             let w = e.open(&PathBuf::from(need_str(a, "path")?)).map_err(|x| x.to_string())?;
             Ok(json!({ "warnings": w }))
+        }
+        "pitch_analyze" => {
+            let an = e.pitch_analysis(need_u64(a, "clipId")?).map_err(|x| x.to_string())?;
+            Ok(json!({ "rate": an.rate, "notes": an.notes }))
         }
         "vst3_scan" => Ok(json!(app.plugins.scan(arg(a, "rescan").and_then(Value::as_bool).unwrap_or(false)))),
         "vst3_add" => {

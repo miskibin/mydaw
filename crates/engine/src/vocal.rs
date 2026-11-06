@@ -1,0 +1,527 @@
+//! Vocal processors: FET compressor (1176 style), de-esser, real-time pitch correction.
+//!
+//! Meter layout (`Processor::meters`, documented in docs/architecture.md):
+//! * fet:   [GR dB, input dB, output dB]
+//! * deess: [GR dB, sidechain dB, sibilance 0..1, threshold dB]
+//! * tune:  [input Hz (0 = unvoiced), target Hz, output Hz, confidence, input cents off target, applied correction cents]
+
+use crate::dsp::{db_to_gain, gain_to_db, Biquad, FilterType};
+use crate::pitch::{hz_to_midi, midi_to_hz, scale_mask, snap, Detector, Psola};
+use crate::processor::{ParamBlock, ProcessCtx, Processor, METERS};
+
+// ------------------------------------------------------------------ FET compressor
+
+/// Fixed-threshold FET-style compressor: drive into it with Input, choose a ratio
+/// button (4/8/12/20/All), attack 20–800 µs, release 50 ms–1.1 s with a
+/// program-dependent second stage, and a class-A style output stage that adds
+/// low-order harmonics as you push it.
+pub struct Fet {
+    sr: f32,
+    input: f32,
+    output: f32,
+    ratio: f32,
+    abi: bool,
+    att: f32,
+    rel_fast: f32,
+    rel_slow: f32,
+    mix: f32,
+    env: f32,
+    slow: f32,
+    dc_l: (f32, f32),
+    dc_r: (f32, f32),
+    gr: f32,
+    in_db: f32,
+    out_db: f32,
+}
+
+impl Default for Fet {
+    fn default() -> Self {
+        Self { sr: 48000.0, input: 1.0, output: 1.0, ratio: 4.0, abi: false, att: 0.0, rel_fast: 0.0, rel_slow: 0.0, mix: 1.0, env: 0.0, slow: 0.0, dc_l: (0.0, 0.0), dc_r: (0.0, 0.0), gr: 0.0, in_db: -120.0, out_db: -120.0 }
+    }
+}
+
+/// Fixed threshold (like the hardware): a vocal peaking around −10 dBFS starts
+/// compressing with the Input knob at about +6 dB.
+const FET_THRESHOLD_DB: f32 = -10.0;
+
+impl Fet {
+    #[inline]
+    fn static_gr(&self, x_db: f32) -> f32 {
+        let over = x_db - FET_THRESHOLD_DB;
+        let knee = if self.abi { 2.0 } else if self.ratio <= 4.0 { 8.0 } else { 4.0 };
+        let slope = 1.0 / self.ratio - 1.0;
+        let mut gr = if over <= -knee / 2.0 {
+            0.0
+        } else if over >= knee / 2.0 {
+            slope * over
+        } else {
+            let t = over + knee / 2.0;
+            slope * t * t / (2.0 * knee)
+        };
+        if self.abi && over > 0.0 {
+            // the all-buttons "plateau": over-compresses just above threshold, then relaxes slightly
+            gr -= 4.0 * (over / 6.0).min(1.0) * (1.0 - (over / 30.0).min(1.0));
+        }
+        gr
+    }
+    #[inline]
+    fn color(x: f32, drive: f32, dc: &mut (f32, f32)) -> f32 {
+        // mostly-even harmonics, then a DC blocker
+        let k = 0.06 * drive;
+        let y = x + k * x * x - 0.5 * k * x * x * x;
+        let o = y - dc.0 + 0.9995 * dc.1;
+        dc.0 = y;
+        dc.1 = o;
+        o.clamp(-1.5, 1.5)
+    }
+}
+
+impl Processor for Fet {
+    fn prepare(&mut self, sr: f32, _max: usize) {
+        self.sr = sr;
+    }
+    fn set_params(&mut self, p: &ParamBlock) {
+        let v = p.values;
+        self.input = db_to_gain(v[0]);
+        self.output = db_to_gain(v[1]);
+        let r = v[2].round() as i32;
+        self.abi = r >= 4;
+        self.ratio = [4.0, 8.0, 12.0, 20.0, 20.0][r.clamp(0, 4) as usize];
+        let mut att_us = v[3].clamp(20.0, 800.0);
+        let mut rel_ms = v[4].clamp(50.0, 1100.0);
+        if self.abi {
+            // ABI: faster attack, slower recovery (the bias shift people hear as "pumping")
+            att_us *= 0.6;
+            rel_ms *= 1.4;
+        }
+        self.att = (-1.0 / (self.sr * att_us / 1e6)).exp();
+        self.rel_fast = (-1.0 / (self.sr * rel_ms / 1000.0)).exp();
+        self.rel_slow = (-1.0 / (self.sr * rel_ms * 3.0 / 1000.0)).exp();
+        self.mix = v[5] / 100.0;
+    }
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
+        let mut gr_min = 0f32;
+        let (mut pin, mut pout) = (0f32, 0f32);
+        let drive = (self.input.log10() * 20.0 / 24.0).clamp(0.0, 1.5) + if self.abi { 0.8 } else { 0.0 };
+        for i in 0..l.len() {
+            let (a, b) = (l[i] * self.input, r[i] * self.input);
+            let lvl = a.abs().max(b.abs());
+            pin = pin.max(lvl);
+            let target = self.static_gr(gain_to_db(lvl).max(-120.0));
+            if target < self.env {
+                self.env = target + (self.env - target) * self.att;
+            } else {
+                // program-dependent release: long stretches of reduction recover slower
+                let k = self.rel_fast + (self.rel_slow - self.rel_fast) * self.slow;
+                self.env = target + (self.env - target) * k;
+            }
+            self.slow += ((if self.env < -3.0 { 1.0 } else { 0.0 }) - self.slow) * 0.00002;
+            let g = db_to_gain(self.env);
+            let (wa, wb) = (Self::color(a * g, drive, &mut self.dc_l) * self.output, Self::color(b * g, drive, &mut self.dc_r) * self.output);
+            let (da, db) = (l[i], r[i]);
+            l[i] = da * (1.0 - self.mix) + wa * self.mix;
+            r[i] = db * (1.0 - self.mix) + wb * self.mix;
+            pout = pout.max(l[i].abs().max(r[i].abs()));
+            gr_min = gr_min.min(self.env);
+        }
+        self.gr = gr_min;
+        self.in_db = gain_to_db(pin);
+        self.out_db = gain_to_db(pout);
+    }
+    fn reset(&mut self) {
+        self.env = 0.0;
+        self.slow = 0.0;
+    }
+    fn gain_reduction_db(&self) -> f32 {
+        self.gr
+    }
+    fn meters(&self, out: &mut [f32; METERS]) {
+        out[0] = self.gr;
+        out[1] = self.in_db;
+        out[2] = self.out_db;
+    }
+}
+
+// ------------------------------------------------------------------ de-esser
+
+/// De-esser. The detector looks at a high band (`freq` and up) *and* at how much
+/// of the signal's energy sits there: an "s" is mostly high-band energy, a bright
+/// sung vowel is not. Reduction needs both — so cymbal-bright vocals are left
+/// alone, sibilants are caught. Split band ducks only the highs; wide band ducks
+/// everything. Look-ahead delays the audio so the gain is down before the "s".
+pub struct DeEss {
+    sr: f32,
+    thr: f32,
+    range: f32,
+    freq: f32,
+    split: bool,
+    look: usize,
+    listen: bool,
+    hp_det: Biquad,
+    lp_l: Biquad,
+    lp_r: Biquad,
+    lp_l2: Biquad,
+    lp_r2: Biquad,
+    env_hi: f32,
+    env_all: f32,
+    gr: f32,
+    gr_env: f32,
+    dl: Vec<f32>,
+    dr: Vec<f32>,
+    w: usize,
+    att: f32,
+    rel: f32,
+    ratio_now: f32,
+    side_db: f32,
+    params: Option<ParamBlock>,
+}
+
+impl Default for DeEss {
+    fn default() -> Self {
+        Self {
+            sr: 48000.0,
+            thr: -30.0,
+            range: 8.0,
+            freq: 6000.0,
+            split: true,
+            look: 0,
+            listen: false,
+            hp_det: Biquad::default(),
+            lp_l: Biquad::default(),
+            lp_r: Biquad::default(),
+            lp_l2: Biquad::default(),
+            lp_r2: Biquad::default(),
+            env_hi: 0.0,
+            env_all: 0.0,
+            gr: 0.0,
+            gr_env: 0.0,
+            dl: vec![],
+            dr: vec![],
+            w: 0,
+            att: 0.0,
+            rel: 0.0,
+            ratio_now: 0.0,
+            side_db: -120.0,
+            params: None,
+        }
+    }
+}
+
+impl DeEss {
+    fn apply(&mut self) {
+        let Some(p) = self.params else { return };
+        let v = p.values;
+        self.thr = v[0];
+        self.range = v[1].max(0.0);
+        self.freq = v[2].clamp(2000.0, 16000.0);
+        self.split = v[3] < 0.5;
+        self.look = ((v[4].clamp(0.0, 15.0) / 1000.0) * self.sr) as usize;
+        self.listen = v[5] > 0.5;
+        self.hp_det.set(FilterType::Highpass, self.sr, self.freq, 0.707, 0.0);
+        // complementary split: low = LR4 lowpass, high = input − low
+        for f in [&mut self.lp_l, &mut self.lp_r, &mut self.lp_l2, &mut self.lp_r2] {
+            f.set(FilterType::Lowpass, self.sr, self.freq, 0.707, 0.0);
+        }
+    }
+}
+
+impl Processor for DeEss {
+    fn prepare(&mut self, sr: f32, _max: usize) {
+        self.sr = sr;
+        let n = (sr * 0.016) as usize + 2;
+        self.dl = vec![0.0; n];
+        self.dr = vec![0.0; n];
+        self.att = (-1.0 / (sr * 0.0008)).exp();
+        self.rel = (-1.0 / (sr * 0.06)).exp();
+        self.apply();
+    }
+    fn set_params(&mut self, p: &ParamBlock) {
+        self.params = Some(*p);
+        self.apply();
+    }
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
+        let n = self.dl.len();
+        if n == 0 {
+            return;
+        }
+        let mut gr_min = 0f32;
+        let mut side_pk = 0f32;
+        let mut ratio_pk = 0f32;
+        for i in 0..l.len() {
+            let mono = (l[i] + r[i]) * 0.5;
+            let hi = self.hp_det.tick(mono);
+            // detector envelopes (energy)
+            let k_hi = if hi * hi > self.env_hi { 0.2 } else { 0.002 };
+            self.env_hi += (hi * hi - self.env_hi) * k_hi;
+            let k_all = if mono * mono > self.env_all { 0.2 } else { 0.002 };
+            self.env_all += (mono * mono - self.env_all) * k_all;
+            let hi_db = 10.0 * self.env_hi.max(1e-12).log10();
+            let ratio = (self.env_hi / self.env_all.max(1e-12)).clamp(0.0, 1.0);
+            // how "s"-like: high band holds more than ~35 % of the energy
+            let sib = ((ratio - 0.25) / 0.35).clamp(0.0, 1.0);
+            let over = (hi_db - self.thr).max(0.0);
+            let target = -(over * 0.8 * sib).min(self.range);
+            let k = if target < self.gr_env { self.att } else { self.rel };
+            self.gr_env = target + (self.gr_env - target) * k;
+            side_pk = side_pk.max(hi_db);
+            ratio_pk = ratio_pk.max(sib);
+            gr_min = gr_min.min(self.gr_env);
+            // delayed audio
+            self.dl[self.w] = l[i];
+            self.dr[self.w] = r[i];
+            let rd = (self.w + n - self.look.min(n - 1)) % n;
+            self.w = (self.w + 1) % n;
+            let (a, b) = (self.dl[rd], self.dr[rd]);
+            let g = db_to_gain(self.gr_env);
+            let (la, lb) = (self.lp_l2.tick(self.lp_l.tick(a)), self.lp_r2.tick(self.lp_r.tick(b)));
+            let (ha, hb) = (a - la, b - lb);
+            if self.listen {
+                l[i] = ha;
+                r[i] = hb;
+            } else if self.split {
+                l[i] = la + ha * g;
+                r[i] = lb + hb * g;
+            } else {
+                l[i] = a * g;
+                r[i] = b * g;
+            }
+        }
+        self.gr = gr_min;
+        self.side_db = side_pk;
+        self.ratio_now = ratio_pk;
+    }
+    fn reset(&mut self) {
+        self.dl.fill(0.0);
+        self.dr.fill(0.0);
+        self.gr_env = 0.0;
+    }
+    fn gain_reduction_db(&self) -> f32 {
+        self.gr
+    }
+    fn meters(&self, out: &mut [f32; METERS]) {
+        out[0] = self.gr;
+        out[1] = self.side_db;
+        out[2] = self.ratio_now;
+        out[3] = self.thr;
+    }
+}
+
+// ------------------------------------------------------------------ real-time pitch correction
+
+/// Real-time pitch correction: detect (YIN), pick the nearest note of the key/scale,
+/// glide there at the Retune speed, shift with PSOLA (formants stay put).
+/// * Humanize: long held notes get a slower retune, so they don't freeze.
+/// * Flex: only notes already near the target are corrected; big intentional
+///   bends and scoops pass untouched.
+/// * Vibrato: how much of the singer's vibrato survives (corrects the note centre,
+///   not every wobble).
+pub struct Tune {
+    sr: f32,
+    det: Option<Detector>,
+    psola_l: Option<Psola>,
+    key: u32,
+    mask: u16,
+    retune_ms: f32,
+    humanize: f32,
+    flex: f32,
+    vibrato: f32,
+    transpose: f32,
+    formant: f32,
+    period: f32,
+    corr: f32,
+    center: f32,
+    held: f32,
+    last_note: f32,
+    /// the current note was close enough to engage correction (flex hysteresis)
+    engaged: bool,
+    m: [f32; 8],
+    params: Option<ParamBlock>,
+}
+
+impl Default for Tune {
+    fn default() -> Self {
+        Self { sr: 48000.0, det: None, psola_l: None, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, m: [0.0; 8], params: None }
+    }
+}
+
+/// Samples of delay the corrector adds at `sr` (reported for latency compensation).
+pub fn tune_latency(sr: f32) -> usize {
+    Psola::new(sr).latency()
+}
+
+impl Processor for Tune {
+    fn prepare(&mut self, sr: f32, _max: usize) {
+        self.sr = sr;
+        self.det = Some(Detector::new(sr));
+        self.psola_l = Some(Psola::new(sr));
+        if let Some(p) = self.params {
+            self.set_params(&p);
+        }
+    }
+    fn set_params(&mut self, p: &ParamBlock) {
+        self.params = Some(*p);
+        let v = p.values;
+        self.key = (v[0].round() as i32).rem_euclid(12) as u32;
+        self.mask = scale_mask(v[1].round().max(0.0) as u32);
+        self.retune_ms = v[2].max(0.0);
+        self.humanize = v[3] / 100.0;
+        self.flex = v[4] / 100.0;
+        self.vibrato = v[5] / 100.0;
+        self.transpose = v[6];
+        self.formant = v[7];
+    }
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
+        let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola_l.as_mut()) else { return };
+        let sr = self.sr;
+        for i in 0..l.len() {
+            let x = (l[i] + r[i]) * 0.5;
+            if det.push(x) {
+                // a new estimate every ~4 ms: update the correction target
+                let hop_s = 0.004f32;
+                if det.hz > 0.0 && det.confidence > 0.55 {
+                    let m = hz_to_midi(det.hz);
+                    self.period = sr / det.hz;
+                    // vibrato-preserving centre: a slow average of the pitch
+                    if self.center == 0.0 || (m - self.center).abs() > 0.8 {
+                        self.center = m;
+                    }
+                    self.center += (m - self.center) * (hop_s / 0.15).min(1.0);
+                    let follow = self.center * self.vibrato + m * (1.0 - self.vibrato);
+                    let note = snap(follow, self.key, self.mask);
+                    if note != self.last_note {
+                        self.last_note = note;
+                        self.held = 0.0;
+                        self.engaged = false;
+                    } else {
+                        self.held += hop_s;
+                    }
+                    let err = note - follow; // semitones to correct
+                    // flex: only notes sung within ±(50 − 35·flex) cents of the target are corrected;
+                    // once a note engages it stays corrected (no flicker with vibrato)
+                    let half = 0.5 - 0.35 * self.flex; // semitones
+                    if self.flex <= 0.0 || err.abs() <= half {
+                        self.engaged = true;
+                    }
+                    let want = if self.engaged { err } else { 0.0 };
+                    let mut tau = self.retune_ms / 1000.0;
+                    if self.humanize > 0.0 && self.held > 0.25 {
+                        tau += self.humanize * 0.4 * ((self.held - 0.25) / 0.5).min(1.0);
+                    }
+                    let k = if tau <= 0.0005 { 1.0 } else { 1.0 - (-hop_s / tau).exp() };
+                    self.corr += (want - self.corr) * k;
+                    self.m = [det.hz, midi_to_hz(note + self.transpose), midi_to_hz(m + self.corr + self.transpose), det.confidence, (m - note) * 100.0, self.corr * 100.0, 0.0, 0.0];
+                } else {
+                    self.period = 0.0;
+                    self.corr *= 0.9;
+                    self.center = 0.0;
+                    self.m = [0.0, 0.0, 0.0, det.confidence, 0.0, 0.0, 0.0, 0.0];
+                }
+            }
+            let ratio = 2f32.powf((self.corr + self.transpose) / 12.0);
+            let formant = 2f32.powf(self.formant / 12.0); // PSOLA keeps formants; this moves them on purpose
+            let y = ps.process(x, self.period, ratio, formant);
+            l[i] = y;
+            r[i] = y;
+        }
+    }
+    fn reset(&mut self) {
+        if let Some(p) = self.psola_l.as_mut() {
+            p.reset();
+        }
+        self.corr = 0.0;
+    }
+    fn meters(&self, out: &mut [f32; METERS]) {
+        out[..8].copy_from_slice(&self.m);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::{new_fx, param_block};
+    use crate::model::FxKind;
+
+    fn voice(hz: f32, sr: f32, n: usize) -> Vec<f32> {
+        (0..n).map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3).collect()
+    }
+
+    fn run(p: &mut dyn Processor, x: &[f32]) -> Vec<f32> {
+        let ctx = ProcessCtx { sample_rate: 48000.0, ..Default::default() };
+        let mut out = vec![];
+        for c in x.chunks(256) {
+            let mut l = c.to_vec();
+            let mut r = c.to_vec();
+            p.process(&mut l, &mut r, &ctx);
+            out.extend(l);
+        }
+        out
+    }
+
+    #[test]
+    fn tune_pulls_a_flat_note_to_the_scale() {
+        let sr = 48000.0;
+        let mut fx = new_fx(1, FxKind::Tune, 120.0);
+        for (k, v) in [("retune", 0.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0)] {
+            fx.params.insert(k.into(), v);
+        }
+        let mut p = Tune::default();
+        p.prepare(sr, 256);
+        p.set_params(&param_block(&fx));
+        // A3 (220 Hz) sung 40 cents flat, chromatic scale → corrected to 220
+        let x = voice(220.0 * 2f32.powf(-0.4 / 12.0), sr, 48000);
+        let y = run(&mut p, &x);
+        let mut d = Detector::new(sr);
+        for &s in &y[24000..] {
+            d.push(s);
+        }
+        let cents = 1200.0 * (d.hz / 220.0).log2();
+        assert!(cents.abs() < 12.0, "still {cents:.1} cents off");
+        let mut m = [0f32; METERS];
+        p.meters(&mut m);
+        assert!((m[1] - 220.0).abs() < 1.0, "target {}", m[1]);
+    }
+
+    #[test]
+    fn deesser_ducks_sibilance_not_vowels() {
+        let sr = 48000.0;
+        let mk = || {
+            let mut d = DeEss::default();
+            d.prepare(sr, 256);
+            d.set_params(&param_block(&new_fx(1, FxKind::Deess, 120.0)));
+            d
+        };
+        // vowel: 220 Hz harmonics, loud
+        let vowel = voice(220.0, sr, 24000);
+        let mut d = mk();
+        run(&mut d, &vowel);
+        assert!(d.gain_reduction_db() > -1.0, "vowel ducked {}", d.gain_reduction_db());
+        // "s": band-limited noise around 7 kHz
+        let mut seed = 3u32;
+        let mut bp = Biquad::default();
+        bp.set(FilterType::Bandpass, sr, 7500.0, 1.0, 0.0);
+        let s: Vec<f32> = (0..24000).map(|_| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            bp.tick((seed as f32 / u32::MAX as f32 - 0.5) * 1.6)
+        }).collect();
+        let mut d = mk();
+        run(&mut d, &s);
+        assert!(d.gain_reduction_db() < -3.0, "sibilant not ducked: {}", d.gain_reduction_db());
+    }
+
+    #[test]
+    fn fet_compresses_harder_with_more_input() {
+        let sr = 48000.0;
+        let x = voice(220.0, sr, 24000);
+        let gr = |input: f64| {
+            let mut fx = new_fx(1, FxKind::Fet, 120.0);
+            fx.params.insert("input".into(), input);
+            let mut p = Fet::default();
+            p.prepare(sr, 256);
+            p.set_params(&param_block(&fx));
+            run(&mut p, &x);
+            p.gain_reduction_db()
+        };
+        let (a, b) = (gr(0.0), gr(24.0));
+        assert!(b < a - 6.0, "input 0 dB → {a}, 24 dB → {b}");
+    }
+}

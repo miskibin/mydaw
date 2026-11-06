@@ -5,7 +5,8 @@ import type { Fx } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
 import { clamp } from '../../lib/format';
 import { Layer } from '../../ui/frameLoop';
-import { MONO10, MONO11, type Viz } from './common';
+import { MONO10, MONO11, rgba, T, type Viz } from './common';
+const REVERB_LIVE = '#4fb8cc';
 
 const NS = 30, K = 72;
 const FK = Float32Array.from({ length: K }, (_, k) => 20 * Math.pow(1000, k / (K - 1)));
@@ -29,6 +30,10 @@ export class ReverbViz implements Viz {
   private frames: Float32Array[] = [];
   private last = 0;
   private zeroRows = NS;
+  /** 0..1: how far the waterfall has scrolled toward the next row (smooth 60 fps motion). */
+  private phase = 0;
+  /** Freshest spectrum, drawn as the front edge every frame. */
+  private live = new Float32Array(K);
   private modelKey = '';
   private model: { pts: Float32Array; n: number }[] = [];
   private proj: ((x: number, y: number, z: number) => [number, number]) | null = null;
@@ -45,25 +50,33 @@ export class ReverbViz implements Viz {
 
   update(fx: Fx, a: FxFrame | null, now: number): boolean {
     const p = fx.params, Tmax = Math.max(0.6, ((p.pre ?? 0) / 1000 + (p.size ?? 2)) * 1.05);
-    const t = now / 1000;
+    const t = now / 1000, step = Tmax / (NS - 1);
     let changed = this.drawnView !== this.viewVersion;
-    if (t - this.last >= Tmax / (NS - 1) || t < this.last) {
-      this.last = t;
+    // the freshest spectrum, every frame
+    let any = false;
+    if (a && a.outPeak > 1e-6) {
+      for (let k = 0; k < K; k++) {
+        const [b0, b1] = KB[k];
+        let m = -200;
+        for (let b = b0; b <= b1; b++) if (a.specOut[b] > m) m = a.specOut[b];
+        const v = clamp((m + 4.5 * Math.log2(FK[k] / 1000) + 105) / 75, 0, 1);
+        // light smoothing so 30 Hz analysis frames don't flicker at 60 fps
+        this.live[k] += (v - this.live[k]) * 0.5;
+        if (this.live[k] > 0.002) any = true;
+      }
+    } else {
+      for (let k = 0; k < K; k++) this.live[k] *= 0.6;
+    }
+    if (t - this.last >= step || t < this.last) {
+      this.last = t < this.last ? t : this.last + step * Math.floor((t - this.last) / step);
       const row = this.frames.pop()!;
-      let any = false;
-      if (a && a.outPeak > 1e-6) {
-        for (let k = 0; k < K; k++) {
-          const [b0, b1] = KB[k];
-          let m = -200;
-          for (let b = b0; b <= b1; b++) if (a.specOut[b] > m) m = a.specOut[b];
-          const v = clamp((m + 4.5 * Math.log2(FK[k] / 1000) + 105) / 75, 0, 1);
-          row[k] = v; if (v > 0) any = true;
-        }
-      } else row.fill(0);
+      row.set(this.live);
       this.frames.unshift(row);
       this.zeroRows = any ? 0 : this.zeroRows + 1;
-      if (this.zeroRows <= NS) changed = true;
     }
+    this.phase = clamp((t - this.last) / step, 0, 1);
+    // keep animating while anything is still visible in the waterfall
+    if (any || this.zeroRows <= NS + 1) changed = true;
     return changed;
   }
 
@@ -106,31 +119,34 @@ export class ReverbViz implements Viz {
       }
     }
     // static floor (grid, labels, pre-delay gate)
-    g.fillStyle = '#0c0e12'; g.fillRect(0, 0, W, H);
+    g.fillStyle = T.viz; g.fillRect(0, 0, W, H);
     g.drawImage(this.floor.get(W, H, mk + fx.bypass, c => drawFloor(c, P, Tmax, pre)) as CanvasImageSource, 0, 0, W, H);
     g.globalAlpha = fx.bypass ? 0.45 : 1;
     g.lineWidth = 1;
-    for (let i = NS - 1; i >= 0; i--) {
-      const z = i / (NS - 1), fr = 1 - z, row = this.frames[i];
+    // rows glide back continuously; the oldest one slides off the far edge
+    for (let i = NS; i >= 0; i--) {
+      const zRow = i === 0 ? 0 : (i - 1 + this.phase) / (NS - 1);
+      if (zRow > 1) continue;
+      const z = zRow, fr = 1 - z, row = i === 0 ? this.live : this.frames[i - 1];
       // live ridge (filled, occludes what is behind)
       g.beginPath(); let q = P(-1, 0, z); g.moveTo(q[0], q[1]);
       for (let k = 0; k < K; k++) { q = P(XK[k], row[k], z); g.lineTo(q[0], q[1]); }
       q = P(1, 0, z); g.lineTo(q[0], q[1]); g.closePath();
-      g.fillStyle = 'rgba(12,14,18,.9)'; g.fill(); g.fillStyle = 'rgba(71,184,168,' + (0.03 + 0.12 * fr) + ')'; g.fill();
-      g.strokeStyle = 'rgba(105,195,214,' + (0.18 + 0.75 * fr) + ')'; g.lineWidth = i === 0 ? 1.6 : 1; g.stroke();
-      // model ridge
-      const m = this.model[i];
+      g.fillStyle = rgba(T.viz, 0.9); g.fill(); g.fillStyle = rgba(REVERB_LIVE, +((0.03 + 0.12 * fr) * T.tint).toFixed(2)); g.fill();
+      g.strokeStyle = rgba(REVERB_LIVE, +(0.18 + 0.75 * fr).toFixed(2)); g.lineWidth = i === 0 ? 1.6 : 1; g.stroke();
+      // model ridge (time after the hit is fixed, so it does not scroll)
+      const m = i < NS ? this.model[i] : undefined;
       if (m && m.n > 0) {
         g.beginPath(); g.moveTo(m.pts[0], m.pts[1]);
         for (let k = 1; k < m.n; k++) g.lineTo(m.pts[2 * k], m.pts[2 * k + 1]);
-        g.strokeStyle = 'rgba(224,164,74,' + (0.16 + 0.55 * fr) + ')'; g.lineWidth = 1; g.stroke();
+        g.strokeStyle = rgba(T.amber, +(0.16 + 0.55 * fr).toFixed(2)); g.lineWidth = 1; g.stroke();
       }
     }
     g.globalAlpha = 1;
-    g.font = MONO11; g.fillStyle = '#f2f4f7'; g.textAlign = 'left'; g.fillText('RT60 ' + size.toFixed(2) + ' s', 10, 16);
-    g.fillStyle = '#7d8592'; g.fillText('PRE ' + Math.round(p.pre ?? 0) + ' ms', 110, 16);
+    g.font = MONO11; g.fillStyle = T.ink; g.textAlign = 'left'; g.fillText('RT60 ' + size.toFixed(2) + ' s', 10, 16);
+    g.fillStyle = T.fg4; g.fillText('PRE ' + Math.round(p.pre ?? 0) + ' ms', 110, 16);
     g.font = MONO10; g.textAlign = 'right';
-    g.fillStyle = '#e0a44a'; g.fillText('— ustawienia', W - 112, 16); g.fillStyle = '#69c3d6'; g.fillText('— sygnał na żywo', W - 8, 16);
+    g.fillStyle = T.amber; g.fillText('— ustawienia', W - 112, 16); g.fillStyle = REVERB_LIVE; g.fillText('— sygnał na żywo', W - 8, 16);
     g.textAlign = 'left';
   }
 }
@@ -139,15 +155,15 @@ function drawFloor(g: CanvasRenderingContext2D, P: (x: number, y: number, z: num
   const seg = (a: [number, number], b: [number, number], col: string) => { g.strokeStyle = col; g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke(); };
   g.lineWidth = 1; g.font = MONO10;
   const fl = [P(-1, 0, 0), P(1, 0, 0), P(1, 0, 1), P(-1, 0, 1)];
-  g.beginPath(); fl.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fillStyle = '#10141a'; g.fill();
-  [0.5, 1].forEach(y => seg(P(-1, y, 1), P(1, y, 1), '#161b22'));
-  seg(P(-1, 0, 1), P(-1, 1, 1), '#1c222a'); seg(P(1, 0, 1), P(1, 1, 1), '#1c222a');
+  g.beginPath(); fl.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fillStyle = T.vizPanel; g.fill();
+  [0.5, 1].forEach(y => seg(P(-1, y, 1), P(1, y, 1), T.vizGrid));
+  seg(P(-1, 0, 1), P(-1, 1, 1), T.vizGrid2); seg(P(1, 0, 1), P(1, 1, 1), T.vizGrid2);
   const xOf = (hz: number) => Math.log(hz / 20) / Math.log(1000) * 2 - 1;
-  [50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(hz => seg(P(xOf(hz), 0, 0), P(xOf(hz), 0, 1), hz === 100 || hz === 1000 || hz === 10000 ? '#232a33' : '#181d24'));
+  [50, 100, 200, 500, 1000, 2000, 5000, 10000].forEach(hz => seg(P(xOf(hz), 0, 0), P(xOf(hz), 0, 1), hz === 100 || hz === 1000 || hz === 10000 ? T.vizGrid2 : T.vizGrid));
   const step = Tmax > 4 ? 1 : Tmax > 1.6 ? 0.5 : 0.25;
-  g.fillStyle = '#4a5360'; g.textAlign = 'left';
+  g.fillStyle = T.vizLabel; g.textAlign = 'left';
   for (let t = 0; t <= Tmax + 1e-6; t += step) {
-    const z = t / Tmax; seg(P(-1, 0, z), P(1, 0, z), '#181d24');
+    const z = t / Tmax; seg(P(-1, 0, z), P(1, 0, z), T.vizGrid);
     const q = P(1.05, 0, z); g.fillText((step < 1 ? t.toFixed(t % 1 ? 2 : 0) : t) + ' s', q[0] + 2, q[1] + 3);
   }
   g.textAlign = 'center';
@@ -155,6 +171,6 @@ function drawFloor(g: CanvasRenderingContext2D, P: (x: number, y: number, z: num
   g.textAlign = 'left';
   if (pre > 0.002) {
     const z = pre / Tmax, a = [P(-1, 0, 0), P(1, 0, 0), P(1, 0, z), P(-1, 0, z)];
-    g.beginPath(); a.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fillStyle = 'rgba(224,164,74,.07)'; g.fill();
+    g.beginPath(); a.forEach((q, i) => i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1])); g.closePath(); g.fillStyle = rgba(T.amber, 0.07); g.fill();
   }
 }

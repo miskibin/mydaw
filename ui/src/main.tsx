@@ -8,6 +8,9 @@ import { replaceState, S, setS } from './state/store';
 import { startTelemetry } from './state/telemetry';
 import { setU } from './state/ui';
 import { App } from './App';
+import { initTheme } from './ui/theme';
+
+initTheme();
 
 async function boot() {
   const be = await getBackend();

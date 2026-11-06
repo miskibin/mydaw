@@ -61,7 +61,17 @@ All edits are "put" ops, applied atomically per batch:
 `putClips{clips}`, `removeClips{ids}`, `putTrack{track}`, `putInsert{insert}`,
 `removeInsert{id}`, `putFx{insertId,fx,index?}`, `removeFx{fxId}`,
 `moveFx{fxId,to}`, `putPattern{pattern}`, `putSource{source}`,
-`removeSource{id}`, `setBpm{bpm}`, `setLoop{loop}`. New ids come from the
+`removeSource{id}`, `putAutomation{automation}`, `removeAutomation{id}`,
+`setBpm{bpm}`, `setLoop{loop}`.
+
+Every effect has `mix` (0..1 dry/wet, default 1). Automation:
+`project.automations[] = {id, name, color, target, points:[{t, v}]}`; a clip of
+kind `auto` with `ref` = automation id plays it (`offset` in beats into it).
+Targets: `{kind:"fx", fxId, param}` (catalog id, or `band:<i>:f|g|q` for EQ:
+f log 20–20k, g −30..30 dB, q log 0.1–18), `{kind:"mix", fxId}`,
+`{kind:"insertVol"|"insertPan", id}`, `{kind:"trackVol", id}`. `v` is 0..1;
+log parameters are normalised logarithmically, vol is the fader position, pan
+maps −1..1 to 0..1. While playing, the engine applies automation every block. New ids come from the
 client: take them from `project.nextId` and increase locally (the engine bumps
 `nextId` past any id it sees).
 
@@ -81,6 +91,8 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `fx_catalog` | – | `{types:{[type]:{name, params:[{id,label,min,max,def,unit,log}]}}, presets:{[type]:[{name, params?, bands?, beats?}]}}` |
 | `import_audio` | `{paths, track?, beat?}` | `{sourceIds, clipIds}` (placed clips only when track/beat given) |
 | `source_peaks` | `{id, norm?, rev?}` | `ArrayBuffer` of f32 `[min,max]` pairs, 100 per second of audio |
+| `pitch_analyze` | `{clipId}` | `{rate, curve: (midi\|null)[], levels: number[], notes: [{start,end,pitch,level}]}` — pitch every 1/rate s (null = unvoiced: breath, sibilant, silence); times in seconds of the source |
+| `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied) |
 | `trim_clip` | `{clipId}` | `{sourceId}` — writes a new file with only the clip region, clip now points at it |
 | `preview_clip` / `preview_file` / `preview_stop` | `{clipId}` / `{path}` / – | – |
 | `audio_hosts` | – | `[{id, name}]` (ids like `"wasapi"`, `"asio"`, `"alsa"`) |
@@ -121,7 +133,8 @@ f32 inLevel         // input peak since last frame (linear)
 f32 previewPos      // seconds into the previewed file, -1 when not previewing
 f32 cpu             // audio callback load 0..1
 u32 nIns  × { u32 insertId, f32 peakL, f32 peakR }            // linear peaks since last frame
-u32 nFx   × { u32 fxId, f32 inPeak, f32 outPeak, f32 grDb,     // only watched fx, only on analysis frames (≈30 Hz)
+u32 nFx   × { u32 fxId, f32 inPeak, f32 outPeak, f32 grDb,     // only watched fx (every frame, 60 Hz)
+              f32 meters[32],                                   // per-type live readings, see "Effect meters"
               f32 specIn[128], f32 specOut[128],               // dBFS, 128 log bands 20 Hz..20 kHz (reverb: specOut = wet only)
               f32 scopeIn[256], f32 scopeOut[256] }            // last samples, mono
 u32 rec             // 0, or 1 followed by:
@@ -132,3 +145,21 @@ u32 rec             // 0, or 1 followed by:
 
 * Callback: < 30 % of the buffer period with 8 tracks × 3 built-in effects at 48 kHz / 128 frames.
 * UI: playlist pan/zoom at 60 fps with 500 clips; 6 open effect windows (incl. 3 reverbs) at 60 fps.
+
+## Effect meters (`meters[32]` in the telemetry frame)
+
+| type | meters |
+| --- | --- |
+| `eq` | `[0..24]` current dynamic gain offset of band *k* in dB (0 for static bands) |
+| `fet` | `[0]` gain reduction dB, `[1]` input peak dBFS (after the Input knob), `[2]` output peak dBFS |
+| `deess` | `[0]` gain reduction dB, `[1]` sidechain (high band) level dB, `[2]` sibilance 0..1, `[3]` threshold dB |
+| `tune` | `[0]` detected input Hz (0 = unvoiced), `[1]` target note Hz, `[2]` output Hz, `[3]` confidence 0..1, `[4]` input offset from target in cents, `[5]` correction applied in cents |
+
+## Pitch edits on audio clips
+
+`clip.tune = { notes: [{start, end, shift, drift, formant, gain}], pencil: [[sec, midi], …] }`
+(seconds into the source; `shift`/`formant` in cents; `drift` 0..1 flattens pitch
+movement inside the note toward its centre; `gain` dB). Start from
+`pitch_analyze` notes, edit, send with `putClips`. Rendering is offline and
+latency-free; during a gesture the previous render keeps playing and the new
+one is made at `end_gesture`.

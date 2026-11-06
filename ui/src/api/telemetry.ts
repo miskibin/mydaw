@@ -11,14 +11,18 @@
 export const MAGIC = 0x54564157;
 export const SPEC_BANDS = 128;
 export const SCOPE_LEN = 256;
-const FX_BYTES = 16 + 4 * (2 * SPEC_BANDS + 2 * SCOPE_LEN);
+const FX_BYTES = 144 + 4 * (2 * SPEC_BANDS + 2 * SCOPE_LEN);
 
 export interface FxFrame {
   id: number;
   inPeak: number; outPeak: number; grDb: number;
+  /** per-type live readings (pitch, envelope, …), see docs/architecture.md */
+  meters: Float32Array;
   specIn: Float32Array; specOut: Float32Array; scopeIn: Float32Array; scopeOut: Float32Array;
   /** Telemetry seq of the last analysis frame that carried this fx. */
   seq: number;
+  /** performance.now() when that frame was decoded (for time-based, de-jittered scrolling). */
+  at: number;
 }
 
 export interface RecFrame {
@@ -79,7 +83,7 @@ export class TelemetryDecoder {
         const id = v.getUint32(o, true);
         let e = this.fx.get(id);
         if (!e) {
-          e = { id, inPeak: 0, outPeak: 0, grDb: 0, seq: 0,
+          e = { id, inPeak: 0, outPeak: 0, grDb: 0, seq: 0, at: 0, meters: new Float32Array(32),
             specIn: new Float32Array(SPEC_BANDS), specOut: new Float32Array(SPEC_BANDS),
             scopeIn: new Float32Array(SCOPE_LEN), scopeOut: new Float32Array(SCOPE_LEN) };
           this.fx.set(id, e);
@@ -88,11 +92,13 @@ export class TelemetryDecoder {
         e.outPeak = v.getFloat32(o + 8, true);
         e.grDb = v.getFloat32(o + 12, true);
         o += 16;
+        o = readF32(v, o, e.meters);
         o = readF32(v, o, e.specIn);
         o = readF32(v, o, e.specOut);
         o = readF32(v, o, e.scopeIn);
         o = readF32(v, o, e.scopeOut);
         e.seq = f.seq;
+        e.at = typeof performance !== 'undefined' ? performance.now() : 0;
         f.fxIds.push(id);
       }
       const rec = o + 4 <= buf.byteLength ? v.getUint32(o, true) : 0; o += 4;
@@ -126,7 +132,7 @@ function readF32(v: DataView, o: number, out: Float32Array): number {
 // ---- encoder (used by the in-browser mock backend and tests) ----
 
 export interface EncFx {
-  id: number; inPeak: number; outPeak: number; grDb: number;
+  id: number; inPeak: number; outPeak: number; grDb: number; meters?: ArrayLike<number>;
   specIn: ArrayLike<number>; specOut: ArrayLike<number>; scopeIn: ArrayLike<number>; scopeOut: ArrayLike<number>;
 }
 export interface EncFrame {
@@ -157,6 +163,7 @@ export function encodeFrame(f: EncFrame): ArrayBuffer {
   for (const e of f.fx) {
     v.setUint32(o, e.id, true); v.setFloat32(o + 4, e.inPeak, true); v.setFloat32(o + 8, e.outPeak, true); v.setFloat32(o + 12, e.grDb, true);
     o += 16;
+    w(e.meters ?? [], 32);
     w(e.specIn, SPEC_BANDS); w(e.specOut, SPEC_BANDS); w(e.scopeIn, SCOPE_LEN); w(e.scopeOut, SCOPE_LEN);
   }
   if (f.rec) {

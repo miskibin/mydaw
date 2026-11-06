@@ -34,6 +34,9 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
         FxKind::Delay => Box::new(Delay::default()),
         FxKind::Reverb => Box::new(Reverb::default()),
         FxKind::Limit => Box::new(Limiter::default()),
+        FxKind::Fet => Box::new(crate::vocal::Fet::default()),
+        FxKind::Deess => Box::new(crate::vocal::DeEss::default()),
+        FxKind::Tune => Box::new(crate::vocal::Tune::default()),
         FxKind::Vst3 => return None,
     })
 }
@@ -160,22 +163,87 @@ impl Smooth {
 
 // ---------------------------------------------------------------- EQ
 
-#[derive(Default)]
+const EQ_BANDS: usize = 24;
+const EQ_STAGES: usize = 4;
+/// Dynamic bands recompute their coefficients this often (samples).
+const DYN_STEP: usize = 32;
+
+#[derive(Clone, Copy, Default)]
+struct BandState {
+    l: [Biquad; EQ_STAGES],
+    r: [Biquad; EQ_STAGES],
+    det: Biquad,
+    env: f32,
+    /// current dynamic gain offset (dB)
+    dyn_g: f32,
+    tilt_out: f32,
+}
+
+/// Up to 24 bands: bell, shelves, cuts (12–48 dB/oct), notch, band pass, tilt;
+/// each on stereo, left, right, mid or side; any bell/shelf/tilt can be dynamic.
 pub struct Eq {
     sr: f32,
-    l: [Biquad; 7],
-    r: [Biquad; 7],
+    bands: [BandState; EQ_BANDS],
+    p: [crate::processor::BandParams; EQ_BANDS],
+    n_on: usize,
     out: f32,
     gain: Smooth,
     last: Option<ParamBlock>,
+    att: f32,
+    rel: f32,
+    tick: usize,
+}
+
+impl Default for Eq {
+    fn default() -> Self {
+        Self { sr: 0.0, bands: [BandState::default(); EQ_BANDS], p: [Default::default(); EQ_BANDS], n_on: 0, out: 1.0, gain: Smooth::default(), last: None, att: 0.0, rel: 0.0, tick: 0 }
+    }
+}
+
+impl Eq {
+    fn design(&mut self, i: usize, extra_db: f32) {
+        let b = self.p[i];
+        let sr = self.sr;
+        let st = &mut self.bands[i];
+        let g = b.g + extra_db;
+        let set_all = |f: &mut [Biquad; EQ_STAGES], t: FilterType, q: f32, gain: f32, n: usize| {
+            for (k, x) in f.iter_mut().enumerate() {
+                if k < n {
+                    x.set(t, sr, b.f, q, gain);
+                } else {
+                    x.bypass();
+                }
+            }
+        };
+        // Butterworth-ish cascades for steeper cuts: user Q on the first stage, 0.707 on the rest
+        let (t, q, gain, n) = match b.kind {
+            0 => (FilterType::Highpass, b.q, 0.0, b.stages as usize),
+            1 => (FilterType::LowShelf, b.q, g, 1),
+            3 => (FilterType::HighShelf, b.q, g, 1),
+            4 => (FilterType::Lowpass, b.q, 0.0, b.stages as usize),
+            5 => (FilterType::Peak, b.q.max(2.0), -60.0, 1),
+            6 => (FilterType::Bandpass, b.q, 0.0, 1),
+            7 => (FilterType::HighShelf, 0.5, g, 1),
+            _ => (FilterType::Peak, b.q, g, 1),
+        };
+        set_all(&mut st.l, t, q, gain, n);
+        set_all(&mut st.r, t, q, gain, n);
+        for k in 1..n {
+            st.l[k].set(t, sr, b.f, 0.707, 0.0);
+            st.r[k].set(t, sr, b.f, 0.707, 0.0);
+        }
+        st.tilt_out = if b.kind == 7 { db_to_gain(-g / 2.0) } else { 1.0 };
+    }
 }
 
 impl Processor for Eq {
     fn prepare(&mut self, sr: f32, _max: usize) {
         self.sr = sr;
         self.gain.setup(sr, 20.0);
-        self.gain.v = self.out.max(1e-9);
+        self.att = (-1.0 / (sr * 0.005)).exp();
+        self.rel = (-1.0 / (sr * 0.08)).exp();
         if let Some(p) = self.last {
+            self.last = None;
             self.set_params(&p);
         }
     }
@@ -189,37 +257,98 @@ impl Processor for Eq {
         if self.sr <= 0.0 {
             return;
         }
-        for (i, b) in p.bands.iter().enumerate() {
-            let (t, q, g) = match b.kind {
-                0 => (FilterType::Highpass, b.q, 0.0),
-                1 => (FilterType::LowShelf, b.q, b.g),
-                3 => (FilterType::HighShelf, b.q, b.g),
-                4 => (FilterType::Lowpass, b.q, 0.0),
-                _ => (FilterType::Peak, b.q, b.g),
-            };
-            for f in [&mut self.l[i], &mut self.r[i]] {
-                if b.on {
-                    f.set(t, self.sr, b.f, q, g);
-                } else {
-                    f.bypass();
-                }
+        self.p = p.bands;
+        self.n_on = 0;
+        for i in 0..EQ_BANDS {
+            if self.p[i].on {
+                self.n_on = i + 1;
             }
+            let dyn_g = if self.p[i].dynamic { self.bands[i].dyn_g } else { 0.0 };
+            self.design(i, dyn_g);
+            let b = self.p[i];
+            self.bands[i].det.set(FilterType::Bandpass, self.sr, b.f, b.q.max(0.3), 0.0);
         }
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
         for i in 0..l.len() {
             let (mut a, mut b) = (l[i], r[i]);
-            for k in 0..7 {
-                a = self.l[k].tick(a);
-                b = self.r[k].tick(b);
+            for k in 0..self.n_on {
+                let bp = self.p[k];
+                if !bp.on {
+                    continue;
+                }
+                let st = &mut self.bands[k];
+                if bp.dynamic {
+                    let src = match bp.place {
+                        1 => a,
+                        2 => b,
+                        4 => (a - b) * 0.5,
+                        _ => (a + b) * 0.5,
+                    };
+                    let d = st.det.tick(src);
+                    let e = d * d;
+                    st.env = if e > st.env { e + (st.env - e) * self.att } else { e + (st.env - e) * self.rel };
+                }
+                let n = if bp.kind == 0 || bp.kind == 4 { bp.stages as usize } else { 1 };
+                let run = |f: &mut [Biquad; EQ_STAGES], mut x: f32| {
+                    for s in f.iter_mut().take(n) {
+                        x = s.tick(x);
+                    }
+                    x
+                };
+                let to = st.tilt_out;
+                match bp.place {
+                    1 => a = run(&mut st.l, a) * to,
+                    2 => b = run(&mut st.r, b) * to,
+                    3 | 4 => {
+                        let (m, s) = ((a + b) * 0.5, (a - b) * 0.5);
+                        let (m, s) = if bp.place == 3 { (run(&mut st.l, m) * to, s) } else { (m, run(&mut st.l, s) * to) };
+                        a = m + s;
+                        b = m - s;
+                    }
+                    _ => {
+                        a = run(&mut st.l, a) * to;
+                        b = run(&mut st.r, b) * to;
+                    }
+                }
             }
             let g = self.gain.next(self.out);
             l[i] = a * g;
             r[i] = b * g;
+            // dynamic bands: move their gain every DYN_STEP samples
+            self.tick += 1;
+            if self.tick >= DYN_STEP {
+                self.tick = 0;
+                for k in 0..self.n_on {
+                    let bp = self.p[k];
+                    if !(bp.on && bp.dynamic) {
+                        continue;
+                    }
+                    let lvl = 10.0 * self.bands[k].env.max(1e-12).log10();
+                    let over = lvl - bp.thr;
+                    // 6 dB soft knee, full range 12 dB over the threshold
+                    let amt = ((over + 3.0) / 15.0).clamp(0.0, 1.0);
+                    let target = bp.range * amt;
+                    let cur = self.bands[k].dyn_g;
+                    if (target - cur).abs() > 0.05 {
+                        self.bands[k].dyn_g = cur + (target - cur) * 0.5;
+                        let dg = self.bands[k].dyn_g;
+                        self.design(k, dg);
+                    }
+                }
+            }
         }
     }
     fn reset(&mut self) {
-        self.l.iter_mut().chain(self.r.iter_mut()).for_each(Biquad::reset);
+        for st in self.bands.iter_mut() {
+            st.l.iter_mut().chain(st.r.iter_mut()).for_each(Biquad::reset);
+            st.env = 0.0;
+        }
+    }
+    fn meters(&self, out: &mut [f32; crate::processor::METERS]) {
+        for k in 0..EQ_BANDS {
+            out[k] = self.bands[k].dyn_g;
+        }
     }
 }
 
@@ -673,6 +802,62 @@ mod tests {
         let (out, _) = run(FxKind::Eq, |i| (i as f32 * 0.05).sin() * 0.5, 4800);
         let err: f32 = out.iter().enumerate().skip(1000).map(|(i, y)| (y - (i as f32 * 0.05).sin() * 0.5).abs()).fold(0.0, f32::max);
         assert!(err < 1e-3, "flat EQ changed the signal by {err}");
+    }
+
+    fn eq_with(bands: Vec<crate::model::EqBand>) -> Box<dyn Processor> {
+        let mut fx = new_fx(1, FxKind::Eq, 120.0);
+        fx.bands = Some(bands);
+        let mut p = create(FxKind::Eq).unwrap();
+        p.prepare(48000.0, 256);
+        p.set_params(&param_block(&fx));
+        p
+    }
+
+    fn rms_after(p: &mut Box<dyn Processor>, l0: impl Fn(usize) -> f32, r0: impl Fn(usize) -> f32) -> (f32, f32) {
+        let ctx = ProcessCtx { sample_rate: 48000.0, ..Default::default() };
+        let (mut el, mut er) = (0f32, 0f32);
+        for blk in 0..200 {
+            let mut l: Vec<f32> = (blk * 256..blk * 256 + 256).map(&l0).collect();
+            let mut r: Vec<f32> = (blk * 256..blk * 256 + 256).map(&r0).collect();
+            p.process(&mut l, &mut r, &ctx);
+            if blk > 150 {
+                el += l.iter().map(|x| x * x).sum::<f32>();
+                er += r.iter().map(|x| x * x).sum::<f32>();
+            }
+        }
+        (el.sqrt(), er.sqrt())
+    }
+
+    #[test]
+    fn dynamic_band_only_acts_when_loud() {
+        use crate::model::{BandType, DynBand, EqBand, Placement};
+        let band = EqBand { on: true, kind: BandType::Peak, f: 1000.0, g: 0.0, q: 1.0, slope: 12, place: Placement::Stereo, dynamic: Some(DynBand { range: -12.0, thr: -30.0 }) };
+        let sine = |a: f32| move |i: usize| (i as f32 * 1000.0 * std::f32::consts::TAU / 48000.0).sin() * a;
+        let mut p = eq_with(vec![band]);
+        let (loud, _) = rms_after(&mut p, sine(0.5), sine(0.5));
+        let mut flat = eq_with(vec![]);
+        let (loud_ref, _) = rms_after(&mut flat, sine(0.5), sine(0.5));
+        assert!(gain_to_db(loud / loud_ref) < -9.0, "loud not ducked: {}", gain_to_db(loud / loud_ref));
+        let mut p = eq_with(vec![band]);
+        let (quiet, _) = rms_after(&mut p, sine(0.005), sine(0.005));
+        let (quiet_ref, _) = rms_after(&mut eq_with(vec![]), sine(0.005), sine(0.005));
+        assert!(gain_to_db(quiet / quiet_ref).abs() < 0.5, "quiet changed: {}", gain_to_db(quiet / quiet_ref));
+    }
+
+    #[test]
+    fn mid_band_leaves_the_side_alone() {
+        use crate::model::{BandType, EqBand, Placement};
+        let cut = EqBand { on: true, kind: BandType::Peak, f: 1000.0, g: -18.0, q: 1.0, slope: 12, place: Placement::Mid, dynamic: None };
+        let sine = |i: usize| (i as f32 * 1000.0 * std::f32::consts::TAU / 48000.0).sin() * 0.5;
+        // pure side signal: L = -R
+        let mut p = eq_with(vec![cut]);
+        let (l, _) = rms_after(&mut p, sine, |i| -sine(i));
+        let (lr, _) = rms_after(&mut eq_with(vec![]), sine, |i| -sine(i));
+        assert!(gain_to_db(l / lr).abs() < 0.5);
+        // pure mid: cut applies
+        let mut p = eq_with(vec![cut]);
+        let (l, _) = rms_after(&mut p, sine, sine);
+        assert!(gain_to_db(l / lr) < -15.0);
     }
 
     #[test]

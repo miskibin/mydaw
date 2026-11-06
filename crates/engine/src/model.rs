@@ -38,6 +38,9 @@ pub struct Project {
     pub clips: Vec<Clip>,
     #[serde(rename = "loop")]
     pub loop_range: Option<LoopRange>,
+    /// Automation envelopes; played by clips of kind `auto`.
+    #[serde(default)]
+    pub automations: Vec<Automation>,
     /// Next id handed out by [`Project::alloc_id`]. Ids are never reused.
     pub next_id: Id,
 }
@@ -86,6 +89,9 @@ pub enum FxKind {
     Delay,
     Reverb,
     Limit,
+    Fet,
+    Deess,
+    Tune,
     Vst3,
 }
 
@@ -96,13 +102,16 @@ pub struct Fx {
     #[serde(rename = "type")]
     pub kind: FxKind,
     pub bypass: bool,
+    /// Dry/wet: 1 = fully processed (default), 0 = dry.
+    #[serde(default = "one")]
+    pub mix: f32,
     /// Index into the built-in preset list this was last loaded from (UI shows `*` when edited).
     #[serde(default)]
     pub preset: Option<u32>,
     /// Built-in effects: parameter id -> value in the parameter's own unit (see [`crate::fx::params`]).
     #[serde(default)]
     pub params: BTreeMap<String, f64>,
-    /// EQ only: the 7 bands.
+    /// EQ only: up to 24 bands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bands: Option<Vec<EqBand>>,
     /// VST3 only.
@@ -118,6 +127,21 @@ pub enum BandType {
     Peak,
     Highshelf,
     Highcut,
+    Notch,
+    Bandpass,
+    Tilt,
+}
+
+/// Which part of the stereo image a band works on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Placement {
+    #[default]
+    Stereo,
+    Left,
+    Right,
+    Mid,
+    Side,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -128,7 +152,35 @@ pub struct EqBand {
     pub f: f64,
     pub g: f64,
     pub q: f64,
+    /// Cut filters: 12, 24, 36 or 48 dB/oct.
+    #[serde(default = "default_slope")]
+    pub slope: u8,
+    #[serde(default)]
+    pub place: Placement,
+    /// Dynamic EQ: when set, the band's gain moves by up to `range` dB
+    /// as the band's own level goes over `thr`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic: Option<DynBand>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DynBand {
+    /// dB, −30..30 (negative = duck when loud).
+    pub range: f64,
+    /// dBFS.
+    pub thr: f64,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn default_slope() -> u8 {
+    12
+}
+
+/// Maximum EQ bands.
+pub const MAX_BANDS: usize = 24;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -198,6 +250,55 @@ pub struct Source {
 pub enum ClipKind {
     Pat,
     Audio,
+    Auto,
+}
+
+/// What an automation moves.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum AutoTarget {
+    /// A built-in effect parameter (catalog id), or `band:<i>:f|g|q` of an EQ.
+    Fx { fx_id: Id, param: String },
+    /// An effect's dry/wet.
+    Mix { fx_id: Id },
+    InsertVol { id: Id },
+    InsertPan { id: Id },
+    TrackVol { id: Id },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AutoPoint {
+    /// Beats from the start of the automation.
+    pub t: f64,
+    /// Normalised 0..1 (log parameters are normalised logarithmically).
+    pub v: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Automation {
+    pub id: Id,
+    pub name: String,
+    pub color: String,
+    pub target: AutoTarget,
+    pub points: Vec<AutoPoint>,
+}
+
+impl Automation {
+    /// Value at `t` beats (linear between points, held at the ends).
+    pub fn value_at(&self, t: f64) -> Option<f32> {
+        let p = &self.points;
+        let first = p.first()?;
+        if t <= first.t {
+            return Some(first.v);
+        }
+        let i = p.partition_point(|q| q.t <= t);
+        if i >= p.len() {
+            return Some(p[p.len() - 1].v);
+        }
+        let (a, b) = (p[i - 1], p[i]);
+        let f = ((t - a.t) / (b.t - a.t).max(1e-9)) as f32;
+        Some(a.v + (b.v - a.v) * f)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -226,6 +327,40 @@ pub struct Clip {
     pub norm: bool,
     #[serde(default)]
     pub rev: bool,
+    /// Note-level pitch edits (the pitch editor). Rendered offline, latency-free.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tune: Option<ClipTune>,
+}
+
+/// Pitch edits of an audio clip. `notes` starts as the analysis' segmentation and
+/// is then the user's: split, merge, shift. Times are seconds into the source.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClipTune {
+    pub notes: Vec<NoteEdit>,
+    /// Hand-drawn pitch (pencil): `[seconds, midi]` points, sorted. Within a
+    /// drawn run it replaces the note's pitch; gaps > 30 ms end a run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pencil: Vec<[f32; 2]>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteEdit {
+    pub start: f64,
+    pub end: f64,
+    /// Pitch move in cents.
+    #[serde(default)]
+    pub shift: f32,
+    /// 0..1: how much of the pitch drift/vibrato inside the note is flattened toward its centre.
+    #[serde(default)]
+    pub drift: f32,
+    /// Formant move in cents (0 = natural).
+    #[serde(default)]
+    pub formant: f32,
+    /// Level change in dB.
+    #[serde(default)]
+    pub gain: f32,
 }
 
 impl Project {

@@ -112,7 +112,7 @@ struct Core {
     transport: TransportDto,
     /// Effect ids the audio thread currently holds a processor for.
     live_fx: HashSet<Id>,
-    sent_params: HashMap<Id, ParamBlock>,
+    sent_params: HashMap<Id, (Option<ParamBlock>, f32)>,
     fx_errors: HashMap<Id, String>,
     wires: Option<Wires>,
     take: Option<Take>,
@@ -158,12 +158,21 @@ impl Engine {
         thread::Builder::new()
             .name("wave-housekeeping".into())
             .spawn(move || {
+                // fixed 60 Hz cadence (sleeping a fixed time *after* the work made frames uneven)
+                let period = Duration::from_micros(16_667);
+                let mut next = std::time::Instant::now();
                 let mut tick = 0u32;
                 while let Some(e) = weak.upgrade() {
                     e.housekeeping(tick);
                     drop(e);
                     tick = tick.wrapping_add(1);
-                    thread::sleep(Duration::from_millis(16));
+                    next += period;
+                    let now = std::time::Instant::now();
+                    if next > now {
+                        thread::sleep(next - now);
+                    } else {
+                        next = now;
+                    }
                 }
             })
             .expect("spawn housekeeping thread");
@@ -302,6 +311,8 @@ impl Engine {
         if let Some(g) = c.gesture.take() {
             if g != c.project {
                 push_undo(&mut c, g);
+                // renders skipped during the drag (pitch edits) happen now
+                self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
                 self.changed(c);
             }
         }
@@ -463,6 +474,7 @@ impl Engine {
                     pan: 0.0,
                     norm: false,
                     rev: false,
+                    tune: None,
                 });
                 clip_ids.push(cid);
             }
@@ -472,6 +484,23 @@ impl Engine {
         self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
         self.changed(c);
         Ok((src_ids, clip_ids))
+    }
+
+    /// Pitch curve and notes of an audio clip's source (for the note editor).
+    pub fn pitch_analysis(&self, clip_id: Id) -> Result<Arc<crate::pitch::PitchAnalysis>, EngineError> {
+        let mut c = self.core.lock();
+        let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
+        if clip.kind != ClipKind::Audio {
+            return Err(EngineError::Msg("only audio clips have pitch".into()));
+        }
+        c.sources.analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))
+    }
+
+    /// Peaks of what the clip actually plays (including pitch edits), for drawing.
+    pub fn clip_peaks(&self, clip_id: Id) -> Option<Vec<f32>> {
+        let mut c = self.core.lock();
+        let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned()?;
+        c.sources.clip_audio(&clip, true).map(|a| a.peaks.clone())
     }
 
     /// [min,max] pairs at 100/s for drawing.
@@ -655,8 +684,8 @@ impl Engine {
             let mut map = HashMap::new();
             for clip in &c.project.clips {
                 if clip.kind == ClipKind::Audio {
-                    if let Some(a) = c.sources.variant(clip.source, clip.norm, clip.rev) {
-                        map.insert((clip.source, clip.norm, clip.rev), a);
+                    if let Some(a) = c.sources.clip_audio(clip, false) {
+                        map.insert(clip.id, a);
                     }
                 }
             }
@@ -679,7 +708,7 @@ impl Engine {
         let mut rt = Rt::new(sr, block, cmd_rx, gb_tx, Arc::new(Shared::new()), taps, rec_tx);
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
-        let mut tl = build_timeline(&project, &mut |id, n, r| store_snapshot.get(&(id, n, r)).cloned());
+        let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned());
         tl.loop_range = None;
         tl.song_end = TOTAL_BEATS;
         let _ = cmd_tx.push(Cmd::Graph(Box::new(graph)));
@@ -750,27 +779,28 @@ impl Engine {
             let graph = build_graph(&c.project, &c.live_fx, sr, max_block, &*self.factory, true, &mut errs);
             c.fx_errors = errs;
             c.live_fx = graph.inserts.iter().flat_map(|i| i.fx.iter().map(|s| s.id)).collect();
-            c.sent_params = c.project.inserts.iter().flat_map(|m| m.fx.iter()).filter(|f| f.kind != FxKind::Vst3).map(|f| (f.id, param_block(f))).collect();
+            c.sent_params = c.project.inserts.iter().flat_map(|m| m.fx.iter()).map(|f| (f.id, fx_send(f))).collect();
             send(c, Cmd::Graph(Box::new(graph)));
         } else if d.params {
             send(c, Cmd::Mix(Box::new(mix_state(&c.project))));
-            let changed: Vec<(Id, ParamBlock)> = c
+            let changed: Vec<(Id, (Option<ParamBlock>, f32))> = c
                 .project
                 .inserts
                 .iter()
                 .flat_map(|m| m.fx.iter())
-                .filter(|f| f.kind != FxKind::Vst3)
-                .map(|f| (f.id, param_block(f)))
+                .map(|f| (f.id, fx_send(f)))
                 .filter(|(id, pb)| c.sent_params.get(id) != Some(pb))
                 .collect();
-            for (id, pb) in changed {
-                c.sent_params.insert(id, pb);
-                send(c, Cmd::Params { fx: id, params: pb });
+            for (id, (params, mix)) in changed {
+                c.sent_params.insert(id, (params, mix));
+                send(c, Cmd::Params { fx: id, params, mix });
             }
         }
         if d.timeline {
+            let gesture_open = c.gesture.is_some();
             let Core { project, sources, .. } = c;
-            let tl = build_timeline(project, &mut |id, n, r| sources.variant(id, n, r));
+            let stale = gesture_open;
+            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale));
             send(c, Cmd::Timeline(Box::new(tl)));
         }
     }
@@ -783,7 +813,7 @@ impl Engine {
             let c = &mut *guard;
             let Some(w) = c.wires.as_mut() else { return };
             while w.garbage.pop().is_ok() {}
-            let analysis = if tick % 2 == 0 { Some(w.analyzer.analyze(&c_watch(&c.watch), &shared)) } else { None };
+            let analysis = if c.watch.is_empty() { None } else { Some(w.analyzer.analyze(&c_watch(&c.watch), &shared)) };
             let w = c.wires.as_mut().unwrap();
             let sr = w.sr as u32;
             // drain recorded input
@@ -796,7 +826,7 @@ impl Engine {
                             t.data.push(x);
                         }
                         let per = (t.sr as usize / 100).max(1);
-                        while t.acc.2 * 2 < t.data.len() {
+                        while (t.acc.2 + 1) * 2 <= t.data.len() {
                             let f = t.acc.2;
                             let (l, r) = (t.data[f * 2], t.data[f * 2 + 1]);
                             let v = (l + r) * 0.5;
@@ -888,11 +918,16 @@ impl Engine {
             pan: 0.0,
             norm: false,
             rev: false,
+            tune: None,
         });
         push_undo(&mut c, before);
         c.revision += 1;
         self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
     }
+}
+
+fn fx_send(f: &Fx) -> (Option<ParamBlock>, f32) {
+    (if f.kind == FxKind::Vst3 { None } else { Some(param_block(f)) }, f.mix.clamp(0.0, 1.0))
 }
 
 fn c_watch(w: &[Id]) -> Vec<Id> {
@@ -982,6 +1017,8 @@ fn mix_state(p: &Project) -> MixState {
 /// thread keeps the running instance; everything else is created and prepared here.
 pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: usize, factory: &dyn PluginFactory, live_instances: bool, errs: &mut HashMap<Id, String>) -> Graph {
     let ins_state = audible_inserts(p);
+    let lat: Vec<usize> = p.inserts.iter().map(|m| m.fx.iter().map(|f| crate::catalog::latency(f, sr)).sum()).collect();
+    let max_lat = lat.iter().skip(1).copied().max().unwrap_or(0);
     let inserts = p
         .inserts
         .iter()
@@ -1011,10 +1048,12 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
                         Some(pr)
                     };
                     let params = if f.kind == FxKind::Vst3 { None } else { Some(param_block(f)) };
-                    FxSlot { id: f.id, bypass: f.bypass, proc, params }
+                    FxSlot { id: f.id, bypass: f.bypass, mix: f.mix.clamp(0.0, 1.0), proc, params }
                 })
                 .collect();
-            InsertRt::new(id, gain, pan, on, fx, max_block)
+            let k = p.inserts.iter().position(|x| x.id == id).unwrap_or(0);
+            let comp = if k == 0 { 0 } else { max_lat - lat[k] };
+            InsertRt::new(id, gain, pan, on, fx, max_block).with_delay(comp)
         })
         .collect();
     let track_state = audible_tracks(p);
@@ -1027,7 +1066,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
     Graph::new(inserts, tracks, monitor_track(p), max_block)
 }
 
-pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(Id, bool, bool) -> Option<Arc<Audio>>) -> Timeline {
+pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option<Arc<Audio>>) -> Timeline {
     let pats: Vec<PatRt> = p
         .patterns
         .iter()
@@ -1036,6 +1075,15 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(Id, bool, bool) 
             notes: pt.notes.iter().map(|n| NoteRt { beat: n.step as f64 / 4.0, len: n.len as f64 / 4.0, inst: n.inst, key: n.p }).collect(),
         })
         .collect();
+    // automation envelopes whose target still exists
+    let mut autos = vec![];
+    let mut auto_idx = HashMap::new();
+    for a in &p.automations {
+        if let Some(target) = resolve_target(p, &a.target) {
+            auto_idx.insert(a.id, autos.len());
+            autos.push(AutoRt { target, env: a.clone() });
+        }
+    }
     let mut clips = vec![];
     for c in p.clips.iter().filter(|c| !c.muted) {
         if c.track as usize >= p.tracks.len() {
@@ -1046,7 +1094,11 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(Id, bool, bool) 
                 Some(i) => ClipSrc::Pat(i),
                 None => continue,
             },
-            ClipKind::Audio => match audio(c.source, c.norm, c.rev) {
+            ClipKind::Auto => match auto_idx.get(&c.source) {
+                Some(&i) => ClipSrc::Auto(i),
+                None => continue,
+            },
+            ClipKind::Audio => match audio(c) {
                 Some(a) => ClipSrc::Audio(a),
                 None => continue,
             },
@@ -1054,5 +1106,40 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(Id, bool, bool) 
         clips.push(ClipRt { track: c.track as usize, start: c.start, end: c.start + c.len, offset: c.offset, gain: c.gain, pan: c.pan, fade_in: c.fade_in, fade_out: c.fade_out, src });
     }
     clips.sort_by(|a, b| a.start.total_cmp(&b.start));
-    Timeline { bpm: p.bpm, clips, pats, loop_range: p.loop_range.map(|l| (l.a, l.b)), song_end: p.song_end() }
+    Timeline { bpm: p.bpm, clips, pats, autos, loop_range: p.loop_range.map(|l| (l.a, l.b)), song_end: p.song_end() }
+}
+
+/// Turns an automation target into graph indices; `None` if it no longer exists.
+fn resolve_target(p: &Project, t: &AutoTarget) -> Option<TargetRt> {
+    Some(match t {
+        AutoTarget::Fx { fx_id, param } => {
+            let (_, f) = p.find_fx(*fx_id)?;
+            if let Some(rest) = param.strip_prefix("band:") {
+                let mut it = rest.split(':');
+                let band: usize = it.next()?.parse().ok()?;
+                let field = match it.next()? {
+                    "f" => 0,
+                    "g" => 1,
+                    "q" => 2,
+                    _ => return None,
+                };
+                if band >= MAX_BANDS {
+                    return None;
+                }
+                TargetRt::Band { fx: *fx_id, band, field }
+            } else {
+                let defs = crate::catalog::params(f.kind);
+                let idx = defs.iter().position(|d| d.id == param)?;
+                let d = &defs[idx];
+                TargetRt::Param { fx: *fx_id, idx, min: d.min as f32, max: d.max as f32, log: d.log }
+            }
+        }
+        AutoTarget::Mix { fx_id } => {
+            p.find_fx(*fx_id)?;
+            TargetRt::Mix { fx: *fx_id }
+        }
+        AutoTarget::InsertVol { id } => TargetRt::InsVol(p.inserts.iter().position(|m| m.id == *id)?),
+        AutoTarget::InsertPan { id } => TargetRt::InsPan(p.inserts.iter().position(|m| m.id == *id)?),
+        AutoTarget::TrackVol { id } => TargetRt::TrackVol(p.tracks.iter().position(|x| x.id == *id)?),
+    })
 }

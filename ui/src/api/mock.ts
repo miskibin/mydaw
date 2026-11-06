@@ -7,8 +7,11 @@ import { BUILTIN, demoProject, emptyProject, mockCatalog } from './mockData';
 import { applyAll } from '../lib/applyOps';
 import { eqCurve } from '../lib/eq';
 import { clamp, dbg } from '../lib/format';
+import { midiToHz, noteAt, scaleMask, snapNote } from '../lib/pitch';
+import { newFx } from '../lib/presets';
+import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, Catalog, Clip, Fx, Id, LibFile, LibraryList, Op, Project, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, Catalog, Clip, Fx, Id, LibFile, LibraryList, Op, PitchAnalysis, Project, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
@@ -34,10 +37,43 @@ function synthPeaks(seed: number, dur: number, bpm: number): Float32Array {
   return out;
 }
 
-interface MockSource extends Source { seed: number; trimFrom?: { id: Id; offSec: number } }
+interface MockSource extends Source { seed: number; vocal?: boolean; trimFrom?: { id: Id; offSec: number } }
+const isVocalName = (n: string) => /vocal|vox|wokal|śpiew/i.test(n);
+const VOCAL_DUR = 14;
+
+/** Per-effect DSP state of the fake processors (so meters move like the engine's). */
+interface FxSim { t: number; corr: number; center: number; held: number; last: number; m: number[]; gr: number; dyn: Float32Array }
+const newSim = (): FxSim => ({ t: 0, corr: 0, center: 0, held: 0, last: 0, m: [0, 0, 0, 0, 0, 0], gr: 0, dyn: new Float32Array(32) });
+
+/** Spectrum (dBFS per band) of a sung vowel at `midi` with level `lv`, plus sibilant noise `sib`. */
+function vocalSpec(s: VocalSample, out: Float32Array) {
+  const pw = new Float64Array(SPEC_BANDS);
+  const lvDb = s.level > 1e-4 ? 20 * Math.log10(s.level) : -120;
+  const idx = (f: number) => Math.round(Math.log(f / 20) / Math.log(1000) * (SPEC_BANDS - 1));
+  if (s.midi != null && s.level > 0.01) {
+    const f0 = midiToHz(s.midi);
+    for (let h = 1; h * f0 < 12000; h++) {
+      const f = h * f0, oct = Math.log2(f / 500);
+      // formants around 700 Hz and 2.6 kHz on a −9 dB/oct tilt
+      const env = -9 * Math.max(0, oct) + 9 * Math.exp(-((Math.log2(f / 700)) ** 2) * 3) + 7 * Math.exp(-((Math.log2(f / 2600)) ** 2) * 4);
+      const k = idx(f); if (k < 0 || k >= SPEC_BANDS) continue;
+      pw[k] += Math.pow(10, (lvDb - 14 + env) / 10);
+    }
+  }
+  for (let k = 0; k < SPEC_BANDS; k++) {
+    const f = BAND_F[k];
+    const hiss = s.sib > 0 ? Math.pow(10, (-24 + 6 * s.sib - 18 * Math.max(0, Math.log2(4500 / f)) ** 2 * (f < 4500 ? 1 : 0) - 3 * Math.max(0, Math.log2(f / 9000))) / 10) : 0;
+    const floor = Math.pow(10, (-92 - 3 * Math.log2(f / 1000)) / 10);
+    out[k] = 10 * Math.log10(pw[k] + hiss + floor) + (Math.random() - 0.5) * 2.5;
+  }
+}
 
 export class MockBackend implements Backend {
   readonly isMock = true;
+  /** No window chrome in a browser; `?chrome` previews the custom title bar with inert buttons. */
+  readonly win = typeof location !== 'undefined' && new URLSearchParams(location.search).has('chrome')
+    ? { minimize: async () => {}, toggleMaximize: async () => {}, close: async () => {}, isMaximized: async () => false, startDragging: async () => {}, onResized: async () => () => {} }
+    : null;
   private cat: Catalog = mockCatalog();
   private p: Project = demoProject(this.cat);
   private revision = 1;
@@ -97,7 +133,12 @@ export class MockBackend implements Backend {
   async beginGesture() { this.gesture = structuredClone(this.p); }
   async endGesture() {
     const g = this.gesture; this.gesture = null;
-    if (g && JSON.stringify(g) !== JSON.stringify(this.p)) { this.pushUndo(g); this.changed(); }
+    if (g && JSON.stringify(g) !== JSON.stringify(this.p)) {
+      this.pushUndo(g);
+      // pitch edits are rendered offline at the end of a gesture: the state event comes after the render
+      const tuned = this.p.clips.some(c => { const o = g.clips.find(x => x.id === c.id); return JSON.stringify(o?.tune ?? null) !== JSON.stringify(c.tune ?? null); });
+      if (tuned) { this.revision++; this.renderReady = performance.now() + 380; setTimeout(() => this.emit('state', this.dto()), 380); } else this.changed();
+    }
   }
   async undo() {
     const prev = this.undoStack.pop();
@@ -191,7 +232,7 @@ export class MockBackend implements Backend {
     const fx: EncFx[] = [];
     if (seq % 2 === 0) for (const id of this.watched) {
       const found = this.findFx(id); if (!found) continue;
-      fx.push(this.fakeAnalysis(found.fx, playing ? (insLvl.get(found.ins) ?? 0) + 0.05 : 0, t, beat));
+      fx.push(this.fakeAnalysis(found.fx, found.ins, playing ? (insLvl.get(found.ins) ?? 0) + 0.05 : 0, t, beat, playing));
     }
     let rec = null;
     if (this.rec && playing && beat >= this.rec.clipStart) {
@@ -218,21 +259,81 @@ export class MockBackend implements Backend {
     return null;
   }
 
-  private fakeAnalysis(fx: Fx, level: number, t: number, beat: number): EncFx {
+  private sims = new Map<Id, FxSim>();
+  /** The vocal heard on insert `ins` now: a vocal clip under the playhead, or (for vocal processors) the looping demo take. */
+  private vocalFor(fx: Fx, ins: Id, beat: number, t: number, playing: boolean): VocalSample | null {
+    if (!playing) return null;
+    for (const c of this.p.clips) {
+      if (c.kind !== 'audio' || c.muted || beat < c.start || beat >= c.start + c.len) continue;
+      const tr = this.p.tracks[c.track]; if (!tr || tr.insert !== ins || tr.muted) continue;
+      const m = this.srcMeta.get(c.ref); if (!m?.vocal) continue;
+      return vocalAt(synthVocal(m.seed, m.dur), (c.offset + beat - c.start) * this.spb());
+    }
+    return fx.type === 'tune' || fx.type === 'deess' || fx.type === 'fet' ? vocalAt(synthVocal(4242, VOCAL_DUR), t) : null;
+  }
+
+  private fakeAnalysis(fx: Fx, ins: Id, level: number, t: number, beat: number, playing: boolean): EncFx {
     const specIn = new Float32Array(SPEC_BANDS), specOut = new Float32Array(SPEC_BANDS);
     const scopeIn = new Float32Array(SCOPE_LEN), scopeOut = new Float32Array(SCOPE_LEN);
+    const meters = new Float32Array(32);
+    let sim = this.sims.get(fx.id); if (!sim) { sim = newSim(); this.sims.set(fx.id, sim); }
+    const dt = sim.t ? clamp(t - sim.t, 0, 0.25) : 1 / 30; sim.t = t;
+    const voc = this.vocalFor(fx, ins, beat, t, playing);
+    if (voc) { voc.level *= 0.4; level = voc.level; }
     const lvDb = level > 1e-4 ? 20 * Math.log10(level) : -120;
-    const pulse = Math.exp(-(((beat % 1) + 1) % 1) * 4);
-    for (let k = 0; k < SPEC_BANDS; k++) {
-      const f = BAND_F[k], oct = Math.log2(f / 1000);
-      const shape = -4.5 * oct - 6 * Math.max(0, oct - 2.5) ** 2 + 10 * Math.exp(-((Math.log2(f / 70)) ** 2) * 2) * pulse;
-      specIn[k] = level > 0 ? lvDb - 28 + shape + (Math.random() - 0.5) * 5 : -120;
+    const pulse = voc ? 1 - voc.level : Math.exp(-(((beat % 1) + 1) % 1) * 4);
+    if (voc) vocalSpec(voc, specIn);
+    else {
+      for (let k = 0; k < SPEC_BANDS; k++) {
+        const f = BAND_F[k], oct = Math.log2(f / 1000);
+        const shape = -4.5 * oct - 6 * Math.max(0, oct - 2.5) ** 2 + 10 * Math.exp(-((Math.log2(f / 70)) ** 2) * 2) * pulse;
+        specIn[k] = level > 0 ? lvDb - 28 + shape + (Math.random() - 0.5) * 5 : -120;
+      }
     }
     const pr = fx.params;
     let gr = 0, out = level;
     if (fx.type === 'eq' && fx.bands) {
-      const c = eqCurve(fx.bands, pr.out ?? 0, BAND_F, new Float32Array(SPEC_BANDS));
+      // dynamic bands: the band's level vs its threshold, 6 dB soft knee, full range 12 dB over (dsp.rs)
+      fx.bands.forEach((b, k) => {
+        if (!b.on || !b.dynamic) { sim!.dyn[k] = 0; return; }
+        const bi = clamp(Math.round(Math.log(b.f / 20) / Math.log(1000) * (SPEC_BANDS - 1)), 0, SPEC_BANDS - 1);
+        let e = 0; for (let j = Math.max(0, bi - 3); j <= Math.min(SPEC_BANDS - 1, bi + 3); j++) e += Math.pow(10, specIn[j] / 10);
+        const lvl = 10 * Math.log10(e + 1e-12) + 6;
+        const target = b.dynamic.range * clamp((lvl - b.dynamic.thr + 3) / 15, 0, 1);
+        const tau = Math.abs(target) > Math.abs(sim!.dyn[k]) ? 0.01 : 0.08; // fast in, slower out
+        sim!.dyn[k] += (target - sim!.dyn[k]) * (1 - Math.exp(-dt / tau));
+        meters[k] = sim!.dyn[k];
+      });
+      const c = eqCurve(fx.bands, pr.out ?? 0, BAND_F, new Float32Array(SPEC_BANDS), 'mid', sim.dyn);
       for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (fx.bypass ? 0 : c[k]);
+    } else if (fx.type === 'tune') {
+      this.simTune(fx, sim, voc, dt);
+      for (let i = 0; i < 6; i++) meters[i] = sim.m[i];
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k];
+    } else if (fx.type === 'fet') {
+      const inDb = level > 1e-5 ? 20 * Math.log10(level) + (pr.input ?? 8) : -120;
+      const ri = Math.round(pr.ratio ?? 0), abi = ri >= 4, ratio = [4, 8, 12, 20, 20][clamp(ri, 0, 4)];
+      const over = inDb + 10, knee = abi ? 2 : ratio <= 4 ? 8 : 4, slope = 1 / ratio - 1;
+      let target = over <= -knee / 2 ? 0 : over >= knee / 2 ? slope * over : slope * (over + knee / 2) ** 2 / (2 * knee);
+      if (abi && over > 0) target -= 4 * Math.min(1, over / 6) * (1 - Math.min(1, over / 30));
+      const rel = (pr.release ?? 300) / 1000 * (abi ? 1.4 : 1);
+      sim.gr = target < sim.gr ? target : target + (sim.gr - target) * Math.exp(-dt / rel);
+      gr = sim.gr;
+      const outDb = inDb + gr + (pr.output ?? 0);
+      meters[0] = gr; meters[1] = Math.max(-120, inDb); meters[2] = Math.max(-120, outDb);
+      out = dbg(outDb);
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (pr.input ?? 8) + gr + (pr.output ?? 0);
+    } else if (fx.type === 'deess') {
+      const sib = voc?.sib ?? 0, lv = voc?.level ?? 0;
+      const hiDb = lv > 1e-4 ? 20 * Math.log10(lv) + (sib > 0 ? 3 + 4 * sib : -26 + (Math.random() - 0.5) * 3) : -120;
+      const over = Math.max(0, hiDb - (pr.thr ?? -32));
+      const target = -Math.min(over * 0.8 * sib, pr.range ?? 8);
+      sim.gr = target < sim.gr ? target + (sim.gr - target) * Math.exp(-dt / 0.004) : target + (sim.gr - target) * Math.exp(-dt / 0.06);
+      gr = sim.gr;
+      meters[0] = gr; meters[1] = Math.max(-120, hiDb); meters[2] = sib; meters[3] = pr.thr ?? -32;
+      out = level * dbg(gr * (pr.mode ? 1 : 0.85));
+      const fc = pr.freq ?? 6000;
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (pr.mode || BAND_F[k] >= fc ? gr : 0);
     } else if (fx.type === 'comp' || fx.type === 'limit') {
       const inDb = lvDb + (fx.type === 'limit' ? pr.gain : 0), thr = fx.type === 'limit' ? pr.ceil : pr.thr;
       const over = inDb - thr;
@@ -257,7 +358,34 @@ export class MockBackend implements Backend {
       scopeIn[i] = x;
       scopeOut[i] = fx.type === 'sat' ? Math.tanh(x * drive * 2.5) / Math.tanh(2.5) * dbg(pr.out ?? 0) : x * dbg(gr);
     }
-    return { id: fx.id, inPeak: level, outPeak: out, grDb: gr, specIn, specOut, scopeIn, scopeOut };
+    return { id: fx.id, inPeak: level, outPeak: out, grDb: gr, meters, specIn, specOut, scopeIn, scopeOut };
+  }
+
+  /** vocal.rs `Tune::process`, stepped every 4 ms hop. */
+  private simTune(fx: Fx, s: FxSim, voc: VocalSample | null, dt: number) {
+    const p = fx.params, key = Math.round(p.key ?? 0), mask = scaleMask(p.scale ?? 0);
+    const vib = (p.vibrato ?? 0) / 100, flex = (p.flex ?? 0) / 100, hum = (p.humanize ?? 0) / 100, tr = p.transpose ?? 0;
+    const hop = 0.004, steps = Math.max(1, Math.round(dt / hop));
+    for (let i = 0; i < steps; i++) {
+      if (voc && voc.midi != null && voc.level > 0.02) {
+        const m = voc.midi + (Math.random() - 0.5) * 0.02;
+        if (s.center === 0 || Math.abs(m - s.center) > 1.5) s.center = m;
+        s.center += (m - s.center) * Math.min(1, hop / 0.15);
+        const fol = s.center * vib + m * (1 - vib);
+        const note = snapNote(fol, key, mask);
+        if (note !== s.last) { s.last = note; s.held = 0; } else s.held += hop;
+        const err = note - fol, win = 1 - 0.9 * flex;
+        const want = flex > 0 && Math.abs(err) > win * 0.5 ? 0 : err;
+        let tau = (p.retune ?? 20) / 1000;
+        if (hum > 0 && s.held > 0.25) tau += hum * 0.4 * Math.min(1, (s.held - 0.25) / 0.5);
+        const k = tau <= 0.0005 ? 1 : 1 - Math.exp(-hop / tau);
+        s.corr += (want - s.corr) * k;
+        s.m = [midiToHz(m), midiToHz(note + tr), midiToHz(m + s.corr + tr), 0.88 + Math.random() * 0.1, (m - note) * 100, s.corr * 100];
+      } else {
+        s.corr *= 0.9; s.center = 0;
+        s.m = [0, 0, 0, 0.15 + Math.random() * 0.2, 0, 0];
+      }
+    }
   }
 
   // ---------- catalog / audio files ----------
@@ -269,8 +397,10 @@ export class MockBackend implements Backend {
     a.paths.forEach((path, k) => {
       const name = (path.split(/[\\/]/).pop() ?? path).replace(/\.[^.]+$/, '');
       const h = hash(path), id = this.p.nextId++;
-      const dur = /loop/i.test(name) ? 4 * 4 * this.spb() : 0.6 + (h % 700) / 100;
-      const src: MockSource = { id, name, color: TC[(this.p.sources.length + 3) % TC.length], path, dur, sr: 48000, ch: 2, peakDb: -1 - (h % 60) / 10, seed: h };
+      const vocal = isVocalName(name);
+      const mins = /(\d+)\s*min/i.exec(name); // e.g. "Long take 4min.wav" (dev/perf checks)
+      const dur = mins ? +mins[1] * 60 : vocal ? VOCAL_DUR : /loop/i.test(name) ? 4 * 4 * this.spb() : 0.6 + (h % 700) / 100;
+      const src: MockSource = { id, name, color: vocal ? '#d9678f' : TC[(this.p.sources.length + 3) % TC.length], path, dur, sr: 48000, ch: vocal ? 1 : 2, peakDb: -1 - (h % 60) / 10, seed: h, vocal };
       this.srcMeta.set(id, src); this.p.sources.push(strip(src)); sourceIds.push(id);
       if (a.track != null && a.beat != null) {
         const tr = clamp(a.track + k, 0, this.p.tracks.length - 1), cid = this.p.nextId++;
@@ -301,10 +431,39 @@ export class MockBackend implements Backend {
       const full = await this.sourcePeaks(meta.trimFrom.id);
       const a = Math.round(meta.trimFrom.offSec * 100) * 2;
       pk = full.slice(a, a + Math.round(s.dur * 100) * 2);
-    } else pk = synthPeaks(meta?.seed ?? id, s.dur, 128);
+    } else if (meta?.vocal) pk = vocalPeaks(synthVocal(meta.seed, s.dur));
+    else pk = synthPeaks(meta?.seed ?? id, s.dur, 128);
     if (rev) { const n = pk.length / 2, o = new Float32Array(pk.length); for (let i = 0; i < n; i++) { o[2 * i] = pk[2 * (n - 1 - i)]; o[2 * i + 1] = pk[2 * (n - 1 - i) + 1]; } pk = o; }
     if (norm) { let m = 0; for (const v of pk) m = Math.max(m, Math.abs(v)); const g = m > 1e-6 ? dbg(-0.3) / m : 1; for (let i = 0; i < pk.length; i++) pk[i] *= g; }
     return pk;
+  }
+  private renderReady = 0;
+  async clipPeaks(clipId: Id) {
+    await delay(Math.max(0, this.renderReady - performance.now())); // the render of the last gesture
+    const c = this.p.clips.find(x => x.id === clipId); if (!c || c.kind !== 'audio') throw new Error('no such clip');
+    const tune = structuredClone(c.tune ?? null);
+    const pk = await this.sourcePeaks(c.ref, c.norm, c.rev);
+    await delay(20);
+    if (tune?.notes.length) {
+      const n = pk.length / 2;
+      for (let i = 0; i < n; i++) {
+        const j = noteAt(tune.notes, i / 100); if (j < 0) continue;
+        const nt = tune.notes[j], edge = clamp(Math.min(i / 100 - nt.start, nt.end - i / 100) / 0.01, 0, 1);
+        const g = 1 + (dbg(nt.gain) - 1) * edge;
+        pk[2 * i] = clamp(pk[2 * i] * g, -1, 0); pk[2 * i + 1] = clamp(pk[2 * i + 1] * g, 0, 1);
+      }
+    }
+    return pk;
+  }
+  async pitchAnalyze(clipId: Id): Promise<PitchAnalysis> {
+    await delay(120); // the engine analyses on a worker thread; keep the loading state visible
+    const c = this.p.clips.find(x => x.id === clipId);
+    if (!c) throw new Error('no such clip');
+    if (c.kind !== 'audio') throw new Error('only audio clips have pitch');
+    const s = this.srcMeta.get(c.ref) ?? this.p.sources.find(x => x.id === c.ref) as MockSource | undefined;
+    if (!s) throw new Error('audio not loaded');
+    const v = synthVocal(s.seed ?? s.id, s.dur);
+    return structuredClone({ rate: v.rate, curve: v.curve, levels: v.levels, notes: v.notes });
   }
   async trimClip(clipId: Id) {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) throw new Error('no clip');
@@ -417,6 +576,22 @@ export class MockBackend implements Backend {
     return () => { window.removeEventListener('dragover', over); window.removeEventListener('dragleave', leave); window.removeEventListener('drop', drop); };
   }
   setTitle(title: string) { document.title = title; }
+
+  /** Dev helper: a sung vocal take on the Vocal track and a vocal chain on its insert. */
+  async addDemoVocal() {
+    const r = await this.importAudio({ paths: ['Vocal take 1.wav'], track: 5, beat: 0 });
+    const ins = this.p.inserts.find(m => m.name === 'Vocal') ?? this.p.inserts[6];
+    const mk = (type: Fx['type']) => newFx(this.cat, this.p.nextId++, type as never, this.p.bpm);
+    const eq = ins.fx.find(f => f.type === 'eq');
+    if (eq?.bands) {
+      eq.bands.push({ on: true, type: 'peak', f: 5200, g: 0, q: 2.2, slope: 12, place: 'stereo', dynamic: { range: -6, thr: -40 } });
+      eq.bands.push({ on: true, type: 'highshelf', f: 9000, g: 2.5, q: 0.71, slope: 12, place: 'side' });
+    }
+    const fx = ins.fx.filter(f => f.type !== 'comp');
+    ins.fx = [mk('tune'), ...fx.filter(f => f.type === 'eq'), mk('deess'), mk('fet'), ...fx.filter(f => f.type !== 'eq')];
+    this.changed();
+    return r;
+  }
 
   /** Dev helper: drop two demo loops on Pad/Perc like the prototype did. */
   async addDemoAudio() {

@@ -1,0 +1,39 @@
+//! Prints input vs corrected pitch for a WAV through the Pitch Correct effect.
+use wave_engine::catalog::{new_fx, param_block};
+use wave_engine::pitch::{hz_to_midi, Detector};
+use wave_engine::{FxKind, ProcessCtx, Processor};
+fn main() {
+    let path = std::env::args().nth(1).expect("wav");
+    let a = wave_engine::sources::Audio::load(std::path::Path::new(&path)).unwrap();
+    let sr = a.sr as f32;
+    let x: Vec<f32> = a.content().chunks(2).map(|f| f[0]).collect();
+    let mut fx = new_fx(1, FxKind::Tune, 120.0);
+    for (k, v) in [("retune", 0.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0)] {
+        fx.params.insert(k.into(), v);
+    }
+    let mut t = wave_engine::vocal::Tune::default();
+    t.prepare(sr, 256);
+    t.set_params(&param_block(&fx));
+    let mut y = vec![];
+    let mut meters = vec![];
+    for c in x.chunks(256) {
+        let (mut l, mut r) = (c.to_vec(), c.to_vec());
+        t.process(&mut l, &mut r, &ProcessCtx { sample_rate: sr, ..Default::default() });
+        let mut m = [0f32; 32];
+        t.meters(&mut m);
+        meters.push(m);
+        y.extend(l);
+    }
+    let (mut di, mut dout) = (Detector::new(sr), Detector::new(sr));
+    let lat = wave_engine::vocal::tune_latency(sr);
+    for (i, &s) in x.iter().enumerate() {
+        di.push(s);
+        dout.push(*y.get(i + lat).unwrap_or(&0.0));
+        if i % (sr as usize / 4) == 0 && i > 0 {
+            let m = meters[i / 256];
+            println!("{:5.2}s in {:6.2} out {:6.2}  meters in {:6.2} target {:6.2} out {:6.2}", i as f32 / sr,
+                if di.hz > 0.0 { hz_to_midi(di.hz) } else { 0.0 }, if dout.hz > 0.0 { hz_to_midi(dout.hz) } else { 0.0 },
+                if m[0] > 0.0 { hz_to_midi(m[0]) } else { 0.0 }, if m[1] > 0.0 { hz_to_midi(m[1]) } else { 0.0 }, if m[2] > 0.0 { hz_to_midi(m[2]) } else { 0.0 });
+        }
+    }
+}
