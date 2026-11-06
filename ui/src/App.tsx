@@ -36,6 +36,7 @@ function onKey(e: KeyboardEvent) {
     return setU('sel', []);
   }
   if (e.key === 'F8') { e.preventDefault(); return setU('pickOpen', !U.pickOpen); }
+  if (e.key === 'F5') { e.preventDefault(); return U.plugsHidden ? A.showPlugs() : A.playlistFront(); }
   if (e.key === 'F9') { e.preventDefault(); return setU('mixOpen', !U.mixOpen); }
   if (m && k === 'z') { e.preventDefault(); return void (e.shiftKey ? A.redo() : A.undo()); }
   if (m && k === 'y') { e.preventDefault(); return void A.redo(); }
@@ -96,7 +97,7 @@ export function App() {
   let lastWatch = '';
   createEffect(() => {
     // the 8 front-most windows (engine limit), in a stable order so focusing does not re-send
-    const ids = [...U.plugs].sort((a, b) => b.z - a.z).map(p => p.fxId).filter(id => { const f = findFx(id)?.f; return f && f.type !== 'vst3'; }).slice(0, 8).sort((a, b) => a - b);
+    const ids = (U.plugsHidden ? [] : [...U.plugs]).sort((a, b) => b.z - a.z).map(p => p.fxId).filter(id => { const f = findFx(id)?.f; return f && f.type !== 'vst3'; }).slice(0, 8).sort((a, b) => a - b);
     const key = ids.join(',');
     if (key !== lastWatch) { lastWatch = key; be().watchFx(ids).catch(e => console.warn(e)); }
   });
@@ -120,7 +121,7 @@ export function App() {
       <StatusBar />
       <SampleEditor />
       <PitchEditor />
-      <div class="winlayer">
+      <div class="winlayer" classList={{ hidden: U.plugsHidden }}>
         <For each={U.plugs}>{pw => <FxWindow pw={pw} z={plugRank(pw.z)} />}</For>
       </div>
       <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>

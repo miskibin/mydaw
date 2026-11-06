@@ -212,13 +212,27 @@ impl Detector {
 /// TD-PSOLA pitch shifter. Feed one sample, get one sample `latency()` later.
 /// `period` is the input's pitch period in samples (0 = unvoiced → transparent),
 /// `ratio` the pitch factor, `formant` the formant factor (1 = keep).
+///
+/// Analysis marks are epoch-synchronous: each one sits on the strongest peak of a
+/// low-passed copy of the input, searched around one period after the previous mark,
+/// so every grain is cut at the same point of the glottal cycle (grains cut at drifting
+/// phases comb-filter each other — the "metallic", "robotic" sound). Synthesis marks
+/// advance by the *measured* spacing of the analysis marks divided by `ratio`, so at
+/// ratio 1 synthesis and analysis marks coincide and the output is the input.
 pub struct Psola {
     inp: Vec<f32>,
+    /// low-passed input, for picking marks on the fundamental rather than a formant ripple
+    lpb: Vec<f32>,
+    lp1: Biquad,
+    lp2: Biquad,
     out: Vec<f32>,
     n: usize,
     tmax: usize,
     next_syn: f64,
+    /// current analysis mark and the one after it (input sample positions)
     mark: f64,
+    next_mark: f64,
+    voiced_prev: bool,
     hann: Vec<f32>,
 }
 
@@ -227,7 +241,11 @@ impl Psola {
         let tmax = (sr / MIN_HZ * 0.75) as usize + 1; // half-grain bound
         let len = (tmax * 8).next_power_of_two();
         let hann = (0..1025).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / 1024.0).cos()).collect();
-        Self { inp: vec![0.0; len], out: vec![0.0; len], n: 0, tmax, next_syn: 0.0, mark: 0.0, hann }
+        let mut lp1 = Biquad::default();
+        let mut lp2 = Biquad::default();
+        lp1.set(FilterType::Lowpass, sr, 900.0, 0.6, 0.0);
+        lp2.set(FilterType::Lowpass, sr, 900.0, 0.6, 0.0);
+        Self { inp: vec![0.0; len], lpb: vec![0.0; len], lp1, lp2, out: vec![0.0; len], n: 0, tmax, next_syn: 0.0, mark: 0.0, next_mark: 0.0, voiced_prev: false, hann }
     }
 
     pub fn latency(&self) -> usize {
@@ -241,7 +259,9 @@ impl Psola {
 
     pub fn reset(&mut self) {
         self.inp.fill(0.0);
+        self.lpb.fill(0.0);
         self.out.fill(0.0);
+        self.voiced_prev = false;
     }
 
     #[inline]
@@ -263,28 +283,63 @@ impl Psola {
         a + (b - a) * f
     }
 
+    /// Strongest positive peak of the low-passed input in `[c − r, c + r]`, not past `limit`.
+    fn peak_near(&self, c: f64, r: f64, limit: i64) -> f64 {
+        let m = self.lpb.len() as i64;
+        let (a, b) = ((c - r).ceil() as i64, ((c + r).floor() as i64).min(limit));
+        if b <= a {
+            return c;
+        }
+        let mut best = (a, f32::MIN);
+        for k in a..=b {
+            let v = self.lpb[k.rem_euclid(m) as usize];
+            if v > best.1 {
+                best = (k, v);
+            }
+        }
+        best.0 as f64
+    }
+
     #[inline]
     pub fn process(&mut self, x: f32, period: f32, ratio: f32, formant: f32) -> f32 {
         let m = self.inp.len();
         let now = self.n;
         self.inp[now % m] = x;
+        self.lpb[now % m] = self.lp2.tick(self.lp1.tick(x));
         let voiced = period >= 8.0;
         let t = if voiced { period.min(self.tmax as f32) } else { (self.tmax as f32 * 0.4).max(32.0) };
         let ratio = if voiced { ratio.clamp(0.25, 4.0) } else { 1.0 };
         let fr = if voiced { formant.clamp(0.5, 2.0) } else { 1.0 };
         let lat = self.tmax as f64;
-        // synthesis marks up to now
+        let limit = now as i64;
+        let tf = t as f64;
         while self.next_syn <= now as f64 {
             let ts = self.next_syn;
             let c = ts - lat; // input time this grain represents
-            // advance analysis marks by the input period
-            if !voiced || (self.mark - c).abs() > 4.0 * t as f64 {
-                self.mark = c;
+            // (re)lock the analysis marks: at a voicing change or when they lost the grain
+            if voiced != self.voiced_prev || (self.mark - c).abs() > 2.0 * tf {
+                self.mark = if voiced { self.peak_near(c, tf * 0.5, limit) } else { c };
+                self.next_mark = self.mark + tf;
+                self.voiced_prev = voiced;
+                // put the grain where its mark is (no time offset): unshifted audio stays
+                // sample-exact across voicing changes instead of jumping by up to half a period
+                let aligned = self.mark + lat;
+                if aligned > now as f64 {
+                    self.next_syn = aligned;
+                    break;
+                }
+                self.next_syn = aligned.max(ts - tf * 0.5);
+                continue;
             }
-            while self.mark + (t as f64) * 0.5 < c {
-                self.mark += t as f64;
+            // step to the analysis mark nearest to c
+            while self.next_mark - c < c - self.mark {
+                self.mark = self.next_mark;
+                let guess = self.mark + tf;
+                self.next_mark = if voiced { self.peak_near(guess, tf * 0.2, limit).max(self.mark + tf * 0.6) } else { guess };
             }
-            let half = t as f64;
+            // grain: two local periods, centred on the analysis mark, placed at ts
+            let span = (self.next_mark - self.mark).clamp(tf * 0.6, tf * 1.4).min(self.tmax as f64);
+            let half = span;
             let norm = 1.0 / ratio.max(1e-3);
             let k0 = (ts - half).ceil() as i64;
             let k1 = (ts + half).floor() as i64;
@@ -298,7 +353,7 @@ impl Psola {
                 let idx = (k.rem_euclid(m as i64)) as usize;
                 self.out[idx] += v;
             }
-            self.next_syn += (t / ratio) as f64;
+            self.next_syn += span / ratio as f64;
         }
         // emit the sample all grains are finished with
         let e = now as i64 - self.tmax as i64;
@@ -388,6 +443,7 @@ pub fn analyze(mono: &[f32], sr: f32) -> PitchAnalysis {
         let x = if i < mono.len() { mono[i] } else { 0.0 };
         if det.push(x) {
             cur_hz = det.hz;
+            det.hint = if cur_hz > 0.0 { cur_hz } else { 0.0 };
             cur_conf = det.confidence;
             cur_rms = det.rms;
         }
@@ -411,8 +467,55 @@ pub fn analyze(mono: &[f32], sr: f32) -> PitchAnalysis {
             curve[f] = (a + c) * 0.5;
         }
     }
+    fold_octave_errors(&mut curve);
     let notes = segment(&curve, &levels);
     PitchAnalysis { rate: ANALYSIS_RATE, curve, levels, notes }
+}
+
+/// Detector slips onto a harmonic (or an octave below) show up as frames far from
+/// the line being sung. Each voiced frame is compared with the running median of the
+/// voiced pitch around it (±0.75 s); a frame more than 9 semitones away (harmonic
+/// slips are 12, 19 or 24 — real leaps of a fifth or sixth stay) is moved by the
+/// octave / octave+fifth that brings it back, or dropped if none does. A voice stays
+/// within about an octave and a half of its own median, so frames beyond that go too.
+fn fold_octave_errors(curve: &mut [f32]) {
+    let voiced: Vec<f32> = curve.iter().copied().filter(|x| !x.is_nan()).collect();
+    if voiced.len() < 20 {
+        return;
+    }
+    let mut g = voiced.clone();
+    g.sort_by(f32::total_cmp);
+    let global = g[g.len() / 2];
+    let half = (ANALYSIS_RATE * 0.75) as usize;
+    let src = curve.to_vec();
+    let mut win: Vec<f32> = Vec::with_capacity(2 * half + 1);
+    for f in 0..curve.len() {
+        let m = src[f];
+        if m.is_nan() {
+            continue;
+        }
+        win.clear();
+        win.extend(src[f.saturating_sub(half)..(f + half + 1).min(src.len())].iter().copied().filter(|x| !x.is_nan()));
+        let reference = if win.len() >= 20 {
+            win.sort_by(f32::total_cmp);
+            win[win.len() / 2]
+        } else {
+            global
+        };
+        let mut v = m;
+        if (m - reference).abs() > 9.0 {
+            let best = [-24.0f32, -19.02, -12.0, 12.0, 19.02, 24.0]
+                .iter()
+                .map(|k| m + k)
+                .min_by(|a, b| (a - reference).abs().total_cmp(&(b - reference).abs()))
+                .unwrap_or(m);
+            v = if (best - reference).abs() < 3.0 { best } else { f32::NAN };
+        }
+        if (v - global).abs() > 18.0 {
+            v = f32::NAN;
+        }
+        curve[f] = v;
+    }
 }
 
 /// Splits voiced runs into notes where the (smoothed) pitch moves to a new semitone and stays.

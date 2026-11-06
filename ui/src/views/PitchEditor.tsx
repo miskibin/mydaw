@@ -81,9 +81,14 @@ function PitchBody(props: { clipId: number }) {
   const fitView = (a: PitchAnalysis | null = an()) => {
     const W = Math.max(200, size.W || E().w - 2);
     view.t = t0(); view.pps = (W - KW) / Math.max(0.2, t1() - t0());
-    let lo = 127, hi = 0;
-    if (a) for (const n of a.notes) if (n.end > t0() && n.start < t1()) { lo = Math.min(lo, n.pitch); hi = Math.max(hi, n.pitch); }
-    if (lo > hi) { lo = 55; hi = 67; }
+    // fit the sung range by time: 2nd–98th percentile of note time, so a stray blob can't zoom out to octaves
+    const vis = a ? a.notes.filter(n => n.end > t0() && n.start < t1()).sort((x, y) => x.pitch - y.pitch) : [];
+    let lo = 55, hi = 67;
+    if (vis.length) {
+      const tot = vis.reduce((s, n) => s + (n.end - n.start), 0);
+      const at = (q: number) => { let acc = 0; for (const n of vis) { acc += n.end - n.start; if (acc >= q * tot) return n.pitch; } return vis[vis.length - 1].pitch; };
+      lo = at(0.02); hi = at(0.98);
+    }
     const mid = (lo + hi) / 2, span = Math.max(14, hi - lo + 7);
     view.lo = mid - span / 2; view.hi = mid + span / 2;
     bumpView();

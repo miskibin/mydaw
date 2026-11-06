@@ -341,13 +341,18 @@ pub struct Tune {
     /// last accepted pitch (MIDI) and how long a big jump away from it has lasted (s)
     last_m: f32,
     jump_t: f32,
+    /// pitch smoothed over ~50 ms and its speed (semitones/s): glides and scoops
+    smooth_m: f32,
+    speed: f32,
+    /// time the voice has sat on the current note centre (s)
+    seg_t: f32,
     m: [f32; 8],
     params: Option<ParamBlock>,
 }
 
 impl Default for Tune {
     fn default() -> Self {
-        Self { sr: 48000.0, det: None, psola_l: None, align: vec![], align_w: 0, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, last_m: 0.0, jump_t: 0.0, m: [0.0; 8], params: None }
+        Self { sr: 48000.0, det: None, psola_l: None, align: vec![], align_w: 0, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, last_m: 0.0, jump_t: 0.0, smooth_m: 0.0, speed: 0.0, seg_t: 0.0, m: [0.0; 8], params: None }
     }
 }
 
@@ -421,11 +426,23 @@ impl Processor for Tune {
                     self.last_m = m;
                     det.hint = det.hz;
                     self.period = sr / det.hz;
-                    // vibrato-preserving centre: a slow average of the pitch
-                    if self.center == 0.0 || (m - self.center).abs() > 0.8 {
+                    // pitch speed on a 50 ms-smoothed curve (vibrato ≈ 6 Hz mostly averages out):
+                    // tells a voice travelling between notes from one sitting on a note
+                    let prev = self.smooth_m;
+                    self.smooth_m = if prev == 0.0 { m } else { prev + (m - prev) * (1.0 - (-hop_s / 0.05f32).exp()) };
+                    let v = if prev == 0.0 { 0.0 } else { (self.smooth_m - prev).abs() / hop_s };
+                    self.speed += (v - self.speed) * 0.3;
+                    // note centre (Melodyne's "pitch centre"): the mean pitch since the voice
+                    // settled on this note — restarted at a transition or a jump of over a
+                    // semitone, a true mean for the first 0.3 s, then slowly following drift.
+                    // Correcting this (Vibrato = 100 %) moves the note and keeps every wobble.
+                    if self.center == 0.0 || self.speed > 20.0 || (m - self.center).abs() > 1.0 {
                         self.center = m;
+                        self.seg_t = 0.0;
+                    } else {
+                        self.seg_t += hop_s;
+                        self.center += (m - self.center) * (hop_s / self.seg_t.max(hop_s)).max(hop_s / 0.3);
                     }
-                    self.center += (m - self.center) * (hop_s / 0.15).min(1.0);
                     let follow = self.center * self.vibrato + m * (1.0 - self.vibrato);
                     let note = snap(follow, self.key, self.mask);
                     if note != self.last_note {
@@ -442,7 +459,13 @@ impl Processor for Tune {
                     if self.flex <= 0.0 || err.abs() <= half {
                         self.engaged = true;
                     }
-                    let want = if self.engaged { err } else { 0.0 };
+                    // glide protection (natural modes): while the voice is travelling between
+                    // notes — a scoop into a note, a slide, a fall — leave it alone and only
+                    // pull once it settles. Measured on a 50 ms-smoothed pitch so vibrato
+                    // (≈ 6 Hz) doesn't count as travelling. Hard tuning (retune < 5 ms) keeps
+                    // the classic stepped effect.
+                    let glide = if self.retune_ms >= 5.0 { (1.0 - (self.speed - 10.0) / 15.0).clamp(0.0, 1.0) } else { 1.0 };
+                    let want = if self.engaged { err * glide } else { 0.0 };
                     let mut tau = self.retune_ms / 1000.0;
                     if self.humanize > 0.0 && self.held > 0.25 {
                         tau += self.humanize * 0.4 * ((self.held - 0.25) / 0.5).min(1.0);
@@ -456,6 +479,8 @@ impl Processor for Tune {
                     self.center = 0.0;
                     self.last_m = 0.0;
                     det.hint = 0.0;
+                    self.smooth_m = 0.0;
+                    self.speed = 0.0;
                     self.m = [0.0, 0.0, 0.0, det.confidence, 0.0, 0.0, 0.0, 0.0];
                 }
             }
@@ -557,6 +582,86 @@ mod tests {
             let cents = 1200.0 * (d.hz / target).log2();
             assert!(cents.abs() < 12.0, "{f0:.1} Hz → {:.1} Hz, still {cents:.1} cents off {target}", d.hz);
         }
+    }
+
+    #[test]
+    fn natural_mode_leaves_a_slide_alone_then_settles() {
+        // 0.4 s at A3 (in tune), 0.3 s slide up to ~C4 + 30 cents, then held
+        let sr = 48000.0;
+        let mut fx = new_fx(1, FxKind::Tune, 120.0);
+        for (k, v) in [("retune", 40.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0)] {
+            fx.params.insert(k.into(), v);
+        }
+        let mut p = Tune::default();
+        p.prepare(sr, 256);
+        p.set_params(&param_block(&fx));
+        let (a, b) = (57.0f32, 60.3f32);
+        let n = (sr * 1.4) as usize;
+        let mut ph = 0f32;
+        let mut pitch = vec![0f32; n];
+        let x: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr;
+                let m = if t < 0.4 { a } else if t < 0.7 { a + (b - a) * (t - 0.4) / 0.3 } else { b };
+                pitch[i] = m;
+                ph += std::f32::consts::TAU * midi_to_hz(m) / sr;
+                (1..6).map(|k| (ph * k as f32).sin() / k as f32).sum::<f32>() * 0.3
+            })
+            .collect();
+        let y = run(&mut p, &x);
+        let lat = tune_latency(sr);
+        let measure = |from: f32, to: f32| {
+            let mut d = Detector::new(sr);
+            let (i0, i1) = ((from * sr) as usize + lat, (to * sr) as usize + lat);
+            for &s in &y[i0..i1.min(y.len())] {
+                d.push(s);
+            }
+            hz_to_midi(d.hz)
+        };
+        // mid-slide: the output still travels with the input (no snapping to a note on the way)
+        let mid = measure(0.45, 0.58);
+        let input_mid = pitch[(0.58 * sr) as usize - Detector::new(sr).latency()];
+        assert!((mid - input_mid).abs() < 0.45, "mid-slide output {mid:.2} vs input {input_mid:.2}");
+        // settled: pulled to C4
+        let end = measure(1.0, 1.35);
+        assert!((end - 60.0).abs() < 0.12, "held note ended at {end:.2}");
+    }
+
+    #[test]
+    fn centre_correction_keeps_vibrato_and_moves_the_note() {
+        // A3 + 30 cents with a 5.5 Hz ±40-cent vibrato; vibrato = 100 % → the note centre
+        // lands on A3 and the vibrato survives
+        let sr = 48000.0;
+        let mut fx = new_fx(1, FxKind::Tune, 120.0);
+        for (k, v) in [("retune", 10.0), ("flex", 0.0), ("vibrato", 100.0), ("humanize", 0.0)] {
+            fx.params.insert(k.into(), v);
+        }
+        let mut p = Tune::default();
+        p.prepare(sr, 256);
+        p.set_params(&param_block(&fx));
+        let n = (sr * 2.0) as usize;
+        let mut ph = 0f32;
+        let x: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / sr;
+                let m = 57.3 + 0.4 * (std::f32::consts::TAU * 5.5 * t).sin();
+                ph += std::f32::consts::TAU * midi_to_hz(m) / sr;
+                (1..6).map(|k| (ph * k as f32).sin() / k as f32).sum::<f32>() * 0.3
+            })
+            .collect();
+        let y = run(&mut p, &x);
+        let lat = tune_latency(sr);
+        let mut d = Detector::new(sr);
+        let mut track = vec![];
+        for &s in &y[(0.6 * sr) as usize + lat..(1.9 * sr) as usize + lat] {
+            if d.push(s) && d.hz > 0.0 {
+                track.push(hz_to_midi(d.hz));
+            }
+        }
+        let mean = track.iter().sum::<f32>() / track.len() as f32;
+        let (lo, hi) = track.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        assert!((mean - 57.0).abs() < 0.1, "note centre at {mean:.2}");
+        assert!(hi - lo > 0.5, "vibrato flattened to {:.2} st", hi - lo);
     }
 
     #[test]
