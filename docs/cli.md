@@ -64,7 +64,9 @@ wave render --out bounce.wav --from 0 --to 32
 
 renders offline (independent of the audio device, so it works while the
 musician keeps playing) and prints peak/RMS/crest/clipping so an agent can
-check its work, then listen to the WAV.
+check its work, then listen to the WAV. The same bounce is available in the
+app as **Eksport** (`Ctrl+Shift+R`): song or loop, a 0/2/8 s effect tail, and
+44.1 or 48 kHz, written as a 32-bit float stereo WAV.
 
 ## Plugins
 

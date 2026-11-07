@@ -116,6 +116,36 @@ pub fn stats(x: &[f32], sr: u32) -> Value {
     })
 }
 
+/// Offline bounce shared by the GUI export dialog and `wave render`.
+///
+/// Writes a 32-bit float stereo WAV. When `cancel` is set mid-render, no file is
+/// written and the error is `"cancelled"`.
+pub fn render_to_file(
+    app: &App,
+    out: &std::path::Path,
+    from: f64,
+    to: f64,
+    tail: f64,
+    rate: u32,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> R<Value> {
+    if to <= from {
+        return Err("`to` must be after `from`".into());
+    }
+    let audio = app.engine.render_cancelable(from, to, tail, rate, cancel).map_err(|e| e.to_string())?;
+    if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
+    wave_engine::sources::write_wav(out, &audio, rate)?;
+    Ok(json!({
+        "out": out.display().to_string(),
+        "fromBeat": from,
+        "toBeat": to,
+        "tail": tail,
+        "stats": stats(&audio, rate),
+    }))
+}
+
 pub fn render(app: &App, a: &Value) -> R<Value> {
     let out = PathBuf::from(need_str(a, "out")?);
     let p = app.engine.project();
@@ -123,12 +153,7 @@ pub fn render(app: &App, a: &Value) -> R<Value> {
     let to = opt_f64(a, "to").unwrap_or_else(|| p.loop_range.map(|l| l.b).unwrap_or(p.song_end()));
     let tail = opt_f64(a, "tail").unwrap_or(2.0);
     let rate = opt_f64(a, "rate").unwrap_or(48000.0) as u32;
-    if to <= from {
-        return Err("`to` must be after `from`".into());
-    }
-    let audio = app.engine.render(from, to, tail, rate).map_err(|e| e.to_string())?;
-    wave_engine::sources::write_wav(&out, &audio, rate)?;
-    Ok(json!({ "out": out.display().to_string(), "fromBeat": from, "toBeat": to, "stats": stats(&audio, rate) }))
+    render_to_file(app, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false))
 }
 
 pub fn context(app: &App, full: bool) -> Value {

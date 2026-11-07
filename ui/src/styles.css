@@ -103,6 +103,11 @@ a { color: var(--blue); }
 .smallbtn.playing { background: var(--green); color: var(--on-accent); }
 .prog { height: 4px; border-radius: 2px; background: var(--bg0); overflow: hidden; }
 .prog > div { height: 100%; background: var(--blue); }
+.prog.busy > div { width: 40%; animation: prog-indeterminate 1.1s ease-in-out infinite; }
+@keyframes prog-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
 .fgroup { padding: 4px 10px 2px 22px; font: 600 9px var(--sans); letter-spacing: .1em; color: var(--fg5); text-transform: uppercase; }
 .fitem { height: 22px; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 22px; font: 12px var(--sans); color: var(--fg2); cursor: grab; }
 .fitem:hover { background: var(--bg6); color: var(--fg-hi); }

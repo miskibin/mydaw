@@ -12,6 +12,7 @@ import { Mixer } from './views/Mixer';
 import { Playlist } from './views/Playlist';
 import { SampleEditor } from './views/SampleEditor';
 import { PitchEditor } from './views/PitchEditor';
+import { Export } from './views/Export';
 import { Settings, VstPicker } from './views/Settings';
 import { MusicDialog } from './views/MusicDialog';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
@@ -31,6 +32,7 @@ function onKey(e: KeyboardEvent) {
     if (U.musicWin) return A.closeMusicAnalysis();
     if (U.vstPicker) return setU('vstPicker', null);
     if (U.settings) return setU('settings', false);
+    if (U.exportOpen) return void A.cancelExportOrClose();
     if (U.help) return setU('help', false);
     if (U.plugs.length) return A.closePlug(A.topPlug()!.fxId);
     if (U.pitchEd) return A.closePitchEditor();
@@ -45,6 +47,7 @@ function onKey(e: KeyboardEvent) {
   if (m && k === 'n') { e.preventDefault(); return void A.projectNew(); }
   if (m && k === 'o') { e.preventDefault(); return void A.projectOpen(); }
   if (m && k === 's') { e.preventDefault(); return void A.projectSave(e.shiftKey); }
+  if (m && e.shiftKey && k === 'r') { e.preventDefault(); return setU('exportOpen', true); }
   if (m && k === 'a') { e.preventDefault(); return A.selectAll(); }
   if (m && k === 'b') { e.preventDefault(); return A.duplicate(); }
   if (m && k === 'c') { e.preventDefault(); return A.copy(); }
@@ -131,6 +134,7 @@ export function App() {
       <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>
       <ContextMenu />
       <Help />
+      <Export />
       <Settings />
       <VstPicker />
       <MusicDialog />

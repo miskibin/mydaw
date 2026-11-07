@@ -165,6 +165,9 @@ export function Toolbar() {
       </select>
       <div data-drag class="dragfill" />
       <span data-drag class="projName" title={(S.path ?? 'Projekt niezapisany') + (S.dirty ? ' — niezapisane zmiany' : '')}>{projName()}<Show when={S.dirty}><span data-drag class="dirty">•</span></Show></span>
+      <button class="tbtn" classList={{ on: U.exportOpen }} onClick={() => setU('exportOpen', true)} title="Eksport do WAV (Ctrl+Shift+R)">
+        <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} />Eksport
+      </button>
       <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : 'SONG'}</span>
       <Show when={U.plugs.length}>
         <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
@@ -223,6 +226,7 @@ const SHORTCUTS: [string, string][] = [
   ['Wysokość jednej ścieżki', 'przeciągnij dolną krawędź'], ['Pętla', 'przeciągnij po linijce'], ['Zmień nazwę ścieżki', '2× klik w nazwę'],
   ['Kolejność efektów', 'przeciągnij slot ↕'], ['Poprzedni / następny preset', '‹ › w oknie efektu'], ['Obrót widoku 3D (Reverb)', 'przeciągnij wizualizację'],
   ['Nowy · Otwórz projekt', 'Ctrl+N · Ctrl+O'], ['Zapisz · Zapisz jako', 'Ctrl+S · Ctrl+Shift+S'],
+  ['Eksport do WAV (master)', 'Ctrl+Shift+R'],
   ['Automatyzuj pokrętło / suwak', 'PPM → Automatyzuj na playliście'], ['Edycja punktów automatyzacji', '2× klik na klip · klik = punkt · PPM = usuń'],
   ['Edytor wysokości', 'PPM na klipie audio → Edytuj wysokość…'], ['Narzędzia edytora wysokości', '1–6'], ['Dopasuj widok edytora', 'F'],
   ['Nowy band EQ', '2× klik na wykresie'], ['Wytnij rezonans', 'przeciągnij z podświetlonego szczytu widma'], ['Q bandu', 'kółko nad punktem'],
