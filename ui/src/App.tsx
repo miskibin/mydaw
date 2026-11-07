@@ -14,6 +14,7 @@ import { SampleEditor } from './views/SampleEditor';
 import { PitchEditor } from './views/PitchEditor';
 import { Export } from './views/Export';
 import { Settings, VstPicker } from './views/Settings';
+import { MusicDialog } from './views/MusicDialog';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 
 /** Stacking rank of a plugin window inside the window layer (1 = bottom). */
@@ -28,6 +29,7 @@ function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') {
     if (U.menu) return closeMenu();
     if (U.autoEdit != null) return setU('autoEdit', null);
+    if (U.musicWin) return A.closeMusicAnalysis();
     if (U.vstPicker) return setU('vstPicker', null);
     if (U.settings) return setU('settings', false);
     if (U.exportOpen) return void A.cancelExportOrClose();
@@ -110,6 +112,8 @@ export function App() {
     if (gone.length) setU('plugs', U.plugs.filter(p => findFx(p.fxId)));
     if (U.editor && !S.project.clips.some(c => c.id === U.editor!.clipId)) setU('editor', null);
     if (U.pitchEd && !S.project.clips.some(c => c.id === U.pitchEd!.clipId)) setU('pitchEd', null);
+    if (U.musicWin?.clipId != null && !S.project.clips.some(c => c.id === U.musicWin!.clipId)) setU('musicWin', null);
+    if (U.musicWin?.fxId != null && !findFx(U.musicWin!.fxId)) setU('musicWin', null);
   });
   createEffect(() => { be().setTitle((S.path ? baseName(S.path) : 'Bez nazwy') + (S.dirty ? ' •' : '') + ' — WAVE'); });
 
@@ -133,6 +137,7 @@ export function App() {
       <Export />
       <Settings />
       <VstPicker />
+      <MusicDialog />
     </div>
   );
 }

@@ -16,7 +16,7 @@ export interface Track {
   vol: number; h: number; insert: Id;
 }
 
-export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'vst3';
+export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'vst3';
 export type BuiltinKind = Exclude<FxKind, 'vst3'>;
 export type BandType = 'lowcut' | 'lowshelf' | 'peak' | 'highshelf' | 'highcut' | 'notch' | 'bandpass' | 'tilt';
 /** Which part of the stereo image a band works on. */
@@ -77,6 +77,15 @@ export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][] }
 /** `pitch_analyze`: pitch every 1/rate s (null = unvoiced), levels 0..1, segmented notes (seconds of the source). */
 export interface NoteBlob { start: number; end: number; pitch: number; level: number }
 export interface PitchAnalysis { rate: number; curve: (number | null)[]; levels: number[]; notes: NoteBlob[] }
+
+export interface TempoCandidate { bpm: number; score: number }
+export interface TempoEstimate { bpm: number; confidence: number; candidates: TempoCandidate[]; firstBeat: number }
+export interface KeyCandidate { root: number; minor: boolean; score: number }
+export interface KeyEstimate {
+  root: number; minor: boolean; confidence: number;
+  candidates: KeyCandidate[]; chroma: number[]; tuningCents: number;
+}
+export interface MusicAnalysis { tempo: TempoEstimate | null; key: KeyEstimate | null }
 
 /** What an automation moves. `param`: catalog param id, or `band:<i>:f|g|q` of an EQ. */
 export type AutoTarget =

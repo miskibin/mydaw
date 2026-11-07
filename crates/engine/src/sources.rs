@@ -109,6 +109,7 @@ pub struct SourceStore {
     pub audio: HashMap<u64, Arc<Audio>>,
     derived: HashMap<(u64, bool, bool), Arc<Audio>>,
     analysis: HashMap<(u64, bool, bool), Arc<crate::pitch::PitchAnalysis>>,
+    music: HashMap<(u64, bool, bool), Arc<crate::music::SourceMusic>>,
     /// clip id → (hash of its edits, rendered audio)
     tuned: HashMap<u64, (u64, Arc<Audio>)>,
 }
@@ -117,6 +118,7 @@ impl SourceStore {
     pub fn insert(&mut self, id: u64, a: Arc<Audio>) {
         self.derived.retain(|k, _| k.0 != id);
         self.analysis.retain(|k, _| k.0 != id);
+        self.music.retain(|k, _| k.0 != id);
         self.audio.insert(id, a);
     }
     pub fn get(&self, id: u64) -> Option<&Arc<Audio>> {
@@ -142,6 +144,14 @@ impl SourceStore {
         let a = Arc::new(crate::pitch::analyze(&mono, audio.sr as f32));
         self.analysis.insert((id, norm, rev), a.clone());
         Some(a)
+    }
+
+    pub fn cached_music(&self, id: u64, norm: bool, rev: bool) -> Option<Arc<crate::music::SourceMusic>> {
+        self.music.get(&(id, norm, rev)).cloned()
+    }
+
+    pub fn put_music(&mut self, id: u64, norm: bool, rev: bool, m: Arc<crate::music::SourceMusic>) {
+        self.music.insert((id, norm, rev), m);
     }
 
     /// The audio a clip plays: source variant plus its pitch edits. While

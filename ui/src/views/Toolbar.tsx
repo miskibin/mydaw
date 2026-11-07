@@ -1,12 +1,12 @@
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
-import { baseName, clamp, fmtClock, fmtPos } from '../lib/format';
+import { baseName, clamp, fmtClock, fmtPos, TapTracker } from '../lib/format';
 import { SNAPS, snapLabel } from '../lib/snap';
 import * as A from '../state/actions';
-import { Gesture, wheelEdit } from '../state/edit';
+import { commit, Gesture, wheelEdit } from '../state/edit';
 import { S } from '../state/store';
 import { curBeat, tele } from '../state/telemetry';
-import { say, setU, U, type Tool } from '../state/ui';
+import { openMenu, say, setU, U, type Tool } from '../state/ui';
 import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { Icon, ICONS } from '../ui/icons';
@@ -52,6 +52,42 @@ export function Toolbar() {
     wheelEdit('bpm', 'Tempo', [{ op: 'setBpm', bpm: b }]);
     say('Tempo ' + b.toFixed(2) + ' BPM');
   };
+  const tapper = new TapTracker();
+  const [tapping, setTapping] = createSignal(false);
+  let tapTimer = 0;
+  onCleanup(() => clearTimeout(tapTimer));
+  const doTap = (e?: MouseEvent) => {
+    const r = tapper.tap(performance.now(), !e?.shiftKey);
+    setTapping(true);
+    clearTimeout(tapTimer);
+    tapTimer = window.setTimeout(() => setTapping(false), 2000);
+    if (r.bpm != null) {
+      wheelEdit('tap-bpm', 'Tap tempo', [{ op: 'setBpm', bpm: r.bpm }]);
+      say(`Tap tempo · ${r.bpm.toFixed(2)} BPM (${r.count}×)`);
+    } else {
+      say('Tap tempo — klikaj dalej w rytm utworu…');
+    }
+  };
+  const bpmMenu = (e: MouseEvent) => {
+    e.preventDefault(); e.stopPropagation();
+    const b = S.project.bpm;
+    const setB = (nb: number, label = 'Tempo') => {
+      const c = clampBpm(nb);
+      commit([{ op: 'setBpm', bpm: c }], label);
+      say('Tempo ' + c.toFixed(2) + ' BPM');
+    };
+    const hasAudio = S.project.clips.some(c => c.kind === 'audio');
+    openMenu(e.clientX, e.clientY, [
+      { t: 'title', label: 'Tempo · ' + b.toFixed(2) + ' BPM' },
+      { t: 'item', label: 'Wybij tempo (Tap)', kbd: 'klikaj TAP', act: () => doTap() },
+      { t: 'item', label: 'Wykryj tempo i tonację z projektu…', disabled: !hasAudio, act: () => A.openMusicAnalysis({}) },
+      { t: 'sep' },
+      { t: 'item', label: `Połowa tempa (${clampBpm(b / 2).toFixed(1)} BPM)`, disabled: b / 2 < 20, act: () => setB(b / 2, 'Połowa tempa') },
+      { t: 'item', label: `Podwójne tempo (${clampBpm(b * 2).toFixed(1)} BPM)`, disabled: b * 2 > 999, act: () => setB(b * 2, 'Podwójne tempo') },
+      { t: 'sep' },
+      { t: 'chips', label: 'Szybki wybór', options: ['80', '90', '100', '110', '120', '128', '140', '160'], active: [80, 90, 100, 110, 120, 128, 140, 160].indexOf(Math.round(b)), pick: i => setB([80, 90, 100, 110, 120, 128, 140, 160][i]) },
+    ], 260);
+  };
   const T = () => S.transport;
   const projName = () => (S.path ? baseName(S.path) : 'Bez nazwy');
   // custom title bar: empty toolbar areas and the project name drag the window, 2× click maximises
@@ -89,7 +125,7 @@ export function Toolbar() {
         <button title="Play / Stop (Spacja)" data-act="play" classList={{ play: U.playing }} onClick={() => void A.togglePlay()}>
           <svg width="11" height="11" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor" /></svg>
         </button>
-        <button title="Stop (wraca do znacznika startu)" disabled={!U.playing} onClick={() => void A.stop()}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
+        <button title="Stop (wraca na początek utworu; Spacja wraca do znacznika startu)" onClick={() => void A.stop(true)}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
         <button title="Nagrywanie (R)" class="rec" classList={{ armed: T().rec }} onClick={A.toggleRec}>
           <svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor" /></svg>
         </button>
@@ -107,11 +143,12 @@ export function Toolbar() {
           <div class="inmeter"><div ref={inEl} /></div>
         </div>
       </Show>
-      <div class="clockbox">
+      <div class="clockbox" onContextMenu={bpmMenu}>
         <span ref={clockEl} class="clock">1:01:01</span>
         <div style={{ width: '1px', height: '14px', background: 'var(--line)' }} />
-        <span class="bpm" title="Tempo — przeciągnij, kółko, Shift = setne" onPointerDown={bpmDown} onWheel={bpmWheel}>{S.project.bpm.toFixed(2)}</span>
+        <span class="bpm" title="Tempo — przeciągnij, kółko, Shift = setne · PPM = menu tempa" onPointerDown={bpmDown} onWheel={bpmWheel}>{S.project.bpm.toFixed(2)}</span>
         <span class="tag9">BPM</span>
+        <button class="tapbtn" classList={{ on: tapping() }} data-tap title="Wybij tempo (Tap) — klikaj w rytm utworu (Shift = z częściami setnymi)" onClick={e => doTap(e)}>TAP</button>
       </div>
       <div class="vsep" />
       <div class="seg tools">

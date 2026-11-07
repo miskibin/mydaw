@@ -245,7 +245,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","music_analyze","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -285,6 +285,12 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         "pitch_analyze" => {
             let an = e.pitch_analysis(need_u64(a, "clipId")?).map_err(|x| x.to_string())?;
             Ok(json!({ "rate": an.rate, "notes": an.notes }))
+        }
+        "music_analyze" => {
+            let cid = arg(a, "clipId").and_then(as_index);
+            let ex = arg(a, "excludeFx").and_then(as_index);
+            let an = e.music_analysis(cid, ex).map_err(|x| x.to_string())?;
+            Ok(json!(an))
         }
         "vst3_scan" => Ok(json!(app.plugins.scan(arg(a, "rescan").and_then(Value::as_bool).unwrap_or(false)))),
         "vst3_add" => {

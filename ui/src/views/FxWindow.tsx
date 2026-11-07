@@ -25,6 +25,7 @@ import { fetModes, FetViz, type FetMode } from './fx/fet';
 import { defaultView, ReverbViz, views3d } from './fx/reverb';
 import { DelayViz, SatViz } from './fx/satDelay';
 import { TuneViz } from './fx/tune';
+import { onVoicePad, padParams, padToVoice, VoiceViz } from './fx/voice';
 
 const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
@@ -39,12 +40,13 @@ function makeViz(f: Fx): Viz | null {
     case 'fet': return new FetViz(f.id);
     case 'deess': return new DeessViz();
     case 'denoise': return new DenoiseViz();
+    case 'voice': return new VoiceViz();
     default: return null;
   }
 }
-const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240 };
+const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240, voice: 250 };
 /** Default window widths per type (actions.openPlug). */
-export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640 };
+export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640, voice: 700 };
 
 const HINTS: Partial<Record<Fx['type'], string>> = {
   eq: 'kółko = Q · PPM na punkcie = kształt / kanał / dynamika · PPM na tle = nowy band danego typu',
@@ -53,6 +55,7 @@ const HINTS: Partial<Record<Fx['type'], string>> = {
   fet: 'Klik na wskaźnik = GR / OUT',
   denoise: 'Profil szumu uczy się sam w przerwach · Hold = zamroź · Listen = posłuchaj, co jest usuwane',
   tune: 'Retune: 0 ms = efekt robota, dłużej = naturalnie',
+  voice: 'Przeciągnij punkt = pitch i formant · 2× klik = zero · Mix < 100% = harmonia z oryginałem · tylko czysty wokal mono',
 };
 
 /** Move a fixed window by its header. */
@@ -198,6 +201,20 @@ function Body(props: { fx: Fx }): JSX.Element {
       <Show when={t() === 'eq'}><EqPanel fx={props.fx} /></Show>
       <Show when={t() === 'tune'}><TuneControls fx={props.fx} /></Show>
       <Show when={t() === 'fet'}><FetControls fx={props.fx} /></Show>
+      <Show when={t() === 'voice'}>
+        <div class="knobs">
+          <div class="stack">
+            <Ctl fx={props.fx} id="mode" />
+            <Ctl fx={props.fx} id="link" small />
+          </div>
+          <div class="vline" />
+          <Ctl fx={props.fx} id="pitch" ends={props.fx.params.mode === 2 ? ['C3', 'C5'] : undefined} />
+          <Ctl fx={props.fx} id="formant" ends={['głębiej', 'jaśniej']} />
+          <div class="vline" />
+          <For each={['drive', 'out']}>{id => <Ctl fx={props.fx} id={id} />}</For>
+          <div style={{ flex: 1 }} /><Hint fx={props.fx} />
+        </div>
+      </Show>
       <Show when={t() === 'deess'}>
         <div class="knobs">
           <For each={['thr', 'range', 'freq', 'look']}>{id => <Ctl fx={props.fx} id={id} />}</For>
@@ -207,7 +224,7 @@ function Body(props: { fx: Fx }): JSX.Element {
           <div style={{ flex: 1 }} /><Hint fx={props.fx} />
         </div>
       </Show>
-      <Show when={!['eq', 'tune', 'fet', 'deess'].includes(t())}>
+      <Show when={!['eq', 'tune', 'fet', 'deess', 'voice'].includes(t())}>
         <div class="knobs">
           <For each={paramDefs(S.catalog, t())}>{p => <Ctl fx={props.fx} id={p.id} />}</For>
           <div style={{ flex: 1 }} /><Hint fx={props.fx} />
@@ -231,6 +248,14 @@ function TuneControls(props: { fx: Fx }) {
         <Show when={defOf(props.fx, 'key')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={NOTE_NAMES} small />}</Show>
         <Show when={defOf(props.fx, 'scale')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} small />}</Show>
         <Show when={defOf(props.fx, 'voice')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={['Auto', 'Bas', 'Męski', 'Żeński', 'Sopran']} small />}</Show>
+        <div class="segp">
+          <span class="lab">AUTO-KEY</span>
+          <button class="smallbtn" style={{ height: '24px', padding: '0 10px' }} data-detect-key
+            title="Wykryj tonację z podkładu projektu (pomija ścieżki wchodzące na ten kanał wokalu)"
+            onClick={() => A.openMusicAnalysis({ fxId: props.fx.id })}>
+            Wykryj tonację…
+          </button>
+        </div>
       </div>
       <div class="knobs">
         <Ctl fx={props.fx} id="retune" ends={['robot', 'natural']} />
@@ -306,6 +331,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     if (got.f.type === 'eq') eqPointerDown(e, cv, props.fxId, viz as EqViz);
     else if (got.f.type === 'reverb') verbDown(e);
     else if (got.f.type === 'deess') deessDown(e, got.f);
+    else if (got.f.type === 'voice') voiceDown(e);
     else if (got.f.type === 'fet' && e.button === 0) {
       const m = fetModes.get(props.fxId) === 'out' ? 'gr' : 'out';
       fetModes.set(props.fxId, m); version++; say('Wskaźnik: ' + (m === 'gr' ? 'redukcja (GR)' : 'wyjście (VU)'));
@@ -320,12 +346,40 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
       const onF = x >= G.sx && Math.abs(x - deessFx(got.f.params.freq ?? 6000, W, H)) < 8;
       if (onThr !== d.hoverThr || onF !== d.hoverFreq) { d.hoverThr = onThr; d.hoverFreq = onF; version++; }
       cv.style.cursor = onThr ? 'ns-resize' : onF ? 'ew-resize' : 'default';
+    } else if (got.f.type === 'voice') {
+      const v = viz as VoiceViz, { x, y, W, H } = rel(e), on = onVoicePad(x, y, W, H);
+      if (on !== v.hover) { v.hover = on; version++; }
+      cv.style.cursor = on ? 'crosshair' : 'default';
     }
   };
   const leave = () => {
     const got = ff(); if (!got || !viz) return;
     if (got.f.type === 'eq') eqLeave(viz as EqViz);
     if (got.f.type === 'deess') { const d = viz as DeessViz; d.hoverThr = d.hoverFreq = false; version++; }
+    if (got.f.type === 'voice') { (viz as VoiceViz).hover = false; version++; }
+  };
+  /** Pad: click / drag sets Pitch and Formant together (one undo step), double click resets both. */
+  const voiceDown = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    const { x, y, W, H } = rel(e);
+    if (!onVoicePad(x, y, W, H)) return;
+    e.preventDefault();
+    const put = (pitch: number, formant: number) => {
+      const f = findFx(props.fxId)?.f; if (!f) return null;
+      return A.fxOp({ ...plain(f), params: { ...plain(f.params), pitch, formant } });
+    };
+    const tell = () => { const p = findFx(props.fxId)?.f.params; if (p) say('Voice · Pitch ' + (p.pitch ?? 0).toFixed(1) + ' st · Formant ' + (p.formant ?? 0).toFixed(1) + ' st'); };
+    if (dblCheck('voice' + props.fxId)) { const op = put(0, 0); if (op) commit([op], 'Pitch / Formant'); tell(); return; }
+    const g = new Gesture('Pitch / Formant');
+    const r = cv.getBoundingClientRect();
+    const at = (cx: number, cy: number) => {
+      const f = findFx(props.fxId)?.f; if (!f) return;
+      const v = padToVoice(cx - r.left, cy - r.top, r.width, r.height), q = padParams(f, v.pitch, v.formant);
+      const op = put(q.pitch, q.formant); if (op) g.update([op]);
+      tell();
+    };
+    at(e.clientX, e.clientY);
+    track(ev => at(ev.clientX, ev.clientY), () => g.end(), 'grabbing');
   };
   const deessDown = (e: PointerEvent, f: Fx) => {
     if (e.button !== 0) return;

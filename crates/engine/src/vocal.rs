@@ -1,11 +1,13 @@
-//! Vocal processors: FET compressor (1176 style), de-esser, real-time pitch correction.
+//! Vocal processors: FET compressor (1176 style), de-esser, real-time pitch correction,
+//! voice character (pitch / formant / robot / drive).
 //!
 //! Meter layout (`Processor::meters`, documented in docs/architecture.md):
 //! * fet:   [GR dB, input dB, output dB]
 //! * deess: [GR dB, sidechain dB, sibilance 0..1, threshold dB]
 //! * tune:  [input Hz (0 = unvoiced), target Hz, output Hz, confidence, input cents off target, applied correction cents]
+//! * voice: [input Hz (0 = unvoiced), output Hz, confidence, applied shift st]
 
-use crate::dsp::{db_to_gain, gain_to_db, Biquad, FilterType};
+use crate::dsp::{db_to_gain, gain_to_db, Biquad, FilterType, Smooth};
 use crate::pitch::{hz_to_midi, midi_to_hz, scale_mask, snap, Detector, Psola};
 use crate::processor::{ParamBlock, ProcessCtx, Processor, METERS};
 
@@ -512,6 +514,210 @@ impl Processor for Tune {
     }
 }
 
+// ------------------------------------------------------------------ voice character
+
+/// Robot mode holds the voice on this note (+ Pitch).
+const ROBOT_NOTE: f32 = 60.0;
+/// Asymmetry of the drive curve (even harmonics, like a tube stage).
+const DRIVE_BIAS: f32 = 0.25;
+
+/// Voice character for a clean monophonic vocal (Little AlterBoy style), on the
+/// same detector and PSOLA as the corrector:
+/// * Transpose: shift by Pitch; formants stay unless Formant moves them.
+/// * Quantize: snap to the nearest semitone at once (hard tune), then shift.
+/// * Robot: hold one note (C4 + Pitch) whatever is sung.
+///
+/// Link moves the formants with the pitch shift (the varispeed sound). Drive is an
+/// asymmetric tube-style saturator after the shift, fully clean at 0 dB.
+pub struct Voice {
+    sr: f32,
+    det: Option<Detector>,
+    psola: Option<Psola>,
+    align: Vec<f32>,
+    align_w: usize,
+    mode: u32,
+    pitch: f32,
+    formant: f32,
+    link: bool,
+    drive_g: f32,
+    drive_w: f32,
+    out: f32,
+    period: f32,
+    /// semitones the current estimate asks for, and the glided value PSOLA gets
+    want: f32,
+    shift: f32,
+    shift_k: f32,
+    last_m: f32,
+    jump_t: f32,
+    sg: Smooth,
+    sw: Smooth,
+    so: Smooth,
+    dc_x: f32,
+    dc_y: f32,
+    dc_k: f32,
+    m: [f32; 4],
+    params: Option<ParamBlock>,
+}
+
+impl Default for Voice {
+    fn default() -> Self {
+        Self {
+            sr: 48000.0,
+            det: None,
+            psola: None,
+            align: vec![],
+            align_w: 0,
+            mode: 0,
+            pitch: 0.0,
+            formant: 0.0,
+            link: false,
+            drive_g: 1.0,
+            drive_w: 0.0,
+            out: 1.0,
+            period: 0.0,
+            want: 0.0,
+            shift: 0.0,
+            shift_k: 1.0,
+            last_m: 0.0,
+            jump_t: 0.0,
+            sg: Smooth::default(),
+            sw: Smooth::default(),
+            so: Smooth::default(),
+            dc_x: 0.0,
+            dc_y: 0.0,
+            dc_k: 0.999,
+            m: [0.0; 4],
+            params: None,
+        }
+    }
+}
+
+/// Semitones to shift a voice sung at MIDI pitch `m`.
+fn voice_shift(mode: u32, pitch: f32, m: f32) -> f32 {
+    let st = match mode {
+        1 => m.round() - m + pitch,
+        2 => ROBOT_NOTE + pitch.round() - m,
+        _ => pitch,
+    };
+    st.clamp(-24.0, 24.0)
+}
+
+impl Processor for Voice {
+    fn prepare(&mut self, sr: f32, _max: usize) {
+        self.sr = sr;
+        self.det = Some(Detector::new(sr));
+        self.psola = Some(Psola::new(sr));
+        self.align = vec![0.0; align_delay(sr)];
+        self.align_w = 0;
+        // fast enough to sound instant, slow enough that a snapped note doesn't click
+        self.shift_k = 1.0 - (-1.0 / (sr * 0.004)).exp();
+        self.dc_k = 1.0 - std::f32::consts::TAU * 10.0 / sr;
+        for s in [&mut self.sg, &mut self.sw, &mut self.so] {
+            s.setup(sr, 15.0);
+        }
+        if let Some(p) = self.params {
+            self.set_params(&p);
+        }
+    }
+    fn set_params(&mut self, p: &ParamBlock) {
+        let first = self.params.is_none();
+        self.params = Some(*p);
+        let v = p.values;
+        self.mode = v[0].round().clamp(0.0, 2.0) as u32;
+        self.pitch = v[1];
+        self.formant = v[2];
+        self.link = v[3] >= 0.5;
+        let drive_db = v[4].max(0.0);
+        self.drive_g = db_to_gain(drive_db);
+        self.drive_w = (drive_db / 3.0).min(1.0);
+        self.out = db_to_gain(v[5]);
+        if self.mode == 0 {
+            self.want = self.pitch;
+        }
+        if first {
+            self.shift = self.want;
+            self.sg.v = self.drive_g;
+            self.sw.v = self.drive_w;
+            self.so.v = self.out;
+        }
+    }
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
+        let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola.as_mut()) else { return };
+        let sr = self.sr;
+        let sat_norm = 1.0 - DRIVE_BIAS.tanh().powi(2);
+        for i in 0..l.len() {
+            let x = (l[i] + r[i]) * 0.5;
+            if det.push(x) {
+                // a lone estimate far from the line being sung is the detector grabbing a
+                // harmonic: hold course until the jump has lasted 40 ms (see Tune)
+                let mut glitch = false;
+                if det.hz > 0.0 && det.confidence > 0.55 && self.last_m > 0.0 && (hz_to_midi(det.hz) - self.last_m).abs() > 5.0 {
+                    self.jump_t += 0.004;
+                    glitch = self.jump_t < 0.04;
+                } else {
+                    self.jump_t = 0.0;
+                }
+                if glitch {
+                    // keep period and shift as they are
+                } else if det.hz > 0.0 && det.confidence > 0.55 {
+                    let m = hz_to_midi(det.hz);
+                    self.last_m = m;
+                    det.hint = det.hz;
+                    self.period = sr / det.hz;
+                    self.want = voice_shift(self.mode, self.pitch, m);
+                    self.m = [det.hz, midi_to_hz(m + self.want), det.confidence, self.want];
+                } else {
+                    self.period = 0.0;
+                    self.last_m = 0.0;
+                    det.hint = 0.0;
+                    self.m = [0.0, 0.0, det.confidence, 0.0];
+                }
+            }
+            self.shift += (self.want - self.shift) * self.shift_k;
+            let ratio = 2f32.powf(self.shift / 12.0);
+            let formant = 2f32.powf((self.formant + if self.link { self.shift } else { 0.0 }) / 12.0);
+            let n = self.align.len();
+            let xd = if n > 0 {
+                let d = self.align[self.align_w];
+                self.align[self.align_w] = x;
+                self.align_w = (self.align_w + 1) % n;
+                d
+            } else {
+                x
+            };
+            let y = ps.process(xd, self.period, ratio, formant);
+            let g = self.sg.next(self.drive_g);
+            let w = self.sw.next(self.drive_w);
+            let o = self.so.next(self.out);
+            let s = if w > 1e-4 {
+                let sat = ((y * g + DRIVE_BIAS).tanh() - DRIVE_BIAS.tanh()) / (g.sqrt() * sat_norm);
+                y + (sat - y) * w
+            } else {
+                y
+            };
+            // the bias leaves a DC offset: 10 Hz high-pass
+            let hp = s - self.dc_x + self.dc_k * self.dc_y;
+            self.dc_x = s;
+            self.dc_y = hp;
+            let z = hp * o;
+            l[i] = z;
+            r[i] = z;
+        }
+    }
+    fn reset(&mut self) {
+        if let Some(p) = self.psola.as_mut() {
+            p.reset();
+        }
+        self.align.fill(0.0);
+        self.shift = self.want;
+        self.dc_x = 0.0;
+        self.dc_y = 0.0;
+    }
+    fn meters(&self, out: &mut [f32; METERS]) {
+        out[..4].copy_from_slice(&self.m);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -706,5 +912,85 @@ mod tests {
         };
         let (a, b) = (gr(0.0), gr(24.0));
         assert!(b < a - 6.0, "input 0 dB → {a}, 24 dB → {b}");
+    }
+
+    fn voice_fx(sr: f32, kv: &[(&str, f64)]) -> Voice {
+        let mut fx = new_fx(1, FxKind::Voice, 120.0);
+        for &(k, v) in kv {
+            fx.params.insert(k.into(), v);
+        }
+        let mut p = Voice::default();
+        p.prepare(sr, 256);
+        p.set_params(&param_block(&fx));
+        p
+    }
+
+    /// Mean detected pitch (MIDI) of `y` from `from` seconds of input time on.
+    fn sung(y: &[f32], sr: f32, from: f32) -> f32 {
+        let mut d = Detector::new(sr);
+        let mut track = vec![];
+        for &s in &y[(from * sr) as usize + tune_latency(sr)..] {
+            if d.push(s) && d.hz > 0.0 && d.confidence > 0.6 {
+                track.push(hz_to_midi(d.hz));
+            }
+        }
+        assert!(!track.is_empty(), "no pitch in the output");
+        track.iter().sum::<f32>() / track.len() as f32
+    }
+
+    #[test]
+    fn voice_at_defaults_is_the_input_delayed() {
+        let sr = 48000.0;
+        let x = voice(196.0, sr, 48000);
+        let y = run(&mut voice_fx(sr, &[]), &x);
+        let lat = tune_latency(sr);
+        let (mut err, mut sig) = (0f32, 0f32);
+        for i in 12000..x.len() - lat {
+            err += (y[i + lat] - x[i]).powi(2);
+            sig += x[i].powi(2);
+        }
+        let rel = (err / sig).sqrt();
+        assert!(rel < 0.05, "default Voice colours the signal: {rel:.3}");
+    }
+
+    #[test]
+    fn voice_transposes_quantizes_and_robots() {
+        let sr = 48000.0;
+        // A3 sung 35 cents flat
+        let x = voice(220.0 * 2f32.powf(-0.35 / 12.0), sr, 48000);
+        let m_in = 57.0 - 0.35;
+        let t = sung(&run(&mut voice_fx(sr, &[("pitch", 5.0)]), &x), sr, 0.4);
+        assert!((t - (m_in + 5.0)).abs() < 0.12, "transpose +5 landed at {t:.2}");
+        let q = sung(&run(&mut voice_fx(sr, &[("mode", 1.0), ("pitch", -12.0)]), &x), sr, 0.4);
+        assert!((q - 45.0).abs() < 0.12, "quantize −12 landed at {q:.2}");
+        // robot: two different sung notes both come out on C4 + 2 = D4
+        for hz in [220.0f32, 164.81] {
+            let r = sung(&run(&mut voice_fx(sr, &[("mode", 2.0), ("pitch", 2.0)]), &voice(hz, sr, 48000)), sr, 0.4);
+            assert!((r - 62.0).abs() < 0.12, "robot from {hz} Hz landed at {r:.2}");
+        }
+    }
+
+    #[test]
+    fn voice_drive_adds_harmonics_only_when_turned_up() {
+        let sr = 48000.0;
+        // a pure 220 Hz tone: anything at 440 Hz in the output is distortion
+        let x: Vec<f32> = (0..48000).map(|i| (std::f32::consts::TAU * 220.0 * i as f32 / sr).sin() * 0.5).collect();
+        let h2 = |y: &[f32]| {
+            let seg = &y[24000..];
+            let at = |f: f32| {
+                let (mut re, mut im) = (0f32, 0f32);
+                for (i, &s) in seg.iter().enumerate() {
+                    let ph = std::f32::consts::TAU * f * i as f32 / sr;
+                    re += s * ph.cos();
+                    im += s * ph.sin();
+                }
+                (re * re + im * im).sqrt()
+            };
+            at(440.0) / at(220.0)
+        };
+        let clean = h2(&run(&mut voice_fx(sr, &[]), &x));
+        let driven = h2(&run(&mut voice_fx(sr, &[("drive", 18.0)]), &x));
+        assert!(clean < 0.01, "drive 0 is not clean: H2 {clean:.4}");
+        assert!(driven > 0.03, "drive 18 dB adds no even harmonics: H2 {driven:.4}");
     }
 }

@@ -12,6 +12,7 @@ import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
   AudioConfig, AudioStatus, Catalog, Clip, ExportResult, Fx, Id, LibFile, LibraryList, Op, PitchAnalysis, Project, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  MusicAnalysis,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 
@@ -270,7 +271,7 @@ export class MockBackend implements Backend {
       const m = this.srcMeta.get(c.ref); if (!m?.vocal) continue;
       return vocalAt(synthVocal(m.seed, m.dur), (c.offset + beat - c.start) * this.spb());
     }
-    return fx.type === 'tune' || fx.type === 'deess' || fx.type === 'fet' ? vocalAt(synthVocal(4242, VOCAL_DUR), t) : null;
+    return fx.type === 'tune' || fx.type === 'voice' || fx.type === 'deess' || fx.type === 'fet' ? vocalAt(synthVocal(4242, VOCAL_DUR), t) : null;
   }
 
   private fakeAnalysis(fx: Fx, ins: Id, level: number, t: number, beat: number, playing: boolean): EncFx {
@@ -311,6 +312,16 @@ export class MockBackend implements Backend {
       this.simTune(fx, sim, voc, dt);
       for (let i = 0; i < 6; i++) meters[i] = sim.m[i];
       for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k];
+    } else if (fx.type === 'voice') {
+      // vocal.rs `Voice`: [input Hz, output Hz, confidence, applied shift st]
+      const mode = Math.round(pr.mode ?? 0), pitch = pr.pitch ?? 0, drive = pr.drive ?? 0;
+      if (voc && voc.midi != null && voc.level > 0.02) {
+        const m = voc.midi, shift = clamp(mode === 1 ? Math.round(m) - m + pitch : mode === 2 ? 60 + Math.round(pitch) - m : pitch, -24, 24);
+        meters[0] = midiToHz(m); meters[1] = midiToHz(m + shift); meters[2] = 0.88 + Math.random() * 0.1; meters[3] = shift;
+      } else meters[2] = 0.15 + Math.random() * 0.2;
+      const fShift = (pr.formant ?? 0) + ((pr.link ?? 0) >= 0.5 ? meters[3] : 0);
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[clamp(Math.round(k - fShift / 12 * (SPEC_BANDS / 10)), 0, SPEC_BANDS - 1)] + drive * 0.15 * (k > 60 ? 2 : 1) + (pr.out ?? 0);
+      out = level * dbg(pr.out ?? 0);
     } else if (fx.type === 'fet') {
       const inDb = level > 1e-5 ? 20 * Math.log10(level) + (pr.input ?? 8) : -120;
       const ri = Math.round(pr.ratio ?? 0), abi = ri >= 4, ratio = [4, 8, 12, 20, 20][clamp(ri, 0, 4)];
@@ -479,6 +490,52 @@ export class MockBackend implements Backend {
     if (!s) throw new Error('audio not loaded');
     const v = synthVocal(s.seed ?? s.id, s.dur);
     return structuredClone({ rate: v.rate, curve: v.curve, levels: v.levels, notes: v.notes });
+  }
+  async musicAnalyze(a?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis> {
+    await delay(80);
+    if (a?.clipId != null) {
+      const c = this.p.clips.find(x => x.id === a.clipId);
+      if (!c) throw new Error('no such clip');
+      if (c.kind !== 'audio') throw new Error('only audio clips have tempo and key');
+      const s = this.p.sources.find(x => x.id === c.ref);
+      const bpm = Math.round(this.p.bpm);
+      // C minor profile (demo song is in C minor at 128 BPM)
+      const root = (s ? s.id % 2 === 0 ? 0 : 0 : 0), minor = true;
+      const chroma = [1, 0.08, 0.42, 0.78, 0.09, 0.51, 0.07, 0.89, 0.36, 0.12, 0.44, 0.19];
+      return {
+        tempo: {
+          bpm,
+          confidence: 0.86,
+          candidates: [
+            { bpm, score: 1 },
+            { bpm: bpm / 2, score: 0.58 },
+            { bpm: bpm * 2, score: 0.44 },
+          ],
+          firstBeat: 0,
+        },
+        key: {
+          root, minor, confidence: 0.84,
+          candidates: [
+            { root, minor: true, score: 0.91 },
+            { root: (root + 3) % 12, minor: false, score: 0.78 },
+            { root: (root + 7) % 12, minor: true, score: 0.62 },
+          ],
+          chroma,
+          tuningCents: 0,
+        },
+      };
+    }
+    const exIns = a?.excludeFx != null ? this.p.inserts.find(ins => ins.fx.some(f => f.id === a.excludeFx))?.id : undefined;
+    const anySolo = this.p.tracks.some(t => t.solo);
+    const active = this.p.clips.filter(c => {
+      if (c.kind !== 'audio' || c.muted) return false;
+      const tr = this.p.tracks[c.track];
+      return tr && !tr.muted && (!anySolo || tr.solo);
+    });
+    const nonEx = exIns != null ? active.filter(c => this.p.tracks[c.track]?.insert !== exIns) : active;
+    const chosen = nonEx.length ? nonEx : active;
+    if (!chosen.length) return { tempo: null, key: null };
+    return this.musicAnalyze({ clipId: chosen[0].id });
   }
   async trimClip(clipId: Id) {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) throw new Error('no clip');

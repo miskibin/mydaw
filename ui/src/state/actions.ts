@@ -17,10 +17,12 @@ export async function play(from = U.start) {
   try { await be().transportPlay(from); setTransport({ playing: true }); say(S.transport.rec ? '● Nagrywanie' : 'Play'); }
   catch (e) { setU('playing', false); say('Błąd odtwarzania: ' + String(e)); }
 }
-export async function stop() {
+/** `rewind` also moves the start marker (and the stopped playhead) to the beginning of the song. */
+export async function stop(rewind = false) {
   setU('playing', false);
+  if (rewind) setU('start', 0);
   try { await be().transportStop(); setTransport({ playing: false }); } catch (e) { console.warn(e); }
-  say('Stop');
+  say(rewind ? 'Stop · początek utworu' : 'Stop');
 }
 export const togglePlay = () => (U.playing ? stop() : play());
 export function seek(b: number) {
@@ -255,7 +257,7 @@ export function stepPreset(fxId: Id, d: number) {
 }
 
 // ---------- windows ----------
-const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640 };
+const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640, voice: 700 };
 /** Open (or bring to front) an effect window. The newest/most recently focused window is always on top. */
 /** Playlist to the front: effect windows go behind it (they keep their place and state). */
 export function playlistFront() { if (U.plugs.length && !U.plugsHidden) setU('plugsHidden', true); }
@@ -296,6 +298,49 @@ export function openPitchEditor(id: Id) {
   setU({ pitchEd: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: Math.max(44, (window.innerHeight - h) / 2 - 20), w, h }, sel: [id] });
 }
 export const closePitchEditor = () => setU('pitchEd', null);
+
+export function openMusicAnalysis(args: { clipId?: Id; fxId?: Id }) {
+  setU('musicWin', args);
+}
+export const closeMusicAnalysis = () => setU('musicWin', null);
+
+/** Set project BPM and scale `clipId`'s length/offset so it still covers the same seconds of audio. */
+export function applyDetectedTempo(bpm: number, clipId?: Id) {
+  const nb = clamp(Math.round(bpm * 100) / 100, 20, 999);
+  const oldBpm = S.project.bpm;
+  const ops: Op[] = [{ op: 'setBpm', bpm: nb }];
+  if (clipId != null && Math.abs(nb - oldBpm) > 1e-6) {
+    const c = S.project.clips.find(x => x.id === clipId);
+    if (c && c.kind === 'audio') {
+      const ratio = nb / oldBpm;
+      const nc: Clip = {
+        ...plain(c),
+        offset: c.offset * ratio,
+        len: clamp(c.len * ratio, 1 / 16, TOTAL - c.start),
+      };
+      ops.push({ op: 'putClips', clips: [nc] });
+    }
+  }
+  commit(ops, 'Wykryte tempo');
+  say('Tempo ustawione na ' + nb.toFixed(2) + ' BPM');
+}
+
+/** Apply detected key/scale (1 = Major, 2 = Minor) to one Pitch Correct instance or all of them in the project. */
+export function applyKeyToTune(root: number, minor: boolean, targetFxId?: Id | 'all') {
+  const scale = minor ? 2 : 1;
+  const ops: Op[] = [];
+  for (const ins of S.project.inserts) {
+    for (const f of ins.fx) {
+      if (f.type !== 'tune') continue;
+      if (targetFxId != null && targetFxId !== 'all' && f.id !== targetFxId) continue;
+      ops.push(fxOp({ ...plain(f), params: { ...plain(f.params), key: root, scale } }, ins.id));
+    }
+  }
+  if (!ops.length) return;
+  commit(ops, 'Tonacja Pitch Correct');
+  const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  say('Pitch Correct · tonacja ' + names[root % 12] + ' ' + (minor ? 'moll' : 'dur') + (ops.length > 1 ? ` (${ops.length} inst.)` : ''));
+}
 
 // ---------- view ----------
 export function zoomAt(f: number) { setU('bw', clamp(U.bw * f, 4, 96)); }

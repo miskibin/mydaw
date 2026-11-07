@@ -23,9 +23,10 @@ export const FXMETA: Record<FxKind, { icon: string; color: string; tag: string }
   deess: { icon: 'M16.5 6.5C15.6 5 14 4.5 12 4.5c-2.8 0-4.5 1.4-4.5 3.4 0 4.6 9 2.8 9 7.8 0 2.2-2 3.8-4.6 3.8-2 0-3.6-.7-4.6-2.3 M3 12h18', color: '#6fd0e8', tag: 'sybilanty' },
   fet: { icon: 'M3.5 17a8.5 8.5 0 0 1 17 0 M12 17l4.5-6.5 M6.2 11.2l1.2 1 M17.8 11.2l-1.2 1 M12 8.5v1.5', color: '#f07f4f', tag: 'kompresja FET' },
   denoise: { icon: 'M2 12h2l1.5-3 1.5 6 1.5-4 1.5 2h2 M13 12c1.5-4 3-6 4.5-6S20 9 22 12 M13 12c1.5 4 3 6 4.5 6S20 15 22 12', color: '#8fb3ff', tag: 'odszumianie' },
+  voice: { icon: 'M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21 M17.5 3.5l3 2-3 2 M20.5 5.5h-2', color: '#c77ddb', tag: 'barwa głosu' },
   vst3: { icon: ICONS.vst, color: '#9a8cf0', tag: 'plugin' },
 };
-export const FX_ORDER = ['denoise', 'tune', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'] as const;
+export const FX_ORDER = ['denoise', 'tune', 'voice', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'] as const;
 export const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
 
 export function Icon(props: { d: string; size?: number; sw?: number }) {

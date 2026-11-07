@@ -57,6 +57,9 @@ a { color: var(--blue); }
 .clockbox { display: flex; align-items: center; gap: 10px; height: 28px; padding: 0 10px; background: var(--bg0); border: 1px solid var(--line); border-radius: 5px; }
 .clock { font: 500 14px var(--mono); color: var(--fg-hi); min-width: 68px; font-variant-numeric: tabular-nums; }
 .bpm { font: 500 14px var(--mono); color: var(--blue); cursor: ns-resize; touch-action: none; font-variant-numeric: tabular-nums; }
+.tapbtn { height: 20px; padding: 0 6px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg1); color: var(--fg3); font: 600 9px var(--mono); letter-spacing: .06em; cursor: pointer; }
+.tapbtn:hover { background: var(--line); color: var(--fg-hi); }
+.tapbtn.on { background: var(--on-bg); color: var(--blue-hi); border-color: var(--blue); }
 .tag9 { font: 500 9px var(--mono); color: var(--fg4); letter-spacing: .08em; }
 .sel { height: 28px; background: var(--bg0); color: var(--fg); border: 1px solid var(--line); border-radius: 5px; padding: 0 6px; font: 500 11px var(--sans); cursor: pointer; }
 .tbtn { height: 26px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--fg4); cursor: pointer; display: flex; align-items: center; gap: 5px; font: 500 11px var(--sans); }

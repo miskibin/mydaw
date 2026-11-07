@@ -6,7 +6,7 @@ import { applyAll, OpError } from './applyOps';
 import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resizeClip, sliceClip } from './clipOps';
 import { eqCurve } from './eq';
 import { exportRange, exportSeconds, fmtExportLen, songEnd } from './export';
-import { fmtClock, fmtPos, panText, volText } from './format';
+import { fmtClock, fmtPos, panText, TapTracker, volText } from './format';
 import { loadPreset, newFx, paramsMatch, presetInfo, pFmt, pNorm, pVal, resolvePreset } from './presets';
 import { autoSnap, snapFloor, snapLabel, snapRes, snapRound } from './snap';
 
@@ -189,6 +189,17 @@ describe('formatting & eq', () => {
     expect(Array.from(eqCurve(bands, 0, fr, new Float32Array(4))).every(v => Math.abs(v) < 0.05)).toBe(true);
     bands[3] = { ...bands[3], g: 6 };
     expect(eqCurve(bands, 0, Float32Array.from([1000]), new Float32Array(1))[0]).toBeCloseTo(6, 1);
+  });
+  it('TapTracker averages taps, cancels jitter and resets after pause', () => {
+    const t = new TapTracker(8, 2000);
+    expect(t.tap(1000)).toEqual({ bpm: null, count: 1, fresh: true });
+    // 120 BPM = 500 ms per beat, with ±10 ms human jitter on intermediate taps
+    expect(t.tap(1510, false).bpm).toBeCloseTo(117.65, 1);
+    expect(t.tap(1990, false).bpm).toBeCloseTo(121.21, 1);
+    expect(t.tap(2500, true)).toEqual({ bpm: 120, count: 4, fresh: false });
+    // after > 2000 ms pause, starts a fresh tap sequence
+    expect(t.tap(5000)).toEqual({ bpm: null, count: 1, fresh: true });
+    expect(t.tap(5400)).toEqual({ bpm: 150, count: 2, fresh: false });
   });
 });
 

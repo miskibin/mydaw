@@ -100,8 +100,19 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         choice("learn", "Profile", 0.0, &["Adaptive", "Hold"]),
         choice("listen", "Listen", 0.0, &["Off", "Noise"]),
     ];
+    const VOICE: &[ParamDef] = &[
+        choice("mode", "Mode", 0.0, &["Transpose", "Quantize", "Robot"]),
+        // Robot: the note the voice is locked to, in semitones from C4
+        p("pitch", "Pitch", -12.0, 12.0, 0.0, "st", false),
+        p("formant", "Formant", -12.0, 12.0, 0.0, "st", false),
+        // formants follow the pitch shift, like a sample played faster or slower
+        choice("link", "Link", 0.0, &["Off", "On"]),
+        p("drive", "Drive", 0.0, 30.0, 0.0, "dB", false),
+        p("out", "Output", -24.0, 12.0, 0.0, "dB", false),
+    ];
     match kind {
         FxKind::Denoise => DENOISE,
+        FxKind::Voice => VOICE,
         FxKind::Fet => FET,
         FxKind::Deess => DEESS,
         FxKind::Tune => TUNE,
@@ -127,11 +138,12 @@ pub fn type_name(kind: FxKind) -> &'static str {
         FxKind::Deess => "De-esser",
         FxKind::Tune => "Pitch Correct",
         FxKind::Denoise => "Denoiser",
+        FxKind::Voice => "Voice",
         FxKind::Vst3 => "VST3",
     }
 }
 
-pub const BUILTIN: [FxKind; 10] = [FxKind::Denoise, FxKind::Tune, FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 11] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
@@ -286,6 +298,18 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Pop — mocno", &[("retune", 10.0), ("humanize", 10.0), ("flex", 10.0), ("vibrato", 30.0)]),
             pr("Efekt robota", &[("retune", 0.0)]),
         ],
+        FxKind::Voice => vec![
+            pr("Domyślny", &[]),
+            pr("Głębszy, pełniejszy", &[("formant", -2.0)]),
+            pr("Oktawa w dół", &[("pitch", -12.0), ("formant", -2.0)]),
+            pr("Oktawa w górę", &[("pitch", 12.0), ("formant", 2.0)]),
+            pr("Zmiana płci ↓", &[("pitch", -4.0), ("formant", -4.0)]),
+            pr("Zmiana płci ↑", &[("pitch", 4.0), ("formant", 4.0)]),
+            pr("Chipmunk", &[("pitch", 7.0), ("link", 1.0)]),
+            pr("Demon", &[("pitch", -7.0), ("formant", -6.0), ("drive", 12.0), ("out", -4.0)]),
+            pr("Hard tune + drive", &[("mode", 1.0), ("drive", 10.0), ("out", -3.0)]),
+            pr("Robot", &[("mode", 2.0), ("drive", 6.0), ("out", -2.0)]),
+        ],
         FxKind::Vst3 => vec![],
     }
 }
@@ -296,7 +320,7 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
         return 0;
     }
     match fx.kind {
-        FxKind::Tune => crate::vocal::tune_latency(sample_rate),
+        FxKind::Tune | FxKind::Voice => crate::vocal::tune_latency(sample_rate),
         FxKind::Denoise => crate::denoise::latency(sample_rate),
         // look-ahead delays the audio so the gain is already down when the "s" arrives
         FxKind::Deess => ((fx.params.get("look").copied().unwrap_or(5.0).clamp(0.0, 15.0) / 1000.0) * sample_rate as f64) as usize,

@@ -92,6 +92,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `import_audio` | `{paths, track?, beat?}` | `{sourceIds, clipIds}` (placed clips only when track/beat given) |
 | `source_peaks` | `{id, norm?, rev?}` | `ArrayBuffer` of f32 `[min,max]` pairs, 100 per second of audio |
 | `pitch_analyze` | `{clipId}` | `{rate, curve: (midi\|null)[], levels: number[], notes: [{start,end,pitch,level}]}` — pitch every 1/rate s (null = unvoiced: breath, sibilant, silence); times in seconds of the source |
+| `music_analyze` | `{clipId?, excludeFx?}` | `{tempo: {bpm, confidence, candidates:[{bpm,score}], firstBeat}\|null, key: {root, minor, confidence, candidates:[{root,minor,score}], chroma:number[12], tuningCents}\|null}` — tempo and key of a clip, or of the project's active audio clips (excluding tracks routed to `excludeFx`'s insert) |
 | `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied) |
 | `trim_clip` | `{clipId}` | `{sourceId}` — writes a new file with only the clip region, clip now points at it |
 | `preview_clip` / `preview_file` / `preview_stop` | `{clipId}` / `{path}` / – | – |
@@ -157,6 +158,7 @@ u32 rec             // 0, or 1 followed by:
 | `deess` | `[0]` gain reduction dB, `[1]` sidechain (high band) level dB, `[2]` sibilance 0..1, `[3]` threshold dB |
 | `denoise` | `[0..16]` learned noise floor dB per band, `[16..32]` gain applied per band dB (≤ 0); 16 log bands 50 Hz – 16 kHz. Total reduction in `grDb`. Adds `fft_size` (2048 at ≤ 64 kHz) samples of latency, compensated by PDC |
 | `tune` | `[0]` detected input Hz (0 = unvoiced), `[1]` target note Hz, `[2]` output Hz, `[3]` confidence 0..1, `[4]` input offset from target in cents, `[5]` correction applied in cents |
+| `voice` | `[0]` detected input Hz (0 = unvoiced), `[1]` output Hz, `[2]` confidence 0..1, `[3]` pitch shift applied in semitones. Same latency as `tune`, compensated by PDC; an effect's dry/wet (`fx.mix`) delays its dry path by the effect's latency, so blends line up |
 
 ## Pitch edits on audio clips
 

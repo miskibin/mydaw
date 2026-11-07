@@ -24,6 +24,7 @@ stdout is only JSON (`--pretty` to indent); messages go to stderr. Exit codes:
 | `wave context --full` | the whole project JSON (every clip, note, parameter) |
 | `wave catalog` | effect types, parameter ids/ranges/units, presets, command list |
 | `wave schema` | every op `apply` accepts, with units and an example |
+| `wave analyze [--clip ID] [--exclude-fx ID]` | detect tempo (BPM, ½×/2× candidates) and musical key (top 3 candidates, 12-note chroma, tuning offset) |
 
 ## Editing
 

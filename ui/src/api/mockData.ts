@@ -27,9 +27,11 @@ const PARAMS: Record<BuiltinKind, ParamDef[]> = {
     p('retune', 'Retune', 0, 400, 20, 'ms'), p('humanize', 'Humanize', 0, 100, 0, '%'), p('flex', 'Flex', 0, 100, 0, '%'),
     p('vibrato', 'Vibrato', 0, 100, 0, '%'), p('transpose', 'Transpose', -12, 12, 0, 'st'), p('formant', 'Formant', -12, 12, 0, 'st'),
     choice('voice', 'Voice', 0, ['Auto', 'Low male', 'Male', 'Female', 'Soprano'])],
+  voice: [choice('mode', 'Mode', 0, ['Transpose', 'Quantize', 'Robot']), p('pitch', 'Pitch', -12, 12, 0, 'st'), p('formant', 'Formant', -12, 12, 0, 'st'),
+    choice('link', 'Link', 0, ['Off', 'On']), p('drive', 'Drive', 0, 30, 0, 'dB'), p('out', 'Output', -24, 12, 0, 'dB')],
 };
 const NAMES: Record<BuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter',
-  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser' };
+  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser', voice: 'Voice' };
 
 type BandEdit = [number, boolean | null, number | null, number | null, number | null];
 function eqp(name: string, out: number, edits: BandEdit[]): Preset {
@@ -114,10 +116,17 @@ const PRESETS: Record<BuiltinKind, Preset[]> = {
     pr('Pop — mocno', { retune: 10, humanize: 10, flex: 10, vibrato: 30 }),
     pr('Efekt robota', { retune: 0 }),
   ],
+  voice: [
+    pr('Domyślny', {}), pr('Głębszy, pełniejszy', { formant: -2 }),
+    pr('Oktawa w dół', { pitch: -12, formant: -2 }), pr('Oktawa w górę', { pitch: 12, formant: 2 }),
+    pr('Zmiana płci ↓', { pitch: -4, formant: -4 }), pr('Zmiana płci ↑', { pitch: 4, formant: 4 }),
+    pr('Chipmunk', { pitch: 7, link: 1 }), pr('Demon', { pitch: -7, formant: -6, drive: 12, out: -4 }),
+    pr('Hard tune + drive', { mode: 1, drive: 10, out: -3 }), pr('Robot', { mode: 2, drive: 6, out: -2 }),
+  ],
 };
 
 /** catalog.rs `BUILTIN` (also the order of the "add effect" menu). */
-export const BUILTIN: BuiltinKind[] = ['denoise', 'tune', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'];
+export const BUILTIN: BuiltinKind[] = ['denoise', 'tune', 'voice', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'];
 
 export function mockCatalog(): Catalog {
   return {

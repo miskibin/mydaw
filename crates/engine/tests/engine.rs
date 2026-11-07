@@ -106,6 +106,33 @@ fn audio_clips_play_at_their_position() {
 }
 
 #[test]
+fn dry_wet_of_a_latent_effect_lines_up() {
+    // Voice at zero shift is a pure delay: a 50 % blend must not comb-filter against the dry
+    let dir = std::env::temp_dir().join(format!("wave-mix-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let wav = dir.join("voice.wav");
+    let sr = 48000.0f32;
+    let x: Vec<f32> = (0..96000).flat_map(|i| { let v = (1..8).map(|k| (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.2; [v, v] }).collect();
+    wave_engine::sources::write_wav(&wav, &x, 48000).unwrap();
+    let mut p = Project::empty();
+    p.inserts[0].fx.clear();
+    let ins = p.tracks[0].insert;
+    let voice = new_fx(90_000, FxKind::Voice, p.bpm);
+    p.inserts.iter_mut().find(|m| m.id == ins).unwrap().fx.push(voice.clone());
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    e.import_audio(std::slice::from_ref(&wav), Some((0, 0.0))).unwrap();
+    let render = |mix: f32| {
+        let fx = Fx { mix, ..voice.clone() };
+        e.apply(&[Op::PutFx { insert_id: ins, fx, index: None }], false, None).unwrap();
+        let out = e.render(0.0, 3.0, 0.0, 48000).unwrap();
+        rms(&out[48000..120000])
+    };
+    let (full, half) = (render(1.0), render(0.5));
+    assert!((half / full - 1.0).abs() < 0.05, "50 % mix is {:.2}× the wet level", half / full);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn save_and_open_round_trip() {
     let dir = std::env::temp_dir().join(format!("wave-proj-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -176,6 +203,75 @@ fn recording_lands_as_a_clip_on_the_armed_track() {
     assert!(secs > 0.8 && secs < 1.2, "take is {secs} s");
     assert!(e.undo());
     assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Audio));
+}
+
+fn armed_engine() -> Arc<Engine> {
+    let mut p = Project::demo();
+    for t in p.tracks.iter_mut() {
+        t.arm = false;
+    }
+    p.tracks[4].arm = true;
+    Engine::new(p, Arc::new(NoPlugins))
+}
+
+/// Runs `secs` of live input through `rt`, giving housekeeping time to drain the ring.
+fn feed(rt: &mut Rt, secs: f64) {
+    let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
+    let tone: Vec<f32> = (0..256).map(|i| (i as f32 * 0.1).sin() * 0.3).collect();
+    for _ in 0..((48000.0 * secs) as usize / 256) {
+        rt.process(&mut l, &mut r, Some((&tone, &tone)));
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
+}
+
+fn takes(e: &Engine) -> Vec<Clip> {
+    e.project().clips.into_iter().filter(|c| c.kind == ClipKind::Audio).collect()
+}
+
+#[test]
+fn disarming_mid_take_keeps_it_and_keeps_playing() {
+    let e = armed_engine();
+    let mut rt = e.create_rt(48000.0, 256);
+    e.set_transport(None, Some(false), Some(true), None);
+    e.play(0.0);
+    feed(&mut rt, 1.0);
+    e.set_transport(None, None, Some(false), None);
+    let t = takes(&e);
+    assert_eq!(t.len(), 1, "disarming lost the take");
+    let secs = t[0].len * 60.0 / e.project().bpm;
+    assert!(secs > 0.8 && secs < 1.2, "take is {secs} s");
+    assert!(e.state().transport.playing, "punch-out stopped the transport");
+    // nothing more is captured after the punch-out
+    feed(&mut rt, 0.5);
+    e.stop();
+    assert_eq!(takes(&e).len(), 1);
+    // and the next armed run records again
+    e.set_transport(None, None, Some(true), None);
+    e.play(0.0);
+    feed(&mut rt, 0.5);
+    e.stop();
+    assert_eq!(takes(&e).len(), 2, "could not record after the punch-out");
+}
+
+#[test]
+fn restarting_the_audio_stream_mid_take_keeps_it() {
+    // reopening the devices (mic toggle, device change) must not orphan the take
+    let e = armed_engine();
+    let mut rt = e.create_rt(48000.0, 256);
+    e.set_transport(None, Some(false), Some(true), None);
+    e.play(4.0);
+    feed(&mut rt, 1.0);
+    drop(rt);
+    let mut rt = e.create_rt(48000.0, 256);
+    let t = takes(&e);
+    assert_eq!(t.len(), 1, "stream restart lost the take");
+    assert!((t[0].start - 4.0).abs() < 1e-9);
+    assert!(!e.state().transport.playing);
+    e.play(0.0);
+    assert!(e.state().transport.playing, "transport is stuck after the restart");
+    feed(&mut rt, 0.5);
+    e.stop();
+    assert_eq!(takes(&e).len(), 2);
 }
 
 #[test]
@@ -289,4 +385,44 @@ fn export_tail_extends_length_and_cancel_aborts() {
     let silent = Engine::new(p, Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
     let peak = silent.iter().fold(0f32, |a, b| a.max(b.abs()));
     assert!(peak < 1e-5, "empty project should be silent");
+}
+ 
+#[test]
+fn music_analysis_excludes_vocal_insert_and_caches() {
+    let dir = std::env::temp_dir().join(format!("wave-music-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sr = 44100;
+    let chord_wav = |name: &str, notes: [i32; 3]| {
+        let p = dir.join(name);
+        let n = sr as usize * 8;
+        let data: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let t = i as f32 / sr as f32;
+                let mut v = 0.0f32;
+                for m in notes {
+                    let f = 440.0 * 2f32.powf((m as f32 - 69.0) / 12.0);
+                    v += (std::f32::consts::TAU * f * t).sin() + 0.5 * (std::f32::consts::TAU * f * 2.0 * t).sin();
+                }
+                let s = v * 0.1;
+                [s, s]
+            })
+            .collect();
+        wave_engine::sources::write_wav(&p, &data, sr).unwrap();
+        p
+    };
+    let c_wav = chord_wav("c_maj.wav", [60, 64, 67]);
+    let fs_wav = chord_wav("fs_maj.wav", [66, 70, 73]);
+    let mut p = Project::empty();
+    let tune = new_fx(9500, FxKind::Tune, p.bpm);
+    p.inserts[2].fx.push(tune);
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    let (_, c1) = e.import_audio(&[c_wav], Some((0, 0.0))).unwrap();
+    let (_, c2) = e.import_audio(&[fs_wav], Some((1, 0.0))).unwrap();
+    let a1 = e.music_analysis(Some(c1[0]), None).unwrap();
+    assert_eq!(a1.key.unwrap().root, 0);
+    let a2 = e.music_analysis(Some(c2[0]), None).unwrap();
+    assert_eq!(a2.key.unwrap().root, 6);
+    let proj_ex = e.music_analysis(None, Some(9500)).unwrap();
+    assert_eq!(proj_ex.key.unwrap().root, 0);
+    let _ = std::fs::remove_dir_all(dir);
 }

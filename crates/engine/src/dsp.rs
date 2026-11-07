@@ -38,6 +38,7 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
         FxKind::Deess => Box::new(crate::vocal::DeEss::default()),
         FxKind::Tune => Box::new(crate::vocal::Tune::default()),
         FxKind::Denoise => Box::new(crate::denoise::Denoise::default()),
+        FxKind::Voice => Box::new(crate::vocal::Voice::default()),
         FxKind::Vst3 => return None,
     })
 }
@@ -149,16 +150,16 @@ impl Biquad {
 
 /// One-pole smoother for parameters that must glide (gains, delay time).
 #[derive(Clone, Copy, Debug, Default)]
-struct Smooth {
-    v: f32,
+pub(crate) struct Smooth {
+    pub(crate) v: f32,
     k: f32,
 }
 impl Smooth {
-    fn setup(&mut self, sr: f32, ms: f32) {
+    pub(crate) fn setup(&mut self, sr: f32, ms: f32) {
         self.k = 1.0 - (-1.0 / (sr * ms / 1000.0)).exp();
     }
     #[inline]
-    fn next(&mut self, target: f32) -> f32 {
+    pub(crate) fn next(&mut self, target: f32) -> f32 {
         self.v += (target - self.v) * self.k;
         self.v
     }

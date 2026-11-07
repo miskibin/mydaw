@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, ExportResult, Id, ImportResult, LibFile,
-  LibraryList, LibraryProgress, Op, PitchAnalysis, StateDto, TransportDto, Vst3Info, Vst3Param,
+  LibraryList, LibraryProgress, MusicAnalysis, Op, PitchAnalysis, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -37,6 +37,8 @@ export interface Backend {
   clipPeaks(clipId: Id): Promise<Float32Array>;
   /** Pitch curve, levels and note segmentation of an audio clip's source (seconds of the source). */
   pitchAnalyze(clipId: Id): Promise<PitchAnalysis>;
+  /** Tempo (BPM) and musical key of an audio clip, or key/tempo of the project's active audio clips (excluding `excludeFx`'s insert). */
+  musicAnalyze(args?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
   previewClip(clipId: Id): Promise<void>;
   previewFile(path: string): Promise<void>;
@@ -135,6 +137,7 @@ export function tauriBackend(): Backend {
     sourcePeaks: async (id, norm, rev) => toF32(await invoke('source_peaks', { id, norm: !!norm, rev: !!rev })),
     clipPeaks: async clipId => toF32(await invoke('clip_peaks', { clipId })),
     pitchAnalyze: clipId => invoke('pitch_analyze', { clipId }),
+    musicAnalyze: a => invoke('music_analyze', { clipId: a?.clipId ?? null, excludeFx: a?.excludeFx ?? null }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
     previewClip: clipId => invoke('preview_clip', { clipId }),
     previewFile: path => invoke('preview_file', { path }),
