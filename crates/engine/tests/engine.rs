@@ -105,6 +105,33 @@ fn audio_clips_play_at_their_position() {
 }
 
 #[test]
+fn dry_wet_of_a_latent_effect_lines_up() {
+    // Voice at zero shift is a pure delay: a 50 % blend must not comb-filter against the dry
+    let dir = std::env::temp_dir().join(format!("wave-mix-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let wav = dir.join("voice.wav");
+    let sr = 48000.0f32;
+    let x: Vec<f32> = (0..96000).flat_map(|i| { let v = (1..8).map(|k| (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.2; [v, v] }).collect();
+    wave_engine::sources::write_wav(&wav, &x, 48000).unwrap();
+    let mut p = Project::empty();
+    p.inserts[0].fx.clear();
+    let ins = p.tracks[0].insert;
+    let voice = new_fx(90_000, FxKind::Voice, p.bpm);
+    p.inserts.iter_mut().find(|m| m.id == ins).unwrap().fx.push(voice.clone());
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    e.import_audio(std::slice::from_ref(&wav), Some((0, 0.0))).unwrap();
+    let render = |mix: f32| {
+        let fx = Fx { mix, ..voice.clone() };
+        e.apply(&[Op::PutFx { insert_id: ins, fx, index: None }], false, None).unwrap();
+        let out = e.render(0.0, 3.0, 0.0, 48000).unwrap();
+        rms(&out[48000..120000])
+    };
+    let (full, half) = (render(1.0), render(0.5));
+    assert!((half / full - 1.0).abs() < 0.05, "50 % mix is {:.2}× the wet level", half / full);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn save_and_open_round_trip() {
     let dir = std::env::temp_dir().join(format!("wave-proj-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();

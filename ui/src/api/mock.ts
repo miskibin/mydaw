@@ -269,7 +269,7 @@ export class MockBackend implements Backend {
       const m = this.srcMeta.get(c.ref); if (!m?.vocal) continue;
       return vocalAt(synthVocal(m.seed, m.dur), (c.offset + beat - c.start) * this.spb());
     }
-    return fx.type === 'tune' || fx.type === 'deess' || fx.type === 'fet' ? vocalAt(synthVocal(4242, VOCAL_DUR), t) : null;
+    return fx.type === 'tune' || fx.type === 'voice' || fx.type === 'deess' || fx.type === 'fet' ? vocalAt(synthVocal(4242, VOCAL_DUR), t) : null;
   }
 
   private fakeAnalysis(fx: Fx, ins: Id, level: number, t: number, beat: number, playing: boolean): EncFx {
@@ -310,6 +310,16 @@ export class MockBackend implements Backend {
       this.simTune(fx, sim, voc, dt);
       for (let i = 0; i < 6; i++) meters[i] = sim.m[i];
       for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k];
+    } else if (fx.type === 'voice') {
+      // vocal.rs `Voice`: [input Hz, output Hz, confidence, applied shift st]
+      const mode = Math.round(pr.mode ?? 0), pitch = pr.pitch ?? 0, drive = pr.drive ?? 0;
+      if (voc && voc.midi != null && voc.level > 0.02) {
+        const m = voc.midi, shift = clamp(mode === 1 ? Math.round(m) - m + pitch : mode === 2 ? 60 + Math.round(pitch) - m : pitch, -24, 24);
+        meters[0] = midiToHz(m); meters[1] = midiToHz(m + shift); meters[2] = 0.88 + Math.random() * 0.1; meters[3] = shift;
+      } else meters[2] = 0.15 + Math.random() * 0.2;
+      const fShift = (pr.formant ?? 0) + ((pr.link ?? 0) >= 0.5 ? meters[3] : 0);
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[clamp(Math.round(k - fShift / 12 * (SPEC_BANDS / 10)), 0, SPEC_BANDS - 1)] + drive * 0.15 * (k > 60 ? 2 : 1) + (pr.out ?? 0);
+      out = level * dbg(pr.out ?? 0);
     } else if (fx.type === 'fet') {
       const inDb = level > 1e-5 ? 20 * Math.log10(level) + (pr.input ?? 8) : -120;
       const ri = Math.round(pr.ratio ?? 0), abi = ri >= 4, ratio = [4, 8, 12, 20, 20][clamp(ri, 0, 4)];

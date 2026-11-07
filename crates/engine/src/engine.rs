@@ -1068,7 +1068,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
                         Some(pr)
                     };
                     let params = if f.kind == FxKind::Vst3 { None } else { Some(param_block(f)) };
-                    FxSlot { id: f.id, bypass: f.bypass, mix: f.mix.clamp(0.0, 1.0), proc, params }
+                    FxSlot::new(f.id, f.bypass, f.mix.clamp(0.0, 1.0), proc, params, crate::catalog::latency(f, sr))
                 })
                 .collect();
             let k = p.inserts.iter().position(|x| x.id == id).unwrap_or(0);

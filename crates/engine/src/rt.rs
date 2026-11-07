@@ -101,6 +101,27 @@ pub struct FxSlot {
     /// `None` = "take the running processor with this id from the current graph".
     pub proc: Option<Box<dyn Processor>>,
     pub params: Option<ParamBlock>,
+    /// Delays the dry path by the effect's latency, so dry/wet blends line up.
+    dly_l: Vec<f32>,
+    dly_r: Vec<f32>,
+    dly_w: usize,
+}
+
+impl FxSlot {
+    /// `latency` in samples (allocates; call off the audio thread).
+    pub fn new(id: Id, bypass: bool, mix: f32, proc: Option<Box<dyn Processor>>, params: Option<ParamBlock>, latency: usize) -> Self {
+        Self { id, bypass, mix, proc, params, dly_l: vec![0.0; latency], dly_r: vec![0.0; latency], dly_w: 0 }
+    }
+
+    fn delay_dry(&mut self, l: &mut [f32], r: &mut [f32]) {
+        let n = self.dly_l.len();
+        for (x, y) in l.iter_mut().zip(r.iter_mut()) {
+            let w = self.dly_w;
+            *x = std::mem::replace(&mut self.dly_l[w], *x);
+            *y = std::mem::replace(&mut self.dly_r[w], *y);
+            self.dly_w = if w + 1 == n { 0 } else { w + 1 };
+        }
+    }
 }
 
 pub struct InsertRt {
@@ -339,8 +360,15 @@ impl Rt {
                     // carry running processors (and their tails) over by effect id
                     for ins in g.inserts.iter_mut() {
                         for slot in ins.fx.iter_mut() {
-                            if slot.proc.is_none() {
-                                slot.proc = self.graph.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == slot.id).and_then(|s| s.proc.take());
+                            if let Some(old) = self.graph.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == slot.id) {
+                                if slot.proc.is_none() {
+                                    slot.proc = old.proc.take();
+                                }
+                                if old.dly_l.len() == slot.dly_l.len() {
+                                    std::mem::swap(&mut slot.dly_l, &mut old.dly_l);
+                                    std::mem::swap(&mut slot.dly_r, &mut old.dly_r);
+                                    slot.dly_w = old.dly_w;
+                                }
                             }
                             if let (Some(p), Some(pb)) = (slot.proc.as_mut(), slot.params.as_ref()) {
                                 p.set_params(pb);
@@ -709,14 +737,22 @@ fn run_chain(ins: &mut InsertRt, n: usize, ctx: &ProcessCtx, watch: &[Id], taps:
         if let Some(w) = w {
             push_tap(&mut taps.input[w], &ins.l[..n], &ins.r[..n]);
         }
-        if !slot.bypass && slot.mix > 0.0005 {
+        let delayed = !slot.dly_l.is_empty();
+        if !slot.bypass && slot.mix <= 0.0005 && delayed {
+            // fully dry: still late by the latency PDC is compensating for
+            slot.delay_dry(&mut ins.l[..n], &mut ins.r[..n]);
+        } else if !slot.bypass && slot.mix > 0.0005 {
             if let Some(p) = slot.proc.as_mut() {
                 let mix = slot.mix.min(1.0);
-                if mix < 0.9995 {
+                if mix < 0.9995 || delayed {
                     ins.dry_l[..n].copy_from_slice(&ins.l[..n]);
                     ins.dry_r[..n].copy_from_slice(&ins.r[..n]);
                 }
                 p.process(&mut ins.l[..n], &mut ins.r[..n], ctx);
+                if delayed {
+                    // the line runs at every Mix so lowering it never plays stale audio
+                    slot.delay_dry(&mut ins.dry_l[..n], &mut ins.dry_r[..n]);
+                }
                 if mix < 0.9995 {
                     for i in 0..n {
                         ins.l[i] = ins.dry_l[i] + (ins.l[i] - ins.dry_l[i]) * mix;
