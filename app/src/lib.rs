@@ -97,23 +97,41 @@ async fn transport_play(app: St<'_>, from_beat: f64) -> R<()> {
 
 #[tauri::command]
 async fn transport_stop(app: St<'_>) -> R<()> {
-    let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || e.stop()).await.map_err(es)
+    let a = app.inner().clone();
+    let st = tauri::async_runtime::spawn_blocking(move || {
+        a.engine.stop();
+        let t = a.engine.state().transport;
+        (!t.rec && !t.monitor).then(|| a.audio.set_input(false))
+    })
+    .await
+    .map_err(es)?;
+    if let Some(st) = st {
+        *app.status.lock() = st;
+    }
+    Ok(())
 }
 
 #[tauri::command]
 async fn transport_set(app: St<'_>, metro: Option<bool>, count_in: Option<bool>, rec: Option<bool>, monitor: Option<bool>, start_beat: Option<f64>) -> R<wave_engine::TransportDto> {
-    if let Some(b) = start_beat {
-        app.engine.set_start(b);
-    }
-    let t = app.engine.set_transport(metro, count_in, rec, monitor);
+    let e = app.engine.clone();
+    let t = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(b) = start_beat {
+            e.set_start(b);
+        }
+        e.set_transport(metro, count_in, rec, monitor)
+    })
+    .await
+    .map_err(es)?;
     // the mic is opened only while recording or monitoring is on (Bluetooth headphones
-    // drop to the low-quality headset profile whenever a mic stream is open)
+    // drop to the low-quality headset profile whenever a mic stream is open). Reopening
+    // the devices restarts the audio stream, so closing it waits for the transport to stop.
     if rec.is_some() || monitor.is_some() {
         let need = t.rec || t.monitor;
-        let a = app.inner().clone();
-        let st = tauri::async_runtime::spawn_blocking(move || a.audio.set_input(need)).await.map_err(es)?;
-        *app.status.lock() = st;
+        if need || !t.playing {
+            let a = app.inner().clone();
+            let st = tauri::async_runtime::spawn_blocking(move || a.audio.set_input(need)).await.map_err(es)?;
+            *app.status.lock() = st;
+        }
     }
     Ok(t)
 }

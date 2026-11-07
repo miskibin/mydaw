@@ -211,6 +211,8 @@ impl Engine {
             self.factory.release(id);
         }
         c.sent_params.clear();
+        // the old stream is gone: keep what it captured instead of orphaning the take
+        self.finalize_take(&mut c);
         c.wires = Some(Wires { cmds: cmd_tx, garbage: gb_rx, record: rec_rx, analyzer: Analyzer::new(ain, aout, sample_rate), sr: sample_rate, max_block });
         self.sync(&mut c, Dirty { timeline: true, mixer: true, params: true });
         let flags = Cmd::Flags { metro: c.transport.metro, monitor: c.transport.monitor };
@@ -218,6 +220,7 @@ impl Engine {
         send(&mut c, flags);
         send(&mut c, watch);
         c.transport.playing = false;
+        self.changed(c);
         rt
     }
 
@@ -397,10 +400,21 @@ impl Engine {
         if let Some(v) = monitor {
             c.transport.monitor = v;
         }
+        let punch_out = !c.transport.rec && c.take.is_some();
+        if punch_out {
+            send(&mut c, Cmd::PunchOut);
+        }
         let f = Cmd::Flags { metro: c.transport.metro, monitor: c.transport.monitor };
         send(&mut c, f);
         let t = c.transport.clone();
-        self.changed(c);
+        if punch_out {
+            drop(c);
+            thread::sleep(Duration::from_millis(30));
+            self.finish_take();
+            self.changed(self.core.lock());
+        } else {
+            self.changed(c);
+        }
         t
     }
 
@@ -879,12 +893,18 @@ impl Engine {
 
     fn finish_take(&self) {
         let mut c = self.core.lock();
-        let Some(take) = c.take.take() else { return };
-        // drain whatever is left in the ring
+        self.finalize_take(&mut c);
+    }
+
+    fn finalize_take(&self, c: &mut Core) {
+        let Some(mut take) = c.take.take() else { return };
         if let Some(w) = c.wires.as_mut() {
             while let Ok(x) = w.record.pop() {
-                let _ = x;
+                take.data.push(x);
             }
+        }
+        if take.data.len() % 2 == 1 {
+            take.data.pop();
         }
         let secs = take.data.len() as f64 / 2.0 / take.sr as f64;
         if secs < 0.05 {
@@ -893,7 +913,7 @@ impl Engine {
         let id = c.project.alloc_id();
         let n = c.project.sources.iter().filter(|s| s.name.starts_with("Take")).count() + 1;
         let name = format!("Take {n}");
-        let path = audio_dir(&c).join(format!("{} {}.wav", name, id));
+        let path = audio_dir(c).join(format!("{} {}.wav", name, id));
         if let Err(e) = write_wav(&path, &take.data, take.sr) {
             log::error!("could not write recording: {e}");
         }
@@ -920,9 +940,9 @@ impl Engine {
             rev: false,
             tune: None,
         });
-        push_undo(&mut c, before);
+        push_undo(c, before);
         c.revision += 1;
-        self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+        self.sync(c, Dirty { timeline: true, ..Default::default() });
     }
 }
 

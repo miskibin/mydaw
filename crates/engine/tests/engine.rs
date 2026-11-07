@@ -177,6 +177,75 @@ fn recording_lands_as_a_clip_on_the_armed_track() {
     assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Audio));
 }
 
+fn armed_engine() -> Arc<Engine> {
+    let mut p = Project::demo();
+    for t in p.tracks.iter_mut() {
+        t.arm = false;
+    }
+    p.tracks[4].arm = true;
+    Engine::new(p, Arc::new(NoPlugins))
+}
+
+/// Runs `secs` of live input through `rt`, giving housekeeping time to drain the ring.
+fn feed(rt: &mut Rt, secs: f64) {
+    let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
+    let tone: Vec<f32> = (0..256).map(|i| (i as f32 * 0.1).sin() * 0.3).collect();
+    for _ in 0..((48000.0 * secs) as usize / 256) {
+        rt.process(&mut l, &mut r, Some((&tone, &tone)));
+        std::thread::sleep(std::time::Duration::from_micros(200));
+    }
+}
+
+fn takes(e: &Engine) -> Vec<Clip> {
+    e.project().clips.into_iter().filter(|c| c.kind == ClipKind::Audio).collect()
+}
+
+#[test]
+fn disarming_mid_take_keeps_it_and_keeps_playing() {
+    let e = armed_engine();
+    let mut rt = e.create_rt(48000.0, 256);
+    e.set_transport(None, Some(false), Some(true), None);
+    e.play(0.0);
+    feed(&mut rt, 1.0);
+    e.set_transport(None, None, Some(false), None);
+    let t = takes(&e);
+    assert_eq!(t.len(), 1, "disarming lost the take");
+    let secs = t[0].len * 60.0 / e.project().bpm;
+    assert!(secs > 0.8 && secs < 1.2, "take is {secs} s");
+    assert!(e.state().transport.playing, "punch-out stopped the transport");
+    // nothing more is captured after the punch-out
+    feed(&mut rt, 0.5);
+    e.stop();
+    assert_eq!(takes(&e).len(), 1);
+    // and the next armed run records again
+    e.set_transport(None, None, Some(true), None);
+    e.play(0.0);
+    feed(&mut rt, 0.5);
+    e.stop();
+    assert_eq!(takes(&e).len(), 2, "could not record after the punch-out");
+}
+
+#[test]
+fn restarting_the_audio_stream_mid_take_keeps_it() {
+    // reopening the devices (mic toggle, device change) must not orphan the take
+    let e = armed_engine();
+    let mut rt = e.create_rt(48000.0, 256);
+    e.set_transport(None, Some(false), Some(true), None);
+    e.play(4.0);
+    feed(&mut rt, 1.0);
+    drop(rt);
+    let mut rt = e.create_rt(48000.0, 256);
+    let t = takes(&e);
+    assert_eq!(t.len(), 1, "stream restart lost the take");
+    assert!((t[0].start - 4.0).abs() < 1e-9);
+    assert!(!e.state().transport.playing);
+    e.play(0.0);
+    assert!(e.state().transport.playing, "transport is stuck after the restart");
+    feed(&mut rt, 0.5);
+    e.stop();
+    assert_eq!(takes(&e).len(), 2);
+}
+
 #[test]
 fn latency_is_compensated_across_inserts() {
     // a pitch corrector on one insert must not make that track late against the others

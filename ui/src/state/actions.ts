@@ -17,10 +17,12 @@ export async function play(from = U.start) {
   try { await be().transportPlay(from); setTransport({ playing: true }); say(S.transport.rec ? '● Nagrywanie' : 'Play'); }
   catch (e) { setU('playing', false); say('Błąd odtwarzania: ' + String(e)); }
 }
-export async function stop() {
+/** `rewind` also moves the start marker (and the stopped playhead) to the beginning of the song. */
+export async function stop(rewind = false) {
   setU('playing', false);
+  if (rewind) setU('start', 0);
   try { await be().transportStop(); setTransport({ playing: false }); } catch (e) { console.warn(e); }
-  say('Stop');
+  say(rewind ? 'Stop · początek utworu' : 'Stop');
 }
 export const togglePlay = () => (U.playing ? stop() : play());
 export function seek(b: number) {

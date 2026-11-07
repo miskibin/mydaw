@@ -89,7 +89,7 @@ export function Toolbar() {
         <button title="Play / Stop (Spacja)" data-act="play" classList={{ play: U.playing }} onClick={() => void A.togglePlay()}>
           <svg width="11" height="11" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor" /></svg>
         </button>
-        <button title="Stop (wraca do znacznika startu)" disabled={!U.playing} onClick={() => void A.stop()}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
+        <button title="Stop (wraca na początek utworu; Spacja wraca do znacznika startu)" onClick={() => void A.stop(true)}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
         <button title="Nagrywanie (R)" class="rec" classList={{ armed: T().rec }} onClick={A.toggleRec}>
           <svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor" /></svg>
         </button>

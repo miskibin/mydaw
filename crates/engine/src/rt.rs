@@ -240,6 +240,8 @@ pub enum Cmd {
     Mix(Box<MixState>),
     Params { fx: Id, params: Option<ParamBlock>, mix: f32 },
     Play { from: f64, count_in: f64, rec: bool },
+    /// Stops capturing input but keeps the transport running.
+    PunchOut,
     Stop,
     Flags { metro: bool, monitor: bool },
     Watch { ids: [Id; WATCH_SLOTS], n: u8 },
@@ -390,6 +392,12 @@ impl Rt {
                     self.playing = true;
                     self.shared.playing.store(true, Relaxed);
                     self.shared.stopped_at_end.store(false, Relaxed);
+                }
+                Cmd::PunchOut => {
+                    // `rec` stays set so the run keeps its open-ended extent instead of
+                    // wrapping at a song end that the new take has not extended yet
+                    self.rec_start = f64::INFINITY;
+                    self.shared.recording.store(false, Relaxed);
                 }
                 Cmd::Stop => self.stop(false),
                 Cmd::Flags { metro, monitor } => {
