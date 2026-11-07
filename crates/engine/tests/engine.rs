@@ -331,3 +331,43 @@ fn automation_moves_volume_and_effect_params() {
     e.apply(&[Op::RemoveAutomation { id: 8000 }], false, None).unwrap();
     assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Auto));
 }
+
+#[test]
+fn music_analysis_excludes_vocal_insert_and_caches() {
+    let dir = std::env::temp_dir().join(format!("wave-music-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sr = 44100;
+    let chord_wav = |name: &str, notes: [i32; 3]| {
+        let p = dir.join(name);
+        let n = sr as usize * 8;
+        let data: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let t = i as f32 / sr as f32;
+                let mut v = 0.0f32;
+                for m in notes {
+                    let f = 440.0 * 2f32.powf((m as f32 - 69.0) / 12.0);
+                    v += (std::f32::consts::TAU * f * t).sin() + 0.5 * (std::f32::consts::TAU * f * 2.0 * t).sin();
+                }
+                let s = v * 0.1;
+                [s, s]
+            })
+            .collect();
+        wave_engine::sources::write_wav(&p, &data, sr).unwrap();
+        p
+    };
+    let c_wav = chord_wav("c_maj.wav", [60, 64, 67]);
+    let fs_wav = chord_wav("fs_maj.wav", [66, 70, 73]);
+    let mut p = Project::empty();
+    let tune = new_fx(9500, FxKind::Tune, p.bpm);
+    p.inserts[2].fx.push(tune);
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    let (_, c1) = e.import_audio(&[c_wav], Some((0, 0.0))).unwrap();
+    let (_, c2) = e.import_audio(&[fs_wav], Some((1, 0.0))).unwrap();
+    let a1 = e.music_analysis(Some(c1[0]), None).unwrap();
+    assert_eq!(a1.key.unwrap().root, 0);
+    let a2 = e.music_analysis(Some(c2[0]), None).unwrap();
+    assert_eq!(a2.key.unwrap().root, 6);
+    let proj_ex = e.music_analysis(None, Some(9500)).unwrap();
+    assert_eq!(proj_ex.key.unwrap().root, 0);
+    let _ = std::fs::remove_dir_all(dir);
+}

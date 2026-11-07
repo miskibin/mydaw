@@ -19,6 +19,7 @@ READ
   context [--full]                         project summary (--full: every clip, note and parameter)
   catalog                                  effect types, parameters and presets
   schema                                   every op `apply` accepts, with an example
+  analyze [--clip ID] [--exclude-fx ID]    detect tempo (BPM) and musical key
 
 EDIT  (all edits are one undo step each; --if-revision N refuses to act if the project moved on)
   apply --file ops.json | --json '[...]'   apply a batch of ops atomically   [--label TEXT]
@@ -156,6 +157,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
         "sessions" => Ok(json!(ws::sessions().into_iter().map(|e| json!({"sessionId": e.session_id, "pid": e.pid, "project": e.project})).collect::<Vec<_>>())),
         "status" | "catalog" | "schema" | "undo" | "redo" | "stop" => send(a, cmd, json!({})),
         "context" => send(a, "context", json!({"full": a.has("full")})),
+        "analyze" => send(a, "music_analyze", json!({"clipId": a.num("clip").map_err(u)?.map(|v| v as u64), "excludeFx": a.num("exclude-fx").map_err(u)?.map(|v| v as u64)})),
         "apply" => {
             let text = match (a.get("file"), a.get("json")) {
                 (Some(f), _) => std::fs::read_to_string(f).map_err(|e| u(format!("{f}: {e}")))?,

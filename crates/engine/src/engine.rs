@@ -510,6 +510,90 @@ impl Engine {
         c.sources.analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))
     }
 
+    fn source_music(&self, id: Id, norm: bool, rev: bool) -> Option<Arc<crate::music::SourceMusic>> {
+        if let Some(m) = self.core.lock().sources.cached_music(id, norm, rev) {
+            return Some(m);
+        }
+        let audio = self.core.lock().sources.variant(id, norm, rev)?;
+        let m = crate::music::analyze_audio(&audio);
+        self.core.lock().sources.put_music(id, norm, rev, m.clone());
+        Some(m)
+    }
+
+    /// Tempo and key of an audio clip, or key of the project's audio clips
+    /// (excluding muted tracks/clips and tracks routed to `exclude_fx`'s insert,
+    /// so key detection for Pitch Correct listens to the backing rather than the vocal).
+    pub fn music_analysis(&self, clip_id: Option<Id>, exclude_fx: Option<Id>) -> Result<crate::music::MusicAnalysis, EngineError> {
+        if let Some(cid) = clip_id {
+            let (clip, bpm) = {
+                let c = self.core.lock();
+                let clip = c.project.clips.iter().find(|x| x.id == cid).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
+                (clip, c.project.bpm)
+            };
+            if clip.kind != ClipKind::Audio {
+                return Err(EngineError::Msg("only audio clips have tempo and key".into()));
+            }
+            let m = self.source_music(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            let spb = 60.0 / bpm;
+            let (a, b) = (clip.offset * spb, (clip.offset + clip.len) * spb);
+            let (mut cs, n) = m.chroma_sum(a, b);
+            if n == 0 {
+                (cs, _) = m.chroma_sum(0.0, 1e9);
+            }
+            let key = crate::music::estimate_key(&cs, m.tuning_cents);
+            return Ok(crate::music::MusicAnalysis { tempo: m.tempo.clone(), key });
+        }
+
+        let (all_clips, excluded_insert, bpm) = {
+            let c = self.core.lock();
+            let p = &c.project;
+            let ex_ins = exclude_fx.and_then(|fid| p.find_fx(fid).map(|(ins, _)| ins.id));
+            let any_solo = p.tracks.iter().any(|t| t.solo);
+            let active: Vec<(Clip, bool)> = p
+                .clips
+                .iter()
+                .filter(|cl| cl.kind == ClipKind::Audio && !cl.muted)
+                .filter_map(|cl| {
+                    let tr = p.tracks.get(cl.track as usize)?;
+                    if tr.muted || (any_solo && !tr.solo) {
+                        return None;
+                    }
+                    let is_excluded = ex_ins == Some(tr.insert);
+                    Some((cl.clone(), is_excluded))
+                })
+                .collect();
+            (active, ex_ins, p.bpm)
+        };
+        let spb = 60.0 / bpm;
+        let use_non_excluded = excluded_insert.is_some() && all_clips.iter().any(|(_, ex)| !*ex);
+        let chosen: Vec<Clip> = all_clips.into_iter().filter(|(_, ex)| !use_non_excluded || !*ex).map(|(cl, _)| cl).collect();
+        let mut total_chroma = [0f32; 12];
+        let mut tuning_sum = 0f32;
+        let mut weight_sum = 0f32;
+        let mut best_tempo: Option<(f64, crate::music::TempoEstimate)> = None;
+        for cl in chosen {
+            let Some(m) = self.source_music(cl.source, cl.norm, cl.rev) else { continue };
+            let (a, b) = (cl.offset * spb, (cl.offset + cl.len) * spb);
+            let (cs, n) = m.chroma_sum(a, b);
+            if n > 0 {
+                for k in 0..12 {
+                    total_chroma[k] += cs[k];
+                }
+                tuning_sum += m.tuning_cents * n as f32;
+                weight_sum += n as f32;
+            }
+            if let Some(ref t) = m.tempo {
+                let score = cl.len * t.confidence.max(0.1) as f64;
+                if best_tempo.as_ref().map(|(s, _)| score > *s).unwrap_or(true) {
+                    best_tempo = Some((score, t.clone()));
+                }
+            }
+        }
+        let tuning = if weight_sum > 0.0 { tuning_sum / weight_sum } else { 0.0 };
+        let key = crate::music::estimate_key(&total_chroma, tuning);
+        Ok(crate::music::MusicAnalysis { tempo: best_tempo.map(|(_, t)| t), key })
+    }
+
     /// Peaks of what the clip actually plays (including pitch edits), for drawing.
     pub fn clip_peaks(&self, clip_id: Id) -> Option<Vec<f32>> {
         let mut c = self.core.lock();

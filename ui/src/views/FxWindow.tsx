@@ -248,6 +248,14 @@ function TuneControls(props: { fx: Fx }) {
         <Show when={defOf(props.fx, 'key')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={NOTE_NAMES} small />}</Show>
         <Show when={defOf(props.fx, 'scale')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} small />}</Show>
         <Show when={defOf(props.fx, 'voice')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={['Auto', 'Bas', 'Męski', 'Żeński', 'Sopran']} small />}</Show>
+        <div class="segp">
+          <span class="lab">AUTO-KEY</span>
+          <button class="smallbtn" style={{ height: '24px', padding: '0 10px' }} data-detect-key
+            title="Wykryj tonację z podkładu projektu (pomija ścieżki wchodzące na ten kanał wokalu)"
+            onClick={() => A.openMusicAnalysis({ fxId: props.fx.id })}>
+            Wykryj tonację…
+          </button>
+        </div>
       </div>
       <div class="knobs">
         <Ctl fx={props.fx} id="retune" ends={['robot', 'natural']} />

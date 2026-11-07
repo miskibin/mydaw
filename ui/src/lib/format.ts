@@ -29,3 +29,37 @@ export function fmtBytes(n: number): string {
   return n + ' B';
 }
 export const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+
+/** Tap tempo accumulator: resets after `resetMs` of silence, keeps up to `maxTaps` timestamps,
+ *  and fits a least-squares line t(k) = a + T·k to cancel individual tap jitter. */
+export class TapTracker {
+  taps: number[] = [];
+  constructor(private readonly maxTaps = 16, private readonly resetMs = 2000) {}
+
+  tap(nowMs: number, round = true): { bpm: number | null; count: number; fresh: boolean } {
+    const last = this.taps[this.taps.length - 1];
+    const fresh = last == null || nowMs - last > this.resetMs;
+    if (fresh) this.taps = [nowMs];
+    else {
+      this.taps.push(nowMs);
+      if (this.taps.length > this.maxTaps) this.taps.shift();
+    }
+    const n = this.taps.length;
+    if (n < 2) return { bpm: null, count: n, fresh };
+    let num = 0, den = 0;
+    const meanK = (n - 1) / 2;
+    const meanT = this.taps.reduce((a, b) => a + b, 0) / n;
+    for (let k = 0; k < n; k++) {
+      const dk = k - meanK;
+      num += dk * (this.taps[k] - meanT);
+      den += dk * dk;
+    }
+    const periodMs = num / den;
+    if (!(periodMs > 0)) return { bpm: null, count: n, fresh };
+    const raw = 60000 / periodMs;
+    const bpm = clamp(round ? Math.round(raw) : Math.round(raw * 100) / 100, 20, 999);
+    return { bpm, count: n, fresh };
+  }
+
+  reset() { this.taps = []; }
+}

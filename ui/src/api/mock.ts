@@ -11,7 +11,7 @@ import { midiToHz, noteAt, scaleMask, snapNote } from '../lib/pitch';
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, Catalog, Clip, Fx, Id, LibFile, LibraryList, Op, PitchAnalysis, Project, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, Catalog, Clip, Fx, Id, LibFile, LibraryList, MusicAnalysis, Op, PitchAnalysis, Project, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
@@ -488,6 +488,52 @@ export class MockBackend implements Backend {
     if (!s) throw new Error('audio not loaded');
     const v = synthVocal(s.seed ?? s.id, s.dur);
     return structuredClone({ rate: v.rate, curve: v.curve, levels: v.levels, notes: v.notes });
+  }
+  async musicAnalyze(a?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis> {
+    await delay(80);
+    if (a?.clipId != null) {
+      const c = this.p.clips.find(x => x.id === a.clipId);
+      if (!c) throw new Error('no such clip');
+      if (c.kind !== 'audio') throw new Error('only audio clips have tempo and key');
+      const s = this.p.sources.find(x => x.id === c.ref);
+      const bpm = Math.round(this.p.bpm);
+      // C minor profile (demo song is in C minor at 128 BPM)
+      const root = (s ? s.id % 2 === 0 ? 0 : 0 : 0), minor = true;
+      const chroma = [1, 0.08, 0.42, 0.78, 0.09, 0.51, 0.07, 0.89, 0.36, 0.12, 0.44, 0.19];
+      return {
+        tempo: {
+          bpm,
+          confidence: 0.86,
+          candidates: [
+            { bpm, score: 1 },
+            { bpm: bpm / 2, score: 0.58 },
+            { bpm: bpm * 2, score: 0.44 },
+          ],
+          firstBeat: 0,
+        },
+        key: {
+          root, minor, confidence: 0.84,
+          candidates: [
+            { root, minor: true, score: 0.91 },
+            { root: (root + 3) % 12, minor: false, score: 0.78 },
+            { root: (root + 7) % 12, minor: true, score: 0.62 },
+          ],
+          chroma,
+          tuningCents: 0,
+        },
+      };
+    }
+    const exIns = a?.excludeFx != null ? this.p.inserts.find(ins => ins.fx.some(f => f.id === a.excludeFx))?.id : undefined;
+    const anySolo = this.p.tracks.some(t => t.solo);
+    const active = this.p.clips.filter(c => {
+      if (c.kind !== 'audio' || c.muted) return false;
+      const tr = this.p.tracks[c.track];
+      return tr && !tr.muted && (!anySolo || tr.solo);
+    });
+    const nonEx = exIns != null ? active.filter(c => this.p.tracks[c.track]?.insert !== exIns) : active;
+    const chosen = nonEx.length ? nonEx : active;
+    if (!chosen.length) return { tempo: null, key: null };
+    return this.musicAnalyze({ clipId: chosen[0].id });
   }
   async trimClip(clipId: Id) {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) throw new Error('no clip');

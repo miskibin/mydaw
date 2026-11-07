@@ -3,6 +3,7 @@
 pub mod catalog;
 pub mod demo;
 pub mod model;
+pub mod music;
 pub mod ops;
 pub mod pitch;
 pub mod processor;
@@ -17,9 +18,9 @@ pub mod engine;
 pub mod rt;
 pub mod sources;
 pub mod synth;
+pub mod telemetry;
 pub mod tune_render;
 pub mod vocal;
-pub mod telemetry;
 
 pub use engine::{Engine, EngineError, NoPlugins, PluginFactory, StateDto, TransportDto};
 pub use rt::Rt;

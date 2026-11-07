@@ -8,6 +8,7 @@ export type Tool = 'draw' | 'paint' | 'erase' | 'mute' | 'slice' | 'select';
 export interface PlugWin { fxId: Id; x: number; y: number; w: number; z: number }
 export interface PitchWin { clipId: Id; x: number; y: number; w: number; h: number }
 export interface EditorWin { clipId: Id; x: number; y: number; w: number; h: number }
+export interface MusicWin { clipId?: Id; fxId?: Id }
 
 export type MenuItem =
   | { t: 'title'; label: string }
@@ -31,6 +32,7 @@ export interface UiState {
   plugsHidden: boolean;
   editor: EditorWin | null; menu: Menu | null; help: boolean; settings: boolean;
   vstPicker: { insId: Id } | null;
+  musicWin: MusicWin | null;
   readout: string;
   headW: number; pickW: number; pickOpen: boolean; browserTab: 'project' | 'library';
   ghost: { x: number; y: number; name: string; color: string } | null;
@@ -53,7 +55,7 @@ export const [U, setU] = createStore<UiState>({
   tool: 'draw', snap: -1, bw: 22, sel: [], cur: { kind: 'pat', ref: 1 },
   start: 0, follow: true, alt: false,
   mixOpen: true, mixMin: false, mixH: 300, mixSel: 6, fxSel: 903, fxDrag: null,
-  plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, vstPicker: null,
+  plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, vstPicker: null, musicWin: null,
   readout: 'Gotowe',
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
   ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, autoEdit: null, zTop: 1, marquee: null,

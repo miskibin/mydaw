@@ -169,6 +169,7 @@ function EditorBody(props: { clip: Clip; src: Source }) {
           <button class="smallbtn" classList={{ playing: previewing() }} style={{ height: '22px', padding: '0 12px' }} onClick={() => previewing() ? be().previewStop() : be().previewClip(c().id).catch(e => say(String(e)))}>
             {previewing() ? 'Stop' : 'Podgląd'}</button>
           <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title="Edytor wysokości nut (strojenie, dryf, formanty)" onClick={() => A.openPitchEditor(c().id)}>Wysokość…</button>
+          <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title="Wykryj tempo (BPM) i tonację tego klipu" onClick={() => A.openMusicAnalysis({ clipId: c().id })}>Tempo / tonacja…</button>
           <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title="Wytnij wszystko poza regionem (nowa kopia pliku)"
             onClick={() => be().trimClip(c().id).then(() => say('Przycięto do regionu · zapisano jako kopię, oryginał nietknięty (Ctrl+Z cofa)')).catch(e => say('Nie przycięto: ' + String(e)))}>Przytnij</button>
         </div>

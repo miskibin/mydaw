@@ -78,6 +78,15 @@ export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][] }
 export interface NoteBlob { start: number; end: number; pitch: number; level: number }
 export interface PitchAnalysis { rate: number; curve: (number | null)[]; levels: number[]; notes: NoteBlob[] }
 
+export interface TempoCandidate { bpm: number; score: number }
+export interface TempoEstimate { bpm: number; confidence: number; candidates: TempoCandidate[]; firstBeat: number }
+export interface KeyCandidate { root: number; minor: boolean; score: number }
+export interface KeyEstimate {
+  root: number; minor: boolean; confidence: number;
+  candidates: KeyCandidate[]; chroma: number[]; tuningCents: number;
+}
+export interface MusicAnalysis { tempo: TempoEstimate | null; key: KeyEstimate | null }
+
 /** What an automation moves. `param`: catalog param id, or `band:<i>:f|g|q` of an EQ. */
 export type AutoTarget =
   | { kind: 'fx'; fxId: Id; param: string }
