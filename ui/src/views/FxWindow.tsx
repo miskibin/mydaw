@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import { be } from '../api/backend';
-import type { Fx, Id, ParamDef, Vst3Param } from '../api/types';
+import type { Fx, FxKind, Id, ParamDef, Vst3Param } from '../api/types';
 import { clamp } from '../lib/format';
 import { NOTE_NAMES } from '../lib/pitch';
 import { paramDefs, pFmt, pNorm, presetInfo, presetList, pVal } from '../lib/presets';
@@ -13,7 +13,7 @@ import { openMenu, say, U, type PlugWin } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
 import { FXMETA, FxTile } from '../ui/icons';
-import { Knob, MiniKnob, Segmented } from '../ui/Knob';
+import { Knob, MiniKnob, Segmented, type KnobSize } from '../ui/Knob';
 import { theme } from '../ui/theme';
 import type { Viz } from './fx/common';
 import { deessDb, DeessViz, deessFx, deessGeom, deessXf, deessY } from './fx/deess';
@@ -21,7 +21,7 @@ import { DenoiseViz } from './fx/denoise';
 import { DynViz } from './fx/dyn';
 import { EqViz } from './fx/eq';
 import { EqPanel, eqHover, eqLeave, eqPointerDown, eqWheel } from './fx/eqEdit';
-import { fetModes, FetViz, type FetMode } from './fx/fet';
+import { fetModes, FetViz } from './fx/fet';
 import { defaultView, ReverbViz, views3d } from './fx/reverb';
 import { DelayViz, SatViz } from './fx/satDelay';
 import { TuneViz } from './fx/tune';
@@ -46,7 +46,7 @@ function makeViz(f: Fx): Viz | null {
 }
 const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240, voice: 250 };
 /** Default window widths per type (actions.openPlug). */
-export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640, voice: 700 };
+export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700 };
 
 const HINTS: Partial<Record<Fx['type'], string>> = {
   eq: 'kółko = Q · PPM na punkcie = kształt / kanał / dynamika · PPM na tle = nowy band danego typu',
@@ -145,7 +145,7 @@ function setParam(fxId: Id, id: string, v: number) {
 }
 const defOf = (fx: Fx, id: string) => paramDefs(S.catalog, fx.type).find(p => p.id === id);
 
-function ParamKnob(props: { fxId: Id; p: ParamDef; ends?: [string, string]; color?: string }) {
+function ParamKnob(props: { fxId: Id; p: ParamDef; ends?: [string, string]; color?: string; size?: KnobSize }) {
   const fx = () => findFx(props.fxId)?.f;
   const target = () => ({ kind: 'fx' as const, fxId: props.fxId, param: props.p.id });
   const val = () => autoDisplay(target()) ?? fx()?.params[props.p.id] ?? props.p.def;
@@ -153,7 +153,7 @@ function ParamKnob(props: { fxId: Id; p: ParamDef; ends?: [string, string]; colo
   let g: Gesture | null = null;
   const reset = () => { const op = setParam(props.fxId, p.id, p.def); if (op) commit([op], p.label); };
   return (
-    <Knob key={props.fxId + p.id} label={p.label} t={() => clamp(pNorm(p, val()), 0, 1)} ends={props.ends} color={props.color}
+    <Knob key={props.fxId + p.id} label={p.label} t={() => clamp(pNorm(p, val()), 0, 1)} ends={props.ends} color={props.color} size={props.size}
       automated={() => isAutomated(target())}
       zero={() => (p.min < 0 && p.max > 0 && !p.log ? pNorm(p, 0) : 0)} text={() => pFmt(p, val())}
       onStart={() => { g = new Gesture(p.label); }}
@@ -180,108 +180,145 @@ function ParamChoice(props: { fxId: Id; p: ParamDef; danger?: number; color?: st
     onMenu={(x, y) => paramMenu(x, y, target(), () => pick(props.p.def), props.color)} />;
 }
 
-function Ctl(props: { fx: Fx; id: string; ends?: [string, string]; danger?: number; labels?: string[]; small?: boolean; hideLabel?: boolean }) {
+/** One catalog parameter, as a knob (size tier) or segmented buttons — tinted with the effect's colour. */
+function Ctl(props: { fx: Fx; id: string; ends?: [string, string]; danger?: number; labels?: string[]; small?: boolean; hideLabel?: boolean; size?: KnobSize }) {
   const d = () => defOf(props.fx, props.id);
   const color = () => FXMETA[props.fx.type].color;
   return (
     <Show when={d()}>
       {p => p().options
         ? <ParamChoice fxId={props.fx.id} p={p()} danger={props.danger} color={color()} labels={props.labels} small={props.small} hideLabel={props.hideLabel} />
-        : <ParamKnob fxId={props.fx.id} p={p()} ends={props.ends} />}
+        : <ParamKnob fxId={props.fx.id} p={p()} ends={props.ends} size={props.size} color={props.size === 'lg' ? color() : undefined} />}
     </Show>
   );
 }
 
 function Hint(props: { fx: Fx }) { return <span class="hint">{HINTS[props.fx.type] ?? ''}</span>; }
 
+// ---- shared layout system: every built-in effect is described as titled sections of controls.
+// Size tiers: `lg` for the one or two controls that define the effect, `md` standard, `sm` trims.
+// Choices render as segmented buttons; `stack` puts items in a column; `x` is a custom widget.
+type Item = { id: string; size?: KnobSize; ends?: [string, string] | ((fx: Fx) => [string, string] | undefined); labels?: string[]; danger?: number; small?: boolean }
+  | { stack: Item[] } | { x: 'fetMeter' };
+type Section = { title: string; items: Item[] };
+const LAYOUT: Partial<Record<FxKind, Section[]>> = {
+  comp: [
+    { title: 'Kompresja', items: [{ id: 'thr', size: 'lg' }, { id: 'ratio', size: 'lg' }] },
+    { title: 'Czas', items: [{ id: 'att' }, { id: 'rel' }] },
+    { title: 'Wyjście', items: [{ id: 'gain' }] },
+  ],
+  fet: [
+    { title: 'Wejście', items: [{ id: 'input', size: 'lg' }] },
+    { title: 'Charakter', items: [{ stack: [{ id: 'ratio', danger: 4 }, { x: 'fetMeter' }] }] },
+    { title: 'Czas', items: [{ id: 'attack' }, { id: 'release' }] },
+    { title: 'Wyjście', items: [{ id: 'output', size: 'lg' }, { id: 'mix', size: 'sm' }] },
+  ],
+  limit: [
+    { title: 'Głośność', items: [{ id: 'gain', size: 'lg' }] },
+    { title: 'Sufit', items: [{ id: 'ceil' }] },
+  ],
+  sat: [
+    { title: 'Przester', items: [{ id: 'drive', size: 'lg' }] },
+    { title: 'Wyjście', items: [{ id: 'mix' }, { id: 'out' }] },
+  ],
+  delay: [
+    { title: 'Echo', items: [{ id: 'time', size: 'lg' }, { id: 'fb' }] },
+    { title: 'Wyjście', items: [{ id: 'mix' }] },
+  ],
+  reverb: [
+    { title: 'Przestrzeń', items: [{ id: 'size', size: 'lg' }, { id: 'pre' }, { id: 'width' }] },
+    { title: 'Barwa', items: [{ id: 'lo', size: 'sm' }, { id: 'hi', size: 'sm' }] },
+    { title: 'Wyjście', items: [{ id: 'mix', size: 'lg' }] },
+  ],
+  deess: [
+    { title: 'Wykrywanie', items: [{ id: 'thr', size: 'lg' }, { id: 'freq' }, { stack: [{ id: 'mode', small: true }] }] },
+    { title: 'Redukcja', items: [{ id: 'range' }, { id: 'look', size: 'sm' }] },
+    { title: 'Odsłuch', items: [{ stack: [{ id: 'listen', labels: ['Off', 'Tylko S'], small: true }] }] },
+  ],
+  denoise: [
+    { title: 'Redukcja', items: [{ id: 'reduction', size: 'lg' }, { id: 'sens' }, { id: 'smooth' }] },
+    { title: 'Profil szumu', items: [{ stack: [{ id: 'learn', small: true }, { id: 'listen', small: true }] }] },
+  ],
+  voice: [
+    { title: 'Tryb', items: [{ stack: [{ id: 'mode', small: true }, { id: 'link', small: true }] }] },
+    { title: 'Głos', items: [{ id: 'pitch', size: 'lg', ends: fx => (fx.params.mode === 2 ? ['C3', 'C5'] : undefined) }, { id: 'formant', size: 'lg', ends: ['głębiej', 'jaśniej'] }] },
+    { title: 'Wyjście', items: [{ id: 'drive' }, { id: 'out' }] },
+  ],
+  tune: [
+    { title: 'Korekcja', items: [{ id: 'retune', size: 'lg', ends: ['robot', 'natural'] }, { id: 'humanize' }, { id: 'flex' }, { id: 'vibrato' }] },
+    { title: 'Przesunięcie', items: [{ id: 'transpose', size: 'sm' }, { id: 'formant', size: 'sm' }] },
+  ],
+  eq: [{ title: 'Wyjście', items: [{ id: 'out', size: 'sm' }] }],
+};
+
+function LayoutItem(props: { fx: Fx; it: Item }) {
+  const it = props.it;
+  if ('stack' in it) return <div class="stack">{it.stack.map(x => <LayoutItem fx={props.fx} it={x} />)}</div>;
+  if ('x' in it) {
+    const mode = () => fetModes.get(props.fx.id);
+    return <Segmented label="Wskaźnik" small options={['GR', 'OUT']} value={() => (mode() === 'gr' ? 0 : 1)} pick={i => fetModes.set(props.fx.id, i ? 'out' : 'gr')} title="Co pokazuje wskaźnik: redukcję (GR) albo poziom wyjścia (VU)" />;
+  }
+  const ends = () => (typeof it.ends === 'function' ? it.ends(props.fx) : it.ends);
+  return <Ctl fx={props.fx} id={it.id} size={it.size} ends={ends()} labels={it.labels} danger={it.danger} small={it.small} />;
+}
+
+/** Sections of an effect's controls; params the layout doesn't place go to an "Inne" section. */
+function Sections(props: { fx: Fx; slim?: boolean }) {
+  const secs = () => {
+    const lay = LAYOUT[props.fx.type];
+    const defs = paramDefs(S.catalog, props.fx.type);
+    if (!lay) return [{ title: 'Parametry', items: defs.map(p => ({ id: p.id })) }] as Section[];
+    const placed = new Set<string>();
+    const walk = (xs: Item[]) => xs.forEach(x => ('stack' in x ? walk(x.stack) : 'id' in x ? placed.add(x.id) : null));
+    lay.forEach(s => walk(s.items));
+    const rest = defs.filter(p => !placed.has(p.id) && !(props.fx.type === 'tune' && ['key', 'scale', 'voice'].includes(p.id)));
+    return rest.length ? [...lay, { title: 'Inne', items: rest.map(p => ({ id: p.id })) }] : lay;
+  };
+  return (
+    <div class="fxsecs" classList={{ slim: !!props.slim }} style={{ '--fxc': FXMETA[props.fx.type].color }}>
+      <For each={secs()}>
+        {(sec, i) => (
+          <>
+            <Show when={i() > 0}><div class="vline" /></Show>
+            <div class="fxsec">
+              <div class="fxsec-h">{sec.title}</div>
+              <div class="fxsec-b"><For each={sec.items}>{it => <LayoutItem fx={props.fx} it={it} />}</For></div>
+            </div>
+          </>
+        )}
+      </For>
+      <div style={{ flex: 1 }} /><Hint fx={props.fx} />
+    </div>
+  );
+}
+
 function Body(props: { fx: Fx }): JSX.Element {
   const t = () => props.fx.type;
   return (
     <>
       <Show when={t() === 'eq'}><EqPanel fx={props.fx} /></Show>
-      <Show when={t() === 'tune'}><TuneControls fx={props.fx} /></Show>
-      <Show when={t() === 'fet'}><FetControls fx={props.fx} /></Show>
-      <Show when={t() === 'voice'}>
-        <div class="knobs">
-          <div class="stack">
-            <Ctl fx={props.fx} id="mode" />
-            <Ctl fx={props.fx} id="link" small />
-          </div>
-          <div class="vline" />
-          <Ctl fx={props.fx} id="pitch" ends={props.fx.params.mode === 2 ? ['C3', 'C5'] : undefined} />
-          <Ctl fx={props.fx} id="formant" ends={['głębiej', 'jaśniej']} />
-          <div class="vline" />
-          <For each={['drive', 'out']}>{id => <Ctl fx={props.fx} id={id} />}</For>
-          <div style={{ flex: 1 }} /><Hint fx={props.fx} />
-        </div>
-      </Show>
-      <Show when={t() === 'deess'}>
-        <div class="knobs">
-          <For each={['thr', 'range', 'freq', 'look']}>{id => <Ctl fx={props.fx} id={id} />}</For>
-          <div class="vline" />
-          <Ctl fx={props.fx} id="mode" />
-          <Ctl fx={props.fx} id="listen" labels={['Off', 'Tylko S']} />
-          <div style={{ flex: 1 }} /><Hint fx={props.fx} />
-        </div>
-      </Show>
-      <Show when={!['eq', 'tune', 'fet', 'deess', 'voice'].includes(t())}>
-        <div class="knobs">
-          <For each={paramDefs(S.catalog, t())}>{p => <Ctl fx={props.fx} id={p.id} />}</For>
-          <div style={{ flex: 1 }} /><Hint fx={props.fx} />
-        </div>
-      </Show>
-      <Show when={t() === 'eq'}>
-        <div class="knobs slim">
-          <For each={paramDefs(S.catalog, 'eq')}>{p => <Ctl fx={props.fx} id={p.id} />}</For>
-          <div style={{ flex: 1 }} /><Hint fx={props.fx} />
-        </div>
-      </Show>
+      <Show when={t() === 'tune'}><TuneHeader fx={props.fx} /></Show>
+      <Sections fx={props.fx} slim={t() === 'eq'} />
     </>
   );
 }
 
-function TuneControls(props: { fx: Fx }) {
+/** Pitch Correct: key / scale / voice / auto-key row above the knobs. */
+function TuneHeader(props: { fx: Fx }) {
   const color = FXMETA.tune.color;
   return (
-    <>
-      <div class="ctlrow">
-        <Show when={defOf(props.fx, 'key')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={NOTE_NAMES} small />}</Show>
-        <Show when={defOf(props.fx, 'scale')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} small />}</Show>
-        <Show when={defOf(props.fx, 'voice')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={['Auto', 'Bas', 'Męski', 'Żeński', 'Sopran']} small />}</Show>
-        <div class="segp">
-          <span class="lab">AUTO-KEY</span>
-          <button class="smallbtn" style={{ height: '24px', padding: '0 10px' }} data-detect-key
-            title="Wykryj tonację z podkładu projektu (pomija ścieżki wchodzące na ten kanał wokalu)"
-            onClick={() => A.openMusicAnalysis({ fxId: props.fx.id })}>
-            Wykryj tonację…
-          </button>
-        </div>
+    <div class="ctlrow">
+      <Show when={defOf(props.fx, 'key')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={NOTE_NAMES} small />}</Show>
+      <Show when={defOf(props.fx, 'scale')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} small />}</Show>
+      <Show when={defOf(props.fx, 'voice')}>{p => <ParamChoice fxId={props.fx.id} p={p()} color={color} labels={['Auto', 'Bas', 'Męski', 'Żeński', 'Sopran']} small />}</Show>
+      <div class="segp">
+        <span class="lab">AUTO-KEY</span>
+        <button class="smallbtn" style={{ height: '24px', padding: '0 10px' }} data-detect-key
+          title="Wykryj tonację z podkładu projektu (pomija ścieżki wchodzące na ten kanał wokalu)"
+          onClick={() => A.openMusicAnalysis({ fxId: props.fx.id })}>
+          Wykryj tonację…
+        </button>
       </div>
-      <div class="knobs">
-        <Ctl fx={props.fx} id="retune" ends={['robot', 'natural']} />
-        <For each={['humanize', 'flex', 'vibrato']}>{id => <Ctl fx={props.fx} id={id} />}</For>
-        <div class="vline" />
-        <For each={['transpose', 'formant']}>{id => <Ctl fx={props.fx} id={id} />}</For>
-        <div style={{ flex: 1 }} /><Hint fx={props.fx} />
-      </div>
-    </>
-  );
-}
-
-function FetControls(props: { fx: Fx }) {
-  const mode = () => fetModes.get(props.fx.id);
-  const pick = (m: FetMode) => fetModes.set(props.fx.id, m);
-  return (
-    <div class="knobs">
-      <Ctl fx={props.fx} id="input" />
-      <div class="vline" />
-      <div class="stack">
-        <Ctl fx={props.fx} id="ratio" danger={4} />
-        <Segmented label="Wskaźnik" small options={['GR', 'OUT']} value={() => (mode() === 'gr' ? 0 : 1)} pick={i => pick(i ? 'out' : 'gr')} title="Co pokazuje wskaźnik: redukcję (GR) albo poziom wyjścia (VU)" />
-      </div>
-      <div class="vline" />
-      <For each={['attack', 'release', 'output', 'mix']}>{id => <Ctl fx={props.fx} id={id} />}</For>
-      <div style={{ flex: 1 }} /><Hint fx={props.fx} />
     </div>
   );
 }

@@ -455,3 +455,20 @@ select option { background: var(--bg4); color: var(--fg); }
 .fxp-ghost { position: fixed; z-index: 61; pointer-events: none; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; background: var(--bg7); border: 1px solid var(--blue); box-shadow: 0 8px 24px var(--shadow); font: 600 12px var(--sans); color: var(--fg-hi); }
 .fxp-ghost .to { font: 500 11px var(--sans); color: var(--blue); }
 .strip[data-ins], .fxchain[data-ins] { transition: box-shadow .1s; }
+
+/* ---- shared effect controls: sections + knob size tiers (FxWindow LAYOUT) */
+.fxsecs { display: flex; align-items: stretch; gap: 16px; padding: 10px 14px 12px; border-top: 1px solid var(--bg0); flex-wrap: wrap; }
+.fxsecs.slim { padding: 8px 14px; }
+.fxsecs > .hint { align-self: flex-end; max-width: 240px; line-height: 1.35; }
+.fxsec { display: flex; flex-direction: column; gap: 8px; }
+.fxsec-h { display: flex; align-items: center; gap: 6px; font: 600 9px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--fg4); white-space: nowrap; }
+.fxsec-h::before { content: ''; width: 6px; height: 6px; border-radius: 2px; background: color-mix(in srgb, var(--fxc, var(--blue)) 70%, transparent); }
+.fxsec-b { display: flex; align-items: flex-end; gap: 14px; flex: 1; }
+.knob.lg { min-width: 70px; gap: 4px; }
+.knob.lg .val { font: 600 12px var(--mono); }
+.knob.lg .lab { font-size: 10px; color: var(--fg3); }
+.knob.lg .ends { width: 86px; }
+.knob.sm { min-width: 44px; gap: 2px; }
+.knob.sm .val { font-size: 9.5px; }
+.knob.sm .lab { font-size: 8.5px; }
+.knob.sm .ends { width: 50px; }

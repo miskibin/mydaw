@@ -2,8 +2,6 @@ import { For, Show, createSignal, type JSX } from 'solid-js';
 import { clamp } from '../lib/format';
 import { dblCheck, track } from './drag';
 
-const L36 = 61.26, C36 = 81.68;
-
 export interface KnobProps {
   /** Normalised position 0..1. */
   t: () => number;
@@ -27,13 +25,24 @@ export interface KnobProps {
   automated?: () => boolean;
   /** Arc colour (defaults to the accent). */
   color?: string;
+  /** Size tier: `lg` 56 px for an effect's one or two main controls, `md` 38 px standard, `sm` 26 px trims. */
+  size?: KnobSize;
 }
 
-/** 36 px knob: drag ↕ (Shift = fine), wheel, double-click = default, right-click = menu. */
+export type KnobSize = 'lg' | 'md' | 'sm';
+const DIM: Record<KnobSize, { s: number; stroke: number; cap: number; ptr: number }> = {
+  lg: { s: 56, stroke: 4, cap: 30, ptr: 10 },
+  md: { s: 38, stroke: 3, cap: 19, ptr: 7 },
+  sm: { s: 26, stroke: 2.5, cap: 12, ptr: 5 },
+};
+
+/** Knob in three size tiers (see `KnobSize`): drag ↕ (Shift = fine), wheel, double-click = default, right-click = menu. */
 export function Knob(p: KnobProps) {
+  const d = () => DIM[p.size ?? 'md'];
+  const geo = () => { const s = d().s, r = s / 2 - d().stroke / 2 - 1.5; return { s, c: s / 2, r, L: 2 * Math.PI * r * 0.75, C: 2 * Math.PI * r }; };
   const arc = () => {
-    const t = clamp(p.t(), 0, 1), z = p.zero ? p.zero() : 0;
-    return { dash: Math.abs(t - z) * L36 + 'px ' + C36 + 'px', off: -Math.min(t, z) * L36 + 'px', angle: -135 + t * 270 };
+    const t = clamp(p.t(), 0, 1), z = p.zero ? p.zero() : 0, g = geo();
+    return { dash: Math.abs(t - z) * g.L + 'px ' + g.C + 'px', off: -Math.min(t, z) * g.L + 'px', angle: -135 + t * 270 };
   };
   const down = (e: PointerEvent) => {
     if (e.button === 2) { e.preventDefault(); e.stopPropagation(); p.onMenu?.(e.clientX, e.clientY); return; }
@@ -53,15 +62,15 @@ export function Knob(p: KnobProps) {
     p.onWheel(clamp(p.t() + (d < 0 ? 1 : -1) * 0.02 * (e.shiftKey ? 0.2 : 1), 0, 1));
   };
   return (
-    <div class="knob" classList={{ auto: !!p.automated?.() }}>
-      <div class="dial" onPointerDown={down} onWheel={wheel} onContextMenu={e => e.preventDefault()}
+    <div class={'knob ' + (p.size ?? 'md')} classList={{ auto: !!p.automated?.() }}>
+      <div class="dial" style={{ width: geo().s + 'px', height: geo().s + 'px' }} onPointerDown={down} onWheel={wheel} onContextMenu={e => e.preventDefault()}
         title={p.title ?? 'Przeciągnij ↕ · Shift = precyzyjnie · 2× klik = domyślna · PPM = automatyzacja'}>
-        <svg width="36" height="36" viewBox="0 0 36 36" style={{ position: 'absolute', inset: 0 }}>
-          <circle cx="18" cy="18" r="13" fill="none" transform="rotate(135 18 18)" style={{ stroke: 'var(--knob-track)', 'stroke-width': '3px', 'stroke-linecap': 'round', 'stroke-dasharray': '61.26px 81.68px' }} />
-          <circle cx="18" cy="18" r="13" fill="none" transform="rotate(135 18 18)" style={{ stroke: p.color ?? 'var(--blue)', 'stroke-width': '3px', 'stroke-linecap': 'round', 'stroke-dasharray': arc().dash, 'stroke-dashoffset': arc().off }} />
+        <svg width={geo().s} height={geo().s} viewBox={`0 0 ${geo().s} ${geo().s}`} style={{ position: 'absolute', inset: 0 }}>
+          <circle cx={geo().c} cy={geo().c} r={geo().r} fill="none" transform={`rotate(135 ${geo().c} ${geo().c})`} style={{ stroke: 'var(--knob-track)', 'stroke-width': d().stroke + 'px', 'stroke-linecap': 'round', 'stroke-dasharray': `${geo().L}px ${geo().C}px` }} />
+          <circle cx={geo().c} cy={geo().c} r={geo().r} fill="none" transform={`rotate(135 ${geo().c} ${geo().c})`} style={{ stroke: p.color ?? 'var(--blue)', 'stroke-width': d().stroke + 'px', 'stroke-linecap': 'round', 'stroke-dasharray': arc().dash, 'stroke-dashoffset': arc().off }} />
         </svg>
-        <div class="cap" />
-        <div class="ptr" style={{ transform: `rotate(${arc().angle}deg)` }} />
+        <div class="cap" style={{ left: (geo().s - d().cap) / 2 + 'px', top: (geo().s - d().cap) / 2 + 'px', width: d().cap + 'px', height: d().cap + 'px' }} />
+        <div class="ptr" style={{ left: geo().c - 1 + 'px', top: (geo().s - d().cap) / 2 + 'px', height: d().ptr + 'px', 'transform-origin': `1px ${d().cap / 2}px`, transform: `rotate(${arc().angle}deg)` }} />
         <Show when={p.automated?.()}><span class="autodot" title="Automatyzowany na playliście" /></Show>
       </div>
       <Show when={p.ends}>{e => <div class="ends"><span>{e()[0]}</span><span>{e()[1]}</span></div>}</Show>
