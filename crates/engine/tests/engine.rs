@@ -250,7 +250,11 @@ fn disarming_mid_take_keeps_it_and_keeps_playing() {
     e.play(0.0);
     feed(&mut rt, 0.5);
     e.stop();
-    assert_eq!(takes(&e).len(), 2, "could not record after the punch-out");
+    // (recording over the first take turns both into takes of one comp)
+    let p = e.project();
+    assert_eq!(p.comps.len(), 1, "could not record after the punch-out");
+    assert_eq!(p.comps[0].takes.len(), 2);
+    assert!(takes(&e).is_empty());
 }
 
 #[test]

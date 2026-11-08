@@ -191,6 +191,8 @@ pub enum ClipSrc {
     Pat(usize),
     Audio(Arc<Audio>),
     Auto(usize),
+    /// A comp, resolved off-thread (shared by every clip that plays it).
+    Comp(Arc<crate::comp::CompRt>),
 }
 
 /// A resolved automation target (indices into the graph built from the same project).
@@ -260,7 +262,8 @@ pub enum Cmd {
     Timeline(Box<Timeline>),
     Mix(Box<MixState>),
     Params { fx: Id, params: Option<ParamBlock>, mix: f32 },
-    Play { from: f64, count_in: f64, rec: bool },
+    /// `rec_loop`: record in passes over the loop range (one take per pass).
+    Play { from: f64, count_in: f64, rec: bool, rec_loop: bool },
     /// Stops capturing input but keeps the transport running.
     PunchOut,
     Stop,
@@ -295,9 +298,12 @@ pub struct Rt {
     click: Vec<f32>,
     tmp_l: Vec<f32>,
     tmp_r: Vec<f32>,
+    comp_l: Vec<f32>,
+    comp_r: Vec<f32>,
     playing: bool,
     beat: f64,
     rec: bool,
+    rec_loop: bool,
     rec_start: f64,
     count_end: f64,
     metro: bool,
@@ -324,9 +330,12 @@ impl Rt {
             click: vec![0.0; max_block],
             tmp_l: vec![0.0; max_block],
             tmp_r: vec![0.0; max_block],
+            comp_l: vec![0.0; max_block],
+            comp_r: vec![0.0; max_block],
             playing: false,
             beat: 0.0,
             rec: false,
+            rec_loop: false,
             rec_start: 0.0,
             count_end: f64::NEG_INFINITY,
             metro: false,
@@ -411,11 +420,12 @@ impl Rt {
                         }
                     }
                 }
-                Cmd::Play { from, count_in, rec } => {
+                Cmd::Play { from, count_in, rec, rec_loop } => {
                     self.voices.clear();
                     self.beat = from - count_in;
                     self.count_end = if count_in > 0.0 { from } else { f64::NEG_INFINITY };
                     self.rec = rec;
+                    self.rec_loop = rec && rec_loop;
                     self.rec_start = from;
                     self.playing = true;
                     self.shared.playing.store(true, Relaxed);
@@ -451,6 +461,7 @@ impl Rt {
     fn stop(&mut self, at_end: bool) {
         self.playing = false;
         self.rec = false;
+        self.rec_loop = false;
         self.shared.playing.store(false, Relaxed);
         self.shared.recording.store(false, Relaxed);
         if at_end {
@@ -501,7 +512,10 @@ impl Rt {
             while p < n && self.playing && guard < 8 {
                 guard += 1;
                 let (ls, le) = if self.rec {
-                    (0.0, crate::model::TOTAL_BEATS)
+                    match self.timeline.loop_range {
+                        Some(lr) if self.rec_loop && lr.1 > lr.0 => lr,
+                        _ => (0.0, crate::model::TOTAL_BEATS),
+                    }
                 } else {
                     self.timeline.loop_range.unwrap_or((0.0, self.timeline.song_end))
                 };
@@ -517,8 +531,10 @@ impl Rt {
                         let first = if b0 >= self.rec_start { 0 } else { (((self.rec_start - b0) / bps).ceil() as usize).min(seg) };
                         for i in p + first..(p + seg).min(il.len()) {
                             if self.record.slots() >= 2 {
-                                let _ = self.record.push(il[i]);
-                                let _ = self.record.push(ir[i]);
+                                // NaN is the pass marker (below): never let it in from the device
+                                let fin = |x: f32| if x.is_finite() { x } else { 0.0 };
+                                let _ = self.record.push(fin(il[i]));
+                                let _ = self.record.push(fin(ir[i]));
                             }
                         }
                     }
@@ -526,10 +542,15 @@ impl Rt {
                 self.beat = b1;
                 p += seg;
                 if self.beat >= le - 1e-9 {
-                    if self.rec {
+                    if self.rec && !self.rec_loop {
                         self.stop(true);
                     } else {
                         self.beat = ls;
+                        // loop recording: a NaN frame tells the engine a new pass (take) begins
+                        if self.rec && self.rec_start.is_finite() && self.record.slots() >= 2 {
+                            let _ = self.record.push(f32::NAN);
+                            let _ = self.record.push(f32::NAN);
+                        }
                     }
                 }
             }
@@ -698,6 +719,44 @@ impl Rt {
                     }
                 }
                 ClipSrc::Auto(_) => {}
+                ClipSrc::Comp(cp) => {
+                    let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else { continue };
+                    // samples of this block inside the clip
+                    // (same per-sample test as audio clips: start ≤ beat < end)
+                    let mut i0 = (((c.start - b0) / bps).ceil().max(0.0) as usize).min(n);
+                    let mut i1 = (((c.end - b0) / bps).ceil().max(0.0) as usize).min(n);
+                    while i1 > i0 && b0 + (i1 - 1) as f64 * bps >= c.end {
+                        i1 -= 1;
+                    }
+                    while i0 < i1 && b0 + i0 as f64 * bps < c.start {
+                        i0 += 1;
+                    }
+                    if i1 <= i0 {
+                        continue;
+                    }
+                    let m = i1 - i0;
+                    let (bl, br) = (&mut self.comp_l[..m], &mut self.comp_r[..m]);
+                    bl.fill(0.0);
+                    br.fill(0.0);
+                    let bt0 = b0 + i0 as f64 * bps;
+                    cp.render_add(c.offset + bt0 - c.start, bps, bl, br, spb);
+                    let dur = (c.end - c.start) * spb;
+                    let g = 10f32.powf(c.gain / 20.0);
+                    let (pl, pr) = (if c.pan > 0.0 { 1.0 - c.pan } else { 1.0 }, if c.pan < 0.0 { 1.0 + c.pan } else { 1.0 });
+                    for k in 0..m {
+                        let t = (bt0 + k as f64 * bps - c.start) * spb;
+                        let mut env = g;
+                        if c.fade_in > 0.0 && t < c.fade_in as f64 {
+                            env *= (t / c.fade_in as f64).max(0.0) as f32;
+                        }
+                        let left = dur - t;
+                        if c.fade_out > 0.0 && left < c.fade_out as f64 {
+                            env *= (left / c.fade_out as f64).max(0.0) as f32;
+                        }
+                        tl_l[at + i0 + k] += bl[k] * env * pl;
+                        tl_r[at + i0 + k] += br[k] * env * pr;
+                    }
+                }
                 ClipSrc::Audio(a) => {
                     let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else { continue };
                     let dur = (c.end - c.start) * spb;

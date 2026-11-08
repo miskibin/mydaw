@@ -2,6 +2,7 @@
 // The real engine is the source of truth; this only has to agree on the happy path and
 // reject the same obviously-invalid batches.
 import { MAX_BANDS, type Id, type Op, type Project } from '../api/types';
+import { applyCompOp } from './comp';
 
 export class OpError extends Error {}
 
@@ -13,7 +14,7 @@ export function applyOp(p: Project, op: Op): void {
       for (const c of op.clips) {
         if (!(c.len > 0) || c.start < 0 || !isFinite(c.start) || !isFinite(c.len)) throw new OpError(`clip ${c.id} has an invalid range`);
         if (c.track >= p.tracks.length || c.track < 0) throw new OpError(`clip ${c.id} is on track ${c.track} which does not exist`);
-        const known = c.kind === 'pat' ? p.patterns.some(x => x.id === c.ref) : c.kind === 'auto' ? (p.automations ?? []).some(x => x.id === c.ref) : p.sources.some(x => x.id === c.ref);
+        const known = c.kind === 'pat' ? p.patterns.some(x => x.id === c.ref) : c.kind === 'auto' ? (p.automations ?? []).some(x => x.id === c.ref) : c.kind === 'comp' ? (p.comps ?? []).some(x => x.id === c.ref) : p.sources.some(x => x.id === c.ref);
         if (!known) throw new OpError(`no clip source with id ${c.ref}`);
       }
       for (const c of op.clips) {
@@ -110,6 +111,11 @@ export function applyOp(p: Project, op: Op): void {
     case 'removeSource':
       p.sources = p.sources.filter(s => s.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'audio' && c.ref === op.id));
+      applyCompOp(p, op);
+      return;
+    case 'putComp':
+    case 'removeComp':
+      try { applyCompOp(p, op); } catch (e) { throw new OpError((e as Error).message); }
       return;
     case 'setBpm':
       if (!(op.bpm >= 20 && op.bpm <= 999)) throw new OpError('bpm must be 20..999');

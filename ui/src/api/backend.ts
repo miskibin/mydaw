@@ -40,6 +40,10 @@ export interface Backend {
   /** Tempo (BPM) and musical key of an audio clip, or key/tempo of the project's active audio clips (excluding `excludeFx`'s insert). */
   musicAnalyze(args?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
+  /** Renders a comp clip to a new source; the clip becomes an ordinary audio clip (one undo step). */
+  flattenComp(clipId: Id): Promise<{ sourceId: Id }>;
+  /** Plays one whole take instead of the comp (null = back to the comp). Live only, not undone. */
+  compAudition(compId: Id, takeId: Id | null): Promise<void>;
   previewClip(clipId: Id): Promise<void>;
   previewFile(path: string): Promise<void>;
   previewStop(): Promise<void>;
@@ -139,6 +143,8 @@ export function tauriBackend(): Backend {
     pitchAnalyze: clipId => invoke('pitch_analyze', { clipId }),
     musicAnalyze: a => invoke('music_analyze', { clipId: a?.clipId ?? null, excludeFx: a?.excludeFx ?? null }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
+    flattenComp: clipId => invoke('flatten_comp', { clipId }),
+    compAudition: (compId, takeId) => invoke('comp_audition', { compId, takeId }),
     previewClip: clipId => invoke('preview_clip', { clipId }),
     previewFile: path => invoke('preview_file', { path }),
     previewStop: () => invoke('preview_stop'),

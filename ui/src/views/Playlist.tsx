@@ -1,6 +1,9 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
-import { VOL_UNITY, type Clip, type Id, type Op, type Track } from '../api/types';
+import { VOL_UNITY, type Clip, type Comp, type Id, type Op, type Take, type Track } from '../api/types';
+import { boundaries, boundaryXfade, moveBoundary, setBoundaryXfade, takeEnd, toComp, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
+import * as CA from '../state/comp';
+import { compById, LANE_H, takeRow, type TakeRow } from '../state/comp';
 import { clampMove, moveClips, resizeClip, TOTAL } from '../lib/clipOps';
 import { clamp, fmtPos, volText } from '../lib/format';
 import { snapFloor, snapRes, snapRound } from '../lib/snap';
@@ -51,7 +54,10 @@ export function dropClipAt(clientX: number, clientY: number, kind: Clip['kind'],
   return true;
 }
 
-interface Hit { c: Clip; edge: 'l' | 'r' | 'fi' | 'fo' | null }
+/** `cb`: a comp region boundary (`bnd` = its index in `boundaries(comp.regions)`). */
+interface Hit { c: Clip; edge: 'l' | 'r' | 'fi' | 'fo' | 'cb' | null; bnd?: number }
+/** A take lane under a track. `cb` = comp beat under the pointer. */
+interface LaneHit extends TakeRow { ti: number; k: number; take: Take; cb: number }
 
 export function Playlist() {
   let scrollEl!: HTMLDivElement, gridEl!: HTMLDivElement, gridCv!: HTMLCanvasElement, rulerCv!: HTMLCanvasElement;
@@ -59,7 +65,14 @@ export function Playlist() {
   const [vw, setVw] = createSignal(800), [vh, setVh] = createSignal(400);
   const [scroll, setScroll] = createSignal({ x: 0, y: 0 });
 
-  const tops = createMemo(() => { const t: number[] = []; let y = 0; for (const tr of S.project.tracks) { t.push(y); y += tr.h; } t.push(y); return t; });
+  /** per track: the comp whose take lanes are open below it */
+  const rows = createMemo(() => S.project.tracks.map((_, i) => takeRow(i)));
+  const tops = createMemo(() => {
+    const t: number[] = [], rs = rows(); let y = 0;
+    S.project.tracks.forEach((tr, i) => { t.push(y); y += tr.h + (rs[i]?.comp.takes.length ?? 0) * LANE_H; });
+    t.push(y); return t;
+  });
+  const [bndHover, setBndHover] = createSignal<{ clipId: Id; i: number } | null>(null);
   createEffect(() => { geom.tops = tops(); });
   const gridW = () => TOTAL * U.bw;
   const gridH = () => tops()[tops().length - 1];
@@ -78,6 +91,11 @@ export function Playlist() {
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
   createEffect(() => { for (const c of S.project.clips) { c.start; c.len; c.track; c.offset; c.muted; c.gain; c.ref; c.kind; c.norm; c.rev; c.tune; } dirtyGrid = true; });
   createEffect(() => { for (const c of S.project.clips) { c.fadeIn; c.fadeOut; } dirtyFade = true; });
+  createEffect(() => {
+    for (const cp of S.project.comps ?? []) { cp.name; cp.xfade; for (const t of cp.takes) { t.name; t.start; t.len; t.ref; t.offset; } for (const r of cp.regions) { r.take; r.from; r.to; r.xfade; } }
+    for (const k in S.audition) void S.audition[k];
+    U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
+  });
   createEffect(() => { for (const a of S.project.automations ?? []) { a.color; a.name; for (const q of a.points) { q.t; q.v; } } U.autoEdit; autoHover(); dirtyGrid = true; });
   createEffect(() => {
     for (const p of S.project.patterns) { p.name; p.color; p.len; for (const n of p.notes) { n.step; n.len; n.p; } }
@@ -99,7 +117,8 @@ export function Playlist() {
     if (fontEpoch !== fonts.epoch || themeEpoch !== theme.epoch) { fontEpoch = fonts.epoch; themeEpoch = theme.epoch; dirtyGrid = dirtyRuler = true; }
     if (dirtyGrid || dirtyFade) {
       const W = cw(), H = ch(), o = offsets();
-      const v: View = { offX: o.x, offY: o.y, W, H, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, autoEdit: U.autoEdit, autoHover: autoHover() };
+      const v: View = { offX: o.x, offY: o.y, W, H, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, autoEdit: U.autoEdit, autoHover: autoHover(),
+        rows: rows().map(r => r && { clip: unwrap(r.clip), comp: unwrap(r.comp) }), laneH: LANE_H, audition: { ...S.audition }, compSel: U.compSel ? { ...U.compSel } : null, bndHover: bndHover() };
       if (dirtyGrid) {
         fitCanvas(base, W, H);
         const b = base.getContext('2d')!;
@@ -174,10 +193,20 @@ export function Playlist() {
       const cx = c.start * bw, cwid = Math.max(3, c.len * bw - 1), cy = t[ti] + 1;
       if (x < cx || x > cx + cwid || y < cy || y > cy + tr.h - 2) continue;
       let edge: Hit['edge'] = null;
-      if (c.kind === 'audio' && editable() && cwid > 36 && y - cy >= 15 && y - cy <= 25) {
+      if ((c.kind === 'audio' || c.kind === 'comp') && editable() && cwid > 36 && y - cy >= 15 && y - cy <= 25) {
         const fi = cx + c.fadeIn / spb * bw, fo = cx + cwid - c.fadeOut / spb * bw;
         if (x >= fi - 1 && x <= fi + 8) edge = 'fi';
         else if (x >= fo - 8 && x <= fo + 1) edge = 'fo';
+      }
+      if (!edge && c.kind === 'comp' && editable() && y - cy >= 15) {
+        const cp = compById(c.ref);
+        if (cp && S.audition[cp.id] == null) {
+          const bs = boundaries(cp.regions);
+          for (let i = 0; i < bs.length; i++) {
+            const bx = toTimeline(c, bs[i].at) * bw;
+            if (Math.abs(x - bx) <= 4 && bx > cx + 3 && bx < cx + cwid - 3) return { c, edge: 'cb', bnd: i };
+          }
+        }
       }
       if (!edge) edge = x - cx < 6 ? 'l' : cx + cwid - x < 6 ? 'r' : null;
       return { c, edge };
@@ -185,9 +214,23 @@ export function Playlist() {
     return null;
   }
 
+  /** The take lane under a grid point, if any. */
+  function laneHit(x: number, y: number): LaneHit | null {
+    const ti = trackAtY(y); if (ti < 0) return null;
+    const row = rows()[ti]; if (!row) return null;
+    const dy = y - tops()[ti] - S.project.tracks[ti].h; if (dy < 0) return null;
+    const k = Math.floor(dy / LANE_H), take = row.comp.takes[k]; if (!take) return null;
+    return { ...row, ti, k, take, cb: toComp(row.clip, x / U.bw) };
+  }
   const hover = (e: PointerEvent) => {
     if (e.buttons) return;
-    const p = pt(e), h = hit(p.x, p.y);
+    const p = pt(e), L = laneHit(p.x, p.y), h = L ? null : hit(p.x, p.y);
+    if (L) { CA.compHover.clipId = L.clip.id; CA.compHover.cb = L.cb; }
+    else if (h?.c.kind === 'comp') { CA.compHover.clipId = h.c.id; CA.compHover.cb = toComp(h.c, p.beat); }
+    else CA.compHover.clipId = null;
+    const bh = h?.edge === 'cb' ? { clipId: h.c.id, i: h.bnd! } : null, cur0 = bndHover();
+    if ((bh?.clipId ?? -1) !== (cur0?.clipId ?? -1) || (bh?.i ?? -1) !== (cur0?.i ?? -1)) setBndHover(bh);
+    if (L) { const c = editable() ? 'text' : toolCursor(); if (gridCv.style.cursor !== c) gridCv.style.cursor = c; return; }
     if (U.autoEdit != null && h && h.c.id === U.autoEdit && p.y > tops()[h.c.track] + 16) {
       const i = envHit(h.c, p.x, p.y);
       if (i !== autoHover()) setAutoHover(i < 0 ? null : i);
@@ -197,7 +240,7 @@ export function Playlist() {
     if (autoHover() != null) setAutoHover(null);
     let cur = toolCursor();
     if (h) {
-      if (h.edge === 'fi' || h.edge === 'fo') cur = 'col-resize';
+      if (h.edge === 'fi' || h.edge === 'fo' || h.edge === 'cb') cur = 'col-resize';
       else if (h.edge) cur = editable() ? 'ew-resize' : toolCursor();
       else cur = editable() ? 'grab' : toolCursor();
     }
@@ -212,6 +255,14 @@ export function Playlist() {
       if (h && h.c.id === U.autoEdit && (e.button === 0 || e.button === 2) && envDown(e, h.c, p.x, p.y)) return;
       if (!h || h.c.id !== U.autoEdit) setU('autoEdit', null);
     }
+    const L = laneHit(p.x, p.y);
+    if (L) {
+      e.preventDefault(); closeMenu();
+      if (e.button === 2) { const sx = e.clientX, sy = e.clientY; track(() => {}, () => openTakeMenu(sx, sy, L, L.take)); return; }
+      if (e.button === 0) return swipeDrag(e, L);
+      return;
+    }
+    if (U.compSel && e.button === 0) setU('compSel', null);
     if (e.button === 2) return rightDown(e, h, p);
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
@@ -224,8 +275,9 @@ export function Playlist() {
     if (h) {
       const clip = h.c;
       if (modK) { setU('sel', U.sel.includes(clip.id) ? U.sel.filter(x => x !== clip.id) : [...U.sel, clip.id]); return; }
-      setU('cur', { kind: clip.kind, ref: clip.ref });
+      if (clip.kind !== 'comp') setU('cur', { kind: clip.kind, ref: clip.ref });
       if (h.edge === 'fi' || h.edge === 'fo') return fadeDrag(e, clip, h.edge);
+      if (h.edge === 'cb') return boundaryDrag(e, clip, h.bnd!);
       if (h.edge === 'l' || h.edge === 'r') return resizeDrag(e, clip, h.edge);
       return moveDrag(e, clip, e.shiftKey);
     }
@@ -275,7 +327,7 @@ export function Playlist() {
   function resizeDrag(e: PointerEvent, clip: Clip, edge: 'l' | 'r') {
     const g = new Gesture('Zmień długość klipu');
     const o = plain(clip), sx = e.clientX;
-    const srcLen = o.kind === 'audio' ? srcLenBeats('audio', o.ref) : Infinity;
+    const srcLen = o.kind === 'audio' || o.kind === 'comp' ? srcLenBeats(o.kind, o.ref) : Infinity;
     const minL = Math.max(1 / 16, snapRes(U.snap, U.bw) || 1 / 16);
     track(ev => {
       const raw = (ev.clientX - sx) / U.bw;
@@ -358,12 +410,14 @@ export function Playlist() {
       if (g) { const q = pt(ev); del(hit(q.x, q.y)?.c.id); }
     }, () => {
       if (g) { g.end(); return; }
-      if (h) openClipMenu(sx, sy, h.c, p); else openGridMenu(sx, sy, p);
+      if (h?.edge === 'cb') openBoundaryMenu(sx, sy, h.c, h.bnd!);
+      else if (h) openClipMenu(sx, sy, h.c, p); else openGridMenu(sx, sy, p);
     });
   }
 
   const gridDbl = (e: MouseEvent) => {
     const p = pt(e), h = hit(p.x, p.y); if (!h) return;
+    if (h.c.kind === 'comp') { if (!U.sel.includes(h.c.id)) setU('sel', [h.c.id]); CA.toggleTakes(h.c.track); return; }
     if (h.c.kind === 'auto') { setU({ autoEdit: h.c.id, sel: [h.c.id] }); say('Edycja automatyzacji: klik = punkt · przeciągnij = przesuń · PPM = usuń · Esc = koniec'); return; }
     setU('cur', { kind: h.c.kind, ref: h.c.ref });
     if (h.c.kind === 'audio') A.openEditor(h.c.id);
@@ -413,8 +467,57 @@ export function Playlist() {
   };
 
   // ---------- menus ----------
+  // ---------- swipe comping ----------
+  /** Dragging across a take lane writes that range of the take into the comp. */
+  function swipeDrag(e: PointerEvent, L: LaneHit) {
+    const clip = plain(L.clip), comp = plain(L.comp), take = plain(L.take);
+    const lo = Math.max(take.start, clip.offset), hi = Math.min(takeEnd(take), clip.offset + clip.len);
+    if (hi <= lo) { say(take.name + ' leży poza oknem klipu — wydłuż klip, aby go usłyszeć'); return; }
+    const at = (ev: PointerEvent) => clamp(toComp(clip, snapRound(pt(ev).beat, unit(ev.altKey))), lo, hi);
+    const a = at(e), sx = e.clientX;
+    let g: Gesture | null = null;
+    track(ev => {
+      if (!g && Math.abs(ev.clientX - sx) < 3) return;
+      const b = at(ev), from = Math.min(a, b), to = Math.max(a, b);
+      if (to - from < 1e-6) return;
+      if (!g) g = new Gesture('Comping');
+      g.update([{ op: 'putComp', comp: { ...comp, regions: writeRange(comp, take.id, from, to) } }]);
+      setU('compSel', { clipId: clip.id, from, to });
+      say(take.name + ' · ' + fmtPos(toTimeline(clip, from)) + ' – ' + fmtPos(toTimeline(clip, to)) + ' · Ctrl+↑/↓ = inny take');
+    }, () => {
+      if (g) { g.end(); return; }
+      setU('compSel', null);
+      say('Przeciągnij po take\'u, aby wpisać ten fragment do compu · klik w nazwę = cały take');
+    }, 'text');
+  }
+  function boundaryDrag(e: PointerEvent, clip: Clip, i: number) {
+    const cp = compById(clip.ref); if (!cp) return;
+    const comp = plain(cp), c = plain(clip), b = boundaries(comp.regions)[i]; if (!b) return;
+    const g = new Gesture('Granica compu'), sx = e.clientX;
+    track(ev => {
+      if (Math.abs(ev.clientX - sx) < 2) return;
+      const cb = toComp(c, snapRound(pt(ev).beat, unit(ev.altKey)));
+      const regions = moveBoundary(comp, b, cb, 1 / 32);
+      g.update([{ op: 'putComp', comp: { ...comp, regions } }]);
+      const r = b.left >= 0 ? regions[b.left].to : regions[b.right].from;
+      say('Granica compu → ' + fmtPos(toTimeline(c, r)));
+    }, () => g.end(), 'col-resize');
+  }
+  function openBoundaryMenu(x: number, y: number, clip: Clip, i: number) {
+    const comp = compById(clip.ref); if (!comp) return;
+    const b = boundaries(comp.regions)[i]; if (!b) return;
+    const cur = boundaryXfade(comp, b), own = (b.right >= 0 ? comp.regions[b.right] : comp.regions[b.left])?.xfade;
+    const set = (v: number | null, label: string) => { CA.putComp({ ...plain(comp), regions: setBoundaryXfade(comp, b, v) }, 'Crossfade granicy'); say(label); };
+    openMenu(x, y, [
+      { t: 'title', label: 'Granica ' + fmtPos(toTimeline(clip, b.at)) + ' · crossfade ' + Math.round(cur * 1000) + ' ms' },
+      { t: 'chips', label: 'Crossfade', options: XF.map(v => v * 1000 + ' ms'), active: XF.findIndex(v => Math.abs(v - cur) < 1e-6), pick: k => set(XF[k], 'Crossfade granicy: ' + XF[k] * 1000 + ' ms') },
+      { t: 'item', label: 'Domyślny compu (' + Math.round(comp.xfade * 1000) + ' ms)', disabled: own == null, act: () => set(null, 'Crossfade granicy: domyślny') },
+    ], 130);
+  }
+
   function openClipMenu(x: number, y: number, c: Clip, p: { beat: number }) {
     if (!U.sel.includes(c.id)) setU('sel', [c.id]);
+    if (c.kind === 'comp') return openCompMenu(x, y, c, p);
     const src = srcOf(c), isPat = c.kind === 'pat';
     if (c.kind === 'auto') {
       const a = autoById(c.ref);
@@ -437,7 +540,7 @@ export function Playlist() {
     const items: MenuItem[] = [
       { t: 'title', label: (isPat ? 'Pattern · ' : 'Audio · ') + (src?.name ?? '') },
       { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, src?.name ?? '', v => A.setSrcProp(c, { name: v })) },
-      { t: 'swatches', current: src?.color, pick: col => A.setSrcProp(c, { color: col }) },
+      { t: 'swatches', current: (src as { color?: string } | undefined)?.color, pick: col => A.setSrcProp(c, { color: col }) },
       { t: 'sep' },
       { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: A.toggleMuteSel },
       { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: A.duplicate },
@@ -456,6 +559,32 @@ export function Playlist() {
     ];
     openMenu(x, y, items, 420);
   }
+  function openCompMenu(x: number, y: number, c: Clip, p: { beat: number }) {
+    const comp = compById(c.ref); if (!comp) return;
+    const tr = S.project.tracks[c.track], open = !!(tr && U.takesOpen[tr.id]);
+    const aud = S.audition[comp.id], unused = unusedTakes(comp).length;
+    openMenu(x, y, [
+      { t: 'title', label: comp.name + ' · ' + CA.takesLabel(comp.takes.length) },
+      { t: 'item', label: open ? 'Ukryj take\'i' : 'Pokaż take\'i', kbd: '2× klik', act: () => CA.toggleTakes(c.track) },
+      ...(aud != null ? [{ t: 'item', label: 'Zakończ odsłuch solo', act: () => CA.audition(comp.id, null) } as MenuItem] : []),
+      { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, comp.name, v => CA.renameComp(comp, v)) },
+      { t: 'chips', label: 'Crossfade', options: XF.map(v => v * 1000 + ' ms'), active: XF.findIndex(v => Math.abs(v - comp.xfade) < 1e-6), pick: k => CA.setXfade(comp, XF[k]) },
+      { t: 'sep' },
+      { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: A.toggleMuteSel },
+      { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: A.duplicate, title: 'Kopia gra ten sam comp (edycja compu zmienia obie)' },
+      { t: 'item', label: 'Kopiuj', kbd: 'Ctrl+C', act: A.copy },
+      { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: A.cut },
+      { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
+      { t: 'gain', clipId: c.id },
+      { t: 'item', label: 'Kanał miksera…', act: () => openRouteMenu(c.track, x, y) },
+      { t: 'sep' },
+      { t: 'item', label: 'Usuń nieużyte take\'i' + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
+      { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(c.id) },
+      { t: 'sep' },
+      { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
+    ], 470);
+  }
+
   function openGridMenu(x: number, y: number, p: { beat: number; track: number }) {
     const at = { beat: snapFloor(p.beat, unit(false)), track: clamp(p.track, 0, S.project.tracks.length - 1) };
     openMenu(x, y, [
@@ -512,7 +641,7 @@ export function Playlist() {
           </div>
           <div style={{ display: 'flex' }}>
             <div class="lanesCol" style={{ width: U.headW + 'px' }}>
-              <For each={S.project.tracks}>{(t, i) => <LaneHeader t={t} i={i()} />}</For>
+              <For each={S.project.tracks}>{(t, i) => <><LaneHeader t={t} i={i()} /><TakeHeaders i={i()} /></>}</For>
               <button class="addTrack" onClick={A.addTrack}>+ Dodaj ścieżkę</button>
               <div class="hsplit" onPointerDown={headSplit} title="Przeciągnij = szerokość nagłówków" />
             </div>
@@ -555,6 +684,10 @@ function openLaneMenu(x: number, y: number, i: number) {
     { t: 'item', label: t.solo ? 'Wyłącz solo' : 'Solo', act: () => A.toggleTrackSolo(i) },
     { t: 'item', label: t.arm ? 'Rozbrój nagrywanie' : 'Uzbrój do nagrywania', act: () => A.armTrack(i) },
     { t: 'item', label: 'Zaznacz klipy ścieżki', act: () => setU('sel', S.project.clips.filter(c => c.track === i).map(c => c.id)) },
+    ...(CA.activeComp(i) ? [
+      { t: 'item', label: U.takesOpen[t.id] ? 'Ukryj take\'i' : 'Pokaż take\'i', kbd: CA.takesLabel(CA.activeComp(i)!.comp.takes.length), act: () => CA.toggleTakes(i) } as MenuItem,
+      { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(CA.activeComp(i)!.clip.id) } as MenuItem,
+    ] : []),
     { t: 'item', label: 'Wysokość: domyślna', act: () => A.setTrack(i, { h: 56 }, 'Wysokość') },
     { t: 'sep' },
     { t: 'item', label: 'Wstaw ścieżkę powyżej', act: () => A.insertTrack(i) },
@@ -609,6 +742,12 @@ function LaneHeader(props: { t: Track; i: number }) {
           <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę"
             onDblClick={e => openRename(e.clientX, e.clientY, t().name, v => A.setTrack(props.i, { name: v }, 'Nazwa ścieżki'))}>{t().name}</span>
           <div class="row" style={{ gap: '2px', flex: 'none' }}>
+            <Show when={CA.activeComp(props.i)}>{r => (
+              <button class="mini tk" classList={{ on: !!U.takesOpen[t().id] }} onPointerDown={stop} onClick={() => CA.toggleTakes(props.i)}
+                title={'Take\'i (' + CA.takesLabel(r().comp.takes.length) + ') — pokaż/ukryj linie take\'ów'}>
+                <svg width="7" height="7" viewBox="0 0 8 8" style={{ transform: U.takesOpen[t().id] ? 'rotate(90deg)' : 'none' }}><path d="M2 1l4 3-4 3z" fill="currentColor" /></svg>{r().comp.takes.length}
+              </button>
+            )}</Show>
             <button class="mini route" title="Kanał miksera" onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? '→M' : '→' + routeIdx()}</button>
             <button class="mini m" classList={{ on: t().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
             <button class="mini s" classList={{ on: t().solo }} title="Solo (wyłącza mute)" onPointerDown={stop} onClick={() => A.toggleTrackSolo(props.i)}>S</button>
@@ -631,5 +770,68 @@ function LaneHeader(props: { t: Track; i: number }) {
       </div>
       <div class="lresize" onPointerDown={resize} title="Przeciągnij = wysokość ścieżki" />
     </div>
+  );
+}
+
+// ---------- take lanes ----------
+/** Crossfade choices at a comp boundary, seconds. */
+const XF = [0.005, 0.01, 0.02, 0.05];
+
+function openTakeMenu(x: number, y: number, row: TakeRow, take: Take) {
+  const comp = row.comp, used = usedBeats(comp, take.id), aud = S.audition[comp.id] === take.id, unused = unusedTakes(comp).length;
+  openMenu(x, y, [
+    { t: 'title', label: 'Take · ' + take.name + (used > 0 ? ' · w compie' : ' · nieużyty') },
+    { t: 'item', label: 'Użyj całego take\'a', kbd: 'klik w nazwę', act: () => CA.useWholeTake(row, take) },
+    { t: 'item', label: aud ? 'Zakończ odsłuch solo' : 'Odsłuchaj solo', kbd: '▶', act: () => CA.audition(comp.id, aud ? null : take.id) },
+    { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, take.name, v => CA.renameTake(comp, take.id, v)) },
+    { t: 'sep' },
+    { t: 'item', label: 'Usuń take', danger: true, act: () => askDeleteTake(x, y, comp, take) },
+    { t: 'item', label: 'Usuń nieużyte take\'i' + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
+    { t: 'sep' },
+    { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(row.clip.id) },
+  ], 290);
+}
+
+/** Deleting a take the comp plays asks first (its regions go silent). */
+function askDeleteTake(x: number, y: number, comp: Comp, take: Take) {
+  const used = usedBeats(comp, take.id);
+  if (used <= 0) return CA.deleteTake(comp, take.id);
+  openMenu(x, y, [
+    { t: 'title', label: take.name + ' gra w compie (' + (Math.round(used * 100) / 100) + ' beat)' },
+    { t: 'item', label: 'Usuń take i jego fragmenty compu', danger: true, act: () => CA.deleteTake(comp, take.id) },
+    { t: 'item', label: 'Anuluj', act: () => {} },
+  ], 110);
+}
+
+/** Lane headers of the takes under track `i` (when expanded). */
+function TakeHeaders(props: { i: number }) {
+  const row = () => takeRow(props.i);
+  const t = () => S.project.tracks[props.i];
+  const stop = (e: Event) => e.stopPropagation();
+  return (
+    <Show when={row()}>{r => (
+      <div class="takes" style={{ '--tc': t()?.color ?? 'var(--fg5)' }}>
+        <For each={r().comp.takes}>{take => {
+          const used = () => usedBeats(r().comp, take.id);
+          const pct = () => Math.round(used() / Math.max(1e-9, take.len) * 100);
+          const aud = () => S.audition[r().comp.id] === take.id;
+          return (
+            <div class="takeLane" classList={{ used: used() > 0, aud: aud() }} style={{ height: LANE_H + 'px' }}
+              title="Klik = cały take do compu · przeciągnij po take'u w siatce = fragment · PPM = menu"
+              onPointerDown={e => { stop(e); if (e.button === 2) { e.preventDefault(); openTakeMenu(e.clientX, e.clientY, r(), take); } else if (e.button === 0) CA.useWholeTake(r(), take); }}
+              onContextMenu={e => e.preventDefault()}>
+              <span class="tkbar" />
+              <span class="tknm">{take.name}</span>
+              <span class="tkuse" title="Ile tego take'a gra w compie">{used() > 0 ? pct() + '%' : '—'}</span>
+              <button class="mini tka" classList={{ on: aud() }} title={aud() ? 'Zakończ odsłuch solo' : 'Odsłuch solo: ten take zamiast compu'}
+                onPointerDown={stop} onClick={() => CA.audition(r().comp.id, aud() ? null : take.id)}>
+                <svg width="7" height="7" viewBox="0 0 8 8"><path d="M1.5 0.5l6 3.5-6 3.5z" fill="currentColor" /></svg>
+              </button>
+              <button class="xbtn" title="Usuń take" onPointerDown={stop} onClick={e => askDeleteTake(e.clientX, e.clientY, r().comp, take)}>×</button>
+            </div>
+          );
+        }}</For>
+      </div>
+    )}</Show>
   );
 }

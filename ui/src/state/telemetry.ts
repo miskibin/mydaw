@@ -12,6 +12,8 @@ export const teleClock = { frames: 0, lastAt: 0 };
 export const recState = {
   active: false, track: 0, clipStart: 0, seconds: 0,
   peaks: new Float32Array(4096), nPeaks: 0, version: 0,
+  /** Loop recording: passes started so far (0 = first pass); each pass becomes a take. */
+  pass: 0,
 };
 
 /** Per-effect frame listeners: called for every decoded analysis frame (bursts included), not once per animation frame. */
@@ -34,7 +36,10 @@ function onFrame() {
   const r = f.rec;
   if (r) {
     if (!recState.active || r.clipStart !== recState.clipStart || r.track !== recState.track) {
-      recState.active = true; recState.nPeaks = 0; recState.track = r.track; recState.clipStart = r.clipStart;
+      recState.active = true; recState.nPeaks = 0; recState.track = r.track; recState.clipStart = r.clipStart; recState.pass = 0;
+    } else if (r.peakOffset === 0 && recState.nPeaks > 0) {
+      // loop recording wrapped: the engine restarts the live clip for the next pass (take)
+      recState.nPeaks = 0; recState.pass++;
     }
     recState.seconds = r.seconds;
     const need = (r.peakOffset + r.nPeaks) * 2;

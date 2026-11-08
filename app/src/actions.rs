@@ -182,6 +182,7 @@ pub fn context(app: &App, full: bool) -> Value {
             "index": i, "id": t.id, "name": t.name, "insert": t.insert, "volume": db(t.vol),
             "muted": t.muted, "solo": t.solo, "armed": t.arm,
             "clips": p.clips.iter().filter(|c| c.track as usize == i).count(),
+            "takes": p.clips.iter().filter(|c| c.track as usize == i && c.kind == wave_engine::ClipKind::Comp).filter_map(|c| p.comp(c.source)).map(|cp| cp.takes.len()).sum::<usize>(),
         })).collect::<Vec<_>>(),
         "inserts": p.inserts.iter().map(|m| json!({
             "id": m.id, "name": m.name, "volume": db(m.vol), "pan": m.pan, "muted": m.muted, "solo": m.solo,
@@ -204,7 +205,7 @@ pub fn schema() -> Value {
         "units": "time in beats (quarter notes); pattern note step/len in sixteenths; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
         "ids": "take new ids from context.nextId and count up",
         "ops": {
-            "putClips": {"clips": [{"id": 0, "track": 0, "start": 0, "len": 4, "offset": 0, "kind": "pat|audio", "ref": "pattern or source id", "muted": false, "gain": 0, "fadeIn": 0, "fadeOut": 0, "pan": 0, "norm": false, "rev": false}]},
+            "putClips": {"clips": [{"id": 0, "track": 0, "start": 0, "len": 4, "offset": 0, "kind": "pat|audio|auto|comp", "ref": "pattern, source, automation or comp id", "muted": false, "gain": 0, "fadeIn": 0, "fadeOut": 0, "pan": 0, "norm": false, "rev": false}]},
             "removeClips": {"ids": [0]},
             "putTrack": {"track": {"id": 0, "name": "", "color": "#4f8ef7", "muted": false, "solo": false, "arm": false, "vol": 0.7937, "h": 56, "insert": 1}},
             "putInsert": {"insert": {"id": 0, "name": "", "color": "#8b93a1", "vol": 0.7937, "pan": 0, "muted": false, "solo": false, "fx": []}},
@@ -219,7 +220,10 @@ pub fn schema() -> Value {
             "setLoop": {"loop": {"a": 0, "b": 16}},
             "putAutomation": {"automation": {"id": 0, "name": "Reverb mix", "color": "#e0a44a", "target": {"kind": "fx|mix|insertVol|insertPan|trackVol", "fxId": 0, "param": "mix or band:<i>:f|g|q", "id": "insert/track id for vol/pan"}, "points": [{"t": 0, "v": 0.2}, {"t": 8, "v": 0.8}]}},
             "removeAutomation": {"id": 0},
+            "putComp": {"comp": {"id": 0, "name": "Comp 1", "xfade": 0.01, "takes": [{"id": 0, "name": "Take 1", "ref": "source id", "start": 0, "len": 8, "offset": 0}], "regions": [{"take": 0, "from": 0, "to": 4, "xfade": 0.02}]}},
+            "removeComp": {"id": 0},
         },
+        "comps": "take lanes: a clip of kind `comp` plays comp `ref`; takes/regions are in comp beats (comp beat = clip.offset + timeline beat − clip.start); regions sorted, non-overlapping, gaps are silent; xfade in seconds (equal-power crossfade centred on each region start, default 0.01). Easier: `wave takes --track N`, `wave comp --track N --set '[{\"take\":ID,\"from\":B,\"to\":B}]'` (timeline beats)",
         "example": [{"op": "setBpm", "bpm": 140}, {"op": "removeClips", "ids": [3]}],
     })
 }
@@ -235,6 +239,118 @@ pub fn import(app: &App, a: &Value) -> R<Value> {
     Ok(json!({ "sourceIds": s, "clipIds": c }))
 }
 
+// ---------------------------------------------------------------- takes & comps
+
+/// The comp clip a takes/comp command means: `clip` if given, else the only one on `track`.
+fn comp_clip(p: &wave_engine::Project, a: &Value) -> R<wave_engine::Clip> {
+    use wave_engine::ClipKind;
+    if let Some(id) = arg(a, "clip").and_then(as_index) {
+        return p.clips.iter().find(|c| c.id == id && c.kind == ClipKind::Comp).cloned().ok_or(format!("clip {id} is not a comp clip"));
+    }
+    let track = need_u64(a, "track")? as u32;
+    if track as usize >= p.tracks.len() {
+        return Err(format!("no track {track} (tracks are 0..{})", p.tracks.len().saturating_sub(1)));
+    }
+    let cs: Vec<_> = p.clips.iter().filter(|c| c.track == track && c.kind == ClipKind::Comp).collect();
+    match cs.len() {
+        0 => Err(format!("track {track} has no takes (record with a loop set, or record over an existing clip)")),
+        1 => Ok(cs[0].clone()),
+        _ => Err(format!("track {track} has several comp clips; pick one with --clip ({})", cs.iter().map(|c| c.id.to_string()).collect::<Vec<_>>().join(", "))),
+    }
+}
+
+/// Takes and comp of the comp clips on a track, in timeline beats.
+pub fn takes(app: &App, a: &Value) -> R<Value> {
+    let p = app.engine.project();
+    let track = need_u64(a, "track")? as u32;
+    let audition = app.engine.state().audition;
+    let out: Vec<Value> = p
+        .clips
+        .iter()
+        .filter(|c| c.track == track && c.kind == wave_engine::ClipKind::Comp)
+        .filter_map(|c| {
+            let cp = p.comp(c.source)?;
+            let tl = |b: f64| b - c.offset + c.start;
+            Some(json!({
+                "clipId": c.id, "compId": cp.id, "name": cp.name, "start": c.start, "len": c.len,
+                "xfadeMs": cp.xfade * 1000.0, "audition": audition.get(&cp.id),
+                "takes": cp.takes.iter().map(|t| json!({
+                    "id": t.id, "name": t.name, "source": t.source, "start": tl(t.start), "len": t.len,
+                    "usedBeats": cp.regions.iter().filter(|r| r.take == t.id).map(|r| r.to - r.from).sum::<f64>(),
+                })).collect::<Vec<_>>(),
+                "regions": cp.regions.iter().map(|r| json!({
+                    "take": r.take, "from": tl(r.from), "to": tl(r.to), "xfadeMs": r.xfade.map(|x| x * 1000.0),
+                })).collect::<Vec<_>>(),
+            }))
+        })
+        .collect();
+    if out.is_empty() {
+        return Err(format!("track {track} has no takes"));
+    }
+    Ok(json!(out))
+}
+
+/// Edits the comp of a comp clip. Times are timeline beats, crossfades milliseconds.
+/// `regions` replaces the comp, `take` uses one whole take, `xfadeMs` sets the default
+/// crossfade, `removeUnused` drops takes the comp does not play. One undo step.
+pub fn comp(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
+    let p = app.engine.project();
+    let clip = comp_clip(&p, a)?;
+    let mut cp = p.comp(clip.source).cloned().ok_or("the clip's comp is missing")?;
+    let local = |b: f64| b - clip.start + clip.offset;
+    let ms = |v: &Value, k: &str| -> R<Option<f32>> {
+        match arg(v, k) {
+            None => Ok(None),
+            Some(x) => x.as_f64().map(|m| Some((m / 1000.0) as f32)).ok_or(format!("`{k}` must be a number of milliseconds")),
+        }
+    };
+    let mut did = vec![];
+    if let Some(rs) = arg(a, "regions") {
+        let rs = rs.as_array().ok_or("`regions` must be an array of {take, from, to, xfadeMs?}")?;
+        let mut regions = vec![];
+        for r in rs {
+            let take = need_u64(r, "take")?;
+            let (from, to) = (opt_f64(r, "from").ok_or("each region needs `from`")?, opt_f64(r, "to").ok_or("each region needs `to`")?);
+            regions.push(wave_engine::CompRegion { take, from: local(from), to: local(to), xfade: ms(r, "xfadeMs")? });
+        }
+        regions.sort_by(|x, y| x.from.total_cmp(&y.from));
+        // a range wider than its take plays the take only
+        for r in regions.iter_mut() {
+            if let Some(t) = cp.take(r.take) {
+                r.from = r.from.max(t.start);
+                r.to = r.to.min(t.end());
+            }
+        }
+        regions.retain(|r| r.to > r.from + 1e-9);
+        cp.regions = regions;
+        did.push("regions");
+    }
+    if let Some(t) = arg(a, "take").and_then(as_index) {
+        let tk = cp.take(t).cloned().ok_or(format!("the comp has no take {t}"))?;
+        cp.regions.clear();
+        cp.write(t, tk.start, tk.end());
+        did.push("take");
+    }
+    if let Some(x) = ms(a, "xfadeMs")? {
+        cp.xfade = x;
+        did.push("xfade");
+    }
+    if arg(a, "removeUnused").and_then(Value::as_bool).unwrap_or(false) {
+        let used: Vec<u64> = cp.regions.iter().map(|r| r.take).collect();
+        let n = cp.takes.len();
+        cp.takes.retain(|t| used.contains(&t.id));
+        if cp.takes.is_empty() {
+            return Err("the comp plays no take; keep at least one".into());
+        }
+        did.push(if cp.takes.len() < n { "removeUnused" } else { "nothingUnused" });
+    }
+    if did.is_empty() {
+        return Err("nothing to do: pass regions, take, xfadeMs or removeUnused".into());
+    }
+    let rev = app.engine.apply(&[Op::PutComp { comp: cp }], false, if_revision).map_err(|e| e.to_string())?;
+    Ok(json!({ "revision": rev, "clipId": clip.id, "changed": did }))
+}
+
 /// The CLI entry: one request → JSON data.
 pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -> R<Value> {
     let e = &app.engine;
@@ -245,7 +361,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","music_analyze","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","music_analyze","takes","comp","flatten_comp","comp_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -281,6 +397,18 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         "open" => {
             let w = e.open(&PathBuf::from(need_str(a, "path")?)).map_err(|x| x.to_string())?;
             Ok(json!({ "warnings": w }))
+        }
+        "takes" => takes(app, a),
+        "comp" => comp(app, a, if_revision),
+        "flatten_comp" => {
+            let clip = comp_clip(&e.project(), a)?;
+            let id = e.flatten_comp(clip.id).map_err(|x| x.to_string())?;
+            Ok(json!({ "clipId": clip.id, "sourceId": id, "revision": e.revision() }))
+        }
+        "comp_audition" => {
+            let clip = comp_clip(&e.project(), a)?;
+            e.audition(clip.source, arg(a, "take").and_then(as_index)).map_err(|x| x.to_string())?;
+            Ok(json!({ "compId": clip.source, "audition": e.state().audition.get(&clip.source) }))
         }
         "pitch_analyze" => {
             let an = e.pitch_analysis(need_u64(a, "clipId")?).map_err(|x| x.to_string())?;

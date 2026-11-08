@@ -62,7 +62,7 @@ All edits are "put" ops, applied atomically per batch:
 `removeInsert{id}`, `putFx{insertId,fx,index?}`, `removeFx{fxId}`,
 `moveFx{fxId,to}`, `putPattern{pattern}`, `putSource{source}`,
 `removeSource{id}`, `putAutomation{automation}`, `removeAutomation{id}`,
-`setBpm{bpm}`, `setLoop{loop}`.
+`putComp{comp}`, `removeComp{id}`, `setBpm{bpm}`, `setLoop{loop}`.
 
 Every effect has `mix` (0..1 dry/wet, default 1). Automation:
 `project.automations[] = {id, name, color, target, points:[{t, v}]}`; a clip of
@@ -95,6 +95,8 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `music_analyze` | `{clipId?, excludeFx?}` | `{tempo: {bpm, confidence, candidates:[{bpm,score}], firstBeat}\|null, key: {root, minor, confidence, candidates:[{root,minor,score}], chroma:number[12], tuningCents}\|null}` — tempo and key of a clip, or of the project's active audio clips (excluding tracks routed to `excludeFx`'s insert) |
 | `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied) |
 | `trim_clip` | `{clipId}` | `{sourceId}` — writes a new file with only the clip region, clip now points at it |
+| `flatten_comp` | `{clipId}` | `{sourceId}` — renders a comp clip to a new file; the clip becomes an `audio` clip, the takes go (one undo step) |
+| `comp_audition` | `{compId, takeId?}` | – ; plays one whole take instead of the comp (`null` = the comp). Live only: not saved, not undone, ignored by renders |
 | `preview_clip` / `preview_file` / `preview_stop` | `{clipId}` / `{path}` / – | – |
 | `audio_hosts` | – | `[{id, name}]` (ids like `"wasapi"`, `"asio"`, `"alsa"`) |
 | `audio_devices` | `{host}` | `{outputs: string[], inputs: string[]}` |
@@ -118,7 +120,8 @@ undo, import, recording, file open), `library-progress`, `audio-status`.
 
 ```ts
 type StateDto = { project: Project; revision: number; canUndo: boolean; canRedo: boolean;
-                  transport: TransportDto; path: string | null; dirty: boolean };
+                  transport: TransportDto; path: string | null; dirty: boolean;
+                  audition: { [compId: string]: number } };   // comp → auditioned take
 type TransportDto = { playing: boolean; rec: boolean; monitor: boolean; metro: boolean; countIn: boolean; startBeat: number };
 type AudioConfig = { host: string; output: string | null; input: string | null; sampleRate: number | null; bufferSize: number | null };
 type AudioStatus = AudioConfig & { running: boolean; actualRate: number; actualBuffer: number; latencyMs: number;
@@ -159,6 +162,46 @@ u32 rec             // 0, or 1 followed by:
 | `denoise` | `[0..16]` learned noise floor dB per band, `[16..32]` gain applied per band dB (≤ 0); 16 log bands 50 Hz – 16 kHz. Total reduction in `grDb`. Adds `fft_size` (2048 at ≤ 64 kHz) samples of latency, compensated by PDC |
 | `tune` | `[0]` detected input Hz (0 = unvoiced), `[1]` target note Hz, `[2]` output Hz, `[3]` confidence 0..1, `[4]` input offset from target in cents, `[5]` correction applied in cents |
 | `voice` | `[0]` detected input Hz (0 = unvoiced), `[1]` output Hz, `[2]` confidence 0..1, `[3]` pitch shift applied in semitones. Same latency as `tune`, compensated by PDC; an effect's dry/wet (`fx.mix`) delays its dry path by the effect's latency, so blends line up |
+
+## Take lanes and comping
+
+Recording with a loop set cycles over it and makes **one take per pass**;
+recording over an existing clip adds a take instead of overwriting it. The
+takes and the comp built from them are a project-level take group:
+
+```jsonc
+"comps": [{ "id": 2000, "name": "Comp 1", "xfade": 0.01,             // default boundary crossfade, s
+  "takes":   [{ "id": 2001, "name": "Take 1", "ref": 1000,            // source id
+                "start": 0, "len": 16, "offset": 0 }],                // comp beats; offset = beats into the source
+  "regions": [{ "take": 2001, "from": 0, "to": 4, "xfade": 0.02 }] }] // sorted, non-overlapping, gaps silent
+"clips":   [{ "kind": "comp", "ref": 2000, "start": 32, "len": 16, "offset": 0, … }]
+```
+
+**Why a clip kind and not takes on the track.** A comp is played by an
+ordinary clip of kind `comp`, exactly like an audio clip plays a source:
+comp beat = `clip.offset + (timeline beat − clip.start)`. So moving, trimming,
+splitting, muting, gain, pan and fades of the comp reuse the clip machinery
+and the existing timeline build; the take group itself never stores timeline
+positions. Copies of a comp clip play the same group (like pattern clips).
+Projects without `comps` open unchanged (`#[serde(default)]`).
+
+* Takes are never cut. `regions` choose which take plays where; the UI's swipe
+  writes a range (replacing what overlapped, merging touching pieces of the
+  same take: `Comp::write`, mirrored in `ui/src/lib/comp.ts`).
+* Every region boundary is an **equal-power crossfade** (cos/sin) centred on
+  the boundary; its length is the region's `xfade` (at its start) or the
+  comp's default, clamped so both halves fit. A region followed by silence
+  fades out with the same length.
+* The comp is resolved off the audio thread into segments (`comp::build`)
+  when the timeline is rebuilt; the callback only mixes them (no allocation).
+  Offline render and "flatten" use the same code, so they are sample-identical.
+* Landing a recording (`comp::land_takes`): over a comp clip → new takes of its
+  comp; over plain audio clips → those become the first takes of a new comp;
+  elsewhere one pass is a plain audio clip and several passes a new comp. The
+  newest take plays over its range (a last pass cut short by Stop only where
+  it has audio). A last pass shorter than one beat is dropped. The audio
+  thread marks each loop wrap with a NaN frame in the input ring.
+* Recordings stay sources (`"Take N"`) next to the project like any audio.
 
 ## Pitch edits on audio clips
 

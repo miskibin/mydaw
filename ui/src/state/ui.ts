@@ -42,6 +42,10 @@ export interface UiState {
   eqSel: Record<number, number>;
   fetMode: Record<number, 'gr' | 'out'>;
   pitchEd: PitchWin | null;
+  /** track id → take lanes expanded */
+  takesOpen: Record<number, boolean>;
+  /** comp time selection (comp beats): the last swiped range, the target of Ctrl+↑/↓ */
+  compSel: { clipId: Id; from: number; to: number } | null;
   /** automation clip whose envelope is being edited inline on the playlist */
   autoEdit: Id | null;
   /** next z for plugin windows (monotonic) */
@@ -60,7 +64,7 @@ export const [U, setU] = createStore<UiState>({
   plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null, musicWin: null,
   readout: 'Gotowe',
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
-  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, autoEdit: null, zTop: 1, marquee: null,
+  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, takesOpen: {}, compSel: null, autoEdit: null, zTop: 1, marquee: null,
   playing: false, previewing: false, previewPath: null,
 });
 

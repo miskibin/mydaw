@@ -77,6 +77,7 @@ function opKey(op: Op): string {
     case 'setBpm': return 'bpm';
     case 'setLoop': return 'loop';
     case 'putAutomation': return 'a' + op.automation.id;
+    case 'putComp': return 'c' + op.comp.id;
     default: return op.op;
   }
 }

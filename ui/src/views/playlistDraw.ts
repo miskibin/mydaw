@@ -1,11 +1,12 @@
 // Canvas rendering of the playlist: lanes, grid, clips (pattern notes / waveforms), the
 // recording clip. Only the visible window is drawn; everything is in grid coordinates.
-import type { Automation, Clip, Pattern, Project, Source, Track } from '../api/types';
+import type { Automation, Clip, Comp, Pattern, Project, Source, Take, Track } from '../api/types';
+import { boundaries, takeEnd, toComp } from '../lib/comp';
 import { mix } from '../lib/color';
 import { rgba, T } from '../ui/theme';
 import { clamp, dbg, mod } from '../lib/format';
 import { snapRes } from '../lib/snap';
-import { getClipPeaks, peakRange } from '../state/peaks';
+import { getClipPeaks, getPeaks, peakRange } from '../state/peaks';
 
 export interface View {
   offX: number; offY: number; W: number; H: number;
@@ -13,6 +14,15 @@ export interface View {
   tops: number[]; sel: Set<number>; editable: boolean; recArmedBg: boolean;
   /** automation clip being edited inline (points shown as handles), and its hovered point */
   autoEdit?: number | null; autoHover?: number | null;
+  /** per track: the comp whose take lanes are expanded below it (null = none) */
+  rows?: ({ clip: Clip; comp: Comp } | null)[];
+  laneH?: number;
+  /** comp id → auditioned take */
+  audition?: Record<string, number>;
+  /** comp time selection (comp beats) */
+  compSel?: { clipId: number; from: number; to: number } | null;
+  /** comp boundary under the pointer: clip id + boundary index */
+  bndHover?: { clipId: number; i: number } | null;
 }
 
 const FONT = '500 10px "Geist Variable", Geist, system-ui, sans-serif';
@@ -45,7 +55,7 @@ function patRects(p: Pattern, sig: string, offset: number, len: number, h: numbe
   return r;
 }
 
-export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: null | { track: number; clipStart: number; seconds: number; peaks: Float32Array; nPeaks: number }) {
+export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: null | { track: number; clipStart: number; seconds: number; peaks: Float32Array; nPeaks: number; pass?: number }) {
   const { offX, offY, W, H, bw, tops } = v;
   g.save();
   g.translate(-offX, -offY);
@@ -56,6 +66,13 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
     if (b < y0 || a > y1) return;
     g.fillStyle = t.arm && v.recArmedBg ? T.laneArm : T.grid;
     g.fillRect(x0, a, W, b - a - 1);
+    const row = v.rows?.[i], lh = v.laneH ?? 30;
+    if (row) {
+      // take lanes: a recessed band under the track, one row per take
+      g.fillStyle = T.laneAlt; g.fillRect(x0, a + t.h, W, b - a - t.h - 1);
+      g.fillStyle = rgba(T.bg0, 0.6);
+      for (let k = 0; k <= row.comp.takes.length; k++) g.fillRect(x0, a + t.h + k * lh - 1, W, 1);
+    }
     g.fillStyle = T.bg0;
     g.fillRect(x0, b - 1, W, 1);
   });
@@ -82,17 +99,148 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
   const sigs = new Map(p.patterns.map(x => [x.id, patSig(x)]));
   const srcs = new Map(p.sources.map(x => [x.id, x]));
   const autos = new Map((p.automations ?? []).map(x => [x.id, x]));
+  const comps = new Map((p.comps ?? []).map(x => [x.id, x]));
   for (const c of p.clips) {
     const tr = p.tracks[c.track]; if (!tr) continue;
     const cx = c.start * bw, cw = Math.max(3, c.len * bw - 1), cy = tops[c.track] + 1, ch = tr.h - 2;
     if (cx > x1 || cx + cw < x0 || cy > y1 || cy + ch < y0) continue;
+    if (c.kind === 'comp') { const cp = comps.get(c.ref); if (cp) drawComp(g, v, c, cp, tr.color, cx, cy, cw, ch, x0, x1); continue; }
     const src = c.kind === 'pat' ? pats.get(c.ref) : c.kind === 'auto' ? autos.get(c.ref) : srcs.get(c.ref);
     if (!src) continue;
     drawClip(g, v, c, src, sigs.get(c.ref) ?? '', cx, cy, cw, ch, x0, x1);
   }
+  p.tracks.forEach((t, i) => { const row = v.rows?.[i]; if (row) drawTakeLanes(g, v, row.clip, row.comp, t, tops[i] + t.h, x0, x1, y0, y1); });
   if (rec && p.tracks[rec.track]) drawRec(g, v, rec, p.tracks[rec.track].h);
   g.restore();
 }
+
+// ---------- take lanes & comps ----------
+
+/** Waveform of `take` between timeline px `xa`..`xb`, centred on `mid`. */
+function takeWave(g: CanvasRenderingContext2D, v: View, clip: Clip, t: Take, xa: number, xb: number, mid: number, half: number, gain: number) {
+  const pk = getPeaks(t.ref); if (!pk) { g.fillRect(xa, mid, xb - xa, 1); return; }
+  const rate = 100 * v.spb, src = (x: number) => (toComp(clip, x / v.bw) - t.start + t.offset) * rate;
+  g.beginPath();
+  for (let x = Math.floor(xa); x < xb; x++) {
+    const i0 = Math.floor(src(x)), i1 = Math.floor(src(x + 1));
+    if (i0 * 2 >= pk.length) break;
+    if (i1 < 0) continue;
+    const [mn, mx] = peakRange(pk, i0, i1);
+    const ya = mid - clamp(mx * gain, 0, 1) * half, yb = mid - clamp(mn * gain, -1, 0) * half;
+    g.rect(x, ya, 1, Math.max(0.6, yb - ya));
+  }
+  g.fill();
+}
+
+/** Crossfade (s) at a boundary: the region starting there, else the one ending there. */
+const xfadeOf = (cp: Comp, b: { left: number; right: number }) => {
+  const r = b.right >= 0 ? cp.regions[b.right] : cp.regions[b.left];
+  return r?.xfade ?? cp.xfade;
+};
+
+/** The comp clip on the track lane: each region's take waveform, boundaries as thin markers. */
+function drawComp(g: CanvasRenderingContext2D, v: View, c: Clip, cp: Comp, color: string, cx: number, cy: number, cw: number, ch: number, vx0: number, vx1: number) {
+  const sel = v.sel.has(c.id), bh = ch - 15, by = cy + 15, mid = by + bh / 2;
+  const X = (cb: number) => (cb - c.offset + c.start) * v.bw;
+  const aud = v.audition?.[cp.id], audT = aud != null ? cp.takes.find(t => t.id === aud) : undefined;
+  const alpha = c.muted ? 0.38 : 1;
+  g.save();
+  g.globalAlpha = alpha;
+  g.beginPath(); g.roundRect(cx, cy, cw, ch, 3); g.clip();
+  g.fillStyle = mix(color, T.clipBodyPct, T.clipBase); g.fillRect(cx, cy, cw, ch);
+  g.fillStyle = sel ? mix(color, T.clipHeadSelPct, T.clipHeadSelTo) : mix(color, T.clipHeadPct, T.clipBase); g.fillRect(cx, cy, cw, 15);
+  const ink = mix(color, T.clipInkPct, T.clipInkTo);
+  const vis0 = Math.max(cx, vx0), vis1 = Math.min(cx + cw, vx1);
+  const gain = dbg(c.gain), half = bh / 2 * 0.92;
+  const regions = audT ? [{ take: audT.id, from: audT.start, to: takeEnd(audT) }] : cp.regions;
+  g.fillStyle = ink;
+  for (const r of regions) {
+    const t = cp.takes.find(x => x.id === r.take); if (!t) continue;
+    const xa = Math.max(vis0, X(r.from)), xb = Math.min(vis1, X(r.to));
+    if (xb > xa) takeWave(g, v, c, t, xa, xb, mid, half, gain);
+  }
+  // which take plays where
+  if (!audT && bh >= 24) {
+    g.font = MONO9;
+    for (const r of regions) {
+      const xa = X(r.from), xb = X(r.to); if (xb - xa < 28 || xb < vis0 || xa > vis1) continue;
+      const k = cp.takes.findIndex(t => t.id === r.take) + 1, lx = Math.max(xa, vis0) + 3;
+      g.fillStyle = mix(color, 30, T.clipBase); g.beginPath(); g.roundRect(lx, cy + ch - 13, 20, 11, 2); g.fill();
+      g.fillStyle = ink; g.fillText('T' + k, lx + 3, cy + ch - 4.5);
+    }
+  }
+  // boundaries: thin markers, the crossfade width shaded, a tick in the body top
+  if (!audT) boundaries(regions).forEach((b, i) => {
+    const x = Math.round(X(b.at)); if (x <= cx + 1 || x >= cx + cw - 1 || x < vis0 - 4 || x > vis1 + 4) return;
+    const hot = v.bndHover?.clipId === c.id && v.bndHover.i === i;
+    const xw = xfadeOf(cp, b) / v.spb * v.bw;
+    if (xw >= 3) { g.fillStyle = rgba(T.ink, hot ? 0.2 : 0.1); g.fillRect(x - xw / 2, by, xw, bh); }
+    g.fillStyle = hot ? T.ink : rgba(T.ink, 0.5); g.fillRect(x, by, 1, bh);
+    g.beginPath(); g.moveTo(x - 3, by); g.lineTo(x + 4, by); g.lineTo(x + 0.5, by + 4); g.closePath(); g.fill();
+  });
+  if (cw > 14) {
+    g.fillStyle = sel ? T.clipTextSel : T.clipText; g.font = FONT;
+    let tx = cx + 5;
+    if (c.muted) { g.font = '600 9px "Geist Mono Variable", monospace'; g.fillText('M', tx, cy + 11); tx += 10; g.font = FONT; }
+    const label = audT ? cp.name + ' · ▶ ' + audT.name : cp.name;
+    g.fillText(label, tx, cy + 11);
+    const w = g.measureText(label).width;
+    g.font = MONO9; g.globalAlpha = alpha * 0.65;
+    g.fillText(cp.takes.length + ' tk' + (c.gain ? ' · ' + (c.gain >= 0 ? '+' : '') + c.gain.toFixed(1) + ' dB' : ''), tx + w + 6, cy + 11);
+    g.globalAlpha = alpha;
+  }
+  const s = v.compSel; if (s && s.clipId === c.id) { g.fillStyle = rgba(T.blue, 0.16); g.fillRect(X(s.from), by, X(s.to) - X(s.from), bh); }
+  g.restore();
+  g.strokeStyle = sel ? T.ink : audT ? T.green : mix(color, 55, T.clipBase);
+  g.lineWidth = 1;
+  g.globalAlpha = alpha;
+  g.beginPath(); g.roundRect(cx + 0.5, cy + 0.5, cw - 1, ch - 1, 3); g.stroke();
+  g.globalAlpha = 1;
+}
+
+/**
+ * One lane per take under the track (Ableton-style): the parts the comp plays are drawn in
+ * the track colour, the rest desaturated; outside the clip window everything is dimmed.
+ */
+function drawTakeLanes(g: CanvasRenderingContext2D, v: View, clip: Clip, cp: Comp, tr: Track, top: number, vx0: number, vx1: number, vy0: number, vy1: number) {
+  const lh = v.laneH ?? 30, X = (cb: number) => (cb - clip.offset + clip.start) * v.bw;
+  const winA = X(clip.offset), winB = X(clip.offset + clip.len);
+  const aud = v.audition?.[cp.id], s = v.compSel && v.compSel.clipId === clip.id ? v.compSel : null;
+  const used = mix(tr.color, T.clipBodyPct + 16, T.clipBase), usedInk = mix(tr.color, T.clipInkPct, T.clipInkTo);
+  const idle = mix(T.fg5, 9, T.clipBase), idleInk = mix(T.fg4, 55, T.clipBase);
+  cp.takes.forEach((t, k) => {
+    const y = top + k * lh + 2, h = lh - 5;
+    if (y > vy1 || y + h < vy0) return;
+    const xa = X(t.start), w = Math.max(3, X(takeEnd(t)) - xa - 1);
+    if (xa > vx1 || xa + w < vx0) return;
+    const vis0 = Math.max(xa, vx0), vis1 = Math.min(xa + w, vx1), mid = y + h / 2, half = h / 2 * 0.86;
+    g.save();
+    g.beginPath(); g.roundRect(xa, y, w, h, 3); g.clip();
+    g.fillStyle = idle; g.fillRect(xa, y, w, h);
+    g.fillStyle = idleInk; takeWave(g, v, clip, t, vis0, vis1, mid, half, 1);
+    for (const r of cp.regions) {
+      if (r.take !== t.id) continue;
+      const ra = Math.max(vis0, X(r.from)), rb = Math.min(vis1, X(r.to)); if (rb <= ra) continue;
+      g.fillStyle = used; g.fillRect(ra, y, rb - ra, h);
+      g.fillStyle = tr.color; g.fillRect(ra, y, rb - ra, 2);
+      g.fillStyle = usedInk; takeWave(g, v, clip, t, ra, rb, mid, half, 1);
+    }
+    // outside the clip window the take is not heard at all
+    g.fillStyle = rgba(T.grid, 0.6);
+    if (winA > xa) g.fillRect(xa, y, winA - xa, h);
+    if (winB < xa + w) g.fillRect(winB, y, xa + w - winB, h);
+    if (s) { g.fillStyle = rgba(T.blue, 0.14); g.fillRect(X(s.from), y, X(s.to) - X(s.from), h); }
+    g.restore();
+    g.strokeStyle = aud === t.id ? T.green : rgba(T.ink, 0.12); g.lineWidth = 1;
+    g.beginPath(); g.roundRect(xa + 0.5, y + 0.5, w - 1, h - 1, 3); g.stroke();
+  });
+  if (s) {
+    const H = cp.takes.length * lh - 1;
+    g.fillStyle = rgba(T.blue, 0.75);
+    g.fillRect(Math.round(X(s.from)), top, 1, H); g.fillRect(Math.round(X(s.to)) - 1, top, 1, H);
+  }
+}
+
 
 /**
  * Fade overlays of the visible audio clips. Drawn on top of the cached grid every time a fade
@@ -103,7 +251,7 @@ export function drawFades(g: CanvasRenderingContext2D, v: View, p: Project) {
   g.save(); g.translate(-offX, -offY);
   const x0 = offX, x1 = offX + W, y0 = offY, y1 = offY + H;
   for (const c of p.clips) {
-    if (c.kind !== 'audio') continue;
+    if (c.kind !== 'audio' && c.kind !== 'comp') continue;
     const tr = p.tracks[c.track]; if (!tr) continue;
     const cx = c.start * bw, cw = Math.max(3, c.len * bw - 1), cy = tops[c.track] + 1, ch = tr.h - 2;
     if (cx > x1 || cx + cw < x0 || cy > y1 || cy + ch < y0) continue;
@@ -223,7 +371,7 @@ function drawEnvelope(g: CanvasRenderingContext2D, v: View, c: Clip, a: Automati
   if (editing) { g.strokeStyle = rgba(T.ink, 0.6); g.setLineDash([3, 3]); g.lineWidth = 1; g.strokeRect(cx + 1.5, by + 0.5, cw - 3, bh - 2); g.setLineDash([]); }
 }
 
-function drawRec(g: CanvasRenderingContext2D, v: View, r: { track: number; clipStart: number; seconds: number; peaks: Float32Array; nPeaks: number }, trackH: number) {
+function drawRec(g: CanvasRenderingContext2D, v: View, r: { track: number; clipStart: number; seconds: number; peaks: Float32Array; nPeaks: number; pass?: number }, trackH: number) {
   const h = trackH - 2, bh = h - 15, lenB = Math.max(0, r.seconds / v.spb);
   const x = r.clipStart * v.bw, y = v.tops[r.track] + 1, w = Math.max(2, lenB * v.bw);
   g.save();
@@ -231,7 +379,7 @@ function drawRec(g: CanvasRenderingContext2D, v: View, r: { track: number; clipS
   g.fillStyle = rgba(T.red, 0.14); g.fillRect(x, y, w, h);
   g.fillStyle = T.red; g.fillRect(x, y, w, 15);
   g.fillStyle = T.onFill; g.font = '600 10px "Geist Variable", sans-serif';
-  g.fillText('● REC ' + (lenB > 0 ? (lenB * v.spb).toFixed(1) + ' s' : 'count-in'), x + 5, y + 11);
+  g.fillText('● REC ' + (r.pass ? 'take ' + (r.pass + 1) + ' · ' : '') + (lenB > 0 ? (lenB * v.spb).toFixed(1) + ' s' : 'count-in'), x + 5, y + 11);
   if (r.nPeaks) {
     const rate = 100 * v.spb, mid = y + 15 + bh / 2;
     g.fillStyle = rgba(T.red, 0.8); g.beginPath();
