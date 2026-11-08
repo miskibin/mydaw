@@ -25,6 +25,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 wave-engine.workspace = true
+wave-rmvpe.workspace = true
 wave-audio-io.workspace = true
 wave-session.workspace = true
 wave-cli = { path = "../crates/cli" }

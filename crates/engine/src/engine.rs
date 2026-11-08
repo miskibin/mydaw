@@ -502,12 +502,93 @@ impl Engine {
 
     /// Pitch curve and notes of an audio clip's source (for the note editor).
     pub fn pitch_analysis(&self, clip_id: Id) -> Result<Arc<crate::pitch::PitchAnalysis>, EngineError> {
-        let mut c = self.core.lock();
+        let clip = self.audio_clip(clip_id)?;
+        self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))
+    }
+
+    fn audio_clip(&self, clip_id: Id) -> Result<Clip, EngineError> {
+        let c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
         if clip.kind != ClipKind::Audio {
             return Err(EngineError::Msg("only audio clips have pitch".into()));
         }
-        c.sources.analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))
+        Ok(clip)
+    }
+
+    /// Analysis of a source variant; slow detectors run without holding the project lock.
+    fn source_analysis(&self, id: Id, norm: bool, rev: bool) -> Option<Arc<crate::pitch::PitchAnalysis>> {
+        let (audio, est) = {
+            let mut c = self.core.lock();
+            if let Some(a) = c.sources.cached_analysis(id, norm, rev) {
+                return Some(a);
+            }
+            (c.sources.variant(id, norm, rev)?, c.sources.estimator())
+        };
+        let a = Arc::new(crate::pitch::analyze_with(&crate::sources::mono_of(&audio), audio.sr as f32, est.as_deref()));
+        let mut c = self.core.lock();
+        c.sources.put_analysis(id, norm, rev, a.clone());
+        Some(c.sources.cached_analysis(id, norm, rev).unwrap_or(a))
+    }
+
+    fn source_content(&self, id: Id, norm: bool, rev: bool) -> Option<Arc<crate::content::ContentFeatures>> {
+        let audio = {
+            let mut c = self.core.lock();
+            if let Some(x) = c.sources.cached_content(id, norm, rev) {
+                return Some(x);
+            }
+            c.sources.variant(id, norm, rev)?
+        };
+        let x = Arc::new(crate::content::mfcc(&crate::sources::mono_of(&audio), audio.sr as f32));
+        self.core.lock().sources.put_content(id, norm, rev, x.clone());
+        Some(x)
+    }
+
+    /// Tune to Reference target of an audio clip with `params` (the clip's own when `None`).
+    /// The slow parts (analysis, features, alignment) run without the project lock and are
+    /// cached, so committing the same reference afterwards only renders.
+    pub fn pitch_target(&self, clip_id: Id, params: Option<RefTune>) -> Result<Arc<crate::reference::PitchTarget>, EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let p = params.or_else(|| clip.tune.as_ref().and_then(|t| t.reference)).ok_or(EngineError::Msg("the clip has no reference".into()))?;
+        let key = {
+            let mut c = self.core.lock();
+            if !c.project.sources.iter().any(|s| s.id == p.source) {
+                return Err(EngineError::Msg("the reference source is not in the project".into()));
+            }
+            let bpm = c.project.bpm;
+            c.sources.align_key(&clip, bpm, p.source).ok_or(EngineError::Msg("audio not loaded".into()))?
+        };
+        let take = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        let cached = self.core.lock().sources.cached_alignment(&key);
+        let al = match cached {
+            Some(a) => a,
+            None => {
+                let reference = self.source_analysis(p.source, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
+                let tc = self.source_content(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+                let rc = self.source_content(p.source, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
+                let r = crate::pitch::ANALYSIS_RATE as f64;
+                let al = Arc::new(crate::reference::align(
+                    &crate::reference::Performance { pitch: &take, content: &tc },
+                    (key.2 as f64 / r, key.3 as f64 / r),
+                    &crate::reference::Performance { pitch: &reference, content: &rc },
+                ));
+                self.core.lock().sources.put_alignment(key, al.clone());
+                al
+            }
+        };
+        Ok(Arc::new(crate::sources::target_for(&clip, &take, &al, &p)))
+    }
+
+    /// Uses `est` for pitch analysis from now on (`None` = built-in YIN). Pitch-edited
+    /// clips are re-rendered with the new analysis.
+    pub fn set_f0_estimator(&self, est: Option<Arc<dyn crate::pitch::F0Estimator>>) {
+        let mut c = self.core.lock();
+        c.sources.set_estimator(est);
+        self.sync(&mut c, Dirty { timeline: true, mixer: false, params: false });
+    }
+
+    /// Name of the pitch detector in use ("yin" or the estimator's).
+    pub fn f0_backend(&self) -> &'static str {
+        self.core.lock().sources.backend()
     }
 
     fn source_music(&self, id: Id, norm: bool, rev: bool) -> Option<Arc<crate::music::SourceMusic>> {
@@ -598,7 +679,8 @@ impl Engine {
     pub fn clip_peaks(&self, clip_id: Id) -> Option<Vec<f32>> {
         let mut c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned()?;
-        c.sources.clip_audio(&clip, true).map(|a| a.peaks.clone())
+        let bpm = c.project.bpm;
+        c.sources.clip_audio(&clip, true, bpm).map(|a| a.peaks.clone())
     }
 
     /// [min,max] pairs at 100/s for drawing.
@@ -780,9 +862,10 @@ impl Engine {
             let c = &mut *guard;
             self.snapshot_plugin_states(c);
             let mut map = HashMap::new();
+            let bpm = c.project.bpm;
             for clip in &c.project.clips {
                 if clip.kind == ClipKind::Audio {
-                    if let Some(a) = c.sources.clip_audio(clip, false) {
+                    if let Some(a) = c.sources.clip_audio(clip, false, bpm) {
                         map.insert(clip.id, a);
                     }
                 }
@@ -898,7 +981,8 @@ impl Engine {
             let gesture_open = c.gesture.is_some();
             let Core { project, sources, .. } = c;
             let stale = gesture_open;
-            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale));
+            let bpm = project.bpm;
+            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale, bpm));
             send(c, Cmd::Timeline(Box::new(tl)));
         }
     }

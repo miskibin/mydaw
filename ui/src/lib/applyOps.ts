@@ -15,6 +15,12 @@ export function applyOp(p: Project, op: Op): void {
         if (c.track >= p.tracks.length || c.track < 0) throw new OpError(`clip ${c.id} is on track ${c.track} which does not exist`);
         const known = c.kind === 'pat' ? p.patterns.some(x => x.id === c.ref) : c.kind === 'auto' ? (p.automations ?? []).some(x => x.id === c.ref) : p.sources.some(x => x.id === c.ref);
         if (!known) throw new OpError(`no clip source with id ${c.ref}`);
+        const r = c.tune?.reference;
+        if (r) {
+          if (!p.sources.some(x => x.id === r.source)) throw new OpError(`no reference source with id ${r.source}`);
+          if ([r.correction, r.vibrato, r.influence].some(v => !(v >= 0 && v <= 1))) throw new OpError(`clip ${c.id}: reference correction, vibrato and influence must be 0..1`);
+          if ((r.octave != null && (r.octave % 12 !== 0 || Math.abs(r.octave) > 36)) || (r.key ?? 0) > 11 || (r.scale ?? 0) > 4) throw new OpError(`clip ${c.id}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4`);
+        }
       }
       for (const c of op.clips) {
         bump(p, c.id);
@@ -110,6 +116,7 @@ export function applyOp(p: Project, op: Op): void {
     case 'removeSource':
       p.sources = p.sources.filter(s => s.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'audio' && c.ref === op.id));
+      for (const c of p.clips) if (c.tune?.reference?.source === op.id) c.tune.reference = null;
       return;
     case 'setBpm':
       if (!(op.bpm >= 20 && op.bpm <= 999)) throw new OpError('bpm must be 20..999');

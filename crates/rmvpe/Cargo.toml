@@ -1,0 +1,13 @@
+[package]
+name = "wave-rmvpe"
+description = "RMVPE vocal pitch estimation (ONNX Runtime) as a WAVE pitch detector."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+wave-engine.workspace = true
+realfft.workspace = true
+parking_lot.workspace = true
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "download-binaries", "copy-dylibs", "tls-native", "api-20"] }

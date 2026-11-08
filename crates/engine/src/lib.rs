@@ -1,12 +1,15 @@
 //! `wave-engine` — everything WAVE does with sound, independent of any window or device.
 
 pub mod catalog;
+pub mod content;
 pub mod demo;
 pub mod model;
 pub mod music;
 pub mod ops;
 pub mod pitch;
 pub mod processor;
+pub mod reference;
+pub mod singer;
 
 pub use model::*;
 pub use ops::{Dirty, Op, OpError};

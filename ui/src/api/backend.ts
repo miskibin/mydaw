@@ -3,8 +3,8 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, Id, ImportResult, LibFile,
-  LibraryList, LibraryProgress, MusicAnalysis, Op, PitchAnalysis, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, F0ModelStatus, Id, ImportResult, LibFile,
+  LibraryList, LibraryProgress, ModelProgress, MusicAnalysis, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -12,6 +12,7 @@ export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[];
 export interface EventMap {
   state: StateDto;
   'library-progress': LibraryProgress;
+  'model-progress': ModelProgress;
   'audio-status': AudioStatus;
 }
 
@@ -37,6 +38,13 @@ export interface Backend {
   clipPeaks(clipId: Id): Promise<Float32Array>;
   /** Pitch curve, levels and note segmentation of an audio clip's source (seconds of the source). */
   pitchAnalyze(clipId: Id): Promise<PitchAnalysis>;
+  /** Tune to Reference target of an audio clip: with `reference` a preview for those parameters,
+   *  without it the clip's own `tune.reference`. The alignment is cached, so changing parameters is cheap. */
+  pitchTarget(clipId: Id, reference?: RefTune): Promise<PitchTarget>;
+  /** Which pitch detector analyses (RMVPE when its model is installed, else YIN). */
+  f0ModelStatus(): Promise<F0ModelStatus>;
+  /** Downloads the RMVPE model (progress: `model-progress`), verifies it, starts using it. */
+  f0ModelInstall(): Promise<F0ModelStatus>;
   /** Tempo (BPM) and musical key of an audio clip, or key/tempo of the project's active audio clips (excluding `excludeFx`'s insert). */
   musicAnalyze(args?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
@@ -133,6 +141,9 @@ export function tauriBackend(): Backend {
     sourcePeaks: async (id, norm, rev) => toF32(await invoke('source_peaks', { id, norm: !!norm, rev: !!rev })),
     clipPeaks: async clipId => toF32(await invoke('clip_peaks', { clipId })),
     pitchAnalyze: clipId => invoke('pitch_analyze', { clipId }),
+    pitchTarget: (clipId, reference) => invoke('pitch_target', { clipId, reference: reference ?? null }),
+    f0ModelStatus: () => invoke('f0_model_status'),
+    f0ModelInstall: () => invoke('f0_model_install'),
     musicAnalyze: a => invoke('music_analyze', { clipId: a?.clipId ?? null, excludeFx: a?.excludeFx ?? null }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
     previewClip: clipId => invoke('preview_clip', { clipId }),

@@ -1,4 +1,4 @@
-//! `wave` — the command line for a running WAVE app.
+//! `wave` — the command line for a running WAVE app (and `tune-file`, which runs offline).
 //!
 //! stdout is only the JSON result; diagnostics go to stderr.
 //! Exit codes: 0 ok, 1 usage, 2 no session / connection, 3 the app refused the request.
@@ -36,6 +36,14 @@ TRANSPORT
 FILES
   render --out file.wav [--from B --to B --tail SEC --rate HZ]   bounce offline; prints level stats
   save [--path FILE] | open <FILE>
+
+PITCH  (Tune to Reference: pull a vocal take onto another performance of the same melody)
+  tune-ref --clip ID --reference SOURCE [--correction 0..100 --vibrato 0..100 --influence 0..100
+           --octave auto|-12|0|12 --key 0..11 --scale 0..4]     switch a clip to it (--off: manual)
+  pitch-target --clip ID [--full]          the computed target: score, octave, notes (--full: curves)
+  f0-model                                 pitch detector in use; RMVPE model install state
+  tune-file --take u.wav --reference r.wav --out o.wav [--json target.json]
+            [--model rmvpe.onnx | --yin] [same options as tune-ref]   headless; needs no running app
 
 PLUGINS
   vst3 [--rescan]                          installed VST3 effects
@@ -210,6 +218,71 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             };
             send(a, c, args)
         }
+        "pitch-target" => send(a, "pitch_target", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "full": a.has("full")})),
+        "tune-ref" => {
+            let mut args = json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "off": a.has("off")});
+            for k in ["reference", "correction", "vibrato", "influence", "key", "scale"] {
+                if let Some(v) = a.num(k).map_err(u)? {
+                    args[k] = json!(v);
+                }
+            }
+            match a.get("octave") {
+                Some("auto") => args["octave"] = json!("auto"),
+                Some(o) => args["octave"] = json!(o.parse::<i64>().map_err(|_| u("--octave is auto or semitones (-12, 0, 12…)".into()))?),
+                None => {}
+            }
+            send(a, "tune_ref", args)
+        }
+        "f0-model" => send(a, "f0_model", json!({})),
+        "tune-file" => tune_file(a),
         other => Err(u(format!("unknown command `{other}`"))),
     }
+}
+
+/// Tune to Reference on two files, offline: no app, no project.
+fn tune_file(a: &Args) -> Result<Value, Fail> {
+    use wave_engine::sources::{write_wav, Audio};
+    let u = Fail::Usage;
+    let (take_p, ref_p, out_p) = (a.need("take").map_err(u)?, a.need("reference").map_err(u)?, a.need("out").map_err(u)?);
+    let take = Audio::load(std::path::Path::new(take_p)).map_err(|e| u(format!("{take_p}: {e}")))?;
+    let reference = Audio::load(std::path::Path::new(ref_p)).map_err(|e| u(format!("{ref_p}: {e}")))?;
+    let pct = |k: &str| -> Result<f32, Fail> {
+        match a.num(k).map_err(u)? {
+            Some(v) if (0.0..=100.0).contains(&v) => Ok(v as f32 / 100.0),
+            Some(_) => Err(u(format!("--{k} is a percentage 0..100"))),
+            None => Ok(1.0),
+        }
+    };
+    let octave = match a.get("octave") {
+        None | Some("auto") => None,
+        Some(o) => Some(o.parse::<i32>().ok().filter(|o| o % 12 == 0 && o.abs() <= 36).ok_or_else(|| u("--octave is auto or a multiple of 12 within ±36".into()))?),
+    };
+    let params = wave_engine::RefTune {
+        source: 0,
+        correction: pct("correction")?,
+        vibrato: pct("vibrato")?,
+        influence: pct("influence")?,
+        octave,
+        key: a.num("key").map_err(u)?.map(|k| k as u32).unwrap_or(0).min(11),
+        scale: a.num("scale").map_err(u)?.map(|k| k as u32).unwrap_or(0).min(4),
+    };
+    let model = if a.has("yin") {
+        None
+    } else {
+        let explicit = a.get("model");
+        let path = explicit.map(std::path::PathBuf::from).unwrap_or_else(wave_rmvpe::model_path);
+        match wave_rmvpe::Rmvpe::load(&path) {
+            Ok(m) => Some(m),
+            Err(e) if explicit.is_some() => return Err(Fail::App(e)),
+            Err(_) => None,
+        }
+    };
+    let est = model.as_ref().map(|m| m as &dyn wave_engine::pitch::F0Estimator);
+    let (out, target, analysis) = wave_engine::reference::tune_audio(&take, &reference, &params, est);
+    write_wav(std::path::Path::new(out_p), out.content(), out.sr).map_err(|e| Fail::App(format!("{out_p}: {e}")))?;
+    if let Some(j) = a.get("json") {
+        let text = serde_json::to_string(&target).map_err(|e| Fail::App(e.to_string()))?;
+        std::fs::write(j, text).map_err(|e| Fail::App(format!("{j}: {e}")))?;
+    }
+    Ok(json!({ "out": out_p, "backend": analysis.backend, "corrected": target.reason.is_none(), "reason": target.reason, "score": target.score, "octave": target.octave, "notes": target.notes.len(), "seconds": out.seconds() }))
 }

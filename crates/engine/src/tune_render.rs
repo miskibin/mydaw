@@ -1,19 +1,23 @@
 //! Offline rendering of a clip's pitch edits (the note editor).
 //!
-//! Inputs: the source audio, its pitch analysis, and the clip's `ClipTune`.
-//! Each note moves by `shift`, its internal drift/vibrato is flattened by
-//! `drift`, its level and formants change; pencil strokes replace the pitch
-//! where drawn. Unvoiced sound (sibilants, breaths) is passed through untouched
-//! because PSOLA is transparent there.
+//! Inputs: the source audio, its pitch analysis, the clip's `ClipTune` and, with
+//! Tune to Reference, the target derived from the reference. The base pitch is the
+//! reference target where there is one, else the sung pitch. Each note then moves by
+//! `shift`, its internal drift/vibrato is flattened by `drift`, its level and
+//! formants change; pencil strokes replace the pitch where drawn. The pitch change
+//! is a continuous function of time (smoothed over 35 ms), so note edges never
+//! jump. Unvoiced sound (sibilants, breaths) is passed through untouched because
+//! PSOLA is transparent there.
 
 use crate::model::ClipTune;
 use crate::pitch::{midi_to_hz, PitchAnalysis, Psola};
+use crate::reference::{lerp_at, smooth, PitchTarget};
 use crate::sources::Audio;
 
-fn note_center(a: &PitchAnalysis, start: f64, end: f64) -> Option<f32> {
-    let r = a.rate as f64;
-    let (i0, i1) = ((start * r) as usize, ((end * r) as usize).min(a.curve.len()));
-    let mut v: Vec<f32> = a.curve.get(i0..i1)?.iter().copied().filter(|x| !x.is_nan()).collect();
+fn note_center(curve: &[f32], rate: f32, start: f64, end: f64) -> Option<f32> {
+    let r = rate as f64;
+    let (i0, i1) = ((start * r) as usize, ((end * r) as usize).min(curve.len()));
+    let mut v: Vec<f32> = curve.get(i0..i1)?.iter().copied().filter(|x| !x.is_nan()).collect();
     if v.is_empty() {
         return None;
     }
@@ -38,12 +42,45 @@ fn pencil_at(p: &[[f32; 2]], t: f32) -> Option<f32> {
     Some(a[1] + (b[1] - a[1]) * f)
 }
 
+/// The pitch each analysis frame will be rendered at (NaN = unvoiced, untouched).
+pub fn edited_curve(a: &PitchAnalysis, tune: &ClipTune, target: Option<&PitchTarget>) -> Vec<f32> {
+    let base: Vec<f32> = (0..a.curve.len()).map(|f| if a.curve[f].is_nan() { f32::NAN } else { target.and_then(|t| t.at(f)).unwrap_or(a.curve[f]) }).collect();
+    let centers: Vec<Option<f32>> = tune.notes.iter().map(|nt| note_center(&base, a.rate, nt.start, nt.end)).collect();
+    let mut ni = 0usize;
+    (0..base.len())
+        .map(|f| {
+            let b = base[f];
+            if b.is_nan() {
+                return f32::NAN;
+            }
+            let t = f as f64 / a.rate as f64;
+            while ni < tune.notes.len() && tune.notes[ni].end <= t {
+                ni += 1;
+            }
+            let mut v = b;
+            if let Some(nt) = tune.notes.get(ni).filter(|nt| nt.start <= t) {
+                v = match centers[ni] {
+                    Some(c) => c + (b - c) * (1.0 - nt.drift.clamp(0.0, 1.0)) + nt.shift / 100.0,
+                    None => b + nt.shift / 100.0,
+                };
+            }
+            pencil_at(&tune.pencil, t as f32).unwrap_or(v)
+        })
+        .collect()
+}
+
 /// Renders `audio` with `tune` applied. Same length and rate as the input.
-pub fn render(audio: &Audio, a: &PitchAnalysis, tune: &ClipTune) -> Audio {
+pub fn render(audio: &Audio, a: &PitchAnalysis, tune: &ClipTune, target: Option<&PitchTarget>) -> Audio {
     let sr = audio.sr as f32;
     let n = audio.frames;
     let src = audio.content();
-    let centers: Vec<Option<f32>> = tune.notes.iter().map(|nt| note_center(a, nt.start, nt.end)).collect();
+    let want = edited_curve(a, tune, target);
+    let delta: Vec<f32> = want.iter().zip(&a.curve).map(|(w, o)| w - o).collect();
+    let delta = smooth(&delta, (0.0175 * a.rate) as usize);
+    // nothing to change: the take itself, bit for bit (PSOLA at ratio 1 is close, not equal)
+    if delta.iter().all(|d| d.is_nan() || d.abs() < 1e-4) && tune.notes.iter().all(|nt| nt.formant == 0.0 && nt.gain == 0.0) {
+        return Audio::from_stereo(src.to_vec(), audio.sr, audio.channels);
+    }
     let mut ps = [Psola::new(sr), Psola::new(sr)];
     let lat = ps[0].latency();
     let mut out = vec![0f32; n * 2];
@@ -52,14 +89,8 @@ pub fn render(audio: &Audio, a: &PitchAnalysis, tune: &ClipTune) -> Audio {
     for i in 0..n + lat {
         let t = i as f64 / sr as f64;
         let (x0, x1) = if i < n { (src[i * 2], src[i * 2 + 1]) } else { (0.0, 0.0) };
-        // original pitch at t
-        let fi = t * a.rate as f64;
-        let k = fi as usize;
-        let orig = match (a.curve.get(k), a.curve.get(k + 1)) {
-            (Some(&p0), Some(&p1)) if !p0.is_nan() && !p1.is_nan() => p0 + (p1 - p0) * (fi - k as f64) as f32,
-            (Some(&p0), _) if !p0.is_nan() => p0,
-            _ => f32::NAN,
-        };
+        let fi = (t * a.rate as f64) as f32;
+        let orig = lerp_at(&a.curve, fi);
         while note_i < tune.notes.len() && tune.notes[note_i].end <= t {
             note_i += 1;
         }
@@ -67,19 +98,13 @@ pub fn render(audio: &Audio, a: &PitchAnalysis, tune: &ClipTune) -> Audio {
         let (mut period, mut ratio, mut formant, mut gain) = (0f32, 1f32, 1f32, 1f32);
         if !orig.is_nan() {
             period = sr / midi_to_hz(orig);
-            let mut target = orig;
+            let d = lerp_at(&delta, fi);
+            if !d.is_nan() {
+                ratio = 2f32.powf(d / 12.0);
+            }
             if let Some(nt) = note {
-                if let Some(c) = centers[note_i] {
-                    target = c + (orig - c) * (1.0 - nt.drift.clamp(0.0, 1.0)) + nt.shift / 100.0;
-                } else {
-                    target = orig + nt.shift / 100.0;
-                }
                 formant = 2f32.powf(nt.formant / 1200.0);
             }
-            if let Some(pv) = pencil_at(&tune.pencil, t as f32) {
-                target = pv;
-            }
-            ratio = 2f32.powf((target - orig) / 12.0);
         }
         if let Some(nt) = note {
             if nt.gain != 0.0 {
@@ -119,9 +144,9 @@ mod tests {
         let audio = Audio::from_stereo(st, 48000, 1);
         let a = analyze(&mono, sr);
         assert_eq!(a.notes.len(), 2);
-        let mut tune = ClipTune { notes: a.notes.iter().map(|n| NoteEdit { start: n.start, end: n.end, shift: 0.0, drift: 0.0, formant: 0.0, gain: 0.0 }).collect(), pencil: vec![] };
+        let mut tune = ClipTune { notes: a.notes.iter().map(|n| NoteEdit { start: n.start, end: n.end, shift: 0.0, drift: 0.0, formant: 0.0, gain: 0.0 }).collect(), pencil: vec![], reference: None };
         tune.notes[0].shift = 200.0; // first note up a whole tone
-        let out = render(&audio, &a, &tune);
+        let out = render(&audio, &a, &tune, None);
         let pitch = |from: usize, to: usize| {
             let mut d = Detector::new(sr);
             for f in from..to {
@@ -136,5 +161,22 @@ mod tests {
         assert!(c1.abs() < 20.0, "first note at {p1} Hz ({c1:.0} cents off)");
         assert!(c2.abs() < 15.0, "second note moved to {p2} Hz ({c2:.0} cents)");
         assert_eq!(out.frames, audio.frames);
+    }
+
+    #[test]
+    fn the_pitch_change_never_steps_at_a_note_edge() {
+        // legato: two touching notes shifted in opposite directions
+        let sr = 48000.0;
+        let mono = voice(220.0, sr, 48000);
+        let a = analyze(&mono, sr);
+        let mid = 0.5;
+        let edit = |start, end, shift| NoteEdit { start, end, shift, drift: 0.0, formant: 0.0, gain: 0.0 };
+        let tune = ClipTune { notes: vec![edit(0.0, mid, 150.0), edit(mid, 1.0, -150.0)], pencil: vec![], reference: None };
+        let want = edited_curve(&a, &tune, None);
+        let delta: Vec<f32> = want.iter().zip(&a.curve).map(|(w, o)| w - o).collect();
+        let d = smooth(&delta, (0.0175 * a.rate) as usize);
+        let steps: f32 = d.windows(2).filter(|w| !w[0].is_nan() && !w[1].is_nan()).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        // 3 semitones spread over 35 ms (7 frames): no frame-to-frame step above half a semitone
+        assert!(steps < 0.5, "largest step {steps:.2} semitones per 5 ms");
     }
 }

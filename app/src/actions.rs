@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 use wave_engine::catalog::{self, load_preset, new_fx};
-use wave_engine::{FxKind, Op, PluginRef};
+use wave_engine::{FxKind, Op, PluginRef, RefTune};
 
 use crate::App;
 
@@ -210,6 +210,45 @@ pub fn import(app: &App, a: &Value) -> R<Value> {
     Ok(json!({ "sourceIds": s, "clipIds": c }))
 }
 
+/// Switches a clip to Tune to Reference (`reference` = source id), or back to
+/// manual editing with `off`. Unset parameters keep their current values.
+pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
+    let p = app.engine.project();
+    let cid = need_u64(a, "clipId")?;
+    let mut clip = p.clips.iter().find(|c| c.id == cid).cloned().ok_or(format!("no clip {cid}"))?;
+    let mut tune = clip.tune.take().unwrap_or_default();
+    if arg(a, "off").and_then(Value::as_bool).unwrap_or(false) {
+        tune.reference = None;
+    } else {
+        let prev = tune.reference;
+        let source = arg(a, "reference").and_then(as_index).or(prev.map(|r| r.source)).ok_or("`reference` (source id) is required")?;
+        let unit = |k: &str, d: f32| -> R<f32> {
+            match opt_f64(a, k) {
+                Some(v) if (0.0..=100.0).contains(&v) => Ok(v as f32 / 100.0),
+                Some(_) => Err(format!("`{k}` is a percentage 0..100")),
+                None => Ok(d),
+            }
+        };
+        let base = prev.unwrap_or(RefTune { source, correction: 1.0, vibrato: 1.0, influence: 1.0, octave: None, key: 0, scale: 0 });
+        let octave = match arg(a, "octave") {
+            Some(Value::String(s)) if s == "auto" => None,
+            Some(v) => Some(v.as_i64().ok_or("`octave` is auto or a whole number of semitones")? as i32),
+            None => base.octave,
+        };
+        tune.reference = Some(RefTune {
+            source,
+            correction: unit("correction", base.correction)?,
+            vibrato: unit("vibrato", base.vibrato)?,
+            influence: unit("influence", base.influence)?,
+            octave,
+            key: arg(a, "key").and_then(as_index).map(|k| k as u32).unwrap_or(base.key),
+            scale: arg(a, "scale").and_then(as_index).map(|k| k as u32).unwrap_or(base.scale),
+        });
+    }
+    clip.tune = tune.is_active().then_some(tune);
+    app.engine.apply(&[Op::PutClips { clips: vec![clip] }], false, if_revision).map_err(|e| e.to_string())
+}
+
 /// The CLI entry: one request → JSON data.
 pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -> R<Value> {
     let e = &app.engine;
@@ -220,7 +259,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","music_analyze","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -259,8 +298,21 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         }
         "pitch_analyze" => {
             let an = e.pitch_analysis(need_u64(a, "clipId")?).map_err(|x| x.to_string())?;
-            Ok(json!({ "rate": an.rate, "notes": an.notes }))
+            Ok(json!({ "rate": an.rate, "backend": an.backend, "notes": an.notes }))
         }
+        "pitch_target" => {
+            let params = match arg(a, "reference") {
+                Some(v) => Some(serde_json::from_value::<RefTune>(v.clone()).map_err(|er| format!("BAD_ARGS: reference: {er}"))?),
+                None => None,
+            };
+            let t = e.pitch_target(need_u64(a, "clipId")?, params).map_err(|x| x.to_string())?;
+            if arg(a, "full").and_then(Value::as_bool).unwrap_or(false) {
+                return Ok(json!(&*t));
+            }
+            Ok(json!({ "score": t.score, "octave": t.octave, "reason": t.reason, "start": t.start as f64 / t.rate as f64, "notes": t.notes }))
+        }
+        "tune_ref" => tune_ref(app, a, if_revision).map(ok_rev),
+        "f0_model" => Ok(json!(crate::models::status(e, app.model_error.lock().clone()))),
         "music_analyze" => {
             let cid = arg(a, "clipId").and_then(as_index);
             let ex = arg(a, "excludeFx").and_then(as_index);
