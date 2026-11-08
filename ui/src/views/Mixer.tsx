@@ -11,7 +11,8 @@ import { tele } from '../state/telemetry';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
-import { FX_ORDER, FXMETA, FxTile, Icon, ICONS } from '../ui/icons';
+import { FXMETA, FxTile, Icon, ICONS } from '../ui/icons';
+import { openFxPicker } from './FxPicker';
 
 const L30 = 51.84, C30 = 69.12;
 
@@ -32,13 +33,7 @@ function meterTask() {
 }
 
 export function openFxMenu(x: number, y: number, insId: Id) {
-  const items: MenuItem[] = [
-    { t: 'title', label: 'Dodaj efekt' },
-    ...FX_ORDER.filter(t => S.catalog?.types[t]).map(type => ({ t: 'item', label: S.catalog!.types[type]!.name, kbd: FXMETA[type].tag, icon: FXMETA[type].icon, iconColor: FXMETA[type].color, act: () => A.addFx(insId, type) }) as MenuItem),
-    { t: 'sep' },
-    { t: 'item', label: 'VST3…', kbd: 'plugin', icon: ICONS.vst, iconColor: FXMETA.vst3.color, act: () => setU('vstPicker', { insId }) },
-  ];
-  openMenu(x, y, items, 320);
+  openFxPicker(insId, x, y);
 }
 
 function openStripMenu(x: number, y: number, id: Id) {
@@ -94,7 +89,7 @@ function Strip(props: { m: Insert; idx: number }) {
   };
   const stop = (e: Event) => e.stopPropagation();
   return (
-    <div class="strip" classList={{ on: U.mixSel === m().id }} onPointerDown={select}>
+    <div class="strip" data-ins={m().id} classList={{ on: U.mixSel === m().id }} onPointerDown={select}>
       <div class="bar" style={{ background: m().color }} />
       <div class="row" style={{ 'justify-content': 'space-between', gap: '4px' }}>
         <span class="lbl">{m().id === 0 ? 'MASTER' : 'INS ' + props.idx}</span>
@@ -213,7 +208,7 @@ export function Mixer() {
           </div>
           <Show when={selIns()}>
             {ins => (
-              <div class="fxchain">
+              <div class="fxchain" data-ins={ins().id}>
                 <div class="hd">
                   <span style={{ width: '8px', height: '8px', 'border-radius': '2px', background: ins().color }} />
                   <span class="ell" style={{ flex: 1, font: '600 11px var(--sans)', color: 'var(--fg-hi)' }}>{insName(ins())}</span>
@@ -221,7 +216,7 @@ export function Mixer() {
                 </div>
                 <div style={{ flex: 1, 'min-height': 0, overflow: 'auto' }}>
                   <For each={ins().fx}>{(f, i) => <FxSlot f={f} n={i() + 1} insId={ins().id} />}</For>
-                  <div class="slot" title="Dodaj efekt — otworzy się od razu" onPointerDown={e => { if (e.button === 0) openFxMenu(e.clientX, e.clientY, ins().id); }}>
+                  <div class="slot" title="Dodaj efekt (F7)" onPointerDown={e => { if (e.button === 0) openFxMenu(e.clientX, e.clientY, ins().id); }}>
                     <span class="n">{ins().fx.length + 1}</span>
                     <span class="tile addtile"><Icon d={ICONS.plus} /></span>
                     <span style={{ flex: 1, font: '500 12px var(--sans)', color: 'var(--blue)' }}>Dodaj efekt</span>

@@ -216,13 +216,14 @@ export function fxOp(fx: Fx, insId?: Id): Op {
   const ins = insId ?? findFx(fx.id)?.m.id ?? 0;
   return { op: 'putFx', insertId: ins, fx: plain(fx) };
 }
-export function addFx(insId: Id, type: BuiltinKind) {
+export function addFx(insId: Id, type: BuiltinKind, preset?: number) {
   if (!S.catalog) return;
-  const f = newFx(S.catalog, allocId(), type, S.project.bpm);
+  let f = newFx(S.catalog, allocId(), type, S.project.bpm);
+  if (preset != null && preset > 0 && presetList(S.catalog, type)[preset]) f = loadPresetFx(S.catalog, f, preset, S.project.bpm);
   commit([{ op: 'putFx', insertId: insId, fx: f }], 'Dodaj efekt');
   setU({ mixSel: insId, fxSel: f.id });
   openPlug(f.id);
-  const pr = presetList(S.catalog, type)[0];
+  const pr = presetList(S.catalog, type)[preset ?? 0];
   say('Dodano ' + (S.catalog.types[type]?.name ?? type) + (pr ? ' · preset: ' + pr.name : ''));
 }
 export function addVst(insId: Id, info: { path: string; cid: string; name: string; vendor: string }) {
