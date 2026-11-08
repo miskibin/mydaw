@@ -227,6 +227,16 @@ async fn preview_file(app: St<'_>, path: String) -> R<()> {
 }
 
 #[tauri::command]
+async fn note_audition(app: St<'_>, ch: u64, key: Option<u8>, vel: Option<f32>, pattern: Option<u64>) -> R<()> {
+    app.engine.note_audition(ch, key, vel.unwrap_or(0.8), pattern).map_err(es)
+}
+
+#[tauri::command]
+async fn pattern_play(app: St<'_>, pattern: Option<u64>) -> R<()> {
+    app.engine.pattern_play(pattern).map_err(es)
+}
+
+#[tauri::command]
 async fn preview_stop(app: St<'_>) -> R<()> {
     app.engine.preview_stop();
     Ok(())
@@ -529,7 +539,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, music_analyze, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, music_analyze, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save, export_audio, export_cancel,

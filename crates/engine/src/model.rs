@@ -44,6 +44,9 @@ pub struct Project {
     /// Take groups with their comps; played by clips of kind `comp`.
     #[serde(default)]
     pub comps: Vec<Comp>,
+    /// Channel Rack rows, shared by every pattern (notes refer to them by `ch`).
+    #[serde(default)]
+    pub channels: Vec<Channel>,
     /// Next id handed out by [`Project::alloc_id`]. Ids are never reused.
     pub next_id: Id,
 }
@@ -211,16 +214,125 @@ pub enum Inst {
     Bass,
 }
 
+impl Inst {
+    pub const ALL: [Inst; 4] = [Inst::Kick, Inst::Clap, Inst::Hat, Inst::Bass];
+    pub fn name(self) -> &'static str {
+        match self {
+            Inst::Kick => "Kick",
+            Inst::Clap => "Clap",
+            Inst::Hat => "Hat",
+            Inst::Bass => "Bass",
+        }
+    }
+    /// Key a step of this instrument plays (only the bass is pitched).
+    pub fn default_root(self) -> u8 {
+        match self {
+            Inst::Bass => 36,
+            _ => SAMPLE_ROOT,
+        }
+    }
+    pub fn color(self) -> &'static str {
+        match self {
+            Inst::Kick => "#4f8ef7",
+            Inst::Clap => "#d9678f",
+            Inst::Hat => "#e0a44a",
+            Inst::Bass => "#7c8cf8",
+        }
+    }
+}
+
+/// MIDI key at which a sampler channel plays its sample unpitched (C5 in FL's naming).
+pub const SAMPLE_ROOT: u8 = 60;
+
+/// What a channel plays.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ChannelSrc {
+    /// A built-in instrument.
+    Inst { inst: Inst },
+    /// A one-shot sampler playing a project source, pitched by the note (`root` = original pitch).
+    Sample { source: Id },
+}
+
+/// A Channel Rack row. Channels are global to the project (like FL Studio): every pattern
+/// can have notes for every channel, and a note says which channel it plays with `ch`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Channel {
+    pub id: Id,
+    pub name: String,
+    pub color: String,
+    #[serde(flatten)]
+    pub src: ChannelSrc,
+    /// Fader position (0.7937 = unity, see [`fader_gain`]).
+    #[serde(default = "vol_unity")]
+    pub vol: f32,
+    /// -1..1.
+    #[serde(default)]
+    pub pan: f32,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub solo: bool,
+    /// Mixer insert the channel plays into. `None`: the insert of the playlist track
+    /// the pattern clip is on (how every channel behaved before channels existed).
+    #[serde(default)]
+    pub insert: Option<Id>,
+    /// Key a step plays when the note has no `p`; for a sampler also the key at which
+    /// the sample plays at its original pitch.
+    #[serde(default = "sample_root")]
+    pub root: u8,
+}
+
+fn vol_unity() -> f32 {
+    VOL_UNITY
+}
+fn sample_root() -> u8 {
+    SAMPLE_ROOT
+}
+
+impl Channel {
+    pub fn builtin(id: Id, inst: Inst) -> Self {
+        Self { id, name: inst.name().into(), color: inst.color().into(), src: ChannelSrc::Inst { inst }, vol: VOL_UNITY, pan: 0.0, mute: false, solo: false, insert: None, root: inst.default_root() }
+    }
+    /// Channel gain: the fader curve normalised so the unity position is exactly 1.
+    pub fn gain(&self) -> f32 {
+        fader_gain(self.vol) / fader_gain(VOL_UNITY)
+    }
+    /// True for channels whose notes have a meaningful pitch (piano roll).
+    pub fn pitched(&self) -> bool {
+        matches!(self.src, ChannelSrc::Sample { .. } | ChannelSrc::Inst { inst: Inst::Bass })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Note {
-    pub inst: Inst,
+    /// Channel id. `0` only in old files, which say `inst` instead (see [`Project::migrate`]).
+    #[serde(default)]
+    pub ch: Id,
+    /// Legacy (before channels): the built-in instrument. Read, never written.
+    #[serde(default, skip_serializing)]
+    pub inst: Option<Inst>,
     /// Start in steps (1/16) from the pattern start.
     pub step: f32,
     /// Length in steps.
     pub len: f32,
-    /// MIDI key, for pitched instruments.
+    /// MIDI key; `None` = the channel's `root`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub p: Option<u8>,
+    /// Velocity 0..1 (gain).
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub v: f32,
+}
+
+fn is_one(v: &f32) -> bool {
+    *v == 1.0
+}
+
+impl Note {
+    pub fn new(ch: Id, step: f32, len: f32, p: Option<u8>) -> Self {
+        Self { ch, inst: None, step, len, p, v: 1.0 }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -228,9 +340,28 @@ pub struct Pattern {
     pub id: Id,
     pub name: String,
     pub color: String,
-    /// Length in beats.
+    /// Length in beats. Notes at or after the end are kept but not played or shown.
     pub len: f64,
     pub notes: Vec<Note>,
+    /// 0..1: how far every second 16th is delayed (see [`swing_offset`]).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub swing: f32,
+}
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
+
+/// Swing, in steps, added to a note that starts on an odd 16th (0-based 1, 3, 5 …).
+/// `swing` 1 (100 %) delays it by half a step: the off-beat 16th lands at 75 % of its
+/// 8th (MPC 75 %); 0.67 is close to a triplet feel (MPC 66 %). Notes off the 16th grid
+/// and on even 16ths do not move.
+pub fn swing_offset(step: f32, swing: f32) -> f32 {
+    let r = step.round();
+    if swing <= 0.0 || (step - r).abs() > 1e-3 || (r as i64).rem_euclid(2) != 1 {
+        return 0.0;
+    }
+    0.5 * swing.clamp(0.0, 1.0)
 }
 
 /// An audio file the project uses. Samples live in the engine, not here.
@@ -497,6 +628,73 @@ impl Project {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    pub fn channel(&self, id: Id) -> Option<&Channel> {
+        self.channels.iter().find(|c| c.id == id)
+    }
+
+    /// The channel that plays a legacy `inst` note: the first built-in channel of that
+    /// instrument, created (appended) when there is none.
+    pub fn channel_for_inst(&mut self, inst: Inst) -> Id {
+        if let Some(c) = self.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst }) {
+            return c.id;
+        }
+        let id = self.alloc_id();
+        self.channels.push(Channel::builtin(id, inst));
+        id
+    }
+
+    /// Gives `inst`-only notes (files and CLI scripts from before channels) their channel.
+    pub fn resolve_note_channels(&mut self, notes: &mut [Note]) {
+        for n in notes.iter_mut() {
+            if n.ch == 0 {
+                if let Some(inst) = n.inst {
+                    n.ch = self.channel_for_inst(inst);
+                }
+            }
+            n.inst = None;
+        }
+    }
+
+    /// Brings a project from an older file up to date. Old notes said `inst`; they get a
+    /// built-in channel each (one per instrument, created in Kick, Clap, Hat, Bass order,
+    /// unity volume, centre, routed like before: through the clip's track). A project
+    /// without channels gets the four built-ins so the Channel Rack is never empty.
+    /// Idempotent; a project that is already current is unchanged.
+    pub fn migrate(&mut self) {
+        let mut used: Vec<Inst> = vec![];
+        for pt in &self.patterns {
+            for n in &pt.notes {
+                if n.ch == 0 {
+                    if let Some(i) = n.inst {
+                        if !used.contains(&i) {
+                            used.push(i);
+                        }
+                    }
+                }
+            }
+        }
+        for inst in Inst::ALL {
+            if used.contains(&inst) {
+                self.channel_for_inst(inst);
+            }
+        }
+        let mut pats = std::mem::take(&mut self.patterns);
+        for pt in pats.iter_mut() {
+            self.resolve_note_channels(&mut pt.notes);
+        }
+        self.patterns = pats;
+        if self.channels.is_empty() {
+            for inst in Inst::ALL {
+                self.channel_for_inst(inst);
+            }
+        }
+        // ids the file used must stay taken
+        let max = self.channels.iter().map(|c| c.id).max().unwrap_or(0);
+        if max >= self.next_id {
+            self.next_id = max + 1;
+        }
     }
 
     pub fn comp(&self, id: Id) -> Option<&Comp> {

@@ -1,10 +1,15 @@
-//! The built-in pattern instruments (kick, clap, hat, bass) and the metronome click.
-//! Same recipes as the prototype, rendered sample by sample from a fixed voice pool.
+//! The built-in pattern instruments (kick, clap, hat, bass), the one-shot sampler and the
+//! metronome click. Same recipes as the prototype, rendered sample by sample from a fixed voice pool.
+//!
+//! Every note voice belongs to a channel: an index into the timeline's channel table
+//! (re-mapped by channel id when a new timeline arrives). The voice reads its channel's
+//! gain, pan and mute every block, so Channel Rack knobs also move notes that are ringing.
 
 use std::f32::consts::TAU;
 
 use crate::dsp::{Biquad, FilterType};
-use crate::model::Inst;
+use crate::model::{Id, Inst};
+use crate::rt::{ChanRt, InsertRt};
 
 pub const MAX_VOICES: usize = 96;
 
@@ -14,14 +19,49 @@ pub enum VoiceKind {
     Clap,
     Hat,
     Bass,
+    /// One-shot sample of the voice's channel, pitched by the note.
+    Sample,
     Click { accent: bool },
 }
+
+impl VoiceKind {
+    pub fn of(inst: Inst) -> Self {
+        match inst {
+            Inst::Kick => VoiceKind::Kick,
+            Inst::Clap => VoiceKind::Clap,
+            Inst::Hat => VoiceKind::Hat,
+            Inst::Bass => VoiceKind::Bass,
+        }
+    }
+}
+
+/// Where a voice plays.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Dest {
+    /// A playlist track (then its fader and its insert).
+    Track(usize),
+    /// Straight into a mixer insert (by index).
+    Insert(usize),
+    /// The metronome bus.
+    Click,
+}
+
+/// Voice without a channel (the metronome).
+pub const NO_CHAN: usize = usize::MAX;
 
 #[derive(Clone, Copy)]
 pub struct Voice {
     pub kind: VoiceKind,
-    /// Destination: track index, or `usize::MAX` for the click bus.
-    pub dest: usize,
+    pub dest: Dest,
+    /// Index into the channel table, or [`NO_CHAN`].
+    pub chan: usize,
+    /// Id of that channel, to find it again in a rebuilt table.
+    pub chan_id: Id,
+    /// Note velocity (gain).
+    vel: f32,
+    /// Sampler: read position in source frames and step per output sample.
+    pos: f64,
+    rate: f64,
     /// Samples to wait before the voice starts (sub-block accuracy).
     pub delay: u32,
     t: u32,
@@ -36,7 +76,23 @@ pub struct Voice {
 
 impl Voice {
     fn dead() -> Self {
-        Self { kind: VoiceKind::Kick, dest: 0, delay: 0, t: 0, len: 0, freq: 0.0, phase: 0.0, filt: Biquad::default(), rng: 1, alive: false }
+        Self {
+            kind: VoiceKind::Kick,
+            dest: Dest::Click,
+            chan: NO_CHAN,
+            chan_id: 0,
+            vel: 1.0,
+            pos: 0.0,
+            rate: 1.0,
+            delay: 0,
+            t: 0,
+            len: 0,
+            freq: 0.0,
+            phase: 0.0,
+            filt: Biquad::default(),
+            rng: 1,
+            alive: false,
+        }
     }
 }
 
@@ -68,6 +124,12 @@ pub fn mtof(key: f32) -> f32 {
     440.0 * 2f32.powf((key - 69.0) / 12.0)
 }
 
+/// Balance pan law shared with the mixer: the far side is attenuated linearly.
+#[inline]
+pub fn pan_gains(pan: f32) -> (f32, f32) {
+    (if pan > 0.0 { 1.0 - pan } else { 1.0 }, if pan < 0.0 { 1.0 + pan } else { 1.0 })
+}
+
 impl VoicePool {
     pub fn new(sr: f32) -> Self {
         Self { voices: vec![Voice::dead(); MAX_VOICES], sr, seed: 0x1234_5678 }
@@ -82,7 +144,40 @@ impl VoicePool {
         self.voices.iter_mut().for_each(|v| v.alive = false);
     }
 
-    pub fn trigger(&mut self, kind: VoiceKind, dest: usize, delay: u32, len_s: f32, key: f32) {
+    /// A new channel table arrived: point every voice at its channel's new index, and
+    /// silence voices whose channel is gone. RT-safe (no allocation).
+    pub fn remap(&mut self, chans: &[ChanRt]) {
+        for v in self.voices.iter_mut().filter(|v| v.alive && v.chan != NO_CHAN) {
+            match chans.iter().position(|c| c.id == v.chan_id) {
+                Some(i) => v.chan = i,
+                None => v.alive = false,
+            }
+        }
+    }
+
+    /// The metronome click.
+    pub fn click(&mut self, accent: bool, delay: u32) {
+        self.trigger(VoiceKind::Click { accent }, Dest::Click, NO_CHAN, 0, delay, 0.06, 0.0, 1.0, 1.0);
+    }
+
+    /// A note of channel `ch` (index `idx` in the table). `key` is a MIDI key; `vel` a gain
+    /// (velocity, times the track gain when the channel skips the track).
+    /// Returns false when nothing can play (a sampler channel without audio).
+    #[allow(clippy::too_many_arguments)]
+    pub fn note(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32) -> bool {
+        match ch.kind {
+            VoiceKind::Sample => {
+                let Some(a) = ch.sample.as_ref() else { return false };
+                let rate = a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0);
+                self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, key as f32, vel, rate);
+            }
+            kind => self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, vel, 1.0),
+        }
+        true
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn trigger(&mut self, kind: VoiceKind, dest: Dest, chan: usize, chan_id: Id, delay: u32, len_s: f32, key: f32, vel: f32, rate: f64) {
         // steal the oldest voice if the pool is full
         let idx = match self.voices.iter().position(|v| !v.alive) {
             Some(i) => i,
@@ -99,6 +194,11 @@ impl VoicePool {
         self.voices[idx] = Voice {
             kind,
             dest,
+            chan,
+            chan_id,
+            vel: vel.max(0.0),
+            pos: 0.0,
+            rate,
             delay,
             t: 0,
             len: (len_s * self.sr) as u32,
@@ -110,22 +210,66 @@ impl VoicePool {
         };
     }
 
-    pub fn trigger_inst(&mut self, inst: Inst, dest: usize, delay: u32, len_s: f32, key: Option<u8>) {
-        let kind = match inst {
-            Inst::Kick => VoiceKind::Kick,
-            Inst::Clap => VoiceKind::Clap,
-            Inst::Hat => VoiceKind::Hat,
-            Inst::Bass => VoiceKind::Bass,
-        };
-        self.trigger(kind, dest, delay, len_s, key.unwrap_or(36) as f32);
-    }
-
-    /// Adds every live voice into `tracks[dest]` (mono, both channels) or `click`.
-    pub fn render(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], click: &mut [f32]) {
+    /// Adds every live voice into its destination: a track buffer, an insert's input, or
+    /// the click bus. Built-in instruments are mono (then the channel's pan); samples are
+    /// stereo (balance).
+    pub fn render(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], inserts: &mut [InsertRt], click: &mut [f32], chans: &[ChanRt]) {
         let sr = self.sr;
         for v in self.voices.iter_mut().filter(|v| v.alive) {
             let start = (v.delay as usize).min(n);
             v.delay = v.delay.saturating_sub(n as u32);
+            // channel gain × velocity, split by the channel's pan
+            let (g, pan, sample) = match chans.get(v.chan) {
+                Some(c) => (if c.on { c.gain * v.vel } else { 0.0 }, c.pan, c.sample.as_deref()),
+                None if v.chan == NO_CHAN => (v.vel, 0.0, None),
+                None => {
+                    v.alive = false;
+                    continue;
+                }
+            };
+            let (pl, pr) = pan_gains(pan);
+            let (gl, gr) = (g * pl, g * pr);
+            let (out_l, out_r): (&mut [f32], &mut [f32]) = match v.dest {
+                // the click bus is mono
+                Dest::Click => (&mut click[..], &mut []),
+                Dest::Track(t) => match tracks.get_mut(t) {
+                    Some((l, r)) => (&mut l[..], &mut r[..]),
+                    None => {
+                        v.alive = false;
+                        continue;
+                    }
+                },
+                Dest::Insert(k) => match inserts.get_mut(k) {
+                    Some(ins) => (&mut ins.l[..], &mut ins.r[..]),
+                    None => {
+                        v.alive = false;
+                        continue;
+                    }
+                },
+            };
+            let stereo = !out_r.is_empty();
+            if v.kind == VoiceKind::Sample {
+                let Some(a) = sample else {
+                    v.alive = false;
+                    continue;
+                };
+                for i in start..n {
+                    if v.pos >= a.frames as f64 {
+                        v.alive = false;
+                        break;
+                    }
+                    let (x, y) = a.sample(v.pos);
+                    // 2 ms fade-in against a click when the sample does not start at zero
+                    let fade = (v.t as f32 / (0.002 * sr)).min(1.0);
+                    out_l[i] += x * gl * fade;
+                    if stereo {
+                        out_r[i] += y * gr * fade;
+                    }
+                    v.pos += v.rate;
+                    v.t += 1;
+                }
+                continue;
+            }
             for i in start..n {
                 let t = v.t as f32 / sr;
                 let (s, done) = match v.kind {
@@ -175,12 +319,11 @@ impl VoicePool {
                         let a = if t < 0.002 { exp_ramp(0.0001, 0.22, t, 0.002) } else { exp_ramp(0.22, 0.0001, t - 0.002, 0.048) };
                         (sq * a, t > 0.06)
                     }
+                    VoiceKind::Sample => (0.0, true),
                 };
-                if v.dest == usize::MAX {
-                    click[i] += s;
-                } else if let Some((l, r)) = tracks.get_mut(v.dest) {
-                    l[i] += s;
-                    r[i] += s;
+                out_l[i] += s * gl;
+                if stereo {
+                    out_r[i] += s * gr;
                 }
                 v.t += 1;
                 if done {

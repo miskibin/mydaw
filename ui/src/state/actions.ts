@@ -68,7 +68,7 @@ export function cancelExportOrClose() {
 }
 function afterProjectLoad() {
   batch(() => {
-    setU({ sel: [], plugs: [], editor: null, start: 0, menu: null });
+    setU({ sel: [], plugs: [], editor: null, patWin: null, start: 0, menu: null });
     const m = S.project.inserts[1] ?? S.project.inserts[0];
     if (m) setU({ mixSel: m.id, fxSel: m.fx[0]?.id ?? null });
     const p = S.project.patterns[0];
@@ -261,7 +261,7 @@ export function stepPreset(fxId: Id, d: number) {
 const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700 };
 /** Open (or bring to front) an effect window. The newest/most recently focused window is always on top. */
 /** Playlist to the front: effect windows go behind it (they keep their place and state). */
-export function playlistFront() { if (U.plugs.length && !U.plugsHidden) setU('plugsHidden', true); }
+export function playlistFront() { if ((U.plugs.length || U.patWin) && !U.plugsHidden) setU('plugsHidden', true); }
 export function showPlugs() { setU('plugsHidden', false); }
 
 export function openPlug(fxId: Id) {

@@ -73,6 +73,7 @@ function opKey(op: Op): string {
     case 'putFx': return 'f' + op.fx.id;
     case 'moveFx': return 'm' + op.fxId;
     case 'putPattern': return 'p' + op.pattern.id;
+    case 'putChannel': return 'ch' + op.channel.id;
     case 'putSource': return 's' + op.source.id;
     case 'setBpm': return 'bpm';
     case 'setLoop': return 'loop';

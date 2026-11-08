@@ -1,6 +1,7 @@
 // Canvas rendering of the playlist: lanes, grid, clips (pattern notes / waveforms), the
 // recording clip. Only the visible window is drawn; everything is in grid coordinates.
-import type { Automation, Clip, Comp, Pattern, Project, Source, Take, Track } from '../api/types';
+import type { Automation, Channel, Clip, Comp, Id, Note, Pattern, Project, Source, Take, Track } from '../api/types';
+import { isPitched, keyOf } from '../lib/pattern';
 import { boundaries, takeEnd, toComp } from '../lib/comp';
 import { mix } from '../lib/color';
 import { rgba, T } from '../ui/theme';
@@ -29,22 +30,28 @@ const FONT = '500 10px "Geist Variable", Geist, system-ui, sans-serif';
 const MONO9 = '500 9px "Geist Mono Variable", "Geist Mono", monospace';
 
 const patCache = new Map<string, Float32Array>();
-const patSig = (p: Pattern) => p.notes.map(n => n.inst + n.step + ':' + n.len + ':' + (n.p ?? '')).join(',');
+/** Row of a note in the clip preview: one row per percussive channel, one per key of pitched channels. */
+const rowKey = (n: Note, chans: Map<Id, Channel>) => { const c = chans.get(n.ch); return c && isPitched(c) ? 'p' + keyOf(n, c) : 'c' + n.ch; };
+const patSig = (p: Pattern, chans: Map<Id, Channel>) => p.notes.map(n => rowKey(n, chans) + '@' + n.step + ':' + n.len).join(',');
+let curChans = new Map<Id, Channel>();
 /** Note rectangles [beat, y, lenBeats, h]* of a pattern clip body, cached by geometry (zoom-independent). */
 function patRects(p: Pattern, sig: string, offset: number, len: number, h: number): Float32Array {
   const key = p.id + '|' + offset + '|' + len + '|' + h + '|' + p.len + '|' + sig;
   let r = patCache.get(key);
   if (r) return r;
-  const drums = ['hat', 'clap', 'kick'];
-  const pitches = [...new Set(p.notes.filter(n => n.p != null).map(n => n.p!))].sort((a, b) => b - a);
-  const rows = [...drums.filter(d => p.notes.some(n => n.inst === d)), ...pitches.map(x => 'p' + x)];
+  // notes past the pattern end are kept in the project but hidden (and silent)
+  const notes = p.notes.filter(n => n.step < p.len * 4 - 1e-4);
+  const order = [...curChans.keys()];
+  const drums = [...new Set(notes.map(n => rowKey(n, curChans)).filter(k => k[0] === 'c'))].sort((a, b) => order.indexOf(+a.slice(1)) - order.indexOf(+b.slice(1)));
+  const pitches = [...new Set(notes.map(n => rowKey(n, curChans)).filter(k => k[0] === 'p'))].sort((a, b) => +b.slice(1) - +a.slice(1));
+  const rows = [...drums.reverse(), ...pitches];
   const nr = Math.max(rows.length, 3), rh = Math.max(1.5, Math.min(5, (h - 6) / nr));
   const top = (h - nr * rh) / 2, out: number[] = [];
   for (let k = Math.floor(offset / p.len) - 1; k <= Math.ceil((offset + len) / p.len); k++) {
-    for (const n of p.notes) {
+    for (const n of notes) {
       const b = k * p.len + n.step / 4 - offset;
       if (b < 0 || b >= len) continue;
-      const ri = rows.indexOf(n.p != null ? 'p' + n.p : n.inst);
+      const ri = rows.indexOf(rowKey(n, curChans));
       out.push(b, top + ri * rh, Math.min(n.len / 4, len - b), Math.max(1, rh - 1));
     }
     if (out.length > 6000) break;
@@ -96,7 +103,8 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
   if (p.loop) { g.fillStyle = rgba(T.green, 0.05); g.fillRect(p.loop.a * bw, y0, (p.loop.b - p.loop.a) * bw, gridBottom - y0); }
   // clips
   const pats = new Map(p.patterns.map(x => [x.id, x]));
-  const sigs = new Map(p.patterns.map(x => [x.id, patSig(x)]));
+  curChans = new Map((p.channels ?? []).map(c => [c.id, c]));
+  const sigs = new Map(p.patterns.map(x => [x.id, patSig(x, curChans)]));
   const srcs = new Map(p.sources.map(x => [x.id, x]));
   const autos = new Map((p.automations ?? []).map(x => [x.id, x]));
   const comps = new Map((p.comps ?? []).map(x => [x.id, x]));

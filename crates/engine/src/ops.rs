@@ -26,7 +26,16 @@ pub enum Op {
     PutFx { insert_id: Id, fx: Fx, #[serde(default)] index: Option<usize> },
     RemoveFx { fx_id: Id },
     MoveFx { fx_id: Id, to: usize },
+    /// Insert or replace a pattern. Notes may still say `inst` instead of `ch` (old
+    /// scripts): they get that instrument's built-in channel (created if missing). When an
+    /// existing pattern's `len` changes, its clips that show exactly one whole pass of it
+    /// (`offset` 0, `len` = old length) take the new length; other clips keep theirs.
     PutPattern { pattern: Pattern },
+    /// Insert or replace a Channel Rack channel. `index` places a new channel (default:
+    /// last) or moves an existing one.
+    PutChannel { channel: Channel, #[serde(default)] index: Option<usize> },
+    /// Remove a channel and its notes in every pattern.
+    RemoveChannel { id: Id },
     /// Rename / recolour a source. Audio itself is changed with dedicated commands.
     PutSource { source: Source },
     RemoveSource { id: Id },
@@ -235,13 +244,97 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             d.mixer = true;
         }
         Op::PutPattern { pattern } => {
-            if pattern.len <= 0.0 {
-                return Err(OpError::Invalid("pattern length must be positive".into()));
+            if !(pattern.len > 0.0 && pattern.len <= TOTAL_BEATS) {
+                return Err(OpError::Invalid(format!("pattern length must be within 0..{TOTAL_BEATS} beats")));
             }
-            bump(p, pattern.id);
-            match p.patterns.iter_mut().find(|x| x.id == pattern.id) {
-                Some(x) => *x = pattern.clone(),
-                None => p.patterns.push(pattern.clone()),
+            if !(pattern.swing.is_finite() && (0.0..=1.0).contains(&pattern.swing)) {
+                return Err(OpError::Invalid("swing must be 0..1".into()));
+            }
+            let mut pt = pattern.clone();
+            for n in &pt.notes {
+                if !(n.step.is_finite() && n.step >= 0.0 && n.len.is_finite() && n.len > 0.0) {
+                    return Err(OpError::Invalid(format!("pattern {}: a note has an invalid step/len", pt.id)));
+                }
+                if !(n.v.is_finite() && (0.0..=1.0).contains(&n.v)) {
+                    return Err(OpError::Invalid("note velocity `v` must be 0..1".into()));
+                }
+                if n.p.is_some_and(|k| k > 127) {
+                    return Err(OpError::Invalid("note key `p` must be 0..127".into()));
+                }
+                if n.ch == 0 && n.inst.is_none() {
+                    return Err(OpError::Invalid("every note needs `ch` (a channel id, see `wave channels`)".into()));
+                }
+            }
+            p.resolve_note_channels(&mut pt.notes);
+            if let Some(n) = pt.notes.iter().find(|n| p.channel(n.ch).is_none()) {
+                return Err(OpError::Missing { what: "channel", id: n.ch });
+            }
+            bump(p, pt.id);
+            match p.patterns.iter_mut().find(|x| x.id == pt.id) {
+                Some(x) => {
+                    let old = x.len;
+                    *x = pt;
+                    if (old - pattern.len).abs() > 1e-9 {
+                        follow_pattern_length(p, pattern.id, old, pattern.len);
+                    }
+                }
+                None => p.patterns.push(pt),
+            }
+            d.timeline = true;
+        }
+        Op::PutChannel { channel, index } => {
+            let c = channel;
+            if !(c.vol.is_finite() && (0.0..=1.0).contains(&c.vol)) {
+                return Err(OpError::Invalid("channel vol is a fader position 0..1".into()));
+            }
+            if !(c.pan.is_finite() && (-1.0..=1.0).contains(&c.pan)) {
+                return Err(OpError::Invalid("channel pan must be -1..1".into()));
+            }
+            if c.root > 127 {
+                return Err(OpError::Invalid("channel root must be 0..127".into()));
+            }
+            if let ChannelSrc::Sample { source } = c.src {
+                if !p.sources.iter().any(|s| s.id == source) {
+                    return Err(OpError::Missing { what: "source", id: source });
+                }
+            }
+            if let Some(ins) = c.insert {
+                if p.insert(ins).is_none() {
+                    return Err(OpError::Missing { what: "insert", id: ins });
+                }
+            }
+            bump(p, c.id);
+            match p.channels.iter().position(|x| x.id == c.id) {
+                Some(i) => {
+                    let x = &p.channels[i];
+                    // knobs and mute/solo take the fast path; what a note plays or where it goes rebuilds
+                    if x.src != c.src || x.insert != c.insert || x.root != c.root {
+                        d.timeline = true;
+                    } else {
+                        d.params = true;
+                    }
+                    p.channels[i] = c.clone();
+                    if let Some(to) = index {
+                        let ch = p.channels.remove(i);
+                        let to = (*to).min(p.channels.len());
+                        p.channels.insert(to, ch);
+                        d.timeline = true;
+                    }
+                }
+                None => {
+                    let at = index.unwrap_or(p.channels.len()).min(p.channels.len());
+                    p.channels.insert(at, c.clone());
+                    d.timeline = true;
+                }
+            }
+        }
+        Op::RemoveChannel { id } => {
+            if p.channel(*id).is_none() {
+                return Err(OpError::Missing { what: "channel", id: *id });
+            }
+            p.channels.retain(|c| c.id != *id);
+            for pt in p.patterns.iter_mut() {
+                pt.notes.retain(|n| n.ch != *id);
             }
             d.timeline = true;
         }
@@ -256,6 +349,12 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         }
         Op::RemoveSource { id } => {
             p.sources.retain(|s| s.id != *id);
+            // sampler channels playing it go, with their notes
+            let gone: Vec<Id> = p.channels.iter().filter(|c| c.src == ChannelSrc::Sample { source: *id }).map(|c| c.id).collect();
+            p.channels.retain(|c| !gone.contains(&c.id));
+            for pt in p.patterns.iter_mut() {
+                pt.notes.retain(|n| !gone.contains(&n.ch));
+            }
             p.clips.retain(|c| !(c.kind == ClipKind::Audio && c.source == *id));
             // takes recorded into this source go too; a comp left without takes goes with its clips
             for cp in p.comps.iter_mut() {
@@ -328,6 +427,17 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         }
     }
     Ok(d)
+}
+
+/// A pattern's length went from `old` to `new` beats: clips that show exactly one whole
+/// pass of it (offset 0, length = old length) follow; longer, shorter or offset clips keep
+/// their length (they were sized on purpose). Clips never run past the playlist end.
+fn follow_pattern_length(p: &mut Project, id: Id, old: f64, new: f64) {
+    for c in p.clips.iter_mut() {
+        if c.kind == ClipKind::Pat && c.source == id && c.offset.abs() < 1e-9 && (c.len - old).abs() < 1e-6 {
+            c.len = new.min(TOTAL_BEATS - c.start).max(1.0 / 16.0);
+        }
+    }
 }
 
 /// Checks a comp and returns it normalised (regions sorted, same-take neighbours joined).

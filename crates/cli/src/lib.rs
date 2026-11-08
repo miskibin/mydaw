@@ -30,6 +30,17 @@ EDIT  (all edits are one undo step each; --if-revision N refuses to act if the p
   preset --fx ID --index N
   import <file>... [--track N --beat B]    load audio, optionally place it
 
+PATTERNS & CHANNELS  (steps: x = on, 1-9 = velocity 10-90 %, . = off; spaces and | are ignored)
+  channels                                 Channel Rack: ids, instrument/sample, volume, pan, insert
+  channels --add kick|clap|hat|bass        add a built-in channel     (--sample SOURCE_ID: a sampler channel)
+  channels --remove ID|NAME                remove a channel and its notes
+  pattern [--id N]                         a pattern as step strings per channel
+  pattern --id N --ch C --steps "x... x... x... x..." [--vel 0.8]   replace channel C's notes
+  pattern --id N --ch C --notes '[{"step":0,"len":4,"p":36,"v":0.9}]'  piano-roll notes (p = MIDI key)
+  pattern --id N --ch C --clear            remove channel C's notes from the pattern
+  pattern --id N [--bars 1..8] [--swing 0..100] [--name TEXT]      (--new instead of --id: a new pattern)
+  pattern --id N --play | --stop           loop the pattern on its own (stops the song)
+
 TAKES & COMPING  (times in timeline beats; add --clip ID when a track has several comps)
   takes --track N                          takes, comp regions and crossfades of the track
   comp --track N --set '[{"take":ID,"from":B,"to":B,"xfadeMs":20},...]'   replace the comp
@@ -160,6 +171,11 @@ fn send(a: &Args, command: &str, args: Value) -> Result<Value, Fail> {
     }
 }
 
+/// `12` → 12, `kick` → "kick".
+fn id_or_name(s: &str) -> Value {
+    s.parse::<u64>().map(|n| json!(n)).unwrap_or_else(|_| json!(s))
+}
+
 fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
     let u = Fail::Usage;
     match cmd {
@@ -195,6 +211,46 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 return Err(u("import <file>...".into()));
             }
             send(a, "import", json!({"paths": files, "track": a.num("track").map_err(u)?, "beat": a.num("beat").map_err(u)?}))
+        }
+        "channels" => {
+            let mut args = json!({});
+            if let Some(k) = a.get("add") {
+                args["add"] = json!(k);
+            }
+            if let Some(s) = a.num("sample").map_err(u)? {
+                args["sample"] = json!(s as u64);
+            }
+            if let Some(r) = a.get("remove") {
+                args["remove"] = id_or_name(r);
+            }
+            send(a, "channels", args)
+        }
+        "pattern" => {
+            if a.has("play") || a.has("stop") {
+                let id = if a.has("stop") { None } else { Some(a.num("id").map_err(u)?.ok_or_else(|| u("--play needs --id".into()))? as u64) };
+                return send(a, "pattern_play", json!({ "id": id }));
+            }
+            let mut args = json!({ "new": a.has("new"), "clear": a.has("clear") });
+            if let Some(id) = a.num("id").map_err(u)? {
+                args["id"] = json!(id as u64);
+            }
+            for k in ["name", "color", "steps"] {
+                if let Some(v) = a.get(k) {
+                    args[k] = json!(v);
+                }
+            }
+            for k in ["bars", "swing", "vel"] {
+                if let Some(v) = a.num(k).map_err(u)? {
+                    args[k] = json!(v);
+                }
+            }
+            if let Some(c) = a.get("ch") {
+                args["ch"] = id_or_name(c);
+            }
+            if let Some(n) = a.get("notes") {
+                args["notes"] = serde_json::from_str(n).map_err(|e| u(format!("--notes is not JSON: {e}")))?;
+            }
+            send(a, "pattern", args)
         }
         "takes" => send(a, "takes", json!({"track": a.num("track").map_err(u)?.ok_or_else(|| u("missing --track".into()))? as u64})),
         "comp" => {
