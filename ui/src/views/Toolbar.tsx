@@ -137,12 +137,12 @@ export function Toolbar() {
         </button>
         <button class="count" classList={{ on: T().countIn }} title="Count-in: 1 takt przed nagrywaniem" onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
-      <Show when={T().rec}>
-        <div class="row" title="Poziom wejścia" style={{ gap: '6px' }}>
-          <span class="tag9">IN</span>
-          <div class="inmeter"><div ref={inEl} /></div>
-        </div>
-      </Show>
+      {/* the slot stays reserved while recording is off, so pressing R never re-wraps the toolbar
+          (and shifts the playlist) on a narrow window */}
+      <div class="row" title="Poziom wejścia" style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
+        <span class="tag9">IN</span>
+        <div class="inmeter"><div ref={inEl} /></div>
+      </div>
       <div class="clockbox" onContextMenu={bpmMenu}>
         <span ref={clockEl} class="clock">1:01:01</span>
         <div style={{ width: '1px', height: '14px', background: 'var(--line)' }} />

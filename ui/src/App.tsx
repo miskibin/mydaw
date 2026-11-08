@@ -1,6 +1,7 @@
 import { createEffect, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from './api/backend';
 import { baseName } from './lib/format';
+import { typingIn } from './lib/keys';
 import { snapRes } from './lib/snap';
 import * as A from './state/actions';
 import { findFx, S } from './state/store';
@@ -26,8 +27,7 @@ function plugRank(z: number) { let r = 1; for (const p of U.plugs) if (p.z < z) 
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
-  const tg = (e.target as HTMLElement).tagName;
-  if (tg === 'INPUT' || tg === 'SELECT' || tg === 'TEXTAREA') return;
+  if (typingIn(e.target as HTMLElement)) return;
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
   if (e.code === 'Space') { e.preventDefault(); (document.activeElement as HTMLElement | null)?.blur?.(); if (!e.repeat) void A.togglePlay(); return; }
   if (e.key === 'Escape') {

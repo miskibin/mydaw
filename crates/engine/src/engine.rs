@@ -91,8 +91,11 @@ type FrameSink = Box<dyn Fn(Vec<u8>) + Send + Sync>;
 /// frames where each later pass begins (the audio thread sends a NaN frame at the wrap).
 struct RecBuf {
     track: usize,
-    /// Beat where the first pass starts.
+    /// Beat where the first pass starts (NaN until the audio thread has punched in).
     start: f64,
+    /// Frames of input to drop from the front so the take lines up with what the
+    /// performer heard: device round trip + plugin delay compensation of the playback.
+    skip: usize,
     /// Loop range when recording in passes.
     lap: Option<(f64, f64)>,
     sr: u32,
@@ -116,6 +119,12 @@ impl RecBuf {
         match (self.lap, self.marks.is_empty()) {
             (Some((a, _)), false) => a,
             _ => self.start,
+        }
+    }
+    /// A punch-in take starts where the audio thread began capturing.
+    fn resolve_start(&mut self, shared: &Shared) {
+        if self.start.is_nan() {
+            self.start = shared.rec_start();
         }
     }
     fn push(&mut self, x: f32) {
@@ -262,6 +271,14 @@ impl Engine {
             aout.push(b);
         }
         let shared = Arc::new(Shared::new());
+        {
+            // a punched-in take learns its start beat from the stream that is going away
+            let mut c = self.core.lock();
+            let old = self.shared.lock().clone();
+            if let Some(t) = c.take.as_mut() {
+                t.resolve_start(&old);
+            }
+        }
         *self.shared.lock() = shared.clone();
         let rt = Rt::new(sample_rate, max_block, cmd_rx, gb_tx, shared, Taps { input: inputs, output: outputs }, rec_tx);
         let mut c = self.core.lock();
@@ -426,9 +443,8 @@ impl Engine {
             None => from,
         };
         let count_in = if rec_track.is_some() && c.transport.count_in { 4.0 } else { 0.0 };
-        if let (Some(track), Some(w)) = (rec_track, c.wires.as_ref()) {
-            let sr = w.sr as u32;
-            c.take = Some(RecBuf { track, start: from, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) });
+        if let Some(track) = rec_track {
+            c.take = self.new_take(&c, track, from, lap);
         }
         c.transport.start_beat = from;
         c.transport.playing = true;
@@ -472,6 +488,17 @@ impl Engine {
         if punch_out {
             send(&mut c, Cmd::PunchOut);
         }
+        // arming while the song plays punches in right away (on the first armed track)
+        if c.transport.rec && c.transport.playing && c.take.is_none() {
+            if let Some(track) = c.project.tracks.iter().position(|t| t.arm) {
+                let lap = c.project.loop_range.filter(|l| l.b > l.a).map(|l| (l.a, l.b));
+                if let Some(t) = self.new_take(&c, track, f64::NAN, lap) {
+                    self.shared().set_rec_start(f64::NAN);
+                    c.take = Some(t);
+                    send(&mut c, Cmd::PunchIn { rec_loop: lap.is_some() });
+                }
+            }
+        }
         let f = Cmd::Flags { metro: c.transport.metro, monitor: c.transport.monitor };
         send(&mut c, f);
         let t = c.transport.clone();
@@ -484,6 +511,15 @@ impl Engine {
             self.changed(c);
         }
         t
+    }
+
+    /// An empty take buffer for the live device (`None` without one). Its start is `start`
+    /// (NaN = learned from the audio thread at punch-in).
+    fn new_take(&self, c: &Core, track: usize, start: f64, lap: Option<(f64, f64)>) -> Option<RecBuf> {
+        let w = c.wires.as_ref()?;
+        let sr = w.sr as u32;
+        let skip = self.shared().io_latency() as usize + playback_latency(&c.project, w.sr);
+        Some(RecBuf { track, start, skip, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
     }
 
     pub fn watch_fx(&self, ids: &[Id]) {
@@ -693,7 +729,7 @@ impl Engine {
         let data = audio.content()[a * 2..b * 2].to_vec();
         let old = c.project.sources.iter().find(|s| s.id == clip.source).cloned().unwrap();
         let id = c.project.alloc_id();
-        let path = audio_dir(&c).join(format!("{} trim {}.wav", sanitize(&old.name), id));
+        let path = fresh_path(&audio_dir(&c), &format!("{} trim {}", sanitize(&old.name), id));
         write_wav(&path, &data, audio.sr)?;
         let new = Audio::from_stereo(data, audio.sr, audio.channels);
         let before = c.project.clone();
@@ -964,25 +1000,33 @@ impl Engine {
         let spb = 60.0 / project.bpm;
         let frames = (((to - from).max(0.0) * spb + tail.max(0.0)) * sample_rate as f64) as usize;
         let play_frames = ((to - from).max(0.0) * spb * sample_rate as f64) as usize;
+        // plugin delay compensation delays everything by `pdc` frames: render that much
+        // longer and drop it from the front, so the file starts on `from` and the last
+        // `pdc` frames of the song are not cut off
+        let pdc = playback_latency(&project, sr);
+        let total = frames + pdc;
         let mut out = Vec::with_capacity(frames * 2);
         let mut l = vec![0f32; block];
         let mut r = vec![0f32; block];
         let mut done = 0;
         let mut stopped = false;
-        while done < frames {
+        let keep = |out: &mut Vec<f32>, at: usize, l: &[f32], r: &[f32]| {
+            for i in at.max(pdc).saturating_sub(at)..l.len() {
+                out.push(l[i]);
+                out.push(r[i]);
+            }
+        };
+        while done < total {
             if cancel.load(Relaxed) {
                 return Err(EngineError::Cancelled);
             }
-            let n = block.min(frames - done);
+            let n = block.min(total - done);
             if !stopped && done + n > play_frames {
                 // stop exactly at `to`: render up to it, then let tails ring
                 let k = play_frames.saturating_sub(done);
                 if k > 0 {
                     rt.process(&mut l[..k], &mut r[..k], None);
-                    for i in 0..k {
-                        out.push(l[i]);
-                        out.push(r[i]);
-                    }
+                    keep(&mut out, done, &l[..k], &r[..k]);
                     done += k;
                 }
                 let _ = cmd_tx.push(Cmd::Stop);
@@ -990,10 +1034,7 @@ impl Engine {
                 continue;
             }
             rt.process(&mut l[..n], &mut r[..n], None);
-            for i in 0..n {
-                out.push(l[i]);
-                out.push(r[i]);
-            }
+            keep(&mut out, done, &l[..n], &r[..n]);
             done += n;
             while gb_rx.pop().is_ok() {}
         }
@@ -1084,7 +1125,10 @@ impl Engine {
             }
             let _ = sr;
             let ids: Vec<Id> = c.project.inserts.iter().map(|m| m.id).collect();
-            let rec = c.take.as_mut().map(|t| {
+            if let Some(t) = c.take.as_mut() {
+                t.resolve_start(&shared);
+            }
+            let rec = c.take.as_mut().filter(|t| !t.start.is_nan()).map(|t| {
                 let new = t.peaks[t.peaks_sent..].to_vec();
                 let off = t.peaks_sent / 2;
                 t.peaks_sent = t.peaks.len();
@@ -1116,7 +1160,11 @@ impl Engine {
     }
 
     fn finish_take(&self) {
+        let shared = self.shared();
         let mut c = self.core.lock();
+        if let Some(t) = c.take.as_mut() {
+            t.resolve_start(&shared);
+        }
         self.finalize_take(&mut c);
     }
 
@@ -1128,12 +1176,22 @@ impl Engine {
                 take.push(x);
             }
         }
+        if take.start.is_nan() {
+            return; // punched in, but the audio thread never started capturing
+        }
         let spb = 60.0 / c.project.bpm;
         let sr = take.sr as f64;
+        // Latency compensation: input captured at frame `j` was sung to what was heard
+        // `skip` frames earlier. Dropping the first `skip` frames moves the whole take
+        // earlier; pass marks (written when the audio thread wrapped) then land exactly
+        // on the loop start of what was heard, so they stay where they are.
+        let skip = take.skip.min(take.frames());
+        let data = &take.data[skip * 2..];
+        let total = data.len() / 2;
         // one pass per loop cycle; a last pass cut off within a beat of the wrap is not a take
         let mut bounds = vec![0];
-        bounds.extend(take.marks.iter().copied());
-        bounds.push(take.frames());
+        bounds.extend(take.marks.iter().copied().filter(|&m| m < total));
+        bounds.push(total);
         let mut passes: Vec<(f64, &[f32])> = vec![];
         for k in 0..bounds.len() - 1 {
             let (f0, f1) = (bounds[k], bounds[k + 1]);
@@ -1143,7 +1201,7 @@ impl Engine {
                 continue;
             }
             let start = if k == 0 { take.start } else { take.lap.map(|l| l.0).unwrap_or(take.start) };
-            passes.push((start, &take.data[f0 * 2..f1 * 2]));
+            passes.push((start, &data[f0 * 2..f1 * 2]));
         }
         if passes.is_empty() {
             return;
@@ -1156,7 +1214,7 @@ impl Engine {
             let id = c.project.alloc_id();
             let n = c.project.sources.iter().filter(|s| s.name.starts_with("Take")).count() + 1;
             let name = format!("Take {n}");
-            let path = dir.join(format!("{} {}.wav", name, id));
+            let path = fresh_path(&dir, &format!("{} {}", name, id));
             if let Err(e) = write_wav(&path, data, take.sr) {
                 log::error!("could not write recording: {e}");
             }
@@ -1217,7 +1275,7 @@ impl Engine {
         let data: Vec<f32> = l.iter().zip(&r).flat_map(|(a, b)| [*a, *b]).collect();
         let id = c.project.alloc_id();
         let name = format!("{} (flat)", comp.name);
-        let path = audio_dir(&c).join(format!("{} flat {}.wav", sanitize(&comp.name), id));
+        let path = fresh_path(&audio_dir(&c), &format!("{} flat {}", sanitize(&comp.name), id));
         write_wav(&path, &data, sr)?;
         let audio = Audio::from_stereo(data, sr, ch);
         let before = c.project.clone();
@@ -1324,6 +1382,19 @@ fn audio_dir(c: &Core) -> PathBuf {
     }
 }
 
+/// `dir/stem.wav`, or `dir/stem (2).wav` … when that file exists: ids restart in every new
+/// project and unsaved projects share the scratch folder, so a new take must never
+/// overwrite audio another project (or an older save of this one) still points at.
+fn fresh_path(dir: &Path, stem: &str) -> PathBuf {
+    let mut p = dir.join(format!("{stem}.wav"));
+    let mut k = 2;
+    while p.exists() {
+        p = dir.join(format!("{stem} ({k}).wav"));
+        k += 1;
+    }
+    p
+}
+
 fn sanitize(s: &str) -> String {
     s.chars().map(|ch| if ch.is_alphanumeric() || ch == ' ' || ch == '-' || ch == '_' { ch } else { '_' }).collect()
 }
@@ -1336,6 +1407,14 @@ fn audible_tracks(p: &Project) -> Vec<(f32, bool)> {
 fn audible_inserts(p: &Project) -> Vec<(Id, f32, f32, bool)> {
     let any_solo = p.inserts.iter().any(|m| m.id != 0 && m.solo);
     p.inserts.iter().map(|m| (m.id, fader_gain(m.vol), m.pan.clamp(-1.0, 1.0), !m.muted && (m.id == 0 || !any_solo || m.solo))).collect()
+}
+
+/// Frames between the timeline and the speakers inside the mixer: the slowest non-master
+/// insert (plugin delay compensation delays every insert to match it) plus the master chain.
+pub fn playback_latency(p: &Project, sr: f32) -> usize {
+    let lat = |m: &crate::model::Insert| m.fx.iter().map(|f| crate::catalog::latency(f, sr)).sum::<usize>();
+    let master = p.inserts.first().map(lat).unwrap_or(0);
+    master + p.inserts.iter().skip(1).map(lat).max().unwrap_or(0)
 }
 
 fn monitor_track(p: &Project) -> Option<usize> {

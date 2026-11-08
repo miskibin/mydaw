@@ -11,6 +11,7 @@
 //! asked for and cannot be opened we fall back to the system host and say why
 //! in [`AudioStatus::note`], so there is always sound.
 
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -29,6 +30,10 @@ pub struct AudioConfig {
     pub input: Option<String>,
     pub sample_rate: Option<u32>,
     pub buffer_size: Option<u32>,
+    /// Input channel recorded and monitored (0-based), as mono in both sides.
+    /// `None` = the first one (where an interface's mic input 1 is).
+    #[serde(default)]
+    pub input_channel: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -263,6 +268,8 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
     };
     let (in_tx, in_rx) = rtrb::RingBuffer::<f32>::new(rate as usize * 2);
     let error = Arc::new(std::sync::Mutex::new(None::<String>));
+    // input latency (capture → input callback) in frames, measured by the input callback
+    let in_lat = Arc::new(AtomicU32::new(0));
     let mut in_name = None;
     let mut in_ch = 0u16;
     let mut inp = None;
@@ -272,7 +279,8 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
                 let ich = ic.channels().max(1);
                 let isc = cpal::StreamConfig { channels: ich, sample_rate: rate, buffer_size: buffer };
                 let err = error.clone();
-                match build_input(&d, &isc, ic.sample_format(), in_tx, err) {
+                let pick = cfg.input_channel.unwrap_or(0).min(ich - 1) as usize;
+                match build_input(&d, &isc, ic.sample_format(), in_tx, err, pick, in_lat.clone()) {
                     Ok(s) => {
                         in_name = dev_name(&d);
                         in_ch = ich;
@@ -286,8 +294,9 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
     }
 
     let rt = engine.create_rt(rate as f32, (nominal as usize).clamp(64, 2048));
+    let shared = engine.shared();
     let err = error.clone();
-    let out = build_output(&out_dev, &sc, fmt, rt, in_rx, err).map_err(|e| format!("{out_name}: {e}"))?;
+    let out = build_output(&out_dev, &sc, fmt, rt, in_rx, err, Latency { shared, input: in_lat }).map_err(|e| format!("{out_name}: {e}"))?;
     out.play().map_err(|e| format!("{out_name}: {e}"))?;
     if let Some(s) = &inp {
         if let Err(e) = s.play() {
@@ -311,13 +320,40 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
     Ok((Running { _out: out, _inp: inp, error }, status))
 }
 
-fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut rt: wave_engine::Rt, mut input: rtrb::Consumer<f32>, err: Arc<std::sync::Mutex<Option<String>>>) -> Result<cpal::Stream, String> {
+/// Where the output callback publishes the measured round trip.
+struct Latency {
+    shared: Arc<wave_engine::rt::Shared>,
+    /// Input latency in frames from the input callback (0 = not measured yet).
+    input: Arc<AtomicU32>,
+}
+
+/// Round trip in frames for one output callback: what the callback renders now is heard
+/// `out` frames later, and the oldest input it consumes was captured `backlog + input`
+/// frames ago. Hosts that report no timestamps fall back to one buffer each way.
+fn round_trip(out: u32, backlog: u32, input: u32, buffer: u32) -> u32 {
+    let out = if out == 0 { buffer } else { out };
+    let input = if input == 0 { buffer } else { input };
+    out + backlog + input
+}
+
+fn frames_of(d: std::time::Duration, rate: u32) -> u32 {
+    (d.as_secs_f64() * rate as f64).round().min(u32::MAX as f64) as u32
+}
+
+fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut rt: wave_engine::Rt, mut input: rtrb::Consumer<f32>, err: Arc<std::sync::Mutex<Option<String>>>, lat: Latency) -> Result<cpal::Stream, String> {
     let ch = sc.channels as usize;
+    let rate = sc.sample_rate;
+    // smoothed round trip (frames); the backlog of the input ring jitters by a callback
+    let mut smooth = -1f64;
     let mut l = vec![0f32; MAX_CALLBACK];
     let mut r = vec![0f32; MAX_CALLBACK];
     let mut il = vec![0f32; MAX_CALLBACK];
     let mut ir = vec![0f32; MAX_CALLBACK];
-    let mut render = move |frames: usize, write: &mut dyn FnMut(usize, f32, f32)| {
+    let mut render = move |frames: usize, out_lat: u32, write: &mut dyn FnMut(usize, f32, f32)| {
+        let backlog = (input.slots() / 2) as u32;
+        let rtt = round_trip(out_lat, backlog, lat.input.load(Relaxed), frames as u32) as f64;
+        smooth = if smooth < 0.0 { rtt } else { smooth * 0.95 + rtt * 0.05 };
+        lat.shared.set_io_latency(smooth.round() as u32);
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(MAX_CALLBACK);
@@ -349,9 +385,11 @@ fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFo
         ($t:ty, $conv:expr) => {
             dev.build_output_stream(
                 *sc,
-                move |data: &mut [$t], _: &cpal::OutputCallbackInfo| {
+                move |data: &mut [$t], info: &cpal::OutputCallbackInfo| {
                     let frames = data.len() / ch;
-                    render(frames, &mut |i, a, b| {
+                    let ts = info.timestamp();
+                    let out_lat = frames_of(ts.playback.duration_since(ts.callback), rate);
+                    render(frames, out_lat, &mut |i, a, b| {
                         let base = i * ch;
                         data[base] = $conv(a);
                         if ch > 1 {
@@ -377,8 +415,10 @@ fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFo
     s.map_err(|e| e.to_string())
 }
 
-fn build_input(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut tx: rtrb::Producer<f32>, err: Arc<std::sync::Mutex<Option<String>>>) -> Result<cpal::Stream, String> {
+fn build_input(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut tx: rtrb::Producer<f32>, err: Arc<std::sync::Mutex<Option<String>>>, pick: usize, lat: Arc<AtomicU32>) -> Result<cpal::Stream, String> {
     let ch = sc.channels as usize;
+    let pick = pick.min(ch - 1);
+    let rate = sc.sample_rate;
     let on_err = move |e: cpal::Error| {
         if let Ok(mut g) = err.lock() {
             *g = Some(format!("input: {e}"));
@@ -388,15 +428,18 @@ fn build_input(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFor
         ($t:ty, $conv:expr) => {
             dev.build_input_stream(
                 *sc,
-                move |data: &[$t], _: &cpal::InputCallbackInfo| {
+                move |data: &[$t], info: &cpal::InputCallbackInfo| {
+                    let ts = info.timestamp();
+                    lat.store(frames_of(ts.callback.duration_since(ts.capture), rate), Relaxed);
+                    // one channel (a mic on input 1 or 2), mono in both sides: a vocal recorded
+                    // from a stereo interface must not end up in the left ear only
                     for f in data.chunks_exact(ch) {
                         if tx.slots() < 2 {
                             break;
                         }
-                        let a = $conv(f[0]);
-                        let b = if ch > 1 { $conv(f[1]) } else { a };
+                        let a = $conv(f[pick]);
                         let _ = tx.push(a);
-                        let _ = tx.push(b);
+                        let _ = tx.push(a);
                     }
                 },
                 on_err,
@@ -412,4 +455,24 @@ fn build_input(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFor
         f => return Err(format!("unsupported sample format {f:?}")),
     };
     s.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trip_adds_both_directions_and_the_backlog() {
+        // 10 ms out + 256 frames waiting + 5 ms in at 48 kHz
+        assert_eq!(round_trip(480, 256, 240, 512), 976);
+        // a host without timestamps: one buffer each way
+        assert_eq!(round_trip(0, 0, 0, 512), 1024);
+        assert_eq!(frames_of(std::time::Duration::from_millis(10), 48000), 480);
+    }
+
+    #[test]
+    fn settings_saved_before_input_channels_still_load() {
+        let c: AudioConfig = serde_json::from_str(r#"{"host":"","output":null,"input":null,"sampleRate":null,"bufferSize":null}"#).unwrap();
+        assert_eq!(c.input_channel, None);
+    }
 }

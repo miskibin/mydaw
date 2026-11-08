@@ -33,7 +33,7 @@ function SettingsDialog() {
   });
   const apply = async (patch: Partial<AudioConfig>) => {
     const s = st(); if (!s) return;
-    const cfg: AudioConfig = { host: s.host, output: s.output, input: s.input, sampleRate: s.sampleRate, bufferSize: s.bufferSize, ...patch };
+    const cfg: AudioConfig = { host: s.host, output: s.output, input: s.input, sampleRate: s.sampleRate, bufferSize: s.bufferSize, inputChannel: s.inputChannel ?? null, ...patch };
     setBusy(true); setErr(null);
     try {
       if (patch.host && patch.host !== s.host) { await loadDevs(patch.host); cfg.output = null; cfg.input = null; }
@@ -71,6 +71,12 @@ function SettingsDialog() {
               <select class="sel" value={opt(s().input)} disabled={busy()} onChange={e => apply({ input: e.currentTarget.value || null })}>
                 <option value="">Domyślne / brak</option>
                 <For each={devs().inputs}>{d => <option value={d}>{d}</option>}</For>
+              </select>
+              <label>Kanał wejścia</label>
+              <select class="sel" value={String(s().inputChannel ?? 0)} disabled={busy() || s().inputChannels < 2}
+                title={s().inputChannels ? 'Kanał nagrywany i odsłuchiwany — mono, w obu słuchawkach (mikrofon zwykle w wejściu 1)' : 'Wejście otwiera się przy nagrywaniu lub odsłuchu — włącz jedno z nich, by zobaczyć kanały'}
+                onChange={e => apply({ inputChannel: +e.currentTarget.value })}>
+                <For each={Array.from({ length: Math.max(s().inputChannels, (s().inputChannel ?? 0) + 1) }, (_, i) => i)}>{i => <option value={String(i)}>{'Wejście ' + (i + 1) + ' (mono)'}</option>}</For>
               </select>
               <label>Częstotliwość</label>
               <select class="sel" value={opt(s().sampleRate)} disabled={busy()} onChange={e => apply({ sampleRate: e.currentTarget.value ? +e.currentTarget.value : null })}>

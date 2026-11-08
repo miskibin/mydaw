@@ -107,7 +107,7 @@ export class MockBackend implements Backend {
   private folders = ['C:\\Users\\michal\\Music\\Samples'];
   private vstParams = new Map<Id, Vst3Param[]>();
   private audio: AudioStatus = {
-    host: 'wasapi', output: 'Głośniki (Realtek High Definition Audio)', input: 'Mikrofon (USB Audio)', sampleRate: null, bufferSize: null,
+    host: 'wasapi', output: 'Głośniki (Realtek High Definition Audio)', input: 'Mikrofon (USB Audio)', sampleRate: null, bufferSize: null, inputChannel: null,
     running: true, actualRate: 48000, actualBuffer: 480, latencyMs: 20, inputChannels: 2, error: null, note: 'Mock — brak prawdziwego audio', asioCompiled: false,
   };
 
@@ -202,10 +202,12 @@ export class MockBackend implements Backend {
   }
   private changedTransport() { this.emit('state', this.dto()); }
   private startRec(clipStart: number) {
+    // like the engine: without an armed track nothing is recorded
     const t = this.p.tracks.findIndex(x => x.arm);
+    if (t < 0) return;
     const lp = this.p.loop;
     const lap: [number, number] | null = lp && lp.b > lp.a && clipStart >= lp.a && clipStart < lp.b ? [lp.a, lp.b] : null;
-    this.rec = { track: t < 0 ? 0 : t, clipStart: Math.max(0, clipStart), t0: 0, peaks: [], sent: 0, lap, pass: 0 };
+    this.rec = { track: t, clipStart: Math.max(0, clipStart), t0: 0, peaks: [], sent: 0, lap, pass: 0 };
   }
   /** Peak-pair index where each pass after the first begins (100 pairs per second). */
   private passMarks(r: NonNullable<MockBackend['rec']>, total: number): number[] {

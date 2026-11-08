@@ -288,13 +288,16 @@ fn latency_is_compensated_across_inserts() {
     p.tracks[5].muted = false;
     let e = Engine::new(p.clone(), Arc::new(NoPlugins));
     let with = e.render(0.0, 1.0, 0.0, 48000).unwrap();
-    let lat = wave_engine::vocal::tune_latency(48000.0);
-    // the kick on beat 1 should now start `lat` samples later than without the tuner
+    // live, the kick on beat 1 is delayed by the tuner's latency to line up with the vocal;
+    // an export drops that delay, so the file starts on the beat as without the tuner
     let mut q = p;
     q.inserts[6].fx.clear();
     let without = Engine::new(q, Arc::new(NoPlugins)).render(0.0, 1.0, 0.0, 48000).unwrap();
     let onset = |x: &[f32]| x.chunks(2).position(|f| f[0].abs() > 0.05).unwrap();
-    assert_eq!(onset(&with), onset(&without) + lat);
+    assert_eq!(onset(&with), onset(&without));
+    assert_eq!(with.len(), without.len());
+    let diff = with.iter().zip(&without).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+    assert!(diff < 1e-4, "export with a latent effect differs from the same mix without it by {diff}");
 }
 
 #[test]

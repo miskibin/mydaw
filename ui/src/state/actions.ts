@@ -12,9 +12,15 @@ import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
 
 // ---------- transport ----------
+/** Recording is on but no track is armed: the engine plays and records nothing. */
+const NO_ARMED = 'Nagrywanie włączone, ale żadna ścieżka nie jest uzbrojona — kliknij ● przy ścieżce';
+const armedTrack = () => S.project.tracks.find(t => t.arm);
 export async function play(from = U.start) {
   setU('playing', true);
-  try { await be().transportPlay(from); setTransport({ playing: true }); say(S.transport.rec ? '● Nagrywanie' : 'Play'); }
+  try {
+    await be().transportPlay(from); setTransport({ playing: true });
+    say(!S.transport.rec ? 'Play' : armedTrack() ? '● Nagrywanie na: ' + armedTrack()!.name : NO_ARMED);
+  }
   catch (e) { setU('playing', false); say('Błąd odtwarzania: ' + String(e)); }
 }
 /** `rewind` also moves the start marker (and the stopped playhead) to the beginning of the song. */
@@ -37,7 +43,10 @@ export async function setTransportFlag(k: 'metro' | 'countIn' | 'rec' | 'monitor
 export function toggleRec() {
   const on = !S.transport.rec;
   void setTransportFlag('rec', on);
-  say(on ? (U.playing ? '● Punch in' : 'Nagrywanie uzbrojone — Spacja startuje' + (S.transport.countIn ? ' (z count-in)' : '')) : 'Nagrywanie wyłączone');
+  say(!on ? (U.playing ? 'Punch out' : 'Nagrywanie wyłączone')
+    : !armedTrack() ? NO_ARMED
+    : U.playing ? '● Punch in: ' + armedTrack()!.name
+    : 'Nagrywanie na: ' + armedTrack()!.name + ' — Spacja startuje' + (S.transport.countIn ? ' (z count-in)' : ''));
 }
 export function toggleMonitor() {
   const on = !S.transport.monitor;

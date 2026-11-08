@@ -256,7 +256,26 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
   newest take plays over its range (a last pass cut short by Stop only where
   it has audio). A last pass shorter than one beat is dropped. The audio
   thread marks each loop wrap with a NaN frame in the input ring.
-* Recordings stay sources (`"Take N"`) next to the project like any audio.
+* Recordings stay sources (`"Take N"`) next to the project like any audio
+  (`<project> Audio/`, or the scratch folder until the first save); a new file
+  never overwrites an existing one (`Take 2 1234 (2).wav`).
+* **Takes line up with what was heard.** Input captured at a frame was sung
+  to playback heard *round trip + PDC* frames earlier: the device layer
+  publishes the measured round trip (`Shared::io_latency`: output
+  playback−callback + input callback−capture + the input ring backlog, from
+  cpal timestamps; one buffer each way when a host reports none) and the
+  engine adds `engine::playback_latency` (slowest non-master insert + master
+  chain). `finalize_take` drops that many frames from the front; pass marks
+  stay put, since they already sit on the heard loop boundary. The last
+  *latency* of a take (still in flight at Stop) is not captured.
+* **Punch-in**: turning `rec` on while playing (with an armed track) starts a
+  take at the playhead (`Cmd::PunchIn`; the audio thread reports the exact beat
+  in `Shared::rec_start`); with a loop set it records in passes like loop
+  recording. Turning `rec` off punches out and keeps playing.
+* The device records **one input channel** (`AudioConfig.inputChannel`,
+  0-based, default the first) as mono in both sides, so a mic on input 1 of a
+  stereo interface is not left-only. Offline renders drop the PDC delay, so an
+  export starts on its first beat and keeps its last `PDC` frames.
 
 ## Pitch edits on audio clips
 
