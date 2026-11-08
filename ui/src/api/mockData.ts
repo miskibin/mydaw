@@ -1,7 +1,8 @@
 // Data for the in-browser mock backend: the catalog of crates/engine/src/catalog.rs and the
 // demo song of crates/engine/src/demo.rs. Only the mock uses these; the real UI reads `fx_catalog`.
-import { VOL_UNITY, type BuiltinKind, type Catalog, type Clip, type EqBand, type Note, type ParamDef, type Preset, type Project } from './types';
+import { VOL_UNITY, type BuiltinKind, type Catalog, type Clip, type EqBand, type Inst, type Note, type ParamDef, type Preset, type Project } from './types';
 import { defaultBands, loadPreset, newFx } from '../lib/presets';
+import { builtinChannel, INSTS } from '../lib/pattern';
 
 const p = (id: string, label: string, min: number, max: number, def: number, unit: string, log = false): ParamDef => ({ id, label, min, max, def, unit, log });
 /** catalog.rs `choice`: a discrete parameter (value = index) shown as buttons. */
@@ -146,6 +147,8 @@ function base(names: string[], insNames: string[], cat: Catalog): Project {
   insNames.forEach((name, i) => p.inserts.push({ id: i + 1, name, color: TC[COLORS[i]], vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] }));
   names.forEach((name, i) => p.tracks.push({ id: i + 1, name, color: TC[COLORS[i]], muted: false, solo: false, arm: false, vol: VOL_UNITY, h: 56, insert: i + 1 }));
   p.inserts[0].fx.push(newFx(cat, 900, 'limit', p.bpm));
+  // the Channel Rack: the four built-ins (ids 1000..1003), like demo.rs
+  p.channels = INSTS.map(i => builtinChannel(p.nextId++, i));
   return p;
 }
 
@@ -157,10 +160,11 @@ export function demoProject(cat: Catalog): Project {
   const p = base(['Drums', 'Hats', 'Bass', 'Pad', 'Perc', 'Vocal', 'Track 7', 'Track 8'],
     ['Drums', 'Hats', 'Bass', 'Pad', 'Perc', 'Vocal', 'Insert 7', 'Insert 8'], cat);
   p.tracks[5].arm = true;
-  const note = (inst: Note['inst'], step: number, len: number, key?: number): Note => key != null ? { inst, step, len, p: key } : { inst, step, len };
+  const ch = (i: Inst) => p.channels!.find(c => c.kind === 'inst' && c.inst === i)!.id;
+  const note = (inst: Inst, step: number, len: number, key?: number): Note => key != null ? { ch: ch(inst), step, len, p: key } : { ch: ch(inst), step, len };
   p.patterns = [
     { id: 1, name: 'Beat', color: '#4f8ef7', len: 4,
-      notes: ([[0, 'kick'], [4, 'kick'], [8, 'kick'], [12, 'kick'], [10, 'kick'], [4, 'clap'], [12, 'clap']] as [number, Note['inst']][]).map(([s, i]) => note(i, s, 1)) },
+      notes: ([[0, 'kick'], [4, 'kick'], [8, 'kick'], [12, 'kick'], [10, 'kick'], [4, 'clap'], [12, 'clap']] as [number, Inst][]).map(([s, i]) => note(i, s, 1)) },
     { id: 2, name: 'Hats', color: '#e0a44a', len: 4, notes: [2, 6, 10, 14, 15, 7].map(s => note('hat', s, 1)) },
     { id: 3, name: 'Bass', color: '#7c8cf8', len: 8,
       notes: [[0, 3, 33], [4, 2, 33], [6, 2, 40], [8, 4, 36], [14, 2, 38], [16, 3, 29], [20, 2, 29], [22, 2, 36], [24, 6, 31], [30, 2, 34]].map(([s, l, k]) => note('bass', s, l, k)) },

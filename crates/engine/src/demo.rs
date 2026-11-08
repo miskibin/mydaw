@@ -18,8 +18,13 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         loop_range: None,
         automations: vec![],
         comps: vec![],
+        channels: vec![],
         next_id: 1000,
     };
+    // the Channel Rack: the four built-ins (ids 1000..1003)
+    for inst in Inst::ALL {
+        p.channel_for_inst(inst);
+    }
     for (i, name) in ins_names.iter().enumerate() {
         p.inserts.push(Insert { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), vol: VOL_UNITY, pan: 0.0, muted: false, solo: false, fx: vec![] });
     }
@@ -44,24 +49,28 @@ pub fn demo_project() -> Project {
         &["Drums", "Hats", "Bass", "Pad", "Perc", "Vocal", "Insert 7", "Insert 8"],
     );
     p.tracks[5].arm = true;
-    let n = |inst, step: f32, len: f32, key: Option<u8>| Note { inst, step, len, p: key };
+    let ch = |inst: Inst| p.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst }).map(|c| c.id).unwrap();
+    let (kick, clap, hat, bass) = (ch(Inst::Kick), ch(Inst::Clap), ch(Inst::Hat), ch(Inst::Bass));
+    let n = |c: Id, step: f32, len: f32, key: Option<u8>| Note::new(c, step, len, key);
     p.patterns = vec![
         Pattern {
             id: 1,
             name: "Beat".into(),
             color: "#4f8ef7".into(),
             len: 4.0,
-            notes: [(0., Inst::Kick), (4., Inst::Kick), (8., Inst::Kick), (12., Inst::Kick), (10., Inst::Kick), (4., Inst::Clap), (12., Inst::Clap)]
+            notes: [(0., kick), (4., kick), (8., kick), (12., kick), (10., kick), (4., clap), (12., clap)]
                 .iter()
                 .map(|&(s, i)| n(i, s, 1.0, None))
                 .collect(),
+            swing: 0.0,
         },
         Pattern {
             id: 2,
             name: "Hats".into(),
             color: "#e0a44a".into(),
             len: 4.0,
-            notes: [2., 6., 10., 14., 15., 7.].iter().map(|&s| n(Inst::Hat, s, 1.0, None)).collect(),
+            notes: [2., 6., 10., 14., 15., 7.].iter().map(|&s| n(hat, s, 1.0, None)).collect(),
+            swing: 0.0,
         },
         Pattern {
             id: 3,
@@ -70,8 +79,9 @@ pub fn demo_project() -> Project {
             len: 8.0,
             notes: [(0., 3., 33), (4., 2., 33), (6., 2., 40), (8., 4., 36), (14., 2., 38), (16., 3., 29), (20., 2., 29), (22., 2., 36), (24., 6., 31), (30., 2., 34)]
                 .iter()
-                .map(|&(s, l, k)| n(Inst::Bass, s, l, Some(k)))
+                .map(|&(s, l, k)| n(bass, s, l, Some(k)))
                 .collect(),
+            swing: 0.0,
         },
     ];
     let clip = |id, track, start, len, pat| Clip {

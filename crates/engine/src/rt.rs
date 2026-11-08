@@ -6,10 +6,10 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::model::{Id, Inst};
+use crate::model::Id;
 use crate::processor::{ParamBlock, ProcessCtx, Processor, METERS};
 use crate::sources::Audio;
-use crate::synth::{VoiceKind, VoicePool};
+use crate::synth::{Dest, VoiceKind, VoicePool};
 
 pub const MAX_INSERTS: usize = 128;
 pub const WATCH_SLOTS: usize = 8;
@@ -26,6 +26,8 @@ pub struct Shared {
     in_level: AtomicU32,
     cpu: AtomicU32,
     preview_pos: AtomicU32,
+    /// Beats into the previewed pattern (f64 bits); negative when no pattern preview runs.
+    pat_beat: AtomicU64,
     /// Per insert *index*: (L, R) peak since last read.
     meters: Vec<(AtomicU32, AtomicU32)>,
     gr: Vec<AtomicU32>,
@@ -55,6 +57,7 @@ impl Shared {
             in_level: AtomicU32::new(0),
             cpu: AtomicU32::new(0),
             preview_pos: AtomicU32::new((-1f32).to_bits()),
+            pat_beat: AtomicU64::new((-1f64).to_bits()),
             meters: (0..MAX_INSERTS).map(|_| (AtomicU32::new(0), AtomicU32::new(0))).collect(),
             gr: (0..WATCH_SLOTS).map(|_| AtomicU32::new(0)).collect(),
             fx_meters: (0..WATCH_SLOTS).map(|_| std::array::from_fn(|_| AtomicU32::new(0))).collect(),
@@ -76,6 +79,10 @@ impl Shared {
     }
     pub fn preview_pos(&self) -> f32 {
         fget(&self.preview_pos)
+    }
+    /// Beats into the pattern the loop preview plays, or a negative number when it is stopped.
+    pub fn pat_beat(&self) -> f64 {
+        f64::from_bits(self.pat_beat.load(Relaxed))
     }
     pub fn fx_meters(&self, slot: usize) -> [f32; METERS] {
         std::array::from_fn(|i| fget(&self.fx_meters[slot][i]))
@@ -131,8 +138,8 @@ pub struct InsertRt {
     pub on: bool,
     pub fx: Vec<FxSlot>,
     g_cur: f32,
-    l: Vec<f32>,
-    r: Vec<f32>,
+    pub(crate) l: Vec<f32>,
+    pub(crate) r: Vec<f32>,
     /// Latency compensation: extra delay so this insert lines up with the slowest one.
     pdc_l: Vec<f32>,
     pdc_r: Vec<f32>,
@@ -183,6 +190,8 @@ pub struct MixState {
     pub inserts: Vec<(Id, f32, f32, bool)>,
     pub tracks: Vec<(f32, bool)>,
     pub monitor_track: Option<usize>,
+    /// Channel (gain, pan, on), in the timeline's channel order.
+    pub chans: Vec<(f32, f32, bool)>,
 }
 
 // ------------------------------------------------------------------ timeline
@@ -224,22 +233,48 @@ pub struct ClipRt {
     pub src: ClipSrc,
 }
 
+/// A pattern note, ready to schedule: swing applied, channel resolved to an index.
 pub struct NoteRt {
     pub beat: f64,
     pub len: f64,
-    pub inst: Inst,
-    pub key: Option<u8>,
+    pub chan: usize,
+    pub key: u8,
+    pub vel: f32,
 }
 
 pub struct PatRt {
+    pub id: Id,
     pub len: f64,
+    /// Only the notes that start before `len` (later ones are kept in the project, hidden).
     pub notes: Vec<NoteRt>,
+    /// Insert index of the track of the first clip that plays this pattern (where the
+    /// loop preview and auditions of track-routed channels go).
+    pub home: Option<usize>,
+}
+
+/// A Channel Rack channel, resolved for the audio thread.
+pub struct ChanRt {
+    pub id: Id,
+    pub kind: VoiceKind,
+    /// Sampler channels: the audio (`None` when the file is missing: the channel is silent).
+    pub sample: Option<Arc<Audio>>,
+    pub root: u8,
+    /// Channel gain (1 at unity), pan −1..1, and audible (mute/solo).
+    pub gain: f32,
+    pub pan: f32,
+    pub on: bool,
+    /// Insert index the channel plays into; `None` = the clip's track.
+    pub insert: Option<usize>,
+    /// Where auditions go when nothing else decides: `insert`, else the insert of a track
+    /// that plays a pattern with this channel's notes, else the master.
+    pub home: usize,
 }
 
 pub struct Timeline {
     pub bpm: f64,
     pub clips: Vec<ClipRt>,
     pub pats: Vec<PatRt>,
+    pub chans: Vec<ChanRt>,
     pub autos: Vec<AutoRt>,
     pub loop_range: Option<(f64, f64)>,
     pub song_end: f64,
@@ -270,6 +305,11 @@ pub enum Cmd {
     Flags { metro: bool, monitor: bool },
     Watch { ids: [Id; WATCH_SLOTS], n: u8 },
     Preview(Option<Box<Preview>>),
+    /// Play one note of a channel now (step clicks, the piano-roll keyboard). `pattern`
+    /// decides where a track-routed channel is heard (that pattern's track).
+    Audition { chan: Id, key: u8, vel: f32, len: f32, pattern: Option<Id> },
+    /// Loop one pattern on its own (`None` stops). Exclusive with the song transport.
+    PatPlay(Option<Id>),
 }
 
 pub enum Garbage {
@@ -313,6 +353,9 @@ pub struct Rt {
     taps: Taps,
     record: rtrb::Producer<f32>,
     preview: Option<Box<Preview>>,
+    /// Pattern loop preview: pattern id and beats into it.
+    pat_play: Option<Id>,
+    pat_beat: f64,
 }
 
 impl Rt {
@@ -325,7 +368,7 @@ impl Rt {
             garbage,
             shared,
             graph: Box::new(Graph::new(vec![], vec![], None, max_block)),
-            timeline: Box::new(Timeline { bpm: 120.0, clips: vec![], pats: vec![], autos: vec![], loop_range: None, song_end: 4.0 }),
+            timeline: Box::new(Timeline { bpm: 120.0, clips: vec![], pats: vec![], chans: vec![], autos: vec![], loop_range: None, song_end: 4.0 }),
             voices: VoicePool::new(sr),
             click: vec![0.0; max_block],
             tmp_l: vec![0.0; max_block],
@@ -345,6 +388,8 @@ impl Rt {
             taps,
             record,
             preview: None,
+            pat_play: None,
+            pat_beat: 0.0,
         }
     }
 
@@ -391,6 +436,7 @@ impl Rt {
                     self.trash(Garbage::Graph(old));
                 }
                 Cmd::Timeline(t) => {
+                    self.voices.remap(&t.chans);
                     let old = std::mem::replace(&mut self.timeline, t);
                     self.trash(Garbage::Timeline(old));
                 }
@@ -407,6 +453,13 @@ impl Rt {
                         t.on = on;
                     }
                     self.graph.monitor_track = m.monitor_track;
+                    if m.chans.len() == self.timeline.chans.len() {
+                        for (c, &(gain, pan, on)) in self.timeline.chans.iter_mut().zip(m.chans.iter()) {
+                            c.gain = gain;
+                            c.pan = pan;
+                            c.on = on;
+                        }
+                    }
                     self.trash(Garbage::Mix(m));
                 }
                 Cmd::Params { fx, params, mix } => {
@@ -422,6 +475,8 @@ impl Rt {
                 }
                 Cmd::Play { from, count_in, rec, rec_loop } => {
                     self.voices.clear();
+                    // the song and the pattern preview are exclusive (FL's SONG / PAT)
+                    self.set_pat_play(None);
                     self.beat = from - count_in;
                     self.count_end = if count_in > 0.0 { from } else { f64::NEG_INFINITY };
                     self.rec = rec;
@@ -454,8 +509,62 @@ impl Rt {
                         fset(&self.shared.preview_pos, -1.0);
                     }
                 }
+                Cmd::Audition { chan, key, vel, len, pattern } => {
+                    let tl = &*self.timeline;
+                    if let Some(i) = tl.chans.iter().position(|c| c.id == chan) {
+                        let ch = &tl.chans[i];
+                        let home = pattern.and_then(|id| tl.pats.iter().find(|p| p.id == id)).and_then(|p| p.home);
+                        let ins = ch.insert.or(home).unwrap_or(ch.home);
+                        self.voices.note(ch, i, Dest::Insert(ins), 0, len, key, vel);
+                    }
+                }
+                Cmd::PatPlay(id) => {
+                    if id.is_some() && self.playing {
+                        self.stop(false);
+                    }
+                    self.set_pat_play(id);
+                }
             }
         }
+    }
+
+    fn set_pat_play(&mut self, id: Option<Id>) {
+        self.pat_play = id;
+        self.pat_beat = 0.0;
+        self.shared.pat_beat.store((if id.is_some() { 0f64 } else { -1f64 }).to_bits(), Relaxed);
+    }
+
+    /// The pattern loop preview: schedules the notes of `[pat_beat, +n samples)` and wraps.
+    fn schedule_pattern(&mut self, n: usize, bps: f64, spb: f64) {
+        let Some(pid) = self.pat_play else { return };
+        let tl = &*self.timeline;
+        let Some(pat) = tl.pats.iter().find(|p| p.id == pid) else {
+            self.set_pat_play(None);
+            return;
+        };
+        if pat.len <= 0.0 {
+            return;
+        }
+        let b0 = self.pat_beat;
+        let b1 = b0 + n as f64 * bps;
+        let (r0, r1) = ((b0 / pat.len).floor() as i64, (b1 / pat.len).floor() as i64);
+        for r in r0..=r1 {
+            for nt in &pat.notes {
+                let nb = r as f64 * pat.len + nt.beat;
+                if nb < b0 || nb >= b1 {
+                    continue;
+                }
+                let Some(ch) = tl.chans.get(nt.chan) else { continue };
+                if !ch.on {
+                    continue;
+                }
+                let ins = ch.insert.or(pat.home).unwrap_or(ch.home);
+                let delay = ((nb - b0) / bps) as u32;
+                self.voices.note(ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel);
+            }
+        }
+        self.pat_beat = b1.rem_euclid(pat.len);
+        self.shared.pat_beat.store(self.pat_beat.to_bits(), Relaxed);
     }
 
     fn stop(&mut self, at_end: bool) {
@@ -560,7 +669,8 @@ impl Rt {
         }
         let shared_beat = if self.playing { self.beat } else { block_beat };
         self.shared.beat.store(shared_beat.to_bits(), Relaxed);
-        self.voices.render(n, &mut self.graph.track_bufs, &mut self.click[..n]);
+        self.schedule_pattern(n, bps, spb);
+        self.voices.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &mut self.click[..n], &self.timeline.chans);
 
         // ---- input level + monitoring
         if let Some((il, ir)) = input {
@@ -687,7 +797,7 @@ impl Rt {
             if self.metro || b < self.count_end {
                 let delay = ((b - b0) / bps) as u32 + at as u32;
                 let accent = (b as i64).rem_euclid(4) == 0;
-                self.voices.trigger(VoiceKind::Click { accent }, usize::MAX, delay, 0.06, 0.0);
+                self.voices.click(accent, delay);
             }
             b += 1.0;
         }
@@ -711,9 +821,21 @@ impl Rt {
                         for nt in &pat.notes {
                             let nb = base + r as f64 * pat.len + nt.beat;
                             if nb >= lo && nb < hi {
+                                let Some(ch) = tl.chans.get(nt.chan) else { continue };
+                                if !ch.on {
+                                    continue;
+                                }
                                 let delay = ((nb - b0) / bps) as u32 + at as u32;
                                 let len_beats = nt.len.min(c.end - nb);
-                                self.voices.trigger_inst(nt.inst, c.track, delay, (len_beats * spb) as f32, nt.key);
+                                let (dest, vel) = match ch.insert {
+                                    None => (Dest::Track(c.track), nt.vel),
+                                    // routed past the track: the track still mutes and scales it
+                                    Some(k) => match self.graph.tracks.get(c.track) {
+                                        Some(t) if t.on => (Dest::Insert(k), nt.vel * t.gain),
+                                        _ => continue,
+                                    },
+                                };
+                                self.voices.note(ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, vel);
                             }
                         }
                     }

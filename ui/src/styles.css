@@ -385,6 +385,51 @@ select option { background: var(--bg4); color: var(--fg); }
 .pstatus { height: 22px; flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 12px; font-size: 10px; color: var(--fg5); border-top: 1px solid var(--bg0); white-space: nowrap; overflow: hidden; }
 .resizer { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; background: linear-gradient(135deg, transparent 50%, var(--fg6) 50%, var(--fg6) 60%, transparent 60%, transparent 70%, var(--fg6) 70%, var(--fg6) 80%, transparent 80%); }
 
+/* ---------- pattern editor (Channel Rack + piano roll) ---------- */
+.patwin { outline: none; min-width: 640px; }
+.patwin .winhd { gap: 6px; }
+.patwin .winhd .sel { height: 24px; }
+.patwin .winhd .patsel { max-width: 180px; font-weight: 600; color: var(--fg-hi); }
+.patwin .winhd .numf { padding: 1px 6px; min-width: 0; }
+.patwin .winhd .numf .lab { font-size: 7px; }
+.patwin .winhd .vsep { height: 18px; }
+.pplay { height: 24px; padding: 0 9px 0 8px; border: 1px solid var(--line2); border-radius: 4px; background: var(--bg1); color: var(--fg2); cursor: pointer; display: flex; align-items: center; gap: 6px; font: 600 10px var(--sans); letter-spacing: .04em; }
+.pplay:hover { color: var(--fg-hi); border-color: var(--line3); }
+.pplay.on { background: color-mix(in srgb, var(--green) 20%, transparent); border-color: var(--green); color: var(--green); }
+.ptabs > button { width: auto; padding: 0 10px; font: 600 10px var(--sans); letter-spacing: .04em; color: var(--fg3); }
+.ptabs > button:disabled { opacity: .4; cursor: default; background: transparent; }
+.rack, .roll { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.rackbody { flex: 1; min-height: 0; display: flex; border-bottom: 1px solid var(--bg0); }
+.rackleft { flex: none; overflow: hidden; background: var(--bg3); border-right: 1px solid var(--bg0); }
+.rackgrid { position: relative; flex: 1; min-width: 0; overflow: hidden; background: var(--bg2); }
+.crow { display: flex; align-items: center; gap: 5px; padding: 0 6px 0 0; border-bottom: 1px solid color-mix(in srgb, var(--bg0) 60%, transparent); box-sizing: border-box; }
+.crow.sel { background: var(--sel-bg2); }
+.crow .cstrip { width: 4px; align-self: stretch; flex: none; }
+.crow.muted .cstrip { opacity: .35; }
+.crow .miniknob { transform: scale(.92); }
+.led { width: 10px; height: 10px; flex: none; padding: 0; border: 0; border-radius: 50%; background: var(--line2); cursor: pointer; margin-left: 2px; }
+.led.on { background: var(--green); box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 22%, transparent); }
+.led.solo { background: var(--amber); box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 28%, transparent); }
+.cins { width: 26px; height: 20px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 3px; background: var(--bg1); color: var(--blue-hi); font: 600 10px var(--mono); cursor: pointer; }
+.cins.auto { color: var(--fg5); }
+.cins:hover { border-color: var(--line3); color: var(--fg-hi); }
+.cname { flex: 1; min-width: 0; height: 20px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 3px; background: var(--bg6); color: var(--fg); font: 500 11px var(--sans); text-align: left; cursor: pointer; }
+.cname:hover { background: var(--line2); color: var(--fg-hi); }
+.cname.sel { background: var(--on-bg); color: var(--blue-hi); }
+.crow.muted .cname { color: var(--fg5); }
+.cname .ckind { flex: none; margin-left: auto; font: 600 8px var(--mono); letter-spacing: .06em; color: var(--fg4); }
+.hbar { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: color-mix(in srgb, var(--bg0) 50%, transparent); }
+.hbar > div { position: absolute; top: 1px; height: 4px; border-radius: 2px; background: var(--fg6); cursor: grab; }
+.lanerow { flex: none; display: flex; border-bottom: 1px solid var(--bg0); }
+.lanelab { flex: none; display: flex; flex-direction: column; justify-content: space-between; padding: 6px 8px; box-sizing: border-box; background: var(--bg3); border-right: 1px solid var(--bg0); }
+.lanelab .addch { align-self: flex-start; height: 22px; display: flex; align-items: center; gap: 4px; }
+.lanetitle { display: flex; align-items: baseline; gap: 6px; min-width: 0; font: 600 11px var(--sans); }
+.lanecv { position: relative; flex: 1; min-width: 0; }
+.lanetag { position: absolute; left: 6px; top: 4px; pointer-events: none; }
+.roll .ptools { align-items: flex-end; }
+.plab { display: flex; flex-direction: column; gap: 2px; font: 600 8px var(--sans); color: var(--fg5); letter-spacing: .08em; }
+.plab .sel { height: 24px; }
+
 /* ---------- title bar (merged into the toolbar) ---------- */
 .toolbar .dragfill { flex: 1 1 0; min-width: 24px; align-self: stretch; }
 .toolbar .projName .dirty { margin-left: 4px; color: var(--amber); }

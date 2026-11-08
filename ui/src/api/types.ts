@@ -52,8 +52,26 @@ export interface Insert {
 }
 
 export type Inst = 'kick' | 'clap' | 'hat' | 'bass';
-export interface Note { inst: Inst; step: number; len: number; p?: number }
-export interface Pattern { id: Id; name: string; color: string; len: number; notes: Note[] }
+/** MIDI key at which a sampler plays its sample unpitched (C5 in FL Studio's naming, C4 here). */
+export const SAMPLE_ROOT = 60;
+/** What a channel plays: a built-in instrument, or a one-shot sample of a project source. */
+export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id };
+/**
+ * A Channel Rack row, global to the project (every pattern can have notes for it).
+ * `vol` fader position (0.7937 = 0 dB), `pan` −1..1, `insert` null = the clip's track insert,
+ * `root` = the key a step plays (and the sampler's original pitch).
+ */
+export type Channel = {
+  id: Id; name: string; color: string;
+  vol: number; pan: number; mute: boolean; solo: boolean; insert: Id | null; root: number;
+} & ChannelSrc;
+/**
+ * A pattern note: channel `ch`, `step`/`len` in 16ths, `p` MIDI key (absent = the channel's root),
+ * `v` velocity 0..1 (absent = 1). `inst` only in old files / scripts (the engine turns it into `ch`).
+ */
+export interface Note { ch: Id; step: number; len: number; p?: number; v?: number; inst?: Inst }
+/** `len` in beats; `swing` 0..1 (absent = 0). Notes at or past `len` are kept but hidden and silent. */
+export interface Pattern { id: Id; name: string; color: string; len: number; notes: Note[]; swing?: number }
 
 export interface Source {
   id: Id; name: string; color: string; path: string;
@@ -120,6 +138,8 @@ export interface Project {
   automations?: Automation[];
   /** Take groups with their comps; played by clips of kind `comp`. */
   comps?: Comp[];
+  /** Channel Rack rows shared by every pattern. */
+  channels?: Channel[];
 }
 
 export type Op =
@@ -133,6 +153,8 @@ export type Op =
   | { op: 'removeFx'; fxId: Id }
   | { op: 'moveFx'; fxId: Id; to: number }
   | { op: 'putPattern'; pattern: Pattern }
+  | { op: 'putChannel'; channel: Channel; index?: number | null }
+  | { op: 'removeChannel'; id: Id }
   | { op: 'putSource'; source: Source }
   | { op: 'removeSource'; id: Id }
   | { op: 'setBpm'; bpm: number }

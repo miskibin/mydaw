@@ -33,6 +33,7 @@ function onFrame() {
   }
   if (f.playing !== U.playing) setU('playing', f.playing);
   if (f.previewing !== U.previewing) setU('previewing', f.previewing);
+  if ((f.patBeat >= 0) !== U.patPlaying) setU('patPlaying', f.patBeat >= 0);
   const r = f.rec;
   if (r) {
     if (!recState.active || r.clipStart !== recState.clipStart || r.track !== recState.track) {

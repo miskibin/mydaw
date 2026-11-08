@@ -7,10 +7,11 @@ import { snapFloor } from '../lib/snap';
 import * as A from '../state/actions';
 import { getPeaks, peakRange, peaksVersion } from '../state/peaks';
 import { S } from '../state/store';
-import { say, setU, U } from '../state/ui';
-import { track } from '../ui/drag';
+import { openMenu, say, setU, U } from '../state/ui';
+import { dblCheck, track } from '../ui/drag';
 import { fitCanvas } from '../ui/frameLoop';
 import { dropClipAt, gridPoint } from './Playlist';
+import { addSamplerFiles, newPattern, openPattern } from '../state/pattern';
 
 /** Drag something from the browser with a ghost label; `onDrop` gets the release point. */
 function dragGhost(e: PointerEvent, name: string, color: string, onClick: () => void, onDrop: (x: number, y: number, alt: boolean) => void) {
@@ -77,12 +78,15 @@ function ProjectTab() {
   };
   return (
     <div class="scroll">
-      <div class="bhead">PATTERNY</div>
+      <div class="bhead">
+        <span>PATTERNY</span>
+        <button class="linkbtn" title="Nowy pattern (otwiera edytor)" onClick={newPattern}>Nowy</button>
+      </div>
       <div style={{ display: 'flex', 'flex-direction': 'column', padding: '4px 0' }}>
         <For each={S.project.patterns}>
           {p => (
-            <div class="pitem" classList={{ on: U.cur?.kind === 'pat' && U.cur.ref === p.id }} title="Klik = wybierz · przeciągnij na ścieżkę"
-              onPointerDown={e => pick('pat', p.id, p.name, p.color, e)}>
+            <div class="pitem" classList={{ on: U.cur?.kind === 'pat' && U.cur.ref === p.id }} title="Klik = wybierz · 2× klik = edytuj (F6) · przeciągnij na ścieżkę"
+              onPointerDown={e => { if (e.button === 0 && dblCheck('pitem' + p.id)) { openPattern(p.id); return; } pick('pat', p.id, p.name, p.color, e); }}>
               <span style={{ width: '8px', height: '8px', 'border-radius': '2px', flex: 'none', background: p.color }} />
               <span class="nm">{p.name}</span>
               <span class="meta">{p.len / 4} bar</span>
@@ -152,7 +156,8 @@ function FileList(props: { k: string }) {
             <Show when={g}><div class="fgroup">{g}</div></Show>
             <For each={files}>
               {f => (
-                <div class="fitem" classList={{ playing: U.previewing && U.previewPath === f.path }} title="Klik = odsłuch · przeciągnij na ścieżkę"
+                <div class="fitem" classList={{ playing: U.previewing && U.previewPath === f.path }} title="Klik = odsłuch · przeciągnij na ścieżkę · PPM = kanał samplera"
+                  onContextMenu={e => { e.preventDefault(); openMenu(e.clientX, e.clientY, [{ t: 'title', label: f.name }, { t: 'item', label: 'Dodaj jako kanał samplera', title: 'Nowy kanał w Channel Rack grający ten plik (one-shot, wysokość z nuty)', act: () => void addSamplerFiles([f.path]) }], 90); }}
                   onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); dragGhost(e, f.name, '#47b8a8', () => previewFile(f), (x, y, alt) => { void importAt([f.path], x, y, alt); }); }}>
                   <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style={{ flex: 'none', opacity: 0.7 }}><path d="M4 12h2l2-6 3 12 3-9 2 3h4" /></svg>
                   <span class="ell">{f.name.replace(/\.[^.]+$/, '')}</span>

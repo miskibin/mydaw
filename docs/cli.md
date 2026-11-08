@@ -20,7 +20,9 @@ stdout is only JSON (`--pretty` to indent); messages go to stderr. Exit codes:
 | command | what you get |
 | --- | --- |
 | `wave status` | transport, revision, file, audio device, CLI path |
-| `wave context` | summary: tracks (index, insert, volume, clip count), inserts with effects and parameters, patterns, sources, `nextId` |
+| `wave context` | summary: tracks (index, insert, volume, clip count), inserts with effects and parameters, patterns, channels, sources, `nextId` |
+| `wave channels` | the Channel Rack: id, name, `inst`/`sample` (+ source), volume, pan, mute/solo, mixer insert (`null` = the clip's track), root key, note count |
+| `wave pattern [--id N]` | a pattern as one step string per channel (`x` full velocity, `1`–`9` = 10–90 %, `.` empty, a space every beat) plus `notes` for melodic rows, bars, swing %, hidden notes past the end |
 | `wave context --full` | the whole project JSON (every clip, note, parameter) |
 | `wave catalog` | effect types, parameter ids/ranges/units, presets, command list |
 | `wave schema` | every op `apply` accepts, with units and an example |
@@ -46,15 +48,44 @@ wave undo
 
 ```json
 [
-  {"op": "putPattern", "pattern": {"id": 2, "name": "Hats", "color": "#e0a44a", "len": 4,
-    "notes": [{"inst": "hat", "step": 0, "len": 1}, {"inst": "hat", "step": 2, "len": 1}]}},
+  {"op": "putPattern", "pattern": {"id": 2, "name": "Hats", "color": "#e0a44a", "len": 4, "swing": 0.4,
+    "notes": [{"ch": 1002, "step": 0, "len": 1}, {"ch": 1002, "step": 2, "len": 1, "v": 0.6}]}},
   {"op": "setLoop", "loop": {"a": 0, "b": 16}}
 ]
 ```
 
+Notes still written the old way (`{"inst": "hat", …}` instead of `"ch"`) are accepted:
+they go to that instrument's built-in channel (created if missing).
+
 Units: playlist time in **beats**; pattern `step`/`len` in **sixteenths**;
 fades in seconds; track/insert `vol` is a fader position (0.7937 = 0 dB);
 clip `gain` in dB; pan −1..1. New ids: start at `context.nextId`.
+
+## Patterns and channels
+
+Channels (Channel Rack rows) are shared by all patterns; a note plays channel `ch`.
+Steps are sixteenths; `--bars` 1–8; swing 0–100 % (delays every odd 16th by up to half a
+step). Each edit is one undo step.
+
+```sh
+wave channels                                     # ids, kinds, routing
+wave channels --add clap                          # a built-in channel (kick, clap, hat, bass)
+wave channels --sample 1001                       # a sampler channel playing source 1001
+wave channels --remove 1004                       # (or a name) — also removes its notes
+wave pattern --id 2                               # step strings per channel
+wave pattern --id 2 --ch hat --steps "x.x. x.x. x.x5 x.x9"     # replace the hat's notes
+wave pattern --id 2 --ch kick --steps "x... x... x... x..." --vel 0.9
+wave pattern --id 3 --ch bass --notes '[{"step":0,"len":3,"p":33},{"step":4,"len":2,"p":40,"v":0.8}]'
+wave pattern --id 2 --ch hat --clear
+wave pattern --id 2 --bars 2 --swing 55 --name "Hats B"
+wave pattern --new --name Fill --bars 1           # → its id in the reply
+wave pattern --id 2 --play                        # loop it on its own (stops the song); --stop
+```
+
+`--ch` takes a channel id or name (`kick`, `Hats 2` …). With `apply`, the ops are
+`putPattern` / `putChannel` / `removeChannel` (see `wave schema`). Changing a pattern's
+length also resizes clips that show exactly one whole pass of it; notes past the end stay
+in the pattern, hidden and silent, until it grows again.
 
 ## Takes and comping
 

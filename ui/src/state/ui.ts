@@ -9,6 +9,12 @@ export interface PlugWin { fxId: Id; x: number; y: number; w: number; z: number 
 export interface PitchWin { clipId: Id; x: number; y: number; w: number; h: number }
 export interface EditorWin { clipId: Id; x: number; y: number; w: number; h: number }
 export interface MusicWin { clipId?: Id; fxId?: Id }
+/**
+ * The pattern editor (Channel Rack + piano roll). It lives in the effect-window layer: F5 /
+ * a playlist click hide it with the effect windows, "Okna" brings it back. `ch`: selected
+ * channel (velocity lane, piano roll); `view`: rack or the piano roll of `ch`.
+ */
+export interface PatWin { pat: Id; ch: Id | null; view: 'rack' | 'roll'; x: number; y: number; w: number; h: number; z: number }
 
 export type MenuItem =
   | { t: 'title'; label: string }
@@ -44,6 +50,9 @@ export interface UiState {
   eqSel: Record<number, number>;
   fetMode: Record<number, 'gr' | 'out'>;
   pitchEd: PitchWin | null;
+  patWin: PatWin | null;
+  /** True while the engine loops a pattern on its own (telemetry `patBeat` ≥ 0). */
+  patPlaying: boolean;
   /** track id → take lanes expanded */
   takesOpen: Record<number, boolean>;
   /** comp time selection (comp beats): the last swiped range, the target of Ctrl+↑/↓ */
@@ -66,7 +75,7 @@ export const [U, setU] = createStore<UiState>({
   plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null, fxPicker: null, musicWin: null,
   readout: 'Gotowe',
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
-  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, takesOpen: {}, compSel: null, autoEdit: null, zTop: 1, marquee: null,
+  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, patWin: null, patPlaying: false, takesOpen: {}, compSel: null, autoEdit: null, zTop: 1, marquee: null,
   playing: false, previewing: false, previewPath: null,
 });
 
