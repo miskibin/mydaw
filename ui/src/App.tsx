@@ -18,6 +18,8 @@ import { Settings, VstPicker } from './views/Settings';
 import { MusicDialog } from './views/MusicDialog';
 import { FxPickerHost, openFxPicker } from './views/FxPicker';
 import { PatternEditor } from './views/PatternEditor';
+import { NotebookHost } from './views/Notebook';
+import { toggleNotebook } from './state/notebook';
 import { closePattern, togglePattern } from './state/pattern';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 
@@ -46,7 +48,7 @@ function onKey(e: KeyboardEvent) {
     if (U.compSel) return setU('compSel', null);
     return setU('sel', []);
   }
-  if (e.key === 'F8') { e.preventDefault(); return setU('pickOpen', !U.pickOpen); }
+  if (e.key === 'F8') { e.preventDefault(); return e.altKey ? setU('pickOpen', !U.pickOpen) : toggleNotebook(); }
   if (e.key === 'F7') { e.preventDefault(); return U.fxPicker ? setU('fxPicker', null) : openFxPicker(U.mixSel); }
   if (e.key === 'F6') { e.preventDefault(); return togglePattern(); }
   if (e.key === 'F5') { e.preventDefault(); return U.plugsHidden ? A.showPlugs() : A.playlistFront(); }
@@ -142,6 +144,7 @@ export function App() {
         <For each={U.plugs}>{pw => <FxWindow pw={pw} z={plugRank(pw.z)} />}</For>
         <PatternEditor z={U.patWin ? plugRank(U.patWin.z) : 1} />
       </div>
+      <NotebookHost />
       <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>
       <ContextMenu />
       <Help />

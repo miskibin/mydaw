@@ -7,6 +7,7 @@ import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
+import { flushNotebook } from './notebook';
 import { allocId, findFx, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
@@ -46,15 +47,18 @@ export function toggleMonitor() {
 }
 
 // ---------- history / project ----------
-export async function undo() { endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say('Cofnięto'); }
-export async function redo() { endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say('Ponowiono'); }
+export async function undo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say('Cofnięto'); }
+export async function redo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say('Ponowiono'); }
 export async function projectNew() {
+  flushNotebook();
   try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); say('Nowy projekt'); } catch (e) { say('Nie utworzono projektu: ' + String(e)); }
 }
 export async function projectOpen() {
+  flushNotebook();
   try { acceptReply(await enqueue(() => be().projectOpen())); afterProjectLoad(); say('Otwarto ' + (S.path ?? '')); } catch (e) { say('Nie otwarto: ' + String(e)); }
 }
 export async function projectSave(saveAs = false) {
+  flushNotebook();
   try { const r = await enqueue(() => be().projectSave(saveAs)); say('Zapisano ' + r.path); await resync(); } catch (e) { say('Nie zapisano: ' + String(e)); }
 }
 /** Escape on the export dialog: abort an in-flight bounce, otherwise close. */
