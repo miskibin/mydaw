@@ -19,6 +19,7 @@ import { drawFades, drawGrid, drawRuler, type View } from './playlistDraw';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { sortPoints } from '../lib/automation';
 import { autoById } from '../state/store';
+import { openPattern } from '../state/pattern';
 import { T, theme } from '../ui/theme';
 
 const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -421,6 +422,7 @@ export function Playlist() {
     if (h.c.kind === 'auto') { setU({ autoEdit: h.c.id, sel: [h.c.id] }); say('Edycja automatyzacji: klik = punkt · przeciągnij = przesuń · PPM = usuń · Esc = koniec'); return; }
     setU('cur', { kind: h.c.kind, ref: h.c.ref });
     if (h.c.kind === 'audio') A.openEditor(h.c.id);
+    if (h.c.kind === 'pat') openPattern(h.c.ref);
   };
 
   // ---------- automation envelope editing (inline, after a double-click on an automation clip) ----------
@@ -548,6 +550,7 @@ export function Playlist() {
       { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: A.cut },
       { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
       { t: 'item', label: 'Podziel na głowicy', act: () => A.sliceAt(c.id, curBeat()) },
+      ...(isPat ? [{ t: 'item', label: 'Edytuj pattern…', kbd: '2× klik', act: () => openPattern(c.ref) } as MenuItem] : []),
       isPat ? { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } : { t: 'gain', clipId: c.id },
       ...(c.kind === 'audio' ? [{ t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem,
         { t: 'item', label: 'Edytuj wysokość…', kbd: c.tune?.notes.length ? 'edytowany' : '', act: () => A.openPitchEditor(c.id) } as MenuItem,

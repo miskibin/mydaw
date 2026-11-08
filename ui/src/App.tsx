@@ -16,10 +16,12 @@ import { PitchEditor } from './views/PitchEditor';
 import { Export } from './views/Export';
 import { Settings, VstPicker } from './views/Settings';
 import { MusicDialog } from './views/MusicDialog';
+import { PatternEditor } from './views/PatternEditor';
+import { closePattern, togglePattern } from './state/pattern';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 
-/** Stacking rank of a plugin window inside the window layer (1 = bottom). */
-function plugRank(z: number) { let r = 1; for (const p of U.plugs) if (p.z < z) r++; return r; }
+/** Stacking rank of a window (effect windows and the pattern editor) inside the window layer (1 = bottom). */
+function plugRank(z: number) { let r = 1; for (const p of U.plugs) if (p.z < z) r++; if (U.patWin && U.patWin.z < z) r++; return r; }
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
@@ -35,6 +37,7 @@ function onKey(e: KeyboardEvent) {
     if (U.settings) return setU('settings', false);
     if (U.exportOpen) return void A.cancelExportOrClose();
     if (U.help) return setU('help', false);
+    if (U.patWin && !U.plugsHidden && (!U.plugs.length || U.patWin.z > A.topPlug()!.z)) return closePattern();
     if (U.plugs.length) return A.closePlug(A.topPlug()!.fxId);
     if (U.pitchEd) return A.closePitchEditor();
     if (U.editor) return A.closeEditor();
@@ -42,6 +45,7 @@ function onKey(e: KeyboardEvent) {
     return setU('sel', []);
   }
   if (e.key === 'F8') { e.preventDefault(); return setU('pickOpen', !U.pickOpen); }
+  if (e.key === 'F6') { e.preventDefault(); return togglePattern(); }
   if (e.key === 'F5') { e.preventDefault(); return U.plugsHidden ? A.showPlugs() : A.playlistFront(); }
   if (e.key === 'F9') { e.preventDefault(); return setU('mixOpen', !U.mixOpen); }
   if (m && k === 'z') { e.preventDefault(); return void (e.shiftKey ? A.redo() : A.undo()); }
@@ -133,6 +137,7 @@ export function App() {
       <PitchEditor />
       <div class="winlayer" classList={{ hidden: U.plugsHidden }}>
         <For each={U.plugs}>{pw => <FxWindow pw={pw} z={plugRank(pw.z)} />}</For>
+        <PatternEditor z={U.patWin ? plugRank(U.patWin.z) : 1} />
       </div>
       <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>
       <ContextMenu />

@@ -4,6 +4,7 @@ import { batch } from 'solid-js';
 import { createStore, produce, reconcile } from 'solid-js/store';
 import type { Catalog, Clip, Fx, Id, Insert, Op, Project, StateDto, TransportDto } from '../api/types';
 import { applyCompOp, compExtent } from '../lib/comp';
+import { applyPatternOp } from '../lib/pattern';
 
 export interface EngineState {
   ready: boolean;
@@ -122,16 +123,12 @@ function applyInPlace(p: Project, op: Op) {
       const [f] = m.fx.splice(i, 1); m.fx.splice(to, 0, f);
       return;
     }
-    case 'putPattern': {
-      const x = p.patterns.find(q => q.id === op.pattern.id);
-      if (x) Object.assign(x, clone(op.pattern)); else p.patterns.push(clone(op.pattern));
-      if (op.pattern.id >= p.nextId) p.nextId = op.pattern.id + 1;
-      return;
-    }
+    case 'putPattern': case 'putChannel': case 'removeChannel': applyPatternOp(p, op, false); return;
     case 'putSource': { const s = p.sources.find(x => x.id === op.source.id); if (s) { s.name = op.source.name; s.color = op.source.color; } return; }
     case 'putComp': case 'removeComp': applyCompOp(p, op, false); return;
     case 'removeSource':
       applyCompOp(p, op, false);
+      applyPatternOp(p, op, false);
       p.sources = p.sources.filter(s => s.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'audio' && c.ref === op.id));
       return;

@@ -169,10 +169,10 @@ export function Toolbar() {
         <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} />Eksport
       </button>
       <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : 'SONG'}</span>
-      <Show when={U.plugs.length}>
+      <Show when={U.plugs.length + (U.patWin ? 1 : 0)}>
         <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
-          title={U.plugsHidden ? `Pokaż okna efektów (F5) — ${U.plugs.length}` : 'Schowaj okna efektów za playlistę (F5, albo klik w playlistę)'}>
-          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} />Okna {U.plugs.length}
+          title={U.plugsHidden ? `Pokaż okna (efekty, pattern) (F5) — ${U.plugs.length + (U.patWin ? 1 : 0)}` : 'Schowaj okna efektów i patternu za playlistę (F5, albo klik w playlistę)'}>
+          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} />Okna {U.plugs.length + (U.patWin ? 1 : 0)}
         </button>
       </Show>
       <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title="Mikser (F9)">
@@ -216,7 +216,7 @@ export function StatusBar() {
 }
 
 const SHORTCUTS: [string, string][] = [
-  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów)', 'F5'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'F8'],
+  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów i patternu)', 'F5'], ['Edytor patternu (Channel Rack)', 'F6 · 2× klik na pattern'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'F8'],
   ['Rysuj · Maluj · Usuń', 'P · B · D'], ['Wycisz · Tnij · Zaznacz', 'T · C · E'],
   ['Zaznacz prostokątem', 'Ctrl + przeciągnij'], ['Dodaj/usuń z zaznaczenia', 'Ctrl + klik'], ['Zaznacz wszystko', 'Ctrl+A'], ['Odznacz', 'Esc'],
   ['Kopiuj przeciągając', 'Shift + przeciągnij'], ['Poza siatką (off grid)', 'trzymaj Alt'], ['Duplikuj za zaznaczeniem', 'Ctrl+B'],
@@ -232,6 +232,10 @@ const SHORTCUTS: [string, string][] = [
   ['Poprzedni / następny take fragmentu', 'Ctrl + ↑ ↓'], ['Granica compu · crossfade', 'przeciągnij · PPM'],
   ['Automatyzuj pokrętło / suwak', 'PPM → Automatyzuj na playliście'], ['Edycja punktów automatyzacji', '2× klik na klip · klik = punkt · PPM = usuń'],
   ['Edytor wysokości', 'PPM na klipie audio → Edytuj wysokość…'], ['Narzędzia edytora wysokości', '1–6'], ['Dopasuj widok edytora', 'F'],
+  ['Krok: włącz · wyłącz', 'klik · PPM (przeciągnij = maluj)'], ['Odsłuch kanału', 'Ctrl + klik w nazwę'], ['Mute · Solo kanału', 'klik w diodę · PPM na diodzie'],
+  ['Menu kanału (wypełnij, przesuń, klonuj…)', 'PPM na kanale'], ['Piano roll kanału melodycznego', '2× klik w nazwę / wiersz'], ['Velocity', 'przeciągnij w pasku pod siatką'],
+  ['Piano roll: rysuj · maluj · zaznacz · usuń', 'P · B · E · D'], ['Piano roll: półton · oktawa', '↑ ↓ · Ctrl + ↑ ↓'], ['Piano roll: duplikuj w prawo', 'Ctrl+B'],
+  ['Piano roll: bez siatki', 'trzymaj Alt'], ['Podgląd patternu w pętli', '▶ Pętla w oknie patternu'],
   ['Nowy band EQ', '2× klik na wykresie'], ['Wytnij rezonans', 'przeciągnij z podświetlonego szczytu widma'], ['Q bandu', 'kółko nad punktem'],
 ];
 

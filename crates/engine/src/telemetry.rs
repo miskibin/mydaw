@@ -78,5 +78,7 @@ pub fn frame(seq: u32, shared: &Shared, insert_ids: &[Id], fx: Option<&[FxAnalys
             w.f32s(peaks);
         }
     }
+    // trailing: the pattern loop preview's position (beats into the pattern, −1 = stopped)
+    w.f64(shared.pat_beat());
     w.0
 }

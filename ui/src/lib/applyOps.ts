@@ -3,6 +3,7 @@
 // reject the same obviously-invalid batches.
 import { MAX_BANDS, type Id, type Op, type Project } from '../api/types';
 import { applyCompOp } from './comp';
+import { applyPatternOp, PatternOpError } from './pattern';
 
 export class OpError extends Error {}
 
@@ -95,13 +96,9 @@ export function applyOp(p: Project, op: Op): void {
       m.fx.splice(Math.min(op.to, m.fx.length), 0, f);
       return;
     }
-    case 'putPattern': {
-      if (!(op.pattern.len > 0)) throw new OpError('pattern length must be positive');
-      bump(p, op.pattern.id);
-      const i = p.patterns.findIndex(x => x.id === op.pattern.id);
-      if (i >= 0) p.patterns[i] = structuredClone(op.pattern); else p.patterns.push(structuredClone(op.pattern));
+    case 'putPattern': case 'putChannel': case 'removeChannel':
+      try { applyPatternOp(p, op, true); } catch (e) { throw new OpError((e as PatternOpError).message); }
       return;
-    }
     case 'putSource': {
       const s = p.sources.find(x => x.id === op.source.id);
       if (!s) throw new OpError(`no source with id ${op.source.id}`);
@@ -109,6 +106,7 @@ export function applyOp(p: Project, op: Op): void {
       return;
     }
     case 'removeSource':
+      applyPatternOp(p, op, true);
       p.sources = p.sources.filter(s => s.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'audio' && c.ref === op.id));
       applyCompOp(p, op);

@@ -192,7 +192,8 @@ pub fn context(app: &App, full: bool) -> Value {
                 "params": f.params, "error": st.fx_errors.get(&f.id),
             })).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
-        "patterns": p.patterns.iter().map(|x| json!({"id": x.id, "name": x.name, "lenBeats": x.len, "notes": x.notes.len()})).collect::<Vec<_>>(),
+        "patterns": p.patterns.iter().map(|x| json!({"id": x.id, "name": x.name, "lenBeats": x.len, "swing": x.swing, "notes": x.notes.len()})).collect::<Vec<_>>(),
+        "channels": p.channels.iter().map(|c| channel_json(p, c)).collect::<Vec<_>>(),
         "sources": p.sources.iter().map(|s| json!({"id": s.id, "name": s.name, "seconds": s.dur, "path": s.path})).collect::<Vec<_>>(),
         "clips": p.clips.len(),
         "nextId": p.next_id,
@@ -202,7 +203,8 @@ pub fn context(app: &App, full: bool) -> Value {
 pub fn schema() -> Value {
     json!({
         "automation": "an automation plays through a clip of kind `auto` whose `ref` is the automation id; points t = beats from the automation start, v = 0..1 normalised (log params normalised logarithmically)",
-        "units": "time in beats (quarter notes); pattern note step/len in sixteenths; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
+        "units": "time in beats (quarter notes); pattern len in beats (4 = 1 bar), note step/len in sixteenths, note v (velocity) 0..1, swing 0..1; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
+        "patterns": "channels are global (Channel Rack rows, `wave channels`); a pattern note plays channel `ch`; p = MIDI key (absent = the channel's root: 60 for samplers, 36 for the bass); swing delays notes on odd 16ths by swing × ½ step; notes at or past the pattern end are kept but silent; changing `len` also resizes clips that show exactly one whole pass (offset 0). Easier: `wave pattern --id N --ch C --steps \"x...x...x...x...\"`",
         "ids": "take new ids from context.nextId and count up",
         "ops": {
             "putClips": {"clips": [{"id": 0, "track": 0, "start": 0, "len": 4, "offset": 0, "kind": "pat|audio|auto|comp", "ref": "pattern, source, automation or comp id", "muted": false, "gain": 0, "fadeIn": 0, "fadeOut": 0, "pan": 0, "norm": false, "rev": false}]},
@@ -213,7 +215,9 @@ pub fn schema() -> Value {
             "putFx": {"insertId": 1, "fx": {"id": 0, "type": "comp", "bypass": false, "params": {"thr": -18}}, "index": null},
             "removeFx": {"fxId": 0},
             "moveFx": {"fxId": 0, "to": 0},
-            "putPattern": {"pattern": {"id": 0, "name": "", "color": "#4f8ef7", "len": 4, "notes": [{"inst": "kick|clap|hat|bass", "step": 0, "len": 1, "p": 36}]}},
+            "putPattern": {"pattern": {"id": 0, "name": "", "color": "#4f8ef7", "len": 4, "swing": 0, "notes": [{"ch": "channel id", "step": 0, "len": 1, "p": 36, "v": 1}]}},
+            "putChannel": {"channel": {"id": 0, "name": "Kick", "color": "#4f8ef7", "kind": "inst|sample", "inst": "kick|clap|hat|bass (kind inst)", "source": "source id (kind sample)", "vol": 0.7937, "pan": 0, "mute": false, "solo": false, "insert": "insert id or null (= the clip's track)", "root": 60}, "index": null},
+            "removeChannel": {"id": 0},
             "putSource": {"source": "rename/recolour an existing source"},
             "removeSource": {"id": 0},
             "setBpm": {"bpm": 128},
@@ -237,6 +241,194 @@ pub fn import(app: &App, a: &Value) -> R<Value> {
     };
     let (s, c) = app.engine.import_audio(&paths, place).map_err(|e| e.to_string())?;
     Ok(json!({ "sourceIds": s, "clipIds": c }))
+}
+
+// ---------------------------------------------------------------- channels & patterns
+
+fn channel_json(p: &wave_engine::Project, c: &wave_engine::Channel) -> Value {
+    use wave_engine::ChannelSrc;
+    let g = c.gain();
+    let (kind, what) = match &c.src {
+        ChannelSrc::Inst { inst } => ("inst", json!({ "inst": inst })),
+        ChannelSrc::Sample { source } => ("sample", json!({ "source": source, "sourceName": p.sources.iter().find(|s| s.id == *source).map(|s| s.name.clone()) })),
+    };
+    let mut v = json!({
+        "id": c.id, "index": p.channels.iter().position(|x| x.id == c.id), "name": c.name, "kind": kind,
+        "volume": if g < 1e-6 { "-inf".to_string() } else { format!("{:+.1} dB", 20.0 * g.log10()) }, "vol": c.vol, "pan": c.pan,
+        "mute": c.mute, "solo": c.solo, "insert": c.insert, "root": c.root,
+        "notes": p.patterns.iter().map(|pt| pt.notes.iter().filter(|n| n.ch == c.id).count()).sum::<usize>(),
+    });
+    if let (Value::Object(m), Value::Object(w)) = (&mut v, what) {
+        m.extend(w);
+    }
+    v
+}
+
+/// A channel by id, by name (case-insensitive) or by built-in instrument name.
+fn find_channel<'a>(p: &'a wave_engine::Project, v: &Value) -> R<&'a wave_engine::Channel> {
+    if let Some(id) = as_index(v) {
+        return p.channel(id).ok_or(format!("no channel {id} (see `wave channels`)"));
+    }
+    let s = v.as_str().ok_or("`ch` is a channel id or name")?.to_lowercase();
+    p.channels
+        .iter()
+        .find(|c| c.name.to_lowercase() == s)
+        .or_else(|| p.channels.iter().find(|c| matches!(&c.src, wave_engine::ChannelSrc::Inst { inst } if inst.name().to_lowercase() == s)))
+        .ok_or(format!("no channel named `{s}` (see `wave channels`)"))
+}
+
+pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
+    use wave_engine::{Channel, ChannelSrc, Inst};
+    let e = &app.engine;
+    let p = e.project();
+    let mut ops = vec![];
+    let mut added = None;
+    if let Some(k) = arg(a, "add").and_then(Value::as_str) {
+        let inst: Inst = serde_json::from_value(json!(k.to_lowercase())).map_err(|_| format!("unknown instrument `{k}` (kick, clap, hat, bass)"))?;
+        let ch = Channel::builtin(p.next_id, inst);
+        added = Some(ch.id);
+        ops.push(Op::PutChannel { channel: ch, index: None });
+    }
+    if let Some(src) = arg(a, "sample").and_then(as_index) {
+        let s = p.sources.iter().find(|s| s.id == src).ok_or(format!("no source {src} (see `wave context`)"))?;
+        let id = p.next_id + ops.len() as u64;
+        let ch = Channel { name: s.name.clone(), color: s.color.clone(), src: ChannelSrc::Sample { source: src }, root: wave_engine::SAMPLE_ROOT, ..Channel::builtin(id, Inst::Kick) };
+        added = Some(id);
+        ops.push(Op::PutChannel { channel: ch, index: None });
+    }
+    if let Some(v) = arg(a, "remove") {
+        ops.push(Op::RemoveChannel { id: find_channel(&p, v)?.id });
+    }
+    if ops.is_empty() {
+        return Ok(json!(p.channels.iter().map(|c| channel_json(&p, c)).collect::<Vec<_>>()));
+    }
+    let rev = e.apply(&ops, false, if_revision).map_err(|x| x.to_string())?;
+    let p = e.project();
+    Ok(json!({ "revision": rev, "added": added, "channels": p.channels.iter().map(|c| channel_json(&p, c)).collect::<Vec<_>>() }))
+}
+
+/// One character per 16th: `.` empty, `x` full velocity, `1`..`9` = 10..90 %.
+fn step_char(v: f32) -> char {
+    if v >= 0.95 {
+        'x'
+    } else {
+        char::from_digit((v * 10.0).round().clamp(1.0, 9.0) as u32, 10).unwrap_or('x')
+    }
+}
+
+/// Parses a step string: `x`/`X` = on (velocity `vel`), `1`..`9` = 10..90 %, `.` `-` `_` `0` = off;
+/// spaces and `|` are ignored (for readability: "x... x... | x... x...").
+pub fn parse_steps(s: &str, vel: f32) -> R<Vec<(f32, f32)>> {
+    let mut out = vec![];
+    let mut k = 0;
+    for ch in s.chars() {
+        match ch {
+            ' ' | '|' => continue,
+            'x' | 'X' => out.push((k as f32, vel)),
+            '1'..='9' => out.push((k as f32, ch.to_digit(10).unwrap() as f32 / 10.0)),
+            '.' | '-' | '_' | '0' => {}
+            other => return Err(format!("`{other}` in --steps: use x (on), 1-9 (velocity 10-90 %), . (off)")),
+        }
+        k += 1;
+    }
+    Ok(out)
+}
+
+fn pattern_json(p: &wave_engine::Project, pt: &wave_engine::Pattern) -> Value {
+    let steps = (pt.len * 4.0).round().max(1.0) as usize;
+    let rows: Vec<Value> = p
+        .channels
+        .iter()
+        .filter(|c| pt.notes.iter().any(|n| n.ch == c.id))
+        .map(|c| {
+            let mut line = vec!['.'; steps];
+            let notes: Vec<_> = pt.notes.iter().filter(|n| n.ch == c.id).collect();
+            for n in &notes {
+                let i = n.step.round() as usize;
+                if i < steps {
+                    line[i] = step_char(n.v);
+                }
+            }
+            let s: String = line.chunks(4).map(|g| g.iter().collect::<String>()).collect::<Vec<_>>().join(" ");
+            let simple = notes.iter().all(|n| n.len == 1.0 && n.p.is_none() && n.step.fract() == 0.0);
+            let mut row = json!({ "ch": c.id, "name": c.name, "steps": s });
+            if !simple {
+                row["notes"] = json!(notes.iter().map(|n| json!({ "step": n.step, "len": n.len, "p": n.p.unwrap_or(c.root), "v": n.v })).collect::<Vec<_>>());
+            }
+            row
+        })
+        .collect();
+    let hidden = pt.notes.iter().filter(|n| n.step >= steps as f32).count();
+    json!({ "id": pt.id, "name": pt.name, "color": pt.color, "bars": pt.len / 4.0, "lenBeats": pt.len, "swing": (pt.swing * 100.0).round(), "rows": rows, "hiddenNotes": hidden })
+}
+
+/// `wave pattern`: show a pattern as step strings, or edit it (one undo step).
+pub fn pattern(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
+    use wave_engine::{Note, Pattern};
+    let e = &app.engine;
+    let p = e.project();
+    let new = arg(a, "new").and_then(Value::as_bool).unwrap_or(false);
+    let mut pt = if new {
+        Pattern { id: p.next_id, name: format!("Pattern {}", p.patterns.len() + 1), color: "#4f8ef7".into(), len: 4.0, notes: vec![], swing: 0.0 }
+    } else {
+        let id = match arg(a, "id").and_then(as_index) {
+            Some(id) => id,
+            None if p.patterns.len() == 1 => p.patterns[0].id,
+            None => return Err(format!("which pattern? pass --id ({})", p.patterns.iter().map(|x| format!("{} {}", x.id, x.name)).collect::<Vec<_>>().join(", "))),
+        };
+        p.patterns.iter().find(|x| x.id == id).cloned().ok_or(format!("no pattern {id}"))?
+    };
+    let before = pt.clone();
+    if let Some(n) = arg(a, "name").and_then(Value::as_str) {
+        pt.name = n.into();
+    }
+    if let Some(c) = arg(a, "color").and_then(Value::as_str) {
+        pt.color = c.into();
+    }
+    if let Some(b) = opt_f64(a, "bars") {
+        if !(1.0..=8.0).contains(&b) || b.fract() != 0.0 {
+            return Err("--bars is a whole number 1..8".into());
+        }
+        pt.len = b * 4.0;
+    }
+    if let Some(s) = opt_f64(a, "swing") {
+        if !(0.0..=100.0).contains(&s) {
+            return Err("--swing is 0..100 (%)".into());
+        }
+        pt.swing = (s / 100.0) as f32;
+    }
+    let steps = arg(a, "steps").and_then(Value::as_str);
+    let notes = arg(a, "notes");
+    if steps.is_some() || notes.is_some() || arg(a, "clear").and_then(Value::as_bool).unwrap_or(false) {
+        let ch = find_channel(&p, arg(a, "ch").ok_or("--ch (channel id or name) is required with --steps / --notes / --clear")?)?.id;
+        pt.notes.retain(|n| n.ch != ch);
+        if let Some(s) = steps {
+            let vel = opt_f64(a, "vel").unwrap_or(1.0) as f32;
+            if !(0.0..=1.0).contains(&vel) {
+                return Err("--vel is 0..1".into());
+            }
+            pt.notes.extend(parse_steps(s, vel)?.into_iter().map(|(k, v)| Note { v, ..Note::new(ch, k, 1.0, None) }));
+        }
+        if let Some(ns) = notes {
+            let list = ns.as_array().ok_or("--notes is a JSON array of {step, len, p?, v?}")?;
+            for n in list {
+                let step = opt_f64(n, "step").ok_or("each note needs `step` (16ths)")? as f32;
+                let len = opt_f64(n, "len").unwrap_or(1.0) as f32;
+                let key = arg(n, "p").and_then(as_index).map(|k| k.min(127) as u8);
+                let v = opt_f64(n, "v").unwrap_or(1.0) as f32;
+                pt.notes.push(Note { v, ..Note::new(ch, step, len, key) });
+            }
+        }
+    }
+    if !new && pt == before {
+        return Ok(pattern_json(&p, &pt));
+    }
+    let rev = e.apply(&[Op::PutPattern { pattern: pt.clone() }], false, if_revision).map_err(|x| x.to_string())?;
+    let p = e.project();
+    let pt = p.patterns.iter().find(|x| x.id == pt.id).ok_or("the pattern vanished")?;
+    let mut v = pattern_json(&p, pt);
+    v["revision"] = json!(rev);
+    Ok(v)
 }
 
 // ---------------------------------------------------------------- takes & comps
@@ -361,7 +553,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","music_analyze","takes","comp","flatten_comp","comp_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","music_analyze","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -399,6 +591,19 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "warnings": w }))
         }
         "takes" => takes(app, a),
+        "channels" => channels(app, a, if_revision),
+        "pattern" => pattern(app, a, if_revision),
+        "pattern_play" => {
+            let id = arg(a, "id").and_then(as_index);
+            e.pattern_play(id).map_err(|x| x.to_string())?;
+            Ok(json!({ "patternPlaying": id }))
+        }
+        "note_audition" => {
+            let p = e.project();
+            let ch = find_channel(&p, arg(a, "ch").ok_or("`ch` is required")?)?.id;
+            e.note_audition(ch, arg(a, "key").and_then(as_index).map(|k| k.min(127) as u8), opt_f64(a, "vel").unwrap_or(0.8) as f32, arg(a, "pattern").and_then(as_index)).map_err(|x| x.to_string())?;
+            Ok(json!({}))
+        }
         "comp" => comp(app, a, if_revision),
         "flatten_comp" => {
             let clip = comp_clip(&e.project(), a)?;
@@ -435,5 +640,18 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({}))
         }
         other => Err(format!("UNKNOWN_COMMAND: `{other}` (see `wave catalog`)")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_steps;
+
+    #[test]
+    fn step_strings() {
+        assert_eq!(parse_steps("x... x... | x.5. ..9.", 1.0).unwrap(), vec![(0.0, 1.0), (4.0, 1.0), (8.0, 1.0), (10.0, 0.5), (14.0, 0.9)]);
+        assert_eq!(parse_steps("X-X_", 0.6).unwrap(), vec![(0.0, 0.6), (2.0, 0.6)]);
+        assert!(parse_steps("x?x", 1.0).is_err());
+        assert!(parse_steps("", 1.0).unwrap().is_empty());
     }
 }

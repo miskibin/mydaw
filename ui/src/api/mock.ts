@@ -94,6 +94,9 @@ export class MockBackend implements Backend {
   private rec: null | { track: number; clipStart: number; t0: number; peaks: number[]; sent: number; lap: [number, number] | null; pass: number } = null;
   private audition: Record<string, Id> = {};
   private preview: null | { t0: number; dur: number; off: number } = null;
+  /** Pattern loop preview (engine `pattern_play`) and recent auditions (insert id → time) for the meters. */
+  private patPlay: null | { id: Id; t0: number } = null;
+  private flash = new Map<Id, number>();
   private srcMeta = new Map<Id, MockSource>();
   private takeN = 0;
   private kits = [
@@ -175,6 +178,7 @@ export class MockBackend implements Backend {
   }
   async transportPlay(fromBeat: number) {
     if (this.tr.playing) this.finishRec();
+    this.patPlay = null; // the song and the pattern preview are exclusive (like the engine)
     const pre = this.tr.rec && this.tr.countIn ? 4 : 0;
     const lp = this.p.loop;
     if (this.tr.rec && lp && lp.b > lp.a && (fromBeat < lp.a || fromBeat >= lp.b)) fromBeat = lp.a;
@@ -254,6 +258,22 @@ export class MockBackend implements Backend {
       const lvl = (c.kind === 'pat' ? 0.25 + 0.55 * Math.exp(-frac * 5) : 0.45 + 0.2 * Math.sin(t * 7)) * 2 * tr.vol ** 3 * dbg(c.gain);
       live.set(tr.insert, Math.max(live.get(tr.insert) ?? 0, lvl));
     }
+    // pattern loop preview and auditions (engine: rt.rs schedule_pattern / Cmd::Audition)
+    let patBeat = -1;
+    if (this.patPlay) {
+      const pt = this.p.patterns.find(x => x.id === this.patPlay!.id);
+      if (!pt) this.patPlay = null;
+      else {
+        patBeat = ((performance.now() - this.patPlay.t0) / 1000 / spb) % pt.len;
+        const ins = this.patHome(pt.id) ?? 0, pf = ((patBeat % 1) + 1) % 1;
+        live.set(ins, Math.max(live.get(ins) ?? 0, 0.25 + 0.55 * Math.exp(-pf * 5)));
+      }
+    }
+    for (const [id, at] of this.flash) {
+      const age = (performance.now() - at) / 1000;
+      if (age > 0.6) { this.flash.delete(id); continue; }
+      live.set(id, Math.max(live.get(id) ?? 0, 0.7 * Math.exp(-age * 9)));
+    }
     let master = 0;
     const lvOf = new Map<Id, number>();
     for (const m of this.p.inserts) if (m.id !== 0) {
@@ -290,7 +310,7 @@ export class MockBackend implements Backend {
     const inLevel = this.tr.rec ? 0.2 + 0.5 * Math.abs(Math.sin(t * 3)) * Math.random() : 0;
     void spb;
     this.teleCb(encodeFrame({ seq, beat, playing, recording: !!this.rec && this.rawBeat() >= (this.rec?.clipStart ?? 0), previewing: !!this.preview,
-      inLevel, previewPos, cpu: playing ? 0.12 + 0.03 * Math.random() : 0.02, ins, fx, rec }));
+      inLevel, previewPos, cpu: playing ? 0.12 + 0.03 * Math.random() : 0.02, ins, fx, rec, patBeat }));
   }
 
   private findFx(id: Id): { fx: Fx; ins: Id } | null {
@@ -625,6 +645,22 @@ export class MockBackend implements Backend {
   }
   async previewFile(path: string) { this.preview = { t0: performance.now(), dur: 0.6 + (hash(path) % 400) / 100, off: 0 }; }
   async previewStop() { this.preview = null; }
+  /** Insert of the track of the pattern's first clip (rt.rs `PatRt.home`). */
+  private patHome(id: Id): Id | null {
+    const c = this.p.clips.filter(x => x.kind === 'pat' && x.ref === id).sort((a, b) => a.start - b.start)[0];
+    return c ? this.p.tracks[c.track]?.insert ?? null : null;
+  }
+  async noteAudition(a: { ch: Id; key?: number; vel?: number; pattern?: Id }) {
+    const c = this.p.channels?.find(x => x.id === a.ch); if (!c) throw new Error('no channel ' + a.ch);
+    const heard = this.p.patterns.find(pt => pt.notes.some(n => n.ch === c.id));
+    const ins = c.insert ?? (a.pattern != null ? this.patHome(a.pattern) : null) ?? (heard ? this.patHome(heard.id) : null) ?? 0;
+    this.flash.set(ins, performance.now());
+  }
+  async patternPlay(id: Id | null) {
+    if (id != null && !this.p.patterns.some(x => x.id === id)) throw new Error('no pattern ' + id);
+    if (id != null && this.tr.playing) { this.finishRec(); this.tr = { ...this.tr, playing: false }; this.changedTransport(); }
+    this.patPlay = id == null ? null : { id, t0: performance.now() };
+  }
 
   // ---------- audio device ----------
   async audioHosts() { return [{ id: 'wasapi', name: 'WASAPI' }, { id: 'asio', name: 'ASIO' }]; }
@@ -669,6 +705,7 @@ export class MockBackend implements Backend {
 
   // ---------- project files ----------
   private resetTo(p: Project, path: string | null) {
+    this.patPlay = null;
     this.p = p; this.undoStack = []; this.redoStack = []; this.path = path;
     this.tr = { ...this.tr, playing: false }; this.revision++; this.savedRev = this.revision;
     this.emit('state', this.dto());
