@@ -3,6 +3,7 @@
 // reject the same obviously-invalid batches.
 import { MAX_BANDS, type Id, type Op, type Project } from '../api/types';
 import { applyCompOp } from './comp';
+import { applyNotebookOp } from './notebook';
 import { applyPatternOp, PatternOpError } from './pattern';
 
 export class OpError extends Error {}
@@ -114,6 +115,9 @@ export function applyOp(p: Project, op: Op): void {
     case 'putComp':
     case 'removeComp':
       try { applyCompOp(p, op); } catch (e) { throw new OpError((e as Error).message); }
+      return;
+    case 'putNotebook':
+      try { applyNotebookOp(p, op.notebook); } catch (e) { throw new OpError((e as Error).message); }
       return;
     case 'setBpm':
       if (!(op.bpm >= 20 && op.bpm <= 999)) throw new OpError('bpm must be 20..999');

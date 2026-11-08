@@ -47,6 +47,9 @@ pub struct Project {
     /// Channel Rack rows, shared by every pattern (notes refer to them by `ch`).
     #[serde(default)]
     pub channels: Vec<Channel>,
+    /// The lyrics notebook ("Notatnik"): pages of text where one line is one bar.
+    #[serde(default)]
+    pub notebook: Notebook,
     /// Next id handed out by [`Project::alloc_id`]. Ids are never reused.
     pub next_id: Id,
 }
@@ -544,6 +547,39 @@ pub struct CompRegion {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xfade: Option<f32>,
 }
+
+/// The project's lyrics notebook. Text only: nothing here plays or renders, it is saved,
+/// undone and shared with the CLI like the rest of the song.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notebook {
+    /// Tabs in display order.
+    #[serde(default)]
+    pub pages: Vec<LyricPage>,
+}
+
+/// One notebook page (a verse, a hook, …). Each line of `text` is one bar, counted from
+/// `start_bar` (1-based like the playlist ruler); an empty line is a bar of rest, a line
+/// wrapped in square brackets (`[Refren]`) is a header and takes no bar.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LyricPage {
+    pub id: Id,
+    pub name: String,
+    #[serde(default = "first_bar")]
+    pub start_bar: u32,
+    #[serde(default)]
+    pub text: String,
+}
+
+fn first_bar() -> u32 {
+    1
+}
+
+/// Limits of a notebook (a bad CLI script must not bloat every undo snapshot).
+pub const NOTEBOOK_MAX_PAGES: usize = 64;
+pub const NOTEBOOK_MAX_TEXT: usize = 100_000;
+pub const NOTEBOOK_MAX_BAR: u32 = 9_999;
 
 /// A take group and its comp. Times are in **comp beats**: a clip of kind `comp`
 /// maps them to the timeline like an audio clip maps its source (`offset` = comp

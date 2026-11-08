@@ -79,6 +79,7 @@ function opKey(op: Op): string {
     case 'setLoop': return 'loop';
     case 'putAutomation': return 'a' + op.automation.id;
     case 'putComp': return 'c' + op.comp.id;
+    case 'putNotebook': return 'nb';
     default: return op.op;
   }
 }
