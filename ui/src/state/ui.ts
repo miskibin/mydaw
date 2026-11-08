@@ -34,6 +34,8 @@ export interface UiState {
   /** True while `exportAudio` is in flight (so Escape can abort and report). */
   exportBusy: boolean;
   vstPicker: { insId: Id } | null;
+  /** add-effect picker, anchored at (x, y) (−1 = centred) */
+  fxPicker: { insId: Id; x: number; y: number } | null;
   musicWin: MusicWin | null;
   readout: string;
   headW: number; pickW: number; pickOpen: boolean; browserTab: 'project' | 'library';
@@ -61,7 +63,7 @@ export const [U, setU] = createStore<UiState>({
   tool: 'draw', snap: -1, bw: 22, sel: [], cur: { kind: 'pat', ref: 1 },
   start: 0, follow: true, alt: false,
   mixOpen: true, mixMin: false, mixH: 300, mixSel: 6, fxSel: 903, fxDrag: null,
-  plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null, musicWin: null,
+  plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null, fxPicker: null, musicWin: null,
   readout: 'Gotowe',
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
   ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, takesOpen: {}, compSel: null, autoEdit: null, zTop: 1, marquee: null,

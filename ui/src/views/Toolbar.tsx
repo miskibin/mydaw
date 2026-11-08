@@ -216,7 +216,7 @@ export function StatusBar() {
 }
 
 const SHORTCUTS: [string, string][] = [
-  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów)', 'F5'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'F8'],
+  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów)', 'F5'], ['Dodaj efekt do zaznaczonego kanału', 'F7'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'F8'],
   ['Rysuj · Maluj · Usuń', 'P · B · D'], ['Wycisz · Tnij · Zaznacz', 'T · C · E'],
   ['Zaznacz prostokątem', 'Ctrl + przeciągnij'], ['Dodaj/usuń z zaznaczenia', 'Ctrl + klik'], ['Zaznacz wszystko', 'Ctrl+A'], ['Odznacz', 'Esc'],
   ['Kopiuj przeciągając', 'Shift + przeciągnij'], ['Poza siatką (off grid)', 'trzymaj Alt'], ['Duplikuj za zaznaczeniem', 'Ctrl+B'],

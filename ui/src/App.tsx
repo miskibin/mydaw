@@ -16,6 +16,7 @@ import { PitchEditor } from './views/PitchEditor';
 import { Export } from './views/Export';
 import { Settings, VstPicker } from './views/Settings';
 import { MusicDialog } from './views/MusicDialog';
+import { FxPickerHost, openFxPicker } from './views/FxPicker';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 
 /** Stacking rank of a plugin window inside the window layer (1 = bottom). */
@@ -31,6 +32,7 @@ function onKey(e: KeyboardEvent) {
     if (U.menu) return closeMenu();
     if (U.autoEdit != null) return setU('autoEdit', null);
     if (U.musicWin) return A.closeMusicAnalysis();
+    if (U.fxPicker) return setU('fxPicker', null);
     if (U.vstPicker) return setU('vstPicker', null);
     if (U.settings) return setU('settings', false);
     if (U.exportOpen) return void A.cancelExportOrClose();
@@ -42,6 +44,7 @@ function onKey(e: KeyboardEvent) {
     return setU('sel', []);
   }
   if (e.key === 'F8') { e.preventDefault(); return setU('pickOpen', !U.pickOpen); }
+  if (e.key === 'F7') { e.preventDefault(); return U.fxPicker ? setU('fxPicker', null) : openFxPicker(U.mixSel); }
   if (e.key === 'F5') { e.preventDefault(); return U.plugsHidden ? A.showPlugs() : A.playlistFront(); }
   if (e.key === 'F9') { e.preventDefault(); return setU('mixOpen', !U.mixOpen); }
   if (m && k === 'z') { e.preventDefault(); return void (e.shiftKey ? A.redo() : A.undo()); }
@@ -140,6 +143,7 @@ export function App() {
       <Export />
       <Settings />
       <VstPicker />
+      <FxPickerHost />
       <MusicDialog />
     </div>
   );

@@ -216,13 +216,14 @@ export function fxOp(fx: Fx, insId?: Id): Op {
   const ins = insId ?? findFx(fx.id)?.m.id ?? 0;
   return { op: 'putFx', insertId: ins, fx: plain(fx) };
 }
-export function addFx(insId: Id, type: BuiltinKind) {
+export function addFx(insId: Id, type: BuiltinKind, preset?: number) {
   if (!S.catalog) return;
-  const f = newFx(S.catalog, allocId(), type, S.project.bpm);
+  let f = newFx(S.catalog, allocId(), type, S.project.bpm);
+  if (preset != null && preset > 0 && presetList(S.catalog, type)[preset]) f = loadPresetFx(S.catalog, f, preset, S.project.bpm);
   commit([{ op: 'putFx', insertId: insId, fx: f }], 'Dodaj efekt');
   setU({ mixSel: insId, fxSel: f.id });
   openPlug(f.id);
-  const pr = presetList(S.catalog, type)[0];
+  const pr = presetList(S.catalog, type)[preset ?? 0];
   say('Dodano ' + (S.catalog.types[type]?.name ?? type) + (pr ? ' · preset: ' + pr.name : ''));
 }
 export function addVst(insId: Id, info: { path: string; cid: string; name: string; vendor: string }) {
@@ -257,7 +258,7 @@ export function stepPreset(fxId: Id, d: number) {
 }
 
 // ---------- windows ----------
-const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 600, deess: 680, denoise: 640, voice: 700 };
+const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700 };
 /** Open (or bring to front) an effect window. The newest/most recently focused window is always on top. */
 /** Playlist to the front: effect windows go behind it (they keep their place and state). */
 export function playlistFront() { if (U.plugs.length && !U.plugsHidden) setU('plugsHidden', true); }
