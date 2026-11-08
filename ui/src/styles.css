@@ -517,3 +517,56 @@ select option { background: var(--bg4); color: var(--fg); }
 .knob.sm .val { font-size: 9.5px; }
 .knob.sm .lab { font-size: 8.5px; }
 .knob.sm .ends { width: 50px; }
+
+/* ---------- notebook (lyrics, F8) ---------- */
+.nbwin { min-width: 300px; }
+.nb-tog { height: 22px; padding: 0 9px; border: 1px solid var(--line); border-radius: 11px; background: transparent; color: var(--fg4); font: 600 10px var(--sans); letter-spacing: .02em; cursor: pointer; flex: none; }
+.nb-tog:hover { color: var(--fg-hi); border-color: var(--line3); }
+.nb-tog.on { background: linear-gradient(90deg, color-mix(in srgb, #e0a44a 22%, transparent), color-mix(in srgb, #4f8ef7 22%, transparent), color-mix(in srgb, #d9678f 22%, transparent)); border-color: var(--line3); color: var(--fg-hi); }
+.nb-tabs { flex: none; display: flex; align-items: flex-end; gap: 2px; padding: 6px 8px 0; background: var(--bg5); border-bottom: 1px solid var(--line2); overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.nb-tabs::-webkit-scrollbar { display: none; }
+.nb-tab { position: relative; flex: none; display: flex; align-items: center; gap: 6px; height: 27px; max-width: 170px; margin-bottom: -1px; padding: 0 10px; border: 1px solid transparent; border-bottom: 0; border-radius: 5px 5px 0 0; color: var(--fg4); font: 500 12px var(--sans); cursor: pointer; white-space: nowrap; user-select: none; }
+.nb-tab:hover { color: var(--fg-hi); }
+.nb-tab.on { background: var(--bg4); border-color: var(--line2); color: var(--fg-hi); box-shadow: inset 0 2px 0 var(--blue); }
+.nb-tabname { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nb-tab.dropL::before, .nb-tab.dropR::after { content: ''; position: absolute; top: 3px; bottom: 3px; width: 2px; border-radius: 1px; background: var(--blue); }
+.nb-tab.dropL::before { left: -2px; }
+.nb-tab.dropR::after { right: -2px; }
+.nb-tabx { width: 16px; height: 16px; margin-right: -5px; padding: 0; border: 0; border-radius: 3px; background: transparent; color: var(--fg5); font-size: 13px; line-height: 1; cursor: pointer; }
+.nb-tabx:hover { background: var(--line2); color: var(--danger); }
+.nb-live { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 2px color-mix(in srgb, var(--green) 25%, transparent); }
+.nb-rename { width: 120px; height: 20px; padding: 0 4px; border: 1px solid var(--blue); border-radius: 3px; background: var(--bg0); color: var(--fg-hi); font: 500 12px var(--sans); outline: none; }
+.nb-add { flex: none; align-self: center; width: 22px; height: 22px; margin-left: 2px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--fg4); cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.nb-add:hover { background: var(--line); color: var(--fg-hi); }
+.nb-bar { flex: none; display: flex; align-items: center; gap: 12px; padding: 6px 10px; background: var(--bg4); border-bottom: 1px solid var(--line); }
+.nb-start { display: flex; align-items: center; gap: 6px; flex: none; font: 500 11px var(--sans); color: var(--fg4); }
+.nb-start .textin { width: 58px; height: 22px; padding: 0 6px; font: 500 11px var(--mono); appearance: textfield; -moz-appearance: textfield; }
+.nb-start .textin::-webkit-inner-spin-button, .nb-start .textin::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.nb-hint { min-width: 0; font: 11px var(--sans); color: var(--fg5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nb-scroll { flex: 1; min-height: 0; overflow: auto; background: var(--bg4); }
+.nb-scroll.hidden { display: none; }
+.nb-grid { display: grid; grid-template-columns: 46px 1fr 34px; width: max-content; min-width: 100%; }
+.nb-row { height: var(--nb-lh); }
+.nb-gutter, .nb-syll { position: sticky; z-index: 2; background: var(--bg4); }
+.nb-gutter { left: 0; border-right: 1px solid var(--line); }
+.nb-syll { right: 0; }
+.nb-gutter .nb-row { display: flex; align-items: center; justify-content: flex-end; padding-right: 7px; }
+.nb-num { height: 18px; min-width: 24px; padding: 0 4px; border: 0; border-radius: 3px; background: transparent; color: var(--fg5); font: 500 11px var(--mono); text-align: right; cursor: pointer; }
+.nb-num:hover { background: var(--line2); color: var(--fg-hi); }
+.nb-gutter .nb-row.cur { box-shadow: inset 3px 0 0 var(--blue); }
+.nb-gutter .nb-row.cur .nb-num { color: var(--blue-hi); font-weight: 700; }
+.nb-row.cur { background: color-mix(in srgb, var(--blue) 15%, transparent); }
+.nb-gutter .nb-row.cur, .nb-syll .nb-row.cur { background: color-mix(in srgb, var(--blue) 15%, var(--bg4)); }
+.nb-syll .nb-row { display: flex; align-items: center; justify-content: flex-end; padding-right: 10px; font: 500 10px var(--mono); color: var(--fg6); }
+.nb-body { position: relative; min-width: 0; }
+.nb-mirror .nb-row, .nb-ta { font: 400 var(--nb-font)/var(--nb-lh) var(--sans); letter-spacing: 0; font-kerning: normal; font-variant-ligatures: normal; tab-size: 4; }
+.nb-mirror .nb-row { padding: 0 18px 0 12px; white-space: pre; color: var(--fg-hi); }
+.nb-mirror .nb-row.hdr { color: var(--fg4); background: color-mix(in srgb, var(--fg) 4%, transparent); box-shadow: inset 0 -1px 0 var(--line); }
+.nb-gutter .nb-row.hdr, .nb-syll .nb-row.hdr { background: color-mix(in srgb, var(--fg) 4%, var(--bg4)); box-shadow: inset 0 -1px 0 var(--line); }
+.nb-rhyme { border-radius: 2px; background: color-mix(in srgb, var(--rc) 20%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--rc) 90%, transparent); }
+.nb-ta { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0 18px 0 12px; border: 0; outline: none; resize: none; overflow: hidden; white-space: pre; background: transparent; color: transparent; caret-color: var(--fg-hi); }
+.nb-ta::placeholder { color: var(--fg6); }
+.nb-ta::selection { background: color-mix(in srgb, var(--blue) 32%, transparent); color: transparent; }
+.nb-empty { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px 28px; text-align: center; }
+.nb-empty-t { font: 600 13px var(--sans); color: var(--fg-hi); }
+.nb-empty .hint { max-width: 300px; line-height: 1.5; }

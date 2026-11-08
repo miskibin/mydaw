@@ -47,6 +47,8 @@ pub enum Op {
     PutComp { comp: Comp },
     /// Remove a take group and every clip that plays it.
     RemoveComp { id: Id },
+    /// Replace the lyrics notebook (all pages, in tab order). Never touches the audio graph.
+    PutNotebook { notebook: Notebook },
     SetBpm { bpm: f64 },
     SetLoop { #[serde(rename = "loop")] range: Option<LoopRange> },
 }
@@ -409,6 +411,13 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             p.clips.retain(|c| !(c.kind == ClipKind::Comp && c.source == *id));
             d.timeline = true;
         }
+        Op::PutNotebook { notebook } => {
+            validate_notebook(notebook)?;
+            for pg in &notebook.pages {
+                bump(p, pg.id);
+            }
+            p.notebook = notebook.clone();
+        }
         Op::SetBpm { bpm } => {
             if !(20.0..=999.0).contains(bpm) {
                 return Err(OpError::Invalid("bpm must be 20..999".into()));
@@ -438,6 +447,30 @@ fn follow_pattern_length(p: &mut Project, id: Id, old: f64, new: f64) {
             c.len = new.min(TOTAL_BEATS - c.start).max(1.0 / 16.0);
         }
     }
+}
+
+/// Checks a notebook: unique page ids, bars 1..=NOTEBOOK_MAX_BAR, bounded size.
+pub fn validate_notebook(nb: &Notebook) -> Result<(), OpError> {
+    let bad = |m: String| Err(OpError::Invalid(m));
+    if nb.pages.len() > NOTEBOOK_MAX_PAGES {
+        return bad(format!("a notebook has at most {NOTEBOOK_MAX_PAGES} pages"));
+    }
+    let mut ids = std::collections::HashSet::new();
+    for pg in &nb.pages {
+        if !ids.insert(pg.id) {
+            return bad(format!("notebook page id {} is used twice", pg.id));
+        }
+        if !(1..=NOTEBOOK_MAX_BAR).contains(&pg.start_bar) {
+            return bad(format!("page {}: start bar must be 1..{NOTEBOOK_MAX_BAR}", pg.id));
+        }
+        if pg.text.len() > NOTEBOOK_MAX_TEXT {
+            return bad(format!("page {}: text is longer than {NOTEBOOK_MAX_TEXT} bytes", pg.id));
+        }
+        if pg.name.chars().count() > 80 {
+            return bad(format!("page {}: name is longer than 80 characters", pg.id));
+        }
+    }
+    Ok(())
 }
 
 /// Checks a comp and returns it normalised (regions sorted, same-take neighbours joined).

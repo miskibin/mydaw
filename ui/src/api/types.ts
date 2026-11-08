@@ -140,7 +140,13 @@ export interface Project {
   comps?: Comp[];
   /** Channel Rack rows shared by every pattern. */
   channels?: Channel[];
+  /** The lyrics notebook (absent in old projects = no pages). */
+  notebook?: Notebook;
 }
+
+/** One notebook page: each line of `text` is a bar counted from `startBar` (1-based); `[…]` lines are headers. */
+export interface LyricPage { id: Id; name: string; startBar: number; text: string }
+export interface Notebook { pages: LyricPage[] }
 
 export type Op =
   | { op: 'putClips'; clips: Clip[] }
@@ -162,7 +168,8 @@ export type Op =
   | { op: 'putAutomation'; automation: Automation }
   | { op: 'removeAutomation'; id: Id }
   | { op: 'putComp'; comp: Comp }
-  | { op: 'removeComp'; id: Id };
+  | { op: 'removeComp'; id: Id }
+  | { op: 'putNotebook'; notebook: Notebook };
 
 export interface TransportDto {
   playing: boolean; rec: boolean; monitor: boolean; metro: boolean; countIn: boolean; startBeat: number;
@@ -188,6 +195,8 @@ export interface AudioHost { id: string; name: string }
 export interface AudioDevices { outputs: string[]; inputs: string[] }
 export interface AudioConfig {
   host: string; output: string | null; input: string | null; sampleRate: number | null; bufferSize: number | null;
+  /** Input channel recorded and monitored (0-based), mono in both sides; null = the first. */
+  inputChannel?: number | null;
 }
 export interface AudioStatus extends AudioConfig {
   running: boolean; actualRate: number; actualBuffer: number; latencyMs: number;

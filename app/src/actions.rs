@@ -196,6 +196,7 @@ pub fn context(app: &App, full: bool) -> Value {
         "channels": p.channels.iter().map(|c| channel_json(p, c)).collect::<Vec<_>>(),
         "sources": p.sources.iter().map(|s| json!({"id": s.id, "name": s.name, "seconds": s.dur, "path": s.path})).collect::<Vec<_>>(),
         "clips": p.clips.len(),
+        "notebook": p.notebook.pages.iter().map(|pg| json!({"id": pg.id, "name": pg.name, "startBar": pg.start_bar, "lines": pg.text.lines().count()})).collect::<Vec<_>>(),
         "nextId": p.next_id,
     })
 }
@@ -226,7 +227,9 @@ pub fn schema() -> Value {
             "removeAutomation": {"id": 0},
             "putComp": {"comp": {"id": 0, "name": "Comp 1", "xfade": 0.01, "takes": [{"id": 0, "name": "Take 1", "ref": "source id", "start": 0, "len": 8, "offset": 0}], "regions": [{"take": 0, "from": 0, "to": 4, "xfade": 0.02}]}},
             "removeComp": {"id": 0},
+            "putNotebook": {"notebook": {"pages": [{"id": 0, "name": "Zwrotka 1", "startBar": 1, "text": "[Zwrotka]\nfirst bar\n\nthird bar"}]}},
         },
+        "notebook": "lyrics notebook (text only, never played): pages in tab order; each line of `text` is one bar counted from `startBar` (1-based, bar = 4 beats), an empty line is a bar of rest, a line wrapped in [brackets] is a header and takes no bar. putNotebook replaces all pages; the full text is in `wave context --full`",
         "comps": "take lanes: a clip of kind `comp` plays comp `ref`; takes/regions are in comp beats (comp beat = clip.offset + timeline beat − clip.start); regions sorted, non-overlapping, gaps are silent; xfade in seconds (equal-power crossfade centred on each region start, default 0.01). Easier: `wave takes --track N`, `wave comp --track N --set '[{\"take\":ID,\"from\":B,\"to\":B}]'` (timeline beats)",
         "example": [{"op": "setBpm", "bpm": 140}, {"op": "removeClips", "ids": [3]}],
     })

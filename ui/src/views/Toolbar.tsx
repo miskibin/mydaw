@@ -10,6 +10,8 @@ import { openMenu, say, setU, U, type Tool } from '../state/ui';
 import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { Icon, ICONS } from '../ui/icons';
+import { NB, toggleNotebook } from '../state/notebook';
+import { NOTEBOOK_ICON } from './Notebook';
 
 export const TOOLS: [Tool, string, string][] = [
   ['draw', 'P', 'Rysuj'], ['paint', 'B', 'Maluj'], ['erase', 'D', 'Usuń'], ['mute', 'T', 'Wycisz'], ['slice', 'C', 'Tnij'], ['select', 'E', 'Zaznacz'],
@@ -113,8 +115,11 @@ export function Toolbar() {
   };
   return (
     <div class="toolbar" classList={{ native: !!win }} onMouseDown={dragDown}>
-      <button class="ibtn" classList={{ on: U.pickOpen }} onClick={() => setU('pickOpen', !U.pickOpen)} title="Browser (F8)">
+      <button class="ibtn" classList={{ on: U.pickOpen }} onClick={() => setU('pickOpen', !U.pickOpen)} title="Browser (Alt+F8)">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
+      </button>
+      <button class="ibtn" classList={{ on: NB.open }} onClick={toggleNotebook} title="Notatnik — tekst utworu, linia = takt (F8)" data-nbbtn>
+        <Icon d={NOTEBOOK_ICON} size={15} sw={1.8} />
       </button>
       <div class="row" style={{ gap: '1px' }}>
         <button class="ibtn" disabled={!S.canUndo} onClick={() => void A.undo()} title="Cofnij (Ctrl+Z)"><Icon d="M9 14L4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3" /></button>
@@ -137,12 +142,12 @@ export function Toolbar() {
         </button>
         <button class="count" classList={{ on: T().countIn }} title="Count-in: 1 takt przed nagrywaniem" onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
-      <Show when={T().rec}>
-        <div class="row" title="Poziom wejścia" style={{ gap: '6px' }}>
-          <span class="tag9">IN</span>
-          <div class="inmeter"><div ref={inEl} /></div>
-        </div>
-      </Show>
+      {/* the slot stays reserved while recording is off, so pressing R never re-wraps the toolbar
+          (and shifts the playlist) on a narrow window */}
+      <div class="row" title="Poziom wejścia" style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
+        <span class="tag9">IN</span>
+        <div class="inmeter"><div ref={inEl} /></div>
+      </div>
       <div class="clockbox" onContextMenu={bpmMenu}>
         <span ref={clockEl} class="clock">1:01:01</span>
         <div style={{ width: '1px', height: '14px', background: 'var(--line)' }} />
@@ -216,7 +221,8 @@ export function StatusBar() {
 }
 
 const SHORTCUTS: [string, string][] = [
-  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów i patternu)', 'F5'], ['Edytor patternu (Channel Rack)', 'F6 · 2× klik na pattern'], ['Dodaj efekt do zaznaczonego kanału', 'F7'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'F8'],
+  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów i patternu)', 'F5'], ['Edytor patternu (Channel Rack)', 'F6 · 2× klik na pattern'], ['Dodaj efekt do zaznaczonego kanału', 'F7'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'Alt+F8'],
+  ['Notatnik (tekst, linia = takt)', 'F8'], ['Notatnik: rozmiar czcionki', 'Ctrl + kółko'], ['Notatnik: głowica na takt', 'klik w numer taktu'], ['Notatnik: wyjdź z edycji', 'Esc'],
   ['Rysuj · Maluj · Usuń', 'P · B · D'], ['Wycisz · Tnij · Zaznacz', 'T · C · E'],
   ['Zaznacz prostokątem', 'Ctrl + przeciągnij'], ['Dodaj/usuń z zaznaczenia', 'Ctrl + klik'], ['Zaznacz wszystko', 'Ctrl+A'], ['Odznacz', 'Esc'],
   ['Kopiuj przeciągając', 'Shift + przeciągnij'], ['Poza siatką (off grid)', 'trzymaj Alt'], ['Duplikuj za zaznaczeniem', 'Ctrl+B'],

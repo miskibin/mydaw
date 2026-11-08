@@ -114,7 +114,7 @@ All edits are "put" ops, applied atomically per batch:
 (also removes its notes in every pattern; `removeSource` removes sampler channels of that
 source), `putSource{source}`,
 `removeSource{id}`, `putAutomation{automation}`, `removeAutomation{id}`,
-`putComp{comp}`, `removeComp{id}`, `setBpm{bpm}`, `setLoop{loop}`.
+`putComp{comp}`, `removeComp{id}`, `putNotebook{notebook}`, `setBpm{bpm}`, `setLoop{loop}`.
 
 Every effect has `mix` (0..1 dry/wet, default 1). Automation:
 `project.automations[] = {id, name, color, target, points:[{t, v}]}`; a clip of
@@ -256,7 +256,62 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
   newest take plays over its range (a last pass cut short by Stop only where
   it has audio). A last pass shorter than one beat is dropped. The audio
   thread marks each loop wrap with a NaN frame in the input ring.
-* Recordings stay sources (`"Take N"`) next to the project like any audio.
+* Recordings stay sources (`"Take N"`) next to the project like any audio
+  (`<project> Audio/`, or the scratch folder until the first save); a new file
+  never overwrites an existing one (`Take 2 1234 (2).wav`).
+* **Takes line up with what was heard.** Input captured at a frame was sung
+  to playback heard *round trip + PDC* frames earlier: the device layer
+  publishes the measured round trip (`Shared::io_latency`: output
+  playback−callback + input callback−capture + the input ring backlog, from
+  cpal timestamps; one buffer each way when a host reports none) and the
+  engine adds `engine::playback_latency` (slowest non-master insert + master
+  chain). `finalize_take` drops that many frames from the front; pass marks
+  stay put, since they already sit on the heard loop boundary. The last
+  *latency* of a take (still in flight at Stop) is not captured.
+* **Punch-in**: turning `rec` on while playing (with an armed track) starts a
+  take at the playhead (`Cmd::PunchIn`; the audio thread reports the exact beat
+  in `Shared::rec_start`); with a loop set it records in passes like loop
+  recording. Turning `rec` off punches out and keeps playing.
+* The device records **one input channel** (`AudioConfig.inputChannel`,
+  0-based, default the first) as mono in both sides, so a mic on input 1 of a
+  stereo interface is not left-only. Offline renders drop the PDC delay, so an
+  export starts on its first beat and keeps its last `PDC` frames.
+
+## Lyrics notebook ("Notatnik", F8)
+
+```jsonc
+"notebook": { "pages": [{ "id": 3000, "name": "Zwrotka 1", "startBar": 1,
+                          "text": "[Zwrotka]\nidę przez miasto nocą\n\nświatła mi nie pomogą" }] }
+```
+
+Text that belongs to the song, so it is **project data**, not UI state: saved with the
+project, undone, visible to the CLI (`wave context` lists the pages, `--full` has the
+text, `putNotebook` through `apply`). It never touches the audio graph (the op returns an
+empty `Dirty`). Old files without `notebook` open with no pages (`#[serde(default)]`).
+
+* **One line = one bar**, counted from the page's `startBar` (1-based, 4 beats per bar,
+  like the playlist ruler). An empty line is a bar of rest and still counts; a line whose
+  trimmed text is `[…]` is a header and takes no bar. `ui/src/lib/notebook.ts` holds the
+  mapping (`lineBars`, `lineOfBar`, `barOfBeat`), the Polish syllable counter and the rhyme
+  grouping (ending from the penultimate vowel — Polish stress — with `ó`/`u`, `rz`/`ż`,
+  `ch`/`h` and final devoicing folded; an ending needs ≥ 2 lines to get a colour).
+* `putNotebook` replaces all pages (tab order = array order); ids are unique, `startBar`
+  1..9999, ≤ 64 pages, ≤ 100 kB of text per page.
+* **Typing is coalesced in the UI** (`ui/src/state/notebook.ts`): the textarea's text is a
+  pending draft sent as one `putNotebook` (one undo step) after 0.9 s without typing, or on
+  blur, page switch, undo/redo, save, new/open. Ctrl+Z inside the editor flushes the draft
+  and runs the project's undo, never the textarea's own.
+* **Draft backup.** Until the text is in a saved file, a copy sits in `localStorage`
+  (`wave.notebook.backup:<path>`), together with the hash of the notebook it was based on.
+  When that project is loaded again and its notebook is still exactly that base (nothing
+  newer was saved), the copy is put back as one undoable edit. Saving drops the copy.
+* **The window** is project-level, not part of the effect-window layer: F5 and clicks on
+  the playlist never hide it. Geometry, font size (Ctrl+wheel) and the rhyme toggle are
+  per-user view settings in `localStorage`. While the transport plays, the bar under the
+  playhead (from telemetry) is highlighted on the current page and kept centred, unless the
+  user typed or scrolled in the last 2 s. Clicking a bar number moves the playhead there.
+  Rendering: a transparent-text `<textarea>` over a mirror of the same text (same font,
+  fixed line height, no soft wrap), so gutter, highlight and syllable column stay aligned.
 
 ## Pitch edits on audio clips
 

@@ -4648,6 +4648,7 @@ dependencies = [
  "log",
  "rtrb",
  "serde",
+ "serde_json",
  "wave-engine",
 ]
 

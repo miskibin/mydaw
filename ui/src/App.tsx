@@ -1,6 +1,7 @@
 import { createEffect, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from './api/backend';
 import { baseName } from './lib/format';
+import { typingIn } from './lib/keys';
 import { snapRes } from './lib/snap';
 import * as A from './state/actions';
 import { findFx, S } from './state/store';
@@ -18,6 +19,8 @@ import { Settings, VstPicker } from './views/Settings';
 import { MusicDialog } from './views/MusicDialog';
 import { FxPickerHost, openFxPicker } from './views/FxPicker';
 import { PatternEditor } from './views/PatternEditor';
+import { NotebookHost } from './views/Notebook';
+import { toggleNotebook } from './state/notebook';
 import { closePattern, togglePattern } from './state/pattern';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 
@@ -26,8 +29,7 @@ function plugRank(z: number) { let r = 1; for (const p of U.plugs) if (p.z < z) 
 
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
-  const tg = (e.target as HTMLElement).tagName;
-  if (tg === 'INPUT' || tg === 'SELECT' || tg === 'TEXTAREA') return;
+  if (typingIn(e.target as HTMLElement)) return;
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
   if (e.code === 'Space') { e.preventDefault(); (document.activeElement as HTMLElement | null)?.blur?.(); if (!e.repeat) void A.togglePlay(); return; }
   if (e.key === 'Escape') {
@@ -46,7 +48,7 @@ function onKey(e: KeyboardEvent) {
     if (U.compSel) return setU('compSel', null);
     return setU('sel', []);
   }
-  if (e.key === 'F8') { e.preventDefault(); return setU('pickOpen', !U.pickOpen); }
+  if (e.key === 'F8') { e.preventDefault(); return e.altKey ? setU('pickOpen', !U.pickOpen) : toggleNotebook(); }
   if (e.key === 'F7') { e.preventDefault(); return U.fxPicker ? setU('fxPicker', null) : openFxPicker(U.mixSel); }
   if (e.key === 'F6') { e.preventDefault(); return togglePattern(); }
   if (e.key === 'F5') { e.preventDefault(); return U.plugsHidden ? A.showPlugs() : A.playlistFront(); }
@@ -142,6 +144,7 @@ export function App() {
         <For each={U.plugs}>{pw => <FxWindow pw={pw} z={plugRank(pw.z)} />}</For>
         <PatternEditor z={U.patWin ? plugRank(U.patWin.z) : 1} />
       </div>
+      <NotebookHost />
       <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>
       <ContextMenu />
       <Help />

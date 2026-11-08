@@ -19,6 +19,7 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         automations: vec![],
         comps: vec![],
         channels: vec![],
+        notebook: Notebook::default(),
         next_id: 1000,
     };
     // the Channel Rack: the four built-ins (ids 1000..1003)

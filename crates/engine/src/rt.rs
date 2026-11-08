@@ -33,6 +33,11 @@ pub struct Shared {
     gr: Vec<AtomicU32>,
     fx_meters: Vec<[AtomicU32; METERS]>,
     pub sample_rate: AtomicU32,
+    /// Round-trip latency of the audio device in frames (what is heard → when it is
+    /// captured), published by the device layer. Recordings are moved earlier by it.
+    io_latency: AtomicU32,
+    /// Beat where input capture began (f64 bits; NaN until the audio thread has started it).
+    rec_start: AtomicU64,
 }
 
 fn fset(a: &AtomicU32, v: f32) {
@@ -62,6 +67,8 @@ impl Shared {
             gr: (0..WATCH_SLOTS).map(|_| AtomicU32::new(0)).collect(),
             fx_meters: (0..WATCH_SLOTS).map(|_| std::array::from_fn(|_| AtomicU32::new(0))).collect(),
             sample_rate: AtomicU32::new(48000),
+            io_latency: AtomicU32::new(0),
+            rec_start: AtomicU64::new(f64::NAN.to_bits()),
         }
     }
     pub fn beat(&self) -> f64 {
@@ -89,6 +96,20 @@ impl Shared {
     }
     pub fn gr(&self, slot: usize) -> f32 {
         fget(&self.gr[slot])
+    }
+    /// Device round trip in frames: output latency + input latency (+ any input backlog).
+    pub fn set_io_latency(&self, frames: u32) {
+        self.io_latency.store(frames, Relaxed)
+    }
+    pub fn io_latency(&self) -> u32 {
+        self.io_latency.load(Relaxed)
+    }
+    /// Beat where the audio thread began capturing the current take (NaN = not yet).
+    pub fn rec_start(&self) -> f64 {
+        f64::from_bits(self.rec_start.load(Relaxed))
+    }
+    pub(crate) fn set_rec_start(&self, beat: f64) {
+        self.rec_start.store(beat.to_bits(), Relaxed)
     }
 }
 
@@ -301,6 +322,9 @@ pub enum Cmd {
     Play { from: f64, count_in: f64, rec: bool, rec_loop: bool },
     /// Stops capturing input but keeps the transport running.
     PunchOut,
+    /// Starts capturing input at the current beat while playing. `rec_loop`: wrap at the
+    /// loop end in passes (one take per pass), like loop recording.
+    PunchIn { rec_loop: bool },
     Stop,
     Flags { metro: bool, monitor: bool },
     Watch { ids: [Id; WATCH_SLOTS], n: u8 },
@@ -482,6 +506,9 @@ impl Rt {
                     self.rec = rec;
                     self.rec_loop = rec && rec_loop;
                     self.rec_start = from;
+                    if rec {
+                        self.shared.set_rec_start(from);
+                    }
                     self.playing = true;
                     self.shared.playing.store(true, Relaxed);
                     self.shared.stopped_at_end.store(false, Relaxed);
@@ -491,6 +518,14 @@ impl Rt {
                     // wrapping at a song end that the new take has not extended yet
                     self.rec_start = f64::INFINITY;
                     self.shared.recording.store(false, Relaxed);
+                }
+                Cmd::PunchIn { rec_loop } => {
+                    if self.playing {
+                        self.rec = true;
+                        self.rec_loop = rec_loop;
+                        self.rec_start = self.beat;
+                        self.shared.set_rec_start(self.beat);
+                    }
                 }
                 Cmd::Stop => self.stop(false),
                 Cmd::Flags { metro, monitor } => {

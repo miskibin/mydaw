@@ -4,6 +4,7 @@ import { batch } from 'solid-js';
 import { createStore, produce, reconcile } from 'solid-js/store';
 import type { Catalog, Clip, Fx, Id, Insert, Op, Project, StateDto, TransportDto } from '../api/types';
 import { applyCompOp, compExtent } from '../lib/comp';
+import { applyNotebookOp } from '../lib/notebook';
 import { applyPatternOp } from '../lib/pattern';
 
 export interface EngineState {
@@ -132,6 +133,7 @@ function applyInPlace(p: Project, op: Op) {
       p.sources = p.sources.filter(s => s.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'audio' && c.ref === op.id));
       return;
+    case 'putNotebook': applyNotebookOp(p, op.notebook, false); return;
     case 'setBpm': p.bpm = op.bpm; return;
     case 'setLoop': p.loop = op.loop ? { ...op.loop } : null; return;
     case 'putAutomation': {

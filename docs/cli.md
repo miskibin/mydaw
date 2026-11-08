@@ -106,6 +106,17 @@ wave comp --track 5 --flatten              # render to one audio clip, takes rem
 Each edit is one undo step. Through `apply`, the ops are `putComp` /
 `removeComp` with comp-beat times and crossfades in seconds (see `wave schema`).
 
+## Lyrics (the notebook)
+
+`wave context` lists the notebook pages (`id`, `name`, `startBar`, `lines`);
+`wave context --full` includes their text. Each line of a page is one bar from
+`startBar`, `[…]` lines are headers. Write them with one op that replaces every
+page (one undo step):
+
+```sh
+wave apply --json '[{"op":"putNotebook","notebook":{"pages":[{"id":3000,"name":"Refren","startBar":17,"text":"[Refren]\nto jest nasz czas\nnasza noc"}]}}]'
+```
+
 ## Listening without speakers
 
 ```sh

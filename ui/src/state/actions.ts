@@ -7,14 +7,21 @@ import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
+import { flushNotebook } from './notebook';
 import { allocId, findFx, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
 
 // ---------- transport ----------
+/** Recording is on but no track is armed: the engine plays and records nothing. */
+const NO_ARMED = 'Nagrywanie włączone, ale żadna ścieżka nie jest uzbrojona — kliknij ● przy ścieżce';
+const armedTrack = () => S.project.tracks.find(t => t.arm);
 export async function play(from = U.start) {
   setU('playing', true);
-  try { await be().transportPlay(from); setTransport({ playing: true }); say(S.transport.rec ? '● Nagrywanie' : 'Play'); }
+  try {
+    await be().transportPlay(from); setTransport({ playing: true });
+    say(!S.transport.rec ? 'Play' : armedTrack() ? '● Nagrywanie na: ' + armedTrack()!.name : NO_ARMED);
+  }
   catch (e) { setU('playing', false); say('Błąd odtwarzania: ' + String(e)); }
 }
 /** `rewind` also moves the start marker (and the stopped playhead) to the beginning of the song. */
@@ -37,7 +44,10 @@ export async function setTransportFlag(k: 'metro' | 'countIn' | 'rec' | 'monitor
 export function toggleRec() {
   const on = !S.transport.rec;
   void setTransportFlag('rec', on);
-  say(on ? (U.playing ? '● Punch in' : 'Nagrywanie uzbrojone — Spacja startuje' + (S.transport.countIn ? ' (z count-in)' : '')) : 'Nagrywanie wyłączone');
+  say(!on ? (U.playing ? 'Punch out' : 'Nagrywanie wyłączone')
+    : !armedTrack() ? NO_ARMED
+    : U.playing ? '● Punch in: ' + armedTrack()!.name
+    : 'Nagrywanie na: ' + armedTrack()!.name + ' — Spacja startuje' + (S.transport.countIn ? ' (z count-in)' : ''));
 }
 export function toggleMonitor() {
   const on = !S.transport.monitor;
@@ -46,15 +56,18 @@ export function toggleMonitor() {
 }
 
 // ---------- history / project ----------
-export async function undo() { endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say('Cofnięto'); }
-export async function redo() { endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say('Ponowiono'); }
+export async function undo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say('Cofnięto'); }
+export async function redo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say('Ponowiono'); }
 export async function projectNew() {
+  flushNotebook();
   try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); say('Nowy projekt'); } catch (e) { say('Nie utworzono projektu: ' + String(e)); }
 }
 export async function projectOpen() {
+  flushNotebook();
   try { acceptReply(await enqueue(() => be().projectOpen())); afterProjectLoad(); say('Otwarto ' + (S.path ?? '')); } catch (e) { say('Nie otwarto: ' + String(e)); }
 }
 export async function projectSave(saveAs = false) {
+  flushNotebook();
   try { const r = await enqueue(() => be().projectSave(saveAs)); say('Zapisano ' + r.path); await resync(); } catch (e) { say('Nie zapisano: ' + String(e)); }
 }
 /** Escape on the export dialog: abort an in-flight bounce, otherwise close. */
