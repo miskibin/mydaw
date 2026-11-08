@@ -34,6 +34,10 @@ pub enum Op {
     PutAutomation { automation: Automation },
     /// Remove an automation and every clip that plays it.
     RemoveAutomation { id: Id },
+    /// Insert or replace a take group with its comp (takes, regions, crossfade).
+    PutComp { comp: Comp },
+    /// Remove a take group and every clip that plays it.
+    RemoveComp { id: Id },
     SetBpm { bpm: f64 },
     SetLoop { #[serde(rename = "loop")] range: Option<LoopRange> },
 }
@@ -90,6 +94,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     ClipKind::Pat => p.patterns.iter().any(|x| x.id == c.source),
                     ClipKind::Audio => p.sources.iter().any(|x| x.id == c.source),
                     ClipKind::Auto => p.automations.iter().any(|x| x.id == c.source),
+                    ClipKind::Comp => p.comps.iter().any(|x| x.id == c.source),
                 };
                 if !known {
                     return Err(OpError::Missing { what: "clip source", id: c.source });
@@ -252,6 +257,16 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         Op::RemoveSource { id } => {
             p.sources.retain(|s| s.id != *id);
             p.clips.retain(|c| !(c.kind == ClipKind::Audio && c.source == *id));
+            // takes recorded into this source go too; a comp left without takes goes with its clips
+            for cp in p.comps.iter_mut() {
+                let gone: Vec<Id> = cp.takes.iter().filter(|t| t.source == *id).map(|t| t.id).collect();
+                for t in gone {
+                    cp.remove_take(t);
+                }
+            }
+            let empty: Vec<Id> = p.comps.iter().filter(|c| c.takes.is_empty()).map(|c| c.id).collect();
+            p.comps.retain(|c| !c.takes.is_empty());
+            p.clips.retain(|c| !(c.kind == ClipKind::Comp && empty.contains(&c.source)));
             d.timeline = true;
         }
         Op::PutAutomation { automation } => {
@@ -275,6 +290,26 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             p.clips.retain(|c| !(c.kind == ClipKind::Auto && c.source == *id));
             d.timeline = true;
         }
+        Op::PutComp { comp } => {
+            let c = validate_comp(p, comp)?;
+            bump(p, c.id);
+            for t in &c.takes {
+                bump(p, t.id);
+            }
+            match p.comps.iter_mut().find(|x| x.id == c.id) {
+                Some(x) => *x = c,
+                None => p.comps.push(c),
+            }
+            d.timeline = true;
+        }
+        Op::RemoveComp { id } => {
+            if p.comp(*id).is_none() {
+                return Err(OpError::Missing { what: "comp", id: *id });
+            }
+            p.comps.retain(|c| c.id != *id);
+            p.clips.retain(|c| !(c.kind == ClipKind::Comp && c.source == *id));
+            d.timeline = true;
+        }
         Op::SetBpm { bpm } => {
             if !(20.0..=999.0).contains(bpm) {
                 return Err(OpError::Invalid("bpm must be 20..999".into()));
@@ -293,6 +328,47 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         }
     }
     Ok(d)
+}
+
+/// Checks a comp and returns it normalised (regions sorted, same-take neighbours joined).
+pub fn validate_comp(p: &Project, comp: &Comp) -> Result<Comp, OpError> {
+    let bad = |m: String| Err(OpError::Invalid(m));
+    if comp.takes.is_empty() {
+        return bad(format!("comp {} has no takes", comp.id));
+    }
+    if !(comp.xfade.is_finite() && (0.0..=MAX_XFADE).contains(&comp.xfade)) {
+        return bad(format!("crossfade must be 0..{} s", MAX_XFADE));
+    }
+    for (i, t) in comp.takes.iter().enumerate() {
+        if !(t.start.is_finite() && t.len.is_finite() && t.offset.is_finite()) || t.len <= 0.0 || t.offset < 0.0 {
+            return bad(format!("take {} has an invalid range", t.id));
+        }
+        if comp.takes[..i].iter().any(|x| x.id == t.id) {
+            return bad(format!("take id {} is used twice", t.id));
+        }
+        if !p.sources.iter().any(|s| s.id == t.source) {
+            return Err(OpError::Missing { what: "take source", id: t.source });
+        }
+    }
+    let mut regions = comp.regions.clone();
+    for r in &regions {
+        if !(r.from.is_finite() && r.to.is_finite()) || r.to <= r.from {
+            return bad(format!("comp region {}..{} is empty or invalid", r.from, r.to));
+        }
+        if comp.take(r.take).is_none() {
+            return Err(OpError::Missing { what: "take", id: r.take });
+        }
+        if let Some(x) = r.xfade {
+            if !(x.is_finite() && (0.0..=MAX_XFADE).contains(&x)) {
+                return bad(format!("crossfade must be 0..{} s", MAX_XFADE));
+            }
+        }
+    }
+    regions.sort_by(|a, b| a.from.total_cmp(&b.from));
+    if regions.windows(2).any(|w| w[1].from < w[0].to - 1e-9) {
+        return bad("comp regions overlap".into());
+    }
+    Ok(Comp { regions: merge_regions(regions), ..comp.clone() })
 }
 
 fn validate_fx(fx: &Fx) -> Result<(), OpError> {

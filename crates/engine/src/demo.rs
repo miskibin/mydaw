@@ -17,6 +17,7 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         clips: vec![],
         loop_range: None,
         automations: vec![],
+        comps: vec![],
         next_id: 1000,
     };
     for (i, name) in ins_names.iter().enumerate() {

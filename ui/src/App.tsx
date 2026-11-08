@@ -4,6 +4,7 @@ import { baseName } from './lib/format';
 import { snapRes } from './lib/snap';
 import * as A from './state/actions';
 import { findFx, S } from './state/store';
+import { swapTake } from './state/comp';
 import { closeMenu, say, setU, U } from './state/ui';
 import { ContextMenu } from './ui/Menu';
 import { Browser, importAt } from './views/Browser';
@@ -37,6 +38,7 @@ function onKey(e: KeyboardEvent) {
     if (U.plugs.length) return A.closePlug(A.topPlug()!.fxId);
     if (U.pitchEd) return A.closePitchEditor();
     if (U.editor) return A.closeEditor();
+    if (U.compSel) return setU('compSel', null);
     return setU('sel', []);
   }
   if (e.key === 'F8') { e.preventDefault(); return setU('pickOpen', !U.pickOpen); }
@@ -59,6 +61,7 @@ function onKey(e: KeyboardEvent) {
   if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); return A.delIds([...U.sel]); }
   if (e.key === 'Home') { e.preventDefault(); return A.seek(0); }
   if (e.key === '?') return setU('help', !U.help);
+  if (m && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && swapTake(e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return; }
   if (e.shiftKey && e.key.startsWith('Arrow')) {
     e.preventDefault();
     const u = snapRes(U.snap, U.bw) || 0.25;

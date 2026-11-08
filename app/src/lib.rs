@@ -204,6 +204,18 @@ async fn trim_clip(app: St<'_>, clip_id: u64) -> R<Value> {
 }
 
 #[tauri::command]
+async fn flatten_comp(app: St<'_>, clip_id: u64) -> R<Value> {
+    let e = app.engine.clone();
+    let id = tauri::async_runtime::spawn_blocking(move || e.flatten_comp(clip_id)).await.map_err(es)?.map_err(es)?;
+    Ok(json!({ "sourceId": id }))
+}
+
+#[tauri::command]
+async fn comp_audition(app: St<'_>, comp_id: u64, take_id: Option<u64>) -> R<()> {
+    app.engine.audition(comp_id, take_id).map_err(es)
+}
+
+#[tauri::command]
 async fn preview_clip(app: St<'_>, clip_id: u64) -> R<()> {
     app.engine.preview_clip(clip_id).map_err(es)
 }
@@ -517,7 +529,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, music_analyze, trim_clip, preview_clip, preview_file, preview_stop,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, music_analyze, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop,
             audio_hosts, audio_devices, audio_get_config, audio_set_config,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save, export_audio, export_cancel,

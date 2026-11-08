@@ -49,10 +49,10 @@ export function resizeClip(o: Clip, edge: 'l' | 'r', target: number, minL: numbe
   const n = { ...o };
   if (edge === 'r') {
     let len = Math.max(minL, target - o.start);
-    if (o.kind === 'audio') len = Math.min(len, srcLen - o.offset);
+    if (o.kind === 'audio' || o.kind === 'comp') len = Math.min(len, srcLen - o.offset);
     n.len = Math.min(len, TOTAL - o.start);
   } else {
-    const lo = o.kind === 'audio' ? o.start - o.offset : 0;
+    const lo = o.kind === 'audio' || o.kind === 'comp' ? o.start - o.offset : 0;
     const ns = clamp(target, Math.max(0, lo), o.start + o.len - minL);
     n.start = ns; n.offset = o.offset + (ns - o.start); n.len = o.len - (ns - o.start);
   }

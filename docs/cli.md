@@ -56,6 +56,25 @@ Units: playlist time in **beats**; pattern `step`/`len` in **sixteenths**;
 fades in seconds; track/insert `vol` is a fader position (0.7937 = 0 dB);
 clip `gain` in dB; pan −1..1. New ids: start at `context.nextId`.
 
+## Takes and comping
+
+A track you recorded with a loop set (one take per pass), or recorded over
+an existing clip, has a comp clip. Times here are **timeline beats**,
+crossfades **milliseconds**; add `--clip ID` when a track has several comps.
+
+```sh
+wave takes --track 5                       # takes, comp regions, crossfades
+wave comp --track 5 --set '[{"take":2001,"from":32,"to":36},{"take":2002,"from":36,"to":40,"xfadeMs":20}]'
+wave comp --track 5 --take 2003            # one whole take
+wave comp --track 5 --xfade 10             # default crossfade at region boundaries
+wave comp --track 5 --remove-unused        # drop takes the comp does not play
+wave comp --track 5 --audition 2002        # hear one take instead of the comp (`off` to stop; not an edit)
+wave comp --track 5 --flatten              # render to one audio clip, takes removed (undo brings them back)
+```
+
+Each edit is one undo step. Through `apply`, the ops are `putComp` /
+`removeComp` with comp-beat times and crossfades in seconds (see `wave schema`).
+
 ## Listening without speakers
 
 ```sh

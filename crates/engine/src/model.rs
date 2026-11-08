@@ -41,6 +41,9 @@ pub struct Project {
     /// Automation envelopes; played by clips of kind `auto`.
     #[serde(default)]
     pub automations: Vec<Automation>,
+    /// Take groups with their comps; played by clips of kind `comp`.
+    #[serde(default)]
+    pub comps: Vec<Comp>,
     /// Next id handed out by [`Project::alloc_id`]. Ids are never reused.
     pub next_id: Id,
 }
@@ -253,6 +256,8 @@ pub enum ClipKind {
     Pat,
     Audio,
     Auto,
+    /// Plays a [`Comp`]: `ref` is the comp id, `offset` is in the comp's own beats.
+    Comp,
 }
 
 /// What an automation moves.
@@ -365,11 +370,137 @@ pub struct NoteEdit {
     pub gain: f32,
 }
 
+/// Default crossfade at comp region boundaries, seconds.
+pub const DEFAULT_XFADE: f32 = 0.010;
+/// Longest crossfade a comp boundary may have, seconds.
+pub const MAX_XFADE: f32 = 0.5;
+
+/// One recorded pass. Takes are never cut: the comp only chooses which parts play.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Take {
+    pub id: Id,
+    pub name: String,
+    /// Source with the audio.
+    #[serde(rename = "ref")]
+    pub source: Id,
+    /// Beats from the comp's origin (comp time, see [`Comp`]).
+    pub start: f64,
+    /// Length in beats.
+    pub len: f64,
+    /// Beats into the source where the take begins.
+    #[serde(default)]
+    pub offset: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+impl Take {
+    pub fn end(&self) -> f64 {
+        self.start + self.len
+    }
+}
+
+/// A piece of the comp: `take` plays over `[from, to)` (comp beats).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompRegion {
+    pub take: Id,
+    pub from: f64,
+    pub to: f64,
+    /// Crossfade at `from` in seconds (the comp default when absent). A region whose
+    /// end is followed by silence uses it for its fade-out as well.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xfade: Option<f32>,
+}
+
+/// A take group and its comp. Times are in **comp beats**: a clip of kind `comp`
+/// maps them to the timeline like an audio clip maps its source (`offset` = comp
+/// beat at the clip's start), so moving, trimming or splitting the clip just works.
+/// `regions` are sorted and do not overlap; gaps are silent.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Comp {
+    pub id: Id,
+    pub name: String,
+    pub takes: Vec<Take>,
+    pub regions: Vec<CompRegion>,
+    /// Default crossfade at region boundaries, seconds.
+    #[serde(default = "default_xfade")]
+    pub xfade: f32,
+}
+
+fn default_xfade() -> f32 {
+    DEFAULT_XFADE
+}
+
+impl Comp {
+    pub fn take(&self, id: Id) -> Option<&Take> {
+        self.takes.iter().find(|t| t.id == id)
+    }
+    /// Earliest take start and latest take end (comp beats).
+    pub fn extent(&self) -> (f64, f64) {
+        let a = self.takes.iter().map(|t| t.start).fold(f64::INFINITY, f64::min);
+        let b = self.takes.iter().map(|t| t.end()).fold(f64::NEG_INFINITY, f64::max);
+        if a.is_finite() {
+            (a, b)
+        } else {
+            (0.0, 0.0)
+        }
+    }
+    /// Puts `take` over `[from, to)`, replacing whatever played there, and merges
+    /// neighbouring pieces of the same take. The range is clipped to the take.
+    pub fn write(&mut self, take: Id, from: f64, to: f64) {
+        let Some(t) = self.take(take) else { return };
+        let (from, to) = (from.max(t.start), to.min(t.end()));
+        if to - from <= 1e-9 {
+            return;
+        }
+        let mut out = Vec::with_capacity(self.regions.len() + 2);
+        for r in &self.regions {
+            if r.to <= from || r.from >= to {
+                out.push(*r);
+                continue;
+            }
+            if r.from < from {
+                out.push(CompRegion { to: from, ..*r });
+            }
+            if r.to > to {
+                out.push(CompRegion { from: to, xfade: None, ..*r });
+            }
+        }
+        out.push(CompRegion { take, from, to, xfade: None });
+        out.sort_by(|a, b| a.from.total_cmp(&b.from));
+        self.regions = merge_regions(out);
+    }
+    /// Removes a take and every region that plays it.
+    pub fn remove_take(&mut self, id: Id) {
+        self.takes.retain(|t| t.id != id);
+        self.regions.retain(|r| r.take != id);
+    }
+}
+
+/// Joins touching regions of the same take (input sorted by `from`).
+pub fn merge_regions(sorted: Vec<CompRegion>) -> Vec<CompRegion> {
+    let mut merged: Vec<CompRegion> = Vec::with_capacity(sorted.len());
+    for r in sorted {
+        match merged.last_mut() {
+            Some(m) if m.take == r.take && (r.from - m.to).abs() < 1e-9 => m.to = m.to.max(r.to),
+            _ => merged.push(r),
+        }
+    }
+    merged
+}
+
 impl Project {
     pub fn alloc_id(&mut self) -> Id {
         let id = self.next_id;
         self.next_id += 1;
         id
+    }
+
+    pub fn comp(&self, id: Id) -> Option<&Comp> {
+        self.comps.iter().find(|c| c.id == id)
     }
 
     pub fn insert(&self, id: Id) -> Option<&Insert> {

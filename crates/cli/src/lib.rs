@@ -30,6 +30,15 @@ EDIT  (all edits are one undo step each; --if-revision N refuses to act if the p
   preset --fx ID --index N
   import <file>... [--track N --beat B]    load audio, optionally place it
 
+TAKES & COMPING  (times in timeline beats; add --clip ID when a track has several comps)
+  takes --track N                          takes, comp regions and crossfades of the track
+  comp --track N --set '[{"take":ID,"from":B,"to":B,"xfadeMs":20},...]'   replace the comp
+  comp --track N --take ID                 play one whole take
+  comp --track N --xfade MS                default crossfade at region boundaries
+  comp --track N --remove-unused           drop takes the comp does not play
+  comp --track N --flatten                 render the comp to one audio clip (removes the takes)
+  comp --track N --audition ID|off         play one take instead of the comp (not an edit)
+
 TRANSPORT
   play [--from BEAT] | stop
 
@@ -186,6 +195,34 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 return Err(u("import <file>...".into()));
             }
             send(a, "import", json!({"paths": files, "track": a.num("track").map_err(u)?, "beat": a.num("beat").map_err(u)?}))
+        }
+        "takes" => send(a, "takes", json!({"track": a.num("track").map_err(u)?.ok_or_else(|| u("missing --track".into()))? as u64})),
+        "comp" => {
+            let mut args = json!({"track": a.num("track").map_err(u)?.map(|v| v as u64), "clip": a.num("clip").map_err(u)?.map(|v| v as u64)});
+            if args["track"].is_null() && args["clip"].is_null() {
+                return Err(u("comp needs --track N (or --clip ID)".into()));
+            }
+            if a.has("flatten") {
+                return send(a, "flatten_comp", args);
+            }
+            if a.has("audition") {
+                let v = a.need("audition").map_err(u)?;
+                args["take"] = if v == "off" { Value::Null } else { json!(v.parse::<u64>().map_err(|_| u(format!("--audition takes a take id or `off`, got {v}")))?) };
+                return send(a, "comp_audition", args);
+            }
+            if let Some(s) = a.get("set") {
+                args["regions"] = serde_json::from_str(s).map_err(|e| u(format!("--set is not JSON: {e}")))?;
+            }
+            if let Some(t) = a.num("take").map_err(u)? {
+                args["take"] = json!(t as u64);
+            }
+            if let Some(x) = a.num("xfade").map_err(u)? {
+                args["xfadeMs"] = json!(x);
+            }
+            if a.has("remove-unused") {
+                args["removeUnused"] = json!(true);
+            }
+            send(a, "comp", args)
         }
         "play" => send(a, "play", json!({"from": a.num("from").map_err(u)?})),
         "render" => {

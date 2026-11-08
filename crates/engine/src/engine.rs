@@ -63,6 +63,8 @@ pub struct StateDto {
     pub dirty: bool,
     /// Effects that failed to load (plugin missing etc.): fx id → message.
     pub fx_errors: HashMap<Id, String>,
+    /// Comp id → take being auditioned (played instead of the comp). Live only.
+    pub audition: HashMap<Id, Id>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -85,14 +87,64 @@ impl From<String> for EngineError {
 type Listener = Box<dyn Fn(&StateDto) + Send + Sync>;
 type FrameSink = Box<dyn Fn(Vec<u8>) + Send + Sync>;
 
-struct Take {
+/// Input being recorded. With loop recording it holds several passes; `marks` are the
+/// frames where each later pass begins (the audio thread sends a NaN frame at the wrap).
+struct RecBuf {
     track: usize,
+    /// Beat where the first pass starts.
     start: f64,
+    /// Loop range when recording in passes.
+    lap: Option<(f64, f64)>,
     sr: u32,
     data: Vec<f32>,
+    marks: Vec<usize>,
+    nans: u32,
+    /// Peaks of the current pass only (the live clip restarts every pass).
     peaks: Vec<f32>,
     peaks_sent: usize,
     acc: (f32, f32, usize),
+}
+
+impl RecBuf {
+    fn frames(&self) -> usize {
+        self.data.len() / 2
+    }
+    fn pass_start_frame(&self) -> usize {
+        self.marks.last().copied().unwrap_or(0)
+    }
+    fn pass_start_beat(&self) -> f64 {
+        match (self.lap, self.marks.is_empty()) {
+            (Some((a, _)), false) => a,
+            _ => self.start,
+        }
+    }
+    fn push(&mut self, x: f32) {
+        if x.is_nan() {
+            self.nans += 1;
+            if self.nans.is_multiple_of(2) {
+                self.marks.push(self.frames());
+                self.peaks.clear();
+                self.peaks_sent = 0;
+                self.acc = (0.0, 0.0, 0);
+            }
+            return;
+        }
+        self.data.push(x);
+        if self.data.len() % 2 == 1 {
+            return;
+        }
+        let f = self.frames() - 1;
+        let v = (self.data[f * 2] + self.data[f * 2 + 1]) * 0.5;
+        self.acc.0 = self.acc.0.min(v);
+        self.acc.1 = self.acc.1.max(v);
+        self.acc.2 += 1;
+        if self.acc.2.is_multiple_of((self.sr as usize / 100).max(1)) {
+            self.peaks.push(self.acc.0);
+            self.peaks.push(self.acc.1);
+            self.acc.0 = 0.0;
+            self.acc.1 = 0.0;
+        }
+    }
 }
 
 struct Wires {
@@ -119,8 +171,10 @@ struct Core {
     sent_params: HashMap<Id, (Option<ParamBlock>, f32)>,
     fx_errors: HashMap<Id, String>,
     wires: Option<Wires>,
-    take: Option<Take>,
+    take: Option<RecBuf>,
     watch: Vec<Id>,
+    /// Comp id → take played instead of the comp (live only: not saved, not undone).
+    audition: HashMap<Id, Id>,
 }
 
 pub struct Engine {
@@ -152,6 +206,7 @@ impl Engine {
                 wires: None,
                 take: None,
                 watch: vec![],
+                audition: HashMap::new(),
             }),
             shared: Mutex::new(Arc::new(Shared::new())),
             factory,
@@ -252,6 +307,7 @@ impl Engine {
             path: c.path.as_ref().map(|p| p.display().to_string()),
             dirty: c.revision != c.saved_revision,
             fx_errors: c.fx_errors.clone(),
+            audition: live_audition(c),
         }
     }
 
@@ -360,15 +416,22 @@ impl Engine {
         let p = &c.project;
         let rec_track = if c.transport.rec { p.tracks.iter().position(|t| t.arm) } else { None };
         let (ls, le) = p.loop_range.map(|l| (l.a, l.b)).unwrap_or((0.0, p.song_end()));
-        let from = if rec_track.is_none() && (from >= le || from < ls && p.loop_range.is_some()) { ls } else { from };
+        // with a loop set, recording cycles over it: one take per pass
+        let lap = p.loop_range.filter(|l| rec_track.is_some() && l.b > l.a).map(|l| (l.a, l.b));
+        let from = match lap {
+            Some((a, b)) if from < a || from >= b => a,
+            Some(_) => from,
+            None if rec_track.is_none() && (from >= le || from < ls && p.loop_range.is_some()) => ls,
+            None => from,
+        };
         let count_in = if rec_track.is_some() && c.transport.count_in { 4.0 } else { 0.0 };
         if let (Some(track), Some(w)) = (rec_track, c.wires.as_ref()) {
             let sr = w.sr as u32;
-            c.take = Some(Take { track, start: from, sr, data: Vec::with_capacity(sr as usize * 2 * 60), peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) });
+            c.take = Some(RecBuf { track, start: from, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) });
         }
         c.transport.start_beat = from;
         c.transport.playing = true;
-        send(&mut c, Cmd::Play { from, count_in, rec: rec_track.is_some() });
+        send(&mut c, Cmd::Play { from, count_in, rec: rec_track.is_some(), rec_loop: lap.is_some() });
         self.changed(c);
     }
 
@@ -692,6 +755,7 @@ impl Engine {
         c.project = project;
         c.undo.clear();
         c.redo.clear();
+        c.audition.clear();
         c.path = None;
         c.revision += 1;
         c.saved_revision = c.revision;
@@ -763,6 +827,7 @@ impl Engine {
         c.transport.playing = false;
         c.sources = store;
         c.project = p;
+        c.audition.clear();
         c.undo.clear();
         c.redo.clear();
         c.path = Some(path.to_path_buf());
@@ -818,7 +883,7 @@ impl Engine {
         if cancel.load(Relaxed) {
             return Err(EngineError::Cancelled);
         }
-        let (project, store_snapshot) = {
+        let (project, store_snapshot, takes) = {
             let mut guard = self.core.lock();
             let c = &mut *guard;
             self.snapshot_plugin_states(c);
@@ -830,7 +895,7 @@ impl Engine {
                     }
                 }
             }
-            (c.project.clone(), map)
+            (c.project.clone(), map, comp_audio(&c.sources, &c.project.comps))
         };
         let sr = sample_rate as f32;
         let block = 512;
@@ -849,12 +914,12 @@ impl Engine {
         let mut rt = Rt::new(sr, block, cmd_rx, gb_tx, Arc::new(Shared::new()), taps, rec_tx);
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
-        let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned());
+        let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new());
         tl.loop_range = None;
         tl.song_end = TOTAL_BEATS;
         let _ = cmd_tx.push(Cmd::Graph(Box::new(graph)));
         let _ = cmd_tx.push(Cmd::Timeline(Box::new(tl)));
-        let _ = cmd_tx.push(Cmd::Play { from, count_in: 0.0, rec: false });
+        let _ = cmd_tx.push(Cmd::Play { from, count_in: 0.0, rec: false, rec_loop: false });
         let spb = 60.0 / project.bpm;
         let frames = (((to - from).max(0.0) * spb + tail.max(0.0)) * sample_rate as f64) as usize;
         let play_frames = ((to - from).max(0.0) * spb * sample_rate as f64) as usize;
@@ -942,9 +1007,11 @@ impl Engine {
         }
         if d.timeline {
             let gesture_open = c.gesture.is_some();
+            let audition = live_audition(c);
             let Core { project, sources, .. } = c;
             let stale = gesture_open;
-            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale));
+            let takes = comp_audio(sources, &project.comps);
+            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale), &takes, &audition);
             send(c, Cmd::Timeline(Box::new(tl)));
         }
     }
@@ -967,22 +1034,7 @@ impl Engine {
                     let (a, b) = chunk.as_slices();
                     if let Some(t) = c.take.as_mut() {
                         for &x in a.iter().chain(b.iter()) {
-                            t.data.push(x);
-                        }
-                        let per = (t.sr as usize / 100).max(1);
-                        while (t.acc.2 + 1) * 2 <= t.data.len() {
-                            let f = t.acc.2;
-                            let (l, r) = (t.data[f * 2], t.data[f * 2 + 1]);
-                            let v = (l + r) * 0.5;
-                            t.acc.0 = t.acc.0.min(v);
-                            t.acc.1 = t.acc.1.max(v);
-                            t.acc.2 += 1;
-                            if t.acc.2 % per == 0 {
-                                t.peaks.push(t.acc.0);
-                                t.peaks.push(t.acc.1);
-                                t.acc.0 = 0.0;
-                                t.acc.1 = 0.0;
-                            }
+                            t.push(x);
                         }
                     }
                     chunk.commit_all();
@@ -994,7 +1046,7 @@ impl Engine {
                 let new = t.peaks[t.peaks_sent..].to_vec();
                 let off = t.peaks_sent / 2;
                 t.peaks_sent = t.peaks.len();
-                (t.track as u32, t.start, t.data.len() as f32 / 2.0 / t.sr as f32, off as u32, new)
+                (t.track as u32, t.pass_start_beat(), (t.frames() - t.pass_start_frame()) as f32 / t.sr as f32, off as u32, new)
             });
             frame_parts = Some((ids, analysis, rec));
         }
@@ -1028,52 +1080,130 @@ impl Engine {
 
     fn finalize_take(&self, c: &mut Core) {
         let Some(mut take) = c.take.take() else { return };
+        // whatever is still in the ring belongs to this recording
         if let Some(w) = c.wires.as_mut() {
             while let Ok(x) = w.record.pop() {
-                take.data.push(x);
+                take.push(x);
             }
         }
-        if take.data.len() % 2 == 1 {
-            take.data.pop();
+        let spb = 60.0 / c.project.bpm;
+        let sr = take.sr as f64;
+        // one pass per loop cycle; a last pass cut off within a beat of the wrap is not a take
+        let mut bounds = vec![0];
+        bounds.extend(take.marks.iter().copied());
+        bounds.push(take.frames());
+        let mut passes: Vec<(f64, &[f32])> = vec![];
+        for k in 0..bounds.len() - 1 {
+            let (f0, f1) = (bounds[k], bounds[k + 1]);
+            let secs = f1.saturating_sub(f0) as f64 / sr;
+            let cut_short = k > 0 && k == bounds.len() - 2;
+            if secs < if cut_short { spb } else { 0.05 } {
+                continue;
+            }
+            let start = if k == 0 { take.start } else { take.lap.map(|l| l.0).unwrap_or(take.start) };
+            passes.push((start, &take.data[f0 * 2..f1 * 2]));
         }
-        let secs = take.data.len() as f64 / 2.0 / take.sr as f64;
-        if secs < 0.05 {
+        if passes.is_empty() {
             return;
         }
-        let id = c.project.alloc_id();
-        let n = c.project.sources.iter().filter(|s| s.name.starts_with("Take")).count() + 1;
-        let name = format!("Take {n}");
-        let path = audio_dir(c).join(format!("{} {}.wav", name, id));
-        if let Err(e) = write_wav(&path, &take.data, take.sr) {
-            log::error!("could not write recording: {e}");
-        }
-        let audio = Audio::from_stereo(take.data, take.sr, 1);
         let before = c.project.clone();
-        let len = secs / (60.0 / c.project.bpm);
-        c.project.sources.push(Source { id, name, color: "#e05263".into(), path: path.display().to_string(), dur: secs, sr: take.sr, ch: 1, peak_db: crate::dsp::gain_to_db(audio.peak()) });
-        c.sources.insert(id, Arc::new(audio));
-        let cid = c.project.alloc_id();
-        c.project.clips.push(Clip {
-            id: cid,
-            track: take.track as u32,
-            start: take.start,
-            len: len.min(TOTAL_BEATS - take.start),
-            offset: 0.0,
-            kind: ClipKind::Audio,
-            source: id,
-            muted: false,
-            gain: 0.0,
-            fade_in: 0.0,
-            fade_out: 0.0,
-            pan: 0.0,
-            norm: false,
-            rev: false,
-            tune: None,
-        });
+        let dir = audio_dir(c);
+        let mut landed = vec![];
+        for (start, data) in passes {
+            let secs = data.len() as f64 / 2.0 / sr;
+            let id = c.project.alloc_id();
+            let n = c.project.sources.iter().filter(|s| s.name.starts_with("Take")).count() + 1;
+            let name = format!("Take {n}");
+            let path = dir.join(format!("{} {}.wav", name, id));
+            if let Err(e) = write_wav(&path, data, take.sr) {
+                log::error!("could not write recording: {e}");
+            }
+            let audio = Audio::from_stereo(data.to_vec(), take.sr, 1);
+            c.project.sources.push(Source { id, name, color: "#e05263".into(), path: path.display().to_string(), dur: secs, sr: take.sr, ch: 1, peak_db: crate::dsp::gain_to_db(audio.peak()) });
+            c.sources.insert(id, Arc::new(audio));
+            landed.push((id, start, (secs / spb).min(TOTAL_BEATS - start)));
+        }
+        crate::comp::land_takes(&mut c.project, take.track as u32, &landed);
         push_undo(c, before);
         c.revision += 1;
         self.sync(c, Dirty { timeline: true, ..Default::default() });
     }
+
+    // ------------------------------------------------------------ comps
+
+    /// Plays one whole take instead of the comp (`None` = back to the comp). Live only.
+    pub fn audition(&self, comp: Id, take: Option<Id>) -> Result<(), EngineError> {
+        let mut c = self.core.lock();
+        let cp = c.project.comp(comp).ok_or(EngineError::Msg(format!("no comp {comp}")))?;
+        match take {
+            Some(t) if cp.take(t).is_none() => return Err(EngineError::Msg(format!("comp {comp} has no take {t}"))),
+            Some(t) => {
+                c.audition.insert(comp, t);
+            }
+            None => {
+                c.audition.remove(&comp);
+            }
+        }
+        self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+        self.changed(c);
+        Ok(())
+    }
+
+    /// Renders what a comp clip plays into a new source and replaces the clip by an
+    /// ordinary audio clip (gain, fades and pan stay on the clip). The take group goes
+    /// when no other clip plays it. One undo step.
+    pub fn flatten_comp(&self, clip_id: Id) -> Result<Id, EngineError> {
+        let mut c = self.core.lock();
+        let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
+        if clip.kind != ClipKind::Comp {
+            return Err(EngineError::Msg("only comp clips can be flattened".into()));
+        }
+        let comp = c.project.comp(clip.source).cloned().ok_or(EngineError::Msg("the clip's comp is missing".into()))?;
+        let map = comp_audio(&c.sources, std::slice::from_ref(&comp));
+        let first = comp.takes.iter().find_map(|t| map.get(&t.source)).ok_or(EngineError::Msg("the takes' audio is not loaded".into()))?;
+        let (sr, ch) = (first.sr, comp.takes.iter().filter_map(|t| map.get(&t.source)).map(|a| a.channels).max().unwrap_or(1));
+        let spb = 60.0 / c.project.bpm;
+        let frames = (clip.len * spb * sr as f64).round() as usize;
+        if frames < 16 {
+            return Err(EngineError::Msg("the clip is empty".into()));
+        }
+        // two guard frames: the playhead's beat may land a hair before the clip end
+        let frames = frames + 2;
+        let rt = crate::comp::build(&comp, spb, None, &map);
+        let (mut l, mut r) = (vec![0f32; frames], vec![0f32; frames]);
+        rt.render_add(clip.offset, 1.0 / (spb * sr as f64), &mut l, &mut r, spb);
+        let data: Vec<f32> = l.iter().zip(&r).flat_map(|(a, b)| [*a, *b]).collect();
+        let id = c.project.alloc_id();
+        let name = format!("{} (flat)", comp.name);
+        let path = audio_dir(&c).join(format!("{} flat {}.wav", sanitize(&comp.name), id));
+        write_wav(&path, &data, sr)?;
+        let audio = Audio::from_stereo(data, sr, ch);
+        let before = c.project.clone();
+        c.project.sources.push(Source { id, name, color: "#e05263".into(), path: path.display().to_string(), dur: audio.seconds(), sr, ch, peak_db: crate::dsp::gain_to_db(audio.peak()) });
+        c.sources.insert(id, Arc::new(audio));
+        if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
+            *x = Clip { kind: ClipKind::Audio, source: id, offset: 0.0, norm: false, rev: false, tune: None, ..clip.clone() };
+        }
+        if !c.project.clips.iter().any(|x| x.kind == ClipKind::Comp && x.source == comp.id) {
+            c.project.comps.retain(|x| x.id != comp.id);
+            c.audition.remove(&comp.id);
+        }
+        push_undo(&mut c, before);
+        c.revision += 1;
+        self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+        self.changed(c);
+        Ok(id)
+    }
+}
+
+/// Loaded audio of every take source of `comps`.
+fn comp_audio(store: &SourceStore, comps: &[Comp]) -> HashMap<Id, Arc<Audio>> {
+    comps.iter().flat_map(|cp| cp.takes.iter()).filter_map(|t| store.get(t.source).map(|a| (t.source, a.clone()))).collect()
+}
+
+/// Auditions that still point at an existing take.
+fn live_audition(c: &Core) -> HashMap<Id, Id> {
+    c.audition.iter().filter(|(cp, t)| c.project.comp(**cp).is_some_and(|x| x.take(**t).is_some())).map(|(a, b)| (*a, *b)).collect()
 }
 
 fn fx_send(f: &Fx) -> (Option<ParamBlock>, f32) {
@@ -1216,7 +1346,10 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
     Graph::new(inserts, tracks, monitor_track(p), max_block)
 }
 
-pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option<Arc<Audio>>) -> Timeline {
+pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option<Arc<Audio>>, takes: &HashMap<Id, Arc<Audio>>, audition: &HashMap<Id, Id>) -> Timeline {
+    // comps are resolved once each, shared by every clip that plays them
+    let spb = 60.0 / p.bpm;
+    let comps: HashMap<Id, Arc<crate::comp::CompRt>> = p.comps.iter().map(|cp| (cp.id, Arc::new(crate::comp::build(cp, spb, audition.get(&cp.id).copied(), takes)))).collect();
     let pats: Vec<PatRt> = p
         .patterns
         .iter()
@@ -1250,6 +1383,10 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option
             },
             ClipKind::Audio => match audio(c) {
                 Some(a) => ClipSrc::Audio(a),
+                None => continue,
+            },
+            ClipKind::Comp => match comps.get(&c.source) {
+                Some(cp) => ClipSrc::Comp(cp.clone()),
                 None => continue,
             },
         };

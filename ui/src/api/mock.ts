@@ -5,6 +5,7 @@ import type { Backend, EventMap, OsDropEvent } from './backend';
 import { encodeFrame, SCOPE_LEN, SPEC_BANDS, type EncFx } from './telemetry';
 import { BUILTIN, demoProject, emptyProject, mockCatalog } from './mockData';
 import { applyAll } from '../lib/applyOps';
+import { landTakes, takeEnd } from '../lib/comp';
 import { eqCurve } from '../lib/eq';
 import { clamp, dbg } from '../lib/format';
 import { midiToHz, noteAt, scaleMask, snapNote } from '../lib/pitch';
@@ -90,7 +91,8 @@ export class MockBackend implements Backend {
   private watched: Id[] = [];
   private seq = 0;
   private playT0 = 0; private playFrom = 0;
-  private rec: null | { track: number; clipStart: number; t0: number; peaks: number[]; sent: number } = null;
+  private rec: null | { track: number; clipStart: number; t0: number; peaks: number[]; sent: number; lap: [number, number] | null; pass: number } = null;
+  private audition: Record<string, Id> = {};
   private preview: null | { t0: number; dur: number; off: number } = null;
   private srcMeta = new Map<Id, MockSource>();
   private takeN = 0;
@@ -114,7 +116,7 @@ export class MockBackend implements Backend {
   // ---------- state ----------
   private dto(): StateDto {
     return structuredClone({ project: this.p, revision: this.revision, canUndo: this.undoStack.length > 0, canRedo: this.redoStack.length > 0,
-      transport: this.tr, path: this.path, dirty: this.revision !== this.savedRev });
+      transport: this.tr, path: this.path, dirty: this.revision !== this.savedRev, audition: this.liveAudition() });
   }
   private emit<K extends keyof EventMap>(ev: K, payload: EventMap[K]) {
     const ls = this.listeners.get(ev); if (!ls) return;
@@ -156,10 +158,17 @@ export class MockBackend implements Backend {
   // ---------- transport ----------
   private spb() { return 60 / this.p.bpm; }
   private songEnd() { return Math.ceil(Math.max(4, ...this.p.clips.map(c => c.start + c.len)) / 4) * 4; }
+  /** Playhead without loop wrapping (beats since start, negative during count-in). */
+  private rawBeat(): number { return this.playFrom + (performance.now() - this.playT0) / 1000 / this.spb(); }
   private beatNow(): number {
     if (!this.tr.playing) return this.tr.startBeat;
-    let b = this.playFrom + (performance.now() - this.playT0) / 1000 / this.spb();
-    if (this.rec) return b;
+    let b = this.rawBeat();
+    if (this.rec) {
+      // loop recording cycles over the loop, like the engine (one take per pass)
+      const lap = this.rec.lap;
+      if (lap && b >= lap[1]) b = lap[0] + ((b - lap[1]) % (lap[1] - lap[0]));
+      return b;
+    }
     const lp = this.p.loop, a = lp ? lp.a : 0, e = lp ? lp.b : this.songEnd();
     if (b >= e && e > a) { b = a + ((b - a) % (e - a)); }
     return b;
@@ -167,6 +176,8 @@ export class MockBackend implements Backend {
   async transportPlay(fromBeat: number) {
     if (this.tr.playing) this.finishRec();
     const pre = this.tr.rec && this.tr.countIn ? 4 : 0;
+    const lp = this.p.loop;
+    if (this.tr.rec && lp && lp.b > lp.a && (fromBeat < lp.a || fromBeat >= lp.b)) fromBeat = lp.a;
     this.tr = { ...this.tr, playing: true, startBeat: fromBeat };
     this.playFrom = fromBeat - pre; this.playT0 = performance.now();
     if (this.tr.rec) this.startRec(fromBeat);
@@ -188,18 +199,41 @@ export class MockBackend implements Backend {
   private changedTransport() { this.emit('state', this.dto()); }
   private startRec(clipStart: number) {
     const t = this.p.tracks.findIndex(x => x.arm);
-    this.rec = { track: t < 0 ? 0 : t, clipStart: Math.max(0, clipStart), t0: 0, peaks: [], sent: 0 };
+    const lp = this.p.loop;
+    const lap: [number, number] | null = lp && lp.b > lp.a && clipStart >= lp.a && clipStart < lp.b ? [lp.a, lp.b] : null;
+    this.rec = { track: t < 0 ? 0 : t, clipStart: Math.max(0, clipStart), t0: 0, peaks: [], sent: 0, lap, pass: 0 };
+  }
+  /** Peak-pair index where each pass after the first begins (100 pairs per second). */
+  private passMarks(r: NonNullable<MockBackend['rec']>, total: number): number[] {
+    if (!r.lap) return [];
+    const spb = this.spb(), first = (r.lap[1] - r.clipStart) * spb * 100, lapLen = (r.lap[1] - r.lap[0]) * spb * 100, out: number[] = [];
+    for (let m = first; m < total; m += lapLen) out.push(Math.round(m));
+    return out;
   }
   private finishRec() {
     const r = this.rec; this.rec = null;
-    if (!r || r.peaks.length < 10) return;
+    if (!r) return;
+    const total = r.peaks.length / 2, spb = this.spb();
+    const bounds = [0, ...this.passMarks(r, total), total];
+    const passes: [Float32Array, number][] = [];
+    for (let k = 0; k < bounds.length - 1; k++) {
+      const n = bounds[k + 1] - bounds[k];
+      const cutShort = k > 0 && k === bounds.length - 2;
+      if (n < (cutShort ? 100 * spb : 10)) continue; // a pass cut off right after the wrap is not a take
+      passes.push([Float32Array.from(r.peaks.slice(bounds[k] * 2, bounds[k + 1] * 2)), k === 0 ? r.clipStart : r.lap![0]]);
+    }
+    if (!passes.length) return;
     const prev = structuredClone(this.p);
-    const id = this.p.nextId++, cid = this.p.nextId++, dur = r.peaks.length / 2 / 100;
-    const src: MockSource = { id, name: 'Take ' + (++this.takeN), color: '#d9678f', path: 'recordings/take' + this.takeN + '.wav', dur, sr: 48000, ch: 1, peakDb: -6, seed: id };
-    this.srcMeta.set(id, src);
-    this.recPeaks.set(id, Float32Array.from(r.peaks));
-    this.p.sources.push(strip(src));
-    this.p.clips.push(mkClip(cid, r.track, r.clipStart, dur / this.spb(), 'audio', id));
+    const landed: [Id, number, number][] = [];
+    for (const [pk, start] of passes) {
+      const id = this.p.nextId++, dur = pk.length / 2 / 100;
+      const src: MockSource = { id, name: 'Take ' + (++this.takeN), color: '#d9678f', path: 'recordings/take' + this.takeN + '.wav', dur, sr: 48000, ch: 1, peakDb: -6, seed: id };
+      this.srcMeta.set(id, src);
+      this.recPeaks.set(id, pk);
+      this.p.sources.push(strip(src));
+      landed.push([id, start, dur / spb]);
+    }
+    landTakes(this.p, r.track, landed, () => this.p.nextId++);
     this.pushUndo(prev); this.changed();
   }
   private recPeaks = new Map<Id, Float32Array>();
@@ -237,13 +271,16 @@ export class MockBackend implements Backend {
       fx.push(this.fakeAnalysis(found.fx, found.ins, playing ? (insLvl.get(found.ins) ?? 0) + 0.05 : 0, t, beat, playing));
     }
     let rec = null;
-    if (this.rec && playing && beat >= this.rec.clipStart) {
+    if (this.rec && playing && this.rawBeat() >= this.rec.clipStart) {
       const r = this.rec;
       if (!r.t0) r.t0 = performance.now();
       const want = Math.floor((performance.now() - r.t0) / 10);
       while (r.peaks.length / 2 < want) { const a = 0.15 + 0.6 * Math.abs(Math.sin(r.peaks.length / 37)) * Math.random(); r.peaks.push(-a, a); }
-      const off = r.sent; r.sent = r.peaks.length / 2;
-      rec = { track: r.track, clipStart: r.clipStart, seconds: r.peaks.length / 200, peakOffset: off, peaks: r.peaks.slice(off * 2) };
+      // the live clip restarts every loop pass, like the engine's telemetry
+      const marks = this.passMarks(r, r.peaks.length / 2), pass = marks.length, p0 = pass ? marks[pass - 1] : 0;
+      if (pass !== r.pass) { r.pass = pass; r.sent = p0; }
+      const off = r.sent - p0; r.sent = r.peaks.length / 2;
+      rec = { track: r.track, clipStart: pass ? r.lap![0] : r.clipStart, seconds: (r.peaks.length / 2 - p0) / 100, peakOffset: off, peaks: r.peaks.slice((off + p0) * 2) };
     }
     let previewPos = -1;
     if (this.preview) {
@@ -252,7 +289,7 @@ export class MockBackend implements Backend {
     }
     const inLevel = this.tr.rec ? 0.2 + 0.5 * Math.abs(Math.sin(t * 3)) * Math.random() : 0;
     void spb;
-    this.teleCb(encodeFrame({ seq, beat, playing, recording: !!this.rec && beat >= (this.rec?.clipStart ?? 0), previewing: !!this.preview,
+    this.teleCb(encodeFrame({ seq, beat, playing, recording: !!this.rec && this.rawBeat() >= (this.rec?.clipStart ?? 0), previewing: !!this.preview,
       inLevel, previewPos, cpu: playing ? 0.12 + 0.03 * Math.random() : 0.02, ins, fx, rec }));
   }
 
@@ -537,6 +574,41 @@ export class MockBackend implements Backend {
     if (!chosen.length) return { tempo: null, key: null };
     return this.musicAnalyze({ clipId: chosen[0].id });
   }
+  private liveAudition(): Record<string, Id> {
+    const out: Record<string, Id> = {};
+    for (const [k, t] of Object.entries(this.audition)) if (this.p.comps?.some(c => String(c.id) === k && c.takes.some(x => x.id === t))) out[k] = t;
+    return out;
+  }
+  async compAudition(compId: Id, takeId: Id | null) {
+    const cp = this.p.comps?.find(c => c.id === compId);
+    if (!cp) throw new Error('no comp ' + compId);
+    if (takeId != null && !cp.takes.some(t => t.id === takeId)) throw new Error(`comp ${compId} has no take ${takeId}`);
+    if (takeId == null) delete this.audition[compId]; else this.audition[compId] = takeId;
+    this.emit('state', this.dto());
+  }
+  async flattenComp(clipId: Id) {
+    const c = this.p.clips.find(x => x.id === clipId);
+    if (!c || c.kind !== 'comp') throw new Error('only comp clips can be flattened');
+    const cp = this.p.comps?.find(x => x.id === c.ref); if (!cp) throw new Error("the clip's comp is missing");
+    const spb = this.spb(), n = Math.round(c.len * spb * 100), out = new Float32Array(n * 2);
+    const pk = new Map<Id, Float32Array>();
+    for (const t of cp.takes) pk.set(t.id, await this.sourcePeaks(t.ref));
+    for (let i = 0; i < n; i++) {
+      const cb = c.offset + i / 100 / spb;
+      const r = cp.regions.find(x => cb >= x.from && cb < x.to); if (!r) continue;
+      const t = cp.takes.find(x => x.id === r.take)!, src = pk.get(t.id)!;
+      if (cb >= takeEnd(t)) continue;
+      const j = Math.floor((cb - t.start + t.offset) * spb * 100);
+      if (j >= 0 && j * 2 + 1 < src.length) { out[2 * i] = src[2 * j]; out[2 * i + 1] = src[2 * j + 1]; }
+    }
+    const prev = structuredClone(this.p), id = this.p.nextId++;
+    const src: MockSource = { id, name: cp.name + ' (flat)', color: '#e05263', path: 'recordings/' + cp.name + ' flat.wav', dur: n / 100, sr: 48000, ch: 1, peakDb: -3, seed: id };
+    this.srcMeta.set(id, src); this.recPeaks.set(id, out); this.p.sources.push(strip(src));
+    Object.assign(this.p.clips.find(x => x.id === clipId)!, { kind: 'audio', ref: id, offset: 0, norm: false, rev: false, tune: null });
+    if (!this.p.clips.some(x => x.kind === 'comp' && x.ref === cp.id)) { this.p.comps = this.p.comps!.filter(x => x.id !== cp.id); delete this.audition[cp.id]; }
+    this.pushUndo(prev); this.changed();
+    return { sourceId: id };
+  }
   async trimClip(clipId: Id) {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) throw new Error('no clip');
     const s = this.srcMeta.get(c.ref); if (!s) throw new Error('no source');
@@ -694,6 +766,22 @@ export class MockBackend implements Backend {
     ins.fx = [mk('tune'), ...fx.filter(f => f.type === 'eq'), mk('deess'), mk('fet'), ...fx.filter(f => f.type !== 'eq')];
     this.changed();
     return r;
+  }
+
+  /**
+   * Dev helper: five sung takes of a 4-bar phrase on the Vocal track, as if loop-recorded
+   * over bars 9–12 (what `finishRec` produces), so take lanes can be tried without a mic.
+   */
+  async addDemoTakes(track = 5, from = 32, bars = 4) {
+    const prev = structuredClone(this.p), spb = this.spb(), len = bars * 4, dur = len * spb, landed: [Id, number, number][] = [];
+    for (let k = 0; k < 5; k++) {
+      const id = this.p.nextId++;
+      const src: MockSource = { id, name: 'Take ' + (++this.takeN), color: '#d9678f', path: 'recordings/take' + this.takeN + '.wav', dur, sr: 48000, ch: 1, peakDb: -6, seed: 7100 + k * 13, vocal: true };
+      this.srcMeta.set(id, src); this.p.sources.push(strip(src));
+      landed.push([id, from, len]);
+    }
+    landTakes(this.p, Math.min(track, this.p.tracks.length - 1), landed, () => this.p.nextId++);
+    this.pushUndo(prev); this.changed();
   }
 
   /** Dev helper: drop two demo loops on Pad/Perc like the prototype did. */

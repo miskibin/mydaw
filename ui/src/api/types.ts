@@ -60,7 +60,21 @@ export interface Source {
   dur: number; sr: number; ch: number; peakDb: number;
 }
 
-export type ClipKind = 'pat' | 'audio' | 'auto';
+/** `comp`: plays a take group's comp (`ref` = comp id, `offset` in comp beats). */
+export type ClipKind = 'pat' | 'audio' | 'auto' | 'comp';
+
+/** One recorded pass. `start`/`len` in comp beats, `offset` beats into the source. Takes are never cut. */
+export interface Take { id: Id; name: string; ref: Id; start: number; len: number; offset: number; color?: string | null }
+/** `take` plays over [from, to) (comp beats). `xfade`: crossfade at `from`, seconds (comp default when absent). */
+export interface CompRegion { take: Id; from: number; to: number; xfade?: number | null }
+/**
+ * A take group and its comp. Comp beat = clip.offset + (timeline beat − clip.start).
+ * `regions` sorted, non-overlapping, gaps silent. `xfade`: default boundary crossfade, seconds.
+ */
+export interface Comp { id: Id; name: string; takes: Take[]; regions: CompRegion[]; xfade: number }
+/** Default comp crossfade (s) and the choices offered on a boundary. */
+export const DEFAULT_XFADE = 0.01;
+export const MAX_XFADE = 0.5;
 export interface Clip {
   id: Id; track: number; start: number; len: number; offset: number;
   kind: ClipKind; ref: Id; muted: boolean; gain: number;
@@ -104,6 +118,8 @@ export interface Project {
   loop: LoopRange | null; nextId: Id;
   /** Automation envelopes; played by clips of kind `auto` (`ref` = automation id). */
   automations?: Automation[];
+  /** Take groups with their comps; played by clips of kind `comp`. */
+  comps?: Comp[];
 }
 
 export type Op =
@@ -122,7 +138,9 @@ export type Op =
   | { op: 'setBpm'; bpm: number }
   | { op: 'setLoop'; loop: LoopRange | null }
   | { op: 'putAutomation'; automation: Automation }
-  | { op: 'removeAutomation'; id: Id };
+  | { op: 'removeAutomation'; id: Id }
+  | { op: 'putComp'; comp: Comp }
+  | { op: 'removeComp'; id: Id };
 
 export interface TransportDto {
   playing: boolean; rec: boolean; monitor: boolean; metro: boolean; countIn: boolean; startBeat: number;
@@ -131,6 +149,8 @@ export interface TransportDto {
 export interface StateDto {
   project: Project; revision: number; canUndo: boolean; canRedo: boolean;
   transport: TransportDto; path: string | null; dirty: boolean;
+  /** Comp id (as a string key) → take played instead of the comp. Live only, not undone. */
+  audition?: Record<string, Id>;
 }
 
 /** `options`: a discrete choice (value = index), shown as buttons instead of a knob. */

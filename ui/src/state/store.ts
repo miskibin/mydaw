@@ -3,6 +3,7 @@
 import { batch } from 'solid-js';
 import { createStore, produce, reconcile } from 'solid-js/store';
 import type { Catalog, Clip, Fx, Id, Insert, Op, Project, StateDto, TransportDto } from '../api/types';
+import { applyCompOp, compExtent } from '../lib/comp';
 
 export interface EngineState {
   ready: boolean;
@@ -14,6 +15,8 @@ export interface EngineState {
   path: string | null;
   dirty: boolean;
   catalog: Catalog | null;
+  /** Comp id → take auditioned instead of the comp (live only). */
+  audition: Record<string, Id>;
 }
 
 const emptyProject = (): Project => ({ version: 2, bpm: 128, tracks: [], inserts: [], patterns: [], sources: [], clips: [], loop: null, nextId: 1 });
@@ -21,7 +24,7 @@ const emptyProject = (): Project => ({ version: 2, bpm: 128, tracks: [], inserts
 export const [S, setS] = createStore<EngineState>({
   ready: false, project: emptyProject(), revision: 0, canUndo: false, canRedo: false,
   transport: { playing: false, rec: false, monitor: false, metro: false, countIn: true, startBeat: 0 },
-  path: null, dirty: false, catalog: null,
+  path: null, dirty: false, catalog: null, audition: {},
 });
 
 // ---- ids ----
@@ -39,6 +42,7 @@ export function replaceState(dto: StateDto) {
     setS('project', reconcile(dto.project, { key: 'id', merge: true }));
     setS({ revision: dto.revision, canUndo: dto.canUndo, canRedo: dto.canRedo, path: dto.path, dirty: dto.dirty, ready: true });
     setS('transport', reconcile(dto.transport));
+    setS('audition', reconcile(dto.audition ?? {}));
   });
   localNext = Math.max(localNext, dto.project.nextId);
 }
@@ -125,7 +129,9 @@ function applyInPlace(p: Project, op: Op) {
       return;
     }
     case 'putSource': { const s = p.sources.find(x => x.id === op.source.id); if (s) { s.name = op.source.name; s.color = op.source.color; } return; }
+    case 'putComp': case 'removeComp': applyCompOp(p, op, false); return;
     case 'removeSource':
+      applyCompOp(p, op, false);
       p.sources = p.sources.filter(s => s.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'audio' && c.ref === op.id));
       return;
@@ -158,11 +164,12 @@ export function findFx(fxId: Id): { m: Insert; f: Fx } | null {
   return null;
 }
 export const insertById = (id: Id) => S.project.inserts.find(m => m.id === id);
-export const srcOf = (c: Clip) => c.kind === 'pat' ? S.project.patterns.find(p => p.id === c.ref) : c.kind === 'auto' ? S.project.automations?.find(a => a.id === c.ref) : S.project.sources.find(s => s.id === c.ref);
+export const srcOf = (c: Clip) => c.kind === 'pat' ? S.project.patterns.find(p => p.id === c.ref) : c.kind === 'auto' ? S.project.automations?.find(a => a.id === c.ref) : c.kind === 'comp' ? S.project.comps?.find(a => a.id === c.ref) : S.project.sources.find(s => s.id === c.ref);
 export const autoById = (id: Id) => S.project.automations?.find(a => a.id === id);
 export const spb = () => 60 / S.project.bpm;
 export function srcLenBeats(kind: Clip['kind'], ref: Id): number {
   if (kind === 'pat') return S.project.patterns.find(p => p.id === ref)?.len ?? 4;
+  if (kind === 'comp') { const cp = S.project.comps?.find(x => x.id === ref); return cp ? compExtent(cp)[1] : 4; }
   if (kind === 'auto') return Infinity; // an envelope holds its last value: auto clips can be any length
   const s = S.project.sources.find(x => x.id === ref);
   return s ? s.dur / spb() : 4;
