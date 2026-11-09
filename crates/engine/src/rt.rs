@@ -166,6 +166,9 @@ pub struct InsertRt {
     pub id: Id,
     pub gain: f32,
     pub pan: f32,
+    /// Stereo width (M/S side gain): 0 mono, 1 unchanged, 2 extra wide.
+    pub width: f32,
+    w_cur: f32,
     pub on: bool,
     pub fx: Vec<FxSlot>,
     g_cur: f32,
@@ -192,8 +195,8 @@ pub struct InsertRt {
 }
 
 impl InsertRt {
-    pub fn new(id: Id, gain: f32, pan: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
-        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block], quiet: 0, parked: false, idle_at: usize::MAX, idle: false, low_lat: false }
+    pub fn new(id: Id, gain: f32, pan: f32, width: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
+        Self { id, gain, pan, width, w_cur: width, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block], quiet: 0, parked: false, idle_at: usize::MAX, idle: false, low_lat: false }
     }
 
     /// Delays this insert's output by `samples` (allocates; call off the audio thread).
@@ -271,7 +274,7 @@ impl Ring {
 
 /// Fader/pan/mute for everything, sent when only those changed.
 pub struct MixState {
-    pub inserts: Vec<(Id, f32, f32, bool)>,
+    pub inserts: Vec<(Id, f32, f32, f32, bool)>,
     pub tracks: Vec<(f32, bool)>,
     pub monitor_track: Option<usize>,
     /// Channel (gain, pan, on), in the timeline's channel order.
@@ -604,10 +607,11 @@ impl Rt {
                     self.trash(Garbage::Timeline(old));
                 }
                 Cmd::Mix(m) => {
-                    for (id, gain, pan, on) in m.inserts.iter().copied() {
+                    for (id, gain, pan, width, on) in m.inserts.iter().copied() {
                         if let Some(i) = self.graph.inserts.iter_mut().find(|i| i.id == id) {
                             i.gain = gain;
                             i.pan = pan;
+                            i.width = width;
                             i.on = on;
                         }
                     }
@@ -1132,6 +1136,18 @@ fn process_insert(ins: &mut InsertRt, k: usize, n: usize, ctx: &ProcessCtx, enab
     if gate == Gate::Run {
         run_chain(ins, n, ctx, watch, taps, shared);
     }
+    // stereo width: M/S side gain, ramped across the block; exactly 1 is a bit-exact bypass
+    if gate == Gate::Run && (ins.width != 1.0 || ins.w_cur != 1.0) {
+        let w0 = ins.w_cur;
+        let step = (ins.width - w0) / n as f32;
+        for i in 0..n {
+            let w = if i + 1 == n { ins.width } else { w0 + step * (i + 1) as f32 };
+            let (m, s) = ((ins.l[i] + ins.r[i]) * 0.5, (ins.l[i] - ins.r[i]) * 0.5 * w);
+            ins.l[i] = m + s;
+            ins.r[i] = m - s;
+        }
+    }
+    ins.w_cur = ins.width;
     // fader + pan, smoothed across the block (a skipped chain outputs zeros)
     let target = if ins.on { ins.gain } else { 0.0 };
     if gate == Gate::Run {
