@@ -167,11 +167,17 @@ pub struct InsertRt {
     pdc_w: usize,
     dry_l: Vec<f32>,
     dry_r: Vec<f32>,
+    /// Samples the insert's input has been exact digital silence (see [`gate`]).
+    quiet: usize,
+    /// The chain has been silent longer than its tail and its state is settled: it is skipped.
+    parked: bool,
+    /// `quiet` at which even the PDC delay line holds only zeros (valid while `parked`).
+    idle_at: usize,
 }
 
 impl InsertRt {
     pub fn new(id: Id, gain: f32, pan: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
-        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block] }
+        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block], quiet: 0, parked: false, idle_at: usize::MAX }
     }
 
     /// Delays this insert's output by `samples` (allocates; call off the audio thread).
@@ -389,6 +395,8 @@ pub struct Rt {
     /// Pattern loop preview: pattern id and beats into it.
     pat_play: Option<Id>,
     pat_beat: f64,
+    /// Skip effect chains that are silent past their tails (see [`gate`]).
+    skip_silent: bool,
 }
 
 impl Rt {
@@ -423,7 +431,19 @@ impl Rt {
             preview: None,
             pat_play: None,
             pat_beat: 0.0,
+            skip_silent: true,
         }
+    }
+
+    /// Inserts whose chain is parked right now (silent past its tails).
+    pub fn parked_inserts(&self) -> usize {
+        self.graph.inserts.iter().filter(|i| i.parked).count()
+    }
+
+    /// Turns silence skipping on (the default) or off. Output is the same either way (to
+    /// well below -120 dB); off is for A/B tests.
+    pub fn set_skip_silent(&mut self, on: bool) {
+        self.skip_silent = on;
     }
 
     pub fn sample_rate(&self) -> f32 {
@@ -446,15 +466,30 @@ impl Rt {
                 Cmd::Graph(mut g) => {
                     // carry running processors (and their tails) over by effect id
                     for ins in g.inserts.iter_mut() {
+                        // silence bookkeeping follows the processors that are carried over;
+                        // an insert made only of fresh processors starts settled
+                        let (mut carried, mut quiet, mut parked) = (false, usize::MAX, true);
                         for slot in ins.fx.iter_mut() {
-                            if let Some(old) = self.graph.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == slot.id) {
+                            let found = self.graph.inserts.iter_mut().find_map(|i| {
+                                let st = (i.quiet, i.parked);
+                                i.fx.iter_mut().find(|s| s.id == slot.id).map(|s| (st, s))
+                            });
+                            if let Some((st, old)) = found {
+                                let mut took = false;
                                 if slot.proc.is_none() {
                                     slot.proc = old.proc.take();
+                                    took = true;
                                 }
                                 if old.dly_l.len() == slot.dly_l.len() {
                                     std::mem::swap(&mut slot.dly_l, &mut old.dly_l);
                                     std::mem::swap(&mut slot.dly_r, &mut old.dly_r);
                                     slot.dly_w = old.dly_w;
+                                    took = took || !slot.dly_l.is_empty();
+                                }
+                                if took {
+                                    carried = true;
+                                    quiet = quiet.min(st.0);
+                                    parked &= st.1;
                                 }
                             }
                             if let (Some(p), Some(pb)) = (slot.proc.as_mut(), slot.params.as_ref()) {
@@ -464,6 +499,8 @@ impl Rt {
                         if let Some(old) = self.graph.inserts.iter().find(|i| i.id == ins.id) {
                             ins.g_cur = old.g_cur;
                         }
+                        // the new insert's PDC line starts empty, so a parked chain is idle at once
+                        (ins.quiet, ins.parked, ins.idle_at) = if carried { (quiet, parked, 0) } else { (usize::MAX / 2, true, 0) };
                     }
                     let old = std::mem::replace(&mut self.graph, g);
                     self.trash(Garbage::Graph(old));
@@ -770,25 +807,35 @@ impl Rt {
             }
             let (head, tail) = g.inserts.split_at_mut(k);
             let ins = &mut tail[0];
-            run_chain(ins, n, &ctx, &self.watch[..self.watch_n], &mut self.taps, &self.shared);
-            // fader + pan, smoothed across the block
+            let gate = gate(ins, n, self.skip_silent, &self.watch[..self.watch_n]);
+            if gate == Gate::Idle {
+                // no signal in, nothing left in the effects or the delay line: nothing out
+                ins.g_cur = if ins.on { ins.gain } else { 0.0 };
+                continue;
+            }
+            if gate == Gate::Run {
+                run_chain(ins, n, &ctx, &self.watch[..self.watch_n], &mut self.taps, &self.shared);
+            }
+            // fader + pan, smoothed across the block (a skipped chain outputs zeros)
             let target = if ins.on { ins.gain } else { 0.0 };
-            let (gl, gr) = (if ins.pan > 0.0 { 1.0 - ins.pan } else { 1.0 }, if ins.pan < 0.0 { 1.0 + ins.pan } else { 1.0 });
-            let g0 = ins.g_cur;
-            let step = (target - g0) / n as f32;
-            let (mut pl, mut pr) = (0f32, 0f32);
-            for i in 0..n {
-                let gg = g0 + step * (i + 1) as f32;
-                ins.l[i] *= gg * gl;
-                ins.r[i] *= gg * gr;
-                pl = pl.max(ins.l[i].abs());
-                pr = pr.max(ins.r[i].abs());
+            if gate == Gate::Run {
+                let (gl, gr) = (if ins.pan > 0.0 { 1.0 - ins.pan } else { 1.0 }, if ins.pan < 0.0 { 1.0 + ins.pan } else { 1.0 });
+                let g0 = ins.g_cur;
+                let step = (target - g0) / n as f32;
+                let (mut pl, mut pr) = (0f32, 0f32);
+                for i in 0..n {
+                    let gg = g0 + step * (i + 1) as f32;
+                    ins.l[i] *= gg * gl;
+                    ins.r[i] *= gg * gr;
+                    pl = pl.max(ins.l[i].abs());
+                    pr = pr.max(ins.r[i].abs());
+                }
+                if k < MAX_INSERTS {
+                    fmax(&self.shared.meters[k].0, pl);
+                    fmax(&self.shared.meters[k].1, pr);
+                }
             }
             ins.g_cur = target;
-            if k < MAX_INSERTS {
-                fmax(&self.shared.meters[k].0, pl);
-                fmax(&self.shared.meters[k].1, pr);
-            }
             if !ins.pdc_l.is_empty() {
                 let d = ins.pdc_l.len();
                 for i in 0..n {
@@ -968,6 +1015,72 @@ impl Rt {
                 }
             }
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Gate {
+    /// Process the chain.
+    Run,
+    /// The chain is parked (silent input, tails over): skip it, the PDC line may still be draining.
+    Skip,
+    /// Parked and the PDC line is empty too: the insert contributes nothing.
+    Idle,
+}
+
+/// Silence skipping. An insert whose input is exact digital silence for longer than the
+/// tail of its chain (every effect's ring-down, summed, plus the dry-path delays) puts out
+/// silence whether or not the effects run, so they are settled once (`Processor::park`)
+/// and then skipped until the input is non-silent again. Chains with an effect of unknown
+/// tail (`tail_samples() == None`, e.g. hosted plugins) or a watched effect never skip.
+fn gate(ins: &mut InsertRt, n: usize, enabled: bool, watch: &[Id]) -> Gate {
+    if !enabled {
+        return Gate::Run;
+    }
+    let silent = ins.l[..n].iter().all(|&x| x == 0.0) && ins.r[..n].iter().all(|&x| x == 0.0);
+    if !silent {
+        ins.quiet = 0;
+        ins.parked = false;
+        return Gate::Run;
+    }
+    // silence that has already passed *before* this block: whatever rings on into the block
+    // (an effect tail, a PDC line) still has to be rendered
+    let before = ins.quiet;
+    ins.quiet = ins.quiet.saturating_add(n);
+    if !ins.parked {
+        let mut tail = 0usize;
+        for s in ins.fx.iter() {
+            if !watch.is_empty() && watch.contains(&s.id) {
+                return Gate::Run;
+            }
+            if s.bypass {
+                continue;
+            }
+            tail = tail.saturating_add(s.dly_l.len());
+            if s.mix > 0.0005 {
+                if let Some(p) = s.proc.as_ref() {
+                    match p.tail_samples() {
+                        Some(t) => tail = tail.saturating_add(t),
+                        None => return Gate::Run,
+                    }
+                }
+            }
+        }
+        if before < tail {
+            return Gate::Run;
+        }
+        for s in ins.fx.iter_mut() {
+            if let Some(p) = s.proc.as_mut() {
+                p.park();
+            }
+        }
+        ins.parked = true;
+        ins.idle_at = tail.saturating_add(ins.pdc_l.len());
+    }
+    if before >= ins.idle_at {
+        Gate::Idle
+    } else {
+        Gate::Skip
     }
 }
 

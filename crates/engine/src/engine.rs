@@ -207,6 +207,8 @@ pub struct Engine {
     factory: Arc<dyn PluginFactory>,
     listeners: Mutex<Vec<Listener>>,
     sink: Mutex<Option<FrameSink>>,
+    /// Effect chains that are silent past their tails are not processed (on by default).
+    skip_silent: std::sync::atomic::AtomicBool,
 }
 
 const UNDO_LIMIT: usize = 200;
@@ -238,6 +240,7 @@ impl Engine {
             factory,
             listeners: Mutex::new(vec![]),
             sink: Mutex::new(None),
+            skip_silent: std::sync::atomic::AtomicBool::new(true),
         });
         let weak = Arc::downgrade(&e);
         thread::Builder::new()
@@ -262,6 +265,12 @@ impl Engine {
             })
             .expect("spawn housekeeping thread");
         e
+    }
+
+    /// Turns silence skipping of effect chains on/off for Rts created from now on and for
+    /// offline renders. The output is the same (below -120 dB); off is for A/B tests.
+    pub fn set_silence_skip(&self, on: bool) {
+        self.skip_silent.store(on, Relaxed);
     }
 
     // ------------------------------------------------------------ device attach
@@ -296,7 +305,8 @@ impl Engine {
             }
         }
         *self.shared.lock() = shared.clone();
-        let rt = Rt::new(sample_rate, max_block, cmd_rx, gb_tx, shared, Taps { input: inputs, output: outputs }, rec_tx);
+        let mut rt = Rt::new(sample_rate, max_block, cmd_rx, gb_tx, shared, Taps { input: inputs, output: outputs }, rec_tx);
+        rt.set_skip_silent(self.skip_silent.load(Relaxed));
         let mut c = self.core.lock();
         // everything is rebuilt for the new rate: hosted plugins keep their state through the project
         self.snapshot_plugin_states(&mut c);
@@ -1099,6 +1109,7 @@ impl Engine {
             keep.push((b, d));
         }
         let mut rt = Rt::new(sr, block, cmd_rx, gb_tx, Arc::new(Shared::new()), taps, rec_tx);
+        rt.set_skip_silent(self.skip_silent.load(Relaxed));
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
         let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new());
