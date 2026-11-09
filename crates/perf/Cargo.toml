@@ -1,0 +1,27 @@
+[package]
+name = "wave-perf"
+description = "WAVE performance harness: synthetic long-project fixtures and engine benchmarks (measurement only)."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# hosted VST3 effects (wave-perf-vst3)
+vst3 = ["dep:wave-vst3"]
+
+[dependencies]
+wave-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+parking_lot.workspace = true
+wave-vst3 = { path = "../vst3-host", optional = true }
+
+[[bin]]
+name = "wave-perf"
+path = "src/main.rs"
+
+[[bin]]
+name = "wave-perf-vst3"
+path = "src/vst3.rs"
+required-features = ["vst3"]

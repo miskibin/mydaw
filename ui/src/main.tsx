@@ -11,6 +11,7 @@ import { App } from './App';
 import { initTheme } from './ui/theme';
 
 initTheme();
+if (import.meta.env.VITE_PERF) void import('./perfHook'); // perf harness only; compiled out otherwise
 
 async function boot() {
   const be = await getBackend();

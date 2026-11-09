@@ -5000,6 +5000,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wave-perf"
+version = "0.4.0"
+dependencies = [
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "wave-engine",
+ "wave-vst3",
+]
+
+[[package]]
 name = "wave-plugin-scan"
 version = "0.4.0"
 dependencies = [

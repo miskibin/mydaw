@@ -13,6 +13,7 @@ members = [
     "crates/rmvpe",
     "crates/tune-bench",
     "crates/midi-in",
+    "crates/perf",
 ]
 
 [workspace.package]

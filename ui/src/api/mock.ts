@@ -77,7 +77,8 @@ export class MockBackend implements Backend {
     ? { minimize: async () => {}, toggleMaximize: async () => {}, close: async () => {}, isMaximized: async () => false, startDragging: async () => {}, onResized: async () => () => {} }
     : null;
   private cat: Catalog = mockCatalog();
-  private p: Project = demoProject(this.cat);
+  // perf harness hook: perf/ui_bench.mjs injects a generated long project here (see perf/README)
+  private p: Project = (typeof window !== 'undefined' && (window as unknown as { __waveFixture?: Project }).__waveFixture) || demoProject(this.cat);
   private revision = 1;
   private savedRev = 1;
   private path: string | null = null;
