@@ -623,8 +623,73 @@ export function Playlist() {
 
   const mq = () => { const m = U.marquee; return m && { x: Math.min(m.x0, m.x1), y: Math.min(m.y0, m.y1), w: Math.abs(m.x1 - m.x0), h: Math.abs(m.y1 - m.y0) }; };
 
+  // ---------- overview scrollbar (FL-style: on top, wide thumb over a minimap of the song) ----------
+  let ovCv!: HTMLCanvasElement;
+  const [ovW, setOvW] = createSignal(600);
+  /** Beats the overview spans: the song plus some room, at least what is visible. */
+  const ovRange = () => {
+    projVersion();
+    let end = 0;
+    for (const c of S.project.clips) end = Math.max(end, c.start + c.len);
+    return Math.min(TOTAL, Math.max(64, end * 1.15 + 16, (scroll().x + cw()) / U.bw));
+  };
+  const thumb = () => {
+    const R = ovRange(), W = ovW();
+    const a = scroll().x / U.bw / R * W, w = Math.max(24, cw() / U.bw / R * W);
+    return { x: Math.min(a, W - w), w };
+  };
+  onMount(() => {
+    const ro = new ResizeObserver(() => setOvW(ovCv.clientWidth)); ro.observe(ovCv);
+    onCleanup(() => ro.disconnect());
+  });
+  createEffect(() => {
+    const W = ovW(), H = 18, R = ovRange(); projVersion(); theme.epoch;
+    fitCanvas(ovCv, W, H);
+    const g = ovCv.getContext('2d')!, P = unwrap(S.project), n = Math.max(1, P.tracks.length);
+    g.clearRect(0, 0, W, H);
+    const lh = Math.max(1, (H - 4) / n);
+    for (const c of P.clips) {
+      const t = P.tracks[c.track]; if (!t) continue;
+      g.globalAlpha = c.muted ? 0.25 : 0.75; g.fillStyle = t.color;
+      g.fillRect(c.start / R * W, 2 + c.track * lh, Math.max(1, c.len / R * W), Math.max(1, lh - (lh > 2 ? 0.5 : 0)));
+    }
+    g.globalAlpha = 1;
+  });
+  const ovDown = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = ovCv.getBoundingClientRect(), x = e.clientX - r.left, th = thumb(), R = ovRange(), W = ovW();
+    const toBeat = (px: number) => px / W * R;
+    const edge = x < th.x + 6 && x > th.x - 4 ? 'l' : x > th.x + th.w - 6 && x < th.x + th.w + 4 ? 'r' : null;
+    if (edge) {
+      // drag an edge = zoom, the other edge stays put
+      const b0 = scroll().x / U.bw, b1 = (scroll().x + cw()) / U.bw;
+      track(ev => {
+        const b = clamp(toBeat(ev.clientX - r.left), 0, R);
+        const [lo, hi] = edge === 'l' ? [Math.min(b, b1 - 1), b1] : [b0, Math.max(b, b0 + 1)];
+        const bw = clamp(cw() / (hi - lo), 4, 96);
+        setU('bw', bw); scrollEl.scrollLeft = lo * bw;
+      }, null, 'ew-resize');
+      return;
+    }
+    // outside the thumb: centre the view there, then drag as if grabbed
+    let grab = x - th.x;
+    if (x < th.x || x > th.x + th.w) { grab = th.w / 2; scrollEl.scrollLeft = toBeat(x - grab) * U.bw; }
+    track(ev => { scrollEl.scrollLeft = Math.max(0, toBeat(ev.clientX - r.left - grab) * U.bw); }, null, 'grabbing');
+  };
+  const ovHover = (e: PointerEvent) => {
+    const x = e.clientX - ovCv.getBoundingClientRect().left, th = thumb();
+    ovCv.style.cursor = Math.abs(x - th.x) < 6 || Math.abs(x - th.x - th.w) < 6 ? 'ew-resize' : x >= th.x && x <= th.x + th.w ? 'grab' : 'pointer';
+  };
+
   return (
     <div class="plwrap" onPointerDown={() => A.playlistFront()}>
+      <div class="ploverview" style={{ 'padding-left': U.headW + 'px' }}>
+        <div class="ovtrack">
+          <canvas ref={ovCv} onPointerDown={ovDown} onPointerMove={ovHover} title="Przeciągnij = przewiń · krawędzie = zoom · klik = skocz" />
+          <div class="ovthumb" style={{ left: thumb().x + 'px', width: thumb().w + 'px' }} />
+        </div>
+      </div>
       <div ref={scrollEl} class="plscroll">
         <div style={{ width: U.headW + gridW() + 'px', position: 'relative' }}>
           <div class="rulerRow">
