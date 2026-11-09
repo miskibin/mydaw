@@ -44,10 +44,22 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("gain", "Makeup", 0.0, 24.0, 0.0, "dB", false),
         choice("det", "Detect", 0.0, &["Peak", "RMS"]),
     ];
+    // order = dsp::saturator::idx
     const SAT: &[ParamDef] = &[
-        p("drive", "Drive", 0.0, 36.0, 6.0, "dB", false),
+        choice("style", "Style", 0.0, &crate::dsp::saturator::STYLES),
+        // knob → gain is quadratic: warmth to ~50 %, grit beyond (36 dB at 100 %)
+        p("drive", "Drive", 0.0, 100.0, 40.0, "%", false),
+        // +20 dB into the stage
+        choice("punish", "Punish", 0.0, &["Off", "On"]),
+        p("lowcut", "Low cut", 10.0, 1000.0, 10.0, "Hz", true),
+        p("thump", "Thump", 0.0, 100.0, 0.0, "%", false),
+        p("tone", "Tone", -100.0, 100.0, 0.0, "%", false),
+        p("highcut", "High cut", 500.0, 20000.0, 20000.0, "Hz", true),
+        choice("steep", "Steep", 0.0, &["Off", "On"]),
+        choice("auto", "Auto gain", 1.0, &["Off", "On"]),
         p("mix", "Mix", 0.0, 100.0, 100.0, "%", false),
-        p("out", "Output", -24.0, 6.0, 0.0, "dB", false),
+        p("out", "Output", -24.0, 12.0, 0.0, "dB", false),
+        choice("hq", "Oversampling", 0.0, &["2×", "4×"]),
     ];
     const DELAY: &[ParamDef] = &[
         p("time", "Time", 10.0, 1500.0, 375.0, "ms", true),
@@ -278,12 +290,15 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Smash", &[("thr", -35.0), ("ratio", 12.0), ("att", 0.5), ("rel", 60.0), ("gain", 12.0)]),
         ],
         FxKind::Sat => vec![
-            pr("Domyślny", &[("drive", 6.0), ("mix", 100.0), ("out", 0.0)]),
-            pr("Subtelny", &[("drive", 2.0), ("mix", 50.0), ("out", 0.0)]),
-            pr("Ciepła taśma", &[("drive", 4.0), ("mix", 100.0), ("out", -1.0)]),
-            pr("Lampa", &[("drive", 10.0), ("mix", 80.0), ("out", -3.0)]),
-            pr("Gruby bas", &[("drive", 18.0), ("mix", 60.0), ("out", -4.0)]),
-            pr("Rozwalony", &[("drive", 30.0), ("mix", 100.0), ("out", -8.0)]),
+            pr("Domyślny", &[("style", 0.0), ("drive", 40.0)]),
+            pr("Wokal — ciepło", &[("style", 0.0), ("drive", 35.0), ("lowcut", 80.0), ("tone", 10.0), ("highcut", 16000.0)]),
+            pr("Wokal — lampa", &[("style", 3.0), ("drive", 45.0), ("lowcut", 70.0), ("highcut", 15000.0)]),
+            pr("Rap — ziarno", &[("style", 1.0), ("drive", 58.0), ("lowcut", 100.0), ("tone", 25.0), ("highcut", 14000.0)]),
+            pr("Bębny — smash", &[("style", 1.0), ("drive", 80.0), ("lowcut", 30.0), ("thump", 30.0), ("mix", 70.0)]),
+            pr("Bas — waga", &[("style", 2.0), ("drive", 50.0), ("lowcut", 35.0), ("thump", 40.0), ("tone", -20.0)]),
+            pr("Lo-fi głośnik", &[("style", 4.0), ("drive", 60.0), ("lowcut", 300.0), ("thump", 35.0), ("tone", 20.0), ("highcut", 4500.0), ("steep", 1.0)]),
+            pr("Równoległe zgniecenie", &[("style", 4.0), ("drive", 90.0), ("punish", 1.0), ("mix", 30.0)]),
+            pr("Taśma — klej na bus", &[("style", 0.0), ("drive", 22.0), ("highcut", 18000.0)]),
         ],
         FxKind::Delay => vec![
             dly("Ósemka 1/8", Some(0.5), 0.0, 35.0, 20.0),
@@ -371,6 +386,7 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
     }
     match fx.kind {
         FxKind::Tune | FxKind::Voice => crate::vocal::tune_latency(sample_rate),
+        FxKind::Sat => crate::dsp::saturator::latency_samples(fx.params.get("hq").copied().unwrap_or(0.0) >= 0.5),
         FxKind::Denoise => crate::denoise::latency(sample_rate),
         FxKind::Rider => crate::rider::latency_samples(fx.params.get("speed").copied().unwrap_or(0.0) as f32, fx.params.get("look").copied().unwrap_or(0.0) as f32, sample_rate),
         // look-ahead delays the audio so the gain is already down when the "s" arrives

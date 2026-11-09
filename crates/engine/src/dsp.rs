@@ -4,6 +4,7 @@ use std::f32::consts::PI;
 
 pub mod limiter_v2;
 pub mod reverb_v2;
+pub mod saturator;
 
 use crate::model::FxKind;
 use crate::processor::{ParamBlock, ProcessCtx, Processor};
@@ -33,7 +34,7 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
     Some(match kind {
         FxKind::Eq => Box::new(Eq::default()),
         FxKind::Comp => Box::new(Comp::default()),
-        FxKind::Sat => Box::new(Sat::default()),
+        FxKind::Sat => Box::new(saturator::Saturator::default()),
         FxKind::Delay => Box::new(Delay::default()),
         FxKind::Reverb => Box::new(reverb_v2::ReverbV2::default()),
         FxKind::Limit => Box::new(limiter_v2::LimiterV2::default()),
@@ -477,55 +478,6 @@ impl Processor for Comp {
     }
     fn gain_reduction_db(&self) -> f32 {
         self.gr
-    }
-}
-
-// ---------------------------------------------------------------- saturator
-
-#[derive(Default)]
-pub struct Sat {
-    drive: f32,
-    mix: f32,
-    out: f32,
-    sd: Smooth,
-    so: Smooth,
-    sm: Smooth,
-}
-impl Processor for Sat {
-    fn prepare(&mut self, sr: f32, _max: usize) {
-        for s in [&mut self.sd, &mut self.so, &mut self.sm] {
-            s.setup(sr, 15.0);
-        }
-    }
-    fn set_params(&mut self, p: &ParamBlock) {
-        self.drive = db_to_gain(p.values[0]);
-        self.mix = p.values[1] / 100.0;
-        self.out = db_to_gain(p.values[2]) / self.drive.sqrt();
-        if self.sd.v == 0.0 {
-            self.sd.v = self.drive;
-            self.so.v = self.out;
-            self.sm.v = self.mix;
-        }
-    }
-    fn tail_samples(&self) -> Option<usize> {
-        Some(0)
-    }
-    fn park(&mut self) {
-        self.sd.v = self.drive;
-        self.so.v = self.out;
-        self.sm.v = self.mix;
-    }
-    fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
-        let norm = 1.0 / 2.5f32.tanh();
-        for i in 0..l.len() {
-            let d = self.sd.next(self.drive);
-            let o = self.so.next(self.out);
-            let m = self.sm.next(self.mix);
-            for x in [&mut l[i], &mut r[i]] {
-                let w = (*x * d * 2.5).tanh() * norm * o;
-                *x = *x * (1.0 - m) + w * m;
-            }
-        }
     }
 }
 

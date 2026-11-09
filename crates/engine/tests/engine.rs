@@ -310,7 +310,9 @@ fn mix_zero_is_the_dry_signal() {
     p.inserts[1].fx.push(sat);
     let out = Engine::new(p, Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
     let diff = dry.iter().zip(&out).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
-    assert!(diff < 1e-5, "mix 0 still changed the sound by {diff}");
+    // the saturator is latent (oversampling): the export is realigned, which leaves float
+    // rounding at the level of `latency_is_compensated_across_inserts`
+    assert!(diff < 1e-4, "mix 0 still changed the sound by {diff}");
 }
 
 #[test]

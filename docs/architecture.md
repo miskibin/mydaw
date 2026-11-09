@@ -112,7 +112,8 @@ target channel, armed insert; refreshed on every sync) and push into a dedicated
 the audio thread drains with the command ring. Offline renders may run the insert chains on
 worker threads (`Engine::set_render_workers`), bit-identical to one thread.
 
-Effect types: `eq` (7 `bands`), `comp`, `sat`, `delay`, `reverb`, `limit`,
+Effect types: `eq` (7 `bands`), `comp`, `sat` (character saturator, see
+`docs/saturator.md`), `delay`, `reverb`, `limit`,
 `vst3` (`plugin: {format,path,cid,name,vendor,state}`). Parameter ids, ranges
 and presets come from `fx_catalog` — the UI must not hard-code them.
 
