@@ -671,3 +671,12 @@ select option { background: var(--bg4); color: var(--fg); }
 .menu .msec { padding: 7px 8px 3px; font: 600 9.5px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg5); }
 .menu .ms + .msec { padding-top: 4px; }
 .menu.submenu { z-index: 52; min-width: 200px; }
+
+/* notebook: tabs and "od taktu" share one row; soft wrap mode */
+.nb-top { flex: none; display: flex; align-items: flex-end; gap: 8px; padding-right: 8px; background: var(--bg5); border-bottom: 1px solid var(--line2); }
+.nb-top .nb-tabs { flex: 1; min-width: 0; border-bottom: 0; background: transparent; }
+.nb-top .nb-start { align-self: center; padding: 4px 0; }
+.nbwin.wrap .nb-grid { width: auto; }
+.nbwin.wrap .nb-mirror .nb-row { height: auto; min-height: var(--nb-lh); white-space: pre-wrap; overflow-wrap: anywhere; }
+.nbwin.wrap .nb-ta { white-space: pre-wrap; overflow-wrap: anywhere; }
+.nbwin.wrap .nb-gutter .nb-row, .nbwin.wrap .nb-syll .nb-row { align-items: flex-start; padding-top: calc((var(--nb-lh) - 18px) / 2); }

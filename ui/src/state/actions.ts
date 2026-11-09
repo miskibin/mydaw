@@ -15,11 +15,22 @@ import { confirmUnsaved } from '../ui/Confirm';
 
 // ---------- transport ----------
 /** Recording is on but no track is armed: the engine plays and records nothing. */
-const NO_ARMED = 'Nagrywanie włączone, ale żadna ścieżka nie jest uzbrojona — kliknij ● przy ścieżce';
+const NO_ARMED = 'Nagrywanie włączone, ale nie ma pustej ścieżki do uzbrojenia — kliknij ● przy ścieżce';
 const armedTrack = () => S.project.tracks.find(t => t.arm);
+/** Recording with nothing armed: arm the first track with no clips at all (waits until the engine has it). */
+async function autoArm() {
+  if (armedTrack()) return;
+  const used = new Set(S.project.clips.map(c => c.track));
+  const i = S.project.tracks.findIndex((_, k) => !used.has(k));
+  if (i < 0) return;
+  armTrack(i);
+  await enqueue(() => Promise.resolve());
+  say('Nagrywanie na: ' + S.project.tracks[i].name + ' (pierwsza pusta ścieżka)');
+}
 export async function play(from = U.start) {
   setU('playing', true);
   try {
+    if (S.transport.rec) await autoArm();
     await be().transportPlay(from); setTransport({ playing: true });
     say(!S.transport.rec ? 'Play' : armedTrack() ? '● Nagrywanie na: ' + armedTrack()!.name : NO_ARMED);
   }
@@ -42,8 +53,9 @@ export async function setTransportFlag(k: 'metro' | 'countIn' | 'rec' | 'monitor
   setTransport({ [k]: v });
   try { const t = await be().transportSet({ [k]: v }); setTransport(t); } catch (e) { say('Błąd: ' + String(e)); }
 }
-export function toggleRec() {
+export async function toggleRec() {
   const on = !S.transport.rec;
+  if (on) await autoArm();
   void setTransportFlag('rec', on);
   say(!on ? (U.playing ? 'Punch out' : 'Nagrywanie wyłączone')
     : !armedTrack() ? NO_ARMED
