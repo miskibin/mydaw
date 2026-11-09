@@ -764,6 +764,14 @@ impl Project {
                 self.channel_for_inst(inst);
             }
         }
+        // saturator parameters from before the character saturator
+        for ins in &mut self.inserts {
+            for fx in ins.fx.iter_mut().filter(|f| f.kind == FxKind::Sat) {
+                if crate::dsp::saturator::migrate_params(&mut fx.params) {
+                    fx.preset = None;
+                }
+            }
+        }
         // ids the file used must stay taken
         let max = self.channels.iter().map(|c| c.id).max().unwrap_or(0);
         if max >= self.next_id {

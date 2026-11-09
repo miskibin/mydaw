@@ -9,6 +9,7 @@ import { BUILTIN, demoProject, emptyProject, mockCatalog } from './mockData';
 const MOCK_REVERB_MIX = 37.2;
 import { applyAll } from '../lib/applyOps';
 import { landTakes, takeEnd } from '../lib/comp';
+import { satDriveDb } from '../lib/saturator';
 import { eqCurve } from '../lib/eq';
 import { clamp, dbg } from '../lib/format';
 import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitch';
@@ -439,15 +440,17 @@ export class MockBackend implements Backend {
         specOut[k] = level > 0 ? specIn[k] - 6 * (1 - pulse) + sustain + wet - 10 * Math.log10(1 + (f / hi) ** 2) + 20 * Math.log10(r / Math.sqrt(1 + r * r)) : -120;
       }
     } else if (fx.type === 'sat') {
-      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (pr.drive ?? 0) * 0.15 + (k > 60 ? (pr.drive ?? 0) * 0.3 : 0);
+      // harmonics grow with the drive; auto gain keeps the level (dsp/saturator.rs)
+      const dd = satDriveDb(pr);
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (pr.auto ?? 1 ? 0 : dd * 0.5) + (k > 60 ? dd * 0.3 : 0);
     } else {
       for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + 20 * Math.log10(1 + (pr.mix ?? 25) / 100);
     }
-    const drive = dbg(pr.drive ?? 0), f0 = 2 + 3 * Math.sin(t * 0.3);
+    const drive = fx.type === 'sat' ? dbg(satDriveDb(pr)) * 0.6 : 1, f0 = 2 + 3 * Math.sin(t * 0.3);
     for (let i = 0; i < SCOPE_LEN; i++) {
       const x = level * (Math.sin(i / SCOPE_LEN * Math.PI * 2 * f0 + t * 9) * 0.8 + (Math.random() - 0.5) * 0.12);
       scopeIn[i] = x;
-      scopeOut[i] = fx.type === 'sat' ? Math.tanh(x * drive * 2.5) / Math.tanh(2.5) * dbg(pr.out ?? 0) : x * dbg(gr);
+      scopeOut[i] = fx.type === 'sat' ? Math.tanh(x * drive) / ((pr.auto ?? 1) ? drive : 0.6) * dbg(pr.out ?? 0) : x * dbg(gr);
     }
     return { id: fx.id, inPeak: level, outPeak: out, grDb: gr, meters, specIn, specOut, scopeIn, scopeOut };
   }

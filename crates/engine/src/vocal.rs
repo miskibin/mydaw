@@ -653,8 +653,20 @@ impl Processor for Tune {
 
 /// Robot mode holds the voice on this note (+ Pitch).
 const ROBOT_NOTE: f32 = 60.0;
-/// Asymmetry of the drive curve (even harmonics, like a tube stage).
-const DRIVE_BIAS: f32 = 0.25;
+/// Voice's drive: the character saturator's triode voicing, level-matched, with a
+/// light 6 dB/oct roll-off at 14 kHz, at 2× oversampling.
+fn voice_sat(drive_db: f32) -> crate::dsp::saturator::Settings {
+    use crate::dsp::saturator as s;
+    s::Settings {
+        style: s::TRIODE,
+        drive: s::drive_pos(drive_db),
+        highcut: 14000.0,
+        auto: true,
+        // fully clean at 0 dB, fully driven from 3 dB
+        mix: (drive_db / 3.0).clamp(0.0, 1.0),
+        ..Default::default()
+    }
+}
 
 /// Voice character for a clean monophonic vocal (Little AlterBoy style), on the
 /// same detector and PSOLA as the corrector:
@@ -662,8 +674,9 @@ const DRIVE_BIAS: f32 = 0.25;
 /// * Quantize: snap to the nearest semitone at once (hard tune), then shift.
 /// * Robot: hold one note (C4 + Pitch) whatever is sung.
 ///
-/// Link moves the formants with the pitch shift (the varispeed sound). Drive is an
-/// asymmetric tube-style saturator after the shift, fully clean at 0 dB.
+/// Link moves the formants with the pitch shift (the varispeed sound). Drive is the
+/// character saturator (triode voicing, auto gain) after the shift, clean at 0 dB. Its
+/// oversampling delay is taken out of the look-ahead, so the total latency is unchanged.
 pub struct Voice {
     sr: f32,
     det: Option<Detector>,
@@ -674,8 +687,8 @@ pub struct Voice {
     pitch: f32,
     formant: f32,
     link: bool,
-    drive_g: f32,
-    drive_w: f32,
+    drive_db: f32,
+    sat: crate::dsp::saturator::Core,
     out: f32,
     period: f32,
     /// semitones the current estimate asks for, and the glided value PSOLA gets
@@ -684,12 +697,7 @@ pub struct Voice {
     shift_k: f32,
     last_m: f32,
     jump_t: f32,
-    sg: Smooth,
-    sw: Smooth,
     so: Smooth,
-    dc_x: f32,
-    dc_y: f32,
-    dc_k: f32,
     m: [f32; 4],
     params: Option<ParamBlock>,
     quiet: usize,
@@ -708,8 +716,8 @@ impl Default for Voice {
             pitch: 0.0,
             formant: 0.0,
             link: false,
-            drive_g: 1.0,
-            drive_w: 0.0,
+            drive_db: 0.0,
+            sat: crate::dsp::saturator::Core::default(),
             out: 1.0,
             period: 0.0,
             want: 0.0,
@@ -717,12 +725,7 @@ impl Default for Voice {
             shift_k: 1.0,
             last_m: 0.0,
             jump_t: 0.0,
-            sg: Smooth::default(),
-            sw: Smooth::default(),
             so: Smooth::default(),
-            dc_x: 0.0,
-            dc_y: 0.0,
-            dc_k: 0.999,
             m: [0.0; 4],
             params: None,
             quiet: 0,
@@ -756,11 +759,8 @@ impl Voice {
         self.shift = self.want;
         self.last_m = 0.0;
         self.jump_t = 0.0;
-        self.sg.v = self.drive_g;
-        self.sw.v = self.drive_w;
         self.so.v = self.out;
-        self.dc_x = 0.0;
-        self.dc_y = 0.0;
+        self.sat.park();
         self.m = [0.0; 4];
         self.quiet = 0;
         self.dormant = true;
@@ -774,14 +774,14 @@ impl Processor for Voice {
         self.dormant = true;
         self.det = Some(Detector::new(sr));
         self.psola = Some(Psola::new(sr));
-        self.align = vec![0.0; align_delay(sr)];
+        self.sat.set(&voice_sat(self.drive_db));
+        self.sat.prepare(sr, 1);
+        // the saturator's oversampling delay comes out of the look-ahead
+        self.align = vec![0.0; align_delay(sr).saturating_sub(self.sat.latency())];
         self.align_w = 0;
         // fast enough to sound instant, slow enough that a snapped note doesn't click
         self.shift_k = 1.0 - (-1.0 / (sr * 0.004)).exp();
-        self.dc_k = 1.0 - std::f32::consts::TAU * 10.0 / sr;
-        for s in [&mut self.sg, &mut self.sw, &mut self.so] {
-            s.setup(sr, 15.0);
-        }
+        self.so.setup(sr, 15.0);
         if let Some(p) = self.params {
             self.set_params(&p);
         }
@@ -794,17 +794,14 @@ impl Processor for Voice {
         self.pitch = v[1];
         self.formant = v[2];
         self.link = v[3] >= 0.5;
-        let drive_db = v[4].max(0.0);
-        self.drive_g = db_to_gain(drive_db);
-        self.drive_w = (drive_db / 3.0).min(1.0);
+        self.drive_db = v[4].max(0.0);
+        self.sat.set(&voice_sat(self.drive_db));
         self.out = db_to_gain(v[5]);
         if self.mode == 0 {
             self.want = self.pitch;
         }
         if first {
             self.shift = self.want;
-            self.sg.v = self.drive_g;
-            self.sw.v = self.drive_w;
             self.so.v = self.out;
         }
     }
@@ -829,7 +826,6 @@ impl Processor for Voice {
         }
         let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola.as_mut()) else { return };
         let sr = self.sr;
-        let sat_norm = 1.0 - DRIVE_BIAS.tanh().powi(2);
         for i in 0..l.len() {
             let x = (l[i] + r[i]) * 0.5;
             if det.push(x) {
@@ -870,21 +866,12 @@ impl Processor for Voice {
             } else {
                 x
             };
-            let y = ps.process(xd, self.period, ratio, formant);
-            let g = self.sg.next(self.drive_g);
-            let w = self.sw.next(self.drive_w);
-            let o = self.so.next(self.out);
-            let s = if w > 1e-4 {
-                let sat = ((y * g + DRIVE_BIAS).tanh() - DRIVE_BIAS.tanh()) / (g.sqrt() * sat_norm);
-                y + (sat - y) * w
-            } else {
-                y
-            };
-            // the bias leaves a DC offset: 10 Hz high-pass
-            let hp = s - self.dc_x + self.dc_k * self.dc_y;
-            self.dc_x = s;
-            self.dc_y = hp;
-            let z = hp * o;
+            l[i] = ps.process(xd, self.period, ratio, formant);
+        }
+        // drive after pitch and formant
+        self.sat.process_mono(l);
+        for i in 0..l.len() {
+            let z = l[i] * self.so.next(self.out);
             l[i] = z;
             r[i] = z;
         }
@@ -895,8 +882,7 @@ impl Processor for Voice {
         }
         self.align.fill(0.0);
         self.shift = self.want;
-        self.dc_x = 0.0;
-        self.dc_y = 0.0;
+        self.sat.reset();
     }
     fn park(&mut self) {
         if !self.dormant {

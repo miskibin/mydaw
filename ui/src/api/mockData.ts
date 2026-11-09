@@ -12,7 +12,12 @@ const PARAMS: Record<AnyBuiltinKind, ParamDef[]> = {
   eq: [p('out', 'Output', -18, 18, 0, 'dB')],
   comp: [p('thr', 'Thresh', -60, 0, -18, 'dB'), p('ratio', 'Ratio', 1, 20, 4, ':1', true), p('att', 'Attack', 0.1, 100, 10, 'ms', true),
     p('rel', 'Release', 10, 1000, 150, 'ms', true), p('gain', 'Makeup', 0, 24, 0, 'dB'), choice('det', 'Detect', 0, ['Peak', 'RMS'])],
-  sat: [p('drive', 'Drive', 0, 36, 6, 'dB'), p('mix', 'Mix', 0, 100, 100, '%'), p('out', 'Output', -24, 6, 0, 'dB')],
+  // catalog.rs SAT (dsp::saturator::idx order)
+  sat: [choice('style', 'Style', 0, ['Taśma', 'Konsola', 'Transformator', 'Trioda', 'Pentoda']), p('drive', 'Drive', 0, 100, 40, '%'),
+    choice('punish', 'Punish', 0, ['Off', 'On']), p('lowcut', 'Low cut', 10, 1000, 10, 'Hz', true), p('thump', 'Thump', 0, 100, 0, '%'),
+    p('tone', 'Tone', -100, 100, 0, '%'), p('highcut', 'High cut', 500, 20000, 20000, 'Hz', true), choice('steep', 'Steep', 0, ['Off', 'On']),
+    choice('auto', 'Auto gain', 1, ['Off', 'On']), p('mix', 'Mix', 0, 100, 100, '%'), p('out', 'Output', -24, 12, 0, 'dB'),
+    choice('hq', 'Oversampling', 0, ['2×', '4×'])],
   delay: [p('time', 'Time', 10, 1500, 375, 'ms', true), p('fb', 'Feedback', 0, 95, 35, '%'), p('mix', 'Mix', 0, 100, 25, '%')],
   // catalog.rs REVERB / LIMIT (v2)
   reverb: [p('size', 'Decay', 0.2, 6, 1, 's', true), p('pre', 'Pre-delay', 0, 150, 25, 'ms'), p('lo', 'Low cut', 20, 1000, 300, 'Hz', true),
@@ -79,9 +84,15 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     pr('Smash', { thr: -35, ratio: 12, att: 0.5, rel: 60, gain: 12 }),
   ],
   sat: [
-    pr('Domyślny', { drive: 6, mix: 100, out: 0 }), pr('Subtelny', { drive: 2, mix: 50, out: 0 }),
-    pr('Ciepła taśma', { drive: 4, mix: 100, out: -1 }), pr('Lampa', { drive: 10, mix: 80, out: -3 }),
-    pr('Gruby bas', { drive: 18, mix: 60, out: -4 }), pr('Rozwalony', { drive: 30, mix: 100, out: -8 }),
+    pr('Domyślny', { style: 0, drive: 40 }),
+    pr('Wokal — ciepło', { style: 0, drive: 35, lowcut: 80, tone: 10, highcut: 16000 }),
+    pr('Wokal — lampa', { style: 3, drive: 45, lowcut: 70, highcut: 15000 }),
+    pr('Rap — ziarno', { style: 1, drive: 58, lowcut: 100, tone: 25, highcut: 14000 }),
+    pr('Bębny — smash', { style: 1, drive: 80, lowcut: 30, thump: 30, mix: 70 }),
+    pr('Bas — waga', { style: 2, drive: 50, lowcut: 35, thump: 40, tone: -20 }),
+    pr('Lo-fi głośnik', { style: 4, drive: 60, lowcut: 300, thump: 35, tone: 20, highcut: 4500, steep: 1 }),
+    pr('Równoległe zgniecenie', { style: 4, drive: 90, punish: 1, mix: 30 }),
+    pr('Taśma — klej na bus', { style: 0, drive: 22, highcut: 18000 }),
   ],
   delay: [
     dly('Ósemka 1/8', 0.5, 0, 35, 20), dly('Ćwierćnuta 1/4', 1, 0, 30, 22), dly('Kropkowana 1/8', 0.75, 0, 40, 22),
