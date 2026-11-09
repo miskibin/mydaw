@@ -11,15 +11,9 @@
   border-bottom: 1px solid color-mix(in srgb, var(--line) 38%, transparent);
 }
 
-.wv-top [data-tauri-drag-region],
-.wv-top[data-tauri-drag-region] {
-  app-region: drag;
-}
-.wv-top button,
-.wv-top input,
-.wv-top [role='slider'] {
-  app-region: no-drag;
-}
+/* Dragging is Tauri's data-tauri-drag-region (JS, only on the empty element
+   itself). CSS app-region: drag would turn the whole bar into an OS caption,
+   swallowing clicks on menus and icons and maximising on double-click. */
 .wv-top > .wv-spacer {
   min-width: 16px;
   align-self: stretch;
