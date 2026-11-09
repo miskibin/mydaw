@@ -42,6 +42,7 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("att", "Attack", 0.1, 100.0, 10.0, "ms", true),
         p("rel", "Release", 10.0, 1000.0, 150.0, "ms", true),
         p("gain", "Makeup", 0.0, 24.0, 0.0, "dB", false),
+        choice("det", "Detect", 0.0, &["Peak", "RMS"]),
     ];
     const SAT: &[ParamDef] = &[
         p("drive", "Drive", 0.0, 36.0, 6.0, "dB", false),
@@ -93,6 +94,8 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         choice("mode", "Mode", 0.0, &["Split", "Wide"]),
         p("look", "Lookahead", 0.0, 15.0, 5.0, "ms", false),
         choice("listen", "Listen", 0.0, &["Off", "S"]),
+        // Relative: the threshold is on the high/low band energy ratio, independent of level
+        choice("detect", "Detect", 0.0, &["Absolute", "Relative"]),
     ];
     const TUNE: &[ParamDef] = &[
         choice("key", "Key", 0.0, &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]),
@@ -123,7 +126,24 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("drive", "Drive", 0.0, 30.0, 0.0, "dB", false),
         p("out", "Output", -24.0, 12.0, 0.0, "dB", false),
     ];
+    // order = rider::idx. Target/floor are what "Auto wokal" measures on the take; with
+    // Auto target on, the rider estimates them while playing
+    const RIDER: &[ParamDef] = &[
+        p("amount", "Amount", 0.0, 100.0, 50.0, "%", false),
+        p("phrase", "Phrase", 0.0, 100.0, 20.0, "%", false),
+        p("up", "Max boost", 0.0, 12.0, 5.0, "dB", false),
+        p("down", "Max cut", 0.0, 12.0, 6.0, "dB", false),
+        choice("speed", "Speed", 0.0, &["Sung", "Rap"]),
+        choice("auto", "Auto target", 1.0, &["Off", "On"]),
+        p("target", "Target", -60.0, 0.0, -24.0, "dB", false),
+        p("floor", "Noise floor", -100.0, -20.0, -70.0, "dB", false),
+        choice("look", "Look-ahead", 1.0, &["Short", "Long"]),
+        p("out", "Output", -24.0, 24.0, 0.0, "dB", false),
+        // below this word level the rider idles at 0 dB (breaths, bleed, room)
+        p("gate", "Gate", -100.0, -10.0, -60.0, "dB", false),
+    ];
     match kind {
+        FxKind::Rider => RIDER,
         FxKind::Denoise => DENOISE,
         FxKind::Voice => VOICE,
         FxKind::Fet => FET,
@@ -152,11 +172,12 @@ pub fn type_name(kind: FxKind) -> &'static str {
         FxKind::Tune => "Pitch Correct",
         FxKind::Denoise => "Denoiser",
         FxKind::Voice => "Voice",
+        FxKind::Rider => "Vocal Rider",
         FxKind::Vst3 => "VST3",
     }
 }
 
-pub const BUILTIN: [FxKind; 11] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 12] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Rider, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
@@ -329,6 +350,13 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Hard tune + drive", &[("mode", 1.0), ("drive", 10.0), ("out", -3.0)]),
             pr("Robot", &[("mode", 2.0), ("drive", 6.0), ("out", -2.0)]),
         ],
+        FxKind::Rider => vec![
+            pr("Wokal — śpiew", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
+            pr("Rap", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 1.0), ("auto", 1.0), ("look", 1.0)]),
+            pr("Delikatnie", &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
+            pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
+            pr("Na żywo (krótki look-ahead)", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
+        ],
         FxKind::Vst3 => vec![],
     }
 }
@@ -341,6 +369,7 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
     match fx.kind {
         FxKind::Tune | FxKind::Voice => crate::vocal::tune_latency(sample_rate),
         FxKind::Denoise => crate::denoise::latency(sample_rate),
+        FxKind::Rider => crate::rider::latency_samples(fx.params.get("speed").copied().unwrap_or(0.0) as f32, fx.params.get("look").copied().unwrap_or(1.0) as f32, sample_rate),
         // look-ahead delays the audio so the gain is already down when the "s" arrives
         FxKind::Limit => crate::dsp::limiter_v2::latency_samples(fx.params.get("look").copied().unwrap_or(3.0) as f32, sample_rate),
         FxKind::Deess => ((fx.params.get("look").copied().unwrap_or(5.0).clamp(0.0, 15.0) / 1000.0) * sample_rate as f64) as usize,

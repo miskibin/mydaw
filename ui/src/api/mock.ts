@@ -4,6 +4,9 @@
 import type { Backend, EventMap, OsDropEvent } from './backend';
 import { encodeFrame, SCOPE_LEN, SPEC_BANDS, type EncFx } from './telemetry';
 import { BUILTIN, demoProject, emptyProject, mockCatalog } from './mockData';
+
+/** Reverb mix (%) the engine computes for the research plate at a -18 dB send (autovocal::reverb_mix_for_send). */
+const MOCK_REVERB_MIX = 37.2;
 import { applyAll } from '../lib/applyOps';
 import { landTakes, takeEnd } from '../lib/comp';
 import { eqCurve } from '../lib/eq';
@@ -12,7 +15,7 @@ import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitc
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 
@@ -625,6 +628,48 @@ export class MockBackend implements Backend {
     const chosen = nonEx.length ? nonEx : active;
     if (!chosen.length) return { tempo: null, key: null };
     return this.musicAnalyze({ clipId: chosen[0].id });
+  }
+  /** Same contract as the engine's `auto_vocal_plan`, with fixed measurements of a typical take
+   *  (the real calibration renders the audio; the mock has no audio to render). */
+  async autoVocalPlan(a: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle }): Promise<AutoVocalPlan> {
+    await delay(300);
+    const c = this.p.clips.find(x => x.id === a.clipId);
+    if (!c) throw new Error('no such clip');
+    if (c.kind !== 'audio') throw new Error('only audio clips have pitch');
+    const style = a.style ?? 'natural';
+    const music = a.beatClipId != null ? await this.musicAnalyze({ clipId: a.beatClipId }) : await this.musicAnalyze();
+    const cat = mockCatalog();
+    const params = (t: AnyBuiltinKind, kv: Record<string, number>) =>
+      ({ ...Object.fromEntries(cat.types[t]!.params.map(d => [d.id, d.def])), ...kv });
+    const hard = style === 'hard';
+    const key = music.key;
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const keyName = key ? `${names[key.root]} ${key.minor ? 'minor' : 'major'}` : '';
+    const tune = key
+      ? params('tune', { key: key.root, scale: key.minor ? 2 : 1, retune: hard ? 0 : 40, humanize: hard ? 0 : 30, flex: hard ? 0 : 40, vibrato: hard ? 20 : 60 })
+      : params('tune', {});
+    const chain: AutoVocalPlan['chain'] = [
+      { type: 'tune', params: tune, mix: 1, enabled: !!key, note: key ? `${keyName} from the beat (confidence ${key.confidence.toFixed(2)})` : 'no key detected in the beat: pitch correction left off' },
+      { type: 'rider', params: params('rider', { amount: 50, phrase: 20, up: 5, down: 6, speed: hard ? 1 : 0, auto: 0, target: -24, floor: -70, gate: -48, look: 1, out: 0 }), mix: 1, enabled: true, note: 'target -24.0 dB, noise floor -70.0 dB; gain p5/p50/p95 -2.1/0.3/2.4 dB' },
+      { type: 'fet', params: params('fet', { input: 12, output: -12, ratio: 0, attack: 800, release: 60, mix: 100 }), mix: 1, enabled: true, note: 'fast 4:1 peak stage, 4.8 dB on the loudest 1 %' },
+      { type: 'comp', params: params('comp', { thr: -32, ratio: 2.5, att: 10, rel: 250, gain: 0, det: 1 }), mix: 1, enabled: true, note: 'slow 2.5:1 stage, 4.1 dB mean reduction' },
+      { type: 'deess', params: params('deess', { thr: -9, range: 12, freq: 5000, mode: 0, look: 5, listen: 0, detect: 1 }), mix: 1, enabled: true, note: 'sibilance -4.0 → -5.1 dB (pro median -6.0)' },
+      { type: 'reverb', params: params('reverb', { size: 1.2, pre: 30, lo: 300, hi: 7000, width: 100, mix: MOCK_REVERB_MIX, tone: 0, space: 0, duck: 0, bass: 1 }), mix: 1, enabled: true, note: 'small plate, T60 1.2 s, -18 dB send' },
+      { type: 'limit', params: params('limit', { gain: 0, ceil: -1, rel: 80, auto: 0, look: 5, link: 100, out: 0 }), mix: 1, enabled: true, note: 'true-peak ceiling -1 dBTP' },
+    ];
+    return {
+      version: 1, style,
+      analysis: {
+        durationS: c.len * 60 / this.p.bpm, sampleRate: 48000, peakDbfs: -3.2, truePeakDbtp: -3.0, lufs: -21.5,
+        wordLevelDb: -24, noiseFloorDb: -70, sungShare: 0.62, sibilanceDb: -4,
+        key: key ? { root: key.root, minor: key.minor, name: keyName, confidence: key.confidence } : null,
+        scaleShare: key ? 0.86 : null, pitchOffCents: key ? 18 : null, beatLufs: a.beatClipId != null ? -11 : null,
+      },
+      chain,
+      trackGainDb: a.beatClipId != null ? 6.4 : null,
+      stages: { riderGainDb: [-2.1, 0.3, 2.4], fetP99GrDb: [4.8, 4.8], compMeanGrDb: [4.1, 4.1], sibilanceAfterDb: [-5.1, -5.1], iqr400Db: [5.6, 2.3], lufsAfter: -23.6, truePeakAfterDbtp: -6.2 },
+      warnings: [],
+    };
   }
   private liveAudition(): Record<string, Id> {
     const out: Record<string, Id> = {};

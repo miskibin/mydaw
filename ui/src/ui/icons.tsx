@@ -25,6 +25,7 @@ export const FXMETA: Record<FxKind, { icon: string; color: string; tag: string }
   fet: { icon: 'M3.5 17a8.5 8.5 0 0 1 17 0 M12 17l4.5-6.5 M6.2 11.2l1.2 1 M17.8 11.2l-1.2 1 M12 8.5v1.5', color: '#f07f4f', tag: 'kompresja FET' },
   denoise: { icon: 'M2 12h2l1.5-3 1.5 6 1.5-4 1.5 2h2 M13 12c1.5-4 3-6 4.5-6S20 9 22 12 M13 12c1.5 4 3 6 4.5 6S20 15 22 12', color: '#8fb3ff', tag: 'odszumianie' },
   voice: { icon: 'M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21 M17.5 3.5l3 2-3 2 M20.5 5.5h-2', color: '#c77ddb', tag: 'barwa głosu' },
+  rider: { icon: 'M3 15c2 0 2-6 4-6s2 8 4 8 2-10 4-10 2 6 4 6h2 M3 12h18', color: '#e8c55a', tag: 'wyrównanie' },
   vst3: { icon: ICONS.vst, color: '#9a8cf0', tag: 'plugin' },
 };
 export const FX_ORDER = ['denoise', 'tune', 'voice', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'] as const;

@@ -17,10 +17,18 @@ fn tail_heavy() -> Project {
     let mut next = 9000;
     for (k, ins) in p.inserts.iter_mut().enumerate().skip(1) {
         if k <= 2 {
-            // the pitch/voice/noise effects idle after a second of silence by themselves
-            for kind in [FxKind::Denoise, FxKind::Tune, FxKind::Voice] {
+            // the pitch/voice/noise effects (and the rider) idle after a second of silence by
+            // themselves. The rider rides wherever it sits in a vocal chain: here it sees the
+            // clips directly, so its gain does not scale the float-level residue differences
+            // the tails further down leave (-130 dB; amplified, they would exceed the limit)
+            for kind in [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Rider] {
                 next += 1;
-                ins.fx.push(new_fx(next, kind, bpm));
+                let mut fx = new_fx(next, kind, bpm);
+                if kind == FxKind::Rider {
+                    // short look-ahead: the wake-up test listens for sound within ~1 s
+                    fx.params.insert("look".into(), 0.0);
+                }
+                ins.fx.push(fx);
             }
         }
         for kind in [FxKind::Eq, FxKind::Comp, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Deess, FxKind::Fet, FxKind::Limit] {

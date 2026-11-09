@@ -3,7 +3,7 @@
 //!
 //! Meter layout (`Processor::meters`, documented in docs/architecture.md):
 //! * fet:   [GR dB, input dB, output dB]
-//! * deess: [GR dB, sidechain dB, sibilance 0..1, threshold dB]
+//! * deess: [GR dB, sidechain dB (Relative: high/low band ratio dB), sibilance 0..1, threshold dB]
 //! * tune:  [input Hz (0 = unvoiced), target Hz, output Hz, confidence, input cents off target, applied correction cents]
 //! * voice: [input Hz (0 = unvoiced), output Hz, confidence, applied shift st]
 
@@ -185,6 +185,17 @@ pub struct DeEss {
     ratio_now: f32,
     side_db: f32,
     params: Option<ParamBlock>,
+    /// Relative detection: the threshold is on the high/low band energy ratio (dB), so it
+    /// does not depend on the take's level (the auto-vocal research de-esser).
+    relative: bool,
+    /// Relative mode splits like the research de-esser: high = 4th-order Butterworth
+    /// high-pass, low = input − high (stages per channel; [4], [5] = detector).
+    hp4: [[Biquad; 2]; 3],
+    env_rh: f32,
+    env_rl: f32,
+    k_rel_env: f32,
+    rel_att: f32,
+    rel_rel: f32,
 }
 
 impl Default for DeEss {
@@ -214,6 +225,13 @@ impl Default for DeEss {
             ratio_now: 0.0,
             side_db: -120.0,
             params: None,
+            relative: false,
+            hp4: [[Biquad::default(); 2]; 3],
+            env_rh: 0.0,
+            env_rl: 0.0,
+            k_rel_env: 0.0,
+            rel_att: 0.0,
+            rel_rel: 0.0,
         }
     }
 }
@@ -228,10 +246,15 @@ impl DeEss {
         self.split = v[3] < 0.5;
         self.look = ((v[4].clamp(0.0, 15.0) / 1000.0) * self.sr) as usize;
         self.listen = v[5] > 0.5;
+        self.relative = v[6] > 0.5;
         self.hp_det.set(FilterType::Highpass, self.sr, self.freq, 0.707, 0.0);
         // complementary split: low = LR4 lowpass, high = input − low
         for f in [&mut self.lp_l, &mut self.lp_r, &mut self.lp_l2, &mut self.lp_r2] {
             f.set(FilterType::Lowpass, self.sr, self.freq, 0.707, 0.0);
+        }
+        for ch in self.hp4.iter_mut() {
+            ch[0].set(FilterType::Highpass, self.sr, self.freq, 0.541_196_1, 0.0);
+            ch[1].set(FilterType::Highpass, self.sr, self.freq, 1.306_563, 0.0);
         }
     }
 }
@@ -244,6 +267,10 @@ impl Processor for DeEss {
         self.dr = vec![0.0; n];
         self.att = (-1.0 / (sr * 0.0008)).exp();
         self.rel = (-1.0 / (sr * 0.06)).exp();
+        // relative detector: ~5 ms band energies, 1 ms attack / 40 ms release on the gain
+        self.k_rel_env = 1.0 - (-1.0 / (sr * 0.0025)).exp();
+        self.rel_att = (-1.0 / (sr * 0.001)).exp();
+        self.rel_rel = (-1.0 / (sr * 0.04)).exp();
         self.apply();
     }
     fn set_params(&mut self, p: &ParamBlock) {
@@ -260,22 +287,38 @@ impl Processor for DeEss {
         let mut ratio_pk = 0f32;
         for i in 0..l.len() {
             let mono = (l[i] + r[i]) * 0.5;
-            let hi = self.hp_det.tick(mono);
-            // detector envelopes (energy)
-            let k_hi = if hi * hi > self.env_hi { 0.2 } else { 0.002 };
-            self.env_hi += (hi * hi - self.env_hi) * k_hi;
-            let k_all = if mono * mono > self.env_all { 0.2 } else { 0.002 };
-            self.env_all += (mono * mono - self.env_all) * k_all;
-            let hi_db = 10.0 * self.env_hi.max(1e-12).log10();
-            let ratio = (self.env_hi / self.env_all.max(1e-12)).clamp(0.0, 1.0);
-            // how "s"-like: high band holds more than ~35 % of the energy
-            let sib = ((ratio - 0.25) / 0.35).clamp(0.0, 1.0);
-            let over = (hi_db - self.thr).max(0.0);
-            let target = -(over * 0.8 * sib).min(self.range);
-            let k = if target < self.gr_env { self.att } else { self.rel };
-            self.gr_env = target + (self.gr_env - target) * k;
-            side_pk = side_pk.max(hi_db);
-            ratio_pk = ratio_pk.max(sib);
+            if self.relative {
+                // band-energy ratio of the complementary split, threshold on the ratio (1:∞)
+                let [d1, d2] = &mut self.hp4[2];
+                let hi = d2.tick(d1.tick(mono));
+                let lo = mono - hi;
+                self.env_rh += (hi * hi - self.env_rh) * self.k_rel_env;
+                self.env_rl += (lo * lo - self.env_rl) * self.k_rel_env;
+                let r_db = 10.0 * (self.env_rh.max(1e-14) / self.env_rl.max(1e-14)).log10();
+                let audible = self.env_rl + self.env_rh > 1e-8; // above -80 dBFS
+                let target = if audible { -(r_db - self.thr).clamp(0.0, self.range) } else { 0.0 };
+                let k = if target < self.gr_env { self.rel_att } else { self.rel_rel };
+                self.gr_env = target + (self.gr_env - target) * k;
+                side_pk = side_pk.max(r_db);
+                ratio_pk = ratio_pk.max(((r_db - self.thr + 6.0) / 12.0).clamp(0.0, 1.0));
+            } else {
+                let hi = self.hp_det.tick(mono);
+                // detector envelopes (energy)
+                let k_hi = if hi * hi > self.env_hi { 0.2 } else { 0.002 };
+                self.env_hi += (hi * hi - self.env_hi) * k_hi;
+                let k_all = if mono * mono > self.env_all { 0.2 } else { 0.002 };
+                self.env_all += (mono * mono - self.env_all) * k_all;
+                let hi_db = 10.0 * self.env_hi.max(1e-12).log10();
+                let ratio = (self.env_hi / self.env_all.max(1e-12)).clamp(0.0, 1.0);
+                // how "s"-like: high band holds more than ~35 % of the energy
+                let sib = ((ratio - 0.25) / 0.35).clamp(0.0, 1.0);
+                let over = (hi_db - self.thr).max(0.0);
+                let target = -(over * 0.8 * sib).min(self.range);
+                let k = if target < self.gr_env { self.att } else { self.rel };
+                self.gr_env = target + (self.gr_env - target) * k;
+                side_pk = side_pk.max(hi_db);
+                ratio_pk = ratio_pk.max(sib);
+            }
             gr_min = gr_min.min(self.gr_env);
             // delayed audio
             self.dl[self.w] = l[i];
@@ -284,8 +327,14 @@ impl Processor for DeEss {
             self.w = (self.w + 1) % n;
             let (a, b) = (self.dl[rd], self.dr[rd]);
             let g = db_to_gain(self.gr_env);
-            let (la, lb) = (self.lp_l2.tick(self.lp_l.tick(a)), self.lp_r2.tick(self.lp_r.tick(b)));
-            let (ha, hb) = (a - la, b - lb);
+            let (la, lb, ha, hb) = if self.relative {
+                let [[l1, l2], [r1, r2], _] = &mut self.hp4;
+                let (ha, hb) = (l2.tick(l1.tick(a)), r2.tick(r1.tick(b)));
+                (a - ha, b - hb, ha, hb)
+            } else {
+                let (la, lb) = (self.lp_l2.tick(self.lp_l.tick(a)), self.lp_r2.tick(self.lp_r.tick(b)));
+                (la, lb, a - la, b - lb)
+            };
             if self.listen {
                 l[i] = ha;
                 r[i] = hb;
@@ -316,8 +365,13 @@ impl Processor for DeEss {
         for f in [&mut self.lp_l, &mut self.lp_r, &mut self.lp_l2, &mut self.lp_r2] {
             f.reset();
         }
+        for f in self.hp4.iter_mut().flatten() {
+            f.reset();
+        }
         self.env_hi = 0.0;
         self.env_all = 0.0;
+        self.env_rh = 0.0;
+        self.env_rl = 0.0;
     }
     fn gain_reduction_db(&self) -> f32 {
         self.gr

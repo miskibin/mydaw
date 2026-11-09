@@ -400,6 +400,7 @@ fn bench_fx(cache: &Path, quick: bool) -> Value {
         FxKind::Tune,
         FxKind::Denoise,
         FxKind::Voice,
+        FxKind::Rider,
     ];
     let mut next_id = 90_000;
     for k in kinds {

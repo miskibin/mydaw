@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
-  LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
+  LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -51,6 +51,9 @@ export interface Backend {
   f0ModelInstall(): Promise<F0ModelStatus>;
   /** Tempo (BPM) and musical key of an audio clip, or key/tempo of the project's active audio clips (excluding `excludeFx`'s insert). */
   musicAnalyze(args?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis>;
+  /** "Auto wokal": measures a vocal clip (key from `beatClipId`, else from the other tracks) and returns the calibrated
+   *  insert chain. Read-only; takes a few seconds per minute of audio. */
+  autoVocalPlan(args: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle }): Promise<AutoVocalPlan>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
   /** Renders a comp clip to a new source; the clip becomes an ordinary audio clip (one undo step). */
   flattenComp(clipId: Id): Promise<{ sourceId: Id }>;
@@ -168,6 +171,7 @@ export function tauriBackend(): Backend {
     f0ModelStatus: () => invoke('f0_model_status'),
     f0ModelInstall: () => invoke('f0_model_install'),
     musicAnalyze: a => invoke('music_analyze', { clipId: a?.clipId ?? null, excludeFx: a?.excludeFx ?? null }),
+    autoVocalPlan: a => invoke('auto_vocal_plan', { clipId: a.clipId, beatClipId: a.beatClipId ?? null, style: a.style ?? null }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
     flattenComp: clipId => invoke('flatten_comp', { clipId }),
     compAudition: (compId, takeId) => invoke('comp_audition', { compId, takeId }),

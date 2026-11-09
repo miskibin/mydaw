@@ -788,6 +788,11 @@ impl Engine {
     /// (excluding muted tracks/clips and tracks routed to `exclude_fx`'s insert,
     /// so key detection for Pitch Correct listens to the backing rather than the vocal).
     pub fn music_analysis(&self, clip_id: Option<Id>, exclude_fx: Option<Id>) -> Result<crate::music::MusicAnalysis, EngineError> {
+        self.music_analysis_ex(clip_id, exclude_fx, None)
+    }
+
+    /// [`Engine::music_analysis`], also excluding the tracks routed to insert `exclude_insert`.
+    fn music_analysis_ex(&self, clip_id: Option<Id>, exclude_fx: Option<Id>, exclude_insert: Option<Id>) -> Result<crate::music::MusicAnalysis, EngineError> {
         if let Some(cid) = clip_id {
             let (clip, bpm) = {
                 let c = self.core.lock();
@@ -811,7 +816,7 @@ impl Engine {
         let (all_clips, excluded_insert, bpm) = {
             let c = self.core.lock();
             let p = &c.project;
-            let ex_ins = exclude_fx.and_then(|fid| p.find_fx(fid).map(|(ins, _)| ins.id));
+            let ex_ins = exclude_insert.or_else(|| exclude_fx.and_then(|fid| p.find_fx(fid).map(|(ins, _)| ins.id)));
             let any_solo = p.tracks.iter().any(|t| t.solo);
             let active: Vec<(Clip, bool)> = p
                 .clips
@@ -856,6 +861,58 @@ impl Engine {
         let tuning = if weight_sum > 0.0 { tuning_sum / weight_sum } else { 0.0 };
         let key = crate::music::estimate_key(&total_chroma, tuning);
         Ok(crate::music::MusicAnalysis { tempo: best_tempo.map(|(_, t)| t), key })
+    }
+
+    /// "Auto vocal": measures the vocal clip (what it plays, its region only) and returns
+    /// the calibrated insert chain for its track. The key comes from `beat_clip` when given,
+    /// else from the project's other audio (tracks not routed to the vocal's insert); the
+    /// level suggestion needs `beat_clip`. Slow (seconds): call off the UI thread.
+    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let region = |cl: &Clip| -> Result<(Vec<f32>, f32), EngineError> {
+            let (audio, bpm) = {
+                let mut c = self.core.lock();
+                let bpm = c.project.bpm;
+                (c.sources.clip_audio(cl, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?, bpm)
+            };
+            let mono = crate::sources::mono_of(&audio);
+            let sr = audio.sr as f64;
+            let (a, b) = crate::sources::clip_region(cl, bpm, mono.len() as f64 / sr);
+            let (i0, i1) = ((a * sr) as usize, ((b * sr) as usize).min(mono.len()));
+            let gain = crate::dsp::db_to_gain(cl.gain);
+            Ok((mono[i0.min(i1)..i1].iter().map(|v| v * gain).collect(), audio.sr as f32))
+        };
+        let (vocal, sr) = region(&clip)?;
+        if vocal.len() < (sr * 1.0) as usize {
+            return Err(EngineError::Msg("the clip is too short to analyse (under 1 s)".into()));
+        }
+        let vocal_insert = {
+            let c = self.core.lock();
+            c.project.tracks.get(clip.track as usize).map(|t| t.insert)
+        };
+        let key = match beat_clip {
+            Some(b) => self.music_analysis(Some(b), None)?.key,
+            None => self.music_analysis_ex(None, None, vocal_insert).ok().and_then(|m| m.key),
+        };
+        let pitch = self.pitch_analysis(clip_id).ok();
+        let beat = match beat_clip {
+            Some(b) => {
+                let bc = {
+                    let c = self.core.lock();
+                    c.project.clips.iter().find(|x| x.id == b).cloned().ok_or(EngineError::Msg("no such beat clip".into()))?
+                };
+                Some(region(&bc)?)
+            }
+            None => None,
+        };
+        Ok(crate::autovocal::plan(&crate::autovocal::PlanInput {
+            vocal: &vocal,
+            sr,
+            style,
+            key,
+            pitch: pitch.as_deref(),
+            beat: beat.as_ref().map(|(x, s)| (x.as_slice(), *s)),
+        }))
     }
 
     /// Peaks of what the clip actually plays (including pitch edits), for drawing.
