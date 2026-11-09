@@ -72,6 +72,12 @@ pub struct Voice {
     filt: Biquad,
     rng: u32,
     pub alive: bool,
+    /// Live (MIDI) note whose key is still down: it sounds until released.
+    held: bool,
+    /// Key let go while the sustain pedal was down: released when the pedal comes up.
+    sus: bool,
+    /// MIDI key of a live note.
+    key: u8,
 }
 
 impl Voice {
@@ -92,6 +98,9 @@ impl Voice {
             filt: Biquad::default(),
             rng: 1,
             alive: false,
+            held: false,
+            sus: false,
+            key: 0,
         }
     }
 }
@@ -100,6 +109,10 @@ pub struct VoicePool {
     pub voices: Vec<Voice>,
     sr: f32,
     seed: u32,
+    /// Sustain pedal state (live MIDI).
+    pedal: bool,
+    /// Pitch-bend factor applied to live notes (1 = none).
+    bend: f32,
 }
 
 #[inline]
@@ -130,9 +143,16 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
     (if pan > 0.0 { 1.0 - pan } else { 1.0 }, if pan < 0.0 { 1.0 + pan } else { 1.0 })
 }
 
+/// Ends a held voice with a 20 ms release (the bass tail; one-shots just ring out).
+fn release(v: &mut Voice, sr: f32) {
+    v.held = false;
+    v.sus = false;
+    v.len = v.t.saturating_add((0.02 * sr) as u32);
+}
+
 impl VoicePool {
     pub fn new(sr: f32) -> Self {
-        Self { voices: vec![Voice::dead(); MAX_VOICES], sr, seed: 0x1234_5678 }
+        Self { voices: vec![Voice::dead(); MAX_VOICES], sr, seed: 0x1234_5678, pedal: false, bend: 1.0 }
     }
 
     pub fn set_sr(&mut self, sr: f32) {
@@ -142,6 +162,58 @@ impl VoicePool {
 
     pub fn clear(&mut self) {
         self.voices.iter_mut().for_each(|v| v.alive = false);
+        self.pedal = false;
+        self.bend = 1.0;
+    }
+
+    /// A live key went down: the note sounds until [`Self::note_off`] (and the pedal) let it go.
+    /// Same routing and voices as a sequenced note; percussion and samples ring out by themselves.
+    pub fn note_on(&mut self, ch: &ChanRt, idx: usize, dest: Dest, key: u8, vel: f32) -> bool {
+        // the same key struck again releases its previous note
+        self.release_where(|v| v.held && v.chan_id == ch.id && v.key == key);
+        let Some(i) = self.note_slot(ch, idx, dest, 0, 3600.0, key, vel) else { return false };
+        let v = &mut self.voices[i];
+        v.held = true;
+        v.key = key;
+        true
+    }
+
+    /// A live key went up. With the pedal down the note keeps sounding until it comes up.
+    pub fn note_off(&mut self, chan_id: Id, key: u8) {
+        let (pedal, sr) = (self.pedal, self.sr);
+        for v in self.voices.iter_mut().filter(|v| v.alive && v.held && v.chan_id == chan_id && v.key == key) {
+            if pedal {
+                v.sus = true;
+            } else {
+                release(v, sr);
+            }
+        }
+    }
+
+    pub fn sustain(&mut self, down: bool) {
+        self.pedal = down;
+        if !down {
+            self.release_where(|v| v.sus);
+        }
+    }
+
+    /// Pitch bend of live notes, in semitones.
+    pub fn set_bend(&mut self, semitones: f32) {
+        self.bend = 2f32.powf(semitones / 12.0);
+    }
+
+    /// Lets go of every live note and the pedal (device unplugged, panic).
+    pub fn all_notes_off(&mut self) {
+        self.pedal = false;
+        self.bend = 1.0;
+        self.release_where(|v| v.held);
+    }
+
+    fn release_where(&mut self, f: impl Fn(&Voice) -> bool) {
+        let sr = self.sr;
+        for v in self.voices.iter_mut().filter(|v| v.alive && f(v)) {
+            release(v, sr);
+        }
     }
 
     /// A new channel table arrived: point every voice at its channel's new index, and
@@ -165,19 +237,24 @@ impl VoicePool {
     /// Returns false when nothing can play (a sampler channel without audio).
     #[allow(clippy::too_many_arguments)]
     pub fn note(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32) -> bool {
+        self.note_slot(ch, idx, dest, delay, len_s, key, vel).is_some()
+    }
+
+    /// Like [`Self::note`], returning the voice slot that was started.
+    #[allow(clippy::too_many_arguments)]
+    fn note_slot(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32) -> Option<usize> {
         match ch.kind {
             VoiceKind::Sample => {
-                let Some(a) = ch.sample.as_ref() else { return false };
+                let a = ch.sample.as_ref()?;
                 let rate = a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0);
-                self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, key as f32, vel, rate);
+                Some(self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, key as f32, vel, rate))
             }
-            kind => self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, vel, 1.0),
+            kind => Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, vel, 1.0)),
         }
-        true
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn trigger(&mut self, kind: VoiceKind, dest: Dest, chan: usize, chan_id: Id, delay: u32, len_s: f32, key: f32, vel: f32, rate: f64) {
+    fn trigger(&mut self, kind: VoiceKind, dest: Dest, chan: usize, chan_id: Id, delay: u32, len_s: f32, key: f32, vel: f32, rate: f64) -> usize {
         // steal the oldest voice if the pool is full
         let idx = match self.voices.iter().position(|v| !v.alive) {
             Some(i) => i,
@@ -207,7 +284,11 @@ impl VoicePool {
             filt,
             rng: self.seed | 1,
             alive: true,
+            held: false,
+            sus: false,
+            key: 0,
         };
+        idx
     }
 
     /// Adds every live voice into its destination: a track buffer, an insert's input, or
@@ -215,7 +296,9 @@ impl VoicePool {
     /// stereo (balance).
     pub fn render(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], inserts: &mut [InsertRt], click: &mut [f32], chans: &[ChanRt]) {
         let sr = self.sr;
+        let bend = self.bend;
         for v in self.voices.iter_mut().filter(|v| v.alive) {
+            let bend = if v.held { bend } else { 1.0 };
             let start = (v.delay as usize).min(n);
             v.delay = v.delay.saturating_sub(n as u32);
             // channel gain × velocity, split by the channel's pan
@@ -265,7 +348,7 @@ impl VoicePool {
                     if stereo {
                         out_r[i] += y * gr * fade;
                     }
-                    v.pos += v.rate;
+                    v.pos += v.rate * bend as f64;
                     v.t += 1;
                 }
                 continue;
@@ -296,7 +379,7 @@ impl VoicePool {
                             let fc = exp_ramp(900.0, 240.0, t, 0.2);
                             v.filt.set(FilterType::Lowpass, sr, fc, 0.707, 0.0);
                         }
-                        let dt = v.freq / sr;
+                        let dt = v.freq * bend / sr;
                         v.phase += dt;
                         if v.phase >= 1.0 {
                             v.phase -= 1.0;

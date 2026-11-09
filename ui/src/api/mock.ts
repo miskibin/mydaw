@@ -12,7 +12,7 @@ import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitc
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 
@@ -109,6 +109,9 @@ export class MockBackend implements Backend {
     host: 'wasapi', output: 'Głośniki (Realtek High Definition Audio)', input: 'Mikrofon (USB Audio)', sampleRate: null, bufferSize: null, inputChannel: null,
     running: true, actualRate: 48000, actualBuffer: 480, latencyMs: 20, inputChannels: 2, error: null, note: 'Mock — brak prawdziwego audio', asioCompiled: false,
   };
+
+  private midiPorts: MidiDevice[] = [{ id: 'mock-keys', name: 'Mock Keystation 61' }, { id: 'mock-pads', name: 'Mock Pad Controller' }];
+  private midi: MidiStatus = { connected: null, selected: null, error: null, lastNote: null, noteCount: 0, target: null };
 
   constructor() {
     setInterval(() => this.tick(), 1000 / 60);
@@ -705,6 +708,22 @@ export class MockBackend implements Backend {
       actualRate: cfg.sampleRate ?? 48000, actualBuffer: cfg.bufferSize ?? 480, latencyMs: Math.round(((cfg.bufferSize ?? 480) * 2 / (cfg.sampleRate ?? 48000)) * 10000) / 10 };
     this.emit('audio-status', { ...this.audio });
     return { ...this.audio };
+  }
+
+  // ---------- MIDI keyboard ----------
+  async midiListDevices() { return this.midiPorts.map(d => ({ ...d })); }
+  async midiSelectDevice(id: string | null) {
+    const d = id == null ? null : this.midiPorts.find(x => x.id === id) ?? null;
+    if (id != null && !d) this.midi = { ...this.midi, connected: null, selected: { id, name: id }, error: `${id} is not connected` };
+    else this.midi = { ...this.midi, connected: d && { ...d }, selected: d && { ...d }, error: null };
+    this.emit('midi-status', { ...this.midi });
+    return { ...this.midi };
+  }
+  async midiStatus() { return { ...this.midi }; }
+  async midiSetTarget(channel: Id | null) {
+    this.midi = { ...this.midi, target: channel };
+    this.emit('midi-status', { ...this.midi });
+    return { ...this.midi };
   }
 
   // ---------- library ----------

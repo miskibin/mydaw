@@ -12,6 +12,7 @@ members = [
     "crates/plugin-windows",
     "crates/rmvpe",
     "crates/tune-bench",
+    "crates/midi-in",
 ]
 
 [workspace.package]
@@ -50,6 +51,7 @@ wave-audio-file = { path = "crates/audio-file" }
 wave-plugin-scan = { path = "crates/plugin-scan" }
 wave-session = { path = "crates/session" }
 wave-rmvpe = { path = "crates/rmvpe" }
+wave-midi-in = { path = "crates/midi-in" }
 
 [profile.dev]
 opt-level = 1           # DSP in debug is unusably slow otherwise

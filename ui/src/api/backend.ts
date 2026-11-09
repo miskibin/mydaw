@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
-  LibraryList, LibraryProgress, ModelProgress, MusicAnalysis, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
+  LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -14,6 +14,10 @@ export interface EventMap {
   'library-progress': LibraryProgress;
   'model-progress': ModelProgress;
   'audio-status': AudioStatus;
+  /** Keyboard connected, unplugged or failed, or the choice changed. */
+  'midi-status': MidiStatus;
+  /** A key went down or up on the MIDI keyboard. */
+  'midi-note': MidiNoteEvent;
 }
 
 export interface Backend {
@@ -63,6 +67,13 @@ export interface Backend {
   audioDevices(host: string): Promise<AudioDevices>;
   audioGetConfig(): Promise<AudioStatus>;
   audioSetConfig(cfg: AudioConfig): Promise<AudioStatus>;
+  /** MIDI input ports the OS lists right now. */
+  midiListDevices(): Promise<MidiDevice[]>;
+  /** Choose the MIDI keyboard (null = none) and open it. Saved with the audio settings and reopened at startup. */
+  midiSelectDevice(id: string | null): Promise<MidiStatus>;
+  midiStatus(): Promise<MidiStatus>;
+  /** Which channel (instrument) the keyboard plays (null = the first pitched channel). With a track armed and transport recording, played notes land as a pattern clip on that track. */
+  midiSetTarget(channel: Id | null): Promise<MidiStatus>;
   libraryList(): Promise<LibraryList>;
   libraryInstall(id: string): Promise<void>;
   libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]>;
@@ -170,6 +181,10 @@ export function tauriBackend(): Backend {
     audioGetConfig: () => invoke('audio_get_config'),
     // Sent both as `config` and flattened, so either command signature deserialises it.
     audioSetConfig: cfg => invoke('audio_set_config', { config: cfg, ...cfg }),
+    midiListDevices: () => invoke('midi_list_devices'),
+    midiSelectDevice: id => invoke('midi_select_device', { id }),
+    midiStatus: () => invoke('midi_status'),
+    midiSetTarget: channel => invoke('midi_set_target', { channel }),
     libraryList: () => invoke('library_list'),
     libraryInstall: id => invoke('library_install', { id }),
     libraryFiles: q => invoke('library_files', { kit: q.kit ?? null, folder: q.folder ?? null }),

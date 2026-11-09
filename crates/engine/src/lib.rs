@@ -1,6 +1,7 @@
 //! `wave-engine` — everything WAVE does with sound, independent of any window or device.
 
 pub mod catalog;
+pub mod midi;
 pub mod comp;
 pub mod content;
 pub mod demo;

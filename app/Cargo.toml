@@ -28,6 +28,7 @@ wave-engine.workspace = true
 wave-rmvpe.workspace = true
 wave-audio-io.workspace = true
 wave-session.workspace = true
+wave-midi-in.workspace = true
 wave-cli = { path = "../crates/cli" }
 wave-vst3 = { path = "../crates/vst3-host" }
 wave-plugin-windows = { path = "../crates/plugin-windows" }
