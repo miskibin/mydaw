@@ -11,7 +11,7 @@ import { snapFloor, snapRes, snapRound } from '../lib/snap';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { peaksVersion } from '../state/peaks';
-import { allocId, S, srcLenBeats, srcOf } from '../state/store';
+import { allocId, projVersion, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -91,19 +91,14 @@ export function Playlist() {
   createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; S.project.loop?.a; S.project.loop?.b; peaksVersion(); scroll(); cw(); ch(); dirtyGrid = true; });
   createEffect(() => { for (const _ of U.sel) void _; dirtyGrid = true; });
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
-  createEffect(() => { for (const c of S.project.clips) { c.start; c.len; c.track; c.offset; c.muted; c.gain; c.ref; c.kind; c.norm; c.rev; c.tune; } dirtyGrid = true; });
-  createEffect(() => { for (const c of S.project.clips) { c.fadeIn; c.fadeOut; } dirtyFade = true; });
+  // clips, comps, automations, patterns, sources: one project-version signal, not a
+  // subscription to every field of every item (that cost ~7 ms per clip move on a big song)
+  createEffect(() => { projVersion(); dirtyGrid = true; dirtyFade = true; });
   createEffect(() => {
-    for (const cp of S.project.comps ?? []) { cp.name; cp.xfade; for (const t of cp.takes) { t.name; t.start; t.len; t.ref; t.offset; } for (const r of cp.regions) { r.take; r.from; r.to; r.xfade; } }
     for (const k in S.audition) void S.audition[k];
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
   });
-  createEffect(() => { for (const a of S.project.automations ?? []) { a.color; a.name; for (const q of a.points) { q.t; q.v; } } U.autoEdit; autoHover(); dirtyGrid = true; });
-  createEffect(() => {
-    for (const p of S.project.patterns) { p.name; p.color; p.len; for (const n of p.notes) { n.step; n.len; n.p; } }
-    for (const s of S.project.sources) { s.name; s.color; s.dur; }
-    dirtyGrid = true;
-  });
+  createEffect(() => { U.autoEdit; autoHover(); dirtyGrid = true; });
   createEffect(() => { U.bw; U.start; S.project.loop?.a; S.project.loop?.b; scroll(); cw(); dirtyRuler = true; });
 
   const offsets = () => {

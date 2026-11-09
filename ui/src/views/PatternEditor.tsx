@@ -16,7 +16,7 @@ import {
   deleteChannel, newPattern, openPattern, patFront, patOp, playStep, previewPattern, putNotes, selectChannel, setBars, setChannel,
   setView, togglePreview, toggleChanMute, toggleChanSolo, patPlayhead,
 } from '../state/pattern';
-import { S } from '../state/store';
+import { projVersion, S } from '../state/store';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
@@ -145,7 +145,8 @@ function useSize(el: () => HTMLElement | undefined) {
 /** Bumped when anything the canvases show changes (pattern notes, channels, theme). */
 function useDataVersion() {
   const [v, setV] = createSignal(0);
-  createEffect(() => { JSON.stringify(curPat()); JSON.stringify(channels()); theme.epoch; setV(x => x + 1); });
+  // projVersion bumps on every project change: no deep JSON walk of a 2000-note pattern per edit
+  createEffect(() => { projVersion(); curPat(); channels(); theme.epoch; setV(x => x + 1); });
   return v;
 }
 

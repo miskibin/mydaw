@@ -6,7 +6,7 @@
 import { be } from '../api/backend';
 import type { Clip, Op, StateDto } from '../api/types';
 import { setGestureProbe } from './peaks';
-import { applyLocal, replaceState, S } from './store';
+import { applyLocal, replaceMeta, replaceState, S } from './store';
 import { say } from './ui';
 
 let inflight = 0;          // queued/unanswered mutating requests
@@ -34,13 +34,37 @@ export function onStateEvent(dto: StateDto) {
     return;
   }
   if (dto.revision < lastReplyRev) return; // older than our last edit
-  replaceState(dto);
+  if (dto.revision === lastReplyRev) { replaceMeta(dto); scheduleReconcile(dto); return; }
+  replaceState(dto); reconciledRev = dto.revision;
 }
+
+let reconciledRev = -1; // project revision last reconciled in full
 
 function settle() {
   if (inflight > 0 || gestures > 0 || !stash) return;
   const s = stash; stash = null;
-  if (s.revision >= lastReplyRev && s.revision >= S.revision) replaceState(s);
+  if (s.revision < lastReplyRev || s.revision < S.revision) return;
+  // The engine state is exactly the result of our own last batch, which is already applied
+  // locally: take the cheap fields now and reconcile the whole project when the UI is idle
+  // (on a big song the reconcile takes ~30 ms and stalled every edit).
+  if (s.revision === lastReplyRev) { replaceMeta(s); scheduleReconcile(s); }
+  else { replaceState(s); reconciledRev = s.revision; }
+}
+
+let idleDto: StateDto | null = null;
+const idle: (cb: () => void) => void = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback
+  ? cb => (globalThis as unknown as { requestIdleCallback: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback(cb, { timeout: 1500 })
+  : cb => setTimeout(cb, 200);
+function scheduleReconcile(dto: StateDto) {
+  if (dto.revision === reconciledRev) return; // e.g. play/stop: the project did not change
+  const first = !idleDto; idleDto = dto;
+  if (!first) return;
+  idle(() => {
+    const d = idleDto; idleDto = null;
+    // a newer edit or gesture since then: its own state will settle later
+    if (!d || inflight > 0 || gestures > 0 || d.revision !== lastReplyRev) return;
+    replaceState(d); reconciledRev = d.revision;
+  });
 }
 
 const noteRev = (r: unknown) => { const v = (r as { revision?: number } | null)?.revision; if (typeof v === 'number') lastReplyRev = Math.max(lastReplyRev, v); };
