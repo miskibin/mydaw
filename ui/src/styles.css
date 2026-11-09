@@ -123,6 +123,8 @@ a { color: var(--blue); }
 /* ---------- playlist ---------- */
 .plwrap { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
 .plscroll { flex: 1; min-width: 0; min-height: 0; overflow: auto; position: relative; background: var(--bg2); }
+/* the overview bar on top replaces the native horizontal scrollbar (vertical one stays) */
+.plscroll::-webkit-scrollbar:horizontal { height: 0; }
 /* FL-style overview scrollbar on top: minimap of the song + a wide, easy-to-grab thumb */
 .ploverview { flex: none; height: 22px; padding: 2px 14px 2px 0; background: var(--bg1); border-bottom: 1px solid var(--bg0); box-sizing: border-box; }
 .ploverview .ovtrack { position: relative; height: 18px; border-radius: 4px; background: var(--bg3); overflow: hidden; }
