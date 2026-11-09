@@ -424,12 +424,15 @@ pub struct TypeDef {
 pub struct Catalog {
     pub types: BTreeMap<FxKind, TypeDef>,
     pub presets: BTreeMap<FxKind, Vec<Preset>>,
+    /// The built-in synth (Channel Rack channels of kind `synth`): its parameter sections and presets.
+    pub synth: crate::poly::SynthCatalog,
 }
 
 pub fn catalog() -> Catalog {
     Catalog {
         types: BUILTIN.iter().map(|&k| (k, TypeDef { name: type_name(k), params: params(k) })).collect(),
         presets: BUILTIN.iter().map(|&k| (k, presets(k))).collect(),
+        synth: crate::poly::catalog(),
     }
 }
 

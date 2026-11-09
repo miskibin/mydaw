@@ -9,6 +9,7 @@ use std::time::Instant;
 use crate::model::Id;
 use crate::processor::{ParamBlock, ProcessCtx, Processor, METERS};
 use crate::sources::Audio;
+use crate::poly::{Patch, SynthBank, SynthInst};
 use crate::synth::{Dest, VoiceKind, VoicePool};
 
 pub const MAX_INSERTS: usize = 128;
@@ -436,6 +437,14 @@ pub enum Cmd {
     MidiBend(f32),
     /// Release every live note and the pedal.
     MidiOff,
+    /// Live MIDI mod wheel (CC 1), 0..1.
+    MidiMod(f32),
+    /// A synth channel's instance, made off the audio thread (replaces one of the same channel).
+    SynthAdd(Box<SynthInst>),
+    /// New parameter values of a synth channel.
+    SynthPatch { chan: Id, patch: Box<Patch> },
+    /// A synth channel is gone.
+    SynthRemove(Id),
 }
 
 pub enum Garbage {
@@ -443,6 +452,8 @@ pub enum Garbage {
     Timeline(Box<Timeline>),
     Mix(Box<MixState>),
     Preview(Box<Preview>),
+    Synth(Box<SynthInst>),
+    Patch(Box<Patch>),
 }
 
 pub struct Taps {
@@ -461,6 +472,8 @@ pub struct Rt {
     graph: Box<Graph>,
     timeline: Box<Timeline>,
     voices: VoicePool,
+    /// Synth channel instances.
+    synths: SynthBank,
     click: Vec<f32>,
     tmp_l: Vec<f32>,
     tmp_r: Vec<f32>,
@@ -506,6 +519,7 @@ impl Rt {
             graph: Box::new(Graph::new(vec![], vec![], None, max_block)),
             timeline: Box::new(Timeline { bpm: 120.0, clips: vec![], pats: vec![], chans: vec![], autos: vec![], loop_range: None, song_end: 4.0 }),
             voices: VoicePool::new(sr),
+            synths: SynthBank::default(),
             click: vec![0.0; max_block],
             tmp_l: vec![0.0; max_block],
             tmp_r: vec![0.0; max_block],
@@ -669,6 +683,7 @@ impl Rt {
                 }
                 Cmd::Play { from, count_in, rec, rec_loop } => {
                     self.voices.clear();
+                    self.synths.stop_all();
                     // the song and the pattern preview are exclusive (FL's SONG / PAT)
                     self.set_pat_play(None);
                     self.beat = from - count_in;
@@ -722,7 +737,7 @@ impl Rt {
                         let ch = &tl.chans[i];
                         let home = pattern.and_then(|id| tl.pats.iter().find(|p| p.id == id)).and_then(|p| p.home);
                         let ins = ch.insert.or(home).unwrap_or(ch.home);
-                        self.voices.note(ch, i, Dest::Insert(ins), 0, len, key, vel);
+                        play(&mut self.voices, &mut self.synths, ch, i, Dest::Insert(ins), 0, len, key, vel, self.sr);
                     }
                 }
                 Cmd::MidiNote { chan, key, vel, on, ins } => {
@@ -731,15 +746,48 @@ impl Rt {
                         if let Some(i) = tl.chans.iter().position(|c| c.id == chan) {
                             let ch = &tl.chans[i];
                             let ins = ch.insert.or(ins).unwrap_or(ch.home);
-                            self.voices.note_on(ch, i, Dest::Insert(ins), key, vel);
+                            if ch.kind == VoiceKind::Synth {
+                                if let Some(s) = self.synths.get(chan) {
+                                    s.key_down(key, vel, Dest::Insert(ins));
+                                }
+                            } else {
+                                self.voices.note_on(ch, i, Dest::Insert(ins), key, vel);
+                            }
                         }
                     } else {
                         self.voices.note_off(chan, key);
+                        self.synths.key_up(chan, key);
                     }
                 }
-                Cmd::MidiSustain(down) => self.voices.sustain(down),
-                Cmd::MidiBend(st) => self.voices.set_bend(st),
-                Cmd::MidiOff => self.voices.all_notes_off(),
+                Cmd::MidiSustain(down) => {
+                    self.voices.sustain(down);
+                    self.synths.sustain(down);
+                }
+                Cmd::MidiBend(st) => {
+                    self.voices.set_bend(st);
+                    self.synths.set_bend(st);
+                }
+                Cmd::MidiOff => {
+                    self.voices.all_notes_off();
+                    self.synths.all_notes_off();
+                }
+                Cmd::MidiMod(v) => self.synths.set_wheel(v),
+                Cmd::SynthAdd(s) => {
+                    if let Some(old) = self.synths.add(s) {
+                        self.trash(Garbage::Synth(old));
+                    }
+                }
+                Cmd::SynthPatch { chan, patch } => {
+                    if let Some(s) = self.synths.get(chan) {
+                        s.set_patch(&patch);
+                    }
+                    self.trash(Garbage::Patch(patch));
+                }
+                Cmd::SynthRemove(id) => {
+                    if let Some(old) = self.synths.remove(id) {
+                        self.trash(Garbage::Synth(old));
+                    }
+                }
                 Cmd::PatPlay(id) => {
                     if id.is_some() && self.playing {
                         self.stop(false);
@@ -782,7 +830,7 @@ impl Rt {
                 }
                 let ins = ch.insert.or(pat.home).unwrap_or(ch.home);
                 let delay = ((nb - b0) / bps) as u32;
-                self.voices.note(ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel);
+                play(&mut self.voices, &mut self.synths, ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel, self.sr);
             }
         }
         self.pat_beat = b1.rem_euclid(pat.len);
@@ -896,6 +944,7 @@ impl Rt {
         self.shared.heard.store(heard.to_bits(), Relaxed);
         self.schedule_pattern(n, bps, spb);
         self.voices.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &mut self.click[..n], &self.timeline.chans);
+        self.synths.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &self.timeline.chans, bpm);
 
         // ---- input level + monitoring
         // low-latency monitoring: the armed track's own insert (not the master) takes the
@@ -1096,7 +1145,7 @@ impl Rt {
                                         _ => continue,
                                     },
                                 };
-                                self.voices.note(ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, vel);
+                                play(&mut self.voices, &mut self.synths, ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, vel, self.sr);
                             }
                         }
                     }
@@ -1146,6 +1195,19 @@ impl Rt {
                 }
             }
         }
+    }
+}
+
+/// Starts a note on a channel: the voice pool for built-ins and samplers, the channel's
+/// synth instance for synth channels. `len_s` in seconds.
+#[allow(clippy::too_many_arguments)]
+fn play(voices: &mut VoicePool, synths: &mut SynthBank, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, sr: f32) {
+    if ch.kind == VoiceKind::Synth {
+        if let Some(s) = synths.get(ch.id) {
+            s.note(delay, (len_s.max(0.0) * sr) as u32, key, vel, dest);
+        }
+    } else {
+        voices.note(ch, idx, dest, delay, len_s, key, vel);
     }
 }
 

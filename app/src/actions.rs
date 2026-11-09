@@ -296,6 +296,7 @@ fn channel_json(p: &wave_engine::Project, c: &wave_engine::Channel) -> Value {
     let (kind, what) = match &c.src {
         ChannelSrc::Inst { inst } => ("inst", json!({ "inst": inst })),
         ChannelSrc::Sample { source } => ("sample", json!({ "source": source, "sourceName": p.sources.iter().find(|s| s.id == *source).map(|s| s.name.clone()) })),
+        ChannelSrc::Synth { synth } => ("synth", json!({ "preset": synth.preset })),
     };
     let mut v = json!({
         "id": c.id, "index": p.channels.iter().position(|x| x.id == c.id), "name": c.name, "kind": kind,
@@ -340,6 +341,35 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         let ch = Channel { name: s.name.clone(), color: s.color.clone(), src: ChannelSrc::Sample { source: src }, root: wave_engine::SAMPLE_ROOT, ..Channel::builtin(id, Inst::Kick) };
         added = Some(id);
         ops.push(Op::PutChannel { channel: ch, index: None });
+    }
+    if let Some(name) = arg(a, "synth").and_then(Value::as_str) {
+        // a synth channel playing a factory preset ("" = the blank patch)
+        let id = p.next_id + ops.len() as u64;
+        let synth = if name.is_empty() { wave_engine::SynthState::default() } else { wave_engine::poly::preset_state(name).ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))? };
+        let bass = wave_engine::poly::presets::all().iter().any(|x| x.name == name && matches!(x.category, "808" | "Bas"));
+        let label = if name.is_empty() { "Synth".to_string() } else { name.to_string() };
+        let ch = Channel { name: label, color: "#9b7cf8".into(), src: ChannelSrc::Synth { synth }, root: if bass { 36 } else { 60 }, ..Channel::builtin(id, Inst::Kick) };
+        added = Some(id);
+        ops.push(Op::PutChannel { channel: ch, index: None });
+    }
+    if let (Some(v), Some(name)) = (arg(a, "ch"), arg(a, "preset").and_then(Value::as_str)) {
+        // load a factory preset into a synth channel
+        let mut c = find_channel(&p, v)?.clone();
+        if !matches!(c.src, ChannelSrc::Synth { .. }) {
+            return Err(format!("channel `{}` is not a synth", c.name));
+        }
+        c.src = ChannelSrc::Synth { synth: wave_engine::poly::preset_state(name).ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))? };
+        ops.push(Op::PutChannel { channel: c, index: None });
+    }
+    if let (Some(v), Some(param)) = (arg(a, "ch"), arg(a, "param").and_then(Value::as_str)) {
+        // one synth knob
+        let mut c = find_channel(&p, v)?.clone();
+        let value = opt_f64(a, "value").ok_or("`value` is required")?;
+        let ChannelSrc::Synth { synth } = &mut c.src else { return Err(format!("channel `{}` is not a synth", c.name)) };
+        let i = wave_engine::poly::params::index_of(param).ok_or(format!("the synth has no parameter `{param}` (see `wave catalog`)"))?;
+        synth.params.insert(param.to_string(), wave_engine::poly::params::clamp(i, value) as f64);
+        synth.preset = None;
+        ops.push(Op::PutChannel { channel: c, index: None });
     }
     if let Some(v) = arg(a, "remove") {
         ops.push(Op::RemoveChannel { id: find_channel(&p, v)?.id });

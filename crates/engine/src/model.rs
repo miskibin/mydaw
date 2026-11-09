@@ -266,6 +266,19 @@ pub enum ChannelSrc {
     Inst { inst: Inst },
     /// A one-shot sampler playing a project source, pitched by the note (`root` = original pitch).
     Sample { source: Id },
+    /// The built-in polyphonic synthesizer (see `crate::poly`).
+    Synth { #[serde(default)] synth: SynthState },
+}
+
+/// A synth channel's sound: parameter values by catalog id (`fx_catalog().synth`). Missing ids
+/// play their defaults, unknown ids are ignored. `preset` names the factory preset the values
+/// came from (display only; `None` once edited or for a blank patch).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SynthState {
+    #[serde(default)]
+    pub preset: Option<String>,
+    #[serde(default)]
+    pub params: BTreeMap<String, f64>,
 }
 
 /// A Channel Rack row. Channels are global to the project (like FL Studio): every pattern
@@ -315,7 +328,7 @@ impl Channel {
     }
     /// True for channels whose notes have a meaningful pitch (piano roll).
     pub fn pitched(&self) -> bool {
-        matches!(self.src, ChannelSrc::Sample { .. } | ChannelSrc::Inst { inst: Inst::Bass })
+        matches!(self.src, ChannelSrc::Sample { .. } | ChannelSrc::Synth { .. } | ChannelSrc::Inst { inst: Inst::Bass })
     }
 }
 

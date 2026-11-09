@@ -21,7 +21,7 @@ stdout is only JSON (`--pretty` to indent); messages go to stderr. Exit codes:
 | --- | --- |
 | `wave status` | transport, revision, file, audio device, CLI path |
 | `wave context` | summary: tracks (index, insert, volume, clip count), inserts with effects and parameters, patterns, channels, sources, `nextId` |
-| `wave channels` | the Channel Rack: id, name, `inst`/`sample` (+ source), volume, pan, mute/solo, mixer insert (`null` = the clip's track), root key, note count |
+| `wave channels` | the Channel Rack: id, name, `inst`/`sample` (+ source)/`synth` (+ preset), volume, pan, mute/solo, mixer insert (`null` = the clip's track), root key, note count |
 | `wave pattern [--id N]` | a pattern as one step string per channel (`x` full velocity, `1`–`9` = 10–90 %, `.` empty, a space every beat) plus `notes` for melodic rows, bars, swing %, hidden notes past the end |
 | `wave context --full` | the whole project JSON (every clip, note, parameter) |
 | `wave catalog` | effect types, parameter ids/ranges/units, presets, command list |
@@ -71,6 +71,9 @@ step). Each edit is one undo step.
 wave channels                                     # ids, kinds, routing
 wave channels --add clap                          # a built-in channel (kick, clap, hat, bass)
 wave channels --sample 1001                       # a sampler channel playing source 1001
+wave channels --synth "808 Czysty"                # a synth channel with a factory preset ("" = blank patch)
+wave channels --ch 1005 --preset "Pad Ciepły"     # load a synth preset (ids/names in `wave catalog` → effects.synth)
+wave channels --ch 1005 --param flt_cutoff --value 900   # one synth knob
 wave channels --remove 1004                       # (or a name) — also removes its notes
 wave pattern --id 2                               # step strings per channel
 wave pattern --id 2 --ch hat --steps "x.x. x.x. x.x5 x.x9"     # replace the hat's notes

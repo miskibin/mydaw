@@ -62,8 +62,15 @@ export interface Insert {
 export type Inst = 'kick' | 'clap' | 'hat' | 'bass';
 /** MIDI key at which a sampler plays its sample unpitched (C5 in FL Studio's naming, C4 here). */
 export const SAMPLE_ROOT = 60;
-/** What a channel plays: a built-in instrument, or a one-shot sample of a project source. */
-export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id };
+/**
+ * A synth channel's sound: parameter values by id (`Catalog.synth`; a missing id plays its default,
+ * the engine rejects unknown ids). `preset`: the factory preset the values came from, for display
+ * (null once a knob was changed, or for a blank patch). Parameter edits are `putChannel` with the
+ * new `synth`; they take the engine's fast path (no timeline rebuild) and glide on held notes.
+ */
+export interface SynthState { preset: string | null; params: Record<string, number> }
+/** What a channel plays: a built-in instrument, a one-shot sample of a project source, or the built-in synth. */
+export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id } | { kind: 'synth'; synth: SynthState };
 /**
  * A Channel Rack row, global to the project (every pattern can have notes for it).
  * `vol` fader position (0.7937 = 0 dB), `pan` −1..1, `insert` null = the clip's track insert,
@@ -267,9 +274,16 @@ export interface StateDto {
 export interface ParamDef { id: string; label: string; min: number; max: number; def: number; unit: string; log: boolean; options?: string[] }
 export interface TypeDef { name: string; params: ParamDef[] }
 export interface Preset { name: string; params: Record<string, number>; bands?: EqBand[]; beats?: number }
+/** One panel section of the synth (ids in order: osc1, osc2, subnoise, unison, filter, ampenv, modenv, lfo1, lfo2, matrix, voice, fx). */
+export interface SynthSection { id: string; name: string; params: ParamDef[] }
+/** A factory synth preset: `params` is the complete parameter set (every id). */
+export interface SynthPreset { name: string; category: string; params: Record<string, number> }
+export interface SynthCatalog { sections: SynthSection[]; categories: string[]; presets: SynthPreset[] }
 export interface Catalog {
   types: Partial<Record<FxKind, TypeDef>>;
   presets: Partial<Record<FxKind, Preset[]>>;
+  /** The built-in synth (Channel Rack channels of kind `synth`). */
+  synth: SynthCatalog;
 }
 
 export interface AudioHost { id: string; name: string }
