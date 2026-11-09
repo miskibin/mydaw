@@ -425,11 +425,21 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
   autoVocalBusy = true;
   say('Auto wokal: analiza nagrania… (kilka sekund)');
   try {
-    const plan = await be().autoVocalPlan({ clipId, style });
+    // the rider (≈1.6 s look-ahead) is baked into the audio instead of living on the insert,
+    // so playback and monitoring get no extra delay; a clip that was baked before is not baked twice
+    const src = S.project.sources.find(x => x.id === c.ref);
+    const baked = !!src && / \(rider\)$/.test(src.name);
+    const plan = await be().autoVocalPlan({ clipId, style, bakeRider: true });
+    if (plan.riderBake && !baked) {
+      say('Auto wokal: wyrównuję głośność w nagraniu…');
+      await enqueue(() => be().bakeRider({ clipId, params: plan.riderBake!.params }));
+      await resync();
+    }
     // The chain leaves the vocal far under the limiter; bring it up to mix level in the limiter
     // (its gain + −1 dBTP ceiling): to sit under the beat when the plan knows it, else −18 LUFS.
     const makeup = Math.round(clamp(plan.trackGainDb ?? (-18 - plan.stages.lufsAfter), 0, 24) * 10) / 10;
     const types = new Set<string>(plan.chain.map(p => p.type));
+    types.add('rider'); // an old live rider would ride the vocal a second time
     const ops: Op[] = ins.fx.filter(f => types.has(f.type)).map(f => ({ op: 'removeFx', fxId: f.id }) as Op);
     for (const p of plan.chain) {
       const f = newFx(S.catalog, allocId(), p.type, S.project.bpm);
@@ -443,7 +453,7 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
     commit(ops, 'Auto wokal');
     setU({ mixSel: ins.id });
     const a = plan.analysis, st = plan.stages;
-    say('Auto wokal: ' + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
+    say('Auto wokal: ' + (plan.riderBake ? 'głośność wyrównana w nagraniu, ' : '') + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
       + ' · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
       + (a.key ? ' · tonacja ' + a.key.name : ' · bez tonacji (autotune wyłączony)')
       + (plan.warnings.length ? ' · ' + plan.warnings[0] : ''));
