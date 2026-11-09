@@ -168,6 +168,10 @@ export function Toolbar() {
       </select>
       <div data-drag class="dragfill" />
       <span data-drag class="projName" title={(S.path ?? 'Projekt niezapisany') + (S.dirty ? ' — niezapisane zmiany' : '')}>{projName()}<Show when={S.dirty}><span data-drag class="dirty">•</span></Show></span>
+      </div>
+      {/* right group sits outside the clipped .tbmain: on a narrow window the left side
+          gives way first, settings / mixer / export never disappear */}
+      <div class="tbright" data-drag>
       <button class="tbtn" classList={{ on: U.exportOpen }} onClick={() => setU('exportOpen', true)} title="Eksport do WAV (Ctrl+Shift+R)" aria-label="Eksport">
         <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} /><span class="lbl">Eksport</span>
       </button>

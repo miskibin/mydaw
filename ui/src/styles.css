@@ -452,7 +452,8 @@ select option { background: var(--bg4); color: var(--fg); }
 .toolbar > .tbmain > * { flex-shrink: 0; }
 .toolbar > .tbmain > .dragfill { flex-shrink: 1; }
 .toolbar > .tbmain > .projName { flex-shrink: 1; min-width: 0; }
-.toolbar.native > .tbmain { margin-top: 6px; margin-bottom: 6px; }
+.toolbar > .tbright { flex: none; display: flex; align-items: center; gap: 6px 8px; padding-left: 8px; }
+.toolbar.native > .tbmain, .toolbar.native > .tbright { margin-top: 6px; margin-bottom: 6px; }
 .toolbar.native > .tbmain > :not(.winbtns) { margin-top: 0; margin-bottom: 0; }
 .winbtns { display: flex; flex: 0 0 auto; flex-shrink: 0; align-self: stretch; margin-left: 4px; }
 /* one row at every width: text buttons turn into icons, then redundant controls drop out */

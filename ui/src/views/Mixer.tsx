@@ -1,4 +1,4 @@
-import { For, onCleanup, onMount, Show } from 'solid-js';
+import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { VOL_UNITY, type Fx, type Id, type Insert } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
 import { presetInfo } from '../lib/presets';
@@ -182,11 +182,17 @@ function FxSlot(props: { f: Fx; n: number; insId: Id }) {
 export function Mixer() {
   onMount(() => { const stop = addFrameTask(meterTask); onCleanup(stop); });
   const selIns = () => S.project.inserts.find(m => m.id === U.mixSel) ?? S.project.inserts[0];
-  const mixH = () => Math.round(Math.min(U.mixH, Math.max(170, window.innerHeight * 0.4)));
+  // One clamp for both the drag and the display: the old pair (drag up to innerHeight-200,
+  // show at most 40 %) let the stored height run past what was drawn, so the splitter
+  // stalled, then jumped, and the playlist above it jerked.
+  const [winH, setWinH] = createSignal(window.innerHeight);
+  onMount(() => { const r = () => setWinH(window.innerHeight); window.addEventListener('resize', r); onCleanup(() => window.removeEventListener('resize', r)); });
+  const fitH = (h: number) => clamp(h, 170, Math.max(170, winH() - 200));
+  const mixH = () => Math.round(fitH(U.mixH));
   const split = (e: PointerEvent) => {
     if (e.button !== 0) return; e.preventDefault();
-    const sy = e.clientY, h0 = U.mixH;
-    track(ev => setU('mixH', clamp(h0 - (ev.clientY - sy), 190, window.innerHeight - 200)), null, 'row-resize');
+    const sy = e.clientY, h0 = mixH();
+    track(ev => setU('mixH', Math.round(fitH(h0 - (ev.clientY - sy)))), null, 'row-resize');
   };
   return (
     <>
