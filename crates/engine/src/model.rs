@@ -106,6 +106,7 @@ pub enum FxKind {
     Tune,
     Denoise,
     Voice,
+    Rider,
     Vst3,
 }
 

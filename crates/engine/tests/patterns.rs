@@ -177,6 +177,11 @@ fn old_projects_migrate_and_render_like_before() {
                 fd.params = fm.params.clone();
                 fd.preset = fm.preset;
             }
+            // parameters added later (Comp "det") are absent from old files; they read as
+            // their default, which is the old behaviour
+            if fm.kind == FxKind::Comp && !fm.params.contains_key("det") {
+                fd.params.remove("det");
+            }
         }
     }
     assert_eq!(migrated, expected);

@@ -1,7 +1,7 @@
 // Commands shared by the toolbar, keyboard, menus and views.
 import { batch } from 'solid-js';
 import { be } from '../api/backend';
-import { VOL_UNITY, type BuiltinKind, type Clip, type Fx, type Id, type Insert, type Op, type Track } from '../api/types';
+import { VOL_UNITY, type AnyBuiltinKind, type Clip, type Fx, type Id, type Insert, type Op, type Track } from '../api/types';
 import { clampMove, duplicateSpan, insertTrackOps, moveClips, muteOps, pasteClips, sliceClip, TOTAL } from '../lib/clipOps';
 import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
@@ -229,7 +229,7 @@ export function fxOp(fx: Fx, insId?: Id): Op {
   const ins = insId ?? findFx(fx.id)?.m.id ?? 0;
   return { op: 'putFx', insertId: ins, fx: plain(fx) };
 }
-export function addFx(insId: Id, type: BuiltinKind, preset?: number) {
+export function addFx(insId: Id, type: AnyBuiltinKind, preset?: number) {
   if (!S.catalog) return;
   let f = newFx(S.catalog, allocId(), type, S.project.bpm);
   if (preset != null && preset > 0 && presetList(S.catalog, type)[preset]) f = loadPresetFx(S.catalog, f, preset, S.project.bpm);

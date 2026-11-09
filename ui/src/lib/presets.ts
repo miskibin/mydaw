@@ -1,5 +1,5 @@
 // Preset resolution and matching against the catalog from `fx_catalog`.
-import type { BuiltinKind, Catalog, EqBand, Fx, FxKind, Id, ParamDef, Preset } from '../api/types';
+import type { AnyBuiltinKind, Catalog, EqBand, Fx, FxKind, Id, ParamDef, Preset } from '../api/types';
 
 export interface ResolvedPreset { params: Record<string, number>; bands?: EqBand[] }
 
@@ -70,7 +70,7 @@ export function defaultBands(): EqBand[] {
 }
 
 /** A fresh built-in effect loaded with its first preset (catalog.rs `new_fx`). */
-export function newFx(cat: Catalog, id: Id, type: BuiltinKind, bpm: number): Fx {
+export function newFx(cat: Catalog, id: Id, type: AnyBuiltinKind, bpm: number): Fx {
   let fx: Fx = { id, type, bypass: false, preset: null, params: defaultParams(cat, type) };
   if (type === 'eq') fx.bands = defaultBands();
   if (presetList(cat, type).length) fx = loadPreset(cat, fx, 0, bpm);

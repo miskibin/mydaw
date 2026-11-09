@@ -12,6 +12,8 @@ pub mod ops;
 pub mod pitch;
 pub mod processor;
 pub mod reference;
+pub mod rider;
+pub mod autovocal;
 pub mod singer;
 
 pub use model::*;

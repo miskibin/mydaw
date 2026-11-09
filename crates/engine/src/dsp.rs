@@ -42,6 +42,7 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
         FxKind::Tune => Box::new(crate::vocal::Tune::default()),
         FxKind::Denoise => Box::new(crate::denoise::Denoise::default()),
         FxKind::Voice => Box::new(crate::vocal::Voice::default()),
+        FxKind::Rider => Box::new(crate::rider::Rider::default()),
         FxKind::Vst3 => return None,
     })
 }
@@ -402,10 +403,15 @@ pub struct Comp {
     env_db: f32,
     gr: f32,
     knee: f32,
+    /// RMS detection (~10 ms mean square) instead of peak: levels a voice by its body
+    /// rather than its transients (the auto-vocal slow stage).
+    rms: bool,
+    ms: f32,
+    k_ms: f32,
 }
 impl Default for Comp {
     fn default() -> Self {
-        Self { sr: 48000.0, thr: -18.0, ratio: 4.0, att: 0.0, rel: 0.0, makeup: 1.0, env_db: 0.0, gr: 0.0, knee: 6.0 }
+        Self { sr: 48000.0, thr: -18.0, ratio: 4.0, att: 0.0, rel: 0.0, makeup: 1.0, env_db: 0.0, gr: 0.0, knee: 6.0, rms: false, ms: 0.0, k_ms: 0.0 }
     }
 }
 impl Comp {
@@ -435,12 +441,19 @@ impl Processor for Comp {
         self.att = (-1.0 / (self.sr * v[2].max(0.05) / 1000.0)).exp();
         self.rel = (-1.0 / (self.sr * v[3].max(1.0) / 1000.0)).exp();
         self.makeup = db_to_gain(v[4]);
+        self.rms = v[5] > 0.5;
+        self.k_ms = 1.0 - (-1.0 / (self.sr * 0.005)).exp();
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
         let mut gr_peak = 0f32;
         for i in 0..l.len() {
-            let lvl = l[i].abs().max(r[i].abs());
-            let x = gain_to_db(lvl).max(-120.0);
+            let x = if self.rms {
+                let p = 0.5 * (l[i] * l[i] + r[i] * r[i]);
+                self.ms = flush(self.ms + (p - self.ms) * self.k_ms);
+                (10.0 * self.ms.max(1e-12).log10()).max(-120.0)
+            } else {
+                gain_to_db(l[i].abs().max(r[i].abs())).max(-120.0)
+            };
             let target = self.curve(x);
             // envelope on the gain reduction: attack when reducing more
             let k = if target < self.env_db { self.att } else { self.rel };
@@ -455,10 +468,12 @@ impl Processor for Comp {
     fn reset(&mut self) {
         self.env_db = 0.0;
         self.gr = 0.0;
+        self.ms = 0.0;
     }
     fn tail_samples(&self) -> Option<usize> {
-        // silent in = silent out; what has to settle is the gain-reduction envelope
-        Some(decay_samples(self.rel, 17.0))
+        // silent in = silent out; what has to settle is the gain-reduction envelope (and,
+        // in RMS mode, the mean-square detector: flushed to zero within ~0.5 s)
+        Some(decay_samples(self.rel, 17.0) + if self.rms { (self.sr * 0.5) as usize } else { 0 })
     }
     fn gain_reduction_db(&self) -> f32 {
         self.gr
