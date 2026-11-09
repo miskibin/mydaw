@@ -201,7 +201,7 @@ type AudioStatus = AudioConfig & { running: boolean; actualRate: number; actualB
 
 ```
 u32 magic = 0x54564157 ("WAVT")   u32 seq
-f64 beat            // playhead in beats; negative during count-in
+f64 beat            // playhead in beats as heard (Shared::heard_beat: rendered beat − playback latency); negative during count-in
 u8  flags           // bit0 playing, bit1 recording, bit2 previewing
 u8  pad, u16 pad
 f32 inLevel         // input peak since last frame (linear)
@@ -284,6 +284,33 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
   chain). `finalize_take` drops that many frames from the front; pass marks
   stay put, since they already sit on the heard loop boundary. The last
   *latency* of a take (still in flight at Stop) is not captured.
+* **Latency while recording.** Plugin delay compensation (PDC) delays every
+  non-master insert to the slowest one (`pdc`), so one long look-ahead effect
+  (the vocal Rider, ≈ 1.6 s on Long) delays all playback. Live input must not
+  wait for it: **low-latency monitoring** is on whenever monitoring is on, a
+  track is armed, the device delivers input and the track's insert is not the
+  master. That insert then (a) skips its effects with latency (look-ahead
+  Rider, tuner, denoiser, limiter, de-esser: bypassed for monitoring only, the
+  take itself is always the raw input), (b) runs its PDC delay of `pdc` frames
+  *before* its chain, on the playback summed into it, and (c) adds the live
+  input (× track gain, muted with the track) after that delay. So the voice
+  reaches the master with no PDC and no look-ahead, while the insert's own
+  clips and patterns still come out `pdc` late like every other insert. The
+  master chain's own latency (a few ms of limiter look-ahead) still applies to
+  the voice. Switching the monitored insert clears its delay lines (a short
+  gap, never stale audio). `playback_latency` does not depend on monitoring,
+  so toggling it never moves the playback or the take alignment.
+* The **metronome and count-in click** run through a delay line of the
+  playback latency (`Graph::with_latency`, allocated with the graph), so they
+  sound on the beats of the music; the **playhead** in telemetry is
+  `Shared::heard_beat` (rendered beat − playback latency, held at the run's
+  start until sound comes out, wrapped back into the loop after a wrap).
+* A take's `skip` is fixed at its start, so **mixer changes that would change
+  the playback latency during a take are deferred** (`Core::graph_deferred`):
+  the audio thread keeps its graph (fader/param changes still apply) and the
+  new graph is sent when the take ends. A parameter change that alters an
+  effect's latency (e.g. the Rider's look-ahead) rebuilds the graph like a
+  bypass toggle, so PDC always matches the parameters.
 * **Punch-in**: turning `rec` on while playing (with an armed track) starts a
   take at the playhead (`Cmd::PunchIn`; the audio thread reports the exact beat
   in `Shared::rec_start`); with a loop set it records in passes like loop

@@ -97,6 +97,8 @@ struct RecBuf {
     /// Frames of input to drop from the front so the take lines up with what the
     /// performer heard: device round trip + plugin delay compensation of the playback.
     skip: usize,
+    /// The mixer's playback latency `skip` was taken with: the graph keeps it until the take ends.
+    pdc: usize,
     /// Loop range when recording in passes.
     lap: Option<(f64, f64)>,
     sr: u32,
@@ -182,6 +184,9 @@ struct Core {
     fx_errors: HashMap<Id, String>,
     wires: Option<Wires>,
     take: Option<RecBuf>,
+    /// A mixer change that would alter the playback latency arrived during a take: the
+    /// audio thread keeps the old graph until the take ends (its `skip` stays right).
+    graph_deferred: bool,
     watch: Vec<Id>,
     /// Comp id → take played instead of the comp (live only: not saved, not undone).
     audition: HashMap<Id, Id>,
@@ -261,6 +266,7 @@ impl Engine {
                 fx_errors: HashMap::new(),
                 wires: None,
                 take: None,
+                graph_deferred: false,
                 watch: vec![],
                 audition: HashMap::new(),
                 midi: MidiState::default(),
@@ -597,8 +603,9 @@ impl Engine {
     fn new_take(&self, c: &Core, track: usize, start: f64, lap: Option<(f64, f64)>) -> Option<RecBuf> {
         let w = c.wires.as_ref()?;
         let sr = w.sr as u32;
-        let skip = self.shared().io_latency() as usize + playback_latency(&c.project, w.sr);
-        Some(RecBuf { track, start, skip, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
+        let pdc = playback_latency(&c.project, w.sr);
+        let skip = self.shared().io_latency() as usize + pdc;
+        Some(RecBuf { track, start, skip, pdc, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
     }
 
     pub fn watch_fx(&self, ids: &[Id]) {
@@ -1282,7 +1289,11 @@ impl Engine {
         self.refresh_midi(c);
         let Some(w) = c.wires.as_ref() else { return };
         let (sr, max_block) = (w.sr, w.max_block);
-        if d.mixer {
+        // a take's alignment assumes the latency at its start: hold latency changes back
+        let defer = d.mixer && c.take.as_ref().is_some_and(|t| t.pdc != playback_latency(&c.project, sr));
+        c.graph_deferred |= defer;
+        if d.mixer && !defer {
+            c.graph_deferred = false;
             let now: HashSet<Id> = c.project.inserts.iter().flat_map(|m| m.fx.iter().map(|f| f.id)).collect();
             for gone in c.live_fx.difference(&now).copied().collect::<Vec<_>>() {
                 self.factory.release(gone);
@@ -1294,7 +1305,7 @@ impl Engine {
             c.live_fx = graph.inserts.iter().flat_map(|i| i.fx.iter().map(|s| s.id)).collect();
             c.sent_params = c.project.inserts.iter().flat_map(|m| m.fx.iter()).map(|f| (f.id, fx_send(f))).collect();
             send(c, Cmd::Graph(Box::new(graph)));
-        } else if d.params {
+        } else if d.params || defer {
             send(c, Cmd::Mix(Box::new(mix_state(&c.project))));
             let changed: Vec<(Id, (Option<ParamBlock>, f32))> = c
                 .project
@@ -1390,6 +1401,9 @@ impl Engine {
             t.resolve_start(&shared);
         }
         self.finalize_take(&mut c);
+        if c.graph_deferred {
+            self.sync(&mut c, Dirty { timeline: false, mixer: true, params: true });
+        }
     }
 
     fn finalize_take(&self, c: &mut Core) {
@@ -1908,7 +1922,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
         .zip(track_state)
         .map(|(t, (gain, on))| TrackRt { insert: p.inserts.iter().position(|m| m.id == t.insert).unwrap_or(0), gain, on })
         .collect();
-    Graph::new(inserts, tracks, monitor_track(p), max_block)
+    Graph::new(inserts, tracks, monitor_track(p), max_block).with_latency(max_lat, lat.first().copied().unwrap_or(0))
 }
 
 /// `takes`: loaded audio by source id of every comp take and sampler channel.
