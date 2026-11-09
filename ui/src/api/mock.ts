@@ -8,12 +8,11 @@ import { applyAll } from '../lib/applyOps';
 import { landTakes, takeEnd } from '../lib/comp';
 import { eqCurve } from '../lib/eq';
 import { clamp, dbg } from '../lib/format';
-import { midiToHz, noteAt, scaleMask, snapNote } from '../lib/pitch';
+import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitch';
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, Catalog, Clip, ExportResult, Fx, Id, LibFile, LibraryList, Op, PitchAnalysis, Project, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
-  MusicAnalysis,
+  AudioConfig, AudioStatus, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 
@@ -548,7 +547,34 @@ export class MockBackend implements Backend {
     const s = this.srcMeta.get(c.ref) ?? this.p.sources.find(x => x.id === c.ref) as MockSource | undefined;
     if (!s) throw new Error('audio not loaded');
     const v = synthVocal(s.seed ?? s.id, s.dur);
-    return structuredClone({ rate: v.rate, curve: v.curve, levels: v.levels, notes: v.notes });
+    return structuredClone({ rate: v.rate, curve: v.curve, levels: v.levels, notes: v.notes, confidence: v.curve.map(x => (x == null ? 0 : 0.9)), backend: this.f0Backend });
+  }
+  async pitchTarget(clipId: Id, reference?: RefTune): Promise<PitchTarget> {
+    const c = this.p.clips.find(x => x.id === clipId);
+    if (!c || c.kind !== 'audio') throw new Error('only audio clips have pitch');
+    const p = reference ?? c.tune?.reference;
+    if (!p) throw new Error('this clip has no reference');
+    const take = await this.pitchAnalyze(clipId);
+    const rs = this.srcMeta.get(p.source) ?? this.p.sources.find(x => x.id === p.source) as MockSource | undefined;
+    if (!rs) throw new Error(`no reference source ${p.source}`);
+    const rv = synthVocal(rs.seed ?? rs.id, rs.dur);
+    const notes = c.tune?.notes.length ? c.tune.notes : take.notes;
+    return simpleTarget(take, { rate: rv.rate, curve: rv.curve, levels: rv.levels, notes: rv.notes }, notes, p);
+  }
+  private f0Backend = 'yin';
+  async f0ModelStatus(): Promise<F0ModelStatus> {
+    return {
+      id: 'rmvpe', name: 'RMVPE vocal pitch model', bytes: 361_688_443, installed: this.f0Backend === 'rmvpe', backend: this.f0Backend,
+      licenseNote: 'RMVPE weights from the RVC project (lj1995/VoiceConversionWebUI). The RVC code is MIT and the RMVPE reference code Apache-2.0, but the weights\' licence file restricts use to research. Downloading is your decision; without the model WAVE uses its built-in YIN detector.',
+      licenseUrl: 'https://huggingface.co/lj1995/VoiceConversionWebUI/blob/main/%E4%BD%BF%E7%94%A8%E9%9C%80%E9%81%B5%E5%AE%88%E7%9A%84%E5%8D%8F%E8%AE%AE-LICENSE.txt',
+      path: 'C:\\Users\\michal\\AppData\\Local\\WAVE\\Models\\rmvpe.onnx', error: null,
+    };
+  }
+  async f0ModelInstall(): Promise<F0ModelStatus> {
+    const total = 361_688_443;
+    for (let k = 1; k <= 20; k++) { await delay(50); this.emit('model-progress', { id: 'rmvpe', done: Math.round(total * k / 20), total }); }
+    this.f0Backend = 'rmvpe';
+    return this.f0ModelStatus();
   }
   async musicAnalyze(a?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis> {
     await delay(80);

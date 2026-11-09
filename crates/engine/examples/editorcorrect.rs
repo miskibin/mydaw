@@ -22,7 +22,7 @@ fn main() {
             NoteEdit { start: n.start, end: n.end, shift, drift: dp / 100.0, formant: 0.0, gain: 0.0 }
         })
         .collect();
-    let out = wave_engine::tune_render::render(&au, &an, &ClipTune { notes, pencil: vec![] });
+    let out = wave_engine::tune_render::render(&au, &an, &ClipTune { notes, pencil: vec![], reference: None }, None);
     wave_engine::sources::write_wav(std::path::Path::new(&a[2]), out.content(), au.sr).unwrap();
     eprintln!("{} notes corrected", an.notes.len());
 }

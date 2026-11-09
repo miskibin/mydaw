@@ -143,7 +143,10 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `fx_catalog` | – | `{types:{[type]:{name, params:[{id,label,min,max,def,unit,log}]}}, presets:{[type]:[{name, params?, bands?, beats?}]}}` |
 | `import_audio` | `{paths, track?, beat?}` | `{sourceIds, clipIds}` (placed clips only when track/beat given) |
 | `source_peaks` | `{id, norm?, rev?}` | `ArrayBuffer` of f32 `[min,max]` pairs, 100 per second of audio |
-| `pitch_analyze` | `{clipId}` | `{rate, curve: (midi\|null)[], levels: number[], notes: [{start,end,pitch,level}]}` — pitch every 1/rate s (null = unvoiced: breath, sibilant, silence); times in seconds of the source |
+| `pitch_analyze` | `{clipId}` | `{rate, curve: (midi\|null)[], levels: number[], confidence: number[], notes: [{start,end,pitch,level}], backend: "rmvpe"\|"yin"}` — pitch every 1/rate s (null = unvoiced: breath, sibilant, silence); times in seconds of the source |
+| `pitch_target` | `{clipId, reference?: RefTune}` | `PitchTarget` (below) — Tune to Reference for the clip, with `reference` or the clip's own `tune.reference` (preview before applying) |
+| `f0_model_status` | – | `{id, name, bytes, installed, backend, licenseNote, licenseUrl, path, error}` |
+| `f0_model_install` | – | – ; downloads RMVPE, verifies size and SHA-256, activates it; progress as event `model-progress {id,done,total,error?}` |
 | `music_analyze` | `{clipId?, excludeFx?}` | `{tempo: {bpm, confidence, candidates:[{bpm,score}], firstBeat}\|null, key: {root, minor, confidence, candidates:[{root,minor,score}], chroma:number[12], tuningCents}\|null}` — tempo and key of a clip, or of the project's active audio clips (excluding tracks routed to `excludeFx`'s insert) |
 | `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied) |
 | `trim_clip` | `{clipId}` | `{sourceId}` — writes a new file with only the clip region, clip now points at it |
@@ -170,7 +173,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `cli_status` | – | `{installed, command, path, note?}` |
 
 Events: `state` (a `StateDto`, after every change from any origin: UI, CLI,
-undo, import, recording, file open), `library-progress`, `audio-status`.
+undo, import, recording, file open), `library-progress`, `model-progress`, `audio-status`.
 
 ```ts
 type StateDto = { project: Project; revision: number; canUndo: boolean; canRedo: boolean;
@@ -321,3 +324,48 @@ movement inside the note toward its centre; `gain` dB). Start from
 `pitch_analyze` notes, edit, send with `putClips`. Rendering is offline and
 latency-free; during a gesture the previous render keeps playing and the new
 one is made at `end_gesture`.
+
+### Tune to Reference (`crates/engine/src/reference.rs`)
+
+`clip.tune.reference = {source, correction, vibrato, influence, octave: number|null, key, scale}`
+(0..1 amounts; `octave` null = automatic) makes another source the clip's
+melody. Offline, deterministic, and the same code for GUI, CLI and tests:
+
+1. **Analysis** — pitch (`F0Estimator`: RMVPE through `ort` when its model is
+   installed, else YIN; 200 frames/s, MIDI, NaN = unvoiced) and content
+   (MFCC, 100 frames/s; the spectral envelope c1–c6, which survives another
+   singer, octave and vowel colour) of take and reference.
+2. **Alignment** — coarse subsequence DTW over the whole reference finds where
+   the take is; a banded DTW refines it with pitch class and contour shape.
+   If that scores low, a content-only path is tried too. A jump-and-stall of
+   the path (an implausible tempo map) is bridged by a straight line and
+   aligned again narrowly around it, kept only if the content there vouches
+   for it.
+3. **Confidence** per frame — plausible tempo map (a veto, lifted where the
+   content matches far better than chance), content against chance, contour
+   correlation, and a gate on the take being more than 7 semitones from the
+   reference (exact octave slips of the detector excepted). The median over
+   sung frames is the score; below 0.3 the reference is refused and nothing
+   is corrected.
+4. **Register** — the multiple of 12 bringing the reference closest to the take.
+5. **Target** — the reference's notes (segmented on the take's time axis) give
+   centres; the take's own notes give vibrato and transitions (movement around
+   a drift curve; octave slips of the detector and transitions to neighbours
+   excluded from the drift). `target = take + correction·gate(confidence)·(centre + vibrato·movement − take)`,
+   the interval folded to ±6 semitones so a detector octave slip still moves by
+   the right amount.
+6. **Render** — the existing TD-PSOLA with a continuous ratio(t), smoothed
+   ±17.5 ms; manual note edits apply on top; a clip whose correction is zero
+   everywhere renders bit-identical to its source.
+
+```ts
+type PitchTarget = { rate: number; start: number;            // first analysis frame of the region
+  sourceF0: (number|null)[]; referenceF0: (number|null)[]; targetF0: (number|null)[];
+  alignmentConfidence: number[]; refTime: number[];          // seconds into the reference
+  octave: number; notes: Note[]; score: number; reason: string | null };  // reason set = refused
+```
+
+The RMVPE model is not shipped: `f0_model_install` downloads it (URL,
+size, SHA-256 and licence link are constants in `crates/rmvpe`) to
+`<data>/Models/rmvpe.onnx`; `WAVE_RMVPE_MODEL` overrides the path.
+`crates/tune-bench` measures the whole pipeline (see `docs/cli.md`).

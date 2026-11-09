@@ -3,13 +3,17 @@
 // edited pitch with the original (faint) and edited (bright) pitch curve through them, and edits
 // them with tools: Main (pitch, snapped to the scale; Alt = free), Drift, Formant, Gain, Split,
 // Pencil. Every drag is one gesture (= one undo step); the engine re-renders when it ends.
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+// "Do referencji" (Tune to Reference) takes the base pitch from another performance of the same
+// melody (`pitch_target`, previewed live while the parameters change, stored on Apply); the
+// reference pitch and its notes are drawn too, and stretches the alignment is unsure of are
+// marked — they are left uncorrected. Manual edits then apply on top of the target.
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
-import type { Clip, ClipTune, Op, PitchAnalysis } from '../api/types';
+import type { Clip, ClipTune, F0ModelStatus, Op, PitchAnalysis, PitchTarget, RefTune } from '../api/types';
 import { clamp, dbg, dbText, fmtPos } from '../lib/format';
 import {
-  addPencil, correctPitch, dragShift, editedCurve, editNotes, erasePencil, inScale, initTune, isBlack, mergeNotes, MIN_NOTE,
-  noteCenter, NOTE_NAMES, noteName, scaleMask, splitNear, splitNote,
+  addPencil, correctPitch, DEFAULT_REF, dragShift, editedCurve, editNotes, erasePencil, inScale, initTune, isBlack, lowConfidenceRuns,
+  mergeNotes, MIN_NOTE, noteCenters, NOTE_NAMES, noteName, scaleMask, splitNear, splitNote,
 } from '../lib/pitch';
 import * as A from '../state/actions';
 import { commit, Gesture, inGesture } from '../state/edit';
@@ -94,11 +98,58 @@ function PitchBody(props: { clipId: number }) {
     bumpView();
   };
 
-  const tune = (): ClipTune | null => { const t = c().tune; return t && t.notes.length ? t : null; };
-  const tuneOrInit = (): ClipTune => tune() ? plain(tune()!) : initTune(an()!);
+  // ---- Tune to Reference
+  const applied = () => c().tune?.reference ?? null;
+  const [mode, setMode] = createSignal(applied() ? 1 : 0); // 0 manual, 1 reference
+  const refSources = () => S.project.sources.filter(s => s.id !== c().ref);
+  const [draft, setDraft] = createSignal<RefTune | null>(applied() ? { ...applied()! } : null);
+  const [target, setTarget] = createSignal<PitchTarget | null>(null);
+  const [tgtBusy, setTgtBusy] = createSignal(false);
+  const [tgtErr, setTgtErr] = createSignal<string | null>(null);
+  const [model, setModel] = createSignal<F0ModelStatus | null>(null);
+  const [dl, setDl] = createSignal<number | null>(null);
+  const [askModel, setAskModel] = createSignal(false);
+  const withKey = (d: RefTune): RefTune => ({ ...d, key: key(), scale: scale() });
+  const activeTarget = () => (mode() === 1 ? target() : null);
+  const sameRef = (a: RefTune, b: RefTune | null) => !!b && a.source === b.source && a.correction === b.correction && a.vibrato === b.vibrato
+    && a.influence === b.influence && (a.octave ?? null) === (b.octave ?? null) && (a.key ?? 0) === (b.key ?? 0) && (a.scale ?? 0) === (b.scale ?? 0);
+  const pending = () => { const d = draft(); return mode() === 1 && !!d && !sameRef(withKey(d), applied()); };
+  const patchDraft = (p: Partial<RefTune>) => setDraft(d => d && { ...d, ...p });
+  const startDraft = () => {
+    if (draft()) return;
+    const s = refSources()[0];
+    if (s) setDraft({ source: s.id, ...DEFAULT_REF });
+  };
+  // an undo/redo of Apply brings the stored parameters back into the panel
+  createEffect(on(() => JSON.stringify(applied()), () => { const a = applied(); if (a) { setDraft({ ...DEFAULT_REF, ...a }); setMode(1); } }, { defer: true }));
+  let tgtSeq = 0, tgtTimer = 0;
+  createEffect(() => {
+    const d = draft(), m = mode(), a = an();
+    JSON.stringify(c().tune?.notes ?? null); key(); scale();
+    clearTimeout(tgtTimer);
+    if (m !== 1 || !d || !a) { tgtSeq++; setTarget(null); setTgtErr(null); setTgtBusy(false); return; }
+    const seq = ++tgtSeq, params = withKey(d);
+    tgtTimer = window.setTimeout(() => {
+      setTgtBusy(true);
+      be().pitchTarget(props.clipId, params)
+        .then(t => { if (seq === tgtSeq) { setTarget(t); setTgtErr(null); } })
+        .catch(e => { if (seq === tgtSeq) { setTarget(null); setTgtErr(String(e?.message ?? e)); } })
+        .finally(() => { if (seq === tgtSeq) setTgtBusy(false); });
+    }, 120);
+  });
+  onCleanup(() => clearTimeout(tgtTimer));
+  const lowRuns = createMemo(() => { const t = activeTarget(); return t && !t.reason ? lowConfidenceRuns(t) : []; });
+
+  const tune = (): ClipTune | null => { const t = c().tune; return t && (t.notes.length || t.pencil?.length || t.reference) ? t : null; };
+  const tuneOrInit = (): ClipTune => {
+    const t = tune(); if (!t) return initTune(an()!);
+    const p = plain(t); if (!p.notes.length) p.notes = initTune(an()!).notes;
+    return p;
+  };
   const notes = () => tuneOrInit().notes;
-  const centers = createMemo(() => { const a = an(); if (!a) return []; return notes().map(n => noteCenter(a, n.start, n.end)); });
-  const edited = createMemo(() => { const a = an(); return a ? editedCurve(a, tune(), tune() ? centers() : undefined) : new Float32Array(0); });
+  const centers = createMemo(() => { const a = an(); if (!a) return []; return noteCenters(a, notes(), activeTarget()); });
+  const edited = createMemo(() => { const a = an(); return a ? editedCurve(a, tune(), tune()?.notes.length ? centers() : undefined, activeTarget()) : new Float32Array(0); });
+  const showEdited = () => !!tune() || !!activeTarget();
   const mask = () => scaleMask(scale());
   const putTune = (t: ClipTune | null): Op => ({ op: 'putClips', clips: [{ ...plain(c()), tune: t } as Clip] });
 
@@ -135,7 +186,7 @@ function PitchBody(props: { clipId: number }) {
   const layer = new Layer();
   let dirty = true;
   createEffect(() => {
-    viewV(); sel(); hover(); tool(); key(); scale(); marq(); pencilLive(); an(); peaksVersion(); edited(); themeVersion();
+    viewV(); sel(); hover(); tool(); key(); scale(); marq(); pencilLive(); an(); peaksVersion(); edited(); themeVersion(); activeTarget(); lowRuns();
     JSON.stringify(c().tune ?? null); c().offset; c().len; c().gain; S.project.bpm; src()?.color;
     dirty = true;
   });
@@ -218,6 +269,18 @@ function PitchBody(props: { clipId: number }) {
     }
     if (rs >= 0) runs.push([rs, f1]);
     for (const [fa, fb] of runs) hatch(X(fa / a.rate), X(fb / a.rate), RH, H - BH, 0.12);
+    // Tune to Reference: stretches left uncorrected (unsure alignment), the reference's notes as outlines
+    const tg = activeTarget(), refOk = !!tg && !tg.reason;
+    for (const [ta, tb] of lowRuns()) {
+      if (tb < vt0 || ta > vt1) continue;
+      g.fillStyle = rgba(T.amber, 0.08); g.fillRect(X(ta), RH, X(tb) - X(ta), H - RH - BH);
+      g.fillStyle = rgba(T.amber, 0.7); g.fillRect(X(ta), RH, X(tb) - X(ta), 3);
+    }
+    if (tg && refOk) {
+      g.setLineDash([3, 3]); g.strokeStyle = rgba(T.blue, 0.55); g.lineWidth = 1;
+      for (const b of tg.notes) { if (b.end < vt0 || b.start > vt1) continue; g.strokeRect(X(b.start) + 0.5, Y(b.pitch) - rh * 0.35, X(b.end) - X(b.start), rh * 0.7); }
+      g.setLineDash([]);
+    }
     // note blobs
     const ns = notes(), cs = centers(), s = sel(), hv = hover();
     for (let i = 0; i < ns.length; i++) {
@@ -257,7 +320,7 @@ function PitchBody(props: { clipId: number }) {
       g.strokeStyle = hv?.split === i ? T.ink : rgba(T.fg3, 0.7); g.lineWidth = hv?.split === i ? 2 : 1;
       g.beginPath(); g.moveTo(x, Y(Math.max(p1, p2)) - rh * 0.6); g.lineTo(x, Y(Math.min(p1, p2)) + rh * 0.6); g.stroke();
     }
-    // pitch curves: original faint, edited bright
+    // pitch curves: original faint, reference dashed, edited bright
     const curve = (val: (f: number) => number | null, stroke: string, lw: number) => {
       g.beginPath(); let pen = false;
       for (let f = f0; f < f1; f++) {
@@ -269,8 +332,9 @@ function PitchBody(props: { clipId: number }) {
       g.strokeStyle = stroke; g.lineWidth = lw; g.stroke();
     };
     const ed = edited();
-    curve(f => a.curve[f], rgba(T.pre, tune() ? 0.45 : 0.8), 1);
-    if (tune()) curve(f => ed[f], accent, 1.6);
+    curve(f => a.curve[f], rgba(T.pre, showEdited() ? 0.45 : 0.8), 1);
+    if (tg && refOk) { g.setLineDash([5, 3]); curve(f => tg.referenceF0[f - tg.start] ?? null, rgba(T.blue, 0.85), 1.2); g.setLineDash([]); }
+    if (showEdited()) curve(f => ed[f], accent, 1.6);
     const pl = pencilLive();
     if (pl && pl.length > 1) { g.beginPath(); pl.forEach(([t, m], k) => (k ? g.lineTo(X(t), Y(m)) : g.moveTo(X(t), Y(m)))); g.strokeStyle = T.ink; g.lineWidth = 2; g.stroke(); }
     // bottom strip: what the clip plays (rendered) + unvoiced stretches
@@ -423,9 +487,44 @@ function PitchBody(props: { clipId: number }) {
     commit([putTune(nt)], 'Popraw wysokość');
     say('Poprawiono ' + scope().length + ' nut · centrum ' + centerPct() + '% · dryf ' + driftPct() + '% · ' + NOTE_NAMES[key()] + ' ' + SCALES[scale()]);
   };
+  const applyRef = () => {
+    const d = draft(), t = target(); if (!d || !t || t.reason) return;
+    const base = tune() ? plain(tune()!) : { notes: [], pencil: [] };
+    commit([putTune({ ...base, reference: withKey(d) })], 'Dopasuj do referencji');
+    const name = S.project.sources.find(s => s.id === d.source)?.name ?? '';
+    say('Dopasowano do „' + name + '” · korekcja ' + Math.round(d.correction * 100) + '% · vibrato ' + Math.round(d.vibrato * 100) + '% · wpływ ' + Math.round(d.influence * 100) + '%');
+  };
+  const offRef = () => {
+    const t = tune(); if (!t?.reference) return;
+    const rest: ClipTune = { ...plain(t), reference: null };
+    commit([putTune(rest.notes.length || rest.pencil?.length ? rest : null)], 'Wyłącz referencję');
+    say('Wyłączono dopasowanie do referencji — ręczne zmiany zostają');
+  };
+  const pickMode = (i: number) => {
+    if (i === 0 && applied()) offRef();
+    if (i === 1) startDraft();
+    setMode(i);
+  };
+  const refreshAnalysis = () => { anCache.clear(); setTarget(null); load(); };
+  onMount(() => {
+    be().f0ModelStatus().then(setModel).catch(() => {});
+    const un = be().on('model-progress', p => setDl(p.error ? null : p.total ? p.done / p.total : null));
+    onCleanup(() => { un.then(f => f()); });
+  });
+  const installModel = () => {
+    setAskModel(false); setDl(0);
+    be().f0ModelInstall()
+      .then(st => { setModel(st); setDl(null); refreshAnalysis(); say('RMVPE gotowy — wysokość przeanalizowana od nowa'); })
+      .catch(e => { setDl(null); say('Pobieranie RMVPE nie powiodło się: ' + String(e?.message ?? e)); });
+  };
   const resetNotes = () => {
     if (!tune()) return;
-    if (!sel().size) { commit([putTune(null)], 'Reset wysokości'); say('Usunięto wszystkie zmiany wysokości'); return; }
+    if (!sel().size) {
+      const r = tune()!.reference;
+      commit([putTune(r ? { notes: [], pencil: [], reference: r } : null)], 'Reset wysokości');
+      say(r ? 'Usunięto ręczne zmiany — dopasowanie do referencji zostaje' : 'Usunięto wszystkie zmiany wysokości');
+      return;
+    }
     const nt = editNotes(tuneOrInit(), sel(), () => ({ shift: 0, drift: 0, formant: 0, gain: 0 }));
     commit([putTune(nt)], 'Reset nut'); say('Zresetowano ' + sel().size + ' nut');
   };
@@ -449,6 +548,9 @@ function PitchBody(props: { clipId: number }) {
         <button class="closebtn" title="Zamknij (Esc)" onClick={A.closePitchEditor}>×</button>
       </div>
       <div class="ptools">
+        <Segmented small label="Tryb" options={['Ręcznie', 'Do referencji']} value={mode} pick={pickMode} color={FXMETA.tune.color}
+          title="Ręcznie: edytujesz nuty sam · Do referencji (Tune to Reference): wysokość z innego wykonania tej samej melodii" />
+        <div class="vsep" />
         <div class="seg tools">
           <For each={TOOLS}>{tl => (
             <button classList={{ on: tool() === tl.id }} title={tl.label + ' (' + tl.key + ') — ' + tl.tip} onClick={() => setTool(tl.id)}>
@@ -471,12 +573,70 @@ function PitchBody(props: { clipId: number }) {
         <button class="smallbtn" classList={{ playing: previewing() }} onClick={() => previewing() ? be().previewStop() : be().previewClip(c().id).catch(e => say(String(e)))}>{previewing() ? 'Stop' : 'Podgląd'}</button>
         <button class="iconbtn" title="Dopasuj widok (F)" onClick={() => fitView()}><Icon d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" size={13} /></button>
       </div>
+      <Show when={mode() === 1}>
+        <div class="ptools refrow">
+          <Show when={refSources().length && draft()} fallback={<span class="refnote">Zaimportuj do projektu nagranie referencyjne (np. acapellę tej samej melodii) — pojawi się tutaj.</span>}>
+            <label class="reflab" title="Inne wykonanie tej samej melodii (acapella). Tempo może się różnić — nagranie zostanie dopasowane w czasie.">
+              <span>REFERENCJA</span>
+              <select class="sel" value={String(draft()!.source)} onChange={e => patchDraft({ source: +e.currentTarget.value })}>
+                <For each={refSources()}>{s => <option value={String(s.id)}>{s.name}</option>}</For>
+              </select>
+            </label>
+            <NumField label="KOREKCJA" width={64} title="Jak mocno ciągnąć wysokość do celu (0 = bez zmian)" value={() => Math.round(draft()!.correction * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
+              drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => patchDraft({ correction: clamp(Math.round(v), 0, 100) / 100 })} />
+            <NumField label="VIBRATO" width={58} title="Ile własnego vibrato i przejść śpiewaka zachować" value={() => Math.round(draft()!.vibrato * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
+              drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => patchDraft({ vibrato: clamp(Math.round(v), 0, 100) / 100 })} />
+            <NumField label="WPŁYW REF." width={66} title="Centra nut: 100% z referencji, 0% najbliższa nuta skali (Tonacja)" value={() => Math.round(draft()!.influence * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
+              drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => patchDraft({ influence: clamp(Math.round(v), 0, 100) / 100 })} />
+            <Segmented small label="Oktawa" options={['Auto', '−12', '0', '+12']} value={() => [null, -12, 0, 12].indexOf(draft()!.octave ?? null)}
+              pick={i => patchDraft({ octave: [null, -12, 0, 12][i] })} color={FXMETA.tune.color} title="Przesunięcie referencji; Auto wybiera oktawę najbliższą śpiewakowi" />
+            <button class="smallbtn primary" disabled={!pending() || !target() || !!target()?.reason || tgtBusy()} onClick={applyRef}>{applied() ? 'Zastosuj zmiany' : 'Zastosuj'}</button>
+            <Show when={applied()}><button class="smallbtn" onClick={offRef} title="Wróć do wysokości śpiewaka (ręczne zmiany zostają)">Wyłącz</button></Show>
+            <span class="refnote" classList={{ err: !!tgtErr() || !!target()?.reason }}>
+              {tgtBusy() ? 'dopasowuję…'
+                : tgtErr() ? 'Błąd: ' + tgtErr()
+                : target()?.reason ? 'Bez korekcji: ' + (target()!.reason === 'the reference does not match this take' ? 'referencja nie pasuje do tego nagrania' : target()!.reason)
+                : target() ? 'dopasowanie ' + Math.round(target()!.score * 100) + '%' + (target()!.octave ? ' · oktawa ' + (target()!.octave > 0 ? '+' : '') + target()!.octave : '')
+                  + (lowRuns().length ? ' · ' + lowRuns().length + ' niepewn' + (lowRuns().length === 1 ? 'y fragment' : 'e fragmenty') + ' bez korekcji' : '')
+                : ''}
+            </span>
+          </Show>
+          <div style={{ flex: 1 }} />
+          <span class="reflegend"><i style={{ background: 'var(--fg4)' }} />oryginał <i class="dash" />referencja <i style={{ background: FXMETA.tune.color }} />wynik</span>
+          <Show when={model()}>{m => (
+            <span class="detchip" title={'Detektor wysokości: ' + (m().backend === 'rmvpe' ? 'RMVPE (sieć neuronowa)' : 'YIN (wbudowany)') + (m().error ? ' · ' + m().error : '')}>
+              {m().backend === 'rmvpe' ? 'RMVPE' : 'YIN'}
+            </span>
+          )}</Show>
+          <Show when={model() && !model()!.installed}>
+            <button class="smallbtn" disabled={dl() != null} onClick={() => setAskModel(true)} title="Dokładniejszy detektor wysokości (opcjonalny, licencja badawcza)">
+              {dl() != null ? 'Pobieram… ' + Math.round(dl()! * 100) + '%' : 'Pobierz RMVPE (362 MB)'}
+            </button>
+          </Show>
+        </div>
+      </Show>
       <div ref={area} class="parea">
         <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}
           onPointerDown={down} onPointerMove={move} onPointerLeave={() => setHover(null)} onWheel={wheel} onContextMenu={e => e.preventDefault()} />
         <div ref={phead} class="pphead" />
         <Show when={!an() && !err()}><div class="pstate"><span class="spin" />Analizuję wysokość…</div></Show>
         <Show when={err()}><div class="pstate err">Nie udało się przeanalizować: {err()} <button class="smallbtn" onClick={load}>Spróbuj ponownie</button></div></Show>
+        <Show when={askModel() && model()}>{m => (
+          <div class="pstate">
+            <div class="consent">
+              <b>Pobrać model RMVPE ({Math.round(m().bytes / 1e6)} MB)?</b>
+              <p>{m().licenseNote}</p>
+              <p class="mono sel-text">{m().licenseUrl}</p>
+              <p class="mono">Suma SHA-256 sprawdzana po pobraniu · zapis: {m().path}</p>
+              <div class="row">
+                <button class="smallbtn" onClick={() => navigator.clipboard?.writeText(m().licenseUrl).then(() => say('Skopiowano link do licencji'))}>Kopiuj link</button>
+                <div style={{ flex: 1 }} />
+                <button class="smallbtn" onClick={() => setAskModel(false)}>Anuluj</button>
+                <button class="smallbtn primary" onClick={installModel}>Pobierz i używaj</button>
+              </div>
+            </div>
+          </div>
+        )}</Show>
       </div>
       <div class="pstatus mono">
         <span>{an() ? notes().length + ' nut' : ''}{sel().size ? ' · zaznaczone ' + sel().size : ''}</span>

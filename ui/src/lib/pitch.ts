@@ -1,7 +1,7 @@
 // Pitch helpers shared by the Pitch Correct window and the pitch editor: note names and scales
 // (a port of crates/engine/src/pitch.rs `scale_mask` / `snap`), the scrolling pitch-graph
 // mapping, and the clip `tune` edit operations (mirroring crates/engine/src/tune_render.rs).
-import type { ClipTune, NoteEdit, PitchAnalysis } from '../api/types';
+import type { ClipTune, NoteEdit, PitchAnalysis, PitchTarget, RefTune } from '../api/types';
 
 export const hzToMidi = (hz: number) => 69 + 12 * Math.log2(hz / 440);
 export const midiToHz = (m: number) => 440 * Math.pow(2, (m - 69) / 12);
@@ -66,15 +66,40 @@ export function initTune(an: PitchAnalysis): ClipTune {
   return { notes: an.notes.map(n => ({ start: n.start, end: n.end, shift: 0, drift: 0, formant: 0, gain: 0 })), pencil: [] };
 }
 
-/** Median voiced pitch inside [start, end) — tune_render.rs `note_center`. */
-export function noteCenter(an: PitchAnalysis, start: number, end: number): number | null {
-  const i0 = Math.floor(start * an.rate), i1 = Math.min(Math.floor(end * an.rate), an.curve.length);
+/** Median voiced value of `curve` inside [start, end) — tune_render.rs `note_center`. */
+export function curveCenter(curve: ArrayLike<number | null>, rate: number, start: number, end: number): number | null {
+  const i0 = Math.floor(start * rate), i1 = Math.min(Math.floor(end * rate), curve.length);
   const v: number[] = [];
-  for (let i = Math.max(0, i0); i < i1; i++) { const x = an.curve[i]; if (x != null && !Number.isNaN(x)) v.push(x); }
+  for (let i = Math.max(0, i0); i < i1; i++) { const x = curve[i]; if (x != null && !Number.isNaN(x)) v.push(x); }
   if (!v.length) return null;
   v.sort((a, b) => a - b);
   return v[v.length >> 1];
 }
+/** Median voiced pitch inside [start, end) of the analysis. */
+export const noteCenter = (an: PitchAnalysis, start: number, end: number) => curveCenter(an.curve, an.rate, start, end);
+
+/** Target pitch at analysis frame `f`, if the target covers it (reference.rs `PitchTarget::at`). */
+export function targetAt(t: PitchTarget | null | undefined, f: number): number | null {
+  if (!t) return null;
+  const v = t.targetF0[f - t.start];
+  return v == null || Number.isNaN(v) ? null : v;
+}
+
+/** The pitch edits start from: the Tune to Reference target where there is one, else the sung pitch. */
+export function baseCurve(an: PitchAnalysis, target?: PitchTarget | null): Float32Array {
+  const out = new Float32Array(an.curve.length);
+  for (let f = 0; f < out.length; f++) {
+    const o = an.curve[f];
+    out[f] = o == null || Number.isNaN(o) ? NaN : targetAt(target, f) ?? o;
+  }
+  return out;
+}
+
+/** Note centres over the base pitch (what Main/Drift edits move). */
+export const noteCenters = (an: PitchAnalysis, notes: NoteEdit[], target?: PitchTarget | null) => {
+  const base = target ? baseCurve(an, target) : an.curve;
+  return notes.map(n => curveCenter(base, an.rate, n.start, n.end));
+};
 
 /** Pencil value at `t` if `t` is inside a drawn run (gaps > 30 ms end a run) — tune_render.rs `pencil_at`. */
 export function pencilAt(p: [number, number][] | undefined, t: number): number | null {
@@ -98,15 +123,17 @@ export function noteAt(notes: NoteEdit[], t: number): number {
   return -1;
 }
 
-/** The pitch the engine will render, per analysis frame (NaN = unvoiced; left untouched). */
-export function editedCurve(an: PitchAnalysis, tune: ClipTune | null | undefined, centers?: (number | null)[]): Float32Array {
+/** The pitch the engine will render, per analysis frame (NaN = unvoiced; left untouched) — tune_render.rs
+ *  `edited_curve`: from the target (Tune to Reference) or the sung pitch, then notes, then pencil. */
+export function editedCurve(an: PitchAnalysis, tune: ClipTune | null | undefined, centers?: (number | null)[], target?: PitchTarget | null): Float32Array {
   const out = new Float32Array(an.curve.length);
   const notes = tune?.notes ?? [];
-  const cs = centers ?? notes.map(n => noteCenter(an, n.start, n.end));
+  const base = baseCurve(an, target);
+  const cs = centers ?? notes.map(n => curveCenter(base, an.rate, n.start, n.end));
   let ni = 0;
   for (let f = 0; f < out.length; f++) {
-    const o = an.curve[f];
-    if (o == null || Number.isNaN(o)) { out[f] = NaN; continue; }
+    const o = base[f];
+    if (Number.isNaN(o)) { out[f] = NaN; continue; }
     const t = f / an.rate;
     while (ni < notes.length && notes[ni].end <= t) ni++;
     let target = o;
@@ -196,5 +223,59 @@ export const erasePencil = (pencil: [number, number][] | undefined, t0: number, 
 /** True when a tune has no audible edit (so the clip plays the plain source). */
 export function tuneIsNeutral(t: ClipTune | null | undefined): boolean {
   if (!t) return true;
-  return !(t.pencil?.length) && t.notes.every(n => !n.shift && !n.drift && !n.formant && !n.gain);
+  return !t.reference && !(t.pencil?.length) && t.notes.every(n => !n.shift && !n.drift && !n.formant && !n.gain);
+}
+
+// ---------------------------------------------------------------- Tune to Reference
+
+export const DEFAULT_REF: Omit<RefTune, 'source'> = { correction: 1, vibrato: 1, influence: 1, octave: null, key: 0, scale: 0 };
+
+/**
+ * A simplified Tune to Reference for the browser mock: the reference is stretched linearly over
+ * the take (the engine aligns with DTW instead), moved by the octave nearest to the take, and the
+ * target follows the engine's note model — each note's centre goes `influence` of the way to the
+ * reference note centre (the rest to the nearest scale note), the singer's own deviation from
+ * the centre is kept by `vibrato`, and the result is mixed in by `correction`.
+ */
+export function simpleTarget(take: PitchAnalysis, ref: PitchAnalysis, notes: { start: number; end: number }[], p: RefTune): PitchTarget {
+  const n = take.curve.length, k = ref.curve.length / Math.max(1, n);
+  const num = (x: number | null | undefined) => (x == null || Number.isNaN(x) ? NaN : x);
+  const r = Array.from({ length: n }, (_, f) => num(ref.curve[Math.min(ref.curve.length - 1, Math.floor(f * k))]));
+  const diffs: number[] = [];
+  for (let f = 0; f < n; f++) { const u = num(take.curve[f]); if (!Number.isNaN(u) && !Number.isNaN(r[f])) diffs.push(u - r[f]); }
+  diffs.sort((a, b) => a - b);
+  const octave = p.octave ?? (diffs.length ? 12 * Math.round(diffs[diffs.length >> 1] / 12) : 0);
+  const mask = scaleMask(p.scale ?? 0), target = new Array<number | null>(n).fill(null);
+  for (let f = 0; f < n; f++) { const u = num(take.curve[f]); target[f] = Number.isNaN(u) ? null : u; }
+  for (const nt of notes) {
+    const uc = curveCenter(take.curve, take.rate, nt.start, nt.end);
+    const rc = curveCenter(r.map(x => x + octave), take.rate, nt.start, nt.end);
+    if (uc == null) continue;
+    const tc = rc == null ? uc : p.influence * rc + (1 - p.influence) * snapNote(uc, p.key ?? 0, mask);
+    for (let f = Math.floor(nt.start * take.rate); f < Math.min(n, Math.floor(nt.end * take.rate)); f++) {
+      const u = num(take.curve[f]); if (Number.isNaN(u)) continue;
+      const want = tc + p.vibrato * (u - uc);
+      target[f] = u + p.correction * (want - u);
+    }
+  }
+  const voiced = diffs.length / Math.max(1, take.curve.filter(x => x != null).length);
+  return {
+    rate: take.rate, start: 0,
+    sourceF0: take.curve.slice(), referenceF0: r.map(x => (Number.isNaN(x) ? null : x + octave)), targetF0: target,
+    alignmentConfidence: r.map(x => (Number.isNaN(x) ? 0 : 1)), refTime: Array.from({ length: n }, (_, f) => f * k / ref.rate),
+    octave, notes: ref.notes.map(b => ({ ...b, start: b.start / k, end: b.end / k, pitch: b.pitch + octave })),
+    score: Math.min(1, voiced), reason: null,
+  };
+}
+
+/** Stretches of the target (seconds of the source) where the alignment is too unsure to correct. */
+export function lowConfidenceRuns(t: PitchTarget, below = 0.2): [number, number][] {
+  const out: [number, number][] = [];
+  let s = -1;
+  for (let i = 0; i <= t.alignmentConfidence.length; i++) {
+    const low = i < t.alignmentConfidence.length && t.alignmentConfidence[i] < below && t.sourceF0[i] != null;
+    if (low && s < 0) s = i;
+    else if (!low && s >= 0) { out.push([(t.start + s) / t.rate, (t.start + i) / t.rate]); s = -1; }
+  }
+  return out;
 }

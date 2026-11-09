@@ -16,4 +16,6 @@ path = "src/main.rs"
 
 [dependencies]
 wave-session.workspace = true
+wave-engine.workspace = true
+wave-rmvpe.workspace = true
 serde_json.workspace = true

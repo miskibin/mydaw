@@ -103,12 +103,33 @@ export interface Clip {
 
 /** Times in seconds of the source; `shift`/`formant` in cents, `drift` 0..1, `gain` dB. */
 export interface NoteEdit { start: number; end: number; shift: number; drift: number; formant: number; gain: number }
-/** `pencil`: hand-drawn `[seconds, midi]` points, sorted; gaps > 30 ms end a run. */
-export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][] }
+/** `pencil`: hand-drawn `[seconds, midi]` points, sorted; gaps > 30 ms end a run.
+ *  `reference`: Tune to Reference — the base pitch comes from another performance; notes and pencil apply on top. */
+export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][]; reference?: RefTune | null }
+/** Tune to Reference: `source` = the reference audio; correction/vibrato/influence 0..1;
+ *  `octave` in semitones (multiple of 12), null = automatic; key 0..11 and scale 0..4 for the non-reference share. */
+export interface RefTune { source: Id; correction: number; vibrato: number; influence: number; octave?: number | null; key?: number; scale?: number }
 
-/** `pitch_analyze`: pitch every 1/rate s (null = unvoiced), levels 0..1, segmented notes (seconds of the source). */
+/** `pitch_analyze`: pitch every 1/rate s (null = unvoiced), levels 0..1, segmented notes (seconds of the source).
+ *  `confidence` 0..1 per frame; `backend` = the detector ("rmvpe" or "yin"). */
 export interface NoteBlob { start: number; end: number; pitch: number; level: number }
-export interface PitchAnalysis { rate: number; curve: (number | null)[]; levels: number[]; notes: NoteBlob[] }
+export interface PitchAnalysis { rate: number; curve: (number | null)[]; levels: number[]; notes: NoteBlob[]; confidence?: number[]; backend?: string }
+
+/** `pitch_target`: per analysis frame from `start` (null = unvoiced/none). `targetF0` is the base pitch the
+ *  engine renders; where `alignmentConfidence` is ~0 it equals the take's own pitch. `notes` are the
+ *  reference's notes on the take's time axis. `reason` is set when the reference was rejected. */
+export interface PitchTarget {
+  rate: number; start: number;
+  sourceF0: (number | null)[]; referenceF0: (number | null)[]; targetF0: (number | null)[];
+  alignmentConfidence: number[]; refTime: (number | null)[];
+  octave: number; notes: NoteBlob[]; score: number; reason: string | null;
+}
+/** The optional RMVPE pitch model (`f0_model_status`). */
+export interface F0ModelStatus {
+  id: string; name: string; bytes: number; installed: boolean; backend: string;
+  licenseNote: string; licenseUrl: string; path: string; error: string | null;
+}
+export interface ModelProgress { id: string; done: number; total: number; error?: string }
 
 export interface TempoCandidate { bpm: number; score: number }
 export interface TempoEstimate { bpm: number; confidence: number; candidates: TempoCandidate[]; firstBeat: number }

@@ -483,6 +483,40 @@ pub struct ClipTune {
     /// drawn run it replaces the note's pitch; gaps > 30 ms end a run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pencil: Vec<[f32; 2]>,
+    /// Tune to Reference: the base pitch comes from another performance of the
+    /// same melody; note edits and pencil then apply on top of it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<RefTune>,
+}
+
+impl ClipTune {
+    /// True when rendering would change the source.
+    pub fn is_active(&self) -> bool {
+        !self.notes.is_empty() || !self.pencil.is_empty() || self.reference.is_some()
+    }
+}
+
+/// Parameters of Tune to Reference. The target pitch is derived from them
+/// deterministically (`crate::reference`), so only these are stored.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefTune {
+    /// Audio source holding the reference vocal (a cappella).
+    pub source: Id,
+    /// 0..1: how far the pitch moves from the sung one toward the target.
+    pub correction: f32,
+    /// 0..1: how much of the singer's own vibrato and note transitions is kept.
+    pub vibrato: f32,
+    /// 0..1: note centres from the reference (1) or from the nearest scale note (0).
+    pub influence: f32,
+    /// Reference transposition in semitones (a multiple of 12); `None` = automatic.
+    #[serde(default)]
+    pub octave: Option<i32>,
+    /// Key (0 = C) and scale (`pitch::scale_mask`) for the scale part of `influence`.
+    #[serde(default)]
+    pub key: u32,
+    #[serde(default)]
+    pub scale: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

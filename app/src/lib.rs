@@ -4,6 +4,7 @@
 mod actions;
 mod cli_shim;
 mod library;
+mod models;
 mod plugins;
 mod settings;
 
@@ -30,6 +31,8 @@ pub struct App {
     pub cli: Mutex<CliStatus>,
     /// Set while an offline bounce is running; flipped by `export_cancel`.
     pub export_cancel: AtomicBool,
+    /// Why the installed RMVPE model could not be used, if it could not.
+    pub model_error: Mutex<Option<String>>,
     session: Mutex<Option<wave_session::Server>>,
 }
 
@@ -177,6 +180,36 @@ async fn source_peaks(app: St<'_>, id: u64, norm: Option<bool>, rev: Option<bool
 async fn pitch_analyze(app: St<'_>, clip_id: u64) -> R<std::sync::Arc<wave_engine::pitch::PitchAnalysis>> {
     let e = app.engine.clone();
     tauri::async_runtime::spawn_blocking(move || e.pitch_analysis(clip_id)).await.map_err(es)?.map_err(es)
+}
+
+#[tauri::command]
+async fn pitch_target(app: St<'_>, clip_id: u64, reference: Option<wave_engine::RefTune>) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
+    let e = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || e.pitch_target(clip_id, reference)).await.map_err(es)?.map_err(es)
+}
+
+#[tauri::command]
+async fn f0_model_status(app: St<'_>) -> R<models::ModelStatus> {
+    Ok(models::status(&app.engine, app.model_error.lock().clone()))
+}
+
+#[tauri::command]
+async fn f0_model_install(app: St<'_>, handle: AppHandle) -> R<models::ModelStatus> {
+    let a = app.inner().clone();
+    let h = handle.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        models::install(|done, total| {
+            let _ = h.emit("model-progress", json!({ "id": "rmvpe", "done": done, "total": total }));
+        })?;
+        models::activate(&a.engine).map(|_| ())
+    })
+    .await
+    .map_err(es)?;
+    *app.model_error.lock() = res.as_ref().err().cloned();
+    if let Err(e) = &res {
+        let _ = handle.emit("model-progress", json!({ "id": "rmvpe", "done": 0, "total": 0, "error": e }));
+    }
+    res.map(|_| models::status(&app.engine, None))
 }
 
 #[tauri::command]
@@ -489,7 +522,16 @@ pub fn run() {
         settings: Mutex::new(settings),
         cli: Mutex::new(cli_shim::install()),
         export_cancel: AtomicBool::new(false),
+        model_error: Mutex::new(None),
         session: Mutex::new(None),
+    });
+    // the pitch model loads in the background; analysis uses YIN until it is ready
+    let a = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = models::activate(&a.engine) {
+            log::warn!("{e}");
+            *a.model_error.lock() = Some(e);
+        }
     });
 
     // live session for the CLI
@@ -539,7 +581,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, music_analyze, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save, export_audio, export_cancel,

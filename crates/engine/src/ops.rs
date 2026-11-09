@@ -110,6 +110,17 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 if !known {
                     return Err(OpError::Missing { what: "clip source", id: c.source });
                 }
+                if let Some(r) = c.tune.as_ref().and_then(|t| t.reference.as_ref()) {
+                    if !p.sources.iter().any(|x| x.id == r.source) {
+                        return Err(OpError::Missing { what: "reference source", id: r.source });
+                    }
+                    if [r.correction, r.vibrato, r.influence].iter().any(|v| !(0.0..=1.0).contains(v)) {
+                        return Err(OpError::Invalid(format!("clip {}: reference correction, vibrato and influence must be 0..1", c.id)));
+                    }
+                    if r.octave.is_some_and(|o| o % 12 != 0 || o.abs() > 36) || r.key > 11 || r.scale > 4 {
+                        return Err(OpError::Invalid(format!("clip {}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4", c.id)));
+                    }
+                }
             }
             for c in clips {
                 bump(p, c.id);
@@ -368,6 +379,11 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             let empty: Vec<Id> = p.comps.iter().filter(|c| c.takes.is_empty()).map(|c| c.id).collect();
             p.comps.retain(|c| !c.takes.is_empty());
             p.clips.retain(|c| !(c.kind == ClipKind::Comp && empty.contains(&c.source)));
+            for t in p.clips.iter_mut().filter_map(|c| c.tune.as_mut()) {
+                if t.reference.is_some_and(|r| r.source == *id) {
+                    t.reference = None;
+                }
+            }
             d.timeline = true;
         }
         Op::PutAutomation { automation } => {
