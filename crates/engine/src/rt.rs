@@ -334,6 +334,15 @@ pub enum Cmd {
     Audition { chan: Id, key: u8, vel: f32, len: f32, pattern: Option<Id> },
     /// Loop one pattern on its own (`None` stops). Exclusive with the song transport.
     PatPlay(Option<Id>),
+    /// Live MIDI key down/up on a channel. `ins`: insert index to play through when the
+    /// channel has no insert of its own (the armed track's), else the channel's home.
+    MidiNote { chan: Id, key: u8, vel: f32, on: bool, ins: Option<usize> },
+    /// Live MIDI sustain pedal.
+    MidiSustain(bool),
+    /// Live MIDI pitch bend in semitones.
+    MidiBend(f32),
+    /// Release every live note and the pedal.
+    MidiOff,
 }
 
 pub enum Garbage {
@@ -553,6 +562,21 @@ impl Rt {
                         self.voices.note(ch, i, Dest::Insert(ins), 0, len, key, vel);
                     }
                 }
+                Cmd::MidiNote { chan, key, vel, on, ins } => {
+                    let tl = &*self.timeline;
+                    if on {
+                        if let Some(i) = tl.chans.iter().position(|c| c.id == chan) {
+                            let ch = &tl.chans[i];
+                            let ins = ch.insert.or(ins).unwrap_or(ch.home);
+                            self.voices.note_on(ch, i, Dest::Insert(ins), key, vel);
+                        }
+                    } else {
+                        self.voices.note_off(chan, key);
+                    }
+                }
+                Cmd::MidiSustain(down) => self.voices.sustain(down),
+                Cmd::MidiBend(st) => self.voices.set_bend(st),
+                Cmd::MidiOff => self.voices.all_notes_off(),
                 Cmd::PatPlay(id) => {
                     if id.is_some() && self.playing {
                         self.stop(false);

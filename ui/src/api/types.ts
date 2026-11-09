@@ -226,6 +226,26 @@ export interface AudioStatus extends AudioConfig {
   inputChannels: number; error: string | null; note: string | null; asioCompiled: boolean;
 }
 
+/** A MIDI input port. `id` is stable per port and is what `midiSelectDevice` takes. */
+export interface MidiDevice { id: string; name: string }
+/** The last key event, for an activity light. `velocity` is 1..127 (0 on a release). */
+export interface MidiLastNote { key: number; velocity: number; on: boolean }
+export interface MidiStatus {
+  /** The device that is open and feeding notes right now. */
+  connected: MidiDevice | null;
+  /** The device the user chose, open or not (it may be unplugged; it reopens when it returns). */
+  selected: MidiDevice | null;
+  /** Why the chosen device is not open (unplugged, busy), or the last error. */
+  error: string | null;
+  lastNote: MidiLastNote | null;
+  /** Key events received since the app started: a change means new activity (poll this). */
+  noteCount: number;
+  /** Channel (instrument) the keyboard plays; null = the first pitched channel. */
+  target: Id | null;
+}
+/** Event `midi-note`: one key down/up as it happens. */
+export interface MidiNoteEvent { note: MidiLastNote; count: number }
+
 export interface Kit { id: string; name: string; description: string; bytes: number; count: number; installed: boolean }
 export interface LibraryList { kits: Kit[]; folders: string[] }
 export interface LibFile { name: string; path: string; group: string }

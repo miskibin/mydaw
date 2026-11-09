@@ -4,11 +4,14 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use wave_audio_io::AudioConfig;
+use wave_midi_in::MidiDevice;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
     pub audio: AudioConfig,
+    /// The MIDI keyboard to reopen at startup (`None` = no device).
+    pub midi_device: Option<MidiDevice>,
     pub folders: Vec<String>,
     pub last_project: Option<String>,
 }

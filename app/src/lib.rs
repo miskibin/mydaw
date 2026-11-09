@@ -19,12 +19,14 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use wave_audio_io::{AudioConfig, AudioIo, AudioStatus};
 use wave_engine::{Engine, Op, Project, StateDto};
+use wave_midi_in::{MidiDevice, MidiInput, MidiStatus};
 
 pub use cli_shim::CliStatus;
 
 pub struct App {
     pub engine: Arc<Engine>,
     pub audio: AudioIo,
+    pub midi: Arc<MidiInput>,
     pub plugins: Arc<plugins::Plugins>,
     pub settings: Mutex<settings::Settings>,
     pub status: Mutex<AudioStatus>,
@@ -309,6 +311,43 @@ async fn audio_set_config(app: St<'_>, handle: AppHandle, config: AudioConfig) -
     Ok(st)
 }
 
+// ---------------------------------------------------------------- MIDI keyboard
+
+/// The input ports the OS lists right now (rescanned on every call).
+#[tauri::command]
+async fn midi_list_devices(app: St<'_>) -> R<Vec<MidiDevice>> {
+    let a = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || a.midi.list()).await.map_err(es)
+}
+
+/// Chooses the keyboard (`None` = none) and opens it; the choice is saved and reopened at startup.
+#[tauri::command]
+async fn midi_select_device(app: St<'_>, id: Option<String>) -> R<MidiStatus> {
+    let a = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let st = a.midi.select(id.as_deref(), None);
+        let mut s = a.settings.lock();
+        s.midi_device = st.selected.clone();
+        s.save();
+        st
+    })
+    .await
+    .map_err(es)
+}
+
+#[tauri::command]
+async fn midi_status(app: St<'_>) -> R<MidiStatus> {
+    Ok(app.midi.status())
+}
+
+/// Which Channel Rack channel (instrument) the keyboard plays; `None` = the first pitched one.
+#[tauri::command]
+async fn midi_set_target(app: St<'_>, channel: Option<u64>) -> R<MidiStatus> {
+    let st = app.midi.set_target(channel);
+    app.engine.midi_configure(channel, st.connected.is_some());
+    Ok(st)
+}
+
 // ---------------------------------------------------------------- library
 
 #[tauri::command]
@@ -514,9 +553,32 @@ pub fn run() {
         }
     }
     let audio = AudioIo::spawn(engine.clone());
+    let events: Arc<std::sync::OnceLock<AppHandle>> = Arc::new(std::sync::OnceLock::new());
+    let midi = {
+        let (e1, e2, ev1, ev2) = (engine.clone(), engine.clone(), events.clone(), events.clone());
+        MidiInput::start(
+            Arc::new(wave_midi_in::MidirBackend),
+            wave_midi_in::Hooks {
+                message: Arc::new(move |m| e1.midi_event(m)),
+                status: Arc::new(move |st: &MidiStatus| {
+                    // a device appearing or vanishing switches live notes on/off (and releases them)
+                    e2.midi_configure(st.target, st.connected.is_some());
+                    if let Some(h) = ev1.get() {
+                        let _ = h.emit("midi-status", st);
+                    }
+                }),
+                note: Arc::new(move |n| {
+                    if let Some(h) = ev2.get() {
+                        let _ = h.emit("midi-note", n);
+                    }
+                }),
+            },
+        )
+    };
     let app = Arc::new(App {
         engine: engine.clone(),
         audio,
+        midi,
         plugins,
         status: Mutex::new(AudioStatus::default()),
         settings: Mutex::new(settings),
@@ -569,6 +631,15 @@ pub fn run() {
                 let st = a.audio.start(cfg);
                 *a.status.lock() = st;
             });
+            let _ = events.set(tapp.handle().clone());
+            // reopen the saved keyboard (it may be unplugged: the status says so, and it opens when it returns)
+            let a = app_setup.clone();
+            std::thread::spawn(move || {
+                let saved = a.settings.lock().midi_device.clone();
+                if let Some(d) = saved {
+                    a.midi.select(Some(&d.id), Some(&d.name));
+                }
+            });
             let h = tapp.handle().clone();
             engine.on_change(move |dto| {
                 let _ = h.emit("state", dto);
@@ -583,6 +654,7 @@ pub fn run() {
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
             import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config,
+            midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save, export_audio, export_cancel,
             vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status
