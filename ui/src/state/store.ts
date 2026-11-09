@@ -69,9 +69,19 @@ export function allocId(): Id {
 }
 
 // ---- replacing from the engine ----
+/**
+ * `reconcile` first unwraps its input, a deep walk that copies every object's property
+ * descriptors to strip store proxies; a state from the engine is fresh JSON with none. Marking
+ * the root as already raw skips the walk (most of a ~1 MB project's reconcile time).
+ */
+function fresh<T extends object>(v: T): T {
+  if (!Object.prototype.hasOwnProperty.call(v, $RAW)) Object.defineProperty(v, $RAW, { value: v });
+  return v;
+}
+
 export function replaceState(dto: StateDto) {
   batch(() => {
-    setS('project', reconcile(dto.project, { key: 'id', merge: true }));
+    setS('project', reconcile(fresh(dto.project), { key: 'id', merge: true }));
     bumpProject();
     setS({ revision: dto.revision, canUndo: dto.canUndo, canRedo: dto.canRedo, path: dto.path, dirty: dto.dirty, ready: true });
     setS('transport', reconcile(dto.transport));

@@ -289,6 +289,30 @@ await act('settings_open_close', async () => {
 });
 await P(() => window.__perf.setU('settings', false));
 
+// synchronous cost of the store paths every edit takes (scales with project size)
+if (!only || only.includes('op_cost')) {
+  results.op_cost = await P(async () => {
+    const { S, applyLocal, replaceState, A } = window.__perf;
+    const tick = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const time = (n, f) => { const t = []; for (let i = 0; i < n; i++) { const a = performance.now(); f(i); t.push(performance.now() - a); } t.sort((x, y) => x - y); return { p50: +t[t.length >> 1].toFixed(2), max: +t[t.length - 1].toFixed(2) }; };
+    const out = {}, c0 = JSON.parse(JSON.stringify(S.project.clips.find(c => c.kind === 'audio')));
+    out.applyLocal_move_clip_ms = time(30, i => applyLocal([{ op: 'putClips', clips: [{ ...c0, start: c0.start + (i % 5) }] }]));
+    applyLocal([{ op: 'putClips', clips: [c0] }]); await tick();
+    const dto = { project: JSON.parse(JSON.stringify(S.project)), revision: S.revision + 1000, canUndo: true, canRedo: false, transport: JSON.parse(JSON.stringify(S.transport)), path: null, dirty: true, audition: {} };
+    const text = JSON.stringify(dto);
+    out.state_kib = Math.round(text.length / 1024);
+    out.replaceState_unchanged_ms = time(8, () => { const d = JSON.parse(text); d.revision = ++dto.revision; replaceState(d); });
+    await tick();
+    out.replaceState_one_clip_changed_ms = time(8, i => { const d = JSON.parse(text); d.revision = ++dto.revision; d.project.clips[5].start += 1 + i; replaceState(d); });
+    await tick();
+    const lat = [];
+    for (let i = 0; i < 6; i++) { const a = performance.now(); await A.undo(); await tick(); lat.push(+(performance.now() - a).toFixed(1)); }
+    out.undo_to_2nd_frame_ms = lat;
+    return out;
+  });
+  console.error('[act] op_cost', JSON.stringify(results.op_cost));
+}
+
 results.errors = errors.slice(0, 10);
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, JSON.stringify(results, null, 2));
