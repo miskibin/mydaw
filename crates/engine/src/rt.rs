@@ -298,6 +298,50 @@ impl Ring {
     fn clear(&mut self) {
         self.buf.fill(0.0);
     }
+    /// Takes over what `old` still has to play (see [`carry_line`]).
+    fn carry(&mut self, old: &mut Ring) {
+        carry_line(&mut self.buf, &mut self.w, &mut old.buf, old.w);
+    }
+}
+
+/// Moves the samples a delay line (`src`, next read at `src_w`) still has to play into a new
+/// line `dst` (fresh, all zeros, write position `*dst_w` = 0). Same length: the buffers are
+/// swapped (O(1)). Shorter: the newest samples are kept (the oldest are skipped). Longer: the
+/// old samples come after a gap of the extra delay. Runs on the audio thread: no allocation.
+fn carry_line(dst: &mut Vec<f32>, dst_w: &mut usize, src: &mut Vec<f32>, src_w: usize) {
+    let (dn, d) = (dst.len(), src.len());
+    if dn == 0 || d == 0 {
+        return;
+    }
+    if dn == d {
+        std::mem::swap(dst, src);
+        *dst_w = src_w;
+        return;
+    }
+    *dst_w = 0;
+    if dn < d {
+        let start = (src_w + d - dn) % d;
+        let first = (d - start).min(dn);
+        dst[..first].copy_from_slice(&src[start..start + first]);
+        dst[first..].copy_from_slice(&src[..dn - first]);
+    } else {
+        let pad = dn - d;
+        let first = d - src_w;
+        dst[pad..pad + first].copy_from_slice(&src[src_w..]);
+        dst[pad + first..].copy_from_slice(&src[..src_w]);
+    }
+}
+
+/// Carries an insert's PDC lines over a graph swap. False when there was nothing to carry
+/// (no line, a line known to hold only zeros, or the line was off for low-latency monitoring).
+fn carry_pdc(new: &mut InsertRt, old: &mut InsertRt) -> bool {
+    if new.pdc_l.is_empty() || old.pdc_l.is_empty() || old.low_lat || (old.parked && old.quiet >= old.idle_at) {
+        return false;
+    }
+    let mut w = 0;
+    carry_line(&mut new.pdc_l, &mut w, &mut old.pdc_l, old.pdc_w);
+    carry_line(&mut new.pdc_r, &mut new.pdc_w, &mut old.pdc_r, old.pdc_w);
+    true
 }
 
 /// Fader/pan/mute for everything, sent when only those changed.
@@ -633,12 +677,19 @@ impl Rt {
                                 p.set_params(pb);
                             }
                         }
-                        if let Some(old) = self.graph.inserts.iter().find(|i| i.id == ins.id) {
+                        // the audio in flight in the PDC line goes on playing: rebuilding the graph
+                        // (an effect added or bypassed anywhere) must not drop up to the whole
+                        // compensation delay (seconds with a long look-ahead Rider) on every insert
+                        let mut pdc_carried = false;
+                        if let Some(old) = self.graph.inserts.iter_mut().find(|i| i.id == ins.id) {
                             ins.g_cur = old.g_cur;
+                            pdc_carried = carry_pdc(ins, old);
                         }
-                        // the new insert's PDC line starts empty, so a parked chain is idle at once
-                        (ins.quiet, ins.parked, ins.idle_at) = if carried { (quiet, parked, 0) } else { (usize::MAX / 2, true, 0) };
+                        (ins.quiet, ins.parked) = if carried { (quiet, parked) } else { (usize::MAX / 2, true) };
+                        // a parked chain is idle once its PDC line has played out (at once if it is empty)
+                        ins.idle_at = if pdc_carried { ins.quiet.saturating_add(ins.pdc_l.len()) } else { 0 };
                     }
+                    g.click.carry(&mut self.graph.click);
                     let old = std::mem::replace(&mut self.graph, g);
                     self.trash(Garbage::Graph(old));
                 }

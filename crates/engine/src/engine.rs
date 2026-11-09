@@ -181,6 +181,8 @@ struct Core {
     redo: Vec<Project>,
     revision: u64,
     gesture: Option<Project>,
+    /// A transient edit inside the open gesture was not reported to listeners yet.
+    gesture_unreported: bool,
     sources: SourceStore,
     path: Option<PathBuf>,
     saved_revision: u64,
@@ -266,6 +268,7 @@ impl Engine {
                 redo: vec![],
                 revision: 1,
                 gesture: None,
+                gesture_unreported: false,
                 sources: SourceStore::default(),
                 path: None,
                 saved_revision: 1,
@@ -455,13 +458,21 @@ impl Engine {
         if c.project == before {
             return Ok(c.revision);
         }
-        if !(transient && c.gesture.is_some()) {
+        let in_gesture = transient && c.gesture.is_some();
+        if !in_gesture {
             push_undo(&mut c, before);
         }
         c.revision += 1;
         self.sync(&mut c, d);
         let rev = c.revision;
-        self.changed(c);
+        // inside a gesture (a drag sends one batch per frame) listeners are not sent the whole
+        // project each time: the UI holds those states back anyway, and `end_gesture` reports
+        // the result. On a big song that was ~1 MB serialised, sent and parsed per frame.
+        if in_gesture {
+            c.gesture_unreported = true;
+        } else {
+            self.changed(c);
+        }
         Ok(rev)
     }
 
@@ -474,11 +485,15 @@ impl Engine {
 
     pub fn end_gesture(&self) {
         let mut c = self.core.lock();
+        let unreported = std::mem::take(&mut c.gesture_unreported);
         if let Some(g) = c.gesture.take() {
             if g != c.project {
                 push_undo(&mut c, g);
                 // renders skipped during the drag (pitch edits) happen now
                 self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+                self.changed(c);
+            } else if unreported {
+                // dragged and back: nothing to undo, but listeners have not seen the revisions
                 self.changed(c);
             }
         }
@@ -487,6 +502,7 @@ impl Engine {
     pub fn undo(&self) -> bool {
         let mut c = self.core.lock();
         c.gesture = None;
+        c.gesture_unreported = false;
         let Some(p) = c.undo.pop() else { return false };
         let cur = std::mem::replace(&mut c.project, p);
         c.redo.push(cur);
@@ -499,6 +515,7 @@ impl Engine {
     pub fn redo(&self) -> bool {
         let mut c = self.core.lock();
         c.gesture = None;
+        c.gesture_unreported = false;
         let Some(p) = c.redo.pop() else { return false };
         let cur = std::mem::replace(&mut c.project, p);
         c.undo.push(cur);

@@ -2,7 +2,8 @@
 // channels, with a velocity lane under both. It is a floating window in the effect-window
 // layer (F5 / a playlist click hide it, "Okna" brings it back). Grids are canvases with cached
 // background layers; every edit goes out as an op (one undo step per click or drag).
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { unwrap } from 'solid-js/store';
 import { VOL_UNITY, type Channel, type Note } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
 import {
@@ -16,7 +17,7 @@ import {
   deleteChannel, newPattern, openPattern, patFront, patOp, playStep, previewPattern, putNotes, selectChannel, setBars, setChannel,
   setView, togglePreview, toggleChanMute, toggleChanSolo, patPlayhead,
 } from '../state/pattern';
-import { projVersion, S } from '../state/store';
+import { arrVersion, S } from '../state/store';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
@@ -147,8 +148,8 @@ function useSize(el: () => HTMLElement | undefined) {
 /** Bumped when anything the canvases show changes (pattern notes, channels, theme). */
 function useDataVersion() {
   const [v, setV] = createSignal(0);
-  // projVersion bumps on every project change: no deep JSON walk of a 2000-note pattern per edit
-  createEffect(() => { projVersion(); curPat(); channels(); theme.epoch; setV(x => x + 1); });
+  // arrVersion bumps on every arrangement change: no deep JSON walk of a 2000-note pattern per edit
+  createEffect(() => { arrVersion(); curPat(); channels(); theme.epoch; setV(x => x + 1); });
   return v;
 }
 
@@ -215,9 +216,16 @@ function addChannelMenu(x: number, y: number) {
 
 function Rack(props: { root: () => HTMLDivElement }) {
   let gridWrap!: HTMLDivElement, cv!: HTMLCanvasElement, head!: HTMLCanvasElement, laneCv!: HTMLCanvasElement, laneWrap!: HTMLDivElement;
-  const pt = () => curPat()!;
+  const ptM = createMemo(() => curPat()!);
+  const pt = () => ptM();
   const chans = () => channels();
   const selCh = () => chanById(W().ch) ?? chans()[0];
+  /** Visible / hidden note counts and the roll rows, from plain data once per project change. */
+  const stats = createMemo(() => {
+    arrVersion();
+    const p = unwrap(pt()), vis = p.notes.filter(n => visible(n, p));
+    return { vis, hidden: p.notes.length - vis.length };
+  });
   const size = useSize(() => gridWrap);
   const laneSize = useSize(() => laneWrap);
   const data = useDataVersion();
@@ -230,7 +238,8 @@ function Rack(props: { root: () => HTMLDivElement }) {
   };
   const maxScroll = () => { const G = geo(); return { x: Math.max(0, G.steps * G.cw - size().w), y: Math.max(0, G.rows * RH - size().h) }; };
   createEffect(() => { const m = maxScroll(), s = scroll(); if (s.x > m.x || s.y > m.y) setScroll({ x: Math.min(s.x, m.x), y: Math.min(s.y, m.y) }); });
-  const rollRows = () => new Set(chans().filter(c => isRollRow(pt().notes.filter(n => visible(n, pt())), c)).map(c => c.id));
+  const rollRowsM = createMemo(() => { const vis = stats().vis; return new Set(unwrap(chans()).filter(c => isRollRow(vis, c)).map(c => c.id)); });
+  const rollRows = () => rollRowsM();
 
   // static + notes: redrawn when data, geometry or selection change
   createEffect(() => {
@@ -239,7 +248,7 @@ function Rack(props: { root: () => HTMLDivElement }) {
     fitCanvas(cv, w, h); fitCanvas(head, w, h);
     const g = cv.getContext('2d')!, dpr = window.devicePixelRatio || 1;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawRack(g, w, h, G, layer, pt(), chans(), selCh()?.id ?? null, rollRows(), chans().some(c => c.solo));
+    drawRack(g, w, h, G, layer, unwrap(pt()), unwrap(chans()), selCh()?.id ?? null, rollRows(), chans().some(c => c.solo));
     lastHead = -2;
   });
   createEffect(() => {
@@ -248,7 +257,7 @@ function Rack(props: { root: () => HTMLDivElement }) {
     fitCanvas(laneCv, w, h);
     const g = laneCv.getContext('2d')!, dpr = window.devicePixelRatio || 1;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const notes = c ? pt().notes.map((n, i) => ({ n, i })).filter(x => x.n.ch === c.id && visible(x.n, pt())) : [];
+    const p = unwrap(pt()), notes = c ? p.notes.map((n, i) => ({ n, i })).filter(x => x.n.ch === c.id && visible(x.n, p)) : [];
     drawLane(g, w, h, { x0: 0, cw: G.cw, sx: G.sx, steps: G.steps, notes, color: c?.color ?? '#4f8ef7', cells: !(c && rollRows().has(c.id)), muted: !!c?.mute });
   });
   // playhead column: only when the step changes
@@ -280,9 +289,9 @@ function Rack(props: { root: () => HTMLDivElement }) {
       say(c.name + ': nuty z długością / wysokością — 2× klik otwiera piano roll');
       return;
     }
-    const on = e.button === 0 ? !pt().notes.some(n => n.ch === c.id && Math.abs(n.step - step) < 1e-3) : false;
+    const on = e.button === 0 ? !unwrap(pt()).notes.some(n => n.ch === c.id && Math.abs(n.step - step) < 1e-3) : false;
     const g = new Gesture(on ? 'Kroki' : 'Usuń kroki');
-    let notes = setStep(pt().notes, c.id, step, on);
+    let notes = setStep(unwrap(pt()).notes, c.id, step, on);
     g.update([putNotes(pt(), notes)]);
     if (on) audition(c.id, undefined, 0.8);
     let last = { row, step };
@@ -312,7 +321,7 @@ function Rack(props: { root: () => HTMLDivElement }) {
     const G = geo(), r = laneCv.getBoundingClientRect(), roll = rollRows().has(c.id);
     const at = (ev: PointerEvent) => ({ s: Math.floor((ev.clientX - r.left + G.sx) / G.cw), v: clamp(1 - (ev.clientY - r.top - 6) / (r.height - 9), 0, 1) });
     const g = new Gesture('Velocity');
-    let notes = pt().notes, last = at(e);
+    let notes = unwrap(pt()).notes, last = at(e);
     const apply = (s: number, v: number) => { notes = roll ? notes.map(n => n.ch === c.id && Math.floor(n.step + 1e-3) === s ? { ...n, v: Math.round(v * 100) / 100 } : n) : setVelAt(notes, c.id, s, v); };
     apply(last.s, last.v);
     g.update([putNotes(pt(), notes)]);
@@ -366,7 +375,7 @@ function Rack(props: { root: () => HTMLDivElement }) {
         </div>
       </div>
       <div class="pstatus mono">
-        <span>{chans().length} kanałów · {pt().notes.filter(n => visible(n, pt())).length} nut{pt().notes.some(n => !visible(n, pt())) ? ' · ' + pt().notes.filter(n => !visible(n, pt())).length + ' poza końcem (ukryte)' : ''}</span>
+        <span>{chans().length} kanałów · {stats().vis.length} nut{stats().hidden ? ' · ' + stats().hidden + ' poza końcem (ukryte)' : ''}</span>
         <span>Klik = krok · PPM = usuń · przeciągnij = maluj · Ctrl+klik w nazwę = odsłuch · PPM na kanale = menu</span>
       </div>
     </div>
@@ -434,8 +443,11 @@ function projectKey(): { root: number; scale: number } {
 
 function Roll(props: { root: () => HTMLDivElement }) {
   let wrap!: HTMLDivElement, cv!: HTMLCanvasElement, phead!: HTMLDivElement, laneCv!: HTMLCanvasElement, laneWrap!: HTMLDivElement;
-  const pt = () => curPat()!;
-  const ch = () => chanById(W().ch)!;
+  // memos: every read was a find() through the store (thousands per redraw of a big pattern)
+  const ptM = createMemo(() => curPat()!), chM = createMemo(() => chanById(W().ch)!);
+  const pt = () => ptM(), ch = () => chM();
+  /** The notes as plain data (canvas drawing and hit tests; redraws follow `data`/`arrVersion`). */
+  const notesRaw = () => unwrap(pt()).notes;
   const size = useSize(() => wrap);
   const laneSize = useSize(() => laneWrap);
   const data = useDataVersion();
@@ -452,7 +464,11 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const steps = stepsOf(pt()), fit = (size().w - KW) / steps;
     return { pps: clamp(fit, 6, 48) * view().zoom, sx: view().sx, sy: view().sy, rowH: view().rowH, kw: KW, steps };
   };
-  const chanNotes = () => pt().notes.map((n, i) => ({ n, i })).filter(x => x.n.ch === ch().id && visible(x.n, pt()));
+  const chanNotes = createMemo(() => {
+    arrVersion();
+    const p = unwrap(pt()), id = ch().id;
+    return p.notes.map((n, i) => ({ n, i })).filter(x => x.n.ch === id && visible(x.n, p));
+  });
   // keep the selection valid when the notes change underneath (undo, CLI)
   createEffect(() => { const ok = new Set(chanNotes().map(x => x.i)); const s = sel(); if ([...s].some(i => !ok.has(i))) setSel(new Set([...s].filter(i => ok.has(i)))); });
   // initial vertical position: centred on the channel's notes (or its root)
@@ -471,7 +487,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     fitCanvas(cv, w, h);
     const g = cv.getContext('2d')!, dpr = window.devicePixelRatio || 1;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawRoll(g, w, h, geo(), layer, { pt: pt(), ch: ch(), chans: new Map(channels().map(c => [c.id, c])), sel: sel(), root: root(), mask: mask(), hoverKey: hoverKey(), marquee: marq() });
+    drawRoll(g, w, h, geo(), layer, { pt: unwrap(pt()), ch: unwrap(ch()), chans: new Map(unwrap(channels()).map(c => [c.id, c])), sel: sel(), root: root(), mask: mask(), hoverKey: hoverKey(), marquee: marq() });
   });
   createEffect(() => {
     data(); sel();
@@ -496,15 +512,15 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const x = e.clientX - r.left, y = e.clientY - r.top;
     return { x, y, step: (x - KW + G.sx) / G.pps, key: clamp(127 - Math.floor((y + G.sy) / G.rowH), 0, 127) };
   };
-  const hitNote = (step: number, key: number) => noteAt(pt().notes, ch().id, ch(), step, key);
-  const edgeHit = (i: number, x: number) => { const n = pt().notes[i], G = geo(); return x >= rollX(G, n.step + n.len) - Math.min(6, n.len * G.pps * 0.3); };
+  const hitNote = (step: number, key: number) => noteAt(notesRaw(), ch().id, unwrap(ch()), step, key);
+  const edgeHit = (i: number, x: number) => { const n = notesRaw()[i], G = geo(); return x >= rollX(G, n.step + n.len) - Math.min(6, n.len * G.pps * 0.3); };
   const commitNotes = (notes: Note[], label: string) => commit([putNotes(pt(), notes)], label);
 
   function eraseDrag(e: PointerEvent) {
     const g = new Gesture('Usuń nuty');
-    let notes = pt().notes, n0 = notes.length;
+    let notes = notesRaw(), n0 = notes.length;
     const del = (ev: PointerEvent | MouseEvent) => {
-      const q = pos(ev), i = noteAt(notes, ch().id, ch(), q.step, q.key);
+      const q = pos(ev), i = noteAt(notes, ch().id, unwrap(ch()), q.step, q.key);
       if (i < 0) return;
       notes = notes.filter((_, k) => k !== i);
       g.update([putNotes(pt(), notes)]);
@@ -514,7 +530,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     track(ev => del(ev), () => { g.end(); if (notes.length < n0) say('Usunięto ' + (n0 - notes.length) + ' nut'); }, 'not-allowed');
   }
   function moveDrag(e: PointerEvent, idx: number[], mode: 'move' | 'resize', g?: Gesture) {
-    const orig = pt().notes.slice(), p0 = pos(e), lead = pt().notes[idx[idx.length - 1]] ?? pt().notes[idx[0]];
+    const orig = notesRaw().slice(), p0 = pos(e), lead = orig[idx[idx.length - 1]] ?? orig[idx[0]];
     const gest = g ?? new Gesture(mode === 'move' ? 'Przesuń nuty' : 'Długość nut');
     let lastKey = keyOf(lead, ch()), moved = false;
     track(ev => {
@@ -522,7 +538,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
       if (!moved && Math.hypot(q.x - p0.x, q.y - p0.y) < 3) return;
       moved = true;
       const notes = mode === 'move'
-        ? moveNotes(orig, idx, q.step - p0.step, q.key - p0.key, unit(ev.altKey), ch())
+        ? moveNotes(orig, idx, q.step - p0.step, q.key - p0.key, unit(ev.altKey), unwrap(ch()))
         : resizeNotes(orig, idx, q.step - p0.step, unit(ev.altKey));
       gest.update([putNotes(pt(), notes)]);
       const ln = notes[idx[idx.length - 1]];
@@ -587,7 +603,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const s = snapStep(p.step, unit(e.altKey), true);
     if (s < 0 || s >= stepsOf(pt())) return;
     const n: Note = { ch: ch().id, step: s, len: lastLen(), p: p.key };
-    const notes = [...pt().notes, n];
+    const notes = [...notesRaw(), n];
     const g = new Gesture(tool === 'paint' ? 'Maluj nuty' : 'Nowa nuta');
     g.update([putNotes(pt(), notes)]);
     setSel(new Set([notes.length - 1]));
@@ -622,7 +638,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const r = laneCv.getBoundingClientRect();
     const at = (ev: PointerEvent) => { const G = geo(); return { step: (ev.clientX - r.left - KW + G.sx) / G.pps, v: clamp(1 - (ev.clientY - r.top - 6) / (r.height - 9), 0, 1) }; };
     const g = new Gesture('Velocity');
-    let notes = pt().notes;
+    let notes = notesRaw();
     const apply = (ev: PointerEvent) => {
       const q = at(ev), G = geo(), tol = Math.max(0.5, 5 / G.pps);
       // notes starting under the pointer (± a few px); with a selection, only selected ones
@@ -642,11 +658,11 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const stop = () => { e.preventDefault(); e.stopPropagation(); };
     if (tl && !m && !e.altKey) { stop(); setRollTool(tl.id); say('Piano roll · ' + tl.label); return; }
     if (m && k === 'a') { stop(); setSel(new Set(chanNotes().map(x => x.i))); say('Zaznaczono ' + chanNotes().length + ' nut'); return; }
-    const s = [...sel()].filter(i => pt().notes[i]?.ch === ch().id);
+    const s = [...sel()].filter(i => notesRaw()[i]?.ch === ch().id);
     if (m && (k === 'c' || k === 'x') && !e.shiftKey) {
       stop(); if (!s.length) return;
-      noteClip = s.map(i => pt().notes[i]); noteClipAt = null;
-      if (k === 'x') { const del = new Set(s); commitNotes(pt().notes.filter((_, i) => !del.has(i)), 'Wytnij nuty'); setSel(new Set<number>()); }
+      noteClip = s.map(i => notesRaw()[i]); noteClipAt = null;
+      if (k === 'x') { const del = new Set(s); commitNotes(notesRaw().filter((_, i) => !del.has(i)), 'Wytnij nuty'); setSel(new Set<number>()); }
       say((k === 'x' ? 'Wycięto ' : 'Skopiowano ') + s.length + ' nut');
       return;
     }
@@ -655,15 +671,15 @@ function Roll(props: { root: () => HTMLDivElement }) {
       const a = Math.min(...noteClip.map(n => n.step)), b = Math.max(...noteClip.map(n => n.step + n.len));
       const at = noteClipAt ?? a + Math.max(4, Math.ceil((b - a) / 4 - 1e-9) * 4); // first paste lands after the copied block, further ones chain on
       const copies = noteClip.map(n => ({ ...n, ch: ch().id, step: n.step - a + at }));
-      const base = pt().notes.length;
-      commitNotes([...pt().notes, ...copies], 'Wklej nuty'); setSel(new Set(copies.map((_, j) => base + j)));
+      const base = notesRaw().length;
+      commitNotes([...notesRaw(), ...copies], 'Wklej nuty'); setSel(new Set(copies.map((_, j) => base + j)));
       noteClipAt = at + (b - a);
       say('Wklejono ' + copies.length + ' nut');
       return;
     }
     if (m && (k === 'b' || k === 'd')) {
       stop(); if (!s.length) return;
-      const r = duplicateRight(pt().notes, s);
+      const r = duplicateRight(notesRaw(), s);
       commitNotes(r.notes, 'Duplikuj nuty'); setSel(new Set(r.idx));
       const past = r.idx.filter(i => !visible(r.notes[i], pt())).length;
       say('Zduplikowano ' + s.length + ' nut' + (past ? ' · ' + past + ' poza końcem patternu (ukryte) — wydłuż go, aby je usłyszeć' : ''));
@@ -672,7 +688,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && s.length && !e.shiftKey) {
       stop();
       const d = (e.key === 'ArrowUp' ? 1 : -1) * (m ? 12 : 1);
-      const notes = transpose(pt().notes, s, d, ch());
+      const notes = transpose(notesRaw(), s, d, ch());
       commitNotes(notes, m ? 'Oktawa' : 'Transpozycja');
       const lead = notes[s[s.length - 1]]; audition(ch().id, keyOf(lead, ch()), lead.v ?? 1);
       return;
@@ -680,7 +696,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     if ((e.key === 'Delete' || e.key === 'Backspace') && s.length) {
       stop();
       const del = new Set(s);
-      commitNotes(pt().notes.filter((_, i) => !del.has(i)), 'Usuń nuty'); setSel(new Set<number>());
+      commitNotes(notesRaw().filter((_, i) => !del.has(i)), 'Usuń nuty'); setSel(new Set<number>());
       say('Usunięto ' + s.length + ' nut');
       return;
     }

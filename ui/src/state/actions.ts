@@ -8,7 +8,7 @@ import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../li
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
 import { flushNotebook } from './notebook';
-import { allocId, findFx, insName, S, setTransport } from './store';
+import { allocId, findFx, insName, plain, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
 import { confirmUnsaved } from '../ui/Confirm';
@@ -123,7 +123,6 @@ export function setLoop(loop: { a: number; b: number } | null, label = 'Pętla')
 
 // ---------- selection & clips ----------
 export const selClips = (): Clip[] => { const s = new Set(U.sel); return S.project.clips.filter(c => s.has(c.id)); };
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 let clipboard: Clip[] = [];
 export const hasClipboard = () => clipboard.length > 0;
 

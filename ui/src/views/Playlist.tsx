@@ -12,7 +12,7 @@ import { snapFloor, snapRes, snapRound } from '../lib/snap';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { peaksVersion } from '../state/peaks';
-import { allocId, projVersion, S, srcLenBeats, srcOf } from '../state/store';
+import { allocId, anyTrackSolo, arrVersion, plain, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -24,7 +24,6 @@ import { autoById } from '../state/store';
 import { openPattern } from '../state/pattern';
 import { T, theme } from '../ui/theme';
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 /** Shared geometry, so the browser and OS drops can find a beat/track under the pointer. */
 export const geom = { grid: null as HTMLDivElement | null, scroll: null as HTMLDivElement | null, tops: [0] as number[] };
@@ -101,7 +100,7 @@ export function Playlist() {
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
   // clips, comps, automations, patterns, sources: one project-version signal, not a
   // subscription to every field of every item (that cost ~7 ms per clip move on a big song)
-  createEffect(() => { projVersion(); prefs().clipIcons; dirtyGrid = true; dirtyFade = true; });
+  createEffect(() => { arrVersion(); prefs().clipIcons; dirtyGrid = true; dirtyFade = true; });
   createEffect(() => {
     for (const k in S.audition) void S.audition[k];
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
@@ -698,12 +697,14 @@ export function Playlist() {
   let ovCv!: HTMLCanvasElement;
   const [ovW, setOvW] = createSignal(600);
   /** Beats the overview spans: the song plus some room, at least what is visible. */
-  const ovRange = () => {
-    projVersion();
+  // memos: this was a walk over every clip through the store on each scroll / zoom step
+  const songEnd = createMemo(() => {
+    arrVersion();
     let end = 0;
-    for (const c of S.project.clips) end = Math.max(end, c.start + c.len);
-    return Math.min(TOTAL, Math.max(64, end * 1.15 + 16, (scroll().x + cw()) / U.bw));
-  };
+    for (const c of unwrap(S.project).clips) end = Math.max(end, c.start + c.len);
+    return end;
+  });
+  const ovRange = createMemo(() => Math.min(TOTAL, Math.max(64, songEnd() * 1.15 + 16, (scroll().x + cw()) / U.bw)));
   const thumb = () => {
     const R = ovRange(), W = ovW();
     const a = scroll().x / U.bw / R * W, w = Math.max(24, cw() / U.bw / R * W);
@@ -714,7 +715,7 @@ export function Playlist() {
     onCleanup(() => ro.disconnect());
   });
   createEffect(() => {
-    const W = ovW(), H = 18, R = ovRange(); projVersion(); theme.epoch;
+    const W = ovW(), H = 18, R = ovRange(); arrVersion(); theme.epoch;
     fitCanvas(ovCv, W, H);
     const g = ovCv.getContext('2d')!, P = unwrap(S.project), n = Math.max(1, P.tracks.length);
     g.clearRect(0, 0, W, H);
@@ -836,8 +837,7 @@ function openLaneMenu(x: number, y: number, i: number) {
 
 function LaneHeader(props: { t: Track; i: number }) {
   const t = () => props.t;
-  const anySolo = () => S.project.tracks.some(x => x.solo);
-  const audible = () => !t().muted && (!anySolo() || t().solo);
+  const audible = () => !t().muted && (!anyTrackSolo() || t().solo);
   const routeIdx = () => S.project.inserts.findIndex(m => m.id === t().insert);
   const down = (e: PointerEvent) => {
     if (e.button === 2) { e.preventDefault(); return openLaneMenu(e.clientX, e.clientY, props.i); }

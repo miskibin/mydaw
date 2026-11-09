@@ -7,11 +7,10 @@ import { SAMPLE_ROOT, type Channel, type Id, type Inst, type Note, type Op, type
 import { baseName, clamp, mod } from '../lib/format';
 import { builtinChannel, cloneNotes, INST_NAME, stepsOf } from '../lib/pattern';
 import { commit } from './edit';
-import { allocId, S } from './store';
+import { allocId, plain, S } from './store';
 import { curBeat, tele } from './telemetry';
 import { say, setU, U } from './ui';
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 const PCOLORS = ['#4f8ef7', '#e0a44a', '#7c8cf8', '#47b8a8', '#d9678f', '#5fbf8a', '#9a8cf0', '#69c3d6'];
 
 export const patById = (id: Id | undefined | null) => (id == null ? undefined : S.project.patterns.find(p => p.id === id));

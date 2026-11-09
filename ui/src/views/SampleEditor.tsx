@@ -6,7 +6,7 @@ import { clamp, dbg, dbText, panText } from '../lib/format';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { getPeaks, peakRange, peaksVersion } from '../state/peaks';
-import { insName, S } from '../state/store';
+import { insName, plain, S } from '../state/store';
 import { tele } from '../state/telemetry';
 import { say, setU, U } from '../state/ui';
 import { track } from '../ui/drag';
@@ -15,7 +15,6 @@ import { rgba, T, theme } from '../ui/theme';
 import { Knob } from '../ui/Knob';
 import { moveWindow } from './FxWindow';
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 export function SampleEditor() {
   const clip = () => U.editor ? S.project.clips.find(c => c.id === U.editor!.clipId) : undefined;
