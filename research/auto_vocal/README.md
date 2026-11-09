@@ -21,13 +21,12 @@ bleeding into the take, but its weights are research-only. The app's YIN is behi
 amateur takes, fine on clean studio takes, and fails when the beat leaks in.
 **Pitch correction** works in the paired test, with two conditions: the note grid must
 come from the beat (blind tuning estimation fails), and a *scale gate* is needed because
-rap and many amateur melodies do not stay on the beat's scale. The **mix chain** beats
-a generic preset on tonal balance (bootstrap CI > 0). It ties on sibilance, per-band
-vocal-to-beat balance, dynamics and level (CIs include 0), and both are far better than
-the untouched raw vocal. Learning the vocal EQ *from the beat* (ridge regression) gave **no**
+rap and many amateur melodies do not stay on the beat's scale. Against a generic preset on the MUSDB paired test, the **mix chain** wins on vocal-to-beat level; loses on dynamic spread vs the pro stem; ties on tonal balance, sibilance, per-band vocal/beat balance (bootstrap 95 % CIs). The loss on dynamic spread is deliberate: the new dynamics make the vocal more even than the MUSDB stems, which contain backing vocals, after the owner heard the first version as uneven (see Dynamics). Both are far better than the untouched raw vocal. Learning the vocal EQ *from the beat* (ridge regression) gave **no**
 measurable gain over one median professional target. Data-driven "carving" is not
-supported by this evidence, so the chain uses boost-and-cut EQ at 50% strength toward the median pro tonal shape (63 Hz–10 kHz), with a fixed 3:1 compressor at the median level (chosen on train songs).
-Reverb level is set from the late energy measured in pro vocal stems. Delay is off.
+supported by this evidence, so the chain uses boost-and-cut EQ at 50% strength toward the median pro tonal shape (63 Hz–10 kHz), with the rider + fast + slow dynamics below (EQ chosen on train songs).
+Dynamics are a two-time-scale vocal rider, then a fast peak stage and a slow stage,
+checked against seven levelling goals and the pro stems. Reverb level is set from the late energy measured in pro
+vocal stems. Delay is off.
 A lookahead true-peak limiter finishes every file. Style selection (layer 4) was not built. There is no public ground truth
 to validate it, so a user toggle (natural / hard) is the honest product.
 
@@ -155,35 +154,82 @@ measured against the pro stem (median over songs; lower is better):
 | --- | --- | --- | --- | --- | --- |
 | untouched raw | 2.70 | 3.41 | 3.47 | 6.05 | 6.85 |
 | generic preset (HPF, -2 dB mud, +3 dB presence, +2 dB air, 4:1, level) | 2.46 | 1.40 | 2.88 | 2.31 | 3.78 |
-| auto, full matching EQ to median target | 2.96 | 3.06 | 2.74 | 2.29 | 3.75 |
-| auto + beat-conditioned targets | 2.92 | 2.56 | 2.94 | 2.28 | 4.09 |
-| **auto, configuration chosen on train split** | 2.36 | 1.34 | 3.16 | 2.30 | 3.51 |
+| auto, full matching EQ to median target | 2.96 | 3.06 | 2.74 | 2.28 | 3.82 |
+| auto + beat-conditioned targets | 3.02 | 2.56 | 2.94 | 2.28 | 4.10 |
+| **auto chain as shipped** (EQ from the train grid, rider + fast + slow dynamics) | 2.37 | 3.99 | 3.04 | 2.30 | 3.62 |
 | another song's pro vocal (spread between pro mixes) | 5.57 | 5.80 | 6.47 | 3.20 | – |
 
-Paired bootstrap, chosen auto chain vs generic preset (mean gain per song, 95 % CI): shape +0.32 [0.04, 0.61]; sibilance +0.31 [-0.23, 0.86]; band ratio +0.20 [-0.11, 0.51]; spread +0.02 [-0.39, 0.41]; level +0.01 [-0.00, 0.02]. Beat-conditioned vs median targets: band ratio -0.02 [-0.19, 0.15] dB. The configuration was picked on 40 *train*
+Paired bootstrap, chosen auto chain vs generic preset (mean gain per song, 95 % CI): shape +0.21 [-0.10, 0.56]; sibilance +0.38 [-0.14, 0.92]; band ratio -0.01 [-0.36, 0.36]; spread -2.00 [-2.45, -1.53]; level +0.01 [0.00, 0.02]. Beat-conditioned vs median targets: band ratio -0.02 [-0.19, 0.15] dB. The configuration was picked on 40 *train*
 songs from a 10-point grid (`results/layer3_chain_grid_train.json`) and reported once on
 the test songs. Full matching EQ to a population target is *worse* than doing nothing:
 it pulls every vocal toward an average that no individual pro mix has.
 
-Raw amateur vocals (Vocadito, 40 phone/home takes), against the pro-vocal distribution: dynamic spread median 11.7 → 9.2 dB (percentile 46 → 26); sibilance -9.3 → -6.6 dB (percentile 29 → 42); tonal-shape distance to the pro median 9.3 → 6.4 dB.
+Raw amateur vocals (Vocadito, 40 phone/home takes), against the pro-vocal distribution: dynamic spread median 11.7 → 7.5 dB (percentile 46 → 17); sibilance -9.3 → -6.2 dB (percentile 29 → 45); tonal-shape distance to the pro median 9.3 → 6.6 dB.
 
 What this can and cannot show: it shows that the chain moves measurable statistics
-toward what engineers produced on these songs, and that it beats a fixed preset on
-tonal balance (it ties on the rest). Excluding the EQ above 10 kHz (the AAC-coded MUSDB
+toward what engineers produced on these songs. The comparison with the fixed preset is in
+the bootstrap line above. Excluding the EQ above 10 kHz (the AAC-coded MUSDB
 stems bias the "air" target low) cost some score on sibilance against the first,
 cut-only configuration, but it no longer dulls every vocal by 9 dB above 10 kHz. It does not show perceived quality. The degradation is synthetic, and one pro
 mix per song is one valid answer. The EQ never boosts a band that the take does not
 contain, meaning a band more than 45 dB under its loudest one, such as anything above
 8 kHz in a 16 kHz recording. This guard was added after the first MIR-1K render.
 
+**Dynamics: rider, fast and slow compression** (`av/mix.py`, `av/leveling.py`,
+`av/dyn_calib.py`). The owner heard the first chain as uneven: loud and quiet words were
+left, and the limiter was doing the levelling. The single 3:1 compressor is now replaced by
+rider → fast peak stage (FET-like 4:1, ~4 dB on the loudest 1 % of 1 ms blocks) → slow
+stage (opto-like 2.5:1, 10/250 ms, ~3 dB mean) → de-esser → (mix bus) true-peak limiter.
+
+The rider follows the owner's research brief (Waves Vocal Rider, Sound Radix POWAIR,
+WebRTC AGC2, DAFx 2022). On K-weighted level every 10 ms it keeps two time scales:
+L_fast (210 ms sung / 120 ms rap) and L_phrase (2 s / 1 s, averaged over confident vocal
+frames only). The gain is s · deadband(L_phrase − L_fast, ±0.6 dB) + μ · (T − L_phrase),
+with T the take's median. That evens words toward their phrase and only nudges phrases, so
+verse/chorus dynamics survive. Vocal confidence (SNR 6→14 dB smoothstep × activity) can
+block a *boost* but never a *cut*, and idle frames glide back to 0 dB, which is the rule
+against lifting breaths and noise. The range is +5 / −6 dB. The slew is asymmetric (80 ms
+toward cut, 300 ms toward boost), run forwards and backwards and averaged, which gives an
+offline look-ahead. Patent note: this is a local-vs-phrase error with confidence-limited
+positive gain. It deliberately avoids the "activity detector → long-term level → target
+gain → direction-dependent ramp" AGC structure claimed in US7995775B2. Keep it that way
+when porting.
+
+Calibration: s × μ grid on 40 real Vocadito takes plus 30 degraded MUSDB *train* songs. The pick meets the most goals (5/7 by median), then lands closest to the pro p25. Chosen: s = 0.5, μ = 0.2. The grid is in `results/dynamics_calibration.json`.
+
+| rider-stage metric (goal) | MUSDB test, 50 degraded | Vocadito, 40 real takes |
+| --- | --- | --- |
+| m1: 400 ms loudness IQR −25…45 % | -20 % (P90−P10 -21 %) ✗ | -22 % (P90−P10 -22 %) ✗ |
+| m2: word P90−P10 −2…5 dB | -2.2 dB (IQR -1.3) ✓ | -2.0 dB (IQR -1.1) ✓ |
+| m3: phrase ρ > 0.9, R_macro 0.7–1.0 | ρ 0.99, R 0.86 ✓ | ρ 0.99, R 0.85 ✓ |
+| m4: lift on non-vocal frames median < 0.25, P95 < 1 dB | +0.01 / +0.92 dB ✓ | +0.03 / +0.98 dB ✓ |
+| m5: gain motion P95 < 12 dB/s | 9.0 dB/s ✓ | 9.7 dB/s ✓ |
+| m6: downstream P95 GR −20 % or more | -12 % ✗ | -12 % ✗ |
+| m7: consonant peak change < 1 dB | 0.80 dB ✓ | 0.54 dB ✓ |
+
+| vocal (K-weighted, vocal regions of the raw take) | 400 ms IQR dB | 400 ms P90−P10 dB | word IQR dB | word P90−P10 dB |
+| --- | --- | --- | --- | --- |
+| MUSDB test: raw (degraded) | 5.56 | 11.61 | 4.68 | 8.89 |
+| MUSDB test: after chain | 2.37 | 5.10 | 1.34 | 2.96 |
+| MUSDB test: the songs' pro stems | 3.97 | 8.54 | 2.84 | 7.34 |
+| Vocadito: raw | 4.34 | 9.09 | 3.22 | 6.64 |
+| Vocadito: after chain | 2.37 | 5.07 | 1.08 | 2.24 |
+| all 150 MUSDB pro stems, p25 / median | 3.03 / 3.86 | 6.81 / 8.50 | 1.57 / 2.93 | 3.41 / 7.18 |
+
+Stage gain reduction on the test songs (medians): fast stage 4.8 dB on the loudest 1 % of blocks; slow stage 4.1 dB mean. The MUSDB pro stems are lead + backing + printed FX, so they are *less* even than a mixed lead vocal (harmonies and ad-libs add level swings). Their 25th percentile is the closer reference. The 'word' unit is an energy segment, not a transcribed word, and m6 freezes the stage thresholds from the no-rider run.
+
 **Reverb, delay and limiter** (`av/fx_calib.py`, `av/limiter.py`). The first sample round
 used fixed tempo rules (a −14 dB noise-tail reverb with T60 up to 2.5 s, plus a −16 dB
-delay). The owner judged it far too wet, so the level is now taken from data.
+delay). The owner judged it far too wet, so the level is now taken from data. This
+calibration was run with the first, single-compressor dynamics. The owner asked to keep
+the reverb as it was after the dynamics rework, so `results/fx_calibration.json` is that
+run. A rerun of `av.fx_calib` with the new dynamics points to −15 dB / T60 0.8 s, which is
+wetter. That setting is not used.
 The *tail ratio* is the energy 80–300 ms after a phrase end, relative to the last 100 ms of the phrase. It is counted only where the tail is still decaying, so a constant bed of backing vocals is excluded. Over 67 measurable MUSDB pro vocal stems it has a median of -15.7 dB (IQR -20.9 to -12.2). Dry takes (Vocadito and VocalSet) mostly have no decaying tail at all. After the chain, a short plate (pre-delay 30 ms, wet filtered 300 Hz–7 kHz) was added at sends from −33 to −12 dB with T60 0.8 and 1.2 s (median tail ratio per send at T60 1.2 s: -33 dB → -35.2, -30 dB → -32.3, -27 dB → -29.3, -24 dB → -26.4, -21 dB → -23.5, -18 dB → -20.5, -15 dB → -16.2, -12 dB → -13.1). A stem's tail holds *all* of its printed FX (delay throws, doubles, room), so the median overstates what a reverb alone contributes. The target is therefore the pro **25th percentile** (-20.9 dB), which gives **send -18 dB, T60 1.2 s**. That is about 1.6 % wet energy, and that setting is used. Matching the pro median instead would need -15 dB. Limits: only a few dry takes have long enough phrase gaps to measure (see `send_curve_measurable_share`), so the curve is coarse; a density-dependent rule (less reverb on a dense beat) was not validated. The **delay is off**: echo level in the pro stems was not measured, so no data-backed setting exists.
 The limiter reads true peak on a 4× oversampled signal. It applies its gain over a 5 ms
 lookahead with an 80 ms release, and its ceiling is −1 dBTP. Every listening file (before,
 after, reference) goes through the same limiter at −14 LUFS, and the gain reduction is
-listed per file in `index.txt`. On the 9 'after' files the maximum gain reduction was 2.3–7.5 dB. When active, the mean was 0.4–1.3 dB. Every file measured at most -1.0 dBTP. Saturation (hard style only) is a style choice and was not
+listed per file in `index.txt`. On the 9 'after' files the maximum gain reduction was 1.3–7.4 dB. When active, the mean was 0.4–1.3 dB. Every file measured at most -1.0 dBTP. Saturation (hard style only) is a style choice and was not
 validated.
 
 ## Layer 4: style selection
@@ -199,8 +245,9 @@ and could default to hard when the scale gate trips on a rap vocal.
 `D:\mydaw-data\auto_vocal_samples\` holds 9 pairs, each about 25 s: `_before`, `_after` and
 (MUSDB) `_reference_pro_mix`. Each file is matched to −14 LUFS through the −1 dBTP
 true-peak limiter. `index.txt` lists what the chain decided per sample: key, tempo, pitch
-deviation before/after, scale gate, EQ moves, de-esser, compressor, level, reverb and
-limiter gain reduction. Seven MUSDB songs have a *simulated* raw vocal (the pro stem,
+deviation before/after, scale gate, EQ moves, de-esser, rider range, gain reduction of
+the fast and slow stages, evenness raw → after → pro, level, reverb and limiter gain
+reduction. Seven MUSDB songs have a *simulated* raw vocal (the pro stem,
 detuned and degraded). Two MIR-1K songs are *real* amateur karaoke takes (16 kHz
 source). All are non-commercial research data: for internal listening only.
 
@@ -237,7 +284,8 @@ downloaded to `D:\mydaw-data`. All jobs are CPU-only and resumable.
    hysteresis and the 75 % scale gate. Add CREPE-tiny (MIT, about 2 MB ONNX) as the
    commercial-safe default tracker.
 3. Mix: every stage maps onto the existing `Eq` (bands from the measured shape, nothing
-   above 10 kHz), `DeEss`, `Comp` (3:1 at the median 400 ms level), `Sat`, `Reverb` (send
+   above 10 kHz). Dynamics need a new offline *rider* (a clip-gain curve from `rider_curve`, so nothing
+   runs on the audio thread; keep the patent note above), then `Fet` (4:1 peaks), `Comp` (2.5:1 slow) and `DeEss`. Then `Sat`, `Reverb` (send
    from the calibration; a better reverb plugin is being built separately) and `Limiter`
    (it needs true-peak lookahead).
    The analysis is offline over the recorded take and the beat, so nothing new runs on

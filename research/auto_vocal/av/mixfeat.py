@@ -71,3 +71,52 @@ def features(v, sr, acc=None):
         feats["delta_lufs"] = feats["lufs"] - feats["acc_lufs"]
         feats["var"] = bd - feats["acc_band_db"]  # vocal-to-accompaniment ratio per band, active frames
     return feats
+
+
+def evenness(x, sr):
+    """How even the vocal level is, on sung frames only (all values in dB; lower = more even).
+
+    Sung = within 20 dB of the take's p95 level (silence, breaths, noise and most printed
+    reverb tails are out).
+    mom_iqr / mom_std : IQR / std of the 400 ms momentary RMS level (100 ms hop) over the
+                        whole excerpt. This includes deliberate section changes (verse vs
+                        chorus).
+    mom_local_iqr     : IQR of the 400 ms level minus its median over the sung windows within
+                        ±2 s: the phrase-to-phrase and word-to-word unevenness a listener
+                        hears, without section-level arrangement changes.
+    word_iqr          : IQR of per-"word" levels (a run of sung 10 ms frames, split at gaps
+                        >= 40 ms, length >= 80 ms; an energy segment, not a transcribed word).
+    word_local_iqr    : IQR of each word's level minus the median of the words within ±3 s.
+    """
+    x = np.asarray(x, np.float64)
+    w, h = int(0.4 * sr), int(0.1 * sr)
+    idx = np.arange(0, max(len(x) - w, 1), h)
+    rms = 10 * np.log10(np.array([np.mean(x[i:i + w] ** 2) for i in idx]) + 1e-14)
+    on = rms > np.percentile(rms, 95) - 20
+    m = rms[on]
+    t_on = np.flatnonzero(on) * 0.1
+    loc = np.array([v - np.median(m[np.abs(t_on - t) <= 2.0]) for v, t in zip(m, t_on)])
+    n10 = int(0.01 * sr)
+    k = len(x) // n10
+    f = 10 * np.log10((x[: k * n10].reshape(k, n10) ** 2).mean(1) + 1e-14)
+    act = f > np.percentile(f, 95) - 20
+    words, centres, a, gap, last = [], [], None, 0, 0
+    for i, v in enumerate(np.append(act, [False] * 4)):
+        if v:
+            if a is None:
+                a = i
+            gap = 0
+            last = i
+        elif a is not None:
+            gap += 1
+            if gap >= 4:
+                if last - a >= 8:
+                    words.append(10 * np.log10(np.mean(10 ** (f[a:last + 1] / 10))))
+                    centres.append((a + last) / 2 * 0.01)
+                a = None
+    wl, wc = np.array(words), np.array(centres)
+    wloc = np.array([wl[j] - np.median(wl[np.abs(wc - wc[j]) <= 3.0]) for j in range(len(wl))
+                     if (np.abs(wc - wc[j]) <= 3.0).sum() >= 3])
+    iqr = lambda v: float(np.percentile(v, 75) - np.percentile(v, 25)) if len(v) >= 4 else float("nan")  # noqa: E731
+    return {"mom_iqr": iqr(m), "mom_std": float(np.std(m)), "mom_local_iqr": iqr(loc),
+            "word_iqr": iqr(wl), "word_local_iqr": iqr(wloc), "n_words": int(len(wl))}

@@ -1,5 +1,9 @@
 {
  "eq_strength": 0.5,
  "eq_cut_only": false,
- "comp_mode": "fixed3"
+ "comp_mode": "serial",
+ "rider_strength": 0.5,
+ "rider_mu": 0.2,
+ "fet_peak_gr": 4.0,
+ "opto_avg_gr": 3.0
 }

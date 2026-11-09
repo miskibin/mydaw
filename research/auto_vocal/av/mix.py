@@ -1,5 +1,6 @@
-"""Automatic vocal mix chain: gate -> HPF -> matching EQ -> de-esser -> compressor ->
-(saturation) -> level vs beat -> tempo-synced delay + reverb sends.
+"""Automatic vocal mix chain: gate -> HPF -> matching EQ -> dynamics -> (saturation) ->
+reverb send -> level vs beat. Dynamics = rider -> fast peak stage -> slow stage -> de-esser
+("serial", the product default) or a single compressor after the de-esser (older modes).
 
 Every stage maps to an effect the app already has (Eq, Comp/Fet, DeEss, Sat, Delay, Reverb,
 in crates/engine/src/{dsp,vocal}.rs). Parameters are chosen from measurements of the vocal
@@ -27,7 +28,13 @@ class Targets:
     rev_send_db: float | None = None   # reverb send (wet/dry energy, dB); None = off
     rev_t60: float = 1.0
     delay_send_db: float | None = None  # tempo-synced delay send; None = off
-    comp_mode: str = "target"    # "target": ratio/threshold chosen to hit `spread`; "fixed3": 3:1 at the median level
+    rider_strength: float = 0.7  # serial mode: word-vs-phrase evening (s)
+    rider_mu: float = 0.2        # serial mode: phrase-vs-take nudge (mu)
+    fet_peak_gr: float = 4.0     # serial mode: dB of reduction on the loudest 1 % of blocks
+    opto_avg_gr: float = 3.0     # serial mode: mean dB of reduction over sung blocks
+    # "serial": rider + FET + opto; "target": one compressor aimed at `spread`;
+    # "fixed3": one 3:1 compressor at the median level
+    comp_mode: str = "target"
 
 
 @dataclass
@@ -44,6 +51,12 @@ class Settings:
     delay_send_db: float | None = None
     reverb_t60: float = 0.0
     reverb_send_db: float | None = None
+    rider_gain_db: list = field(default_factory=list)
+    rider_curve: tuple = ()
+    fet_thr_db: float = 0.0
+    fet_gr: dict = field(default_factory=dict)
+    opto_thr_db: float = 0.0
+    opto_gr: dict = field(default_factory=dict)
 
 
 def _env_db(x, sr, ms=1.0):
@@ -210,6 +223,130 @@ def fx_sends(x, sr, bpm, s: Settings, rev_send_db=None, t60=1.0, delay_send_db=N
         y = y + 10 ** (delay_send_db / 20) * dl
     return y
 
+def k_weight(x, sr):
+    """ITU-R BS.1770 K-weighting (pre-filter + RLB high-pass), as in pyloudnorm."""
+    import pyloudnorm as pyln
+    m = pyln.Meter(sr)
+    y = np.asarray(x, np.float64)
+    for f in m._filters.values():
+        y = f.apply_filter(y)
+    return y
+
+
+RIDER_STYLE = {  # time constants (s) per style: rap words are shorter than sung notes
+    "natural": {"fast": 0.21, "phrase": 2.0},
+    "hard": {"fast": 0.12, "phrase": 1.0},
+}
+
+
+def rider_curve(x, sr, strength=0.7, mu=0.2, style="natural", deadband=0.6, max_boost=5.0, max_cut=6.0,
+                cut_ms=80.0, boost_ms=300.0):
+    """Two-time-scale vocal rider (offline). Returns (gain dB per 10 ms frame, frame times s,
+    confidence 0..1, activity mask).
+
+    On K-weighted power every 10 ms: L_fast (~word, 210 ms sung / 120 ms rap) and L_phrase
+    (2 s / 1 s, averaged over confident vocal frames only). Desired gain =
+    strength * deadband(L_phrase - L_fast) + mu * (T - L_phrase), T = median L_fast of the
+    take: words are evened toward their phrase, phrases only nudged toward the take, so
+    verse/chorus dynamics survive. Confidence = smoothstep(SNR 6->14 dB) x activity: low
+    confidence can block a BOOST but never a cut; idle frames glide back to 0 dB. Range
+    +5 / -6 dB. Asymmetric slew (toward cut 80 ms, toward boost 300 ms), run forwards and
+    backwards and averaged: an offline look-ahead of the same order.
+
+    This is deliberately a local-vs-phrase error with confidence-limited positive gain, not
+    the "activity detector -> long-term level -> target gain -> direction-dependent ramp"
+    AGC structure claimed in US7995775B2.
+    """
+    from scipy.ndimage import uniform_filter1d
+    tc = RIDER_STYLE.get(style, RIDER_STYLE["natural"])
+    hop = int(0.01 * sr)
+    pk = uniform_filter1d(k_weight(x, sr) ** 2, hop)[hop // 2::hop] + 1e-14
+    nf = len(pk)
+    p_fast = uniform_filter1d(pk, max(1, int(tc["fast"] / 0.01)))
+    l_fast = 10 * np.log10(p_fast + 1e-14)
+    top = np.percentile(l_fast, 95)
+    floor = min(np.percentile(l_fast, 10), top - 35)
+    snr = l_fast - floor
+    u = np.clip((snr - 6.0) / 8.0, 0.0, 1.0)
+    active = l_fast > top - 30
+    conf = u * u * (3 - 2 * u) * active
+    w = max(1, int(tc["phrase"] / 0.01))
+    num = uniform_filter1d(pk * conf, w)
+    den = uniform_filter1d(conf, w)
+    l_phrase = 10 * np.log10(np.where(den > 1e-3, num / np.maximum(den, 1e-9), p_fast) + 1e-14)
+    confident = conf > 0.5
+    if confident.sum() < 20:
+        return np.zeros(nf), np.arange(nf) * 0.01 + 0.005, conf, active
+    T = float(np.median(l_fast[confident]))
+    e = l_phrase - l_fast
+    db = np.sign(e) * np.maximum(np.abs(e) - deadband, 0.0)
+    g = strength * db + mu * (T - l_phrase)
+    g = np.where(g > 0, g * conf, g)          # low confidence blocks boost, not cut
+    g = np.where(active, g, 0.0)              # idle: back to 0 dB
+    g = np.clip(g, -max_cut, max_boost)
+
+    def slew(seq):
+        a_c, a_b = np.exp(-0.01 / (cut_ms / 1000)), np.exp(-0.01 / (boost_ms / 1000))
+        out, st = np.empty_like(seq), 0.0
+        for k, v in enumerate(seq):
+            a = a_c if v < st else a_b
+            st = a * st + (1 - a) * v
+            out[k] = st
+        return out
+    gs = 0.5 * (slew(g) + slew(g[::-1])[::-1])
+    return gs, np.arange(nf) * 0.01 + 0.005, conf, active
+
+
+def rider(x, sr, s: Settings, strength=0.7, mu=0.2, style="natural"):
+    g, t, conf, active = rider_curve(x, sr, strength, mu, style)
+    s.rider_gain_db = [round(float(np.percentile(g[conf > 0.5], q)), 1) for q in (5, 50, 95)] if (conf > 0.5).any() else []
+    s.rider_curve = (g, t, conf, active)
+    gs = np.interp(np.arange(len(x)) / sr, t, g)
+    return x * 10 ** (gs / 20)
+
+def _static_gr(e, thr, ratio, knee=6.0):
+    over = e - thr
+    return np.where(over > knee / 2, over * (1 - 1 / ratio),
+                    np.where(over > -knee / 2, (1 - 1 / ratio) * (over + knee / 2) ** 2 / (2 * knee), 0.0))
+
+
+def fet(x, sr, s: Settings, ratio=4.0, peak_gr=4.0, thr=None):
+    """Fast peak stage (FET-like): 4:1, 1 ms blocks, attack 1 ms, release 60 ms; threshold
+    set so the loudest 1 % of sung blocks get ~peak_gr dB of reduction."""
+    n = int(0.001 * sr)
+    m = len(x) // n
+    e = 20 * np.log10(np.abs(x[: m * n]).reshape(m, n).max(1) + 1e-9)
+    sung = e > np.percentile(e, 95) - 30
+    if thr is None:  # frozen thresholds let the workload test compare with/without rider
+        thr = np.percentile(e[sung], 99) - peak_gr / (1 - 1 / ratio)
+    g = _smooth_gain(-_static_gr(e, thr, ratio, 3.0), n, sr, 1.0, 60.0)
+    s.fet_thr_db = float(thr)
+    s.fet_gr = {"p99_db": round(float(np.percentile(-g[sung], 99)), 1), "max_db": round(float(-g.min()), 1),
+                "mean_sung_db": round(float(np.mean(-g[sung])), 2), "p95_sung_db": round(float(np.percentile(-g[sung], 95)), 2)}
+    return _apply_gain(x, g, n)
+
+
+def opto(x, sr, s: Settings, ratio=2.5, avg_gr=3.0, thr=None):
+    """Slow stage (opto-like): 2.5:1, soft knee, 10 ms RMS, attack 10 ms, release 250 ms;
+    threshold searched so the mean reduction over sung blocks is ~avg_gr dB."""
+    n = int(0.01 * sr)
+    m = len(x) // n
+    e = 10 * np.log10((x[: m * n].reshape(m, n) ** 2).mean(1) + 1e-14)
+    sung = e > np.percentile(e, 95) - 25
+    if thr is None:
+        lo, hi = np.percentile(e[sung], 1) - 20, np.percentile(e[sung], 99)
+        for _ in range(30):
+            thr = (lo + hi) / 2
+            if np.mean(_static_gr(e[sung], thr, ratio)) > avg_gr:
+                lo = thr
+            else:
+                hi = thr
+    g = _smooth_gain(-_static_gr(e, thr, ratio), n, sr, 10.0, 250.0)
+    s.opto_thr_db = float(thr)
+    s.opto_gr = {"mean_sung_db": round(float(np.mean(-g[sung])), 2), "p95_db": round(float(np.percentile(-g[sung], 95)), 1)}
+    return _apply_gain(x, g, n)
+
+
 def auto_mix(v, sr, beat, t: Targets, bpm=None, style="natural", fx=False, stages=("gate", "hpf", "eq", "deess", "comp", "level")):
     s = Settings()
     x = np.asarray(v, np.float64)
@@ -219,10 +356,20 @@ def auto_mix(v, sr, beat, t: Targets, bpm=None, style="natural", fx=False, stage
         x = hpf(x, sr)
     if "eq" in stages:
         x = match_eq(x, sr, t.shape, s, t.max_eq_db, t.eq_strength, t.eq_cut_only)
-    if "deess" in stages:
-        x = deess(x, sr, t.sib, s)
-    if "comp" in stages:
-        x = compress(x, sr, t.spread, s, t.comp_mode)
+    if t.comp_mode == "serial":
+        # rider -> fast peak stage -> slow stage, then the de-esser (owner 11-09)
+        if "comp" in stages:
+            x = rider(x, sr, s, t.rider_strength, t.rider_mu, "hard" if style == "hard" else "natural")
+            x = fet(x, sr, s, peak_gr=t.fet_peak_gr)
+            x = opto(x, sr, s, avg_gr=t.opto_avg_gr)
+            s.comp_ratio, s.comp_thr_db = 2.5, s.opto_thr_db
+        if "deess" in stages:
+            x = deess(x, sr, t.sib, s)
+    else:
+        if "deess" in stages:
+            x = deess(x, sr, t.sib, s)
+        if "comp" in stages:
+            x = compress(x, sr, t.spread, s, t.comp_mode)
     if style == "hard":
         x = saturate(x, 6.0, 0.25)
     if fx:

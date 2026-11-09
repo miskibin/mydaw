@@ -21,6 +21,7 @@ from . import mix, tune
 from .common import CACHE, DATA, NOTE, RAW, RESULTS, load, write
 from .layer1_run import beat_this_tempo, chroma_features
 from .layer3_eval import EXC, degrade, load_exc
+from . import leveling
 from .limiter import master
 
 SR = 44100
@@ -141,6 +142,7 @@ def main():
         dev = np.abs(tune.intonation(notes, pcs))
         f_out = tune.track_f0(tuned, SR, "tiny")
         dev_out = np.abs(tune.intonation(tune.segment_notes(tune.hz2midi(f_out) - tun_c), pcs))
+        mask_r, segs_r = leveling.vocal_windows(raw, SR), leveling.words(raw, SR)
         eq = np.array(s.eq_gains_db)
         cen = mixfeat.CENTRES
         big = np.argsort(-np.abs(eq))[:3]
@@ -160,6 +162,12 @@ def main():
                     "delay": "off",
                     "saturation": "tanh drive 6 dB, 25 % mix" if style == "hard" else "off"},
             "limiter": lim,
+            "dynamics": {"rider_gain_p5_p50_p95_db": s.rider_gain_db, "fast_stage_gr": s.fet_gr, "slow_stage_gr": s.opto_gr},
+            # levelling metrics on the raw take's vocal windows / word segments (same timing for all)
+            "leveling": {k: {"m1": {m: round(v, 2) for m, v in leveling.m1(sig, SR, mask_r).items()},
+                             "m2": {m: round(v, 2) for m, v in leveling.m2(sig, SR, segs_r).items()}}
+                         for k, sig in (("raw", raw), ("after", proc), ("pro", pro)) if sig is not None},
+            "rider": {m: round(v, 2) for m, v in leveling.rider_stats(s.rider_curve).items()} if s.rider_curve else {},
         }
         index.append(rec)
         print(json.dumps(rec), flush=True)
@@ -180,6 +188,16 @@ def main():
                   + (" -> scale gate: snapped chromatically" if r['pitch']['scale_gated'] else ""),
                   f"  mix: gate {r['mix']['gate_thr_db']} dB; EQ {', '.join(r['mix']['eq_biggest_moves'])}; "
                   f"de-ess thr {r['mix']['deess_thr_db']} dB; comp {r['mix']['comp']}; vocal {r['mix']['vocal_vs_beat_lufs']} LU vs beat",
+                  f"  dynamics: rider gain p5/p50/p95 {r['dynamics']['rider_gain_p5_p50_p95_db']} dB; fast stage (4:1) GR "
+                  f"p99 {r['dynamics']['fast_stage_gr'].get('p99_db')} dB, max {r['dynamics']['fast_stage_gr'].get('max_db')} dB; "
+                  f"slow stage (2.5:1) mean GR {r['dynamics']['slow_stage_gr'].get('mean_sung_db')} dB",
+                  "  levelling, K-weighted, on the raw take's vocal regions (400 ms loudness IQR, P90-P10 | word-level IQR, "
+                  "P90-P10, dB; lower = more even): "
+                  + " -> ".join(f"{k} {v['m1']['iqr']:.1f}, {v['m1']['p90_p10']:.1f} | {v['m2']['iqr']:.1f}, {v['m2']['p90_p10']:.1f}"
+                                for k, v in r['leveling'].items()),
+                  f"  rider: gain p5..p95 {r['rider'].get('gain_p5_db')}..{r['rider'].get('gain_p95_db')} dB; on non-vocal frames "
+                  f"median {r['rider'].get('lift_median_db')} dB, P95 {r['rider'].get('lift_p95_db')} dB; "
+                  f"gain motion P95 {r['rider'].get('motion_p95_db_s')} dB/s",
                   f"  fx: reverb {r['mix']['reverb']}; delay {r['mix']['delay']}; saturation {r['mix']['saturation']}",
                   "  limiter: " + "; ".join(f"{k} GR max {v['gr_max_db']} dB, mean {v['gr_mean_db_when_active']} dB over "
                                             f"{v['active_share']:.0%} of the time, TP {v['true_peak_dbtp']} dBTP, {v['lufs']} LUFS"
