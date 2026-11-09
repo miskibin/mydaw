@@ -169,7 +169,8 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `preview_clip` / `preview_file` / `preview_stop` | `{clipId}` / `{path}` / – | – |
 | `audio_hosts` | – | `[{id, name}]` (ids like `"wasapi"`, `"asio"`, `"alsa"`) |
 | `audio_devices` | `{host}` | `{outputs: string[], inputs: string[]}` |
-| `audio_get_config` / `audio_set_config` | `– / AudioConfig` | `AudioStatus` |
+| `audio_get_config` / `audio_set_config` | `– / AudioConfig` | `AudioStatus` (a config without `recOffsetMs` keeps the saved one; changing only `recOffsetMs` does not restart the device) |
+| `audio_measure_latency` | – | `{roundTripMs, reportedMs, suggestedOffsetMs, confidence}` — plays 8 clicks (~5 s) instead of the mix, records them back (mic at the speaker or a loopback cable), finds them by cross-correlation off the audio thread. Transport must be stopped; opens the input for the measurement. Saves nothing |
 | `asio_control_panel` | – | – (opens the driver's own panel, Windows only) |
 | `library_list` | – | `{kits:[{id,name,description,bytes,count,installed}], folders:string[]}` |
 | `library_install` | `{id}` | – ; progress as event `library-progress {id,done,total,error?}` |
@@ -192,9 +193,11 @@ type StateDto = { project: Project; revision: number; canUndo: boolean; canRedo:
                   transport: TransportDto; path: string | null; dirty: boolean;
                   audition: { [compId: string]: number } };   // comp → auditioned take
 type TransportDto = { playing: boolean; rec: boolean; monitor: boolean; metro: boolean; countIn: boolean; startBeat: number };
-type AudioConfig = { host: string; output: string | null; input: string | null; sampleRate: number | null; bufferSize: number | null };
+type AudioConfig = { host: string; output: string | null; input: string | null; sampleRate: number | null; bufferSize: number | null;
+                     inputChannel?: number | null; recOffsetMs?: number | null };
 type AudioStatus = AudioConfig & { running: boolean; actualRate: number; actualBuffer: number; latencyMs: number;
-                                   inputChannels: number; error: string | null; note: string | null; asioCompiled: boolean };
+                                   inputChannels: number; error: string | null; note: string | null; asioCompiled: boolean;
+                                   inputUnderruns: number; inputOverruns: number; inputDriftPpm: number };
 ```
 
 ## Telemetry frame (binary, little-endian, ≤ 60 Hz)
@@ -276,14 +279,64 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
   (`<project> Audio/`, or the scratch folder until the first save); a new file
   never overwrites an existing one (`Take 2 1234 (2).wav`).
 * **Takes line up with what was heard.** Input captured at a frame was sung
-  to playback heard *round trip + PDC* frames earlier: the device layer
-  publishes the measured round trip (`Shared::io_latency`: output
-  playback−callback + input callback−capture + the input ring backlog, from
-  cpal timestamps; one buffer each way when a host reports none) and the
-  engine adds `engine::playback_latency` (slowest non-master insert + master
-  chain). `finalize_take` drops that many frames from the front; pass marks
-  stay put, since they already sit on the heard loop boundary. The last
-  *latency* of a take (still in flight at Stop) is not captured.
+  to playback heard *round trip + PDC* frames earlier. `finalize_take` drops
+  that many frames from the front; pass marks stay put, since they already
+  sit on the heard loop boundary. The last *latency* of a take (still in
+  flight at Stop) is not captured.
+  * *Round trip, per callback* (`wave-audio-io`): output playback − callback
+    (cpal) + the age of the input frame played first in this callback. Each
+    input packet publishes `origin` = its capture instant − frames pushed
+    before it, so input frame *i* was captured at `origin + i/rate`; the
+    output callback knows which frame it plays (the jitter buffer's read
+    position) and its own instant, so the age needs no ring-backlog guess and
+    holds for any packet phase, packet size and a separate input device. Used
+    where both streams share the system clock (WASAPI QPC, CoreAudio); other
+    hosts fall back to *out + backlog + input callback−capture* (one buffer
+    each way when a host reports nothing).
+  * *Measured during the take, not at its start.* `Shared::add_take_latency`
+    collects one sample per callback while the take captures real input
+    (count-in excluded, nothing before the input's first packet), and
+    `RecBuf::resolve` aligns the take with their mean. The estimate published
+    at the start (`Shared::io_latency`, smoothed) is only the fallback when
+    nothing was measured. Before, the start value was used: with monitoring
+    off the input opens only when record is armed, so a take started soon
+    after (or a punch-in, which used to restart both streams and lose the
+    take) was aligned with an unsettled guess — "worse with monitoring off".
+    PDC stays frozen at the start (the graph keeps it until the take ends).
+  * *Calibration* (`AudioConfig.recOffsetMs`, signed ms, saved with the audio
+    config, default 0) is added to every sample: converters, USB and driver
+    buffers that timestamps do not report. `audio_measure_latency` measures
+    it: the output callback plays a click plan instead of the mix and keeps,
+    per output frame, the input frame consumed with it; a click rendered at
+    output frame *a* found at *a + lag* means `lag` is exactly the skip a
+    take needs, so `suggestedOffsetMs = lag − reported` (reported = mean
+    per-callback round trip during the measurement). Normalised
+    cross-correlation of a 4 ms windowed noise burst over 8 irregularly
+    spaced clicks, lags 0–400 ms; confidence = clicks agreeing within 1 ms ×
+    peak prominence over echoes. The job travels to the audio thread and back
+    in a preallocated `Box` through lock-free rings; analysis runs on the
+    caller's thread.
+* **Input jitter buffer** (`crates/audio-io/src/jitter.rs`). The input stream
+  opens and closes on its own (`AudioIo::set_input` hands the output callback
+  a new ring through a lock-free swap ring; the old one is freed off the audio
+  thread), so arming record or monitoring never restarts the output. Input
+  packets arrive on their own schedule (WASAPI: 480-frame periods against
+  512-frame output callbacks) and, with a separate input device, on their own
+  clock. Before, the output took what had arrived and zero-padded the rest:
+  a packet arriving a moment late put ~477 exact zeros into the take several
+  times a second (clicks), and pile-ups beyond two callbacks were dropped.
+  Now: *prefill* to two input periods + half a callback + a 2 ms margin (one
+  period on ASIO, whose input arrives in step with the output) before
+  reading; *drift steering*: after 50 callbacks the backlog it settled at
+  becomes the anchor and the read step is nudged (P control, 1 ms deadband,
+  ≤ ±0.1 %) through a 32-tap Kaiser-windowed sinc, which is an exact copy at
+  a step of 1, so one device is never resampled and a ±200 ppm input clock
+  is followed without dropping or repeating samples; *real stalls* fade the
+  last sample out over 2 ms, refill with a larger margin (+¼ callback per
+  underrun, ≤ 50 ms) and fade back in; *overflow* (output stalled) fades out,
+  skips to the target and fades in. Counted in `AudioStatus.inputUnderruns`
+  / `inputOverruns`; `inputDriftPpm` is the followed clock difference. The
+  cost is a little more input latency (~2 input periods) for monitoring.
 * **Latency while recording.** Plugin delay compensation (PDC) delays every
   non-master insert to the slowest one (`pdc`), so one long look-ahead effect
   (the vocal Rider, ≈ 1.6 s on Long) delays all playback. Live input must not

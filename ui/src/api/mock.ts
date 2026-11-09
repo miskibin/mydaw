@@ -15,7 +15,7 @@ import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitc
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 
@@ -112,6 +112,7 @@ export class MockBackend implements Backend {
   private audio: AudioStatus = {
     host: 'wasapi', output: 'Głośniki (Realtek High Definition Audio)', input: 'Mikrofon (USB Audio)', sampleRate: null, bufferSize: null, inputChannel: null,
     running: true, actualRate: 48000, actualBuffer: 480, latencyMs: 20, inputChannels: 2, error: null, note: 'Mock — brak prawdziwego audio', asioCompiled: false,
+    recOffsetMs: 0, inputUnderruns: 0, inputOverruns: 0, inputDriftPpm: 0,
   };
 
   private midiPorts: MidiDevice[] = [{ id: 'mock-keys', name: 'Mock Keystation 61' }, { id: 'mock-pads', name: 'Mock Pad Controller' }];
@@ -769,11 +770,20 @@ export class MockBackend implements Backend {
   async audioGetConfig() { return { ...this.audio }; }
   async audioSetConfig(cfg: AudioConfig) {
     await delay(80);
+    // like the app: a config without recOffsetMs keeps the saved calibration
+    cfg = { ...cfg, recOffsetMs: cfg.recOffsetMs ?? this.audio.recOffsetMs ?? 0 };
     const asioErr = cfg.host === 'asio' && !this.audio.asioCompiled;
     this.audio = { ...this.audio, ...cfg, running: !asioErr, error: asioErr ? 'ASIO nie jest wkompilowane w tę wersję' : null,
       actualRate: cfg.sampleRate ?? 48000, actualBuffer: cfg.bufferSize ?? 480, latencyMs: Math.round(((cfg.bufferSize ?? 480) * 2 / (cfg.sampleRate ?? 48000)) * 10000) / 10 };
     this.emit('audio-status', { ...this.audio });
     return { ...this.audio };
+  }
+
+  async audioMeasureLatency(): Promise<LatencyReport> {
+    if (this.tr.playing) throw new Error('Stop playback before measuring the latency.');
+    await delay(5200);
+    const reportedMs = 21.3, roundTripMs = 25.8;
+    return { roundTripMs, reportedMs, suggestedOffsetMs: Math.round((roundTripMs - reportedMs) * 100) / 100, confidence: 0.93 };
   }
 
   // ---------- MIDI keyboard ----------

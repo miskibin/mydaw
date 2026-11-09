@@ -275,10 +275,31 @@ export interface AudioConfig {
   host: string; output: string | null; input: string | null; sampleRate: number | null; bufferSize: number | null;
   /** Input channel recorded and monitored (0-based), mono in both sides; null = the first. */
   inputChannel?: number | null;
+  /** Recording calibration in ms (signed), added to the measured round trip: positive moves
+   *  takes earlier. Omitted/null when sent = keep the saved value; saved with the audio
+   *  config. Changing only this does not restart the audio device. */
+  recOffsetMs?: number | null;
 }
 export interface AudioStatus extends AudioConfig {
   running: boolean; actualRate: number; actualBuffer: number; latencyMs: number;
   inputChannels: number; error: string | null; note: string | null; asioCompiled: boolean;
+  /** Input dropouts since the input opened (each a short faded gap in a take): "przerwy w wejściu: N". */
+  inputUnderruns: number;
+  /** Times input piled up (the output stalled) and was skipped, faded. */
+  inputOverruns: number;
+  /** Input clock vs output clock in ppm as followed by the jitter buffer (≈0 for one device). */
+  inputDriftPpm: number;
+}
+/** Result of `audioMeasureLatency`. */
+export interface LatencyReport {
+  /** Measured round trip: a sound played reaches the recording this much later. */
+  roundTripMs: number;
+  /** What the driver timestamps report (what takes use without an offset). */
+  reportedMs: number;
+  /** roundTripMs − reportedMs: the `recOffsetMs` that makes takes land on the beat. */
+  suggestedOffsetMs: number;
+  /** 0..1 — share of clicks agreeing within 1 ms × how clearly the peak beats echoes/noise; below ~0.5 measure again. */
+  confidence: number;
 }
 
 /** A MIDI input port. `id` is stable per port and is what `midiSelectDevice` takes. */

@@ -96,6 +96,8 @@ struct RecBuf {
     start: f64,
     /// Frames of input to drop from the front so the take lines up with what the
     /// performer heard: device round trip + plugin delay compensation of the playback.
+    /// Set at the start from the device estimate then; replaced in [`RecBuf::resolve`] by the
+    /// mean round trip measured while the take was capturing, when there is one.
     skip: usize,
     /// The mixer's playback latency `skip` was taken with: the graph keeps it until the take ends.
     pdc: usize,
@@ -124,10 +126,15 @@ impl RecBuf {
             _ => self.start,
         }
     }
-    /// A punch-in take starts where the audio thread began capturing.
-    fn resolve_start(&mut self, shared: &Shared) {
+    /// Reads what the audio thread learned during the take (before its `Shared` goes away):
+    /// a punch-in take starts where capturing began, and the device round trip is the one
+    /// measured while it captured (the estimate at the start may not have settled).
+    fn resolve(&mut self, shared: &Shared) {
         if self.start.is_nan() {
             self.start = shared.rec_start();
+        }
+        if let Some(io) = shared.take_latency() {
+            self.skip = io as usize + self.pdc;
         }
     }
     fn push(&mut self, x: f32) {
@@ -347,7 +354,7 @@ impl Engine {
             let mut c = self.core.lock();
             let old = self.shared.lock().clone();
             if let Some(t) = c.take.as_mut() {
-                t.resolve_start(&old);
+                t.resolve(&old);
             }
         }
         *self.shared.lock() = shared.clone();
@@ -604,7 +611,9 @@ impl Engine {
         let w = c.wires.as_ref()?;
         let sr = w.sr as u32;
         let pdc = playback_latency(&c.project, w.sr);
-        let skip = self.shared().io_latency() as usize + pdc;
+        let shared = self.shared();
+        let skip = shared.io_latency() as usize + pdc;
+        shared.reset_take_latency();
         Some(RecBuf { track, start, skip, pdc, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
     }
 
@@ -1431,7 +1440,7 @@ impl Engine {
             let _ = sr;
             let ids: Vec<Id> = c.project.inserts.iter().map(|m| m.id).collect();
             if let Some(t) = c.take.as_mut() {
-                t.resolve_start(&shared);
+                t.resolve(&shared);
             }
             let rec = c.take.as_mut().filter(|t| !t.start.is_nan()).map(|t| {
                 let new = t.peaks[t.peaks_sent..].to_vec();
@@ -1469,7 +1478,7 @@ impl Engine {
         let shared = self.shared();
         let mut c = self.core.lock();
         if let Some(t) = c.take.as_mut() {
-            t.resolve_start(&shared);
+            t.resolve(&shared);
         }
         self.finalize_take(&mut c);
         if c.graph_deferred {
