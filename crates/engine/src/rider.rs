@@ -407,6 +407,27 @@ impl Rider {
         }
     }
 
+    /// Before parking: analyse the silence that processing would have fed until dormancy.
+    /// Only the auto-target estimates outlive dormancy, and the last frames of audio still
+    /// in the word window update them; without this, a rider parked mid-phrase would carry
+    /// other estimates than one that ran into the silence. No audio is produced.
+    fn flush_silence(&mut self) {
+        if !self.auto || self.dl.is_empty() {
+            return;
+        }
+        for _ in 0..(self.latency + self.hop * 4).saturating_sub(self.quiet) {
+            let (ka, kb) = (self.kl.tick(0.0), self.kr.tick(0.0));
+            self.acc += 0.5 * (ka as f64 * ka as f64 + kb as f64 * kb as f64);
+            self.acc_n += 1;
+            if self.acc_n == self.hop {
+                let pk = self.acc / self.hop as f64;
+                self.acc = 0.0;
+                self.acc_n = 0;
+                self.push_frame(pk);
+            }
+        }
+    }
+
     /// Final gain (dB) at input sample `s`: linear between frame centres, like `np.interp`.
     #[inline]
     fn gain_at(&self, s: usize) -> f32 {
@@ -513,6 +534,7 @@ impl Processor for Rider {
 
     fn park(&mut self) {
         if !self.dormant {
+            self.flush_silence();
             self.go_dormant();
         }
     }
@@ -651,9 +673,19 @@ mod tests {
 
     #[test]
     fn parking_equals_processing_silence() {
+        for look in [0.0, 1.0] {
+            parking_equals_processing_silence_at(look);
+        }
+    }
+
+    fn parking_equals_processing_silence_at(look: f64) {
         let blk = 512;
-        let x = words(&[-12.0, -20.0, -14.0], 0.3, 0.1);
-        let pb = catalog::param_block(&catalog::new_fx(1, FxKind::Rider, 120.0));
+        // longer than the long look-ahead, so the gain after parking is heard
+        let x = words(&[-12.0, -20.0, -14.0, -18.0, -10.0], 0.3, 0.1);
+        let mut fx = catalog::new_fx(1, FxKind::Rider, 120.0);
+        fx.params.insert("look".into(), look);
+        assert_eq!(fx.params["auto"], 1.0, "the auto-target estimates are what outlives parking");
+        let pb = catalog::param_block(&fx);
         let ctx = ProcessCtx { sample_rate: SR, bpm: 120.0, beat: 0.0, playing: true };
         let mk = || {
             let mut r = Rider::default();
@@ -678,6 +710,7 @@ mod tests {
         assert!(za[za.len() - blk..].iter().all(|v| *v == 0.0));
         b.park();
         let (ya, yb) = (run(&mut a, &x), run(&mut b, &x));
-        assert_eq!(ya, yb, "a parked rider must continue exactly like one that processed the silence");
+        assert!(ya.iter().any(|v| v.abs() > 1e-3));
+        assert_eq!(ya, yb, "look {look}: a parked rider must continue exactly like one that processed the silence");
     }
 }

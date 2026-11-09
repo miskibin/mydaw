@@ -595,7 +595,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -687,8 +687,18 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
                 Some("hard") => wave_engine::autovocal::Style::Hard,
                 _ => wave_engine::autovocal::Style::Natural,
             };
-            let plan = e.auto_vocal_plan(cid, beat, style).map_err(|x| x.to_string())?;
+            let bake = arg(a, "bakeRider").and_then(Value::as_bool).unwrap_or(false);
+            let plan = e.auto_vocal_plan(cid, beat, style, bake).map_err(|x| x.to_string())?;
             Ok(json!(plan))
+        }
+        "bake_rider" => {
+            let cid = need_u64(a, "clipId")?;
+            let params: std::collections::BTreeMap<String, f64> = match arg(a, "params") {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|er| format!("BAD_ARGS: params: {er}"))?,
+                None => Default::default(),
+            };
+            let (source, clip) = e.bake_rider(cid, &params).map_err(|x| x.to_string())?;
+            Ok(json!({ "clipId": clip, "sourceId": source, "revision": e.revision() }))
         }
         "vst3_scan" => Ok(json!(app.plugins.scan(arg(a, "rescan").and_then(Value::as_bool).unwrap_or(false)))),
         "vst3_add" => {

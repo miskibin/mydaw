@@ -874,7 +874,10 @@ impl Engine {
     /// the calibrated insert chain for its track. The key comes from `beat_clip` when given,
     /// else from the project's other audio (tracks not routed to the vocal's insert); the
     /// level suggestion needs `beat_clip`. Slow (seconds): call off the UI thread.
-    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
+    ///
+    /// `bake_rider`: the plan's rider comes out of the chain into `rider_bake`, for
+    /// [`Self::bake_rider`] (no live look-ahead on the insert, so no playback delay).
+    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style, bake_rider: bool) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
         let clip = self.audio_clip(clip_id)?;
         let region = |cl: &Clip| -> Result<(Vec<f32>, f32), EngineError> {
             let (audio, bpm) = {
@@ -912,14 +915,82 @@ impl Engine {
             }
             None => None,
         };
-        Ok(crate::autovocal::plan(&crate::autovocal::PlanInput {
+        let plan = crate::autovocal::plan(&crate::autovocal::PlanInput {
             vocal: &vocal,
             sr,
             style,
             key,
             pitch: pitch.as_deref(),
             beat: beat.as_ref().map(|(x, s)| (x.as_slice(), *s)),
-        }))
+        });
+        Ok(if bake_rider { plan.baked() } else { plan })
+    }
+
+    /// Renders what an audio clip plays (its region, clip gain, normalise/reverse and pitch
+    /// edits; not its fades, which stay on the clip) through the Vocal Rider offline, as
+    /// `autovocal::render` does — the rider's latency removed, sample-aligned, any
+    /// look-ahead — into a new source, and points the clip at it (gain 0 dB, no
+    /// norm/rev/pitch edits, the region's sub-sample start kept as the offset). The original
+    /// source stays in the project. One undo step. `params` are Rider params (catalog ids;
+    /// missing ones take the catalog defaults), e.g. an auto-vocal plan's `rider_bake`.
+    /// Returns (new source id, clip id). Slow (the whole region is rendered): call it off
+    /// the UI thread.
+    pub fn bake_rider(&self, clip_id: Id, params: &std::collections::BTreeMap<String, f64>) -> Result<(Id, Id), EngineError> {
+        let (clip, audio, bpm, src_name, color) = {
+            let mut c = self.core.lock();
+            let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
+            if clip.kind != ClipKind::Audio {
+                return Err(EngineError::Msg("only audio clips can be baked".into()));
+            }
+            let bpm = c.project.bpm;
+            let audio = c.sources.clip_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            let src = c.project.sources.iter().find(|s| s.id == clip.source);
+            let (name, color) = src.map(|s| (s.name.clone(), s.color.clone())).unwrap_or_else(|| ("Vocal".into(), "#e05263".into()));
+            (clip, audio, bpm, name, color)
+        };
+        let sr = audio.sr;
+        let (a, b) = crate::sources::clip_region(&clip, bpm, audio.seconds());
+        // the same frames `auto_vocal_plan` measures (truncated start); the fraction of a
+        // frame the region starts past it stays on the clip as its offset
+        let pos = a * sr as f64;
+        let i0 = (pos as usize).min(audio.frames);
+        let i1 = ((b * sr as f64) as usize).clamp(i0, audio.frames);
+        if i1 - i0 < 16 {
+            return Err(EngineError::Msg("the clip is empty".into()));
+        }
+        // two guard frames (as in `flatten_comp`): playback reads a frame or two past the
+        // region's last whole frame (interpolation, the clip end landing between frames)
+        let i1 = (i1 + 2).min(audio.frames);
+        let g = crate::dsp::db_to_gain(clip.gain);
+        let content = audio.content();
+        let l: Vec<f32> = (i0..i1).map(|i| content[2 * i] * g).collect();
+        let r: Vec<f32> = (i0..i1).map(|i| content[2 * i + 1] * g).collect();
+        let (yl, yr) = crate::autovocal::render_stereo(FxKind::Rider, params, &l, &r, sr as f32);
+        let data: Vec<f32> = yl.iter().zip(&yr).flat_map(|(a, b)| [*a, *b]).collect();
+        let spb = 60.0 / bpm;
+        let offset = (pos - i0 as f64) / sr as f64 / spb;
+
+        let mut c = self.core.lock();
+        let now = c.project.clips.iter().find(|x| x.id == clip_id).cloned();
+        if now.as_ref() != Some(&clip) || c.project.bpm != bpm {
+            return Err(EngineError::Msg("the clip changed while the rider was rendering; try again".into()));
+        }
+        let id = c.project.alloc_id();
+        let name = format!("{src_name} (rider)");
+        let path = fresh_path(&audio_dir(&c), &format!("{} rider {}", sanitize(&src_name), id));
+        write_wav(&path, &data, sr)?;
+        let baked = Audio::from_stereo(data, sr, audio.channels);
+        let before = c.project.clone();
+        c.project.sources.push(Source { id, name, color, path: path.display().to_string(), dur: baked.seconds(), sr, ch: audio.channels, peak_db: crate::dsp::gain_to_db(baked.peak()) });
+        c.sources.insert(id, Arc::new(baked));
+        if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
+            *x = Clip { source: id, offset, gain: 0.0, norm: false, rev: false, tune: None, ..clip };
+        }
+        push_undo(&mut c, before);
+        c.revision += 1;
+        self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+        self.changed(c);
+        Ok((id, clip_id))
     }
 
     /// Peaks of what the clip actually plays (including pitch edits), for drawing.
