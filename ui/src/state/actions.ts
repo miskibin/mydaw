@@ -384,6 +384,9 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
   say('Auto wokal: analiza nagrania… (kilka sekund)');
   try {
     const plan = await be().autoVocalPlan({ clipId, style });
+    // The chain leaves the vocal far under the limiter; bring it up to mix level in the limiter
+    // (its gain + −1 dBTP ceiling): to sit under the beat when the plan knows it, else −18 LUFS.
+    const makeup = Math.round(clamp(plan.trackGainDb ?? (-18 - plan.stages.lufsAfter), 0, 24) * 10) / 10;
     const types = new Set<string>(plan.chain.map(p => p.type));
     const ops: Op[] = ins.fx.filter(f => types.has(f.type)).map(f => ({ op: 'removeFx', fxId: f.id }) as Op);
     for (const p of plan.chain) {
@@ -391,13 +394,14 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
       f.params = { ...f.params, ...p.params };
       f.mix = p.mix;
       f.bypass = !p.enabled;
+      if (p.type === 'limit') f.params.gain = clamp((f.params.gain ?? 0) + makeup, 0, 24);
       ops.push({ op: 'putFx', insertId: ins.id, fx: f });
     }
     commit(ops, 'Auto wokal');
     setU({ mixSel: ins.id });
     const a = plan.analysis, st = plan.stages;
     say('Auto wokal: ' + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
-      + ' · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
+      + ' · +' + makeup.toFixed(1) + ' dB w limiterze · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
       + (a.key ? ' · tonacja ' + a.key.name : ' · bez tonacji (autotune wyłączony)')
       + (plan.warnings.length ? ' · ' + plan.warnings[0] : ''));
   } catch (e) { say('Auto wokal nie zadziałał: ' + String(e)); }
