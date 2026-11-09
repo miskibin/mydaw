@@ -85,6 +85,10 @@ export function FxWindow(props: { pw: PlugWin; z: number }) {
                 onPointerDown={e => { e.stopPropagation(); A.toggleBypass(fx().id); }} />
               <FxTile type={fx().type} size={20} icon={13} />
               <span class="title">{A.fxName(fx())}</span>
+              <Show when={fx().type === 'comp' || fx().type === 'fet'}>
+                <Segmented options={['Czysty', 'FET']} small value={() => (fx().type === 'fet' ? 1 : 0)} color={FXMETA[fx().type].color}
+                  pick={i => A.swapFxType(fx().id, i ? 'fet' : 'comp')} title="Typ kompresora: czysty (VCA) albo FET w stylu 1176 — przełączenie ładuje ustawienia domyślne" />
+              </Show>
               <span style={{ width: '6px', height: '6px', flex: 'none', 'border-radius': '2px', background: m().color }} />
               <span class="sub">{insName(m())}</span>
               <Show when={fx().bypass}><span class="bypasstag">BYPASS</span></Show>

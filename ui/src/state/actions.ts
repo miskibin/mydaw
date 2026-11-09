@@ -273,6 +273,16 @@ export function toggleBypass(fxId: Id) {
 /** FL-style: bypass every effect of an insert, or turn them all back on if all are bypassed. */
 /** Effects that were on when "N FX" switched an insert off, so switching back restores them. */
 const fxWasOn = new Map<Id, Set<Id>>();
+/** Switch an effect to another built-in type in place (e.g. clean compressor ↔ FET); default preset. */
+export function swapFxType(fxId: Id, type: AnyBuiltinKind) {
+  const ff = findFx(fxId); if (!ff || !S.catalog || ff.f.type === type) return;
+  const idx = ff.m.fx.findIndex(f => f.id === fxId);
+  const f = newFx(S.catalog, allocId(), type, S.project.bpm);
+  f.bypass = ff.f.bypass;
+  commit([{ op: 'removeFx', fxId }, { op: 'putFx', insertId: ff.m.id, fx: f, index: idx }], 'Typ kompresora');
+  closePlug(fxId); openPlug(f.id);
+  say((S.catalog.types[type]?.name ?? type) + ' — ustawienia domyślne');
+}
 export function toggleInsertFx(insId: Id) {
   const m = S.project.inserts.find(x => x.id === insId); if (!m || !m.fx.length) return;
   const on = m.fx.some(f => !f.bypass);
