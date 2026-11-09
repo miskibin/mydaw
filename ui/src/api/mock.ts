@@ -141,8 +141,9 @@ export class MockBackend implements Backend {
     await delay();
     const prev = this.p;
     this.p = applyAll(this.p, ops); // throws (rejects) on an invalid batch
-    if (!(opts?.transient && this.gesture)) this.pushUndo(prev);
-    this.changed();
+    // like the engine: no state event per transient batch of a gesture (endGesture reports it)
+    if (opts?.transient && this.gesture) this.revision++;
+    else { this.pushUndo(prev); this.changed(); }
     return { revision: this.revision };
   }
   async beginGesture() { this.gesture = structuredClone(this.p); }
