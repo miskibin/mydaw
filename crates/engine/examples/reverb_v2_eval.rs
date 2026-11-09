@@ -7,7 +7,7 @@
 use std::time::Instant;
 
 use realfft::RealFftPlanner;
-use wave_engine::catalog::{new_fx, param_block, presets, load_preset};
+use wave_engine::catalog::{load_preset, new_fx, param_block, presets};
 use wave_engine::dsp::limiter_v2::LimiterV2;
 use wave_engine::dsp::reverb_v2::{self, ReverbV2};
 use wave_engine::dsp::{Biquad, FilterType, Limiter as OldLimiter, Reverb as OldReverb};
@@ -17,7 +17,10 @@ use wave_engine::FxKind;
 const BLOCK: usize = 128;
 
 fn run(p: &mut dyn Processor, l: &[f32], r: &[f32], sr: f32) -> (Vec<f32>, Vec<f32>) {
-    let ctx = ProcessCtx { sample_rate: sr, ..Default::default() };
+    let ctx = ProcessCtx {
+        sample_rate: sr,
+        ..Default::default()
+    };
     let (mut ol, mut or) = (l.to_vec(), r.to_vec());
     for (a, b) in ol.chunks_mut(BLOCK).zip(or.chunks_mut(BLOCK)) {
         p.process(a, b, &ctx);
@@ -33,7 +36,10 @@ fn block(vals: &[f32]) -> ParamBlock {
 
 fn preset_block(kind: FxKind, name: &str) -> ParamBlock {
     let mut fx = new_fx(1, kind, 120.0);
-    let i = presets(kind).iter().position(|p| p.name == name).expect("preset");
+    let i = presets(kind)
+        .iter()
+        .position(|p| p.name == name)
+        .expect("preset");
     load_preset(&mut fx, i, 120.0);
     param_block(&fx)
 }
@@ -83,19 +89,32 @@ fn rt60(h: &[f32], sr: f32) -> f32 {
         edc[i] = acc;
     }
     let e0 = edc[0].max(1e-30);
-    let db: Vec<f64> = edc.iter().map(|e| 10.0 * (e / e0).max(1e-30).log10()).collect();
+    let db: Vec<f64> = edc
+        .iter()
+        .map(|e| 10.0 * (e / e0).max(1e-30).log10())
+        .collect();
     let fit = |lo: f64, hi: f64| -> Option<f32> {
-        let pts: Vec<(f64, f64)> = db.iter().enumerate().filter(|(_, &d)| d <= lo && d >= hi).map(|(i, &d)| (i as f64 / sr as f64, d)).collect();
+        let pts: Vec<(f64, f64)> = db
+            .iter()
+            .enumerate()
+            .filter(|(_, &d)| d <= lo && d >= hi)
+            .map(|(i, &d)| (i as f64 / sr as f64, d))
+            .collect();
         if pts.len() < 10 {
             return None;
         }
         let n = pts.len() as f64;
-        let (mx, my) = (pts.iter().map(|p| p.0).sum::<f64>() / n, pts.iter().map(|p| p.1).sum::<f64>() / n);
+        let (mx, my) = (
+            pts.iter().map(|p| p.0).sum::<f64>() / n,
+            pts.iter().map(|p| p.1).sum::<f64>() / n,
+        );
         let sxy: f64 = pts.iter().map(|p| (p.0 - mx) * (p.1 - my)).sum();
         let sxx: f64 = pts.iter().map(|p| (p.0 - mx).powi(2)).sum();
         Some((-60.0 / (sxy / sxx)) as f32)
     };
-    fit(-5.0, -35.0).or_else(|| fit(-5.0, -25.0)).unwrap_or(f32::NAN)
+    fit(-5.0, -35.0)
+        .or_else(|| fit(-5.0, -25.0))
+        .unwrap_or(f32::NAN)
 }
 
 /// Normalised echo density (Abel & Huang 2006), 20 ms windows: time (ms) it first reaches 0.9.
@@ -145,7 +164,9 @@ fn flatness(h: &[f32], sr: f32) -> (f32, f32, f32) {
         win.clear();
         win.extend_from_slice(&pw[lo..=hi]);
         let m = win.len() / 2;
-        let med = *win.select_nth_unstable_by(m, |x, y| x.partial_cmp(y).unwrap()).1;
+        let med = *win
+            .select_nth_unstable_by(m, |x, y| x.partial_cmp(y).unwrap())
+            .1;
         ratios.push(10.0 * (pw[k] / med).log10());
     }
     ratios.sort_by(|x, y| x.partial_cmp(y).unwrap());
@@ -203,7 +224,11 @@ fn true_peak(x: &[f32], lim: f32) -> (f32, usize) {
         for (j, v) in row.iter_mut().enumerate() {
             let m = (OS * j + p) as f64;
             let t = (m - centre) / OS as f64;
-            let sinc = if t == 0.0 { 1.0 } else { (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t) };
+            let sinc = if t == 0.0 {
+                1.0
+            } else {
+                (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t)
+            };
             let r = (m - centre) / centre;
             *v = (sinc * i0(10.0 * (1.0 - r * r).max(0.0).sqrt()) / i0(10.0)) as f32;
         }
@@ -238,7 +263,8 @@ fn thd(y: &[f32], f0: f32, sr: f32) -> f32 {
         .enumerate()
         .map(|(i, v)| {
             let t = 2.0 * std::f32::consts::PI * i as f32 / n as f32;
-            v * (0.35875 - 0.48829 * t.cos() + 0.14128 * (2.0 * t).cos() - 0.01168 * (3.0 * t).cos())
+            v * (0.35875 - 0.48829 * t.cos() + 0.14128 * (2.0 * t).cos()
+                - 0.01168 * (3.0 * t).cos())
         })
         .collect();
     let mut planner = RealFftPlanner::<f32>::new();
@@ -247,15 +273,23 @@ fn thd(y: &[f32], f0: f32, sr: f32) -> f32 {
     fft.process(&mut buf, &mut spec).unwrap();
     let e = |f: f32| {
         let k = (f / sr * n as f32).round() as usize;
-        (k.saturating_sub(4)..=(k + 4).min(spec.len() - 1)).map(|i| spec[i].norm_sqr()).sum::<f32>()
+        (k.saturating_sub(4)..=(k + 4).min(spec.len() - 1))
+            .map(|i| spec[i].norm_sqr())
+            .sum::<f32>()
     };
     let fund = e(f0);
-    let harm: f32 = (2..=10).map(|k| f0 * k as f32).filter(|f| *f < sr * 0.45).map(e).sum();
+    let harm: f32 = (2..=10)
+        .map(|k| f0 * k as f32)
+        .filter(|f| *f < sr * 0.45)
+        .map(e)
+        .sum();
     (harm / fund).sqrt() * 100.0
 }
 
 fn rms_db(x: &[f32]) -> f32 {
-    20.0 * ((x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt() as f32).max(1e-9).log10()
+    20.0 * ((x.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / x.len() as f64).sqrt() as f32)
+        .max(1e-9)
+        .log10()
 }
 
 fn read_wav(path: &std::path::Path) -> (Vec<f32>, f32) {
@@ -263,14 +297,25 @@ fn read_wav(path: &std::path::Path) -> (Vec<f32>, f32) {
     let spec = r.spec();
     let ch = spec.channels as usize;
     let s: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Int => r.samples::<i32>().map(|v| v.unwrap() as f32 / (1u32 << (spec.bits_per_sample - 1)) as f32).collect(),
+        hound::SampleFormat::Int => r
+            .samples::<i32>()
+            .map(|v| v.unwrap() as f32 / (1u32 << (spec.bits_per_sample - 1)) as f32)
+            .collect(),
         hound::SampleFormat::Float => r.samples::<f32>().map(|v| v.unwrap()).collect(),
     };
-    (s.chunks(ch).map(|c| c[0]).collect(), spec.sample_rate as f32)
+    (
+        s.chunks(ch).map(|c| c[0]).collect(),
+        spec.sample_rate as f32,
+    )
 }
 
 fn write_wav(path: &std::path::Path, l: &[f32], r: &[f32], sr: f32) {
-    let spec = hound::WavSpec { channels: 2, sample_rate: sr as u32, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: sr as u32,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
     let mut w = hound::WavWriter::create(path, spec).unwrap();
     for (a, b) in l.iter().zip(r) {
         w.write_sample(*a).unwrap();
@@ -283,7 +328,12 @@ fn reverb_report(sr: f32) {
     println!("\n## Reverb @ {sr} Hz");
     let bands = [125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
     // new: open input filters so the band decays can be read cleanly
-    for (name, space, size, tone, bass) in [("Plate", 0.0, 1.0, 0.0, 0.8), ("Room", 1.0, 0.6, 0.0, 1.0), ("Hall", 2.0, 2.0, -20.0, 0.8), ("Ambience", 3.0, 0.4, 0.0, 1.0)] {
+    for (name, space, size, tone, bass) in [
+        ("Plate", 0.0, 1.0, 0.0, 0.8),
+        ("Room", 1.0, 0.6, 0.0, 1.0),
+        ("Hall", 2.0, 2.0, -20.0, 0.8),
+        ("Ambience", 3.0, 0.4, 0.0, 1.0),
+    ] {
         let mut pb = preset_block(FxKind::Reverb, "Vocal Plate");
         let v = &mut pb.values;
         v[reverb_v2::idx::SPACE] = space;
@@ -302,7 +352,10 @@ fn reverb_report(sr: f32) {
             err_max = err_max.max(((m - d) / d).abs());
             row += &format!(" {f:>5}:{m:.2}/{d:.2}");
         }
-        println!("new {name:<8} T60 {size}s  measured/design per band:{row}  max err {:.0}%", err_max * 100.0);
+        println!(
+            "new {name:<8} T60 {size}s  measured/design per band:{row}  max err {:.0}%",
+            err_max * 100.0
+        );
     }
     for (name, size, hi) in [("old size1.0", 1.0, 7000.0), ("old size2.2", 2.2, 8000.0)] {
         let (l, r) = ir_old(size, 25.0, 20.0, hi, sr, (size * 3.0).max(2.0));
@@ -321,7 +374,11 @@ fn reverb_report(sr: f32) {
         let (sfm, p999, mx) = flatness(&mono, sr);
         let a = (0.05 * sr) as usize;
         let b = (0.8 * sr) as usize;
-        println!("| {label} | {:.0} | {sfm:.3} | {p999:.1} / {mx:.1} | {:.3} | {cpu:.1} |", ned_time(&mono, sr), corr(&l[a..b], &r[a..b]));
+        println!(
+            "| {label} | {:.0} | {sfm:.3} | {p999:.1} / {mx:.1} | {:.3} | {cpu:.1} |",
+            ned_time(&mono, sr),
+            corr(&l[a..b], &r[a..b])
+        );
     };
     let (l, r) = ir_old(1.0, 25.0, 300.0, 7000.0, sr, 2.5);
     let mut old = OldReverb::default();
@@ -348,16 +405,52 @@ fn limiter_report(sr: f32, mixes: &[Vec<f32>], mix_sr: f32) {
     let mut sigs: Vec<(String, Vec<f32>, f32, f32)> = Vec::new();
     let n = (sr * 2.0) as usize;
     // fs/4 sine at 45° phase: samples at ±0.707 of the true peak → classic +3 dB inter-sample over
-    sigs.push(("fs/4 sine 45° bursts".into(), (0..n).map(|i| if (i / 4800) % 2 == 0 { (std::f32::consts::FRAC_PI_2 * i as f32 + 0.785).sin() * 0.9 } else { 0.0 }).collect(), sr, 6.0));
-    sigs.push(("11 kHz sine bursts".into(), (0..n).map(|i| if (i / 2400) % 3 == 0 { (2.0 * std::f32::consts::PI * 11000.0 * i as f32 / sr).sin() * 0.8 } else { 0.0 }).collect(), sr, 6.0));
+    sigs.push((
+        "fs/4 sine 45° bursts".into(),
+        (0..n)
+            .map(|i| {
+                if (i / 4800) % 2 == 0 {
+                    (std::f32::consts::FRAC_PI_2 * i as f32 + 0.785).sin() * 0.9
+                } else {
+                    0.0
+                }
+            })
+            .collect(),
+        sr,
+        6.0,
+    ));
+    sigs.push((
+        "11 kHz sine bursts".into(),
+        (0..n)
+            .map(|i| {
+                if (i / 2400) % 3 == 0 {
+                    (2.0 * std::f32::consts::PI * 11000.0 * i as f32 / sr).sin() * 0.8
+                } else {
+                    0.0
+                }
+            })
+            .collect(),
+        sr,
+        6.0,
+    ));
     // synthetic drum loop: kick (pitch-swept sine) + snare (noise burst), 120 bpm 8ths
     let nz = noise(n, 11);
     let drums: Vec<f32> = (0..n)
         .map(|i| {
             let t = (i % (sr as usize / 4)) as f32 / sr;
             let beat = (i / (sr as usize / 4)) % 4;
-            let kick = if beat % 2 == 0 { (2.0 * std::f32::consts::PI * (50.0 * t + 400.0 * (1.0 - (-t * 30.0).exp()) / 30.0)).sin() * (-t * 8.0).exp() } else { 0.0 };
-            let snare = if beat % 2 == 1 { nz[i] * (-t * 20.0).exp() * 0.8 } else { 0.0 };
+            let kick = if beat.is_multiple_of(2) {
+                (2.0 * std::f32::consts::PI * (50.0 * t + 400.0 * (1.0 - (-t * 30.0).exp()) / 30.0))
+                    .sin()
+                    * (-t * 8.0).exp()
+            } else {
+                0.0
+            };
+            let snare = if beat % 2 == 1 {
+                nz[i] * (-t * 20.0).exp() * 0.8
+            } else {
+                0.0
+            };
             (kick + snare) * 0.7
         })
         .collect();
@@ -384,14 +477,22 @@ fn limiter_report(sr: f32, mixes: &[Vec<f32>], mix_sr: f32) {
         if nw.clamped > 0 {
             eprintln!("  ({name}: safety clamp touched {} samples)", nw.clamped);
         }
-        println!("| {name} | {:.2} | {oo} | {:.2} | {on} | {:.1} | {:.1} |", 20.0 * tpo.log10(), 20.0 * tpn.log10(), rms_db(&ol), rms_db(&nl));
+        println!(
+            "| {name} | {:.2} | {oo} | {:.2} | {on} | {:.1} | {:.1} |",
+            20.0 * tpo.log10(),
+            20.0 * tpn.log10(),
+            rms_db(&ol),
+            rms_db(&nl)
+        );
     }
     println!("total overs: old {tot_old}, new {tot_new}");
     // THD at ~6 dB gain reduction, steady sines
     println!("\n| THD at 6 dB GR | old | new |\n|---|---|---|");
     for f0 in [50.0, 100.0, 1000.0] {
         let n = (sr * 3.0) as usize;
-        let x: Vec<f32> = (0..n).map(|i| (2.0 * std::f32::consts::PI * f0 * i as f32 / sr).sin() * ceil * 2.0).collect();
+        let x: Vec<f32> = (0..n)
+            .map(|i| (2.0 * std::f32::consts::PI * f0 * i as f32 / sr).sin() * ceil * 2.0)
+            .collect();
         let mut o = OldLimiter::default();
         o.prepare(sr, BLOCK);
         o.set_params(&block(&[0.0, -1.0]));
@@ -400,7 +501,11 @@ fn limiter_report(sr: f32, mixes: &[Vec<f32>], mix_sr: f32) {
         nw.prepare(sr, BLOCK);
         nw.set_params(&preset_v(0.0));
         let (nl, _) = run(&mut nw, &x, &x, sr);
-        println!("| {f0} Hz | {:.2} % | {:.2} % |", thd(&ol, f0, sr), thd(&nl, f0, sr));
+        println!(
+            "| {f0} Hz | {:.2} % | {:.2} % |",
+            thd(&ol, f0, sr),
+            thd(&nl, f0, sr)
+        );
     }
     // CPU
     let mut o = OldLimiter::default();
@@ -409,7 +514,11 @@ fn limiter_report(sr: f32, mixes: &[Vec<f32>], mix_sr: f32) {
     let mut nw = LimiterV2::default();
     nw.prepare(sr, BLOCK);
     nw.set_params(&preset_v(6.0));
-    println!("CPU µs/128 frames: old {:.1}, new {:.1}", cpu_us(&mut o, sr), cpu_us(&mut nw, sr));
+    println!(
+        "CPU µs/128 frames: old {:.1}, new {:.1}",
+        cpu_us(&mut o, sr),
+        cpu_us(&mut nw, sr)
+    );
 }
 
 fn preset_v(gain: f32) -> ParamBlock {
@@ -441,16 +550,46 @@ fn render(dir: &std::path::Path) -> Vec<Vec<f32>> {
     }
     let wet_g = 0.3; // 15 % mix → wet gain 0.3, dry 1
     let k = 10f32.powf((rms_db(&nl) - rms_db(&ol)) / 20.0);
-    let mixl = |w: &[f32], g: f32| -> Vec<f32> { voc.iter().zip(w).map(|(d, x)| d + x * g).collect() };
-    write_wav(&dir.join("02_vocal_old_reverb.wav"), &mixl(&ol, wet_g * k), &mixl(&or, wet_g * k), sr);
-    write_wav(&dir.join("03_vocal_new_vocal_plate.wav"), &mixl(&nl, wet_g), &mixl(&nr, wet_g), sr);
-    println!("\nrender: old wet scaled by {:.2} dB to match the new wet level", 20.0 * k.log10());
-    for (i, name) in ["Vocal Room", "Vocal Hall", "Ambience", "Ballada — długi plate"].iter().enumerate() {
+    let mixl =
+        |w: &[f32], g: f32| -> Vec<f32> { voc.iter().zip(w).map(|(d, x)| d + x * g).collect() };
+    write_wav(
+        &dir.join("02_vocal_old_reverb.wav"),
+        &mixl(&ol, wet_g * k),
+        &mixl(&or, wet_g * k),
+        sr,
+    );
+    write_wav(
+        &dir.join("03_vocal_new_vocal_plate.wav"),
+        &mixl(&nl, wet_g),
+        &mixl(&nr, wet_g),
+        sr,
+    );
+    println!(
+        "\nrender: old wet scaled by {:.2} dB to match the new wet level",
+        20.0 * k.log10()
+    );
+    for (i, name) in [
+        "Vocal Room",
+        "Vocal Hall",
+        "Ambience",
+        "Ballada — długi plate",
+    ]
+    .iter()
+    .enumerate()
+    {
         let mut p = ReverbV2::default();
         p.prepare(sr, BLOCK);
         p.set_params(&preset_block(FxKind::Reverb, name));
         let (l, r) = run(&mut p, &voc, &voc, sr);
-        let fname = format!("{:02}_vocal_new_{}.wav", 4 + i, name.split_whitespace().last().unwrap().to_lowercase().replace('—', ""));
+        let fname = format!(
+            "{:02}_vocal_new_{}.wav",
+            4 + i,
+            name.split_whitespace()
+                .last()
+                .unwrap()
+                .to_lowercase()
+                .replace('—', "")
+        );
         write_wav(&dir.join(fname), &l, &r, sr);
     }
     // limiter on beat + vocal
