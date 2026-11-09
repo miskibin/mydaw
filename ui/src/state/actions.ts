@@ -403,7 +403,8 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
     say('Auto wokal: ' + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
       + ' · +' + makeup.toFixed(1) + ' dB w limiterze · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
       + (a.key ? ' · tonacja ' + a.key.name : ' · bez tonacji (autotune wyłączony)')
-      + (plan.warnings.length ? ' · ' + plan.warnings[0] : ''));
+      + (plan.warnings.length ? ' · ' + plan.warnings[0] : '')
+      + ' · nagrywając kolejne podejście na tej ścieżce wyłącz efekty (klik „N FX”) — Rider opóźnia odsłuch o ~1,6 s');
   } catch (e) { say('Auto wokal nie zadziałał: ' + String(e)); }
   autoVocalBusy = false;
 }
