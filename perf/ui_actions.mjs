@@ -178,7 +178,29 @@ await act('playback_follow', async () => {
   await page.waitForTimeout(D + 1000);
   await P(() => window.__perf.A.togglePlay());
 });
-await P(() => { window.__perf.setU('follow', false); window.__perf.A.seek(0); });
+if (arg('exp', false)) {
+  const play = async () => { await P(() => { window.__perf.A.seek(8); return window.__perf.A.togglePlay(); }); await page.waitForTimeout(D); await P(() => window.__perf.A.togglePlay()); };
+  const css = t => P(t => { let s = document.getElementById('__exp'); if (!s) { s = document.createElement('style'); s.id = '__exp'; document.head.appendChild(s); } s.textContent = t; }, t);
+  await act('exp_play_base', play);
+  await css('.meter > div { will-change: transform }'); await act('exp_play_meter_layers', play);
+  await css('.meter { display: none }'); await act('exp_play_no_meters', play);
+  await css('.phead { display: none }'); await act('exp_play_no_phead', play);
+  await css('.inmeter, .clockbox { display: none }'); await act('exp_play_no_toolbar_live', play);
+  await css('.phead, .inmeter, .clockbox, .meter { display: none }'); await act('exp_play_none_live', play);
+  await css('.mixer .strip { contain: strict }'); await act('exp_play_contain', play);
+  await css('.mixer .strips { will-change: transform }'); await act('exp_play_strips_layer', play);
+  await css('.mixer .strip { content-visibility: auto; contain-intrinsic-size: 80px 300px }'); await act('exp_play_cv', play);
+  await css('.mixer .strips { will-change: transform } .mixer .strip { content-visibility: auto; contain-intrinsic-size: 80px 300px }'); await act('exp_play_cv_layer', play);
+  await css('.mixer .strips { will-change: transform } .mixer .strip { contain: paint }'); await act('exp_play_paint_layer', play);
+  await css('');
+}
+await P(() => window.__perf.setU('mixOpen', false)); await frames(4);
+await act('playback_follow_mixer_closed', async () => {
+  await P(() => { window.__perf.A.seek(8); return window.__perf.A.togglePlay(); });
+  await page.waitForTimeout(D + 1000);
+  await P(() => window.__perf.A.togglePlay());
+});
+await P(() => { window.__perf.setU('mixOpen', true); window.__perf.setU('follow', false); window.__perf.A.seek(0); });
 
 // ---------- mixer
 await act('mixer_open_close', async () => {
@@ -198,6 +220,17 @@ await act('mixer_knob_drag', async () => {
   await page.mouse.move(r.x, r.y); await page.mouse.down();
   for (let i = 1; i <= 80; i++) await page.mouse.move(r.x, r.y + Math.sin(i / 10) * 40);
   await page.mouse.up(); await page.waitForTimeout(200);
+});
+await act('mixer_scroll_wheel', async () => {
+  const r = await P(() => { const b = document.querySelector('.mixer .strips').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + 40 }; });
+  await page.mouse.move(r.x, r.y);
+  let blank = 0;
+  for (let i = 0; i < 90; i++) {
+    await page.mouse.wheel(i % 60 < 30 ? 120 : -120, 0); await frames(1);
+    // a built strip under every visible column (no empty placeholder in view)
+    blank += await P(() => { const sc = document.querySelector('.mixer .strips'), b = sc.getBoundingClientRect(); let n = 0; for (let x = b.left + 5; x < b.right - 50; x += 80) { const e = document.elementFromPoint(x, b.top + 30); const s = e && e.closest('.strip'); if (s && !s.children.length) n++; } return n; });
+  }
+  return { blank_columns_seen: blank };
 });
 await P(() => window.__perf.setU('mixOpen', false)); await frames(5);
 

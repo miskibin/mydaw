@@ -212,6 +212,33 @@ function FxSlot(props: { f: Fx; n: number; insId: Id }) {
   );
 }
 
+/** Strip width (`.strip`, border-box) and how many strips past each edge stay built. */
+const STRIP_W = 80, STRIP_MARGIN = 4;
+
+/**
+ * The strip row. Only strips in (or near) the visible part are built; the others are empty
+ * placeholders of the same size. Out of view they look the same, and the browser no longer
+ * lays every strip of a 60-insert mixer into the compositor on each frame of playback.
+ */
+function Strips() {
+  let el!: HTMLDivElement;
+  const [view, setView] = createSignal({ x: 0, w: window.innerWidth });
+  const sync = () => { if (el.scrollLeft !== view().x || el.clientWidth !== view().w) setView({ x: el.scrollLeft, w: el.clientWidth }); };
+  onMount(() => {
+    sync();
+    el.addEventListener('scroll', sync, { passive: true });
+    const ro = new ResizeObserver(sync); ro.observe(el);
+    onCleanup(() => { el.removeEventListener('scroll', sync); ro.disconnect(); });
+  });
+  const near = (i: number) => { const v = view(), m = STRIP_MARGIN * STRIP_W; return (i + 1) * STRIP_W > v.x - m && i * STRIP_W < v.x + v.w + m; };
+  return (
+    <div ref={el} class="strips">
+      <For each={S.project.inserts}>{(m, i) => <Show when={near(i())} fallback={<div class="strip" />}><Strip m={m} idx={i()} /></Show>}</For>
+      <button class="addIns" onClick={A.addInsert} title="Dodaj kanał miksera">+</button>
+    </div>
+  );
+}
+
 export function Mixer() {
   onMount(() => { const stop = addFrameTask(meterTask); onCleanup(stop); });
   const selIns = () => S.project.inserts.find(m => m.id === U.mixSel) ?? S.project.inserts[0];
@@ -241,10 +268,7 @@ export function Mixer() {
       </div>
       <Show when={!U.mixMin}>
         <div class="mixer" style={{ height: mixH() + 'px' }}>
-          <div class="strips">
-            <For each={S.project.inserts}>{(m, i) => <Strip m={m} idx={i()} />}</For>
-            <button class="addIns" onClick={A.addInsert} title="Dodaj kanał miksera">+</button>
-          </div>
+          <Strips />
           <Show when={selIns()}>
             {ins => (
               <div class="fxchain" data-ins={ins().id}>
