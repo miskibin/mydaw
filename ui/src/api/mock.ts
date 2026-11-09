@@ -832,7 +832,7 @@ export class MockBackend implements Backend {
   }
 
   private exportAbort = false;
-  async exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number }): Promise<ExportResult> {
+  async exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
     const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
@@ -842,7 +842,7 @@ export class MockBackend implements Backend {
       await delay(40);
       if (this.exportAbort) return { cancelled: true };
     }
-    const name = (this.path ? this.path.replace(/\.wave$/i, '') : 'C:\\Users\\michal\\Music\\Song') + '.wav';
+    const name = (this.path ? this.path.replace(/\.wave$/i, '') : 'C:\\Users\\michal\\Music\\Song') + (opts.format === 'mp3' ? '.mp3' : '.wav');
     const silent = this.p.clips.length === 0 || this.p.tracks.every(t => t.muted);
     return {
       out: name,

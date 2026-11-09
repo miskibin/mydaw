@@ -91,7 +91,7 @@ export interface Backend {
   projectOpen(path?: string): Promise<StateDto>;
   projectSave(saveAs?: boolean): Promise<{ path: string }>;
   /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
-  exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number }): Promise<ExportResult>;
+  exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult>;
   /** Abort an in-flight `exportAudio` before a file is written. */
   exportCancel(): Promise<void>;
   vst3Scan(rescan: boolean): Promise<Vst3Info[]>;
@@ -203,7 +203,7 @@ export function tauriBackend(): Backend {
     projectNew: () => invoke('project_new'),
     projectOpen: path => invoke('project_open', { path: path ?? null }),
     projectSave: saveAs => invoke('project_save', { saveAs: !!saveAs }),
-    exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate }),
+    exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, format: opts.format, mp3Kbps: opts.mp3Kbps }),
     exportCancel: () => invoke('export_cancel'),
     vst3Scan: rescan => invoke('vst3_scan', { rescan }),
     vst3Editor: (fxId, open) => invoke('vst3_editor', { fxId, open }),
