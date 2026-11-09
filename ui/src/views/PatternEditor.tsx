@@ -42,12 +42,15 @@ const W = () => U.patWin!;
  * clipboard and nudge shortcuts stop here (Space, Ctrl+Z, F-keys and Esc stay global).
  */
 let viewKey: ((e: KeyboardEvent) => void) | null = null;
+/** Piano-roll note clipboard (shared across patterns); `noteClipAt` = where the next paste lands. */
+let noteClip: Note[] = [];
+let noteClipAt: number | null = null;
 function guardKeys(e: KeyboardEvent) {
   // the window has the focus: the active view (piano roll) gets the keys first
   viewKey?.(e);
   if (e.cancelBubble) return;
   const m = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
-  if (e.key === 'Delete' || e.key === 'Backspace' || e.key.startsWith('Arrow') || (m && 'abcxvm'.includes(k) && k.length === 1)) { e.preventDefault(); e.stopPropagation(); }
+  if (e.key === 'Delete' || e.key === 'Backspace' || e.key.startsWith('Arrow') || (m && 'abcdxvm'.includes(k) && k.length === 1)) { e.preventDefault(); e.stopPropagation(); }
 }
 
 /** Pattern editor window (shown while `U.patWin` is set). */
@@ -626,7 +629,25 @@ function Roll(props: { root: () => HTMLDivElement }) {
     if (tl && !m && !e.altKey) { stop(); setRollTool(tl.id); say('Piano roll · ' + tl.label); return; }
     if (m && k === 'a') { stop(); setSel(new Set(chanNotes().map(x => x.i))); say('Zaznaczono ' + chanNotes().length + ' nut'); return; }
     const s = [...sel()].filter(i => pt().notes[i]?.ch === ch().id);
-    if (m && k === 'b') {
+    if (m && (k === 'c' || k === 'x') && !e.shiftKey) {
+      stop(); if (!s.length) return;
+      noteClip = s.map(i => pt().notes[i]); noteClipAt = null;
+      if (k === 'x') { const del = new Set(s); commitNotes(pt().notes.filter((_, i) => !del.has(i)), 'Wytnij nuty'); setSel(new Set<number>()); }
+      say((k === 'x' ? 'Wycięto ' : 'Skopiowano ') + s.length + ' nut');
+      return;
+    }
+    if (m && k === 'v' && !e.shiftKey) {
+      stop(); if (!noteClip.length) return;
+      const a = Math.min(...noteClip.map(n => n.step)), b = Math.max(...noteClip.map(n => n.step + n.len));
+      const at = noteClipAt ?? a + Math.max(4, Math.ceil((b - a) / 4 - 1e-9) * 4); // first paste lands after the copied block, further ones chain on
+      const copies = noteClip.map(n => ({ ...n, ch: ch().id, step: n.step - a + at }));
+      const base = pt().notes.length;
+      commitNotes([...pt().notes, ...copies], 'Wklej nuty'); setSel(new Set(copies.map((_, j) => base + j)));
+      noteClipAt = at + (b - a);
+      say('Wklejono ' + copies.length + ' nut');
+      return;
+    }
+    if (m && (k === 'b' || k === 'd')) {
       stop(); if (!s.length) return;
       const r = duplicateRight(pt().notes, s);
       commitNotes(r.notes, 'Duplikuj nuty'); setSel(new Set(r.idx));

@@ -27,6 +27,13 @@ import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 /** Stacking rank of a window (effect windows and the pattern editor) inside the window layer (1 = bottom). */
 function plugRank(z: number) { let r = 1; for (const p of U.plugs) if (p.z < z) r++; if (U.patWin && U.patWin.z < z) r++; return r; }
 
+/** A click on the playlist/toolbar takes the keyboard back from a floating window (pattern editor, effects):
+ * the canvas calls preventDefault on pointerdown, so focus would otherwise stay in that window and swallow the keys. */
+function reclaimFocus(e: PointerEvent) {
+  const ae = document.activeElement as HTMLElement | null, tg = e.target as HTMLElement;
+  if (ae && ae !== document.body && ae.closest('.win') && !tg.closest('.win') && !typingIn(tg)) ae.blur();
+}
+
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
   if (typingIn(e.target as HTMLElement)) return;
@@ -60,7 +67,7 @@ function onKey(e: KeyboardEvent) {
   if (m && k === 's') { e.preventDefault(); return void A.projectSave(e.shiftKey); }
   if (m && e.shiftKey && k === 'r') { e.preventDefault(); return setU('exportOpen', true); }
   if (m && k === 'a') { e.preventDefault(); return A.selectAll(); }
-  if (m && k === 'b') { e.preventDefault(); return A.duplicate(); }
+  if (m && (k === 'b' || k === 'd')) { e.preventDefault(); return A.duplicate(); } // Ctrl+B (FL) and Ctrl+D (Ableton/Reaper); preventDefault also stops the browser bookmark
   if (m && k === 'c') { e.preventDefault(); return A.copy(); }
   if (m && k === 'x') { e.preventDefault(); return A.cut(); }
   if (m && k === 'v') { e.preventDefault(); return A.paste(); }
@@ -96,6 +103,7 @@ const onBlur = () => { if (U.alt) setU('alt', false); };
 export function App() {
   onMount(() => {
     window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', reclaimFocus, true);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
     let offDrop: (() => void) | null = null;
@@ -105,7 +113,7 @@ export function App() {
       else { setU('dragOver', false); if (ev.paths.length) void importAt(ev.paths, ev.x, ev.y, U.alt); }
     }).then(u => { offDrop = u; });
     onCleanup(() => {
-      window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur);
+      window.removeEventListener('keydown', onKey); window.removeEventListener('pointerdown', reclaimFocus, true); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur);
       offDrop?.();
     });
   });
