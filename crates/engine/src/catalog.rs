@@ -149,9 +149,10 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         choice("auto", "Auto target", 1.0, &["Off", "On"]),
         p("target", "Target", -60.0, 0.0, -24.0, "dB", false),
         p("floor", "Noise floor", -100.0, -20.0, -70.0, "dB", false),
-        // Short by default: Long (≈ 1.6 s) delays the whole mix through PDC; the auto-vocal
-        // chain bakes the long rider into the audio instead (`Engine::bake_rider`)
-        choice("look", "Look-ahead", 0.0, &["Short", "Long"]),
+        // value = `rider::look`: 0 short, 1 long (old projects), 2 live. Live (no latency) by
+        // default: Short (≈ 0.3 s) and Long (≈ 1–1.6 s) delay the whole mix through PDC; the
+        // auto-vocal chain bakes the long rider into the audio instead (`Engine::bake_rider`)
+        choice("look", "Look-ahead", 2.0, &["Krótki (+0,3 s opóźnienia)", "Długi (+1–1,6 s opóźnienia)", "Na żywo"]),
         p("out", "Output", -24.0, 24.0, 0.0, "dB", false),
         // below this word level the rider idles at 0 dB (breaths, bleed, room)
         p("gate", "Gate", -100.0, -10.0, -60.0, "dB", false),
@@ -369,10 +370,10 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Robot", &[("mode", 2.0), ("drive", 6.0), ("out", -2.0)]),
         ],
         FxKind::Rider => vec![
-            pr("Wokal — śpiew", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
-            pr("Rap", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 1.0), ("auto", 1.0), ("look", 0.0)]),
-            pr("Delikatnie", &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
-            pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
+            pr("Wokal — śpiew", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
+            pr("Rap", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 1.0), ("auto", 1.0), ("look", 2.0)]),
+            pr("Delikatnie", &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
+            pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
             pr("Wokal — śpiew (długi look-ahead, opóźnienie)", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
         ],
         FxKind::Vst3 => vec![],
