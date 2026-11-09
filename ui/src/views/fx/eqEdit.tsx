@@ -12,7 +12,7 @@ import { commit, Gesture, wheelEdit } from '../../state/edit';
 import { findFx } from '../../state/store';
 import { openMenu, say, setU, U, type MenuItem } from '../../state/ui';
 import { dblCheck, track } from '../../ui/drag';
-import { NumField, parseNum, Segmented } from '../../ui/Knob';
+import { Knob, NumField, parseNum, Segmented } from '../../ui/Knob';
 import { bandColor } from './common';
 import { dbY, eqRange, EqViz, PLACE_SHORT, yDb } from './eq';
 
@@ -184,6 +184,42 @@ function dynField(fxId: Id, i: () => number, key: 'range' | 'thr') {
   };
 }
 
+// ---- quick low / high cut (FL Parametric EQ 2 style): two knobs drive the first cut band of each kind
+const CUT_LO = 20, CUT_HI = 20000;
+const f2t = (f: number) => Math.log(f / CUT_LO) / Math.log(CUT_HI / CUT_LO);
+const t2f = (t: number) => Math.round(CUT_LO * Math.pow(CUT_HI / CUT_LO, clamp(t, 0, 1)));
+function cutOp(fxId: Id, type: 'lowcut' | 'highcut', t: number): Op | null {
+  const off = type === 'lowcut' ? t <= 0.005 : t >= 0.995;
+  return withBands(fxId, b => {
+    const i = b.findIndex(x => x.type === type);
+    if (i < 0) { if (!off && b.length < MAX_BANDS) b.push({ ...newBand(type, t2f(t), 0), slope: 24 }); return; }
+    b[i] = { ...b[i], f: t2f(t), on: !off };
+  });
+}
+export function CutKnobs(props: { fx: Fx }) {
+  const band = (type: string) => props.fx.bands?.find(x => x.type === type);
+  const tOf = (type: 'lowcut' | 'highcut') => { const b = band(type); return b && b.on ? f2t(b.f) : type === 'lowcut' ? 0 : 1; };
+  const text = (type: 'lowcut' | 'highcut') => { const b = band(type); return b && b.on ? hzText(b.f) : 'wył.'; };
+  const knob = (type: 'lowcut' | 'highcut', label: string) => {
+    let g: Gesture | null = null;
+    return (
+      <Knob key={'cut' + type + props.fx.id} label={label} size="lg" t={() => tOf(type)} text={() => text(type)}
+        title={(type === 'lowcut' ? 'Wycina wszystko PONIŻEJ tej częstotliwości' : 'Wycina wszystko POWYŻEJ tej częstotliwości') + ' · skrajna pozycja = wył. · 2× klik = wył.'}
+        onStart={() => { g = new Gesture(label); }}
+        onChange={t => { const op = cutOp(props.fx.id, type, t); if (op) g?.update([op]); say(label + ' ' + (type === 'lowcut' ? (t <= 0.005 ? 'wył.' : hzText(t2f(t))) : (t >= 0.995 ? 'wył.' : hzText(t2f(t))))); }}
+        onEnd={() => { g?.end(); g = null; }}
+        onReset={() => { const op = cutOp(props.fx.id, type, type === 'lowcut' ? 0 : 1); if (op) commit([op], label); }}
+        onWheel={t => { const op = cutOp(props.fx.id, type, t); if (op) wheelEdit('cut' + type, label, [op]); }} />
+    );
+  };
+  return (
+    <div class="eqcuts">
+      {knob('lowcut', 'Low cut')}
+      {knob('highcut', 'High cut')}
+    </div>
+  );
+}
+
 export function EqPanel(props: { fx: Fx }) {
   const fxId = () => props.fx.id;
   const sel = () => { const i = U.eqSel[fxId()]; return i != null && props.fx.bands?.[i] ? i : null; };
@@ -201,6 +237,7 @@ export function EqPanel(props: { fx: Fx }) {
   };
   return (
     <div class="eqpanel">
+      <CutKnobs fx={props.fx} />
       <div class="bchips">
         <For each={props.fx.bands ?? []}>{(bd, i) => (
           <button class="bchip" classList={{ sel: sel() === i(), off: !bd.on }} style={{ '--c': bandColor(i()) }}

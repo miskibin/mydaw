@@ -66,6 +66,7 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     eqp('Bas — czysty dół', 0, [[0, T, 35, n, n], [1, n, 80, 2, n], [2, n, 250, -3, n], [6, T, 8000, n, n]]),
     eqp('Mud cut', 0, [[0, T, 60, n, n], [2, n, 300, -4, 1.5]]),
     eqp('Air / połysk', 0, [[4, n, 5000, 1, n], [5, n, 12000, 4, n]]),
+    eqp('Pasmo — wytnij dół i górę', 0, [[0, T, 120, n, n], [6, T, 9000, n, n]]),
     eqp('Telefon / lo-fi', 2, [[0, T, 400, n, n], [3, n, 1500, 4, 0.8], [6, T, 3200, n, n]]),
     eqp('Master — smile', 0, [[1, n, 80, 1.5, n], [3, n, 1000, -0.5, 0.6], [5, n, 10000, 1.5, n]]),
   ],

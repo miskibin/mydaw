@@ -693,3 +693,6 @@ select option { background: var(--bg4); color: var(--fg); }
 .lane .mini.route { min-width: 30px; padding: 0 4px; }
 .toolbar .snapsel { flex: none; width: 118px; }
 @media (max-width: 1180px) { .toolbar .tapbtn, .toolbar .monbtn { display: none; } .toolbar .clockbox .tag9 { display: none; } }
+
+/* EQ quick low/high cut knobs */
+.eqcuts { display: flex; gap: 22px; padding: 8px 4px 10px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
