@@ -3,7 +3,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
+  AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
   LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
@@ -70,6 +70,11 @@ export interface Backend {
   audioDevices(host: string): Promise<AudioDevices>;
   audioGetConfig(): Promise<AudioStatus>;
   audioSetConfig(cfg: AudioConfig): Promise<AudioStatus>;
+  /** Plays 8 clicks on the output (instead of the mix) for ~5 s while recording the input
+   *  (microphone at the speaker, or a cable from an output to an input) and finds them by
+   *  cross-correlation. Transport must be stopped. Saves nothing: apply `suggestedOffsetMs`
+   *  with `audioSetConfig({ ...cfg, recOffsetMs })`. Rejects when no click came back. */
+  audioMeasureLatency(): Promise<LatencyReport>;
   /** MIDI input ports the OS lists right now. */
   midiListDevices(): Promise<MidiDevice[]>;
   /** Choose the MIDI keyboard (null = none) and open it. Saved with the audio settings and reopened at startup. */
@@ -185,6 +190,7 @@ export function tauriBackend(): Backend {
     audioGetConfig: () => invoke('audio_get_config'),
     // Sent both as `config` and flattened, so either command signature deserialises it.
     audioSetConfig: cfg => invoke('audio_set_config', { config: cfg, ...cfg }),
+    audioMeasureLatency: () => invoke('audio_measure_latency'),
     midiListDevices: () => invoke('midi_list_devices'),
     midiSelectDevice: id => invoke('midi_select_device', { id }),
     midiStatus: () => invoke('midi_status'),

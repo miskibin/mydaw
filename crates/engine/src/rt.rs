@@ -38,6 +38,10 @@ pub struct Shared {
     /// Round-trip latency of the audio device in frames (what is heard → when it is
     /// captured), published by the device layer. Recordings are moved earlier by it.
     io_latency: AtomicU32,
+    /// Round-trip samples the device layer measured while the current take was capturing
+    /// (sum, count): the take is aligned with their mean, not with the estimate at its start.
+    take_lat_sum: AtomicU64,
+    take_lat_n: AtomicU32,
     /// Beat where input capture began (f64 bits; NaN until the audio thread has started it).
     rec_start: AtomicU64,
 }
@@ -71,6 +75,8 @@ impl Shared {
             fx_meters: (0..WATCH_SLOTS).map(|_| std::array::from_fn(|_| AtomicU32::new(0))).collect(),
             sample_rate: AtomicU32::new(48000),
             io_latency: AtomicU32::new(0),
+            take_lat_sum: AtomicU64::new(0),
+            take_lat_n: AtomicU32::new(0),
             rec_start: AtomicU64::new(f64::NAN.to_bits()),
         }
     }
@@ -113,6 +119,27 @@ impl Shared {
     }
     pub fn io_latency(&self) -> u32 {
         self.io_latency.load(Relaxed)
+    }
+    /// One round trip (frames, calibration offset included) measured by the device layer for
+    /// the input consumed in this callback. Kept only while a take is capturing (call it
+    /// before [`Rt::process`]); the take is aligned with the mean of these samples, so an
+    /// estimate that had not settled when the take started (input just opened) does not
+    /// shift it. Lock-free; no allocation.
+    pub fn add_take_latency(&self, frames: u32) {
+        if self.recording.load(Relaxed) {
+            self.take_lat_sum.fetch_add(frames as u64, Relaxed);
+            self.take_lat_n.fetch_add(1, Relaxed);
+        }
+    }
+    /// Forgets the samples of the previous take (a new take is about to start).
+    pub fn reset_take_latency(&self) {
+        self.take_lat_n.store(0, Relaxed);
+        self.take_lat_sum.store(0, Relaxed);
+    }
+    /// Mean round trip measured while the current take captured, if anything was measured.
+    pub fn take_latency(&self) -> Option<u32> {
+        let n = self.take_lat_n.load(Relaxed);
+        (n > 0).then(|| (self.take_lat_sum.load(Relaxed) as f64 / n as f64).round() as u32)
     }
     /// Beat where the audio thread began capturing the current take (NaN = not yet).
     pub fn rec_start(&self) -> f64 {

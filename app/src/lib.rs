@@ -17,7 +17,7 @@ use serde_json::{json, Value};
 use tauri::ipc::{Channel, InvokeResponseBody, Response};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
-use wave_audio_io::{AudioConfig, AudioIo, AudioStatus};
+use wave_audio_io::{AudioConfig, AudioIo, AudioStatus, LatencyReport};
 use wave_engine::{Engine, Op, Project, StateDto};
 use wave_midi_in::{MidiDevice, MidiInput, MidiStatus};
 
@@ -131,8 +131,9 @@ async fn transport_set(app: St<'_>, metro: Option<bool>, count_in: Option<bool>,
     .await
     .map_err(es)?;
     // the mic is opened only while recording or monitoring is on (Bluetooth headphones
-    // drop to the low-quality headset profile whenever a mic stream is open). Reopening
-    // the devices restarts the audio stream, so closing it waits for the transport to stop.
+    // drop to the low-quality headset profile whenever a mic stream is open). It opens and
+    // closes without touching the output, so a punch-in keeps the song playing; closing
+    // still waits for the transport to stop (a punch-out may be followed by another punch-in).
     if rec.is_some() || monitor.is_some() {
         let need = t.rec || t.monitor;
         if need || !t.playing {
@@ -303,9 +304,14 @@ async fn audio_get_config(app: St<'_>) -> R<AudioStatus> {
 }
 
 #[tauri::command]
-async fn audio_set_config(app: St<'_>, handle: AppHandle, config: AudioConfig) -> R<AudioStatus> {
+async fn audio_set_config(app: St<'_>, handle: AppHandle, mut config: AudioConfig) -> R<AudioStatus> {
     let a = app.inner().clone();
     let st = tauri::async_runtime::spawn_blocking(move || {
+        // a config sent without `recOffsetMs` keeps the calibration (a device change does
+        // not lose it); changing only the offset does not restart the streams
+        if config.rec_offset_ms.is_none() {
+            config.rec_offset_ms = a.settings.lock().audio.rec_offset_ms;
+        }
         let st = a.audio.start(config.clone());
         let mut s = a.settings.lock();
         s.audio = config;
@@ -317,6 +323,29 @@ async fn audio_set_config(app: St<'_>, handle: AppHandle, config: AudioConfig) -
     .map_err(es)?;
     let _ = handle.emit("audio-status", &st);
     Ok(st)
+}
+
+/// Measures the recording round trip with clicks played on the output and recorded back
+/// (microphone at the speaker, or a loopback cable). Opens the input for the ~6 s it takes
+/// and closes it again unless recording or monitoring needs it. The suggested offset is
+/// what `recOffsetMs` should be; nothing is saved here.
+#[tauri::command]
+async fn audio_measure_latency(app: St<'_>) -> R<LatencyReport> {
+    let a = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if a.engine.state().transport.playing {
+            return Err("Stop playback before measuring the latency.".to_string());
+        }
+        *a.status.lock() = a.audio.set_input(true);
+        let res = a.audio.measure_latency();
+        let t = a.engine.state().transport;
+        if !t.rec && !t.monitor {
+            *a.status.lock() = a.audio.set_input(false);
+        }
+        res
+    })
+    .await
+    .map_err(es)?
 }
 
 // ---------------------------------------------------------------- MIDI keyboard
@@ -661,7 +690,7 @@ pub fn run() {
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
             import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
-            audio_hosts, audio_devices, audio_get_config, audio_set_config,
+            audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save, export_audio, export_cancel,
