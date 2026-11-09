@@ -1,7 +1,7 @@
 // The engine's state, mirrored. Rust owns the project and undo; this store holds the latest
 // StateDto plus local optimistic edits (applied immediately so drags feel instant).
 import { batch, createSignal } from 'solid-js';
-import { createStore, produce, reconcile } from 'solid-js/store';
+import { $RAW, createStore, produce, reconcile } from 'solid-js/store';
 import type { Catalog, Clip, Fx, Id, Insert, Op, Project, StateDto, TransportDto } from '../api/types';
 import { applyCompOp, compExtent } from '../lib/comp';
 import { applyNotebookOp } from '../lib/notebook';
@@ -37,6 +37,19 @@ export const [S, setS] = createStore<EngineState>({
 const [projVersion, setProjVersion] = createSignal(0);
 export { projVersion };
 const bumpProject = () => setProjVersion(v => v + 1);
+
+// ---- plain copies ----
+const rawOf = (x: unknown): unknown => (x != null && typeof x === 'object' && (x as Record<symbol, unknown>)[$RAW]) || x;
+/**
+ * A plain deep copy (JSON semantics) of store data or of anything built from it. A store
+ * proxy is copied from its raw object, whose whole tree is raw (the native fast path, instead of
+ * a proxy trap and a tracked read per field: ~0.5 s per drag on a 2000-note pattern); a fresh
+ * container that holds proxies is unwrapped item by item.
+ */
+export function plain<T>(v: T): T {
+  const r = rawOf(v);
+  return JSON.parse(r !== v ? JSON.stringify(r) : JSON.stringify(v, (_k, x) => rawOf(x)));
+}
 
 // ---- ids ----
 let localNext = 1;

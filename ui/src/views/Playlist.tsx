@@ -12,7 +12,7 @@ import { snapFloor, snapRes, snapRound } from '../lib/snap';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { peaksVersion } from '../state/peaks';
-import { allocId, projVersion, S, srcLenBeats, srcOf } from '../state/store';
+import { allocId, plain, projVersion, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -24,7 +24,6 @@ import { autoById } from '../state/store';
 import { openPattern } from '../state/pattern';
 import { T, theme } from '../ui/theme';
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 /** Shared geometry, so the browser and OS drops can find a beat/track under the pointer. */
 export const geom = { grid: null as HTMLDivElement | null, scroll: null as HTMLDivElement | null, tops: [0] as number[] };

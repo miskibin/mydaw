@@ -5,7 +5,7 @@ import type { Clip, Comp, CompRegion, Id, Take } from '../api/types';
 import { removeTake, swapRange, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import { fmtPos } from '../lib/format';
 import { commit, enqueue, resync } from './edit';
-import { S } from './store';
+import { plain, S } from './store';
 import { say, setU, U } from './ui';
 
 /** Height of one take lane, px. */
@@ -13,7 +13,6 @@ export const LANE_H = 30;
 
 export interface TakeRow { clip: Clip; comp: Comp }
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 export const compById = (id: Id) => S.project.comps?.find(c => c.id === id);
 
 /** Comp clips on a track, earliest first. */

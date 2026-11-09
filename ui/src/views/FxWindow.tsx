@@ -7,7 +7,7 @@ import { paramDefs, pFmt, pNorm, presetInfo, presetList, pVal } from '../lib/pre
 import * as A from '../state/actions';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture, wheelEdit } from '../state/edit';
-import { findFx, insName, S } from '../state/store';
+import { findFx, insName, plain, S } from '../state/store';
 import { onFxFrame, tele } from '../state/telemetry';
 import { openMenu, say, U, type PlugWin } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -28,7 +28,6 @@ import { TuneViz } from './fx/tune';
 import { RiderViz } from './fx/rider';
 import { onVoicePad, padParams, padToVoice, VoiceViz } from './fx/voice';
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 function makeViz(f: Fx): Viz | null {
   switch (f.type) {

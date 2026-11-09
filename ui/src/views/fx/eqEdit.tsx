@@ -9,14 +9,13 @@ import { hzToMidi, noteName } from '../../lib/pitch';
 import * as A from '../../state/actions';
 import { paramMenu } from '../../state/automation';
 import { commit, Gesture, wheelEdit } from '../../state/edit';
-import { findFx } from '../../state/store';
+import { findFx, plain } from '../../state/store';
 import { openMenu, say, setU, U, type MenuItem } from '../../state/ui';
 import { dblCheck, track } from '../../ui/drag';
 import { Knob, NumField, parseNum, Segmented } from '../../ui/Knob';
 import { bandColor } from './common';
 import { dbY, eqRange, EqViz, PLACE_SHORT, yDb } from './eq';
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 export const BTYPE_ORDER: BandType[] = ['peak', 'lowshelf', 'highshelf', 'lowcut', 'highcut', 'notch', 'bandpass', 'tilt'];
 export const BTYPE_LABEL: Record<BandType, string> = { peak: 'Bell', lowshelf: 'Low shelf', highshelf: 'High shelf', lowcut: 'Low cut', highcut: 'High cut', notch: 'Notch', bandpass: 'Band pass', tilt: 'Tilt' };
 const BTYPE_SHORT: Record<BandType, string> = { peak: 'Bell', lowshelf: 'Lo shelf', highshelf: 'Hi shelf', lowcut: 'Lo cut', highcut: 'Hi cut', notch: 'Notch', bandpass: 'BPass', tilt: 'Tilt' };
