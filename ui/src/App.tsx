@@ -13,6 +13,7 @@ import { FxWindow } from './views/FxWindow';
 import { Mixer } from './views/Mixer';
 import { Playlist } from './views/Playlist';
 import { SampleEditor } from './views/SampleEditor';
+import { ChannelWindow } from './views/ChannelWindow';
 import { PitchEditor } from './views/PitchEditor';
 import { Export } from './views/Export';
 import { Settings, VstPicker } from './views/Settings';
@@ -149,6 +150,7 @@ export function App() {
       <Show when={U.mixOpen}><Mixer /></Show>
       <StatusBar />
       <SampleEditor />
+      <ChannelWindow />
       <PitchEditor />
       <div class="winlayer" classList={{ hidden: U.plugsHidden }}>
         <For each={U.plugs}>{pw => <FxWindow pw={pw} z={plugRank(pw.z)} />}</For>

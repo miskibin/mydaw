@@ -22,6 +22,7 @@ import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
 import { Icon } from '../ui/icons';
 import { channelIcon, InstIcon } from '../ui/instIcons';
+import { closeChannelWindow, toggleChannelWindow } from './ChannelWindow';
 import { MiniKnob, NumField, parseNum } from '../ui/Knob';
 import { theme } from '../ui/theme';
 import { moveWindow } from './FxWindow';
@@ -376,7 +377,8 @@ function ChanRow(props: { c: Channel }) {
     if (e.button !== 0) return;
     selectChannel(c().id);
     if (e.ctrlKey || e.metaKey) { audition(c().id, undefined, 0.8, true); return; }
-    if (dblCheck('cname' + c().id) && isPitched(c())) setView('roll', c().id);
+    if (dblCheck('cname' + c().id) && isPitched(c())) { closeChannelWindow(); setView('roll', c().id); return; }
+    toggleChannelWindow(c().id);
   };
   return (
     <div class="crow" classList={{ sel: sel(), muted: c().mute || (anySolo() && !c().solo) }} style={{ height: RH + 'px' }}
@@ -397,7 +399,7 @@ function ChanRow(props: { c: Channel }) {
         onWheel={t => commit([panOp(t)], 'Panorama kanału')} />
       <button class="cins" classList={{ auto: c().insert == null }} title={insTitle(c())}
         onPointerDown={e => e.stopPropagation()} onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); insertMenu(c(), r.left, r.bottom + 2); }}>{insLabel(c())}</button>
-      <button class="cname" classList={{ sel: sel() }} title={c().name + ' · ' + chanKindLabel(c()) + ' — klik = wybierz · Ctrl+klik = odsłuch' + (isPitched(c()) ? ' · 2× klik = piano roll' : '') + ' · PPM = menu'}
+      <button class="cname" classList={{ sel: sel() }} title={c().name + ' · ' + chanKindLabel(c()) + ' — klik = ustawienia kanału · Ctrl+klik = odsłuch' + (isPitched(c()) ? ' · 2× klik = piano roll' : '') + ' · PPM = menu'}
         onPointerDown={nameDown}>
         <span class="cicon" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={11} /></span>
         <span class="ell">{c().name}</span>
