@@ -148,10 +148,13 @@ export function Playlist() {
       drawRuler(g, o.x, W, U.bw, S.project.loop, U.start);
     }
     // playhead + follow
-    const b = curBeat(), x = Math.max(0, b) * U.bw;
+    // the playhead lives in sticky layers like the canvases, so it moves in the same frame as the
+    // redrawn grid instead of ahead of it with native (touchpad) scrolling
+    const b = curBeat(), x = Math.max(0, b) * U.bw - offsets().x;
     if (x !== lastPhX) {
       lastPhX = x;
       phGrid.style.transform = phRuler.style.transform = `translateX(${x}px)`;
+      phGrid.style.visibility = phRuler.style.visibility = x < -1 || x > cw() + 1 ? 'hidden' : '';
     }
     if (U.follow && !followHold && tele.frame.playing && b >= 0) {
       const view = scrollEl.clientWidth - U.headW;
@@ -767,9 +770,10 @@ export function Playlist() {
               <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg5)' }}>{S.project.tracks.length} tr</span>
             </div>
             <div style={{ position: 'relative', width: gridW() + 'px', height: '26px', flex: 'none' }}>
+              <div class="phlayer" style={{ left: U.headW + 'px', width: cw() + 'px', top: '0px' }}><div ref={phRuler} class="phead" style={{ height: '26px' }} /></div>
               <canvas ref={rulerCv} class="ruler" title="Klik = start · przeciągnij = pętla · 2× klik = usuń pętlę"
                 style={{ left: U.headW + 'px', width: cw() + 'px' }} onPointerDown={rulerDown} onPointerMove={rulerHover} />
-              <div ref={phRuler} class="phead" style={{ height: '26px', 'z-index': 2 }} />
+
             </div>
           </div>
           <div style={{ display: 'flex' }}>
@@ -779,9 +783,9 @@ export function Playlist() {
               <div class="hsplit" onPointerDown={headSplit} title="Przeciągnij = szerokość nagłówków" />
             </div>
             <div ref={gridEl} class="gridArea" style={{ width: gridW() + 'px', height: gridH() + 'px' }}>
+              <div class="phlayer" style={{ left: U.headW + 'px', width: cw() + 'px', top: '26px' }}><div ref={phGrid} class="phead" style={{ height: ch() + 'px' }} /></div>
               <canvas ref={gridCv} class="gridCanvas" style={{ top: '26px', left: U.headW + 'px', width: cw() + 'px', height: ch() + 'px', cursor: toolCursor() }}
                 onPointerDown={gridDown} onPointerMove={hover} onDblClick={gridDbl} onContextMenu={e => e.preventDefault()} />
-              <div ref={phGrid} class="phead" style={{ height: gridH() + 'px', 'z-index': 2 }} />
               <Show when={mq()}>{m => <div class="marquee" style={{ left: m().x + 'px', top: m().y + 'px', width: m().w + 'px', height: m().h + 'px' }} />}</Show>
             </div>
           </div>

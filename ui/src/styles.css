@@ -700,3 +700,7 @@ select option { background: var(--bg4); color: var(--fg); }
 /* mixer: pan + stereo width side by side */
 .strip .knobrow { display: flex; gap: 6px; justify-content: center; }
 .strip .knobrow .pantxt { font-size: 9px; }
+
+/* playhead layers: sticky like the canvases (height 0, so they take no room in the flow) */
+.phlayer { position: sticky; height: 0; z-index: 3; pointer-events: none; overflow: visible; }
+.phlayer > .phead { position: absolute; top: 0; left: 0; }
