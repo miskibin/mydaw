@@ -236,6 +236,8 @@ pub struct Engine {
     skip_silent: std::sync::atomic::AtomicBool,
     midi_fast: MidiFast,
     midi_take: Mutex<MidiTake>,
+    /// Threads an offline render may use for the insert chains.
+    render_workers: std::sync::atomic::AtomicUsize,
 }
 
 const UNDO_LIMIT: usize = 200;
@@ -270,6 +272,7 @@ impl Engine {
             skip_silent: std::sync::atomic::AtomicBool::new(true),
             midi_fast: MidiFast { live: AtomicBool::new(false), chan: std::sync::atomic::AtomicU64::new(u64::MAX), ins: std::sync::atomic::AtomicUsize::new(usize::MAX), tx: Mutex::new(None) },
             midi_take: Mutex::new(MidiTake::default()),
+            render_workers: std::sync::atomic::AtomicUsize::new(std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).clamp(1, 8)).unwrap_or(1)),
         });
         let weak = Arc::downgrade(&e);
         thread::Builder::new()
@@ -300,6 +303,13 @@ impl Engine {
     /// offline renders. The output is the same (below -120 dB); off is for A/B tests.
     pub fn set_silence_skip(&self, on: bool) {
         self.skip_silent.store(on, Relaxed);
+    }
+
+    /// Threads an offline render may use for the insert chains (1 = single-threaded). The
+    /// default leaves two cores to the rest of the machine, at most 8. The render is identical
+    /// whatever the count.
+    pub fn set_render_workers(&self, n: usize) {
+        self.render_workers.store(n.max(1), Relaxed);
     }
 
     // ------------------------------------------------------------ device attach
@@ -1142,6 +1152,7 @@ impl Engine {
         }
         let mut rt = Rt::new(sr, block, cmd_rx, gb_tx, Arc::new(Shared::new()), taps, rec_tx);
         rt.set_skip_silent(self.skip_silent.load(Relaxed));
+        rt.set_workers(self.render_workers.load(Relaxed));
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
         let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new());

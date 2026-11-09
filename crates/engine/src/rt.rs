@@ -173,11 +173,13 @@ pub struct InsertRt {
     parked: bool,
     /// `quiet` at which even the PDC delay line holds only zeros (valid while `parked`).
     idle_at: usize,
+    /// Set for the block just processed when the insert contributed nothing.
+    idle: bool,
 }
 
 impl InsertRt {
     pub fn new(id: Id, gain: f32, pan: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
-        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block], quiet: 0, parked: false, idle_at: usize::MAX }
+        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block], quiet: 0, parked: false, idle_at: usize::MAX, idle: false }
     }
 
     /// Delays this insert's output by `samples` (allocates; call off the audio thread).
@@ -399,6 +401,8 @@ pub struct Rt {
     skip_silent: bool,
     /// Live MIDI events (see `Engine::midi_event`).
     midi: Option<rtrb::Consumer<Cmd>>,
+    /// Worker threads for the insert chains (offline renders only; 0/1 = this thread).
+    workers: usize,
 }
 
 impl Rt {
@@ -435,7 +439,14 @@ impl Rt {
             pat_beat: 0.0,
             skip_silent: true,
             midi: None,
+            workers: 0,
         }
+    }
+
+    /// Lets this Rt process insert chains on `n` worker threads. Never for a live stream:
+    /// it spawns threads and allocates. Output is identical to the single-threaded one.
+    pub fn set_workers(&mut self, n: usize) {
+        self.workers = n;
     }
 
     /// The ring live keyboard events arrive on, drained together with the command ring.
@@ -822,60 +833,41 @@ impl Rt {
         // ---- inserts (non-master first), then master
         let ctx = ProcessCtx { sample_rate: sr, bpm, beat: block_beat, playing: self.playing };
         let count = g.inserts.len();
-        for k in (1..count).chain(std::iter::once(0)) {
-            if count == 0 {
-                break;
-            }
-            let (head, tail) = g.inserts.split_at_mut(k);
-            let ins = &mut tail[0];
-            let gate = gate(ins, n, self.skip_silent, &self.watch[..self.watch_n]);
-            if gate == Gate::Idle {
-                // no signal in, nothing left in the effects or the delay line: nothing out
-                ins.g_cur = if ins.on { ins.gain } else { 0.0 };
-                continue;
-            }
-            if gate == Gate::Run {
-                run_chain(ins, n, &ctx, &self.watch[..self.watch_n], &mut self.taps, &self.shared);
-            }
-            // fader + pan, smoothed across the block (a skipped chain outputs zeros)
-            let target = if ins.on { ins.gain } else { 0.0 };
-            if gate == Gate::Run {
-                let (gl, gr) = (if ins.pan > 0.0 { 1.0 - ins.pan } else { 1.0 }, if ins.pan < 0.0 { 1.0 + ins.pan } else { 1.0 });
-                let g0 = ins.g_cur;
-                let step = (target - g0) / n as f32;
-                let (mut pl, mut pr) = (0f32, 0f32);
-                for i in 0..n {
-                    let gg = g0 + step * (i + 1) as f32;
-                    ins.l[i] *= gg * gl;
-                    ins.r[i] *= gg * gr;
-                    pl = pl.max(ins.l[i].abs());
-                    pr = pr.max(ins.r[i].abs());
-                }
-                if k < MAX_INSERTS {
-                    fmax(&self.shared.meters[k].0, pl);
-                    fmax(&self.shared.meters[k].1, pr);
+        if count > 0 {
+            let (enabled, watch) = (self.skip_silent, &self.watch[..self.watch_n]);
+            if self.workers > 1 && count > 4 && watch.is_empty() {
+                // offline: the effect chains of the non-master inserts are independent, so
+                // worker threads take them one by one (the sum into the master stays in order)
+                let next = std::sync::atomic::AtomicUsize::new(0);
+                let cells: Vec<std::sync::Mutex<&mut InsertRt>> = g.inserts[1..].iter_mut().map(std::sync::Mutex::new).collect();
+                let shared = &*self.shared;
+                std::thread::scope(|sc| {
+                    for _ in 0..self.workers.min(cells.len()) {
+                        sc.spawn(|| {
+                            let mut taps = Taps { input: vec![], output: vec![] };
+                            loop {
+                                let j = next.fetch_add(1, Relaxed);
+                                let Some(cell) = cells.get(j) else { break };
+                                let mut ins = cell.lock().unwrap();
+                                process_insert(&mut ins, j + 1, n, &ctx, enabled, &[], &mut taps, shared);
+                            }
+                        });
+                    }
+                });
+            } else {
+                for k in 1..count {
+                    process_insert(&mut g.inserts[k], k, n, &ctx, enabled, watch, &mut self.taps, &self.shared);
                 }
             }
-            ins.g_cur = target;
-            if !ins.pdc_l.is_empty() {
-                let d = ins.pdc_l.len();
-                for i in 0..n {
-                    let w = ins.pdc_w;
-                    let (a, b) = (ins.pdc_l[w], ins.pdc_r[w]);
-                    ins.pdc_l[w] = ins.l[i];
-                    ins.pdc_r[w] = ins.r[i];
-                    ins.l[i] = a;
-                    ins.r[i] = b;
-                    ins.pdc_w = if w + 1 == d { 0 } else { w + 1 };
-                }
-            }
-            if k != 0 {
-                let master = &mut head[0];
+            let (head, tail) = g.inserts.split_at_mut(1);
+            let master = &mut head[0];
+            for ins in tail.iter().filter(|i| !i.idle) {
                 for i in 0..n {
                     master.l[i] += ins.l[i];
                     master.r[i] += ins.r[i];
                 }
             }
+            process_insert(master, 0, n, &ctx, enabled, watch, &mut self.taps, &self.shared);
         }
 
         // ---- out: master + click + preview
@@ -1010,6 +1002,54 @@ impl Rt {
                     crate::clipmix::mix_audio_clip(c, a, b0, bps, spb, &mut tl_l[at..at + n], &mut tl_r[at..at + n]);
                 }
             }
+        }
+    }
+}
+
+/// One insert's turn in a block: silence gate, effect chain, fader/pan, PDC delay. Leaves the
+/// insert's output in `ins.l`/`ins.r` (or `ins.idle` set: it contributes nothing).
+#[allow(clippy::too_many_arguments)]
+fn process_insert(ins: &mut InsertRt, k: usize, n: usize, ctx: &ProcessCtx, enabled: bool, watch: &[Id], taps: &mut Taps, shared: &Shared) {
+    let gate = gate(ins, n, enabled, watch);
+    ins.idle = gate == Gate::Idle;
+    if ins.idle {
+        // no signal in, nothing left in the effects or the delay line: nothing out
+        ins.g_cur = if ins.on { ins.gain } else { 0.0 };
+        return;
+    }
+    if gate == Gate::Run {
+        run_chain(ins, n, ctx, watch, taps, shared);
+    }
+    // fader + pan, smoothed across the block (a skipped chain outputs zeros)
+    let target = if ins.on { ins.gain } else { 0.0 };
+    if gate == Gate::Run {
+        let (gl, gr) = (if ins.pan > 0.0 { 1.0 - ins.pan } else { 1.0 }, if ins.pan < 0.0 { 1.0 + ins.pan } else { 1.0 });
+        let g0 = ins.g_cur;
+        let step = (target - g0) / n as f32;
+        let (mut pl, mut pr) = (0f32, 0f32);
+        for i in 0..n {
+            let gg = g0 + step * (i + 1) as f32;
+            ins.l[i] *= gg * gl;
+            ins.r[i] *= gg * gr;
+            pl = pl.max(ins.l[i].abs());
+            pr = pr.max(ins.r[i].abs());
+        }
+        if k < MAX_INSERTS {
+            fmax(&shared.meters[k].0, pl);
+            fmax(&shared.meters[k].1, pr);
+        }
+    }
+    ins.g_cur = target;
+    if !ins.pdc_l.is_empty() {
+        let d = ins.pdc_l.len();
+        for i in 0..n {
+            let w = ins.pdc_w;
+            let (a, b) = (ins.pdc_l[w], ins.pdc_r[w]);
+            ins.pdc_l[w] = ins.l[i];
+            ins.pdc_r[w] = ins.r[i];
+            ins.l[i] = a;
+            ins.r[i] = b;
+            ins.pdc_w = if w + 1 == d { 0 } else { w + 1 };
         }
     }
 }

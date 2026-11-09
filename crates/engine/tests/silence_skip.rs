@@ -92,3 +92,15 @@ fn silent_inserts_are_parked_and_wake_up_live() {
     assert!(energy > 0.5, "nothing playing after waking up ({energy})");
     assert!(rt.parked_inserts() < e.project().inserts.len());
 }
+
+#[test]
+fn parallel_render_is_bit_identical() {
+    let e = Engine::new(tail_heavy(), Arc::new(NoPlugins));
+    e.set_render_workers(1);
+    let one = e.render(0.0, 8.0, 3.0, 48000).unwrap();
+    e.set_render_workers(6);
+    let six = e.render(0.0, 8.0, 3.0, 48000).unwrap();
+    assert_eq!(one.len(), six.len());
+    assert!(one.iter().zip(&six).all(|(a, b)| a.to_bits() == b.to_bits()), "worker threads changed the render");
+    assert!(rms(&one) > 0.01);
+}
