@@ -8,6 +8,9 @@ import { Segmented } from '../ui/Knob';
 
 const TAILS = [0, 2, 8] as const;
 const RATES = [48000, 44100] as const;
+const KBPS = [320, 256, 192, 128] as const;
+const FKEY = 'wave.export.fmt';
+const saved = (() => { try { return JSON.parse(localStorage.getItem(FKEY) ?? '{}') as { mp3?: boolean; kb?: number }; } catch { return {}; } })();
 
 export function Export() {
   return <Show when={U.exportOpen}><ExportDialog /></Show>;
@@ -18,6 +21,9 @@ function ExportDialog() {
   const [useLoop, setUseLoop] = createSignal(false);
   const [tailI, setTailI] = createSignal(1); // 2 s
   const [rateI, setRateI] = createSignal(0); // 48 kHz
+  const [mp3, setMp3] = createSignal(!!saved.mp3);
+  const [kbI, setKbI] = createSignal(Math.max(0, KBPS.indexOf((saved.kb ?? 320) as 320)));
+  const remember = () => { try { localStorage.setItem(FKEY, JSON.stringify({ mp3: mp3(), kb: KBPS[kbI()] })); } catch { /* ignore */ } };
   const [busy, setBusy] = createSignal(false);
   const [err, setErr] = createSignal<string | null>(null);
 
@@ -33,6 +39,8 @@ function ExportDialog() {
         useLoop: useLoop() && loopOk(),
         tail: TAILS[tailI()],
         sampleRate: RATES[rateI()],
+        format: mp3() ? 'mp3' : 'wav',
+        ...(mp3() ? { mp3Kbps: KBPS[kbI()] } : {}),
       });
       setU('exportBusy', false);
       if (!U.exportOpen) return; // dialog was closed (Escape) while bouncing
@@ -96,7 +104,14 @@ function ExportDialog() {
               pick={i => setRateI(i as 0 | 1)}
             />
             <label>Format</label>
-            <span class="note mono">WAV · stereo · 32-bit float</span>
+            <Segmented options={['WAV', 'MP3']} value={() => (mp3() ? 1 : 0)} pick={i => { setMp3(i === 1); remember(); }}
+              title="WAV: bez strat, 32-bit float (do dalszej pracy, masteringu). MP3: mały plik do wysłania / odsłuchu na telefonie" />
+            <Show when={mp3()}>
+              <label>Jakość MP3</label>
+              <Segmented options={KBPS.map(k => k + ' kbps')} value={() => kbI()} pick={i => { setKbI(i); remember(); }} title="320 kbps = najlepsza jakość" />
+            </Show>
+            <label>Plik</label>
+            <span class="note mono">{mp3() ? 'MP3 · stereo · ' + KBPS[kbI()] + ' kbps' : 'WAV · stereo · 32-bit float'}</span>
             <label>Długość</label>
             <span class="note mono">{fmtExportLen(seconds())} · {RATES[rateI()]} Hz</span>
           </div>
