@@ -42,7 +42,7 @@ a { color: var(--blue); }
 .ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- toolbar ---------- */
-.toolbar { min-height: 40px; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 8px; background: var(--bg5); border-bottom: 1px solid var(--bg0); }
+.toolbar { min-height: 40px; flex: none; display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 6px 8px; padding: 6px 8px; background: var(--bg5); border-bottom: 1px solid var(--bg0); }
 .ibtn { width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: var(--fg2); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
 .ibtn:hover { background: var(--line); color: var(--fg-hi); }
 .ibtn.on { background: var(--line); }
@@ -434,8 +434,11 @@ select option { background: var(--bg4); color: var(--fg); }
 .toolbar .dragfill { flex: 1 1 0; min-width: 24px; align-self: stretch; }
 .toolbar .projName .dirty { margin-left: 4px; color: var(--amber); }
 .toolbar.native { padding-right: 0; padding-top: 0; padding-bottom: 0; min-height: 40px; }
-.toolbar.native > :not(.winbtns) { margin-top: 6px; margin-bottom: 6px; }
-.winbtns { display: flex; align-self: stretch; margin-left: 4px; }
+.toolbar > .tbmain { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; overflow: hidden; }
+.toolbar.native > .tbmain { margin-top: 6px; margin-bottom: 6px; }
+.toolbar.native > .tbmain > :not(.winbtns) { margin-top: 0; margin-bottom: 0; }
+.winbtns { display: flex; flex: 0 0 auto; flex-shrink: 0; align-self: stretch; margin-left: 4px; }
+@media (max-width: 1100px) { .toolbar .tbtn .lbl { display: none; } .toolbar .tbtn { padding: 0 6px; } }
 .winbtns > button { width: 46px; border: 0; background: transparent; color: var(--fg2); cursor: default; display: flex; align-items: center; justify-content: center; padding: 0; }
 .winbtns > button:hover { background: var(--line); color: var(--fg-hi); }
 .winbtns > button.close:hover { background: var(--win-close); color: #ffffff; }
