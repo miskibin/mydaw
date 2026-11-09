@@ -230,8 +230,11 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
     { title: 'Wyjście', adv: true, items: [{ id: 'link', size: 'sm' }, { id: 'out', size: 'sm' }] },
   ],
   sat: [
-    { title: 'Przester', items: [{ id: 'drive', size: 'lg' }] },
-    { title: 'Wyjście', items: [{ id: 'mix' }, { id: 'out' }] },
+    { title: 'Charakter', items: [{ stack: [{ id: 'style', small: true }] }] },
+    { title: 'Przester', items: [{ id: 'drive', size: 'lg' }, { stack: [{ id: 'punish', labels: ['Normalnie', 'Punish +20'], small: true, danger: 1 }] }] },
+    { title: 'Barwa', items: [{ id: 'lowcut' }, { id: 'thump', size: 'sm' }, { id: 'tone', ends: ['ciemno', 'jasno'] }, { id: 'highcut' }, { stack: [{ id: 'steep', labels: ['Łagodnie', 'Stromo'], small: true }] }] },
+    { title: 'Wyjście', items: [{ stack: [{ id: 'auto', labels: ['Ręcznie', 'Auto'], small: true }] }, { id: 'mix' }, { id: 'out' }] },
+    { title: 'Jakość', adv: true, items: [{ stack: [{ id: 'hq', labels: ['2×', '4× HQ'], small: true }] }] },
   ],
   delay: [
     { title: 'Echo', items: [{ id: 'time', size: 'lg' }, { id: 'fb' }] },
