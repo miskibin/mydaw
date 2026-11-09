@@ -105,7 +105,9 @@ export function Toolbar() {
   const dragDown = (e: MouseEvent) => {
     if (!win || e.button !== 0) return;
     const el = e.target as HTMLElement;
-    if (el !== e.currentTarget && !el.closest('[data-drag]')) return;
+    // Drag only from the bar itself or an element marked data-drag, never from a
+    // child of one (.tbmain holds every button: closest() swallowed their clicks).
+    if (el !== e.currentTarget && !el.hasAttribute('data-drag')) return;
     const now = performance.now();
     if (now - lastDown < 350) { lastDown = 0; void win.toggleMaximize(); return; }
     lastDown = now;
