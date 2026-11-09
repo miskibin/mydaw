@@ -1,4 +1,5 @@
 import type { FxKind } from '../api/types';
+import { FX_ART } from './fxArt';
 
 export const ICONS = {
   draw: 'M4 20l4.5-1L19 8.5 15.5 5 5 15.5z M13.5 7l3.5 3.5',
@@ -36,12 +37,10 @@ export function Icon(props: { d: string; size?: number; sw?: number }) {
   );
 }
 
-/** Coloured rounded tile with an effect-type icon. */
+/** Coloured flat effect icon (no background); `dim` greys it out for bypassed effects. */
 export function FxTile(props: { type: FxKind; size: number; icon?: number; dim?: boolean }) {
-  const m = () => FXMETA[props.type];
   return (
-    <span class="tile" style={{ width: props.size + 'px', height: props.size + 'px', background: props.dim ? 'var(--bg6)' : m().color + '26', color: props.dim ? 'var(--fg5)' : m().color }}>
-      <Icon d={m().icon} size={props.icon ?? 14} />
-    </span>
+    <span class="fxart" classList={{ dim: !!props.dim }} style={{ width: props.size + 'px', height: props.size + 'px' }}
+      innerHTML={FX_ART[props.type] ?? ''} />
   );
 }
