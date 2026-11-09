@@ -10,7 +10,9 @@ const SR: u32 = 48000;
 const BLOCK: usize = 256;
 
 fn engine(p: Project) -> Arc<Engine> {
-    let dir = std::env::temp_dir().join(format!("wave-midi-{}", std::process::id()));
+    // one directory per engine: tests run in parallel and each saves a song
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!("wave-midi-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     std::fs::create_dir_all(&dir).unwrap();
     let e = Engine::new(p, Arc::new(NoPlugins));
     e.save(&dir.join("song.wave")).unwrap();
@@ -150,4 +152,39 @@ fn not_armed_or_not_recording_plays_but_does_not_record() {
     assert!(run(&mut rt, 4000) > 0.0);
     e.stop();
     assert!(e.project().clips.is_empty());
+}
+
+#[test]
+fn keys_follow_project_edits_and_stream_restarts_without_the_core_lock() {
+    let mut p = Project::empty();
+    p.tracks[2].arm = true;
+    let e = engine(p);
+    let mut rt = e.create_rt(SR as f32, BLOCK);
+    e.midi_configure(None, true);
+    // the project is edited from another thread all the time; keys must keep working
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (e2, s2) = (e.clone(), stop.clone());
+    let editor = std::thread::spawn(move || {
+        let mut k = 0u32;
+        while !s2.load(std::sync::atomic::Ordering::Relaxed) {
+            let _ = e2.apply(&[Op::SetBpm { bpm: 100.0 + (k % 20) as f64 }], false, None);
+            k += 1;
+        }
+    });
+    let mut worst = std::time::Duration::ZERO;
+    for k in 0..200u8 {
+        let t = std::time::Instant::now();
+        e.midi_event(on(40 + k % 12));
+        e.midi_event(off(40 + k % 12));
+        worst = worst.max(t.elapsed());
+        run(&mut rt, BLOCK);
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    editor.join().unwrap();
+    assert!(worst < std::time::Duration::from_millis(50), "keyboard events waited {worst:?}");
+    // a new stream (device change) gets the keyboard too
+    let mut rt2 = e.create_rt(SR as f32, BLOCK);
+    e.midi_event(on(45));
+    assert!(run(&mut rt2, SR as usize / 10) > 0.01);
+    e.midi_event(off(45));
 }

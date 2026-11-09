@@ -397,6 +397,8 @@ pub struct Rt {
     pat_beat: f64,
     /// Skip effect chains that are silent past their tails (see [`gate`]).
     skip_silent: bool,
+    /// Live MIDI events (see `Engine::midi_event`).
+    midi: Option<rtrb::Consumer<Cmd>>,
 }
 
 impl Rt {
@@ -432,7 +434,13 @@ impl Rt {
             pat_play: None,
             pat_beat: 0.0,
             skip_silent: true,
+            midi: None,
         }
+    }
+
+    /// The ring live keyboard events arrive on, drained together with the command ring.
+    pub fn set_midi_ring(&mut self, ring: rtrb::Consumer<Cmd>) {
+        self.midi = Some(ring);
     }
 
     /// Inserts whose chain is parked right now (silent past its tails).
@@ -462,6 +470,19 @@ impl Rt {
 
     fn drain(&mut self) {
         while let Ok(cmd) = self.cmds.pop() {
+            self.apply(cmd);
+        }
+        // live keyboard events arrive on their own ring (the UI side never waits for a lock)
+        if let Some(mut ring) = self.midi.take() {
+            while let Ok(cmd) = ring.pop() {
+                self.apply(cmd);
+            }
+            self.midi = Some(ring);
+        }
+    }
+
+    fn apply(&mut self, cmd: Cmd) {
+        {
             match cmd {
                 Cmd::Graph(mut g) => {
                     // carry running processors (and their tails) over by effect id
