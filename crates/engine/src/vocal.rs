@@ -336,8 +336,15 @@ impl Processor for DeEss {
                 (la, lb, a - la, b - lb)
             };
             if self.listen {
-                l[i] = ha;
-                r[i] = hb;
+                // "Tylko S": only what the de-esser takes away (delta), not the whole high band
+                let cut = 1.0 - g;
+                if self.split {
+                    l[i] = ha * cut;
+                    r[i] = hb * cut;
+                } else {
+                    l[i] = a * cut;
+                    r[i] = b * cut;
+                }
             } else if self.split {
                 l[i] = la + ha * g;
                 r[i] = lb + hb * g;
