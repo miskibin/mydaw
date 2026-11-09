@@ -153,7 +153,7 @@ export function Playlist() {
       lastPhX = x;
       phGrid.style.transform = phRuler.style.transform = `translateX(${x}px)`;
     }
-    if (U.follow && tele.frame.playing && b >= 0) {
+    if (U.follow && !followHold && tele.frame.playing && b >= 0) {
       const view = scrollEl.clientWidth - U.headW;
       if (x > scrollEl.scrollLeft + view - 40) scrollEl.scrollLeft = x - 80;
       else if (x < scrollEl.scrollLeft) scrollEl.scrollLeft = Math.max(0, x - 80);
@@ -171,8 +171,17 @@ export function Playlist() {
     onCleanup(() => { ro.disconnect(); stop(); scrollEl.removeEventListener('scroll', onScroll); scrollEl.removeEventListener('wheel', onWheel); });
   });
 
+  // the user moved the view while playing: stop following until the next Play (no tug of war)
+  let followHold = false;
+  const holdFollow = () => {
+    if (!U.follow || !U.playing || followHold) return;
+    followHold = true; say('Podążanie wstrzymane do następnego Play (F = włącz z powrotem)');
+  };
+  createEffect(on(() => U.playing, p => { if (p) followHold = false; }));
+  createEffect(on(() => U.follow, f => { if (f) followHold = false; }, { defer: true }));
   // ---------- wheel ----------
   const onWheel = (e: WheelEvent) => {
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))) holdFollow();
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const r = scrollEl.getBoundingClientRect(), mx = e.clientX - r.left - U.headW;
@@ -254,6 +263,7 @@ export function Playlist() {
 
   // ---------- pointer interactions ----------
   const gridDown = (e: PointerEvent) => {
+    holdFollow();
     const p = pt(e), h = hit(p.x, p.y), id = h?.c.id ?? null;
     const modK = e.ctrlKey || e.metaKey;
     if (U.autoEdit != null) {
@@ -686,6 +696,7 @@ export function Playlist() {
     g.globalAlpha = 1;
   });
   const ovDown = (e: PointerEvent) => {
+    holdFollow();
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const r = ovCv.getBoundingClientRect(), x = e.clientX - r.left, th = thumb(), R = ovRange(), W = ovW();
@@ -829,7 +840,7 @@ function LaneHeader(props: { t: Track; i: number }) {
   };
   const stop = (e: Event) => e.stopPropagation();
   return (
-    <div class="lane" classList={{ armrec: t().arm && S.transport.rec }} style={{ height: t().h + 'px' }} onPointerDown={down}>
+    <div class="lane" classList={{ armrec: t().arm && S.transport.rec, dimmed: !audible() }} style={{ height: t().h + 'px' }} onPointerDown={down}>
       <div class="stripe" style={{ background: t().color }} />
       <div class="body">
         <div class="row" style={{ gap: '6px', 'min-width': 0 }}>
@@ -847,7 +858,7 @@ function LaneHeader(props: { t: Track; i: number }) {
             )}</Show>
             <button class="mini route" title="Kanał miksera" onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? '→M' : '→' + routeIdx()}</button>
             <button class="mini m" classList={{ on: t().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
-            <button class="mini s" classList={{ on: t().solo }} title="Solo (wyłącza mute)" onPointerDown={stop} onClick={() => A.toggleTrackSolo(props.i)}>S</button>
+            <button class="mini s" classList={{ on: t().solo }} title="Solo — tylko ta ścieżka · Ctrl+klik = dodaj do solo" onPointerDown={stop} onClick={e => A.toggleTrackSolo(props.i, e.ctrlKey || e.metaKey)}>S</button>
             <button class="mini r" classList={{ on: t().arm }} title="Uzbrój do nagrywania" onPointerDown={stop} onClick={() => A.armTrack(props.i)}>
               <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="currentColor" /></svg>
             </button>

@@ -126,8 +126,8 @@ a { color: var(--blue); }
 /* the overview bar on top replaces the native horizontal scrollbar (vertical one stays) */
 .plscroll::-webkit-scrollbar:horizontal { height: 0; }
 /* FL-style overview scrollbar on top: minimap of the song + a wide, easy-to-grab thumb */
-.ploverview { flex: none; height: 22px; padding: 2px 14px 2px 0; background: var(--bg1); border-bottom: 1px solid var(--bg0); box-sizing: border-box; }
-.ploverview .ovtrack { position: relative; height: 18px; border-radius: 4px; background: var(--bg3); overflow: hidden; }
+.ploverview { flex: none; height: 28px; padding: 2px 14px 2px 0; background: var(--bg1); border-bottom: 1px solid var(--bg0); box-sizing: border-box; }
+.ploverview .ovtrack { position: relative; height: 24px; border-radius: 4px; background: var(--bg3); overflow: hidden; }
 .ploverview canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
 .ploverview .ovthumb { position: absolute; top: 0; bottom: 0; pointer-events: none; border-radius: 4px;
   background: color-mix(in srgb, var(--fg-hi) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-hi) 45%, transparent); }
@@ -680,3 +680,8 @@ select option { background: var(--bg4); color: var(--fg); }
 .nbwin.wrap .nb-mirror .nb-row { height: auto; min-height: var(--nb-lh); white-space: pre-wrap; overflow-wrap: anywhere; }
 .nbwin.wrap .nb-ta { white-space: pre-wrap; overflow-wrap: anywhere; }
 .nbwin.wrap .nb-gutter .nb-row, .nbwin.wrap .nb-syll .nb-row { align-items: flex-start; padding-top: calc((var(--nb-lh) - 18px) / 2); }
+
+/* solo: everything that can't be heard is dimmed */
+.lane.dimmed > .body, .lane.dimmed > .stripe { opacity: .4; }
+.strip.dimmed > *:not(.bar) { opacity: .45; }
+.strip.dimmed .mini.s, .lane.dimmed .mini.s { opacity: 1; }

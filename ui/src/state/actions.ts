@@ -206,17 +206,22 @@ export function toggleTrackMute(i: number) {
   const t = S.project.tracks[i]; if (!t) return;
   setTrack(i, t.muted ? { muted: false } : { muted: true, solo: false }, 'Mute');
 }
-export function toggleTrackSolo(i: number) {
+/** Solo is exclusive (FL): soloing a track un-solos the others; Ctrl+click adds to the solo set. */
+export function toggleTrackSolo(i: number, add = false) {
   const t = S.project.tracks[i]; if (!t) return;
-  setTrack(i, t.solo ? { solo: false } : { solo: true, muted: false }, 'Solo');
+  if (t.solo) { setTrack(i, { solo: false }, 'Solo'); return; }
+  const ops = S.project.tracks.map((x, j) => j === i ? trackOp(j, { solo: true, muted: false }) : (!add && x.solo ? trackOp(j, { solo: false }) : null)).filter((o): o is Op => !!o);
+  commit(ops, 'Solo');
 }
 export function toggleInsertMute(id: Id) {
   const m = S.project.inserts.find(x => x.id === id); if (!m) return;
   setInsert(id, m.muted ? { muted: false } : { muted: true, solo: false }, 'Mute');
 }
-export function toggleInsertSolo(id: Id) {
+export function toggleInsertSolo(id: Id, add = false) {
   const m = S.project.inserts.find(x => x.id === id); if (!m || id === 0) return;
-  setInsert(id, m.solo ? { solo: false } : { solo: true, muted: false }, 'Solo');
+  if (m.solo) { setInsert(id, { solo: false }, 'Solo'); return; }
+  const ops = S.project.inserts.map(x => x.id === id ? insertOp(x.id, { solo: true, muted: false }) : (!add && x.solo ? insertOp(x.id, { solo: false }) : null)).filter((o): o is Op => !!o);
+  commit(ops, 'Solo');
 }
 export function removeTrack(id: number) {
   commit([{ op: 'removeTrack', id }], 'Usuń ścieżkę');

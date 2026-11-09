@@ -91,7 +91,7 @@ function Strip(props: { m: Insert; idx: number }) {
   const stop = (e: Event) => e.stopPropagation();
   const icon = () => { if (m().id === 0) return null; const t = S.project.tracks.find(x => x.insert === m().id); return guessIcon(m().name) ?? (t ? trackIcon(t) : null); };
   return (
-    <div class="strip" data-ins={m().id} classList={{ on: U.mixSel === m().id }} onPointerDown={select}>
+    <div class="strip" data-ins={m().id} classList={{ on: U.mixSel === m().id, dimmed: !audible() }} onPointerDown={select}>
       <div class="bar" style={{ background: m().color }} />
       <div class="row" style={{ 'justify-content': 'space-between', gap: '4px' }}>
         <span class="lbl">{m().id === 0 ? 'MASTER' : 'INS ' + props.idx}</span>
@@ -117,7 +117,7 @@ function Strip(props: { m: Insert; idx: number }) {
       <div class="row" style={{ gap: '2px', 'justify-content': 'center' }}>
         <button class="mini m mute" classList={{ on: m().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleInsertMute(m().id)}>M</button>
         <Show when={m().id !== 0}>
-          <button class="mini s mute" classList={{ on: m().solo }} title="Solo (wyłącza mute)" onPointerDown={stop} onClick={() => A.toggleInsertSolo(m().id)}>S</button>
+          <button class="mini s mute" classList={{ on: m().solo }} title="Solo — tylko ten kanał · Ctrl+klik = dodaj do solo" onPointerDown={stop} onClick={e => A.toggleInsertSolo(m().id, e.ctrlKey || e.metaKey)}>S</button>
         </Show>
       </div>
       <div style={{ flex: 1, 'min-height': '50px', display: 'flex', 'justify-content': 'center', gap: '3px' }}>
