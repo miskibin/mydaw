@@ -4,6 +4,7 @@ import { S } from '../state/store';
 import { commit } from '../state/edit';
 import { clamp, dbText } from '../lib/format';
 import { Icon, TC } from './icons';
+import { INST_ICONS, InstIcon } from './instIcons';
 
 /** The one context menu (items are built by whoever opens it). */
 export function ContextMenu() {
@@ -38,6 +39,19 @@ export function ContextMenu() {
                     {i => (
                       <div class="swatches">
                         <For each={TC}>{c => <button title="Kolor" style={{ background: c, 'box-shadow': c === i().current ? '0 0 0 2px var(--fg-hi)' : 'none' }} onClick={() => { i().pick(c); closeMenu(); }} />}</For>
+                      </div>
+                    )}
+                  </Match>
+                  <Match when={it.t === 'icons' && it}>
+                    {i => (
+                      <div class="iconpick">
+                        <For each={Object.entries(INST_ICONS)}>{([id, g]) => (
+                          <button title={g.label + (id === i().current ? ' (klik = usuń)' : '')} classList={{ on: id === i().current }}
+                            style={{ color: id === i().current ? (i().color ?? 'var(--fg-hi)') : undefined }}
+                            onClick={() => { i().pick(id === i().current ? null : id); closeMenu(); }}>
+                            <InstIcon id={id} size={14} />
+                          </button>
+                        )}</For>
                       </div>
                     )}
                   </Match>

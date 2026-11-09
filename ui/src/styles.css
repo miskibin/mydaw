@@ -250,6 +250,11 @@ a { color: var(--blue); }
 .menu input { margin: 3px 4px; height: 26px; padding: 0 8px; background: var(--bg0); color: var(--fg-hi); border: 1px solid var(--blue); border-radius: 3px; outline: none; font: 500 12px var(--sans); }
 .swatches { display: flex; gap: 4px; padding: 5px 8px; flex-wrap: wrap; }
 .swatches button { width: 15px; height: 15px; padding: 0; border: 0; border-radius: 3px; cursor: pointer; }
+.iconpick { display: grid; grid-template-columns: repeat(5, 26px); gap: 3px; padding: 4px 8px 6px; }
+.iconpick button { width: 26px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--fg4); cursor: pointer; }
+.iconpick button:hover { background: var(--bg6); color: var(--fg-hi); }
+.iconpick button.on { background: var(--bg6); box-shadow: inset 0 0 0 1px currentColor; }
+.lane .laneicon { width: 14px; flex: none; display: grid; place-items: center; }
 .gainrow { display: flex; align-items: center; gap: 6px; padding: 3px 8px; }
 .gainrow button { width: 22px; height: 20px; border: 0; border-radius: 3px; background: var(--line2); color: var(--fg-hi); cursor: pointer; }
 .overlay { position: fixed; inset: 0; z-index: 70; background: var(--shadow2); display: flex; align-items: center; justify-content: center; }

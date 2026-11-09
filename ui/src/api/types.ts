@@ -14,6 +14,8 @@ export interface Track {
   id: Id; name: string; color: string;
   muted: boolean; solo: boolean; arm: boolean;
   vol: number; h: number; insert: Id;
+  /** Instrument icon id (ui/instIcons INST_ICONS), absent = none. */
+  icon?: string | null;
 }
 
 export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'vst3';

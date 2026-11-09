@@ -74,6 +74,9 @@ pub struct Track {
     pub h: f32,
     /// Mixer insert id this track plays into.
     pub insert: Id,
+    /// Instrument icon id shown in the lane header (UI only); older songs have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
