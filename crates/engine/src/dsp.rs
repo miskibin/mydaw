@@ -2,6 +2,9 @@
 
 use std::f32::consts::PI;
 
+pub mod limiter_v2;
+pub mod reverb_v2;
+
 use crate::model::FxKind;
 use crate::processor::{ParamBlock, ProcessCtx, Processor};
 
@@ -32,8 +35,8 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
         FxKind::Comp => Box::new(Comp::default()),
         FxKind::Sat => Box::new(Sat::default()),
         FxKind::Delay => Box::new(Delay::default()),
-        FxKind::Reverb => Box::new(Reverb::default()),
-        FxKind::Limit => Box::new(Limiter::default()),
+        FxKind::Reverb => Box::new(reverb_v2::ReverbV2::default()),
+        FxKind::Limit => Box::new(limiter_v2::LimiterV2::default()),
         FxKind::Fet => Box::new(crate::vocal::Fet::default()),
         FxKind::Deess => Box::new(crate::vocal::DeEss::default()),
         FxKind::Tune => Box::new(crate::vocal::Tune::default()),
@@ -968,15 +971,14 @@ mod tests {
 
     #[test]
     fn reverb_tail_decays_near_rt60() {
-        // impulse, then measure energy around RT60/2 vs 0.1 s
-        let (out, _) = run(FxKind::Reverb, |i| if i == 0 { 1.0 } else { 0.0 }, 48000 * 3);
+        // impulse, then compare the tail around 0.15 s and 0.65 s (default preset: RT60 1.0 s → −30 dB)
+        let (out, _) = run(FxKind::Reverb, |i| if i == 0 { 1.0 } else { 0.0 }, 48000 * 2);
         let rms = |a: usize, b: usize| (out[a..b].iter().map(|x| x * x).sum::<f32>() / (b - a) as f32).sqrt();
         let early = rms(4800, 9600);
-        let late = rms(48000 * 2, 48000 * 2 + 4800);
-        assert!(early > 1e-4, "no tail at all");
+        let late = rms(28800, 33600);
+        assert!(early > 1e-5, "no tail at all");
         let drop = gain_to_db(late / early);
-        // default decay 2.2 s: ~1.9 s apart → about -52 dB; allow a wide band
-        assert!(drop < -25.0 && drop > -90.0, "decay {drop} dB");
+        assert!(drop < -18.0 && drop > -45.0, "decay {drop} dB");
     }
 
     #[test]
