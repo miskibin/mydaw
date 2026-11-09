@@ -11,14 +11,26 @@ import { flushNotebook } from './notebook';
 import { allocId, findFx, insName, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
+import { confirmUnsaved } from '../ui/Confirm';
 
 // ---------- transport ----------
 /** Recording is on but no track is armed: the engine plays and records nothing. */
-const NO_ARMED = 'Nagrywanie włączone, ale żadna ścieżka nie jest uzbrojona — kliknij ● przy ścieżce';
+const NO_ARMED = 'Nagrywanie włączone, ale nie ma pustej ścieżki do uzbrojenia — kliknij ● przy ścieżce';
 const armedTrack = () => S.project.tracks.find(t => t.arm);
+/** Recording with nothing armed: arm the first track with no clips at all (waits until the engine has it). */
+async function autoArm() {
+  if (armedTrack()) return;
+  const used = new Set(S.project.clips.map(c => c.track));
+  const i = S.project.tracks.findIndex((_, k) => !used.has(k));
+  if (i < 0) return;
+  armTrack(i);
+  await enqueue(() => Promise.resolve());
+  say('Nagrywanie na: ' + S.project.tracks[i].name + ' (pierwsza pusta ścieżka)');
+}
 export async function play(from = U.start) {
   setU('playing', true);
   try {
+    if (S.transport.rec) await autoArm();
     await be().transportPlay(from); setTransport({ playing: true });
     say(!S.transport.rec ? 'Play' : armedTrack() ? '● Nagrywanie na: ' + armedTrack()!.name : NO_ARMED);
   }
@@ -41,8 +53,9 @@ export async function setTransportFlag(k: 'metro' | 'countIn' | 'rec' | 'monitor
   setTransport({ [k]: v });
   try { const t = await be().transportSet({ [k]: v }); setTransport(t); } catch (e) { say('Błąd: ' + String(e)); }
 }
-export function toggleRec() {
+export async function toggleRec() {
   const on = !S.transport.rec;
+  if (on) await autoArm();
   void setTransportFlag('rec', on);
   say(!on ? (U.playing ? 'Punch out' : 'Nagrywanie wyłączone')
     : !armedTrack() ? NO_ARMED
@@ -58,17 +71,30 @@ export function toggleMonitor() {
 // ---------- history / project ----------
 export async function undo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say('Cofnięto'); }
 export async function redo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say('Ponowiono'); }
+/** Ask about unsaved changes; false = the user cancelled (or the save failed). */
+async function guardUnsaved(what: string): Promise<boolean> {
+  const a = await confirmUnsaved(what);
+  if (a === 'cancel') return false;
+  if (a === 'save') return projectSave(false);
+  return true;
+}
 export async function projectNew() {
+  if (!(await guardUnsaved('nowym projektem'))) return;
   flushNotebook();
   try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); say('Nowy projekt'); } catch (e) { say('Nie utworzono projektu: ' + String(e)); }
 }
 export async function projectOpen() {
+  if (!(await guardUnsaved('otwarciem innego projektu'))) return;
   flushNotebook();
   try { acceptReply(await enqueue(() => be().projectOpen())); afterProjectLoad(); say('Otwarto ' + (S.path ?? '')); } catch (e) { say('Nie otwarto: ' + String(e)); }
 }
-export async function projectSave(saveAs = false) {
+export async function projectSave(saveAs = false): Promise<boolean> {
   flushNotebook();
-  try { const r = await enqueue(() => be().projectSave(saveAs)); say('Zapisano ' + r.path); await resync(); } catch (e) { say('Nie zapisano: ' + String(e)); }
+  try { const r = await enqueue(() => be().projectSave(saveAs)); say('Zapisano ' + r.path); await resync(); return true; } catch (e) { say('Nie zapisano: ' + String(e)); return false; }
+}
+/** Window close: ask about unsaved changes, then really close. */
+export async function closeWindowGuarded(): Promise<boolean> {
+  return guardUnsaved('zamknięciem aplikacji');
 }
 /** Escape on the export dialog: abort an in-flight bounce, otherwise close. */
 export function cancelExportOrClose() {
@@ -180,17 +206,22 @@ export function toggleTrackMute(i: number) {
   const t = S.project.tracks[i]; if (!t) return;
   setTrack(i, t.muted ? { muted: false } : { muted: true, solo: false }, 'Mute');
 }
-export function toggleTrackSolo(i: number) {
+/** Solo is exclusive (FL): soloing a track un-solos the others; Ctrl+click adds to the solo set. */
+export function toggleTrackSolo(i: number, add = false) {
   const t = S.project.tracks[i]; if (!t) return;
-  setTrack(i, t.solo ? { solo: false } : { solo: true, muted: false }, 'Solo');
+  if (t.solo) { setTrack(i, { solo: false }, 'Solo'); return; }
+  const ops = S.project.tracks.map((x, j) => j === i ? trackOp(j, { solo: true, muted: false }) : (!add && x.solo ? trackOp(j, { solo: false }) : null)).filter((o): o is Op => !!o);
+  commit(ops, 'Solo');
 }
 export function toggleInsertMute(id: Id) {
   const m = S.project.inserts.find(x => x.id === id); if (!m) return;
   setInsert(id, m.muted ? { muted: false } : { muted: true, solo: false }, 'Mute');
 }
-export function toggleInsertSolo(id: Id) {
+export function toggleInsertSolo(id: Id, add = false) {
   const m = S.project.inserts.find(x => x.id === id); if (!m || id === 0) return;
-  setInsert(id, m.solo ? { solo: false } : { solo: true, muted: false }, 'Solo');
+  if (m.solo) { setInsert(id, { solo: false }, 'Solo'); return; }
+  const ops = S.project.inserts.map(x => x.id === id ? insertOp(x.id, { solo: true, muted: false }) : (!add && x.solo ? insertOp(x.id, { solo: false }) : null)).filter((o): o is Op => !!o);
+  commit(ops, 'Solo');
 }
 export function removeTrack(id: number) {
   commit([{ op: 'removeTrack', id }], 'Usuń ścieżkę');
@@ -257,10 +288,26 @@ export function toggleBypass(fxId: Id) {
   say(fxName(ff.f) + (ff.f.bypass ? ' · bypass' : ' · aktywny'));
 }
 /** FL-style: bypass every effect of an insert, or turn them all back on if all are bypassed. */
+/** Effects that were on when "N FX" switched an insert off, so switching back restores them. */
+const fxWasOn = new Map<Id, Set<Id>>();
+/** Switch an effect to another built-in type in place (e.g. clean compressor ↔ FET); default preset. */
+export function swapFxType(fxId: Id, type: AnyBuiltinKind) {
+  const ff = findFx(fxId); if (!ff || !S.catalog || ff.f.type === type) return;
+  const idx = ff.m.fx.findIndex(f => f.id === fxId);
+  const f = newFx(S.catalog, allocId(), type, S.project.bpm);
+  f.bypass = ff.f.bypass;
+  commit([{ op: 'removeFx', fxId }, { op: 'putFx', insertId: ff.m.id, fx: f, index: idx }], 'Typ kompresora');
+  closePlug(fxId); openPlug(f.id);
+  say((S.catalog.types[type]?.name ?? type) + ' — ustawienia domyślne');
+}
 export function toggleInsertFx(insId: Id) {
   const m = S.project.inserts.find(x => x.id === insId); if (!m || !m.fx.length) return;
   const on = m.fx.some(f => !f.bypass);
-  commit(m.fx.map(f => fxOp({ ...plain(f), bypass: on }, m.id)), on ? 'Wyłącz efekty' : 'Włącz efekty');
+  if (on) fxWasOn.set(m.id, new Set(m.fx.filter(f => !f.bypass).map(f => f.id)));
+  const keep = fxWasOn.get(m.id);
+  const restore = !on && keep && m.fx.some(f => keep.has(f.id));
+  commit(m.fx.map(f => fxOp({ ...plain(f), bypass: on ? true : restore ? !keep!.has(f.id) : false }, m.id)), on ? 'Wyłącz efekty' : 'Włącz efekty');
+  if (!on) fxWasOn.delete(m.id);
   say(insName(m) + (on ? ' · wszystkie efekty wyłączone' : ' · efekty włączone'));
 }
 export const fxName = (f: Fx) => f.type === 'vst3' ? (f.plugin?.name ?? 'VST3') : (S.catalog?.types[f.type]?.name ?? f.type);
@@ -383,16 +430,27 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
   autoVocalBusy = true;
   say('Auto wokal: analiza nagrania… (kilka sekund)');
   try {
-    const plan = await be().autoVocalPlan({ clipId, style });
+    // the rider (≈1.6 s look-ahead) is baked into the audio instead of living on the insert,
+    // so playback and monitoring get no extra delay; a clip that was baked before is not baked twice
+    const src = S.project.sources.find(x => x.id === c.ref);
+    const baked = !!src && / \(rider\)$/.test(src.name);
+    const plan = await be().autoVocalPlan({ clipId, style, bakeRider: true });
+    if (plan.riderBake && !baked) {
+      say('Auto wokal: wyrównuję głośność w nagraniu…');
+      await enqueue(() => be().bakeRider({ clipId, params: plan.riderBake!.params }));
+      await resync();
+    }
     // The chain leaves the vocal far under the limiter; bring it up to mix level in the limiter
     // (its gain + −1 dBTP ceiling): to sit under the beat when the plan knows it, else −18 LUFS.
     const makeup = Math.round(clamp(plan.trackGainDb ?? (-18 - plan.stages.lufsAfter), 0, 24) * 10) / 10;
     const types = new Set<string>(plan.chain.map(p => p.type));
+    types.add('rider'); // an old live rider would ride the vocal a second time
     const ops: Op[] = ins.fx.filter(f => types.has(f.type)).map(f => ({ op: 'removeFx', fxId: f.id }) as Op);
     for (const p of plan.chain) {
       const f = newFx(S.catalog, allocId(), p.type, S.project.bpm);
       f.params = { ...f.params, ...p.params };
       f.mix = p.mix;
+      f.preset = null; // calibrated values, not a preset (the header then reads "Własne ustawienia")
       f.bypass = !p.enabled;
       if (p.type === 'limit') f.params.gain = clamp((f.params.gain ?? 0) + makeup, 0, 24);
       ops.push({ op: 'putFx', insertId: ins.id, fx: f });
@@ -400,10 +458,22 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
     commit(ops, 'Auto wokal');
     setU({ mixSel: ins.id });
     const a = plan.analysis, st = plan.stages;
-    say('Auto wokal: ' + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
-      + ' · +' + makeup.toFixed(1) + ' dB w limiterze · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
+    say('Auto wokal: ' + (plan.riderBake ? 'głośność wyrównana w nagraniu, ' : '') + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
+      + ' · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
       + (a.key ? ' · tonacja ' + a.key.name : ' · bez tonacji (autotune wyłączony)')
       + (plan.warnings.length ? ' · ' + plan.warnings[0] : ''));
   } catch (e) { say('Auto wokal nie zadziałał: ' + String(e)); }
   autoVocalBusy = false;
+}
+
+/** Auto vocal on a comp: flatten it to one audio clip first (Ctrl+Z undoes both steps). */
+export async function autoVocalComp(clipId: Id, style: 'natural' | 'hard' = 'natural') {
+  const c = S.project.clips.find(x => x.id === clipId); if (!c || c.kind !== 'comp') return;
+  const { track, start } = c;
+  say('Auto wokal: spłaszczam take’i do jednego klipu…');
+  try { await enqueue(() => be().flattenComp(clipId)); } catch (e) { say('Nie spłaszczono: ' + String(e)); return; }
+  const a = S.project.clips.filter(x => x.kind === 'audio' && x.track === track && Math.abs(x.start - start) < 1e-6)[0]
+    ?? S.project.clips.filter(x => x.kind === 'audio' && x.track === track).sort((p, q) => Math.abs(p.start - start) - Math.abs(q.start - start))[0];
+  if (!a) { say('Auto wokal: nie znalazłem spłaszczonego klipu'); return; }
+  await autoVocal(a.id, style);
 }

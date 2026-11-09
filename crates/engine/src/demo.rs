@@ -11,7 +11,7 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         version: 2,
         bpm: 128.0,
         tracks: vec![],
-        inserts: vec![Insert { id: 0, name: "Master".into(), color: "#d5dae2".into(), vol: VOL_UNITY, pan: 0.0, muted: false, solo: false, fx: vec![] }],
+        inserts: vec![Insert { id: 0, name: "Master".into(), color: "#d5dae2".into(), vol: VOL_UNITY, pan: 0.0, width: 1.0, muted: false, solo: false, fx: vec![] }],
         patterns: vec![],
         sources: vec![],
         clips: vec![],
@@ -27,7 +27,7 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         p.channel_for_inst(inst);
     }
     for (i, name) in ins_names.iter().enumerate() {
-        p.inserts.push(Insert { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), vol: VOL_UNITY, pan: 0.0, muted: false, solo: false, fx: vec![] });
+        p.inserts.push(Insert { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), vol: VOL_UNITY, pan: 0.0, width: 1.0, muted: false, solo: false, fx: vec![] });
     }
     for (i, name) in names.iter().enumerate() {
         p.tracks.push(Track { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), muted: false, solo: false, arm: false, vol: VOL_UNITY, h: 56.0, insert: i as Id + 1, icon: None });

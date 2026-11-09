@@ -13,7 +13,12 @@ const PARAMS: Record<AnyBuiltinKind, ParamDef[]> = {
   eq: [p('out', 'Output', -18, 18, 0, 'dB')],
   comp: [p('thr', 'Thresh', -60, 0, -18, 'dB'), p('ratio', 'Ratio', 1, 20, 4, ':1', true), p('att', 'Attack', 0.1, 100, 10, 'ms', true),
     p('rel', 'Release', 10, 1000, 150, 'ms', true), p('gain', 'Makeup', 0, 24, 0, 'dB'), choice('det', 'Detect', 0, ['Peak', 'RMS'])],
-  sat: [p('drive', 'Drive', 0, 36, 6, 'dB'), p('mix', 'Mix', 0, 100, 100, '%'), p('out', 'Output', -24, 6, 0, 'dB')],
+  // catalog.rs SAT (dsp::saturator::idx order)
+  sat: [choice('style', 'Style', 0, ['Taśma', 'Konsola', 'Transformator', 'Trioda', 'Pentoda']), p('drive', 'Drive', 0, 100, 40, '%'),
+    choice('punish', 'Punish', 0, ['Off', 'On']), p('lowcut', 'Low cut', 10, 1000, 10, 'Hz', true), p('thump', 'Thump', 0, 100, 0, '%'),
+    p('tone', 'Tone', -100, 100, 0, '%'), p('highcut', 'High cut', 500, 20000, 20000, 'Hz', true), choice('steep', 'Steep', 0, ['Off', 'On']),
+    choice('auto', 'Auto gain', 1, ['Off', 'On']), p('mix', 'Mix', 0, 100, 100, '%'), p('out', 'Output', -24, 12, 0, 'dB'),
+    choice('hq', 'Oversampling', 0, ['2×', '4×'])],
   delay: [p('time', 'Time', 10, 1500, 375, 'ms', true), p('fb', 'Feedback', 0, 95, 35, '%'), p('mix', 'Mix', 0, 100, 25, '%')],
   // catalog.rs REVERB / LIMIT (v2)
   reverb: [p('size', 'Decay', 0.2, 6, 1, 's', true), p('pre', 'Pre-delay', 0, 150, 25, 'ms'), p('lo', 'Low cut', 20, 1000, 300, 'Hz', true),
@@ -39,7 +44,7 @@ const PARAMS: Record<AnyBuiltinKind, ParamDef[]> = {
   // catalog.rs RIDER (order = rider::idx)
   rider: [p('amount', 'Amount', 0, 100, 50, '%'), p('phrase', 'Phrase', 0, 100, 20, '%'), p('up', 'Max boost', 0, 12, 5, 'dB'),
     p('down', 'Max cut', 0, 12, 6, 'dB'), choice('speed', 'Speed', 0, ['Sung', 'Rap']), choice('auto', 'Auto target', 1, ['Off', 'On']),
-    p('target', 'Target', -60, 0, -24, 'dB'), p('floor', 'Noise floor', -100, -20, -70, 'dB'), choice('look', 'Look-ahead', 1, ['Short', 'Long']),
+    p('target', 'Target', -60, 0, -24, 'dB'), p('floor', 'Noise floor', -100, -20, -70, 'dB'), choice('look', 'Look-ahead', 0, ['Short', 'Long']),
     p('out', 'Output', -24, 24, 0, 'dB'), p('gate', 'Gate', -100, -10, -60, 'dB')],
 };
 const NAMES: Record<AnyBuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter',
@@ -67,6 +72,7 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     eqp('Bas — czysty dół', 0, [[0, T, 35, n, n], [1, n, 80, 2, n], [2, n, 250, -3, n], [6, T, 8000, n, n]]),
     eqp('Mud cut', 0, [[0, T, 60, n, n], [2, n, 300, -4, 1.5]]),
     eqp('Air / połysk', 0, [[4, n, 5000, 1, n], [5, n, 12000, 4, n]]),
+    eqp('Pasmo — wytnij dół i górę', 0, [[0, T, 120, n, n], [6, T, 9000, n, n]]),
     eqp('Telefon / lo-fi', 2, [[0, T, 400, n, n], [3, n, 1500, 4, 0.8], [6, T, 3200, n, n]]),
     eqp('Master — smile', 0, [[1, n, 80, 1.5, n], [3, n, 1000, -0.5, 0.6], [5, n, 10000, 1.5, n]]),
   ],
@@ -80,9 +86,15 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     pr('Smash', { thr: -35, ratio: 12, att: 0.5, rel: 60, gain: 12 }),
   ],
   sat: [
-    pr('Domyślny', { drive: 6, mix: 100, out: 0 }), pr('Subtelny', { drive: 2, mix: 50, out: 0 }),
-    pr('Ciepła taśma', { drive: 4, mix: 100, out: -1 }), pr('Lampa', { drive: 10, mix: 80, out: -3 }),
-    pr('Gruby bas', { drive: 18, mix: 60, out: -4 }), pr('Rozwalony', { drive: 30, mix: 100, out: -8 }),
+    pr('Domyślny', { style: 0, drive: 40 }),
+    pr('Wokal — ciepło', { style: 0, drive: 35, lowcut: 80, tone: 10, highcut: 16000 }),
+    pr('Wokal — lampa', { style: 3, drive: 45, lowcut: 70, highcut: 15000 }),
+    pr('Rap — ziarno', { style: 1, drive: 58, lowcut: 100, tone: 25, highcut: 14000 }),
+    pr('Bębny — smash', { style: 1, drive: 80, lowcut: 30, thump: 30, mix: 70 }),
+    pr('Bas — waga', { style: 2, drive: 50, lowcut: 35, thump: 40, tone: -20 }),
+    pr('Lo-fi głośnik', { style: 4, drive: 60, lowcut: 300, thump: 35, tone: 20, highcut: 4500, steep: 1 }),
+    pr('Równoległe zgniecenie', { style: 4, drive: 90, punish: 1, mix: 30 }),
+    pr('Taśma — klej na bus', { style: 0, drive: 22, highcut: 18000 }),
   ],
   delay: [
     dly('Ósemka 1/8', 0.5, 0, 35, 20), dly('Ćwierćnuta 1/4', 1, 0, 30, 22), dly('Kropkowana 1/8', 0.75, 0, 40, 22),
@@ -135,11 +147,11 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     pr('Hard tune + drive', { mode: 1, drive: 10, out: -3 }), pr('Robot', { mode: 2, drive: 6, out: -2 }),
   ],
   rider: [
-    pr('Wokal — śpiew', { amount: 50, phrase: 20, up: 5, down: 6, speed: 0, auto: 1, look: 1 }),
-    pr('Rap', { amount: 50, phrase: 20, up: 5, down: 6, speed: 1, auto: 1, look: 1 }),
-    pr('Delikatnie', { amount: 30, phrase: 10, up: 3, down: 4, speed: 0, auto: 1, look: 1 }),
-    pr('Mocno', { amount: 80, phrase: 30, up: 8, down: 9, speed: 0, auto: 1, look: 1 }),
-    pr('Na żywo (krótki look-ahead)', { amount: 50, phrase: 20, up: 5, down: 6, speed: 0, auto: 1, look: 0 }),
+    pr('Wokal — śpiew', { amount: 50, phrase: 20, up: 5, down: 6, speed: 0, auto: 1, look: 0 }),
+    pr('Rap', { amount: 50, phrase: 20, up: 5, down: 6, speed: 1, auto: 1, look: 0 }),
+    pr('Delikatnie', { amount: 30, phrase: 10, up: 3, down: 4, speed: 0, auto: 1, look: 0 }),
+    pr('Mocno', { amount: 80, phrase: 30, up: 8, down: 9, speed: 0, auto: 1, look: 0 }),
+    pr('Wokal — śpiew (długi look-ahead, opóźnienie)', { amount: 50, phrase: 20, up: 5, down: 6, speed: 0, auto: 1, look: 1 }),
   ],
 };
 
@@ -160,9 +172,9 @@ const COLORS = [0, 6, 5, 3, 4, 8, 9, 9];
 function base(names: string[], insNames: string[], cat: Catalog): Project {
   const p: Project = {
     version: 2, bpm: 128, tracks: [], patterns: [], sources: [], clips: [], loop: null, nextId: 1000, automations: [],
-    inserts: [{ id: 0, name: 'Master', color: '#d5dae2', vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] }],
+    inserts: [{ id: 0, name: 'Master', color: '#d5dae2', vol: VOL_UNITY, pan: 0, width: 1, muted: false, solo: false, fx: [] }],
   };
-  insNames.forEach((name, i) => p.inserts.push({ id: i + 1, name, color: TC[COLORS[i]], vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] }));
+  insNames.forEach((name, i) => p.inserts.push({ id: i + 1, name, color: TC[COLORS[i]], vol: VOL_UNITY, pan: 0, width: 1, muted: false, solo: false, fx: [] }));
   names.forEach((name, i) => p.tracks.push({ id: i + 1, name, color: TC[COLORS[i]], muted: false, solo: false, arm: false, vol: VOL_UNITY, h: 56, insert: i + 1 }));
   p.inserts[0].fx.push(newFx(cat, 900, 'limit', p.bpm));
   // the Channel Rack: the four built-ins (ids 1000..1003), like demo.rs

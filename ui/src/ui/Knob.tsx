@@ -118,7 +118,7 @@ export function Segmented(p: { options: string[]; value: () => number; pick: (i:
       <div class="seg2" classList={{ small: !!p.small }}>
         <For each={p.options}>{(o, i) => (
           <button classList={{ on: Math.round(p.value()) === i(), danger: p.danger === i() }}
-            style={Math.round(p.value()) === i() && p.color && p.danger !== i() ? { background: p.color + '33', color: p.color } : {}}
+            style={Math.round(p.value()) === i() && p.color && p.danger !== i() ? { background: p.color + '38', color: `color-mix(in srgb, ${p.color} 55%, var(--fg-hi))` } : {}}
             onClick={() => p.pick(i())}>{o}</button>
         )}</For>
       </div>

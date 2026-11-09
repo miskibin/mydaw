@@ -36,7 +36,8 @@ pub fn frame(seq: u32, shared: &Shared, insert_ids: &[Id], fx: Option<&[FxAnalys
     let mut w = W(Vec::with_capacity(64 + insert_ids.len() * 12 + nfx * (144 + 4 * (128 * 2 + 256 * 2)) + rec.map(|r| r.4.len() * 4 + 32).unwrap_or(4)));
     w.u32(MAGIC);
     w.u32(seq);
-    w.f64(shared.beat());
+    // the playhead shows what is heard, not what the mixer is rendering (playback latency)
+    w.f64(shared.heard_beat());
     let playing = shared.playing.load(std::sync::atomic::Ordering::Relaxed);
     let recording = shared.recording.load(std::sync::atomic::Ordering::Relaxed);
     let previewing = shared.preview_pos() >= 0.0;

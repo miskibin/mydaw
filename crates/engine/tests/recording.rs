@@ -155,3 +155,90 @@ fn arming_while_playing_without_an_armed_track_records_nothing() {
     e.stop();
     assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Audio));
 }
+
+/// Like `feed`, but the device layer reports `io` as the measured round trip of every
+/// callback (as `wave-audio-io` does once real input flows), before the block is processed.
+fn feed_measured(e: &Engine, rt: &mut Rt, at: &mut usize, total: usize, io: u32, input: &dyn Fn(usize) -> f32) {
+    let (mut l, mut r) = (vec![0f32; BLOCK], vec![0f32; BLOCK]);
+    let end = *at + total;
+    while *at < end {
+        let n = BLOCK.min(end - *at);
+        let inp: Vec<f32> = (0..n).map(|i| input(*at + i)).collect();
+        e.shared().add_take_latency(io);
+        rt.process(&mut l[..n], &mut r[..n], Some((&inp, &inp)));
+        *at += n;
+    }
+}
+
+fn first_take_onset(e: &Engine) -> (f64, usize) {
+    let p = e.project();
+    let clip = p.clips.iter().find(|c| c.kind == ClipKind::Audio).expect("a take");
+    let audio = take_audio(&p, clip.source);
+    (clip.start, audio.iter().position(|x| x.abs() > 0.5).expect("the hit was recorded"))
+}
+
+const MS1: i64 = SR as i64 / 1000;
+
+/// The estimate at the start of a take is stale (`at_start`: the input was just opened, so
+/// nothing was measured yet) while the device measures `io` during the take: the take lines
+/// up with what was measured during it, with and without count-in.
+fn record_with_stale_start(tag: &str, at_start: u32, count_in: bool) {
+    let p = armed();
+    let bpm = p.bpm;
+    let e = engine(p, tag);
+    let mut rt = e.create_rt(SR as f32, BLOCK);
+    let io = 1700u32;
+    e.shared().set_io_latency(at_start);
+    e.set_transport(None, Some(count_in), Some(true), None);
+    e.play(4.0);
+    let lead = if count_in { frames(4.0, bpm) } else { 0 };
+    // a hit sung exactly when beat 5 is heard reaches the engine `io` frames later
+    let hit = lead + frames(1.0, bpm) + io as usize;
+    let mut at = 0;
+    feed_measured(&e, &mut rt, &mut at, lead + frames(3.0, bpm), io, &|f| if f == hit { 0.9 } else { 0.0 });
+    e.stop();
+    let (start, onset) = first_take_onset(&e);
+    assert!((start - 4.0).abs() < 1e-9, "take starts at {start}");
+    let off = onset as i64 - frames(1.0, bpm) as i64;
+    assert!(off.abs() <= MS1, "{tag}: hit lands {off} frames off beat 5");
+}
+
+#[test]
+fn a_take_started_before_the_round_trip_was_measured_still_lines_up() {
+    record_with_stale_start("stale0", 0, false); // fresh stream: nothing published yet
+    record_with_stale_start("stale512", 512, false); // one buffer guessed for the input
+    record_with_stale_start("staleci", 0, true); // count-in: measured after the count
+}
+
+#[test]
+fn a_running_input_lines_up_as_before() {
+    record_with_stale_start("settled", 1700, false);
+    record_with_stale_start("settledci", 1700, true);
+}
+
+#[test]
+fn punch_in_with_an_input_opened_at_the_punch_lines_up() {
+    // monitoring off: the input opens only when record is armed during playback, so the
+    // estimate at the punch is the output-only guess; the take uses what was measured after
+    let p = armed();
+    let bpm = p.bpm;
+    let e = engine(p, "punchio");
+    let mut rt = e.create_rt(SR as f32, BLOCK);
+    let io = 1300u32;
+    e.shared().set_io_latency(600);
+    e.play(2.0);
+    let mut at = 0;
+    feed(&mut rt, &mut at, frames(1.0, bpm), &|_| 0.0);
+    e.set_transport(None, None, Some(true), None);
+    let punch_at = at;
+    let punch = e.shared().beat();
+    // a hit sung when beat (punch + 2) is heard
+    let hit = punch_at + frames(2.0, bpm) + io as usize;
+    feed_measured(&e, &mut rt, &mut at, frames(3.0, bpm), io, &|f| if f == hit { 0.9 } else { 0.0 });
+    e.set_transport(None, None, Some(false), None);
+    let (start, onset) = first_take_onset(&e);
+    assert!((start - punch).abs() < 1e-9, "take starts at {start} instead of {punch}");
+    let want = ((punch + 2.0 - start) * 60.0 / bpm * SR as f64).round() as i64;
+    let off = onset as i64 - want;
+    assert!(off.abs() <= MS1, "punch-in hit lands {off} frames off");
+}

@@ -116,15 +116,19 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
     if (c.kind === 'pat') { let i = patIcons.get(c.ref); if (i === undefined) { i = patternIcon(src as Pattern, curChans); patIcons.set(c.ref, i); } return i; }
     return trackIcon(tr) ?? guessIcon(src.name);
   };
+  const anySolo = p.tracks.some(t => t.solo);
   for (const c of p.clips) {
     const tr = p.tracks[c.track]; if (!tr) continue;
+    const silent = tr.muted || (anySolo && !tr.solo);
     const cx = c.start * bw, cw = Math.max(3, c.len * bw - 1), cy = tops[c.track] + 1, ch = tr.h - 2;
     if (cx > x1 || cx + cw < x0 || cy > y1 || cy + ch < y0) continue;
+    g.globalAlpha = silent ? 0.35 : 1;
     if (c.kind === 'comp') { const cp = comps.get(c.ref); if (cp) drawComp(g, v, c, cp, tr.color, cx, cy, cw, ch, x0, x1); continue; }
     const src = c.kind === 'pat' ? pats.get(c.ref) : c.kind === 'auto' ? autos.get(c.ref) : srcs.get(c.ref);
     if (!src) continue;
     drawClip(g, v, c, src, sigs.get(c.ref) ?? '', cx, cy, cw, ch, x0, x1, iconOf(c, tr, src));
   }
+  g.globalAlpha = 1;
   p.tracks.forEach((t, i) => { const row = v.rows?.[i]; if (row) drawTakeLanes(g, v, row.clip, row.comp, t, tops[i] + t.h, x0, x1, y0, y1); });
   if (rec && p.tracks[rec.track]) drawRec(g, v, rec, p.tracks[rec.track].h);
   g.restore();
@@ -297,7 +301,7 @@ export function drawFades(g: CanvasRenderingContext2D, v: View, p: Project) {
 }
 
 function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | Source | Automation, sig: string, cx: number, cy: number, cw: number, ch: number, vx0: number, vx1: number, icon: string | null = null) {
-  const sel = v.sel.has(c.id), color = src.color, bh = ch - 15;
+  const sel = v.sel.has(c.id), color = src.color, bh = ch - 15, prevAlpha = g.globalAlpha;
   g.save();
   if (c.muted) g.globalAlpha = 0.38;
   g.beginPath(); g.roundRect(cx, cy, cw, ch, 3); g.clip();
@@ -316,7 +320,7 @@ function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | 
     if (isAudio && c.gain) {
       const w = g.measureText(src.name).width;
       g.font = MONO9; g.globalAlpha *= 0.65; g.fillText((c.gain >= 0 ? '+' : '') + c.gain.toFixed(1) + ' dB', tx + w + 5, cy + 11);
-      g.globalAlpha = c.muted ? 0.38 : 1;
+      g.globalAlpha = c.muted ? 0.38 : prevAlpha;
     }
   }
   const by = cy + 15;

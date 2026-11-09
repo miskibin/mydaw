@@ -9,13 +9,14 @@ import { BUILTIN, demoProject, emptyProject, mockCatalog } from './mockData';
 const MOCK_REVERB_MIX = 37.2;
 import { applyAll } from '../lib/applyOps';
 import { landTakes, takeEnd } from '../lib/comp';
+import { satDriveDb } from '../lib/saturator';
 import { eqCurve } from '../lib/eq';
 import { clamp, dbg } from '../lib/format';
 import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitch';
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 
@@ -112,6 +113,7 @@ export class MockBackend implements Backend {
   private audio: AudioStatus = {
     host: 'wasapi', output: 'Głośniki (Realtek High Definition Audio)', input: 'Mikrofon (USB Audio)', sampleRate: null, bufferSize: null, inputChannel: null,
     running: true, actualRate: 48000, actualBuffer: 480, latencyMs: 20, inputChannels: 2, error: null, note: 'Mock — brak prawdziwego audio', asioCompiled: false,
+    recOffsetMs: 0, inputUnderruns: 0, inputOverruns: 0, inputDriftPpm: 0,
   };
 
   private midiPorts: MidiDevice[] = [{ id: 'mock-keys', name: 'Mock Keystation 61' }, { id: 'mock-pads', name: 'Mock Pad Controller' }];
@@ -439,15 +441,17 @@ export class MockBackend implements Backend {
         specOut[k] = level > 0 ? specIn[k] - 6 * (1 - pulse) + sustain + wet - 10 * Math.log10(1 + (f / hi) ** 2) + 20 * Math.log10(r / Math.sqrt(1 + r * r)) : -120;
       }
     } else if (fx.type === 'sat') {
-      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (pr.drive ?? 0) * 0.15 + (k > 60 ? (pr.drive ?? 0) * 0.3 : 0);
+      // harmonics grow with the drive; auto gain keeps the level (dsp/saturator.rs)
+      const dd = satDriveDb(pr);
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (pr.auto ?? 1 ? 0 : dd * 0.5) + (k > 60 ? dd * 0.3 : 0);
     } else {
       for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + 20 * Math.log10(1 + (pr.mix ?? 25) / 100);
     }
-    const drive = dbg(pr.drive ?? 0), f0 = 2 + 3 * Math.sin(t * 0.3);
+    const drive = fx.type === 'sat' ? dbg(satDriveDb(pr)) * 0.6 : 1, f0 = 2 + 3 * Math.sin(t * 0.3);
     for (let i = 0; i < SCOPE_LEN; i++) {
       const x = level * (Math.sin(i / SCOPE_LEN * Math.PI * 2 * f0 + t * 9) * 0.8 + (Math.random() - 0.5) * 0.12);
       scopeIn[i] = x;
-      scopeOut[i] = fx.type === 'sat' ? Math.tanh(x * drive * 2.5) / Math.tanh(2.5) * dbg(pr.out ?? 0) : x * dbg(gr);
+      scopeOut[i] = fx.type === 'sat' ? Math.tanh(x * drive) / ((pr.auto ?? 1) ? drive : 0.6) * dbg(pr.out ?? 0) : x * dbg(gr);
     }
     return { id: fx.id, inPeak: level, outPeak: out, grDb: gr, meters, specIn, specOut, scopeIn, scopeOut };
   }
@@ -631,7 +635,7 @@ export class MockBackend implements Backend {
   }
   /** Same contract as the engine's `auto_vocal_plan`, with fixed measurements of a typical take
    *  (the real calibration renders the audio; the mock has no audio to render). */
-  async autoVocalPlan(a: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle }): Promise<AutoVocalPlan> {
+  async autoVocalPlan(a: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle; bakeRider?: boolean }): Promise<AutoVocalPlan> {
     await delay(300);
     const c = this.p.clips.find(x => x.id === a.clipId);
     if (!c) throw new Error('no such clip');
@@ -657,8 +661,10 @@ export class MockBackend implements Backend {
       { type: 'reverb', params: params('reverb', { size: 1.2, pre: 30, lo: 300, hi: 7000, width: 100, mix: MOCK_REVERB_MIX, tone: 0, space: 0, duck: 0, bass: 1 }), mix: 1, enabled: true, note: 'small plate, T60 1.2 s, -18 dB send' },
       { type: 'limit', params: params('limit', { gain: 0, ceil: -1, rel: 80, auto: 0, look: 5, link: 100, out: 0 }), mix: 1, enabled: true, note: 'true-peak ceiling -1 dBTP' },
     ];
+    const ri = chain.findIndex(p => p.type === 'rider');
+    const riderBake = a.bakeRider ? chain.splice(ri, 1)[0] : null;
     return {
-      version: 1, style,
+      version: 1, style, riderBake,
       analysis: {
         durationS: c.len * 60 / this.p.bpm, sampleRate: 48000, peakDbfs: -3.2, truePeakDbtp: -3.0, lufs: -21.5,
         wordLevelDb: -24, noiseFloorDb: -70, sungShare: 0.62, sibilanceDb: -4,
@@ -706,6 +712,24 @@ export class MockBackend implements Backend {
     this.pushUndo(prev); this.changed();
     return { sourceId: id };
   }
+  /** The mock has no audio to render: the clip moves to a copy of its region (clip gain applied), as one undo step. */
+  async bakeRider(a: { clipId: Id; params: Record<string, number> }) {
+    await delay(200);
+    const c = this.p.clips.find(x => x.id === a.clipId);
+    if (!c || c.kind !== 'audio') throw new Error('only audio clips can be baked');
+    const s = this.srcMeta.get(c.ref); if (!s) throw new Error('audio not loaded');
+    const prev = structuredClone(this.p), id = this.p.nextId++;
+    const spb = this.spb(), a0 = c.offset * spb, dur = Math.max(0, Math.min(s.dur, (c.offset + c.len) * spb) - a0);
+    const src: MockSource = { ...s, id, name: s.name + ' (rider)', path: s.path.replace(/\.wav$/i, '') + ' rider.wav', dur, trimFrom: undefined };
+    this.srcMeta.set(id, src);
+    const pk = await this.sourcePeaks(c.ref, c.norm, c.rev);
+    const g = dbg(c.gain);
+    this.recPeaks.set(id, pk.slice(Math.floor(a0 * 100) * 2, Math.ceil((a0 + dur) * 100) * 2).map(v => v * g));
+    this.p.sources.push(strip(src));
+    Object.assign(c, { ref: id, offset: 0, gain: 0, norm: false, rev: false, tune: null });
+    this.pushUndo(prev); this.changed();
+    return { sourceId: id, clipId: c.id };
+  }
   async trimClip(clipId: Id) {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) throw new Error('no clip');
     const s = this.srcMeta.get(c.ref); if (!s) throw new Error('no source');
@@ -749,11 +773,20 @@ export class MockBackend implements Backend {
   async audioGetConfig() { return { ...this.audio }; }
   async audioSetConfig(cfg: AudioConfig) {
     await delay(80);
+    // like the app: a config without recOffsetMs keeps the saved calibration
+    cfg = { ...cfg, recOffsetMs: cfg.recOffsetMs ?? this.audio.recOffsetMs ?? 0 };
     const asioErr = cfg.host === 'asio' && !this.audio.asioCompiled;
     this.audio = { ...this.audio, ...cfg, running: !asioErr, error: asioErr ? 'ASIO nie jest wkompilowane w tę wersję' : null,
       actualRate: cfg.sampleRate ?? 48000, actualBuffer: cfg.bufferSize ?? 480, latencyMs: Math.round(((cfg.bufferSize ?? 480) * 2 / (cfg.sampleRate ?? 48000)) * 10000) / 10 };
     this.emit('audio-status', { ...this.audio });
     return { ...this.audio };
+  }
+
+  async audioMeasureLatency(): Promise<LatencyReport> {
+    if (this.tr.playing) throw new Error('Stop playback before measuring the latency.');
+    await delay(5200);
+    const reportedMs = 21.3, roundTripMs = 25.8;
+    return { roundTripMs, reportedMs, suggestedOffsetMs: Math.round((roundTripMs - reportedMs) * 100) / 100, confidence: 0.93 };
   }
 
   // ---------- MIDI keyboard ----------
@@ -812,7 +845,7 @@ export class MockBackend implements Backend {
   }
 
   private exportAbort = false;
-  async exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number }): Promise<ExportResult> {
+  async exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult> {
     this.exportAbort = false;
     const { from, to } = exportRange(this.p, opts.useLoop);
     const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
@@ -822,7 +855,7 @@ export class MockBackend implements Backend {
       await delay(40);
       if (this.exportAbort) return { cancelled: true };
     }
-    const name = (this.path ? this.path.replace(/\.wave$/i, '') : 'C:\\Users\\michal\\Music\\Song') + '.wav';
+    const name = (this.path ? this.path.replace(/\.wave$/i, '') : 'C:\\Users\\michal\\Music\\Song') + (opts.format === 'mp3' ? '.mp3' : '.wav');
     const silent = this.p.clips.length === 0 || this.p.tracks.every(t => t.muted);
     return {
       out: name,

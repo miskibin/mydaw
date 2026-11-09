@@ -79,6 +79,10 @@ pub struct Track {
     pub icon: Option<String>,
 }
 
+fn width_unity() -> f32 {
+    1.0
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Insert {
@@ -87,6 +91,9 @@ pub struct Insert {
     pub color: String,
     pub vol: f32,
     pub pan: f32,
+    /// Stereo width, 0 mono .. 1 unchanged .. 2 extra wide (old projects: 1).
+    #[serde(default = "width_unity")]
+    pub width: f32,
     pub muted: bool,
     pub solo: bool,
     pub fx: Vec<Fx>,
@@ -775,6 +782,14 @@ impl Project {
         if self.channels.is_empty() {
             for inst in Inst::ALL {
                 self.channel_for_inst(inst);
+            }
+        }
+        // saturator parameters from before the character saturator
+        for ins in &mut self.inserts {
+            for fx in ins.fx.iter_mut().filter(|f| f.kind == FxKind::Sat) {
+                if crate::dsp::saturator::migrate_params(&mut fx.params) {
+                    fx.preset = None;
+                }
             }
         }
         // ids the file used must stay taken

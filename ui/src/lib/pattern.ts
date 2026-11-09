@@ -3,6 +3,7 @@
 //
 // Units: pattern `len` in beats; note `step`/`len` in 16ths ("steps"); `p` MIDI key
 // (absent = the channel's root); `v` velocity 0..1 (absent = 1).
+import { migrateSatParams } from './saturator';
 import { SAMPLE_ROOT, TOTAL_BEATS, VOL_UNITY, type Channel, type Id, type Inst, type Note, type Op, type Pattern, type Project } from '../api/types';
 import { SYNTH_CATALOG } from '../api/synthCatalog';
 import { synthError } from './synth';
@@ -64,6 +65,8 @@ export function migrateProject(p: Project) {
   for (const i of INSTS) if (used.has(i)) channelForInst(p, i);
   for (const pt of p.patterns) resolveNotes(p, pt.notes);
   if (!p.channels?.length) for (const i of INSTS) channelForInst(p, i);
+  // saturator parameters from before the character saturator
+  for (const ins of p.inserts) for (const fx of ins.fx) if (fx.type === 'sat' && migrateSatParams(fx.params)) fx.preset = null;
 }
 
 /** Clips showing exactly one whole pass of the pattern (offset 0, old length) follow a length change. */

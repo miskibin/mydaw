@@ -214,7 +214,8 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 if plugin_changed {
                     return Err(OpError::Invalid("a VST3 slot cannot swap its plugin; remove and add it".into()));
                 }
-                let bypass_changed = old.bypass != fx.bypass;
+                // a parameter that changes the effect's latency (look-ahead) re-plans the PDC
+                let bypass_changed = old.bypass != fx.bypass || crate::catalog::latency(old, 48000.0) != crate::catalog::latency(fx, 48000.0);
                 let m = p.inserts.iter_mut().find(|m| m.id == *insert_id).unwrap();
                 let slot = m.fx.iter_mut().find(|f| f.id == fx.id).unwrap();
                 *slot = fx.clone();

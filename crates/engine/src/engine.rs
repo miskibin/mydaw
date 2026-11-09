@@ -96,7 +96,11 @@ struct RecBuf {
     start: f64,
     /// Frames of input to drop from the front so the take lines up with what the
     /// performer heard: device round trip + plugin delay compensation of the playback.
+    /// Set at the start from the device estimate then; replaced in [`RecBuf::resolve`] by the
+    /// mean round trip measured while the take was capturing, when there is one.
     skip: usize,
+    /// The mixer's playback latency `skip` was taken with: the graph keeps it until the take ends.
+    pdc: usize,
     /// Loop range when recording in passes.
     lap: Option<(f64, f64)>,
     sr: u32,
@@ -122,10 +126,15 @@ impl RecBuf {
             _ => self.start,
         }
     }
-    /// A punch-in take starts where the audio thread began capturing.
-    fn resolve_start(&mut self, shared: &Shared) {
+    /// Reads what the audio thread learned during the take (before its `Shared` goes away):
+    /// a punch-in take starts where capturing began, and the device round trip is the one
+    /// measured while it captured (the estimate at the start may not have settled).
+    fn resolve(&mut self, shared: &Shared) {
         if self.start.is_nan() {
             self.start = shared.rec_start();
+        }
+        if let Some(io) = shared.take_latency() {
+            self.skip = io as usize + self.pdc;
         }
     }
     fn push(&mut self, x: f32) {
@@ -182,6 +191,9 @@ struct Core {
     fx_errors: HashMap<Id, String>,
     wires: Option<Wires>,
     take: Option<RecBuf>,
+    /// A mixer change that would alter the playback latency arrived during a take: the
+    /// audio thread keeps the old graph until the take ends (its `skip` stays right).
+    graph_deferred: bool,
     watch: Vec<Id>,
     /// Comp id → take played instead of the comp (live only: not saved, not undone).
     audition: HashMap<Id, Id>,
@@ -263,6 +275,7 @@ impl Engine {
                 fx_errors: HashMap::new(),
                 wires: None,
                 take: None,
+                graph_deferred: false,
                 watch: vec![],
                 audition: HashMap::new(),
                 midi: MidiState::default(),
@@ -344,7 +357,7 @@ impl Engine {
             let mut c = self.core.lock();
             let old = self.shared.lock().clone();
             if let Some(t) = c.take.as_mut() {
-                t.resolve_start(&old);
+                t.resolve(&old);
             }
         }
         *self.shared.lock() = shared.clone();
@@ -601,8 +614,11 @@ impl Engine {
     fn new_take(&self, c: &Core, track: usize, start: f64, lap: Option<(f64, f64)>) -> Option<RecBuf> {
         let w = c.wires.as_ref()?;
         let sr = w.sr as u32;
-        let skip = self.shared().io_latency() as usize + playback_latency(&c.project, w.sr);
-        Some(RecBuf { track, start, skip, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
+        let pdc = playback_latency(&c.project, w.sr);
+        let shared = self.shared();
+        let skip = shared.io_latency() as usize + pdc;
+        shared.reset_take_latency();
+        Some(RecBuf { track, start, skip, pdc, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
     }
 
     pub fn watch_fx(&self, ids: &[Id]) {
@@ -871,7 +887,10 @@ impl Engine {
     /// the calibrated insert chain for its track. The key comes from `beat_clip` when given,
     /// else from the project's other audio (tracks not routed to the vocal's insert); the
     /// level suggestion needs `beat_clip`. Slow (seconds): call off the UI thread.
-    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
+    ///
+    /// `bake_rider`: the plan's rider comes out of the chain into `rider_bake`, for
+    /// [`Self::bake_rider`] (no live look-ahead on the insert, so no playback delay).
+    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style, bake_rider: bool) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
         let clip = self.audio_clip(clip_id)?;
         let region = |cl: &Clip| -> Result<(Vec<f32>, f32), EngineError> {
             let (audio, bpm) = {
@@ -909,14 +928,82 @@ impl Engine {
             }
             None => None,
         };
-        Ok(crate::autovocal::plan(&crate::autovocal::PlanInput {
+        let plan = crate::autovocal::plan(&crate::autovocal::PlanInput {
             vocal: &vocal,
             sr,
             style,
             key,
             pitch: pitch.as_deref(),
             beat: beat.as_ref().map(|(x, s)| (x.as_slice(), *s)),
-        }))
+        });
+        Ok(if bake_rider { plan.baked() } else { plan })
+    }
+
+    /// Renders what an audio clip plays (its region, clip gain, normalise/reverse and pitch
+    /// edits; not its fades, which stay on the clip) through the Vocal Rider offline, as
+    /// `autovocal::render` does — the rider's latency removed, sample-aligned, any
+    /// look-ahead — into a new source, and points the clip at it (gain 0 dB, no
+    /// norm/rev/pitch edits, the region's sub-sample start kept as the offset). The original
+    /// source stays in the project. One undo step. `params` are Rider params (catalog ids;
+    /// missing ones take the catalog defaults), e.g. an auto-vocal plan's `rider_bake`.
+    /// Returns (new source id, clip id). Slow (the whole region is rendered): call it off
+    /// the UI thread.
+    pub fn bake_rider(&self, clip_id: Id, params: &std::collections::BTreeMap<String, f64>) -> Result<(Id, Id), EngineError> {
+        let (clip, audio, bpm, src_name, color) = {
+            let mut c = self.core.lock();
+            let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
+            if clip.kind != ClipKind::Audio {
+                return Err(EngineError::Msg("only audio clips can be baked".into()));
+            }
+            let bpm = c.project.bpm;
+            let audio = c.sources.clip_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            let src = c.project.sources.iter().find(|s| s.id == clip.source);
+            let (name, color) = src.map(|s| (s.name.clone(), s.color.clone())).unwrap_or_else(|| ("Vocal".into(), "#e05263".into()));
+            (clip, audio, bpm, name, color)
+        };
+        let sr = audio.sr;
+        let (a, b) = crate::sources::clip_region(&clip, bpm, audio.seconds());
+        // the same frames `auto_vocal_plan` measures (truncated start); the fraction of a
+        // frame the region starts past it stays on the clip as its offset
+        let pos = a * sr as f64;
+        let i0 = (pos as usize).min(audio.frames);
+        let i1 = ((b * sr as f64) as usize).clamp(i0, audio.frames);
+        if i1 - i0 < 16 {
+            return Err(EngineError::Msg("the clip is empty".into()));
+        }
+        // two guard frames (as in `flatten_comp`): playback reads a frame or two past the
+        // region's last whole frame (interpolation, the clip end landing between frames)
+        let i1 = (i1 + 2).min(audio.frames);
+        let g = crate::dsp::db_to_gain(clip.gain);
+        let content = audio.content();
+        let l: Vec<f32> = (i0..i1).map(|i| content[2 * i] * g).collect();
+        let r: Vec<f32> = (i0..i1).map(|i| content[2 * i + 1] * g).collect();
+        let (yl, yr) = crate::autovocal::render_stereo(FxKind::Rider, params, &l, &r, sr as f32);
+        let data: Vec<f32> = yl.iter().zip(&yr).flat_map(|(a, b)| [*a, *b]).collect();
+        let spb = 60.0 / bpm;
+        let offset = (pos - i0 as f64) / sr as f64 / spb;
+
+        let mut c = self.core.lock();
+        let now = c.project.clips.iter().find(|x| x.id == clip_id).cloned();
+        if now.as_ref() != Some(&clip) || c.project.bpm != bpm {
+            return Err(EngineError::Msg("the clip changed while the rider was rendering; try again".into()));
+        }
+        let id = c.project.alloc_id();
+        let name = format!("{src_name} (rider)");
+        let path = fresh_path(&audio_dir(&c), &format!("{} rider {}", sanitize(&src_name), id));
+        write_wav(&path, &data, sr)?;
+        let baked = Audio::from_stereo(data, sr, audio.channels);
+        let before = c.project.clone();
+        c.project.sources.push(Source { id, name, color, path: path.display().to_string(), dur: baked.seconds(), sr, ch: audio.channels, peak_db: crate::dsp::gain_to_db(baked.peak()) });
+        c.sources.insert(id, Arc::new(baked));
+        if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
+            *x = Clip { source: id, offset, gain: 0.0, norm: false, rev: false, tune: None, ..clip };
+        }
+        push_undo(&mut c, before);
+        c.revision += 1;
+        self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+        self.changed(c);
+        Ok((id, clip_id))
     }
 
     /// Peaks of what the clip actually plays (including pitch edits), for drawing.
@@ -1293,7 +1380,11 @@ impl Engine {
         let (sr, max_block) = (w.sr, w.max_block);
         // synth instances first, so a new timeline never plays a channel without one
         sync_synths(c, sr);
-        if d.mixer {
+        // a take's alignment assumes the latency at its start: hold latency changes back
+        let defer = d.mixer && c.take.as_ref().is_some_and(|t| t.pdc != playback_latency(&c.project, sr));
+        c.graph_deferred |= defer;
+        if d.mixer && !defer {
+            c.graph_deferred = false;
             let now: HashSet<Id> = c.project.inserts.iter().flat_map(|m| m.fx.iter().map(|f| f.id)).collect();
             for gone in c.live_fx.difference(&now).copied().collect::<Vec<_>>() {
                 self.factory.release(gone);
@@ -1305,7 +1396,7 @@ impl Engine {
             c.live_fx = graph.inserts.iter().flat_map(|i| i.fx.iter().map(|s| s.id)).collect();
             c.sent_params = c.project.inserts.iter().flat_map(|m| m.fx.iter()).map(|f| (f.id, fx_send(f))).collect();
             send(c, Cmd::Graph(Box::new(graph)));
-        } else if d.params {
+        } else if d.params || defer {
             send(c, Cmd::Mix(Box::new(mix_state(&c.project))));
             let changed: Vec<(Id, (Option<ParamBlock>, f32))> = c
                 .project
@@ -1360,7 +1451,7 @@ impl Engine {
             let _ = sr;
             let ids: Vec<Id> = c.project.inserts.iter().map(|m| m.id).collect();
             if let Some(t) = c.take.as_mut() {
-                t.resolve_start(&shared);
+                t.resolve(&shared);
             }
             let rec = c.take.as_mut().filter(|t| !t.start.is_nan()).map(|t| {
                 let new = t.peaks[t.peaks_sent..].to_vec();
@@ -1398,9 +1489,12 @@ impl Engine {
         let shared = self.shared();
         let mut c = self.core.lock();
         if let Some(t) = c.take.as_mut() {
-            t.resolve_start(&shared);
+            t.resolve(&shared);
         }
         self.finalize_take(&mut c);
+        if c.graph_deferred {
+            self.sync(&mut c, Dirty { timeline: false, mixer: true, params: true });
+        }
     }
 
     fn finalize_take(&self, c: &mut Core) {
@@ -1824,9 +1918,9 @@ fn audible_tracks(p: &Project) -> Vec<(f32, bool)> {
     p.tracks.iter().map(|t| (fader_gain(t.vol), !t.muted && (!any_solo || t.solo))).collect()
 }
 
-fn audible_inserts(p: &Project) -> Vec<(Id, f32, f32, bool)> {
+fn audible_inserts(p: &Project) -> Vec<(Id, f32, f32, f32, bool)> {
     let any_solo = p.inserts.iter().any(|m| m.id != 0 && m.solo);
-    p.inserts.iter().map(|m| (m.id, fader_gain(m.vol), m.pan.clamp(-1.0, 1.0), !m.muted && (m.id == 0 || !any_solo || m.solo))).collect()
+    p.inserts.iter().map(|m| (m.id, fader_gain(m.vol), m.pan.clamp(-1.0, 1.0), if m.width.is_finite() { m.width.clamp(0.0, 2.0) } else { 1.0 }, !m.muted && (m.id == 0 || !any_solo || m.solo))).collect()
 }
 
 /// Frames between the timeline and the speakers inside the mixer: the slowest non-master
@@ -1914,7 +2008,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
         .inserts
         .iter()
         .zip(ins_state)
-        .map(|(m, (id, gain, pan, on))| {
+        .map(|(m, (id, gain, pan, width, on))| {
             let fx = m
                 .fx
                 .iter()
@@ -1944,7 +2038,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
                 .collect();
             let k = p.inserts.iter().position(|x| x.id == id).unwrap_or(0);
             let comp = if k == 0 { 0 } else { max_lat - lat[k] };
-            InsertRt::new(id, gain, pan, on, fx, max_block).with_delay(comp)
+            InsertRt::new(id, gain, pan, width, on, fx, max_block).with_delay(comp)
         })
         .collect();
     let track_state = audible_tracks(p);
@@ -1954,7 +2048,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
         .zip(track_state)
         .map(|(t, (gain, on))| TrackRt { insert: p.inserts.iter().position(|m| m.id == t.insert).unwrap_or(0), gain, on })
         .collect();
-    Graph::new(inserts, tracks, monitor_track(p), max_block)
+    Graph::new(inserts, tracks, monitor_track(p), max_block).with_latency(max_lat, lat.first().copied().unwrap_or(0))
 }
 
 /// `takes`: loaded audio by source id of every comp take and sampler channel.

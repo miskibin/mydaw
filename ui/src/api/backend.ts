@@ -3,7 +3,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
+  AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
   LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
@@ -52,8 +52,13 @@ export interface Backend {
   /** Tempo (BPM) and musical key of an audio clip, or key/tempo of the project's active audio clips (excluding `excludeFx`'s insert). */
   musicAnalyze(args?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis>;
   /** "Auto wokal": measures a vocal clip (key from `beatClipId`, else from the other tracks) and returns the calibrated
-   *  insert chain. Read-only; takes a few seconds per minute of audio. */
-  autoVocalPlan(args: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle }): Promise<AutoVocalPlan>;
+   *  insert chain. Read-only; takes a few seconds per minute of audio. `bakeRider`: the rider is left out of
+   *  `chain` and returned as `riderBake` — pass its params to `bakeRider` (no live look-ahead delay on the insert). */
+  autoVocalPlan(args: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle; bakeRider?: boolean }): Promise<AutoVocalPlan>;
+  /** Renders the Vocal Rider (`params`: catalog ids, e.g. `plan.riderBake.params`) into an audio clip's audio
+   *  (region, clip gain, norm/rev/pitch edits; fades stay) as a new source; the clip (same id) plays it with gain
+   *  0 dB. One undo step; the original source stays in the project. Slow: seconds per minute of audio. */
+  bakeRider(args: { clipId: Id; params: Record<string, number> }): Promise<{ sourceId: Id; clipId: Id }>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
   /** Renders a comp clip to a new source; the clip becomes an ordinary audio clip (one undo step). */
   flattenComp(clipId: Id): Promise<{ sourceId: Id }>;
@@ -70,6 +75,11 @@ export interface Backend {
   audioDevices(host: string): Promise<AudioDevices>;
   audioGetConfig(): Promise<AudioStatus>;
   audioSetConfig(cfg: AudioConfig): Promise<AudioStatus>;
+  /** Plays 8 clicks on the output (instead of the mix) for ~5 s while recording the input
+   *  (microphone at the speaker, or a cable from an output to an input) and finds them by
+   *  cross-correlation. Transport must be stopped. Saves nothing: apply `suggestedOffsetMs`
+   *  with `audioSetConfig({ ...cfg, recOffsetMs })`. Rejects when no click came back. */
+  audioMeasureLatency(): Promise<LatencyReport>;
   /** MIDI input ports the OS lists right now. */
   midiListDevices(): Promise<MidiDevice[]>;
   /** Choose the MIDI keyboard (null = none) and open it. Saved with the audio settings and reopened at startup. */
@@ -86,7 +96,7 @@ export interface Backend {
   projectOpen(path?: string): Promise<StateDto>;
   projectSave(saveAs?: boolean): Promise<{ path: string }>;
   /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
-  exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number }): Promise<ExportResult>;
+  exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult>;
   /** Abort an in-flight `exportAudio` before a file is written. */
   exportCancel(): Promise<void>;
   vst3Scan(rescan: boolean): Promise<Vst3Info[]>;
@@ -171,7 +181,8 @@ export function tauriBackend(): Backend {
     f0ModelStatus: () => invoke('f0_model_status'),
     f0ModelInstall: () => invoke('f0_model_install'),
     musicAnalyze: a => invoke('music_analyze', { clipId: a?.clipId ?? null, excludeFx: a?.excludeFx ?? null }),
-    autoVocalPlan: a => invoke('auto_vocal_plan', { clipId: a.clipId, beatClipId: a.beatClipId ?? null, style: a.style ?? null }),
+    autoVocalPlan: a => invoke('auto_vocal_plan', { clipId: a.clipId, beatClipId: a.beatClipId ?? null, style: a.style ?? null, bakeRider: a.bakeRider ?? null }),
+    bakeRider: a => invoke('bake_rider', { clipId: a.clipId, params: a.params }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
     flattenComp: clipId => invoke('flatten_comp', { clipId }),
     compAudition: (compId, takeId) => invoke('comp_audition', { compId, takeId }),
@@ -185,6 +196,7 @@ export function tauriBackend(): Backend {
     audioGetConfig: () => invoke('audio_get_config'),
     // Sent both as `config` and flattened, so either command signature deserialises it.
     audioSetConfig: cfg => invoke('audio_set_config', { config: cfg, ...cfg }),
+    audioMeasureLatency: () => invoke('audio_measure_latency'),
     midiListDevices: () => invoke('midi_list_devices'),
     midiSelectDevice: id => invoke('midi_select_device', { id }),
     midiStatus: () => invoke('midi_status'),
@@ -197,7 +209,7 @@ export function tauriBackend(): Backend {
     projectNew: () => invoke('project_new'),
     projectOpen: path => invoke('project_open', { path: path ?? null }),
     projectSave: saveAs => invoke('project_save', { saveAs: !!saveAs }),
-    exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate }),
+    exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, format: opts.format, mp3Kbps: opts.mp3Kbps }),
     exportCancel: () => invoke('export_cancel'),
     vst3Scan: rescan => invoke('vst3_scan', { rescan }),
     vst3Editor: (fxId, open) => invoke('vst3_editor', { fxId, open }),

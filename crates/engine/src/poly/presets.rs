@@ -86,15 +86,15 @@ pub fn all() -> Vec<Preset> {
     vec![
         // ------------------------------------------------ 808 / sub
         pr("808 Czysty", "808", &with(
-            &[(O1_WAVE, SINE), (O1_LEVEL, 90.0), (FLT_CUTOFF, 12000.0), (FLT_RES, 0.0), (AMP_A, 2.0), (AMP_D, 1.0), (AMP_S, 100.0), (AMP_R, 160.0), (MOD_A, 0.5), (MOD_D, 75.0), (MOD_S, 0.0), (MOD_R, 60.0), (V_MODE, LEGATO), (V_GLIDE, 110.0), (FX_DRIVE, 18.0), (FX_OUT, -14.4)],
+            &[(O1_WAVE, SINE), (O1_LEVEL, 90.0), (FLT_CUTOFF, 12000.0), (FLT_RES, 0.0), (AMP_A, 2.0), (AMP_D, 1.0), (AMP_S, 100.0), (AMP_R, 160.0), (MOD_A, 0.5), (MOD_D, 75.0), (MOD_S, 0.0), (MOD_R, 60.0), (V_MODE, LEGATO), (V_GLIDE, 110.0), (FX_DRIVE, 18.0), (FX_OUT, -12.8)],
             &[m(0, MENV, PITCH, st(24.0))],
         )),
         pr("808 Brudny", "808", &with(
-            &[(O1_WAVE, SINE), (O1_SHAPE, 45.0), (O1_LEVEL, 90.0), (O2_WAVE, TRI), (O2_LEVEL, 18.0), (FLT_CUTOFF, 6500.0), (FLT_RES, 25.0), (FLT_DRIVE, 48.0), (AMP_A, 1.5), (AMP_D, 1.0), (AMP_S, 100.0), (AMP_R, 180.0), (MOD_A, 0.5), (MOD_D, 55.0), (MOD_S, 0.0), (V_MODE, LEGATO), (V_GLIDE, 135.0), (FX_DRIVE, 30.0), (FX_OUT, -15.2)],
+            &[(O1_WAVE, SINE), (O1_SHAPE, 45.0), (O1_LEVEL, 90.0), (O2_WAVE, TRI), (O2_LEVEL, 18.0), (FLT_CUTOFF, 6500.0), (FLT_RES, 25.0), (FLT_DRIVE, 48.0), (AMP_A, 1.5), (AMP_D, 1.0), (AMP_S, 100.0), (AMP_R, 180.0), (MOD_A, 0.5), (MOD_D, 55.0), (MOD_S, 0.0), (V_MODE, LEGATO), (V_GLIDE, 135.0), (FX_DRIVE, 30.0), (FX_OUT, -12.6)],
             &[m(0, MENV, PITCH, st(31.0))],
         )),
         pr("808 Twardy", "808", &with(
-            &[(O1_WAVE, SINE), (O1_SHAPE, 100.0), (O1_LEVEL, 90.0), (SUB_LEVEL, 0.0), (FLT_CUTOFF, 4000.0), (FLT_RES, 15.0), (FLT_DRIVE, 80.0), (AMP_A, 1.0), (AMP_S, 100.0), (AMP_R, 140.0), (MOD_A, 0.5), (MOD_D, 35.0), (MOD_S, 0.0), (V_MODE, LEGATO), (V_GLIDE, 90.0), (FX_DRIVE, 45.0), (FX_OUT, -13.7)],
+            &[(O1_WAVE, SINE), (O1_SHAPE, 100.0), (O1_LEVEL, 90.0), (SUB_LEVEL, 0.0), (FLT_CUTOFF, 4000.0), (FLT_RES, 15.0), (FLT_DRIVE, 80.0), (AMP_A, 1.0), (AMP_S, 100.0), (AMP_R, 140.0), (MOD_A, 0.5), (MOD_D, 35.0), (MOD_S, 0.0), (V_MODE, LEGATO), (V_GLIDE, 90.0), (FX_DRIVE, 45.0), (FX_OUT, -10.6)],
             &[m(0, MENV, PITCH, st(24.0))],
         )),
         pr("Sub Bas", "808", &with(
@@ -109,16 +109,16 @@ pub fn all() -> Vec<Preset> {
         pr("Bas Pluck", "Bas", &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SQR), (O2_LEVEL, 45.0), (O2_COARSE, -12.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 380.0), (FLT_RES, 30.0), (FLT_ENV, 3.0), (MOD_A, 8.0), (MOD_D, 600.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 900.0), (AMP_S, 60.0), (AMP_R, 80.0), (V_MODE, MONO), (FX_OUT, -6.9)]),
         pr("Bas Analog", "Bas", &[(O1_WAVE, SQR), (O1_SHAPE, 20.0), (O1_LEVEL, 70.0), (O2_WAVE, SAW), (O2_LEVEL, 55.0), (O2_FINE, 6.0), (SUB_LEVEL, 30.0), (FLT_CUTOFF, 1200.0), (FLT_RES, 20.0), (FLT_KEY, 50.0), (FLT_ENV, 2.0), (MOD_A, 0.5), (MOD_D, 250.0), (MOD_S, 10.0), (AMP_A, 2.0), (AMP_S, 100.0), (AMP_R, 90.0), (V_MODE, LEGATO), (V_GLIDE, 30.0), (FX_OUT, -13.4)]),
         pr("Wobble", "Bas", &with(
-            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SQR), (O2_LEVEL, 55.0), (O2_COARSE, -12.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 20.0), (UNI_WIDTH, 30.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 300.0), (FLT_RES, 55.0), (FLT_DRIVE, 50.0), (AMP_A, 2.0), (AMP_S, 100.0), (AMP_R, 100.0), (L1_WAVE, 0.0), (L1_SYNC, 6.0), (V_MODE, LEGATO), (V_GLIDE, 25.0), (FX_DRIVE, 25.0), (FX_OUT, -13.3)],
+            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SQR), (O2_LEVEL, 55.0), (O2_COARSE, -12.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 20.0), (UNI_WIDTH, 30.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 300.0), (FLT_RES, 55.0), (FLT_DRIVE, 50.0), (AMP_A, 2.0), (AMP_S, 100.0), (AMP_R, 100.0), (L1_WAVE, 0.0), (L1_SYNC, 6.0), (V_MODE, LEGATO), (V_GLIDE, 25.0), (FX_DRIVE, 25.0), (FX_OUT, -11.2)],
             &[m(0, LFO1, CUT, oct(2.6))],
         )),
         // ------------------------------------------------ pluck
-        pr("Pluck Trap", "Pluck", &[(FX_DRIVE, 22.0), (O1_WAVE, SAW), (O1_COARSE, 12.0), (O1_LEVEL, 60.0), (O2_WAVE, SQR), (O2_LEVEL, 50.0), (FLT_CUTOFF, 950.0), (FLT_RES, 20.0), (FLT_ENV, 4.0), (MOD_A, 0.5), (MOD_D, 450.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 1100.0), (AMP_S, 0.0), (AMP_R, 150.0), (FX_DELAY, 18.0), (FX_DTIME, 3.0), (FX_DFB, 30.0), (FX_REVERB, 15.0), (FX_RSIZE, 1.6), (FX_OUT, 0.1)]),
+        pr("Pluck Trap", "Pluck", &[(FX_DRIVE, 22.0), (O1_WAVE, SAW), (O1_COARSE, 12.0), (O1_LEVEL, 60.0), (O2_WAVE, SQR), (O2_LEVEL, 50.0), (FLT_CUTOFF, 950.0), (FLT_RES, 20.0), (FLT_ENV, 4.0), (MOD_A, 0.5), (MOD_D, 450.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 1100.0), (AMP_S, 0.0), (AMP_R, 150.0), (FX_DELAY, 18.0), (FX_DTIME, 3.0), (FX_DFB, 30.0), (FX_REVERB, 15.0), (FX_RSIZE, 1.6), (FX_OUT, -0.4)]),
         pr("Pluck Szklany", "Pluck", &with(
-            &[(FX_DRIVE, 12.0), (O1_WAVE, AIR), (O1_LEVEL, 70.0), (O2_WAVE, DIGITAL), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (FLT_CUTOFF, 2000.0), (FLT_RES, 15.0), (FLT_ENV, 3.0), (MOD_A, 0.5), (MOD_D, 300.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 1600.0), (AMP_S, 0.0), (AMP_R, 400.0), (FX_CHORUS, 30.0), (FX_REVERB, 25.0), (FX_RSIZE, 2.2), (FX_OUT, 1.9)],
+            &[(FX_DRIVE, 12.0), (O1_WAVE, AIR), (O1_LEVEL, 70.0), (O2_WAVE, DIGITAL), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (FLT_CUTOFF, 2000.0), (FLT_RES, 15.0), (FLT_ENV, 3.0), (MOD_A, 0.5), (MOD_D, 300.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 1600.0), (AMP_S, 0.0), (AMP_R, 400.0), (FX_CHORUS, 30.0), (FX_REVERB, 25.0), (FX_RSIZE, 2.2), (FX_OUT, 1.8)],
             &[m(0, VEL, CUT, oct(1.0))],
         )),
-        pr("Pluck Ciepły", "Pluck", &[(FX_DRIVE, 15.0), (O1_WAVE, TRI), (O1_LEVEL, 70.0), (O2_WAVE, SAW), (O2_LEVEL, 45.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 15.0), (UNI_WIDTH, 60.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1500.0), (FLT_RES, 10.0), (FLT_ENV, 2.5), (MOD_A, 0.5), (MOD_D, 250.0), (MOD_S, 0.0), (AMP_A, 1.5), (AMP_D, 1400.0), (AMP_S, 0.0), (AMP_R, 300.0), (FX_REVERB, 20.0), (FX_OUT, 0.6)]),
+        pr("Pluck Ciepły", "Pluck", &[(FX_DRIVE, 15.0), (O1_WAVE, TRI), (O1_LEVEL, 70.0), (O2_WAVE, SAW), (O2_LEVEL, 45.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 15.0), (UNI_WIDTH, 60.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1500.0), (FLT_RES, 10.0), (FLT_ENV, 2.5), (MOD_A, 0.5), (MOD_D, 250.0), (MOD_S, 0.0), (AMP_A, 1.5), (AMP_D, 1400.0), (AMP_S, 0.0), (AMP_R, 300.0), (FX_REVERB, 20.0), (FX_OUT, 0.5)]),
         // ------------------------------------------------ lead
         pr("Supersaw Lead", "Lead", &with(
             &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SAW), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (UNI_VOICES, 3.0), (UNI_DETUNE, 45.0), (UNI_WIDTH, 85.0), (FLT_CUTOFF, 7000.0), (FLT_RES, 10.0), (AMP_A, 5.0), (AMP_D, 500.0), (AMP_S, 85.0), (AMP_R, 250.0), (L1_WAVE, 0.0), (L1_RATE, 5.5), (V_GLIDE, 55.0), (FX_DELAY, 15.0), (FX_DTIME, 3.0), (FX_REVERB, 18.0), (FX_OUT, -8.0)],
@@ -133,7 +133,7 @@ pub fn all() -> Vec<Preset> {
             &[m(0, LFO1, PITCH, st(0.15)), m(1, VIB, PITCH, st(0.4))],
         )),
         pr("Lead Ostry", "Lead", &with(
-            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SQR), (O2_LEVEL, 30.0), (O2_COARSE, 7.0), (UNI_VOICES, 2.0), (UNI_DETUNE, 30.0), (UNI_WIDTH, 70.0), (FLT_CUTOFF, 9000.0), (FLT_RES, 20.0), (FLT_ENV, 1.0), (MOD_D, 200.0), (MOD_S, 0.0), (AMP_A, 2.0), (AMP_S, 90.0), (AMP_R, 160.0), (L1_RATE, 5.5), (V_MODE, MONO), (V_GLIDE, 35.0), (FX_DRIVE, 35.0), (FX_DELAY, 12.0), (FX_DTIME, 2.0), (FX_REVERB, 12.0), (FX_OUT, -12.2)],
+            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SQR), (O2_LEVEL, 30.0), (O2_COARSE, 7.0), (UNI_VOICES, 2.0), (UNI_DETUNE, 30.0), (UNI_WIDTH, 70.0), (FLT_CUTOFF, 9000.0), (FLT_RES, 20.0), (FLT_ENV, 1.0), (MOD_D, 200.0), (MOD_S, 0.0), (AMP_A, 2.0), (AMP_S, 90.0), (AMP_R, 160.0), (L1_RATE, 5.5), (V_MODE, MONO), (V_GLIDE, 35.0), (FX_DRIVE, 35.0), (FX_DELAY, 12.0), (FX_DTIME, 2.0), (FX_REVERB, 12.0), (FX_OUT, -8.5)],
             &[m(0, VIB, PITCH, st(0.5))],
         )),
         // ------------------------------------------------ pad
@@ -164,7 +164,7 @@ pub fn all() -> Vec<Preset> {
         )),
         // ------------------------------------------------ brass / strings
         pr("Brass", "Dęte/Smyczki", &with(
-            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SAW), (O2_LEVEL, 40.0), (O2_FINE, 8.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 15.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 800.0), (FLT_RES, 10.0), (FLT_KEY, 40.0), (FLT_ENV, 2.5), (MOD_A, 40.0), (MOD_D, 400.0), (MOD_S, 40.0), (MOD_R, 200.0), (AMP_A, 30.0), (AMP_D, 300.0), (AMP_S, 85.0), (AMP_R, 200.0), (L1_RATE, 5.0), (FX_DRIVE, 15.0), (FX_REVERB, 20.0), (FX_OUT, -7.6)],
+            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SAW), (O2_LEVEL, 40.0), (O2_FINE, 8.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 15.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 800.0), (FLT_RES, 10.0), (FLT_KEY, 40.0), (FLT_ENV, 2.5), (MOD_A, 40.0), (MOD_D, 400.0), (MOD_S, 40.0), (MOD_R, 200.0), (AMP_A, 30.0), (AMP_D, 300.0), (AMP_S, 85.0), (AMP_R, 200.0), (L1_RATE, 5.0), (FX_DRIVE, 15.0), (FX_REVERB, 20.0), (FX_OUT, -6.0)],
             &[m(0, VIB, PITCH, st(0.4))],
         )),
         pr("Smyczki", "Dęte/Smyczki", &with(
@@ -172,9 +172,9 @@ pub fn all() -> Vec<Preset> {
             &[m(0, LFO1, PITCH, st(0.08))],
         )),
         // ------------------------------------------------ arp
-        pr("Arp Cyfrowy", "Arp", &[(FX_DRIVE, 18.0), (O1_WAVE, DIGITAL), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (FLT_CUTOFF, 3000.0), (FLT_RES, 15.0), (FLT_ENV, 2.0), (MOD_D, 250.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 700.0), (AMP_S, 10.0), (AMP_R, 120.0), (FX_DELAY, 30.0), (FX_DTIME, 3.0), (FX_DFB, 45.0), (FX_REVERB, 15.0), (FX_OUT, 0.1)]),
+        pr("Arp Cyfrowy", "Arp", &[(FX_DRIVE, 18.0), (O1_WAVE, DIGITAL), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (FLT_CUTOFF, 3000.0), (FLT_RES, 15.0), (FLT_ENV, 2.0), (MOD_D, 250.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 700.0), (AMP_S, 10.0), (AMP_R, 120.0), (FX_DELAY, 30.0), (FX_DTIME, 3.0), (FX_DFB, 45.0), (FX_REVERB, 15.0), (FX_OUT, -0.2)]),
         pr("Arp Puls", "Arp", &with(
-            &[(FX_DRIVE, 12.0), (O1_WAVE, SQR), (O1_LEVEL, 75.0), (FLT_CUTOFF, 2000.0), (FLT_RES, 40.0), (FLT_ENV, 3.0), (MOD_D, 220.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 700.0), (AMP_S, 0.0), (AMP_R, 100.0), (L2_RATE, 0.5), (FX_DELAY, 25.0), (FX_DTIME, 0.0), (FX_DFB, 40.0), (FX_REVERB, 12.0), (FX_OUT, -0.2)],
+            &[(FX_DRIVE, 12.0), (O1_WAVE, SQR), (O1_LEVEL, 75.0), (FLT_CUTOFF, 2000.0), (FLT_RES, 40.0), (FLT_ENV, 3.0), (MOD_D, 220.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 700.0), (AMP_S, 0.0), (AMP_R, 100.0), (L2_RATE, 0.5), (FX_DELAY, 25.0), (FX_DTIME, 0.0), (FX_DFB, 40.0), (FX_REVERB, 12.0), (FX_OUT, -0.9)],
             &[m(0, LFO2, SH1, 40.0), m(1, RND, CUT, oct(0.3))],
         )),
         // ------------------------------------------------ lo-fi
@@ -192,7 +192,7 @@ pub fn all() -> Vec<Preset> {
             &[m(0, MENV, PITCH, st(12.0))],
         )),
         pr("Zjazd", "FX", &with(
-            &[(FX_DRIVE, 50.0), (O1_WAVE, SAW), (O1_LEVEL, 70.0), (UNI_VOICES, 2.0), (UNI_DETUNE, 40.0), (UNI_WIDTH, 100.0), (NOISE_LEVEL, 40.0), (FLT_TYPE, BP), (FLT_CUTOFF, 2500.0), (FLT_RES, 30.0), (FLT_ENV, -3.0), (MOD_A, 0.5), (MOD_D, 1500.0), (MOD_S, 0.0), (AMP_A, 5.0), (AMP_D, 1800.0), (AMP_S, 0.0), (AMP_R, 1000.0), (FX_REVERB, 60.0), (FX_RSIZE, 4.5), (FX_OUT, 4.9)],
+            &[(FX_DRIVE, 50.0), (O1_WAVE, SAW), (O1_LEVEL, 70.0), (UNI_VOICES, 2.0), (UNI_DETUNE, 40.0), (UNI_WIDTH, 100.0), (NOISE_LEVEL, 40.0), (FLT_TYPE, BP), (FLT_CUTOFF, 2500.0), (FLT_RES, 30.0), (FLT_ENV, -3.0), (MOD_A, 0.5), (MOD_D, 1500.0), (MOD_S, 0.0), (AMP_A, 5.0), (AMP_D, 1800.0), (AMP_S, 0.0), (AMP_R, 1000.0), (FX_REVERB, 60.0), (FX_RSIZE, 4.5), (FX_OUT, 6.6)],
             &[m(0, MENV, PITCH, st(-36.0)), m(1, MENV, NOISE, 30.0)],
         )),
         pr("Szum Wiatru", "FX", &with(

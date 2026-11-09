@@ -1,12 +1,12 @@
 //! The synth's global effects after the voice sum: drive → chorus → ping-pong delay → reverb.
 //! Buffers are allocated in [`Fx::new`] (off the audio thread); processing never allocates.
-//! The reverb is the engine's own `reverb_v2`.
+//! The drive is the engine's character saturator (`dsp::saturator`, triode voicing, auto
+//! gain) and the reverb is the engine's own `reverb_v2`.
 
 use std::f32::consts::TAU;
 
 use super::params::{ix, Patch, DELAY_BEATS};
-use super::tables::bank;
-use super::voice::{tanh, Os2};
+use crate::dsp::saturator::{self, Settings as SatSettings};
 use crate::dsp::reverb_v2::{idx, ReverbV2};
 use crate::processor::{ParamBlock, ProcessCtx, Processor};
 
@@ -113,7 +113,8 @@ impl PingPong {
 
 pub struct Fx {
     sr: f32,
-    os: [Os2; 2],
+    sat: saturator::Core,
+    sat_set: SatSettings,
     chorus: Chorus,
     delay: PingPong,
     reverb: ReverbV2,
@@ -126,9 +127,14 @@ impl Fx {
         let mut reverb = ReverbV2::default();
         reverb.prepare(sr, max_chunk);
         let delay_len = (sr * 2.6) as usize + 8;
+        let sat_set = SatSettings { style: saturator::TRIODE, drive: 0.0, auto: true, mix: 0.0, ..Default::default() };
+        let mut sat = saturator::Core::default();
+        sat.set(&sat_set);
+        sat.prepare(sr, 2);
         Self {
             sr,
-            os: [Os2::default(); 2],
+            sat,
+            sat_set,
             chorus: Chorus { l: Line::new((sr * 0.03) as usize + 8), r: Line::new((sr * 0.03) as usize + 8), ph1: 0.0, ph2: 0.25 },
             delay: PingPong { l: Line::new(delay_len), r: Line::new(delay_len), d: 0.0, lp: 0.0, hp: 0.0 },
             reverb,
@@ -156,9 +162,7 @@ impl Fx {
     }
 
     pub fn reset(&mut self) {
-        for o in self.os.iter_mut() {
-            o.reset();
-        }
+        self.sat.reset();
         self.chorus.l.clear();
         self.chorus.r.clear();
         self.delay.l.clear();
@@ -169,27 +173,16 @@ impl Fx {
     }
 
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], p: &Patch, bpm: f64) {
-        let n = l.len();
         let sr = self.sr;
-        // drive: always through the oversampler, so turning it up never shifts the timing
-        let dr = p[ix::FX_DRIVE] * 0.01;
-        let hb = &bank().hb;
-        if dr > 0.0 {
-            let g = 1.0 + 30.0 * dr * dr;
-            let comp = g.powf(-0.4);
-            // the first 5 % of the knob blend in the shaper, so leaving 0 is continuous
-            let w = (dr * 20.0).min(1.0);
-            let f = |x: f32| x + (tanh(g * x) * comp - x) * w;
-            for i in 0..n {
-                l[i] = self.os[0].process(l[i], hb, f);
-                r[i] = self.os[1].process(r[i], hb, f);
-            }
-        } else {
-            for i in 0..n {
-                l[i] = self.os[0].process(l[i], hb, |x| x);
-                r[i] = self.os[1].process(r[i], hb, |x| x);
-            }
+        // drive: the saturator always runs (its latency stays put when the knob leaves 0);
+        // the first 5 % of the knob blends it in, so leaving 0 is continuous
+        let dr = (p[ix::FX_DRIVE] * 0.01).clamp(0.0, 1.0);
+        let want = SatSettings { drive: dr, mix: (dr * 20.0).min(1.0), ..self.sat_set };
+        if want != self.sat_set {
+            self.sat_set = want;
+            self.sat.set(&want);
         }
+        self.sat.process(l, Some(r));
         // Chorus, delay and reverb always run (while the instance is not idle) even at zero
         // mix: their lines then hold the recent signal, so turning a mix up (a preset change
         // on a held note) fades in a continuous wet signal instead of a wet signal that

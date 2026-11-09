@@ -2,6 +2,7 @@
 import type { Fx } from '../../api/types';
 import { SCOPE_LEN, type FxFrame } from '../../api/telemetry';
 import { clamp, dbg } from '../../lib/format';
+import { satDriveDb } from '../../lib/saturator';
 import { Layer } from '../../ui/frameLoop';
 import { MONO10, rgba, scope, T, TeleGate, type Viz } from './common';
 
@@ -16,13 +17,15 @@ export class SatViz implements Viz {
     this.sIn.set(a!.scopeIn); this.sOut.set(a!.scopeOut); return true;
   }
   draw(g: CanvasRenderingContext2D, W: number, H: number, fx: Fx) {
-    const S = Math.min(H, W * 0.36), dr = dbg(fx.params.drive ?? 0);
+    const S = Math.min(H, W * 0.36), dr = dbg(Math.min(satDriveDb(fx.params), 40) * 0.6);
+    // even-harmonic styles (Taśma, Transformator, Trioda) bend asymmetrically
+    const style = Math.round(fx.params.style ?? 0), asym = [0.18, 0.04, 0.12, 0.3, 0.02][style] ?? 0;
     g.fillStyle = T.viz; g.fillRect(0, 0, W, H);
-    g.drawImage(this.layer.get(W, H, 'sat' + dr + fx.bypass, c => {
+    g.drawImage(this.layer.get(W, H, 'sat' + dr + style + fx.bypass, c => {
       c.lineWidth = 1; c.strokeStyle = T.vizGrid; c.beginPath(); c.moveTo(S / 2, 0); c.lineTo(S / 2, S); c.moveTo(0, S / 2); c.lineTo(S, S / 2); c.stroke();
       c.strokeStyle = T.vizAxis; c.strokeRect(0.5, 0.5, S - 1, S - 1); c.strokeStyle = T.vizGrid2; c.beginPath(); c.moveTo(0, S); c.lineTo(S, 0); c.stroke();
       c.beginPath();
-      for (let i = 0; i <= 100; i++) { const x = i / 50 - 1, y = Math.tanh(clamp(x * dr, -1, 1) * 2.5) / Math.tanh(2.5), px = i / 100 * S, py = S / 2 - y * S / 2 * 0.95; i ? c.lineTo(px, py) : c.moveTo(px, py); }
+      for (let i = 0; i <= 100; i++) { const x = i / 50 - 1, xb = x * dr + asym * Math.min(1, dr / 4) * (1 - x * x), y = Math.tanh(clamp(xb, -1.2, 1.2) * 2.2) / Math.tanh(2.2), px = i / 100 * S, py = S / 2 - y * S / 2 * 0.95; i ? c.lineTo(px, py) : c.moveTo(px, py); }
       c.strokeStyle = fx.bypass ? T.vizLabel : T.amber; c.lineWidth = 2; c.stroke();
       const x0 = S + 14;
       c.strokeStyle = T.vizGrid; c.lineWidth = 1; c.beginPath(); c.moveTo(x0, H / 2); c.lineTo(W, H / 2); c.stroke();

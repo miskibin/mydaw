@@ -1,4 +1,6 @@
-import { For, Match, Show, Switch, onMount } from 'solid-js';
+import { createSignal, For, Match, Show, Switch, onMount } from 'solid-js';
+import type { MenuItem } from '../state/ui';
+import { menuGlyph, type MenuGlyph } from './menuIcons';
 import { closeMenu, U } from '../state/ui';
 import { S } from '../state/store';
 import { commit } from '../state/edit';
@@ -13,18 +15,54 @@ export function ContextMenu() {
       {menu => (
         <>
           <div class="backdrop" onPointerDown={closeMenu} onContextMenu={e => e.preventDefault()} />
-          <div class="menu" style={{ left: menu().x + 'px', top: menu().y + 'px' }} onPointerDown={e => e.stopPropagation()}>
-            <For each={menu().items}>
+          <MenuList items={menu().items} x={menu().x} y={menu().y} />
+        </>
+      )}
+    </Show>
+  );
+}
+
+/** One menu panel; `sub` items open a nested panel on hover. */
+function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolean }) {
+  const [open, setOpen] = createSignal<{ i: number; x: number; y: number } | null>(null);
+  let el!: HTMLDivElement;
+  const [pos, setPos] = createSignal({ x: props.x, y: props.y });
+  onMount(() => {
+    if (!props.sub) return;
+    const r = el.getBoundingClientRect();
+    setPos({ x: props.x, y: Math.max(4, Math.min(props.y, window.innerHeight - r.height - 4)) });
+  });
+  const openSub = (i: number, b: HTMLElement) => {
+    const r = b.getBoundingClientRect(), W = 230;
+    setOpen({ i, x: r.right + W > window.innerWidth ? r.left - W : r.right - 2, y: r.top - 5 });
+  };
+  const glyph = (it: { label: string }) => menuGlyph(it.label);
+  return (
+    <>
+          <div ref={el} class="menu" classList={{ submenu: !!props.sub }} style={{ left: pos().x + 'px', top: pos().y + 'px' }} onPointerDown={e => e.stopPropagation()}>
+            <For each={props.items}>
               {it => (
                 <Switch>
                   <Match when={it.t === 'title' && it}>{i => <div class="mt">{i().label}</div>}</Match>
                   <Match when={it.t === 'sep'}><div class="ms" /></Match>
+                  <Match when={it.t === 'sec' && it}>{i => <div class="msec">{i().label}</div>}</Match>
+                  <Match when={it.t === 'sub' && it}>
+                    {i => {
+                      const idx = props.items.indexOf(i());
+                      return (
+                        <button class="mi" classList={{ hot: open()?.i === idx }} onPointerEnter={e => openSub(idx, e.currentTarget)} onClick={e => openSub(idx, e.currentTarget)}>
+                          <span class="row" style={{ gap: '8px' }}><MenuIco g={glyph(i())} /><span>{i().label}</span></span>
+                          <span class="kbd">›</span>
+                        </button>
+                      );
+                    }}
+                  </Match>
                   <Match when={it.t === 'item' && it}>
                     {i => (
-                      <button class="mi" classList={{ danger: !!i().danger, dis: !!i().disabled }} title={i().title ?? ''}
+                      <button class="mi" classList={{ danger: !!i().danger, dis: !!i().disabled }} title={i().title ?? ''} onPointerEnter={() => setOpen(null)}
                         onClick={() => { if (i().disabled) return; closeMenu(); i().act(); }}>
                         <span class="row" style={{ gap: '8px' }}>
-                          <Show when={i().icon}>
+                          <Show when={i().icon} fallback={<MenuIco g={glyph(i())} />}>
                             <span class="tile" style={{ width: '18px', height: '18px', 'border-radius': '4px', background: (i().iconColor ?? '#9aa2ad') + '26', color: i().iconColor ?? 'var(--fg3)' }}>
                               <Icon d={i().icon!} size={12} sw={2.2} />
                             </span>
@@ -97,8 +135,18 @@ export function ContextMenu() {
               )}
             </For>
           </div>
-        </>
-      )}
-    </Show>
+          <Show when={open()}>{o => {
+            const it = props.items[o().i];
+            return it && it.t === 'sub' ? <MenuList items={it.items} x={o().x} y={o().y} sub /> : null;
+          }}</Show>
+    </>
+  );
+}
+
+function MenuIco(props: { g: MenuGlyph | null }) {
+  return (
+    <span class="mico">
+      <Show when={props.g}>{g => <svg viewBox={g().vb} width="12" height="12" fill="currentColor"><path d={g().d} /></svg>}</Show>
+    </span>
   );
 }
