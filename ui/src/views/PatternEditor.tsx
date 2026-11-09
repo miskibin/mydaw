@@ -12,7 +12,7 @@ import {
 import { NOTE_NAMES } from '../lib/pitch';
 import { commit, Gesture } from '../state/edit';
 import {
-  addBuiltin, addSampler, addSamplerFiles, audition, chanById, chanKindLabel, chanOp, channels, cloneChannel, closePattern, curPat,
+  addBuiltin, addSampler, addSamplerFiles, addSynth, audition, chanById, chanKindLabel, chanOp, channels, cloneChannel, closePattern, curPat,
   deleteChannel, newPattern, openPattern, patFront, patOp, playStep, previewPattern, putNotes, selectChannel, setBars, setChannel,
   setView, togglePreview, toggleChanMute, toggleChanSolo, patPlayhead,
 } from '../state/pattern';
@@ -196,6 +196,15 @@ function chanMenu(c: Channel, x: number, y: number) {
 function addChannelMenu(x: number, y: number) {
   const items: MenuItem[] = [{ t: 'title', label: 'Wbudowane instrumenty' }];
   for (const i of INSTS) items.push({ t: 'item', label: INST_NAME[i], act: () => addBuiltin(i) });
+  const syn = S.catalog?.synth;
+  if (syn) {
+    items.push({ t: 'sep' }, { t: 'title', label: 'Syntezator' });
+    for (const g of syn.categories) {
+      const ps = syn.presets.filter(p => p.category === g);
+      if (ps.length) items.push({ t: 'sub', label: g, items: ps.map(p => ({ t: 'item', label: p.name, act: () => addSynth(p.name) }) as MenuItem) });
+    }
+    items.push({ t: 'item', label: 'Pusty syntezator', act: () => addSynth(null) });
+  }
   items.push({ t: 'sep' }, { t: 'title', label: 'Sampler (one-shot, wysokość z nuty)' });
   for (const s of S.project.sources.slice(0, 14)) items.push({ t: 'item', label: s.name, kbd: s.dur.toFixed(1) + ' s', act: () => addSampler(s.id) });
   items.push({ t: 'item', label: 'Plik z dysku…', act: () => void addSamplerFiles(null) });

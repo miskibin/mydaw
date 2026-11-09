@@ -1,5 +1,6 @@
 // Pattern editor commands: the window, channels, auditions and the pattern loop preview.
 // Every edit is an op (putPattern / putChannel / removeChannel) and one undo step.
+import { newSynthChannel } from '../lib/synth';
 import { prefs } from './prefs';
 import { be } from '../api/backend';
 import { SAMPLE_ROOT, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
@@ -100,6 +101,14 @@ export function addBuiltin(inst: Inst) {
   commit([chanOp(c)], 'Dodaj kanał');
   selectChannel(c.id);
   say('Dodano kanał ' + INST_NAME[inst]);
+}
+/** A new channel of the built-in synth playing factory preset `name` (or the blank patch). */
+export function addSynth(name: string | null) {
+  const cat = S.catalog?.synth; if (!cat) { say('Syntezator niedostępny'); return; }
+  const c = newSynthChannel(cat, allocId(), name);
+  commit([chanOp(c)], 'Dodaj syntezator');
+  selectChannel(c.id);
+  say('Syntezator: ' + (name ?? 'pusty dźwięk') + ' — klik w nazwę kanału = edycja dźwięku');
 }
 export function addSampler(sourceId: Id) {
   const s = S.project.sources.find(x => x.id === sourceId); if (!s) return;

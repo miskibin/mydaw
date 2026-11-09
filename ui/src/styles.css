@@ -704,3 +704,16 @@ select option { background: var(--bg4); color: var(--fg); }
 /* playhead layers: sticky like the canvases (height 0, so they take no room in the flow) */
 .phlayer { position: sticky; height: 0; z-index: 3; pointer-events: none; overflow: visible; }
 .phlayer > .phead { position: absolute; top: 0; left: 0; }
+
+/* synth page in the channel window (views/SynthPanel.tsx) */
+.synthpanel { display: flex; flex-direction: column; max-height: calc(100vh - 200px); }
+.synthbar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.synthbar .arrow { width: 24px; height: 26px; border: 1px solid var(--line2); border-radius: 4px; background: var(--bg3); color: var(--fg2); cursor: pointer; }
+.synthpreset { display: flex; align-items: baseline; gap: 8px; min-width: 220px; height: 26px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 4px; background: var(--bg1); color: var(--fg-hi); font: 600 12px var(--sans); cursor: pointer; text-align: left; }
+.synthpreset .cat { font: 500 10px var(--mono); color: var(--fg4); margin-left: auto; }
+.synthsecs { display: flex; flex-wrap: wrap; gap: 4px 0; padding: 4px 6px 10px; overflow-y: auto; }
+.synthsec { padding: 6px 10px; border-right: 1px solid var(--line); }
+.synthsec .sechd { margin-bottom: 4px; }
+.synthknobs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.synthchoice { display: flex; flex-direction: column; gap: 3px; font: 600 9px var(--sans); color: var(--fg4); text-transform: uppercase; letter-spacing: .05em; }
+.synthchoice .sel { height: 22px; font-size: 11px; text-transform: none; }
