@@ -200,7 +200,9 @@ function Hint(props: { fx: Fx }) { return <span class="hint">{HINTS[props.fx.typ
 // Choices render as segmented buttons; `stack` puts items in a column; `x` is a custom widget.
 type Item = { id: string; size?: KnobSize; ends?: [string, string] | ((fx: Fx) => [string, string] | undefined); labels?: string[]; danger?: number; small?: boolean }
   | { stack: Item[] } | { x: 'fetMeter' };
-type Section = { title: string; items: Item[] };
+/** `adv`: shown only after the window's "Zaawansowane" toggle (keeps the first view simple). */
+type Section = { title: string; items: Item[]; adv?: boolean };
+const [advOpen, setAdvOpen] = createSignal<Record<number, boolean>>({});
 const LAYOUT: Partial<Record<FxKind, Section[]>> = {
   comp: [
     { title: 'Kompresja', items: [{ id: 'thr', size: 'lg' }, { id: 'ratio', size: 'lg' }] },
@@ -216,6 +218,8 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
   limit: [
     { title: 'Głośność', items: [{ id: 'gain', size: 'lg' }] },
     { title: 'Sufit', items: [{ id: 'ceil' }] },
+    { title: 'Czas', adv: true, items: [{ id: 'rel' }, { stack: [{ id: 'auto', small: true }] }, { id: 'look', size: 'sm' }] },
+    { title: 'Wyjście', adv: true, items: [{ id: 'link', size: 'sm' }, { id: 'out', size: 'sm' }] },
   ],
   sat: [
     { title: 'Przester', items: [{ id: 'drive', size: 'lg' }] },
@@ -226,9 +230,11 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
     { title: 'Wyjście', items: [{ id: 'mix' }] },
   ],
   reverb: [
-    { title: 'Przestrzeń', items: [{ id: 'size', size: 'lg' }, { id: 'pre' }, { id: 'width' }] },
-    { title: 'Barwa', items: [{ id: 'lo', size: 'sm' }, { id: 'hi', size: 'sm' }] },
-    { title: 'Wyjście', items: [{ id: 'mix', size: 'lg' }] },
+    { title: 'Przestrzeń', items: [{ stack: [{ id: 'space', small: true }] }, { id: 'size', size: 'lg' }, { id: 'pre' }] },
+    { title: 'Barwa', items: [{ id: 'tone', ends: ['ciemno', 'jasno'] }] },
+    { title: 'Ilość', items: [{ id: 'mix', size: 'lg' }] },
+    { title: 'Filtry', adv: true, items: [{ id: 'lo', size: 'sm' }, { id: 'hi', size: 'sm' }, { id: 'bass', size: 'sm' }] },
+    { title: 'Charakter', adv: true, items: [{ id: 'early', size: 'sm' }, { id: 'width', size: 'sm' }, { id: 'mod', size: 'sm' }, { id: 'duck', size: 'sm' }] },
   ],
   deess: [
     { title: 'Wykrywanie', items: [{ id: 'thr', size: 'lg' }, { id: 'freq' }, { stack: [{ id: 'mode', small: true }] }] },
@@ -271,12 +277,22 @@ function Sections(props: { fx: Fx; slim?: boolean }) {
     const placed = new Set<string>();
     const walk = (xs: Item[]) => xs.forEach(x => ('stack' in x ? walk(x.stack) : 'id' in x ? placed.add(x.id) : null));
     lay.forEach(s => walk(s.items));
+    const known = new Set(defs.map(p => p.id));
     const rest = defs.filter(p => !placed.has(p.id) && !(props.fx.type === 'tune' && ['key', 'scale', 'voice'].includes(p.id)));
-    return rest.length ? [...lay, { title: 'Inne', items: rest.map(p => ({ id: p.id })) }] : lay;
+    // drop layout items the engine does not define (older catalog), then sections left empty
+    const keep = (xs: Item[]): Item[] => xs.flatMap((x): Item[] => {
+      if ('stack' in x) { const k = keep(x.stack); return k.length ? [{ stack: k }] : []; }
+      return 'id' in x && !known.has(x.id) ? [] : [x];
+    });
+    const all = lay.map(s => ({ ...s, items: keep(s.items) })).filter(s => s.items.length);
+    return rest.length ? [...all, { title: 'Inne', adv: true, items: rest.map(p => ({ id: p.id })) }] : all;
   };
+  const hasAdv = () => secs().some(s => s.adv);
+  const adv = () => !!advOpen()[props.fx.id];
+  const shown = () => secs().filter(s => !s.adv || adv());
   return (
     <div class="fxsecs" classList={{ slim: !!props.slim }} style={{ '--fxc': FXMETA[props.fx.type].color }}>
-      <For each={secs()}>
+      <For each={shown()}>
         {(sec, i) => (
           <>
             <Show when={i() > 0}><div class="vline" /></Show>
@@ -287,7 +303,12 @@ function Sections(props: { fx: Fx; slim?: boolean }) {
           </>
         )}
       </For>
-      <div style={{ flex: 1 }} /><Hint fx={props.fx} />
+      <div style={{ flex: 1 }} />
+      <Show when={hasAdv()}>
+        <button class="smallbtn advbtn" classList={{ on: adv() }} title="Pokaż / schowaj parametry dla zaawansowanych"
+          onClick={() => setAdvOpen(m => ({ ...m, [props.fx.id]: !adv() }))}>{adv() ? 'Mniej' : 'Zaawansowane'}</button>
+      </Show>
+      <Hint fx={props.fx} />
     </div>
   );
 }
