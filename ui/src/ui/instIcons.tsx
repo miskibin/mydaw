@@ -39,3 +39,55 @@ export function InstIcon(props: { id?: string | null; size?: number }) {
     )}</>
   );
 }
+
+// ---------------------------------------------------------------- automatic icons
+// Shown whenever the user has not picked one: a guess from the name, else from what plays.
+
+const RULES: [RegExp, string][] = [
+  [/vo[ck]|wokal|g[łl]os|rap|ch[óo]r|adlib|\bmic|\bvox|\bvoice|zwrotk|refren|nagran/i, 'vocal'],
+  [/bass|\bbas\b|\bbasy?\b|808|\bsub\b/i, 'bass'],
+  [/kick|snare|hat|clap|perc|drum|b[ęe]b|beat|\btom|cymb|ride|crash|shaker|rim|stopa|werbel|talerz/i, 'drums'],
+  [/piano|pian|keys|rhodes|klaw|organ|organy/i, 'piano'],
+  [/guit|gitar/i, 'guitar'],
+  [/synth|syntez|lead|\bpad|pluck|arp|chord|akord|string|smycz|bell/i, 'synth'],
+  [/\bfx\b|riser|sweep|impact|noise|efekt|transition|whoosh/i, 'fx'],
+  [/loop|sampl|vinyl|chop|p[ęe]tl/i, 'sample'],
+  [/\bbus\b|send|grup|odsłuch|reverb|delay|pog[łl]os/i, 'bus'],
+];
+
+/** Icon id guessed from a name, or null. */
+export function guessIcon(name: string | null | undefined): string | null {
+  if (!name) return null;
+  for (const [re, id] of RULES) if (re.test(name)) return id;
+  return null;
+}
+
+/** A track's icon: the picked one, else a guess from its name. */
+export const trackIcon = (t: { icon?: string | null; name: string }): string | null => t.icon ?? guessIcon(t.name);
+
+/** A Channel Rack row's icon: name first, then its built-in instrument or 'sample'. */
+export function channelIcon(c: { name: string; kind: 'inst' | 'sample'; inst?: string }): string {
+  const g = guessIcon(c.name); if (g) return g;
+  if (c.kind === 'inst') return c.inst === 'bass' ? 'bass' : 'drums';
+  return 'sample';
+}
+
+/** A pattern's icon: name first, else the most used channel icon among its notes. */
+export function patternIcon(p: { name: string; notes: readonly { ch: number }[] }, chans: ReadonlyMap<number, { name: string; kind: 'inst' | 'sample'; inst?: string }>): string | null {
+  const g = guessIcon(p.name); if (g) return g;
+  const n = new Map<string, number>();
+  for (const x of p.notes) { const c = chans.get(x.ch); if (c) { const id = channelIcon(c); n.set(id, (n.get(id) ?? 0) + 1); } }
+  let best: string | null = null, bn = 0;
+  for (const [id, k] of n) if (k > bn) { best = id; bn = k; }
+  return best;
+}
+
+const paths = new Map<string, { p: Path2D; s: number; w: number; h: number; eo: boolean }>();
+/** Draw a glyph filled with the current fillStyle into a size×size box at (x, y). */
+export function drawGlyph(g: CanvasRenderingContext2D, id: string, x: number, y: number, size: number) {
+  const gl = INST_ICONS[id]; if (!gl) return;
+  let c = paths.get(id);
+  if (!c) { const [, , w, h] = gl.vb.split(' ').map(Number); c = { p: new Path2D(gl.d), s: 1 / Math.max(w, h), w, h, eo: !!gl.eo }; paths.set(id, c); }
+  const k = size * c.s;
+  g.save(); g.translate(x + (size - c.w * k) / 2, y + (size - c.h * k) / 2); g.scale(k, k); g.fill(c.p, c.eo ? 'evenodd' : 'nonzero'); g.restore();
+}

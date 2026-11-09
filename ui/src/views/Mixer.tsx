@@ -12,6 +12,7 @@ import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { FXMETA, FxTile, Icon, ICONS } from '../ui/icons';
+import { guessIcon, InstIcon, trackIcon } from '../ui/instIcons';
 import { openFxPicker } from './FxPicker';
 
 const L30 = 51.84, C30 = 69.12;
@@ -88,6 +89,7 @@ function Strip(props: { m: Insert; idx: number }) {
     else { const v = clamp(m().vol + n * 0.015 * f, 0, 1); wheelEdit('vol' + m().id, 'Głośność', [put({ vol: v })]); say(m().name + ' · ' + volText(v)); }
   };
   const stop = (e: Event) => e.stopPropagation();
+  const icon = () => { if (m().id === 0) return null; const t = S.project.tracks.find(x => x.insert === m().id); return guessIcon(m().name) ?? (t ? trackIcon(t) : null); };
   return (
     <div class="strip" data-ins={m().id} classList={{ on: U.mixSel === m().id }} onPointerDown={select}>
       <div class="bar" style={{ background: m().color }} />
@@ -99,7 +101,8 @@ function Strip(props: { m: Insert; idx: number }) {
         </Show>
       </div>
       <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę · PPM = menu"
-        onDblClick={e => openRename(e.clientX, e.clientY, m().name, v => A.setInsert(m().id, { name: v }, 'Nazwa insertu'))}>{m().name}</span>
+        onDblClick={e => openRename(e.clientX, e.clientY, m().name, v => A.setInsert(m().id, { name: v }, 'Nazwa insertu'))}>
+        <Show when={icon()}>{id => <span class="micon" style={{ color: m().color }}><InstIcon id={id()} size={11} /></span>}</Show>{m().name}</span>
       <div style={{ display: 'flex', 'flex-direction': 'column', 'align-items': 'center', gap: '2px' }}>
         <div class="pandial" classList={{ auto: isAutomated(panT()) }} onPointerDown={panDown} onWheel={wheel('pan')} onContextMenu={e => e.preventDefault()} title="Panorama — przeciągnij, 2× klik = środek, PPM = automatyzacja">
           <svg width="30" height="30" viewBox="0 0 30 30" style={{ position: 'absolute', inset: 0 }}>

@@ -21,6 +21,7 @@ import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
 import { Icon } from '../ui/icons';
+import { channelIcon, InstIcon } from '../ui/instIcons';
 import { MiniKnob, NumField, parseNum } from '../ui/Knob';
 import { theme } from '../ui/theme';
 import { moveWindow } from './FxWindow';
@@ -398,6 +399,7 @@ function ChanRow(props: { c: Channel }) {
         onPointerDown={e => e.stopPropagation()} onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); insertMenu(c(), r.left, r.bottom + 2); }}>{insLabel(c())}</button>
       <button class="cname" classList={{ sel: sel() }} title={c().name + ' · ' + chanKindLabel(c()) + ' — klik = wybierz · Ctrl+klik = odsłuch' + (isPitched(c()) ? ' · 2× klik = piano roll' : '') + ' · PPM = menu'}
         onPointerDown={nameDown}>
+        <span class="cicon" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={11} /></span>
         <span class="ell">{c().name}</span>
         <Show when={c().kind === 'sample'}><span class="ckind">SMP</span></Show>
       </button>

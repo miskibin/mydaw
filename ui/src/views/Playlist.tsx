@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
-import { InstIcon } from '../ui/instIcons';
+import { InstIcon, trackIcon } from '../ui/instIcons';
 import { VOL_UNITY, type Clip, type Comp, type Id, type Op, type Take, type Track } from '../api/types';
 import { boundaries, boundaryXfade, moveBoundary, setBoundaryXfade, takeEnd, toComp, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import * as CA from '../state/comp';
@@ -803,8 +803,8 @@ function LaneHeader(props: { t: Track; i: number }) {
       <div class="stripe" style={{ background: t().color }} />
       <div class="body">
         <div class="row" style={{ gap: '6px', 'min-width': 0 }}>
-          <Show when={t().icon} fallback={<span class="num">{props.i + 1}</span>}>
-            <span class="laneicon" style={{ color: t().color }} title={'Ścieżka ' + (props.i + 1) + ' · PPM = zmień ikonę'}><InstIcon id={t().icon} size={13} /></span>
+          <Show when={trackIcon(t())} fallback={<span class="num">{props.i + 1}</span>}>
+            <span class="laneicon" style={{ color: t().color }} title={'Ścieżka ' + (props.i + 1) + ' · PPM = zmień ikonę'}><InstIcon id={trackIcon(t())} size={13} /></span>
           </Show>
           <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę"
             onDblClick={e => openRename(e.clientX, e.clientY, t().name, v => A.setTrack(props.i, { name: v }, 'Nazwa ścieżki'))}>{t().name}</span>

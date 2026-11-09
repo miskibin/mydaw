@@ -622,3 +622,9 @@ select option { background: var(--bg4); color: var(--fg); }
 .fxart > svg { display: block; width: 100%; height: 100%; }
 .fxart.dim { filter: grayscale(1); opacity: .45; }
 
+
+/* automatic instrument icons (ui/instIcons guessIcon) */
+.pitem .picon, .cname .cicon, .strip .micon { display: inline-flex; flex: none; opacity: .9; }
+.pitem .picon { width: 12px; justify-content: center; }
+.cname .cicon { margin-right: 4px; }
+.strip .micon { margin-right: 4px; vertical-align: -1px; }
