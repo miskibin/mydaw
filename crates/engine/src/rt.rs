@@ -896,7 +896,6 @@ impl Rt {
     }
 
     fn schedule(&mut self, b0: f64, b1: f64, at: usize, n: usize, bps: f64, spb: f64) {
-        let sr = self.sr as f64;
         // metronome & count-in clicks
         let mut b = b0.ceil();
         while b < b1 {
@@ -987,31 +986,7 @@ impl Rt {
                 }
                 ClipSrc::Audio(a) => {
                     let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else { continue };
-                    let dur = (c.end - c.start) * spb;
-                    let g = 10f32.powf(c.gain / 20.0);
-                    let (pl, pr) = (if c.pan > 0.0 { 1.0 - c.pan } else { 1.0 }, if c.pan < 0.0 { 1.0 + c.pan } else { 1.0 });
-                    let fsr = a.sr as f64;
-                    for i in 0..n {
-                        let bt = b0 + i as f64 * bps;
-                        if bt < c.start || bt >= c.end {
-                            continue;
-                        }
-                        let rel = bt - c.start;
-                        let t = rel * spb;
-                        let mut env = g;
-                        if c.fade_in > 0.0 && t < c.fade_in as f64 {
-                            env *= (t / c.fade_in as f64) as f32;
-                        }
-                        let left = dur - t;
-                        if c.fade_out > 0.0 && left < c.fade_out as f64 {
-                            env *= (left / c.fade_out as f64) as f32;
-                        }
-                        let src = (c.offset + rel) * spb * fsr;
-                        let (x, y) = a.sample(src);
-                        tl_l[at + i] += x * env * pl;
-                        tl_r[at + i] += y * env * pr;
-                    }
-                    let _ = sr;
+                    crate::clipmix::mix_audio_clip(c, a, b0, bps, spb, &mut tl_l[at..at + n], &mut tl_r[at..at + n]);
                 }
             }
         }
