@@ -17,7 +17,7 @@ import {
   deleteChannel, newPattern, openPattern, patFront, patOp, playStep, previewPattern, putNotes, selectChannel, setBars, setChannel,
   setView, togglePreview, toggleChanMute, toggleChanSolo, patPlayhead,
 } from '../state/pattern';
-import { projVersion, S } from '../state/store';
+import { arrVersion, S } from '../state/store';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
@@ -148,8 +148,8 @@ function useSize(el: () => HTMLElement | undefined) {
 /** Bumped when anything the canvases show changes (pattern notes, channels, theme). */
 function useDataVersion() {
   const [v, setV] = createSignal(0);
-  // projVersion bumps on every project change: no deep JSON walk of a 2000-note pattern per edit
-  createEffect(() => { projVersion(); curPat(); channels(); theme.epoch; setV(x => x + 1); });
+  // arrVersion bumps on every arrangement change: no deep JSON walk of a 2000-note pattern per edit
+  createEffect(() => { arrVersion(); curPat(); channels(); theme.epoch; setV(x => x + 1); });
   return v;
 }
 
@@ -213,7 +213,7 @@ function Rack(props: { root: () => HTMLDivElement }) {
   const selCh = () => chanById(W().ch) ?? chans()[0];
   /** Visible / hidden note counts and the roll rows, from plain data once per project change. */
   const stats = createMemo(() => {
-    projVersion();
+    arrVersion();
     const p = unwrap(pt()), vis = p.notes.filter(n => visible(n, p));
     return { vis, hidden: p.notes.length - vis.length };
   });
@@ -437,7 +437,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
   // memos: every read was a find() through the store (thousands per redraw of a big pattern)
   const ptM = createMemo(() => curPat()!), chM = createMemo(() => chanById(W().ch)!);
   const pt = () => ptM(), ch = () => chM();
-  /** The notes as plain data (canvas drawing and hit tests; redraws follow `data`/`projVersion`). */
+  /** The notes as plain data (canvas drawing and hit tests; redraws follow `data`/`arrVersion`). */
   const notesRaw = () => unwrap(pt()).notes;
   const size = useSize(() => wrap);
   const laneSize = useSize(() => laneWrap);
@@ -456,7 +456,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     return { pps: clamp(fit, 6, 48) * view().zoom, sx: view().sx, sy: view().sy, rowH: view().rowH, kw: KW, steps };
   };
   const chanNotes = createMemo(() => {
-    projVersion();
+    arrVersion();
     const p = unwrap(pt()), id = ch().id;
     return p.notes.map((n, i) => ({ n, i })).filter(x => x.n.ch === id && visible(x.n, p));
   });

@@ -6,7 +6,7 @@ import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { MiniKnob } from '../ui/Knob';
-import { insName, S } from '../state/store';
+import { anyInsertSolo, insName, S } from '../state/store';
 import { tele } from '../state/telemetry';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -55,8 +55,7 @@ function Strip(props: { m: Insert; idx: number }) {
   let fl!: HTMLDivElement, fr!: HTMLDivElement;
   onMount(() => { meterEls.set(props.m.id, [fl, fr]); hold.delete(props.m.id); });
   onCleanup(() => meterEls.delete(props.m.id));
-  const anySolo = () => S.project.inserts.some(x => x.id !== 0 && x.solo);
-  const audible = () => !m().muted && (m().id === 0 || !anySolo() || m().solo);
+  const audible = () => !m().muted && (m().id === 0 || !anyInsertSolo() || m().solo);
   const route = () => { if (m().id === 0) return 'OUT'; const here = S.project.tracks.filter(t => t.insert === m().id).map(t => t.name); return here.length ? here.join(', ') : '—'; };
   const panT = () => ({ kind: 'insertPan' as const, id: m().id }), volT = () => ({ kind: 'insertVol' as const, id: m().id });
   const shownPan = () => autoDisplay(panT()) ?? m().pan, shownVol = () => autoDisplay(volT()) ?? m().vol;

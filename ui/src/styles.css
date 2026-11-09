@@ -200,7 +200,7 @@ a { color: var(--blue); }
 .strip .route { font: 500 9px var(--sans); color: var(--fg5); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .strip .mute { width: 22px; }
 .meter { position: relative; width: 4px; border-radius: 1px; overflow: hidden; background: linear-gradient(0deg, #3f9e72, #4ec08a 62%, #f0c25a 88%, #e05263 97%); }
-.meter > div { position: absolute; left: 0; right: 0; top: 0; height: 100%; background: var(--bg0); transform-origin: top; will-change: transform; }
+.meter > div { position: absolute; left: 0; right: 0; top: 0; height: 100%; background: var(--bg0); transform-origin: top; }
 .fader { position: relative; width: 24px; margin-left: 4px; cursor: ns-resize; touch-action: none; }
 .fader .fslot { position: absolute; left: 11px; top: 7px; bottom: 7px; width: 2px; background: var(--bg0); border-radius: 1px; }
 .fader .unity { position: absolute; left: 3px; right: 3px; height: 1px; background: var(--fg6); }

@@ -53,7 +53,7 @@ const browser = await chromium.launch({ executablePath: findChrome(), headless: 
 const ctx = await browser.newContext({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
 const page = await ctx.newPage();
 const cdp = await ctx.newCDPSession(page);
-await cdp.send('Profiler.enable');
+await cdp.send('Profiler.enable'); await cdp.send('Performance.enable');
 await cdp.send('Profiler.setSamplingInterval', { interval: 200 });
 const errors = [];
 page.on('pageerror', e => errors.push(String(e).slice(0, 200)));
@@ -83,6 +83,7 @@ function topSelf(prof, n = 12) {
   return [...agg].sort((a, b) => b[1] - a[1]).slice(0, n).map(([fn, us]) => `${r1(us / 1000)}ms ${fn}`);
 }
 const P = (f, a) => page.evaluate(f, a);
+async function metrics() { const { metrics } = await cdp.send('Performance.getMetrics'); const o = {}; for (const m of metrics) o[m.name] = m.value; return o; }
 const frames = n => P(n => new Promise(res => { let i = 0; const l = () => (++i >= n ? res() : requestAnimationFrame(l)); requestAnimationFrame(l); }), n);
 const now = () => P(() => performance.now());
 const results = { meta: { size, chrome: await browser.version(), date: new Date().toISOString() }, actions: {} };
@@ -91,20 +92,24 @@ async function act(name, fn) {
   if (only && !only.includes(name)) return;
   await page.waitForTimeout(200);
   await P(() => window.gc && window.gc());
+  const m0 = await metrics();
   await P(() => window.__m.start());
   if (profile) await cdp.send('Profiler.start');
+  if (arg('trace', '') === name) await browser.startTracing(page, { path: join(root, 'perf/results/trace_' + name + '.json'), categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline', 'blink', 'cc', 'gpu', 'viz', 'toplevel'] });
   let extra = null;
   const t0 = Date.now();
   try { extra = await fn(); } catch (e) { extra = { error: String(e).slice(0, 300) }; }
   const wall = Date.now() - t0;
   const prof = profile ? (await cdp.send('Profiler.stop')).profile : null;
+  if (arg('trace', '') === name) await browser.stopTracing();
   const r = await P(() => window.__m.stop());
+  const m1 = await metrics(), d = k => r1((m1[k] - m0[k]) * 1000);
   const f = r.frames;
-  const a = { wall_ms: wall, frames: f.length, p50: r1(pct(f, 0.5)), p95: r1(pct(f, 0.95)), max: r1(Math.max(0, ...f)), long_n: r.long.length, long_ms: r1(sum(r.long)), long_max: r1(Math.max(0, ...r.long)) };
+  const a = { wall_ms: wall, frames: f.length, p50: r1(pct(f, 0.5)), p95: r1(pct(f, 0.95)), max: r1(Math.max(0, ...f)), long_n: r.long.length, long_ms: r1(sum(r.long)), long_max: r1(Math.max(0, ...r.long)), main: { task: d('TaskDuration'), script: d('ScriptDuration'), layout: d('LayoutDuration'), style: d('RecalcStyleDuration'), layouts: m1.LayoutCount - m0.LayoutCount } };
   if (extra) a.extra = extra;
   if (prof) a.hot = topSelf(prof);
   results.actions[name] = a;
-  console.error(`[act] ${name.padEnd(26)} p50 ${a.p50} p95 ${a.p95} max ${a.max} long ${a.long_n}/${a.long_ms}ms ${extra ? JSON.stringify(extra) : ''}`);
+  console.error(`[act] ${name.padEnd(26)} p50 ${a.p50} p95 ${a.p95} max ${a.max} long ${a.long_n}/${a.long_ms}ms main ${JSON.stringify(a.main)} ${extra ? JSON.stringify(extra) : ''}`);
   if (prof) for (const h of a.hot.slice(0, 8)) console.error('        ' + h);
 }
 /** Time from `f` (in page) to the second painted frame after it. */
@@ -120,9 +125,11 @@ const grid = await P(() => { const r = window.__perf.geom.scroll.getBoundingClie
 const wheel = (n, mk) => P(([n, mk, g]) => new Promise(res => { const el = window.__perf.geom.scroll; let i = 0; const f = (0, eval)(mk); const l = () => { el.dispatchEvent(new WheelEvent('wheel', { ...f(i), clientX: g.x + 600, clientY: g.y + 300, bubbles: true, cancelable: true })); ++i < n ? requestAnimationFrame(l) : res(); }; requestAnimationFrame(l); }), [n, mk.toString(), grid]);
 
 // ---------- playlist
-await act('wheel_scroll_mouse', () => wheel(120, i => ({ deltaY: i % 60 < 30 ? 100 : -100, deltaMode: 0 })));
-await act('wheel_scroll_h_mouse', () => wheel(120, i => ({ deltaY: i % 60 < 30 ? 100 : -100, shiftKey: true })));
-await act('touchpad_pan', () => wheel(180, i => ({ deltaX: Math.round(6 * Math.sin(i / 20)), deltaY: Math.round(4 * Math.cos(i / 15)) })));
+// real input (synthetic wheel events do not scroll natively): one wheel step per frame
+const realWheel = async (n, f) => { await page.mouse.move(grid.x + 600, grid.y + 300); for (let i = 0; i < n; i++) { const [dx, dy] = f(i); await page.mouse.wheel(dx, dy); await frames(1); } };
+await act('wheel_scroll_mouse', () => realWheel(120, i => [0, i % 60 < 30 ? 100 : -100]));
+await act('wheel_scroll_h_mouse', () => realWheel(120, i => [i % 60 < 30 ? 100 : -100, 0]));
+await act('touchpad_pan', () => realWheel(180, i => [Math.round(12 * Math.sin(i / 20)), Math.round(8 * Math.cos(i / 15))]));
 await act('touchpad_pinch_zoom', () => wheel(180, i => ({ deltaY: (i % 90 < 45 ? -1 : 1) * 3, ctrlKey: true })));
 await act('ctrl_wheel_zoom', () => wheel(80, i => ({ deltaY: i % 40 < 20 ? -100 : 100, ctrlKey: true })));
 await P(() => { const el = window.__perf.geom.scroll; el.scrollLeft = 0; el.scrollTop = 0; });

@@ -1,6 +1,6 @@
 // The engine's state, mirrored. Rust owns the project and undo; this store holds the latest
 // StateDto plus local optimistic edits (applied immediately so drags feel instant).
-import { batch, createSignal } from 'solid-js';
+import { batch, createMemo, createRoot, createSignal } from 'solid-js';
 import { $RAW, createStore, produce, reconcile } from 'solid-js/store';
 import type { Catalog, Clip, Fx, Id, Insert, Op, Project, StateDto, TransportDto } from '../api/types';
 import { applyCompOp, compExtent } from '../lib/comp';
@@ -36,7 +36,15 @@ export const [S, setS] = createStore<EngineState>({
  */
 const [projVersion, setProjVersion] = createSignal(0);
 export { projVersion };
-const bumpProject = () => setProjVersion(v => v + 1);
+/**
+ * Like `projVersion`, but not bumped by local edits that only touch the mixer or the notebook
+ * (effects, inserts, lyrics): the arrangement canvases (playlist, pattern editor) skip a full
+ * redraw when an effect is added, bypassed or tweaked.
+ */
+const [arrVersion, setArrVersion] = createSignal(0);
+export { arrVersion };
+const bumpProject = (arrangement = true) => batch(() => { setProjVersion(v => v + 1); if (arrangement) setArrVersion(v => v + 1); });
+const MIXER_ONLY = new Set<Op['op']>(['putFx', 'removeFx', 'moveFx', 'putInsert', 'removeInsert', 'putNotebook']);
 
 // ---- plain copies ----
 const rawOf = (x: unknown): unknown => (x != null && typeof x === 'object' && (x as Record<symbol, unknown>)[$RAW]) || x;
@@ -187,11 +195,14 @@ function applyInPlace(p: Project, op: Op) {
 export function applyLocal(ops: Op[]) {
   if (!ops.length) return;
   setS('project', produce(p => { for (const op of ops) applyInPlace(p, op); }));
-  bumpProject();
+  bumpProject(ops.some(op => !MIXER_ONLY.has(op.op)));
   if (!S.dirty) setS('dirty', true);
 }
 
 // ---- lookups ----
+/** Shared by every lane header / mixer strip (each one walked the whole list per update). */
+export const anyTrackSolo = createRoot(() => createMemo(() => S.project.tracks.some(t => t.solo)));
+export const anyInsertSolo = createRoot(() => createMemo(() => S.project.inserts.some(x => x.id !== 0 && x.solo)));
 export function findFx(fxId: Id): { m: Insert; f: Fx } | null {
   for (const m of S.project.inserts) { const f = m.fx.find(x => x.id === fxId); if (f) return { m, f }; }
   return null;
