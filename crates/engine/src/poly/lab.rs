@@ -64,8 +64,8 @@ pub fn click_flags(x: &[f32], sr: f32, k: f32) -> Vec<usize> {
     let (near, far) = (2usize, (0.04 * sr) as usize / bs);
     let amax: Vec<f32> = (0..nb).map(|b| x[b * bs..((b + 1) * bs).min(n)].iter().fold(0f32, |m, v| m.max(v.abs()))).collect();
     let mut out: Vec<usize> = vec![];
-    for i in 0..n {
-        if d[i] <= 1e-3 {
+    for (i, &di) in d.iter().enumerate() {
+        if di <= 1e-3 {
             continue;
         }
         let b = i / bs;
@@ -73,10 +73,10 @@ pub fn click_flags(x: &[f32], sr: f32, k: f32) -> Vec<usize> {
         let fut = bmax[(b + near).min(nb)..(b + far).min(nb)].iter().fold(0f32, |m, v| m.max(*v));
         let before = amax[b.saturating_sub(far)..b.saturating_sub(near)].iter().fold(0f32, |m, v| m.max(*v));
         let level = amax[b.saturating_sub(far)..(b + far).min(nb)].iter().fold(0f32, |m, v| m.max(*v));
-        if before < 1e-3 || d[i] < 0.02 * level {
+        if before < 1e-3 || di < 0.02 * level {
             continue;
         }
-        if d[i] > k * past && d[i] > k * fut && out.last().is_none_or(|&l| i - l > far * bs) {
+        if di > k * past && di > k * fut && out.last().is_none_or(|&l| i - l > far * bs) {
             out.push(i);
         }
     }

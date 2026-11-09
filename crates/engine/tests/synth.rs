@@ -90,8 +90,8 @@ fn patterns_play_synth_channels_deterministically() {
     let b = e.render(0.0, 4.0, 0.5, SR).unwrap();
     assert!(peak(&a) > 0.05, "synth pattern is silent");
     assert_eq!(a, b, "offline renders must be bit-identical");
-    // the first note starts on the downbeat (within the 15-sample oversampler latency + attack)
-    let first = a.chunks_exact(2).position(|f| f[0].abs() > 1e-4).unwrap();
+    // the first note starts on the downbeat (within the drive's oversampler latency + attack)
+    let first = a.iter().step_by(2).position(|v| v.abs() > 1e-4).unwrap();
     assert!(first < 200, "onset at {first}");
 }
 
