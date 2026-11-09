@@ -1,5 +1,5 @@
 import { prefs } from '../state/prefs';
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { InstIcon, trackIcon } from '../ui/instIcons';
 import { VOL_UNITY, type Clip, type Comp, type Id, type Op, type Take, type Track } from '../api/types';
@@ -77,6 +77,13 @@ export function Playlist() {
   });
   const [bndHover, setBndHover] = createSignal<{ clipId: Id; i: number } | null>(null);
   createEffect(() => { geom.tops = tops(); });
+  // recording starts: make sure the armed track is on screen (a tall mixer can hide it)
+  createEffect(on(() => S.transport.rec && U.playing, rec => {
+    if (!rec || !scrollEl) return;
+    const i = S.project.tracks.findIndex(t => t.arm); if (i < 0) return;
+    const y0 = tops()[i], y1 = y0 + S.project.tracks[i].h, top = scrollEl.scrollTop, vis = scrollEl.clientHeight - 30;
+    if (y0 < top || y1 > top + vis) scrollEl.scrollTop = Math.max(0, y0 - 10);
+  }, { defer: true }));
   const gridW = () => TOTAL * U.bw;
   const gridH = () => tops()[tops().length - 1];
   const cw = () => Math.max(1, Math.min(vw() - U.headW, gridW()));
@@ -582,6 +589,8 @@ export function Playlist() {
       { t: 'sep' },
       { t: 'item', label: 'Usuń nieużyte take\'i' + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
       { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(c.id) },
+      { t: 'item', label: 'Auto wokal — śpiew', title: 'Spłaszcza comp do jednego klipu i ustawia łańcuch wokalu na kanale miksera', act: () => void A.autoVocalComp(c.id, 'natural') },
+      { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocalComp(c.id, 'hard') },
       { t: 'sep' },
       { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
     ], 470);

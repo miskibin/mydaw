@@ -11,6 +11,7 @@ import { flushNotebook } from './notebook';
 import { allocId, findFx, insName, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
+import { confirmUnsaved } from '../ui/Confirm';
 
 // ---------- transport ----------
 /** Recording is on but no track is armed: the engine plays and records nothing. */
@@ -58,17 +59,30 @@ export function toggleMonitor() {
 // ---------- history / project ----------
 export async function undo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say('Cofnięto'); }
 export async function redo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say('Ponowiono'); }
+/** Ask about unsaved changes; false = the user cancelled (or the save failed). */
+async function guardUnsaved(what: string): Promise<boolean> {
+  const a = await confirmUnsaved(what);
+  if (a === 'cancel') return false;
+  if (a === 'save') return projectSave(false);
+  return true;
+}
 export async function projectNew() {
+  if (!(await guardUnsaved('nowym projektem'))) return;
   flushNotebook();
   try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); say('Nowy projekt'); } catch (e) { say('Nie utworzono projektu: ' + String(e)); }
 }
 export async function projectOpen() {
+  if (!(await guardUnsaved('otwarciem innego projektu'))) return;
   flushNotebook();
   try { acceptReply(await enqueue(() => be().projectOpen())); afterProjectLoad(); say('Otwarto ' + (S.path ?? '')); } catch (e) { say('Nie otwarto: ' + String(e)); }
 }
-export async function projectSave(saveAs = false) {
+export async function projectSave(saveAs = false): Promise<boolean> {
   flushNotebook();
-  try { const r = await enqueue(() => be().projectSave(saveAs)); say('Zapisano ' + r.path); await resync(); } catch (e) { say('Nie zapisano: ' + String(e)); }
+  try { const r = await enqueue(() => be().projectSave(saveAs)); say('Zapisano ' + r.path); await resync(); return true; } catch (e) { say('Nie zapisano: ' + String(e)); return false; }
+}
+/** Window close: ask about unsaved changes, then really close. */
+export async function closeWindowGuarded(): Promise<boolean> {
+  return guardUnsaved('zamknięciem aplikacji');
 }
 /** Escape on the export dialog: abort an in-flight bounce, otherwise close. */
 export function cancelExportOrClose() {
@@ -257,10 +271,16 @@ export function toggleBypass(fxId: Id) {
   say(fxName(ff.f) + (ff.f.bypass ? ' · bypass' : ' · aktywny'));
 }
 /** FL-style: bypass every effect of an insert, or turn them all back on if all are bypassed. */
+/** Effects that were on when "N FX" switched an insert off, so switching back restores them. */
+const fxWasOn = new Map<Id, Set<Id>>();
 export function toggleInsertFx(insId: Id) {
   const m = S.project.inserts.find(x => x.id === insId); if (!m || !m.fx.length) return;
   const on = m.fx.some(f => !f.bypass);
-  commit(m.fx.map(f => fxOp({ ...plain(f), bypass: on }, m.id)), on ? 'Wyłącz efekty' : 'Włącz efekty');
+  if (on) fxWasOn.set(m.id, new Set(m.fx.filter(f => !f.bypass).map(f => f.id)));
+  const keep = fxWasOn.get(m.id);
+  const restore = !on && keep && m.fx.some(f => keep.has(f.id));
+  commit(m.fx.map(f => fxOp({ ...plain(f), bypass: on ? true : restore ? !keep!.has(f.id) : false }, m.id)), on ? 'Wyłącz efekty' : 'Włącz efekty');
+  if (!on) fxWasOn.delete(m.id);
   say(insName(m) + (on ? ' · wszystkie efekty wyłączone' : ' · efekty włączone'));
 }
 export const fxName = (f: Fx) => f.type === 'vst3' ? (f.plugin?.name ?? 'VST3') : (S.catalog?.types[f.type]?.name ?? f.type);
@@ -393,6 +413,7 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
       const f = newFx(S.catalog, allocId(), p.type, S.project.bpm);
       f.params = { ...f.params, ...p.params };
       f.mix = p.mix;
+      f.preset = null; // calibrated values, not a preset (the header then reads "Własne ustawienia")
       f.bypass = !p.enabled;
       if (p.type === 'limit') f.params.gain = clamp((f.params.gain ?? 0) + makeup, 0, 24);
       ops.push({ op: 'putFx', insertId: ins.id, fx: f });
@@ -401,10 +422,21 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
     setU({ mixSel: ins.id });
     const a = plan.analysis, st = plan.stages;
     say('Auto wokal: ' + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
-      + ' · +' + makeup.toFixed(1) + ' dB w limiterze · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
+      + ' · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
       + (a.key ? ' · tonacja ' + a.key.name : ' · bez tonacji (autotune wyłączony)')
-      + (plan.warnings.length ? ' · ' + plan.warnings[0] : '')
-      + ' · nagrywając kolejne podejście na tej ścieżce wyłącz efekty (klik „N FX”) — Rider opóźnia odsłuch o ~1,6 s');
+      + (plan.warnings.length ? ' · ' + plan.warnings[0] : ''));
   } catch (e) { say('Auto wokal nie zadziałał: ' + String(e)); }
   autoVocalBusy = false;
+}
+
+/** Auto vocal on a comp: flatten it to one audio clip first (Ctrl+Z undoes both steps). */
+export async function autoVocalComp(clipId: Id, style: 'natural' | 'hard' = 'natural') {
+  const c = S.project.clips.find(x => x.id === clipId); if (!c || c.kind !== 'comp') return;
+  const { track, start } = c;
+  say('Auto wokal: spłaszczam take’i do jednego klipu…');
+  try { await enqueue(() => be().flattenComp(clipId)); } catch (e) { say('Nie spłaszczono: ' + String(e)); return; }
+  const a = S.project.clips.filter(x => x.kind === 'audio' && x.track === track && Math.abs(x.start - start) < 1e-6)[0]
+    ?? S.project.clips.filter(x => x.kind === 'audio' && x.track === track).sort((p, q) => Math.abs(p.start - start) - Math.abs(q.start - start))[0];
+  if (!a) { say('Auto wokal: nie znalazłem spłaszczonego klipu'); return; }
+  await autoVocal(a.id, style);
 }

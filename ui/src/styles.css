@@ -277,7 +277,8 @@ a { color: var(--blue); }
 .dialog .hd button { border: 0; background: transparent; color: var(--fg3); cursor: pointer; font-size: 16px; }
 .sc { display: flex; justify-content: space-between; gap: 12px; padding: 5px 0; border-bottom: 1px solid var(--line); }
 .sc .a { font: 12px var(--sans); color: var(--fg); }
-.sc .k { font: 500 11px var(--mono); color: var(--blue-hi); white-space: nowrap; }
+.sc .k { font: 500 11px var(--mono); color: var(--blue-hi); text-align: right; max-width: 55%; }
+.smallbtn.danger { color: var(--danger); }
 .ghost { position: fixed; z-index: 60; pointer-events: none; padding: 3px 8px; border-radius: 3px; background: var(--bg7); color: var(--fg-hi); font: 500 11px var(--sans); }
 .form { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; align-items: center; }
 .form label { font: 500 11px var(--sans); color: var(--fg4); }
@@ -476,10 +477,10 @@ select option { background: var(--bg4); color: var(--fg); }
 .toolbar.native > .tbmain > :not(.winbtns) { margin-top: 0; margin-bottom: 0; }
 .winbtns { display: flex; flex: 0 0 auto; flex-shrink: 0; align-self: stretch; margin-left: 4px; }
 /* one row at every width: text buttons turn into icons, then redundant controls drop out */
-@media (max-width: 1300px) { .toolbar .tbtn .lbl { display: none; } .toolbar .tbtn { padding: 0 6px; } .toolbar .zgrp, .toolbar .loopText, .toolbar .inrow, .toolbar .projName { display: none; } }
-@media (max-width: 1100px) { .toolbar .snapsel, .toolbar .followbtn, .toolbar .count { display: none; } }
-@media (max-width: 900px) { .toolbar .tapbtn, .toolbar .monbtn, .toolbar .vsep, .toolbar .helpbtn { display: none; } .toolbar > .tbmain { gap: 4px; } }
-@media (max-width: 780px) { .toolbar .undogrp, .toolbar .clockbox .tag9 { display: none; } }
+@media (max-width: 1300px) { .toolbar .tbtn .lbl { display: none; } .toolbar .tbtn { padding: 0 6px; } .toolbar .zgrp, .toolbar .loopText, .toolbar .projName { display: none; } }
+@media (max-width: 1100px) { .toolbar .snapsel, .toolbar .followbtn { display: none; } }
+@media (max-width: 900px) { .toolbar .tapbtn, .toolbar .monbtn, .toolbar .vsep, .toolbar .helpbtn, .toolbar .inrow { display: none; } .toolbar > .tbmain { gap: 4px; } }
+@media (max-width: 780px) { .toolbar .undogrp, .toolbar .clockbox .tag9, .toolbar .count { display: none; } }
 @media (max-width: 800px) { .toolbar .tools > button:nth-child(n+4), .toolbar .seg > button.metrobtn { display: none; } }
 @media (max-width: 660px) { .toolbar .tools, .toolbar .clockbox > div { display: none; } }
 .winbtns > button { width: 46px; border: 0; background: transparent; color: var(--fg2); cursor: default; display: flex; align-items: center; justify-content: center; padding: 0; }

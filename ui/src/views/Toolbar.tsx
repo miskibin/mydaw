@@ -232,7 +232,7 @@ export function StatusBar() {
 }
 
 const SHORTCUTS: [string, string][] = [
-  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów i patternu)', 'F5'], ['Edytor patternu (Channel Rack)', 'F6 · 2× klik na pattern'], ['Dodaj efekt do zaznaczonego kanału', 'F7'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie (uzbrój)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'Alt+F8'],
+  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów i patternu)', 'F5'], ['Edytor patternu (Channel Rack)', 'F6 · 2× klik na pattern'], ['Dodaj efekt do zaznaczonego kanału', 'F7'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie wł./wył. (na uzbrojonej ścieżce)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'Alt+F8'],
   ['Notatnik (tekst, linia = takt)', 'F8'], ['Notatnik: rozmiar czcionki', 'Ctrl + kółko'], ['Notatnik: głowica na takt', 'klik w numer taktu'], ['Notatnik: wyjdź z edycji', 'Esc'],
   ['Rysuj · Maluj · Usuń', 'P · B · D'], ['Wycisz · Tnij · Zaznacz', 'T · C · E'],
   ['Zaznacz prostokątem', 'Ctrl + przeciągnij'], ['Dodaj/usuń z zaznaczenia', 'Ctrl + klik'], ['Zaznacz wszystko', 'Ctrl+A'], ['Odznacz', 'Esc'],

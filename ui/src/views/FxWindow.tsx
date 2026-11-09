@@ -25,6 +25,7 @@ import { fetModes, FetViz } from './fx/fet';
 import { defaultView, ReverbViz, views3d } from './fx/reverb';
 import { DelayViz, SatViz } from './fx/satDelay';
 import { TuneViz } from './fx/tune';
+import { RiderViz } from './fx/rider';
 import { onVoicePad, padParams, padToVoice, VoiceViz } from './fx/voice';
 
 const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
@@ -41,10 +42,11 @@ function makeViz(f: Fx): Viz | null {
     case 'deess': return new DeessViz();
     case 'denoise': return new DenoiseViz();
     case 'voice': return new VoiceViz();
+    case 'rider': return new RiderViz();
     default: return null;
   }
 }
-const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240, voice: 250 };
+const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240, voice: 250, rider: 220 };
 /** Default window widths per type (actions.openPlug). */
 export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700 };
 
@@ -87,7 +89,8 @@ export function FxWindow(props: { pw: PlugWin; z: number }) {
               <span class="sub">{insName(m())}</span>
               <Show when={fx().bypass}><span class="bypasstag">BYPASS</span></Show>
               <div style={{ flex: 1 }} />
-              <MixControl fx={fx()} />
+              {/* effects with their own wet/dry knob don't need a second one in the header */}
+              <Show when={!OWN_MIX.has(fx().type) || (fx().mix ?? 1) !== 1}><MixControl fx={fx()} /></Show>
               <Show when={!isVst() && presetList(S.catalog, fx().type).length}>
                 <div class="presetbar">
                   <button class="arrow" title="Poprzedni preset" onClick={() => A.stepPreset(fx().id, -1)}>‹</button>
@@ -113,6 +116,7 @@ export function FxWindow(props: { pw: PlugWin; z: number }) {
 }
 
 /** Dry/wet of the effect (fx.mix), automatable. */
+const OWN_MIX = new Set<string>(['reverb', 'delay', 'sat', 'fet']);
 function MixControl(props: { fx: Fx }) {
   const target = () => ({ kind: 'mix' as const, fxId: props.fx.id });
   const val = () => autoDisplay(target()) ?? props.fx.mix ?? 1;
@@ -235,6 +239,13 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
     { title: 'Ilość', items: [{ id: 'mix', size: 'lg' }] },
     { title: 'Filtry', adv: true, items: [{ id: 'lo', size: 'sm' }, { id: 'hi', size: 'sm' }, { id: 'bass', size: 'sm' }] },
     { title: 'Charakter', adv: true, items: [{ id: 'early', size: 'sm' }, { id: 'width', size: 'sm' }, { id: 'mod', size: 'sm' }, { id: 'duck', size: 'sm' }] },
+  ],
+  rider: [
+    { title: 'Wyrównanie', items: [{ id: 'amount', size: 'lg' }, { id: 'phrase' }, { stack: [{ id: 'speed', labels: ['Śpiew', 'Rap'], small: true }] }] },
+    { title: 'Zakres', items: [{ id: 'up' }, { id: 'down' }] },
+    { title: 'Wyprzedzenie', items: [{ stack: [{ id: 'look', labels: ['Krótkie', 'Długie'], small: true }] }] },
+    { title: 'Cel', adv: true, items: [{ stack: [{ id: 'auto', labels: ['Ręczny', 'Auto'], small: true }] }, { id: 'target', size: 'sm' }, { id: 'floor', size: 'sm' }, { id: 'gate', size: 'sm' }] },
+    { title: 'Wyjście', adv: true, items: [{ id: 'out', size: 'sm' }] },
   ],
   deess: [
     { title: 'Wykrywanie', items: [{ id: 'thr', size: 'lg' }, { id: 'freq' }, { stack: [{ id: 'mode', small: true }] }] },
