@@ -10,6 +10,8 @@ import { presetList } from '../lib/presets';
 import * as A from '../state/actions';
 import { S } from '../state/store';
 import { say, setU, U } from '../state/ui';
+import { openNotebook } from '../state/notebook';
+import { NOTEBOOK_ICON } from './Notebook';
 import { FX_ORDER, FXMETA, FxTile, Icon, ICONS } from '../ui/icons';
 
 /** What each built-in effect is for, in one line. */
@@ -46,10 +48,11 @@ const CATS: Cat[] = [
   { id: 'tone', label: 'EQ i barwa', types: ['eq', 'sat'] },
   { id: 'space', label: 'Czas i przestrzeń', types: ['delay', 'reverb'] },
   { id: 'vst', label: 'VST3' },
+  { id: 'tools', label: 'Narzędzia' },
 ];
 
 /** An entry in the grid: a built-in effect or a scanned VST3 plugin. */
-type Entry = { key: string; builtin?: BuiltinKind; vst?: Vst3Info; name: string; desc: string; presets: number };
+type Entry = { key: string; builtin?: BuiltinKind; vst?: Vst3Info; tool?: 'notebook'; name: string; desc: string; presets: number };
 
 // ---- per-user conveniences (best effort, never required)
 const LS_RECENT = 'wave.fxpicker.recent', LS_FAV = 'wave.fxpicker.fav';
@@ -68,6 +71,9 @@ function ensureVsts() {
   scanning = true;
   be().vst3Scan(false).then(setVsts).catch(() => setVsts([])).finally(() => { scanning = false; });
 }
+
+/** Project tools that open their own window instead of adding an effect. */
+const TOOLS: Entry[] = [{ key: 'tool:notebook', tool: 'notebook', name: 'Notatnik', desc: 'Tekst utworu — jedna linia = jeden takt (F8)', presets: 0 }];
 
 const vstKey = (p: Vst3Info) => 'vst:' + p.cid;
 
@@ -101,19 +107,20 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
   const shown = createMemo(() => {
     const s = q().trim().toLowerCase();
     const c = CATS.find(x => x.id === cat())!;
-    const all = [...builtins(), ...plugins()];
+    const all = [...builtins(), ...plugins(), ...TOOLS];
     let list: Entry[];
     if (s) list = all; // search always covers everything; the active category is shown as a chip
     else if (c.id === 'recent') list = recent().map(k => all.find(e => e.key === k)).filter((e): e is Entry => !!e);
     else if (c.id === 'fav') list = favs().map(k => all.find(e => e.key === k)).filter((e): e is Entry => !!e);
     else if (c.id === 'vst') list = plugins();
+    else if (c.id === 'tools') list = TOOLS;
     else if (c.types) list = builtins().filter(e => c.types!.includes(e.builtin!));
     else list = all;
     if (!s) return list;
     const words = s.split(/\s+/);
     // rank: name, then keywords/tag, then description
     const score = (e: Entry) => {
-      const name = e.name.toLowerCase(), kw = (e.builtin ? FXMETA[e.builtin].tag + ' ' + KW[e.builtin] : 'vst3 plugin wtyczka').toLowerCase(), desc = e.desc.toLowerCase();
+      const name = e.name.toLowerCase(), kw = (e.builtin ? FXMETA[e.builtin].tag + ' ' + KW[e.builtin] : e.tool ? 'notatnik notebook tekst lyrics słowa narzędzie' : 'vst3 plugin wtyczka').toLowerCase(), desc = e.desc.toLowerCase();
       let sc = 0;
       for (const w of words) {
         if (name.startsWith(w)) sc += 0; else if (name.includes(w)) sc += 1; else if (kw.includes(w)) sc += 2; else if (desc.includes(w)) sc += 4; else return -1;
@@ -128,6 +135,7 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
 
   const add = (e: Entry | undefined, preset?: number) => {
     if (!e) return;
+    if (e.tool === 'notebook') { openNotebook(); remember(e.key); close(); return; }
     if (e.builtin) A.addFx(props.insId, e.builtin, preset);
     else if (e.vst) { A.addVst(props.insId, e.vst); say('Dodano ' + e.vst.name); }
     remember(e.key);
@@ -189,6 +197,7 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
       const target = dragging ? insAt(u.clientX, u.clientY) : null;
       setDrag(null);
       if (!dragging) return add(e);
+      if (e.tool) return;
       if (target != null) {
         if (e.builtin) A.addFx(target, e.builtin); else if (e.vst) A.addVst(target, e.vst);
         remember(e.key); close();
@@ -214,7 +223,7 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
         <div class="fxp-hd">
           <span class="fxp-search">
             <Icon d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15z M21 21l-5.2-5.2" size={14} />
-            <input ref={input} placeholder="Szukaj efektu lub wtyczki…" value={q()} onInput={e => setQ(e.currentTarget.value)} onKeyDown={onKey} spellcheck={false} />
+            <input ref={input} placeholder="Szukaj efektu, wtyczki lub narzędzia…" value={q()} onInput={e => setQ(e.currentTarget.value)} onKeyDown={onKey} spellcheck={false} />
             <Show when={q()}><button class="fxp-clear" title="Wyczyść (Esc)" onClick={() => { setQ(''); input.focus(); }}>×</button></Show>
           </span>
           <span class="fxp-dest">do <b>{insName()}</b></span>
@@ -225,10 +234,10 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
             <For each={CATS}>
               {(c, i) => (
                 <>
-                  <Show when={i() === 3 || i() === 8}><div class="fxp-sep" /></Show>
+                  <Show when={i() === 3 || i() === 8 || i() === 9}><div class="fxp-sep" /></Show>
                   <button classList={{ on: cat() === c.id && !q() }} onClick={() => { setCat(c.id); setQ(''); input.focus(); }}>
                     <span>{c.label}</span>
-                    <span class="n">{c.id === 'recent' ? recent().length || '' : c.id === 'fav' ? favs().length || '' : c.id === 'vst' ? (vsts() ? vsts()!.length : '…') : c.types ? c.types.length : builtins().length + plugins().length}</span>
+                    <span class="n">{c.id === 'recent' ? recent().length || '' : c.id === 'fav' ? favs().length || '' : c.id === 'vst' ? (vsts() ? vsts()!.length : '…') : c.id === 'tools' ? TOOLS.length : c.types ? c.types.length : builtins().length + plugins().length + TOOLS.length}</span>
                   </button>
                 </>
               )}
@@ -244,8 +253,8 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
               <For each={shown()} fallback={<div class="fxp-empty">{cat() === 'fav' && !q() ? 'Kliknij ☆ na kafelku, żeby dodać efekt do ulubionych.' : cat() === 'recent' && !q() ? 'Tu pojawią się ostatnio dodane efekty.' : cat() === 'vst' && !vsts() ? 'Skanowanie wtyczek VST3…' : 'Nic nie pasuje.'}</div>}>
                 {(e, i) => (
                   <div class="fxp-tile" data-i={i()} classList={{ focus: i() === focus() && presetFocus() < 0, cur: i() === focus() }}
-                    onPointerDown={ev => tileDown(ev, e, i())} onPointerEnter={() => presetFocus() < 0 && setFocus(i())} title={e.vst?.path ?? 'Klik lub Enter: dodaj · przeciągnij na kanał miksera'}>
-                    <Show when={e.builtin} fallback={<span class="tile" style={{ width: '40px', height: '40px', background: FXMETA.vst3.color + '26', color: FXMETA.vst3.color }}><Icon d={ICONS.vst} size={20} /></span>}>
+                    onPointerDown={ev => tileDown(ev, e, i())} onPointerEnter={() => presetFocus() < 0 && setFocus(i())} title={e.vst?.path ?? (e.tool ? 'Klik lub Enter: otwórz' : 'Klik lub Enter: dodaj · przeciągnij na kanał miksera')}>
+                    <Show when={e.builtin} fallback={<span class="tile" style={{ width: '40px', height: '40px', background: e.tool ? 'color-mix(in srgb, var(--blue) 18%, transparent)' : FXMETA.vst3.color + '26', color: e.tool ? 'var(--blue)' : FXMETA.vst3.color }}><Icon d={e.tool ? NOTEBOOK_ICON : ICONS.vst} size={20} /></span>}>
                       <FxTile type={e.builtin!} size={40} icon={20} />
                     </Show>
                     <div class="fxp-txt">

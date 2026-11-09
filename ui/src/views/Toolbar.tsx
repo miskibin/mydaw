@@ -10,8 +10,6 @@ import { openMenu, say, setU, U, type Tool } from '../state/ui';
 import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { Icon, ICONS } from '../ui/icons';
-import { NB, toggleNotebook } from '../state/notebook';
-import { NOTEBOOK_ICON } from './Notebook';
 
 export const TOOLS: [Tool, string, string][] = [
   ['draw', 'P', 'Rysuj'], ['paint', 'B', 'Maluj'], ['erase', 'D', 'Usuń'], ['mute', 'T', 'Wycisz'], ['slice', 'C', 'Tnij'], ['select', 'E', 'Zaznacz'],
@@ -119,10 +117,7 @@ export function Toolbar() {
       <button class="ibtn" classList={{ on: U.pickOpen }} onClick={() => setU('pickOpen', !U.pickOpen)} title="Browser (Alt+F8)">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
       </button>
-      <button class="ibtn" classList={{ on: NB.open }} onClick={toggleNotebook} title="Notatnik — tekst utworu, linia = takt (F8)" data-nbbtn>
-        <Icon d={NOTEBOOK_ICON} size={15} sw={1.8} />
-      </button>
-      <div class="row" style={{ gap: '1px' }}>
+      <div class="row undogrp" style={{ gap: '1px' }}>
         <button class="ibtn" disabled={!S.canUndo} onClick={() => void A.undo()} title="Cofnij (Ctrl+Z)"><Icon d="M9 14L4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3" /></button>
         <button class="ibtn" disabled={!S.canRedo} onClick={() => void A.redo()} title="Ponów (Ctrl+Shift+Z)"><Icon d="M15 14l5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3" /></button>
       </div>
@@ -135,17 +130,17 @@ export function Toolbar() {
         <button title="Nagrywanie (R)" class="rec" classList={{ armed: T().rec }} onClick={A.toggleRec}>
           <svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor" /></svg>
         </button>
-        <button title="Odsłuch wejścia" class="mon" classList={{ on: T().monitor }} onClick={A.toggleMonitor}>
+        <button title="Odsłuch wejścia" class="mon monbtn" classList={{ on: T().monitor }} onClick={A.toggleMonitor}>
           <Icon d="M4 15v-3a8 8 0 0 1 16 0v3 M3 14h4v7H3z M17 14h4v7h-4z" size={13} />
         </button>
-        <button title="Metronom" classList={{ on: T().metro, dim: !T().metro }} onClick={() => void A.setTransportFlag('metro', !T().metro)}>
+        <button title="Metronom" class="metrobtn" classList={{ on: T().metro, dim: !T().metro }} onClick={() => void A.setTransportFlag('metro', !T().metro)}>
           <Icon d="M9 3h6l4 18H5z M12 16l6-9" size={13} />
         </button>
         <button class="count" classList={{ on: T().countIn }} title="Count-in: 1 takt przed nagrywaniem" onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
       {/* the slot stays reserved while recording is off, so pressing R never re-wraps the toolbar
           (and shifts the playlist) on a narrow window */}
-      <div class="row" title="Poziom wejścia" style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
+      <div class="row inrow" title="Poziom wejścia" style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
         <span class="tag9">IN</span>
         <div class="inmeter"><div ref={inEl} /></div>
       </div>
@@ -166,7 +161,7 @@ export function Toolbar() {
           )}
         </For>
       </div>
-      <select class="sel" title="Przyciąganie do siatki" value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
+      <select class="sel snapsel" title="Przyciąganie do siatki" value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
         <For each={SNAPS}>{([label, v]) => <option value={String(v)}>{v < 0 ? snapLabel(-1, U.bw) : label}</option>}</For>
       </select>
       <div data-drag class="dragfill" />
@@ -184,15 +179,15 @@ export function Toolbar() {
       <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title="Mikser (F9)" aria-label="Mixer">
         <Icon d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6" size={13} /><span class="lbl">Mixer</span>
       </button>
-      <button class="tbtn" classList={{ on: U.follow }} onClick={() => setU('follow', !U.follow)} title="Podążaj za głowicą (F)" aria-label="Follow">
+      <button class="tbtn followbtn" classList={{ on: U.follow }} onClick={() => setU('follow', !U.follow)} title="Podążaj za głowicą (F)" aria-label="Follow">
         <Icon d="M4 12h11 M11 7l5 5-5 5 M20 4v16" size={13} /><span class="lbl">Follow</span>
       </button>
-      <div class="row" style={{ gap: '1px' }}>
+      <div class="row zgrp" style={{ gap: '1px' }}>
         <button class="zbtn" onClick={() => A.zoomAt(0.8)} title="Oddal (Ctrl+−)">−</button>
         <button class="zbtn" onClick={() => A.zoomAt(1.25)} title="Przybliż (Ctrl+=)">+</button>
       </div>
       <button class="ibtn" classList={{ on: U.settings }} style={{ width: '26px', height: '26px' }} onClick={() => setU('settings', !U.settings)} title="Ustawienia (audio, wygląd)"><Icon d={ICONS.gear} size={14} sw={1.8} /></button>
-      <button class="zbtn" classList={{ on: U.help }} style={{ font: '600 12px var(--mono)' }} onClick={() => setU('help', !U.help)} title="Skróty klawiszowe (?)">?</button>
+      <button class="zbtn helpbtn" classList={{ on: U.help }} style={{ font: '600 12px var(--mono)' }} onClick={() => setU('help', !U.help)} title="Skróty klawiszowe (?)">?</button>
       </div>
       <Show when={win}>
         <div class="winbtns">
