@@ -631,7 +631,7 @@ export class MockBackend implements Backend {
   }
   /** Same contract as the engine's `auto_vocal_plan`, with fixed measurements of a typical take
    *  (the real calibration renders the audio; the mock has no audio to render). */
-  async autoVocalPlan(a: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle }): Promise<AutoVocalPlan> {
+  async autoVocalPlan(a: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle; bakeRider?: boolean }): Promise<AutoVocalPlan> {
     await delay(300);
     const c = this.p.clips.find(x => x.id === a.clipId);
     if (!c) throw new Error('no such clip');
@@ -657,8 +657,10 @@ export class MockBackend implements Backend {
       { type: 'reverb', params: params('reverb', { size: 1.2, pre: 30, lo: 300, hi: 7000, width: 100, mix: MOCK_REVERB_MIX, tone: 0, space: 0, duck: 0, bass: 1 }), mix: 1, enabled: true, note: 'small plate, T60 1.2 s, -18 dB send' },
       { type: 'limit', params: params('limit', { gain: 0, ceil: -1, rel: 80, auto: 0, look: 5, link: 100, out: 0 }), mix: 1, enabled: true, note: 'true-peak ceiling -1 dBTP' },
     ];
+    const ri = chain.findIndex(p => p.type === 'rider');
+    const riderBake = a.bakeRider ? chain.splice(ri, 1)[0] : null;
     return {
-      version: 1, style,
+      version: 1, style, riderBake,
       analysis: {
         durationS: c.len * 60 / this.p.bpm, sampleRate: 48000, peakDbfs: -3.2, truePeakDbtp: -3.0, lufs: -21.5,
         wordLevelDb: -24, noiseFloorDb: -70, sungShare: 0.62, sibilanceDb: -4,
@@ -705,6 +707,24 @@ export class MockBackend implements Backend {
     if (!this.p.clips.some(x => x.kind === 'comp' && x.ref === cp.id)) { this.p.comps = this.p.comps!.filter(x => x.id !== cp.id); delete this.audition[cp.id]; }
     this.pushUndo(prev); this.changed();
     return { sourceId: id };
+  }
+  /** The mock has no audio to render: the clip moves to a copy of its region (clip gain applied), as one undo step. */
+  async bakeRider(a: { clipId: Id; params: Record<string, number> }) {
+    await delay(200);
+    const c = this.p.clips.find(x => x.id === a.clipId);
+    if (!c || c.kind !== 'audio') throw new Error('only audio clips can be baked');
+    const s = this.srcMeta.get(c.ref); if (!s) throw new Error('audio not loaded');
+    const prev = structuredClone(this.p), id = this.p.nextId++;
+    const spb = this.spb(), a0 = c.offset * spb, dur = Math.max(0, Math.min(s.dur, (c.offset + c.len) * spb) - a0);
+    const src: MockSource = { ...s, id, name: s.name + ' (rider)', path: s.path.replace(/\.wav$/i, '') + ' rider.wav', dur, trimFrom: undefined };
+    this.srcMeta.set(id, src);
+    const pk = await this.sourcePeaks(c.ref, c.norm, c.rev);
+    const g = dbg(c.gain);
+    this.recPeaks.set(id, pk.slice(Math.floor(a0 * 100) * 2, Math.ceil((a0 + dur) * 100) * 2).map(v => v * g));
+    this.p.sources.push(strip(src));
+    Object.assign(c, { ref: id, offset: 0, gain: 0, norm: false, rev: false, tune: null });
+    this.pushUndo(prev); this.changed();
+    return { sourceId: id, clipId: c.id };
   }
   async trimClip(clipId: Id) {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) throw new Error('no clip');

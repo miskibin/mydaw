@@ -186,12 +186,15 @@ export interface AutoVocalPlan {
   version: number;
   style: AutoVocalStyle;
   analysis: AutoVocalAnalysis;
-  /** Insert chain, first = first in the chain: tune, rider, fet, comp, deess, reverb, limit. */
+  /** Insert chain, first = first in the chain: tune, rider, fet, comp, deess, reverb, limit (no rider when baked). */
   chain: PlannedFx[];
   /** Suggested vocal level change (dB) to sit 1.2 LU under the beat; null without a beat clip. */
   trackGainDb: number | null;
   stages: AutoVocalStages;
   warnings: string[];
+  /** With `autoVocalPlan({ bakeRider: true })`: the rider stage, taken out of `chain`, to render into the clip
+   *  with `bakeRider({ clipId, params: riderBake.params })` before the chain goes on the insert. Else null. */
+  riderBake: PlannedFx | null;
 }
 
 /** What an automation moves. `param`: catalog param id, or `band:<i>:f|g|q` of an EQ. */

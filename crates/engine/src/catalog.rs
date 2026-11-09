@@ -137,7 +137,9 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         choice("auto", "Auto target", 1.0, &["Off", "On"]),
         p("target", "Target", -60.0, 0.0, -24.0, "dB", false),
         p("floor", "Noise floor", -100.0, -20.0, -70.0, "dB", false),
-        choice("look", "Look-ahead", 1.0, &["Short", "Long"]),
+        // Short by default: Long (≈ 1.6 s) delays the whole mix through PDC; the auto-vocal
+        // chain bakes the long rider into the audio instead (`Engine::bake_rider`)
+        choice("look", "Look-ahead", 0.0, &["Short", "Long"]),
         p("out", "Output", -24.0, 24.0, 0.0, "dB", false),
         // below this word level the rider idles at 0 dB (breaths, bleed, room)
         p("gate", "Gate", -100.0, -10.0, -60.0, "dB", false),
@@ -351,11 +353,11 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Robot", &[("mode", 2.0), ("drive", 6.0), ("out", -2.0)]),
         ],
         FxKind::Rider => vec![
-            pr("Wokal — śpiew", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
-            pr("Rap", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 1.0), ("auto", 1.0), ("look", 1.0)]),
-            pr("Delikatnie", &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
-            pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
-            pr("Na żywo (krótki look-ahead)", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
+            pr("Wokal — śpiew", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
+            pr("Rap", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 1.0), ("auto", 1.0), ("look", 0.0)]),
+            pr("Delikatnie", &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
+            pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
+            pr("Wokal — śpiew (długi look-ahead, opóźnienie)", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
         ],
         FxKind::Vst3 => vec![],
     }
@@ -369,7 +371,7 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
     match fx.kind {
         FxKind::Tune | FxKind::Voice => crate::vocal::tune_latency(sample_rate),
         FxKind::Denoise => crate::denoise::latency(sample_rate),
-        FxKind::Rider => crate::rider::latency_samples(fx.params.get("speed").copied().unwrap_or(0.0) as f32, fx.params.get("look").copied().unwrap_or(1.0) as f32, sample_rate),
+        FxKind::Rider => crate::rider::latency_samples(fx.params.get("speed").copied().unwrap_or(0.0) as f32, fx.params.get("look").copied().unwrap_or(0.0) as f32, sample_rate),
         // look-ahead delays the audio so the gain is already down when the "s" arrives
         FxKind::Limit => crate::dsp::limiter_v2::latency_samples(fx.params.get("look").copied().unwrap_or(3.0) as f32, sample_rate),
         FxKind::Deess => ((fx.params.get("look").copied().unwrap_or(5.0).clamp(0.0, 15.0) / 1000.0) * sample_rate as f64) as usize,

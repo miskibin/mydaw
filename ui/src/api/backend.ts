@@ -52,8 +52,13 @@ export interface Backend {
   /** Tempo (BPM) and musical key of an audio clip, or key/tempo of the project's active audio clips (excluding `excludeFx`'s insert). */
   musicAnalyze(args?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis>;
   /** "Auto wokal": measures a vocal clip (key from `beatClipId`, else from the other tracks) and returns the calibrated
-   *  insert chain. Read-only; takes a few seconds per minute of audio. */
-  autoVocalPlan(args: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle }): Promise<AutoVocalPlan>;
+   *  insert chain. Read-only; takes a few seconds per minute of audio. `bakeRider`: the rider is left out of
+   *  `chain` and returned as `riderBake` — pass its params to `bakeRider` (no live look-ahead delay on the insert). */
+  autoVocalPlan(args: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle; bakeRider?: boolean }): Promise<AutoVocalPlan>;
+  /** Renders the Vocal Rider (`params`: catalog ids, e.g. `plan.riderBake.params`) into an audio clip's audio
+   *  (region, clip gain, norm/rev/pitch edits; fades stay) as a new source; the clip (same id) plays it with gain
+   *  0 dB. One undo step; the original source stays in the project. Slow: seconds per minute of audio. */
+  bakeRider(args: { clipId: Id; params: Record<string, number> }): Promise<{ sourceId: Id; clipId: Id }>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
   /** Renders a comp clip to a new source; the clip becomes an ordinary audio clip (one undo step). */
   flattenComp(clipId: Id): Promise<{ sourceId: Id }>;
@@ -171,7 +176,8 @@ export function tauriBackend(): Backend {
     f0ModelStatus: () => invoke('f0_model_status'),
     f0ModelInstall: () => invoke('f0_model_install'),
     musicAnalyze: a => invoke('music_analyze', { clipId: a?.clipId ?? null, excludeFx: a?.excludeFx ?? null }),
-    autoVocalPlan: a => invoke('auto_vocal_plan', { clipId: a.clipId, beatClipId: a.beatClipId ?? null, style: a.style ?? null }),
+    autoVocalPlan: a => invoke('auto_vocal_plan', { clipId: a.clipId, beatClipId: a.beatClipId ?? null, style: a.style ?? null, bakeRider: a.bakeRider ?? null }),
+    bakeRider: a => invoke('bake_rider', { clipId: a.clipId, params: a.params }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
     flattenComp: clipId => invoke('flatten_comp', { clipId }),
     compAudition: (compId, takeId) => invoke('comp_audition', { compId, takeId }),

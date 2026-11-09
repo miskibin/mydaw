@@ -222,10 +222,21 @@ async fn music_analyze(app: St<'_>, clip_id: Option<u64>, exclude_fx: Option<u64
 
 /// "Auto wokal": measures a vocal clip (and the beat's key) and returns the calibrated
 /// insert chain for its track. Read-only: the UI applies the chain with `apply_ops`.
+/// `bake_rider: true`: the rider is left out of `chain` and returned as `riderBake`, for
+/// `bake_rider` (then the chain goes on the insert with no live look-ahead delay).
 #[tauri::command]
-async fn auto_vocal_plan(app: St<'_>, clip_id: u64, beat_clip_id: Option<u64>, style: Option<wave_engine::autovocal::Style>) -> R<wave_engine::autovocal::AutoVocalPlan> {
+async fn auto_vocal_plan(app: St<'_>, clip_id: u64, beat_clip_id: Option<u64>, style: Option<wave_engine::autovocal::Style>, bake_rider: Option<bool>) -> R<wave_engine::autovocal::AutoVocalPlan> {
     let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || e.auto_vocal_plan(clip_id, beat_clip_id, style.unwrap_or_default())).await.map_err(es)?.map_err(es)
+    tauri::async_runtime::spawn_blocking(move || e.auto_vocal_plan(clip_id, beat_clip_id, style.unwrap_or_default(), bake_rider.unwrap_or(false))).await.map_err(es)?.map_err(es)
+}
+
+/// Renders the Vocal Rider (`params`, e.g. a plan's `riderBake.params`) into an audio clip's
+/// audio as a new source and swaps the clip onto it (one undo step; the original source stays).
+#[tauri::command]
+async fn bake_rider(app: St<'_>, clip_id: u64, params: std::collections::BTreeMap<String, f64>) -> R<Value> {
+    let e = app.engine.clone();
+    let (source, clip) = tauri::async_runtime::spawn_blocking(move || e.bake_rider(clip_id, &params)).await.map_err(es)?.map_err(es)?;
+    Ok(json!({ "sourceId": source, "clipId": clip }))
 }
 
 #[tauri::command]
@@ -660,7 +671,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config,
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
