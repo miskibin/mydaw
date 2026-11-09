@@ -8,7 +8,7 @@ import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../li
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
 import { flushNotebook } from './notebook';
-import { allocId, findFx, S, setTransport } from './store';
+import { allocId, findFx, insName, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
 
@@ -255,6 +255,13 @@ export function toggleBypass(fxId: Id) {
   const ff = findFx(fxId); if (!ff) return;
   commit([fxOp({ ...plain(ff.f), bypass: !ff.f.bypass }, ff.m.id)], 'Bypass');
   say(fxName(ff.f) + (ff.f.bypass ? ' · bypass' : ' · aktywny'));
+}
+/** FL-style: bypass every effect of an insert, or turn them all back on if all are bypassed. */
+export function toggleInsertFx(insId: Id) {
+  const m = S.project.inserts.find(x => x.id === insId); if (!m || !m.fx.length) return;
+  const on = m.fx.some(f => !f.bypass);
+  commit(m.fx.map(f => fxOp({ ...plain(f), bypass: on }, m.id)), on ? 'Wyłącz efekty' : 'Włącz efekty');
+  say(insName(m) + (on ? ' · wszystkie efekty wyłączone' : ' · efekty włączone'));
 }
 export const fxName = (f: Fx) => f.type === 'vst3' ? (f.plugin?.name ?? 'VST3') : (S.catalog?.types[f.type]?.name ?? f.type);
 export function loadPreset(fxId: Id, i: number) {

@@ -93,7 +93,10 @@ function Strip(props: { m: Insert; idx: number }) {
       <div class="bar" style={{ background: m().color }} />
       <div class="row" style={{ 'justify-content': 'space-between', gap: '4px' }}>
         <span class="lbl">{m().id === 0 ? 'MASTER' : 'INS ' + props.idx}</span>
-        <span class="fxn">{m().fx.length ? m().fx.length + ' FX' : ''}</span>
+        <Show when={m().fx.length}>
+          <button class="fxn" classList={{ off: m().fx.every(f => f.bypass) }} onPointerDown={stop} onClick={() => A.toggleInsertFx(m().id)}
+            title="Klik = wyłącz / włącz wszystkie efekty tego kanału">{m().fx.length + ' FX'}</button>
+        </Show>
       </div>
       <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę · PPM = menu"
         onDblClick={e => openRename(e.clientX, e.clientY, m().name, v => A.setInsert(m().id, { name: v }, 'Nazwa insertu'))}>{m().name}</span>
