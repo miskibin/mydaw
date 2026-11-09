@@ -369,3 +369,37 @@ export function setSnap(v: number) {
   setU('snap', v);
   say(v < 0 ? 'Snap auto — rozdzielczość zależy od zoomu (teraz ' + snapName(snapRes(-1, U.bw)) + ')' : 'Snap: ' + snapName(v));
 }
+
+// ---------- auto vocal ----------
+let autoVocalBusy = false;
+/** Analyse an audio clip and put the calibrated vocal chain on its track's insert (one undo step).
+ *  Effects of the types the chain brings are replaced; others (e.g. an EQ) stay in front. */
+export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural') {
+  const c = S.project.clips.find(x => x.id === clipId);
+  if (!c || c.kind !== 'audio' || !S.catalog || autoVocalBusy) return;
+  const tr = S.project.tracks[c.track]; if (!tr) return;
+  const ins = S.project.inserts.find(m => m.id === tr.insert);
+  if (!ins || ins.id === 0) { say('Auto wokal: przypisz ścieżkę do kanału miksera (nie Master)'); return; }
+  autoVocalBusy = true;
+  say('Auto wokal: analiza nagrania… (kilka sekund)');
+  try {
+    const plan = await be().autoVocalPlan({ clipId, style });
+    const types = new Set<string>(plan.chain.map(p => p.type));
+    const ops: Op[] = ins.fx.filter(f => types.has(f.type)).map(f => ({ op: 'removeFx', fxId: f.id }) as Op);
+    for (const p of plan.chain) {
+      const f = newFx(S.catalog, allocId(), p.type, S.project.bpm);
+      f.params = { ...f.params, ...p.params };
+      f.mix = p.mix;
+      f.bypass = !p.enabled;
+      ops.push({ op: 'putFx', insertId: ins.id, fx: f });
+    }
+    commit(ops, 'Auto wokal');
+    setU({ mixSel: ins.id });
+    const a = plan.analysis, st = plan.stages;
+    say('Auto wokal: ' + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
+      + ' · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
+      + (a.key ? ' · tonacja ' + a.key.name : ' · bez tonacji (autotune wyłączony)')
+      + (plan.warnings.length ? ' · ' + plan.warnings[0] : ''));
+  } catch (e) { say('Auto wokal nie zadziałał: ' + String(e)); }
+  autoVocalBusy = false;
+}

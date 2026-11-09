@@ -115,6 +115,15 @@ export const FX_ART: Record<FxKind, string> = {
   <circle cx="90" cy="58" r="2" fill="#DBEAFE"/>
   <circle cx="70" cy="76" r="2" fill="#BFDBFE"/>
   <circle cx="84" cy="22" r="1.8" fill="#DBEAFE"/>`),
+  rider: svg(`
+  <rect x="44" y="10" width="12" height="80" rx="6" fill="#78350F"/>
+  <rect x="49" y="14" width="2" height="72" rx="1" fill="#1E1E24"/>
+  <path d="M 6,58 L 14,40 L 20,70 L 26,30 L 32,64 L 38,48" stroke="#FCD34D" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 62,50 L 68,42 L 74,58 L 80,42 L 86,58 L 94,50" stroke="#FBBF24" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="36" y="40" width="28" height="18" rx="4" fill="#F59E0B" stroke="#1E1E24" stroke-width="2.5"/>
+  <line x1="40" y1="49" x2="60" y2="49" stroke="#1E1E24" stroke-width="2.5" stroke-linecap="round"/>
+  <polygon points="50,2 44,10 56,10" fill="#FCD34D"/>
+  <polygon points="50,98 44,90 56,90" fill="#FCD34D"/>`),
   vst3: svg(`
   <rect x="14" y="26" width="72" height="58" rx="8" fill="#7C3AED" stroke="#1E1E24" stroke-width="2.5"/>
   <rect x="32" y="10" width="9" height="18" rx="2" fill="#A78BFA" stroke="#1E1E24" stroke-width="2.5"/>

@@ -20,7 +20,7 @@ export interface Track {
 
 export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'rider' | 'vst3';
 /** Built-in kinds the effect picker lists (the views keep a label and blurb per kind). */
-export type BuiltinKind = Exclude<FxKind, 'vst3' | 'rider'>;
+export type BuiltinKind = Exclude<FxKind, 'vst3'>;
 /** Every built-in kind, including ones the picker does not list yet ('rider': added by "Auto wokal"). */
 export type AnyBuiltinKind = Exclude<FxKind, 'vst3'>;
 export type BandType = 'lowcut' | 'lowshelf' | 'peak' | 'highshelf' | 'highcut' | 'notch' | 'bandpass' | 'tilt';

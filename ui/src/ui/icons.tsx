@@ -28,7 +28,7 @@ export const FXMETA: Record<FxKind, { icon: string; color: string; tag: string }
   rider: { icon: 'M3 15c2 0 2-6 4-6s2 8 4 8 2-10 4-10 2 6 4 6h2 M3 12h18', color: '#e8c55a', tag: 'wyrównanie' },
   vst3: { icon: ICONS.vst, color: '#9a8cf0', tag: 'plugin' },
 };
-export const FX_ORDER = ['denoise', 'tune', 'voice', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'] as const;
+export const FX_ORDER = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'] as const;
 export const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
 
 export function Icon(props: { d: string; size?: number; sw?: number }) {

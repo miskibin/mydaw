@@ -20,6 +20,7 @@ const DESC: Record<BuiltinKind, string> = {
   tune: 'Strojenie wokalu na żywo — od naturalnego po twardy efekt',
   voice: 'Wysokość, formanty, robot i przester głosu',
   eq: '24 pasma, dynamiczne, M/S — rzeźbienie barwy',
+  rider: 'Wyrównuje głośność słów jak inżynier na suwaku',
   deess: 'Ścisza ostre „s” i „sz” bez gaszenia góry',
   comp: 'Wyrównuje dynamikę, klej dla śladu lub sumy',
   fet: 'Szybki kompresor w stylu 1176 — charakter i atak',
@@ -32,7 +33,7 @@ const DESC: Record<BuiltinKind, string> = {
 /** Extra search words (Polish and English names people type). */
 const KW: Record<BuiltinKind, string> = {
   denoise: 'szum noise denoiser odszumianie brum hum', tune: 'autotune auto-tune pitch strojenie melodyne', voice: 'pitch formant robot vocoder głos',
-  eq: 'korektor equalizer eq filtr filter', deess: 'deesser de-esser sybilanty', comp: 'kompresor compressor dynamika',
+  eq: 'korektor equalizer eq filtr filter', deess: 'deesser de-esser sybilanty', rider: 'rider vocal rider wyrównanie leveler głośność słów automatyzacja', comp: 'kompresor compressor dynamika',
   fet: 'kompresor compressor 1176 fet', sat: 'saturacja saturator przester distortion drive taśma tape', delay: 'echo opóźnienie delay',
   reverb: 'pogłos reverb przestrzeń hall room plate', limit: 'limiter głośność loudness master',
 };
@@ -42,9 +43,9 @@ const CATS: Cat[] = [
   { id: 'all', label: 'Wszystkie' },
   { id: 'recent', label: 'Ostatnie' },
   { id: 'fav', label: 'Ulubione' },
-  { id: 'vocal', label: 'Wokal i strojenie', types: ['tune', 'voice', 'deess'] },
+  { id: 'vocal', label: 'Wokal i strojenie', types: ['tune', 'voice', 'rider', 'deess'] },
   { id: 'repair', label: 'Naprawa', types: ['denoise', 'deess'] },
-  { id: 'dyn', label: 'Dynamika', types: ['comp', 'fet', 'limit'] },
+  { id: 'dyn', label: 'Dynamika', types: ['rider', 'comp', 'fet', 'limit'] },
   { id: 'tone', label: 'EQ i barwa', types: ['eq', 'sat'] },
   { id: 'space', label: 'Czas i przestrzeń', types: ['delay', 'reverb'] },
   { id: 'vst', label: 'VST3' },
