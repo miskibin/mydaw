@@ -636,6 +636,18 @@ export function Playlist() {
   }
 
   // ---------- ruler ----------
+  /** Ruler x near the loop's start / end (8 px) → that edge; inside with Shift → body. */
+  const loopEdge = (clientX: number, shift = false): 'a' | 'b' | 'body' | null => {
+    const lp = S.project.loop; if (!lp) return null;
+    const x = clientX - gridEl.getBoundingClientRect().left, xa = lp.a * U.bw, xb = lp.b * U.bw;
+    if (Math.abs(x - xa) <= 8) return 'a';
+    if (Math.abs(x - xb) <= 8) return 'b';
+    return shift && x > xa && x < xb ? 'body' : null;
+  };
+  const rulerHover = (e: PointerEvent) => {
+    const ed = loopEdge(e.clientX, e.shiftKey);
+    (e.currentTarget as HTMLElement).style.cursor = ed === 'a' || ed === 'b' ? 'ew-resize' : ed === 'body' ? 'grab' : '';
+  };
   const rulerDown = (e: PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
@@ -643,6 +655,22 @@ export function Playlist() {
     const r = gridEl.getBoundingClientRect();
     const b0 = clamp(snapRound((e.clientX - r.left) / U.bw, unit(e.altKey)), 0, TOTAL);
     let g: Gesture | null = null;
+    // an existing loop: grab its start or end edge (or drag its body) instead of drawing a new one
+    const lp = S.project.loop, edge = loopEdge(e.clientX, e.shiftKey);
+    if (lp && edge) {
+      const len = lp.b - lp.a, raw0 = (e.clientX - r.left) / U.bw;
+      track(ev => {
+        const raw = (ev.clientX - r.left) / U.bw, u = unit(ev.altKey);
+        if (!g && Math.abs(ev.clientX - e.clientX) > 2) g = new Gesture(edge === 'body' ? 'Przesuń pętlę' : 'Zakres pętli');
+        if (!g) return;
+        let a = lp.a, z = lp.b;
+        if (edge === 'a') a = clamp(snapRound(raw, u), 0, lp.b - u);
+        else if (edge === 'b') z = clamp(snapRound(raw, u), lp.a + u, TOTAL);
+        else { a = clamp(snapRound(lp.a + raw - raw0, u), 0, TOTAL - len); z = a + len; }
+        g.update([{ op: 'setLoop', loop: { a, b: z } }]);
+      }, () => { if (g) g.end(); else A.seek(b0); }, edge === 'body' ? 'grabbing' : 'ew-resize');
+      return;
+    }
     track(ev => {
       const b1 = clamp(snapRound((ev.clientX - r.left) / U.bw, unit(ev.altKey)), 0, TOTAL);
       if (!g && Math.abs(ev.clientX - e.clientX) > 4) g = new Gesture('Pętla');
@@ -740,7 +768,7 @@ export function Playlist() {
             </div>
             <div style={{ position: 'relative', width: gridW() + 'px', height: '26px', flex: 'none' }}>
               <canvas ref={rulerCv} class="ruler" title="Klik = start · przeciągnij = pętla · 2× klik = usuń pętlę"
-                style={{ left: U.headW + 'px', width: cw() + 'px' }} onPointerDown={rulerDown} />
+                style={{ left: U.headW + 'px', width: cw() + 'px' }} onPointerDown={rulerDown} onPointerMove={rulerHover} />
               <div ref={phRuler} class="phead" style={{ height: '26px', 'z-index': 2 }} />
             </div>
           </div>

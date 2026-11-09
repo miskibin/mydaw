@@ -252,7 +252,7 @@ const SHORTCUTS: [string, string][] = [
   ['Krok: włącz · wyłącz', 'klik · PPM (przeciągnij = maluj)'], ['Odsłuch kanału', 'Ctrl + klik w nazwę'], ['Mute · Solo kanału', 'klik w diodę · PPM na diodzie'],
   ['Menu kanału (wypełnij, przesuń, klonuj…)', 'PPM na kanale'], ['Piano roll kanału melodycznego', '2× klik w nazwę / wiersz'], ['Velocity', 'przeciągnij w pasku pod siatką'],
   ['Piano roll: rysuj · maluj · zaznacz · usuń', 'P · B · E · D'], ['Piano roll: półton · oktawa', '↑ ↓ · Ctrl + ↑ ↓'], ['Piano roll: duplikuj w prawo', 'Ctrl+B · Ctrl+D'], ['Piano roll: kopiuj · wytnij · wklej nuty', 'Ctrl+C · X · V'],
-  ['Usuń pętlę', '2× klik na linijce'], ['Piano roll: bez siatki', 'trzymaj Alt'], ['Podgląd patternu w pętli', '▶ Pętla w oknie patternu'],
+  ['Usuń pętlę', '2× klik na linijce'], ['Zmień początek / koniec pętli', 'przeciągnij krawędź na linijce'], ['Przesuń pętlę', 'Shift + przeciągnij na linijce'], ['Piano roll: bez siatki', 'trzymaj Alt'], ['Podgląd patternu w pętli', '▶ Pętla w oknie patternu'],
   ['Nowy band EQ', '2× klik na wykresie'], ['Wytnij rezonans', 'przeciągnij z podświetlonego szczytu widma'], ['Q bandu', 'kółko nad punktem'],
 ];
 

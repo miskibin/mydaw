@@ -696,3 +696,7 @@ select option { background: var(--bg4); color: var(--fg); }
 
 /* EQ quick low/high cut knobs */
 .eqcuts { display: flex; gap: 22px; padding: 8px 4px 10px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
+
+/* mixer: pan + stereo width side by side */
+.strip .knobrow { display: flex; gap: 6px; justify-content: center; }
+.strip .knobrow .pantxt { font-size: 9px; }
