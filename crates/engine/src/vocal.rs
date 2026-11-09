@@ -134,6 +134,15 @@ impl Processor for Fet {
         self.env = 0.0;
         self.slow = 0.0;
     }
+    fn tail_samples(&self) -> Option<usize> {
+        // gain-reduction envelope (slow release) and the DC blocker (pole 0.9995)
+        Some(crate::dsp::decay_samples(self.rel_slow, 17.0).max(crate::dsp::decay_samples(self.rel_fast, 17.0)) + 40_000)
+    }
+    fn park(&mut self) {
+        self.reset();
+        self.dc_l = (0.0, 0.0);
+        self.dc_r = (0.0, 0.0);
+    }
     fn gain_reduction_db(&self) -> f32 {
         self.gr
     }
@@ -297,6 +306,19 @@ impl Processor for DeEss {
         self.dr.fill(0.0);
         self.gr_env = 0.0;
     }
+    fn tail_samples(&self) -> Option<usize> {
+        // look-ahead line, split-band filters, detector envelopes (pole 0.998), gain release
+        Some(self.dl.len() + crate::dsp::decay_samples(self.rel, 17.0) + 17 * 500 + 4096)
+    }
+    fn park(&mut self) {
+        self.reset();
+        self.hp_det.reset();
+        for f in [&mut self.lp_l, &mut self.lp_r, &mut self.lp_l2, &mut self.lp_r2] {
+            f.reset();
+        }
+        self.env_hi = 0.0;
+        self.env_all = 0.0;
+    }
     fn gain_reduction_db(&self) -> f32 {
         self.gr
     }
@@ -350,11 +372,14 @@ pub struct Tune {
     seg_t: f32,
     m: [f32; 8],
     params: Option<ParamBlock>,
+    /// Samples of digital silence at the input, and whether the state is the canonical idle one.
+    quiet: usize,
+    dormant: bool,
 }
 
 impl Default for Tune {
     fn default() -> Self {
-        Self { sr: 48000.0, det: None, psola_l: None, align: vec![], align_w: 0, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, last_m: 0.0, jump_t: 0.0, smooth_m: 0.0, speed: 0.0, seg_t: 0.0, m: [0.0; 8], params: None }
+        Self { sr: 48000.0, det: None, psola_l: None, align: vec![], align_w: 0, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, last_m: 0.0, jump_t: 0.0, smooth_m: 0.0, speed: 0.0, seg_t: 0.0, m: [0.0; 8], params: None, quiet: 0, dormant: true }
     }
 }
 
@@ -369,9 +394,38 @@ fn align_delay(sr: f32) -> usize {
     Detector::new(sr).latency().saturating_sub(Psola::new(sr).half_grain())
 }
 
+impl Tune {
+    fn go_dormant(&mut self) {
+        if let Some(d) = self.det.as_mut() {
+            d.clear();
+        }
+        if let Some(p) = self.psola_l.as_mut() {
+            p.clear();
+        }
+        self.align.fill(0.0);
+        self.align_w = 0;
+        self.period = 0.0;
+        self.corr = 0.0;
+        self.center = 0.0;
+        self.held = 0.0;
+        self.last_note = 0.0;
+        self.engaged = false;
+        self.last_m = 0.0;
+        self.jump_t = 0.0;
+        self.smooth_m = 0.0;
+        self.speed = 0.0;
+        self.seg_t = 0.0;
+        self.m = [0.0; 8];
+        self.quiet = 0;
+        self.dormant = true;
+    }
+}
+
 impl Processor for Tune {
     fn prepare(&mut self, sr: f32, _max: usize) {
         self.sr = sr;
+        self.quiet = 0;
+        self.dormant = true;
         self.det = Some(Detector::new(sr));
         self.psola_l = Some(Psola::new(sr));
         self.align = vec![0.0; align_delay(sr)];
@@ -404,6 +458,24 @@ impl Processor for Tune {
         }
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
+        // Dormancy: digital silence for a second flushes everything the effect holds, so
+        // it settles to one canonical state and does nothing until sound returns. A chain
+        // that is skipped (`Processor::park`) is in exactly this state, so skipping it
+        // changes nothing.
+        let silent = l.iter().all(|&x| x == 0.0) && r.iter().all(|&x| x == 0.0);
+        if silent {
+            if self.dormant {
+                return;
+            }
+            if self.quiet >= self.sr as usize {
+                self.go_dormant();
+                return;
+            }
+            self.quiet += l.len();
+        } else {
+            self.quiet = 0;
+            self.dormant = false;
+        }
         let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola_l.as_mut()) else { return };
         let sr = self.sr;
         for i in 0..l.len() {
@@ -509,6 +581,15 @@ impl Processor for Tune {
         self.align.fill(0.0);
         self.corr = 0.0;
     }
+    fn park(&mut self) {
+        if !self.dormant {
+            self.go_dormant();
+        }
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        // look-ahead + pitch window + grain buffers all hold well under a second
+        Some(self.align.len() + (self.sr * 1.5) as usize)
+    }
     fn meters(&self, out: &mut [f32; METERS]) {
         out[..8].copy_from_slice(&self.m);
     }
@@ -557,6 +638,8 @@ pub struct Voice {
     dc_k: f32,
     m: [f32; 4],
     params: Option<ParamBlock>,
+    quiet: usize,
+    dormant: bool,
 }
 
 impl Default for Voice {
@@ -588,6 +671,8 @@ impl Default for Voice {
             dc_k: 0.999,
             m: [0.0; 4],
             params: None,
+            quiet: 0,
+            dormant: true,
         }
     }
 }
@@ -602,9 +687,37 @@ fn voice_shift(mode: u32, pitch: f32, m: f32) -> f32 {
     st.clamp(-24.0, 24.0)
 }
 
+impl Voice {
+    fn go_dormant(&mut self) {
+        if let Some(d) = self.det.as_mut() {
+            d.clear();
+        }
+        if let Some(p) = self.psola.as_mut() {
+            p.clear();
+        }
+        self.align.fill(0.0);
+        self.align_w = 0;
+        self.period = 0.0;
+        self.want = if self.mode == 0 { self.pitch } else { 0.0 };
+        self.shift = self.want;
+        self.last_m = 0.0;
+        self.jump_t = 0.0;
+        self.sg.v = self.drive_g;
+        self.sw.v = self.drive_w;
+        self.so.v = self.out;
+        self.dc_x = 0.0;
+        self.dc_y = 0.0;
+        self.m = [0.0; 4];
+        self.quiet = 0;
+        self.dormant = true;
+    }
+}
+
 impl Processor for Voice {
     fn prepare(&mut self, sr: f32, _max: usize) {
         self.sr = sr;
+        self.quiet = 0;
+        self.dormant = true;
         self.det = Some(Detector::new(sr));
         self.psola = Some(Psola::new(sr));
         self.align = vec![0.0; align_delay(sr)];
@@ -642,6 +755,24 @@ impl Processor for Voice {
         }
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
+        // Dormancy: digital silence for a second flushes everything the effect holds, so
+        // it settles to one canonical state and does nothing until sound returns. A chain
+        // that is skipped (`Processor::park`) is in exactly this state, so skipping it
+        // changes nothing.
+        let silent = l.iter().all(|&x| x == 0.0) && r.iter().all(|&x| x == 0.0);
+        if silent {
+            if self.dormant {
+                return;
+            }
+            if self.quiet >= self.sr as usize {
+                self.go_dormant();
+                return;
+            }
+            self.quiet += l.len();
+        } else {
+            self.quiet = 0;
+            self.dormant = false;
+        }
         let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola.as_mut()) else { return };
         let sr = self.sr;
         let sat_norm = 1.0 - DRIVE_BIAS.tanh().powi(2);
@@ -712,6 +843,14 @@ impl Processor for Voice {
         self.shift = self.want;
         self.dc_x = 0.0;
         self.dc_y = 0.0;
+    }
+    fn park(&mut self) {
+        if !self.dormant {
+            self.go_dormant();
+        }
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        Some(self.align.len() + (self.sr * 1.5) as usize)
     }
     fn meters(&self, out: &mut [f32; METERS]) {
         out[..4].copy_from_slice(&self.m);

@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -188,17 +188,42 @@ struct Core {
     midi: MidiState,
 }
 
-/// Live MIDI input state (see [`Engine::midi_configure`]).
+/// Live MIDI input state kept under the core lock (see [`Engine::midi_configure`]).
 #[derive(Default)]
 struct MidiState {
     /// Channel the keyboard plays; `None` = the first pitched channel.
     target: Option<Id>,
     /// A device is connected: notes play, and an armed recording captures them.
     live: bool,
+}
+
+/// The MIDI take being recorded; its own lock, so keyboard events never wait for the core.
+#[derive(Default)]
+struct MidiTake {
     /// The take being played in: recorder, armed track index, target channel.
     rec: Option<(MidiRecorder, usize, Id)>,
     /// The running take received notes (then its audio take is dropped).
     played: bool,
+}
+
+/// What a keyboard event needs, readable without the core lock: whether a device is live,
+/// the channel and insert the keys play (refreshed whenever the project changes) and the
+/// audio thread's MIDI ring (separate from the command ring, so it has its own producer).
+struct MidiFast {
+    live: AtomicBool,
+    chan: std::sync::atomic::AtomicU64,
+    ins: std::sync::atomic::AtomicUsize,
+    tx: Mutex<Option<rtrb::Producer<Cmd>>>,
+}
+
+impl MidiFast {
+    fn send(&self, cmd: Cmd) {
+        if let Some(tx) = self.tx.lock().as_mut() {
+            if tx.push(cmd).is_err() {
+                log::warn!("audio MIDI queue full; dropping an event");
+            }
+        }
+    }
 }
 
 pub struct Engine {
@@ -207,6 +232,12 @@ pub struct Engine {
     factory: Arc<dyn PluginFactory>,
     listeners: Mutex<Vec<Listener>>,
     sink: Mutex<Option<FrameSink>>,
+    /// Effect chains that are silent past their tails are not processed (on by default).
+    skip_silent: std::sync::atomic::AtomicBool,
+    midi_fast: MidiFast,
+    midi_take: Mutex<MidiTake>,
+    /// Threads an offline render may use for the insert chains.
+    render_workers: std::sync::atomic::AtomicUsize,
 }
 
 const UNDO_LIMIT: usize = 200;
@@ -238,6 +269,10 @@ impl Engine {
             factory,
             listeners: Mutex::new(vec![]),
             sink: Mutex::new(None),
+            skip_silent: std::sync::atomic::AtomicBool::new(true),
+            midi_fast: MidiFast { live: AtomicBool::new(false), chan: std::sync::atomic::AtomicU64::new(u64::MAX), ins: std::sync::atomic::AtomicUsize::new(usize::MAX), tx: Mutex::new(None) },
+            midi_take: Mutex::new(MidiTake::default()),
+            render_workers: std::sync::atomic::AtomicUsize::new(std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).clamp(1, 8)).unwrap_or(1)),
         });
         let weak = Arc::downgrade(&e);
         thread::Builder::new()
@@ -264,6 +299,19 @@ impl Engine {
         e
     }
 
+    /// Turns silence skipping of effect chains on/off for Rts created from now on and for
+    /// offline renders. The output is the same (below -120 dB); off is for A/B tests.
+    pub fn set_silence_skip(&self, on: bool) {
+        self.skip_silent.store(on, Relaxed);
+    }
+
+    /// Threads an offline render may use for the insert chains (1 = single-threaded). The
+    /// default leaves two cores to the rest of the machine, at most 8. The render is identical
+    /// whatever the count.
+    pub fn set_render_workers(&self, n: usize) {
+        self.render_workers.store(n.max(1), Relaxed);
+    }
+
     // ------------------------------------------------------------ device attach
 
     /// Builds the audio-thread half for a device running at `sample_rate` with
@@ -272,6 +320,7 @@ impl Engine {
     pub fn create_rt(&self, sample_rate: f32, max_block: usize) -> Rt {
         let max_block = max_block.clamp(16, 8192);
         let (cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(4096);
+        let (midi_tx, midi_rx) = rtrb::RingBuffer::<Cmd>::new(1024);
         let (gb_tx, gb_rx) = rtrb::RingBuffer::<Garbage>::new(4096);
         let (rec_tx, rec_rx) = rtrb::RingBuffer::<f32>::new(sample_rate as usize * 2 * 20);
         let mut inputs = vec![];
@@ -296,7 +345,10 @@ impl Engine {
             }
         }
         *self.shared.lock() = shared.clone();
-        let rt = Rt::new(sample_rate, max_block, cmd_rx, gb_tx, shared, Taps { input: inputs, output: outputs }, rec_tx);
+        let mut rt = Rt::new(sample_rate, max_block, cmd_rx, gb_tx, shared, Taps { input: inputs, output: outputs }, rec_tx);
+        rt.set_skip_silent(self.skip_silent.load(Relaxed));
+        rt.set_midi_ring(midi_rx);
+        *self.midi_fast.tx.lock() = Some(midi_tx);
         let mut c = self.core.lock();
         // everything is rebuilt for the new rate: hosted plugins keep their state through the project
         self.snapshot_plugin_states(&mut c);
@@ -443,7 +495,7 @@ impl Engine {
 
     pub fn play(&self, from: f64) {
         let mut c = self.core.lock();
-        if c.take.is_some() || c.midi.rec.is_some() {
+        if c.take.is_some() || self.midi_take.lock().rec.is_some() {
             return;
         }
         let from = from.max(0.0);
@@ -504,7 +556,7 @@ impl Engine {
         if let Some(v) = monitor {
             c.transport.monitor = v;
         }
-        let punch_out = !c.transport.rec && (c.take.is_some() || c.midi.rec.is_some());
+        let punch_out = !c.transport.rec && (c.take.is_some() || self.midi_take.lock().rec.is_some());
         if punch_out {
             send(&mut c, Cmd::PunchOut);
         }
@@ -519,7 +571,7 @@ impl Engine {
                 }
             }
         }
-        if c.transport.rec && c.transport.playing && c.midi.rec.is_none() {
+        if c.transport.rec && c.transport.playing && self.midi_take.lock().rec.is_none() {
             if let Some(track) = c.project.tracks.iter().position(|t| t.arm) {
                 let at = self.shared().beat();
                 self.begin_midi_take(&mut c, track, at);
@@ -1099,6 +1151,8 @@ impl Engine {
             keep.push((b, d));
         }
         let mut rt = Rt::new(sr, block, cmd_rx, gb_tx, Arc::new(Shared::new()), taps, rec_tx);
+        rt.set_skip_silent(self.skip_silent.load(Relaxed));
+        rt.set_workers(self.render_workers.load(Relaxed));
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
         let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new());
@@ -1168,6 +1222,7 @@ impl Engine {
 
     /// Pushes the project to the audio thread.
     fn sync(&self, c: &mut Core, d: Dirty) {
+        self.refresh_midi(c);
         let Some(w) = c.wires.as_ref() else { return };
         let (sr, max_block) = (w.sr, w.max_block);
         if d.mixer {
@@ -1291,7 +1346,7 @@ impl Engine {
         if take.start.is_nan() {
             return; // punched in, but the audio thread never started capturing
         }
-        if c.midi.played {
+        if self.midi_take.lock().played {
             return; // the armed track was played on a MIDI keyboard: this is a MIDI take
         }
         let spb = 60.0 / c.project.bpm;
@@ -1354,8 +1409,10 @@ impl Engine {
         let changed = c.midi.target != target || c.midi.live != live;
         c.midi.target = target;
         c.midi.live = live;
+        self.refresh_midi(&c);
+        self.midi_fast.live.store(live, Release);
         if changed {
-            send(&mut c, Cmd::MidiOff);
+            self.midi_fast.send(Cmd::MidiOff);
         }
     }
 
@@ -1367,56 +1424,70 @@ impl Engine {
 
     /// Releases every sounding keyboard note (device unplugged).
     pub fn midi_panic(&self) {
-        let mut c = self.core.lock();
-        send(&mut c, Cmd::MidiOff);
+        self.midi_fast.send(Cmd::MidiOff);
     }
 
-    /// One decoded message from the keyboard. Plays through the audio thread's command ring
+    /// Publishes the channel and insert the keyboard plays for the lock-free event path.
+    fn refresh_midi(&self, c: &Core) {
+        self.midi_fast.chan.store(midi_channel(c).unwrap_or(u64::MAX), Relaxed);
+        self.midi_fast.ins.store(armed_insert(c).unwrap_or(usize::MAX), Relaxed);
+    }
+
+    /// One decoded message from the keyboard. Plays through the audio thread's MIDI ring
     /// (no allocation there) and, while a take is armed, goes into the recorder at the
-    /// playhead. Cheap; safe to call from the MIDI input thread.
+    /// playhead. Cheap and never waits for the core lock (the project being edited, saved
+    /// or rebuilt); safe to call from the MIDI input thread.
     pub fn midi_event(&self, m: MidiMsg) {
-        let beat = self.shared().beat();
-        let mut guard = self.core.lock();
-        let c = &mut *guard;
-        if !c.midi.live {
+        let mf = &self.midi_fast;
+        if !mf.live.load(Acquire) {
             return;
         }
+        let chan = match mf.chan.load(Relaxed) {
+            u64::MAX => None,
+            id => Some(id),
+        };
+        let ins = match mf.ins.load(Relaxed) {
+            usize::MAX => None,
+            i => Some(i),
+        };
+        let beat = self.shared().beat();
         match m {
             MidiMsg::NoteOn { key, vel, .. } => {
-                let Some(chan) = midi_channel(c) else { return };
-                let ins = armed_insert(c);
-                send(c, Cmd::MidiNote { chan, key, vel: MidiMsg::vel_gain(vel), on: true, ins });
-                if let Some((r, _, _)) = c.midi.rec.as_mut() {
+                let Some(chan) = chan else { return };
+                mf.send(Cmd::MidiNote { chan, key, vel: MidiMsg::vel_gain(vel), on: true, ins });
+                let mut t = self.midi_take.lock();
+                if let Some((r, _, _)) = t.rec.as_mut() {
                     r.note_on(beat, key, vel);
-                    c.midi.played = true;
+                    t.played = true;
                 }
             }
             MidiMsg::NoteOff { key, .. } => {
-                let Some(chan) = midi_channel(c) else { return };
-                send(c, Cmd::MidiNote { chan, key, vel: 0.0, on: false, ins: None });
-                if let Some((r, _, _)) = c.midi.rec.as_mut() {
+                let Some(chan) = chan else { return };
+                mf.send(Cmd::MidiNote { chan, key, vel: 0.0, on: false, ins: None });
+                if let Some((r, _, _)) = self.midi_take.lock().rec.as_mut() {
                     r.note_off(beat, key);
                 }
             }
             MidiMsg::Sustain { down, .. } => {
-                send(c, Cmd::MidiSustain(down));
-                if let Some((r, _, _)) = c.midi.rec.as_mut() {
+                mf.send(Cmd::MidiSustain(down));
+                if let Some((r, _, _)) = self.midi_take.lock().rec.as_mut() {
                     r.sustain(beat, down);
                 }
             }
-            MidiMsg::PitchBend { value, .. } => send(c, Cmd::MidiBend(MidiMsg::bend_semitones(value))),
-            MidiMsg::AllNotesOff { .. } => send(c, Cmd::MidiOff),
+            MidiMsg::PitchBend { value, .. } => mf.send(Cmd::MidiBend(MidiMsg::bend_semitones(value))),
+            MidiMsg::AllNotesOff { .. } => mf.send(Cmd::MidiOff),
         }
     }
 
     /// Starts collecting keyboard notes for a take on armed track `track` from beat `from`.
     fn begin_midi_take(&self, c: &mut Core, track: usize, from: f64) {
-        c.midi.played = false;
+        let mut t = self.midi_take.lock();
+        t.played = false;
         if !c.midi.live {
             return;
         }
         if let Some(ch) = midi_channel(c) {
-            c.midi.rec = Some((MidiRecorder::new(from), track, ch));
+            t.rec = Some((MidiRecorder::new(from), track, ch));
         }
     }
 
@@ -1425,8 +1496,13 @@ impl Engine {
     fn finish_midi_take(&self) {
         let end = self.shared().beat();
         let mut c = self.core.lock();
-        let Some((rec, track, ch)) = c.midi.rec.take() else { return };
-        c.midi.played = false;
+        let Some((rec, track, ch)) = ({
+            let mut t = self.midi_take.lock();
+            t.played = false;
+            t.rec.take()
+        }) else {
+            return;
+        };
         let notes = rec.finish(end);
         let Some(laid) = midi::layout(&notes, ch, 4.0) else { return };
         let color = c.project.channel(ch).map(|x| x.color.clone()).unwrap_or_else(|| "#69c3d6".into());

@@ -101,6 +101,17 @@ moves go through the mixer fast path (`MixState.chans`) without a timeline rebui
 ringing notes follow them. Auditions (`note_audition`) and the pattern loop preview
 (`pattern_play`) are commands to the audio thread, not edits.
 
+**Silence skipping.** An insert whose input is exact digital silence for longer than its
+chain's tail (each `Processor::tail_samples`, summed, plus the dry-path delays) is not
+processed: its effects are settled once (`Processor::park`) and skipped until sound returns;
+an effect with no known tail (`None`, e.g. hosted plugins) keeps its insert running. Tune,
+Voice and Denoise idle after a second of silence themselves, so a skipped chain and a
+processed one give the same output (`crates/engine/tests/silence_skip.rs`, below -120 dB).
+Live keyboard events do not take the core lock: they read an atomic snapshot (device live,
+target channel, armed insert; refreshed on every sync) and push into a dedicated ring that
+the audio thread drains with the command ring. Offline renders may run the insert chains on
+worker threads (`Engine::set_render_workers`), bit-identical to one thread.
+
 Effect types: `eq` (7 `bands`), `comp`, `sat`, `delay`, `reverb`, `limit`,
 `vst3` (`plugin: {format,path,cid,name,vendor,state}`). Parameter ids, ranges
 and presets come from `fx_catalog` — the UI must not hard-code them.

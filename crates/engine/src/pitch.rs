@@ -74,6 +74,20 @@ impl Detector {
         }
     }
 
+    /// Back to the state right after `new` (the search range and `hint` are the caller's).
+    pub fn clear(&mut self) {
+        self.lp1.reset();
+        self.lp2.reset();
+        self.phase = 0;
+        self.buf.fill(0.0);
+        self.w = 0;
+        self.since = 0;
+        self.hz = 0.0;
+        self.confidence = 0.0;
+        self.rms = 0.0;
+        self.hint = 0.0;
+    }
+
     /// Latency of an estimate, in device samples (half the analysis window).
     /// Search only between `lo` and `hi` Hz (within MIN_HZ‥MAX_HZ). Latency is unchanged.
     pub fn set_range(&mut self, lo: f32, hi: f32) {
@@ -262,6 +276,17 @@ impl Psola {
         self.lpb.fill(0.0);
         self.out.fill(0.0);
         self.voiced_prev = false;
+    }
+
+    /// Back to the state right after `new`.
+    pub fn clear(&mut self) {
+        self.reset();
+        self.lp1.reset();
+        self.lp2.reset();
+        self.n = 0;
+        self.next_syn = 0.0;
+        self.mark = 0.0;
+        self.next_mark = 0.0;
     }
 
     #[inline]

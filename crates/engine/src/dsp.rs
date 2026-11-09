@@ -165,6 +165,17 @@ impl Smooth {
     }
 }
 
+/// Samples for a one-pole decay with per-sample coefficient `k` to fall `taus` time constants.
+pub(crate) fn decay_samples(k: f32, taus: f32) -> usize {
+    if k > 0.0 && k < 1.0 {
+        (taus * -1.0 / k.ln()) as usize + 1
+    } else if k >= 1.0 {
+        usize::MAX / 4
+    } else {
+        0
+    }
+}
+
 // ---------------------------------------------------------------- EQ
 
 const EQ_BANDS: usize = 24;
@@ -349,6 +360,26 @@ impl Processor for Eq {
             st.env = 0.0;
         }
     }
+    fn tail_samples(&self) -> Option<usize> {
+        if self.sr <= 0.0 {
+            return Some(0);
+        }
+        // series of biquads: the ring-down times add up (tau ~ Q / (pi f), longer for boosts)
+        let mut tau = 0.0f32;
+        for b in self.p[..self.n_on].iter().filter(|b| b.on) {
+            if b.dynamic {
+                return None;
+            }
+            let stages = if b.kind == 0 || b.kind == 4 { b.stages.max(1) as f32 } else { 1.0 };
+            let boost = 10f32.powf(b.g.abs().min(48.0) / 40.0);
+            tau += stages * b.q.max(0.707) * boost / (PI * b.f.max(5.0));
+        }
+        Some(((tau * 23.0 + 0.05) * self.sr) as usize + 64)
+    }
+    fn park(&mut self) {
+        self.reset();
+        self.gain.v = self.out;
+    }
     fn meters(&self, out: &mut [f32; crate::processor::METERS]) {
         for k in 0..EQ_BANDS {
             out[k] = self.bands[k].dyn_g;
@@ -422,6 +453,10 @@ impl Processor for Comp {
         self.env_db = 0.0;
         self.gr = 0.0;
     }
+    fn tail_samples(&self) -> Option<usize> {
+        // silent in = silent out; what has to settle is the gain-reduction envelope
+        Some(decay_samples(self.rel, 17.0))
+    }
     fn gain_reduction_db(&self) -> f32 {
         self.gr
     }
@@ -453,6 +488,14 @@ impl Processor for Sat {
             self.so.v = self.out;
             self.sm.v = self.mix;
         }
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        Some(0)
+    }
+    fn park(&mut self) {
+        self.sd.v = self.drive;
+        self.so.v = self.out;
+        self.sm.v = self.mix;
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
         let norm = 1.0 / 2.5f32.tanh();
@@ -524,6 +567,20 @@ impl Processor for Delay {
     fn reset(&mut self) {
         self.bl.fill(0.0);
         self.br.fill(0.0);
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        let n = self.bl.len();
+        if n < 4 {
+            return Some(0);
+        }
+        let t = self.time.max(self.st.v).clamp(1.0, (n - 3) as f32);
+        // every repeat is `fb` of the one before: down to -140 dB
+        let reps = if self.fb < 1e-4 { 1.0 } else { (16.2 / -self.fb.ln()).ceil().max(1.0) };
+        Some(((reps + 1.0) * t + 0.4 * self.sr) as usize)
+    }
+    fn park(&mut self) {
+        self.reset();
+        self.st.v = self.time;
     }
 }
 
@@ -702,6 +759,13 @@ impl Processor for Reverb {
             ln.buf.fill(0.0);
         }
         self.lp = [0.0; FDN];
+        self.hp_l.reset();
+        self.hp_r.reset();
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        // 60 dB per RT60, so -140 dB takes 2.33 RT60 (+ pre-delay, diffusion, filters)
+        let rt60 = self.params.map(|p| p.values[0].max(0.1)).unwrap_or(0.1);
+        Some(self.pre_d + ((2.6 * rt60 + 0.3) * self.sr) as usize)
     }
     fn wet_tap(&self) -> Option<&[f32]> {
         Some(&self.wet[..self.wet_n])
@@ -773,6 +837,9 @@ impl Processor for Limiter {
         self.dr.fill(0.0);
         self.req.fill(1.0);
         self.env = 1.0;
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        Some(self.dl.len() + decay_samples(self.rel, 17.0))
     }
     fn gain_reduction_db(&self) -> f32 {
         self.gr

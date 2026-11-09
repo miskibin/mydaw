@@ -33,6 +33,22 @@ pub trait Processor: Send {
     /// Forget tails and envelopes (transport jump, bypass toggled on).
     fn reset(&mut self) {}
 
+    /// How many samples of output this processor can still produce, and how long its
+    /// state needs to settle, after its input became exact digital silence (the time to
+    /// fall below about -140 dB / to forget envelopes). `Some(0)` = memoryless. `None` =
+    /// unknown or self-generating: the chain is never skipped. Called on the audio
+    /// thread: no allocation.
+    fn tail_samples(&self) -> Option<usize> {
+        None
+    }
+
+    /// Called once when the chain has been silent for longer than every tail and is
+    /// about to be skipped: bring the state to what the tail would have left (zeros,
+    /// settled envelopes and smoothers). Defaults to `reset`.
+    fn park(&mut self) {
+        self.reset();
+    }
+
     /// Current gain reduction in dB (≤ 0) for meters; 0 when not a dynamics processor.
     fn gain_reduction_db(&self) -> f32 {
         0.0
