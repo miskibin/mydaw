@@ -183,7 +183,7 @@ function chanMenu(c: Channel, x: number, y: number) {
     { t: 'item', label: 'Przesuń w prawo', kbd: '▶', act: () => edit(rotate(pt.notes, c.id, steps, 1), 'Przesuń kroki') },
     { t: 'item', label: 'Wyczyść', disabled: !pt.notes.some(n => n.ch === c.id), act: () => edit(clearChannel(pt.notes, c.id), 'Wyczyść kanał') },
     { t: 'sep' },
-    { t: 'item', label: 'Odsłuchaj', kbd: 'Ctrl+klik', act: () => audition(c.id) },
+    { t: 'item', label: 'Odsłuchaj', kbd: 'Ctrl+klik', act: () => audition(c.id, undefined, 0.8, true) },
     { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, c.name, v => v.trim() && setChannel(c, { name: v.trim() }, 'Nazwa kanału')) },
     { t: 'swatches', current: c.color, pick: col => setChannel(c, { color: col }, 'Kolor kanału') },
     { t: 'item', label: 'Klonuj kanał', act: () => cloneChannel(c) },
@@ -375,7 +375,7 @@ function ChanRow(props: { c: Channel }) {
     if (e.button === 2) { e.preventDefault(); e.stopPropagation(); selectChannel(c().id); chanMenu(c(), e.clientX, e.clientY); return; }
     if (e.button !== 0) return;
     selectChannel(c().id);
-    if (e.ctrlKey || e.metaKey) { audition(c().id); return; }
+    if (e.ctrlKey || e.metaKey) { audition(c().id, undefined, 0.8, true); return; }
     if (dblCheck('cname' + c().id) && isPitched(c())) setView('roll', c().id);
   };
   return (

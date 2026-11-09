@@ -64,9 +64,70 @@ export const LIGHT: Tokens = {
   clipInkTo: '#000000', clipInkPct: 78, clipText: '#0f1318', clipTextSel: '#ffffff', laneArm: '#f7eef1', gridShade: 'rgba(0,0,0,.025)',
 };
 
+// ---- extra themes: generated from a hue/saturation for surfaces and an accent ----
+function hsl(h: number, sat: number, l: number): string {
+  const s = sat / 100, L = l / 100, k = (n: number) => (n + h / 30) % 12, a = s * Math.min(L, 1 - L);
+  const f = (n: number) => Math.round(255 * (L - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1)))).toString(16).padStart(2, '0');
+  return '#' + f(0) + f(8) + f(4);
+}
+
+/** Extra CSS variables that are not canvas tokens. */
+type Css = Record<string, string>;
+export interface ThemeDef { id: string; name: string; light: boolean; t: Tokens; css: Css; swatch: [string, string, string] }
+
+function darkTheme(id: string, name: string, h: number, s: number, accent: [string, string], o: { lift?: number; fgS?: number; warm?: [string, string, string] } = {}): ThemeDef {
+  const d = o.lift ?? 0, L = (l: number) => hsl(h, s, Math.max(0, l + d)), F = (l: number) => hsl(h, o.fgS ?? Math.min(s, 14), l);
+  const [green, amber, red] = o.warm ?? [DARK.green, DARK.amber, DARK.red];
+  const t: Tokens = {
+    ...DARK,
+    bg0: L(4.5), bg1: L(6.5), bg2: L(8.4), bg3: L(9.8), bg4: L(10.6), bg5: L(11), bg6: L(13), bg7: L(14.8),
+    line: L(17.6), line2: L(20.6), line3: L(21.8),
+    fg: F(86), fgHi: F(96), fg2: F(74), fg3: F(64), fg4: F(53), fg5: F(40), fg6: F(32),
+    blue: accent[0], blueHi: accent[1], green, amber, red, onBg: L(24),
+    viz: L(5.5), vizPanel: L(7.5), vizGrid: L(11), vizGrid2: L(15), vizAxis: L(19), vizLabel: F(32),
+    grid: L(8.4), gridBar: L(17), gridBeat: L(12.5), laneAlt: L(9.5), rulerBg: L(9.8), rulerText: F(53), clipBody: L(7.5),
+    keyB: L(15), clipBase: L(7.5), laneArm: hsl(330, 18, 8.5 + d),
+  };
+  const css: Css = {
+    '--sel-bg': L(17), '--sel-bg2': L(15), '--sel-ring': L(28), '--drag-bg': L(21), '--mixer-bg': L(7.6), '--dialog-bg': L(12.5),
+    '--arm-bg': hsl(330, 14, 11 + d), '--knob-track': L(20.6), '--knob-cap': L(20.6), '--viz': t.viz,
+  };
+  return { id, name, light: false, t, css, swatch: [t.bg2, t.bg6, accent[0]] };
+}
+
+function lightTheme(id: string, name: string, h: number, s: number, accent: [string, string]): ThemeDef {
+  const L = (l: number) => hsl(h, s, l), F = (l: number) => hsl(h, Math.min(s, 16), l);
+  const t: Tokens = {
+    ...LIGHT,
+    bg0: L(86.5), bg1: L(94), bg2: L(97), bg3: L(95.5), bg4: L(97.5), bg5: L(93), bg6: L(90.5), bg7: L(99.5),
+    line: L(85), line2: L(80.5), line3: L(78),
+    fg: F(19), fgHi: F(7), fg2: F(27), fg3: F(36), fg4: F(45), fg5: F(56), fg6: F(64),
+    blue: accent[0], blueHi: accent[1], onBg: hsl(h, 40, 90),
+    viz: L(98.8), vizPanel: L(96.5), vizGrid: L(93.5), vizGrid2: L(89), vizAxis: L(81), grid: L(97), gridBar: L(83), gridBeat: L(91),
+    laneAlt: L(94.5), rulerBg: L(93.5), clipBody: L(99.5), clipBase: L(99.5),
+  };
+  const css: Css = { '--sel-bg': hsl(h, 45, 90), '--sel-bg2': hsl(h, 40, 92), '--sel-ring': hsl(h, 45, 76), '--drag-bg': hsl(h, 45, 86), '--mixer-bg': L(91.5), '--dialog-bg': L(99.5), '--viz': t.viz };
+  return { id, name, light: true, t, css, swatch: [t.bg2, t.bg6, accent[0]] };
+}
+
+/** Every theme the settings offer. Ids are saved on this computer, never rename them. */
+export const THEMES: ThemeDef[] = [
+  { id: 'dark', name: 'Grafit', light: false, t: DARK, css: {}, swatch: [DARK.bg2, DARK.bg6, DARK.blue] },
+  darkTheme('midnight', 'Północ', 220, 34, ['#5b8cff', '#9db8ff'], { lift: 1 }),
+  darkTheme('violet', 'Fiolet', 265, 22, ['#a07cf6', '#c6b0ff'], { lift: 1 }),
+  darkTheme('forest', 'Las', 155, 16, ['#3fbf8a', '#86e0b8'], { warm: ['#5cc98f', '#e0a44a', '#e05263'] }),
+  darkTheme('studio', 'Studio', 28, 14, ['#f0973f', '#ffc285'], { lift: 1, warm: ['#7fc06a', '#e8b04a', '#e05a4f'] }),
+  darkTheme('rose', 'Róż', 340, 14, ['#f06292', '#ffa6c4']),
+  darkTheme('oled', 'Czerń (OLED)', 220, 6, ['#4f8ef7', '#8fb6ff'], { lift: -4, fgS: 6 }),
+  { id: 'light', name: 'Jasny', light: true, t: LIGHT, css: {}, swatch: [LIGHT.bg2, LIGHT.bg6, LIGHT.blue] },
+  lightTheme('paper', 'Papier', 38, 30, ['#c2651b', '#a9530f']),
+  lightTheme('sky', 'Błękit', 210, 35, ['#1f6fe0', '#1858b8']),
+];
+
 /** Current tokens (mutated in place on theme change; read at draw time). */
 export const T: Tokens = { ...DARK };
-export type ThemeMode = 'dark' | 'light' | 'system';
+/** A theme id from THEMES, or 'system' (Grafit / Jasny following the OS). */
+export type ThemeMode = string;
 export const theme = { epoch: 0, light: false };
 const [themeVersion, setThemeVersion] = createSignal(0);
 const [themeMode, setThemeModeSig] = createSignal<ThemeMode>('dark');
@@ -74,17 +135,30 @@ export { themeMode, themeVersion };
 
 const KEY = 'wave.theme';
 let mq: MediaQueryList | null = null;
+let cssSet: string[] = [];
 
-function resolve(mode: ThemeMode): boolean {
-  if (mode === 'system') return !!mq?.matches;
-  return mode === 'light';
+function resolve(mode: ThemeMode): ThemeDef {
+  const id = mode === 'system' ? (mq?.matches ? 'light' : 'dark') : mode;
+  return THEMES.find(t => t.id === id) ?? THEMES[0];
 }
 
-function apply(light: boolean) {
-  Object.assign(T, light ? LIGHT : DARK);
-  theme.light = light;
+const VAR_TOKENS = ['bg0', 'bg1', 'bg2', 'bg3', 'bg4', 'bg5', 'bg6', 'bg7', 'line', 'line2', 'line3', 'fg', 'fgHi', 'fg2', 'fg3', 'fg4', 'fg5', 'fg6', 'blue', 'blueHi', 'green', 'amber', 'red', 'onBg'] as const;
+
+function apply(def: ThemeDef) {
+  Object.assign(T, def.t);
+  theme.light = def.light;
   theme.epoch++;
-  if (typeof document !== 'undefined') document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  if (typeof document !== 'undefined') {
+    const root = document.documentElement;
+    root.dataset.theme = def.light ? 'light' : 'dark';
+    for (const k of cssSet) root.style.removeProperty(k);
+    cssSet = [];
+    if (def.id !== 'dark' && def.id !== 'light') {
+      const vars: Css = { ...def.css };
+      for (const k of VAR_TOKENS) vars['--' + k.replace(/[A-Z]/g, m => '-' + m.toLowerCase())] = def.t[k];
+      for (const [k, v] of Object.entries(vars)) { root.style.setProperty(k, v); cssSet.push(k); }
+    }
+  }
   setThemeVersion(v => v + 1);
 }
 
@@ -100,7 +174,7 @@ export function initTheme() {
   if (typeof window === 'undefined') return;
   mq = window.matchMedia?.('(prefers-color-scheme: light)') ?? null;
   let mode: ThemeMode = 'dark';
-  try { const v = localStorage.getItem(KEY); if (v === 'light' || v === 'dark' || v === 'system') mode = v; } catch { /* ignore */ }
+  try { const v = localStorage.getItem(KEY); if (v && (v === 'system' || THEMES.some(t => t.id === v))) mode = v; } catch { /* ignore */ }
   setThemeModeSig(mode);
   apply(resolve(mode));
   mq?.addEventListener?.('change', () => { if (themeMode() === 'system') apply(resolve('system')); });

@@ -628,3 +628,23 @@ select option { background: var(--bg4); color: var(--fg); }
 .pitem .picon { width: 12px; justify-content: center; }
 .cname .cicon { margin-right: 4px; }
 .strip .micon { margin-right: 4px; vertical-align: -1px; }
+
+/* settings dialog: tabs on the left */
+.dialog.setdlg { width: min(660px, 94vw); height: min(560px, 90vh); display: flex; flex-direction: column; }
+.setdlg .setbody { flex: 1; min-height: 0; display: flex; gap: 14px; }
+.setdlg .settabs { flex: none; width: 112px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); padding-right: 10px; }
+.setdlg .settabs button { text-align: left; background: none; border: 0; color: var(--fg3); padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 12.5px; }
+.setdlg .settabs button:hover { background: var(--bg6); color: var(--fg); }
+.setdlg .settabs button.on { background: var(--sel-bg); color: var(--fg-hi); }
+.setdlg .setpane { flex: 1; min-width: 0; overflow-y: auto; padding-right: 4px; }
+.setdlg .setfoot { margin-top: 18px; display: flex; justify-content: flex-end; }
+.themegrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.themecard { display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 8px; border: 1px solid var(--line2); background: var(--bg3); cursor: pointer; color: var(--fg2); font-size: 11.5px; }
+.themecard:hover { border-color: var(--line3); color: var(--fg); }
+.themecard.on { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue); color: var(--fg-hi); }
+.themecard .sw { height: 44px; border-radius: 5px; display: flex; align-items: flex-end; gap: 4px; padding: 6px; border: 1px solid rgba(127,127,127,.25); }
+.themecard .sw span:first-child { flex: 1; height: 16px; border-radius: 3px; }
+.themecard .sw span:last-child { width: 16px; height: 16px; border-radius: 50%; }
+.themecard .sw.sys { background: linear-gradient(135deg, #111419 50%, #f6f7f9 50%); }
+.themecard .sw.sys span { background: transparent !important; }
+.themecard .nm { text-align: left; }

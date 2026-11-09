@@ -9,8 +9,10 @@ import { startTelemetry } from './state/telemetry';
 import { setU } from './state/ui';
 import { App } from './App';
 import { initTheme } from './ui/theme';
+import { initPrefs } from './state/prefs';
 
 initTheme();
+initPrefs();
 if (import.meta.env.VITE_PERF) void import('./perfHook'); // perf harness only; compiled out otherwise
 
 async function boot() {

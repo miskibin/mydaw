@@ -1,5 +1,6 @@
 // Pattern editor commands: the window, channels, auditions and the pattern loop preview.
 // Every edit is an op (putPattern / putChannel / removeChannel) and one undo step.
+import { prefs } from './prefs';
 import { be } from '../api/backend';
 import { SAMPLE_ROOT, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
 import { baseName, clamp, mod } from '../lib/format';
@@ -138,7 +139,8 @@ export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? 'wbudowany · 
 
 // ---------------------------------------------------------------- sound
 
-export function audition(ch: Id, key?: number, vel = 0.8) {
+export function audition(ch: Id, key?: number, vel = 0.8, force = false) {
+  if (!force && !prefs().noteAudition) return;
   be().noteAudition({ ch, key, vel, pattern: U.patWin?.pat }).catch(e => console.warn(e));
 }
 

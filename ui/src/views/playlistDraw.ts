@@ -8,6 +8,7 @@ import { rgba, T } from '../ui/theme';
 import { clamp, dbg, mod } from '../lib/format';
 import { snapRes } from '../lib/snap';
 import { getClipPeaks, getPeaks, peakRange } from '../state/peaks';
+import { prefs } from '../state/prefs';
 import { drawGlyph, guessIcon, patternIcon, trackIcon } from '../ui/instIcons';
 
 export interface View {
@@ -111,7 +112,7 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
   const comps = new Map((p.comps ?? []).map(x => [x.id, x]));
   const patIcons = new Map<number, string | null>();
   const iconOf = (c: Clip, tr: Track, src: Pattern | Source | Automation): string | null => {
-    if (c.kind === 'auto') return null;
+    if (c.kind === 'auto' || !prefs().clipIcons) return null;
     if (c.kind === 'pat') { let i = patIcons.get(c.ref); if (i === undefined) { i = patternIcon(src as Pattern, curChans); patIcons.set(c.ref, i); } return i; }
     return trackIcon(tr) ?? guessIcon(src.name);
   };

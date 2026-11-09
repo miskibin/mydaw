@@ -1,3 +1,4 @@
+import { prefs } from '../state/prefs';
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { InstIcon, trackIcon } from '../ui/instIcons';
@@ -93,7 +94,7 @@ export function Playlist() {
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
   // clips, comps, automations, patterns, sources: one project-version signal, not a
   // subscription to every field of every item (that cost ~7 ms per clip move on a big song)
-  createEffect(() => { projVersion(); dirtyGrid = true; dirtyFade = true; });
+  createEffect(() => { projVersion(); prefs().clipIcons; dirtyGrid = true; dirtyFade = true; });
   createEffect(() => {
     for (const k in S.audition) void S.audition[k];
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;

@@ -6,7 +6,8 @@ import { keyName, midiFlash, midiFollow, midiStatus, selectMidiDevice, setMidiFo
 import { S } from '../state/store';
 import { say, setU, U } from '../state/ui';
 import { Segmented } from '../ui/Knob';
-import { setTheme, themeMode, type ThemeMode } from '../ui/theme';
+import { prefs, resetPrefs, setPref } from '../state/prefs';
+import { setTheme, THEMES, themeMode } from '../ui/theme';
 
 const RATES = [44100, 48000, 88200, 96000];
 const BUFFERS = [32, 64, 128, 256, 512, 1024, 2048];
@@ -44,16 +45,20 @@ function SettingsDialog() {
     setBusy(false);
   };
   const opt = (v: string | number | null) => v == null ? '' : String(v);
+  const [tab, setTab] = createSignal<Tab>(lastTab);
+  const pickTab = (t: Tab) => { lastTab = t; setTab(t); };
   return (
     <div class="overlay" onPointerDown={() => setU('settings', false)}>
-      <div class="dialog" style={{ width: 'min(500px,92vw)', 'max-height': '92vh', 'overflow-y': 'auto' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+      <div class="dialog setdlg" onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
         <div class="hd"><span>Ustawienia</span><button onClick={() => setU('settings', false)}>×</button></div>
-        <div class="form" style={{ 'margin-bottom': '14px' }}>
-          <label>Wygląd</label>
-          <Segmented options={['Ciemny', 'Jasny', 'Systemowy']} value={() => (['dark', 'light', 'system'] as ThemeMode[]).indexOf(themeMode())}
-            pick={i => { const m = (['dark', 'light', 'system'] as ThemeMode[])[i]; setTheme(m); say('Motyw: ' + ['ciemny', 'jasny', 'systemowy'][i]); }} title="Zapamiętywane na tym komputerze" />
-        </div>
-        <div class="sechd">Audio</div>
+        <div class="setbody">
+          <nav class="settabs">
+            <For each={TABS}>{([id, label]) => <button classList={{ on: tab() === id }} onClick={() => pickTab(id)}>{label}</button>}</For>
+          </nav>
+          <div class="setpane">
+            <Show when={tab() === 'general'}><GeneralSection /></Show>
+            <Show when={tab() === 'look'}><LookSection /></Show>
+            <Show when={tab() === 'audio'}>
         <Show when={st()} fallback={<span class="note">{err() ?? 'Wczytywanie…'}</span>}>
           {s => (
             <div class="form">
@@ -106,9 +111,82 @@ function SettingsDialog() {
             </div>
           )}
         </Show>
-        <MidiSection />
+            </Show>
+            <Show when={tab() === 'midi'}><MidiSection /></Show>
+          </div>
+        </div>
       </div>
     </div>
+  );
+}
+
+type Tab = 'general' | 'look' | 'audio' | 'midi';
+const TABS: [Tab, string][] = [['general', 'Ogólne'], ['look', 'Wygląd'], ['audio', 'Audio'], ['midi', 'MIDI']];
+let lastTab: Tab = 'general';
+
+const OnOff = (p: { on: () => boolean; set: (v: boolean) => void; title?: string }) =>
+  <Segmented options={['Wył.', 'Wł.']} value={() => (p.on() ? 1 : 0)} pick={i => p.set(i === 1)} title={p.title ?? ''} />;
+
+const AUTOSAVE = [0, 1, 2, 5, 10];
+const SCALES = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
+
+function GeneralSection() {
+  return (
+    <>
+      <div class="sechd">Projekt</div>
+      <div class="form">
+        <label>Autozapis</label>
+        <Segmented options={AUTOSAVE.map(m => (m ? m + ' min' : 'Wył.'))} value={() => AUTOSAVE.indexOf(prefs().autosaveMin)}
+          pick={i => setPref('autosaveMin', AUTOSAVE[i])} title="Zapisuje projekt co tyle minut, jeśli ma niezapisane zmiany (tylko projekty zapisane już raz)" />
+      </div>
+      <div class="sechd">Edycja</div>
+      <div class="form">
+        <label>Odsłuch nut</label>
+        <OnOff on={() => prefs().noteAudition} set={v => setPref('noteAudition', v)} title="Graj dźwięk przy wstawianiu i przesuwaniu nut i kroków (Ctrl+klik w kanał gra zawsze)" />
+        <label>Podpowiedzi</label>
+        <OnOff on={() => prefs().hints} set={v => setPref('hints', v)} title="Skróty narzędzia na pasku stanu u dołu" />
+      </div>
+      <div class="sechd">Nagrywanie</div>
+      <div class="form">
+        <label>Metronom</label>
+        <OnOff on={() => S.transport.metro} set={v => void A.setTransportFlag('metro', v)} />
+        <label>Count-in</label>
+        <OnOff on={() => S.transport.countIn} set={v => void A.setTransportFlag('countIn', v)} title="Takt odliczania przed nagrywaniem" />
+      </div>
+      <div class="setfoot">
+        <button class="smallbtn" onClick={() => { resetPrefs(); setTheme('dark'); say('Przywrócono ustawienia domyślne'); }}>Przywróć domyślne</button>
+      </div>
+    </>
+  );
+}
+
+function LookSection() {
+  return (
+    <>
+      <div class="sechd">Motyw</div>
+      <div class="themegrid">
+        <For each={THEMES}>{t => (
+          <button class="themecard" classList={{ on: themeMode() === t.id }} onClick={() => { setTheme(t.id); say('Motyw: ' + t.name); }} title={t.name}>
+            <span class="sw" style={{ background: t.swatch[0] }}>
+              <span style={{ background: t.swatch[1] }} /><span style={{ background: t.swatch[2] }} />
+            </span>
+            <span class="nm">{t.name}</span>
+          </button>
+        )}</For>
+        <button class="themecard" classList={{ on: themeMode() === 'system' }} onClick={() => { setTheme('system'); say('Motyw: systemowy'); }} title="Grafit albo Jasny, zależnie od ustawień Windows">
+          <span class="sw sys"><span /><span /></span>
+          <span class="nm">Systemowy</span>
+        </button>
+      </div>
+      <div class="sechd" style={{ 'margin-top': '14px' }}>Interfejs</div>
+      <div class="form">
+        <label>Skala</label>
+        <Segmented options={SCALES.map(z => Math.round(z * 100) + '%')} value={() => SCALES.indexOf(prefs().uiScale)}
+          pick={i => setPref('uiScale', SCALES[i])} title="Powiększenie całego interfejsu" />
+        <label>Ikony na klipach</label>
+        <OnOff on={() => prefs().clipIcons} set={v => setPref('clipIcons', v)} title="Ikona instrumentu w nagłówku klipu na playliście" />
+      </div>
+    </>
   );
 }
 
@@ -127,7 +205,7 @@ function MidiSection() {
   };
   return (
     <>
-      <div class="sechd" style={{ 'margin-top': '14px' }}>Klawiatura MIDI</div>
+      <div class="sechd">Klawiatura MIDI</div>
       <div class="form">
         <label>Urządzenie</label>
         <div class="row" style={{ gap: '8px' }}>

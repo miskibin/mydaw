@@ -1,3 +1,4 @@
+import { prefs } from '../state/prefs';
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import { baseName, clamp, fmtClock, fmtPos, TapTracker } from '../lib/format';
@@ -225,7 +226,7 @@ export function StatusBar() {
       <span style={{ color: 'var(--fg)' }} data-readout>{U.readout}</span>
       <div style={{ flex: 1 }} />
       <Show when={U.alt}><span class="offgrid">OFF GRID</span></Show>
-      <span style={{ color: 'var(--fg5)' }}>{hint()}</span>
+      <Show when={prefs().hints}><span style={{ color: 'var(--fg5)' }}>{hint()}</span></Show>
     </div>
   );
 }
