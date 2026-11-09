@@ -662,3 +662,12 @@ select option { background: var(--bg4); color: var(--fg); }
 .chanwin .chknobs { display: flex; align-items: flex-end; gap: 18px; padding: 14px 14px 14px; flex-wrap: wrap; }
 .chanwin .chroute { display: flex; flex-direction: column; gap: 4px; margin-left: auto; font-size: 11px; color: var(--fg4); }
 .chanwin .chroute .sel { min-width: 150px; }
+
+/* menu icons, sections, submenus (ui/Menu.tsx, ui/menuIcons.ts) */
+.menu .mico { width: 14px; height: 14px; flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--fg4); }
+.menu .mi:hover .mico, .menu .mi.hot .mico { color: var(--fg2); }
+.menu .mi.danger .mico { color: var(--danger); }
+.menu .mi.hot { background: var(--line2); }
+.menu .msec { padding: 7px 8px 3px; font: 600 9.5px var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--fg5); }
+.menu .ms + .msec { padding-top: 4px; }
+.menu.submenu { z-index: 52; min-width: 200px; }

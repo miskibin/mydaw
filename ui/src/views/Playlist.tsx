@@ -543,26 +543,42 @@ export function Playlist() {
       ], 380);
       return;
     }
+    const all = () => setU('sel', S.project.clips.filter(v => v.kind === c.kind && v.ref === c.ref).map(v => v.id));
     const items: MenuItem[] = [
       { t: 'title', label: (isPat ? 'Pattern · ' : 'Audio · ') + (src?.name ?? '') },
       { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, src?.name ?? '', v => A.setSrcProp(c, { name: v })) },
       { t: 'swatches', current: (src as { color?: string } | undefined)?.color, pick: col => A.setSrcProp(c, { color: col }) },
-      { t: 'sep' },
+      { t: 'sec', label: 'Edycja' },
       { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: A.toggleMuteSel },
       { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: A.duplicate },
-      { t: 'item', label: 'Kopiuj', kbd: 'Ctrl+C', act: A.copy },
-      { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: A.cut },
-      { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
-      { t: 'item', label: 'Podziel na głowicy', act: () => A.sliceAt(c.id, curBeat()) },
-      ...(isPat ? [{ t: 'item', label: 'Edytuj pattern…', kbd: '2× klik', act: () => openPattern(c.ref) } as MenuItem] : []),
-      isPat ? { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } : { t: 'gain', clipId: c.id },
-      ...(c.kind === 'audio' ? [{ t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem,
-        { t: 'item', label: 'Edytuj wysokość…', kbd: c.tune?.notes.length ? 'edytowany' : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
-        { t: 'item', label: 'Wykryj tempo i tonację…', act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
-        { t: 'item', label: 'Auto wokal — śpiew', act: () => void A.autoVocal(c.id, 'natural'), title: 'Analizuje nagranie i ustawia na kanale miksera: wyrównanie, kompresję, de-esser, autotune w tonacji bitu, mały reverb i limiter' } as MenuItem,
-        { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocal(c.id, 'hard') } as MenuItem] : []),
+      { t: 'sub', label: 'Schowek', items: [
+        { t: 'item', label: 'Kopiuj', kbd: 'Ctrl+C', act: A.copy },
+        { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: A.cut },
+      ] },
+      { t: 'sub', label: 'Podziel', items: [
+        { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
+        { t: 'item', label: 'Podziel na głowicy', act: () => A.sliceAt(c.id, curBeat()) },
+      ] },
+      ...(isPat ? [
+        { t: 'sec', label: 'Pattern' } as MenuItem,
+        { t: 'item', label: 'Edytuj pattern…', kbd: '2× klik', act: () => openPattern(c.ref) } as MenuItem,
+        { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } as MenuItem,
+      ] : [
+        { t: 'sec', label: 'Audio' } as MenuItem,
+        { t: 'gain', clipId: c.id } as MenuItem,
+        ...(c.kind === 'audio' ? [
+          { t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem,
+          { t: 'item', label: 'Edytuj wysokość…', kbd: c.tune?.notes.length ? 'edytowany' : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
+          { t: 'item', label: 'Wykryj tempo i tonację…', act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
+          { t: 'sub', label: 'Auto wokal', items: [
+            { t: 'item', label: 'Auto wokal — śpiew', act: () => void A.autoVocal(c.id, 'natural'), title: 'Analizuje nagranie i ustawia na kanale miksera: wyrównanie, kompresję, de-esser, autotune w tonacji bitu, mały reverb i limiter' },
+            { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocal(c.id, 'hard'), title: 'Jak śpiew, ale szybsze wyrównanie i twardszy autotune' },
+          ] } as MenuItem,
+        ] : []),
+      ]),
+      { t: 'sec', label: 'Miks' },
       { t: 'item', label: 'Kanał miksera…', act: () => openRouteMenu(c.track, x, y) },
-      { t: 'item', label: 'Zaznacz wszystkie z tego źródła', act: () => setU('sel', S.project.clips.filter(v => v.kind === c.kind && v.ref === c.ref).map(v => v.id)) },
+      { t: 'item', label: 'Zaznacz wszystkie z tego źródła', act: all },
       { t: 'sep' },
       { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
     ];
@@ -589,8 +605,10 @@ export function Playlist() {
       { t: 'sep' },
       { t: 'item', label: 'Usuń nieużyte take\'i' + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
       { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(c.id) },
-      { t: 'item', label: 'Auto wokal — śpiew', title: 'Spłaszcza comp do jednego klipu i ustawia łańcuch wokalu na kanale miksera', act: () => void A.autoVocalComp(c.id, 'natural') },
-      { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocalComp(c.id, 'hard') },
+      { t: 'sub', label: 'Auto wokal', items: [
+        { t: 'item', label: 'Auto wokal — śpiew', title: 'Spłaszcza comp do jednego klipu i ustawia łańcuch wokalu na kanale miksera', act: () => void A.autoVocalComp(c.id, 'natural') },
+        { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocalComp(c.id, 'hard') },
+      ] },
       { t: 'sep' },
       { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
     ], 470);

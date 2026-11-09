@@ -19,6 +19,10 @@ export interface PatWin { pat: Id; ch: Id | null; view: 'rack' | 'roll'; x: numb
 export type MenuItem =
   | { t: 'title'; label: string }
   | { t: 'sep' }
+  /** Small section heading inside a menu. */
+  | { t: 'sec'; label: string }
+  /** Opens a nested menu on hover. */
+  | { t: 'sub'; label: string; items: MenuItem[] }
   | { t: 'item'; label: string; kbd?: string; act: () => void; danger?: boolean; disabled?: boolean; icon?: string; iconColor?: string; title?: string }
   | { t: 'swatches'; current?: string; pick: (c: string) => void }
   /** Row of instrument icons; picking the current one clears it. */
