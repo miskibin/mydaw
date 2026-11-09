@@ -1,0 +1,13 @@
+[package]
+name = "music-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Detached from the repo workspace: a research harness, not part of the app build.
+[workspace]
+
+[dependencies]
+wave-engine = { path = "../../../crates/engine" }
+wave-rmvpe = { path = "../../../crates/rmvpe" }
+hound = "3"

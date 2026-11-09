@@ -1,0 +1,5 @@
+{
+ "eq_strength": 0.5,
+ "eq_cut_only": false,
+ "comp_mode": "fixed3"
+}
