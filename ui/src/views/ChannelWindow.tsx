@@ -26,7 +26,7 @@ export { win as chanWin };
 export function toggleChannelWindow(id: Id) {
   const w = win();
   if (w && w.id === id) { setWin(null); return; }
-  const synth = chanById(id)?.kind === 'synth', wd = synth ? 760 : 460;
+  const synth = chanById(id)?.kind === 'synth', wd = synth ? 900 : 460;
   setWin(w ? { ...w, id, w: wd } : { id, x: Math.max(20, window.innerWidth / 2 - wd / 2), y: synth ? 70 : 110, w: wd });
 }
 export const closeChannelWindow = () => setWin(null);
