@@ -102,6 +102,12 @@ function SettingsDialog() {
               <Show when={s().error}><span /><span class="note err">{s().error}</span></Show>
               <Show when={s().note}><span /><span class="note">{s().note}</span></Show>
               <Show when={err()}><span /><span class="note err">{err()}</span></Show>
+              <label>Korekta nagrania</label>
+              <RecCalib st={s()} apply={apply} busy={busy()} />
+              <Show when={s().inputUnderruns || s().inputOverruns}>
+                <label>Przerwy wejścia</label>
+                <span class="note warn">{(s().inputUnderruns ?? 0) + (s().inputOverruns ?? 0)} od otwarcia wejścia — zwiększ bufor albo ustaw wejście i wyjście na to samo urządzenie</span>
+              </Show>
               <label>CLI</label>
               <span class="note">
                 <Show when={cli()} fallback="—">
@@ -279,6 +285,38 @@ function VstPickerDialog(props: { insId: number }) {
           </Show>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Recording offset: measured with clicks through the speakers / headphones into the mic. */
+function RecCalib(props: { st: AudioStatus; apply: (p: Partial<AudioConfig>) => Promise<void>; busy: boolean }) {
+  const [meas, setMeas] = createSignal(false);
+  const [msg, setMsg] = createSignal<string | null>(null);
+  const off = () => props.st.recOffsetMs ?? 0;
+  const set = (v: number) => void props.apply({ recOffsetMs: Math.round(Math.max(-200, Math.min(200, v)) * 10) / 10 });
+  const measure = async () => {
+    if (meas()) return;
+    setMeas(true); setMsg('Mierzę… przyłóż mikrofon do głośnika lub słuchawki (≈5 s, będą kliki)');
+    try {
+      const r = await be().audioMeasureLatency();
+      if (r.confidence < 0.5) setMsg('Niepewny pomiar (' + Math.round(r.confidence * 100) + '%) — głośniej, bliżej mikrofonu, w ciszy, i jeszcze raz');
+      else { set(r.suggestedOffsetMs); setMsg('Opóźnienie w obie strony ' + r.roundTripMs.toFixed(1) + ' ms (sterownik podaje ' + r.reportedMs.toFixed(1) + ' ms) → korekta ' + r.suggestedOffsetMs.toFixed(1) + ' ms ustawiona'); }
+    } catch (e) { setMsg('Nie zmierzono: ' + String(e)); }
+    setMeas(false);
+  };
+  return (
+    <div style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>
+      <div class="row" style={{ gap: '8px' }}>
+        <input class="textin" type="number" step="0.5" style={{ width: '80px' }} value={off()} disabled={props.busy}
+          title="Dodatnia = nagranie trafia wcześniej. Zwykle ustawia ją pomiar."
+          onChange={e => { const v = parseFloat(e.currentTarget.value); if (isFinite(v)) set(v); }} />
+        <span class="note">ms</span>
+        <button class="smallbtn primary" style={{ height: '26px' }} disabled={meas() || props.busy} onClick={measure}
+          title="Gra kilka klików i nagrywa je mikrofonem — aplikacja sama wylicza, o ile przesunąć nagrania, żeby trafiały w bit">{meas() ? 'Mierzę…' : 'Zmierz opóźnienie'}</button>
+        <Show when={off() !== 0}><button class="smallbtn" style={{ height: '26px' }} onClick={() => set(0)}>Zeruj</button></Show>
+      </div>
+      <Show when={msg()}><span class="note">{msg()}</span></Show>
     </div>
   );
 }

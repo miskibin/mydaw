@@ -16,6 +16,7 @@ import { channelIcon, InstIcon } from '../ui/instIcons';
 import { Knob } from '../ui/Knob';
 import { rgba, T, themeVersion } from '../ui/theme';
 import { moveWindow } from './FxWindow';
+import { SynthPanel } from './SynthPanel';
 
 type Win = { id: Id; x: number; y: number; w: number };
 const [win, setWin] = createSignal<Win | null>(null);
@@ -25,7 +26,8 @@ export { win as chanWin };
 export function toggleChannelWindow(id: Id) {
   const w = win();
   if (w && w.id === id) { setWin(null); return; }
-  setWin(w ? { ...w, id } : { id, x: Math.max(20, window.innerWidth / 2 - 230), y: 110, w: 460 });
+  const synth = chanById(id)?.kind === 'synth', wd = synth ? 900 : 460;
+  setWin(w ? { ...w, id, w: wd } : { id, x: Math.max(20, window.innerWidth / 2 - wd / 2), y: synth ? 70 : 110, w: wd });
 }
 export const closeChannelWindow = () => setWin(null);
 
@@ -83,12 +85,13 @@ function Body(props: { w: Win; c: Channel }) {
       <div class="winhd" onPointerDown={e => moveWindow(e, () => props.w, setPos)}>
         <span class="chicon" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={14} /></span>
         <span class="title">{c().name}</span>
-        <span class="sub">{c().kind === 'sample' ? 'Sampler' : 'Wbudowany instrument'}</span>
+        <span class="sub">{c().kind === 'sample' ? 'Sampler' : c().kind === 'synth' ? 'Syntezator' : 'Wbudowany instrument'}</span>
         <div style={{ flex: 1 }} />
         <button class="iconbtn" title="Odsłuchaj (C5 / wysokość bazowa)" onClick={() => audition(c().id, undefined, 0.9, true)}>▶</button>
         <button class="closebtn" title="Zamknij" onClick={closeChannelWindow}>×</button>
       </div>
-      <Show when={c().kind === 'sample'} fallback={
+      <Show when={c().kind === 'synth'}><SynthPanel c={c()} /></Show>
+      <Show when={c().kind === 'sample'} fallback={c().kind === 'synth' ? null :
         <div class="chinst">
           <span class="big" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={34} /></span>
           <div>

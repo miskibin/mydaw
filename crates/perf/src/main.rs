@@ -25,7 +25,7 @@ static ALLOC: Counting = Counting;
 const SR: f32 = 48000.0;
 
 static ONLY: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-/// `--only fx,rt,ops,export,analysis,edit,midi,telemetry,undo` limits the run to some sections.
+/// `--only fx,synth,rt,ops,export,analysis,edit,midi,telemetry,undo` limits the run to some sections.
 fn want(sec: &str) -> bool {
     ONLY.get()
         .map(|o| o.is_empty() || o.iter().any(|x| x == sec))
@@ -109,6 +109,10 @@ fn bench_all(cache: &Path, sizes: &[String], quick: bool, full_export: bool) -> 
     if want("fx") {
         eprintln!("[fx] per-effect real-time cost");
         doc["rt_fx"] = bench_fx(cache, quick);
+    }
+    if want("synth") {
+        eprintln!("[synth] built-in synth, heaviest patch");
+        doc["rt_synth"] = bench_synth(quick);
     }
 
     for name in sizes {
@@ -435,6 +439,33 @@ fn bench_fx(cache: &Path, quick: bool) -> Value {
         e.apply(&rm, false, None).unwrap();
     }
     out
+}
+
+/// The built-in synth's worst case: 16 voices of the heaviest patch (2 oscillators × 7 unison,
+/// LP24 with drive, all effects), 48 kHz, 64-sample blocks, one instance on this thread.
+fn bench_synth(quick: bool) -> Value {
+    let block = 64usize;
+    let secs = if quick { 3.0 } else { 10.0 };
+    let mut s = wave_engine::poly::lab::heaviest_instance(SR, secs);
+    let (mut l, mut r) = (vec![0f32; block], vec![0f32; block]);
+    let blocks = (secs * SR) as usize / block;
+    let mut us = Vec::with_capacity(blocks);
+    // the first block is outside the allocation count (nothing should allocate there either)
+    s.render_into(&mut l, &mut r, 120.0);
+    let (_, allocs) = count_allocs(|| {
+        for _ in 1..blocks {
+            let t = Instant::now();
+            s.render_into(&mut l, &mut r, 120.0);
+            us.push(t.elapsed().as_secs_f64() * 1e6);
+        }
+    });
+    let st = stats(us);
+    let budget = block as f64 / SR as f64 * 1e6;
+    json!({
+        "voices": s.active_voices(), "block": block, "budget_us": r2(budget),
+        "cpu_pct_mean": r2(st.mean / budget * 100.0), "cpu_pct_p99": r2(st.p99 / budget * 100.0), "cpu_pct_max": r2(st.max / budget * 100.0),
+        "block_us": st.json(), "audio_allocs": allocs.allocs,
+    })
 }
 
 // ---------------------------------------------------------------- whole project

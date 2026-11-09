@@ -26,6 +26,8 @@ interface NbState {
   page: Id | null;
   font: number;
   rhymes: boolean;
+  /** soft-wrap long lines (a wrapped line is still one bar) */
+  wrap: boolean;
 }
 
 const GEOM_KEY = 'wave.notebook.geom', PREFS_KEY = 'wave.notebook.prefs', BACKUP_KEY = 'wave.notebook.backup:';
@@ -42,14 +44,14 @@ function initialGeom(): NbGeom {
   const w = num(g.w, 460), h = num(g.h, 540);
   return { w, h, x: num(g.x, (typeof window !== 'undefined' ? window.innerWidth : 1400) - w - 24), y: num(g.y, 64) };
 }
-const prefs = load<{ font: number; rhymes: boolean }>(PREFS_KEY);
+const prefs = load<{ font: number; rhymes: boolean; wrap: boolean }>(PREFS_KEY);
 
 export const [NB, setNB] = createStore<NbState>({
   open: false, front: true, geom: initialGeom(), page: null,
-  font: clamp(num(prefs.font, 16), FONT_MIN, FONT_MAX), rhymes: prefs.rhymes !== false,
+  font: clamp(num(prefs.font, 16), FONT_MIN, FONT_MAX), rhymes: prefs.rhymes !== false, wrap: prefs.wrap === true,
 });
 
-export const savePrefs = () => store(PREFS_KEY, { font: NB.font, rhymes: NB.rhymes });
+export const savePrefs = () => store(PREFS_KEY, { font: NB.font, rhymes: NB.rhymes, wrap: NB.wrap });
 export const saveGeom = () => store(GEOM_KEY, NB.geom);
 
 export const notebook = (): Notebook => S.project.notebook ?? emptyNotebook();

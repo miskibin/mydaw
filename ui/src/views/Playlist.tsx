@@ -1,5 +1,5 @@
 import { prefs } from '../state/prefs';
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { InstIcon, trackIcon } from '../ui/instIcons';
 import { VOL_UNITY, type Clip, type Comp, type Id, type Op, type Take, type Track } from '../api/types';
@@ -12,7 +12,7 @@ import { snapFloor, snapRes, snapRound } from '../lib/snap';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { peaksVersion } from '../state/peaks';
-import { allocId, projVersion, S, srcLenBeats, srcOf } from '../state/store';
+import { allocId, anyTrackSolo, arrVersion, plain, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -24,7 +24,6 @@ import { autoById } from '../state/store';
 import { openPattern } from '../state/pattern';
 import { T, theme } from '../ui/theme';
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 /** Shared geometry, so the browser and OS drops can find a beat/track under the pointer. */
 export const geom = { grid: null as HTMLDivElement | null, scroll: null as HTMLDivElement | null, tops: [0] as number[] };
@@ -77,6 +76,13 @@ export function Playlist() {
   });
   const [bndHover, setBndHover] = createSignal<{ clipId: Id; i: number } | null>(null);
   createEffect(() => { geom.tops = tops(); });
+  // recording starts: make sure the armed track is on screen (a tall mixer can hide it)
+  createEffect(on(() => S.transport.rec && U.playing, rec => {
+    if (!rec || !scrollEl) return;
+    const i = S.project.tracks.findIndex(t => t.arm); if (i < 0) return;
+    const y0 = tops()[i], y1 = y0 + S.project.tracks[i].h, top = scrollEl.scrollTop, vis = scrollEl.clientHeight - 30;
+    if (y0 < top || y1 > top + vis) scrollEl.scrollTop = Math.max(0, y0 - 10);
+  }, { defer: true }));
   const gridW = () => TOTAL * U.bw;
   const gridH = () => tops()[tops().length - 1];
   const cw = () => Math.max(1, Math.min(vw() - U.headW, gridW()));
@@ -94,7 +100,7 @@ export function Playlist() {
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
   // clips, comps, automations, patterns, sources: one project-version signal, not a
   // subscription to every field of every item (that cost ~7 ms per clip move on a big song)
-  createEffect(() => { projVersion(); prefs().clipIcons; dirtyGrid = true; dirtyFade = true; });
+  createEffect(() => { arrVersion(); prefs().clipIcons; dirtyGrid = true; dirtyFade = true; });
   createEffect(() => {
     for (const k in S.audition) void S.audition[k];
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
@@ -141,12 +147,15 @@ export function Playlist() {
       drawRuler(g, o.x, W, U.bw, S.project.loop, U.start);
     }
     // playhead + follow
-    const b = curBeat(), x = Math.max(0, b) * U.bw;
+    // the playhead lives in sticky layers like the canvases, so it moves in the same frame as the
+    // redrawn grid instead of ahead of it with native (touchpad) scrolling
+    const b = curBeat(), x = Math.max(0, b) * U.bw - offsets().x;
     if (x !== lastPhX) {
       lastPhX = x;
       phGrid.style.transform = phRuler.style.transform = `translateX(${x}px)`;
+      phGrid.style.visibility = phRuler.style.visibility = x < -1 || x > cw() + 1 ? 'hidden' : '';
     }
-    if (U.follow && tele.frame.playing && b >= 0) {
+    if (U.follow && !followHold && tele.frame.playing && b >= 0) {
       const view = scrollEl.clientWidth - U.headW;
       if (x > scrollEl.scrollLeft + view - 40) scrollEl.scrollLeft = x - 80;
       else if (x < scrollEl.scrollLeft) scrollEl.scrollLeft = Math.max(0, x - 80);
@@ -164,8 +173,17 @@ export function Playlist() {
     onCleanup(() => { ro.disconnect(); stop(); scrollEl.removeEventListener('scroll', onScroll); scrollEl.removeEventListener('wheel', onWheel); });
   });
 
+  // the user moved the view while playing: stop following until the next Play (no tug of war)
+  let followHold = false;
+  const holdFollow = () => {
+    if (!U.follow || !U.playing || followHold) return;
+    followHold = true; say('Podążanie wstrzymane do następnego Play (F = włącz z powrotem)');
+  };
+  createEffect(on(() => U.playing, p => { if (p) followHold = false; }));
+  createEffect(on(() => U.follow, f => { if (f) followHold = false; }, { defer: true }));
   // ---------- wheel ----------
   const onWheel = (e: WheelEvent) => {
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY))) holdFollow();
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const r = scrollEl.getBoundingClientRect(), mx = e.clientX - r.left - U.headW;
@@ -247,6 +265,7 @@ export function Playlist() {
 
   // ---------- pointer interactions ----------
   const gridDown = (e: PointerEvent) => {
+    holdFollow();
     const p = pt(e), h = hit(p.x, p.y), id = h?.c.id ?? null;
     const modK = e.ctrlKey || e.metaKey;
     if (U.autoEdit != null) {
@@ -536,26 +555,42 @@ export function Playlist() {
       ], 380);
       return;
     }
+    const all = () => setU('sel', S.project.clips.filter(v => v.kind === c.kind && v.ref === c.ref).map(v => v.id));
     const items: MenuItem[] = [
       { t: 'title', label: (isPat ? 'Pattern · ' : 'Audio · ') + (src?.name ?? '') },
       { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, src?.name ?? '', v => A.setSrcProp(c, { name: v })) },
       { t: 'swatches', current: (src as { color?: string } | undefined)?.color, pick: col => A.setSrcProp(c, { color: col }) },
-      { t: 'sep' },
+      { t: 'sec', label: 'Edycja' },
       { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: A.toggleMuteSel },
       { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: A.duplicate },
-      { t: 'item', label: 'Kopiuj', kbd: 'Ctrl+C', act: A.copy },
-      { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: A.cut },
-      { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
-      { t: 'item', label: 'Podziel na głowicy', act: () => A.sliceAt(c.id, curBeat()) },
-      ...(isPat ? [{ t: 'item', label: 'Edytuj pattern…', kbd: '2× klik', act: () => openPattern(c.ref) } as MenuItem] : []),
-      isPat ? { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } : { t: 'gain', clipId: c.id },
-      ...(c.kind === 'audio' ? [{ t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem,
-        { t: 'item', label: 'Edytuj wysokość…', kbd: c.tune?.notes.length ? 'edytowany' : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
-        { t: 'item', label: 'Wykryj tempo i tonację…', act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
-        { t: 'item', label: 'Auto wokal — śpiew', act: () => void A.autoVocal(c.id, 'natural'), title: 'Analizuje nagranie i ustawia na kanale miksera: wyrównanie, kompresję, de-esser, autotune w tonacji bitu, mały reverb i limiter' } as MenuItem,
-        { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocal(c.id, 'hard') } as MenuItem] : []),
+      { t: 'sub', label: 'Schowek', items: [
+        { t: 'item', label: 'Kopiuj', kbd: 'Ctrl+C', act: A.copy },
+        { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: A.cut },
+      ] },
+      { t: 'sub', label: 'Podziel', items: [
+        { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
+        { t: 'item', label: 'Podziel na głowicy', act: () => A.sliceAt(c.id, curBeat()) },
+      ] },
+      ...(isPat ? [
+        { t: 'sec', label: 'Pattern' } as MenuItem,
+        { t: 'item', label: 'Edytuj pattern…', kbd: '2× klik', act: () => openPattern(c.ref) } as MenuItem,
+        { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } as MenuItem,
+      ] : [
+        { t: 'sec', label: 'Audio' } as MenuItem,
+        { t: 'gain', clipId: c.id } as MenuItem,
+        ...(c.kind === 'audio' ? [
+          { t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem,
+          { t: 'item', label: 'Edytuj wysokość…', kbd: c.tune?.notes.length ? 'edytowany' : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
+          { t: 'item', label: 'Wykryj tempo i tonację…', act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
+          { t: 'sub', label: 'Auto wokal', items: [
+            { t: 'item', label: 'Auto wokal — śpiew', act: () => void A.autoVocal(c.id, 'natural'), title: 'Analizuje nagranie i ustawia na kanale miksera: wyrównanie, kompresję, de-esser, autotune w tonacji bitu, mały reverb i limiter' },
+            { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocal(c.id, 'hard'), title: 'Jak śpiew, ale szybsze wyrównanie i twardszy autotune' },
+          ] } as MenuItem,
+        ] : []),
+      ]),
+      { t: 'sec', label: 'Miks' },
       { t: 'item', label: 'Kanał miksera…', act: () => openRouteMenu(c.track, x, y) },
-      { t: 'item', label: 'Zaznacz wszystkie z tego źródła', act: () => setU('sel', S.project.clips.filter(v => v.kind === c.kind && v.ref === c.ref).map(v => v.id)) },
+      { t: 'item', label: 'Zaznacz wszystkie z tego źródła', act: all },
       { t: 'sep' },
       { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
     ];
@@ -582,6 +617,10 @@ export function Playlist() {
       { t: 'sep' },
       { t: 'item', label: 'Usuń nieużyte take\'i' + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
       { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(c.id) },
+      { t: 'sub', label: 'Auto wokal', items: [
+        { t: 'item', label: 'Auto wokal — śpiew', title: 'Spłaszcza comp do jednego klipu i ustawia łańcuch wokalu na kanale miksera', act: () => void A.autoVocalComp(c.id, 'natural') },
+        { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocalComp(c.id, 'hard') },
+      ] },
       { t: 'sep' },
       { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
     ], 470);
@@ -599,6 +638,18 @@ export function Playlist() {
   }
 
   // ---------- ruler ----------
+  /** Ruler x near the loop's start / end (8 px) → that edge; inside with Shift → body. */
+  const loopEdge = (clientX: number, shift = false): 'a' | 'b' | 'body' | null => {
+    const lp = S.project.loop; if (!lp) return null;
+    const x = clientX - gridEl.getBoundingClientRect().left, xa = lp.a * U.bw, xb = lp.b * U.bw;
+    if (Math.abs(x - xa) <= 8) return 'a';
+    if (Math.abs(x - xb) <= 8) return 'b';
+    return shift && x > xa && x < xb ? 'body' : null;
+  };
+  const rulerHover = (e: PointerEvent) => {
+    const ed = loopEdge(e.clientX, e.shiftKey);
+    (e.currentTarget as HTMLElement).style.cursor = ed === 'a' || ed === 'b' ? 'ew-resize' : ed === 'body' ? 'grab' : '';
+  };
   const rulerDown = (e: PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
@@ -606,6 +657,22 @@ export function Playlist() {
     const r = gridEl.getBoundingClientRect();
     const b0 = clamp(snapRound((e.clientX - r.left) / U.bw, unit(e.altKey)), 0, TOTAL);
     let g: Gesture | null = null;
+    // an existing loop: grab its start or end edge (or drag its body) instead of drawing a new one
+    const lp = S.project.loop, edge = loopEdge(e.clientX, e.shiftKey);
+    if (lp && edge) {
+      const len = lp.b - lp.a, raw0 = (e.clientX - r.left) / U.bw;
+      track(ev => {
+        const raw = (ev.clientX - r.left) / U.bw, u = unit(ev.altKey);
+        if (!g && Math.abs(ev.clientX - e.clientX) > 2) g = new Gesture(edge === 'body' ? 'Przesuń pętlę' : 'Zakres pętli');
+        if (!g) return;
+        let a = lp.a, z = lp.b;
+        if (edge === 'a') a = clamp(snapRound(raw, u), 0, lp.b - u);
+        else if (edge === 'b') z = clamp(snapRound(raw, u), lp.a + u, TOTAL);
+        else { a = clamp(snapRound(lp.a + raw - raw0, u), 0, TOTAL - len); z = a + len; }
+        g.update([{ op: 'setLoop', loop: { a, b: z } }]);
+      }, () => { if (g) g.end(); else A.seek(b0); }, edge === 'body' ? 'grabbing' : 'ew-resize');
+      return;
+    }
     track(ev => {
       const b1 = clamp(snapRound((ev.clientX - r.left) / U.bw, unit(ev.altKey)), 0, TOTAL);
       if (!g && Math.abs(ev.clientX - e.clientX) > 4) g = new Gesture('Pętla');
@@ -630,12 +697,14 @@ export function Playlist() {
   let ovCv!: HTMLCanvasElement;
   const [ovW, setOvW] = createSignal(600);
   /** Beats the overview spans: the song plus some room, at least what is visible. */
-  const ovRange = () => {
-    projVersion();
+  // memos: this was a walk over every clip through the store on each scroll / zoom step
+  const songEnd = createMemo(() => {
+    arrVersion();
     let end = 0;
-    for (const c of S.project.clips) end = Math.max(end, c.start + c.len);
-    return Math.min(TOTAL, Math.max(64, end * 1.15 + 16, (scroll().x + cw()) / U.bw));
-  };
+    for (const c of unwrap(S.project).clips) end = Math.max(end, c.start + c.len);
+    return end;
+  });
+  const ovRange = createMemo(() => Math.min(TOTAL, Math.max(64, songEnd() * 1.15 + 16, (scroll().x + cw()) / U.bw)));
   const thumb = () => {
     const R = ovRange(), W = ovW();
     const a = scroll().x / U.bw / R * W, w = Math.max(24, cw() / U.bw / R * W);
@@ -646,7 +715,7 @@ export function Playlist() {
     onCleanup(() => ro.disconnect());
   });
   createEffect(() => {
-    const W = ovW(), H = 18, R = ovRange(); projVersion(); theme.epoch;
+    const W = ovW(), H = 18, R = ovRange(); arrVersion(); theme.epoch;
     fitCanvas(ovCv, W, H);
     const g = ovCv.getContext('2d')!, P = unwrap(S.project), n = Math.max(1, P.tracks.length);
     g.clearRect(0, 0, W, H);
@@ -659,6 +728,7 @@ export function Playlist() {
     g.globalAlpha = 1;
   });
   const ovDown = (e: PointerEvent) => {
+    holdFollow();
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const r = ovCv.getBoundingClientRect(), x = e.clientX - r.left, th = thumb(), R = ovRange(), W = ovW();
@@ -701,9 +771,10 @@ export function Playlist() {
               <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg5)' }}>{S.project.tracks.length} tr</span>
             </div>
             <div style={{ position: 'relative', width: gridW() + 'px', height: '26px', flex: 'none' }}>
+              <div class="phlayer" style={{ left: U.headW + 'px', width: cw() + 'px', top: '0px' }}><div ref={phRuler} class="phead" style={{ height: '26px' }} /></div>
               <canvas ref={rulerCv} class="ruler" title="Klik = start · przeciągnij = pętla · 2× klik = usuń pętlę"
-                style={{ left: U.headW + 'px', width: cw() + 'px' }} onPointerDown={rulerDown} />
-              <div ref={phRuler} class="phead" style={{ height: '26px', 'z-index': 2 }} />
+                style={{ left: U.headW + 'px', width: cw() + 'px' }} onPointerDown={rulerDown} onPointerMove={rulerHover} />
+
             </div>
           </div>
           <div style={{ display: 'flex' }}>
@@ -713,9 +784,9 @@ export function Playlist() {
               <div class="hsplit" onPointerDown={headSplit} title="Przeciągnij = szerokość nagłówków" />
             </div>
             <div ref={gridEl} class="gridArea" style={{ width: gridW() + 'px', height: gridH() + 'px' }}>
+              <div class="phlayer" style={{ left: U.headW + 'px', width: cw() + 'px', top: '26px' }}><div ref={phGrid} class="phead" style={{ height: ch() + 'px' }} /></div>
               <canvas ref={gridCv} class="gridCanvas" style={{ top: '26px', left: U.headW + 'px', width: cw() + 'px', height: ch() + 'px', cursor: toolCursor() }}
                 onPointerDown={gridDown} onPointerMove={hover} onDblClick={gridDbl} onContextMenu={e => e.preventDefault()} />
-              <div ref={phGrid} class="phead" style={{ height: gridH() + 'px', 'z-index': 2 }} />
               <Show when={mq()}>{m => <div class="marquee" style={{ left: m().x + 'px', top: m().y + 'px', width: m().w + 'px', height: m().h + 'px' }} />}</Show>
             </div>
           </div>
@@ -766,8 +837,7 @@ function openLaneMenu(x: number, y: number, i: number) {
 
 function LaneHeader(props: { t: Track; i: number }) {
   const t = () => props.t;
-  const anySolo = () => S.project.tracks.some(x => x.solo);
-  const audible = () => !t().muted && (!anySolo() || t().solo);
+  const audible = () => !t().muted && (!anyTrackSolo() || t().solo);
   const routeIdx = () => S.project.inserts.findIndex(m => m.id === t().insert);
   const down = (e: PointerEvent) => {
     if (e.button === 2) { e.preventDefault(); return openLaneMenu(e.clientX, e.clientY, props.i); }
@@ -802,7 +872,7 @@ function LaneHeader(props: { t: Track; i: number }) {
   };
   const stop = (e: Event) => e.stopPropagation();
   return (
-    <div class="lane" classList={{ armrec: t().arm && S.transport.rec }} style={{ height: t().h + 'px' }} onPointerDown={down}>
+    <div class="lane" classList={{ armrec: t().arm && S.transport.rec, dimmed: !audible() }} style={{ height: t().h + 'px' }} onPointerDown={down}>
       <div class="stripe" style={{ background: t().color }} />
       <div class="body">
         <div class="row" style={{ gap: '6px', 'min-width': 0 }}>
@@ -818,9 +888,9 @@ function LaneHeader(props: { t: Track; i: number }) {
                 <svg width="7" height="7" viewBox="0 0 8 8" style={{ transform: U.takesOpen[t().id] ? 'rotate(90deg)' : 'none' }}><path d="M2 1l4 3-4 3z" fill="currentColor" /></svg>{r().comp.takes.length}
               </button>
             )}</Show>
-            <button class="mini route" title="Kanał miksera" onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? '→M' : '→' + routeIdx()}</button>
+            <button class="mini route" title={'Wyjście ścieżki: ' + (routeIdx() <= 0 ? 'Master' : 'Insert ' + routeIdx()) + ' — kliknij, by zmienić kanał miksera'} onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? 'M' : 'Ins ' + routeIdx()}</button>
             <button class="mini m" classList={{ on: t().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
-            <button class="mini s" classList={{ on: t().solo }} title="Solo (wyłącza mute)" onPointerDown={stop} onClick={() => A.toggleTrackSolo(props.i)}>S</button>
+            <button class="mini s" classList={{ on: t().solo }} title="Solo — tylko ta ścieżka · Ctrl+klik = dodaj do solo" onPointerDown={stop} onClick={e => A.toggleTrackSolo(props.i, e.ctrlKey || e.metaKey)}>S</button>
             <button class="mini r" classList={{ on: t().arm }} title="Uzbrój do nagrywania" onPointerDown={stop} onClick={() => A.armTrack(props.i)}>
               <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="currentColor" /></svg>
             </button>

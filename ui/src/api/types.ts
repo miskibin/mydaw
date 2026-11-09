@@ -52,15 +52,25 @@ export interface Fx {
 
 export interface Insert {
   id: Id; name: string; color: string;
-  vol: number; pan: number; muted: boolean; solo: boolean;
+  vol: number; pan: number;
+  /** Stereo width (M/S side gain): 0 mono, 1 unchanged (default when absent), 2 extra wide. */
+  width?: number;
+  muted: boolean; solo: boolean;
   fx: Fx[];
 }
 
 export type Inst = 'kick' | 'clap' | 'hat' | 'bass';
 /** MIDI key at which a sampler plays its sample unpitched (C5 in FL Studio's naming, C4 here). */
 export const SAMPLE_ROOT = 60;
-/** What a channel plays: a built-in instrument, or a one-shot sample of a project source. */
-export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id };
+/**
+ * A synth channel's sound: parameter values by id (`Catalog.synth`; a missing id plays its default,
+ * the engine rejects unknown ids). `preset`: the factory preset the values came from, for display
+ * (null once a knob was changed, or for a blank patch). Parameter edits are `putChannel` with the
+ * new `synth`; they take the engine's fast path (no timeline rebuild) and glide on held notes.
+ */
+export interface SynthState { preset: string | null; params: Record<string, number> }
+/** What a channel plays: a built-in instrument, a one-shot sample of a project source, or the built-in synth. */
+export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id } | { kind: 'synth'; synth: SynthState };
 /**
  * A Channel Rack row, global to the project (every pattern can have notes for it).
  * `vol` fader position (0.7937 = 0 dB), `pan` −1..1, `insert` null = the clip's track insert,
@@ -186,12 +196,15 @@ export interface AutoVocalPlan {
   version: number;
   style: AutoVocalStyle;
   analysis: AutoVocalAnalysis;
-  /** Insert chain, first = first in the chain: tune, rider, fet, comp, deess, reverb, limit. */
+  /** Insert chain, first = first in the chain: tune, rider, fet, comp, deess, reverb, limit (no rider when baked). */
   chain: PlannedFx[];
   /** Suggested vocal level change (dB) to sit 1.2 LU under the beat; null without a beat clip. */
   trackGainDb: number | null;
   stages: AutoVocalStages;
   warnings: string[];
+  /** With `autoVocalPlan({ bakeRider: true })`: the rider stage, taken out of `chain`, to render into the clip
+   *  with `bakeRider({ clipId, params: riderBake.params })` before the chain goes on the insert. Else null. */
+  riderBake: PlannedFx | null;
 }
 
 /** What an automation moves. `param`: catalog param id, or `band:<i>:f|g|q` of an EQ. */
@@ -261,9 +274,16 @@ export interface StateDto {
 export interface ParamDef { id: string; label: string; min: number; max: number; def: number; unit: string; log: boolean; options?: string[] }
 export interface TypeDef { name: string; params: ParamDef[] }
 export interface Preset { name: string; params: Record<string, number>; bands?: EqBand[]; beats?: number }
+/** One panel section of the synth (ids in order: osc1, osc2, subnoise, unison, filter, ampenv, modenv, lfo1, lfo2, matrix, voice, fx). */
+export interface SynthSection { id: string; name: string; params: ParamDef[] }
+/** A factory synth preset: `params` is the complete parameter set (every id). */
+export interface SynthPreset { name: string; category: string; params: Record<string, number> }
+export interface SynthCatalog { sections: SynthSection[]; categories: string[]; presets: SynthPreset[] }
 export interface Catalog {
   types: Partial<Record<FxKind, TypeDef>>;
   presets: Partial<Record<FxKind, Preset[]>>;
+  /** The built-in synth (Channel Rack channels of kind `synth`). */
+  synth: SynthCatalog;
 }
 
 export interface AudioHost { id: string; name: string }
@@ -272,10 +292,31 @@ export interface AudioConfig {
   host: string; output: string | null; input: string | null; sampleRate: number | null; bufferSize: number | null;
   /** Input channel recorded and monitored (0-based), mono in both sides; null = the first. */
   inputChannel?: number | null;
+  /** Recording calibration in ms (signed), added to the measured round trip: positive moves
+   *  takes earlier. Omitted/null when sent = keep the saved value; saved with the audio
+   *  config. Changing only this does not restart the audio device. */
+  recOffsetMs?: number | null;
 }
 export interface AudioStatus extends AudioConfig {
   running: boolean; actualRate: number; actualBuffer: number; latencyMs: number;
   inputChannels: number; error: string | null; note: string | null; asioCompiled: boolean;
+  /** Input dropouts since the input opened (each a short faded gap in a take): "przerwy w wejściu: N". */
+  inputUnderruns: number;
+  /** Times input piled up (the output stalled) and was skipped, faded. */
+  inputOverruns: number;
+  /** Input clock vs output clock in ppm as followed by the jitter buffer (≈0 for one device). */
+  inputDriftPpm: number;
+}
+/** Result of `audioMeasureLatency`. */
+export interface LatencyReport {
+  /** Measured round trip: a sound played reaches the recording this much later. */
+  roundTripMs: number;
+  /** What the driver timestamps report (what takes use without an offset). */
+  reportedMs: number;
+  /** roundTripMs − reportedMs: the `recOffsetMs` that makes takes land on the beat. */
+  suggestedOffsetMs: number;
+  /** 0..1 — share of clicks agreeing within 1 ms × how clearly the peak beats echoes/noise; below ~0.5 measure again. */
+  confidence: number;
 }
 
 /** A MIDI input port. `id` is stable per port and is what `midiSelectDevice` takes. */

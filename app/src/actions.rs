@@ -118,8 +118,40 @@ pub fn stats(x: &[f32], sr: u32) -> Value {
 
 /// Offline bounce shared by the GUI export dialog and `wave render`.
 ///
-/// Writes a 32-bit float stereo WAV. When `cancel` is set mid-render, no file is
+/// Writes a 32-bit float stereo WAV, or a CBR MP3 when `fmt` says so. When `cancel` is set mid-render, no file is
 /// written and the error is `"cancelled"`.
+/// Output container of an offline bounce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFormat {
+    Wav,
+    Mp3 { kbps: u32 },
+}
+
+impl ExportFormat {
+    /// `format`: "wav" (default) or "mp3"; `kbps`: 128/192/256/320 (default 320, mp3 only).
+    pub fn parse(format: Option<&str>, kbps: Option<u32>) -> R<Self> {
+        match format.map(str::to_ascii_lowercase).as_deref() {
+            None | Some("wav") => Ok(Self::Wav),
+            Some("mp3") => {
+                let kbps = kbps.unwrap_or(320);
+                if ![128, 192, 256, 320].contains(&kbps) {
+                    return Err("mp3Kbps must be 128, 192, 256 or 320".into());
+                }
+                Ok(Self::Mp3 { kbps })
+            }
+            Some(o) => Err(format!("format must be wav or mp3, not `{o}`")),
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Mp3 { .. } => "mp3",
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn render_to_file(
     app: &App,
     out: &std::path::Path,
@@ -128,6 +160,7 @@ pub fn render_to_file(
     tail: f64,
     rate: u32,
     cancel: &std::sync::atomic::AtomicBool,
+    fmt: ExportFormat,
 ) -> R<Value> {
     if to <= from {
         return Err("`to` must be after `from`".into());
@@ -136,12 +169,19 @@ pub fn render_to_file(
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("cancelled".into());
     }
-    wave_engine::sources::write_wav(out, &audio, rate)?;
+    match fmt {
+        ExportFormat::Wav => wave_engine::sources::write_wav(out, &audio, rate)?,
+        ExportFormat::Mp3 { kbps } => {
+            let title = app.engine.state().path.as_deref().and_then(|p| std::path::Path::new(p).file_stem().map(|s| s.to_string_lossy().into_owned()));
+            wave_engine::sources::write_mp3(out, &audio, rate, kbps, title.as_deref())?
+        }
+    }
     Ok(json!({
         "out": out.display().to_string(),
         "fromBeat": from,
         "toBeat": to,
         "tail": tail,
+        "format": fmt.extension(),
         "stats": stats(&audio, rate),
     }))
 }
@@ -153,7 +193,9 @@ pub fn render(app: &App, a: &Value) -> R<Value> {
     let to = opt_f64(a, "to").unwrap_or_else(|| p.loop_range.map(|l| l.b).unwrap_or(p.song_end()));
     let tail = opt_f64(a, "tail").unwrap_or(2.0);
     let rate = opt_f64(a, "rate").unwrap_or(48000.0) as u32;
-    render_to_file(app, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false))
+    let by_ext = out.extension().and_then(|e| e.to_str()).filter(|e| e.eq_ignore_ascii_case("mp3")).map(|_| "mp3");
+    let fmt = ExportFormat::parse(arg(a, "format").and_then(Value::as_str).or(by_ext), opt_f64(a, "mp3Kbps").map(|k| k as u32))?;
+    render_to_file(app, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false), fmt)
 }
 
 pub fn context(app: &App, full: bool) -> Value {
@@ -254,6 +296,7 @@ fn channel_json(p: &wave_engine::Project, c: &wave_engine::Channel) -> Value {
     let (kind, what) = match &c.src {
         ChannelSrc::Inst { inst } => ("inst", json!({ "inst": inst })),
         ChannelSrc::Sample { source } => ("sample", json!({ "source": source, "sourceName": p.sources.iter().find(|s| s.id == *source).map(|s| s.name.clone()) })),
+        ChannelSrc::Synth { synth } => ("synth", json!({ "preset": synth.preset })),
     };
     let mut v = json!({
         "id": c.id, "index": p.channels.iter().position(|x| x.id == c.id), "name": c.name, "kind": kind,
@@ -298,6 +341,35 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         let ch = Channel { name: s.name.clone(), color: s.color.clone(), src: ChannelSrc::Sample { source: src }, root: wave_engine::SAMPLE_ROOT, ..Channel::builtin(id, Inst::Kick) };
         added = Some(id);
         ops.push(Op::PutChannel { channel: ch, index: None });
+    }
+    if let Some(name) = arg(a, "synth").and_then(Value::as_str) {
+        // a synth channel playing a factory preset ("" = the blank patch)
+        let id = p.next_id + ops.len() as u64;
+        let synth = if name.is_empty() { wave_engine::SynthState::default() } else { wave_engine::poly::preset_state(name).ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))? };
+        let bass = wave_engine::poly::presets::all().iter().any(|x| x.name == name && matches!(x.category, "808" | "Bas"));
+        let label = if name.is_empty() { "Synth".to_string() } else { name.to_string() };
+        let ch = Channel { name: label, color: "#9b7cf8".into(), src: ChannelSrc::Synth { synth }, root: if bass { 36 } else { 60 }, ..Channel::builtin(id, Inst::Kick) };
+        added = Some(id);
+        ops.push(Op::PutChannel { channel: ch, index: None });
+    }
+    if let (Some(v), Some(name)) = (arg(a, "ch"), arg(a, "preset").and_then(Value::as_str)) {
+        // load a factory preset into a synth channel
+        let mut c = find_channel(&p, v)?.clone();
+        if !matches!(c.src, ChannelSrc::Synth { .. }) {
+            return Err(format!("channel `{}` is not a synth", c.name));
+        }
+        c.src = ChannelSrc::Synth { synth: wave_engine::poly::preset_state(name).ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))? };
+        ops.push(Op::PutChannel { channel: c, index: None });
+    }
+    if let (Some(v), Some(param)) = (arg(a, "ch"), arg(a, "param").and_then(Value::as_str)) {
+        // one synth knob
+        let mut c = find_channel(&p, v)?.clone();
+        let value = opt_f64(a, "value").ok_or("`value` is required")?;
+        let ChannelSrc::Synth { synth } = &mut c.src else { return Err(format!("channel `{}` is not a synth", c.name)) };
+        let i = wave_engine::poly::params::index_of(param).ok_or(format!("the synth has no parameter `{param}` (see `wave catalog`)"))?;
+        synth.params.insert(param.to_string(), wave_engine::poly::params::clamp(i, value) as f64);
+        synth.preset = None;
+        ops.push(Op::PutChannel { channel: c, index: None });
     }
     if let Some(v) = arg(a, "remove") {
         ops.push(Op::RemoveChannel { id: find_channel(&p, v)?.id });
@@ -595,7 +667,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -687,8 +759,18 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
                 Some("hard") => wave_engine::autovocal::Style::Hard,
                 _ => wave_engine::autovocal::Style::Natural,
             };
-            let plan = e.auto_vocal_plan(cid, beat, style).map_err(|x| x.to_string())?;
+            let bake = arg(a, "bakeRider").and_then(Value::as_bool).unwrap_or(false);
+            let plan = e.auto_vocal_plan(cid, beat, style, bake).map_err(|x| x.to_string())?;
             Ok(json!(plan))
+        }
+        "bake_rider" => {
+            let cid = need_u64(a, "clipId")?;
+            let params: std::collections::BTreeMap<String, f64> = match arg(a, "params") {
+                Some(v) => serde_json::from_value(v.clone()).map_err(|er| format!("BAD_ARGS: params: {er}"))?,
+                None => Default::default(),
+            };
+            let (source, clip) = e.bake_rider(cid, &params).map_err(|x| x.to_string())?;
+            Ok(json!({ "clipId": clip, "sourceId": source, "revision": e.revision() }))
         }
         "vst3_scan" => Ok(json!(app.plugins.scan(arg(a, "rescan").and_then(Value::as_bool).unwrap_or(false)))),
         "vst3_add" => {

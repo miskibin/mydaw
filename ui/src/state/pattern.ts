@@ -1,16 +1,16 @@
 // Pattern editor commands: the window, channels, auditions and the pattern loop preview.
 // Every edit is an op (putPattern / putChannel / removeChannel) and one undo step.
+import { newSynthChannel } from '../lib/synth';
 import { prefs } from './prefs';
 import { be } from '../api/backend';
 import { SAMPLE_ROOT, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
 import { baseName, clamp, mod } from '../lib/format';
 import { builtinChannel, cloneNotes, INST_NAME, stepsOf } from '../lib/pattern';
 import { commit } from './edit';
-import { allocId, S } from './store';
+import { allocId, plain, S } from './store';
 import { curBeat, tele } from './telemetry';
 import { say, setU, U } from './ui';
 
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 const PCOLORS = ['#4f8ef7', '#e0a44a', '#7c8cf8', '#47b8a8', '#d9678f', '#5fbf8a', '#9a8cf0', '#69c3d6'];
 
 export const patById = (id: Id | undefined | null) => (id == null ? undefined : S.project.patterns.find(p => p.id === id));
@@ -101,6 +101,14 @@ export function addBuiltin(inst: Inst) {
   selectChannel(c.id);
   say('Dodano kanał ' + INST_NAME[inst]);
 }
+/** A new channel of the built-in synth playing factory preset `name` (or the blank patch). */
+export function addSynth(name: string | null) {
+  const cat = S.catalog?.synth; if (!cat) { say('Syntezator niedostępny'); return; }
+  const c = newSynthChannel(cat, allocId(), name);
+  commit([chanOp(c)], 'Dodaj syntezator');
+  selectChannel(c.id);
+  say('Syntezator: ' + (name ?? 'pusty dźwięk') + ' — klik w nazwę kanału = edycja dźwięku');
+}
 export function addSampler(sourceId: Id) {
   const s = S.project.sources.find(x => x.id === sourceId); if (!s) return;
   const c: Channel = { id: allocId(), name: s.name, color: s.color, kind: 'sample', source: s.id, vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: SAMPLE_ROOT };
@@ -135,7 +143,7 @@ export function deleteChannel(c: Channel) {
   say('Usunięto kanał ' + c.name + (used ? ' (z nutami w ' + used + ' pattern' + (used === 1 ? 'ie' : 'ach') + ') — Ctrl+Z cofa' : ''));
 }
 export const chanSource = (c: Channel) => (c.kind === 'sample' ? S.project.sources.find(s => s.id === c.source) : undefined);
-export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? 'wbudowany · ' + INST_NAME[c.inst] : 'sampler · ' + (chanSource(c) ? baseName(chanSource(c)!.path) : 'brak pliku'));
+export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? 'wbudowany · ' + INST_NAME[c.inst] : c.kind === 'synth' ? 'syntezator · ' + (c.synth.preset ?? 'własny') : 'sampler · ' + (chanSource(c) ? baseName(chanSource(c)!.path) : 'brak pliku'));
 
 // ---------------------------------------------------------------- sound
 

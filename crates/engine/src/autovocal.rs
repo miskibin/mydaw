@@ -136,6 +136,24 @@ pub struct AutoVocalPlan {
     pub track_gain_db: Option<f64>,
     pub stages: StageStats,
     pub warnings: Vec<String>,
+    /// Set by [`AutoVocalPlan::baked`]: the rider stage, taken out of `chain`, to be rendered
+    /// into the clip's audio (`Engine::bake_rider` with these params, its output trim
+    /// included) instead of running live on the insert. `None`: the rider is in `chain`.
+    pub rider_bake: Option<PlannedFx>,
+}
+
+impl AutoVocalPlan {
+    /// The same plan with the rider moved out of the insert chain into [`Self::rider_bake`].
+    /// The calibration stays valid: every later stage was calibrated on the rider's offline
+    /// render (long look-ahead, latency removed, output trim applied), which is exactly the
+    /// audio the bake writes; only the pitch correction, which is not part of the level
+    /// calibration, now hears the levelled take instead of the raw one.
+    pub fn baked(mut self) -> Self {
+        if let Some(i) = self.chain.iter().position(|f| f.kind == FxKind::Rider) {
+            self.rider_bake = Some(self.chain.remove(i));
+        }
+        self
+    }
 }
 
 /// What the plan is computed from. `vocal` is mono at `sr`.
@@ -501,6 +519,19 @@ pub fn render(kind: FxKind, params: &BTreeMap<String, f64>, x: &[f32], sr: f32) 
 
 /// Like [`render`], with a processor the caller keeps (to read its state afterwards).
 pub fn render_with(p: &mut dyn Processor, kind: FxKind, params: &BTreeMap<String, f64>, x: &[f32], sr: f32) -> Vec<f32> {
+    render_stereo_with(p, kind, params, x, x, sr).0
+}
+
+/// Renders stereo `l`/`r` (equal lengths) through one built-in effect exactly as [`render`]
+/// does: 512-frame blocks, the effect's reported latency rendered past the end and dropped
+/// from the front, so the output is sample-aligned with the input and as long as it.
+pub fn render_stereo(kind: FxKind, params: &BTreeMap<String, f64>, l: &[f32], r: &[f32], sr: f32) -> (Vec<f32>, Vec<f32>) {
+    let mut p = crate::dsp::create(kind).expect("built-in effect");
+    render_stereo_with(p.as_mut(), kind, params, l, r, sr)
+}
+
+/// [`render_stereo`] with a processor the caller keeps.
+pub fn render_stereo_with(p: &mut dyn Processor, kind: FxKind, params: &BTreeMap<String, f64>, xl: &[f32], xr: &[f32], sr: f32) -> (Vec<f32>, Vec<f32>) {
     let mut fx = catalog::new_fx(1, kind, 120.0);
     for (k, v) in params {
         fx.params.insert(k.clone(), *v);
@@ -510,23 +541,25 @@ pub fn render_with(p: &mut dyn Processor, kind: FxKind, params: &BTreeMap<String
     p.prepare(sr, BLK);
     p.set_params(&catalog::param_block(&fx));
     let ctx = ProcessCtx { sample_rate: sr, bpm: 120.0, beat: 0.0, playing: true };
-    let total = x.len() + lat;
-    let mut out = Vec::with_capacity(total);
+    let len = xl.len().min(xr.len());
+    let total = len + lat;
+    let (mut ol, mut or) = (Vec::with_capacity(total), Vec::with_capacity(total));
     let (mut l, mut r) = (vec![0f32; BLK], vec![0f32; BLK]);
     let mut i = 0;
     while i < total {
         let n = BLK.min(total - i);
         for k in 0..n {
-            let v = x.get(i + k).copied().unwrap_or(0.0);
-            l[k] = v;
-            r[k] = v;
+            let j = i + k;
+            (l[k], r[k]) = if j < len { (xl[j], xr[j]) } else { (0.0, 0.0) };
         }
         p.process(&mut l[..n], &mut r[..n], &ctx);
-        out.extend_from_slice(&l[..n]);
+        ol.extend_from_slice(&l[..n]);
+        or.extend_from_slice(&r[..n]);
         i += n;
     }
-    out.drain(..lat.min(out.len()));
-    out
+    ol.drain(..lat.min(ol.len()));
+    or.drain(..lat.min(or.len()));
+    (ol, or)
 }
 
 /// The rider's output and its per-frame (gain dB, confidence, active) curve.
@@ -827,7 +860,7 @@ pub fn plan(inp: &PlanInput) -> AutoVocalPlan {
         fx(FxKind::Reverb, reverb, true, format!("small plate, T60 {REVERB_T60_S} s, {REVERB_SEND_DB} dB send")),
         fx(FxKind::Limit, limiter, true, format!("true-peak ceiling {LIMIT_CEILING_DBTP} dBTP")),
     ];
-    AutoVocalPlan { version: 1, style: inp.style, analysis, chain, track_gain_db, stages: stats, warnings }
+    AutoVocalPlan { version: 1, style: inp.style, analysis, chain, track_gain_db, stages: stats, warnings, rider_bake: None }
 }
 
 // ------------------------------------------------------------------ research metrics

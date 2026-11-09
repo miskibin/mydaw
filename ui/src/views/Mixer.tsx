@@ -6,7 +6,7 @@ import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { MiniKnob } from '../ui/Knob';
-import { insName, S } from '../state/store';
+import { anyInsertSolo, insName, S } from '../state/store';
 import { tele } from '../state/telemetry';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -55,13 +55,27 @@ function Strip(props: { m: Insert; idx: number }) {
   let fl!: HTMLDivElement, fr!: HTMLDivElement;
   onMount(() => { meterEls.set(props.m.id, [fl, fr]); hold.delete(props.m.id); });
   onCleanup(() => meterEls.delete(props.m.id));
-  const anySolo = () => S.project.inserts.some(x => x.id !== 0 && x.solo);
-  const audible = () => !m().muted && (m().id === 0 || !anySolo() || m().solo);
+  const audible = () => !m().muted && (m().id === 0 || !anyInsertSolo() || m().solo);
   const route = () => { if (m().id === 0) return 'OUT'; const here = S.project.tracks.filter(t => t.insert === m().id).map(t => t.name); return here.length ? here.join(', ') : '—'; };
   const panT = () => ({ kind: 'insertPan' as const, id: m().id }), volT = () => ({ kind: 'insertVol' as const, id: m().id });
   const shownPan = () => autoDisplay(panT()) ?? m().pan, shownVol = () => autoDisplay(volT()) ?? m().vol;
   const pan = () => { const t = (shownPan() + 1) / 2; return { dash: Math.abs(t - 0.5) * L30 + 'px ' + C30 + 'px', off: -Math.min(t, 0.5) * L30 + 'px', angle: -135 + t * 270 }; };
   const put = (patch: Partial<Insert>) => A.insertOp(m().id, patch)!;
+  // stereo width: 0 = mono, 100 % = as is, 200 % = extra wide (arc grows from the 100 % centre)
+  const wid = () => m().width ?? 1;
+  const widArc = () => { const t = wid() / 2; return { dash: Math.abs(t - 0.5) * L30 + 'px ' + C30 + 'px', off: -Math.min(t, 0.5) * L30 + 'px', angle: -135 + t * 270 }; };
+  const widText = (w: number) => (w <= 0.005 ? 'mono' : Math.round(w * 100) + '%');
+  const widDown = (e: PointerEvent) => {
+    if (e.button !== 0) return; e.preventDefault(); e.stopPropagation(); A.selectInsert(m().id);
+    if (dblCheck('wid' + m().id)) return A.setInsert(m().id, { width: 1 }, 'Szerokość');
+    const g = new Gesture('Szerokość'); let v = wid(), ly = e.clientY;
+    track(ev => { v = clamp(v + (ly - ev.clientY) / 70 * (ev.shiftKey ? 0.2 : 1) * 2, 0, 2); if (Math.abs(v - 1) < 0.03) v = 1; ly = ev.clientY; g.update([put({ width: Math.round(v * 100) / 100 })]); say('Szerokość ' + widText(v)); }, () => g.end(), 'ns-resize');
+  };
+  const widWheel = (e: WheelEvent) => {
+    const d = e.deltaY || e.deltaX; if (!d) return; e.preventDefault(); e.stopPropagation();
+    const v = clamp(Math.round((wid() + (d < 0 ? 1 : -1) * 0.05 * (e.shiftKey ? 0.2 : 1)) * 100) / 100, 0, 2);
+    wheelEdit('wid' + m().id, 'Szerokość', [put({ width: v })]); say(m().name + ' · szerokość ' + widText(v));
+  };
   const select = (e: PointerEvent) => {
     if (e.button === 2) { e.preventDefault(); return openStripMenu(e.clientX, e.clientY, m().id); }
     A.selectInsert(m().id);
@@ -91,7 +105,7 @@ function Strip(props: { m: Insert; idx: number }) {
   const stop = (e: Event) => e.stopPropagation();
   const icon = () => { if (m().id === 0) return null; const t = S.project.tracks.find(x => x.insert === m().id); return guessIcon(m().name) ?? (t ? trackIcon(t) : null); };
   return (
-    <div class="strip" data-ins={m().id} classList={{ on: U.mixSel === m().id }} onPointerDown={select}>
+    <div class="strip" data-ins={m().id} classList={{ on: U.mixSel === m().id, dimmed: !audible() }} onPointerDown={select}>
       <div class="bar" style={{ background: m().color }} />
       <div class="row" style={{ 'justify-content': 'space-between', gap: '4px' }}>
         <span class="lbl">{m().id === 0 ? 'MASTER' : 'INS ' + props.idx}</span>
@@ -103,6 +117,7 @@ function Strip(props: { m: Insert; idx: number }) {
       <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę · PPM = menu"
         onDblClick={e => openRename(e.clientX, e.clientY, m().name, v => A.setInsert(m().id, { name: v }, 'Nazwa insertu'))}>
         <Show when={icon()}>{id => <span class="micon" style={{ color: m().color }}><InstIcon id={id()} size={11} /></span>}</Show>{m().name}</span>
+      <div class="knobrow">
       <div style={{ display: 'flex', 'flex-direction': 'column', 'align-items': 'center', gap: '2px' }}>
         <div class="pandial" classList={{ auto: isAutomated(panT()) }} onPointerDown={panDown} onWheel={wheel('pan')} onContextMenu={e => e.preventDefault()} title="Panorama — przeciągnij, 2× klik = środek, PPM = automatyzacja">
           <svg width="30" height="30" viewBox="0 0 30 30" style={{ position: 'absolute', inset: 0 }}>
@@ -114,10 +129,22 @@ function Strip(props: { m: Insert; idx: number }) {
         </div>
         <span class="pantxt">{panText(shownPan())}</span>
       </div>
+      <div style={{ display: 'flex', 'flex-direction': 'column', 'align-items': 'center', gap: '2px' }}>
+        <div class="pandial wdial" onPointerDown={widDown} onWheel={widWheel} onContextMenu={e => e.preventDefault()} title="Szerokość stereo — w lewo mono, środek bez zmian, w prawo szerzej · 2× klik = 100 %">
+          <svg width="30" height="30" viewBox="0 0 30 30" style={{ position: 'absolute', inset: 0 }}>
+            <circle cx="15" cy="15" r="11" fill="none" transform="rotate(135 15 15)" style={{ stroke: 'var(--knob-track)', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': '51.84px 69.12px' }} />
+            <circle cx="15" cy="15" r="11" fill="none" transform="rotate(135 15 15)" style={{ stroke: 'var(--green)', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': widArc().dash, 'stroke-dashoffset': widArc().off }} />
+          </svg>
+          <div class="pcap" />
+          <div class="pptr" style={{ transform: `rotate(${widArc().angle}deg)` }} />
+        </div>
+        <span class="pantxt">{widText(wid())}</span>
+      </div>
+      </div>
       <div class="row" style={{ gap: '2px', 'justify-content': 'center' }}>
         <button class="mini m mute" classList={{ on: m().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleInsertMute(m().id)}>M</button>
         <Show when={m().id !== 0}>
-          <button class="mini s mute" classList={{ on: m().solo }} title="Solo (wyłącza mute)" onPointerDown={stop} onClick={() => A.toggleInsertSolo(m().id)}>S</button>
+          <button class="mini s mute" classList={{ on: m().solo }} title="Solo — tylko ten kanał · Ctrl+klik = dodaj do solo" onPointerDown={stop} onClick={e => A.toggleInsertSolo(m().id, e.ctrlKey || e.metaKey)}>S</button>
         </Show>
       </div>
       <div style={{ flex: 1, 'min-height': '50px', display: 'flex', 'justify-content': 'center', gap: '3px' }}>
@@ -185,6 +212,33 @@ function FxSlot(props: { f: Fx; n: number; insId: Id }) {
   );
 }
 
+/** Strip width (`.strip`, border-box) and how many strips past each edge stay built. */
+const STRIP_W = 80, STRIP_MARGIN = 4;
+
+/**
+ * The strip row. Only strips in (or near) the visible part are built; the others are empty
+ * placeholders of the same size. Out of view they look the same, and the browser no longer
+ * lays every strip of a 60-insert mixer into the compositor on each frame of playback.
+ */
+function Strips() {
+  let el!: HTMLDivElement;
+  const [view, setView] = createSignal({ x: 0, w: window.innerWidth });
+  const sync = () => { if (el.scrollLeft !== view().x || el.clientWidth !== view().w) setView({ x: el.scrollLeft, w: el.clientWidth }); };
+  onMount(() => {
+    sync();
+    el.addEventListener('scroll', sync, { passive: true });
+    const ro = new ResizeObserver(sync); ro.observe(el);
+    onCleanup(() => { el.removeEventListener('scroll', sync); ro.disconnect(); });
+  });
+  const near = (i: number) => { const v = view(), m = STRIP_MARGIN * STRIP_W; return (i + 1) * STRIP_W > v.x - m && i * STRIP_W < v.x + v.w + m; };
+  return (
+    <div ref={el} class="strips">
+      <For each={S.project.inserts}>{(m, i) => <Show when={near(i())} fallback={<div class="strip" />}><Strip m={m} idx={i()} /></Show>}</For>
+      <button class="addIns" onClick={A.addInsert} title="Dodaj kanał miksera">+</button>
+    </div>
+  );
+}
+
 export function Mixer() {
   onMount(() => { const stop = addFrameTask(meterTask); onCleanup(stop); });
   const selIns = () => S.project.inserts.find(m => m.id === U.mixSel) ?? S.project.inserts[0];
@@ -214,10 +268,7 @@ export function Mixer() {
       </div>
       <Show when={!U.mixMin}>
         <div class="mixer" style={{ height: mixH() + 'px' }}>
-          <div class="strips">
-            <For each={S.project.inserts}>{(m, i) => <Strip m={m} idx={i()} />}</For>
-            <button class="addIns" onClick={A.addInsert} title="Dodaj kanał miksera">+</button>
-          </div>
+          <Strips />
           <Show when={selIns()}>
             {ins => (
               <div class="fxchain" data-ins={ins().id}>

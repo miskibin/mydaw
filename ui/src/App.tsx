@@ -1,5 +1,7 @@
+import { closeNotebook, NB } from './state/notebook';
+import { ConfirmDialog } from './ui/Confirm';
 import { createEffect, For, onCleanup, onMount, Show } from 'solid-js';
-import { be } from './api/backend';
+import { be, isTauri } from './api/backend';
 import { baseName } from './lib/format';
 import { typingIn } from './lib/keys';
 import { snapRes } from './lib/snap';
@@ -50,6 +52,7 @@ function onKey(e: KeyboardEvent) {
     if (U.settings) return setU('settings', false);
     if (U.exportOpen) return void A.cancelExportOrClose();
     if (U.help) return setU('help', false);
+    if (NB.open && !U.patWin && !U.plugs.length) return closeNotebook();
     if (U.patWin && !U.plugsHidden && (!U.plugs.length || U.patWin.z > A.topPlug()!.z)) return closePattern();
     if (U.plugs.length) return A.closePlug(A.topPlug()!.fxId);
     if (U.pitchEd) return A.closePitchEditor();
@@ -105,6 +108,17 @@ const onBlur = () => { if (U.alt) setU('alt', false); };
 export function App() {
   onMount(() => {
     startMidi();
+    if (isTauri()) {
+      void import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
+        const w = getCurrentWindow();
+        let closing = false;
+        await w.onCloseRequested(async ev => {
+          if (closing) return;
+          ev.preventDefault();
+          if (await A.closeWindowGuarded()) { closing = true; await w.destroy(); }
+        });
+      }).catch(() => {});
+    }
     window.addEventListener('keydown', onKey);
     window.addEventListener('pointerdown', reclaimFocus, true);
     window.addEventListener('keyup', onKeyUp);
@@ -160,6 +174,7 @@ export function App() {
       <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>
       <ContextMenu />
       <Help />
+      <ConfirmDialog />
       <Export />
       <Settings />
       <VstPicker />

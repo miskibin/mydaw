@@ -21,6 +21,8 @@ pub enum VoiceKind {
     Bass,
     /// One-shot sample of the voice's channel, pitched by the note.
     Sample,
+    /// A synth channel: its notes go to the channel's `poly::SynthInst`, not this pool.
+    Synth,
     Click { accent: bool },
 }
 
@@ -249,6 +251,7 @@ impl VoicePool {
                 let rate = a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0);
                 Some(self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, key as f32, vel, rate))
             }
+            VoiceKind::Synth => None,
             kind => Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, vel, 1.0)),
         }
     }
@@ -402,7 +405,7 @@ impl VoicePool {
                         let a = if t < 0.002 { exp_ramp(0.0001, 0.22, t, 0.002) } else { exp_ramp(0.22, 0.0001, t - 0.002, 0.048) };
                         (sq * a, t > 0.06)
                     }
-                    VoiceKind::Sample => (0.0, true),
+                    VoiceKind::Sample | VoiceKind::Synth => (0.0, true),
                 };
                 out_l[i] += s * gl;
                 if stereo {

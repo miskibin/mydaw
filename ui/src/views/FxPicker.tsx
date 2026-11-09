@@ -22,7 +22,7 @@ const DESC: Record<BuiltinKind, string> = {
   eq: '24 pasma, dynamiczne, M/S — rzeźbienie barwy',
   rider: 'Wyrównuje głośność słów jak inżynier na suwaku',
   deess: 'Ścisza ostre „s” i „sz” bez gaszenia góry',
-  comp: 'Wyrównuje dynamikę, klej dla śladu lub sumy',
+  comp: 'Czysty albo FET (1176) — wyrównuje dynamikę; typ zmienisz w oknie',
   fet: 'Szybki kompresor w stylu 1176 — charakter i atak',
   sat: 'Ciepło taśmy i lampy, harmoniczne',
   delay: 'Echo zsynchronizowane z tempem, ping-pong',
@@ -33,7 +33,7 @@ const DESC: Record<BuiltinKind, string> = {
 /** Extra search words (Polish and English names people type). */
 const KW: Record<BuiltinKind, string> = {
   denoise: 'szum noise denoiser odszumianie brum hum', tune: 'autotune auto-tune pitch strojenie melodyne', voice: 'pitch formant robot vocoder głos',
-  eq: 'korektor equalizer eq filtr filter', deess: 'deesser de-esser sybilanty', rider: 'rider vocal rider wyrównanie leveler głośność słów automatyzacja', comp: 'kompresor compressor dynamika',
+  eq: 'korektor equalizer eq filtr filter', deess: 'deesser de-esser sybilanty', rider: 'rider vocal rider wyrównanie leveler głośność słów automatyzacja', comp: 'kompresor compressor dynamika fet 1176 vca',
   fet: 'kompresor compressor 1176 fet', sat: 'saturacja saturator przester distortion drive taśma tape', delay: 'echo opóźnienie delay',
   reverb: 'pogłos reverb przestrzeń hall room plate', limit: 'limiter głośność loudness master',
 };
@@ -100,8 +100,9 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
 
   const insName = () => { const m = S.project.inserts.find(i => i.id === props.insId); return m ? (m.id === 0 ? 'Master' : m.name) : ''; };
 
-  const builtins = createMemo<Entry[]>(() => FX_ORDER.filter(t => S.catalog?.types[t]).map(t => ({
-    key: t, builtin: t, name: S.catalog!.types[t]!.name, desc: DESC[t] ?? FXMETA[t].tag, presets: presetList(S.catalog, t).length,
+  const builtins = createMemo<Entry[]>(() => FX_ORDER.filter(t => t !== 'fet' && S.catalog?.types[t]).map(t => ({
+    key: t, builtin: t, name: t === 'comp' ? 'Kompresor' : S.catalog!.types[t]!.name, desc: DESC[t] ?? FXMETA[t].tag,
+    presets: presetList(S.catalog, t).length + (t === 'comp' ? presetList(S.catalog, 'fet').length : 0),
   })));
   const plugins = createMemo<Entry[]>(() => (vsts() ?? []).map(p => ({ key: vstKey(p), vst: p, name: p.name, desc: [p.vendor, p.category].filter(Boolean).join(' · '), presets: 0 })));
 
@@ -132,12 +133,17 @@ function FxPicker(props: { insId: Id; x: number; y: number }) {
   });
   createEffect(() => { shown(); setFocus(0); setPresetFocus(-1); });
   const cur = () => shown()[Math.min(focus(), shown().length - 1)];
-  const curPresets = () => { const e = cur(); return e?.builtin ? presetList(S.catalog, e.builtin) : []; };
+  // "Kompresor" covers both compressors: its preset list holds the clean ones and the FET (1176) ones
+  const curPresets = () => {
+    const e = cur(); if (!e?.builtin) return [];
+    const one = (t: BuiltinKind) => presetList(S.catalog, t).map((p, i) => ({ name: p.name, type: t, idx: i }));
+    return e.builtin === 'comp' ? [...one('comp'), ...one('fet').map(p => ({ ...p, name: 'FET · ' + p.name }))] : one(e.builtin);
+  };
 
   const add = (e: Entry | undefined, preset?: number) => {
     if (!e) return;
     if (e.tool === 'notebook') { openNotebook(); remember(e.key); close(); return; }
-    if (e.builtin) A.addFx(props.insId, e.builtin, preset);
+    if (e.builtin) { const p = preset != null ? curPresets()[preset] : undefined; A.addFx(props.insId, p?.type ?? e.builtin, p?.idx); }
     else if (e.vst) { A.addVst(props.insId, e.vst); say('Dodano ' + e.vst.name); }
     remember(e.key);
     close();

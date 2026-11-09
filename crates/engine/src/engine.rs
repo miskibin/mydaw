@@ -96,7 +96,11 @@ struct RecBuf {
     start: f64,
     /// Frames of input to drop from the front so the take lines up with what the
     /// performer heard: device round trip + plugin delay compensation of the playback.
+    /// Set at the start from the device estimate then; replaced in [`RecBuf::resolve`] by the
+    /// mean round trip measured while the take was capturing, when there is one.
     skip: usize,
+    /// The mixer's playback latency `skip` was taken with: the graph keeps it until the take ends.
+    pdc: usize,
     /// Loop range when recording in passes.
     lap: Option<(f64, f64)>,
     sr: u32,
@@ -122,10 +126,15 @@ impl RecBuf {
             _ => self.start,
         }
     }
-    /// A punch-in take starts where the audio thread began capturing.
-    fn resolve_start(&mut self, shared: &Shared) {
+    /// Reads what the audio thread learned during the take (before its `Shared` goes away):
+    /// a punch-in take starts where capturing began, and the device round trip is the one
+    /// measured while it captured (the estimate at the start may not have settled).
+    fn resolve(&mut self, shared: &Shared) {
         if self.start.is_nan() {
             self.start = shared.rec_start();
+        }
+        if let Some(io) = shared.take_latency() {
+            self.skip = io as usize + self.pdc;
         }
     }
     fn push(&mut self, x: f32) {
@@ -172,6 +181,8 @@ struct Core {
     redo: Vec<Project>,
     revision: u64,
     gesture: Option<Project>,
+    /// A transient edit inside the open gesture was not reported to listeners yet.
+    gesture_unreported: bool,
     sources: SourceStore,
     path: Option<PathBuf>,
     saved_revision: u64,
@@ -182,10 +193,15 @@ struct Core {
     fx_errors: HashMap<Id, String>,
     wires: Option<Wires>,
     take: Option<RecBuf>,
+    /// A mixer change that would alter the playback latency arrived during a take: the
+    /// audio thread keeps the old graph until the take ends (its `skip` stays right).
+    graph_deferred: bool,
     watch: Vec<Id>,
     /// Comp id → take played instead of the comp (live only: not saved, not undone).
     audition: HashMap<Id, Id>,
     midi: MidiState,
+    /// Synth channels the audio thread holds an instance for, with the patch it was last sent.
+    synths: HashMap<Id, crate::poly::Patch>,
 }
 
 /// Live MIDI input state kept under the core lock (see [`Engine::midi_configure`]).
@@ -252,6 +268,7 @@ impl Engine {
                 redo: vec![],
                 revision: 1,
                 gesture: None,
+                gesture_unreported: false,
                 sources: SourceStore::default(),
                 path: None,
                 saved_revision: 1,
@@ -261,9 +278,11 @@ impl Engine {
                 fx_errors: HashMap::new(),
                 wires: None,
                 take: None,
+                graph_deferred: false,
                 watch: vec![],
                 audition: HashMap::new(),
                 midi: MidiState::default(),
+                synths: HashMap::new(),
             }),
             shared: Mutex::new(Arc::new(Shared::new())),
             factory,
@@ -341,7 +360,7 @@ impl Engine {
             let mut c = self.core.lock();
             let old = self.shared.lock().clone();
             if let Some(t) = c.take.as_mut() {
-                t.resolve_start(&old);
+                t.resolve(&old);
             }
         }
         *self.shared.lock() = shared.clone();
@@ -356,6 +375,7 @@ impl Engine {
             self.factory.release(id);
         }
         c.sent_params.clear();
+        c.synths.clear();
         // the old stream is gone: keep what it captured instead of orphaning the take
         self.finalize_take(&mut c);
         c.wires = Some(Wires { cmds: cmd_tx, garbage: gb_rx, record: rec_rx, analyzer: Analyzer::new(ain, aout, sample_rate), sr: sample_rate, max_block });
@@ -438,13 +458,21 @@ impl Engine {
         if c.project == before {
             return Ok(c.revision);
         }
-        if !(transient && c.gesture.is_some()) {
+        let in_gesture = transient && c.gesture.is_some();
+        if !in_gesture {
             push_undo(&mut c, before);
         }
         c.revision += 1;
         self.sync(&mut c, d);
         let rev = c.revision;
-        self.changed(c);
+        // inside a gesture (a drag sends one batch per frame) listeners are not sent the whole
+        // project each time: the UI holds those states back anyway, and `end_gesture` reports
+        // the result. On a big song that was ~1 MB serialised, sent and parsed per frame.
+        if in_gesture {
+            c.gesture_unreported = true;
+        } else {
+            self.changed(c);
+        }
         Ok(rev)
     }
 
@@ -457,11 +485,15 @@ impl Engine {
 
     pub fn end_gesture(&self) {
         let mut c = self.core.lock();
+        let unreported = std::mem::take(&mut c.gesture_unreported);
         if let Some(g) = c.gesture.take() {
             if g != c.project {
                 push_undo(&mut c, g);
                 // renders skipped during the drag (pitch edits) happen now
                 self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+                self.changed(c);
+            } else if unreported {
+                // dragged and back: nothing to undo, but listeners have not seen the revisions
                 self.changed(c);
             }
         }
@@ -470,6 +502,7 @@ impl Engine {
     pub fn undo(&self) -> bool {
         let mut c = self.core.lock();
         c.gesture = None;
+        c.gesture_unreported = false;
         let Some(p) = c.undo.pop() else { return false };
         let cur = std::mem::replace(&mut c.project, p);
         c.redo.push(cur);
@@ -482,6 +515,7 @@ impl Engine {
     pub fn redo(&self) -> bool {
         let mut c = self.core.lock();
         c.gesture = None;
+        c.gesture_unreported = false;
         let Some(p) = c.redo.pop() else { return false };
         let cur = std::mem::replace(&mut c.project, p);
         c.undo.push(cur);
@@ -597,8 +631,11 @@ impl Engine {
     fn new_take(&self, c: &Core, track: usize, start: f64, lap: Option<(f64, f64)>) -> Option<RecBuf> {
         let w = c.wires.as_ref()?;
         let sr = w.sr as u32;
-        let skip = self.shared().io_latency() as usize + playback_latency(&c.project, w.sr);
-        Some(RecBuf { track, start, skip, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
+        let pdc = playback_latency(&c.project, w.sr);
+        let shared = self.shared();
+        let skip = shared.io_latency() as usize + pdc;
+        shared.reset_take_latency();
+        Some(RecBuf { track, start, skip, pdc, lap, sr, data: Vec::with_capacity(sr as usize * 2 * 60), marks: vec![], nans: 0, peaks: vec![], peaks_sent: 0, acc: (0.0, 0.0, 0) })
     }
 
     pub fn watch_fx(&self, ids: &[Id]) {
@@ -867,7 +904,10 @@ impl Engine {
     /// the calibrated insert chain for its track. The key comes from `beat_clip` when given,
     /// else from the project's other audio (tracks not routed to the vocal's insert); the
     /// level suggestion needs `beat_clip`. Slow (seconds): call off the UI thread.
-    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
+    ///
+    /// `bake_rider`: the plan's rider comes out of the chain into `rider_bake`, for
+    /// [`Self::bake_rider`] (no live look-ahead on the insert, so no playback delay).
+    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style, bake_rider: bool) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
         let clip = self.audio_clip(clip_id)?;
         let region = |cl: &Clip| -> Result<(Vec<f32>, f32), EngineError> {
             let (audio, bpm) = {
@@ -905,14 +945,82 @@ impl Engine {
             }
             None => None,
         };
-        Ok(crate::autovocal::plan(&crate::autovocal::PlanInput {
+        let plan = crate::autovocal::plan(&crate::autovocal::PlanInput {
             vocal: &vocal,
             sr,
             style,
             key,
             pitch: pitch.as_deref(),
             beat: beat.as_ref().map(|(x, s)| (x.as_slice(), *s)),
-        }))
+        });
+        Ok(if bake_rider { plan.baked() } else { plan })
+    }
+
+    /// Renders what an audio clip plays (its region, clip gain, normalise/reverse and pitch
+    /// edits; not its fades, which stay on the clip) through the Vocal Rider offline, as
+    /// `autovocal::render` does — the rider's latency removed, sample-aligned, any
+    /// look-ahead — into a new source, and points the clip at it (gain 0 dB, no
+    /// norm/rev/pitch edits, the region's sub-sample start kept as the offset). The original
+    /// source stays in the project. One undo step. `params` are Rider params (catalog ids;
+    /// missing ones take the catalog defaults), e.g. an auto-vocal plan's `rider_bake`.
+    /// Returns (new source id, clip id). Slow (the whole region is rendered): call it off
+    /// the UI thread.
+    pub fn bake_rider(&self, clip_id: Id, params: &std::collections::BTreeMap<String, f64>) -> Result<(Id, Id), EngineError> {
+        let (clip, audio, bpm, src_name, color) = {
+            let mut c = self.core.lock();
+            let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
+            if clip.kind != ClipKind::Audio {
+                return Err(EngineError::Msg("only audio clips can be baked".into()));
+            }
+            let bpm = c.project.bpm;
+            let audio = c.sources.clip_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            let src = c.project.sources.iter().find(|s| s.id == clip.source);
+            let (name, color) = src.map(|s| (s.name.clone(), s.color.clone())).unwrap_or_else(|| ("Vocal".into(), "#e05263".into()));
+            (clip, audio, bpm, name, color)
+        };
+        let sr = audio.sr;
+        let (a, b) = crate::sources::clip_region(&clip, bpm, audio.seconds());
+        // the same frames `auto_vocal_plan` measures (truncated start); the fraction of a
+        // frame the region starts past it stays on the clip as its offset
+        let pos = a * sr as f64;
+        let i0 = (pos as usize).min(audio.frames);
+        let i1 = ((b * sr as f64) as usize).clamp(i0, audio.frames);
+        if i1 - i0 < 16 {
+            return Err(EngineError::Msg("the clip is empty".into()));
+        }
+        // two guard frames (as in `flatten_comp`): playback reads a frame or two past the
+        // region's last whole frame (interpolation, the clip end landing between frames)
+        let i1 = (i1 + 2).min(audio.frames);
+        let g = crate::dsp::db_to_gain(clip.gain);
+        let content = audio.content();
+        let l: Vec<f32> = (i0..i1).map(|i| content[2 * i] * g).collect();
+        let r: Vec<f32> = (i0..i1).map(|i| content[2 * i + 1] * g).collect();
+        let (yl, yr) = crate::autovocal::render_stereo(FxKind::Rider, params, &l, &r, sr as f32);
+        let data: Vec<f32> = yl.iter().zip(&yr).flat_map(|(a, b)| [*a, *b]).collect();
+        let spb = 60.0 / bpm;
+        let offset = (pos - i0 as f64) / sr as f64 / spb;
+
+        let mut c = self.core.lock();
+        let now = c.project.clips.iter().find(|x| x.id == clip_id).cloned();
+        if now.as_ref() != Some(&clip) || c.project.bpm != bpm {
+            return Err(EngineError::Msg("the clip changed while the rider was rendering; try again".into()));
+        }
+        let id = c.project.alloc_id();
+        let name = format!("{src_name} (rider)");
+        let path = fresh_path(&audio_dir(&c), &format!("{} rider {}", sanitize(&src_name), id));
+        write_wav(&path, &data, sr)?;
+        let baked = Audio::from_stereo(data, sr, audio.channels);
+        let before = c.project.clone();
+        c.project.sources.push(Source { id, name, color, path: path.display().to_string(), dur: baked.seconds(), sr, ch: audio.channels, peak_db: crate::dsp::gain_to_db(baked.peak()) });
+        c.sources.insert(id, Arc::new(baked));
+        if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
+            *x = Clip { source: id, offset, gain: 0.0, norm: false, rev: false, tune: None, ..clip };
+        }
+        push_undo(&mut c, before);
+        c.revision += 1;
+        self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+        self.changed(c);
+        Ok((id, clip_id))
     }
 
     /// Peaks of what the clip actually plays (including pitch edits), for drawing.
@@ -1195,7 +1303,7 @@ impl Engine {
         };
         let sr = sample_rate as f32;
         let block = 512;
-        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(64);
+        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(64 + project.channels.len());
         let (gb_tx, mut gb_rx) = rtrb::RingBuffer::<Garbage>::new(64);
         let (rec_tx, _rec_rx) = rtrb::RingBuffer::<f32>::new(16);
         let mut taps = Taps { input: vec![], output: vec![] };
@@ -1216,6 +1324,11 @@ impl Engine {
         tl.loop_range = None;
         tl.song_end = TOTAL_BEATS;
         let _ = cmd_tx.push(Cmd::Graph(Box::new(graph)));
+        for ch in &project.channels {
+            if let ChannelSrc::Synth { synth } = &ch.src {
+                let _ = cmd_tx.push(Cmd::SynthAdd(Box::new(crate::poly::SynthInst::new(ch.id, crate::poly::params::resolve(synth), sr))));
+            }
+        }
         let _ = cmd_tx.push(Cmd::Timeline(Box::new(tl)));
         let _ = cmd_tx.push(Cmd::Play { from, count_in: 0.0, rec: false, rec_loop: false });
         let spb = 60.0 / project.bpm;
@@ -1282,7 +1395,13 @@ impl Engine {
         self.refresh_midi(c);
         let Some(w) = c.wires.as_ref() else { return };
         let (sr, max_block) = (w.sr, w.max_block);
-        if d.mixer {
+        // synth instances first, so a new timeline never plays a channel without one
+        sync_synths(c, sr);
+        // a take's alignment assumes the latency at its start: hold latency changes back
+        let defer = d.mixer && c.take.as_ref().is_some_and(|t| t.pdc != playback_latency(&c.project, sr));
+        c.graph_deferred |= defer;
+        if d.mixer && !defer {
+            c.graph_deferred = false;
             let now: HashSet<Id> = c.project.inserts.iter().flat_map(|m| m.fx.iter().map(|f| f.id)).collect();
             for gone in c.live_fx.difference(&now).copied().collect::<Vec<_>>() {
                 self.factory.release(gone);
@@ -1294,7 +1413,7 @@ impl Engine {
             c.live_fx = graph.inserts.iter().flat_map(|i| i.fx.iter().map(|s| s.id)).collect();
             c.sent_params = c.project.inserts.iter().flat_map(|m| m.fx.iter()).map(|f| (f.id, fx_send(f))).collect();
             send(c, Cmd::Graph(Box::new(graph)));
-        } else if d.params {
+        } else if d.params || defer {
             send(c, Cmd::Mix(Box::new(mix_state(&c.project))));
             let changed: Vec<(Id, (Option<ParamBlock>, f32))> = c
                 .project
@@ -1349,7 +1468,7 @@ impl Engine {
             let _ = sr;
             let ids: Vec<Id> = c.project.inserts.iter().map(|m| m.id).collect();
             if let Some(t) = c.take.as_mut() {
-                t.resolve_start(&shared);
+                t.resolve(&shared);
             }
             let rec = c.take.as_mut().filter(|t| !t.start.is_nan()).map(|t| {
                 let new = t.peaks[t.peaks_sent..].to_vec();
@@ -1387,9 +1506,12 @@ impl Engine {
         let shared = self.shared();
         let mut c = self.core.lock();
         if let Some(t) = c.take.as_mut() {
-            t.resolve_start(&shared);
+            t.resolve(&shared);
         }
         self.finalize_take(&mut c);
+        if c.graph_deferred {
+            self.sync(&mut c, Dirty { timeline: false, mixer: true, params: true });
+        }
     }
 
     fn finalize_take(&self, c: &mut Core) {
@@ -1532,6 +1654,7 @@ impl Engine {
                 }
             }
             MidiMsg::PitchBend { value, .. } => mf.send(Cmd::MidiBend(MidiMsg::bend_semitones(value))),
+            MidiMsg::ModWheel { value, .. } => mf.send(Cmd::MidiMod(value as f32 / 127.0)),
             MidiMsg::AllNotesOff { .. } => mf.send(Cmd::MidiOff),
         }
     }
@@ -1668,7 +1791,7 @@ fn sample_audio(store: &SourceStore, chans: &[Channel]) -> HashMap<Id, Arc<Audio
         .iter()
         .filter_map(|c| match c.src {
             ChannelSrc::Sample { source } => store.get(source).map(|a| (source, a.clone())),
-            ChannelSrc::Inst { .. } => None,
+            ChannelSrc::Inst { .. } | ChannelSrc::Synth { .. } => None,
         })
         .collect()
 }
@@ -1706,6 +1829,39 @@ fn armed_insert(c: &Core) -> Option<usize> {
     let p = &c.project;
     let t = p.tracks.iter().find(|t| t.arm)?;
     p.inserts.iter().position(|m| m.id == t.insert)
+}
+
+/// Brings the audio thread's synth instances in line with the project's synth channels:
+/// new channels get an instance (built here, off the audio thread), changed ones their new
+/// patch, removed ones are dropped.
+fn sync_synths(c: &mut Core, sr: f32) {
+    let want: Vec<(Id, crate::poly::Patch)> = c
+        .project
+        .channels
+        .iter()
+        .filter_map(|ch| match &ch.src {
+            ChannelSrc::Synth { synth } => Some((ch.id, crate::poly::params::resolve(synth))),
+            _ => None,
+        })
+        .collect();
+    let gone: Vec<Id> = c.synths.keys().filter(|id| !want.iter().any(|(w, _)| w == *id)).copied().collect();
+    for id in gone {
+        c.synths.remove(&id);
+        send(c, Cmd::SynthRemove(id));
+    }
+    for (id, patch) in want {
+        match c.synths.get(&id) {
+            None => {
+                c.synths.insert(id, patch);
+                send(c, Cmd::SynthAdd(Box::new(crate::poly::SynthInst::new(id, patch, sr))));
+            }
+            Some(old) if *old != patch => {
+                c.synths.insert(id, patch);
+                send(c, Cmd::SynthPatch { chan: id, patch: Box::new(patch) });
+            }
+            _ => {}
+        }
+    }
 }
 
 fn send(c: &mut Core, cmd: Cmd) {
@@ -1779,9 +1935,9 @@ fn audible_tracks(p: &Project) -> Vec<(f32, bool)> {
     p.tracks.iter().map(|t| (fader_gain(t.vol), !t.muted && (!any_solo || t.solo))).collect()
 }
 
-fn audible_inserts(p: &Project) -> Vec<(Id, f32, f32, bool)> {
+fn audible_inserts(p: &Project) -> Vec<(Id, f32, f32, f32, bool)> {
     let any_solo = p.inserts.iter().any(|m| m.id != 0 && m.solo);
-    p.inserts.iter().map(|m| (m.id, fader_gain(m.vol), m.pan.clamp(-1.0, 1.0), !m.muted && (m.id == 0 || !any_solo || m.solo))).collect()
+    p.inserts.iter().map(|m| (m.id, fader_gain(m.vol), m.pan.clamp(-1.0, 1.0), if m.width.is_finite() { m.width.clamp(0.0, 2.0) } else { 1.0 }, !m.muted && (m.id == 0 || !any_solo || m.solo))).collect()
 }
 
 /// Frames between the timeline and the speakers inside the mixer: the slowest non-master
@@ -1833,6 +1989,7 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>) -> (Vec<ChanRt>,
             let (kind, sample) = match c.src {
                 ChannelSrc::Inst { inst } => (crate::synth::VoiceKind::of(inst), None),
                 ChannelSrc::Sample { source } => (crate::synth::VoiceKind::Sample, audio.get(&source).cloned()),
+                ChannelSrc::Synth { .. } => (crate::synth::VoiceKind::Synth, None),
             };
             ChanRt { id: c.id, kind, sample, root: c.root, gain, pan, on, insert, home: insert.or(heard).unwrap_or(0) }
         })
@@ -1868,7 +2025,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
         .inserts
         .iter()
         .zip(ins_state)
-        .map(|(m, (id, gain, pan, on))| {
+        .map(|(m, (id, gain, pan, width, on))| {
             let fx = m
                 .fx
                 .iter()
@@ -1898,7 +2055,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
                 .collect();
             let k = p.inserts.iter().position(|x| x.id == id).unwrap_or(0);
             let comp = if k == 0 { 0 } else { max_lat - lat[k] };
-            InsertRt::new(id, gain, pan, on, fx, max_block).with_delay(comp)
+            InsertRt::new(id, gain, pan, width, on, fx, max_block).with_delay(comp)
         })
         .collect();
     let track_state = audible_tracks(p);
@@ -1908,7 +2065,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
         .zip(track_state)
         .map(|(t, (gain, on))| TrackRt { insert: p.inserts.iter().position(|m| m.id == t.insert).unwrap_or(0), gain, on })
         .collect();
-    Graph::new(inserts, tracks, monitor_track(p), max_block)
+    Graph::new(inserts, tracks, monitor_track(p), max_block).with_latency(max_lat, lat.first().copied().unwrap_or(0))
 }
 
 /// `takes`: loaded audio by source id of every comp take and sampler channel.

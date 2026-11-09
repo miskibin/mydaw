@@ -19,7 +19,7 @@ export interface Prefs {
 }
 
 const KEY = 'wave.prefs';
-const DEFAULTS: Prefs = { uiScale: 1, clipIcons: true, noteAudition: true, autosaveMin: 0, hints: true };
+const DEFAULTS: Prefs = { uiScale: 1, clipIcons: true, noteAudition: false, autosaveMin: 2, hints: true };
 
 function load(): Prefs {
   try { const v = JSON.parse(localStorage.getItem(KEY) ?? '{}'); return { ...DEFAULTS, ...v }; } catch { return { ...DEFAULTS }; }

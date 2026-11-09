@@ -18,7 +18,7 @@ import {
 import * as A from '../state/actions';
 import { commit, Gesture, inGesture } from '../state/edit';
 import { clipPeaksPending, getClipPeaks, peakRange, peaksVersion } from '../state/peaks';
-import { S } from '../state/store';
+import { plain, S } from '../state/store';
 import { tele } from '../state/telemetry';
 import { say, setU, U } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -41,7 +41,6 @@ const SCALES = ['Chromatic', 'Major', 'Minor', 'Maj pent', 'Min pent'];
 const KW = 46, RH = 22, BH = 48;
 
 const anCache = new Map<string, PitchAnalysis>();
-const plain = <T,>(v: T): T => JSON.parse(JSON.stringify(v));
 
 export function PitchEditor() {
   const clip = () => U.pitchEd ? S.project.clips.find(c => c.id === U.pitchEd!.clipId && c.kind === 'audio') : undefined;
