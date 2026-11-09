@@ -1873,9 +1873,9 @@ fn audible_tracks(p: &Project) -> Vec<(f32, bool)> {
     p.tracks.iter().map(|t| (fader_gain(t.vol), !t.muted && (!any_solo || t.solo))).collect()
 }
 
-fn audible_inserts(p: &Project) -> Vec<(Id, f32, f32, bool)> {
+fn audible_inserts(p: &Project) -> Vec<(Id, f32, f32, f32, bool)> {
     let any_solo = p.inserts.iter().any(|m| m.id != 0 && m.solo);
-    p.inserts.iter().map(|m| (m.id, fader_gain(m.vol), m.pan.clamp(-1.0, 1.0), !m.muted && (m.id == 0 || !any_solo || m.solo))).collect()
+    p.inserts.iter().map(|m| (m.id, fader_gain(m.vol), m.pan.clamp(-1.0, 1.0), if m.width.is_finite() { m.width.clamp(0.0, 2.0) } else { 1.0 }, !m.muted && (m.id == 0 || !any_solo || m.solo))).collect()
 }
 
 /// Frames between the timeline and the speakers inside the mixer: the slowest non-master
@@ -1962,7 +1962,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
         .inserts
         .iter()
         .zip(ins_state)
-        .map(|(m, (id, gain, pan, on))| {
+        .map(|(m, (id, gain, pan, width, on))| {
             let fx = m
                 .fx
                 .iter()
@@ -1992,7 +1992,7 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
                 .collect();
             let k = p.inserts.iter().position(|x| x.id == id).unwrap_or(0);
             let comp = if k == 0 { 0 } else { max_lat - lat[k] };
-            InsertRt::new(id, gain, pan, on, fx, max_block).with_delay(comp)
+            InsertRt::new(id, gain, pan, width, on, fx, max_block).with_delay(comp)
         })
         .collect();
     let track_state = audible_tracks(p);

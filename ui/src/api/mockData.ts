@@ -170,9 +170,9 @@ const COLORS = [0, 6, 5, 3, 4, 8, 9, 9];
 function base(names: string[], insNames: string[], cat: Catalog): Project {
   const p: Project = {
     version: 2, bpm: 128, tracks: [], patterns: [], sources: [], clips: [], loop: null, nextId: 1000, automations: [],
-    inserts: [{ id: 0, name: 'Master', color: '#d5dae2', vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] }],
+    inserts: [{ id: 0, name: 'Master', color: '#d5dae2', vol: VOL_UNITY, pan: 0, width: 1, muted: false, solo: false, fx: [] }],
   };
-  insNames.forEach((name, i) => p.inserts.push({ id: i + 1, name, color: TC[COLORS[i]], vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] }));
+  insNames.forEach((name, i) => p.inserts.push({ id: i + 1, name, color: TC[COLORS[i]], vol: VOL_UNITY, pan: 0, width: 1, muted: false, solo: false, fx: [] }));
   names.forEach((name, i) => p.tracks.push({ id: i + 1, name, color: TC[COLORS[i]], muted: false, solo: false, arm: false, vol: VOL_UNITY, h: 56, insert: i + 1 }));
   p.inserts[0].fx.push(newFx(cat, 900, 'limit', p.bpm));
   // the Channel Rack: the four built-ins (ids 1000..1003), like demo.rs

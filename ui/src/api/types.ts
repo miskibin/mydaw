@@ -52,7 +52,10 @@ export interface Fx {
 
 export interface Insert {
   id: Id; name: string; color: string;
-  vol: number; pan: number; muted: boolean; solo: boolean;
+  vol: number; pan: number;
+  /** Stereo width (M/S side gain): 0 mono, 1 unchanged (default when absent), 2 extra wide. */
+  width?: number;
+  muted: boolean; solo: boolean;
   fx: Fx[];
 }
 

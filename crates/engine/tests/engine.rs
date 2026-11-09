@@ -435,3 +435,45 @@ fn music_analysis_excludes_vocal_insert_and_caches() {
     assert_eq!(proj_ex.key.unwrap().root, 0);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+fn width_render(width: f32) -> Vec<f32> {
+    let dir = std::env::temp_dir().join(format!("wave-width-{}-{}", std::process::id(), width));
+    std::fs::create_dir_all(&dir).unwrap();
+    let wav = dir.join("st.wav");
+    let tone: Vec<f32> = (0..24000).flat_map(|i| [(i as f32 * 0.05).sin() * 0.4, (i as f32 * 0.071).sin() * 0.3]).collect();
+    wave_engine::sources::write_wav(&wav, &tone, 48000).unwrap();
+    let mut p = Project::empty();
+    p.inserts[0].fx.clear();
+    p.inserts[0].width = width;
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    e.import_audio(&[wav], Some((0, 0.0))).unwrap();
+    let out = e.render(0.0, 4.0, 0.0, 48000).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    out
+}
+
+#[test]
+fn insert_width_scales_the_side_signal() {
+    let one = width_render(1.0);
+    assert!(rms(&one) > 0.05);
+    let mono = width_render(0.0);
+    assert!(mono.chunks(2).all(|f| f[0] == f[1]), "width 0 is not mono");
+    let wide = width_render(2.0);
+    for (a, b) in one.chunks(2).zip(wide.chunks(2)) {
+        let (m1, s1) = ((a[0] + a[1]) * 0.5, (a[0] - a[1]) * 0.5);
+        let (m2, s2) = ((b[0] + b[1]) * 0.5, (b[0] - b[1]) * 0.5);
+        assert!((m1 - m2).abs() < 1e-5 && (2.0 * s1 - s2).abs() < 1e-5);
+    }
+    // width 1 changes nothing: matches the mid/side-free default render bit for bit
+    let again = width_render(1.0);
+    assert_eq!(one, again);
+}
+
+#[test]
+fn old_insert_json_loads_with_unity_width() {
+    let mut v = serde_json::to_value(&Project::empty().inserts[0]).unwrap();
+    assert_eq!(v["width"], 1.0);
+    v.as_object_mut().unwrap().remove("width");
+    let ins: Insert = serde_json::from_value(v).unwrap();
+    assert_eq!(ins.width, 1.0);
+}

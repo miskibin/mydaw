@@ -340,6 +340,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
             color: color(t),
             vol: VOL_UNITY,
             pan: ((t % 7) as f32 - 3.0) / 6.0,
+            width: 1.0,
             muted: false,
             solo: false,
             fx,
