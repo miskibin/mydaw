@@ -53,7 +53,7 @@ const RULES: [RegExp, IconDefinition][] = [
   [/^rysuj|^ołówek/i, faPencil],
   [/^maluj/i, faPaintbrush],
   [/^gumka/i, faEraser],
-  [/^wbudowane instrumenty|^pianino|^bas$/i, faMusic],
+  [/^wbudowane instrumenty|^pianino/i, faMusic],
   [/^klawiatura|^midi/i, faKeyboard],
   [/^szukaj/i, faMagnifyingGlass],
   [/^anuluj/i, faBan],
