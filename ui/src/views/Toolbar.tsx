@@ -7,6 +7,7 @@ import { commit, Gesture, wheelEdit } from '../state/edit';
 import { S } from '../state/store';
 import { curBeat, tele } from '../state/telemetry';
 import { openMenu, say, setU, U, type Tool } from '../state/ui';
+import { midiFlash, midiStatus } from '../state/midi';
 import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { Icon, ICONS } from '../ui/icons';
@@ -192,6 +193,12 @@ export function Toolbar() {
         <button class="zbtn" onClick={() => A.zoomAt(0.8)} title="Oddal (Ctrl+−)">−</button>
         <button class="zbtn" onClick={() => A.zoomAt(1.25)} title="Przybliż (Ctrl+=)">+</button>
       </div>
+      <Show when={midiStatus()?.selected}>
+        <button class="ibtn midibtn" onClick={() => setU('settings', true)}
+          title={midiStatus()?.connected ? 'MIDI: ' + midiStatus()!.connected!.name + ' — klik = ustawienia' : 'MIDI: urządzenie odłączone — klik = ustawienia'}>
+          <span class="midiled" classList={{ on: !!midiStatus()?.connected, hit: midiFlash() }} /><span class="tag9">MIDI</span>
+        </button>
+      </Show>
       <button class="ibtn" classList={{ on: U.settings }} style={{ width: '26px', height: '26px' }} onClick={() => setU('settings', !U.settings)} title="Ustawienia (audio, wygląd)"><Icon d={ICONS.gear} size={14} sw={1.8} /></button>
       <button class="zbtn helpbtn" classList={{ on: U.help }} style={{ font: '600 12px var(--mono)' }} onClick={() => setU('help', !U.help)} title="Skróty klawiszowe (?)">?</button>
       </div>

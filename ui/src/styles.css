@@ -251,6 +251,10 @@ a { color: var(--blue); }
 .swatches { display: flex; gap: 4px; padding: 5px 8px; flex-wrap: wrap; }
 .swatches button { width: 15px; height: 15px; padding: 0; border: 0; border-radius: 3px; cursor: pointer; }
 .iconpick { display: grid; grid-template-columns: repeat(5, 26px); gap: 3px; padding: 4px 8px 6px; }
+.midiled { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--fg5); transition: background .12s, box-shadow .12s; }
+.midiled.on { background: color-mix(in srgb, var(--green) 55%, var(--bg6)); }
+.midiled.on.hit { background: var(--green); box-shadow: 0 0 6px var(--green); transition: none; }
+.toolbar .midibtn { width: auto; height: 26px; padding: 0 6px; display: flex; gap: 5px; align-items: center; }
 .iconpick button { width: 26px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--fg4); cursor: pointer; }
 .iconpick button:hover { background: var(--bg6); color: var(--fg-hi); }
 .iconpick button.on { background: var(--bg6); box-shadow: inset 0 0 0 1px currentColor; }

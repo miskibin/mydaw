@@ -16,6 +16,7 @@ import { SampleEditor } from './views/SampleEditor';
 import { PitchEditor } from './views/PitchEditor';
 import { Export } from './views/Export';
 import { Settings, VstPicker } from './views/Settings';
+import { startMidi } from './state/midi';
 import { MusicDialog } from './views/MusicDialog';
 import { FxPickerHost, openFxPicker } from './views/FxPicker';
 import { PatternEditor } from './views/PatternEditor';
@@ -102,6 +103,7 @@ const onBlur = () => { if (U.alt) setU('alt', false); };
 
 export function App() {
   onMount(() => {
+    startMidi();
     window.addEventListener('keydown', onKey);
     window.addEventListener('pointerdown', reclaimFocus, true);
     window.addEventListener('keyup', onKeyUp);

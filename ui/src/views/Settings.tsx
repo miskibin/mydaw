@@ -1,7 +1,9 @@
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
-import type { AudioConfig, AudioDevices, AudioHost, AudioStatus, CliStatus, Vst3Info } from '../api/types';
+import type { AudioConfig, AudioDevices, AudioHost, AudioStatus, CliStatus, MidiDevice, Vst3Info } from '../api/types';
 import * as A from '../state/actions';
+import { keyName, midiFlash, midiFollow, midiStatus, selectMidiDevice, setMidiFollow, setMidiTarget } from '../state/midi';
+import { S } from '../state/store';
 import { say, setU, U } from '../state/ui';
 import { Segmented } from '../ui/Knob';
 import { setTheme, themeMode, type ThemeMode } from '../ui/theme';
@@ -44,7 +46,7 @@ function SettingsDialog() {
   const opt = (v: string | number | null) => v == null ? '' : String(v);
   return (
     <div class="overlay" onPointerDown={() => setU('settings', false)}>
-      <div class="dialog" style={{ width: 'min(500px,92vw)' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+      <div class="dialog" style={{ width: 'min(500px,92vw)', 'max-height': '92vh', 'overflow-y': 'auto' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
         <div class="hd"><span>Ustawienia</span><button onClick={() => setU('settings', false)}>×</button></div>
         <div class="form" style={{ 'margin-bottom': '14px' }}>
           <label>Wygląd</label>
@@ -104,8 +106,58 @@ function SettingsDialog() {
             </div>
           )}
         </Show>
+        <MidiSection />
       </div>
     </div>
+  );
+}
+
+function MidiSection() {
+  const [devs, setDevs] = createSignal<MidiDevice[]>([]);
+  const [err, setErr] = createSignal<string | null>(null);
+  const refresh = () => be().midiListDevices().then(setDevs).catch(e => setErr(String(e)));
+  onMount(refresh);
+  const run = (p: Promise<void>) => { setErr(null); p.catch(e => setErr(String(e))); };
+  const st = midiStatus;
+  const pitched = () => (S.project.channels ?? []);
+  const targetVal = () => (midiFollow() ? 'follow' : String(st()?.target ?? ''));
+  const pickTarget = (v: string) => {
+    if (v === 'follow') { setMidiFollow(true); const ch = U.patWin?.ch; if (ch != null) run(setMidiTarget(ch)); return; }
+    setMidiFollow(false); run(setMidiTarget(v === '' ? null : +v));
+  };
+  return (
+    <>
+      <div class="sechd" style={{ 'margin-top': '14px' }}>Klawiatura MIDI</div>
+      <div class="form">
+        <label>Urządzenie</label>
+        <div class="row" style={{ gap: '8px' }}>
+          <select class="sel" style={{ flex: 1 }} value={st()?.selected?.id ?? ''} onChange={e => run(selectMidiDevice(e.currentTarget.value || null))}>
+            <option value="">Brak</option>
+            <Show when={st()?.selected && !devs().some(d => d.id === st()!.selected!.id)}>
+              <option value={st()!.selected!.id}>{st()!.selected!.name} (odłączone)</option>
+            </Show>
+            <For each={devs()}>{d => <option value={d.id}>{d.name}</option>}</For>
+          </select>
+          <button class="smallbtn" style={{ height: '26px' }} onClick={refresh} title="Odśwież listę urządzeń MIDI">Odśwież</button>
+        </div>
+        <label>Gra na</label>
+        <select class="sel" value={targetVal()} onChange={e => pickTarget(e.currentTarget.value)}
+          title="Kanał (instrument), który brzmi z klawiatury. Nagrywanie: uzbrojona ścieżka + R — nuty trafiają do nowego patternu.">
+          <option value="follow">Zaznaczony kanał (Channel Rack / piano roll)</option>
+          <option value="">Pierwszy instrument</option>
+          <For each={pitched()}>{c => <option value={String(c.id)}>{c.name}</option>}</For>
+        </select>
+        <label>Stan</label>
+        <span class="note mono row" style={{ gap: '6px' }}>
+          <span class="midiled" classList={{ on: !!st()?.connected, hit: midiFlash() }} />
+          <Show when={st()?.connected} fallback={<span style={{ color: 'var(--fg4)' }}>{st()?.selected ? 'czeka na urządzenie' : 'nie wybrano'}</span>}>
+            {c => <span style={{ color: 'var(--green)' }}>{c().name}</span>}
+          </Show>
+          <Show when={st()?.lastNote}>{n => <span>· ostatnia {keyName(n().key)}{n().on ? ' v' + n().velocity : ''}</span>}</Show>
+        </span>
+        <Show when={st()?.error || err()}><span /><span class="note err">{st()?.error ?? err()}</span></Show>
+      </div>
+    </>
   );
 }
 
