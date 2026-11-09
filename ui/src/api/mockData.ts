@@ -3,6 +3,7 @@
 import { VOL_UNITY, type AnyBuiltinKind, type Catalog, type Clip, type EqBand, type Inst, type Note, type ParamDef, type Preset, type Project } from './types';
 import { defaultBands, loadPreset, newFx } from '../lib/presets';
 import { builtinChannel, INSTS } from '../lib/pattern';
+import { SYNTH_CATALOG } from './synthCatalog';
 
 const p = (id: string, label: string, min: number, max: number, def: number, unit: string, log = false): ParamDef => ({ id, label, min, max, def, unit, log });
 /** catalog.rs `choice`: a discrete parameter (value = index) shown as buttons. */
@@ -149,6 +150,7 @@ export function mockCatalog(): Catalog {
   return {
     types: Object.fromEntries(BUILTIN.map(k => [k, { name: NAMES[k], params: PARAMS[k] }])),
     presets: Object.fromEntries(BUILTIN.map(k => [k, PRESETS[k]])),
+    synth: structuredClone(SYNTH_CATALOG),
   };
 }
 

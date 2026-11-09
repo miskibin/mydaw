@@ -10,6 +10,7 @@ pub mod model;
 pub mod music;
 pub mod ops;
 pub mod pitch;
+pub mod poly;
 pub mod processor;
 pub mod reference;
 pub mod rider;

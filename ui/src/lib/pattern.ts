@@ -4,6 +4,8 @@
 // Units: pattern `len` in beats; note `step`/`len` in 16ths ("steps"); `p` MIDI key
 // (absent = the channel's root); `v` velocity 0..1 (absent = 1).
 import { SAMPLE_ROOT, TOTAL_BEATS, VOL_UNITY, type Channel, type Id, type Inst, type Note, type Op, type Pattern, type Project } from '../api/types';
+import { SYNTH_CATALOG } from '../api/synthCatalog';
+import { synthError } from './synth';
 
 export const INSTS: Inst[] = ['kick', 'clap', 'hat', 'bass'];
 export const INST_NAME: Record<Inst, string> = { kick: 'Kick', clap: 'Clap', hat: 'Hat', bass: 'Bass' };
@@ -17,7 +19,7 @@ export function builtinChannel(id: Id, inst: Inst): Channel {
   return { id, name: INST_NAME[inst], color: INST_COLOR[inst], kind: 'inst', inst, vol: VOL_UNITY, pan: 0, mute: false, solo: false, insert: null, root: instRoot(inst) };
 }
 /** Channels whose notes have a pitch worth editing (piano roll). */
-export const isPitched = (c: Channel) => c.kind === 'sample' || c.inst === 'bass';
+export const isPitched = (c: Channel) => c.kind === 'sample' || c.kind === 'synth' || c.inst === 'bass';
 export const keyOf = (n: Note, c: Channel | undefined) => n.p ?? c?.root ?? SAMPLE_ROOT;
 export const velOf = (n: Note) => n.v ?? 1;
 /** Number of 16ths in the pattern. */
@@ -106,6 +108,7 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean): boolean {
       if (!(c.vol >= 0 && c.vol <= 1)) fail('channel vol is a fader position 0..1');
       if (!(c.pan >= -1 && c.pan <= 1)) fail('channel pan must be -1..1');
       if (c.kind === 'sample' && !p.sources.some(s => s.id === c.source)) fail(`no source with id ${c.source}`);
+      if (c.kind === 'synth') { const e = synthError(SYNTH_CATALOG, c.synth ?? { preset: null, params: {} }); if (e) fail(e); }
       if (c.insert != null && !p.inserts.some(m => m.id === c.insert)) fail(`no insert with id ${c.insert}`);
       const chans = p.channels ?? (p.channels = []);
       bump(p, c.id);

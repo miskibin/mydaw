@@ -186,6 +186,8 @@ struct Core {
     /// Comp id → take played instead of the comp (live only: not saved, not undone).
     audition: HashMap<Id, Id>,
     midi: MidiState,
+    /// Synth channels the audio thread holds an instance for, with the patch it was last sent.
+    synths: HashMap<Id, crate::poly::Patch>,
 }
 
 /// Live MIDI input state kept under the core lock (see [`Engine::midi_configure`]).
@@ -264,6 +266,7 @@ impl Engine {
                 watch: vec![],
                 audition: HashMap::new(),
                 midi: MidiState::default(),
+                synths: HashMap::new(),
             }),
             shared: Mutex::new(Arc::new(Shared::new())),
             factory,
@@ -356,6 +359,7 @@ impl Engine {
             self.factory.release(id);
         }
         c.sent_params.clear();
+        c.synths.clear();
         // the old stream is gone: keep what it captured instead of orphaning the take
         self.finalize_take(&mut c);
         c.wires = Some(Wires { cmds: cmd_tx, garbage: gb_rx, record: rec_rx, analyzer: Analyzer::new(ain, aout, sample_rate), sr: sample_rate, max_block });
@@ -1195,7 +1199,7 @@ impl Engine {
         };
         let sr = sample_rate as f32;
         let block = 512;
-        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(64);
+        let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(64 + project.channels.len());
         let (gb_tx, mut gb_rx) = rtrb::RingBuffer::<Garbage>::new(64);
         let (rec_tx, _rec_rx) = rtrb::RingBuffer::<f32>::new(16);
         let mut taps = Taps { input: vec![], output: vec![] };
@@ -1216,6 +1220,11 @@ impl Engine {
         tl.loop_range = None;
         tl.song_end = TOTAL_BEATS;
         let _ = cmd_tx.push(Cmd::Graph(Box::new(graph)));
+        for ch in &project.channels {
+            if let ChannelSrc::Synth { synth } = &ch.src {
+                let _ = cmd_tx.push(Cmd::SynthAdd(Box::new(crate::poly::SynthInst::new(ch.id, crate::poly::params::resolve(synth), sr))));
+            }
+        }
         let _ = cmd_tx.push(Cmd::Timeline(Box::new(tl)));
         let _ = cmd_tx.push(Cmd::Play { from, count_in: 0.0, rec: false, rec_loop: false });
         let spb = 60.0 / project.bpm;
@@ -1282,6 +1291,8 @@ impl Engine {
         self.refresh_midi(c);
         let Some(w) = c.wires.as_ref() else { return };
         let (sr, max_block) = (w.sr, w.max_block);
+        // synth instances first, so a new timeline never plays a channel without one
+        sync_synths(c, sr);
         if d.mixer {
             let now: HashSet<Id> = c.project.inserts.iter().flat_map(|m| m.fx.iter().map(|f| f.id)).collect();
             for gone in c.live_fx.difference(&now).copied().collect::<Vec<_>>() {
@@ -1532,6 +1543,7 @@ impl Engine {
                 }
             }
             MidiMsg::PitchBend { value, .. } => mf.send(Cmd::MidiBend(MidiMsg::bend_semitones(value))),
+            MidiMsg::ModWheel { value, .. } => mf.send(Cmd::MidiMod(value as f32 / 127.0)),
             MidiMsg::AllNotesOff { .. } => mf.send(Cmd::MidiOff),
         }
     }
@@ -1668,7 +1680,7 @@ fn sample_audio(store: &SourceStore, chans: &[Channel]) -> HashMap<Id, Arc<Audio
         .iter()
         .filter_map(|c| match c.src {
             ChannelSrc::Sample { source } => store.get(source).map(|a| (source, a.clone())),
-            ChannelSrc::Inst { .. } => None,
+            ChannelSrc::Inst { .. } | ChannelSrc::Synth { .. } => None,
         })
         .collect()
 }
@@ -1706,6 +1718,39 @@ fn armed_insert(c: &Core) -> Option<usize> {
     let p = &c.project;
     let t = p.tracks.iter().find(|t| t.arm)?;
     p.inserts.iter().position(|m| m.id == t.insert)
+}
+
+/// Brings the audio thread's synth instances in line with the project's synth channels:
+/// new channels get an instance (built here, off the audio thread), changed ones their new
+/// patch, removed ones are dropped.
+fn sync_synths(c: &mut Core, sr: f32) {
+    let want: Vec<(Id, crate::poly::Patch)> = c
+        .project
+        .channels
+        .iter()
+        .filter_map(|ch| match &ch.src {
+            ChannelSrc::Synth { synth } => Some((ch.id, crate::poly::params::resolve(synth))),
+            _ => None,
+        })
+        .collect();
+    let gone: Vec<Id> = c.synths.keys().filter(|id| !want.iter().any(|(w, _)| w == *id)).copied().collect();
+    for id in gone {
+        c.synths.remove(&id);
+        send(c, Cmd::SynthRemove(id));
+    }
+    for (id, patch) in want {
+        match c.synths.get(&id) {
+            None => {
+                c.synths.insert(id, patch);
+                send(c, Cmd::SynthAdd(Box::new(crate::poly::SynthInst::new(id, patch, sr))));
+            }
+            Some(old) if *old != patch => {
+                c.synths.insert(id, patch);
+                send(c, Cmd::SynthPatch { chan: id, patch: Box::new(patch) });
+            }
+            _ => {}
+        }
+    }
 }
 
 fn send(c: &mut Core, cmd: Cmd) {
@@ -1833,6 +1878,7 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>) -> (Vec<ChanRt>,
             let (kind, sample) = match c.src {
                 ChannelSrc::Inst { inst } => (crate::synth::VoiceKind::of(inst), None),
                 ChannelSrc::Sample { source } => (crate::synth::VoiceKind::Sample, audio.get(&source).cloned()),
+                ChannelSrc::Synth { .. } => (crate::synth::VoiceKind::Synth, None),
             };
             ChanRt { id: c.id, kind, sample, root: c.root, gain, pan, on, insert, home: insert.or(heard).unwrap_or(0) }
         })

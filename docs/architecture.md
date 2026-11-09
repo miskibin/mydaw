@@ -63,10 +63,11 @@ channel with `ch`. Why global and not per pattern: a beat is usually several pat
 (verse / chorus / fill) played by the same kit; per-pattern instruments would duplicate
 the kit and its mixer routing in every pattern.
 
-* `channel.kind`: `inst` (built-in `kick`/`clap`/`hat`/`bass`) or `sample` (a one-shot
+* `channel.kind`: `inst` (built-in `kick`/`clap`/`hat`/`bass`), `sample` (a one-shot
   sampler playing project source `source`; the note's key repitches it, `root` = the key at
   which the file plays at its own pitch, default 60 = C5 in FL's naming / C4 in this app's
-  labels). `vol` is a fader position (unity = 0.7937, gain normalised so unity is exactly
+  labels) or `synth` (the built-in polyphonic synth, `synth: {preset, params}` with
+  parameter ids from `fx_catalog().synth`; see [synth.md](synth.md)). `vol` is a fader position (unity = 0.7937, gain normalised so unity is exactly
   1), `pan` −1..1 (balance law of the mixer), `mute`/`solo` (with any solo, only soloed
   channels play), `insert`: a mixer insert id, or `null` = **the insert of the playlist track
   the clip is on** (how every pattern note behaved before channels existed; the track's fader

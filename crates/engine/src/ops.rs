@@ -311,6 +311,16 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     return Err(OpError::Missing { what: "source", id: source });
                 }
             }
+            if let ChannelSrc::Synth { synth } = &c.src {
+                for (k, v) in &synth.params {
+                    if crate::poly::params::index_of(k).is_none() {
+                        return Err(OpError::Invalid(format!("synth has no parameter `{k}`")));
+                    }
+                    if !v.is_finite() {
+                        return Err(OpError::Invalid(format!("synth parameter `{k}` must be a number")));
+                    }
+                }
+            }
             if let Some(ins) = c.insert {
                 if p.insert(ins).is_none() {
                     return Err(OpError::Missing { what: "insert", id: ins });
@@ -321,7 +331,9 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 Some(i) => {
                     let x = &p.channels[i];
                     // knobs and mute/solo take the fast path; what a note plays or where it goes rebuilds
-                    if x.src != c.src || x.insert != c.insert || x.root != c.root {
+                    // a synth's sound (its parameters) takes the fast path too
+                    let same_kind = matches!((&x.src, &c.src), (ChannelSrc::Synth { .. }, ChannelSrc::Synth { .. }));
+                    if (x.src != c.src && !same_kind) || x.insert != c.insert || x.root != c.root {
                         d.timeline = true;
                     } else {
                         d.params = true;

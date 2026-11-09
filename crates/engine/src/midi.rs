@@ -22,6 +22,8 @@ pub enum MidiMsg {
     Sustain { ch: u8, down: bool },
     /// Pitch bend in −8192..=8191 (0 = centre).
     PitchBend { ch: u8, value: i16 },
+    /// CC 1 (mod wheel), 0..=127.
+    ModWheel { ch: u8, value: u8 },
     /// CC 120 (all sound off) / CC 123 (all notes off).
     AllNotesOff { ch: u8 },
 }
@@ -51,6 +53,7 @@ impl MidiMsg {
             },
             0xB0 => match (d1, d2?) {
                 (64, v) => Some(Self::Sustain { ch, down: v >= 64 }),
+                (1, v) => Some(Self::ModWheel { ch, value: v }),
                 (120 | 123, _) => Some(Self::AllNotesOff { ch }),
                 _ => None,
             },

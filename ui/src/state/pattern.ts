@@ -135,7 +135,7 @@ export function deleteChannel(c: Channel) {
   say('Usunięto kanał ' + c.name + (used ? ' (z nutami w ' + used + ' pattern' + (used === 1 ? 'ie' : 'ach') + ') — Ctrl+Z cofa' : ''));
 }
 export const chanSource = (c: Channel) => (c.kind === 'sample' ? S.project.sources.find(s => s.id === c.source) : undefined);
-export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? 'wbudowany · ' + INST_NAME[c.inst] : 'sampler · ' + (chanSource(c) ? baseName(chanSource(c)!.path) : 'brak pliku'));
+export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? 'wbudowany · ' + INST_NAME[c.inst] : c.kind === 'synth' ? 'syntezator · ' + (c.synth.preset ?? 'własny') : 'sampler · ' + (chanSource(c) ? baseName(chanSource(c)!.path) : 'brak pliku'));
 
 // ---------------------------------------------------------------- sound
 
