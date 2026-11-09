@@ -118,8 +118,40 @@ pub fn stats(x: &[f32], sr: u32) -> Value {
 
 /// Offline bounce shared by the GUI export dialog and `wave render`.
 ///
-/// Writes a 32-bit float stereo WAV. When `cancel` is set mid-render, no file is
+/// Writes a 32-bit float stereo WAV, or a CBR MP3 when `fmt` says so. When `cancel` is set mid-render, no file is
 /// written and the error is `"cancelled"`.
+/// Output container of an offline bounce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportFormat {
+    Wav,
+    Mp3 { kbps: u32 },
+}
+
+impl ExportFormat {
+    /// `format`: "wav" (default) or "mp3"; `kbps`: 128/192/256/320 (default 320, mp3 only).
+    pub fn parse(format: Option<&str>, kbps: Option<u32>) -> R<Self> {
+        match format.map(str::to_ascii_lowercase).as_deref() {
+            None | Some("wav") => Ok(Self::Wav),
+            Some("mp3") => {
+                let kbps = kbps.unwrap_or(320);
+                if ![128, 192, 256, 320].contains(&kbps) {
+                    return Err("mp3Kbps must be 128, 192, 256 or 320".into());
+                }
+                Ok(Self::Mp3 { kbps })
+            }
+            Some(o) => Err(format!("format must be wav or mp3, not `{o}`")),
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Wav => "wav",
+            Self::Mp3 { .. } => "mp3",
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn render_to_file(
     app: &App,
     out: &std::path::Path,
@@ -128,6 +160,7 @@ pub fn render_to_file(
     tail: f64,
     rate: u32,
     cancel: &std::sync::atomic::AtomicBool,
+    fmt: ExportFormat,
 ) -> R<Value> {
     if to <= from {
         return Err("`to` must be after `from`".into());
@@ -136,12 +169,19 @@ pub fn render_to_file(
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("cancelled".into());
     }
-    wave_engine::sources::write_wav(out, &audio, rate)?;
+    match fmt {
+        ExportFormat::Wav => wave_engine::sources::write_wav(out, &audio, rate)?,
+        ExportFormat::Mp3 { kbps } => {
+            let title = app.engine.state().path.as_deref().and_then(|p| std::path::Path::new(p).file_stem().map(|s| s.to_string_lossy().into_owned()));
+            wave_engine::sources::write_mp3(out, &audio, rate, kbps, title.as_deref())?
+        }
+    }
     Ok(json!({
         "out": out.display().to_string(),
         "fromBeat": from,
         "toBeat": to,
         "tail": tail,
+        "format": fmt.extension(),
         "stats": stats(&audio, rate),
     }))
 }
@@ -153,7 +193,9 @@ pub fn render(app: &App, a: &Value) -> R<Value> {
     let to = opt_f64(a, "to").unwrap_or_else(|| p.loop_range.map(|l| l.b).unwrap_or(p.song_end()));
     let tail = opt_f64(a, "tail").unwrap_or(2.0);
     let rate = opt_f64(a, "rate").unwrap_or(48000.0) as u32;
-    render_to_file(app, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false))
+    let by_ext = out.extension().and_then(|e| e.to_str()).filter(|e| e.eq_ignore_ascii_case("mp3")).map(|_| "mp3");
+    let fmt = ExportFormat::parse(arg(a, "format").and_then(Value::as_str).or(by_ext), opt_f64(a, "mp3Kbps").map(|k| k as u32))?;
+    render_to_file(app, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false), fmt)
 }
 
 pub fn context(app: &App, full: bool) -> Value {

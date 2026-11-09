@@ -16,6 +16,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 log.workspace = true
 parking_lot.workspace = true
+mp3lame-encoder = "0.3.0"
 
 [dev-dependencies]
 hound.workspace = true

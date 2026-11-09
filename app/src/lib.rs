@@ -468,12 +468,15 @@ async fn project_save(app: St<'_>, handle: AppHandle, save_as: Option<bool>) -> 
     Ok(json!({ "path": path.display().to_string() }))
 }
 
-/// Bounce the master mix to a 32-bit float stereo WAV (song or loop + tail).
+/// Bounce the master mix to a 32-bit float stereo WAV, or a CBR MP3 (`format: "mp3"`,
+/// `mp3_kbps` 128/192/256/320, default 320), song or loop + tail.
 ///
 /// Opens a native save dialog first. The render runs off the UI thread so playback
 /// keeps going; call `export_cancel` to abort before a file is written.
 #[tauri::command]
-async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32) -> R<Value> {
+async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32, format: Option<String>, mp3_kbps: Option<u32>) -> R<Value> {
+    let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps)?;
+    let ext = fmt.extension();
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
         return Err("sample rate must be 44100 or 48000".into());
     }
@@ -485,26 +488,26 @@ async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
     let suggested = st
         .path
         .as_deref()
-        .and_then(|p| PathBuf::from(p).file_stem().map(|s| format!("{}.wav", s.to_string_lossy())))
-        .unwrap_or_else(|| "Song.wav".into());
+        .and_then(|p| PathBuf::from(p).file_stem().map(|s| format!("{}.{ext}", s.to_string_lossy())))
+        .unwrap_or_else(|| format!("Song.{ext}"));
     let picked = handle
         .dialog()
         .file()
-        .add_filter("WAV audio", &["wav"])
+        .add_filter(if ext == "mp3" { "MP3 audio" } else { "WAV audio" }, &[ext])
         .set_file_name(&suggested)
         .blocking_save_file()
         .and_then(|p| p.into_path().ok());
     let Some(mut path) = picked else {
         return Ok(json!({ "cancelled": true }));
     };
-    if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("wav")) != Some(true) {
-        path.set_extension("wav");
+    if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case(ext)) != Some(true) {
+        path.set_extension(ext);
     }
     app.export_cancel.store(false, Ordering::Relaxed);
     let a = app.inner().clone();
     let out = path.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        actions::render_to_file(&a, &out, from, to, tail, sample_rate, &a.export_cancel)
+        actions::render_to_file(&a, &out, from, to, tail, sample_rate, &a.export_cancel, fmt)
     })
     .await
     .map_err(es)?;
