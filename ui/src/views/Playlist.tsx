@@ -1,5 +1,7 @@
+import { prefs } from '../state/prefs';
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
+import { InstIcon, trackIcon } from '../ui/instIcons';
 import { VOL_UNITY, type Clip, type Comp, type Id, type Op, type Take, type Track } from '../api/types';
 import { boundaries, boundaryXfade, moveBoundary, setBoundaryXfade, takeEnd, toComp, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import * as CA from '../state/comp';
@@ -10,7 +12,7 @@ import { snapFloor, snapRes, snapRound } from '../lib/snap';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { peaksVersion } from '../state/peaks';
-import { allocId, S, srcLenBeats, srcOf } from '../state/store';
+import { allocId, projVersion, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
@@ -90,19 +92,14 @@ export function Playlist() {
   createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; S.project.loop?.a; S.project.loop?.b; peaksVersion(); scroll(); cw(); ch(); dirtyGrid = true; });
   createEffect(() => { for (const _ of U.sel) void _; dirtyGrid = true; });
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
-  createEffect(() => { for (const c of S.project.clips) { c.start; c.len; c.track; c.offset; c.muted; c.gain; c.ref; c.kind; c.norm; c.rev; c.tune; } dirtyGrid = true; });
-  createEffect(() => { for (const c of S.project.clips) { c.fadeIn; c.fadeOut; } dirtyFade = true; });
+  // clips, comps, automations, patterns, sources: one project-version signal, not a
+  // subscription to every field of every item (that cost ~7 ms per clip move on a big song)
+  createEffect(() => { projVersion(); prefs().clipIcons; dirtyGrid = true; dirtyFade = true; });
   createEffect(() => {
-    for (const cp of S.project.comps ?? []) { cp.name; cp.xfade; for (const t of cp.takes) { t.name; t.start; t.len; t.ref; t.offset; } for (const r of cp.regions) { r.take; r.from; r.to; r.xfade; } }
     for (const k in S.audition) void S.audition[k];
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
   });
-  createEffect(() => { for (const a of S.project.automations ?? []) { a.color; a.name; for (const q of a.points) { q.t; q.v; } } U.autoEdit; autoHover(); dirtyGrid = true; });
-  createEffect(() => {
-    for (const p of S.project.patterns) { p.name; p.color; p.len; for (const n of p.notes) { n.step; n.len; n.p; } }
-    for (const s of S.project.sources) { s.name; s.color; s.dur; }
-    dirtyGrid = true;
-  });
+  createEffect(() => { U.autoEdit; autoHover(); dirtyGrid = true; });
   createEffect(() => { U.bw; U.start; S.project.loop?.a; S.project.loop?.b; scroll(); cw(); dirtyRuler = true; });
 
   const offsets = () => {
@@ -554,7 +551,9 @@ export function Playlist() {
       isPat ? { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } : { t: 'gain', clipId: c.id },
       ...(c.kind === 'audio' ? [{ t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem,
         { t: 'item', label: 'Edytuj wysokość…', kbd: c.tune?.notes.length ? 'edytowany' : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
-        { t: 'item', label: 'Wykryj tempo i tonację…', act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem] : []),
+        { t: 'item', label: 'Wykryj tempo i tonację…', act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
+        { t: 'item', label: 'Auto wokal — śpiew', act: () => void A.autoVocal(c.id, 'natural'), title: 'Analizuje nagranie i ustawia na kanale miksera: wyrównanie, kompresję, de-esser, autotune w tonacji bitu, mały reverb i limiter' } as MenuItem,
+        { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocal(c.id, 'hard') } as MenuItem] : []),
       { t: 'item', label: 'Kanał miksera…', act: () => openRouteMenu(c.track, x, y) },
       { t: 'item', label: 'Zaznacz wszystkie z tego źródła', act: () => setU('sel', S.project.clips.filter(v => v.kind === c.kind && v.ref === c.ref).map(v => v.id)) },
       { t: 'sep' },
@@ -627,8 +626,73 @@ export function Playlist() {
 
   const mq = () => { const m = U.marquee; return m && { x: Math.min(m.x0, m.x1), y: Math.min(m.y0, m.y1), w: Math.abs(m.x1 - m.x0), h: Math.abs(m.y1 - m.y0) }; };
 
+  // ---------- overview scrollbar (FL-style: on top, wide thumb over a minimap of the song) ----------
+  let ovCv!: HTMLCanvasElement;
+  const [ovW, setOvW] = createSignal(600);
+  /** Beats the overview spans: the song plus some room, at least what is visible. */
+  const ovRange = () => {
+    projVersion();
+    let end = 0;
+    for (const c of S.project.clips) end = Math.max(end, c.start + c.len);
+    return Math.min(TOTAL, Math.max(64, end * 1.15 + 16, (scroll().x + cw()) / U.bw));
+  };
+  const thumb = () => {
+    const R = ovRange(), W = ovW();
+    const a = scroll().x / U.bw / R * W, w = Math.max(24, cw() / U.bw / R * W);
+    return { x: Math.min(a, W - w), w };
+  };
+  onMount(() => {
+    const ro = new ResizeObserver(() => setOvW(ovCv.clientWidth)); ro.observe(ovCv);
+    onCleanup(() => ro.disconnect());
+  });
+  createEffect(() => {
+    const W = ovW(), H = 18, R = ovRange(); projVersion(); theme.epoch;
+    fitCanvas(ovCv, W, H);
+    const g = ovCv.getContext('2d')!, P = unwrap(S.project), n = Math.max(1, P.tracks.length);
+    g.clearRect(0, 0, W, H);
+    const lh = Math.max(1, (H - 4) / n);
+    for (const c of P.clips) {
+      const t = P.tracks[c.track]; if (!t) continue;
+      g.globalAlpha = c.muted ? 0.25 : 0.75; g.fillStyle = t.color;
+      g.fillRect(c.start / R * W, 2 + c.track * lh, Math.max(1, c.len / R * W), Math.max(1, lh - (lh > 2 ? 0.5 : 0)));
+    }
+    g.globalAlpha = 1;
+  });
+  const ovDown = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = ovCv.getBoundingClientRect(), x = e.clientX - r.left, th = thumb(), R = ovRange(), W = ovW();
+    const toBeat = (px: number) => px / W * R;
+    const edge = x < th.x + 6 && x > th.x - 4 ? 'l' : x > th.x + th.w - 6 && x < th.x + th.w + 4 ? 'r' : null;
+    if (edge) {
+      // drag an edge = zoom, the other edge stays put
+      const b0 = scroll().x / U.bw, b1 = (scroll().x + cw()) / U.bw;
+      track(ev => {
+        const b = clamp(toBeat(ev.clientX - r.left), 0, R);
+        const [lo, hi] = edge === 'l' ? [Math.min(b, b1 - 1), b1] : [b0, Math.max(b, b0 + 1)];
+        const bw = clamp(cw() / (hi - lo), 4, 96);
+        setU('bw', bw); scrollEl.scrollLeft = lo * bw;
+      }, null, 'ew-resize');
+      return;
+    }
+    // outside the thumb: centre the view there, then drag as if grabbed
+    let grab = x - th.x;
+    if (x < th.x || x > th.x + th.w) { grab = th.w / 2; scrollEl.scrollLeft = toBeat(x - grab) * U.bw; }
+    track(ev => { scrollEl.scrollLeft = Math.max(0, toBeat(ev.clientX - r.left - grab) * U.bw); }, null, 'grabbing');
+  };
+  const ovHover = (e: PointerEvent) => {
+    const x = e.clientX - ovCv.getBoundingClientRect().left, th = thumb();
+    ovCv.style.cursor = Math.abs(x - th.x) < 6 || Math.abs(x - th.x - th.w) < 6 ? 'ew-resize' : x >= th.x && x <= th.x + th.w ? 'grab' : 'pointer';
+  };
+
   return (
     <div class="plwrap" onPointerDown={() => A.playlistFront()}>
+      <div class="ploverview" style={{ 'padding-left': U.headW + 'px' }}>
+        <div class="ovtrack">
+          <canvas ref={ovCv} onPointerDown={ovDown} onPointerMove={ovHover} title="Przeciągnij = przewiń · krawędzie = zoom · klik = skocz" />
+          <div class="ovthumb" style={{ left: thumb().x + 'px', width: thumb().w + 'px' }} />
+        </div>
+      </div>
       <div ref={scrollEl} class="plscroll">
         <div style={{ width: U.headW + gridW() + 'px', position: 'relative' }}>
           <div class="rulerRow">
@@ -682,6 +746,7 @@ function openLaneMenu(x: number, y: number, i: number) {
     { t: 'title', label: t.name },
     { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, t.name, v => A.setTrack(i, { name: v }, 'Nazwa ścieżki')) },
     { t: 'swatches', current: t.color, pick: col => A.setTrack(i, { color: col }, 'Kolor ścieżki') },
+    { t: 'icons', current: t.icon, color: t.color, pick: id => A.setTrack(i, { icon: id }, 'Ikona ścieżki') },
     { t: 'sep' },
     { t: 'item', label: t.muted ? 'Odcisz' : 'Wycisz', act: () => A.toggleTrackMute(i) },
     { t: 'item', label: t.solo ? 'Wyłącz solo' : 'Solo', act: () => A.toggleTrackSolo(i) },
@@ -741,7 +806,9 @@ function LaneHeader(props: { t: Track; i: number }) {
       <div class="stripe" style={{ background: t().color }} />
       <div class="body">
         <div class="row" style={{ gap: '6px', 'min-width': 0 }}>
-          <span class="num">{props.i + 1}</span>
+          <Show when={trackIcon(t())} fallback={<span class="num">{props.i + 1}</span>}>
+            <span class="laneicon" style={{ color: t().color }} title={'Ścieżka ' + (props.i + 1) + ' · PPM = zmień ikonę'}><InstIcon id={trackIcon(t())} size={13} /></span>
+          </Show>
           <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę"
             onDblClick={e => openRename(e.clientX, e.clientY, t().name, v => A.setTrack(props.i, { name: v }, 'Nazwa ścieżki'))}>{t().name}</span>
           <div class="row" style={{ gap: '2px', flex: 'none' }}>

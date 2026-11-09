@@ -16,11 +16,13 @@ import {
   deleteChannel, newPattern, openPattern, patFront, patOp, playStep, previewPattern, putNotes, selectChannel, setBars, setChannel,
   setView, togglePreview, toggleChanMute, toggleChanSolo, patPlayhead,
 } from '../state/pattern';
-import { S } from '../state/store';
+import { projVersion, S } from '../state/store';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
 import { Icon } from '../ui/icons';
+import { channelIcon, InstIcon } from '../ui/instIcons';
+import { closeChannelWindow, toggleChannelWindow } from './ChannelWindow';
 import { MiniKnob, NumField, parseNum } from '../ui/Knob';
 import { theme } from '../ui/theme';
 import { moveWindow } from './FxWindow';
@@ -42,12 +44,15 @@ const W = () => U.patWin!;
  * clipboard and nudge shortcuts stop here (Space, Ctrl+Z, F-keys and Esc stay global).
  */
 let viewKey: ((e: KeyboardEvent) => void) | null = null;
+/** Piano-roll note clipboard (shared across patterns); `noteClipAt` = where the next paste lands. */
+let noteClip: Note[] = [];
+let noteClipAt: number | null = null;
 function guardKeys(e: KeyboardEvent) {
   // the window has the focus: the active view (piano roll) gets the keys first
   viewKey?.(e);
   if (e.cancelBubble) return;
   const m = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
-  if (e.key === 'Delete' || e.key === 'Backspace' || e.key.startsWith('Arrow') || (m && 'abcxvm'.includes(k) && k.length === 1)) { e.preventDefault(); e.stopPropagation(); }
+  if (e.key === 'Delete' || e.key === 'Backspace' || e.key.startsWith('Arrow') || (m && 'abcdxvm'.includes(k) && k.length === 1)) { e.preventDefault(); e.stopPropagation(); }
 }
 
 /** Pattern editor window (shown while `U.patWin` is set). */
@@ -142,7 +147,8 @@ function useSize(el: () => HTMLElement | undefined) {
 /** Bumped when anything the canvases show changes (pattern notes, channels, theme). */
 function useDataVersion() {
   const [v, setV] = createSignal(0);
-  createEffect(() => { JSON.stringify(curPat()); JSON.stringify(channels()); theme.epoch; setV(x => x + 1); });
+  // projVersion bumps on every project change: no deep JSON walk of a 2000-note pattern per edit
+  createEffect(() => { projVersion(); curPat(); channels(); theme.epoch; setV(x => x + 1); });
   return v;
 }
 
@@ -178,7 +184,7 @@ function chanMenu(c: Channel, x: number, y: number) {
     { t: 'item', label: 'Przesuń w prawo', kbd: '▶', act: () => edit(rotate(pt.notes, c.id, steps, 1), 'Przesuń kroki') },
     { t: 'item', label: 'Wyczyść', disabled: !pt.notes.some(n => n.ch === c.id), act: () => edit(clearChannel(pt.notes, c.id), 'Wyczyść kanał') },
     { t: 'sep' },
-    { t: 'item', label: 'Odsłuchaj', kbd: 'Ctrl+klik', act: () => audition(c.id) },
+    { t: 'item', label: 'Odsłuchaj', kbd: 'Ctrl+klik', act: () => audition(c.id, undefined, 0.8, true) },
     { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, c.name, v => v.trim() && setChannel(c, { name: v.trim() }, 'Nazwa kanału')) },
     { t: 'swatches', current: c.color, pick: col => setChannel(c, { color: col }, 'Kolor kanału') },
     { t: 'item', label: 'Klonuj kanał', act: () => cloneChannel(c) },
@@ -370,8 +376,9 @@ function ChanRow(props: { c: Channel }) {
     if (e.button === 2) { e.preventDefault(); e.stopPropagation(); selectChannel(c().id); chanMenu(c(), e.clientX, e.clientY); return; }
     if (e.button !== 0) return;
     selectChannel(c().id);
-    if (e.ctrlKey || e.metaKey) { audition(c().id); return; }
-    if (dblCheck('cname' + c().id) && isPitched(c())) setView('roll', c().id);
+    if (e.ctrlKey || e.metaKey) { audition(c().id, undefined, 0.8, true); return; }
+    if (dblCheck('cname' + c().id) && isPitched(c())) { closeChannelWindow(); setView('roll', c().id); return; }
+    toggleChannelWindow(c().id);
   };
   return (
     <div class="crow" classList={{ sel: sel(), muted: c().mute || (anySolo() && !c().solo) }} style={{ height: RH + 'px' }}
@@ -392,8 +399,9 @@ function ChanRow(props: { c: Channel }) {
         onWheel={t => commit([panOp(t)], 'Panorama kanału')} />
       <button class="cins" classList={{ auto: c().insert == null }} title={insTitle(c())}
         onPointerDown={e => e.stopPropagation()} onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); insertMenu(c(), r.left, r.bottom + 2); }}>{insLabel(c())}</button>
-      <button class="cname" classList={{ sel: sel() }} title={c().name + ' · ' + chanKindLabel(c()) + ' — klik = wybierz · Ctrl+klik = odsłuch' + (isPitched(c()) ? ' · 2× klik = piano roll' : '') + ' · PPM = menu'}
+      <button class="cname" classList={{ sel: sel() }} title={c().name + ' · ' + chanKindLabel(c()) + ' — klik = ustawienia kanału · Ctrl+klik = odsłuch' + (isPitched(c()) ? ' · 2× klik = piano roll' : '') + ' · PPM = menu'}
         onPointerDown={nameDown}>
+        <span class="cicon" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={11} /></span>
         <span class="ell">{c().name}</span>
         <Show when={c().kind === 'sample'}><span class="ckind">SMP</span></Show>
       </button>
@@ -626,7 +634,25 @@ function Roll(props: { root: () => HTMLDivElement }) {
     if (tl && !m && !e.altKey) { stop(); setRollTool(tl.id); say('Piano roll · ' + tl.label); return; }
     if (m && k === 'a') { stop(); setSel(new Set(chanNotes().map(x => x.i))); say('Zaznaczono ' + chanNotes().length + ' nut'); return; }
     const s = [...sel()].filter(i => pt().notes[i]?.ch === ch().id);
-    if (m && k === 'b') {
+    if (m && (k === 'c' || k === 'x') && !e.shiftKey) {
+      stop(); if (!s.length) return;
+      noteClip = s.map(i => pt().notes[i]); noteClipAt = null;
+      if (k === 'x') { const del = new Set(s); commitNotes(pt().notes.filter((_, i) => !del.has(i)), 'Wytnij nuty'); setSel(new Set<number>()); }
+      say((k === 'x' ? 'Wycięto ' : 'Skopiowano ') + s.length + ' nut');
+      return;
+    }
+    if (m && k === 'v' && !e.shiftKey) {
+      stop(); if (!noteClip.length) return;
+      const a = Math.min(...noteClip.map(n => n.step)), b = Math.max(...noteClip.map(n => n.step + n.len));
+      const at = noteClipAt ?? a + Math.max(4, Math.ceil((b - a) / 4 - 1e-9) * 4); // first paste lands after the copied block, further ones chain on
+      const copies = noteClip.map(n => ({ ...n, ch: ch().id, step: n.step - a + at }));
+      const base = pt().notes.length;
+      commitNotes([...pt().notes, ...copies], 'Wklej nuty'); setSel(new Set(copies.map((_, j) => base + j)));
+      noteClipAt = at + (b - a);
+      say('Wklejono ' + copies.length + ' nut');
+      return;
+    }
+    if (m && (k === 'b' || k === 'd')) {
       stop(); if (!s.length) return;
       const r = duplicateRight(pt().notes, s);
       commitNotes(r.notes, 'Duplikuj nuty'); setSel(new Set(r.idx));

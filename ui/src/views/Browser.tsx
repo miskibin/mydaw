@@ -1,4 +1,4 @@
-import { createEffect, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, For, onCleanup, onMount, Show } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { be } from '../api/backend';
 import type { ClipKind, Id, Kit, LibFile, LibraryProgress, Source } from '../api/types';
@@ -12,6 +12,7 @@ import { dblCheck, track } from '../ui/drag';
 import { fitCanvas } from '../ui/frameLoop';
 import { dropClipAt, gridPoint } from './Playlist';
 import { addSamplerFiles, newPattern, openPattern } from '../state/pattern';
+import { InstIcon, patternIcon } from '../ui/instIcons';
 
 /** Drag something from the browser with a ghost label; `onDrop` gets the release point. */
 function dragGhost(e: PointerEvent, name: string, color: string, onClick: () => void, onDrop: (x: number, y: number, alt: boolean) => void) {
@@ -72,6 +73,7 @@ function Thumb(props: { src: Source }) {
 }
 
 function ProjectTab() {
+  const chanMap = createMemo(() => new Map((S.project.channels ?? []).map(c => [c.id, c])));
   const importBtn = async () => {
     try { const paths = await be().pickAudioFiles(); if (paths) await importFiles(paths); }
     catch (e) { say('Import niedostępny: ' + String(e)); }
@@ -87,7 +89,9 @@ function ProjectTab() {
           {p => (
             <div class="pitem" classList={{ on: U.cur?.kind === 'pat' && U.cur.ref === p.id }} title="Klik = wybierz · 2× klik = edytuj (F6) · przeciągnij na ścieżkę"
               onPointerDown={e => { if (e.button === 0 && dblCheck('pitem' + p.id)) { openPattern(p.id); return; } pick('pat', p.id, p.name, p.color, e); }}>
-              <span style={{ width: '8px', height: '8px', 'border-radius': '2px', flex: 'none', background: p.color }} />
+              <Show when={patternIcon(p, chanMap())} fallback={<span style={{ width: '8px', height: '8px', 'border-radius': '2px', flex: 'none', background: p.color }} />}>
+                {id => <span class="picon" style={{ color: p.color }}><InstIcon id={id()} size={12} /></span>}
+              </Show>
               <span class="nm">{p.name}</span>
               <span class="meta">{p.len / 4} bar</span>
             </div>

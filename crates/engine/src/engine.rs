@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::analysis::Analyzer;
 use crate::catalog::param_block;
+use crate::midi::{self, MidiMsg, MidiRecorder};
 use crate::model::*;
 use crate::ops::{self, Dirty, Op};
 use crate::processor::{ParamBlock, Processor};
@@ -184,6 +185,45 @@ struct Core {
     watch: Vec<Id>,
     /// Comp id → take played instead of the comp (live only: not saved, not undone).
     audition: HashMap<Id, Id>,
+    midi: MidiState,
+}
+
+/// Live MIDI input state kept under the core lock (see [`Engine::midi_configure`]).
+#[derive(Default)]
+struct MidiState {
+    /// Channel the keyboard plays; `None` = the first pitched channel.
+    target: Option<Id>,
+    /// A device is connected: notes play, and an armed recording captures them.
+    live: bool,
+}
+
+/// The MIDI take being recorded; its own lock, so keyboard events never wait for the core.
+#[derive(Default)]
+struct MidiTake {
+    /// The take being played in: recorder, armed track index, target channel.
+    rec: Option<(MidiRecorder, usize, Id)>,
+    /// The running take received notes (then its audio take is dropped).
+    played: bool,
+}
+
+/// What a keyboard event needs, readable without the core lock: whether a device is live,
+/// the channel and insert the keys play (refreshed whenever the project changes) and the
+/// audio thread's MIDI ring (separate from the command ring, so it has its own producer).
+struct MidiFast {
+    live: AtomicBool,
+    chan: std::sync::atomic::AtomicU64,
+    ins: std::sync::atomic::AtomicUsize,
+    tx: Mutex<Option<rtrb::Producer<Cmd>>>,
+}
+
+impl MidiFast {
+    fn send(&self, cmd: Cmd) {
+        if let Some(tx) = self.tx.lock().as_mut() {
+            if tx.push(cmd).is_err() {
+                log::warn!("audio MIDI queue full; dropping an event");
+            }
+        }
+    }
 }
 
 pub struct Engine {
@@ -192,6 +232,12 @@ pub struct Engine {
     factory: Arc<dyn PluginFactory>,
     listeners: Mutex<Vec<Listener>>,
     sink: Mutex<Option<FrameSink>>,
+    /// Effect chains that are silent past their tails are not processed (on by default).
+    skip_silent: std::sync::atomic::AtomicBool,
+    midi_fast: MidiFast,
+    midi_take: Mutex<MidiTake>,
+    /// Threads an offline render may use for the insert chains.
+    render_workers: std::sync::atomic::AtomicUsize,
 }
 
 const UNDO_LIMIT: usize = 200;
@@ -217,11 +263,16 @@ impl Engine {
                 take: None,
                 watch: vec![],
                 audition: HashMap::new(),
+                midi: MidiState::default(),
             }),
             shared: Mutex::new(Arc::new(Shared::new())),
             factory,
             listeners: Mutex::new(vec![]),
             sink: Mutex::new(None),
+            skip_silent: std::sync::atomic::AtomicBool::new(true),
+            midi_fast: MidiFast { live: AtomicBool::new(false), chan: std::sync::atomic::AtomicU64::new(u64::MAX), ins: std::sync::atomic::AtomicUsize::new(usize::MAX), tx: Mutex::new(None) },
+            midi_take: Mutex::new(MidiTake::default()),
+            render_workers: std::sync::atomic::AtomicUsize::new(std::thread::available_parallelism().map(|n| n.get().saturating_sub(2).clamp(1, 8)).unwrap_or(1)),
         });
         let weak = Arc::downgrade(&e);
         thread::Builder::new()
@@ -248,6 +299,19 @@ impl Engine {
         e
     }
 
+    /// Turns silence skipping of effect chains on/off for Rts created from now on and for
+    /// offline renders. The output is the same (below -120 dB); off is for A/B tests.
+    pub fn set_silence_skip(&self, on: bool) {
+        self.skip_silent.store(on, Relaxed);
+    }
+
+    /// Threads an offline render may use for the insert chains (1 = single-threaded). The
+    /// default leaves two cores to the rest of the machine, at most 8. The render is identical
+    /// whatever the count.
+    pub fn set_render_workers(&self, n: usize) {
+        self.render_workers.store(n.max(1), Relaxed);
+    }
+
     // ------------------------------------------------------------ device attach
 
     /// Builds the audio-thread half for a device running at `sample_rate` with
@@ -256,6 +320,7 @@ impl Engine {
     pub fn create_rt(&self, sample_rate: f32, max_block: usize) -> Rt {
         let max_block = max_block.clamp(16, 8192);
         let (cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(4096);
+        let (midi_tx, midi_rx) = rtrb::RingBuffer::<Cmd>::new(1024);
         let (gb_tx, gb_rx) = rtrb::RingBuffer::<Garbage>::new(4096);
         let (rec_tx, rec_rx) = rtrb::RingBuffer::<f32>::new(sample_rate as usize * 2 * 20);
         let mut inputs = vec![];
@@ -280,7 +345,10 @@ impl Engine {
             }
         }
         *self.shared.lock() = shared.clone();
-        let rt = Rt::new(sample_rate, max_block, cmd_rx, gb_tx, shared, Taps { input: inputs, output: outputs }, rec_tx);
+        let mut rt = Rt::new(sample_rate, max_block, cmd_rx, gb_tx, shared, Taps { input: inputs, output: outputs }, rec_tx);
+        rt.set_skip_silent(self.skip_silent.load(Relaxed));
+        rt.set_midi_ring(midi_rx);
+        *self.midi_fast.tx.lock() = Some(midi_tx);
         let mut c = self.core.lock();
         // everything is rebuilt for the new rate: hosted plugins keep their state through the project
         self.snapshot_plugin_states(&mut c);
@@ -427,7 +495,7 @@ impl Engine {
 
     pub fn play(&self, from: f64) {
         let mut c = self.core.lock();
-        if c.take.is_some() {
+        if c.take.is_some() || self.midi_take.lock().rec.is_some() {
             return;
         }
         let from = from.max(0.0);
@@ -446,6 +514,9 @@ impl Engine {
         if let Some(track) = rec_track {
             c.take = self.new_take(&c, track, from, lap);
         }
+        if let Some(track) = rec_track {
+            self.begin_midi_take(&mut c, track, from);
+        }
         c.transport.start_beat = from;
         c.transport.playing = true;
         send(&mut c, Cmd::Play { from, count_in, rec: rec_track.is_some(), rec_loop: lap.is_some() });
@@ -460,6 +531,7 @@ impl Engine {
         // give the callback a moment to flush the last input
         thread::sleep(Duration::from_millis(30));
         self.finish_take();
+        self.finish_midi_take();
         let c = self.core.lock();
         self.changed(c);
     }
@@ -484,7 +556,7 @@ impl Engine {
         if let Some(v) = monitor {
             c.transport.monitor = v;
         }
-        let punch_out = !c.transport.rec && c.take.is_some();
+        let punch_out = !c.transport.rec && (c.take.is_some() || self.midi_take.lock().rec.is_some());
         if punch_out {
             send(&mut c, Cmd::PunchOut);
         }
@@ -499,6 +571,12 @@ impl Engine {
                 }
             }
         }
+        if c.transport.rec && c.transport.playing && self.midi_take.lock().rec.is_none() {
+            if let Some(track) = c.project.tracks.iter().position(|t| t.arm) {
+                let at = self.shared().beat();
+                self.begin_midi_take(&mut c, track, at);
+            }
+        }
         let f = Cmd::Flags { metro: c.transport.metro, monitor: c.transport.monitor };
         send(&mut c, f);
         let t = c.transport.clone();
@@ -506,6 +584,7 @@ impl Engine {
             drop(c);
             thread::sleep(Duration::from_millis(30));
             self.finish_take();
+            self.finish_midi_take();
             self.changed(self.core.lock());
         } else {
             self.changed(c);
@@ -606,12 +685,93 @@ impl Engine {
 
     /// Pitch curve and notes of an audio clip's source (for the note editor).
     pub fn pitch_analysis(&self, clip_id: Id) -> Result<Arc<crate::pitch::PitchAnalysis>, EngineError> {
-        let mut c = self.core.lock();
+        let clip = self.audio_clip(clip_id)?;
+        self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))
+    }
+
+    fn audio_clip(&self, clip_id: Id) -> Result<Clip, EngineError> {
+        let c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
         if clip.kind != ClipKind::Audio {
             return Err(EngineError::Msg("only audio clips have pitch".into()));
         }
-        c.sources.analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))
+        Ok(clip)
+    }
+
+    /// Analysis of a source variant; slow detectors run without holding the project lock.
+    fn source_analysis(&self, id: Id, norm: bool, rev: bool) -> Option<Arc<crate::pitch::PitchAnalysis>> {
+        let (audio, est) = {
+            let mut c = self.core.lock();
+            if let Some(a) = c.sources.cached_analysis(id, norm, rev) {
+                return Some(a);
+            }
+            (c.sources.variant(id, norm, rev)?, c.sources.estimator())
+        };
+        let a = Arc::new(crate::pitch::analyze_with(&crate::sources::mono_of(&audio), audio.sr as f32, est.as_deref()));
+        let mut c = self.core.lock();
+        c.sources.put_analysis(id, norm, rev, a.clone());
+        Some(c.sources.cached_analysis(id, norm, rev).unwrap_or(a))
+    }
+
+    fn source_content(&self, id: Id, norm: bool, rev: bool) -> Option<Arc<crate::content::ContentFeatures>> {
+        let audio = {
+            let mut c = self.core.lock();
+            if let Some(x) = c.sources.cached_content(id, norm, rev) {
+                return Some(x);
+            }
+            c.sources.variant(id, norm, rev)?
+        };
+        let x = Arc::new(crate::content::mfcc(&crate::sources::mono_of(&audio), audio.sr as f32));
+        self.core.lock().sources.put_content(id, norm, rev, x.clone());
+        Some(x)
+    }
+
+    /// Tune to Reference target of an audio clip with `params` (the clip's own when `None`).
+    /// The slow parts (analysis, features, alignment) run without the project lock and are
+    /// cached, so committing the same reference afterwards only renders.
+    pub fn pitch_target(&self, clip_id: Id, params: Option<RefTune>) -> Result<Arc<crate::reference::PitchTarget>, EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let p = params.or_else(|| clip.tune.as_ref().and_then(|t| t.reference)).ok_or(EngineError::Msg("the clip has no reference".into()))?;
+        let key = {
+            let mut c = self.core.lock();
+            if !c.project.sources.iter().any(|s| s.id == p.source) {
+                return Err(EngineError::Msg("the reference source is not in the project".into()));
+            }
+            let bpm = c.project.bpm;
+            c.sources.align_key(&clip, bpm, p.source).ok_or(EngineError::Msg("audio not loaded".into()))?
+        };
+        let take = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        let cached = self.core.lock().sources.cached_alignment(&key);
+        let al = match cached {
+            Some(a) => a,
+            None => {
+                let reference = self.source_analysis(p.source, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
+                let tc = self.source_content(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+                let rc = self.source_content(p.source, false, false).ok_or(EngineError::Msg("reference audio not loaded".into()))?;
+                let r = crate::pitch::ANALYSIS_RATE as f64;
+                let al = Arc::new(crate::reference::align(
+                    &crate::reference::Performance { pitch: &take, content: &tc },
+                    (key.2 as f64 / r, key.3 as f64 / r),
+                    &crate::reference::Performance { pitch: &reference, content: &rc },
+                ));
+                self.core.lock().sources.put_alignment(key, al.clone());
+                al
+            }
+        };
+        Ok(Arc::new(crate::sources::target_for(&clip, &take, &al, &p)))
+    }
+
+    /// Uses `est` for pitch analysis from now on (`None` = built-in YIN). Pitch-edited
+    /// clips are re-rendered with the new analysis.
+    pub fn set_f0_estimator(&self, est: Option<Arc<dyn crate::pitch::F0Estimator>>) {
+        let mut c = self.core.lock();
+        c.sources.set_estimator(est);
+        self.sync(&mut c, Dirty { timeline: true, mixer: false, params: false });
+    }
+
+    /// Name of the pitch detector in use ("yin" or the estimator's).
+    pub fn f0_backend(&self) -> &'static str {
+        self.core.lock().sources.backend()
     }
 
     fn source_music(&self, id: Id, norm: bool, rev: bool) -> Option<Arc<crate::music::SourceMusic>> {
@@ -628,6 +788,11 @@ impl Engine {
     /// (excluding muted tracks/clips and tracks routed to `exclude_fx`'s insert,
     /// so key detection for Pitch Correct listens to the backing rather than the vocal).
     pub fn music_analysis(&self, clip_id: Option<Id>, exclude_fx: Option<Id>) -> Result<crate::music::MusicAnalysis, EngineError> {
+        self.music_analysis_ex(clip_id, exclude_fx, None)
+    }
+
+    /// [`Engine::music_analysis`], also excluding the tracks routed to insert `exclude_insert`.
+    fn music_analysis_ex(&self, clip_id: Option<Id>, exclude_fx: Option<Id>, exclude_insert: Option<Id>) -> Result<crate::music::MusicAnalysis, EngineError> {
         if let Some(cid) = clip_id {
             let (clip, bpm) = {
                 let c = self.core.lock();
@@ -651,7 +816,7 @@ impl Engine {
         let (all_clips, excluded_insert, bpm) = {
             let c = self.core.lock();
             let p = &c.project;
-            let ex_ins = exclude_fx.and_then(|fid| p.find_fx(fid).map(|(ins, _)| ins.id));
+            let ex_ins = exclude_insert.or_else(|| exclude_fx.and_then(|fid| p.find_fx(fid).map(|(ins, _)| ins.id)));
             let any_solo = p.tracks.iter().any(|t| t.solo);
             let active: Vec<(Clip, bool)> = p
                 .clips
@@ -698,11 +863,64 @@ impl Engine {
         Ok(crate::music::MusicAnalysis { tempo: best_tempo.map(|(_, t)| t), key })
     }
 
+    /// "Auto vocal": measures the vocal clip (what it plays, its region only) and returns
+    /// the calibrated insert chain for its track. The key comes from `beat_clip` when given,
+    /// else from the project's other audio (tracks not routed to the vocal's insert); the
+    /// level suggestion needs `beat_clip`. Slow (seconds): call off the UI thread.
+    pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let region = |cl: &Clip| -> Result<(Vec<f32>, f32), EngineError> {
+            let (audio, bpm) = {
+                let mut c = self.core.lock();
+                let bpm = c.project.bpm;
+                (c.sources.clip_audio(cl, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?, bpm)
+            };
+            let mono = crate::sources::mono_of(&audio);
+            let sr = audio.sr as f64;
+            let (a, b) = crate::sources::clip_region(cl, bpm, mono.len() as f64 / sr);
+            let (i0, i1) = ((a * sr) as usize, ((b * sr) as usize).min(mono.len()));
+            let gain = crate::dsp::db_to_gain(cl.gain);
+            Ok((mono[i0.min(i1)..i1].iter().map(|v| v * gain).collect(), audio.sr as f32))
+        };
+        let (vocal, sr) = region(&clip)?;
+        if vocal.len() < (sr * 1.0) as usize {
+            return Err(EngineError::Msg("the clip is too short to analyse (under 1 s)".into()));
+        }
+        let vocal_insert = {
+            let c = self.core.lock();
+            c.project.tracks.get(clip.track as usize).map(|t| t.insert)
+        };
+        let key = match beat_clip {
+            Some(b) => self.music_analysis(Some(b), None)?.key,
+            None => self.music_analysis_ex(None, None, vocal_insert).ok().and_then(|m| m.key),
+        };
+        let pitch = self.pitch_analysis(clip_id).ok();
+        let beat = match beat_clip {
+            Some(b) => {
+                let bc = {
+                    let c = self.core.lock();
+                    c.project.clips.iter().find(|x| x.id == b).cloned().ok_or(EngineError::Msg("no such beat clip".into()))?
+                };
+                Some(region(&bc)?)
+            }
+            None => None,
+        };
+        Ok(crate::autovocal::plan(&crate::autovocal::PlanInput {
+            vocal: &vocal,
+            sr,
+            style,
+            key,
+            pitch: pitch.as_deref(),
+            beat: beat.as_ref().map(|(x, s)| (x.as_slice(), *s)),
+        }))
+    }
+
     /// Peaks of what the clip actually plays (including pitch edits), for drawing.
     pub fn clip_peaks(&self, clip_id: Id) -> Option<Vec<f32>> {
         let mut c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned()?;
-        c.sources.clip_audio(&clip, true).map(|a| a.peaks.clone())
+        let bpm = c.project.bpm;
+        c.sources.clip_audio(&clip, true, bpm).map(|a| a.peaks.clone())
     }
 
     /// [min,max] pairs at 100/s for drawing.
@@ -963,9 +1181,10 @@ impl Engine {
             let c = &mut *guard;
             self.snapshot_plugin_states(c);
             let mut map = HashMap::new();
+            let bpm = c.project.bpm;
             for clip in &c.project.clips {
                 if clip.kind == ClipKind::Audio {
-                    if let Some(a) = c.sources.clip_audio(clip, false) {
+                    if let Some(a) = c.sources.clip_audio(clip, false, bpm) {
                         map.insert(clip.id, a);
                     }
                 }
@@ -989,6 +1208,8 @@ impl Engine {
             keep.push((b, d));
         }
         let mut rt = Rt::new(sr, block, cmd_rx, gb_tx, Arc::new(Shared::new()), taps, rec_tx);
+        rt.set_skip_silent(self.skip_silent.load(Relaxed));
+        rt.set_workers(self.render_workers.load(Relaxed));
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
         let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new());
@@ -1058,6 +1279,7 @@ impl Engine {
 
     /// Pushes the project to the audio thread.
     fn sync(&self, c: &mut Core, d: Dirty) {
+        self.refresh_midi(c);
         let Some(w) = c.wires.as_ref() else { return };
         let (sr, max_block) = (w.sr, w.max_block);
         if d.mixer {
@@ -1094,7 +1316,8 @@ impl Engine {
             let stale = gesture_open;
             let mut takes = comp_audio(sources, &project.comps);
             takes.extend(sample_audio(sources, &project.channels));
-            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale), &takes, &audition);
+            let bpm = project.bpm;
+            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale, bpm), &takes, &audition);
             send(c, Cmd::Timeline(Box::new(tl)));
         }
     }
@@ -1142,6 +1365,7 @@ impl Engine {
                 c.transport.playing = false;
             }
             self.finish_take();
+            self.finish_midi_take();
             let c = self.core.lock();
             self.changed(c);
         }
@@ -1178,6 +1402,9 @@ impl Engine {
         }
         if take.start.is_nan() {
             return; // punched in, but the audio thread never started capturing
+        }
+        if self.midi_take.lock().played {
+            return; // the armed track was played on a MIDI keyboard: this is a MIDI take
         }
         let spb = 60.0 / c.project.bpm;
         let sr = take.sr as f64;
@@ -1227,6 +1454,140 @@ impl Engine {
         push_undo(c, before);
         c.revision += 1;
         self.sync(c, Dirty { timeline: true, ..Default::default() });
+    }
+
+    // ------------------------------------------------------------ live MIDI
+
+    /// Sets what the MIDI keyboard plays. `target`: the channel (instrument) to play, `None` =
+    /// the first pitched channel. `live`: a device is connected; without one nothing is
+    /// recorded and playing stops. Anything still sounding is released when this changes.
+    pub fn midi_configure(&self, target: Option<Id>, live: bool) {
+        let mut c = self.core.lock();
+        let changed = c.midi.target != target || c.midi.live != live;
+        c.midi.target = target;
+        c.midi.live = live;
+        self.refresh_midi(&c);
+        self.midi_fast.live.store(live, Release);
+        if changed {
+            self.midi_fast.send(Cmd::MidiOff);
+        }
+    }
+
+    /// The channel the keyboard plays right now (the chosen one, else the first pitched
+    /// channel, else the first channel).
+    pub fn midi_target(&self) -> Option<Id> {
+        midi_channel(&self.core.lock())
+    }
+
+    /// Releases every sounding keyboard note (device unplugged).
+    pub fn midi_panic(&self) {
+        self.midi_fast.send(Cmd::MidiOff);
+    }
+
+    /// Publishes the channel and insert the keyboard plays for the lock-free event path.
+    fn refresh_midi(&self, c: &Core) {
+        self.midi_fast.chan.store(midi_channel(c).unwrap_or(u64::MAX), Relaxed);
+        self.midi_fast.ins.store(armed_insert(c).unwrap_or(usize::MAX), Relaxed);
+    }
+
+    /// One decoded message from the keyboard. Plays through the audio thread's MIDI ring
+    /// (no allocation there) and, while a take is armed, goes into the recorder at the
+    /// playhead. Cheap and never waits for the core lock (the project being edited, saved
+    /// or rebuilt); safe to call from the MIDI input thread.
+    pub fn midi_event(&self, m: MidiMsg) {
+        let mf = &self.midi_fast;
+        if !mf.live.load(Acquire) {
+            return;
+        }
+        let chan = match mf.chan.load(Relaxed) {
+            u64::MAX => None,
+            id => Some(id),
+        };
+        let ins = match mf.ins.load(Relaxed) {
+            usize::MAX => None,
+            i => Some(i),
+        };
+        let beat = self.shared().beat();
+        match m {
+            MidiMsg::NoteOn { key, vel, .. } => {
+                let Some(chan) = chan else { return };
+                mf.send(Cmd::MidiNote { chan, key, vel: MidiMsg::vel_gain(vel), on: true, ins });
+                let mut t = self.midi_take.lock();
+                if let Some((r, _, _)) = t.rec.as_mut() {
+                    r.note_on(beat, key, vel);
+                    t.played = true;
+                }
+            }
+            MidiMsg::NoteOff { key, .. } => {
+                let Some(chan) = chan else { return };
+                mf.send(Cmd::MidiNote { chan, key, vel: 0.0, on: false, ins: None });
+                if let Some((r, _, _)) = self.midi_take.lock().rec.as_mut() {
+                    r.note_off(beat, key);
+                }
+            }
+            MidiMsg::Sustain { down, .. } => {
+                mf.send(Cmd::MidiSustain(down));
+                if let Some((r, _, _)) = self.midi_take.lock().rec.as_mut() {
+                    r.sustain(beat, down);
+                }
+            }
+            MidiMsg::PitchBend { value, .. } => mf.send(Cmd::MidiBend(MidiMsg::bend_semitones(value))),
+            MidiMsg::AllNotesOff { .. } => mf.send(Cmd::MidiOff),
+        }
+    }
+
+    /// Starts collecting keyboard notes for a take on armed track `track` from beat `from`.
+    fn begin_midi_take(&self, c: &mut Core, track: usize, from: f64) {
+        let mut t = self.midi_take.lock();
+        t.played = false;
+        if !c.midi.live {
+            return;
+        }
+        if let Some(ch) = midi_channel(c) {
+            t.rec = Some((MidiRecorder::new(from), track, ch));
+        }
+    }
+
+    /// Ends the MIDI take at the playhead: the played notes become a pattern and a pattern
+    /// clip on the armed track (one undo step). Nothing played = nothing added.
+    fn finish_midi_take(&self) {
+        let end = self.shared().beat();
+        let mut c = self.core.lock();
+        let Some((rec, track, ch)) = ({
+            let mut t = self.midi_take.lock();
+            t.played = false;
+            t.rec.take()
+        }) else {
+            return;
+        };
+        let notes = rec.finish(end);
+        let Some(laid) = midi::layout(&notes, ch, 4.0) else { return };
+        let color = c.project.channel(ch).map(|x| x.color.clone()).unwrap_or_else(|| "#69c3d6".into());
+        let n = c.project.patterns.iter().filter(|p| p.name.starts_with("MIDI take")).count() + 1;
+        let pid = c.project.alloc_id();
+        let cid = c.project.alloc_id();
+        let pattern = Pattern { id: pid, name: format!("MIDI take {n}"), color, len: laid.len, notes: laid.notes, swing: 0.0 };
+        let clip = Clip {
+            id: cid,
+            track: track as u32,
+            start: laid.start,
+            len: laid.len,
+            offset: 0.0,
+            kind: ClipKind::Pat,
+            source: pid,
+            muted: false,
+            gain: 0.0,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            pan: 0.0,
+            norm: false,
+            rev: false,
+            tune: None,
+        };
+        drop(c);
+        if let Err(e) = self.apply(&[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None) {
+            log::error!("could not place the MIDI take: {e}");
+        }
     }
 
     // ------------------------------------------------------------ comps
@@ -1331,6 +1692,20 @@ fn push_undo(c: &mut Core, before: Project) {
         c.undo.remove(0);
     }
     c.redo.clear();
+}
+
+/// The channel the keyboard plays: the chosen one if it exists, else the first pitched
+/// channel, else the first channel.
+fn midi_channel(c: &Core) -> Option<Id> {
+    let p = &c.project;
+    c.midi.target.filter(|id| p.channel(*id).is_some()).or_else(|| p.channels.iter().find(|x| x.pitched()).or(p.channels.first()).map(|x| x.id))
+}
+
+/// Mixer insert index of the first armed track (where the keyboard is heard through).
+fn armed_insert(c: &Core) -> Option<usize> {
+    let p = &c.project;
+    let t = p.tracks.iter().find(|t| t.arm)?;
+    p.inserts.iter().position(|m| m.id == t.insert)
 }
 
 fn send(c: &mut Core, cmd: Cmd) {

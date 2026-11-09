@@ -3,8 +3,8 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, ExportResult, Id, ImportResult, LibFile,
-  LibraryList, LibraryProgress, MusicAnalysis, Op, PitchAnalysis, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioDevices, AudioHost, AudioStatus, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
+  LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -12,7 +12,12 @@ export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[];
 export interface EventMap {
   state: StateDto;
   'library-progress': LibraryProgress;
+  'model-progress': ModelProgress;
   'audio-status': AudioStatus;
+  /** Keyboard connected, unplugged or failed, or the choice changed. */
+  'midi-status': MidiStatus;
+  /** A key went down or up on the MIDI keyboard. */
+  'midi-note': MidiNoteEvent;
 }
 
 export interface Backend {
@@ -37,8 +42,18 @@ export interface Backend {
   clipPeaks(clipId: Id): Promise<Float32Array>;
   /** Pitch curve, levels and note segmentation of an audio clip's source (seconds of the source). */
   pitchAnalyze(clipId: Id): Promise<PitchAnalysis>;
+  /** Tune to Reference target of an audio clip: with `reference` a preview for those parameters,
+   *  without it the clip's own `tune.reference`. The alignment is cached, so changing parameters is cheap. */
+  pitchTarget(clipId: Id, reference?: RefTune): Promise<PitchTarget>;
+  /** Which pitch detector analyses (RMVPE when its model is installed, else YIN). */
+  f0ModelStatus(): Promise<F0ModelStatus>;
+  /** Downloads the RMVPE model (progress: `model-progress`), verifies it, starts using it. */
+  f0ModelInstall(): Promise<F0ModelStatus>;
   /** Tempo (BPM) and musical key of an audio clip, or key/tempo of the project's active audio clips (excluding `excludeFx`'s insert). */
   musicAnalyze(args?: { clipId?: Id; excludeFx?: Id }): Promise<MusicAnalysis>;
+  /** "Auto wokal": measures a vocal clip (key from `beatClipId`, else from the other tracks) and returns the calibrated
+   *  insert chain. Read-only; takes a few seconds per minute of audio. */
+  autoVocalPlan(args: { clipId: Id; beatClipId?: Id; style?: AutoVocalStyle }): Promise<AutoVocalPlan>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
   /** Renders a comp clip to a new source; the clip becomes an ordinary audio clip (one undo step). */
   flattenComp(clipId: Id): Promise<{ sourceId: Id }>;
@@ -55,6 +70,13 @@ export interface Backend {
   audioDevices(host: string): Promise<AudioDevices>;
   audioGetConfig(): Promise<AudioStatus>;
   audioSetConfig(cfg: AudioConfig): Promise<AudioStatus>;
+  /** MIDI input ports the OS lists right now. */
+  midiListDevices(): Promise<MidiDevice[]>;
+  /** Choose the MIDI keyboard (null = none) and open it. Saved with the audio settings and reopened at startup. */
+  midiSelectDevice(id: string | null): Promise<MidiStatus>;
+  midiStatus(): Promise<MidiStatus>;
+  /** Which channel (instrument) the keyboard plays (null = the first pitched channel). With a track armed and transport recording, played notes land as a pattern clip on that track. */
+  midiSetTarget(channel: Id | null): Promise<MidiStatus>;
   libraryList(): Promise<LibraryList>;
   libraryInstall(id: string): Promise<void>;
   libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]>;
@@ -145,7 +167,11 @@ export function tauriBackend(): Backend {
     sourcePeaks: async (id, norm, rev) => toF32(await invoke('source_peaks', { id, norm: !!norm, rev: !!rev })),
     clipPeaks: async clipId => toF32(await invoke('clip_peaks', { clipId })),
     pitchAnalyze: clipId => invoke('pitch_analyze', { clipId }),
+    pitchTarget: (clipId, reference) => invoke('pitch_target', { clipId, reference: reference ?? null }),
+    f0ModelStatus: () => invoke('f0_model_status'),
+    f0ModelInstall: () => invoke('f0_model_install'),
     musicAnalyze: a => invoke('music_analyze', { clipId: a?.clipId ?? null, excludeFx: a?.excludeFx ?? null }),
+    autoVocalPlan: a => invoke('auto_vocal_plan', { clipId: a.clipId, beatClipId: a.beatClipId ?? null, style: a.style ?? null }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
     flattenComp: clipId => invoke('flatten_comp', { clipId }),
     compAudition: (compId, takeId) => invoke('comp_audition', { compId, takeId }),
@@ -159,6 +185,10 @@ export function tauriBackend(): Backend {
     audioGetConfig: () => invoke('audio_get_config'),
     // Sent both as `config` and flattened, so either command signature deserialises it.
     audioSetConfig: cfg => invoke('audio_set_config', { config: cfg, ...cfg }),
+    midiListDevices: () => invoke('midi_list_devices'),
+    midiSelectDevice: id => invoke('midi_select_device', { id }),
+    midiStatus: () => invoke('midi_status'),
+    midiSetTarget: channel => invoke('midi_set_target', { channel }),
     libraryList: () => invoke('library_list'),
     libraryInstall: id => invoke('library_install', { id }),
     libraryFiles: q => invoke('library_files', { kit: q.kit ?? null, folder: q.folder ?? null }),

@@ -1,6 +1,6 @@
 // The engine's state, mirrored. Rust owns the project and undo; this store holds the latest
 // StateDto plus local optimistic edits (applied immediately so drags feel instant).
-import { batch } from 'solid-js';
+import { batch, createSignal } from 'solid-js';
 import { createStore, produce, reconcile } from 'solid-js/store';
 import type { Catalog, Clip, Fx, Id, Insert, Op, Project, StateDto, TransportDto } from '../api/types';
 import { applyCompOp, compExtent } from '../lib/comp';
@@ -29,6 +29,15 @@ export const [S, setS] = createStore<EngineState>({
   path: null, dirty: false, catalog: null, audition: {},
 });
 
+/**
+ * Bumped on every change to the project (local edit or engine state). Canvas views that draw
+ * whole lists (clips, patterns, automations) depend on this one signal instead of subscribing
+ * to every field of every item, which cost ~7 ms per clip move on a 1400-clip song.
+ */
+const [projVersion, setProjVersion] = createSignal(0);
+export { projVersion };
+const bumpProject = () => setProjVersion(v => v + 1);
+
 // ---- ids ----
 let localNext = 1;
 /** Allocate a new id (project.nextId, increased locally). */
@@ -42,6 +51,17 @@ export function allocId(): Id {
 export function replaceState(dto: StateDto) {
   batch(() => {
     setS('project', reconcile(dto.project, { key: 'id', merge: true }));
+    bumpProject();
+    setS({ revision: dto.revision, canUndo: dto.canUndo, canRedo: dto.canRedo, path: dto.path, dirty: dto.dirty, ready: true });
+    setS('transport', reconcile(dto.transport));
+    setS('audition', reconcile(dto.audition ?? {}));
+  });
+  localNext = Math.max(localNext, dto.project.nextId);
+}
+
+/** Everything but the project (whose edits are already applied locally). */
+export function replaceMeta(dto: StateDto) {
+  batch(() => {
     setS({ revision: dto.revision, canUndo: dto.canUndo, canRedo: dto.canRedo, path: dto.path, dirty: dto.dirty, ready: true });
     setS('transport', reconcile(dto.transport));
     setS('audition', reconcile(dto.audition ?? {}));
@@ -154,6 +174,7 @@ function applyInPlace(p: Project, op: Op) {
 export function applyLocal(ops: Op[]) {
   if (!ops.length) return;
   setS('project', produce(p => { for (const op of ops) applyInPlace(p, op); }));
+  bumpProject();
   if (!S.dirty) setS('dirty', true);
 }
 

@@ -21,6 +21,8 @@ export type MenuItem =
   | { t: 'sep' }
   | { t: 'item'; label: string; kbd?: string; act: () => void; danger?: boolean; disabled?: boolean; icon?: string; iconColor?: string; title?: string }
   | { t: 'swatches'; current?: string; pick: (c: string) => void }
+  /** Row of instrument icons; picking the current one clears it. */
+  | { t: 'icons'; current?: string | null; color?: string; pick: (id: string | null) => void }
   | { t: 'gain'; clipId: Id }
   | { t: 'rename'; value: string; done: (v: string) => void }
   /** A row of small toggle buttons (one click picks, menu stays coherent with the current value). */

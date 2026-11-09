@@ -85,10 +85,10 @@ describe('presets', () => {
     expect(presetInfo(cat, f, 128)).toEqual({ idx: 0, name: 'Domyślny', mod: false });
   });
   it('a moved parameter shows the last preset as modified', () => {
-    const f = loadPreset(cat, newFx(cat, 10, 'reverb', 128), 3, 128);
-    expect(presetInfo(cat, f, 128).name).toBe('Wokal plate');
+    const f = loadPreset(cat, newFx(cat, 10, 'reverb', 128), 4, 128);
+    expect(presetInfo(cat, f, 128).name).toBe('Ballada — długi plate');
     const g = { ...f, params: { ...f.params, mix: 40 } };
-    expect(presetInfo(cat, g, 128)).toEqual({ idx: 3, name: 'Wokal plate', mod: true });
+    expect(presetInfo(cat, g, 128)).toEqual({ idx: 4, name: 'Ballada — długi plate', mod: true });
   });
   it('tempo-synced delay presets resolve time at the bpm', () => {
     const r = resolvePreset(cat, 'delay', 1, 120)!;
@@ -106,8 +106,8 @@ describe('presets', () => {
   });
   it('stepping wraps around', () => {
     const f = newFx(cat, 1, 'limit', 128);
-    expect(loadPreset(cat, f, -1, 128).preset).toBe(3);
-    expect(loadPreset(cat, f, 4, 128).preset).toBe(0);
+    expect(loadPreset(cat, f, -1, 128).preset).toBe(4);
+    expect(loadPreset(cat, f, 5, 128).preset).toBe(0);
   });
   it('knob mapping is log where asked', () => {
     const ratio = cat.types.comp!.params.find(p => p.id === 'ratio')!;

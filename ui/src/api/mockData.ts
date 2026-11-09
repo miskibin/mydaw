@@ -1,6 +1,6 @@
 // Data for the in-browser mock backend: the catalog of crates/engine/src/catalog.rs and the
 // demo song of crates/engine/src/demo.rs. Only the mock uses these; the real UI reads `fx_catalog`.
-import { VOL_UNITY, type BuiltinKind, type Catalog, type Clip, type EqBand, type Inst, type Note, type ParamDef, type Preset, type Project } from './types';
+import { VOL_UNITY, type AnyBuiltinKind, type Catalog, type Clip, type EqBand, type Inst, type Note, type ParamDef, type Preset, type Project } from './types';
 import { defaultBands, loadPreset, newFx } from '../lib/presets';
 import { builtinChannel, INSTS } from '../lib/pattern';
 
@@ -8,19 +8,24 @@ const p = (id: string, label: string, min: number, max: number, def: number, uni
 /** catalog.rs `choice`: a discrete parameter (value = index) shown as buttons. */
 const choice = (id: string, label: string, def: number, options: string[]): ParamDef => ({ id, label, min: 0, max: options.length - 1, def, unit: '', log: false, options });
 
-const PARAMS: Record<BuiltinKind, ParamDef[]> = {
+const PARAMS: Record<AnyBuiltinKind, ParamDef[]> = {
   eq: [p('out', 'Output', -18, 18, 0, 'dB')],
   comp: [p('thr', 'Thresh', -60, 0, -18, 'dB'), p('ratio', 'Ratio', 1, 20, 4, ':1', true), p('att', 'Attack', 0.1, 100, 10, 'ms', true),
-    p('rel', 'Release', 10, 1000, 150, 'ms', true), p('gain', 'Makeup', 0, 24, 0, 'dB')],
+    p('rel', 'Release', 10, 1000, 150, 'ms', true), p('gain', 'Makeup', 0, 24, 0, 'dB'), choice('det', 'Detect', 0, ['Peak', 'RMS'])],
   sat: [p('drive', 'Drive', 0, 36, 6, 'dB'), p('mix', 'Mix', 0, 100, 100, '%'), p('out', 'Output', -24, 6, 0, 'dB')],
   delay: [p('time', 'Time', 10, 1500, 375, 'ms', true), p('fb', 'Feedback', 0, 95, 35, '%'), p('mix', 'Mix', 0, 100, 25, '%')],
-  reverb: [p('size', 'Decay', 0.3, 8, 2.2, 's', true), p('pre', 'Pre-delay', 0, 200, 20, 'ms'), p('lo', 'Low cut', 20, 1000, 120, 'Hz', true),
-    p('hi', 'High cut', 1000, 20000, 8000, 'Hz', true), p('width', 'Width', 0, 100, 100, '%'), p('mix', 'Mix', 0, 100, 25, '%')],
-  limit: [p('gain', 'Gain', 0, 24, 0, 'dB'), p('ceil', 'Ceiling', -12, 0, -0.3, 'dB')],
+  // catalog.rs REVERB / LIMIT (v2)
+  reverb: [p('size', 'Decay', 0.2, 6, 1, 's', true), p('pre', 'Pre-delay', 0, 150, 25, 'ms'), p('lo', 'Low cut', 20, 1000, 300, 'Hz', true),
+    p('hi', 'High cut', 2000, 16000, 7000, 'Hz', true), p('width', 'Width', 0, 100, 100, '%'), p('mix', 'Mix', 0, 100, 15, '%'),
+    p('tone', 'Tone', -100, 100, 0, '%'), choice('space', 'Space', 0, ['Plate', 'Room', 'Hall', 'Ambience']), p('duck', 'Ducking', 0, 12, 0, 'dB'),
+    p('early', 'Early', 0, 100, 50, '%'), p('bass', 'Bass decay', 0.5, 1.5, 1, '×'), p('mod', 'Modulation', 0, 100, 50, '%')],
+  limit: [p('gain', 'Gain', 0, 24, 0, 'dB'), p('ceil', 'Ceiling', -12, 0, -1, 'dBTP'), p('rel', 'Release', 10, 1000, 80, 'ms', true),
+    choice('auto', 'Auto release', 1, ['Off', 'On']), p('look', 'Lookahead', 1, 5, 3, 'ms'), p('link', 'Stereo link', 0, 100, 100, '%'), p('out', 'Output', -12, 0, 0, 'dB')],
   fet: [p('input', 'Input', 0, 36, 8, 'dB'), p('output', 'Output', -24, 12, 0, 'dB'), choice('ratio', 'Ratio', 0, ['4', '8', '12', '20', 'All']),
     p('attack', 'Attack', 20, 800, 300, 'µs', true), p('release', 'Release', 50, 1100, 300, 'ms', true), p('mix', 'Mix', 0, 100, 100, '%')],
   deess: [p('thr', 'Threshold', -60, 0, -32, 'dB'), p('range', 'Range', 0, 24, 8, 'dB'), p('freq', 'Freq', 2000, 16000, 6000, 'Hz', true),
-    choice('mode', 'Mode', 0, ['Split', 'Wide']), p('look', 'Lookahead', 0, 15, 5, 'ms'), choice('listen', 'Listen', 0, ['Off', 'S'])],
+    choice('mode', 'Mode', 0, ['Split', 'Wide']), p('look', 'Lookahead', 0, 15, 5, 'ms'), choice('listen', 'Listen', 0, ['Off', 'S']),
+    choice('detect', 'Detect', 0, ['Absolute', 'Relative'])],
   denoise: [p('reduction', 'Reduction', 0, 40, 12, 'dB'), p('sens', 'Sensitivity', 0, 100, 50, '%'), p('smooth', 'Smoothing', 0, 100, 50, '%'),
     choice('learn', 'Profile', 0, ['Adaptive', 'Hold']), choice('listen', 'Listen', 0, ['Off', 'Noise'])],
   tune: [choice('key', 'Key', 0, ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']),
@@ -30,9 +35,14 @@ const PARAMS: Record<BuiltinKind, ParamDef[]> = {
     choice('voice', 'Voice', 0, ['Auto', 'Low male', 'Male', 'Female', 'Soprano'])],
   voice: [choice('mode', 'Mode', 0, ['Transpose', 'Quantize', 'Robot']), p('pitch', 'Pitch', -12, 12, 0, 'st'), p('formant', 'Formant', -12, 12, 0, 'st'),
     choice('link', 'Link', 0, ['Off', 'On']), p('drive', 'Drive', 0, 30, 0, 'dB'), p('out', 'Output', -24, 12, 0, 'dB')],
+  // catalog.rs RIDER (order = rider::idx)
+  rider: [p('amount', 'Amount', 0, 100, 50, '%'), p('phrase', 'Phrase', 0, 100, 20, '%'), p('up', 'Max boost', 0, 12, 5, 'dB'),
+    p('down', 'Max cut', 0, 12, 6, 'dB'), choice('speed', 'Speed', 0, ['Sung', 'Rap']), choice('auto', 'Auto target', 1, ['Off', 'On']),
+    p('target', 'Target', -60, 0, -24, 'dB'), p('floor', 'Noise floor', -100, -20, -70, 'dB'), choice('look', 'Look-ahead', 1, ['Short', 'Long']),
+    p('out', 'Output', -24, 24, 0, 'dB'), p('gate', 'Gate', -100, -10, -60, 'dB')],
 };
-const NAMES: Record<BuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter',
-  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser', voice: 'Voice' };
+const NAMES: Record<AnyBuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter',
+  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser', voice: 'Voice', rider: 'Vocal Rider' };
 
 type BandEdit = [number, boolean | null, number | null, number | null, number | null];
 function eqp(name: string, out: number, edits: BandEdit[]): Preset {
@@ -48,7 +58,7 @@ const dly = (name: string, beats: number | null, time: number, fb: number, mix: 
   ({ name, params: { time, fb, mix }, ...(beats != null ? { beats } : {}) });
 const T = true, n = null;
 
-const PRESETS: Record<BuiltinKind, Preset[]> = {
+const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
   eq: [
     eqp('Flat', 0, []),
     eqp('Wokal — obecność', 0, [[0, T, 100, n, n], [2, n, 300, -2.5, 1.2], [4, n, 3500, 3, 0.9], [5, n, 10000, 2.5, n]]),
@@ -77,18 +87,17 @@ const PRESETS: Record<BuiltinKind, Preset[]> = {
     dly('Ósemka 1/8', 0.5, 0, 35, 20), dly('Ćwierćnuta 1/4', 1, 0, 30, 22), dly('Kropkowana 1/8', 0.75, 0, 40, 22),
     dly('Triola 1/8T', 1 / 3, 0, 35, 20), dly('Slapback', null, 90, 0, 25), dly('Długi dub', 1.5, 0, 65, 30),
   ],
-  reverb: [
-    pr('Domyślny', { size: 2.2, pre: 20, lo: 120, hi: 8000, width: 100, mix: 25 }),
-    pr('Mały pokój', { size: 0.6, pre: 5, lo: 150, hi: 9000, width: 70, mix: 18 }),
-    pr('Bęben — krótki', { size: 0.9, pre: 0, lo: 200, hi: 8000, width: 60, mix: 15 }),
-    pr('Wokal plate', { size: 1.8, pre: 30, lo: 250, hi: 7000, width: 100, mix: 22 }),
-    pr('Duża sala', { size: 3.2, pre: 25, lo: 120, hi: 6500, width: 100, mix: 25 }),
-    pr('Ambient', { size: 5, pre: 120, lo: 300, hi: 12000, width: 100, mix: 45 }),
-    pr('Katedra', { size: 7, pre: 60, lo: 100, hi: 5000, width: 100, mix: 35 }),
-  ],
+  reverb: ([
+    ['Vocal Plate', 1.0, 25, 300, 7000, 100, 15, 0, 0, 3, 0.8], ['Vocal Room', 0.6, 10, 250, 8000, 90, 12, -10, 1, 0, 0.9],
+    ['Vocal Hall', 2.0, 35, 250, 6500, 100, 14, -20, 2, 4, 0.8], ['Ambience', 0.4, 0, 200, 9000, 100, 12, 10, 3, 0, 1.0],
+    ['Ballada — długi plate', 2.4, 40, 350, 6000, 100, 18, -30, 0, 6, 0.8], ['Bębny — pokój', 0.7, 0, 150, 9000, 80, 12, 0, 1, 0, 1.0],
+    ['Wysyłka — hala 100 %', 2.2, 20, 200, 7000, 100, 100, -10, 2, 0, 0.9],
+  ] as [string, ...number[]][]).map(([name, size, pre, lo, hi, width, mix, tone, space, duck, bass]) =>
+    pr(name, { size, pre, lo, hi, width, mix, tone, space, duck, early: 50, bass, mod: 50 })),
   limit: [
-    pr('Bezpieczny', { gain: 0, ceil: -0.3 }), pr('Streaming −1 dB', { gain: 3, ceil: -1 }),
-    pr('Głośny master', { gain: 6, ceil: -0.3 }), pr('Bardzo głośny', { gain: 10, ceil: -0.1 }),
+    pr('Bezpieczny', { gain: 0, ceil: -1 }), pr('Streaming −1 dBTP', { gain: 4, ceil: -1, rel: 80 }),
+    pr('Głośny master', { gain: 7, ceil: -1, rel: 120 }), pr('Bardzo głośny', { gain: 10, ceil: -0.5, rel: 150, look: 5 }),
+    pr('Przezroczysty', { gain: 3, ceil: -1, rel: 250, look: 5 }),
   ],
   fet: [
     pr('Wokal — klasyk', { input: 8, output: -2, ratio: 0, attack: 400, release: 250, mix: 100 }),
@@ -124,10 +133,17 @@ const PRESETS: Record<BuiltinKind, Preset[]> = {
     pr('Chipmunk', { pitch: 7, link: 1 }), pr('Demon', { pitch: -7, formant: -6, drive: 12, out: -4 }),
     pr('Hard tune + drive', { mode: 1, drive: 10, out: -3 }), pr('Robot', { mode: 2, drive: 6, out: -2 }),
   ],
+  rider: [
+    pr('Wokal — śpiew', { amount: 50, phrase: 20, up: 5, down: 6, speed: 0, auto: 1, look: 1 }),
+    pr('Rap', { amount: 50, phrase: 20, up: 5, down: 6, speed: 1, auto: 1, look: 1 }),
+    pr('Delikatnie', { amount: 30, phrase: 10, up: 3, down: 4, speed: 0, auto: 1, look: 1 }),
+    pr('Mocno', { amount: 80, phrase: 30, up: 8, down: 9, speed: 0, auto: 1, look: 1 }),
+    pr('Na żywo (krótki look-ahead)', { amount: 50, phrase: 20, up: 5, down: 6, speed: 0, auto: 1, look: 0 }),
+  ],
 };
 
 /** catalog.rs `BUILTIN` (also the order of the "add effect" menu). */
-export const BUILTIN: BuiltinKind[] = ['denoise', 'tune', 'voice', 'eq', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'];
+export const BUILTIN: AnyBuiltinKind[] = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'];
 
 export function mockCatalog(): Catalog {
   return {

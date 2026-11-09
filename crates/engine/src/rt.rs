@@ -167,11 +167,19 @@ pub struct InsertRt {
     pdc_w: usize,
     dry_l: Vec<f32>,
     dry_r: Vec<f32>,
+    /// Samples the insert's input has been exact digital silence (see [`gate`]).
+    quiet: usize,
+    /// The chain has been silent longer than its tail and its state is settled: it is skipped.
+    parked: bool,
+    /// `quiet` at which even the PDC delay line holds only zeros (valid while `parked`).
+    idle_at: usize,
+    /// Set for the block just processed when the insert contributed nothing.
+    idle: bool,
 }
 
 impl InsertRt {
     pub fn new(id: Id, gain: f32, pan: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
-        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block] }
+        Self { id, gain, pan, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block], quiet: 0, parked: false, idle_at: usize::MAX, idle: false }
     }
 
     /// Delays this insert's output by `samples` (allocates; call off the audio thread).
@@ -334,6 +342,15 @@ pub enum Cmd {
     Audition { chan: Id, key: u8, vel: f32, len: f32, pattern: Option<Id> },
     /// Loop one pattern on its own (`None` stops). Exclusive with the song transport.
     PatPlay(Option<Id>),
+    /// Live MIDI key down/up on a channel. `ins`: insert index to play through when the
+    /// channel has no insert of its own (the armed track's), else the channel's home.
+    MidiNote { chan: Id, key: u8, vel: f32, on: bool, ins: Option<usize> },
+    /// Live MIDI sustain pedal.
+    MidiSustain(bool),
+    /// Live MIDI pitch bend in semitones.
+    MidiBend(f32),
+    /// Release every live note and the pedal.
+    MidiOff,
 }
 
 pub enum Garbage {
@@ -380,6 +397,12 @@ pub struct Rt {
     /// Pattern loop preview: pattern id and beats into it.
     pat_play: Option<Id>,
     pat_beat: f64,
+    /// Skip effect chains that are silent past their tails (see [`gate`]).
+    skip_silent: bool,
+    /// Live MIDI events (see `Engine::midi_event`).
+    midi: Option<rtrb::Consumer<Cmd>>,
+    /// Worker threads for the insert chains (offline renders only; 0/1 = this thread).
+    workers: usize,
 }
 
 impl Rt {
@@ -414,7 +437,32 @@ impl Rt {
             preview: None,
             pat_play: None,
             pat_beat: 0.0,
+            skip_silent: true,
+            midi: None,
+            workers: 0,
         }
+    }
+
+    /// Lets this Rt process insert chains on `n` worker threads. Never for a live stream:
+    /// it spawns threads and allocates. Output is identical to the single-threaded one.
+    pub fn set_workers(&mut self, n: usize) {
+        self.workers = n;
+    }
+
+    /// The ring live keyboard events arrive on, drained together with the command ring.
+    pub fn set_midi_ring(&mut self, ring: rtrb::Consumer<Cmd>) {
+        self.midi = Some(ring);
+    }
+
+    /// Inserts whose chain is parked right now (silent past its tails).
+    pub fn parked_inserts(&self) -> usize {
+        self.graph.inserts.iter().filter(|i| i.parked).count()
+    }
+
+    /// Turns silence skipping on (the default) or off. Output is the same either way (to
+    /// well below -120 dB); off is for A/B tests.
+    pub fn set_skip_silent(&mut self, on: bool) {
+        self.skip_silent = on;
     }
 
     pub fn sample_rate(&self) -> f32 {
@@ -433,19 +481,47 @@ impl Rt {
 
     fn drain(&mut self) {
         while let Ok(cmd) = self.cmds.pop() {
+            self.apply(cmd);
+        }
+        // live keyboard events arrive on their own ring (the UI side never waits for a lock)
+        if let Some(mut ring) = self.midi.take() {
+            while let Ok(cmd) = ring.pop() {
+                self.apply(cmd);
+            }
+            self.midi = Some(ring);
+        }
+    }
+
+    fn apply(&mut self, cmd: Cmd) {
+        {
             match cmd {
                 Cmd::Graph(mut g) => {
                     // carry running processors (and their tails) over by effect id
                     for ins in g.inserts.iter_mut() {
+                        // silence bookkeeping follows the processors that are carried over;
+                        // an insert made only of fresh processors starts settled
+                        let (mut carried, mut quiet, mut parked) = (false, usize::MAX, true);
                         for slot in ins.fx.iter_mut() {
-                            if let Some(old) = self.graph.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == slot.id) {
+                            let found = self.graph.inserts.iter_mut().find_map(|i| {
+                                let st = (i.quiet, i.parked);
+                                i.fx.iter_mut().find(|s| s.id == slot.id).map(|s| (st, s))
+                            });
+                            if let Some((st, old)) = found {
+                                let mut took = false;
                                 if slot.proc.is_none() {
                                     slot.proc = old.proc.take();
+                                    took = true;
                                 }
                                 if old.dly_l.len() == slot.dly_l.len() {
                                     std::mem::swap(&mut slot.dly_l, &mut old.dly_l);
                                     std::mem::swap(&mut slot.dly_r, &mut old.dly_r);
                                     slot.dly_w = old.dly_w;
+                                    took = took || !slot.dly_l.is_empty();
+                                }
+                                if took {
+                                    carried = true;
+                                    quiet = quiet.min(st.0);
+                                    parked &= st.1;
                                 }
                             }
                             if let (Some(p), Some(pb)) = (slot.proc.as_mut(), slot.params.as_ref()) {
@@ -455,6 +531,8 @@ impl Rt {
                         if let Some(old) = self.graph.inserts.iter().find(|i| i.id == ins.id) {
                             ins.g_cur = old.g_cur;
                         }
+                        // the new insert's PDC line starts empty, so a parked chain is idle at once
+                        (ins.quiet, ins.parked, ins.idle_at) = if carried { (quiet, parked, 0) } else { (usize::MAX / 2, true, 0) };
                     }
                     let old = std::mem::replace(&mut self.graph, g);
                     self.trash(Garbage::Graph(old));
@@ -553,6 +631,21 @@ impl Rt {
                         self.voices.note(ch, i, Dest::Insert(ins), 0, len, key, vel);
                     }
                 }
+                Cmd::MidiNote { chan, key, vel, on, ins } => {
+                    let tl = &*self.timeline;
+                    if on {
+                        if let Some(i) = tl.chans.iter().position(|c| c.id == chan) {
+                            let ch = &tl.chans[i];
+                            let ins = ch.insert.or(ins).unwrap_or(ch.home);
+                            self.voices.note_on(ch, i, Dest::Insert(ins), key, vel);
+                        }
+                    } else {
+                        self.voices.note_off(chan, key);
+                    }
+                }
+                Cmd::MidiSustain(down) => self.voices.sustain(down),
+                Cmd::MidiBend(st) => self.voices.set_bend(st),
+                Cmd::MidiOff => self.voices.all_notes_off(),
                 Cmd::PatPlay(id) => {
                     if id.is_some() && self.playing {
                         self.stop(false);
@@ -740,50 +833,41 @@ impl Rt {
         // ---- inserts (non-master first), then master
         let ctx = ProcessCtx { sample_rate: sr, bpm, beat: block_beat, playing: self.playing };
         let count = g.inserts.len();
-        for k in (1..count).chain(std::iter::once(0)) {
-            if count == 0 {
-                break;
-            }
-            let (head, tail) = g.inserts.split_at_mut(k);
-            let ins = &mut tail[0];
-            run_chain(ins, n, &ctx, &self.watch[..self.watch_n], &mut self.taps, &self.shared);
-            // fader + pan, smoothed across the block
-            let target = if ins.on { ins.gain } else { 0.0 };
-            let (gl, gr) = (if ins.pan > 0.0 { 1.0 - ins.pan } else { 1.0 }, if ins.pan < 0.0 { 1.0 + ins.pan } else { 1.0 });
-            let g0 = ins.g_cur;
-            let step = (target - g0) / n as f32;
-            let (mut pl, mut pr) = (0f32, 0f32);
-            for i in 0..n {
-                let gg = g0 + step * (i + 1) as f32;
-                ins.l[i] *= gg * gl;
-                ins.r[i] *= gg * gr;
-                pl = pl.max(ins.l[i].abs());
-                pr = pr.max(ins.r[i].abs());
-            }
-            ins.g_cur = target;
-            if k < MAX_INSERTS {
-                fmax(&self.shared.meters[k].0, pl);
-                fmax(&self.shared.meters[k].1, pr);
-            }
-            if !ins.pdc_l.is_empty() {
-                let d = ins.pdc_l.len();
-                for i in 0..n {
-                    let w = ins.pdc_w;
-                    let (a, b) = (ins.pdc_l[w], ins.pdc_r[w]);
-                    ins.pdc_l[w] = ins.l[i];
-                    ins.pdc_r[w] = ins.r[i];
-                    ins.l[i] = a;
-                    ins.r[i] = b;
-                    ins.pdc_w = if w + 1 == d { 0 } else { w + 1 };
+        if count > 0 {
+            let (enabled, watch) = (self.skip_silent, &self.watch[..self.watch_n]);
+            if self.workers > 1 && count > 4 && watch.is_empty() {
+                // offline: the effect chains of the non-master inserts are independent, so
+                // worker threads take them one by one (the sum into the master stays in order)
+                let next = std::sync::atomic::AtomicUsize::new(0);
+                let cells: Vec<std::sync::Mutex<&mut InsertRt>> = g.inserts[1..].iter_mut().map(std::sync::Mutex::new).collect();
+                let shared = &*self.shared;
+                std::thread::scope(|sc| {
+                    for _ in 0..self.workers.min(cells.len()) {
+                        sc.spawn(|| {
+                            let mut taps = Taps { input: vec![], output: vec![] };
+                            loop {
+                                let j = next.fetch_add(1, Relaxed);
+                                let Some(cell) = cells.get(j) else { break };
+                                let mut ins = cell.lock().unwrap();
+                                process_insert(&mut ins, j + 1, n, &ctx, enabled, &[], &mut taps, shared);
+                            }
+                        });
+                    }
+                });
+            } else {
+                for k in 1..count {
+                    process_insert(&mut g.inserts[k], k, n, &ctx, enabled, watch, &mut self.taps, &self.shared);
                 }
             }
-            if k != 0 {
-                let master = &mut head[0];
+            let (head, tail) = g.inserts.split_at_mut(1);
+            let master = &mut head[0];
+            for ins in tail.iter().filter(|i| !i.idle) {
                 for i in 0..n {
                     master.l[i] += ins.l[i];
                     master.r[i] += ins.r[i];
                 }
             }
+            process_insert(master, 0, n, &ctx, enabled, watch, &mut self.taps, &self.shared);
         }
 
         // ---- out: master + click + preview
@@ -825,7 +909,6 @@ impl Rt {
     }
 
     fn schedule(&mut self, b0: f64, b1: f64, at: usize, n: usize, bps: f64, spb: f64) {
-        let sr = self.sr as f64;
         // metronome & count-in clicks
         let mut b = b0.ceil();
         while b < b1 {
@@ -916,34 +999,124 @@ impl Rt {
                 }
                 ClipSrc::Audio(a) => {
                     let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else { continue };
-                    let dur = (c.end - c.start) * spb;
-                    let g = 10f32.powf(c.gain / 20.0);
-                    let (pl, pr) = (if c.pan > 0.0 { 1.0 - c.pan } else { 1.0 }, if c.pan < 0.0 { 1.0 + c.pan } else { 1.0 });
-                    let fsr = a.sr as f64;
-                    for i in 0..n {
-                        let bt = b0 + i as f64 * bps;
-                        if bt < c.start || bt >= c.end {
-                            continue;
-                        }
-                        let rel = bt - c.start;
-                        let t = rel * spb;
-                        let mut env = g;
-                        if c.fade_in > 0.0 && t < c.fade_in as f64 {
-                            env *= (t / c.fade_in as f64) as f32;
-                        }
-                        let left = dur - t;
-                        if c.fade_out > 0.0 && left < c.fade_out as f64 {
-                            env *= (left / c.fade_out as f64) as f32;
-                        }
-                        let src = (c.offset + rel) * spb * fsr;
-                        let (x, y) = a.sample(src);
-                        tl_l[at + i] += x * env * pl;
-                        tl_r[at + i] += y * env * pr;
-                    }
-                    let _ = sr;
+                    crate::clipmix::mix_audio_clip(c, a, b0, bps, spb, &mut tl_l[at..at + n], &mut tl_r[at..at + n]);
                 }
             }
         }
+    }
+}
+
+/// One insert's turn in a block: silence gate, effect chain, fader/pan, PDC delay. Leaves the
+/// insert's output in `ins.l`/`ins.r` (or `ins.idle` set: it contributes nothing).
+#[allow(clippy::too_many_arguments)]
+fn process_insert(ins: &mut InsertRt, k: usize, n: usize, ctx: &ProcessCtx, enabled: bool, watch: &[Id], taps: &mut Taps, shared: &Shared) {
+    let gate = gate(ins, n, enabled, watch);
+    ins.idle = gate == Gate::Idle;
+    if ins.idle {
+        // no signal in, nothing left in the effects or the delay line: nothing out
+        ins.g_cur = if ins.on { ins.gain } else { 0.0 };
+        return;
+    }
+    if gate == Gate::Run {
+        run_chain(ins, n, ctx, watch, taps, shared);
+    }
+    // fader + pan, smoothed across the block (a skipped chain outputs zeros)
+    let target = if ins.on { ins.gain } else { 0.0 };
+    if gate == Gate::Run {
+        let (gl, gr) = (if ins.pan > 0.0 { 1.0 - ins.pan } else { 1.0 }, if ins.pan < 0.0 { 1.0 + ins.pan } else { 1.0 });
+        let g0 = ins.g_cur;
+        let step = (target - g0) / n as f32;
+        let (mut pl, mut pr) = (0f32, 0f32);
+        for i in 0..n {
+            let gg = g0 + step * (i + 1) as f32;
+            ins.l[i] *= gg * gl;
+            ins.r[i] *= gg * gr;
+            pl = pl.max(ins.l[i].abs());
+            pr = pr.max(ins.r[i].abs());
+        }
+        if k < MAX_INSERTS {
+            fmax(&shared.meters[k].0, pl);
+            fmax(&shared.meters[k].1, pr);
+        }
+    }
+    ins.g_cur = target;
+    if !ins.pdc_l.is_empty() {
+        let d = ins.pdc_l.len();
+        for i in 0..n {
+            let w = ins.pdc_w;
+            let (a, b) = (ins.pdc_l[w], ins.pdc_r[w]);
+            ins.pdc_l[w] = ins.l[i];
+            ins.pdc_r[w] = ins.r[i];
+            ins.l[i] = a;
+            ins.r[i] = b;
+            ins.pdc_w = if w + 1 == d { 0 } else { w + 1 };
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Gate {
+    /// Process the chain.
+    Run,
+    /// The chain is parked (silent input, tails over): skip it, the PDC line may still be draining.
+    Skip,
+    /// Parked and the PDC line is empty too: the insert contributes nothing.
+    Idle,
+}
+
+/// Silence skipping. An insert whose input is exact digital silence for longer than the
+/// tail of its chain (every effect's ring-down, summed, plus the dry-path delays) puts out
+/// silence whether or not the effects run, so they are settled once (`Processor::park`)
+/// and then skipped until the input is non-silent again. Chains with an effect of unknown
+/// tail (`tail_samples() == None`, e.g. hosted plugins) or a watched effect never skip.
+fn gate(ins: &mut InsertRt, n: usize, enabled: bool, watch: &[Id]) -> Gate {
+    if !enabled {
+        return Gate::Run;
+    }
+    let silent = ins.l[..n].iter().all(|&x| x == 0.0) && ins.r[..n].iter().all(|&x| x == 0.0);
+    if !silent {
+        ins.quiet = 0;
+        ins.parked = false;
+        return Gate::Run;
+    }
+    // silence that has already passed *before* this block: whatever rings on into the block
+    // (an effect tail, a PDC line) still has to be rendered
+    let before = ins.quiet;
+    ins.quiet = ins.quiet.saturating_add(n);
+    if !ins.parked {
+        let mut tail = 0usize;
+        for s in ins.fx.iter() {
+            if !watch.is_empty() && watch.contains(&s.id) {
+                return Gate::Run;
+            }
+            if s.bypass {
+                continue;
+            }
+            tail = tail.saturating_add(s.dly_l.len());
+            if s.mix > 0.0005 {
+                if let Some(p) = s.proc.as_ref() {
+                    match p.tail_samples() {
+                        Some(t) => tail = tail.saturating_add(t),
+                        None => return Gate::Run,
+                    }
+                }
+            }
+        }
+        if before < tail {
+            return Gate::Run;
+        }
+        for s in ins.fx.iter_mut() {
+            if let Some(p) = s.proc.as_mut() {
+                p.park();
+            }
+        }
+        ins.parked = true;
+        ins.idle_at = tail.saturating_add(ins.pdc_l.len());
+    }
+    if before >= ins.idle_at {
+        Gate::Idle
+    } else {
+        Gate::Skip
     }
 }
 

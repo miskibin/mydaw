@@ -74,6 +74,20 @@ impl Detector {
         }
     }
 
+    /// Back to the state right after `new` (the search range and `hint` are the caller's).
+    pub fn clear(&mut self) {
+        self.lp1.reset();
+        self.lp2.reset();
+        self.phase = 0;
+        self.buf.fill(0.0);
+        self.w = 0;
+        self.since = 0;
+        self.hz = 0.0;
+        self.confidence = 0.0;
+        self.rms = 0.0;
+        self.hint = 0.0;
+    }
+
     /// Latency of an estimate, in device samples (half the analysis window).
     /// Search only between `lo` and `hi` Hz (within MIN_HZ‥MAX_HZ). Latency is unchanged.
     pub fn set_range(&mut self, lo: f32, hi: f32) {
@@ -264,6 +278,17 @@ impl Psola {
         self.voiced_prev = false;
     }
 
+    /// Back to the state right after `new`.
+    pub fn clear(&mut self) {
+        self.reset();
+        self.lp1.reset();
+        self.lp2.reset();
+        self.n = 0;
+        self.next_syn = 0.0;
+        self.mark = 0.0;
+        self.next_mark = 0.0;
+    }
+
     #[inline]
     fn win(&self, x: f32) -> f32 {
         // x in 0..1
@@ -417,15 +442,86 @@ pub struct NoteBlob {
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PitchAnalysis {
-    /// Frames per second of `curve` / `levels`.
+    /// Frames per second of `curve` / `levels` / `confidence`.
     pub rate: f32,
     /// MIDI pitch per frame; NaN where unvoiced (breaths, sibilants, silence).
     pub curve: Vec<f32>,
     pub levels: Vec<f32>,
+    /// How sure the detector is of the pitch, 0..1 per frame.
+    pub confidence: Vec<f32>,
     pub notes: Vec<NoteBlob>,
+    /// Which detector produced the curve: "yin" or the estimator's name.
+    pub backend: String,
 }
 
 pub const ANALYSIS_RATE: f32 = 200.0;
+
+/// F0 per frame from an estimator other than the built-in YIN (e.g. a neural model).
+pub struct F0Track {
+    pub rate: f32,
+    /// Hz, 0 = unvoiced.
+    pub hz: Vec<f32>,
+    pub confidence: Vec<f32>,
+}
+
+/// A replaceable pitch detector for offline analysis.
+pub trait F0Estimator: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn estimate(&self, mono: &[f32], sr: f32) -> Result<F0Track, String>;
+}
+
+/// Analysis with `est` when given (falls back to YIN if it fails).
+pub fn analyze_with(mono: &[f32], sr: f32, est: Option<&dyn F0Estimator>) -> PitchAnalysis {
+    let Some(est) = est else { return analyze(mono, sr) };
+    let tr = match est.estimate(mono, sr) {
+        Ok(t) if !t.hz.is_empty() && t.rate > 0.0 => t,
+        Ok(_) => return analyze(mono, sr),
+        Err(e) => {
+            log::warn!("{} failed ({e}); using YIN", est.name());
+            return analyze(mono, sr);
+        }
+    };
+    let step = (sr / ANALYSIS_RATE) as usize;
+    let frames = mono.len() / step + 1;
+    let levels = frame_levels(mono, sr, frames);
+    let mut curve = vec![f32::NAN; frames];
+    let mut confidence = vec![0f32; frames];
+    for f in 0..frames {
+        let x = f as f32 / ANALYSIS_RATE * tr.rate;
+        let i = x.floor() as usize;
+        if i >= tr.hz.len() {
+            break;
+        }
+        let j = (i + 1).min(tr.hz.len() - 1);
+        let w = x - i as f32;
+        let (a, b) = (tr.hz[i], tr.hz[j]);
+        confidence[f] = tr.confidence[i] + (tr.confidence[j] - tr.confidence[i]) * w;
+        // interpolate in pitch, never across a voicing edge
+        curve[f] = match (a > 0.0, b > 0.0) {
+            (true, true) => hz_to_midi(a) + (hz_to_midi(b) - hz_to_midi(a)) * w,
+            (true, false) if w < 0.5 => hz_to_midi(a),
+            (false, true) if w >= 0.5 => hz_to_midi(b),
+            _ => f32::NAN,
+        };
+    }
+    finish(curve, levels, confidence, est.name())
+}
+
+/// RMS around each analysis frame (same window length YIN's level uses).
+fn frame_levels(mono: &[f32], sr: f32, frames: usize) -> Vec<f32> {
+    let step = (sr / ANALYSIS_RATE) as usize;
+    let half = (sr * 0.02) as usize;
+    (0..frames)
+        .map(|f| {
+            let c = f * step;
+            let (a, b) = (c.saturating_sub(half), (c + half).min(mono.len()));
+            if b <= a {
+                return 0.0;
+            }
+            (mono[a..b].iter().map(|x| x * x).sum::<f32>() / (b - a) as f32).sqrt()
+        })
+        .collect()
+}
 
 /// Analyses a mono signal: pitch curve every 5 ms and note segmentation.
 pub fn analyze(mono: &[f32], sr: f32) -> PitchAnalysis {
@@ -435,6 +531,7 @@ pub fn analyze(mono: &[f32], sr: f32) -> PitchAnalysis {
     let frames = mono.len() / step + 1;
     let mut curve = vec![f32::NAN; frames];
     let mut levels = vec![0f32; frames];
+    let mut confidence = vec![0f32; frames];
     let mut cur_hz = 0f32;
     let mut cur_conf = 0f32;
     let mut cur_rms = 0f32;
@@ -451,12 +548,18 @@ pub fn analyze(mono: &[f32], sr: f32) -> PitchAnalysis {
             let f = (i - lat) / step;
             if f < frames {
                 levels[f] = cur_rms;
+                confidence[f] = if cur_hz > 0.0 { cur_conf } else { 0.0 };
                 if cur_hz > 0.0 && cur_conf > 0.6 {
                     curve[f] = hz_to_midi(cur_hz);
                 }
             }
         }
     }
+    finish(curve, levels, confidence, "yin")
+}
+
+fn finish(mut curve: Vec<f32>, levels: Vec<f32>, confidence: Vec<f32>, backend: &str) -> PitchAnalysis {
+    let frames = curve.len();
     // remove octave jumps lasting a few frames and single voiced frames
     for f in 1..frames.saturating_sub(1) {
         let (a, b, c) = (curve[f - 1], curve[f], curve[f + 1]);
@@ -467,9 +570,11 @@ pub fn analyze(mono: &[f32], sr: f32) -> PitchAnalysis {
             curve[f] = (a + c) * 0.5;
         }
     }
-    fold_octave_errors(&mut curve);
+    if backend == "yin" {
+        fold_octave_errors(&mut curve);
+    }
     let notes = segment(&curve, &levels);
-    PitchAnalysis { rate: ANALYSIS_RATE, curve, levels, notes }
+    PitchAnalysis { rate: ANALYSIS_RATE, curve, levels, confidence, notes, backend: backend.to_string() }
 }
 
 /// Detector slips onto a harmonic (or an octave below) show up as frames far from
@@ -519,7 +624,7 @@ fn fold_octave_errors(curve: &mut [f32]) {
 }
 
 /// Splits voiced runs into notes where the (smoothed) pitch moves to a new semitone and stays.
-fn segment(curve: &[f32], levels: &[f32]) -> Vec<NoteBlob> {
+pub(crate) fn segment(curve: &[f32], levels: &[f32]) -> Vec<NoteBlob> {
     let dt = 1.0 / ANALYSIS_RATE as f64;
     let mut notes = vec![];
     let mut f = 0;

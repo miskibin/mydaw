@@ -8,6 +8,8 @@ import { rgba, T } from '../ui/theme';
 import { clamp, dbg, mod } from '../lib/format';
 import { snapRes } from '../lib/snap';
 import { getClipPeaks, getPeaks, peakRange } from '../state/peaks';
+import { prefs } from '../state/prefs';
+import { drawGlyph, guessIcon, patternIcon, trackIcon } from '../ui/instIcons';
 
 export interface View {
   offX: number; offY: number; W: number; H: number;
@@ -108,6 +110,12 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
   const srcs = new Map(p.sources.map(x => [x.id, x]));
   const autos = new Map((p.automations ?? []).map(x => [x.id, x]));
   const comps = new Map((p.comps ?? []).map(x => [x.id, x]));
+  const patIcons = new Map<number, string | null>();
+  const iconOf = (c: Clip, tr: Track, src: Pattern | Source | Automation): string | null => {
+    if (c.kind === 'auto' || !prefs().clipIcons) return null;
+    if (c.kind === 'pat') { let i = patIcons.get(c.ref); if (i === undefined) { i = patternIcon(src as Pattern, curChans); patIcons.set(c.ref, i); } return i; }
+    return trackIcon(tr) ?? guessIcon(src.name);
+  };
   for (const c of p.clips) {
     const tr = p.tracks[c.track]; if (!tr) continue;
     const cx = c.start * bw, cw = Math.max(3, c.len * bw - 1), cy = tops[c.track] + 1, ch = tr.h - 2;
@@ -115,7 +123,7 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
     if (c.kind === 'comp') { const cp = comps.get(c.ref); if (cp) drawComp(g, v, c, cp, tr.color, cx, cy, cw, ch, x0, x1); continue; }
     const src = c.kind === 'pat' ? pats.get(c.ref) : c.kind === 'auto' ? autos.get(c.ref) : srcs.get(c.ref);
     if (!src) continue;
-    drawClip(g, v, c, src, sigs.get(c.ref) ?? '', cx, cy, cw, ch, x0, x1);
+    drawClip(g, v, c, src, sigs.get(c.ref) ?? '', cx, cy, cw, ch, x0, x1, iconOf(c, tr, src));
   }
   p.tracks.forEach((t, i) => { const row = v.rows?.[i]; if (row) drawTakeLanes(g, v, row.clip, row.comp, t, tops[i] + t.h, x0, x1, y0, y1); });
   if (rec && p.tracks[rec.track]) drawRec(g, v, rec, p.tracks[rec.track].h);
@@ -288,7 +296,7 @@ export function drawFades(g: CanvasRenderingContext2D, v: View, p: Project) {
   g.restore();
 }
 
-function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | Source | Automation, sig: string, cx: number, cy: number, cw: number, ch: number, vx0: number, vx1: number) {
+function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | Source | Automation, sig: string, cx: number, cy: number, cw: number, ch: number, vx0: number, vx1: number, icon: string | null = null) {
   const sel = v.sel.has(c.id), color = src.color, bh = ch - 15;
   g.save();
   if (c.muted) g.globalAlpha = 0.38;
@@ -303,6 +311,7 @@ function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | 
     g.fillStyle = sel ? T.clipTextSel : T.clipText;
     let tx = cx + 5;
     if (c.muted) { g.font = '600 9px "Geist Mono Variable", monospace'; g.fillText('M', tx, cy + 11); tx += 10; }
+    if (icon && cw > 30) { drawGlyph(g, icon, tx, cy + 2.5, 10); tx += 13; }
     g.font = FONT; g.fillText(src.name, tx, cy + 11);
     if (isAudio && c.gain) {
       const w = g.measureText(src.name).width;

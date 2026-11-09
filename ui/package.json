@@ -12,6 +12,7 @@
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.5",
     "@fontsource-variable/geist-mono": "^5.2.5",
+    "@fortawesome/free-solid-svg-icons": "6.7.2",
     "@tauri-apps/api": "^2.9.0",
     "solid-js": "^1.9.9"
   },
@@ -22,6 +23,8 @@
     "vitest": "^3.2.4"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }

@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { demoProject, mockCatalog } from '../api/mockData';
-import type { ClipTune, EqBand, PitchAnalysis } from '../api/types';
-import { applyAll } from './applyOps';
+import type { Clip, ClipTune, EqBand, PitchAnalysis, RefTune } from '../api/types';
+import { applyAll, OpError } from './applyOps';
 import { automatedValue, createAutomationOps, denormalize, normalize, parseBandParam, valueAt } from './automation';
 import { bandCurve, eqCurve, FreqGrid, rbj, stagesOf, usedPlacements } from './eq';
 import {
-  addPencil, correctPitch, dragShift, editedCurve, follow, graphMidi, graphX, graphY, hzToMidi, initTune, mergeNotes, midiToHz,
-  noteAt, noteCenter, noteName, pencilAt, scaleMask, snapNote, splitNear, splitNote, tuneIsNeutral,
+  addPencil, baseCurve, correctPitch, curveCenter, DEFAULT_REF, dragShift, editedCurve, follow, graphMidi, graphX, graphY, hzToMidi, initTune,
+  lowConfidenceRuns, mergeNotes, midiToHz, noteAt, noteCenter, noteCenters, noteName, pencilAt, scaleMask, simpleTarget, snapNote, splitNear,
+  splitNote, tuneIsNeutral,
 } from './pitch';
 import { loadPreset, newFx, pFmt, presetInfo } from './presets';
 
@@ -166,6 +167,73 @@ describe('tune edits', () => {
     const half = correctPitch(initTune(an), an, [1], 50, 0, 0, scaleMask(1));
     expect(half.notes[1].shift).toBe(-5);
     expect(half.notes[0].shift).toBe(0);
+  });
+});
+
+describe('Tune to Reference', () => {
+  const an = analysis();
+  /** The same two notes sung in tune, an octave up, at a different tempo (longer). */
+  function reference(): PitchAnalysis {
+    const rate = 200, curve: (number | null)[] = [], levels: number[] = [];
+    for (let f = 0; f < 300; f++) {
+      const t = f / rate;
+      curve.push(t < 0.6 ? 69 + 0.1 * Math.sin(2 * Math.PI * 6 * t) : t < 0.75 ? null : 72);
+      levels.push(0.7);
+    }
+    return { rate, curve, levels, notes: [{ start: 0, end: 0.6, pitch: 69, level: 0.7 }, { start: 0.75, end: 1.5, pitch: 72, level: 0.7 }] };
+  }
+  const p: RefTune = { source: 9, ...DEFAULT_REF };
+
+  it('pulls note centres onto the reference, an octave down, keeping the singer’s vibrato', () => {
+    const t = simpleTarget(an, reference(), an.notes, p);
+    expect(t.octave).toBe(-12);
+    expect(curveCenter(t.targetF0, t.rate, 0, 0.4)!).toBeCloseTo(57, 1); // A3 −20 ct → A3
+    expect(curveCenter(t.targetF0, t.rate, 0.5, 1)!).toBeCloseTo(60, 1); // C4 +10 ct → C4
+    // the 5 Hz vibrato of the take survives: target − centre follows take − centre
+    const c0 = noteCenter(an, 0, 0.4)!, tc = curveCenter(t.targetF0, t.rate, 0, 0.4)!;
+    for (const f of [10, 25, 60]) expect(t.targetF0[f]! - tc).toBeCloseTo(an.curve[f]! - c0, 2);
+    expect(t.targetF0[90]).toBeNull(); // unvoiced stays unvoiced
+  });
+  it('correction, vibrato and influence blend like the engine', () => {
+    const none = simpleTarget(an, reference(), an.notes, { ...p, correction: 0 });
+    expect(none.targetF0[150]).toBeCloseTo(an.curve[150]!, 6);
+    const flat = simpleTarget(an, reference(), an.notes, { ...p, vibrato: 0 });
+    expect(flat.targetF0[25]).toBeCloseTo(57, 1);
+    // influence 0: the nearest scale note instead (C major: 56.8 → A 57)
+    const scale = simpleTarget(an, reference(), an.notes, { ...p, influence: 0, key: 0, scale: 1 });
+    expect(curveCenter(scale.targetF0, 200, 0.5, 1)!).toBeCloseTo(60, 1);
+    // a forced octave wins over the automatic one
+    expect(simpleTarget(an, reference(), an.notes, { ...p, octave: 0 }).octave).toBe(0);
+  });
+  it('the edited curve starts from the target; note edits apply on top', () => {
+    const t = simpleTarget(an, reference(), an.notes, p);
+    expect(baseCurve(an, t)[150]).toBeCloseTo(60, 1);
+    expect(Number.isNaN(baseCurve(an, t)[90])).toBe(true);
+    const tune: ClipTune = { ...initTune(an), reference: p };
+    tune.notes[1].shift = 100;
+    const e = editedCurve(an, tune, undefined, t);
+    expect(e[150]).toBeCloseTo(61, 1);
+    expect(noteCenters(an, tune.notes, t)[1]!).toBeCloseTo(60, 1);
+    expect(tuneIsNeutral({ notes: [], reference: p })).toBe(false);
+  });
+  it('marks stretches the alignment is unsure of', () => {
+    const t = simpleTarget(an, reference(), an.notes, p);
+    t.alignmentConfidence = t.alignmentConfidence.map((c, i) => (i >= 20 && i < 60 ? 0.05 : c));
+    expect(lowConfidenceRuns(t)).toEqual([[0.1, 0.3]]);
+  });
+  it('mock ops check references like the engine and drop them with their source', () => {
+    const proj = demoProject(mockCatalog());
+    const src = (id: number, name: string) => ({ id, name, color: '#888', path: name + '.wav', dur: 4, sr: 48000, ch: 1, peakDb: -3 });
+    proj.sources.push(src(7001, 'take'), src(7002, 'acapella'));
+    const clip: Clip = { id: 7003, track: 0, start: 0, len: 8, offset: 0, kind: 'audio', ref: 7001, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false };
+    const put = (r: RefTune) => applyAll(proj, [{ op: 'putClips', clips: [{ ...clip, tune: { notes: [], reference: r } }] }]);
+    expect(() => put({ ...p, source: 99999 })).toThrow(OpError);
+    expect(() => put({ ...p, source: 7002, correction: 1.5 })).toThrow(OpError);
+    expect(() => put({ ...p, source: 7002, octave: 7 })).toThrow(OpError);
+    const ok = put({ ...p, source: 7002 });
+    expect(ok.clips.find(c => c.id === 7003)!.tune!.reference!.source).toBe(7002);
+    const gone = applyAll(ok, [{ op: 'removeSource', id: 7002 }]);
+    expect(gone.clips.find(c => c.id === 7003)!.tune!.reference).toBeNull();
   });
 });
 

@@ -2,6 +2,9 @@
 
 use std::f32::consts::PI;
 
+pub mod limiter_v2;
+pub mod reverb_v2;
+
 use crate::model::FxKind;
 use crate::processor::{ParamBlock, ProcessCtx, Processor};
 
@@ -32,13 +35,14 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
         FxKind::Comp => Box::new(Comp::default()),
         FxKind::Sat => Box::new(Sat::default()),
         FxKind::Delay => Box::new(Delay::default()),
-        FxKind::Reverb => Box::new(Reverb::default()),
-        FxKind::Limit => Box::new(Limiter::default()),
+        FxKind::Reverb => Box::new(reverb_v2::ReverbV2::default()),
+        FxKind::Limit => Box::new(limiter_v2::LimiterV2::default()),
         FxKind::Fet => Box::new(crate::vocal::Fet::default()),
         FxKind::Deess => Box::new(crate::vocal::DeEss::default()),
         FxKind::Tune => Box::new(crate::vocal::Tune::default()),
         FxKind::Denoise => Box::new(crate::denoise::Denoise::default()),
         FxKind::Voice => Box::new(crate::vocal::Voice::default()),
+        FxKind::Rider => Box::new(crate::rider::Rider::default()),
         FxKind::Vst3 => return None,
     })
 }
@@ -162,6 +166,17 @@ impl Smooth {
     pub(crate) fn next(&mut self, target: f32) -> f32 {
         self.v += (target - self.v) * self.k;
         self.v
+    }
+}
+
+/// Samples for a one-pole decay with per-sample coefficient `k` to fall `taus` time constants.
+pub(crate) fn decay_samples(k: f32, taus: f32) -> usize {
+    if k > 0.0 && k < 1.0 {
+        (taus * -1.0 / k.ln()) as usize + 1
+    } else if k >= 1.0 {
+        usize::MAX / 4
+    } else {
+        0
     }
 }
 
@@ -349,6 +364,26 @@ impl Processor for Eq {
             st.env = 0.0;
         }
     }
+    fn tail_samples(&self) -> Option<usize> {
+        if self.sr <= 0.0 {
+            return Some(0);
+        }
+        // series of biquads: the ring-down times add up (tau ~ Q / (pi f), longer for boosts)
+        let mut tau = 0.0f32;
+        for b in self.p[..self.n_on].iter().filter(|b| b.on) {
+            if b.dynamic {
+                return None;
+            }
+            let stages = if b.kind == 0 || b.kind == 4 { b.stages.max(1) as f32 } else { 1.0 };
+            let boost = 10f32.powf(b.g.abs().min(48.0) / 40.0);
+            tau += stages * b.q.max(0.707) * boost / (PI * b.f.max(5.0));
+        }
+        Some(((tau * 23.0 + 0.05) * self.sr) as usize + 64)
+    }
+    fn park(&mut self) {
+        self.reset();
+        self.gain.v = self.out;
+    }
     fn meters(&self, out: &mut [f32; crate::processor::METERS]) {
         for k in 0..EQ_BANDS {
             out[k] = self.bands[k].dyn_g;
@@ -368,10 +403,15 @@ pub struct Comp {
     env_db: f32,
     gr: f32,
     knee: f32,
+    /// RMS detection (~10 ms mean square) instead of peak: levels a voice by its body
+    /// rather than its transients (the auto-vocal slow stage).
+    rms: bool,
+    ms: f32,
+    k_ms: f32,
 }
 impl Default for Comp {
     fn default() -> Self {
-        Self { sr: 48000.0, thr: -18.0, ratio: 4.0, att: 0.0, rel: 0.0, makeup: 1.0, env_db: 0.0, gr: 0.0, knee: 6.0 }
+        Self { sr: 48000.0, thr: -18.0, ratio: 4.0, att: 0.0, rel: 0.0, makeup: 1.0, env_db: 0.0, gr: 0.0, knee: 6.0, rms: false, ms: 0.0, k_ms: 0.0 }
     }
 }
 impl Comp {
@@ -401,12 +441,19 @@ impl Processor for Comp {
         self.att = (-1.0 / (self.sr * v[2].max(0.05) / 1000.0)).exp();
         self.rel = (-1.0 / (self.sr * v[3].max(1.0) / 1000.0)).exp();
         self.makeup = db_to_gain(v[4]);
+        self.rms = v[5] > 0.5;
+        self.k_ms = 1.0 - (-1.0 / (self.sr * 0.005)).exp();
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
         let mut gr_peak = 0f32;
         for i in 0..l.len() {
-            let lvl = l[i].abs().max(r[i].abs());
-            let x = gain_to_db(lvl).max(-120.0);
+            let x = if self.rms {
+                let p = 0.5 * (l[i] * l[i] + r[i] * r[i]);
+                self.ms = flush(self.ms + (p - self.ms) * self.k_ms);
+                (10.0 * self.ms.max(1e-12).log10()).max(-120.0)
+            } else {
+                gain_to_db(l[i].abs().max(r[i].abs())).max(-120.0)
+            };
             let target = self.curve(x);
             // envelope on the gain reduction: attack when reducing more
             let k = if target < self.env_db { self.att } else { self.rel };
@@ -421,6 +468,12 @@ impl Processor for Comp {
     fn reset(&mut self) {
         self.env_db = 0.0;
         self.gr = 0.0;
+        self.ms = 0.0;
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        // silent in = silent out; what has to settle is the gain-reduction envelope (and,
+        // in RMS mode, the mean-square detector: flushed to zero within ~0.5 s)
+        Some(decay_samples(self.rel, 17.0) + if self.rms { (self.sr * 0.5) as usize } else { 0 })
     }
     fn gain_reduction_db(&self) -> f32 {
         self.gr
@@ -453,6 +506,14 @@ impl Processor for Sat {
             self.so.v = self.out;
             self.sm.v = self.mix;
         }
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        Some(0)
+    }
+    fn park(&mut self) {
+        self.sd.v = self.drive;
+        self.so.v = self.out;
+        self.sm.v = self.mix;
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
         let norm = 1.0 / 2.5f32.tanh();
@@ -524,6 +585,20 @@ impl Processor for Delay {
     fn reset(&mut self) {
         self.bl.fill(0.0);
         self.br.fill(0.0);
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        let n = self.bl.len();
+        if n < 4 {
+            return Some(0);
+        }
+        let t = self.time.max(self.st.v).clamp(1.0, (n - 3) as f32);
+        // every repeat is `fb` of the one before: down to -140 dB
+        let reps = if self.fb < 1e-4 { 1.0 } else { (16.2 / -self.fb.ln()).ceil().max(1.0) };
+        Some(((reps + 1.0) * t + 0.4 * self.sr) as usize)
+    }
+    fn park(&mut self) {
+        self.reset();
+        self.st.v = self.time;
     }
 }
 
@@ -702,6 +777,13 @@ impl Processor for Reverb {
             ln.buf.fill(0.0);
         }
         self.lp = [0.0; FDN];
+        self.hp_l.reset();
+        self.hp_r.reset();
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        // 60 dB per RT60, so -140 dB takes 2.33 RT60 (+ pre-delay, diffusion, filters)
+        let rt60 = self.params.map(|p| p.values[0].max(0.1)).unwrap_or(0.1);
+        Some(self.pre_d + ((2.6 * rt60 + 0.3) * self.sr) as usize)
     }
     fn wet_tap(&self) -> Option<&[f32]> {
         Some(&self.wet[..self.wet_n])
@@ -773,6 +855,9 @@ impl Processor for Limiter {
         self.dr.fill(0.0);
         self.req.fill(1.0);
         self.env = 1.0;
+    }
+    fn tail_samples(&self) -> Option<usize> {
+        Some(self.dl.len() + decay_samples(self.rel, 17.0))
     }
     fn gain_reduction_db(&self) -> f32 {
         self.gr
@@ -901,15 +986,14 @@ mod tests {
 
     #[test]
     fn reverb_tail_decays_near_rt60() {
-        // impulse, then measure energy around RT60/2 vs 0.1 s
-        let (out, _) = run(FxKind::Reverb, |i| if i == 0 { 1.0 } else { 0.0 }, 48000 * 3);
+        // impulse, then compare the tail around 0.15 s and 0.65 s (default preset: RT60 1.0 s → −30 dB)
+        let (out, _) = run(FxKind::Reverb, |i| if i == 0 { 1.0 } else { 0.0 }, 48000 * 2);
         let rms = |a: usize, b: usize| (out[a..b].iter().map(|x| x * x).sum::<f32>() / (b - a) as f32).sqrt();
         let early = rms(4800, 9600);
-        let late = rms(48000 * 2, 48000 * 2 + 4800);
-        assert!(early > 1e-4, "no tail at all");
+        let late = rms(28800, 33600);
+        assert!(early > 1e-5, "no tail at all");
         let drop = gain_to_db(late / early);
-        // default decay 2.2 s: ~1.9 s apart → about -52 dB; allow a wide band
-        assert!(drop < -25.0 && drop > -90.0, "decay {drop} dB");
+        assert!(drop < -18.0 && drop > -45.0, "decay {drop} dB");
     }
 
     #[test]

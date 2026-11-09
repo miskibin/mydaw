@@ -1,3 +1,4 @@
+import { prefs } from '../state/prefs';
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import { baseName, clamp, fmtClock, fmtPos, TapTracker } from '../lib/format';
@@ -7,11 +8,10 @@ import { commit, Gesture, wheelEdit } from '../state/edit';
 import { S } from '../state/store';
 import { curBeat, tele } from '../state/telemetry';
 import { openMenu, say, setU, U, type Tool } from '../state/ui';
+import { midiFlash, midiStatus } from '../state/midi';
 import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { Icon, ICONS } from '../ui/icons';
-import { NB, toggleNotebook } from '../state/notebook';
-import { NOTEBOOK_ICON } from './Notebook';
 
 export const TOOLS: [Tool, string, string][] = [
   ['draw', 'P', 'Rysuj'], ['paint', 'B', 'Maluj'], ['erase', 'D', 'Usuń'], ['mute', 'T', 'Wycisz'], ['slice', 'C', 'Tnij'], ['select', 'E', 'Zaznacz'],
@@ -107,7 +107,9 @@ export function Toolbar() {
   const dragDown = (e: MouseEvent) => {
     if (!win || e.button !== 0) return;
     const el = e.target as HTMLElement;
-    if (el !== e.currentTarget && !el.closest('[data-drag]')) return;
+    // Drag only from the bar itself or an element marked data-drag, never from a
+    // child of one (.tbmain holds every button: closest() swallowed their clicks).
+    if (el !== e.currentTarget && !el.hasAttribute('data-drag')) return;
     const now = performance.now();
     if (now - lastDown < 350) { lastDown = 0; void win.toggleMaximize(); return; }
     lastDown = now;
@@ -115,13 +117,11 @@ export function Toolbar() {
   };
   return (
     <div class="toolbar" classList={{ native: !!win }} onMouseDown={dragDown}>
+      <div class="tbmain" data-drag>
       <button class="ibtn" classList={{ on: U.pickOpen }} onClick={() => setU('pickOpen', !U.pickOpen)} title="Browser (Alt+F8)">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
       </button>
-      <button class="ibtn" classList={{ on: NB.open }} onClick={toggleNotebook} title="Notatnik — tekst utworu, linia = takt (F8)" data-nbbtn>
-        <Icon d={NOTEBOOK_ICON} size={15} sw={1.8} />
-      </button>
-      <div class="row" style={{ gap: '1px' }}>
+      <div class="row undogrp" style={{ gap: '1px' }}>
         <button class="ibtn" disabled={!S.canUndo} onClick={() => void A.undo()} title="Cofnij (Ctrl+Z)"><Icon d="M9 14L4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3" /></button>
         <button class="ibtn" disabled={!S.canRedo} onClick={() => void A.redo()} title="Ponów (Ctrl+Shift+Z)"><Icon d="M15 14l5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3" /></button>
       </div>
@@ -134,17 +134,17 @@ export function Toolbar() {
         <button title="Nagrywanie (R)" class="rec" classList={{ armed: T().rec }} onClick={A.toggleRec}>
           <svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor" /></svg>
         </button>
-        <button title="Odsłuch wejścia" class="mon" classList={{ on: T().monitor }} onClick={A.toggleMonitor}>
+        <button title="Odsłuch wejścia" class="mon monbtn" classList={{ on: T().monitor }} onClick={A.toggleMonitor}>
           <Icon d="M4 15v-3a8 8 0 0 1 16 0v3 M3 14h4v7H3z M17 14h4v7h-4z" size={13} />
         </button>
-        <button title="Metronom" classList={{ on: T().metro, dim: !T().metro }} onClick={() => void A.setTransportFlag('metro', !T().metro)}>
+        <button title="Metronom" class="metrobtn" classList={{ on: T().metro, dim: !T().metro }} onClick={() => void A.setTransportFlag('metro', !T().metro)}>
           <Icon d="M9 3h6l4 18H5z M12 16l6-9" size={13} />
         </button>
         <button class="count" classList={{ on: T().countIn }} title="Count-in: 1 takt przed nagrywaniem" onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
       {/* the slot stays reserved while recording is off, so pressing R never re-wraps the toolbar
           (and shifts the playlist) on a narrow window */}
-      <div class="row" title="Poziom wejścia" style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
+      <div class="row inrow" title="Poziom wejścia" style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
         <span class="tag9">IN</span>
         <div class="inmeter"><div ref={inEl} /></div>
       </div>
@@ -165,42 +165,53 @@ export function Toolbar() {
           )}
         </For>
       </div>
-      <select class="sel" title="Przyciąganie do siatki" value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
+      <select class="sel snapsel" title="Przyciąganie do siatki" value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
         <For each={SNAPS}>{([label, v]) => <option value={String(v)}>{v < 0 ? snapLabel(-1, U.bw) : label}</option>}</For>
       </select>
       <div data-drag class="dragfill" />
       <span data-drag class="projName" title={(S.path ?? 'Projekt niezapisany') + (S.dirty ? ' — niezapisane zmiany' : '')}>{projName()}<Show when={S.dirty}><span data-drag class="dirty">•</span></Show></span>
-      <button class="tbtn" classList={{ on: U.exportOpen }} onClick={() => setU('exportOpen', true)} title="Eksport do WAV (Ctrl+Shift+R)">
-        <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} />Eksport
+      </div>
+      {/* right group sits outside the clipped .tbmain: on a narrow window the left side
+          gives way first, settings / mixer / export never disappear */}
+      <div class="tbright" data-drag>
+      <button class="tbtn" classList={{ on: U.exportOpen }} onClick={() => setU('exportOpen', true)} title="Eksport do WAV (Ctrl+Shift+R)" aria-label="Eksport">
+        <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} /><span class="lbl">Eksport</span>
       </button>
       <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : 'SONG'}</span>
       <Show when={U.plugs.length + (U.patWin ? 1 : 0)}>
         <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
           title={U.plugsHidden ? `Pokaż okna (efekty, pattern) (F5) — ${U.plugs.length + (U.patWin ? 1 : 0)}` : 'Schowaj okna efektów i patternu za playlistę (F5, albo klik w playlistę)'}>
-          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} />Okna {U.plugs.length + (U.patWin ? 1 : 0)}
+          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} /><span class="lbl">Okna {U.plugs.length + (U.patWin ? 1 : 0)}</span>
         </button>
       </Show>
-      <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title="Mikser (F9)">
-        <Icon d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6" size={13} />Mixer
+      <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title="Mikser (F9)" aria-label="Mixer">
+        <Icon d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6" size={13} /><span class="lbl">Mixer</span>
       </button>
-      <button class="tbtn" classList={{ on: U.follow }} onClick={() => setU('follow', !U.follow)} title="Podążaj za głowicą (F)">
-        <Icon d="M4 12h11 M11 7l5 5-5 5 M20 4v16" size={13} />Follow
+      <button class="tbtn followbtn" classList={{ on: U.follow }} onClick={() => setU('follow', !U.follow)} title="Podążaj za głowicą (F)" aria-label="Follow">
+        <Icon d="M4 12h11 M11 7l5 5-5 5 M20 4v16" size={13} /><span class="lbl">Follow</span>
       </button>
-      <div class="row" style={{ gap: '1px' }}>
+      <div class="row zgrp" style={{ gap: '1px' }}>
         <button class="zbtn" onClick={() => A.zoomAt(0.8)} title="Oddal (Ctrl+−)">−</button>
         <button class="zbtn" onClick={() => A.zoomAt(1.25)} title="Przybliż (Ctrl+=)">+</button>
       </div>
+      <Show when={midiStatus()?.selected}>
+        <button class="ibtn midibtn" onClick={() => setU('settings', true)}
+          title={midiStatus()?.connected ? 'MIDI: ' + midiStatus()!.connected!.name + ' — klik = ustawienia' : 'MIDI: urządzenie odłączone — klik = ustawienia'}>
+          <span class="midiled" classList={{ on: !!midiStatus()?.connected, hit: midiFlash() }} /><span class="tag9">MIDI</span>
+        </button>
+      </Show>
       <button class="ibtn" classList={{ on: U.settings }} style={{ width: '26px', height: '26px' }} onClick={() => setU('settings', !U.settings)} title="Ustawienia (audio, wygląd)"><Icon d={ICONS.gear} size={14} sw={1.8} /></button>
-      <button class="zbtn" classList={{ on: U.help }} style={{ font: '600 12px var(--mono)' }} onClick={() => setU('help', !U.help)} title="Skróty klawiszowe (?)">?</button>
+      <button class="zbtn helpbtn" classList={{ on: U.help }} style={{ font: '600 12px var(--mono)' }} onClick={() => setU('help', !U.help)} title="Skróty klawiszowe (?)">?</button>
+      </div>
       <Show when={win}>
         <div class="winbtns">
-          <button title="Minimalizuj" onClick={() => void win!.minimize()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" /></svg></button>
-          <button title={maxed() ? 'Przywróć' : 'Maksymalizuj'} onClick={() => void win!.toggleMaximize()}>
+          <button title="Minimalizuj" aria-label="Minimalizuj" onClick={() => void win!.minimize()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" /></svg></button>
+          <button title={maxed() ? 'Przywróć' : 'Maksymalizuj'} aria-label={maxed() ? 'Przywróć' : 'Maksymalizuj'} onClick={() => void win!.toggleMaximize()}>
             <Show when={maxed()} fallback={<svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" /></svg>}>
               <svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5V.5h7v7h-2 M.5 2.5h7v7h-7z" fill="none" stroke="currentColor" /></svg>
             </Show>
           </button>
-          <button class="close" title="Zamknij" onClick={() => void win!.close()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.1" /></svg></button>
+          <button class="close" title="Zamknij" aria-label="Zamknij" onClick={() => void win!.close()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.1" /></svg></button>
         </div>
       </Show>
     </div>
@@ -215,7 +226,7 @@ export function StatusBar() {
       <span style={{ color: 'var(--fg)' }} data-readout>{U.readout}</span>
       <div style={{ flex: 1 }} />
       <Show when={U.alt}><span class="offgrid">OFF GRID</span></Show>
-      <span style={{ color: 'var(--fg5)' }}>{hint()}</span>
+      <Show when={prefs().hints}><span style={{ color: 'var(--fg5)' }}>{hint()}</span></Show>
     </div>
   );
 }
@@ -225,7 +236,7 @@ const SHORTCUTS: [string, string][] = [
   ['Notatnik (tekst, linia = takt)', 'F8'], ['Notatnik: rozmiar czcionki', 'Ctrl + kółko'], ['Notatnik: głowica na takt', 'klik w numer taktu'], ['Notatnik: wyjdź z edycji', 'Esc'],
   ['Rysuj · Maluj · Usuń', 'P · B · D'], ['Wycisz · Tnij · Zaznacz', 'T · C · E'],
   ['Zaznacz prostokątem', 'Ctrl + przeciągnij'], ['Dodaj/usuń z zaznaczenia', 'Ctrl + klik'], ['Zaznacz wszystko', 'Ctrl+A'], ['Odznacz', 'Esc'],
-  ['Kopiuj przeciągając', 'Shift + przeciągnij'], ['Poza siatką (off grid)', 'trzymaj Alt'], ['Duplikuj za zaznaczeniem', 'Ctrl+B'],
+  ['Kopiuj przeciągając', 'Shift + przeciągnij'], ['Poza siatką (off grid)', 'trzymaj Alt'], ['Duplikuj za zaznaczeniem', 'Ctrl+B · Ctrl+D'],
   ['Kopiuj · Wytnij · Wklej', 'Ctrl+C · X · V'], ['Usuń zaznaczone', 'Del'], ['Wycisz zaznaczone', 'Ctrl+M'],
   ['Przesuń w czasie', 'Shift + ← →'], ['Przesuń między ścieżkami', 'Shift + ↑ ↓'], ['Cofnij · Ponów', 'Ctrl+Z · Ctrl+Shift+Z'],
   ['Usuń klipy pod kursorem', 'PPM + przeciągnij'], ['Menu kontekstowe', 'PPM'], ['Zoom poziomy', 'Ctrl + kółko'], ['Wysokość wszystkich ścieżek', 'Alt + kółko'],
@@ -240,7 +251,7 @@ const SHORTCUTS: [string, string][] = [
   ['Edytor wysokości', 'PPM na klipie audio → Edytuj wysokość…'], ['Narzędzia edytora wysokości', '1–6'], ['Dopasuj widok edytora', 'F'],
   ['Krok: włącz · wyłącz', 'klik · PPM (przeciągnij = maluj)'], ['Odsłuch kanału', 'Ctrl + klik w nazwę'], ['Mute · Solo kanału', 'klik w diodę · PPM na diodzie'],
   ['Menu kanału (wypełnij, przesuń, klonuj…)', 'PPM na kanale'], ['Piano roll kanału melodycznego', '2× klik w nazwę / wiersz'], ['Velocity', 'przeciągnij w pasku pod siatką'],
-  ['Piano roll: rysuj · maluj · zaznacz · usuń', 'P · B · E · D'], ['Piano roll: półton · oktawa', '↑ ↓ · Ctrl + ↑ ↓'], ['Piano roll: duplikuj w prawo', 'Ctrl+B'],
+  ['Piano roll: rysuj · maluj · zaznacz · usuń', 'P · B · E · D'], ['Piano roll: półton · oktawa', '↑ ↓ · Ctrl + ↑ ↓'], ['Piano roll: duplikuj w prawo', 'Ctrl+B · Ctrl+D'], ['Piano roll: kopiuj · wytnij · wklej nuty', 'Ctrl+C · X · V'],
   ['Piano roll: bez siatki', 'trzymaj Alt'], ['Podgląd patternu w pętli', '▶ Pętla w oknie patternu'],
   ['Nowy band EQ', '2× klik na wykresie'], ['Wytnij rezonans', 'przeciągnij z podświetlonego szczytu widma'], ['Q bandu', 'kółko nad punktem'],
 ];

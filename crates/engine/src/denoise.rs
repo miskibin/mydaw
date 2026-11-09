@@ -77,6 +77,10 @@ pub struct Denoise {
     gr: f32,
     meter: [f32; METERS],
     params: Option<ParamBlock>,
+    /// Samples of digital silence at the input; after a second the effect idles (state kept)
+    /// until sound returns, so a skipped chain (`Processor::park`) changes nothing.
+    quiet: usize,
+    dormant: bool,
 }
 
 impl Default for Denoise {
@@ -119,6 +123,8 @@ impl Default for Denoise {
             gr: 0.0,
             meter: [0.0; METERS],
             params: None,
+            quiet: 0,
+            dormant: true,
         }
     }
 }
@@ -280,6 +286,8 @@ impl Processor for Denoise {
         }
         self.rover = self.lat;
         self.frames = 0;
+        self.quiet = 0;
+        self.dormant = true;
         self.apply();
     }
 
@@ -297,9 +305,32 @@ impl Processor for Denoise {
         self.rover = self.lat;
     }
 
+    fn park(&mut self) {
+        self.dormant = true;
+    }
+
+    fn tail_samples(&self) -> Option<usize> {
+        // one FFT frame of latency plus the gain smoothing; the learned profile is kept
+        Some(self.n + (self.sr * 1.5) as usize)
+    }
+
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
         if self.fwd.is_none() {
             return;
+        }
+        let silent = l.iter().all(|&x| x == 0.0) && r.iter().all(|&x| x == 0.0);
+        if silent {
+            if self.dormant {
+                return;
+            }
+            if self.quiet >= self.sr as usize {
+                self.dormant = true;
+                return;
+            }
+            self.quiet += l.len();
+        } else {
+            self.quiet = 0;
+            self.dormant = false;
         }
         for i in 0..l.len() {
             self.in_l[self.rover] = l[i];

@@ -1,14 +1,14 @@
 // Commands shared by the toolbar, keyboard, menus and views.
 import { batch } from 'solid-js';
 import { be } from '../api/backend';
-import { VOL_UNITY, type BuiltinKind, type Clip, type Fx, type Id, type Insert, type Op, type Track } from '../api/types';
+import { VOL_UNITY, type AnyBuiltinKind, type Clip, type Fx, type Id, type Insert, type Op, type Track } from '../api/types';
 import { clampMove, duplicateSpan, insertTrackOps, moveClips, muteOps, pasteClips, sliceClip, TOTAL } from '../lib/clipOps';
 import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
 import { flushNotebook } from './notebook';
-import { allocId, findFx, S, setTransport } from './store';
+import { allocId, findFx, insName, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
 
@@ -229,7 +229,7 @@ export function fxOp(fx: Fx, insId?: Id): Op {
   const ins = insId ?? findFx(fx.id)?.m.id ?? 0;
   return { op: 'putFx', insertId: ins, fx: plain(fx) };
 }
-export function addFx(insId: Id, type: BuiltinKind, preset?: number) {
+export function addFx(insId: Id, type: AnyBuiltinKind, preset?: number) {
   if (!S.catalog) return;
   let f = newFx(S.catalog, allocId(), type, S.project.bpm);
   if (preset != null && preset > 0 && presetList(S.catalog, type)[preset]) f = loadPresetFx(S.catalog, f, preset, S.project.bpm);
@@ -255,6 +255,13 @@ export function toggleBypass(fxId: Id) {
   const ff = findFx(fxId); if (!ff) return;
   commit([fxOp({ ...plain(ff.f), bypass: !ff.f.bypass }, ff.m.id)], 'Bypass');
   say(fxName(ff.f) + (ff.f.bypass ? ' · bypass' : ' · aktywny'));
+}
+/** FL-style: bypass every effect of an insert, or turn them all back on if all are bypassed. */
+export function toggleInsertFx(insId: Id) {
+  const m = S.project.inserts.find(x => x.id === insId); if (!m || !m.fx.length) return;
+  const on = m.fx.some(f => !f.bypass);
+  commit(m.fx.map(f => fxOp({ ...plain(f), bypass: on }, m.id)), on ? 'Wyłącz efekty' : 'Włącz efekty');
+  say(insName(m) + (on ? ' · wszystkie efekty wyłączone' : ' · efekty włączone'));
 }
 export const fxName = (f: Fx) => f.type === 'vst3' ? (f.plugin?.name ?? 'VST3') : (S.catalog?.types[f.type]?.name ?? f.type);
 export function loadPreset(fxId: Id, i: number) {
@@ -361,4 +368,43 @@ export function zoomAt(f: number) { setU('bw', clamp(U.bw * f, 4, 96)); }
 export function setSnap(v: number) {
   setU('snap', v);
   say(v < 0 ? 'Snap auto — rozdzielczość zależy od zoomu (teraz ' + snapName(snapRes(-1, U.bw)) + ')' : 'Snap: ' + snapName(v));
+}
+
+// ---------- auto vocal ----------
+let autoVocalBusy = false;
+/** Analyse an audio clip and put the calibrated vocal chain on its track's insert (one undo step).
+ *  Effects of the types the chain brings are replaced; others (e.g. an EQ) stay in front. */
+export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural') {
+  const c = S.project.clips.find(x => x.id === clipId);
+  if (!c || c.kind !== 'audio' || !S.catalog || autoVocalBusy) return;
+  const tr = S.project.tracks[c.track]; if (!tr) return;
+  const ins = S.project.inserts.find(m => m.id === tr.insert);
+  if (!ins || ins.id === 0) { say('Auto wokal: przypisz ścieżkę do kanału miksera (nie Master)'); return; }
+  autoVocalBusy = true;
+  say('Auto wokal: analiza nagrania… (kilka sekund)');
+  try {
+    const plan = await be().autoVocalPlan({ clipId, style });
+    // The chain leaves the vocal far under the limiter; bring it up to mix level in the limiter
+    // (its gain + −1 dBTP ceiling): to sit under the beat when the plan knows it, else −18 LUFS.
+    const makeup = Math.round(clamp(plan.trackGainDb ?? (-18 - plan.stages.lufsAfter), 0, 24) * 10) / 10;
+    const types = new Set<string>(plan.chain.map(p => p.type));
+    const ops: Op[] = ins.fx.filter(f => types.has(f.type)).map(f => ({ op: 'removeFx', fxId: f.id }) as Op);
+    for (const p of plan.chain) {
+      const f = newFx(S.catalog, allocId(), p.type, S.project.bpm);
+      f.params = { ...f.params, ...p.params };
+      f.mix = p.mix;
+      f.bypass = !p.enabled;
+      if (p.type === 'limit') f.params.gain = clamp((f.params.gain ?? 0) + makeup, 0, 24);
+      ops.push({ op: 'putFx', insertId: ins.id, fx: f });
+    }
+    commit(ops, 'Auto wokal');
+    setU({ mixSel: ins.id });
+    const a = plan.analysis, st = plan.stages;
+    say('Auto wokal: ' + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
+      + ' · +' + makeup.toFixed(1) + ' dB w limiterze · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
+      + (a.key ? ' · tonacja ' + a.key.name : ' · bez tonacji (autotune wyłączony)')
+      + (plan.warnings.length ? ' · ' + plan.warnings[0] : '')
+      + ' · nagrywając kolejne podejście na tej ścieżce wyłącz efekty (klik „N FX”) — Rider opóźnia odsłuch o ~1,6 s');
+  } catch (e) { say('Auto wokal nie zadziałał: ' + String(e)); }
+  autoVocalBusy = false;
 }

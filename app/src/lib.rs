@@ -4,6 +4,7 @@
 mod actions;
 mod cli_shim;
 mod library;
+mod models;
 mod plugins;
 mod settings;
 
@@ -18,18 +19,22 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use wave_audio_io::{AudioConfig, AudioIo, AudioStatus};
 use wave_engine::{Engine, Op, Project, StateDto};
+use wave_midi_in::{MidiDevice, MidiInput, MidiStatus};
 
 pub use cli_shim::CliStatus;
 
 pub struct App {
     pub engine: Arc<Engine>,
     pub audio: AudioIo,
+    pub midi: Arc<MidiInput>,
     pub plugins: Arc<plugins::Plugins>,
     pub settings: Mutex<settings::Settings>,
     pub status: Mutex<AudioStatus>,
     pub cli: Mutex<CliStatus>,
     /// Set while an offline bounce is running; flipped by `export_cancel`.
     pub export_cancel: AtomicBool,
+    /// Why the installed RMVPE model could not be used, if it could not.
+    pub model_error: Mutex<Option<String>>,
     session: Mutex<Option<wave_session::Server>>,
 }
 
@@ -180,9 +185,47 @@ async fn pitch_analyze(app: St<'_>, clip_id: u64) -> R<std::sync::Arc<wave_engin
 }
 
 #[tauri::command]
+async fn pitch_target(app: St<'_>, clip_id: u64, reference: Option<wave_engine::RefTune>) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
+    let e = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || e.pitch_target(clip_id, reference)).await.map_err(es)?.map_err(es)
+}
+
+#[tauri::command]
+async fn f0_model_status(app: St<'_>) -> R<models::ModelStatus> {
+    Ok(models::status(&app.engine, app.model_error.lock().clone()))
+}
+
+#[tauri::command]
+async fn f0_model_install(app: St<'_>, handle: AppHandle) -> R<models::ModelStatus> {
+    let a = app.inner().clone();
+    let h = handle.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        models::install(|done, total| {
+            let _ = h.emit("model-progress", json!({ "id": "rmvpe", "done": done, "total": total }));
+        })?;
+        models::activate(&a.engine).map(|_| ())
+    })
+    .await
+    .map_err(es)?;
+    *app.model_error.lock() = res.as_ref().err().cloned();
+    if let Err(e) = &res {
+        let _ = handle.emit("model-progress", json!({ "id": "rmvpe", "done": 0, "total": 0, "error": e }));
+    }
+    res.map(|_| models::status(&app.engine, None))
+}
+
+#[tauri::command]
 async fn music_analyze(app: St<'_>, clip_id: Option<u64>, exclude_fx: Option<u64>) -> R<wave_engine::music::MusicAnalysis> {
     let e = app.engine.clone();
     tauri::async_runtime::spawn_blocking(move || e.music_analysis(clip_id, exclude_fx)).await.map_err(es)?.map_err(es)
+}
+
+/// "Auto wokal": measures a vocal clip (and the beat's key) and returns the calibrated
+/// insert chain for its track. Read-only: the UI applies the chain with `apply_ops`.
+#[tauri::command]
+async fn auto_vocal_plan(app: St<'_>, clip_id: u64, beat_clip_id: Option<u64>, style: Option<wave_engine::autovocal::Style>) -> R<wave_engine::autovocal::AutoVocalPlan> {
+    let e = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || e.auto_vocal_plan(clip_id, beat_clip_id, style.unwrap_or_default())).await.map_err(es)?.map_err(es)
 }
 
 #[tauri::command]
@@ -273,6 +316,43 @@ async fn audio_set_config(app: St<'_>, handle: AppHandle, config: AudioConfig) -
     .await
     .map_err(es)?;
     let _ = handle.emit("audio-status", &st);
+    Ok(st)
+}
+
+// ---------------------------------------------------------------- MIDI keyboard
+
+/// The input ports the OS lists right now (rescanned on every call).
+#[tauri::command]
+async fn midi_list_devices(app: St<'_>) -> R<Vec<MidiDevice>> {
+    let a = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || a.midi.list()).await.map_err(es)
+}
+
+/// Chooses the keyboard (`None` = none) and opens it; the choice is saved and reopened at startup.
+#[tauri::command]
+async fn midi_select_device(app: St<'_>, id: Option<String>) -> R<MidiStatus> {
+    let a = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let st = a.midi.select(id.as_deref(), None);
+        let mut s = a.settings.lock();
+        s.midi_device = st.selected.clone();
+        s.save();
+        st
+    })
+    .await
+    .map_err(es)
+}
+
+#[tauri::command]
+async fn midi_status(app: St<'_>) -> R<MidiStatus> {
+    Ok(app.midi.status())
+}
+
+/// Which Channel Rack channel (instrument) the keyboard plays; `None` = the first pitched one.
+#[tauri::command]
+async fn midi_set_target(app: St<'_>, channel: Option<u64>) -> R<MidiStatus> {
+    let st = app.midi.set_target(channel);
+    app.engine.midi_configure(channel, st.connected.is_some());
     Ok(st)
 }
 
@@ -481,15 +561,47 @@ pub fn run() {
         }
     }
     let audio = AudioIo::spawn(engine.clone());
+    let events: Arc<std::sync::OnceLock<AppHandle>> = Arc::new(std::sync::OnceLock::new());
+    let midi = {
+        let (e1, e2, ev1, ev2) = (engine.clone(), engine.clone(), events.clone(), events.clone());
+        MidiInput::start(
+            Arc::new(wave_midi_in::MidirBackend),
+            wave_midi_in::Hooks {
+                message: Arc::new(move |m| e1.midi_event(m)),
+                status: Arc::new(move |st: &MidiStatus| {
+                    // a device appearing or vanishing switches live notes on/off (and releases them)
+                    e2.midi_configure(st.target, st.connected.is_some());
+                    if let Some(h) = ev1.get() {
+                        let _ = h.emit("midi-status", st);
+                    }
+                }),
+                note: Arc::new(move |n| {
+                    if let Some(h) = ev2.get() {
+                        let _ = h.emit("midi-note", n);
+                    }
+                }),
+            },
+        )
+    };
     let app = Arc::new(App {
         engine: engine.clone(),
         audio,
+        midi,
         plugins,
         status: Mutex::new(AudioStatus::default()),
         settings: Mutex::new(settings),
         cli: Mutex::new(cli_shim::install()),
         export_cancel: AtomicBool::new(false),
+        model_error: Mutex::new(None),
         session: Mutex::new(None),
+    });
+    // the pitch model loads in the background; analysis uses YIN until it is ready
+    let a = app.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = models::activate(&a.engine) {
+            log::warn!("{e}");
+            *a.model_error.lock() = Some(e);
+        }
     });
 
     // live session for the CLI
@@ -527,6 +639,15 @@ pub fn run() {
                 let st = a.audio.start(cfg);
                 *a.status.lock() = st;
             });
+            let _ = events.set(tapp.handle().clone());
+            // reopen the saved keyboard (it may be unplugged: the status says so, and it opens when it returns)
+            let a = app_setup.clone();
+            std::thread::spawn(move || {
+                let saved = a.settings.lock().midi_device.clone();
+                if let Some(d) = saved {
+                    a.midi.select(Some(&d.id), Some(&d.name));
+                }
+            });
             let h = tapp.handle().clone();
             engine.on_change(move |dto| {
                 let _ = h.emit("state", dto);
@@ -539,8 +660,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, music_analyze, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config,
+            midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save, export_audio, export_cancel,
             vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status

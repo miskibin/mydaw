@@ -101,6 +101,17 @@ moves go through the mixer fast path (`MixState.chans`) without a timeline rebui
 ringing notes follow them. Auditions (`note_audition`) and the pattern loop preview
 (`pattern_play`) are commands to the audio thread, not edits.
 
+**Silence skipping.** An insert whose input is exact digital silence for longer than its
+chain's tail (each `Processor::tail_samples`, summed, plus the dry-path delays) is not
+processed: its effects are settled once (`Processor::park`) and skipped until sound returns;
+an effect with no known tail (`None`, e.g. hosted plugins) keeps its insert running. Tune,
+Voice and Denoise idle after a second of silence themselves, so a skipped chain and a
+processed one give the same output (`crates/engine/tests/silence_skip.rs`, below -120 dB).
+Live keyboard events do not take the core lock: they read an atomic snapshot (device live,
+target channel, armed insert; refreshed on every sync) and push into a dedicated ring that
+the audio thread drains with the command ring. Offline renders may run the insert chains on
+worker threads (`Engine::set_render_workers`), bit-identical to one thread.
+
 Effect types: `eq` (7 `bands`), `comp`, `sat`, `delay`, `reverb`, `limit`,
 `vst3` (`plugin: {format,path,cid,name,vendor,state}`). Parameter ids, ranges
 and presets come from `fx_catalog` — the UI must not hard-code them.
@@ -143,8 +154,12 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `fx_catalog` | – | `{types:{[type]:{name, params:[{id,label,min,max,def,unit,log}]}}, presets:{[type]:[{name, params?, bands?, beats?}]}}` |
 | `import_audio` | `{paths, track?, beat?}` | `{sourceIds, clipIds}` (placed clips only when track/beat given) |
 | `source_peaks` | `{id, norm?, rev?}` | `ArrayBuffer` of f32 `[min,max]` pairs, 100 per second of audio |
-| `pitch_analyze` | `{clipId}` | `{rate, curve: (midi\|null)[], levels: number[], notes: [{start,end,pitch,level}]}` — pitch every 1/rate s (null = unvoiced: breath, sibilant, silence); times in seconds of the source |
+| `pitch_analyze` | `{clipId}` | `{rate, curve: (midi\|null)[], levels: number[], confidence: number[], notes: [{start,end,pitch,level}], backend: "rmvpe"\|"yin"}` — pitch every 1/rate s (null = unvoiced: breath, sibilant, silence); times in seconds of the source |
+| `pitch_target` | `{clipId, reference?: RefTune}` | `PitchTarget` (below) — Tune to Reference for the clip, with `reference` or the clip's own `tune.reference` (preview before applying) |
+| `f0_model_status` | – | `{id, name, bytes, installed, backend, licenseNote, licenseUrl, path, error}` |
+| `f0_model_install` | – | – ; downloads RMVPE, verifies size and SHA-256, activates it; progress as event `model-progress {id,done,total,error?}` |
 | `music_analyze` | `{clipId?, excludeFx?}` | `{tempo: {bpm, confidence, candidates:[{bpm,score}], firstBeat}\|null, key: {root, minor, confidence, candidates:[{root,minor,score}], chroma:number[12], tuningCents}\|null}` — tempo and key of a clip, or of the project's active audio clips (excluding tracks routed to `excludeFx`'s insert) |
+| `auto_vocal_plan` | `{clipId, beatClipId?, style?: "natural"\|"hard"}` | `AutoVocalPlan` (`ui/src/api/types.ts`): `{version, style, analysis, chain: [{type, params, mix, enabled, note}], trackGainDb\|null, stages, warnings}` — "Auto wokal": measures the vocal clip's region and calibrates tune → rider → fet → comp → deess → reverb → limit on it (`crates/engine/src/autovocal.rs`; key from `beatClipId`, else from the tracks not routed to the vocal's insert). Read-only, seconds per minute of audio; the UI applies the chain with `apply_ops` |
 | `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied) |
 | `trim_clip` | `{clipId}` | `{sourceId}` — writes a new file with only the clip region, clip now points at it |
 | `flatten_comp` | `{clipId}` | `{sourceId}` — renders a comp clip to a new file; the clip becomes an `audio` clip, the takes go (one undo step) |
@@ -170,7 +185,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `cli_status` | – | `{installed, command, path, note?}` |
 
 Events: `state` (a `StateDto`, after every change from any origin: UI, CLI,
-undo, import, recording, file open), `library-progress`, `audio-status`.
+undo, import, recording, file open), `library-progress`, `model-progress`, `audio-status`.
 
 ```ts
 type StateDto = { project: Project; revision: number; canUndo: boolean; canRedo: boolean;
@@ -213,7 +228,8 @@ f64 patBeat         // beats into the pattern the loop preview plays; −1 = sto
 | --- | --- |
 | `eq` | `[0..24]` current dynamic gain offset of band *k* in dB (0 for static bands) |
 | `fet` | `[0]` gain reduction dB, `[1]` input peak dBFS (after the Input knob), `[2]` output peak dBFS |
-| `deess` | `[0]` gain reduction dB, `[1]` sidechain (high band) level dB, `[2]` sibilance 0..1, `[3]` threshold dB |
+| `deess` | `[0]` gain reduction dB, `[1]` sidechain (high band) level dB — with Detect = Relative the high/low band energy ratio dB, `[2]` sibilance 0..1, `[3]` threshold dB |
+| `rider` | `[0]` gain applied dB, `[1]` word level dB (K-weighted, ~200 ms), `[2]` phrase level dB (~2 s, confident vocal only), `[3]` vocal confidence 0..1, all at the moment being heard. Look-ahead latency (Short ≈ 0.3 s, Long ≈ 1.6 s: the offline research windows exactly) is compensated by PDC |
 | `denoise` | `[0..16]` learned noise floor dB per band, `[16..32]` gain applied per band dB (≤ 0); 16 log bands 50 Hz – 16 kHz. Total reduction in `grDb`. Adds `fft_size` (2048 at ≤ 64 kHz) samples of latency, compensated by PDC |
 | `tune` | `[0]` detected input Hz (0 = unvoiced), `[1]` target note Hz, `[2]` output Hz, `[3]` confidence 0..1, `[4]` input offset from target in cents, `[5]` correction applied in cents |
 | `voice` | `[0]` detected input Hz (0 = unvoiced), `[1]` output Hz, `[2]` confidence 0..1, `[3]` pitch shift applied in semitones. Same latency as `tune`, compensated by PDC; an effect's dry/wet (`fx.mix`) delays its dry path by the effect's latency, so blends line up |
@@ -321,3 +337,48 @@ movement inside the note toward its centre; `gain` dB). Start from
 `pitch_analyze` notes, edit, send with `putClips`. Rendering is offline and
 latency-free; during a gesture the previous render keeps playing and the new
 one is made at `end_gesture`.
+
+### Tune to Reference (`crates/engine/src/reference.rs`)
+
+`clip.tune.reference = {source, correction, vibrato, influence, octave: number|null, key, scale}`
+(0..1 amounts; `octave` null = automatic) makes another source the clip's
+melody. Offline, deterministic, and the same code for GUI, CLI and tests:
+
+1. **Analysis** — pitch (`F0Estimator`: RMVPE through `ort` when its model is
+   installed, else YIN; 200 frames/s, MIDI, NaN = unvoiced) and content
+   (MFCC, 100 frames/s; the spectral envelope c1–c6, which survives another
+   singer, octave and vowel colour) of take and reference.
+2. **Alignment** — coarse subsequence DTW over the whole reference finds where
+   the take is; a banded DTW refines it with pitch class and contour shape.
+   If that scores low, a content-only path is tried too. A jump-and-stall of
+   the path (an implausible tempo map) is bridged by a straight line and
+   aligned again narrowly around it, kept only if the content there vouches
+   for it.
+3. **Confidence** per frame — plausible tempo map (a veto, lifted where the
+   content matches far better than chance), content against chance, contour
+   correlation, and a gate on the take being more than 7 semitones from the
+   reference (exact octave slips of the detector excepted). The median over
+   sung frames is the score; below 0.3 the reference is refused and nothing
+   is corrected.
+4. **Register** — the multiple of 12 bringing the reference closest to the take.
+5. **Target** — the reference's notes (segmented on the take's time axis) give
+   centres; the take's own notes give vibrato and transitions (movement around
+   a drift curve; octave slips of the detector and transitions to neighbours
+   excluded from the drift). `target = take + correction·gate(confidence)·(centre + vibrato·movement − take)`,
+   the interval folded to ±6 semitones so a detector octave slip still moves by
+   the right amount.
+6. **Render** — the existing TD-PSOLA with a continuous ratio(t), smoothed
+   ±17.5 ms; manual note edits apply on top; a clip whose correction is zero
+   everywhere renders bit-identical to its source.
+
+```ts
+type PitchTarget = { rate: number; start: number;            // first analysis frame of the region
+  sourceF0: (number|null)[]; referenceF0: (number|null)[]; targetF0: (number|null)[];
+  alignmentConfidence: number[]; refTime: number[];          // seconds into the reference
+  octave: number; notes: Note[]; score: number; reason: string | null };  // reason set = refused
+```
+
+The RMVPE model is not shipped: `f0_model_install` downloads it (URL,
+size, SHA-256 and licence link are constants in `crates/rmvpe`) to
+`<data>/Models/rmvpe.onnx`; `WAVE_RMVPE_MODEL` overrides the path.
+`crates/tune-bench` measures the whole pipeline (see `docs/cli.md`).

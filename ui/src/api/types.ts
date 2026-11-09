@@ -14,10 +14,15 @@ export interface Track {
   id: Id; name: string; color: string;
   muted: boolean; solo: boolean; arm: boolean;
   vol: number; h: number; insert: Id;
+  /** Instrument icon id (ui/instIcons INST_ICONS), absent = none. */
+  icon?: string | null;
 }
 
-export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'vst3';
+export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'rider' | 'vst3';
+/** Built-in kinds the effect picker lists (the views keep a label and blurb per kind). */
 export type BuiltinKind = Exclude<FxKind, 'vst3'>;
+/** Every built-in kind, including ones the picker does not list yet ('rider': added by "Auto wokal"). */
+export type AnyBuiltinKind = Exclude<FxKind, 'vst3'>;
 export type BandType = 'lowcut' | 'lowshelf' | 'peak' | 'highshelf' | 'highcut' | 'notch' | 'bandpass' | 'tilt';
 /** Which part of the stereo image a band works on. */
 export type Placement = 'stereo' | 'left' | 'right' | 'mid' | 'side';
@@ -103,12 +108,33 @@ export interface Clip {
 
 /** Times in seconds of the source; `shift`/`formant` in cents, `drift` 0..1, `gain` dB. */
 export interface NoteEdit { start: number; end: number; shift: number; drift: number; formant: number; gain: number }
-/** `pencil`: hand-drawn `[seconds, midi]` points, sorted; gaps > 30 ms end a run. */
-export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][] }
+/** `pencil`: hand-drawn `[seconds, midi]` points, sorted; gaps > 30 ms end a run.
+ *  `reference`: Tune to Reference — the base pitch comes from another performance; notes and pencil apply on top. */
+export interface ClipTune { notes: NoteEdit[]; pencil?: [number, number][]; reference?: RefTune | null }
+/** Tune to Reference: `source` = the reference audio; correction/vibrato/influence 0..1;
+ *  `octave` in semitones (multiple of 12), null = automatic; key 0..11 and scale 0..4 for the non-reference share. */
+export interface RefTune { source: Id; correction: number; vibrato: number; influence: number; octave?: number | null; key?: number; scale?: number }
 
-/** `pitch_analyze`: pitch every 1/rate s (null = unvoiced), levels 0..1, segmented notes (seconds of the source). */
+/** `pitch_analyze`: pitch every 1/rate s (null = unvoiced), levels 0..1, segmented notes (seconds of the source).
+ *  `confidence` 0..1 per frame; `backend` = the detector ("rmvpe" or "yin"). */
 export interface NoteBlob { start: number; end: number; pitch: number; level: number }
-export interface PitchAnalysis { rate: number; curve: (number | null)[]; levels: number[]; notes: NoteBlob[] }
+export interface PitchAnalysis { rate: number; curve: (number | null)[]; levels: number[]; notes: NoteBlob[]; confidence?: number[]; backend?: string }
+
+/** `pitch_target`: per analysis frame from `start` (null = unvoiced/none). `targetF0` is the base pitch the
+ *  engine renders; where `alignmentConfidence` is ~0 it equals the take's own pitch. `notes` are the
+ *  reference's notes on the take's time axis. `reason` is set when the reference was rejected. */
+export interface PitchTarget {
+  rate: number; start: number;
+  sourceF0: (number | null)[]; referenceF0: (number | null)[]; targetF0: (number | null)[];
+  alignmentConfidence: number[]; refTime: (number | null)[];
+  octave: number; notes: NoteBlob[]; score: number; reason: string | null;
+}
+/** The optional RMVPE pitch model (`f0_model_status`). */
+export interface F0ModelStatus {
+  id: string; name: string; bytes: number; installed: boolean; backend: string;
+  licenseNote: string; licenseUrl: string; path: string; error: string | null;
+}
+export interface ModelProgress { id: string; done: number; total: number; error?: string }
 
 export interface TempoCandidate { bpm: number; score: number }
 export interface TempoEstimate { bpm: number; confidence: number; candidates: TempoCandidate[]; firstBeat: number }
@@ -118,6 +144,55 @@ export interface KeyEstimate {
   candidates: KeyCandidate[]; chroma: number[]; tuningCents: number;
 }
 export interface MusicAnalysis { tempo: TempoEstimate | null; key: KeyEstimate | null }
+
+/** `auto_vocal_plan` (crates/engine/src/autovocal.rs): `natural` = sung, gentle tune; `hard` = rap windows, fast retune. */
+export type AutoVocalStyle = 'natural' | 'hard';
+/** One insert effect of the planned chain, in chain order. Apply as `PutFx` with these params and `mix`. */
+export interface PlannedFx {
+  type: AnyBuiltinKind;
+  /** Full parameter set (catalog ids). */
+  params: Record<string, number>;
+  /** Effect dry/wet (`Fx.mix`, 0..1). */
+  mix: number;
+  /** false: proposed but should be added bypassed (e.g. tune without a detected key). */
+  enabled: boolean;
+  /** One line on why (tooltip). */
+  note: string;
+}
+export interface AutoVocalAnalysis {
+  durationS: number; sampleRate: number; peakDbfs: number; truePeakDbtp: number; lufs: number;
+  /** Typical sung word level (K-weighted, 200 ms) = the rider's target. */
+  wordLevelDb: number; noiseFloorDb: number;
+  /** Share of the take that is confident vocal, 0..1. */
+  sungShare: number;
+  /** p95 high/low band ratio (≥ 5 kHz vs below), dB. */
+  sibilanceDb: number;
+  key: { root: number; minor: boolean; name: string; confidence: number } | null;
+  /** Share of voiced pitch on the beat's scale (< 0.75 → tune snaps chromatically). */
+  scaleShare: number | null;
+  pitchOffCents: number | null;
+  beatLufs: number | null;
+}
+export interface AutoVocalStages {
+  /** Rider gain on confident frames, p5 / p50 / p95 dB. */
+  riderGainDb: [number, number, number];
+  /** [research target, engine] pairs. */
+  fetP99GrDb: [number, number]; compMeanGrDb: [number, number]; sibilanceAfterDb: [number, number];
+  /** 400 ms loudness IQR before → after the dynamics, dB. */
+  iqr400Db: [number, number];
+  lufsAfter: number; truePeakAfterDbtp: number;
+}
+export interface AutoVocalPlan {
+  version: number;
+  style: AutoVocalStyle;
+  analysis: AutoVocalAnalysis;
+  /** Insert chain, first = first in the chain: tune, rider, fet, comp, deess, reverb, limit. */
+  chain: PlannedFx[];
+  /** Suggested vocal level change (dB) to sit 1.2 LU under the beat; null without a beat clip. */
+  trackGainDb: number | null;
+  stages: AutoVocalStages;
+  warnings: string[];
+}
 
 /** What an automation moves. `param`: catalog param id, or `band:<i>:f|g|q` of an EQ. */
 export type AutoTarget =
@@ -202,6 +277,26 @@ export interface AudioStatus extends AudioConfig {
   running: boolean; actualRate: number; actualBuffer: number; latencyMs: number;
   inputChannels: number; error: string | null; note: string | null; asioCompiled: boolean;
 }
+
+/** A MIDI input port. `id` is stable per port and is what `midiSelectDevice` takes. */
+export interface MidiDevice { id: string; name: string }
+/** The last key event, for an activity light. `velocity` is 1..127 (0 on a release). */
+export interface MidiLastNote { key: number; velocity: number; on: boolean }
+export interface MidiStatus {
+  /** The device that is open and feeding notes right now. */
+  connected: MidiDevice | null;
+  /** The device the user chose, open or not (it may be unplugged; it reopens when it returns). */
+  selected: MidiDevice | null;
+  /** Why the chosen device is not open (unplugged, busy), or the last error. */
+  error: string | null;
+  lastNote: MidiLastNote | null;
+  /** Key events received since the app started: a change means new activity (poll this). */
+  noteCount: number;
+  /** Channel (instrument) the keyboard plays; null = the first pitched channel. */
+  target: Id | null;
+}
+/** Event `midi-note`: one key down/up as it happens. */
+export interface MidiNoteEvent { note: MidiLastNote; count: number }
 
 export interface Kit { id: string; name: string; description: string; bytes: number; count: number; installed: boolean }
 export interface LibraryList { kits: Kit[]; folders: string[] }

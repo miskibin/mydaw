@@ -167,8 +167,24 @@ fn old_projects_migrate_and_render_like_before() {
     let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
     assert!(e.open(&path).unwrap().is_empty());
     let migrated = e.project();
-    // the migration is exactly the new demo: built-in channels in Kick, Clap, Hat, Bass order
-    assert_eq!(migrated, Project::demo());
+    // the migration is exactly the new demo: built-in channels in Kick, Clap, Hat, Bass order.
+    // Reverb and limiter settings are the exception: their parameter sets and factory
+    // presets changed with the v2 DSP after the fixture was written, and old files keep theirs.
+    let mut expected = Project::demo();
+    for (m, d) in migrated.inserts.iter().zip(expected.inserts.iter_mut()) {
+        for (fm, fd) in m.fx.iter().zip(d.fx.iter_mut()) {
+            if fm.kind == FxKind::Reverb || fm.kind == FxKind::Limit {
+                fd.params = fm.params.clone();
+                fd.preset = fm.preset;
+            }
+            // parameters added later (Comp "det") are absent from old files; they read as
+            // their default, which is the old behaviour
+            if fm.kind == FxKind::Comp && !fm.params.contains_key("det") {
+                fd.params.remove("det");
+            }
+        }
+    }
+    assert_eq!(migrated, expected);
     assert!(migrated
         .patterns
         .iter()
@@ -202,7 +218,7 @@ fn old_projects_migrate_and_render_like_before() {
         }
     }
     // and the in-memory demo renders bit-identically to the migrated file
-    let demo = Engine::new(Project::demo(), Arc::new(NoPlugins))
+    let demo = Engine::new(expected, Arc::new(NoPlugins))
         .render(0.0, 32.0, 1.0, SR)
         .unwrap();
     assert!(demo == out, "demo and migrated file differ");
@@ -624,4 +640,36 @@ fn pattern_preview_and_auditions_are_not_edits() {
     assert_eq!(e.revision(), r);
     assert!(e.note_audition(424242, None, 1.0, None).is_err());
     assert!(e.pattern_play(Some(424242)).is_err());
+}
+
+/// Rewrites `fixtures/demo_v1_render.json` after an intended DSP change of a built-in effect
+/// the demo uses: `cargo test -p wave-engine --test patterns regenerate_demo_v1_render -- --ignored`.
+#[test]
+#[ignore]
+fn regenerate_demo_v1_render() {
+    let dir = tmp("regen");
+    let path = dir.join("demo_v1.wave");
+    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+    std::fs::copy(format!("{fixtures}/demo_v1.wave"), &path).unwrap();
+    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    assert!(e.open(&path).unwrap().is_empty());
+    let out = e.render(0.0, 32.0, 1.0, SR).unwrap();
+    let w = 960usize;
+    let rms: Vec<[f64; 2]> = out
+        .chunks(w * 2)
+        .map(|c| {
+            let n = (c.len() / 2) as f64;
+            let (l, r) = c.as_chunks::<2>().0.iter().fold((0f64, 0f64), |(l, r), f| (l + (f[0] as f64).powi(2), r + (f[1] as f64).powi(2)));
+            [(l / n).sqrt(), (r / n).sqrt()]
+        })
+        .collect();
+    let peak = out.iter().fold(0f32, |m, v| m.max(v.abs()));
+    let json = serde_json::json!({
+        "frames": out.len() / 2,
+        "note": "RMS per 20 ms window (L,R) of the demo_v1.wave fixture migrated and rendered 0..32 beats + 1 s tail at 48 kHz; notes from the engine before channels existed (commit d507fb6), regenerated for the v2 reverb and limiter DSP",
+        "peak": peak,
+        "rms": rms,
+        "window": w,
+    });
+    std::fs::write(format!("{fixtures}/demo_v1_render.json"), serde_json::to_string(&json).unwrap()).unwrap();
 }

@@ -4,6 +4,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::content::ContentFeatures;
+use crate::pitch::{F0Estimator, PitchAnalysis};
+use crate::reference::{Alignment, PitchTarget};
+
 /// Interleaved stereo at the file's own rate, padded for cubic interpolation
 /// (`wave_audio_file::PAD_LEAD` frames before, `PAD_TRAIL` after).
 pub struct Audio {
@@ -103,23 +107,62 @@ fn peaks_of(interleaved: &[f32], sr: u32) -> Vec<f32> {
     out
 }
 
+type Variant = (u64, bool, bool);
+/// (take variant, reference variant, first and last analysis frame of the take's region)
+pub type AlignKey = (Variant, Variant, usize, usize);
+/// Alignments kept (each is a few floats per 5 ms of the take).
+const MAX_ALIGNMENTS: usize = 32;
+
 /// Every loaded source, plus normalised/reversed variants built on demand.
 #[derive(Default)]
 pub struct SourceStore {
     pub audio: HashMap<u64, Arc<Audio>>,
-    derived: HashMap<(u64, bool, bool), Arc<Audio>>,
-    analysis: HashMap<(u64, bool, bool), Arc<crate::pitch::PitchAnalysis>>,
-    music: HashMap<(u64, bool, bool), Arc<crate::music::SourceMusic>>,
+    derived: HashMap<Variant, Arc<Audio>>,
+    analysis: HashMap<Variant, Arc<PitchAnalysis>>,
+    content: HashMap<Variant, Arc<ContentFeatures>>,
+    aligned: HashMap<AlignKey, (u64, Arc<Alignment>)>,
+    align_tick: u64,
+    music: HashMap<Variant, Arc<crate::music::SourceMusic>>,
     /// clip id → (hash of its edits, rendered audio)
     tuned: HashMap<u64, (u64, Arc<Audio>)>,
+    /// Pitch detector for analysis (`None` = built-in YIN).
+    estimator: Option<Arc<dyn F0Estimator>>,
+}
+
+/// Mono mix of a variant.
+pub fn mono_of(audio: &Audio) -> Vec<f32> {
+    audio.content().chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
+}
+
+/// The part of its source a clip plays, in seconds.
+pub fn clip_region(c: &crate::model::Clip, bpm: f64, source_seconds: f64) -> (f64, f64) {
+    let spb = 60.0 / bpm.max(1.0);
+    let a = (c.offset * spb).clamp(0.0, source_seconds);
+    (a, ((c.offset + c.len) * spb).clamp(a, source_seconds))
 }
 
 impl SourceStore {
     pub fn insert(&mut self, id: u64, a: Arc<Audio>) {
         self.derived.retain(|k, _| k.0 != id);
         self.analysis.retain(|k, _| k.0 != id);
+        self.content.retain(|k, _| k.0 != id);
+        self.aligned.retain(|k, _| k.0 .0 != id && k.1 .0 != id);
         self.music.retain(|k, _| k.0 != id);
         self.audio.insert(id, a);
+    }
+
+    /// Switches the pitch detector; every analysis (and what depends on it) is redone.
+    pub fn set_estimator(&mut self, e: Option<Arc<dyn F0Estimator>>) {
+        self.estimator = e;
+        self.analysis.clear();
+        self.aligned.clear();
+        self.tuned.clear();
+    }
+    pub fn estimator(&self) -> Option<Arc<dyn F0Estimator>> {
+        self.estimator.clone()
+    }
+    pub fn backend(&self) -> &'static str {
+        self.estimator.as_ref().map(|e| e.name()).unwrap_or("yin")
     }
     pub fn get(&self, id: u64) -> Option<&Arc<Audio>> {
         self.audio.get(&id)
@@ -135,15 +178,88 @@ impl SourceStore {
 
 impl SourceStore {
     /// Pitch analysis of a source variant (cached).
-    pub fn analysis(&mut self, id: u64, norm: bool, rev: bool) -> Option<Arc<crate::pitch::PitchAnalysis>> {
+    pub fn analysis(&mut self, id: u64, norm: bool, rev: bool) -> Option<Arc<PitchAnalysis>> {
         if let Some(a) = self.analysis.get(&(id, norm, rev)) {
             return Some(a.clone());
         }
         let audio = self.variant(id, norm, rev)?;
-        let mono: Vec<f32> = audio.content().chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect();
-        let a = Arc::new(crate::pitch::analyze(&mono, audio.sr as f32));
+        let a = Arc::new(crate::pitch::analyze_with(&mono_of(&audio), audio.sr as f32, self.estimator.as_deref()));
         self.analysis.insert((id, norm, rev), a.clone());
         Some(a)
+    }
+    pub fn cached_analysis(&self, id: u64, norm: bool, rev: bool) -> Option<Arc<PitchAnalysis>> {
+        self.analysis.get(&(id, norm, rev)).cloned()
+    }
+    /// Stores an analysis made outside the store, unless the detector changed meanwhile.
+    pub fn put_analysis(&mut self, id: u64, norm: bool, rev: bool, a: Arc<PitchAnalysis>) {
+        if a.backend == self.backend() || (a.backend == "yin" && self.estimator.is_none()) {
+            self.analysis.insert((id, norm, rev), a);
+        }
+    }
+
+    /// Content features (MFCC) of a source variant (cached).
+    pub fn content(&mut self, id: u64, norm: bool, rev: bool) -> Option<Arc<ContentFeatures>> {
+        if let Some(c) = self.content.get(&(id, norm, rev)) {
+            return Some(c.clone());
+        }
+        let audio = self.variant(id, norm, rev)?;
+        let c = Arc::new(crate::content::mfcc(&mono_of(&audio), audio.sr as f32));
+        self.content.insert((id, norm, rev), c.clone());
+        Some(c)
+    }
+    pub fn cached_content(&self, id: u64, norm: bool, rev: bool) -> Option<Arc<ContentFeatures>> {
+        self.content.get(&(id, norm, rev)).cloned()
+    }
+    pub fn put_content(&mut self, id: u64, norm: bool, rev: bool, c: Arc<ContentFeatures>) {
+        self.content.insert((id, norm, rev), c);
+    }
+
+    pub fn cached_alignment(&mut self, k: &AlignKey) -> Option<Arc<Alignment>> {
+        self.align_tick += 1;
+        let t = self.align_tick;
+        self.aligned.get_mut(k).map(|e| {
+            e.0 = t;
+            e.1.clone()
+        })
+    }
+    /// Keeps at most `MAX_ALIGNMENTS`, dropping the least recently used.
+    pub fn put_alignment(&mut self, k: AlignKey, a: Arc<Alignment>) {
+        self.align_tick += 1;
+        self.aligned.insert(k, (self.align_tick, a));
+        while self.aligned.len() > MAX_ALIGNMENTS {
+            let oldest = *self.aligned.iter().min_by_key(|e| e.1 .0).map(|e| e.0).unwrap();
+            self.aligned.remove(&oldest);
+        }
+    }
+
+    /// Alignment key of a clip's region against its reference, if it has one.
+    pub fn align_key(&mut self, c: &crate::model::Clip, bpm: f64, reference: u64) -> Option<AlignKey> {
+        let audio = self.variant(c.source, c.norm, c.rev)?;
+        let (a, b) = clip_region(c, bpm, audio.seconds());
+        let r = crate::pitch::ANALYSIS_RATE as f64;
+        Some(((c.source, c.norm, c.rev), (reference, false, false), (a * r).round() as usize, (b * r).round() as usize))
+    }
+
+    /// Tune to Reference target of a clip with `params` (computed here if not cached).
+    pub fn pitch_target(&mut self, c: &crate::model::Clip, bpm: f64, params: &crate::model::RefTune) -> Option<Arc<PitchTarget>> {
+        let key = self.align_key(c, bpm, params.source)?;
+        let take = self.analysis(c.source, c.norm, c.rev)?;
+        let al = match self.cached_alignment(&key) {
+            Some(a) => a,
+            None => {
+                let reference = self.analysis(params.source, false, false)?;
+                let (tc, rc) = (self.content(c.source, c.norm, c.rev)?, self.content(params.source, false, false)?);
+                let r = crate::pitch::ANALYSIS_RATE as f64;
+                let al = Arc::new(crate::reference::align(
+                    &crate::reference::Performance { pitch: &take, content: &tc },
+                    (key.2 as f64 / r, key.3 as f64 / r),
+                    &crate::reference::Performance { pitch: &reference, content: &rc },
+                ));
+                self.put_alignment(key, al.clone());
+                al
+            }
+        };
+        Some(Arc::new(target_for(c, &take, &al, params)))
     }
 
     pub fn cached_music(&self, id: u64, norm: bool, rev: bool) -> Option<Arc<crate::music::SourceMusic>> {
@@ -157,13 +273,14 @@ impl SourceStore {
     /// The audio a clip plays: source variant plus its pitch edits. While
     /// `allow_stale` (a drag is in progress) a previous render is reused rather
     /// than re-rendering the whole clip on every mouse move.
-    pub fn clip_audio(&mut self, c: &crate::model::Clip, allow_stale: bool) -> Option<Arc<Audio>> {
+    pub fn clip_audio(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<Arc<Audio>> {
         let base = self.variant(c.source, c.norm, c.rev)?;
-        let Some(tune) = c.tune.as_ref().filter(|t| !t.notes.is_empty() || !t.pencil.is_empty()) else { return Some(base) };
+        let Some(tune) = c.tune.as_ref().filter(|t| t.is_active()) else { return Some(base) };
+        let region = tune.reference.and_then(|r| self.align_key(c, bpm, r.source)).map(|k| (k.2, k.3));
         let hash = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (c.source, c.norm, c.rev).hash(&mut h);
+            (c.source, c.norm, c.rev, region).hash(&mut h);
             serde_json::to_string(tune).unwrap_or_default().hash(&mut h);
             h.finish()
         };
@@ -173,10 +290,21 @@ impl SourceStore {
             }
         }
         let an = self.analysis(c.source, c.norm, c.rev)?;
-        let out = Arc::new(crate::tune_render::render(&base, &an, tune));
+        let target = tune.reference.and_then(|r| self.pitch_target(c, bpm, &r));
+        let out = Arc::new(crate::tune_render::render(&base, &an, tune, target.as_deref()));
         self.tuned.insert(c.id, (hash, out.clone()));
         Some(out)
     }
+}
+
+/// The target for clip `c` from a ready alignment. The note spans are the editor's
+/// segmentation when the clip has one, else the analysis'.
+pub fn target_for(c: &crate::model::Clip, take: &PitchAnalysis, al: &Alignment, params: &crate::model::RefTune) -> PitchTarget {
+    let spans: Vec<(f64, f64)> = match c.tune.as_ref().filter(|t| !t.notes.is_empty()) {
+        Some(t) => t.notes.iter().map(|n| (n.start, n.end)).collect(),
+        None => take.notes.iter().map(|n| (n.start, n.end)).collect(),
+    };
+    crate::reference::target(take, &spans, al, params)
 }
 
 /// Writes interleaved stereo float to a 32-bit float WAV.

@@ -30,7 +30,7 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         p.inserts.push(Insert { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), vol: VOL_UNITY, pan: 0.0, muted: false, solo: false, fx: vec![] });
     }
     for (i, name) in names.iter().enumerate() {
-        p.tracks.push(Track { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), muted: false, solo: false, arm: false, vol: VOL_UNITY, h: 56.0, insert: i as Id + 1 });
+        p.tracks.push(Track { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), muted: false, solo: false, arm: false, vol: VOL_UNITY, h: 56.0, insert: i as Id + 1, icon: None });
     }
     let limiter = new_fx(900, FxKind::Limit, p.bpm);
     p.inserts[0].fx.push(limiter);

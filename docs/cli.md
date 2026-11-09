@@ -129,6 +129,53 @@ check its work, then listen to the WAV. The same bounce is available in the
 app as **Eksport** (`Ctrl+Shift+R`): song or loop, a 0/2/8 s effect tail, and
 44.1 or 48 kHz, written as a 32-bit float stereo WAV.
 
+## Tune to Reference
+
+Pulls a vocal take onto another performance of the same melody (a guide vocal,
+an acapella, a better take) that is already a source in the project. Nothing is
+generated and the take is not time-stretched: the reference is aligned to the
+take (content, then pitch shape), brought to the take's octave, and its notes
+become the take's target; the singer's vibrato and transitions are kept.
+Where the alignment is not trusted (another song, a different part) the take
+is left as sung.
+
+```sh
+wave tune-ref --clip 412 --reference 7                       # source 7 = the guide vocal
+wave tune-ref --clip 412 --reference 7 --correction 80 --vibrato 100 --influence 100 --octave auto
+wave pitch-target --clip 412            # score, octave, the reference's notes, low-confidence stretches
+wave pitch-target --clip 412 --full     # plus every curve (source, reference, target, confidence)
+wave tune-ref --clip 412 --off          # back to manual pitch edits
+wave f0-model                           # which pitch detector runs (RMVPE or YIN) and its install state
+```
+
+`--correction` (how far toward the target), `--vibrato` (how much of the
+singer's own movement is kept) and `--influence` (100 = the reference's note
+centres, 0 = nearest note of `--key`/`--scale`) are percentages. Manual note
+edits on the clip still apply on top.
+
+Without a running app, a whole file:
+
+```sh
+wave tune-file --take take.wav --reference guide.wav --out tuned.wav --json target.json
+```
+
+uses the installed RMVPE model, or `--model rmvpe.onnx`, or `--yin`.
+
+**Pitch detector.** WAVE detects pitch with YIN out of the box. The RMVPE
+model (362 MB, from the RVC project; read its licence first) is better on
+real voices: Pitch Editor → *Pobierz RMVPE* downloads it after showing the
+licence, checks its SHA-256 and switches to it. `WAVE_RMVPE_MODEL=path`
+points at a copy you already have.
+
+**Benchmark.** `cargo run --release -p wave-tune-bench -- synth` (synthetic
+takes with ±25…400 ct errors and drift against references in other voices,
+octaves and tempi, plus unrelated references that must be refused),
+`… -- vocalset --root DIR` (Annotated VocalSet: real singers with injected
+errors, cross-singer references, mismatched references) and `… -- ab --out DIR`
+(a blind A/B listening kit; `ab-score` evaluates the filled-in ratings). Add
+`--rmvpe model.onnx` or `--yin`, and `--json out.json` for the full results.
+Exit code 0 means every criterion passed.
+
 ## Plugins
 
 ```sh

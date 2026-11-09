@@ -42,6 +42,7 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("att", "Attack", 0.1, 100.0, 10.0, "ms", true),
         p("rel", "Release", 10.0, 1000.0, 150.0, "ms", true),
         p("gain", "Makeup", 0.0, 24.0, 0.0, "dB", false),
+        choice("det", "Detect", 0.0, &["Peak", "RMS"]),
     ];
     const SAT: &[ParamDef] = &[
         p("drive", "Drive", 0.0, 36.0, 6.0, "dB", false),
@@ -53,17 +54,30 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("fb", "Feedback", 0.0, 95.0, 35.0, "%", false),
         p("mix", "Mix", 0.0, 100.0, 25.0, "%", false),
     ];
+    // order = dsp::reverb_v2::idx; size/pre/tone/mix are the macros, the rest is "advanced"
     const REVERB: &[ParamDef] = &[
-        p("size", "Decay", 0.3, 8.0, 2.2, "s", true),
-        p("pre", "Pre-delay", 0.0, 200.0, 20.0, "ms", false),
-        p("lo", "Low cut", 20.0, 1000.0, 120.0, "Hz", true),
-        p("hi", "High cut", 1000.0, 20000.0, 8000.0, "Hz", true),
+        p("size", "Decay", 0.2, 6.0, 1.0, "s", true),
+        p("pre", "Pre-delay", 0.0, 150.0, 25.0, "ms", false),
+        p("lo", "Low cut", 20.0, 1000.0, 300.0, "Hz", true),
+        p("hi", "High cut", 2000.0, 16000.0, 7000.0, "Hz", true),
         p("width", "Width", 0.0, 100.0, 100.0, "%", false),
-        p("mix", "Mix", 0.0, 100.0, 25.0, "%", false),
+        p("mix", "Mix", 0.0, 100.0, 15.0, "%", false),
+        p("tone", "Tone", -100.0, 100.0, 0.0, "%", false),
+        choice("space", "Space", 0.0, &["Plate", "Room", "Hall", "Ambience"]),
+        p("duck", "Ducking", 0.0, 12.0, 0.0, "dB", false),
+        p("early", "Early", 0.0, 100.0, 50.0, "%", false),
+        p("bass", "Bass decay", 0.5, 1.5, 1.0, "×", false),
+        p("mod", "Modulation", 0.0, 100.0, 50.0, "%", false),
     ];
+    // order = dsp::limiter_v2::idx
     const LIMIT: &[ParamDef] = &[
         p("gain", "Gain", 0.0, 24.0, 0.0, "dB", false),
-        p("ceil", "Ceiling", -12.0, 0.0, -0.3, "dB", false),
+        p("ceil", "Ceiling", -12.0, 0.0, -1.0, "dBTP", false),
+        p("rel", "Release", 10.0, 1000.0, 80.0, "ms", true),
+        choice("auto", "Auto release", 1.0, &["Off", "On"]),
+        p("look", "Lookahead", 1.0, 5.0, 3.0, "ms", false),
+        p("link", "Stereo link", 0.0, 100.0, 100.0, "%", false),
+        p("out", "Output", -12.0, 0.0, 0.0, "dB", false),
     ];
     const FET: &[ParamDef] = &[
         p("input", "Input", 0.0, 36.0, 8.0, "dB", false),
@@ -80,6 +94,8 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         choice("mode", "Mode", 0.0, &["Split", "Wide"]),
         p("look", "Lookahead", 0.0, 15.0, 5.0, "ms", false),
         choice("listen", "Listen", 0.0, &["Off", "S"]),
+        // Relative: the threshold is on the high/low band energy ratio, independent of level
+        choice("detect", "Detect", 0.0, &["Absolute", "Relative"]),
     ];
     const TUNE: &[ParamDef] = &[
         choice("key", "Key", 0.0, &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]),
@@ -110,7 +126,24 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("drive", "Drive", 0.0, 30.0, 0.0, "dB", false),
         p("out", "Output", -24.0, 12.0, 0.0, "dB", false),
     ];
+    // order = rider::idx. Target/floor are what "Auto wokal" measures on the take; with
+    // Auto target on, the rider estimates them while playing
+    const RIDER: &[ParamDef] = &[
+        p("amount", "Amount", 0.0, 100.0, 50.0, "%", false),
+        p("phrase", "Phrase", 0.0, 100.0, 20.0, "%", false),
+        p("up", "Max boost", 0.0, 12.0, 5.0, "dB", false),
+        p("down", "Max cut", 0.0, 12.0, 6.0, "dB", false),
+        choice("speed", "Speed", 0.0, &["Sung", "Rap"]),
+        choice("auto", "Auto target", 1.0, &["Off", "On"]),
+        p("target", "Target", -60.0, 0.0, -24.0, "dB", false),
+        p("floor", "Noise floor", -100.0, -20.0, -70.0, "dB", false),
+        choice("look", "Look-ahead", 1.0, &["Short", "Long"]),
+        p("out", "Output", -24.0, 24.0, 0.0, "dB", false),
+        // below this word level the rider idles at 0 dB (breaths, bleed, room)
+        p("gate", "Gate", -100.0, -10.0, -60.0, "dB", false),
+    ];
     match kind {
+        FxKind::Rider => RIDER,
         FxKind::Denoise => DENOISE,
         FxKind::Voice => VOICE,
         FxKind::Fet => FET,
@@ -139,11 +172,12 @@ pub fn type_name(kind: FxKind) -> &'static str {
         FxKind::Tune => "Pitch Correct",
         FxKind::Denoise => "Denoiser",
         FxKind::Voice => "Voice",
+        FxKind::Rider => "Vocal Rider",
         FxKind::Vst3 => "VST3",
     }
 }
 
-pub const BUILTIN: [FxKind; 11] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 12] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Rider, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
@@ -256,20 +290,26 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             dly("Slapback", None, 90.0, 0.0, 25.0),
             dly("Długi dub", Some(1.5), 0.0, 65.0, 30.0),
         ],
-        FxKind::Reverb => vec![
-            pr("Domyślny", &[("size", 2.2), ("pre", 20.0), ("lo", 120.0), ("hi", 8000.0), ("width", 100.0), ("mix", 25.0)]),
-            pr("Mały pokój", &[("size", 0.6), ("pre", 5.0), ("lo", 150.0), ("hi", 9000.0), ("width", 70.0), ("mix", 18.0)]),
-            pr("Bęben — krótki", &[("size", 0.9), ("pre", 0.0), ("lo", 200.0), ("hi", 8000.0), ("width", 60.0), ("mix", 15.0)]),
-            pr("Wokal plate", &[("size", 1.8), ("pre", 30.0), ("lo", 250.0), ("hi", 7000.0), ("width", 100.0), ("mix", 22.0)]),
-            pr("Duża sala", &[("size", 3.2), ("pre", 25.0), ("lo", 120.0), ("hi", 6500.0), ("width", 100.0), ("mix", 25.0)]),
-            pr("Ambient", &[("size", 5.0), ("pre", 120.0), ("lo", 300.0), ("hi", 12000.0), ("width", 100.0), ("mix", 45.0)]),
-            pr("Katedra", &[("size", 7.0), ("pre", 60.0), ("lo", 100.0), ("hi", 5000.0), ("width", 100.0), ("mix", 35.0)]),
-        ],
+        FxKind::Reverb => {
+            let rv = |name, size, pre, lo, hi, width, mix, tone, space, duck, bass| {
+                pr(name, &[("size", size), ("pre", pre), ("lo", lo), ("hi", hi), ("width", width), ("mix", mix), ("tone", tone), ("space", space), ("duck", duck), ("early", 50.0), ("bass", bass), ("mod", 50.0)])
+            };
+            vec![
+                rv("Vocal Plate", 1.0, 25.0, 300.0, 7000.0, 100.0, 15.0, 0.0, 0.0, 3.0, 0.8),
+                rv("Vocal Room", 0.6, 10.0, 250.0, 8000.0, 90.0, 12.0, -10.0, 1.0, 0.0, 0.9),
+                rv("Vocal Hall", 2.0, 35.0, 250.0, 6500.0, 100.0, 14.0, -20.0, 2.0, 4.0, 0.8),
+                rv("Ambience", 0.4, 0.0, 200.0, 9000.0, 100.0, 12.0, 10.0, 3.0, 0.0, 1.0),
+                rv("Ballada — długi plate", 2.4, 40.0, 350.0, 6000.0, 100.0, 18.0, -30.0, 0.0, 6.0, 0.8),
+                rv("Bębny — pokój", 0.7, 0.0, 150.0, 9000.0, 80.0, 12.0, 0.0, 1.0, 0.0, 1.0),
+                rv("Wysyłka — hala 100 %", 2.2, 20.0, 200.0, 7000.0, 100.0, 100.0, -10.0, 2.0, 0.0, 0.9),
+            ]
+        }
         FxKind::Limit => vec![
-            pr("Bezpieczny", &[("gain", 0.0), ("ceil", -0.3)]),
-            pr("Streaming −1 dB", &[("gain", 3.0), ("ceil", -1.0)]),
-            pr("Głośny master", &[("gain", 6.0), ("ceil", -0.3)]),
-            pr("Bardzo głośny", &[("gain", 10.0), ("ceil", -0.1)]),
+            pr("Bezpieczny", &[("gain", 0.0), ("ceil", -1.0)]),
+            pr("Streaming −1 dBTP", &[("gain", 4.0), ("ceil", -1.0), ("rel", 80.0)]),
+            pr("Głośny master", &[("gain", 7.0), ("ceil", -1.0), ("rel", 120.0)]),
+            pr("Bardzo głośny", &[("gain", 10.0), ("ceil", -0.5), ("rel", 150.0), ("look", 5.0)]),
+            pr("Przezroczysty", &[("gain", 3.0), ("ceil", -1.0), ("rel", 250.0), ("look", 5.0)]),
         ],
         FxKind::Fet => vec![
             pr("Wokal — klasyk", &[("input", 8.0), ("output", -2.0), ("ratio", 0.0), ("attack", 400.0), ("release", 250.0), ("mix", 100.0)]),
@@ -310,6 +350,13 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Hard tune + drive", &[("mode", 1.0), ("drive", 10.0), ("out", -3.0)]),
             pr("Robot", &[("mode", 2.0), ("drive", 6.0), ("out", -2.0)]),
         ],
+        FxKind::Rider => vec![
+            pr("Wokal — śpiew", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
+            pr("Rap", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 1.0), ("auto", 1.0), ("look", 1.0)]),
+            pr("Delikatnie", &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
+            pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
+            pr("Na żywo (krótki look-ahead)", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 0.0)]),
+        ],
         FxKind::Vst3 => vec![],
     }
 }
@@ -322,7 +369,9 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
     match fx.kind {
         FxKind::Tune | FxKind::Voice => crate::vocal::tune_latency(sample_rate),
         FxKind::Denoise => crate::denoise::latency(sample_rate),
+        FxKind::Rider => crate::rider::latency_samples(fx.params.get("speed").copied().unwrap_or(0.0) as f32, fx.params.get("look").copied().unwrap_or(1.0) as f32, sample_rate),
         // look-ahead delays the audio so the gain is already down when the "s" arrives
+        FxKind::Limit => crate::dsp::limiter_v2::latency_samples(fx.params.get("look").copied().unwrap_or(3.0) as f32, sample_rate),
         FxKind::Deess => ((fx.params.get("look").copied().unwrap_or(5.0).clamp(0.0, 15.0) / 1000.0) * sample_rate as f64) as usize,
         _ => 0,
     }
