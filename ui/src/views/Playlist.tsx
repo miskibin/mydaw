@@ -856,7 +856,7 @@ function LaneHeader(props: { t: Track; i: number }) {
                 <svg width="7" height="7" viewBox="0 0 8 8" style={{ transform: U.takesOpen[t().id] ? 'rotate(90deg)' : 'none' }}><path d="M2 1l4 3-4 3z" fill="currentColor" /></svg>{r().comp.takes.length}
               </button>
             )}</Show>
-            <button class="mini route" title="Kanał miksera" onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? '→M' : '→' + routeIdx()}</button>
+            <button class="mini route" title={'Wyjście ścieżki: ' + (routeIdx() <= 0 ? 'Master' : 'Insert ' + routeIdx()) + ' — kliknij, by zmienić kanał miksera'} onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? 'M' : 'Ins ' + routeIdx()}</button>
             <button class="mini m" classList={{ on: t().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
             <button class="mini s" classList={{ on: t().solo }} title="Solo — tylko ta ścieżka · Ctrl+klik = dodaj do solo" onPointerDown={stop} onClick={e => A.toggleTrackSolo(props.i, e.ctrlKey || e.metaKey)}>S</button>
             <button class="mini r" classList={{ on: t().arm }} title="Uzbrój do nagrywania" onPointerDown={stop} onClick={() => A.armTrack(props.i)}>

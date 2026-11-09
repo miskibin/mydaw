@@ -1,3 +1,4 @@
+import { closeNotebook, NB } from './state/notebook';
 import { ConfirmDialog } from './ui/Confirm';
 import { createEffect, For, onCleanup, onMount, Show } from 'solid-js';
 import { be, isTauri } from './api/backend';
@@ -51,6 +52,7 @@ function onKey(e: KeyboardEvent) {
     if (U.settings) return setU('settings', false);
     if (U.exportOpen) return void A.cancelExportOrClose();
     if (U.help) return setU('help', false);
+    if (NB.open && !U.patWin && !U.plugs.length) return closeNotebook();
     if (U.patWin && !U.plugsHidden && (!U.plugs.length || U.patWin.z > A.topPlug()!.z)) return closePattern();
     if (U.plugs.length) return A.closePlug(A.topPlug()!.fxId);
     if (U.pitchEd) return A.closePitchEditor();

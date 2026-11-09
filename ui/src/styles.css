@@ -67,7 +67,7 @@ a { color: var(--blue); }
 .tbtn:hover { color: var(--fg-hi); }
 .zbtn { width: 26px; height: 26px; border: 0; border-radius: 4px; background: transparent; color: var(--fg2); cursor: pointer; font: 500 14px var(--sans); padding: 0; }
 .zbtn:hover { background: var(--line); }
-.loopText { font: 500 10px var(--mono); letter-spacing: .06em; white-space: nowrap; }
+.loopText { font: 500 10px var(--mono); letter-spacing: .06em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 150px; flex-shrink: 1; min-width: 0; }
 .projName { font: 500 11px var(--sans); color: var(--fg4); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
 .inmeter { position: relative; width: 64px; height: 6px; background: var(--bg0); border-radius: 2px; overflow: hidden; }
 .inmeter > div { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; transform-origin: left; transform: scaleX(0); background: var(--green); }
@@ -477,8 +477,10 @@ select option { background: var(--bg4); color: var(--fg); }
 .toolbar.native > .tbmain > :not(.winbtns) { margin-top: 0; margin-bottom: 0; }
 .winbtns { display: flex; flex: 0 0 auto; flex-shrink: 0; align-self: stretch; margin-left: 4px; }
 /* one row at every width: text buttons turn into icons, then redundant controls drop out */
-@media (max-width: 1300px) { .toolbar .tbtn .lbl { display: none; } .toolbar .tbtn { padding: 0 6px; } .toolbar .zgrp, .toolbar .loopText, .toolbar .projName { display: none; } }
-@media (max-width: 1100px) { .toolbar .snapsel, .toolbar .followbtn { display: none; } }
+@media (max-width: 1300px) { .toolbar .tbtn .lbl { display: none; } .toolbar .tbtn { padding: 0 6px; } .toolbar .loopText, .toolbar .projName { display: none; } }
+@media (max-width: 1050px) { .toolbar .zgrp { display: none; } }
+@media (max-width: 1100px) { .toolbar .followbtn .lbl { display: none; } }
+@media (max-width: 960px) { .toolbar .snapsel, .toolbar .followbtn { display: none; } }
 @media (max-width: 900px) { .toolbar .tapbtn, .toolbar .monbtn, .toolbar .vsep, .toolbar .helpbtn, .toolbar .inrow { display: none; } .toolbar > .tbmain { gap: 4px; } }
 @media (max-width: 780px) { .toolbar .undogrp, .toolbar .clockbox .tag9, .toolbar .count { display: none; } }
 @media (max-width: 800px) { .toolbar .tools > button:nth-child(n+4), .toolbar .seg > button.metrobtn { display: none; } }
@@ -685,3 +687,9 @@ select option { background: var(--bg4); color: var(--fg); }
 .lane.dimmed > .body, .lane.dimmed > .stripe { opacity: .4; }
 .strip.dimmed > *:not(.bar) { opacity: .45; }
 .strip.dimmed .mini.s, .lane.dimmed .mini.s { opacity: 1; }
+
+/* bigger mute / solo / arm targets in track headers and mixer strips */
+.lane .mini.m, .lane .mini.s, .strip .mini.m, .strip .mini.s { min-width: 22px; height: 19px; font-size: 10px; }
+.lane .mini.route { min-width: 30px; padding: 0 4px; }
+.toolbar .snapsel { flex: none; width: 118px; }
+@media (max-width: 1180px) { .toolbar .tapbtn, .toolbar .monbtn { display: none; } .toolbar .clockbox .tag9 { display: none; } }
