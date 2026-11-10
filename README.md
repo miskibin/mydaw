@@ -12,6 +12,8 @@
 
 ## Note from developer (This part is not AI SLOP)
 
+![From the first FL Studio in 2010 to WAVE in 2026](site/img/journey.svg)
+
 - **2010:** I downloaded FL Studio for the first time and started making music.
 - **2015:** I started music school: cello, guitar and piano (graduated in 2019).
 - **2016–2022:** I sold beats to underground rappers in Poland (pop, true school, trap, love songs).
