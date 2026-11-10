@@ -8,7 +8,6 @@ export const pl: Record<keyof typeof en, string> = {
   'settings.language': 'Język',
   'settings.english': 'English',
   'settings.polish': 'Polski',
-  'startup.failed': 'WAVE: nie udało się uruchomić UI
-{error}',
+  'startup.failed': 'WAVE: nie udało się uruchomić UI\n{error}',
   ...a, ...b, ...c, ...d,
 };

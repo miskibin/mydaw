@@ -7,8 +7,7 @@ const base = {
   'settings.language': 'Language',
   'settings.english': 'English',
   'settings.polish': 'Polski',
-  'startup.failed': 'WAVE: failed to start UI
-{error}',
+  'startup.failed': 'WAVE: failed to start UI\n{error}',
 } as const;
 
 export const en = { ...base, ...a, ...b, ...c, ...d } as const;
