@@ -46,9 +46,13 @@ const PARAMS: Record<AnyBuiltinKind, ParamDef[]> = {
     p('down', 'Max cut', 0, 12, 6, 'dB'), choice('speed', 'Speed', 0, ['Sung', 'Rap']), choice('auto', 'Auto target', 1, ['Off', 'On']),
     p('target', 'Target', -60, 0, -24, 'dB'), p('floor', 'Noise floor', -100, -20, -70, 'dB'), choice('look', 'Look-ahead', 2, ['Krótki (+0,3 s opóźnienia)', 'Długi (+1–1,6 s opóźnienia)', 'Na żywo']),
     p('out', 'Output', -24, 24, 0, 'dB'), p('gate', 'Gate', -100, -10, -60, 'dB')],
+  // catalog.rs HALF (order = dsp::halftime::idx)
+  half: [choice('speed', 'Speed', 1, ['1.5×', '2×', '4×']), choice('loop', 'Loop', 4, ['1/16', '1/8', '1/4', '1/2', '1 takt', '2 takty', '4 takty', '8 taktów']),
+    p('smooth', 'Smooth', -100, 100, 10, '%'), p('lo', 'Band low', 20, 20000, 20, 'Hz', true), p('hi', 'Band high', 20, 20000, 20000, 'Hz', true),
+    choice('solo', 'Band solo', 0, ['Off', 'On']), p('mix', 'Mix', 0, 100, 100, '%')],
 };
 const NAMES: Record<AnyBuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter',
-  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser', voice: 'Voice', rider: 'Vocal Rider' };
+  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser', voice: 'Voice', rider: 'Vocal Rider', half: 'Half-Speed' };
 
 type BandEdit = [number, boolean | null, number | null, number | null, number | null];
 function eqp(name: string, out: number, edits: BandEdit[]): Preset {
@@ -153,10 +157,17 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     pr('Mocno', { amount: 80, phrase: 30, up: 8, down: 9, speed: 0, auto: 1, look: 2 }),
     pr('Wokal — śpiew (długi look-ahead, opóźnienie)', { amount: 50, phrase: 20, up: 5, down: 6, speed: 0, auto: 1, look: 1 }),
   ],
+  half: ([
+    ['Half-time — 1 takt', 1, 4, 10, 20, 20000, 0, 100], ['Bębny — ósemki, punch', 1, 1, -12, 20, 20000, 0, 100],
+    ['Szesnastki — oktawa w dół', 1, 0, -8, 20, 20000, 0, 100], ['Triola — kwinta niżej', 0, 2, 10, 20, 20000, 0, 100],
+    ['Kwinta — harmonia 50 %', 0, 3, 20, 20, 20000, 0, 50], ['4× — tekstura', 2, 4, 45, 20, 20000, 0, 100],
+    ['Swell — od tyłu', 1, 3, 80, 20, 20000, 0, 100], ['FX — swoop', 1, 2, -70, 20, 20000, 0, 100],
+    ['Tylko góra (sub zostaje)', 1, 4, 10, 150, 20000, 0, 100], ['Środek pasma — solo', 1, 2, 10, 300, 4000, 1, 100],
+  ] as [string, ...number[]][]).map(([name, speed, loop, smooth, lo, hi, solo, mix]) => pr(name, { speed, loop, smooth, lo, hi, solo, mix })),
 };
 
 /** catalog.rs `BUILTIN` (also the order of the "add effect" menu). */
-export const BUILTIN: AnyBuiltinKind[] = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'reverb', 'limit'];
+export const BUILTIN: AnyBuiltinKind[] = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'half', 'reverb', 'limit'];
 
 export function mockCatalog(): Catalog {
   return {

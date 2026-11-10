@@ -157,7 +157,19 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         // below this word level the rider idles at 0 dB (breaths, bleed, room)
         p("gate", "Gate", -100.0, -10.0, -60.0, "dB", false),
     ];
+    // order = dsp::halftime::idx
+    const HALF: &[ParamDef] = &[
+        choice("speed", "Speed", 1.0, &crate::dsp::halftime::SPEEDS),
+        choice("loop", "Loop", 4.0, &crate::dsp::halftime::LOOPS),
+        // < 0: Percussive → FX (fade before the window start), > 0: Sustain → Swell (after)
+        p("smooth", "Smooth", -100.0, 100.0, 10.0, "%", false),
+        p("lo", "Band low", 20.0, 20000.0, 20.0, "Hz", true),
+        p("hi", "Band high", 20.0, 20000.0, 20000.0, "Hz", true),
+        choice("solo", "Band solo", 0.0, &["Off", "On"]),
+        p("mix", "Mix", 0.0, 100.0, 100.0, "%", false),
+    ];
     match kind {
+        FxKind::Half => HALF,
         FxKind::Rider => RIDER,
         FxKind::Denoise => DENOISE,
         FxKind::Voice => VOICE,
@@ -188,11 +200,12 @@ pub fn type_name(kind: FxKind) -> &'static str {
         FxKind::Denoise => "Denoiser",
         FxKind::Voice => "Voice",
         FxKind::Rider => "Vocal Rider",
+        FxKind::Half => "Half-Speed",
         FxKind::Vst3 => "VST3",
     }
 }
 
-pub const BUILTIN: [FxKind; 12] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Rider, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 13] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Rider, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Half, FxKind::Reverb, FxKind::Limit];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
@@ -376,6 +389,24 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
             pr("Wokal — śpiew (długi look-ahead, opóźnienie)", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
         ],
+        FxKind::Half => {
+            // (name, speed, loop, smooth, lo, hi, solo, mix)
+            let h = |name, speed: f64, lp: f64, smooth: f64, lo: f64, hi: f64, solo: f64, mix: f64| {
+                pr(name, &[("speed", speed), ("loop", lp), ("smooth", smooth), ("lo", lo), ("hi", hi), ("solo", solo), ("mix", mix)])
+            };
+            vec![
+                h("Half-time — 1 takt", 1.0, 4.0, 10.0, 20.0, 20000.0, 0.0, 100.0),
+                h("Bębny — ósemki, punch", 1.0, 1.0, -12.0, 20.0, 20000.0, 0.0, 100.0),
+                h("Szesnastki — oktawa w dół", 1.0, 0.0, -8.0, 20.0, 20000.0, 0.0, 100.0),
+                h("Triola — kwinta niżej", 0.0, 2.0, 10.0, 20.0, 20000.0, 0.0, 100.0),
+                h("Kwinta — harmonia 50 %", 0.0, 3.0, 20.0, 20.0, 20000.0, 0.0, 50.0),
+                h("4× — tekstura", 2.0, 4.0, 45.0, 20.0, 20000.0, 0.0, 100.0),
+                h("Swell — od tyłu", 1.0, 3.0, 80.0, 20.0, 20000.0, 0.0, 100.0),
+                h("FX — swoop", 1.0, 2.0, -70.0, 20.0, 20000.0, 0.0, 100.0),
+                h("Tylko góra (sub zostaje)", 1.0, 4.0, 10.0, 150.0, 20000.0, 0.0, 100.0),
+                h("Środek pasma — solo", 1.0, 2.0, 10.0, 300.0, 4000.0, 1.0, 100.0),
+            ]
+        }
         FxKind::Vst3 => vec![],
     }
 }

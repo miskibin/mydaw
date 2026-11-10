@@ -114,6 +114,8 @@ pub enum FxKind {
     Denoise,
     Voice,
     Rider,
+    /// Tempo-locked slow-down (`dsp::halftime`).
+    Half,
     Vst3,
 }
 

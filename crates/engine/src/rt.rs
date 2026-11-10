@@ -1106,6 +1106,8 @@ impl Rt {
         self.shared.beat.store(shared_beat.to_bits(), Relaxed);
         let heard = if self.playing { self.heard(shared_beat, bps) } else { shared_beat };
         self.shared.heard.store(heard.to_bits(), Relaxed);
+        // tempo-locked effects follow the pattern loop preview like the song
+        let pat_ctx = if !self.playing && self.pat_play.is_some() { Some(self.pat_beat) } else { None };
         self.schedule_pattern(n, bps, spb);
         self.voices.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &mut self.click[..n], &self.timeline.chans);
         self.synths.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &self.timeline.chans, bpm);
@@ -1177,7 +1179,10 @@ impl Rt {
         }
 
         // ---- inserts (non-master first), then master
-        let ctx = ProcessCtx { sample_rate: sr, bpm, beat: block_beat, playing: self.playing };
+        let ctx = match pat_ctx {
+            Some(b) => ProcessCtx { sample_rate: sr, bpm, beat: b, playing: true },
+            None => ProcessCtx { sample_rate: sr, bpm, beat: block_beat, playing: self.playing },
+        };
         let count = g.inserts.len();
         if count > 0 {
             let (enabled, watch) = (self.skip_silent, &self.watch[..self.watch_n]);

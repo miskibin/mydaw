@@ -18,7 +18,7 @@ export interface Track {
   icon?: string | null;
 }
 
-export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'rider' | 'vst3';
+export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'rider' | 'half' | 'vst3';
 /** Built-in kinds the effect picker lists (the views keep a label and blurb per kind). */
 export type BuiltinKind = Exclude<FxKind, 'vst3'>;
 /** Every built-in kind, including ones the picker does not list yet ('rider': added by "Auto wokal"). */

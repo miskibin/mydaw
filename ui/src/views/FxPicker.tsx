@@ -26,6 +26,7 @@ const DESC: Record<BuiltinKind, string> = {
   fet: 'Szybki kompresor w stylu 1176 — charakter i atak',
   sat: 'Ciepło taśmy i lampy, harmoniczne',
   delay: 'Echo zsynchronizowane z tempem, ping-pong',
+  half: 'Spowalnia o pół (oktawa w dół) w rytm — groove zostaje na siatce',
   reverb: 'Przestrzeń: pokój, plate, hala',
   limit: 'Limiter z lookahead — głośność bez przesterów',
 };
@@ -34,7 +35,7 @@ const DESC: Record<BuiltinKind, string> = {
 const KW: Record<BuiltinKind, string> = {
   denoise: 'szum noise denoiser odszumianie brum hum', tune: 'autotune auto-tune pitch strojenie melodyne', voice: 'pitch formant robot vocoder głos',
   eq: 'korektor equalizer eq filtr filter', deess: 'deesser de-esser sybilanty', rider: 'rider vocal rider wyrównanie leveler głośność słów automatyzacja', comp: 'kompresor compressor dynamika fet 1176 vca',
-  fet: 'kompresor compressor 1176 fet', sat: 'saturacja saturator przester distortion drive taśma tape', delay: 'echo opóźnienie delay',
+  fet: 'kompresor compressor 1176 fet', sat: 'saturacja saturator przester distortion drive taśma tape', delay: 'echo opóźnienie delay', half: 'halftime half-time half speed spowolnienie slow down oktawa tape stop pętla loop',
   reverb: 'pogłos reverb przestrzeń hall room plate', limit: 'limiter głośność loudness master',
 };
 
@@ -47,7 +48,7 @@ const CATS: Cat[] = [
   { id: 'repair', label: 'Naprawa', types: ['denoise', 'deess'] },
   { id: 'dyn', label: 'Dynamika', types: ['rider', 'comp', 'fet', 'limit'] },
   { id: 'tone', label: 'EQ i barwa', types: ['eq', 'sat'] },
-  { id: 'space', label: 'Czas i przestrzeń', types: ['delay', 'reverb'] },
+  { id: 'space', label: 'Czas i przestrzeń', types: ['delay', 'half', 'reverb'] },
   { id: 'vst', label: 'VST3' },
   { id: 'tools', label: 'Narzędzia' },
 ];

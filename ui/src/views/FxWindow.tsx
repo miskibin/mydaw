@@ -26,6 +26,7 @@ import { defaultView, ReverbViz, views3d } from './fx/reverb';
 import { DelayViz, SatViz } from './fx/satDelay';
 import { TuneViz } from './fx/tune';
 import { RiderViz } from './fx/rider';
+import { halfHit, HalfViz, halfXf } from './fx/half';
 import { onVoicePad, padParams, padToVoice, VoiceViz } from './fx/voice';
 
 
@@ -42,12 +43,13 @@ function makeViz(f: Fx): Viz | null {
     case 'denoise': return new DenoiseViz();
     case 'voice': return new VoiceViz();
     case 'rider': return new RiderViz();
+    case 'half': return new HalfViz();
     default: return null;
   }
 }
-const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240, voice: 250, rider: 220 };
+const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240, voice: 250, rider: 220, half: 250 };
 /** Default window widths per type (actions.openPlug). */
-export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700 };
+export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700, half: 760 };
 
 const HINTS: Partial<Record<Fx['type'], string>> = {
   eq: 'kółko = Q · PPM na punkcie = kształt / kanał / dynamika · PPM na tle = nowy band danego typu',
@@ -56,6 +58,7 @@ const HINTS: Partial<Record<Fx['type'], string>> = {
   fet: 'Klik na wskaźnik = GR / OUT',
   denoise: 'Profil szumu uczy się sam w przerwach · Hold = zamroź · Listen = posłuchaj, co jest usuwane',
   tune: 'Retune: 0 ms = efekt robota, dłużej = naturalnie',
+  half: 'Działa przy odtwarzaniu (PAT i SONG) · Smooth w lewo = atak na siatce, w prawo = płynnie / swell · przeciągnij krawędzie pasma na dole',
   voice: 'Przeciągnij punkt = pitch i formant · 2× klik = zero · Mix < 100% = harmonia z oryginałem · tylko czysty wokal mono',
 };
 
@@ -119,7 +122,7 @@ export function FxWindow(props: { pw: PlugWin; z: number }) {
 }
 
 /** Dry/wet of the effect (fx.mix), automatable. */
-const OWN_MIX = new Set<string>(['reverb', 'delay', 'sat', 'fet']);
+const OWN_MIX = new Set<string>(['reverb', 'delay', 'sat', 'fet', 'half']);
 function MixControl(props: { fx: Fx }) {
   const target = () => ({ kind: 'mix' as const, fxId: props.fx.id });
   const val = () => autoDisplay(target()) ?? props.fx.mix ?? 1;
@@ -272,6 +275,12 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
     { title: 'Przesunięcie', items: [{ id: 'transpose', size: 'sm' }, { id: 'formant', size: 'sm' }] },
   ],
   eq: [{ title: 'Wyjście', items: [{ id: 'out', size: 'sm' }] }],
+  half: [
+    { title: 'Spowolnienie', items: [{ stack: [{ id: 'speed', labels: ['1.5× kwinta', '2× oktawa', '4× dwie okt.'], small: true }, { id: 'loop', small: true }] }] },
+    { title: 'Przejścia', items: [{ id: 'smooth', size: 'lg', ends: ['perkusyjnie', 'swell'] }] },
+    { title: 'Pasmo', items: [{ id: 'lo', size: 'sm' }, { id: 'hi', size: 'sm' }, { stack: [{ id: 'solo', labels: ['Całość', 'Solo pasma'], small: true }] }] },
+    { title: 'Wyjście', items: [{ id: 'mix' }] },
+  ],
 };
 
 function LayoutItem(props: { fx: Fx; it: Item }) {
@@ -407,6 +416,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     else if (got.f.type === 'reverb') verbDown(e);
     else if (got.f.type === 'deess') deessDown(e, got.f);
     else if (got.f.type === 'voice') voiceDown(e);
+    else if (got.f.type === 'half') halfDown(e, got.f);
     else if (got.f.type === 'fet' && e.button === 0) {
       const m = fetModes.get(props.fxId) === 'out' ? 'gr' : 'out';
       fetModes.set(props.fxId, m); version++; say('Wskaźnik: ' + (m === 'gr' ? 'redukcja (GR)' : 'wyjście (VU)'));
@@ -421,6 +431,10 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
       const onF = x >= G.sx && Math.abs(x - deessFx(got.f.params.freq ?? 6000, W, H)) < 8;
       if (onThr !== d.hoverThr || onF !== d.hoverFreq) { d.hoverThr = onThr; d.hoverFreq = onF; version++; }
       cv.style.cursor = onThr ? 'ns-resize' : onF ? 'ew-resize' : 'default';
+    } else if (got.f.type === 'half') {
+      const v = viz as HalfViz, { x, y, W, H } = rel(e), on = halfHit(got.f, x, y, W, H);
+      if (on !== v.hover) { v.hover = on; version++; }
+      cv.style.cursor = on ? 'ew-resize' : 'default';
     } else if (got.f.type === 'voice') {
       const v = viz as VoiceViz, { x, y, W, H } = rel(e), on = onVoicePad(x, y, W, H);
       if (on !== v.hover) { v.hover = on; version++; }
@@ -432,6 +446,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     if (got.f.type === 'eq') eqLeave(viz as EqViz);
     if (got.f.type === 'deess') { const d = viz as DeessViz; d.hoverThr = d.hoverFreq = false; version++; }
     if (got.f.type === 'voice') { (viz as VoiceViz).hover = false; version++; }
+    if (got.f.type === 'half') { (viz as HalfViz).hover = null; version++; }
   };
   /** Pad: click / drag sets Pitch and Formant together (one undo step), double click resets both. */
   const voiceDown = (e: PointerEvent) => {
@@ -455,6 +470,28 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     };
     at(e.clientX, e.clientY);
     track(ev => at(ev.clientX, ev.clientY), () => g.end(), 'grabbing');
+  };
+  /** Half-Speed band strip: drag an edge (2× klik = reset that edge to off). */
+  const halfDown = (e: PointerEvent, f: Fx) => {
+    if (e.button !== 0) return;
+    const { x, y, W, H } = rel(e), which = halfHit(f, x, y, W, H); if (!which) return;
+    const pd = defOf(f, which); if (!pd) return;
+    e.preventDefault();
+    const name = which === 'lo' ? 'Dolna krawędź pasma' : 'Górna krawędź pasma';
+    if (dblCheck('half' + which + props.fxId)) { const op = setParam(props.fxId, which, pd.def); if (op) commit([op], name); return; }
+    const g = new Gesture(name);
+    const r = cv.getBoundingClientRect();
+    const at = (cx: number) => {
+      const cur = findFx(props.fxId)?.f; if (!cur) return;
+      let v = halfXf(cx - r.left, r.width);
+      // keep the edges apart (≥ 1/6 octave)
+      if (which === 'lo') v = Math.min(v, (cur.params.hi ?? 20000) / 1.12); else v = Math.max(v, (cur.params.lo ?? 20) * 1.12);
+      const op = setParam(props.fxId, which, Math.round(clamp(v, pd.min, pd.max))); if (op) g.update([op]);
+      const nv = findFx(props.fxId)?.f.params[which] ?? v;
+      say(name + ': ' + (nv >= 1000 ? (nv / 1000).toFixed(2) + ' kHz' : Math.round(nv) + ' Hz'));
+    };
+    at(e.clientX);
+    track(ev => at(ev.clientX), () => g.end(), 'ew-resize');
   };
   const deessDown = (e: PointerEvent, f: Fx) => {
     if (e.button !== 0) return;
