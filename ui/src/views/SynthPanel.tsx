@@ -7,6 +7,7 @@ import type { Channel, ParamDef, SynthCatalog } from '../api/types';
 import { t, tName } from '../lib/i18n';
 import { pFmt, pNorm, pVal } from '../lib/presets';
 import { clampSynth, synthParam, synthValue, withSynthParam, withSynthPreset } from '../lib/synth';
+import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { chanById, chanOp } from '../state/pattern';
 import { S } from '../state/store';
@@ -15,7 +16,16 @@ import { Knob, Segmented } from '../ui/Knob';
 import { rgba, T, themeVersion } from '../ui/theme';
 
 type SynthCh = Channel & { kind: 'synth' };
-type Ctx = { cat: SynthCatalog; ch: () => SynthCh; v: (id: string) => number; set: (id: string, x: number, label?: string) => void; def: (id: string) => ParamDef | undefined };
+type Ctx = {
+  cat: SynthCatalog; ch: () => SynthCh;
+  /** The value a control shows: the automated one while it plays, else the patch's. */
+  v: (id: string) => number;
+  set: (id: string, x: number, label?: string) => void; def: (id: string) => ParamDef | undefined;
+  /** Driven by an automation clip. */
+  auto: (id: string) => boolean;
+  /** The parameter's right-click menu (automate, select its clips, reset to default). */
+  menu: (id: string, x: number, y: number) => void;
+};
 
 const C_OSC = '#a78bfa', C_FLT = '#f59e0b', C_ENV = '#34d399', C_LFO = '#60a5fa', C_FX = '#f472b6';
 type Tab = 'osc' | 'mod' | 'fx';
@@ -32,13 +42,19 @@ export function SynthPanel(props: { c: Channel }) {
 
 function Panel(props: { cat: SynthCatalog; c: Channel }) {
   const ch = () => (chanById(props.c.id) ?? props.c) as SynthCh;
-  const v = (id: string) => synthValue(props.cat, ch().synth, id);
+  const target = (id: string) => ({ kind: 'synth' as const, chanId: ch().id, param: id });
+  const v = (id: string) => autoDisplay(target(id)) ?? synthValue(props.cat, ch().synth, id);
   const def = (id: string) => synthParam(props.cat, id);
   const set = (id: string, x: number, label?: string) => {
     const d = def(id); if (!d) return;
     commit([chanOp(withSynthParam(props.cat, ch(), id, clampSynth(d, x)))], label ?? tName(d.label));
   };
-  const ctx: Ctx = { cat: props.cat, ch, v, set, def };
+  const auto = (id: string) => isAutomated(target(id));
+  const menu = (id: string, x: number, y: number) => {
+    const d = def(id); if (!d) return;
+    paramMenu(x, y, target(id), () => set(id, d.def), ch().color);
+  };
+  const ctx: Ctx = { cat: props.cat, ch, v, set, def, auto, menu };
   const presetName = () => ch().synth.preset;
   const list = () => props.cat.presets;
   const load = (name: string) => { commit([chanOp(withSynthPreset(props.cat, ch(), name))], t('b.sp.presetUndo')); say(t('b.sp.presetSay', { name: tName(name) })); };
@@ -207,6 +223,8 @@ function K(props: { ctx: Ctx; id: string; label: string; color?: string; size?: 
         onChange={t => { const ch = props.ctx.ch(); g?.update([chanOp(withSynthParam(props.ctx.cat, ch, props.id, pVal(p(), t)))]); say(props.label + ' ' + pFmt(p(), pVal(p(), t))); }}
         onEnd={() => { g?.end(); g = null; }}
         onReset={() => props.ctx.set(props.id, p().def, props.label)}
+        automated={() => props.ctx.auto(props.id)}
+        onMenu={(x, y) => props.ctx.menu(props.id, x, y)}
         onWheel={t => wheelEdit('syn' + props.id, props.label, [chanOp(withSynthParam(props.ctx.cat, props.ctx.ch(), props.id, pVal(p(), t)))])} />
     )}</Show>
   );
@@ -217,10 +235,12 @@ function Choice(props: { ctx: Ctx; id: string; bare?: boolean }) {
   return (
     <Show when={d()?.options}>{opts => (
       <Show when={opts().length <= 5} fallback={
-        <select class="sel syn-sel" title={tName(d()!.label)} value={String(Math.round(props.ctx.v(props.id)))} onChange={e => props.ctx.set(props.id, +e.currentTarget.value)}>
+        <select class="sel syn-sel" classList={{ auto: props.ctx.auto(props.id) }} title={tName(d()!.label)} value={String(Math.round(props.ctx.v(props.id)))} onChange={e => props.ctx.set(props.id, +e.currentTarget.value)}
+          onContextMenu={e => { e.preventDefault(); e.stopPropagation(); props.ctx.menu(props.id, e.clientX, e.clientY); }}>
           <For each={opts()}>{(o, i) => <option value={String(i())}>{tName(o)}</option>}</For>
         </select>}>
-        <Segmented small options={opts().map(o => tName(o))} value={() => Math.round(props.ctx.v(props.id))} pick={i => props.ctx.set(props.id, i)} title={tName(d()!.label)} />
+        <Segmented small options={opts().map(o => tName(o))} value={() => Math.round(props.ctx.v(props.id))} pick={i => props.ctx.set(props.id, i)} title={tName(d()!.label)}
+          onMenu={(x, y) => props.ctx.menu(props.id, x, y)} />
       </Show>
     )}</Show>
   );
@@ -241,7 +261,8 @@ function AmtBar(props: { ctx: Ctx; id: string }) {
     window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
   };
   return (
-    <div class="syn-amt" onPointerDown={down} title={t('b.sp.amtTitle')}>
+    <div class="syn-amt" classList={{ auto: props.ctx.auto(props.id) }} onPointerDown={down} title={t('b.sp.amtTitle')}
+      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); props.ctx.menu(props.id, e.clientX, e.clientY); }}>
       <div class="fill" style={{ left: (v() < 0 ? 50 + v() / 2 : 50) + '%', width: Math.abs(v()) / 2 + '%' }} />
       <span>{(v() > 0 ? '+' : '') + Math.round(v())}%</span>
     </div>

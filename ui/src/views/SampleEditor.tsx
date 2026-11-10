@@ -14,6 +14,7 @@ import { track } from '../ui/drag';
 import { addFrameTask, fitCanvas, Layer } from '../ui/frameLoop';
 import { rgba, T, theme } from '../ui/theme';
 import { Knob } from '../ui/Knob';
+import { autoDisplay, controlMenu, isAutomated, paramMenu } from '../state/automation';
 import { moveWindow } from './FxWindow';
 
 
@@ -147,15 +148,20 @@ function EditorBody(props: { clip: Clip; src: Source }) {
           <For each={knobs}>
             {kn => {
               let g: Gesture | null = null;
-              const v = () => c()[kn.k] || 0;
+              // VOL and PAN are automatable (the clip's own gain and pan); the fades shape the clip
+              const target = () => kn.k === 'gain' ? { kind: 'clipGain' as const, id: c().id } : kn.k === 'pan' ? { kind: 'clipPan' as const, id: c().id } : null;
+              const v = () => { const tg = target(); return (tg && autoDisplay(tg)) ?? (c()[kn.k] || 0); };
+              const reset = () => commit([put({ [kn.k]: spec(kn.k)[2] })], kn.label);
               return <Knob key={'ed' + kn.k} label={kn.label} title={t('d.smp.knob.tip')}
+                automated={() => { const tg = target(); return !!tg && isAutomated(tg); }}
+                onMenu={(x, y) => { const tg = target(); if (tg) paramMenu(x, y, tg, reset, src().color); else controlMenu(x, y, src().name + ' · ' + kn.label, reset, t('a.au.noFade')); }}
                 t={() => { const [lo, hi] = spec(kn.k); return clamp((v() - lo) / (hi - lo), 0, 1); }}
                 zero={() => { const [lo, hi] = spec(kn.k); return lo < 0 ? -lo / (hi - lo) : 0; }}
                 text={() => text(kn.k, v())}
                 onStart={() => { g = new Gesture(kn.label); }}
                 onChange={tv => { const [lo, hi] = spec(kn.k); const nv = limit(kn.k, lo + tv * (hi - lo)); g?.update([put({ [kn.k]: nv })]); say(kn.label + ' ' + text(kn.k, nv)); }}
                 onEnd={() => { g?.end(); g = null; }}
-                onReset={() => commit([put({ [kn.k]: spec(kn.k)[2] })], kn.label)}
+                onReset={reset}
                 onWheel={tv => { const [lo, hi] = spec(kn.k); const nv = limit(kn.k, lo + tv * (hi - lo)); wheelEdit('ed' + kn.k, kn.label, [put({ [kn.k]: nv })]); }} />;
             }}
           </For>

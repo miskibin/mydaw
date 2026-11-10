@@ -12,6 +12,7 @@ import {
   noteAt, notesText, resizeNotes, ROLL_SNAPS, rotate, SCALES, setStep, setVelAt, snapStep, stepsOf, transpose, visible,
 } from '../lib/pattern';
 import { NOTE_NAMES } from '../lib/pitch';
+import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture } from '../state/edit';
 import {
   addBuiltin, addKeys, addSampler, addSamplerFiles, addSynth, audition, chanById, chanKindLabel, chanOp, channels, cloneChannel, closePattern, curPat,
@@ -393,6 +394,7 @@ function ChanRow(props: { c: Channel }) {
   let vg: Gesture | null = null, pg: Gesture | null = null;
   const live = () => chanById(c().id) ?? c();
   const volOp = (t: number) => chanOp(live(), { vol: Math.round(clamp(t, 0, 1) * 10000) / 10000 });
+  const volT = () => ({ kind: 'chanVol' as const, id: c().id }), panT = () => ({ kind: 'chanPan' as const, id: c().id });
   const panOp = (t: number) => chanOp(live(), { pan: Math.round(clamp(t * 2 - 1, -1, 1) * 100) / 100 });
   const nameDown = (e: PointerEvent) => {
     if (e.button === 2) { e.preventDefault(); e.stopPropagation(); selectChannel(c().id); chanMenu(c(), e.clientX, e.clientY); return; }
@@ -411,11 +413,13 @@ function ChanRow(props: { c: Channel }) {
         title={t('b.pe.ledTitle', { state: t(c().mute ? 'b.pe.ledMuted' : c().solo ? 'b.pe.ledSolo' : 'b.pe.ledActive') })}
         onPointerDown={e => { e.stopPropagation(); e.preventDefault(); if (e.button === 2) toggleChanSolo(c()); else if (e.button === 0) toggleChanMute(c()); }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }} />
-      <MiniKnob key={'cv' + c().id} t={() => c().vol} title={t('b.pe.volTitle', { v: volText(c().vol) })}
+      <MiniKnob key={'cv' + c().id} t={() => autoDisplay(volT()) ?? c().vol} title={t('b.pe.volTitle', { v: volText(autoDisplay(volT()) ?? c().vol) })}
+        automated={() => isAutomated(volT())} onMenu={(x, y) => paramMenu(x, y, volT(), () => commit([volOp(VOL_UNITY)], t('b.cw.volCh')), c().color)}
         onStart={() => { vg = new Gesture(t('b.cw.volCh')); }} onChange={t => { vg?.update([volOp(t)]); say(c().name + ' · ' + volText(t)); }}
         onEnd={() => { vg?.end(); vg = null; }} onReset={() => commit([volOp(VOL_UNITY)], t('b.cw.volCh'))}
         onWheel={v => commit([volOp(v)], t('b.cw.volCh'))} />
-      <MiniKnob key={'cp' + c().id} t={() => (c().pan + 1) / 2} title={t('b.pe.panTitle', { v: panText(c().pan) })}
+      <MiniKnob key={'cp' + c().id} t={() => ((autoDisplay(panT()) ?? c().pan) + 1) / 2} title={t('b.pe.panTitle', { v: panText(autoDisplay(panT()) ?? c().pan) })}
+        automated={() => isAutomated(panT())} onMenu={(x, y) => paramMenu(x, y, panT(), () => commit([panOp(0.5)], t('b.cw.panCh')), c().color)}
         onStart={() => { pg = new Gesture(t('b.cw.panCh')); }} onChange={t => { pg?.update([panOp(t)]); say(c().name + ' · pan ' + panText(t * 2 - 1)); }}
         onEnd={() => { pg?.end(); pg = null; }} onReset={() => commit([panOp(0.5)], t('b.cw.panCh'))}
         onWheel={v => commit([panOp(v)], t('b.cw.panCh'))} />

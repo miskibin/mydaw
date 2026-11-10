@@ -148,3 +148,19 @@ fn a_single_soft_note_passes_the_limiter_untouched() {
     let pk = x.iter().fold(0f32, |a, b| a.max(b.abs()));
     assert!(pk > 0.02 && pk < 0.891, "soft note peak {pk}");
 }
+
+#[test]
+fn dynamics_follow_their_automation() {
+    // a soft note: with full dynamics it plays quietly, automated to 0 % it plays like a loud one
+    let soft = |auto: Option<f32>| {
+        let mut p = project(vec![note(4.0, 8.0, 60, 0.15)], KeysState { dynamics: 100.0, ..Default::default() });
+        if let Some(v) = auto {
+            p.automations.push(Automation { id: 70, name: "d".into(), color: "#e0a44a".into(), target: AutoTarget::Keys { chan_id: CH, param: "dynamics".into() }, points: vec![AutoPoint { t: 0.0, v }] });
+            p.clips.push(Clip { id: 71, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Auto, source: 70, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None });
+        }
+        rms(&render(p, true)[2 * 12000..2 * 40000])
+    };
+    let (plain, flat) = (soft(None), soft(Some(0.0)));
+    assert!(flat > plain * 1.5, "dynamics automation: {plain} → {flat}");
+    // (the note starts a beat in: a note-on reads the value automation set before it)
+}

@@ -74,6 +74,19 @@ export function automate(target: AutoTarget, color = '#e0a44a') {
   say(tl('a.au.created', { name, n: r.track + 1, pos: fmtPos(start) }));
 }
 
+/**
+ * The right-click menu of a control that cannot be automated (a clip's fades, a channel's root
+ * key): the same menu, with "Automate" shown disabled and why.
+ */
+export function controlMenu(x: number, y: number, label: string, reset: () => void, why: string) {
+  openMenu(x, y, [
+    { t: 'title', label },
+    { t: 'item', label: tl('a.au.automate'), disabled: true, title: why, act: () => {} },
+    { t: 'sep' },
+    { t: 'item', label: tl('a.au.reset'), kbd: tl('a.pl.dblClick'), act: reset },
+  ], 140);
+}
+
 /** The shared right-click menu of an automatable control. */
 export function paramMenu(x: number, y: number, target: AutoTarget, reset: (() => void) | null, color?: string) {
   const auto = isAutomated(target);

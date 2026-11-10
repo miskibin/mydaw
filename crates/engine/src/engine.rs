@@ -2030,7 +2030,7 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Ar
                 _ => None,
             };
             let (keys_release, keys_dynamics) = ks.map(|k| (k.release / 1000.0, k.dynamics / 100.0)).unwrap_or((0.35, 1.0));
-            ChanRt { id: c.id, kind, sample, keys: ks.and(keys.cloned()), keys_release, keys_dynamics, root: c.root, gain, pan, on, insert, home: insert.or(heard).unwrap_or(0) }
+            ChanRt { id: c.id, kind, sample, keys: ks.and(keys.cloned()), keys_release, keys_dynamics, root: c.root, gain, pan, gain0: gain, pan0: pan, on, insert, home: insert.or(heard).unwrap_or(0) }
         })
         .collect();
     let pats = p
@@ -2145,9 +2145,16 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option
                 None => continue,
             },
         };
-        clips.push(ClipRt { track: c.track as usize, start: c.start, end: c.start + c.len, offset: c.offset, gain: c.gain, pan: c.pan, fade_in: c.fade_in, fade_out: c.fade_out, src });
+        clips.push(ClipRt { id: c.id, track: c.track as usize, start: c.start, end: c.start + c.len, offset: c.offset, gain: c.gain, pan: c.pan, fade_in: c.fade_in, fade_out: c.fade_out, src, gain0: c.gain, pan0: c.pan });
     }
     clips.sort_by(|a, b| a.start.total_cmp(&b.start));
+    // clip targets point at the sorted list (a muted clip is not in it: its automation rests)
+    for a in autos.iter_mut() {
+        if let TargetRt::ClipGain(k) | TargetRt::ClipPan(k) = &mut a.target {
+            let id = *k as Id;
+            *k = clips.iter().position(|c| c.id == id && matches!(c.src, ClipSrc::Audio(_))).unwrap_or(usize::MAX);
+        }
+    }
     Timeline { bpm: p.bpm, clips, pats, chans, autos, loop_range: p.loop_range.map(|l| (l.a, l.b)), song_end: p.song_end() }
 }
 
@@ -2183,5 +2190,27 @@ fn resolve_target(p: &Project, t: &AutoTarget) -> Option<TargetRt> {
         AutoTarget::InsertVol { id } => TargetRt::InsVol(p.inserts.iter().position(|m| m.id == *id)?),
         AutoTarget::InsertPan { id } => TargetRt::InsPan(p.inserts.iter().position(|m| m.id == *id)?),
         AutoTarget::TrackVol { id } => TargetRt::TrackVol(p.tracks.iter().position(|x| x.id == *id)?),
+        AutoTarget::ChanVol { id } => TargetRt::ChanVol(p.channels.iter().position(|c| c.id == *id)?),
+        AutoTarget::ChanPan { id } => TargetRt::ChanPan(p.channels.iter().position(|c| c.id == *id)?),
+        AutoTarget::Synth { chan_id, param } => {
+            let c = p.channels.iter().find(|c| c.id == *chan_id)?;
+            if !matches!(c.src, ChannelSrc::Synth { .. }) {
+                return None;
+            }
+            let idx = crate::poly::params::index_of(param)?;
+            let d = &crate::poly::params::PARAMS[idx];
+            TargetRt::Synth { chan: *chan_id, idx, min: d.min as f32, max: d.max as f32, log: d.log, choice: d.options.is_some() }
+        }
+        AutoTarget::Keys { chan_id, param } => {
+            let i = p.channels.iter().position(|c| c.id == *chan_id && matches!(c.src, ChannelSrc::Keys { .. }))?;
+            match param.as_str() {
+                "release" => TargetRt::KeysRelease(i),
+                "dynamics" => TargetRt::KeysDynamics(i),
+                _ => return None,
+            }
+        }
+        // the clip id for now: `build_timeline` turns it into the clip's index once sorted
+        AutoTarget::ClipGain { id } => TargetRt::ClipGain(p.clips.iter().find(|c| c.id == *id && c.kind == ClipKind::Audio)?.id as usize),
+        AutoTarget::ClipPan { id } => TargetRt::ClipPan(p.clips.iter().find(|c| c.id == *id && c.kind == ClipKind::Audio)?.id as usize),
     })
 }

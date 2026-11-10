@@ -323,6 +323,9 @@ select option { background: var(--bg4); color: var(--fg); }
 .pandial .pcap { position: absolute; left: 8px; top: 8px; width: 14px; height: 14px; border-radius: 50%; background: var(--knob-cap); box-shadow: inset 0 0 0 1px var(--line2); }
 .pandial .pptr { position: absolute; left: 14px; top: 7px; width: 2px; height: 6px; border-radius: 1px; background: var(--knob-ptr); transform-origin: 1px 8px; }
 .pandial.auto::after { content: ''; position: absolute; right: -2px; top: -2px; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+/* a synth choice or modulation amount driven by an automation clip */
+.syn-sel.auto { box-shadow: 0 0 0 1px var(--amber); }
+.syn-amt.auto { box-shadow: inset 0 0 0 1px var(--amber); }
 .slotmix { display: flex; align-items: center; gap: 2px; flex: none; }
 .slotmix .mono { width: 20px; font-size: 9px; color: var(--fg4); text-align: right; }
 .xdel { color: var(--fg4); font-size: 13px; }

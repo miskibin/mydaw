@@ -211,6 +211,13 @@ impl SynthInst {
         }
     }
 
+    /// One parameter (automation): glides like an edit when it is a continuous one.
+    pub fn set_param(&mut self, idx: usize, v: f32) {
+        if let Some(t) = self.target.get_mut(idx) {
+            *t = v;
+        }
+    }
+
     pub fn active_voices(&self) -> usize {
         self.voices.iter().filter(|v| v.on).count()
     }

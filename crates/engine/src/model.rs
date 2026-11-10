@@ -457,6 +457,16 @@ pub enum AutoTarget {
     InsertVol { id: Id },
     InsertPan { id: Id },
     TrackVol { id: Id },
+    /// A Channel Rack channel's volume (fader position 0..1, like `vol`) and pan.
+    ChanVol { id: Id },
+    ChanPan { id: Id },
+    /// A synth channel's patch parameter (catalog id, `poly::params`).
+    Synth { chan_id: Id, param: String },
+    /// A WAVE Keys channel's `release` (ms, logarithmic) or `dynamics` (%).
+    Keys { chan_id: Id, param: String },
+    /// An audio clip's own gain (−24..+12 dB) and pan.
+    ClipGain { id: Id },
+    ClipPan { id: Id },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

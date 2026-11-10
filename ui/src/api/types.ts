@@ -223,7 +223,19 @@ export type AutoTarget =
   | { kind: 'mix'; fxId: Id }
   | { kind: 'insertVol'; id: Id }
   | { kind: 'insertPan'; id: Id }
-  | { kind: 'trackVol'; id: Id };
+  | { kind: 'trackVol'; id: Id }
+  /** A Channel Rack channel's fader position and pan. */
+  | { kind: 'chanVol'; id: Id }
+  | { kind: 'chanPan'; id: Id }
+  /** A synth channel's parameter (`Catalog.synth` id). */
+  | { kind: 'synth'; chanId: Id; param: string }
+  /** A WAVE Keys channel's release (ms, log) or dynamics (%). */
+  | { kind: 'keys'; chanId: Id; param: 'release' | 'dynamics' }
+  /** An audio clip's own gain (−24..+12 dB, `CLIP_GAIN_DB`) and pan. */
+  | { kind: 'clipGain'; id: Id }
+  | { kind: 'clipPan'; id: Id };
+/** The span of an audio clip's gain automation, dB (the sample editor's VOL knob; rt.rs `CLIP_GAIN_DB`). */
+export const CLIP_GAIN_DB = { min: -24, max: 12 } as const;
 /** `t` beats from the start of the automation, `v` normalised 0..1. */
 export interface AutoPoint { t: number; v: number }
 export interface Automation { id: Id; name: string; color: string; target: AutoTarget; points: AutoPoint[] }

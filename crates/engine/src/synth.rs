@@ -374,9 +374,12 @@ impl VoicePool {
             let start = (v.delay as usize).min(n);
             v.delay = v.delay.saturating_sub(n as u32);
             // channel gain × velocity, split by the channel's pan
-            let (g, pan, sample, piano) = match chans.get(v.chan) {
-                Some(c) => (if c.on { c.gain * v.vel } else { 0.0 }, c.pan, c.sample.as_deref(), c.keys.as_deref().map(|b| (b, c.keys_release))),
-                None if v.chan == NO_CHAN => (v.vel, 0.0, None, None),
+            let (g, pan, g0, pan0, sample, piano) = match chans.get(v.chan) {
+                Some(c) => {
+                    let on = if c.on { v.vel } else { 0.0 };
+                    (c.gain * on, c.pan, c.gain0 * on, c.pan0, c.sample.as_deref(), c.keys.as_deref().map(|b| (b, c.keys_release)))
+                }
+                None if v.chan == NO_CHAN => (v.vel, 0.0, v.vel, 0.0, None, None),
                 None => {
                     v.alive = false;
                     continue;
@@ -384,6 +387,14 @@ impl VoicePool {
             };
             let (pl, pr) = pan_gains(pan);
             let (gl, gr) = (g * pl, g * pr);
+            // an automated channel gain or pan glides from the previous block's value
+            let (pl0, pr0) = pan_gains(pan0);
+            let (gl0, gr0) = (g0 * pl0, g0 * pr0);
+            let inv_n = 1.0 / n.max(1) as f32;
+            let side = |i: usize| -> (f32, f32) {
+                let t = i as f32 * inv_n;
+                (gl0 + (gl - gl0) * t, gr0 + (gr - gr0) * t)
+            };
             let (out_l, out_r): (&mut [f32], &mut [f32]) = match v.dest {
                 // the click bus is mono
                 Dest::Click => (&mut click[..], &mut []),
@@ -433,6 +444,7 @@ impl VoicePool {
                     }
                     let (x, y) = a.sample(v.pos);
                     let fade = (v.t as f32 / (0.001 * sr)).min(1.0) * v.env;
+                    let (gl, gr) = side(i);
                     out_l[i] += x * gl * fade;
                     if stereo {
                         out_r[i] += y * gr * fade;
@@ -455,6 +467,7 @@ impl VoicePool {
                     let (x, y) = a.sample(v.pos);
                     // 2 ms fade-in against a click when the sample does not start at zero
                     let fade = (v.t as f32 / (0.002 * sr)).min(1.0);
+                    let (gl, gr) = side(i);
                     out_l[i] += x * gl * fade;
                     if stereo {
                         out_r[i] += y * gr * fade;
@@ -515,6 +528,7 @@ impl VoicePool {
                     }
                     VoiceKind::Sample | VoiceKind::Synth | VoiceKind::Keys => (0.0, true),
                 };
+                let (gl, gr) = side(i);
                 out_l[i] += s * gl;
                 if stereo {
                     out_r[i] += s * gr;

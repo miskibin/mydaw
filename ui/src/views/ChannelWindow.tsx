@@ -3,10 +3,11 @@
 // key and mixer routing. The synth and WAVE Keys have their own pages here too.
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
-import { VOL_UNITY, type Channel, type Id } from '../api/types';
+import { VOL_UNITY, type AutoTarget, type Channel, type Id } from '../api/types';
 import { baseName, clamp, panText, volText } from '../lib/format';
 import { lang, t, type TranslationKey } from '../lib/i18n';
 import { noteName } from '../lib/pitch';
+import { autoDisplay, controlMenu, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { audition, chanById, chanOp, chanSource } from '../state/pattern';
 import { getPeaks, peakRange, peaksVersion } from '../state/peaks';
@@ -60,19 +61,25 @@ function Body(props: { w: Win; c: Channel }) {
   const live = () => chanById(props.c.id)!;
   const src = () => chanSource(c());
   const setPos = (x: number, y: number) => setWin(v => v && { ...v, x, y });
-  const knob = (lab: TranslationKey, undoLab: TranslationKey, tv: () => number, text: () => string, toPatch: (v: number) => Partial<Channel>, def: number, zero?: number) => {
+  const knob = (lab: TranslationKey, undoLab: TranslationKey, tv: () => number, text: () => string, toPatch: (v: number) => Partial<Channel>, def: number, zero?: number, target?: () => AutoTarget) => {
     let g: Gesture | null = null;
+    const reset = () => commit([chanOp(live(), toPatch(def))], t(undoLab));
     return (
       <Knob key={'cw' + lab + props.c.id} label={t(lab)} title={t('b.cw.knobTitle')} t={tv} text={text}
+        automated={() => !!target && isAutomated(target())}
+        onMenu={(x, y) => target ? paramMenu(x, y, target(), reset, c().color) : controlMenu(x, y, c().name + ' · ' + t(lab), reset, t('a.au.noRoot'))}
         zero={zero != null ? () => zero : undefined}
         onStart={() => { g = new Gesture(t(undoLab)); }}
         onChange={v => { g?.update([chanOp(live(), toPatch(v))]); say(c().name + ' · ' + t(lab).toLowerCase() + ' ' + text()); }}
         onEnd={() => { g?.end(); g = null; }}
-        onReset={() => commit([chanOp(live(), toPatch(def))], t(undoLab))}
+        onReset={reset}
         onWheel={v => wheelEdit('cw' + lab, t(undoLab), [chanOp(live(), toPatch(v))])} />
     );
   };
   const ROOT_LO = 24, ROOT_HI = 96;
+  // volume and pan follow their automation while it plays
+  const volT = () => ({ kind: 'chanVol' as const, id: c().id }), panT = () => ({ kind: 'chanPan' as const, id: c().id });
+  const vol = () => autoDisplay(volT()) ?? c().vol, pan = () => autoDisplay(panT()) ?? c().pan;
   const replaceSample = async () => {
     try {
       const ps = await be().pickAudioFiles(); if (!ps?.length) return;
@@ -112,8 +119,8 @@ function Body(props: { w: Win; c: Channel }) {
         </div>
       </Show>
       <div class="chknobs">
-        {knob('b.cw.vol', 'b.cw.volCh', () => c().vol, () => volText(c().vol), t => ({ vol: Math.round(clamp(t, 0, 1) * 10000) / 10000 }), VOL_UNITY)}
-        {knob('b.cw.pan', 'b.cw.panCh', () => (c().pan + 1) / 2, () => panText(c().pan), t => ({ pan: Math.round(clamp(t * 2 - 1, -1, 1) * 100) / 100 }), 0.5, 0.5)}
+        {knob('b.cw.vol', 'b.cw.volCh', () => vol(), () => volText(vol()), t => ({ vol: Math.round(clamp(t, 0, 1) * 10000) / 10000 }), VOL_UNITY, undefined, volT)}
+        {knob('b.cw.pan', 'b.cw.panCh', () => (pan() + 1) / 2, () => panText(pan()), t => ({ pan: Math.round(clamp(t * 2 - 1, -1, 1) * 100) / 100 }), 0.5, 0.5, panT)}
         {knob('b.cw.root', 'b.cw.rootCh', () => (c().root - ROOT_LO) / (ROOT_HI - ROOT_LO), () => noteName(c().root), t => ({ root: Math.round(ROOT_LO + clamp(t, 0, 1) * (ROOT_HI - ROOT_LO)) }), (60 - ROOT_LO) / (ROOT_HI - ROOT_LO))}
         <div class="chroute">
           <label>{t('b.cw.mixer')}</label>

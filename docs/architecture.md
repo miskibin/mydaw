@@ -134,9 +134,14 @@ Every effect has `mix` (0..1 dry/wet, default 1). Automation:
 kind `auto` with `ref` = automation id plays it (`offset` in beats into it).
 Targets: `{kind:"fx", fxId, param}` (catalog id, or `band:<i>:f|g|q` for EQ:
 f log 20–20k, g −30..30 dB, q log 0.1–18), `{kind:"mix", fxId}`,
-`{kind:"insertVol"|"insertPan", id}`, `{kind:"trackVol", id}`. `v` is 0..1;
-log parameters are normalised logarithmically, vol is the fader position, pan
-maps −1..1 to 0..1. While playing, the engine applies automation every block. New ids come from the
+`{kind:"insertVol"|"insertPan", id}`, `{kind:"trackVol", id}`,
+`{kind:"chanVol"|"chanPan", id}` (Channel Rack channel), `{kind:"synth", chanId, param}`
+(synth catalog id), `{kind:"keys", chanId, param:"release"|"dynamics"}` (release log
+40–3000 ms, dynamics 0–100 %), `{kind:"clipGain"|"clipPan", id}` (an audio clip; gain
+−24..+12 dB). `v` is 0..1; log parameters are normalised logarithmically, vol is the
+fader position, pan maps −1..1 to 0..1, choices snap to an option. While playing, the
+engine applies automation every block; channel and clip gain/pan glide across the block,
+synth parameters glide like an edit, and an edit during playback keeps the automated value. New ids come from the
 client: take them from `project.nextId` and increase locally (the engine bumps
 `nextId` past any id it sees).
 

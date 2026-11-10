@@ -2,8 +2,9 @@
 // as the engine does, the value of an envelope at a beat, which clip drives a target at the
 // playhead, and the ops that create a new automation clip ("Automatyzuj na playliście").
 import { t as tl, tName } from './i18n';
-import type { AutoPoint, AutoTarget, Automation, Catalog, Clip, Id, Op, Project, Track } from '../api/types';
+import { CLIP_GAIN_DB, KEYS_DYNAMICS, KEYS_RELEASE, type AutoPoint, type AutoTarget, type Automation, type Catalog, type Channel, type Clip, type Id, type Op, type Project, type Track } from '../api/types';
 import { insertTrackOps } from './clipOps';
+import { synthParam } from './synth';
 
 const lg = (x: number, a: number, b: number) => Math.log(Math.max(a, Math.min(b, x)) / a) / Math.log(b / a);
 const ex = (v: number, a: number, b: number) => a * Math.pow(b / a, v);
@@ -25,8 +26,17 @@ export function targetKey(t: AutoTarget): string {
     case 'insertVol': return 'iv:' + t.id;
     case 'insertPan': return 'ip:' + t.id;
     case 'trackVol': return 'tv:' + t.id;
+    case 'chanVol': return 'cv:' + t.id;
+    case 'chanPan': return 'cp:' + t.id;
+    case 'synth': return 'sy:' + t.chanId + ':' + t.param;
+    case 'keys': return 'ky:' + t.chanId + ':' + t.param;
+    case 'clipGain': return 'cg:' + t.id;
+    case 'clipPan': return 'cpn:' + t.id;
   }
 }
+
+const chanOf = (p: Project, id: Id): Channel | undefined => p.channels?.find(c => c.id === id);
+const clipOf = (p: Project, id: Id) => p.clips.find(c => c.id === id && c.kind === 'audio');
 
 function fxOf(p: Project, id: Id) {
   for (const m of p.inserts) { const f = m.fx.find(x => x.id === id); if (f) return { m, f }; }
@@ -36,8 +46,15 @@ function fxOf(p: Project, id: Id) {
 /** Plain value → normalised 0..1. */
 export function normalize(p: Project, cat: Catalog | null, t: AutoTarget, x: number): number {
   switch (t.kind) {
-    case 'mix': case 'insertVol': case 'trackVol': return c01(x);
-    case 'insertPan': return c01((x + 1) / 2);
+    case 'mix': case 'insertVol': case 'trackVol': case 'chanVol': return c01(x);
+    case 'insertPan': case 'chanPan': case 'clipPan': return c01((x + 1) / 2);
+    case 'clipGain': return lin(x, CLIP_GAIN_DB.min, CLIP_GAIN_DB.max);
+    case 'keys': return t.param === 'release' ? lg(x, KEYS_RELEASE.min, KEYS_RELEASE.max) : lin(x, KEYS_DYNAMICS.min, KEYS_DYNAMICS.max);
+    case 'synth': {
+      const d = cat && synthParam(cat.synth, t.param);
+      if (!d) return c01(x);
+      return d.log ? lg(x, d.min, d.max) : lin(x, d.min, d.max);
+    }
     case 'fx': {
       const b = parseBandParam(t.param);
       if (b) { const [a, z, log] = BAND_RANGE[b.k]; return log ? lg(x, a, z) : lin(x, a, z); }
@@ -52,8 +69,16 @@ export function normalize(p: Project, cat: Catalog | null, t: AutoTarget, x: num
 export function denormalize(p: Project, cat: Catalog | null, t: AutoTarget, v: number): number {
   v = c01(v);
   switch (t.kind) {
-    case 'mix': case 'insertVol': case 'trackVol': return v;
-    case 'insertPan': return v * 2 - 1;
+    case 'mix': case 'insertVol': case 'trackVol': case 'chanVol': return v;
+    case 'insertPan': case 'chanPan': case 'clipPan': return v * 2 - 1;
+    case 'clipGain': return unlin(v, CLIP_GAIN_DB.min, CLIP_GAIN_DB.max);
+    case 'keys': return t.param === 'release' ? ex(v, KEYS_RELEASE.min, KEYS_RELEASE.max) : unlin(v, KEYS_DYNAMICS.min, KEYS_DYNAMICS.max);
+    case 'synth': {
+      const d = cat && synthParam(cat.synth, t.param);
+      if (!d) return v;
+      const x = d.log ? ex(v, d.min, d.max) : unlin(v, d.min, d.max);
+      return d.options ? Math.round(x) : x;
+    }
     case 'fx': {
       const b = parseBandParam(t.param);
       if (b) { const [a, z, log] = BAND_RANGE[b.k]; return log ? ex(v, a, z) : unlin(v, a, z); }
@@ -72,6 +97,16 @@ export function readTarget(p: Project, t: AutoTarget): number | null {
     case 'insertVol': return p.inserts.find(m => m.id === t.id)?.vol ?? null;
     case 'insertPan': return p.inserts.find(m => m.id === t.id)?.pan ?? null;
     case 'trackVol': return p.tracks.find(x => x.id === t.id)?.vol ?? null;
+    case 'chanVol': return chanOf(p, t.id)?.vol ?? null;
+    case 'chanPan': return chanOf(p, t.id)?.pan ?? null;
+    case 'clipGain': return clipOf(p, t.id)?.gain ?? null;
+    case 'clipPan': return clipOf(p, t.id)?.pan ?? null;
+    case 'keys': { const c = chanOf(p, t.chanId); return c?.kind === 'keys' ? c.keys[t.param] : null; }
+    case 'synth': {
+      const c = chanOf(p, t.chanId); if (c?.kind !== 'synth') return null;
+      // null for a parameter the patch leaves out: it plays its default (`createAutomationOps` reads it)
+      return c.synth.params[t.param] ?? null;
+    }
     case 'fx': {
       const ff = fxOf(p, t.fxId); if (!ff) return null;
       const b = parseBandParam(t.param);
@@ -130,7 +165,7 @@ export function trackForAutomation(p: Project): { index: number; ops: Op[] } {
  * points, a clip of `len` beats at `start`, on an empty or new track.
  */
 export function createAutomationOps(p: Project, cat: Catalog | null, target: AutoTarget, name: string, color: string, start: number, len: number, alloc: () => Id): { ops: Op[]; clipId: Id; autoId: Id; track: number } {
-  const cur = readTarget(p, target) ?? 0;
+  const cur = readTarget(p, target) ?? (target.kind === 'synth' && cat ? synthParam(cat.synth, target.param)?.def : undefined) ?? 0;
   const v = normalize(p, cat, target, cur);
   const autoId = alloc();
   const auto: Automation = { id: autoId, name, color, target, points: [{ t: 0, v }, { t: len, v }] };
@@ -156,6 +191,14 @@ export function targetLabel(p: Project, cat: Catalog | null, t: AutoTarget): str
     case 'insertVol': return insName(t.id) + ' · ' + tl('a.au.vol');
     case 'insertPan': return insName(t.id) + ' · ' + tl('a.au.pan');
     case 'trackVol': return (p.tracks.find(x => x.id === t.id)?.name ?? '?') + ' · ' + tl('a.au.trackVol');
+    case 'chanVol': return (chanOf(p, t.id)?.name ?? '?') + ' · ' + tl('a.au.vol');
+    case 'chanPan': return (chanOf(p, t.id)?.name ?? '?') + ' · ' + tl('a.au.pan');
+    case 'keys': return (chanOf(p, t.chanId)?.name ?? '?') + ' · ' + tl(t.param === 'release' ? 'b.kp.release' : 'b.kp.dynamics');
+    case 'synth': return (chanOf(p, t.chanId)?.name ?? '?') + ' · ' + tName((cat && synthParam(cat.synth, t.param)?.label) ?? t.param);
+    case 'clipGain': case 'clipPan': {
+      const c = clipOf(p, t.id), src = c && p.sources.find(s => s.id === c.ref);
+      return (src?.name ?? '?') + ' · ' + tl(t.kind === 'clipGain' ? 'a.au.clipGain' : 'a.au.clipPan');
+    }
     case 'mix': { const ff = fxOf(p, t.fxId); return ff ? tName(ff.m.name) + ' · ' + tName(cat?.types[ff.f.type]?.name ?? ff.f.type) + ' · Mix' : 'Mix'; }
     case 'fx': {
       const ff = fxOf(p, t.fxId); if (!ff) return t.param;
