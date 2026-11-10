@@ -52,9 +52,10 @@ jobs:
           tagName: v__VERSION__
           releaseName: "WAVE v__VERSION__"
           releaseBody: |
-            WAVE v2 — rewritten as a lean Tauri app.
-            * Windows installer is built **with ASIO** (Settings → Audio → ASIO).
-            * `wave` CLI works after the first start (open a new terminal): `wave status`, `wave context`, see docs/cli.md.
-            * VST3 effects: Dodaj efekt → VST3… (first scan may take a while).
+            WAVE: a fast, FL-Studio-style DAW. Website and audio examples: https://miskibin.github.io/wave-DAW/
+            * The Windows installer is built **with ASIO** (Settings → Audio → ASIO) and includes the WAVE Keys piano.
+            * The interface is English by default; Polish is in Settings.
+            * The `wave` command line works after the first start (open a new terminal): `wave status`, `wave context`, see docs/cli.md.
+            * VST3 effects: Add effect → VST3… (the first scan may take a while).
           releaseDraft: false
-          prerelease: true
+          prerelease: false
