@@ -174,6 +174,7 @@ a { color: var(--blue); }
 .gridArea { position: relative; flex: none; }
 /* the grid and ruler canvases are tiles in grid coordinates, moved by `transform` (playlistTile.ts) */
 .gridCanvas { position: absolute; left: 0; top: 0; display: block; touch-action: none; }
+.gridOverlay { pointer-events: none; }
 .phead { position: absolute; top: 0; left: 0; width: 1px; background: var(--playhead); pointer-events: none; will-change: transform; }
 .marquee { position: absolute; border: 1px solid var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); pointer-events: none; }
 .dropHint { position: absolute; inset: 6px; z-index: 20; border: 1px solid var(--blue); border-radius: 6px; background: color-mix(in srgb, var(--blue) 8%, transparent); display: flex; align-items: center; justify-content: center; pointer-events: none; }

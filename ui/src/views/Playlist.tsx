@@ -13,18 +13,18 @@ import { snapFloor, snapRes, snapRound } from '../lib/snap';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { peaksVersion } from '../state/peaks';
-import { allocId, anyTrackSolo, arrVersion, plain, S, srcLenBeats, srcOf } from '../state/store';
+import { allocId, anyTrackSolo, arrVersion, onArrangementChange, plain, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
 import { drawFades, drawGrid, drawRuler, type View } from './playlistDraw';
-import { followScroll, planTile, type Rect, type Tile } from './playlistTile';
+import { damageRects, followScroll, planTile, type Rect, type Tile } from './playlistTile';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { sortPoints } from '../lib/automation';
 import { autoById } from '../state/store';
 import { openPattern } from '../state/pattern';
-import { T, theme } from '../ui/theme';
+import { rgba, T, theme } from '../ui/theme';
 
 
 /** Shared geometry, so the browser and OS drops can find a beat/track under the pointer. */
@@ -64,7 +64,7 @@ interface Hit { c: Clip; edge: 'l' | 'r' | 'fi' | 'fo' | 'cb' | null; bnd?: numb
 interface LaneHit extends TakeRow { ti: number; k: number; take: Take; cb: number }
 
 export function Playlist() {
-  let scrollEl!: HTMLDivElement, gridEl!: HTMLDivElement, gridCv!: HTMLCanvasElement, rulerCv!: HTMLCanvasElement;
+  let scrollEl!: HTMLDivElement, gridEl!: HTMLDivElement, gridCv!: HTMLCanvasElement, fadeCv!: HTMLCanvasElement, rulerCv!: HTMLCanvasElement;
   let phGrid!: HTMLDivElement, phRuler!: HTMLDivElement;
   const [vw, setVw] = createSignal(800), [vh, setVh] = createSignal(400);
   const [scroll, setScroll] = createSignal({ x: 0, y: 0 });
@@ -92,20 +92,61 @@ export function Playlist() {
   const editable = () => U.tool === 'draw' || U.tool === 'paint' || U.tool === 'select';
   const toolCursor = () => ({ draw: 'crosshair', paint: 'copy', erase: 'not-allowed', mute: 'pointer', slice: 'col-resize', select: 'crosshair' })[U.tool];
 
-  let dirtyGrid = true, dirtyFade = true, dirtyRuler = true, lastRecV = -1, lastPhX = -1, fontEpoch = 0, themeEpoch = -1, lastDpr = 0;
-  /** Everything but the fade overlays, cached: a fade drag only re-composites (cost independent of clip length). */
-  const base = document.createElement('canvas');
+  let dirtyGrid = true, dirtyFade = true, dirtyRuler = true, dirtyOv = true, lastRecV = -1, lastPhX = -1, fontEpoch = 0, themeEpoch = -1, lastDpr = 0;
   /** Where the grid canvases sit in grid coordinates (see playlistTile.ts); null = redraw all. */
   let tile: Tile | null = null, rulerTile: Tile | null = null;
+  /**
+   * Parts of the grid to repaint (grid coordinates) when not all of it is dirty: the old and new
+   * place of each clip an edit moved, the clips whose selection changed. A drag on a big song
+   * repaints a few clips per frame instead of the whole view with every waveform in it.
+   */
+  let damage: Rect[] = [];
+  /** Bumped when the clip lookups of `drawGrid` (patterns, sources, …) may be stale: not for a clip-only edit. */
+  let lookVer = 0;
   const [autoHover, setAutoHover] = createSignal<number | null>(null);
   // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip.
   // Scrolling is not here: the canvases scroll with the content and redraw only strips (`draw`)
-  createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; S.project.loop?.a; S.project.loop?.b; peaksVersion(); cw(); ch(); dirtyGrid = true; });
-  createEffect(() => { for (const _ of U.sel) void _; dirtyGrid = true; });
+  createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; peaksVersion(); cw(); ch(); dirtyGrid = true; });
+  // the loop range is shaded on the overlay: moving it repaints no clip
+  createEffect(() => { S.project.loop?.a; S.project.loop?.b; dirtyFade = true; });
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
-  // clips, comps, automations, patterns, sources: one project-version signal, not a
-  // subscription to every field of every item (that cost ~7 ms per clip move on a big song)
-  createEffect(() => { arrVersion(); prefs().clipIcons; dirtyGrid = true; dirtyFade = true; });
+  /** The clip's box in grid coordinates (with its ring), or null when it is drawn beyond it (comps open take lanes). */
+  const clipBox = (c: Clip, P: { tracks: Track[] }): Rect | null => {
+    if (c.kind === 'comp') return null;
+    const tr = P.tracks[c.track], t = tops(); if (!tr || t[c.track] == null) return null;
+    return { x: c.start * U.bw - 2, y: t[c.track] - 1, w: Math.max(3, c.len * U.bw - 1) + 4, h: tr.h + 2 };
+  };
+  const damageClip = (c: Clip | undefined, P: { tracks: Track[] }) => {
+    if (!c) return;
+    const r = clipBox(c, P);
+    if (r) damage.push(r); else dirtyGrid = true;
+  };
+  // selection: only the clips whose state changed are repainted
+  let drawnSel = new Set<Id>();
+  createEffect(() => {
+    const next = new Set<Id>(U.sel);
+    const changed: Id[] = [];
+    for (const id of next) if (!drawnSel.has(id)) changed.push(id);
+    for (const id of drawnSel) if (!next.has(id)) changed.push(id);
+    drawnSel = next;
+    if (!changed.length) return;
+    if (changed.length > 64) { dirtyGrid = true; return; }
+    const P = unwrap(S.project), ids = new Set(changed);
+    for (const c of P.clips) if (ids.has(c.id)) damageClip(c, P);
+  });
+  // clip edits: the old and the new box of each clip; anything else redraws the view
+  onCleanup(onArrangementChange((ops, before) => {
+    dirtyFade = dirtyOv = true;
+    if (!ops) { dirtyGrid = true; lookVer++; return; }
+    let byId: Map<Id, Clip> | null = null;
+    const old = (id: Id) => (byId ??= new Map(before.clips.map(c => [c.id, c]))).get(id);
+    for (const op of ops) {
+      if (op.op === 'putClips') for (const c of op.clips) { damageClip(old(c.id), before); damageClip(c, before); }
+      else if (op.op === 'removeClips') for (const id of op.ids) damageClip(old(id), before);
+      else { dirtyGrid = true; lookVer++; }
+    }
+  }));
+  createEffect(on(() => prefs().clipIcons, () => { dirtyGrid = true; }, { defer: true }));
   createEffect(() => {
     for (const k in S.audition) void S.audition[k];
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
@@ -113,19 +154,46 @@ export function Playlist() {
   createEffect(() => { U.autoEdit; autoHover(); dirtyGrid = true; });
   createEffect(() => { U.bw; U.start; S.project.loop?.a; S.project.loop?.b; cw(); dirtyRuler = true; });
 
-  /** Grid view of a region of the tile (tile-local CSS px). */
-  const tileView = (t: Tile, r: Rect): View => ({
-    offX: t.x + r.x, offY: t.y + r.y, W: r.w, H: r.h, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, autoEdit: U.autoEdit, autoHover: autoHover(),
-    rows: rows().map(r => r && { clip: unwrap(r.clip), comp: unwrap(r.comp) }), laneH: LANE_H, audition: { ...S.audition }, compSel: U.compSel ? { ...U.compSel } : null, bndHover: bndHover(), ver: arrVersion(),
+  /** The grid view of one frame; `at` places it on a region of the tile (tile-local CSS px). */
+  const frameView = (): View => ({
+    offX: 0, offY: 0, W: 0, H: 0, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, autoEdit: U.autoEdit, autoHover: autoHover(),
+    rows: rows().map(r => r && { clip: unwrap(r.clip), comp: unwrap(r.comp) }), laneH: LANE_H, audition: { ...S.audition }, compSel: U.compSel ? { ...U.compSel } : null, bndHover: bndHover(), ver: lookVer,
   });
-  /** Draws the grid into `region` of the base canvas only (clipped: nothing is painted twice). */
-  const paintBase = (b: CanvasRenderingContext2D, t: Tile, r: Rect, dpr: number, rec: typeof recState | null) => {
-    b.save();
-    b.setTransform(dpr, 0, 0, dpr, r.x * dpr, r.y * dpr);
-    b.beginPath(); b.rect(0, 0, r.w, r.h); b.clip();
-    b.fillStyle = T.grid; b.fillRect(0, 0, r.w, r.h);
-    drawGrid(b, tileView(t, r), unwrap(S.project), rec);
-    b.restore();
+  const at = (v: View, t: Tile, r: Rect): View => ({ ...v, offX: t.x + r.x, offY: t.y + r.y, W: r.w, H: r.h });
+  /** Draws the grid into `r` of the grid canvas only (clipped to whole device pixels: nothing is painted twice). */
+  const paintGrid = (g: CanvasRenderingContext2D, v: View, t: Tile, r: Rect, dpr: number, rec: typeof recState | null) => {
+    // the transform of a full paint, clipped to the region: a region repaint matches it pixel for pixel
+    g.save();
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.beginPath(); g.rect(r.x, r.y, r.w, r.h); g.clip();
+    g.fillStyle = T.grid; g.fillRect(r.x, r.y, r.w, r.h);
+    drawGrid(g, { ...at(v, t, r), orgX: t.x, orgY: t.y }, unwrap(S.project), rec);
+    g.restore();
+  };
+  /**
+   * Grows damaged boxes over every clip they touch (until none cuts through one): a repaint edge
+   * through a clip's rounded corner antialiases a few levels off a full paint, an edge on the
+   * lane background never does.
+   */
+  const closeOverClips = (rs: Rect[]): Rect[] => {
+    const P = unwrap(S.project), t = tops(), bw = U.bw;
+    const out = rs.map(r => ({ ...r }));
+    for (let pass = 0; pass < 4; pass++) {
+      let grew = false;
+      for (const c of P.clips) {
+        const tr = P.tracks[c.track]; if (!tr || t[c.track] == null) continue;
+        const x0 = c.start * bw - 2, x1 = x0 + Math.max(3, c.len * bw - 1) + 4, y0 = t[c.track] - 1, y1 = y0 + tr.h + 2;
+        for (const r of out) {
+          if (x1 <= r.x || x0 >= r.x + r.w || y1 <= r.y || y0 >= r.y + r.h) continue;
+          if (x0 >= r.x && x1 <= r.x + r.w && y0 >= r.y && y1 <= r.y + r.h) continue;
+          const nx = Math.min(r.x, x0), ny = Math.min(r.y, y0);
+          r.w = Math.max(r.x + r.w, x1) - nx; r.h = Math.max(r.y + r.h, y1) - ny; r.x = nx; r.y = ny;
+          grew = true;
+        }
+      }
+      if (!grew) break;
+    }
+    return out;
   };
   /** Follow playback: scrolls before anything is drawn, so grid, ruler and playhead change in one frame. */
   const follow = (b: number) => {
@@ -142,41 +210,52 @@ export function Playlist() {
     if (recActive && recState.version !== lastRecV) { dirtyGrid = true; lastRecV = recState.version; }
     else if (!recActive && lastRecV !== -1) { dirtyGrid = true; lastRecV = -1; }
     const dpr = window.devicePixelRatio || 1;
-    if (fontEpoch !== fonts.epoch || themeEpoch !== theme.epoch || dpr !== lastDpr) { fontEpoch = fonts.epoch; themeEpoch = theme.epoch; lastDpr = dpr; dirtyGrid = dirtyRuler = true; }
+    if (fontEpoch !== fonts.epoch || themeEpoch !== theme.epoch || dpr !== lastDpr) { fontEpoch = fonts.epoch; themeEpoch = theme.epoch; lastDpr = dpr; dirtyGrid = dirtyRuler = dirtyOv = true; }
     const beat = curBeat();
     follow(beat);
     const sx = scrollEl.scrollLeft, sy = scrollEl.scrollTop, W = cw(), H = ch();
     const plan = planTile(dirtyGrid ? null : tile, sx, sy, W, H, gridW(), gridH(), dpr);
     const t = plan.tile, moved = !tile || t.x !== tile.x || t.y !== tile.y || t.w !== tile.w || t.h !== tile.h;
-    if (plan.full || moved || dirtyFade) {
-      const rec = recActive ? recState : null;
-      if (plan.full) {
-        fitCanvas(base, t.w, t.h);
-        paintBase(base.getContext('2d')!, t, { x: 0, y: 0, w: t.w, h: t.h }, dpr, rec);
-      } else if (moved) {
-        // blit what is already drawn by the shift, then draw only the exposed strips
-        const b = base.getContext('2d')!;
-        b.save();
-        b.setTransform(1, 0, 0, 1, 0, 0);
-        b.globalCompositeOperation = 'copy';
-        b.drawImage(base, Math.round(plan.dx * dpr), Math.round(plan.dy * dpr));
-        b.restore();
-        for (const r of plan.strips) paintBase(b, t, r, dpr, rec);
-      }
-      dirtyGrid = dirtyFade = false;
-      fitCanvas(gridCv, t.w, t.h);
+    const rects = plan.full ? [] : damageRects(damage.length ? closeOverClips(damage) : damage, t, dpr);
+    const full = plan.full || rects === null;
+    damage = [];
+    if (full || moved || rects!.length) {
+      const rec = recActive ? recState : null, v = frameView();
+      if (full) fitCanvas(gridCv, t.w, t.h);
       const g = gridCv.getContext('2d')!;
-      g.setTransform(1, 0, 0, 1, 0, 0);
-      g.globalCompositeOperation = 'copy';
-      g.drawImage(base, 0, 0);
-      g.globalCompositeOperation = 'source-over';
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawFades(g, tileView(t, { x: 0, y: 0, w: t.w, h: t.h }), unwrap(S.project));
-      if (moved) {
-        gridCv.style.width = t.w + 'px'; gridCv.style.height = t.h + 'px';
-        gridCv.style.transform = `translate(${t.x}px, ${t.y}px)`;
+      if (full) paintGrid(g, v, t, { x: 0, y: 0, w: t.w, h: t.h }, dpr, rec);
+      else {
+        if (moved) {
+          // shift what is already drawn, then draw only the exposed strips
+          g.save();
+          g.setTransform(1, 0, 0, 1, 0, 0);
+          g.globalCompositeOperation = 'copy';
+          g.drawImage(gridCv, Math.round(plan.dx * dpr), Math.round(plan.dy * dpr));
+          g.restore();
+          for (const r of plan.strips) paintGrid(g, v, t, r, dpr, rec);
+        }
+        for (const r of rects!) paintGrid(g, v, t, r, dpr, rec);
+      }
+      dirtyGrid = false;
+      if (full || moved) {
+        gridCv.style.width = fadeCv.style.width = t.w + 'px';
+        gridCv.style.height = fadeCv.style.height = t.h + 'px';
+        gridCv.style.transform = fadeCv.style.transform = `translate(${t.x}px, ${t.y}px)`;
+        dirtyFade = true;
       }
       tile = t;
+    }
+    // fades and the loop range: an overlay, so dragging them repaints no clip
+    if (dirtyFade) {
+      dirtyFade = false;
+      fitCanvas(fadeCv, t.w, t.h);
+      const g = fadeCv.getContext('2d')!;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, fadeCv.width, fadeCv.height);
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const P = unwrap(S.project);
+      if (P.loop) { g.fillStyle = rgba(T.green, 0.05); g.fillRect(P.loop.a * U.bw - t.x, 0, (P.loop.b - P.loop.a) * U.bw, Math.min(t.h, gridH() - t.y)); }
+      drawFades(g, at(frameView(), t, { x: 0, y: 0, w: t.w, h: t.h }), P);
     }
     // the ruler is cheap: redrawn whole whenever its tile moves
     if (dirtyRuler || !rulerTile || rulerTile.x !== t.x || rulerTile.w !== t.w) {
@@ -189,6 +268,7 @@ export function Playlist() {
       rulerCv.style.width = t.w + 'px';
       rulerCv.style.transform = `translateX(${t.x}px)`;
     }
+    if (dirtyOv) { dirtyOv = false; drawOverview(); }
     // the playhead lives in grid coordinates like the canvases: it scrolls with them
     const x = Math.max(0, beat) * U.bw;
     if (x !== lastPhX) {
@@ -354,7 +434,7 @@ export function Playlist() {
     setU('sel', ids);
     const sx = e.clientX, sy = e.clientY, n = S.project.tracks.length;
     const t0 = trackAtYClamped(sy - gridEl.getBoundingClientRect().top);
-    let moved = false;
+    let moved = false, lastD = NaN, lastDt = NaN;
     track(ev => {
       if (!moved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 3) return;
       if (!moved && clone) {
@@ -370,6 +450,9 @@ export function Playlist() {
       const d0 = snapRound(o.start + raw, unit(ev.altKey)) - o.start;
       const dt0 = trackAtYClamped(ev.clientY - gridEl.getBoundingClientRect().top) - t0;
       const [d, dt] = clampMove(orig, d0, dt0, n);
+      // most pointer moves land on the same snapped place: nothing to apply, send or repaint
+      if (d === lastD && dt === lastDt) return;
+      lastD = d; lastDt = dt;
       g.update([{ op: 'putClips', clips: moveClips(orig, d, dt) }]);
       const src = srcOf(o);
       say((clone ? 'Kopia · ' : '') + (src ? src.name : '') + ' → ' + fmtPos(o.start + d) + ' · ' + (S.project.tracks[o.track + dt]?.name ?? ''));
@@ -385,6 +468,8 @@ export function Playlist() {
       const raw = (ev.clientX - sx) / U.bw;
       const target = snapRound((edge === 'r' ? o.start + o.len : o.start) + raw, unit(ev.altKey));
       const nc = resizeClip(o, edge, target, minL, srcLen);
+      const cur = S.project.clips.find(c => c.id === o.id);
+      if (cur && cur.start === nc.start && cur.len === nc.len && cur.offset === nc.offset) return;
       g.update([{ op: 'putClips', clips: [nc] }]);
       say(tl('a.pl.startLen', { pos: fmtPos(nc.start), len: nc.len.toFixed(2) }));
     }, () => g.end(), 'ew-resize');
@@ -441,8 +526,12 @@ export function Playlist() {
     track(ev => {
       const q = pt(ev), bw = U.bw, t = tops();
       const ax = Math.min(x0, q.x), bx = Math.max(x0, q.x), ay = Math.min(y0, q.y), by = Math.max(y0, q.y);
-      const hits = S.project.clips.filter(c => c.start * bw < bx && (c.start + c.len) * bw > ax && t[c.track] < by && t[c.track + 1] > ay).map(c => c.id);
-      setU({ marquee: { x0, y0, x1: q.x, y1: q.y }, sel: [...new Set([...base, ...hits])] });
+      const clips = unwrap(S.project).clips;
+      const hits = clips.filter(c => c.start * bw < bx && (c.start + c.len) * bw > ax && t[c.track] < by && t[c.track + 1] > ay).map(c => c.id);
+      const sel = [...new Set([...base, ...hits])], cur = U.sel;
+      // the box moves every frame, the selection only when it crosses a clip
+      const same = sel.length === cur.length && sel.every((id, i) => id === cur[i]);
+      setU(same ? { marquee: { x0, y0, x1: q.x, y1: q.y } } : { marquee: { x0, y0, x1: q.x, y1: q.y }, sel });
     }, () => { setU('marquee', null); say(tl('a.pl.selected', { n: U.sel.length })); }, 'crosshair');
   }
 
@@ -704,6 +793,8 @@ export function Playlist() {
         if (edge === 'a') a = clamp(snapRound(raw, u), 0, lp.b - u);
         else if (edge === 'b') z = clamp(snapRound(raw, u), lp.a + u, TOTAL);
         else { a = clamp(snapRound(lp.a + raw - raw0, u), 0, TOTAL - len); z = a + len; }
+        const now = S.project.loop;
+        if (now && now.a === a && now.b === z) return;
         g.update([{ op: 'setLoop', loop: { a, b: z } }]);
       }, () => { if (g) g.end(); else A.seek(b0); }, edge === 'body' ? 'grabbing' : 'ew-resize');
       return;
@@ -711,7 +802,8 @@ export function Playlist() {
     track(ev => {
       const b1 = clamp(snapRound((ev.clientX - r.left) / U.bw, unit(ev.altKey)), 0, TOTAL);
       if (!g && Math.abs(ev.clientX - e.clientX) > 4) g = new Gesture(tl('a.pl.loop'));
-      if (g && b1 !== b0) g.update([{ op: 'setLoop', loop: { a: Math.min(b0, b1), b: Math.max(b0, b1) } }]);
+      const a = Math.min(b0, b1), z = Math.max(b0, b1), now = S.project.loop;
+      if (g && b1 !== b0 && !(now && now.a === a && now.b === z)) g.update([{ op: 'setLoop', loop: { a, b: z } }]);
     }, () => {
       if (!g) A.seek(b0);
       else { g.end(); if (S.project.loop) A.seek(S.project.loop.a); }
@@ -749,8 +841,10 @@ export function Playlist() {
     const ro = new ResizeObserver(() => setOvW(ovCv.clientWidth)); ro.observe(ovCv);
     onCleanup(() => ro.disconnect());
   });
-  createEffect(() => {
-    const W = ovW(), H = 18, R = ovRange(); arrVersion(); theme.epoch;
+  // drawn from the frame loop: a drag changes the arrangement on every pointer move
+  createEffect(() => { ovW(); ovRange(); arrVersion(); theme.epoch; dirtyOv = true; });
+  function drawOverview() {
+    const W = ovW(), H = 18, R = ovRange();
     fitCanvas(ovCv, W, H);
     const g = ovCv.getContext('2d')!, P = unwrap(S.project), n = Math.max(1, P.tracks.length);
     g.clearRect(0, 0, W, H);
@@ -761,7 +855,7 @@ export function Playlist() {
       g.fillRect(c.start / R * W, 2 + c.track * lh, Math.max(1, c.len / R * W), Math.max(1, lh - (lh > 2 ? 0.5 : 0)));
     }
     g.globalAlpha = 1;
-  });
+  }
   const ovDown = (e: PointerEvent) => {
     holdFollow();
     if (e.button !== 0) return;
@@ -822,6 +916,7 @@ export function Playlist() {
               <div class="phtile"><div ref={phGrid} class="phead" style={{ height: gridH() + 'px' }} /></div>
               <canvas ref={gridCv} class="gridCanvas" style={{ cursor: toolCursor() }}
                 onPointerDown={gridDown} onPointerMove={hover} onDblClick={gridDbl} onContextMenu={e => e.preventDefault()} />
+              <canvas ref={fadeCv} class="gridCanvas gridOverlay" />
               <Show when={mq()}>{m => <div class="marquee" style={{ left: m().x + 'px', top: m().y + 'px', width: m().w + 'px', height: m().h + 'px' }} />}</Show>
             </div>
           </div>

@@ -108,7 +108,9 @@ function topSelf(profile, n = 14) {
 }
 const results = { meta: { size, url: 'mock backend, production-like unminified build', viewport: '1600x900', headless: !arg('headed', false), quick, chrome: await browser.version(), note: 'headless Chromium uses software rasterisation: absolute frame times are pessimistic for canvas work, relative comparisons are valid' }, scenarios: {} };
 
+const only = arg('only', '') ? String(arg('only', '')).split(',') : null;
 async function scenario(name, fn, opt = {}) {
+  if (only && !only.includes(name)) { results.scenarios[name] = {}; return; }
   await page.waitForTimeout(opt.settle ?? 250);
   await page.evaluate(() => window.gc && window.gc());
   const m0 = await metrics();
@@ -197,6 +199,27 @@ await scenario('clip_drag_mouse', async () => {
 const ipcDrag = ipcDiff(ipc0, await ipcSnap());
 results.scenarios.clip_drag_mouse.ipc = ipcDrag;
 await P(() => window.__perf.A.undo && window.__perf.A.undo());
+
+// drawing a loop range on the ruler, then a Ctrl+drag marquee over the clips
+// the ruler row is sticky at the top of the scroller, right of the lane headers
+const rul = await P(() => { const { geom, U } = window.__perf, r = geom.scroll.getBoundingClientRect(); return { x: r.left + U.headW, y: r.top + 13 }; });
+await scenario('loop_range_drag', async () => {
+  const x0 = rul.x + 200; await page.mouse.move(x0, rul.y); await page.mouse.down();
+  const N = quick ? 40 : 100;
+  for (let i = 1; i <= N; i++) await page.mouse.move(x0 + i * 6, rul.y);
+  await page.mouse.up(); await page.waitForTimeout(300);
+  return { moves: N, loop: await P(() => window.__perf.S.project.loop) };
+});
+await P(() => window.__perf.A.undo && window.__perf.A.undo());
+await scenario('marquee_select', async () => {
+  await page.keyboard.down('Control');
+  await page.mouse.move(pt.x - 40, pt.y - 40); await page.mouse.down();
+  const N = quick ? 40 : 100;
+  for (let i = 1; i <= N; i++) await page.mouse.move(pt.x - 40 + i * 12, pt.y - 40 + i * 6);
+  await page.mouse.up(); await page.keyboard.up('Control'); await page.waitForTimeout(300);
+  return { moves: N, selected: await P(() => window.__perf.U.sel.length) };
+});
+await P(() => window.__perf.setU('sel', []));
 
 // per-op reactive cost, synchronous parts, in page (scales with project size)
 results.op_cost = await P(async () => {
