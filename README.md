@@ -10,6 +10,18 @@
 
 ![WAVE: playlist, automation and the mixer](site/img/hero.png)
 
+## Note from developer (This part is not AI SLOP)
+
+- **2010:** I downloaded FL Studio for the first time and started making music.
+- **2015:** I started music school: cello, guitar and piano (graduated in 2019).
+- **2016–2022:** I sold beats to underground rappers in Poland (pop, true school, trap, love songs).
+- Along the way I tried almost every genre (EDM, lo-fi, classical, my own pop songs), often with real instruments in my beats. I also run a YouTube channel and master the voice for it myself.
+- **2022:** I joined Nokia, where I work on noise cancellation for telecom radios. That is a lot of DSP math, so I understand how sound works under the hood.
+
+My whole life led me to this product, and with AI I can finally build it. Yes, the app is vibe-coded with claude Fable, but at least I know what the code is doing.
+
+I now use WAVE for everything I used FL Studio for.
+
 ## What it does
 
 - **Playlist and patterns.** Pattern, audio and automation clips on free lanes; slice, fade,
