@@ -549,7 +549,28 @@ pub struct Rt {
     midi: Option<rtrb::Consumer<Cmd>>,
     /// Worker threads for the insert chains (offline renders only; 0/1 = this thread).
     workers: usize,
+    /// Instant start (live streams, see [`Rt::set_instant_start`]): the share of a callback
+    /// period the audio thread may fill while pre-rolling, `None` = off (offline renders
+    /// drop the latency themselves).
+    instant: Option<f32>,
+    /// Frames still to render muted before the music at the start position is heard: the
+    /// playback latency at the last Play, rendered ahead of the device clock (pre-roll).
+    preroll: usize,
+    /// Seconds one frame of pre-roll took at most (budget estimate), 0 = not measured yet.
+    pre_cost: f64,
+    /// Scratch output of pre-roll blocks.
+    pre_l: Vec<f32>,
+    pre_r: Vec<f32>,
+    /// Declick of a transport jump: the last frame heard before it ramps to zero over
+    /// [`DECLICK_S`] while the new music fades in.
+    last: (f32, f32),
+    dc: (f32, f32),
+    dc_pos: usize,
+    fade_pos: usize,
 }
+
+/// Declick ramp of a transport jump while sound is coming out.
+const DECLICK_S: f32 = 0.003;
 
 impl Rt {
     pub fn new(sr: f32, max_block: usize, cmds: rtrb::Consumer<Cmd>, garbage: rtrb::Producer<Garbage>, shared: Arc<Shared>, taps: Taps, record: rtrb::Producer<f32>) -> Self {
@@ -589,6 +610,50 @@ impl Rt {
             skip_silent: true,
             midi: None,
             workers: 0,
+            instant: None,
+            preroll: 0,
+            pre_cost: 0.0,
+            pre_l: vec![0.0; max_block],
+            pre_r: vec![0.0; max_block],
+            last: (0.0, 0.0),
+            dc: (0.0, 0.0),
+            dc_pos: usize::MAX,
+            fade_pos: usize::MAX,
+        }
+    }
+
+    /// Instant start for a live stream: after Play (a start, a seek, a jump of the start
+    /// marker) the playback latency (plugin delay compensation: up to seconds with a
+    /// look-ahead Rider) is rendered muted ahead of the device clock, as fast as the
+    /// callback deadline allows, so the music at the start position is heard at once
+    /// instead of after the latency, still on the timeline. `budget` is the share of each
+    /// callback period the audio thread may spend in total while pre-rolling (its own
+    /// frames included); `f32::INFINITY` renders the whole pre-roll in the first callback
+    /// (tests). `None` (the default, offline renders) keeps silence for the latency.
+    ///
+    /// Bound: with a mix costing `c` of real time, a pre-roll of `L` seconds is heard after
+    /// about `L · c / budget` seconds, plus at most one callback.
+    pub fn set_instant_start(&mut self, budget: Option<f32>) {
+        self.instant = budget;
+    }
+
+    /// Frames of the latency still being pre-rolled (0 = the music is heard).
+    pub fn preroll(&self) -> usize {
+        self.preroll
+    }
+
+    /// Starts the pre-roll at a transport jump. Not while recording: a take's alignment
+    /// assumes the delayed start (`RecBuf::skip` drops the playback latency).
+    fn jump(&mut self) {
+        if self.instant.is_none() || self.rec {
+            return;
+        }
+        self.preroll = self.graph.click.buf.len();
+        if self.last.0.abs() > 1e-6 || self.last.1.abs() > 1e-6 {
+            // sound was coming out: ramp it away and fade the new music in
+            self.dc = self.last;
+            self.dc_pos = 0;
+            self.fade_pos = 0;
         }
     }
 
@@ -750,6 +815,7 @@ impl Rt {
                     self.playing = true;
                     self.shared.playing.store(true, Relaxed);
                     self.shared.stopped_at_end.store(false, Relaxed);
+                    self.jump();
                 }
                 Cmd::PunchOut => {
                     // `rec` stays set so the run keeps its open-ended extent instead of
@@ -844,6 +910,9 @@ impl Rt {
                         self.stop(false);
                     }
                     self.set_pat_play(id);
+                    if id.is_some() {
+                        self.jump();
+                    }
                 }
             }
         }
@@ -905,20 +974,64 @@ impl Rt {
         let t0 = Instant::now();
         self.drain();
         let n = out_l.len();
+        let period = n as f32 / self.sr;
+        let pre = self.pre_roll(t0, n, period as f64);
         let mut pos = 0;
         while pos < n {
             let m = (n - pos).min(self.max_block);
             let inp = input.map(|(l, r)| (&l[pos.min(l.len())..(pos + m).min(l.len())], &r[pos.min(r.len())..(pos + m).min(r.len())]));
-            self.block(pos, m, out_l, out_r, inp);
+            let mute = self.preroll.min(m);
+            self.block(pos, m, out_l, out_r, inp, mute, false);
+            self.preroll -= mute;
             pos += m;
         }
-        let period = n as f32 / self.sr;
-        let load = t0.elapsed().as_secs_f32() / period.max(1e-6);
+        // the pre-roll is not this callback's load (the meter would only show its spike)
+        let load = (t0.elapsed().as_secs_f32() - pre).max(0.0) / period.max(1e-6);
         let prev = fget(&self.shared.cpu);
         fset(&self.shared.cpu, if load > prev { load } else { prev * 0.95 + load * 0.05 });
     }
 
-    fn block(&mut self, at: usize, n: usize, out_l: &mut [f32], out_r: &mut [f32], input: Option<(&[f32], &[f32])>) {
+    /// Renders pre-roll frames before this callback's own `n` while the deadline allows:
+    /// another block only if it and the callback's own frames still fit the budget at the
+    /// slowest per-frame cost seen in this pre-roll (bounded: at most one block over the
+    /// estimate). Allocation-free; the blocks go to scratch and are not heard. Returns the
+    /// seconds spent.
+    fn pre_roll(&mut self, t0: Instant, n: usize, period: f64) -> f32 {
+        let Some(budget) = self.instant else {
+            return 0.0;
+        };
+        if self.preroll == 0 {
+            return 0.0;
+        }
+        let tp = Instant::now();
+        let limit = period * budget as f64;
+        // the first block is small: it measures what a frame costs
+        let full = n.min(self.max_block);
+        let mut m = if self.pre_cost > 0.0 || !limit.is_finite() { full } else { 64.min(full) };
+        while self.preroll > 0 {
+            let m_now = m.min(self.preroll);
+            if limit.is_finite() && t0.elapsed().as_secs_f64() + self.pre_cost * (m_now + n) as f64 > limit {
+                break;
+            }
+            let tb = Instant::now();
+            let (mut l, mut r) = (std::mem::take(&mut self.pre_l), std::mem::take(&mut self.pre_r));
+            self.block(0, m_now, &mut l, &mut r, None, m_now, true);
+            (self.pre_l, self.pre_r) = (l, r);
+            self.pre_cost = self.pre_cost.max(tb.elapsed().as_secs_f64() / m_now as f64);
+            self.preroll -= m_now;
+            m = full;
+        }
+        if self.preroll == 0 {
+            self.pre_cost = 0.0; // the next pre-roll measures afresh
+        }
+        tp.elapsed().as_secs_f32()
+    }
+
+    /// One block of `n` frames into `out_*[at..]`. The first `mute` frames of the music are
+    /// not heard (pre-roll); `ahead`: a pre-roll block rendered ahead of the device clock
+    /// (no device input, no preview: those follow the real clock).
+    #[allow(clippy::too_many_arguments)]
+    fn block(&mut self, at: usize, n: usize, out_l: &mut [f32], out_r: &mut [f32], input: Option<(&[f32], &[f32])>, mute: usize, ahead: bool) {
         let sr = self.sr;
         for (l, r) in self.graph.track_bufs.iter_mut() {
             l[..n].fill(0.0);
@@ -1001,6 +1114,8 @@ impl Rt {
         // low-latency monitoring: the armed track's own insert (not the master) takes the
         // live input past its PDC delay and its look-ahead effects (see `InsertRt::low_lat`)
         let mon_ins = match input {
+            // a pre-roll block has no device input: the monitoring set-up stays as it is
+            _ if ahead => self.graph.mon_ins,
             Some(_) if self.monitor => self.graph.monitor_track.and_then(|t| self.graph.tracks.get(t)).map(|t| t.insert).filter(|&k| k > 0 && k < self.graph.inserts.len()),
             _ => None,
         };
@@ -1047,13 +1162,13 @@ impl Rt {
             }
         }
 
-        if let (Some(k), Some((il, ir))) = (mon_ins, input) {
+        if let Some(k) = mon_ins {
             // playback on the monitored insert is compensated before the chain; the live
             // input joins after the delay, scaled and muted by its track like the playback
             let ins = &mut g.inserts[k];
             g.mon.0.run(&mut ins.l[..n]);
             g.mon.1.run(&mut ins.r[..n]);
-            if let Some(t) = g.monitor_track.and_then(|t| g.tracks.get(t)).filter(|t| t.on) {
+            if let (Some(t), Some((il, ir))) = (g.monitor_track.and_then(|t| g.tracks.get(t)).filter(|t| t.on), input) {
                 for i in 0..n.min(il.len()) {
                     ins.l[i] += il[i] * t.gain;
                     ins.r[i] += ir[i] * t.gain;
@@ -1107,9 +1222,29 @@ impl Rt {
             Some(m) => (&m.l[..n], &m.r[..n]),
             None => (&self.tmp_l[..n], &self.tmp_r[..n]),
         };
+        if ahead {
+            return;
+        }
+        let ramp = ((DECLICK_S * sr) as usize).max(1);
         for i in 0..n {
-            out_l[at + i] = ml[i] + self.click[i] * 0.6;
-            out_r[at + i] = mr[i] + self.click[i] * 0.6;
+            let (mut a, mut b) = if i < mute { (0.0, 0.0) } else { (ml[i] + self.click[i] * 0.6, mr[i] + self.click[i] * 0.6) };
+            if i >= mute && self.fade_pos < ramp {
+                let w = self.fade_pos as f32 / ramp as f32;
+                a *= w;
+                b *= w;
+                self.fade_pos += 1;
+            }
+            if self.dc_pos < ramp {
+                let w = 1.0 - self.dc_pos as f32 / ramp as f32;
+                a += self.dc.0 * w;
+                b += self.dc.1 * w;
+                self.dc_pos += 1;
+            }
+            out_l[at + i] = a;
+            out_r[at + i] = b;
+        }
+        if n > 0 {
+            self.last = (out_l[at + n - 1], out_r[at + n - 1]);
         }
         if let Some(pv) = self.preview.as_mut() {
             let rate = pv.audio.sr as f64 / sr as f64;

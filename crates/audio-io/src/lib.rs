@@ -475,7 +475,9 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
         }
     }
 
-    let rt = engine.create_rt(rate as f32, (nominal as usize).clamp(64, 2048));
+    let mut rt = engine.create_rt(rate as f32, (nominal as usize).clamp(64, 2048));
+    // after Play the music is heard at once, not after the plugin delay compensation
+    rt.set_instant_start(Some(0.7));
     let wires = OutWires { shared: engine.shared(), swap: swap_rx, trash: trash_tx, probe: probe_rx, back: back_tx, offset_ms: offset_ms.clone(), stats: stats.clone(), shared_clock, buffer: nominal };
     let out = build_output(&out_dev, &sc, fmt, rt, error.clone(), wires).map_err(|e| format!("{out_name}: {e}"))?;
     out.play().map_err(|e| format!("{out_name}: {e}"))?;

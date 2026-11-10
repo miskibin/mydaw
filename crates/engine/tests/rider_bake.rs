@@ -244,12 +244,12 @@ fn baked_plan_renders_like_the_live_plan() {
 }
 
 #[test]
-fn a_rider_added_by_hand_has_the_short_look_ahead() {
+fn a_rider_added_by_hand_is_live() {
     let fx = new_fx(1, FxKind::Rider, 120.0);
-    assert_eq!(fx.params["look"], 0.0);
-    assert!(wave_engine::catalog::latency(&fx, SR as f32) < SR as usize / 2);
+    assert_eq!(fx.params["look"], 2.0);
+    assert_eq!(wave_engine::catalog::latency(&fx, SR as f32), 0, "a rider added by hand must not delay the mix");
     for p in wave_engine::catalog::presets(FxKind::Rider) {
-        let long = p.params.get("look").copied().unwrap_or(0.0) >= 0.5;
+        let long = wave_engine::rider::look_mode(p.params.get("look").copied().unwrap_or(0.0) as f32) == wave_engine::rider::look::LONG;
         assert_eq!(long, p.name.ends_with("(długi look-ahead, opóźnienie)"), "preset {}", p.name);
     }
 }

@@ -234,7 +234,7 @@ f64 patBeat         // beats into the pattern the loop preview plays; −1 = sto
 | `eq` | `[0..24]` current dynamic gain offset of band *k* in dB (0 for static bands) |
 | `fet` | `[0]` gain reduction dB, `[1]` input peak dBFS (after the Input knob), `[2]` output peak dBFS |
 | `deess` | `[0]` gain reduction dB, `[1]` sidechain (high band) level dB — with Detect = Relative the high/low band energy ratio dB, `[2]` sibilance 0..1, `[3]` threshold dB |
-| `rider` | `[0]` gain applied dB, `[1]` word level dB (K-weighted, ~200 ms), `[2]` phrase level dB (~2 s, confident vocal only), `[3]` vocal confidence 0..1, all at the moment being heard. Look-ahead latency (Short ≈ 0.3 s, Long ≈ 1.6 s: the offline research windows exactly) is compensated by PDC |
+| `rider` | `[0]` gain applied dB, `[1]` word level dB (K-weighted, ~200 ms), `[2]` phrase level dB (~2 s, confident vocal only), `[3]` vocal confidence 0..1, all at the moment being heard. Look-ahead (`look`): Live (default, value 2) adds no latency (trailing windows, forward slew only, gain applied 20 ms behind the analysis); Short ≈ 0.3 s and Long ≈ 1.6 s (the offline research windows exactly) are compensated by PDC |
 | `denoise` | `[0..16]` learned noise floor dB per band, `[16..32]` gain applied per band dB (≤ 0); 16 log bands 50 Hz – 16 kHz. Total reduction in `grDb`. Adds `fft_size` (2048 at ≤ 64 kHz) samples of latency, compensated by PDC |
 | `tune` | `[0]` detected input Hz (0 = unvoiced), `[1]` target note Hz, `[2]` output Hz, `[3]` confidence 0..1, `[4]` input offset from target in cents, `[5]` correction applied in cents |
 | `voice` | `[0]` detected input Hz (0 = unvoiced), `[1]` output Hz, `[2]` confidence 0..1, `[3]` pitch shift applied in semitones. Same latency as `tune`, compensated by PDC; an effect's dry/wet (`fx.mix`) delays its dry path by the effect's latency, so blends line up |
@@ -366,6 +366,16 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
   new graph is sent when the take ends. A parameter change that alters an
   effect's latency (e.g. the Rider's look-ahead) rebuilds the graph like a
   bypass toggle, so PDC always matches the parameters.
+* **Instant start** (live stream only, `Rt::set_instant_start`): after Play, a
+  seek or a pattern play the audio thread renders the playback latency muted
+  ahead of the device clock (pre-roll), as many blocks per callback as fit a
+  budget of 70 % of the period (its own frames included, at the slowest
+  per-frame cost seen), so the start position is heard at once and on the
+  timeline instead of after the latency. With a mix costing `c` of real time a
+  pre-roll of `L` is heard after about `L · c / 0.7` (plus a callback). A jump
+  while sound plays ramps the last output to zero over 3 ms while the new
+  music fades in. Not while recording (a take's `skip` assumes the delayed
+  start) and not offline (renders drop the latency themselves).
 * **Punch-in**: turning `rec` on while playing (with an armed track) starts a
   take at the playhead (`Cmd::PunchIn`; the audio thread reports the exact beat
   in `Shared::rec_start`); with a loop set it records in passes like loop
