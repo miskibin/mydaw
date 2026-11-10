@@ -4,6 +4,7 @@
 import { createSignal, For, onCleanup, onMount } from 'solid-js';
 import { be } from '../api/backend';
 import type { Id } from '../api/types';
+import { t } from '../lib/i18n';
 import { isBlack, noteName } from '../lib/pitch';
 import { typingHeld } from '../state/typingKeys';
 import { say } from '../state/ui';
@@ -32,7 +33,7 @@ export function PianoKeys(props: { ch: Id; lo: number; hi: number; mark?: number
     }
     return { key: ws[i], vel: vel(r.height) };
   };
-  const send = (key: number, vel: number, on: boolean) => be().typingNote({ ch: props.ch, key, vel, on }).catch(err => { if (on) say('Nie zagrano nuty: ' + String(err)); });
+  const send = (key: number, vel: number, on: boolean) => be().typingNote({ ch: props.ch, key, vel, on }).catch(err => { if (on) say(t('b.pk.fail', { err: String(err) })); });
   const release = () => { const k = down(); if (k != null) { setDown(null); void send(k, 0, false); } };
   const play = (e: PointerEvent) => {
     const h = hit(e);
@@ -49,19 +50,19 @@ export function PianoKeys(props: { ch: Id; lo: number; hi: number; mark?: number
 
   const lit = (k: number) => down() === k || held().has(k) || typingHeld().includes(k);
   return (
-    <div ref={el} class="pkeys" role="group" aria-label="Klawiatura: kliknij, żeby zagrać" title="Kliknij i trzymaj klawisz, żeby zagrać · niżej = mocniej · przeciągnij = glissando"
+    <div ref={el} class="pkeys" role="group" aria-label={t('b.pk.aria')} title={t('b.pk.title')}
       onPointerDown={e => { if (e.button !== 0) return; el.setPointerCapture(e.pointerId); play(e); }}
       onPointerMove={e => { if (down() != null) play(e); }}
       onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}>
       <For each={whites()}>{(k, i) => (
         <div class="w" classList={{ on: lit(k) }} style={{ left: (i() / whites().length) * 100 + '%', width: 100 / whites().length + '%' }}>
           {k % 12 === 0 && <span class="lbl">{noteName(k)}</span>}
-          {props.mark === k && <span class="mark" title="Nuta bazowa" />}
+          {props.mark === k && <span class="mark" title={t('b.pk.root')} />}
         </div>
       )}</For>
       <For each={blacks()}>{b => (
         <div class="b" classList={{ on: lit(b.key) }} style={{ left: 'calc(' + (b.at / whites().length) * 100 + '% - ' + (32 / whites().length) + '%)', width: 64 / whites().length + '%' }}>
-          {props.mark === b.key && <span class="mark" title="Nuta bazowa" />}
+          {props.mark === b.key && <span class="mark" title={t('b.pk.root')} />}
         </div>
       )}</For>
     </div>

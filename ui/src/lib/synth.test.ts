@@ -28,7 +28,7 @@ describe('synth channels', () => {
   });
 
   it('a knob clamps, keeps the other values and drops the preset name', () => {
-    const c = newSynthChannel(cat, 7, 'Pad Ciepły');
+    const c = newSynthChannel(cat, 7, cat.presets[1].name);
     const d = withSynthParam(cat, c, 'flt_cutoff', 99999);
     if (d.kind !== 'synth' || c.kind !== 'synth') throw new Error('kind');
     expect(d.synth.params.flt_cutoff).toBe(synthParam(cat, 'flt_cutoff')!.max);

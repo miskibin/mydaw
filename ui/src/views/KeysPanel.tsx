@@ -5,6 +5,7 @@ import { createSignal, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import { KEYS_DYNAMICS, KEYS_RELEASE, type Channel, type KeysStatus } from '../api/types';
 import { clamp } from '../lib/format';
+import { t, type TranslationKey } from '../lib/i18n';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { chanById, chanOp } from '../state/pattern';
 import { say } from '../state/ui';
@@ -42,21 +43,21 @@ export function KeysPanel(props: { c: KeysChannel }) {
   const download = async () => {
     const kit = st()?.kit; if (!kit) return;
     setErr(null); setDl(0);
-    try { await be().libraryInstall(kit); say('WAVE Keys: fortepian pobrany'); }
+    try { await be().libraryInstall(kit); say(t('b.kp.downloaded')); }
     catch (e) { setErr(String(e)); }
     finally { setDl(null); void be().keysStatus().then(setSt); }
   };
 
-  const knob = (label: string, title: string, t: () => number, text: () => string, patch: (t: number) => KeysChannel['keys'], def: number) => {
+  const knob = (lab: TranslationKey, titleKey: TranslationKey, tv: () => number, text: () => string, patch: (v: number) => KeysChannel['keys'], def: number) => {
     let g: Gesture | null = null;
     const op = (v: number) => [chanOp(live(), { keys: patch(v) } as Partial<Channel>)];
     return (
-      <Knob key={'keys' + label + props.c.id} label={label} title={title + ' · przeciągnij ↕ · Shift = precyzyjnie · 2× klik = reset'} t={t} text={text}
-        onStart={() => { g = new Gesture(label + ' · WAVE Keys'); }}
-        onChange={v => { g?.update(op(v)); say(props.c.name + ' · ' + label.toLowerCase() + ' ' + text()); }}
+      <Knob key={'keys' + lab + props.c.id} label={t(lab)} title={t('b.kp.knobTitle', { title: t(titleKey) })} t={tv} text={text}
+        onStart={() => { g = new Gesture(t('b.kp.gest', { name: t(lab) })); }}
+        onChange={v => { g?.update(op(v)); say(props.c.name + ' · ' + t(lab).toLowerCase() + ' ' + text()); }}
         onEnd={() => { g?.end(); g = null; }}
-        onReset={() => commit(op(def), label + ' · WAVE Keys')}
-        onWheel={v => wheelEdit('keys' + label, label + ' · WAVE Keys', op(v))} />
+        onReset={() => commit(op(def), t('b.kp.gest', { name: t(lab) }))}
+        onWheel={v => wheelEdit('keys' + lab, t('b.kp.gest', { name: t(lab) }), op(v))} />
     );
   };
 
@@ -68,29 +69,29 @@ export function KeysPanel(props: { c: KeysChannel }) {
         <span class="big" style={{ color: props.c.color }}><InstIcon id="piano" size={34} /></span>
         <div class="keysinfo">
           <div class="nm">WAVE KEYS</div>
-          <div class="note">Fortepian koncertowy z próbek: 30 nagranych dźwięków × 3 dynamiki, do 9 s wybrzmienia. Siła uderzenia zmienia barwę, nie tylko głośność.</div>
+          <div class="note">{t('b.kp.desc')}</div>
         </div>
       </div>
       <Show when={state() === 'missing' || (state() === 'idle' && st() && !st()!.installed) || dl() != null}>
         <div class="keysmsg">
           <Show when={dl() != null} fallback={<>
-            <span>Nagrania fortepianu nie są jeszcze na tym komputerze (138 MB, pobierane raz). Do tego czasu kanał milczy.</span>
-            <button class="smallbtn primary" onClick={download}>Pobierz fortepian</button>
+            <span>{t('b.kp.missing')}</span>
+            <button class="smallbtn primary" onClick={download}>{t('b.kp.download')}</button>
           </>}>
-            <span>Pobieranie fortepianu… {Math.round((dl() ?? 0) * 100)} %</span>
+            <span>{t('b.kp.downloading', { n: Math.round((dl() ?? 0) * 100) })}</span>
             <div class="keysbar"><div style={{ width: Math.round((dl() ?? 0) * 100) + '%' }} /></div>
           </Show>
         </div>
       </Show>
-      <Show when={state() === 'loading' && dl() == null}><div class="keysmsg"><span>Wczytywanie nagrań… kanał zagra za chwilę.</span></div></Show>
-      <Show when={err() ?? (state() === 'error' ? st()?.error ?? 'Nie udało się wczytać nagrań.' : null)}>
-        {m => <div class="keysmsg bad"><span>{m()}</span><button class="smallbtn" onClick={download}>Spróbuj ponownie</button></div>}
+      <Show when={state() === 'loading' && dl() == null}><div class="keysmsg"><span>{t('b.kp.loading')}</span></div></Show>
+      <Show when={err() ?? (state() === 'error' ? st()?.error ?? t('b.kp.loadFail') : null)}>
+        {m => <div class="keysmsg bad"><span>{m()}</span><button class="smallbtn" onClick={download}>{t('b.kp.retry')}</button></div>}
       </Show>
       <div class="keysknobs">
-        {knob('Wybrzmienie', 'Jak długo dźwięk gaśnie po puszczeniu klawisza', () => relT(k().release), () => relText(k().release), t => ({ ...k(), release: relMs(t) }), relT(KEYS_RELEASE.def))}
-        {knob('Dynamika', 'Jak mocno siła uderzenia zmienia głośność (0 % = każda nuta równie głośna, barwa nadal zależy od siły)', () => k().dynamics / 100, () => Math.round(k().dynamics) + ' %', t => ({ ...k(), dynamics: Math.round(clamp(t, 0, 1) * 100) }), KEYS_DYNAMICS.def / 100)}
-        <div class="keyscredit" title="Salamander Grand Piano V3, Alexander Holm, CC-BY-3.0 — w utworze z tym fortepianem podaj autora nagrań.">
-          Nagrania: Salamander Grand Piano V3 · Alexander Holm · CC-BY 3.0
+        {knob('b.kp.release', 'b.kp.releaseTip', () => relT(k().release), () => relText(k().release), t => ({ ...k(), release: relMs(t) }), relT(KEYS_RELEASE.def))}
+        {knob('b.kp.dynamics', 'b.kp.dynamicsTip', () => k().dynamics / 100, () => Math.round(k().dynamics) + ' %', t => ({ ...k(), dynamics: Math.round(clamp(t, 0, 1) * 100) }), KEYS_DYNAMICS.def / 100)}
+        <div class="keyscredit" title={t('b.kp.creditTitle')}>
+          {t('b.kp.credit')}
         </div>
       </div>
     </div>

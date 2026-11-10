@@ -1,5 +1,6 @@
 // Preset resolution and matching against the catalog from `fx_catalog`.
 import type { AnyBuiltinKind, Catalog, EqBand, Fx, FxKind, Id, ParamDef, Preset } from '../api/types';
+import { t, tName } from './i18n';
 
 export interface ResolvedPreset { params: Record<string, number>; bands?: EqBand[] }
 
@@ -51,7 +52,7 @@ export function presetInfo(cat: Catalog | null, fx: Fx, bpm: number): PresetInfo
     if (r && paramsMatch(fx, r)) return { idx: i, name: list[i].name, mod: false };
   }
   if (fx.preset != null && list[fx.preset]) return { idx: fx.preset, name: list[fx.preset].name, mod: true };
-  return { idx: -1, name: 'Własne ustawienia', mod: false };
+  return { idx: -1, name: t('c.presets.custom'), mod: false };
 }
 
 export function loadPreset(cat: Catalog, fx: Fx, i: number, bpm: number): Fx {
@@ -89,7 +90,7 @@ export function pFmt(p: ParamDef, v: number): string {
   if (u === ':1') return v.toFixed(1) + ':1';
   if (u === 'µs') return Math.round(v) + ' µs';
   if (u === 'st') return (v > 0.05 ? '+' : '') + (Math.abs(v) < 0.05 ? '0' : v.toFixed(1)) + ' st';
-  if (p.options) return p.options[Math.round(Math.min(p.max, Math.max(p.min, v)))] ?? String(v);
+  if (p.options) { const o = p.options[Math.round(Math.min(p.max, Math.max(p.min, v)))]; return o != null ? tName(o) : String(v); }
   if (u === 'dB') return (v > 0.05 ? '+' : '') + (Math.abs(v) < 0.05 ? '0.0' : v.toFixed(1)) + ' dB';
   return v.toFixed(2) + (u ? ' ' + u : '');
 }

@@ -1,4 +1,5 @@
 import { patMode, setPatMode } from '../state/pattern';
+import { t, type TranslationKey } from '../lib/i18n';
 import { setTypingOn, typingBase, typingOn } from '../state/typingKeys';
 import { noteName } from '../lib/pitch';
 import { prefs } from '../state/prefs';
@@ -16,10 +17,10 @@ import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { Icon, ICONS } from '../ui/icons';
 
-export const TOOLS: [Tool, string, string][] = [
-  ['draw', 'P', 'Rysuj'], ['paint', 'B', 'Maluj'], ['erase', 'D', 'Usuń'], ['mute', 'T', 'Wycisz'], ['slice', 'C', 'Tnij'], ['select', 'E', 'Zaznacz'],
+export const TOOLS: [Tool, string, TranslationKey][] = [
+  ['draw', 'P', 'a.tb.toolDraw'], ['paint', 'B', 'a.tb.toolPaint'], ['erase', 'D', 'a.tb.toolErase'], ['mute', 'T', 'a.tb.toolMute'], ['slice', 'C', 'a.tb.toolSlice'], ['select', 'E', 'a.tb.toolSelect'],
 ];
-export const TOOL_HINT: Record<Tool, string> = { draw: 'klik wstawia · przeciągnij przesuwa · krawędzie przycinają', paint: 'przeciągnij, aby powielać', erase: 'klik / przeciągnij usuwa', mute: 'klik przełącza mute klipu', slice: 'klik tnie na siatce · Alt = swobodnie', select: 'przeciągnij prostokąt' };
+export const TOOL_HINT: Record<Tool, TranslationKey> = { draw: 'a.tb.hint_draw', paint: 'a.tb.hint_paint', erase: 'a.tb.hint_erase', mute: 'a.tb.hint_mute', slice: 'a.tb.hint_slice', select: 'a.tb.hint_select' };
 
 const clampBpm = (v: number) => clamp(Math.round(v * 100) / 100, 20, 999);
 
@@ -70,7 +71,7 @@ export function Toolbar() {
       wheelEdit('tap-bpm', 'Tap tempo', [{ op: 'setBpm', bpm: r.bpm }]);
       say(`Tap tempo · ${r.bpm.toFixed(2)} BPM (${r.count}×)`);
     } else {
-      say('Tap tempo — klikaj dalej w rytm utworu…');
+      say(t('a.tb.tapKeep'));
     }
   };
   const bpmMenu = (e: MouseEvent) => {
@@ -84,17 +85,17 @@ export function Toolbar() {
     const hasAudio = S.project.clips.some(c => c.kind === 'audio');
     openMenu(e.clientX, e.clientY, [
       { t: 'title', label: 'Tempo · ' + b.toFixed(2) + ' BPM' },
-      { t: 'item', label: 'Wybij tempo (Tap)', kbd: 'klikaj TAP', act: () => doTap() },
-      { t: 'item', label: 'Wykryj tempo i tonację z projektu…', disabled: !hasAudio, act: () => A.openMusicAnalysis({}) },
+      { t: 'item', label: t('a.tb.tapMenu'), kbd: t('a.tb.tapKbd'), act: () => doTap() },
+      { t: 'item', label: t('a.tb.detectProj'), disabled: !hasAudio, act: () => A.openMusicAnalysis({}) },
       { t: 'sep' },
-      { t: 'item', label: `Połowa tempa (${clampBpm(b / 2).toFixed(1)} BPM)`, disabled: b / 2 < 20, act: () => setB(b / 2, 'Połowa tempa') },
-      { t: 'item', label: `Podwójne tempo (${clampBpm(b * 2).toFixed(1)} BPM)`, disabled: b * 2 > 999, act: () => setB(b * 2, 'Podwójne tempo') },
+      { t: 'item', label: t('a.tb.halfTempo', { bpm: clampBpm(b / 2).toFixed(1) }), disabled: b / 2 < 20, act: () => setB(b / 2, t('a.tb.halfLabel')) },
+      { t: 'item', label: t('a.tb.doubleTempo', { bpm: clampBpm(b * 2).toFixed(1) }), disabled: b * 2 > 999, act: () => setB(b * 2, t('a.tb.doubleLabel')) },
       { t: 'sep' },
-      { t: 'chips', label: 'Szybki wybór', options: ['80', '90', '100', '110', '120', '128', '140', '160'], active: [80, 90, 100, 110, 120, 128, 140, 160].indexOf(Math.round(b)), pick: i => setB([80, 90, 100, 110, 120, 128, 140, 160][i]) },
+      { t: 'chips', label: t('a.tb.quickPick'), options: ['80', '90', '100', '110', '120', '128', '140', '160'], active: [80, 90, 100, 110, 120, 128, 140, 160].indexOf(Math.round(b)), pick: i => setB([80, 90, 100, 110, 120, 128, 140, 160][i]) },
     ], 260);
   };
   const T = () => S.transport;
-  const projName = () => (S.path ? baseName(S.path) : 'Bez nazwy');
+  const projName = () => (S.path ? baseName(S.path) : t('a.tb.untitled'));
   // custom title bar: empty toolbar areas and the project name drag the window, 2× click maximises
   const win = be().win;
   const [maxed, setMaxed] = createSignal(false);
@@ -125,105 +126,105 @@ export function Toolbar() {
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
       </button>
       <div class="row undogrp" style={{ gap: '1px' }}>
-        <button class="ibtn" disabled={!S.canUndo} onClick={() => void A.undo()} title="Cofnij (Ctrl+Z)"><Icon d="M9 14L4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3" /></button>
-        <button class="ibtn" disabled={!S.canRedo} onClick={() => void A.redo()} title="Ponów (Ctrl+Shift+Z)"><Icon d="M15 14l5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3" /></button>
+        <button class="ibtn" disabled={!S.canUndo} onClick={() => void A.undo()} title={t('a.tb.undo')}><Icon d="M9 14L4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3" /></button>
+        <button class="ibtn" disabled={!S.canRedo} onClick={() => void A.redo()} title={t('a.tb.redo')}><Icon d="M15 14l5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3" /></button>
       </div>
       <div class="vsep" />
-      <div class="seg patsong" title="L — co gra Spacja: PAT = bieżący pattern w pętli, SONG = utwór z playlisty (jak w FL Studio)">
+      <div class="seg patsong" title={t('a.tb.patSongTip')}>
         <button classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
         <button classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
       </div>
       <div class="seg">
-        <button title={patMode() ? 'Play / Stop bieżącego patternu (Spacja) — tryb PAT' : 'Play / Stop (Spacja)'} data-act="play" classList={{ play: U.playing || U.patPlaying }} onClick={() => void A.togglePlay()}>
+        <button title={patMode() ? t('a.tb.playPat') : t('a.tb.playSong')} data-act="play" classList={{ play: U.playing || U.patPlaying }} onClick={() => void A.togglePlay()}>
           <svg width="11" height="11" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor" /></svg>
         </button>
-        <button title="Stop (wraca na początek utworu; Spacja wraca do znacznika startu)" onClick={() => void A.stop(true)}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
-        <button title="Nagrywanie (R)" class="rec" classList={{ armed: T().rec }} onClick={A.toggleRec}>
+        <button title={t('a.tb.stopTip')} onClick={() => void A.stop(true)}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
+        <button title={t('a.tb.recTip')} class="rec" classList={{ armed: T().rec }} onClick={A.toggleRec}>
           <svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor" /></svg>
         </button>
-        <button title="Odsłuch wejścia" class="mon monbtn" classList={{ on: T().monitor }} onClick={A.toggleMonitor}>
+        <button title={t('a.tb.monTip')} class="mon monbtn" classList={{ on: T().monitor }} onClick={A.toggleMonitor}>
           <Icon d="M4 15v-3a8 8 0 0 1 16 0v3 M3 14h4v7H3z M17 14h4v7h-4z" size={13} />
         </button>
-        <button title="Metronom" class="metrobtn" classList={{ on: T().metro, dim: !T().metro }} onClick={() => void A.setTransportFlag('metro', !T().metro)}>
+        <button title={t('a.tb.metroTip')} class="metrobtn" classList={{ on: T().metro, dim: !T().metro }} onClick={() => void A.setTransportFlag('metro', !T().metro)}>
           <Icon d="M9 3h6l4 18H5z M12 16l6-9" size={13} />
         </button>
-        <button class="count" classList={{ on: T().countIn }} title="Count-in: 1 takt przed nagrywaniem" onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
+        <button class="count" classList={{ on: T().countIn }} title={t('a.tb.countTip')} onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
-      <button class="ibtn typkb" classList={{ on: typingOn() }} title={typingOn() ? 'Klawiatura jako pianino: wł. (Ctrl+T) · Z = ' + noteName(typingBase()) + ', Q = ' + noteName(typingBase() + 12) + ' · PgDn / PgUp = oktawa' : 'Klawiatura jako pianino (Ctrl+T): Z S X D C… i Q 2 W 3 E… grają nuty wybranego kanału'}
+      <button class="ibtn typkb" classList={{ on: typingOn() }} title={typingOn() ? t('a.tb.typOn', { z: noteName(typingBase()), q: noteName(typingBase() + 12) }) : t('a.tb.typOff')}
         onClick={() => setTypingOn(!typingOn())}>
         <Icon d="M3 6h18v12H3z M7 6v7 M11 6v7 M15 6v7 M19 6v7 M3 13h18" size={14} />
         <Show when={typingOn()}><span class="mono typoct">{noteName(typingBase())}</span></Show>
       </button>
       {/* the slot stays reserved while recording is off, so pressing R never re-wraps the toolbar
           (and shifts the playlist) on a narrow window */}
-      <div class="row inrow" title="Poziom wejścia" style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
+      <div class="row inrow" title={t('a.tb.inLevel')} style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
         <span class="tag9">IN</span>
         <div class="inmeter"><div ref={inEl} /></div>
       </div>
       <div class="clockbox" onContextMenu={bpmMenu}>
         <span ref={clockEl} class="clock">1:01:01</span>
         <div style={{ width: '1px', height: '14px', background: 'var(--line)' }} />
-        <span class="bpm" title="Tempo — przeciągnij, kółko, Shift = setne · PPM = menu tempa" onPointerDown={bpmDown} onWheel={bpmWheel}>{S.project.bpm.toFixed(2)}</span>
+        <span class="bpm" title={t('a.tb.bpmTip')} onPointerDown={bpmDown} onWheel={bpmWheel}>{S.project.bpm.toFixed(2)}</span>
         <span class="tag9">BPM</span>
-        <button class="tapbtn" classList={{ on: tapping() }} data-tap title="Wybij tempo (Tap) — klikaj w rytm utworu (Shift = z częściami setnymi)" onClick={e => doTap(e)}>TAP</button>
+        <button class="tapbtn" classList={{ on: tapping() }} data-tap title={t('a.tb.tapTip')} onClick={e => doTap(e)}>TAP</button>
       </div>
       <div class="vsep" />
       <div class="seg tools">
         <For each={TOOLS}>
           {([id, key, title]) => (
-            <button classList={{ on: U.tool === id }} title={title + ' (' + key + ') — ' + TOOL_HINT[id]} onClick={() => setU('tool', id)}>
+            <button classList={{ on: U.tool === id }} title={t(title) + ' (' + key + ') — ' + t(TOOL_HINT[id])} onClick={() => setU('tool', id)}>
               <Icon d={ICONS[id]} sw={1.9} />
             </button>
           )}
         </For>
       </div>
-      <select class="sel snapsel" title="Przyciąganie do siatki" value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
-        <For each={SNAPS}>{([label, v]) => <option value={String(v)}>{v < 0 ? snapLabel(-1, U.bw) : label}</option>}</For>
+      <select class="sel snapsel" title={t('a.tb.snapTip')} value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
+        <For each={SNAPS}>{([label, v]) => <option value={String(v)}>{v < 0 ? snapLabel(-1, U.bw) : v === 0 ? t('a.snap.off') : label}</option>}</For>
       </select>
       <div data-drag class="dragfill" />
-      <span data-drag class="projName" title={(S.path ?? 'Projekt niezapisany') + (S.dirty ? ' — niezapisane zmiany' : '')}>{projName()}<Show when={S.dirty}><span data-drag class="dirty">•</span></Show></span>
+      <span data-drag class="projName" title={(S.path ?? t('a.tb.unsavedProj')) + (S.dirty ? t('a.tb.unsavedChanges') : '')}>{projName()}<Show when={S.dirty}><span data-drag class="dirty">•</span></Show></span>
       </div>
       {/* right group sits outside the clipped .tbmain: on a narrow window the left side
           gives way first, settings / mixer / export never disappear */}
       <div class="tbright" data-drag>
-      <button class="tbtn" classList={{ on: U.exportOpen }} onClick={() => setU('exportOpen', true)} title="Eksport do WAV (Ctrl+Shift+R)" aria-label="Eksport">
-        <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} /><span class="lbl">Eksport</span>
+      <button class="tbtn" classList={{ on: U.exportOpen }} onClick={() => setU('exportOpen', true)} title={t('a.tb.exportTip')} aria-label={t('a.tb.export')}>
+        <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} /><span class="lbl">{t('a.tb.export')}</span>
       </button>
       <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : ''}</span>
       <Show when={U.plugs.length + (U.patWin ? 1 : 0)}>
         <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
-          title={U.plugsHidden ? `Pokaż okna (efekty, pattern) (F5) — ${U.plugs.length + (U.patWin ? 1 : 0)}` : 'Schowaj okna efektów i patternu za playlistę (F5, albo klik w playlistę)'}>
-          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} /><span class="lbl">Okna {U.plugs.length + (U.patWin ? 1 : 0)}</span>
+          title={U.plugsHidden ? t('a.tb.showWins', { n: U.plugs.length + (U.patWin ? 1 : 0) }) : t('a.tb.hideWins')}>
+          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} /><span class="lbl">{t('a.tb.windows', { n: U.plugs.length + (U.patWin ? 1 : 0) })}</span>
         </button>
       </Show>
-      <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title="Mikser (F9)" aria-label="Mixer">
+      <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title={t('a.tb.mixerTip')} aria-label="Mixer">
         <Icon d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6" size={13} /><span class="lbl">Mixer</span>
       </button>
-      <button class="tbtn followbtn" classList={{ on: U.follow }} onClick={() => setU('follow', !U.follow)} title="Podążaj za głowicą (F)" aria-label="Follow">
+      <button class="tbtn followbtn" classList={{ on: U.follow }} onClick={() => setU('follow', !U.follow)} title={t('a.tb.followTip')} aria-label="Follow">
         <Icon d="M4 12h11 M11 7l5 5-5 5 M20 4v16" size={13} /><span class="lbl">Follow</span>
       </button>
       <div class="row zgrp" style={{ gap: '1px' }}>
-        <button class="zbtn" onClick={() => A.zoomAt(0.8)} title="Oddal (Ctrl+−)">−</button>
-        <button class="zbtn" onClick={() => A.zoomAt(1.25)} title="Przybliż (Ctrl+=)">+</button>
+        <button class="zbtn" onClick={() => A.zoomAt(0.8)} title={t('a.tb.zoomOut')}>−</button>
+        <button class="zbtn" onClick={() => A.zoomAt(1.25)} title={t('a.tb.zoomIn')}>+</button>
       </div>
       <Show when={midiStatus()?.selected}>
         <button class="ibtn midibtn" onClick={() => setU('settings', true)}
-          title={midiStatus()?.connected ? 'MIDI: ' + midiStatus()!.connected!.name + ' — klik = ustawienia' : 'MIDI: urządzenie odłączone — klik = ustawienia'}>
+          title={midiStatus()?.connected ? t('a.tb.midiOn', { name: midiStatus()!.connected!.name }) : t('a.tb.midiOff')}>
           <span class="midiled" classList={{ on: !!midiStatus()?.connected, hit: midiFlash() }} /><span class="tag9">MIDI</span>
         </button>
       </Show>
-      <button class="ibtn" classList={{ on: U.settings }} style={{ width: '26px', height: '26px' }} onClick={() => setU('settings', !U.settings)} title="Ustawienia (audio, wygląd)"><Icon d={ICONS.gear} size={14} sw={1.8} /></button>
-      <button class="zbtn helpbtn" classList={{ on: U.help }} style={{ font: '600 12px var(--mono)' }} onClick={() => setU('help', !U.help)} title="Skróty klawiszowe (?)">?</button>
+      <button class="ibtn" classList={{ on: U.settings }} style={{ width: '26px', height: '26px' }} onClick={() => setU('settings', !U.settings)} title={t('a.tb.settingsTip')}><Icon d={ICONS.gear} size={14} sw={1.8} /></button>
+      <button class="zbtn helpbtn" classList={{ on: U.help }} style={{ font: '600 12px var(--mono)' }} onClick={() => setU('help', !U.help)} title={t('a.tb.helpTip')}>?</button>
       </div>
       <Show when={win}>
         <div class="winbtns">
-          <button title="Minimalizuj" aria-label="Minimalizuj" onClick={() => void win!.minimize()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" /></svg></button>
-          <button title={maxed() ? 'Przywróć' : 'Maksymalizuj'} aria-label={maxed() ? 'Przywróć' : 'Maksymalizuj'} onClick={() => void win!.toggleMaximize()}>
+          <button title={t('a.tb.minimize')} aria-label={t('a.tb.minimize')} onClick={() => void win!.minimize()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" /></svg></button>
+          <button title={maxed() ? t('a.tb.restore') : t('a.tb.maximize')} aria-label={maxed() ? t('a.tb.restore') : t('a.tb.maximize')} onClick={() => void win!.toggleMaximize()}>
             <Show when={maxed()} fallback={<svg width="10" height="10" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" fill="none" stroke="currentColor" /></svg>}>
               <svg width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 2.5V.5h7v7h-2 M.5 2.5h7v7h-7z" fill="none" stroke="currentColor" /></svg>
             </Show>
           </button>
-          <button class="close" title="Zamknij" aria-label="Zamknij" onClick={() => void win!.close()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.1" /></svg></button>
+          <button class="close" title={t('a.tb.close')} aria-label={t('a.tb.close')} onClick={() => void win!.close()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.1" /></svg></button>
         </div>
       </Show>
     </div>
@@ -231,7 +232,7 @@ export function Toolbar() {
 }
 
 export function StatusBar() {
-  const hint = () => TOOLS.find(t => t[0] === U.tool)![2] + ': ' + TOOL_HINT[U.tool] + ' · snap ' + (U.alt ? 'off' : snapLabel(U.snap, U.bw).replace('Snap: ', '')) + ' · ? skróty';
+  const hint = () => t('a.tb.statusHint', { tool: t(TOOLS.find(x => x[0] === U.tool)![2]), hint: t(TOOL_HINT[U.tool]), snap: U.alt ? 'off' : snapLabel(U.snap, U.bw).replace('Snap: ', '') });
   return (
     <div class="status">
       <span style={{ color: S.transport.rec && U.playing ? 'var(--red)' : U.playing ? 'var(--green)' : 'var(--fg6)' }}>●</span>
@@ -243,29 +244,78 @@ export function StatusBar() {
   );
 }
 
-const SHORTCUTS: [string, string][] = [
-  ['Play / Stop', 'Spacja'], ['Mikser', 'F9'], ['Playlista na wierzch (chowa okna efektów i patternu)', 'F5'], ['Edytor patternu (Channel Rack)', 'F6 · 2× klik na pattern'], ['Dodaj efekt do zaznaczonego kanału', 'F7'], ['Edytor sampla', '2× klik na klip audio'], ['Nagrywanie wł./wył. (na uzbrojonej ścieżce)', 'R'], ['Podążanie za głowicą', 'F'], ['Start na 0', 'Home'], ['Browser', 'Alt+F8'],
-  ['Notatnik (tekst, linia = takt)', 'F8'], ['Notatnik: rozmiar czcionki', 'Ctrl + kółko'], ['Notatnik: głowica na takt', 'klik w numer taktu'], ['Notatnik: wyjdź z edycji', 'Esc'],
-  ['Rysuj · Maluj · Usuń', 'P · B · D'], ['Wycisz · Tnij · Zaznacz', 'T · C · E'],
-  ['Zaznacz prostokątem', 'Ctrl + przeciągnij'], ['Dodaj/usuń z zaznaczenia', 'Ctrl + klik'], ['Zaznacz wszystko', 'Ctrl+A'], ['Odznacz', 'Esc'],
-  ['Kopiuj przeciągając', 'Shift + przeciągnij'], ['Poza siatką (off grid)', 'trzymaj Alt'], ['Duplikuj za zaznaczeniem', 'Ctrl+B · Ctrl+D'],
-  ['Kopiuj · Wytnij · Wklej', 'Ctrl+C · X · V'], ['Usuń zaznaczone', 'Del'], ['Wycisz zaznaczone', 'Ctrl+M'],
-  ['Przesuń w czasie', 'Shift + ← →'], ['Przesuń między ścieżkami', 'Shift + ↑ ↓'], ['Cofnij · Ponów', 'Ctrl+Z · Ctrl+Shift+Z'],
-  ['Usuń klipy pod kursorem', 'PPM + przeciągnij'], ['Menu kontekstowe', 'PPM'], ['Zoom poziomy', 'Ctrl + kółko'], ['Wysokość wszystkich ścieżek', 'Alt + kółko'],
-  ['Wysokość jednej ścieżki', 'przeciągnij dolną krawędź'], ['Pętla', 'przeciągnij po linijce'], ['Zmień nazwę ścieżki', '2× klik w nazwę'],
-  ['Kolejność efektów', 'przeciągnij slot ↕'], ['Poprzedni / następny preset', '‹ › w oknie efektu'], ['Obrót widoku 3D (Reverb)', 'przeciągnij wizualizację'],
-  ['Nowy · Otwórz projekt', 'Ctrl+N · Ctrl+O'], ['Zapisz · Zapisz jako', 'Ctrl+S · Ctrl+Shift+S'],
-  ['Eksport do WAV (master)', 'Ctrl+Shift+R'],
-  ["Nagrywanie take'ów", 'ustaw pętlę i nagrywaj: 1 przebieg = 1 take'], ["Pokaż take'i", '2× klik na comp · ▸ w nagłówku ścieżki'],
-  ['Comping (swipe)', "przeciągnij po linii take'a"], ["Cały take do compu", "klik w nazwę take'a"],
-  ['Poprzedni / następny take fragmentu', 'Ctrl + ↑ ↓'], ['Granica compu · crossfade', 'przeciągnij · PPM'],
-  ['Automatyzuj pokrętło / suwak', 'PPM → Automatyzuj na playliście'], ['Edycja punktów automatyzacji', '2× klik na klip · klik = punkt · PPM = usuń'],
-  ['Edytor wysokości', 'PPM na klipie audio → Edytuj wysokość…'], ['Narzędzia edytora wysokości', '1–6'], ['Dopasuj widok edytora', 'F'],
-  ['Krok: włącz · wyłącz', 'klik · PPM (przeciągnij = maluj)'], ['Odsłuch kanału', 'Ctrl + klik w nazwę'], ['Mute · Solo kanału', 'klik w diodę · PPM na diodzie'],
-  ['Menu kanału (wypełnij, przesuń, klonuj…)', 'PPM na kanale'], ['Piano roll kanału melodycznego', '2× klik w nazwę / wiersz'], ['Velocity', 'przeciągnij w pasku pod siatką'],
-  ['Piano roll: rysuj · maluj · zaznacz · usuń', 'P · B · E · D'], ['Piano roll: półton · oktawa', '↑ ↓ · Ctrl + ↑ ↓'], ['Piano roll: duplikuj w prawo', 'Ctrl+B · Ctrl+D'], ['Piano roll: kopiuj · wytnij · wklej nuty', 'Ctrl+C · X · V'],
-  ['Usuń pętlę', '2× klik na linijce'], ['Zmień początek / koniec pętli', 'przeciągnij krawędź na linijce'], ['Przesuń pętlę', 'Shift + przeciągnij na linijce'], ['Piano roll: bez siatki', 'trzymaj Alt'], ['Podgląd patternu w pętli', '▶ Pętla w oknie patternu'],
-  ['Nowy band EQ', '2× klik na wykresie'], ['Wytnij rezonans', 'przeciągnij z podświetlonego szczytu widma'], ['Q bandu', 'kółko nad punktem'],
+const shortcuts = (): [string, string][] => [
+  ['Play / Stop', t('a.sc.1')],
+  [t('a.sc.2'), 'F9'],
+  [t('a.sc.3'), 'F5'],
+  [t('a.sc.4'), t('a.sc.5')],
+  [t('a.sc.6'), 'F7'],
+  [t('a.sc.7'), t('a.sc.8')],
+  [t('a.sc.9'), 'R'],
+  [t('a.sc.10'), 'F'],
+  [t('a.sc.11'), 'Home'],
+  ['Browser', 'Alt+F8'],
+  [t('a.sc.12'), 'F8'],
+  [t('a.sc.13'), t('a.sc.14')],
+  [t('a.sc.15'), t('a.sc.16')],
+  [t('a.sc.17'), 'Esc'],
+  [t('a.sc.18'), 'P · B · D'],
+  [t('a.sc.19'), 'T · C · E'],
+  [t('a.sc.20'), t('a.sc.21')],
+  [t('a.sc.22'), t('a.sc.23')],
+  [t('a.sc.24'), 'Ctrl+A'],
+  [t('a.sc.25'), 'Esc'],
+  [t('a.sc.26'), t('a.sc.27')],
+  [t('a.sc.28'), t('a.sc.29')],
+  [t('a.sc.30'), 'Ctrl+B · Ctrl+D'],
+  [t('a.sc.31'), 'Ctrl+C · X · V'],
+  [t('a.sc.32'), 'Del'],
+  [t('a.sc.33'), 'Ctrl+M'],
+  [t('a.sc.34'), 'Shift + ← →'],
+  [t('a.sc.35'), 'Shift + ↑ ↓'],
+  [t('a.sc.36'), 'Ctrl+Z · Ctrl+Shift+Z'],
+  [t('a.sc.37'), t('a.sc.38')],
+  [t('a.sc.39'), t('a.sc.40')],
+  [t('a.sc.41'), t('a.sc.14')],
+  [t('a.sc.42'), t('a.sc.43')],
+  [t('a.sc.44'), t('a.sc.45')],
+  [t('a.sc.46'), t('a.sc.47')],
+  [t('a.sc.48'), t('a.sc.49')],
+  [t('a.sc.50'), t('a.sc.51')],
+  [t('a.sc.52'), t('a.sc.53')],
+  [t('a.sc.54'), t('a.sc.55')],
+  [t('a.sc.56'), 'Ctrl+N · Ctrl+O'],
+  [t('a.sc.57'), 'Ctrl+S · Ctrl+Shift+S'],
+  [t('a.sc.58'), 'Ctrl+Shift+R'],
+  [t('a.sc.59'), t('a.sc.60')],
+  [t('a.sc.61'), t('a.sc.62')],
+  ['Comping (swipe)', t('a.sc.63')],
+  [t('a.sc.64'), t('a.sc.65')],
+  [t('a.sc.66'), 'Ctrl + ↑ ↓'],
+  [t('a.sc.67'), t('a.sc.68')],
+  [t('a.sc.69'), t('a.sc.70')],
+  [t('a.sc.71'), t('a.sc.72')],
+  [t('a.sc.73'), t('a.sc.74')],
+  [t('a.sc.75'), '1–6'],
+  [t('a.sc.76'), 'F'],
+  [t('a.sc.77'), t('a.sc.78')],
+  [t('a.sc.79'), t('a.sc.80')],
+  [t('a.sc.81'), t('a.sc.82')],
+  [t('a.sc.83'), t('a.sc.84')],
+  [t('a.sc.85'), t('a.sc.86')],
+  ['Velocity', t('a.sc.87')],
+  [t('a.sc.88'), 'P · B · E · D'],
+  [t('a.sc.89'), '↑ ↓ · Ctrl + ↑ ↓'],
+  [t('a.sc.90'), 'Ctrl+B · Ctrl+D'],
+  [t('a.sc.91'), 'Ctrl+C · X · V'],
+  [t('a.sc.92'), t('a.sc.93')],
+  [t('a.sc.94'), t('a.sc.95')],
+  [t('a.sc.96'), t('a.sc.97')],
+  [t('a.sc.98'), t('a.sc.29')],
+  [t('a.sc.99'), t('a.sc.100')],
+  [t('a.sc.101'), t('a.sc.102')],
+  [t('a.sc.103'), t('a.sc.104')],
+  [t('a.sc.105'), t('a.sc.106')],
 ];
 
 export function Help() {
@@ -273,9 +323,9 @@ export function Help() {
     <Show when={U.help}>
       <div class="overlay" onPointerDown={() => setU('help', false)}>
         <div class="dialog" style={{ width: 'min(680px,92vw)', 'max-height': '90vh', 'overflow-y': 'auto' }} onPointerDown={e => e.stopPropagation()}>
-          <div class="hd"><span>Skróty klawiszowe</span><button onClick={() => setU('help', false)}>×</button></div>
+          <div class="hd"><span>{t('a.tb.helpTitle')}</span><button onClick={() => setU('help', false)}>×</button></div>
           <div style={{ display: 'grid', 'grid-template-columns': 'repeat(auto-fit,minmax(280px,1fr))', 'column-gap': '24px' }}>
-            <For each={SHORTCUTS}>{([a, k]) => <div class="sc"><span class="a">{a}</span><span class="k">{k}</span></div>}</For>
+            <For each={shortcuts()}>{([a, k]) => <div class="sc"><span class="a">{a}</span><span class="k">{k}</span></div>}</For>
           </div>
         </div>
       </div>

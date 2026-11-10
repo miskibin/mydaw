@@ -1,12 +1,13 @@
 import { createEffect, createSignal, For, Show } from 'solid-js';
 import { be } from '../api/backend';
 import type { KeyCandidate, MusicAnalysis } from '../api/types';
+import { t } from '../lib/i18n';
 import { NOTE_NAMES } from '../lib/pitch';
 import * as A from '../state/actions';
 import { findFx, insName, S } from '../state/store';
 import { U } from '../state/ui';
 
-const keyLabel = (root: number, minor: boolean) => `${NOTE_NAMES[root % 12]} ${minor ? 'moll' : 'dur'}`;
+const keyLabel = (root: number, minor: boolean) => `${NOTE_NAMES[root % 12]} ${t(minor ? 'd.music.minor' : 'd.music.major')}`;
 
 export function MusicDialog() {
   const [loading, setLoading] = createSignal(false);
@@ -45,13 +46,13 @@ export function MusicDialog() {
   };
   const srcName = () => {
     const c = clip();
-    if (c) return S.project.sources.find(s => s.id === c.ref)?.name ?? 'Klip audio';
+    if (c) return S.project.sources.find(s => s.id === c.ref)?.name ?? t('d.music.clip');
     const fxId = U.musicWin?.fxId;
     if (fxId != null) {
       const ff = findFx(fxId);
-      return ff ? `Podkład projektu (bez kanału ${insName(ff.m)})` : 'Podkład projektu';
+      return ff ? t('d.music.backing.ex', { name: insName(ff.m) }) : t('d.music.backing');
     }
-    return 'Wszystkie aktywne klipy audio';
+    return t('d.music.allclips');
   };
   const tuneCount = () => {
     let n = 0;
@@ -64,13 +65,13 @@ export function MusicDialog() {
       <div class="overlay" onPointerDown={A.closeMusicAnalysis}>
         <div class="dialog" style={{ width: 'min(520px, 92vw)' }} onPointerDown={e => e.stopPropagation()} data-music-dialog>
           <div class="hd">
-            <span>Analiza tempa i tonacji · {srcName()}</span>
+            <span>{t('d.music.title', { name: srcName() })}</span>
             <button onClick={A.closeMusicAnalysis}>×</button>
           </div>
           <Show when={loading()}>
             <div class="row" style={{ gap: '10px', padding: '24px 0', 'justify-content': 'center', color: 'var(--fg3)' }}>
               <div class="spin" />
-              <span>Analizowanie audio…</span>
+              <span>{t('d.music.analyzing')}</span>
             </div>
           </Show>
           <Show when={err()}>
@@ -82,18 +83,18 @@ export function MusicDialog() {
                 {/* ---- TEMPO ---- */}
                 <div style={{ padding: '10px 12px', background: 'var(--bg1)', border: '1px solid var(--line)', 'border-radius': '6px', display: 'flex', 'flex-direction': 'column', gap: '8px' }}>
                   <div class="row" style={{ 'justify-content': 'space-between' }}>
-                    <span class="tag9">TEMPO (BPM)</span>
+                    <span class="tag9">{t('d.music.tempo')}</span>
                     <Show when={r().tempo}>
-                      {t => <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg4)' }}>pewność {Math.round(t().confidence * 100)}%</span>}
+                      {tp => <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg4)' }}>{t('d.music.confidence', { n: Math.round(tp().confidence * 100) })}</span>}
                     </Show>
                   </div>
-                  <Show when={r().tempo} fallback={<span class="note">Za krótki lub zbyt cichy sygnał, by wykryć tempo.</span>}>
-                    {t => (
+                  <Show when={r().tempo} fallback={<span class="note">{t('d.music.notempo')}</span>}>
+                    {tp => (
                       <>
                         <div class="row" style={{ gap: '6px', 'flex-wrap': 'wrap' }}>
-                          <For each={t().candidates}>
+                          <For each={tp().candidates}>
                             {(c, i) => {
-                              const tag = () => (i() === 0 ? 'Główne' : c.bpm < t().bpm ? '½×' : '2×');
+                              const tag = () => (i() === 0 ? t('d.music.main') : c.bpm < tp().bpm ? '½×' : '2×');
                               const on = () => selBpm() === c.bpm;
                               return (
                                 <button class="smallbtn" classList={{ primary: on() }} style={{ height: '28px', padding: '0 10px', display: 'flex', 'align-items': 'center', gap: '6px' }}
@@ -107,11 +108,11 @@ export function MusicDialog() {
                           <div style={{ flex: 1 }} />
                           <button class="smallbtn primary" style={{ height: '28px', padding: '0 12px' }} disabled={selBpm() == null}
                             onClick={() => { if (selBpm() != null) A.applyDetectedTempo(selBpm()!, U.musicWin?.clipId); }}>
-                            Ustaw tempo ({(selBpm() ?? t().bpm).toFixed(2)} BPM)
+                            {t('d.music.settempo', { bpm: (selBpm() ?? tp().bpm).toFixed(2) })}
                           </button>
                         </div>
                         <Show when={U.musicWin?.clipId != null}>
-                          <span class="note">Dopasowuje długość tego klipu na siatce, by grał ten sam fragment audio w nowym tempie.</span>
+                          <span class="note">{t('d.music.fitnote')}</span>
                         </Show>
                       </>
                     )}
@@ -121,19 +122,19 @@ export function MusicDialog() {
                 {/* ---- KEY ---- */}
                 <div style={{ padding: '10px 12px', background: 'var(--bg1)', border: '1px solid var(--line)', 'border-radius': '6px', display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
                   <div class="row" style={{ 'justify-content': 'space-between' }}>
-                    <span class="tag9">TONACJA (KEY / SCALE)</span>
+                    <span class="tag9">{t('d.music.key')}</span>
                     <Show when={r().key}>
                       {k => (
                         <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg4)' }}>
-                          pewność {Math.round(k().confidence * 100)}%
+                          {t('d.music.confidence', { n: Math.round(k().confidence * 100) })}
                           <Show when={Math.abs(k().tuningCents) >= 3}>
-                            {' · strój ' + (k().tuningCents > 0 ? '+' : '−') + Math.abs(Math.round(k().tuningCents)) + ' c'}
+                            {t('d.music.tuning', { sign: k().tuningCents > 0 ? '+' : '−', n: Math.abs(Math.round(k().tuningCents)) })}
                           </Show>
                         </span>
                       )}
                     </Show>
                   </div>
-                  <Show when={r().key} fallback={<span class="note">Brak wyraźnej treści harmonicznej do wykrycia tonacji.</span>}>
+                  <Show when={r().key} fallback={<span class="note">{t('d.music.nokey')}</span>}>
                     {k => (
                       <>
                         <div class="row" style={{ gap: '6px', 'flex-wrap': 'wrap' }}>
@@ -167,18 +168,18 @@ export function MusicDialog() {
                           </For>
                         </div>
 
-                        <Show when={tuneCount() > 0} fallback={<span class="note">Dodaj efekt Pitch Correct na kanał wokalu, aby przekazać mu wykrytą tonację jednym kliknięciem.</span>}>
+                        <Show when={tuneCount() > 0} fallback={<span class="note">{t('d.music.addpc')}</span>}>
                           <div class="row" style={{ gap: '8px', 'justify-content': 'flex-end', 'flex-wrap': 'wrap' }}>
                             <Show when={U.musicWin?.fxId != null}>
                               <button class="smallbtn primary" style={{ height: '28px', padding: '0 12px' }} disabled={!selKey()}
                                 onClick={() => { const sk = selKey(); if (sk) A.applyKeyToTune(sk.root, sk.minor, U.musicWin!.fxId); }}>
-                                Ustaw w tym Pitch Correct ({selKey() ? keyLabel(selKey()!.root, selKey()!.minor) : ''})
+                                {t('d.music.setthis', { key: selKey() ? keyLabel(selKey()!.root, selKey()!.minor) : '' })}
                               </button>
                             </Show>
                             <Show when={U.musicWin?.fxId == null || tuneCount() > 1}>
                               <button class="smallbtn" classList={{ primary: U.musicWin?.fxId == null }} style={{ height: '28px', padding: '0 12px' }} disabled={!selKey()}
                                 onClick={() => { const sk = selKey(); if (sk) A.applyKeyToTune(sk.root, sk.minor, 'all'); }}>
-                                Ustaw we wszystkich Pitch Correct ({tuneCount()})
+                                {t('d.music.setall', { n: tuneCount() })}
                               </button>
                             </Show>
                           </div>

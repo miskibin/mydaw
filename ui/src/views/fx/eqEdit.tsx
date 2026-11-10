@@ -5,6 +5,7 @@ import { For, Show } from 'solid-js';
 import { MAX_BANDS, type BandType, type EqBand, type Fx, type Id, type Op, type Placement } from '../../api/types';
 import { canBeDynamic, fx2x, handleDb, hasGain, isCut, newBand, placeOf, slopeOf, x2f } from '../../lib/eq';
 import { clamp, dbText, hzText } from '../../lib/format';
+import { t as tr } from '../../lib/i18n';
 import { hzToMidi, noteName } from '../../lib/pitch';
 import * as A from '../../state/actions';
 import { paramMenu } from '../../state/automation';
@@ -33,46 +34,46 @@ export const bandOp = (fxId: Id, i: number, patch: Partial<EqBand>) => withBands
 export function updBand(fxId: Id, i: number, patch: Partial<EqBand>, label = 'Band EQ') { const op = bandOp(fxId, i, patch); if (op) commit([op], label); }
 export function addBand(fxId: Id, band: EqBand): number {
   const ff = findFx(fxId); if (!ff?.f.bands) return -1;
-  if (ff.f.bands.length >= MAX_BANDS) { say('Maksymalnie ' + MAX_BANDS + ' bandów'); return -1; }
+  if (ff.f.bands.length >= MAX_BANDS) { say(tr('c.eq.maxBands', { n: MAX_BANDS })); return -1; }
   const i = ff.f.bands.length;
   const op = withBands(fxId, b => { b.push(band); });
-  if (op) { commit([op], 'Nowy band'); setU('eqSel', fxId, i); }
+  if (op) { commit([op], tr('c.eq.newBand')); setU('eqSel', fxId, i); }
   return i;
 }
 export function deleteBand(fxId: Id, i: number) {
   const op = withBands(fxId, b => { b.splice(i, 1); });
   if (!op) return;
-  commit([op], 'Usuń band');
+  commit([op], tr('c.eq.deleteBand'));
   const sel = U.eqSel[fxId];
   setU('eqSel', fxId, sel == null || sel < i ? sel : sel === i ? (undefined as unknown as number) : sel - 1);
-  say('Usunięto band ' + (i + 1));
+  say(tr('c.eq.bandDeleted', { n: i + 1 }));
 }
 /** Changing the shape keeps the band coherent: gain only where it means something, sensible Q. */
 export function setShape(fxId: Id, i: number, type: BandType) {
   const b = findFx(fxId)?.f.bands?.[i]; if (!b) return;
   const q = type === 'notch' ? Math.max(b.q, 4) : isCut(type) && !isCut(b.type) ? 0.71 : b.q;
-  updBand(fxId, i, { type, on: true, q, g: hasGain(type) ? b.g : 0, dynamic: canBeDynamic(type) ? b.dynamic ?? null : null }, 'Kształt bandu');
+  updBand(fxId, i, { type, on: true, q, g: hasGain(type) ? b.g : 0, dynamic: canBeDynamic(type) ? b.dynamic ?? null : null }, tr('c.eq.bandShape'));
 }
 
 export function openBandMenu(x: number, y: number, fxId: Id, i: number) {
   const b = findFx(fxId)?.f.bands?.[i]; if (!b) return;
   const items: MenuItem[] = [
     { t: 'title', label: 'Band ' + (i + 1) + ' · ' + hzText(b.f) },
-    { t: 'chips', label: 'Kształt', options: BTYPE_ORDER.slice(0, 4).map(t => BTYPE_SHORT[t]), active: BTYPE_ORDER.indexOf(b.type), pick: k => setShape(fxId, i, BTYPE_ORDER[k]) },
+    { t: 'chips', label: tr('c.eq.shape'), options: BTYPE_ORDER.slice(0, 4).map(t => BTYPE_SHORT[t]), active: BTYPE_ORDER.indexOf(b.type), pick: k => setShape(fxId, i, BTYPE_ORDER[k]) },
     { t: 'chips', options: BTYPE_ORDER.slice(4).map(t => BTYPE_SHORT[t]), active: BTYPE_ORDER.indexOf(b.type) - 4, pick: k => setShape(fxId, i, BTYPE_ORDER[k + 4]) },
-    { t: 'chips', label: 'Nachylenie', options: SLOPES.map(s => s + ''), active: SLOPES.indexOf(slopeOf(b)), disabled: !isCut(b.type), pick: k => updBand(fxId, i, { slope: SLOPES[k] }, 'Nachylenie') },
-    { t: 'chips', label: 'Kanał', options: PLACES.map(p => PLACE_SHORT[p]), active: PLACES.indexOf(placeOf(b)), pick: k => updBand(fxId, i, { place: PLACES[k] }, 'Kanał bandu') },
+    { t: 'chips', label: tr('c.eq.slope'), options: SLOPES.map(s => s + ''), active: SLOPES.indexOf(slopeOf(b)), disabled: !isCut(b.type), pick: k => updBand(fxId, i, { slope: SLOPES[k] }, tr('c.eq.slope')) },
+    { t: 'chips', label: tr('c.eq.channel'), options: PLACES.map(p => PLACE_SHORT[p]), active: PLACES.indexOf(placeOf(b)), pick: k => updBand(fxId, i, { place: PLACES[k] }, tr('c.eq.bandChannel')) },
     { t: 'sep' },
-    { t: 'item', label: b.dynamic ? 'Dynamiczny: wyłącz' : 'Dynamiczny: włącz', disabled: !canBeDynamic(b.type), title: canBeDynamic(b.type) ? '' : 'Tylko bell, shelf i tilt mogą być dynamiczne',
-      act: () => updBand(fxId, i, { dynamic: b.dynamic ? null : { range: b.g > 0 ? -b.g : -6, thr: -30 } }, 'Dynamiczny band') },
-    { t: 'item', label: b.on ? 'Wyłącz band' : 'Włącz band', kbd: '2× klik', act: () => updBand(fxId, i, { on: !b.on }) },
-    { t: 'item', label: 'Usuń band', kbd: '', danger: true, act: () => deleteBand(fxId, i) },
+    { t: 'item', label: b.dynamic ? tr('c.eq.dynOff') : tr('c.eq.dynOn'), disabled: !canBeDynamic(b.type), title: canBeDynamic(b.type) ? '' : tr('c.eq.dynOnly'),
+      act: () => updBand(fxId, i, { dynamic: b.dynamic ? null : { range: b.g > 0 ? -b.g : -6, thr: -30 } }, tr('c.eq.dynBand')) },
+    { t: 'item', label: b.on ? tr('c.eq.disableBand') : tr('c.eq.enableBand'), kbd: tr('c.eq.dblClick'), act: () => updBand(fxId, i, { on: !b.on }) },
+    { t: 'item', label: tr('c.eq.deleteBand'), kbd: '', danger: true, act: () => deleteBand(fxId, i) },
   ];
   openMenu(x, y, items, 330);
 }
 
 function openAddMenu(x: number, y: number, fxId: Id, f: number, g: number) {
-  openMenu(x, y, [{ t: 'title', label: 'Nowy band · ' + hzText(f) },
+  openMenu(x, y, [{ t: 'title', label: tr('c.eq.newBandAt', { hz: hzText(f) }) },
     ...BTYPE_ORDER.map(t => ({ t: 'item' as const, label: BTYPE_LABEL[t], act: () => addBand(fxId, newBand(t, f, hasGain(t) ? g : 0)) }))], 280);
 }
 
@@ -110,14 +111,14 @@ export function eqPointerDown(e: PointerEvent, cv: HTMLCanvasElement, fxId: Id, 
       const nf = clamp(x2f(x0 + (ev.clientX - sx) * k, W), 10, 22000);
       const ng = gain ? clamp(yDb(y0 + (ev.clientY - sy) * k, H, range) * mul, -30, 30) : b0.g;
       const op = bandOp(fxId, hit, { f: nf, g: Math.round(ng * 100) / 100, on: true }); if (op) g.update([op]);
-      say('Band ' + (hit + 1) + ' · ' + hzText(nf) + (gain ? ' · ' + dbText(ng) : '') + ' · kółko = Q · Shift = precyzyjnie');
+      say('Band ' + (hit + 1) + ' · ' + hzText(nf) + (gain ? ' · ' + dbText(ng) : '') + ' · ' + tr('c.eq.dragHint'));
     }, () => g?.end(), 'move');
     return;
   }
   // empty area
   if (dblCheck('eqempty' + fxId)) {
     const f = clamp(x2f(px, W), 10, 22000), gdb = clamp(yDb(py, H, range), -30, 30);
-    if (addBand(fxId, newBand('peak', f, Math.round(gdb * 10) / 10)) >= 0) say('Nowy band · ' + hzText(f) + ' — przeciągnij, kółko = Q, PPM = kształt');
+    if (addBand(fxId, newBand('peak', f, Math.round(gdb * 10) / 10)) >= 0) say(tr('c.eq.newBandSay', { hz: hzText(f) }));
     return;
   }
   const pk = viz.peak;
@@ -127,11 +128,11 @@ export function eqPointerDown(e: PointerEvent, cv: HTMLCanvasElement, fxId: Id, 
     let g: Gesture | null = null;
     track(ev => {
       const d = ev.clientY - sy;
-      if (!g) { if (Math.abs(d) < 3) return; g = new Gesture('Nowy band'); setU('eqSel', fxId, i); }
+      if (!g) { if (Math.abs(d) < 3) return; g = new Gesture(tr('c.eq.newBand')); setU('eqSel', fxId, i); }
       const gdb = clamp(-d / ((H / 2) * 0.86) * range * (ev.shiftKey ? 0.2 : 1), -30, 30);
       const op = withBands(fxId, b => { if (b.length === i) b.push(newBand('peak', f, 0)); b[i] = { ...b[i], q: 4, g: Math.round(gdb * 10) / 10 }; });
       if (op) g.update([op]);
-      say('Band ' + (i + 1) + ' na rezonansie ' + hzText(f) + ' (' + noteName(hzToMidi(f)) + ') · ' + dbText(gdb));
+      say(tr('c.eq.onResonance', { n: i + 1, hz: hzText(f), note: noteName(hzToMidi(f)), db: dbText(gdb) }));
     }, () => { if (g) g.end(); else setU('eqSel', fxId, undefined as unknown as number); }, 'ns-resize');
     return;
   }
@@ -175,11 +176,11 @@ function dynField(fxId: Id, i: () => number, key: 'range' | 'thr') {
   return (v: number, mode: 'begin' | 'move' | 'end' | 'set' | 'wheel') => {
     const b = findFx(fxId)?.f.bands?.[i()]; if (!b?.dynamic) return;
     const op = bandOp(fxId, i(), { dynamic: { ...b.dynamic, [key]: v } });
-    if (mode === 'begin') g = new Gesture('Dynamiczny band');
+    if (mode === 'begin') g = new Gesture(tr('c.eq.dynBand'));
     else if (mode === 'move') { if (op) g?.update([op]); }
     else if (mode === 'end') { g?.end(); g = null; }
-    else if (mode === 'set') { if (op) commit([op], 'Dynamiczny band'); }
-    else if (op) wheelEdit('eqd' + fxId + key, 'Dynamiczny band', [op]);
+    else if (mode === 'set') { if (op) commit([op], tr('c.eq.dynBand')); }
+    else if (op) wheelEdit('eqd' + fxId + key, tr('c.eq.dynBand'), [op]);
   };
 }
 
@@ -198,14 +199,14 @@ function cutOp(fxId: Id, type: 'lowcut' | 'highcut', t: number): Op | null {
 export function CutKnobs(props: { fx: Fx }) {
   const band = (type: string) => props.fx.bands?.find(x => x.type === type);
   const tOf = (type: 'lowcut' | 'highcut') => { const b = band(type); return b && b.on ? f2t(b.f) : type === 'lowcut' ? 0 : 1; };
-  const text = (type: 'lowcut' | 'highcut') => { const b = band(type); return b && b.on ? hzText(b.f) : 'wył.'; };
+  const text = (type: 'lowcut' | 'highcut') => { const b = band(type); return b && b.on ? hzText(b.f) : tr('c.eq.off'); };
   const knob = (type: 'lowcut' | 'highcut', label: string) => {
     let g: Gesture | null = null;
     return (
       <Knob key={'cut' + type + props.fx.id} label={label} size="lg" t={() => tOf(type)} text={() => text(type)}
-        title={(type === 'lowcut' ? 'Wycina wszystko PONIŻEJ tej częstotliwości' : 'Wycina wszystko POWYŻEJ tej częstotliwości') + ' · skrajna pozycja = wył. · 2× klik = wył.'}
+        title={(type === 'lowcut' ? tr('c.eq.cutBelow') : tr('c.eq.cutAbove')) + ' · ' + tr('c.eq.cutTip')}
         onStart={() => { g = new Gesture(label); }}
-        onChange={t => { const op = cutOp(props.fx.id, type, t); if (op) g?.update([op]); say(label + ' ' + (type === 'lowcut' ? (t <= 0.005 ? 'wył.' : hzText(t2f(t))) : (t >= 0.995 ? 'wył.' : hzText(t2f(t))))); }}
+        onChange={t => { const op = cutOp(props.fx.id, type, t); if (op) g?.update([op]); say(label + ' ' + (type === 'lowcut' ? (t <= 0.005 ? tr('c.eq.off') : hzText(t2f(t))) : (t >= 0.995 ? tr('c.eq.off') : hzText(t2f(t))))); }}
         onEnd={() => { g?.end(); g = null; }}
         onReset={() => { const op = cutOp(props.fx.id, type, type === 'lowcut' ? 0 : 1); if (op) commit([op], label); }}
         onWheel={t => { const op = cutOp(props.fx.id, type, t); if (op) wheelEdit('cut' + type, label, [op]); }} />
@@ -240,7 +241,7 @@ export function EqPanel(props: { fx: Fx }) {
       <div class="bchips">
         <For each={props.fx.bands ?? []}>{(bd, i) => (
           <button class="bchip" classList={{ sel: sel() === i(), off: !bd.on }} style={{ '--c': bandColor(i()) }}
-            title={'Band ' + (i() + 1) + ' · ' + BTYPE_LABEL[bd.type] + ' · ' + hzText(bd.f) + ' — klik = wybierz · 2× klik = wł./wył. · PPM = menu'}
+            title={tr('c.eq.chipTip', { n: i() + 1, type: BTYPE_LABEL[bd.type], hz: hzText(bd.f) })}
             onPointerDown={e => {
               e.stopPropagation();
               if (e.button === 2) { setU('eqSel', fxId(), i()); openBandMenu(e.clientX, e.clientY, fxId(), i()); return; }
@@ -248,16 +249,16 @@ export function EqPanel(props: { fx: Fx }) {
               if (dblCheck('chip' + fxId() + i())) updBand(fxId(), i(), { on: !bd.on });
             }}>{i() + 1}</button>
         )}</For>
-        <button class="bchip add" title={'Dodaj band (lub 2× klik na wykresie) · ' + (props.fx.bands?.length ?? 0) + '/' + MAX_BANDS}
+        <button class="bchip add" title={tr('c.eq.addBandTip', { n: props.fx.bands?.length ?? 0, max: MAX_BANDS })}
           disabled={(props.fx.bands?.length ?? 0) >= MAX_BANDS} onClick={addFree}>+</button>
         <span class="bcount">{(props.fx.bands?.length ?? 0) + '/' + MAX_BANDS}</span>
       </div>
-      <Show when={b()} fallback={<div class="bedit empty">Wybierz band na wykresie albo 2× kliknij, by dodać. Przeciągnij z podświetlonego szczytu widma, by od razu wyciąć rezonans.</div>}>
+      <Show when={b()} fallback={<div class="bedit empty">{tr('c.eq.empty')}</div>}>
         {band => (
           <div class="bedit">
-            <button class="led" title="Włącz / wyłącz band" style={{ background: band().on ? bandColor(si()) : 'var(--line2)' }} onClick={() => updBand(fxId(), si(), { on: !band().on })} />
+            <button class="led" title={tr('c.eq.toggleBand')} style={{ background: band().on ? bandColor(si()) : 'var(--line2)' }} onClick={() => updBand(fxId(), si(), { on: !band().on })} />
             <span class="bnum" style={{ color: bandColor(si()) }}>{si() + 1}</span>
-            <button class="shape" title="Kształt" onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openBandMenu(r.left, r.bottom + 4, fxId(), si()); }}>
+            <button class="shape" title={tr('c.eq.shape')} onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openBandMenu(r.left, r.bottom + 4, fxId(), si()); }}>
               {BTYPE_LABEL[band().type]}<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6" /></svg>
             </button>
             <NumField label="FREQ" width={74} value={() => band().f} text={hzText} parse={parseNum} onMenu={menu('f')}
@@ -267,22 +268,22 @@ export function EqPanel(props: { fx: Fx }) {
             <NumField label="Q" width={50} value={() => band().q} text={v => v.toFixed(2)} parse={parseNum} disabled={() => band().type === 'tilt'} onMenu={menu('q')}
               drag={(v, d) => clamp(v * Math.pow(2, d / 110), 0.1, 18)} apply={field(fxId(), si, 'q')} />
             <Show when={isCut(band().type)}>
-              <Segmented small label="dB/okt" options={SLOPES.map(String)} value={() => SLOPES.indexOf(slopeOf(band()))} pick={k => updBand(fxId(), si(), { slope: SLOPES[k] }, 'Nachylenie')} />
+              <Segmented small label={tr('c.eq.dbOct')} options={SLOPES.map(String)} value={() => SLOPES.indexOf(slopeOf(band()))} pick={k => updBand(fxId(), si(), { slope: SLOPES[k] }, tr('c.eq.slope'))} />
             </Show>
-            <Segmented small label="kanał" options={PLACES.map(p => PLACE_SHORT[p])} value={() => PLACES.indexOf(placeOf(band()))} pick={k => updBand(fxId(), si(), { place: PLACES[k] }, 'Kanał bandu')}
+            <Segmented small label={tr('c.eq.channelLc')} options={PLACES.map(p => PLACE_SHORT[p])} value={() => PLACES.indexOf(placeOf(band()))} pick={k => updBand(fxId(), si(), { place: PLACES[k] }, tr('c.eq.bandChannel'))}
               title="Stereo / Left / Right / Mid / Side" />
             <Show when={canBeDynamic(band().type)}>
-              <button class="tog" classList={{ on: !!band().dynamic }} title="Dynamiczny: gain zmienia się, gdy poziom pasma przekroczy próg"
-                onClick={() => updBand(fxId(), si(), { dynamic: band().dynamic ? null : { range: band().g > 0 ? -band().g : -6, thr: -30 } }, 'Dynamiczny band')}>DYN</button>
+              <button class="tog" classList={{ on: !!band().dynamic }} title={tr('c.eq.dynTip')}
+                onClick={() => updBand(fxId(), si(), { dynamic: band().dynamic ? null : { range: band().g > 0 ? -band().g : -6, thr: -30 } }, tr('c.eq.dynBand'))}>DYN</button>
               <Show when={band().dynamic}>
-                <NumField label="ZAKRES" width={64} value={() => band().dynamic!.range} text={dbText} parse={parseNum}
+                <NumField label={tr('c.eq.range')} width={64} value={() => band().dynamic!.range} text={dbText} parse={parseNum}
                   drag={(v, d) => clamp(Math.round((v + d * 0.05) * 10) / 10, -30, 30)} apply={dynField(fxId(), si, 'range')} />
-                <NumField label="PRÓG" width={64} value={() => band().dynamic!.thr} text={v => Math.round(v) + ' dB'} parse={parseNum}
+                <NumField label={tr('c.eq.thresh')} width={64} value={() => band().dynamic!.thr} text={v => Math.round(v) + ' dB'} parse={parseNum}
                   drag={(v, d) => clamp(Math.round(v + d * 0.1), -80, 0)} apply={dynField(fxId(), si, 'thr')} />
               </Show>
             </Show>
             <div style={{ flex: 1 }} />
-            <button class="iconbtn danger" title="Usuń band" onClick={() => deleteBand(fxId(), si())}>
+            <button class="iconbtn danger" title={tr('c.eq.deleteBand')} onClick={() => deleteBand(fxId(), si())}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16 M10 11v6 M14 11v6 M6 7l1 13h10l1-13 M9 7V4h6v3" /></svg>
             </button>
           </div>

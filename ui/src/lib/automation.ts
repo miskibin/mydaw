@@ -1,6 +1,7 @@
 // Automation (playlist envelopes): normalisation of every automatable control to 0..1 exactly
 // as the engine does, the value of an envelope at a beat, which clip drives a target at the
 // playhead, and the ops that create a new automation clip ("Automatyzuj na playliście").
+import { t as tl, tName } from './i18n';
 import type { AutoPoint, AutoTarget, Automation, Catalog, Clip, Id, Op, Project, Track } from '../api/types';
 import { insertTrackOps } from './clipOps';
 
@@ -139,7 +140,7 @@ export function createAutomationOps(p: Project, cat: Catalog | null, target: Aut
     const tid = alloc();
     ops.push(...insertTrackOps(structuredClone(p), p.tracks.length, tid));
     const put = ops.find(o => o.op === 'putTrack' && o.track.id === tid) as { op: 'putTrack'; track: Track } | undefined;
-    if (put) { put.track.name = 'Automatyzacja'; put.track.color = color; put.track.h = 48; }
+    if (put) { put.track.name = tl('a.au.label'); put.track.color = color; put.track.h = 48; }
     track = p.tracks.length;
   }
   const clipId = alloc();
@@ -150,18 +151,18 @@ export function createAutomationOps(p: Project, cat: Catalog | null, target: Aut
 
 /** Human label of a target ("Vocal · EQ · Band 3 Gain"). */
 export function targetLabel(p: Project, cat: Catalog | null, t: AutoTarget): string {
-  const insName = (id: Id) => p.inserts.find(m => m.id === id)?.name ?? '?';
+  const insName = (id: Id) => tName(p.inserts.find(m => m.id === id)?.name ?? '?');
   switch (t.kind) {
-    case 'insertVol': return insName(t.id) + ' · Głośność';
-    case 'insertPan': return insName(t.id) + ' · Panorama';
-    case 'trackVol': return (p.tracks.find(x => x.id === t.id)?.name ?? '?') + ' · Głośność ścieżki';
-    case 'mix': { const ff = fxOf(p, t.fxId); return ff ? ff.m.name + ' · ' + (cat?.types[ff.f.type]?.name ?? ff.f.type) + ' · Mix' : 'Mix'; }
+    case 'insertVol': return insName(t.id) + ' · ' + tl('a.au.vol');
+    case 'insertPan': return insName(t.id) + ' · ' + tl('a.au.pan');
+    case 'trackVol': return (p.tracks.find(x => x.id === t.id)?.name ?? '?') + ' · ' + tl('a.au.trackVol');
+    case 'mix': { const ff = fxOf(p, t.fxId); return ff ? tName(ff.m.name) + ' · ' + tName(cat?.types[ff.f.type]?.name ?? ff.f.type) + ' · Mix' : 'Mix'; }
     case 'fx': {
       const ff = fxOf(p, t.fxId); if (!ff) return t.param;
-      const fxn = cat?.types[ff.f.type]?.name ?? ff.f.type;
+      const fxn = tName(cat?.types[ff.f.type]?.name ?? ff.f.type);
       const b = parseBandParam(t.param);
-      const pn = b ? 'Band ' + (b.i + 1) + ' ' + ({ f: 'Freq', g: 'Gain', q: 'Q' })[b.k] : cat?.types[ff.f.type]?.params.find(q => q.id === t.param)?.label ?? t.param;
-      return ff.m.name + ' · ' + fxn + ' · ' + pn;
+      const pn = b ? 'Band ' + (b.i + 1) + ' ' + ({ f: 'Freq', g: 'Gain', q: 'Q' })[b.k] : tName(cat?.types[ff.f.type]?.params.find(q => q.id === t.param)?.label ?? t.param);
+      return tName(ff.m.name) + ' · ' + fxn + ' · ' + pn;
     }
   }
 }

@@ -1,3 +1,4 @@
+import { t as tl } from '../lib/i18n';
 // Sending edits to the engine: discrete commits, drag gestures (transient ops throttled to
 // animation frames), and the rules for accepting `state` events while edits are in flight.
 //
@@ -76,7 +77,7 @@ export function acceptReply(dto: StateDto) {
 }
 
 export async function resync(err?: unknown) {
-  if (err) { console.warn('[wave] edit rejected:', err); say('Błąd: ' + String((err as Error)?.message ?? err)); }
+  if (err) { console.warn('[wave] edit rejected:', err); say(tl('a.err', { e: String((err as Error)?.message ?? err) })); }
   try { const dto = await be().getState(); lastReplyRev = dto.revision; stash = null; replaceState(dto); } catch (e) { console.error(e); }
 }
 

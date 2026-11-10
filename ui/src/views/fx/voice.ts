@@ -5,6 +5,7 @@
 import type { Fx } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
 import { clamp } from '../../lib/format';
+import { t as tr } from '../../lib/i18n';
 import { hzToMidi, noteName } from '../../lib/pitch';
 import { FXMETA } from '../../ui/icons';
 import { MONO10, MONO9, Needle, rgba, T, type Viz, type VizExtra } from './common';
@@ -86,15 +87,15 @@ export class VoiceViz implements Viz {
     const cx = G.lw / 2, vis = 0.3 + 0.7 * conf;
     g.textAlign = 'center';
     g.font = MONO9; g.fillStyle = T.vizLabel;
-    g.fillText('WEJŚCIE', cx, 22);
+    g.fillText(tr('c.viz.inputCaps'), cx, 22);
     g.font = '600 22px "Geist Variable", Geist, sans-serif'; g.fillStyle = rgba(T.amber, voiced ? vis : 0.3);
     g.fillText(voiced ? noteName(hzToMidi(this.inHz)) : '—', cx, 50);
     g.font = MONO10; g.fillStyle = T.fg4;
-    g.fillText(voiced ? this.inHz.toFixed(1) + ' Hz' : 'cisza', cx, 66);
+    g.fillText(voiced ? this.inHz.toFixed(1) + ' Hz' : tr('c.viz.silence'), cx, 66);
     g.strokeStyle = rgba(T.fg3, 0.5); g.lineWidth = 1.4;
     g.beginPath(); g.moveTo(cx, 76); g.lineTo(cx, 90); g.moveTo(cx - 4, 86); g.lineTo(cx, 90); g.lineTo(cx + 4, 86); g.stroke();
     g.font = MONO9; g.fillStyle = T.vizLabel;
-    g.fillText('WYJŚCIE', cx, 106);
+    g.fillText(tr('c.viz.outputCaps'), cx, 106);
     const outName = !on ? 'BYPASS' : voiced ? noteName(hzToMidi(this.outHz)) : mode === 2 ? noteName(ROBOT_NOTE + Math.round(pitch)) : '—';
     g.font = `600 ${on ? Math.round(clamp(H * 0.2, 34, 56)) : 22}px "Geist Variable", Geist, sans-serif`;
     g.fillStyle = on ? rgba(accent, voiced || mode === 2 ? vis : 0.35) : T.fg4;
@@ -104,7 +105,7 @@ export class VoiceViz implements Viz {
     g.font = '600 10px "Geist Variable", Geist, sans-serif'; g.fillStyle = on ? accent : T.fg4;
     g.fillText(MODES[mode] + (link ? ' · LINK' : ''), cx, my);
     g.font = MONO10; g.fillStyle = T.fg4;
-    g.fillText(mode === 2 ? 'nuta ' + noteName(ROBOT_NOTE + Math.round(pitch)) : mode === 1 ? 'do półtonu · ' + st(pitch) : st(pitch), cx, my + 15);
+    g.fillText(mode === 2 ? tr('c.viz.note', { n: noteName(ROBOT_NOTE + Math.round(pitch)) }) : mode === 1 ? tr('c.viz.toSemitone', { st: st(pitch) }) : st(pitch), cx, my + 15);
     g.fillStyle = T.vizAxis; g.fillRect(G.lw, 12, 1, H - 24);
 
     // ---- pad (right): pitch × formant
@@ -123,10 +124,10 @@ export class VoiceViz implements Viz {
       }
     }
     g.fillStyle = T.fg4; g.textAlign = 'left'; g.font = MONO9;
-    g.fillText(mode === 2 ? 'NUTA OD C4 →' : 'PITCH →', px, py + ph + 24);
-    g.textAlign = 'right'; g.fillText('wyżej', px + pw, py + ph + 24);
-    g.textAlign = 'left'; g.fillText('FORMANT · jaśniej', px + 4, py - 8);
-    g.fillStyle = T.vizLabel; g.fillText('głębiej', px + 4, py + ph - 5);
+    g.fillText(mode === 2 ? tr('c.viz.noteFromC4') : 'PITCH →', px, py + ph + 24);
+    g.textAlign = 'right'; g.fillText(tr('c.viz.higher'), px + pw, py + ph + 24);
+    g.textAlign = 'left'; g.fillText(tr('c.viz.formantBrighter'), px + 4, py - 8);
+    g.fillStyle = T.vizLabel; g.fillText(tr('c.viz.deeper'), px + 4, py + ph - 5);
     // link: formants follow the pitch along the diagonal through the knob's formant
     const fo = p.formant ?? 0;
     if (link && mode !== 2) {
@@ -154,7 +155,7 @@ export class VoiceViz implements Viz {
     g.fillText(label, tx, ty);
     g.textAlign = 'left';
     if (link && mode === 2) {
-      g.font = MONO9; g.fillStyle = T.fg4; g.fillText('LINK: formanty idą za każdą nutą', px + 4, py + 12);
+      g.font = MONO9; g.fillStyle = T.fg4; g.fillText(tr('c.viz.linkNote'), px + 4, py + 12);
     }
     // drive
     const drive = p.drive ?? 0;

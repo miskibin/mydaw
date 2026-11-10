@@ -7,6 +7,7 @@ import { fx2x, x2f } from '../../lib/eq';
 import { clamp, hzText } from '../../lib/format';
 import { FXMETA } from '../../ui/icons';
 import { Layer } from '../../ui/frameLoop';
+import { t as tr } from '../../lib/i18n';
 import { MONO10, MONO9, Needle, rgba, SpecSmoother, specCurve, T, TimeRing, type Viz, type VizExtra } from './common';
 
 const SECS = 4;
@@ -131,10 +132,10 @@ export class DeessViz implements Viz {
     g.font = MONO9; g.textAlign = 'left';
     let lx = G.hx + 8; const ly = 13;
     const leg = (col: string, t: string) => { g.fillStyle = col; g.fillRect(lx, ly - 6, 8, 3); g.fillStyle = T.fg4; g.fillText(t, lx + 11, ly - 2); lx += g.measureText(t).width + 24; };
-    leg(T.pre, 'wejście'); leg(accent, 'wyjście'); leg(T.amber, 'detektor'); leg(T.red, 'redukcja');
+    leg(T.pre, tr('c.viz.input')); leg(accent, tr('c.viz.output')); leg(T.amber, tr('c.viz.detector')); leg(T.red, tr('c.viz.reduction'));
     // sibilance indicator + GR number
     const ix = G.hx + G.hw - 158, s = clamp(this.sib.v, 0, 1);
-    g.fillStyle = T.fg4; g.fillText('SYBILANT', ix - 4, ly - 2);
+    g.fillStyle = T.fg4; g.fillText(tr('c.viz.sibilance'), ix - 4, ly - 2);
     g.fillStyle = T.viz; g.fillRect(ix + 46, ly - 8, 40, 6);
     g.fillStyle = s > 0.5 ? accent : rgba(accent, 0.6); g.fillRect(ix + 46, ly - 8, 40 * s, 6);
     g.font = '600 11px "Geist Mono Variable", monospace'; g.fillStyle = this.grN.v < -0.5 ? T.red : T.fg3; g.textAlign = 'right';
@@ -164,6 +165,6 @@ export class DeessViz implements Viz {
     g.fillStyle = accent; g.beginPath(); g.roundRect(fxp - 30, 4, 60, 16, 3); g.fill();
     g.fillStyle = T.onBand; g.textAlign = 'center'; g.font = MONO10; g.fillText(hzText(freq), fxp, 15.5); g.textAlign = 'left';
     g.restore();
-    if (p.listen) { g.font = '600 10px "Geist Variable", sans-serif'; g.fillStyle = T.amber; g.textAlign = 'right'; g.fillText('ODSŁUCH S', G.sx + G.sw - 8, 34); g.textAlign = 'left'; }
+    if (p.listen) { g.font = '600 10px "Geist Variable", sans-serif'; g.fillStyle = T.amber; g.textAlign = 'right'; g.fillText(tr('c.viz.listenS'), G.sx + G.sw - 8, 34); g.textAlign = 'left'; }
   }
 }

@@ -2,8 +2,10 @@
 import type { Fx } from '../../api/types';
 import { SCOPE_LEN, type FxFrame } from '../../api/telemetry';
 import { clamp, dbg } from '../../lib/format';
+import { lang, tName } from '../../lib/i18n';
 import { satDriveDb } from '../../lib/saturator';
 import { Layer } from '../../ui/frameLoop';
+import { t as tr } from '../../lib/i18n';
 import { FXMETA } from '../../ui/icons';
 import { freqGrid, MONO10, MONO9, rgba, scope, specCurve, T, TeleGate, type Viz } from './common';
 
@@ -78,7 +80,7 @@ export class SatViz implements Viz {
     const style = clamp(Math.round(fx.params.style ?? 0), 0, 4), asym = [0.18, 0.04, 0.12, 0.3, 0.02][style];
     const x1 = sx + S + 18, w = W - x1 - 8, specH = Math.round((H - 12) * 0.62), scY = specH + 12, scH = H - scY - 6;
     g.fillStyle = T.viz; g.fillRect(0, 0, W, H);
-    g.drawImage(this.layer.get(W, H, 'sat2' + dr.toFixed(3) + style + fx.bypass + S, c => {
+    g.drawImage(this.layer.get(W, H, 'sat2' + lang() + dr.toFixed(3) + style + fx.bypass + S, c => {
       // curve panel
       c.fillStyle = T.vizPanel; c.beginPath(); c.roundRect(sx, sy, S, S, 4); c.fill();
       c.lineWidth = 1; c.strokeStyle = T.vizGrid;
@@ -93,7 +95,7 @@ export class SatViz implements Viz {
         if (i) c.lineTo(px, py); else c.moveTo(px, py);
       }
       c.strokeStyle = rgba(col, 0.45); c.lineWidth = 1.5; c.stroke();
-      c.font = MONO9; c.fillStyle = T.vizLabel; c.fillText('WE', sx + S - 16, sy + S / 2 - 4); c.fillText('WY', sx + S / 2 + 4, sy + 11);
+      c.font = MONO9; c.fillStyle = T.vizLabel; c.fillText(tr('c.viz.in'), sx + S - 16, sy + S / 2 - 4); c.fillText(tr('c.viz.out'), sx + S / 2 + 4, sy + 11);
       // spectrum and scope panels
       c.save(); c.translate(0, 6); c.beginPath(); c.rect(x1, 0, w, specH); c.clip(); freqGrid(c, w, specH, x1); c.restore();
       c.fillStyle = T.vizPanel; c.beginPath(); c.roundRect(x1, scY, w, scH, 3); c.fill();
@@ -142,11 +144,11 @@ export class SatViz implements Viz {
 
     // readouts
     g.font = MONO9; g.textAlign = 'right';
-    g.fillStyle = T.vizLabel; g.fillText(SAT_STYLES[style].toUpperCase() + '  ·  DRIVE +' + driveDb.toFixed(1) + ' dB', x1 + w - 4, 18);
+    g.fillStyle = T.vizLabel; g.fillText(tName(SAT_STYLES[style]).toUpperCase() + '  ·  DRIVE +' + driveDb.toFixed(1) + ' dB', x1 + w - 4, 18);
     g.fillStyle = heat > 0.05 && !fx.bypass ? col : T.vizLabel;
-    g.fillText('DODANE HARMONICZNE ' + (this.live && !fx.bypass ? Math.round(this.amount * 100) + ' %' : '—'), x1 + w - 4, 30);
+    g.fillText(tr('c.viz.addedHarmonics') + ' ' + (this.live && !fx.bypass ? Math.round(this.amount * 100) + ' %' : '—'), x1 + w - 4, 30);
     g.textAlign = 'left'; g.fillStyle = T.vizLabel;
-    g.fillText('HARMONICZNE · 6 s', x1 + 5, scY + 11); g.textAlign = 'right'; g.fillText('25 %', x1 + w - 4, scY + scH / 2 - 3); g.textAlign = 'left';
+    g.fillText(tr('c.viz.harmonics6s'), x1 + 5, scY + 11); g.textAlign = 'right'; g.fillText('25 %', x1 + w - 4, scY + scH / 2 - 3); g.textAlign = 'left';
   }
 }
 

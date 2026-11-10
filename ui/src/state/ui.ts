@@ -1,5 +1,7 @@
 // UI-only state (not saved, not undone).
+import { createEffect, createRoot } from 'solid-js';
 import { createStore } from 'solid-js/store';
+import { t } from '../lib/i18n';
 import type { ClipKind, Id } from '../api/types';
 
 export type Tool = 'draw' | 'paint' | 'erase' | 'mute' | 'slice' | 'select';
@@ -79,13 +81,16 @@ export const [U, setU] = createStore<UiState>({
   start: 0, follow: true, alt: false,
   mixOpen: true, mixMin: false, mixH: 300, mixSel: 6, fxSel: 903, fxDrag: null,
   plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null, fxPicker: null, musicWin: null,
-  readout: 'Gotowe',
+  readout: t('d.ui.ready'),
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
   ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, patWin: null, patPlaying: false, takesOpen: {}, compSel: null, autoEdit: null, zTop: 1, marquee: null,
   playing: false, previewing: false, previewPath: null,
 });
 
-export const say = (t: string) => setU('readout', t);
+// Until the first status message the readout follows the language (a live switch re-translates "Ready").
+let readoutPristine = true;
+createRoot(() => createEffect(() => { const ready = t('d.ui.ready'); if (readoutPristine) setU('readout', ready); }));
+export const say = (msg: string) => { readoutPristine = false; setU('readout', msg); };
 export const closeMenu = () => { if (U.menu) setU('menu', null); };
 export function menuPos(x: number, y: number, h: number) {
   return { x: Math.max(4, Math.min(x, window.innerWidth - 240)), y: Math.max(4, Math.min(y, window.innerHeight - h)) };

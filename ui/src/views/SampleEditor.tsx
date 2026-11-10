@@ -3,6 +3,7 @@ import { be } from '../api/backend';
 import type { Clip, Source } from '../api/types';
 import { TOTAL } from '../lib/clipOps';
 import { clamp, dbg, dbText, panText } from '../lib/format';
+import { t } from '../lib/i18n';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { getPeaks, peakRange, peaksVersion } from '../state/peaks';
@@ -127,7 +128,7 @@ function EditorBody(props: { clip: Clip; src: Source }) {
         <span class="title">{src().name}</span>
         <span class="sub">{tr()?.name ?? ''}</span>
         <div style={{ flex: 1 }} />
-        <button class="closebtn" title="Zamknij (Esc)" onClick={A.closeEditor}>×</button>
+        <button class="closebtn" title={t('d.smp.close')} onClick={A.closeEditor}>×</button>
       </div>
       <div class="row mono" style={{ height: '28px', flex: 'none', 'justify-content': 'space-between', gap: '12px', padding: '0 16px', 'font-size': '10px', color: 'var(--fg4)' }}>
         <span>{src().dur.toFixed(3) + ' s · ' + src().sr + ' Hz · ' + (src().ch === 2 ? 'stereo' : 'mono') + ' · peak ' + src().peakDb.toFixed(1) + ' dBFS'}</span>
@@ -135,10 +136,10 @@ function EditorBody(props: { clip: Clip; src: Source }) {
       </div>
       <div onPointerDown={waveDown} style={{ position: 'relative', flex: 'none', margin: '0 16px', width: W() + 'px', height: H() + 'px', border: '1px solid var(--line)', 'border-radius': '3px', overflow: 'hidden' }}>
         <canvas ref={cv} style={{ position: 'absolute', left: 0, top: 0, width: W() + 'px', height: H() + 'px', 'pointer-events': 'none' }} />
-        {handle(x0, 'l', 'Początek regionu')}
-        {handle(x1, 'r', 'Koniec regionu')}
-        <div data-ed="fi" title="Fade in — przeciągnij" style={{ position: 'absolute', top: 0, left: x0() + fi() + 'px', width: '11px', height: '11px', 'margin-left': '-1px', background: 'var(--fg-hi)', 'border-radius': '0 0 4px 0', cursor: 'col-resize' }} />
-        <div data-ed="fo" title="Fade out — przeciągnij" style={{ position: 'absolute', top: 0, left: x1() - fo() + 'px', width: '11px', height: '11px', 'margin-left': '-10px', background: 'var(--fg-hi)', 'border-radius': '0 0 0 4px', cursor: 'col-resize' }} />
+        {handle(x0, 'l', t('d.smp.regstart'))}
+        {handle(x1, 'r', t('d.smp.regend'))}
+        <div data-ed="fi" title={t('d.smp.fadein.tip')} style={{ position: 'absolute', top: 0, left: x0() + fi() + 'px', width: '11px', height: '11px', 'margin-left': '-1px', background: 'var(--fg-hi)', 'border-radius': '0 0 4px 0', cursor: 'col-resize' }} />
+        <div data-ed="fo" title={t('d.smp.fadeout.tip')} style={{ position: 'absolute', top: 0, left: x1() - fo() + 'px', width: '11px', height: '11px', 'margin-left': '-10px', background: 'var(--fg-hi)', 'border-radius': '0 0 0 4px', cursor: 'col-resize' }} />
         <div ref={prevLine} style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: '1px', background: 'var(--playhead)', opacity: 0, 'pointer-events': 'none' }} />
       </div>
       <div style={{ flex: 1, 'min-height': 0, display: 'flex', 'flex-wrap': 'wrap', 'align-content': 'flex-start', 'align-items': 'center', gap: '12px 18px', padding: '14px 16px' }}>
@@ -147,41 +148,41 @@ function EditorBody(props: { clip: Clip; src: Source }) {
             {kn => {
               let g: Gesture | null = null;
               const v = () => c()[kn.k] || 0;
-              return <Knob key={'ed' + kn.k} label={kn.label} title="Przeciągnij ↕ · Shift = precyzyjnie · 2× klik = reset"
+              return <Knob key={'ed' + kn.k} label={kn.label} title={t('d.smp.knob.tip')}
                 t={() => { const [lo, hi] = spec(kn.k); return clamp((v() - lo) / (hi - lo), 0, 1); }}
                 zero={() => { const [lo, hi] = spec(kn.k); return lo < 0 ? -lo / (hi - lo) : 0; }}
                 text={() => text(kn.k, v())}
                 onStart={() => { g = new Gesture(kn.label); }}
-                onChange={t => { const [lo, hi] = spec(kn.k); const nv = limit(kn.k, lo + t * (hi - lo)); g?.update([put({ [kn.k]: nv })]); say(kn.label + ' ' + text(kn.k, nv)); }}
+                onChange={tv => { const [lo, hi] = spec(kn.k); const nv = limit(kn.k, lo + tv * (hi - lo)); g?.update([put({ [kn.k]: nv })]); say(kn.label + ' ' + text(kn.k, nv)); }}
                 onEnd={() => { g?.end(); g = null; }}
                 onReset={() => commit([put({ [kn.k]: spec(kn.k)[2] })], kn.label)}
-                onWheel={t => { const [lo, hi] = spec(kn.k); const nv = limit(kn.k, lo + t * (hi - lo)); wheelEdit('ed' + kn.k, kn.label, [put({ [kn.k]: nv })]); }} />;
+                onWheel={tv => { const [lo, hi] = spec(kn.k); const nv = limit(kn.k, lo + tv * (hi - lo)); wheelEdit('ed' + kn.k, kn.label, [put({ [kn.k]: nv })]); }} />;
             }}
           </For>
         </div>
         <div class="vline" />
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
-          <ToggleBtn on={c().norm} label="NORMALIZE" title="Normalizuj do −0.3 dBFS (nieniszcząco)" onClick={() => { commit([put({ norm: !c().norm })], 'Normalize'); say(c().norm ? 'Normalize do −0.3 dBFS (nieniszcząco)' : 'Normalize wył.'); }} />
-          <ToggleBtn on={c().rev} label="REVERSE" title="Odwróć (nieniszcząco)" onClick={() => { commit([put({ rev: !c().rev })], 'Reverse'); say(c().rev ? 'Reverse wł. (nieniszcząco)' : 'Reverse wył.'); }} />
+          <ToggleBtn on={c().norm} label="NORMALIZE" title={t('d.smp.norm.tip')} onClick={() => { commit([put({ norm: !c().norm })], 'Normalize'); say(c().norm ? t('d.smp.norm.on') : t('d.smp.norm.off')); }} />
+          <ToggleBtn on={c().rev} label="REVERSE" title={t('d.smp.rev.tip')} onClick={() => { commit([put({ rev: !c().rev })], 'Reverse'); say(c().rev ? t('d.smp.rev.on') : t('d.smp.rev.off')); }} />
         </div>
         <div style={{ display: 'flex', 'flex-direction': 'column', gap: '6px' }}>
           <button class="smallbtn" classList={{ playing: previewing() }} style={{ height: '22px', padding: '0 12px' }} onClick={() => previewing() ? be().previewStop() : be().previewClip(c().id).catch(e => say(String(e)))}>
-            {previewing() ? 'Stop' : 'Podgląd'}</button>
-          <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title="Edytor wysokości nut (strojenie, dryf, formanty)" onClick={() => A.openPitchEditor(c().id)}>Wysokość…</button>
-          <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title="Wykryj tempo (BPM) i tonację tego klipu" onClick={() => A.openMusicAnalysis({ clipId: c().id })}>Tempo / tonacja…</button>
-          <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title="Wytnij wszystko poza regionem (nowa kopia pliku)"
-            onClick={() => be().trimClip(c().id).then(() => say('Przycięto do regionu · zapisano jako kopię, oryginał nietknięty (Ctrl+Z cofa)')).catch(e => say('Nie przycięto: ' + String(e)))}>Przytnij</button>
+            {previewing() ? 'Stop' : t('d.smp.preview')}</button>
+          <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title={t('d.smp.pitch.tip')} onClick={() => A.openPitchEditor(c().id)}>{t('d.smp.pitch')}</button>
+          <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title={t('d.smp.music.tip')} onClick={() => A.openMusicAnalysis({ clipId: c().id })}>{t('d.smp.music')}</button>
+          <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title={t('d.smp.trim.tip')}
+            onClick={() => be().trimClip(c().id).then(() => say(t('d.smp.trimmed'))).catch(e => say(t('d.smp.trimfail', { err: String(e) })))}>{t('d.smp.trim')}</button>
         </div>
         <div style={{ flex: 1 }} />
         <div class="row" style={{ gap: '6px' }}>
           <span class="tag9">MIXER</span>
           <select class="sel" style={{ height: '26px' }} value={String(tr()?.insert ?? 0)}
-            onChange={e => { const id = +e.currentTarget.value; A.setTrack(c().track, { insert: id }, 'Routing'); setU('mixSel', id); }}>
+            onChange={e => { const id = +e.currentTarget.value; A.setTrack(c().track, { insert: id }, t('d.smp.routing')); setU('mixSel', id); }}>
             <For each={S.project.inserts}>{m => <option value={String(m.id)}>{insName(m)}</option>}</For>
           </select>
         </div>
       </div>
-      <div class="resizer" onPointerDown={resize} title="Zmień rozmiar" />
+      <div class="resizer" onPointerDown={resize} title={t('d.smp.resize')} />
     </div>
   );
 }

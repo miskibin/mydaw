@@ -1,4 +1,5 @@
 import { prefs } from '../state/prefs';
+import { t as tl } from '../lib/i18n';
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { InstIcon, trackIcon } from '../ui/instIcons';
@@ -52,7 +53,7 @@ export function dropClipAt(clientX: number, clientY: number, kind: Clip['kind'],
   if (!p.inside || p.track < 0) return false;
   const len = srcLenBeats(kind, ref), start = clamp(snapFloor(p.beat, unit(alt)), 0, TOTAL - Math.min(len, TOTAL));
   const nc: Clip = { id: allocId(), track: p.track, start, len: Math.min(len, TOTAL - start), offset: 0, kind, ref, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false };
-  commit([{ op: 'putClips', clips: [nc] }], 'Wstaw klip');
+  commit([{ op: 'putClips', clips: [nc] }], tl('a.pl.insertClip'));
   setU('sel', [nc.id]);
   return true;
 }
@@ -211,7 +212,7 @@ export function Playlist() {
   let followHold = false;
   const holdFollow = () => {
     if (!U.follow || !U.playing || followHold) return;
-    followHold = true; say('Podążanie wstrzymane do następnego Play (F = włącz z powrotem)');
+    followHold = true; say(tl('a.pl.followPaused'));
   };
   createEffect(on(() => U.playing, p => { if (p) followHold = false; }));
   createEffect(on(() => U.follow, f => { if (f) followHold = false; }, { defer: true }));
@@ -228,7 +229,7 @@ export function Playlist() {
     } else if (e.altKey) {
       e.preventDefault();
       const d = e.deltaY < 0 ? 6 : -6;
-      wheelEdit('heights', 'Wysokość ścieżek', S.project.tracks.map(t => ({ op: 'putTrack', track: { ...plain(t), h: clamp(t.h + d, 28, 220) } }) as Op));
+      wheelEdit('heights', tl('a.pl.trackHeights'), S.project.tracks.map(t => ({ op: 'putTrack', track: { ...plain(t), h: clamp(t.h + d, 28, 220) } }) as Op));
     }
   };
 
@@ -337,7 +338,7 @@ export function Playlist() {
     const len = srcLenBeats(cur.kind, cur.ref);
     const start = clamp(snapFloor(p.beat, unit(e.altKey)), 0, TOTAL - Math.min(len, TOTAL));
     const nc: Clip = { id: allocId(), track: p.track, start, len: Math.min(len, TOTAL - start), offset: 0, kind: cur.kind, ref: cur.ref, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false };
-    const g = new Gesture(tool === 'paint' ? 'Maluj klipy' : 'Wstaw klip');
+    const g = new Gesture(tool === 'paint' ? tl('a.pl.paintClips') : tl('a.pl.insertClip'));
     g.update([{ op: 'putClips', clips: [nc] }]);
     setU('sel', [nc.id]);
     if (tool === 'paint') return paintDrag(g, nc);
@@ -345,7 +346,7 @@ export function Playlist() {
   };
 
   function moveDrag(e: PointerEvent, clip: Clip, clone: boolean, fresh?: Gesture) {
-    const g = fresh ?? new Gesture(clone ? 'Kopiuj klipy' : 'Przesuń klipy');
+    const g = fresh ?? new Gesture(clone ? tl('a.pl.copyClips') : tl('a.pl.moveClips'));
     const ids = U.sel.includes(clip.id) ? [...U.sel] : [clip.id];
     const idSet = new Set(ids);
     let orig = plain(S.project.clips.filter(c => idSet.has(c.id)));
@@ -376,7 +377,7 @@ export function Playlist() {
   }
 
   function resizeDrag(e: PointerEvent, clip: Clip, edge: 'l' | 'r') {
-    const g = new Gesture('Zmień długość klipu');
+    const g = new Gesture(tl('a.pl.resizeClip'));
     const o = plain(clip), sx = e.clientX;
     const srcLen = o.kind === 'audio' || o.kind === 'comp' ? srcLenBeats(o.kind, o.ref) : Infinity;
     const minL = Math.max(1 / 16, snapRes(U.snap, U.bw) || 1 / 16);
@@ -385,7 +386,7 @@ export function Playlist() {
       const target = snapRound((edge === 'r' ? o.start + o.len : o.start) + raw, unit(ev.altKey));
       const nc = resizeClip(o, edge, target, minL, srcLen);
       g.update([{ op: 'putClips', clips: [nc] }]);
-      say('Start ' + fmtPos(nc.start) + ' · długość ' + nc.len.toFixed(2) + ' beat');
+      say(tl('a.pl.startLen', { pos: fmtPos(nc.start), len: nc.len.toFixed(2) }));
     }, () => g.end(), 'ew-resize');
   }
 
@@ -411,7 +412,7 @@ export function Playlist() {
   }
 
   function eraseDrag(id: Id | null) {
-    const g = new Gesture('Usuń klipy');
+    const g = new Gesture(tl('a.pl.deleteClips'));
     const del = (cid: Id | null | undefined) => {
       if (cid == null || !S.project.clips.some(c => c.id === cid)) return;
       g.update([{ op: 'removeClips', ids: [cid] }]);
@@ -423,7 +424,7 @@ export function Playlist() {
 
   function muteDrag(id: Id | null) {
     if (id == null) return;
-    const g = new Gesture('Wycisz klipy');
+    const g = new Gesture(tl('a.pl.muteClips'));
     const val = !S.project.clips.find(c => c.id === id)!.muted;
     const set = (cid: Id | undefined) => {
       const c = S.project.clips.find(x => x.id === cid);
@@ -442,7 +443,7 @@ export function Playlist() {
       const ax = Math.min(x0, q.x), bx = Math.max(x0, q.x), ay = Math.min(y0, q.y), by = Math.max(y0, q.y);
       const hits = S.project.clips.filter(c => c.start * bw < bx && (c.start + c.len) * bw > ax && t[c.track] < by && t[c.track + 1] > ay).map(c => c.id);
       setU({ marquee: { x0, y0, x1: q.x, y1: q.y }, sel: [...new Set([...base, ...hits])] });
-    }, () => { setU('marquee', null); say('Zaznaczono ' + U.sel.length); }, 'crosshair');
+    }, () => { setU('marquee', null); say(tl('a.pl.selected', { n: U.sel.length })); }, 'crosshair');
   }
 
   function rightDown(e: PointerEvent, h: Hit | null, p: { beat: number; track: number }) {
@@ -456,7 +457,7 @@ export function Playlist() {
     };
     track(ev => {
       if (!g && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 5) {
-        g = new Gesture('Usuń klipy'); document.body.style.cursor = 'not-allowed'; del(h?.c.id);
+        g = new Gesture(tl('a.pl.deleteClips')); document.body.style.cursor = 'not-allowed'; del(h?.c.id);
       }
       if (g) { const q = pt(ev); del(hit(q.x, q.y)?.c.id); }
     }, () => {
@@ -469,7 +470,7 @@ export function Playlist() {
   const gridDbl = (e: MouseEvent) => {
     const p = pt(e), h = hit(p.x, p.y); if (!h) return;
     if (h.c.kind === 'comp') { if (!U.sel.includes(h.c.id)) setU('sel', [h.c.id]); CA.toggleTakes(h.c.track); return; }
-    if (h.c.kind === 'auto') { setU({ autoEdit: h.c.id, sel: [h.c.id] }); say('Edycja automatyzacji: klik = punkt · przeciągnij = przesuń · PPM = usuń · Esc = koniec'); return; }
+    if (h.c.kind === 'auto') { setU({ autoEdit: h.c.id, sel: [h.c.id] }); say(tl('a.pl.autoEditHint')); return; }
     setU('cur', { kind: h.c.kind, ref: h.c.ref });
     if (h.c.kind === 'audio') A.openEditor(h.c.id);
     if (h.c.kind === 'pat') openPattern(h.c.ref);
@@ -494,11 +495,11 @@ export function Playlist() {
     e.preventDefault();
     let i = envHit(c, x, y);
     if (e.button === 2) {
-      if (i >= 0 && a.points.length > 1) { commit([{ op: 'putAutomation', automation: { ...plain(a), points: a.points.filter((_, k) => k !== i).map(q => ({ ...q })) } }], 'Usuń punkt'); say('Usunięto punkt'); }
-      else if (i >= 0) say('Automatyzacja musi mieć co najmniej jeden punkt');
+      if (i >= 0 && a.points.length > 1) { commit([{ op: 'putAutomation', automation: { ...plain(a), points: a.points.filter((_, k) => k !== i).map(q => ({ ...q })) } }], tl('a.pl.deletePoint')); say(tl('a.pl.pointDeleted')); }
+      else if (i >= 0) say(tl('a.pl.autoMinPoint'));
       return true;
     }
-    const g = new Gesture(i >= 0 ? 'Przesuń punkt' : 'Dodaj punkt');
+    const g = new Gesture(i >= 0 ? tl('a.pl.movePoint') : tl('a.pl.addPoint'));
     let pts = plain(a.points);
     if (i < 0) {
       const nt = Math.max(0, snapRound(G.T(x) + c.start - c.offset, unit(e.altKey)) - c.start + c.offset);
@@ -524,7 +525,7 @@ export function Playlist() {
   function swipeDrag(e: PointerEvent, L: LaneHit) {
     const clip = plain(L.clip), comp = plain(L.comp), take = plain(L.take);
     const lo = Math.max(take.start, clip.offset), hi = Math.min(takeEnd(take), clip.offset + clip.len);
-    if (hi <= lo) { say(take.name + ' leży poza oknem klipu — wydłuż klip, aby go usłyszeć'); return; }
+    if (hi <= lo) { say(tl('a.pl.takeOutside', { name: take.name })); return; }
     const at = (ev: PointerEvent) => clamp(toComp(clip, snapRound(pt(ev).beat, unit(ev.altKey))), lo, hi);
     const a = at(e), sx = e.clientX;
     let g: Gesture | null = null;
@@ -539,31 +540,31 @@ export function Playlist() {
     }, () => {
       if (g) { g.end(); return; }
       setU('compSel', null);
-      say('Przeciągnij po take\'u, aby wpisać ten fragment do compu · klik w nazwę = cały take');
+      say(tl('a.pl.swipeHint'));
     }, 'text');
   }
   function boundaryDrag(e: PointerEvent, clip: Clip, i: number) {
     const cp = compById(clip.ref); if (!cp) return;
     const comp = plain(cp), c = plain(clip), b = boundaries(comp.regions)[i]; if (!b) return;
-    const g = new Gesture('Granica compu'), sx = e.clientX;
+    const g = new Gesture(tl('a.pl.compBoundary')), sx = e.clientX;
     track(ev => {
       if (Math.abs(ev.clientX - sx) < 2) return;
       const cb = toComp(c, snapRound(pt(ev).beat, unit(ev.altKey)));
       const regions = moveBoundary(comp, b, cb, 1 / 32);
       g.update([{ op: 'putComp', comp: { ...comp, regions } }]);
       const r = b.left >= 0 ? regions[b.left].to : regions[b.right].from;
-      say('Granica compu → ' + fmtPos(toTimeline(c, r)));
+      say(tl('a.pl.compBoundaryAt', { pos: fmtPos(toTimeline(c, r)) }));
     }, () => g.end(), 'col-resize');
   }
   function openBoundaryMenu(x: number, y: number, clip: Clip, i: number) {
     const comp = compById(clip.ref); if (!comp) return;
     const b = boundaries(comp.regions)[i]; if (!b) return;
     const cur = boundaryXfade(comp, b), own = (b.right >= 0 ? comp.regions[b.right] : comp.regions[b.left])?.xfade;
-    const set = (v: number | null, label: string) => { CA.putComp({ ...plain(comp), regions: setBoundaryXfade(comp, b, v) }, 'Crossfade granicy'); say(label); };
+    const set = (v: number | null, label: string) => { CA.putComp({ ...plain(comp), regions: setBoundaryXfade(comp, b, v) }, tl('a.pl.boundaryXfade')); say(label); };
     openMenu(x, y, [
-      { t: 'title', label: 'Granica ' + fmtPos(toTimeline(clip, b.at)) + ' · crossfade ' + Math.round(cur * 1000) + ' ms' },
-      { t: 'chips', label: 'Crossfade', options: XF.map(v => v * 1000 + ' ms'), active: XF.findIndex(v => Math.abs(v - cur) < 1e-6), pick: k => set(XF[k], 'Crossfade granicy: ' + XF[k] * 1000 + ' ms') },
-      { t: 'item', label: 'Domyślny compu (' + Math.round(comp.xfade * 1000) + ' ms)', disabled: own == null, act: () => set(null, 'Crossfade granicy: domyślny') },
+      { t: 'title', label: tl('a.pl.boundaryTitle', { pos: fmtPos(toTimeline(clip, b.at)), ms: Math.round(cur * 1000) }) },
+      { t: 'chips', label: 'Crossfade', options: XF.map(v => v * 1000 + ' ms'), active: XF.findIndex(v => Math.abs(v - cur) < 1e-6), pick: k => set(XF[k], tl('a.pl.boundaryXfadeMs', { ms: XF[k] * 1000 })) },
+      { t: 'item', label: tl('a.pl.compDefault', { ms: Math.round(comp.xfade * 1000) }), disabled: own == null, act: () => set(null, tl('a.pl.boundaryXfadeDef')) },
     ], 130);
   }
 
@@ -574,59 +575,59 @@ export function Playlist() {
     if (c.kind === 'auto') {
       const a = autoById(c.ref);
       openMenu(x, y, [
-        { t: 'title', label: 'Automatyzacja · ' + (a?.name ?? '') },
-        { t: 'item', label: 'Edytuj punkty', kbd: '2× klik', act: () => setU({ autoEdit: c.id }) },
-        { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, a?.name ?? '', v => A.setSrcProp(c, { name: v })) },
+        { t: 'title', label: tl('a.pl.autoPrefix') + (a?.name ?? '') },
+        { t: 'item', label: tl('a.pl.editPoints'), kbd: tl('a.pl.dblClick'), act: () => setU({ autoEdit: c.id }) },
+        { t: 'item', label: tl('a.pl.rename'), act: () => openRename(x, y, a?.name ?? '', v => A.setSrcProp(c, { name: v })) },
         { t: 'swatches', current: a?.color, pick: col => A.setSrcProp(c, { color: col }) },
         { t: 'sep' },
-        { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: A.toggleMuteSel },
-        { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: A.duplicate },
-        { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
-        { t: 'item', label: 'Zaznacz wszystkie z tej automatyzacji', act: () => setU('sel', S.project.clips.filter(v => v.kind === 'auto' && v.ref === c.ref).map(v => v.id)) },
+        { t: 'item', label: c.muted ? tl('a.pl.unmute') : tl('a.pl.mute'), kbd: 'Ctrl+M', act: A.toggleMuteSel },
+        { t: 'item', label: tl('a.pl.duplicate'), kbd: 'Ctrl+B', act: A.duplicate },
+        { t: 'item', label: tl('a.pl.splitHere'), act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
+        { t: 'item', label: tl('a.pl.selAllAuto'), act: () => setU('sel', S.project.clips.filter(v => v.kind === 'auto' && v.ref === c.ref).map(v => v.id)) },
         { t: 'sep' },
-        { t: 'item', label: 'Usuń klip', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
-        { t: 'item', label: 'Usuń automatyzację (wszystkie klipy)', danger: true, act: () => { commit([{ op: 'removeAutomation', id: c.ref }], 'Usuń automatyzację'); setU('autoEdit', null); } },
+        { t: 'item', label: tl('a.pl.deleteClip'), kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
+        { t: 'item', label: tl('a.pl.deleteAutoAll'), danger: true, act: () => { commit([{ op: 'removeAutomation', id: c.ref }], tl('a.pl.deleteAuto')); setU('autoEdit', null); } },
       ], 380);
       return;
     }
     const all = () => setU('sel', S.project.clips.filter(v => v.kind === c.kind && v.ref === c.ref).map(v => v.id));
     const items: MenuItem[] = [
       { t: 'title', label: (isPat ? 'Pattern · ' : 'Audio · ') + (src?.name ?? '') },
-      { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, src?.name ?? '', v => A.setSrcProp(c, { name: v })) },
+      { t: 'item', label: tl('a.pl.rename'), act: () => openRename(x, y, src?.name ?? '', v => A.setSrcProp(c, { name: v })) },
       { t: 'swatches', current: (src as { color?: string } | undefined)?.color, pick: col => A.setSrcProp(c, { color: col }) },
-      { t: 'sec', label: 'Edycja' },
-      { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: A.toggleMuteSel },
-      { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: A.duplicate },
-      { t: 'sub', label: 'Schowek', items: [
-        { t: 'item', label: 'Kopiuj', kbd: 'Ctrl+C', act: A.copy },
-        { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: A.cut },
+      { t: 'sec', label: tl('a.pl.secEdit') },
+      { t: 'item', label: c.muted ? tl('a.pl.unmute') : tl('a.pl.mute'), kbd: 'Ctrl+M', act: A.toggleMuteSel },
+      { t: 'item', label: tl('a.pl.duplicate'), kbd: 'Ctrl+B', act: A.duplicate },
+      { t: 'sub', label: tl('a.pl.clipboard'), items: [
+        { t: 'item', label: tl('a.pl.copy'), kbd: 'Ctrl+C', act: A.copy },
+        { t: 'item', label: tl('a.pl.cut'), kbd: 'Ctrl+X', act: A.cut },
       ] },
-      { t: 'sub', label: 'Podziel', items: [
-        { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
-        { t: 'item', label: 'Podziel na głowicy', act: () => A.sliceAt(c.id, curBeat()) },
+      { t: 'sub', label: tl('a.pl.split'), items: [
+        { t: 'item', label: tl('a.pl.splitHere'), act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
+        { t: 'item', label: tl('a.pl.splitAtHead'), act: () => A.sliceAt(c.id, curBeat()) },
       ] },
       ...(isPat ? [
         { t: 'sec', label: 'Pattern' } as MenuItem,
-        { t: 'item', label: 'Edytuj pattern…', kbd: '2× klik', act: () => openPattern(c.ref) } as MenuItem,
+        { t: 'item', label: tl('a.pl.editPattern'), kbd: tl('a.pl.dblClick'), act: () => openPattern(c.ref) } as MenuItem,
         { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } as MenuItem,
       ] : [
         { t: 'sec', label: 'Audio' } as MenuItem,
         { t: 'gain', clipId: c.id } as MenuItem,
         ...(c.kind === 'audio' ? [
-          { t: 'item', label: 'Edytuj sample…', kbd: '2× klik', act: () => A.openEditor(c.id) } as MenuItem,
-          { t: 'item', label: 'Edytuj wysokość…', kbd: c.tune?.notes.length ? 'edytowany' : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
-          { t: 'item', label: 'Wykryj tempo i tonację…', act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
-          { t: 'sub', label: 'Auto wokal', items: [
-            { t: 'item', label: 'Auto wokal — śpiew', act: () => void A.autoVocal(c.id, 'natural'), title: 'Analizuje nagranie i ustawia na kanale miksera: wyrównanie, kompresję, de-esser, autotune w tonacji bitu, mały reverb i limiter' },
-            { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocal(c.id, 'hard'), title: 'Jak śpiew, ale szybsze wyrównanie i twardszy autotune' },
+          { t: 'item', label: tl('a.pl.editSample'), kbd: tl('a.pl.dblClick'), act: () => A.openEditor(c.id) } as MenuItem,
+          { t: 'item', label: tl('a.pl.editPitch'), kbd: c.tune?.notes.length ? tl('a.pl.edited') : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
+          { t: 'item', label: tl('a.pl.detectTempoKey'), act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
+          { t: 'sub', label: tl('a.pl.autoVocal'), items: [
+            { t: 'item', label: tl('a.pl.autoVocalSing'), act: () => void A.autoVocal(c.id, 'natural'), title: tl('a.pl.autoVocalSingTip') },
+            { t: 'item', label: tl('a.pl.autoVocalRap'), act: () => void A.autoVocal(c.id, 'hard'), title: tl('a.pl.autoVocalRapTip') },
           ] } as MenuItem,
         ] : []),
       ]),
-      { t: 'sec', label: 'Miks' },
-      { t: 'item', label: 'Kanał miksera…', act: () => openRouteMenu(c.track, x, y) },
-      { t: 'item', label: 'Zaznacz wszystkie z tego źródła', act: all },
+      { t: 'sec', label: tl('a.pl.secMix') },
+      { t: 'item', label: tl('a.pl.mixerChannel'), act: () => openRouteMenu(c.track, x, y) },
+      { t: 'item', label: tl('a.pl.selAllSource'), act: all },
       { t: 'sep' },
-      { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
+      { t: 'item', label: tl('a.pl.delete'), kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
     ];
     openMenu(x, y, items, 420);
   }
@@ -636,27 +637,27 @@ export function Playlist() {
     const aud = S.audition[comp.id], unused = unusedTakes(comp).length;
     openMenu(x, y, [
       { t: 'title', label: comp.name + ' · ' + CA.takesLabel(comp.takes.length) },
-      { t: 'item', label: open ? 'Ukryj take\'i' : 'Pokaż take\'i', kbd: '2× klik', act: () => CA.toggleTakes(c.track) },
-      ...(aud != null ? [{ t: 'item', label: 'Zakończ odsłuch solo', act: () => CA.audition(comp.id, null) } as MenuItem] : []),
-      { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, comp.name, v => CA.renameComp(comp, v)) },
+      { t: 'item', label: open ? tl('a.pl.hideTakes') : tl('a.pl.showTakes'), kbd: tl('a.pl.dblClick'), act: () => CA.toggleTakes(c.track) },
+      ...(aud != null ? [{ t: 'item', label: tl('a.pl.endSoloPrev'), act: () => CA.audition(comp.id, null) } as MenuItem] : []),
+      { t: 'item', label: tl('a.pl.rename'), act: () => openRename(x, y, comp.name, v => CA.renameComp(comp, v)) },
       { t: 'chips', label: 'Crossfade', options: XF.map(v => v * 1000 + ' ms'), active: XF.findIndex(v => Math.abs(v - comp.xfade) < 1e-6), pick: k => CA.setXfade(comp, XF[k]) },
       { t: 'sep' },
-      { t: 'item', label: c.muted ? 'Odcisz' : 'Wycisz', kbd: 'Ctrl+M', act: A.toggleMuteSel },
-      { t: 'item', label: 'Duplikuj', kbd: 'Ctrl+B', act: A.duplicate, title: 'Kopia gra ten sam comp (edycja compu zmienia obie)' },
-      { t: 'item', label: 'Kopiuj', kbd: 'Ctrl+C', act: A.copy },
-      { t: 'item', label: 'Wytnij', kbd: 'Ctrl+X', act: A.cut },
-      { t: 'item', label: 'Podziel tutaj', act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
+      { t: 'item', label: c.muted ? tl('a.pl.unmute') : tl('a.pl.mute'), kbd: 'Ctrl+M', act: A.toggleMuteSel },
+      { t: 'item', label: tl('a.pl.duplicate'), kbd: 'Ctrl+B', act: A.duplicate, title: tl('a.pl.dupCompTip') },
+      { t: 'item', label: tl('a.pl.copy'), kbd: 'Ctrl+C', act: A.copy },
+      { t: 'item', label: tl('a.pl.cut'), kbd: 'Ctrl+X', act: A.cut },
+      { t: 'item', label: tl('a.pl.splitHere'), act: () => A.sliceAt(c.id, snapRound(p.beat, unit(false))) },
       { t: 'gain', clipId: c.id },
-      { t: 'item', label: 'Kanał miksera…', act: () => openRouteMenu(c.track, x, y) },
+      { t: 'item', label: tl('a.pl.mixerChannel'), act: () => openRouteMenu(c.track, x, y) },
       { t: 'sep' },
-      { t: 'item', label: 'Usuń nieużyte take\'i' + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
-      { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(c.id) },
-      { t: 'sub', label: 'Auto wokal', items: [
-        { t: 'item', label: 'Auto wokal — śpiew', title: 'Spłaszcza comp do jednego klipu i ustawia łańcuch wokalu na kanale miksera', act: () => void A.autoVocalComp(c.id, 'natural') },
-        { t: 'item', label: 'Auto wokal — rap', act: () => void A.autoVocalComp(c.id, 'hard') },
+      { t: 'item', label: tl('a.pl.removeUnused') + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
+      { t: 'item', label: tl('a.pl.flattenComp'), title: tl('a.pl.flattenTip'), act: () => CA.flatten(c.id) },
+      { t: 'sub', label: tl('a.pl.autoVocal'), items: [
+        { t: 'item', label: tl('a.pl.autoVocalSing'), title: tl('a.pl.autoVocalCompTip'), act: () => void A.autoVocalComp(c.id, 'natural') },
+        { t: 'item', label: tl('a.pl.autoVocalRap'), act: () => void A.autoVocalComp(c.id, 'hard') },
       ] },
       { t: 'sep' },
-      { t: 'item', label: 'Usuń', kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
+      { t: 'item', label: tl('a.pl.delete'), kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
     ], 470);
   }
 
@@ -664,10 +665,10 @@ export function Playlist() {
     const at = { beat: snapFloor(p.beat, unit(false)), track: clamp(p.track, 0, S.project.tracks.length - 1) };
     openMenu(x, y, [
       { t: 'title', label: 'Playlist · ' + fmtPos(at.beat) },
-      { t: 'item', label: 'Wklej tutaj', kbd: 'Ctrl+V', act: () => A.paste(at), disabled: !A.hasClipboard() },
-      { t: 'item', label: 'Ustaw start tutaj', act: () => A.seek(at.beat) },
-      { t: 'item', label: 'Zaznacz wszystko', kbd: 'Ctrl+A', act: A.selectAll },
-      { t: 'item', label: 'Zaznacz ścieżkę', act: () => setU('sel', S.project.clips.filter(c => c.track === at.track).map(c => c.id)) },
+      { t: 'item', label: tl('a.pl.pasteHere'), kbd: 'Ctrl+V', act: () => A.paste(at), disabled: !A.hasClipboard() },
+      { t: 'item', label: tl('a.pl.setStartHere'), act: () => A.seek(at.beat) },
+      { t: 'item', label: tl('a.pl.selectAll'), kbd: 'Ctrl+A', act: A.selectAll },
+      { t: 'item', label: tl('a.pl.selectTrack'), act: () => setU('sel', S.project.clips.filter(c => c.track === at.track).map(c => c.id)) },
     ], 180);
   }
 
@@ -687,7 +688,7 @@ export function Playlist() {
   const rulerDown = (e: PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
-    if (dblCheck('ruler')) { if (S.project.loop) { A.setLoop(null, 'Usuń pętlę'); say('Pętla usunięta'); } return; }
+    if (dblCheck('ruler')) { if (S.project.loop) { A.setLoop(null, tl('a.pl.deleteLoop')); say(tl('a.pl.loopDeleted')); } return; }
     const r = gridEl.getBoundingClientRect();
     const b0 = clamp(snapRound((e.clientX - r.left) / U.bw, unit(e.altKey)), 0, TOTAL);
     let g: Gesture | null = null;
@@ -697,7 +698,7 @@ export function Playlist() {
       const len = lp.b - lp.a, raw0 = (e.clientX - r.left) / U.bw;
       track(ev => {
         const raw = (ev.clientX - r.left) / U.bw, u = unit(ev.altKey);
-        if (!g && Math.abs(ev.clientX - e.clientX) > 2) g = new Gesture(edge === 'body' ? 'Przesuń pętlę' : 'Zakres pętli');
+        if (!g && Math.abs(ev.clientX - e.clientX) > 2) g = new Gesture(edge === 'body' ? tl('a.pl.moveLoop') : tl('a.pl.loopRange'));
         if (!g) return;
         let a = lp.a, z = lp.b;
         if (edge === 'a') a = clamp(snapRound(raw, u), 0, lp.b - u);
@@ -709,7 +710,7 @@ export function Playlist() {
     }
     track(ev => {
       const b1 = clamp(snapRound((ev.clientX - r.left) / U.bw, unit(ev.altKey)), 0, TOTAL);
-      if (!g && Math.abs(ev.clientX - e.clientX) > 4) g = new Gesture('Pętla');
+      if (!g && Math.abs(ev.clientX - e.clientX) > 4) g = new Gesture(tl('a.pl.loop'));
       if (g && b1 !== b0) g.update([{ op: 'setLoop', loop: { a: Math.min(b0, b1), b: Math.max(b0, b1) } }]);
     }, () => {
       if (!g) A.seek(b0);
@@ -793,7 +794,7 @@ export function Playlist() {
     <div class="plwrap" onPointerDown={() => A.playlistFront()}>
       <div class="ploverview" style={{ 'padding-left': U.headW + 'px' }}>
         <div class="ovtrack">
-          <canvas ref={ovCv} onPointerDown={ovDown} onPointerMove={ovHover} title="Przeciągnij = przewiń · krawędzie = zoom · klik = skocz" />
+          <canvas ref={ovCv} onPointerDown={ovDown} onPointerMove={ovHover} title={tl('a.pl.ovTip')} />
           <div class="ovthumb" style={{ left: thumb().x + 'px', width: thumb().w + 'px' }} />
         </div>
       </div>
@@ -806,7 +807,7 @@ export function Playlist() {
             </div>
             <div style={{ position: 'relative', width: gridW() + 'px', height: '26px', flex: 'none' }}>
               <div class="phtile"><div ref={phRuler} class="phead" style={{ height: '26px' }} /></div>
-              <canvas ref={rulerCv} class="ruler" title="Klik = start · przeciągnij = pętla · 2× klik = usuń pętlę"
+              <canvas ref={rulerCv} class="ruler" title={tl('a.pl.rulerTip')}
                 onPointerDown={rulerDown} onPointerMove={rulerHover} />
 
             </div>
@@ -814,8 +815,8 @@ export function Playlist() {
           <div style={{ display: 'flex' }}>
             <div class="lanesCol" style={{ width: U.headW + 'px' }}>
               <For each={S.project.tracks}>{(t, i) => <><LaneHeader t={t} i={i()} /><TakeHeaders i={i()} /></>}</For>
-              <button class="addTrack" onClick={A.addTrack}>+ Dodaj ścieżkę</button>
-              <div class="hsplit" onPointerDown={headSplit} title="Przeciągnij = szerokość nagłówków" />
+              <button class="addTrack" onClick={A.addTrack}>{tl('a.pl.addTrack')}</button>
+              <div class="hsplit" onPointerDown={headSplit} title={tl('a.pl.headSplitTip')} />
             </div>
             <div ref={gridEl} class="gridArea" style={{ width: gridW() + 'px', height: gridH() + 'px' }}>
               <div class="phtile"><div ref={phGrid} class="phead" style={{ height: gridH() + 'px' }} /></div>
@@ -827,7 +828,7 @@ export function Playlist() {
         </div>
       </div>
       <Show when={U.dragOver}>
-        <div class="dropHint"><span>Upuść, aby wstawić audio w miejscu kursora</span></div>
+        <div class="dropHint"><span>{tl('a.pl.dropHint')}</span></div>
       </Show>
     </div>
   );
@@ -837,7 +838,7 @@ export function Playlist() {
 export function openRouteMenu(i: number, x: number, y: number) {
   const t = S.project.tracks[i]; if (!t) return;
   openMenu(x, y, [
-    { t: 'title', label: t.name + ' → kanał miksera' },
+    { t: 'title', label: tl('a.pl.toMixer', { name: t.name }) },
     ...S.project.inserts.map(m => ({ t: 'item', label: insLabel(m.id), kbd: t.insert === m.id ? '●' : '', act: () => {
       A.setTrack(i, { insert: m.id }, 'Routing'); A.selectInsert(m.id); say(t.name + ' → ' + insLabel(m.id));
     } }) as MenuItem),
@@ -849,23 +850,23 @@ function openLaneMenu(x: number, y: number, i: number) {
   const t = S.project.tracks[i];
   openMenu(x, y, [
     { t: 'title', label: t.name },
-    { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, t.name, v => A.setTrack(i, { name: v }, 'Nazwa ścieżki')) },
-    { t: 'swatches', current: t.color, pick: col => A.setTrack(i, { color: col }, 'Kolor ścieżki') },
-    { t: 'icons', current: t.icon, color: t.color, pick: id => A.setTrack(i, { icon: id }, 'Ikona ścieżki') },
+    { t: 'item', label: tl('a.pl.rename'), act: () => openRename(x, y, t.name, v => A.setTrack(i, { name: v }, tl('a.pl.trackName'))) },
+    { t: 'swatches', current: t.color, pick: col => A.setTrack(i, { color: col }, tl('a.pl.trackColor')) },
+    { t: 'icons', current: t.icon, color: t.color, pick: id => A.setTrack(i, { icon: id }, tl('a.pl.trackIcon')) },
     { t: 'sep' },
-    { t: 'item', label: t.muted ? 'Odcisz' : 'Wycisz', act: () => A.toggleTrackMute(i) },
-    { t: 'item', label: t.solo ? 'Wyłącz solo' : 'Solo', act: () => A.toggleTrackSolo(i) },
-    { t: 'item', label: t.arm ? 'Rozbrój nagrywanie' : 'Uzbrój do nagrywania', act: () => A.armTrack(i) },
-    { t: 'item', label: 'Zaznacz klipy ścieżki', act: () => setU('sel', S.project.clips.filter(c => c.track === i).map(c => c.id)) },
+    { t: 'item', label: t.muted ? tl('a.pl.unmute') : tl('a.pl.mute'), act: () => A.toggleTrackMute(i) },
+    { t: 'item', label: t.solo ? tl('a.pl.soloOff') : 'Solo', act: () => A.toggleTrackSolo(i) },
+    { t: 'item', label: t.arm ? tl('a.pl.disarm') : tl('a.pl.arm'), act: () => A.armTrack(i) },
+    { t: 'item', label: tl('a.pl.selTrackClips'), act: () => setU('sel', S.project.clips.filter(c => c.track === i).map(c => c.id)) },
     ...(CA.activeComp(i) ? [
-      { t: 'item', label: U.takesOpen[t.id] ? 'Ukryj take\'i' : 'Pokaż take\'i', kbd: CA.takesLabel(CA.activeComp(i)!.comp.takes.length), act: () => CA.toggleTakes(i) } as MenuItem,
-      { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(CA.activeComp(i)!.clip.id) } as MenuItem,
+      { t: 'item', label: U.takesOpen[t.id] ? tl('a.pl.hideTakes') : tl('a.pl.showTakes'), kbd: CA.takesLabel(CA.activeComp(i)!.comp.takes.length), act: () => CA.toggleTakes(i) } as MenuItem,
+      { t: 'item', label: tl('a.pl.flattenComp'), title: tl('a.pl.flattenTip'), act: () => CA.flatten(CA.activeComp(i)!.clip.id) } as MenuItem,
     ] : []),
-    { t: 'item', label: 'Wysokość: domyślna', act: () => A.setTrack(i, { h: 56 }, 'Wysokość') },
+    { t: 'item', label: tl('a.pl.heightDefault'), act: () => A.setTrack(i, { h: 56 }, tl('a.pl.height')) },
     { t: 'sep' },
-    { t: 'item', label: 'Wstaw ścieżkę powyżej', act: () => A.insertTrack(i) },
-    { t: 'item', label: 'Wstaw ścieżkę poniżej', act: () => A.insertTrack(i + 1) },
-    { t: 'item', label: 'Usuń ścieżkę', danger: true, disabled: S.project.tracks.length < 2, act: () => A.removeTrack(t.id) },
+    { t: 'item', label: tl('a.pl.insertAbove'), act: () => A.insertTrack(i) },
+    { t: 'item', label: tl('a.pl.insertBelow'), act: () => A.insertTrack(i + 1) },
+    { t: 'item', label: tl('a.pl.deleteTrack'), danger: true, disabled: S.project.tracks.length < 2, act: () => A.removeTrack(t.id) },
   ], 400);
 }
 
@@ -880,23 +881,23 @@ function LaneHeader(props: { t: Track; i: number }) {
   const resize = (e: PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
-    const g = new Gesture('Wysokość ścieżki');
+    const g = new Gesture(tl('a.pl.trackHeight'));
     const sy = e.clientY, h0 = t().h;
     track(ev => {
       const h = clamp(Math.round(h0 + ev.clientY - sy), 28, 220);
       g.update([{ op: 'putTrack', track: { ...plain(t()), h } }]);
-      say(t().name + ' · wysokość ' + h + ' px');
+      say(tl('a.pl.nameHeight', { name: t().name, h }));
     }, () => g.end(), 'row-resize');
   };
   const volTarget = () => ({ kind: 'trackVol' as const, id: t().id });
   const shownVol = () => autoDisplay(volTarget()) ?? t().vol;
   const vol = (e: PointerEvent) => {
-    if (e.button === 2) { e.preventDefault(); e.stopPropagation(); paramMenu(e.clientX, e.clientY, volTarget(), () => A.setTrack(props.i, { vol: VOL_UNITY }, 'Głośność'), t().color); return; }
+    if (e.button === 2) { e.preventDefault(); e.stopPropagation(); paramMenu(e.clientX, e.clientY, volTarget(), () => A.setTrack(props.i, { vol: VOL_UNITY }, tl('a.pl.volume')), t().color); return; }
     if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
-    if (dblCheck('lvol' + props.i)) { A.setTrack(props.i, { vol: VOL_UNITY }, 'Głośność'); say(t().name + ' · 0.0 dB'); return; }
+    if (dblCheck('lvol' + props.i)) { A.setTrack(props.i, { vol: VOL_UNITY }, tl('a.pl.volume')); say(t().name + ' · 0.0 dB'); return; }
     const w = (e.currentTarget as HTMLElement).getBoundingClientRect().width;
-    const g = new Gesture('Głośność ścieżki');
+    const g = new Gesture(tl('a.pl.trackVolume'));
     let v = t().vol, lx = e.clientX;
     track(ev => {
       v = clamp(v + (ev.clientX - lx) / w * (ev.shiftKey ? 0.2 : 1), 0, 1); lx = ev.clientX;
@@ -911,28 +912,28 @@ function LaneHeader(props: { t: Track; i: number }) {
       <div class="body">
         <div class="row" style={{ gap: '6px', 'min-width': 0 }}>
           <Show when={trackIcon(t())} fallback={<span class="num">{props.i + 1}</span>}>
-            <span class="laneicon" style={{ color: t().color }} title={'Ścieżka ' + (props.i + 1) + ' · PPM = zmień ikonę'}><InstIcon id={trackIcon(t())} size={13} /></span>
+            <span class="laneicon" style={{ color: t().color }} title={tl('a.pl.trackTip', { n: props.i + 1 })}><InstIcon id={trackIcon(t())} size={13} /></span>
           </Show>
-          <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title="2× klik = zmień nazwę"
-            onDblClick={e => openRename(e.clientX, e.clientY, t().name, v => A.setTrack(props.i, { name: v }, 'Nazwa ścieżki'))}>{t().name}</span>
+          <span class="nm" style={{ color: audible() ? 'var(--fg-hi)' : 'var(--fg4)' }} title={tl('a.pl.nameTip')}
+            onDblClick={e => openRename(e.clientX, e.clientY, t().name, v => A.setTrack(props.i, { name: v }, tl('a.pl.trackName')))}>{t().name}</span>
           <div class="row" style={{ gap: '2px', flex: 'none' }}>
             <Show when={CA.activeComp(props.i)}>{r => (
               <button class="mini tk" classList={{ on: !!U.takesOpen[t().id] }} onPointerDown={stop} onClick={() => CA.toggleTakes(props.i)}
-                title={'Take\'i (' + CA.takesLabel(r().comp.takes.length) + ') — pokaż/ukryj linie take\'ów'}>
+                title={tl('a.pl.takesTip', { n: CA.takesLabel(r().comp.takes.length) })}>
                 <svg width="7" height="7" viewBox="0 0 8 8" style={{ transform: U.takesOpen[t().id] ? 'rotate(90deg)' : 'none' }}><path d="M2 1l4 3-4 3z" fill="currentColor" /></svg>{r().comp.takes.length}
               </button>
             )}</Show>
-            <button class="mini route" title={'Wyjście ścieżki: ' + (routeIdx() <= 0 ? 'Master' : 'Insert ' + routeIdx()) + ' — kliknij, by zmienić kanał miksera'} onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? 'M' : 'Ins ' + routeIdx()}</button>
-            <button class="mini m" classList={{ on: t().muted }} title="Mute (wyłącza solo)" onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
-            <button class="mini s" classList={{ on: t().solo }} title="Solo — tylko ta ścieżka · Ctrl+klik = dodaj do solo" onPointerDown={stop} onClick={e => A.toggleTrackSolo(props.i, e.ctrlKey || e.metaKey)}>S</button>
-            <button class="mini r" classList={{ on: t().arm }} title="Uzbrój do nagrywania" onPointerDown={stop} onClick={() => A.armTrack(props.i)}>
+            <button class="mini route" title={tl('a.pl.routeTip', { out: routeIdx() <= 0 ? 'Master' : 'Insert ' + routeIdx() })} onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? 'M' : 'Ins ' + routeIdx()}</button>
+            <button class="mini m" classList={{ on: t().muted }} title={tl('a.pl.muteTip')} onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
+            <button class="mini s" classList={{ on: t().solo }} title={tl('a.pl.soloTip')} onPointerDown={stop} onClick={e => A.toggleTrackSolo(props.i, e.ctrlKey || e.metaKey)}>S</button>
+            <button class="mini r" classList={{ on: t().arm }} title={tl('a.pl.arm')} onPointerDown={stop} onClick={() => A.armTrack(props.i)}>
               <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3.5" fill="currentColor" /></svg>
             </button>
           </div>
         </div>
         <Show when={t().h >= 50}>
           <div class="row" style={{ gap: '6px', 'padding-left': '20px' }}>
-            <div class="lvol" classList={{ auto: isAutomated(volTarget()) }} onPointerDown={vol} onContextMenu={e => e.preventDefault()} title="Głośność — przeciągnij, 2× klik = 0 dB, PPM = automatyzacja">
+            <div class="lvol" classList={{ auto: isAutomated(volTarget()) }} onPointerDown={vol} onContextMenu={e => e.preventDefault()} title={tl('a.pl.volTip')}>
               <div class="track">
                 <div class="fill" style={{ width: shownVol() * 100 + '%', background: audible() ? t().color : 'var(--fg6)' }} />
                 <div class="thumb" style={{ left: shownVol() * 100 + '%' }} />
@@ -942,7 +943,7 @@ function LaneHeader(props: { t: Track; i: number }) {
           </div>
         </Show>
       </div>
-      <div class="lresize" onPointerDown={resize} title="Przeciągnij = wysokość ścieżki" />
+      <div class="lresize" onPointerDown={resize} title={tl('a.pl.resizeTip')} />
     </div>
   );
 }
@@ -954,15 +955,15 @@ const XF = [0.005, 0.01, 0.02, 0.05];
 function openTakeMenu(x: number, y: number, row: TakeRow, take: Take) {
   const comp = row.comp, used = usedBeats(comp, take.id), aud = S.audition[comp.id] === take.id, unused = unusedTakes(comp).length;
   openMenu(x, y, [
-    { t: 'title', label: 'Take · ' + take.name + (used > 0 ? ' · w compie' : ' · nieużyty') },
-    { t: 'item', label: 'Użyj całego take\'a', kbd: 'klik w nazwę', act: () => CA.useWholeTake(row, take) },
-    { t: 'item', label: aud ? 'Zakończ odsłuch solo' : 'Odsłuchaj solo', kbd: '▶', act: () => CA.audition(comp.id, aud ? null : take.id) },
-    { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, take.name, v => CA.renameTake(comp, take.id, v)) },
+    { t: 'title', label: tl(used > 0 ? 'a.pl.takeTitleUsed' : 'a.pl.takeTitleUnused', { name: take.name }) },
+    { t: 'item', label: tl('a.pl.useWholeTake'), kbd: tl('a.pl.clickName'), act: () => CA.useWholeTake(row, take) },
+    { t: 'item', label: aud ? tl('a.pl.endSoloPrev') : tl('a.pl.soloPrev'), kbd: '▶', act: () => CA.audition(comp.id, aud ? null : take.id) },
+    { t: 'item', label: tl('a.pl.rename'), act: () => openRename(x, y, take.name, v => CA.renameTake(comp, take.id, v)) },
     { t: 'sep' },
-    { t: 'item', label: 'Usuń take', danger: true, act: () => askDeleteTake(x, y, comp, take) },
-    { t: 'item', label: 'Usuń nieużyte take\'i' + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
+    { t: 'item', label: tl('a.pl.deleteTake'), danger: true, act: () => askDeleteTake(x, y, comp, take) },
+    { t: 'item', label: tl('a.pl.removeUnused') + (unused ? ' (' + unused + ')' : ''), disabled: !unused, act: () => CA.removeUnused(comp) },
     { t: 'sep' },
-    { t: 'item', label: 'Spłaszcz comp', title: 'Renderuje comp do jednego klipu audio i usuwa take\'i (Ctrl+Z cofa)', act: () => CA.flatten(row.clip.id) },
+    { t: 'item', label: tl('a.pl.flattenComp'), title: tl('a.pl.flattenTip'), act: () => CA.flatten(row.clip.id) },
   ], 290);
 }
 
@@ -971,9 +972,9 @@ function askDeleteTake(x: number, y: number, comp: Comp, take: Take) {
   const used = usedBeats(comp, take.id);
   if (used <= 0) return CA.deleteTake(comp, take.id);
   openMenu(x, y, [
-    { t: 'title', label: take.name + ' gra w compie (' + (Math.round(used * 100) / 100) + ' beat)' },
-    { t: 'item', label: 'Usuń take i jego fragmenty compu', danger: true, act: () => CA.deleteTake(comp, take.id) },
-    { t: 'item', label: 'Anuluj', act: () => {} },
+    { t: 'title', label: tl('a.pl.takePlays', { name: take.name, n: Math.round(used * 100) / 100 }) },
+    { t: 'item', label: tl('a.pl.deleteTakeParts'), danger: true, act: () => CA.deleteTake(comp, take.id) },
+    { t: 'item', label: tl('a.pl.cancel'), act: () => {} },
   ], 110);
 }
 
@@ -991,17 +992,17 @@ function TakeHeaders(props: { i: number }) {
           const aud = () => S.audition[r().comp.id] === take.id;
           return (
             <div class="takeLane" classList={{ used: used() > 0, aud: aud() }} style={{ height: LANE_H + 'px' }}
-              title="Klik = cały take do compu · przeciągnij po take'u w siatce = fragment · PPM = menu"
+              title={tl('a.pl.takeLaneTip')}
               onPointerDown={e => { stop(e); if (e.button === 2) { e.preventDefault(); openTakeMenu(e.clientX, e.clientY, r(), take); } else if (e.button === 0) CA.useWholeTake(r(), take); }}
               onContextMenu={e => e.preventDefault()}>
               <span class="tkbar" />
               <span class="tknm">{take.name}</span>
-              <span class="tkuse" title="Ile tego take'a gra w compie">{used() > 0 ? pct() + '%' : '—'}</span>
-              <button class="mini tka" classList={{ on: aud() }} title={aud() ? 'Zakończ odsłuch solo' : 'Odsłuch solo: ten take zamiast compu'}
+              <span class="tkuse" title={tl('a.pl.takeUseTip')}>{used() > 0 ? pct() + '%' : '—'}</span>
+              <button class="mini tka" classList={{ on: aud() }} title={aud() ? tl('a.pl.endSoloPrev') : tl('a.pl.takeSoloTip')}
                 onPointerDown={stop} onClick={() => CA.audition(r().comp.id, aud() ? null : take.id)}>
                 <svg width="7" height="7" viewBox="0 0 8 8"><path d="M1.5 0.5l6 3.5-6 3.5z" fill="currentColor" /></svg>
               </button>
-              <button class="xbtn" title="Usuń take" onPointerDown={stop} onClick={e => askDeleteTake(e.clientX, e.clientY, r().comp, take)}>×</button>
+              <button class="xbtn" title={tl('a.pl.deleteTake')} onPointerDown={stop} onClick={e => askDeleteTake(e.clientX, e.clientY, r().comp, take)}>×</button>
             </div>
           );
         }}</For>

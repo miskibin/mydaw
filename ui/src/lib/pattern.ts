@@ -3,6 +3,7 @@
 //
 // Units: pattern `len` in beats; note `step`/`len` in 16ths ("steps"); `p` MIDI key
 // (absent = the channel's root); `v` velocity 0..1 (absent = 1).
+import { t, type TranslationKey } from './i18n';
 import { migrateSatParams } from './saturator';
 import { KEYS_RELEASE, SAMPLE_ROOT, TOTAL_BEATS, VOL_UNITY, type Channel, type Id, type Inst, type Note, type Op, type Pattern, type Project } from '../api/types';
 import { SYNTH_CATALOG } from '../api/synthCatalog';
@@ -272,5 +273,9 @@ export function noteAt(notes: readonly Note[], ch: Id, chan: Channel | undefined
 }
 
 /** Major / natural minor scale masks (bit k = k semitones above the root). */
-export const SCALES: [string, number][] = [['dur', 0b101010110101], ['moll', 0b010110101101], ['chromatyczna', 0xfff]];
+export const SCALES: [TranslationKey, number][] = [['b.sc.major', 0b101010110101], ['b.sc.minor', 0b010110101101], ['b.sc.chromatic', 0xfff]];
+/** "3 bars" in the current language. */
+export const barsText = (n: number): string => t(n === 1 ? 'b.pat.bar1' : n < 5 ? 'b.pat.bar2' : 'b.pat.bar5', { n });
+/** "3 notes" in the current language. */
+export const notesText = (n: number): string => t(n === 1 ? 'b.pat.note1' : 'b.pat.noteN', { n });
 export const inScale = (key: number, root: number, mask: number) => (mask & (1 << ((((key - root) % 12) + 12) % 12))) !== 0;

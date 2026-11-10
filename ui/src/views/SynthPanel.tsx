@@ -4,6 +4,7 @@
 // `putChannel` (engine fast path, held notes follow).
 import { createEffect, createSignal, For, onCleanup, onMount, Show, type JSX } from 'solid-js';
 import type { Channel, ParamDef, SynthCatalog } from '../api/types';
+import { t, tName } from '../lib/i18n';
 import { pFmt, pNorm, pVal } from '../lib/presets';
 import { clampSynth, synthParam, synthValue, withSynthParam, withSynthPreset } from '../lib/synth';
 import { commit, Gesture, wheelEdit } from '../state/edit';
@@ -23,7 +24,7 @@ const [lastTab, setLastTab] = createSignal<Tab>('osc');
 export function SynthPanel(props: { c: Channel }) {
   const cat = () => S.catalog?.synth as SynthCatalog | undefined;
   return (
-    <Show when={cat()} fallback={<div class="note" style={{ padding: '14px' }}>Katalog syntezatora niedostępny.</div>}>
+    <Show when={cat()} fallback={<div class="note" style={{ padding: '14px' }}>{t('b.sp.unavailable')}</div>}>
       {c => <Panel cat={c()} c={props.c} />}
     </Show>
   );
@@ -35,22 +36,22 @@ function Panel(props: { cat: SynthCatalog; c: Channel }) {
   const def = (id: string) => synthParam(props.cat, id);
   const set = (id: string, x: number, label?: string) => {
     const d = def(id); if (!d) return;
-    commit([chanOp(withSynthParam(props.cat, ch(), id, clampSynth(d, x)))], label ?? d.label);
+    commit([chanOp(withSynthParam(props.cat, ch(), id, clampSynth(d, x)))], label ?? tName(d.label));
   };
   const ctx: Ctx = { cat: props.cat, ch, v, set, def };
   const presetName = () => ch().synth.preset;
   const list = () => props.cat.presets;
-  const load = (name: string) => { commit([chanOp(withSynthPreset(props.cat, ch(), name))], 'Preset syntezatora'); say('Preset: ' + name); };
+  const load = (name: string) => { commit([chanOp(withSynthPreset(props.cat, ch(), name))], t('b.sp.presetUndo')); say(t('b.sp.presetSay', { name: tName(name) })); };
   const step = (d: number) => {
     if (!list().length) return;
     const i = list().findIndex(p => p.name === presetName());
     load(list()[(i + d + list().length) % list().length].name);
   };
   const pick = (x: number, y: number) => {
-    const items: MenuItem[] = [{ t: 'title', label: 'Presety syntezatora' }];
+    const items: MenuItem[] = [{ t: 'title', label: t('b.sp.presets') }];
     for (const g of props.cat.categories) {
       const ps = props.cat.presets.filter(p => p.category === g);
-      if (ps.length) items.push({ t: 'sub', label: g, items: ps.map(p => ({ t: 'item', label: p.name, kbd: p.name === presetName() ? '●' : '', act: () => load(p.name) }) as MenuItem) });
+      if (ps.length) items.push({ t: 'sub', label: tName(g), items: ps.map(p => ({ t: 'item', label: tName(p.name), kbd: p.name === presetName() ? '●' : '', act: () => load(p.name) }) as MenuItem) });
     }
     openMenu(x, y, items, 360);
   };
@@ -58,12 +59,12 @@ function Panel(props: { cat: SynthCatalog; c: Channel }) {
     <div class="syn">
       <div class="syn-top">
         <div class="syn-preset">
-          <button class="arrow" title="Poprzedni preset" onClick={() => step(-1)}>‹</button>
-          <button class="name" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); pick(r.left, r.bottom + 4); }} title="Wybierz preset">
-            <span class="ell">{presetName() ?? 'Własny dźwięk'}</span>
-            <span class="cat">{list().find(p => p.name === presetName())?.category ?? 'edytowany'}</span>
+          <button class="arrow" title={t('b.sp.prev')} onClick={() => step(-1)}>‹</button>
+          <button class="name" onClick={e => { const r = e.currentTarget.getBoundingClientRect(); pick(r.left, r.bottom + 4); }} title={t('b.sp.choose')}>
+            <span class="ell">{presetName() ? tName(presetName()!) : t('b.sp.custom')}</span>
+            <span class="cat">{tName(list().find(p => p.name === presetName())?.category ?? '') || t('b.sp.edited')}</span>
           </button>
-          <button class="arrow" title="Następny preset" onClick={() => step(1)}>›</button>
+          <button class="arrow" title={t('b.sp.next')} onClick={() => step(1)}>›</button>
         </div>
         <div class="syn-tabs">
           <For each={[['osc', 'OSC'], ['mod', 'MOD'], ['fx', 'FX']] as [Tab, string][]}>{([id, l]) =>
@@ -72,7 +73,7 @@ function Panel(props: { cat: SynthCatalog; c: Channel }) {
         <div class="syn-voice">
           <Choice ctx={ctx} id="v_mode" />
           <K ctx={ctx} id="v_glide" label="Glide" />
-          <K ctx={ctx} id="fx_out" label="Wyjście" />
+          <K ctx={ctx} id="fx_out" label={t('b.sp.output')} />
         </div>
       </div>
       <Show when={lastTab() === 'osc'}><OscTab ctx={ctx} /></Show>
@@ -90,29 +91,29 @@ function OscTab(props: { ctx: Ctx }) {
     <div class="syn-grid osc">
       <Osc ctx={c} n={1} />
       <Osc ctx={c} n={2} />
-      <Card title="Sub / Szum" color={C_OSC} class="sub">
+      <Card title={t('b.sp.subNoise')} color={C_OSC} class="sub">
         <div class="syn-row"><K ctx={c} id="sub_level" label="Sub" color={C_OSC} /><Choice ctx={c} id="sub_oct" /></div>
-        <div class="syn-row"><K ctx={c} id="noise_level" label="Szum" color={C_OSC} /><K ctx={c} id="noise_color" label="Barwa" color={C_OSC} /></div>
+        <div class="syn-row"><K ctx={c} id="noise_level" label={t('b.sp.noise')} color={C_OSC} /><K ctx={c} id="noise_color" label={t('b.sp.colour')} color={C_OSC} /></div>
       </Card>
-      <Card title="Filtr" color={C_FLT} class="flt" head={<Choice ctx={c} id="flt_type" />}>
+      <Card title={t('b.sp.filter')} color={C_FLT} class="flt" head={<Choice ctx={c} id="flt_type" />}>
         <Plot draw={(g, w, h) => drawFilter(g, w, h, c)} deps={() => [c.v('flt_type'), c.v('flt_cutoff'), c.v('flt_res'), c.v('flt_drive')]} />
         <div class="syn-row">
           <K ctx={c} id="flt_cutoff" label="Cutoff" color={C_FLT} size="md" />
-          <K ctx={c} id="flt_res" label="Rezonans" color={C_FLT} size="md" />
+          <K ctx={c} id="flt_res" label={t('b.sp.resonance')} color={C_FLT} size="md" />
           <K ctx={c} id="flt_drive" label="Drive" color={C_FLT} />
-          <K ctx={c} id="flt_env" label="Obwiednia" color={C_FLT} />
+          <K ctx={c} id="flt_env" label={t('b.sp.envelope')} color={C_FLT} />
           <K ctx={c} id="flt_key" label="Key" color={C_FLT} />
         </div>
       </Card>
       <Card title="Unison" color={C_OSC} class="uni">
         <Choice ctx={c} id="uni_voices" />
-        <div class="syn-row"><K ctx={c} id="uni_detune" label="Detune" color={C_OSC} /><K ctx={c} id="uni_width" label="Szerokość" color={C_OSC} /></div>
+        <div class="syn-row"><K ctx={c} id="uni_detune" label="Detune" color={C_OSC} /><K ctx={c} id="uni_width" label={t('b.sp.width')} color={C_OSC} /></div>
       </Card>
-      <Card title="Obwiednia głośności" color={C_ENV} class="amp">
+      <Card title={t('b.sp.ampEnv')} color={C_ENV} class="amp">
         <Plot draw={(g, w, h) => drawAdsr(g, w, h, c, 'amp')} deps={() => [c.v('amp_a'), c.v('amp_d'), c.v('amp_s'), c.v('amp_r')]} />
         <div class="syn-row">
-          <K ctx={c} id="amp_a" label="Atak" color={C_ENV} /><K ctx={c} id="amp_d" label="Zanik" color={C_ENV} />
-          <K ctx={c} id="amp_s" label="Podtrzym." color={C_ENV} /><K ctx={c} id="amp_r" label="Wybrzmienie" color={C_ENV} />
+          <K ctx={c} id="amp_a" label={t('b.sp.attack')} color={C_ENV} /><K ctx={c} id="amp_d" label={t('b.sp.decay')} color={C_ENV} />
+          <K ctx={c} id="amp_s" label={t('b.sp.sustain')} color={C_ENV} /><K ctx={c} id="amp_r" label={t('b.sp.release')} color={C_ENV} />
         </div>
       </Card>
     </div>
@@ -123,20 +124,20 @@ function ModTab(props: { ctx: Ctx }) {
   const c = props.ctx;
   return (
     <div class="syn-grid mod">
-      <Card title="Obwiednia modulacji" color={C_ENV} class="menv">
+      <Card title={t('b.sp.modEnv')} color={C_ENV} class="menv">
         <Plot draw={(g, w, h) => drawAdsr(g, w, h, c, 'mod')} deps={() => [c.v('mod_a'), c.v('mod_d'), c.v('mod_s'), c.v('mod_r')]} />
         <div class="syn-row">
-          <K ctx={c} id="mod_a" label="Atak" color={C_ENV} /><K ctx={c} id="mod_d" label="Zanik" color={C_ENV} />
-          <K ctx={c} id="mod_s" label="Podtrzym." color={C_ENV} /><K ctx={c} id="mod_r" label="Wybrzmienie" color={C_ENV} />
+          <K ctx={c} id="mod_a" label={t('b.sp.attack')} color={C_ENV} /><K ctx={c} id="mod_d" label={t('b.sp.decay')} color={C_ENV} />
+          <K ctx={c} id="mod_s" label={t('b.sp.sustain')} color={C_ENV} /><K ctx={c} id="mod_r" label={t('b.sp.release')} color={C_ENV} />
         </div>
       </Card>
       <For each={[1, 2]}>{n => (
         <Card title={'LFO ' + n} color={C_LFO} class={'lfo' + n} head={<Choice ctx={c} id={`l${n}_wave`} />}>
           <Plot draw={(g, w, h) => drawLfo(g, w, h, c.v(`l${n}_wave`))} deps={() => [c.v(`l${n}_wave`)]} />
-          <div class="syn-row"><K ctx={c} id={`l${n}_rate`} label="Tempo" color={C_LFO} /><Choice ctx={c} id={`l${n}_sync`} /></div>
+          <div class="syn-row"><K ctx={c} id={`l${n}_rate`} label={t('b.sp.rate')} color={C_LFO} /><Choice ctx={c} id={`l${n}_sync`} /></div>
         </Card>
       )}</For>
-      <Card title="Modulacja (źródło → cel)" color={C_LFO} class="matrix">
+      <Card title={t('b.sp.matrix')} color={C_LFO} class="matrix">
         <For each={[1, 2, 3, 4]}>{n => (
           <div class="syn-mrow" classList={{ off: c.v(`m${n}_src`) === 0 }}>
             <span class="slot">{n}</span>
@@ -155,13 +156,13 @@ function FxTab(props: { ctx: Ctx }) {
   const c = props.ctx;
   return (
     <div class="syn-grid fx">
-      <Card title="Drive" color={C_FX}><div class="syn-row"><K ctx={c} id="fx_drive" label="Przester" color={C_FX} size="md" /></div></Card>
-      <Card title="Chorus" color={C_FX}><div class="syn-row"><K ctx={c} id="fx_chorus" label="Ilość" color={C_FX} size="md" /></div></Card>
+      <Card title="Drive" color={C_FX}><div class="syn-row"><K ctx={c} id="fx_drive" label={t('b.sp.overdrive')} color={C_FX} size="md" /></div></Card>
+      <Card title="Chorus" color={C_FX}><div class="syn-row"><K ctx={c} id="fx_chorus" label={t('b.sp.amount')} color={C_FX} size="md" /></div></Card>
       <Card title="Delay" color={C_FX}>
-        <div class="syn-row"><K ctx={c} id="fx_delay" label="Ilość" color={C_FX} size="md" /><K ctx={c} id="fx_dfb" label="Sprzężenie" color={C_FX} /></div>
+        <div class="syn-row"><K ctx={c} id="fx_delay" label={t('b.sp.amount')} color={C_FX} size="md" /><K ctx={c} id="fx_dfb" label={t('b.sp.feedback')} color={C_FX} /></div>
         <Choice ctx={c} id="fx_dtime" />
       </Card>
-      <Card title="Reverb" color={C_FX}><div class="syn-row"><K ctx={c} id="fx_reverb" label="Ilość" color={C_FX} size="md" /><K ctx={c} id="fx_rsize" label="Rozmiar" color={C_FX} /></div></Card>
+      <Card title="Reverb" color={C_FX}><div class="syn-row"><K ctx={c} id="fx_reverb" label={t('b.sp.amount')} color={C_FX} size="md" /><K ctx={c} id="fx_rsize" label={t('b.sp.size')} color={C_FX} /></div></Card>
     </div>
   );
 }
@@ -169,13 +170,13 @@ function FxTab(props: { ctx: Ctx }) {
 function Osc(props: { ctx: Ctx; n: 1 | 2 }) {
   const c = props.ctx, p = 'o' + props.n + '_';
   return (
-    <Card title={'Oscylator ' + props.n} color={C_OSC} class={'osc' + props.n} head={<Choice ctx={c} id={p + 'wave'} bare />}
+    <Card title={t('b.sp.osc', { n: props.n })} color={C_OSC} class={'osc' + props.n} head={<Choice ctx={c} id={p + 'wave'} bare />}
       dim={c.v(p + 'level') <= 0}>
       <Plot draw={(g, w, h) => drawOsc(g, w, h, c, props.n)} deps={() => [c.v(p + 'wave'), c.v(p + 'shape'), c.v(p + 'level'), c.v('uni_voices'), c.v('uni_detune')]} />
       <div class="syn-row">
-        <K ctx={c} id={p + 'level'} label="Głośność" color={C_OSC} size="md" />
-        <K ctx={c} id={p + 'shape'} label="Kształt" color={C_OSC} />
-        <K ctx={c} id={p + 'coarse'} label="Oktawa / st" color={C_OSC} />
+        <K ctx={c} id={p + 'level'} label={t('b.sp.level')} color={C_OSC} size="md" />
+        <K ctx={c} id={p + 'shape'} label={t('b.sp.shape')} color={C_OSC} />
+        <K ctx={c} id={p + 'coarse'} label={t('b.sp.coarse')} color={C_OSC} />
         <Show when={props.n === 2}><K ctx={c} id="o2_fine" label="Fine" color={C_OSC} /></Show>
       </div>
     </Card>
@@ -201,7 +202,7 @@ function K(props: { ctx: Ctx; id: string; label: string; color?: string; size?: 
       <Knob key={'syn' + props.id} label={props.label} size={props.size ?? 'sm'} color={props.color}
         t={() => pNorm(p(), props.ctx.v(props.id))} text={() => pFmt(p(), props.ctx.v(props.id))}
         zero={() => (p().min < 0 && p().max > 0 && !p().log ? pNorm(p(), 0) : 0)}
-        title={p().label + ' · przeciągnij ↕ · Shift = precyzyjnie · 2× klik = domyślna'}
+        title={t('b.sp.knobTitle', { label: tName(p().label) })}
         onStart={() => { g = new Gesture(props.label); }}
         onChange={t => { const ch = props.ctx.ch(); g?.update([chanOp(withSynthParam(props.ctx.cat, ch, props.id, pVal(p(), t)))]); say(props.label + ' ' + pFmt(p(), pVal(p(), t))); }}
         onEnd={() => { g?.end(); g = null; }}
@@ -216,10 +217,10 @@ function Choice(props: { ctx: Ctx; id: string; bare?: boolean }) {
   return (
     <Show when={d()?.options}>{opts => (
       <Show when={opts().length <= 5} fallback={
-        <select class="sel syn-sel" title={d()!.label} value={String(Math.round(props.ctx.v(props.id)))} onChange={e => props.ctx.set(props.id, +e.currentTarget.value)}>
-          <For each={opts()}>{(o, i) => <option value={String(i())}>{o}</option>}</For>
+        <select class="sel syn-sel" title={tName(d()!.label)} value={String(Math.round(props.ctx.v(props.id)))} onChange={e => props.ctx.set(props.id, +e.currentTarget.value)}>
+          <For each={opts()}>{(o, i) => <option value={String(i())}>{tName(o)}</option>}</For>
         </select>}>
-        <Segmented small options={opts()} value={() => Math.round(props.ctx.v(props.id))} pick={i => props.ctx.set(props.id, i)} title={d()!.label} />
+        <Segmented small options={opts().map(o => tName(o))} value={() => Math.round(props.ctx.v(props.id))} pick={i => props.ctx.set(props.id, i)} title={tName(d()!.label)} />
       </Show>
     )}</Show>
   );
@@ -231,16 +232,16 @@ function AmtBar(props: { ctx: Ctx; id: string }) {
   const down = (e: PointerEvent) => {
     if (e.button !== 0) return; e.preventDefault();
     const el = e.currentTarget as HTMLElement, r = el.getBoundingClientRect();
-    if (e.detail === 2) { props.ctx.set(props.id, 0, 'Ilość modulacji'); return; }
-    const g = new Gesture('Ilość modulacji');
-    const at = (x: number) => { const t = Math.max(-1, Math.min(1, ((x - r.left) / r.width) * 2 - 1)); g.update([chanOp(withSynthParam(props.ctx.cat, props.ctx.ch(), props.id, Math.round(t * 100)))]); say('Ilość ' + Math.round(t * 100) + '%'); };
+    if (e.detail === 2) { props.ctx.set(props.id, 0, t('b.sp.modAmt')); return; }
+    const g = new Gesture(t('b.sp.modAmt'));
+    const at = (x: number) => { const amt = Math.max(-1, Math.min(1, ((x - r.left) / r.width) * 2 - 1)); g.update([chanOp(withSynthParam(props.ctx.cat, props.ctx.ch(), props.id, Math.round(amt * 100)))]); say(t('b.sp.amtSay', { n: Math.round(amt * 100) })); };
     at(e.clientX);
     const mv = (ev: PointerEvent) => at(ev.clientX);
     const up = () => { g.end(); window.removeEventListener('pointermove', mv); window.removeEventListener('pointerup', up); };
     window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up);
   };
   return (
-    <div class="syn-amt" onPointerDown={down} title="Ilość: przeciągnij w lewo / prawo · 2× klik = 0">
+    <div class="syn-amt" onPointerDown={down} title={t('b.sp.amtTitle')}>
       <div class="fill" style={{ left: (v() < 0 ? 50 + v() / 2 : 50) + '%', width: Math.abs(v()) / 2 + '%' }} />
       <span>{(v() > 0 ? '+' : '') + Math.round(v())}%</span>
     </div>

@@ -5,6 +5,7 @@ import type { Fx } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
 import { clamp } from '../../lib/format';
 import { Layer } from '../../ui/frameLoop';
+import { t as tr } from '../../lib/i18n';
 import { MONO10, MONO11, rgba, T, type Viz } from './common';
 const REVERB_LIVE = '#4fb8cc';
 
@@ -146,7 +147,7 @@ export class ReverbViz implements Viz {
     g.font = MONO11; g.fillStyle = T.ink; g.textAlign = 'left'; g.fillText('RT60 ' + size.toFixed(2) + ' s', 10, 16);
     g.fillStyle = T.fg4; g.fillText('PRE ' + Math.round(p.pre ?? 0) + ' ms', 110, 16);
     g.font = MONO10; g.textAlign = 'right';
-    g.fillStyle = T.amber; g.fillText('— ustawienia', W - 112, 16); g.fillStyle = REVERB_LIVE; g.fillText('— sygnał na żywo', W - 8, 16);
+    g.fillStyle = T.amber; g.fillText(tr('c.viz.settings'), W - 112, 16); g.fillStyle = REVERB_LIVE; g.fillText(tr('c.viz.liveSignal'), W - 8, 16);
     g.textAlign = 'left';
   }
 }

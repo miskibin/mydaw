@@ -1,5 +1,6 @@
 import { For, Show, createSignal, type JSX } from 'solid-js';
 import { clamp } from '../lib/format';
+import { t } from '../lib/i18n';
 import { dblCheck, track } from './drag';
 
 export interface KnobProps {
@@ -64,14 +65,14 @@ export function Knob(p: KnobProps) {
   return (
     <div class={'knob ' + (p.size ?? 'md')} classList={{ auto: !!p.automated?.() }}>
       <div class="dial" style={{ width: geo().s + 'px', height: geo().s + 'px' }} onPointerDown={down} onWheel={wheel} onContextMenu={e => e.preventDefault()}
-        title={p.title ?? 'Przeciągnij ↕ · Shift = precyzyjnie · 2× klik = domyślna · PPM = automatyzacja'}>
+        title={p.title ?? t('d.ui.knob.tip')}>
         <svg width={geo().s} height={geo().s} viewBox={`0 0 ${geo().s} ${geo().s}`} style={{ position: 'absolute', inset: 0 }}>
           <circle cx={geo().c} cy={geo().c} r={geo().r} fill="none" transform={`rotate(135 ${geo().c} ${geo().c})`} style={{ stroke: 'var(--knob-track)', 'stroke-width': d().stroke + 'px', 'stroke-linecap': 'round', 'stroke-dasharray': `${geo().L}px ${geo().C}px` }} />
           <circle cx={geo().c} cy={geo().c} r={geo().r} fill="none" transform={`rotate(135 ${geo().c} ${geo().c})`} style={{ stroke: p.color ?? 'var(--blue)', 'stroke-width': d().stroke + 'px', 'stroke-linecap': 'round', 'stroke-dasharray': arc().dash, 'stroke-dashoffset': arc().off }} />
         </svg>
         <div class="cap" style={{ left: (geo().s - d().cap) / 2 + 'px', top: (geo().s - d().cap) / 2 + 'px', width: d().cap + 'px', height: d().cap + 'px' }} />
         <div class="ptr" style={{ left: geo().c - 1 + 'px', top: (geo().s - d().cap) / 2 + 'px', height: d().ptr + 'px', 'transform-origin': `1px ${d().cap / 2}px`, transform: `rotate(${arc().angle}deg)` }} />
-        <Show when={p.automated?.()}><span class="autodot" title="Automatyzowany na playliście" /></Show>
+        <Show when={p.automated?.()}><span class="autodot" title={t('d.ui.knob.auto')} /></Show>
       </div>
       <Show when={p.ends}>{e => <div class="ends"><span>{e()[0]}</span><span>{e()[1]}</span></div>}</Show>
       <span class="val">{p.text()}</span>
@@ -162,7 +163,7 @@ export function NumField(p: {
     setEdit(false);
   };
   return (
-    <div class="numf" classList={{ dis: !!p.disabled?.() }} title={p.title ?? 'Przeciągnij · kółko · 2× klik = wpisz'} style={p.width ? { width: p.width + 'px' } : {}}
+    <div class="numf" classList={{ dis: !!p.disabled?.() }} title={p.title ?? t('d.ui.num.tip')} style={p.width ? { width: p.width + 'px' } : {}}
       onPointerDown={down} onWheel={wheel} onContextMenu={e => e.preventDefault()}>
       <span class="lab">{p.label}</span>
       <Show when={edit()} fallback={<span class="v" style={p.color ? { color: p.color } : {}}>{p.disabled?.() ? '—' : p.text(p.value())}</span>}>
