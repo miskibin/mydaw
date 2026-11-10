@@ -249,7 +249,7 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
   rider: [
     { title: 'Wyrównanie', items: [{ id: 'amount', size: 'lg' }, { id: 'phrase' }, { stack: [{ id: 'speed', labels: ['Śpiew', 'Rap'], small: true }] }] },
     { title: 'Zakres', items: [{ id: 'up' }, { id: 'down' }] },
-    { title: 'Wyprzedzenie', items: [{ stack: [{ id: 'look', labels: ['Krótkie', 'Długie'], small: true }] }] },
+    { title: 'Wyprzedzenie', items: [{ stack: [{ id: 'look', labels: ['Krótkie +0,3 s', 'Długie +1,6 s', 'Na żywo'], small: true }] }] },
     { title: 'Cel', adv: true, items: [{ stack: [{ id: 'auto', labels: ['Ręczny', 'Auto'], small: true }] }, { id: 'target', size: 'sm' }, { id: 'floor', size: 'sm' }, { id: 'gate', size: 'sm' }] },
     { title: 'Wyjście', adv: true, items: [{ id: 'out', size: 'sm' }] },
   ],
