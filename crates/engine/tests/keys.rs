@@ -128,3 +128,23 @@ fn settings_are_validated_saved_and_undone() {
     e.undo();
     assert_eq!(e.project().channel(CH).unwrap().src, ChannelSrc::Keys { keys: KeysState::default() });
 }
+
+#[test]
+fn a_full_chord_stays_below_full_scale_without_clicks() {
+    // each recording peaks at 0.5: eight loud notes summed to 4.0 (+12 dBFS) and clipped hard
+    let chord: Vec<Note> = (58..66).map(|k| note(0.0, 8.0, k, 1.0)).collect();
+    let x = render(project(chord, KeysState::default()), true);
+    let pk = x.iter().fold(0f32, |a, b| a.max(b.abs()));
+    assert!(pk <= 0.9, "chord peak {:.1} dBFS", 20.0 * pk.log10());
+    assert!(pk > 0.8, "the limiter only catches the overs: peak {pk}");
+    // no step bigger than the loudest sine could make on its own (a click or a clipped edge)
+    let step = x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+    assert!(step < 0.2, "largest sample step {step}");
+}
+
+#[test]
+fn a_single_soft_note_passes_the_limiter_untouched() {
+    let x = render(project(vec![note(0.0, 8.0, 60, 0.3)], KeysState::default()), true);
+    let pk = x.iter().fold(0f32, |a, b| a.max(b.abs()));
+    assert!(pk > 0.02 && pk < 0.891, "soft note peak {pk}");
+}

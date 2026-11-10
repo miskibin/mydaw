@@ -4,6 +4,7 @@ use std::f32::consts::PI;
 
 pub mod halftime;
 pub mod limiter_v2;
+pub mod out_limiter;
 pub mod reverb_v2;
 pub mod saturator;
 
