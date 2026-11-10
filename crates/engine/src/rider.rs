@@ -24,7 +24,11 @@
 //! reported to the host through [`latency_samples`] (plugin delay compensation). "Long"
 //! look-ahead reproduces the offline windows exactly (phrase window centred, 0.5 s of
 //! backward slew, ≈ 1.6 s latency); "Short" uses a trailing phrase window and 0.2 s of
-//! backward slew (≈ 0.3 s latency).
+//! backward slew (≈ 0.3 s latency). "Live" (the default) adds no latency at all: word and
+//! phrase windows trail the audio, the gain is slewed forwards only and applied
+//! [`LIVE_LAG_HOPS`] frames behind the analysis (a 20 ms lag of a curve that slews over
+//! 30–100 ms), so the mix is never delayed. It reacts later than the look-ahead modes and
+//! evens words less (≈ 3 dB of a 10 dB spread on the test phrase).
 //!
 //! Meters: `[0]` gain applied dB, `[1]` word level dB, `[2]` phrase level dB,
 //! `[3]` vocal confidence 0..1 (all at the moment being heard).
@@ -53,9 +57,34 @@ const MASK: usize = RING - 1;
 const DEADBAND_DB: f32 = 0.6;
 const CUT_MS: f32 = 80.0;
 const BOOST_MS: f32 = 300.0;
+/// Live mode slews (no backward pass to soften them; tuned on `live_mode_evens_words_without_delay`).
+const LIVE_CUT_MS: f32 = 30.0;
+const LIVE_BOOST_MS: f32 = 100.0;
 /// Frames whose word level is below this are digital silence: auto estimates ignore them.
 const SILENCE_DB: f32 = -100.0;
 const P_MIN: f64 = 1e-14;
+
+/// Look-ahead modes (`look` parameter values).
+pub mod look {
+    pub const SHORT: usize = 0;
+    pub const LONG: usize = 1;
+    pub const LIVE: usize = 2;
+}
+
+/// Live mode: the gain heard at sample `s` is the curve at `s − LIVE_LAG_HOPS · hop`, the
+/// latest point whose interpolation frames are always analysed (needs > 1.5 hops).
+pub const LIVE_LAG_HOPS: usize = 2;
+
+/// The look-ahead mode of a `look` parameter value (old projects: 0 short, 1 long).
+pub fn look_mode(look: f32) -> usize {
+    if look >= 1.5 {
+        look::LIVE
+    } else if look >= 0.5 {
+        look::LONG
+    } else {
+        look::SHORT
+    }
+}
 
 /// Analysis hop: 10 ms (`int(0.01 · sr)` as in the research code).
 pub fn hop(sr: f32) -> usize {
@@ -73,19 +102,24 @@ fn windows(speed: usize) -> (usize, usize) {
 }
 
 /// Frames the analysis looks ahead: (word window ahead, phrase window ahead, backward slew).
-fn ahead(speed: usize, long: bool) -> (usize, usize, usize) {
+fn ahead(speed: usize, mode: usize) -> (usize, usize, usize) {
     let (wf, wp) = windows(speed);
     let fa = wf - wf / 2 - 1;
-    if long {
-        (fa, wp - wp / 2 - 1, 50)
-    } else {
-        (fa, 0, 20)
+    match mode {
+        look::LONG => (fa, wp - wp / 2 - 1, 50),
+        look::SHORT => (fa, 0, 20),
+        _ => (0, 0, 0),
     }
 }
 
-/// Delay the rider adds, in samples, for `speed` (0 sung / 1 rap) and look-ahead (0 short / 1 long).
+/// Delay the rider adds, in samples, for `speed` (0 sung / 1 rap) and look-ahead (0 short /
+/// 1 long / 2 live: none).
 pub fn latency_samples(speed: f32, look: f32, sr: f32) -> usize {
-    let (fa, ap, b) = ahead(speed.round().clamp(0.0, 1.0) as usize, look >= 0.5);
+    let mode = look_mode(look);
+    if mode == look::LIVE {
+        return 0;
+    }
+    let (fa, ap, b) = ahead(speed.round().clamp(0.0, 1.0) as usize, mode);
     (fa + ap + b + 2) * hop(sr)
 }
 
@@ -162,7 +196,7 @@ pub struct Rider {
     target: f32,
     floor: f32,
     gate: f32,
-    long: bool,
+    mode: usize,
     out: f32,
     wf: usize,
     wp: usize,
@@ -212,7 +246,7 @@ impl Default for Rider {
             target: -24.0,
             floor: -70.0,
             gate: -60.0,
-            long: false,
+            mode: look::SHORT,
             out: 1.0,
             wf: 20,
             wp: 200,
@@ -271,13 +305,19 @@ impl Rider {
     fn configure(&mut self) {
         let v = self.params.map(|p| p.values).unwrap_or_default();
         self.speed = if self.params.is_some() { v[idx::SPEED].round().clamp(0.0, 1.0) as usize } else { 0 };
-        self.long = self.params.is_some() && v[idx::LOOK] >= 0.5;
+        self.mode = if self.params.is_some() { look_mode(v[idx::LOOK]) } else { look::SHORT };
         (self.wf, self.wp) = windows(self.speed);
-        (self.fa, self.ap, self.back) = ahead(self.speed, self.long);
+        (self.fa, self.ap, self.back) = ahead(self.speed, self.mode);
         self.hop = hop(self.sr);
-        self.latency = latency_samples(self.speed as f32, if self.long { 1.0 } else { 0.0 }, self.sr);
-        self.a_cut = (-10.0 / CUT_MS).exp();
-        self.a_boost = (-10.0 / BOOST_MS).exp();
+        self.latency = latency_samples(self.speed as f32, self.mode as f32, self.sr);
+        let live = self.mode == look::LIVE;
+        if live {
+            // a trailing window lags by its whole length: half of the centred one, and
+            // faster slews, so a word is still caught while it lasts
+            self.wf = (self.wf / 2).max(2);
+        }
+        self.a_cut = (-10.0 / if live { LIVE_CUT_MS } else { CUT_MS }).exp();
+        self.a_boost = (-10.0 / if live { LIVE_BOOST_MS } else { BOOST_MS }).exp();
     }
 
     /// The state after a long stretch of digital silence (also the start state).
@@ -309,11 +349,11 @@ impl Rider {
         self.frames[n as usize & MASK] = Frame { pk: pk + P_MIN, pf: P_MIN, lf: -140.0, lp: -140.0, ..Frame::default() };
         self.n_frames += 1;
 
-        // 1. word level at m (window offsets −wf/2 .. +fa)
+        // 1. word level at m (window offsets −(wf − 1 − fa) .. +fa: centred, or trailing live)
         let m = n - self.fa as isize;
-        let half = (self.wf / 2) as isize;
+        let behind = (self.wf - 1 - self.fa) as isize;
         let mut s = 0.0;
-        for k in (m - half)..=(m + self.fa as isize) {
+        for k in (m - behind)..=(m + self.fa as isize) {
             s += self.fr(k).pk;
         }
         let pf = s / self.wf as f64;
@@ -399,7 +439,8 @@ impl Rider {
             st = a * st + (1.0 - a) * v;
             k -= 1;
         }
-        let gs = 0.5 * (self.fr(qq).fw + st);
+        // live: no future frames to slew back from, the forward slew alone
+        let gs = if self.mode == look::LIVE { self.fr(qq).fw } else { 0.5 * (self.fr(qq).fw + st) };
         self.frames[qq.rem_euclid(RING as isize) as usize].gs = gs;
         if qq >= 0 && self.log.len() < self.log.capacity() && qq as usize == self.log.len() {
             let f = self.fr(qq);
@@ -439,6 +480,20 @@ impl Rider {
         let g1 = self.fr(q0 + 1).gs;
         g0 + (g1 - g0) * w
     }
+
+    /// Gain (dB) applied to input sample `s` (live mode: the curve a few frames behind).
+    #[inline]
+    fn heard_gain(&self, s: usize) -> f32 {
+        if self.mode == look::LIVE {
+            match s.checked_sub(LIVE_LAG_HOPS * self.hop) {
+                Some(t) => self.gain_at(t),
+                // before the first analysed frames: unity, like the look-ahead modes
+                None => 0.0,
+            }
+        } else {
+            self.gain_at(s)
+        }
+    }
 }
 
 impl Processor for Rider {
@@ -457,8 +512,8 @@ impl Processor for Rider {
 
     fn set_params(&mut self, p: &ParamBlock) {
         self.params = Some(*p);
-        let (speed, look) = (p.values[idx::SPEED].round().clamp(0.0, 1.0) as usize, p.values[idx::LOOK] >= 0.5);
-        if self.sr > 0.0 && (speed != self.speed || look != self.long) {
+        let (speed, mode) = (p.values[idx::SPEED].round().clamp(0.0, 1.0) as usize, look_mode(p.values[idx::LOOK]));
+        if self.sr > 0.0 && (speed != self.speed || mode != self.mode) {
             // the buffers are sized for the longest look-ahead in `prepare`: no allocation
             self.configure();
             self.go_dormant();
@@ -512,7 +567,7 @@ impl Processor for Rider {
             self.w = (self.w + 1) % n;
             let g = if self.out_pos >= self.latency {
                 let s = self.out_pos - self.latency;
-                crate::dsp::db_to_gain(self.gain_at(s)) * self.out
+                crate::dsp::db_to_gain(self.heard_gain(s)) * self.out
             } else {
                 self.out
             };
@@ -524,7 +579,7 @@ impl Processor for Rider {
             let s = self.out_pos - 1 - self.latency;
             let q = (s as isize - self.hop as isize / 2).max(0) / self.hop as isize;
             let f = self.fr(q);
-            self.m = [self.gain_at(s), f.lf, f.lp, f.conf];
+            self.m = [self.heard_gain(s), f.lf, f.lp, f.conf];
         }
     }
 
@@ -610,7 +665,7 @@ mod tests {
 
     #[test]
     fn latency_is_what_the_catalog_reports() {
-        for look in [0.0, 1.0] {
+        for look in [0.0, 1.0, 2.0] {
             for speed in [0.0, 1.0] {
                 // amount and phrase at 0: unity gain, so output = input delayed by the latency
                 let p = params(&[("amount", 0.0), ("phrase", 0.0), ("look", look), ("speed", speed), ("auto", 0.0)]);
@@ -625,6 +680,24 @@ mod tests {
         assert_eq!(catalog::latency(&fx, 44100.0), (9 + 99 + 50 + 2) * 441);
         fx.params.insert("look".into(), 0.0);
         assert_eq!(catalog::latency(&fx, 48000.0), (9 + 20 + 2) * 480);
+        fx.params.insert("look".into(), 2.0);
+        assert_eq!(catalog::latency(&fx, 48000.0), 0, "live: no delay");
+        assert_eq!(catalog::new_fx(2, FxKind::Rider, 120.0).params["look"], 2.0, "a new rider is live");
+    }
+
+    #[test]
+    fn live_mode_evens_words_without_delay() {
+        let lv: Vec<f32> = (0..24).map(|i| if (i / 2) % 2 == 0 { -14.0 } else { -24.0 }).collect();
+        let x = words(&lv, 0.5, 0.08);
+        let mut p = measured(&x);
+        p.insert("look".into(), 2.0);
+        let y = render(FxKind::Rider, &p, &x, SR);
+        let segs = metrics::words(&x, SR);
+        let (_, a, _) = metrics::m2(&x, SR, &segs);
+        let (_, b, _) = metrics::m2(&y, SR, &segs);
+        assert!(a - b > 2.0, "live: word spread {a:.2} → {b:.2} dB: not evened");
+        assert!(b > 1.0, "live: word spread {a:.2} → {b:.2} dB: flattened completely");
+        // (zero delay itself: `latency_is_what_the_catalog_reports`)
     }
 
     #[test]
@@ -673,7 +746,7 @@ mod tests {
 
     #[test]
     fn parking_equals_processing_silence() {
-        for look in [0.0, 1.0] {
+        for look in [0.0, 1.0, 2.0] {
             parking_equals_processing_silence_at(look);
         }
     }

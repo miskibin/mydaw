@@ -18,6 +18,7 @@ import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '..
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
 import { drawFades, drawGrid, drawRuler, type View } from './playlistDraw';
+import { followScroll, planTile, type Rect, type Tile } from './playlistTile';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { sortPoints } from '../lib/automation';
 import { autoById } from '../state/store';
@@ -90,12 +91,15 @@ export function Playlist() {
   const editable = () => U.tool === 'draw' || U.tool === 'paint' || U.tool === 'select';
   const toolCursor = () => ({ draw: 'crosshair', paint: 'copy', erase: 'not-allowed', mute: 'pointer', slice: 'col-resize', select: 'crosshair' })[U.tool];
 
-  let dirtyGrid = true, dirtyFade = true, dirtyRuler = true, lastRecV = -1, lastPhX = -1, fontEpoch = 0, themeEpoch = -1;
+  let dirtyGrid = true, dirtyFade = true, dirtyRuler = true, lastRecV = -1, lastPhX = -1, fontEpoch = 0, themeEpoch = -1, lastDpr = 0;
   /** Everything but the fade overlays, cached: a fade drag only re-composites (cost independent of clip length). */
   const base = document.createElement('canvas');
+  /** Where the grid canvases sit in grid coordinates (see playlistTile.ts); null = redraw all. */
+  let tile: Tile | null = null, rulerTile: Tile | null = null;
   const [autoHover, setAutoHover] = createSignal<number | null>(null);
-  // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip
-  createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; S.project.loop?.a; S.project.loop?.b; peaksVersion(); scroll(); cw(); ch(); dirtyGrid = true; });
+  // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip.
+  // Scrolling is not here: the canvases scroll with the content and redraw only strips (`draw`)
+  createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; S.project.loop?.a; S.project.loop?.b; peaksVersion(); cw(); ch(); dirtyGrid = true; });
   createEffect(() => { for (const _ of U.sel) void _; dirtyGrid = true; });
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
   // clips, comps, automations, patterns, sources: one project-version signal, not a
@@ -106,11 +110,30 @@ export function Playlist() {
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
   });
   createEffect(() => { U.autoEdit; autoHover(); dirtyGrid = true; });
-  createEffect(() => { U.bw; U.start; S.project.loop?.a; S.project.loop?.b; scroll(); cw(); dirtyRuler = true; });
+  createEffect(() => { U.bw; U.start; S.project.loop?.a; S.project.loop?.b; cw(); dirtyRuler = true; });
 
-  const offsets = () => {
-    const s = scroll();
-    return { x: clamp(s.x, 0, Math.max(0, gridW() - cw())), y: clamp(s.y, 0, Math.max(0, gridH() - ch())) };
+  /** Grid view of a region of the tile (tile-local CSS px). */
+  const tileView = (t: Tile, r: Rect): View => ({
+    offX: t.x + r.x, offY: t.y + r.y, W: r.w, H: r.h, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, autoEdit: U.autoEdit, autoHover: autoHover(),
+    rows: rows().map(r => r && { clip: unwrap(r.clip), comp: unwrap(r.comp) }), laneH: LANE_H, audition: { ...S.audition }, compSel: U.compSel ? { ...U.compSel } : null, bndHover: bndHover(), ver: arrVersion(),
+  });
+  /** Draws the grid into `region` of the base canvas only (clipped: nothing is painted twice). */
+  const paintBase = (b: CanvasRenderingContext2D, t: Tile, r: Rect, dpr: number, rec: typeof recState | null) => {
+    b.save();
+    b.setTransform(dpr, 0, 0, dpr, r.x * dpr, r.y * dpr);
+    b.beginPath(); b.rect(0, 0, r.w, r.h); b.clip();
+    b.fillStyle = T.grid; b.fillRect(0, 0, r.w, r.h);
+    drawGrid(b, tileView(t, r), unwrap(S.project), rec);
+    b.restore();
+  };
+  /** Follow playback: scrolls before anything is drawn, so grid, ruler and playhead change in one frame. */
+  const follow = (b: number) => {
+    if (!U.follow || followHold || !tele.frame.playing || b < 0) return;
+    const sl = scrollEl.scrollLeft, to = followScroll(b * U.bw, sl, cw());
+    if (to === sl) return;
+    scrollEl.scrollLeft = to;
+    // the scroll event comes a frame later: the overview follows now
+    setScroll({ x: scrollEl.scrollLeft, y: scrollEl.scrollTop });
   };
 
   const draw = () => {
@@ -118,47 +141,58 @@ export function Playlist() {
     if (recActive && recState.version !== lastRecV) { dirtyGrid = true; lastRecV = recState.version; }
     else if (!recActive && lastRecV !== -1) { dirtyGrid = true; lastRecV = -1; }
     const dpr = window.devicePixelRatio || 1;
-    if (fontEpoch !== fonts.epoch || themeEpoch !== theme.epoch) { fontEpoch = fonts.epoch; themeEpoch = theme.epoch; dirtyGrid = dirtyRuler = true; }
-    if (dirtyGrid || dirtyFade) {
-      const W = cw(), H = ch(), o = offsets();
-      const v: View = { offX: o.x, offY: o.y, W, H, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, autoEdit: U.autoEdit, autoHover: autoHover(),
-        rows: rows().map(r => r && { clip: unwrap(r.clip), comp: unwrap(r.comp) }), laneH: LANE_H, audition: { ...S.audition }, compSel: U.compSel ? { ...U.compSel } : null, bndHover: bndHover() };
-      if (dirtyGrid) {
-        fitCanvas(base, W, H);
+    if (fontEpoch !== fonts.epoch || themeEpoch !== theme.epoch || dpr !== lastDpr) { fontEpoch = fonts.epoch; themeEpoch = theme.epoch; lastDpr = dpr; dirtyGrid = dirtyRuler = true; }
+    const beat = curBeat();
+    follow(beat);
+    const sx = scrollEl.scrollLeft, sy = scrollEl.scrollTop, W = cw(), H = ch();
+    const plan = planTile(dirtyGrid ? null : tile, sx, sy, W, H, gridW(), gridH(), dpr);
+    const t = plan.tile, moved = !tile || t.x !== tile.x || t.y !== tile.y || t.w !== tile.w || t.h !== tile.h;
+    if (plan.full || moved || dirtyFade) {
+      const rec = recActive ? recState : null;
+      if (plan.full) {
+        fitCanvas(base, t.w, t.h);
+        paintBase(base.getContext('2d')!, t, { x: 0, y: 0, w: t.w, h: t.h }, dpr, rec);
+      } else if (moved) {
+        // blit what is already drawn by the shift, then draw only the exposed strips
         const b = base.getContext('2d')!;
-        b.setTransform(dpr, 0, 0, dpr, 0, 0);
-        b.fillStyle = T.grid; b.fillRect(0, 0, W, H);
-        drawGrid(b, v, unwrap(S.project), recActive ? recState : null);
+        b.save();
+        b.setTransform(1, 0, 0, 1, 0, 0);
+        b.globalCompositeOperation = 'copy';
+        b.drawImage(base, Math.round(plan.dx * dpr), Math.round(plan.dy * dpr));
+        b.restore();
+        for (const r of plan.strips) paintBase(b, t, r, dpr, rec);
       }
       dirtyGrid = dirtyFade = false;
-      fitCanvas(gridCv, W, H);
+      fitCanvas(gridCv, t.w, t.h);
       const g = gridCv.getContext('2d')!;
       g.setTransform(1, 0, 0, 1, 0, 0);
+      g.globalCompositeOperation = 'copy';
       g.drawImage(base, 0, 0);
+      g.globalCompositeOperation = 'source-over';
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawFades(g, v, unwrap(S.project));
+      drawFades(g, tileView(t, { x: 0, y: 0, w: t.w, h: t.h }), unwrap(S.project));
+      if (moved) {
+        gridCv.style.width = t.w + 'px'; gridCv.style.height = t.h + 'px';
+        gridCv.style.transform = `translate(${t.x}px, ${t.y}px)`;
+      }
+      tile = t;
     }
-    if (dirtyRuler) {
+    // the ruler is cheap: redrawn whole whenever its tile moves
+    if (dirtyRuler || !rulerTile || rulerTile.x !== t.x || rulerTile.w !== t.w) {
       dirtyRuler = false;
-      const W = cw(), o = offsets();
-      fitCanvas(rulerCv, W, 26);
+      rulerTile = t;
+      fitCanvas(rulerCv, t.w, 26);
       const g = rulerCv.getContext('2d')!;
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawRuler(g, o.x, W, U.bw, S.project.loop, U.start);
+      drawRuler(g, t.x, t.w, U.bw, S.project.loop, U.start);
+      rulerCv.style.width = t.w + 'px';
+      rulerCv.style.transform = `translateX(${t.x}px)`;
     }
-    // playhead + follow
-    // the playhead lives in sticky layers like the canvases, so it moves in the same frame as the
-    // redrawn grid instead of ahead of it with native (touchpad) scrolling
-    const b = curBeat(), x = Math.max(0, b) * U.bw - offsets().x;
+    // the playhead lives in grid coordinates like the canvases: it scrolls with them
+    const x = Math.max(0, beat) * U.bw;
     if (x !== lastPhX) {
       lastPhX = x;
       phGrid.style.transform = phRuler.style.transform = `translateX(${x}px)`;
-      phGrid.style.visibility = phRuler.style.visibility = x < -1 || x > cw() + 1 ? 'hidden' : '';
-    }
-    if (U.follow && !followHold && tele.frame.playing && b >= 0) {
-      const view = scrollEl.clientWidth - U.headW;
-      if (x > scrollEl.scrollLeft + view - 40) scrollEl.scrollLeft = x - 80;
-      else if (x < scrollEl.scrollLeft) scrollEl.scrollLeft = Math.max(0, x - 80);
     }
   };
 
@@ -771,9 +805,9 @@ export function Playlist() {
               <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg5)' }}>{S.project.tracks.length} tr</span>
             </div>
             <div style={{ position: 'relative', width: gridW() + 'px', height: '26px', flex: 'none' }}>
-              <div class="phlayer" style={{ left: U.headW + 'px', width: cw() + 'px', top: '0px' }}><div ref={phRuler} class="phead" style={{ height: '26px' }} /></div>
+              <div class="phtile"><div ref={phRuler} class="phead" style={{ height: '26px' }} /></div>
               <canvas ref={rulerCv} class="ruler" title="Klik = start · przeciągnij = pętla · 2× klik = usuń pętlę"
-                style={{ left: U.headW + 'px', width: cw() + 'px' }} onPointerDown={rulerDown} onPointerMove={rulerHover} />
+                onPointerDown={rulerDown} onPointerMove={rulerHover} />
 
             </div>
           </div>
@@ -784,8 +818,8 @@ export function Playlist() {
               <div class="hsplit" onPointerDown={headSplit} title="Przeciągnij = szerokość nagłówków" />
             </div>
             <div ref={gridEl} class="gridArea" style={{ width: gridW() + 'px', height: gridH() + 'px' }}>
-              <div class="phlayer" style={{ left: U.headW + 'px', width: cw() + 'px', top: '26px' }}><div ref={phGrid} class="phead" style={{ height: ch() + 'px' }} /></div>
-              <canvas ref={gridCv} class="gridCanvas" style={{ top: '26px', left: U.headW + 'px', width: cw() + 'px', height: ch() + 'px', cursor: toolCursor() }}
+              <div class="phtile"><div ref={phGrid} class="phead" style={{ height: gridH() + 'px' }} /></div>
+              <canvas ref={gridCv} class="gridCanvas" style={{ cursor: toolCursor() }}
                 onPointerDown={gridDown} onPointerMove={hover} onDblClick={gridDbl} onContextMenu={e => e.preventDefault()} />
               <Show when={mq()}>{m => <div class="marquee" style={{ left: m().x + 'px', top: m().y + 'px', width: m().w + 'px', height: m().h + 'px' }} />}</Show>
             </div>

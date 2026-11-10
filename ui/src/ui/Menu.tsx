@@ -135,9 +135,10 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
               )}
             </For>
           </div>
-          <Show when={open()}>{o => {
-            const it = props.items[o().i];
-            return it && it.t === 'sub' ? <MenuList items={it.items} x={o().x} y={o().y} sub /> : null;
+          {/* keyed: hovering another submenu row must swap the panel, not keep the first one */}
+          <Show when={open()} keyed>{o => {
+            const it = props.items[o.i];
+            return it && it.t === 'sub' ? <MenuList items={it.items} x={o.x} y={o.y} sub /> : null;
           }}</Show>
     </>
   );
