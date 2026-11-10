@@ -3,8 +3,9 @@ name: Release
 on:
   push:
     tags: ["v*"]
-    # this session cannot push tags; a push to v2 publishes v<app version> (tauri-action creates the tag)
-    branches: [v2]
+    # some sessions cannot push tags: a push to main whose message contains the release marker (see the `if` below)
+    # publishes v<app version> (tauri-action creates the tag)
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -12,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    # pushes to v2 publish only when the commit says so (this session cannot push tags)
+    # pushes to main publish only when the commit message says so
     if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[release]')
     strategy:
       fail-fast: false

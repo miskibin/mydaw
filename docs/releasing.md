@@ -9,8 +9,8 @@ A release is one commit; the workflow does the rest. Installed copies find it by
 2. Add a section to the top of `CHANGELOG.md`: `## 0.9.4 — 2026-12-01`, then `### Added`,
    `### Changed`, `### Fixed` with bullets written for musicians. The release workflow stops
    when the section is missing or empty, so a release cannot go out without notes.
-3. Push to `v2` with `[release]` in the commit message (or push a `v*` tag, or run the
-   workflow by hand). `tauri-action` builds Windows (with ASIO) and Linux one after the other,
+3. Push a `v*` tag, or push to `main` with `[release]` in the commit message (for sessions that
+   cannot push tags), or run the workflow by hand. `tauri-action` builds Windows (with ASIO) and Linux one after the other,
    signs the installers, creates the GitHub release and uploads `latest.json`.
 
 ## What the updater uses
