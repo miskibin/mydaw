@@ -22,3 +22,7 @@ assets/
 
 # Local pnpm content-addressable store created by some agent environments.
 .pnpm-store/
+
+# WAVE Keys piano (138 MB, CC-BY): fetched by scripts/fetch-keys.mjs, bundled by `tauri build`.
+app/resources/keys/*.flac
+app/resources/keys/ATTRIBUTION.txt

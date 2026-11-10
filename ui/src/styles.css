@@ -662,6 +662,25 @@ select option { background: var(--bg4); color: var(--fg); }
 .chanwin .chinst { display: flex; align-items: center; gap: 14px; padding: 16px 14px 4px; }
 .chanwin .chinst .nm { font: 600 13px var(--sans); color: var(--fg-hi); letter-spacing: .04em; }
 .chanwin .chinst .note { font-size: 11.5px; color: var(--fg3); margin-top: 3px; }
+.chanwin .keyspanel { display: flex; flex-direction: column; }
+.chanwin .keyshd { display: flex; align-items: center; gap: 14px; padding: 16px 14px 4px; }
+.chanwin .keyshd .nm { font: 600 13px var(--sans); color: var(--fg-hi); letter-spacing: .04em; }
+.chanwin .keyshd .note { font-size: 11.5px; color: var(--fg3); margin-top: 3px; line-height: 1.45; }
+.chanwin .keysmsg { display: flex; align-items: center; gap: 10px; margin: 10px 14px 0; padding: 8px 10px; border-radius: 4px; background: var(--line); font-size: 11.5px; color: var(--fg); }
+.chanwin .keysmsg span { flex: 1; min-width: 0; line-height: 1.4; }
+.chanwin .keysmsg.bad { color: var(--red); }
+.chanwin .keysbar { flex: 0 0 120px; height: 4px; border-radius: 2px; background: var(--line2); overflow: hidden; }
+.chanwin .keysbar div { height: 100%; background: var(--blue); }
+.chanwin .keysknobs { display: flex; align-items: flex-end; gap: 18px; padding: 14px 14px 0; }
+.chanwin .keyscredit { flex: 1; min-width: 0; text-align: right; font-size: 10.5px; color: var(--fg4); padding-bottom: 4px; }
+.pkeys { position: relative; flex: none; height: 64px; margin: 0 14px 14px; border-radius: 3px; overflow: hidden; background: #0b0d10; cursor: pointer; touch-action: none; user-select: none; }
+.pkeys .w { position: absolute; top: 0; bottom: 0; box-sizing: border-box; background: linear-gradient(#dfe3ea, #f4f6f9 70%); border-right: 1px solid #8e97a6; border-radius: 0 0 2px 2px; }
+.pkeys .w.on { background: var(--amber); }
+.pkeys .b { position: absolute; top: 0; height: 60%; background: linear-gradient(#2a2f38, #101318); border-radius: 0 0 2px 2px; box-shadow: 0 1px 2px rgba(0, 0, 0, .5); }
+.pkeys .b.on { background: var(--amber); }
+.pkeys .lbl { position: absolute; left: 0; right: 0; bottom: 2px; text-align: center; font: 500 8.5px var(--sans); color: #5c6573; pointer-events: none; }
+.pkeys .mark { position: absolute; left: 50%; bottom: 14px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%; background: var(--blue); pointer-events: none; }
+.pkeys .b .mark { bottom: 4px; }
 .chanwin .chknobs { display: flex; align-items: flex-end; gap: 18px; padding: 14px 14px 14px; flex-wrap: wrap; }
 .chanwin .chroute { display: flex; flex-direction: column; gap: 4px; margin-left: auto; font-size: 11px; color: var(--fg4); }
 .chanwin .chroute .sel { min-width: 150px; }

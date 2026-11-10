@@ -21,6 +21,9 @@ pub enum VoiceKind {
     Bass,
     /// One-shot sample of the voice's channel, pitched by the note.
     Sample,
+    /// WAVE Keys: a recording of the channel's piano, picked by key and velocity; it rings
+    /// for the note's length, then fades over the channel's release time.
+    Keys,
     /// A synth channel: its notes go to the channel's `poly::SynthInst`, not this pool.
     Synth,
     Click { accent: bool },
@@ -78,8 +81,11 @@ pub struct Voice {
     held: bool,
     /// Key let go while the sustain pedal was down: released when the pedal comes up.
     sus: bool,
-    /// MIDI key of a live note.
+    /// MIDI key of a live note (and of every piano note).
     key: u8,
+    /// Piano: which recording of the bank plays, and the release envelope's level.
+    zone: u16,
+    env: f32,
 }
 
 impl Voice {
@@ -103,6 +109,8 @@ impl Voice {
             held: false,
             sus: false,
             key: 0,
+            zone: 0,
+            env: 1.0,
         }
     }
 }
@@ -149,7 +157,8 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
 fn release(v: &mut Voice, sr: f32) {
     v.held = false;
     v.sus = false;
-    v.len = v.t.saturating_add((0.02 * sr) as u32);
+    // a piano note starts its own release (the channel's release time) right away
+    v.len = if v.kind == VoiceKind::Keys { v.t } else { v.t.saturating_add((0.02 * sr) as u32) };
 }
 
 impl VoicePool {
@@ -173,7 +182,7 @@ impl VoicePool {
     pub fn note_on(&mut self, ch: &ChanRt, idx: usize, dest: Dest, key: u8, vel: f32) -> bool {
         // the same key struck again releases its previous note
         self.release_where(|v| v.held && v.chan_id == ch.id && v.key == key);
-        let Some(i) = self.note_slot(ch, idx, dest, 0, 3600.0, key, vel) else { return false };
+        let Some(i) = self.note_slot(ch, idx, dest, 0, 3600.0, key, vel, 1.0) else { return false };
         let v = &mut self.voices[i];
         v.held = true;
         v.key = key;
@@ -234,25 +243,42 @@ impl VoicePool {
         self.trigger(VoiceKind::Click { accent }, Dest::Click, NO_CHAN, 0, delay, 0.06, 0.0, 1.0, 1.0);
     }
 
-    /// A note of channel `ch` (index `idx` in the table). `key` is a MIDI key; `vel` a gain
-    /// (velocity, times the track gain when the channel skips the track).
+    /// A note of channel `ch` (index `idx` in the table). `key` is a MIDI key, `vel` the
+    /// velocity 0..1 and `gain` level on top of it (the track gain when the channel skips the track).
     /// Returns false when nothing can play (a sampler channel without audio).
     #[allow(clippy::too_many_arguments)]
-    pub fn note(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32) -> bool {
-        self.note_slot(ch, idx, dest, delay, len_s, key, vel).is_some()
+    pub fn note(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32) -> bool {
+        self.note_slot(ch, idx, dest, delay, len_s, key, vel, gain).is_some()
     }
 
     /// Like [`Self::note`], returning the voice slot that was started.
     #[allow(clippy::too_many_arguments)]
-    fn note_slot(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32) -> Option<usize> {
+    fn note_slot(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32) -> Option<usize> {
+        let level = vel * gain;
         match ch.kind {
             VoiceKind::Sample => {
                 let a = ch.sample.as_ref()?;
                 let rate = a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0);
-                Some(self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, key as f32, vel, rate))
+                Some(self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, key as f32, level, rate))
+            }
+            VoiceKind::Keys => {
+                let bank = ch.keys.as_ref()?;
+                let (zone, semis, hit) = bank.pick(key, vel, ch.keys_dynamics);
+                let a = bank.audio(zone)?;
+                let rate = a.sr as f64 / self.sr as f64 * 2f64.powf(semis as f64 / 12.0);
+                // the same key struck again: the string's previous note is damped
+                for v in self.voices.iter_mut().filter(|v| v.alive && v.kind == VoiceKind::Keys && v.chan_id == ch.id && v.key == key) {
+                    v.held = false;
+                    v.sus = false;
+                    v.len = v.len.min(v.t);
+                }
+                let i = self.trigger(VoiceKind::Keys, dest, idx, ch.id, delay, len_s, key as f32, hit * gain, rate);
+                self.voices[i].zone = zone;
+                self.voices[i].key = key;
+                Some(i)
             }
             VoiceKind::Synth => None,
-            kind => Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, vel, 1.0)),
+            kind => Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, level, 1.0)),
         }
     }
 
@@ -290,6 +316,8 @@ impl VoicePool {
             held: false,
             sus: false,
             key: 0,
+            zone: 0,
+            env: 1.0,
         };
         idx
     }
@@ -305,9 +333,9 @@ impl VoicePool {
             let start = (v.delay as usize).min(n);
             v.delay = v.delay.saturating_sub(n as u32);
             // channel gain × velocity, split by the channel's pan
-            let (g, pan, sample) = match chans.get(v.chan) {
-                Some(c) => (if c.on { c.gain * v.vel } else { 0.0 }, c.pan, c.sample.as_deref()),
-                None if v.chan == NO_CHAN => (v.vel, 0.0, None),
+            let (g, pan, sample, piano) = match chans.get(v.chan) {
+                Some(c) => (if c.on { c.gain * v.vel } else { 0.0 }, c.pan, c.sample.as_deref(), c.keys.as_deref().map(|b| (b, c.keys_release))),
+                None if v.chan == NO_CHAN => (v.vel, 0.0, None, None),
                 None => {
                     v.alive = false;
                     continue;
@@ -334,6 +362,36 @@ impl VoicePool {
                 },
             };
             let stereo = !out_r.is_empty();
+            if v.kind == VoiceKind::Keys {
+                let Some((a, release)) = piano.and_then(|(b, r)| b.audio(v.zone).map(|a| (a, r))) else {
+                    v.alive = false;
+                    continue;
+                };
+                // -60 dB after `release` seconds
+                let coef = 10f32.powf(-3.0 / (release.max(0.005) * sr));
+                for i in start..n {
+                    if v.pos >= a.frames as f64 {
+                        v.alive = false;
+                        break;
+                    }
+                    if v.t >= v.len {
+                        v.env *= coef;
+                        if v.env < 1e-4 {
+                            v.alive = false;
+                            break;
+                        }
+                    }
+                    let (x, y) = a.sample(v.pos);
+                    let fade = (v.t as f32 / (0.001 * sr)).min(1.0) * v.env;
+                    out_l[i] += x * gl * fade;
+                    if stereo {
+                        out_r[i] += y * gr * fade;
+                    }
+                    v.pos += v.rate * bend as f64;
+                    v.t += 1;
+                }
+                continue;
+            }
             if v.kind == VoiceKind::Sample {
                 let Some(a) = sample else {
                     v.alive = false;
@@ -405,7 +463,7 @@ impl VoicePool {
                         let a = if t < 0.002 { exp_ramp(0.0001, 0.22, t, 0.002) } else { exp_ramp(0.22, 0.0001, t - 0.002, 0.048) };
                         (sq * a, t > 0.06)
                     }
-                    VoiceKind::Sample | VoiceKind::Synth => (0.0, true),
+                    VoiceKind::Sample | VoiceKind::Synth | VoiceKind::Keys => (0.0, true),
                 };
                 out_l[i] += s * gl;
                 if stereo {

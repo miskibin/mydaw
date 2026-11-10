@@ -13,7 +13,7 @@ import {
 import { NOTE_NAMES } from '../lib/pitch';
 import { commit, Gesture } from '../state/edit';
 import {
-  addBuiltin, addSampler, addSamplerFiles, addSynth, audition, chanById, chanKindLabel, chanOp, channels, cloneChannel, closePattern, curPat,
+  addBuiltin, addKeys, addSampler, addSamplerFiles, addSynth, audition, chanById, chanKindLabel, chanOp, channels, cloneChannel, closePattern, curPat,
   deleteChannel, newPattern, openPattern, patFront, patOp, playStep, previewPattern, putNotes, selectChannel, setBars, setChannel,
   setView, togglePreview, toggleChanMute, toggleChanSolo, patPlayhead,
 } from '../state/pattern';
@@ -206,6 +206,7 @@ function addChannelMenu(x: number, y: number) {
     }
     items.push({ t: 'item', label: 'Pusty syntezator', act: () => addSynth(null) });
   }
+  items.push({ t: 'sep' }, { t: 'title', label: 'Instrumenty z próbek' }, { t: 'item', label: 'WAVE Keys — fortepian', act: () => addKeys() });
   items.push({ t: 'sep' }, { t: 'title', label: 'Sampler (one-shot, wysokość z nuty)' });
   for (const s of S.project.sources.slice(0, 14)) items.push({ t: 'item', label: s.name, kbd: s.dur.toFixed(1) + ' s', act: () => addSampler(s.id) });
   items.push({ t: 'item', label: 'Plik z dysku…', act: () => void addSamplerFiles(null) });
@@ -422,6 +423,7 @@ function ChanRow(props: { c: Channel }) {
         <span class="cicon" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={11} /></span>
         <span class="ell">{c().name}</span>
         <Show when={c().kind === 'sample'}><span class="ckind">SMP</span></Show>
+        <Show when={c().kind === 'keys'}><span class="ckind">KEYS</span></Show>
       </button>
     </div>
   );

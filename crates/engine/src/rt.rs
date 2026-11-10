@@ -417,6 +417,11 @@ pub struct ChanRt {
     pub kind: VoiceKind,
     /// Sampler channels: the audio (`None` when the file is missing: the channel is silent).
     pub sample: Option<Arc<Audio>>,
+    /// WAVE Keys channels: the piano (`None` until it is loaded: the channel is silent),
+    /// the release time in seconds and the velocity → level amount 0..1.
+    pub keys: Option<Arc<crate::keys::KeysBank>>,
+    pub keys_release: f32,
+    pub keys_dynamics: f32,
     pub root: u8,
     /// Channel gain (1 at unity), pan −1..1, and audible (mute/solo).
     pub gain: f32,
@@ -854,7 +859,7 @@ impl Rt {
                         let ch = &tl.chans[i];
                         let home = pattern.and_then(|id| tl.pats.iter().find(|p| p.id == id)).and_then(|p| p.home);
                         let ins = ch.insert.or(home).unwrap_or(ch.home);
-                        play(&mut self.voices, &mut self.synths, ch, i, Dest::Insert(ins), 0, len, key, vel, self.sr);
+                        play(&mut self.voices, &mut self.synths, ch, i, Dest::Insert(ins), 0, len, key, vel, 1.0, self.sr);
                     }
                 }
                 Cmd::MidiNote { chan, key, vel, on, ins } => {
@@ -950,7 +955,7 @@ impl Rt {
                 }
                 let ins = ch.insert.or(pat.home).unwrap_or(ch.home);
                 let delay = ((nb - b0) / bps) as u32;
-                play(&mut self.voices, &mut self.synths, ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel, self.sr);
+                play(&mut self.voices, &mut self.synths, ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel, 1.0, self.sr);
             }
         }
         self.pat_beat = b1.rem_euclid(pat.len);
@@ -1323,15 +1328,15 @@ impl Rt {
                                 }
                                 let delay = ((nb - b0) / bps) as u32 + at as u32;
                                 let len_beats = nt.len.min(c.end - nb);
-                                let (dest, vel) = match ch.insert {
-                                    None => (Dest::Track(c.track), nt.vel),
+                                let (dest, gain) = match ch.insert {
+                                    None => (Dest::Track(c.track), 1.0),
                                     // routed past the track: the track still mutes and scales it
                                     Some(k) => match self.graph.tracks.get(c.track) {
-                                        Some(t) if t.on => (Dest::Insert(k), nt.vel * t.gain),
+                                        Some(t) if t.on => (Dest::Insert(k), t.gain),
                                         _ => continue,
                                     },
                                 };
-                                play(&mut self.voices, &mut self.synths, ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, vel, self.sr);
+                                play(&mut self.voices, &mut self.synths, ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, nt.vel, gain, self.sr);
                             }
                         }
                     }
@@ -1385,15 +1390,16 @@ impl Rt {
 }
 
 /// Starts a note on a channel: the voice pool for built-ins and samplers, the channel's
-/// synth instance for synth channels. `len_s` in seconds.
+/// synth instance for synth channels. `len_s` in seconds; `gain` is level on top of the
+/// velocity (a track fader the channel's routing skips).
 #[allow(clippy::too_many_arguments)]
-fn play(voices: &mut VoicePool, synths: &mut SynthBank, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, sr: f32) {
+fn play(voices: &mut VoicePool, synths: &mut SynthBank, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32, sr: f32) {
     if ch.kind == VoiceKind::Synth {
         if let Some(s) = synths.get(ch.id) {
-            s.note(delay, (len_s.max(0.0) * sr) as u32, key, vel, dest);
+            s.note(delay, (len_s.max(0.0) * sr) as u32, key, vel * gain, dest);
         }
     } else {
-        voices.note(ch, idx, dest, delay, len_s, key, vel);
+        voices.note(ch, idx, dest, delay, len_s, key, vel, gain);
     }
 }
 

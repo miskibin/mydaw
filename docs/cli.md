@@ -74,6 +74,8 @@ wave channels --sample 1001                       # a sampler channel playing so
 wave channels --synth "808 Czysty"                # a synth channel with a factory preset ("" = blank patch)
 wave channels --ch 1005 --preset "Pad Ciepły"     # load a synth preset (ids/names in `wave catalog` → effects.synth)
 wave channels --ch 1005 --param flt_cutoff --value 900   # one synth knob
+wave channels --keys                              # WAVE Keys: the sampled grand piano (see docs/keys.md)
+wave channels --ch "WAVE Keys" --param release --value 600   # its knobs: release (ms), dynamics (%)
 wave channels --remove 1004                       # (or a name) — also removes its notes
 wave pattern --id 2                               # step strings per channel
 wave pattern --id 2 --ch hat --steps "x.x. x.x. x.x5 x.x9"     # replace the hat's notes

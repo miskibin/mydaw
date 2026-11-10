@@ -202,6 +202,8 @@ struct Core {
     midi: MidiState,
     /// Synth channels the audio thread holds an instance for, with the patch it was last sent.
     synths: HashMap<Id, crate::poly::Patch>,
+    /// The WAVE Keys piano, once the app has loaded it.
+    keys: Option<Arc<crate::keys::KeysBank>>,
 }
 
 /// Live MIDI input state kept under the core lock (see [`Engine::midi_configure`]).
@@ -283,6 +285,7 @@ impl Engine {
                 audition: HashMap::new(),
                 midi: MidiState::default(),
                 synths: HashMap::new(),
+                keys: None,
             }),
             shared: Mutex::new(Arc::new(Shared::new())),
             factory,
@@ -1110,11 +1113,17 @@ impl Engine {
     /// on a channel). `pattern`: the pattern being edited, so a channel that follows its clip's
     /// track is heard through that track. Not an edit.
     pub fn note_audition(&self, chan: Id, key: Option<u8>, vel: f32, pattern: Option<Id>) -> Result<(), EngineError> {
+        self.note_audition_len(chan, key, vel, pattern, None)
+    }
+
+    /// Like [`Self::note_audition`], with the note's length in seconds (`None` = the short
+    /// default; 0.05..8 s). The on-screen keyboard uses it so a clicked piano key can ring.
+    pub fn note_audition_len(&self, chan: Id, key: Option<u8>, vel: f32, pattern: Option<Id>, len: Option<f32>) -> Result<(), EngineError> {
         let mut c = self.core.lock();
         let ch = c.project.channel(chan).ok_or(EngineError::Msg(format!("no channel {chan}")))?;
         let key = key.unwrap_or(ch.root).min(127);
         // percussion rings out by itself; pitched channels get a short note
-        let len = if ch.pitched() { 0.35 } else { 0.25 };
+        let len = len.filter(|l| l.is_finite()).map(|l| l.clamp(0.05, 8.0)).unwrap_or(if ch.pitched() { 0.35 } else { 0.25 });
         send(&mut c, Cmd::Audition { chan, key, vel: vel.clamp(0.0, 1.0), len, pattern });
         Ok(())
     }
@@ -1137,6 +1146,25 @@ impl Engine {
             self.changed(c);
         }
         Ok(())
+    }
+
+    // ------------------------------------------------------------ WAVE Keys
+
+    /// Hands the engine the loaded piano (or takes it away). Keys channels are silent
+    /// without it; with it they play at once, also notes that are sounding.
+    pub fn set_keys_bank(&self, bank: Option<Arc<crate::keys::KeysBank>>) {
+        let mut c = self.core.lock();
+        c.keys = bank;
+        self.sync(&mut c, Dirty { timeline: true, mixer: false, params: false });
+    }
+
+    pub fn has_keys_bank(&self) -> bool {
+        self.core.lock().keys.is_some()
+    }
+
+    /// True when the project has a WAVE Keys channel.
+    pub fn uses_keys(&self) -> bool {
+        self.core.lock().project.channels.iter().any(|c| matches!(c.src, ChannelSrc::Keys { .. }))
     }
 
     // ------------------------------------------------------------ project files
@@ -1284,7 +1312,7 @@ impl Engine {
         if cancel.load(Relaxed) {
             return Err(EngineError::Cancelled);
         }
-        let (project, store_snapshot, takes) = {
+        let (project, store_snapshot, takes, keys) = {
             let mut guard = self.core.lock();
             let c = &mut *guard;
             self.snapshot_plugin_states(c);
@@ -1299,7 +1327,7 @@ impl Engine {
             }
             let mut audio = comp_audio(&c.sources, &c.project.comps);
             audio.extend(sample_audio(&c.sources, &c.project.channels));
-            (c.project.clone(), map, audio)
+            (c.project.clone(), map, audio, c.keys.clone())
         };
         let sr = sample_rate as f32;
         let block = 512;
@@ -1320,7 +1348,7 @@ impl Engine {
         rt.set_workers(self.render_workers.load(Relaxed));
         let mut errs = HashMap::new();
         let graph = build_graph(&project, &HashSet::new(), sr, block, &*self.factory, false, &mut errs);
-        let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new());
+        let mut tl = build_timeline(&project, &mut |clip| store_snapshot.get(&clip.id).cloned(), &takes, &HashMap::new(), keys.as_ref());
         tl.loop_range = None;
         tl.song_end = TOTAL_BEATS;
         let _ = cmd_tx.push(Cmd::Graph(Box::new(graph)));
@@ -1431,12 +1459,12 @@ impl Engine {
         if d.timeline {
             let gesture_open = c.gesture.is_some();
             let audition = live_audition(c);
-            let Core { project, sources, .. } = c;
+            let Core { project, sources, keys, .. } = c;
             let stale = gesture_open;
             let mut takes = comp_audio(sources, &project.comps);
             takes.extend(sample_audio(sources, &project.channels));
             let bpm = project.bpm;
-            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale, bpm), &takes, &audition);
+            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale, bpm), &takes, &audition, keys.as_ref());
             send(c, Cmd::Timeline(Box::new(tl)));
         }
     }
@@ -1791,7 +1819,7 @@ fn sample_audio(store: &SourceStore, chans: &[Channel]) -> HashMap<Id, Arc<Audio
         .iter()
         .filter_map(|c| match c.src {
             ChannelSrc::Sample { source } => store.get(source).map(|a| (source, a.clone())),
-            ChannelSrc::Inst { .. } | ChannelSrc::Synth { .. } => None,
+            ChannelSrc::Inst { .. } | ChannelSrc::Synth { .. } | ChannelSrc::Keys { .. } => None,
         })
         .collect()
 }
@@ -1966,7 +1994,7 @@ fn audible_channels(p: &Project) -> Vec<(f32, f32, bool)> {
 /// The channel table and the patterns for the audio thread. Swing is applied here (when
 /// the timeline is built, i.e. at schedule time, never written into the notes); notes of
 /// unknown channels and notes past the pattern end are left out.
-fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>) -> (Vec<ChanRt>, Vec<PatRt>) {
+fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Arc<crate::keys::KeysBank>>) -> (Vec<ChanRt>, Vec<PatRt>) {
     let ins_idx = |id: Id| p.inserts.iter().position(|m| m.id == id);
     let track_ins = |track: u32| p.tracks.get(track as usize).and_then(|t| ins_idx(t.insert));
     // first clip (by time) of each pattern → its track's insert
@@ -1990,8 +2018,14 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>) -> (Vec<ChanRt>,
                 ChannelSrc::Inst { inst } => (crate::synth::VoiceKind::of(inst), None),
                 ChannelSrc::Sample { source } => (crate::synth::VoiceKind::Sample, audio.get(&source).cloned()),
                 ChannelSrc::Synth { .. } => (crate::synth::VoiceKind::Synth, None),
+                ChannelSrc::Keys { .. } => (crate::synth::VoiceKind::Keys, None),
             };
-            ChanRt { id: c.id, kind, sample, root: c.root, gain, pan, on, insert, home: insert.or(heard).unwrap_or(0) }
+            let ks = match c.src {
+                ChannelSrc::Keys { keys: k } => Some(k),
+                _ => None,
+            };
+            let (keys_release, keys_dynamics) = ks.map(|k| (k.release / 1000.0, k.dynamics / 100.0)).unwrap_or((0.35, 1.0));
+            ChanRt { id: c.id, kind, sample, keys: ks.and(keys.cloned()), keys_release, keys_dynamics, root: c.root, gain, pan, on, insert, home: insert.or(heard).unwrap_or(0) }
         })
         .collect();
     let pats = p
@@ -2069,11 +2103,11 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
 }
 
 /// `takes`: loaded audio by source id of every comp take and sampler channel.
-pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option<Arc<Audio>>, takes: &HashMap<Id, Arc<Audio>>, audition: &HashMap<Id, Id>) -> Timeline {
+pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option<Arc<Audio>>, takes: &HashMap<Id, Arc<Audio>>, audition: &HashMap<Id, Id>, keys: Option<&Arc<crate::keys::KeysBank>>) -> Timeline {
     // comps are resolved once each, shared by every clip that plays them
     let spb = 60.0 / p.bpm;
     let comps: HashMap<Id, Arc<crate::comp::CompRt>> = p.comps.iter().map(|cp| (cp.id, Arc::new(crate::comp::build(cp, spb, audition.get(&cp.id).copied(), takes)))).collect();
-    let (chans, pats) = build_patterns(p, takes);
+    let (chans, pats) = build_patterns(p, takes, keys);
     // automation envelopes whose target still exists
     let mut autos = vec![];
     let mut auto_idx = HashMap::new();

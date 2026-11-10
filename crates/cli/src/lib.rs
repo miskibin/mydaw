@@ -33,6 +33,9 @@ EDIT  (all edits are one undo step each; --if-revision N refuses to act if the p
 PATTERNS & CHANNELS  (steps: x = on, 1-9 = velocity 10-90 %, . = off; spaces and | are ignored)
   channels                                 Channel Rack: ids, instrument/sample, volume, pan, insert
   channels --add kick|clap|hat|bass        add a built-in channel     (--sample SOURCE_ID: a sampler channel)
+  channels --keys                          add WAVE Keys, the sampled grand piano
+  channels --synth "PRESET"                add a synth channel ("" = blank patch); --ch C --preset NAME loads one
+  channels --ch C --param ID --value V     one knob of a synth (ids in `catalog`) or of WAVE Keys (release ms, dynamics %)
   channels --remove ID|NAME                remove a channel and its notes
   pattern [--id N]                         a pattern as step strings per channel
   pattern --id N --ch C --steps "x... x... x... x..." [--vel 0.8]   replace channel C's notes
@@ -231,6 +234,23 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             }
             if let Some(r) = a.get("remove") {
                 args["remove"] = id_or_name(r);
+            }
+            if a.has("keys") {
+                args["keys"] = json!(true);
+            }
+            if a.has("synth") {
+                args["synth"] = json!(a.get("synth").unwrap_or(""));
+            }
+            if let Some(c) = a.get("ch") {
+                args["ch"] = id_or_name(c);
+            }
+            for k in ["preset", "param"] {
+                if let Some(v) = a.get(k) {
+                    args[k] = json!(v);
+                }
+            }
+            if let Some(v) = a.num("value").map_err(u)? {
+                args["value"] = json!(v);
             }
             send(a, "channels", args)
         }

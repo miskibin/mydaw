@@ -3,7 +3,7 @@
 import { newSynthChannel } from '../lib/synth';
 import { prefs } from './prefs';
 import { be } from '../api/backend';
-import { SAMPLE_ROOT, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
+import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
 import { baseName, clamp, mod } from '../lib/format';
 import { builtinChannel, cloneNotes, INST_NAME, stepsOf } from '../lib/pattern';
 import { commit } from './edit';
@@ -109,6 +109,13 @@ export function addSynth(name: string | null) {
   selectChannel(c.id);
   say('Syntezator: ' + (name ?? 'pusty dźwięk') + ' — klik w nazwę kanału = edycja dźwięku');
 }
+/** A new WAVE Keys channel: the sampled grand piano. */
+export function addKeys() {
+  const c: Channel = { id: allocId(), name: 'WAVE Keys', color: '#e0a44a', kind: 'keys', keys: { release: KEYS_RELEASE.def, dynamics: KEYS_DYNAMICS.def }, vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: 60 };
+  commit([chanOp(c)], 'Dodaj WAVE Keys');
+  selectChannel(c.id);
+  say('WAVE Keys: fortepian — 2× klik w nazwę = piano roll, klik = ustawienia');
+}
 export function addSampler(sourceId: Id) {
   const s = S.project.sources.find(x => x.id === sourceId); if (!s) return;
   const c: Channel = { id: allocId(), name: s.name, color: s.color, kind: 'sample', source: s.id, vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: SAMPLE_ROOT };
@@ -143,7 +150,7 @@ export function deleteChannel(c: Channel) {
   say('Usunięto kanał ' + c.name + (used ? ' (z nutami w ' + used + ' pattern' + (used === 1 ? 'ie' : 'ach') + ') — Ctrl+Z cofa' : ''));
 }
 export const chanSource = (c: Channel) => (c.kind === 'sample' ? S.project.sources.find(s => s.id === c.source) : undefined);
-export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? 'wbudowany · ' + INST_NAME[c.inst] : c.kind === 'synth' ? 'syntezator · ' + (c.synth.preset ?? 'własny') : 'sampler · ' + (chanSource(c) ? baseName(chanSource(c)!.path) : 'brak pliku'));
+export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? 'wbudowany · ' + INST_NAME[c.inst] : c.kind === 'synth' ? 'syntezator · ' + (c.synth.preset ?? 'własny') : c.kind === 'keys' ? 'WAVE Keys · fortepian' : 'sampler · ' + (chanSource(c) ? baseName(chanSource(c)!.path) : 'brak pliku'));
 
 // ---------------------------------------------------------------- sound
 

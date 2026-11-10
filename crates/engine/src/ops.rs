@@ -322,6 +322,15 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     }
                 }
             }
+            if let ChannelSrc::Keys { keys } = &c.src {
+                let (r, y) = (crate::keys::RELEASE_MS, crate::keys::DYNAMICS);
+                if !(keys.release.is_finite() && (r.0..=r.1).contains(&keys.release)) {
+                    return Err(OpError::Invalid(format!("keys release must be {}..{} ms", r.0, r.1)));
+                }
+                if !(keys.dynamics.is_finite() && (y.0..=y.1).contains(&keys.dynamics)) {
+                    return Err(OpError::Invalid("keys dynamics must be 0..100 %".into()));
+                }
+            }
             if let Some(ins) = c.insert {
                 if p.insert(ins).is_none() {
                     return Err(OpError::Missing { what: "insert", id: ins });
@@ -334,6 +343,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     // knobs and mute/solo take the fast path; what a note plays or where it goes rebuilds
                     // a synth's sound (its parameters) takes the fast path too
                     let same_kind = matches!((&x.src, &c.src), (ChannelSrc::Synth { .. }, ChannelSrc::Synth { .. }));
+                    // (a piano's knobs are read from the channel table, which the timeline carries)
                     if (x.src != c.src && !same_kind) || x.insert != c.insert || x.root != c.root {
                         d.timeline = true;
                     } else {

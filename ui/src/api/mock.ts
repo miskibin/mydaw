@@ -16,7 +16,7 @@ import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitc
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 
@@ -752,7 +752,7 @@ export class MockBackend implements Backend {
     const c = this.p.clips.filter(x => x.kind === 'pat' && x.ref === id).sort((a, b) => a.start - b.start)[0];
     return c ? this.p.tracks[c.track]?.insert ?? null : null;
   }
-  async noteAudition(a: { ch: Id; key?: number; vel?: number; pattern?: Id }) {
+  async noteAudition(a: { ch: Id; key?: number; vel?: number; pattern?: Id; len?: number }) {
     const c = this.p.channels?.find(x => x.id === a.ch); if (!c) throw new Error('no channel ' + a.ch);
     const heard = this.p.patterns.find(pt => pt.notes.some(n => n.ch === c.id));
     const ins = c.insert ?? (a.pattern != null ? this.patHome(a.pattern) : null) ?? (heard ? this.patHome(heard.id) : null) ?? 0;
@@ -817,6 +817,8 @@ export class MockBackend implements Backend {
       if (done >= total) { clearInterval(iv); kit.installed = true; }
     }, 60);
   }
+  /** The browser preview has no recordings to load: the piano is always "ready" (and silent, like every mock instrument). */
+  async keysStatus(): Promise<KeysStatus> { await delay(); return { state: 'ready', error: null, kit: 'salamander-piano', installed: true }; }
   async libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]> {
     await delay(10);
     const root = q.kit ? 'C:\\WAVE\\Library\\' + q.kit : q.folder ?? '';

@@ -1,7 +1,8 @@
 # WAVE
 
 A fast, FL-Studio-style DAW: Rust audio engine, Tauri 2 shell, SolidJS + canvas UI.
-Playlist with patterns and audio clips, mixer with insert effects (EQ, compressor,
+Playlist with patterns and audio clips, a built-in synth and a sampled grand piano
+([WAVE Keys](docs/keys.md)), mixer with insert effects (EQ, compressor,
 saturator, delay, reverb, limiter — all with presets and live visualisations),
 recording, a sample library, VST3 effects, **ASIO** on Windows, and a `wave`
 command line that edits the open project live.

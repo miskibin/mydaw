@@ -16,3 +16,11 @@ used, in the `mp3lame-sys` crate on crates.io.
 LGPL relinking: WAVE is open source and ships its full source, so you may rebuild the application
 against a modified LAME (`cargo build` with a patched `mp3lame-sys`). Patents on MP3 have expired.
 This notice is not legal advice; check the licence terms before redistributing a binary.
+
+## Salamander Grand Piano (WAVE Keys)
+
+The WAVE Keys piano plays recordings from the
+[Salamander Grand Piano V3](https://github.com/sfzinstruments/SalamanderGrandPiano) by
+Alexander Holm, licensed [CC-BY-3.0](https://creativecommons.org/licenses/by/3.0/). Installers
+ship 90 of its FLAC files unmodified (see `docs/keys.md`); other builds download the same files.
+Music made with WAVE Keys contains these recordings: credit them as the licence asks.

@@ -41,6 +41,8 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: ui/pnpm-lock.yaml }
       - run: pnpm --dir ui install --frozen-lockfile
+      - name: WAVE Keys piano (bundled into the installer)
+        run: node scripts/fetch-keys.mjs
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

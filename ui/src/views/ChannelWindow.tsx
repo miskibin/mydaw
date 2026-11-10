@@ -1,6 +1,6 @@
 // Channel settings window (FL "Channel settings"): click a Channel Rack name to see what makes
 // the sound — the sample with its waveform, or the built-in instrument — plus level, pan, root
-// key and mixer routing. The synth's own page will live here too.
+// key and mixer routing. The synth and WAVE Keys have their own pages here too.
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import { VOL_UNITY, type Channel, type Id } from '../api/types';
@@ -14,8 +14,10 @@ import { say } from '../state/ui';
 import { fitCanvas } from '../ui/frameLoop';
 import { channelIcon, InstIcon } from '../ui/instIcons';
 import { Knob } from '../ui/Knob';
+import { PianoKeys } from '../ui/PianoKeys';
 import { rgba, T, themeVersion } from '../ui/theme';
 import { moveWindow } from './FxWindow';
+import { KeysPanel } from './KeysPanel';
 import { SynthPanel } from './SynthPanel';
 
 type Win = { id: Id; x: number; y: number; w: number };
@@ -26,7 +28,7 @@ export { win as chanWin };
 export function toggleChannelWindow(id: Id) {
   const w = win();
   if (w && w.id === id) { setWin(null); return; }
-  const synth = chanById(id)?.kind === 'synth', wd = synth ? 900 : 460;
+  const kind = chanById(id)?.kind, synth = kind === 'synth', wd = synth ? 900 : kind === 'keys' ? 700 : 520;
   setWin(w ? { ...w, id, w: wd } : { id, x: Math.max(20, window.innerWidth / 2 - wd / 2), y: synth ? 70 : 110, w: wd });
 }
 export const closeChannelWindow = () => setWin(null);
@@ -85,13 +87,14 @@ function Body(props: { w: Win; c: Channel }) {
       <div class="winhd" onPointerDown={e => moveWindow(e, () => props.w, setPos)}>
         <span class="chicon" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={14} /></span>
         <span class="title">{c().name}</span>
-        <span class="sub">{c().kind === 'sample' ? 'Sampler' : c().kind === 'synth' ? 'Syntezator' : 'Wbudowany instrument'}</span>
+        <span class="sub">{c().kind === 'sample' ? 'Sampler' : c().kind === 'synth' ? 'Syntezator' : c().kind === 'keys' ? 'Fortepian z próbek' : 'Wbudowany instrument'}</span>
         <div style={{ flex: 1 }} />
         <button class="iconbtn" title="Odsłuchaj (C5 / wysokość bazowa)" onClick={() => audition(c().id, undefined, 0.9, true)}>▶</button>
         <button class="closebtn" title="Zamknij" onClick={closeChannelWindow}>×</button>
       </div>
       <Show when={c().kind === 'synth'}><SynthPanel c={c()} /></Show>
-      <Show when={c().kind === 'sample'} fallback={c().kind === 'synth' ? null :
+      <Show when={c().kind === 'keys' && c()}>{k => <KeysPanel c={k() as Extract<Channel, { kind: 'keys' }>} />}</Show>
+      <Show when={c().kind === 'sample'} fallback={c().kind === 'synth' || c().kind === 'keys' ? null :
         <div class="chinst">
           <span class="big" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={34} /></span>
           <div>
@@ -120,6 +123,8 @@ function Body(props: { w: Win; c: Channel }) {
           </select>
         </div>
       </div>
+      <Show when={c().kind === 'keys'}><PianoKeys ch={c().id} lo={21} hi={108} /></Show>
+      <Show when={c().kind === 'sample'}><PianoKeys ch={c().id} lo={36} hi={96} mark={c().root} /></Show>
     </div>
   );
 }

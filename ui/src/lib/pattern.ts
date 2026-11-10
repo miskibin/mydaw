@@ -4,7 +4,7 @@
 // Units: pattern `len` in beats; note `step`/`len` in 16ths ("steps"); `p` MIDI key
 // (absent = the channel's root); `v` velocity 0..1 (absent = 1).
 import { migrateSatParams } from './saturator';
-import { SAMPLE_ROOT, TOTAL_BEATS, VOL_UNITY, type Channel, type Id, type Inst, type Note, type Op, type Pattern, type Project } from '../api/types';
+import { KEYS_RELEASE, SAMPLE_ROOT, TOTAL_BEATS, VOL_UNITY, type Channel, type Id, type Inst, type Note, type Op, type Pattern, type Project } from '../api/types';
 import { SYNTH_CATALOG } from '../api/synthCatalog';
 import { synthError } from './synth';
 
@@ -20,7 +20,7 @@ export function builtinChannel(id: Id, inst: Inst): Channel {
   return { id, name: INST_NAME[inst], color: INST_COLOR[inst], kind: 'inst', inst, vol: VOL_UNITY, pan: 0, mute: false, solo: false, insert: null, root: instRoot(inst) };
 }
 /** Channels whose notes have a pitch worth editing (piano roll). */
-export const isPitched = (c: Channel) => c.kind === 'sample' || c.kind === 'synth' || c.inst === 'bass';
+export const isPitched = (c: Channel) => c.kind === 'sample' || c.kind === 'synth' || c.kind === 'keys' || c.inst === 'bass';
 export const keyOf = (n: Note, c: Channel | undefined) => n.p ?? c?.root ?? SAMPLE_ROOT;
 export const velOf = (n: Note) => n.v ?? 1;
 /** Number of 16ths in the pattern. */
@@ -112,6 +112,10 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean): boolean {
       if (!(c.pan >= -1 && c.pan <= 1)) fail('channel pan must be -1..1');
       if (c.kind === 'sample' && !p.sources.some(s => s.id === c.source)) fail(`no source with id ${c.source}`);
       if (c.kind === 'synth') { const e = synthError(SYNTH_CATALOG, c.synth ?? { preset: null, params: {} }); if (e) fail(e); }
+      if (c.kind === 'keys') {
+        if (!(c.keys?.release >= KEYS_RELEASE.min && c.keys.release <= KEYS_RELEASE.max)) fail(`keys release must be ${KEYS_RELEASE.min}..${KEYS_RELEASE.max} ms`);
+        if (!(c.keys.dynamics >= 0 && c.keys.dynamics <= 100)) fail('keys dynamics must be 0..100 %');
+      }
       if (c.insert != null && !p.inserts.some(m => m.id === c.insert)) fail(`no insert with id ${c.insert}`);
       const chans = p.channels ?? (p.channels = []);
       bump(p, c.id);
