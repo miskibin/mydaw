@@ -7,11 +7,12 @@ import type { Fx } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
 import { clamp } from '../../lib/format';
 import { hzToMidi, NOTE_NAMES, scaleMask } from '../../lib/pitch';
+import { t as tr, type TranslationKey } from '../../lib/i18n';
 import { FXMETA } from '../../ui/icons';
 import { MONO10, MONO9, Needle, rgba, T, type Viz, type VizExtra } from './common';
 
 const RANGE = 100; // cents, each side of the meter
-const SCALE_NAMES = ['chromatyczna', 'dur', 'moll', 'pentatonika dur', 'pentatonika moll'];
+const SCALE_NAMES: TranslationKey[] = ['c.viz.scale.chromatic', 'c.viz.scale.major', 'c.viz.scale.minor', 'c.viz.scale.majPent', 'c.viz.scale.minPent'];
 
 export class TuneViz implements Viz {
   cursor = 'default';
@@ -56,7 +57,7 @@ export class TuneViz implements Viz {
     const vis = 0.25 + 0.75 * conf;
     g.textAlign = 'center';
     g.font = MONO9; g.fillStyle = T.vizLabel;
-    g.fillText('NUTA DOCELOWA', leftW / 2, 22);
+    g.fillText(tr('c.viz.targetNote'), leftW / 2, 22);
     const name = Number.isNaN(this.target) ? '—' : NOTE_NAMES[((this.target % 12) + 12) % 12];
     const oct = Number.isNaN(this.target) ? '' : String(Math.floor(this.target / 12) - 1);
     g.font = `600 ${Math.round(clamp(mainH * 0.42, 44, 92))}px "Geist Variable", Geist, sans-serif`;
@@ -125,18 +126,18 @@ export class TuneViz implements Viz {
     // centre readout
     g.textAlign = 'center';
     g.font = MONO9; g.fillStyle = T.vizLabel;
-    g.fillText('KOREKTA', cx, cy - R * 0.42);
+    g.fillText(tr('c.viz.correctionCaps'), cx, cy - R * 0.42);
     g.font = '600 20px "Geist Mono Variable", monospace'; g.fillStyle = on ? (Math.abs(corr) > 1 ? accent : T.fg3) : T.fg4;
     g.fillText(on ? fmtC(corr) : 'BYPASS', cx, cy - R * 0.42 + 24);
     // legend
     g.font = MONO9; g.textAlign = 'left';
     let lx = mx0 + 10; const ly = 16;
     const leg = (draw: () => void, t: string) => { draw(); g.fillStyle = T.fg4; g.fillText(t, lx + 13, ly + 3); lx += g.measureText(t).width + 26; };
-    leg(() => { g.fillStyle = T.amber; g.fillRect(lx, ly - 1, 9, 2.4); }, 'wejście');
-    leg(() => { g.fillStyle = accent; g.fillRect(lx, ly - 2, 9, 5); }, 'korekta');
-    leg(() => { g.fillStyle = T.ink; g.beginPath(); g.arc(lx + 4.5, ly, 3, 0, Math.PI * 2); g.fill(); }, 'wyjście');
+    leg(() => { g.fillStyle = T.amber; g.fillRect(lx, ly - 1, 9, 2.4); }, tr('c.viz.input'));
+    leg(() => { g.fillStyle = accent; g.fillRect(lx, ly - 2, 9, 5); }, tr('c.viz.correction'));
+    leg(() => { g.fillStyle = T.ink; g.beginPath(); g.arc(lx + 4.5, ly, 3, 0, Math.PI * 2); g.fill(); }, tr('c.viz.output'));
     g.textAlign = 'right'; g.fillStyle = T.fg4;
-    g.fillText(`${NOTE_NAMES[key]} ${SCALE_NAMES[scale] ?? ''}`, W - 10, ly + 3);
+    g.fillText(`${NOTE_NAMES[key]} ${SCALE_NAMES[scale] ? tr(SCALE_NAMES[scale]) : ''}`, W - 10, ly + 3);
 
     // ---- note ribbon (bottom): the 12 notes, scale lit, target highlighted
     const ry = H - ribbonH - 2, pad = 10, gap = 4;

@@ -1,3 +1,4 @@
+import { t as tl } from '../lib/i18n';
 // The lyrics notebook ("Notatnik", F8): pages of lyrics where one line is one bar.
 //
 // A plain <textarea> does the editing (caret, selection, IME, paste, spell-free typing); a
@@ -126,7 +127,7 @@ function NotebookWindow() {
   };
   const lineHt = (ln: number) => rowH()?.[ln] ?? LH();
   const rowStyle = (i: number) => (rowH() ? { height: (rowH()![i] ?? LH()) + 'px' } : {});
-  const toggleWrap = () => { setNB('wrap', !NB.wrap); savePrefs(); say(NB.wrap ? 'Notatnik: zawijanie linii' : 'Notatnik: bez zawijania'); queueMicrotask(keepCaretVisible); };
+  const toggleWrap = () => { setNB('wrap', !NB.wrap); savePrefs(); say(NB.wrap ? tl('a.nb.wrapOn') : tl('a.nb.wrapOff')); queueMicrotask(keepCaretVisible); };
   const range = () => { const pg = page(); return pg ? pageBarRange({ text: text(), startBar: pg.startBar }) : [1, 0]; };
 
   // ------------------------------------------------ teleprompter
@@ -174,7 +175,7 @@ function NotebookWindow() {
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     const f = clamp(NB.font + (e.deltaY < 0 ? 1 : -1), FONT_MIN, FONT_MAX);
-    if (f !== NB.font) { setNB('font', f); savePrefs(); say('Notatnik: czcionka ' + f + ' px'); }
+    if (f !== NB.font) { setNB('font', f); savePrefs(); say(tl('a.nb.font', { px: f })); }
   };
 
   // ------------------------------------------------ window
@@ -190,27 +191,27 @@ function NotebookWindow() {
     track(ev => setNB('geom', { w: clamp(o.w + ev.clientX - sx, 300, window.innerWidth - 20), h: clamp(o.h + ev.clientY - sy, 240, window.innerHeight - 20) }), () => saveGeom(), 'nwse-resize');
   };
   const move = (e: PointerEvent) => moveWindow(e, () => G(), (x, y) => { setNB('geom', { x, y }); saveGeom(); });
-  const goBar = (bar: number) => { A.seek(beatOfBar(bar)); say('Takt ' + bar); };
+  const goBar = (bar: number) => { A.seek(beatOfBar(bar)); say(tl('a.nb.bar', { n: bar })); };
 
   return (
     <div class="win nbwin" classList={{ wrap: NB.wrap }} style={{ left: G().x + 'px', top: G().y + 'px', width: G().w + 'px', height: G().h + 'px', 'z-index': NB.front ? 46 : 44, '--nb-font': NB.font + 'px', '--nb-lh': LH() + 'px' }}
       data-notebook>
       <div class="winhd" onPointerDown={move}>
         <span class="tile" style={{ width: '20px', height: '20px', background: 'color-mix(in srgb, var(--blue) 18%, transparent)', color: 'var(--blue)' }}><Icon d={NOTEBOOK_ICON} size={12} /></span>
-        <span class="title">Notatnik</span>
+        <span class="title">{tl('a.nb.title')}</span>
         <Show when={page()}>
-          <span class="sub">{range()[1] >= range()[0] ? `takty ${range()[0]}–${range()[1]}` : 'brak taktów'}</span>
+          <span class="sub">{range()[1] >= range()[0] ? tl('a.nb.bars', { a: range()[0], b: range()[1] }) : tl('a.nb.noBars')}</span>
         </Show>
         <div style={{ flex: 1 }} />
-        <Show when={pages().length}><button class="nb-tog" classList={{ on: NB.rhymes }} title="Rymy: zakończenia wersów, które się rymują, mają wspólny kolor" onClick={() => { setNB('rhymes', !NB.rhymes); savePrefs(); }}>Rymy</button></Show>
-        <Show when={pages().length}><button class="nb-tog" classList={{ on: NB.wrap }} title="Zawijaj długie linie (Alt+Z) — zawinięta linia to dalej jeden takt" onClick={toggleWrap}>Zawijaj</button></Show>
-        <button class="closebtn" title="Zamknij (F8)" onClick={closeNotebook}>×</button>
+        <Show when={pages().length}><button class="nb-tog" classList={{ on: NB.rhymes }} title={tl('a.nb.rhymesTip')} onClick={() => { setNB('rhymes', !NB.rhymes); savePrefs(); }}>{tl('a.nb.rhymes')}</button></Show>
+        <Show when={pages().length}><button class="nb-tog" classList={{ on: NB.wrap }} title={tl('a.nb.wrapTip')} onClick={toggleWrap}>{tl('a.nb.wrap')}</button></Show>
+        <button class="closebtn" title={tl('a.nb.close')} onClick={closeNotebook}>×</button>
       </div>
       <div class="nb-top">
       <Show when={pages().length}><Tabs /></Show>
       <Show when={page()}>
-          <label class="nb-start" title="Numer taktu pierwszej linii tej strony (jak na linijce playlisty). 1 linia = 1 takt · [Nagłówek] nie liczy się">
-            od taktu
+          <label class="nb-start" title={tl('a.nb.startTip')}>
+            {tl('a.nb.fromBar')}
             <input class="textin" type="number" min="1" max="9999" value={page()!.startBar}
               onChange={e => { const v = parseInt(e.currentTarget.value, 10); if (isFinite(v)) setStartBar(page()!.id, v); else e.currentTarget.value = String(page()!.startBar); }}
               onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur(); }} />
@@ -224,7 +225,7 @@ function NotebookWindow() {
             <Index each={bars()}>{(b, i) => (
               <div class="nb-row" classList={{ cur: i === curLine(), hdr: b() == null }} style={rowStyle(i)}>
                 <Show when={b() != null}>
-                  <button class="nb-num" tabIndex={-1} title={'Głowica na początek taktu ' + b()} onClick={() => goBar(b()!)}>{b()}</button>
+                  <button class="nb-num" tabIndex={-1} title={tl('a.nb.playheadTo', { n: b()! })} onClick={() => goBar(b()!)}>{b()}</button>
                 </Show>
               </div>
             )}</Index>
@@ -234,7 +235,7 @@ function NotebookWindow() {
               <Index each={lines()}>{(l, i) => <MirrorLine text={l()} hdr={bars()[i] == null} cur={i === curLine()} group={groups().get(i)} />}</Index>
             </div>
             <textarea ref={ta} class="nb-ta" wrap={NB.wrap ? 'soft' : 'off'} maxLength={50000} spellcheck={false} autocapitalize="off" autocomplete="off"
-              placeholder={'[Zwrotka]\nPierwszy takt…'}
+              placeholder={tl('a.nb.placeholder')}
               onInput={onInput} onKeyDown={onKey} onBlur={flushNotebook} onPointerUp={keepCaretVisible}
               onScroll={() => { if (ta.scrollTop || ta.scrollLeft) { ta.scrollTop = 0; ta.scrollLeft = 0; } }} />
           </div>
@@ -246,7 +247,7 @@ function NotebookWindow() {
           </div>
         </div>
       </div>
-      <div class="resizer" onPointerDown={resize} title="Zmień rozmiar" />
+      <div class="resizer" onPointerDown={resize} title={tl('a.nb.resize')} />
     </div>
   );
 }
@@ -270,9 +271,9 @@ function MirrorLine(props: { text: string; hdr: boolean; cur: boolean; group: nu
 function Empty() {
   return (
     <div class="nb-empty">
-      <div class="nb-empty-t">Tekst utworu, takt po takcie</div>
-      <div class="hint">Każda linia to jeden takt — numer obok pokazuje, gdzie wypada na playliście. Pusta linia to takt przerwy, a linia w nawiasach, np. [Refren], to nagłówek. Podczas odtwarzania bieżący takt się podświetla.</div>
-      <button class="smallbtn" onClick={() => addPage()}>+ Nowa strona</button>
+      <div class="nb-empty-t">{tl('a.nb.emptyTitle')}</div>
+      <div class="hint">{tl('a.nb.emptyHint')}</div>
+      <button class="smallbtn" onClick={() => addPage()}>{tl('a.nb.addPage')}</button>
     </div>
   );
 }
@@ -291,10 +292,10 @@ function Tabs() {
     selectPage(pg.id);
     openMenu(e.clientX, e.clientY, [
       { t: 'title', label: pg.name },
-      { t: 'item', label: 'Zmień nazwę', kbd: '2× klik', act: () => setEditing(pg.id) },
-      { t: 'item', label: 'Nowa strona', act: () => addPage() },
+      { t: 'item', label: tl('a.nb.rename'), kbd: tl('a.nb.dbl'), act: () => setEditing(pg.id) },
+      { t: 'item', label: tl('a.nb.newPage'), act: () => addPage() },
       { t: 'sep' },
-      { t: 'item', label: 'Usuń stronę', danger: true, act: () => deletePage(pg.id) },
+      { t: 'item', label: tl('a.nb.deletePage'), danger: true, act: () => deletePage(pg.id) },
     ], 140);
   };
   /** Press on a tab: click selects, a drag sideways reorders. */
@@ -326,7 +327,7 @@ function Tabs() {
       <For each={pages()}>{(pg, i) => (
         <div class="nb-tab" classList={{ on: pg.id === curPage()?.id, dropL: drop() === i(), dropR: drop() === pages().length && i() === pages().length - 1 }}
           onPointerDown={e => down(e, pg)} onDblClick={() => setEditing(pg.id)} onContextMenu={e => menu(e, pg)}
-          title={pg.name + ' — od taktu ' + pg.startBar + ' · 2× klik = zmień nazwę · przeciągnij = kolejność · PPM = menu'}>
+          title={tl('a.nb.tabTip', { name: pg.name, bar: pg.startBar })}>
           <Show when={live(pg)}><span class="nb-live" /></Show>
           <Show when={editing() === pg.id} fallback={<span class="nb-tabname">{pg.name}</span>}>
             <input class="nb-rename" value={pg.name} maxLength={80} ref={el => queueMicrotask(() => { el.focus(); el.select(); })}
@@ -335,11 +336,11 @@ function Tabs() {
               onBlur={e => { renamePage(pg.id, e.currentTarget.value); setEditing(null); }} />
           </Show>
           <Show when={pg.id === curPage()?.id && editing() !== pg.id}>
-            <button class="nb-tabx" title="Usuń stronę (Ctrl+Z przywraca)" onPointerDown={e => e.stopPropagation()} onClick={() => deletePage(pg.id)}>×</button>
+            <button class="nb-tabx" title={tl('a.nb.deletePageTip')} onPointerDown={e => e.stopPropagation()} onClick={() => deletePage(pg.id)}>×</button>
           </Show>
         </div>
       )}</For>
-      <button class="nb-add" title="Nowa strona" onClick={() => addPage()}><Icon d="M12 5v14 M5 12h14" size={12} /></button>
+      <button class="nb-add" title={tl('a.nb.newPage')} onClick={() => addPage()}><Icon d="M12 5v14 M5 12h14" size={12} /></button>
     </div>
   );
 }

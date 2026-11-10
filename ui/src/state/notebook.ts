@@ -1,3 +1,4 @@
+import { t as tl } from '../lib/i18n';
 // The lyrics notebook ("Notatnik"): its window, view preferences and the edits.
 //
 // The text lives in the project (`project.notebook`) and changes only through `putNotebook`,
@@ -98,7 +99,7 @@ export function flushNotebook() {
   const { id, text } = pending; pending = null;
   const pg = pages().find(p => p.id === id);
   if (!pg || pg.text === text) return;
-  commit([{ op: 'putNotebook', notebook: withPage(notebook(), id, { text }) }], 'Tekst');
+  commit([{ op: 'putNotebook', notebook: withPage(notebook(), id, { text }) }], tl('a.nb.text'));
   writeBackup();
 }
 
@@ -114,9 +115,9 @@ export function addPage(): Id {
   flushNotebook();
   const ps = pages();
   let n = ps.length + 1;
-  while (ps.some(p => p.name === 'Strona ' + n)) n++;
-  const pg: LyricPage = { id: allocId(), name: 'Strona ' + n, startBar: 1, text: '' };
-  put({ pages: [...notebook().pages.map(p => ({ ...p })), pg] }, 'Nowa strona');
+  while (ps.some(p => p.name === tl('a.nb.pageName', { n }))) n++;
+  const pg: LyricPage = { id: allocId(), name: tl('a.nb.pageName', { n }), startBar: 1, text: '' };
+  put({ pages: [...notebook().pages.map(p => ({ ...p })), pg] }, tl('a.nb.newPage'));
   setNB('page', pg.id);
   return pg.id;
 }
@@ -124,28 +125,28 @@ export function renamePage(id: Id, name: string) {
   const v = name.trim().slice(0, 80);
   const pg = pages().find(p => p.id === id);
   if (!pg || !v || v === pg.name) return;
-  put(withPage(notebook(), id, { name: v }), 'Nazwa strony');
+  put(withPage(notebook(), id, { name: v }), tl('a.nb.pageNameLabel'));
 }
 export function setStartBar(id: Id, bar: number) {
   const pg = pages().find(p => p.id === id);
   const b = clamp(Math.round(bar), 1, 9999);
   if (!pg || !isFinite(bar) || b === pg.startBar) return;
-  put(withPage(notebook(), id, { startBar: b }), 'Początek strony');
-  say(pg.name + ': od taktu ' + b);
+  put(withPage(notebook(), id, { startBar: b }), tl('a.nb.pageStart'));
+  say(tl('a.nb.pageFrom', { name: pg.name, bar: b }));
 }
 export function deletePage(id: Id) {
   flushNotebook();
   const ps = pages(), i = ps.findIndex(p => p.id === id);
   if (i < 0) return;
   const name = ps[i].name;
-  put({ pages: ps.filter(p => p.id !== id).map(p => ({ ...p })) }, 'Usuń stronę');
+  put({ pages: ps.filter(p => p.id !== id).map(p => ({ ...p })) }, tl('a.nb.deletePage'));
   if (NB.page === id) setNB('page', ps[i + 1]?.id ?? ps[i - 1]?.id ?? null);
-  say('Usunięto stronę „' + name + '” — Ctrl+Z przywraca');
+  say(tl('a.nb.pageDeleted', { name }));
 }
 export function reorderPage(id: Id, to: number) {
   const ps = pages(), i = ps.findIndex(p => p.id === id);
   if (i < 0 || i === to) return;
-  put(movePage(notebook(), id, to), 'Kolejność stron');
+  put(movePage(notebook(), id, to), tl('a.nb.pageOrder'));
 }
 export function selectPage(id: Id) {
   if (NB.page === id) return;
@@ -201,7 +202,7 @@ export function restoreBackup(): boolean {
   const cur = notebookHash(S.project.notebook);
   if (b.base !== cur || notebookHash(b.nb) === cur) return false;
   savedHash = cur;
-  commit([{ op: 'putNotebook', notebook: b.nb }], 'Przywróć Notatnik');
-  say('Notatnik: przywrócono niezapisany tekst (Ctrl+Z cofa)');
+  commit([{ op: 'putNotebook', notebook: b.nb }], tl('a.nb.restore'));
+  say(tl('a.nb.restored'));
   return true;
 }

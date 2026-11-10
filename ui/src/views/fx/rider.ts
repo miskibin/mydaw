@@ -4,6 +4,7 @@
 import type { Fx } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
 import { clamp } from '../../lib/format';
+import { t as tr } from '../../lib/i18n';
 import { MONO10, MONO11, rgba, T, TeleGate, type Viz } from './common';
 
 const HN = 360;
@@ -66,9 +67,9 @@ export class RiderViz implements Viz {
 
   private label(g: CanvasRenderingContext2D, W: number) {
     g.font = MONO10; g.textAlign = 'right';
-    g.fillStyle = T.post; g.fillText('słowa', W - 120, 16);
-    g.fillStyle = T.amber; g.fillText('fraza', W - 70, 16);
-    g.fillStyle = T.green; g.fillText('korekta', W - 8, 16);
+    g.fillStyle = T.post; g.fillText(tr('c.viz.words'), W - 120, 16);
+    g.fillStyle = T.amber; g.fillText(tr('c.viz.phrase'), W - 70, 16);
+    g.fillStyle = T.green; g.fillText(tr('c.viz.correction'), W - 8, 16);
     g.textAlign = 'left';
   }
 }

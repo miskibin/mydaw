@@ -1,4 +1,5 @@
 import type { IconDefinition } from '@fortawesome/free-solid-svg-icons';
+import { t, type TranslationKey } from '../lib/i18n';
 import {
   faDrum, faGuitar, faHeadphones, faMicrophone, faMusic, faRecordVinyl, faWandMagicSparkles, faWaveSquare,
 } from '@fortawesome/free-solid-svg-icons';
@@ -6,9 +7,9 @@ import {
 /** Filled instrument glyph: viewBox + path (Font Awesome Free, CC BY 4.0, or our own 24×24 drawings). */
 type Glyph = { vb: string; d: string; label: string; eo?: boolean };
 
-const fa = (i: IconDefinition, label: string): Glyph => {
+const fa = (i: IconDefinition, label: TranslationKey): Glyph => {
   const [w, h, , , d] = i.icon;
-  return { vb: `0 0 ${w} ${h}`, d: Array.isArray(d) ? d.join(' ') : d, label };
+  return { vb: `0 0 ${w} ${h}`, d: Array.isArray(d) ? d.join(' ') : d, get label() { return t(label); } };
 };
 
 /** Own drawings where Font Awesome only has Pro icons (piano, bass guitar). */
@@ -17,16 +18,16 @@ const BASS = 'M20.2 1.8C20.9 1.1 22.1 1.1 22.8 1.8C23.4 2.4 23.5 3.3 23 4.1L20.6
 
 /** Track icons in picker order. Ids are saved in the project, never rename them. */
 export const INST_ICONS: Record<string, Glyph> = {
-  vocal: fa(faMicrophone, 'Wokal'),
-  guitar: fa(faGuitar, 'Gitara'),
-  bass: { vb: '0 0 24 24', d: BASS, label: 'Bas', eo: true },
-  piano: { vb: '0 0 24 24', d: PIANO, label: 'Pianino', eo: true },
-  drums: fa(faDrum, 'Perkusja'),
-  synth: fa(faWaveSquare, 'Syntezator'),
-  sample: fa(faRecordVinyl, 'Sample / loop'),
-  fx: fa(faWandMagicSparkles, 'Efekty'),
-  bus: fa(faHeadphones, 'Odsłuch / bus'),
-  other: fa(faMusic, 'Inne'),
+  vocal: fa(faMicrophone, 'b.ii.vocal'),
+  guitar: fa(faGuitar, 'b.ii.guitar'),
+  bass: { vb: '0 0 24 24', d: BASS, get label() { return t('b.ii.bass'); }, eo: true },
+  piano: { vb: '0 0 24 24', d: PIANO, get label() { return t('b.ii.piano'); }, eo: true },
+  drums: fa(faDrum, 'b.ii.drums'),
+  synth: fa(faWaveSquare, 'b.ii.synth'),
+  sample: fa(faRecordVinyl, 'b.ii.sample'),
+  fx: fa(faWandMagicSparkles, 'b.ii.fx'),
+  bus: fa(faHeadphones, 'b.ii.bus'),
+  other: fa(faMusic, 'b.ii.other'),
 };
 
 export function InstIcon(props: { id?: string | null; size?: number }) {
@@ -66,14 +67,15 @@ export function guessIcon(name: string | null | undefined): string | null {
 export const trackIcon = (t: { icon?: string | null; name: string }): string | null => t.icon ?? guessIcon(t.name);
 
 /** A Channel Rack row's icon: name first, then its built-in instrument, 'synth' or 'sample'. */
-export function channelIcon(c: { name: string; kind: 'inst' | 'sample' | 'synth'; inst?: string }): string {
+export function channelIcon(c: { name: string; kind: 'inst' | 'sample' | 'synth' | 'keys'; inst?: string }): string {
   const g = guessIcon(c.name); if (g) return g;
+  if (c.kind === 'keys') return 'piano';
   if (c.kind === 'inst') return c.inst === 'bass' ? 'bass' : 'drums';
   return c.kind === 'synth' ? 'synth' : 'sample';
 }
 
 /** A pattern's icon: name first, else the most used channel icon among its notes. */
-export function patternIcon(p: { name: string; notes: readonly { ch: number }[] }, chans: ReadonlyMap<number, { name: string; kind: 'inst' | 'sample' | 'synth'; inst?: string }>): string | null {
+export function patternIcon(p: { name: string; notes: readonly { ch: number }[] }, chans: ReadonlyMap<number, { name: string; kind: 'inst' | 'sample' | 'synth' | 'keys'; inst?: string }>): string | null {
   const g = guessIcon(p.name); if (g) return g;
   const n = new Map<string, number>();
   for (const x of p.notes) { const c = chans.get(x.ch); if (c) { const id = channelIcon(c); n.set(id, (n.get(id) ?? 0) + 1); } }

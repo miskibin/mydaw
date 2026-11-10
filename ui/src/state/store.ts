@@ -45,6 +45,26 @@ const [arrVersion, setArrVersion] = createSignal(0);
 export { arrVersion };
 const bumpProject = (arrangement = true) => batch(() => { setProjVersion(v => v + 1); if (arrangement) setArrVersion(v => v + 1); });
 const MIXER_ONLY = new Set<Op['op']>(['putFx', 'removeFx', 'moveFx', 'putInsert', 'removeInsert', 'putNotebook']);
+/** Not mixer edits, but nothing an arrangement canvas draws from the clip list either: the loop
+ *  range is read directly by the views that show it (a loop drag must not redraw every clip). */
+const NOT_ARRANGEMENT = new Set<Op['op']>([...MIXER_ONLY, 'setLoop']);
+
+/**
+ * Told about every arrangement change before it is applied: the local ops (with the project as it
+ * is before them), or `null` when the whole project was replaced from the engine. The playlist
+ * uses it to repaint only the clips an edit touched instead of the whole view.
+ */
+export type ArrangementListener = (ops: readonly Op[] | null, before: Project) => void;
+const arrListeners = new Set<ArrangementListener>();
+export function onArrangementChange(f: ArrangementListener): () => void {
+  arrListeners.add(f);
+  return () => { arrListeners.delete(f); };
+}
+const tellArrangement = (ops: readonly Op[] | null) => {
+  if (!arrListeners.size) return;
+  const before = rawOf(S.project) as Project;
+  for (const f of arrListeners) f(ops, before);
+};
 
 // ---- plain copies ----
 const rawOf = (x: unknown): unknown => (x != null && typeof x === 'object' && (x as Record<symbol, unknown>)[$RAW]) || x;
@@ -80,6 +100,7 @@ function fresh<T extends object>(v: T): T {
 }
 
 export function replaceState(dto: StateDto) {
+  tellArrangement(null);
   batch(() => {
     setS('project', reconcile(fresh(dto.project), { key: 'id', merge: true }));
     bumpProject();
@@ -204,8 +225,10 @@ function applyInPlace(p: Project, op: Op) {
 
 export function applyLocal(ops: Op[]) {
   if (!ops.length) return;
+  const arrangement = ops.some(op => !NOT_ARRANGEMENT.has(op.op));
+  if (arrangement) tellArrangement(ops);
   setS('project', produce(p => { for (const op of ops) applyInPlace(p, op); }));
-  bumpProject(ops.some(op => !MIXER_ONLY.has(op.op)));
+  bumpProject(arrangement);
   if (!S.dirty) setS('dirty', true);
 }
 

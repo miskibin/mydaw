@@ -134,9 +134,14 @@ Every effect has `mix` (0..1 dry/wet, default 1). Automation:
 kind `auto` with `ref` = automation id plays it (`offset` in beats into it).
 Targets: `{kind:"fx", fxId, param}` (catalog id, or `band:<i>:f|g|q` for EQ:
 f log 20–20k, g −30..30 dB, q log 0.1–18), `{kind:"mix", fxId}`,
-`{kind:"insertVol"|"insertPan", id}`, `{kind:"trackVol", id}`. `v` is 0..1;
-log parameters are normalised logarithmically, vol is the fader position, pan
-maps −1..1 to 0..1. While playing, the engine applies automation every block. New ids come from the
+`{kind:"insertVol"|"insertPan", id}`, `{kind:"trackVol", id}`,
+`{kind:"chanVol"|"chanPan", id}` (Channel Rack channel), `{kind:"synth", chanId, param}`
+(synth catalog id), `{kind:"keys", chanId, param:"release"|"dynamics"}` (release log
+40–3000 ms, dynamics 0–100 %), `{kind:"clipGain"|"clipPan", id}` (an audio clip; gain
+−24..+12 dB). `v` is 0..1; log parameters are normalised logarithmically, vol is the
+fader position, pan maps −1..1 to 0..1, choices snap to an option. While playing, the
+engine applies automation every block; channel and clip gain/pan glide across the block,
+synth parameters glide like an edit, and an edit during playback keeps the automated value. New ids come from the
 client: take them from `project.nextId` and increase locally (the engine bumps
 `nextId` past any id it sees).
 
@@ -238,6 +243,7 @@ f64 patBeat         // beats into the pattern the loop preview plays; −1 = sto
 | `denoise` | `[0..16]` learned noise floor dB per band, `[16..32]` gain applied per band dB (≤ 0); 16 log bands 50 Hz – 16 kHz. Total reduction in `grDb`. Adds `fft_size` (2048 at ≤ 64 kHz) samples of latency, compensated by PDC |
 | `tune` | `[0]` detected input Hz (0 = unvoiced), `[1]` target note Hz, `[2]` output Hz, `[3]` confidence 0..1, `[4]` input offset from target in cents, `[5]` correction applied in cents |
 | `voice` | `[0]` detected input Hz (0 = unvoiced), `[1]` output Hz, `[2]` confidence 0..1, `[3]` pitch shift applied in semitones. Same latency as `tune`, compensated by PDC; an effect's dry/wet (`fx.mix`) delays its dry path by the effect's latency, so blends line up |
+| `half` | `[0]` position in the loop window 0..1, `[1]` 1 = slowing down (0 = stopped, or passing the input through until the first window after a playhead jump), `[2]`/`[3]` gains of read heads A/B (crossfade), `[4]` speed divisor (1.5 / 2 / 4), `[5]` window in beats, `[6]` crossfade ms (negative = before the window start, Percussive/FX), `[7]`/`[8]` band edges Hz (0 = that side not split). Zero latency; follows the song and the pattern loop preview (`ProcessCtx` carries the preview's beat) |
 
 ## Take lanes and comping
 
@@ -474,3 +480,25 @@ The RMVPE model is not shipped: `f0_model_install` downloads it (URL,
 size, SHA-256 and licence link are constants in `crates/rmvpe`) to
 `<data>/Models/rmvpe.onnx`; `WAVE_RMVPE_MODEL` overrides the path.
 `crates/tune-bench` measures the whole pipeline (see `docs/cli.md`).
+
+## Updates and release notes
+
+The app updates itself from GitHub Releases (public repository: no token). See
+[releasing.md](releasing.md) for how a release is made and signed.
+
+* `app/src/updater.rs` wraps `tauri-plugin-updater`: `update_check` (finds a newer
+  `latest.json`), `update_download` (progress on the `update-progress` event, signature
+  verified, nothing restarts) and `update_install` (detaches plugin editors, stops audio, runs
+  the installer, restarts; on failure audio comes back and the old version keeps running).
+  `app_info`, `update_set_auto` and `update_mark_seen` read and write `settings.json`
+  (`seenVersion`, `noAutoUpdate`). Views reach them only through `backend.ts`
+  (`appInfo`, `updateCheck`, …); `api/mockUpdates.ts` is the browser mock with a fake newer release.
+* `ui/src/state/updateCtl.ts` is the state machine
+  (`idle → available → downloading → ready → installing`); `state/updates.ts` is its signal.
+  An automatic check (8 s after start, then every 6 h, can be switched off in Settings) never
+  opens a dialog, only a status-bar button; downloading happens in the background; the restart
+  needs a click and the unsaved-changes question.
+* **What's new** reads the `CHANGELOG.md` bundled into the UI (`lib/changelog.ts`) and opens
+  once at the first start of a new version, for every version since `seenVersion`. A fresh
+  install shows nothing; it can be reopened from Settings → General → Updates.
+* The updater is app-shell behaviour, not a project action, so it has no `wave` CLI command.

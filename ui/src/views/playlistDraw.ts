@@ -13,6 +13,9 @@ import { drawGlyph, guessIcon, patternIcon, trackIcon } from '../ui/instIcons';
 
 export interface View {
   offX: number; offY: number; W: number; H: number;
+  /** Grid point drawn at the canvas origin when it is not (`offX`, `offY`): a region of a larger
+   *  canvas is then painted with the very transform of a full paint (identical antialiasing). */
+  orgX?: number; orgY?: number;
   bw: number; snap: number; spb: number;
   tops: number[]; sel: Set<number>; editable: boolean; recArmedBg: boolean;
   /** automation clip being edited inline (points shown as handles), and its hovered point */
@@ -87,7 +90,7 @@ function patRects(p: Pattern, sig: string, offset: number, len: number, h: numbe
 export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: null | { track: number; clipStart: number; seconds: number; peaks: Float32Array; nPeaks: number; pass?: number }) {
   const { offX, offY, W, H, bw, tops } = v;
   g.save();
-  g.translate(-offX, -offY);
+  g.translate(-(v.orgX ?? offX), -(v.orgY ?? offY));
   const x0 = offX, x1 = offX + W, y0 = offY, y1 = offY + H;
   // lanes
   p.tracks.forEach((t: Track, i) => {
@@ -121,8 +124,7 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
   for (let b = b0; b <= b1; b++) if (b % 4) g.fillRect(Math.round(b * bw), y0, 1, gridBottom - y0);
   g.fillStyle = T.gridBar;
   for (let b = Math.floor(b0 / 4) * 4; b <= b1; b += 4) g.fillRect(Math.round(b * bw), y0, 1, gridBottom - y0);
-  // loop
-  if (p.loop) { g.fillStyle = rgba(T.green, 0.05); g.fillRect(p.loop.a * bw, y0, (p.loop.b - p.loop.a) * bw, gridBottom - y0); }
+  // (the loop range is shaded on the playlist's overlay canvas: moving it repaints no clip)
   // clips
   const { pats, chans, sigs, srcs, autos, comps, patIcons } = lookupsOf(p, v.ver);
   curChans = chans;

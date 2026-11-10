@@ -7,6 +7,9 @@
 // melody (`pitch_target`, previewed live while the parameters change, stored on Apply); the
 // reference pitch and its notes are drawn too, and stretches the alignment is unsure of are
 // marked — they are left uncorrected. Manual edits then apply on top of the target.
+import { lang, t } from '../lib/i18n';
+import type { TranslationKey } from '../lib/i18n';
+import { isTypingKey } from '../state/typingKeys';
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import type { Clip, ClipTune, F0ModelStatus, Op, PitchAnalysis, PitchTarget, RefTune } from '../api/types';
@@ -29,13 +32,13 @@ import { rgba, T, theme, themeVersion } from '../ui/theme';
 import { moveWindow } from './FxWindow';
 
 type Tool = 'main' | 'drift' | 'formant' | 'gain' | 'split' | 'pencil';
-const TOOLS: { id: Tool; key: string; label: string; icon: string; tip: string }[] = [
-  { id: 'main', key: '1', label: 'Wysokość', icon: 'M12 3v18 M7 8l5-5 5 5 M7 16l5 5 5-5', tip: 'Przeciągnij nutę ↕ — przyciąga do skali, Alt = swobodnie (centy) · 2× klik = podziel' },
-  { id: 'drift', key: '2', label: 'Dryf', icon: 'M3 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0', tip: 'Przeciągnij ↕ — spłaszcza wahania wysokości w nucie (0–100 %)' },
-  { id: 'formant', key: '3', label: 'Formant', icon: 'M4 18c3-12 5-12 8 0s5-8 8-8', tip: 'Przeciągnij ↕ — przesuwa formanty (barwę) w centach' },
-  { id: 'gain', key: '4', label: 'Głośność', icon: 'M4 9h4l5-4v14l-5-4H4z M17 9a4 4 0 0 1 0 6', tip: 'Przeciągnij ↕ — głośność nuty w dB' },
-  { id: 'split', key: '5', label: 'Podział', icon: 'M12 3v18 M5 8h4 M15 16h4', tip: 'Klik na nucie = podziel w tym miejscu · klik na podziale = scal' },
-  { id: 'pencil', key: '6', label: 'Ołówek', icon: 'M4 20l4.5-1L19 8.5 15.5 5 5 15.5z', tip: 'Rysuj przebieg wysokości · Alt + przeciągnij = zmaż rysunek' },
+const TOOLS: { id: Tool; key: string; label: TranslationKey; icon: string; tip: TranslationKey }[] = [
+  { id: 'main', key: '1', label: 'd.pitch.tool.main', icon: 'M12 3v18 M7 8l5-5 5 5 M7 16l5 5 5-5', tip: 'd.pitch.tip.main' },
+  { id: 'drift', key: '2', label: 'd.pitch.tool.drift', icon: 'M3 12c2-4 4-4 6 0s4 4 6 0 4-4 6 0', tip: 'd.pitch.tip.drift' },
+  { id: 'formant', key: '3', label: 'd.pitch.tool.formant', icon: 'M4 18c3-12 5-12 8 0s5-8 8-8', tip: 'd.pitch.tip.formant' },
+  { id: 'gain', key: '4', label: 'd.pitch.tool.gain', icon: 'M4 9h4l5-4v14l-5-4H4z M17 9a4 4 0 0 1 0 6', tip: 'd.pitch.tip.gain' },
+  { id: 'split', key: '5', label: 'd.pitch.tool.split', icon: 'M12 3v18 M5 8h4 M15 16h4', tip: 'd.pitch.tip.split' },
+  { id: 'pencil', key: '6', label: 'd.pitch.tool.pencil', icon: 'M4 20l4.5-1L19 8.5 15.5 5 5 15.5z', tip: 'd.pitch.tip.pencil' },
 ];
 const SCALES = ['Chromatic', 'Major', 'Minor', 'Maj pent', 'Min pent'];
 const KW = 46, RH = 22, BH = 48;
@@ -185,7 +188,7 @@ function PitchBody(props: { clipId: number }) {
   const layer = new Layer();
   let dirty = true;
   createEffect(() => {
-    viewV(); sel(); hover(); tool(); key(); scale(); marq(); pencilLive(); an(); peaksVersion(); edited(); themeVersion(); activeTarget(); lowRuns();
+    viewV(); sel(); hover(); tool(); key(); scale(); marq(); pencilLive(); an(); peaksVersion(); edited(); themeVersion(); lang(); activeTarget(); lowRuns();
     JSON.stringify(c().tune ?? null); c().offset; c().len; c().gain; S.project.bpm; src()?.color;
     dirty = true;
   });
@@ -204,7 +207,7 @@ function PitchBody(props: { clipId: number }) {
       if (ts >= 0 && X(ts) >= KW && X(ts) <= W) { phead.style.opacity = '1'; phead.style.transform = `translateX(${X(ts)}px)`; }
       else if (phead.style.opacity !== '0') phead.style.opacity = '0';
       const busy = !inGesture() && clipPeaksPending(c());
-      const txt = !an() ? '' : busy ? 'renderuję…' : '';
+      const txt = !an() ? '' : busy ? t('d.pitch.rendering') : '';
       if (status.textContent !== txt) status.textContent = txt;
     });
     onCleanup(stop);
@@ -354,7 +357,7 @@ function PitchBody(props: { clipId: number }) {
       g.fill();
     }
     for (const [fa, fb] of runs) { g.fillStyle = rgba(T.amber, 0.12); g.fillRect(X(fa / a.rate), by + 1, X(fb / a.rate) - X(fa / a.rate), BH - 1); hatch(X(fa / a.rate), X(fb / a.rate), by + 1, H, 0.35); }
-    g.font = '600 8px "Geist Variable", sans-serif'; g.fillStyle = T.fg5; g.fillText('BEZDŹWIĘCZNE (S, ODDECH) — NIETKNIĘTE', KW + 6, by + 11);
+    g.font = '600 8px "Geist Variable", sans-serif'; g.fillStyle = T.fg5; g.fillText(t('d.pitch.unvoiced'), KW + 6, by + 11);
     // marquee
     const mq = marq();
     if (mq) { g.fillStyle = rgba(T.blue, 0.1); g.strokeStyle = T.blue; g.lineWidth = 1; const x = Math.min(mq.x0, mq.x1), y = Math.min(mq.y0, mq.y1); g.fillRect(x, y, Math.abs(mq.x1 - mq.x0), Math.abs(mq.y1 - mq.y0)); g.strokeRect(x + 0.5, y + 0.5, Math.abs(mq.x1 - mq.x0), Math.abs(mq.y1 - mq.y0)); }
@@ -387,20 +390,20 @@ function PitchBody(props: { clipId: number }) {
     e.preventDefault();
     if (y < RH) { A.seek(c().start + (tAt(x) - t0()) / spb()); return; }
     if (x < KW) return;
-    const i = hitNote(x, y), sp = hitSplit(x, y), t = tool();
-    if (t === 'pencil') return pencil(e);
-    if (t === 'split' || (t === 'main' && dblCheck('pnote' + props.clipId))) {
-      if (sp >= 0) { const nt = mergeNotes(tuneOrInit(), sp); if (nt) { commit([putTune(nt)], 'Scal nuty'); setSel(new Set<number>()); say('Scalono nuty'); } return; }
-      if (i >= 0) { const nt = splitNote(tuneOrInit(), i, tAt(x)); if (nt) { commit([putTune(nt)], 'Podziel nutę'); setSel(new Set([i + 1])); say('Podzielono nutę w ' + tAt(x).toFixed(3) + ' s'); } else say('Za blisko krawędzi nuty (min. ' + MIN_NOTE * 1000 + ' ms)'); }
+    const i = hitNote(x, y), sp = hitSplit(x, y), tk = tool();
+    if (tk === 'pencil') return pencil(e);
+    if (tk === 'split' || (tk === 'main' && dblCheck('pnote' + props.clipId))) {
+      if (sp >= 0) { const nt = mergeNotes(tuneOrInit(), sp); if (nt) { commit([putTune(nt)], t('d.pitch.op.merge')); setSel(new Set<number>()); say(t('d.pitch.say.merged')); } return; }
+      if (i >= 0) { const nt = splitNote(tuneOrInit(), i, tAt(x)); if (nt) { commit([putTune(nt)], t('d.pitch.op.split')); setSel(new Set([i + 1])); say(t('d.pitch.say.split', { s: tAt(x).toFixed(3) })); } else say(t('d.pitch.say.tooclose', { ms: MIN_NOTE * 1000 })); }
       return;
     }
     if (i < 0) return marquee(e, x, y);
     if (e.ctrlKey || e.metaKey || e.shiftKey) { const s2 = new Set(sel()); s2.has(i) ? s2.delete(i) : s2.add(i); setSel(s2); return; }
     const k0 = key(), m0 = mask();
-    if (t === 'main') editDrag(e, i, 'Wysokość nuty', (n, k, dy, ev) => ({ shift: dragShift(centers()[k] ?? 0, n.shift, dy / rowH() * 100, k0, m0, ev.altKey) }));
-    else if (t === 'drift') editDrag(e, i, 'Dryf', (n, _k, dy) => ({ drift: clamp(n.drift + dy / 120, 0, 1) }));
-    else if (t === 'formant') editDrag(e, i, 'Formant', (n, _k, dy) => ({ formant: Math.round(clamp(n.formant + dy * 3, -1200, 1200)) }));
-    else if (t === 'gain') editDrag(e, i, 'Głośność nuty', (n, _k, dy) => ({ gain: Math.round(clamp(n.gain + dy * 0.1, -24, 12) * 10) / 10 }));
+    if (tk === 'main') editDrag(e, i, t('d.pitch.op.pitch'), (n, k, dy, ev) => ({ shift: dragShift(centers()[k] ?? 0, n.shift, dy / rowH() * 100, k0, m0, ev.altKey) }));
+    else if (tk === 'drift') editDrag(e, i, t('d.pitch.op.drift'), (n, _k, dy) => ({ drift: clamp(n.drift + dy / 120, 0, 1) }));
+    else if (tk === 'formant') editDrag(e, i, t('d.pitch.op.formant'), (n, _k, dy) => ({ formant: Math.round(clamp(n.formant + dy * 3, -1200, 1200)) }));
+    else if (tk === 'gain') editDrag(e, i, t('d.pitch.op.gain'), (n, _k, dy) => ({ gain: Math.round(clamp(n.gain + dy * 0.1, -24, 12) * 10) / 10 }));
   };
   const marquee = (e: PointerEvent, x: number, y: number) => {
     const add = e.ctrlKey || e.metaKey || e.shiftKey, base = add ? new Set(sel()) : new Set<number>();
@@ -413,7 +416,7 @@ function PitchBody(props: { clipId: number }) {
       const s2 = new Set(base);
       notes().forEach((n, i) => { const p = pitchOf(i); if (p != null && n.end > ta && n.start < tb && p + 0.5 > ma && p - 0.5 < mb) s2.add(i); });
       setSel(s2);
-    }, () => { setMarq(null); if (sel().size) say('Zaznaczono ' + sel().size + ' nut'); }, 'crosshair');
+    }, () => { setMarq(null); if (sel().size) say(t('d.pitch.say.selected', { n: sel().size })); }, 'crosshair');
   };
   const pan = (e: PointerEvent) => {
     e.preventDefault();
@@ -440,8 +443,8 @@ function PitchBody(props: { clipId: number }) {
       if (pts.length < 2 && !erase) return;
       const base = tuneOrInit(), ta = Math.min(...pts.map(p => p[0])), tb = Math.max(...pts.map(p => p[0]));
       const nt: ClipTune = { ...base, pencil: erase ? erasePencil(base.pencil, ta, tb) : addPencil(base.pencil, pts) };
-      commit([putTune(nt)], erase ? 'Zmaż ołówek' : 'Ołówek');
-      say(erase ? 'Zmazano rysunek wysokości' : 'Narysowano przebieg wysokości (' + (tb - ta).toFixed(2) + ' s)');
+      commit([putTune(nt)], erase ? t('d.pitch.op.erase') : t('d.pitch.op.pencil'));
+      say(erase ? t('d.pitch.say.erased') : t('d.pitch.say.drew', { s: (tb - ta).toFixed(2) }));
     }, 'crosshair');
   };
   const move = (e: PointerEvent) => {
@@ -467,10 +470,10 @@ function PitchBody(props: { clipId: number }) {
     bumpView();
   };
   const onKey = (e: KeyboardEvent) => {
-    if ((e.target as HTMLElement).tagName === 'INPUT') return;
+    if ((e.target as HTMLElement).tagName === 'INPUT' || isTypingKey(e)) return;
     const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
     const tl = TOOLS.find(x => x.key === e.key);
-    if (tl && !m) { e.stopPropagation(); setTool(tl.id); say('Narzędzie: ' + tl.label); return; }
+    if (tl && !m) { e.stopPropagation(); setTool(tl.id); say(t('d.pitch.say.tool', { name: t(tl.label) })); return; }
     if (m && k === 'a') { e.preventDefault(); e.stopPropagation(); setSel(new Set(notes().map((_, i) => i))); return; }
     if (e.key === 'Escape' && sel().size) { e.stopPropagation(); setSel(new Set<number>()); return; }
     if ((e.key === 'Delete' || e.key === 'Backspace') && sel().size) { e.preventDefault(); e.stopPropagation(); resetNotes(); return; }
@@ -483,21 +486,21 @@ function PitchBody(props: { clipId: number }) {
   const correct = () => {
     const a = an(); if (!a) return;
     const nt = correctPitch(tuneOrInit(), a, scope(), centerPct(), driftPct(), key(), mask());
-    commit([putTune(nt)], 'Popraw wysokość');
-    say('Poprawiono ' + scope().length + ' nut · centrum ' + centerPct() + '% · dryf ' + driftPct() + '% · ' + NOTE_NAMES[key()] + ' ' + SCALES[scale()]);
+    commit([putTune(nt)], t('d.pitch.op.correct'));
+    say(t('d.pitch.say.corrected', { n: scope().length, c: centerPct(), d: driftPct(), key: NOTE_NAMES[key()], scale: SCALES[scale()] }));
   };
   const applyRef = () => {
-    const d = draft(), t = target(); if (!d || !t || t.reason) return;
+    const d = draft(), tg = target(); if (!d || !tg || tg.reason) return;
     const base = tune() ? plain(tune()!) : { notes: [], pencil: [] };
-    commit([putTune({ ...base, reference: withKey(d) })], 'Dopasuj do referencji');
+    commit([putTune({ ...base, reference: withKey(d) })], t('d.pitch.op.match'));
     const name = S.project.sources.find(s => s.id === d.source)?.name ?? '';
-    say('Dopasowano do „' + name + '” · korekcja ' + Math.round(d.correction * 100) + '% · vibrato ' + Math.round(d.vibrato * 100) + '% · wpływ ' + Math.round(d.influence * 100) + '%');
+    say(t('d.pitch.say.matched', { name, c: Math.round(d.correction * 100), v: Math.round(d.vibrato * 100), i: Math.round(d.influence * 100) }));
   };
   const offRef = () => {
-    const t = tune(); if (!t?.reference) return;
-    const rest: ClipTune = { ...plain(t), reference: null };
-    commit([putTune(rest.notes.length || rest.pencil?.length ? rest : null)], 'Wyłącz referencję');
-    say('Wyłączono dopasowanie do referencji — ręczne zmiany zostają');
+    const tu = tune(); if (!tu?.reference) return;
+    const rest: ClipTune = { ...plain(tu), reference: null };
+    commit([putTune(rest.notes.length || rest.pencil?.length ? rest : null)], t('d.pitch.op.refoff'));
+    say(t('d.pitch.say.refoff'));
   };
   const pickMode = (i: number) => {
     if (i === 0 && applied()) offRef();
@@ -513,19 +516,19 @@ function PitchBody(props: { clipId: number }) {
   const installModel = () => {
     setAskModel(false); setDl(0);
     be().f0ModelInstall()
-      .then(st => { setModel(st); setDl(null); refreshAnalysis(); say('RMVPE gotowy — wysokość przeanalizowana od nowa'); })
-      .catch(e => { setDl(null); say('Pobieranie RMVPE nie powiodło się: ' + String(e?.message ?? e)); });
+      .then(st => { setModel(st); setDl(null); refreshAnalysis(); say(t('d.pitch.say.rmvpe')); })
+      .catch(e => { setDl(null); say(t('d.pitch.say.rmvpefail', { err: String(e?.message ?? e) })); });
   };
   const resetNotes = () => {
     if (!tune()) return;
     if (!sel().size) {
       const r = tune()!.reference;
-      commit([putTune(r ? { notes: [], pencil: [], reference: r } : null)], 'Reset wysokości');
-      say(r ? 'Usunięto ręczne zmiany — dopasowanie do referencji zostaje' : 'Usunięto wszystkie zmiany wysokości');
+      commit([putTune(r ? { notes: [], pencil: [], reference: r } : null)], t('d.pitch.op.reset'));
+      say(t(r ? 'd.pitch.say.reset1' : 'd.pitch.say.reset2'));
       return;
     }
     const nt = editNotes(tuneOrInit(), sel(), () => ({ shift: 0, drift: 0, formant: 0, gain: 0 }));
-    commit([putTune(nt)], 'Reset nut'); say('Zresetowano ' + sel().size + ' nut');
+    commit([putTune(nt)], t('d.pitch.op.resetnotes')); say(t('d.pitch.say.resetn', { n: sel().size }));
   };
   const previewing = () => U.previewing;
   const resize = (e: PointerEvent) => {
@@ -539,77 +542,77 @@ function PitchBody(props: { clipId: number }) {
       onKeyDown={onKey} data-pitched>
       <div class="winhd" onPointerDown={e => moveWindow(e, () => E(), (x, y) => setU('pitchEd', ed => ed && { ...ed, x, y }))}>
         <span class="tile" style={{ width: '20px', height: '20px', background: FXMETA.tune.color + '26', color: FXMETA.tune.color }}><Icon d={FXMETA.tune.icon} size={13} /></span>
-        <span class="title">Edytor wysokości</span>
+        <span class="title">{t('d.pitch.title')}</span>
         <span style={{ width: '6px', height: '6px', 'border-radius': '2px', background: src()?.color ?? 'var(--fg5)' }} />
         <span class="sub">{src()?.name ?? ''} · {S.project.tracks[c().track]?.name ?? ''}</span>
         <span ref={status} class="rendering" />
         <div style={{ flex: 1 }} />
-        <button class="closebtn" title="Zamknij (Esc)" onClick={A.closePitchEditor}>×</button>
+        <button class="closebtn" title={t('d.pitch.close')} onClick={A.closePitchEditor}>×</button>
       </div>
       <div class="ptools">
-        <Segmented small label="Tryb" options={['Ręcznie', 'Do referencji']} value={mode} pick={pickMode} color={FXMETA.tune.color}
-          title="Ręcznie: edytujesz nuty sam · Do referencji (Tune to Reference): wysokość z innego wykonania tej samej melodii" />
+        <Segmented small label={t('d.pitch.mode')} options={[t('d.pitch.mode.manual'), t('d.pitch.mode.ref')]} value={mode} pick={pickMode} color={FXMETA.tune.color}
+          title={t('d.pitch.mode.tip')} />
         <div class="vsep" />
         <div class="seg tools">
           <For each={TOOLS}>{tl => (
-            <button classList={{ on: tool() === tl.id }} title={tl.label + ' (' + tl.key + ') — ' + tl.tip} onClick={() => setTool(tl.id)}>
+            <button classList={{ on: tool() === tl.id }} title={t(tl.label) + ' (' + tl.key + ') — ' + t(tl.tip)} onClick={() => setTool(tl.id)}>
               <Icon d={tl.icon} size={14} />
             </button>
           )}</For>
         </div>
-        <span class="toolname">{TOOLS.find(t => t.id === tool())!.label}</span>
+        <span class="toolname">{t(TOOLS.find(x => x.id === tool())!.label)}</span>
         <div class="vsep" />
-        <Segmented small label="Tonacja" options={NOTE_NAMES} value={key} pick={setKey} color={FXMETA.tune.color} title="Do tej skali przyciąga narzędzie Wysokość i makro" />
+        <Segmented small label={t('d.pitch.key')} options={NOTE_NAMES} value={key} pick={setKey} color={FXMETA.tune.color} title={t('d.pitch.key.tip')} />
         <Segmented small options={SCALES} value={scale} pick={setScale} color={FXMETA.tune.color} />
         <div class="vsep" />
-        <div class="macro" title="Makro: przesuwa środek nut do najbliższej nuty skali i spłaszcza dryf">
-          <NumField label="CENTRUM" width={62} value={centerPct} text={v => Math.round(v) + '%'} parse={parseNum} drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => setCenterPct(Math.round(clamp(v, 0, 100)))} />
-          <NumField label="DRYF" width={52} value={driftPct} text={v => Math.round(v) + '%'} parse={parseNum} drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => setDriftPct(Math.round(clamp(v, 0, 100)))} />
-          <button class="smallbtn primary" disabled={!an()} onClick={correct}>Popraw wysokość{sel().size ? ' (' + sel().size + ')' : ''}</button>
+        <div class="macro" title={t('d.pitch.macro.tip')}>
+          <NumField label={t('d.pitch.center')} width={62} value={centerPct} text={v => Math.round(v) + '%'} parse={parseNum} drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => setCenterPct(Math.round(clamp(v, 0, 100)))} />
+          <NumField label={t('d.pitch.drift')} width={52} value={driftPct} text={v => Math.round(v) + '%'} parse={parseNum} drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => setDriftPct(Math.round(clamp(v, 0, 100)))} />
+          <button class="smallbtn primary" disabled={!an()} onClick={correct}>{t('d.pitch.op.correct')}{sel().size ? ' (' + sel().size + ')' : ''}</button>
         </div>
-        <button class="smallbtn" disabled={!tune()} title={sel().size ? 'Zeruj zmiany zaznaczonych nut (Del)' : 'Usuń wszystkie zmiany wysokości tego klipu'} onClick={resetNotes}>{sel().size ? 'Reset nut' : 'Reset'}</button>
+        <button class="smallbtn" disabled={!tune()} title={sel().size ? t('d.pitch.reset.tip1') : t('d.pitch.reset.tip2')} onClick={resetNotes}>{sel().size ? t('d.pitch.reset.notes') : t('d.pitch.reset')}</button>
         <div style={{ flex: 1 }} />
-        <button class="smallbtn" classList={{ playing: previewing() }} onClick={() => previewing() ? be().previewStop() : be().previewClip(c().id).catch(e => say(String(e)))}>{previewing() ? 'Stop' : 'Podgląd'}</button>
-        <button class="iconbtn" title="Dopasuj widok (F)" onClick={() => fitView()}><Icon d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" size={13} /></button>
+        <button class="smallbtn" classList={{ playing: previewing() }} onClick={() => previewing() ? be().previewStop() : be().previewClip(c().id).catch(e => say(String(e)))}>{previewing() ? t('d.pitch.stop') : t('d.pitch.preview')}</button>
+        <button class="iconbtn" title={t('d.pitch.fit.tip')} onClick={() => fitView()}><Icon d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5" size={13} /></button>
       </div>
       <Show when={mode() === 1}>
         <div class="ptools refrow">
-          <Show when={refSources().length && draft()} fallback={<span class="refnote">Zaimportuj do projektu nagranie referencyjne (np. acapellę tej samej melodii) — pojawi się tutaj.</span>}>
-            <label class="reflab" title="Inne wykonanie tej samej melodii (acapella). Tempo może się różnić — nagranie zostanie dopasowane w czasie.">
-              <span>REFERENCJA</span>
+          <Show when={refSources().length && draft()} fallback={<span class="refnote">{t('d.pitch.refnote.empty')}</span>}>
+            <label class="reflab" title={t('d.pitch.ref.tip')}>
+              <span>{t('d.pitch.reference')}</span>
               <select class="sel" value={String(draft()!.source)} onChange={e => patchDraft({ source: +e.currentTarget.value })}>
                 <For each={refSources()}>{s => <option value={String(s.id)}>{s.name}</option>}</For>
               </select>
             </label>
-            <NumField label="KOREKCJA" width={64} title="Jak mocno ciągnąć wysokość do celu (0 = bez zmian)" value={() => Math.round(draft()!.correction * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
+            <NumField label={t('d.pitch.correction')} width={64} title={t('d.pitch.correction.tip')} value={() => Math.round(draft()!.correction * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
               drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => patchDraft({ correction: clamp(Math.round(v), 0, 100) / 100 })} />
-            <NumField label="VIBRATO" width={58} title="Ile własnego vibrato i przejść śpiewaka zachować" value={() => Math.round(draft()!.vibrato * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
+            <NumField label="VIBRATO" width={58} title={t('d.pitch.vibrato.tip')} value={() => Math.round(draft()!.vibrato * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
               drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => patchDraft({ vibrato: clamp(Math.round(v), 0, 100) / 100 })} />
-            <NumField label="WPŁYW REF." width={66} title="Centra nut: 100% z referencji, 0% najbliższa nuta skali (Tonacja)" value={() => Math.round(draft()!.influence * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
+            <NumField label={t('d.pitch.influence')} width={66} title={t('d.pitch.influence.tip')} value={() => Math.round(draft()!.influence * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
               drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={v => patchDraft({ influence: clamp(Math.round(v), 0, 100) / 100 })} />
-            <Segmented small label="Oktawa" options={['Auto', '−12', '0', '+12']} value={() => [null, -12, 0, 12].indexOf(draft()!.octave ?? null)}
-              pick={i => patchDraft({ octave: [null, -12, 0, 12][i] })} color={FXMETA.tune.color} title="Przesunięcie referencji; Auto wybiera oktawę najbliższą śpiewakowi" />
-            <button class="smallbtn primary" disabled={!pending() || !target() || !!target()?.reason || tgtBusy()} onClick={applyRef}>{applied() ? 'Zastosuj zmiany' : 'Zastosuj'}</button>
-            <Show when={applied()}><button class="smallbtn" onClick={offRef} title="Wróć do wysokości śpiewaka (ręczne zmiany zostają)">Wyłącz</button></Show>
+            <Segmented small label={t('d.pitch.octave')} options={[t('d.pitch.auto'), '−12', '0', '+12']} value={() => [null, -12, 0, 12].indexOf(draft()!.octave ?? null)}
+              pick={i => patchDraft({ octave: [null, -12, 0, 12][i] })} color={FXMETA.tune.color} title={t('d.pitch.octave.tip')} />
+            <button class="smallbtn primary" disabled={!pending() || !target() || !!target()?.reason || tgtBusy()} onClick={applyRef}>{applied() ? t('d.pitch.apply.changes') : t('d.pitch.apply')}</button>
+            <Show when={applied()}><button class="smallbtn" onClick={offRef} title={t('d.pitch.off.tip')}>{t('d.pitch.off')}</button></Show>
             <span class="refnote" classList={{ err: !!tgtErr() || !!target()?.reason }}>
-              {tgtBusy() ? 'dopasowuję…'
-                : tgtErr() ? 'Błąd: ' + tgtErr()
-                : target()?.reason ? 'Bez korekcji: ' + (target()!.reason === 'the reference does not match this take' ? 'referencja nie pasuje do tego nagrania' : target()!.reason)
-                : target() ? 'dopasowanie ' + Math.round(target()!.score * 100) + '%' + (target()!.octave ? ' · oktawa ' + (target()!.octave > 0 ? '+' : '') + target()!.octave : '')
-                  + (lowRuns().length ? ' · ' + lowRuns().length + ' niepewn' + (lowRuns().length === 1 ? 'y fragment' : 'e fragmenty') + ' bez korekcji' : '')
+              {tgtBusy() ? t('d.pitch.matching')
+                : tgtErr() ? t('d.pitch.error', { err: tgtErr()! })
+                : target()?.reason ? t('d.pitch.nocorr', { why: target()!.reason === 'the reference does not match this take' ? t('d.pitch.mismatch') : target()!.reason! })
+                : target() ? t('d.pitch.fit', { n: Math.round(target()!.score * 100) }) + (target()!.octave ? t('d.pitch.fit.oct', { o: (target()!.octave > 0 ? '+' : '') + target()!.octave }) : '')
+                  + (lowRuns().length ? t(lowRuns().length === 1 ? 'd.pitch.low.one' : 'd.pitch.low.many', { n: lowRuns().length }) : '')
                 : ''}
             </span>
           </Show>
           <div style={{ flex: 1 }} />
-          <span class="reflegend"><i style={{ background: 'var(--fg4)' }} />oryginał <i class="dash" />referencja <i style={{ background: FXMETA.tune.color }} />wynik</span>
+          <span class="reflegend"><i style={{ background: 'var(--fg4)' }} />{t('d.pitch.legend.orig')} <i class="dash" />{t('d.pitch.legend.ref')} <i style={{ background: FXMETA.tune.color }} />{t('d.pitch.legend.out')}</span>
           <Show when={model()}>{m => (
-            <span class="detchip" title={'Detektor wysokości: ' + (m().backend === 'rmvpe' ? 'RMVPE (sieć neuronowa)' : 'YIN (wbudowany)') + (m().error ? ' · ' + m().error : '')}>
+            <span class="detchip" title={t('d.pitch.det', { name: m().backend === 'rmvpe' ? t('d.pitch.det.rmvpe') : t('d.pitch.det.yin') }) + (m().error ? ' · ' + m().error : '')}>
               {m().backend === 'rmvpe' ? 'RMVPE' : 'YIN'}
             </span>
           )}</Show>
           <Show when={model() && !model()!.installed}>
-            <button class="smallbtn" disabled={dl() != null} onClick={() => setAskModel(true)} title="Dokładniejszy detektor wysokości (opcjonalny, licencja badawcza)">
-              {dl() != null ? 'Pobieram… ' + Math.round(dl()! * 100) + '%' : 'Pobierz RMVPE (362 MB)'}
+            <button class="smallbtn" disabled={dl() != null} onClick={() => setAskModel(true)} title={t('d.pitch.dl.tip')}>
+              {dl() != null ? t('d.pitch.dl.busy', { n: Math.round(dl()! * 100) }) : t('d.pitch.dl')}
             </button>
           </Show>
         </div>
@@ -618,20 +621,20 @@ function PitchBody(props: { clipId: number }) {
         <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}
           onPointerDown={down} onPointerMove={move} onPointerLeave={() => setHover(null)} onWheel={wheel} onContextMenu={e => e.preventDefault()} />
         <div ref={phead} class="pphead" />
-        <Show when={!an() && !err()}><div class="pstate"><span class="spin" />Analizuję wysokość…</div></Show>
-        <Show when={err()}><div class="pstate err">Nie udało się przeanalizować: {err()} <button class="smallbtn" onClick={load}>Spróbuj ponownie</button></div></Show>
+        <Show when={!an() && !err()}><div class="pstate"><span class="spin" />{t('d.pitch.analyzing')}</div></Show>
+        <Show when={err()}><div class="pstate err">{t('d.pitch.anfail', { err: err()! })} <button class="smallbtn" onClick={load}>{t('d.pitch.retry')}</button></div></Show>
         <Show when={askModel() && model()}>{m => (
           <div class="pstate">
             <div class="consent">
-              <b>Pobrać model RMVPE ({Math.round(m().bytes / 1e6)} MB)?</b>
+              <b>{t('d.pitch.ask', { mb: Math.round(m().bytes / 1e6) })}</b>
               <p>{m().licenseNote}</p>
               <p class="mono sel-text">{m().licenseUrl}</p>
-              <p class="mono">Suma SHA-256 sprawdzana po pobraniu · zapis: {m().path}</p>
+              <p class="mono">{t('d.pitch.ask.sha', { path: m().path })}</p>
               <div class="row">
-                <button class="smallbtn" onClick={() => navigator.clipboard?.writeText(m().licenseUrl).then(() => say('Skopiowano link do licencji'))}>Kopiuj link</button>
+                <button class="smallbtn" onClick={() => navigator.clipboard?.writeText(m().licenseUrl).then(() => say(t('d.pitch.say.licensecopied')))}>{t('d.pitch.copylink')}</button>
                 <div style={{ flex: 1 }} />
-                <button class="smallbtn" onClick={() => setAskModel(false)}>Anuluj</button>
-                <button class="smallbtn primary" onClick={installModel}>Pobierz i używaj</button>
+                <button class="smallbtn" onClick={() => setAskModel(false)}>{t('d.pitch.cancel')}</button>
+                <button class="smallbtn primary" onClick={installModel}>{t('d.pitch.dlinstall')}</button>
               </div>
             </div>
           </div>
@@ -639,10 +642,10 @@ function PitchBody(props: { clipId: number }) {
       </div>
       <div class="pstatus mono">
         <span>{an() ? notes().length + ' nut' : ''}{sel().size ? ' · zaznaczone ' + sel().size : ''}</span>
-        <span>{TOOLS.find(t => t.id === tool())!.tip}</span>
-        <span>Ctrl+kółko = zoom · kółko = góra/dół · Shift+kółko = przewiń · F = dopasuj</span>
+        <span>{t(TOOLS.find(x => x.id === tool())!.tip)}</span>
+        <span>{t('d.pitch.hint')}</span>
       </div>
-      <div class="resizer" onPointerDown={resize} title="Zmień rozmiar" />
+      <div class="resizer" onPointerDown={resize} title={t('d.pitch.resize')} />
     </div>
   );
 }

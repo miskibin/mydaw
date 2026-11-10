@@ -1,9 +1,9 @@
-//! `mydaw-plugin-scan` -- finding out what is inside a plugin without betting the
+//! `wave-plugin-scan` -- finding out what is inside a plugin without betting the
 //! DAW on it.
 //!
-//! Both of MYDAW's plugin hosts have the same problem and it is not a format
+//! Both of WAVE's plugin hosts have the same problem and it is not a format
 //! problem: reading a module's plugin list means running a stranger's code in
-//! your process. `mydaw-plugin-host-clap` and `mydaw-plugin-host-vst3` differ in
+//! your process. `wave-plugin-host-clap` and `wave-plugin-host-vst3` differ in
 //! every detail of *how* they read a module and in none of the details of what to
 //! do about that, so the "what to do about it" lives here once:
 //!
@@ -448,7 +448,7 @@ fn timeout_message(timeout: Duration) -> String {
 /// a plugin browser.
 fn in_process_hang_message() -> String {
     "did not answer within the deadline and there was no scan worker to contain it, so it is \
-     holding this process's loader lock: nothing after it can be opened until MYDAW restarts."
+     holding this process's loader lock: nothing after it can be opened until WAVE restarts."
         .to_owned()
 }
 
@@ -468,7 +468,7 @@ fn read_module_with_deadline<T: ScanTarget>(
     let owned = module.to_path_buf();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let spawned = std::thread::Builder::new()
-        .name("mydaw-scan-inline".to_owned())
+        .name("wave-scan-inline".to_owned())
         .spawn(move || {
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| T::read_module(&owned)))

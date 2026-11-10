@@ -159,7 +159,7 @@ describe('tune edits', () => {
     expect(dragShift(56.8, 0, 160, 0, scaleMask(1), false)).toBe(220);
     expect(dragShift(56.8, 0, 37, 0, scaleMask(1), true)).toBe(37);
   });
-  it('"Popraw wysokość" moves centres to the scale by Center % and sets drift', () => {
+  it('"Fix pitch" moves centres to the scale by Center % and sets drift', () => {
     const t = correctPitch(initTune(an), an, [0, 1], 100, 50, 0, scaleMask(1));
     expect(t.notes[0].shift).toBe(Math.round((57 - noteCenter(an, 0, 0.4)!) * 100));
     expect(t.notes[1].shift).toBe(-10);
@@ -288,7 +288,7 @@ describe('automation', () => {
     const p = demoProject(cat);
     let next = p.nextId;
     const target = { kind: 'insertVol' as const, id: 3 };
-    const r = createAutomationOps(p, cat, target, 'Bass · Głośność', '#e0a44a', 8, 16, () => next++);
+    const r = createAutomationOps(p, cat, target, 'Bass · Volume', '#e0a44a', 8, 16, () => next++);
     const used = new Set(p.clips.map(c => c.track));
     expect(used.has(r.track)).toBe(false);
     const q = applyAll(p, r.ops);

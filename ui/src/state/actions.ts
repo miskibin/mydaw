@@ -1,6 +1,7 @@
 // Commands shared by the toolbar, keyboard, menus and views.
 import { batch } from 'solid-js';
 import { be } from '../api/backend';
+import { t, tName } from '../lib/i18n';
 import { VOL_UNITY, type AnyBuiltinKind, type Clip, type Fx, type Id, type Insert, type Op, type Track } from '../api/types';
 import { clampMove, duplicateSpan, insertTrackOps, moveClips, muteOps, pasteClips, sliceClip, TOTAL } from '../lib/clipOps';
 import { clamp, fmtPos } from '../lib/format';
@@ -8,6 +9,7 @@ import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../li
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
 import { flushNotebook } from './notebook';
+import { modePattern, patMode, stopPreview, togglePreview } from './pattern';
 import { allocId, findFx, insName, plain, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
@@ -15,7 +17,7 @@ import { confirmUnsaved } from '../ui/Confirm';
 
 // ---------- transport ----------
 /** Recording is on but no track is armed: the engine plays and records nothing. */
-const NO_ARMED = 'Nagrywanie włączone, ale nie ma pustej ścieżki do uzbrojenia — kliknij ● przy ścieżce';
+const NO_ARMED = () => t('d.act.noarmed');
 const armedTrack = () => S.project.tracks.find(t => t.arm);
 /** Recording with nothing armed: arm the first track with no clips at all (waits until the engine has it). */
 async function autoArm() {
@@ -25,25 +27,35 @@ async function autoArm() {
   if (i < 0) return;
   armTrack(i);
   await enqueue(() => Promise.resolve());
-  say('Nagrywanie na: ' + S.project.tracks[i].name + ' (pierwsza pusta ścieżka)');
+  say(t('d.act.recon1', { name: S.project.tracks[i].name }));
 }
 export async function play(from = U.start) {
+  if (U.patPlaying) await stopPreview();
   setU('playing', true);
   try {
     if (S.transport.rec) await autoArm();
     await be().transportPlay(from); setTransport({ playing: true });
-    say(!S.transport.rec ? 'Play' : armedTrack() ? '● Nagrywanie na: ' + armedTrack()!.name : NO_ARMED);
+    say(!S.transport.rec ? 'Play' : armedTrack() ? t('d.act.recon', { name: armedTrack()!.name }) : NO_ARMED());
   }
-  catch (e) { setU('playing', false); say('Błąd odtwarzania: ' + String(e)); }
+  catch (e) { setU('playing', false); say(t('d.act.playerr', { err: String(e) })); }
 }
 /** `rewind` also moves the start marker (and the stopped playhead) to the beginning of the song. */
 export async function stop(rewind = false) {
+  if (U.patPlaying) void stopPreview();
   setU('playing', false);
   if (rewind) setU('start', 0);
   try { await be().transportStop(); setTransport({ playing: false }); } catch (e) { console.warn(e); }
-  say(rewind ? 'Stop · początek utworu' : 'Stop');
+  say(rewind ? t('d.act.stop.rew') : 'Stop');
 }
-export const togglePlay = () => (U.playing ? stop() : play());
+/** Space: stop whatever plays; else PAT mode loops the current pattern, SONG mode plays the song
+ * (recording always runs the song). */
+export function togglePlay() {
+  if (U.playing) return stop();
+  if (U.patPlaying) { void stopPreview(); say('Stop'); return; }
+  const p = patMode() && !S.transport.rec ? modePattern() : undefined;
+  if (p) return togglePreview(p.id);
+  return play();
+}
 export function seek(b: number) {
   setU('start', Math.max(0, b));
   if (U.playing) void be().transportPlay(U.start);
@@ -51,57 +63,57 @@ export function seek(b: number) {
 }
 export async function setTransportFlag(k: 'metro' | 'countIn' | 'rec' | 'monitor', v: boolean) {
   setTransport({ [k]: v });
-  try { const t = await be().transportSet({ [k]: v }); setTransport(t); } catch (e) { say('Błąd: ' + String(e)); }
+  try { const t = await be().transportSet({ [k]: v }); setTransport(t); } catch (e) { say(t('d.act.err', { err: String(e) })); }
 }
 export async function toggleRec() {
   const on = !S.transport.rec;
   if (on) await autoArm();
   void setTransportFlag('rec', on);
-  say(!on ? (U.playing ? 'Punch out' : 'Nagrywanie wyłączone')
-    : !armedTrack() ? NO_ARMED
-    : U.playing ? '● Punch in: ' + armedTrack()!.name
-    : 'Nagrywanie na: ' + armedTrack()!.name + ' — Spacja startuje' + (S.transport.countIn ? ' (z count-in)' : ''));
+  say(!on ? (U.playing ? 'Punch out' : t('d.act.recoff'))
+    : !armedTrack() ? NO_ARMED()
+    : U.playing ? t('d.act.punchin', { name: armedTrack()!.name })
+    : t(S.transport.countIn ? 'd.act.recspace.ci' : 'd.act.recspace', { name: armedTrack()!.name }));
 }
 export function toggleMonitor() {
   const on = !S.transport.monitor;
   void setTransportFlag('monitor', on);
-  say(on ? 'Odsłuch włączony — uważaj na sprzężenie' : 'Odsłuch wyłączony');
+  say(t(on ? 'd.act.mon.on' : 'd.act.mon.off'));
 }
 
 // ---------- history / project ----------
-export async function undo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say('Cofnięto'); }
-export async function redo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say('Ponowiono'); }
+export async function undo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say(t('d.act.undone')); }
+export async function redo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say(t('d.act.redone')); }
 /** Ask about unsaved changes; false = the user cancelled (or the save failed). */
-async function guardUnsaved(what: string): Promise<boolean> {
+export async function guardUnsaved(what: string): Promise<boolean> {
   const a = await confirmUnsaved(what);
   if (a === 'cancel') return false;
   if (a === 'save') return projectSave(false);
   return true;
 }
 export async function projectNew() {
-  if (!(await guardUnsaved('nowym projektem'))) return;
+  if (!(await guardUnsaved(t('d.act.guard.new')))) return;
   flushNotebook();
-  try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); say('Nowy projekt'); } catch (e) { say('Nie utworzono projektu: ' + String(e)); }
+  try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); say(t('d.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
 }
 export async function projectOpen() {
-  if (!(await guardUnsaved('otwarciem innego projektu'))) return;
+  if (!(await guardUnsaved(t('d.act.guard.open')))) return;
   flushNotebook();
-  try { acceptReply(await enqueue(() => be().projectOpen())); afterProjectLoad(); say('Otwarto ' + (S.path ?? '')); } catch (e) { say('Nie otwarto: ' + String(e)); }
+  try { acceptReply(await enqueue(() => be().projectOpen())); afterProjectLoad(); say(t('d.act.opened', { path: S.path ?? '' })); } catch (e) { say(t('d.act.openfail', { err: String(e) })); }
 }
 export async function projectSave(saveAs = false): Promise<boolean> {
   flushNotebook();
-  try { const r = await enqueue(() => be().projectSave(saveAs)); say('Zapisano ' + r.path); await resync(); return true; } catch (e) { say('Nie zapisano: ' + String(e)); return false; }
+  try { const r = await enqueue(() => be().projectSave(saveAs)); say(t('d.act.saved', { path: r.path })); await resync(); return true; } catch (e) { say(t('d.act.savefail', { err: String(e) })); return false; }
 }
 /** Window close: ask about unsaved changes, then really close. */
 export async function closeWindowGuarded(): Promise<boolean> {
-  return guardUnsaved('zamknięciem aplikacji');
+  return guardUnsaved(t('d.act.guard.close'));
 }
 /** Escape on the export dialog: abort an in-flight bounce, otherwise close. */
 export function cancelExportOrClose() {
   if (!U.exportOpen) return;
   if (U.exportBusy) {
     void be().exportCancel().catch(() => {});
-    say('Eksport anulowany');
+    say(t('d.act.exportcancel'));
   }
   setU({ exportOpen: false, exportBusy: false });
 }
@@ -117,7 +129,7 @@ function afterProjectLoad() {
 
 // ---------- tempo / loop ----------
 export const snapUnit = (alt = false) => (alt || U.alt ? 0 : snapRes(U.snap, U.bw));
-export function setLoop(loop: { a: number; b: number } | null, label = 'Pętla') {
+export function setLoop(loop: { a: number; b: number } | null, label = t('d.act.loop')) {
   commit([{ op: 'setLoop', loop }], label);
 }
 
@@ -128,44 +140,44 @@ export const hasClipboard = () => clipboard.length > 0;
 
 export function delIds(ids: Id[]) {
   if (!ids.length) return;
-  commit([{ op: 'removeClips', ids: [...ids] }], 'Usuń klipy');
+  commit([{ op: 'removeClips', ids: [...ids] }], t('d.act.op.delclips'));
   const s = new Set(ids);
   setU('sel', U.sel.filter(x => !s.has(x)));
 }
 export function duplicate() {
   const cs = selClips(); if (!cs.length) return;
   const span = duplicateSpan(cs, snapUnit());
-  if (Math.max(...cs.map(c => c.start + c.len)) + span > TOTAL) return say('Brak miejsca na duplikat');
+  if (Math.max(...cs.map(c => c.start + c.len)) + span > TOTAL) return say(t('d.act.nospace'));
   const copies = cs.map(c => ({ ...plain(c), id: allocId(), start: c.start + span }));
-  commit([{ op: 'putClips', clips: copies }], 'Duplikuj');
+  commit([{ op: 'putClips', clips: copies }], t('d.act.op.dup'));
   setU('sel', copies.map(c => c.id));
-  say('Zduplikowano ' + copies.length);
+  say(t('d.act.duplicated', { n: copies.length }));
 }
-export function copy() { const cs = selClips(); if (!cs.length) return; clipboard = cs.map(plain); say('Skopiowano ' + cs.length); }
+export function copy() { const cs = selClips(); if (!cs.length) return; clipboard = cs.map(plain); say(t('d.act.copied', { n: cs.length })); }
 export function cut() { copy(); delIds(U.sel); }
 export function paste(at?: { beat: number; track: number }) {
   if (!clipboard.length) return;
   const beat = at ? at.beat : curBeat() >= 0 ? U.start : 0;
   const copies = pasteClips(clipboard, beat, at ? at.track : null, S.project.tracks.length, allocId);
-  commit([{ op: 'putClips', clips: copies }], 'Wklej');
+  commit([{ op: 'putClips', clips: copies }], t('d.act.op.paste'));
   setU('sel', copies.map(c => c.id));
-  say('Wklejono ' + copies.length + ' w ' + fmtPos(beat));
+  say(t('d.act.pasted', { n: copies.length, pos: fmtPos(beat) }));
 }
 export function toggleMuteSel() {
   const cs = selClips(); if (!cs.length) return;
-  commit(muteOps(cs.map(plain), !cs.every(c => c.muted)), 'Wycisz klipy');
+  commit(muteOps(cs.map(plain), !cs.every(c => c.muted)), t('d.act.op.muteclips'));
 }
 export function nudge(db: number, dt: number) {
   const cs = selClips().map(plain); if (!cs.length) return;
-  const [d, t] = clampMove(cs, db, dt, S.project.tracks.length);
-  if (!d && !t) return;
-  commit([{ op: 'putClips', clips: moveClips(cs, d, t) }], 'Przesuń');
+  const [d, dtr] = clampMove(cs, db, dt, S.project.tracks.length);
+  if (!d && !dtr) return;
+  commit([{ op: 'putClips', clips: moveClips(cs, d, dtr) }], t('d.act.op.move'));
 }
 export function sliceAt(id: Id, b: number) {
   const c = S.project.clips.find(x => x.id === id); if (!c) return;
   const r = sliceClip(plain(c), b, allocId()); if (!r) return;
-  commit([{ op: 'putClips', clips: r }], 'Podziel');
-  say('Przecięto w ' + fmtPos(b));
+  commit([{ op: 'putClips', clips: r }], t('d.act.op.split'));
+  say(t('d.act.cut', { pos: fmtPos(b) }));
 }
 export function selectAll() { setU('sel', S.project.clips.map(c => c.id)); }
 export function makeUnique(clip: Clip) {
@@ -175,15 +187,15 @@ export function makeUnique(clip: Clip) {
   const np = { ...plain(p), id: allocId(), name: baseName + ' #' + (count + 1) };
   commit([{ op: 'putPattern', pattern: np }, { op: 'putClips', clips: [{ ...plain(clip), ref: np.id }] }], 'Make unique');
   setU('cur', { kind: 'pat', ref: np.id });
-  say('Nowy pattern: ' + np.name);
+  say(t('d.act.newpat', { name: np.name }));
 }
 export function setSrcProp(clip: Clip, patch: { name?: string; color?: string }) {
   if (clip.kind === 'auto') {
-    const a = S.project.automations?.find(x => x.id === clip.ref); if (a) commit([{ op: 'putAutomation', automation: { ...plain(a), ...patch } }], 'Automatyzacja');
+    const a = S.project.automations?.find(x => x.id === clip.ref); if (a) commit([{ op: 'putAutomation', automation: { ...plain(a), ...patch } }], t('d.act.op.auto'));
   } else if (clip.kind === 'pat') {
     const p = S.project.patterns.find(x => x.id === clip.ref); if (p) commit([{ op: 'putPattern', pattern: { ...plain(p), ...patch } }], 'Pattern');
   } else {
-    const s = S.project.sources.find(x => x.id === clip.ref); if (s) commit([{ op: 'putSource', source: { ...plain(s), ...patch } }], 'Źródło');
+    const s = S.project.sources.find(x => x.id === clip.ref); if (s) commit([{ op: 'putSource', source: { ...plain(s), ...patch } }], t('d.act.op.source'));
   }
 }
 
@@ -192,13 +204,13 @@ export function trackOp(i: number, patch: Partial<Track>): Op | null {
   const t = S.project.tracks[i]; if (!t) return null;
   return { op: 'putTrack', track: { ...plain(t), ...patch } };
 }
-export function setTrack(i: number, patch: Partial<Track>, label = 'Ścieżka') { const op = trackOp(i, patch); if (op) commit([op], label); }
+export function setTrack(i: number, patch: Partial<Track>, label = t('d.act.track')) { const op = trackOp(i, patch); if (op) commit([op], label); }
 export function armTrack(i: number) {
   const on = !S.project.tracks[i]?.arm;
   const ops = S.project.tracks.map((t, j) => ({ t, arm: j === i ? on : false })).filter(x => x.t.arm !== x.arm)
     .map(x => ({ op: 'putTrack', track: { ...plain(x.t), arm: x.arm } }) as Op);
-  commit(ops, 'Uzbrój');
-  say(on ? 'Nagrywanie na: ' + S.project.tracks[i].name : 'Ścieżka rozbrojona');
+  commit(ops, t('d.act.op.arm'));
+  say(on ? t('d.act.recon2', { name: S.project.tracks[i].name }) : t('d.act.disarmed'));
 }
 /** Mute and solo are mutually exclusive per channel: turning one on clears the other (one undo step). */
 export function toggleTrackMute(i: number) {
@@ -223,11 +235,11 @@ export function toggleInsertSolo(id: Id, add = false) {
   commit(ops, 'Solo');
 }
 export function removeTrack(id: number) {
-  commit([{ op: 'removeTrack', id }], 'Usuń ścieżkę');
+  commit([{ op: 'removeTrack', id }], t('d.act.op.deltrack'));
 }
 
 export function insertTrack(i: number) {
-  commit(insertTrackOps(plain(S.project), i, allocId()), 'Dodaj ścieżkę');
+  commit(insertTrackOps(plain(S.project), i, allocId()), t('d.act.op.addtrack'));
 }
 export const addTrack = () => insertTrack(S.project.tracks.length);
 
@@ -237,20 +249,20 @@ export function insertOp(id: Id, patch: Partial<Insert>): Op | null {
   const { fx: _fx, ...rest } = plain(m); void _fx;
   return { op: 'putInsert', insert: { ...rest, fx: [], ...patch } as Insert };
 }
-export function setInsert(id: Id, patch: Partial<Insert>, label = 'Mikser') { const op = insertOp(id, patch); if (op) commit([op], label); }
+export function setInsert(id: Id, patch: Partial<Insert>, label = t('d.act.mixer')) { const op = insertOp(id, patch); if (op) commit([op], label); }
 export function selectInsert(id: Id) {
   const m = S.project.inserts.find(x => x.id === id);
   if (m && U.mixSel !== id) setU({ mixSel: id, fxSel: m.fx[0]?.id ?? null });
 }
 export function addInsert() {
   const id = allocId();
-  commit([{ op: 'putInsert', insert: { id, name: 'Insert ' + S.project.inserts.length, color: '#8b93a1', vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] } }], 'Dodaj insert');
+  commit([{ op: 'putInsert', insert: { id, name: 'Insert ' + S.project.inserts.length, color: '#8b93a1', vol: VOL_UNITY, pan: 0, muted: false, solo: false, fx: [] } }], t('d.act.op.addinsert'));
   setU({ mixSel: id, fxSel: null });
 }
 export function removeInsert(id: Id) {
   const m = S.project.inserts.find(x => x.id === id);
   m?.fx.forEach(f => closePlug(f.id));
-  commit([{ op: 'removeInsert', id }], 'Usuń insert');
+  commit([{ op: 'removeInsert', id }], t('d.act.op.delinsert'));
   if (U.mixSel === id) setU({ mixSel: 0, fxSel: null });
 }
 
@@ -263,28 +275,28 @@ export function addFx(insId: Id, type: AnyBuiltinKind, preset?: number) {
   if (!S.catalog) return;
   let f = newFx(S.catalog, allocId(), type, S.project.bpm);
   if (preset != null && preset > 0 && presetList(S.catalog, type)[preset]) f = loadPresetFx(S.catalog, f, preset, S.project.bpm);
-  commit([{ op: 'putFx', insertId: insId, fx: f }], 'Dodaj efekt');
+  commit([{ op: 'putFx', insertId: insId, fx: f }], t('d.act.op.addfx'));
   setU({ mixSel: insId, fxSel: f.id });
   openPlug(f.id);
   const pr = presetList(S.catalog, type)[preset ?? 0];
-  say('Dodano ' + (S.catalog.types[type]?.name ?? type) + (pr ? ' · preset: ' + pr.name : ''));
+  say(t('d.act.added', { name: tName(S.catalog.types[type]?.name ?? type) }) + (pr ? t('d.act.added.preset', { name: tName(pr.name) }) : ''));
 }
 export function addVst(insId: Id, info: { path: string; cid: string; name: string; vendor: string }) {
   const f: Fx = { id: allocId(), type: 'vst3', bypass: false, preset: null, params: {}, plugin: { format: 'vst3', path: info.path, cid: info.cid, name: info.name, vendor: info.vendor } };
-  commit([{ op: 'putFx', insertId: insId, fx: f }], 'Dodaj VST3');
+  commit([{ op: 'putFx', insertId: insId, fx: f }], t('d.act.op.addvst'));
   setU({ mixSel: insId, fxSel: f.id });
   openPlug(f.id);
-  say('Dodano ' + info.name);
+  say(t('d.act.added', { name: info.name }));
 }
 export function removeFx(fxId: Id) {
   closePlug(fxId);
-  commit([{ op: 'removeFx', fxId }], 'Usuń efekt');
+  commit([{ op: 'removeFx', fxId }], t('d.act.op.delfx'));
   if (U.fxSel === fxId) setU('fxSel', null);
 }
 export function toggleBypass(fxId: Id) {
   const ff = findFx(fxId); if (!ff) return;
   commit([fxOp({ ...plain(ff.f), bypass: !ff.f.bypass }, ff.m.id)], 'Bypass');
-  say(fxName(ff.f) + (ff.f.bypass ? ' · bypass' : ' · aktywny'));
+  say(fxName(ff.f) + (ff.f.bypass ? ' · bypass' : t('d.act.active')));
 }
 /** FL-style: bypass every effect of an insert, or turn them all back on if all are bypassed. */
 /** Effects that were on when "N FX" switched an insert off, so switching back restores them. */
@@ -295,9 +307,9 @@ export function swapFxType(fxId: Id, type: AnyBuiltinKind) {
   const idx = ff.m.fx.findIndex(f => f.id === fxId);
   const f = newFx(S.catalog, allocId(), type, S.project.bpm);
   f.bypass = ff.f.bypass;
-  commit([{ op: 'removeFx', fxId }, { op: 'putFx', insertId: ff.m.id, fx: f, index: idx }], 'Typ kompresora');
+  commit([{ op: 'removeFx', fxId }, { op: 'putFx', insertId: ff.m.id, fx: f, index: idx }], t('d.act.op.comptype'));
   closePlug(fxId); openPlug(f.id);
-  say((S.catalog.types[type]?.name ?? type) + ' — ustawienia domyślne');
+  say(t('d.act.defaults', { name: tName(S.catalog.types[type]?.name ?? type) }));
 }
 export function toggleInsertFx(insId: Id) {
   const m = S.project.inserts.find(x => x.id === insId); if (!m || !m.fx.length) return;
@@ -305,9 +317,9 @@ export function toggleInsertFx(insId: Id) {
   if (on) fxWasOn.set(m.id, new Set(m.fx.filter(f => !f.bypass).map(f => f.id)));
   const keep = fxWasOn.get(m.id);
   const restore = !on && keep && m.fx.some(f => keep.has(f.id));
-  commit(m.fx.map(f => fxOp({ ...plain(f), bypass: on ? true : restore ? !keep!.has(f.id) : false }, m.id)), on ? 'Wyłącz efekty' : 'Włącz efekty');
+  commit(m.fx.map(f => fxOp({ ...plain(f), bypass: on ? true : restore ? !keep!.has(f.id) : false }, m.id)), on ? t('d.act.op.fxoff') : t('d.act.op.fxon'));
   if (!on) fxWasOn.delete(m.id);
-  say(insName(m) + (on ? ' · wszystkie efekty wyłączone' : ' · efekty włączone'));
+  say(insName(m) + t(on ? 'd.act.fxoff' : 'd.act.fxon'));
 }
 export const fxName = (f: Fx) => f.type === 'vst3' ? (f.plugin?.name ?? 'VST3') : (S.catalog?.types[f.type]?.name ?? f.type);
 export function loadPreset(fxId: Id, i: number) {
@@ -315,7 +327,7 @@ export function loadPreset(fxId: Id, i: number) {
   const list = presetList(S.catalog, ff.f.type); if (!list.length) return;
   const nf = loadPresetFx(S.catalog, plain(ff.f), i, S.project.bpm);
   commit([fxOp(nf, ff.m.id)], 'Preset');
-  say(fxName(ff.f) + ' · preset ' + ((nf.preset ?? 0) + 1) + '/' + list.length + ': ' + list[nf.preset ?? 0].name);
+  say(fxName(ff.f) + ' · ' + t('d.act.preset', { i: (nf.preset ?? 0) + 1, n: list.length, name: tName(list[nf.preset ?? 0].name) }));
 }
 export function stepPreset(fxId: Id, d: number) {
   const ff = findFx(fxId); if (!ff) return;
@@ -388,8 +400,8 @@ export function applyDetectedTempo(bpm: number, clipId?: Id) {
       ops.push({ op: 'putClips', clips: [nc] });
     }
   }
-  commit(ops, 'Wykryte tempo');
-  say('Tempo ustawione na ' + nb.toFixed(2) + ' BPM');
+  commit(ops, t('d.act.op.detected'));
+  say(t('d.act.tempoSet', { bpm: nb.toFixed(2) }));
 }
 
 /** Apply detected key/scale (1 = Major, 2 = Minor) to one Pitch Correct instance or all of them in the project. */
@@ -404,16 +416,16 @@ export function applyKeyToTune(root: number, minor: boolean, targetFxId?: Id | '
     }
   }
   if (!ops.length) return;
-  commit(ops, 'Tonacja Pitch Correct');
+  commit(ops, t('d.act.op.pckey'));
   const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  say('Pitch Correct · tonacja ' + names[root % 12] + ' ' + (minor ? 'moll' : 'dur') + (ops.length > 1 ? ` (${ops.length} inst.)` : ''));
+  say(t('d.act.pckey', { key: names[root % 12], mode: t(minor ? 'd.act.minor' : 'd.act.major') }) + (ops.length > 1 ? t('d.act.inst', { n: ops.length }) : ''));
 }
 
 // ---------- view ----------
 export function zoomAt(f: number) { setU('bw', clamp(U.bw * f, 4, 96)); }
 export function setSnap(v: number) {
   setU('snap', v);
-  say(v < 0 ? 'Snap auto — rozdzielczość zależy od zoomu (teraz ' + snapName(snapRes(-1, U.bw)) + ')' : 'Snap: ' + snapName(v));
+  say(v < 0 ? t('d.act.snapauto', { name: snapName(snapRes(-1, U.bw)) }) : t('d.act.snap', { name: snapName(v) }));
 }
 
 // ---------- auto vocal ----------
@@ -425,9 +437,9 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
   if (!c || c.kind !== 'audio' || !S.catalog || autoVocalBusy) return;
   const tr = S.project.tracks[c.track]; if (!tr) return;
   const ins = S.project.inserts.find(m => m.id === tr.insert);
-  if (!ins || ins.id === 0) { say('Auto wokal: przypisz ścieżkę do kanału miksera (nie Master)'); return; }
+  if (!ins || ins.id === 0) { say(t('d.act.av.assign')); return; }
   autoVocalBusy = true;
-  say('Auto wokal: analiza nagrania… (kilka sekund)');
+  say(t('d.act.av.analyze'));
   try {
     // the rider (≈1.6 s look-ahead) is baked into the audio instead of living on the insert,
     // so playback and monitoring get no extra delay; a clip that was baked before is not baked twice
@@ -435,7 +447,7 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
     const baked = !!src && / \(rider\)$/.test(src.name);
     const plan = await be().autoVocalPlan({ clipId, style, bakeRider: true });
     if (plan.riderBake && !baked) {
-      say('Auto wokal: wyrównuję głośność w nagraniu…');
+      say(t('d.act.av.level'));
       await enqueue(() => be().bakeRider({ clipId, params: plan.riderBake!.params }));
       await resync();
     }
@@ -454,14 +466,14 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
       if (p.type === 'limit') f.params.gain = clamp((f.params.gain ?? 0) + makeup, 0, 24);
       ops.push({ op: 'putFx', insertId: ins.id, fx: f });
     }
-    commit(ops, 'Auto wokal');
+    commit(ops, t('d.act.op.av'));
     setU({ mixSel: ins.id });
     const a = plan.analysis, st = plan.stages;
-    say('Auto wokal: ' + (plan.riderBake ? 'głośność wyrównana w nagraniu, ' : '') + plan.chain.filter(p => p.enabled).length + ' efektów na ' + insName(ins)
-      + ' · rozrzut głośności ' + st.iqr400Db[0].toFixed(1) + ' → ' + st.iqr400Db[1].toFixed(1) + ' dB'
-      + (a.key ? ' · tonacja ' + a.key.name : ' · bez tonacji (autotune wyłączony)')
+    say(t(plan.riderBake ? 'd.act.av.done.rb' : 'd.act.av.done', { n: plan.chain.filter(p => p.enabled).length, name: insName(ins) })
+      + t('d.act.av.spread', { a: st.iqr400Db[0].toFixed(1), b: st.iqr400Db[1].toFixed(1) })
+      + (a.key ? t('d.act.av.key', { key: a.key.name }) : t('d.act.av.nokey'))
       + (plan.warnings.length ? ' · ' + plan.warnings[0] : ''));
-  } catch (e) { say('Auto wokal nie zadziałał: ' + String(e)); }
+  } catch (e) { say(t('d.act.av.fail', { err: String(e) })); }
   autoVocalBusy = false;
 }
 
@@ -469,10 +481,10 @@ export async function autoVocal(clipId: Id, style: 'natural' | 'hard' = 'natural
 export async function autoVocalComp(clipId: Id, style: 'natural' | 'hard' = 'natural') {
   const c = S.project.clips.find(x => x.id === clipId); if (!c || c.kind !== 'comp') return;
   const { track, start } = c;
-  say('Auto wokal: spłaszczam take’i do jednego klipu…');
-  try { await enqueue(() => be().flattenComp(clipId)); } catch (e) { say('Nie spłaszczono: ' + String(e)); return; }
+  say(t('d.act.av.flatten'));
+  try { await enqueue(() => be().flattenComp(clipId)); } catch (e) { say(t('d.act.av.flatfail', { err: String(e) })); return; }
   const a = S.project.clips.filter(x => x.kind === 'audio' && x.track === track && Math.abs(x.start - start) < 1e-6)[0]
     ?? S.project.clips.filter(x => x.kind === 'audio' && x.track === track).sort((p, q) => Math.abs(p.start - start) - Math.abs(q.start - start))[0];
-  if (!a) { say('Auto wokal: nie znalazłem spłaszczonego klipu'); return; }
+  if (!a) { say(t('d.act.av.noflat')); return; }
   await autoVocal(a.id, style);
 }

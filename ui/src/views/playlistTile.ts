@@ -70,3 +70,44 @@ export function followScroll(x: number, sl: number, view: number): number {
   if (x < sl) return Math.max(0, x - 80);
   return sl;
 }
+
+/**
+ * The damaged boxes (grid coordinates) that fall on `tile`, as tile-local rects on whole device
+ * pixels (so a repaint clipped to one never blends into its neighbours), overlapping ones merged.
+ * Null when one full paint is cheaper: many boxes, or most of the tile.
+ */
+export function damageRects(damage: readonly Rect[], tile: Tile, dpr: number): Rect[] | null {
+  const out: Rect[] = [];
+  for (const d of damage) {
+    const x0 = Math.max(tile.x, d.x), y0 = Math.max(tile.y, d.y);
+    const x1 = Math.min(tile.x + tile.w, d.x + d.w), y1 = Math.min(tile.y + tile.h, d.y + d.h);
+    if (x1 <= x0 || y1 <= y0) continue;
+    const a = Math.floor((x0 - tile.x) * dpr) / dpr, b = Math.floor((y0 - tile.y) * dpr) / dpr;
+    out.push({ x: a, y: b, w: Math.ceil((x1 - tile.x) * dpr) / dpr - a, h: Math.ceil((y1 - tile.y) * dpr) / dpr - b });
+  }
+  if (out.length > 48) return null;
+  const merged = mergeRects(out);
+  let area = 0;
+  for (const r of merged) area += r.w * r.h;
+  return area > tile.w * tile.h * 0.5 ? null : merged;
+}
+
+/** Union of overlapping (or touching) rects until none overlap: a clipped repaint never covers a pixel twice. */
+export function mergeRects(rs: readonly Rect[]): Rect[] {
+  const out = rs.map(r => ({ ...r }));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (let i = 0; i < out.length && !changed; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        const a = out[i], b = out[j];
+        if (a.x > b.x + b.w || b.x > a.x + a.w || a.y > b.y + b.h || b.y > a.y + a.h) continue;
+        const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+        out[i] = { x, y, w: Math.max(a.x + a.w, b.x + b.w) - x, h: Math.max(a.y + a.h, b.y + b.h) - y };
+        out.splice(j, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return out;
+}

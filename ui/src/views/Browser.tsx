@@ -3,6 +3,7 @@ import { createStore } from 'solid-js/store';
 import { be } from '../api/backend';
 import type { ClipKind, Id, Kit, LibFile, LibraryProgress, Source } from '../api/types';
 import { clamp, fmtBytes, baseName } from '../lib/format';
+import { t } from '../lib/i18n';
 import { snapFloor } from '../lib/snap';
 import * as A from '../state/actions';
 import { getPeaks, peakRange, peaksVersion } from '../state/peaks';
@@ -31,7 +32,7 @@ function pick(kind: ClipKind, ref: Id, name: string, color: string, e: PointerEv
   if (e.button !== 0) return;
   e.preventDefault();
   setU('cur', { kind, ref });
-  say('Wybrano: ' + name);
+  say(t('d.br.picked', { name }));
   dragGhost(e, name, color, () => {}, (x, y, alt) => { dropClipAt(x, y, kind, ref, alt); });
 }
 
@@ -41,8 +42,8 @@ export async function importFiles(paths: string[], at?: { track: number; beat: n
     const r = await be().importAudio({ paths, track: at?.track, beat: at?.beat });
     if (r.sourceIds.length) setU('cur', { kind: 'audio', ref: r.sourceIds[r.sourceIds.length - 1] });
     if (r.clipIds.length) setU('sel', r.clipIds);
-    say('Wczytano ' + paths.map(baseName).join(', '));
-  } catch (err) { say('Nie udało się wczytać: ' + String(err)); }
+    say(t('d.br.loaded', { names: paths.map(baseName).join(', ') }));
+  } catch (err) { say(t('d.br.loadfail', { err: String(err) })); }
 }
 
 /** Import at a client point if it is over the playlist grid. */
@@ -76,36 +77,36 @@ function ProjectTab() {
   const chanMap = createMemo(() => new Map((S.project.channels ?? []).map(c => [c.id, c])));
   const importBtn = async () => {
     try { const paths = await be().pickAudioFiles(); if (paths) await importFiles(paths); }
-    catch (e) { say('Import niedostępny: ' + String(e)); }
+    catch (e) { say(t('d.br.noimport', { err: String(e) })); }
   };
   return (
     <div class="scroll">
       <div class="bhead">
-        <span>PATTERNY</span>
-        <button class="linkbtn" title="Nowy pattern (otwiera edytor)" onClick={newPattern}>Nowy</button>
+        <span>{t('d.br.patterns')}</span>
+        <button class="linkbtn" title={t('d.br.newpat.tip')} onClick={newPattern}>{t('d.br.new')}</button>
       </div>
       <div style={{ display: 'flex', 'flex-direction': 'column', padding: '4px 0' }}>
         <For each={S.project.patterns}>
           {p => (
-            <div class="pitem" classList={{ on: U.cur?.kind === 'pat' && U.cur.ref === p.id }} title="Klik = wybierz · 2× klik = edytuj (F6) · przeciągnij na ścieżkę"
+            <div class="pitem" classList={{ on: U.cur?.kind === 'pat' && U.cur.ref === p.id }} title={t('d.br.pat.tip')}
               onPointerDown={e => { if (e.button === 0 && dblCheck('pitem' + p.id)) { openPattern(p.id); return; } pick('pat', p.id, p.name, p.color, e); }}>
               <Show when={patternIcon(p, chanMap())} fallback={<span style={{ width: '8px', height: '8px', 'border-radius': '2px', flex: 'none', background: p.color }} />}>
                 {id => <span class="picon" style={{ color: p.color }}><InstIcon id={id()} size={12} /></span>}
               </Show>
               <span class="nm">{p.name}</span>
-              <span class="meta">{p.len / 4} bar</span>
+              <span class="meta">{t('d.br.bars', { n: p.len / 4 })}</span>
             </div>
           )}
         </For>
       </div>
       <div class="bhead top">
-        <span>AUDIO</span>
-        <button class="linkbtn" title="Importuj pliki audio" onClick={importBtn}>Importuj</button>
+        <span>{t('d.br.audio')}</span>
+        <button class="linkbtn" title={t('d.br.import.tip')} onClick={importBtn}>{t('d.br.import')}</button>
       </div>
       <div style={{ display: 'flex', 'flex-direction': 'column', padding: '4px 0' }}>
         <For each={S.project.sources}>
           {s => (
-            <div class="sitem" classList={{ on: U.cur?.kind === 'audio' && U.cur.ref === s.id }} title="Klik = wybierz · przeciągnij na ścieżkę"
+            <div class="sitem" classList={{ on: U.cur?.kind === 'audio' && U.cur.ref === s.id }} title={t('d.br.src.tip')}
               onPointerDown={e => pick('audio', s.id, s.name, s.color, e)}>
               <div class="row" style={{ gap: '8px' }}>
                 <span style={{ width: '8px', height: '8px', 'border-radius': '50%', flex: 'none', background: s.color }} />
@@ -117,7 +118,7 @@ function ProjectTab() {
           )}
         </For>
       </div>
-      <div class="bnote">Przeciągnij WAV / MP3 z dysku na ścieżkę lub tutaj.</div>
+      <div class="bnote">{t('d.br.dragnote')}</div>
     </div>
   );
 }
@@ -135,15 +136,15 @@ async function toggleOpen(key: string, q: { kit?: string; folder?: string }) {
   const open = !lib.open[key];
   setLib('open', key, open);
   if (open && !lib.files[key]) {
-    try { setLib('files', key, await be().libraryFiles(q)); } catch (e) { say('Biblioteka: ' + String(e)); setLib('files', key, []); }
+    try { setLib('files', key, await be().libraryFiles(q)); } catch (e) { say(t('d.br.liberr', { err: String(e) })); setLib('files', key, []); }
   }
 }
 
 function previewFile(f: LibFile) {
   if (U.previewing && U.previewPath === f.path) { void be().previewStop(); setU('previewPath', null); return; }
   setU('previewPath', f.path);
-  be().previewFile(f.path).catch(e => say('Odsłuch: ' + String(e)));
-  say('Odsłuch: ' + f.name);
+  be().previewFile(f.path).catch(e => say(t('d.br.preverr', { err: String(e) })));
+  say(t('d.br.prev', { name: f.name }));
 }
 
 function FileList(props: { k: string }) {
@@ -153,15 +154,15 @@ function FileList(props: { k: string }) {
     return [...m.entries()];
   };
   return (
-    <Show when={lib.files[props.k]} fallback={<div class="fgroup">Wczytywanie…</div>}>
-      <For each={groups()} fallback={<div class="fgroup">Brak plików</div>}>
+    <Show when={lib.files[props.k]} fallback={<div class="fgroup">{t('d.br.loading')}</div>}>
+      <For each={groups()} fallback={<div class="fgroup">{t('d.br.nofiles')}</div>}>
         {([g, files]) => (
           <>
             <Show when={g}><div class="fgroup">{g}</div></Show>
             <For each={files}>
               {f => (
-                <div class="fitem" classList={{ playing: U.previewing && U.previewPath === f.path }} title="Klik = odsłuch · przeciągnij na ścieżkę · PPM = kanał samplera"
-                  onContextMenu={e => { e.preventDefault(); openMenu(e.clientX, e.clientY, [{ t: 'title', label: f.name }, { t: 'item', label: 'Dodaj jako kanał samplera', title: 'Nowy kanał w Channel Rack grający ten plik (one-shot, wysokość z nuty)', act: () => void addSamplerFiles([f.path]) }], 90); }}
+                <div class="fitem" classList={{ playing: U.previewing && U.previewPath === f.path }} title={t('d.br.file.tip')}
+                  onContextMenu={e => { e.preventDefault(); openMenu(e.clientX, e.clientY, [{ t: 'title', label: f.name }, { t: 'item', label: t('d.br.addsampler'), title: t('d.br.addsampler.tip'), act: () => void addSamplerFiles([f.path]) }], 90); }}
                   onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); dragGhost(e, f.name, '#47b8a8', () => previewFile(f), (x, y, alt) => { void importAt([f.path], x, y, alt); }); }}>
                   <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style={{ flex: 'none', opacity: 0.7 }}><path d="M4 12h2l2-6 3 12 3-9 2 3h4" /></svg>
                   <span class="ell">{f.name.replace(/\.[^.]+$/, '')}</span>
@@ -181,20 +182,20 @@ function LibraryTab() {
     let off: (() => void) | null = null;
     be().on('library-progress', p => {
       setLib('progress', p.id, p);
-      if (p.error) say('Instalacja ' + p.id + ': ' + p.error);
-      else if (p.done >= p.total) { setLib('progress', p.id, undefined); void refreshLib(); say('Zainstalowano ' + p.id); }
+      if (p.error) say(t('d.br.instfail', { id: p.id, err: p.error }));
+      else if (p.done >= p.total) { setLib('progress', p.id, undefined); void refreshLib(); say(t('d.br.installed', { id: p.id })); }
     }).then(u => { off = u; });
     onCleanup(() => off?.());
   });
   const install = (k: Kit) => {
     setLib('progress', k.id, { id: k.id, done: 0, total: k.bytes });
-    be().libraryInstall(k.id).catch(e => { setLib('progress', k.id, undefined); say('Instalacja: ' + String(e)); });
+    be().libraryInstall(k.id).catch(e => { setLib('progress', k.id, undefined); say(t('d.br.insterr', { err: String(e) })); });
   };
   const addFolder = async () => { try { setLib('folders', await be().libraryAddFolder()); } catch (e) { say(String(e)); } };
   const removeFolder = async (p: string) => { try { setLib('folders', await be().libraryRemoveFolder(p)); setLib('files', 'f:' + p, undefined); } catch (e) { say(String(e)); } };
   return (
     <div class="scroll">
-      <div class="bhead">ZESTAWY</div>
+      <div class="bhead">{t('d.br.kits')}</div>
       <Show when={lib.error}><div class="bnote" style={{ color: 'var(--danger)' }}>{lib.error}</div></Show>
       <For each={lib.kits}>
         {k => {
@@ -206,15 +207,15 @@ function LibraryTab() {
                   <span class="chev" style={{ cursor: 'pointer' }} onClick={() => toggleOpen('k:' + k.id, { kit: k.id })}>{lib.open['k:' + k.id] ? '▾' : '▸'}</span>
                 </Show>
                 <span class="nm ell" style={{ cursor: k.installed ? 'pointer' : 'default' }} onClick={() => k.installed && toggleOpen('k:' + k.id, { kit: k.id })}>{k.name}</span>
-                <Show when={!k.installed && !prog()}><button class="smallbtn primary" onClick={() => install(k)}>Zainstaluj</button></Show>
+                <Show when={!k.installed && !prog()}><button class="smallbtn primary" onClick={() => install(k)}>{t('d.br.install')}</button></Show>
               </div>
               <span class="desc" style={{ 'padding-left': '22px' }}>{k.description}</span>
-              <span class="meta" style={{ 'padding-left': '22px' }}>{k.count} plików · {fmtBytes(k.bytes)}{k.installed ? ' · zainstalowany' : ''}</span>
+              <span class="meta" style={{ 'padding-left': '22px' }}>{t('d.br.kitmeta', { n: k.count, size: fmtBytes(k.bytes) })}{k.installed ? t('d.br.kitinst') : ''}</span>
               <Show when={prog()}>
                 {p => (
                   <div style={{ 'padding-left': '22px', display: 'flex', 'flex-direction': 'column', gap: '3px' }}>
                     <div class="prog"><div style={{ width: clamp(p().total ? p().done / p().total : 0, 0, 1) * 100 + '%' }} /></div>
-                    <span class="meta">{p().error ? p().error : 'Pobieranie… ' + Math.round(p().total ? p().done / p().total * 100 : 0) + '%'}</span>
+                    <span class="meta">{p().error ? p().error : t('d.br.downloading', { n: Math.round(p().total ? p().done / p().total * 100 : 0) })}</span>
                   </div>
                 )}
               </Show>
@@ -224,22 +225,22 @@ function LibraryTab() {
         }}
       </For>
       <div class="bhead top">
-        <span>FOLDERY</span>
-        <button class="linkbtn" onClick={addFolder} title="Dodaj folder z samplami">Dodaj</button>
+        <span>{t('d.br.folders')}</span>
+        <button class="linkbtn" onClick={addFolder} title={t('d.br.addfolder.tip')}>{t('d.br.add')}</button>
       </div>
-      <For each={lib.folders} fallback={<div class="bnote">Dodaj własny folder z samplami.</div>}>
+      <For each={lib.folders} fallback={<div class="bnote">{t('d.br.addown')}</div>}>
         {f => (
           <>
             <div class="folder" onClick={() => toggleOpen('f:' + f, { folder: f })} title={f}>
               <span class="chev">{lib.open['f:' + f] ? '▾' : '▸'}</span>
               <span class="ell" style={{ flex: 1 }}>{baseName(f) || f}</span>
-              <button class="xbtn" title="Usuń folder z biblioteki" onClick={e => { e.stopPropagation(); void removeFolder(f); }}>×</button>
+              <button class="xbtn" title={t('d.br.rmfolder')} onClick={e => { e.stopPropagation(); void removeFolder(f); }}>×</button>
             </div>
             <Show when={lib.open['f:' + f]}><FileList k={'f:' + f} /></Show>
           </>
         )}
       </For>
-      <div class="bnote">Klik = odsłuch · przeciągnij plik na ścieżkę, aby go zaimportować.</div>
+      <div class="bnote">{t('d.br.libnote')}</div>
     </div>
   );
 }
@@ -254,12 +255,12 @@ export function Browser() {
     <>
       <div class="browser" style={{ width: U.pickW + 'px' }}>
         <div class="btabs">
-          <button classList={{ on: U.browserTab === 'project' }} onClick={() => setU('browserTab', 'project')}>PROJEKT</button>
-          <button classList={{ on: U.browserTab === 'library' }} onClick={() => setU('browserTab', 'library')}>BIBLIOTEKA</button>
+          <button classList={{ on: U.browserTab === 'project' }} onClick={() => setU('browserTab', 'project')}>{t('d.br.tab.project')}</button>
+          <button classList={{ on: U.browserTab === 'library' }} onClick={() => setU('browserTab', 'library')}>{t('d.br.tab.library')}</button>
         </div>
         <Show when={U.browserTab === 'project'} fallback={<LibraryTab />}><ProjectTab /></Show>
       </div>
-      <div class="vsplit" onPointerDown={split} onDblClick={() => setU('pickOpen', false)} title="Przeciągnij, aby zmienić szerokość" />
+      <div class="vsplit" onPointerDown={split} onDblClick={() => setU('pickOpen', false)} title={t('d.br.resize')} />
     </>
   );
 }

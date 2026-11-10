@@ -1,11 +1,14 @@
 // User preferences kept on this computer (localStorage), applied live. The theme lives in
 // ui/theme.ts; audio and MIDI devices are saved by the engine.
 import { createSignal } from 'solid-js';
+import { setLang, type Lang } from '../lib/i18n';
 import { isTauri } from '../api/backend';
 import * as A from './actions';
 import { S } from './store';
 
 export interface Prefs {
+  /** interface language */
+  lang: Lang;
   /** interface zoom, 0.8–1.5 */
   uiScale: number;
   /** instrument icons on playlist clips */
@@ -19,10 +22,10 @@ export interface Prefs {
 }
 
 const KEY = 'wave.prefs';
-const DEFAULTS: Prefs = { uiScale: 1, clipIcons: true, noteAudition: false, autosaveMin: 2, hints: true };
+const DEFAULTS: Prefs = { lang: 'en', uiScale: 1, clipIcons: true, noteAudition: false, autosaveMin: 2, hints: true };
 
 function load(): Prefs {
-  try { const v = JSON.parse(localStorage.getItem(KEY) ?? '{}'); return { ...DEFAULTS, ...v }; } catch { return { ...DEFAULTS }; }
+  try { const v = JSON.parse(localStorage.getItem(KEY) ?? '{}'); return { ...DEFAULTS, ...v, lang: v.lang === 'pl' ? 'pl' : 'en' }; } catch { return { ...DEFAULTS }; }
 }
 
 const [prefs, setPrefsSig] = createSignal<Prefs>(DEFAULTS);
@@ -44,6 +47,7 @@ export function resetPrefs() {
 let timer: ReturnType<typeof setInterval> | null = null;
 
 function applyPref(k: keyof Prefs, p: Prefs) {
+  if (k === 'lang') setLang(p.lang);
   if (k === 'uiScale') void applyScale(p.uiScale);
   if (k === 'autosaveMin') {
     if (timer) clearInterval(timer);
@@ -63,5 +67,6 @@ async function applyScale(z: number) {
 export function initPrefs() {
   const p = load();
   setPrefsSig(p);
+  setLang(p.lang);
   for (const k of Object.keys(p) as (keyof Prefs)[]) if (p[k] !== DEFAULTS[k]) applyPref(k, p);
 }

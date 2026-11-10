@@ -1,6 +1,7 @@
 // Take lanes & comping: which comp a track shows, and the edits the playlist, its menus and
 // the keyboard make. Every edit is one `putComp` (or `removeComp`) undo step.
 import { be } from '../api/backend';
+import { lang, t as tl } from '../lib/i18n';
 import type { Clip, Comp, CompRegion, Id, Take } from '../api/types';
 import { removeTake, swapRange, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import { fmtPos } from '../lib/format';
@@ -37,13 +38,14 @@ export function toggleTakes(track: number, open?: boolean) {
   const t = S.project.tracks[track]; if (!t) return;
   const v = open ?? !U.takesOpen[t.id];
   setU('takesOpen', t.id, v);
-  if (v && !activeComp(track)) say(t.name + ': brak take\'ów — nagraj z ustawioną pętlą albo nagraj na istniejący klip');
+  if (v && !activeComp(track)) say(tl('a.cp.noTakes', { name: t.name }));
 }
 
 /** Polish count: 1 take, 2–4 take'i, 5+ take'ów. */
 export function takesLabel(n: number): string {
   const m10 = n % 10, m100 = n % 100;
-  return n + ' ' + (n === 1 ? 'take' : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? "take'i" : "take'ów");
+  const few = lang() === 'pl' && m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14);
+  return tl(n === 1 ? 'a.cp.takeOne' : few ? 'a.cp.takeFew' : 'a.cp.takeMany', { n });
 }
 
 export function putComp(comp: Comp, label: string) {
@@ -55,48 +57,48 @@ const withRegions = (comp: Comp, regions: CompRegion[]): Comp => ({ ...plain(com
 export function useWholeTake(row: TakeRow, take: Take) {
   const { clip, comp } = row;
   const lo = Math.max(take.start, clip.offset), hi = Math.min(take.start + take.len, clip.offset + clip.len);
-  putComp(withRegions(comp, writeRange({ ...comp, regions: [] }, take.id, lo, hi)), 'Cały take');
+  putComp(withRegions(comp, writeRange({ ...comp, regions: [] }, take.id, lo, hi)), tl('a.cp.wholeTake'));
   setU('compSel', null);
   say('Comp = ' + take.name);
 }
 
 export function renameTake(comp: Comp, id: Id, name: string) {
-  putComp({ ...plain(comp), takes: comp.takes.map(t => (t.id === id ? { ...t, name } : t)) }, 'Nazwa take\'a');
+  putComp({ ...plain(comp), takes: comp.takes.map(t => (t.id === id ? { ...t, name } : t)) }, tl('a.cp.takeName'));
 }
-export function renameComp(comp: Comp, name: string) { putComp({ ...plain(comp), name }, 'Nazwa compu'); }
+export function renameComp(comp: Comp, name: string) { putComp({ ...plain(comp), name }, tl('a.cp.compName')); }
 
 export function deleteTake(comp: Comp, id: Id) {
   const t = comp.takes.find(x => x.id === id); if (!t) return;
-  if (comp.takes.length === 1) { commit([{ op: 'removeComp', id: comp.id }], 'Usuń take'); say('Usunięto ostatni take — klip zniknął (Ctrl+Z cofa)'); return; }
-  putComp(removeTake(plain(comp), id), 'Usuń take');
+  if (comp.takes.length === 1) { commit([{ op: 'removeComp', id: comp.id }], tl('a.pl.deleteTake')); say(tl('a.cp.lastGone')); return; }
+  putComp(removeTake(plain(comp), id), tl('a.pl.deleteTake'));
   if (S.audition[comp.id] === id) void audition(comp.id, null);
-  say('Usunięto ' + t.name);
+  say(tl('a.cp.deleted', { what: t.name }));
 }
 export function removeUnused(comp: Comp) {
   const gone = unusedTakes(comp);
-  if (!gone.length) return say('Wszystkie take\'i są użyte w compie');
-  if (gone.length === comp.takes.length) return say('Comp nie gra żadnego take\'a — zostawiam je');
-  putComp({ ...plain(comp), takes: comp.takes.filter(t => !gone.some(g => g.id === t.id)) }, 'Usuń nieużyte take\'i');
-  say('Usunięto ' + takesLabel(gone.length));
+  if (!gone.length) return say(tl('a.cp.allUsed'));
+  if (gone.length === comp.takes.length) return say(tl('a.cp.noneUsed'));
+  putComp({ ...plain(comp), takes: comp.takes.filter(t => !gone.some(g => g.id === t.id)) }, tl('a.pl.removeUnused'));
+  say(tl('a.cp.deleted', { what: takesLabel(gone.length) }));
 }
 export const isUsed = (comp: Comp, id: Id) => usedBeats(comp, id) > 0;
 
 export function setXfade(comp: Comp, secs: number) {
-  putComp({ ...plain(comp), xfade: secs }, 'Crossfade compu');
-  say('Crossfade compu: ' + Math.round(secs * 1000) + ' ms');
+  putComp({ ...plain(comp), xfade: secs }, tl('a.cp.xfade'));
+  say(tl('a.cp.xfadeMs', { ms: Math.round(secs * 1000) }));
 }
 
 export async function audition(compId: Id, take: Id | null) {
   try { await enqueue(() => be().compAudition(compId, take)); }
-  catch (e) { say('Błąd: ' + String(e)); return; }
+  catch (e) { say(tl('a.err', { e: String(e) })); return; }
   const cp = compById(compId), t = cp?.takes.find(x => x.id === take);
-  say(t ? '▶ Odsłuch solo: ' + t.name + ' (zamiast compu)' : 'Odsłuch: comp');
+  say(t ? tl('a.cp.soloTake', { name: t.name }) : tl('a.cp.soloComp'));
 }
 
 export function flatten(clipId: Id) {
   enqueue(() => be().flattenComp(clipId))
-    .then(() => { say('Spłaszczono comp do jednego klipu audio (Ctrl+Z cofa)'); setU('compSel', null); })
-    .catch(e => { say('Nie spłaszczono: ' + String(e)); void resync(); });
+    .then(() => { say(tl('a.cp.flattened')); setU('compSel', null); })
+    .catch(e => { say(tl('a.cp.notFlattened', { e: String(e) })); void resync(); });
 }
 
 /** Where the pointer last was over a comp (clip body or a take lane), in comp beats. */
@@ -112,12 +114,12 @@ export function swapTake(dir: -1 | 1): boolean {
   if (sel) ({ from, to } = sel);
   else {
     const r = comp.regions.find(x => compHover.cb >= x.from && compHover.cb < x.to);
-    if (!r) { say('Najedź na fragment compu albo zaznacz zakres na take\'u'); return true; }
+    if (!r) { say(tl('a.cp.hover')); return true; }
     ({ from, to } = r);
   }
   const res = swapRange(comp, from, to, dir);
-  if (!res) { say(dir < 0 ? 'To pierwszy take z tym fragmentem' : 'To ostatni take z tym fragmentem'); return true; }
-  putComp(withRegions(comp, res.regions), 'Zamień take');
+  if (!res) { say(dir < 0 ? tl('a.cp.firstTake') : tl('a.cp.lastTake')); return true; }
+  putComp(withRegions(comp, res.regions), tl('a.cp.swap'));
   if (sel) setU('compSel', { clipId, from: Math.max(from, res.take.start), to: Math.min(to, res.take.start + res.take.len) });
   say(fmtPos(toTimeline(clip, from)) + '–' + fmtPos(toTimeline(clip, to)) + ' → ' + res.take.name);
   return true;

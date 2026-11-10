@@ -34,6 +34,7 @@ wave-vst3 = { path = "../crates/vst3-host" }
 wave-plugin-windows = { path = "../crates/plugin-windows" }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
 serde.workspace = true
 serde_json.workspace = true
 parking_lot.workspace = true

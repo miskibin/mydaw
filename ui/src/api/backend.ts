@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
-  LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
+  KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -12,7 +12,11 @@ export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[];
 export interface EventMap {
   state: StateDto;
   'library-progress': LibraryProgress;
+  /** WAVE Keys: the piano started loading, is ready, or is not on this computer. */
+  'keys-status': KeysStatus;
   'model-progress': ModelProgress;
+  /** The update installer is downloading (`updateDownload`). `total` is 0 when the size is unknown. */
+  'update-progress': UpdateProgress;
   'audio-status': AudioStatus;
   /** Keyboard connected, unplugged or failed, or the choice changed. */
   'midi-status': MidiStatus;
@@ -69,6 +73,8 @@ export interface Backend {
   previewStop(): Promise<void>;
   /** Play one note of a channel now (not an edit). `key` MIDI (default: the channel's root), `vel` 0..1, `pattern`: the one being edited (routing). */
   noteAudition(args: { ch: Id; key?: number; vel?: number; pattern?: Id }): Promise<void>;
+  /** Computer keyboard as a piano: key down (`on`) / up on a channel. */
+  typingNote(args: { ch: Id; key: number; vel?: number; on: boolean }): Promise<void>;
   /** Loop one pattern on its own (null stops). Exclusive with the song transport. */
   patternPlay(pattern: Id | null): Promise<void>;
   audioHosts(): Promise<AudioHost[]>;
@@ -89,6 +95,8 @@ export interface Backend {
   midiSetTarget(channel: Id | null): Promise<MidiStatus>;
   libraryList(): Promise<LibraryList>;
   libraryInstall(id: string): Promise<void>;
+  /** WAVE Keys: whether the piano's recordings are on this computer and loaded. */
+  keysStatus(): Promise<KeysStatus>;
   libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]>;
   libraryAddFolder(): Promise<string[]>;
   libraryRemoveFolder(path: string): Promise<string[]>;
@@ -104,6 +112,19 @@ export interface Backend {
   vst3Params(fxId: Id): Promise<Vst3Param[]>;
   vst3SetParam(fxId: Id, id: number, value: number): Promise<void>;
   cliStatus(): Promise<CliStatus>;
+  /** The running version, the version whose release notes were last shown, and whether updates are checked automatically. */
+  appInfo(): Promise<AppInfo>;
+  /** Asks GitHub Releases for a newer version (null = this is the newest). Rejects when offline or the release is malformed. */
+  updateCheck(): Promise<UpdateInfo | null>;
+  /** Downloads the update found by `updateCheck` (progress: `update-progress`) and verifies its signature. Nothing restarts. */
+  updateDownload(): Promise<void>;
+  /** Installs the downloaded update and restarts WAVE (the call does not return then). Rejects on a failure; the old version keeps running. */
+  updateInstall(): Promise<void>;
+  updateSetAuto(on: boolean): Promise<void>;
+  /** Remembers that the release notes of `version` were shown. */
+  updateMarkSeen(version: string): Promise<void>;
+  /** Opens the release page of `version` (null = the releases list) in the system browser. */
+  openReleasePage(version?: string | null): Promise<void>;
   on<K extends keyof EventMap>(ev: K, cb: (payload: EventMap[K]) => void): Promise<() => void>;
   /** OS file drag & drop with real paths (Tauri) or file names (mock). */
   onOsDrop(cb: (e: OsDropEvent) => void): Promise<() => void>;
@@ -189,6 +210,7 @@ export function tauriBackend(): Backend {
     previewClip: clipId => invoke('preview_clip', { clipId }),
     previewFile: path => invoke('preview_file', { path }),
     previewStop: () => invoke('preview_stop'),
+    typingNote: a => invoke('typing_note', { ch: a.ch, key: a.key, vel: a.vel ?? null, on: a.on }),
     noteAudition: a => invoke('note_audition', { ch: a.ch, key: a.key ?? null, vel: a.vel ?? null, pattern: a.pattern ?? null }),
     patternPlay: pattern => invoke('pattern_play', { pattern }),
     audioHosts: () => invoke('audio_hosts'),
@@ -203,6 +225,7 @@ export function tauriBackend(): Backend {
     midiSetTarget: channel => invoke('midi_set_target', { channel }),
     libraryList: () => invoke('library_list'),
     libraryInstall: id => invoke('library_install', { id }),
+    keysStatus: () => invoke('keys_status'),
     libraryFiles: q => invoke('library_files', { kit: q.kit ?? null, folder: q.folder ?? null }),
     libraryAddFolder: () => invoke('library_add_folder'),
     libraryRemoveFolder: path => invoke('library_remove_folder', { path }),
@@ -216,6 +239,13 @@ export function tauriBackend(): Backend {
     vst3Params: fxId => invoke('vst3_params', { fxId }),
     vst3SetParam: (fxId, id, value) => invoke('vst3_set_param', { fxId, id, value }),
     cliStatus: () => invoke('cli_status'),
+    appInfo: () => invoke('app_info'),
+    updateCheck: () => invoke('update_check'),
+    updateDownload: () => invoke('update_download'),
+    updateInstall: () => invoke('update_install'),
+    updateSetAuto: on => invoke('update_set_auto', { on }),
+    updateMarkSeen: version => invoke('update_mark_seen', { version }),
+    openReleasePage: version => invoke('open_release_page', { version: version ?? null }),
     on: async (ev, cb) => listen(ev, e => cb(e.payload as never)),
     async onOsDrop(cb) {
       const { getCurrentWebview } = await import('@tauri-apps/api/webview');

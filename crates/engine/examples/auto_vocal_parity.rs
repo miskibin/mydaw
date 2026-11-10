@@ -2,7 +2,7 @@
 //!
 //! 1. Export the research test set (50 degraded MUSDB test songs, same seeds as
 //!    `av.dyn_calib`) with `auto_vocal_parity_export.py` (see its docstring).
-//! 2. `cargo run --release -p wave-engine --example auto_vocal_parity -- D:/mydaw-data/auto_vocal_parity [--short] [--n 50]`
+//! 2. `cargo run --release -p wave-engine --example auto_vocal_parity -- D:/wave-data/auto_vocal_parity [--short] [--n 50]`
 //!
 //! Each song's pre-dynamics signal (gate → HPF → EQ, done in Python) goes through the engine
 //! chain calibrated by `autovocal::calibrate_dynamics` (rider → FET → compressor → de-esser).
@@ -160,7 +160,7 @@ fn song(dir: &Path, long: bool) -> Row {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let root = PathBuf::from(args.get(1).map(String::as_str).unwrap_or("D:/mydaw-data/auto_vocal_parity"));
+    let root = PathBuf::from(args.get(1).map(String::as_str).unwrap_or("D:/wave-data/auto_vocal_parity"));
     let long = !args.iter().any(|a| a == "--short");
     let n: usize = args.iter().position(|a| a == "--n").and_then(|i| args.get(i + 1)).and_then(|s| s.parse().ok()).unwrap_or(50);
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(&root).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join("eq.wav").exists()).collect();

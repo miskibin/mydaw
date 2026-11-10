@@ -373,6 +373,17 @@ pub enum TargetRt {
     InsVol(usize),
     InsPan(usize),
     TrackVol(usize),
+    /// Channel Rack channel (index into `Timeline::chans`): fader position, pan.
+    ChanVol(usize),
+    ChanPan(usize),
+    /// A synth channel's patch parameter (`poly::params` index), glided by the synth.
+    Synth { chan: Id, idx: usize, min: f32, max: f32, log: bool, choice: bool },
+    /// WAVE Keys channel (index into `Timeline::chans`): release time, dynamics.
+    KeysRelease(usize),
+    KeysDynamics(usize),
+    /// An audio clip (index into `Timeline::clips`; `usize::MAX` while it does not play).
+    ClipGain(usize),
+    ClipPan(usize),
 }
 
 pub struct AutoRt {
@@ -381,6 +392,7 @@ pub struct AutoRt {
 }
 
 pub struct ClipRt {
+    pub id: Id,
     pub track: usize,
     pub start: f64,
     pub end: f64,
@@ -390,6 +402,10 @@ pub struct ClipRt {
     pub fade_in: f32,
     pub fade_out: f32,
     pub src: ClipSrc,
+    /// `gain` (dB) and `pan` as the previous block played them: an automated change glides
+    /// across the block instead of stepping (a zipper at every block edge).
+    pub gain0: f32,
+    pub pan0: f32,
 }
 
 /// A pattern note, ready to schedule: swing applied, channel resolved to an index.
@@ -417,10 +433,18 @@ pub struct ChanRt {
     pub kind: VoiceKind,
     /// Sampler channels: the audio (`None` when the file is missing: the channel is silent).
     pub sample: Option<Arc<Audio>>,
+    /// WAVE Keys channels: the piano (`None` until it is loaded: the channel is silent),
+    /// the release time in seconds and the velocity → level amount 0..1.
+    pub keys: Option<Arc<crate::keys::KeysBank>>,
+    pub keys_release: f32,
+    pub keys_dynamics: f32,
     pub root: u8,
     /// Channel gain (1 at unity), pan −1..1, and audible (mute/solo).
     pub gain: f32,
     pub pan: f32,
+    /// Gain and pan as the previous block played them (voices glide from these to `gain`/`pan`).
+    pub gain0: f32,
+    pub pan0: f32,
     pub on: bool,
     /// Insert index the channel plays into; `None` = the clip's track.
     pub insert: Option<usize>,
@@ -758,8 +782,9 @@ impl Rt {
                     let old = std::mem::replace(&mut self.graph, g);
                     self.trash(Garbage::Graph(old));
                 }
-                Cmd::Timeline(t) => {
+                Cmd::Timeline(mut t) => {
                     self.voices.remap(&t.chans);
+                    carry_automated(&mut t, &self.timeline);
                     let old = std::mem::replace(&mut self.timeline, t);
                     self.trash(Garbage::Timeline(old));
                 }
@@ -854,7 +879,7 @@ impl Rt {
                         let ch = &tl.chans[i];
                         let home = pattern.and_then(|id| tl.pats.iter().find(|p| p.id == id)).and_then(|p| p.home);
                         let ins = ch.insert.or(home).unwrap_or(ch.home);
-                        play(&mut self.voices, &mut self.synths, ch, i, Dest::Insert(ins), 0, len, key, vel, self.sr);
+                        play(&mut self.voices, &mut self.synths, ch, i, Dest::Insert(ins), 0, len, key, vel, 1.0, self.sr);
                     }
                 }
                 Cmd::MidiNote { chan, key, vel, on, ins } => {
@@ -950,7 +975,7 @@ impl Rt {
                 }
                 let ins = ch.insert.or(pat.home).unwrap_or(ch.home);
                 let delay = ((nb - b0) / bps) as u32;
-                play(&mut self.voices, &mut self.synths, ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel, self.sr);
+                play(&mut self.voices, &mut self.synths, ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel, 1.0, self.sr);
             }
         }
         self.pat_beat = b1.rem_euclid(pat.len);
@@ -1099,16 +1124,28 @@ impl Rt {
                 }
             }
         }
+        // the clips of this block are mixed: the next one glides from what they played
+        for c in self.timeline.clips.iter_mut() {
+            c.gain0 = c.gain;
+            c.pan0 = c.pan;
+        }
         if self.playing {
-            apply_automation(&self.timeline, &mut self.graph, block_beat);
+            apply_automation(&mut self.timeline, &mut self.graph, &mut self.synths, block_beat);
         }
         let shared_beat = if self.playing { self.beat } else { block_beat };
         self.shared.beat.store(shared_beat.to_bits(), Relaxed);
         let heard = if self.playing { self.heard(shared_beat, bps) } else { shared_beat };
         self.shared.heard.store(heard.to_bits(), Relaxed);
+        // tempo-locked effects follow the pattern loop preview like the song
+        let pat_ctx = if !self.playing && self.pat_play.is_some() { Some(self.pat_beat) } else { None };
         self.schedule_pattern(n, bps, spb);
         self.voices.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &mut self.click[..n], &self.timeline.chans);
         self.synths.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &self.timeline.chans, bpm);
+        // what this block played is where the next one glides from
+        for c in self.timeline.chans.iter_mut() {
+            c.gain0 = c.gain;
+            c.pan0 = c.pan;
+        }
 
         // ---- input level + monitoring
         // low-latency monitoring: the armed track's own insert (not the master) takes the
@@ -1177,7 +1214,10 @@ impl Rt {
         }
 
         // ---- inserts (non-master first), then master
-        let ctx = ProcessCtx { sample_rate: sr, bpm, beat: block_beat, playing: self.playing };
+        let ctx = match pat_ctx {
+            Some(b) => ProcessCtx { sample_rate: sr, bpm, beat: b, playing: true },
+            None => ProcessCtx { sample_rate: sr, bpm, beat: block_beat, playing: self.playing },
+        };
         let count = g.inserts.len();
         if count > 0 {
             let (enabled, watch) = (self.skip_silent, &self.watch[..self.watch_n]);
@@ -1323,15 +1363,15 @@ impl Rt {
                                 }
                                 let delay = ((nb - b0) / bps) as u32 + at as u32;
                                 let len_beats = nt.len.min(c.end - nb);
-                                let (dest, vel) = match ch.insert {
-                                    None => (Dest::Track(c.track), nt.vel),
+                                let (dest, gain) = match ch.insert {
+                                    None => (Dest::Track(c.track), 1.0),
                                     // routed past the track: the track still mutes and scales it
                                     Some(k) => match self.graph.tracks.get(c.track) {
-                                        Some(t) if t.on => (Dest::Insert(k), nt.vel * t.gain),
+                                        Some(t) if t.on => (Dest::Insert(k), t.gain),
                                         _ => continue,
                                     },
                                 };
-                                play(&mut self.voices, &mut self.synths, ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, vel, self.sr);
+                                play(&mut self.voices, &mut self.synths, ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, nt.vel, gain, self.sr);
                             }
                         }
                     }
@@ -1385,15 +1425,16 @@ impl Rt {
 }
 
 /// Starts a note on a channel: the voice pool for built-ins and samplers, the channel's
-/// synth instance for synth channels. `len_s` in seconds.
+/// synth instance for synth channels. `len_s` in seconds; `gain` is level on top of the
+/// velocity (a track fader the channel's routing skips).
 #[allow(clippy::too_many_arguments)]
-fn play(voices: &mut VoicePool, synths: &mut SynthBank, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, sr: f32) {
+fn play(voices: &mut VoicePool, synths: &mut SynthBank, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32, sr: f32) {
     if ch.kind == VoiceKind::Synth {
         if let Some(s) = synths.get(ch.id) {
-            s.note(delay, (len_s.max(0.0) * sr) as u32, key, vel, dest);
+            s.note(delay, (len_s.max(0.0) * sr) as u32, key, vel * gain, dest);
         }
     } else {
-        voices.note(ch, idx, dest, delay, len_s, key, vel);
+        voices.note(ch, idx, dest, delay, len_s, key, vel, gain);
     }
 }
 
@@ -1598,16 +1639,54 @@ fn slot(g: &mut Graph, fx: Id) -> Option<&mut FxSlot> {
     g.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == fx)
 }
 
+/// A new timeline is built from the project's static values: the channels and clips an
+/// automation drives keep the value they were playing (the next block glides from there to the
+/// automated one; jumping back to the static value for a block was an audible blip on every edit
+/// during playback). Allocation-free; quadratic only in the number of automations.
+fn carry_automated(new: &mut Timeline, old: &Timeline) {
+    for a in new.autos.iter() {
+        match a.target {
+            TargetRt::ChanVol(i) | TargetRt::ChanPan(i) | TargetRt::KeysRelease(i) | TargetRt::KeysDynamics(i) => {
+                let Some(c) = new.chans.get_mut(i) else { continue };
+                let Some(o) = old.chans.iter().find(|o| o.id == c.id) else { continue };
+                match a.target {
+                    TargetRt::ChanVol(_) => (c.gain, c.gain0) = (o.gain, o.gain0),
+                    TargetRt::ChanPan(_) => (c.pan, c.pan0) = (o.pan, o.pan0),
+                    TargetRt::KeysRelease(_) => c.keys_release = o.keys_release,
+                    _ => c.keys_dynamics = o.keys_dynamics,
+                }
+            }
+            TargetRt::ClipGain(k) | TargetRt::ClipPan(k) => {
+                let Some(id) = new.clips.get(k).map(|c| c.id) else { continue };
+                let found = old.autos.iter().find_map(|oa| match oa.target {
+                    TargetRt::ClipGain(j) | TargetRt::ClipPan(j) => old.clips.get(j).filter(|c| c.id == id),
+                    _ => None,
+                });
+                let Some(o) = found else { continue };
+                let c = &mut new.clips[k];
+                if matches!(a.target, TargetRt::ClipGain(_)) {
+                    (c.gain, c.gain0) = (o.gain, o.gain0);
+                } else {
+                    (c.pan, c.pan0) = (o.pan, o.pan0);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Moves automated parameters to their value at `beat`. Allocation-free.
-fn apply_automation(tl: &Timeline, g: &mut Graph, beat: f64) {
-    for c in tl.clips.iter() {
+fn apply_automation(tl: &mut Timeline, g: &mut Graph, synths: &mut crate::poly::SynthBank, beat: f64) {
+    for ci in 0..tl.clips.len() {
+        let c = &tl.clips[ci];
         let ClipSrc::Auto(ai) = c.src else { continue };
         if beat < c.start || beat >= c.end {
             continue;
         }
         let Some(a) = tl.autos.get(ai) else { continue };
         let Some(v) = a.env.value_at(beat - c.start + c.offset) else { continue };
-        match a.target {
+        let target = a.target;
+        match target {
             TargetRt::Param { fx, idx, min, max, log } => {
                 if let Some(s) = slot(g, fx) {
                     let x = if log { min * (max / min).powf(v) } else { min + (max - min) * v };
@@ -1666,6 +1745,46 @@ fn apply_automation(tl: &Timeline, g: &mut Graph, beat: f64) {
                     t.gain = crate::model::fader_gain(v);
                 }
             }
+            TargetRt::ChanVol(i) => {
+                if let Some(ch) = tl.chans.get_mut(i) {
+                    ch.gain = crate::model::fader_gain(v) / crate::model::fader_gain(crate::model::VOL_UNITY);
+                }
+            }
+            TargetRt::ChanPan(i) => {
+                if let Some(ch) = tl.chans.get_mut(i) {
+                    ch.pan = v * 2.0 - 1.0;
+                }
+            }
+            TargetRt::Synth { chan, idx, min, max, log, choice } => {
+                if let Some(s) = synths.get(chan) {
+                    let x = if log { min * (max / min).powf(v) } else { min + (max - min) * v };
+                    s.set_param(idx, if choice { x.round() } else { x });
+                }
+            }
+            TargetRt::KeysRelease(i) => {
+                if let Some(ch) = tl.chans.get_mut(i) {
+                    let (lo, hi, _) = crate::keys::RELEASE_MS;
+                    ch.keys_release = lo * (hi / lo).powf(v) / 1000.0;
+                }
+            }
+            TargetRt::KeysDynamics(i) => {
+                if let Some(ch) = tl.chans.get_mut(i) {
+                    ch.keys_dynamics = v;
+                }
+            }
+            TargetRt::ClipGain(k) => {
+                if let Some(cl) = tl.clips.get_mut(k) {
+                    cl.gain = CLIP_GAIN_DB.0 + (CLIP_GAIN_DB.1 - CLIP_GAIN_DB.0) * v;
+                }
+            }
+            TargetRt::ClipPan(k) => {
+                if let Some(cl) = tl.clips.get_mut(k) {
+                    cl.pan = v * 2.0 - 1.0;
+                }
+            }
         }
     }
 }
+
+/// The range an audio clip's gain automation spans, dB (the sample editor's VOL knob).
+pub const CLIP_GAIN_DB: (f32, f32) = (-24.0, 12.0);

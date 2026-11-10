@@ -2,6 +2,8 @@
 // canvas code reads them from `T`, which is mutated in place when the theme changes. Cached
 // canvas layers include `theme.epoch` in their key (frameLoop `Layer`), so they re-render.
 import { createSignal } from 'solid-js';
+import { t } from '../lib/i18n';
+import type { TranslationKey } from '../lib/i18n';
 
 export interface Tokens {
   // surfaces
@@ -123,6 +125,13 @@ export const THEMES: ThemeDef[] = [
   lightTheme('paper', 'Papier', 38, 30, ['#c2651b', '#a9530f']),
   lightTheme('sky', 'Błękit', 210, 35, ['#1f6fe0', '#1858b8']),
 ];
+
+const THEME_NAME_KEYS: Record<string, TranslationKey> = {
+  dark: 'd.theme.dark', midnight: 'd.theme.midnight', violet: 'd.theme.violet', forest: 'd.theme.forest', studio: 'd.theme.studio',
+  rose: 'd.theme.rose', oled: 'd.theme.oled', light: 'd.theme.light', paper: 'd.theme.paper', sky: 'd.theme.sky',
+};
+/** Display name of a theme in the current language (the Polish `name` stays as the data). */
+export function themeName(th: ThemeDef): string { const k = THEME_NAME_KEYS[th.id]; return k ? t(k) : th.name; }
 
 /** Current tokens (mutated in place on theme change; read at draw time). */
 export const T: Tokens = { ...DARK };

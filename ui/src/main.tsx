@@ -10,6 +10,8 @@ import { setU } from './state/ui';
 import { App } from './App';
 import { initTheme } from './ui/theme';
 import { initPrefs } from './state/prefs';
+import { initUpdates } from './state/updates';
+import { t } from './lib/i18n';
 
 initTheme();
 initPrefs();
@@ -29,9 +31,13 @@ async function boot() {
   setU('cur', p ? { kind: 'pat', ref: p.id } : S.project.sources[0] ? { kind: 'audio', ref: S.project.sources[0].id } : null);
   setU('playing', state.transport.playing);
   render(() => <App />, document.getElementById('root')!);
+  void initUpdates(); // version, "What's new" after an update, the first automatic check
 }
 
 boot().catch(e => {
   console.error(e);
-  document.getElementById('root')!.innerHTML = '<pre style="color:#e8607a;padding:20px;font:12px monospace">WAVE: nie udało się uruchomić UI\n' + String(e?.stack ?? e) + '</pre>';
+  const pre = document.createElement('pre');
+  pre.style.cssText = 'color:#e8607a;padding:20px;font:12px monospace';
+  pre.textContent = t('startup.failed', { error: String(e?.stack ?? e) });
+  document.getElementById('root')!.replaceChildren(pre);
 });

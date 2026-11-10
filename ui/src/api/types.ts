@@ -18,7 +18,7 @@ export interface Track {
   icon?: string | null;
 }
 
-export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'rider' | 'vst3';
+export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'rider' | 'half' | 'vst3';
 /** Built-in kinds the effect picker lists (the views keep a label and blurb per kind). */
 export type BuiltinKind = Exclude<FxKind, 'vst3'>;
 /** Every built-in kind, including ones the picker does not list yet ('rider': added by "Auto wokal"). */
@@ -69,8 +69,18 @@ export const SAMPLE_ROOT = 60;
  * new `synth`; they take the engine's fast path (no timeline rebuild) and glide on held notes.
  */
 export interface SynthState { preset: string | null; params: Record<string, number> }
-/** What a channel plays: a built-in instrument, a one-shot sample of a project source, or the built-in synth. */
-export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id } | { kind: 'synth'; synth: SynthState };
+/**
+ * WAVE Keys (the sampled grand piano): `release` = how long a note rings after its key is let
+ * go, in ms; `dynamics` 0..100 % = how much the velocity changes the level (the timbre always
+ * follows the velocity). Mirrors crates/engine/src/keys.rs.
+ */
+export interface KeysState { release: number; dynamics: number }
+export const KEYS_RELEASE = { min: 40, max: 3000, def: 350 } as const;
+export const KEYS_DYNAMICS = { min: 0, max: 100, def: 100 } as const;
+/** Where the piano's recordings are: `missing` = not on this computer yet (install library kit `kit`). */
+export interface KeysStatus { state: 'idle' | 'missing' | 'loading' | 'ready' | 'error'; error: string | null; kit: string; installed: boolean }
+/** What a channel plays: a built-in instrument, a one-shot sample of a project source, the built-in synth, or WAVE Keys. */
+export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id } | { kind: 'synth'; synth: SynthState } | { kind: 'keys'; keys: KeysState };
 /**
  * A Channel Rack row, global to the project (every pattern can have notes for it).
  * `vol` fader position (0.7937 = 0 dB), `pan` −1..1, `insert` null = the clip's track insert,
@@ -144,6 +154,11 @@ export interface F0ModelStatus {
   id: string; name: string; bytes: number; installed: boolean; backend: string;
   licenseNote: string; licenseUrl: string; path: string; error: string | null;
 }
+/** An update found on GitHub Releases (`update_check`). `notes`: the release notes (Markdown), `date`: `YYYY-MM-DD`. */
+export interface UpdateInfo { version: string; notes: string | null; date: string | null }
+/** `app_info`: the running version, the version whose notes were last shown (null on a fresh install), the auto-check switch. */
+export interface AppInfo { version: string; seenVersion: string | null; autoUpdate: boolean }
+export interface UpdateProgress { done: number; total: number }
 export interface ModelProgress { id: string; done: number; total: number; error?: string }
 
 export interface TempoCandidate { bpm: number; score: number }
@@ -213,7 +228,19 @@ export type AutoTarget =
   | { kind: 'mix'; fxId: Id }
   | { kind: 'insertVol'; id: Id }
   | { kind: 'insertPan'; id: Id }
-  | { kind: 'trackVol'; id: Id };
+  | { kind: 'trackVol'; id: Id }
+  /** A Channel Rack channel's fader position and pan. */
+  | { kind: 'chanVol'; id: Id }
+  | { kind: 'chanPan'; id: Id }
+  /** A synth channel's parameter (`Catalog.synth` id). */
+  | { kind: 'synth'; chanId: Id; param: string }
+  /** A WAVE Keys channel's release (ms, log) or dynamics (%). */
+  | { kind: 'keys'; chanId: Id; param: 'release' | 'dynamics' }
+  /** An audio clip's own gain (−24..+12 dB, `CLIP_GAIN_DB`) and pan. */
+  | { kind: 'clipGain'; id: Id }
+  | { kind: 'clipPan'; id: Id };
+/** The span of an audio clip's gain automation, dB (the sample editor's VOL knob; rt.rs `CLIP_GAIN_DB`). */
+export const CLIP_GAIN_DB = { min: -24, max: 12 } as const;
 /** `t` beats from the start of the automation, `v` normalised 0..1. */
 export interface AutoPoint { t: number; v: number }
 export interface Automation { id: Id; name: string; color: string; target: AutoTarget; points: AutoPoint[] }

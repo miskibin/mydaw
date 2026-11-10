@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { followScroll, margins, planTile, type Tile } from './playlistTile';
+import { damageRects, followScroll, margins, mergeRects, planTile, type Rect, type Tile } from './playlistTile';
 
 const GW = 20000, GH = 4000;
 
@@ -74,5 +74,40 @@ describe('follow', () => {
     }
     expect(jumps.length).toBeGreaterThan(3);
     expect(jumps.length).toBeLessThan(7);
+  });
+});
+
+describe('playlist damage', () => {
+  const tile: Tile = { x: 1000, y: 200, w: 2000, h: 1000 };
+  const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+  it('maps a moved clip to its old and new box, tile-local', () => {
+    const r = damageRects([{ x: 1100, y: 300, w: 50, h: 40 }, { x: 1500, y: 300, w: 50, h: 40 }], tile, 1)!;
+    expect(r).toEqual([{ x: 100, y: 100, w: 50, h: 40 }, { x: 500, y: 100, w: 50, h: 40 }]);
+  });
+
+  it('drops boxes off the tile and clips the ones across its edge', () => {
+    const r = damageRects([{ x: 0, y: 0, w: 50, h: 50 }, { x: 2980, y: 1180, w: 100, h: 100 }], tile, 1)!;
+    expect(r).toEqual([{ x: 1980, y: 980, w: 20, h: 20 }]);
+  });
+
+  it('lands on whole device pixels at fractional scaling', () => {
+    const [r] = damageRects([{ x: 1100.3, y: 300.3, w: 10.2, h: 10.2 }], tile, 1.5)!;
+    for (const v of [r.x, r.y, r.x + r.w, r.y + r.h]) expect(Math.abs(v * 1.5 - Math.round(v * 1.5))).toBeLessThan(1e-9);
+    expect(r.x).toBeLessThanOrEqual(100.3);
+    expect(r.x + r.w).toBeGreaterThanOrEqual(110.5);
+  });
+
+  it('merges overlapping boxes so no pixel is painted twice', () => {
+    const r = mergeRects([{ x: 0, y: 0, w: 10, h: 10 }, { x: 5, y: 5, w: 10, h: 10 }, { x: 40, y: 0, w: 5, h: 5 }, { x: 14, y: 14, w: 3, h: 3 }]);
+    expect(r).toHaveLength(2);
+    for (let i = 0; i < r.length; i++) for (let j = i + 1; j < r.length; j++) expect(overlaps(r[i], r[j])).toBe(false);
+  });
+
+  it('falls back to a full paint for most of the tile or many boxes', () => {
+    expect(damageRects([{ x: 1000, y: 200, w: 1800, h: 900 }], tile, 1)).toBeNull();
+    const many = Array.from({ length: 60 }, (_, i) => ({ x: 1000 + i * 30, y: 300, w: 10, h: 10 }));
+    expect(damageRects(many, tile, 1)).toBeNull();
+    expect(damageRects([], tile, 1)).toEqual([]);
   });
 });

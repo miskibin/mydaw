@@ -153,7 +153,7 @@ impl ExportFormat {
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_to_file(
-    app: &App,
+    app: &Arc<App>,
     out: &std::path::Path,
     from: f64,
     to: f64,
@@ -165,6 +165,8 @@ pub fn render_to_file(
     if to <= from {
         return Err("`to` must be after `from`".into());
     }
+    // a bounce must not start while the piano is still loading (it would be silent)
+    crate::keys::wait(app);
     let audio = app.engine.render_cancelable(from, to, tail, rate, cancel).map_err(|e| e.to_string())?;
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("cancelled".into());
@@ -186,7 +188,7 @@ pub fn render_to_file(
     }))
 }
 
-pub fn render(app: &App, a: &Value) -> R<Value> {
+pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
     let out = PathBuf::from(need_str(a, "out")?);
     let p = app.engine.project();
     let from = opt_f64(a, "from").unwrap_or(0.0);
@@ -265,7 +267,7 @@ pub fn schema() -> Value {
             "removeSource": {"id": 0},
             "setBpm": {"bpm": 128},
             "setLoop": {"loop": {"a": 0, "b": 16}},
-            "putAutomation": {"automation": {"id": 0, "name": "Reverb mix", "color": "#e0a44a", "target": {"kind": "fx|mix|insertVol|insertPan|trackVol", "fxId": 0, "param": "mix or band:<i>:f|g|q", "id": "insert/track id for vol/pan"}, "points": [{"t": 0, "v": 0.2}, {"t": 8, "v": 0.8}]}},
+            "putAutomation": {"automation": {"id": 0, "name": "Reverb mix", "color": "#e0a44a", "target": {"kind": "fx|mix|insertVol|insertPan|trackVol|chanVol|chanPan|synth|keys|clipGain|clipPan", "fxId": 0, "chanId": 0, "param": "fx: mix or band:<i>:f|g|q; synth: catalog id; keys: release|dynamics", "id": "insert/track/channel/clip id for vol/pan/gain"}, "points": [{"t": 0, "v": 0.2}, {"t": 8, "v": 0.8}]}},
             "removeAutomation": {"id": 0},
             "putComp": {"comp": {"id": 0, "name": "Comp 1", "xfade": 0.01, "takes": [{"id": 0, "name": "Take 1", "ref": "source id", "start": 0, "len": 8, "offset": 0}], "regions": [{"take": 0, "from": 0, "to": 4, "xfade": 0.02}]}},
             "removeComp": {"id": 0},
@@ -297,6 +299,7 @@ fn channel_json(p: &wave_engine::Project, c: &wave_engine::Channel) -> Value {
         ChannelSrc::Inst { inst } => ("inst", json!({ "inst": inst })),
         ChannelSrc::Sample { source } => ("sample", json!({ "source": source, "sourceName": p.sources.iter().find(|s| s.id == *source).map(|s| s.name.clone()) })),
         ChannelSrc::Synth { synth } => ("synth", json!({ "preset": synth.preset })),
+        ChannelSrc::Keys { keys } => ("keys", json!({ "release": keys.release, "dynamics": keys.dynamics })),
     };
     let mut v = json!({
         "id": c.id, "index": p.channels.iter().position(|x| x.id == c.id), "name": c.name, "kind": kind,
@@ -352,6 +355,13 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         added = Some(id);
         ops.push(Op::PutChannel { channel: ch, index: None });
     }
+    if arg(a, "keys").and_then(Value::as_bool).unwrap_or(false) {
+        // a WAVE Keys channel: the sampled grand piano
+        let id = p.next_id + ops.len() as u64;
+        let ch = Channel { name: "WAVE Keys".into(), color: "#e0a44a".into(), src: ChannelSrc::Keys { keys: Default::default() }, root: 60, ..Channel::builtin(id, Inst::Kick) };
+        added = Some(id);
+        ops.push(Op::PutChannel { channel: ch, index: None });
+    }
     if let (Some(v), Some(name)) = (arg(a, "ch"), arg(a, "preset").and_then(Value::as_str)) {
         // load a factory preset into a synth channel
         let mut c = find_channel(&p, v)?.clone();
@@ -365,10 +375,19 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         // one synth knob
         let mut c = find_channel(&p, v)?.clone();
         let value = opt_f64(a, "value").ok_or("`value` is required")?;
-        let ChannelSrc::Synth { synth } = &mut c.src else { return Err(format!("channel `{}` is not a synth", c.name)) };
-        let i = wave_engine::poly::params::index_of(param).ok_or(format!("the synth has no parameter `{param}` (see `wave catalog`)"))?;
-        synth.params.insert(param.to_string(), wave_engine::poly::params::clamp(i, value) as f64);
-        synth.preset = None;
+        match &mut c.src {
+            ChannelSrc::Synth { synth } => {
+                let i = wave_engine::poly::params::index_of(param).ok_or(format!("the synth has no parameter `{param}` (see `wave catalog`)"))?;
+                synth.params.insert(param.to_string(), wave_engine::poly::params::clamp(i, value) as f64);
+                synth.preset = None;
+            }
+            ChannelSrc::Keys { keys } => match param {
+                "release" => keys.release = (value as f32).clamp(wave_engine::keys::RELEASE_MS.0, wave_engine::keys::RELEASE_MS.1),
+                "dynamics" => keys.dynamics = (value as f32).clamp(0.0, 100.0),
+                _ => return Err(format!("WAVE Keys has no parameter `{param}` (release in ms, dynamics in %)")),
+            },
+            _ => return Err(format!("channel `{}` has no parameters (it is not a synth or WAVE Keys)", c.name)),
+        }
         ops.push(Op::PutChannel { channel: c, index: None });
     }
     if let Some(v) = arg(a, "remove") {

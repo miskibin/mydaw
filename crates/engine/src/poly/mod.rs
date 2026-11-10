@@ -27,6 +27,7 @@ use std::f32::consts::TAU;
 
 use serde::Serialize;
 
+use crate::dsp::out_limiter::OutLimiter;
 use crate::model::Id;
 use crate::rt::{ChanRt, InsertRt};
 use crate::synth::{pan_gains, Dest};
@@ -151,6 +152,8 @@ pub struct SynthInst {
     /// destination first fades the old routing out, then the new one in.
     mslots: [(u8, usize, f32); 4],
     gain: (f32, f32),
+    /// Output safety limiter: chords sum above full scale, single notes never reach it.
+    lim: OutLimiter,
     quiet: usize,
     idle: bool,
     age: u64,
@@ -188,6 +191,7 @@ impl SynthInst {
             rng: 0x1234_5678 ^ (chan as u32).wrapping_mul(0x9E37_79B9) | 1,
             mslots: [(0, 0, 0.0); 4],
             gain: (0.0, 0.0),
+            lim: OutLimiter::new(sr),
             quiet: 0,
             idle: true,
             age: 0,
@@ -204,6 +208,13 @@ impl SynthInst {
         self.target = *p;
         if !self.voices.iter().any(|v| v.on) {
             self.fresh = false;
+        }
+    }
+
+    /// One parameter (automation): glides like an edit when it is a continuous one.
+    pub fn set_param(&mut self, idx: usize, v: f32) {
+        if let Some(t) = self.target.get_mut(idx) {
+            *t = v;
         }
     }
 
@@ -534,7 +545,7 @@ impl SynthInst {
             let mut pk = 0f32;
             for i in 0..m {
                 let t = (i + 1) as f32 * inv;
-                let (a, b) = (self.bl[i] * trim, self.br[i] * trim);
+                let (a, b) = self.lim.tick(self.bl[i] * trim, self.br[i] * trim);
                 pk = pk.max(a.abs()).max(b.abs());
                 self.bl[i] = a * (g0l + (gl - g0l) * t);
                 self.br[i] = b * (g0r + (gr - g0r) * t);
@@ -548,6 +559,7 @@ impl SynthInst {
                 if self.quiet > self.fx.tail(&self.cur, bpm) + CHUNK {
                     self.idle = true;
                     self.fx.reset();
+                    self.lim.reset();
                 }
             }
             self.now += m as u64;

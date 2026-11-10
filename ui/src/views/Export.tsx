@@ -1,5 +1,6 @@
 import { createSignal, Show } from 'solid-js';
 import { be } from '../api/backend';
+import { t } from '../lib/i18n';
 import { baseName } from '../lib/format';
 import { exportRange, exportSeconds, fmtExportLen, hasLoop } from '../lib/export';
 import { S } from '../state/store';
@@ -45,13 +46,13 @@ function ExportDialog() {
       setU('exportBusy', false);
       if (!U.exportOpen) return; // dialog was closed (Escape) while bouncing
       if (r.cancelled) {
-        say('Eksport anulowany');
+        say(t('a.ex.cancelled'));
         setBusy(false);
         return;
       }
-      const peak = r.stats.silent ? 'cisza' : r.stats.peakDbfs.toFixed(1) + ' dBFS';
+      const peak = r.stats.silent ? t('a.ex.silence') : r.stats.peakDbfs.toFixed(1) + ' dBFS';
       const clip = r.stats.clippedSamples > 0 ? ' · ' + r.stats.clippedSamples + ' clipped' : '';
-      say('Wyeksportowano ' + baseName(r.out) + ' · ' + fmtExportLen(r.stats.seconds) + ' · peak ' + peak + clip);
+      say(t('a.ex.done', { name: baseName(r.out), len: fmtExportLen(r.stats.seconds), peak, clip }));
       setU('exportOpen', false);
     } catch (e) {
       setU('exportBusy', false);
@@ -72,53 +73,53 @@ function ExportDialog() {
   return (
     <div class="overlay" onPointerDown={() => close()}>
       <div class="dialog" style={{ width: 'min(420px,92vw)' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
-        <div class="hd"><span>Eksport</span><button disabled={busy()} onClick={() => setU('exportOpen', false)}>×</button></div>
+        <div class="hd"><span>{t('a.ex.title')}</span><button disabled={busy()} onClick={() => setU('exportOpen', false)}>×</button></div>
         <Show when={!busy()} fallback={
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '14px' }}>
-            <span class="note">Eksportuję master → WAV 32-bit float…</span>
+            <span class="note">{t('a.ex.busy')}</span>
             <div class="prog busy"><div /></div>
             <div class="row" style={{ 'justify-content': 'flex-end', gap: '8px' }}>
-              <button class="smallbtn" onClick={cancel}>Anuluj</button>
+              <button class="smallbtn" onClick={cancel}>{t('a.ex.cancel')}</button>
             </div>
           </div>
         }>
           <div class="form" style={{ 'margin-bottom': '12px' }}>
-            <label>Zakres</label>
+            <label>{t('a.ex.range')}</label>
             <Segmented
-              options={loopOk() ? ['Utwór', 'Pętla'] : ['Utwór']}
+              options={loopOk() ? [t('a.ex.song'), t('a.ex.loop')] : [t('a.ex.song')]}
               value={() => (useLoop() && loopOk() ? 1 : 0)}
               pick={i => setUseLoop(i === 1)}
-              title={loopOk() ? 'Utwór = cała piosenka; Pętla = zaznaczona pętla' : 'Brak pętli — eksportuje cały utwór'}
+              title={loopOk() ? t('a.ex.rangeTip') : t('a.ex.rangeTipNoLoop')}
             />
-            <label>Ogon</label>
+            <label>{t('a.ex.tail')}</label>
             <Segmented
-              options={['Utnij', '2 s', '8 s']}
+              options={[t('a.ex.cut'), '2 s', '8 s']}
               value={() => tailI()}
               pick={i => setTailI(i as 0 | 1 | 2)}
-              title="Ile sekund po końcu zostawić na zanikanie reverbu i delay"
+              title={t('a.ex.tailTip')}
             />
-            <label>Próbkowanie</label>
+            <label>{t('a.ex.rate')}</label>
             <Segmented
               options={['48 kHz', '44,1 kHz']}
               value={() => rateI()}
               pick={i => setRateI(i as 0 | 1)}
             />
-            <label>Format</label>
+            <label>{t('a.ex.format')}</label>
             <Segmented options={['WAV', 'MP3']} value={() => (mp3() ? 1 : 0)} pick={i => { setMp3(i === 1); remember(); }}
-              title="WAV: bez strat, 32-bit float (do dalszej pracy, masteringu). MP3: mały plik do wysłania / odsłuchu na telefonie" />
+              title={t('a.ex.formatTip')} />
             <Show when={mp3()}>
-              <label>Jakość MP3</label>
-              <Segmented options={KBPS.map(k => k + ' kbps')} value={() => kbI()} pick={i => { setKbI(i); remember(); }} title="320 kbps = najlepsza jakość" />
+              <label>{t('a.ex.mp3q')}</label>
+              <Segmented options={KBPS.map(k => k + ' kbps')} value={() => kbI()} pick={i => { setKbI(i); remember(); }} title={t('a.ex.mp3qTip')} />
             </Show>
-            <label>Plik</label>
-            <span class="note mono">{mp3() ? 'MP3 · stereo · ' + KBPS[kbI()] + ' kbps' : 'WAV · stereo · 32-bit float'}</span>
-            <label>Długość</label>
+            <label>{t('a.ex.file')}</label>
+            <span class="note mono">{mp3() ? t('a.ex.fileMp3', { kbps: KBPS[kbI()] }) : t('a.ex.fileWav')}</span>
+            <label>{t('a.ex.length')}</label>
             <span class="note mono">{fmtExportLen(seconds())} · {RATES[rateI()]} Hz</span>
           </div>
           <Show when={err()}><div class="note err" style={{ 'margin-bottom': '10px' }}>{err()}</div></Show>
           <div class="row" style={{ 'justify-content': 'flex-end', gap: '8px' }}>
-            <button class="smallbtn" onClick={cancel}>Anuluj</button>
-            <button class="smallbtn primary" onClick={() => void start()}>Eksportuj…</button>
+            <button class="smallbtn" onClick={cancel}>{t('a.ex.cancel')}</button>
+            <button class="smallbtn primary" onClick={() => void start()}>{t('a.ex.go')}</button>
           </div>
         </Show>
       </div>

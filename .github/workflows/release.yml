@@ -16,11 +16,13 @@ jobs:
     if: github.event_name != 'push' || startsWith(github.ref, 'refs/tags/') || contains(github.event.head_commit.message, '[release]')
     strategy:
       fail-fast: false
+      # both jobs add their platform to the same latest.json (the updater manifest): one at a time, or one overwrites the other
+      max-parallel: 1
       matrix:
         include:
           - os: windows-latest
             features: asio
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             features: ""
     runs-on: ${{ matrix.os }}
     steps:
@@ -41,18 +43,39 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: ui/pnpm-lock.yaml }
       - run: pnpm --dir ui install --frozen-lockfile
+      - name: WAVE Keys piano (bundled into the installer)
+        run: node scripts/fetch-keys.mjs
+      # The release notes are the CHANGELOG.md section of this version (fails when it is missing). They
+      # become the release body and the "notes" the in-app updater shows; see docs/releasing.md.
+      - name: Release notes from CHANGELOG.md
+        id: notes
+        shell: bash
+        run: |
+          node scripts/changelog-section.mjs > release-notes.md
+          { echo 'notes<<NOTES_EOF'; cat release-notes.md; echo 'NOTES_EOF'; } >> "$GITHUB_OUTPUT"
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # signs the installers for the in-app updater (the public half is plugins.updater.pubkey in tauri.conf.json)
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: app
-          args: ${{ matrix.features != '' && format('--features {0}', matrix.features) || '' }}
+          # tauri.release.conf.json turns on the signed updater artifacts (a plain `tauri build` needs no key)
+          args: ${{ format('--config tauri.release.conf.json {0}', matrix.features != '' && format('--features {0}', matrix.features) || '') }}
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
           tagName: v__VERSION__
           releaseName: "WAVE v__VERSION__"
+          # the notes end at the rule: the app shows only what is above it
           releaseBody: |
-            WAVE v2 — rewritten as a lean Tauri app.
-            * Windows installer is built **with ASIO** (Settings → Audio → ASIO).
-            * `wave` CLI works after the first start (open a new terminal): `wave status`, `wave context`, see docs/cli.md.
-            * VST3 effects: Dodaj efekt → VST3… (first scan may take a while).
+            ${{ steps.notes.outputs.notes }}
+
+            ---
+            WAVE: a fast, FL-Studio-style DAW. Website and audio examples: https://miskibin.github.io/wave-DAW/
+            * The Windows installer is built **with ASIO** (Settings → Audio → ASIO) and includes the WAVE Keys piano.
+            * The interface is English by default; Polish is in Settings.
+            * The `wave` command line works after the first start (open a new terminal): `wave status`, `wave context`, see docs/cli.md.
+            * VST3 effects: Add effect → VST3… (the first scan may take a while).
           releaseDraft: false
-          prerelease: true
+          prerelease: false

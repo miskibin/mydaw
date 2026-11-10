@@ -1,6 +1,8 @@
+import { t } from './i18n';
+
 // Grid snapping. `snap` is the select value: -1 = auto, 0 = off, otherwise beats.
 export const SNAPS: [string, number][] = [
-  ['Snap: auto', -1], ['Snap: brak', 0], ['Snap: 1/4 beat', 0.25], ['Snap: 1/3 beat', 1 / 3],
+  ['Snap: auto', -1], ['Snap: off', 0], ['Snap: 1/4 beat', 0.25], ['Snap: 1/3 beat', 1 / 3],
   ['Snap: 1/2 beat', 0.5], ['Snap: beat', 1], ['Snap: bar', 4],
 ];
 
@@ -9,9 +11,9 @@ export function snapName(u: number): string {
   if (Math.abs(u - 1 / 3) < 1e-6) return '1/3 beat';
   if (u === 0.5) return '1/2 beat';
   if (u === 1) return 'beat';
-  if (u === 2) return '2 beaty';
+  if (u === 2) return t('a.snap.beats2');
   if (u === 4) return 'bar';
-  return 'brak';
+  return t('a.snap.offName');
 }
 
 /** Smallest of [¼, ½, 1, 2, 4] beats whose on-screen width is at least 10 px. */
@@ -31,5 +33,5 @@ export function snapFloor(b: number, unit: number): number {
 }
 
 export function snapLabel(snap: number, pxPerBeat: number): string {
-  return snap < 0 ? 'Snap: auto · ' + snapName(autoSnap(pxPerBeat)) : (SNAPS.find(s => s[1] === snap)?.[0] ?? 'Snap');
+  return snap < 0 ? 'Snap: auto · ' + snapName(autoSnap(pxPerBeat)) : snap === 0 ? t('a.snap.off') : (SNAPS.find(s => s[1] === snap)?.[0] ?? 'Snap');
 }

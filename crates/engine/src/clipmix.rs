@@ -28,12 +28,18 @@ pub(crate) fn mix_audio_clip(c: &ClipRt, a: &Audio, b0: f64, bps: f64, spb: f64,
     }
     let dur = (c.end - c.start) * spb;
     let g = 10f32.powf(c.gain / 20.0);
-    let (pl, pr) = (if c.pan > 0.0 { 1.0 - c.pan } else { 1.0 }, if c.pan < 0.0 { 1.0 + c.pan } else { 1.0 });
+    let pans = |p: f32| (if p > 0.0 { 1.0 - p } else { 1.0 }, if p < 0.0 { 1.0 + p } else { 1.0 });
+    let (pl, pr) = pans(c.pan);
+    // an automated gain or pan glides from the previous block's value across this one
+    let glide = c.gain0 != c.gain || c.pan0 != c.pan;
+    let (g0, (pl0, pr0)) = (10f32.powf(c.gain0 / 20.0), pans(c.pan0));
+    let inv_n = 1.0 / n.max(1) as f32;
+    let gain_at = |i: usize| if glide { g0 + (g - g0) * (i as f32 * inv_n) } else { g };
     let t_of = |i: usize| (b0 + i as f64 * bps - c.start) * spb;
     let (fi, fo) = (c.fade_in as f64, c.fade_out as f64);
     let env_of = |i: usize| {
         let t = t_of(i);
-        let mut env = g;
+        let mut env = gain_at(i);
         if c.fade_in > 0.0 && t < fi {
             env *= (t / fi) as f32;
         }
@@ -67,6 +73,18 @@ pub(crate) fn mix_audio_clip(c: &ClipRt, a: &Audio, b0: f64, bps: f64, spb: f64,
     let fsr = a.sr as f64;
     let step = bps * spb * fsr;
     let src_at = |i: usize| (c.offset + (b0 + i as f64 * bps - c.start)) * spb * fsr;
+    if glide {
+        // automated: every sample its own gain and pan (the fades on top)
+        let pan_at = |i: usize| {
+            let t = i as f32 * inv_n;
+            (pl0 + (pl - pl0) * t, pr0 + (pr - pr0) * t)
+        };
+        add_run_stereo(a, src_at(i0), step, &mut out_l[i0..i1], &mut out_r[i0..i1], |k| {
+            let (e, (a, b)) = (env_of(i0 + k), pan_at(i0 + k));
+            (e * a, e * b)
+        });
+        return;
+    }
     if fi_end > fo_start {
         // the fades overlap (a very short clip): every sample gets its full envelope
         add_run(a, src_at(i0), step, &mut out_l[i0..i1], &mut out_r[i0..i1], |k| env_of(i0 + k), pl, pr);
@@ -80,6 +98,16 @@ pub(crate) fn mix_audio_clip(c: &ClipRt, a: &Audio, b0: f64, bps: f64, spb: f64,
     }
     if i1 > fo_start {
         add_run(a, src_at(fo_start), step, &mut out_l[fo_start..i1], &mut out_r[fo_start..i1], |k| env_of(fo_start + k), pl, pr);
+    }
+}
+
+/// [`add_run`] with a separate gain per side and sample (an automated gain or pan gliding).
+fn add_run_stereo(a: &Audio, src0: f64, step: f64, out_l: &mut [f32], out_r: &mut [f32], env: impl Fn(usize) -> (f32, f32)) {
+    for k in 0..out_l.len() {
+        let (x, y) = a.sample(src0 + k as f64 * step);
+        let (el, er) = env(k);
+        out_l[k] += x * el;
+        out_r[k] += y * er;
     }
 }
 
@@ -210,6 +238,31 @@ mod tests {
     }
 
     #[test]
+    fn an_automated_gain_glides_across_the_block() {
+        let a = audio(48000, 1.0);
+        let spb = 0.5;
+        let bps = 1.0 / (48000.0 * spb);
+        let mut c = ClipRt { id: 1, track: 0, start: 0.0, end: 4.0, offset: 0.0, gain: 0.0, pan: 0.0, fade_in: 0.0, fade_out: 0.0, src: ClipSrc::Audio(a.clone()), gain0: -24.0, pan0: 0.0 };
+        let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
+        mix_audio_clip(&c, &a, 0.5, bps, spb, &mut l, &mut r);
+        // the reference at the old and the new gain bound the glide; it starts at the old one
+        let (mut lo, mut lo_r, mut hi, mut hi_r) = (vec![0f32; 512], vec![0f32; 512], vec![0f32; 512], vec![0f32; 512]);
+        c.gain0 = -24.0;
+        c.gain = -24.0;
+        mix_audio_clip(&c, &a, 0.5, bps, spb, &mut lo, &mut lo_r);
+        c.gain0 = 0.0;
+        c.gain = 0.0;
+        mix_audio_clip(&c, &a, 0.5, bps, spb, &mut hi, &mut hi_r);
+        assert!((l[0] - lo[0]).abs() < 1e-6, "starts at the old gain");
+        for i in 0..512 {
+            let (x0, x1) = (lo[i].min(hi[i]), lo[i].max(hi[i]));
+            assert!(l[i] >= x0 - 1e-6 && l[i] <= x1 + 1e-6, "sample {i} outside the glide");
+        }
+        let e = |x: &[f32]| x[448..].iter().map(|v| v * v).sum::<f32>();
+        assert!(e(&l) > e(&lo) * 30.0, "ends near the new gain");
+    }
+
+    #[test]
     fn matches_the_per_sample_reference() {
         let out_sr = 48000.0f64;
         let mut seed = 99u32;
@@ -229,7 +282,8 @@ mod tests {
                 let start = rnd() * 4.0;
                 let len = [0.002, 0.05, 0.5, 1.5, 4.0][(rnd() * 5.0) as usize % 5] / spb;
                 let fade = |r: f64| if r < 0.3 { 0.0 } else { (r * 0.2) as f32 };
-                let c = ClipRt {
+                let mut c = ClipRt {
+                    id: 1,
                     track: 0,
                     start,
                     end: start + len,
@@ -239,7 +293,10 @@ mod tests {
                     fade_in: fade(rnd()),
                     fade_out: fade(rnd()),
                     src: ClipSrc::Audio(a.clone()),
+                    gain0: 0.0,
+                    pan0: 0.0,
                 };
+                (c.gain0, c.pan0) = (c.gain, c.pan);
                 // blocks around the clip: before, over the start, inside, over the end, after
                 let first = (start - 2.0 * block as f64 * bps).max(0.0);
                 let mut b0 = first;
@@ -268,7 +325,7 @@ mod tests {
             let a = audio(file_sr, 10.0);
             let spb = 60.0 / 120.0;
             let bps = 1.0 / (spb * 48000.0);
-            let c = ClipRt { track: 0, start: 0.0, end: 16.0, offset: 0.3, gain: -3.0, pan: 0.2, fade_in: 0.01, fade_out: 0.01, src: ClipSrc::Audio(a.clone()) };
+            let c = ClipRt { id: 1, track: 0, start: 0.0, end: 16.0, offset: 0.3, gain: -3.0, pan: 0.2, fade_in: 0.01, fade_out: 0.01, src: ClipSrc::Audio(a.clone()), gain0: -3.0, pan0: 0.2 };
             let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
             let reps = 20000;
             let t = std::time::Instant::now();
