@@ -20,6 +20,7 @@ import { ChannelWindow } from './views/ChannelWindow';
 import { PitchEditor } from './views/PitchEditor';
 import { Export } from './views/Export';
 import { Settings, VstPicker } from './views/Settings';
+import { Updates } from './views/Updates';
 import { midiStatus, startMidi } from './state/midi';
 import { releaseAll, setTypingOn, typingDown, typingOn, typingUp } from './state/typingKeys';
 import { chanWin } from './views/ChannelWindow';
@@ -198,6 +199,7 @@ export function App() {
       <ConfirmDialog />
       <Export />
       <Settings />
+      <Updates />
       <VstPicker />
       <FxPickerHost />
       <MusicDialog />

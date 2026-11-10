@@ -480,3 +480,25 @@ The RMVPE model is not shipped: `f0_model_install` downloads it (URL,
 size, SHA-256 and licence link are constants in `crates/rmvpe`) to
 `<data>/Models/rmvpe.onnx`; `WAVE_RMVPE_MODEL` overrides the path.
 `crates/tune-bench` measures the whole pipeline (see `docs/cli.md`).
+
+## Updates and release notes
+
+The app updates itself from GitHub Releases (public repository: no token). See
+[releasing.md](releasing.md) for how a release is made and signed.
+
+* `app/src/updater.rs` wraps `tauri-plugin-updater`: `update_check` (finds a newer
+  `latest.json`), `update_download` (progress on the `update-progress` event, signature
+  verified, nothing restarts) and `update_install` (detaches plugin editors, stops audio, runs
+  the installer, restarts; on failure audio comes back and the old version keeps running).
+  `app_info`, `update_set_auto` and `update_mark_seen` read and write `settings.json`
+  (`seenVersion`, `noAutoUpdate`). Views reach them only through `backend.ts`
+  (`appInfo`, `updateCheck`, …); `api/mockUpdates.ts` is the browser mock with a fake newer release.
+* `ui/src/state/updateCtl.ts` is the state machine
+  (`idle → available → downloading → ready → installing`); `state/updates.ts` is its signal.
+  An automatic check (8 s after start, then every 6 h, can be switched off in Settings) never
+  opens a dialog, only a status-bar button; downloading happens in the background; the restart
+  needs a click and the unsaved-changes question.
+* **What's new** reads the `CHANGELOG.md` bundled into the UI (`lib/changelog.ts`) and opens
+  once at the first start of a new version, for every version since `seenVersion`. A fresh
+  install shows nothing; it can be reopened from Settings → General → Updates.
+* The updater is app-shell behaviour, not a project action, so it has no `wave` CLI command.

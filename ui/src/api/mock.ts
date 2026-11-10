@@ -20,6 +20,7 @@ import type {
   AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
+import { MockUpdates } from './mockUpdates';
 
 const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
 const BAND_F = new Float32Array(SPEC_BANDS).map((_, k) => 20 * Math.pow(1000, k / (SPEC_BANDS - 1)));
@@ -900,6 +901,14 @@ export class MockBackend implements Backend {
     if (p) { p.value = value; p.display = (value * 100).toFixed(0) + ' %'; }
   }
 
+  private readonly upd = new MockUpdates((done, total) => this.emit('update-progress', { done, total }));
+  appInfo() { return this.upd.appInfo(); }
+  updateCheck() { return this.upd.updateCheck(); }
+  updateDownload() { return this.upd.updateDownload(); }
+  updateInstall() { return this.upd.updateInstall(); }
+  updateSetAuto(on: boolean) { return this.upd.updateSetAuto(on); }
+  updateMarkSeen(version: string) { return this.upd.updateMarkSeen(version); }
+  openReleasePage(version?: string | null) { return this.upd.openReleasePage(version); }
   async cliStatus() { return { installed: false, command: 'wave', path: null, note: t('d.mock.nocli') }; }
 
   async on<K extends keyof EventMap>(ev: K, cb: (p: EventMap[K]) => void) {

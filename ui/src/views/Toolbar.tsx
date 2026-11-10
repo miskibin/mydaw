@@ -16,6 +16,7 @@ import { midiFlash, midiStatus } from '../state/midi';
 import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { Icon, ICONS } from '../ui/icons';
+import { UpdateChip } from './Updates';
 
 export const TOOLS: [Tool, string, TranslationKey][] = [
   ['draw', 'P', 'a.tb.toolDraw'], ['paint', 'B', 'a.tb.toolPaint'], ['erase', 'D', 'a.tb.toolErase'], ['mute', 'T', 'a.tb.toolMute'], ['slice', 'C', 'a.tb.toolSlice'], ['select', 'E', 'a.tb.toolSelect'],
@@ -239,6 +240,7 @@ export function StatusBar() {
       <span style={{ color: 'var(--fg)' }} data-readout>{U.readout}</span>
       <div style={{ flex: 1 }} />
       <Show when={U.alt}><span class="offgrid">OFF GRID</span></Show>
+      <UpdateChip />
       <Show when={prefs().hints}><span style={{ color: 'var(--fg5)' }}>{hint()}</span></Show>
     </div>
   );

@@ -10,6 +10,7 @@ import { setU } from './state/ui';
 import { App } from './App';
 import { initTheme } from './ui/theme';
 import { initPrefs } from './state/prefs';
+import { initUpdates } from './state/updates';
 import { t } from './lib/i18n';
 
 initTheme();
@@ -30,6 +31,7 @@ async function boot() {
   setU('cur', p ? { kind: 'pat', ref: p.id } : S.project.sources[0] ? { kind: 'audio', ref: S.project.sources[0].id } : null);
   setU('playing', state.transport.playing);
   render(() => <App />, document.getElementById('root')!);
+  void initUpdates(); // version, "What's new" after an update, the first automatic check
 }
 
 boot().catch(e => {

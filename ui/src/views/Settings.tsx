@@ -9,6 +9,7 @@ import { Segmented } from '../ui/Knob';
 import { prefs, resetPrefs, setPref } from '../state/prefs';
 import { setTheme, THEMES, themeMode, themeName } from '../ui/theme';
 import { t } from '../lib/i18n';
+import { UpdatesSettings } from './Updates';
 import type { TranslationKey } from '../lib/i18n';
 
 const RATES = [44100, 48000, 88200, 96000];
@@ -166,6 +167,7 @@ function GeneralSection() {
         <label>Count-in</label>
         <OnOff on={() => S.transport.countIn} set={v => void A.setTransportFlag('countIn', v)} title={t('d.set.countin.tip')} />
       </div>
+      <UpdatesSettings OnOff={OnOff} />
       <div class="setfoot">
         <button class="smallbtn" onClick={() => { resetPrefs(); setTheme('dark'); say(t('d.set.reset.say')); }}>{t('d.set.reset')}</button>
       </div>

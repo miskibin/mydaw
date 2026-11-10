@@ -84,7 +84,7 @@ export function toggleMonitor() {
 export async function undo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say(t('d.act.undone')); }
 export async function redo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say(t('d.act.redone')); }
 /** Ask about unsaved changes; false = the user cancelled (or the save failed). */
-async function guardUnsaved(what: string): Promise<boolean> {
+export async function guardUnsaved(what: string): Promise<boolean> {
   const a = await confirmUnsaved(what);
   if (a === 'cancel') return false;
   if (a === 'save') return projectSave(false);

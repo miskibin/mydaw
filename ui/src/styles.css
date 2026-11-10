@@ -773,3 +773,35 @@ select option { background: var(--bg4); color: var(--fg); }
 .ibtn.typkb.on { color: var(--blue-hi); background: var(--on-bg); }
 .typoct { font-size: 9.5px; font-weight: 600; }
 @media (max-width: 900px) { .toolbar .typoct { display: none; } }
+
+/* updates: status-bar button, update / What's new dialogs, Settings rows */
+.updchip { position: relative; overflow: hidden; height: 16px; padding: 0 8px; border: 0; border-radius: 3px; background: var(--blue); color: var(--on-accent); font: 600 10px var(--mono); cursor: pointer; white-space: nowrap; }
+.updchip:hover { filter: brightness(1.1); }
+.updchip.ready { background: var(--green); }
+.updchip.busy { background: var(--on-bg); color: var(--blue-hi); cursor: pointer; }
+.updchip.busy::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: var(--p, 0%); background: color-mix(in srgb, var(--blue) 45%, transparent); }
+.updchip.busy { isolation: isolate; }
+.upddlg { width: min(520px, 92vw); display: flex; flex-direction: column; gap: 10px; }
+.upddlg .updver { display: flex; gap: 10px; align-items: baseline; font: 500 12px var(--sans); color: var(--fg2); }
+.upddlg .updver b { color: var(--fg-hi); font-weight: 600; }
+.upddlg .updver span { color: var(--fg4); font: 500 11px var(--mono); }
+.upddlg .notes { max-height: min(46vh, 360px); overflow: auto; padding: 2px 4px 2px 0; font: 400 12px/1.5 var(--sans); color: var(--fg2); user-select: text; }
+.upddlg .newsrel + .newsrel { padding-top: 10px; border-top: 1px solid var(--line); }
+.notes h4 { margin: 10px 0 4px; font: 600 10px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--fg4); }
+.notes h4:first-child { margin-top: 0; }
+.notes p { margin: 4px 0; }
+.notes ul { margin: 4px 0; padding-left: 16px; }
+.notes li { margin: 3px 0; }
+.notes b { color: var(--fg-hi); font-weight: 600; }
+.notes code { padding: 0 4px; border-radius: 3px; background: var(--bg1); font: 500 11px var(--mono); }
+.muted { color: var(--fg4); }
+.upddlg .updmsg { font: 400 12px/1.45 var(--sans); color: var(--fg2); }
+.upddlg .updmsg.muted { color: var(--fg4); font-size: 11px; }
+.updmsg.err, .updrow .err { color: var(--danger); }
+.updbar { height: 6px; border-radius: 3px; background: var(--bg1); overflow: hidden; }
+.updbar i { display: block; height: 100%; background: var(--blue); transition: width .12s linear; }
+.updfoot { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+.updfoot .smallbtn { height: 24px; }
+.updrow { display: flex; gap: 10px; align-items: center; font: 500 11px var(--sans); color: var(--fg2); min-height: 24px; }
+.updrow b { font: 600 12px var(--mono); color: var(--fg-hi); }
+@media (prefers-reduced-motion: reduce) { .updbar i { transition: none; } }

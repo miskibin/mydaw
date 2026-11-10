@@ -8,6 +8,7 @@ mod library;
 mod models;
 mod plugins;
 mod settings;
+mod updater;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +40,8 @@ pub struct App {
     session: Mutex<Option<wave_session::Server>>,
     /// WAVE Keys piano: where it is and whether it is loaded.
     pub keys: keys::Keys,
+    /// The update found by the last check and its downloaded installer.
+    pub updater: updater::State,
     /// Set once the window exists (events to the UI).
     pub handle: std::sync::OnceLock<AppHandle>,
 }
@@ -604,11 +607,87 @@ async fn vst3_set_param(app: St<'_>, fx_id: u64, id: u32, value: f64) -> R<()> {
 }
 
 #[tauri::command]
+async fn app_info(app: St<'_>, handle: AppHandle) -> R<updater::AppInfo> {
+    let s = app.settings.lock();
+    Ok(updater::AppInfo { version: handle.package_info().version.to_string(), seen_version: s.seen_version.clone(), auto_update: !s.no_auto_update })
+}
+
+#[tauri::command]
+async fn update_set_auto(app: St<'_>, on: bool) -> R<()> {
+    let mut s = app.settings.lock();
+    s.no_auto_update = !on;
+    s.save();
+    Ok(())
+}
+
+/// Remembers that the release notes of `version` were shown.
+#[tauri::command]
+async fn update_mark_seen(app: St<'_>, version: String) -> R<()> {
+    let mut s = app.settings.lock();
+    s.seen_version = Some(version);
+    s.save();
+    Ok(())
+}
+
+/// Asks GitHub for a newer release. `None` = this is the newest.
+#[tauri::command]
+async fn update_check(app: St<'_>, handle: AppHandle) -> R<Option<updater::UpdateInfo>> {
+    updater::check(&handle, &app.updater).await
+}
+
+/// Downloads and verifies the update found by `update_check` (progress: `update-progress`).
+#[tauri::command]
+async fn update_download(app: St<'_>, handle: AppHandle) -> R<()> {
+    updater::download(&handle, &app.updater).await
+}
+
+/// Installs the downloaded update and restarts the app. On Windows the installer takes over
+/// and the process ends; it does not return then.
+#[tauri::command]
+async fn update_install(app: St<'_>, handle: AppHandle) -> R<()> {
+    let a = app.inner().clone();
+    let h = handle.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let ready = updater::ready(&a.updater)?;
+        // the installer may end the process without a normal exit: detach plugin editors and stop audio first
+        shutdown(&h, &a);
+        ready.update.install(ready.bytes.as_slice()).map_err(es)
+    })
+    .await
+    .map_err(es)?;
+    match res {
+        Ok(()) => handle.restart(),
+        Err(e) => {
+            // the old version keeps running: audio comes back
+            let a = app.inner().clone();
+            let cfg = a.settings.lock().audio.clone();
+            let st = tauri::async_runtime::spawn_blocking(move || a.audio.start(cfg)).await.map_err(es)?;
+            *app.status.lock() = st.clone();
+            let _ = handle.emit("audio-status", &st);
+            Err(e)
+        }
+    }
+}
+
+#[tauri::command]
+async fn open_release_page(version: Option<String>) -> R<()> {
+    updater::open_release(version.as_deref())
+}
+
+#[tauri::command]
 async fn cli_status(app: St<'_>) -> R<CliStatus> {
     Ok(app.cli.lock().clone())
 }
 
 // ---------------------------------------------------------------- boot
+
+/// Plugin editors detach first, then audio stops, then instances go.
+fn shutdown(h: &AppHandle, app: &App) {
+    if let Some(w) = h.try_state::<wave_plugin_windows::Service>() {
+        w.close_all();
+    }
+    app.audio.stop();
+}
 
 pub fn run() {
     let plugins = plugins::Plugins::new();
@@ -659,6 +738,7 @@ pub fn run() {
         model_error: Mutex::new(None),
         session: Mutex::new(None),
         keys: keys::Keys::default(),
+        updater: updater::State::default(),
         handle: std::sync::OnceLock::new(),
     });
     // the pitch model loads in the background; analysis uses YIN until it is ready
@@ -690,6 +770,7 @@ pub fn run() {
     let app_exit = app.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app.clone())
         .setup(move |tapp| {
             // plugin work that must happen on the UI thread is posted here
@@ -735,17 +816,14 @@ pub fn run() {
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save, export_audio, export_cancel,
-            vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status
+            vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status,
+            app_info, update_set_auto, update_mark_seen, update_check, update_download, update_install, open_release_page
         ])
         .build(tauri::generate_context!())
         .expect("error while building WAVE")
         .run(move |h, ev| {
             if let tauri::RunEvent::Exit = ev {
-                // plugin editors detach first, then audio stops, then instances go
-                if let Some(w) = h.try_state::<wave_plugin_windows::Service>() {
-                    w.close_all();
-                }
-                app_exit.audio.stop();
+                shutdown(h, &app_exit);
             }
         });
 }

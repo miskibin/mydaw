@@ -154,6 +154,11 @@ export interface F0ModelStatus {
   id: string; name: string; bytes: number; installed: boolean; backend: string;
   licenseNote: string; licenseUrl: string; path: string; error: string | null;
 }
+/** An update found on GitHub Releases (`update_check`). `notes`: the release notes (Markdown), `date`: `YYYY-MM-DD`. */
+export interface UpdateInfo { version: string; notes: string | null; date: string | null }
+/** `app_info`: the running version, the version whose notes were last shown (null on a fresh install), the auto-check switch. */
+export interface AppInfo { version: string; seenVersion: string | null; autoUpdate: boolean }
+export interface UpdateProgress { done: number; total: number }
 export interface ModelProgress { id: string; done: number; total: number; error?: string }
 
 export interface TempoCandidate { bpm: number; score: number }
