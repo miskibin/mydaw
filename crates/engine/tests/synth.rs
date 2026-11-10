@@ -287,3 +287,20 @@ fn the_ui_mock_catalog_is_current() {
     let have = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
     assert!(have == want, "ui/src/api/synthCatalog.ts is stale: run WAVE_UPDATE_UI=1 cargo test -p wave-engine --test synth");
 }
+
+#[test]
+fn chords_stay_below_full_scale_without_clicks() {
+    // presets are levelled for one note; an 8-note chord of a keys patch used to reach +9 dBFS
+    let sr = SR as f32;
+    for p in presets::all() {
+        let mut s = SynthInst::new(1, p.patch, sr);
+        let k0 = p.probe_key();
+        for (i, d) in [0u8, 4, 7, 11, 14, 16, 19, 24].into_iter().enumerate() {
+            s.note((i as f32 * 0.003 * sr) as u32, (1.0 * sr) as u32, k0 + d, 1.0, Dest::Click);
+        }
+        let (l, r) = lab::run(&mut s, 1.6, sr);
+        let pk = peak(&l).max(peak(&r));
+        assert!(pk <= 0.9, "{}: chord peak {:.1} dBFS", p.name, 20.0 * pk.log10());
+        assert_eq!(clicks(&l, &r), 0, "{}: chord", p.name);
+    }
+}
