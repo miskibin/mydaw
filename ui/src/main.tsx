@@ -10,6 +10,7 @@ import { setU } from './state/ui';
 import { App } from './App';
 import { initTheme } from './ui/theme';
 import { initPrefs } from './state/prefs';
+import { t } from './lib/i18n';
 
 initTheme();
 initPrefs();
@@ -33,5 +34,8 @@ async function boot() {
 
 boot().catch(e => {
   console.error(e);
-  document.getElementById('root')!.innerHTML = '<pre style="color:#e8607a;padding:20px;font:12px monospace">WAVE: nie udało się uruchomić UI\n' + String(e?.stack ?? e) + '</pre>';
+  const pre = document.createElement('pre');
+  pre.style.cssText = 'color:#e8607a;padding:20px;font:12px monospace';
+  pre.textContent = t('startup.failed', { error: String(e?.stack ?? e) });
+  document.getElementById('root')!.replaceChildren(pre);
 });

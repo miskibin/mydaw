@@ -6,7 +6,7 @@
 //! runs the module's entry point, then its initialiser runs. That code can crash
 //! the process outright -- a segfault, a stack overflow, an `abort()` -- and no
 //! amount of `catch_unwind` sees any of it. Measured on the development machine,
-//! the *first* scan of a fresh install killed MYDAW before the block list had a
+//! the *first* scan of a fresh install killed WAVE before the block list had a
 //! chance to learn which module did it, so the next launch did exactly the same
 //! thing.
 //!
@@ -15,7 +15,7 @@
 //! from any thread blocks behind it forever. One wedged plugin does not cost one
 //! plugin, it costs every module after it.
 //!
-//! Both problems have the same answer: open the module in a process MYDAW is
+//! Both problems have the same answer: open the module in a process WAVE is
 //! willing to lose. A poisoned loader lock dies with the child, and so does an
 //! access violation.
 //!
@@ -27,11 +27,11 @@
 //! parent                                        child
 //! ------                                        -----
 //! spawn(worker, env {                           run_worker_if_requested() sees
-//!     MYDAW_SCAN_WORKER = "vst3"                    the two variables, scans
-//!     MYDAW_SCAN_MODULE = "C:\...\Thing.vst3"       exactly that one module
+//!     WAVE_SCAN_WORKER = "vst3"                    the two variables, scans
+//!     WAVE_SCAN_MODULE = "C:\...\Thing.vst3"       exactly that one module
 //! }, stdout = pipe)
 //!                                               prints one line to stdout:
-//!                                               MYDAW-SCAN-RESULT {"status":...}
+//!                                               WAVE-SCAN-RESULT {"status":...}
 //!                                               exit(0)
 //! read stdout until exit or deadline
 //! kill on deadline
@@ -40,7 +40,7 @@
 //! Three decisions are load-bearing:
 //!
 //! - **The request travels in the environment, not in `argv`.** The worker is
-//!   normally the MYDAW binary itself, which has its own command line to parse
+//!   normally the WAVE binary itself, which has its own command line to parse
 //!   (Tauri, the debug-capture flags); an environment variable cannot collide
 //!   with any of it, and cannot be confused with a file a user dropped on the
 //!   icon.
@@ -57,9 +57,9 @@
 //!
 //! [`WorkerSpawn::Auto`] resolves, in order:
 //!
-//! 1. `MYDAW_SCAN_WORKER_BIN`, an explicit override (tests, and a packager who
+//! 1. `WAVE_SCAN_WORKER_BIN`, an explicit override (tests, and a packager who
 //!    ships a dedicated worker as a sidecar).
-//! 2. `mydaw-<format>-scan-worker` next to the current executable -- or one
+//! 2. `wave-<format>-scan-worker` next to the current executable -- or one
 //!    directory up when the current executable sits in `deps/` or `examples/`,
 //!    which is where Cargo puts test and example binaries. This is the small
 //!    dedicated worker each host crate ships; it starts faster than the whole
@@ -83,16 +83,16 @@ use serde::{Deserialize, Serialize};
 
 /// Names the format the child must scan (`vst3`, `clap`). Its presence is what
 /// makes a process a scan worker.
-pub const FORMAT_ENV: &str = "MYDAW_SCAN_WORKER";
+pub const FORMAT_ENV: &str = "WAVE_SCAN_WORKER";
 
 /// The one module the child must scan.
-pub const MODULE_ENV: &str = "MYDAW_SCAN_MODULE";
+pub const MODULE_ENV: &str = "WAVE_SCAN_MODULE";
 
 /// Overrides which executable is spawned as the worker. See the module docs.
-pub const WORKER_BIN_ENV: &str = "MYDAW_SCAN_WORKER_BIN";
+pub const WORKER_BIN_ENV: &str = "WAVE_SCAN_WORKER_BIN";
 
 /// Marks the one line of the child's stdout that is a scan result.
-pub const RESULT_PREFIX: &str = "MYDAW-SCAN-RESULT ";
+pub const RESULT_PREFIX: &str = "WAVE-SCAN-RESULT ";
 
 /// Bumped when the wire shape changes. Parent and child normally come from the
 /// same build; the field exists so a stale sidecar is *detected* rather than
@@ -306,7 +306,7 @@ fn spawn_worker(program: &Path, format: &str, module: &Path) -> std::io::Result<
         .env(MODULE_ENV, module)
         // A worker inherits nothing it could be confused by, and writes nowhere
         // the parent is not reading: a plugin's stderr chatter goes to the void
-        // rather than into MYDAW's console.
+        // rather than into WAVE's console.
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -323,7 +323,7 @@ pub fn resolve_worker(format: &str) -> Option<PathBuf> {
 
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    let name = format!("mydaw-{format}-scan-worker{}", std::env::consts::EXE_SUFFIX);
+    let name = format!("wave-{format}-scan-worker{}", std::env::consts::EXE_SUFFIX);
 
     let sibling = dir.join(&name);
     if sibling.is_file() {
@@ -331,7 +331,7 @@ pub fn resolve_worker(format: &str) -> Option<PathBuf> {
     }
     // Cargo puts test binaries in `target/<profile>/deps/` and examples in
     // `target/<profile>/examples/`, one level below the dedicated workers.
-    // Restricted to those two names so an installed MYDAW never goes looking
+    // Restricted to those two names so an installed WAVE never goes looking
     // outside its own directory for something to execute.
     if dir
         .file_name()
@@ -380,7 +380,7 @@ pub fn scan_in_child(
     let (tx, rx) = mpsc::sync_channel(1);
     let reader = child.stdout.take().map(|mut stdout| {
         std::thread::Builder::new()
-            .name("mydaw-scan-reader".to_owned())
+            .name("wave-scan-reader".to_owned())
             .spawn(move || {
                 let _ = tx.send(read_capped(&mut stdout));
             })

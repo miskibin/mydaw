@@ -4,16 +4,17 @@
 // background layers; every edit goes out as an op (one undo step per click or drag).
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { unwrap } from 'solid-js/store';
+import { t, tName, type TranslationKey } from '../lib/i18n';
 import { VOL_UNITY, type Channel, type Note } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
 import {
-  cellsBetween, clearChannel, duplicateRight, fillEvery, INST_NAME, INSTS, isPitched, isRollRow, keyOf, MAX_BARS, moveNotes,
-  noteAt, resizeNotes, ROLL_SNAPS, rotate, SCALES, setStep, setVelAt, snapStep, stepsOf, transpose, visible,
+  barsText, cellsBetween, clearChannel, duplicateRight, fillEvery, INST_NAME, INSTS, isPitched, isRollRow, keyOf, MAX_BARS, moveNotes,
+  noteAt, notesText, resizeNotes, ROLL_SNAPS, rotate, SCALES, setStep, setVelAt, snapStep, stepsOf, transpose, visible,
 } from '../lib/pattern';
 import { NOTE_NAMES } from '../lib/pitch';
 import { commit, Gesture } from '../state/edit';
 import {
-  addBuiltin, addSampler, addSamplerFiles, addSynth, audition, chanById, chanKindLabel, chanOp, channels, cloneChannel, closePattern, curPat,
+  addBuiltin, addKeys, addSampler, addSamplerFiles, addSynth, audition, chanById, chanKindLabel, chanOp, channels, cloneChannel, closePattern, curPat,
   deleteChannel, newPattern, openPattern, patFront, patOp, playStep, previewPattern, putNotes, selectChannel, setBars, setChannel,
   setView, togglePreview, toggleChanMute, toggleChanSolo, patPlayhead,
 } from '../state/pattern';
@@ -33,11 +34,11 @@ import { drawLane, drawRack, drawRackHead, drawRoll, rollX, rollY, type RackGeo,
 const RH = 28, LEFTW = 252, LANE_H = 76, KW = 48;
 const STEP_ICON = 'M4 5h4v4H4z M10 5h4v4h-4z M16 5h4v4h-4z M4 15h4v4H4z M10 15h4v4h-4z M16 15h4v4h-4z';
 type Tool = 'draw' | 'paint' | 'select' | 'erase';
-const TOOLS: { id: Tool; key: string; label: string; icon: string; tip: string }[] = [
-  { id: 'draw', key: 'p', label: 'Rysuj', icon: 'M4 20l4.5-1L19 8.5 15.5 5 5 15.5z M13.5 7l3.5 3.5', tip: 'Klik = nuta (długość ostatniej) · przeciągnij = przesuń · krawędź = długość · PPM = usuń' },
-  { id: 'paint', key: 'b', label: 'Maluj', icon: 'M18 3l3 3-9 9-3-3z M9 12c-3 0-4 2-4 4s-1 3-2 4c4 0 8-1 8-5', tip: 'Przeciągnij = maluj nuty po siatce · PPM = usuń' },
-  { id: 'select', key: 'e', label: 'Zaznacz', icon: 'M4 4h4 M12 4h4 M20 4v4 M20 12v4 M20 20h-4 M12 20H8 M4 20v-4 M4 12V8', tip: 'Prostokąt = zaznacz · Shift = dodaj · przeciągnij zaznaczone = przesuń' },
-  { id: 'erase', key: 'd', label: 'Usuń', icon: 'M8 20h12 M4.5 15.5L14 6l5 5-7.5 7.5H8z', tip: 'Klik / przeciągnij po nutach = usuń' },
+const TOOLS: { id: Tool; key: string; label: TranslationKey; icon: string; tip: TranslationKey }[] = [
+  { id: 'draw', key: 'p', label: 'b.pe.tool.draw', icon: 'M4 20l4.5-1L19 8.5 15.5 5 5 15.5z M13.5 7l3.5 3.5', tip: 'b.pe.tool.draw.tip' },
+  { id: 'paint', key: 'b', label: 'b.pe.tool.paint', icon: 'M18 3l3 3-9 9-3-3z M9 12c-3 0-4 2-4 4s-1 3-2 4c4 0 8-1 8-5', tip: 'b.pe.tool.paint.tip' },
+  { id: 'select', key: 'e', label: 'b.pe.tool.select', icon: 'M4 4h4 M12 4h4 M20 4v4 M20 12v4 M20 20h-4 M12 20H8 M4 20v-4 M4 12V8', tip: 'b.pe.tool.select.tip' },
+  { id: 'erase', key: 'd', label: 'b.pe.tool.erase', icon: 'M8 20h12 M4.5 15.5L14 6l5 5-7.5 7.5H8z', tip: 'b.pe.tool.erase.tip' },
 ];
 const W = () => U.patWin!;
 
@@ -94,42 +95,42 @@ function Editor(props: { z: number }) {
       onKeyDown={guardKeys}>
       <div class="winhd" onPointerDown={e => moveWindow(e, () => W(), (x, y) => setU('patWin', w => w && { ...w, x, y }))}>
         <span class="tile" style={{ width: '20px', height: '20px', background: pt().color + '2e', color: pt().color }}><Icon d={STEP_ICON} size={12} /></span>
-        <select class="sel patsel" title="Pattern (F6 otwiera edytor wybranego)" value={String(pt().id)} onPointerDown={e => e.stopPropagation()}
+        <select class="sel patsel" title={t('b.pe.patSelTitle')} value={String(pt().id)} onPointerDown={e => e.stopPropagation()}
           onChange={e => openPattern(+e.currentTarget.value)}>
           <For each={S.project.patterns}>{p => <option value={String(p.id)}>{p.name}</option>}</For>
         </select>
-        <button class="iconbtn" title="Nowy pattern" onPointerDown={e => e.stopPropagation()} onClick={newPattern}><Icon d="M12 5v14 M5 12h14" size={13} /></button>
+        <button class="iconbtn" title={t('b.pat.new')} onPointerDown={e => e.stopPropagation()} onClick={newPattern}><Icon d="M12 5v14 M5 12h14" size={13} /></button>
         <div class="vsep" />
-        <select class="sel" title="Długość patternu w taktach — klipy pokazujące cały pattern idą za nią; nuty poza końcem zostają (ukryte)" value={String(pt().len / 4)}
+        <select class="sel" title={t('b.pe.barsTitle')} value={String(pt().len / 4)}
           onPointerDown={e => e.stopPropagation()} onChange={e => setBars(pt(), +e.currentTarget.value)}>
-          <For each={Array.from({ length: MAX_BARS }, (_, i) => i + 1)}>{b => <option value={String(b)}>{b + (b === 1 ? ' takt' : b < 5 ? ' takty' : ' taktów')}</option>}</For>
-          <Show when={pt().len % 4 !== 0 || pt().len > MAX_BARS * 4}><option value={String(pt().len / 4)}>{(pt().len / 4).toFixed(2)} t.</option></Show>
+          <For each={Array.from({ length: MAX_BARS }, (_, i) => i + 1)}>{b => <option value={String(b)}>{barsText(b)}</option>}</For>
+          <Show when={pt().len % 4 !== 0 || pt().len > MAX_BARS * 4}><option value={String(pt().len / 4)}>{t('b.pe.barsAbbr', { n: (pt().len / 4).toFixed(2) })}</option></Show>
         </select>
         <div onPointerDown={e => e.stopPropagation()}>
           <NumField label="SWING" width={58} value={() => Math.round((pt().swing ?? 0) * 100)} text={v => Math.round(v) + '%'} parse={parseNum}
             drag={(v, d) => clamp(Math.round(v + d * 0.5), 0, 100)} apply={applySwing}
-            title="Swing: opóźnia co drugą szesnastkę (100% = o pół kroku) · przeciągnij · kółko · 2× klik = wpisz" />
+            title={t('b.pe.swingTitle')} />
         </div>
-        <button class="pplay" classList={{ on: playing() }} title={playing() ? 'Zatrzymaj podgląd patternu' : 'Odtwarzaj sam pattern w pętli (zatrzymuje utwór; Spacja = utwór)'}
+        <button class="pplay" classList={{ on: playing() }} title={playing() ? t('b.pe.previewStop') : t('b.pe.previewPlay')}
           onPointerDown={e => e.stopPropagation()} onClick={() => void togglePreview(pt().id)}>
           <Show when={playing()} fallback={<svg width="10" height="10" viewBox="0 0 10 10"><path d="M1.5 1v8l7-4z" fill="currentColor" /></svg>}>
             <svg width="10" height="10" viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" fill="currentColor" /></svg>
           </Show>
-          <span>{playing() ? 'Stop' : 'Pętla'}</span>
+          <span>{playing() ? 'Stop' : t('b.pe.loop')}</span>
         </button>
         <div style={{ flex: 1 }} />
         <div class="seg ptabs" onPointerDown={e => e.stopPropagation()}>
-          <button classList={{ on: W().view === 'rack' }} onClick={() => setView('rack')} title="Channel Rack — kroki">Kanały</button>
+          <button classList={{ on: W().view === 'rack' }} onClick={() => setView('rack')} title={t('b.pe.tabRackTitle')}>{t('b.pe.tabRack')}</button>
           <button classList={{ on: W().view === 'roll' }} disabled={!selCh() || !isPitched(selCh()!)}
-            title={selCh() && isPitched(selCh()!) ? 'Piano roll: ' + selCh()!.name : 'Piano roll — wybierz kanał melodyczny (Bass, sampler)'}
+            title={selCh() && isPitched(selCh()!) ? t('b.pe.rollOf', { name: selCh()!.name }) : t('b.pe.rollNone')}
             onClick={() => selCh() && isPitched(selCh()!) && setView('roll')}>Piano roll</button>
         </div>
-        <button class="closebtn" title="Zamknij (Esc)" onClick={closePattern}>×</button>
+        <button class="closebtn" title={t('b.pe.close')} onClick={closePattern}>×</button>
       </div>
       <Show when={W().view === 'roll' && selCh() && isPitched(selCh()!)} fallback={<Rack root={() => root} />}>
         <Roll root={() => root} />
       </Show>
-      <div class="resizer" onPointerDown={resize} title="Zmień rozmiar" />
+      <div class="resizer" onPointerDown={resize} title={t('b.pe.resize')} />
     </div>
   );
 }
@@ -161,14 +162,14 @@ function insLabel(c: Channel): string {
   return i <= 0 ? 'M' : String(i);
 }
 function insTitle(c: Channel): string {
-  if (c.insert == null) return 'Kanał miksera: przez ścieżkę klipu (jak dotąd) — kliknij, aby wybrać insert';
+  if (c.insert == null) return t('b.pe.insAuto');
   const m = S.project.inserts.find(x => x.id === c.insert);
-  return 'Kanał miksera: ' + (m ? (m.id === 0 ? 'Master' : m.name) : '?') + ' — kliknij, aby zmienić';
+  return t('b.pe.insTo', { name: m ? (m.id === 0 ? 'Master' : m.name) : '?' });
 }
 function insertMenu(c: Channel, x: number, y: number) {
-  const items: MenuItem[] = [{ t: 'title', label: 'Kanał miksera · ' + c.name },
-    { t: 'item', label: 'Ścieżka klipu (auto)', kbd: c.insert == null ? '✓' : '', title: 'Gra przez insert ścieżki playlisty, na której leży klip patternu', act: () => setChannel(c, { insert: null }, 'Kanał miksera') }, { t: 'sep' }];
-  S.project.inserts.forEach((m, i) => items.push({ t: 'item', label: i === 0 ? 'Master' : i + ' · ' + m.name, kbd: c.insert === m.id ? '✓' : '', act: () => { setChannel(c, { insert: m.id }, 'Kanał miksera'); say(c.name + ' → ' + (i === 0 ? 'Master' : 'Insert ' + i)); } }));
+  const items: MenuItem[] = [{ t: 'title', label: t('b.pe.mixChName', { name: c.name }) },
+    { t: 'item', label: t('b.pe.clipTrack'), kbd: c.insert == null ? '✓' : '', title: t('b.pe.clipTrackTitle'), act: () => setChannel(c, { insert: null }, t('b.pe.mixCh')) }, { t: 'sep' }];
+  S.project.inserts.forEach((m, i) => items.push({ t: 'item', label: i === 0 ? 'Master' : i + ' · ' + m.name, kbd: c.insert === m.id ? '✓' : '', act: () => { setChannel(c, { insert: m.id }, t('b.pe.mixCh')); say(c.name + ' → ' + (i === 0 ? 'Master' : t('b.pe.insWord', { n: i }))); } }));
   openMenu(x, y, items, Math.min(window.innerHeight - 20, 60 + items.length * 26));
 }
 
@@ -178,39 +179,40 @@ function chanMenu(c: Channel, x: number, y: number) {
   const edit = (notes: Note[], label: string) => commit([putNotes(pt, notes)], label);
   openMenu(x, y, [
     { t: 'title', label: c.name + ' · ' + chanKindLabel(c) },
-    { t: 'item', label: 'Piano roll', kbd: '2× klik', disabled: !isPitched(c), title: isPitched(c) ? '' : 'Kanały perkusyjne grają tylko kroki — piano roll ma Bass i samplery', act: () => setView('roll', c.id) },
+    { t: 'item', label: 'Piano roll', kbd: t('b.pe.dbl'), disabled: !isPitched(c), title: isPitched(c) ? '' : t('b.pe.noRollTitle'), act: () => setView('roll', c.id) },
     { t: 'sep' },
-    { t: 'item', label: 'Wypełnij co 2 kroki', act: () => edit(fillEvery(pt.notes, c.id, steps, 2), 'Wypełnij') },
-    { t: 'item', label: 'Wypełnij co 4 kroki', act: () => edit(fillEvery(pt.notes, c.id, steps, 4), 'Wypełnij') },
-    { t: 'item', label: 'Wypełnij co 8 kroków', act: () => edit(fillEvery(pt.notes, c.id, steps, 8), 'Wypełnij') },
-    { t: 'item', label: 'Przesuń w lewo', kbd: '◀', act: () => edit(rotate(pt.notes, c.id, steps, -1), 'Przesuń kroki') },
-    { t: 'item', label: 'Przesuń w prawo', kbd: '▶', act: () => edit(rotate(pt.notes, c.id, steps, 1), 'Przesuń kroki') },
-    { t: 'item', label: 'Wyczyść', disabled: !pt.notes.some(n => n.ch === c.id), act: () => edit(clearChannel(pt.notes, c.id), 'Wyczyść kanał') },
+    { t: 'item', label: t('b.pe.fill2'), act: () => edit(fillEvery(pt.notes, c.id, steps, 2), t('b.pe.fill')) },
+    { t: 'item', label: t('b.pe.fill4'), act: () => edit(fillEvery(pt.notes, c.id, steps, 4), t('b.pe.fill')) },
+    { t: 'item', label: t('b.pe.fill8'), act: () => edit(fillEvery(pt.notes, c.id, steps, 8), t('b.pe.fill')) },
+    { t: 'item', label: t('b.pe.shiftL'), kbd: '◀', act: () => edit(rotate(pt.notes, c.id, steps, -1), t('b.pe.shiftSteps')) },
+    { t: 'item', label: t('b.pe.shiftR'), kbd: '▶', act: () => edit(rotate(pt.notes, c.id, steps, 1), t('b.pe.shiftSteps')) },
+    { t: 'item', label: t('b.pe.clear'), disabled: !pt.notes.some(n => n.ch === c.id), act: () => edit(clearChannel(pt.notes, c.id), t('b.pe.clearCh')) },
     { t: 'sep' },
-    { t: 'item', label: 'Odsłuchaj', kbd: 'Ctrl+klik', act: () => audition(c.id, undefined, 0.8, true) },
-    { t: 'item', label: 'Zmień nazwę…', act: () => openRename(x, y, c.name, v => v.trim() && setChannel(c, { name: v.trim() }, 'Nazwa kanału')) },
-    { t: 'swatches', current: c.color, pick: col => setChannel(c, { color: col }, 'Kolor kanału') },
-    { t: 'item', label: 'Klonuj kanał', act: () => cloneChannel(c) },
+    { t: 'item', label: t('b.pe.preview'), kbd: t('b.pe.ctrlClick'), act: () => audition(c.id, undefined, 0.8, true) },
+    { t: 'item', label: t('b.pe.rename'), act: () => openRename(x, y, c.name, v => v.trim() && setChannel(c, { name: v.trim() }, t('b.pe.chName'))) },
+    { t: 'swatches', current: c.color, pick: col => setChannel(c, { color: col }, t('b.pe.chColor')) },
+    { t: 'item', label: t('b.pe.clone'), act: () => cloneChannel(c) },
     { t: 'sep' },
-    { t: 'item', label: 'Usuń kanał', danger: true, act: () => deleteChannel(c) },
+    { t: 'item', label: t('b.pe.delete'), danger: true, act: () => deleteChannel(c) },
   ], 470);
 }
 
 function addChannelMenu(x: number, y: number) {
-  const items: MenuItem[] = [{ t: 'title', label: 'Wbudowane instrumenty' }];
+  const items: MenuItem[] = [{ t: 'title', label: t('b.pe.menuBuiltin') }];
   for (const i of INSTS) items.push({ t: 'item', label: INST_NAME[i], act: () => addBuiltin(i) });
   const syn = S.catalog?.synth;
   if (syn) {
-    items.push({ t: 'sep' }, { t: 'title', label: 'Syntezator' });
+    items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSynth') });
     for (const g of syn.categories) {
       const ps = syn.presets.filter(p => p.category === g);
-      if (ps.length) items.push({ t: 'sub', label: g, items: ps.map(p => ({ t: 'item', label: p.name, act: () => addSynth(p.name) }) as MenuItem) });
+      if (ps.length) items.push({ t: 'sub', label: tName(g), items: ps.map(p => ({ t: 'item', label: tName(p.name), act: () => addSynth(p.name) }) as MenuItem) });
     }
-    items.push({ t: 'item', label: 'Pusty syntezator', act: () => addSynth(null) });
+    items.push({ t: 'item', label: t('b.pe.menuSynthEmpty'), act: () => addSynth(null) });
   }
-  items.push({ t: 'sep' }, { t: 'title', label: 'Sampler (one-shot, wysokość z nuty)' });
+  items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSampled') }, { t: 'item', label: t('b.pe.menuKeys'), act: () => addKeys() });
+  items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSampler') });
   for (const s of S.project.sources.slice(0, 14)) items.push({ t: 'item', label: s.name, kbd: s.dur.toFixed(1) + ' s', act: () => addSampler(s.id) });
-  items.push({ t: 'item', label: 'Plik z dysku…', act: () => void addSamplerFiles(null) });
+  items.push({ t: 'item', label: t('b.pe.menuFile'), act: () => void addSamplerFiles(null) });
   openMenu(x, y, items, Math.min(window.innerHeight - 20, 80 + items.length * 26));
 }
 
@@ -288,11 +290,11 @@ function Rack(props: { root: () => HTMLDivElement }) {
     if (rollRows().has(c.id)) {
       // a melodic line (lengths / pitches): the steps would not show it — the piano roll does
       if (e.button === 0 && dblCheck('prow' + c.id)) { if (isPitched(c)) setView('roll', c.id); return; }
-      say(c.name + ': nuty z długością / wysokością — 2× klik otwiera piano roll');
+      say(t('b.pe.melodic', { name: c.name }));
       return;
     }
     const on = e.button === 0 ? !unwrap(pt()).notes.some(n => n.ch === c.id && Math.abs(n.step - step) < 1e-3) : false;
-    const g = new Gesture(on ? 'Kroki' : 'Usuń kroki');
+    const g = new Gesture(on ? t('b.pe.gestSteps') : t('b.pe.gestDelSteps'));
     let notes = setStep(unwrap(pt()).notes, c.id, step, on);
     g.update([putNotes(pt(), notes)]);
     if (on) audition(c.id, undefined, 0.8);
@@ -356,15 +358,15 @@ function Rack(props: { root: () => HTMLDivElement }) {
           <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none', cursor: 'pointer' }}
             onPointerDown={gridDown} onContextMenu={e => e.preventDefault()} />
           <canvas ref={head} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'pointer-events': 'none' }} />
-          <Show when={!chans().length}><div class="pstate">Brak kanałów — dodaj instrument lub sampler przyciskiem „+ Kanał”</div></Show>
+          <Show when={!chans().length}><div class="pstate">{t('b.pe.noChannels')}</div></Show>
           <Show when={hbar()}>{b => <div class="hbar"><div style={{ left: b().left + 'px', width: b().width + 'px' }} onPointerDown={hbarDown} /></div>}</Show>
         </div>
       </div>
       <div class="lanerow" style={{ height: LANE_H + 'px' }}>
         <div class="lanelab" style={{ width: LEFTW + 'px' }}>
-          <button class="smallbtn addch" title="Dodaj kanał: wbudowany instrument albo sampler z audio projektu / pliku"
+          <button class="smallbtn addch" title={t('b.pe.addChTitle')}
             onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); addChannelMenu(r.left, r.top - 8 - Math.min(window.innerHeight - 40, 80 + (5 + Math.min(14, S.project.sources.length)) * 26)); }}>
-            <Icon d="M12 5v14 M5 12h14" size={11} />Kanał
+            <Icon d="M12 5v14 M5 12h14" size={11} />{t('b.pe.addCh')}
           </button>
           <div class="lanetitle">
             <span class="tag9">VELOCITY</span>
@@ -377,8 +379,8 @@ function Rack(props: { root: () => HTMLDivElement }) {
         </div>
       </div>
       <div class="pstatus mono">
-        <span>{chans().length} kanałów · {stats().vis.length} nut{stats().hidden ? ' · ' + stats().hidden + ' poza końcem (ukryte)' : ''}</span>
-        <span>Klik = krok · PPM = usuń · przeciągnij = maluj · Ctrl+klik w nazwę = odsłuch · PPM na kanale = menu</span>
+        <span>{t('b.pe.rackStatus', { ch: chans().length, notes: notesText(stats().vis.length) })}{stats().hidden ? t('b.pe.hiddenPast', { n: stats().hidden }) : ''}</span>
+        <span>{t('b.pe.rackHint')}</span>
       </div>
     </div>
   );
@@ -406,24 +408,25 @@ function ChanRow(props: { c: Channel }) {
       onContextMenu={e => { e.preventDefault(); selectChannel(c().id); chanMenu(c(), e.clientX, e.clientY); }}>
       <span class="cstrip" style={{ background: c().color }} />
       <button class="led" classList={{ on: !c().mute && (!anySolo() || c().solo), solo: c().solo }}
-        title={(c().mute ? 'Wyciszony' : c().solo ? 'Solo' : 'Aktywny') + ' — klik = mute · PPM = solo'}
+        title={t('b.pe.ledTitle', { state: t(c().mute ? 'b.pe.ledMuted' : c().solo ? 'b.pe.ledSolo' : 'b.pe.ledActive') })}
         onPointerDown={e => { e.stopPropagation(); e.preventDefault(); if (e.button === 2) toggleChanSolo(c()); else if (e.button === 0) toggleChanMute(c()); }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }} />
-      <MiniKnob key={'cv' + c().id} t={() => c().vol} title={'Głośność ' + volText(c().vol) + ' · przeciągnij ↕ · 2× klik = 0 dB'}
-        onStart={() => { vg = new Gesture('Głośność kanału'); }} onChange={t => { vg?.update([volOp(t)]); say(c().name + ' · ' + volText(t)); }}
-        onEnd={() => { vg?.end(); vg = null; }} onReset={() => commit([volOp(VOL_UNITY)], 'Głośność kanału')}
-        onWheel={t => commit([volOp(t)], 'Głośność kanału')} />
-      <MiniKnob key={'cp' + c().id} t={() => (c().pan + 1) / 2} title={'Panorama ' + panText(c().pan) + ' · przeciągnij ↕ · 2× klik = środek'}
-        onStart={() => { pg = new Gesture('Panorama kanału'); }} onChange={t => { pg?.update([panOp(t)]); say(c().name + ' · pan ' + panText(t * 2 - 1)); }}
-        onEnd={() => { pg?.end(); pg = null; }} onReset={() => commit([panOp(0.5)], 'Panorama kanału')}
-        onWheel={t => commit([panOp(t)], 'Panorama kanału')} />
+      <MiniKnob key={'cv' + c().id} t={() => c().vol} title={t('b.pe.volTitle', { v: volText(c().vol) })}
+        onStart={() => { vg = new Gesture(t('b.cw.volCh')); }} onChange={t => { vg?.update([volOp(t)]); say(c().name + ' · ' + volText(t)); }}
+        onEnd={() => { vg?.end(); vg = null; }} onReset={() => commit([volOp(VOL_UNITY)], t('b.cw.volCh'))}
+        onWheel={v => commit([volOp(v)], t('b.cw.volCh'))} />
+      <MiniKnob key={'cp' + c().id} t={() => (c().pan + 1) / 2} title={t('b.pe.panTitle', { v: panText(c().pan) })}
+        onStart={() => { pg = new Gesture(t('b.cw.panCh')); }} onChange={t => { pg?.update([panOp(t)]); say(c().name + ' · pan ' + panText(t * 2 - 1)); }}
+        onEnd={() => { pg?.end(); pg = null; }} onReset={() => commit([panOp(0.5)], t('b.cw.panCh'))}
+        onWheel={v => commit([panOp(v)], t('b.cw.panCh'))} />
       <button class="cins" classList={{ auto: c().insert == null }} title={insTitle(c())}
         onPointerDown={e => e.stopPropagation()} onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); insertMenu(c(), r.left, r.bottom + 2); }}>{insLabel(c())}</button>
-      <button class="cname" classList={{ sel: sel() }} title={c().name + ' · ' + chanKindLabel(c()) + ' — klik = ustawienia kanału · Ctrl+klik = odsłuch' + (isPitched(c()) ? ' · 2× klik = piano roll' : '') + ' · PPM = menu'}
+      <button class="cname" classList={{ sel: sel() }} title={t('b.pe.cnameTitle', { name: c().name, kind: chanKindLabel(c()), roll: isPitched(c()) ? t('b.pe.cnameRoll') : '' })}
         onPointerDown={nameDown}>
         <span class="cicon" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={11} /></span>
         <span class="ell">{c().name}</span>
         <Show when={c().kind === 'sample'}><span class="ckind">SMP</span></Show>
+        <Show when={c().kind === 'keys'}><span class="ckind">KEYS</span></Show>
       </button>
     </div>
   );
@@ -532,7 +535,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
   const commitNotes = (notes: Note[], label: string) => commit([putNotes(pt(), notes)], label);
 
   function eraseDrag(e: PointerEvent) {
-    const g = new Gesture('Usuń nuty');
+    const g = new Gesture(t('b.pe.gestDelNotes'));
     let notes = notesRaw(), n0 = notes.length;
     const del = (ev: PointerEvent | MouseEvent) => {
       const q = pos(ev), i = noteAt(notes, ch().id, unwrap(ch()), q.step, q.key);
@@ -542,11 +545,11 @@ function Roll(props: { root: () => HTMLDivElement }) {
     };
     setSel(new Set<number>());
     del(e);
-    track(ev => del(ev), () => { g.end(); if (notes.length < n0) say('Usunięto ' + (n0 - notes.length) + ' nut'); }, 'not-allowed');
+    track(ev => del(ev), () => { g.end(); if (notes.length < n0) say(t('b.pe.deleted', { x: notesText(n0 - notes.length) })); }, 'not-allowed');
   }
   function moveDrag(e: PointerEvent, idx: number[], mode: 'move' | 'resize', g?: Gesture) {
     const orig = notesRaw().slice(), p0 = pos(e), lead = orig[idx[idx.length - 1]] ?? orig[idx[0]];
-    const gest = g ?? new Gesture(mode === 'move' ? 'Przesuń nuty' : 'Długość nut');
+    const gest = g ?? new Gesture(mode === 'move' ? t('b.pe.gestMove') : t('b.pe.gestLen'));
     let lastKey = keyOf(lead, ch()), moved = false;
     trackFrame(ev => {
       const q = pos(ev);
@@ -574,7 +577,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
         if (nx < x1 && nx + nw > x0 && ny < y1 && ny + G.rowH > y0) s.add(i);
       }
       setSel(s);
-    }, () => { setMarq(null); say(sel().size ? 'Zaznaczono ' + sel().size + ' nut · Ctrl+C kopiuj · Ctrl+V wklej · Del usuń · przeciągnij = przesuń' : 'Brak zaznaczenia'); });
+    }, () => { setMarq(null); say(sel().size ? t('b.pe.selHint', { x: notesText(sel().size) }) : t('b.pe.noSel')); });
   }
   function paintDrag(e: PointerEvent, g: Gesture, startNotes: Note[]) {
     let notes = startNotes;
@@ -600,7 +603,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
       if (i < 0) return marqueeDrag(e, e.shiftKey);
       const s = new Set(sel()); if (s.has(i)) s.delete(i); else s.add(i); setSel(s);
-      say(s.size ? 'Zaznaczono ' + s.size + ' nut · Ctrl+C kopiuje' : 'Brak zaznaczenia');
+      say(s.size ? t('b.pe.selCopy', { x: notesText(s.size) }) : t('b.pe.noSel'));
       return;
     }
     if (e.button === 2 || tool === 'erase') return eraseDrag(e);
@@ -626,7 +629,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     if (s < 0 || s >= stepsOf(pt())) return;
     const n: Note = { ch: ch().id, step: s, len: lastLen(), p: p.key };
     const notes = [...notesRaw(), n];
-    const g = new Gesture(tool === 'paint' ? 'Maluj nuty' : 'Nowa nuta');
+    const g = new Gesture(tool === 'paint' ? t('b.pe.gestPaint') : t('b.pe.gestNew'));
     g.update([putNotes(pt(), notes)]);
     setSel(new Set([notes.length - 1]));
     audition(ch().id, p.key, 1);
@@ -678,14 +681,14 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
     const tl = TOOLS.find(x => x.key === k);
     const stop = () => { e.preventDefault(); e.stopPropagation(); };
-    if (tl && !m && !e.altKey) { stop(); setRollTool(tl.id); say('Piano roll · ' + tl.label); return; }
-    if (m && k === 'a') { stop(); setSel(new Set(chanNotes().map(x => x.i))); say('Zaznaczono ' + chanNotes().length + ' nut'); return; }
+    if (tl && !m && !e.altKey) { stop(); setRollTool(tl.id); say(t('b.pe.rollTool', { tool: t(tl.label) })); return; }
+    if (m && k === 'a') { stop(); setSel(new Set(chanNotes().map(x => x.i))); say(t('b.pe.selected', { x: notesText(chanNotes().length) })); return; }
     const s = [...sel()].filter(i => notesRaw()[i]?.ch === ch().id);
     if (m && (k === 'c' || k === 'x') && !e.shiftKey) {
       stop(); if (!s.length) return;
       noteClip = s.map(i => notesRaw()[i]); noteClipAt = null;
-      if (k === 'x') { const del = new Set(s); commitNotes(notesRaw().filter((_, i) => !del.has(i)), 'Wytnij nuty'); setSel(new Set<number>()); }
-      say((k === 'x' ? 'Wycięto ' : 'Skopiowano ') + s.length + ' nut');
+      if (k === 'x') { const del = new Set(s); commitNotes(notesRaw().filter((_, i) => !del.has(i)), t('b.pe.cutNotes')); setSel(new Set<number>()); }
+      say(t(k === 'x' ? 'b.pe.cutX' : 'b.pe.copiedX', { x: notesText(s.length) }));
       return;
     }
     if (m && k === 'v' && !e.shiftKey) {
@@ -694,32 +697,32 @@ function Roll(props: { root: () => HTMLDivElement }) {
       const at = noteClipAt ?? a + Math.max(4, Math.ceil((b - a) / 4 - 1e-9) * 4); // first paste lands after the copied block, further ones chain on
       const copies = noteClip.map(n => ({ ...n, ch: ch().id, step: n.step - a + at }));
       const base = notesRaw().length;
-      commitNotes([...notesRaw(), ...copies], 'Wklej nuty'); setSel(new Set(copies.map((_, j) => base + j)));
+      commitNotes([...notesRaw(), ...copies], t('b.pe.pasteNotes')); setSel(new Set(copies.map((_, j) => base + j)));
       noteClipAt = at + (b - a);
-      say('Wklejono ' + copies.length + ' nut');
+      say(t('b.pe.pastedX', { x: notesText(copies.length) }));
       return;
     }
     if (m && (k === 'b' || k === 'd')) {
       stop(); if (!s.length) return;
       const r = duplicateRight(notesRaw(), s);
-      commitNotes(r.notes, 'Duplikuj nuty'); setSel(new Set(r.idx));
+      commitNotes(r.notes, t('b.pe.dupNotes')); setSel(new Set(r.idx));
       const past = r.idx.filter(i => !visible(r.notes[i], pt())).length;
-      say('Zduplikowano ' + s.length + ' nut' + (past ? ' · ' + past + ' poza końcem patternu (ukryte) — wydłuż go, aby je usłyszeć' : ''));
+      say(t('b.pe.dupX', { x: notesText(s.length) }) + (past ? t('b.pe.dupPast', { n: past }) : ''));
       return;
     }
     if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && s.length && !e.shiftKey) {
       stop();
       const d = (e.key === 'ArrowUp' ? 1 : -1) * (m ? 12 : 1);
       const notes = transpose(notesRaw(), s, d, ch());
-      commitNotes(notes, m ? 'Oktawa' : 'Transpozycja');
+      commitNotes(notes, t(m ? 'b.pe.octave' : 'b.pe.transpose'));
       const lead = notes[s[s.length - 1]]; audition(ch().id, keyOf(lead, ch()), lead.v ?? 1);
       return;
     }
     if ((e.key === 'Delete' || e.key === 'Backspace') && s.length) {
       stop();
       const del = new Set(s);
-      commitNotes(notesRaw().filter((_, i) => !del.has(i)), 'Usuń nuty'); setSel(new Set<number>());
-      say('Usunięto ' + s.length + ' nut');
+      commitNotes(notesRaw().filter((_, i) => !del.has(i)), t('b.pe.gestDelNotes')); setSel(new Set<number>());
+      say(t('b.pe.deleted', { x: notesText(s.length) }));
       return;
     }
     if (e.key === 'Escape' && sel().size) { stop(); setSel(new Set<number>()); }
@@ -733,35 +736,35 @@ function Roll(props: { root: () => HTMLDivElement }) {
       <div class="ptools">
         <div class="seg tools">
           <For each={TOOLS}>{tl => (
-            <button classList={{ on: rollTool() === tl.id }} title={tl.label + ' (' + tl.key.toUpperCase() + ') — ' + tl.tip} onClick={() => setRollTool(tl.id)}>
+            <button classList={{ on: rollTool() === tl.id }} title={t(tl.label) + ' (' + tl.key.toUpperCase() + ') — ' + t(tl.tip)} onClick={() => setRollTool(tl.id)}>
               <Icon d={tl.icon} size={14} />
             </button>
           )}</For>
         </div>
-        <span class="toolname">{TOOLS.find(t => t.id === rollTool())!.label}</span>
+        <span class="toolname">{t(TOOLS.find(x => x.id === rollTool())!.label)}</span>
         <div class="vsep" />
-        <label class="plab">KANAŁ
+        <label class="plab">{t('b.pe.lblChannel')}
           <select class="sel" value={String(ch().id)} onChange={e => setView('roll', +e.currentTarget.value)}>
             <For each={pitched()}>{c => <option value={String(c.id)}>{c.name}</option>}</For>
           </select>
         </label>
-        <label class="plab">SIATKA
-          <select class="sel" title="Przyciąganie (Alt = bez siatki)" value={String(rollSnap())} onChange={e => setRollSnap(+e.currentTarget.value)}>
+        <label class="plab">{t('b.pe.lblGrid')}
+          <select class="sel" title={t('b.pe.snapTitle')} value={String(rollSnap())} onChange={e => setRollSnap(+e.currentTarget.value)}>
             <For each={ROLL_SNAPS}>{([l, v]) => <option value={String(v)}>{l}</option>}</For>
           </select>
         </label>
-        <label class="plab">TONACJA
+        <label class="plab">{t('b.pe.lblKey')}
           <span class="row" style={{ gap: '4px' }}>
-            <select class="sel" title={rollKey() == null ? 'Z Pitch Correct w projekcie (wykryta tonacja), inaczej C dur' : 'Podświetlenie skali'} value={String(root())} onChange={e => { setRollKey(+e.currentTarget.value); setRollScale(scaleIdx()); }}>
+            <select class="sel" title={rollKey() == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { setRollKey(+e.currentTarget.value); setRollScale(scaleIdx()); }}>
               <For each={NOTE_NAMES}>{(n, i) => <option value={String(i())}>{n}</option>}</For>
             </select>
             <select class="sel" value={String(scaleIdx())} onChange={e => { if (rollKey() == null) setRollKey(root()); setRollScale(+e.currentTarget.value); }}>
-              <For each={SCALES}>{([l], i) => <option value={String(i())}>{l}</option>}</For>
+              <For each={SCALES}>{([l], i) => <option value={String(i())}>{t(l)}</option>}</For>
             </select>
           </span>
         </label>
         <div style={{ flex: 1 }} />
-        <span class="note mono" style={{ 'align-self': 'center', 'font-size': '10px', color: 'var(--fg5)' }}>{sel().size ? sel().size + ' zazn.' : chanNotes().length + ' nut'} · nowa nuta: {lastLenText()}</span>
+        <span class="note mono" style={{ 'align-self': 'center', 'font-size': '10px', color: 'var(--fg5)' }}>{sel().size ? t('b.pe.nSel', { n: sel().size }) : notesText(chanNotes().length)}{t('b.pe.newNote', { len: lastLenText() })}</span>
       </div>
       <div ref={wrap} class="parea">
         <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}
@@ -777,8 +780,8 @@ function Roll(props: { root: () => HTMLDivElement }) {
       </div>
       <div class="pstatus mono">
         <span>{ch().name} · {chanKindLabel(ch())}</span>
-        <span>{TOOLS.find(t => t.id === rollTool())!.tip}</span>
-        <span>Ctrl+przeciągnij = zaznacz · Ctrl+C / V = kopiuj / wklej · ↑↓ = półton · Ctrl+↑↓ = oktawa · Ctrl+B = duplikuj · Ctrl+kółko = zoom</span>
+        <span>{t(TOOLS.find(x => x.id === rollTool())!.tip)}</span>
+        <span>{t('b.pe.rollHint')}</span>
       </div>
     </div>
   );
@@ -786,5 +789,5 @@ function Roll(props: { root: () => HTMLDivElement }) {
 
 function lastLenText() {
   const l = lastLen();
-  return l >= 4 && l % 4 === 0 ? l / 4 + (l === 4 ? ' beat' : ' beaty') : l === 1 ? '1/16' : l === 2 ? '1/8' : l === 0.5 ? '1/32' : l + ' kroków';
+  return l >= 4 && l % 4 === 0 ? t(l === 4 ? 'b.pe.beat1' : 'b.pe.beatN', { n: l / 4 }) : l === 1 ? '1/16' : l === 2 ? '1/8' : l === 0.5 ? '1/32' : t('b.pe.stepsN', { n: l });
 }

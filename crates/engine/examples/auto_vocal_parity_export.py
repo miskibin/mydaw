@@ -1,7 +1,7 @@
 """Exports the auto-vocal research test set for the Rust parity check (auto_vocal_parity.rs).
 
 Run from the research checkout (branch `auto-vocal`, folder research/auto_vocal) with its
-venv:  python <this file> D:/mydaw-data/auto_vocal_parity
+venv:  python <this file> D:/wave-data/auto_vocal_parity
 
 It rebuilds exactly the 50 degraded MUSDB test songs of `av.dyn_calib` (same seeds), the
 pre-dynamics signal (gate -> HPF -> EQ, which the app chain does not port yet), and writes

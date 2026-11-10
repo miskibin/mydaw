@@ -270,6 +270,32 @@ pub enum ChannelSrc {
     Sample { source: Id },
     /// The built-in polyphonic synthesizer (see `crate::poly`).
     Synth { #[serde(default)] synth: SynthState },
+    /// WAVE Keys: the sampled grand piano (see `crate::keys`).
+    Keys { #[serde(default)] keys: KeysState },
+}
+
+/// A WAVE Keys channel's settings.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KeysState {
+    /// How long a note rings after its key is let go, in milliseconds.
+    #[serde(default = "keys_release")]
+    pub release: f32,
+    /// 0..100 %: how much the velocity changes the level (the timbre always follows it).
+    #[serde(default = "keys_dynamics")]
+    pub dynamics: f32,
+}
+
+fn keys_release() -> f32 {
+    crate::keys::RELEASE_MS.2
+}
+fn keys_dynamics() -> f32 {
+    crate::keys::DYNAMICS.2
+}
+
+impl Default for KeysState {
+    fn default() -> Self {
+        Self { release: keys_release(), dynamics: keys_dynamics() }
+    }
 }
 
 /// A synth channel's sound: parameter values by catalog id (`fx_catalog().synth`). Missing ids
@@ -330,7 +356,7 @@ impl Channel {
     }
     /// True for channels whose notes have a meaningful pitch (piano roll).
     pub fn pitched(&self) -> bool {
-        matches!(self.src, ChannelSrc::Sample { .. } | ChannelSrc::Synth { .. } | ChannelSrc::Inst { inst: Inst::Bass })
+        matches!(self.src, ChannelSrc::Sample { .. } | ChannelSrc::Synth { .. } | ChannelSrc::Keys { .. } | ChannelSrc::Inst { inst: Inst::Bass })
     }
 }
 

@@ -286,7 +286,7 @@ pub(crate) fn module_paths(roots: &[PathBuf]) -> Vec<PathBuf> {
 
 /// How the scanner starts a child: the dedicated worker when it sits next to
 /// the executable (or one level up from Cargo's `deps/`), otherwise
-/// [`WorkerSpawn::Auto`] -- which honours `MYDAW_SCAN_WORKER_BIN`, then falls
+/// [`WorkerSpawn::Auto`] -- which honours `WAVE_SCAN_WORKER_BIN`, then falls
 /// back to the current executable if it called
 /// [`run_scan_worker_if_requested`], then to an in-process read with a deadline.
 fn worker_spawn() -> WorkerSpawn {
@@ -398,7 +398,7 @@ pub fn scan(rescan: bool) -> Vec<PluginInfo> {
 /// ```
 ///
 /// A scan re-executes the app binary as a sacrificial worker, with the request
-/// in its *environment* (`MYDAW_SCAN_WORKER=vst3`, `MYDAW_SCAN_MODULE=<path>`;
+/// in its *environment* (`WAVE_SCAN_WORKER=vst3`, `WAVE_SCAN_MODULE=<path>`;
 /// the variable names belong to `wave-plugin-scan`). Environment rather than
 /// argv, so it cannot collide with Tauri's own arguments or a file dropped on
 /// the icon. In that case this scans the one module, prints the result line on

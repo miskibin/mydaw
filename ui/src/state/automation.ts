@@ -1,3 +1,4 @@
+import { t as tl } from '../lib/i18n';
 // Automation in the UI: the right-click menu every automatable control shares, creating an
 // automation clip, and the live (automated) value a control shows while the song plays.
 import { createMemo, createRoot, createSignal } from 'solid-js';
@@ -68,9 +69,9 @@ export function automate(target: AutoTarget, color = '#e0a44a') {
   const start = lp ? lp.a : Math.max(0, U.start), len = lp ? lp.b - lp.a : 16;
   const name = targetLabel(S.project, S.catalog, target);
   const r = createAutomationOps(S.project, S.catalog, target, name, color, start, len, allocId);
-  commit(r.ops, 'Automatyzacja');
+  commit(r.ops, tl('a.au.label'));
   setU('sel', [r.clipId]);
-  say('Automatyzacja: ' + name + ' · ścieżka ' + (r.track + 1) + ' · ' + fmtPos(start) + ' — 2× klik na klipie = edycja punktów');
+  say(tl('a.au.created', { name, n: r.track + 1, pos: fmtPos(start) }));
 }
 
 /** The shared right-click menu of an automatable control. */
@@ -79,8 +80,8 @@ export function paramMenu(x: number, y: number, target: AutoTarget, reset: (() =
   const clips = () => S.project.clips.filter(c => c.kind === 'auto' && S.project.automations?.find(a => a.id === c.ref && targetKey(a.target) === targetKey(target)));
   openMenu(x, y, [
     { t: 'title', label: targetLabel(S.project, S.catalog, target) },
-    { t: 'item', label: 'Automatyzuj na playliście', kbd: S.project.loop ? 'pętla' : '4 takty', act: () => automate(target, color) },
-    ...(auto ? [{ t: 'item' as const, label: 'Zaznacz klipy automatyzacji', act: () => setU('sel', clips().map(c => c.id)) }] : []),
-    ...(reset ? [{ t: 'sep' as const }, { t: 'item' as const, label: 'Reset do domyślnej', kbd: '2× klik', act: reset }] : []),
+    { t: 'item', label: tl('a.au.automate'), kbd: S.project.loop ? tl('a.au.loop') : tl('a.au.bars4'), act: () => automate(target, color) },
+    ...(auto ? [{ t: 'item' as const, label: tl('a.au.selClips'), act: () => setU('sel', clips().map(c => c.id)) }] : []),
+    ...(reset ? [{ t: 'sep' as const }, { t: 'item' as const, label: tl('a.au.reset'), kbd: tl('a.pl.dblClick'), act: reset }] : []),
   ], 140);
 }

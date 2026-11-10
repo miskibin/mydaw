@@ -108,7 +108,7 @@ pub struct ScanCache<T> {
 }
 
 impl<T: Clone + Serialize + DeserializeOwned> ScanCache<T> {
-    /// Load the cache named `file_name` from MYDAW's data directory.
+    /// Load the cache named `file_name` from WAVE's data directory.
     ///
     /// Never fails. A missing, unreadable, truncated or version-mismatched file
     /// is an empty cache, which costs one slow scan and nothing else.

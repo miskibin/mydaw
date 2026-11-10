@@ -4,6 +4,7 @@
 import type { Fx } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
 import { clamp } from '../../lib/format';
+import { t as tr, tName } from '../../lib/i18n';
 import { S } from '../../state/store';
 import { tele } from '../../state/telemetry';
 import { Layer } from '../../ui/frameLoop';
@@ -13,7 +14,7 @@ export const HALF_COLOR = '#a3d65f';
 const SPEED = [1.5, 2, 4];
 const LOOP_BEATS = [0.25, 0.5, 1, 2, 4, 8, 16, 32];
 const LOOP_NAMES = ['1/16', '1/8', '1/4', '1/2', '1 takt', '2 takty', '4 takty', '8 taktów'];
-const SEMIS = ['−7 st (kwinta)', '−12 st (oktawa)', '−24 st (2 oktawy)'];
+const SEMIS = ['c.fx.half.semi0', 'c.fx.half.semi1', 'c.fx.half.semi2'] as const;
 const NB = 160;
 const F0 = 20, F1 = 20000;
 
@@ -90,7 +91,7 @@ export class HalfViz implements Viz {
 
     g.fillStyle = T.viz; g.fillRect(0, 0, W, H);
     // static layer: grid, lanes, labels, stretch fan, band strip frame
-    g.drawImage(this.layer.get(W, H, ['half', si, li, sm, p.lo, p.hi, p.solo, fx.bypass, S.project.bpm].join('|'), c => {
+    g.drawImage(this.layer.get(W, H, ['half', si, li, sm, p.lo, p.hi, p.solo, fx.bypass, S.project.bpm, tr('c.fx.half.in')].join('|'), c => {
       c.lineWidth = 1;
       // beat / subdivision grid across the window
       const div = lb >= 4 ? lb : lb >= 1 ? lb * 4 : 4;
@@ -119,10 +120,10 @@ export class HalfViz implements Viz {
       // labels
       c.font = SANS10; c.fillStyle = T.vizLabel; c.textBaseline = 'alphabetic';
       c.font = MONO10; c.textAlign = 'right';
-      c.fillStyle = col; c.fillText(`${LOOP_NAMES[li]} · ${M}× wolniej · ${SEMIS[si]}`, G.x0 + G.w, G.inY - 6);
+      c.fillStyle = col; c.fillText(`${tName(LOOP_NAMES[li])} · ${tr('c.fx.half.slower', { n: M })} · ${tr(SEMIS[si] ?? SEMIS[1])}`, G.x0 + G.w, G.inY - 6);
       c.textAlign = 'left';
       c.font = MONO9; c.fillStyle = rgba(T.vizLabel, 0.9);
-      if (used < 0.98) c.fillText('pominięte', X(used) + 5, G.inY + G.laneH - 5);
+      if (used < 0.98) c.fillText(tr('c.fx.half.skipped'), X(used) + 5, G.inY + G.laneH - 5);
 
       // band strip
       const lo = p.lo ?? 20, hi = p.hi ?? 20000, solo = (p.solo ?? 0) >= 0.5;
@@ -139,11 +140,11 @@ export class HalfViz implements Viz {
         c.fillText(f >= 1000 ? f / 1000 + 'k' : String(f), x + 2, G.bandY + G.bandH + 11);
       }
       c.font = SANS10; c.fillStyle = col;
-      const mid = (xl + xh) / 2, txt = solo ? 'SOLO PASMA' : 'SPOWALNIANE';
+      const mid = (xl + xh) / 2, txt = tr(solo ? 'c.fx.half.solo' : 'c.fx.half.slowed');
       if (xh - xl > 80) { c.textAlign = 'center'; c.fillText(txt, mid, G.bandY + 14); c.textAlign = 'left'; }
       c.font = MONO9; c.fillStyle = T.vizLabel;
-      if (xl - G.x0 > 50) c.fillText(solo ? 'wyciszone' : 'bez zmian', G.x0 + 5, G.bandY + 14);
-      if (G.x0 + G.w - xh > 50) { c.textAlign = 'right'; c.fillText(solo ? 'wyciszone' : 'bez zmian', G.x0 + G.w - 5, G.bandY + 14); c.textAlign = 'left'; }
+      if (xl - G.x0 > 50) c.fillText(tr(solo ? 'c.fx.half.muted' : 'c.fx.half.unchanged'), G.x0 + 5, G.bandY + 14);
+      if (G.x0 + G.w - xh > 50) { c.textAlign = 'right'; c.fillText(tr(solo ? 'c.fx.half.muted' : 'c.fx.half.unchanged'), G.x0 + G.w - 5, G.bandY + 14); c.textAlign = 'left'; }
     }) as CanvasImageSource, 0, 0, W, H);
 
     // envelopes
@@ -182,22 +183,22 @@ export class HalfViz implements Viz {
       g.beginPath(); g.moveTo(xr, G.inY + G.laneH); g.lineTo(xw, G.outY); g.lineWidth = 1; g.setLineDash([2, 3]); g.stroke(); g.setLineDash([]);
       g.strokeStyle = T.ink; g.lineWidth = 2;
       g.beginPath(); g.moveTo(xw, G.outY); g.lineTo(xw, G.outY + G.laneH); g.stroke();
-      g.font = MONO9; g.fillStyle = col; g.fillText('odczyt', Math.min(xr + 4, X(1) - 34), G.inY + 10);
+      g.font = MONO9; g.fillStyle = col; g.fillText(tr('c.fx.half.read'), Math.min(xr + 4, X(1) - 34), G.inY + 10);
     } else {
       g.font = MONO10; g.fillStyle = T.vizLabel; g.textAlign = 'center';
-      g.fillText(fx.bypass ? 'bypass' : 'działa przy odtwarzaniu (Spacja) — PAT albo SONG', W / 2, G.outY + G.laneH / 2 + 4);
+      g.fillText(tr(fx.bypass ? 'c.fx.half.bypass' : 'c.fx.half.idle'), W / 2, G.outY + G.laneH / 2 + 4);
       g.textAlign = 'left';
     }
 
     // lane labels on top of the envelopes
     g.font = SANS10;
-    for (const [t, y] of [['WEJŚCIE', G.inY], ['WYJŚCIE', G.outY]] as const) {
+    for (const [t, y] of [[tr('c.fx.half.in'), G.inY], [tr('c.fx.half.out'), G.outY]] as const) {
       const tw = g.measureText(t).width + 10;
       g.fillStyle = rgba(T.viz, 0.85); g.fillRect(G.x0 + 1, y + 1, tw, 15);
       g.fillStyle = T.vizLabel; g.fillText(t, G.x0 + 6, y + 12);
     }
     g.font = MONO10; g.textAlign = 'right';
-    const ft = sm >= 0 ? (sm > 55 ? 'swell ' : 'sustain ') + Math.round(smoothMs(sm)) + ' ms' : (sm < -55 ? 'FX ' : 'perkusyjnie ') + Math.round(smoothMs(sm)) + ' ms przed';
+    const ft = tr(sm >= 0 ? (sm > 55 ? 'c.fx.half.swell' : 'c.fx.half.sustain') : sm < -55 ? 'c.fx.half.fx' : 'c.fx.half.perc', { ms: Math.round(smoothMs(sm)) });
     const fw = g.measureText(ft).width + 10;
     g.fillStyle = rgba(T.viz, 0.85); g.fillRect(G.x0 + G.w - fw - 1, G.outY + 1, fw, 15);
     g.fillStyle = T.amber; g.fillText(ft, G.x0 + G.w - 6, G.outY + 12);
@@ -209,7 +210,7 @@ export class HalfViz implements Viz {
       g.beginPath(); g.arc(x, G.bandY + G.bandH / 2, on ? 6 : 5, 0, Math.PI * 2); g.fill();
       const off = which === 'lo' ? f <= 21 : f >= 19500;
       g.font = MONO9; g.fillStyle = on ? T.ink : T.vizLabel;
-      const lab = off ? (which === 'lo' ? 'cały dół' : 'cała góra') : f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 0 : 1) + ' kHz' : Math.round(f) + ' Hz';
+      const lab = off ? tr(which === 'lo' ? 'c.fx.half.allLow' : 'c.fx.half.allHigh') : f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 0 : 1) + ' kHz' : Math.round(f) + ' Hz';
       g.textAlign = which === 'lo' ? 'left' : 'right';
       g.fillText(lab, which === 'lo' ? x + 8 : x - 8, G.bandY + G.bandH - 6);
       g.textAlign = 'left';

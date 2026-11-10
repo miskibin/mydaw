@@ -24,6 +24,7 @@ pub mod analysis;
 pub mod denoise;
 pub mod dsp;
 pub mod engine;
+pub mod keys;
 pub mod rt;
 pub mod sources;
 pub mod synth;

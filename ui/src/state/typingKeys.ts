@@ -6,6 +6,7 @@
 import { createSignal } from 'solid-js';
 import { be } from '../api/backend';
 import type { Id } from '../api/types';
+import { t } from '../lib/i18n';
 import { noteName } from '../lib/pitch';
 import { say } from './ui';
 
@@ -33,14 +34,14 @@ export const baseText = () => noteName(typingBase()) + '–' + noteName(typingBa
 export function setTypingOn(on: boolean) {
   if (!on) releaseAll();
   setOn(on); save();
-  say(on ? 'Klawiatura jako pianino: Z = ' + noteName(typingBase()) + ', Q = ' + noteName(typingBase() + 12) + ' · PgDn / PgUp = oktawa · Ctrl+T wyłącza'
-    : 'Klawiatura jako pianino: wył. — litery znów są skrótami');
+  say(on ? t('b.tk.on', { z: noteName(typingBase()), q: noteName(typingBase() + 12) })
+    : t('b.tk.off'));
 }
 export function shiftOctave(d: number) {
   const b = Math.min(96, Math.max(12, typingBase() + 12 * d));
   if (b === typingBase()) return;
   releaseAll(); setBase(b); save();
-  say('Klawiatura: Z = ' + noteName(b) + ', Q = ' + noteName(b + 12));
+  say(t('b.tk.shift', { z: noteName(b), q: noteName(b + 12) }));
 }
 
 /** True when the key is a piano key in typing mode (then shortcuts must leave it alone). */
@@ -55,7 +56,7 @@ export function typingDown(e: KeyboardEvent, target: () => Id | null): boolean {
   if (e.code === 'PageUp' || e.code === 'PageDown') { if (!e.repeat) shiftOctave(e.code === 'PageUp' ? 1 : -1); return true; }
   if (e.repeat || held.has(e.code)) return true;
   const ch = target();
-  if (ch == null) { say('Klawiatura jako pianino: brak kanału — dodaj instrument w Channel Rack'); return true; }
+  if (ch == null) { say(t('b.tk.noCh')); return true; }
   const key = Math.min(127, typingBase() + OFFSET.get(e.code)!);
   held.set(e.code, { ch, key }); syncHeld();
   be().typingNote({ ch, key, vel: e.shiftKey ? 1 : 0.8, on: true }).catch(err => console.warn(err));

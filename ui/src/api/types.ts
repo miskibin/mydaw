@@ -69,8 +69,18 @@ export const SAMPLE_ROOT = 60;
  * new `synth`; they take the engine's fast path (no timeline rebuild) and glide on held notes.
  */
 export interface SynthState { preset: string | null; params: Record<string, number> }
-/** What a channel plays: a built-in instrument, a one-shot sample of a project source, or the built-in synth. */
-export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id } | { kind: 'synth'; synth: SynthState };
+/**
+ * WAVE Keys (the sampled grand piano): `release` = how long a note rings after its key is let
+ * go, in ms; `dynamics` 0..100 % = how much the velocity changes the level (the timbre always
+ * follows the velocity). Mirrors crates/engine/src/keys.rs.
+ */
+export interface KeysState { release: number; dynamics: number }
+export const KEYS_RELEASE = { min: 40, max: 3000, def: 350 } as const;
+export const KEYS_DYNAMICS = { min: 0, max: 100, def: 100 } as const;
+/** Where the piano's recordings are: `missing` = not on this computer yet (install library kit `kit`). */
+export interface KeysStatus { state: 'idle' | 'missing' | 'loading' | 'ready' | 'error'; error: string | null; kit: string; installed: boolean }
+/** What a channel plays: a built-in instrument, a one-shot sample of a project source, the built-in synth, or WAVE Keys. */
+export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id } | { kind: 'synth'; synth: SynthState } | { kind: 'keys'; keys: KeysState };
 /**
  * A Channel Rack row, global to the project (every pattern can have notes for it).
  * `vol` fader position (0.7937 = 0 dB), `pan` −1..1, `insert` null = the clip's track insert,

@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
-  LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
+  KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -12,6 +12,8 @@ export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[];
 export interface EventMap {
   state: StateDto;
   'library-progress': LibraryProgress;
+  /** WAVE Keys: the piano started loading, is ready, or is not on this computer. */
+  'keys-status': KeysStatus;
   'model-progress': ModelProgress;
   'audio-status': AudioStatus;
   /** Keyboard connected, unplugged or failed, or the choice changed. */
@@ -91,6 +93,8 @@ export interface Backend {
   midiSetTarget(channel: Id | null): Promise<MidiStatus>;
   libraryList(): Promise<LibraryList>;
   libraryInstall(id: string): Promise<void>;
+  /** WAVE Keys: whether the piano's recordings are on this computer and loaded. */
+  keysStatus(): Promise<KeysStatus>;
   libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]>;
   libraryAddFolder(): Promise<string[]>;
   libraryRemoveFolder(path: string): Promise<string[]>;
@@ -206,6 +210,7 @@ export function tauriBackend(): Backend {
     midiSetTarget: channel => invoke('midi_set_target', { channel }),
     libraryList: () => invoke('library_list'),
     libraryInstall: id => invoke('library_install', { id }),
+    keysStatus: () => invoke('keys_status'),
     libraryFiles: q => invoke('library_files', { kit: q.kit ?? null, folder: q.folder ?? null }),
     libraryAddFolder: () => invoke('library_add_folder'),
     libraryRemoveFolder: path => invoke('library_remove_folder', { path }),

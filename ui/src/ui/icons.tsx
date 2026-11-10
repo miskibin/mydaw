@@ -1,5 +1,6 @@
 import type { FxKind } from '../api/types';
 import { FX_ART } from './fxArt';
+import type { TranslationKey } from '../lib/i18n';
 
 export const ICONS = {
   draw: 'M4 20l4.5-1L19 8.5 15.5 5 5 15.5z M13.5 7l3.5 3.5',
@@ -13,21 +14,21 @@ export const ICONS = {
   vst: 'M4 6h16v12H4z M8 10v4 M12 9v6 M16 11v2',
 };
 
-export const FXMETA: Record<FxKind, { icon: string; color: string; tag: string }> = {
-  eq: { icon: 'M2 17h4c2.5 0 3.5-10 6-10s3.5 10 6 10h4', color: '#5aa9e6', tag: 'barwa' },
-  comp: { icon: 'M4 12h16 M12 2v6 M9 5l3 3 3-3 M12 22v-6 M9 19l3-3 3 3', color: '#e0a44a', tag: 'dynamika' },
-  sat: { icon: 'M2 12c1.5-5 2.5-6 4.5-6h3c2 0 3 12 5 12h3c2 0 3-1 4.5-6', color: '#d9678f', tag: 'ciepło' },
-  delay: { icon: 'M4 5v14 M9.5 8v11 M14.5 11v8 M19.5 14v5', color: '#7c8cf8', tag: 'echo' },
-  reverb: { icon: 'M4 12h.01 M8 8.5a5 5 0 0 1 0 7 M11.5 5.5a9 9 0 0 1 0 13 M15 2.5a13 13 0 0 1 0 19', color: '#47b8a8', tag: 'przestrzeń' },
-  limit: { icon: 'M3 4h18 M3 20l3-12 3 12 3-12 3 12 3-12 3 12', color: '#e05263', tag: 'głośność' },
-  tune: { icon: 'M3 18h5v-5h5V8h8 M3 15.5c3 0 3.5-5.5 7-5.5s3.5-3.5 7-3.5', color: '#5fbf8a', tag: 'strojenie' },
-  deess: { icon: 'M16.5 6.5C15.6 5 14 4.5 12 4.5c-2.8 0-4.5 1.4-4.5 3.4 0 4.6 9 2.8 9 7.8 0 2.2-2 3.8-4.6 3.8-2 0-3.6-.7-4.6-2.3 M3 12h18', color: '#6fd0e8', tag: 'sybilanty' },
-  fet: { icon: 'M3.5 17a8.5 8.5 0 0 1 17 0 M12 17l4.5-6.5 M6.2 11.2l1.2 1 M17.8 11.2l-1.2 1 M12 8.5v1.5', color: '#f07f4f', tag: 'kompresja FET' },
-  denoise: { icon: 'M2 12h2l1.5-3 1.5 6 1.5-4 1.5 2h2 M13 12c1.5-4 3-6 4.5-6S20 9 22 12 M13 12c1.5 4 3 6 4.5 6S20 15 22 12', color: '#8fb3ff', tag: 'odszumianie' },
-  voice: { icon: 'M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21 M17.5 3.5l3 2-3 2 M20.5 5.5h-2', color: '#c77ddb', tag: 'barwa głosu' },
-  half: { icon: 'M2 12c1-4 2-4 3 0s2 4 3 0 M10 12c2.5-8 5-8 7 0s4.5 8 5 0', color: '#a3d65f', tag: 'spowolnienie' },
-  rider: { icon: 'M3 15c2 0 2-6 4-6s2 8 4 8 2-10 4-10 2 6 4 6h2 M3 12h18', color: '#e8c55a', tag: 'wyrównanie' },
-  vst3: { icon: ICONS.vst, color: '#9a8cf0', tag: 'plugin' },
+export const FXMETA: Record<FxKind, { icon: string; color: string; /** translation key: show with t() */ tag: TranslationKey }> = {
+  eq: { icon: 'M2 17h4c2.5 0 3.5-10 6-10s3.5 10 6 10h4', color: '#5aa9e6', tag: 'c.fxtag.tone' },
+  comp: { icon: 'M4 12h16 M12 2v6 M9 5l3 3 3-3 M12 22v-6 M9 19l3-3 3 3', color: '#e0a44a', tag: 'c.fxtag.dynamics' },
+  sat: { icon: 'M2 12c1.5-5 2.5-6 4.5-6h3c2 0 3 12 5 12h3c2 0 3-1 4.5-6', color: '#d9678f', tag: 'c.fxtag.warmth' },
+  delay: { icon: 'M4 5v14 M9.5 8v11 M14.5 11v8 M19.5 14v5', color: '#7c8cf8', tag: 'c.fxtag.echo' },
+  reverb: { icon: 'M4 12h.01 M8 8.5a5 5 0 0 1 0 7 M11.5 5.5a9 9 0 0 1 0 13 M15 2.5a13 13 0 0 1 0 19', color: '#47b8a8', tag: 'c.fxtag.space' },
+  limit: { icon: 'M3 4h18 M3 20l3-12 3 12 3-12 3 12 3-12 3 12', color: '#e05263', tag: 'c.fxtag.loudness' },
+  tune: { icon: 'M3 18h5v-5h5V8h8 M3 15.5c3 0 3.5-5.5 7-5.5s3.5-3.5 7-3.5', color: '#5fbf8a', tag: 'c.fxtag.tuning' },
+  deess: { icon: 'M16.5 6.5C15.6 5 14 4.5 12 4.5c-2.8 0-4.5 1.4-4.5 3.4 0 4.6 9 2.8 9 7.8 0 2.2-2 3.8-4.6 3.8-2 0-3.6-.7-4.6-2.3 M3 12h18', color: '#6fd0e8', tag: 'c.fxtag.sibilance' },
+  fet: { icon: 'M3.5 17a8.5 8.5 0 0 1 17 0 M12 17l4.5-6.5 M6.2 11.2l1.2 1 M17.8 11.2l-1.2 1 M12 8.5v1.5', color: '#f07f4f', tag: 'c.fxtag.fetComp' },
+  denoise: { icon: 'M2 12h2l1.5-3 1.5 6 1.5-4 1.5 2h2 M13 12c1.5-4 3-6 4.5-6S20 9 22 12 M13 12c1.5 4 3 6 4.5 6S20 15 22 12', color: '#8fb3ff', tag: 'c.fxtag.denoising' },
+  voice: { icon: 'M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21 M17.5 3.5l3 2-3 2 M20.5 5.5h-2', color: '#c77ddb', tag: 'c.fxtag.voiceTimbre' },
+  half: { icon: 'M2 12c1-4 2-4 3 0s2 4 3 0 M10 12c2.5-8 5-8 7 0s4.5 8 5 0', color: '#a3d65f', tag: 'c.fxtag.slowdown' },
+  rider: { icon: 'M3 15c2 0 2-6 4-6s2 8 4 8 2-10 4-10 2 6 4 6h2 M3 12h18', color: '#e8c55a', tag: 'c.fxtag.leveling' },
+  vst3: { icon: ICONS.vst, color: '#9a8cf0', tag: 'c.fxtag.plugin' },
 };
 export const FX_ORDER = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'half', 'reverb', 'limit'] as const;
 export const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];

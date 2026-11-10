@@ -1,12 +1,13 @@
 // Pattern editor commands: the window, channels, auditions and the pattern loop preview.
 // Every edit is an op (putPattern / putChannel / removeChannel) and one undo step.
 import { createSignal } from 'solid-js';
+import { t, tName } from '../lib/i18n';
 import { newSynthChannel } from '../lib/synth';
 import { prefs } from './prefs';
 import { be } from '../api/backend';
-import { SAMPLE_ROOT, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
+import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
 import { baseName, clamp, mod } from '../lib/format';
-import { builtinChannel, cloneNotes, INST_NAME, stepsOf } from '../lib/pattern';
+import { barsText, builtinChannel, cloneNotes, INST_NAME, notesText, stepsOf } from '../lib/pattern';
 import { commit } from './edit';
 import { allocId, plain, S } from './store';
 import { curBeat, tele } from './telemetry';
@@ -25,7 +26,7 @@ export const curPat = () => patById(U.patWin?.pat);
 /** Open the pattern editor on `id` (or bring it to the front). It shares the effect-window layer. */
 export function openPattern(id?: Id, view?: 'rack' | 'roll', ch?: Id) {
   const pat = patById(id) ?? patById(U.cur?.kind === 'pat' ? U.cur.ref : undefined) ?? S.project.patterns[0];
-  if (!pat) { say('Brak patternów — utwórz nowy'); return; }
+  if (!pat) { say(t('b.st.noPatterns')); return; }
   if (U.plugsHidden) setU('plugsHidden', false);
   const z = U.zTop + 1;
   // sized to the content: the rack's controls, ~34 px per step, a row per channel (+ room for one more)
@@ -75,16 +76,16 @@ export const patOp = (pt: Pattern, patch: Partial<Pattern>): Op => ({ op: 'putPa
 export function newPattern() {
   const n = S.project.patterns.length;
   const pt: Pattern = { id: allocId(), name: 'Pattern ' + (n + 1), color: PCOLORS[n % PCOLORS.length], len: 4, notes: [] };
-  commit([{ op: 'putPattern', pattern: pt }], 'Nowy pattern');
+  commit([{ op: 'putPattern', pattern: pt }], t('b.pat.new'));
   openPattern(pt.id);
-  say('Nowy pattern: ' + pt.name + ' — maluj kroki, przeciągnij na playlistę');
+  say(t('b.st.newSay', { name: pt.name }));
 }
 export function setBars(pt: Pattern, bars: number) {
   const len = clamp(Math.round(bars), 1, 8) * 4;
   if (len === pt.len) return;
   const hidden = pt.notes.filter(n => n.step >= len * 4 - 1e-4).length;
-  commit([patOp(pt, { len })], 'Długość patternu');
-  say(pt.name + ': ' + len / 4 + (len === 4 ? ' takt' : len < 20 ? ' takty' : ' taktów') + (hidden ? ' · ' + hidden + ' nut poza końcem (ukryte, nie usunięte)' : ''));
+  commit([patOp(pt, { len })], t('b.st.patLen'));
+  say(t('b.st.barsSay', { name: pt.name, bars: barsText(len / 4), hidden: hidden ? t('b.st.hiddenKept', { x: notesText(hidden) }) : '' }));
 }
 
 // ---------------------------------------------------------------- channels
@@ -93,29 +94,36 @@ export function chanOp(c: Channel, patch: Partial<Channel> = {}, index?: number)
   return { op: 'putChannel', channel: { ...plain(c), ...patch } as Channel, ...(index != null ? { index } : {}) };
 }
 export function setChannel(c: Channel, patch: Partial<Channel>, label: string) { commit([chanOp(c, patch)], label); }
-export function toggleChanMute(c: Channel) { setChannel(c, c.mute ? { mute: false } : { mute: true, solo: false }, 'Mute kanału'); say(c.name + (c.mute ? ' · włączony' : ' · wyciszony')); }
-export function toggleChanSolo(c: Channel) { setChannel(c, c.solo ? { solo: false } : { solo: true, mute: false }, 'Solo kanału'); say(c.name + (c.solo ? ' · solo wył.' : ' · solo')); }
+export function toggleChanMute(c: Channel) { setChannel(c, c.mute ? { mute: false } : { mute: true, solo: false }, t('b.st.muteCh')); say(c.name + t(c.mute ? 'b.st.unmuted' : 'b.st.muted')); }
+export function toggleChanSolo(c: Channel) { setChannel(c, c.solo ? { solo: false } : { solo: true, mute: false }, t('b.st.soloCh')); say(c.name + t(c.solo ? 'b.st.soloOff' : 'b.st.soloOn')); }
 
 export function addBuiltin(inst: Inst) {
   const c = builtinChannel(allocId(), inst);
-  commit([chanOp(c)], 'Dodaj kanał');
+  commit([chanOp(c)], t('b.st.addCh'));
   selectChannel(c.id);
-  say('Dodano kanał ' + INST_NAME[inst]);
+  say(t('b.st.addedCh', { name: INST_NAME[inst] }));
 }
 /** A new channel of the built-in synth playing factory preset `name` (or the blank patch). */
 export function addSynth(name: string | null) {
-  const cat = S.catalog?.synth; if (!cat) { say('Syntezator niedostępny'); return; }
+  const cat = S.catalog?.synth; if (!cat) { say(t('b.st.synthNA')); return; }
   const c = newSynthChannel(cat, allocId(), name);
-  commit([chanOp(c)], 'Dodaj syntezator');
+  commit([chanOp(c)], t('b.st.addSynth'));
   selectChannel(c.id);
-  say('Syntezator: ' + (name ?? 'pusty dźwięk') + ' — klik w nazwę kanału = edycja dźwięku');
+  say(t('b.st.synthSay', { name: name ? tName(name) : t('b.st.emptySound') }));
+}
+/** A new WAVE Keys channel: the sampled grand piano. */
+export function addKeys() {
+  const c: Channel = { id: allocId(), name: 'WAVE Keys', color: '#e0a44a', kind: 'keys', keys: { release: KEYS_RELEASE.def, dynamics: KEYS_DYNAMICS.def }, vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: 60 };
+  commit([chanOp(c)], t('b.st.addKeys'));
+  selectChannel(c.id);
+  say(t('b.st.keysSay'));
 }
 export function addSampler(sourceId: Id) {
   const s = S.project.sources.find(x => x.id === sourceId); if (!s) return;
   const c: Channel = { id: allocId(), name: s.name, color: s.color, kind: 'sample', source: s.id, vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: SAMPLE_ROOT };
-  commit([chanOp(c)], 'Dodaj sampler');
+  commit([chanOp(c)], t('b.st.addSampler'));
   selectChannel(c.id);
-  say('Sampler: ' + s.name + ' — klik w krok = odsłuch, piano roll = wysokości');
+  say(t('b.st.samplerSay', { name: s.name }));
 }
 /** Import audio files (dialog, library) and add one sampler channel per file. */
 export async function addSamplerFiles(paths?: string[] | null) {
@@ -126,25 +134,25 @@ export async function addSamplerFiles(paths?: string[] | null) {
     // the import's state event may still be in flight: wait until the sources are in the store
     for (let k = 0; k < 50 && !r.sourceIds.every(id => S.project.sources.some(s => s.id === id)); k++) await new Promise(res => setTimeout(res, 20));
     for (const id of r.sourceIds) addSampler(id);
-  } catch (e) { say('Nie dodano samplera: ' + String(e)); }
+  } catch (e) { say(t('b.st.samplerErr', { err: String(e) })); }
 }
 export function cloneChannel(c: Channel) {
   const id = allocId(), idx = channels().findIndex(x => x.id === c.id) + 1;
   const ops: Op[] = [chanOp({ ...c, id, name: c.name + ' 2', mute: false, solo: false }, {}, idx)];
   // FL clones the channel's steps too: in every pattern
   for (const pt of S.project.patterns) if (pt.notes.some(n => n.ch === c.id)) ops.push(putNotes(pt, cloneNotes(pt.notes, c.id, id)));
-  commit(ops, 'Klonuj kanał');
+  commit(ops, t('b.st.cloneCh'));
   selectChannel(id);
-  say('Sklonowano ' + c.name);
+  say(t('b.st.cloned', { name: c.name }));
 }
 export function deleteChannel(c: Channel) {
   const used = S.project.patterns.filter(pt => pt.notes.some(n => n.ch === c.id)).length;
-  commit([{ op: 'removeChannel', id: c.id }], 'Usuń kanał');
+  commit([{ op: 'removeChannel', id: c.id }], t('b.st.delCh'));
   if (U.patWin?.ch === c.id) setU('patWin', { ch: channels()[0]?.id ?? null, view: 'rack' });
-  say('Usunięto kanał ' + c.name + (used ? ' (z nutami w ' + used + ' pattern' + (used === 1 ? 'ie' : 'ach') + ') — Ctrl+Z cofa' : ''));
+  say(t('b.st.deletedCh', { name: c.name, used: used ? t(used === 1 ? 'b.st.usedIn1' : 'b.st.usedInN', { n: used }) : '' }));
 }
 export const chanSource = (c: Channel) => (c.kind === 'sample' ? S.project.sources.find(s => s.id === c.source) : undefined);
-export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? 'wbudowany · ' + INST_NAME[c.inst] : c.kind === 'synth' ? 'syntezator · ' + (c.synth.preset ?? 'własny') : 'sampler · ' + (chanSource(c) ? baseName(chanSource(c)!.path) : 'brak pliku'));
+export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? t('b.st.kindInst', { name: INST_NAME[c.inst] }) : c.kind === 'synth' ? t('b.st.kindSynth', { name: c.synth.preset ? tName(c.synth.preset) : t('b.st.kindCustom') }) : c.kind === 'keys' ? t('b.st.kindKeys') : t('b.st.kindSample', { name: chanSource(c) ? baseName(chanSource(c)!.path) : t('b.cw.noFile') }));
 
 // ---------------------------------------------------------------- sound
 
@@ -162,20 +170,20 @@ export { patMode };
 export function setPatMode(on: boolean) {
   setPatModeS(on);
   try { localStorage.setItem(MODE_KEY, on ? '1' : '0'); } catch { /* private window */ }
-  say(on ? 'Tryb PAT — Spacja gra bieżący pattern w pętli (' + (modePattern()?.name ?? '—') + ')' : 'Tryb SONG — Spacja gra utwór z playlisty');
+  say(on ? t('b.st.modePat', { name: modePattern()?.name ?? '—' }) : t('b.st.modeSong'));
 }
 /** The pattern PAT mode plays: the open editor's, else the one selected in the browser / playlist. */
 export const modePattern = () => curPat() ?? patById(U.cur?.kind === 'pat' ? U.cur.ref : undefined) ?? S.project.patterns[0];
 export const previewPattern = () => (U.patPlaying ? previewId : null);
 export async function togglePreview(id: Id) {
   try {
-    if (U.patPlaying && previewId === id) { await stopPreview(); say('Podgląd patternu zatrzymany'); return; }
+    if (U.patPlaying && previewId === id) { await stopPreview(); say(t('b.st.prevStopped')); return; }
     previewId = id;
     if (U.playing) setU('playing', false);
     await be().patternPlay(id);
     setU('patPlaying', true);
-    say((patMode() ? 'PAT · ' : 'Podgląd · ') + (patById(id)?.name ?? 'pattern') + ' w pętli — Spacja zatrzymuje' + (patMode() ? '' : ' · L = tryb PAT/SONG'));
-  } catch (e) { say('Podgląd: ' + String(e)); }
+    say(t('b.st.prevSay', { mode: t(patMode() ? 'b.st.modePatWord' : 'b.st.modePrevWord'), name: patById(id)?.name ?? t('b.st.patternWord'), hint: patMode() ? '' : t('b.st.prevHint') }));
+  } catch (e) { say(t('b.st.prevErr', { err: String(e) })); }
 }
 export async function stopPreview() {
   try { await be().patternPlay(null); setU('patPlaying', false); } catch (e) { console.warn(e); }

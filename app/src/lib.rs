@@ -3,6 +3,7 @@
 
 mod actions;
 mod cli_shim;
+mod keys;
 mod library;
 mod models;
 mod plugins;
@@ -36,6 +37,10 @@ pub struct App {
     /// Why the installed RMVPE model could not be used, if it could not.
     pub model_error: Mutex<Option<String>>,
     session: Mutex<Option<wave_session::Server>>,
+    /// WAVE Keys piano: where it is and whether it is loaded.
+    pub keys: keys::Keys,
+    /// Set once the window exists (events to the UI).
+    pub handle: std::sync::OnceLock<AppHandle>,
 }
 
 impl App {
@@ -410,8 +415,14 @@ async fn library_list(app: St<'_>) -> R<Value> {
     Ok(json!({ "kits": library::kits(), "folders": app.settings.lock().folders }))
 }
 
+/// WAVE Keys: is the piano on this computer, and is it loaded?
 #[tauri::command]
-async fn library_install(handle: AppHandle, id: String) -> R<()> {
+async fn keys_status(app: St<'_>) -> R<keys::KeysStatus> {
+    Ok(keys::status(&app))
+}
+
+#[tauri::command]
+async fn library_install(app: St<'_>, handle: AppHandle, id: String) -> R<()> {
     let h = handle.clone();
     let kid = id.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
@@ -423,6 +434,9 @@ async fn library_install(handle: AppHandle, id: String) -> R<()> {
     .map_err(es)?;
     if let Err(e) = &res {
         let _ = handle.emit("library-progress", json!({ "id": id, "done": 0, "total": 0, "error": e }));
+    } else if id == wave_engine::keys::KIT_ID {
+        // the piano just arrived: Keys channels start playing
+        keys::ensure(app.inner(), app.engine.uses_keys());
     }
     res
 }
@@ -644,6 +658,8 @@ pub fn run() {
         export_cancel: AtomicBool::new(false),
         model_error: Mutex::new(None),
         session: Mutex::new(None),
+        keys: keys::Keys::default(),
+        handle: std::sync::OnceLock::new(),
     });
     // the pitch model loads in the background; analysis uses YIN until it is ready
     let a = app.clone();
@@ -690,6 +706,8 @@ pub fn run() {
                 *a.status.lock() = st;
             });
             let _ = events.set(tapp.handle().clone());
+            let _ = app_setup.handle.set(tapp.handle().clone());
+            keys::ensure(&app_setup, app_setup.engine.uses_keys());
             // reopen the saved keyboard (it may be unplugged: the status says so, and it opens when it returns)
             let a = app_setup.clone();
             std::thread::spawn(move || {
@@ -699,7 +717,9 @@ pub fn run() {
                 }
             });
             let h = tapp.handle().clone();
+            let a = app_setup.clone();
             engine.on_change(move |dto| {
+                keys::ensure(&a, dto.project.channels.iter().any(|c| matches!(c.src, wave_engine::ChannelSrc::Keys { .. })));
                 let _ = h.emit("state", dto);
             });
             if let Some(w) = tapp.get_webview_window("main") {
@@ -713,7 +733,7 @@ pub fn run() {
             import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
-            library_list, library_install, library_files, library_add_folder, library_remove_folder,
+            library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,
             project_new, project_open, project_save, export_audio, export_cancel,
             vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status
         ])

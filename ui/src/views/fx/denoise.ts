@@ -5,6 +5,7 @@ import type { Fx } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
 import { fx2x } from '../../lib/eq';
 import { clamp } from '../../lib/format';
+import { t as tr } from '../../lib/i18n';
 import { FXMETA } from '../../ui/icons';
 import { MONO10, MONO9, Needle, rgba, SpecSmoother, specCurve, T, type Viz, type VizExtra } from './common';
 
@@ -89,13 +90,13 @@ export class DenoiseViz implements Viz {
     // legend + total reduction
     g.font = MONO9; let lx = 8; const ly = 14;
     const leg = (col: string, t: string) => { g.fillStyle = col; g.fillRect(lx, ly - 6, 8, 3); g.fillStyle = T.fg4; g.fillText(t, lx + 11, ly - 2); lx += g.measureText(t).width + 24; };
-    leg(T.pre, 'wejście'); leg(accent, 'po odszumieniu'); leg(T.red, 'profil szumu / redukcja');
+    leg(T.pre, tr('c.viz.input')); leg(accent, tr('c.viz.denoised')); leg(T.red, tr('c.viz.noiseProfile'));
     g.font = '600 11px "Geist Mono Variable", monospace'; g.textAlign = 'right';
     g.fillStyle = this.gr.v < -0.5 ? T.red : T.fg3;
     g.fillText((this.gr.v < -0.05 ? '−' + Math.abs(this.gr.v).toFixed(1) : '0.0') + ' dB', W - 8, ly + 1);
     g.font = MONO10; g.fillStyle = T.fg4;
-    if (fx.params.learn) g.fillText('PROFIL ZAMROŻONY', W - 80, ly + 1);
-    if (fx.params.listen) { g.fillStyle = T.amber; g.fillText('ODSŁUCH SZUMU', W - 80, ly + 15); }
+    if (fx.params.learn) g.fillText(tr('c.viz.profileFrozen'), W - 80, ly + 1);
+    if (fx.params.listen) { g.fillStyle = T.amber; g.fillText(tr('c.viz.listenNoise'), W - 80, ly + 15); }
     g.textAlign = 'left';
   }
 }

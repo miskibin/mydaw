@@ -1,3 +1,4 @@
+import { t as tl } from './lib/i18n';
 import { closeNotebook, NB } from './state/notebook';
 import { ConfirmDialog } from './ui/Confirm';
 import { createEffect, For, onCleanup, onMount, Show } from 'solid-js';
@@ -113,9 +114,9 @@ function onKey(e: KeyboardEvent) {
   if (!m && !e.altKey) {
     if (k === 'r') return A.toggleRec();
     if (k === 'l') return setPatMode(!patMode());
-    if (k === 'f') { setU('follow', !U.follow); return say(U.follow ? 'Podążanie za głowicą: wł.' : 'Podążanie za głowicą: wył.'); }
+    if (k === 'f') { setU('follow', !U.follow); return say(U.follow ? tl('a.app.followOn') : tl('a.app.followOff')); }
     const t = TOOLS.find(x => x[1].toLowerCase() === k);
-    if (t) { setU('tool', t[0]); say('Narzędzie: ' + t[2]); }
+    if (t) { setU('tool', t[0]); say(tl('a.app.tool', { name: tl(t[2]) })); }
   }
 }
 const onKeyUp = (e: KeyboardEvent) => {
@@ -172,7 +173,7 @@ export function App() {
     if (U.musicWin?.clipId != null && !S.project.clips.some(c => c.id === U.musicWin!.clipId)) setU('musicWin', null);
     if (U.musicWin?.fxId != null && !findFx(U.musicWin!.fxId)) setU('musicWin', null);
   });
-  createEffect(() => { be().setTitle((S.path ? baseName(S.path) : 'Bez nazwy') + (S.dirty ? ' •' : '') + ' — WAVE'); });
+  createEffect(() => { be().setTitle((S.path ? baseName(S.path) : tl('a.tb.untitled')) + (S.dirty ? ' •' : '') + ' — WAVE'); });
 
   return (
     <div class="app" onContextMenu={e => e.preventDefault()}>

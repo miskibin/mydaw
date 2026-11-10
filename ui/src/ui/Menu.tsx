@@ -5,6 +5,7 @@ import { closeMenu, U } from '../state/ui';
 import { S } from '../state/store';
 import { commit } from '../state/edit';
 import { clamp, dbText } from '../lib/format';
+import { t } from '../lib/i18n';
 import { Icon, TC } from './icons';
 import { INST_ICONS, InstIcon } from './instIcons';
 
@@ -76,7 +77,7 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
                   <Match when={it.t === 'swatches' && it}>
                     {i => (
                       <div class="swatches">
-                        <For each={TC}>{c => <button title="Kolor" style={{ background: c, 'box-shadow': c === i().current ? '0 0 0 2px var(--fg-hi)' : 'none' }} onClick={() => { i().pick(c); closeMenu(); }} />}</For>
+                        <For each={TC}>{c => <button title={t('d.ui.color')} style={{ background: c, 'box-shadow': c === i().current ? '0 0 0 2px var(--fg-hi)' : 'none' }} onClick={() => { i().pick(c); closeMenu(); }} />}</For>
                       </div>
                     )}
                   </Match>
@@ -84,7 +85,7 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
                     {i => (
                       <div class="iconpick">
                         <For each={Object.entries(INST_ICONS)}>{([id, g]) => (
-                          <button title={g.label + (id === i().current ? ' (klik = usuń)' : '')} classList={{ on: id === i().current }}
+                          <button title={id === i().current ? t('d.ui.iconremove', { label: g.label }) : g.label} classList={{ on: id === i().current }}
                             style={{ color: id === i().current ? (i().color ?? 'var(--fg-hi)') : undefined }}
                             onClick={() => { i().pick(id === i().current ? null : id); closeMenu(); }}>
                             <InstIcon id={id} size={14} />
@@ -96,10 +97,10 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
                   <Match when={it.t === 'gain' && it}>
                     {i => {
                       const clip = () => S.project.clips.find(c => c.id === i().clipId);
-                      const set = (d: number) => { const c = clip(); if (c) commit([{ op: 'putClips', clips: [{ ...c, gain: clamp(c.gain + d, -24, 12) }] }], 'Głośność klipu'); };
+                      const set = (d: number) => { const c = clip(); if (c) commit([{ op: 'putClips', clips: [{ ...c, gain: clamp(c.gain + d, -24, 12) }] }], t('d.ui.clipvol')); };
                       return (
                         <div class="gainrow">
-                          <span style={{ flex: 1, font: '500 12px var(--sans)', color: 'var(--fg)' }}>Głośność klipu</span>
+                          <span style={{ flex: 1, font: '500 12px var(--sans)', color: 'var(--fg)' }}>{t('d.ui.clipvol')}</span>
                           <button onClick={() => set(-1)}>−</button>
                           <span style={{ 'min-width': '54px', 'text-align': 'center', font: '500 11px var(--mono)', color: 'var(--blue)' }}>{dbText(clip()?.gain ?? 0)}</span>
                           <button onClick={() => set(1)}>+</button>

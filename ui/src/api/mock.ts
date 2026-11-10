@@ -12,11 +12,12 @@ import { landTakes, takeEnd } from '../lib/comp';
 import { satDriveDb } from '../lib/saturator';
 import { eqCurve } from '../lib/eq';
 import { clamp, dbg } from '../lib/format';
+import { t } from '../lib/i18n';
 import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitch';
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 
@@ -112,7 +113,7 @@ export class MockBackend implements Backend {
   private vstParams = new Map<Id, Vst3Param[]>();
   private audio: AudioStatus = {
     host: 'wasapi', output: 'Głośniki (Realtek High Definition Audio)', input: 'Mikrofon (USB Audio)', sampleRate: null, bufferSize: null, inputChannel: null,
-    running: true, actualRate: 48000, actualBuffer: 480, latencyMs: 20, inputChannels: 2, error: null, note: 'Mock — brak prawdziwego audio', asioCompiled: false,
+    running: true, actualRate: 48000, actualBuffer: 480, latencyMs: 20, inputChannels: 2, error: null, note: t('d.mock.noaudio'), asioCompiled: false,
     recOffsetMs: 0, inputUnderruns: 0, inputOverruns: 0, inputDriftPpm: 0,
   };
 
@@ -778,7 +779,7 @@ export class MockBackend implements Backend {
     // like the app: a config without recOffsetMs keeps the saved calibration
     cfg = { ...cfg, recOffsetMs: cfg.recOffsetMs ?? this.audio.recOffsetMs ?? 0 };
     const asioErr = cfg.host === 'asio' && !this.audio.asioCompiled;
-    this.audio = { ...this.audio, ...cfg, running: !asioErr, error: asioErr ? 'ASIO nie jest wkompilowane w tę wersję' : null,
+    this.audio = { ...this.audio, ...cfg, running: !asioErr, error: asioErr ? t('d.mock.noasio') : null,
       actualRate: cfg.sampleRate ?? 48000, actualBuffer: cfg.bufferSize ?? 480, latencyMs: Math.round(((cfg.bufferSize ?? 480) * 2 / (cfg.sampleRate ?? 48000)) * 10000) / 10 };
     this.emit('audio-status', { ...this.audio });
     return { ...this.audio };
@@ -818,6 +819,8 @@ export class MockBackend implements Backend {
       if (done >= total) { clearInterval(iv); kit.installed = true; }
     }, 60);
   }
+  /** The browser preview has no recordings to load: the piano is always "ready" (and silent, like every mock instrument). */
+  async keysStatus(): Promise<KeysStatus> { await delay(); return { state: 'ready', error: null, kit: 'salamander-piano', installed: true }; }
   async libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]> {
     await delay(10);
     const root = q.kit ? 'C:\\WAVE\\Library\\' + q.kit : q.folder ?? '';
@@ -897,7 +900,7 @@ export class MockBackend implements Backend {
     if (p) { p.value = value; p.display = (value * 100).toFixed(0) + ' %'; }
   }
 
-  async cliStatus() { return { installed: false, command: 'wave', path: null, note: 'Podgląd w przeglądarce — CLI dostępne tylko w aplikacji' }; }
+  async cliStatus() { return { installed: false, command: 'wave', path: null, note: t('d.mock.nocli') }; }
 
   async on<K extends keyof EventMap>(ev: K, cb: (p: EventMap[K]) => void) {
     let s = this.listeners.get(ev); if (!s) this.listeners.set(ev, s = new Set());
