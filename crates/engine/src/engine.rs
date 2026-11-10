@@ -1113,17 +1113,11 @@ impl Engine {
     /// on a channel). `pattern`: the pattern being edited, so a channel that follows its clip's
     /// track is heard through that track. Not an edit.
     pub fn note_audition(&self, chan: Id, key: Option<u8>, vel: f32, pattern: Option<Id>) -> Result<(), EngineError> {
-        self.note_audition_len(chan, key, vel, pattern, None)
-    }
-
-    /// Like [`Self::note_audition`], with the note's length in seconds (`None` = the short
-    /// default; 0.05..8 s). The on-screen keyboard uses it so a clicked piano key can ring.
-    pub fn note_audition_len(&self, chan: Id, key: Option<u8>, vel: f32, pattern: Option<Id>, len: Option<f32>) -> Result<(), EngineError> {
         let mut c = self.core.lock();
         let ch = c.project.channel(chan).ok_or(EngineError::Msg(format!("no channel {chan}")))?;
         let key = key.unwrap_or(ch.root).min(127);
         // percussion rings out by itself; pitched channels get a short note
-        let len = len.filter(|l| l.is_finite()).map(|l| l.clamp(0.05, 8.0)).unwrap_or(if ch.pitched() { 0.35 } else { 0.25 });
+        let len = if ch.pitched() { 0.35 } else { 0.25 };
         send(&mut c, Cmd::Audition { chan, key, vel: vel.clamp(0.0, 1.0), len, pattern });
         Ok(())
     }
@@ -1627,6 +1621,17 @@ impl Engine {
     /// channel, else the first channel).
     pub fn midi_target(&self) -> Option<Id> {
         midi_channel(&self.core.lock())
+    }
+
+    /// A note from the computer keyboard used as a piano (FL "typing keyboard"): plays `chan`
+    /// like a MIDI key, through the same lock-free ring, whether or not a MIDI device is connected.
+    pub fn typing_note(&self, chan: Id, key: u8, vel: f32, on: bool) {
+        let ins = match self.midi_fast.ins.load(Relaxed) {
+            usize::MAX => None,
+            i => Some(i),
+        };
+        let vel = if on { vel.clamp(0.0, 1.0) } else { 0.0 };
+        self.midi_fast.send(Cmd::MidiNote { chan, key: key.min(127), vel, on, ins: if on { ins } else { None } });
     }
 
     /// Releases every sounding keyboard note (device unplugged).

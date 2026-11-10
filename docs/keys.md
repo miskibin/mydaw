@@ -19,7 +19,7 @@ wave channels --ch "WAVE Keys" --param release --value 600
 wave channels --ch "WAVE Keys" --param dynamics --value 70
 ```
 
-The Keys window (click the channel's name) has a keyboard you can click: lower on a key is a
+The Keys window (click the channel's name) has a keyboard you can click (a key sounds while held): lower on a key is a
 harder hit, dragging slides across keys, and keys held on a MIDI keyboard light up. Sampler
 channels have the same keyboard, with a dot on the root key.
 

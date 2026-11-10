@@ -1,16 +1,14 @@
 // A piano keyboard you can click: plays the channel's notes like the keyboard at the bottom
-// of a sampler in FL Studio. Lower on a key = harder hit; drag across keys to slide.
-// Keys held on the MIDI keyboard light up too.
+// of a sampler in FL Studio. A key sounds while it is held; lower on a key = harder hit; drag
+// across keys to slide. Keys held on the MIDI keyboard or the typing keyboard light up too.
 import { createSignal, For, onCleanup, onMount } from 'solid-js';
 import { be } from '../api/backend';
 import type { Id } from '../api/types';
 import { isBlack, noteName } from '../lib/pitch';
+import { typingHeld } from '../state/typingKeys';
 import { say } from '../state/ui';
 
-/** Seconds a clicked key sounds (then the instrument's own release). */
-const CLICK_LEN = 1.2;
-
-export function PianoKeys(props: { ch: Id; lo: number; hi: number; mark?: number; pattern?: Id | null }) {
+export function PianoKeys(props: { ch: Id; lo: number; hi: number; mark?: number }) {
   let el!: HTMLDivElement;
   const [down, setDown] = createSignal<number | null>(null);
   const [held, setHeld] = createSignal<ReadonlySet<number>>(new Set());
@@ -34,24 +32,27 @@ export function PianoKeys(props: { ch: Id; lo: number; hi: number; mark?: number
     }
     return { key: ws[i], vel: vel(r.height) };
   };
+  const send = (key: number, vel: number, on: boolean) => be().typingNote({ ch: props.ch, key, vel, on }).catch(err => { if (on) say('Nie zagrano nuty: ' + String(err)); });
+  const release = () => { const k = down(); if (k != null) { setDown(null); void send(k, 0, false); } };
   const play = (e: PointerEvent) => {
     const h = hit(e);
     if (!h || h.key === down()) return;
+    release();
     setDown(h.key);
-    be().noteAudition({ ch: props.ch, key: h.key, vel: h.vel, pattern: props.pattern ?? undefined, len: CLICK_LEN }).catch(err => say('Nie zagrano nuty: ' + String(err)));
+    void send(h.key, h.vel, true);
   };
 
   onMount(() => {
     const off = be().on('midi-note', ev => setHeld(s => { const n = new Set(s); if (ev.note.on) n.add(ev.note.key); else n.delete(ev.note.key); return n; }));
-    onCleanup(() => void off.then(un => un()));
+    onCleanup(() => { release(); void off.then(un => un()); });
   });
 
-  const lit = (k: number) => down() === k || held().has(k);
+  const lit = (k: number) => down() === k || held().has(k) || typingHeld().includes(k);
   return (
-    <div ref={el} class="pkeys" role="group" aria-label="Klawiatura: kliknij, żeby zagrać" title="Kliknij klawisz, żeby zagrać · niżej = mocniej · przeciągnij = glissando"
+    <div ref={el} class="pkeys" role="group" aria-label="Klawiatura: kliknij, żeby zagrać" title="Kliknij i trzymaj klawisz, żeby zagrać · niżej = mocniej · przeciągnij = glissando"
       onPointerDown={e => { if (e.button !== 0) return; el.setPointerCapture(e.pointerId); play(e); }}
       onPointerMove={e => { if (down() != null) play(e); }}
-      onPointerUp={() => setDown(null)} onPointerCancel={() => setDown(null)}>
+      onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}>
       <For each={whites()}>{(k, i) => (
         <div class="w" classList={{ on: lit(k) }} style={{ left: (i() / whites().length) * 100 + '%', width: 100 / whites().length + '%' }}>
           {k % 12 === 0 && <span class="lbl">{noteName(k)}</span>}

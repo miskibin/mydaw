@@ -7,6 +7,7 @@
 // melody (`pitch_target`, previewed live while the parameters change, stored on Apply); the
 // reference pitch and its notes are drawn too, and stretches the alignment is unsure of are
 // marked — they are left uncorrected. Manual edits then apply on top of the target.
+import { isTypingKey } from '../state/typingKeys';
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import type { Clip, ClipTune, F0ModelStatus, Op, PitchAnalysis, PitchTarget, RefTune } from '../api/types';
@@ -467,7 +468,7 @@ function PitchBody(props: { clipId: number }) {
     bumpView();
   };
   const onKey = (e: KeyboardEvent) => {
-    if ((e.target as HTMLElement).tagName === 'INPUT') return;
+    if ((e.target as HTMLElement).tagName === 'INPUT' || isTypingKey(e)) return;
     const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
     const tl = TOOLS.find(x => x.key === e.key);
     if (tl && !m) { e.stopPropagation(); setTool(tl.id); say('Narzędzie: ' + tl.label); return; }

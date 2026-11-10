@@ -734,7 +734,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         "note_audition" => {
             let p = e.project();
             let ch = find_channel(&p, arg(a, "ch").ok_or("`ch` is required")?)?.id;
-            e.note_audition_len(ch, arg(a, "key").and_then(as_index).map(|k| k.min(127) as u8), opt_f64(a, "vel").unwrap_or(0.8) as f32, arg(a, "pattern").and_then(as_index), opt_f64(a, "len").map(|l| l as f32)).map_err(|x| x.to_string())?;
+            e.note_audition(ch, arg(a, "key").and_then(as_index).map(|k| k.min(127) as u8), opt_f64(a, "vel").unwrap_or(0.8) as f32, arg(a, "pattern").and_then(as_index)).map_err(|x| x.to_string())?;
             Ok(json!({}))
         }
         "comp" => comp(app, a, if_revision),

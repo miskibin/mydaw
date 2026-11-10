@@ -1,5 +1,6 @@
 // Pattern editor commands: the window, channels, auditions and the pattern loop preview.
 // Every edit is an op (putPattern / putChannel / removeChannel) and one undo step.
+import { createSignal } from 'solid-js';
 import { newSynthChannel } from '../lib/synth';
 import { prefs } from './prefs';
 import { be } from '../api/backend';
@@ -160,6 +161,18 @@ export function audition(ch: Id, key?: number, vel = 0.8, force = false) {
 }
 
 let previewId: Id | null = null;
+
+// FL's PAT / SONG switch (L): in PAT mode Space loops the current pattern, in SONG the playlist.
+const MODE_KEY = 'wave.patMode';
+const [patMode, setPatModeS] = createSignal((() => { try { return localStorage.getItem(MODE_KEY) === '1'; } catch { return false; } })());
+export { patMode };
+export function setPatMode(on: boolean) {
+  setPatModeS(on);
+  try { localStorage.setItem(MODE_KEY, on ? '1' : '0'); } catch { /* private window */ }
+  say(on ? 'Tryb PAT — Spacja gra bieżący pattern w pętli (' + (modePattern()?.name ?? '—') + ')' : 'Tryb SONG — Spacja gra utwór z playlisty');
+}
+/** The pattern PAT mode plays: the open editor's, else the one selected in the browser / playlist. */
+export const modePattern = () => curPat() ?? patById(U.cur?.kind === 'pat' ? U.cur.ref : undefined) ?? S.project.patterns[0];
 export const previewPattern = () => (U.patPlaying ? previewId : null);
 export async function togglePreview(id: Id) {
   try {
@@ -168,7 +181,7 @@ export async function togglePreview(id: Id) {
     if (U.playing) setU('playing', false);
     await be().patternPlay(id);
     setU('patPlaying', true);
-    say('Podgląd patternu w pętli — ▶ ponownie zatrzymuje · Spacja gra utwór');
+    say((patMode() ? 'PAT · ' : 'Podgląd · ') + (patById(id)?.name ?? 'pattern') + ' w pętli — Spacja zatrzymuje' + (patMode() ? '' : ' · L = tryb PAT/SONG'));
   } catch (e) { say('Podgląd: ' + String(e)); }
 }
 export async function stopPreview() {

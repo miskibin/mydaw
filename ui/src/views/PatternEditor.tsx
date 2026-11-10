@@ -2,7 +2,7 @@
 // channels, with a velocity lane under both. It is a floating window in the effect-window
 // layer (F5 / a playlist click hide it, "Okna" brings it back). Grids are canvases with cached
 // background layers; every edit goes out as an op (one undo step per click or drag).
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { VOL_UNITY, type Channel, type Note } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
@@ -19,7 +19,8 @@ import {
 } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
-import { dblCheck, track } from '../ui/drag';
+import { dblCheck, track, trackFrame } from '../ui/drag';
+import { isTypingKey, typingHeld } from '../state/typingKeys';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
 import { Icon } from '../ui/icons';
 import { channelIcon, InstIcon } from '../ui/instIcons';
@@ -49,6 +50,7 @@ let viewKey: ((e: KeyboardEvent) => void) | null = null;
 let noteClip: Note[] = [];
 let noteClipAt: number | null = null;
 function guardKeys(e: KeyboardEvent) {
+  if (isTypingKey(e)) return; // typing keyboard on: these keys play notes (App handles them)
   // the window has the focus: the active view (piano roll) gets the keys first
   viewKey?.(e);
   if (e.cancelBubble) return;
@@ -458,8 +460,10 @@ function Roll(props: { root: () => HTMLDivElement }) {
   const [hoverKey, setHoverKey] = createSignal<number | null>(null);
   const [marq, setMarq] = createSignal<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const [view, setViewS] = createSignal({ sx: 0, sy: 0, zoom: 1, rowH: 14 });
-  const root = () => rollKey() ?? projectKey().root;
-  const scaleIdx = () => (rollKey() != null ? rollScale() : projectKey().scale);
+  const pk = createMemo(projectKey, undefined, { equals: (a, b) => a.root === b.root && a.scale === b.scale });
+  const root = () => rollKey() ?? pk().root;
+  const scaleIdx = () => (rollKey() != null ? rollScale() : pk().scale);
+  const chansMap = createMemo(() => { arrVersion(); return new Map(unwrap(channels()).map(c => [c.id, c])); });
   const mask = () => SCALES[scaleIdx()][1];
   const unit = (alt = false) => (alt ? 0 : rollSnap());
   const geo = (): RollGeo => {
@@ -483,23 +487,34 @@ function Roll(props: { root: () => HTMLDivElement }) {
     setViewS(v => ({ ...v, sx: 0, sy: clamp((127 - mid) * v.rowH - h / 2, 0, 128 * v.rowH - h) }));
     setSel(new Set<number>());
   });
-  createEffect(() => {
-    data(); sel(); hoverKey(); marq(); root(); mask(); void fonts.epoch;
+  // Drawing runs at most once per frame: a touchpad sends several wheel / pointer events per
+  // frame and each one redrew the whole roll synchronously.
+  const drawMain = () => {
     const { w, h } = size(); if (!w || !h) return;
     fitCanvas(cv, w, h);
     const g = cv.getContext('2d')!, dpr = window.devicePixelRatio || 1;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    drawRoll(g, w, h, geo(), layer, { pt: unwrap(pt()), ch: unwrap(ch()), chans: new Map(unwrap(channels()).map(c => [c.id, c])), sel: sel(), root: root(), mask: mask(), hoverKey: hoverKey(), marquee: marq() });
-  });
-  createEffect(() => {
-    data(); sel();
+    const lit = typingHeld();
+    drawRoll(g, w, h, geo(), layer, { pt: unwrap(pt()), ch: unwrap(ch()), chans: chansMap(), sel: sel(), root: root(), mask: mask(), hoverKey: hoverKey(), lit, marquee: marq() });
+  };
+  const drawVel = () => {
     const { w, h } = laneSize(); if (!w || !h) return;
     fitCanvas(laneCv, w, h);
     const g = laneCv.getContext('2d')!, dpr = window.devicePixelRatio || 1;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const G = geo();
     drawLane(g, w, h, { x0: KW, cw: G.pps, sx: G.sx, steps: G.steps, notes: chanNotes(), color: ch().color, sel: sel(), cells: false, muted: ch().mute });
+  };
+  let rafMain = 0, rafVel = 0;
+  createEffect(() => {
+    data(); sel(); hoverKey(); marq(); root(); mask(); void fonts.epoch; size(); view(); typingHeld(); ch(); pt().len;
+    if (!rafMain) rafMain = requestAnimationFrame(() => { rafMain = 0; untrack(drawMain); });
   });
+  createEffect(() => {
+    data(); sel(); laneSize(); view(); size(); ch(); pt().len;
+    if (!rafVel) rafVel = requestAnimationFrame(() => { rafVel = 0; untrack(drawVel); });
+  });
+  onCleanup(() => { cancelAnimationFrame(rafMain); cancelAnimationFrame(rafVel); });
   onMount(() => onCleanup(addFrameTask(() => {
     const p = curPat(); if (!p || !phead) return;
     const b = patPlayhead(p);
@@ -535,7 +550,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const orig = notesRaw().slice(), p0 = pos(e), lead = orig[idx[idx.length - 1]] ?? orig[idx[0]];
     const gest = g ?? new Gesture(mode === 'move' ? 'Przesuń nuty' : 'Długość nut');
     let lastKey = keyOf(lead, ch()), moved = false;
-    track(ev => {
+    trackFrame(ev => {
       const q = pos(ev);
       if (!moved && Math.hypot(q.x - p0.x, q.y - p0.y) < 3) return;
       moved = true;
@@ -551,7 +566,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
   function marqueeDrag(e: PointerEvent, add: boolean) {
     const p0 = pos(e), base = add ? new Set(sel()) : new Set<number>();
     setMarq({ x0: p0.x, y0: p0.y, x1: p0.x, y1: p0.y });
-    track(ev => {
+    trackFrame(ev => {
       const q = pos(ev), G = geo();
       setMarq({ x0: p0.x, y0: p0.y, x1: q.x, y1: q.y });
       const [x0, x1] = [Math.min(p0.x, q.x), Math.max(p0.x, q.x)], [y0, y1] = [Math.min(p0.y, q.y), Math.max(p0.y, q.y)];
@@ -561,7 +576,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
         if (nx < x1 && nx + nw > x0 && ny < y1 && ny + G.rowH > y0) s.add(i);
       }
       setSel(s);
-    }, () => { setMarq(null); if (sel().size) say('Zaznaczono ' + sel().size + ' nut'); });
+    }, () => { setMarq(null); say(sel().size ? 'Zaznaczono ' + sel().size + ' nut · Ctrl+C kopiuj · Ctrl+V wklej · Del usuń · przeciągnij = przesuń' : 'Brak zaznaczenia'); });
   }
   function paintDrag(e: PointerEvent, g: Gesture, startNotes: Note[]) {
     let notes = startNotes;
@@ -582,8 +597,15 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const p = pos(e);
     if (p.x < KW) { if (e.button === 0) { audition(ch().id, p.key); setHoverKey(p.key); track(() => {}, () => setHoverKey(null)); } return; }
     const tool = rollTool();
-    if (e.button === 2 || tool === 'erase') return eraseDrag(e);
     const i = hitNote(p.step, p.key);
+    // FL: Ctrl+drag selects with any tool; Ctrl+click toggles one note
+    if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
+      if (i < 0) return marqueeDrag(e, e.shiftKey);
+      const s = new Set(sel()); if (s.has(i)) s.delete(i); else s.add(i); setSel(s);
+      say(s.size ? 'Zaznaczono ' + s.size + ' nut · Ctrl+C kopiuje' : 'Brak zaznaczenia');
+      return;
+    }
+    if (e.button === 2 || tool === 'erase') return eraseDrag(e);
     if (tool === 'select') {
       if (i < 0) return marqueeDrag(e, e.shiftKey);
       if (e.shiftKey) { const s = new Set(sel()); if (s.has(i)) s.delete(i); else s.add(i); setSel(s); return; }
@@ -618,7 +640,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
     const p = pos(e);
     if (p.x < KW) { cv.style.cursor = 'pointer'; return; }
     const i = hitNote(p.step, p.key), t = rollTool();
-    cv.style.cursor = t === 'erase' ? 'not-allowed' : i >= 0 ? (t !== 'select' && edgeHit(i, p.x) ? 'ew-resize' : 'grab') : t === 'select' ? 'crosshair' : 'copy';
+    cv.style.cursor = e.ctrlKey || e.metaKey ? 'crosshair' : t === 'erase' ? 'not-allowed' : i >= 0 ? (t !== 'select' && edgeHit(i, p.x) ? 'ew-resize' : 'grab') : t === 'select' ? 'crosshair' : 'copy';
   };
   const wheel = (e: WheelEvent) => {
     e.preventDefault();
@@ -758,7 +780,7 @@ function Roll(props: { root: () => HTMLDivElement }) {
       <div class="pstatus mono">
         <span>{ch().name} · {chanKindLabel(ch())}</span>
         <span>{TOOLS.find(t => t.id === rollTool())!.tip}</span>
-        <span>↑↓ = półton · Ctrl+↑↓ = oktawa · Ctrl+B = duplikuj · Ctrl+kółko = zoom · Alt+kółko = wysokość wierszy</span>
+        <span>Ctrl+przeciągnij = zaznacz · Ctrl+C / V = kopiuj / wklej · ↑↓ = półton · Ctrl+↑↓ = oktawa · Ctrl+B = duplikuj · Ctrl+kółko = zoom</span>
       </div>
     </div>
   );

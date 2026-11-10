@@ -1,5 +1,8 @@
 # WAVE
 
+<img width="1920" height="1032" alt="image" src="https://github.com/user-attachments/assets/f50e8eb8-2938-4910-b40f-cc5b5d55d244" />
+
+
 A fast, FL-Studio-style DAW: Rust audio engine, Tauri 2 shell, SolidJS + canvas UI.
 Playlist with patterns and audio clips, a built-in synth and a sampled grand piano
 ([WAVE Keys](docs/keys.md)), mixer with insert effects (EQ, compressor,

@@ -157,7 +157,7 @@ function rollBg(g: CanvasRenderingContext2D, W: number, H: number, G: RollGeo, r
 }
 
 export function drawRoll(g: CanvasRenderingContext2D, W: number, H: number, G: RollGeo, layer: Layer, o: {
-  pt: Pattern; ch: Channel; chans: Map<Id, Channel>; sel: Set<number>; root: number; mask: number; hoverKey: number | null; marquee: { x0: number; y0: number; x1: number; y1: number } | null;
+  pt: Pattern; ch: Channel; chans: Map<Id, Channel>; sel: Set<number>; root: number; mask: number; hoverKey: number | null; lit?: number[]; marquee: { x0: number; y0: number; x1: number; y1: number } | null;
 }) {
   g.clearRect(0, 0, W, H);
   const bg = layer.get(W, H, ['roll', G.pps, G.sx, G.sy, G.rowH, G.kw, G.steps, o.root, o.mask].join('|'), (gg, w, h) => rollBg(gg, w, h, G, o.root, o.mask));
@@ -192,8 +192,10 @@ export function drawRoll(g: CanvasRenderingContext2D, W: number, H: number, G: R
     g.strokeStyle = rgba(T.blue, 0.8); g.strokeRect(x + 0.5, y + 0.5, Math.abs(m.x1 - m.x0), Math.abs(m.y1 - m.y0));
   }
   g.restore();
-  if (o.hoverKey != null) {
-    const y = rollY(G, o.hoverKey);
-    g.fillStyle = rgba(T.blue, 0.35); g.fillRect(0, y + 0.5, G.kw - 1, G.rowH - 1);
+  // keys sounding: clicked on the keyboard, or played from the typing keyboard
+  for (const k of o.hoverKey != null ? [o.hoverKey, ...(o.lit ?? [])] : o.lit ?? []) {
+    const y = rollY(G, k);
+    if (y > H || y + G.rowH < 0) continue;
+    g.fillStyle = rgba(T.blue, 0.45); g.fillRect(0, y + 0.5, G.kw - 1, G.rowH - 1);
   }
 }

@@ -22,3 +22,12 @@ export function dblCheck(key: string): boolean {
   lastTap = d ? null : { k: key, t: now };
   return d;
 }
+
+/** `track` with the moves coalesced to one per animation frame (high-rate mice and touchpads send
+ * several pointermoves per frame; each one re-applied a whole pattern). The last move is flushed
+ * before `up`. */
+export function trackFrame(move: (e: PointerEvent) => void, up?: ((e: PointerEvent) => void) | null, cursor?: string) {
+  let last: PointerEvent | null = null, raf = 0;
+  const run = () => { raf = 0; const e = last; last = null; if (e) move(e); };
+  track(e => { last = e; if (!raf) raf = requestAnimationFrame(run); }, e => { if (raf) cancelAnimationFrame(raf); run(); up?.(e); }, cursor);
+}
