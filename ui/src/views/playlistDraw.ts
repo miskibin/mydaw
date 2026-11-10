@@ -26,6 +26,26 @@ export interface View {
   compSel?: { clipId: number; from: number; to: number } | null;
   /** comp boundary under the pointer: clip id + boundary index */
   bndHover?: { clipId: number; i: number } | null;
+  /** arrangement version (`arrVersion`): the lookup tables of `drawGrid` are kept while it holds
+   *  (the grid is drawn in several strips per frame when it scrolls) */
+  ver?: number;
+}
+
+interface Lookups { ver: number; pats: Map<Id, Pattern>; chans: Map<Id, Channel>; sigs: Map<Id, string>; srcs: Map<Id, Source>; autos: Map<Id, Automation>; comps: Map<Id, Comp>; patIcons: Map<number, string | null> }
+let lookups: Lookups | null = null;
+function lookupsOf(p: Project, ver: number | undefined): Lookups {
+  if (lookups && ver != null && lookups.ver === ver) return lookups;
+  const chans = new Map((p.channels ?? []).map(c => [c.id, c]));
+  lookups = {
+    ver: ver ?? -1, chans,
+    pats: new Map(p.patterns.map(x => [x.id, x])),
+    sigs: new Map(p.patterns.map(x => [x.id, patSig(x, chans)])),
+    srcs: new Map(p.sources.map(x => [x.id, x])),
+    autos: new Map((p.automations ?? []).map(x => [x.id, x])),
+    comps: new Map((p.comps ?? []).map(x => [x.id, x])),
+    patIcons: new Map(),
+  };
+  return lookups;
 }
 
 const FONT = '500 10px "Geist Variable", Geist, system-ui, sans-serif';
@@ -104,13 +124,8 @@ export function drawGrid(g: CanvasRenderingContext2D, v: View, p: Project, rec: 
   // loop
   if (p.loop) { g.fillStyle = rgba(T.green, 0.05); g.fillRect(p.loop.a * bw, y0, (p.loop.b - p.loop.a) * bw, gridBottom - y0); }
   // clips
-  const pats = new Map(p.patterns.map(x => [x.id, x]));
-  curChans = new Map((p.channels ?? []).map(c => [c.id, c]));
-  const sigs = new Map(p.patterns.map(x => [x.id, patSig(x, curChans)]));
-  const srcs = new Map(p.sources.map(x => [x.id, x]));
-  const autos = new Map((p.automations ?? []).map(x => [x.id, x]));
-  const comps = new Map((p.comps ?? []).map(x => [x.id, x]));
-  const patIcons = new Map<number, string | null>();
+  const { pats, chans, sigs, srcs, autos, comps, patIcons } = lookupsOf(p, v.ver);
+  curChans = chans;
   const iconOf = (c: Clip, tr: Track, src: Pattern | Source | Automation): string | null => {
     if (c.kind === 'auto' || !prefs().clipIcons) return null;
     if (c.kind === 'pat') { let i = patIcons.get(c.ref); if (i === undefined) { i = patternIcon(src as Pattern, curChans); patIcons.set(c.ref, i); } return i; }
@@ -183,8 +198,9 @@ function drawComp(g: CanvasRenderingContext2D, v: View, c: Clip, cp: Comp, color
   if (!audT && bh >= 24) {
     g.font = MONO9;
     for (const r of regions) {
-      const xa = X(r.from), xb = X(r.to); if (xb - xa < 28 || xb < vis0 || xa > vis1) continue;
-      const k = cp.takes.findIndex(t => t.id === r.take) + 1, lx = Math.max(xa, vis0) + 3;
+      // at the region start, not pinned to the view edge: the grid is drawn in strips (playlistTile.ts)
+      const xa = X(r.from), xb = X(r.to); if (xb - xa < 28 || xa + 26 < vis0 || xa > vis1) continue;
+      const k = cp.takes.findIndex(t => t.id === r.take) + 1, lx = xa + 3;
       g.fillStyle = mix(color, 30, T.clipBase); g.beginPath(); g.roundRect(lx, cy + ch - 13, 20, 11, 2); g.fill();
       g.fillStyle = ink; g.fillText('T' + k, lx + 3, cy + ch - 4.5);
     }

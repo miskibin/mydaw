@@ -133,7 +133,7 @@ a { color: var(--blue); }
   background: color-mix(in srgb, var(--fg-hi) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-hi) 45%, transparent); }
 .rulerRow { position: sticky; top: 0; z-index: 5; display: flex; height: 26px; }
 .plhead { position: sticky; left: 0; z-index: 6; flex: none; background: var(--bg5); border-right: 1px solid var(--bg0); border-bottom: 1px solid var(--bg0); display: flex; align-items: center; justify-content: space-between; padding: 0 10px; }
-.ruler { position: sticky; display: block; flex: none; height: 26px; cursor: pointer; }
+.ruler { position: absolute; left: 0; top: 0; display: block; height: 26px; cursor: pointer; }
 .lanesCol { position: sticky; left: 0; z-index: 4; flex: none; background: var(--bg4); border-right: 1px solid var(--bg0); }
 .lane { position: relative; display: flex; border-bottom: 1px solid var(--bg0); background: var(--bg4); }
 .lane.armrec { background: var(--arm-bg); }
@@ -172,7 +172,8 @@ a { color: var(--blue); }
 .addTrack:hover { color: var(--fg-hi); background: var(--bg6); }
 .hsplit { position: absolute; top: 0; bottom: 0; right: -3px; width: 6px; cursor: col-resize; z-index: 5; }
 .gridArea { position: relative; flex: none; }
-.gridCanvas { position: sticky; display: block; touch-action: none; }
+/* the grid and ruler canvases are tiles in grid coordinates, moved by `transform` (playlistTile.ts) */
+.gridCanvas { position: absolute; left: 0; top: 0; display: block; touch-action: none; }
 .phead { position: absolute; top: 0; left: 0; width: 1px; background: var(--playhead); pointer-events: none; will-change: transform; }
 .marquee { position: absolute; border: 1px solid var(--blue); background: color-mix(in srgb, var(--blue) 10%, transparent); pointer-events: none; }
 .dropHint { position: absolute; inset: 6px; z-index: 20; border: 1px solid var(--blue); border-radius: 6px; background: color-mix(in srgb, var(--blue) 8%, transparent); display: flex; align-items: center; justify-content: center; pointer-events: none; }
@@ -702,8 +703,9 @@ select option { background: var(--bg4); color: var(--fg); }
 .strip .knobrow .pantxt { font-size: 9px; }
 
 /* playhead layers: sticky like the canvases (height 0, so they take no room in the flow) */
-.phlayer { position: sticky; height: 0; z-index: 3; pointer-events: none; overflow: visible; }
-.phlayer > .phead { position: absolute; top: 0; left: 0; }
+/* playhead in grid coordinates: scrolls with the canvases on the compositor */
+.phtile { position: absolute; left: 0; top: 0; width: 0; height: 0; z-index: 3; pointer-events: none; overflow: visible; }
+.phtile > .phead { position: absolute; top: 0; left: 0; }
 
 /* synth page in the channel window (views/SynthPanel.tsx): preset bar, tabs, visual cards */
 .syn { display: flex; flex-direction: column; background: var(--bg2); }
