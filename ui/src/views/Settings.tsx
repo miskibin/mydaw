@@ -8,6 +8,7 @@ import { say, setU, U } from '../state/ui';
 import { Segmented } from '../ui/Knob';
 import { prefs, resetPrefs, setPref } from '../state/prefs';
 import { setTheme, THEMES, themeMode } from '../ui/theme';
+import { t } from '../lib/i18n';
 
 const RATES = [44100, 48000, 88200, 96000];
 const BUFFERS = [32, 64, 128, 256, 512, 1024, 2048];
@@ -139,6 +140,11 @@ const SCALES = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
 function GeneralSection() {
   return (
     <>
+      <div class="form">
+        <label>{t('settings.language')}</label>
+        <Segmented options={[t('settings.english'), t('settings.polish')]} value={() => prefs().lang === 'pl' ? 1 : 0}
+          pick={i => setPref('lang', i === 1 ? 'pl' : 'en')} />
+      </div>
       <div class="sechd">Projekt</div>
       <div class="form">
         <label>Autozapis</label>
