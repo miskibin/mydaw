@@ -1,3 +1,6 @@
+import { patMode, setPatMode } from '../state/pattern';
+import { setTypingOn, typingBase, typingOn } from '../state/typingKeys';
+import { noteName } from '../lib/pitch';
 import { prefs } from '../state/prefs';
 import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
@@ -126,8 +129,12 @@ export function Toolbar() {
         <button class="ibtn" disabled={!S.canRedo} onClick={() => void A.redo()} title="Ponów (Ctrl+Shift+Z)"><Icon d="M15 14l5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3" /></button>
       </div>
       <div class="vsep" />
+      <div class="seg patsong" title="L — co gra Spacja: PAT = bieżący pattern w pętli, SONG = utwór z playlisty (jak w FL Studio)">
+        <button classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
+        <button classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
+      </div>
       <div class="seg">
-        <button title="Play / Stop (Spacja)" data-act="play" classList={{ play: U.playing }} onClick={() => void A.togglePlay()}>
+        <button title={patMode() ? 'Play / Stop bieżącego patternu (Spacja) — tryb PAT' : 'Play / Stop (Spacja)'} data-act="play" classList={{ play: U.playing || U.patPlaying }} onClick={() => void A.togglePlay()}>
           <svg width="11" height="11" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor" /></svg>
         </button>
         <button title="Stop (wraca na początek utworu; Spacja wraca do znacznika startu)" onClick={() => void A.stop(true)}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
@@ -142,6 +149,11 @@ export function Toolbar() {
         </button>
         <button class="count" classList={{ on: T().countIn }} title="Count-in: 1 takt przed nagrywaniem" onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
+      <button class="ibtn typkb" classList={{ on: typingOn() }} title={typingOn() ? 'Klawiatura jako pianino: wł. (Ctrl+T) · Z = ' + noteName(typingBase()) + ', Q = ' + noteName(typingBase() + 12) + ' · PgDn / PgUp = oktawa' : 'Klawiatura jako pianino (Ctrl+T): Z S X D C… i Q 2 W 3 E… grają nuty wybranego kanału'}
+        onClick={() => setTypingOn(!typingOn())}>
+        <Icon d="M3 6h18v12H3z M7 6v7 M11 6v7 M15 6v7 M19 6v7 M3 13h18" size={14} />
+        <Show when={typingOn()}><span class="mono typoct">{noteName(typingBase())}</span></Show>
+      </button>
       {/* the slot stays reserved while recording is off, so pressing R never re-wraps the toolbar
           (and shifts the playlist) on a narrow window */}
       <div class="row inrow" title="Poziom wejścia" style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
@@ -177,7 +189,7 @@ export function Toolbar() {
       <button class="tbtn" classList={{ on: U.exportOpen }} onClick={() => setU('exportOpen', true)} title="Eksport do WAV (Ctrl+Shift+R)" aria-label="Eksport">
         <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} /><span class="lbl">Eksport</span>
       </button>
-      <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : 'SONG'}</span>
+      <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : ''}</span>
       <Show when={U.plugs.length + (U.patWin ? 1 : 0)}>
         <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
           title={U.plugsHidden ? `Pokaż okna (efekty, pattern) (F5) — ${U.plugs.length + (U.patWin ? 1 : 0)}` : 'Schowaj okna efektów i patternu za playlistę (F5, albo klik w playlistę)'}>

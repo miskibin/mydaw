@@ -758,6 +758,7 @@ export class MockBackend implements Backend {
     const ins = c.insert ?? (a.pattern != null ? this.patHome(a.pattern) : null) ?? (heard ? this.patHome(heard.id) : null) ?? 0;
     this.flash.set(ins, performance.now());
   }
+  async typingNote(a: { ch: Id; key: number; vel?: number; on: boolean }) { if (a.on) await this.noteAudition({ ch: a.ch, key: a.key, vel: a.vel }); }
   async patternPlay(id: Id | null) {
     if (id != null && !this.p.patterns.some(x => x.id === id)) throw new Error('no pattern ' + id);
     if (id != null && this.tr.playing) { this.finishRec(); this.tr = { ...this.tr, playing: false }; this.changedTransport(); }

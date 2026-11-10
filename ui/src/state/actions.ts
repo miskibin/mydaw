@@ -8,6 +8,7 @@ import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../li
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
 import { flushNotebook } from './notebook';
+import { modePattern, patMode, stopPreview, togglePreview } from './pattern';
 import { allocId, findFx, insName, plain, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
@@ -28,6 +29,7 @@ async function autoArm() {
   say('Nagrywanie na: ' + S.project.tracks[i].name + ' (pierwsza pusta ścieżka)');
 }
 export async function play(from = U.start) {
+  if (U.patPlaying) await stopPreview();
   setU('playing', true);
   try {
     if (S.transport.rec) await autoArm();
@@ -38,12 +40,21 @@ export async function play(from = U.start) {
 }
 /** `rewind` also moves the start marker (and the stopped playhead) to the beginning of the song. */
 export async function stop(rewind = false) {
+  if (U.patPlaying) void stopPreview();
   setU('playing', false);
   if (rewind) setU('start', 0);
   try { await be().transportStop(); setTransport({ playing: false }); } catch (e) { console.warn(e); }
   say(rewind ? 'Stop · początek utworu' : 'Stop');
 }
-export const togglePlay = () => (U.playing ? stop() : play());
+/** Space: stop whatever plays; else PAT mode loops the current pattern, SONG mode plays the song
+ * (recording always runs the song). */
+export function togglePlay() {
+  if (U.playing) return stop();
+  if (U.patPlaying) { void stopPreview(); say('Stop'); return; }
+  const p = patMode() && !S.transport.rec ? modePattern() : undefined;
+  if (p) return togglePreview(p.id);
+  return play();
+}
 export function seek(b: number) {
   setU('start', Math.max(0, b));
   if (U.playing) void be().transportPlay(U.start);

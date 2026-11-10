@@ -69,6 +69,8 @@ export interface Backend {
   previewStop(): Promise<void>;
   /** Play one note of a channel now (not an edit). `key` MIDI (default: the channel's root), `vel` 0..1, `pattern`: the one being edited (routing). */
   noteAudition(args: { ch: Id; key?: number; vel?: number; pattern?: Id }): Promise<void>;
+  /** Computer keyboard as a piano: key down (`on`) / up on a channel. */
+  typingNote(args: { ch: Id; key: number; vel?: number; on: boolean }): Promise<void>;
   /** Loop one pattern on its own (null stops). Exclusive with the song transport. */
   patternPlay(pattern: Id | null): Promise<void>;
   audioHosts(): Promise<AudioHost[]>;
@@ -189,6 +191,7 @@ export function tauriBackend(): Backend {
     previewClip: clipId => invoke('preview_clip', { clipId }),
     previewFile: path => invoke('preview_file', { path }),
     previewStop: () => invoke('preview_stop'),
+    typingNote: a => invoke('typing_note', { ch: a.ch, key: a.key, vel: a.vel ?? null, on: a.on }),
     noteAudition: a => invoke('note_audition', { ch: a.ch, key: a.key ?? null, vel: a.vel ?? null, pattern: a.pattern ?? null }),
     patternPlay: pattern => invoke('pattern_play', { pattern }),
     audioHosts: () => invoke('audio_hosts'),

@@ -19,13 +19,17 @@ import { ChannelWindow } from './views/ChannelWindow';
 import { PitchEditor } from './views/PitchEditor';
 import { Export } from './views/Export';
 import { Settings, VstPicker } from './views/Settings';
-import { startMidi } from './state/midi';
+import { midiStatus, startMidi } from './state/midi';
+import { releaseAll, setTypingOn, typingDown, typingOn, typingUp } from './state/typingKeys';
+import { chanWin } from './views/ChannelWindow';
+import { channels } from './state/pattern';
+import { isPitched } from './lib/pattern';
 import { MusicDialog } from './views/MusicDialog';
 import { FxPickerHost, openFxPicker } from './views/FxPicker';
 import { PatternEditor } from './views/PatternEditor';
 import { NotebookHost } from './views/Notebook';
 import { toggleNotebook } from './state/notebook';
-import { closePattern, togglePattern } from './state/pattern';
+import { closePattern, patMode, setPatMode, togglePattern } from './state/pattern';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 
 /** Stacking rank of a window (effect windows and the pattern editor) inside the window layer (1 = bottom). */
@@ -38,11 +42,25 @@ function reclaimFocus(e: PointerEvent) {
   if (ae && ae !== document.body && ae.closest('.win') && !tg.closest('.win') && !typingIn(tg)) ae.blur();
 }
 
+/** The channel the typing keyboard plays: the open channel window, the pattern editor's channel,
+ * the channel feeding the top effect window's insert, the MIDI target, else the first instrument. */
+function typingTarget() {
+  const cw = chanWin(); if (cw) return cw.id;
+  if (U.patWin?.ch != null) return U.patWin.ch;
+  const top = A.topPlug(), hit = top ? findFx(top.fxId) : null;
+  const cs = channels();
+  const fed = hit ? cs.find(c => c.insert === hit.m.id) : undefined; if (fed) return fed.id;
+  const t = midiStatus()?.target; if (t != null && cs.some(c => c.id === t)) return t;
+  return (cs.find(isPitched) ?? cs[0])?.id ?? null;
+}
+
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
   if (typingIn(e.target as HTMLElement)) return;
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
   if (e.code === 'Space') { e.preventDefault(); (document.activeElement as HTMLElement | null)?.blur?.(); if (!e.repeat) void A.togglePlay(); return; }
+  if (m && !e.shiftKey && !e.altKey && e.code === 'KeyT') { e.preventDefault(); return setTypingOn(!typingOn()); }
+  if (typingDown(e, typingTarget)) return;
   if (e.key === 'Escape') {
     if (U.menu) return closeMenu();
     if (U.autoEdit != null) return setU('autoEdit', null);
@@ -94,16 +112,18 @@ function onKey(e: KeyboardEvent) {
   }
   if (!m && !e.altKey) {
     if (k === 'r') return A.toggleRec();
+    if (k === 'l') return setPatMode(!patMode());
     if (k === 'f') { setU('follow', !U.follow); return say(U.follow ? 'Podążanie za głowicą: wł.' : 'Podążanie za głowicą: wył.'); }
     const t = TOOLS.find(x => x[1].toLowerCase() === k);
     if (t) { setU('tool', t[0]); say('Narzędzie: ' + t[2]); }
   }
 }
 const onKeyUp = (e: KeyboardEvent) => {
+  typingUp(e);
   if (e.key === 'Alt') { e.preventDefault(); setU('alt', false); }
   if (e.code === 'Space' && (e.target as HTMLElement).tagName === 'BUTTON') e.preventDefault(); // no button click on Space
 };
-const onBlur = () => { if (U.alt) setU('alt', false); };
+const onBlur = () => { if (U.alt) setU('alt', false); releaseAll(); };
 
 export function App() {
   onMount(() => {

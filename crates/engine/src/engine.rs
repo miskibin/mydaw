@@ -1601,6 +1601,17 @@ impl Engine {
         midi_channel(&self.core.lock())
     }
 
+    /// A note from the computer keyboard used as a piano (FL "typing keyboard"): plays `chan`
+    /// like a MIDI key, through the same lock-free ring, whether or not a MIDI device is connected.
+    pub fn typing_note(&self, chan: Id, key: u8, vel: f32, on: bool) {
+        let ins = match self.midi_fast.ins.load(Relaxed) {
+            usize::MAX => None,
+            i => Some(i),
+        };
+        let vel = if on { vel.clamp(0.0, 1.0) } else { 0.0 };
+        self.midi_fast.send(Cmd::MidiNote { chan, key: key.min(127), vel, on, ins: if on { ins } else { None } });
+    }
+
     /// Releases every sounding keyboard note (device unplugged).
     pub fn midi_panic(&self) {
         self.midi_fast.send(Cmd::MidiOff);

@@ -286,6 +286,13 @@ async fn note_audition(app: St<'_>, ch: u64, key: Option<u8>, vel: Option<f32>, 
     app.engine.note_audition(ch, key, vel.unwrap_or(0.8), pattern).map_err(es)
 }
 
+/// Computer keyboard as a piano: key down / up on a Channel Rack channel.
+#[tauri::command]
+async fn typing_note(app: St<'_>, ch: u64, key: u8, vel: Option<f32>, on: bool) -> R<()> {
+    app.engine.typing_note(ch, key, vel.unwrap_or(0.8), on);
+    Ok(())
+}
+
 #[tauri::command]
 async fn pattern_play(app: St<'_>, pattern: Option<u64>) -> R<()> {
     app.engine.pattern_play(pattern).map_err(es)
@@ -703,7 +710,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, pattern_play,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, library_files, library_add_folder, library_remove_folder,
