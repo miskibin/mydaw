@@ -30,10 +30,10 @@ use std::path::{Path, PathBuf};
 
 use parking_lot::Mutex;
 
-/// Where MYDAW keeps the small persistent files a scan needs, or `None` when this
+/// Where WAVE keeps the small persistent files a scan needs, or `None` when this
 /// platform will not say.
 ///
-/// `%LOCALAPPDATA%\MYDAW\` on Windows, `$XDG_DATA_HOME`/`~/.local/share/mydaw`
+/// `%LOCALAPPDATA%\WAVE\` on Windows, `$XDG_DATA_HOME`/`~/.local/share/wave`
 /// elsewhere. A machine that answers neither simply gets in-memory state, which
 /// still fixes the within-one-session half of the problem.
 pub fn data_dir() -> Option<PathBuf> {
@@ -44,10 +44,10 @@ pub fn data_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")));
 
-    Some(root?.join("MYDAW"))
+    Some(root?.join("WAVE"))
 }
 
-/// Full path of one of MYDAW's scan side files, or `None` -- see [`data_dir`].
+/// Full path of one of WAVE's scan side files, or `None` -- see [`data_dir`].
 pub fn data_file(file_name: &str) -> Option<PathBuf> {
     Some(data_dir()?.join(file_name))
 }
@@ -64,7 +64,7 @@ pub struct BlockList {
 }
 
 impl BlockList {
-    /// Load the block list named `file_name` from MYDAW's data directory.
+    /// Load the block list named `file_name` from WAVE's data directory.
     ///
     /// Never fails: a missing, unreadable or malformed file yields an empty list,
     /// because a broken block list must not stop a DAW from starting.
@@ -154,9 +154,9 @@ impl BlockList {
             return;
         };
         let mut text = String::from(
-            "# Plugin modules MYDAW will not open again: each one hung or took its\n\
+            "# Plugin modules WAVE will not open again: each one hung or took its\n\
              # scan process down, which on Windows almost always means a licensing\n\
-             # dialog. Delete a line (or this file) to make MYDAW try it again.\n",
+             # dialog. Delete a line (or this file) to make WAVE try it again.\n",
         );
         for path in self.blocked.lock().iter() {
             text.push_str(&path.display().to_string());
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn a_missing_or_unreadable_file_is_an_empty_list_rather_than_a_failure() {
         // A broken block list must never stop the DAW from starting.
-        let missing = std::env::temp_dir().join("mydaw-no-such-blocklist-2f9a.txt");
+        let missing = std::env::temp_dir().join("wave-no-such-blocklist-2f9a.txt");
         let _ = std::fs::remove_file(&missing);
         assert!(BlockList::with_file(&missing).is_empty());
     }
@@ -252,7 +252,7 @@ mod tests {
         if let Some(path) = data_file("vst3-blocklist.txt") {
             assert!(path.ends_with("vst3-blocklist.txt"));
             assert!(
-                path.to_string_lossy().contains("MYDAW"),
+                path.to_string_lossy().contains("WAVE"),
                 "{}",
                 path.display()
             );

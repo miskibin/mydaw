@@ -1,4 +1,4 @@
-//! `mydaw-audio-file` -- one audio file, in memory, as interleaved stereo `f32`.
+//! `wave-audio-file` -- one audio file, in memory, as interleaved stereo `f32`.
 //!
 //! ```text
 //!   *.wav / *.flac / *.ogg / *.mp3  --decode_stereo-->  DecodedAudio
@@ -433,7 +433,7 @@ mod tests {
     impl TempDir {
         fn new(tag: &str) -> Self {
             let base = std::env::temp_dir().join(format!(
-                "mydaw-audio-file-{tag}-{}-{:?}",
+                "wave-audio-file-{tag}-{}-{:?}",
                 std::process::id(),
                 std::thread::current().id()
             ));
@@ -501,13 +501,13 @@ mod tests {
     /// have no encoder in this workspace, and hand-rolling a valid FLAC frame to
     /// prove that symphonia can read it would be testing the fixture rather than
     /// the decoder. So this test decodes whatever real content is on the
-    /// machine: point `MYDAW_AUDIO_FIXTURES` at a directory of audio files, or
+    /// machine: point `WAVE_AUDIO_FIXTURES` at a directory of audio files, or
     /// let it find the sampler's downloaded instruments. With neither, it prints
     /// a skip and passes -- CI has no sample content and must not fail for it.
     #[test]
     fn every_format_this_build_claims_decodes_when_a_real_file_is_available() {
         let mut roots: Vec<PathBuf> = Vec::new();
-        if let Ok(dir) = std::env::var("MYDAW_AUDIO_FIXTURES") {
+        if let Ok(dir) = std::env::var("WAVE_AUDIO_FIXTURES") {
             roots.push(PathBuf::from(dir));
         }
         roots.push(PathBuf::from("../../assets/instruments"));
@@ -539,7 +539,7 @@ mod tests {
         if checked == 0 {
             eprintln!(
                 "skipped: no FLAC/OGG content on this machine \
-                 (set MYDAW_AUDIO_FIXTURES or install the sampler assets)"
+                 (set WAVE_AUDIO_FIXTURES or install the sampler assets)"
             );
         }
     }

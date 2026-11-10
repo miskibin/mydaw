@@ -1,7 +1,7 @@
 # Built-in Reverb and Limiter v2: design notes and measurements
 
 Code: `crates/engine/src/dsp/reverb_v2.rs`, `crates/engine/src/dsp/limiter_v2.rs`.
-Measurements: `cargo run -p wave-engine --example reverb_v2_eval --release -- D:\mydaw-data\reverb_v2_samples`.
+Measurements: `cargo run -p wave-engine --example reverb_v2_eval --release -- D:\wave-data\reverb_v2_samples`.
 
 ## Research summary
 

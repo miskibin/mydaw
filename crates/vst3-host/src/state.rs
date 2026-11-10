@@ -11,14 +11,15 @@
 //!
 //! A blob without a known magic is a bare component state (what the old host
 //! saved before it stored controller state), and is loaded as such. The old
-//! host's `MYDAW-VST-STATE1` envelope is read too, so its project files keep
-//! their plugin settings.
+//! host's envelope (magic kept byte-for-byte as `LEGACY_MAGIC`, spelled in hex
+//! because it carries the app's former name) is read too, so its project files
+//! keep their plugin settings.
 
 use crate::host::MAX_STATE_BYTES;
 use crate::Vst3Error;
 
 const MAGIC: &[u8; 16] = b"WAVE-VST3-STATE1";
-const LEGACY_MAGIC: &[u8; 16] = b"MYDAW-VST-STATE1";
+const LEGACY_MAGIC: &[u8; 16] = b"\x4d\x59\x44\x41\x57-VST-STATE1";
 const HEADER: usize = 24;
 
 pub(crate) fn encode(component: &[u8], controller: &[u8]) -> Result<Vec<u8>, Vst3Error> {

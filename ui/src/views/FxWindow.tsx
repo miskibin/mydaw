@@ -45,7 +45,7 @@ function makeViz(f: Fx): Viz | null {
     default: return null;
   }
 }
-const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, deess: 230, denoise: 240, voice: 250, rider: 220 };
+const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, sat: 240, deess: 230, denoise: 240, voice: 250, rider: 220 };
 /** Default window widths per type (actions.openPlug). */
 export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700 };
 
