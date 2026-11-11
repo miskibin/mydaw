@@ -1,0 +1,124 @@
+name: Linux smoke test
+
+# Installs the Linux packages of a published release on clean systems and checks that the app
+# really starts: the window appears, the audio engine opens an ALSA device, the `wave` command
+# line talks to the running app and bounces audio. Run by hand (Actions → Linux smoke test).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to test (empty = latest)
+        required: false
+        default: ""
+
+jobs:
+  fetch:
+    name: Download the release packages
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir pkg && cd pkg
+          gh release download ${{ inputs.tag }} --repo "$GITHUB_REPOSITORY" -p '*.deb' -p '*.rpm' -p '*.AppImage'
+          ls -la
+      - uses: actions/upload-artifact@v4
+        with: { name: packages, path: pkg, retention-days: 3 }
+
+  desktop:
+    name: Start the app (Ubuntu 24.04, virtual display, null ALSA device)
+    needs: fetch
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: packages, path: pkg }
+      - name: Install the .deb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./pkg/*.deb xvfb alsa-utils imagemagick xdotool dbus-x11
+          dpkg -c pkg/*.deb | awk '{print $1, $6}' | grep -v '/$' | head -60
+      - name: A silent default ALSA device (runners have no sound card)
+        run: |
+          printf 'pcm.!default { type null }\n' > ~/.asoundrc
+          aplay -L | head -20 || true
+      - name: Run under a virtual display
+        env:
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          APP=$(dpkg -L $(dpkg-deb -f pkg/*.deb Package) | grep -E '^/usr/bin/' | head -1)
+          echo "binary: $APP"
+          cat > run.sh <<EOF
+          set -x
+          dbus-run-session -- bash -c '
+            "$APP" > app.log 2>&1 &
+            PID=\$!
+            sleep 30
+            if kill -0 \$PID 2>/dev/null; then echo "RESULT app: alive after 30 s"; else echo "RESULT app: DIED"; fi
+            echo "--- windows"; xdotool search --onlyvisible --name . getwindowname %@ 2>/dev/null | sort -u
+            import -window root shot.png || true
+            WAVE=\$(command -v wave || echo \$HOME/.local/bin/wave)
+            echo "--- cli: \$WAVE"; ls -la \$HOME/.local/bin 2>/dev/null
+            "\$WAVE" status && echo "RESULT cli status: ok" || echo "RESULT cli status: FAILED"
+            "\$WAVE" context --pretty | head -40
+            "\$WAVE" pattern --id 1 --ch kick --steps "x... x... x... x..." && echo "RESULT cli edit: ok" || echo "RESULT cli edit: FAILED"
+            "\$WAVE" render --out \$PWD/check.wav --to 8 && echo "RESULT render: ok" || echo "RESULT render: FAILED"
+            ls -la check.wav 2>/dev/null
+            import -window root shot2.png || true
+            kill \$PID 2>/dev/null; sleep 2
+          '
+          EOF
+          xvfb-run -a -s "-screen 0 1600x900x24" bash run.sh 2>&1 | tee run.log
+          echo "===== app.log"; cat app.log || true
+          grep "RESULT" run.log
+          ! grep -q "RESULT app: DIED" run.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-run
+          path: |
+            shot.png
+            shot2.png
+            app.log
+            run.log
+            check.wav
+          retention-days: 7
+
+  install:
+    name: Install on ${{ matrix.image }}
+    needs: fetch
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "ubuntu:22.04", kind: deb }
+          - { image: "debian:12", kind: deb }
+          - { image: "debian:13", kind: deb }
+          - { image: "linuxmintd/mint22-amd64", kind: deb }
+          - { image: "fedora:41", kind: rpm }
+          - { image: "fedora:42", kind: rpm }
+          - { image: "opensuse/tumbleweed", kind: rpm-zypper }
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: packages, path: pkg }
+      - name: Install the package
+        run: |
+          set -x
+          case "${{ matrix.kind }}" in
+            deb) apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ./pkg/*.deb ;;
+            rpm) dnf install -y ./pkg/*.rpm ;;
+            rpm-zypper) zypper --non-interactive --no-gpg-checks install ./pkg/*.rpm ;;
+          esac
+      - name: Every library the binaries need is there
+        run: |
+          set -x
+          for b in /usr/bin/wave-app /usr/bin/wave; do
+            [ -e "$b" ] || continue
+            ldd "$b" > ldd.txt 2>&1 || true
+            cat ldd.txt | grep -E "not found|GLIBC" && { echo "RESULT $b: MISSING LIBRARIES"; exit 1; } || echo "RESULT $b: libraries ok"
+          done
+          ls /usr/bin | grep -i wave
