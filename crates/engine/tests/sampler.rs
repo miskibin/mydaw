@@ -1,5 +1,5 @@
-//! The sampler channel and the standard library: what the settings do to the sound, how
-//! library samples are stored in a project, and the demo song built from them.
+//! The sampler channel and the standard library: what the settings do to the sound and how
+//! library samples are stored in a project.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -318,72 +318,9 @@ fn a_new_project_does_not_inherit_audio_from_the_previous_one() {
     assert_eq!(peak(&out[2 * SR as usize * 6 / 10..]), 0.0);
 }
 
-#[test]
-fn the_demo_song_is_self_contained_and_every_section_sounds() {
-    let p = Project::demo();
-    // only standard-library audio, every reference resolves, every pattern and channel is used
-    assert!(p.sources.iter().all(|s| factory::embedded(&s.path).is_some()));
-    for c in &p.clips {
-        match c.kind {
-            ClipKind::Pat => assert!(p.patterns.iter().any(|x| x.id == c.source)),
-            ClipKind::Audio => assert!(p.sources.iter().any(|x| x.id == c.source)),
-            ClipKind::Auto => assert!(p.automations.iter().any(|x| x.id == c.source)),
-            ClipKind::Comp => panic!("the demo has no comps"),
-        }
-        assert!((c.track as usize) < p.tracks.len());
-    }
-    for pt in &p.patterns {
-        assert!(p.clips.iter().any(|c| c.kind == ClipKind::Pat && c.source == pt.id), "pattern {} is not on the playlist", pt.name);
-        assert!(pt.notes.iter().all(|n| p.channel(n.ch).is_some()));
-    }
-    for c in &p.channels {
-        assert!(p.patterns.iter().any(|pt| pt.notes.iter().any(|n| n.ch == c.id)), "channel {} plays nothing", c.name);
-    }
-    for t in &p.tracks {
-        assert!(p.insert(t.insert).is_some());
-    }
-    // ids are unique within each kind, and the next id is past all of them
-    let unique = |mut ids: Vec<Id>, what: &str| {
-        let n = ids.len();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), n, "{what} ids repeat");
-        ids.last().copied().unwrap_or(0)
-    };
-    unique(p.clips.iter().map(|c| c.id).collect(), "clip");
-    unique(p.patterns.iter().map(|x| x.id).collect(), "pattern");
-    unique(p.inserts.iter().flat_map(|m| m.fx.iter().map(|f| f.id)).collect(), "effect");
-    let top = unique(p.channels.iter().map(|x| x.id).chain(p.sources.iter().map(|x| x.id)).chain(p.automations.iter().map(|x| x.id)).collect(), "channel, source and automation");
-    assert!(p.next_id > top);
-    assert_eq!(p.song_end(), 160.0);
-    // it loads as an edit would leave it: applying it to itself changes nothing
-    let mut again = p.clone();
-    again.migrate();
-    assert_eq!(again, p);
-
-    let e = Engine::new(p, Arc::new(NoPlugins));
-    let out = e.render(0.0, 160.0, 2.0, SR).unwrap();
-    let frames_per_beat = 60.0 / 124.0 * SR as f64;
-    let rms = |a: f64, b: f64| {
-        let s = &out[(a * frames_per_beat) as usize * 2..(b * frames_per_beat) as usize * 2];
-        (s.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / s.len() as f64).sqrt()
-    };
-    let (intro, drop, brk, drop2, outro) = (rms(0.0, 32.0), rms(32.0, 96.0), rms(96.0, 112.0), rms(112.0, 144.0), rms(144.0, 160.0));
-    for (name, v) in [("intro", intro), ("drop", drop), ("break", brk), ("second drop", drop2), ("outro", outro)] {
-        assert!(v > 0.01, "{name} is silent ({v})");
-    }
-    assert!(drop > intro * 1.5 && drop > brk * 1.5, "the drop is the loud part: intro {intro}, drop {drop}, break {brk}");
-    // the master limiter holds the ceiling, and the mix is not slammed into it
-    let pk = peak(&out);
-    assert!(pk <= 1.0, "the demo clips: {pk}");
-    assert!(drop2 < 0.35, "the demo is crushed: rms {drop2}");
-    // it ends: the tail after the last bar dies away
-    assert!(peak(&out[out.len() - SR as usize / 2..]) < 0.02);
-}
-
-/// The in-browser mock (`ui/src/api/mock.ts`) must start with the same projects and list the
-/// same standard library as the engine, so it reads them from a file generated here. After a
-/// change to the demo, the starter kit or the library, regenerate it:
+/// The in-browser mock (`ui/src/api/mock.ts`) must start a new project like the engine and list
+/// the same standard library, so it reads both from a file generated here. After a change to
+/// the starter kit or the library, regenerate it:
 /// `WAVE_UPDATE_FIXTURES=1 cargo test -p wave-engine --test sampler mock_fixture`.
 #[test]
 fn the_mock_fixture_matches_the_engine() {
@@ -391,7 +328,7 @@ fn the_mock_fixture_matches_the_engine() {
         .iter()
         .map(|f| serde_json::json!({ "file": f.file, "name": f.name, "group": f.group, "root": f.root, "dur": f.dur, "ch": f.ch, "bytes": f.bytes.len(), "color": factory::color(f) }))
         .collect();
-    let want = serde_json::json!({ "kit": factory::KIT, "files": files, "empty": Project::empty(), "demo": Project::demo() });
+    let want = serde_json::json!({ "kit": factory::KIT, "files": files, "empty": Project::empty() });
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/src/api/factory.json");
     if std::env::var_os("WAVE_UPDATE_FIXTURES").is_some() {
         std::fs::write(path, serde_json::to_string(&want).unwrap() + "\n").unwrap();

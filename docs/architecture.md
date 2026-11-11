@@ -118,15 +118,15 @@ snares, claps, hats, cymbals, toms, percussion, a few tonal ones) are embedded i
 (`crates/engine/library`, 3.2 MB of FLAC; built by `scripts/make-factory-library.py`,
 which trims, fades and normalises picks from the kits pinned in `assets-manifest.json`).
 There is nothing synthesised behind a channel any more: a new project's Channel Rack is four
-samplers of these files (`STARTER_KIT`: Kick, Clap, Hat, Snare), and the demo song
-(`demo.rs`) is built from them. A source inside the sample library is stored by a portable
+samplers of these files (`STARTER_KIT`: Kick, Clap, Hat, Snare), and the program starts
+with that empty project. A source inside the sample library is stored by a portable
 path, `lib:<kit>/<file>` (in memory and in the file), never by where the library is on this
 computer; `lib:Standard/…` is decoded from the embedded bytes, so it is never missing, other
 kits resolve to `<data>/WAVE/Library/<kit>/`. Importing a library file twice gives the same
 source: a sampler channel and audio clips of one sample share it. The app also writes the
 standard library into `<data>/WAVE/Library/Standard` (`factory::install`) so the browser
 lists, previews and drags it like any downloaded kit. `ui/src/api/factory.json` (the file
-table, the empty project and the demo, for the in-browser mock) is generated from the engine;
+table and the empty project, for the in-browser mock) is generated from the engine;
 `tests/sampler.rs` fails when it is stale and says how to regenerate it.
 
 **Old files.** Files from before the standard library name synthesised instruments:
@@ -223,7 +223,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `library_install` | `{id}` | – ; progress as event `library-progress {id,done,total,error?}` |
 | `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group, root?}]`; kit `Standard` = the standard library (always installed); `root` = the file's own pitch when the library knows it |
 | `library_add_folder` / `library_remove_folder` | – (native dialog) / `{path}` | updated `folders` |
-| `project_new` / `project_open` / `project_save` | `{demo?}` (true = the demo song) / `{path?}` / `{saveAs?}` | `StateDto` / `StateDto` / `{path}` |
+| `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `StateDto` / `{path}` |
 | `export_audio` | `{useLoop, tail, sampleRate}` | `{out, fromBeat, toBeat, tail, stats}` or `{cancelled:true}`; native save dialog; offline master → 32-bit float stereo WAV |
 | `export_cancel` | – | – (abort an in-flight `export_audio` before a file is written) |
 | `vst3_scan` | `{rescan}` | `[{path,cid,name,vendor,category}]` |

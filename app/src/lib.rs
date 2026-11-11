@@ -480,9 +480,8 @@ async fn library_remove_folder(app: St<'_>, path: String) -> R<Vec<String>> {
 // ---------------------------------------------------------------- project files
 
 #[tauri::command]
-async fn project_new(app: St<'_>, demo: Option<bool>) -> R<StateDto> {
-    // `demo`: the demo song instead of an empty project
-    app.engine.new_project(if demo.unwrap_or(false) { Project::demo() } else { Project::empty() });
+async fn project_new(app: St<'_>) -> R<StateDto> {
+    app.engine.new_project(Project::empty());
     Ok(app.engine.state())
 }
 
@@ -698,7 +697,7 @@ pub fn run() {
         .as_ref()
         .filter(|p| std::path::Path::new(p).is_file())
         .cloned();
-    let engine = Engine::new(Project::demo(), plugins.factory());
+    let engine = Engine::new(Project::empty(), plugins.factory());
     if let Some(p) = project {
         if let Err(e) = engine.open(std::path::Path::new(&p)) {
             log::warn!("could not reopen {p}: {e}");

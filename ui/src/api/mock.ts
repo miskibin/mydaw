@@ -3,7 +3,7 @@
 // streams binary telemetry frames (encoded exactly like the real ones).
 import type { Backend, EventMap, OsDropEvent } from './backend';
 import { encodeFrame, SCOPE_LEN, SPEC_BANDS, type EncFx } from './telemetry';
-import { BUILTIN, demoProject, emptyProject, mockCatalog } from './mockData';
+import { BUILTIN, emptyProject, mockCatalog, sketchProject } from './mockData';
 import { FACTORY_FILES, FACTORY_KIT, factoryFile, LIB_SCHEME, libPath } from '../lib/factory';
 
 /** Reverb mix (%) the engine computes for the research plate at a -18 dB send (autovocal::reverb_mix_for_send). */
@@ -95,7 +95,7 @@ export class MockBackend implements Backend {
     : null;
   private cat: Catalog = mockCatalog();
   // perf harness hook: perf/ui_bench.mjs injects a generated long project here (see perf/README)
-  private p: Project = (typeof window !== 'undefined' && (window as unknown as { __waveFixture?: Project }).__waveFixture) || demoProject();
+  private p: Project = (typeof window !== 'undefined' && (window as unknown as { __waveFixture?: Project }).__waveFixture) || sketchProject(this.cat);
   private revision = 1;
   private savedRev = 1;
   private path: string | null = null;
@@ -867,8 +867,8 @@ export class MockBackend implements Backend {
     this.tr = { ...this.tr, playing: false }; this.revision++; this.savedRev = this.revision;
     this.emit('state', this.dto());
   }
-  async projectNew(demo?: boolean) { this.resetTo(demo ? demoProject() : emptyProject(), null); return this.dto(); }
-  async projectOpen(path?: string) { this.resetTo(demoProject(), path ?? 'C:\\Users\\michal\\Music\\Demo.wave'); return this.dto(); }
+  async projectNew() { this.resetTo(emptyProject(), null); return this.dto(); }
+  async projectOpen(path?: string) { this.resetTo(sketchProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave'); return this.dto(); }
   async projectSave(saveAs?: boolean) {
     if (!this.path || saveAs) this.path = 'C:\\Users\\michal\\Music\\Projekt ' + (1 + (this.revision % 9)) + '.wave';
     this.savedRev = this.revision; this.emit('state', this.dto());

@@ -1860,7 +1860,7 @@ fn sample_audio(store: &SourceStore, chans: &[Channel]) -> HashMap<Id, Arc<Audio
 }
 
 /// Decodes the sample-library sources of a project that did not come from a file (a new
-/// project's starter kit, the demo song). A kit that is not installed leaves its channels silent.
+/// project's starter kit). A kit that is not installed leaves its channels silent.
 fn load_library_sources(p: &Project, store: &mut SourceStore) {
     for s in p.sources.iter().filter(|s| s.path.starts_with(crate::factory::SCHEME)) {
         if let Ok(a) = Audio::load_path(&s.path, Path::new(".")) {

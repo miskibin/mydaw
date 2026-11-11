@@ -1003,11 +1003,6 @@ impl Project {
         (end / 4.0).ceil() * 4.0
     }
 
-    /// The demo song (see [`crate::demo::demo_project`]).
-    pub fn demo() -> Self {
-        crate::demo::demo_project()
-    }
-
     /// The small fixed song tests and benchmarks build on.
     pub fn sketch() -> Self {
         crate::demo::sketch_project()

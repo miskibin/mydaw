@@ -3,7 +3,7 @@
 import { VOL_UNITY, type AnyBuiltinKind, type Catalog, type Clip, type EqBand, type Note, type ParamDef, type Preset, type Project } from './types';
 import { defaultBands, loadPreset, newFx } from '../lib/presets';
 import { addStarterKit, factoryChannel } from '../lib/factory';
-export { demoProject, emptyProject } from '../lib/factory';
+export { emptyProject } from '../lib/factory';
 import { SYNTH_CATALOG } from './synthCatalog';
 
 const p = (id: string, label: string, min: number, max: number, def: number, unit: string, log = false): ParamDef => ({ id, label, min, max, def, unit, log });

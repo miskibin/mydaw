@@ -1,5 +1,5 @@
 //! The standard library: the one-shots that ship inside the program, so a new project has
-//! real, visible samples in its Channel Rack and the demo song plays without a download.
+//! real, visible samples in its Channel Rack without a download.
 //!
 //! The files are embedded (`crates/engine/library`, built by `scripts/make-factory-library.py` from
 //! CC0 recordings, see `THIRD_PARTY_NOTICES.md`). A project names them, and any other file of

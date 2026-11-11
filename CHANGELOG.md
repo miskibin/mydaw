@@ -17,9 +17,10 @@ shown in the app after an update and is published as the release notes (see
   (attack, decay, sustain, release) drawn over the waveform; One-shot (drums: the sample rings
   out) or Gate (bass and melodies: it stops with the note); and cut groups, so a closed hi-hat
   silences the open one.
-- **A demo song.** Settings → General → Project → *Open the demo song*: forty bars built from
-  the standard library, with samplers, synths, audio clips, automation and a mixed chain on
-  every insert, to take apart and learn from.
+- **EQ: a band bank beside the graph.** Each band has a shape button, a gain slider and
+  FREQ and BW knobs next to the curve; bands that are switched off no longer clutter the graph.
+  New presets that only cut: below 20 Hz and above 18 kHz, low cut 80 Hz, low cut 150 Hz
+  (vocal), high cut 10 kHz.
 
 ### Changed
 - **Kick, Clap, Hat and Bass are samples now.** The built-in synthesised instruments, which had
@@ -30,6 +31,14 @@ shown in the app after an update and is published as the release notes (see
   dulled the attack.
 - Projects that use library samples open on any computer: they no longer store where the
   library is installed.
+- WAVE starts with an empty project (eight tracks, the starter kit and an empty Pattern 1)
+  instead of a demo beat.
+- A click on the playlist's time ruler switches from PAT to SONG; a pattern loop that is playing
+  carries on as the song from there. PAT is shown amber and SONG green.
+
+### Fixed
+- A click on a channel's mini piano roll now brings the Piano roll to the front instead of
+  leaving it behind the Channel Rack.
 
 ## 0.9.6 — 2026-11-11
 

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { MockBackend } from './mock';
-import { demoProject, emptyProject, FACTORY_FILES, FACTORY_KIT, libPath } from '../lib/factory';
+import { emptyProject, FACTORY_FILES, FACTORY_KIT, libPath } from '../lib/factory';
 import { migrateProject } from '../lib/pattern';
 
 // the mock publishes itself on `window` for dev tools; node has none
@@ -35,14 +35,12 @@ describe('standard library in the mock', () => {
     await be.importAudio({ paths: ['C:\\\\loops\\\\beat.wav'] });
     expect((await be.getState()).project.sources).toHaveLength(before + 3);
   });
-  it('starts new projects like the engine: empty with the starter kit, or the demo song', async () => {
+  it('starts a new project like the engine: empty, with the starter kit', async () => {
     const be = new MockBackend();
-    expect((await be.projectNew()).project).toEqual(emptyProject());
-    expect((await be.projectNew(true)).project).toEqual(demoProject());
-    // both are already what the engine would make of them
-    for (const p of [emptyProject(), demoProject()]) { const q = structuredClone(p); migrateProject(q); expect(q).toEqual(p); }
-    const demo = demoProject();
-    expect(demo.channels!.filter(c => c.kind === 'sample' && c.sampler.cut === 1).map(c => c.name)).toEqual(['Hat', 'Open Hat']);
-    expect(demo.sources.every(s => s.path.startsWith('lib:Standard/'))).toBe(true);
+    const p = (await be.projectNew()).project;
+    expect(p).toEqual(emptyProject());
+    expect(p.channels!.map(c => c.name)).toEqual(['Kick', 'Clap', 'Hat', 'Snare']);
+    // it is already what the engine would make of it
+    const q = structuredClone(p); migrateProject(q); expect(q).toEqual(p);
   });
 });

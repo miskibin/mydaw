@@ -1,4 +1,4 @@
-// The standard library and the projects the program starts with, as the engine defines them
+// The standard library and the project the program starts with, as the engine defines them
 // (crates/engine/src/factory.rs, demo.rs). `api/factory.json` is generated from the engine and a
 // test there fails when it is out of date, so the in-browser mock cannot drift from it.
 import data from '../api/factory.json';
@@ -15,7 +15,6 @@ export const factoryFile = (path: string) => FACTORY_FILES.find(f => libPath(f.f
 export const STARTER_KIT: readonly [string, string][] = [['kick-808-short.flac', 'Kick'], ['clap-808.flac', 'Clap'], ['hat-808-closed.flac', 'Hat'], ['snare-808.flac', 'Snare']];
 
 export const emptyProject = (): Project => structuredClone(data.empty) as unknown as Project;
-export const demoProject = (): Project => structuredClone(data.demo) as unknown as Project;
 
 /** The project source of a standard-library file: the one already there, or a new one (factory.rs `source`). */
 export function factorySource(p: Project, file: string): Id | null {
