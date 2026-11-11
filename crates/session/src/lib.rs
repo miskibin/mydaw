@@ -51,10 +51,7 @@ pub struct ErrorBody {
 
 impl ErrorBody {
     pub fn new(code: &str, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-        }
+        Self { code: code.into(), message: message.into() }
     }
 }
 
@@ -87,10 +84,7 @@ pub fn read_message<T: for<'a> Deserialize<'a>>(r: &mut impl Read) -> io::Result
     r.read_exact(&mut h)?;
     let n = u32::from_le_bytes(h) as usize;
     if n > MAX_MESSAGE {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "message too large",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "message too large"));
     }
     let mut b = vec![0; n];
     r.read_exact(&mut b)?;
@@ -141,14 +135,7 @@ impl Server {
                 }
             }
         }
-        let endpoint = Endpoint {
-            version: PROTOCOL_VERSION,
-            session_id: id.clone(),
-            socket: sock,
-            token: token.clone(),
-            pid: std::process::id(),
-            project: None,
-        };
+        let endpoint = Endpoint { version: PROTOCOL_VERSION, session_id: id.clone(), socket: sock, token: token.clone(), pid: std::process::id(), project: None };
         let endpoint_path = dir.join(format!("{id}.json"));
         std::fs::write(&endpoint_path, serde_json::to_vec_pretty(&endpoint)?)?;
         thread::Builder::new().name("wave-session".into()).spawn(move || {
@@ -170,10 +157,7 @@ impl Server {
                 });
             }
         })?;
-        Ok(Server {
-            endpoint_path,
-            endpoint,
-        })
+        Ok(Server { endpoint_path, endpoint })
     }
 }
 
@@ -182,20 +166,13 @@ pub fn sessions() -> Vec<Endpoint> {
     let mut out: Vec<(std::time::SystemTime, Endpoint)> = vec![];
     if let Ok(rd) = std::fs::read_dir(session_dir()) {
         for e in rd.flatten() {
-            let Ok(t) = std::fs::read_to_string(e.path()) else {
-                continue;
-            };
-            let Ok(ep) = serde_json::from_str::<Endpoint>(&t) else {
-                continue;
-            };
+            let Ok(t) = std::fs::read_to_string(e.path()) else { continue };
+            let Ok(ep) = serde_json::from_str::<Endpoint>(&t) else { continue };
             if !pid_alive(ep.pid) {
                 let _ = std::fs::remove_file(e.path());
                 continue;
             }
-            let m = e
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::UNIX_EPOCH);
+            let m = e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
             out.push((m, ep));
         }
     }
@@ -204,23 +181,10 @@ pub fn sessions() -> Vec<Endpoint> {
 }
 
 /// Sends one request to a session.
-pub fn call(
-    ep: &Endpoint,
-    command: &str,
-    args: Value,
-    if_revision: Option<u64>,
-    label: Option<String>,
-) -> io::Result<Reply> {
+pub fn call(ep: &Endpoint, command: &str, args: Value, if_revision: Option<u64>, label: Option<String>) -> io::Result<Reply> {
     let name = ep.socket.clone().to_ns_name::<GenericNamespaced>()?;
     let mut s = Stream::connect(name)?;
-    let req = Request {
-        version: PROTOCOL_VERSION,
-        token: ep.token.clone(),
-        command: command.into(),
-        args,
-        if_revision,
-        label,
-    };
+    let req = Request { version: PROTOCOL_VERSION, token: ep.token.clone(), command: command.into(), args, if_revision, label };
     write_message(&mut s, &req)?;
     read_message(&mut s)
 }
@@ -260,18 +224,8 @@ mod tests {
         assert!(rep.ok);
         assert_eq!(rep.revision, 7);
         assert_eq!(rep.data["a"], 1);
-        let bad = Endpoint {
-            token: "nope".into(),
-            ..eps[0].clone()
-        };
-        assert_eq!(
-            call(&bad, "echo", Value::Null, None, None)
-                .unwrap()
-                .error
-                .unwrap()
-                .code,
-            "UNAUTHORIZED"
-        );
+        let bad = Endpoint { token: "nope".into(), ..eps[0].clone() };
+        assert_eq!(call(&bad, "echo", Value::Null, None, None).unwrap().error.unwrap().code, "UNAUTHORIZED");
         drop(srv);
         assert!(sessions().is_empty());
         let _ = std::fs::remove_dir_all(dir);

@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::model::Id;
-use crate::poly::{Patch, SynthBank, SynthInst};
 use crate::processor::{ParamBlock, ProcessCtx, Processor, METERS};
 use crate::sources::Audio;
+use crate::poly::{Patch, SynthBank, SynthInst};
 use crate::synth::{Dest, VoiceKind, VoicePool};
 
 pub const MAX_INSERTS: usize = 128;
@@ -71,13 +71,9 @@ impl Shared {
             cpu: AtomicU32::new(0),
             preview_pos: AtomicU32::new((-1f32).to_bits()),
             pat_beat: AtomicU64::new((-1f64).to_bits()),
-            meters: (0..MAX_INSERTS)
-                .map(|_| (AtomicU32::new(0), AtomicU32::new(0)))
-                .collect(),
+            meters: (0..MAX_INSERTS).map(|_| (AtomicU32::new(0), AtomicU32::new(0))).collect(),
             gr: (0..WATCH_SLOTS).map(|_| AtomicU32::new(0)).collect(),
-            fx_meters: (0..WATCH_SLOTS)
-                .map(|_| std::array::from_fn(|_| AtomicU32::new(0)))
-                .collect(),
+            fx_meters: (0..WATCH_SLOTS).map(|_| std::array::from_fn(|_| AtomicU32::new(0))).collect(),
             sample_rate: AtomicU32::new(48000),
             io_latency: AtomicU32::new(0),
             take_lat_sum: AtomicU64::new(0),
@@ -97,10 +93,7 @@ impl Shared {
     }
     pub fn take_meter(&self, idx: usize) -> (f32, f32) {
         let (l, r) = &self.meters[idx];
-        (
-            f32::from_bits(l.swap(0, Relaxed)),
-            f32::from_bits(r.swap(0, Relaxed)),
-        )
+        (f32::from_bits(l.swap(0, Relaxed)), f32::from_bits(r.swap(0, Relaxed)))
     }
     pub fn take_in_level(&self) -> f32 {
         f32::from_bits(self.in_level.swap(0, Relaxed))
@@ -182,24 +175,8 @@ pub struct FxSlot {
 
 impl FxSlot {
     /// `latency` in samples (allocates; call off the audio thread).
-    pub fn new(
-        id: Id,
-        bypass: bool,
-        mix: f32,
-        proc: Option<Box<dyn Processor>>,
-        params: Option<ParamBlock>,
-        latency: usize,
-    ) -> Self {
-        Self {
-            id,
-            bypass,
-            mix,
-            proc,
-            params,
-            dly_l: vec![0.0; latency],
-            dly_r: vec![0.0; latency],
-            dly_w: 0,
-        }
+    pub fn new(id: Id, bypass: bool, mix: f32, proc: Option<Box<dyn Processor>>, params: Option<ParamBlock>, latency: usize) -> Self {
+        Self { id, bypass, mix, proc, params, dly_l: vec![0.0; latency], dly_r: vec![0.0; latency], dly_w: 0 }
     }
 
     fn delay_dry(&mut self, l: &mut [f32], r: &mut [f32]) {
@@ -246,37 +223,8 @@ pub struct InsertRt {
 }
 
 impl InsertRt {
-    pub fn new(
-        id: Id,
-        gain: f32,
-        pan: f32,
-        width: f32,
-        on: bool,
-        fx: Vec<FxSlot>,
-        max_block: usize,
-    ) -> Self {
-        Self {
-            id,
-            gain,
-            pan,
-            width,
-            w_cur: width,
-            on,
-            fx,
-            g_cur: if on { gain } else { 0.0 },
-            l: vec![0.0; max_block],
-            r: vec![0.0; max_block],
-            pdc_l: vec![],
-            pdc_r: vec![],
-            pdc_w: 0,
-            dry_l: vec![0.0; max_block],
-            dry_r: vec![0.0; max_block],
-            quiet: 0,
-            parked: false,
-            idle_at: usize::MAX,
-            idle: false,
-            low_lat: false,
-        }
+    pub fn new(id: Id, gain: f32, pan: f32, width: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
+        Self { id, gain, pan, width, w_cur: width, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block], quiet: 0, parked: false, idle_at: usize::MAX, idle: false, low_lat: false }
     }
 
     /// Delays this insert's output by `samples` (allocates; call off the audio thread).
@@ -311,25 +259,9 @@ pub struct Graph {
 }
 
 impl Graph {
-    pub fn new(
-        inserts: Vec<InsertRt>,
-        tracks: Vec<TrackRt>,
-        monitor_track: Option<usize>,
-        max_block: usize,
-    ) -> Self {
-        let track_bufs = tracks
-            .iter()
-            .map(|_| (vec![0.0; max_block], vec![0.0; max_block]))
-            .collect();
-        Self {
-            inserts,
-            tracks,
-            track_bufs,
-            monitor_track,
-            mon: (Ring::default(), Ring::default()),
-            mon_ins: None,
-            click: Ring::default(),
-        }
+    pub fn new(inserts: Vec<InsertRt>, tracks: Vec<TrackRt>, monitor_track: Option<usize>, max_block: usize) -> Self {
+        let track_bufs = tracks.iter().map(|_| (vec![0.0; max_block], vec![0.0; max_block])).collect();
+        Self { inserts, tracks, track_bufs, monitor_track, mon: (Ring::default(), Ring::default()), mon_ins: None, click: Ring::default() }
     }
 
     /// Allocates the latency lines (call off the audio thread): `pdc` = the delay every
@@ -350,10 +282,7 @@ struct Ring {
 
 impl Ring {
     fn new(len: usize) -> Self {
-        Self {
-            buf: vec![0.0; len],
-            w: 0,
-        }
+        Self { buf: vec![0.0; len], w: 0 }
     }
     fn run(&mut self, x: &mut [f32]) {
         let n = self.buf.len();
@@ -406,11 +335,7 @@ fn carry_line(dst: &mut Vec<f32>, dst_w: &mut usize, src: &mut Vec<f32>, src_w: 
 /// Carries an insert's PDC lines over a graph swap. False when there was nothing to carry
 /// (no line, a line known to hold only zeros, or the line was off for low-latency monitoring).
 fn carry_pdc(new: &mut InsertRt, old: &mut InsertRt) -> bool {
-    if new.pdc_l.is_empty()
-        || old.pdc_l.is_empty()
-        || old.low_lat
-        || (old.parked && old.quiet >= old.idle_at)
-    {
+    if new.pdc_l.is_empty() || old.pdc_l.is_empty() || old.low_lat || (old.parked && old.quiet >= old.idle_at) {
         return false;
     }
     let mut w = 0;
@@ -441,22 +366,10 @@ pub enum ClipSrc {
 /// A resolved automation target (indices into the graph built from the same project).
 #[derive(Clone, Copy, Debug)]
 pub enum TargetRt {
-    Param {
-        fx: Id,
-        idx: usize,
-        min: f32,
-        max: f32,
-        log: bool,
-    },
+    Param { fx: Id, idx: usize, min: f32, max: f32, log: bool },
     /// EQ band field: 0 freq, 1 gain, 2 Q.
-    Band {
-        fx: Id,
-        band: usize,
-        field: u8,
-    },
-    Mix {
-        fx: Id,
-    },
+    Band { fx: Id, band: usize, field: u8 },
+    Mix { fx: Id },
     InsVol(usize),
     InsPan(usize),
     TrackVol(usize),
@@ -464,14 +377,7 @@ pub enum TargetRt {
     ChanVol(usize),
     ChanPan(usize),
     /// A synth channel's patch parameter (`poly::params` index), glided by the synth.
-    Synth {
-        chan: Id,
-        idx: usize,
-        min: f32,
-        max: f32,
-        log: bool,
-        choice: bool,
-    },
+    Synth { chan: Id, idx: usize, min: f32, max: f32, log: bool, choice: bool },
     /// WAVE Keys channel (index into `Timeline::chans`): release time, dynamics.
     KeysRelease(usize),
     KeysDynamics(usize),
@@ -573,55 +479,26 @@ pub enum Cmd {
     Graph(Box<Graph>),
     Timeline(Box<Timeline>),
     Mix(Box<MixState>),
-    Params {
-        fx: Id,
-        params: Option<ParamBlock>,
-        mix: f32,
-    },
+    Params { fx: Id, params: Option<ParamBlock>, mix: f32 },
     /// `rec_loop`: record in passes over the loop range (one take per pass).
-    Play {
-        from: f64,
-        count_in: f64,
-        rec: bool,
-        rec_loop: bool,
-    },
+    Play { from: f64, count_in: f64, rec: bool, rec_loop: bool },
     /// Stops capturing input but keeps the transport running.
     PunchOut,
     /// Starts capturing input at the current beat while playing. `rec_loop`: wrap at the
     /// loop end in passes (one take per pass), like loop recording.
-    PunchIn {
-        rec_loop: bool,
-    },
+    PunchIn { rec_loop: bool },
     Stop,
-    Flags {
-        metro: bool,
-        monitor: bool,
-    },
-    Watch {
-        ids: [Id; WATCH_SLOTS],
-        n: u8,
-    },
+    Flags { metro: bool, monitor: bool },
+    Watch { ids: [Id; WATCH_SLOTS], n: u8 },
     Preview(Option<Box<Preview>>),
     /// Play one note of a channel now (step clicks, the piano-roll keyboard). `pattern`
     /// decides where a track-routed channel is heard (that pattern's track).
-    Audition {
-        chan: Id,
-        key: u8,
-        vel: f32,
-        len: f32,
-        pattern: Option<Id>,
-    },
+    Audition { chan: Id, key: u8, vel: f32, len: f32, pattern: Option<Id> },
     /// Loop one pattern on its own (`None` stops). Exclusive with the song transport.
     PatPlay(Option<Id>),
     /// Live MIDI key down/up on a channel. `ins`: insert index to play through when the
     /// channel has no insert of its own (the armed track's), else the channel's home.
-    MidiNote {
-        chan: Id,
-        key: u8,
-        vel: f32,
-        on: bool,
-        ins: Option<usize>,
-    },
+    MidiNote { chan: Id, key: u8, vel: f32, on: bool, ins: Option<usize> },
     /// Live MIDI sustain pedal.
     MidiSustain(bool),
     /// Live MIDI pitch bend in semitones.
@@ -633,10 +510,7 @@ pub enum Cmd {
     /// A synth channel's instance, made off the audio thread (replaces one of the same channel).
     SynthAdd(Box<SynthInst>),
     /// New parameter values of a synth channel.
-    SynthPatch {
-        chan: Id,
-        patch: Box<Patch>,
-    },
+    SynthPatch { chan: Id, patch: Box<Patch> },
     /// A synth channel is gone.
     SynthRemove(Id),
 }
@@ -723,15 +597,7 @@ pub struct Rt {
 const DECLICK_S: f32 = 0.003;
 
 impl Rt {
-    pub fn new(
-        sr: f32,
-        max_block: usize,
-        cmds: rtrb::Consumer<Cmd>,
-        garbage: rtrb::Producer<Garbage>,
-        shared: Arc<Shared>,
-        taps: Taps,
-        record: rtrb::Producer<f32>,
-    ) -> Self {
+    pub fn new(sr: f32, max_block: usize, cmds: rtrb::Consumer<Cmd>, garbage: rtrb::Producer<Garbage>, shared: Arc<Shared>, taps: Taps, record: rtrb::Producer<f32>) -> Self {
         shared.sample_rate.store(sr as u32, Relaxed);
         Self {
             sr,
@@ -740,15 +606,7 @@ impl Rt {
             garbage,
             shared,
             graph: Box::new(Graph::new(vec![], vec![], None, max_block)),
-            timeline: Box::new(Timeline {
-                bpm: 120.0,
-                clips: vec![],
-                pats: vec![],
-                chans: vec![],
-                autos: vec![],
-                loop_range: None,
-                song_end: 4.0,
-            }),
+            timeline: Box::new(Timeline { bpm: 120.0, clips: vec![], pats: vec![], chans: vec![], autos: vec![], loop_range: None, song_end: 4.0 }),
             voices: VoicePool::new(sr),
             synths: SynthBank::default(),
             click: vec![0.0; max_block],
@@ -904,8 +762,7 @@ impl Rt {
                                     parked &= st.1;
                                 }
                             }
-                            if let (Some(p), Some(pb)) = (slot.proc.as_mut(), slot.params.as_ref())
-                            {
+                            if let (Some(p), Some(pb)) = (slot.proc.as_mut(), slot.params.as_ref()) {
                                 p.set_params(pb);
                             }
                         }
@@ -917,17 +774,9 @@ impl Rt {
                             ins.g_cur = old.g_cur;
                             pdc_carried = carry_pdc(ins, old);
                         }
-                        (ins.quiet, ins.parked) = if carried {
-                            (quiet, parked)
-                        } else {
-                            (usize::MAX / 2, true)
-                        };
+                        (ins.quiet, ins.parked) = if carried { (quiet, parked) } else { (usize::MAX / 2, true) };
                         // a parked chain is idle once its PDC line has played out (at once if it is empty)
-                        ins.idle_at = if pdc_carried {
-                            ins.quiet.saturating_add(ins.pdc_l.len())
-                        } else {
-                            0
-                        };
+                        ins.idle_at = if pdc_carried { ins.quiet.saturating_add(ins.pdc_l.len()) } else { 0 };
                     }
                     g.click.carry(&mut self.graph.click);
                     let old = std::mem::replace(&mut self.graph, g);
@@ -954,9 +803,7 @@ impl Rt {
                     }
                     self.graph.monitor_track = m.monitor_track;
                     if m.chans.len() == self.timeline.chans.len() {
-                        for (c, &(gain, pan, on)) in
-                            self.timeline.chans.iter_mut().zip(m.chans.iter())
-                        {
+                        for (c, &(gain, pan, on)) in self.timeline.chans.iter_mut().zip(m.chans.iter()) {
                             c.gain = gain;
                             c.pan = pan;
                             c.on = on;
@@ -965,13 +812,7 @@ impl Rt {
                     self.trash(Garbage::Mix(m));
                 }
                 Cmd::Params { fx, params, mix } => {
-                    if let Some(s) = self
-                        .graph
-                        .inserts
-                        .iter_mut()
-                        .flat_map(|i| i.fx.iter_mut())
-                        .find(|s| s.id == fx)
-                    {
+                    if let Some(s) = self.graph.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == fx) {
                         s.mix = mix;
                         if let Some(params) = params {
                             s.params = Some(params);
@@ -981,22 +822,13 @@ impl Rt {
                         }
                     }
                 }
-                Cmd::Play {
-                    from,
-                    count_in,
-                    rec,
-                    rec_loop,
-                } => {
+                Cmd::Play { from, count_in, rec, rec_loop } => {
                     self.voices.clear();
                     self.synths.stop_all();
                     // the song and the pattern preview are exclusive (FL's SONG / PAT)
                     self.set_pat_play(None);
                     self.beat = from - count_in;
-                    self.count_end = if count_in > 0.0 {
-                        from
-                    } else {
-                        f64::NEG_INFINITY
-                    };
+                    self.count_end = if count_in > 0.0 { from } else { f64::NEG_INFINITY };
                     self.run_start = self.beat;
                     self.wrapped = None;
                     self.rec = rec;
@@ -1041,42 +873,16 @@ impl Rt {
                         fset(&self.shared.preview_pos, -1.0);
                     }
                 }
-                Cmd::Audition {
-                    chan,
-                    key,
-                    vel,
-                    len,
-                    pattern,
-                } => {
+                Cmd::Audition { chan, key, vel, len, pattern } => {
                     let tl = &*self.timeline;
                     if let Some(i) = tl.chans.iter().position(|c| c.id == chan) {
                         let ch = &tl.chans[i];
-                        let home = pattern
-                            .and_then(|id| tl.pats.iter().find(|p| p.id == id))
-                            .and_then(|p| p.home);
+                        let home = pattern.and_then(|id| tl.pats.iter().find(|p| p.id == id)).and_then(|p| p.home);
                         let ins = ch.insert.or(home).unwrap_or(ch.home);
-                        play(
-                            &mut self.voices,
-                            &mut self.synths,
-                            ch,
-                            i,
-                            Dest::Insert(ins),
-                            0,
-                            len,
-                            key,
-                            vel,
-                            1.0,
-                            self.sr,
-                        );
+                        play(&mut self.voices, &mut self.synths, ch, i, Dest::Insert(ins), 0, len, key, vel, 1.0, self.sr);
                     }
                 }
-                Cmd::MidiNote {
-                    chan,
-                    key,
-                    vel,
-                    on,
-                    ins,
-                } => {
+                Cmd::MidiNote { chan, key, vel, on, ins } => {
                     let tl = &*self.timeline;
                     if on {
                         if let Some(i) = tl.chans.iter().position(|c| c.id == chan) {
@@ -1140,9 +946,7 @@ impl Rt {
     fn set_pat_play(&mut self, id: Option<Id>) {
         self.pat_play = id;
         self.pat_beat = 0.0;
-        self.shared
-            .pat_beat
-            .store((if id.is_some() { 0f64 } else { -1f64 }).to_bits(), Relaxed);
+        self.shared.pat_beat.store((if id.is_some() { 0f64 } else { -1f64 }).to_bits(), Relaxed);
     }
 
     /// The pattern loop preview: schedules the notes of `[pat_beat, +n samples)` and wraps.
@@ -1165,27 +969,13 @@ impl Rt {
                 if nb < b0 || nb >= b1 {
                     continue;
                 }
-                let Some(ch) = tl.chans.get(nt.chan) else {
-                    continue;
-                };
+                let Some(ch) = tl.chans.get(nt.chan) else { continue };
                 if !ch.on {
                     continue;
                 }
                 let ins = ch.insert.or(pat.home).unwrap_or(ch.home);
                 let delay = ((nb - b0) / bps) as u32;
-                play(
-                    &mut self.voices,
-                    &mut self.synths,
-                    ch,
-                    nt.chan,
-                    Dest::Insert(ins),
-                    delay,
-                    (nt.len * spb) as f32,
-                    nt.key,
-                    nt.vel,
-                    1.0,
-                    self.sr,
-                );
+                play(&mut self.voices, &mut self.synths, ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel, 1.0, self.sr);
             }
         }
         self.pat_beat = b1.rem_euclid(pat.len);
@@ -1205,12 +995,7 @@ impl Rt {
     }
 
     /// Renders `out_l.len()` frames. `input` is the device input for the same period, if any.
-    pub fn process(
-        &mut self,
-        out_l: &mut [f32],
-        out_r: &mut [f32],
-        input: Option<(&[f32], &[f32])>,
-    ) {
+    pub fn process(&mut self, out_l: &mut [f32], out_r: &mut [f32], input: Option<(&[f32], &[f32])>) {
         let t0 = Instant::now();
         self.drain();
         let n = out_l.len();
@@ -1219,12 +1004,7 @@ impl Rt {
         let mut pos = 0;
         while pos < n {
             let m = (n - pos).min(self.max_block);
-            let inp = input.map(|(l, r)| {
-                (
-                    &l[pos.min(l.len())..(pos + m).min(l.len())],
-                    &r[pos.min(r.len())..(pos + m).min(r.len())],
-                )
-            });
+            let inp = input.map(|(l, r)| (&l[pos.min(l.len())..(pos + m).min(l.len())], &r[pos.min(r.len())..(pos + m).min(r.len())]));
             let mute = self.preroll.min(m);
             self.block(pos, m, out_l, out_r, inp, mute, false);
             self.preroll -= mute;
@@ -1233,14 +1013,7 @@ impl Rt {
         // the pre-roll is not this callback's load (the meter would only show its spike)
         let load = (t0.elapsed().as_secs_f32() - pre).max(0.0) / period.max(1e-6);
         let prev = fget(&self.shared.cpu);
-        fset(
-            &self.shared.cpu,
-            if load > prev {
-                load
-            } else {
-                prev * 0.95 + load * 0.05
-            },
-        );
+        fset(&self.shared.cpu, if load > prev { load } else { prev * 0.95 + load * 0.05 });
     }
 
     /// Renders pre-roll frames before this callback's own `n` while the deadline allows:
@@ -1259,23 +1032,14 @@ impl Rt {
         let limit = period * budget as f64;
         // the first block is small: it measures what a frame costs
         let full = n.min(self.max_block);
-        let mut m = if self.pre_cost > 0.0 || !limit.is_finite() {
-            full
-        } else {
-            64.min(full)
-        };
+        let mut m = if self.pre_cost > 0.0 || !limit.is_finite() { full } else { 64.min(full) };
         while self.preroll > 0 {
             let m_now = m.min(self.preroll);
-            if limit.is_finite()
-                && t0.elapsed().as_secs_f64() + self.pre_cost * (m_now + n) as f64 > limit
-            {
+            if limit.is_finite() && t0.elapsed().as_secs_f64() + self.pre_cost * (m_now + n) as f64 > limit {
                 break;
             }
             let tb = Instant::now();
-            let (mut l, mut r) = (
-                std::mem::take(&mut self.pre_l),
-                std::mem::take(&mut self.pre_r),
-            );
+            let (mut l, mut r) = (std::mem::take(&mut self.pre_l), std::mem::take(&mut self.pre_r));
             self.block(0, m_now, &mut l, &mut r, None, m_now, true);
             (self.pre_l, self.pre_r) = (l, r);
             self.pre_cost = self.pre_cost.max(tb.elapsed().as_secs_f64() / m_now as f64);
@@ -1292,16 +1056,7 @@ impl Rt {
     /// not heard (pre-roll); `ahead`: a pre-roll block rendered ahead of the device clock
     /// (no device input, no preview: those follow the real clock).
     #[allow(clippy::too_many_arguments)]
-    fn block(
-        &mut self,
-        at: usize,
-        n: usize,
-        out_l: &mut [f32],
-        out_r: &mut [f32],
-        input: Option<(&[f32], &[f32])>,
-        mute: usize,
-        ahead: bool,
-    ) {
+    fn block(&mut self, at: usize, n: usize, out_l: &mut [f32], out_r: &mut [f32], input: Option<(&[f32], &[f32])>, mute: usize, ahead: bool) {
         let sr = self.sr;
         for (l, r) in self.graph.track_bufs.iter_mut() {
             l[..n].fill(0.0);
@@ -1330,9 +1085,7 @@ impl Rt {
                         _ => (0.0, crate::model::TOTAL_BEATS),
                     }
                 } else {
-                    self.timeline
-                        .loop_range
-                        .unwrap_or((0.0, self.timeline.song_end))
+                    self.timeline.loop_range.unwrap_or((0.0, self.timeline.song_end))
                 };
                 let left = ((le - self.beat) / bps).ceil().max(1.0) as usize;
                 let seg = left.min(n - p);
@@ -1343,11 +1096,7 @@ impl Rt {
                 if self.rec && b1 > self.rec_start {
                     self.shared.recording.store(true, Relaxed);
                     if let Some((il, ir)) = input {
-                        let first = if b0 >= self.rec_start {
-                            0
-                        } else {
-                            (((self.rec_start - b0) / bps).ceil() as usize).min(seg)
-                        };
+                        let first = if b0 >= self.rec_start { 0 } else { (((self.rec_start - b0) / bps).ceil() as usize).min(seg) };
                         for i in p + first..(p + seg).min(il.len()) {
                             if self.record.slots() >= 2 {
                                 // NaN is the pass marker (below): never let it in from the device
@@ -1381,42 +1130,17 @@ impl Rt {
             c.pan0 = c.pan;
         }
         if self.playing {
-            apply_automation(
-                &mut self.timeline,
-                &mut self.graph,
-                &mut self.synths,
-                block_beat,
-            );
+            apply_automation(&mut self.timeline, &mut self.graph, &mut self.synths, block_beat);
         }
         let shared_beat = if self.playing { self.beat } else { block_beat };
         self.shared.beat.store(shared_beat.to_bits(), Relaxed);
-        let heard = if self.playing {
-            self.heard(shared_beat, bps)
-        } else {
-            shared_beat
-        };
+        let heard = if self.playing { self.heard(shared_beat, bps) } else { shared_beat };
         self.shared.heard.store(heard.to_bits(), Relaxed);
         // tempo-locked effects follow the pattern loop preview like the song
-        let pat_ctx = if !self.playing && self.pat_play.is_some() {
-            Some(self.pat_beat)
-        } else {
-            None
-        };
+        let pat_ctx = if !self.playing && self.pat_play.is_some() { Some(self.pat_beat) } else { None };
         self.schedule_pattern(n, bps, spb);
-        self.voices.render(
-            n,
-            &mut self.graph.track_bufs,
-            &mut self.graph.inserts,
-            &mut self.click[..n],
-            &self.timeline.chans,
-        );
-        self.synths.render(
-            n,
-            &mut self.graph.track_bufs,
-            &mut self.graph.inserts,
-            &self.timeline.chans,
-            bpm,
-        );
+        self.voices.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &mut self.click[..n], &self.timeline.chans);
+        self.synths.render(n, &mut self.graph.track_bufs, &mut self.graph.inserts, &self.timeline.chans, bpm);
         // what this block played is where the next one glides from
         for c in self.timeline.chans.iter_mut() {
             c.gain0 = c.gain;
@@ -1429,12 +1153,7 @@ impl Rt {
         let mon_ins = match input {
             // a pre-roll block has no device input: the monitoring set-up stays as it is
             _ if ahead => self.graph.mon_ins,
-            Some(_) if self.monitor => self
-                .graph
-                .monitor_track
-                .and_then(|t| self.graph.tracks.get(t))
-                .map(|t| t.insert)
-                .filter(|&k| k > 0 && k < self.graph.inserts.len()),
+            Some(_) if self.monitor => self.graph.monitor_track.and_then(|t| self.graph.tracks.get(t)).map(|t| t.insert).filter(|&k| k > 0 && k < self.graph.inserts.len()),
             _ => None,
         };
         if mon_ins != self.graph.mon_ins {
@@ -1469,9 +1188,7 @@ impl Rt {
         // ---- tracks → inserts
         let g = &mut *self.graph;
         for (ti, t) in g.tracks.iter().enumerate() {
-            let Some(ins) = g.inserts.get_mut(t.insert) else {
-                continue;
-            };
+            let Some(ins) = g.inserts.get_mut(t.insert) else { continue };
             if !t.on {
                 continue;
             }
@@ -1488,12 +1205,7 @@ impl Rt {
             let ins = &mut g.inserts[k];
             g.mon.0.run(&mut ins.l[..n]);
             g.mon.1.run(&mut ins.r[..n]);
-            if let (Some(t), Some((il, ir))) = (
-                g.monitor_track
-                    .and_then(|t| g.tracks.get(t))
-                    .filter(|t| t.on),
-                input,
-            ) {
+            if let (Some(t), Some((il, ir))) = (g.monitor_track.and_then(|t| g.tracks.get(t)).filter(|t| t.on), input) {
                 for i in 0..n.min(il.len()) {
                     ins.l[i] += il[i] * t.gain;
                     ins.r[i] += ir[i] * t.gain;
@@ -1503,18 +1215,8 @@ impl Rt {
 
         // ---- inserts (non-master first), then master
         let ctx = match pat_ctx {
-            Some(b) => ProcessCtx {
-                sample_rate: sr,
-                bpm,
-                beat: b,
-                playing: true,
-            },
-            None => ProcessCtx {
-                sample_rate: sr,
-                bpm,
-                beat: block_beat,
-                playing: self.playing,
-            },
+            Some(b) => ProcessCtx { sample_rate: sr, bpm, beat: b, playing: true },
+            None => ProcessCtx { sample_rate: sr, bpm, beat: block_beat, playing: self.playing },
         };
         let count = g.inserts.len();
         if count > 0 {
@@ -1523,48 +1225,24 @@ impl Rt {
                 // offline: the effect chains of the non-master inserts are independent, so
                 // worker threads take them one by one (the sum into the master stays in order)
                 let next = std::sync::atomic::AtomicUsize::new(0);
-                let cells: Vec<std::sync::Mutex<&mut InsertRt>> = g.inserts[1..]
-                    .iter_mut()
-                    .map(std::sync::Mutex::new)
-                    .collect();
+                let cells: Vec<std::sync::Mutex<&mut InsertRt>> = g.inserts[1..].iter_mut().map(std::sync::Mutex::new).collect();
                 let shared = &*self.shared;
                 std::thread::scope(|sc| {
                     for _ in 0..self.workers.min(cells.len()) {
                         sc.spawn(|| {
-                            let mut taps = Taps {
-                                input: vec![],
-                                output: vec![],
-                            };
+                            let mut taps = Taps { input: vec![], output: vec![] };
                             loop {
                                 let j = next.fetch_add(1, Relaxed);
                                 let Some(cell) = cells.get(j) else { break };
                                 let mut ins = cell.lock().unwrap();
-                                process_insert(
-                                    &mut ins,
-                                    j + 1,
-                                    n,
-                                    &ctx,
-                                    enabled,
-                                    &[],
-                                    &mut taps,
-                                    shared,
-                                );
+                                process_insert(&mut ins, j + 1, n, &ctx, enabled, &[], &mut taps, shared);
                             }
                         });
                     }
                 });
             } else {
                 for k in 1..count {
-                    process_insert(
-                        &mut g.inserts[k],
-                        k,
-                        n,
-                        &ctx,
-                        enabled,
-                        watch,
-                        &mut self.taps,
-                        &self.shared,
-                    );
+                    process_insert(&mut g.inserts[k], k, n, &ctx, enabled, watch, &mut self.taps, &self.shared);
                 }
             }
             let (head, tail) = g.inserts.split_at_mut(1);
@@ -1575,16 +1253,7 @@ impl Rt {
                     master.r[i] += ins.r[i];
                 }
             }
-            process_insert(
-                master,
-                0,
-                n,
-                &ctx,
-                enabled,
-                watch,
-                &mut self.taps,
-                &self.shared,
-            );
+            process_insert(master, 0, n, &ctx, enabled, watch, &mut self.taps, &self.shared);
         }
 
         // ---- out: master + click (delayed like the music) + preview
@@ -1598,11 +1267,7 @@ impl Rt {
         }
         let ramp = ((DECLICK_S * sr) as usize).max(1);
         for i in 0..n {
-            let (mut a, mut b) = if i < mute {
-                (0.0, 0.0)
-            } else {
-                (ml[i] + self.click[i] * 0.6, mr[i] + self.click[i] * 0.6)
-            };
+            let (mut a, mut b) = if i < mute { (0.0, 0.0) } else { (ml[i] + self.click[i] * 0.6, mr[i] + self.click[i] * 0.6) };
             if i >= mute && self.fade_pos < ramp {
                 let w = self.fade_pos as f32 / ramp as f32;
                 a *= w;
@@ -1641,10 +1306,7 @@ impl Rt {
                 out_r[at + i] += b * env as f32;
                 pv.pos += rate;
             }
-            fset(
-                &self.shared.preview_pos,
-                (pv.pos / pv.audio.sr as f64) as f32,
-            );
+            fset(&self.shared.preview_pos, (pv.pos / pv.audio.sr as f64) as f32);
             if pv.pos >= pv.end {
                 let done = self.preview.take().unwrap();
                 fset(&self.shared.preview_pos, -1.0);
@@ -1682,9 +1344,7 @@ impl Rt {
             }
             match &c.src {
                 ClipSrc::Pat(pi) => {
-                    let Some(pat) = tl.pats.get(*pi) else {
-                        continue;
-                    };
+                    let Some(pat) = tl.pats.get(*pi) else { continue };
                     if pat.len <= 0.0 {
                         continue;
                     }
@@ -1697,9 +1357,7 @@ impl Rt {
                         for nt in &pat.notes {
                             let nb = base + r as f64 * pat.len + nt.beat;
                             if nb >= lo && nb < hi {
-                                let Some(ch) = tl.chans.get(nt.chan) else {
-                                    continue;
-                                };
+                                let Some(ch) = tl.chans.get(nt.chan) else { continue };
                                 if !ch.on {
                                     continue;
                                 }
@@ -1713,28 +1371,14 @@ impl Rt {
                                         _ => continue,
                                     },
                                 };
-                                play(
-                                    &mut self.voices,
-                                    &mut self.synths,
-                                    ch,
-                                    nt.chan,
-                                    dest,
-                                    delay,
-                                    (len_beats * spb) as f32,
-                                    nt.key,
-                                    nt.vel,
-                                    gain,
-                                    self.sr,
-                                );
+                                play(&mut self.voices, &mut self.synths, ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, nt.vel, gain, self.sr);
                             }
                         }
                     }
                 }
                 ClipSrc::Auto(_) => {}
                 ClipSrc::Comp(cp) => {
-                    let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else {
-                        continue;
-                    };
+                    let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else { continue };
                     // samples of this block inside the clip
                     // (same per-sample test as audio clips: start ≤ beat < end)
                     let mut i0 = (((c.start - b0) / bps).ceil().max(0.0) as usize).min(n);
@@ -1756,10 +1400,7 @@ impl Rt {
                     cp.render_add(c.offset + bt0 - c.start, bps, bl, br, spb);
                     let dur = (c.end - c.start) * spb;
                     let g = 10f32.powf(c.gain / 20.0);
-                    let (pl, pr) = (
-                        if c.pan > 0.0 { 1.0 - c.pan } else { 1.0 },
-                        if c.pan < 0.0 { 1.0 + c.pan } else { 1.0 },
-                    );
+                    let (pl, pr) = (if c.pan > 0.0 { 1.0 - c.pan } else { 1.0 }, if c.pan < 0.0 { 1.0 + c.pan } else { 1.0 });
                     for k in 0..m {
                         let t = (bt0 + k as f64 * bps - c.start) * spb;
                         let mut env = g;
@@ -1775,18 +1416,8 @@ impl Rt {
                     }
                 }
                 ClipSrc::Audio(a) => {
-                    let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else {
-                        continue;
-                    };
-                    crate::clipmix::mix_audio_clip(
-                        c,
-                        a,
-                        b0,
-                        bps,
-                        spb,
-                        &mut tl_l[at..at + n],
-                        &mut tl_r[at..at + n],
-                    );
+                    let Some((tl_l, tl_r)) = self.graph.track_bufs.get_mut(c.track) else { continue };
+                    crate::clipmix::mix_audio_clip(c, a, b0, bps, spb, &mut tl_l[at..at + n], &mut tl_r[at..at + n]);
                 }
             }
         }
@@ -1797,19 +1428,7 @@ impl Rt {
 /// synth instance for synth channels. `len_s` in seconds; `gain` is level on top of the
 /// velocity (a track fader the channel's routing skips).
 #[allow(clippy::too_many_arguments)]
-fn play(
-    voices: &mut VoicePool,
-    synths: &mut SynthBank,
-    ch: &ChanRt,
-    idx: usize,
-    dest: Dest,
-    delay: u32,
-    len_s: f32,
-    key: u8,
-    vel: f32,
-    gain: f32,
-    sr: f32,
-) {
+fn play(voices: &mut VoicePool, synths: &mut SynthBank, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32, sr: f32) {
     if ch.kind == VoiceKind::Synth {
         if let Some(s) = synths.get(ch.id) {
             s.note(delay, (len_s.max(0.0) * sr) as u32, key, vel * gain, dest);
@@ -1822,16 +1441,7 @@ fn play(
 /// One insert's turn in a block: silence gate, effect chain, fader/pan, PDC delay. Leaves the
 /// insert's output in `ins.l`/`ins.r` (or `ins.idle` set: it contributes nothing).
 #[allow(clippy::too_many_arguments)]
-fn process_insert(
-    ins: &mut InsertRt,
-    k: usize,
-    n: usize,
-    ctx: &ProcessCtx,
-    enabled: bool,
-    watch: &[Id],
-    taps: &mut Taps,
-    shared: &Shared,
-) {
+fn process_insert(ins: &mut InsertRt, k: usize, n: usize, ctx: &ProcessCtx, enabled: bool, watch: &[Id], taps: &mut Taps, shared: &Shared) {
     let gate = gate(ins, n, enabled, watch);
     ins.idle = gate == Gate::Idle;
     if ins.idle {
@@ -1847,11 +1457,7 @@ fn process_insert(
         let w0 = ins.w_cur;
         let step = (ins.width - w0) / n as f32;
         for i in 0..n {
-            let w = if i + 1 == n {
-                ins.width
-            } else {
-                w0 + step * (i + 1) as f32
-            };
+            let w = if i + 1 == n { ins.width } else { w0 + step * (i + 1) as f32 };
             let (m, s) = ((ins.l[i] + ins.r[i]) * 0.5, (ins.l[i] - ins.r[i]) * 0.5 * w);
             ins.l[i] = m + s;
             ins.r[i] = m - s;
@@ -1861,10 +1467,7 @@ fn process_insert(
     // fader + pan, smoothed across the block (a skipped chain outputs zeros)
     let target = if ins.on { ins.gain } else { 0.0 };
     if gate == Gate::Run {
-        let (gl, gr) = (
-            if ins.pan > 0.0 { 1.0 - ins.pan } else { 1.0 },
-            if ins.pan < 0.0 { 1.0 + ins.pan } else { 1.0 },
-        );
+        let (gl, gr) = (if ins.pan > 0.0 { 1.0 - ins.pan } else { 1.0 }, if ins.pan < 0.0 { 1.0 + ins.pan } else { 1.0 });
         let g0 = ins.g_cur;
         let step = (target - g0) / n as f32;
         let (mut pl, mut pr) = (0f32, 0f32);
@@ -1961,14 +1564,7 @@ fn gate(ins: &mut InsertRt, n: usize, enabled: bool, watch: &[Id]) -> Gate {
     }
 }
 
-fn run_chain(
-    ins: &mut InsertRt,
-    n: usize,
-    ctx: &ProcessCtx,
-    watch: &[Id],
-    taps: &mut Taps,
-    shared: &Shared,
-) {
+fn run_chain(ins: &mut InsertRt, n: usize, ctx: &ProcessCtx, watch: &[Id], taps: &mut Taps, shared: &Shared) {
     let low_lat = ins.low_lat;
     for slot in ins.fx.iter_mut() {
         let delayed = !slot.dly_l.is_empty();
@@ -2003,23 +1599,12 @@ fn run_chain(
             }
         }
         if let Some(w) = w {
-            let wet = if slot.bypass {
-                None
-            } else {
-                slot.proc.as_ref().and_then(|p| p.wet_tap())
-            };
+            let wet = if slot.bypass { None } else { slot.proc.as_ref().and_then(|p| p.wet_tap()) };
             match wet {
                 Some(wet) if !wet.is_empty() => push_mono(&mut taps.output[w], wet),
                 _ => push_tap(&mut taps.output[w], &ins.l[..n], &ins.r[..n]),
             }
-            let gr = if slot.bypass {
-                0.0
-            } else {
-                slot.proc
-                    .as_ref()
-                    .map(|p| p.gain_reduction_db())
-                    .unwrap_or(0.0)
-            };
+            let gr = if slot.bypass { 0.0 } else { slot.proc.as_ref().map(|p| p.gain_reduction_db()).unwrap_or(0.0) };
             fset(&shared.gr[w], gr);
             let mut m = [0f32; METERS];
             if let Some(p) = slot.proc.as_ref() {
@@ -2051,10 +1636,7 @@ fn push_mono(p: &mut rtrb::Producer<f32>, x: &[f32]) {
 }
 
 fn slot(g: &mut Graph, fx: Id) -> Option<&mut FxSlot> {
-    g.inserts
-        .iter_mut()
-        .flat_map(|i| i.fx.iter_mut())
-        .find(|s| s.id == fx)
+    g.inserts.iter_mut().flat_map(|i| i.fx.iter_mut()).find(|s| s.id == fx)
 }
 
 /// A new timeline is built from the project's static values: the channels and clips an
@@ -2064,16 +1646,9 @@ fn slot(g: &mut Graph, fx: Id) -> Option<&mut FxSlot> {
 fn carry_automated(new: &mut Timeline, old: &Timeline) {
     for a in new.autos.iter() {
         match a.target {
-            TargetRt::ChanVol(i)
-            | TargetRt::ChanPan(i)
-            | TargetRt::KeysRelease(i)
-            | TargetRt::KeysDynamics(i) => {
-                let Some(c) = new.chans.get_mut(i) else {
-                    continue;
-                };
-                let Some(o) = old.chans.iter().find(|o| o.id == c.id) else {
-                    continue;
-                };
+            TargetRt::ChanVol(i) | TargetRt::ChanPan(i) | TargetRt::KeysRelease(i) | TargetRt::KeysDynamics(i) => {
+                let Some(c) = new.chans.get_mut(i) else { continue };
+                let Some(o) = old.chans.iter().find(|o| o.id == c.id) else { continue };
                 match a.target {
                     TargetRt::ChanVol(_) => (c.gain, c.gain0) = (o.gain, o.gain0),
                     TargetRt::ChanPan(_) => (c.pan, c.pan0) = (o.pan, o.pan0),
@@ -2082,13 +1657,9 @@ fn carry_automated(new: &mut Timeline, old: &Timeline) {
                 }
             }
             TargetRt::ClipGain(k) | TargetRt::ClipPan(k) => {
-                let Some(id) = new.clips.get(k).map(|c| c.id) else {
-                    continue;
-                };
+                let Some(id) = new.clips.get(k).map(|c| c.id) else { continue };
                 let found = old.autos.iter().find_map(|oa| match oa.target {
-                    TargetRt::ClipGain(j) | TargetRt::ClipPan(j) => {
-                        old.clips.get(j).filter(|c| c.id == id)
-                    }
+                    TargetRt::ClipGain(j) | TargetRt::ClipPan(j) => old.clips.get(j).filter(|c| c.id == id),
                     _ => None,
                 });
                 let Some(o) = found else { continue };
@@ -2105,12 +1676,7 @@ fn carry_automated(new: &mut Timeline, old: &Timeline) {
 }
 
 /// Moves automated parameters to their value at `beat`. Allocation-free.
-fn apply_automation(
-    tl: &mut Timeline,
-    g: &mut Graph,
-    synths: &mut crate::poly::SynthBank,
-    beat: f64,
-) {
+fn apply_automation(tl: &mut Timeline, g: &mut Graph, synths: &mut crate::poly::SynthBank, beat: f64) {
     for ci in 0..tl.clips.len() {
         let c = &tl.clips[ci];
         let ClipSrc::Auto(ai) = c.src else { continue };
@@ -2118,24 +1684,12 @@ fn apply_automation(
             continue;
         }
         let Some(a) = tl.autos.get(ai) else { continue };
-        let Some(v) = a.env.value_at(beat - c.start + c.offset) else {
-            continue;
-        };
+        let Some(v) = a.env.value_at(beat - c.start + c.offset) else { continue };
         let target = a.target;
         match target {
-            TargetRt::Param {
-                fx,
-                idx,
-                min,
-                max,
-                log,
-            } => {
+            TargetRt::Param { fx, idx, min, max, log } => {
                 if let Some(s) = slot(g, fx) {
-                    let x = if log {
-                        min * (max / min).powf(v)
-                    } else {
-                        min + (max - min) * v
-                    };
+                    let x = if log { min * (max / min).powf(v) } else { min + (max - min) * v };
                     if let Some(pb) = s.params.as_mut() {
                         if (pb.values[idx] - x).abs() > 1e-6 * x.abs().max(1.0) {
                             pb.values[idx] = x;
@@ -2193,8 +1747,7 @@ fn apply_automation(
             }
             TargetRt::ChanVol(i) => {
                 if let Some(ch) = tl.chans.get_mut(i) {
-                    ch.gain = crate::model::fader_gain(v)
-                        / crate::model::fader_gain(crate::model::VOL_UNITY);
+                    ch.gain = crate::model::fader_gain(v) / crate::model::fader_gain(crate::model::VOL_UNITY);
                 }
             }
             TargetRt::ChanPan(i) => {
@@ -2202,20 +1755,9 @@ fn apply_automation(
                     ch.pan = v * 2.0 - 1.0;
                 }
             }
-            TargetRt::Synth {
-                chan,
-                idx,
-                min,
-                max,
-                log,
-                choice,
-            } => {
+            TargetRt::Synth { chan, idx, min, max, log, choice } => {
                 if let Some(s) = synths.get(chan) {
-                    let x = if log {
-                        min * (max / min).powf(v)
-                    } else {
-                        min + (max - min) * v
-                    };
+                    let x = if log { min * (max / min).powf(v) } else { min + (max - min) * v };
                     s.set_param(idx, if choice { x.round() } else { x });
                 }
             }

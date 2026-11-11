@@ -38,16 +38,7 @@ pub mod idx {
 
 pub const SPEEDS: [&str; 3] = ["1.5×", "2×", "4×"];
 pub const SPEED_DIV: [f64; 3] = [1.5, 2.0, 4.0];
-pub const LOOPS: [&str; 8] = [
-    "1/16",
-    "1/8",
-    "1/4",
-    "1/2",
-    "1 takt",
-    "2 takty",
-    "4 takty",
-    "8 taktów",
-];
+pub const LOOPS: [&str; 8] = ["1/16", "1/8", "1/4", "1/2", "1 takt", "2 takty", "4 takty", "8 taktów"];
 /// Window lengths in beats (4/4).
 pub const LOOP_BEATS: [f64; 8] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
 
@@ -128,14 +119,7 @@ impl Split {
         }
     }
     fn reset(&mut self) {
-        for f in [
-            &mut self.lp_lo,
-            &mut self.hp_lo,
-            &mut self.lp_hi,
-            &mut self.hp_hi,
-            &mut self.ap_lp,
-            &mut self.ap_hp,
-        ] {
+        for f in [&mut self.lp_lo, &mut self.hp_lo, &mut self.lp_hi, &mut self.hp_hi, &mut self.ap_lp, &mut self.ap_hp] {
             f.reset();
         }
     }
@@ -290,9 +274,7 @@ impl Processor for HalfTime {
         let max_d = (self.mask as f64 - 8.0) - 0.02 * sr;
         let fade_ms = smooth_ms(self.smooth) as f64;
         let sustain = self.smooth >= 0.0;
-        let fade = (fade_ms * 0.001 * sr)
-            .min(if sustain { 0.9 } else { 0.5 } * n_loop)
-            .max(1.0);
+        let fade = (fade_ms * 0.001 * sr).min(if sustain { 0.9 } else { 0.5 } * n_loop).max(1.0);
         let handover = (0.010 * sr) as u32;
         let mix_a = 1.0 - (-1.0 / (0.02 * self.sr)).exp();
         let (lo_on, hi_on, solo) = (self.lo_on, self.hi_on, self.solo);
@@ -319,11 +301,7 @@ impl Processor for HalfTime {
                 let valid = start >= self.valid_from as f64 - 0.5;
                 if valid {
                     // parameter change mid-window: hand the old trajectory to head B
-                    if self.last_valid
-                        && !wrapped
-                        && (slope != self.last_slope || (d_a - self.last_d).abs() > 2.0)
-                        && self.tail_left == 0
-                    {
+                    if self.last_valid && !wrapped && (slope != self.last_slope || (d_a - self.last_d).abs() > 2.0) && self.tail_left == 0 {
                         self.tail_d = self.last_d + self.last_slope;
                         self.tail_slope = self.last_slope;
                         self.tail_len = handover.max(1);
@@ -380,11 +358,7 @@ impl Processor for HalfTime {
                 self.last_valid = false;
             }
         }
-        self.m_phase = if playing {
-            (ctx.beat + n as f64 / spb).rem_euclid(lb) as f32 / lb as f32
-        } else {
-            0.0
-        };
+        self.m_phase = if playing { (ctx.beat + n as f64 / spb).rem_euclid(lb) as f32 / lb as f32 } else { 0.0 };
         self.m_active = if playing && self.last_valid { 1.0 } else { 0.0 };
         self.m_ga = ga_last;
         self.m_gb = gb_last;
@@ -413,11 +387,7 @@ impl Processor for HalfTime {
         out[3] = self.m_gb;
         out[4] = self.div as f32;
         out[5] = self.loop_beats as f32;
-        out[6] = if self.smooth >= 0.0 {
-            smooth_ms(self.smooth)
-        } else {
-            -smooth_ms(self.smooth)
-        };
+        out[6] = if self.smooth >= 0.0 { smooth_ms(self.smooth) } else { -smooth_ms(self.smooth) };
         out[7] = if self.lo_on { self.lo } else { 0.0 };
         out[8] = if self.hi_on { self.hi } else { 0.0 };
     }
@@ -439,13 +409,7 @@ mod tests {
     }
 
     /// Runs `secs` of `f(sample index)` through the effect with the transport playing from beat 0.
-    fn run(
-        fx: &mut HalfTime,
-        f: impl Fn(usize) -> f32,
-        secs: f32,
-        bpm: f64,
-        playing: bool,
-    ) -> Vec<f32> {
+    fn run(fx: &mut HalfTime, f: impl Fn(usize) -> f32, secs: f32, bpm: f64, playing: bool) -> Vec<f32> {
         let sr = 48_000.0;
         let n = (secs * sr) as usize;
         let mut out = Vec::with_capacity(n);
@@ -455,12 +419,7 @@ mod tests {
             let m = blk.min(n - i);
             let mut l: Vec<f32> = (i..i + m).map(&f).collect();
             let mut r = l.clone();
-            let ctx = ProcessCtx {
-                sample_rate: sr,
-                bpm,
-                beat: i as f64 / (60.0 * sr as f64 / bpm),
-                playing,
-            };
+            let ctx = ProcessCtx { sample_rate: sr, bpm, beat: i as f64 / (60.0 * sr as f64 / bpm), playing };
             fx.process(&mut l, &mut r, &ctx);
             out.extend_from_slice(&l);
             i += m;
@@ -479,10 +438,7 @@ mod tests {
         fx.set_params(&pb(1.0, 4.0, 10.0, 20.0, 20_000.0, 100.0));
         let sig = |i: usize| (i as f32 * 0.05).sin() * 0.5;
         let out = run(&mut fx, sig, 0.5, 120.0, false);
-        assert!(out
-            .iter()
-            .enumerate()
-            .all(|(i, &y)| (y - sig(i)).abs() < 1e-6));
+        assert!(out.iter().enumerate().all(|(i, &y)| (y - sig(i)).abs() < 1e-6));
     }
 
     #[test]
@@ -492,26 +448,14 @@ mod tests {
         // 1/4 note windows at 120 BPM = 24000 samples
         fx.set_params(&pb(1.0, 2.0, 10.0, 20.0, 20_000.0, 100.0));
         let f = 440.0 / 48_000.0;
-        let out = run(
-            &mut fx,
-            |i| (std::f32::consts::TAU * f * i as f32).sin() * 0.5,
-            2.0,
-            120.0,
-            true,
-        );
+        let out = run(&mut fx, |i| (std::f32::consts::TAU * f * i as f32).sin() * 0.5, 2.0, 120.0, true);
         // the second window onward: 220 Hz instead of 440 Hz
         let w = &out[24_000 + 2000..48_000 - 2000];
         let hz = zero_crossings(w) as f32 / (w.len() as f32 / 48_000.0);
         assert!((hz - 220.0).abs() < 4.0, "{hz} Hz");
         // 4× → 110 Hz
         fx.set_params(&pb(2.0, 2.0, 10.0, 20.0, 20_000.0, 100.0));
-        let out = run(
-            &mut fx,
-            |i| (std::f32::consts::TAU * f * i as f32).sin() * 0.5,
-            2.0,
-            120.0,
-            true,
-        );
+        let out = run(&mut fx, |i| (std::f32::consts::TAU * f * i as f32).sin() * 0.5, 2.0, 120.0, true);
         let w = &out[24_000 + 2000..48_000 - 2000];
         let hz = zero_crossings(w) as f32 / (w.len() as f32 / 48_000.0);
         assert!((hz - 110.0).abs() < 4.0, "{hz} Hz");
@@ -524,18 +468,9 @@ mod tests {
             fx.prepare(48_000.0, 256);
             fx.set_params(&pb(1.0, 1.0, smooth, 20.0, 20_000.0, 100.0));
             let f = 300.0 / 48_000.0;
-            let out = run(
-                &mut fx,
-                |i| (std::f32::consts::TAU * f * i as f32).sin() * 0.5,
-                2.0,
-                120.0,
-                true,
-            );
+            let out = run(&mut fx, |i| (std::f32::consts::TAU * f * i as f32).sin() * 0.5, 2.0, 120.0, true);
             // largest sample-to-sample step stays near the sine's own (2π·f·A ≈ 0.02)
-            let step = out[1000..]
-                .windows(2)
-                .map(|w| (w[1] - w[0]).abs())
-                .fold(0f32, f32::max);
+            let step = out[1000..].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
             assert!(step < 0.05, "smooth {smooth}: step {step}");
         }
     }
@@ -545,13 +480,7 @@ mod tests {
         let mut fx = HalfTime::default();
         fx.prepare(48_000.0, 256);
         fx.set_params(&pb(1.0, 4.0, 10.0, 200.0, 4000.0, 100.0));
-        let out = run(
-            &mut fx,
-            |i| if i == 0 { 1.0 } else { 0.0 },
-            1.0,
-            120.0,
-            false,
-        );
+        let out = run(&mut fx, |i| if i == 0 { 1.0 } else { 0.0 }, 1.0, 120.0, false);
         // all-pass: energy of the impulse response stays 1
         let e: f32 = out.iter().map(|v| v * v).sum();
         assert!((e - 1.0).abs() < 0.02, "energy {e}");
@@ -571,12 +500,7 @@ mod tests {
         for b in 0..40 {
             let mut l = vec![0.0f32; 256];
             let mut r = l.clone();
-            let ctx = ProcessCtx {
-                sample_rate: sr,
-                bpm: 120.0,
-                beat: 10.5 + (b * 256) as f64 / spb,
-                playing: true,
-            };
+            let ctx = ProcessCtx { sample_rate: sr, bpm: 120.0, beat: 10.5 + (b * 256) as f64 / spb, playing: true };
             fx.process(&mut l, &mut r, &ctx);
             out.extend_from_slice(&l);
         }

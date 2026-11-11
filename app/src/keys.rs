@@ -40,33 +40,19 @@ pub struct Keys {
 
 impl Default for Keys {
     fn default() -> Self {
-        Self {
-            st: Mutex::new((Phase::Idle, None)),
-        }
+        Self { st: Mutex::new((Phase::Idle, None)) }
     }
 }
 
 /// Where the recordings are: inside the app first, then the sample library.
 fn dir(app: &App) -> Option<PathBuf> {
-    let bundled = app
-        .handle
-        .get()
-        .and_then(|h| h.path().resource_dir().ok())
-        .map(|d| d.join("keys"));
-    bundled
-        .into_iter()
-        .chain([crate::library::library_dir().join(KIT_ID)])
-        .find(|d| KeysBank::present(d))
+    let bundled = app.handle.get().and_then(|h| h.path().resource_dir().ok()).map(|d| d.join("keys"));
+    bundled.into_iter().chain([crate::library::library_dir().join(KIT_ID)]).find(|d| KeysBank::present(d))
 }
 
 pub fn status(app: &App) -> KeysStatus {
     let (state, error) = app.keys.st.lock().clone();
-    KeysStatus {
-        state,
-        error,
-        kit: KIT_ID,
-        installed: state == Phase::Ready || dir(app).is_some(),
-    }
+    KeysStatus { state, error, kit: KIT_ID, installed: state == Phase::Ready || dir(app).is_some() }
 }
 
 fn set(app: &App, phase: Phase, error: Option<String>) {
@@ -88,9 +74,7 @@ pub fn ensure(app: &Arc<App>, needed: bool) {
     }
     let a = app.clone();
     std::thread::spawn(move || {
-        let Some(d) = dir(&a) else {
-            return set(&a, Phase::Missing, None);
-        };
+        let Some(d) = dir(&a) else { return set(&a, Phase::Missing, None) };
         set(&a, Phase::Loading, None);
         match KeysBank::load(&d) {
             Ok(b) => {

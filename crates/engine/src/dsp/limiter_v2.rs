@@ -243,12 +243,7 @@ impl LimiterV2 {
         let phase = |p: usize| -> f32 {
             // 8 independent accumulators so the dot product vectorises
             let mut acc = [0f32; 8];
-            for (h, x) in self.fir[p - 1]
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .zip(lin.as_chunks::<8>().0)
-            {
+            for (h, x) in self.fir[p - 1].as_chunks::<8>().0.iter().zip(lin.as_chunks::<8>().0) {
                 for k in 0..8 {
                     acc[k] += h[k] * x[k];
                 }

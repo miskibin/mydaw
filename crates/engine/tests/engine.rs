@@ -13,17 +13,11 @@ fn demo_renders_offline_with_sound_and_no_clipping() {
     let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
     let out = e.render(0.0, 16.0, 1.0, 48000).unwrap();
     let secs = out.len() as f32 / 2.0 / 48000.0;
-    assert!(
-        (secs - (16.0 * 60.0 / 128.0 + 1.0)).abs() < 0.05,
-        "length {secs}"
-    );
+    assert!((secs - (16.0 * 60.0 / 128.0 + 1.0)).abs() < 0.05, "length {secs}");
     let level = rms(&out);
     assert!(level > 0.01, "demo is silent: rms {level}");
     let peak = out.iter().fold(0f32, |a, b| a.max(b.abs()));
-    assert!(
-        peak <= 10f32.powf(-0.3 / 20.0) + 1e-3,
-        "master limiter let {peak} through"
-    );
+    assert!(peak <= 10f32.powf(-0.3 / 20.0) + 1e-3, "master limiter let {peak} through");
     // kick on beat 1: energy right after 0 is far above the silence before any clip
     assert!(out.iter().all(|x| x.is_finite()));
 }
@@ -51,8 +45,7 @@ fn undo_redo_and_gestures() {
     e.begin_gesture();
     for k in 0..10 {
         t.vol = 0.5 + k as f32 * 0.01;
-        e.apply(&[Op::PutTrack { track: t.clone() }], true, None)
-            .unwrap();
+        e.apply(&[Op::PutTrack { track: t.clone() }], true, None).unwrap();
     }
     e.end_gesture();
     assert!((e.project().tracks[0].vol - 0.59).abs() < 1e-6);
@@ -72,25 +65,17 @@ fn invalid_batches_change_nothing() {
     assert!(e.apply(&bad, false, None).is_err());
     assert_eq!(e.project(), before);
     let r = e.revision();
-    assert!(e
-        .apply(&[Op::SetBpm { bpm: 100.0 }], false, Some(r + 5))
-        .unwrap_err()
-        .to_string()
-        .contains("REVISION_CONFLICT"));
+    assert!(e.apply(&[Op::SetBpm { bpm: 100.0 }], false, Some(r + 5)).unwrap_err().to_string().contains("REVISION_CONFLICT"));
 }
 
 #[test]
 fn effects_change_the_render() {
     let mut p = Project::demo();
-    let plain = Engine::new(p.clone(), Arc::new(NoPlugins))
-        .render(0.0, 8.0, 0.0, 48000)
-        .unwrap();
+    let plain = Engine::new(p.clone(), Arc::new(NoPlugins)).render(0.0, 8.0, 0.0, 48000).unwrap();
     let mut sat = new_fx(5000, FxKind::Sat, p.bpm);
     sat.params.insert("drive".into(), 30.0);
     p.inserts[1].fx.push(sat);
-    let driven = Engine::new(p, Arc::new(NoPlugins))
-        .render(0.0, 8.0, 0.0, 48000)
-        .unwrap();
+    let driven = Engine::new(p, Arc::new(NoPlugins)).render(0.0, 8.0, 0.0, 48000).unwrap();
     let diff: f32 = plain.iter().zip(&driven).map(|(a, b)| (a - b).abs()).sum();
     assert!(diff > 1.0, "saturator did nothing ({diff})");
 }
@@ -101,12 +86,7 @@ fn audio_clips_play_at_their_position() {
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("tone.wav");
     // 0.5 s of 440 Hz at 44.1 kHz — a different rate than the render
-    let tone: Vec<f32> = (0..22050)
-        .flat_map(|i| {
-            let v = (i as f32 * 440.0 * std::f32::consts::TAU / 44100.0).sin() * 0.5;
-            [v, v]
-        })
-        .collect();
+    let tone: Vec<f32> = (0..22050).flat_map(|i| { let v = (i as f32 * 440.0 * std::f32::consts::TAU / 44100.0).sin() * 0.5; [v, v] }).collect();
     wave_engine::sources::write_wav(&wav, &tone, 44100).unwrap();
     let mut p = Project::empty();
     p.inserts[0].fx.clear(); // no limiter, so levels are exact
@@ -132,55 +112,23 @@ fn dry_wet_of_a_latent_effect_lines_up() {
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("voice.wav");
     let sr = 48000.0f32;
-    let x: Vec<f32> = (0..96000)
-        .flat_map(|i| {
-            let v = (1..8)
-                .map(|k| {
-                    (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32
-                })
-                .sum::<f32>()
-                * 0.2;
-            [v, v]
-        })
-        .collect();
+    let x: Vec<f32> = (0..96000).flat_map(|i| { let v = (1..8).map(|k| (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.2; [v, v] }).collect();
     wave_engine::sources::write_wav(&wav, &x, 48000).unwrap();
     let mut p = Project::empty();
     p.inserts[0].fx.clear();
     let ins = p.tracks[0].insert;
     let voice = new_fx(90_000, FxKind::Voice, p.bpm);
-    p.inserts
-        .iter_mut()
-        .find(|m| m.id == ins)
-        .unwrap()
-        .fx
-        .push(voice.clone());
+    p.inserts.iter_mut().find(|m| m.id == ins).unwrap().fx.push(voice.clone());
     let e = Engine::new(p, Arc::new(NoPlugins));
-    e.import_audio(std::slice::from_ref(&wav), Some((0, 0.0)))
-        .unwrap();
+    e.import_audio(std::slice::from_ref(&wav), Some((0, 0.0))).unwrap();
     let render = |mix: f32| {
-        let fx = Fx {
-            mix,
-            ..voice.clone()
-        };
-        e.apply(
-            &[Op::PutFx {
-                insert_id: ins,
-                fx,
-                index: None,
-            }],
-            false,
-            None,
-        )
-        .unwrap();
+        let fx = Fx { mix, ..voice.clone() };
+        e.apply(&[Op::PutFx { insert_id: ins, fx, index: None }], false, None).unwrap();
         let out = e.render(0.0, 3.0, 0.0, 48000).unwrap();
         rms(&out[48000..120000])
     };
     let (full, half) = (render(1.0), render(0.5));
-    assert!(
-        (half / full - 1.0).abs() < 0.05,
-        "50 % mix is {:.2}× the wet level",
-        half / full
-    );
+    assert!((half / full - 1.0).abs() < 0.05, "50 % mix is {:.2}× the wet level", half / full);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -218,8 +166,7 @@ fn live_rt_follows_edits_and_transport() {
     // mute master live, fast path
     let mut m = e.project().inserts[0].clone();
     m.muted = true;
-    e.apply(&[Op::PutInsert { insert: m }], false, None)
-        .unwrap();
+    e.apply(&[Op::PutInsert { insert: m }], false, None).unwrap();
     for _ in 0..4 {
         rt.process(&mut l, &mut r, None);
     }
@@ -249,17 +196,9 @@ fn recording_lands_as_a_clip_on_the_armed_track() {
     }
     e.stop();
     let p = e.project();
-    let take = p
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Audio)
-        .expect("no take clip");
+    let take = p.clips.iter().find(|c| c.kind == ClipKind::Audio).expect("no take clip");
     assert_eq!(take.track, 4);
-    assert!(
-        (take.start - 8.0).abs() < 1e-9,
-        "take starts at {}",
-        take.start
-    );
+    assert!((take.start - 8.0).abs() < 1e-9, "take starts at {}", take.start);
     let secs = take.len * 60.0 / p.bpm;
     assert!(secs > 0.8 && secs < 1.2, "take is {secs} s");
     assert!(e.undo());
@@ -286,11 +225,7 @@ fn feed(rt: &mut Rt, secs: f64) {
 }
 
 fn takes(e: &Engine) -> Vec<Clip> {
-    e.project()
-        .clips
-        .into_iter()
-        .filter(|c| c.kind == ClipKind::Audio)
-        .collect()
+    e.project().clips.into_iter().filter(|c| c.kind == ClipKind::Audio).collect()
 }
 
 #[test]
@@ -305,10 +240,7 @@ fn disarming_mid_take_keeps_it_and_keeps_playing() {
     assert_eq!(t.len(), 1, "disarming lost the take");
     let secs = t[0].len * 60.0 / e.project().bpm;
     assert!(secs > 0.8 && secs < 1.2, "take is {secs} s");
-    assert!(
-        e.state().transport.playing,
-        "punch-out stopped the transport"
-    );
+    assert!(e.state().transport.playing, "punch-out stopped the transport");
     // nothing more is captured after the punch-out
     feed(&mut rt, 0.5);
     e.stop();
@@ -340,10 +272,7 @@ fn restarting_the_audio_stream_mid_take_keeps_it() {
     assert!((t[0].start - 4.0).abs() < 1e-9);
     assert!(!e.state().transport.playing);
     e.play(0.0);
-    assert!(
-        e.state().transport.playing,
-        "transport is stuck after the restart"
-    );
+    assert!(e.state().transport.playing, "transport is stuck after the restart");
     feed(&mut rt, 0.5);
     e.stop();
     assert_eq!(takes(&e).len(), 2);
@@ -363,41 +292,24 @@ fn latency_is_compensated_across_inserts() {
     // an export drops that delay, so the file starts on the beat as without the tuner
     let mut q = p;
     q.inserts[6].fx.clear();
-    let without = Engine::new(q, Arc::new(NoPlugins))
-        .render(0.0, 1.0, 0.0, 48000)
-        .unwrap();
+    let without = Engine::new(q, Arc::new(NoPlugins)).render(0.0, 1.0, 0.0, 48000).unwrap();
     let onset = |x: &[f32]| x.chunks(2).position(|f| f[0].abs() > 0.05).unwrap();
     assert_eq!(onset(&with), onset(&without));
     assert_eq!(with.len(), without.len());
-    let diff = with
-        .iter()
-        .zip(&without)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0f32, f32::max);
-    assert!(
-        diff < 1e-4,
-        "export with a latent effect differs from the same mix without it by {diff}"
-    );
+    let diff = with.iter().zip(&without).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+    assert!(diff < 1e-4, "export with a latent effect differs from the same mix without it by {diff}");
 }
 
 #[test]
 fn mix_zero_is_the_dry_signal() {
     let mut p = Project::demo();
-    let dry = Engine::new(p.clone(), Arc::new(NoPlugins))
-        .render(0.0, 4.0, 0.0, 48000)
-        .unwrap();
+    let dry = Engine::new(p.clone(), Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
     let mut sat = wave_engine::catalog::new_fx(6000, FxKind::Sat, p.bpm);
     sat.params.insert("drive".into(), 30.0);
     sat.mix = 0.0;
     p.inserts[1].fx.push(sat);
-    let out = Engine::new(p, Arc::new(NoPlugins))
-        .render(0.0, 4.0, 0.0, 48000)
-        .unwrap();
-    let diff = dry
-        .iter()
-        .zip(&out)
-        .map(|(a, b)| (a - b).abs())
-        .fold(0f32, f32::max);
+    let out = Engine::new(p, Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
+    let diff = dry.iter().zip(&out).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
     // the saturator is latent (oversampling): the export is realigned, which leaves float
     // rounding at the level of `latency_is_compensated_across_inserts`
     assert!(diff < 1e-4, "mix 0 still changed the sound by {diff}");
@@ -413,53 +325,20 @@ fn automation_moves_volume_and_effect_params() {
         name: "Drums vol".into(),
         color: "#e0a44a".into(),
         target: AutoTarget::InsertVol { id: 1 },
-        points: vec![
-            AutoPoint {
-                t: 0.0,
-                v: VOL_UNITY,
-            },
-            AutoPoint {
-                t: 1.99,
-                v: VOL_UNITY,
-            },
-            AutoPoint { t: 2.0, v: 0.0 },
-        ],
+        points: vec![AutoPoint { t: 0.0, v: VOL_UNITY }, AutoPoint { t: 1.99, v: VOL_UNITY }, AutoPoint { t: 2.0, v: 0.0 }],
     });
     // only drums audible
     for t in p.tracks.iter_mut().skip(1) {
         t.muted = true;
     }
-    p.clips.push(Clip {
-        id: 8001,
-        track: 7,
-        start: 0.0,
-        len: 8.0,
-        offset: 0.0,
-        kind: ClipKind::Auto,
-        source: 8000,
-        muted: false,
-        gain: 0.0,
-        fade_in: 0.0,
-        fade_out: 0.0,
-        pan: 0.0,
-        norm: false,
-        rev: false,
-        tune: None,
-    });
+    p.clips.push(Clip { id: 8001, track: 7, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Auto, source: 8000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None });
     let e = Engine::new(p, Arc::new(NoPlugins));
     let out = e.render(0.0, 4.0, 0.0, 48000).unwrap();
     let at = |b: f64| (b * 60.0 / 128.0 * 48000.0) as usize * 2;
-    assert!(
-        rms(&out[at(0.0)..at(1.9)]) > 0.01,
-        "silent before the automation drops"
-    );
-    assert!(
-        rms(&out[at(2.05)..at(4.0)]) < 1e-4,
-        "volume automation did nothing"
-    );
+    assert!(rms(&out[at(0.0)..at(1.9)]) > 0.01, "silent before the automation drops");
+    assert!(rms(&out[at(2.05)..at(4.0)]) < 1e-4, "volume automation did nothing");
     // removing the automation removes its clip
-    e.apply(&[Op::RemoveAutomation { id: 8000 }], false, None)
-        .unwrap();
+    e.apply(&[Op::RemoveAutomation { id: 8000 }], false, None).unwrap();
     assert!(e.project().clips.iter().all(|c| c.kind != ClipKind::Auto));
 }
 
@@ -505,22 +384,18 @@ fn export_tail_extends_length_and_cancel_aborts() {
     assert_eq!(with_tail.len(), no_tail.len() + 48000 * 2);
 
     let cancel = AtomicBool::new(true);
-    let err = e
-        .render_cancelable(0.0, 32.0, 2.0, 48000, &cancel)
-        .unwrap_err();
+    let err = e.render_cancelable(0.0, 32.0, 2.0, 48000, &cancel).unwrap_err();
     assert!(matches!(err, EngineError::Cancelled));
 
     let mut p = Project::empty();
     for t in p.tracks.iter_mut() {
         t.muted = true;
     }
-    let silent = Engine::new(p, Arc::new(NoPlugins))
-        .render(0.0, 4.0, 0.0, 48000)
-        .unwrap();
+    let silent = Engine::new(p, Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
     let peak = silent.iter().fold(0f32, |a, b| a.max(b.abs()));
     assert!(peak < 1e-5, "empty project should be silent");
 }
-
+ 
 #[test]
 fn music_analysis_excludes_vocal_insert_and_caches() {
     let dir = std::env::temp_dir().join(format!("wave-music-{}", std::process::id()));
@@ -535,8 +410,7 @@ fn music_analysis_excludes_vocal_insert_and_caches() {
                 let mut v = 0.0f32;
                 for m in notes {
                     let f = 440.0 * 2f32.powf((m as f32 - 69.0) / 12.0);
-                    v += (std::f32::consts::TAU * f * t).sin()
-                        + 0.5 * (std::f32::consts::TAU * f * 2.0 * t).sin();
+                    v += (std::f32::consts::TAU * f * t).sin() + 0.5 * (std::f32::consts::TAU * f * 2.0 * t).sin();
                 }
                 let s = v * 0.1;
                 [s, s]
@@ -566,14 +440,7 @@ fn width_render(width: f32) -> Vec<f32> {
     let dir = std::env::temp_dir().join(format!("wave-width-{}-{}", std::process::id(), width));
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("st.wav");
-    let tone: Vec<f32> = (0..24000)
-        .flat_map(|i| {
-            [
-                (i as f32 * 0.05).sin() * 0.4,
-                (i as f32 * 0.071).sin() * 0.3,
-            ]
-        })
-        .collect();
+    let tone: Vec<f32> = (0..24000).flat_map(|i| [(i as f32 * 0.05).sin() * 0.4, (i as f32 * 0.071).sin() * 0.3]).collect();
     wave_engine::sources::write_wav(&wav, &tone, 48000).unwrap();
     let mut p = Project::empty();
     p.inserts[0].fx.clear();

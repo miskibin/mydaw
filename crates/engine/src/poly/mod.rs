@@ -31,8 +31,8 @@ use crate::dsp::out_limiter::OutLimiter;
 use crate::model::Id;
 use crate::rt::{ChanRt, InsertRt};
 use crate::synth::{pan_gains, Dest};
-use params::{ix, SYNC_BEATS};
 pub use params::{Patch, COUNT, PARAMS};
+use params::{ix, SYNC_BEATS};
 use voice::{EnvCoef, Voice};
 
 /// Voices that can sound at once.
@@ -51,15 +51,8 @@ const STOP_S: f32 = 0.006;
 
 #[derive(Clone, Copy, Debug)]
 enum Ev {
-    On {
-        key: u8,
-        vel: f32,
-        id: u32,
-        live: bool,
-    },
-    Off {
-        id: u32,
-    },
+    On { key: u8, vel: f32, id: u32, live: bool },
+    Off { id: u32 },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -111,11 +104,7 @@ impl Lfo {
                 _ => self.sh,
             };
             // steps (square, S&H) are slewed over ~2 ms so they modulate without clicks
-            self.out = if wave >= 3 {
-                self.out + (v - self.out) * slew
-            } else {
-                v
-            };
+            self.out = if wave >= 3 { self.out + (v - self.out) * slew } else { v };
             *o = self.out;
             self.ph += dt;
             if self.ph >= 1.0 {
@@ -190,16 +179,7 @@ impl SynthInst {
             stack: [(0, 0, 0.0, false); 16],
             nstack: 0,
             last_st: None,
-            lfo: [
-                Lfo {
-                    rng: 0x2545_F491 ^ chan as u32 | 1,
-                    ..Default::default()
-                },
-                Lfo {
-                    rng: 0x9E37_79B9 ^ chan as u32 | 1,
-                    ..Default::default()
-                },
-            ],
+            lfo: [Lfo { rng: 0x2545_F491 ^ chan as u32 | 1, ..Default::default() }, Lfo { rng: 0x9E37_79B9 ^ chan as u32 | 1, ..Default::default() }],
             lfo_buf: [[0.0; CHUNK]; 2],
             wheel: 0.0,
             wheel_t: 0.0,
@@ -266,19 +246,8 @@ impl SynthInst {
         let id = self.new_id();
         let at = self.now + delay as u64;
         self.dest = Some(dest);
-        self.push(Event {
-            at,
-            ev: Ev::On {
-                key,
-                vel,
-                id,
-                live: false,
-            },
-        });
-        self.push(Event {
-            at: at + len.max(1) as u64,
-            ev: Ev::Off { id },
-        });
+        self.push(Event { at, ev: Ev::On { key, vel, id, live: false } });
+        self.push(Event { at: at + len.max(1) as u64, ev: Ev::Off { id } });
     }
 
     /// A live key went down; it sounds until [`Self::key_up`] (and the pedal).
@@ -289,23 +258,12 @@ impl SynthInst {
         }
         if self.live[k] != 0 {
             let old = self.live[k];
-            self.push(Event {
-                at: self.now,
-                ev: Ev::Off { id: old },
-            });
+            self.push(Event { at: self.now, ev: Ev::Off { id: old } });
         }
         let id = self.new_id();
         self.live[k] = id;
         self.dest = Some(dest);
-        self.push(Event {
-            at: self.now,
-            ev: Ev::On {
-                key,
-                vel,
-                id,
-                live: true,
-            },
-        });
+        self.push(Event { at: self.now, ev: Ev::On { key, vel, id, live: true } });
     }
 
     pub fn key_up(&mut self, key: u8) {
@@ -317,10 +275,7 @@ impl SynthInst {
         if self.pedal && self.sustained.len() < self.sustained.capacity() {
             self.sustained.push(id);
         } else {
-            self.push(Event {
-                at: self.now,
-                ev: Ev::Off { id },
-            });
+            self.push(Event { at: self.now, ev: Ev::Off { id } });
         }
     }
 
@@ -328,10 +283,7 @@ impl SynthInst {
         self.pedal = down;
         if !down {
             while let Some(id) = self.sustained.pop() {
-                self.push(Event {
-                    at: self.now,
-                    ev: Ev::Off { id },
-                });
+                self.push(Event { at: self.now, ev: Ev::Off { id } });
             }
         }
     }
@@ -351,17 +303,11 @@ impl SynthInst {
         for k in 0..128 {
             let id = std::mem::take(&mut self.live[k]);
             if id != 0 {
-                self.push(Event {
-                    at: self.now,
-                    ev: Ev::Off { id },
-                });
+                self.push(Event { at: self.now, ev: Ev::Off { id } });
             }
         }
         while let Some(id) = self.sustained.pop() {
-            self.push(Event {
-                at: self.now,
-                ev: Ev::Off { id },
-            });
+            self.push(Event { at: self.now, ev: Ev::Off { id } });
         }
     }
 
@@ -373,11 +319,7 @@ impl SynthInst {
         self.sustained.clear();
         self.pedal = false;
         let step = 1.0 / (STOP_S * self.sr);
-        for v in self
-            .voices
-            .iter_mut()
-            .filter(|v| v.on && v.fade_step == 0.0)
-        {
+        for v in self.voices.iter_mut().filter(|v| v.on && v.fade_step == 0.0) {
             v.fade_step = step;
         }
     }
@@ -431,8 +373,7 @@ impl SynthInst {
                 // a new note on the mono voice: the old one fades out in a spare slot while
                 // the new one starts (from phase 0) and fades in, its envelopes continuing
                 // from the old levels (retrigger from the current level)
-                let (sounding, amp, menv, st) =
-                    (v.on && v.fade_step == 0.0, v.amp.v, v.menv.v, v.st);
+                let (sounding, amp, menv, st) = (v.on && v.fade_step == 0.0, v.amp.v, v.menv.v, v.st);
                 if v.on {
                     let f = self.fade_slot();
                     self.voices[f] = self.voices[0].clone();
@@ -440,15 +381,7 @@ impl SynthInst {
                         self.voices[f].fade_step = 1.0 / (STEAL_S * self.sr);
                     }
                 }
-                let from = if glide >= 1.0 && mode == 1 {
-                    if sounding {
-                        Some(st)
-                    } else {
-                        self.last_st
-                    }
-                } else {
-                    None
-                };
+                let from = if glide >= 1.0 && mode == 1 { if sounding { Some(st) } else { self.last_st } } else { None };
                 self.voices[0].start(&p, id, key, vel, live, self.age, seed, from, glide);
                 if sounding && amp > 0.002 {
                     self.voices[0].take_over(amp, menv, STEAL_S * self.sr);
@@ -491,11 +424,7 @@ impl SynthInst {
         if let Some(i) = self.voices[..POLY].iter().position(|v| !v.on) {
             return i;
         }
-        let pick = (0..POLY)
-            .filter(|&i| self.voices[i].released())
-            .min_by_key(|&i| self.voices[i].age)
-            .or_else(|| (0..POLY).min_by_key(|&i| self.voices[i].age))
-            .unwrap_or(0);
+        let pick = (0..POLY).filter(|&i| self.voices[i].released()).min_by_key(|&i| self.voices[i].age).or_else(|| (0..POLY).min_by_key(|&i| self.voices[i].age)).unwrap_or(0);
         let f = self.fade_slot();
         self.voices[f] = self.voices[pick].clone();
         let step = 1.0 / (STEAL_S * self.sr);
@@ -508,13 +437,7 @@ impl SynthInst {
     }
 
     fn fade_slot(&self) -> usize {
-        (POLY..POLY + FADES)
-            .find(|&i| !self.voices[i].on)
-            .unwrap_or_else(|| {
-                (POLY..POLY + FADES)
-                    .min_by(|&a, &b| self.voices[a].fade.total_cmp(&self.voices[b].fade))
-                    .unwrap_or(POLY)
-            })
+        (POLY..POLY + FADES).find(|&i| !self.voices[i].on).unwrap_or_else(|| (POLY..POLY + FADES).min_by(|&a, &b| self.voices[a].fade.total_cmp(&self.voices[b].fade)).unwrap_or(POLY))
     }
 
     fn apply_due(&mut self) {
@@ -535,21 +458,13 @@ impl SynthInst {
         let sr = self.sr;
         let k_amt = 1.0 - (-(m as f32) / (0.004 * sr)).exp();
         for s in 0..4 {
-            let t = (
-                self.target[ix::M1_SRC + 3 * s] as u8,
-                self.target[ix::M1_DST + 3 * s] as usize,
-                self.target[ix::M1_AMT + 3 * s],
-            );
+            let t = (self.target[ix::M1_SRC + 3 * s] as u8, self.target[ix::M1_DST + 3 * s] as usize, self.target[ix::M1_AMT + 3 * s]);
             let st = &mut self.mslots[s];
             if !self.fresh || st.0 == 0 || (st.0 == t.0 && st.1 == t.1) {
                 if st.0 != t.0 || st.1 != t.1 {
                     *st = (t.0, t.1, if self.fresh { 0.0 } else { t.2 });
                 }
-                st.2 = if self.fresh {
-                    st.2 + (t.2 - st.2) * k_amt
-                } else {
-                    t.2
-                };
+                st.2 = if self.fresh { st.2 + (t.2 - st.2) * k_amt } else { t.2 };
             } else {
                 st.2 -= st.2 * k_amt;
                 if st.2.abs() < 0.05 {
@@ -578,11 +493,7 @@ impl SynthInst {
         for j in 0..2 {
             let base = if j == 0 { ix::L1_WAVE } else { ix::L2_WAVE };
             let sync = self.cur[base + 2] as usize;
-            let hz = if sync > 0 {
-                (bpm as f32 / 60.0) / SYNC_BEATS[sync.min(SYNC_BEATS.len() - 1)]
-            } else {
-                self.cur[base + 1]
-            };
+            let hz = if sync > 0 { (bpm as f32 / 60.0) / SYNC_BEATS[sync.min(SYNC_BEATS.len() - 1)] } else { self.cur[base + 1] };
             let wave = self.cur[base] as u8;
             self.lfo[j].fill(wave, hz, sr, &mut self.lfo_buf[j][..m]);
         }
@@ -590,14 +501,7 @@ impl SynthInst {
 
     /// Renders `n` samples. Each finished stretch is handed to `sink(offset, l, r)` (already
     /// scaled by the output gains, which glide from the previous call's).
-    pub fn process(
-        &mut self,
-        n: usize,
-        bpm: f64,
-        gl: f32,
-        gr: f32,
-        mut sink: impl FnMut(usize, &[f32], &[f32]),
-    ) {
+    pub fn process(&mut self, n: usize, bpm: f64, gl: f32, gr: f32, mut sink: impl FnMut(usize, &[f32], &[f32])) {
         let mut done = 0;
         while done < n {
             self.apply_due();
@@ -624,20 +528,8 @@ impl SynthInst {
                 lfo2: &self.lfo_buf[1][..m],
                 wheel: self.wheel,
                 bend: self.bend,
-                amp: EnvCoef::new(
-                    c[ix::AMP_A],
-                    c[ix::AMP_D],
-                    c[ix::AMP_S] * 0.01,
-                    c[ix::AMP_R],
-                    self.sr,
-                ),
-                menv: EnvCoef::new(
-                    c[ix::MOD_A],
-                    c[ix::MOD_D],
-                    c[ix::MOD_S] * 0.01,
-                    c[ix::MOD_R],
-                    self.sr,
-                ),
+                amp: EnvCoef::new(c[ix::AMP_A], c[ix::AMP_D], c[ix::AMP_S] * 0.01, c[ix::AMP_R], self.sr),
+                menv: EnvCoef::new(c[ix::MOD_A], c[ix::MOD_D], c[ix::MOD_S] * 0.01, c[ix::MOD_R], self.sr),
                 slots,
                 nslots,
             };
@@ -646,8 +538,7 @@ impl SynthInst {
                 v.render(&ctx, &mut self.bl[..m], &mut self.br[..m]);
                 any |= v.on;
             }
-            self.fx
-                .process(&mut self.bl[..m], &mut self.br[..m], &self.cur, bpm);
+            self.fx.process(&mut self.bl[..m], &mut self.br[..m], &self.cur, bpm);
             let trim = 10f32.powf(self.cur[ix::FX_OUT] / 20.0);
             let (g0l, g0r) = self.gain;
             let inv = 1.0 / m as f32;
@@ -695,9 +586,7 @@ pub struct SynthBank {
 
 impl Default for SynthBank {
     fn default() -> Self {
-        Self {
-            insts: Vec::with_capacity(MAX_SYNTHS),
-        }
+        Self { insts: Vec::with_capacity(MAX_SYNTHS) }
     }
 }
 
@@ -722,10 +611,7 @@ impl SynthBank {
     }
 
     pub fn get(&mut self, chan: Id) -> Option<&mut SynthInst> {
-        self.insts
-            .iter_mut()
-            .find(|x| x.chan == chan)
-            .map(|b| &mut **b)
+        self.insts.iter_mut().find(|x| x.chan == chan).map(|b| &mut **b)
     }
 
     pub fn len(&self) -> usize {
@@ -764,20 +650,9 @@ impl SynthBank {
 
     /// Adds every instance's output into where its notes were played (a track buffer or an
     /// insert input), scaled by its channel's gain and pan.
-    pub fn render(
-        &mut self,
-        n: usize,
-        tracks: &mut [(Vec<f32>, Vec<f32>)],
-        inserts: &mut [InsertRt],
-        chans: &[ChanRt],
-        bpm: f64,
-    ) {
+    pub fn render(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], inserts: &mut [InsertRt], chans: &[ChanRt], bpm: f64) {
         for s in self.insts.iter_mut() {
-            let (g, pan) = chans
-                .iter()
-                .find(|c| c.id == s.chan)
-                .map(|c| (if c.on { c.gain } else { 0.0 }, c.pan))
-                .unwrap_or((0.0, 0.0));
+            let (g, pan) = chans.iter().find(|c| c.id == s.chan).map(|c| (if c.on { c.gain } else { 0.0 }, c.pan)).unwrap_or((0.0, 0.0));
             let (pl, pr) = pan_gains(pan);
             let out: Option<(&mut [f32], &mut [f32])> = match s.dest {
                 Some(Dest::Track(t)) => tracks.get_mut(t).map(|(l, r)| (&mut l[..], &mut r[..])),
@@ -821,15 +696,7 @@ pub fn catalog() -> SynthCatalog {
         categories: presets::CATEGORIES,
         presets: presets::all()
             .iter()
-            .map(|p| SynthPreset {
-                name: p.name,
-                category: p.category,
-                params: PARAMS
-                    .iter()
-                    .zip(p.patch.iter())
-                    .map(|(d, v)| (d.id, (*v as f64 * 1000.0).round() / 1000.0))
-                    .collect(),
-            })
+            .map(|p| SynthPreset { name: p.name, category: p.category, params: PARAMS.iter().zip(p.patch.iter()).map(|(d, v)| (d.id, (*v as f64 * 1000.0).round() / 1000.0)).collect() })
             .collect(),
     }
 }
@@ -837,12 +704,5 @@ pub fn catalog() -> SynthCatalog {
 /// A synth state holding preset `name`'s full parameter set (`None` if there is no such preset).
 pub fn preset_state(name: &str) -> Option<crate::model::SynthState> {
     let p = presets::all().into_iter().find(|p| p.name == name)?;
-    Some(crate::model::SynthState {
-        preset: Some(p.name.to_owned()),
-        params: PARAMS
-            .iter()
-            .zip(p.patch.iter())
-            .map(|(d, v)| (d.id.to_owned(), (*v as f64 * 1000.0).round() / 1000.0))
-            .collect(),
-    })
+    Some(crate::model::SynthState { preset: Some(p.name.to_owned()), params: PARAMS.iter().zip(p.patch.iter()).map(|(d, v)| (d.id.to_owned(), (*v as f64 * 1000.0).round() / 1000.0)).collect() })
 }

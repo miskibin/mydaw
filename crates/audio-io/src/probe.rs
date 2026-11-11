@@ -41,14 +41,7 @@ pub(crate) struct Probe {
 impl Probe {
     pub fn new(id: u64, signal: Vec<f32>) -> Self {
         let cap = vec![0.0; signal.len()];
-        Self {
-            id,
-            signal,
-            cap,
-            pos: 0,
-            reported_sum: 0.0,
-            reported_n: 0,
-        }
+        Self { id, signal, cap, pos: 0, reported_sum: 0.0, reported_n: 0 }
     }
     pub fn done(&self) -> bool {
         self.pos >= self.signal.len()
@@ -96,12 +89,7 @@ pub fn click_plan(rate: u32) -> ClickPlan {
     for &a in &at {
         signal[a..a + n].copy_from_slice(&burst);
     }
-    ClickPlan {
-        signal,
-        burst,
-        at,
-        max_lag,
-    }
+    ClickPlan { signal, burst, at, max_lag }
 }
 
 /// Normalised cross-correlation of the clicks with `cap` at `lag`, over the given clicks.
@@ -109,9 +97,7 @@ fn ncc(plan: &ClickPlan, cap: &[f32], clicks: &[usize], lag: usize, b_energy: f6
     let n = plan.burst.len();
     let (mut num, mut en) = (0.0f64, 0.0f64);
     for &a in clicks {
-        let Some(x) = cap.get(a + lag..a + lag + n) else {
-            continue;
-        };
+        let Some(x) = cap.get(a + lag..a + lag + n) else { continue };
         for (s, b) in x.iter().zip(&plan.burst) {
             num += *s as f64 * *b as f64;
             en += *s as f64 * *s as f64;
@@ -129,25 +115,14 @@ fn ncc(plan: &ClickPlan, cap: &[f32], clicks: &[usize], lag: usize, b_energy: f6
 pub fn find_lag(plan: &ClickPlan, cap: &[f32], rate: u32) -> Option<(usize, f32)> {
     let b_energy: f64 = plan.burst.iter().map(|x| *x as f64 * *x as f64).sum();
     let all: Vec<usize> = plan.at.clone();
-    let curve: Vec<f64> = (0..plan.max_lag)
-        .map(|l| ncc(plan, cap, &all, l, b_energy))
-        .collect();
-    let (lag, peak) = curve
-        .iter()
-        .copied()
-        .enumerate()
-        .max_by(|a, b| a.1.total_cmp(&b.1))?;
+    let curve: Vec<f64> = (0..plan.max_lag).map(|l| ncc(plan, cap, &all, l, b_energy)).collect();
+    let (lag, peak) = curve.iter().copied().enumerate().max_by(|a, b| a.1.total_cmp(&b.1))?;
     if peak < 0.1 {
         return None;
     }
     let ms1 = (rate as usize / 1000).max(1);
     // how clearly the peak stands out from everything more than 2 ms away (echoes, noise)
-    let second = curve
-        .iter()
-        .enumerate()
-        .filter(|(l, _)| l.abs_diff(lag) > 2 * ms1)
-        .map(|(_, v)| *v)
-        .fold(0.0, f64::max);
+    let second = curve.iter().enumerate().filter(|(l, _)| l.abs_diff(lag) > 2 * ms1).map(|(_, v)| *v).fold(0.0, f64::max);
     // (a room echo at half the direct sound is normal and costs nothing)
     let prominence = (2.0 * (1.0 - second / peak)).clamp(0.0, 1.0);
     // each click on its own: does it agree within 1 ms?
@@ -156,9 +131,7 @@ pub fn find_lag(plan: &ClickPlan, cap: &[f32], rate: u32) -> Option<(usize, f32)
         .iter()
         .filter(|&&a| {
             let one = [a];
-            let best = (0..plan.max_lag).max_by(|&x, &y| {
-                ncc(plan, cap, &one, x, b_energy).total_cmp(&ncc(plan, cap, &one, y, b_energy))
-            });
+            let best = (0..plan.max_lag).max_by(|&x, &y| ncc(plan, cap, &one, x, b_energy).total_cmp(&ncc(plan, cap, &one, y, b_energy)));
             best.is_some_and(|b| b.abs_diff(lag) <= ms1)
         })
         .count() as f64
@@ -171,17 +144,8 @@ pub fn report(plan: &ClickPlan, probe: &Probe, rate: u32) -> Result<LatencyRepor
     let (lag, confidence) = find_lag(plan, &probe.cap, rate).ok_or("No click came back. Hold the microphone close to the speaker (or connect an output to an input with a cable), raise the input gain and try again.")?;
     let ms = |f: f64| (f * 1000.0 / rate as f64) as f32;
     let round_trip_ms = ms(lag as f64);
-    let reported_ms = if probe.reported_n > 0 {
-        ms(probe.reported_sum / probe.reported_n as f64)
-    } else {
-        0.0
-    };
-    Ok(LatencyReport {
-        round_trip_ms,
-        reported_ms,
-        suggested_offset_ms: round_trip_ms - reported_ms,
-        confidence,
-    })
+    let reported_ms = if probe.reported_n > 0 { ms(probe.reported_sum / probe.reported_n as f64) } else { 0.0 };
+    Ok(LatencyReport { round_trip_ms, reported_ms, suggested_offset_ms: round_trip_ms - reported_ms, confidence })
 }
 
 #[cfg(test)]
@@ -198,16 +162,8 @@ mod tests {
         let n = plan.signal.len();
         (0..n)
             .map(|i| {
-                let d = if i >= delay {
-                    plan.signal[i - delay] * gain
-                } else {
-                    0.0
-                };
-                let echo = if i >= delay + 700 {
-                    -plan.signal[i - delay - 700] * gain * 0.4
-                } else {
-                    0.0
-                };
+                let d = if i >= delay { plan.signal[i - delay] * gain } else { 0.0 };
+                let echo = if i >= delay + 700 { -plan.signal[i - delay - 700] * gain * 0.4 } else { 0.0 };
                 d + echo + noise * rnd()
             })
             .collect()

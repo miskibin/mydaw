@@ -70,10 +70,7 @@ async fn get_state(app: St<'_>) -> R<StateDto> {
 
 #[tauri::command]
 async fn apply_ops(app: St<'_>, ops: Vec<Op>, transient: Option<bool>) -> R<Value> {
-    let rev = app
-        .engine
-        .apply(&ops, transient.unwrap_or(false), None)
-        .map_err(es)?;
+    let rev = app.engine.apply(&ops, transient.unwrap_or(false), None).map_err(es)?;
     Ok(json!({ "revision": rev }))
 }
 
@@ -131,14 +128,7 @@ async fn transport_stop(app: St<'_>) -> R<()> {
 }
 
 #[tauri::command]
-async fn transport_set(
-    app: St<'_>,
-    metro: Option<bool>,
-    count_in: Option<bool>,
-    rec: Option<bool>,
-    monitor: Option<bool>,
-    start_beat: Option<f64>,
-) -> R<wave_engine::TransportDto> {
+async fn transport_set(app: St<'_>, metro: Option<bool>, count_in: Option<bool>, rec: Option<bool>, monitor: Option<bool>, start_beat: Option<f64>) -> R<wave_engine::TransportDto> {
     let e = app.engine.clone();
     let t = tauri::async_runtime::spawn_blocking(move || {
         if let Some(b) = start_beat {
@@ -156,9 +146,7 @@ async fn transport_set(
         let need = t.rec || t.monitor;
         if need || !t.playing {
             let a = app.inner().clone();
-            let st = tauri::async_runtime::spawn_blocking(move || a.audio.set_input(need))
-                .await
-                .map_err(es)?;
+            let st = tauri::async_runtime::spawn_blocking(move || a.audio.set_input(need)).await.map_err(es)?;
             *app.status.lock() = st;
         }
     }
@@ -182,26 +170,16 @@ async fn watch_fx(app: St<'_>, ids: Vec<u64>) -> R<()> {
 // ---------------------------------------------------------------- audio sources
 
 #[tauri::command]
-async fn import_audio(
-    app: St<'_>,
-    paths: Vec<String>,
-    track: Option<u32>,
-    beat: Option<f64>,
-) -> R<Value> {
+async fn import_audio(app: St<'_>, paths: Vec<String>, track: Option<u32>, beat: Option<f64>) -> R<Value> {
     let a = app.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        actions::import(&a, &json!({ "paths": paths, "track": track, "beat": beat }))
-    })
-    .await
-    .map_err(es)?
+    tauri::async_runtime::spawn_blocking(move || actions::import(&a, &json!({ "paths": paths, "track": track, "beat": beat })))
+        .await
+        .map_err(es)?
 }
 
 #[tauri::command]
 async fn source_peaks(app: St<'_>, id: u64, norm: Option<bool>, rev: Option<bool>) -> R<Response> {
-    let p = app
-        .engine
-        .source_peaks(id, norm.unwrap_or(false), rev.unwrap_or(false))
-        .ok_or("no such source")?;
+    let p = app.engine.source_peaks(id, norm.unwrap_or(false), rev.unwrap_or(false)).ok_or("no such source")?;
     let mut b = Vec::with_capacity(p.len() * 4);
     for x in p {
         b.extend_from_slice(&x.to_le_bytes());
@@ -210,28 +188,15 @@ async fn source_peaks(app: St<'_>, id: u64, norm: Option<bool>, rev: Option<bool
 }
 
 #[tauri::command]
-async fn pitch_analyze(
-    app: St<'_>,
-    clip_id: u64,
-) -> R<std::sync::Arc<wave_engine::pitch::PitchAnalysis>> {
+async fn pitch_analyze(app: St<'_>, clip_id: u64) -> R<std::sync::Arc<wave_engine::pitch::PitchAnalysis>> {
     let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || e.pitch_analysis(clip_id))
-        .await
-        .map_err(es)?
-        .map_err(es)
+    tauri::async_runtime::spawn_blocking(move || e.pitch_analysis(clip_id)).await.map_err(es)?.map_err(es)
 }
 
 #[tauri::command]
-async fn pitch_target(
-    app: St<'_>,
-    clip_id: u64,
-    reference: Option<wave_engine::RefTune>,
-) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
+async fn pitch_target(app: St<'_>, clip_id: u64, reference: Option<wave_engine::RefTune>) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
     let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || e.pitch_target(clip_id, reference))
-        .await
-        .map_err(es)?
-        .map_err(es)
+    tauri::async_runtime::spawn_blocking(move || e.pitch_target(clip_id, reference)).await.map_err(es)?.map_err(es)
 }
 
 #[tauri::command]
@@ -245,10 +210,7 @@ async fn f0_model_install(app: St<'_>, handle: AppHandle) -> R<models::ModelStat
     let h = handle.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
         models::install(|done, total| {
-            let _ = h.emit(
-                "model-progress",
-                json!({ "id": "rmvpe", "done": done, "total": total }),
-            );
+            let _ = h.emit("model-progress", json!({ "id": "rmvpe", "done": done, "total": total }));
         })?;
         models::activate(&a.engine).map(|_| ())
     })
@@ -256,25 +218,15 @@ async fn f0_model_install(app: St<'_>, handle: AppHandle) -> R<models::ModelStat
     .map_err(es)?;
     *app.model_error.lock() = res.as_ref().err().cloned();
     if let Err(e) = &res {
-        let _ = handle.emit(
-            "model-progress",
-            json!({ "id": "rmvpe", "done": 0, "total": 0, "error": e }),
-        );
+        let _ = handle.emit("model-progress", json!({ "id": "rmvpe", "done": 0, "total": 0, "error": e }));
     }
     res.map(|_| models::status(&app.engine, None))
 }
 
 #[tauri::command]
-async fn music_analyze(
-    app: St<'_>,
-    clip_id: Option<u64>,
-    exclude_fx: Option<u64>,
-) -> R<wave_engine::music::MusicAnalysis> {
+async fn music_analyze(app: St<'_>, clip_id: Option<u64>, exclude_fx: Option<u64>) -> R<wave_engine::music::MusicAnalysis> {
     let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || e.music_analysis(clip_id, exclude_fx))
-        .await
-        .map_err(es)?
-        .map_err(es)
+    tauri::async_runtime::spawn_blocking(move || e.music_analysis(clip_id, exclude_fx)).await.map_err(es)?.map_err(es)
 }
 
 /// "Auto wokal": measures a vocal clip (and the beat's key) and returns the calibrated
@@ -282,51 +234,24 @@ async fn music_analyze(
 /// `bake_rider: true`: the rider is left out of `chain` and returned as `riderBake`, for
 /// `bake_rider` (then the chain goes on the insert with no live look-ahead delay).
 #[tauri::command]
-async fn auto_vocal_plan(
-    app: St<'_>,
-    clip_id: u64,
-    beat_clip_id: Option<u64>,
-    style: Option<wave_engine::autovocal::Style>,
-    bake_rider: Option<bool>,
-) -> R<wave_engine::autovocal::AutoVocalPlan> {
+async fn auto_vocal_plan(app: St<'_>, clip_id: u64, beat_clip_id: Option<u64>, style: Option<wave_engine::autovocal::Style>, bake_rider: Option<bool>) -> R<wave_engine::autovocal::AutoVocalPlan> {
     let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        e.auto_vocal_plan(
-            clip_id,
-            beat_clip_id,
-            style.unwrap_or_default(),
-            bake_rider.unwrap_or(false),
-        )
-    })
-    .await
-    .map_err(es)?
-    .map_err(es)
+    tauri::async_runtime::spawn_blocking(move || e.auto_vocal_plan(clip_id, beat_clip_id, style.unwrap_or_default(), bake_rider.unwrap_or(false))).await.map_err(es)?.map_err(es)
 }
 
 /// Renders the Vocal Rider (`params`, e.g. a plan's `riderBake.params`) into an audio clip's
 /// audio as a new source and swaps the clip onto it (one undo step; the original source stays).
 #[tauri::command]
-async fn bake_rider(
-    app: St<'_>,
-    clip_id: u64,
-    params: std::collections::BTreeMap<String, f64>,
-) -> R<Value> {
+async fn bake_rider(app: St<'_>, clip_id: u64, params: std::collections::BTreeMap<String, f64>) -> R<Value> {
     let e = app.engine.clone();
-    let (source, clip) =
-        tauri::async_runtime::spawn_blocking(move || e.bake_rider(clip_id, &params))
-            .await
-            .map_err(es)?
-            .map_err(es)?;
+    let (source, clip) = tauri::async_runtime::spawn_blocking(move || e.bake_rider(clip_id, &params)).await.map_err(es)?.map_err(es)?;
     Ok(json!({ "sourceId": source, "clipId": clip }))
 }
 
 #[tauri::command]
 async fn clip_peaks(app: St<'_>, clip_id: u64) -> R<Response> {
     let e = app.engine.clone();
-    let p = tauri::async_runtime::spawn_blocking(move || e.clip_peaks(clip_id))
-        .await
-        .map_err(es)?
-        .ok_or("no such clip")?;
+    let p = tauri::async_runtime::spawn_blocking(move || e.clip_peaks(clip_id)).await.map_err(es)?.ok_or("no such clip")?;
     let mut b = Vec::with_capacity(p.len() * 4);
     for x in p {
         b.extend_from_slice(&x.to_le_bytes());
@@ -337,20 +262,14 @@ async fn clip_peaks(app: St<'_>, clip_id: u64) -> R<Response> {
 #[tauri::command]
 async fn trim_clip(app: St<'_>, clip_id: u64) -> R<Value> {
     let e = app.engine.clone();
-    let id = tauri::async_runtime::spawn_blocking(move || e.trim_clip(clip_id))
-        .await
-        .map_err(es)?
-        .map_err(es)?;
+    let id = tauri::async_runtime::spawn_blocking(move || e.trim_clip(clip_id)).await.map_err(es)?.map_err(es)?;
     Ok(json!({ "sourceId": id }))
 }
 
 #[tauri::command]
 async fn flatten_comp(app: St<'_>, clip_id: u64) -> R<Value> {
     let e = app.engine.clone();
-    let id = tauri::async_runtime::spawn_blocking(move || e.flatten_comp(clip_id))
-        .await
-        .map_err(es)?
-        .map_err(es)?;
+    let id = tauri::async_runtime::spawn_blocking(move || e.flatten_comp(clip_id)).await.map_err(es)?.map_err(es)?;
     Ok(json!({ "sourceId": id }))
 }
 
@@ -367,23 +286,12 @@ async fn preview_clip(app: St<'_>, clip_id: u64) -> R<()> {
 #[tauri::command]
 async fn preview_file(app: St<'_>, path: String) -> R<()> {
     let e = app.engine.clone();
-    tauri::async_runtime::spawn_blocking(move || e.preview_file(&PathBuf::from(path)))
-        .await
-        .map_err(es)?
-        .map_err(es)
+    tauri::async_runtime::spawn_blocking(move || e.preview_file(&PathBuf::from(path))).await.map_err(es)?.map_err(es)
 }
 
 #[tauri::command]
-async fn note_audition(
-    app: St<'_>,
-    ch: u64,
-    key: Option<u8>,
-    vel: Option<f32>,
-    pattern: Option<u64>,
-) -> R<()> {
-    app.engine
-        .note_audition(ch, key, vel.unwrap_or(0.8), pattern)
-        .map_err(es)
+async fn note_audition(app: St<'_>, ch: u64, key: Option<u8>, vel: Option<f32>, pattern: Option<u64>) -> R<()> {
+    app.engine.note_audition(ch, key, vel.unwrap_or(0.8), pattern).map_err(es)
 }
 
 /// Computer keyboard as a piano: key down / up on a Channel Rack channel.
@@ -413,9 +321,7 @@ async fn audio_hosts() -> R<Vec<wave_audio_io::HostInfo>> {
 
 #[tauri::command]
 async fn audio_devices(host: String) -> R<wave_audio_io::DeviceList> {
-    tauri::async_runtime::spawn_blocking(move || wave_audio_io::devices(&host))
-        .await
-        .map_err(es)
+    tauri::async_runtime::spawn_blocking(move || wave_audio_io::devices(&host)).await.map_err(es)
 }
 
 #[tauri::command]
@@ -424,11 +330,7 @@ async fn audio_get_config(app: St<'_>) -> R<AudioStatus> {
 }
 
 #[tauri::command]
-async fn audio_set_config(
-    app: St<'_>,
-    handle: AppHandle,
-    mut config: AudioConfig,
-) -> R<AudioStatus> {
+async fn audio_set_config(app: St<'_>, handle: AppHandle, mut config: AudioConfig) -> R<AudioStatus> {
     let a = app.inner().clone();
     let st = tauri::async_runtime::spawn_blocking(move || {
         // a config sent without `recOffsetMs` keeps the calibration (a device change does
@@ -478,9 +380,7 @@ async fn audio_measure_latency(app: St<'_>) -> R<LatencyReport> {
 #[tauri::command]
 async fn midi_list_devices(app: St<'_>) -> R<Vec<MidiDevice>> {
     let a = app.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || a.midi.list())
-        .await
-        .map_err(es)
+    tauri::async_runtime::spawn_blocking(move || a.midi.list()).await.map_err(es)
 }
 
 /// Chooses the keyboard (`None` = none) and opens it; the choice is saved and reopened at startup.
@@ -530,19 +430,13 @@ async fn library_install(app: St<'_>, handle: AppHandle, id: String) -> R<()> {
     let kid = id.clone();
     let res = tauri::async_runtime::spawn_blocking(move || {
         library::install(&kid, |done, total| {
-            let _ = h.emit(
-                "library-progress",
-                json!({ "id": kid, "done": done, "total": total }),
-            );
+            let _ = h.emit("library-progress", json!({ "id": kid, "done": done, "total": total }));
         })
     })
     .await
     .map_err(es)?;
     if let Err(e) = &res {
-        let _ = handle.emit(
-            "library-progress",
-            json!({ "id": id, "done": 0, "total": 0, "error": e }),
-        );
+        let _ = handle.emit("library-progress", json!({ "id": id, "done": 0, "total": 0, "error": e }));
     } else if id == wave_engine::keys::KIT_ID {
         // the piano just arrived: Keys channels start playing
         keys::ensure(app.inner(), app.engine.uses_keys());
@@ -595,22 +489,12 @@ async fn project_new(app: St<'_>) -> R<StateDto> {
 async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R<Value> {
     let path = match path {
         Some(p) => Some(PathBuf::from(p)),
-        None => handle
-            .dialog()
-            .file()
-            .add_filter("WAVE project", &["wave"])
-            .blocking_pick_file()
-            .and_then(|p| p.into_path().ok()),
+        None => handle.dialog().file().add_filter("WAVE project", &["wave"]).blocking_pick_file().and_then(|p| p.into_path().ok()),
     };
-    let Some(path) = path else {
-        return Ok(json!({ "cancelled": true }));
-    };
+    let Some(path) = path else { return Ok(json!({ "cancelled": true })) };
     let e = app.engine.clone();
     let p2 = path.clone();
-    let warnings = tauri::async_runtime::spawn_blocking(move || e.open(&p2))
-        .await
-        .map_err(es)?
-        .map_err(es)?;
+    let warnings = tauri::async_runtime::spawn_blocking(move || e.open(&p2)).await.map_err(es)?.map_err(es)?;
     let mut s = app.settings.lock();
     s.last_project = Some(path.display().to_string());
     s.save();
@@ -622,26 +506,15 @@ async fn project_save(app: St<'_>, handle: AppHandle, save_as: Option<bool>) -> 
     let cur = app.engine.state().path.map(PathBuf::from);
     let path = match (cur, save_as.unwrap_or(false)) {
         (Some(p), false) => Some(p),
-        _ => handle
-            .dialog()
-            .file()
-            .add_filter("WAVE project", &["wave"])
-            .set_file_name("Song.wave")
-            .blocking_save_file()
-            .and_then(|p| p.into_path().ok()),
+        _ => handle.dialog().file().add_filter("WAVE project", &["wave"]).set_file_name("Song.wave").blocking_save_file().and_then(|p| p.into_path().ok()),
     };
-    let Some(mut path) = path else {
-        return Ok(json!({ "cancelled": true }));
-    };
+    let Some(mut path) = path else { return Ok(json!({ "cancelled": true })) };
     if path.extension().is_none() {
         path.set_extension("wave");
     }
     let e = app.engine.clone();
     let p2 = path.clone();
-    tauri::async_runtime::spawn_blocking(move || e.save(&p2))
-        .await
-        .map_err(es)?
-        .map_err(es)?;
+    tauri::async_runtime::spawn_blocking(move || e.save(&p2)).await.map_err(es)?.map_err(es)?;
     let mut s = app.settings.lock();
     s.last_project = Some(path.display().to_string());
     s.save();
@@ -654,15 +527,7 @@ async fn project_save(app: St<'_>, handle: AppHandle, save_as: Option<bool>) -> 
 /// Opens a native save dialog first. The render runs off the UI thread so playback
 /// keeps going; call `export_cancel` to abort before a file is written.
 #[tauri::command]
-async fn export_audio(
-    app: St<'_>,
-    handle: AppHandle,
-    use_loop: bool,
-    tail: f64,
-    sample_rate: u32,
-    format: Option<String>,
-    mp3_kbps: Option<u32>,
-) -> R<Value> {
+async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64, sample_rate: u32, format: Option<String>, mp3_kbps: Option<u32>) -> R<Value> {
     let fmt = actions::ExportFormat::parse(format.as_deref(), mp3_kbps)?;
     let ext = fmt.extension();
     if !(sample_rate == 44_100 || sample_rate == 48_000) {
@@ -676,35 +541,19 @@ async fn export_audio(
     let suggested = st
         .path
         .as_deref()
-        .and_then(|p| {
-            PathBuf::from(p)
-                .file_stem()
-                .map(|s| format!("{}.{ext}", s.to_string_lossy()))
-        })
+        .and_then(|p| PathBuf::from(p).file_stem().map(|s| format!("{}.{ext}", s.to_string_lossy())))
         .unwrap_or_else(|| format!("Song.{ext}"));
     let picked = handle
         .dialog()
         .file()
-        .add_filter(
-            if ext == "mp3" {
-                "MP3 audio"
-            } else {
-                "WAV audio"
-            },
-            &[ext],
-        )
+        .add_filter(if ext == "mp3" { "MP3 audio" } else { "WAV audio" }, &[ext])
         .set_file_name(&suggested)
         .blocking_save_file()
         .and_then(|p| p.into_path().ok());
     let Some(mut path) = picked else {
         return Ok(json!({ "cancelled": true }));
     };
-    if path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case(ext))
-        != Some(true)
-    {
+    if path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case(ext)) != Some(true) {
         path.set_extension(ext);
     }
     app.export_cancel.store(false, Ordering::Relaxed);
@@ -733,19 +582,11 @@ async fn export_cancel(app: St<'_>) -> R<()> {
 #[tauri::command]
 async fn vst3_scan(app: St<'_>, rescan: bool) -> R<Vec<Value>> {
     let p = app.plugins.clone();
-    tauri::async_runtime::spawn_blocking(move || p.scan(rescan))
-        .await
-        .map_err(es)
+    tauri::async_runtime::spawn_blocking(move || p.scan(rescan)).await.map_err(es)
 }
 
 #[tauri::command]
-async fn vst3_add(
-    app: St<'_>,
-    insert_id: u64,
-    path: String,
-    cid: String,
-    index: Option<usize>,
-) -> R<Value> {
+async fn vst3_add(app: St<'_>, insert_id: u64, path: String, cid: String, index: Option<usize>) -> R<Value> {
     let (id, rev) = actions::vst3_add(&app, insert_id, &path, &cid, index)?;
     Ok(json!({ "fxId": id, "revision": rev }))
 }
@@ -768,11 +609,7 @@ async fn vst3_set_param(app: St<'_>, fx_id: u64, id: u32, value: f64) -> R<()> {
 #[tauri::command]
 async fn app_info(app: St<'_>, handle: AppHandle) -> R<updater::AppInfo> {
     let s = app.settings.lock();
-    Ok(updater::AppInfo {
-        version: handle.package_info().version.to_string(),
-        seen_version: s.seen_version.clone(),
-        auto_update: !s.no_auto_update,
-    })
+    Ok(updater::AppInfo { version: handle.package_info().version.to_string(), seen_version: s.seen_version.clone(), auto_update: !s.no_auto_update })
 }
 
 #[tauri::command]
@@ -824,9 +661,7 @@ async fn update_install(app: St<'_>, handle: AppHandle) -> R<()> {
             // the old version keeps running: audio comes back
             let a = app.inner().clone();
             let cfg = a.settings.lock().audio.clone();
-            let st = tauri::async_runtime::spawn_blocking(move || a.audio.start(cfg))
-                .await
-                .map_err(es)?;
+            let st = tauri::async_runtime::spawn_blocking(move || a.audio.start(cfg)).await.map_err(es)?;
             *app.status.lock() = st.clone();
             let _ = handle.emit("audio-status", &st);
             Err(e)
@@ -871,12 +706,7 @@ pub fn run() {
     let audio = AudioIo::spawn(engine.clone());
     let events: Arc<std::sync::OnceLock<AppHandle>> = Arc::new(std::sync::OnceLock::new());
     let midi = {
-        let (e1, e2, ev1, ev2) = (
-            engine.clone(),
-            engine.clone(),
-            events.clone(),
-            events.clone(),
-        );
+        let (e1, e2, ev1, ev2) = (engine.clone(), engine.clone(), events.clone(), events.clone());
         MidiInput::start(
             Arc::new(wave_midi_in::MidirBackend),
             wave_midi_in::Hooks {
@@ -923,18 +753,11 @@ pub fn run() {
     // live session for the CLI
     let weak = Arc::downgrade(&app);
     let handler: Arc<wave_session::Handler> = Arc::new(move |req: &wave_session::Request| {
-        let Some(app) = weak.upgrade() else {
-            return Err(wave_session::ErrorBody::new("GONE", "the app is closing"));
-        };
+        let Some(app) = weak.upgrade() else { return Err(wave_session::ErrorBody::new("GONE", "the app is closing")) };
         let res = actions::control(&app, &req.command, &req.args, req.if_revision);
         let rev = app.engine.revision();
         res.map(|d| (d, rev)).map_err(|m| {
-            let code = m
-                .split(':')
-                .next()
-                .filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2)
-                .unwrap_or("REFUSED")
-                .to_string();
+            let code = m.split(':').next().filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2).unwrap_or("REFUSED").to_string();
             wave_session::ErrorBody::new(&code, m)
         })
     });
@@ -977,13 +800,7 @@ pub fn run() {
             let h = tapp.handle().clone();
             let a = app_setup.clone();
             engine.on_change(move |dto| {
-                keys::ensure(
-                    &a,
-                    dto.project
-                        .channels
-                        .iter()
-                        .any(|c| matches!(c.src, wave_engine::ChannelSrc::Keys { .. })),
-                );
+                keys::ensure(&a, dto.project.channels.iter().any(|c| matches!(c.src, wave_engine::ChannelSrc::Keys { .. })));
                 let _ = h.emit("state", dto);
             });
             if let Some(w) = tapp.get_webview_window("main") {
@@ -992,70 +809,15 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            get_state,
-            apply_ops,
-            begin_gesture,
-            end_gesture,
-            undo,
-            redo,
-            fx_catalog,
-            transport_play,
-            transport_stop,
-            transport_set,
-            telemetry_subscribe,
-            watch_fx,
-            import_audio,
-            source_peaks,
-            clip_peaks,
-            pitch_analyze,
-            pitch_target,
-            f0_model_status,
-            f0_model_install,
-            music_analyze,
-            auto_vocal_plan,
-            bake_rider,
-            trim_clip,
-            flatten_comp,
-            comp_audition,
-            preview_clip,
-            preview_file,
-            preview_stop,
-            note_audition,
-            typing_note,
-            pattern_play,
-            audio_hosts,
-            audio_devices,
-            audio_get_config,
-            audio_set_config,
-            audio_measure_latency,
-            midi_list_devices,
-            midi_select_device,
-            midi_status,
-            midi_set_target,
-            library_list,
-            library_install,
-            keys_status,
-            library_files,
-            library_add_folder,
-            library_remove_folder,
-            project_new,
-            project_open,
-            project_save,
-            export_audio,
-            export_cancel,
-            vst3_scan,
-            vst3_add,
-            vst3_editor,
-            vst3_params,
-            vst3_set_param,
-            cli_status,
-            app_info,
-            update_set_auto,
-            update_mark_seen,
-            update_check,
-            update_download,
-            update_install,
-            open_release_page
+            get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
+            transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
+            audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
+            midi_list_devices, midi_select_device, midi_status, midi_set_target,
+            library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,
+            project_new, project_open, project_save, export_audio, export_cancel,
+            vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status,
+            app_info, update_set_auto, update_mark_seen, update_check, update_download, update_install, open_release_page
         ])
         .build(tauri::generate_context!())
         .expect("error while building WAVE")

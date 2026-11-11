@@ -51,11 +51,7 @@ fn feed(rt: &mut Rt, at: &mut usize, total: usize, input: &dyn Fn(usize) -> f32)
 }
 
 fn take_audio(p: &Project, source: Id) -> Vec<f32> {
-    let s = p
-        .sources
-        .iter()
-        .find(|s| s.id == source)
-        .expect("take source");
+    let s = p.sources.iter().find(|s| s.id == source).expect("take source");
     let a = Audio::load(Path::new(&s.path)).expect("take file");
     a.content().chunks(2).map(|f| f[0]).collect()
 }
@@ -66,12 +62,7 @@ fn a_take_lines_up_with_the_beat_the_singer_heard() {
     // round trip. A sound made exactly on beat 5 must land on beat 5 of the take.
     let mut p = armed();
     let other = p.tracks[1].insert;
-    p.inserts
-        .iter_mut()
-        .find(|m| m.id == other)
-        .unwrap()
-        .fx
-        .push(new_fx(7000, FxKind::Tune, p.bpm));
+    p.inserts.iter_mut().find(|m| m.id == other).unwrap().fx.push(new_fx(7000, FxKind::Tune, p.bpm));
     let bpm = p.bpm;
     let pdc = wave_engine::vocal::tune_latency(SR as f32);
     assert_eq!(wave_engine::engine::playback_latency(&p, SR as f32), pdc);
@@ -85,36 +76,14 @@ fn a_take_lines_up_with_the_beat_the_singer_heard() {
     // mic sound reaches the engine `input` frames later: `io + pdc` after beat 5 in all
     let hit = frames(1.0, bpm) + io + pdc;
     let mut at = 0;
-    feed(&mut rt, &mut at, frames(3.0, bpm), &|f| {
-        if f == hit {
-            0.9
-        } else {
-            0.0
-        }
-    });
+    feed(&mut rt, &mut at, frames(3.0, bpm), &|f| if f == hit { 0.9 } else { 0.0 });
     e.stop();
     let p = e.project();
-    let clip = p
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Audio)
-        .expect("a take");
-    assert!(
-        (clip.start - 4.0).abs() < 1e-9,
-        "take starts at {}",
-        clip.start
-    );
+    let clip = p.clips.iter().find(|c| c.kind == ClipKind::Audio).expect("a take");
+    assert!((clip.start - 4.0).abs() < 1e-9, "take starts at {}", clip.start);
     let audio = take_audio(&p, clip.source);
-    let onset = audio
-        .iter()
-        .position(|x| x.abs() > 0.5)
-        .expect("the hit was recorded");
-    assert_eq!(
-        onset,
-        frames(1.0, bpm),
-        "hit lands {} frames off beat 5",
-        onset as i64 - frames(1.0, bpm) as i64
-    );
+    let onset = audio.iter().position(|x| x.abs() > 0.5).expect("the hit was recorded");
+    assert_eq!(onset, frames(1.0, bpm), "hit lands {} frames off beat 5", onset as i64 - frames(1.0, bpm) as i64);
 }
 
 #[test]
@@ -130,13 +99,7 @@ fn loop_passes_keep_their_boundaries_with_latency() {
     e.play(8.0);
     let pass = frames(4.0, bpm);
     // what the singer does during heard pass k reaches the engine `io` frames late
-    let level = move |f: usize| {
-        if f < io {
-            0.0
-        } else {
-            0.1 * (((f - io) / pass) + 1) as f32
-        }
-    };
+    let level = move |f: usize| if f < io { 0.0 } else { 0.1 * (((f - io) / pass) + 1) as f32 };
     let mut at = 0;
     feed(&mut rt, &mut at, pass * 3 + 2000, &level);
     e.stop();
@@ -151,11 +114,7 @@ fn loop_passes_keep_their_boundaries_with_latency() {
         // drift by ≤ 1 frame each against this ideal input: allow a few at the edges; a
         // misplaced boundary would be off by the whole latency, 777 frames)
         let bad = (4..a.len() - 4).find(|&i| (a[i] - want).abs() > 1e-4);
-        assert_eq!(
-            bad.map(|i| (i, a[i], a.len())),
-            None,
-            "take {k} holds audio of another pass (want {want})"
-        );
+        assert_eq!(bad.map(|i| (i, a[i], a.len())), None, "take {k} holds audio of another pass (want {want})");
     }
 }
 
@@ -174,17 +133,9 @@ fn arming_while_playing_punches_in_at_the_playhead() {
     e.set_transport(None, None, Some(false), None);
     assert!(e.state().transport.playing);
     let p = e.project();
-    let clips: Vec<_> = p
-        .clips
-        .iter()
-        .filter(|c| c.kind == ClipKind::Audio)
-        .collect();
+    let clips: Vec<_> = p.clips.iter().filter(|c| c.kind == ClipKind::Audio).collect();
     assert_eq!(clips.len(), 1, "punch-in recorded nothing");
-    assert!(
-        (clips[0].start - punch).abs() < 1e-9,
-        "take starts at {} instead of {punch}",
-        clips[0].start
-    );
+    assert!((clips[0].start - punch).abs() < 1e-9, "take starts at {} instead of {punch}", clips[0].start);
     let secs = clips[0].len * 60.0 / p.bpm;
     assert!((secs - 1.0).abs() < 0.02, "take is {secs} s");
     e.stop();
@@ -207,14 +158,7 @@ fn arming_while_playing_without_an_armed_track_records_nothing() {
 
 /// Like `feed`, but the device layer reports `io` as the measured round trip of every
 /// callback (as `wave-audio-io` does once real input flows), before the block is processed.
-fn feed_measured(
-    e: &Engine,
-    rt: &mut Rt,
-    at: &mut usize,
-    total: usize,
-    io: u32,
-    input: &dyn Fn(usize) -> f32,
-) {
+fn feed_measured(e: &Engine, rt: &mut Rt, at: &mut usize, total: usize, io: u32, input: &dyn Fn(usize) -> f32) {
     let (mut l, mut r) = (vec![0f32; BLOCK], vec![0f32; BLOCK]);
     let end = *at + total;
     while *at < end {
@@ -228,19 +172,9 @@ fn feed_measured(
 
 fn first_take_onset(e: &Engine) -> (f64, usize) {
     let p = e.project();
-    let clip = p
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Audio)
-        .expect("a take");
+    let clip = p.clips.iter().find(|c| c.kind == ClipKind::Audio).expect("a take");
     let audio = take_audio(&p, clip.source);
-    (
-        clip.start,
-        audio
-            .iter()
-            .position(|x| x.abs() > 0.5)
-            .expect("the hit was recorded"),
-    )
+    (clip.start, audio.iter().position(|x| x.abs() > 0.5).expect("the hit was recorded"))
 }
 
 const MS1: i64 = SR as i64 / 1000;
@@ -261,13 +195,7 @@ fn record_with_stale_start(tag: &str, at_start: u32, count_in: bool) {
     // a hit sung exactly when beat 5 is heard reaches the engine `io` frames later
     let hit = lead + frames(1.0, bpm) + io as usize;
     let mut at = 0;
-    feed_measured(&e, &mut rt, &mut at, lead + frames(3.0, bpm), io, &|f| {
-        if f == hit {
-            0.9
-        } else {
-            0.0
-        }
-    });
+    feed_measured(&e, &mut rt, &mut at, lead + frames(3.0, bpm), io, &|f| if f == hit { 0.9 } else { 0.0 });
     e.stop();
     let (start, onset) = first_take_onset(&e);
     assert!((start - 4.0).abs() < 1e-9, "take starts at {start}");
@@ -306,19 +234,10 @@ fn punch_in_with_an_input_opened_at_the_punch_lines_up() {
     let punch = e.shared().beat();
     // a hit sung when beat (punch + 2) is heard
     let hit = punch_at + frames(2.0, bpm) + io as usize;
-    feed_measured(&e, &mut rt, &mut at, frames(3.0, bpm), io, &|f| {
-        if f == hit {
-            0.9
-        } else {
-            0.0
-        }
-    });
+    feed_measured(&e, &mut rt, &mut at, frames(3.0, bpm), io, &|f| if f == hit { 0.9 } else { 0.0 });
     e.set_transport(None, None, Some(false), None);
     let (start, onset) = first_take_onset(&e);
-    assert!(
-        (start - punch).abs() < 1e-9,
-        "take starts at {start} instead of {punch}"
-    );
+    assert!((start - punch).abs() < 1e-9, "take starts at {start} instead of {punch}");
     let want = ((punch + 2.0 - start) * 60.0 / bpm * SR as f64).round() as i64;
     let off = onset as i64 - want;
     assert!(off.abs() <= MS1, "punch-in hit lands {off} frames off");

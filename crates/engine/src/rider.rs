@@ -134,13 +134,7 @@ pub struct KWeight {
 impl KWeight {
     pub fn new(sr: f32) -> Self {
         let mut k = Self::default();
-        k.shelf.set(
-            FilterType::HighShelf,
-            sr,
-            1500.0,
-            std::f32::consts::FRAC_1_SQRT_2,
-            4.0,
-        );
+        k.shelf.set(FilterType::HighShelf, sr, 1500.0, std::f32::consts::FRAC_1_SQRT_2, 4.0);
         k.hp.set(FilterType::Highpass, sr, 38.0, 0.5, 0.0);
         k
     }
@@ -183,12 +177,7 @@ struct AutoEst {
 
 impl Default for AutoEst {
     fn default() -> Self {
-        Self {
-            top: -30.0,
-            floor: -80.0,
-            target: -36.0,
-            seeded: false,
-        }
+        Self { top: -30.0, floor: -80.0, target: -36.0, seeded: false }
     }
 }
 
@@ -289,10 +278,7 @@ impl Default for Rider {
 impl Rider {
     /// A rider that records its per-frame gain curve (offline analysis and tests).
     pub fn with_log(frames: usize) -> Self {
-        Self {
-            log: Vec::with_capacity(frames),
-            ..Self::default()
-        }
+        Self { log: Vec::with_capacity(frames), ..Self::default() }
     }
 
     /// The recorded (gain dB, confidence, active) per 10 ms frame, frame 0 first.
@@ -318,16 +304,8 @@ impl Rider {
 
     fn configure(&mut self) {
         let v = self.params.map(|p| p.values).unwrap_or_default();
-        self.speed = if self.params.is_some() {
-            v[idx::SPEED].round().clamp(0.0, 1.0) as usize
-        } else {
-            0
-        };
-        self.mode = if self.params.is_some() {
-            look_mode(v[idx::LOOK])
-        } else {
-            look::SHORT
-        };
+        self.speed = if self.params.is_some() { v[idx::SPEED].round().clamp(0.0, 1.0) as usize } else { 0 };
+        self.mode = if self.params.is_some() { look_mode(v[idx::LOOK]) } else { look::SHORT };
         (self.wf, self.wp) = windows(self.speed);
         (self.fa, self.ap, self.back) = ahead(self.speed, self.mode);
         self.hop = hop(self.sr);
@@ -344,13 +322,7 @@ impl Rider {
 
     /// The state after a long stretch of digital silence (also the start state).
     fn go_dormant(&mut self) {
-        self.frames.fill(Frame {
-            pk: P_MIN,
-            pf: P_MIN,
-            lf: -140.0,
-            lp: -140.0,
-            ..Frame::default()
-        });
+        self.frames.fill(Frame { pk: P_MIN, pf: P_MIN, lf: -140.0, lp: -140.0, ..Frame::default() });
         self.n_frames = 0;
         self.acc = 0.0;
         self.acc_n = 0;
@@ -374,13 +346,7 @@ impl Rider {
     /// One more 10 ms frame of input analysed: advance every stage of the pipeline.
     fn push_frame(&mut self, pk: f64) {
         let n = self.n_frames as isize;
-        self.frames[n as usize & MASK] = Frame {
-            pk: pk + P_MIN,
-            pf: P_MIN,
-            lf: -140.0,
-            lp: -140.0,
-            ..Frame::default()
-        };
+        self.frames[n as usize & MASK] = Frame { pk: pk + P_MIN, pf: P_MIN, lf: -140.0, lp: -140.0, ..Frame::default() };
         self.n_frames += 1;
 
         // 1. word level at m (window offsets −(wf − 1 − fa) .. +fa: centred, or trailing live)
@@ -441,11 +407,7 @@ impl Rider {
             den += f.conf as f64;
         }
         let fq = *self.fr(q);
-        let p_phrase = if den / self.wp as f64 > 1e-3 {
-            num / den.max(1e-9)
-        } else {
-            fq.pf
-        };
+        let p_phrase = if den / self.wp as f64 > 1e-3 { num / den.max(1e-9) } else { fq.pf };
         let lp = (10.0 * (p_phrase + P_MIN).log10()) as f32;
         let e = lp - fq.lf;
         let db = e.signum() * (e.abs() - DEADBAND_DB).max(0.0);
@@ -458,11 +420,7 @@ impl Rider {
         }
         g = g.clamp(-self.down, self.up);
         // forward slew
-        let a = if g < self.fw_state {
-            self.a_cut
-        } else {
-            self.a_boost
-        };
+        let a = if g < self.fw_state { self.a_cut } else { self.a_boost };
         self.fw_state = a * self.fw_state + (1.0 - a) * g;
         {
             let f = &mut self.frames[q.rem_euclid(RING as isize) as usize];
@@ -482,16 +440,11 @@ impl Rider {
             k -= 1;
         }
         // live: no future frames to slew back from, the forward slew alone
-        let gs = if self.mode == look::LIVE {
-            self.fr(qq).fw
-        } else {
-            0.5 * (self.fr(qq).fw + st)
-        };
+        let gs = if self.mode == look::LIVE { self.fr(qq).fw } else { 0.5 * (self.fr(qq).fw + st) };
         self.frames[qq.rem_euclid(RING as isize) as usize].gs = gs;
         if qq >= 0 && self.log.len() < self.log.capacity() && qq as usize == self.log.len() {
             let f = self.fr(qq);
-            self.log
-                .push([gs, f.conf, if f.active { 1.0 } else { 0.0 }]);
+            self.log.push([gs, f.conf, if f.active { 1.0 } else { 0.0 }]);
         }
     }
 
@@ -523,11 +476,7 @@ impl Rider {
         let u = s as isize - h / 2;
         let q0 = u.div_euclid(h);
         let w = u.rem_euclid(h) as f32 / h as f32;
-        let g0 = if q0 < 0 {
-            self.fr(0).gs
-        } else {
-            self.fr(q0).gs
-        };
+        let g0 = if q0 < 0 { self.fr(0).gs } else { self.fr(q0).gs };
         let g1 = self.fr(q0 + 1).gs;
         g0 + (g1 - g0) * w
     }
@@ -563,10 +512,7 @@ impl Processor for Rider {
 
     fn set_params(&mut self, p: &ParamBlock) {
         self.params = Some(*p);
-        let (speed, mode) = (
-            p.values[idx::SPEED].round().clamp(0.0, 1.0) as usize,
-            look_mode(p.values[idx::LOOK]),
-        );
+        let (speed, mode) = (p.values[idx::SPEED].round().clamp(0.0, 1.0) as usize, look_mode(p.values[idx::LOOK]));
         if self.sr > 0.0 && (speed != self.speed || mode != self.mode) {
             // the buffers are sized for the longest look-ahead in `prepare`: no allocation
             self.configure();
@@ -722,23 +668,11 @@ mod tests {
         for look in [0.0, 1.0, 2.0] {
             for speed in [0.0, 1.0] {
                 // amount and phrase at 0: unity gain, so output = input delayed by the latency
-                let p = params(&[
-                    ("amount", 0.0),
-                    ("phrase", 0.0),
-                    ("look", look),
-                    ("speed", speed),
-                    ("auto", 0.0),
-                ]);
+                let p = params(&[("amount", 0.0), ("phrase", 0.0), ("look", look), ("speed", speed), ("auto", 0.0)]);
                 let x = words(&[-12.0, -20.0, -15.0], 0.3, 0.1);
                 let y = render(FxKind::Rider, &p, &x, SR);
-                let d = x
-                    .iter()
-                    .zip(&y)
-                    .fold(0f32, |m, (a, b)| m.max((a - b).abs()));
-                assert!(
-                    d < 1e-6,
-                    "look {look} speed {speed}: output differs from the input by {d}"
-                );
+                let d = x.iter().zip(&y).fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+                assert!(d < 1e-6, "look {look} speed {speed}: output differs from the input by {d}");
             }
         }
         let mut fx = catalog::new_fx(1, FxKind::Rider, 120.0);
@@ -748,18 +682,12 @@ mod tests {
         assert_eq!(catalog::latency(&fx, 48000.0), (9 + 20 + 2) * 480);
         fx.params.insert("look".into(), 2.0);
         assert_eq!(catalog::latency(&fx, 48000.0), 0, "live: no delay");
-        assert_eq!(
-            catalog::new_fx(2, FxKind::Rider, 120.0).params["look"],
-            2.0,
-            "a new rider is live"
-        );
+        assert_eq!(catalog::new_fx(2, FxKind::Rider, 120.0).params["look"], 2.0, "a new rider is live");
     }
 
     #[test]
     fn live_mode_evens_words_without_delay() {
-        let lv: Vec<f32> = (0..24)
-            .map(|i| if (i / 2) % 2 == 0 { -14.0 } else { -24.0 })
-            .collect();
+        let lv: Vec<f32> = (0..24).map(|i| if (i / 2) % 2 == 0 { -14.0 } else { -24.0 }).collect();
         let x = words(&lv, 0.5, 0.08);
         let mut p = measured(&x);
         p.insert("look".into(), 2.0);
@@ -767,33 +695,22 @@ mod tests {
         let segs = metrics::words(&x, SR);
         let (_, a, _) = metrics::m2(&x, SR, &segs);
         let (_, b, _) = metrics::m2(&y, SR, &segs);
-        assert!(
-            a - b > 2.0,
-            "live: word spread {a:.2} → {b:.2} dB: not evened"
-        );
-        assert!(
-            b > 1.0,
-            "live: word spread {a:.2} → {b:.2} dB: flattened completely"
-        );
+        assert!(a - b > 2.0, "live: word spread {a:.2} → {b:.2} dB: not evened");
+        assert!(b > 1.0, "live: word spread {a:.2} → {b:.2} dB: flattened completely");
         // (zero delay itself: `latency_is_what_the_catalog_reports`)
     }
 
     #[test]
     fn evens_words_toward_their_phrase() {
         // a phrase of alternating loud/quiet words, 10 dB apart
-        let lv: Vec<f32> = (0..24)
-            .map(|i| if (i / 2) % 2 == 0 { -14.0 } else { -24.0 })
-            .collect();
+        let lv: Vec<f32> = (0..24).map(|i| if (i / 2) % 2 == 0 { -14.0 } else { -24.0 }).collect();
         let x = words(&lv, 0.5, 0.08);
         let y = render(FxKind::Rider, &measured(&x), &x, SR);
         let segs = metrics::words(&x, SR);
         let (_, a, _) = metrics::m2(&x, SR, &segs);
         let (_, b, _) = metrics::m2(&y, SR, &segs);
         assert!(a - b > 3.0, "word spread {a:.2} → {b:.2} dB: not evened");
-        assert!(
-            b > 1.0,
-            "word spread {a:.2} → {b:.2} dB: flattened completely"
-        );
+        assert!(b > 1.0, "word spread {a:.2} → {b:.2} dB: flattened completely");
     }
 
     #[test]
@@ -810,17 +727,13 @@ mod tests {
         let (_, log) = rider_curve(&measured(&x), &x, SR);
         let h = hop(SR);
         // the middle of the noise stretch (away from the slews at its edges)
-        let max = log[(n0 / h + 60)..(n1 / h - 60)]
-            .iter()
-            .fold(f32::MIN, |m, f| m.max(f[0]));
+        let max = log[(n0 / h + 60)..(n1 / h - 60)].iter().fold(f32::MIN, |m, f| m.max(f[0]));
         assert!(max < 0.25, "noise lifted by up to {max:.2} dB");
     }
 
     #[test]
     fn auto_target_converges_and_rides() {
-        let lv: Vec<f32> = (0..60)
-            .map(|i| if (i / 2) % 2 == 0 { -14.0 } else { -24.0 })
-            .collect();
+        let lv: Vec<f32> = (0..60).map(|i| if (i / 2) % 2 == 0 { -14.0 } else { -24.0 }).collect();
         let x = words(&lv, 0.5, 0.08);
         let y = render(FxKind::Rider, &params(&[("auto", 1.0)]), &x, SR);
         // second half: the estimates have settled
@@ -844,17 +757,9 @@ mod tests {
         let x = words(&[-12.0, -20.0, -14.0, -18.0, -10.0], 0.3, 0.1);
         let mut fx = catalog::new_fx(1, FxKind::Rider, 120.0);
         fx.params.insert("look".into(), look);
-        assert_eq!(
-            fx.params["auto"], 1.0,
-            "the auto-target estimates are what outlives parking"
-        );
+        assert_eq!(fx.params["auto"], 1.0, "the auto-target estimates are what outlives parking");
         let pb = catalog::param_block(&fx);
-        let ctx = ProcessCtx {
-            sample_rate: SR,
-            bpm: 120.0,
-            beat: 0.0,
-            playing: true,
-        };
+        let ctx = ProcessCtx { sample_rate: SR, bpm: 120.0, beat: 0.0, playing: true };
         let mk = || {
             let mut r = Rider::default();
             r.prepare(SR, blk);
@@ -879,9 +784,6 @@ mod tests {
         b.park();
         let (ya, yb) = (run(&mut a, &x), run(&mut b, &x));
         assert!(ya.iter().any(|v| v.abs() > 1e-3));
-        assert_eq!(
-            ya, yb,
-            "look {look}: a parked rider must continue exactly like one that processed the silence"
-        );
+        assert_eq!(ya, yb, "look {look}: a parked rider must continue exactly like one that processed the silence");
     }
 }

@@ -89,30 +89,15 @@ enum Plan {
 }
 
 /// Decides from the chosen device, the open one and the listed ports.
-fn plan(
-    wanted: Option<&MidiDevice>,
-    open: Option<&MidiDevice>,
-    ports: &[MidiDevice],
-) -> (Plan, Option<MidiDevice>) {
+fn plan(wanted: Option<&MidiDevice>, open: Option<&MidiDevice>, ports: &[MidiDevice]) -> (Plan, Option<MidiDevice>) {
     let Some(w) = wanted else {
-        return (
-            open.map(|o| Plan::Close(format!("{} closed", o.name)))
-                .unwrap_or(Plan::Nothing),
-            None,
-        );
+        return (open.map(|o| Plan::Close(format!("{} closed", o.name))).unwrap_or(Plan::Nothing), None);
     };
     // the same port by id, else a port of the same name (ids may change with the USB slot)
-    let found = ports
-        .iter()
-        .find(|p| p.id == w.id)
-        .or_else(|| ports.iter().find(|p| p.name == w.name))
-        .cloned();
+    let found = ports.iter().find(|p| p.id == w.id).or_else(|| ports.iter().find(|p| p.name == w.name)).cloned();
     match (open, found) {
         (Some(o), Some(f)) if o.id == f.id => (Plan::Nothing, Some(f)),
-        (Some(o), Some(f)) => (
-            Plan::Close(format!("{} replaced by {}", o.name, f.name)),
-            Some(f),
-        ),
+        (Some(o), Some(f)) => (Plan::Close(format!("{} replaced by {}", o.name, f.name)), Some(f)),
         (Some(o), None) => (Plan::Close(format!("{} was disconnected", o.name)), None),
         (None, Some(f)) => (Plan::Open(f.id.clone()), Some(f)),
         (None, None) => (Plan::Absent, None),
@@ -143,14 +128,7 @@ fn unpack(v: u64) -> (u64, Option<LastNote>) {
     if count == 0 {
         return (0, None);
     }
-    (
-        count,
-        Some(LastNote {
-            key: (v >> 8) as u8 & 0x7F,
-            velocity: v as u8,
-            on: v >> 16 & 1 == 1,
-        }),
-    )
+    (count, Some(LastNote { key: (v >> 8) as u8 & 0x7F, velocity: v as u8, on: v >> 16 & 1 == 1 }))
 }
 
 impl MidiInput {
@@ -160,17 +138,7 @@ impl MidiInput {
     }
 
     pub fn start_with(backend: Arc<dyn Backend>, hooks: Hooks, poll: Duration) -> Arc<Self> {
-        let m = Arc::new(Self {
-            backend,
-            hooks,
-            inner: Mutex::new(Inner {
-                wanted: None,
-                open: None,
-                error: None,
-                target: None,
-            }),
-            last: Arc::new(AtomicU64::new(0)),
-        });
+        let m = Arc::new(Self { backend, hooks, inner: Mutex::new(Inner { wanted: None, open: None, error: None, target: None }), last: Arc::new(AtomicU64::new(0)) });
         let weak: Weak<Self> = Arc::downgrade(&m);
         thread::Builder::new()
             .name("wave-midi-watch".into())
@@ -194,14 +162,7 @@ impl MidiInput {
 
     fn status_of(&self, g: &Inner) -> MidiStatus {
         let (note_count, last_note) = unpack(self.last.load(Relaxed));
-        MidiStatus {
-            connected: g.open.as_ref().map(|(d, _)| d.clone()),
-            selected: g.wanted.clone(),
-            error: g.error.clone(),
-            last_note,
-            note_count,
-            target: g.target,
-        }
+        MidiStatus { connected: g.open.as_ref().map(|(d, _)| d.clone()), selected: g.wanted.clone(), error: g.error.clone(), last_note, note_count, target: g.target }
     }
 
     /// Chooses the device (`None` = no device) and opens it now. Remembered across unplugging:
@@ -209,16 +170,8 @@ impl MidiInput {
     pub fn select(&self, id: Option<&str>, name_hint: Option<&str>) -> MidiStatus {
         let ports = self.backend.list();
         let wanted = id.map(|id| {
-            let name = ports
-                .iter()
-                .find(|p| p.id == id)
-                .map(|p| p.name.clone())
-                .or_else(|| name_hint.map(String::from))
-                .unwrap_or_else(|| id.to_string());
-            MidiDevice {
-                id: id.to_string(),
-                name,
-            }
+            let name = ports.iter().find(|p| p.id == id).map(|p| p.name.clone()).or_else(|| name_hint.map(String::from)).unwrap_or_else(|| id.to_string());
+            MidiDevice { id: id.to_string(), name }
         });
         {
             let mut g = self.inner.lock();
@@ -243,11 +196,7 @@ impl MidiInput {
     pub fn reconcile(&self) -> MidiStatus {
         let ports = self.backend.list();
         let mut g = self.inner.lock();
-        let before = (
-            g.open.as_ref().map(|(d, _)| d.id.clone()),
-            g.error.clone(),
-            g.wanted.clone(),
-        );
+        let before = (g.open.as_ref().map(|(d, _)| d.id.clone()), g.error.clone(), g.wanted.clone());
         let open_dev = g.open.as_ref().map(|(d, _)| d.clone());
         let (action, found) = plan(g.wanted.as_ref(), open_dev.as_ref(), &ports);
         if let (Some(f), Some(w)) = (&found, g.wanted.as_mut()) {
@@ -260,11 +209,7 @@ impl MidiInput {
                 }
             }
             Plan::Absent => {
-                let n = g
-                    .wanted
-                    .as_ref()
-                    .map(|d| d.name.clone())
-                    .unwrap_or_default();
+                let n = g.wanted.as_ref().map(|d| d.name.clone()).unwrap_or_default();
                 g.error.get_or_insert(format!("{n} is not connected"));
             }
             Plan::Close(why) => {
@@ -281,11 +226,7 @@ impl MidiInput {
                 self.open_port(&mut g, &id, dev);
             }
         }
-        let after = (
-            g.open.as_ref().map(|(d, _)| d.id.clone()),
-            g.error.clone(),
-            g.wanted.clone(),
-        );
+        let after = (g.open.as_ref().map(|(d, _)| d.id.clone()), g.error.clone(), g.wanted.clone());
         let st = self.status_of(&g);
         drop(g);
         if before != after {
@@ -295,15 +236,8 @@ impl MidiInput {
     }
 
     fn open_port(&self, g: &mut Inner, id: &str, dev: MidiDevice) {
-        let sink = CallbackState {
-            message: self.hooks.message.clone(),
-            note: self.hooks.note.clone(),
-            last: self.last.clone(),
-        };
-        match self
-            .backend
-            .connect(id, Box::new(move |raw: &[u8]| sink.handle(raw)))
-        {
+        let sink = CallbackState { message: self.hooks.message.clone(), note: self.hooks.note.clone(), last: self.last.clone() };
+        match self.backend.connect(id, Box::new(move |raw: &[u8]| sink.handle(raw))) {
             Ok(conn) => {
                 g.open = Some((dev, conn));
                 g.error = None;
@@ -328,16 +262,8 @@ impl CallbackState {
         let Some(m) = MidiMsg::parse(raw) else { return };
         (self.message)(m);
         let n = match m {
-            MidiMsg::NoteOn { key, vel, .. } => LastNote {
-                key,
-                velocity: vel,
-                on: true,
-            },
-            MidiMsg::NoteOff { key, .. } => LastNote {
-                key,
-                velocity: 0,
-                on: false,
-            },
+            MidiMsg::NoteOn { key, vel, .. } => LastNote { key, velocity: vel, on: true },
+            MidiMsg::NoteOff { key, .. } => LastNote { key, velocity: 0, on: false },
             _ => return,
         };
         let count = (self.last.load(Relaxed) >> 24) + 1;
@@ -353,33 +279,16 @@ pub struct MidirBackend;
 
 impl Backend for MidirBackend {
     fn list(&self) -> Vec<MidiDevice> {
-        let Ok(mut input) = midir::MidiInput::new("wave-list") else {
-            return vec![];
-        };
+        let Ok(mut input) = midir::MidiInput::new("wave-list") else { return vec![] };
         input.ignore(midir::Ignore::All);
-        input
-            .ports()
-            .iter()
-            .filter_map(|p| {
-                Some(MidiDevice {
-                    id: p.id(),
-                    name: input.port_name(p).ok()?,
-                })
-            })
-            .collect()
+        input.ports().iter().filter_map(|p| Some(MidiDevice { id: p.id(), name: input.port_name(p).ok()? })).collect()
     }
 
     fn connect(&self, id: &str, mut on_msg: RawSink) -> Result<Connection, String> {
         let mut input = midir::MidiInput::new("wave").map_err(|e| e.to_string())?;
         input.ignore(midir::Ignore::All);
-        let port = input
-            .ports()
-            .into_iter()
-            .find(|p| p.id() == id)
-            .ok_or("the port is gone")?;
-        let conn = input
-            .connect(&port, "wave-in", move |_us, bytes, _| on_msg(bytes), ())
-            .map_err(|e| e.to_string())?;
+        let port = input.ports().into_iter().find(|p| p.id() == id).ok_or("the port is gone")?;
+        let conn = input.connect(&port, "wave-in", move |_us, bytes, _| on_msg(bytes), ()).map_err(|e| e.to_string())?;
         Ok(Box::new(conn))
     }
 }

@@ -31,16 +31,7 @@ fn tail_heavy() -> Project {
                 ins.fx.push(fx);
             }
         }
-        for kind in [
-            FxKind::Eq,
-            FxKind::Comp,
-            FxKind::Sat,
-            FxKind::Delay,
-            FxKind::Reverb,
-            FxKind::Deess,
-            FxKind::Fet,
-            FxKind::Limit,
-        ] {
+        for kind in [FxKind::Eq, FxKind::Comp, FxKind::Sat, FxKind::Delay, FxKind::Reverb, FxKind::Deess, FxKind::Fet, FxKind::Limit] {
             next += 1;
             let mut fx = new_fx(next, kind, bpm);
             if kind == FxKind::Reverb || kind == FxKind::Delay {
@@ -87,10 +78,7 @@ fn skipping_wakes_up_on_new_signal() {
     let off = e.render(0.0, to, 2.0, 48000).unwrap();
     let d = max_diff(&on, &off);
     assert!(d < 1e-6, "skipping changed the render by {d}");
-    assert!(
-        rms(&off[off.len() - 96000..]) > 1e-4,
-        "the second burst must sound"
-    );
+    assert!(rms(&off[off.len() - 96000..]) > 1e-4, "the second burst must sound");
 }
 
 #[test]
@@ -121,11 +109,6 @@ fn parallel_render_is_bit_identical() {
     e.set_render_workers(6);
     let six = e.render(0.0, 8.0, 3.0, 48000).unwrap();
     assert_eq!(one.len(), six.len());
-    assert!(
-        one.iter()
-            .zip(&six)
-            .all(|(a, b)| a.to_bits() == b.to_bits()),
-        "worker threads changed the render"
-    );
+    assert!(one.iter().zip(&six).all(|(a, b)| a.to_bits() == b.to_bits()), "worker threads changed the render");
     assert!(rms(&one) > 0.01);
 }

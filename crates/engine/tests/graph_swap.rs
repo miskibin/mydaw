@@ -37,24 +37,16 @@ fn setup(rider: bool, tag: &str) -> (Arc<Engine>, Rt) {
         let mut f = new_fx(7000, FxKind::Rider, p.bpm);
         f.params.insert("look".into(), 1.0);
         let ins = p.tracks[1].insert;
-        p.inserts
-            .iter_mut()
-            .find(|m| m.id == ins)
-            .unwrap()
-            .fx
-            .push(f);
+        p.inserts.iter_mut().find(|m| m.id == ins).unwrap().fx.push(f);
     }
     let e = Engine::new(p, Arc::new(NoPlugins));
     let dir = std::env::temp_dir().join(format!("wave-swap-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("tone.wav");
-    let x: Vec<f32> = (0..SR as usize * 2 * 15)
-        .map(|i| 0.2 * (i as f32 * 0.05).sin() + 0.25)
-        .collect();
+    let x: Vec<f32> = (0..SR as usize * 2 * 15).map(|i| 0.2 * (i as f32 * 0.05).sin() + 0.25).collect();
     wave_engine::sources::write_wav(&wav, &x, SR).unwrap();
     for t in [2, 4, 5] {
-        e.import_audio(std::slice::from_ref(&wav), Some((t, 0.0)))
-            .unwrap();
+        e.import_audio(std::slice::from_ref(&wav), Some((t, 0.0))).unwrap();
     }
     let mut rt = e.create_rt(SR as f32, BLOCK);
     e.play(0.0);
@@ -74,35 +66,17 @@ fn run(rt: &mut Rt, n: usize) -> Vec<f32> {
 
 fn put(e: &Engine, track: usize, fx: Fx) {
     let ins = e.project().tracks[track].insert;
-    e.apply(
-        &[Op::PutFx {
-            insert_id: ins,
-            fx,
-            index: None,
-        }],
-        false,
-        None,
-    )
-    .unwrap();
+    e.apply(&[Op::PutFx { insert_id: ins, fx, index: None }], false, None).unwrap();
 }
 
 #[test]
 fn effect_edits_do_not_drop_the_compensated_audio() {
     let (e, mut rt) = setup(true, "rider");
-    assert!(
-        longest_gap(&run(&mut rt, SR as usize / 2)) < 4,
-        "the tone plays before any edit"
-    );
+    assert!(longest_gap(&run(&mut rt, SR as usize / 2)) < 4, "the tone plays before any edit");
     let bpm = e.project().bpm;
     let steps: [(&str, Fx); 4] = [
         ("adding Voice", new_fx(9000, FxKind::Voice, bpm)),
-        (
-            "bypassing Voice",
-            Fx {
-                bypass: true,
-                ..new_fx(9000, FxKind::Voice, bpm)
-            },
-        ),
+        ("bypassing Voice", Fx { bypass: true, ..new_fx(9000, FxKind::Voice, bpm) }),
         ("switching Voice back on", new_fx(9000, FxKind::Voice, bpm)),
         ("adding an EQ", new_fx(9001, FxKind::Eq, bpm)),
     ];
@@ -115,11 +89,7 @@ fn effect_edits_do_not_drop_the_compensated_audio() {
         out.extend(run(&mut rt, SR as usize * 3 / 2));
         let gap = longest_gap(&out);
         eprintln!("{what}: longest gap {gap} frames, block with the graph swap {swap_us:.0} us");
-        assert!(
-            gap < 4,
-            "{what} on another insert silenced the mix for {:.0} ms",
-            gap as f64 / SR as f64 * 1e3
-        );
+        assert!(gap < 4, "{what} on another insert silenced the mix for {:.0} ms", gap as f64 / SR as f64 * 1e3);
     }
 }
 
@@ -133,19 +103,9 @@ fn a_latency_change_costs_at_most_the_change() {
     let lat = wave_engine::engine::playback_latency(&e.project(), SR as f32);
     assert!(lat > 0, "Voice has latency");
     let gap = longest_gap(&run(&mut rt, SR as usize));
-    assert!(
-        gap <= lat + BLOCK,
-        "gap {gap} frames for a latency change of {lat}"
-    );
+    assert!(gap <= lat + BLOCK, "gap {gap} frames for a latency change of {lat}");
     // and bypassing it (latency back to 0) skips ahead instead of pausing
-    put(
-        &e,
-        3,
-        Fx {
-            bypass: true,
-            ..new_fx(9000, FxKind::Voice, bpm)
-        },
-    );
+    put(&e, 3, Fx { bypass: true, ..new_fx(9000, FxKind::Voice, bpm) });
     let gap = longest_gap(&run(&mut rt, SR as usize));
     assert!(gap < 4, "gap {gap} frames when the latency drops");
 }

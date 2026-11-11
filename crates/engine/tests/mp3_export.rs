@@ -18,17 +18,10 @@ fn mp3_size_header_and_decode() {
         write_mp3(&path, &sine(sr, 2.0, 0.5), sr, kbps, Some("My Song")).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[..3], b"ID3", "ID3v2 tag leads the file");
-        assert!(
-            bytes.windows(7).any(|w| w == b"My Song"),
-            "title is in the tag"
-        );
+        assert!(bytes.windows(7).any(|w| w == b"My Song"), "title is in the tag");
         let expect = kbps as f64 * 1000.0 / 8.0 * 2.0;
         let ratio = bytes.len() as f64 / expect;
-        assert!(
-            (0.9..=1.1).contains(&ratio),
-            "size {} vs {expect} (ratio {ratio})",
-            bytes.len()
-        );
+        assert!((0.9..=1.1).contains(&ratio), "size {} vs {expect} (ratio {ratio})", bytes.len());
         let d = wave_audio_file::decode_stereo(&path, |_| None).unwrap();
         assert!((d.seconds() - 2.0).abs() < 0.1, "decoded {} s", d.seconds());
     }
@@ -36,9 +29,7 @@ fn mp3_size_header_and_decode() {
 
 #[test]
 fn mp3_without_title_starts_with_frame_sync_and_rejects_bad_kbps() {
-    let path = std::env::temp_dir()
-        .join("wave_mp3_test")
-        .join("notitle.mp3");
+    let path = std::env::temp_dir().join("wave_mp3_test").join("notitle.mp3");
     write_mp3(&path, &sine(44_100, 1.0, 0.5), 44_100, 192, None).unwrap();
     let b = std::fs::read(&path).unwrap();
     assert!(&b[..3] == b"ID3" || (b[0] == 0xFF && b[1] & 0xE0 == 0xE0));

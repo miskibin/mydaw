@@ -35,20 +35,12 @@ fn rider(id: Id, bpm: f64) -> Fx {
 
 fn add_fx(p: &mut Project, track: usize, fx: Fx) {
     let ins = p.tracks[track].insert;
-    p.inserts
-        .iter_mut()
-        .find(|m| m.id == ins)
-        .unwrap()
-        .fx
-        .push(fx);
+    p.inserts.iter_mut().find(|m| m.id == ins).unwrap().fx.push(fx);
 }
 
 fn rider_latency(p: &Project) -> usize {
     let pdc = wave_engine::engine::playback_latency(p, SR as f32);
-    assert!(
-        pdc > SR as usize,
-        "the long Rider should delay playback by over a second, got {pdc}"
-    );
+    assert!(pdc > SR as usize, "the long Rider should delay playback by over a second, got {pdc}");
     pdc
 }
 
@@ -98,10 +90,7 @@ fn onset(x: &[f32], th: f32) -> Option<usize> {
 /// Audio clips start on the first frame at or after their beat: allow that one frame.
 fn assert_near(got: Option<usize>, want: usize, what: &str) {
     let got = got.unwrap_or_else(|| panic!("{what}: nothing came out"));
-    assert!(
-        got.abs_diff(want) <= 1,
-        "{what}: at frame {got}, want {want}"
-    );
+    assert!(got.abs_diff(want) <= 1, "{what}: at frame {got}, want {want}");
 }
 
 #[test]
@@ -116,18 +105,8 @@ fn monitored_input_is_not_delayed_by_a_rider_on_another_insert() {
     e.play(0.0);
     let hit = 5000;
     let mut at = 0;
-    let out = run(&mut rt, &mut at, 20000, &|f| {
-        if f == hit {
-            0.9
-        } else {
-            0.0
-        }
-    });
-    assert_eq!(
-        onset(&out, 0.1),
-        Some(hit),
-        "the singer hears themselves late"
-    );
+    let out = run(&mut rt, &mut at, 20000, &|f| if f == hit { 0.9 } else { 0.0 });
+    assert_eq!(onset(&out, 0.1), Some(hit), "the singer hears themselves late");
 }
 
 #[test]
@@ -146,34 +125,15 @@ fn monitoring_skips_look_ahead_on_its_own_insert_and_playback_stays_aligned() {
     e.play(0.0);
     let hit = 3000;
     let mut at = 0;
-    let out = run(&mut rt, &mut at, frames(1.0, bpm) + pdc + 4000, &|f| {
-        if f == hit {
-            0.9
-        } else {
-            0.0
-        }
-    });
-    assert_eq!(
-        onset(&out, 0.1),
-        Some(hit),
-        "live input delayed on its own insert"
-    );
+    let out = run(&mut rt, &mut at, frames(1.0, bpm) + pdc + 4000, &|f| if f == hit { 0.9 } else { 0.0 });
+    assert_eq!(onset(&out, 0.1), Some(hit), "live input delayed on its own insert");
     // both clips sound together, `pdc` after beat 1 was rendered: 0.4 + 0.4
     let beat1 = frames(1.0, bpm) + pdc;
     let after = &out[hit + 10..];
     let first = onset(after, 0.1).map(|i| i + hit + 10);
-    assert_eq!(
-        first,
-        Some(beat1),
-        "playback is not compensated on the monitored insert"
-    );
-    let peak = out[beat1..beat1 + 150]
-        .iter()
-        .fold(0f32, |a, b| a.max(b.abs()));
-    assert!(
-        (peak - 0.8).abs() < 0.02,
-        "the two clips do not line up (peak {peak})"
-    );
+    assert_eq!(first, Some(beat1), "playback is not compensated on the monitored insert");
+    let peak = out[beat1..beat1 + 150].iter().fold(0f32, |a, b| a.max(b.abs()));
+    assert!((peak - 0.8).abs() < 0.02, "the two clips do not line up (peak {peak})");
 }
 
 #[test]
@@ -205,16 +165,8 @@ fn the_click_lines_up_with_the_music_under_a_long_latency() {
         p
     });
     let (late, _) = clicks(true, pdc + span);
-    assert_eq!(
-        onset(&late, 1e-4),
-        Some(pdc + first),
-        "the click on beat 0 must come out with the music on beat 0"
-    );
-    let diff = plain
-        .iter()
-        .zip(&late[pdc..])
-        .map(|(a, b)| (a - b).abs())
-        .fold(0f32, f32::max);
+    assert_eq!(onset(&late, 1e-4), Some(pdc + first), "the click on beat 0 must come out with the music on beat 0");
+    let diff = plain.iter().zip(&late[pdc..]).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
     assert!(diff < 1e-6, "the delayed click train differs by {diff}");
 
     // and a clip on beat 2 comes out `pdc` after beat 2, where the click on beat 2 is
@@ -228,19 +180,11 @@ fn the_click_lines_up_with_the_music_under_a_long_latency() {
     let out = run(&mut rt, &mut at, frames(2.0, bpm) + pdc + 5000, &|_| 0.0);
     assert_near(onset(&out, 0.3), frames(2.0, bpm) + pdc, "clip on beat 2");
     let click2 = onset(&plain[frames(1.5, bpm)..], 1e-4).map(|i| i + frames(1.5, bpm) + pdc);
-    assert_near(
-        click2,
-        frames(2.0, bpm) + pdc + first,
-        "click on beat 2 (with the music)",
-    );
+    assert_near(click2, frames(2.0, bpm) + pdc + first, "click on beat 2 (with the music)");
 }
 
 fn take_audio(p: &Project, source: Id) -> Vec<f32> {
-    let s = p
-        .sources
-        .iter()
-        .find(|s| s.id == source)
-        .expect("take source");
+    let s = p.sources.iter().find(|s| s.id == source).expect("take source");
     let a = Audio::load(Path::new(&s.path)).expect("take file");
     a.content().chunks(2).map(|f| f[0]).collect()
 }
@@ -271,67 +215,25 @@ fn record_hit(tag: &str, mid: bool) {
         let ins = e.project().tracks[1].insert;
         let mut off = rider(7001, bpm);
         off.bypass = true;
-        e.apply(
-            &[Op::PutFx {
-                insert_id: ins,
-                fx: off,
-                index: None,
-            }],
-            false,
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            wave_engine::engine::playback_latency(&e.project(), SR as f32),
-            0
-        );
+        e.apply(&[Op::PutFx { insert_id: ins, fx: off, index: None }], false, None).unwrap();
+        assert_eq!(wave_engine::engine::playback_latency(&e.project(), SR as f32), 0);
     }
-    out.extend(run(&mut rt, &mut at, hit + 20000 - heard5 / 2, &|f| {
-        if f == hit {
-            0.9
-        } else {
-            0.0
-        }
-    }));
+    out.extend(run(&mut rt, &mut at, hit + 20000 - heard5 / 2, &|f| if f == hit { 0.9 } else { 0.0 }));
     // the singer hears beat 5 when the take's `skip` assumes it
-    assert_near(
-        onset(&out, 0.3),
-        heard5,
-        "beat 5 heard when the take assumes it",
-    );
+    assert_near(onset(&out, 0.3), heard5, "beat 5 heard when the take assumes it");
     e.stop();
     let p = e.project();
-    let clip = p
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Audio && c.track == 0)
-        .expect("a take");
-    assert!(
-        (clip.start - 4.0).abs() < 1e-9,
-        "take starts at {}",
-        clip.start
-    );
+    let clip = p.clips.iter().find(|c| c.kind == ClipKind::Audio && c.track == 0).expect("a take");
+    assert!((clip.start - 4.0).abs() < 1e-9, "take starts at {}", clip.start);
     let audio = take_audio(&p, clip.source);
-    let on = audio
-        .iter()
-        .position(|x| x.abs() > 0.5)
-        .expect("the hit was recorded");
-    assert_eq!(
-        on,
-        frames(1.0, bpm),
-        "hit lands {} frames off beat 5",
-        on as i64 - frames(1.0, bpm) as i64
-    );
+    let on = audio.iter().position(|x| x.abs() > 0.5).expect("the hit was recorded");
+    assert_eq!(on, frames(1.0, bpm), "hit lands {} frames off beat 5", on as i64 - frames(1.0, bpm) as i64);
     if mid {
         // the take is over: the deferred change applies, beat 5 now comes out undelayed
         e.set_transport(None, None, Some(false), Some(false));
         e.play(4.0);
         let out = run(&mut rt, &mut at, frames(1.0, bpm) + 5000, &|_| 0.0);
-        assert_near(
-            onset(&out, 0.3),
-            frames(1.0, bpm),
-            "beat 5 undelayed once the take is over",
-        );
+        assert_near(onset(&out, 0.3), frames(1.0, bpm), "beat 5 undelayed once the take is over");
     }
 }
 
@@ -365,11 +267,7 @@ fn the_playhead_shows_the_heard_beat() {
     run(&mut rt, &mut at, total - BLOCK * 20, &|_| 0.0);
     let s = e.shared();
     let want = s.beat() - pdc as f64 * bps;
-    assert!(
-        (s.heard_beat() - want).abs() < 1e-9,
-        "heard {} want {want}",
-        s.heard_beat()
-    );
+    assert!((s.heard_beat() - want).abs() < 1e-9, "heard {} want {want}", s.heard_beat());
     assert!((s.heard_beat() - (4.0 + (total - pdc) as f64 * bps)).abs() < 1e-6);
     // the telemetry frame carries the heard beat
     let frame = wave_engine::telemetry::frame(1, &s, &[], None, None);
@@ -395,8 +293,5 @@ fn the_playhead_wraps_with_the_loop_under_latency() {
     assert!(s.beat() < 1.0, "loop did not wrap: {}", s.beat());
     let heard = s.heard_beat();
     let want = 8.0 + s.beat() - pdc as f64 * bps;
-    assert!(
-        (heard - want).abs() < 1e-6 && heard < 8.0 && heard > 4.0,
-        "heard {heard}, want {want}"
-    );
+    assert!((heard - want).abs() < 1e-6 && heard < 8.0 && heard > 4.0, "heard {heard}, want {want}");
 }

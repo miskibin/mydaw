@@ -70,15 +70,7 @@ impl EnvCoef {
         let ac = coef(a_ms * ms, RATIO_A);
         let dc = coef(d_ms * ms, RATIO_DR);
         let rc = coef(r_ms * ms, RATIO_DR);
-        Self {
-            ac,
-            ab: (1.0 + RATIO_A) * (1.0 - ac),
-            dc,
-            db: (sus - RATIO_DR) * (1.0 - dc),
-            rc,
-            rb: -RATIO_DR * (1.0 - rc),
-            sus,
-        }
+        Self { ac, ab: (1.0 + RATIO_A) * (1.0 - ac), dc, db: (sus - RATIO_DR) * (1.0 - dc), rc, rb: -RATIO_DR * (1.0 - rc), sus }
     }
 }
 
@@ -157,12 +149,7 @@ impl SvfCoef {
     pub fn new(g: f32, k: f32) -> Self {
         let a1 = 1.0 / (1.0 + g * (g + k));
         let a2 = g * a1;
-        Self {
-            k,
-            a1,
-            a2,
-            a3: g * a2,
-        }
+        Self { k, a1, a2, a3: g * a2 }
     }
 }
 
@@ -223,14 +210,7 @@ pub struct Os2 {
 
 impl Default for Os2 {
     fn default() -> Self {
-        Self {
-            x: [0.0; 32],
-            xp: 0,
-            e: [0.0; 16],
-            ep: 0,
-            o: [0.0; 32],
-            op: 0,
-        }
+        Self { x: [0.0; 32], xp: 0, e: [0.0; 16], ep: 0, o: [0.0; 32], op: 0 }
     }
 }
 
@@ -414,30 +394,10 @@ impl<'a> Osc<'a> {
         if wave == SQUARE {
             let t0 = b.table(SAW, 0, j0);
             let t1 = b.table(SAW, 0, j1);
-            return Self {
-                t00: t0,
-                t01: t1,
-                t10: t0,
-                t11: t1,
-                w,
-                fm: 0.0,
-                morph: false,
-                pw: 0.5 - 0.45 * shape,
-                pulse: true,
-            };
+            return Self { t00: t0, t01: t1, t10: t0, t11: t1, w, fm: 0.0, morph: false, pw: 0.5 - 0.45 * shape, pulse: true };
         }
         let morph = shape > 1e-4;
-        Self {
-            t00: b.table(wave, 0, j0),
-            t01: b.table(wave, 0, j1),
-            t10: b.table(wave, 1, j0),
-            t11: b.table(wave, 1, j1),
-            w,
-            fm: shape,
-            morph,
-            pw: 0.5,
-            pulse: false,
-        }
+        Self { t00: b.table(wave, 0, j0), t01: b.table(wave, 0, j1), t10: b.table(wave, 1, j0), t11: b.table(wave, 1, j1), w, fm: shape, morph, pw: 0.5, pulse: false }
     }
     #[inline(always)]
     fn lv(&self, a: &[f32], b: &[f32], ph: f32) -> f32 {
@@ -470,23 +430,11 @@ impl<'a> Osc<'a> {
 impl Voice {
     /// Starts a note in this (free) slot. `from`: pitch to glide from (`None` = start on the note).
     #[allow(clippy::too_many_arguments)]
-    pub fn start(
-        &mut self,
-        p: &Patch,
-        note: u32,
-        key: u8,
-        vel: f32,
-        live: bool,
-        age: u64,
-        seed: u32,
-        from: Option<f32>,
-        glide_samples: f32,
-    ) {
+    pub fn start(&mut self, p: &Patch, note: u32, key: u8, vel: f32, live: bool, age: u64, seed: u32, from: Option<f32>, glide_samples: f32) {
         let mut rng = seed | 1;
         let row = (p[ix::UNI_VOICES] as usize).min(3);
         let n_uni = [1, 3, 5, 7][row];
-        let drive_mod = (0..4)
-            .any(|s| p[ix::M1_SRC + 3 * s] > 0.5 && p[ix::M1_DST + 3 * s] as usize == dst::DRIVE);
+        let drive_mod = (0..4).any(|s| p[ix::M1_SRC + 3 * s] > 0.5 && p[ix::M1_DST + 3 * s] as usize == dst::DRIVE);
         *self = Voice {
             on: true,
             note,
@@ -583,20 +531,11 @@ impl Voice {
         let n = self.n_uni;
         let bend = if self.live { c.bend } else { 0.0 };
         let nlp_a = 1.0 - (-2.0 * PI * 1200.0 * inv_sr).exp();
-        let do2 = lvl2 > 0.0
-            || c.slots[..c.nslots]
-                .iter()
-                .any(|s| s.1 == dst::LVL2 && s.2 > 0.0);
+        let do2 = lvl2 > 0.0 || c.slots[..c.nslots].iter().any(|s| s.1 == dst::LVL2 && s.2 > 0.0);
         // filter damping and drive curve: per sample only when the matrix moves them
         let res_mod = c.slots[..c.nslots].iter().any(|s| s.1 == dst::RES);
         let drive_mod = c.slots[..c.nslots].iter().any(|s| s.1 == dst::DRIVE);
-        let damp = |res: f32, lp24: bool| {
-            if lp24 {
-                1.0 / (1.3066 * 15.3f32.powf(res))
-            } else {
-                2.0 * 40f32.powf(-res)
-            }
-        };
+        let damp = |res: f32, lp24: bool| if lp24 { 1.0 / (1.3066 * 15.3f32.powf(res)) } else { 2.0 * 40f32.powf(-res) };
         let lp24 = self.ftype == LP24;
         let k_chunk = damp(res0, lp24);
         let shaper = |fd: f32| {
@@ -646,12 +585,7 @@ impl Voice {
 
             // oscillators
             let dt1 = dt_note * ((c1 + d[dst::P1]) / 12.0).exp2();
-            let o1 = Osc::new(
-                b,
-                self.wave1,
-                (sh1 + d[dst::SHAPE1]).clamp(0.0, 1.0),
-                dt1 * rmax,
-            );
+            let o1 = Osc::new(b, self.wave1, (sh1 + d[dst::SHAPE1]).clamp(0.0, 1.0), dt1 * rmax);
             let (mut a1l, mut a1r) = (0.0, 0.0);
             for k in 0..n {
                 let ph = self.ph1[k];
@@ -668,12 +602,7 @@ impl Voice {
             let (mut xl, mut xr) = (a1l * g1, a1r * g1);
             if do2 {
                 let dt2 = dt_note * ((c2 + d[dst::P2]) / 12.0).exp2();
-                let o2 = Osc::new(
-                    b,
-                    self.wave2,
-                    (sh2 + d[dst::SHAPE2]).clamp(0.0, 1.0),
-                    dt2 * rmax,
-                );
+                let o2 = Osc::new(b, self.wave2, (sh2 + d[dst::SHAPE2]).clamp(0.0, 1.0), dt2 * rmax);
                 let (mut a2l, mut a2r) = (0.0, 0.0);
                 for k in 0..n {
                     let ph = self.ph2[k];
@@ -703,23 +632,14 @@ impl Voice {
             if nl > 0.0 {
                 let w = xorshift(&mut self.rng);
                 self.noise_lp += (w - self.noise_lp) * nlp_a;
-                let s = if ncol < 0.0 {
-                    w + (self.noise_lp - w) * -ncol
-                } else {
-                    w - self.noise_lp * ncol
-                } * 0.5
-                    * nl;
+                let s = if ncol < 0.0 { w + (self.noise_lp - w) * -ncol } else { w - self.noise_lp * ncol } * 0.5 * nl;
                 xl += s;
                 xr += s;
             }
 
             // drive into the filter
             if self.drive_on {
-                let (g, comp, w) = if drive_mod {
-                    shaper((fdrive0 + d[dst::DRIVE]).clamp(0.0, 1.0))
-                } else {
-                    drive_chunk
-                };
+                let (g, comp, w) = if drive_mod { shaper((fdrive0 + d[dst::DRIVE]).clamp(0.0, 1.0)) } else { drive_chunk };
                 let f = |x: f32| x + (tanh(g * x) * comp - x) * w;
                 xl = self.os[0].process(xl, &b.hb, f);
                 xr = self.os[1].process(xr, &b.hb, f);
@@ -729,11 +649,7 @@ impl Voice {
             let oct = cut_oct + ktrack * (note - 60.0) / 12.0 + envamt * me + d[dst::CUTOFF];
             let fc = oct.exp2().clamp(16.0, max_fc);
             let g = (PI * fc * inv_sr).tan();
-            let k = if res_mod {
-                damp((res0 + d[dst::RES]).clamp(0.0, 1.0), lp24)
-            } else {
-                k_chunk
-            };
+            let k = if res_mod { damp((res0 + d[dst::RES]).clamp(0.0, 1.0), lp24) } else { k_chunk };
             if self.ftype == LP24 {
                 let ca = SvfCoef::new(g, 1.0 / 0.5412);
                 let cb = SvfCoef::new(g, k);
@@ -765,10 +681,7 @@ impl Voice {
                 a *= self.fade;
             }
             let pan = d[dst::PAN].clamp(-1.0, 1.0);
-            let (pl, pr) = (
-                if pan > 0.0 { 1.0 - pan } else { 1.0 },
-                if pan < 0.0 { 1.0 + pan } else { 1.0 },
-            );
+            let (pl, pr) = (if pan > 0.0 { 1.0 - pan } else { 1.0 }, if pan < 0.0 { 1.0 + pan } else { 1.0 });
             l[i] += xl * a * pl;
             r[i] += xr * a * pr;
         }

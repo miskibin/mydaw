@@ -15,38 +15,23 @@ fn arg<'a>(a: &'a Value, k: &str) -> Option<&'a Value> {
     a.get(k).filter(|v| !v.is_null())
 }
 fn as_index(v: &Value) -> Option<u64> {
-    v.as_u64().or_else(|| {
-        v.as_f64()
-            .filter(|f| *f >= 0.0 && f.fract() == 0.0)
-            .map(|f| f as u64)
-    })
+    v.as_u64().or_else(|| v.as_f64().filter(|f| *f >= 0.0 && f.fract() == 0.0).map(|f| f as u64))
 }
 fn need_u64(a: &Value, k: &str) -> R<u64> {
-    arg(a, k)
-        .and_then(as_index)
-        .ok_or(format!("`{k}` (whole number) is required"))
+    arg(a, k).and_then(as_index).ok_or(format!("`{k}` (whole number) is required"))
 }
 fn need_str<'a>(a: &'a Value, k: &str) -> R<&'a str> {
-    arg(a, k)
-        .and_then(Value::as_str)
-        .ok_or(format!("`{k}` (string) is required"))
+    arg(a, k).and_then(Value::as_str).ok_or(format!("`{k}` (string) is required"))
 }
 fn opt_f64(a: &Value, k: &str) -> Option<f64> {
     arg(a, k).and_then(Value::as_f64)
 }
 
 pub fn parse_kind(s: &str) -> R<FxKind> {
-    serde_json::from_value(json!(s))
-        .map_err(|_| format!("unknown effect type `{s}` (eq, comp, sat, delay, reverb, limit)"))
+    serde_json::from_value(json!(s)).map_err(|_| format!("unknown effect type `{s}` (eq, comp, sat, delay, reverb, limit)"))
 }
 
-pub fn add_fx(
-    app: &App,
-    insert_id: u64,
-    kind: FxKind,
-    preset: Option<usize>,
-    index: Option<usize>,
-) -> R<(u64, u64)> {
+pub fn add_fx(app: &App, insert_id: u64, kind: FxKind, preset: Option<usize>, index: Option<usize>) -> R<(u64, u64)> {
     if kind == FxKind::Vst3 {
         return Err("use vst3_add for plugins".into());
     }
@@ -61,63 +46,22 @@ pub fn add_fx(
             return Err(format!("{} has no preset {i}", catalog::type_name(kind)));
         }
     }
-    let rev = app
-        .engine
-        .apply(
-            &[Op::PutFx {
-                insert_id,
-                fx,
-                index,
-            }],
-            false,
-            None,
-        )
-        .map_err(|e| e.to_string())?;
+    let rev = app.engine.apply(&[Op::PutFx { insert_id, fx, index }], false, None).map_err(|e| e.to_string())?;
     Ok((id, rev))
 }
 
-pub fn set_param(
-    app: &App,
-    fx_id: u64,
-    param: &str,
-    value: f64,
-    if_revision: Option<u64>,
-) -> R<u64> {
+pub fn set_param(app: &App, fx_id: u64, param: &str, value: f64, if_revision: Option<u64>) -> R<u64> {
     let p = app.engine.project();
     let (m, f) = p.find_fx(fx_id).ok_or(format!("no effect {fx_id}"))?;
-    let def = catalog::params(f.kind)
-        .iter()
-        .find(|d| d.id == param)
-        .ok_or_else(|| {
-            format!(
-                "{} has no parameter `{param}` (has: {})",
-                catalog::type_name(f.kind),
-                catalog::params(f.kind)
-                    .iter()
-                    .map(|d| d.id)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })?;
+    let def = catalog::params(f.kind).iter().find(|d| d.id == param).ok_or_else(|| {
+        format!("{} has no parameter `{param}` (has: {})", catalog::type_name(f.kind), catalog::params(f.kind).iter().map(|d| d.id).collect::<Vec<_>>().join(", "))
+    })?;
     if !(def.min..=def.max).contains(&value) {
-        return Err(format!(
-            "{param} must be within {}..{} {}",
-            def.min, def.max, def.unit
-        ));
+        return Err(format!("{param} must be within {}..{} {}", def.min, def.max, def.unit));
     }
     let mut f = f.clone();
     f.params.insert(param.into(), value);
-    app.engine
-        .apply(
-            &[Op::PutFx {
-                insert_id: m.id,
-                fx: f,
-                index: None,
-            }],
-            false,
-            if_revision,
-        )
-        .map_err(|e| e.to_string())
+    app.engine.apply(&[Op::PutFx { insert_id: m.id, fx: f, index: None }], false, if_revision).map_err(|e| e.to_string())
 }
 
 pub fn preset(app: &App, fx_id: u64, index: usize) -> R<u64> {
@@ -127,34 +71,15 @@ pub fn preset(app: &App, fx_id: u64, index: usize) -> R<u64> {
     if !load_preset(&mut f, index, p.bpm) {
         return Err(format!("no preset {index}"));
     }
-    app.engine
-        .apply(
-            &[Op::PutFx {
-                insert_id: m.id,
-                fx: f,
-                index: None,
-            }],
-            false,
-            None,
-        )
-        .map_err(|e| e.to_string())
+    app.engine.apply(&[Op::PutFx { insert_id: m.id, fx: f, index: None }], false, None).map_err(|e| e.to_string())
 }
 
-pub fn vst3_add(
-    app: &App,
-    insert_id: u64,
-    path: &str,
-    cid: &str,
-    index: Option<usize>,
-) -> R<(u64, u64)> {
+pub fn vst3_add(app: &App, insert_id: u64, path: &str, cid: &str, index: Option<usize>) -> R<(u64, u64)> {
     let p = app.engine.project();
     if p.insert(insert_id).is_none() {
         return Err(format!("no insert {insert_id}"));
     }
-    let (name, vendor) = app
-        .plugins
-        .info(path, cid)
-        .ok_or("that plugin is not in the scan results; run a VST3 scan first")?;
+    let (name, vendor) = app.plugins.info(path, cid).ok_or("that plugin is not in the scan results; run a VST3 scan first")?;
     let id = p.next_id;
     let fx = wave_engine::Fx {
         id,
@@ -164,27 +89,9 @@ pub fn vst3_add(
         preset: None,
         params: Default::default(),
         bands: None,
-        plugin: Some(PluginRef {
-            format: "vst3".into(),
-            path: path.into(),
-            cid: cid.into(),
-            name,
-            vendor,
-            state: None,
-        }),
+        plugin: Some(PluginRef { format: "vst3".into(), path: path.into(), cid: cid.into(), name, vendor, state: None }),
     };
-    let rev = app
-        .engine
-        .apply(
-            &[Op::PutFx {
-                insert_id,
-                fx,
-                index,
-            }],
-            false,
-            None,
-        )
-        .map_err(|e| e.to_string())?;
+    let rev = app.engine.apply(&[Op::PutFx { insert_id, fx, index }], false, None).map_err(|e| e.to_string())?;
     if let Some(err) = app.engine.state().fx_errors.get(&id) {
         return Err(format!("added, but the plugin failed to load: {err}"));
     }
@@ -197,13 +104,7 @@ pub fn stats(x: &[f32], sr: u32) -> Value {
     let peak = x.iter().fold(0f32, |a, b| a.max(b.abs()));
     let rms = (x.iter().map(|v| (v * v) as f64).sum::<f64>() / n as f64).sqrt() as f32;
     let clipped = x.iter().filter(|v| v.abs() >= 0.999).count();
-    let db = |g: f32| {
-        if g > 1e-9 {
-            (20.0 * (g as f64).log10() * 10.0).round() / 10.0
-        } else {
-            -180.0
-        }
-    };
+    let db = |g: f32| if g > 1e-9 { (20.0 * (g as f64).log10() * 10.0).round() / 10.0 } else { -180.0 };
     json!({
         "seconds": x.len() as f64 / 2.0 / sr as f64,
         "sampleRate": sr,
@@ -266,21 +167,14 @@ pub fn render_to_file(
     }
     // a bounce must not start while the piano is still loading (it would be silent)
     crate::keys::wait(app);
-    let audio = app
-        .engine
-        .render_cancelable(from, to, tail, rate, cancel)
-        .map_err(|e| e.to_string())?;
+    let audio = app.engine.render_cancelable(from, to, tail, rate, cancel).map_err(|e| e.to_string())?;
     if cancel.load(std::sync::atomic::Ordering::Relaxed) {
         return Err("cancelled".into());
     }
     match fmt {
         ExportFormat::Wav => wave_engine::sources::write_wav(out, &audio, rate)?,
         ExportFormat::Mp3 { kbps } => {
-            let title = app.engine.state().path.as_deref().and_then(|p| {
-                std::path::Path::new(p)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-            });
+            let title = app.engine.state().path.as_deref().and_then(|p| std::path::Path::new(p).file_stem().map(|s| s.to_string_lossy().into_owned()));
             wave_engine::sources::write_mp3(out, &audio, rate, kbps, title.as_deref())?
         }
     }
@@ -301,25 +195,9 @@ pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
     let to = opt_f64(a, "to").unwrap_or_else(|| p.loop_range.map(|l| l.b).unwrap_or(p.song_end()));
     let tail = opt_f64(a, "tail").unwrap_or(2.0);
     let rate = opt_f64(a, "rate").unwrap_or(48000.0) as u32;
-    let by_ext = out
-        .extension()
-        .and_then(|e| e.to_str())
-        .filter(|e| e.eq_ignore_ascii_case("mp3"))
-        .map(|_| "mp3");
-    let fmt = ExportFormat::parse(
-        arg(a, "format").and_then(Value::as_str).or(by_ext),
-        opt_f64(a, "mp3Kbps").map(|k| k as u32),
-    )?;
-    render_to_file(
-        app,
-        &out,
-        from,
-        to,
-        tail,
-        rate,
-        &std::sync::atomic::AtomicBool::new(false),
-        fmt,
-    )
+    let by_ext = out.extension().and_then(|e| e.to_str()).filter(|e| e.eq_ignore_ascii_case("mp3")).map(|_| "mp3");
+    let fmt = ExportFormat::parse(arg(a, "format").and_then(Value::as_str).or(by_ext), opt_f64(a, "mp3Kbps").map(|k| k as u32))?;
+    render_to_file(app, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false), fmt)
 }
 
 pub fn context(app: &App, full: bool) -> Value {
@@ -403,21 +281,13 @@ pub fn schema() -> Value {
 }
 
 pub fn import(app: &App, a: &Value) -> R<Value> {
-    let paths: Vec<PathBuf> = arg(a, "paths")
-        .and_then(Value::as_array)
-        .ok_or("`paths` is required")?
-        .iter()
-        .filter_map(|v| v.as_str().map(PathBuf::from))
-        .collect();
+    let paths: Vec<PathBuf> = arg(a, "paths").and_then(Value::as_array).ok_or("`paths` is required")?.iter().filter_map(|v| v.as_str().map(PathBuf::from)).collect();
     let place = match (opt_f64(a, "track"), opt_f64(a, "beat")) {
         (Some(t), b) => Some((t as u32, b.unwrap_or(0.0))),
         (None, Some(b)) => Some((0, b)),
         _ => None,
     };
-    let (s, c) = app
-        .engine
-        .import_audio(&paths, place)
-        .map_err(|e| e.to_string())?;
+    let (s, c) = app.engine.import_audio(&paths, place).map_err(|e| e.to_string())?;
     Ok(json!({ "sourceIds": s, "clipIds": c }))
 }
 
@@ -428,15 +298,9 @@ fn channel_json(p: &wave_engine::Project, c: &wave_engine::Channel) -> Value {
     let g = c.gain();
     let (kind, what) = match &c.src {
         ChannelSrc::Inst { inst } => ("inst", json!({ "inst": inst })),
-        ChannelSrc::Sample { source } => (
-            "sample",
-            json!({ "source": source, "sourceName": p.sources.iter().find(|s| s.id == *source).map(|s| s.name.clone()) }),
-        ),
+        ChannelSrc::Sample { source } => ("sample", json!({ "source": source, "sourceName": p.sources.iter().find(|s| s.id == *source).map(|s| s.name.clone()) })),
         ChannelSrc::Synth { synth } => ("synth", json!({ "preset": synth.preset })),
-        ChannelSrc::Keys { keys } => (
-            "keys",
-            json!({ "release": keys.release, "dynamics": keys.dynamics }),
-        ),
+        ChannelSrc::Keys { keys } => ("keys", json!({ "release": keys.release, "dynamics": keys.dynamics })),
     };
     let mut v = json!({
         "id": c.id, "index": p.channels.iter().position(|x| x.id == c.id), "name": c.name, "kind": kind,
@@ -453,14 +317,9 @@ fn channel_json(p: &wave_engine::Project, c: &wave_engine::Channel) -> Value {
 /// A channel by id, by name (case-insensitive) or by built-in instrument name.
 fn find_channel<'a>(p: &'a wave_engine::Project, v: &Value) -> R<&'a wave_engine::Channel> {
     if let Some(id) = as_index(v) {
-        return p
-            .channel(id)
-            .ok_or(format!("no channel {id} (see `wave channels`)"));
+        return p.channel(id).ok_or(format!("no channel {id} (see `wave channels`)"));
     }
-    let s = v
-        .as_str()
-        .ok_or("`ch` is a channel id or name")?
-        .to_lowercase();
+    let s = v.as_str().ok_or("`ch` is a channel id or name")?.to_lowercase();
     p.channels
         .iter()
         .find(|c| c.name.to_lowercase() == s)
@@ -475,82 +334,34 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
     let mut ops = vec![];
     let mut added = None;
     if let Some(k) = arg(a, "add").and_then(Value::as_str) {
-        let inst: Inst = serde_json::from_value(json!(k.to_lowercase()))
-            .map_err(|_| format!("unknown instrument `{k}` (kick, clap, hat, bass)"))?;
+        let inst: Inst = serde_json::from_value(json!(k.to_lowercase())).map_err(|_| format!("unknown instrument `{k}` (kick, clap, hat, bass)"))?;
         let ch = Channel::builtin(p.next_id, inst);
         added = Some(ch.id);
-        ops.push(Op::PutChannel {
-            channel: ch,
-            index: None,
-        });
+        ops.push(Op::PutChannel { channel: ch, index: None });
     }
     if let Some(src) = arg(a, "sample").and_then(as_index) {
-        let s = p
-            .sources
-            .iter()
-            .find(|s| s.id == src)
-            .ok_or(format!("no source {src} (see `wave context`)"))?;
+        let s = p.sources.iter().find(|s| s.id == src).ok_or(format!("no source {src} (see `wave context`)"))?;
         let id = p.next_id + ops.len() as u64;
-        let ch = Channel {
-            name: s.name.clone(),
-            color: s.color.clone(),
-            src: ChannelSrc::Sample { source: src },
-            root: wave_engine::SAMPLE_ROOT,
-            ..Channel::builtin(id, Inst::Kick)
-        };
+        let ch = Channel { name: s.name.clone(), color: s.color.clone(), src: ChannelSrc::Sample { source: src }, root: wave_engine::SAMPLE_ROOT, ..Channel::builtin(id, Inst::Kick) };
         added = Some(id);
-        ops.push(Op::PutChannel {
-            channel: ch,
-            index: None,
-        });
+        ops.push(Op::PutChannel { channel: ch, index: None });
     }
     if let Some(name) = arg(a, "synth").and_then(Value::as_str) {
         // a synth channel playing a factory preset ("" = the blank patch)
         let id = p.next_id + ops.len() as u64;
-        let synth = if name.is_empty() {
-            wave_engine::SynthState::default()
-        } else {
-            wave_engine::poly::preset_state(name)
-                .ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))?
-        };
-        let bass = wave_engine::poly::presets::all()
-            .iter()
-            .any(|x| x.name == name && matches!(x.category, "808" | "Bas"));
-        let label = if name.is_empty() {
-            "Synth".to_string()
-        } else {
-            name.to_string()
-        };
-        let ch = Channel {
-            name: label,
-            color: "#9b7cf8".into(),
-            src: ChannelSrc::Synth { synth },
-            root: if bass { 36 } else { 60 },
-            ..Channel::builtin(id, Inst::Kick)
-        };
+        let synth = if name.is_empty() { wave_engine::SynthState::default() } else { wave_engine::poly::preset_state(name).ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))? };
+        let bass = wave_engine::poly::presets::all().iter().any(|x| x.name == name && matches!(x.category, "808" | "Bas"));
+        let label = if name.is_empty() { "Synth".to_string() } else { name.to_string() };
+        let ch = Channel { name: label, color: "#9b7cf8".into(), src: ChannelSrc::Synth { synth }, root: if bass { 36 } else { 60 }, ..Channel::builtin(id, Inst::Kick) };
         added = Some(id);
-        ops.push(Op::PutChannel {
-            channel: ch,
-            index: None,
-        });
+        ops.push(Op::PutChannel { channel: ch, index: None });
     }
     if arg(a, "keys").and_then(Value::as_bool).unwrap_or(false) {
         // a WAVE Keys channel: the sampled grand piano
         let id = p.next_id + ops.len() as u64;
-        let ch = Channel {
-            name: "WAVE Keys".into(),
-            color: "#e0a44a".into(),
-            src: ChannelSrc::Keys {
-                keys: Default::default(),
-            },
-            root: 60,
-            ..Channel::builtin(id, Inst::Kick)
-        };
+        let ch = Channel { name: "WAVE Keys".into(), color: "#e0a44a".into(), src: ChannelSrc::Keys { keys: Default::default() }, root: 60, ..Channel::builtin(id, Inst::Kick) };
         added = Some(id);
-        ops.push(Op::PutChannel {
-            channel: ch,
-            index: None,
-        });
+        ops.push(Op::PutChannel { channel: ch, index: None });
     }
     if let (Some(v), Some(name)) = (arg(a, "ch"), arg(a, "preset").and_then(Value::as_str)) {
         // load a factory preset into a synth channel
@@ -558,14 +369,8 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         if !matches!(c.src, ChannelSrc::Synth { .. }) {
             return Err(format!("channel `{}` is not a synth", c.name));
         }
-        c.src = ChannelSrc::Synth {
-            synth: wave_engine::poly::preset_state(name)
-                .ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))?,
-        };
-        ops.push(Op::PutChannel {
-            channel: c,
-            index: None,
-        });
+        c.src = ChannelSrc::Synth { synth: wave_engine::poly::preset_state(name).ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))? };
+        ops.push(Op::PutChannel { channel: c, index: None });
     }
     if let (Some(v), Some(param)) = (arg(a, "ch"), arg(a, "param").and_then(Value::as_str)) {
         // one synth knob
@@ -573,60 +378,28 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         let value = opt_f64(a, "value").ok_or("`value` is required")?;
         match &mut c.src {
             ChannelSrc::Synth { synth } => {
-                let i = wave_engine::poly::params::index_of(param).ok_or(format!(
-                    "the synth has no parameter `{param}` (see `wave catalog`)"
-                ))?;
-                synth.params.insert(
-                    param.to_string(),
-                    wave_engine::poly::params::clamp(i, value) as f64,
-                );
+                let i = wave_engine::poly::params::index_of(param).ok_or(format!("the synth has no parameter `{param}` (see `wave catalog`)"))?;
+                synth.params.insert(param.to_string(), wave_engine::poly::params::clamp(i, value) as f64);
                 synth.preset = None;
             }
             ChannelSrc::Keys { keys } => match param {
-                "release" => {
-                    keys.release = (value as f32).clamp(
-                        wave_engine::keys::RELEASE_MS.0,
-                        wave_engine::keys::RELEASE_MS.1,
-                    )
-                }
+                "release" => keys.release = (value as f32).clamp(wave_engine::keys::RELEASE_MS.0, wave_engine::keys::RELEASE_MS.1),
                 "dynamics" => keys.dynamics = (value as f32).clamp(0.0, 100.0),
-                _ => {
-                    return Err(format!(
-                        "WAVE Keys has no parameter `{param}` (release in ms, dynamics in %)"
-                    ))
-                }
+                _ => return Err(format!("WAVE Keys has no parameter `{param}` (release in ms, dynamics in %)")),
             },
-            _ => {
-                return Err(format!(
-                    "channel `{}` has no parameters (it is not a synth or WAVE Keys)",
-                    c.name
-                ))
-            }
+            _ => return Err(format!("channel `{}` has no parameters (it is not a synth or WAVE Keys)", c.name)),
         }
-        ops.push(Op::PutChannel {
-            channel: c,
-            index: None,
-        });
+        ops.push(Op::PutChannel { channel: c, index: None });
     }
     if let Some(v) = arg(a, "remove") {
-        ops.push(Op::RemoveChannel {
-            id: find_channel(&p, v)?.id,
-        });
+        ops.push(Op::RemoveChannel { id: find_channel(&p, v)?.id });
     }
     if ops.is_empty() {
-        return Ok(json!(p
-            .channels
-            .iter()
-            .map(|c| channel_json(&p, c))
-            .collect::<Vec<_>>()));
+        return Ok(json!(p.channels.iter().map(|c| channel_json(&p, c)).collect::<Vec<_>>()));
     }
-    let rev = e
-        .apply(&ops, false, if_revision)
-        .map_err(|x| x.to_string())?;
+    let rev = e.apply(&ops, false, if_revision).map_err(|x| x.to_string())?;
     let p = e.project();
-    Ok(
-        json!({ "revision": rev, "added": added, "channels": p.channels.iter().map(|c| channel_json(&p, c)).collect::<Vec<_>>() }),
-    )
+    Ok(json!({ "revision": rev, "added": added, "channels": p.channels.iter().map(|c| channel_json(&p, c)).collect::<Vec<_>>() }))
 }
 
 /// One character per 16th: `.` empty, `x` full velocity, `1`..`9` = 10..90 %.
@@ -649,11 +422,7 @@ pub fn parse_steps(s: &str, vel: f32) -> R<Vec<(f32, f32)>> {
             'x' | 'X' => out.push((k as f32, vel)),
             '1'..='9' => out.push((k as f32, ch.to_digit(10).unwrap() as f32 / 10.0)),
             '.' | '-' | '_' | '0' => {}
-            other => {
-                return Err(format!(
-                    "`{other}` in --steps: use x (on), 1-9 (velocity 10-90 %), . (off)"
-                ))
-            }
+            other => return Err(format!("`{other}` in --steps: use x (on), 1-9 (velocity 10-90 %), . (off)")),
         }
         k += 1;
     }
@@ -694,35 +463,14 @@ pub fn pattern(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
     let p = e.project();
     let new = arg(a, "new").and_then(Value::as_bool).unwrap_or(false);
     let mut pt = if new {
-        Pattern {
-            id: p.next_id,
-            name: format!("Pattern {}", p.patterns.len() + 1),
-            color: "#4f8ef7".into(),
-            len: 4.0,
-            min_len: 4.0,
-            notes: vec![],
-            swing: 0.0,
-        }
+        Pattern { id: p.next_id, name: format!("Pattern {}", p.patterns.len() + 1), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes: vec![], swing: 0.0 }
     } else {
         let id = match arg(a, "id").and_then(as_index) {
             Some(id) => id,
             None if p.patterns.len() == 1 => p.patterns[0].id,
-            None => {
-                return Err(format!(
-                    "which pattern? pass --id ({})",
-                    p.patterns
-                        .iter()
-                        .map(|x| format!("{} {}", x.id, x.name))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-            }
+            None => return Err(format!("which pattern? pass --id ({})", p.patterns.iter().map(|x| format!("{} {}", x.id, x.name)).collect::<Vec<_>>().join(", "))),
         };
-        p.patterns
-            .iter()
-            .find(|x| x.id == id)
-            .cloned()
-            .ok_or(format!("no pattern {id}"))?
+        p.patterns.iter().find(|x| x.id == id).cloned().ok_or(format!("no pattern {id}"))?
     };
     let before = pt.clone();
     if let Some(n) = arg(a, "name").and_then(Value::as_str) {
@@ -734,10 +482,7 @@ pub fn pattern(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
     if let Some(b) = opt_f64(a, "bars") {
         // the shortest the pattern may be: it still grows with notes past it
         if !(1.0..=wave_engine::TOTAL_BEATS / 4.0).contains(&b) || b.fract() != 0.0 {
-            return Err(format!(
-                "--bars is a whole number 1..{} (the pattern still grows to fit its notes)",
-                wave_engine::TOTAL_BEATS / 4.0
-            ));
+            return Err(format!("--bars is a whole number 1..{} (the pattern still grows to fit its notes)", wave_engine::TOTAL_BEATS / 4.0));
         }
         pt.min_len = b * 4.0;
     }
@@ -749,62 +494,33 @@ pub fn pattern(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
     }
     let steps = arg(a, "steps").and_then(Value::as_str);
     let notes = arg(a, "notes");
-    if steps.is_some()
-        || notes.is_some()
-        || arg(a, "clear").and_then(Value::as_bool).unwrap_or(false)
-    {
-        let ch = find_channel(
-            &p,
-            arg(a, "ch")
-                .ok_or("--ch (channel id or name) is required with --steps / --notes / --clear")?,
-        )?
-        .id;
+    if steps.is_some() || notes.is_some() || arg(a, "clear").and_then(Value::as_bool).unwrap_or(false) {
+        let ch = find_channel(&p, arg(a, "ch").ok_or("--ch (channel id or name) is required with --steps / --notes / --clear")?)?.id;
         pt.notes.retain(|n| n.ch != ch);
         if let Some(s) = steps {
             let vel = opt_f64(a, "vel").unwrap_or(1.0) as f32;
             if !(0.0..=1.0).contains(&vel) {
                 return Err("--vel is 0..1".into());
             }
-            pt.notes
-                .extend(parse_steps(s, vel)?.into_iter().map(|(k, v)| Note {
-                    v,
-                    ..Note::new(ch, k, 1.0, None)
-                }));
+            pt.notes.extend(parse_steps(s, vel)?.into_iter().map(|(k, v)| Note { v, ..Note::new(ch, k, 1.0, None) }));
         }
         if let Some(ns) = notes {
-            let list = ns
-                .as_array()
-                .ok_or("--notes is a JSON array of {step, len, p?, v?}")?;
+            let list = ns.as_array().ok_or("--notes is a JSON array of {step, len, p?, v?}")?;
             for n in list {
                 let step = opt_f64(n, "step").ok_or("each note needs `step` (16ths)")? as f32;
                 let len = opt_f64(n, "len").unwrap_or(1.0) as f32;
                 let key = arg(n, "p").and_then(as_index).map(|k| k.min(127) as u8);
                 let v = opt_f64(n, "v").unwrap_or(1.0) as f32;
-                pt.notes.push(Note {
-                    v,
-                    ..Note::new(ch, step, len, key)
-                });
+                pt.notes.push(Note { v, ..Note::new(ch, step, len, key) });
             }
         }
     }
     if !new && pt == before {
         return Ok(pattern_json(&p, &pt));
     }
-    let rev = e
-        .apply(
-            &[Op::PutPattern {
-                pattern: pt.clone(),
-            }],
-            false,
-            if_revision,
-        )
-        .map_err(|x| x.to_string())?;
+    let rev = e.apply(&[Op::PutPattern { pattern: pt.clone() }], false, if_revision).map_err(|x| x.to_string())?;
     let p = e.project();
-    let pt = p
-        .patterns
-        .iter()
-        .find(|x| x.id == pt.id)
-        .ok_or("the pattern vanished")?;
+    let pt = p.patterns.iter().find(|x| x.id == pt.id).ok_or("the pattern vanished")?;
     let mut v = pattern_json(&p, pt);
     v["revision"] = json!(rev);
     Ok(v)
@@ -816,37 +532,17 @@ pub fn pattern(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
 fn comp_clip(p: &wave_engine::Project, a: &Value) -> R<wave_engine::Clip> {
     use wave_engine::ClipKind;
     if let Some(id) = arg(a, "clip").and_then(as_index) {
-        return p
-            .clips
-            .iter()
-            .find(|c| c.id == id && c.kind == ClipKind::Comp)
-            .cloned()
-            .ok_or(format!("clip {id} is not a comp clip"));
+        return p.clips.iter().find(|c| c.id == id && c.kind == ClipKind::Comp).cloned().ok_or(format!("clip {id} is not a comp clip"));
     }
     let track = need_u64(a, "track")? as u32;
     if track as usize >= p.tracks.len() {
-        return Err(format!(
-            "no track {track} (tracks are 0..{})",
-            p.tracks.len().saturating_sub(1)
-        ));
+        return Err(format!("no track {track} (tracks are 0..{})", p.tracks.len().saturating_sub(1)));
     }
-    let cs: Vec<_> = p
-        .clips
-        .iter()
-        .filter(|c| c.track == track && c.kind == ClipKind::Comp)
-        .collect();
+    let cs: Vec<_> = p.clips.iter().filter(|c| c.track == track && c.kind == ClipKind::Comp).collect();
     match cs.len() {
-        0 => Err(format!(
-            "track {track} has no takes (record with a loop set, or record over an existing clip)"
-        )),
+        0 => Err(format!("track {track} has no takes (record with a loop set, or record over an existing clip)")),
         1 => Ok(cs[0].clone()),
-        _ => Err(format!(
-            "track {track} has several comp clips; pick one with --clip ({})",
-            cs.iter()
-                .map(|c| c.id.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
+        _ => Err(format!("track {track} has several comp clips; pick one with --clip ({})", cs.iter().map(|c| c.id.to_string()).collect::<Vec<_>>().join(", "))),
     }
 }
 
@@ -887,38 +583,22 @@ pub fn takes(app: &App, a: &Value) -> R<Value> {
 pub fn comp(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
     let p = app.engine.project();
     let clip = comp_clip(&p, a)?;
-    let mut cp = p
-        .comp(clip.source)
-        .cloned()
-        .ok_or("the clip's comp is missing")?;
+    let mut cp = p.comp(clip.source).cloned().ok_or("the clip's comp is missing")?;
     let local = |b: f64| b - clip.start + clip.offset;
     let ms = |v: &Value, k: &str| -> R<Option<f32>> {
         match arg(v, k) {
             None => Ok(None),
-            Some(x) => x
-                .as_f64()
-                .map(|m| Some((m / 1000.0) as f32))
-                .ok_or(format!("`{k}` must be a number of milliseconds")),
+            Some(x) => x.as_f64().map(|m| Some((m / 1000.0) as f32)).ok_or(format!("`{k}` must be a number of milliseconds")),
         }
     };
     let mut did = vec![];
     if let Some(rs) = arg(a, "regions") {
-        let rs = rs
-            .as_array()
-            .ok_or("`regions` must be an array of {take, from, to, xfadeMs?}")?;
+        let rs = rs.as_array().ok_or("`regions` must be an array of {take, from, to, xfadeMs?}")?;
         let mut regions = vec![];
         for r in rs {
             let take = need_u64(r, "take")?;
-            let (from, to) = (
-                opt_f64(r, "from").ok_or("each region needs `from`")?,
-                opt_f64(r, "to").ok_or("each region needs `to`")?,
-            );
-            regions.push(wave_engine::CompRegion {
-                take,
-                from: local(from),
-                to: local(to),
-                xfade: ms(r, "xfadeMs")?,
-            });
+            let (from, to) = (opt_f64(r, "from").ok_or("each region needs `from`")?, opt_f64(r, "to").ok_or("each region needs `to`")?);
+            regions.push(wave_engine::CompRegion { take, from: local(from), to: local(to), xfade: ms(r, "xfadeMs")? });
         }
         regions.sort_by(|x, y| x.from.total_cmp(&y.from));
         // a range wider than its take plays the take only
@@ -933,10 +613,7 @@ pub fn comp(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         did.push("regions");
     }
     if let Some(t) = arg(a, "take").and_then(as_index) {
-        let tk = cp
-            .take(t)
-            .cloned()
-            .ok_or(format!("the comp has no take {t}"))?;
+        let tk = cp.take(t).cloned().ok_or(format!("the comp has no take {t}"))?;
         cp.regions.clear();
         cp.write(t, tk.start, tk.end());
         did.push("take");
@@ -945,29 +622,19 @@ pub fn comp(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         cp.xfade = x;
         did.push("xfade");
     }
-    if arg(a, "removeUnused")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if arg(a, "removeUnused").and_then(Value::as_bool).unwrap_or(false) {
         let used: Vec<u64> = cp.regions.iter().map(|r| r.take).collect();
         let n = cp.takes.len();
         cp.takes.retain(|t| used.contains(&t.id));
         if cp.takes.is_empty() {
             return Err("the comp plays no take; keep at least one".into());
         }
-        did.push(if cp.takes.len() < n {
-            "removeUnused"
-        } else {
-            "nothingUnused"
-        });
+        did.push(if cp.takes.len() < n { "removeUnused" } else { "nothingUnused" });
     }
     if did.is_empty() {
         return Err("nothing to do: pass regions, take, xfadeMs or removeUnused".into());
     }
-    let rev = app
-        .engine
-        .apply(&[Op::PutComp { comp: cp }], false, if_revision)
-        .map_err(|e| e.to_string())?;
+    let rev = app.engine.apply(&[Op::PutComp { comp: cp }], false, if_revision).map_err(|e| e.to_string())?;
     Ok(json!({ "revision": rev, "clipId": clip.id, "changed": did }))
 }
 
@@ -976,21 +643,13 @@ pub fn comp(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
 pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
     let p = app.engine.project();
     let cid = need_u64(a, "clipId")?;
-    let mut clip = p
-        .clips
-        .iter()
-        .find(|c| c.id == cid)
-        .cloned()
-        .ok_or(format!("no clip {cid}"))?;
+    let mut clip = p.clips.iter().find(|c| c.id == cid).cloned().ok_or(format!("no clip {cid}"))?;
     let mut tune = clip.tune.take().unwrap_or_default();
     if arg(a, "off").and_then(Value::as_bool).unwrap_or(false) {
         tune.reference = None;
     } else {
         let prev = tune.reference;
-        let source = arg(a, "reference")
-            .and_then(as_index)
-            .or(prev.map(|r| r.source))
-            .ok_or("`reference` (source id) is required")?;
+        let source = arg(a, "reference").and_then(as_index).or(prev.map(|r| r.source)).ok_or("`reference` (source id) is required")?;
         let unit = |k: &str, d: f32| -> R<f32> {
             match opt_f64(a, k) {
                 Some(v) if (0.0..=100.0).contains(&v) => Ok(v as f32 / 100.0),
@@ -998,22 +657,10 @@ pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
                 None => Ok(d),
             }
         };
-        let base = prev.unwrap_or(RefTune {
-            source,
-            correction: 1.0,
-            vibrato: 1.0,
-            influence: 1.0,
-            octave: None,
-            key: 0,
-            scale: 0,
-        });
+        let base = prev.unwrap_or(RefTune { source, correction: 1.0, vibrato: 1.0, influence: 1.0, octave: None, key: 0, scale: 0 });
         let octave = match arg(a, "octave") {
             Some(Value::String(s)) if s == "auto" => None,
-            Some(v) => Some(
-                v.as_i64()
-                    .ok_or("`octave` is auto or a whole number of semitones")?
-                    as i32,
-            ),
+            Some(v) => Some(v.as_i64().ok_or("`octave` is auto or a whole number of semitones")? as i32),
             None => base.octave,
         };
         tune.reference = Some(RefTune {
@@ -1022,20 +669,12 @@ pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
             vibrato: unit("vibrato", base.vibrato)?,
             influence: unit("influence", base.influence)?,
             octave,
-            key: arg(a, "key")
-                .and_then(as_index)
-                .map(|k| k as u32)
-                .unwrap_or(base.key),
-            scale: arg(a, "scale")
-                .and_then(as_index)
-                .map(|k| k as u32)
-                .unwrap_or(base.scale),
+            key: arg(a, "key").and_then(as_index).map(|k| k as u32).unwrap_or(base.key),
+            scale: arg(a, "scale").and_then(as_index).map(|k| k as u32).unwrap_or(base.scale),
         });
     }
     clip.tune = tune.is_active().then_some(tune);
-    app.engine
-        .apply(&[Op::PutClips { clips: vec![clip] }], false, if_revision)
-        .map_err(|e| e.to_string())
+    app.engine.apply(&[Op::PutClips { clips: vec![clip] }], false, if_revision).map_err(|e| e.to_string())
 }
 
 /// The CLI entry: one request → JSON data.
@@ -1045,24 +684,14 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
     match cmd {
         "status" => {
             let st = e.state();
-            Ok(
-                json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }),
-            )
+            Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
-        "context" => Ok(context(
-            app,
-            arg(a, "full").and_then(Value::as_bool).unwrap_or(false),
-        )),
-        "catalog" => Ok(
-            json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] }),
-        ),
+        "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
-            let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([])))
-                .map_err(|er| format!("BAD_OPS: {er}"))?;
-            e.apply(&ops, false, if_revision)
-                .map(ok_rev)
-                .map_err(|er| er.to_string())
+            let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
+            e.apply(&ops, false, if_revision).map(ok_rev).map_err(|er| er.to_string())
         }
         "undo" => Ok(json!({ "undone": e.undo() })),
         "redo" => Ok(json!({ "redone": e.redo() })),
@@ -1078,42 +707,21 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         "import" => import(app, a),
         "add_fx" => {
             let kind = parse_kind(need_str(a, "type")?)?;
-            let (id, rev) = add_fx(
-                app,
-                need_u64(a, "insertId")?,
-                kind,
-                arg(a, "preset").and_then(as_index).map(|x| x as usize),
-                None,
-            )?;
+            let (id, rev) = add_fx(app, need_u64(a, "insertId")?, kind, arg(a, "preset").and_then(as_index).map(|x| x as usize), None)?;
             Ok(json!({ "fxId": id, "revision": rev }))
         }
-        "set_param" => set_param(
-            app,
-            need_u64(a, "fxId")?,
-            need_str(a, "param")?,
-            opt_f64(a, "value").ok_or("`value` is required")?,
-            if_revision,
-        )
-        .map(ok_rev),
-        "load_preset" => {
-            preset(app, need_u64(a, "fxId")?, need_u64(a, "index")? as usize).map(ok_rev)
-        }
+        "set_param" => set_param(app, need_u64(a, "fxId")?, need_str(a, "param")?, opt_f64(a, "value").ok_or("`value` is required")?, if_revision).map(ok_rev),
+        "load_preset" => preset(app, need_u64(a, "fxId")?, need_u64(a, "index")? as usize).map(ok_rev),
         "save" => {
             let path = match arg(a, "path").and_then(Value::as_str) {
                 Some(p) => PathBuf::from(p),
-                None => e
-                    .state()
-                    .path
-                    .map(PathBuf::from)
-                    .ok_or("the project has never been saved; pass --path")?,
+                None => e.state().path.map(PathBuf::from).ok_or("the project has never been saved; pass --path")?,
             };
             e.save(&path).map_err(|x| x.to_string())?;
             Ok(json!({ "path": path.display().to_string() }))
         }
         "open" => {
-            let w = e
-                .open(&PathBuf::from(need_str(a, "path")?))
-                .map_err(|x| x.to_string())?;
+            let w = e.open(&PathBuf::from(need_str(a, "path")?)).map_err(|x| x.to_string())?;
             Ok(json!({ "warnings": w }))
         }
         "takes" => takes(app, a),
@@ -1127,13 +735,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         "note_audition" => {
             let p = e.project();
             let ch = find_channel(&p, arg(a, "ch").ok_or("`ch` is required")?)?.id;
-            e.note_audition(
-                ch,
-                arg(a, "key").and_then(as_index).map(|k| k.min(127) as u8),
-                opt_f64(a, "vel").unwrap_or(0.8) as f32,
-                arg(a, "pattern").and_then(as_index),
-            )
-            .map_err(|x| x.to_string())?;
+            e.note_audition(ch, arg(a, "key").and_then(as_index).map(|k| k.min(127) as u8), opt_f64(a, "vel").unwrap_or(0.8) as f32, arg(a, "pattern").and_then(as_index)).map_err(|x| x.to_string())?;
             Ok(json!({}))
         }
         "comp" => comp(app, a, if_revision),
@@ -1144,39 +746,26 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
         }
         "comp_audition" => {
             let clip = comp_clip(&e.project(), a)?;
-            e.audition(clip.source, arg(a, "take").and_then(as_index))
-                .map_err(|x| x.to_string())?;
+            e.audition(clip.source, arg(a, "take").and_then(as_index)).map_err(|x| x.to_string())?;
             Ok(json!({ "compId": clip.source, "audition": e.state().audition.get(&clip.source) }))
         }
         "pitch_analyze" => {
-            let an = e
-                .pitch_analysis(need_u64(a, "clipId")?)
-                .map_err(|x| x.to_string())?;
+            let an = e.pitch_analysis(need_u64(a, "clipId")?).map_err(|x| x.to_string())?;
             Ok(json!({ "rate": an.rate, "backend": an.backend, "notes": an.notes }))
         }
         "pitch_target" => {
             let params = match arg(a, "reference") {
-                Some(v) => Some(
-                    serde_json::from_value::<RefTune>(v.clone())
-                        .map_err(|er| format!("BAD_ARGS: reference: {er}"))?,
-                ),
+                Some(v) => Some(serde_json::from_value::<RefTune>(v.clone()).map_err(|er| format!("BAD_ARGS: reference: {er}"))?),
                 None => None,
             };
-            let t = e
-                .pitch_target(need_u64(a, "clipId")?, params)
-                .map_err(|x| x.to_string())?;
+            let t = e.pitch_target(need_u64(a, "clipId")?, params).map_err(|x| x.to_string())?;
             if arg(a, "full").and_then(Value::as_bool).unwrap_or(false) {
                 return Ok(json!(&*t));
             }
-            Ok(
-                json!({ "score": t.score, "octave": t.octave, "reason": t.reason, "start": t.start as f64 / t.rate as f64, "notes": t.notes }),
-            )
+            Ok(json!({ "score": t.score, "octave": t.octave, "reason": t.reason, "start": t.start as f64 / t.rate as f64, "notes": t.notes }))
         }
         "tune_ref" => tune_ref(app, a, if_revision).map(ok_rev),
-        "f0_model" => Ok(json!(crate::models::status(
-            e,
-            app.model_error.lock().clone()
-        ))),
+        "f0_model" => Ok(json!(crate::models::status(e, app.model_error.lock().clone()))),
         "music_analyze" => {
             let cid = arg(a, "clipId").and_then(as_index);
             let ex = arg(a, "excludeFx").and_then(as_index);
@@ -1190,56 +779,31 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
                 Some("hard") => wave_engine::autovocal::Style::Hard,
                 _ => wave_engine::autovocal::Style::Natural,
             };
-            let bake = arg(a, "bakeRider")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let plan = e
-                .auto_vocal_plan(cid, beat, style, bake)
-                .map_err(|x| x.to_string())?;
+            let bake = arg(a, "bakeRider").and_then(Value::as_bool).unwrap_or(false);
+            let plan = e.auto_vocal_plan(cid, beat, style, bake).map_err(|x| x.to_string())?;
             Ok(json!(plan))
         }
         "bake_rider" => {
             let cid = need_u64(a, "clipId")?;
             let params: std::collections::BTreeMap<String, f64> = match arg(a, "params") {
-                Some(v) => serde_json::from_value(v.clone())
-                    .map_err(|er| format!("BAD_ARGS: params: {er}"))?,
+                Some(v) => serde_json::from_value(v.clone()).map_err(|er| format!("BAD_ARGS: params: {er}"))?,
                 None => Default::default(),
             };
             let (source, clip) = e.bake_rider(cid, &params).map_err(|x| x.to_string())?;
             Ok(json!({ "clipId": clip, "sourceId": source, "revision": e.revision() }))
         }
-        "vst3_scan" => Ok(json!(app
-            .plugins
-            .scan(arg(a, "rescan").and_then(Value::as_bool).unwrap_or(false)))),
+        "vst3_scan" => Ok(json!(app.plugins.scan(arg(a, "rescan").and_then(Value::as_bool).unwrap_or(false)))),
         "vst3_add" => {
-            let (id, rev) = vst3_add(
-                app,
-                need_u64(a, "insertId")?,
-                need_str(a, "path")?,
-                need_str(a, "cid")?,
-                None,
-            )?;
+            let (id, rev) = vst3_add(app, need_u64(a, "insertId")?, need_str(a, "path")?, need_str(a, "cid")?, None)?;
             Ok(json!({ "fxId": id, "revision": rev }))
         }
         "vst3_params" => {
-            let q = arg(a, "query")
-                .and_then(Value::as_str)
-                .map(str::to_lowercase);
+            let q = arg(a, "query").and_then(Value::as_str).map(str::to_lowercase);
             let ps = app.plugins.params(need_u64(a, "fxId")?)?;
-            Ok(json!(ps
-                .into_iter()
-                .filter(|p| q
-                    .as_ref()
-                    .map(|q| p.name.to_lowercase().contains(q))
-                    .unwrap_or(true))
-                .collect::<Vec<_>>()))
+            Ok(json!(ps.into_iter().filter(|p| q.as_ref().map(|q| p.name.to_lowercase().contains(q)).unwrap_or(true)).collect::<Vec<_>>()))
         }
         "vst3_set_param" => {
-            app.plugins.set_param(
-                need_u64(a, "fxId")?,
-                need_u64(a, "id")? as u32,
-                opt_f64(a, "value").ok_or("`value` is required")?,
-            )?;
+            app.plugins.set_param(need_u64(a, "fxId")?, need_u64(a, "id")? as u32, opt_f64(a, "value").ok_or("`value` is required")?)?;
             Ok(json!({}))
         }
         other => Err(format!("UNKNOWN_COMMAND: `{other}` (see `wave catalog`)")),
@@ -1252,14 +816,8 @@ mod tests {
 
     #[test]
     fn step_strings() {
-        assert_eq!(
-            parse_steps("x... x... | x.5. ..9.", 1.0).unwrap(),
-            vec![(0.0, 1.0), (4.0, 1.0), (8.0, 1.0), (10.0, 0.5), (14.0, 0.9)]
-        );
-        assert_eq!(
-            parse_steps("X-X_", 0.6).unwrap(),
-            vec![(0.0, 0.6), (2.0, 0.6)]
-        );
+        assert_eq!(parse_steps("x... x... | x.5. ..9.", 1.0).unwrap(), vec![(0.0, 1.0), (4.0, 1.0), (8.0, 1.0), (10.0, 0.5), (14.0, 0.9)]);
+        assert_eq!(parse_steps("X-X_", 0.6).unwrap(), vec![(0.0, 0.6), (2.0, 0.6)]);
         assert!(parse_steps("x?x", 1.0).is_err());
         assert!(parse_steps("", 1.0).unwrap().is_empty());
     }

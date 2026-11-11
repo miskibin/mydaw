@@ -25,9 +25,7 @@ fn main() {
         "clicks" => clicks(),
         "cpu" => cpu(),
         "clickdbg" => clickdbg(&args[1]),
-        "demos" => demos(Path::new(
-            args.get(1).map(String::as_str).unwrap_or("synth_demos"),
-        )),
+        "demos" => demos(Path::new(args.get(1).map(String::as_str).unwrap_or("synth_demos"))),
         _ => eprintln!("usage: synth_lab alias|levels|clicks|cpu|demos <dir>"),
     }
 }
@@ -56,16 +54,10 @@ fn alias() {
             *w = w.min(x);
         }
         if k % 12 == 0 || k == 108 {
-            println!(
-                "| {k} | {f:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |",
-                v[0], v[1], v[2], v[3], v[4]
-            );
+            println!("| {k} | {f:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |", v[0], v[1], v[2], v[3], v[4]);
         }
     }
-    println!(
-        "| worst 24–108 | | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |",
-        worst[0], worst[1], worst[2], worst[3], worst[4]
-    );
+    println!("| worst 24–108 | | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} |", worst[0], worst[1], worst[2], worst[3], worst[4]);
 }
 
 /// Loudness target per category (basses and pads a little lower).
@@ -87,16 +79,7 @@ fn levels() {
         if tp + delta > -3.0 {
             delta = -3.0 - tp;
         }
-        println!(
-            "| {} | {} | {} | {:.1} | {:.1} | {:.1} | {:.1} |",
-            p.name,
-            p.category,
-            p.probe_key(),
-            lu,
-            tp,
-            now,
-            now + delta
-        );
+        println!("| {} | {} | {} | {:.1} | {:.1} | {:.1} | {:.1} |", p.name, p.category, p.probe_key(), lu, tp, now, now + delta);
     }
 }
 
@@ -104,15 +87,8 @@ fn count_clicks(l: &[f32], r: &[f32]) -> usize {
     let (a, b) = (lab::click_flags(l, SR, 3.0), lab::click_flags(r, SR, 3.0));
     if std::env::var("SYNTH_DBG").is_ok() {
         for &i in &a {
-            let ctx: Vec<String> = l[i.saturating_sub(4)..(i + 4).min(l.len())]
-                .iter()
-                .map(|v| format!("{v:+.4}"))
-                .collect();
-            eprintln!(
-                "  flag L at {:.2} ms: {}",
-                i as f32 / SR * 1000.0,
-                ctx.join(" ")
-            );
+            let ctx: Vec<String> = l[i.saturating_sub(4)..(i + 4).min(l.len())].iter().map(|v| format!("{v:+.4}")).collect();
+            eprintln!("  flag L at {:.2} ms: {}", i as f32 / SR * 1000.0, ctx.join(" "));
         }
     }
     a.len() + b.len()
@@ -125,39 +101,21 @@ fn click_scenarios(p: &Patch, next: &Patch, key: u8) -> [usize; 6] {
     // a) note on/off
     let mut s = SynthInst::new(1, *p, SR);
     for i in 0..4 {
-        s.note(
-            ms(400.0 * i as f32),
-            ms(300.0),
-            key + (i * 3) as u8,
-            0.8,
-            Dest::Click,
-        );
+        s.note(ms(400.0 * i as f32), ms(300.0), key + (i * 3) as u8, 0.8, Dest::Click);
     }
     let (l, r) = lab::run(&mut s, 3.5, SR);
     out[0] = count_clicks(&l, &r);
     // b) retrigger the same key, short gaps and overlaps
     let mut s = SynthInst::new(1, *p, SR);
     for i in 0..8 {
-        s.note(
-            ms(120.0 * i as f32),
-            ms(if i % 2 == 0 { 100.0 } else { 200.0 }),
-            key,
-            0.8,
-            Dest::Click,
-        );
+        s.note(ms(120.0 * i as f32), ms(if i % 2 == 0 { 100.0 } else { 200.0 }), key, 0.8, Dest::Click);
     }
     let (l, r) = lab::run(&mut s, 3.0, SR);
     out[1] = count_clicks(&l, &r);
     // c) voice stealing: 20 notes stacked
     let mut s = SynthInst::new(1, *p, SR);
     for i in 0..20u32 {
-        s.note(
-            ms(30.0 * i as f32),
-            ms(1500.0),
-            (key as u32 - 12 + 2 * i) as u8,
-            0.8,
-            Dest::Click,
-        );
+        s.note(ms(30.0 * i as f32), ms(1500.0), (key as u32 - 12 + 2 * i) as u8, 0.8, Dest::Click);
     }
     let (l, r) = lab::run(&mut s, 4.0, SR);
     out[2] = count_clicks(&l, &r);
@@ -198,55 +156,30 @@ fn clickdbg(name: &str) {
     let key = p.probe_key();
     let mut s = SynthInst::new(1, p.patch, SR);
     for i in 0..4 {
-        s.note(
-            ms(400.0 * i as f32),
-            ms(300.0),
-            key + (i * 3) as u8,
-            0.8,
-            Dest::Click,
-        );
+        s.note(ms(400.0 * i as f32), ms(300.0), key + (i * 3) as u8, 0.8, Dest::Click);
     }
     let (l, _r) = lab::run(&mut s, 3.5, SR);
     for i in lab::click_flags(&l, SR, 3.0) {
-        println!(
-            "on/off flag at {:.2} ms: {:?}",
-            i as f32 / SR * 1000.0,
-            &l[i - 3..i + 3]
-        );
+        println!("on/off flag at {:.2} ms: {:?}", i as f32 / SR * 1000.0, &l[i - 3..i + 3]);
     }
     let mut s = SynthInst::new(1, p.patch, SR);
     for i in 0..8 {
-        s.note(
-            ms(120.0 * i as f32),
-            ms(if i % 2 == 0 { 100.0 } else { 200.0 }),
-            key,
-            0.8,
-            Dest::Click,
-        );
+        s.note(ms(120.0 * i as f32), ms(if i % 2 == 0 { 100.0 } else { 200.0 }), key, 0.8, Dest::Click);
     }
     let (l, _r) = lab::run(&mut s, 3.0, SR);
     for i in lab::click_flags(&l, SR, 3.0) {
-        println!(
-            "retrig flag at {:.2} ms: {:?}",
-            i as f32 / SR * 1000.0,
-            &l[i - 3..i + 3]
-        );
+        println!("retrig flag at {:.2} ms: {:?}", i as f32 / SR * 1000.0, &l[i - 3..i + 3]);
     }
 }
 
 fn clicks() {
     // the detector itself: a hard cut and a step must be caught, a clean sine must not
-    let sine: Vec<f32> = (0..48000)
-        .map(|i| (i as f32 * 0.0137).sin() * 0.5)
-        .collect();
+    let sine: Vec<f32> = (0..48000).map(|i| (i as f32 * 0.0137).sin() * 0.5).collect();
     let mut cut = sine.clone();
     cut[24000..].fill(0.0);
     let mut step = sine.clone();
     step[30000..].iter_mut().for_each(|v| *v += 0.05);
-    let saw: Vec<f32> = voice::render_osc(tables::SAW, 0.0, 110.0, SR, 48000)
-        .iter()
-        .map(|v| v * 0.5)
-        .collect();
+    let saw: Vec<f32> = voice::render_osc(tables::SAW, 0.0, 110.0, SR, 48000).iter().map(|v| v * 0.5).collect();
     let mut saw_cut = saw.clone();
     saw_cut[24011..].fill(0.0);
     let mut faded = sine.clone();
@@ -268,15 +201,9 @@ fn clicks() {
         for (t, v) in total.iter_mut().zip(c) {
             *t += v;
         }
-        println!(
-            "| {} | {} | {} | {} | {} | {} | {} |",
-            p.name, c[0], c[1], c[2], c[3], c[4], c[5]
-        );
+        println!("| {} | {} | {} | {} | {} | {} | {} |", p.name, c[0], c[1], c[2], c[3], c[4], c[5]);
     }
-    println!(
-        "| total | {} | {} | {} | {} | {} | {} |",
-        total[0], total[1], total[2], total[3], total[4], total[5]
-    );
+    println!("| total | {} | {} | {} | {} | {} | {} |", total[0], total[1], total[2], total[3], total[4], total[5]);
 }
 
 fn cpu() {
@@ -321,9 +248,7 @@ fn synth_chan(id: Id, preset: &str, root: u8) -> Channel {
         id,
         name: preset.into(),
         color: "#9b7cf8".into(),
-        src: ChannelSrc::Synth {
-            synth: wave_engine::poly::preset_state(preset).unwrap(),
-        },
+        src: ChannelSrc::Synth { synth: wave_engine::poly::preset_state(preset).unwrap() },
         vol: VOL_UNITY,
         pan: 0.0,
         mute: false,
@@ -349,24 +274,9 @@ fn render_song(preset: &str, song: &Song) -> Vec<f32> {
         })
         .collect();
     if song.hats {
-        let hat = p
-            .channels
-            .iter()
-            .find(|c| c.src == ChannelSrc::Inst { inst: Inst::Hat })
-            .unwrap()
-            .id;
-        let kick = p
-            .channels
-            .iter()
-            .find(|c| c.src == ChannelSrc::Inst { inst: Inst::Kick })
-            .unwrap()
-            .id;
-        let clap = p
-            .channels
-            .iter()
-            .find(|c| c.src == ChannelSrc::Inst { inst: Inst::Clap })
-            .unwrap()
-            .id;
+        let hat = p.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst: Inst::Hat }).unwrap().id;
+        let kick = p.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst: Inst::Kick }).unwrap().id;
+        let clap = p.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst: Inst::Clap }).unwrap().id;
         let bars = (song.beats / 4.0) as usize;
         for b in 0..bars {
             let o = b as f32 * 16.0;
@@ -385,37 +295,11 @@ fn render_song(preset: &str, song: &Song) -> Vec<f32> {
             notes.push(Note::new(kick, o, 1.0, None));
         }
     }
-    p.patterns = vec![Pattern {
-        id: p.alloc_id(),
-        name: "Demo".into(),
-        color: "#4f8ef7".into(),
-        len: song.beats,
-        min_len: song.beats,
-        notes,
-        swing: 0.0,
-    }];
+    p.patterns = vec![Pattern { id: p.alloc_id(), name: "Demo".into(), color: "#4f8ef7".into(), len: song.beats, min_len: song.beats, notes, swing: 0.0 }];
     let pid = p.patterns[0].id;
     let cid = p.alloc_id();
-    p.clips = vec![Clip {
-        id: cid,
-        track: 0,
-        start: 0.0,
-        len: song.beats,
-        offset: 0.0,
-        kind: ClipKind::Pat,
-        source: pid,
-        muted: false,
-        gain: 0.0,
-        fade_in: 0.0,
-        fade_out: 0.0,
-        pan: 0.0,
-        norm: false,
-        rev: false,
-        tune: None,
-    }];
-    Engine::new(p, Arc::new(NoPlugins))
-        .render(0.0, song.beats, 2.5, SR as u32)
-        .unwrap()
+    p.clips = vec![Clip { id: cid, track: 0, start: 0.0, len: song.beats, offset: 0.0, kind: ClipKind::Pat, source: pid, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None }];
+    Engine::new(p, Arc::new(NoPlugins)).render(0.0, song.beats, 2.5, SR as u32).unwrap()
 }
 
 /// (step, len, key, velocity) helpers
@@ -428,45 +312,20 @@ fn song_for(cat: &str) -> Song {
     match cat {
         "808" => {
             // 4 bars at 140: long 808s, slides where notes overlap
-            let line: [(f32, f32, u8); 10] = [
-                (0.0, 6.0, 36),
-                (6.0, 4.0, 36),
-                (10.0, 6.0, 43),
-                (16.0, 8.0, 34),
-                (23.0, 3.0, 46),
-                (26.0, 6.0, 34),
-                (32.0, 6.0, 36),
-                (38.0, 6.0, 41),
-                (43.0, 5.0, 39),
-                (48.0, 16.0, 31),
-            ];
+            let line: [(f32, f32, u8); 10] = [(0.0, 6.0, 36), (6.0, 4.0, 36), (10.0, 6.0, 43), (16.0, 8.0, 34), (23.0, 3.0, 46), (26.0, 6.0, 34), (32.0, 6.0, 36), (38.0, 6.0, 41), (43.0, 5.0, 39), (48.0, 16.0, 31)];
             for (s, l, k) in line {
                 v.push(n(s, l, k));
             }
-            return Song {
-                bpm: 140.0,
-                beats: 16.0,
-                notes: v,
-                hats: true,
-            };
+            return Song { bpm: 140.0, beats: 16.0, notes: v, hats: true };
         }
         "Bas" => {
             let line = [36u8, 36, 48, 36, 39, 36, 43, 41];
             for bar in 0..4 {
                 for (i, k) in line.iter().enumerate() {
-                    v.push(n(
-                        bar as f32 * 16.0 + i as f32 * 2.0,
-                        1.6,
-                        *k - if bar >= 2 { 4 } else { 0 },
-                    ));
+                    v.push(n(bar as f32 * 16.0 + i as f32 * 2.0, 1.6, *k - if bar >= 2 { 4 } else { 0 }));
                 }
             }
-            return Song {
-                bpm: 124.0,
-                beats: 16.0,
-                notes: v,
-                hats: true,
-            };
+            return Song { bpm: 124.0, beats: 16.0, notes: v, hats: true };
         }
         "Pluck" | "Arp" | "Dzwonki" => {
             let arp = [60u8, 63, 67, 70, 72, 70, 67, 63];
@@ -478,41 +337,18 @@ fn song_for(cat: &str) -> Song {
                     if cat == "Dzwonki" && s % 2 == 1 {
                         continue;
                     }
-                    v.push((
-                        step,
-                        if cat == "Dzwonki" { 2.0 } else { 1.0 },
-                        k,
-                        if s % 4 == 0 { 0.95 } else { 0.75 },
-                    ));
+                    v.push((step, if cat == "Dzwonki" { 2.0 } else { 1.0 }, k, if s % 4 == 0 { 0.95 } else { 0.75 }));
                 }
             }
         }
         "Lead" => {
-            let mel: [(f32, f32, u8); 12] = [
-                (0.0, 3.0, 72),
-                (3.0, 3.0, 75),
-                (6.0, 2.0, 77),
-                (8.0, 6.0, 79),
-                (16.0, 2.0, 79),
-                (18.0, 2.0, 77),
-                (20.0, 4.0, 75),
-                (24.0, 8.0, 72),
-                (32.0, 3.0, 70),
-                (35.0, 5.0, 72),
-                (40.0, 8.0, 75),
-                (48.0, 14.0, 74),
-            ];
+            let mel: [(f32, f32, u8); 12] = [(0.0, 3.0, 72), (3.0, 3.0, 75), (6.0, 2.0, 77), (8.0, 6.0, 79), (16.0, 2.0, 79), (18.0, 2.0, 77), (20.0, 4.0, 75), (24.0, 8.0, 72), (32.0, 3.0, 70), (35.0, 5.0, 72), (40.0, 8.0, 75), (48.0, 14.0, 74)];
             for (s, l, k) in mel {
                 v.push(n(s, l + 0.3, k));
             }
         }
         "Pad" | "Dęte/Smyczki" | "Klawisze" | "Lo-fi" => {
-            let chords: [[u8; 4]; 4] = [
-                [48, 58, 62, 63],
-                [44, 55, 60, 63],
-                [51, 58, 62, 67],
-                [46, 55, 58, 62],
-            ];
+            let chords: [[u8; 4]; 4] = [[48, 58, 62, 63], [44, 55, 60, 63], [51, 58, 62, 67], [46, 55, 58, 62]];
             for (bar, c) in chords.iter().enumerate() {
                 for &k in c {
                     if cat == "Klawisze" || cat == "Lo-fi" {
@@ -525,44 +361,22 @@ fn song_for(cat: &str) -> Song {
                 }
             }
             if cat == "Lo-fi" {
-                return Song {
-                    bpm: 82.0,
-                    beats: 16.0,
-                    notes: v,
-                    hats: false,
-                };
+                return Song { bpm: 82.0, beats: 16.0, notes: v, hats: false };
             }
         }
         _ => {
             v.push(n(0.0, 30.0, 60));
-            return Song {
-                bpm: 120.0,
-                beats: 8.0,
-                notes: v,
-                hats: false,
-            };
+            return Song { bpm: 120.0, beats: 8.0, notes: v, hats: false };
         }
     }
-    Song {
-        bpm: 120.0,
-        beats: 16.0,
-        notes: v,
-        hats: false,
-    }
+    Song { bpm: 120.0, beats: 16.0, notes: v, hats: false }
 }
 
 fn write_mp3(dir: &Path, name: &str, x: &[f32]) {
     let wav = dir.join(format!("{name}.wav"));
     wave_engine::sources::write_wav(&wav, x, SR as u32).unwrap();
     let mp3 = dir.join(format!("{name}.mp3"));
-    let ok = std::process::Command::new("ffmpeg")
-        .args(["-y", "-loglevel", "error", "-i"])
-        .arg(&wav)
-        .args(["-codec:a", "libmp3lame", "-b:a", "192k"])
-        .arg(&mp3)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let ok = std::process::Command::new("ffmpeg").args(["-y", "-loglevel", "error", "-i"]).arg(&wav).args(["-codec:a", "libmp3lame", "-b:a", "192k"]).arg(&mp3).status().map(|s| s.success()).unwrap_or(false);
     if ok {
         let _ = std::fs::remove_file(&wav);
         println!("{}", mp3.display());
@@ -572,15 +386,7 @@ fn write_mp3(dir: &Path, name: &str, x: &[f32]) {
 }
 
 fn slug(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect()
+    s.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '_' }).collect()
 }
 
 fn demos(dir: &Path) {
@@ -590,12 +396,7 @@ fn demos(dir: &Path) {
     for p in &all {
         let (l, r) = lab::probe(p, SR);
         let x: Vec<f32> = l.iter().zip(&r).flat_map(|(a, b)| [*a, *b]).collect();
-        wave_engine::sources::write_wav(
-            &probes.join(format!("{}.wav", slug(p.name))),
-            &x,
-            SR as u32,
-        )
-        .unwrap();
+        wave_engine::sources::write_wav(&probes.join(format!("{}.wav", slug(p.name))), &x, SR as u32).unwrap();
     }
     println!("probes: {}", probes.display());
     for cat in presets::CATEGORIES {
@@ -612,14 +413,6 @@ fn demos(dir: &Path) {
             out.iter_mut().for_each(|v| *v *= g);
             eprintln!("{cat}: peak {pk:.2}, scaled to 0.97");
         }
-        write_mp3(
-            dir,
-            &format!(
-                "{:02}_{}",
-                presets::CATEGORIES.iter().position(|c| c == cat).unwrap() + 1,
-                slug(cat)
-            ),
-            &out,
-        );
+        write_mp3(dir, &format!("{:02}_{}", presets::CATEGORIES.iter().position(|c| c == cat).unwrap() + 1, slug(cat)), &out);
     }
 }

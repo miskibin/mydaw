@@ -8,10 +8,7 @@ use wave_engine::*;
 
 fn engine() -> (Arc<Engine>, Arc<AtomicUsize>, Arc<std::sync::Mutex<u64>>) {
     let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
-    let (n, last) = (
-        Arc::new(AtomicUsize::new(0)),
-        Arc::new(std::sync::Mutex::new(0)),
-    );
+    let (n, last) = (Arc::new(AtomicUsize::new(0)), Arc::new(std::sync::Mutex::new(0)));
     let (n2, l2) = (n.clone(), last.clone());
     e.on_change(move |dto| {
         n2.fetch_add(1, Ordering::Relaxed);
@@ -37,11 +34,7 @@ fn a_drag_is_reported_once_when_it_ends() {
     assert_eq!(n.load(Ordering::Relaxed), 0, "no state per transient batch");
     e.end_gesture();
     assert_eq!(n.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        *last.lock().unwrap(),
-        e.revision(),
-        "the report carries the final revision"
-    );
+    assert_eq!(*last.lock().unwrap(), e.revision(), "the report carries the final revision");
     assert!(e.state().can_undo);
 }
 

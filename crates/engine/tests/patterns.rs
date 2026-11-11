@@ -751,9 +751,7 @@ fn regenerate_demo_v1_render() {
         .chunks(w * 2)
         .map(|c| {
             let n = (c.len() / 2) as f64;
-            let (l, r) = c.as_chunks::<2>().0.iter().fold((0f64, 0f64), |(l, r), f| {
-                (l + (f[0] as f64).powi(2), r + (f[1] as f64).powi(2))
-            });
+            let (l, r) = c.as_chunks::<2>().0.iter().fold((0f64, 0f64), |(l, r), f| (l + (f[0] as f64).powi(2), r + (f[1] as f64).powi(2)));
             [(l / n).sqrt(), (r / n).sqrt()]
         })
         .collect();
@@ -765,9 +763,5 @@ fn regenerate_demo_v1_render() {
         "rms": rms,
         "window": w,
     });
-    std::fs::write(
-        format!("{fixtures}/demo_v1_render.json"),
-        serde_json::to_string(&json).unwrap(),
-    )
-    .unwrap();
+    std::fs::write(format!("{fixtures}/demo_v1_render.json"), serde_json::to_string(&json).unwrap()).unwrap();
 }

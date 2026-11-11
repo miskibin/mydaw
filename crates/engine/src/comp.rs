@@ -88,23 +88,11 @@ impl CompRt {
 
 /// Resolves a comp. `audition` plays one whole take instead of the comp.
 /// Regions whose take has no loaded audio are silent.
-pub fn build(
-    comp: &Comp,
-    spb: f64,
-    audition: Option<Id>,
-    audio: &HashMap<Id, Arc<Audio>>,
-) -> CompRt {
+pub fn build(comp: &Comp, spb: f64, audition: Option<Id>, audio: &HashMap<Id, Arc<Audio>>) -> CompRt {
     let mut segs = vec![];
     if let Some(t) = audition.and_then(|id| comp.take(id)) {
         if let Some(a) = audio.get(&t.source) {
-            segs.push(CompSeg {
-                audio: a.clone(),
-                a: t.start,
-                b: t.end(),
-                xin: 0.0,
-                xout: 0.0,
-                src0: t.offset - t.start,
-            });
+            segs.push(CompSeg { audio: a.clone(), a: t.start, b: t.end(), xin: 0.0, xout: 0.0, src0: t.offset - t.start });
         }
         return CompRt { segs };
     }
@@ -127,23 +115,10 @@ pub fn build(
         .collect();
     for (i, r) in rs.iter().enumerate() {
         let Some(t) = comp.take(r.take) else { continue };
-        let Some(a) = audio.get(&t.source) else {
-            continue;
-        };
+        let Some(a) = audio.get(&t.source) else { continue };
         let xin = fade_in[i];
-        let xout = if adjacent(i) {
-            fade_in[i + 1]
-        } else {
-            to_beats(r.xfade.unwrap_or(def)).min(len(i))
-        };
-        segs.push(CompSeg {
-            audio: a.clone(),
-            a: r.from - xin / 2.0,
-            b: r.to + xout / 2.0,
-            xin,
-            xout,
-            src0: t.offset - t.start,
-        });
+        let xout = if adjacent(i) { fade_in[i + 1] } else { to_beats(r.xfade.unwrap_or(def)).min(len(i)) };
+        segs.push(CompSeg { audio: a.clone(), a: r.from - xin / 2.0, b: r.to + xout / 2.0, xin, xout, src0: t.offset - t.start });
     }
     segs.sort_by(|x, y| x.a.total_cmp(&y.a));
     CompRt { segs }
@@ -164,17 +139,11 @@ pub fn land_takes(p: &mut Project, track: u32, passes: &[(Id, f64, f64)]) {
         return;
     }
     let r0 = passes.iter().map(|x| x.1).fold(f64::INFINITY, f64::min);
-    let r1 = passes
-        .iter()
-        .map(|x| x.1 + x.2)
-        .fold(f64::NEG_INFINITY, f64::max);
-    let overlaps =
-        |c: &Clip| c.track == track && c.start < r1 - 1e-9 && c.start + c.len > r0 + 1e-9;
+    let r1 = passes.iter().map(|x| x.1 + x.2).fold(f64::NEG_INFINITY, f64::max);
+    let overlaps = |c: &Clip| c.track == track && c.start < r1 - 1e-9 && c.start + c.len > r0 + 1e-9;
 
     // 1. recording over a comp: more takes for it
-    let hit = p.clips.iter().position(|c| {
-        c.kind == ClipKind::Comp && overlaps(c) && p.comps.iter().any(|x| x.id == c.source)
-    });
+    let hit = p.clips.iter().position(|c| c.kind == ClipKind::Comp && overlaps(c) && p.comps.iter().any(|x| x.id == c.source));
     if let Some(ci) = hit {
         let comp_id = p.clips[ci].source;
         let origin = p.clips[ci].start - p.clips[ci].offset;
@@ -183,25 +152,13 @@ pub fn land_takes(p: &mut Project, track: u32, passes: &[(Id, f64, f64)]) {
         for &(src, start, len) in passes {
             let id = p.alloc_id();
             fresh.push(id);
-            comp.takes.push(Take {
-                id,
-                name: format!("Take {}", comp.takes.len() + 1),
-                source: src,
-                start: start - origin,
-                len,
-                offset: 0.0,
-                color: None,
-            });
+            comp.takes.push(Take { id, name: format!("Take {}", comp.takes.len() + 1), source: src, start: start - origin, len, offset: 0.0, color: None });
         }
         // comp time stays ≥ 0: shift it (and every clip playing it) when a take starts earlier
         let lo = comp.extent().0;
         if lo < 0.0 {
             shift(&mut comp, -lo);
-            for c in p
-                .clips
-                .iter_mut()
-                .filter(|c| c.kind == ClipKind::Comp && c.source == comp_id)
-            {
+            for c in p.clips.iter_mut().filter(|c| c.kind == ClipKind::Comp && c.source == comp_id) {
                 c.offset -= lo;
             }
         }
@@ -224,70 +181,26 @@ pub fn land_takes(p: &mut Project, track: u32, passes: &[(Id, f64, f64)]) {
     let mut old: Vec<Clip> = p
         .clips
         .iter()
-        .filter(|c| {
-            c.kind == ClipKind::Audio
-                && overlaps(c)
-                && !c.rev
-                && !c.norm
-                && c.tune
-                    .as_ref()
-                    .is_none_or(|t| t.notes.is_empty() && t.pencil.is_empty())
-        })
+        .filter(|c| c.kind == ClipKind::Audio && overlaps(c) && !c.rev && !c.norm && c.tune.as_ref().is_none_or(|t| t.notes.is_empty() && t.pencil.is_empty()))
         .cloned()
         .collect();
     old.sort_by(|a, b| a.start.total_cmp(&b.start));
     if old.is_empty() && passes.len() == 1 {
         let (src, start, len) = passes[0];
         let id = p.alloc_id();
-        p.clips.push(Clip {
-            id,
-            track,
-            start,
-            len,
-            offset: 0.0,
-            kind: ClipKind::Audio,
-            source: src,
-            muted: false,
-            gain: 0.0,
-            fade_in: 0.0,
-            fade_out: 0.0,
-            pan: 0.0,
-            norm: false,
-            rev: false,
-            tune: None,
-        });
+        p.clips.push(Clip { id, track, start, len, offset: 0.0, kind: ClipKind::Audio, source: src, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None });
         return;
     }
     // (source, timeline start, len, source offset)
-    let mut all: Vec<(Id, f64, f64, f64)> = old
-        .iter()
-        .map(|c| (c.source, c.start, c.len, c.offset))
-        .collect();
+    let mut all: Vec<(Id, f64, f64, f64)> = old.iter().map(|c| (c.source, c.start, c.len, c.offset)).collect();
     all.extend(passes.iter().map(|&(s, a, l)| (s, a, l, 0.0)));
     let origin = all.iter().map(|x| x.1).fold(f64::INFINITY, f64::min);
-    let end = all
-        .iter()
-        .map(|x| x.1 + x.2)
-        .fold(f64::NEG_INFINITY, f64::max);
+    let end = all.iter().map(|x| x.1 + x.2).fold(f64::NEG_INFINITY, f64::max);
     let id = p.alloc_id();
-    let mut comp = Comp {
-        id,
-        name: format!("Comp {}", p.comps.len() + 1),
-        takes: vec![],
-        regions: vec![],
-        xfade: DEFAULT_XFADE,
-    };
+    let mut comp = Comp { id, name: format!("Comp {}", p.comps.len() + 1), takes: vec![], regions: vec![], xfade: DEFAULT_XFADE };
     for (k, &(src, start, len, offset)) in all.iter().enumerate() {
         let tid = p.alloc_id();
-        comp.takes.push(Take {
-            id: tid,
-            name: format!("Take {}", k + 1),
-            source: src,
-            start: start - origin,
-            len,
-            offset,
-            color: None,
-        });
+        comp.takes.push(Take { id: tid, name: format!("Take {}", k + 1), source: src, start: start - origin, len, offset, color: None });
     }
     // what played before, then each pass on top, oldest first: the newest plays
     // wherever it has audio
@@ -298,23 +211,7 @@ pub fn land_takes(p: &mut Project, track: u32, passes: &[(Id, f64, f64)]) {
     let gone: Vec<Id> = old.iter().map(|c| c.id).collect();
     p.clips.retain(|c| !gone.contains(&c.id));
     let cid = p.alloc_id();
-    p.clips.push(Clip {
-        id: cid,
-        track,
-        start: origin,
-        len: end - origin,
-        offset: 0.0,
-        kind: ClipKind::Comp,
-        source: id,
-        muted: false,
-        gain,
-        fade_in: 0.0,
-        fade_out: 0.0,
-        pan,
-        norm: false,
-        rev: false,
-        tune: None,
-    });
+    p.clips.push(Clip { id: cid, track, start: origin, len: end - origin, offset: 0.0, kind: ClipKind::Comp, source: id, muted: false, gain, fade_in: 0.0, fade_out: 0.0, pan, norm: false, rev: false, tune: None });
     p.comps.push(comp);
 }
 

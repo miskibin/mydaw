@@ -5,23 +5,13 @@ use std::sync::Arc;
 use wave_engine::*;
 
 fn page(id: Id, name: &str, start_bar: u32, text: &str) -> LyricPage {
-    LyricPage {
-        id,
-        name: name.into(),
-        start_bar,
-        text: text.into(),
-    }
+    LyricPage { id, name: name.into(), start_bar, text: text.into() }
 }
 
 fn notebook() -> Notebook {
     Notebook {
         pages: vec![
-            page(
-                5000,
-                "Zwrotka 1",
-                1,
-                "[Zwrotka]\nidę przez miasto nocą\n\nświatła mi nie pomogą",
-            ),
+            page(5000, "Zwrotka 1", 1, "[Zwrotka]\nidę przez miasto nocą\n\nświatła mi nie pomogą"),
             page(5001, "Refren", 17, "to jest refren\nłatwy do śpiewania"),
         ],
     }
@@ -31,28 +21,14 @@ fn notebook() -> Notebook {
 fn put_notebook_is_one_undo_step_and_bumps_ids() {
     let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
     assert!(e.project().notebook.pages.is_empty());
-    e.apply(
-        &[Op::PutNotebook {
-            notebook: notebook(),
-        }],
-        false,
-        None,
-    )
-    .unwrap();
+    e.apply(&[Op::PutNotebook { notebook: notebook() }], false, None).unwrap();
     let p = e.project();
     assert_eq!(p.notebook, notebook());
     assert!(p.next_id > 5001);
     assert!(e.state().dirty);
     let mut edited = notebook();
     edited.pages[1].text.push_str("\nnowa linia");
-    e.apply(
-        &[Op::PutNotebook {
-            notebook: edited.clone(),
-        }],
-        false,
-        None,
-    )
-    .unwrap();
+    e.apply(&[Op::PutNotebook { notebook: edited.clone() }], false, None).unwrap();
     assert_eq!(e.project().notebook, edited);
     assert!(e.undo());
     assert_eq!(e.project().notebook, notebook());
@@ -68,19 +44,13 @@ fn invalid_notebooks_are_rejected() {
     let before = e.project();
     let mut dup = notebook();
     dup.pages[1].id = 5000;
-    assert!(e
-        .apply(&[Op::PutNotebook { notebook: dup }], false, None)
-        .is_err());
+    assert!(e.apply(&[Op::PutNotebook { notebook: dup }], false, None).is_err());
     let mut zero = notebook();
     zero.pages[0].start_bar = 0;
-    assert!(e
-        .apply(&[Op::PutNotebook { notebook: zero }], false, None)
-        .is_err());
+    assert!(e.apply(&[Op::PutNotebook { notebook: zero }], false, None).is_err());
     let mut huge = notebook();
     huge.pages[0].text = "x".repeat(NOTEBOOK_MAX_TEXT + 1);
-    assert!(e
-        .apply(&[Op::PutNotebook { notebook: huge }], false, None)
-        .is_err());
+    assert!(e.apply(&[Op::PutNotebook { notebook: huge }], false, None).is_err());
     assert_eq!(e.project(), before);
 }
 
@@ -90,14 +60,7 @@ fn notebook_survives_save_and_open() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("song.wave");
     let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
-    e.apply(
-        &[Op::PutNotebook {
-            notebook: notebook(),
-        }],
-        false,
-        None,
-    )
-    .unwrap();
+    e.apply(&[Op::PutNotebook { notebook: notebook() }], false, None).unwrap();
     e.save(&path).unwrap();
     let f = Engine::new(Project::empty(), Arc::new(NoPlugins));
     f.open(&path).unwrap();

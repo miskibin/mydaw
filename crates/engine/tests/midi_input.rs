@@ -12,11 +12,7 @@ const BLOCK: usize = 256;
 fn engine(p: Project) -> Arc<Engine> {
     // one directory per engine: tests run in parallel and each saves a song
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let dir = std::env::temp_dir().join(format!(
-        "wave-midi-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
+    let dir = std::env::temp_dir().join(format!("wave-midi-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     std::fs::create_dir_all(&dir).unwrap();
     let e = Engine::new(p, Arc::new(NoPlugins));
     e.save(&dir.join("song.wave")).unwrap();
@@ -31,21 +27,14 @@ fn run(rt: &mut Rt, frames: usize) -> f32 {
     while done < frames {
         let n = BLOCK.min(frames - done);
         rt.process(&mut l[..n], &mut r[..n], None);
-        peak = l[..n]
-            .iter()
-            .chain(r[..n].iter())
-            .fold(peak, |a, x| a.max(x.abs()));
+        peak = l[..n].iter().chain(r[..n].iter()).fold(peak, |a, x| a.max(x.abs()));
         done += n;
     }
     peak
 }
 
 fn on(key: u8) -> MidiMsg {
-    MidiMsg::NoteOn {
-        ch: 0,
-        key,
-        vel: 100,
-    }
+    MidiMsg::NoteOn { ch: 0, key, vel: 100 }
 }
 fn off(key: u8) -> MidiMsg {
     MidiMsg::NoteOff { ch: 0, key }
@@ -75,10 +64,7 @@ fn sustain_pedal_holds_released_keys() {
     e.midi_event(on(40));
     e.midi_event(off(40));
     run(&mut rt, SR as usize / 10);
-    assert!(
-        run(&mut rt, SR as usize / 2) > 0.01,
-        "pedal down: the note keeps sounding"
-    );
+    assert!(run(&mut rt, SR as usize / 2) > 0.01, "pedal down: the note keeps sounding");
     e.midi_event(MidiMsg::Sustain { ch: 0, down: false });
     run(&mut rt, SR as usize / 10);
     assert_eq!(run(&mut rt, SR as usize / 10), 0.0);
@@ -119,11 +105,7 @@ fn a_recorded_take_becomes_a_pattern_clip_on_the_armed_track() {
     run(&mut rt, beat(0.5)); // 6.5
     e.stop();
     let p = e.project();
-    let clip = p
-        .clips
-        .iter()
-        .find(|c| c.kind == ClipKind::Pat)
-        .expect("a pattern clip");
+    let clip = p.clips.iter().find(|c| c.kind == ClipKind::Pat).expect("a pattern clip");
     assert_eq!(clip.track, 2);
     assert_eq!(clip.start, 4.0);
     assert_eq!(clip.len, 4.0);
@@ -185,13 +167,7 @@ fn keys_follow_project_edits_and_stream_restarts_without_the_core_lock() {
     let editor = std::thread::spawn(move || {
         let mut k = 0u32;
         while !s2.load(std::sync::atomic::Ordering::Relaxed) {
-            let _ = e2.apply(
-                &[Op::SetBpm {
-                    bpm: 100.0 + (k % 20) as f64,
-                }],
-                false,
-                None,
-            );
+            let _ = e2.apply(&[Op::SetBpm { bpm: 100.0 + (k % 20) as f64 }], false, None);
             k += 1;
         }
     });
@@ -205,10 +181,7 @@ fn keys_follow_project_edits_and_stream_restarts_without_the_core_lock() {
     }
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     editor.join().unwrap();
-    assert!(
-        worst < std::time::Duration::from_millis(50),
-        "keyboard events waited {worst:?}"
-    );
+    assert!(worst < std::time::Duration::from_millis(50), "keyboard events waited {worst:?}");
     // a new stream (device change) gets the keyboard too
     let mut rt2 = e.create_rt(SR as f32, BLOCK);
     e.midi_event(on(45));

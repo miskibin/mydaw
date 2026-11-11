@@ -34,12 +34,7 @@ struct History {
 
 impl History {
     fn new() -> Self {
-        Self {
-            buf: vec![0.0; FFT],
-            w: 0,
-            peak: 0.0,
-            smooth: [-120.0; BANDS],
-        }
+        Self { buf: vec![0.0; FFT], w: 0, peak: 0.0, smooth: [-120.0; BANDS] }
     }
     fn feed(&mut self, c: &mut rtrb::Consumer<f32>) {
         let n = c.slots();
@@ -79,16 +74,10 @@ pub struct Analyzer {
 }
 
 impl Analyzer {
-    pub fn new(
-        inputs: Vec<rtrb::Consumer<f32>>,
-        outputs: Vec<rtrb::Consumer<f32>>,
-        sr: f32,
-    ) -> Self {
+    pub fn new(inputs: Vec<rtrb::Consumer<f32>>, outputs: Vec<rtrb::Consumer<f32>>, sr: f32) -> Self {
         let n = inputs.len();
         let fft = RealFftPlanner::<f32>::new().plan_fft_forward(FFT);
-        let window = (0..FFT)
-            .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / FFT as f32).cos())
-            .collect();
+        let window = (0..FFT).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / FFT as f32).cos()).collect();
         let spec = fft.make_output_vec();
         let bin_hz = sr / FFT as f32;
         let bands = (0..BANDS)
@@ -100,18 +89,7 @@ impl Analyzer {
                 (b0, b1)
             })
             .collect();
-        Self {
-            inputs,
-            outputs,
-            hin: (0..n).map(|_| History::new()).collect(),
-            hout: (0..n).map(|_| History::new()).collect(),
-            ids: vec![],
-            fft,
-            window,
-            scratch: vec![0.0; FFT],
-            spec,
-            bands,
-        }
+        Self { inputs, outputs, hin: (0..n).map(|_| History::new()).collect(), hout: (0..n).map(|_| History::new()).collect(), ids: vec![], fft, window, scratch: vec![0.0; FFT], spec, bands }
     }
 
     fn spectrum(&mut self, h: &History, smooth: &mut [f32; BANDS]) -> [f32; BANDS] {
@@ -128,11 +106,7 @@ impl Analyzer {
             }
             let db = 20.0 * (m * norm).max(1e-7).log10();
             // fast attack, slow-ish fall, like a real analyser
-            smooth[k] = if db > smooth[k] {
-                db
-            } else {
-                smooth[k] * 0.7 + db * 0.3
-            };
+            smooth[k] = if db > smooth[k] { db } else { smooth[k] * 0.7 + db * 0.3 };
             out[k] = smooth[k];
         }
         out
@@ -160,27 +134,9 @@ impl Analyzer {
             let mut scope_out = [0f32; SCOPE];
             hin.last(&mut scope_in);
             hout.last(&mut scope_out);
-            res.push(FxAnalysis {
-                id,
-                in_peak: hin.peak,
-                out_peak: hout.peak,
-                gr: shared.gr(slot),
-                meters: shared.fx_meters(slot),
-                spec_in,
-                spec_out,
-                scope_in,
-                scope_out,
-            });
-            self.hin[slot] = History {
-                peak: 0.0,
-                smooth: si,
-                ..hin
-            };
-            self.hout[slot] = History {
-                peak: 0.0,
-                smooth: so,
-                ..hout
-            };
+            res.push(FxAnalysis { id, in_peak: hin.peak, out_peak: hout.peak, gr: shared.gr(slot), meters: shared.fx_meters(slot), spec_in, spec_out, scope_in, scope_out });
+            self.hin[slot] = History { peak: 0.0, smooth: si, ..hin };
+            self.hout[slot] = History { peak: 0.0, smooth: so, ..hout };
         }
         res
     }

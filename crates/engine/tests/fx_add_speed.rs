@@ -66,16 +66,7 @@ fn adding_and_bypassing_each_effect_is_fast() {
             id += 1;
             let fx = new_fx(id, kind, 120.0);
             let t0 = Instant::now();
-            e.apply(
-                &[Op::PutFx {
-                    insert_id: ins,
-                    fx,
-                    index: None,
-                }],
-                false,
-                None,
-            )
-            .unwrap();
+            e.apply(&[Op::PutFx { insert_id: ins, fx, index: None }], false, None).unwrap();
             let t = t0.elapsed();
             rt.process(&mut l, &mut r, None);
             t
@@ -86,26 +77,14 @@ fn adding_and_bypassing_each_effect_is_fast() {
             fx.bypass = on;
             on = !on;
             let t0 = Instant::now();
-            e.apply(
-                &[Op::PutFx {
-                    insert_id: ins,
-                    fx,
-                    index: None,
-                }],
-                false,
-                None,
-            )
-            .unwrap();
+            e.apply(&[Op::PutFx { insert_id: ins, fx, index: None }], false, None).unwrap();
             let t = t0.elapsed();
             rt.process(&mut l, &mut r, None);
             t
         });
-        eprintln!(
-            "add {kind:?}: {:.3} ms, bypass toggle: {:.3} ms",
-            add.as_secs_f64() * 1e3,
-            bypass.as_secs_f64() * 1e3
-        );
+        eprintln!("add {kind:?}: {:.3} ms, bypass toggle: {:.3} ms", add.as_secs_f64() * 1e3, bypass.as_secs_f64() * 1e3);
         assert!(add < BUDGET, "adding {kind:?} takes {add:?}");
         assert!(bypass < BUDGET, "bypassing {kind:?} takes {bypass:?}");
     }
 }
+

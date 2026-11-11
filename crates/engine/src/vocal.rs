@@ -38,24 +38,7 @@ pub struct Fet {
 
 impl Default for Fet {
     fn default() -> Self {
-        Self {
-            sr: 48000.0,
-            input: 1.0,
-            output: 1.0,
-            ratio: 4.0,
-            abi: false,
-            att: 0.0,
-            rel_fast: 0.0,
-            rel_slow: 0.0,
-            mix: 1.0,
-            env: 0.0,
-            slow: 0.0,
-            dc_l: (0.0, 0.0),
-            dc_r: (0.0, 0.0),
-            gr: 0.0,
-            in_db: -120.0,
-            out_db: -120.0,
-        }
+        Self { sr: 48000.0, input: 1.0, output: 1.0, ratio: 4.0, abi: false, att: 0.0, rel_fast: 0.0, rel_slow: 0.0, mix: 1.0, env: 0.0, slow: 0.0, dc_l: (0.0, 0.0), dc_r: (0.0, 0.0), gr: 0.0, in_db: -120.0, out_db: -120.0 }
     }
 }
 
@@ -67,13 +50,7 @@ impl Fet {
     #[inline]
     fn static_gr(&self, x_db: f32) -> f32 {
         let over = x_db - FET_THRESHOLD_DB;
-        let knee = if self.abi {
-            2.0
-        } else if self.ratio <= 4.0 {
-            8.0
-        } else {
-            4.0
-        };
+        let knee = if self.abi { 2.0 } else if self.ratio <= 4.0 { 8.0 } else { 4.0 };
         let slope = 1.0 / self.ratio - 1.0;
         let mut gr = if over <= -knee / 2.0 {
             0.0
@@ -127,8 +104,7 @@ impl Processor for Fet {
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
         let mut gr_min = 0f32;
         let (mut pin, mut pout) = (0f32, 0f32);
-        let drive =
-            (self.input.log10() * 20.0 / 24.0).clamp(0.0, 1.5) + if self.abi { 0.8 } else { 0.0 };
+        let drive = (self.input.log10() * 20.0 / 24.0).clamp(0.0, 1.5) + if self.abi { 0.8 } else { 0.0 };
         for i in 0..l.len() {
             let (a, b) = (l[i] * self.input, r[i] * self.input);
             let lvl = a.abs().max(b.abs());
@@ -143,10 +119,7 @@ impl Processor for Fet {
             }
             self.slow += ((if self.env < -3.0 { 1.0 } else { 0.0 }) - self.slow) * 0.00002;
             let g = db_to_gain(self.env);
-            let (wa, wb) = (
-                Self::color(a * g, drive, &mut self.dc_l) * self.output,
-                Self::color(b * g, drive, &mut self.dc_r) * self.output,
-            );
+            let (wa, wb) = (Self::color(a * g, drive, &mut self.dc_l) * self.output, Self::color(b * g, drive, &mut self.dc_r) * self.output);
             let (da, db) = (l[i], r[i]);
             l[i] = da * (1.0 - self.mix) + wa * self.mix;
             r[i] = db * (1.0 - self.mix) + wb * self.mix;
@@ -163,11 +136,7 @@ impl Processor for Fet {
     }
     fn tail_samples(&self) -> Option<usize> {
         // gain-reduction envelope (slow release) and the DC blocker (pole 0.9995)
-        Some(
-            crate::dsp::decay_samples(self.rel_slow, 17.0)
-                .max(crate::dsp::decay_samples(self.rel_fast, 17.0))
-                + 40_000,
-        )
+        Some(crate::dsp::decay_samples(self.rel_slow, 17.0).max(crate::dsp::decay_samples(self.rel_fast, 17.0)) + 40_000)
     }
     fn park(&mut self) {
         self.reset();
@@ -278,15 +247,9 @@ impl DeEss {
         self.look = ((v[4].clamp(0.0, 15.0) / 1000.0) * self.sr) as usize;
         self.listen = v[5] > 0.5;
         self.relative = v[6] > 0.5;
-        self.hp_det
-            .set(FilterType::Highpass, self.sr, self.freq, 0.707, 0.0);
+        self.hp_det.set(FilterType::Highpass, self.sr, self.freq, 0.707, 0.0);
         // complementary split: low = LR4 lowpass, high = input − low
-        for f in [
-            &mut self.lp_l,
-            &mut self.lp_r,
-            &mut self.lp_l2,
-            &mut self.lp_r2,
-        ] {
+        for f in [&mut self.lp_l, &mut self.lp_r, &mut self.lp_l2, &mut self.lp_r2] {
             f.set(FilterType::Lowpass, self.sr, self.freq, 0.707, 0.0);
         }
         for ch in self.hp4.iter_mut() {
@@ -333,16 +296,8 @@ impl Processor for DeEss {
                 self.env_rl += (lo * lo - self.env_rl) * self.k_rel_env;
                 let r_db = 10.0 * (self.env_rh.max(1e-14) / self.env_rl.max(1e-14)).log10();
                 let audible = self.env_rl + self.env_rh > 1e-8; // above -80 dBFS
-                let target = if audible {
-                    -(r_db - self.thr).clamp(0.0, self.range)
-                } else {
-                    0.0
-                };
-                let k = if target < self.gr_env {
-                    self.rel_att
-                } else {
-                    self.rel_rel
-                };
+                let target = if audible { -(r_db - self.thr).clamp(0.0, self.range) } else { 0.0 };
+                let k = if target < self.gr_env { self.rel_att } else { self.rel_rel };
                 self.gr_env = target + (self.gr_env - target) * k;
                 side_pk = side_pk.max(r_db);
                 ratio_pk = ratio_pk.max(((r_db - self.thr + 6.0) / 12.0).clamp(0.0, 1.0));
@@ -351,11 +306,7 @@ impl Processor for DeEss {
                 // detector envelopes (energy)
                 let k_hi = if hi * hi > self.env_hi { 0.2 } else { 0.002 };
                 self.env_hi += (hi * hi - self.env_hi) * k_hi;
-                let k_all = if mono * mono > self.env_all {
-                    0.2
-                } else {
-                    0.002
-                };
+                let k_all = if mono * mono > self.env_all { 0.2 } else { 0.002 };
                 self.env_all += (mono * mono - self.env_all) * k_all;
                 let hi_db = 10.0 * self.env_hi.max(1e-12).log10();
                 let ratio = (self.env_hi / self.env_all.max(1e-12)).clamp(0.0, 1.0);
@@ -363,11 +314,7 @@ impl Processor for DeEss {
                 let sib = ((ratio - 0.25) / 0.35).clamp(0.0, 1.0);
                 let over = (hi_db - self.thr).max(0.0);
                 let target = -(over * 0.8 * sib).min(self.range);
-                let k = if target < self.gr_env {
-                    self.att
-                } else {
-                    self.rel
-                };
+                let k = if target < self.gr_env { self.att } else { self.rel };
                 self.gr_env = target + (self.gr_env - target) * k;
                 side_pk = side_pk.max(hi_db);
                 ratio_pk = ratio_pk.max(sib);
@@ -385,10 +332,7 @@ impl Processor for DeEss {
                 let (ha, hb) = (l2.tick(l1.tick(a)), r2.tick(r1.tick(b)));
                 (a - ha, b - hb, ha, hb)
             } else {
-                let (la, lb) = (
-                    self.lp_l2.tick(self.lp_l.tick(a)),
-                    self.lp_r2.tick(self.lp_r.tick(b)),
-                );
+                let (la, lb) = (self.lp_l2.tick(self.lp_l.tick(a)), self.lp_r2.tick(self.lp_r.tick(b)));
                 (la, lb, a - la, b - lb)
             };
             if self.listen {
@@ -425,12 +369,7 @@ impl Processor for DeEss {
     fn park(&mut self) {
         self.reset();
         self.hp_det.reset();
-        for f in [
-            &mut self.lp_l,
-            &mut self.lp_r,
-            &mut self.lp_l2,
-            &mut self.lp_r2,
-        ] {
+        for f in [&mut self.lp_l, &mut self.lp_r, &mut self.lp_l2, &mut self.lp_r2] {
             f.reset();
         }
         for f in self.hp4.iter_mut().flatten() {
@@ -501,36 +440,7 @@ pub struct Tune {
 
 impl Default for Tune {
     fn default() -> Self {
-        Self {
-            sr: 48000.0,
-            det: None,
-            psola_l: None,
-            align: vec![],
-            align_w: 0,
-            key: 0,
-            mask: 0xfff,
-            retune_ms: 20.0,
-            humanize: 0.0,
-            flex: 0.0,
-            vibrato: 0.0,
-            transpose: 0.0,
-            formant: 0.0,
-            period: 0.0,
-            corr: 0.0,
-            center: 0.0,
-            held: 0.0,
-            last_note: 0.0,
-            engaged: false,
-            last_m: 0.0,
-            jump_t: 0.0,
-            smooth_m: 0.0,
-            speed: 0.0,
-            seg_t: 0.0,
-            m: [0.0; 8],
-            params: None,
-            quiet: 0,
-            dormant: true,
-        }
+        Self { sr: 48000.0, det: None, psola_l: None, align: vec![], align_w: 0, key: 0, mask: 0xfff, retune_ms: 20.0, humanize: 0.0, flex: 0.0, vibrato: 0.0, transpose: 0.0, formant: 0.0, period: 0.0, corr: 0.0, center: 0.0, held: 0.0, last_note: 0.0, engaged: false, last_m: 0.0, jump_t: 0.0, smooth_m: 0.0, speed: 0.0, seg_t: 0.0, m: [0.0; 8], params: None, quiet: 0, dormant: true }
     }
 }
 
@@ -542,9 +452,7 @@ pub fn tune_latency(sr: f32) -> usize {
 /// Detector window centre minus PSOLA's own look-back: the pitch estimate refers to
 /// audio that much older than the grain PSOLA is shifting at the same moment.
 fn align_delay(sr: f32) -> usize {
-    Detector::new(sr)
-        .latency()
-        .saturating_sub(Psola::new(sr).half_grain())
+    Detector::new(sr).latency().saturating_sub(Psola::new(sr).half_grain())
 }
 
 impl Tune {
@@ -629,9 +537,7 @@ impl Processor for Tune {
             self.quiet = 0;
             self.dormant = false;
         }
-        let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola_l.as_mut()) else {
-            return;
-        };
+        let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola_l.as_mut()) else { return };
         let sr = self.sr;
         for i in 0..l.len() {
             let x = (l[i] + r[i]) * 0.5;
@@ -642,11 +548,7 @@ impl Processor for Tune {
                 // locking onto a loud harmonic for a frame or two: hold course until the
                 // jump has lasted 40 ms (then it is a real leap)
                 let mut glitch = false;
-                if det.hz > 0.0
-                    && det.confidence > 0.55
-                    && self.last_m > 0.0
-                    && (hz_to_midi(det.hz) - self.last_m).abs() > 5.0
-                {
+                if det.hz > 0.0 && det.confidence > 0.55 && self.last_m > 0.0 && (hz_to_midi(det.hz) - self.last_m).abs() > 5.0 {
                     self.jump_t += 0.004;
                     glitch = self.jump_t < 0.04;
                 } else {
@@ -662,16 +564,8 @@ impl Processor for Tune {
                     // pitch speed on a 50 ms-smoothed curve (vibrato ≈ 6 Hz mostly averages out):
                     // tells a voice travelling between notes from one sitting on a note
                     let prev = self.smooth_m;
-                    self.smooth_m = if prev == 0.0 {
-                        m
-                    } else {
-                        prev + (m - prev) * (1.0 - (-hop_s / 0.05f32).exp())
-                    };
-                    let v = if prev == 0.0 {
-                        0.0
-                    } else {
-                        (self.smooth_m - prev).abs() / hop_s
-                    };
+                    self.smooth_m = if prev == 0.0 { m } else { prev + (m - prev) * (1.0 - (-hop_s / 0.05f32).exp()) };
+                    let v = if prev == 0.0 { 0.0 } else { (self.smooth_m - prev).abs() / hop_s };
                     self.speed += (v - self.speed) * 0.3;
                     // note centre (Melodyne's "pitch centre"): the mean pitch since the voice
                     // settled on this note — restarted at a transition or a jump of over a
@@ -682,8 +576,7 @@ impl Processor for Tune {
                         self.seg_t = 0.0;
                     } else {
                         self.seg_t += hop_s;
-                        self.center +=
-                            (m - self.center) * (hop_s / self.seg_t.max(hop_s)).max(hop_s / 0.3);
+                        self.center += (m - self.center) * (hop_s / self.seg_t.max(hop_s)).max(hop_s / 0.3);
                     }
                     let follow = self.center * self.vibrato + m * (1.0 - self.vibrato);
                     let note = snap(follow, self.key, self.mask);
@@ -695,8 +588,8 @@ impl Processor for Tune {
                         self.held += hop_s;
                     }
                     let err = note - follow; // semitones to correct
-                                             // flex: only notes sung within ±(50 − 35·flex) cents of the target are corrected;
-                                             // once a note engages it stays corrected (no flicker with vibrato)
+                    // flex: only notes sung within ±(50 − 35·flex) cents of the target are corrected;
+                    // once a note engages it stays corrected (no flicker with vibrato)
                     let half = 0.5 - 0.35 * self.flex; // semitones
                     if self.flex <= 0.0 || err.abs() <= half {
                         self.engaged = true;
@@ -706,32 +599,15 @@ impl Processor for Tune {
                     // pull once it settles. Measured on a 50 ms-smoothed pitch so vibrato
                     // (≈ 6 Hz) doesn't count as travelling. Hard tuning (retune < 5 ms) keeps
                     // the classic stepped effect.
-                    let glide = if self.retune_ms >= 5.0 {
-                        (1.0 - (self.speed - 10.0) / 15.0).clamp(0.0, 1.0)
-                    } else {
-                        1.0
-                    };
+                    let glide = if self.retune_ms >= 5.0 { (1.0 - (self.speed - 10.0) / 15.0).clamp(0.0, 1.0) } else { 1.0 };
                     let want = if self.engaged { err * glide } else { 0.0 };
                     let mut tau = self.retune_ms / 1000.0;
                     if self.humanize > 0.0 && self.held > 0.25 {
                         tau += self.humanize * 0.4 * ((self.held - 0.25) / 0.5).min(1.0);
                     }
-                    let k = if tau <= 0.0005 {
-                        1.0
-                    } else {
-                        1.0 - (-hop_s / tau).exp()
-                    };
+                    let k = if tau <= 0.0005 { 1.0 } else { 1.0 - (-hop_s / tau).exp() };
                     self.corr += (want - self.corr) * k;
-                    self.m = [
-                        det.hz,
-                        midi_to_hz(note + self.transpose),
-                        midi_to_hz(m + self.corr + self.transpose),
-                        det.confidence,
-                        (m - note) * 100.0,
-                        self.corr * 100.0,
-                        0.0,
-                        0.0,
-                    ];
+                    self.m = [det.hz, midi_to_hz(note + self.transpose), midi_to_hz(m + self.corr + self.transpose), det.confidence, (m - note) * 100.0, self.corr * 100.0, 0.0, 0.0];
                 } else {
                     self.period = 0.0;
                     self.corr *= 0.9;
@@ -955,9 +831,7 @@ impl Processor for Voice {
             self.quiet = 0;
             self.dormant = false;
         }
-        let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola.as_mut()) else {
-            return;
-        };
+        let (Some(det), Some(ps)) = (self.det.as_mut(), self.psola.as_mut()) else { return };
         let sr = self.sr;
         for i in 0..l.len() {
             let x = (l[i] + r[i]) * 0.5;
@@ -965,11 +839,7 @@ impl Processor for Voice {
                 // a lone estimate far from the line being sung is the detector grabbing a
                 // harmonic: hold course until the jump has lasted 40 ms (see Tune)
                 let mut glitch = false;
-                if det.hz > 0.0
-                    && det.confidence > 0.55
-                    && self.last_m > 0.0
-                    && (hz_to_midi(det.hz) - self.last_m).abs() > 5.0
-                {
+                if det.hz > 0.0 && det.confidence > 0.55 && self.last_m > 0.0 && (hz_to_midi(det.hz) - self.last_m).abs() > 5.0 {
                     self.jump_t += 0.004;
                     glitch = self.jump_t < 0.04;
                 } else {
@@ -993,8 +863,7 @@ impl Processor for Voice {
             }
             self.shift += (self.want - self.shift) * self.shift_k;
             let ratio = 2f32.powf(self.shift / 12.0);
-            let formant =
-                2f32.powf((self.formant + if self.link { self.shift } else { 0.0 }) / 12.0);
+            let formant = 2f32.powf((self.formant + if self.link { self.shift } else { 0.0 }) / 12.0);
             let n = self.align.len();
             let xd = if n > 0 {
                 let d = self.align[self.align_w];
@@ -1042,23 +911,11 @@ mod tests {
     use crate::model::FxKind;
 
     fn voice(hz: f32, sr: f32, n: usize) -> Vec<f32> {
-        (0..n)
-            .map(|i| {
-                (1..8)
-                    .map(|k| {
-                        (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32
-                    })
-                    .sum::<f32>()
-                    * 0.3
-            })
-            .collect()
+        (0..n).map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3).collect()
     }
 
     fn run(p: &mut dyn Processor, x: &[f32]) -> Vec<f32> {
-        let ctx = ProcessCtx {
-            sample_rate: 48000.0,
-            ..Default::default()
-        };
+        let ctx = ProcessCtx { sample_rate: 48000.0, ..Default::default() };
         let mut out = vec![];
         for c in x.chunks(256) {
             let mut l = c.to_vec();
@@ -1073,12 +930,7 @@ mod tests {
     fn tune_pulls_a_flat_note_to_the_scale() {
         let sr = 48000.0;
         let mut fx = new_fx(1, FxKind::Tune, 120.0);
-        for (k, v) in [
-            ("retune", 0.0),
-            ("flex", 0.0),
-            ("vibrato", 0.0),
-            ("humanize", 0.0),
-        ] {
+        for (k, v) in [("retune", 0.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0)] {
             fx.params.insert(k.into(), v);
         }
         let mut p = Tune::default();
@@ -1102,18 +954,9 @@ mod tests {
     fn tune_corrects_a_phone_like_low_male_voice() {
         // ~123 Hz, almost no fundamental, loud 3rd–5th harmonics (formant), sung 40 cents sharp
         let sr = 44100.0;
-        for (f0, target) in [
-            (123.47f32 * 2f32.powf(0.4 / 12.0), 123.47f32),
-            (146.83 * 2f32.powf(-0.35 / 12.0), 146.83),
-        ] {
+        for (f0, target) in [(123.47f32 * 2f32.powf(0.4 / 12.0), 123.47f32), (146.83 * 2f32.powf(-0.35 / 12.0), 146.83)] {
             let mut fx = new_fx(1, FxKind::Tune, 120.0);
-            for (k, v) in [
-                ("retune", 0.0),
-                ("flex", 0.0),
-                ("vibrato", 0.0),
-                ("humanize", 0.0),
-                ("voice", 2.0),
-            ] {
+            for (k, v) in [("retune", 0.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0), ("voice", 2.0)] {
                 fx.params.insert(k.into(), v);
             }
             let mut p = Tune::default();
@@ -1121,15 +964,7 @@ mod tests {
             p.set_params(&param_block(&fx));
             let amps = [0.03f32, 0.15, 0.9, 1.0, 0.7, 0.3, 0.2, 0.1, 0.08, 0.05];
             let x: Vec<f32> = (0..44100)
-                .map(|i| {
-                    amps.iter()
-                        .enumerate()
-                        .map(|(k, a)| {
-                            a * (std::f32::consts::TAU * f0 * (k + 1) as f32 * i as f32 / sr).sin()
-                        })
-                        .sum::<f32>()
-                        * 0.08
-                })
+                .map(|i| amps.iter().enumerate().map(|(k, a)| a * (std::f32::consts::TAU * f0 * (k + 1) as f32 * i as f32 / sr).sin()).sum::<f32>() * 0.08)
                 .collect();
             let y = run(&mut p, &x);
             let mut d = Detector::new(sr);
@@ -1137,11 +972,7 @@ mod tests {
                 d.push(s);
             }
             let cents = 1200.0 * (d.hz / target).log2();
-            assert!(
-                cents.abs() < 12.0,
-                "{f0:.1} Hz → {:.1} Hz, still {cents:.1} cents off {target}",
-                d.hz
-            );
+            assert!(cents.abs() < 12.0, "{f0:.1} Hz → {:.1} Hz, still {cents:.1} cents off {target}", d.hz);
         }
     }
 
@@ -1150,12 +981,7 @@ mod tests {
         // 0.4 s at A3 (in tune), 0.3 s slide up to ~C4 + 30 cents, then held
         let sr = 48000.0;
         let mut fx = new_fx(1, FxKind::Tune, 120.0);
-        for (k, v) in [
-            ("retune", 40.0),
-            ("flex", 0.0),
-            ("vibrato", 0.0),
-            ("humanize", 0.0),
-        ] {
+        for (k, v) in [("retune", 40.0), ("flex", 0.0), ("vibrato", 0.0), ("humanize", 0.0)] {
             fx.params.insert(k.into(), v);
         }
         let mut p = Tune::default();
@@ -1168,19 +994,10 @@ mod tests {
         let x: Vec<f32> = (0..n)
             .map(|i| {
                 let t = i as f32 / sr;
-                let m = if t < 0.4 {
-                    a
-                } else if t < 0.7 {
-                    a + (b - a) * (t - 0.4) / 0.3
-                } else {
-                    b
-                };
+                let m = if t < 0.4 { a } else if t < 0.7 { a + (b - a) * (t - 0.4) / 0.3 } else { b };
                 pitch[i] = m;
                 ph += std::f32::consts::TAU * midi_to_hz(m) / sr;
-                (1..6)
-                    .map(|k| (ph * k as f32).sin() / k as f32)
-                    .sum::<f32>()
-                    * 0.3
+                (1..6).map(|k| (ph * k as f32).sin() / k as f32).sum::<f32>() * 0.3
             })
             .collect();
         let y = run(&mut p, &x);
@@ -1196,10 +1013,7 @@ mod tests {
         // mid-slide: the output still travels with the input (no snapping to a note on the way)
         let mid = measure(0.45, 0.58);
         let input_mid = pitch[(0.58 * sr) as usize - Detector::new(sr).latency()];
-        assert!(
-            (mid - input_mid).abs() < 0.45,
-            "mid-slide output {mid:.2} vs input {input_mid:.2}"
-        );
+        assert!((mid - input_mid).abs() < 0.45, "mid-slide output {mid:.2} vs input {input_mid:.2}");
         // settled: pulled to C4
         let end = measure(1.0, 1.35);
         assert!((end - 60.0).abs() < 0.12, "held note ended at {end:.2}");
@@ -1211,12 +1025,7 @@ mod tests {
         // lands on A3 and the vibrato survives
         let sr = 48000.0;
         let mut fx = new_fx(1, FxKind::Tune, 120.0);
-        for (k, v) in [
-            ("retune", 10.0),
-            ("flex", 0.0),
-            ("vibrato", 100.0),
-            ("humanize", 0.0),
-        ] {
+        for (k, v) in [("retune", 10.0), ("flex", 0.0), ("vibrato", 100.0), ("humanize", 0.0)] {
             fx.params.insert(k.into(), v);
         }
         let mut p = Tune::default();
@@ -1229,10 +1038,7 @@ mod tests {
                 let t = i as f32 / sr;
                 let m = 57.3 + 0.4 * (std::f32::consts::TAU * 5.5 * t).sin();
                 ph += std::f32::consts::TAU * midi_to_hz(m) / sr;
-                (1..6)
-                    .map(|k| (ph * k as f32).sin() / k as f32)
-                    .sum::<f32>()
-                    * 0.3
+                (1..6).map(|k| (ph * k as f32).sin() / k as f32).sum::<f32>() * 0.3
             })
             .collect();
         let y = run(&mut p, &x);
@@ -1245,9 +1051,7 @@ mod tests {
             }
         }
         let mean = track.iter().sum::<f32>() / track.len() as f32;
-        let (lo, hi) = track
-            .iter()
-            .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        let (lo, hi) = track.iter().fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
         assert!((mean - 57.0).abs() < 0.1, "note centre at {mean:.2}");
         assert!(hi - lo > 0.5, "vibrato flattened to {:.2} st", hi - lo);
     }
@@ -1265,28 +1069,18 @@ mod tests {
         let vowel = voice(220.0, sr, 24000);
         let mut d = mk();
         run(&mut d, &vowel);
-        assert!(
-            d.gain_reduction_db() > -1.0,
-            "vowel ducked {}",
-            d.gain_reduction_db()
-        );
+        assert!(d.gain_reduction_db() > -1.0, "vowel ducked {}", d.gain_reduction_db());
         // "s": band-limited noise around 7 kHz
         let mut seed = 3u32;
         let mut bp = Biquad::default();
         bp.set(FilterType::Bandpass, sr, 7500.0, 1.0, 0.0);
-        let s: Vec<f32> = (0..24000)
-            .map(|_| {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                bp.tick((seed as f32 / u32::MAX as f32 - 0.5) * 1.6)
-            })
-            .collect();
+        let s: Vec<f32> = (0..24000).map(|_| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            bp.tick((seed as f32 / u32::MAX as f32 - 0.5) * 1.6)
+        }).collect();
         let mut d = mk();
         run(&mut d, &s);
-        assert!(
-            d.gain_reduction_db() < -3.0,
-            "sibilant not ducked: {}",
-            d.gain_reduction_db()
-        );
+        assert!(d.gain_reduction_db() < -3.0, "sibilant not ducked: {}", d.gain_reduction_db());
     }
 
     #[test]
@@ -1352,30 +1146,13 @@ mod tests {
         let x = voice(220.0 * 2f32.powf(-0.35 / 12.0), sr, 48000);
         let m_in = 57.0 - 0.35;
         let t = sung(&run(&mut voice_fx(sr, &[("pitch", 5.0)]), &x), sr, 0.4);
-        assert!(
-            (t - (m_in + 5.0)).abs() < 0.12,
-            "transpose +5 landed at {t:.2}"
-        );
-        let q = sung(
-            &run(&mut voice_fx(sr, &[("mode", 1.0), ("pitch", -12.0)]), &x),
-            sr,
-            0.4,
-        );
+        assert!((t - (m_in + 5.0)).abs() < 0.12, "transpose +5 landed at {t:.2}");
+        let q = sung(&run(&mut voice_fx(sr, &[("mode", 1.0), ("pitch", -12.0)]), &x), sr, 0.4);
         assert!((q - 45.0).abs() < 0.12, "quantize −12 landed at {q:.2}");
         // robot: two different sung notes both come out on C4 + 2 = D4
         for hz in [220.0f32, 164.81] {
-            let r = sung(
-                &run(
-                    &mut voice_fx(sr, &[("mode", 2.0), ("pitch", 2.0)]),
-                    &voice(hz, sr, 48000),
-                ),
-                sr,
-                0.4,
-            );
-            assert!(
-                (r - 62.0).abs() < 0.12,
-                "robot from {hz} Hz landed at {r:.2}"
-            );
+            let r = sung(&run(&mut voice_fx(sr, &[("mode", 2.0), ("pitch", 2.0)]), &voice(hz, sr, 48000)), sr, 0.4);
+            assert!((r - 62.0).abs() < 0.12, "robot from {hz} Hz landed at {r:.2}");
         }
     }
 
@@ -1383,9 +1160,7 @@ mod tests {
     fn voice_drive_adds_harmonics_only_when_turned_up() {
         let sr = 48000.0;
         // a pure 220 Hz tone: anything at 440 Hz in the output is distortion
-        let x: Vec<f32> = (0..48000)
-            .map(|i| (std::f32::consts::TAU * 220.0 * i as f32 / sr).sin() * 0.5)
-            .collect();
+        let x: Vec<f32> = (0..48000).map(|i| (std::f32::consts::TAU * 220.0 * i as f32 / sr).sin() * 0.5).collect();
         let h2 = |y: &[f32]| {
             let seg = &y[24000..];
             let at = |f: f32| {
@@ -1402,9 +1177,6 @@ mod tests {
         let clean = h2(&run(&mut voice_fx(sr, &[]), &x));
         let driven = h2(&run(&mut voice_fx(sr, &[("drive", 18.0)]), &x));
         assert!(clean < 0.01, "drive 0 is not clean: H2 {clean:.4}");
-        assert!(
-            driven > 0.03,
-            "drive 18 dB adds no even harmonics: H2 {driven:.4}"
-        );
+        assert!(driven > 0.03, "drive 18 dB adds no even harmonics: H2 {driven:.4}");
     }
 }
