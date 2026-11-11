@@ -183,9 +183,11 @@ export function nudge(db: number, dt: number) {
   if (!d && !dtr) return;
   commit([{ op: 'putClips', clips: moveClips(cs, d, dtr) }], t('d.act.op.move'));
 }
-export function sliceAt(id: Id, b: number) {
-  const c = S.project.clips.find(x => x.id === id); if (!c) return;
-  const r = sliceClip(plain(c), b, allocId()); if (!r) return;
+/** Split clip `id` at beat `b`; with `withSel`, when it is part of the selection, every selected clip that crosses `b` (one undo step). */
+export function sliceAt(id: Id, b: number, withSel = true) {
+  const ids = withSel && U.sel.includes(id) ? U.sel : [id];
+  const r = S.project.clips.filter(x => ids.includes(x.id)).flatMap(c => sliceClip(plain(c), b, allocId()) ?? []);
+  if (!r.length) return;
   commit([{ op: 'putClips', clips: r }], t('d.act.op.split'));
   say(t('d.act.cut', { pos: fmtPos(b) }));
 }

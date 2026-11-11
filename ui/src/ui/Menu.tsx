@@ -1,4 +1,5 @@
 import { createSignal, For, Match, Show, Switch, onMount } from 'solid-js';
+import { unwrap } from 'solid-js/store';
 import type { MenuItem } from '../state/ui';
 import { CHECK_GLYPH, menuGlyph, type MenuGlyph } from './menuIcons';
 import { closeMenu, U } from '../state/ui';
@@ -97,7 +98,12 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
                   <Match when={it.t === 'gain' && it}>
                     {i => {
                       const clip = () => S.project.clips.find(c => c.id === i().clipId);
-                      const set = (d: number) => { const c = clip(); if (c) commit([{ op: 'putClips', clips: [{ ...c, gain: clamp(c.gain + d, -24, 12) }] }], t('d.ui.clipvol')); };
+                      // a clip of the selection: the whole selection gets the same step (one undo step)
+                      const set = (d: number) => {
+                        const c = clip(); if (!c) return;
+                        const cs = U.sel.includes(c.id) ? S.project.clips.filter(x => U.sel.includes(x.id)) : [c];
+                        commit([{ op: 'putClips', clips: cs.map(x => ({ ...unwrap(x), gain: clamp(x.gain + d, -24, 12) })) }], t('d.ui.clipvol'));
+                      };
                       return (
                         <div class="gainrow">
                           <span style={{ flex: 1, font: '500 12px var(--sans)', color: 'var(--fg)' }}>{t('d.ui.clipvol')}</span>

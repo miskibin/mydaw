@@ -3,7 +3,7 @@
 // follow the key). The pattern's other channels show as ghost notes; double right-click one to
 // switch to its channel. Drawing past the end makes the pattern longer (its length follows the
 // notes). Every edit is an op and one undo step.
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { be } from '../api/backend';
 import { t } from '../lib/i18n';
@@ -83,13 +83,17 @@ function Roll(props: { z: number }) {
   const chansMap = createMemo(() => { arrVersion(); return new Map(unwrap(channels()).map(c => [c.id, c])); });
   const mask = () => SCALES[scaleIdx()][1];
   const unit = (alt = false) => (alt ? 0 : rollSnap());
+  /** After a pick in a toolbar list the keyboard goes back to the roll (arrows transpose, Delete deletes) instead of staying in the list. */
+  const backToRoll = (el: HTMLElement) => el.closest<HTMLElement>('.win')?.focus({ preventScroll: true });
   /** Width of the note grid (px). */
   const gridW = () => Math.max(1, size().w - KW);
   // The length the view was fitted to: taken when a pattern is shown, NOT while it grows. A
   // note dragged past the end makes the pattern longer; a scale that followed the length
   // would shrink under the pointer and the note would jump back and forth.
   const [fitSteps, setFitSteps] = createSignal(stepsOf(pt()));
-  createEffect(() => { pt().id; setFitSteps(stepsOf(untrack(pt))); });
+  // (a memo of the id: every note edit replaces the pattern object, only another pattern changes the id)
+  const patId = createMemo(() => pt().id);
+  createEffect(on(patId, () => setFitSteps(stepsOf(untrack(pt)))));
   /** Px per step at zoom 1: the pattern as it was opened fits the window (within sensible limits). */
   const basePps = () => clamp(gridW() / fitSteps(), 6, 48);
   /** Smallest key height: never so small that the 128 keys leave the grid half empty. */
@@ -123,6 +127,8 @@ function Roll(props: { z: number }) {
   });
   // keep the selection valid when the notes change underneath (undo, CLI)
   createEffect(() => { const ok = new Set(chanNotes().map(x => x.i)); const s = sel(); if ([...s].some(i => !ok.has(i))) setSel(new Set([...s].filter(i => ok.has(i)))); });
+  // another pattern: the selection is note indices of the old one, they would point at random notes
+  createEffect(on(patId, () => setSel(new Set<number>()), { defer: true }));
   // initial vertical position: centred on the channel's notes (or its root)
   let centred = -1;
   createEffect(() => {
@@ -439,7 +445,7 @@ function Roll(props: { z: number }) {
       head={<>
         <span class="tile" style={{ width: '20px', height: '20px', background: ch().color + '2e', color: ch().color }}><Icon d={ROLL_ICON} size={12} /></span>
         <span class="wintitle">Piano roll</span>
-        <select class="sel chsel" title={t('b.pr.chTitle')} value={String(ch().id)} style={{ color: ch().color }} onChange={e => selectChannel(+e.currentTarget.value)}>
+        <select class="sel chsel" title={t('b.pr.chTitle')} value={String(ch().id)} style={{ color: ch().color }} onChange={e => { selectChannel(+e.currentTarget.value); backToRoll(e.currentTarget); }}>
           <For each={channels()}>{c => <option value={String(c.id)}>{c.name}</option>}</For>
         </select>
         <button class="patname" title={t('b.rk.patTitle')} onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); patternMenu(r.left, r.bottom + 4); }}>
@@ -461,16 +467,16 @@ function Roll(props: { z: number }) {
         <span class="toolname">{t(TOOLS.find(x => x.id === rollTool())!.label)}</span>
         <div class="vsep" />
         <label class="plab">{t('b.pe.lblGrid')}
-          <select class="sel" title={t('b.pe.snapTitle')} value={String(rollSnap())} onChange={e => setRollSnap(+e.currentTarget.value)}>
+          <select class="sel" title={t('b.pe.snapTitle')} value={String(rollSnap())} onChange={e => { setRollSnap(+e.currentTarget.value); backToRoll(e.currentTarget); }}>
             <For each={ROLL_SNAPS}>{([l, v]) => <option value={String(v)}>{l}</option>}</For>
           </select>
         </label>
         <label class="plab">{t('b.pe.lblKey')}
           <span class="row" style={{ gap: '4px' }}>
-            <select class="sel" title={rollKey() == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { setRollKey(+e.currentTarget.value); setRollScale(scaleIdx()); }}>
+            <select class="sel" title={rollKey() == null ? t('b.pe.keyAuto') : t('b.pe.keyScale')} value={String(root())} onChange={e => { setRollKey(+e.currentTarget.value); setRollScale(scaleIdx()); backToRoll(e.currentTarget); }}>
               <For each={NOTE_NAMES}>{(n, i) => <option value={String(i())}>{n}</option>}</For>
             </select>
-            <select class="sel" value={String(scaleIdx())} onChange={e => { if (rollKey() == null) setRollKey(root()); setRollScale(+e.currentTarget.value); }}>
+            <select class="sel" value={String(scaleIdx())} onChange={e => { if (rollKey() == null) setRollKey(root()); setRollScale(+e.currentTarget.value); backToRoll(e.currentTarget); }}>
               <For each={SCALES}>{([l], i) => <option value={String(i())}>{t(l)}</option>}</For>
             </select>
           </span>

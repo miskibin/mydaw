@@ -50,9 +50,13 @@ function Rack(props: { z: number }) {
   const [scroll, setScroll] = createSignal({ x: 0, y: 0 });
   const layer = new Layer();
   // the pattern plus one greyed bar (FL): a step clicked there makes the pattern a bar longer
+  // While steps are being painted the grid keeps its step width and count: the first step in the
+  // greyed bar makes the pattern a bar longer, and a grid that refitted at once would slide under
+  // the pointer (the rest of the run landed in the wrong columns). It refits on release.
+  const [hold, setHold] = createSignal<{ cw: number; steps: number } | null>(null);
   const geo = (): RackGeo => {
-    const end = stepsOf(pt()), steps = Math.min(TOTAL_BEATS * 4, end + 16), w = size().w;
-    const cw = clamp(fitCw(w, steps), STEP_MIN, STEP_MAX);
+    const end = stepsOf(pt()), h = hold(), steps = h ? h.steps : Math.min(TOTAL_BEATS * 4, end + 16), w = size().w;
+    const cw = h ? h.cw : clamp(fitCw(w, steps), STEP_MIN, STEP_MAX);
     return { cw, sx: scroll().x, sy: scroll().y, rh: RACK_ROW, steps, end, rows: chans().length };
   };
   // the grid's own height: the add-channel row below the channels scrolls with them
@@ -119,6 +123,7 @@ function Rack(props: { z: number }) {
     g.update([putNotes(pt(), notes)]);
     if (on) audition(c.id, undefined, 0.8);
     let last = { row, step };
+    setHold({ cw: G.cw, steps: G.steps });
     track(ev => {
       const q = cellAt(ev);
       const r = clamp(q.row, 0, chans().length - 1), s = clamp(q.step, 0, G.steps - 1);
@@ -129,7 +134,7 @@ function Rack(props: { z: number }) {
       }
       last = { row: r, step: s };
       g.update([putNotes(pt(), notes)]);
-    }, () => g.end(), on ? 'copy' : 'not-allowed');
+    }, () => { g.end(); setHold(null); }, on ? 'copy' : 'not-allowed');
   };
   const wheel = (e: WheelEvent) => {
     const m = maxScroll(); if (!m.x && !m.y) return;

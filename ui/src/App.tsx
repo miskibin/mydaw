@@ -67,7 +67,15 @@ function onKey(e: KeyboardEvent) {
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
   if (typingIn(e.target as HTMLElement)) return;
   const k = e.key.toLowerCase(), m = e.ctrlKey || e.metaKey;
-  if (e.code === 'Space') { e.preventDefault(); (document.activeElement as HTMLElement | null)?.blur?.(); if (!e.repeat) void A.togglePlay(); return; }
+  if (e.code === 'Space') {
+    e.preventDefault();
+    // Space must not press the focused button; but a pattern window keeps the keyboard (its
+    // Delete / Ctrl+C / arrows would otherwise fall through to the playlist after a play)
+    const ae = document.activeElement as HTMLElement | null;
+    if (ae && /^(BUTTON|SELECT|INPUT)$/.test(ae.tagName)) { const w = ae.closest<HTMLElement>('.win'); if (w) w.focus({ preventScroll: true }); else ae.blur(); }
+    if (!e.repeat) void A.togglePlay();
+    return;
+  }
   if (m && !e.shiftKey && !e.altKey && e.code === 'KeyT') { e.preventDefault(); return setTypingOn(!typingOn()); }
   if (typingDown(e, typingTarget)) return;
   if (e.key === 'Escape') {

@@ -31,6 +31,20 @@ shown in the app after an update and is published as the release notes (see
 ### Fixed
 - **Piano roll: a note dragged past the end of the pattern no longer jumps around.** The
   pattern still grows to fit, but the view keeps its scale while you drag.
+- **Trimming, fading, splitting and clip volume work on the whole selection.** Drag the edge
+  or the fade handle of one selected clip and every selected clip follows; *Split here* and the
+  clip volume buttons in the clip menu do the same.
+- **A new selection box on the playlist replaces the old selection** (hold Shift to add to it).
+  With the pencil, Ctrl+drag used to keep adding, so a selection never went away. Ctrl+click
+  on a clip toggles it with the select tool too.
+- **Short clips can be moved again.** A clip a few pixels wide was all trim zone; now narrow
+  clips keep a body to grab, and a plain click on an edge or a fade handle changes nothing.
+- **After Space, the keyboard stays in the Piano roll or Channel Rack.** Delete, Ctrl+C / V and
+  the tool keys used to go to the playlist after a play / stop and could delete a clip there.
+- Piano roll: picking a grid, key or channel from the lists no longer leaves the arrow keys
+  and Delete stuck in that list; switching pattern clears the note selection.
+- Channel Rack: painting steps into the greyed extra bar no longer shifts the grid under the
+  pointer.
 
 ## 0.9.7 — 2026-11-11
 

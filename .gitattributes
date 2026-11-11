@@ -1,0 +1,4 @@
+# scripts with a shebang must keep LF: Node and Vite reject "#!...
+" (broke changelog.test.ts on Windows checkouts)
+*.mjs text eol=lf
+*.sh text eol=lf

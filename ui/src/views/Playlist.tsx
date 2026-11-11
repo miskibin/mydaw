@@ -419,7 +419,9 @@ export function Playlist() {
           }
         }
       }
-      if (!edge) edge = x - cx < 6 ? 'l' : cx + cwid - x < 6 ? 'r' : null;
+      // narrow clips keep a body to grab: the trim zones shrink, and vanish on a sliver
+      const ez = cwid < 14 ? 0 : Math.min(6, cwid / 4);
+      if (!edge) edge = x - cx < ez ? 'l' : cx + cwid - x < ez ? 'r' : null;
       return { c, edge };
     }
     return null;
@@ -482,10 +484,10 @@ export function Playlist() {
     if (modK && !id && (tool === 'draw' || tool === 'paint')) tool = 'select';
     if (tool === 'erase') return eraseDrag(id);
     if (tool === 'mute') return muteDrag(id);
-    if (tool === 'slice') { if (id) A.sliceAt(id, snapRound(p.beat, unit(e.altKey))); return; }
+    if (tool === 'slice') { if (id) A.sliceAt(id, snapRound(p.beat, unit(e.altKey)), false); return; }
     // a new box replaces the selection; Shift adds to it. (Ctrl only turns the pencil into the
     // select tool: it used to make every box additive, so an old selection never went away.)
-    if (tool === 'select' && (!id || modK)) return marqueeDrag(p, e.shiftKey);
+    if (tool === 'select' && !id) return marqueeDrag(p, e.shiftKey);
     if (h) {
       const clip = h.c;
       if (modK) { setU('sel', U.sel.includes(clip.id) ? U.sel.filter(x => x !== clip.id) : [...U.sel, clip.id]); return; }
@@ -548,8 +550,10 @@ export function Playlist() {
     const minL = Math.max(1 / 16, snapRes(U.snap, U.bw) || 1 / 16);
     // the edge of a selected clip trims the whole selection by the same amount (FL / Ableton)
     const others = U.sel.includes(o.id) ? S.project.clips.filter(c => c.id !== o.id && U.sel.includes(c.id)).map(plain) : [];
-    let last = [o, ...others].map(c => c.start + ':' + c.len).join('|');
+    let last = [o, ...others].map(c => c.start + ':' + c.len).join('|'), moved = false;
     track(ev => {
+      if (!moved && Math.abs(ev.clientX - sx) < 3) return; // a click on an edge is not a trim
+      moved = true;
       const raw = (ev.clientX - sx) / U.bw, edge0 = edge === 'r' ? o.start + o.len : o.start;
       const nc = resizeClip(o, edge, snapRound(edge0 + raw, unit(ev.altKey)), minL, srcLenOf(o));
       const delta = (edge === 'r' ? nc.start + nc.len : nc.start) - edge0;
@@ -564,11 +568,17 @@ export function Playlist() {
 
   function fadeDrag(e: PointerEvent, clip: Clip, which: 'fi' | 'fo') {
     const g = new Gesture(which === 'fi' ? 'Fade in' : 'Fade out');
-    const o = plain(clip), sx = e.clientX, spb = 60 / S.project.bpm, max = o.len * spb;
+    const o = plain(clip), sx = e.clientX, spb = 60 / S.project.bpm;
+    // a fade handle of a selected clip fades every selected audio clip by the same amount
+    const all = [o, ...(U.sel.includes(o.id) ? S.project.clips.filter(c => c.id !== o.id && U.sel.includes(c.id) && (c.kind === 'audio' || c.kind === 'comp')).map(plain) : [])];
+    let moved = false;
     track(ev => {
-      const d = (ev.clientX - sx) / U.bw * spb, nc = { ...o };
-      if (which === 'fi') nc.fadeIn = clamp(o.fadeIn + d, 0, max - o.fadeOut); else nc.fadeOut = clamp(o.fadeOut - d, 0, max - o.fadeIn);
-      g.update([{ op: 'putClips', clips: [nc] }]);
+      if (!moved && Math.abs(ev.clientX - sx) < 3) return; // a click on the handle is not a fade
+      moved = true;
+      const d = (ev.clientX - sx) / U.bw * spb;
+      const out = all.map(c => { const max = c.len * spb; return which === 'fi' ? { ...c, fadeIn: clamp(c.fadeIn + d, 0, max - c.fadeOut) } : { ...c, fadeOut: clamp(c.fadeOut - d, 0, max - c.fadeIn) }; });
+      const nc = out[0];
+      g.update([{ op: 'putClips', clips: out }]);
       say((which === 'fi' ? 'Fade in ' : 'Fade out ') + Math.round((which === 'fi' ? nc.fadeIn : nc.fadeOut) * 1000) + ' ms');
     }, () => g.end(), 'ew-resize');
   }
