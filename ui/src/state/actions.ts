@@ -9,7 +9,7 @@ import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../li
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
 import { flushNotebook } from './notebook';
-import { modePattern, patMode, stopPreview, togglePreview } from './pattern';
+import { modePattern, patMode, setPatMode, stopPreview, togglePreview } from './pattern';
 import { allocId, findFx, insName, plain, S, setTransport } from './store';
 import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
@@ -55,6 +55,16 @@ export function togglePlay() {
   const p = patMode() && !S.transport.rec ? modePattern() : undefined;
   if (p) return togglePreview(p.id);
   return play();
+}
+/**
+ * A click on the playlist's time ruler (FL): SONG mode from there. A pattern loop that is
+ * playing hands over to the song at that position, so moving between them needs no L key.
+ */
+export function seekSong(b: number) {
+  const from = Math.max(0, b);
+  if (patMode()) setPatMode(false);
+  if (U.patPlaying) { setU('start', from); void play(from); return; }
+  seek(from);
 }
 export function seek(b: number) {
   setU('start', Math.max(0, b));

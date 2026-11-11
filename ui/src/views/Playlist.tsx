@@ -796,7 +796,7 @@ export function Playlist() {
         const now = S.project.loop;
         if (now && now.a === a && now.b === z) return;
         g.update([{ op: 'setLoop', loop: { a, b: z } }]);
-      }, () => { if (g) g.end(); else A.seek(b0); }, edge === 'body' ? 'grabbing' : 'ew-resize');
+      }, () => { if (g) g.end(); else A.seekSong(b0); }, edge === 'body' ? 'grabbing' : 'ew-resize');
       return;
     }
     track(ev => {
@@ -805,8 +805,8 @@ export function Playlist() {
       const a = Math.min(b0, b1), z = Math.max(b0, b1), now = S.project.loop;
       if (g && b1 !== b0 && !(now && now.a === a && now.b === z)) g.update([{ op: 'setLoop', loop: { a, b: z } }]);
     }, () => {
-      if (!g) A.seek(b0);
-      else { g.end(); if (S.project.loop) A.seek(S.project.loop.a); }
+      if (!g) A.seekSong(b0);
+      else { g.end(); if (S.project.loop) A.seekSong(S.project.loop.a); }
     }, 'ew-resize');
   };
 

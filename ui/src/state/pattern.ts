@@ -105,6 +105,8 @@ export function openRoll(ch?: Id) {
   if (!S.project.patterns.length) { say(t('b.st.noPatterns')); return; }
   if (ch != null) selectChannel(ch);
   if (!selChan()) { say(t('b.st.noChannels')); return; }
+  // the roll takes the keyboard (tools, arrows, Ctrl+C/V) as soon as it is shown
+  requestAnimationFrame(() => (document.querySelector('.rollwin') as HTMLElement | null)?.focus({ preventScroll: true }));
   if (U.rollWin) { rollFront(); return; }
   const w = clamp(Math.round(window.innerWidth * 0.62), 640, window.innerWidth - 40), h = clamp(Math.round(window.innerHeight * 0.58), 360, window.innerHeight - 100);
   const z = U.zTop + 1;

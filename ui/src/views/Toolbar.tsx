@@ -133,8 +133,8 @@ export function Toolbar() {
       </div>
       <div class="vsep" />
       <div class="seg patsong" title={t('a.tb.patSongTip')}>
-        <button classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
-        <button classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
+        <button class="pat" classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
+        <button class="song" classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
       </div>
       <PatSelector />
       <div class="seg">
