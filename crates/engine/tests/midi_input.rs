@@ -188,3 +188,29 @@ fn keys_follow_project_edits_and_stream_restarts_without_the_core_lock() {
     assert!(run(&mut rt2, SR as usize / 10) > 0.01);
     e.midi_event(off(45));
 }
+
+#[test]
+fn live_keys_play_where_the_song_plays_the_channel_not_through_the_armed_track() {
+    // the armed track is a vocal track: its chain (compressor, pitch correction) pumped and
+    // mangled chords played on the keyboard that sounded right in the piano roll
+    let mut p = Project::empty();
+    p.inserts[0].fx.clear();
+    let id = p.alloc_id();
+    p.channels.push(Channel { name: "Bass".into(), ..Channel::builtin(id, Inst::Bass) });
+    p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, notes: vec![Note::new(id, 0.0, 4.0, Some(45))], swing: 0.0 }];
+    p.clips = vec![Clip { id: 2, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None }];
+    p.tracks[5].arm = true;
+    let vocal = p.tracks[5].insert;
+    p.inserts.iter_mut().find(|m| m.id == vocal).unwrap().muted = true;
+    let heard = |p: Project, key: u8| {
+        let e = engine(p);
+        let mut rt = e.create_rt(SR as f32, BLOCK);
+        e.typing_note(id, key, 0.8, true);
+        run(&mut rt, SR as usize / 4)
+    };
+    assert!(heard(p.clone(), 45) > 0.01, "the channel's track (the piano roll's path) is silent");
+    // a channel the song does not play yet still sounds through the armed track
+    let mut q = p;
+    q.patterns[0].notes.clear();
+    assert_eq!(heard(q, 45), 0.0);
+}

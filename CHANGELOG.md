@@ -4,6 +4,17 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## 0.9.5 — 2026-11-11
+
+### Fixed
+- **Chords from the computer keyboard and MIDI keyboard.** Keys you play live now sound
+  through the instrument's own mixer track, exactly like the piano roll. Before, they went
+  through the track armed for recording (in the starter project the Vocal track, with its
+  compressor), which squashed chords and made them sound unnatural.
+- **Shift+click selects notes in the piano roll with any tool.** With the pencil, Shift+click
+  used to move the clicked note and drop the rest of the selection, so Ctrl+C copied only one
+  note. Shift+click now adds or removes a note, Shift+drag adds a box of notes.
+
 ## 0.9.4 — 2026-11-11
 
 ### Fixed

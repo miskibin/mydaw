@@ -2030,7 +2030,7 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Ar
                 _ => None,
             };
             let (keys_release, keys_dynamics) = ks.map(|k| (k.release / 1000.0, k.dynamics / 100.0)).unwrap_or((0.35, 1.0));
-            ChanRt { id: c.id, kind, sample, keys: ks.and(keys.cloned()), keys_release, keys_dynamics, root: c.root, gain, pan, gain0: gain, pan0: pan, on, insert, home: insert.or(heard).unwrap_or(0) }
+            ChanRt { id: c.id, kind, sample, keys: ks.and(keys.cloned()), keys_release, keys_dynamics, root: c.root, gain, pan, gain0: gain, pan0: pan, on, insert, heard, home: insert.or(heard).unwrap_or(0) }
         })
         .collect();
     let pats = p
