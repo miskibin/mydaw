@@ -109,7 +109,8 @@ function Rack(props: { z: number }) {
     selectChannel(c.id);
     if (rollRows().has(c.id) && step < G.end) {
       // a melodic line (lengths / chords): the steps cannot show it — the piano roll does (FL: click the mini roll)
-      if (e.button === 0) openRoll(c.id);
+      // stop here: the rack's own pointerdown would bring the rack back over the roll
+      if (e.button === 0) { e.stopPropagation(); openRoll(c.id); }
       return;
     }
     const on = e.button === 0 ? !unwrap(pt()).notes.some(n => n.ch === c.id && Math.abs(n.step - step) < 1e-3) : false;
@@ -291,7 +292,7 @@ function ChanRow(props: { c: Channel }) {
     if (e.button !== 0) return;
     selectChannel(c().id);
     if (e.ctrlKey || e.metaKey) { audition(c().id, undefined, 0.8, true); return; }
-    if (dblCheck('cname' + c().id)) { closeChannelWindow(); openRoll(c().id); return; }
+    if (dblCheck('cname' + c().id)) { e.stopPropagation(); closeChannelWindow(); openRoll(c().id); return; }
     toggleChannelWindow(c().id);
   };
   return (
