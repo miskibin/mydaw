@@ -34,7 +34,7 @@ fn song(preset: &str, notes: &[(f32, f32, u8)], beats: f64) -> (Project, Id) {
     let id = p.alloc_id();
     p.channels.push(synth_channel(id, preset));
     let pid = p.alloc_id();
-    p.patterns = vec![Pattern { id: pid, name: "P".into(), color: "#4f8ef7".into(), len: beats, notes: notes.iter().map(|&(s, l, k)| Note::new(id, s, l, Some(k))).collect(), swing: 0.0 }];
+    p.patterns = vec![Pattern { id: pid, name: "P".into(), color: "#4f8ef7".into(), len: beats, min_len: beats, notes: notes.iter().map(|&(s, l, k)| Note::new(id, s, l, Some(k))).collect(), swing: 0.0 }];
     let cid = p.alloc_id();
     p.clips = vec![Clip { id: cid, track: 0, start: 0.0, len: beats, offset: 0.0, kind: ClipKind::Pat, source: pid, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None }];
     (p, id)

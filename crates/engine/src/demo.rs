@@ -59,6 +59,7 @@ pub fn demo_project() -> Project {
             name: "Beat".into(),
             color: "#4f8ef7".into(),
             len: 4.0,
+            min_len: 4.0,
             notes: [(0., kick), (4., kick), (8., kick), (12., kick), (10., kick), (4., clap), (12., clap)]
                 .iter()
                 .map(|&(s, i)| n(i, s, 1.0, None))
@@ -70,6 +71,7 @@ pub fn demo_project() -> Project {
             name: "Hats".into(),
             color: "#e0a44a".into(),
             len: 4.0,
+            min_len: 4.0,
             notes: [2., 6., 10., 14., 15., 7.].iter().map(|&s| n(hat, s, 1.0, None)).collect(),
             swing: 0.0,
         },
@@ -78,6 +80,7 @@ pub fn demo_project() -> Project {
             name: "Bass".into(),
             color: "#7c8cf8".into(),
             len: 8.0,
+            min_len: 4.0,
             notes: [(0., 3., 33), (4., 2., 33), (6., 2., 40), (8., 4., 36), (14., 2., 38), (16., 3., 29), (20., 2., 29), (22., 2., 36), (24., 6., 31), (30., 2., 34)]
                 .iter()
                 .map(|&(s, l, k)| n(bass, s, l, Some(k)))

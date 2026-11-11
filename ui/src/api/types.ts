@@ -96,7 +96,11 @@ export type Channel = {
  */
 export interface Note { ch: Id; step: number; len: number; p?: number; v?: number; inst?: Inst }
 /** `len` in beats; `swing` 0..1 (absent = 0). Notes at or past `len` are kept but hidden and silent. */
-export interface Pattern { id: Id; name: string; color: string; len: number; notes: Note[]; swing?: number }
+/**
+ * `len` (beats) is derived by the engine: the end of the last note rounded up to a bar, at least
+ * `minLen` (whole bars the user keeps on purpose, ≥ 1 bar). A `len` sent in `putPattern` is ignored.
+ */
+export interface Pattern { id: Id; name: string; color: string; len: number; minLen?: number; notes: Note[]; swing?: number }
 
 export interface Source {
   id: Id; name: string; color: string; path: string;
@@ -276,6 +280,7 @@ export type Op =
   | { op: 'putPattern'; pattern: Pattern }
   | { op: 'putChannel'; channel: Channel; index?: number | null }
   | { op: 'removeChannel'; id: Id }
+  | { op: 'removePattern'; id: Id }
   | { op: 'putSource'; source: Source }
   | { op: 'removeSource'; id: Id }
   | { op: 'setBpm'; bpm: number }

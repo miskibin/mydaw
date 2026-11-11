@@ -1,4 +1,5 @@
-import { patMode, setPatMode } from '../state/pattern';
+import { curPat, newPattern, patMode, setPatMode, stepPattern } from '../state/pattern';
+import { patternMenu } from './patternShared';
 import { t, type TranslationKey } from '../lib/i18n';
 import { setTypingOn, typingBase, typingOn } from '../state/typingKeys';
 import { noteName } from '../lib/pitch';
@@ -135,6 +136,7 @@ export function Toolbar() {
         <button classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
         <button classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
       </div>
+      <PatSelector />
       <div class="seg">
         <button title={patMode() ? t('a.tb.playPat') : t('a.tb.playSong')} data-act="play" classList={{ play: U.playing || U.patPlaying }} onClick={() => void A.togglePlay()}>
           <svg width="11" height="11" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor" /></svg>
@@ -192,10 +194,10 @@ export function Toolbar() {
         <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} /><span class="lbl">{t('a.tb.export')}</span>
       </button>
       <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : ''}</span>
-      <Show when={U.plugs.length + (U.patWin ? 1 : 0)}>
+      <Show when={U.plugs.length + (U.rackWin ? 1 : 0) + (U.rollWin ? 1 : 0)}>
         <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
-          title={U.plugsHidden ? t('a.tb.showWins', { n: U.plugs.length + (U.patWin ? 1 : 0) }) : t('a.tb.hideWins')}>
-          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} /><span class="lbl">{t('a.tb.windows', { n: U.plugs.length + (U.patWin ? 1 : 0) })}</span>
+          title={U.plugsHidden ? t('a.tb.showWins', { n: U.plugs.length + (U.rackWin ? 1 : 0) + (U.rollWin ? 1 : 0) }) : t('a.tb.hideWins')}>
+          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} /><span class="lbl">{t('a.tb.windows', { n: U.plugs.length + (U.rackWin ? 1 : 0) + (U.rollWin ? 1 : 0) })}</span>
         </button>
       </Show>
       <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title={t('a.tb.mixerTip')} aria-label="Mixer">
@@ -232,6 +234,37 @@ export function Toolbar() {
   );
 }
 
+/**
+ * FL's pattern selector: the current pattern (number, colour, name). Click = the patterns menu
+ * (pick, new, clone, rename, split, delete); wheel = previous / next; + = new pattern.
+ */
+function PatSelector() {
+  const n = () => { const p = curPat(); return p ? S.project.patterns.indexOf(p) + 1 : 0; };
+  let acc = 0;
+  const wheel = (e: WheelEvent) => {
+    e.preventDefault();
+    acc += e.deltaY || e.deltaX;
+    if (Math.abs(acc) < 40) return;
+    stepPattern(acc > 0 ? 1 : -1); acc = 0;
+  };
+  return (
+    <div class="patselbox" data-patsel>
+      <button class="patselbtn" title={t('b.ps.title')} onWheel={wheel}
+        onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); patternMenu(r.left, r.bottom + 4); }}>
+        <Show when={curPat()} fallback={<span class="ell" style={{ color: 'var(--fg5)' }}>—</span>}>
+          {p => <>
+            <span class="num mono">{n()}</span>
+            <span class="sw" style={{ background: p().color }} />
+            <span class="ell">{p().name}</span>
+          </>}
+        </Show>
+        <svg width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.3" /></svg>
+      </button>
+      <button class="patselnew" title={t('b.pat.new')} onClick={newPattern}><Icon d="M12 5v14 M5 12h14" size={11} /></button>
+    </div>
+  );
+}
+
 export function StatusBar() {
   const hint = () => t('a.tb.statusHint', { tool: t(TOOLS.find(x => x[0] === U.tool)![2]), hint: t(TOOL_HINT[U.tool]), snap: U.alt ? 'off' : snapLabel(U.snap, U.bw).replace('Snap: ', '') });
   return (
@@ -251,7 +284,12 @@ const shortcuts = (): [string, string][] => [
   [t('a.sc.2'), 'F9'],
   [t('a.sc.3'), 'F5'],
   [t('a.sc.4'), t('a.sc.5')],
-  [t('a.sc.6'), 'F7'],
+  [t('a.sc.107'), 'F7'],
+  [t('a.sc.108'), 'F4 · F2'],
+  [t('a.sc.109'), 'Num 1–9 · Num + −'],
+  [t('a.sc.110'), 'Shift+Ctrl+C'],
+  [t('a.sc.111'), 'G'],
+  [t('a.sc.6'), 'Shift+F9'],
   [t('a.sc.7'), t('a.sc.8')],
   [t('a.sc.9'), 'R'],
   [t('a.sc.10'), 'F'],

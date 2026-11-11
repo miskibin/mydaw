@@ -41,7 +41,7 @@ PATTERNS & CHANNELS  (steps: x = on, 1-9 = velocity 10-90 %, . = off; spaces and
   pattern --id N --ch C --steps "x... x... x... x..." [--vel 0.8]   replace channel C's notes
   pattern --id N --ch C --notes '[{"step":0,"len":4,"p":36,"v":0.9}]'  piano-roll notes (p = MIDI key)
   pattern --id N --ch C --clear            remove channel C's notes from the pattern
-  pattern --id N [--bars 1..8] [--swing 0..100] [--name TEXT]      (--new instead of --id: a new pattern)
+  pattern --id N [--bars N (minimum)] [--swing 0..100] [--name TEXT]      (--new instead of --id: a new pattern)
   pattern --id N --play | --stop           loop the pattern on its own (stops the song)
 
 TAKES & COMPING  (times in timeline beats; add --clip ID when a track has several comps)

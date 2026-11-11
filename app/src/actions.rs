@@ -248,8 +248,8 @@ pub fn context(app: &App, full: bool) -> Value {
 pub fn schema() -> Value {
     json!({
         "automation": "an automation plays through a clip of kind `auto` whose `ref` is the automation id; points t = beats from the automation start, v = 0..1 normalised (log params normalised logarithmically)",
-        "units": "time in beats (quarter notes); pattern len in beats (4 = 1 bar), note step/len in sixteenths, note v (velocity) 0..1, swing 0..1; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
-        "patterns": "channels are global (Channel Rack rows, `wave channels`); a pattern note plays channel `ch`; p = MIDI key (absent = the channel's root: 60 for samplers, 36 for the bass); swing delays notes on odd 16ths by swing × ½ step; notes at or past the pattern end are kept but silent; changing `len` also resizes clips that show exactly one whole pass (offset 0). Easier: `wave pattern --id N --ch C --steps \"x...x...x...x...\"`",
+        "units": "time in beats (quarter notes); pattern len in beats (4 = 1 bar, derived from the notes, at least minLen), note step/len in sixteenths, note v (velocity) 0..1, swing 0..1; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
+        "patterns": "channels are global (Channel Rack rows, `wave channels`); a pattern note plays channel `ch`; p = MIDI key (absent = the channel's root: 60 for samplers, 36 for the bass); swing delays notes on odd 16ths by swing × ½ step; the pattern length is derived: the end of the last note rounded up to a bar, at least `minLen` beats (a `len` you send is ignored); when it changes, clips that show exactly one whole pass (offset 0) follow. Easier: `wave pattern --id N --ch C --steps \"x...x...x...x...\"`",
         "ids": "take new ids from context.nextId and count up",
         "ops": {
             "putClips": {"clips": [{"id": 0, "track": 0, "start": 0, "len": 4, "offset": 0, "kind": "pat|audio|auto|comp", "ref": "pattern, source, automation or comp id", "muted": false, "gain": 0, "fadeIn": 0, "fadeOut": 0, "pan": 0, "norm": false, "rev": false}]},
@@ -260,9 +260,10 @@ pub fn schema() -> Value {
             "putFx": {"insertId": 1, "fx": {"id": 0, "type": "comp", "bypass": false, "params": {"thr": -18}}, "index": null},
             "removeFx": {"fxId": 0},
             "moveFx": {"fxId": 0, "to": 0},
-            "putPattern": {"pattern": {"id": 0, "name": "", "color": "#4f8ef7", "len": 4, "swing": 0, "notes": [{"ch": "channel id", "step": 0, "len": 1, "p": 36, "v": 1}]}},
+            "putPattern": {"pattern": {"id": 0, "name": "", "color": "#4f8ef7", "minLen": 4, "swing": 0, "notes": [{"ch": "channel id", "step": 0, "len": 1, "p": 36, "v": 1}]}},
             "putChannel": {"channel": {"id": 0, "name": "Kick", "color": "#4f8ef7", "kind": "inst|sample", "inst": "kick|clap|hat|bass (kind inst)", "source": "source id (kind sample)", "vol": 0.7937, "pan": 0, "mute": false, "solo": false, "insert": "insert id or null (= the clip's track)", "root": 60}, "index": null},
             "removeChannel": {"id": 0},
+            "removePattern": {"id": 0},
             "putSource": {"source": "rename/recolour an existing source"},
             "removeSource": {"id": 0},
             "setBpm": {"bpm": 128},
@@ -452,8 +453,7 @@ fn pattern_json(p: &wave_engine::Project, pt: &wave_engine::Pattern) -> Value {
             row
         })
         .collect();
-    let hidden = pt.notes.iter().filter(|n| n.step >= steps as f32).count();
-    json!({ "id": pt.id, "name": pt.name, "color": pt.color, "bars": pt.len / 4.0, "lenBeats": pt.len, "swing": (pt.swing * 100.0).round(), "rows": rows, "hiddenNotes": hidden })
+    json!({ "id": pt.id, "name": pt.name, "color": pt.color, "bars": pt.len / 4.0, "lenBeats": pt.len, "minBars": pt.min_len / 4.0, "swing": (pt.swing * 100.0).round(), "rows": rows })
 }
 
 /// `wave pattern`: show a pattern as step strings, or edit it (one undo step).
@@ -463,7 +463,7 @@ pub fn pattern(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
     let p = e.project();
     let new = arg(a, "new").and_then(Value::as_bool).unwrap_or(false);
     let mut pt = if new {
-        Pattern { id: p.next_id, name: format!("Pattern {}", p.patterns.len() + 1), color: "#4f8ef7".into(), len: 4.0, notes: vec![], swing: 0.0 }
+        Pattern { id: p.next_id, name: format!("Pattern {}", p.patterns.len() + 1), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes: vec![], swing: 0.0 }
     } else {
         let id = match arg(a, "id").and_then(as_index) {
             Some(id) => id,
@@ -480,10 +480,11 @@ pub fn pattern(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         pt.color = c.into();
     }
     if let Some(b) = opt_f64(a, "bars") {
-        if !(1.0..=8.0).contains(&b) || b.fract() != 0.0 {
-            return Err("--bars is a whole number 1..8".into());
+        // the shortest the pattern may be: it still grows with notes past it
+        if !(1.0..=wave_engine::TOTAL_BEATS / 4.0).contains(&b) || b.fract() != 0.0 {
+            return Err(format!("--bars is a whole number 1..{} (the pattern still grows to fit its notes)", wave_engine::TOTAL_BEATS / 4.0));
         }
-        pt.len = b * 4.0;
+        pt.min_len = b * 4.0;
     }
     if let Some(s) = opt_f64(a, "swing") {
         if !(0.0..=100.0).contains(&s) {

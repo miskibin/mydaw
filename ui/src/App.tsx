@@ -28,27 +28,35 @@ import { channels } from './state/pattern';
 import { isPitched } from './lib/pattern';
 import { MusicDialog } from './views/MusicDialog';
 import { FxPickerHost, openFxPicker } from './views/FxPicker';
-import { PatternEditor } from './views/PatternEditor';
+import { ChannelRack } from './views/ChannelRack';
+import { PianoRoll } from './views/PianoRoll';
+import { renameCurrent } from './views/patternShared';
 import { NotebookHost } from './views/Notebook';
 import { toggleNotebook } from './state/notebook';
-import { closePattern, patMode, setPatMode, togglePattern } from './state/pattern';
+import { clonePattern, closeTopPatWin, nextEmptyPattern, patMode, pickPatternNum, setPatMode, stepPattern, toggleRack, toggleRoll } from './state/pattern';
 import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
 
-/** Stacking rank of a window (effect windows and the pattern editor) inside the window layer (1 = bottom). */
-function plugRank(z: number) { let r = 1; for (const p of U.plugs) if (p.z < z) r++; if (U.patWin && U.patWin.z < z) r++; return r; }
+/** Stacking rank of a window (effect windows, Channel Rack, Piano roll) inside the window layer (1 = bottom). */
+function plugRank(z: number) {
+  let r = 1;
+  for (const p of U.plugs) if (p.z < z) r++;
+  if (U.rackWin && U.rackWin.z < z) r++;
+  if (U.rollWin && U.rollWin.z < z) r++;
+  return r;
+}
 
-/** A click on the playlist/toolbar takes the keyboard back from a floating window (pattern editor, effects):
+/** A click on the playlist/toolbar takes the keyboard back from a floating window (Channel Rack, Piano roll, effects):
  * the canvas calls preventDefault on pointerdown, so focus would otherwise stay in that window and swallow the keys. */
 function reclaimFocus(e: PointerEvent) {
   const ae = document.activeElement as HTMLElement | null, tg = e.target as HTMLElement;
   if (ae && ae !== document.body && ae.closest('.win') && !tg.closest('.win') && !typingIn(tg)) ae.blur();
 }
 
-/** The channel the typing keyboard plays: the open channel window, the pattern editor's channel,
+/** The channel the typing keyboard plays: the open channel window, the selected channel while the rack or the roll is open,
  * the channel feeding the top effect window's insert, the MIDI target, else the first instrument. */
 function typingTarget() {
   const cw = chanWin(); if (cw) return cw.id;
-  if (U.patWin?.ch != null) return U.patWin.ch;
+  if ((U.rackWin || U.rollWin) && U.selCh != null && channels().some(c => c.id === U.selCh)) return U.selCh;
   const top = A.topPlug(), hit = top ? findFx(top.fxId) : null;
   const cs = channels();
   const fed = hit ? cs.find(c => c.insert === hit.m.id) : undefined; if (fed) return fed.id;
@@ -72,8 +80,8 @@ function onKey(e: KeyboardEvent) {
     if (U.settings) return setU('settings', false);
     if (U.exportOpen) return void A.cancelExportOrClose();
     if (U.help) return setU('help', false);
-    if (NB.open && !U.patWin && !U.plugs.length) return closeNotebook();
-    if (U.patWin && !U.plugsHidden && (!U.plugs.length || U.patWin.z > A.topPlug()!.z)) return closePattern();
+    if (NB.open && !U.rackWin && !U.rollWin && !U.plugs.length) return closeNotebook();
+    if (closeTopPatWin()) return;
     if (U.plugs.length) return A.closePlug(A.topPlug()!.fxId);
     if (U.pitchEd) return A.closePitchEditor();
     if (U.editor) return A.closeEditor();
@@ -81,8 +89,17 @@ function onKey(e: KeyboardEvent) {
     return setU('sel', []);
   }
   if (e.key === 'F8') { e.preventDefault(); return e.altKey ? setU('pickOpen', !U.pickOpen) : toggleNotebook(); }
-  if (e.key === 'F7') { e.preventDefault(); return U.fxPicker ? setU('fxPicker', null) : openFxPicker(U.mixSel); }
-  if (e.key === 'F6') { e.preventDefault(); return togglePattern(); }
+  // FL Studio's window keys: F6 Channel rack, F7 Piano roll; the effect picker sits next to the mixer (Shift+F9)
+  if (e.key === 'F9' && e.shiftKey) { e.preventDefault(); return U.fxPicker ? setU('fxPicker', null) : openFxPicker(U.mixSel); }
+  if (e.key === 'F7') { e.preventDefault(); return toggleRoll(); }
+  if (e.key === 'F6') { e.preventDefault(); return toggleRack(); }
+  // the pattern selector: F4 next empty pattern, F2 rename, numpad 1–9 / + / − pick
+  if (e.key === 'F4') { e.preventDefault(); return nextEmptyPattern(); }
+  if (e.key === 'F2') { e.preventDefault(); const r = document.querySelector('[data-patsel]')?.getBoundingClientRect(); return renameCurrent(r?.left ?? window.innerWidth / 2, r ? r.bottom + 4 : 80); }
+  if (!m && !e.altKey && e.code === 'NumpadAdd') { e.preventDefault(); return stepPattern(1); }
+  if (!m && !e.altKey && e.code === 'NumpadSubtract') { e.preventDefault(); return stepPattern(-1); }
+  if (!m && !e.altKey && /^Numpad[1-9]$/.test(e.code)) { e.preventDefault(); return pickPatternNum(+e.code.slice(6)); }
+  if (m && e.shiftKey && k === 'c') { e.preventDefault(); return clonePattern(); }
   if (e.key === 'F5') { e.preventDefault(); return U.plugsHidden ? A.showPlugs() : A.playlistFront(); }
   if (e.key === 'F9') { e.preventDefault(); return setU('mixOpen', !U.mixOpen); }
   if (m && k === 'z') { e.preventDefault(); return void (e.shiftKey ? A.redo() : A.undo()); }
@@ -190,7 +207,8 @@ export function App() {
       <PitchEditor />
       <div class="winlayer" classList={{ hidden: U.plugsHidden }}>
         <For each={U.plugs}>{pw => <FxWindow pw={pw} z={plugRank(pw.z)} />}</For>
-        <PatternEditor z={U.patWin ? plugRank(U.patWin.z) : 1} />
+        <ChannelRack z={U.rackWin ? plugRank(U.rackWin.z) : 1} />
+        <PianoRoll z={U.rollWin ? plugRank(U.rollWin.z) : 1} />
       </div>
       <NotebookHost />
       <Show when={U.ghost}>{g => <div class="ghost" style={{ left: g().x + 'px', top: g().y + 'px', 'box-shadow': `inset 0 0 0 1px ${g().color},0 6px 16px rgba(0,0,0,.45)` }}>{g().name}</div>}</Show>

@@ -117,7 +117,7 @@ fn synth_parameter_automation_closes_the_filter() {
     let ch: Id = 3000;
     p.channels.push(Channel { name: "Synth".into(), src: ChannelSrc::Synth { synth: SynthState::default() }, root: 60, ..Channel::builtin(ch, Inst::Kick) });
     let notes = vec![Note { v: 0.9, ..Note::new(ch, 0.0, 64.0, Some(48)) }];
-    p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, notes, swing: 0.0 }];
+    p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes, swing: 0.0 }];
     p.clips = vec![Clip { id: 1, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None }];
     p.automations.push(step_down(9400, AutoTarget::Synth { chan_id: ch, param: cutoff }, 1.0, 0.0));
     p.clips.push(auto_clip(9401, 9400, 1, 8.0));

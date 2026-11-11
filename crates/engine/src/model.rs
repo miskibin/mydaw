@@ -395,8 +395,15 @@ pub struct Pattern {
     pub id: Id,
     pub name: String,
     pub color: String,
-    /// Length in beats. Notes at or after the end are kept but not played or shown.
+    /// Length in beats, always whole bars: derived, never chosen directly. It is the end of
+    /// the last note rounded up to a bar, but at least `min_len` (FL Studio's automatic
+    /// pattern length). [`Pattern::fit_len`] sets it; every `putPattern` and file load does.
+    #[serde(default = "bar")]
     pub len: f64,
+    /// The shortest the pattern may be, in beats (whole bars, at least one): bars the user
+    /// added on purpose ("+ bar") stay even while empty, e.g. a crash every second bar.
+    #[serde(default = "bar", rename = "minLen")]
+    pub min_len: f64,
     pub notes: Vec<Note>,
     /// 0..1: how far every second 16th is delayed (see [`swing_offset`]).
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -405,6 +412,29 @@ pub struct Pattern {
 
 fn is_zero(v: &f32) -> bool {
     *v == 0.0
+}
+
+fn bar() -> f64 {
+    4.0
+}
+
+/// Beats in one bar (the project is in 4/4).
+pub const BAR_BEATS: f64 = 4.0;
+
+impl Pattern {
+    /// The length its notes need: the end of the last note rounded up to a whole bar, at
+    /// least one bar, at most [`TOTAL_BEATS`].
+    pub fn content_len(notes: &[Note]) -> f64 {
+        let end = notes.iter().map(|n| (n.step + n.len) as f64 / 4.0).fold(0.0, f64::max);
+        ((end / BAR_BEATS - 1e-6).ceil().max(1.0) * BAR_BEATS).min(TOTAL_BEATS)
+    }
+
+    /// Sets `len` from the notes and `min_len` (whole bars), and normalises `min_len`.
+    pub fn fit_len(&mut self) {
+        let min = if self.min_len.is_finite() { (self.min_len / BAR_BEATS - 1e-6).ceil().max(1.0) * BAR_BEATS } else { BAR_BEATS };
+        self.min_len = min.min(TOTAL_BEATS);
+        self.len = Self::content_len(&self.notes).max(self.min_len);
+    }
 }
 
 /// Swing, in steps, added to a note that starts on an odd 16th (0-based 1, 3, 5 …).
@@ -815,6 +845,7 @@ impl Project {
         let mut pats = std::mem::take(&mut self.patterns);
         for pt in pats.iter_mut() {
             self.resolve_note_channels(&mut pt.notes);
+            pt.fit_len();
         }
         self.patterns = pats;
         if self.channels.is_empty() {

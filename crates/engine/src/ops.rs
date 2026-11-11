@@ -27,10 +27,14 @@ pub enum Op {
     RemoveFx { fx_id: Id },
     MoveFx { fx_id: Id, to: usize },
     /// Insert or replace a pattern. Notes may still say `inst` instead of `ch` (old
-    /// scripts): they get that instrument's built-in channel (created if missing). When an
-    /// existing pattern's `len` changes, its clips that show exactly one whole pass of it
-    /// (`offset` 0, `len` = old length) take the new length; other clips keep theirs.
+    /// scripts): they get that instrument's built-in channel (created if missing). `len` is
+    /// derived (the notes' end rounded up to a bar, at least `minLen`); whatever is sent is
+    /// replaced. When an existing pattern's length changes, its clips that show exactly one
+    /// whole pass of it (`offset` 0, `len` = old length) take the new length; other clips
+    /// keep theirs.
     PutPattern { pattern: Pattern },
+    /// Remove a pattern and every clip that plays it.
+    RemovePattern { id: Id },
     /// Insert or replace a Channel Rack channel. `index` places a new channel (default:
     /// last) or moves an existing one.
     PutChannel { channel: Channel, #[serde(default)] index: Option<usize> },
@@ -258,9 +262,6 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             d.mixer = true;
         }
         Op::PutPattern { pattern } => {
-            if !(pattern.len > 0.0 && pattern.len <= TOTAL_BEATS) {
-                return Err(OpError::Invalid(format!("pattern length must be within 0..{TOTAL_BEATS} beats")));
-            }
             if !(pattern.swing.is_finite() && (0.0..=1.0).contains(&pattern.swing)) {
                 return Err(OpError::Invalid("swing must be 0..1".into()));
             }
@@ -275,6 +276,9 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 if n.p.is_some_and(|k| k > 127) {
                     return Err(OpError::Invalid("note key `p` must be 0..127".into()));
                 }
+                if (n.step + n.len) as f64 > TOTAL_BEATS * 4.0 {
+                    return Err(OpError::Invalid(format!("pattern {}: notes must end within {TOTAL_BEATS} beats", pt.id)));
+                }
                 if n.ch == 0 && n.inst.is_none() {
                     return Err(OpError::Invalid("every note needs `ch` (a channel id, see `wave channels`)".into()));
                 }
@@ -283,13 +287,15 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             if let Some(n) = pt.notes.iter().find(|n| p.channel(n.ch).is_none()) {
                 return Err(OpError::Missing { what: "channel", id: n.ch });
             }
+            pt.fit_len();
             bump(p, pt.id);
-            match p.patterns.iter_mut().find(|x| x.id == pt.id) {
+            let (id, len) = (pt.id, pt.len);
+            match p.patterns.iter_mut().find(|x| x.id == id) {
                 Some(x) => {
                     let old = x.len;
                     *x = pt;
-                    if (old - pattern.len).abs() > 1e-9 {
-                        follow_pattern_length(p, pattern.id, old, pattern.len);
+                    if (old - len).abs() > 1e-9 {
+                        follow_pattern_length(p, id, old, len);
                     }
                 }
                 None => p.patterns.push(pt),
@@ -423,6 +429,14 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 Some(x) => *x = a,
                 None => p.automations.push(a),
             }
+            d.timeline = true;
+        }
+        Op::RemovePattern { id } => {
+            if !p.patterns.iter().any(|x| x.id == *id) {
+                return Err(OpError::Missing { what: "pattern", id: *id });
+            }
+            p.patterns.retain(|x| x.id != *id);
+            p.clips.retain(|c| !(c.kind == ClipKind::Pat && c.source == *id));
             d.timeline = true;
         }
         Op::RemoveAutomation { id } => {

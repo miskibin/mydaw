@@ -295,7 +295,7 @@ fn render_song(preset: &str, song: &Song) -> Vec<f32> {
             notes.push(Note::new(kick, o, 1.0, None));
         }
     }
-    p.patterns = vec![Pattern { id: p.alloc_id(), name: "Demo".into(), color: "#4f8ef7".into(), len: song.beats, notes, swing: 0.0 }];
+    p.patterns = vec![Pattern { id: p.alloc_id(), name: "Demo".into(), color: "#4f8ef7".into(), len: song.beats, min_len: song.beats, notes, swing: 0.0 }];
     let pid = p.patterns[0].id;
     let cid = p.alloc_id();
     p.clips = vec![Clip { id: cid, track: 0, start: 0.0, len: song.beats, offset: 0.0, kind: ClipKind::Pat, source: pid, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None }];

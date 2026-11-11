@@ -47,7 +47,7 @@ project looks like:
                "mute":false,"solo":false,"insert":null,"root":60},
               {"id":1004,"name":"Stab","color":"#47b8a8","kind":"sample","source":1001,"vol":0.7937,"pan":0,
                "mute":false,"solo":false,"insert":3,"root":60}],
-  "patterns":[{"id":1,"name":"Beat","color":"#4f8ef7","len":4,"swing":0.5,
+  "patterns":[{"id":1,"name":"Beat","color":"#4f8ef7","len":4,"minLen":4,"swing":0.5,
                "notes":[{"ch":1000,"step":0,"len":1},{"ch":1003,"step":0,"len":3,"p":33,"v":0.8}]}],
   "sources": [{"id":1001,"name":"Pad Loop","color":"#47b8a8","path":"…/pad.wav","dur":3.75,"sr":48000,"ch":2,"peakDb":-3.1}],
   "clips":   [{"id":5,"track":0,"start":0,"len":16,"offset":0,"kind":"pat","ref":1,"muted":false,"gain":0,
@@ -55,7 +55,7 @@ project looks like:
 }
 ```
 
-## Channels, patterns and notes (the pattern editor)
+## Channels, patterns and notes (Channel Rack and Piano roll)
 
 Channels are **global to the project**, like FL Studio's Channel Rack: one row per
 instrument, and every pattern can hold notes for every channel. A note names its
@@ -74,19 +74,33 @@ the kit and its mixer routing in every pattern.
   and mute still apply). A channel routed to an insert skips the track's insert but the
   track still mutes it and scales it by its fader.
 * `note`: `step`/`len` in 16ths, `p` MIDI key (absent = the channel's `root`; percussion
-  ignores pitch), `v` velocity 0..1 = linear gain (absent = 1). A step-sequencer step is
-  simply a note of length 1 at the root, so the step grid and the piano roll edit the same
-  notes; a channel whose notes have other lengths/pitches is shown as a mini piano roll in
-  the rack and edited in the piano roll.
-* `pattern.len` in beats (the editor offers 1–8 bars); notes at or past the end are **kept
-  but hidden and silent** (shrinking and growing back loses nothing). When `len` changes,
-  pattern clips that show exactly one whole pass (`offset` 0, `len` = the old length) take
-  the new length; clips sized on purpose (repeats, offsets) keep theirs. New clips use the
-  pattern's length.
+  — built-in drums follow it like a sampler, the root plays them as designed), `v` velocity
+  0..1 = linear gain (absent = 1). A step-sequencer step is simply a note of length 1 (at
+  the root, or at its own key set in the rack's graph editor), so the step grid and the piano
+  roll edit the same notes; a channel with other lengths, off-grid notes or chords is shown
+  as a mini piano roll in the rack (a click opens the Piano roll).
+* `pattern.len` in beats is **derived**, like FL Studio's automatic pattern length: the end
+  of the last note rounded up to a whole bar, at least `minLen` (whole bars, ≥ 1; the bars
+  the user keeps on purpose with "+ bar", e.g. a crash every second bar). The engine sets it
+  on every `putPattern` and on load (`Pattern::fit_len`); a `len` sent by a client is
+  ignored. Drawing past the end makes a pattern longer, deleting its last notes shorter.
+  When `len` changes, pattern clips that show exactly one whole pass (`offset` 0, `len` = the
+  old length) take the new length; clips sized on purpose (repeats, offsets) keep theirs. New
+  clips use the pattern's length. Notes must end within the song (`TOTAL_BEATS`).
 * `pattern.swing` 0..1: a note that starts exactly on an odd 16th (0-based 1, 3, 5 …) is
   delayed by `swing × ½` step. 100 % puts the off-beat 16th at 75 % of its 8th (MPC 75 %),
   ~67 % is close to triplet feel; 0 is straight. Even 16ths and off-grid notes never move.
   Swing is applied when the timeline is built (schedule time), never written into the notes.
+
+**The UI, as in FL Studio.** The *current pattern* is global (the toolbar's pattern selector,
+numpad 1–9 / + / −, F4 next empty pattern, F2 rename, Shift+Ctrl+C clone); picking a pattern
+clip on the playlist or in the browser makes it current, and the playlist paints it. Two
+separate floating windows show it: the **Channel Rack** (F6: a row per channel — mute LED,
+pan, volume, mixer insert, name, steps — "+ / −" bars, swing, and the graph editor `G` for
+per-step velocity and key of the selected channel) and the **Piano roll** (F7: the selected
+channel's notes in the current pattern, any channel; the pattern's other channels as ghost
+notes, double right-click one to switch). PAT mode (L) loops the current pattern and follows
+it when it changes.
 
 **Migration.** Old files (and old `wave apply` scripts) say `{"inst":"hat"}` on notes and
 have no `channels`. `Project::migrate` (on open, and `putPattern` for each note) gives every
@@ -123,7 +137,7 @@ and presets come from `fx_catalog` — the UI must not hard-code them.
 All edits are "put" ops, applied atomically per batch:
 `putClips{clips}`, `removeClips{ids}`, `putTrack{track}`, `putInsert{insert}`,
 `removeInsert{id}`, `putFx{insertId,fx,index?}`, `removeFx{fxId}`,
-`moveFx{fxId,to}`, `putPattern{pattern}`, `putChannel{channel,index?}`, `removeChannel{id}`
+`moveFx{fxId,to}`, `putPattern{pattern}`, `removePattern{id}` (also removes its clips), `putChannel{channel,index?}`, `removeChannel{id}`
 (also removes its notes in every pattern; `removeSource` removes sampler channels of that
 source), `putSource{source}`,
 `removeSource{id}`, `putAutomation{automation}`, `removeAutomation{id}`,

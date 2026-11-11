@@ -313,6 +313,11 @@ impl VoicePool {
                 Some(i)
             }
             VoiceKind::Synth => None,
+            // built-in drums follow the key like a sampler: the root plays them as designed
+            kind @ (VoiceKind::Kick | VoiceKind::Clap | VoiceKind::Hat) => {
+                let rate = 2f64.powf((key as f64 - ch.root as f64) / 12.0);
+                Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, level, rate))
+            }
             kind => Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, level, 1.0)),
         }
     }
@@ -327,8 +332,8 @@ impl VoicePool {
         self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         let mut filt = Biquad::default();
         match kind {
-            VoiceKind::Hat => filt.set(FilterType::Highpass, self.sr, 7000.0, 0.707, 0.0),
-            VoiceKind::Clap => filt.set(FilterType::Bandpass, self.sr, 1400.0, 0.9, 0.0),
+            VoiceKind::Hat => filt.set(FilterType::Highpass, self.sr, (7000.0 * rate as f32).clamp(200.0, self.sr * 0.45), 0.707, 0.0),
+            VoiceKind::Clap => filt.set(FilterType::Bandpass, self.sr, (1400.0 * rate as f32).clamp(60.0, self.sr * 0.45), 0.9, 0.0),
             VoiceKind::Bass => filt.set(FilterType::Lowpass, self.sr, 900.0, 0.707, 0.0),
             _ => {}
         }
@@ -481,7 +486,7 @@ impl VoicePool {
                 let t = v.t as f32 / sr;
                 let (s, done) = match v.kind {
                     VoiceKind::Kick => {
-                        let f = exp_ramp(150.0, 42.0, t, 0.12);
+                        let f = exp_ramp(150.0, 42.0, t, 0.12) * v.rate as f32;
                         v.phase = (v.phase + f / sr).fract();
                         ((v.phase * TAU).sin() * exp_ramp(0.9, 0.001, t, 0.38), t > 0.4)
                     }

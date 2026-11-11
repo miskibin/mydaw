@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { Channel, Note, Project } from '../api/types';
 import { applyAll } from './applyOps';
 import {
-  builtinChannel, cellsBetween, duplicateRight, fillEvery, isRollRow, isStepOn, migrateProject, moveNotes, noteAt, resizeNotes,
-  rotate, setStep, setVelAt, snapStep, swingOffset, transpose,
+  builtinChannel, cellsBetween, contentLen, duplicateRight, fillEvery, isRollRow, isStepOn, migrateProject, moveNotes, noteAt, resizeNotes,
+  rotate, setKeyAt, setStep, setVelAt, snapStep, swingOffset, transpose,
 } from './pattern';
 
 const KICK = 1000, BASS = 1003;
@@ -33,10 +33,10 @@ describe('step sequencer', () => {
     for (const [, s] of cellsBetween(0, 0, 0, 5)) n = setStep(n, KICK, s, true);
     expect(steps(n, KICK)).toEqual([0, 1, 2, 3, 4, 5]);
   });
-  it('fills every N steps, replacing the channel and keeping others and hidden notes', () => {
+  it('fills every N steps, replacing the channel and keeping the others', () => {
     const n: Note[] = [{ ch: KICK, step: 3, len: 1 }, { ch: BASS, step: 0, len: 4, p: 36 }, { ch: KICK, step: 20, len: 1 }];
     const f = fillEvery(n, KICK, 16, 4);
-    expect(steps(f, KICK)).toEqual([0, 4, 8, 12, 20]);
+    expect(steps(f, KICK)).toEqual([0, 4, 8, 12]);
     expect(f.filter(x => x.ch === BASS)).toHaveLength(1);
     expect(steps(fillEvery([], KICK, 32, 8), KICK)).toEqual([0, 8, 16, 24]);
   });
@@ -52,7 +52,22 @@ describe('step sequencer', () => {
     expect(isRollRow([{ ch: BASS, step: 0, len: 1 }], bass)).toBe(false);
     expect(isRollRow([{ ch: BASS, step: 0, len: 1, p: 36 }], bass)).toBe(false);
     expect(isRollRow([{ ch: BASS, step: 0, len: 3, p: 36 }], bass)).toBe(true);
-    expect(isRollRow([{ ch: BASS, step: 0, len: 1, p: 40 }], bass)).toBe(true);
+    // a step with its own key (graph editor) is still a step; a chord or an off-grid note is not
+    expect(isRollRow([{ ch: BASS, step: 0, len: 1, p: 40 }], bass)).toBe(false);
+    expect(isRollRow([{ ch: BASS, step: 0, len: 1, p: 40 }, { ch: BASS, step: 0, len: 1, p: 43 }], bass)).toBe(true);
+    expect(isRollRow([{ ch: BASS, step: 0.5, len: 1 }], bass)).toBe(true);
+  });
+  it('sets a step key from the graph editor (the root clears it)', () => {
+    const n: Note[] = [{ ch: BASS, step: 2, len: 1 }, { ch: BASS, step: 3, len: 1, p: 40 }];
+    expect(setKeyAt(n, bass, 2, 43)[0]).toEqual({ ch: BASS, step: 2, len: 1, p: 43 });
+    expect(setKeyAt(n, bass, 3, bass.root)[1]).toEqual({ ch: BASS, step: 3, len: 1 });
+    expect(setKeyAt(n, bass, 3, 200)[1].p).toBe(127);
+  });
+  it('a pattern is as long as its notes: the last end rounded up to a bar, at least one', () => {
+    expect(contentLen([])).toBe(4);
+    expect(contentLen([{ ch: KICK, step: 15, len: 1 }])).toBe(4);
+    expect(contentLen([{ ch: KICK, step: 15, len: 1.5 }])).toBe(8);
+    expect(contentLen([{ ch: KICK, step: 40, len: 4 }])).toBe(12);
   });
   it('swing moves only odd 16ths, half a step at 100 %', () => {
     expect([0, 1, 2, 3, 4, 5].map(s => swingOffset(s, 1))).toEqual([0, 0.5, 0, 0.5, 0, 0.5]);
@@ -116,14 +131,25 @@ describe('mock engine ops (mirror of ops.rs)', () => {
     expect(q.patterns[0].notes[0]).toEqual({ ch: 1002, step: 2, len: 1 });
     expect(() => applyAll(p, [{ op: 'putPattern', pattern: { id: 5, name: 'x', color: '#fff', len: 4, notes: [{ ch: 77, step: 0, len: 1 }] } }])).toThrow();
   });
-  it('length changes resize whole-pattern clips only; removing a channel removes its notes', () => {
+  it('length follows the notes and minLen; whole-pattern clips follow it; removing a channel removes its notes', () => {
     let p = base();
-    p = applyAll(p, [{ op: 'putPattern', pattern: { id: 5, name: 'x', color: '#fff', len: 4, notes: [{ ch: 1000, step: 0, len: 1 }, { ch: 1001, step: 4, len: 1 }] } },
+    p = applyAll(p, [{ op: 'putPattern', pattern: { id: 5, name: 'x', color: '#fff', len: 99, notes: [{ ch: 1000, step: 0, len: 1 }, { ch: 1001, step: 4, len: 1 }] } },
       { op: 'putClips', clips: [
         { id: 1, track: 0, start: 0, len: 4, offset: 0, kind: 'pat', ref: 5, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false },
         { id: 2, track: 0, start: 8, len: 16, offset: 0, kind: 'pat', ref: 5, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false }] }]);
-    p = applyAll(p, [{ op: 'putPattern', pattern: { ...p.patterns[0], len: 8 } }]);
+    expect([p.patterns[0].len, p.patterns[0].minLen]).toEqual([4, 4]); // a sent len is ignored
+    // a note in bar 2 grows it; the clip that shows one whole pass follows
+    p = applyAll(p, [{ op: 'putPattern', pattern: { ...p.patterns[0], notes: [...p.patterns[0].notes, { ch: 1000, step: 20, len: 1 }] } }]);
+    expect(p.patterns[0].len).toBe(8);
     expect(p.clips.map(c => c.len)).toEqual([8, 16]);
+    // removed again: back to one bar — unless an empty bar is kept on purpose (minLen)
+    const two = { ...p.patterns[0], notes: p.patterns[0].notes.slice(0, 2) };
+    expect(applyAll(p, [{ op: 'putPattern', pattern: two }]).patterns[0].len).toBe(4);
+    p = applyAll(p, [{ op: 'putPattern', pattern: { ...two, minLen: 8 } }]);
+    expect([p.patterns[0].len, p.clips[0].len]).toEqual([8, 8]);
+    expect(() => applyAll(p, [{ op: 'putPattern', pattern: { ...two, notes: [{ ch: 1000, step: 2047, len: 2 }] } }])).toThrow();
+    // removePattern takes its clips with it
+    expect(applyAll(p, [{ op: 'removePattern', id: 5 }]).clips).toEqual([]);
     p = applyAll(p, [{ op: 'removeChannel', id: 1000 }]);
     expect(p.patterns[0].notes).toEqual([{ ch: 1001, step: 4, len: 1 }]);
     expect(p.channels!.some(c => c.id === 1000)).toBe(false);

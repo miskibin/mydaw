@@ -13,8 +13,8 @@ export const INSTS: Inst[] = ['kick', 'clap', 'hat', 'bass'];
 export const INST_NAME: Record<Inst, string> = { kick: 'Kick', clap: 'Clap', hat: 'Hat', bass: 'Bass' };
 export const INST_COLOR: Record<Inst, string> = { kick: '#4f8ef7', clap: '#d9678f', hat: '#e0a44a', bass: '#7c8cf8' };
 export const instRoot = (i: Inst) => (i === 'bass' ? 36 : SAMPLE_ROOT);
-/** Longest pattern in the editor (8 bars). */
-export const MAX_BARS = 8;
+/** Beats per bar (4/4). */
+export const BAR = 4;
 const EPS = 1e-3;
 
 export function builtinChannel(id: Id, inst: Inst): Channel {
@@ -26,8 +26,20 @@ export const keyOf = (n: Note, c: Channel | undefined) => n.p ?? c?.root ?? SAMP
 export const velOf = (n: Note) => n.v ?? 1;
 /** Number of 16ths in the pattern. */
 export const stepsOf = (p: Pattern) => Math.max(1, Math.round(p.len * 4));
-/** Notes the editor shows and the engine plays (the rest are past the end: kept, hidden). */
-export const visible = (n: Note, p: Pattern) => n.step < p.len * 4 - 1e-4;
+/** Beats the notes need: the end of the last one rounded up to a bar, ≥ 1 bar, ≤ the song (model.rs `content_len`). */
+export function contentLen(notes: readonly Note[]): number {
+  let end = 0;
+  for (const n of notes) end = Math.max(end, (n.step + n.len) / 4);
+  return Math.min(TOTAL_BEATS, Math.max(1, Math.ceil(end / BAR - 1e-6)) * BAR);
+}
+/** The pattern's `minLen` in whole bars (beats), ≥ 1 bar. */
+export const minLenOf = (p: Pick<Pattern, 'minLen'>) => Math.min(TOTAL_BEATS, Math.max(1, Math.ceil((p.minLen ?? BAR) / BAR - 1e-6)) * BAR);
+/** Sets `len` (and normalises `minLen`) like the engine's `Pattern::fit_len`. */
+export function fitLen(p: Pattern): Pattern {
+  p.minLen = minLenOf(p);
+  p.len = Math.max(contentLen(p.notes), p.minLen);
+  return p;
+}
 
 /** Swing in steps added to a note on an odd 16th (crates/engine/src/model.rs `swing_offset`). */
 export function swingOffset(step: number, swing: number): number {
@@ -64,7 +76,7 @@ export function migrateProject(p: Project) {
   const used = new Set<Inst>();
   for (const pt of p.patterns) for (const n of pt.notes) if (!n.ch && n.inst) used.add(n.inst);
   for (const i of INSTS) if (used.has(i)) channelForInst(p, i);
-  for (const pt of p.patterns) resolveNotes(p, pt.notes);
+  for (const pt of p.patterns) { resolveNotes(p, pt.notes); fitLen(pt); }
   if (!p.channels?.length) for (const i of INSTS) channelForInst(p, i);
   // saturator parameters from before the character saturator
   for (const ins of p.inserts) for (const fx of ins.fx) if (fx.type === 'sat' && migrateSatParams(fx.params)) fx.preset = null;
@@ -87,10 +99,10 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean): boolean {
   switch (op.op) {
     case 'putPattern': {
       const pt: Pattern = structuredClone(op.pattern);
-      if (!(pt.len > 0 && pt.len <= TOTAL_BEATS)) fail(`pattern length must be within 0..${TOTAL_BEATS} beats`);
       if (!((pt.swing ?? 0) >= 0 && (pt.swing ?? 0) <= 1)) fail('swing must be 0..1');
       for (const n of pt.notes) {
         if (!(n.step >= 0 && n.len > 0 && isFinite(n.step) && isFinite(n.len))) fail(`pattern ${pt.id}: a note has an invalid step/len`);
+        if ((n.step + n.len) > TOTAL_BEATS * 4) fail(`pattern ${pt.id}: notes must end within ${TOTAL_BEATS} beats`);
         if (n.v != null && !(n.v >= 0 && n.v <= 1)) fail('note velocity `v` must be 0..1');
         if (!n.ch && !n.inst) fail('every note needs `ch`');
       }
@@ -98,6 +110,7 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean): boolean {
       if (strict) { const bad = pt.notes.find(n => !(p.channels ?? []).some(c => c.id === n.ch)); if (bad) fail(`no channel with id ${bad.ch}`); }
       if (!pt.swing) delete pt.swing;
       for (const n of pt.notes) if (n.v === 1) delete n.v;
+      fitLen(pt);
       bump(p, pt.id);
       const i = p.patterns.findIndex(x => x.id === pt.id);
       if (i >= 0) {
@@ -172,16 +185,16 @@ export function cellsBetween(r0: number, s0: number, r1: number, s1: number): [n
   return out;
 }
 
-/** "Fill each N steps": the channel's steps become 0, N, 2N … (its other visible notes go). */
+/** "Fill each N steps": the channel's steps become 0, N, 2N … up to `steps` (its other notes go). */
 export function fillEvery(notes: readonly Note[], ch: Id, steps: number, n: number): Note[] {
-  const keep = notes.filter(x => x.ch !== ch || x.step >= steps - 1e-4);
+  const keep = notes.filter(x => x.ch !== ch);
   for (let s = 0; s < steps; s += n) keep.push({ ch, step: s, len: 1 });
   return keep;
 }
 
-/** Shift the channel's visible notes by `d` steps, wrapping around the pattern length. */
+/** Shift the channel's notes by `d` steps, wrapping around the pattern length. */
 export function rotate(notes: readonly Note[], ch: Id, steps: number, d: number): Note[] {
-  return notes.map(n => n.ch === ch && n.step < steps - 1e-4 ? { ...n, step: ((((n.step + d) % steps) + steps) % steps) } : n);
+  return notes.map(n => n.ch === ch ? { ...n, step: ((((n.step + d) % steps) + steps) % steps) } : n);
 }
 
 export const clearChannel = (notes: readonly Note[], ch: Id) => notes.filter(n => n.ch !== ch);
@@ -189,9 +202,30 @@ export const clearChannel = (notes: readonly Note[], ch: Id) => notes.filter(n =
 /** Copies of `from`'s notes for channel `to`. */
 export const cloneNotes = (notes: readonly Note[], from: Id, to: Id): Note[] => [...notes, ...notes.filter(n => n.ch === from).map(n => ({ ...n, ch: to }))];
 
-/** True when the channel's notes in this pattern are more than plain steps (lengths, pitches, off-grid). */
+/**
+ * True when the channel's notes in this pattern are more than steps: a length other than one
+ * step, an off-grid start, or two notes on one step (a chord). A step may have its own key (the
+ * graph editor's key lane, FL's note pitch graph): that is still a step.
+ */
 export function isRollRow(notes: readonly Note[], c: Channel): boolean {
-  return notes.some(n => n.ch === c.id && (Math.abs(n.len - 1) > EPS || (n.p != null && n.p !== c.root) || Math.abs(n.step - Math.round(n.step)) > EPS));
+  const seen = new Set<number>();
+  for (const n of notes) {
+    if (n.ch !== c.id) continue;
+    const r = Math.round(n.step);
+    if (Math.abs(n.len - 1) > EPS || Math.abs(n.step - r) > EPS || seen.has(r)) return true;
+    seen.add(r);
+  }
+  return false;
+}
+
+/** Set the key of the channel's notes that start in cell [s, s+1) (`root` = no key of its own). */
+export function setKeyAt(notes: readonly Note[], c: Channel, s: number, key: number): Note[] {
+  const k = Math.round(Math.min(127, Math.max(0, key)));
+  return notes.map(n => {
+    if (n.ch !== c.id || n.step < s - EPS || n.step >= s + 1 - EPS) return n;
+    const { p: _p, ...rest } = n;
+    return k === c.root ? rest : { ...rest, p: k };
+  });
 }
 
 /** Set the velocity of the channel's notes that start in cell [s, s+1). */

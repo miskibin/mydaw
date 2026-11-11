@@ -215,7 +215,7 @@ function MidiSection() {
   const pitched = () => (S.project.channels ?? []);
   const targetVal = () => (midiFollow() ? 'follow' : String(st()?.target ?? ''));
   const pickTarget = (v: string) => {
-    if (v === 'follow') { setMidiFollow(true); const ch = U.patWin?.ch; if (ch != null) run(setMidiTarget(ch)); return; }
+    if (v === 'follow') { setMidiFollow(true); const ch = U.selCh; if (ch != null) run(setMidiTarget(ch)); return; }
     setMidiFollow(false); run(setMidiTarget(v === '' ? null : +v));
   };
   return (
