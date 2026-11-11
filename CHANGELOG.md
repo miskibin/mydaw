@@ -4,6 +4,32 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## 0.9.4 — 2026-11-11
+
+### Added
+- **Patterns like FL Studio.** The current pattern is picked in the toolbar (menu, mouse
+  wheel, Num 1-9, + / -); F4 jumps to the next empty one, F2 renames, Shift+Ctrl+C clones.
+- **Channel Rack (F6) and Piano roll (F7) are windows of their own.** The rack has compact step
+  buttons, a greyed extra bar (click there to make the pattern longer), a graph editor (G) for
+  each step's velocity and key, and *Replace* to swap a channel's instrument while keeping its
+  notes and routing. The effect picker moved to Shift+F9.
+- **Piano roll for every channel**, drums included. Notes of the pattern's other channels show
+  as ghost notes (double right-click one to switch to it), and drawing past the end makes the
+  pattern longer: its length follows the notes.
+
+### Changed
+- **Much smoother editing in big songs.** Drawing and dragging notes in the Piano roll and the
+  Channel Rack, turning a channel's knobs and moving a track fader no longer redraw the whole
+  playlist (about 3x the frame rate on a 64-track, 1400-clip song).
+- **Zooming the playlist stays fluid** on heavy songs: the view follows the wheel at once and
+  sharpens when you stop.
+- Resizing or opening the mixer no longer redraws the playlist on every frame.
+
+### Fixed
+- **Lower CPU after a phrase ends.** Effects fading out on silence (reverb and delay tails,
+  filters) could cost more than the music itself; that part of the load is about a quarter lower.
+- Dragging one clip on a big song sometimes redrew the whole playlist on every step.
+
 ## 0.9.3 — 2026-11-10
 
 ### Added
