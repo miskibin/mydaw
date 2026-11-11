@@ -4,7 +4,7 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
-## Unreleased
+## 0.9.7 — 2026-11-11
 
 ### Added
 - **A standard library of samples, built in.** Fifty drum, percussion and tonal one-shots
