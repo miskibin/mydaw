@@ -60,7 +60,12 @@ async function applyScale(z: number) {
   if (isTauri()) {
     try { const { getCurrentWebview } = await import('@tauri-apps/api/webview'); await getCurrentWebview().setZoom(z); return; } catch { /* fall back to CSS */ }
   }
-  (document.documentElement.style as CSSStyleDeclaration & { zoom: string }).zoom = z === 1 ? '' : String(z);
+  // browser (and a webview that refuses setZoom): CSS zoom. 100vh is measured before the zoom,
+  // so the app would be z times the window's height and its bottom (the mixer) cut off: --ui-zoom
+  // lets the layout divide it back out.
+  const st = document.documentElement.style as CSSStyleDeclaration & { zoom: string };
+  st.zoom = z === 1 ? '' : String(z);
+  if (z === 1) st.removeProperty('--ui-zoom'); else st.setProperty('--ui-zoom', String(z));
 }
 
 /** Load and apply saved preferences. Call once at startup. */

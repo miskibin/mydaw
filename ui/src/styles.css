@@ -34,8 +34,8 @@ a { color: var(--blue); }
 ::-webkit-scrollbar-thumb { background: var(--line2); border: 2px solid var(--bg1); border-radius: 6px; }
 ::-webkit-scrollbar-corner { background: var(--bg1); }
 
-#root { height: 100vh; }
-.app { height: 100vh; display: flex; flex-direction: column; background: var(--bg1); color: var(--fg); font-family: var(--sans); font-size: 12px; user-select: none; }
+#root { height: calc(100vh / var(--ui-zoom, 1)); }
+.app { height: calc(100vh / var(--ui-zoom, 1)); display: flex; flex-direction: column; background: var(--bg1); color: var(--fg); font-family: var(--sans); font-size: 12px; user-select: none; }
 .mono { font-family: var(--mono); }
 .row { display: flex; align-items: center; }
 .grow { flex: 1 1 0; min-width: 0; }
@@ -251,7 +251,7 @@ a { color: var(--blue); }
 .knob .lab { font: 600 9px var(--sans); color: var(--fg4); letter-spacing: .06em; text-transform: uppercase; white-space: nowrap; }
 .hint { font: 11px var(--sans); color: var(--fg5); }
 .backdrop { position: fixed; inset: 0; z-index: 50; }
-.menu { position: fixed; z-index: 51; min-width: 220px; padding: 4px; background: var(--bg7); border: 1px solid var(--line3); border-radius: 6px; box-shadow: 0 12px 32px var(--shadow); display: flex; flex-direction: column; max-height: calc(100vh - 8px); overflow: auto; }
+.menu { position: fixed; z-index: 51; min-width: 220px; padding: 4px; background: var(--bg7); border: 1px solid var(--line3); border-radius: 6px; box-shadow: 0 12px 32px var(--shadow); display: flex; flex-direction: column; max-height: calc(100vh / var(--ui-zoom, 1) - 8px); overflow: auto; }
 .menu .mt { padding: 5px 8px; font: 600 10px var(--sans); letter-spacing: .08em; color: var(--fg4); text-transform: uppercase; white-space: nowrap; }
 .menu .ms { height: 1px; margin: 3px 4px; background: var(--line3); flex: none; }
 .menu .mi { display: flex; align-items: center; justify-content: space-between; gap: 24px; height: 26px; flex: none; padding: 0 8px; border: 0; border-radius: 3px; background: transparent; color: var(--fg-hi); font: 500 12px var(--sans); cursor: pointer; text-align: left; }

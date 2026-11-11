@@ -16,6 +16,7 @@
     "core:window:allow-close",
     "core:window:allow-is-maximized",
     "core:window:allow-internal-toggle-maximize",
-    "core:window:allow-destroy"
+    "core:window:allow-destroy",
+    "core:webview:allow-set-webview-zoom"
   ]
 }
