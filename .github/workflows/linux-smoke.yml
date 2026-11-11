@@ -48,6 +48,7 @@ jobs:
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
           LIBGL_ALWAYS_SOFTWARE: "1"
         run: |
+          echo '[{"op":"putClips","clips":[{"id":5000,"track":0,"start":0,"len":8,"offset":0,"kind":"pat","ref":1,"muted":false,"gain":0,"fadeIn":0,"fadeOut":0,"pan":0,"norm":false,"rev":false}]}]' > clip.json
           APP=$(dpkg -L $(dpkg-deb -f pkg/*.deb Package) | grep -E '^/usr/bin/' | head -1)
           echo "binary: $APP"
           cat > run.sh <<EOF
@@ -64,7 +65,9 @@ jobs:
             "\$WAVE" status && echo "RESULT cli status: ok" || echo "RESULT cli status: FAILED"
             "\$WAVE" context --pretty | head -40
             "\$WAVE" pattern --id 1 --ch kick --steps "x... x... x... x..." && echo "RESULT cli edit: ok" || echo "RESULT cli edit: FAILED"
-            "\$WAVE" render --out \$PWD/check.wav --to 8 && echo "RESULT render: ok" || echo "RESULT render: FAILED"
+            "\$WAVE" apply --file \$PWD/clip.json --label "Smoke test clip" && echo "RESULT cli clip: ok" || echo "RESULT cli clip: FAILED"
+            "\$WAVE" render --out \$PWD/check.wav --to 8 | tee render.json
+            grep -q "\"silent\":false" render.json && echo "RESULT render: audible" || echo "RESULT render: SILENT-OR-FAILED"
             ls -la check.wav 2>/dev/null
             import -window root shot2.png || true
             kill \$PID 2>/dev/null; sleep 2
@@ -72,8 +75,8 @@ jobs:
           EOF
           xvfb-run -a -s "-screen 0 1600x900x24" bash run.sh 2>&1 | tee run.log
           echo "===== app.log"; cat app.log || true
-          grep "RESULT" run.log
-          ! grep -q "RESULT app: DIED" run.log
+          grep "^RESULT" run.log
+          ! grep -qE "^RESULT .*(DIED|FAILED|SILENT)" run.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
