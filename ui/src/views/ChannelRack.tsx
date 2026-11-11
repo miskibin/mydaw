@@ -8,7 +8,7 @@ import { unwrap } from 'solid-js/store';
 import { t } from '../lib/i18n';
 import { TOTAL_BEATS, VOL_UNITY, type Channel } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
-import { barsText, cellsBetween, isRollRow, keyOf, notesText, rotate, setKeyAt, setStep, setVelAt, stepsOf } from '../lib/pattern';
+import { barsText, cellsBetween, fitCw, gridW, stepAt, isRollRow, keyOf, notesText, rotate, setKeyAt, setStep, setVelAt, stepsOf } from '../lib/pattern';
 import { noteName } from '../lib/pitch';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture } from '../state/edit';
@@ -52,12 +52,12 @@ function Rack(props: { z: number }) {
   // the pattern plus one greyed bar (FL): a step clicked there makes the pattern a bar longer
   const geo = (): RackGeo => {
     const end = stepsOf(pt()), steps = Math.min(TOTAL_BEATS * 4, end + 16), w = size().w;
-    const cw = clamp(Math.floor(w / steps), STEP_MIN, STEP_MAX);
+    const cw = clamp(fitCw(w, steps), STEP_MIN, STEP_MAX);
     return { cw, sx: scroll().x, sy: scroll().y, rh: RACK_ROW, steps, end, rows: chans().length };
   };
   // the grid's own height: the add-channel row below the channels scrolls with them
   const contentH = () => (chans().length + 1) * RACK_ROW;
-  const maxScroll = () => { const G = geo(); return { x: Math.max(0, G.steps * G.cw - size().w), y: Math.max(0, contentH() - size().h) }; };
+  const maxScroll = () => { const G = geo(); return { x: Math.max(0, gridW(G.steps, G.cw) - size().w), y: Math.max(0, contentH() - size().h) }; };
   createEffect(() => { const m = maxScroll(), s = scroll(); if (s.x > m.x || s.y > m.y) setScroll({ x: Math.min(s.x, m.x), y: Math.min(s.y, m.y) }); });
   const rollRowsM = createMemo(() => { arrVersion(); const notes = unwrap(pt()).notes; return new Set(unwrap(chans()).filter(c => isRollRow(notes, c)).map(c => c.id)); });
   const rollRows = () => rollRowsM();
@@ -81,7 +81,7 @@ function Rack(props: { z: number }) {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const p = unwrap(pt()), notes = c ? p.notes.map((n, i) => ({ n, i })).filter(x => x.n.ch === c.id) : [];
     const roll = !!c && rollRows().has(c.id);
-    if (mode === 'vel') drawLane(g, w, h, { x0: 0, cw: G.cw, sx: G.sx, steps: G.steps, notes, color: c?.color ?? '#4f8ef7', cells: !roll, muted: !!c?.mute });
+    if (mode === 'vel') drawLane(g, w, h, { x0: 0, cw: G.cw, sx: G.sx, steps: G.steps, notes, color: c?.color ?? '#4f8ef7', cells: !roll, beatGap: true, muted: !!c?.mute });
     else drawKeyGraph(g, w, h, { cw: G.cw, sx: G.sx, steps: G.steps, notes, color: c?.color ?? '#4f8ef7', root: c?.root ?? 60, span: KEY_SPAN, off: roll });
   });
   // playhead column: only when the step changes
@@ -99,7 +99,7 @@ function Rack(props: { z: number }) {
 
   const cellAt = (e: PointerEvent | MouseEvent) => {
     const r = cv.getBoundingClientRect(), G = geo();
-    return { row: Math.floor((e.clientY - r.top + G.sy) / RACK_ROW), step: Math.floor((e.clientX - r.left + G.sx) / G.cw) };
+    return { row: Math.floor((e.clientY - r.top + G.sy) / RACK_ROW), step: stepAt(e.clientX - r.left + G.sx, G.cw) };
   };
   const gridDown = (e: PointerEvent) => {
     if (e.button !== 0 && e.button !== 2) return;
@@ -145,7 +145,7 @@ function Rack(props: { z: number }) {
     const roll = rollRows().has(c.id);
     if (mode === 'key' && roll) { say(t('b.rk.keyRoll', { name: c.name })); return; }
     const G = geo(), r = graphCv.getBoundingClientRect();
-    const at = (ev: PointerEvent) => ({ s: Math.floor((ev.clientX - r.left + G.sx) / G.cw), f: clamp(1 - (ev.clientY - r.top - 6) / (r.height - 9), 0, 1) });
+    const at = (ev: PointerEvent) => ({ s: stepAt(ev.clientX - r.left + G.sx, G.cw), f: clamp(1 - (ev.clientY - r.top - 6) / (r.height - 9), 0, 1) });
     const g = new Gesture(mode === 'vel' ? 'Velocity' : t('b.rk.keyGest'));
     let notes = unwrap(pt()).notes, last = at(e);
     const keyFor = (f: number) => clamp(Math.round(c.root - KEY_SPAN + f * 2 * KEY_SPAN), 0, 127);
@@ -169,10 +169,10 @@ function Rack(props: { z: number }) {
       if (mode === 'key' && keyFor(q.f) !== lastKey) { lastKey = keyFor(q.f); if (notes.some(x => x.ch === c.id && Math.round(x.step) === q.s)) audition(c.id, lastKey, 0.8); }
     }, () => g.end(), 'ns-resize');
   };
-  const hbar = () => { const m = maxScroll(), w = size().w, G = geo(); if (!m.x) return null; const total = G.steps * G.cw; return { left: scroll().x / total * w, width: Math.max(24, w / total * w) }; };
+  const hbar = () => { const m = maxScroll(), w = size().w, G = geo(); if (!m.x) return null; const total = gridW(G.steps, G.cw); return { left: scroll().x / total * w, width: Math.max(24, w / total * w) }; };
   const hbarDown = (e: PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
-    const sx = e.clientX, x0 = scroll().x, G = geo(), k = (G.steps * G.cw) / size().w;
+    const sx = e.clientX, x0 = scroll().x, G = geo(), k = gridW(G.steps, G.cw) / size().w;
     track(ev => setScroll(s => ({ ...s, x: clamp(x0 + (ev.clientX - sx) * k, 0, maxScroll().x) })), null, 'grabbing');
   };
   const swingG: { g: Gesture | null } = { g: null };
@@ -193,7 +193,7 @@ function Rack(props: { z: number }) {
   // a pattern that grows (notes past the end, + bar) widens the window up to the screen, never narrows it
   createEffect(on(() => stepsOf(pt()), (steps, prev) => {
     const w = U.rackWin; if (!w || prev == null || steps <= prev) return;
-    const want = RACK_LEFT + (steps + 16) * STEP_MAX + 8;
+    const want = RACK_LEFT + gridW(steps + 16, STEP_MAX) + 8;
     if (want > w.w) setU('rackWin', 'w', Math.min(want, window.innerWidth - w.x - 10));
   }));
   const onKey = (e: KeyboardEvent) => {

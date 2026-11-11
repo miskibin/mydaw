@@ -2,14 +2,17 @@
 // CC BY 4.0). An item's own `icon` (a 24×24 stroke path) wins over these.
 import type { IconDefinition } from '@fortawesome/free-solid-svg-icons';
 import {
-  faArrowDown, faArrowLeft, faArrowRight, faArrowsUpDown, faArrowUp, faBan, faChartLine, faCheckDouble, faClone, faCopy,
+  faArrowDown, faArrowLeft, faArrowRight, faArrowsUpDown, faArrowUp, faBan, faChartLine, faCheck, faCheckDouble, faClone, faCopy,
   faCrosshairs, faEraser, faEye, faEyeSlash, faFileAudio, faFileCirclePlus, faFillDrip, faFingerprint, faGripLinesVertical,
   faHeadphones, faKeyboard, faLayerGroup, faMagnifyingGlass, faMusic, faPaintbrush, faPaste, faPen, faPencil, faPlay, faPlus,
   faRotateLeft, faScissors, faSliders, faStopwatch, faTableCells, faTrashCan, faVolumeHigh, faVolumeXmark, faWandMagicSparkles,
-  faWaveSquare, faCircle, faFolderOpen,
+  faWaveSquare, faCircle, faFolderOpen, faBell, faBolt, faCircleDot, faCloud, faDrumSteelpan, faGuitar, faHandsClapping, faRadio,
+  faStairs, faWind,
 } from '@fortawesome/free-solid-svg-icons';
+import { INST_ICONS } from './instIcons';
 
-export type MenuGlyph = { vb: string; d: string };
+/** `eo`: the path uses the even-odd fill rule (our own 24×24 instrument drawings). */
+export type MenuGlyph = { vb: string; d: string; eo?: boolean };
 const g = (i: IconDefinition): MenuGlyph => {
   const [w, h, , , d] = i.icon;
   return { vb: `0 0 ${w} ${h}`, d: Array.isArray(d) ? d.join(' ') : d };
@@ -65,6 +68,8 @@ const RULES: [RegExp, IconDefinition][] = [
 ];
 
 const cache = new Map<string, MenuGlyph | null>();
+/** The mark of a toggle item that is on. */
+export const CHECK_GLYPH: MenuGlyph = g(faCheck);
 export function menuGlyph(label: string): MenuGlyph | null {
   let v = cache.get(label);
   if (v === undefined) {
@@ -74,3 +79,38 @@ export function menuGlyph(label: string): MenuGlyph | null {
   }
   return v;
 }
+
+// ---------------------------------------------------------------- instrument picker
+// Keyed by engine ids (synth categories, built-in instruments), never by translated labels.
+
+const SYNTH_CATEGORY: Record<string, MenuGlyph> = {
+  '808': g(faCircleDot), // the speaker cone of a sub hit
+  'Bas': INST_ICONS.bass,
+  'Pluck': g(faGuitar),
+  'Lead': g(faBolt),
+  'Pad': g(faCloud),
+  'Klawisze': INST_ICONS.piano,
+  'Dzwonki': g(faBell),
+  'Dęte/Smyczki': g(faWind),
+  'Arp': g(faStairs),
+  'Lo-fi': g(faRadio),
+  'FX': INST_ICONS.fx,
+};
+/** A synth preset category's glyph (its presets show it too); a category added later gets the synth wave. */
+export const synthCategoryGlyph = (category: string): MenuGlyph => SYNTH_CATEGORY[category] ?? INST_ICONS.synth;
+
+const BUILTIN: Record<string, MenuGlyph> = {
+  kick: INST_ICONS.drums,
+  clap: g(faHandsClapping),
+  hat: g(faDrumSteelpan),
+  bass: INST_ICONS.bass,
+};
+/** Glyph for a built-in instrument id (kick, clap, hat, bass). */
+export const builtinGlyph = (inst: string): MenuGlyph => BUILTIN[inst] ?? INST_ICONS.drums;
+
+/** Other instrument-picker rows. */
+export const PICK_GLYPH = {
+  emptySynth: INST_ICONS.synth,
+  keys: INST_ICONS.piano,
+  source: INST_ICONS.sample,
+} satisfies Record<string, MenuGlyph>;

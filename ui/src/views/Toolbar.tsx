@@ -1,10 +1,10 @@
-import { curPat, newPattern, patMode, setPatMode, stepPattern } from '../state/pattern';
+import { curPat, newPattern, patMode, setPatMode, stepPattern, toggleRack, toggleRoll } from '../state/pattern';
 import { patternMenu } from './patternShared';
 import { t, type TranslationKey } from '../lib/i18n';
 import { setTypingOn, typingBase, typingOn } from '../state/typingKeys';
 import { noteName } from '../lib/pitch';
 import { prefs } from '../state/prefs';
-import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import { baseName, clamp, fmtClock, fmtPos, TapTracker } from '../lib/format';
 import { SNAPS, snapLabel } from '../lib/snap';
@@ -12,7 +12,8 @@ import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { S } from '../state/store';
 import { curBeat, tele } from '../state/telemetry';
-import { openMenu, say, setU, U, type Tool } from '../state/ui';
+import { closeMenu, openMenu, say, setU, U, type MenuItem, type Tool } from '../state/ui';
+import { checkUpdates, showWhatsNew } from '../state/updates';
 import { midiFlash, midiStatus } from '../state/midi';
 import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
@@ -121,17 +122,29 @@ export function Toolbar() {
     lastDown = now;
     void win.startDragging();
   };
+  const wins = () => U.plugs.length + (U.rackWin ? 1 : 0) + (U.rollWin ? 1 : 0);
+  const hint = () => t('a.tb.statusHint', { tool: t(TOOLS.find(x => x[0] === U.tool)![2]), hint: t(TOOL_HINT[U.tool]), snap: U.alt ? 'off' : snapLabel(U.snap, U.bw).replace('Snap: ', '') });
   return (
     <div class="toolbar" classList={{ native: !!win }} onMouseDown={dragDown}>
-      <div class="tbmain" data-drag>
-      <button class="ibtn" classList={{ on: U.pickOpen }} onClick={() => setU('pickOpen', !U.pickOpen)} title="Browser (Alt+F8)">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>
-      </button>
-      <div class="row undogrp" style={{ gap: '1px' }}>
-        <button class="ibtn" disabled={!S.canUndo} onClick={() => void A.undo()} title={t('a.tb.undo')}><Icon d="M9 14L4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3" /></button>
-        <button class="ibtn" disabled={!S.canRedo} onClick={() => void A.redo()} title={t('a.tb.redo')}><Icon d="M15 14l5-5-5-5 M20 9H10a6 6 0 0 0 0 12h3" /></button>
+      {/* left: the menus over the hint line (FL): what the last action did, and what the tool does */}
+      <div class="tbleft" data-drag>
+        <div class="tbmenu" data-drag>
+          <MenuBar />
+          <UpdateChip />
+          <span data-drag class="projName" title={(S.path ?? t('a.tb.unsavedProj')) + (S.dirty ? t('a.tb.unsavedChanges') : '')}>{projName()}<Show when={S.dirty}><span data-drag class="dirty">•</span></Show></span>
+        </div>
+        <div class="tbhint" data-drag>
+          <span class="hled" style={{ background: S.transport.rec && U.playing ? 'var(--red)' : U.playing ? 'var(--green)' : 'var(--fg6)' }} />
+          <span data-drag class="readout" data-readout>{U.readout}</span>
+          <Show when={U.alt}><span class="offgrid">OFF GRID</span></Show>
+          <Show when={prefs().hints}><span data-drag class="hinttxt">{hint()}</span></Show>
+          <div class="row inrow" title={t('a.tb.inLevel')} style={{ gap: '6px', display: T().rec || T().monitor ? 'flex' : 'none' }}>
+            <span class="tag9">IN</span>
+            <div class="inmeter"><div ref={inEl} /></div>
+          </div>
+        </div>
       </div>
-      <div class="vsep" />
+      <div class="tbmid" data-drag>
       <div class="seg patsong" title={t('a.tb.patSongTip')}>
         <button class="pat" classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
         <button class="song" classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
@@ -153,17 +166,6 @@ export function Toolbar() {
         </button>
         <button class="count" classList={{ on: T().countIn }} title={t('a.tb.countTip')} onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
-      <button class="ibtn typkb" classList={{ on: typingOn() }} title={typingOn() ? t('a.tb.typOn', { z: noteName(typingBase()), q: noteName(typingBase() + 12) }) : t('a.tb.typOff')}
-        onClick={() => setTypingOn(!typingOn())}>
-        <Icon d="M3 6h18v12H3z M7 6v7 M11 6v7 M15 6v7 M19 6v7 M3 13h18" size={14} />
-        <Show when={typingOn()}><span class="mono typoct">{noteName(typingBase())}</span></Show>
-      </button>
-      {/* the slot stays reserved while recording is off, so pressing R never re-wraps the toolbar
-          (and shifts the playlist) on a narrow window */}
-      <div class="row inrow" title={t('a.tb.inLevel')} style={{ gap: '6px', visibility: T().rec || T().monitor ? 'visible' : 'hidden' }}>
-        <span class="tag9">IN</span>
-        <div class="inmeter"><div ref={inEl} /></div>
-      </div>
       <div class="clockbox" onContextMenu={bpmMenu}>
         <span ref={clockEl} class="clock">1:01:01</span>
         <div style={{ width: '1px', height: '14px', background: 'var(--line)' }} />
@@ -171,7 +173,15 @@ export function Toolbar() {
         <span class="tag9">BPM</span>
         <button class="tapbtn" classList={{ on: tapping() }} data-tap title={t('a.tb.tapTip')} onClick={e => doTap(e)}>TAP</button>
       </div>
-      <div class="vsep" />
+      </div>
+      <div class="tbright" data-drag>
+      <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : ''}</span>
+      <div data-drag class="dragfill" />
+      <button class="ibtn typkb" classList={{ on: typingOn() }} title={typingOn() ? t('a.tb.typOn', { z: noteName(typingBase()), q: noteName(typingBase() + 12) }) : t('a.tb.typOff')}
+        onClick={() => setTypingOn(!typingOn())}>
+        <Icon d="M3 6h18v12H3z M7 6v7 M11 6v7 M15 6v7 M19 6v7 M3 13h18" size={14} />
+        <Show when={typingOn()}><span class="mono typoct">{noteName(typingBase())}</span></Show>
+      </button>
       <div class="seg tools">
         <For each={TOOLS}>
           {([id, key, title]) => (
@@ -184,41 +194,21 @@ export function Toolbar() {
       <select class="sel snapsel" title={t('a.tb.snapTip')} value={String(U.snap)} onChange={e => A.setSnap(parseFloat(e.currentTarget.value))} data-snap>
         <For each={SNAPS}>{([label, v]) => <option value={String(v)}>{v < 0 ? snapLabel(-1, U.bw) : v === 0 ? t('a.snap.off') : label}</option>}</For>
       </select>
-      <div data-drag class="dragfill" />
-      <span data-drag class="projName" title={(S.path ?? t('a.tb.unsavedProj')) + (S.dirty ? t('a.tb.unsavedChanges') : '')}>{projName()}<Show when={S.dirty}><span data-drag class="dirty">•</span></Show></span>
-      </div>
-      {/* right group sits outside the clipped .tbmain: on a narrow window the left side
-          gives way first, settings / mixer / export never disappear */}
-      <div class="tbright" data-drag>
-      <button class="tbtn" classList={{ on: U.exportOpen }} onClick={() => setU('exportOpen', true)} title={t('a.tb.exportTip')} aria-label={t('a.tb.export')}>
-        <Icon d="M12 3v12 M8 11l4 4 4-4 M5 21h14" size={13} /><span class="lbl">{t('a.tb.export')}</span>
-      </button>
-      <span data-drag class="loopText" style={{ color: S.project.loop ? 'var(--green)' : 'var(--fg5)' }}>{S.project.loop ? 'LOOP ' + fmtPos(S.project.loop.a) + ' – ' + fmtPos(S.project.loop.b) : ''}</span>
-      <Show when={U.plugs.length + (U.rackWin ? 1 : 0) + (U.rollWin ? 1 : 0)}>
+      <Show when={wins()}>
         <button class="tbtn" classList={{ on: !U.plugsHidden }} onClick={() => (U.plugsHidden ? A.showPlugs() : A.playlistFront())}
-          title={U.plugsHidden ? t('a.tb.showWins', { n: U.plugs.length + (U.rackWin ? 1 : 0) + (U.rollWin ? 1 : 0) }) : t('a.tb.hideWins')}>
-          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} /><span class="lbl">{t('a.tb.windows', { n: U.plugs.length + (U.rackWin ? 1 : 0) + (U.rollWin ? 1 : 0) })}</span>
+          title={U.plugsHidden ? t('a.tb.showWins', { n: wins() }) : t('a.tb.hideWins')}>
+          <Icon d="M4 7h12v12H4z M8 3h12v12" size={13} /><span class="lbl">{t('a.tb.windows', { n: wins() })}</span>
         </button>
       </Show>
       <button class="tbtn" classList={{ on: U.mixOpen }} onClick={() => setU('mixOpen', !U.mixOpen)} title={t('a.tb.mixerTip')} aria-label="Mixer">
         <Icon d="M5 21v-7M5 10V3M12 21v-9M12 8V3M19 21v-5M19 12V3M2 14h6M9 8h6M16 16h6" size={13} /><span class="lbl">Mixer</span>
       </button>
-      <button class="tbtn followbtn" classList={{ on: U.follow }} onClick={() => setU('follow', !U.follow)} title={t('a.tb.followTip')} aria-label="Follow">
-        <Icon d="M4 12h11 M11 7l5 5-5 5 M20 4v16" size={13} /><span class="lbl">Follow</span>
-      </button>
-      <div class="row zgrp" style={{ gap: '1px' }}>
-        <button class="zbtn" onClick={() => A.zoomAt(0.8)} title={t('a.tb.zoomOut')}>−</button>
-        <button class="zbtn" onClick={() => A.zoomAt(1.25)} title={t('a.tb.zoomIn')}>+</button>
-      </div>
       <Show when={midiStatus()?.selected}>
         <button class="ibtn midibtn" onClick={() => setU('settings', true)}
           title={midiStatus()?.connected ? t('a.tb.midiOn', { name: midiStatus()!.connected!.name }) : t('a.tb.midiOff')}>
           <span class="midiled" classList={{ on: !!midiStatus()?.connected, hit: midiFlash() }} /><span class="tag9">MIDI</span>
         </button>
       </Show>
-      <button class="ibtn" classList={{ on: U.settings }} style={{ width: '26px', height: '26px' }} onClick={() => setU('settings', !U.settings)} title={t('a.tb.settingsTip')}><Icon d={ICONS.gear} size={14} sw={1.8} /></button>
-      <button class="zbtn helpbtn" classList={{ on: U.help }} style={{ font: '600 12px var(--mono)' }} onClick={() => setU('help', !U.help)} title={t('a.tb.helpTip')}>?</button>
-      </div>
       <Show when={win}>
         <div class="winbtns">
           <button title={t('a.tb.minimize')} aria-label={t('a.tb.minimize')} onClick={() => void win!.minimize()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" /></svg></button>
@@ -230,6 +220,79 @@ export function Toolbar() {
           <button class="close" title={t('a.tb.close')} aria-label={t('a.tb.close')} onClick={() => void win!.close()}><svg width="10" height="10" viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1.1" /></svg></button>
         </div>
       </Show>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The application menus. A press opens one under its title; while one is open, moving over
+ * another title switches to it (the bar is lifted above the menu backdrop for that).
+ */
+function MenuBar() {
+  const [open, setOpen] = createSignal(-1);
+  createEffect(() => { if (!U.menu) setOpen(-1); });
+  const win = be().win;
+  const none = () => !U.sel.length;
+  const wins = () => U.plugs.length + (U.rackWin ? 1 : 0) + (U.rollWin ? 1 : 0);
+  const menus: [TranslationKey, () => MenuItem[]][] = [
+    ['a.mn.file', () => [
+      { t: 'item', label: t('a.mn.new'), kbd: 'Ctrl+N', act: () => void A.projectNew() },
+      { t: 'item', label: t('a.mn.open'), kbd: 'Ctrl+O', act: () => void A.projectOpen() },
+      { t: 'sep' },
+      { t: 'item', label: t('a.mn.save'), kbd: 'Ctrl+S', act: () => void A.projectSave(false) },
+      { t: 'item', label: t('a.mn.saveAs'), kbd: 'Ctrl+Shift+S', act: () => void A.projectSave(true) },
+      { t: 'sep' },
+      { t: 'item', label: t('a.mn.export'), kbd: 'Ctrl+Shift+R', act: () => setU('exportOpen', true) },
+      { t: 'sep' },
+      { t: 'item', label: t('a.mn.settings'), act: () => setU('settings', true) },
+      ...(win ? [{ t: 'sep' } as MenuItem, { t: 'item', label: t('a.mn.exit'), kbd: 'Alt+F4', act: () => void win.close() } as MenuItem] : []),
+    ]],
+    ['a.mn.edit', () => [
+      { t: 'item', label: t('a.mn.undo'), kbd: 'Ctrl+Z', disabled: !S.canUndo, act: () => void A.undo() },
+      { t: 'item', label: t('a.mn.redo'), kbd: 'Ctrl+Shift+Z', disabled: !S.canRedo, act: () => void A.redo() },
+      { t: 'sep' },
+      { t: 'item', label: t('a.mn.cut'), kbd: 'Ctrl+X', disabled: none(), act: A.cut },
+      { t: 'item', label: t('a.mn.copy'), kbd: 'Ctrl+C', disabled: none(), act: A.copy },
+      { t: 'item', label: t('a.mn.paste'), kbd: 'Ctrl+V', disabled: !A.hasClipboard(), act: () => A.paste() },
+      { t: 'item', label: t('a.mn.dup'), kbd: 'Ctrl+B', disabled: none(), act: A.duplicate },
+      { t: 'item', label: t('a.mn.del'), kbd: 'Del', disabled: none(), act: () => A.delIds([...U.sel]) },
+      { t: 'sep' },
+      { t: 'item', label: t('a.mn.selAll'), kbd: 'Ctrl+A', disabled: !S.project.clips.length, act: A.selectAll },
+    ]],
+    ['a.mn.view', () => [
+      { t: 'item', label: t('a.mn.browser'), kbd: 'Alt+F8', checked: U.pickOpen, act: () => setU('pickOpen', !U.pickOpen) },
+      { t: 'item', label: t('a.mn.mixer'), kbd: 'F9', checked: U.mixOpen, act: () => setU('mixOpen', !U.mixOpen) },
+      { t: 'item', label: t('a.mn.rack'), kbd: 'F6', checked: !!U.rackWin, act: toggleRack },
+      { t: 'item', label: t('a.mn.roll'), kbd: 'F7', checked: !!U.rollWin, act: toggleRoll },
+      { t: 'item', label: t(U.plugsHidden ? 'a.mn.winsShow' : 'a.mn.winsHide'), kbd: 'F5', disabled: !wins(), act: () => (U.plugsHidden ? A.showPlugs() : A.playlistFront()) },
+      { t: 'sep' },
+      { t: 'item', label: t('a.mn.follow'), kbd: 'F', checked: U.follow, act: () => setU('follow', !U.follow) },
+      { t: 'item', label: t('a.mn.zoomIn'), kbd: 'Ctrl+=', act: () => A.zoomAt(1.25) },
+      { t: 'item', label: t('a.mn.zoomOut'), kbd: 'Ctrl+−', act: () => A.zoomAt(0.8) },
+    ]],
+    ['a.mn.help', () => [
+      { t: 'item', label: t('a.mn.shortcuts'), kbd: '?', act: () => setU('help', true) },
+      { t: 'sep' },
+      { t: 'item', label: t('a.mn.updates'), act: () => void checkUpdates() },
+      { t: 'item', label: t('a.mn.whatsNew'), act: () => void showWhatsNew() },
+    ]],
+  ];
+  const show = (i: number, el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    closeMenu(); // remount: an open panel keeps the position it was mounted at
+    openMenu(r.left, r.bottom + 3, menus[i][1](), 340);
+    setOpen(i);
+  };
+  return (
+    <div class="menubar" classList={{ open: open() >= 0 }} role="menubar">
+      <For each={menus}>
+        {([key], i) => (
+          <button class="mbtn" role="menuitem" aria-haspopup="menu" aria-expanded={open() === i()} classList={{ on: open() === i() }}
+            onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); if (open() === i()) closeMenu(); else show(i(), e.currentTarget); }}
+            onPointerEnter={e => { if (open() >= 0 && open() !== i()) show(i(), e.currentTarget); }}>{t(key)}</button>
+        )}
+      </For>
     </div>
   );
 }
@@ -261,20 +324,6 @@ function PatSelector() {
         <svg width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.3" /></svg>
       </button>
       <button class="patselnew" title={t('b.pat.new')} onClick={newPattern}><Icon d="M12 5v14 M5 12h14" size={11} /></button>
-    </div>
-  );
-}
-
-export function StatusBar() {
-  const hint = () => t('a.tb.statusHint', { tool: t(TOOLS.find(x => x[0] === U.tool)![2]), hint: t(TOOL_HINT[U.tool]), snap: U.alt ? 'off' : snapLabel(U.snap, U.bw).replace('Snap: ', '') });
-  return (
-    <div class="status">
-      <span style={{ color: S.transport.rec && U.playing ? 'var(--red)' : U.playing ? 'var(--green)' : 'var(--fg6)' }}>●</span>
-      <span style={{ color: 'var(--fg)' }} data-readout>{U.readout}</span>
-      <div style={{ flex: 1 }} />
-      <Show when={U.alt}><span class="offgrid">OFF GRID</span></Show>
-      <UpdateChip />
-      <Show when={prefs().hints}><span style={{ color: 'var(--fg5)' }}>{hint()}</span></Show>
     </div>
   );
 }
@@ -348,6 +397,8 @@ const shortcuts = (): [string, string][] => [
   [t('a.sc.89'), '↑ ↓ · Ctrl + ↑ ↓'],
   [t('a.sc.90'), 'Ctrl+B · Ctrl+D'],
   [t('a.sc.91'), 'Ctrl+C · X · V'],
+  [t('a.sc.112'), t('a.sc.113')],
+  [t('a.sc.114'), t('a.sc.115')],
   [t('a.sc.92'), t('a.sc.93')],
   [t('a.sc.94'), t('a.sc.95')],
   [t('a.sc.96'), t('a.sc.97')],

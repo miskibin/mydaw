@@ -42,7 +42,7 @@ a { color: var(--blue); }
 .ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- toolbar ---------- */
-.toolbar { min-height: 40px; flex: none; display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 6px 8px; padding: 6px 8px; background: var(--bg5); border-bottom: 1px solid var(--bg0); }
+.toolbar { height: 54px; flex: none; display: grid; grid-template-columns: minmax(230px, 1fr) minmax(0, auto) minmax(max-content, 1fr); align-items: center; column-gap: 14px; padding: 0 8px 0 10px; background: var(--bg5); border-bottom: 1px solid var(--bg0); }
 .ibtn { width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: var(--fg2); cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
 .ibtn:hover { background: var(--line); color: var(--fg-hi); }
 .ibtn.on { background: var(--line); }
@@ -82,9 +82,11 @@ a { color: var(--blue); }
 .btabs { height: 30px; flex: none; display: flex; border-bottom: 1px solid var(--bg0); background: var(--bg5); }
 .btabs > button { flex: 1; border: 0; background: transparent; color: var(--fg4); font: 600 10px var(--sans); letter-spacing: .12em; cursor: pointer; border-bottom: 2px solid transparent; }
 .btabs > button.on { color: var(--fg-hi); border-bottom-color: var(--blue); }
-.pitem { height: 26px; display: flex; align-items: center; gap: 8px; padding: 0 10px; cursor: grab; color: var(--fg2); }
-.pitem:hover { background: var(--bg6); }
-.pitem.on { background: var(--sel-bg); color: var(--fg-hi); }
+/* patterns: coloured blocks (FL's picker panel), drag one onto the playlist */
+.plist { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; }
+.pitem { height: 34px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 9px; border-left: 3px solid var(--c); border-radius: 0 4px 4px 0; background: color-mix(in srgb, var(--c) 16%, var(--bg3)); cursor: grab; color: var(--fg); }
+.pitem:hover { background: color-mix(in srgb, var(--c) 26%, var(--bg3)); color: var(--fg-hi); }
+.pitem.on { background: color-mix(in srgb, var(--c) 38%, var(--bg3)); color: var(--fg-hi); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 70%, transparent); }
 .pitem .nm { flex: 1; font: 500 12px var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pitem .meta { font: 500 10px var(--mono); color: var(--fg4); }
 .sitem { display: flex; flex-direction: column; gap: 3px; padding: 6px 10px; cursor: grab; color: var(--fg2); }
@@ -222,8 +224,6 @@ a { color: var(--blue); }
 .ledbtn { width: 20px; height: 20px; padding: 0; border: 0; border-radius: 3px; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .ledbtn:hover { background: var(--line2); }
 
-/* ---------- status ---------- */
-.status { height: 24px; flex: none; display: flex; align-items: center; gap: 14px; padding: 0 10px; background: var(--bg5); border-top: 1px solid var(--bg0); font: 500 10px var(--mono); }
 .offgrid { padding: 1px 6px; border-radius: 3px; background: var(--amber); color: var(--on-warm); font: 600 9px var(--mono); letter-spacing: .06em; }
 
 /* ---------- windows / menus ---------- */
@@ -492,28 +492,65 @@ select option { background: var(--bg4); color: var(--fg); }
 .roll .ptools { align-items: flex-end; }
 .plab { display: flex; flex-direction: column; gap: 2px; font: 600 8px var(--sans); color: var(--fg5); letter-spacing: .08em; }
 .plab .sel { height: 24px; }
+/* piano roll: note grid with zoom scrollbars (right = key height, bottom = time) */
+.rollgrid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 14px; grid-template-rows: minmax(0, 1fr) 14px; background: var(--bg1); border-bottom: 1px solid var(--bg0); }
+.rollgrid > .parea { min-width: 0; }
+.rollgrid > .zbar.v { margin: 1px 1px 1px 2px; }
+.rollgrid .zbar.h { margin: 2px 1px 1px 0; }
+.roll .lanerow { padding-right: 14px; }
+/* zoom scrollbar (ui/ZoomScrollbar): drag the thumb = scroll, drag an end of it = zoom */
+.zbar { position: relative; min-width: 0; min-height: 0; border-radius: 4px; background: var(--bg3); touch-action: none; cursor: pointer; }
+.zthumb { position: absolute; border-radius: 4px; cursor: grab; background: color-mix(in srgb, var(--fg-hi) 14%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fg-hi) 40%, transparent); }
+.zbar.h .zthumb { top: 0; bottom: 0; }
+.zbar.v .zthumb { left: 0; right: 0; }
+.zbar:hover .zthumb { background: color-mix(in srgb, var(--fg-hi) 20%, transparent); }
+.zgrip { position: absolute; }
+.zgrip::after { content: ''; position: absolute; background: var(--fg4); border-radius: 1px; opacity: .7; }
+.zgrip:hover::after { background: var(--fg-hi); opacity: 1; }
+.zbar.h .zgrip { top: 0; bottom: 0; width: 8px; cursor: ew-resize; }
+.zbar.h .zgrip.lo { left: 0; } .zbar.h .zgrip.hi { right: 0; }
+.zbar.h .zgrip::after { top: 3px; bottom: 3px; left: 3.5px; width: 1px; }
+.zbar.v .zgrip { left: 0; right: 0; height: 8px; cursor: ns-resize; }
+.zbar.v .zgrip.lo { top: 0; } .zbar.v .zgrip.hi { bottom: 0; }
+.zbar.v .zgrip::after { left: 3px; right: 3px; top: 3.5px; height: 1px; }
+/* channel settings: a click on the waveform plays the sample */
+.chanwin canvas.chwave { cursor: pointer; }
 
 /* ---------- title bar (merged into the toolbar) ---------- */
-.toolbar .dragfill { flex: 1 1 0; min-width: 24px; align-self: stretch; }
 .toolbar .projName .dirty { margin-left: 4px; color: var(--amber); }
-.toolbar.native { padding-right: 0; padding-top: 0; padding-bottom: 0; min-height: 40px; }
-.toolbar > .tbmain { flex: 1 1 0; min-width: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 6px 8px; overflow: hidden; }
-.toolbar > .tbmain > * { flex-shrink: 0; }
-.toolbar > .tbmain > .dragfill { flex-shrink: 1; }
-.toolbar > .tbmain > .projName { flex-shrink: 1; min-width: 0; }
-.toolbar > .tbright { flex: none; display: flex; align-items: center; gap: 6px 8px; padding-left: 8px; }
-.toolbar.native > .tbmain, .toolbar.native > .tbright { margin-top: 6px; margin-bottom: 6px; }
-.toolbar.native > .tbmain > :not(.winbtns) { margin-top: 0; margin-bottom: 0; }
-.winbtns { display: flex; flex: 0 0 auto; flex-shrink: 0; align-self: stretch; margin-left: 4px; }
-/* one row at every width: text buttons turn into icons, then redundant controls drop out */
-@media (max-width: 1300px) { .toolbar .tbtn .lbl { display: none; } .toolbar .tbtn { padding: 0 6px; } .toolbar .loopText, .toolbar .projName { display: none; } }
-@media (max-width: 1050px) { .toolbar .zgrp { display: none; } }
-@media (max-width: 1100px) { .toolbar .followbtn .lbl { display: none; } }
-@media (max-width: 960px) { .toolbar .snapsel, .toolbar .followbtn { display: none; } }
-@media (max-width: 900px) { .toolbar .tapbtn, .toolbar .monbtn, .toolbar .vsep, .toolbar .helpbtn, .toolbar .inrow { display: none; } .toolbar > .tbmain { gap: 4px; } }
-@media (max-width: 780px) { .toolbar .undogrp, .toolbar .clockbox .tag9, .toolbar .count { display: none; } }
-@media (max-width: 800px) { .toolbar .tools > button:nth-child(n+4), .toolbar .seg > button.metrobtn { display: none; } }
-@media (max-width: 660px) { .toolbar .tools, .toolbar .clockbox > div { display: none; } }
+.toolbar.native { padding-right: 0; }
+/* left: menus over the hint line; middle: transport, centred in the window; right: editing tools and panels */
+.tbleft { min-width: 0; align-self: stretch; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.tbmenu { display: flex; align-items: center; gap: 10px; height: 22px; min-width: 0; }
+.tbmenu .updchip { flex: 0 1 auto; min-width: 0; text-overflow: ellipsis; }
+.menubar { flex: none; display: flex; gap: 1px; margin-left: -7px; }
+.menubar.open { position: relative; z-index: 52; }
+.mbtn { height: 22px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; color: var(--fg2); font: 500 12px var(--sans); cursor: default; }
+.mbtn:hover, .mbtn.on { background: var(--line); color: var(--fg-hi); }
+.tbmenu .projName { flex: 0 1 auto; min-width: 0; max-width: none; }
+.tbhint { display: flex; align-items: center; gap: 8px; height: 16px; min-width: 0; padding-left: 1px; font: 500 10px var(--mono); white-space: nowrap; }
+.tbhint .hled { width: 6px; height: 6px; flex: none; border-radius: 50%; }
+.tbhint .readout { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg); }
+.tbhint .hinttxt { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--fg5); }
+.tbhint .offgrid { flex: none; }
+.tbhint .inrow { flex: none; }
+.toolbar .patselbox, .toolbar .patselbtn, .toolbar .patselnew { height: 28px; box-sizing: border-box; }
+.tbmid { min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; }
+.tbmid > * { flex-shrink: 0; }
+.tbright { min-width: 0; align-self: stretch; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.tbright .dragfill { flex: 1 1 0; min-width: 0; align-self: stretch; }
+/* one height for every control in the bar */
+.toolbar .seg { height: 28px; box-sizing: border-box; align-items: center; }
+.toolbar .seg > button { height: 22px; }
+.toolbar .tbtn { height: 28px; }
+.winbtns { display: flex; flex: none; align-self: stretch; margin-left: 2px; }
+/* one row at every width: labels turn into icons, then redundant controls drop out */
+@media (max-width: 1560px) { .toolbar .loopText { display: none; } }
+@media (max-width: 1460px) { .toolbar .tapbtn, .toolbar .monbtn, .toolbar .clockbox .tag9 { display: none; } }
+@media (max-width: 1340px) { .toolbar .tbtn .lbl, .toolbar .typoct { display: none; } .toolbar .tbtn { padding: 0 7px; } .toolbar .count { display: none; } }
+@media (max-width: 1200px) { .toolbar { column-gap: 8px; } .toolbar .projName, .toolbar .hinttxt { display: none; } .toolbar .snapsel { width: 92px; } }
+@media (max-width: 1040px) { .toolbar .patselbtn { min-width: 64px; max-width: 96px; } .toolbar .patselnew { display: none; } .toolbar .tools > button:nth-child(n+4), .toolbar .seg > button.metrobtn, .toolbar .typkb { display: none; } .tbmid, .tbright { gap: 5px; } }
+@media (max-width: 900px) { .toolbar .snapsel, .toolbar .tools, .toolbar .clockbox > div { display: none; } }
 .winbtns > button { width: 46px; border: 0; background: transparent; color: var(--fg2); cursor: default; display: flex; align-items: center; justify-content: center; padding: 0; }
 .winbtns > button:hover { background: var(--line); color: var(--fg-hi); }
 .winbtns > button.close:hover { background: var(--win-close); color: #ffffff; }
@@ -739,7 +776,6 @@ select option { background: var(--bg4); color: var(--fg); }
 .lane .mini.m, .lane .mini.s, .strip .mini.m, .strip .mini.s { min-width: 22px; height: 19px; font-size: 10px; }
 .lane .mini.route { min-width: 30px; padding: 0 4px; }
 .toolbar .snapsel { flex: none; width: 118px; }
-@media (max-width: 1180px) { .toolbar .tapbtn, .toolbar .monbtn { display: none; } .toolbar .clockbox .tag9 { display: none; } }
 
 /* EQ quick low/high cut knobs */
 
@@ -795,7 +831,6 @@ select option { background: var(--bg4); color: var(--fg); }
 .ibtn.typkb { width: auto; min-width: 28px; gap: 4px; padding: 0 6px; display: inline-flex; align-items: center; }
 .ibtn.typkb.on { color: var(--blue-hi); background: var(--on-bg); }
 .typoct { font-size: 9.5px; font-weight: 600; }
-@media (max-width: 900px) { .toolbar .typoct { display: none; } }
 
 /* updates: status-bar button, update / What's new dialogs, Settings rows */
 .updchip { position: relative; overflow: hidden; height: 16px; padding: 0 8px; border: 0; border-radius: 3px; background: var(--blue); color: var(--on-accent); font: 600 10px var(--mono); cursor: pointer; white-space: nowrap; }

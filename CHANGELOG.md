@@ -4,6 +4,34 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## 0.9.7 — 2026-11-11
+
+### Added
+- **Menus: File, Edit, View, Help.** New, open, save, export and settings live in File; undo,
+  redo and the clipboard in Edit; the browser, mixer, Channel Rack, Piano roll, follow and
+  zoom in View; shortcuts and updates in Help.
+- **Piano roll scrollbars that zoom.** Drag a bar to scroll, drag either end of it to zoom
+  time or key height. The keys are taller by default.
+- **Shift+drag clones notes** in the Piano roll: the selection (or the note under the pointer)
+  is copied and the copies move. Shift+click still adds a note to the selection.
+- **Hear what you click.** Holding a key on the Piano roll keyboard plays it, and sliding
+  across the keys follows; a click on the waveform in a sampler channel's window plays the sample.
+- **Slate theme**: a lighter dark theme (Settings -> Appearance).
+- Icons for every instrument and preset in the add-channel menu.
+
+### Changed
+- **The status bar at the bottom is gone**, so the playlist and mixer get its space. Messages
+  and the tool hint now sit in the toolbar under the menus; the transport is centred.
+- **Bigger Channel Rack steps** with more room between them and a gap after every beat.
+- A right-click on the mixer sends the floating windows behind, like a click on the playlist.
+- **Patterns in the browser are bigger, coloured blocks** with their own right-click menu:
+  open, rename, clone, split by channel, add or remove a bar, colour, delete.
+- A right-click anywhere in the Piano roll clears the selection.
+
+### Fixed
+- **Piano roll: a note dragged past the end of the pattern no longer jumps around.** The
+  pattern still grows to fit, but the view keeps its scale while you drag.
+
 ## 0.9.6 — 2026-11-11
 
 ### Added

@@ -13,6 +13,7 @@ import { dblCheck, track } from '../ui/drag';
 import { fitCanvas } from '../ui/frameLoop';
 import { dropClipAt, gridPoint } from './Playlist';
 import { addSamplerFiles, newPattern, openPattern } from '../state/pattern';
+import { patternItemMenu } from './patternShared';
 import { InstIcon, patternIcon } from '../ui/instIcons';
 
 /** Drag something from the browser with a ghost label; `onDrop` gets the release point. */
@@ -85,10 +86,11 @@ function ProjectTab() {
         <span>{t('d.br.patterns')}</span>
         <button class="linkbtn" title={t('d.br.newpat.tip')} onClick={newPattern}>{t('d.br.new')}</button>
       </div>
-      <div style={{ display: 'flex', 'flex-direction': 'column', padding: '4px 0' }}>
+      <div class="plist">
         <For each={S.project.patterns}>
           {p => (
-            <div class="pitem" classList={{ on: U.cur?.kind === 'pat' && U.cur.ref === p.id }} title={t('d.br.pat.tip')}
+            <div class="pitem" classList={{ on: U.cur?.kind === 'pat' && U.cur.ref === p.id }} title={t('d.br.pat.tip')} style={{ '--c': p.color }}
+              onContextMenu={e => { e.preventDefault(); patternItemMenu(p, e.clientX, e.clientY); }}
               onPointerDown={e => { if (e.button === 0 && dblCheck('pitem' + p.id)) { openPattern(p.id); return; } pick('pat', p.id, p.name, p.color, e); }}>
               <Show when={patternIcon(p, chanMap())} fallback={<span style={{ width: '8px', height: '8px', 'border-radius': '2px', flex: 'none', background: p.color }} />}>
                 {id => <span class="picon" style={{ color: p.color }}><InstIcon id={id()} size={12} /></span>}

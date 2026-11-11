@@ -8,7 +8,7 @@ import { prefs } from './prefs';
 import { be } from '../api/backend';
 import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, TOTAL_BEATS, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
 import { baseName, clamp, mod } from '../lib/format';
-import { BAR, barsText, builtinChannel, cloneNotes, INST_NAME, notesText, stepsOf } from '../lib/pattern';
+import { BAR, barsText, builtinChannel, cloneNotes, INST_NAME, gridW, notesText, stepsOf } from '../lib/pattern';
 import { commit } from './edit';
 import { unwrap } from 'solid-js/store';
 import { allocId, plain, plainNotes, S } from './store';
@@ -16,9 +16,9 @@ import { curBeat, tele } from './telemetry';
 import { say, setU, U } from './ui';
 
 /** Channel Rack geometry shared with the view (sizes the window to its content). */
-export const RACK_LEFT = 212, RACK_HEAD = 34, RACK_ROW = 22;
+export const RACK_LEFT = 212, RACK_HEAD = 34, RACK_ROW = 26;
 /** Step button width in the Channel Rack (px): compact like FL's, wider only when the window has room. */
-export const STEP_MIN = 11, STEP_MAX = 16;
+export const STEP_MIN = 15, STEP_MAX = 22;
 
 /** The pattern the engine loops on its own (PAT mode / preview). */
 let previewId: Id | null = null;
@@ -93,7 +93,7 @@ export function openRack() {
   if (!S.project.patterns.length) { say(t('b.st.noPatterns')); return; }
   if (U.rackWin) { rackFront(); return; }
   const pt = curPat()!, rows = Math.max(4, channels().length + 1);
-  const w = clamp(RACK_LEFT + (stepsOf(pt) + 16) * STEP_MAX + 8, 480, window.innerWidth - 40);
+  const w = clamp(RACK_LEFT + gridW(stepsOf(pt) + 16, STEP_MAX) + 8, 480, window.innerWidth - 40);
   const h = clamp(RACK_HEAD + rows * RACK_ROW + 12, 220, window.innerHeight - 120);
   const z = U.zTop + 1;
   setU({ zTop: z, plugsHidden: false, rackWin: { x: Math.max(20, Math.round((window.innerWidth - w) / 2)), y: 64, w, h, z } });

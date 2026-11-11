@@ -1,4 +1,4 @@
-// Update dialog, "What's new" dialog, the status-bar button and the Settings → Updates rows.
+// Update dialog, "What's new" dialog, the toolbar button and the Settings → Updates rows.
 import { createMemo, For, Match, Show, Switch } from 'solid-js';
 import { lang, t } from '../lib/i18n';
 import { parseNotes, type Block, type Inline } from '../lib/changelog';
@@ -34,7 +34,7 @@ function Notes(p: { md: string | null }) {
 
 const pct = () => { const s = upd(); return s.total > 0 ? Math.min(100, Math.floor(s.done * 100 / s.total)) : null; };
 
-/** Status-bar button while an update is found, downloading or waiting for the restart. */
+/** Button beside the menus while an update is found, downloading or waiting for the restart. */
 export function UpdateChip() {
   const s = () => upd();
   const label = () => {

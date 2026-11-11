@@ -4,7 +4,7 @@
 import type { Channel, Id, Note, Pattern } from '../api/types';
 import { t } from '../lib/i18n';
 import { mix } from '../lib/color';
-import { inScale, keyOf, velOf } from '../lib/pattern';
+import { BEAT_GAP, gridW, inScale, keyOf, stepAt, stepX, velOf } from '../lib/pattern';
 import { isBlack, noteName } from '../lib/pitch';
 import type { Layer } from '../ui/frameLoop';
 import { rgba, T, theme } from '../ui/theme';
@@ -24,7 +24,7 @@ function rr(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: num
  */
 export interface RackGeo { cw: number; sx: number; sy: number; rh: number; steps: number; end: number; rows: number }
 
-const STEP_PAD = 1, STEP_VPAD = 3, STEP_R = 1.5;
+const STEP_PAD = 2, STEP_VPAD = 3, STEP_R = 2.5;
 /** Unlit step colours: alternating groups of four (beats), like FL's. */
 function stepOff(s: number) {
   return mix(T.fg5, Math.floor(s / 4) % 2 ? (theme.light ? 18 : 13) : (theme.light ? 30 : 24), T.bg2);
@@ -37,12 +37,12 @@ function stepOn(v: number, dim: boolean) {
 
 /** Cell backgrounds, bar lines, the greyed extra bar. Cached: depends only on geometry and theme. */
 function rackBg(g: CanvasRenderingContext2D, W: number, H: number, G: RackGeo) {
-  const s0 = Math.max(0, Math.floor(G.sx / G.cw)), s1 = Math.min(G.steps - 1, Math.ceil((G.sx + W) / G.cw));
+  const s0 = Math.max(0, stepAt(G.sx, G.cw)), s1 = Math.min(G.steps - 1, stepAt(G.sx + W, G.cw));
   const r0 = Math.max(0, Math.floor(G.sy / G.rh)), r1 = Math.min(G.rows - 1, Math.ceil((G.sy + H) / G.rh));
   for (let r = r0; r <= r1; r++) {
     const y = r * G.rh - G.sy;
     for (let s = s0; s <= s1; s++) {
-      const x = s * G.cw - G.sx;
+      const x = stepX(s, G.cw) - G.sx;
       g.globalAlpha = s >= G.end ? 0.35 : 1;
       g.fillStyle = stepOff(s);
       g.beginPath(); rr(g, x + STEP_PAD, y + STEP_VPAD, G.cw - 2 * STEP_PAD, G.rh - 2 * STEP_VPAD, STEP_R); g.fill();
@@ -54,7 +54,7 @@ function rackBg(g: CanvasRenderingContext2D, W: number, H: number, G: RackGeo) {
   for (let s = Math.ceil(s0 / 16) * 16; s <= s1 + 1; s += 16) {
     if (s <= 0 || s >= G.steps) continue;
     g.fillStyle = s === G.end ? T.line3 : T.line2;
-    g.fillRect(Math.round(s * G.cw - G.sx) - 0.5, 0, 1, h);
+    g.fillRect(Math.round(stepX(s, G.cw) - G.sx - BEAT_GAP / 2) - 0.5, 0, 1, h);
   }
 }
 
@@ -75,9 +75,9 @@ export function drawRack(g: CanvasRenderingContext2D, W: number, H: number, G: R
       const keys = notes.map(n => keyOf(n, c)), lo = Math.min(...keys), hi = Math.max(...keys);
       const span = hi - lo + 1, ih = G.rh - 2 * vpad, nh = Math.max(2, Math.min(4, ih / span));
       const top = y + vpad + (ih - nh * span) / 2;
-      g.fillStyle = T.bg2; g.beginPath(); rr(g, -G.sx, y + vpad - 1, G.end * G.cw, G.rh - 2 * vpad + 2, 2); g.fill();
+      g.fillStyle = T.bg2; g.beginPath(); rr(g, -G.sx, y + vpad - 1, gridW(G.end, G.cw), G.rh - 2 * vpad + 2, 2); g.fill();
       for (const n of notes) {
-        const x = n.step * G.cw - G.sx, w = Math.max(2, n.len * G.cw - 1);
+        const x = stepX(n.step, G.cw) - G.sx, w = Math.max(2, stepX(n.step + n.len, G.cw) - G.sx - x - 1);
         if (x > W || x + w < 0) continue;
         g.fillStyle = stepOn(velOf(n), dim);
         g.fillRect(x, top + (hi - keyOf(n, c)) * nh, w, Math.max(1.5, nh - 0.5));
@@ -85,7 +85,7 @@ export function drawRack(g: CanvasRenderingContext2D, W: number, H: number, G: R
       continue;
     }
     for (const n of notes) {
-      const s = Math.round(n.step), x = s * G.cw - G.sx;
+      const s = Math.round(n.step), x = stepX(s, G.cw) - G.sx;
       if (x > W || x + G.cw < 0) continue;
       g.fillStyle = stepOn(velOf(n), dim);
       g.beginPath(); rr(g, x + STEP_PAD, y + vpad, G.cw - 2 * STEP_PAD, G.rh - 2 * vpad, STEP_R); g.fill();
@@ -103,7 +103,7 @@ export function drawRack(g: CanvasRenderingContext2D, W: number, H: number, G: R
 export function drawRackHead(g: CanvasRenderingContext2D, W: number, H: number, G: RackGeo, step: number) {
   g.clearRect(0, 0, W, H);
   if (step < 0) return;
-  const x = step * G.cw - G.sx, h = Math.min(H, G.rows * G.rh - G.sy);
+  const x = stepX(step, G.cw) - G.sx, h = Math.min(H, G.rows * G.rh - G.sy);
   g.fillStyle = rgba(T.playhead, theme.light ? 0.10 : 0.09);
   g.fillRect(x, 0, G.cw, h);
   g.fillStyle = rgba(T.playhead, 0.55);
@@ -112,11 +112,12 @@ export function drawRackHead(g: CanvasRenderingContext2D, W: number, H: number, 
 
 /** One velocity bar per note of the selected channel. `x0`: where step 0 is (px), `cw` px per step. */
 export function drawLane(g: CanvasRenderingContext2D, W: number, H: number, o: {
-  x0: number; cw: number; sx: number; steps: number; notes: { n: Note; i: number }[]; color: string; sel?: Set<number>; cells: boolean; muted: boolean;
+  x0: number; cw: number; sx: number; steps: number; notes: { n: Note; i: number }[]; color: string; sel?: Set<number>; cells: boolean; muted: boolean; beatGap?: boolean;
 }) {
   g.clearRect(0, 0, W, H);
   const top = 6, bh = H - top - 3;
-  const endX = Math.min(W, o.x0 + o.steps * o.cw - o.sx);
+  const px = (s: number) => (o.beatGap ? stepX(s, o.cw) : s * o.cw);
+  const endX = Math.min(W, o.x0 + (o.beatGap ? gridW(o.steps, o.cw) : o.steps * o.cw) - o.sx);
   g.fillStyle = T.vizPanel; g.fillRect(0, 0, W, H);
   g.fillStyle = T.viz; g.fillRect(o.x0, 0, endX - o.x0, H);
   g.fillStyle = T.vizGrid2;
@@ -124,7 +125,7 @@ export function drawLane(g: CanvasRenderingContext2D, W: number, H: number, o: {
   g.fillStyle = T.vizAxis; g.fillRect(o.x0, top, endX - o.x0, 1);
   for (const { n, i } of o.notes) {
     const v = velOf(n);
-    const x = o.x0 + (o.cells ? Math.round(n.step) : n.step) * o.cw - o.sx;
+    const x = o.x0 + px(o.cells ? Math.round(n.step) : n.step) - o.sx;
     const w = o.cells ? Math.max(2, o.cw - 6) : Math.max(3, Math.min(8, n.len * o.cw - 2));
     const bx = o.cells ? x + (o.cw - w) / 2 : x;
     if (bx > W || bx + w < o.x0 - 4) continue;
@@ -145,7 +146,7 @@ export function drawKeyGraph(g: CanvasRenderingContext2D, W: number, H: number, 
   cw: number; sx: number; steps: number; notes: { n: Note; i: number }[]; color: string; root: number; span: number; off: boolean;
 }) {
   g.clearRect(0, 0, W, H);
-  const top = 6, bh = H - top - 3, endX = Math.min(W, o.steps * o.cw - o.sx);
+  const top = 6, bh = H - top - 3, endX = Math.min(W, gridW(o.steps, o.cw) - o.sx);
   g.fillStyle = T.vizPanel; g.fillRect(0, 0, W, H);
   g.fillStyle = T.viz; g.fillRect(0, 0, endX, H);
   const yOf = (k: number) => top + bh * (1 - (k - o.root + o.span) / (2 * o.span));
@@ -160,7 +161,7 @@ export function drawKeyGraph(g: CanvasRenderingContext2D, W: number, H: number, 
   g.font = MONO8; g.textAlign = 'center'; g.textBaseline = 'bottom';
   for (const { n } of o.notes) {
     const k = n.p ?? o.root;
-    const x = Math.round(n.step) * o.cw - o.sx, w = Math.max(2, o.cw - 6), bx = x + (o.cw - w) / 2;
+    const x = stepX(Math.round(n.step), o.cw) - o.sx, w = Math.max(2, o.cw - 6), bx = x + (o.cw - w) / 2;
     if (bx > W || bx + w < 0) continue;
     const y0 = yOf(o.root), y = yOf(Math.max(o.root - o.span, Math.min(o.root + o.span, k)));
     g.fillStyle = rgba(o.color, 0.75);

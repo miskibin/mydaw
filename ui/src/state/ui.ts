@@ -3,6 +3,7 @@ import { createEffect, createRoot } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { t } from '../lib/i18n';
 import type { ClipKind, Id } from '../api/types';
+import type { MenuGlyph } from '../ui/menuIcons';
 
 export type Tool = 'draw' | 'paint' | 'erase' | 'mute' | 'slice' | 'select';
 
@@ -23,9 +24,12 @@ export type MenuItem =
   | { t: 'sep' }
   /** Small section heading inside a menu. */
   | { t: 'sec'; label: string }
-  /** Opens a nested menu on hover. */
-  | { t: 'sub'; label: string; items: MenuItem[] }
-  | { t: 'item'; label: string; kbd?: string; act: () => void; danger?: boolean; disabled?: boolean; icon?: string; iconColor?: string; title?: string }
+  /** Opens a nested menu on hover. `glyph` overrides the icon guessed from the label. */
+  | { t: 'sub'; label: string; items: MenuItem[]; glyph?: MenuGlyph }
+  /** `icon` (24×24 stroke path in a coloured tile) wins over `glyph`, which wins over the label guess. */
+  | { t: 'item'; label: string; kbd?: string; act: () => void; danger?: boolean; disabled?: boolean; icon?: string; iconColor?: string; title?: string; glyph?: MenuGlyph;
+      /** A toggle: shows a check mark in the icon slot while on (and nothing while off). */
+      checked?: boolean }
   | { t: 'swatches'; current?: string; pick: (c: string) => void }
   /** Row of instrument icons; picking the current one clears it. */
   | { t: 'icons'; current?: string | null; color?: string; pick: (id: string | null) => void }

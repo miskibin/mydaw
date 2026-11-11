@@ -1,7 +1,7 @@
 # Releasing WAVE
 
 A release is one commit; the workflow does the rest. Installed copies find it by themselves
-(Settings → General → Updates, or the status-bar button) and show its notes.
+(Settings → General → Updates, or the button beside the menus) and show its notes.
 
 ## Each release
 

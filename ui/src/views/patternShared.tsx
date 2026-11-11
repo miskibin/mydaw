@@ -2,18 +2,19 @@
 // (move, resize, focus, keys that must not reach the playlist), channel and pattern menus.
 import { createEffect, createSignal, onCleanup, onMount, type JSX } from 'solid-js';
 import { t, tName } from '../lib/i18n';
-import type { Channel, Note } from '../api/types';
+import type { Channel, Note, Pattern } from '../api/types';
 import { clamp } from '../lib/format';
 import { barsText, clearChannel, fillEvery, INST_NAME, INSTS, notesText, rotate, stepsOf } from '../lib/pattern';
 import { isTypingKey } from '../state/typingKeys';
 import { commit } from '../state/edit';
 import {
   addBar, addBuiltin, addKeys, addSampler, addSamplerFiles, addSynth, audition, chanKindLabel, channels, clonePattern, cloneChannel, curPat, deleteChannel,
-  deletePattern, type InstrumentPick, newPattern, nextEmptyPattern, openRoll, putNotes, recolorPattern, removeBar, renamePattern, replaceChannel, replaceWithFile, setChannel, setCurPattern, splitByChannel,
+  deletePattern, type InstrumentPick, newPattern, nextEmptyPattern, openPattern, openRoll, putNotes, recolorPattern, removeBar, renamePattern, replaceChannel, replaceWithFile, setChannel, setCurPattern, splitByChannel,
 } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
 import { openMenu, openRename, say, setU, type MenuItem, type PatWin } from '../state/ui';
 import { track } from '../ui/drag';
+import { builtinGlyph, PICK_GLYPH, synthCategoryGlyph } from '../ui/menuIcons';
 import { theme } from '../ui/theme';
 import { moveWindow } from './FxWindow';
 
@@ -120,19 +121,20 @@ export function chanMenu(c: Channel, x: number, y: number) {
 /** The instruments a channel can play, as menu items: `pick` adds a channel or replaces one. */
 function instrumentItems(pick: (p: InstrumentPick) => void, file: () => void): MenuItem[] {
   const items: MenuItem[] = [{ t: 'title', label: t('b.pe.menuBuiltin') }];
-  for (const i of INSTS) items.push({ t: 'item', label: INST_NAME[i], act: () => pick({ kind: 'inst', inst: i }) });
+  for (const i of INSTS) items.push({ t: 'item', label: INST_NAME[i], glyph: builtinGlyph(i), act: () => pick({ kind: 'inst', inst: i }) });
   const syn = S.catalog?.synth;
   if (syn) {
     items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSynth') });
     for (const g of syn.categories) {
       const ps = syn.presets.filter(p => p.category === g);
-      if (ps.length) items.push({ t: 'sub', label: tName(g), items: ps.map(p => ({ t: 'item', label: tName(p.name), act: () => pick({ kind: 'synth', preset: p.name }) }) as MenuItem) });
+      const glyph = synthCategoryGlyph(g);
+      if (ps.length) items.push({ t: 'sub', label: tName(g), glyph, items: ps.map(p => ({ t: 'item', label: tName(p.name), glyph, act: () => pick({ kind: 'synth', preset: p.name }) }) as MenuItem) });
     }
-    items.push({ t: 'item', label: t('b.pe.menuSynthEmpty'), act: () => pick({ kind: 'synth', preset: null }) });
+    items.push({ t: 'item', label: t('b.pe.menuSynthEmpty'), glyph: PICK_GLYPH.emptySynth, act: () => pick({ kind: 'synth', preset: null }) });
   }
-  items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSampled') }, { t: 'item', label: t('b.pe.menuKeys'), act: () => pick({ kind: 'keys' }) });
+  items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSampled') }, { t: 'item', label: t('b.pe.menuKeys'), glyph: PICK_GLYPH.keys, act: () => pick({ kind: 'keys' }) });
   items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSampler') });
-  for (const s of S.project.sources.slice(0, 14)) items.push({ t: 'item', label: s.name, kbd: s.dur.toFixed(1) + ' s', act: () => pick({ kind: 'sample', source: s.id }) });
+  for (const s of S.project.sources.slice(0, 14)) items.push({ t: 'item', label: s.name, glyph: PICK_GLYPH.source, kbd: s.dur.toFixed(1) + ' s', act: () => pick({ kind: 'sample', source: s.id }) });
   items.push({ t: 'item', label: t('b.pe.menuFile'), act: file });
   return items;
 }
@@ -158,6 +160,26 @@ export function renameCurrent(x: number, y: number) {
 }
 
 
+/** What can be done to one pattern: rename, clone, split by channel, length, colour, delete. */
+function patItems(p: Pattern, x: number, y: number): MenuItem[] {
+  const last = S.project.patterns.length < 2;
+  return [
+    { t: 'item', label: t('b.pm.rename'), kbd: p.id === curPat()?.id ? 'F2' : undefined, act: () => openRename(x, y, p.name, v => renamePattern(p, v)) },
+    { t: 'item', label: t('b.pm.clone'), kbd: p.id === curPat()?.id ? 'Shift+Ctrl+C' : undefined, act: () => clonePattern(p) },
+    { t: 'item', label: t('b.pm.split'), disabled: new Set(p.notes.map(n => n.ch)).size < 2, title: t('b.pm.splitTitle'), act: () => splitByChannel(p) },
+    { t: 'item', label: t('b.pm.addBar'), kbd: barsText(p.len / 4), act: () => addBar(p) },
+    { t: 'item', label: t('b.pm.removeBar'), disabled: p.len <= 4, title: t('b.pm.removeBarTitle'), act: () => removeBar(p) },
+    { t: 'swatches', current: p.color, pick: col => recolorPattern(p, col) },
+    { t: 'sep' },
+    { t: 'item', label: t('b.pm.delete'), danger: true, disabled: last, title: last ? t('b.pm.lastOne') : '', act: () => deletePattern(p) },
+  ];
+}
+/** Right-click on a pattern in the browser (FL's picker panel): open it, then everything in `patItems`. */
+export function patternItemMenu(p: Pattern, x: number, y: number) {
+  const items: MenuItem[] = [{ t: 'title', label: p.name }, { t: 'item', label: t('b.pm.open'), act: () => openPattern(p.id) }, { t: 'sep' }, ...patItems(p, x, y)];
+  openMenu(x, y, items, 40 + items.length * 26);
+}
+
 /** The pattern selector's menu (toolbar and Channel Rack title): pick, new, clone, rename, colour, split, delete. */
 export function patternMenu(x: number, y: number) {
   const cur = curPat();
@@ -170,17 +192,7 @@ export function patternMenu(x: number, y: number) {
   items.push({ t: 'sep' },
     { t: 'item', label: t('b.pat.new'), act: newPattern },
     { t: 'item', label: t('b.pm.nextEmpty'), kbd: 'F4', act: nextEmptyPattern });
-  if (cur) {
-    items.push({ t: 'sep' }, { t: 'title', label: cur.name },
-      { t: 'item', label: t('b.pm.rename'), kbd: 'F2', act: () => renameCurrent(x, y) },
-      { t: 'item', label: t('b.pm.clone'), kbd: 'Shift+Ctrl+C', act: () => clonePattern(cur) },
-      { t: 'item', label: t('b.pm.split'), disabled: new Set(cur.notes.map(n => n.ch)).size < 2, title: t('b.pm.splitTitle'), act: () => splitByChannel(cur) },
-      { t: 'item', label: t('b.pm.addBar'), kbd: barsText(cur.len / 4), act: () => addBar(cur) },
-      { t: 'item', label: t('b.pm.removeBar'), disabled: cur.len <= 4, title: t('b.pm.removeBarTitle'), act: () => removeBar(cur) },
-      { t: 'swatches', current: cur.color, pick: col => recolorPattern(cur, col) },
-      { t: 'sep' },
-      { t: 'item', label: t('b.pm.delete'), danger: true, disabled: S.project.patterns.length < 2, title: S.project.patterns.length < 2 ? t('b.pm.lastOne') : '', act: () => deletePattern(cur) });
-  }
+  if (cur) items.push({ t: 'sep' }, { t: 'title', label: cur.name }, ...patItems(cur, x, y));
   const h = Math.min(window.innerHeight - 20, 40 + items.length * 26);
   openMenu(x, y, items, h);
 }

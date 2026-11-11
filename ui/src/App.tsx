@@ -34,7 +34,7 @@ import { renameCurrent } from './views/patternShared';
 import { NotebookHost } from './views/Notebook';
 import { toggleNotebook } from './state/notebook';
 import { clonePattern, closeTopPatWin, nextEmptyPattern, patMode, pickPatternNum, setPatMode, stepPattern, toggleRack, toggleRoll } from './state/pattern';
-import { Help, StatusBar, Toolbar, TOOLS } from './views/Toolbar';
+import { Help, Toolbar, TOOLS } from './views/Toolbar';
 
 /** Stacking rank of a window (effect windows, Channel Rack, Piano roll) inside the window layer (1 = bottom). */
 function plugRank(z: number) {
@@ -201,7 +201,6 @@ export function App() {
         <Playlist />
       </div>
       <Show when={U.mixOpen}><Mixer /></Show>
-      <StatusBar />
       <SampleEditor />
       <ChannelWindow />
       <PitchEditor />

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Channel, Note, Project } from '../api/types';
 import { applyAll } from './applyOps';
 import {
-  builtinChannel, cellsBetween, contentLen, duplicateRight, fillEvery, isRollRow, isStepOn, migrateProject, moveNotes, noteAt, resizeNotes,
+  BEAT_GAP, builtinChannel, cellsBetween, fitCw, gridW, stepAt, stepX, contentLen, duplicateRight, fillEvery, isRollRow, isStepOn, migrateProject, moveNotes, noteAt, resizeNotes,
   rotate, setKeyAt, setStep, setVelAt, snapStep, swingOffset, transpose,
 } from './pattern';
 
@@ -73,6 +73,30 @@ describe('step sequencer', () => {
     expect([0, 1, 2, 3, 4, 5].map(s => swingOffset(s, 1))).toEqual([0, 0.5, 0, 0.5, 0, 0.5]);
     expect(swingOffset(3, 0.5)).toBe(0.25);
     expect(swingOffset(3.25, 1)).toBe(0);
+  });
+});
+
+describe('step grid geometry (beat gaps)', () => {
+  it('puts a gap before every fourth step and none before the first', () => {
+    expect(stepX(0, 20)).toBe(0);
+    expect(stepX(3, 20)).toBe(60);
+    expect(stepX(4, 20)).toBe(80 + BEAT_GAP);
+    expect(stepX(16, 20)).toBe(320 + 4 * BEAT_GAP);
+  });
+  it('maps every pixel of a cell back to its step, a gap to the step on its left', () => {
+    for (let s = 0; s < 40; s++) {
+      expect(stepAt(stepX(s, 17), 17)).toBe(s);
+      expect(stepAt(stepX(s, 17) + 16.9, 17)).toBe(s);
+    }
+    expect(stepAt(4 * 17 + BEAT_GAP - 1, 17)).toBe(3);
+    expect(stepAt(-1, 17)).toBeLessThan(0);
+  });
+  it('measures the grid without a trailing gap and fits cells into a width', () => {
+    expect(gridW(16, 20)).toBe(320 + 3 * BEAT_GAP);
+    expect(gridW(17, 20)).toBe(340 + 4 * BEAT_GAP);
+    const cw = fitCw(500, 32);
+    expect(gridW(32, cw)).toBeLessThanOrEqual(500);
+    expect(gridW(32, cw + 1)).toBeGreaterThan(500);
   });
 });
 

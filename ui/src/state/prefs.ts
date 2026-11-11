@@ -17,7 +17,7 @@ export interface Prefs {
   noteAudition: boolean;
   /** autosave interval in minutes (0 = off); only projects that were saved once */
   autosaveMin: number;
-  /** show hints in the status bar */
+  /** show the tool hint in the toolbar's hint line */
   hints: boolean;
 }
 

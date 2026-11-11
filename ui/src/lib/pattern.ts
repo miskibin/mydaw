@@ -26,6 +26,19 @@ export const keyOf = (n: Note, c: Channel | undefined) => n.p ?? c?.root ?? SAMP
 export const velOf = (n: Note) => n.v ?? 1;
 /** Number of 16ths in the pattern. */
 export const stepsOf = (p: Pattern) => Math.max(1, Math.round(p.len * 4));
+/** Channel Rack step grid: extra px between groups of four steps (beats), like FL's. */
+export const BEAT_GAP = 5;
+/** Left edge (px) of a step in the Channel Rack grid, `cw` px per step; fractional steps interpolate inside their cell. */
+export const stepX = (step: number, cw: number) => step * cw + Math.floor(step / 4 + 1e-6) * BEAT_GAP;
+/** Width (px) of `steps` steps including the beat gaps between them. */
+export const gridW = (steps: number, cw: number) => steps * cw + Math.max(0, Math.ceil(steps / 4) - 1) * BEAT_GAP;
+/** The step under grid x (px); a point in a beat gap belongs to the step on its left. */
+export function stepAt(x: number, cw: number): number {
+  const gw = 4 * cw + BEAT_GAP, b = Math.floor(x / gw);
+  return b * 4 + Math.min(3, Math.floor((x - b * gw) / cw));
+}
+/** Widest cell (px) at which `steps` steps and their beat gaps fit into `w` px. */
+export const fitCw = (w: number, steps: number) => Math.floor((w - (Math.ceil(steps / 4) - 1) * BEAT_GAP) / steps);
 /** Beats the notes need: the end of the last one rounded up to a bar, ≥ 1 bar, ≤ the song (model.rs `content_len`). */
 export function contentLen(notes: readonly Note[]): number {
   let end = 0;

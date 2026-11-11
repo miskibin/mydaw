@@ -5,7 +5,11 @@
 // notes). Every edit is an op and one undo step.
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { unwrap } from 'solid-js/store';
+import { be } from '../api/backend';
 import { t } from '../lib/i18n';
+import { cloneNotes } from '../lib/noteClone';
+import type { ZRange } from '../lib/zoomBar';
+import { ZoomScrollbar } from '../ui/ZoomScrollbar';
 import { TOTAL_BEATS, type Note } from '../api/types';
 import { clamp } from '../lib/format';
 import { duplicateRight, keyOf, moveNotes, noteAt, notesText, resizeNotes, ROLL_SNAPS, SCALES, snapStep, stepsOf, transpose } from '../lib/pattern';
@@ -25,6 +29,10 @@ const LANE_H = 76, KW = 48;
 /** Steps past the pattern's end the roll lets you scroll to and draw in (the pattern grows). */
 const ROOM = 64;
 const MAX_STEPS = TOTAL_BEATS * 4;
+/** Key height (px): default (about FL's density) and the vertical zoom's limits. */
+const ROW_H = 18, ROW_MIN = 6, ROW_MAX = 40;
+/** Time zoom limits, relative to the fit-the-pattern width. */
+const Z_MIN = 0.5, Z_MAX = 8;
 const ROLL_ICON = 'M4 4h16v16H4z M4 9h16 M4 14h16 M9 4v5 M15 14v6';
 type Tool = 'draw' | 'paint' | 'select' | 'erase';
 const TOOLS: { id: Tool; key: string; label: Parameters<typeof t>[0]; icon: string; tip: Parameters<typeof t>[0] }[] = [
@@ -68,19 +76,46 @@ function Roll(props: { z: number }) {
   const [sel, setSel] = createSignal<Set<number>>(new Set());
   const [hoverKey, setHoverKey] = createSignal<number | null>(null);
   const [marq, setMarq] = createSignal<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
-  const [view, setViewS] = createSignal({ sx: 0, sy: 0, zoom: 1, rowH: 14 });
+  const [view, setViewS] = createSignal({ sx: 0, sy: 0, zoom: 1, rowH: ROW_H });
   const pk = createMemo(projectKey, undefined, { equals: (a, b) => a.root === b.root && a.scale === b.scale });
   const root = () => rollKey() ?? pk().root;
   const scaleIdx = () => (rollKey() != null ? rollScale() : pk().scale);
   const chansMap = createMemo(() => { arrVersion(); return new Map(unwrap(channels()).map(c => [c.id, c])); });
   const mask = () => SCALES[scaleIdx()][1];
   const unit = (alt = false) => (alt ? 0 : rollSnap());
+  /** Width of the note grid (px). */
+  const gridW = () => Math.max(1, size().w - KW);
+  // The length the view was fitted to: taken when a pattern is shown, NOT while it grows. A
+  // note dragged past the end makes the pattern longer; a scale that followed the length
+  // would shrink under the pointer and the note would jump back and forth.
+  const [fitSteps, setFitSteps] = createSignal(stepsOf(pt()));
+  createEffect(() => { pt().id; setFitSteps(stepsOf(untrack(pt))); });
+  /** Px per step at zoom 1: the pattern as it was opened fits the window (within sensible limits). */
+  const basePps = () => clamp(gridW() / fitSteps(), 6, 48);
+  /** Smallest key height: never so small that the 128 keys leave the grid half empty. */
+  const rowMin = () => Math.max(ROW_MIN, size().h / 128);
   const geo = (): RollGeo => {
-    const steps = stepsOf(pt()), fit = (size().w - KW) / steps;
-    return { pps: clamp(fit, 6, 48) * view().zoom, sx: view().sx, sy: view().sy, rowH: view().rowH, kw: KW, steps };
+    const steps = stepsOf(pt());
+    return { pps: basePps() * view().zoom, sx: view().sx, sy: view().sy, rowH: Math.max(view().rowH, rowMin()), kw: KW, steps };
   };
-  /** How far right the view scrolls: the pattern plus room to draw on (the pattern grows to fit). */
-  const maxSx = () => { const G = geo(); return Math.max(0, Math.min(MAX_STEPS, G.steps + ROOM) * G.pps - (size().w - KW)); };
+  /** Steps the view scrolls over: the pattern plus room to draw on (the pattern grows to fit). */
+  const hTotal = () => Math.min(MAX_STEPS, stepsOf(pt()) + ROOM);
+  const maxSxAt = (pps: number) => Math.max(0, hTotal() * pps - gridW());
+  const maxSx = () => maxSxAt(geo().pps);
+  const maxSyAt = (rowH: number) => Math.max(0, 128 * rowH - size().h);
+  // the zoom scrollbars, in steps (time) and keys from the top (key height)
+  const hRange = (): ZRange => { const G = geo(); return { pos: G.sx / G.pps, len: gridW() / G.pps }; };
+  const hLimits = () => ({ total: hTotal(), minLen: gridW() / (basePps() * Z_MAX), maxLen: gridW() / (basePps() * Z_MIN) });
+  const setH = (r: ZRange) => {
+    const zoom = clamp(gridW() / r.len / basePps(), Z_MIN, Z_MAX), pps = basePps() * zoom;
+    setViewS(v => ({ ...v, zoom, sx: clamp(r.pos * pps, 0, maxSxAt(pps)) }));
+  };
+  const vRange = (): ZRange => { const G = geo(), h = Math.max(1, size().h); return { pos: G.sy / G.rowH, len: h / G.rowH }; };
+  const vLimits = () => { const h = Math.max(1, size().h); return { total: 128, minLen: h / ROW_MAX, maxLen: h / rowMin() }; };
+  const setV = (r: ZRange) => {
+    const rowH = clamp(Math.max(1, size().h) / r.len, rowMin(), ROW_MAX);
+    setViewS(v => ({ ...v, rowH, sy: clamp(r.pos * rowH, 0, maxSyAt(rowH)) }));
+  };
   const chanNotes = createMemo(() => {
     arrVersion();
     const p = unwrap(pt()), id = ch().id;
@@ -95,7 +130,7 @@ function Roll(props: { z: number }) {
     centred = id;
     const ks = chanNotes().map(x => keyOf(x.n, ch()));
     const mid = ks.length ? (Math.min(...ks) + Math.max(...ks)) / 2 : ch().root;
-    setViewS(v => ({ ...v, sy: clamp((127 - mid) * v.rowH - h / 2, 0, 128 * v.rowH - h) }));
+    setViewS(v => { const rh = Math.max(v.rowH, rowMin()); return { ...v, sy: clamp((127 - mid) * rh - h / 2, 0, maxSyAt(rh)) }; });
     setSel(new Set<number>());
   });
   // Drawing runs at most once per frame: a touchpad sends several wheel / pointer events per
@@ -166,14 +201,27 @@ function Roll(props: { z: number }) {
     del(e);
     track(ev => del(ev), () => { g.end(); if (notes.length < n0) say(t('b.pe.deleted', { x: notesText(n0 - notes.length) })); }, 'not-allowed');
   }
-  function moveDrag(e: PointerEvent, idx: number[], mode: 'move' | 'resize', g?: Gesture) {
-    const orig = notesRaw().slice(), p0 = pos(e), lead = orig[idx[idx.length - 1]] ?? orig[idx[0]];
-    const gest = g ?? new Gesture(mode === 'move' ? t('b.pe.gestMove') : t('b.pe.gestLen'));
+  /** Drags notes `idx` (the last one leads). `clone`: Shift+drag — once the pointer really
+   * moves, copies of the notes are made and moved instead (originals stay), one undo step;
+   * released without moving, `clone` (the click) runs instead. */
+  function moveDrag(e: PointerEvent, idx: number[], mode: 'move' | 'resize', g?: Gesture, clone?: () => void) {
+    let orig = notesRaw().slice();
+    const p0 = pos(e), lead = orig[idx[idx.length - 1]] ?? orig[idx[0]];
+    let gest = clone ? null : g ?? new Gesture(mode === 'move' ? t('b.pe.gestMove') : t('b.pe.gestLen'));
     let lastKey = keyOf(lead, ch()), moved = false;
     trackFrame(ev => {
       const q = pos(ev);
       if (!moved && Math.hypot(q.x - p0.x, q.y - p0.y) < 3) return;
+      if (!moved && clone) {
+        const r = cloneNotes(orig, idx);
+        orig = r.notes; idx = r.idx;
+        gest = new Gesture(t('b.pe.gestClone'));
+        gest.update([putNotes(pt(), orig)]);
+        setSel(new Set(idx)); // after the copies exist: the selection drops indices that do not
+        say(t('b.pe.cloning', { x: notesText(idx.length) }));
+      }
       moved = true;
+      if (!gest) return;
       const notes = mode === 'move'
         ? moveNotes(orig, idx, q.step - p0.step, q.key - p0.key, unit(ev.altKey), unwrap(ch()))
         : resizeNotes(orig, idx, q.step - p0.step, unit(ev.altKey));
@@ -181,7 +229,24 @@ function Roll(props: { z: number }) {
       const ln = notes[idx[idx.length - 1]];
       if (ln) setLastLen(ln.len);
       if (mode === 'move' && ln && keyOf(ln, ch()) !== lastKey) { lastKey = keyOf(ln, ch()); audition(ch().id, lastKey, ln.v ?? 1); }
-    }, () => gest.end(), mode === 'move' ? 'grabbing' : 'ew-resize');
+    }, () => { gest?.end(); if (!moved) clone?.(); }, mode === 'move' ? 'grabbing' : 'ew-resize');
+  }
+  /** Pressing the keyboard plays that key on the channel for as long as it is held (always,
+   * whatever the "hear notes while editing" preference); dragging glides to other keys.
+   * Further right on a key (towards its tip) = harder. */
+  function keyboardDrag(e: PointerEvent) {
+    const id = ch().id;
+    const velAt = (x: number) => Math.round((0.35 + 0.65 * clamp(x / KW, 0, 1)) * 100) / 100;
+    const on = (key: number, vel: number) => be().typingNote({ ch: id, key, vel, on: true }).catch(err => say(t('b.pk.fail', { err: String(err) })));
+    const off = (key: number) => be().typingNote({ ch: id, key, on: false }).catch(() => {});
+    const p = pos(e);
+    let cur = p.key;
+    void on(cur, velAt(p.x)); setHoverKey(cur);
+    track(ev => {
+      const q = pos(ev);
+      if (q.key === cur) return;
+      void off(cur); cur = q.key; void on(cur, velAt(q.x)); setHoverKey(cur);
+    }, () => { void off(cur); setHoverKey(null); }, 'pointer');
   }
   function marqueeDrag(e: PointerEvent, add: boolean) {
     const p0 = pos(e), base = add ? new Set(sel()) : new Set<number>();
@@ -215,7 +280,9 @@ function Roll(props: { z: number }) {
     if (e.button !== 0 && e.button !== 2) return;
     e.preventDefault();
     const p = pos(e);
-    if (p.x < KW) { if (e.button === 0) { audition(ch().id, p.key); setHoverKey(p.key); track(() => {}, () => setHoverKey(null)); } return; }
+    // a right-click anywhere in the roll (keyboard, ghost notes, empty grid) drops the selection
+    if (e.button === 2 && sel().size) setSel(new Set<number>());
+    if (p.x < KW) { if (e.button === 0) keyboardDrag(e); return; }
     const tool = rollTool();
     const i = hitNote(p.step, p.key);
     // FL: Ctrl+drag selects with any tool; Ctrl+click toggles one note
@@ -233,13 +300,19 @@ function Roll(props: { z: number }) {
         return;
       }
     }
-    // Shift adds to the selection with any tool (click toggles a note, drag adds a box): with
-    // the pencil it used to move the clicked note alone and drop the rest of the selection
+    // Shift with any tool: drag on empty space adds a box to the selection; on a note, a click
+    // toggles it in the selection and a drag clones (FL): copies of the selection (or of that
+    // note alone when it is not selected) move, the originals stay
     if (e.button === 0 && e.shiftKey) {
       if (i < 0) return marqueeDrag(e, true);
-      const s = new Set(sel()); if (s.has(i)) s.delete(i); else s.add(i); setSel(s);
-      say(s.size ? t('b.pe.selCopy', { x: notesText(s.size) }) : t('b.pe.noSel'));
-      return;
+      const toggle = () => {
+        const s = new Set(sel()); if (s.has(i)) s.delete(i); else s.add(i); setSel(s);
+        say(s.size ? t('b.pe.selCopy', { x: notesText(s.size) }) : t('b.pe.noSel'));
+      };
+      if (tool === 'erase') return toggle();
+      const idx = sel().has(i) ? [...sel()].filter(k => k !== i && notesRaw()[k]?.ch === ch().id).concat(i) : [i];
+      setLastLen(notesRaw()[i].len);
+      return moveDrag(e, idx, 'move', undefined, toggle);
     }
     if (e.button === 2 || tool === 'erase') return eraseDrag(e);
     if (tool === 'select') {
@@ -281,16 +354,18 @@ function Roll(props: { z: number }) {
     e.preventDefault();
     const d = e.deltaY || e.deltaX, h = size().h;
     if (e.ctrlKey || e.metaKey) {
-      const p = pos(e), G = geo(), z = clamp(view().zoom * Math.pow(1.0015, -d), 0.5, 8);
-      const pps = G.pps / view().zoom * z;
-      setViewS(v => ({ ...v, zoom: z, sx: clamp(p.step * pps - (p.x - KW), 0, Math.max(0, Math.min(MAX_STEPS, G.steps + ROOM) * pps - (size().w - KW))) }));
+      const p = pos(e), z = clamp(view().zoom * Math.pow(1.0015, -d), Z_MIN, Z_MAX);
+      const pps = basePps() * z;
+      setViewS(v => ({ ...v, zoom: z, sx: clamp(p.step * pps - (p.x - KW), 0, maxSxAt(pps)) }));
     } else if (e.altKey) {
-      setViewS(v => { const rowH = clamp(v.rowH * Math.pow(1.0015, -d), 8, 28); const k = 127 - (v.sy + h / 2) / v.rowH; return { ...v, rowH, sy: clamp((127 - k) * rowH - h / 2, 0, 128 * rowH - h) }; });
+      const r0 = geo().rowH, rowH = clamp(r0 * Math.pow(1.0015, -d), rowMin(), ROW_MAX);
+      setViewS(v => { const k = 127 - (v.sy + h / 2) / r0; return { ...v, rowH, sy: clamp((127 - k) * rowH - h / 2, 0, maxSyAt(rowH)) }; });
     } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       setViewS(v => ({ ...v, sx: clamp(v.sx + d, 0, maxSx()) }));
-    } else setViewS(v => ({ ...v, sy: clamp(v.sy + d * 0.7, 0, 128 * v.rowH - h) }));
+    } else { const rh = geo().rowH; setViewS(v => ({ ...v, sy: clamp(v.sy + d * 0.7, 0, maxSyAt(rh)) })); }
   };
   const laneDown = (e: PointerEvent) => {
+    if (e.button === 2 && sel().size) setSel(new Set<number>());
     if (e.button !== 0) return;
     e.preventDefault();
     const r = laneCv.getBoundingClientRect();
@@ -403,10 +478,16 @@ function Roll(props: { z: number }) {
         <div style={{ flex: 1 }} />
         <span class="note mono" style={{ 'align-self': 'center', 'font-size': '10px', color: 'var(--fg5)' }}>{sel().size ? t('b.pe.nSel', { n: sel().size }) : notesText(chanNotes().length)}{t('b.pe.newNote', { len: lastLenText() })}</span>
       </div>
-      <div ref={wrap} class="parea">
-        <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}
-          onPointerDown={down} onPointerMove={move} onWheel={wheel} onContextMenu={e => e.preventDefault()} />
-        <div ref={phead} class="pphead" />
+      <div class="rollgrid">
+        <div ref={wrap} class="parea">
+          <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}
+            onPointerDown={down} onPointerMove={move} onWheel={wheel} onContextMenu={e => e.preventDefault()} />
+          <div ref={phead} class="pphead" />
+        </div>
+        <ZoomScrollbar orient="v" range={vRange} limits={vLimits} onChange={setV} title={t('b.pr.vbarTip')} />
+        <div style={{ 'padding-left': KW + 'px', display: 'grid', 'min-width': '0' }}>
+          <ZoomScrollbar orient="h" range={hRange} limits={hLimits} onChange={setH} title={t('b.pr.hbarTip')} />
+        </div>
       </div>
       <div class="lanerow" style={{ height: LANE_H + 'px' }}>
         <div ref={laneWrap} class="lanecv">

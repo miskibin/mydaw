@@ -255,10 +255,12 @@ export function Mixer() {
     const sy = e.clientY, h0 = mixH();
     track(ev => setU('mixH', Math.round(fitH(h0 - (ev.clientY - sy)))), null, 'row-resize');
   };
+  const hideWins = (e: PointerEvent) => { if (e.button === 2) A.playlistFront(); };
   return (
     <>
       <Show when={!U.mixMin}><div class="mixsplit" onPointerDown={split} title={tr('c.mix.heightTip')} /></Show>
-      <div class="mixbar">
+      {/* FL: a right-click on the mixer sends the floating windows behind (like a click on the playlist) */}
+      <div class="mixbar" on:pointerdown={{ capture: true, handleEvent: hideWins }}>
         <span class="t">MIXER</span>
         <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg5)' }}>{tr('c.mix.insertCount', { n: S.project.inserts.length - 1 })}</span>
         <div style={{ flex: 1 }} />
@@ -268,7 +270,7 @@ export function Mixer() {
         <button onClick={() => setU('mixOpen', false)} title={tr('c.mix.close')}>×</button>
       </div>
       <Show when={!U.mixMin}>
-        <div class="mixer" style={{ height: mixH() + 'px' }}>
+        <div class="mixer" style={{ height: mixH() + 'px' }} on:pointerdown={{ capture: true, handleEvent: hideWins }}>
           <Strips />
           <Show when={selIns()}>
             {ins => (

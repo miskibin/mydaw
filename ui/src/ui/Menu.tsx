@@ -1,6 +1,6 @@
 import { createSignal, For, Match, Show, Switch, onMount } from 'solid-js';
 import type { MenuItem } from '../state/ui';
-import { menuGlyph, type MenuGlyph } from './menuIcons';
+import { CHECK_GLYPH, menuGlyph, type MenuGlyph } from './menuIcons';
 import { closeMenu, U } from '../state/ui';
 import { S } from '../state/store';
 import { commit } from '../state/edit';
@@ -37,7 +37,7 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
     const r = b.getBoundingClientRect(), W = 230;
     setOpen({ i, x: r.right + W > window.innerWidth ? r.left - W : r.right - 2, y: r.top - 5 });
   };
-  const glyph = (it: { label: string }) => menuGlyph(it.label);
+  const glyph = (it: { label: string; glyph?: MenuGlyph; checked?: boolean }) => it.checked != null ? (it.checked ? CHECK_GLYPH : null) : it.glyph ?? menuGlyph(it.label);
   return (
     <>
           <div ref={el} class="menu" classList={{ submenu: !!props.sub }} style={{ left: pos().x + 'px', top: pos().y + 'px' }} onPointerDown={e => e.stopPropagation()}>
@@ -60,7 +60,7 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
                   </Match>
                   <Match when={it.t === 'item' && it}>
                     {i => (
-                      <button class="mi" classList={{ danger: !!i().danger, dis: !!i().disabled }} title={i().title ?? ''} onPointerEnter={() => setOpen(null)}
+                      <button class="mi" role={i().checked != null ? 'menuitemcheckbox' : 'menuitem'} aria-checked={i().checked} classList={{ danger: !!i().danger, dis: !!i().disabled }} title={i().title ?? ''} onPointerEnter={() => setOpen(null)}
                         onClick={() => { if (i().disabled) return; closeMenu(); i().act(); }}>
                         <span class="row" style={{ gap: '8px' }}>
                           <Show when={i().icon} fallback={<MenuIco g={glyph(i())} />}>
@@ -148,7 +148,7 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
 function MenuIco(props: { g: MenuGlyph | null }) {
   return (
     <span class="mico">
-      <Show when={props.g}>{g => <svg viewBox={g().vb} width="12" height="12" fill="currentColor"><path d={g().d} /></svg>}</Show>
+      <Show when={props.g}>{g => <svg viewBox={g().vb} width="12" height="12" fill="currentColor"><path fill-rule={g().eo ? 'evenodd' : 'nonzero'} d={g().d} /></svg>}</Show>
     </span>
   );
 }

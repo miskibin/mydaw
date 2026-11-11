@@ -163,5 +163,13 @@ function Wave(props: { c: Channel }) {
     onCleanup(() => ro.disconnect());
   });
   createEffect(() => { peaksVersion(); themeVersion(); lang(); void props.c.color; void (props.c.kind === 'sample' && props.c.source); draw(); });
-  return <canvas ref={cv} class="chwave" />;
+  // A click plays the sample through the channel (its volume, pan and mixer insert) at the root
+  // pitch, to its end, like a key of the keyboard below; another click restarts it.
+  const play = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const c = props.c;
+    be().typingNote({ ch: c.id, key: c.root, vel: 0.9, on: true }).catch(err => say(t('b.pk.fail', { err: String(err) })));
+  };
+  return <canvas ref={cv} class="chwave" title={t('b.cw.waveTip')} onPointerDown={play} />;
 }

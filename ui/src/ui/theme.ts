@@ -112,9 +112,35 @@ function lightTheme(id: string, name: string, h: number, s: number, accent: [str
   return { id, name, light: true, t, css, swatch: [t.bg2, t.bg6, accent[0]] };
 }
 
+/** A lighter grey-blue dark theme (One Dark-like panels): same elevation order as DARK, shifted up.
+ *  Every CSS variable is set explicitly so nothing falls through to Grafit's `:root` values. */
+const SLATE_T: Tokens = {
+  bg0: '#1b1e23', bg1: '#21252b', bg2: '#282c34', bg3: '#2b2f37', bg4: '#2d3139', bg5: '#2e323a', bg6: '#333842', bg7: '#373c47',
+  line: '#3b404b', line2: '#434955', line3: '#484e5b',
+  fg: '#b9c0cb', fgHi: '#e6e9ef', fg2: '#a8afbb', fg3: '#9ca3b0', fg4: '#8b93a1', fg5: '#737b88', fg6: '#626976',
+  blue: '#61afef', blueHi: '#9dcdf7', green: '#98c379', amber: '#e5c07b', red: '#e06c75', onBg: '#3a4a60',
+  viz: '#1e2127', vizPanel: '#23272e', vizGrid: '#2b3038', vizGrid2: '#343a44', vizAxis: '#3e4451', vizLabel: '#737b88',
+  ink: '#e6e9ef', pre: '#9ca3b0', post: '#9dcdf7', playhead: '#eef1f5', onFill: '#1b1e23',
+  grid: '#282c34', gridBar: '#3b414c', gridBeat: '#31363f', laneAlt: '#2a2e36', rulerBg: '#2b2f37', rulerText: '#8b93a1', clipBody: '#23272e',
+  shade: 'rgba(0,0,0,.45)',
+  keyW: '#c8ccd4', keyB: '#30353e', keyWText: '#1b1e23', keyBText: '#e6e9ef', onBand: '#1b1e23', tint: 1,
+  clipBase: '#23272e', clipBodyPct: 18, clipHeadPct: 46, clipHeadSelPct: 75, clipHeadSelTo: '#ffffff',
+  clipInkTo: '#ffffff', clipInkPct: 80, clipText: '#eef0f4', clipTextSel: '#1b1e23', laneArm: '#30292f', gridShade: 'rgba(255,255,255,.022)',
+};
+const SLATE: ThemeDef = {
+  id: 'slate', name: 'Łupek', light: false, t: SLATE_T, swatch: [SLATE_T.bg2, SLATE_T.bg6, SLATE_T.blue],
+  css: {
+    '--sel-bg': '#3e4451', '--sel-bg2': '#363c47', '--sel-ring': '#5a6478', '--drag-bg': '#4a5263', '--mixer-bg': '#24282f', '--dialog-bg': '#2f343e',
+    '--on-accent': '#1b1e23', '--on-warm': '#1b1e23', '--danger': '#e8737e', '--arm-bg': '#3a2e35', '--playhead': SLATE_T.playhead,
+    '--knob-track': '#434955', '--knob-cap': '#4a505d', '--knob-ptr': '#eef1f5', '--fader-cap': '#c8ccd4', '--shadow': 'rgba(0,0,0,.45)', '--shadow2': 'rgba(0,0,0,.32)',
+    '--viz': SLATE_T.viz, '--win-close': '#c42b1c', '--on-band': SLATE_T.onBand,
+  },
+};
+
 /** Every theme the settings offer. Ids are saved on this computer, never rename them. */
 export const THEMES: ThemeDef[] = [
   { id: 'dark', name: 'Grafit', light: false, t: DARK, css: {}, swatch: [DARK.bg2, DARK.bg6, DARK.blue] },
+  SLATE,
   darkTheme('midnight', 'Północ', 220, 34, ['#5b8cff', '#9db8ff'], { lift: 1 }),
   darkTheme('violet', 'Fiolet', 265, 22, ['#a07cf6', '#c6b0ff'], { lift: 1 }),
   darkTheme('forest', 'Las', 155, 16, ['#3fbf8a', '#86e0b8'], { warm: ['#5cc98f', '#e0a44a', '#e05263'] }),
@@ -127,7 +153,7 @@ export const THEMES: ThemeDef[] = [
 ];
 
 const THEME_NAME_KEYS: Record<string, TranslationKey> = {
-  dark: 'd.theme.dark', midnight: 'd.theme.midnight', violet: 'd.theme.violet', forest: 'd.theme.forest', studio: 'd.theme.studio',
+  dark: 'd.theme.dark', slate: 'd.theme.slate', midnight: 'd.theme.midnight', violet: 'd.theme.violet', forest: 'd.theme.forest', studio: 'd.theme.studio',
   rose: 'd.theme.rose', oled: 'd.theme.oled', light: 'd.theme.light', paper: 'd.theme.paper', sky: 'd.theme.sky',
 };
 /** Display name of a theme in the current language (the Polish `name` stays as the data). */
