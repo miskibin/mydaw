@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { samplerDefault, type Channel, type Note, type Project } from '../api/types';
 import { applyAll } from './applyOps';
 import { copyChannelNotes, gridW, pasteChannelNotes } from './pattern';
-import { moveIndex, RACK_FIT_STEPS, rackFitWidth } from './rack';
+import { fitOnScreen, moveIndex, RACK_FIT_STEPS, rackFitWidth } from './rack';
 
 const geo = { left: 212, cw: 22, pad: 8, min: 480, room: 5000 };
 const ch = (id: number, name: string): Channel => ({ id, name, color: '#4f8ef7', kind: 'sample', source: 1, sampler: samplerDefault(), vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: 60 });
@@ -22,12 +22,22 @@ describe('Channel Rack window width', () => {
     expect(rackFitWidth(16, geo)).toBeLessThan(rackFitWidth(32, geo));
     expect(rackFitWidth(32, geo)).toBeGreaterThan(rackFitWidth(16, geo));
   });
-  it('stops growing at ~4 bars and at the screen edge; never below the minimum', () => {
-    expect(rackFitWidth(64, geo)).toBe(212 + gridW(RACK_FIT_STEPS, 22) + 8);
-    expect(rackFitWidth(256, geo)).toBe(rackFitWidth(64, geo));
+  it('grows with the pattern up to 16 bars, then to the room it has; never below the minimum', () => {
+    const wide = { ...geo, room: 50000 };
+    expect(rackFitWidth(64, wide)).toBe(212 + gridW(80, 22) + 8);
+    expect(rackFitWidth(240, wide)).toBe(212 + gridW(RACK_FIT_STEPS, 22) + 8);
+    expect(rackFitWidth(512, wide)).toBe(rackFitWidth(240, wide));
     expect(rackFitWidth(32, { ...geo, room: 700 })).toBe(700);
     expect(rackFitWidth(1, { ...geo, cw: 1 })).toBe(480);
     expect(rackFitWidth(32, { ...geo, room: 300 })).toBe(480);
+  });
+});
+
+describe('window kept on screen while it grows', () => {
+  it('stays put while it fits, slides left when it would pass the right edge, never wider than the screen', () => {
+    expect(fitOnScreen(300, 600, 1920)).toEqual({ x: 300, w: 600 });
+    expect(fitOnScreen(900, 1400, 1920)).toEqual({ x: 510, w: 1400 });
+    expect(fitOnScreen(900, 4000, 1920)).toEqual({ x: 10, w: 1900 });
   });
 });
 

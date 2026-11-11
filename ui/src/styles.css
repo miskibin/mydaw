@@ -465,10 +465,15 @@ select option { background: var(--bg4); color: var(--fg); }
 .patwin .winhd .numf .lab { font-size: 7px; }
 .patwin .winhd .vsep { height: 18px; }
 .rack, .roll { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.rackbody { flex: 1; min-height: 0; display: flex; border-bottom: 1px solid var(--bg0); }
+.rackbody { flex: 1; min-height: 0; display: flex; border-bottom: 1px solid var(--bg0); background: var(--bg2); }
+/* room around the rows and the steps: the rack read as squeezed into its frame */
+.rackbody { padding: 8px 0; }
+.rackbody > .rackleft { margin: -8px 0; padding: 8px 0; }
+.rackbody > .rackgrid { margin: 0 10px; }
+.rack .lanerow > .lanecv { margin: 0 10px; }
 .rackleft { flex: none; overflow: hidden; background: var(--bg3); border-right: 1px solid var(--bg0); }
 .rackgrid { position: relative; flex: 1; min-width: 0; overflow: hidden; background: var(--bg2); }
-.crow { display: flex; align-items: center; gap: 3px; padding: 0 6px 0 0; border-bottom: 1px solid color-mix(in srgb, var(--bg0) 60%, transparent); box-sizing: border-box; }
+.crow { display: flex; align-items: center; gap: 5px; padding: 0 8px 0 0; border-bottom: 1px solid color-mix(in srgb, var(--bg0) 60%, transparent); box-sizing: border-box; }
 .crow.sel { background: var(--sel-bg2); }
 .crow .cstrip { width: 4px; align-self: stretch; flex: none; }
 .crow.muted .cstrip { opacity: .35; }
@@ -479,7 +484,7 @@ select option { background: var(--bg4); color: var(--fg); }
 .cins { width: 24px; height: 17px; flex: none; padding: 0; border: 1px solid var(--line); border-radius: 3px; background: var(--bg1); color: var(--blue-hi); font: 600 10px var(--mono); cursor: pointer; }
 .cins.auto { color: var(--fg5); }
 .cins:hover { border-color: var(--line3); color: var(--fg-hi); }
-.cname { flex: 1; min-width: 0; height: 18px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 3px; background: var(--bg6); color: var(--fg); font: 500 11px var(--sans); text-align: left; cursor: pointer; }
+.cname { flex: 1; min-width: 0; height: 22px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 3px; background: var(--bg6); color: var(--fg); font: 500 11px var(--sans); text-align: left; cursor: pointer; }
 .cname:hover { background: var(--line2); color: var(--fg-hi); }
 .cname.sel { background: var(--on-bg); color: var(--blue-hi); }
 .crow.muted .cname { color: var(--fg5); }

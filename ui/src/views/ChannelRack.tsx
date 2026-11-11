@@ -15,7 +15,7 @@ import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture } from '../state/edit';
 import {
   addBar, STEP_MAX, STEP_MIN, audition, chanById, chanKindLabel, chanOp, channels, closeRack, curPat, openRoll, patOp, playStep, putNotes, RACK_LEFT, RACK_ROW,
-  rackFront, rackWidthFor, removeBar, selChan, selectChannel, stepPattern, toggleChanMute, toggleChanSolo,
+  rackFront, rackPlaceFor, removeBar, selChan, selectChannel, stepPattern, toggleChanMute, toggleChanSolo,
 } from '../state/pattern';
 import { arrVersion } from '../state/store';
 import { say, setU, U } from '../state/ui';
@@ -208,7 +208,7 @@ function Rack(props: { z: number }) {
     const steps = stepsOf(pt());
     if (hold() || steps === fitted) return;
     fitted = steps;
-    untrack(() => { const w = U.rackWin; if (w) setU('rackWin', 'w', rackWidthFor(steps, w.x)); });
+    untrack(() => { const w = U.rackWin; if (w) { const pl = rackPlaceFor(steps, w.x); setU('rackWin', v => v && { ...v, x: pl.x, w: pl.w }); } });
   });
   /** Ctrl+C / X / V: copy, cut, paste the selected channel's notes in the current pattern (FL). */
   const clipboardKey = (k: 'c' | 'x' | 'v') => {

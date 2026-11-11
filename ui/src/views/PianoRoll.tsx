@@ -19,7 +19,7 @@ import {
   parseKey, parseLen, parseStart, parseVel, quantizeStarts, readProps, wheelNotches,
 } from '../lib/rollEdit';
 import { commit, Gesture, wheelEdit } from '../state/edit';
-import { audition, chanKindLabel, channels, closeRoll, curPat, patPlayhead, putNotes, rollFront, selChan, selectChannel } from '../state/pattern';
+import { audition, chanKindLabel, channels, closeRoll, curPat, patPlayhead, putNotes, rollFront, selChan, selectChannel, toggleRollMax } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
 import { say, U } from '../state/ui';
 import { dblCheck, edgeScroller, panDrag, track, trackFrame } from '../ui/drag';
@@ -705,7 +705,7 @@ function Roll(props: { z: number }) {
     );
   }
   return (
-    <PatFrame win={U.rollWin!} key="rollWin" z={props.z} class="rollwin" minW={560} minH={300} front={rollFront} onKey={onKey}
+    <PatFrame win={U.rollWin!} key="rollWin" z={props.z} class="rollwin" minW={560} minH={300} front={rollFront} onKey={onKey} onHeadDbl={toggleRollMax}
       head={<>
         <span class="tile" style={{ width: '20px', height: '20px', background: ch().color + '2e', color: ch().color }}><Icon d={ROLL_ICON} size={12} /></span>
         <span class="wintitle">Piano roll</span>

@@ -26,9 +26,11 @@ shown in the app after an update and is published as the release notes (see
 - **A beat plays on the first Space.** New installs start in PAT mode, and in SONG mode an
   empty playlist plays the pattern you are editing instead of silence.
 - **Notes sound while you draw them** (Settings can switch that off).
-- **The Channel Rack sizes itself:** its width follows the pattern's length in both directions
-  (up to four bars, then it scrolls) and it grows when you add a channel. It and the Piano roll
-  reopen where you left them; the Piano roll no longer opens on top of the rack.
+- **The Channel Rack sizes itself and has room to breathe:** taller rows, bigger steps and a
+  margin around the grid. Its width follows the pattern's length in both directions and only
+  scrolls once it spans the screen; it grows when you add a channel.
+- **The Piano roll opens over the whole work area**, like FL's. Double-click its title bar to
+  switch between that and a smaller window. Both windows reopen where you left them.
 - A double-click on a pattern always opens the Channel Rack (it used to open the Piano roll
   instead when only one channel played the pattern).
 - **Split by channel adds the tracks it needs** instead of stacking clips on the last track.

@@ -9,7 +9,7 @@ import { be } from '../api/backend';
 import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, samplerDefault, TOTAL_BEATS, type Channel, type Id, type LibFile, type Note, type Op, type Pattern } from '../api/types';
 import { baseName, clamp, mod } from '../lib/format';
 import { BAR, barsText, cloneNotes, notesText, stepsOf } from '../lib/pattern';
-import { rackFitWidth } from '../lib/rack';
+import { fitOnScreen, rackFitWidth } from '../lib/rack';
 import { commit } from './edit';
 import { newTrack } from '../lib/clipOps';
 import { unwrap } from 'solid-js/store';
@@ -18,9 +18,11 @@ import { curBeat, tele } from './telemetry';
 import { say, setU, U } from './ui';
 
 /** Channel Rack geometry shared with the view (sizes the window to its content). */
-export const RACK_LEFT = 212, RACK_HEAD = 34, RACK_ROW = 26;
+export const RACK_LEFT = 212, RACK_HEAD = 34, RACK_ROW = 32;
+/** Frame around the step grid (px): left of the first step and right of the last; above and below the rows. */
+export const RACK_PAD_X = 10, RACK_PAD_Y = 8;
 /** Step button width in the Channel Rack (px): compact like FL's, wider only when the window has room. */
-export const STEP_MIN = 15, STEP_MAX = 22;
+export const STEP_MIN = 16, STEP_MAX = 24;
 /** The Channel Rack window's narrowest width (px). */
 export const RACK_MIN_W = 480;
 
@@ -96,21 +98,24 @@ function onTop(k: WinKey) {
  * The Channel Rack's width for a pattern of `steps` steps at window position `x`: the pattern and
  * its greyed extra bar at the comfortable step width, up to ~4 bars and the screen's right edge.
  */
-export const rackWidthFor = (steps: number, x: number) => rackFitWidth(steps, { left: RACK_LEFT, cw: STEP_MAX, pad: 8, min: RACK_MIN_W, room: window.innerWidth - x - 10 });
+export const rackWidthFor = (steps: number, x: number) => rackFitWidth(steps, { left: RACK_LEFT, cw: STEP_MAX, pad: 2 * RACK_PAD_X + 2, min: RACK_MIN_W, room: window.innerWidth - x - 10 });
+/** The rack's place and width for `steps` steps: as wide as the pattern needs, sliding left before it would scroll (the screen is the only limit). */
+export const rackPlaceFor = (steps: number, x: number) => fitOnScreen(x, rackWidthFor(steps, 10), window.innerWidth);
 /** F6: open the Channel Rack (or bring it to the front). */
 export function openRack() {
   if (!S.project.patterns.length) { say(t('b.st.noPatterns')); return; }
   if (U.rackWin) { rackFront(); return; }
   const pt = curPat()!, rows = Math.max(4, channels().length + 1);
   const w = rackWidthFor(stepsOf(pt), 30);
-  const need = RACK_HEAD + rows * RACK_ROW + 12;
+  const need = RACK_HEAD + rows * RACK_ROW + 12 + 2 * RACK_PAD_Y;
   const z = U.zTop + 1;
   // where it was when it was last closed (kept on screen), else centred under the toolbar
   const g = lastWin.rackWin;
   const x = g ? clamp(g.x, 0, Math.max(0, window.innerWidth - 120)) : Math.max(20, Math.round((window.innerWidth - w) / 2));
   const y = g ? clamp(g.y, 0, Math.max(0, window.innerHeight - 80)) : 64;
   const h = clamp(Math.max(need, g?.h ?? 0), 220, Math.max(220, window.innerHeight - y - 20));
-  setU({ zTop: z, plugsHidden: false, rackWin: { x, y, w: g ? rackWidthFor(stepsOf(pt), x) : w, h, z } });
+  const pl = rackPlaceFor(stepsOf(pt), x);
+  setU({ zTop: z, plugsHidden: false, rackWin: { x: pl.x, y, w: pl.w, h, z } });
 }
 /** Where the pattern windows were when last closed: they reopen there instead of jumping back to the centre. */
 const lastWin: { rackWin?: { x: number; y: number; w: number; h: number }; rollWin?: { x: number; y: number; w: number; h: number } } = {};
@@ -131,11 +136,26 @@ export function openRoll(ch?: Id) {
     setU({ zTop: z, plugsHidden: false, rollWin: { x: clamp(g.x, 0, Math.max(0, W - 120)), y: clamp(g.y, 0, Math.max(0, H - 80)), w, h, z } });
     return;
   }
-  const w = clamp(Math.round(W * 0.62), 640, W - 40), h = clamp(Math.round(H * 0.58), 360, H - 100);
-  // first time: under the Channel Rack when there is room, so the two do not cover each other
-  const r = U.rackWin, below = r ? r.y + r.h + 8 : 96;
-  const y = r && below + h <= H - 10 ? below : 96;
-  setU({ zTop: z, plugsHidden: false, rollWin: { x: Math.max(20, Math.round((W - w) / 2) + (y === 96 && r ? 40 : 0)), y, w, h, z } });
+  // first time: the whole work area, like FL's piano roll (a melody needs the room; the Channel
+  // Rack stays one F6 away and the title bar's double-click restores a smaller window)
+  setU({ zTop: z, plugsHidden: false, rollWin: { ...workArea(), z } });
+}
+/** The playlist's area: where a maximised pattern window goes (down to the window's bottom when the mixer leaves too little). */
+function workArea() {
+  const r = document.querySelector('.plwrap')?.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight;
+  const x = Math.round(r?.left ?? 0), y = Math.round(r?.top ?? 54);
+  const h = Math.round((r && r.bottom - y >= 420 ? r.bottom : H) - y);
+  return { x, y, w: Math.max(640, W - x), h: Math.max(360, h) };
+}
+let rollRestore: { x: number; y: number; w: number; h: number } | null = null;
+/** Double-click on the Piano roll's title bar: fill the work area, or go back to the size before. */
+export function toggleRollMax() {
+  const w = U.rollWin; if (!w) return;
+  const a = workArea(), full = Math.abs(w.x - a.x) < 4 && Math.abs(w.y - a.y) < 4 && Math.abs(w.w - a.w) < 4 && Math.abs(w.h - a.h) < 4;
+  if (!full) { rollRestore = { x: w.x, y: w.y, w: w.w, h: w.h }; setU('rollWin', v => v && { ...v, ...a }); return; }
+  const W = window.innerWidth, H = window.innerHeight;
+  const b = rollRestore ?? { w: clamp(Math.round(W * 0.62), 640, W - 40), h: clamp(Math.round(H * 0.58), 360, H - 100), x: Math.round(W * 0.19), y: 96 };
+  setU('rollWin', v => v && { ...v, ...b });
 }
 export function closeRoll() { const w = U.rollWin; if (w) lastWin.rollWin = { x: w.x, y: w.y, w: w.w, h: w.h }; setU('rollWin', null); }
 export function toggleRoll() { if (onTop('rollWin')) closeRoll(); else openRoll(); }
@@ -416,7 +436,7 @@ export const playStep = (pt: Pattern) => { const b = patPlayhead(pt); return b <
 createRoot(() => {
   createEffect(on(() => channels().length, (n, prev) => {
     const w = U.rackWin; if (!w || prev == null || n <= prev) return;
-    const need = RACK_HEAD + (n + 1) * RACK_ROW + 12;
+    const need = RACK_HEAD + (n + 1) * RACK_ROW + 12 + 2 * RACK_PAD_Y;
     if (need > w.h) setU('rackWin', 'h', Math.min(need, Math.max(220, window.innerHeight - w.y - 20)));
   }));
   const keepOnScreen = () => {

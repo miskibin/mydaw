@@ -60,6 +60,8 @@ export function PatFrame(props: {
   front: () => void; onKey?: (e: KeyboardEvent) => void; head: JSX.Element; children: JSX.Element;
   /** Wheel over the title bar (the Channel Rack switches pattern). */
   onHeadWheel?: (e: WheelEvent) => void;
+  /** Double-click on the empty part of the title bar (the Piano roll maximises / restores). */
+  onHeadDbl?: () => void;
 }) {
   let root!: HTMLDivElement;
   const W = () => props.win;
@@ -72,7 +74,8 @@ export function PatFrame(props: {
     <div ref={root} tabIndex={0} class={'win patwin ' + props.class} style={{ left: W().x + 'px', top: W().y + 'px', width: W().w + 'px', height: W().h + 'px', 'z-index': props.z }}
       onPointerDown={e => { props.front(); const tg = (e.target as HTMLElement).tagName; if (tg !== 'SELECT' && tg !== 'INPUT') root.focus({ preventScroll: true }); }}
       onKeyDown={e => guardKeys(e, props.onKey)}>
-      <div class="winhd" onPointerDown={e => moveWindow(e, () => W(), (x, y) => setU(props.key, w => w && { ...w, x, y }))} onWheel={e => props.onHeadWheel?.(e)}>{props.head}</div>
+      <div class="winhd" onPointerDown={e => moveWindow(e, () => W(), (x, y) => setU(props.key, w => w && { ...w, x, y }))} onWheel={e => props.onHeadWheel?.(e)}
+        onDblClick={e => { if (!(e.target as HTMLElement).closest('button, select, input, .numf, .seg')) props.onHeadDbl?.(); }}>{props.head}</div>
       {props.children}
       <div class="resizer" onPointerDown={resize} title={t('b.pe.resize')} />
     </div>

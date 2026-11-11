@@ -24,7 +24,7 @@ function rr(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: num
  */
 export interface RackGeo { cw: number; sx: number; sy: number; rh: number; steps: number; end: number; rows: number }
 
-const STEP_PAD = 2, STEP_VPAD = 3, STEP_R = 2.5;
+const STEP_PAD = 2, STEP_VPAD = 5, STEP_R = 3;
 /** Unlit step colours: alternating groups of four (beats), like FL's. */
 function stepOff(s: number) {
   return mix(T.fg5, Math.floor(s / 4) % 2 ? (theme.light ? 18 : 13) : (theme.light ? 30 : 24), T.bg2);
