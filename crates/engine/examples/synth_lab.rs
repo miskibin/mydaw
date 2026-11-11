@@ -276,9 +276,9 @@ fn render_song(preset: &str, song: &Song) -> Vec<f32> {
         })
         .collect();
     if song.hats {
-        let hat = p.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst: Inst::Hat }).unwrap().id;
-        let kick = p.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst: Inst::Kick }).unwrap().id;
-        let clap = p.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst: Inst::Clap }).unwrap().id;
+        let hat = p.channels.iter().find(|c| c.name == "Hat").unwrap().id;
+        let kick = p.channels.iter().find(|c| c.name == "Kick").unwrap().id;
+        let clap = p.channels.iter().find(|c| c.name == "Clap").unwrap().id;
         let bars = (song.beats / 4.0) as usize;
         for b in 0..bars {
             let o = b as f32 * 16.0;

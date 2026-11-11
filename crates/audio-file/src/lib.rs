@@ -309,7 +309,28 @@ fn decode_symphonia(
         source,
     })?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
+    decode_symphonia_stream(stream, path, max_frames_for)
+}
 
+/// Audio that is already in memory (a file embedded in the program). `name` only supplies the
+/// extension hint and the path named in errors; nothing is read from disk.
+///
+/// # Errors
+/// A [`DecodeError`] naming `name`.
+pub fn decode_stereo_bytes(
+    bytes: &'static [u8],
+    name: &Path,
+    max_frames_for: impl Fn(f64) -> Option<usize>,
+) -> Result<DecodedAudio, DecodeError> {
+    let stream = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
+    decode_symphonia_stream(stream, name, &max_frames_for)
+}
+
+fn decode_symphonia_stream(
+    stream: MediaSourceStream<'_>,
+    path: &Path,
+    max_frames_for: &impl Fn(f64) -> Option<usize>,
+) -> Result<DecodedAudio, DecodeError> {
     let mut hint = Hint::new();
     if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
         hint.with_extension(extension);

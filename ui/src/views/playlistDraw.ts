@@ -1,7 +1,7 @@
 // Canvas rendering of the playlist: lanes, grid, clips (pattern notes / waveforms), the
 // recording clip. Only the visible window is drawn; everything is in grid coordinates.
 import type { Automation, Channel, Clip, Comp, Id, Note, Pattern, Project, Source, Take, Track } from '../api/types';
-import { isPitched, keyOf } from '../lib/pattern';
+import { keyOf } from '../lib/pattern';
 import { boundaries, takeEnd, toComp } from '../lib/comp';
 import { mix } from '../lib/color';
 import { rgba, T } from '../ui/theme';
@@ -55,9 +55,18 @@ const FONT = '500 10px "Geist Variable", Geist, system-ui, sans-serif';
 const MONO9 = '500 9px "Geist Mono Variable", "Geist Mono", monospace';
 
 const patCache = new Map<string, Float32Array>();
-/** Row of a note in the clip preview: one row per percussive channel, one per key of pitched channels. */
-const rowKey = (n: Note, chans: Map<Id, Channel>) => { const c = chans.get(n.ch); return c && isPitched(c) ? 'p' + keyOf(n, c) : 'c' + n.ch; };
-const patSig = (p: Pattern, chans: Map<Id, Channel>) => p.notes.map(n => rowKey(n, chans) + '@' + n.step + ':' + n.len).join(',');
+/** Channels that play more than one key in the pattern (a bass line, chords): the others are one-note parts, i.e. drums. */
+function melodic(p: Pattern, chans: Map<Id, Channel>): Set<Id> {
+  const first = new Map<Id, number>(), multi = new Set<Id>();
+  for (const n of p.notes) {
+    const k = keyOf(n, chans.get(n.ch)), f = first.get(n.ch);
+    if (f == null) first.set(n.ch, k); else if (f !== k) multi.add(n.ch);
+  }
+  return multi;
+}
+/** Row of a note in the clip preview: one row per key of a melodic channel, one row per channel for the rest. */
+const rowKey = (n: Note, chans: Map<Id, Channel>, multi: Set<Id>) => (multi.has(n.ch) ? 'p' + keyOf(n, chans.get(n.ch)) : 'c' + n.ch);
+const patSig = (p: Pattern, chans: Map<Id, Channel>) => { const multi = melodic(p, chans); return p.notes.map(n => rowKey(n, chans, multi) + '@' + n.step + ':' + n.len).join(','); };
 let curChans = new Map<Id, Channel>();
 /** Note rectangles [beat, y, lenBeats, h]* of a pattern clip body, cached by geometry (zoom-independent). */
 function patRects(p: Pattern, sig: string, offset: number, len: number, h: number): Float32Array {
@@ -66,9 +75,9 @@ function patRects(p: Pattern, sig: string, offset: number, len: number, h: numbe
   if (r) return r;
   // notes past the pattern end are kept in the project but hidden (and silent)
   const notes = p.notes.filter(n => n.step < p.len * 4 - 1e-4);
-  const order = [...curChans.keys()];
-  const drums = [...new Set(notes.map(n => rowKey(n, curChans)).filter(k => k[0] === 'c'))].sort((a, b) => order.indexOf(+a.slice(1)) - order.indexOf(+b.slice(1)));
-  const pitches = [...new Set(notes.map(n => rowKey(n, curChans)).filter(k => k[0] === 'p'))].sort((a, b) => +b.slice(1) - +a.slice(1));
+  const order = [...curChans.keys()], multi = melodic(p, curChans);
+  const drums = [...new Set(notes.map(n => rowKey(n, curChans, multi)).filter(k => k[0] === 'c'))].sort((a, b) => order.indexOf(+a.slice(1)) - order.indexOf(+b.slice(1)));
+  const pitches = [...new Set(notes.map(n => rowKey(n, curChans, multi)).filter(k => k[0] === 'p'))].sort((a, b) => +b.slice(1) - +a.slice(1));
   const rows = [...drums.reverse(), ...pitches];
   const nr = Math.max(rows.length, 3), rh = Math.max(1.5, Math.min(5, (h - 6) / nr));
   const top = (h - nr * rh) / 2, out: number[] = [];
@@ -76,7 +85,7 @@ function patRects(p: Pattern, sig: string, offset: number, len: number, h: numbe
     for (const n of notes) {
       const b = k * p.len + n.step / 4 - offset;
       if (b < 0 || b >= len) continue;
-      const ri = rows.indexOf(rowKey(n, curChans));
+      const ri = rows.indexOf(rowKey(n, curChans, multi));
       out.push(b, top + ri * rh, Math.min(n.len / 4, len - b), Math.max(1, rh - 1));
     }
     if (out.length > 6000) break;

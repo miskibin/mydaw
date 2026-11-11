@@ -25,7 +25,6 @@ import { midiStatus, startMidi } from './state/midi';
 import { releaseAll, setTypingOn, typingDown, typingOn, typingUp } from './state/typingKeys';
 import { chanWin } from './views/ChannelWindow';
 import { channels } from './state/pattern';
-import { isPitched } from './lib/pattern';
 import { MusicDialog } from './views/MusicDialog';
 import { FxPickerHost, openFxPicker } from './views/FxPicker';
 import { ChannelRack } from './views/ChannelRack';
@@ -61,7 +60,7 @@ function typingTarget() {
   const cs = channels();
   const fed = hit ? cs.find(c => c.insert === hit.m.id) : undefined; if (fed) return fed.id;
   const t = midiStatus()?.target; if (t != null && cs.some(c => c.id === t)) return t;
-  return (cs.find(isPitched) ?? cs[0])?.id ?? null;
+  return cs[0]?.id ?? null;
 }
 
 function onKey(e: KeyboardEvent) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { demoProject, mockCatalog } from '../api/mockData';
+import { sketchProject, mockCatalog } from '../api/mockData';
 import type { Clip, ClipTune, EqBand, PitchAnalysis, RefTune } from '../api/types';
 import { applyAll, OpError } from './applyOps';
 import { automatedValue, createAutomationOps, denormalize, normalize, parseBandParam, valueAt } from './automation';
@@ -222,7 +222,7 @@ describe('Tune to Reference', () => {
     expect(lowConfidenceRuns(t)).toEqual([[0.1, 0.3]]);
   });
   it('mock ops check references like the engine and drop them with their source', () => {
-    const proj = demoProject(mockCatalog());
+    const proj = sketchProject(mockCatalog());
     const src = (id: number, name: string) => ({ id, name, color: '#888', path: name + '.wav', dur: 4, sr: 48000, ch: 1, peakDb: -3 });
     proj.sources.push(src(7001, 'take'), src(7002, 'acapella'));
     const clip: Clip = { id: 7003, track: 0, start: 0, len: 8, offset: 0, kind: 'audio', ref: 7001, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false };
@@ -256,7 +256,7 @@ describe('choice parameters', () => {
     }
   });
   it('automation of a choice param snaps to an option', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     p.inserts[1].fx.push(newFx(cat, 777, 'fet', 128));
     const t = { kind: 'fx' as const, fxId: 777, param: 'ratio' };
     expect(denormalize(p, cat, t, 0.6)).toBe(2);
@@ -267,7 +267,7 @@ describe('choice parameters', () => {
 describe('automation', () => {
   const cat = mockCatalog();
   it('normalises like the engine: log params logarithmically, bands, vol and pan', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     const rel = { kind: 'fx' as const, fxId: 903, param: 'rel' }; // comp release 10..1000 ms, log
     expect(normalize(p, cat, rel, 100)).toBeCloseTo(0.5, 9);
     expect(denormalize(p, cat, rel, 0.5)).toBeCloseTo(100, 6);
@@ -285,7 +285,7 @@ describe('automation', () => {
     expect(valueAt([], 1)).toBeNull();
   });
   it('creates an automation clip on an empty track, plays it at the playhead, and is removed with its clips', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     let next = p.nextId;
     const target = { kind: 'insertVol' as const, id: 3 };
     const r = createAutomationOps(p, cat, target, 'Bass · Volume', '#e0a44a', 8, 16, () => next++);
@@ -301,7 +301,7 @@ describe('automation', () => {
     expect(q3.clips.some(c => c.kind === 'auto')).toBe(false);
   });
   it('adds a track when none is empty', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     p.clips.push(...p.tracks.map((_, i) => ({ id: 5000 + i, track: i, start: 100, len: 4, offset: 0, kind: 'pat' as const, ref: 1, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false })));
     let next = 9000;
     const r = createAutomationOps(p, cat, { kind: 'mix', fxId: 903 }, 'Mix', '#fff', 0, 16, () => next++);

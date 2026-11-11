@@ -100,7 +100,8 @@ export interface Backend {
   libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]>;
   libraryAddFolder(): Promise<string[]>;
   libraryRemoveFolder(path: string): Promise<string[]>;
-  projectNew(): Promise<StateDto>;
+  /** A new project: empty (eight tracks, the starter kit in the Channel Rack), or with `demo` the demo song. */
+  projectNew(demo?: boolean): Promise<StateDto>;
   projectOpen(path?: string): Promise<StateDto>;
   projectSave(saveAs?: boolean): Promise<{ path: string }>;
   /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
@@ -229,7 +230,7 @@ export function tauriBackend(): Backend {
     libraryFiles: q => invoke('library_files', { kit: q.kit ?? null, folder: q.folder ?? null }),
     libraryAddFolder: () => invoke('library_add_folder'),
     libraryRemoveFolder: path => invoke('library_remove_folder', { path }),
-    projectNew: () => invoke('project_new'),
+    projectNew: demo => invoke('project_new', { demo: !!demo }),
     projectOpen: path => invoke('project_open', { path: path ?? null }),
     projectSave: saveAs => invoke('project_save', { saveAs: !!saveAs }),
     exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, format: opts.format, mp3Kbps: opts.mp3Kbps }),

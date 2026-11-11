@@ -279,11 +279,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 if (n.step + n.len) as f64 > TOTAL_BEATS * 4.0 {
                     return Err(OpError::Invalid(format!("pattern {}: notes must end within {TOTAL_BEATS} beats", pt.id)));
                 }
-                if n.ch == 0 && n.inst.is_none() {
-                    return Err(OpError::Invalid("every note needs `ch` (a channel id, see `wave channels`)".into()));
-                }
             }
-            p.resolve_note_channels(&mut pt.notes);
             if let Some(n) = pt.notes.iter().find(|n| p.channel(n.ch).is_none()) {
                 return Err(OpError::Missing { what: "channel", id: n.ch });
             }
@@ -313,10 +309,11 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             if c.root > 127 {
                 return Err(OpError::Invalid("channel root must be 0..127".into()));
             }
-            if let ChannelSrc::Sample { source } = c.src {
-                if !p.sources.iter().any(|s| s.id == source) {
-                    return Err(OpError::Missing { what: "source", id: source });
+            if let ChannelSrc::Sample { source, sampler } = &c.src {
+                if !p.sources.iter().any(|s| s.id == *source) {
+                    return Err(OpError::Missing { what: "source", id: *source });
                 }
+                sampler.check().map_err(OpError::Invalid)?;
             }
             if let ChannelSrc::Synth { synth } = &c.src {
                 for (k, v) in &synth.params {
@@ -392,7 +389,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         Op::RemoveSource { id } => {
             p.sources.retain(|s| s.id != *id);
             // sampler channels playing it go, with their notes
-            let gone: Vec<Id> = p.channels.iter().filter(|c| c.src == ChannelSrc::Sample { source: *id }).map(|c| c.id).collect();
+            let gone: Vec<Id> = p.channels.iter().filter(|c| c.sample_source() == Some(*id)).map(|c| c.id).collect();
             p.channels.retain(|c| !gone.contains(&c.id));
             for pt in p.patterns.iter_mut() {
                 pt.notes.retain(|n| !gone.contains(&n.ch));

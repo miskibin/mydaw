@@ -40,6 +40,27 @@ impl Audio {
         Ok(Self::from_stereo(d.data, sr, if mono { 1 } else { 2 }))
     }
 
+    /// Loads a project source by its stored path: a `lib:` path of the sample library (the
+    /// standard library is decoded from the program itself, so it is never missing), an
+    /// absolute path, or one relative to `base` (the project's folder).
+    pub fn load_path(path: &str, base: &Path) -> Result<Self, String> {
+        if let Some(f) = crate::factory::embedded(path) {
+            let d = wave_audio_file::decode_stereo_bytes(f.bytes, Path::new(f.file), |_| None).map_err(|e| e.to_string())?;
+            let sr = d.sample_rate.round() as u32;
+            return Ok(Self::from_stereo(d.data, sr, f.ch));
+        }
+        if path.starts_with(crate::factory::SCHEME) {
+            let abs = crate::factory::resolve(path).ok_or_else(|| format!("{path}: not a library path"))?;
+            return Self::load(&abs).map_err(|e| format!("{e} (a sample of a library kit that is not installed on this computer)"));
+        }
+        let p = Path::new(path);
+        if p.is_absolute() {
+            Self::load(p)
+        } else {
+            Self::load(&base.join(p))
+        }
+    }
+
     pub fn seconds(&self) -> f64 {
         self.frames as f64 / self.sr as f64
     }

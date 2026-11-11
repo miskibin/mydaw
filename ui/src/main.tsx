@@ -12,6 +12,7 @@ import { initTheme } from './ui/theme';
 import { initPrefs } from './state/prefs';
 import { initUpdates } from './state/updates';
 import { t } from './lib/i18n';
+import { loadStdLib } from './state/library';
 
 initTheme();
 initPrefs();
@@ -24,6 +25,8 @@ async function boot() {
   replaceState(state);
   await be.on('state', onStateEvent);
   await startTelemetry();
+  // the standard library's file list, so the first "add channel" menu already offers it
+  void loadStdLib();
   // initial selection like the prototype: the Vocal insert with its compressor
   const voc = S.project.inserts.find(m => m.fx.length > 1) ?? S.project.inserts[1] ?? S.project.inserts[0];
   if (voc) setU({ mixSel: voc.id, fxSel: voc.fx[1]?.id ?? voc.fx[0]?.id ?? null });

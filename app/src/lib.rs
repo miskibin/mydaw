@@ -447,7 +447,7 @@ async fn library_install(app: St<'_>, handle: AppHandle, id: String) -> R<()> {
 #[tauri::command]
 async fn library_files(kit: Option<String>, folder: Option<String>) -> R<Vec<library::FileInfo>> {
     tauri::async_runtime::spawn_blocking(move || match (kit, folder) {
-        (Some(k), _) => Ok(library::kit_files(&k)),
+        (Some(k), _) => library::kit_files(&k),
         (None, Some(f)) => Ok(library::folder_files(&PathBuf::from(f))),
         _ => Err("pass `kit` or `folder`".to_string()),
     })
@@ -480,8 +480,9 @@ async fn library_remove_folder(app: St<'_>, path: String) -> R<Vec<String>> {
 // ---------------------------------------------------------------- project files
 
 #[tauri::command]
-async fn project_new(app: St<'_>) -> R<StateDto> {
-    app.engine.new_project(Project::empty());
+async fn project_new(app: St<'_>, demo: Option<bool>) -> R<StateDto> {
+    // `demo`: the demo song instead of an empty project
+    app.engine.new_project(if demo.unwrap_or(false) { Project::demo() } else { Project::empty() });
     Ok(app.engine.state())
 }
 

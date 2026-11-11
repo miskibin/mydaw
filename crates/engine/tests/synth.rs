@@ -57,7 +57,6 @@ fn synth_channels_round_trip_and_old_projects_still_load() {
     // a synth channel written without its `synth` object plays the default patch
     let c: Channel = serde_json::from_str(r##"{"id":7,"name":"S","color":"#fff","kind":"synth"}"##).unwrap();
     assert_eq!(c.src, ChannelSrc::Synth { synth: SynthState::default() });
-    assert!(c.pitched());
 }
 
 #[test]

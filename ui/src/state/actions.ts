@@ -100,10 +100,11 @@ export async function guardUnsaved(what: string): Promise<boolean> {
   if (a === 'save') return projectSave(false);
   return true;
 }
-export async function projectNew() {
-  if (!(await guardUnsaved(t('d.act.guard.new')))) return;
+/** A new empty project, or with `demo` the demo song (asks about unsaved changes first). */
+export async function projectNew(demo = false) {
+  if (!(await guardUnsaved(t(demo ? 'd.act.guard.demo' : 'd.act.guard.new')))) return;
   flushNotebook();
-  try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); say(t('d.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
+  try { acceptReply(await enqueue(() => be().projectNew(demo))); afterProjectLoad(); say(t(demo ? 'd.act.demoproj' : 'd.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
 }
 export async function projectOpen() {
   if (!(await guardUnsaved(t('d.act.guard.open')))) return;

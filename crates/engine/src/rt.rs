@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::model::Id;
+use crate::model::{Id, SamplerState};
 use crate::processor::{ParamBlock, ProcessCtx, Processor, METERS};
 use crate::sources::Audio;
 use crate::poly::{Patch, SynthBank, SynthInst};
@@ -427,12 +427,63 @@ pub struct PatRt {
     pub home: Option<usize>,
 }
 
+/// A sampler channel's settings, resolved for the audio thread (see `SamplerState`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SmpRt {
+    /// The part that plays, as fractions of the file.
+    pub start: f32,
+    pub end: f32,
+    pub reverse: bool,
+    /// Playback-rate factor of the transpose and fine tune.
+    pub rate: f64,
+    /// Level of "normalise" (1 when off).
+    pub gain: f32,
+    pub gate: bool,
+    /// Seconds.
+    pub attack: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+    pub cut: u8,
+}
+
+impl Default for SmpRt {
+    fn default() -> Self {
+        Self::new(&SamplerState::default(), None)
+    }
+}
+
+impl SmpRt {
+    /// `peak_db`: the file's peak, for "normalise".
+    pub fn new(s: &SamplerState, peak_db: Option<f32>) -> Self {
+        let gain = match peak_db {
+            Some(pk) if s.norm && pk.is_finite() => crate::dsp::db_to_gain(-0.3 - pk),
+            _ => 1.0,
+        };
+        Self {
+            start: s.start.clamp(0.0, 1.0),
+            end: s.end.clamp(0.0, 1.0),
+            reverse: s.reverse,
+            rate: 2f64.powf((s.semi as f64 + s.fine as f64 / 100.0) / 12.0),
+            gain,
+            gate: s.gate,
+            attack: s.attack.max(0.0) / 1000.0,
+            decay: s.decay.max(0.0) / 1000.0,
+            sustain: s.sustain.clamp(0.0, 1.0),
+            release: s.release.max(1.0) / 1000.0,
+            cut: s.cut,
+        }
+    }
+}
+
 /// A Channel Rack channel, resolved for the audio thread.
 pub struct ChanRt {
     pub id: Id,
     pub kind: VoiceKind,
-    /// Sampler channels: the audio (`None` when the file is missing: the channel is silent).
+    /// Sampler channels: the audio (`None` when the file is missing: the channel is silent)
+    /// and how it is played.
     pub sample: Option<Arc<Audio>>,
+    pub smp: SmpRt,
     /// WAVE Keys channels: the piano (`None` until it is loaded: the channel is silent),
     /// the release time in seconds and the velocity → level amount 0..1.
     pub keys: Option<Arc<crate::keys::KeysBank>>,

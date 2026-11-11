@@ -249,7 +249,7 @@ pub fn schema() -> Value {
     json!({
         "automation": "an automation plays through a clip of kind `auto` whose `ref` is the automation id; points t = beats from the automation start, v = 0..1 normalised (log params normalised logarithmically)",
         "units": "time in beats (quarter notes); pattern len in beats (4 = 1 bar, derived from the notes, at least minLen), note step/len in sixteenths, note v (velocity) 0..1, swing 0..1; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
-        "patterns": "channels are global (Channel Rack rows, `wave channels`); a pattern note plays channel `ch`; p = MIDI key (absent = the channel's root: 60 for samplers, 36 for the bass); swing delays notes on odd 16ths by swing × ½ step; the pattern length is derived: the end of the last note rounded up to a bar, at least `minLen` beats (a `len` you send is ignored); when it changes, clips that show exactly one whole pass (offset 0) follow. Easier: `wave pattern --id N --ch C --steps \"x...x...x...x...\"`",
+        "patterns": "channels are global (Channel Rack rows, `wave channels`); a pattern note plays channel `ch`; p = MIDI key (absent = the channel's root, the key at which a sampler plays its file unpitched); swing delays notes on odd 16ths by swing × ½ step; the pattern length is derived: the end of the last note rounded up to a bar, at least `minLen` beats (a `len` you send is ignored); when it changes, clips that show exactly one whole pass (offset 0) follow. Easier: `wave pattern --id N --ch C --steps \"x...x...x...x...\"`",
         "ids": "take new ids from context.nextId and count up",
         "ops": {
             "putClips": {"clips": [{"id": 0, "track": 0, "start": 0, "len": 4, "offset": 0, "kind": "pat|audio|auto|comp", "ref": "pattern, source, automation or comp id", "muted": false, "gain": 0, "fadeIn": 0, "fadeOut": 0, "pan": 0, "norm": false, "rev": false}]},
@@ -261,7 +261,7 @@ pub fn schema() -> Value {
             "removeFx": {"fxId": 0},
             "moveFx": {"fxId": 0, "to": 0},
             "putPattern": {"pattern": {"id": 0, "name": "", "color": "#4f8ef7", "minLen": 4, "swing": 0, "notes": [{"ch": "channel id", "step": 0, "len": 1, "p": 36, "v": 1}]}},
-            "putChannel": {"channel": {"id": 0, "name": "Kick", "color": "#4f8ef7", "kind": "inst|sample", "inst": "kick|clap|hat|bass (kind inst)", "source": "source id (kind sample)", "vol": 0.7937, "pan": 0, "mute": false, "solo": false, "insert": "insert id or null (= the clip's track)", "root": 60}, "index": null},
+            "putChannel": {"channel": {"id": 0, "name": "Kick", "color": "#4f8ef7", "kind": "sample|synth|keys", "source": "source id (kind sample)", "sampler": "kind sample, optional: {start, end (0..1 of the file), reverse, norm, semi, fine, gate (false = one-shot), attack, decay, release (ms), sustain (0..1), cut (0 = none, 1..8)}", "vol": 0.7937, "pan": 0, "mute": false, "solo": false, "insert": "insert id or null (= the clip's track)", "root": 60}, "index": null},
             "removeChannel": {"id": 0},
             "removePattern": {"id": 0},
             "putSource": {"source": "rename/recolour an existing source"},
@@ -297,8 +297,7 @@ fn channel_json(p: &wave_engine::Project, c: &wave_engine::Channel) -> Value {
     use wave_engine::ChannelSrc;
     let g = c.gain();
     let (kind, what) = match &c.src {
-        ChannelSrc::Inst { inst } => ("inst", json!({ "inst": inst })),
-        ChannelSrc::Sample { source } => ("sample", json!({ "source": source, "sourceName": p.sources.iter().find(|s| s.id == *source).map(|s| s.name.clone()) })),
+        ChannelSrc::Sample { source, sampler } => ("sample", json!({ "source": source, "sourceName": p.sources.iter().find(|s| s.id == *source).map(|s| s.name.clone()), "sampler": sampler })),
         ChannelSrc::Synth { synth } => ("synth", json!({ "preset": synth.preset })),
         ChannelSrc::Keys { keys } => ("keys", json!({ "release": keys.release, "dynamics": keys.dynamics })),
     };
@@ -323,26 +322,38 @@ fn find_channel<'a>(p: &'a wave_engine::Project, v: &Value) -> R<&'a wave_engine
     p.channels
         .iter()
         .find(|c| c.name.to_lowercase() == s)
-        .or_else(|| p.channels.iter().find(|c| matches!(&c.src, wave_engine::ChannelSrc::Inst { inst } if inst.name().to_lowercase() == s)))
         .ok_or(format!("no channel named `{s}` (see `wave channels`)"))
 }
 
 pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
-    use wave_engine::{Channel, ChannelSrc, Inst};
+    use wave_engine::{factory, Channel, ChannelSrc};
     let e = &app.engine;
-    let p = e.project();
+    let mut p = e.project();
     let mut ops = vec![];
     let mut added = None;
     if let Some(k) = arg(a, "add").and_then(Value::as_str) {
-        let inst: Inst = serde_json::from_value(json!(k.to_lowercase())).map_err(|_| format!("unknown instrument `{k}` (kick, clap, hat, bass)"))?;
-        let ch = Channel::builtin(p.next_id, inst);
+        // a sampler playing a standard-library sample: its file name (with or without
+        // ".flac"), its display name, or the start of either ("kick" = the first kick)
+        let want = k.to_lowercase();
+        let stem = |f: &factory::FactoryFile| f.file.trim_end_matches(".flac").to_string();
+        let files = factory::files();
+        let f = files
+            .iter()
+            .find(|f| stem(f) == want.trim_end_matches(".flac") || f.name.to_lowercase() == want)
+            .or_else(|| files.iter().find(|f| stem(f).starts_with(&want) || f.name.to_lowercase().starts_with(&want)))
+            .ok_or(format!("no standard-library sample `{k}`: try kick-808, snare-studio, hat-808-open, bass-808, marimba ... (the browser's Library tab lists them all)"))?;
+        // the import adds the project source (or finds the one already there)
+        let (srcs, _) = e.import_audio(&[PathBuf::from(factory::lib_path(f.file))], None).map_err(|x| x.to_string())?;
+        p = e.project();
+        let mut ch = Channel::sampler(p.next_id, f.name, factory::color(f), srcs[0]);
+        ch.root = f.root;
         added = Some(ch.id);
         ops.push(Op::PutChannel { channel: ch, index: None });
     }
     if let Some(src) = arg(a, "sample").and_then(as_index) {
         let s = p.sources.iter().find(|s| s.id == src).ok_or(format!("no source {src} (see `wave context`)"))?;
         let id = p.next_id + ops.len() as u64;
-        let ch = Channel { name: s.name.clone(), color: s.color.clone(), src: ChannelSrc::Sample { source: src }, root: wave_engine::SAMPLE_ROOT, ..Channel::builtin(id, Inst::Kick) };
+        let ch = Channel::sampler(id, &s.name, &s.color, src);
         added = Some(id);
         ops.push(Op::PutChannel { channel: ch, index: None });
     }
@@ -352,14 +363,14 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
         let synth = if name.is_empty() { wave_engine::SynthState::default() } else { wave_engine::poly::preset_state(name).ok_or(format!("no synth preset `{name}` (see `wave catalog`)"))? };
         let bass = wave_engine::poly::presets::all().iter().any(|x| x.name == name && matches!(x.category, "808" | "Bas"));
         let label = if name.is_empty() { "Synth".to_string() } else { name.to_string() };
-        let ch = Channel { name: label, color: "#9b7cf8".into(), src: ChannelSrc::Synth { synth }, root: if bass { 36 } else { 60 }, ..Channel::builtin(id, Inst::Kick) };
+        let ch = Channel { root: if bass { 36 } else { 60 }, ..Channel::new(id, &label, "#9b7cf8", ChannelSrc::Synth { synth }) };
         added = Some(id);
         ops.push(Op::PutChannel { channel: ch, index: None });
     }
     if arg(a, "keys").and_then(Value::as_bool).unwrap_or(false) {
         // a WAVE Keys channel: the sampled grand piano
         let id = p.next_id + ops.len() as u64;
-        let ch = Channel { name: "WAVE Keys".into(), color: "#e0a44a".into(), src: ChannelSrc::Keys { keys: Default::default() }, root: 60, ..Channel::builtin(id, Inst::Kick) };
+        let ch = Channel::new(id, "WAVE Keys", "#e0a44a", ChannelSrc::Keys { keys: Default::default() });
         added = Some(id);
         ops.push(Op::PutChannel { channel: ch, index: None });
     }
@@ -387,7 +398,24 @@ pub fn channels(app: &App, a: &Value, if_revision: Option<u64>) -> R<Value> {
                 "dynamics" => keys.dynamics = (value as f32).clamp(0.0, 100.0),
                 _ => return Err(format!("WAVE Keys has no parameter `{param}` (release in ms, dynamics in %)")),
             },
-            _ => return Err(format!("channel `{}` has no parameters (it is not a synth or WAVE Keys)", c.name)),
+            ChannelSrc::Sample { sampler, .. } => {
+                let (v, on) = (value as f32, value != 0.0);
+                match param {
+                    "start" => sampler.start = v,
+                    "end" => sampler.end = v,
+                    "reverse" => sampler.reverse = on,
+                    "norm" => sampler.norm = on,
+                    "semi" => sampler.semi = value.round().clamp(-128.0, 127.0) as i8,
+                    "fine" => sampler.fine = v,
+                    "gate" => sampler.gate = on,
+                    "attack" => sampler.attack = v,
+                    "decay" => sampler.decay = v,
+                    "sustain" => sampler.sustain = v,
+                    "release" => sampler.release = v,
+                    "cut" => sampler.cut = value.round().clamp(0.0, 255.0) as u8,
+                    _ => return Err(format!("the sampler has no parameter `{param}` (start, end: 0..1; reverse, norm, gate: 0 or 1; semi, fine; attack, decay, release in ms; sustain 0..1; cut 0..8)")),
+                }
+            }
         }
         ops.push(Op::PutChannel { channel: c, index: None });
     }

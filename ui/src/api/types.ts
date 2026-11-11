@@ -59,7 +59,6 @@ export interface Insert {
   fx: Fx[];
 }
 
-export type Inst = 'kick' | 'clap' | 'hat' | 'bass';
 /** MIDI key at which a sampler plays its sample unpitched (C5 in FL Studio's naming, C4 here). */
 export const SAMPLE_ROOT = 60;
 /**
@@ -79,8 +78,26 @@ export const KEYS_RELEASE = { min: 40, max: 3000, def: 350 } as const;
 export const KEYS_DYNAMICS = { min: 0, max: 100, def: 100 } as const;
 /** Where the piano's recordings are: `missing` = not on this computer yet (install library kit `kit`). */
 export interface KeysStatus { state: 'idle' | 'missing' | 'loading' | 'ready' | 'error'; error: string | null; kit: string; installed: boolean }
-/** What a channel plays: a built-in instrument, a one-shot sample of a project source, the built-in synth, or WAVE Keys. */
-export type ChannelSrc = { kind: 'inst'; inst: Inst } | { kind: 'sample'; source: Id } | { kind: 'synth'; synth: SynthState } | { kind: 'keys'; keys: KeysState };
+/**
+ * How a sampler channel plays its sample (crates/engine/src/model.rs `SamplerState`).
+ * `start`/`end`: the part of the file that plays, fractions 0..1. `semi` (−24..24) and `fine`
+ * (cents) transpose on top of the note. `gate` false = one-shot (the note's length is ignored),
+ * true = the sample plays while the note is held, then fades over `release` ms. `attack`/`decay`
+ * in ms, `sustain` 0..1 (0 = the decay is the whole sound). `cut` 0 = none, 1..8 = a cut group:
+ * a new note silences every sounding note of the group's channels.
+ */
+export interface SamplerState {
+  start: number; end: number; reverse: boolean; norm: boolean; semi: number; fine: number;
+  gate: boolean; attack: number; decay: number; sustain: number; release: number; cut: number;
+}
+export const SAMPLER = {
+  semi: { min: -24, max: 24 }, fine: { min: -100, max: 100 },
+  attack: { min: 0, max: 2000 }, decay: { min: 0, max: 5000 }, release: { min: 1, max: 5000, def: 20 },
+  cutGroups: 8, minSpan: 0.001,
+} as const;
+export const samplerDefault = (): SamplerState => ({ start: 0, end: 1, reverse: false, norm: false, semi: 0, fine: 0, gate: false, attack: 0, decay: 0, sustain: 1, release: SAMPLER.release.def, cut: 0 });
+/** What a channel plays: a sample of a project source (the sampler), the built-in synth, or WAVE Keys. */
+export type ChannelSrc = { kind: 'sample'; source: Id; sampler: SamplerState } | { kind: 'synth'; synth: SynthState } | { kind: 'keys'; keys: KeysState };
 /**
  * A Channel Rack row, global to the project (every pattern can have notes for it).
  * `vol` fader position (0.7937 = 0 dB), `pan` −1..1, `insert` null = the clip's track insert,
@@ -92,9 +109,9 @@ export type Channel = {
 } & ChannelSrc;
 /**
  * A pattern note: channel `ch`, `step`/`len` in 16ths, `p` MIDI key (absent = the channel's root),
- * `v` velocity 0..1 (absent = 1). `inst` only in old files / scripts (the engine turns it into `ch`).
+ * `v` velocity 0..1 (absent = 1).
  */
-export interface Note { ch: Id; step: number; len: number; p?: number; v?: number; inst?: Inst }
+export interface Note { ch: Id; step: number; len: number; p?: number; v?: number }
 /** `len` in beats; `swing` 0..1 (absent = 0). Notes at or past `len` are kept but hidden and silent. */
 /**
  * `len` (beats) is derived by the engine: the end of the last note rounded up to a bar, at least
@@ -373,7 +390,8 @@ export interface MidiNoteEvent { note: MidiLastNote; count: number }
 
 export interface Kit { id: string; name: string; description: string; bytes: number; count: number; installed: boolean }
 export interface LibraryList { kits: Kit[]; folders: string[] }
-export interface LibFile { name: string; path: string; group: string }
+/** `root`: the MIDI key at which the file sounds at its own pitch, when the library knows it. */
+export interface LibFile { name: string; path: string; group: string; root?: number }
 export interface LibraryProgress { id: string; done: number; total: number; error?: string }
 
 /** Level stats returned by an offline master bounce. */

@@ -152,6 +152,8 @@ function GeneralSection() {
         <label>{t('d.set.autosave')}</label>
         <Segmented options={AUTOSAVE.map(m => (m ? t('d.set.min', { n: m }) : t('d.set.off')))} value={() => AUTOSAVE.indexOf(prefs().autosaveMin)}
           pick={i => setPref('autosaveMin', AUTOSAVE[i])} title={t('d.set.autosave.tip')} />
+        <label>{t('d.set.demo')}</label>
+        <button class="smallbtn" style={{ 'justify-self': 'start' }} title={t('d.set.demo.tip')} onClick={() => void A.projectNew(true)}>{t('d.set.demo.open')}</button>
       </div>
       <div class="sechd">{t('d.set.sec.edit')}</div>
       <div class="form">

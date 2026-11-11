@@ -221,57 +221,105 @@ pub struct PluginRef {
     pub state: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Inst {
-    Kick,
-    Clap,
-    Hat,
-    Bass,
-}
-
-impl Inst {
-    pub const ALL: [Inst; 4] = [Inst::Kick, Inst::Clap, Inst::Hat, Inst::Bass];
-    pub fn name(self) -> &'static str {
-        match self {
-            Inst::Kick => "Kick",
-            Inst::Clap => "Clap",
-            Inst::Hat => "Hat",
-            Inst::Bass => "Bass",
-        }
-    }
-    /// Key a step of this instrument plays (only the bass is pitched).
-    pub fn default_root(self) -> u8 {
-        match self {
-            Inst::Bass => 36,
-            _ => SAMPLE_ROOT,
-        }
-    }
-    pub fn color(self) -> &'static str {
-        match self {
-            Inst::Kick => "#4f8ef7",
-            Inst::Clap => "#d9678f",
-            Inst::Hat => "#e0a44a",
-            Inst::Bass => "#7c8cf8",
-        }
-    }
-}
-
 /// MIDI key at which a sampler channel plays its sample unpitched (C5 in FL's naming).
 pub const SAMPLE_ROOT: u8 = 60;
+
+/// Standard-library files of a new project's channels, and the channel names.
+pub const STARTER_KIT: [(&str, &str); 4] = [("kick-808-short.flac", "Kick"), ("clap-808.flac", "Clap"), ("hat-808-closed.flac", "Hat"), ("snare-808.flac", "Snare")];
 
 /// What a channel plays.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ChannelSrc {
-    /// A built-in instrument.
-    Inst { inst: Inst },
-    /// A one-shot sampler playing a project source, pitched by the note (`root` = original pitch).
-    Sample { source: Id },
+    /// The sampler: plays a project source, pitched by the note (`root` = original pitch).
+    Sample {
+        source: Id,
+        #[serde(default)]
+        sampler: SamplerState,
+    },
     /// The built-in polyphonic synthesizer (see `crate::poly`).
     Synth { #[serde(default)] synth: SynthState },
     /// WAVE Keys: the sampled grand piano (see `crate::keys`).
     Keys { #[serde(default)] keys: KeysState },
+}
+
+/// How a sampler channel plays its sample (FL Studio's Sampler, Ableton's Simpler).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SamplerState {
+    /// The part of the file that plays, as fractions of its length (`start` < `end`).
+    #[serde(default)]
+    pub start: f32,
+    #[serde(default = "one")]
+    pub end: f32,
+    /// Plays the part backwards.
+    #[serde(default)]
+    pub reverse: bool,
+    /// Brings the file's peak to −0.3 dBFS.
+    #[serde(default)]
+    pub norm: bool,
+    /// Transpose in semitones (−24..24) and fine tune in cents (−100..100), on top of the note.
+    #[serde(default)]
+    pub semi: i8,
+    #[serde(default)]
+    pub fine: f32,
+    /// `false` = one-shot: a note plays the sample to its end, whatever its length (drums).
+    /// `true` = gate: the sample plays while the note is held, then fades over `release`.
+    #[serde(default)]
+    pub gate: bool,
+    /// Volume envelope: `attack` and `decay` in ms, `sustain` 0..1 (the level after the
+    /// decay; 0 makes the decay the whole sound), `release` in ms (gate mode).
+    #[serde(default)]
+    pub attack: f32,
+    #[serde(default)]
+    pub decay: f32,
+    #[serde(default = "one")]
+    pub sustain: f32,
+    #[serde(default = "sampler_release")]
+    pub release: f32,
+    /// Cut group 1..8 (0 = none): a new note silences every sounding note of the channels in
+    /// the same group, itself included. A closed hat that cuts the open one.
+    #[serde(default)]
+    pub cut: u8,
+}
+
+fn sampler_release() -> f32 {
+    SamplerState::RELEASE_DEFAULT
+}
+
+impl SamplerState {
+    pub const SEMI: (i8, i8) = (-24, 24);
+    pub const FINE: (f32, f32) = (-100.0, 100.0);
+    pub const ATTACK_MS: (f32, f32) = (0.0, 2000.0);
+    pub const DECAY_MS: (f32, f32) = (0.0, 5000.0);
+    pub const RELEASE_MS: (f32, f32) = (1.0, 5000.0);
+    pub const RELEASE_DEFAULT: f32 = 20.0;
+    pub const CUT_GROUPS: u8 = 8;
+    /// The shortest part that may be selected, as a fraction of the file.
+    pub const MIN_SPAN: f32 = 0.001;
+
+    /// Why these settings cannot be used, if they cannot.
+    pub fn check(&self) -> Result<(), String> {
+        let within = |v: f32, (lo, hi): (f32, f32)| v.is_finite() && (lo..=hi).contains(&v);
+        if !(within(self.start, (0.0, 1.0)) && within(self.end, (0.0, 1.0)) && self.end - self.start >= Self::MIN_SPAN - 1e-6) {
+            return Err("sampler start and end are fractions 0..1 of the file, start before end".into());
+        }
+        if !(Self::SEMI.0..=Self::SEMI.1).contains(&self.semi) || !within(self.fine, Self::FINE) {
+            return Err("sampler pitch is -24..24 semitones and -100..100 cents".into());
+        }
+        if !within(self.attack, Self::ATTACK_MS) || !within(self.decay, Self::DECAY_MS) || !within(self.sustain, (0.0, 1.0)) || !within(self.release, Self::RELEASE_MS) {
+            return Err("sampler envelope: attack 0..2000 ms, decay 0..5000 ms, sustain 0..1, release 1..5000 ms".into());
+        }
+        if self.cut > Self::CUT_GROUPS {
+            return Err("sampler cut group is 0 (none) or 1..8".into());
+        }
+        Ok(())
+    }
+}
+
+impl Default for SamplerState {
+    fn default() -> Self {
+        Self { start: 0.0, end: 1.0, reverse: false, norm: false, semi: 0, fine: 0.0, gate: false, attack: 0.0, decay: 0.0, sustain: 1.0, release: Self::RELEASE_DEFAULT, cut: 0 }
+    }
 }
 
 /// A WAVE Keys channel's settings.
@@ -347,27 +395,31 @@ fn sample_root() -> u8 {
 }
 
 impl Channel {
-    pub fn builtin(id: Id, inst: Inst) -> Self {
-        Self { id, name: inst.name().into(), color: inst.color().into(), src: ChannelSrc::Inst { inst }, vol: VOL_UNITY, pan: 0.0, mute: false, solo: false, insert: None, root: inst.default_root() }
+    /// A channel at unity, centred, following its clip's track, rooted at C5.
+    pub fn new(id: Id, name: &str, color: &str, src: ChannelSrc) -> Self {
+        Self { id, name: name.into(), color: color.into(), src, vol: VOL_UNITY, pan: 0.0, mute: false, solo: false, insert: None, root: SAMPLE_ROOT }
+    }
+    /// A sampler channel playing `source` with the default settings.
+    pub fn sampler(id: Id, name: &str, color: &str, source: Id) -> Self {
+        Self::new(id, name, color, ChannelSrc::Sample { source, sampler: SamplerState::default() })
+    }
+    /// The source a sampler channel plays.
+    pub fn sample_source(&self) -> Option<Id> {
+        match self.src {
+            ChannelSrc::Sample { source, .. } => Some(source),
+            _ => None,
+        }
     }
     /// Channel gain: the fader curve normalised so the unity position is exactly 1.
     pub fn gain(&self) -> f32 {
         fader_gain(self.vol) / fader_gain(VOL_UNITY)
     }
-    /// True for channels whose notes have a meaningful pitch (piano roll).
-    pub fn pitched(&self) -> bool {
-        matches!(self.src, ChannelSrc::Sample { .. } | ChannelSrc::Synth { .. } | ChannelSrc::Keys { .. } | ChannelSrc::Inst { inst: Inst::Bass })
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Note {
-    /// Channel id. `0` only in old files, which say `inst` instead (see [`Project::migrate`]).
-    #[serde(default)]
+    /// Channel id.
     pub ch: Id,
-    /// Legacy (before channels): the built-in instrument. Read, never written.
-    #[serde(default, skip_serializing)]
-    pub inst: Option<Inst>,
     /// Start in steps (1/16) from the pattern start.
     pub step: f32,
     /// Length in steps.
@@ -386,7 +438,7 @@ fn is_one(v: &f32) -> bool {
 
 impl Note {
     pub fn new(ch: Id, step: f32, len: f32, p: Option<u8>) -> Self {
-        Self { ch, inst: None, step, len, p, v: 1.0 }
+        Self { ch, step, len, p, v: 1.0 }
     }
 }
 
@@ -796,62 +848,42 @@ impl Project {
         self.channels.iter().find(|c| c.id == id)
     }
 
-    /// The channel that plays a legacy `inst` note: the first built-in channel of that
-    /// instrument, created (appended) when there is none.
-    pub fn channel_for_inst(&mut self, inst: Inst) -> Id {
-        if let Some(c) = self.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst }) {
-            return c.id;
+    /// The sampler channel that plays a standard-library file: the first one there is, or a
+    /// new one (appended, named and coloured after the file, rooted at the file's pitch).
+    pub fn factory_channel(&mut self, file: &str) -> Option<Id> {
+        let f = crate::factory::file(file)?;
+        let source = crate::factory::source(self, file)?;
+        if let Some(c) = self.channels.iter().find(|c| c.sample_source() == Some(source)) {
+            return Some(c.id);
         }
         let id = self.alloc_id();
-        self.channels.push(Channel::builtin(id, inst));
-        id
+        let mut ch = Channel::sampler(id, f.name, crate::factory::color(f), source);
+        ch.root = f.root;
+        self.channels.push(ch);
+        Some(id)
     }
 
-    /// Gives `inst`-only notes (files and CLI scripts from before channels) their channel.
-    pub fn resolve_note_channels(&mut self, notes: &mut [Note]) {
-        for n in notes.iter_mut() {
-            if n.ch == 0 {
-                if let Some(inst) = n.inst {
-                    n.ch = self.channel_for_inst(inst);
-                }
+    /// The kit a new project starts with, as in FL Studio's template: four samplers from the
+    /// standard library. Returns their ids (kick, clap, hat, snare).
+    pub fn add_starter_kit(&mut self) -> [Id; 4] {
+        STARTER_KIT.map(|(file, name)| {
+            let id = self.factory_channel(file).expect("the starter kit is in the standard library");
+            if let Some(c) = self.channels.iter_mut().find(|c| c.id == id) {
+                c.name = name.into();
             }
-            n.inst = None;
-        }
+            id
+        })
     }
 
-    /// Brings a project from an older file up to date. Old notes said `inst`; they get a
-    /// built-in channel each (one per instrument, created in Kick, Clap, Hat, Bass order,
-    /// unity volume, centre, routed like before: through the clip's track). A project
-    /// without channels gets the four built-ins so the Channel Rack is never empty.
+    /// Brings a project up to date and makes it consistent: pattern lengths are derived, a
+    /// project without channels gets the starter kit so the Channel Rack is never empty.
     /// Idempotent; a project that is already current is unchanged.
     pub fn migrate(&mut self) {
-        let mut used: Vec<Inst> = vec![];
-        for pt in &self.patterns {
-            for n in &pt.notes {
-                if n.ch == 0 {
-                    if let Some(i) = n.inst {
-                        if !used.contains(&i) {
-                            used.push(i);
-                        }
-                    }
-                }
-            }
-        }
-        for inst in Inst::ALL {
-            if used.contains(&inst) {
-                self.channel_for_inst(inst);
-            }
-        }
-        let mut pats = std::mem::take(&mut self.patterns);
-        for pt in pats.iter_mut() {
-            self.resolve_note_channels(&mut pt.notes);
+        for pt in self.patterns.iter_mut() {
             pt.fit_len();
         }
-        self.patterns = pats;
         if self.channels.is_empty() {
-            for inst in Inst::ALL {
-                self.channel_for_inst(inst);
-            }
+            self.add_starter_kit();
         }
         // saturator parameters from before the character saturator
         for ins in &mut self.inserts {
@@ -862,10 +894,93 @@ impl Project {
             }
         }
         // ids the file used must stay taken
-        let max = self.channels.iter().map(|c| c.id).max().unwrap_or(0);
+        let max = self.channels.iter().map(|c| c.id).chain(self.sources.iter().map(|s| s.id)).max().unwrap_or(0);
         if max >= self.next_id {
             self.next_id = max + 1;
         }
+    }
+
+    /// Reads a project from a file's JSON. Files from before the standard library named
+    /// built-in synthesised drums (`"kind":"inst"` channels, or `inst` on notes before there
+    /// were channels); those now play the closest standard-library sample.
+    pub fn from_json(mut v: serde_json::Value) -> Result<Self, serde_json::Error> {
+        use serde_json::{json, Value};
+        const LEGACY: [(&str, &str); 4] = [("kick", "kick-808-short.flac"), ("clap", "clap-808.flac"), ("hat", "hat-808-closed.flac"), ("bass", "bass-808-short.flac")];
+        let file_of = |inst: &Value| LEGACY.iter().find(|(k, _)| inst.as_str() == Some(k)).map(|(_, f)| *f);
+        // (channel index or None for "notes of this instrument", file)
+        let mut chans: Vec<(usize, &str)> = vec![];
+        let mut loose: Vec<&str> = vec![];
+        if let Some(list) = v.get("channels").and_then(Value::as_array) {
+            for (i, c) in list.iter().enumerate() {
+                if c.get("kind").and_then(Value::as_str) == Some("inst") {
+                    chans.push((i, file_of(&c["inst"]).unwrap_or(LEGACY[0].1)));
+                }
+            }
+        }
+        for pt in v.get("patterns").and_then(Value::as_array).into_iter().flatten() {
+            for n in pt.get("notes").and_then(Value::as_array).into_iter().flatten() {
+                if n.get("ch").is_none() {
+                    if let Some(f) = n.get("inst").and_then(file_of) {
+                        if !loose.contains(&f) {
+                            loose.push(f);
+                        }
+                    }
+                }
+            }
+        }
+        if chans.is_empty() && loose.is_empty() {
+            return serde_json::from_value(v);
+        }
+        // park the legacy channels as samplers of source 0, read, then give them their sample
+        for (i, _) in &chans {
+            let c = &mut v["channels"][*i];
+            c["kind"] = json!("sample");
+            c["source"] = json!(0);
+        }
+        for pt in v.get_mut("patterns").and_then(Value::as_array_mut).into_iter().flatten() {
+            for n in pt.get_mut("notes").and_then(Value::as_array_mut).into_iter().flatten() {
+                if n.get("ch").is_none() {
+                    // a negative-free marker: 1-based index into `loose`, resolved below
+                    let k = n.get("inst").and_then(file_of).and_then(|f| loose.iter().position(|x| *x == f));
+                    n["ch"] = json!(k.map(|k| k as u64 + 1).unwrap_or(0));
+                    n["legacy"] = json!(true);
+                }
+            }
+        }
+        let legacy_notes: Vec<Vec<bool>> = v
+            .get("patterns")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .map(|pt| pt.get("notes").and_then(Value::as_array).into_iter().flatten().map(|n| n.get("legacy").is_some()).collect())
+            .collect();
+        let mut p: Project = serde_json::from_value(v)?;
+        let top = p.channels.iter().map(|c| c.id).chain(p.sources.iter().map(|s| s.id)).max().unwrap_or(0);
+        p.next_id = p.next_id.max(top + 1);
+        for (i, file) in chans {
+            let (source, f) = (crate::factory::source(&mut p, file), crate::factory::file(file));
+            if let (Some(source), Some(f), Some(c)) = (source, f, p.channels.get_mut(i)) {
+                // the synthesised bass held its note; the drums rang out
+                let sampler = SamplerState { gate: file == LEGACY[3].1, ..Default::default() };
+                c.src = ChannelSrc::Sample { source, sampler };
+                c.root = f.root;
+            }
+        }
+        let ids: Vec<Id> = loose.iter().map(|f| p.factory_channel(f).unwrap_or(0)).collect();
+        for (id, file) in ids.iter().zip(&loose) {
+            if let Some(ChannelSrc::Sample { sampler, .. }) = p.channels.iter_mut().find(|c| c.id == *id).map(|c| &mut c.src) {
+                sampler.gate = *file == LEGACY[3].1;
+            }
+        }
+        for (pt, flags) in p.patterns.iter_mut().zip(legacy_notes) {
+            for (n, legacy) in pt.notes.iter_mut().zip(flags) {
+                if legacy {
+                    n.ch = (n.ch as usize).checked_sub(1).and_then(|k| ids.get(k)).copied().unwrap_or(0);
+                }
+            }
+            pt.notes.retain(|n| n.ch != 0);
+        }
+        Ok(p)
     }
 
     pub fn comp(&self, id: Id) -> Option<&Comp> {
@@ -888,9 +1003,14 @@ impl Project {
         (end / 4.0).ceil() * 4.0
     }
 
-    /// A fresh project: the demo song of the prototype minus the audio loops.
+    /// The demo song (see [`crate::demo::demo_project`]).
     pub fn demo() -> Self {
         crate::demo::demo_project()
+    }
+
+    /// The small fixed song tests and benchmarks build on.
+    pub fn sketch() -> Self {
+        crate::demo::sketch_project()
     }
 
     pub fn empty() -> Self {

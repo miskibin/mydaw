@@ -21,7 +21,7 @@ stdout is only JSON (`--pretty` to indent); messages go to stderr. Exit codes:
 | --- | --- |
 | `wave status` | transport, revision, file, audio device, CLI path |
 | `wave context` | summary: tracks (index, insert, volume, clip count), inserts with effects and parameters, patterns, channels, sources, `nextId` |
-| `wave channels` | the Channel Rack: id, name, `inst`/`sample` (+ source)/`synth` (+ preset), volume, pan, mute/solo, mixer insert (`null` = the clip's track), root key, note count |
+| `wave channels` | the Channel Rack: id, name, `sample` (+ source and sampler settings)/`synth` (+ preset)/`keys`, volume, pan, mute/solo, mixer insert (`null` = the clip's track), root key, note count |
 | `wave pattern [--id N]` | a pattern as one step string per channel (`x` full velocity, `1`–`9` = 10–90 %, `.` empty, a space every beat) plus `notes` for melodic rows, bars, minimum bars, swing % |
 | `wave context --full` | the whole project JSON (every clip, note, parameter) |
 | `wave catalog` | effect types, parameter ids/ranges/units, presets, command list |
@@ -54,8 +54,7 @@ wave undo
 ]
 ```
 
-Notes still written the old way (`{"inst": "hat", …}` instead of `"ch"`) are accepted:
-they go to that instrument's built-in channel (created if missing).
+Every note names its channel with `ch` (see `wave channels`).
 
 Units: playlist time in **beats**; pattern `step`/`len` in **sixteenths**;
 fades in seconds; track/insert `vol` is a fader position (0.7937 = 0 dB);
@@ -71,7 +70,8 @@ step). Each edit is one undo step.
 
 ```sh
 wave channels                                     # ids, kinds, routing
-wave channels --add clap                          # a built-in channel (kick, clap, hat, bass)
+wave channels --add snare-studio                  # a sampler of a standard-library sample (file or display name, or the start of one: "kick")
+wave channels --ch "Studio Snare" --param cut --value 1   # one sampler setting: start, end, reverse, norm, semi, fine, gate, attack, decay, sustain, release, cut
 wave channels --sample 1001                       # a sampler channel playing source 1001
 wave channels --synth "808 Czysty"                # a synth channel with a factory preset ("" = blank patch)
 wave channels --ch 1005 --preset "Pad Ciepły"     # load a synth preset (ids/names in `wave catalog` → effects.synth)
