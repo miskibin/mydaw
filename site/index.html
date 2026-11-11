@@ -116,6 +116,9 @@
   img.journey { margin-top: 32px; width: 100%; border-radius: 12px; }
   ul.story { max-width: 820px; margin-top: 28px; }
   h3.group { margin: 44px 0 0; color: var(--fg-hi); font-size: 19px; }
+  .video { position: relative; aspect-ratio: 16 / 9; margin-top: 32px; border: 1px solid var(--line2); border-radius: 12px; overflow: hidden; background: #000; box-shadow: 0 30px 90px rgba(0, 0, 0, .5); }
+  .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  .video-link { margin: 12px 0 0; font-size: 13.5px; color: var(--fg-dim); }
   @media (max-width: 820px) { .player { grid-template-columns: 1fr; } }
   @media (max-width: 820px) { .split { grid-template-columns: 1fr; } nav .links a.opt { display: none; } header.hero { padding-top: 56px; } section { padding-top: 72px; } }
 </style>
@@ -126,6 +129,7 @@
   <div class="wrap">
     <a class="brand" href="#top"><img src="img/icon.png" alt="">WAVE</a>
     <div class="links">
+      <a class="opt" href="#watch">Watch</a>
       <a class="opt" href="#what">What it is</a>
       <a class="opt" href="#listen">Listen</a>
       <a class="opt" href="#features">Features</a>
@@ -151,6 +155,17 @@
   </div>
   <div class="shot"><img src="img/hero.png" alt="WAVE: playlist with pattern and audio clips, automation, and the mixer" width="1920" height="1032"></div>
 </header>
+
+<section id="watch">
+  <div class="wrap">
+    <div class="kicker">Watch</div>
+    <h2>WAVE on video</h2>
+    <div class="video">
+      <iframe src="https://www.youtube-nocookie.com/embed/wtuHDyIQpYk" title="WAVE video on YouTube" loading="lazy" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>
+    </div>
+    <p class="video-link"><a href="https://www.youtube.com/watch?v=wtuHDyIQpYk" rel="noopener">Open on YouTube</a></p>
+  </div>
+</section>
 
 <section id="what">
   <div class="wrap">
