@@ -21,6 +21,7 @@ import { deessDb, DeessViz, deessFx, deessGeom, deessXf, deessY } from './fx/dee
 import { DenoiseViz } from './fx/denoise';
 import { DynViz } from './fx/dyn';
 import { EqViz } from './fx/eq';
+import { EqStrips } from './fx/eqStrips';
 import { EqPanel, eqHover, eqLeave, eqPointerDown, eqWheel } from './fx/eqEdit';
 import { fetModes, FetViz } from './fx/fet';
 import { defaultView, ReverbViz, views3d } from './fx/reverb';
@@ -112,7 +113,13 @@ export function FxWindow(props: { pw: PlugWin; z: number }) {
               <button class="closebtn" title={t('c.fx.close')} onClick={() => A.closePlug(fx().id)}>×</button>
             </div>
             <Show when={!isVst()} fallback={<Vst3Body fx={fx()} />}>
-              <VizCanvas fxId={props.pw.fxId} pw={props.pw} height={VIZ_H[fx().type] ?? 190} />
+              <Show when={fx().type === 'eq'} fallback={<VizCanvas fxId={props.pw.fxId} pw={props.pw} height={VIZ_H[fx().type] ?? 190} />}>
+                {/* EQ: band bank beside the graph, like FL Parametric EQ 2 */}
+                <div class="eqmain">
+                  <div class="eqgraph"><VizCanvas fxId={props.pw.fxId} pw={props.pw} height={VIZ_H.eq!} /></div>
+                  <EqStrips fx={fx()} />
+                </div>
+              </Show>
               <Body fx={fx()} />
             </Show>
           </div>
@@ -298,7 +305,7 @@ function LayoutItem(props: { fx: Fx; it: Item }) {
 }
 
 /** Sections of an effect's controls; params the layout doesn't place go to an "Other" section. */
-function Sections(props: { fx: Fx; slim?: boolean }) {
+function Sections(props: { fx: Fx }) {
   const secs = () => {
     const lay = LAYOUT[props.fx.type];
     const defs = paramDefs(S.catalog, props.fx.type);
@@ -320,7 +327,7 @@ function Sections(props: { fx: Fx; slim?: boolean }) {
   const adv = () => !!advOpen()[props.fx.id];
   const shown = () => secs().filter(s => !s.adv || adv());
   return (
-    <div class="fxsecs" classList={{ slim: !!props.slim }} style={{ '--fxc': FXMETA[props.fx.type].color }}>
+    <div class="fxsecs" style={{ '--fxc': FXMETA[props.fx.type].color }}>
       <For each={shown()}>
         {(sec, i) => (
           <>
@@ -348,7 +355,7 @@ function Body(props: { fx: Fx }): JSX.Element {
     <>
       <Show when={t() === 'eq'}><EqPanel fx={props.fx} /></Show>
       <Show when={t() === 'tune'}><TuneHeader fx={props.fx} /></Show>
-      <Sections fx={props.fx} slim={t() === 'eq'} />
+      <Show when={t() !== 'eq'}><Sections fx={props.fx} /></Show>
     </>
   );
 }

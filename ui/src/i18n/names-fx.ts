@@ -36,6 +36,8 @@ export const names: Record<string, string> = {
   'Air / połysk': 'Air / shine',
   'Pasmo — wytnij dół i górę': 'Band — cut lows and highs',
   'Telefon / lo-fi': 'Telephone / lo-fi',
+  'Wytnij < 20 Hz i > 18 kHz': 'Cut < 20 Hz and > 18 kHz',
+  'Low cut 150 Hz (wokal)': 'Low cut 150 Hz (vocal)',
   // compressor
   'Wokal — wyrównanie': 'Vocal — leveling',
   'Delikatny': 'Gentle',

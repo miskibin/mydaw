@@ -368,21 +368,31 @@ select option { background: var(--bg4); color: var(--fg); }
 .mixctl .lab { font: 600 9px var(--sans); color: var(--fg4); letter-spacing: .06em; }
 .mixctl .v { width: 30px; font: 500 10px var(--mono); color: var(--fg-hi); text-align: right; }
 .vizcv { background: var(--viz); }
-.eqpanel { border-top: 1px solid var(--bg0); }
-.bchips { display: flex; align-items: center; gap: 3px; padding: 6px 10px 0; flex-wrap: wrap; }
-.bchip { width: 22px; height: 18px; padding: 0; border: 0; border-radius: 3px; background: color-mix(in srgb, var(--c) 22%, var(--bg1)); color: var(--c); font: 700 9px var(--mono); cursor: pointer; }
-.bchip.off { background: var(--bg1); color: var(--fg5); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 45%, transparent); }
-.bchip.sel { background: var(--c); color: var(--on-band); }
-.bchip.add { background: var(--bg1); color: var(--fg3); box-shadow: inset 0 0 0 1px var(--line2); font-size: 12px; }
-.bchip.add:hover { color: var(--fg-hi); }
-.bchip:disabled { opacity: .4; cursor: default; }
-.bcount { margin-left: 4px; font: 500 9px var(--mono); color: var(--fg5); }
+.eqmain { display: flex; height: 300px; background: var(--viz); }
+.eqgraph { flex: 1; min-width: 0; }
+.eqbank { flex: none; display: flex; gap: 4px; padding: 8px 10px 8px 6px; border-left: 1px solid var(--bg0); max-width: 290px; }
+.eqout { margin-right: 6px; }
+.eqout .outlab { height: 18px; display: flex; align-items: center; font: 600 8px var(--sans); color: var(--fg5); letter-spacing: .06em; }
+.eqout .outsp { height: 48px; flex: none; }
+.eqrowlab { order: -1; display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; padding-bottom: 1px; font: 600 8px var(--sans); color: var(--fg5); letter-spacing: .06em; }
+.eqrowlab span { height: 22px; display: flex; align-items: center; }
+.eqstriprow { min-width: 0; display: flex; gap: 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.eqstrip { flex: none; width: 22px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.eqshape { flex: none; width: 22px; height: 18px; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 3px; background: var(--c); color: var(--on-band); cursor: ns-resize; touch-action: none; }
+.eqstrip.off .eqshape { background: transparent; color: var(--fg5); box-shadow: inset 0 0 0 1px var(--line2); }
+.eqstrip.picked .eqshape { box-shadow: 0 0 0 1.5px var(--fg-hi); }
+.eqfader { position: relative; flex: 1; width: 22px; cursor: ns-resize; touch-action: none; }
+.eqfader .fslot { position: absolute; left: 9px; top: 4px; bottom: 4px; width: 4px; background: var(--line); border-radius: 2px; }
+.eqfader .fslot::after { content: ""; position: absolute; left: -4px; right: -4px; top: 50%; height: 1px; background: var(--fg6); }
+.eqfader .fill { position: absolute; left: 0; right: 0; background: var(--c); border-radius: 2px; opacity: .8; }
+.eqfader .fcap { position: absolute; left: 3px; width: 16px; height: 8px; border-radius: 2px; background: var(--fader-cap); box-shadow: 0 1px 3px var(--shadow), inset 0 0 0 1px var(--line2); }
+.eqfader.dis { cursor: default; }
+.eqfader.dis .fcap, .eqstrip.off .fcap { opacity: .35; }
+.eqfader.auto .fcap { box-shadow: 0 1px 3px var(--shadow), inset 0 0 0 1px var(--amber); }
+.eqpanel.bedit { min-height: 0; padding: 6px 10px; align-items: center; border-top: 1px solid var(--bg0); }
+.eqpanel .dyntag { font: 600 10px var(--sans); color: var(--fg3); }
 .bedit { display: flex; align-items: flex-end; gap: 8px; padding: 8px 10px 10px; min-height: 52px; flex-wrap: wrap; }
-.bedit.empty { align-items: center; font: 11px var(--sans); color: var(--fg5); }
-.bedit .led { width: 12px; height: 12px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; align-self: center; flex: none; }
 .bedit .bnum { font: 700 12px var(--mono); align-self: center; width: 18px; }
-.bedit .shape { height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg1); color: var(--fg-hi); font: 500 11px var(--sans); cursor: pointer; min-width: 92px; justify-content: space-between; }
-.bedit .shape:hover { border-color: var(--line3); }
 .chiprow { padding: 3px 8px 4px; display: flex; flex-direction: column; gap: 3px; }
 .chiprow .cl { font: 600 9px var(--sans); color: var(--fg5); letter-spacing: .08em; text-transform: uppercase; }
 .chiprow .chips { display: flex; gap: 2px; }
@@ -571,7 +581,6 @@ select option { background: var(--bg4); color: var(--fg); }
 
 /* ---- shared effect controls: sections + knob size tiers (FxWindow LAYOUT) */
 .fxsecs { display: flex; align-items: stretch; gap: 16px; padding: 10px 14px 12px; border-top: 1px solid var(--bg0); flex-wrap: wrap; }
-.fxsecs.slim { padding: 8px 14px; }
 .fxsecs > .hint { align-self: flex-end; max-width: 240px; line-height: 1.35; }
 .fxsec { display: flex; flex-direction: column; gap: 8px; }
 .fxsec-h { display: flex; align-items: center; gap: 6px; font: 600 9px var(--sans); letter-spacing: .1em; text-transform: uppercase; color: var(--fg4); white-space: nowrap; }
@@ -733,7 +742,6 @@ select option { background: var(--bg4); color: var(--fg); }
 @media (max-width: 1180px) { .toolbar .tapbtn, .toolbar .monbtn { display: none; } .toolbar .clockbox .tag9 { display: none; } }
 
 /* EQ quick low/high cut knobs */
-.eqcuts { display: flex; gap: 22px; padding: 8px 4px 10px; border-bottom: 1px solid var(--line); margin-bottom: 8px; }
 
 /* mixer: pan + stereo width side by side */
 .strip .knobrow { display: flex; gap: 6px; justify-content: center; }

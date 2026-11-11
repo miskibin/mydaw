@@ -82,7 +82,7 @@ export function Knob(p: KnobProps) {
 }
 
 /** 22 px knob for dense rows (mixer slots, window headers): drag ↕, wheel, 2× click = default, right-click = menu. */
-export function MiniKnob(p: { t: () => number; key: string; title: string; onStart: () => void; onChange: (t: number) => void; onEnd: () => void; onReset: () => void; onWheel: (t: number) => void; onMenu?: (x: number, y: number) => void; automated?: () => boolean }) {
+export function MiniKnob(p: { t: () => number; key: string; title: string; color?: string; onStart: () => void; onChange: (t: number) => void; onEnd: () => void; onReset: () => void; onWheel: (t: number) => void; onMenu?: (x: number, y: number) => void; automated?: () => boolean }) {
   const R = 8, L = 2 * Math.PI * R * 0.75, C = 2 * Math.PI * R;
   const down = (e: PointerEvent) => {
     e.stopPropagation();
@@ -104,7 +104,7 @@ export function MiniKnob(p: { t: () => number; key: string; title: string; onSta
     <span class="miniknob" classList={{ auto: !!p.automated?.() }} title={p.title} onPointerDown={down} onWheel={wheel} onContextMenu={e => e.preventDefault()} onClick={e => e.stopPropagation()}>
       <svg width="22" height="22" viewBox="0 0 22 22">
         <circle cx="11" cy="11" r={R} fill="none" transform="rotate(135 11 11)" style={{ stroke: 'var(--knob-track)', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': `${L}px ${C}px` }} />
-        <circle cx="11" cy="11" r={R} fill="none" transform="rotate(135 11 11)" style={{ stroke: 'var(--blue)', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': `${t() * L}px ${C}px` }} />
+        <circle cx="11" cy="11" r={R} fill="none" transform="rotate(135 11 11)" style={{ stroke: p.color ?? 'var(--blue)', 'stroke-width': '2.5px', 'stroke-linecap': 'round', 'stroke-dasharray': `${t() * L}px ${C}px` }} />
         <line x1="11" y1="11" x2="11" y2="5" style={{ stroke: 'var(--fg-hi)', 'stroke-width': '1.6px', 'stroke-linecap': 'round' }} transform={`rotate(${-135 + t() * 270} 11 11)`} />
       </svg>
     </span>

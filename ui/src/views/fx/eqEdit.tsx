@@ -1,24 +1,22 @@
 // EQ editing: canvas gestures (drag handles, wheel = Q, double-click = new bell, drag from a
 // spectral peak = new bell there, right-click = band menu), and the compact panel for the
-// selected band (shape, freq, gain, Q, slope, placement, dynamic).
-import { For, Show } from 'solid-js';
+// selected band (shape, freq, gain, Q, slope, placement, dynamic). The per-band strips live in eqStrips.tsx.
+import { Show } from 'solid-js';
 import { MAX_BANDS, type BandType, type EqBand, type Fx, type Id, type Op, type Placement } from '../../api/types';
-import { canBeDynamic, fx2x, handleDb, hasGain, isCut, newBand, placeOf, slopeOf, x2f } from '../../lib/eq';
+import { BTYPE_LABEL, BTYPE_ORDER, canBeDynamic, fx2x, handleShown, shapePatch, handleDb, hasGain, isCut, newBand, placeOf, slopeOf, x2f } from '../../lib/eq';
 import { clamp, dbText, hzText } from '../../lib/format';
 import { t as tr } from '../../lib/i18n';
 import { hzToMidi, noteName } from '../../lib/pitch';
 import * as A from '../../state/actions';
-import { paramMenu } from '../../state/automation';
 import { commit, Gesture, wheelEdit } from '../../state/edit';
 import { findFx, plain } from '../../state/store';
 import { openMenu, say, setU, U, type MenuItem } from '../../state/ui';
 import { dblCheck, track } from '../../ui/drag';
-import { Knob, NumField, parseNum, Segmented } from '../../ui/Knob';
+import { NumField, parseNum } from '../../ui/Knob';
 import { bandColor } from './common';
 import { dbY, eqRange, EqViz, PLACE_SHORT, yDb } from './eq';
 
-export const BTYPE_ORDER: BandType[] = ['peak', 'lowshelf', 'highshelf', 'lowcut', 'highcut', 'notch', 'bandpass', 'tilt'];
-export const BTYPE_LABEL: Record<BandType, string> = { peak: 'Bell', lowshelf: 'Low shelf', highshelf: 'High shelf', lowcut: 'Low cut', highcut: 'High cut', notch: 'Notch', bandpass: 'Band pass', tilt: 'Tilt' };
+export { BTYPE_LABEL, BTYPE_ORDER };
 const BTYPE_SHORT: Record<BandType, string> = { peak: 'Bell', lowshelf: 'Lo shelf', highshelf: 'Hi shelf', lowcut: 'Lo cut', highcut: 'Hi cut', notch: 'Notch', bandpass: 'BPass', tilt: 'Tilt' };
 const PLACES: Placement[] = ['stereo', 'left', 'right', 'mid', 'side'];
 const SLOPES = [12, 24, 36, 48];
@@ -51,8 +49,7 @@ export function deleteBand(fxId: Id, i: number) {
 /** Changing the shape keeps the band coherent: gain only where it means something, sensible Q. */
 export function setShape(fxId: Id, i: number, type: BandType) {
   const b = findFx(fxId)?.f.bands?.[i]; if (!b) return;
-  const q = type === 'notch' ? Math.max(b.q, 4) : isCut(type) && !isCut(b.type) ? 0.71 : b.q;
-  updBand(fxId, i, { type, on: true, q, g: hasGain(type) ? b.g : 0, dynamic: canBeDynamic(type) ? b.dynamic ?? null : null }, tr('c.eq.bandShape'));
+  updBand(fxId, i, shapePatch(b, type), tr('c.eq.bandShape'));
 }
 
 export function openBandMenu(x: number, y: number, fxId: Id, i: number) {
@@ -79,10 +76,10 @@ function openAddMenu(x: number, y: number, fxId: Id, f: number, g: number) {
 
 // ---- canvas gestures ----
 const HIT = 11;
-export function eqHit(bands: EqBand[], px: number, py: number, W: number, H: number): number {
+export function eqHit(bands: EqBand[], px: number, py: number, W: number, H: number, sel?: number | null): number {
   const range = eqRange(bands);
   let best = -1, bd = HIT;
-  bands.forEach((b, i) => { const d = Math.hypot(px - fx2x(b.f, W), py - dbY(handleDb(b), H, range)); if (d <= bd) { bd = d; best = i; } });
+  bands.forEach((b, i) => { if (!handleShown(b, i, sel)) return; const d = Math.hypot(px - fx2x(b.f, W), py - dbY(handleDb(b), H, range)); if (d <= bd) { bd = d; best = i; } });
   return best;
 }
 
@@ -90,7 +87,7 @@ export function eqPointerDown(e: PointerEvent, cv: HTMLCanvasElement, fxId: Id, 
   const ff = findFx(fxId); if (!ff) return;
   const r = cv.getBoundingClientRect(), W = r.width, H = r.height, px = e.clientX - r.left, py = e.clientY - r.top;
   const bands = ff.f.bands ?? [], range = eqRange(bands);
-  const hit = eqHit(bands, px, py, W, H);
+  const hit = eqHit(bands, px, py, W, H, U.eqSel[fxId]);
   if (e.button === 2) {
     e.preventDefault();
     if (hit >= 0) { setU('eqSel', fxId, hit); openBandMenu(e.clientX, e.clientY, fxId, hit); }
@@ -142,7 +139,7 @@ export function eqPointerDown(e: PointerEvent, cv: HTMLCanvasElement, fxId: Id, 
 export function eqHover(e: PointerEvent, cv: HTMLCanvasElement, fxId: Id, viz: EqViz) {
   const ff = findFx(fxId); if (!ff) return;
   const r = cv.getBoundingClientRect(), px = e.clientX - r.left, py = e.clientY - r.top;
-  const hit = eqHit(ff.f.bands ?? [], px, py, r.width, r.height);
+  const hit = eqHit(ff.f.bands ?? [], px, py, r.width, r.height, U.eqSel[fxId]);
   viz.hover = { x: px, y: py, band: hit >= 0 ? hit : null, inside: true };
   viz.hoverVersion++;
   cv.style.cursor = hit >= 0 ? 'move' : viz.peak ? 'ns-resize' : 'crosshair';
@@ -160,17 +157,6 @@ export function eqWheel(e: WheelEvent, fxId: Id, viz: EqViz) {
 }
 
 // ---- panel ----
-function field(fxId: Id, i: () => number, key: 'f' | 'g' | 'q') {
-  let g: Gesture | null = null;
-  return (v: number, mode: 'begin' | 'move' | 'end' | 'set' | 'wheel') => {
-    const op = bandOp(fxId, i(), { [key]: v });
-    if (mode === 'begin') g = new Gesture('Band EQ');
-    else if (mode === 'move') { if (op) g?.update([op]); }
-    else if (mode === 'end') { g?.end(); g = null; }
-    else if (mode === 'set') { if (op) commit([op], 'Band EQ'); }
-    else if (op) wheelEdit('eqf' + fxId + key, 'Band EQ', [op]);
-  };
-}
 function dynField(fxId: Id, i: () => number, key: 'range' | 'thr') {
   let g: Gesture | null = null;
   return (v: number, mode: 'begin' | 'move' | 'end' | 'set' | 'wheel') => {
@@ -184,112 +170,27 @@ function dynField(fxId: Id, i: () => number, key: 'range' | 'thr') {
   };
 }
 
-// ---- quick low / high cut (FL Parametric EQ 2 style): two knobs drive the first cut band of each kind
-const CUT_LO = 20, CUT_HI = 20000;
-const f2t = (f: number) => Math.log(f / CUT_LO) / Math.log(CUT_HI / CUT_LO);
-const t2f = (t: number) => Math.round(CUT_LO * Math.pow(CUT_HI / CUT_LO, clamp(t, 0, 1)));
-function cutOp(fxId: Id, type: 'lowcut' | 'highcut', t: number): Op | null {
-  const off = type === 'lowcut' ? t <= 0.005 : t >= 0.995;
-  return withBands(fxId, b => {
-    const i = b.findIndex(x => x.type === type);
-    if (i < 0) { if (!off && b.length < MAX_BANDS) b.push({ ...newBand(type, t2f(t), 0), slope: 24 }); return; }
-    b[i] = { ...b[i], f: t2f(t), on: !off };
-  });
-}
-export function CutKnobs(props: { fx: Fx }) {
-  const band = (type: string) => props.fx.bands?.find(x => x.type === type);
-  const tOf = (type: 'lowcut' | 'highcut') => { const b = band(type); return b && b.on ? f2t(b.f) : type === 'lowcut' ? 0 : 1; };
-  const text = (type: 'lowcut' | 'highcut') => { const b = band(type); return b && b.on ? hzText(b.f) : tr('c.eq.off'); };
-  const knob = (type: 'lowcut' | 'highcut', label: string) => {
-    let g: Gesture | null = null;
-    return (
-      <Knob key={'cut' + type + props.fx.id} label={label} size="lg" t={() => tOf(type)} text={() => text(type)}
-        title={(type === 'lowcut' ? tr('c.eq.cutBelow') : tr('c.eq.cutAbove')) + ' · ' + tr('c.eq.cutTip')}
-        onStart={() => { g = new Gesture(label); }}
-        onChange={t => { const op = cutOp(props.fx.id, type, t); if (op) g?.update([op]); say(label + ' ' + (type === 'lowcut' ? (t <= 0.005 ? tr('c.eq.off') : hzText(t2f(t))) : (t >= 0.995 ? tr('c.eq.off') : hzText(t2f(t))))); }}
-        onEnd={() => { g?.end(); g = null; }}
-        onReset={() => { const op = cutOp(props.fx.id, type, type === 'lowcut' ? 0 : 1); if (op) commit([op], label); }}
-        onWheel={t => { const op = cutOp(props.fx.id, type, t); if (op) wheelEdit('cut' + type, label, [op]); }} />
-    );
-  };
-  return (
-    <div class="eqcuts">
-      {knob('lowcut', 'Low cut')}
-      {knob('highcut', 'High cut')}
-    </div>
-  );
-}
-
+/** Below the graph only when the selected band is dynamic: its range and threshold (everything else
+ * lives on the band bank, the graph and the band's right-click menu). */
 export function EqPanel(props: { fx: Fx }) {
   const fxId = () => props.fx.id;
-  const sel = () => { const i = U.eqSel[fxId()]; return i != null && props.fx.bands?.[i] ? i : null; };
-  const b = () => { const i = sel(); return i == null ? null : props.fx.bands![i]; };
+  const sel = () => { const i = U.eqSel[fxId()]; return i != null && props.fx.bands?.[i]?.dynamic ? i : null; };
   const si = () => sel() ?? 0;
-  const menu = (k: 'f' | 'g' | 'q') => (x: number, y: number) => paramMenu(x, y, { kind: 'fx', fxId: fxId(), param: 'band:' + si() + ':' + k },
-    k === 'g' ? () => updBand(fxId(), si(), { g: 0 }) : k === 'q' ? () => updBand(fxId(), si(), { q: b()?.type === 'peak' ? 1 : 0.71 }) : null, bandColor(si()));
-  const addFree = () => {
-    // a bell where the response has the most room: the widest gap between existing bands (log f)
-    const fs = (props.fx.bands ?? []).map(x => Math.log(x.f)).sort((a, z) => a - z);
-    const pts = [Math.log(30), ...fs, Math.log(16000)];
-    let best = 0, bg = -1;
-    for (let k = 0; k + 1 < pts.length; k++) if (pts[k + 1] - pts[k] > bg) { bg = pts[k + 1] - pts[k]; best = k; }
-    addBand(fxId(), newBand('peak', Math.exp((pts[best] + pts[best + 1]) / 2), 0));
-  };
   return (
-    <div class="eqpanel">
-      <CutKnobs fx={props.fx} />
-      <div class="bchips">
-        <For each={props.fx.bands ?? []}>{(bd, i) => (
-          <button class="bchip" classList={{ sel: sel() === i(), off: !bd.on }} style={{ '--c': bandColor(i()) }}
-            title={tr('c.eq.chipTip', { n: i() + 1, type: BTYPE_LABEL[bd.type], hz: hzText(bd.f) })}
-            onPointerDown={e => {
-              e.stopPropagation();
-              if (e.button === 2) { setU('eqSel', fxId(), i()); openBandMenu(e.clientX, e.clientY, fxId(), i()); return; }
-              setU('eqSel', fxId(), i());
-              if (dblCheck('chip' + fxId() + i())) updBand(fxId(), i(), { on: !bd.on });
-            }}>{i() + 1}</button>
-        )}</For>
-        <button class="bchip add" title={tr('c.eq.addBandTip', { n: props.fx.bands?.length ?? 0, max: MAX_BANDS })}
-          disabled={(props.fx.bands?.length ?? 0) >= MAX_BANDS} onClick={addFree}>+</button>
-        <span class="bcount">{(props.fx.bands?.length ?? 0) + '/' + MAX_BANDS}</span>
-      </div>
-      <Show when={b()} fallback={<div class="bedit empty">{tr('c.eq.empty')}</div>}>
-        {band => (
-          <div class="bedit">
-            <button class="led" title={tr('c.eq.toggleBand')} style={{ background: band().on ? bandColor(si()) : 'var(--line2)' }} onClick={() => updBand(fxId(), si(), { on: !band().on })} />
-            <span class="bnum" style={{ color: bandColor(si()) }}>{si() + 1}</span>
-            <button class="shape" title={tr('c.eq.shape')} onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); openBandMenu(r.left, r.bottom + 4, fxId(), si()); }}>
-              {BTYPE_LABEL[band().type]}<svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 9l6 6 6-6" /></svg>
-            </button>
-            <NumField label="FREQ" width={74} value={() => band().f} text={hzText} parse={parseNum} onMenu={menu('f')}
-              drag={(v, d) => clamp(v * Math.pow(2, d / 90), 10, 22000)} apply={field(fxId(), si, 'f')} />
-            <NumField label="GAIN" width={64} value={() => band().g} text={dbText} parse={parseNum} disabled={() => !hasGain(band().type)} onMenu={menu('g')}
-              drag={(v, d) => clamp(Math.round((v + d * 0.05) * 10) / 10, -30, 30)} apply={field(fxId(), si, 'g')} />
-            <NumField label="Q" width={50} value={() => band().q} text={v => v.toFixed(2)} parse={parseNum} disabled={() => band().type === 'tilt'} onMenu={menu('q')}
-              drag={(v, d) => clamp(v * Math.pow(2, d / 110), 0.1, 18)} apply={field(fxId(), si, 'q')} />
-            <Show when={isCut(band().type)}>
-              <Segmented small label={tr('c.eq.dbOct')} options={SLOPES.map(String)} value={() => SLOPES.indexOf(slopeOf(band()))} pick={k => updBand(fxId(), si(), { slope: SLOPES[k] }, tr('c.eq.slope'))} />
-            </Show>
-            <Segmented small label={tr('c.eq.channelLc')} options={PLACES.map(p => PLACE_SHORT[p])} value={() => PLACES.indexOf(placeOf(band()))} pick={k => updBand(fxId(), si(), { place: PLACES[k] }, tr('c.eq.bandChannel'))}
-              title="Stereo / Left / Right / Mid / Side" />
-            <Show when={canBeDynamic(band().type)}>
-              <button class="tog" classList={{ on: !!band().dynamic }} title={tr('c.eq.dynTip')}
-                onClick={() => updBand(fxId(), si(), { dynamic: band().dynamic ? null : { range: band().g > 0 ? -band().g : -6, thr: -30 } }, tr('c.eq.dynBand'))}>DYN</button>
-              <Show when={band().dynamic}>
-                <NumField label={tr('c.eq.range')} width={64} value={() => band().dynamic!.range} text={dbText} parse={parseNum}
-                  drag={(v, d) => clamp(Math.round((v + d * 0.05) * 10) / 10, -30, 30)} apply={dynField(fxId(), si, 'range')} />
-                <NumField label={tr('c.eq.thresh')} width={64} value={() => band().dynamic!.thr} text={v => Math.round(v) + ' dB'} parse={parseNum}
-                  drag={(v, d) => clamp(Math.round(v + d * 0.1), -80, 0)} apply={dynField(fxId(), si, 'thr')} />
-              </Show>
-            </Show>
-            <div style={{ flex: 1 }} />
-            <button class="iconbtn danger" title={tr('c.eq.deleteBand')} onClick={() => deleteBand(fxId(), si())}>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16 M10 11v6 M14 11v6 M6 7l1 13h10l1-13 M9 7V4h6v3" /></svg>
-            </button>
-          </div>
-        )}
-      </Show>
-    </div>
+    <Show when={sel() != null && props.fx.bands![si()]}>
+      {band => (
+        <div class="eqpanel bedit">
+          <span class="bnum" style={{ color: bandColor(si()) }}>{si() + 1}</span>
+          <span class="dyntag">{tr('c.eq.dynBand')}</span>
+          <NumField label={tr('c.eq.range')} width={64} value={() => band().dynamic!.range} text={dbText} parse={parseNum}
+            drag={(v, d) => clamp(Math.round((v + d * 0.05) * 10) / 10, -30, 30)} apply={dynField(fxId(), si, 'range')} />
+          <NumField label={tr('c.eq.thresh')} width={64} value={() => band().dynamic!.thr} text={v => Math.round(v) + ' dB'} parse={parseNum}
+            drag={(v, d) => clamp(Math.round(v + d * 0.1), -80, 0)} apply={dynField(fxId(), si, 'thr')} />
+          <div style={{ flex: 1 }} />
+          <button class="smallbtn" onClick={() => updBand(fxId(), si(), { dynamic: null }, tr('c.eq.dynBand'))}>{tr('c.eq.dynOff')}</button>
+        </div>
+      )}
+    </Show>
   );
 }
 export { yDb };

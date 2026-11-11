@@ -3,12 +3,17 @@
 // (user Q on the first stage, 0.707 on the rest), notch = RBJ notch at the user Q,
 // tilt = high shelf (Q 0.5, gain g) followed by −g/2 dB.
 import type { BandType, EqBand, Placement } from '../api/types';
+import { defaultBands } from './presets';
 
 export const fx2x = (f: number, W: number) => Math.log(f / 20) / Math.log(1000) * W;
 export const x2f = (x: number, W: number) => 20 * Math.pow(1000, x / W);
 
 export const SR = 48000;
 const clampN = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
+
+/** Band types in menu order, and their display names. */
+export const BTYPE_ORDER: BandType[] = ['peak', 'lowshelf', 'highshelf', 'lowcut', 'highcut', 'notch', 'bandpass', 'tilt'];
+export const BTYPE_LABEL: Record<BandType, string> = { peak: 'Bell', lowshelf: 'Low shelf', highshelf: 'High shelf', lowcut: 'Low cut', highcut: 'High cut', notch: 'Notch', bandpass: 'Band pass', tilt: 'Tilt' };
 
 export const isCut = (t: BandType) => t === 'lowcut' || t === 'highcut';
 /** Bands whose gain means something (bell, shelves, tilt). */
@@ -148,3 +153,25 @@ export function handleDb(b: EqBand): number {
 export function newBand(type: BandType, f: number, g: number): EqBand {
   return { on: true, type, f, g: hasGain(type) ? g : 0, q: type === 'peak' ? 1 : type === 'notch' ? 6 : type === 'bandpass' ? 2 : 0.71, slope: 12, place: 'stereo' };
 }
+
+// ---- band editing helpers (strips, shape changes, graph handles)
+/** A switched-off band has no handle on the graph (FL-style), unless it is the selected one: then a hollow ghost shows where it sits. */
+export const handleShown = (b: EqBand, i: number, sel: number | null | undefined) => b.on || i === sel;
+/** Changing the shape keeps the band coherent: gain only where it means something, sensible Q. */
+export function shapePatch(b: EqBand, type: BandType): Partial<EqBand> {
+  const q = type === 'notch' ? Math.max(b.q, 4) : isCut(type) && !isCut(b.type) ? 0.71 : b.q;
+  return { type, on: true, q, g: hasGain(type) ? b.g : 0, dynamic: canBeDynamic(type) ? b.dynamic ?? null : null };
+}
+// knob travel
+const F_MIN = 10, F_MAX = 22000, Q_MIN = 0.1, Q_MAX = 18;
+export const f2t = (f: number) => Math.log(clampN(f, F_MIN, F_MAX) / F_MIN) / Math.log(F_MAX / F_MIN);
+export const t2f = (t: number) => F_MIN * Math.pow(F_MAX / F_MIN, clampN(t, 0, 1));
+export const q2t = (q: number) => Math.log(clampN(q, Q_MIN, Q_MAX) / Q_MIN) / Math.log(Q_MAX / Q_MIN);
+export const t2q = (t: number) => Q_MIN * Math.pow(Q_MAX / Q_MIN, clampN(t, 0, 1));
+/** Shape selector steps when dragged: Off, then every band type. */
+export const SHAPE_STEPS: (BandType | 'off')[] = ['off', ...BTYPE_ORDER];
+export const shapeStep = (b: EqBand) => b.on ? SHAPE_STEPS.indexOf(b.type) : 0;
+/** Double-click defaults: the band's factory frequency (bands beyond the default seven: 1 kHz). */
+export const defaultFreq = (i: number) => defaultBands()[i]?.f ?? 1000;
+export const defaultQ = (type: BandType) => type === 'peak' ? 1 : type === 'notch' ? 4 : 0.71;
+

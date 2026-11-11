@@ -63,6 +63,15 @@ function eqp(name: string, out: number, edits: BandEdit[]): Preset {
   }
   return { name, params: { out }, bands };
 }
+/** catalog.rs `eqo`: only the listed bands stay on; cut bands get `slope`. */
+function eqo(name: string, out: number, slope: number, edits: BandEdit[]): Preset {
+  const p = eqp(name, out, edits);
+  p.bands!.forEach((b, i) => {
+    if (!edits.some(e => e[0] === i)) b.on = false;
+    else if (b.type === 'lowcut' || b.type === 'highcut') b.slope = slope;
+  });
+  return p;
+}
 const pr = (name: string, params: Record<string, number>): Preset => ({ name, params });
 const dly = (name: string, beats: number | null, time: number, fb: number, mix: number): Preset =>
   ({ name, params: { time, fb, mix }, ...(beats != null ? { beats } : {}) });
@@ -74,11 +83,15 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     eqp('Wokal — obecność', 0, [[0, T, 100, n, n], [2, n, 300, -2.5, 1.2], [4, n, 3500, 3, 0.9], [5, n, 10000, 2.5, n]]),
     eqp('Kick — punch', 0, [[0, T, 30, n, n], [1, n, 60, 3, n], [2, n, 350, -4, 1.4], [4, n, 4000, 3, 1.2]]),
     eqp('Bas — czysty dół', 0, [[0, T, 35, n, n], [1, n, 80, 2, n], [2, n, 250, -3, n], [6, T, 8000, n, n]]),
-    eqp('Mud cut', 0, [[0, T, 60, n, n], [2, n, 300, -4, 1.5]]),
+    eqo('Mud cut', 0, 12, [[0, T, 60, n, n], [2, n, 300, -4, 1.5]]),
     eqp('Air / połysk', 0, [[4, n, 5000, 1, n], [5, n, 12000, 4, n]]),
-    eqp('Pasmo — wytnij dół i górę', 0, [[0, T, 120, n, n], [6, T, 9000, n, n]]),
-    eqp('Telefon / lo-fi', 2, [[0, T, 400, n, n], [3, n, 1500, 4, 0.8], [6, T, 3200, n, n]]),
+    eqo('Pasmo — wytnij dół i górę', 0, 24, [[0, T, 120, n, n], [6, T, 9000, n, n]]),
+    eqo('Telefon / lo-fi', 2, 24, [[0, T, 400, n, n], [3, n, 1500, 4, 0.8], [6, T, 3200, n, n]]),
     eqp('Master — smile', 0, [[1, n, 80, 1.5, n], [3, n, 1000, -0.5, 0.6], [5, n, 10000, 1.5, n]]),
+    eqo('Wytnij < 20 Hz i > 18 kHz', 0, 24, [[0, T, 20, n, n], [6, T, 18000, n, n]]),
+    eqo('Low cut 80 Hz', 0, 24, [[0, T, 80, n, n]]),
+    eqo('Low cut 150 Hz (wokal)', 0, 24, [[0, T, 150, n, n]]),
+    eqo('High cut 10 kHz', 0, 24, [[6, T, 10000, n, n]]),
   ],
   comp: [
     pr('Domyślny', { thr: -18, ratio: 4, att: 10, rel: 150, gain: 0 }),

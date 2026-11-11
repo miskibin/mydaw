@@ -3,7 +3,7 @@
 // the live gain animated from telemetry, and spectrum-peak picking for "grab a resonance".
 import type { EqBand, Fx, Placement } from '../../api/types';
 import type { FxFrame } from '../../api/telemetry';
-import { bandCurve, design, addDesign, eqCurve, FreqGrid, fx2x, handleDb, hasGain, isCut, placeOf, usedPlacements, x2f } from '../../lib/eq';
+import { bandCurve, design, addDesign, eqCurve, FreqGrid, fx2x, handleDb, handleShown, hasGain, isCut, placeOf, usedPlacements, x2f } from '../../lib/eq';
 import { clamp, hzText } from '../../lib/format';
 import { hzToMidi, noteName } from '../../lib/pitch';
 import { Layer } from '../../ui/frameLoop';
@@ -206,6 +206,7 @@ export class EqViz implements Viz {
     // handles
     g.textAlign = 'center'; g.textBaseline = 'middle';
     bands.forEach((b, i) => {
+      if (!handleShown(b, i, sel)) return;
       const x = fx2x(b.f, W), y = dbY(handleDb(b), H, range), col = bandColor(i), r = i === sel ? 8.5 : 7.5;
       if (b.dynamic && b.on && hasGain(b.type)) {
         const y2 = dbY(handleDb(b) + b.dynamic.range * (b.type === 'tilt' ? 0.5 : 1), H, range);

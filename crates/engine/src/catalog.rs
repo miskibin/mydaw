@@ -276,6 +276,20 @@ fn eqp(name: &'static str, out: f64, edits: &[BandEdit]) -> Preset {
     Preset { name, params: [("out", out)].into_iter().collect(), bands: Some(bands), beats: None }
 }
 
+/// A preset that uses only the listed bands: every other band is switched off (no handle on the
+/// graph, no CPU), like FL's "20Hz + 18kHz cut". Cut bands get the given slope.
+fn eqo(name: &'static str, out: f64, slope: u8, edits: &[BandEdit]) -> Preset {
+    let mut p = eqp(name, out, edits);
+    for (i, b) in p.bands.iter_mut().flatten().enumerate() {
+        if !edits.iter().any(|e| e.0 == i) {
+            b.on = false;
+        } else if matches!(b.kind, BandType::Lowcut | BandType::Highcut) {
+            b.slope = slope;
+        }
+    }
+    p
+}
+
 fn dly(name: &'static str, beats: Option<f64>, time: f64, fb: f64, mix: f64) -> Preset {
     Preset { name, params: [("time", time), ("fb", fb), ("mix", mix)].into_iter().collect(), bands: None, beats }
 }
@@ -288,11 +302,15 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             eqp("Wokal — obecność", 0.0, &[(0, t, Some(100.0), n, n), (2, f, Some(300.0), Some(-2.5), Some(1.2)), (4, f, Some(3500.0), Some(3.0), Some(0.9)), (5, f, Some(10000.0), Some(2.5), n)]),
             eqp("Kick — punch", 0.0, &[(0, t, Some(30.0), n, n), (1, f, Some(60.0), Some(3.0), n), (2, f, Some(350.0), Some(-4.0), Some(1.4)), (4, f, Some(4000.0), Some(3.0), Some(1.2))]),
             eqp("Bas — czysty dół", 0.0, &[(0, t, Some(35.0), n, n), (1, f, Some(80.0), Some(2.0), n), (2, f, Some(250.0), Some(-3.0), n), (6, t, Some(8000.0), n, n)]),
-            eqp("Mud cut", 0.0, &[(0, t, Some(60.0), n, n), (2, f, Some(300.0), Some(-4.0), Some(1.5))]),
+            eqo("Mud cut", 0.0, 12, &[(0, t, Some(60.0), n, n), (2, f, Some(300.0), Some(-4.0), Some(1.5))]),
             eqp("Air / połysk", 0.0, &[(4, f, Some(5000.0), Some(1.0), n), (5, f, Some(12000.0), Some(4.0), n)]),
-            eqp("Pasmo — wytnij dół i górę", 0.0, &[(0, t, Some(120.0), n, n), (6, t, Some(9000.0), n, n)]),
-            eqp("Telefon / lo-fi", 2.0, &[(0, t, Some(400.0), n, n), (3, f, Some(1500.0), Some(4.0), Some(0.8)), (6, t, Some(3200.0), n, n)]),
+            eqo("Pasmo — wytnij dół i górę", 0.0, 24, &[(0, t, Some(120.0), n, n), (6, t, Some(9000.0), n, n)]),
+            eqo("Telefon / lo-fi", 2.0, 24, &[(0, t, Some(400.0), n, n), (3, f, Some(1500.0), Some(4.0), Some(0.8)), (6, t, Some(3200.0), n, n)]),
             eqp("Master — smile", 0.0, &[(1, f, Some(80.0), Some(1.5), n), (3, f, Some(1000.0), Some(-0.5), Some(0.6)), (5, f, Some(10000.0), Some(1.5), n)]),
+            eqo("Wytnij < 20 Hz i > 18 kHz", 0.0, 24, &[(0, t, Some(20.0), n, n), (6, t, Some(18000.0), n, n)]),
+            eqo("Low cut 80 Hz", 0.0, 24, &[(0, t, Some(80.0), n, n)]),
+            eqo("Low cut 150 Hz (wokal)", 0.0, 24, &[(0, t, Some(150.0), n, n)]),
+            eqo("High cut 10 kHz", 0.0, 24, &[(6, t, Some(10000.0), n, n)]),
         ],
         FxKind::Comp => vec![
             pr("Domyślny", &[("thr", -18.0), ("ratio", 4.0), ("att", 10.0), ("rel", 150.0), ("gain", 0.0)]),
@@ -501,4 +519,32 @@ pub fn param_block(fx: &Fx) -> ParamBlock {
         }
     }
     pb
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn on_bands(name: &str) -> Vec<(BandType, f64, u8)> {
+        let p = presets(FxKind::Eq).into_iter().find(|p| p.name == name).unwrap_or_else(|| panic!("no preset {name}"));
+        p.bands.unwrap().into_iter().filter(|b| b.on).map(|b| (b.kind, b.f, b.slope)).collect()
+    }
+
+    #[test]
+    fn cut_presets_use_only_their_bands() {
+        use BandType::*;
+        assert_eq!(on_bands("Wytnij < 20 Hz i > 18 kHz"), vec![(Lowcut, 20.0, 24), (Highcut, 18000.0, 24)]);
+        assert_eq!(on_bands("Low cut 80 Hz"), vec![(Lowcut, 80.0, 24)]);
+        assert_eq!(on_bands("High cut 10 kHz"), vec![(Highcut, 10000.0, 24)]);
+        assert_eq!(on_bands("Flat").len(), 5, "Flat keeps the tone bands ready");
+    }
+
+    #[test]
+    fn eq_preset_names_are_unique() {
+        let names: Vec<_> = presets(FxKind::Eq).iter().map(|p| p.name).collect();
+        let mut u = names.clone();
+        u.sort();
+        u.dedup();
+        assert_eq!(u.len(), names.len());
+    }
 }
