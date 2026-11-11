@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use wave_engine::*;
 fn main() {
     let wav = std::env::args().nth(1).unwrap();
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let mut rt = e.create_rt(48000.0, 256);
     let p = e.project();
     let mut tune = wave_engine::catalog::new_fx(5000, FxKind::Tune, p.bpm);

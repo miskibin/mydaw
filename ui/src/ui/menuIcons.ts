@@ -7,7 +7,7 @@ import {
   faHeadphones, faKeyboard, faLayerGroup, faMagnifyingGlass, faMusic, faPaintbrush, faPaste, faPen, faPencil, faPlay, faPlus,
   faRotateLeft, faScissors, faSliders, faStopwatch, faTableCells, faTrashCan, faVolumeHigh, faVolumeXmark, faWandMagicSparkles,
   faWaveSquare, faCircle, faFolderOpen, faBell, faBolt, faCircleDot, faCloud, faDrumSteelpan, faGuitar, faHandsClapping, faRadio,
-  faStairs, faWind,
+  faStairs, faWind, faDrum, faCompactDisc, faHandFist,
 } from '@fortawesome/free-solid-svg-icons';
 import { INST_ICONS } from './instIcons';
 
@@ -107,6 +107,13 @@ const BUILTIN: Record<string, MenuGlyph> = {
 };
 /** Glyph for a built-in instrument id (kick, clap, hat, bass). */
 export const builtinGlyph = (inst: string): MenuGlyph => BUILTIN[inst] ?? INST_ICONS.drums;
+
+const LIB_GROUP: Record<string, MenuGlyph> = {
+  Kicks: g(faCircleDot), Snares: g(faDrum), Claps: g(faHandsClapping), Hats: g(faDrumSteelpan),
+  Cymbals: g(faCompactDisc), Toms: INST_ICONS.drums, Percussion: g(faHandFist), Tonal: g(faMusic),
+};
+/** Glyph for a standard-library sample group (by its id, not its translated name); other folders get the sample icon. */
+export const libGlyph = (group: string): MenuGlyph => LIB_GROUP[group] ?? INST_ICONS.sample;
 
 /** Other instrument-picker rows. */
 export const PICK_GLYPH = {

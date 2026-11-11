@@ -43,13 +43,14 @@ project looks like:
   "tracks":  [{"id":1,"name":"Drums","color":"#4f8ef7","muted":false,"solo":false,"arm":false,"vol":0.7937,"h":56,"insert":1}],
   "inserts": [{"id":0,"name":"Master","color":"#d5dae2","vol":0.7937,"pan":0,"muted":false,"solo":false,
                "fx":[{"id":900,"type":"limit","bypass":false,"preset":0,"params":{"gain":0,"ceil":-0.3}}]}],
-  "channels":[{"id":1000,"name":"Kick","color":"#4f8ef7","kind":"inst","inst":"kick","vol":0.7937,"pan":0,
-               "mute":false,"solo":false,"insert":null,"root":60},
-              {"id":1004,"name":"Stab","color":"#47b8a8","kind":"sample","source":1001,"vol":0.7937,"pan":0,
-               "mute":false,"solo":false,"insert":3,"root":60}],
+  "channels":[{"id":1001,"name":"Kick","color":"#4f8ef7","kind":"sample","source":1000,"vol":0.7937,"pan":0,
+               "mute":false,"solo":false,"insert":null,"root":60,
+               "sampler":{"start":0,"end":1,"reverse":false,"norm":false,"semi":0,"fine":0,"gate":false,
+                          "attack":0,"decay":0,"sustain":1,"release":20,"cut":0}}],
   "patterns":[{"id":1,"name":"Beat","color":"#4f8ef7","len":4,"minLen":4,"swing":0.5,
-               "notes":[{"ch":1000,"step":0,"len":1},{"ch":1003,"step":0,"len":3,"p":33,"v":0.8}]}],
-  "sources": [{"id":1001,"name":"Pad Loop","color":"#47b8a8","path":"…/pad.wav","dur":3.75,"sr":48000,"ch":2,"peakDb":-3.1}],
+               "notes":[{"ch":1001,"step":0,"len":1},{"ch":1001,"step":6,"len":1,"p":55,"v":0.8}]}],
+  "sources": [{"id":1000,"name":"808 Kick Short","color":"#4f8ef7","path":"lib:Standard/kick-808-short.flac","dur":0.378,"sr":44100,"ch":1,"peakDb":-1},
+              {"id":1010,"name":"Pad Loop","color":"#47b8a8","path":"…/pad.wav","dur":3.75,"sr":48000,"ch":2,"peakDb":-3.1}],
   "clips":   [{"id":5,"track":0,"start":0,"len":16,"offset":0,"kind":"pat","ref":1,"muted":false,"gain":0,
                "fadeIn":0,"fadeOut":0,"pan":0,"norm":false,"rev":false}]
 }
@@ -63,18 +64,28 @@ channel with `ch`. Why global and not per pattern: a beat is usually several pat
 (verse / chorus / fill) played by the same kit; per-pattern instruments would duplicate
 the kit and its mixer routing in every pattern.
 
-* `channel.kind`: `inst` (built-in `kick`/`clap`/`hat`/`bass`), `sample` (a one-shot
-  sampler playing project source `source`; the note's key repitches it, `root` = the key at
-  which the file plays at its own pitch, default 60 = C5 in FL's naming / C4 in this app's
-  labels) or `synth` (the built-in polyphonic synth, `synth: {preset, params}` with
+* `channel.kind`: `sample` (the sampler: plays project source `source`; the note's key
+  repitches it, `root` = the key at which the file plays at its own pitch, default 60 = C5 in
+  FL's naming / C4 in this app's labels; `sampler` = how it plays, see below), `keys` (WAVE
+  Keys, see [keys.md](keys.md)) or `synth` (the built-in polyphonic synth, `synth: {preset, params}` with
   parameter ids from `fx_catalog().synth`; see [synth.md](synth.md)). `vol` is a fader position (unity = 0.7937, gain normalised so unity is exactly
   1), `pan` −1..1 (balance law of the mixer), `mute`/`solo` (with any solo, only soloed
   channels play), `insert`: a mixer insert id, or `null` = **the insert of the playlist track
   the clip is on** (how every pattern note behaved before channels existed; the track's fader
   and mute still apply). A channel routed to an insert skips the track's insert but the
   track still mutes it and scales it by its fader.
-* `note`: `step`/`len` in 16ths, `p` MIDI key (absent = the channel's `root`; percussion
-  — built-in drums follow it like a sampler, the root plays them as designed), `v` velocity
+* `channel.sampler` (kind `sample`; every field has a default, so older files load):
+  `start`/`end` = the part of the file that plays, fractions 0..1; `reverse`; `norm` (peak to
+  −0.3 dBFS, from the source's `peakDb`); `semi` −24..24 and `fine` −100..100 cents on top of
+  the note; `gate` false = **one-shot** (the note's length is ignored: drums), true = the
+  sample plays while the note is held and then fades over `release` ms (1..5000); `attack`
+  0..2000 ms and `decay` 0..5000 ms to the `sustain` level 0..1 (0 = the decay is the whole
+  sound); `cut` 0 = none, 1..8 = a **cut group**: a new note silences every sounding sampler
+  note of the group's channels, its own included, when it starts (a closed hat cutting the
+  open one). A part that starts or ends inside the waveform (trimmed or reversed) is faded
+  over 1.5 ms; an untrimmed sample starts exactly as recorded, no fade softens its transient.
+  `putChannel` refuses values out of range (`SamplerState::check`).
+* `note`: `step`/`len` in 16ths, `p` MIDI key (absent = the channel's `root`), `v` velocity
   0..1 = linear gain (absent = 1). A step-sequencer step is simply a note of length 1 (at
   the root, or at its own key set in the rack's graph editor), so the step grid and the piano
   roll edit the same notes; a channel with other lengths, off-grid notes or chords is shown
@@ -102,12 +113,27 @@ channel's notes in the current pattern, any channel; the pattern's other channel
 notes, double right-click one to switch). PAT mode (L) loops the current pattern and follows
 it when it changes.
 
-**Migration.** Old files (and old `wave apply` scripts) say `{"inst":"hat"}` on notes and
-have no `channels`. `Project::migrate` (on open, and `putPattern` for each note) gives every
-used instrument one built-in channel (in Kick, Clap, Hat, Bass order, unity, centre,
-`insert: null`, bass root 36), so an old song renders identically
-(`crates/engine/tests/patterns.rs` compares a pre-channels render of the demo). `inst` is
-read, never written. A project without channels gets the four built-ins.
+**The standard library** (`crates/engine/src/factory.rs`). Fifty CC0 one-shots (kicks,
+snares, claps, hats, cymbals, toms, percussion, a few tonal ones) are embedded in the engine
+(`crates/engine/library`, 3.2 MB of FLAC; built by `scripts/make-factory-library.py`,
+which trims, fades and normalises picks from the kits pinned in `assets-manifest.json`).
+There is nothing synthesised behind a channel any more: a new project's Channel Rack is four
+samplers of these files (`STARTER_KIT`: Kick, Clap, Hat, Snare), and the program starts
+with that empty project. A source inside the sample library is stored by a portable
+path, `lib:<kit>/<file>` (in memory and in the file), never by where the library is on this
+computer; `lib:Standard/…` is decoded from the embedded bytes, so it is never missing, other
+kits resolve to `<data>/WAVE/Library/<kit>/`. Importing a library file twice gives the same
+source: a sampler channel and audio clips of one sample share it. The app also writes the
+standard library into `<data>/WAVE/Library/Standard` (`factory::install`) so the browser
+lists, previews and drags it like any downloaded kit. `ui/src/api/factory.json` (the file
+table and the empty project, for the in-browser mock) is generated from the engine;
+`tests/sampler.rs` fails when it is stale and says how to regenerate it.
+
+**Old files.** Files from before the standard library name synthesised instruments:
+`{"kind":"inst","inst":"kick"}` channels, or `inst` on notes before channels existed.
+`Project::from_json` (used by `open`) turns each into a sampler of the closest library sample
+(the bass in gate mode); they do not sound the same as before. A project without channels
+gets the starter kit.
 
 **Real time.** Channels are resolved off-thread into a table in the timeline (`ChanRt`:
 voice kind, `Arc` of the sample, gain/pan/on, destination insert). Voices keep a channel
@@ -195,7 +221,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `asio_control_panel` | – | – (opens the driver's own panel, Windows only) |
 | `library_list` | – | `{kits:[{id,name,description,bytes,count,installed}], folders:string[]}` |
 | `library_install` | `{id}` | – ; progress as event `library-progress {id,done,total,error?}` |
-| `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group}]` |
+| `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group, root?}]`; kit `Standard` = the standard library (always installed); `root` = the file's own pitch when the library knows it |
 | `library_add_folder` / `library_remove_folder` | – (native dialog) / `{path}` | updated `folders` |
 | `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `StateDto` / `{path}` |
 | `export_audio` | `{useLoop, tail, sampleRate}` | `{out, fromBeat, toBeat, tail, stats}` or `{cancelled:true}`; native save dialog; offline master → 32-bit float stereo WAV |

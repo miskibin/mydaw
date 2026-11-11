@@ -7,7 +7,7 @@ import { VOL_UNITY, type Channel, type Clip, type Comp, type Id, type Op, type T
 import { boundaries, boundaryXfade, moveBoundary, setBoundaryXfade, takeEnd, toComp, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import * as CA from '../state/comp';
 import { compById, LANE_H, takeRow, type TakeRow } from '../state/comp';
-import { clampMove, moveClips, resizeClip, TOTAL } from '../lib/clipOps';
+import { clampMove, moveClips, resizeClip, resizeClips, TOTAL } from '../lib/clipOps';
 import { clamp, fmtPos, volText } from '../lib/format';
 import { snapFloor, snapRes, snapRound } from '../lib/snap';
 import * as A from '../state/actions';
@@ -64,7 +64,7 @@ function sameDrawnTrack(a: Track | undefined, b: Track): boolean {
 }
 /** Same for a channel: pattern clips show its notes' rows (kind, root) and an icon (name, instrument), not its knobs. */
 function sameDrawnChannel(a: Channel | undefined, b: Channel): boolean {
-  return !!a && a.name === b.name && a.kind === b.kind && a.root === b.root && (a as { inst?: string }).inst === (b as { inst?: string }).inst;
+  return !!a && a.name === b.name && a.kind === b.kind && a.root === b.root;
 }
 
 /** `cb`: a comp region boundary (`bnd` = its index in `boundaries(comp.regions)`). */
@@ -483,7 +483,9 @@ export function Playlist() {
     if (tool === 'erase') return eraseDrag(id);
     if (tool === 'mute') return muteDrag(id);
     if (tool === 'slice') { if (id) A.sliceAt(id, snapRound(p.beat, unit(e.altKey))); return; }
-    if (tool === 'select' && (!id || modK)) return marqueeDrag(p, modK);
+    // a new box replaces the selection; Shift adds to it. (Ctrl only turns the pencil into the
+    // select tool: it used to make every box additive, so an old selection never went away.)
+    if (tool === 'select' && (!id || modK)) return marqueeDrag(p, e.shiftKey);
     if (h) {
       const clip = h.c;
       if (modK) { setU('sel', U.sel.includes(clip.id) ? U.sel.filter(x => x !== clip.id) : [...U.sel, clip.id]); return; }
@@ -542,15 +544,20 @@ export function Playlist() {
   function resizeDrag(e: PointerEvent, clip: Clip, edge: 'l' | 'r') {
     const g = new Gesture(tl('a.pl.resizeClip'));
     const o = plain(clip), sx = e.clientX;
-    const srcLen = o.kind === 'audio' || o.kind === 'comp' ? srcLenBeats(o.kind, o.ref) : Infinity;
+    const srcLenOf = (c: Clip) => (c.kind === 'audio' || c.kind === 'comp' ? srcLenBeats(c.kind, c.ref) : Infinity);
     const minL = Math.max(1 / 16, snapRes(U.snap, U.bw) || 1 / 16);
+    // the edge of a selected clip trims the whole selection by the same amount (FL / Ableton)
+    const others = U.sel.includes(o.id) ? S.project.clips.filter(c => c.id !== o.id && U.sel.includes(c.id)).map(plain) : [];
+    let last = [o, ...others].map(c => c.start + ':' + c.len).join('|');
     track(ev => {
-      const raw = (ev.clientX - sx) / U.bw;
-      const target = snapRound((edge === 'r' ? o.start + o.len : o.start) + raw, unit(ev.altKey));
-      const nc = resizeClip(o, edge, target, minL, srcLen);
-      const cur = S.project.clips.find(c => c.id === o.id);
-      if (cur && cur.start === nc.start && cur.len === nc.len && cur.offset === nc.offset) return;
-      g.update([{ op: 'putClips', clips: [nc] }]);
+      const raw = (ev.clientX - sx) / U.bw, edge0 = edge === 'r' ? o.start + o.len : o.start;
+      const nc = resizeClip(o, edge, snapRound(edge0 + raw, unit(ev.altKey)), minL, srcLenOf(o));
+      const delta = (edge === 'r' ? nc.start + nc.len : nc.start) - edge0;
+      const all = [nc, ...resizeClips(others, edge, delta, minL, srcLenOf)];
+      const key = all.map(c => c.start + ':' + c.len).join('|');
+      if (key === last) return;
+      last = key;
+      g.update([{ op: 'putClips', clips: all }]);
       say(tl('a.pl.startLen', { pos: fmtPos(nc.start), len: nc.len.toFixed(2) }));
     }, () => g.end(), 'ew-resize');
   }

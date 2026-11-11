@@ -1,4 +1,5 @@
-//! The starting song: the prototype's demo arrangement (drums, hats, bass) on a full mixer.
+//! The project the program starts with (eight tracks, the starter kit in the Channel Rack) and
+//! the small fixed song tests and benchmarks build on.
 
 use crate::catalog::{new_fx, load_preset};
 use crate::model::*;
@@ -22,10 +23,6 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
         notebook: Notebook::default(),
         next_id: 1000,
     };
-    // the Channel Rack: the four built-ins (ids 1000..1003)
-    for inst in Inst::ALL {
-        p.channel_for_inst(inst);
-    }
     for (i, name) in ins_names.iter().enumerate() {
         p.inserts.push(Insert { id: i as Id + 1, name: (*name).into(), color: TC[COLORS[i]].into(), vol: VOL_UNITY, pan: 0.0, width: 1.0, muted: false, solo: false, fx: vec![] });
     }
@@ -38,20 +35,34 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
 }
 
 pub fn empty_project() -> Project {
-    base(
+    let mut p = base(
         &["Track 1", "Track 2", "Track 3", "Track 4", "Track 5", "Track 6", "Track 7", "Track 8"],
         &["Insert 1", "Insert 2", "Insert 3", "Insert 4", "Insert 5", "Insert 6", "Insert 7", "Insert 8"],
-    )
+    );
+    p.add_starter_kit();
+    // one empty pattern, as in FL Studio: the Channel Rack and the Piano roll have something to edit
+    p.patterns.push(Pattern { id: 1, name: "Pattern 1".into(), color: TC[0].into(), len: 4.0, min_len: 4.0, notes: vec![], swing: 0.0 });
+    p
 }
 
-pub fn demo_project() -> Project {
+
+/// A sketch of a song: three short patterns (beat, hats, bass line) on the starter kit plus
+/// a gated 808 bass, with a vocal chain and a drum-bus compressor. Small and fixed: tests,
+/// benchmarks and examples build on it.
+pub fn sketch_project() -> Project {
     let mut p = base(
         &["Drums", "Hats", "Bass", "Pad", "Perc", "Vocal", "Track 7", "Track 8"],
         &["Drums", "Hats", "Bass", "Pad", "Perc", "Vocal", "Insert 7", "Insert 8"],
     );
     p.tracks[5].arm = true;
-    let ch = |inst: Inst| p.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst }).map(|c| c.id).unwrap();
-    let (kick, clap, hat, bass) = (ch(Inst::Kick), ch(Inst::Clap), ch(Inst::Hat), ch(Inst::Bass));
+    let [kick, clap, hat, _snare] = p.add_starter_kit();
+    let bass = p.factory_channel("bass-808.flac").expect("a standard-library file");
+    for c in p.channels.iter_mut().filter(|c| c.id == bass) {
+        c.name = "Bass".into();
+        if let ChannelSrc::Sample { sampler, .. } = &mut c.src {
+            sampler.gate = true;
+        }
+    }
     let n = |c: Id, step: f32, len: f32, key: Option<u8>| Note::new(c, step, len, key);
     p.patterns = vec![
         Pattern {

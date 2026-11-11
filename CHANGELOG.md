@@ -4,7 +4,7 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
-## 0.9.7 — 2026-11-11
+## 0.9.8 — 2026-11-11
 
 ### Added
 - **Menus: File, Edit, View, Help.** New, open, save, export and settings live in File; undo,
@@ -31,6 +31,42 @@ shown in the app after an update and is published as the release notes (see
 ### Fixed
 - **Piano roll: a note dragged past the end of the pattern no longer jumps around.** The
   pattern still grows to fit, but the view keeps its scale while you drag.
+
+## 0.9.7 — 2026-11-11
+
+### Added
+- **A standard library of samples, built in.** Fifty drum, percussion and tonal one-shots
+  (808 and acoustic kicks, snares, claps, hats, cymbals, toms, congas, shakers, an 808 bass,
+  marimba, glockenspiel) are in the Library tab from the first start: no download. Drag one onto
+  a track for an audio clip, onto the Channel Rack for a new sampler channel, or onto an open
+  sampler to swap its sample. The "+ Channel" menu lists them too.
+- **A real sampler in the channel window.** Drag the start and end markers on the waveform to
+  pick the part that plays; Reverse and Normalize; transpose and fine tune; a volume envelope
+  (attack, decay, sustain, release) drawn over the waveform; One-shot (drums: the sample rings
+  out) or Gate (bass and melodies: it stops with the note); and cut groups, so a closed hi-hat
+  silences the open one.
+- **EQ: a band bank beside the graph.** Each band has a shape button, a gain slider and
+  FREQ and BW knobs next to the curve; bands that are switched off no longer clutter the graph.
+  New presets that only cut: below 20 Hz and above 18 kHz, low cut 80 Hz, low cut 150 Hz
+  (vocal), high cut 10 kHz.
+
+### Changed
+- **Kick, Clap, Hat and Bass are samples now.** The built-in synthesised instruments, which had
+  no waveform and no settings, are gone. A new project starts with Kick, Clap, Hat and Snare
+  samplers from the standard library, and you can see and edit each of them. Songs saved with
+  the old instruments open with the closest library samples and sound different.
+- Drum samples start exactly as recorded: the sampler no longer fades in the first 2 ms, which
+  dulled the attack.
+- Projects that use library samples open on any computer: they no longer store where the
+  library is installed.
+- WAVE starts with an empty project (eight tracks, the starter kit and an empty Pattern 1)
+  instead of a demo beat.
+- A click on the playlist's time ruler switches from PAT to SONG; a pattern loop that is playing
+  carries on as the song from there. PAT is shown amber and SONG green.
+
+### Fixed
+- A click on a channel's mini piano roll now brings the Piano roll to the front instead of
+  leaving it behind the Channel Rack.
 
 ## 0.9.6 — 2026-11-11
 

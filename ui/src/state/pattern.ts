@@ -6,9 +6,9 @@ import { t, tName } from '../lib/i18n';
 import { newSynthChannel } from '../lib/synth';
 import { prefs } from './prefs';
 import { be } from '../api/backend';
-import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, TOTAL_BEATS, type Channel, type Id, type Inst, type Note, type Op, type Pattern } from '../api/types';
+import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, samplerDefault, TOTAL_BEATS, type Channel, type Id, type LibFile, type Note, type Op, type Pattern } from '../api/types';
 import { baseName, clamp, mod } from '../lib/format';
-import { BAR, barsText, builtinChannel, cloneNotes, INST_NAME, gridW, notesText, stepsOf } from '../lib/pattern';
+import { BAR, barsText, cloneNotes, gridW, notesText, stepsOf } from '../lib/pattern';
 import { commit } from './edit';
 import { unwrap } from 'solid-js/store';
 import { allocId, plain, plainNotes, S } from './store';
@@ -225,12 +225,6 @@ export function setChannel(c: Channel, patch: Partial<Channel>, label: string) {
 export function toggleChanMute(c: Channel) { setChannel(c, c.mute ? { mute: false } : { mute: true, solo: false }, t('b.st.muteCh')); say(c.name + t(c.mute ? 'b.st.unmuted' : 'b.st.muted')); }
 export function toggleChanSolo(c: Channel) { setChannel(c, c.solo ? { solo: false } : { solo: true, mute: false }, t('b.st.soloCh')); say(c.name + t(c.solo ? 'b.st.soloOff' : 'b.st.soloOn')); }
 
-export function addBuiltin(inst: Inst) {
-  const c = builtinChannel(allocId(), inst);
-  commit([chanOp(c)], t('b.st.addCh'));
-  selectChannel(c.id);
-  say(t('b.st.addedCh', { name: INST_NAME[inst] }));
-}
 /** A new channel of the built-in synth playing factory preset `name` (or the blank patch). */
 export function addSynth(name: string | null) {
   const cat = S.catalog?.synth; if (!cat) { say(t('b.st.synthNA')); return; }
@@ -240,16 +234,16 @@ export function addSynth(name: string | null) {
   say(t('b.st.synthSay', { name: name ? tName(name) : t('b.st.emptySound') }));
 }
 const keysChannel = (id: Id): Channel => ({ id, name: 'WAVE Keys', color: '#e0a44a', kind: 'keys', keys: { release: KEYS_RELEASE.def, dynamics: KEYS_DYNAMICS.def }, vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: 60 });
-const samplerChannel = (id: Id, s: { id: Id; name: string; color: string }): Channel => ({ id, name: s.name, color: s.color, kind: 'sample', source: s.id, vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: SAMPLE_ROOT });
+/** `root`: the key at which the file plays at its own pitch (a library file may know it). */
+const samplerChannel = (id: Id, s: { id: Id; name: string; color: string }, root: number = SAMPLE_ROOT): Channel => ({ id, name: s.name, color: s.color, kind: 'sample', source: s.id, sampler: samplerDefault(), vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root });
 
-/** What a channel can play, for "add" and "replace": a built-in, a synth preset, WAVE Keys, a sampler of a source. */
-export type InstrumentPick = { kind: 'inst'; inst: Inst } | { kind: 'synth'; preset: string | null } | { kind: 'keys' } | { kind: 'sample'; source: Id };
+/** What a channel can play, for "add" and "replace": a synth preset, WAVE Keys, a sampler of a source (`root`: the file's own pitch, if known). */
+export type InstrumentPick = { kind: 'synth'; preset: string | null } | { kind: 'keys' } | { kind: 'sample'; source: Id; root?: number };
 function makeChannel(id: Id, pick: InstrumentPick): Channel | null {
   switch (pick.kind) {
-    case 'inst': return builtinChannel(id, pick.inst);
     case 'synth': { const cat = S.catalog?.synth; if (!cat) { say(t('b.st.synthNA')); return null; } return newSynthChannel(cat, id, pick.preset); }
     case 'keys': return keysChannel(id);
-    case 'sample': { const src = S.project.sources.find(x => x.id === pick.source); return src ? samplerChannel(id, src) : null; }
+    case 'sample': { const src = S.project.sources.find(x => x.id === pick.source); return src ? samplerChannel(id, src, pick.root) : null; }
   }
 }
 /**
@@ -262,14 +256,27 @@ export function replaceChannel(c: Channel, pick: InstrumentPick) {
   commit([{ op: 'putChannel', channel: { ...fresh, ...keep } }], t('b.st.replaceCh'));
   say(t('b.st.replacedCh', { from: c.name, to: fresh.name }));
 }
-/** Import audio files and make `c` a sampler of the first one. */
-export async function replaceWithFile(c: Channel) {
+/** Imports files and waits until their sources are in the store (the import's state event may still be in flight). */
+async function importSources(paths: string[]): Promise<Id[]> {
+  const r = await be().importAudio({ paths });
+  for (let k = 0; k < 50 && !r.sourceIds.every(id => S.project.sources.some(s => s.id === id)); k++) await new Promise(res => setTimeout(res, 20));
+  return r.sourceIds;
+}
+/**
+ * Make `c` a sampler of a file: a library file, or the first one picked in the file dialog.
+ * A sampler keeps its own settings (envelope, cut group …): only the sample changes.
+ */
+export async function replaceWithFile(c: Channel, file?: LibFile) {
   try {
-    const ps = await be().pickAudioFiles();
-    if (!ps?.length) return;
-    const r = await be().importAudio({ paths: ps.slice(0, 1) });
-    for (let k = 0; k < 50 && !r.sourceIds.every(id => S.project.sources.some(s => s.id === id)); k++) await new Promise(res => setTimeout(res, 20));
-    if (r.sourceIds[0] != null) replaceChannel(c, { kind: 'sample', source: r.sourceIds[0] });
+    const path = file?.path ?? (await be().pickAudioFiles())?.[0];
+    if (!path) return;
+    const [id] = await importSources([path]);
+    if (id == null) return;
+    const live = chanById(c.id) ?? c, src = S.project.sources.find(s => s.id === id);
+    if (live.kind === 'sample' && src) {
+      commit([chanOp(live, { source: id, name: src.name, root: file?.root ?? live.root } as Partial<Channel>)], t('b.cw.changeSample'));
+      say(t('b.st.replacedCh', { from: live.name, to: src.name }));
+    } else replaceChannel(live, { kind: 'sample', source: id, root: file?.root });
   } catch (e) { say(t('b.st.samplerErr', { err: String(e) })); }
 }
 
@@ -280,22 +287,24 @@ export function addKeys() {
   selectChannel(c.id);
   say(t('b.st.keysSay'));
 }
-export function addSampler(sourceId: Id) {
+/** A new sampler channel of a project source, at `index` in the rack (default: the end). */
+export function addSampler(sourceId: Id, root?: number, index?: number) {
   const s = S.project.sources.find(x => x.id === sourceId); if (!s) return;
-  const c = samplerChannel(allocId(), s);
-  commit([chanOp(c)], t('b.st.addSampler'));
+  const c = samplerChannel(allocId(), s, root);
+  commit([chanOp(c, {}, index)], t('b.st.addSampler'));
   selectChannel(c.id);
   say(t('b.st.samplerSay', { name: s.name }));
 }
-/** Import audio files (dialog, library) and add one sampler channel per file. */
-export async function addSamplerFiles(paths?: string[] | null) {
+/**
+ * Import audio files and add one sampler channel per file: library files (which may know their
+ * root key), or with nothing given the files picked in the dialog. `index`: where in the rack.
+ */
+export async function addSamplerFiles(files?: LibFile[] | null, index?: number) {
   try {
-    const ps = paths ?? await be().pickAudioFiles();
-    if (!ps?.length) return;
-    const r = await be().importAudio({ paths: ps });
-    // the import's state event may still be in flight: wait until the sources are in the store
-    for (let k = 0; k < 50 && !r.sourceIds.every(id => S.project.sources.some(s => s.id === id)); k++) await new Promise(res => setTimeout(res, 20));
-    for (const id of r.sourceIds) addSampler(id);
+    const list: { path: string; root?: number }[] | undefined = files ?? (await be().pickAudioFiles())?.map(path => ({ path }));
+    if (!list?.length) return;
+    const ids = await importSources(list.map(f => f.path));
+    ids.forEach((id, k) => addSampler(id, list[k]?.root, index != null ? index + k : undefined));
   } catch (e) { say(t('b.st.samplerErr', { err: String(e) })); }
 }
 export function cloneChannel(c: Channel) {
@@ -314,7 +323,7 @@ export function deleteChannel(c: Channel) {
   say(t('b.st.deletedCh', { name: c.name, used: used ? t(used === 1 ? 'b.st.usedIn1' : 'b.st.usedInN', { n: used }) : '' }));
 }
 export const chanSource = (c: Channel) => (c.kind === 'sample' ? S.project.sources.find(s => s.id === c.source) : undefined);
-export const chanKindLabel = (c: Channel) => (c.kind === 'inst' ? t('b.st.kindInst', { name: INST_NAME[c.inst] }) : c.kind === 'synth' ? t('b.st.kindSynth', { name: c.synth.preset ? tName(c.synth.preset) : t('b.st.kindCustom') }) : c.kind === 'keys' ? t('b.st.kindKeys') : t('b.st.kindSample', { name: chanSource(c) ? baseName(chanSource(c)!.path) : t('b.cw.noFile') }));
+export const chanKindLabel = (c: Channel) => (c.kind === 'synth' ? t('b.st.kindSynth', { name: c.synth.preset ? tName(c.synth.preset) : t('b.st.kindCustom') }) : c.kind === 'keys' ? t('b.st.kindKeys') : t('b.st.kindSample', { name: chanSource(c) ? baseName(chanSource(c)!.path) : t('b.cw.noFile') }));
 
 // ---------------------------------------------------------------- sound
 

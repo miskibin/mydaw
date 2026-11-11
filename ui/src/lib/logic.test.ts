@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { encodeFrame, MAGIC, SCOPE_LEN, SPEC_BANDS, TelemetryDecoder } from '../api/telemetry';
-import { demoProject, mockCatalog } from '../api/mockData';
+import { sketchProject, mockCatalog } from '../api/mockData';
 import type { Clip } from '../api/types';
 import { applyAll, OpError } from './applyOps';
-import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resizeClip, sliceClip } from './clipOps';
+import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resizeClip, resizeClips, sliceClip } from './clipOps';
 import { eqCurve } from './eq';
 import { exportRange, exportSeconds, fmtExportLen, songEnd } from './export';
 import { fmtClock, fmtPos, panText, TapTracker, volText } from './format';
@@ -140,6 +140,14 @@ describe('op builders', () => {
     const l = resizeClip(c, 'l', 0, 0.25, 6);
     expect([l.start, l.offset, l.len]).toEqual([3, 0, 5]);
   });
+  it('trims a selection together, each clip within its own limits', () => {
+    const pat = clip({ id: 1, kind: 'pat', start: 0, len: 4 }), short = clip({ id: 2, kind: 'pat', start: 0, len: 1 });
+    const audio = clip({ id: 3, kind: 'audio', start: 0, len: 4, offset: 0 });
+    const out = resizeClips([pat, short, audio], 'r', 4, 0.25, c => (c.kind === 'audio' ? 6 : Infinity));
+    expect(out.map(c => c.len)).toEqual([8, 5, 6]); // the audio clip stops at its source
+    expect(resizeClips([pat, short], 'r', -2, 0.25, () => Infinity).map(c => c.len)).toEqual([2, 0.25]);
+    expect(resizeClips([pat], 'l', 1, 0.25, () => Infinity).map(c => [c.start, c.len])).toEqual([[1, 3]]);
+  });
   it('duplicate span rounds up to the snap', () => {
     expect(duplicateSpan([clip({ start: 0, len: 3 })], 4)).toBe(4);
     expect(duplicateSpan([clip({ start: 1, len: 2 }), clip({ start: 4, len: 1 })], 1)).toBe(4);
@@ -150,7 +158,7 @@ describe('op builders', () => {
     expect(out.map(c => [c.id, c.start, c.track])).toEqual([[100, 0, 0], [101, 2, 1]]);
   });
   it('inserting a track shifts lanes and clips (valid batch)', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     const ops = insertTrackOps(p, 1, p.nextId);
     const q = applyAll(p, ops);
     expect(q.tracks.length).toBe(9);
@@ -164,12 +172,12 @@ describe('op builders', () => {
 
 describe('mock op application', () => {
   it('is atomic', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     expect(() => applyAll(p, [{ op: 'setBpm', bpm: 100 }, { op: 'removeInsert', id: 0 }])).toThrow(OpError);
     expect(p.bpm).toBe(128);
   });
   it('moves effects and bumps nextId', () => {
-    const p = applyAll(demoProject(cat), [{ op: 'moveFx', fxId: 902, to: 2 }, { op: 'putFx', insertId: 2, fx: newFx(cat, 5000, 'sat', 128) }]);
+    const p = applyAll(sketchProject(cat), [{ op: 'moveFx', fxId: 902, to: 2 }, { op: 'putFx', insertId: 2, fx: newFx(cat, 5000, 'sat', 128) }]);
     expect(p.inserts[6].fx.map(f => f.id)).toEqual([903, 904, 902]);
     expect(p.nextId).toBe(5001);
   });
@@ -206,7 +214,7 @@ describe('formatting & eq', () => {
 
 describe('export range', () => {
   it('uses song by default and loop when asked', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     expect(songEnd(p)).toBe(32);
     expect(exportRange(p, false)).toEqual({ from: 0, to: 32 });
     expect(exportRange(p, true)).toEqual({ from: 0, to: 32 });

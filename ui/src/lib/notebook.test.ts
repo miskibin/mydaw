@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { demoProject, mockCatalog } from '../api/mockData';
+import { sketchProject, mockCatalog } from '../api/mockData';
 import type { Notebook, Project } from '../api/types';
 import { applyAll } from './applyOps';
 import {
@@ -93,7 +93,7 @@ describe('notebook op (mirror of ops.rs putNotebook)', () => {
   const cat = mockCatalog();
   const nb: Notebook = { pages: [{ id: 9000, name: 'Zwrotka 1', startBar: 1, text: '[Zwrotka]\nraz\ndwa' }, { id: 9001, name: 'Refren', startBar: 17, text: 'la' }] };
   it('round-trips through the model and JSON, bumping nextId', () => {
-    const p = applyAll(demoProject(cat), [{ op: 'putNotebook', notebook: nb }]);
+    const p = applyAll(sketchProject(cat), [{ op: 'putNotebook', notebook: nb }]);
     expect(p.notebook).toEqual(nb);
     expect(p.nextId).toBeGreaterThan(9001);
     const back = JSON.parse(JSON.stringify(p)) as Project;
@@ -101,7 +101,7 @@ describe('notebook op (mirror of ops.rs putNotebook)', () => {
     expect(notebookHash(back.notebook)).toBe(notebookHash(nb));
   });
   it('rejects duplicate ids and bad bars, changing nothing', () => {
-    const p0 = demoProject(cat);
+    const p0 = sketchProject(cat);
     expect(() => applyAll(p0, [{ op: 'putNotebook', notebook: { pages: [nb.pages[0], { ...nb.pages[1], id: 9000 }] } }])).toThrow();
     expect(() => applyAll(p0, [{ op: 'putNotebook', notebook: withPage(nb, 9000, { startBar: 0 }) }])).toThrow();
     expect(p0.notebook).toBeUndefined();

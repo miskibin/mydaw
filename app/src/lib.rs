@@ -447,7 +447,7 @@ async fn library_install(app: St<'_>, handle: AppHandle, id: String) -> R<()> {
 #[tauri::command]
 async fn library_files(kit: Option<String>, folder: Option<String>) -> R<Vec<library::FileInfo>> {
     tauri::async_runtime::spawn_blocking(move || match (kit, folder) {
-        (Some(k), _) => Ok(library::kit_files(&k)),
+        (Some(k), _) => library::kit_files(&k),
         (None, Some(f)) => Ok(library::folder_files(&PathBuf::from(f))),
         _ => Err("pass `kit` or `folder`".to_string()),
     })
@@ -697,7 +697,7 @@ pub fn run() {
         .as_ref()
         .filter(|p| std::path::Path::new(p).is_file())
         .cloned();
-    let engine = Engine::new(Project::demo(), plugins.factory());
+    let engine = Engine::new(Project::empty(), plugins.factory());
     if let Some(p) = project {
         if let Err(e) = engine.open(std::path::Path::new(&p)) {
             log::warn!("could not reopen {p}: {e}");

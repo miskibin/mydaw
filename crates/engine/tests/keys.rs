@@ -33,7 +33,7 @@ const CH: Id = 2000;
 fn project(notes: Vec<Note>, keys: KeysState) -> Project {
     let mut p = Project::empty();
     p.inserts[0].fx.clear();
-    p.channels.push(Channel { name: "WAVE Keys".into(), src: ChannelSrc::Keys { keys }, root: 60, ..Channel::builtin(CH, Inst::Kick) });
+    p.channels.push(Channel { name: "WAVE Keys".into(), src: ChannelSrc::Keys { keys }, root: 60, ..Channel::new(CH, "", "#4f8ef7", ChannelSrc::Keys { keys: Default::default() }) });
     p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes, swing: 0.0 }];
     p.clips = vec![Clip { id: 1, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None }];
     p
@@ -114,7 +114,6 @@ fn settings_are_validated_saved_and_undone() {
     let good = Channel { src: ChannelSrc::Keys { keys: KeysState { release: 900.0, dynamics: 40.0 } }, ..ch };
     e.apply(&[Op::PutChannel { channel: good.clone(), index: None }], false, None).unwrap();
     assert_eq!(e.project().channel(CH).unwrap().src, good.src);
-    assert!(e.project().channel(CH).unwrap().pitched());
 
     // JSON: {"kind":"keys","keys":{"release":900,"dynamics":40}}, and a bare {"kind":"keys"} loads with the defaults
     let v = serde_json::to_value(e.project().channel(CH).unwrap()).unwrap();

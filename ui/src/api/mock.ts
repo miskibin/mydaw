@@ -3,7 +3,8 @@
 // streams binary telemetry frames (encoded exactly like the real ones).
 import type { Backend, EventMap, OsDropEvent } from './backend';
 import { encodeFrame, SCOPE_LEN, SPEC_BANDS, type EncFx } from './telemetry';
-import { BUILTIN, demoProject, emptyProject, mockCatalog } from './mockData';
+import { BUILTIN, emptyProject, mockCatalog, sketchProject } from './mockData';
+import { FACTORY_FILES, FACTORY_KIT, factoryFile, LIB_SCHEME, libPath } from '../lib/factory';
 
 /** Reverb mix (%) the engine computes for the research plate at a -18 dB send (autovocal::reverb_mix_for_send). */
 const MOCK_REVERB_MIX = 37.2;
@@ -40,6 +41,16 @@ function synthPeaks(seed: number, dur: number, bpm: number): Float32Array {
     const t = i / 100, ph = (t % (spb / (style === 1 ? 2 : 1))) / spb;
     const env = style === 0 ? Math.exp(-ph * 9) * 0.85 + 0.05 : style === 1 ? Math.exp(-ph * 4) * 0.6 + 0.2 : 0.45 + 0.25 * Math.sin(t * 2.1) * Math.sin(t * 0.7);
     const a = clamp(env * (0.75 + 0.25 * r()), 0, 1);
+    out[2 * i] = -a * (0.85 + 0.15 * r()); out[2 * i + 1] = a;
+  }
+  return out;
+}
+
+/** Peaks of a one-shot (a standard-library sample): a hit that decays over its length. */
+function oneShotPeaks(seed: number, dur: number): Float32Array {
+  const n = Math.max(1, Math.round(dur * 100)), out = new Float32Array(n * 2), r = rng(seed);
+  for (let i = 0; i < n; i++) {
+    const a = clamp(Math.exp(-(i / n) * 5) * (0.8 + 0.2 * r()), 0, 1);
     out[2 * i] = -a * (0.85 + 0.15 * r()); out[2 * i + 1] = a;
   }
   return out;
@@ -84,7 +95,7 @@ export class MockBackend implements Backend {
     : null;
   private cat: Catalog = mockCatalog();
   // perf harness hook: perf/ui_bench.mjs injects a generated long project here (see perf/README)
-  private p: Project = (typeof window !== 'undefined' && (window as unknown as { __waveFixture?: Project }).__waveFixture) || demoProject(this.cat);
+  private p: Project = (typeof window !== 'undefined' && (window as unknown as { __waveFixture?: Project }).__waveFixture) || sketchProject(this.cat);
   private revision = 1;
   private savedRev = 1;
   private path: string | null = null;
@@ -106,6 +117,7 @@ export class MockBackend implements Backend {
   private srcMeta = new Map<Id, MockSource>();
   private takeN = 0;
   private kits = [
+    { id: FACTORY_KIT, name: 'Standard library', description: 'Drums, percussion and tonal one-shots that ship with WAVE', bytes: FACTORY_FILES.reduce((n, f) => n + f.bytes, 0), count: FACTORY_FILES.length, installed: true },
     { id: 'wave-drums', name: 'WAVE Drums', description: 'Stopy, werble, hi-haty i pętle perkusyjne', bytes: 86e6, count: 240, installed: false },
     { id: 'wave-keys', name: 'WAVE Keys & Pads', description: 'Akordy, pady i tekstury', bytes: 142e6, count: 96, installed: true },
     { id: 'wave-fx', name: 'WAVE FX', description: 'Uplightery, impakty, szumy', bytes: 38e6, count: 64, installed: false },
@@ -493,13 +505,21 @@ export class MockBackend implements Backend {
     const prev = structuredClone(this.p);
     const sourceIds: Id[] = [], clipIds: Id[] = [];
     a.paths.forEach((path, k) => {
-      const name = (path.split(/[\\/]/).pop() ?? path).replace(/\.[^.]+$/, '');
-      const h = hash(path), id = this.p.nextId++;
+      // a file of the sample library is one source however often it is used (engine.rs `import_audio`)
+      const lib = path.startsWith(LIB_SCHEME), had = lib ? this.p.sources.find(s => s.path === path) : undefined;
+      const fac = factoryFile(path);
+      const name = fac?.name ?? (path.split(/[\\/]/).pop() ?? path).replace(/\.[^.]+$/, '');
+      const h = hash(path), id = had?.id ?? this.p.nextId++;
       const vocal = isVocalName(name);
       const mins = /(\d+)\s*min/i.exec(name); // e.g. "Long take 4min.wav" (dev/perf checks)
-      const dur = mins ? +mins[1] * 60 : vocal ? VOCAL_DUR : /loop/i.test(name) ? 4 * 4 * this.spb() : 0.6 + (h % 700) / 100;
-      const src: MockSource = { id, name, color: vocal ? '#d9678f' : TC[(this.p.sources.length + 3) % TC.length], path, dur, sr: 48000, ch: vocal ? 1 : 2, peakDb: -1 - (h % 60) / 10, seed: h, vocal };
-      this.srcMeta.set(id, src); this.p.sources.push(strip(src)); sourceIds.push(id);
+      const dur = had?.dur ?? fac?.dur ?? (mins ? +mins[1] * 60 : vocal ? VOCAL_DUR : /loop/i.test(name) ? 4 * 4 * this.spb() : 0.6 + (h % 700) / 100);
+      if (!had) {
+        const src: MockSource = fac
+          ? { id, name, color: fac.color, path, dur, sr: 44100, ch: fac.ch, peakDb: -1, seed: h }
+          : { id, name, color: vocal ? '#d9678f' : TC[(this.p.sources.length + 3) % TC.length], path, dur, sr: 48000, ch: vocal ? 1 : 2, peakDb: -1 - (h % 60) / 10, seed: h, vocal };
+        this.srcMeta.set(id, src); this.p.sources.push(strip(src));
+      }
+      sourceIds.push(id);
       if (a.track != null && a.beat != null) {
         const tr = clamp(a.track + k, 0, this.p.tracks.length - 1), cid = this.p.nextId++;
         const len = Math.min(dur / this.spb(), 512 - a.beat);
@@ -530,6 +550,7 @@ export class MockBackend implements Backend {
       const a = Math.round(meta.trimFrom.offSec * 100) * 2;
       pk = full.slice(a, a + Math.round(s.dur * 100) * 2);
     } else if (meta?.vocal) pk = vocalPeaks(synthVocal(meta.seed, s.dur));
+    else if (s.path.startsWith(LIB_SCHEME)) pk = oneShotPeaks(meta?.seed ?? id, s.dur);
     else pk = synthPeaks(meta?.seed ?? id, s.dur, 128);
     if (rev) { const n = pk.length / 2, o = new Float32Array(pk.length); for (let i = 0; i < n; i++) { o[2 * i] = pk[2 * (n - 1 - i)]; o[2 * i + 1] = pk[2 * (n - 1 - i) + 1]; } pk = o; }
     if (norm) { let m = 0; for (const v of pk) m = Math.max(m, Math.abs(v)); const g = m > 1e-6 ? dbg(-0.3) / m : 1; for (let i = 0; i < pk.length; i++) pk[i] *= g; }
@@ -824,6 +845,8 @@ export class MockBackend implements Backend {
   async keysStatus(): Promise<KeysStatus> { await delay(); return { state: 'ready', error: null, kit: 'salamander-piano', installed: true }; }
   async libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]> {
     await delay(10);
+    // the standard library is listed by its portable paths (the app lists where it is installed; importing either gives `lib:` sources)
+    if (q.kit === FACTORY_KIT) return FACTORY_FILES.map(f => ({ name: f.name, path: libPath(f.file), group: f.group, root: f.root }));
     const root = q.kit ? 'C:\\WAVE\\Library\\' + q.kit : q.folder ?? '';
     const groups: Record<string, string[]> = q.kit === 'wave-keys'
       ? { Pady: ['Warm Pad C', 'Glass Pad Am', 'Choir Pad F'], Akordy: ['Rhodes Chord 1', 'Rhodes Chord 2', 'Piano Stab'], Pętle: ['Keys Loop 120', 'Pad Loop Am-F'] }
@@ -838,12 +861,14 @@ export class MockBackend implements Backend {
   // ---------- project files ----------
   private resetTo(p: Project, path: string | null) {
     this.patPlay = null;
+    // ids start over in a new project: the audio of the previous one must not answer to them
+    this.srcMeta.clear(); this.recPeaks.clear();
     this.p = p; this.undoStack = []; this.redoStack = []; this.path = path;
     this.tr = { ...this.tr, playing: false }; this.revision++; this.savedRev = this.revision;
     this.emit('state', this.dto());
   }
-  async projectNew() { this.resetTo(emptyProject(this.cat), null); return this.dto(); }
-  async projectOpen(path?: string) { this.resetTo(demoProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave'); return this.dto(); }
+  async projectNew() { this.resetTo(emptyProject(), null); return this.dto(); }
+  async projectOpen(path?: string) { this.resetTo(sketchProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave'); return this.dto(); }
   async projectSave(saveAs?: boolean) {
     if (!this.path || saveAs) this.path = 'C:\\Users\\michal\\Music\\Projekt ' + (1 + (this.revision % 9)) + '.wave';
     this.savedRev = this.revision; this.emit('state', this.dto());
@@ -931,7 +956,7 @@ export class MockBackend implements Backend {
 
   /** Dev helper: a sung vocal take on the Vocal track and a vocal chain on its insert. */
   async addDemoVocal() {
-    const r = await this.importAudio({ paths: ['Vocal take 1.wav'], track: 5, beat: 0 });
+    const r = await this.importAudio({ paths: ['Vocal take 1.wav'], track: this.vocalTrack(), beat: 0 });
     const ins = this.p.inserts.find(m => m.name === 'Vocal') ?? this.p.inserts[6];
     const mk = (type: Fx['type']) => newFx(this.cat, this.p.nextId++, type as never, this.p.bpm);
     const eq = ins.fx.find(f => f.type === 'eq');
@@ -949,7 +974,7 @@ export class MockBackend implements Backend {
    * Dev helper: five sung takes of a 4-bar phrase on the Vocal track, as if loop-recorded
    * over bars 9–12 (what `finishRec` produces), so take lanes can be tried without a mic.
    */
-  async addDemoTakes(track = 5, from = 32, bars = 4) {
+  async addDemoTakes(track = this.vocalTrack(), from = 32, bars = 4) {
     const prev = structuredClone(this.p), spb = this.spb(), len = bars * 4, dur = len * spb, landed: [Id, number, number][] = [];
     for (let k = 0; k < 5; k++) {
       const id = this.p.nextId++;
@@ -961,11 +986,13 @@ export class MockBackend implements Backend {
     this.pushUndo(prev); this.changed();
   }
 
-  /** Dev helper: drop two demo loops on Pad/Perc like the prototype did. */
+  /** Dev helper: two audio loops on the vocal track (free of pattern clips in every starting project). */
   async addDemoAudio() {
-    await this.importAudio({ paths: ['Pad Loop Am-F.wav'], track: 3, beat: 32 });
-    await this.importAudio({ paths: ['Perc Loop.wav'], track: 4, beat: 48 });
+    await this.importAudio({ paths: ['Pad Loop Am-F.wav'], track: this.vocalTrack(), beat: 32 });
+    await this.importAudio({ paths: ['Perc Loop.wav'], track: this.vocalTrack(), beat: 64 });
   }
+  /** Index of the track named "Vocal" (the armed one in the demo), else the sixth. */
+  private vocalTrack() { const i = this.p.tracks.findIndex(t => t.name === 'Vocal'); return i >= 0 ? i : Math.min(5, this.p.tracks.length - 1); }
 }
 
 function strip(s: MockSource): Source {

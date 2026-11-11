@@ -263,6 +263,8 @@ const UNDO_LIMIT: usize = 200;
 impl Engine {
     pub fn new(mut project: Project, factory: Arc<dyn PluginFactory>) -> Arc<Self> {
         project.migrate();
+        let mut sources = SourceStore::default();
+        load_library_sources(&project, &mut sources);
         let e = Arc::new(Self {
             core: Mutex::new(Core {
                 project,
@@ -271,7 +273,7 @@ impl Engine {
                 revision: 1,
                 gesture: None,
                 gesture_unreported: false,
-                sources: SourceStore::default(),
+                sources,
                 path: None,
                 saved_revision: 1,
                 transport: TransportDto { playing: false, rec: false, monitor: false, metro: false, count_in: true, start_beat: 0.0 },
@@ -655,9 +657,23 @@ impl Engine {
     pub fn import_audio(&self, paths: &[PathBuf], place: Option<(u32, f64)>) -> Result<(Vec<Id>, Vec<Id>), EngineError> {
         let mut loaded = vec![];
         let mut errors = vec![];
+        // A file of the sample library is one source however often it is used (a sampler
+        // channel and audio clips share it), stored by its portable `lib:` path.
+        let known: HashMap<String, Id> = {
+            let c = self.core.lock();
+            c.project.sources.iter().filter(|s| s.path.starts_with(crate::factory::SCHEME) && c.sources.get(s.id).is_some()).map(|s| (s.path.clone(), s.id)).collect()
+        };
         for p in paths {
-            match Audio::load(p) {
-                Ok(a) => loaded.push((p.clone(), a)),
+            let stored = match p.to_str() {
+                Some(s) if s.starts_with(crate::factory::SCHEME) => s.to_string(),
+                _ => crate::factory::portable(p),
+            };
+            if known.contains_key(&stored) {
+                loaded.push((p.clone(), stored, None));
+                continue;
+            }
+            match Audio::load_path(&stored, Path::new(".")) {
+                Ok(a) => loaded.push((p.clone(), stored, Some(a))),
                 Err(e) => errors.push(e),
             }
         }
@@ -669,24 +685,28 @@ impl Engine {
         let mut src_ids = vec![];
         let mut clip_ids = vec![];
         let bpm = c.project.bpm;
-        for (k, (path, audio)) in loaded.into_iter().enumerate() {
-            let id = c.project.alloc_id();
-            let name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Audio".into());
-            let colors = ["#69c3d6", "#47b8a8", "#5fbf8a", "#7c8cf8", "#e0a44a", "#9a8cf0", "#d9678f", "#5aa9e6"];
-            let color = colors[c.project.sources.len() % colors.len()].to_string();
-            let src = Source {
-                id,
-                name,
-                color,
-                path: path.display().to_string(),
-                dur: audio.seconds(),
-                sr: audio.sr,
-                ch: audio.channels,
-                peak_db: crate::dsp::gain_to_db(audio.peak()),
+        for (k, (path, stored, audio)) in loaded.into_iter().enumerate() {
+            let reuse = c.project.sources.iter().find(|s| s.path == stored && s.path.starts_with(crate::factory::SCHEME)).map(|s| (s.id, s.dur));
+            let (id, seconds) = match (reuse, audio) {
+                (Some(r), _) if c.sources.get(r.0).is_some() => r,
+                (_, None) => continue,
+                (_, Some(audio)) => {
+                    let id = c.project.alloc_id();
+                    let factory = crate::factory::embedded(&stored);
+                    let name = match factory {
+                        Some(f) => f.name.to_string(),
+                        None => path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Audio".into()),
+                    };
+                    let colors = ["#69c3d6", "#47b8a8", "#5fbf8a", "#7c8cf8", "#e0a44a", "#9a8cf0", "#d9678f", "#5aa9e6"];
+                    let color = factory.map(crate::factory::color).unwrap_or(colors[c.project.sources.len() % colors.len()]).to_string();
+                    let seconds = audio.seconds();
+                    let src = Source { id, name, color, path: stored, dur: seconds, sr: audio.sr, ch: audio.channels, peak_db: crate::dsp::gain_to_db(audio.peak()) };
+                    c.sources.insert(id, Arc::new(audio));
+                    c.project.sources.push(src);
+                    (id, seconds)
+                }
             };
-            let len_beats = audio.seconds() / (60.0 / bpm);
-            c.sources.insert(id, Arc::new(audio));
-            c.project.sources.push(src);
+            let len_beats = seconds / (60.0 / bpm);
             src_ids.push(id);
             if let Some((track, beat)) = place {
                 let ntracks = c.project.tracks.len() as u32;
@@ -1097,7 +1117,10 @@ impl Engine {
     }
 
     pub fn preview_file(&self, path: &Path) -> Result<(), EngineError> {
-        let audio = Arc::new(Audio::load(path)?);
+        let audio = Arc::new(match path.to_str() {
+            Some(s) if s.starts_with(crate::factory::SCHEME) => Audio::load_path(s, Path::new("."))?,
+            _ => Audio::load(path)?,
+        });
         let mut c = self.core.lock();
         let end = audio.frames as f64;
         send(&mut c, Cmd::Preview(Some(Box::new(Preview { audio, pos: 0.0, start: 0.0, end, gain: 0.8, fade_in: 0.0, fade_out: 0.0 }))));
@@ -1116,8 +1139,8 @@ impl Engine {
         let mut c = self.core.lock();
         let ch = c.project.channel(chan).ok_or(EngineError::Msg(format!("no channel {chan}")))?;
         let key = key.unwrap_or(ch.root).min(127);
-        // percussion rings out by itself; pitched channels get a short note
-        let len = if ch.pitched() { 0.35 } else { 0.25 };
+        // a one-shot rings out by itself; held sounds get a short note
+        let len = 0.35;
         send(&mut c, Cmd::Audition { chan, key, vel: vel.clamp(0.0, 1.0), len, pattern });
         Ok(())
     }
@@ -1173,6 +1196,10 @@ impl Engine {
         c.transport.playing = false;
         let mut project = project;
         project.migrate();
+        // ids start over in a new project: audio of the previous one must not answer to them
+        let mut sources = SourceStore::default();
+        load_library_sources(&project, &mut sources);
+        c.sources = sources;
         c.project = project;
         c.undo.clear();
         c.redo.clear();
@@ -1193,7 +1220,7 @@ impl Engine {
         // move recordings that live in the scratch folder next to the project
         let audio_dir = dir.join(format!("{} Audio", path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()));
         let scratch = scratch_dir();
-        for s in p.sources.iter_mut() {
+        for s in p.sources.iter_mut().filter(|s| !s.path.starts_with(crate::factory::SCHEME)) {
             let sp = PathBuf::from(&s.path);
             if sp.starts_with(&scratch) {
                 let dst = audio_dir.join(sp.file_name().unwrap_or_default());
@@ -1227,16 +1254,19 @@ impl Engine {
     pub fn open(&self, path: &Path) -> Result<Vec<String>, EngineError> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("not a WAVE project: {e}"))?;
-        let mut p: Project = serde_json::from_value(doc.get("project").cloned().unwrap_or(doc)).map_err(|e| format!("not a WAVE project: {e}"))?;
+        let mut p = Project::from_json(doc.get("project").cloned().unwrap_or(doc)).map_err(|e| format!("not a WAVE project: {e}"))?;
         p.migrate();
         let dir = path.parent().unwrap_or(Path::new("."));
         let mut warnings = vec![];
         let mut store = SourceStore::default();
         for s in p.sources.iter_mut() {
-            let sp = PathBuf::from(&s.path);
-            let abs = if sp.is_absolute() { sp } else { dir.join(sp) };
-            s.path = abs.display().to_string();
-            match Audio::load(&abs) {
+            // library paths stay portable; everything else is absolute in memory
+            if !s.path.starts_with(crate::factory::SCHEME) {
+                let sp = PathBuf::from(&s.path);
+                let abs = if sp.is_absolute() { sp } else { dir.join(sp) };
+                s.path = abs.display().to_string();
+            }
+            match Audio::load_path(&s.path, dir) {
                 Ok(a) => store.insert(s.id, Arc::new(a)),
                 Err(e) => warnings.push(e),
             }
@@ -1823,10 +1853,20 @@ fn sample_audio(store: &SourceStore, chans: &[Channel]) -> HashMap<Id, Arc<Audio
     chans
         .iter()
         .filter_map(|c| match c.src {
-            ChannelSrc::Sample { source } => store.get(source).map(|a| (source, a.clone())),
-            ChannelSrc::Inst { .. } | ChannelSrc::Synth { .. } | ChannelSrc::Keys { .. } => None,
+            ChannelSrc::Sample { source, .. } => store.get(source).map(|a| (source, a.clone())),
+            ChannelSrc::Synth { .. } | ChannelSrc::Keys { .. } => None,
         })
         .collect()
+}
+
+/// Decodes the sample-library sources of a project that did not come from a file (a new
+/// project's starter kit). A kit that is not installed leaves its channels silent.
+fn load_library_sources(p: &Project, store: &mut SourceStore) {
+    for s in p.sources.iter().filter(|s| s.path.starts_with(crate::factory::SCHEME)) {
+        if let Ok(a) = Audio::load_path(&s.path, Path::new(".")) {
+            store.insert(s.id, Arc::new(a));
+        }
+    }
 }
 
 /// Auditions that still point at an existing take.
@@ -1854,7 +1894,7 @@ fn push_undo(c: &mut Core, before: Project) {
 /// channel, else the first channel.
 fn midi_channel(c: &Core) -> Option<Id> {
     let p = &c.project;
-    c.midi.target.filter(|id| p.channel(*id).is_some()).or_else(|| p.channels.iter().find(|x| x.pitched()).or(p.channels.first()).map(|x| x.id))
+    c.midi.target.filter(|id| p.channel(*id).is_some()).or_else(|| p.channels.first().map(|x| x.id))
 }
 
 /// Mixer insert index of the first armed track (where the keyboard is heard through).
@@ -2020,8 +2060,7 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Ar
             let insert = c.insert.and_then(ins_idx);
             let heard = p.patterns.iter().filter(|pt| pt.notes.iter().any(|n| n.ch == c.id)).find_map(|pt| pat_home(pt.id));
             let (kind, sample) = match c.src {
-                ChannelSrc::Inst { inst } => (crate::synth::VoiceKind::of(inst), None),
-                ChannelSrc::Sample { source } => (crate::synth::VoiceKind::Sample, audio.get(&source).cloned()),
+                ChannelSrc::Sample { source, .. } => (crate::synth::VoiceKind::Sample, audio.get(&source).cloned()),
                 ChannelSrc::Synth { .. } => (crate::synth::VoiceKind::Synth, None),
                 ChannelSrc::Keys { .. } => (crate::synth::VoiceKind::Keys, None),
             };
@@ -2030,7 +2069,11 @@ fn build_patterns(p: &Project, audio: &HashMap<Id, Arc<Audio>>, keys: Option<&Ar
                 _ => None,
             };
             let (keys_release, keys_dynamics) = ks.map(|k| (k.release / 1000.0, k.dynamics / 100.0)).unwrap_or((0.35, 1.0));
-            ChanRt { id: c.id, kind, sample, keys: ks.and(keys.cloned()), keys_release, keys_dynamics, root: c.root, gain, pan, gain0: gain, pan0: pan, on, insert, heard, home: insert.or(heard).unwrap_or(0) }
+            let smp = match c.src {
+                ChannelSrc::Sample { source, sampler } => SmpRt::new(&sampler, p.sources.iter().find(|s| s.id == source).map(|s| s.peak_db)),
+                _ => SmpRt::default(),
+            };
+            ChanRt { id: c.id, kind, sample, smp, keys: ks.and(keys.cloned()), keys_release, keys_dynamics, root: c.root, gain, pan, gain0: gain, pan0: pan, on, insert, heard, home: insert.or(heard).unwrap_or(0) }
         })
         .collect();
     let pats = p

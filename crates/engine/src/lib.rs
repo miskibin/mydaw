@@ -6,6 +6,7 @@ pub mod midi;
 pub mod comp;
 pub mod content;
 pub mod demo;
+pub mod factory;
 pub mod model;
 pub mod music;
 pub mod ops;

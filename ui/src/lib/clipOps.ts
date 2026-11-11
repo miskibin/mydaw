@@ -59,6 +59,14 @@ export function resizeClip(o: Clip, edge: 'l' | 'r', target: number, minL: numbe
   return n;
 }
 
+/**
+ * Trim several clips together: the edge of each moves by `delta` beats (what the dragged clip's
+ * edge moved), each within its own limits (minimum length, its source, the song).
+ */
+export function resizeClips(clips: Clip[], edge: 'l' | 'r', delta: number, minL: number, srcLenOf: (c: Clip) => number): Clip[] {
+  return clips.map(o => resizeClip(o, edge, (edge === 'r' ? o.start + o.len : o.start) + delta, minL, srcLenOf(o)));
+}
+
 export function newTrack(id: number, n: number): Track {
   return { id, name: 'Track ' + (n + 1), color: '#8b93a1', muted: false, solo: false, arm: false, vol: VOL_UNITY, h: 56, insert: 0 };
 }

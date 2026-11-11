@@ -12,7 +12,9 @@ import { openMenu, say, setU, U } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { fitCanvas } from '../ui/frameLoop';
 import { dropClipAt, gridPoint } from './Playlist';
-import { addSamplerFiles, newPattern, openPattern } from '../state/pattern';
+import { addSamplerFiles, chanById, channels, newPattern, openPattern, replaceWithFile } from '../state/pattern';
+import { libGroup, STD_KIT } from '../state/library';
+import { chanWin } from './ChannelWindow';
 import { patternItemMenu } from './patternShared';
 import { InstIcon, patternIcon } from '../ui/instIcons';
 
@@ -149,6 +151,23 @@ function previewFile(f: LibFile) {
   say(t('d.br.prev', { name: f.name }));
 }
 
+/**
+ * A library file let go at a client point: onto a sampler's window = that channel plays it; onto
+ * the Channel Rack = a new sampler channel (before the row it was dropped on); anywhere else it
+ * is imported, as an audio clip when the point is on a playlist track. One source either way.
+ */
+function dropFile(f: LibFile, x: number, y: number, alt: boolean) {
+  const el = document.elementFromPoint(x, y) as HTMLElement | null;
+  const w = el?.closest('.chanwin') ? chanWin() : null, target = w ? chanById(w.id) : undefined;
+  if (target?.kind === 'sample') return void replaceWithFile(target, f);
+  if (w || el?.closest('.rackwin')) {
+    const row = el?.closest<HTMLElement>('[data-ch]');
+    const at = row ? channels().findIndex(c => c.id === Number(row.dataset.ch)) : -1;
+    return void addSamplerFiles([f], at >= 0 ? at : undefined);
+  }
+  void importAt([f.path], x, y, alt);
+}
+
 function FileList(props: { k: string }) {
   const groups = () => {
     const m = new Map<string, LibFile[]>();
@@ -160,12 +179,12 @@ function FileList(props: { k: string }) {
       <For each={groups()} fallback={<div class="fgroup">{t('d.br.nofiles')}</div>}>
         {([g, files]) => (
           <>
-            <Show when={g}><div class="fgroup">{g}</div></Show>
+            <Show when={g}><div class="fgroup">{libGroup(g)}</div></Show>
             <For each={files}>
               {f => (
                 <div class="fitem" classList={{ playing: U.previewing && U.previewPath === f.path }} title={t('d.br.file.tip')}
-                  onContextMenu={e => { e.preventDefault(); openMenu(e.clientX, e.clientY, [{ t: 'title', label: f.name }, { t: 'item', label: t('d.br.addsampler'), title: t('d.br.addsampler.tip'), act: () => void addSamplerFiles([f.path]) }], 90); }}
-                  onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); dragGhost(e, f.name, '#47b8a8', () => previewFile(f), (x, y, alt) => { void importAt([f.path], x, y, alt); }); }}>
+                  onContextMenu={e => { e.preventDefault(); openMenu(e.clientX, e.clientY, [{ t: 'title', label: f.name }, { t: 'item', label: t('d.br.addsampler'), title: t('d.br.addsampler.tip'), act: () => void addSamplerFiles([f]) }], 90); }}
+                  onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); dragGhost(e, f.name, '#47b8a8', () => previewFile(f), (x, y, alt) => dropFile(f, x, y, alt)); }}>
                   <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style={{ flex: 'none', opacity: 0.7 }}><path d="M4 12h2l2-6 3 12 3-9 2 3h4" /></svg>
                   <span class="ell">{f.name.replace(/\.[^.]+$/, '')}</span>
                 </div>
@@ -208,11 +227,11 @@ function LibraryTab() {
                 <Show when={k.installed} fallback={<span class="chev" />}>
                   <span class="chev" style={{ cursor: 'pointer' }} onClick={() => toggleOpen('k:' + k.id, { kit: k.id })}>{lib.open['k:' + k.id] ? '▾' : '▸'}</span>
                 </Show>
-                <span class="nm ell" style={{ cursor: k.installed ? 'pointer' : 'default' }} onClick={() => k.installed && toggleOpen('k:' + k.id, { kit: k.id })}>{k.name}</span>
+                <span class="nm ell" style={{ cursor: k.installed ? 'pointer' : 'default' }} onClick={() => k.installed && toggleOpen('k:' + k.id, { kit: k.id })}>{k.id === STD_KIT ? t('d.br.stdlib') : k.name}</span>
                 <Show when={!k.installed && !prog()}><button class="smallbtn primary" onClick={() => install(k)}>{t('d.br.install')}</button></Show>
               </div>
-              <span class="desc" style={{ 'padding-left': '22px' }}>{k.description}</span>
-              <span class="meta" style={{ 'padding-left': '22px' }}>{t('d.br.kitmeta', { n: k.count, size: fmtBytes(k.bytes) })}{k.installed ? t('d.br.kitinst') : ''}</span>
+              <span class="desc" style={{ 'padding-left': '22px' }}>{k.id === STD_KIT ? t('d.br.stdlibDesc') : k.description}</span>
+              <span class="meta" style={{ 'padding-left': '22px' }}>{k.id === STD_KIT ? t('d.br.stdlibMeta', { n: k.count }) : t('d.br.kitmeta', { n: k.count, size: fmtBytes(k.bytes) }) + (k.installed ? t('d.br.kitinst') : '')}</span>
               <Show when={prog()}>
                 {p => (
                   <div style={{ 'padding-left': '22px', display: 'flex', 'flex-direction': 'column', gap: '3px' }}>

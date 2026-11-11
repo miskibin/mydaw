@@ -12,7 +12,7 @@ fn rms(x: &[f32]) -> f32 {
 
 /// A demo project whose inserts carry the built-in effects that have audible tails.
 fn tail_heavy() -> Project {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
     let bpm = p.bpm;
     let mut next = 9000;
     for (k, ins) in p.inserts.iter_mut().enumerate().skip(1) {

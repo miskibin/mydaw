@@ -17,6 +17,21 @@ LGPL relinking: WAVE is open source and ships its full source, so you may rebuil
 against a modified LAME (`cargo build` with a patched `mp3lame-sys`). Patents on MP3 have expired.
 This notice is not legal advice; check the licence terms before redistributing a binary.
 
+## Standard library samples
+
+The standard library that ships inside WAVE (`crates/engine/library`) is made from
+recordings released to the public domain under
+[CC0-1.0](https://creativecommons.org/publicdomain/zero/1.0/):
+
+* files named `*-808*`: a Roland TR-808 sampled by Michael Fischer (Technopolis), 1994, via
+  the [TidalCycles sound library](https://github.com/tidalcycles/sounds-tr808-fischer);
+* all other files: the
+  [Versilian Community Sample Library](https://github.com/sgossner/VCSL) by Versilian Studios LLC.
+
+The files are edited (silence trimmed, tails faded, peaks normalised, re-encoded as FLAC) by
+`scripts/make-factory-library.py`; the exact source of each is pinned in `assets-manifest.json`.
+CC0 asks for no credit; it is given here anyway.
+
 ## Salamander Grand Piano (WAVE Keys)
 
 The WAVE Keys piano plays recordings from the

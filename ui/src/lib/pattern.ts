@@ -5,23 +5,25 @@
 // (absent = the channel's root); `v` velocity 0..1 (absent = 1).
 import { t, type TranslationKey } from './i18n';
 import { migrateSatParams } from './saturator';
-import { KEYS_RELEASE, SAMPLE_ROOT, TOTAL_BEATS, VOL_UNITY, type Channel, type Id, type Inst, type Note, type Op, type Pattern, type Project } from '../api/types';
+import { KEYS_RELEASE, SAMPLE_ROOT, SAMPLER, TOTAL_BEATS, type Channel, type Id, type Note, type Op, type Pattern, type Project, type SamplerState } from '../api/types';
+import { addStarterKit } from './factory';
 import { SYNTH_CATALOG } from '../api/synthCatalog';
 import { synthError } from './synth';
 
-export const INSTS: Inst[] = ['kick', 'clap', 'hat', 'bass'];
-export const INST_NAME: Record<Inst, string> = { kick: 'Kick', clap: 'Clap', hat: 'Hat', bass: 'Bass' };
-export const INST_COLOR: Record<Inst, string> = { kick: '#4f8ef7', clap: '#d9678f', hat: '#e0a44a', bass: '#7c8cf8' };
-export const instRoot = (i: Inst) => (i === 'bass' ? 36 : SAMPLE_ROOT);
 /** Beats per bar (4/4). */
 export const BAR = 4;
 const EPS = 1e-3;
 
-export function builtinChannel(id: Id, inst: Inst): Channel {
-  return { id, name: INST_NAME[inst], color: INST_COLOR[inst], kind: 'inst', inst, vol: VOL_UNITY, pan: 0, mute: false, solo: false, insert: null, root: instRoot(inst) };
+/** Why sampler settings cannot be used, or null (model.rs `SamplerState::check`). */
+export function samplerError(s: SamplerState | undefined): string | null {
+  if (!s) return null; // absent = the defaults
+  const within = (v: number, lo: number, hi: number) => Number.isFinite(v) && v >= lo && v <= hi;
+  if (!(within(s.start, 0, 1) && within(s.end, 0, 1) && s.end - s.start >= SAMPLER.minSpan - 1e-6)) return 'sampler start and end are fractions 0..1 of the file, start before end';
+  if (!(Number.isInteger(s.semi) && within(s.semi, SAMPLER.semi.min, SAMPLER.semi.max) && within(s.fine, SAMPLER.fine.min, SAMPLER.fine.max))) return 'sampler pitch is -24..24 semitones and -100..100 cents';
+  if (!(within(s.attack, SAMPLER.attack.min, SAMPLER.attack.max) && within(s.decay, SAMPLER.decay.min, SAMPLER.decay.max) && within(s.sustain, 0, 1) && within(s.release, SAMPLER.release.min, SAMPLER.release.max))) return 'sampler envelope: attack 0..2000 ms, decay 0..5000 ms, sustain 0..1, release 1..5000 ms';
+  if (!(Number.isInteger(s.cut) && within(s.cut, 0, SAMPLER.cutGroups))) return 'sampler cut group is 0 (none) or 1..8';
+  return null;
 }
-/** Channels whose notes have a pitch worth editing (piano roll). */
-export const isPitched = (c: Channel) => c.kind === 'sample' || c.kind === 'synth' || c.kind === 'keys' || c.inst === 'bass';
 export const keyOf = (n: Note, c: Channel | undefined) => n.p ?? c?.root ?? SAMPLE_ROOT;
 export const velOf = (n: Note) => n.v ?? 1;
 /** Number of 16ths in the pattern. */
@@ -67,30 +69,10 @@ export class PatternOpError extends Error {}
 
 const bump = (p: Project, id: Id) => { if (id >= p.nextId) p.nextId = id + 1; };
 
-export function channelForInst(p: Project, inst: Inst): Id {
-  const chans = p.channels ?? (p.channels = []);
-  const c = chans.find(x => x.kind === 'inst' && x.inst === inst);
-  if (c) return c.id;
-  const id = p.nextId++;
-  chans.push(builtinChannel(id, inst));
-  return id;
-}
-
-/** Old notes say `inst`: give them that instrument's channel (created if missing). */
-export function resolveNotes(p: Project, notes: Note[]) {
-  for (const n of notes) {
-    if (!n.ch && n.inst) n.ch = channelForInst(p, n.inst);
-    delete n.inst;
-  }
-}
-
-/** Project.migrate: channels for legacy notes (Kick, Clap, Hat, Bass order), four built-ins when empty. */
+/** Project.migrate: derived pattern lengths, the starter kit when the Channel Rack is empty. */
 export function migrateProject(p: Project) {
-  const used = new Set<Inst>();
-  for (const pt of p.patterns) for (const n of pt.notes) if (!n.ch && n.inst) used.add(n.inst);
-  for (const i of INSTS) if (used.has(i)) channelForInst(p, i);
-  for (const pt of p.patterns) { resolveNotes(p, pt.notes); fitLen(pt); }
-  if (!p.channels?.length) for (const i of INSTS) channelForInst(p, i);
+  for (const pt of p.patterns) fitLen(pt);
+  if (!p.channels?.length) addStarterKit(p);
   // saturator parameters from before the character saturator
   for (const ins of p.inserts) for (const fx of ins.fx) if (fx.type === 'sat' && migrateSatParams(fx.params)) fx.preset = null;
 }
@@ -119,9 +101,8 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean, adopt: <T ex
         if (!(n.step >= 0 && n.len > 0 && isFinite(n.step) && isFinite(n.len))) fail(`pattern ${pt.id}: a note has an invalid step/len`);
         if ((n.step + n.len) > TOTAL_BEATS * 4) fail(`pattern ${pt.id}: notes must end within ${TOTAL_BEATS} beats`);
         if (n.v != null && !(n.v >= 0 && n.v <= 1)) fail('note velocity `v` must be 0..1');
-        if (!n.ch && !n.inst) fail('every note needs `ch`');
+        if (!n.ch) fail('every note needs `ch`');
       }
-      resolveNotes(p, pt.notes);
       if (strict) { const bad = pt.notes.find(n => !(p.channels ?? []).some(c => c.id === n.ch)); if (bad) fail(`no channel with id ${bad.ch}`); }
       if (!pt.swing) delete pt.swing;
       for (const n of pt.notes) if (n.v === 1) delete n.v;
@@ -139,7 +120,10 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean, adopt: <T ex
       const c = structuredClone(op.channel);
       if (!(c.vol >= 0 && c.vol <= 1)) fail('channel vol is a fader position 0..1');
       if (!(c.pan >= -1 && c.pan <= 1)) fail('channel pan must be -1..1');
-      if (c.kind === 'sample' && !p.sources.some(s => s.id === c.source)) fail(`no source with id ${c.source}`);
+      if (c.kind === 'sample') {
+        if (!p.sources.some(s => s.id === c.source)) fail(`no source with id ${c.source}`);
+        const e = samplerError(c.sampler); if (e) fail(e);
+      }
       if (c.kind === 'synth') { const e = synthError(SYNTH_CATALOG, c.synth ?? { preset: null, params: {} }); if (e) fail(e); }
       if (c.kind === 'keys') {
         if (!(c.keys?.release >= KEYS_RELEASE.min && c.keys.release <= KEYS_RELEASE.max)) fail(`keys release must be ${KEYS_RELEASE.min}..${KEYS_RELEASE.max} ms`);
