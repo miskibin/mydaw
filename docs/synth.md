@@ -29,8 +29,19 @@ amp ADSR × velocity → pan. Envelopes: exponential (Redmon-style overshoot tar
 ADSRs. Two LFOs (sine/tri/saw/square/S&H, Hz or tempo sync), 4-slot mod matrix
 (sources: mod env, LFO 1/2, velocity, wheel, random, key, LFO 1 × wheel; 14 destinations).
 16 voices plus 4 fade slots: a stolen voice fades over 4 ms. Poly / mono / legato with glide
-(808 slides). Global: drive (the engine saturator core, triode voicing with auto gain, always
-running so its latency never moves), stereo chorus, tempo ping-pong delay, `reverb_v2`, output trim.
+(808 slides). In poly mode, notes struck within 30 ms of each other are one chord: with glide on
+they all slide from the note played before the chord, never from each other. Global: drive (the
+engine saturator core, triode voicing with auto gain, always running so its latency never moves),
+stereo chorus, tempo ping-pong delay, `reverb_v2`, output trim, chord headroom.
+
+**Chords.** Polyphonic patches play 12 dB below their mono level (`POLY_HEADROOM`), so a six-note
+chord of a pluck or keys patch (8–13 dB above one note) still lands near full scale. Nothing
+limits or compresses the instrument output: every note sounds in a chord exactly as it does
+alone (`a_chord_is_the_sum_of_its_notes`). The global drive works on the sum of all notes, so
+on a chord it adds intermodulation (−8 to −17 dB residual on a four-note chord at 12–40 %); poly
+factory presets therefore get their grit from the per-voice drive instead. WAVE Keys plays its
+recordings 12 dB lower for the same reason (one loud note −11 dBFS, six −5.7, ten −1.8 dBFS on
+the Salamander bank).
 
 Wavetables: harmonics capped at 256 per 2048-sample frame, third-octave mip levels crossfaded
 by pitch, so nothing above Nyquist is ever played. Real time: tables are built once off the
@@ -51,7 +62,8 @@ note-offs before note-ons at the same sample).
 - CPU, 16 voices × 2 osc × 7 unison, LP24 + drive, every global effect, 48 kHz / 64-sample
   blocks: mean 16.8 % of one core, p99 block 343 µs, worst 705 µs (budget 1333 µs).
 - Loudness (one 2 s note at velocity 100, C3 for 808/basses, C4 otherwise; trims set by
-  measurement): −19 LUFS (808, bass, pads) / −18 LUFS (others) within ±0.1, true peak ≤ −3 dBTP.
-  Short, peaky presets hit the −3 dBTP ceiling first: Pluck Trap −23.0, Zjazd −23.8, Arp Cyfrowy
-  −21.7, Pluck Ciepły −21.0, Arp Puls −20.3, Pluck Szklany −20.0 LUFS (integrated loudness of
-  a decaying single note understates how loud they sound in a line).
+  measurement): −19 LUFS (808, bass, pads) / −18 LUFS (others) within ±0.1, true peak ≤ −3 dBTP;
+  polyphonic presets 12 dB lower (the chord headroom).
+  Short, peaky presets (plucks, arps, mallets, FX hits) hit the true-peak ceiling first and
+  read lower in LUFS (`synth_lab levels` lists them); integrated loudness of a decaying single
+  note understates how loud they sound in a line.

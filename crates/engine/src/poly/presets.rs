@@ -130,17 +130,17 @@ pub fn all() -> Vec<Preset> {
             &[m(0, VEL, CUT, oct(1.0))],
         )),
         // ------------------------------------------------ pluck
-        pr("Pluck Trap", "Pluck", &[(FX_DRIVE, 28.0), (O1_WAVE, SAW), (O1_COARSE, 12.0), (O1_LEVEL, 60.0), (O2_WAVE, SQR), (O2_LEVEL, 50.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 20.0), (UNI_WIDTH, 70.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 700.0), (FLT_RES, 28.0), (FLT_DRIVE, 35.0), (FLT_ENV, 5.0), (MOD_A, 0.5), (MOD_D, 260.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 800.0), (AMP_S, 0.0), (AMP_R, 150.0), (FX_DELAY, 18.0), (FX_DTIME, 3.0), (FX_DFB, 30.0), (FX_REVERB, 15.0), (FX_RSIZE, 1.6), (FX_OUT, 0.6)]),
+        pr("Pluck Trap", "Pluck", &[(O1_WAVE, SAW), (O1_COARSE, 12.0), (O1_LEVEL, 60.0), (O2_WAVE, SQR), (O2_LEVEL, 50.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 20.0), (UNI_WIDTH, 70.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 700.0), (FLT_RES, 28.0), (FLT_DRIVE, 63.0), (FLT_ENV, 5.0), (MOD_A, 0.5), (MOD_D, 260.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 800.0), (AMP_S, 0.0), (AMP_R, 150.0), (FX_DELAY, 18.0), (FX_DTIME, 3.0), (FX_DFB, 30.0), (FX_REVERB, 15.0), (FX_RSIZE, 1.6), (FX_OUT, 1.7)]),
         pr("Pluck Szklany", "Pluck", &with(
-            &[(FX_DRIVE, 12.0), (O1_WAVE, AIR), (O1_LEVEL, 70.0), (O2_WAVE, DIGITAL), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (FLT_CUTOFF, 2000.0), (FLT_RES, 15.0), (FLT_ENV, 3.0), (MOD_A, 0.5), (MOD_D, 300.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 1600.0), (AMP_S, 0.0), (AMP_R, 400.0), (FX_CHORUS, 30.0), (FX_REVERB, 25.0), (FX_RSIZE, 2.2), (FX_OUT, 1.8)],
+            &[(O1_WAVE, AIR), (O1_LEVEL, 70.0), (O2_WAVE, DIGITAL), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (FLT_CUTOFF, 2000.0), (FLT_RES, 15.0), (FLT_ENV, 3.0), (MOD_A, 0.5), (MOD_D, 300.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 1600.0), (AMP_S, 0.0), (AMP_R, 400.0), (FX_CHORUS, 30.0), (FX_REVERB, 25.0), (FX_RSIZE, 2.2), (FLT_DRIVE, 12.0), (FX_OUT, 3.1)],
             &[m(0, VEL, CUT, oct(1.0))],
         )),
-        pr("Pluck Ciepły", "Pluck", &[(FX_DRIVE, 15.0), (O1_WAVE, TRI), (O1_LEVEL, 70.0), (O2_WAVE, SAW), (O2_LEVEL, 45.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 15.0), (UNI_WIDTH, 60.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1500.0), (FLT_RES, 10.0), (FLT_ENV, 2.5), (MOD_A, 0.5), (MOD_D, 250.0), (MOD_S, 0.0), (AMP_A, 1.5), (AMP_D, 1400.0), (AMP_S, 0.0), (AMP_R, 300.0), (FX_REVERB, 20.0), (FX_OUT, 0.5)]),
-        pr("Pluck Hard", "Pluck", &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 55.0), (O2_COARSE, 12.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 18.0), (UNI_WIDTH, 60.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 400.0), (FLT_RES, 42.0), (FLT_DRIVE, 60.0), (FLT_ENV, 5.5), (MOD_A, 0.5), (MOD_D, 140.0), (MOD_S, 0.0), (AMP_A, 0.8), (AMP_D, 650.0), (AMP_S, 0.0), (AMP_R, 90.0), (FX_DRIVE, 35.0), (FX_DELAY, 15.0), (FX_DTIME, 3.0), (FX_REVERB, 12.0), (FX_OUT, 0.8)]),
-        pr("Pluck EDM", "Pluck", &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 40.0), (O2_COARSE, 12.0), (UNI_VOICES, 2.0), (UNI_DETUNE, 40.0), (UNI_WIDTH, 95.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 800.0), (FLT_RES, 20.0), (FLT_ENV, 4.2), (MOD_A, 0.5), (MOD_D, 230.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 900.0), (AMP_S, 0.0), (AMP_R, 200.0), (FX_DRIVE, 15.0), (FX_CHORUS, 20.0), (FX_DELAY, 22.0), (FX_DTIME, 3.0), (FX_DFB, 38.0), (FX_REVERB, 20.0), (FX_RSIZE, 1.8), (FX_OUT, -0.2)]),
+        pr("Pluck Ciepły", "Pluck", &[(O1_WAVE, TRI), (O1_LEVEL, 70.0), (O2_WAVE, SAW), (O2_LEVEL, 45.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 15.0), (UNI_WIDTH, 60.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1500.0), (FLT_RES, 10.0), (FLT_ENV, 2.5), (MOD_A, 0.5), (MOD_D, 250.0), (MOD_S, 0.0), (AMP_A, 1.5), (AMP_D, 1400.0), (AMP_S, 0.0), (AMP_R, 300.0), (FX_REVERB, 20.0), (FLT_DRIVE, 15.0), (FX_OUT, 1.5)]),
+        pr("Pluck Hard", "Pluck", &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 55.0), (O2_COARSE, 12.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 18.0), (UNI_WIDTH, 60.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 400.0), (FLT_RES, 42.0), (FLT_DRIVE, 95.0), (FLT_ENV, 5.5), (MOD_A, 0.5), (MOD_D, 140.0), (MOD_S, 0.0), (AMP_A, 0.8), (AMP_D, 650.0), (AMP_S, 0.0), (AMP_R, 90.0), (FX_DELAY, 15.0), (FX_DTIME, 3.0), (FX_REVERB, 12.0), (FX_OUT, 1.2)]),
+        pr("Pluck EDM", "Pluck", &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 40.0), (O2_COARSE, 12.0), (UNI_VOICES, 2.0), (UNI_DETUNE, 40.0), (UNI_WIDTH, 95.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 800.0), (FLT_RES, 20.0), (FLT_ENV, 4.2), (MOD_A, 0.5), (MOD_D, 230.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 900.0), (AMP_S, 0.0), (AMP_R, 200.0), (FX_CHORUS, 20.0), (FX_DELAY, 22.0), (FX_DTIME, 3.0), (FX_DFB, 38.0), (FX_REVERB, 20.0), (FX_RSIZE, 1.8), (FLT_DRIVE, 15.0), (FX_OUT, 1.4)]),
         // ------------------------------------------------ lead
         pr("Supersaw Szeroki", "Lead", &with(
-            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SAW), (O2_LEVEL, 45.0), (O2_COARSE, 12.0), (O2_FINE, 9.0), (UNI_VOICES, 3.0), (UNI_DETUNE, 72.0), (UNI_WIDTH, 100.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 9500.0), (FLT_RES, 6.0), (AMP_A, 8.0), (AMP_D, 600.0), (AMP_S, 90.0), (AMP_R, 300.0), (L1_RATE, 5.2), (FX_DRIVE, 12.0), (FX_CHORUS, 28.0), (FX_DELAY, 14.0), (FX_DTIME, 3.0), (FX_REVERB, 26.0), (FX_RSIZE, 2.2), (FX_OUT, -8.3)],
+            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SAW), (O2_LEVEL, 45.0), (O2_COARSE, 12.0), (O2_FINE, 9.0), (UNI_VOICES, 3.0), (UNI_DETUNE, 72.0), (UNI_WIDTH, 100.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 9500.0), (FLT_RES, 6.0), (AMP_A, 8.0), (AMP_D, 600.0), (AMP_S, 90.0), (AMP_R, 300.0), (L1_RATE, 5.2), (FX_CHORUS, 28.0), (FX_DELAY, 14.0), (FX_DTIME, 3.0), (FX_REVERB, 26.0), (FX_RSIZE, 2.2), (FLT_DRIVE, 12.0), (FX_OUT, -8.4)],
             &[m(0, VIB, PITCH, st(0.4))],
         )),
         pr("Supersaw Lead", "Lead", &with(
@@ -175,9 +175,9 @@ pub fn all() -> Vec<Preset> {
         )),
         pr("Pad Supersaw", "Pad", &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SAW), (O2_LEVEL, 45.0), (O2_COARSE, 12.0), (UNI_VOICES, 3.0), (UNI_DETUNE, 55.0), (UNI_WIDTH, 100.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 5000.0), (FLT_RES, 8.0), (AMP_A, 250.0), (AMP_D, 1500.0), (AMP_S, 85.0), (AMP_R, 1800.0), (FX_CHORUS, 35.0), (FX_REVERB, 40.0), (FX_RSIZE, 3.5), (FX_OUT, -7.9)]),
         // ------------------------------------------------ keys
-        pr("Keys Dance", "Klawisze", &[(O1_WAVE, SQR), (O1_SHAPE, 35.0), (O1_LEVEL, 70.0), (O2_WAVE, SAW), (O2_LEVEL, 50.0), (O2_FINE, 8.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 20.0), (UNI_WIDTH, 60.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1200.0), (FLT_RES, 15.0), (FLT_ENV, 3.0), (MOD_A, 0.5), (MOD_D, 200.0), (MOD_S, 10.0), (AMP_A, 1.5), (AMP_D, 700.0), (AMP_S, 40.0), (AMP_R, 160.0), (FX_DRIVE, 18.0), (FX_CHORUS, 30.0), (FX_REVERB, 16.0), (FX_OUT, -1.9)]),
+        pr("Keys Dance", "Klawisze", &[(O1_WAVE, SQR), (O1_SHAPE, 35.0), (O1_LEVEL, 70.0), (O2_WAVE, SAW), (O2_LEVEL, 50.0), (O2_FINE, 8.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 20.0), (UNI_WIDTH, 60.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1200.0), (FLT_RES, 15.0), (FLT_ENV, 3.0), (MOD_A, 0.5), (MOD_D, 200.0), (MOD_S, 10.0), (AMP_A, 1.5), (AMP_D, 700.0), (AMP_S, 40.0), (AMP_R, 160.0), (FX_CHORUS, 30.0), (FX_REVERB, 16.0), (FLT_DRIVE, 18.0), (FX_OUT, -2.1)]),
         pr("Future Chord", "Klawisze", &with(
-            &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 28.0), (O2_COARSE, 12.0), (UNI_VOICES, 3.0), (UNI_DETUNE, 38.0), (UNI_WIDTH, 100.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1800.0), (FLT_RES, 12.0), (FLT_ENV, 2.5), (MOD_A, 0.5), (MOD_D, 380.0), (MOD_S, 20.0), (AMP_A, 2.0), (AMP_D, 700.0), (AMP_S, 55.0), (AMP_R, 380.0), (FX_DRIVE, 12.0), (FX_CHORUS, 40.0), (FX_DELAY, 16.0), (FX_DTIME, 3.0), (FX_REVERB, 24.0), (FX_RSIZE, 2.2), (FX_OUT, -4.1)],
+            &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 28.0), (O2_COARSE, 12.0), (UNI_VOICES, 3.0), (UNI_DETUNE, 38.0), (UNI_WIDTH, 100.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1800.0), (FLT_RES, 12.0), (FLT_ENV, 2.5), (MOD_A, 0.5), (MOD_D, 380.0), (MOD_S, 20.0), (AMP_A, 2.0), (AMP_D, 700.0), (AMP_S, 55.0), (AMP_R, 380.0), (FX_CHORUS, 40.0), (FX_DELAY, 16.0), (FX_DTIME, 3.0), (FX_REVERB, 24.0), (FX_RSIZE, 2.2), (FLT_DRIVE, 12.0), (FX_OUT, -3.8)],
             &[m(0, VEL, CUT, oct(1.0))],
         )),
         pr("EP Klasyczny", "Klawisze", &with(
@@ -204,7 +204,7 @@ pub fn all() -> Vec<Preset> {
         )),
         // ------------------------------------------------ brass / strings
         pr("Brass", "Dęte/Smyczki", &with(
-            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SAW), (O2_LEVEL, 40.0), (O2_FINE, 8.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 15.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 800.0), (FLT_RES, 10.0), (FLT_KEY, 40.0), (FLT_ENV, 2.5), (MOD_A, 40.0), (MOD_D, 400.0), (MOD_S, 40.0), (MOD_R, 200.0), (AMP_A, 30.0), (AMP_D, 300.0), (AMP_S, 85.0), (AMP_R, 200.0), (L1_RATE, 5.0), (FX_DRIVE, 15.0), (FX_REVERB, 20.0), (FX_OUT, -6.0)],
+            &[(O1_WAVE, SAW), (O1_LEVEL, 75.0), (O2_WAVE, SAW), (O2_LEVEL, 40.0), (O2_FINE, 8.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 15.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 800.0), (FLT_RES, 10.0), (FLT_KEY, 40.0), (FLT_ENV, 2.5), (MOD_A, 40.0), (MOD_D, 400.0), (MOD_S, 40.0), (MOD_R, 200.0), (AMP_A, 30.0), (AMP_D, 300.0), (AMP_S, 85.0), (AMP_R, 200.0), (L1_RATE, 5.0), (FX_REVERB, 20.0), (FLT_DRIVE, 15.0), (FX_OUT, -7.0)],
             &[m(0, VIB, PITCH, st(0.4))],
         )),
         pr("Smyczki", "Dęte/Smyczki", &with(
@@ -212,12 +212,12 @@ pub fn all() -> Vec<Preset> {
             &[m(0, LFO1, PITCH, st(0.08))],
         )),
         // ------------------------------------------------ arp
-        pr("Arp Cyfrowy", "Arp", &[(FX_DRIVE, 18.0), (O1_WAVE, DIGITAL), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (FLT_CUTOFF, 3000.0), (FLT_RES, 15.0), (FLT_ENV, 2.0), (MOD_D, 250.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 700.0), (AMP_S, 10.0), (AMP_R, 120.0), (FX_DELAY, 30.0), (FX_DTIME, 3.0), (FX_DFB, 45.0), (FX_REVERB, 15.0), (FX_OUT, -0.2)]),
+        pr("Arp Cyfrowy", "Arp", &[(O1_WAVE, DIGITAL), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 35.0), (O2_COARSE, 12.0), (FLT_CUTOFF, 3000.0), (FLT_RES, 15.0), (FLT_ENV, 2.0), (MOD_D, 250.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 700.0), (AMP_S, 10.0), (AMP_R, 120.0), (FX_DELAY, 30.0), (FX_DTIME, 3.0), (FX_DFB, 45.0), (FX_REVERB, 15.0), (FLT_DRIVE, 18.0), (FX_OUT, 1.0)]),
         pr("Arp Puls", "Arp", &with(
-            &[(FX_DRIVE, 12.0), (O1_WAVE, SQR), (O1_LEVEL, 75.0), (FLT_CUTOFF, 2000.0), (FLT_RES, 40.0), (FLT_ENV, 3.0), (MOD_D, 220.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 700.0), (AMP_S, 0.0), (AMP_R, 100.0), (L2_RATE, 0.5), (FX_DELAY, 25.0), (FX_DTIME, 0.0), (FX_DFB, 40.0), (FX_REVERB, 12.0), (FX_OUT, -0.9)],
+            &[(O1_WAVE, SQR), (O1_LEVEL, 75.0), (FLT_CUTOFF, 2000.0), (FLT_RES, 40.0), (FLT_ENV, 3.0), (MOD_D, 220.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 700.0), (AMP_S, 0.0), (AMP_R, 100.0), (L2_RATE, 0.5), (FX_DELAY, 25.0), (FX_DTIME, 0.0), (FX_DFB, 40.0), (FX_REVERB, 12.0), (FLT_DRIVE, 12.0), (FX_OUT, -1.2)],
             &[m(0, LFO2, SH1, 40.0), m(1, RND, CUT, oct(0.3))],
         )),
-        pr("Arp Trance", "Arp", &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 35.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 25.0), (UNI_WIDTH, 80.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1400.0), (FLT_RES, 10.0), (FLT_ENV, 3.0), (MOD_A, 0.5), (MOD_D, 220.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 750.0), (AMP_S, 0.0), (AMP_R, 90.0), (FX_DRIVE, 15.0), (FX_DELAY, 35.0), (FX_DTIME, 3.0), (FX_DFB, 48.0), (FX_REVERB, 14.0), (FX_OUT, -0.3)]),
+        pr("Arp Trance", "Arp", &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (O2_WAVE, SQR), (O2_LEVEL, 35.0), (UNI_VOICES, 1.0), (UNI_DETUNE, 25.0), (UNI_WIDTH, 80.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 1400.0), (FLT_RES, 10.0), (FLT_ENV, 3.0), (MOD_A, 0.5), (MOD_D, 220.0), (MOD_S, 0.0), (AMP_A, 1.0), (AMP_D, 750.0), (AMP_S, 0.0), (AMP_R, 90.0), (FX_DELAY, 35.0), (FX_DTIME, 3.0), (FX_DFB, 48.0), (FX_REVERB, 14.0), (FLT_DRIVE, 15.0), (FX_OUT, 0.4)]),
         // ------------------------------------------------ lo-fi
         pr("Lo-fi Klawisz", "Lo-fi", &with(
             &[(O1_WAVE, TRI), (O1_LEVEL, 75.0), (O2_WAVE, DIGITAL), (O2_SHAPE, 50.0), (O2_LEVEL, 25.0), (NOISE_LEVEL, 6.0), (NOISE_COLOR, -60.0), (FLT_CUTOFF, 1800.0), (FLT_DRIVE, 25.0), (AMP_A, 5.0), (AMP_D, 1200.0), (AMP_S, 30.0), (AMP_R, 400.0), (L1_WAVE, 1.0), (L1_RATE, 0.7), (FX_CHORUS, 20.0), (FX_REVERB, 25.0), (FX_OUT, -1.5)],
@@ -233,11 +233,11 @@ pub fn all() -> Vec<Preset> {
             &[m(0, MENV, PITCH, st(12.0))],
         )),
         pr("Zjazd", "FX", &with(
-            &[(FX_DRIVE, 50.0), (O1_WAVE, SAW), (O1_LEVEL, 70.0), (UNI_VOICES, 2.0), (UNI_DETUNE, 40.0), (UNI_WIDTH, 100.0), (NOISE_LEVEL, 40.0), (FLT_TYPE, BP), (FLT_CUTOFF, 2500.0), (FLT_RES, 30.0), (FLT_ENV, -3.0), (MOD_A, 0.5), (MOD_D, 1500.0), (MOD_S, 0.0), (AMP_A, 5.0), (AMP_D, 1800.0), (AMP_S, 0.0), (AMP_R, 1000.0), (FX_REVERB, 60.0), (FX_RSIZE, 4.5), (FX_OUT, 6.6)],
+            &[(O1_WAVE, SAW), (O1_LEVEL, 70.0), (UNI_VOICES, 2.0), (UNI_DETUNE, 40.0), (UNI_WIDTH, 100.0), (NOISE_LEVEL, 40.0), (FLT_TYPE, BP), (FLT_CUTOFF, 2500.0), (FLT_RES, 30.0), (FLT_ENV, -3.0), (MOD_A, 0.5), (MOD_D, 1500.0), (MOD_S, 0.0), (AMP_A, 5.0), (AMP_D, 1800.0), (AMP_S, 0.0), (AMP_R, 1000.0), (FX_REVERB, 60.0), (FX_RSIZE, 4.5), (FLT_DRIVE, 50.0), (FX_OUT, 4.9)],
             &[m(0, MENV, PITCH, st(-36.0)), m(1, MENV, NOISE, 30.0)],
         )),
         pr("Impact", "FX", &with(
-            &[(O1_WAVE, SINE), (O1_LEVEL, 90.0), (SUB_LEVEL, 40.0), (NOISE_LEVEL, 45.0), (NOISE_COLOR, -40.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 6000.0), (FLT_ENV, -3.0), (MOD_A, 0.5), (MOD_D, 900.0), (MOD_S, 0.0), (AMP_A, 0.8), (AMP_D, 1400.0), (AMP_S, 0.0), (AMP_R, 800.0), (FX_DRIVE, 40.0), (FX_REVERB, 45.0), (FX_RSIZE, 3.5), (FX_OUT, -0.6)],
+            &[(O1_WAVE, SINE), (O1_LEVEL, 90.0), (SUB_LEVEL, 40.0), (NOISE_LEVEL, 45.0), (NOISE_COLOR, -40.0), (FLT_TYPE, LP24), (FLT_CUTOFF, 6000.0), (FLT_ENV, -3.0), (MOD_A, 0.5), (MOD_D, 900.0), (MOD_S, 0.0), (AMP_A, 0.8), (AMP_D, 1400.0), (AMP_S, 0.0), (AMP_R, 800.0), (FX_REVERB, 45.0), (FX_RSIZE, 3.5), (FLT_DRIVE, 40.0), (FX_OUT, 0.3)],
             &[m(0, MENV, PITCH, st(30.0))],
         )),
         pr("Szum Wiatru", "FX", &with(

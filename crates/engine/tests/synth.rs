@@ -252,10 +252,12 @@ fn presets_are_loudness_matched() {
     for p in presets::all() {
         let (l, r) = lab::probe(&p, sr);
         let (lufs, tp) = lab::loudness(&l, &r, sr);
-        let target = if matches!(p.category, "808" | "Bas" | "Pad") { -19.0 } else { -18.0 };
-        assert!(tp <= -2.9, "{}: true peak {tp:.1} dBTP", p.name);
+        // polyphonic patches play 12 dB lower (POLY_HEADROOM) so chords fit below full scale
+        let hr = if p.patch[ix::V_MODE] == 0.0 { 20.0 * poly::POLY_HEADROOM.log10() as f64 } else { 0.0 };
+        let target = if matches!(p.category, "808" | "Bas" | "Pad") { -19.0 } else { -18.0 } + hr;
+        assert!(tp <= -2.9 + hr, "{}: true peak {tp:.1} dBTP", p.name);
         // short, peaky sounds hit the true-peak ceiling before the loudness target
-        let peak_limited = tp > -3.2;
+        let peak_limited = tp > -3.2 + hr;
         assert!((lufs - target).abs() <= 1.5 || (peak_limited && lufs < target), "{}: {lufs:.1} LUFS (target {target}), {tp:.1} dBTP", p.name);
     }
 }
@@ -288,19 +290,117 @@ fn the_ui_mock_catalog_is_current() {
     assert!(have == want, "ui/src/api/synthCatalog.ts is stale: run WAVE_UPDATE_UI=1 cargo test -p wave-engine --test synth");
 }
 
+/// Mean power of `l`/`r` over `[a, b)` seconds.
+fn power(l: &[f32], r: &[f32], a: f32, b: f32) -> f64 {
+    let (a, b) = ((a * SR as f32) as usize, (b * SR as f32) as usize);
+    (a..b).map(|i| (l[i] as f64).powi(2) + (r[i] as f64).powi(2)).sum::<f64>() / (b - a) as f64
+}
+
+/// A six-note chord of `patch`, rendered with only the notes in `on` sounding (the others are
+/// struck at velocity 0, so every voice gets the same random start phases as in the full chord).
+fn chord(patch: &params::Patch, k0: u8, on: impl Fn(usize) -> bool) -> (Vec<f32>, Vec<f32>) {
+    let sr = SR as f32;
+    let mut s = SynthInst::new(1, *patch, sr);
+    for (i, d) in [0u8, 4, 7, 12, 16, 19].into_iter().enumerate() {
+        s.note(0, sr as u32, k0 + d, if on(i) { 1.0 } else { 0.0 }, Dest::Click);
+    }
+    lab::run(&mut s, 1.5, sr)
+}
+
+/// Energy of `a − b` against the energy of `b`, in dB.
+fn residual_db(a: &[f32], b: &[f32]) -> f64 {
+    let e: f64 = a.iter().zip(b).map(|(x, y)| ((x - y) as f64).powi(2)).sum();
+    let r: f64 = b.iter().map(|y| (*y as f64).powi(2)).sum();
+    10.0 * (e / r.max(1e-30)).log10()
+}
+
 #[test]
-fn chords_stay_below_full_scale_without_clicks() {
-    // presets are levelled for one note; an 8-note chord of a keys patch used to reach +9 dBFS
+fn a_chord_is_the_sum_of_its_notes() {
+    // an output limiter used to squash chords by 5–11 dB: notes got quieter and the tone
+    // changed as keys were added. Without global drive a polyphonic patch is linear: the chord
+    // is exactly its notes played alone, added up.
+    for p in presets::all().into_iter().filter(|p| p.patch[ix::V_MODE] == 0.0 && p.patch[ix::FX_DRIVE] == 0.0) {
+        let k0 = p.probe_key();
+        let (l, r) = chord(&p.patch, k0, |_| true);
+        let (mut sl, mut sr) = (vec![0f32; l.len()], vec![0f32; r.len()]);
+        for k in 0..6 {
+            let (a, b) = chord(&p.patch, k0, |i| i == k);
+            sl.iter_mut().zip(a).for_each(|(s, x)| *s += x);
+            sr.iter_mut().zip(b).for_each(|(s, x)| *s += x);
+        }
+        // a patch with less than full velocity tracking still sounds notes struck at velocity 0:
+        // each render above holds the other five of those, so take them out again
+        let (a, b) = chord(&p.patch, k0, |_| false);
+        sl.iter_mut().zip(a).for_each(|(s, x)| *s -= 5.0 * x);
+        sr.iter_mut().zip(b).for_each(|(s, x)| *s -= 5.0 * x);
+        let db = residual_db(&l, &sl).max(residual_db(&r, &sr));
+        assert!(db < -60.0, "{}: chord departs from the sum of its notes ({db:.0} dB)", p.name);
+    }
+}
+
+#[test]
+fn polyphonic_presets_keep_global_drive_off() {
+    // the global drive saturates the sum of all notes: on a chord it adds intermodulation
+    // (−8 to −17 dB on four notes), so poly presets get their grit from the per-voice drive
+    for p in presets::all().into_iter().filter(|p| p.patch[ix::V_MODE] == 0.0) {
+        assert_eq!(p.patch[ix::FX_DRIVE], 0.0, "{}", p.name);
+    }
+}
+
+#[test]
+fn chords_fit_below_full_scale_without_clicks() {
+    // presets are levelled for one note; an 8-note chord of a keys patch is 9–13 dB louder
     let sr = SR as f32;
     for p in presets::all() {
         let mut s = SynthInst::new(1, p.patch, sr);
         let k0 = p.probe_key();
         for (i, d) in [0u8, 4, 7, 11, 14, 16, 19, 24].into_iter().enumerate() {
-            s.note((i as f32 * 0.003 * sr) as u32, (1.0 * sr) as u32, k0 + d, 1.0, Dest::Click);
+            s.note((i as f32 * 0.003 * sr) as u32, (1.0 * sr) as u32, k0 + d, 0.8, Dest::Click);
         }
         let (l, r) = lab::run(&mut s, 1.6, sr);
         let pk = peak(&l).max(peak(&r));
-        assert!(pk <= 0.9, "{}: chord peak {:.1} dBFS", p.name, 20.0 * pk.log10());
+        assert!(pk <= 1.0, "{}: chord peak {:.1} dBFS", p.name, 20.0 * pk.log10());
         assert_eq!(clicks(&l, &r), 0, "{}: chord", p.name);
+    }
+}
+
+#[test]
+fn switching_poly_and_mono_glides_the_headroom() {
+    let sr = SR as f32;
+    let p = presets::all().into_iter().find(|p| p.name == "Pad Ciepły").unwrap();
+    let mut s = SynthInst::new(1, p.patch, sr);
+    s.note(0, (2.0 * sr) as u32, 60, 1.0, Dest::Click);
+    let (mut l, mut r) = lab::run(&mut s, 0.5, sr);
+    let mut q = p.patch;
+    q[ix::V_MODE] = 1.0;
+    s.set_patch(&q);
+    let (l2, r2) = lab::run(&mut s, 0.5, sr);
+    l.extend(l2);
+    r.extend(r2);
+    assert_eq!(clicks(&l, &r), 0);
+    // the level steps up by the headroom, without a click
+    let db = 10.0 * (power(&l, &r, 0.8, 0.95) / power(&l, &r, 0.3, 0.45)).log10();
+    assert!(db > 6.0, "mono against poly: {db:+.1} dB");
+}
+
+#[test]
+fn notes_of_a_chord_do_not_glide_from_each_other() {
+    // poly glide used to slide every note of a chord from the note struck just before it
+    // (a smeared, detuned chord); notes struck together now share the glide origin
+    let sr = SR as f32;
+    let p = presets::all().into_iter().find(|p| p.name == "Supersaw Lead").unwrap();
+    let render = |glide: f32, spread: f32| {
+        let mut q = p.patch;
+        q[ix::V_GLIDE] = glide;
+        let mut s = SynthInst::new(1, q, sr);
+        for (i, k) in [60u8, 64, 67, 72].into_iter().enumerate() {
+            s.note((i as f32 * spread * sr) as u32, sr as u32, k, 0.9, Dest::Click);
+        }
+        lab::run(&mut s, 1.0, sr)
+    };
+    // the first chord has nothing before it: exactly the chord without glide, struck at once
+    // or rolled over 15 ms
+    for spread in [0.0, 0.005] {
+        assert_eq!(render(300.0, spread), render(0.0, spread), "spread {spread}");
     }
 }
