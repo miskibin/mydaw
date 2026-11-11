@@ -8,17 +8,21 @@ import { unwrap } from 'solid-js/store';
 import { be } from '../api/backend';
 import { t } from '../lib/i18n';
 import { cloneNotes } from '../lib/noteClone';
-import type { ZRange } from '../lib/zoomBar';
+import { zoomAround, type ZRange } from '../lib/zoomBar';
 import { ZoomScrollbar } from '../ui/ZoomScrollbar';
 import { TOTAL_BEATS, type Note } from '../api/types';
 import { clamp } from '../lib/format';
-import { duplicateRight, keyOf, moveNotes, noteAt, notesText, resizeNotes, ROLL_SNAPS, SCALES, snapStep, stepsOf, transpose } from '../lib/pattern';
-import { NOTE_NAMES } from '../lib/pitch';
-import { commit, Gesture } from '../state/edit';
+import { duplicateRight, keyOf, moveNotes, noteAt, notesText, resizeNotes, ROLL_SNAPS, SCALES, snapStep, stepsOf, transpose, velOf } from '../lib/pattern';
+import { NOTE_NAMES, noteName } from '../lib/pitch';
+import {
+  applyProps, fitRange, fmtLen, fmtStart, followPage, invertSelection, legato, notesOfKey, nudgeVelocity,
+  parseKey, parseLen, parseStart, parseVel, quantizeStarts, readProps, wheelNotches,
+} from '../lib/rollEdit';
+import { commit, Gesture, wheelEdit } from '../state/edit';
 import { audition, chanKindLabel, channels, closeRoll, curPat, patPlayhead, putNotes, rollFront, selChan, selectChannel } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
 import { say, U } from '../state/ui';
-import { dblCheck, track, trackFrame } from '../ui/drag';
+import { dblCheck, edgeScroller, panDrag, track, trackFrame } from '../ui/drag';
 import { typingHeld } from '../state/typingKeys';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
 import { Icon } from '../ui/icons';
@@ -51,6 +55,9 @@ export function PianoRoll(props: { z: number }) {
 }
 
 const [lastLen, setLastLen] = createSignal(2);
+/** Velocity of the last note touched: new notes take it, like the length (FL). 1 = full, stored as none. */
+const [lastVel, setLastVel] = createSignal(1);
+const velProp = () => (lastVel() < 0.995 ? { v: lastVel() } : {});
 const [rollTool, setRollTool] = createSignal<Tool>('draw');
 const [rollSnap, setRollSnap] = createSignal(1);
 const [rollKey, setRollKey] = createSignal<number | null>(null);
@@ -76,6 +83,9 @@ function Roll(props: { z: number }) {
   const [sel, setSel] = createSignal<Set<number>>(new Set());
   const [hoverKey, setHoverKey] = createSignal<number | null>(null);
   const [marq, setMarq] = createSignal<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  const [zbox, setZbox] = createSignal<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  /** The note properties popover (double-click a note): the notes it edits, the clicked one last. */
+  const [propsFor, setPropsFor] = createSignal<number[] | null>(null);
   const [view, setViewS] = createSignal({ sx: 0, sy: 0, zoom: 1, rowH: ROW_H });
   const pk = createMemo(projectKey, undefined, { equals: (a, b) => a.root === b.root && a.scale === b.scale });
   const root = () => rollKey() ?? pk().root;
@@ -110,10 +120,20 @@ function Roll(props: { z: number }) {
   // the zoom scrollbars, in steps (time) and keys from the top (key height)
   const hRange = (): ZRange => { const G = geo(); return { pos: G.sx / G.pps, len: gridW() / G.pps }; };
   const hLimits = () => ({ total: hTotal(), minLen: gridW() / (basePps() * Z_MAX), maxLen: gridW() / (basePps() * Z_MIN) });
-  const setH = (r: ZRange) => {
+  const applyH = (r: ZRange) => {
     const zoom = clamp(gridW() / r.len / basePps(), Z_MIN, Z_MAX), pps = basePps() * zoom;
     setViewS(v => ({ ...v, zoom, sx: clamp(r.pos * pps, 0, maxSxAt(pps)) }));
   };
+  // Follow the playhead (the app-wide Follow toggle): the frame task flips the view a page when
+  // the playhead leaves it. Moving the view by hand while it plays pauses that until the
+  // pattern comes round again (no tug of war); nothing follows during a drag.
+  let playingNow = false, followHold = false, dragging = false, lastBeat = -1;
+  const userScrolled = () => {
+    if (!playingNow || !U.follow || followHold) return;
+    followHold = true; say(t('b.pr.followPaused'));
+  };
+  /** The time scrollbar (scrolls or zooms by hand). */
+  const setH = (r: ZRange) => { userScrolled(); applyH(r); };
   const vRange = (): ZRange => { const G = geo(), h = Math.max(1, size().h); return { pos: G.sy / G.rowH, len: h / G.rowH }; };
   const vLimits = () => { const h = Math.max(1, size().h); return { total: 128, minLen: h / ROW_MAX, maxLen: h / rowMin() }; };
   const setV = (r: ZRange) => {
@@ -127,8 +147,10 @@ function Roll(props: { z: number }) {
   });
   // keep the selection valid when the notes change underneath (undo, CLI)
   createEffect(() => { const ok = new Set(chanNotes().map(x => x.i)); const s = sel(); if ([...s].some(i => !ok.has(i))) setSel(new Set([...s].filter(i => ok.has(i)))); });
+  // the popover's notes gone (undo, another channel): it closes rather than edit other notes
+  createEffect(() => { const p = propsFor(); if (!p) return; const ok = new Set(chanNotes().map(x => x.i)); if (p.some(i => !ok.has(i))) setPropsFor(null); });
   // another pattern: the selection is note indices of the old one, they would point at random notes
-  createEffect(on(patId, () => setSel(new Set<number>()), { defer: true }));
+  createEffect(on(patId, () => { setSel(new Set<number>()); setPropsFor(null); }, { defer: true }));
   // initial vertical position: centred on the channel's notes (or its root)
   let centred = -1;
   createEffect(() => {
@@ -147,7 +169,7 @@ function Roll(props: { z: number }) {
     const g = cv.getContext('2d')!, dpr = window.devicePixelRatio || 1;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     const lit = typingHeld();
-    drawRoll(g, w, h, geo(), layer, { pt: unwrap(pt()), ch: unwrap(ch()), chans: chansMap(), sel: sel(), root: root(), mask: mask(), hoverKey: hoverKey(), lit, marquee: marq() });
+    drawRoll(g, w, h, geo(), layer, { pt: unwrap(pt()), ch: unwrap(ch()), chans: chansMap(), sel: sel(), root: root(), mask: mask(), hoverKey: hoverKey(), lit, marquee: marq(), zoomBox: zbox() });
   };
   const drawVel = () => {
     const { w, h } = laneSize(); if (!w || !h) return;
@@ -159,7 +181,7 @@ function Roll(props: { z: number }) {
   };
   let rafMain = 0, rafVel = 0;
   createEffect(() => {
-    data(); sel(); hoverKey(); marq(); root(); mask(); void fonts.epoch; size(); view(); typingHeld(); ch(); pt().len;
+    data(); sel(); hoverKey(); marq(); zbox(); root(); mask(); void fonts.epoch; size(); view(); typingHeld(); ch(); pt().len;
     if (!rafMain) rafMain = requestAnimationFrame(() => { rafMain = 0; untrack(drawMain); });
   });
   createEffect(() => {
@@ -170,11 +192,45 @@ function Roll(props: { z: number }) {
   onMount(() => onCleanup(addFrameTask(() => {
     const p = curPat(); if (!p || !phead || !U.rollWin) return;
     const b = patPlayhead(p);
-    if (b < 0) { phead.style.opacity = '0'; return; }
+    if (b < 0) { phead.style.opacity = '0'; playingNow = false; followHold = false; lastBeat = -1; return; }
+    playingNow = true;
+    if (b + 1e-6 < lastBeat) followHold = false; // the pattern came round: a new pass
+    lastBeat = b;
+    // follow: a store write only when the view flips a page
+    if (U.follow && !followHold && !dragging) {
+      const to = followPage(b * 4, hRange(), 2);
+      if (to != null) { const sx = clamp(to * geo().pps, 0, maxSx()); if (Math.abs(sx - view().sx) > 0.5) setViewS(v => ({ ...v, sx })); }
+    }
     const x = rollX(geo(), b * 4);
     phead.style.opacity = x >= KW ? '0.85' : '0';
     phead.style.transform = `translateX(${Math.round(x)}px)`;
   })));
+  onMount(() => {
+    const up = () => { dragging = false; };
+    window.addEventListener('pointerup', up); window.addEventListener('pointercancel', up);
+    onCleanup(() => { window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', up); });
+  });
+  /** Where the pointer last was over the grid (canvas px), for zooming around it; null = outside. */
+  let ptr: { x: number; y: number } | null = null;
+  /** The grid's box on screen (the keyboard excluded): auto-scroll zones of the drags. */
+  const gridRect = () => { const r = cv.getBoundingClientRect(); return { left: r.left + KW, top: r.top, right: r.right, bottom: r.bottom }; };
+  /** Scroll by (dx, dy) px; false when the view cannot move any further that way. */
+  const scrollBy = (dx: number, dy: number) => {
+    const v = view(), rh = geo().rowH;
+    const sx = clamp(v.sx + dx, 0, maxSx()), sy = clamp(v.sy + dy, 0, maxSyAt(rh));
+    if (Math.abs(sx - v.sx) < 0.01 && Math.abs(sy - v.sy) < 0.01) return false;
+    if (sx !== v.sx) userScrolled();
+    setViewS({ ...v, sx, sy });
+    return true;
+  };
+  /** Edge auto-scroll for a drag: `replay` re-runs the drag with the last pointer event after each scroll. */
+  const autoScroll = (replay: (e: PointerEvent) => void, axes?: { x?: boolean; y?: boolean }) => edgeScroller(gridRect, scrollBy, replay, axes);
+  /** Middle-button pan (both axes on the grid). */
+  const pan = (e: PointerEvent, yToo = true) => panDrag(e, () => ({ x: view().sx, y: view().sy }), (x, y) => {
+    const sx = clamp(x, 0, maxSx()), sy = yToo ? clamp(y, 0, maxSyAt(geo().rowH)) : view().sy;
+    if (sx !== view().sx) userScrolled();
+    setViewS(v => ({ ...v, sx, sy }));
+  });
 
   const pos = (e: PointerEvent | MouseEvent | WheelEvent) => {
     const r = cv.getBoundingClientRect(), G = geo();
@@ -215,7 +271,12 @@ function Roll(props: { z: number }) {
     const p0 = pos(e), lead = orig[idx[idx.length - 1]] ?? orig[idx[0]];
     let gest = clone ? null : g ?? new Gesture(mode === 'move' ? t('b.pe.gestMove') : t('b.pe.gestLen'));
     let lastKey = keyOf(lead, ch()), moved = false;
-    trackFrame(ev => {
+    // Axis lock (FL): Shift pressed after the drag started = time only, Ctrl = pitch only. Held
+    // at pointer-down they keep their meaning (clone / select) and lock nothing.
+    const shift0 = e.shiftKey, ctrl0 = e.ctrlKey || e.metaKey;
+    let mods = { shift: shift0, ctrl: ctrl0 }, lastEv: PointerEvent | null = null, lockSaid = '';
+    const run = (ev: PointerEvent) => {
+      lastEv = ev;
       const q = pos(ev);
       if (!moved && Math.hypot(q.x - p0.x, q.y - p0.y) < 3) return;
       if (!moved && clone) {
@@ -228,14 +289,33 @@ function Roll(props: { z: number }) {
       }
       moved = true;
       if (!gest) return;
+      const lockPitch = mode === 'move' && mods.shift && !shift0, lockTime = mode === 'move' && mods.ctrl && !ctrl0;
+      const lock = lockTime ? 'time' : lockPitch ? 'pitch' : '';
+      if (lock && lock !== lockSaid) say(t(lockTime ? 'b.pr.lockTime' : 'b.pr.lockPitch'));
+      lockSaid = lock;
+      const dKey = lockPitch ? 0 : q.key - p0.key;
       const notes = mode === 'move'
-        ? moveNotes(orig, idx, q.step - p0.step, q.key - p0.key, unit(ev.altKey), unwrap(ch()))
+        ? (lockTime ? transpose(orig, idx, dKey, unwrap(ch())) : moveNotes(orig, idx, q.step - p0.step, dKey, unit(ev.altKey), unwrap(ch())))
         : resizeNotes(orig, idx, q.step - p0.step, unit(ev.altKey));
       gest.update([putNotes(pt(), notes)]);
       const ln = notes[idx[idx.length - 1]];
       if (ln) setLastLen(ln.len);
       if (mode === 'move' && ln && keyOf(ln, ch()) !== lastKey) { lastKey = keyOf(ln, ch()); audition(ch().id, lastKey, ln.v ?? 1); }
-    }, () => { gest?.end(); if (!moved) clone?.(); }, mode === 'move' ? 'grabbing' : 'ew-resize');
+    };
+    const es = autoScroll(run, mode === 'resize' ? { x: true } : undefined);
+    // a modifier pressed or released without moving the mouse applies at once
+    const onMod = (ke: KeyboardEvent) => {
+      const m = { shift: ke.shiftKey, ctrl: ke.ctrlKey || ke.metaKey };
+      if (m.shift === mods.shift && m.ctrl === mods.ctrl) return;
+      mods = m;
+      if (lastEv) run(lastEv);
+    };
+    window.addEventListener('keydown', onMod, true); window.addEventListener('keyup', onMod, true);
+    trackFrame(ev => { mods = { shift: ev.shiftKey, ctrl: ev.ctrlKey || ev.metaKey }; run(ev); if (moved) es.move(ev); }, () => {
+      es.stop();
+      window.removeEventListener('keydown', onMod, true); window.removeEventListener('keyup', onMod, true);
+      gest?.end(); if (!moved) clone?.();
+    }, mode === 'move' ? 'grabbing' : 'ew-resize');
   }
   /** Pressing the keyboard plays that key on the channel for as long as it is held (always,
    * whatever the "hear notes while editing" preference); dragging glides to other keys.
@@ -256,41 +336,112 @@ function Roll(props: { z: number }) {
   }
   function marqueeDrag(e: PointerEvent, add: boolean) {
     const p0 = pos(e), base = add ? new Set(sel()) : new Set<number>();
+    // the box's anchor in content px: it stays on its notes while the view auto-scrolls
+    const G0 = geo(), ax = p0.x + G0.sx, ay = p0.y + G0.sy;
+    let moved = false;
     setMarq({ x0: p0.x, y0: p0.y, x1: p0.x, y1: p0.y });
-    trackFrame(ev => {
-      const q = pos(ev), G = geo();
-      setMarq({ x0: p0.x, y0: p0.y, x1: q.x, y1: q.y });
-      const [x0, x1] = [Math.min(p0.x, q.x), Math.max(p0.x, q.x)], [y0, y1] = [Math.min(p0.y, q.y), Math.max(p0.y, q.y)];
+    const run = (ev: PointerEvent) => {
+      const q = pos(ev), G = geo(), sx = ax - G.sx, sy = ay - G.sy;
+      if (Math.hypot(q.x - p0.x, q.y - p0.y) >= 3) moved = true;
+      setMarq({ x0: sx, y0: sy, x1: q.x, y1: q.y });
+      const [x0, x1] = [Math.min(sx, q.x), Math.max(sx, q.x)], [y0, y1] = [Math.min(sy, q.y), Math.max(sy, q.y)];
       const s = new Set(base);
       for (const { n, i } of chanNotes()) {
         const nx = rollX(G, n.step), nw = n.len * G.pps, ny = rollY(G, keyOf(n, ch()));
         if (nx < x1 && nx + nw > x0 && ny < y1 && ny + G.rowH > y0) s.add(i);
       }
       setSel(s);
-    }, () => { setMarq(null); say(sel().size ? t('b.pe.selHint', { x: notesText(sel().size) }) : t('b.pe.noSel')); });
+    };
+    const es = autoScroll(run);
+    trackFrame(ev => { run(ev); if (moved) es.move(ev); }, () => { es.stop(); setMarq(null); say(sel().size ? t('b.pe.selHint', { x: notesText(sel().size) }) : t('b.pe.noSel')); });
   }
   function paintDrag(e: PointerEvent, g: Gesture, startNotes: Note[]) {
     let notes = startNotes;
-    let lastCell = Math.floor(pos(e).step / (unit(e.altKey) || 1));
-    track(ev => {
+    const p0 = pos(e);
+    let lastCell = Math.floor(p0.step / (unit(e.altKey) || 1)), moved = false;
+    const run = (ev: PointerEvent) => {
       const q = pos(ev), u = unit(ev.altKey) || 1, cell = Math.floor(q.step / u);
+      if (Math.hypot(q.x - p0.x, q.y - p0.y) >= 3) moved = true;
       if (cell === lastCell || q.step < 0 || q.step + lastLen() > MAX_STEPS) return;
       lastCell = cell;
       const s = cell * u;
       if (notes.some(n => n.ch === ch().id && Math.abs(n.step - s) < 1e-3)) return;
-      notes = [...notes, { ch: ch().id, step: s, len: lastLen(), p: q.key }];
+      notes = [...notes, { ch: ch().id, step: s, len: lastLen(), p: q.key, ...velProp() }];
       g.update([putNotes(pt(), notes)]);
-    }, () => g.end(), 'copy');
+    };
+    const es = autoScroll(run);
+    track(ev => { run(ev); if (moved) es.move(ev); }, () => { es.stop(); g.end(); }, 'copy');
   }
+  /** Ctrl+right-drag: a box to zoom the view to (both axes); a Ctrl+right-click without a drag goes back to the previous view. */
+  function zoomBoxDrag(e: PointerEvent) {
+    const p0 = pos(e), G0 = geo(), ax = p0.x + G0.sx, ay = p0.y + G0.sy;
+    let q = p0;
+    track(ev => {
+      q = pos(ev);
+      const G = geo();
+      setZbox({ x0: ax - G.sx, y0: ay - G.sy, x1: Math.max(KW, q.x), y1: q.y });
+    }, () => {
+      setZbox(null);
+      if (Math.hypot(q.x - p0.x, q.y - p0.y) < 4) {
+        const v = viewBack.pop();
+        if (!v) return say(t('b.pr.zoomNoBack'));
+        setViewS(v); say(t('b.pr.zoomBack'));
+        return;
+      }
+      const G = geo();
+      // content units: steps across, rows (keys from the top) down
+      const s0 = (ax - KW) / G.pps, s1 = (Math.max(KW, q.x) + G.sx - KW) / G.pps;
+      const r0 = ay / G.rowH, r1 = (q.y + G.sy) / G.rowH;
+      pushView();
+      applyH(fitRange(Math.max(0, s0), Math.max(0, s1), hLimits()));
+      setV(fitRange(clamp(r0, 0, 128), clamp(r1, 0, 128), vLimits()));
+      say(t('b.pr.zoomBox'));
+    }, 'zoom-in');
+  }
+  /** Views to go back to (Ctrl+right-click), newest last. */
+  const viewBack: ReturnType<typeof view>[] = [];
+  const pushView = () => { viewBack.push({ ...view() }); if (viewBack.length > 32) viewBack.shift(); };
+  /** Time zoom to `len` visible steps around the pointer (or the view's centre when the pointer is not over the grid). */
+  const zoomTimeTo = (len: number) => {
+    const r = hRange(), G = geo();
+    const at = ptr && ptr.x >= KW ? (ptr.x - KW + G.sx) / G.pps : r.pos + r.len / 2;
+    applyH(zoomAround(r, hLimits(), at, len / r.len));
+    const bars = hRange().len / 16;
+    say(t('b.pr.zoomBars', { n: bars >= 10 ? Math.round(bars) : +bars.toFixed(bars < 1 ? 2 : 1) }));
+  };
   const down = (e: PointerEvent) => {
+    if (propsFor()) setPropsFor(null); // a click elsewhere cancels the properties popover
+    if (pan(e)) { dragging = true; return; }
     if (e.button !== 0 && e.button !== 2) return;
     e.preventDefault();
+    dragging = true;
     const p = pos(e);
+    const m = e.ctrlKey || e.metaKey;
+    if (e.button === 2 && m && p.x >= KW) return zoomBoxDrag(e);
     // a right-click anywhere in the roll (keyboard, ghost notes, empty grid) drops the selection
     if (e.button === 2 && sel().size) setSel(new Set<number>());
-    if (p.x < KW) { if (e.button === 0) keyboardDrag(e); return; }
+    if (p.x < KW) {
+      if (e.button !== 0) return;
+      // Ctrl+click on a key: every note of that pitch (Shift too = add to the selection)
+      if (m) {
+        const ks = notesOfKey(notesRaw(), ch().id, unwrap(ch()), p.key);
+        const s = e.shiftKey ? new Set([...sel(), ...ks]) : new Set(ks);
+        setSel(s);
+        say(ks.length ? t('b.pr.keySel', { key: noteName(p.key), x: notesText(s.size) }) : t('b.pr.keyNone', { key: noteName(p.key) }));
+        return;
+      }
+      keyboardDrag(e); return;
+    }
     const tool = rollTool();
     const i = hitNote(p.step, p.key);
+    // double-click a note: its properties (the selection's when it is selected). The first
+    // click's move-drag has not moved anything (it starts after 3 px), so nothing is nudged.
+    if (e.button === 0 && i >= 0 && !m && !e.shiftKey && tool !== 'erase' && dblCheck('rn' + i)) {
+      const idx = sel().has(i) ? [...sel()].filter(k => k !== i && notesRaw()[k]?.ch === ch().id).concat(i) : [i];
+      if (!sel().has(i)) setSel(new Set([i]));
+      setPropsFor(idx);
+      return;
+    }
     // FL: Ctrl+drag selects with any tool; Ctrl+click toggles one note
     if (e.button === 0 && (e.ctrlKey || e.metaKey)) {
       if (i < 0) return marqueeDrag(e, e.shiftKey);
@@ -317,7 +468,7 @@ function Roll(props: { z: number }) {
       };
       if (tool === 'erase') return toggle();
       const idx = sel().has(i) ? [...sel()].filter(k => k !== i && notesRaw()[k]?.ch === ch().id).concat(i) : [i];
-      setLastLen(notesRaw()[i].len);
+      setLastLen(notesRaw()[i].len); setLastVel(notesRaw()[i].v ?? 1);
       return moveDrag(e, idx, 'move', undefined, toggle);
     }
     if (e.button === 2 || tool === 'erase') return eraseDrag(e);
@@ -325,12 +476,12 @@ function Roll(props: { z: number }) {
       if (i < 0) return marqueeDrag(e, false);
       const idx = sel().has(i) ? [...sel()] : [i];
       if (!sel().has(i)) setSel(new Set([i]));
-      setLastLen(pt().notes[i].len);
+      setLastLen(pt().notes[i].len); setLastVel(pt().notes[i].v ?? 1);
       return moveDrag(e, idx.filter(k => k !== i).concat(i), 'move');
     }
     if (i >= 0) {
       const n = pt().notes[i];
-      setLastLen(n.len);
+      setLastLen(n.len); setLastVel(n.v ?? 1);
       const idx = sel().has(i) ? [...sel()].filter(k => k !== i).concat(i) : [i];
       if (!sel().has(i)) setSel(new Set([i]));
       if (edgeHit(i, p.x)) return moveDrag(e, idx, 'resize');
@@ -340,7 +491,7 @@ function Roll(props: { z: number }) {
     // a new note: grid start, last touched length, the row's key
     const s = snapStep(p.step, unit(e.altKey), true);
     if (s < 0 || s + lastLen() > MAX_STEPS) return;
-    const n: Note = { ch: ch().id, step: s, len: lastLen(), p: p.key };
+    const n: Note = { ch: ch().id, step: s, len: lastLen(), p: p.key, ...velProp() };
     const notes = [...notesRaw(), n];
     const g = new Gesture(tool === 'paint' ? t('b.pe.gestPaint') : t('b.pe.gestNew'));
     g.update([putNotes(pt(), notes)]);
@@ -350,15 +501,32 @@ function Roll(props: { z: number }) {
     moveDrag(e, [notes.length - 1], 'move', g);
   };
   const move = (e: PointerEvent) => {
-    if (e.buttons) return;
     const p = pos(e);
+    ptr = { x: p.x, y: p.y };
+    if (e.buttons) return;
     if (p.x < KW) { cv.style.cursor = 'pointer'; return; }
     const i = hitNote(p.step, p.key), t = rollTool();
     cv.style.cursor = e.ctrlKey || e.metaKey ? 'crosshair' : t === 'erase' ? 'not-allowed' : i >= 0 ? (t !== 'select' && edgeHit(i, p.x) ? 'ew-resize' : 'grab') : t === 'select' ? 'crosshair' : 'copy';
   };
+  let velAcc = 0;
+  /** Alt+wheel on note `i`: its velocity (the selection's when it is selected), 5 % a notch, 1 % with Ctrl; one undo step per wheel burst. */
+  const velWheel = (e: WheelEvent, i: number) => {
+    const r = wheelNotches(velAcc, e.deltaY || e.deltaX, e.deltaMode === 1); velAcc = r.acc;
+    if (!r.n) return;
+    const idx = sel().has(i) ? [...sel()].filter(k => notesRaw()[k]?.ch === ch().id) : [i];
+    const notes = nudgeVelocity(notesRaw(), idx, r.n * (e.ctrlKey || e.metaKey ? 0.01 : 0.05));
+    wheelEdit('rollVel', t('b.pr.gestVel'), [putNotes(pt(), notes)]);
+    const vs = idx.map(k => Math.round(velOf(notes[k]) * 100)), lo = Math.min(...vs), hi = Math.max(...vs);
+    say(t('b.pr.velX', { x: notesText(idx.length), v: (lo === hi ? lo : lo + '–' + hi) + ' %' }));
+  };
   const wheel = (e: WheelEvent) => {
     e.preventDefault();
     const d = e.deltaY || e.deltaX, h = size().h;
+    if (e.altKey) {
+      // over a note: velocity (Ctrl+Alt = fine); elsewhere Alt+wheel stays the key height
+      const p = pos(e), i = p.x >= KW ? hitNote(p.step, p.key) : -1;
+      if (i >= 0) return velWheel(e, i);
+    }
     if (e.ctrlKey || e.metaKey) {
       const p = pos(e), z = clamp(view().zoom * Math.pow(1.0015, -d), Z_MIN, Z_MAX);
       const pps = basePps() * z;
@@ -367,10 +535,12 @@ function Roll(props: { z: number }) {
       const r0 = geo().rowH, rowH = clamp(r0 * Math.pow(1.0015, -d), rowMin(), ROW_MAX);
       setViewS(v => { const k = 127 - (v.sy + h / 2) / r0; return { ...v, rowH, sy: clamp((127 - k) * rowH - h / 2, 0, maxSyAt(rowH)) }; });
     } else if (e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
+      userScrolled();
       setViewS(v => ({ ...v, sx: clamp(v.sx + d, 0, maxSx()) }));
     } else { const rh = geo().rowH; setViewS(v => ({ ...v, sy: clamp(v.sy + d * 0.7, 0, maxSyAt(rh)) })); }
   };
   const laneDown = (e: PointerEvent) => {
+    if (pan(e, false)) { dragging = true; return; } // middle-drag: scroll time, as on the grid
     if (e.button === 2 && sel().size) setSel(new Set<number>());
     if (e.button !== 0) return;
     e.preventDefault();
@@ -397,7 +567,42 @@ function Roll(props: { z: number }) {
     const stop = () => { e.preventDefault(); e.stopPropagation(); };
     if (tl && !m && !e.altKey) { stop(); setRollTool(tl.id); say(t('b.pe.rollTool', { tool: t(tl.label) })); return; }
     if (m && k === 'a') { stop(); setSel(new Set(chanNotes().map(x => x.i))); say(t('b.pe.selected', { x: notesText(chanNotes().length) })); return; }
+    // Shift+I: invert the selection within the channel
+    if (e.shiftKey && !m && !e.altKey && e.code === 'KeyI') {
+      stop();
+      const s = invertSelection(chanNotes().map(x => x.i), sel());
+      setSel(s); say(s.size ? t('b.pr.inverted', { x: notesText(s.size) }) : t('b.pe.noSel'));
+      return;
+    }
+    // zoom: Page Up / Down in / out around the pointer; Shift+1/2/3 = 1/4/16 bars, Shift+4 = the whole pattern
+    if (!m && !e.altKey && !e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown')) { stop(); zoomTimeTo(hRange().len * (e.key === 'PageUp' ? 0.8 : 1.25)); return; }
+    if (e.shiftKey && !m && !e.altKey && /^Digit[1-4]$/.test(e.code)) {
+      stop();
+      const n = +e.code.slice(5);
+      if (n < 4) return zoomTimeTo([16, 64, 256][n - 1]);
+      applyH(fitRange(0, stepsOf(pt()), hLimits())); say(t('b.pr.zoomFit'));
+      return;
+    }
     const s = [...sel()].filter(i => notesRaw()[i]?.ch === ch().id);
+    // Ctrl+Q quantize / Ctrl+L legato: the selection, or every note of the channel
+    if (m && !e.shiftKey && !e.altKey && (k === 'q' || k === 'l')) {
+      stop();
+      const idx = s.length ? s : chanNotes().map(x => x.i);
+      if (!idx.length) return;
+      if (k === 'q') {
+        const grid = ROLL_SNAPS.find(x => x[1] === rollSnap())?.[0] ?? '1/16';
+        const r = quantizeStarts(notesRaw(), idx, rollSnap());
+        if (!r.moved) return say(t('b.pr.onGrid', { grid }));
+        commitNotes(r.notes, t('b.pr.quantize'));
+        say(t('b.pr.quantized', { x: notesText(r.moved), grid }));
+      } else {
+        const r = legato(notesRaw(), idx);
+        if (!r.changed) return say(t('b.pr.legatoNone'));
+        commitNotes(r.notes, t('b.pr.legato'));
+        say(t('b.pr.legatoDone', { x: notesText(r.changed) }));
+      }
+      return;
+    }
     if (m && (k === 'c' || k === 'x') && !e.shiftKey) {
       stop(); if (!s.length) return;
       noteClip = s.map(i => notesRaw()[i]); noteClipAt = null;
@@ -440,6 +645,65 @@ function Roll(props: { z: number }) {
     }
     if (e.key === 'Escape' && sel().size) { stop(); setSel(new Set<number>()); }
   };
+  /** The note properties popover, under the clicked note (above it near the bottom). */
+  function PropsPop(pp: { idx: number[] }) {
+    let box!: HTMLDivElement, first!: HTMLInputElement;
+    const init = readProps(notesRaw(), pp.idx, unwrap(ch()));
+    const shown = { vel: init.vel == null ? '' : String(init.vel), start: fmtStart(init.start), len: init.len == null ? '' : fmtLen(init.len), key: noteName(init.key) };
+    const [err, setErr] = createSignal('');
+    const W = 236, H = pp.idx.length > 1 ? 196 : 176;
+    const place = () => {
+      const n = notesRaw()[pp.idx[pp.idx.length - 1]], G = geo(), { w, h } = size();
+      if (!n) return { left: 0, top: 0 };
+      const x = rollX(G, n.step), y = rollY(G, keyOf(n, ch()));
+      const below = y + G.rowH + 4;
+      return { left: clamp(x, KW + 2, Math.max(KW + 2, w - W - 4)), top: below + H <= h ? below : clamp(y - H - 4, 2, Math.max(2, h - H - 2)) };
+    };
+    // the window takes the keyboard back (found before the popover leaves the DOM)
+    const close = () => { const w = box.closest<HTMLElement>('.win'); setPropsFor(null); w?.focus({ preventScroll: true }); };
+    const apply = () => {
+      const val = (name: string) => (box.querySelector(`[name=${name}]`) as HTMLInputElement).value.trim();
+      const ch0: { vel?: number; len?: number; start?: number; key?: number } = {};
+      const bad = (msg: string, name: string) => { setErr(msg); say(msg); (box.querySelector(`[name=${name}]`) as HTMLInputElement).select(); };
+      // a field left as shown (or empty when the notes differ) changes nothing
+      const v = val('vel'), s = val('start'), l = val('len'), k = val('key');
+      if (v && v !== shown.vel) { const x = parseVel(v); if (x == null) return bad(t('b.pr.pBadVel'), 'vel'); ch0.vel = x; }
+      if (s && s !== shown.start) { const x = parseStart(s); if (x == null) return bad(t('b.pr.pBadStart'), 'start'); ch0.start = x; }
+      if (l && l !== shown.len) { const x = parseLen(l); if (x == null) return bad(t('b.pr.pBadLen'), 'len'); ch0.len = x; }
+      if (k && k !== shown.key) { const x = parseKey(k); if (x == null) return bad(t('b.pr.pBadKey'), 'key'); ch0.key = x; }
+      if (!Object.keys(ch0).length) return close();
+      const notes = applyProps(notesRaw(), pp.idx, unwrap(ch()), ch0);
+      if (!notes) { setErr(t('b.pr.pRange')); say(t('b.pr.pRange')); return; }
+      commitNotes(notes, t('b.pr.props'));
+      if (ch0.len != null) setLastLen(ch0.len);
+      say(t('b.pr.pDone', { x: notesText(pp.idx.length) }));
+      close();
+    };
+    onMount(() => setTimeout(() => { first.focus(); first.select(); }, 0));
+    const field = (name: 'vel' | 'start' | 'len' | 'key', label: string, tip: string | undefined, ref?: (el: HTMLInputElement) => void) => (
+      <label class="rpf" title={tip}>
+        <span>{label}</span>
+        <input ref={ref} name={name} value={shown[name]} placeholder={shown[name] ? '' : t('b.pr.pMixed')} spellcheck={false} autocomplete="off" onInput={() => setErr('')} />
+      </label>
+    );
+    return (
+      <div ref={box} class="menu rollprops" style={{ position: 'absolute', left: place().left + 'px', top: place().top + 'px', width: W + 'px' }}
+        onPointerDown={e => e.stopPropagation()} onWheel={e => e.stopPropagation()}
+        onKeyDown={e => {
+          e.stopPropagation(); // typed text never reaches the roll's shortcuts or the playlist
+          if (e.key === 'Enter') { e.preventDefault(); apply(); }
+          if (e.key === 'Escape') { e.preventDefault(); close(); }
+        }}>
+        <div class="mt">{pp.idx.length > 1 ? t('b.pr.props') + ' · ' + notesText(pp.idx.length) : t('b.pr.props')}</div>
+        <Show when={pp.idx.length > 1}><div class="rpnote">{t('b.pr.propsN', { x: notesText(pp.idx.length) })}</div></Show>
+        {field('vel', t('b.pr.pVel'), undefined, el => (first = el))}
+        {field('start', t('b.pr.pStart'), t('b.pr.pStartTip'))}
+        {field('len', t('b.pr.pLen'), t('b.pr.pLenTip'))}
+        {field('key', t('b.pr.pKey'), t('b.pr.pKeyTip'))}
+        <div class="rpfoot" classList={{ err: !!err() }}>{err() || t('b.pr.pFoot')}</div>
+      </div>
+    );
+  }
   return (
     <PatFrame win={U.rollWin!} key="rollWin" z={props.z} class="rollwin" minW={560} minH={300} front={rollFront} onKey={onKey}
       head={<>
@@ -487,8 +751,9 @@ function Roll(props: { z: number }) {
       <div class="rollgrid">
         <div ref={wrap} class="parea">
           <canvas ref={cv} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', 'touch-action': 'none' }}
-            onPointerDown={down} onPointerMove={move} onWheel={wheel} onContextMenu={e => e.preventDefault()} />
+            onPointerDown={down} onPointerMove={move} onPointerLeave={() => { ptr = null; }} onWheel={wheel} onContextMenu={e => e.preventDefault()} />
           <div ref={phead} class="pphead" />
+          <Show when={propsFor()} keyed>{idx => <PropsPop idx={idx} />}</Show>
         </div>
         <ZoomScrollbar orient="v" range={vRange} limits={vLimits} onChange={setV} title={t('b.pr.vbarTip')} />
         <div style={{ 'padding-left': KW + 'px', display: 'grid', 'min-width': '0' }}>
@@ -505,7 +770,7 @@ function Roll(props: { z: number }) {
       <div class="pstatus mono">
         <span>{ch().name} · {chanKindLabel(ch())}</span>
         <span>{t(TOOLS.find(x => x.id === rollTool())!.tip)}</span>
-        <span>{t('b.pe.rollHint')}</span>
+        <span class="rollhint" title={t('b.pr.keysTip')}>{t('b.pe.rollHint')}</span>
       </div>
     </div>
     </PatFrame>

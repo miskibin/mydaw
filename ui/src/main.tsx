@@ -5,6 +5,7 @@ import { render } from 'solid-js/web';
 import { getBackend } from './api/backend';
 import { onStateEvent } from './state/edit';
 import { replaceState, S, setS } from './state/store';
+import { openRack } from './state/pattern';
 import { startTelemetry } from './state/telemetry';
 import { setU } from './state/ui';
 import { App } from './App';
@@ -34,6 +35,8 @@ async function boot() {
   setU('cur', p ? { kind: 'pat', ref: p.id } : S.project.sources[0] ? { kind: 'audio', ref: S.project.sources[0].id } : null);
   setU('playing', state.transport.playing);
   render(() => <App />, document.getElementById('root')!);
+  // nothing on the playlist yet: start on the Channel Rack, where a beat begins (FL)
+  if (!S.project.clips.length && S.project.patterns.length) openRack();
   void initUpdates(); // version, "What's new" after an update, the first automatic check
 }
 

@@ -4,6 +4,50 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## 0.9.9 — 2026-11-11
+
+### Added
+- **Move around like in FL Studio.** Middle-button drag pans the playlist and the Piano roll;
+  the view scrolls by itself when you drag a clip, a note or a selection box to its edge;
+  Page Up / Page Down zoom at the pointer, Shift+1 / 2 / 3 are zoom presets, Shift+4 shows
+  everything, Ctrl + right-drag zooms to a box and Ctrl + right-click goes back.
+- **Piano roll:** it follows the playhead; Alt + wheel over a note changes its velocity;
+  Shift or Ctrl pressed while dragging locks the pitch or the time; Ctrl+Q quantizes and
+  Ctrl+L makes notes legato; double-click a note for its properties; Shift+I inverts the
+  selection and Ctrl+click on a piano key selects every note of that pitch. New notes take
+  the velocity of the last note you touched, like its length.
+- **Channel Rack:** Ctrl+click on a channel's light solos it, Alt + Up / Down moves the
+  channel, Ctrl+C / X / V copy steps between channels and patterns, and the wheel over the
+  title bar switches pattern.
+
+### Changed
+- **The playlist deletes with a right-click, like FL** (right-drag deletes what it crosses).
+  A clip's menu now opens from the icon in its top-left corner.
+- **A beat plays on the first Space.** New installs start in PAT mode, and in SONG mode an
+  empty playlist plays the pattern you are editing instead of silence.
+- **Notes sound while you draw them** (Settings can switch that off).
+- **The Channel Rack sizes itself:** its width follows the pattern's length in both directions
+  (up to four bars, then it scrolls) and it grows when you add a channel. It and the Piano roll
+  reopen where you left them; the Piano roll no longer opens on top of the rack.
+- A double-click on a pattern always opens the Channel Rack (it used to open the Piano roll
+  instead when only one channel played the pattern).
+- **Split by channel adds the tracks it needs** instead of stacking clips on the last track.
+- Stop works like Space; pressing it again while stopped goes back to the start of the song.
+- Paste on the playlist lands right after what you copied, and keeps chaining.
+- A project with nothing on the playlist opens on the Channel Rack.
+- Tool, snap, zoom, follow and the panel layout are remembered between sessions.
+- Selecting a channel selects its mixer insert; mixer strips also name the channels routed to them.
+- Slate theme: much higher contrast.
+
+### Fixed
+- **Interface scale:** at 110 % and above the bottom of the window (the mixer) was cut off.
+- **Autosave never ran** until its setting was changed once.
+- **A sample could show another sample's waveform** after opening or creating a project.
+- Escape closes Export, Settings and the channel window; a rename is kept when you click
+  elsewhere; the delete button of an effect no longer fires on the way to the bypass light.
+- Keys typed in the Piano roll no longer switch the playlist's tool behind it, and the typing
+  keyboard no longer turns itself back on at start.
+
 ## 0.9.8 — 2026-11-11
 
 ### Added

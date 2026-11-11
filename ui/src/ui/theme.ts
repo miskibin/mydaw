@@ -115,24 +115,26 @@ function lightTheme(id: string, name: string, h: number, s: number, accent: [str
 /** A lighter grey-blue dark theme (One Dark-like panels): same elevation order as DARK, shifted up.
  *  Every CSS variable is set explicitly so nothing falls through to Grafit's `:root` values. */
 const SLATE_T: Tokens = {
-  bg0: '#1b1e23', bg1: '#21252b', bg2: '#282c34', bg3: '#2b2f37', bg4: '#2d3139', bg5: '#2e323a', bg6: '#333842', bg7: '#373c47',
-  line: '#3b404b', line2: '#434955', line3: '#484e5b',
-  fg: '#b9c0cb', fgHi: '#e6e9ef', fg2: '#a8afbb', fg3: '#9ca3b0', fg4: '#8b93a1', fg5: '#737b88', fg6: '#626976',
-  blue: '#61afef', blueHi: '#9dcdf7', green: '#98c379', amber: '#e5c07b', red: '#e06c75', onBg: '#3a4a60',
-  viz: '#1e2127', vizPanel: '#23272e', vizGrid: '#2b3038', vizGrid2: '#343a44', vizAxis: '#3e4451', vizLabel: '#737b88',
-  ink: '#e6e9ef', pre: '#9ca3b0', post: '#9dcdf7', playhead: '#eef1f5', onFill: '#1b1e23',
-  grid: '#282c34', gridBar: '#3b414c', gridBeat: '#31363f', laneAlt: '#2a2e36', rulerBg: '#2b2f37', rulerText: '#8b93a1', clipBody: '#23272e',
+  // surfaces span a wide range (deep wells to raised panels) and text is near white: the first
+  // version kept One Dark's narrow range and read as low-contrast grey on grey
+  bg0: '#15171c', bg1: '#1d2026', bg2: '#282c34', bg3: '#2c313a', bg4: '#30353f', bg5: '#333945', bg6: '#3c424e', bg7: '#454c59',
+  line: '#474e5b', line2: '#535b69', line3: '#606979',
+  fg: '#d3d8e0', fgHi: '#f6f8fb', fg2: '#c4cad4', fg3: '#b6bdc9', fg4: '#a5adba', fg5: '#8f97a6', fg6: '#788190',
+  blue: '#61afef', blueHi: '#a8d4fa', green: '#98c379', amber: '#e5c07b', red: '#e06c75', onBg: '#3d5270',
+  viz: '#1a1d22', vizPanel: '#20242a', vizGrid: '#30353f', vizGrid2: '#3c424e', vizAxis: '#535b69', vizLabel: '#8f97a6',
+  ink: '#f6f8fb', pre: '#b6bdc9', post: '#a8d4fa', playhead: '#ffffff', onFill: '#15171c',
+  grid: '#282c34', gridBar: '#525a69', gridBeat: '#3a404b', laneAlt: '#2d323b', rulerBg: '#2c313a', rulerText: '#a5adba', clipBody: '#20242a',
   shade: 'rgba(0,0,0,.45)',
-  keyW: '#c8ccd4', keyB: '#30353e', keyWText: '#1b1e23', keyBText: '#e6e9ef', onBand: '#1b1e23', tint: 1,
-  clipBase: '#23272e', clipBodyPct: 18, clipHeadPct: 46, clipHeadSelPct: 75, clipHeadSelTo: '#ffffff',
-  clipInkTo: '#ffffff', clipInkPct: 80, clipText: '#eef0f4', clipTextSel: '#1b1e23', laneArm: '#30292f', gridShade: 'rgba(255,255,255,.022)',
+  keyW: '#d5d9e0', keyB: '#2c313a', keyWText: '#15171c', keyBText: '#f6f8fb', onBand: '#15171c', tint: 1,
+  clipBase: '#20242a', clipBodyPct: 22, clipHeadPct: 52, clipHeadSelPct: 78, clipHeadSelTo: '#ffffff',
+  clipInkTo: '#ffffff', clipInkPct: 85, clipText: '#f6f8fb', clipTextSel: '#15171c', laneArm: '#3a2c33', gridShade: 'rgba(255,255,255,.03)',
 };
 const SLATE: ThemeDef = {
   id: 'slate', name: 'Łupek', light: false, t: SLATE_T, swatch: [SLATE_T.bg2, SLATE_T.bg6, SLATE_T.blue],
   css: {
-    '--sel-bg': '#3e4451', '--sel-bg2': '#363c47', '--sel-ring': '#5a6478', '--drag-bg': '#4a5263', '--mixer-bg': '#24282f', '--dialog-bg': '#2f343e',
-    '--on-accent': '#1b1e23', '--on-warm': '#1b1e23', '--danger': '#e8737e', '--arm-bg': '#3a2e35', '--playhead': SLATE_T.playhead,
-    '--knob-track': '#434955', '--knob-cap': '#4a505d', '--knob-ptr': '#eef1f5', '--fader-cap': '#c8ccd4', '--shadow': 'rgba(0,0,0,.45)', '--shadow2': 'rgba(0,0,0,.32)',
+    '--sel-bg': '#48536a', '--sel-bg2': '#3c4556', '--sel-ring': '#7686a3', '--drag-bg': '#556078', '--mixer-bg': '#22262d', '--dialog-bg': '#333945',
+    '--on-accent': '#15171c', '--on-warm': '#15171c', '--danger': '#f07f8a', '--arm-bg': '#44313a', '--playhead': SLATE_T.playhead,
+    '--knob-track': '#535b69', '--knob-cap': '#606979', '--knob-ptr': '#ffffff', '--fader-cap': '#d5d9e0', '--shadow': 'rgba(0,0,0,.5)', '--shadow2': 'rgba(0,0,0,.36)',
     '--viz': SLATE_T.viz, '--win-close': '#c42b1c', '--on-band': SLATE_T.onBand,
   },
 };

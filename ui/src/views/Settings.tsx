@@ -52,7 +52,7 @@ function SettingsDialog() {
   const pickTab = (t: Tab) => { lastTab = t; setTab(t); };
   return (
     <div class="overlay" onPointerDown={() => setU('settings', false)}>
-      <div class="dialog setdlg" onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+      <div class="dialog setdlg" onPointerDown={e => e.stopPropagation()} onKeyDown={e => { if (e.key !== 'Escape') e.stopPropagation(); }}>
         <div class="hd"><span>{t('d.set.title')}</span><button onClick={() => setU('settings', false)}>×</button></div>
         <div class="setbody">
           <nav class="settabs">

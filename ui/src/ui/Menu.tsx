@@ -131,10 +131,13 @@ function MenuList(props: { items: MenuItem[]; x: number; y: number; sub?: boolea
                     {i => {
                       let el!: HTMLInputElement;
                       onMount(() => { el.value = i().value; setTimeout(() => { el.focus(); el.select(); }, 0); });
-                      return <input ref={el} onKeyDown={e => {
+                      // Enter or a click elsewhere keeps the name, Escape drops it
+                      let done = false;
+                      const keep = () => { if (done) return; done = true; const v = el.value.trim(); closeMenu(); if (v) i().done(v); };
+                      return <input ref={el} onBlur={keep} onKeyDown={e => {
                         e.stopPropagation();
-                        if (e.key === 'Enter') { const v = el.value.trim(); closeMenu(); if (v) i().done(v); }
-                        if (e.key === 'Escape') closeMenu();
+                        if (e.key === 'Enter') keep();
+                        if (e.key === 'Escape') { done = true; closeMenu(); }
                       }} />;
                     }}
                   </Match>

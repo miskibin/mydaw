@@ -154,7 +154,7 @@ export function Toolbar() {
         <button title={patMode() ? t('a.tb.playPat') : t('a.tb.playSong')} data-act="play" classList={{ play: U.playing || U.patPlaying }} onClick={() => void A.togglePlay()}>
           <svg width="11" height="11" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor" /></svg>
         </button>
-        <button title={t('a.tb.stopTip')} onClick={() => void A.stop(true)}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
+        <button title={t('a.tb.stopTip')} onClick={() => void A.stop(!(U.playing || U.patPlaying))}><svg width="10" height="10" viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" rx="1" fill="currentColor" /></svg></button>
         <button title={t('a.tb.recTip')} class="rec" classList={{ armed: T().rec }} onClick={A.toggleRec}>
           <svg width="10" height="10" viewBox="0 0 12 12"><circle cx="6" cy="6" r="5" fill="currentColor" /></svg>
         </button>
@@ -341,6 +341,9 @@ const shortcuts = (): [string, string][] => [
   [t('a.sc.6'), 'Shift+F9'],
   [t('a.sc.7'), t('a.sc.8')],
   [t('a.sc.9'), 'R'],
+  [t('a.sc.164'), 'Ctrl+T'],
+  [t('a.sc.160'), t('a.sc.161')],
+  [t('a.sc.162'), t('a.sc.163')],
   [t('a.sc.10'), 'F'],
   [t('a.sc.11'), 'Home'],
   ['Browser', 'Alt+F8'],
@@ -398,7 +401,26 @@ const shortcuts = (): [string, string][] => [
   [t('a.sc.90'), 'Ctrl+B · Ctrl+D'],
   [t('a.sc.91'), 'Ctrl+C · X · V'],
   [t('a.sc.112'), t('a.sc.113')],
+  [t('a.sc.170'), t('a.sc.171')],
+  [t('a.sc.172'), t('a.sc.173')],
+  [t('a.sc.174'), t('a.sc.175')],
+  [t('a.sc.176'), t('a.sc.177')],
+  [t('a.sc.178'), t('a.sc.179')],
+  [t('a.sc.180'), t('a.sc.181')],
+  [t('a.sc.182'), t('a.sc.183')],
+  [t('a.sc.184'), t('a.sc.185')],
+  [t('a.sc.186'), t('a.sc.187')],
+  [t('a.sc.188'), t('a.sc.189')],
   [t('a.sc.114'), t('a.sc.115')],
+  [t('a.sc.140'), t('a.sc.141')],
+  [t('a.sc.142'), 'PgUp · PgDn'],
+  [t('a.sc.143'), 'Shift+1 2 3 · Shift+4'],
+  [t('a.sc.144'), t('a.sc.145')],
+  [t('a.sc.146'), t('a.sc.147')],
+  [t('a.sc.148'), t('a.sc.149')],
+  [t('a.sc.150'), 'Alt + ↑ ↓'],
+  [t('a.sc.151'), 'Ctrl+C · X · V'],
+  [t('a.sc.152'), t('a.sc.153')],
   [t('a.sc.92'), t('a.sc.93')],
   [t('a.sc.94'), t('a.sc.95')],
   [t('a.sc.96'), t('a.sc.97')],

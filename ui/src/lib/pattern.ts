@@ -201,6 +201,19 @@ export const clearChannel = (notes: readonly Note[], ch: Id) => notes.filter(n =
 /** Copies of `from`'s notes for channel `to`. */
 export const cloneNotes = (notes: readonly Note[], from: Id, to: Id): Note[] => [...notes, ...notes.filter(n => n.ch === from).map(n => ({ ...n, ch: to }))];
 
+/** A channel's notes without their channel: what the Channel Rack's clipboard holds (Ctrl+C / X). */
+export type ChannelClip = Omit<Note, 'ch'>[];
+export const copyChannelNotes = (notes: readonly Note[], ch: Id): ChannelClip =>
+  notes.filter(n => n.ch === ch).map(({ ch: _ch, ...n }) => ({ ...n })).sort((a, b) => a.step - b.step);
+/**
+ * Ctrl+V in the Channel Rack: the channel's notes in this pattern become the clipboard's (its
+ * other notes go, every other channel keeps its own). The pattern's length follows the notes.
+ * Notes that would end past the song are dropped.
+ */
+export function pasteChannelNotes(notes: readonly Note[], ch: Id, clip: ChannelClip): Note[] {
+  return [...notes.filter(n => n.ch !== ch), ...clip.filter(n => n.step + n.len <= TOTAL_BEATS * 4 + EPS).map(n => ({ ...n, ch }))];
+}
+
 /**
  * True when the channel's notes in this pattern are more than steps: a length other than one
  * step, an off-grid start, or two notes on one step (a chord). A step may have its own key (the

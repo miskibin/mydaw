@@ -51,7 +51,7 @@ function ExportDialog() {
         return;
       }
       const peak = r.stats.silent ? t('a.ex.silence') : r.stats.peakDbfs.toFixed(1) + ' dBFS';
-      const clip = r.stats.clippedSamples > 0 ? ' · ' + r.stats.clippedSamples + ' clipped' : '';
+      const clip = r.stats.clippedSamples > 0 ? ' · ' + t('a.ex.clipped', { n: r.stats.clippedSamples }) : '';
       say(t('a.ex.done', { name: baseName(r.out), len: fmtExportLen(r.stats.seconds), peak, clip }));
       setU('exportOpen', false);
     } catch (e) {
@@ -72,7 +72,7 @@ function ExportDialog() {
 
   return (
     <div class="overlay" onPointerDown={() => close()}>
-      <div class="dialog" style={{ width: 'min(420px,92vw)' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+      <div class="dialog" style={{ width: 'min(420px,92vw)' }} onPointerDown={e => e.stopPropagation()} onKeyDown={e => { if (e.key !== 'Escape') e.stopPropagation(); }}>
         <div class="hd"><span>{t('a.ex.title')}</span><button disabled={busy()} onClick={() => setU('exportOpen', false)}>×</button></div>
         <Show when={!busy()} fallback={
           <div style={{ display: 'flex', 'flex-direction': 'column', gap: '14px' }}>

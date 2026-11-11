@@ -16,7 +16,7 @@ const OFFSET = new Map<string, number>([...LOW.map((c, i) => [c, i] as const), .
 const KEY = 'wave.typingKeys';
 
 function load(): { on: boolean; base: number } {
-  try { const v = JSON.parse(localStorage.getItem(KEY) ?? '{}'); return { on: !!v.on, base: typeof v.base === 'number' ? v.base : 60 }; } catch { return { on: false, base: 60 }; }
+  try { const v = JSON.parse(localStorage.getItem(KEY) ?? '{}'); return { on: false, base: typeof v.base === 'number' ? v.base : 60 } /* always starts off: left on, it silently ate the tool keys */; } catch { return { on: false, base: 60 }; }
 }
 const init = load();
 const [typingOn, setOn] = createSignal(init.on);

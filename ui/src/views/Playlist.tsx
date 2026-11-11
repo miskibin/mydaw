@@ -16,7 +16,9 @@ import { peaksVersion } from '../state/peaks';
 import { allocId, anyTrackSolo, arrVersion, onArrangementChange, plain, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
-import { dblCheck, track } from '../ui/drag';
+import { dblCheck, edgeScroller, panDrag, track } from '../ui/drag';
+import { fitSpan, zoomScroll, zoomToRange } from '../lib/viewNav';
+import { barsText } from '../lib/pattern';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
 import { drawFades, drawGrid, drawRuler, type View } from './playlistDraw';
 import { damageRects, followScroll, planTile, snapPx, type Rect, type Tile } from './playlistTile';
@@ -47,6 +49,18 @@ export function gridPoint(clientX: number, clientY: number) {
 }
 const unit = (alt: boolean) => A.snapUnit(alt);
 
+/** Playlist zoom presets (Shift+1 / 2 / 3), px per beat: detail, the default, overview. */
+const ZOOM_PRESETS = [64, 22, 8];
+/** The least a "fit the song" zoom shows (beats): a few bars, so an empty song is not zoomed in to a beat. */
+const FIT_MIN_BEATS = 16;
+let zoomImpl: { step(f: number): void; preset(i: number): void; fit(): void } | null = null;
+/** The playlist's zoom keys (App): Page Up / Down around the pointer, Shift+1–3 presets, Shift+4 fit the song. */
+export const playlistZoom = {
+  step: (f: number) => zoomImpl?.step(f),
+  preset: (i: number) => zoomImpl?.preset(i),
+  fit: () => zoomImpl?.fit(),
+};
+
 /** Place a pattern/source clip at a client point (browser drag). */
 export function dropClipAt(clientX: number, clientY: number, kind: Clip['kind'], ref: Id, alt: boolean): boolean {
   const p = gridPoint(clientX, clientY);
@@ -68,7 +82,7 @@ function sameDrawnChannel(a: Channel | undefined, b: Channel): boolean {
 }
 
 /** `cb`: a comp region boundary (`bnd` = its index in `boundaries(comp.regions)`). */
-interface Hit { c: Clip; edge: 'l' | 'r' | 'fi' | 'fo' | 'cb' | null; bnd?: number }
+interface Hit { c: Clip; edge: 'l' | 'r' | 'fi' | 'fo' | 'cb' | 'menu' | null; bnd?: number }
 /** A take lane under a track. `cb` = comp beat under the pointer. */
 interface LaneHit extends TakeRow { ti: number; k: number; take: Take; cb: number }
 
@@ -383,7 +397,7 @@ export function Playlist() {
       e.preventDefault();
       const r = scrollEl.getBoundingClientRect(), mx = e.clientX - r.left - U.headW;
       const beat = (scrollEl.scrollLeft + mx) / U.bw;
-      const bw = clamp(U.bw * (e.deltaY < 0 ? 1.15 : 1 / 1.15), 4, 96);
+      const bw = clamp(U.bw * (e.deltaY < 0 ? 1.15 : 1 / 1.15), A.BW_MIN, A.BW_MAX);
       setU('bw', bw);
       scrollEl.scrollLeft = beat * bw - mx;
     } else if (e.altKey) {
@@ -392,6 +406,94 @@ export function Playlist() {
       wheelEdit('heights', tl('a.pl.trackHeights'), S.project.tracks.map(t => ({ op: 'putTrack', track: { ...plain(t), h: clamp(t.h + d, 28, 220) } }) as Op));
     }
   };
+
+  // ---------- view navigation: pan, edge auto-scroll, zoom ----------
+  /** The clip area on screen (client px): the view without the track headers, the ruler and the scrollbar. */
+  const viewRect = () => {
+    const r = scrollEl.getBoundingClientRect();
+    return { left: r.left + U.headW, top: r.top + 26, right: r.left + scrollEl.clientWidth, bottom: r.top + scrollEl.clientHeight };
+  };
+  const syncScroll = () => setScroll({ x: scrollEl.scrollLeft, y: scrollEl.scrollTop });
+  /** Scrolls by (dx, dy) px; false when the view could not move (at its ends). */
+  const scrollByPx = (dx: number, dy: number) => {
+    const x0 = scrollEl.scrollLeft, y0 = scrollEl.scrollTop;
+    scrollEl.scrollLeft = x0 + dx; scrollEl.scrollTop = y0 + dy;
+    const moved = scrollEl.scrollLeft !== x0 || scrollEl.scrollTop !== y0;
+    if (moved) syncScroll();
+    return moved;
+  };
+  /**
+   * `track` with edge auto-scroll: dragged near or past the clip area's edge, the view scrolls and
+   * `move` runs again with the last pointer event. A `move` must read positions in grid
+   * coordinates (the grid's live rect), so what is dragged keeps up with the view.
+   */
+  const trackEdge = (move: (e: PointerEvent) => void, up: ((e: PointerEvent) => void) | null, cursor: string, axes?: { x?: boolean; y?: boolean }) => {
+    const es = edgeScroller(viewRect, scrollByPx, move, axes);
+    track(ev => { move(ev); es.move(ev); }, ev => { es.stop(); up?.(ev); }, cursor);
+  };
+  const gridLeft = () => gridEl.getBoundingClientRect().left;
+  /** Middle-button drag anywhere in the playlist pans it in both directions (FL). */
+  const panDown = (e: PointerEvent) => {
+    if (panDrag(e, () => ({ x: scrollEl.scrollLeft, y: scrollEl.scrollTop }), (x, y) => { scrollEl.scrollLeft = x; scrollEl.scrollTop = y; syncScroll(); })) { holdFollow(); closeMenu(); }
+  };
+  /** The last pointer position over the playlist (Page Up / Down zoom around it). */
+  let lastPtr: { x: number; y: number } | null = null;
+  /** Views to go back to with a plain Ctrl+right-click (saved before a range zoom, a preset or a fit). */
+  const views: { bw: number; x: number; y: number }[] = [];
+  const pushView = () => { views.push({ bw: U.bw, x: scrollEl.scrollLeft, y: scrollEl.scrollTop }); if (views.length > 32) views.shift(); };
+  const setView = (bw: number, x: number, y = scrollEl.scrollTop) => {
+    setU('bw', clamp(bw, A.BW_MIN, A.BW_MAX));
+    scrollEl.scrollLeft = x; scrollEl.scrollTop = y;
+    syncScroll();
+  };
+  const viewW = () => Math.max(1, scrollEl.clientWidth - U.headW);
+  /** Zoom to `bw` around the pointer when it is over the clips, else around the middle of the view. */
+  const zoomTo = (bw: number) => {
+    const nb = clamp(bw, A.BW_MIN, A.BW_MAX); if (nb === U.bw) return;
+    const r = viewRect(), p = lastPtr;
+    const anchor = p && p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom ? p.x - r.left : viewW() / 2;
+    setView(nb, zoomScroll(scrollEl.scrollLeft, anchor, U.bw, nb));
+  };
+  const barsInView = () => barsText(Math.max(1, Math.round(viewW() / U.bw / 4)));
+  zoomImpl = {
+    step: f => zoomTo(U.bw * f),
+    preset: i => { const bw = ZOOM_PRESETS[i]; if (bw == null) return; if (bw !== U.bw) { pushView(); zoomTo(bw); } say(tl('a.pl.zoomPreset', { n: i + 1, bars: barsInView() })); },
+    fit: () => {
+      const span = fitSpan(songEnd(), 4, FIT_MIN_BEATS);
+      pushView();
+      setView(zoomToRange(0, span, viewW(), A.BW_MIN, A.BW_MAX).k, 0);
+      say(tl('a.pl.zoomFit', { bars: barsText(Math.round(span / 4)) }));
+    },
+  };
+  onCleanup(() => { zoomImpl = null; });
+  const [zbox, setZbox] = createSignal<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  /** Ctrl + right-drag: a box; on release the view zooms horizontally to it. A plain Ctrl+right-click goes back to the previous view. */
+  function zoomBoxDrag(e: PointerEvent) {
+    e.preventDefault(); closeMenu();
+    const p0 = pt(e);
+    let moved = false;
+    trackEdge(ev => {
+      const q = pt(ev);
+      if (!moved && Math.abs(q.x - p0.x) < 4) return;
+      moved = true;
+      setZbox({ x0: p0.x, y0: p0.y, x1: q.x, y1: q.y });
+    }, ev => {
+      setZbox(null);
+      if (!moved) {
+        const v = views.pop();
+        if (!v) { say(tl('a.pl.zoomNoBack')); return; }
+        setView(v.bw, v.x, v.y);
+        say(tl('a.pl.zoomBack'));
+        return;
+      }
+      const q = pt(ev), a = clamp(Math.min(p0.beat, q.beat), 0, TOTAL), b = clamp(Math.max(p0.beat, q.beat), 0, TOTAL);
+      if (b - a < 1e-6) return;
+      pushView();
+      const z = zoomToRange(a, b, viewW(), A.BW_MIN, A.BW_MAX);
+      setView(z.k, z.scroll);
+      say(tl('a.pl.zoomRange', { a: fmtPos(a), b: fmtPos(b) }));
+    }, 'zoom-in');
+  }
 
   // ---------- hit testing ----------
   const pt = (e: { clientX: number; clientY: number }) => gridPoint(e.clientX, e.clientY);
@@ -422,6 +524,8 @@ export function Playlist() {
       // narrow clips keep a body to grab: the trim zones shrink, and vanish on a sliver
       const ez = cwid < 14 ? 0 : Math.min(6, cwid / 4);
       if (!edge) edge = x - cx < ez ? 'l' : cx + cwid - x < ez ? 'r' : null;
+      // the icon in the clip's top-left corner opens its menu (FL): right-click deletes instead
+      if (!edge && cwid >= 36 && x - cx < 20 && y - cy < 15) edge = 'menu';
       return { c, edge };
     }
     return null;
@@ -453,7 +557,8 @@ export function Playlist() {
     if (autoHover() != null) setAutoHover(null);
     let cur = toolCursor();
     if (h) {
-      if (h.edge === 'fi' || h.edge === 'fo' || h.edge === 'cb') cur = 'col-resize';
+      if (h.edge === 'menu') cur = 'pointer';
+      else if (h.edge === 'fi' || h.edge === 'fo' || h.edge === 'cb') cur = 'col-resize';
       else if (h.edge) cur = editable() ? 'ew-resize' : toolCursor();
       else cur = editable() ? 'grab' : toolCursor();
     }
@@ -462,9 +567,11 @@ export function Playlist() {
 
   // ---------- pointer interactions ----------
   const gridDown = (e: PointerEvent) => {
+    if (e.button === 1) return; // the scroll view pans
     holdFollow();
-    const p = pt(e), h = hit(p.x, p.y), id = h?.c.id ?? null;
     const modK = e.ctrlKey || e.metaKey;
+    if (e.button === 2 && modK) return zoomBoxDrag(e);
+    const p = pt(e), h = hit(p.x, p.y), id = h?.c.id ?? null;
     if (U.autoEdit != null) {
       if (h && h.c.id === U.autoEdit && (e.button === 0 || e.button === 2) && envDown(e, h.c, p.x, p.y)) return;
       if (!h || h.c.id !== U.autoEdit) setU('autoEdit', null);
@@ -492,6 +599,7 @@ export function Playlist() {
       const clip = h.c;
       if (modK) { setU('sel', U.sel.includes(clip.id) ? U.sel.filter(x => x !== clip.id) : [...U.sel, clip.id]); return; }
       if (clip.kind !== 'comp') setU('cur', { kind: clip.kind, ref: clip.ref });
+      if (h.edge === 'menu') { if (!U.sel.includes(clip.id)) setU('sel', [clip.id]); return openClipMenu(e.clientX, e.clientY, clip, p); }
       if (h.edge === 'fi' || h.edge === 'fo') return fadeDrag(e, clip, h.edge);
       if (h.edge === 'cb') return boundaryDrag(e, clip, h.bnd!);
       if (h.edge === 'l' || h.edge === 'r') return resizeDrag(e, clip, h.edge);
@@ -516,10 +624,10 @@ export function Playlist() {
     let orig = plain(S.project.clips.filter(c => idSet.has(c.id)));
     let lead = clip.id;
     setU('sel', ids);
-    const sx = e.clientX, sy = e.clientY, n = S.project.tracks.length;
+    const sx = e.clientX, sy = e.clientY, n = S.project.tracks.length, gx0 = sx - gridLeft();
     const t0 = trackAtYClamped(sy - gridEl.getBoundingClientRect().top);
     let moved = false, lastD = NaN, lastDt = NaN;
-    track(ev => {
+    trackEdge(ev => {
       if (!moved && Math.abs(ev.clientX - sx) + Math.abs(ev.clientY - sy) < 3) return;
       if (!moved && clone) {
         const copies = orig.map(c => ({ ...c, id: allocId() }));
@@ -530,7 +638,7 @@ export function Playlist() {
       }
       moved = true;
       const o = orig.find(c => c.id === lead)!;
-      const raw = (ev.clientX - sx) / U.bw;
+      const raw = (ev.clientX - gridLeft() - gx0) / U.bw;
       const d0 = snapRound(o.start + raw, unit(ev.altKey)) - o.start;
       const dt0 = trackAtYClamped(ev.clientY - gridEl.getBoundingClientRect().top) - t0;
       const [d, dt] = clampMove(orig, d0, dt0, n);
@@ -539,22 +647,22 @@ export function Playlist() {
       lastD = d; lastDt = dt;
       g.update([{ op: 'putClips', clips: moveClips(orig, d, dt) }]);
       const src = srcOf(o);
-      say((clone ? 'Kopia · ' : '') + (src ? src.name : '') + ' → ' + fmtPos(o.start + d) + ' · ' + (S.project.tracks[o.track + dt]?.name ?? ''));
+      say((clone ? tl('a.pl.copyPrefix') : '') + (src ? src.name : '') + ' → ' + fmtPos(o.start + d) + ' · ' + (S.project.tracks[o.track + dt]?.name ?? ''));
     }, () => g.end(), 'grabbing');
   }
 
   function resizeDrag(e: PointerEvent, clip: Clip, edge: 'l' | 'r') {
     const g = new Gesture(tl('a.pl.resizeClip'));
-    const o = plain(clip), sx = e.clientX;
+    const o = plain(clip), sx = e.clientX, gx0 = sx - gridLeft();
     const srcLenOf = (c: Clip) => (c.kind === 'audio' || c.kind === 'comp' ? srcLenBeats(c.kind, c.ref) : Infinity);
     const minL = Math.max(1 / 16, snapRes(U.snap, U.bw) || 1 / 16);
     // the edge of a selected clip trims the whole selection by the same amount (FL / Ableton)
     const others = U.sel.includes(o.id) ? S.project.clips.filter(c => c.id !== o.id && U.sel.includes(c.id)).map(plain) : [];
     let last = [o, ...others].map(c => c.start + ':' + c.len).join('|'), moved = false;
-    track(ev => {
+    trackEdge(ev => {
       if (!moved && Math.abs(ev.clientX - sx) < 3) return; // a click on an edge is not a trim
       moved = true;
-      const raw = (ev.clientX - sx) / U.bw, edge0 = edge === 'r' ? o.start + o.len : o.start;
+      const raw = (ev.clientX - gridLeft() - gx0) / U.bw, edge0 = edge === 'r' ? o.start + o.len : o.start;
       const nc = resizeClip(o, edge, snapRound(edge0 + raw, unit(ev.altKey)), minL, srcLenOf(o));
       const delta = (edge === 'r' ? nc.start + nc.len : nc.start) - edge0;
       const all = [nc, ...resizeClips(others, edge, delta, minL, srcLenOf)];
@@ -563,7 +671,7 @@ export function Playlist() {
       last = key;
       g.update([{ op: 'putClips', clips: all }]);
       say(tl('a.pl.startLen', { pos: fmtPos(nc.start), len: nc.len.toFixed(2) }));
-    }, () => g.end(), 'ew-resize');
+    }, () => g.end(), 'ew-resize', { x: true });
   }
 
   function fadeDrag(e: PointerEvent, clip: Clip, which: 'fi' | 'fo') {
@@ -586,11 +694,11 @@ export function Playlist() {
   function paintDrag(g: Gesture, first: Clip) {
     let lastEnd = first.start + first.len;
     const len = first.len;
-    track(ev => {
+    trackEdge(ev => {
       const b = pt(ev).beat, add: Clip[] = [];
       while (b >= lastEnd && lastEnd + len <= TOTAL) { add.push({ ...first, id: allocId(), start: lastEnd }); lastEnd += len; }
       if (add.length) { g.update([{ op: 'putClips', clips: add }]); setU('sel', [...U.sel, ...add.map(c => c.id)]); }
-    }, () => g.end(), 'copy');
+    }, () => g.end(), 'copy', { x: true });
   }
 
   function eraseDrag(id: Id | null) {
@@ -620,7 +728,7 @@ export function Playlist() {
     const base = additive ? [...U.sel] : [];
     const x0 = p.x, y0 = p.y;
     setU({ marquee: { x0, y0, x1: x0, y1: y0 }, sel: base });
-    track(ev => {
+    trackEdge(ev => {
       const q = pt(ev), bw = U.bw, t = tops();
       const ax = Math.min(x0, q.x), bx = Math.max(x0, q.x), ay = Math.min(y0, q.y), by = Math.max(y0, q.y);
       const clips = unwrap(S.project).clips;
@@ -641,15 +749,18 @@ export function Playlist() {
       g.update([{ op: 'removeClips', ids: [cid] }]);
       if (U.sel.includes(cid)) setU('sel', U.sel.filter(x => x !== cid));
     };
+    // FL: a right-click on a clip deletes it at once and a right-drag deletes what it crosses (one
+    // undo step). The clip's menu is on its icon; empty space and a comp boundary keep their menus.
+    const start = () => { g = new Gesture(tl('a.pl.deleteClips')); document.body.style.cursor = 'not-allowed'; del(h?.c.id); };
+    if (h && h.edge !== 'cb') start();
     track(ev => {
-      if (!g && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 5) {
-        g = new Gesture(tl('a.pl.deleteClips')); document.body.style.cursor = 'not-allowed'; del(h?.c.id);
-      }
+      if (!g && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 5) start();
       if (g) { const q = pt(ev); del(hit(q.x, q.y)?.c.id); }
     }, () => {
+      document.body.style.cursor = '';
       if (g) { g.end(); return; }
       if (h?.edge === 'cb') openBoundaryMenu(sx, sy, h.c, h.bnd!);
-      else if (h) openClipMenu(sx, sy, h.c, p); else openGridMenu(sx, sy, p);
+      else openGridMenu(sx, sy, p);
     });
   }
 
@@ -722,7 +833,7 @@ export function Playlist() {
       if (!g) g = new Gesture('Comping');
       g.update([{ op: 'putComp', comp: { ...comp, regions: writeRange(comp, take.id, from, to) } }]);
       setU('compSel', { clipId: clip.id, from, to });
-      say(take.name + ' · ' + fmtPos(toTimeline(clip, from)) + ' – ' + fmtPos(toTimeline(clip, to)) + ' · Ctrl+↑/↓ = inny take');
+      say(take.name + ' · ' + fmtPos(toTimeline(clip, from)) + ' – ' + fmtPos(toTimeline(clip, to)) + tl('a.pl.takeHint'));
     }, () => {
       if (g) { g.end(); return; }
       setU('compSel', null);
@@ -795,7 +906,7 @@ export function Playlist() {
       ...(isPat ? [
         { t: 'sec', label: 'Pattern' } as MenuItem,
         { t: 'item', label: tl('a.pl.editPattern'), kbd: tl('a.pl.dblClick'), act: () => openPattern(c.ref) } as MenuItem,
-        { t: 'item', label: 'Make unique', act: () => A.makeUnique(c) } as MenuItem,
+        { t: 'item', label: tl('a.pl.makeUnique'), act: () => A.makeUnique(c) } as MenuItem,
       ] : [
         { t: 'sec', label: 'Audio' } as MenuItem,
         { t: 'gain', clipId: c.id } as MenuItem,
@@ -875,15 +986,16 @@ export function Playlist() {
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
     if (dblCheck('ruler')) { if (S.project.loop) { A.setLoop(null, tl('a.pl.deleteLoop')); say(tl('a.pl.loopDeleted')); } return; }
-    const r = gridEl.getBoundingClientRect();
+    // later positions come from the grid's live rect: the view may scroll under the drag (edge auto-scroll)
+    const r = gridEl.getBoundingClientRect(), ex = { x: true };
     const b0 = clamp(snapRound((e.clientX - r.left) / U.bw, unit(e.altKey)), 0, TOTAL);
     let g: Gesture | null = null;
     // an existing loop: grab its start or end edge (or drag its body) instead of drawing a new one
     const lp = S.project.loop, edge = loopEdge(e.clientX, e.shiftKey);
     if (lp && edge) {
       const len = lp.b - lp.a, raw0 = (e.clientX - r.left) / U.bw;
-      track(ev => {
-        const raw = (ev.clientX - r.left) / U.bw, u = unit(ev.altKey);
+      trackEdge(ev => {
+        const raw = (ev.clientX - gridLeft()) / U.bw, u = unit(ev.altKey);
         if (!g && Math.abs(ev.clientX - e.clientX) > 2) g = new Gesture(edge === 'body' ? tl('a.pl.moveLoop') : tl('a.pl.loopRange'));
         if (!g) return;
         let a = lp.a, z = lp.b;
@@ -893,18 +1005,18 @@ export function Playlist() {
         const now = S.project.loop;
         if (now && now.a === a && now.b === z) return;
         g.update([{ op: 'setLoop', loop: { a, b: z } }]);
-      }, () => { if (g) g.end(); else A.seekSong(b0); }, edge === 'body' ? 'grabbing' : 'ew-resize');
+      }, () => { if (g) g.end(); else A.seekSong(b0); }, edge === 'body' ? 'grabbing' : 'ew-resize', ex);
       return;
     }
-    track(ev => {
-      const b1 = clamp(snapRound((ev.clientX - r.left) / U.bw, unit(ev.altKey)), 0, TOTAL);
+    trackEdge(ev => {
+      const b1 = clamp(snapRound((ev.clientX - gridLeft()) / U.bw, unit(ev.altKey)), 0, TOTAL);
       if (!g && Math.abs(ev.clientX - e.clientX) > 4) g = new Gesture(tl('a.pl.loop'));
       const a = Math.min(b0, b1), z = Math.max(b0, b1), now = S.project.loop;
       if (g && b1 !== b0 && !(now && now.a === a && now.b === z)) g.update([{ op: 'setLoop', loop: { a, b: z } }]);
     }, () => {
       if (!g) A.seekSong(b0);
       else { g.end(); if (S.project.loop) A.seekSong(S.project.loop.a); }
-    }, 'ew-resize');
+    }, 'ew-resize', ex);
   };
 
   // ---------- header splitter ----------
@@ -966,7 +1078,7 @@ export function Playlist() {
       track(ev => {
         const b = clamp(toBeat(ev.clientX - r.left), 0, R);
         const [lo, hi] = edge === 'l' ? [Math.min(b, b1 - 1), b1] : [b0, Math.max(b, b0 + 1)];
-        const bw = clamp(cw() / (hi - lo), 4, 96);
+        const bw = clamp(cw() / (hi - lo), A.BW_MIN, A.BW_MAX);
         setU('bw', bw); scrollEl.scrollLeft = lo * bw;
       }, null, 'ew-resize');
       return;
@@ -989,7 +1101,8 @@ export function Playlist() {
           <div class="ovthumb" style={{ left: thumb().x + 'px', width: thumb().w + 'px' }} />
         </div>
       </div>
-      <div ref={scrollEl} class="plscroll">
+      <div ref={scrollEl} class="plscroll" onPointerDown={panDown} onMouseDown={e => { if (e.button === 1) e.preventDefault(); }}
+        onPointerMove={e => { lastPtr = { x: e.clientX, y: e.clientY }; }} onPointerLeave={() => { lastPtr = null; }}>
         <div style={{ width: U.headW + gridW() + 'px', position: 'relative' }}>
           <div class="rulerRow">
             <div class="plhead" style={{ width: U.headW + 'px' }}>
@@ -1015,6 +1128,7 @@ export function Playlist() {
                 onPointerDown={gridDown} onPointerMove={hover} onDblClick={gridDbl} onContextMenu={e => e.preventDefault()} />
               <canvas ref={fadeCv} class="gridCanvas gridOverlay" />
               <Show when={mq()}>{m => <div class="marquee" style={{ left: m().x + 'px', top: m().y + 'px', width: m().w + 'px', height: m().h + 'px' }} />}</Show>
+              <Show when={zbox()}>{z => <div class="zoombox" style={{ left: Math.min(z().x0, z().x1) + 'px', top: Math.min(z().y0, z().y1) + 'px', width: Math.abs(z().x1 - z().x0) + 'px', height: Math.abs(z().y1 - z().y0) + 'px' }} />}</Show>
             </div>
           </div>
         </div>

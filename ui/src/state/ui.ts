@@ -101,6 +101,33 @@ export const [U, setU] = createStore<UiState>({
 // Until the first status message the readout follows the language (a live switch re-translates "Ready").
 let readoutPristine = true;
 createRoot(() => createEffect(() => { const ready = t('d.ui.ready'); if (readoutPristine) setU('readout', ready); }));
+
+// The working set-up survives a restart: tool, snap, zoom, follow and the panel layout used to
+// reset on every launch (the mixer reopened, the browser went back to the Project tab, ...).
+const LAYOUT_KEY = 'wave.layout';
+const TOOLS_OK: Tool[] = ['draw', 'paint', 'erase', 'mute', 'slice', 'select'];
+const num = (v: unknown, lo: number, hi: number): number | undefined => (typeof v === 'number' && isFinite(v) && v >= lo && v <= hi ? v : undefined);
+const bool = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : undefined);
+/** A saved layout as a patch of valid fields only (pure: tested). */
+export function parseLayout(raw: string | null): Partial<UiState> {
+  let v: Record<string, unknown>;
+  try { v = JSON.parse(raw ?? '{}') ?? {}; } catch { return {}; }
+  if (typeof v !== 'object') return {};
+  const p: Partial<UiState> = {
+    tool: TOOLS_OK.includes(v.tool as Tool) ? (v.tool as Tool) : undefined,
+    snap: num(v.snap, -1, 64), bw: num(v.bw, 4, 96), follow: bool(v.follow),
+    mixOpen: bool(v.mixOpen), mixMin: bool(v.mixMin), mixH: num(v.mixH, 100, 2000),
+    headW: num(v.headW, 120, 600), pickW: num(v.pickW, 140, 800), pickOpen: bool(v.pickOpen),
+    browserTab: v.browserTab === 'project' || v.browserTab === 'library' ? v.browserTab : undefined,
+  };
+  for (const k of Object.keys(p) as (keyof UiState)[]) if (p[k] === undefined) delete p[k];
+  return p;
+}
+try { setU(parseLayout(localStorage.getItem(LAYOUT_KEY))); } catch { /* private window */ }
+createRoot(() => createEffect(() => {
+  const s = JSON.stringify({ tool: U.tool, snap: U.snap, bw: U.bw, follow: U.follow, mixOpen: U.mixOpen, mixMin: U.mixMin, mixH: U.mixH, headW: U.headW, pickW: U.pickW, pickOpen: U.pickOpen, browserTab: U.browserTab });
+  try { localStorage.setItem(LAYOUT_KEY, s); } catch { /* private window */ }
+}));
 export const say = (msg: string) => { readoutPristine = false; setU('readout', msg); };
 export const closeMenu = () => { if (U.menu) setU('menu', null); };
 export function menuPos(x: number, y: number, h: number) {
@@ -110,5 +137,5 @@ export function openMenu(x: number, y: number, items: MenuItem[], h = 300) {
   setU('menu', { ...menuPos(x, y, h), items });
 }
 export function openRename(x: number, y: number, value: string, done: (v: string) => void) {
-  openMenu(x, y, [{ t: 'title', label: 'Nazwa — Enter zatwierdza' }, { t: 'rename', value, done }], 80);
+  openMenu(x, y, [{ t: 'title', label: t('d.ui.renameTitle') }, { t: 'rename', value, done }], 80);
 }

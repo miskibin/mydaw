@@ -9,9 +9,9 @@ import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../li
 import { snapName, snapRes } from '../lib/snap';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
 import { flushNotebook } from './notebook';
-import { modePattern, patMode, setPatMode, stopPreview, togglePreview } from './pattern';
+import { clearPeaks } from './peaks';
+import { modePattern, openRack, patMode, setPatMode, stopPreview, togglePreview } from './pattern';
 import { allocId, findFx, insName, plain, S, setTransport } from './store';
-import { curBeat } from './telemetry';
 import { say, setU, U } from './ui';
 import { confirmUnsaved } from '../ui/Confirm';
 
@@ -54,6 +54,9 @@ export function togglePlay() {
   if (U.patPlaying) { void stopPreview(); say('Stop'); return; }
   const p = patMode() && !S.transport.rec ? modePattern() : undefined;
   if (p) return togglePreview(p.id);
+  // SONG with an empty playlist would play silence: play the pattern being edited and say why
+  const cur = modePattern();
+  if (!S.transport.rec && !S.project.clips.length && cur?.notes.length) { say(t('d.act.songEmpty', { name: cur.name })); return togglePreview(cur.id); }
   return play();
 }
 /**
@@ -91,8 +94,8 @@ export function toggleMonitor() {
 }
 
 // ---------- history / project ----------
-export async function undo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say(t('d.act.undone')); }
-export async function redo() { flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say(t('d.act.redone')); }
+export async function undo() { if (!S.canUndo) return say(t('d.act.noUndo')); flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().undo())); say(t('d.act.undone')); }
+export async function redo() { if (!S.canRedo) return say(t('d.act.noRedo')); flushNotebook(); endWheelGestures(); acceptReply(await enqueue(() => be().redo())); say(t('d.act.redone')); }
 /** Ask about unsaved changes; false = the user cancelled (or the save failed). */
 export async function guardUnsaved(what: string): Promise<boolean> {
   const a = await confirmUnsaved(what);
@@ -103,7 +106,7 @@ export async function guardUnsaved(what: string): Promise<boolean> {
 export async function projectNew() {
   if (!(await guardUnsaved(t('d.act.guard.new')))) return;
   flushNotebook();
-  try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); say(t('d.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
+  try { acceptReply(await enqueue(() => be().projectNew())); afterProjectLoad(); if (!S.project.clips.length) openRack(); say(t('d.act.newproj')); } catch (e) { say(t('d.act.newfail', { err: String(e) })); }
 }
 export async function projectOpen() {
   if (!(await guardUnsaved(t('d.act.guard.open')))) return;
@@ -128,6 +131,7 @@ export function cancelExportOrClose() {
   setU({ exportOpen: false, exportBusy: false });
 }
 function afterProjectLoad() {
+  clearPeaks();
   batch(() => {
     setU({ sel: [], plugs: [], editor: null, start: 0, menu: null });
     const m = S.project.inserts[1] ?? S.project.inserts[0];
@@ -146,6 +150,8 @@ export function setLoop(loop: { a: number; b: number } | null, label = t('d.act.
 // ---------- selection & clips ----------
 export const selClips = (): Clip[] => { const s = new Set(U.sel); return S.project.clips.filter(c => s.has(c.id)); };
 let clipboard: Clip[] = [];
+/** Where Ctrl+V puts the next copy: right after the copied block, then after each paste (chains like the piano roll). */
+let pasteAt: number | null = null;
 export const hasClipboard = () => clipboard.length > 0;
 
 export function delIds(ids: Id[]) {
@@ -163,12 +169,13 @@ export function duplicate() {
   setU('sel', copies.map(c => c.id));
   say(t('d.act.duplicated', { n: copies.length }));
 }
-export function copy() { const cs = selClips(); if (!cs.length) return; clipboard = cs.map(plain); say(t('d.act.copied', { n: cs.length })); }
+export function copy() { const cs = selClips(); if (!cs.length) return; clipboard = cs.map(plain); pasteAt = Math.max(...clipboard.map(c => c.start + c.len)); say(t('d.act.copied', { n: cs.length })); }
 export function cut() { copy(); delIds(U.sel); }
 export function paste(at?: { beat: number; track: number }) {
   if (!clipboard.length) return;
-  const beat = at ? at.beat : curBeat() >= 0 ? U.start : 0;
+  const beat = at ? at.beat : pasteAt ?? U.start;
   const copies = pasteClips(clipboard, beat, at ? at.track : null, S.project.tracks.length, allocId);
+  if (!at) pasteAt = Math.max(...copies.map(c => c.start + c.len));
   commit([{ op: 'putClips', clips: copies }], t('d.act.op.paste'));
   setU('sel', copies.map(c => c.id));
   say(t('d.act.pasted', { n: copies.length, pos: fmtPos(beat) }));
@@ -434,7 +441,9 @@ export function applyKeyToTune(root: number, minor: boolean, targetFxId?: Id | '
 }
 
 // ---------- view ----------
-export function zoomAt(f: number) { setU('bw', clamp(U.bw * f, 4, 96)); }
+/** Playlist zoom limits, px per beat. */
+export const BW_MIN = 4, BW_MAX = 96;
+export function zoomAt(f: number) { setU('bw', clamp(U.bw * f, BW_MIN, BW_MAX)); }
 export function setSnap(v: number) {
   setU('snap', v);
   say(v < 0 ? t('d.act.snapauto', { name: snapName(snapRes(-1, U.bw)) }) : t('d.act.snap', { name: snapName(v) }));

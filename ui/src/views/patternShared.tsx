@@ -50,12 +50,16 @@ export function guardKeys(e: KeyboardEvent, own?: (e: KeyboardEvent) => void) {
   if (e.cancelBubble) return;
   const m = e.ctrlKey || e.metaKey, k = e.key.toLowerCase();
   if (e.key === 'Delete' || e.key === 'Backspace' || e.key.startsWith('Arrow') || (m && !e.shiftKey && 'abcdxvm'.includes(k) && k.length === 1)) { e.preventDefault(); e.stopPropagation(); }
+  // the playlist's tool letters: a window that does not use one must not switch the tool behind it
+  else if (!m && !e.altKey && k.length === 1 && 'pbdtce'.includes(k)) e.stopPropagation();
 }
 
 /** A pattern window: frame, title bar (drag to move), bottom-right resize grip. */
 export function PatFrame(props: {
   win: PatWin; key: 'rackWin' | 'rollWin'; z: number; class: string; minW: number; minH: number;
   front: () => void; onKey?: (e: KeyboardEvent) => void; head: JSX.Element; children: JSX.Element;
+  /** Wheel over the title bar (the Channel Rack switches pattern). */
+  onHeadWheel?: (e: WheelEvent) => void;
 }) {
   let root!: HTMLDivElement;
   const W = () => props.win;
@@ -68,7 +72,7 @@ export function PatFrame(props: {
     <div ref={root} tabIndex={0} class={'win patwin ' + props.class} style={{ left: W().x + 'px', top: W().y + 'px', width: W().w + 'px', height: W().h + 'px', 'z-index': props.z }}
       onPointerDown={e => { props.front(); const tg = (e.target as HTMLElement).tagName; if (tg !== 'SELECT' && tg !== 'INPUT') root.focus({ preventScroll: true }); }}
       onKeyDown={e => guardKeys(e, props.onKey)}>
-      <div class="winhd" onPointerDown={e => moveWindow(e, () => W(), (x, y) => setU(props.key, w => w && { ...w, x, y }))}>{props.head}</div>
+      <div class="winhd" onPointerDown={e => moveWindow(e, () => W(), (x, y) => setU(props.key, w => w && { ...w, x, y }))} onWheel={e => props.onHeadWheel?.(e)}>{props.head}</div>
       {props.children}
       <div class="resizer" onPointerDown={resize} title={t('b.pe.resize')} />
     </div>

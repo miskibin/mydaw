@@ -15,10 +15,25 @@ export function getPeaks(id: Id, norm = false, rev = false): Float32Array | null
   if (v instanceof Float32Array) return v;
   if (v) return null;
   cache.set(key, 'loading');
+  const ep = epoch;
   be().sourcePeaks(id, norm, rev)
-    .then(p => { cache.set(key, p); setVersion(x => x + 1); })
-    .catch(e => { console.warn('[wave] source_peaks', id, e); cache.set(key, 'error'); });
+    .then(p => { if (ep !== epoch) return; cache.set(key, p); setVersion(x => x + 1); })
+    .catch(e => { if (ep !== epoch) return; console.warn('[wave] source_peaks', id, e); cache.set(key, 'error'); });
   return null;
+}
+
+/**
+ * Another project was loaded: forget everything. Source and clip ids start again in every
+ * project, so a cached waveform would be drawn for whatever new sample got the same id (a clap
+ * showing the previous project's file). Answers still on their way for the old project are dropped.
+ */
+let epoch = 0;
+export function clearPeaks() {
+  epoch++;
+  cache.clear();
+  for (const e of clipCache.values()) clearTimeout(e.timer);
+  clipCache.clear();
+  setVersion(x => x + 1);
 }
 
 /** Forget cached peaks of a source (e.g. after trim, the id changes anyway). */
@@ -63,7 +78,7 @@ export function getClipPeaks(c: Clip): Float32Array | null {
       if (gestureOpen() || ent.busy) { ent.timer = window.setTimeout(fire, 120); return; }
       const k = ent.want; ent.busy = true;
       be().clipPeaks(id)
-        .then(p => { if (ent.want === k) { ent.key = k; ent.pk = p; setVersion(x => x + 1); } })
+        .then(p => { if (clipCache.get(id) === ent && ent.want === k) { ent.key = k; ent.pk = p; setVersion(x => x + 1); } })
         .catch(err => { console.warn('[wave] clip_peaks', id, err); ent.key = k; })
         .finally(() => { ent.busy = false; if (ent.want !== ent.key) { ent.timer = window.setTimeout(fire, 60); } });
     };

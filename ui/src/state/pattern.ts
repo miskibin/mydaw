@@ -8,8 +8,10 @@ import { prefs } from './prefs';
 import { be } from '../api/backend';
 import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, samplerDefault, TOTAL_BEATS, type Channel, type Id, type LibFile, type Note, type Op, type Pattern } from '../api/types';
 import { baseName, clamp, mod } from '../lib/format';
-import { BAR, barsText, cloneNotes, gridW, notesText, stepsOf } from '../lib/pattern';
+import { BAR, barsText, cloneNotes, notesText, stepsOf } from '../lib/pattern';
+import { rackFitWidth } from '../lib/rack';
 import { commit } from './edit';
+import { newTrack } from '../lib/clipOps';
 import { unwrap } from 'solid-js/store';
 import { allocId, plain, plainNotes, S } from './store';
 import { curBeat, tele } from './telemetry';
@@ -19,6 +21,8 @@ import { say, setU, U } from './ui';
 export const RACK_LEFT = 212, RACK_HEAD = 34, RACK_ROW = 26;
 /** Step button width in the Channel Rack (px): compact like FL's, wider only when the window has room. */
 export const STEP_MIN = 15, STEP_MAX = 22;
+/** The Channel Rack window's narrowest width (px). */
+export const RACK_MIN_W = 480;
 
 /** The pattern the engine loops on its own (PAT mode / preview). */
 let previewId: Id | null = null;
@@ -88,17 +92,29 @@ function onTop(k: WinKey) {
   return U.plugs.every(p => p.z < w.z) && (!other || other.z < w.z);
 }
 
+/**
+ * The Channel Rack's width for a pattern of `steps` steps at window position `x`: the pattern and
+ * its greyed extra bar at the comfortable step width, up to ~4 bars and the screen's right edge.
+ */
+export const rackWidthFor = (steps: number, x: number) => rackFitWidth(steps, { left: RACK_LEFT, cw: STEP_MAX, pad: 8, min: RACK_MIN_W, room: window.innerWidth - x - 10 });
 /** F6: open the Channel Rack (or bring it to the front). */
 export function openRack() {
   if (!S.project.patterns.length) { say(t('b.st.noPatterns')); return; }
   if (U.rackWin) { rackFront(); return; }
   const pt = curPat()!, rows = Math.max(4, channels().length + 1);
-  const w = clamp(RACK_LEFT + gridW(stepsOf(pt) + 16, STEP_MAX) + 8, 480, window.innerWidth - 40);
-  const h = clamp(RACK_HEAD + rows * RACK_ROW + 12, 220, window.innerHeight - 120);
+  const w = rackWidthFor(stepsOf(pt), 30);
+  const need = RACK_HEAD + rows * RACK_ROW + 12;
   const z = U.zTop + 1;
-  setU({ zTop: z, plugsHidden: false, rackWin: { x: Math.max(20, Math.round((window.innerWidth - w) / 2)), y: 64, w, h, z } });
+  // where it was when it was last closed (kept on screen), else centred under the toolbar
+  const g = lastWin.rackWin;
+  const x = g ? clamp(g.x, 0, Math.max(0, window.innerWidth - 120)) : Math.max(20, Math.round((window.innerWidth - w) / 2));
+  const y = g ? clamp(g.y, 0, Math.max(0, window.innerHeight - 80)) : 64;
+  const h = clamp(Math.max(need, g?.h ?? 0), 220, Math.max(220, window.innerHeight - y - 20));
+  setU({ zTop: z, plugsHidden: false, rackWin: { x, y, w: g ? rackWidthFor(stepsOf(pt), x) : w, h, z } });
 }
-export function closeRack() { setU('rackWin', null); }
+/** Where the pattern windows were when last closed: they reopen there instead of jumping back to the centre. */
+const lastWin: { rackWin?: { x: number; y: number; w: number; h: number }; rollWin?: { x: number; y: number; w: number; h: number } } = {};
+export function closeRack() { const w = U.rackWin; if (w) lastWin.rackWin = { x: w.x, y: w.y, w: w.w, h: w.h }; setU('rackWin', null); }
 export function toggleRack() { if (onTop('rackWin')) closeRack(); else openRack(); }
 
 /** F7: open the Piano roll on `ch` (default: the selected channel), or bring it to the front. */
@@ -109,11 +125,19 @@ export function openRoll(ch?: Id) {
   // the roll takes the keyboard (tools, arrows, Ctrl+C/V) as soon as it is shown
   requestAnimationFrame(() => (document.querySelector('.rollwin') as HTMLElement | null)?.focus({ preventScroll: true }));
   if (U.rollWin) { rollFront(); return; }
-  const w = clamp(Math.round(window.innerWidth * 0.62), 640, window.innerWidth - 40), h = clamp(Math.round(window.innerHeight * 0.58), 360, window.innerHeight - 100);
-  const z = U.zTop + 1;
-  setU({ zTop: z, plugsHidden: false, rollWin: { x: Math.max(20, Math.round((window.innerWidth - w) / 2) + 40), y: 96, w, h, z } });
+  const z = U.zTop + 1, g = lastWin.rollWin, W = window.innerWidth, H = window.innerHeight;
+  if (g) {
+    const w = clamp(g.w, 640, Math.max(640, W - 20)), h = clamp(g.h, 360, Math.max(360, H - 20));
+    setU({ zTop: z, plugsHidden: false, rollWin: { x: clamp(g.x, 0, Math.max(0, W - 120)), y: clamp(g.y, 0, Math.max(0, H - 80)), w, h, z } });
+    return;
+  }
+  const w = clamp(Math.round(W * 0.62), 640, W - 40), h = clamp(Math.round(H * 0.58), 360, H - 100);
+  // first time: under the Channel Rack when there is room, so the two do not cover each other
+  const r = U.rackWin, below = r ? r.y + r.h + 8 : 96;
+  const y = r && below + h <= H - 10 ? below : 96;
+  setU({ zTop: z, plugsHidden: false, rollWin: { x: Math.max(20, Math.round((W - w) / 2) + (y === 96 && r ? 40 : 0)), y, w, h, z } });
 }
-export function closeRoll() { setU('rollWin', null); }
+export function closeRoll() { const w = U.rollWin; if (w) lastWin.rollWin = { x: w.x, y: w.y, w: w.w, h: w.h }; setU('rollWin', null); }
 export function toggleRoll() { if (onTop('rollWin')) closeRoll(); else openRoll(); }
 /** Escape: close the top pattern window when it is above every effect window. True when one closed. */
 export function closeTopPatWin(): boolean {
@@ -121,14 +145,25 @@ export function closeTopPatWin(): boolean {
   if (onTop('rackWin')) { closeRack(); return true; }
   return false;
 }
-/** Open a pattern from the playlist / browser: make it current and show the rack (or the roll when one channel plays it, FL-style). */
+/**
+ * Open a pattern from the playlist / browser: make it current and show the Channel Rack. Always
+ * the rack: it used to open the Piano roll instead when one channel played the pattern, so the
+ * same double-click showed different windows (the roll is one click away on the row's mini roll, or F7).
+ */
 export function openPattern(id: Id) {
   setCurPattern(id, true);
   const pt = patById(id); if (!pt) return;
   const used = [...new Set(pt.notes.map(n => n.ch))];
-  if (used.length === 1) openRoll(used[0]); else openRack();
+  if (used.length === 1) selectChannel(used[0]);
+  openRack();
 }
-export function selectChannel(id: Id) { if (U.selCh !== id) setU('selCh', id); }
+/** Select a channel; the mixer follows to the insert it plays through (FL), so mixing it needs no hunt for the strip. */
+export function selectChannel(id: Id) {
+  if (U.selCh === id) return;
+  setU('selCh', id);
+  const ins = chanById(id)?.insert, m = ins ? S.project.inserts.find(x => x.id === ins) : undefined;
+  if (m && U.mixSel !== m.id) setU({ mixSel: m.id, fxSel: m.fx[0]?.id ?? null });
+}
 
 // ---------------------------------------------------------------- patterns
 
@@ -188,11 +223,12 @@ export function splitByChannel(pt = curPat()) {
     made.push(np); ops.push({ op: 'putPattern', pattern: np });
   }
   const old = S.project.clips.filter(c => c.kind === 'pat' && c.ref === pt.id);
-  const nt = S.project.tracks.length, clips = [];
-  for (const c of old) for (let k = 0; k < made.length; k++) {
-    const track = Math.min(nt - 1, c.track + k);
-    clips.push({ ...plain(c), id: allocId(), track, ref: made[k].id });
-  }
+  // one clip per channel on the tracks below the original; tracks that do not exist yet are
+  // added (the clips used to pile up on the last track)
+  let nt = S.project.tracks.length;
+  const clips = [], need = old.length ? Math.max(...old.map(c => c.track)) + made.length : 0;
+  for (; nt < need; nt++) ops.push({ op: 'putTrack', track: newTrack(allocId(), nt) });
+  for (const c of old) for (let k = 0; k < made.length; k++) clips.push({ ...plain(c), id: allocId(), track: c.track + k, ref: made[k].id });
   if (old.length) ops.push({ op: 'removeClips', ids: old.map(c => c.id) }, { op: 'putClips', clips });
   ops.push({ op: 'removePattern', id: pt.id });
   commit(ops, t('b.st.splitPat'));
@@ -335,7 +371,7 @@ export function audition(ch: Id, key?: number, vel = 0.8, force = false) {
 
 // FL's PAT / SONG switch (L): in PAT mode Space loops the current pattern, in SONG the playlist.
 const MODE_KEY = 'wave.patMode';
-const [patMode, setPatModeS] = createSignal((() => { try { return localStorage.getItem(MODE_KEY) === '1'; } catch { return false; } })());
+const [patMode, setPatModeS] = createSignal((() => { try { const v = localStorage.getItem(MODE_KEY); return v == null ? true : v === '1'; } catch { return true; } })());
 export { patMode };
 export function setPatMode(on: boolean) {
   setPatModeS(on);
@@ -374,3 +410,21 @@ export function patPlayhead(pt: Pattern): number {
   return -1;
 }
 export const playStep = (pt: Pattern) => { const b = patPlayhead(pt); return b < 0 ? -1 : Math.floor(b * 4 + 1e-6) % stepsOf(pt); };
+
+// The Channel Rack grows with its channels (a new channel and the "+ Channel" row used to land
+// below the window's edge), and both pattern windows stay reachable when the app window shrinks.
+createRoot(() => {
+  createEffect(on(() => channels().length, (n, prev) => {
+    const w = U.rackWin; if (!w || prev == null || n <= prev) return;
+    const need = RACK_HEAD + (n + 1) * RACK_ROW + 12;
+    if (need > w.h) setU('rackWin', 'h', Math.min(need, Math.max(220, window.innerHeight - w.y - 20)));
+  }));
+  const keepOnScreen = () => {
+    for (const k of ['rackWin', 'rollWin'] as const) {
+      const w = U[k]; if (!w) continue;
+      const x = clamp(w.x, 0, Math.max(0, window.innerWidth - 120)), y = clamp(w.y, 0, Math.max(0, window.innerHeight - 80));
+      if (x !== w.x || y !== w.y) setU(k, v => v && { ...v, x, y });
+    }
+  };
+  window.addEventListener('resize', keepOnScreen);
+});

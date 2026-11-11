@@ -22,7 +22,7 @@ export interface Prefs {
 }
 
 const KEY = 'wave.prefs';
-const DEFAULTS: Prefs = { lang: 'en', uiScale: 1, clipIcons: true, noteAudition: false, autosaveMin: 2, hints: true };
+const DEFAULTS: Prefs = { lang: 'en', uiScale: 1, clipIcons: true, noteAudition: true, autosaveMin: 2, hints: true };
 
 function load(): Prefs {
   try { const v = JSON.parse(localStorage.getItem(KEY) ?? '{}'); return { ...DEFAULTS, ...v, lang: v.lang === 'pl' ? 'pl' : 'en' }; } catch { return { ...DEFAULTS }; }
@@ -74,4 +74,7 @@ export function initPrefs() {
   setPrefsSig(p);
   setLang(p.lang);
   for (const k of Object.keys(p) as (keyof Prefs)[]) if (p[k] !== DEFAULTS[k]) applyPref(k, p);
+  // autosave is a timer, not a value: it must start at the default interval too (it never ran
+  // until the setting was changed once)
+  if (p.autosaveMin === DEFAULTS.autosaveMin) applyPref('autosaveMin', p);
 }

@@ -14,7 +14,7 @@ import { ContextMenu } from './ui/Menu';
 import { Browser, importAt } from './views/Browser';
 import { FxWindow } from './views/FxWindow';
 import { Mixer } from './views/Mixer';
-import { Playlist } from './views/Playlist';
+import { Playlist, playlistZoom } from './views/Playlist';
 import { SampleEditor } from './views/SampleEditor';
 import { ChannelWindow } from './views/ChannelWindow';
 import { PitchEditor } from './views/PitchEditor';
@@ -23,7 +23,7 @@ import { Settings, VstPicker } from './views/Settings';
 import { Updates } from './views/Updates';
 import { midiStatus, startMidi } from './state/midi';
 import { releaseAll, setTypingOn, typingDown, typingOn, typingUp } from './state/typingKeys';
-import { chanWin } from './views/ChannelWindow';
+import { chanWin, closeChannelWindow } from './views/ChannelWindow';
 import { channels } from './state/pattern';
 import { MusicDialog } from './views/MusicDialog';
 import { FxPickerHost, openFxPicker } from './views/FxPicker';
@@ -63,6 +63,9 @@ function typingTarget() {
   return cs[0]?.id ?? null;
 }
 
+/** The keyboard is in a pattern window (Channel Rack, Piano roll): its own keys win over the playlist's. */
+const patWinFocused = () => !!(document.activeElement as HTMLElement | null)?.closest?.('.patwin');
+
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Alt') { e.preventDefault(); if (!U.alt) setU('alt', true); return; }
   if (typingIn(e.target as HTMLElement)) return;
@@ -88,12 +91,21 @@ function onKey(e: KeyboardEvent) {
     if (U.exportOpen) return void A.cancelExportOrClose();
     if (U.help) return setU('help', false);
     if (NB.open && !U.rackWin && !U.rollWin && !U.plugs.length) return closeNotebook();
+    if (chanWin()) return closeChannelWindow();
     if (closeTopPatWin()) return;
     if (U.plugs.length) return A.closePlug(A.topPlug()!.fxId);
     if (U.pitchEd) return A.closePitchEditor();
     if (U.editor) return A.closeEditor();
     if (U.compSel) return setU('compSel', null);
     return setU('sel', []);
+  }
+  // playlist zoom (FL): Page Up / Down around the pointer, Shift+1–3 presets, Shift+4 the whole song.
+  // Not while the Channel Rack or the Piano roll has the keyboard: they zoom their own view.
+  if (!m && !e.altKey && !patWinFocused() && (e.key === 'PageUp' || e.key === 'PageDown')) { e.preventDefault(); return playlistZoom.step(e.key === 'PageUp' ? 1.25 : 0.8); }
+  if (e.shiftKey && !m && !e.altKey && !patWinFocused() && /^Digit[1-4]$/.test(e.code)) {
+    e.preventDefault();
+    const n = +e.code.slice(5);
+    return n === 4 ? playlistZoom.fit() : playlistZoom.preset(n - 1);
   }
   if (e.key === 'F8') { e.preventDefault(); return e.altKey ? setU('pickOpen', !U.pickOpen) : toggleNotebook(); }
   // FL Studio's window keys: F6 Channel rack, F7 Piano roll; the effect picker sits next to the mixer (Shift+F9)

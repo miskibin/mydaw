@@ -214,6 +214,8 @@ function rollBg(g: CanvasRenderingContext2D, W: number, H: number, G: RollGeo, r
 
 export function drawRoll(g: CanvasRenderingContext2D, W: number, H: number, G: RollGeo, layer: Layer, o: {
   pt: Pattern; ch: Channel; chans: Map<Id, Channel>; sel: Set<number>; root: number; mask: number; hoverKey: number | null; lit?: number[]; marquee: { x0: number; y0: number; x1: number; y1: number } | null;
+  /** Ctrl+right-drag: the box the view will zoom to (dashed, no fill: it selects nothing). */
+  zoomBox?: { x0: number; y0: number; x1: number; y1: number } | null;
 }) {
   g.clearRect(0, 0, W, H);
   const bg = layer.get(W, H, ['roll', G.pps, G.sx, G.sy, G.rowH, G.kw, G.steps, o.root, o.mask].join('|'), (gg, w, h) => rollBg(gg, w, h, G, o.root, o.mask));
@@ -246,6 +248,12 @@ export function drawRoll(g: CanvasRenderingContext2D, W: number, H: number, G: R
     const m = o.marquee, x = Math.min(m.x0, m.x1), y = Math.min(m.y0, m.y1);
     g.fillStyle = rgba(T.blue, 0.12); g.fillRect(x, y, Math.abs(m.x1 - m.x0), Math.abs(m.y1 - m.y0));
     g.strokeStyle = rgba(T.blue, 0.8); g.strokeRect(x + 0.5, y + 0.5, Math.abs(m.x1 - m.x0), Math.abs(m.y1 - m.y0));
+  }
+  if (o.zoomBox) {
+    const m = o.zoomBox, x = Math.min(m.x0, m.x1), y = Math.min(m.y0, m.y1);
+    g.strokeStyle = T.fgHi; g.lineWidth = 1; g.setLineDash([4, 3]);
+    g.strokeRect(Math.round(x) + 0.5, Math.round(y) + 0.5, Math.round(Math.abs(m.x1 - m.x0)), Math.round(Math.abs(m.y1 - m.y0)));
+    g.setLineDash([]);
   }
   g.restore();
   // keys sounding: clicked on the keyboard, or played from the typing keyboard

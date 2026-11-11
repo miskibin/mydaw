@@ -3,18 +3,19 @@
 // more than steps (lengths, chords, off-grid) shows a mini piano roll; a click opens the Piano
 // roll. The graph editor (G) edits the selected channel's per-step velocity and key.
 // It is a floating window in the effect-window layer; every edit is an op and one undo step.
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { t } from '../lib/i18n';
 import { TOTAL_BEATS, VOL_UNITY, type Channel } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
-import { barsText, cellsBetween, fitCw, gridW, stepAt, isRollRow, keyOf, notesText, rotate, setKeyAt, setStep, setVelAt, stepsOf } from '../lib/pattern';
+import { barsText, cellsBetween, clearChannel, copyChannelNotes, fitCw, gridW, pasteChannelNotes, stepAt, isRollRow, keyOf, notesText, rotate, setKeyAt, setStep, setVelAt, stepsOf, type ChannelClip } from '../lib/pattern';
+import { moveIndex } from '../lib/rack';
 import { noteName } from '../lib/pitch';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture } from '../state/edit';
 import {
   addBar, STEP_MAX, STEP_MIN, audition, chanById, chanKindLabel, chanOp, channels, closeRack, curPat, openRoll, patOp, playStep, putNotes, RACK_LEFT, RACK_ROW,
-  rackFront, removeBar, selChan, selectChannel, toggleChanMute, toggleChanSolo,
+  rackFront, rackWidthFor, removeBar, selChan, selectChannel, stepPattern, toggleChanMute, toggleChanSolo,
 } from '../state/pattern';
 import { arrVersion } from '../state/store';
 import { say, setU, U } from '../state/ui';
@@ -32,6 +33,8 @@ const RACK_ICON = 'M4 5h4v4H4z M10 5h4v4h-4z M16 5h4v4h-4z M4 15h4v4H4z M10 15h4
 const GRAPH_ICON = 'M4 20V10 M9 20V4 M14 20v-7 M19 20V8';
 /** Key graph range around the channel's root (FL's note pitch graph: ± one octave). */
 const KEY_SPAN = 12;
+/** The rack's clipboard (Ctrl+C / X / V): one channel's notes, kept apart from the playlist's clips. */
+let rackClip: ChannelClip | null = null;
 
 /** The Channel Rack window (shown while `U.rackWin` is set and the project has a pattern). */
 export function ChannelRack(props: { z: number }) {
@@ -119,11 +122,12 @@ function Rack(props: { z: number }) {
     }
     const on = e.button === 0 ? !unwrap(pt()).notes.some(n => n.ch === c.id && Math.abs(n.step - step) < 1e-3) : false;
     const g = new Gesture(on ? t('b.pe.gestSteps') : t('b.pe.gestDelSteps'));
+    // freeze the grid (and the window's width) before the first step can make the pattern longer
+    setHold({ cw: G.cw, steps: G.steps });
     let notes = setStep(unwrap(pt()).notes, c.id, step, on);
     g.update([putNotes(pt(), notes)]);
     if (on) audition(c.id, undefined, 0.8);
     let last = { row, step };
-    setHold({ cw: G.cw, steps: G.steps });
     track(ev => {
       const q = cellAt(ev);
       const r = clamp(q.row, 0, chans().length - 1), s = clamp(q.step, 0, G.steps - 1);
@@ -195,15 +199,59 @@ function Rack(props: { z: number }) {
     setU('rackGraph', on ? 'vel' : null);
     if (w) setU('rackWin', 'h', clamp(w.h + (on ? GRAPH_H : -GRAPH_H), 200, window.innerHeight - w.y - 10));
   };
-  // a pattern that grows (notes past the end, + bar) widens the window up to the screen, never narrows it
-  createEffect(on(() => stepsOf(pt()), (steps, prev) => {
-    const w = U.rackWin; if (!w || prev == null || steps <= prev) return;
-    const want = RACK_LEFT + gridW(steps + 16, STEP_MAX) + 8;
-    if (want > w.w) setU('rackWin', 'w', Math.min(want, window.innerWidth - w.x - 10));
-  }));
+  // The window's width follows the pattern's length, both ways (longer / shorter pattern, + / − bar,
+  // another pattern, undo): the pattern and its greyed bar at the comfortable step width, up to ~4
+  // bars and the screen's edge (beyond that the grid scrolls). Only a length change refits, so a
+  // width the user set by hand stays until then; never while steps are painted (`hold`): on release.
+  let fitted = stepsOf(pt());
+  createEffect(() => {
+    const steps = stepsOf(pt());
+    if (hold() || steps === fitted) return;
+    fitted = steps;
+    untrack(() => { const w = U.rackWin; if (w) setU('rackWin', 'w', rackWidthFor(steps, w.x)); });
+  });
+  /** Ctrl+C / X / V: copy, cut, paste the selected channel's notes in the current pattern (FL). */
+  const clipboardKey = (k: 'c' | 'x' | 'v') => {
+    const c = selCh(), p = pt(); if (!c) return;
+    const notes = unwrap(p).notes;
+    if (k === 'v') {
+      if (!rackClip) { say(t('b.rk.clipEmpty')); return; }
+      commit([putNotes(p, pasteChannelNotes(notes, c.id, rackClip))], t('b.rk.gestPaste'));
+      say(t('b.rk.pasted', { notes: notesText(rackClip.length), name: c.name, pat: p.name }));
+      return;
+    }
+    const clip = copyChannelNotes(notes, c.id);
+    if (!clip.length) { say(t('b.rk.noNotes', { name: c.name, pat: p.name })); return; }
+    rackClip = clip;
+    if (k === 'x') commit([putNotes(p, clearChannel(notes, c.id))], t('b.rk.gestCut'));
+    say(t(k === 'x' ? 'b.rk.cut' : 'b.rk.copied', { notes: notesText(clip.length), name: c.name, pat: p.name }));
+  };
+  /** Alt+↑ / ↓: move the selected channel one row (FL); the row stays in view. */
+  const moveChannel = (d: number) => {
+    const c = selCh(); if (!c) return;
+    const list = chans(), to = moveIndex(list.findIndex(x => x.id === c.id), list.length, d);
+    if (to == null) { say(t(d < 0 ? 'b.rk.moveTop' : 'b.rk.moveBottom', { name: c.name })); return; }
+    commit([chanOp(c, {}, to)], t('b.rk.gestMove'));
+    say(t('b.rk.moved', { name: c.name, n: to + 1, of: list.length }));
+    const top = to * RACK_ROW, h = size().h;
+    if (top < scroll().y) setScroll(s => ({ ...s, y: top }));
+    else if (top + RACK_ROW > scroll().y + h) setScroll(s => ({ ...s, y: Math.min(maxScroll().y, top + RACK_ROW - h) }));
+  };
   const onKey = (e: KeyboardEvent) => {
     const tg = (e.target as HTMLElement).tagName;
-    if (tg === 'INPUT' || tg === 'SELECT' || e.ctrlKey || e.metaKey) return;
+    if (tg === 'INPUT' || tg === 'SELECT') return;
+    const k = e.key.toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (k === 'c' || k === 'x' || k === 'v')) {
+      e.preventDefault(); e.stopPropagation();
+      clipboardKey(k);
+      return;
+    }
+    if (e.ctrlKey || e.metaKey) return;
+    if (e.altKey && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault(); e.stopPropagation();
+      moveChannel(e.key === 'ArrowUp' ? -1 : 1);
+      return;
+    }
     // FL: Shift+Alt+← / → shifts the selected channel's steps by one, wrapping around the pattern
     if (e.altKey && e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       e.preventDefault(); e.stopPropagation();
@@ -217,8 +265,17 @@ function Rack(props: { z: number }) {
     if (e.key.toLowerCase() === 'g') { e.preventDefault(); e.stopPropagation(); toggleGraph(); }
   };
   const notesCount = createMemo(() => { arrVersion(); return unwrap(pt()).notes.length; });
+  // wheel over the title bar: previous / next pattern, like the toolbar's pattern selector
+  let headAcc = 0;
+  const headWheel = (e: WheelEvent) => {
+    if (e.defaultPrevented) return; // the swing field turns its own value
+    e.preventDefault();
+    headAcc += e.deltaY || e.deltaX;
+    if (Math.abs(headAcc) < 40) return;
+    stepPattern(headAcc > 0 ? 1 : -1); headAcc = 0;
+  };
   return (
-    <PatFrame win={U.rackWin!} key="rackWin" z={props.z} class="rackwin" minW={480} minH={200} front={rackFront} onKey={onKey}
+    <PatFrame win={U.rackWin!} key="rackWin" z={props.z} class="rackwin" minW={480} minH={200} front={rackFront} onKey={onKey} onHeadWheel={headWheel}
       head={<>
         <span class="tile" style={{ width: '20px', height: '20px', background: pt().color + '2e', color: pt().color }}><Icon d={RACK_ICON} size={12} /></span>
         <span class="wintitle">Channel rack</span>
@@ -307,7 +364,11 @@ function ChanRow(props: { c: Channel }) {
       <span class="cstrip" style={{ background: c().color }} />
       <button class="led" classList={{ on: !c().mute && (!anySolo() || c().solo), solo: c().solo }}
         title={t('b.pe.ledTitle', { state: t(c().mute ? 'b.pe.ledMuted' : c().solo ? 'b.pe.ledSolo' : 'b.pe.ledActive') })}
-        onPointerDown={e => { e.stopPropagation(); e.preventDefault(); if (e.button === 2) toggleChanSolo(c()); else if (e.button === 0) toggleChanMute(c()); }}
+        onPointerDown={e => {
+          e.stopPropagation(); e.preventDefault();
+          // FL: click = mute, Ctrl+click (or right-click) = solo
+          if (e.button === 2 || (e.button === 0 && (e.ctrlKey || e.metaKey))) toggleChanSolo(c()); else if (e.button === 0) toggleChanMute(c());
+        }}
         onContextMenu={e => { e.preventDefault(); e.stopPropagation(); }} />
       <MiniKnob key={'cp' + c().id} t={() => ((autoDisplay(panT()) ?? c().pan) + 1) / 2} title={t('b.pe.panTitle', { v: panText(autoDisplay(panT()) ?? c().pan) })}
         automated={() => isAutomated(panT())} onMenu={(x, y) => paramMenu(x, y, panT(), () => commit([panOp(0.5)], t('b.cw.panCh')), c().color)}

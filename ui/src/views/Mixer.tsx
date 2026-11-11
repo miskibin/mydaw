@@ -2,6 +2,7 @@ import { createSignal, For, onCleanup, onMount, Show } from 'solid-js';
 import { VOL_UNITY, type Fx, type Id, type Insert } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
 import { t as tr, tName } from '../lib/i18n';
+import { channels } from '../state/pattern';
 import { presetInfo } from '../lib/presets';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
@@ -57,7 +58,7 @@ function Strip(props: { m: Insert; idx: number }) {
   onMount(() => { meterEls.set(props.m.id, [fl, fr]); hold.delete(props.m.id); });
   onCleanup(() => meterEls.delete(props.m.id));
   const audible = () => !m().muted && (m().id === 0 || !anyInsertSolo() || m().solo);
-  const route = () => { if (m().id === 0) return 'OUT'; const here = S.project.tracks.filter(t => t.insert === m().id).map(t => t.name); return here.length ? here.join(', ') : '—'; };
+  const route = () => { if (m().id === 0) return 'OUT'; const here = [...S.project.tracks.filter(t => t.insert === m().id).map(t => t.name), ...channels().filter(c => c.insert === m().id).map(c => c.name)]; return here.length ? [...new Set(here)].join(', ') : '—'; };
   const panT = () => ({ kind: 'insertPan' as const, id: m().id }), volT = () => ({ kind: 'insertVol' as const, id: m().id });
   const shownPan = () => autoDisplay(panT()) ?? m().pan, shownVol = () => autoDisplay(volT()) ?? m().vol;
   const pan = () => { const t = (shownPan() + 1) / 2; return { dash: Math.abs(t - 0.5) * L30 + 'px ' + C30 + 'px', off: -Math.min(t, 0.5) * L30 + 'px', angle: -135 + t * 270 }; };
@@ -208,7 +209,7 @@ function FxSlot(props: { f: Fx; n: number; insId: Id }) {
       <button class="ledbtn" title={f().bypass ? tr('c.fx.bypassOn') : tr('c.fx.bypassOff')} onPointerDown={e => { e.stopPropagation(); A.toggleBypass(f().id); }}>
         <span class="led" style={{ background: f().bypass ? 'var(--line2)' : 'var(--green)' }} />
       </button>
-      <button class="ledbtn xdel" title={tr('c.mix.removeFx')} onPointerDown={e => { e.stopPropagation(); A.removeFx(f().id); }}>×</button>
+      <button class="ledbtn xdel" title={tr('c.mix.removeFx')} onPointerDown={e => e.stopPropagation()} onClick={() => A.removeFx(f().id)}>×</button>
     </div>
   );
 }

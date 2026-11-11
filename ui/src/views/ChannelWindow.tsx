@@ -10,7 +10,7 @@ import { autoDisplay, controlMenu, isAutomated, paramMenu } from '../state/autom
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { audition, chanById, chanOp } from '../state/pattern';
 import { insName, S } from '../state/store';
-import { say } from '../state/ui';
+import { say, U } from '../state/ui';
 import { channelIcon, InstIcon } from '../ui/instIcons';
 import { Knob } from '../ui/Knob';
 import { PianoKeys } from '../ui/PianoKeys';
@@ -28,7 +28,11 @@ export function toggleChannelWindow(id: Id) {
   const w = win();
   if (w && w.id === id) { setWin(null); return; }
   const kind = chanById(id)?.kind, synth = kind === 'synth', wd = synth ? 900 : kind === 'keys' ? 700 : 560;
-  setWin(w ? { ...w, id, w: wd } : { id, x: Math.max(20, window.innerWidth / 2 - wd / 2), y: synth ? 70 : 110, w: wd });
+  if (w) { setWin({ ...w, id, w: wd }); return; }
+  // beside the Channel Rack when there is room (it used to open centred, over the rack just clicked)
+  const r = U.rackWin, W = window.innerWidth;
+  const x = r && r.x + r.w + 8 + wd <= W - 10 ? r.x + r.w + 8 : r && r.x - 8 - wd >= 10 ? r.x - 8 - wd : Math.max(20, W / 2 - wd / 2);
+  setWin({ id, x, y: r && x !== Math.max(20, W / 2 - wd / 2) ? r.y : synth ? 70 : 110, w: wd });
 }
 export const closeChannelWindow = () => setWin(null);
 
