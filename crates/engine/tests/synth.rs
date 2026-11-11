@@ -29,7 +29,7 @@ fn synth_channel(id: Id, preset: &str) -> Channel {
 
 /// An empty project (no master limiter) with one synth channel and one pattern clip.
 fn song(preset: &str, notes: &[(f32, f32, u8)], beats: f64) -> (Project, Id) {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.inserts[0].fx.clear();
     let id = p.alloc_id();
     p.channels.push(synth_channel(id, preset));

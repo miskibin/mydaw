@@ -52,7 +52,7 @@ fn creating_and_preparing_each_effect_is_fast() {
 
 #[test]
 fn adding_and_bypassing_each_effect_is_fast() {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     for m in p.inserts.iter_mut() {
         m.fx.clear();
     }

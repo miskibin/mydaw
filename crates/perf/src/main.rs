@@ -139,7 +139,7 @@ fn bench_all(cache: &Path, sizes: &[String], quick: bool, full_export: bool) -> 
         // ---- project load
         eprintln!("[{name}] load");
         let rss0 = rss_mib();
-        let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+        let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
         let (warn, open_ms) = time_ms(|| e.open(&wave).expect("open"));
         let rss1 = rss_mib();
         let p = e.project();
@@ -162,13 +162,13 @@ fn bench_all(cache: &Path, sizes: &[String], quick: bool, full_export: bool) -> 
         });
         let _ = reparse;
         let (e2, new_ms) = time_ms(|| {
-            let e2 = Engine::new(Project::empty(), Arc::new(NoPlugins));
+            let e2 = Engine::new(Project::routed(), Arc::new(NoPlugins));
             e2.new_project(p.clone());
             e2
         });
         drop(e2);
         // load with a device attached: sync builds graph, timeline and renders tuned clips
-        let e3 = Engine::new(Project::empty(), Arc::new(NoPlugins));
+        let e3 = Engine::new(Project::routed(), Arc::new(NoPlugins));
         let _rt = e3.create_rt(SR, 512);
         let (_, open_rt_ms) = time_ms(|| e3.open(&wave).unwrap());
         drop(_rt);
@@ -393,7 +393,7 @@ fn bench_fx(cache: &Path, quick: bool) -> Value {
         }
         wave_engine::sources::write_wav(&wav, &v, 48000).unwrap();
     }
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     let paths: Vec<PathBuf> = (0..8).map(|_| wav.clone()).collect();
     e.import_audio(&paths, Some((0, 0.0))).unwrap();
     // 8 tracks, each with the voice clip; the loop is the whole 30 s
@@ -480,7 +480,7 @@ fn bench_synth(quick: bool) -> Value {
 // ---------------------------------------------------------------- whole project
 
 fn bench_rt_project(wave: &Path, quick: bool) -> Value {
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
     e.apply(&[Op::SetLoop { range: None }], false, None)
         .unwrap();
@@ -512,7 +512,7 @@ fn bench_rt_project(wave: &Path, quick: bool) -> Value {
 fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
     let n = if quick { 8 } else { 30 };
     // an audio thread must exist, otherwise nothing is synced
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     let rt = e.create_rt(SR, 512);
     let sim = start_sim(rt, 512, true);
     e.open(wave).unwrap();
@@ -760,7 +760,7 @@ fn t_vec() -> Vec<f64> {
 // ---------------------------------------------------------------- export
 
 fn bench_export(wave: &Path, quick: bool, full: bool) -> Value {
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
     let p = e.project();
     let end = p.song_end();
@@ -782,7 +782,7 @@ fn bench_export(wave: &Path, quick: bool, full: bool) -> Value {
 // ---------------------------------------------------------------- analysis, comp, peaks
 
 fn bench_analysis(wave: &Path, _name: &str) -> Value {
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
     let p = e.project();
     let mut res = json!({});
@@ -893,7 +893,7 @@ fn bench_analysis(wave: &Path, _name: &str) -> Value {
 // ---------------------------------------------------------------- audio thread under edits
 
 fn bench_rt_under_edit(wave: &Path, quick: bool) -> Value {
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
     e.apply(&[Op::SetLoop { range: None }], false, None)
         .unwrap();
@@ -970,7 +970,7 @@ fn bench_rt_under_edit(wave: &Path, quick: bool) -> Value {
 // ---------------------------------------------------------------- MIDI
 
 fn bench_midi(wave: &Path, quick: bool) -> Value {
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
     let rt = e.create_rt(SR, 512);
     let sim = start_sim(rt, 512, true);
@@ -1038,7 +1038,7 @@ fn bench_midi(wave: &Path, quick: bool) -> Value {
 // ---------------------------------------------------------------- telemetry (housekeeping at 60 Hz)
 
 fn bench_telemetry(wave: &Path, quick: bool) -> Value {
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
     e.apply(&[Op::SetLoop { range: None }], false, None)
         .unwrap();
@@ -1111,7 +1111,7 @@ fn bench_telemetry(wave: &Path, quick: bool) -> Value {
 // ---------------------------------------------------------------- undo memory
 
 fn bench_undo_memory(wave: &Path, quick: bool) -> Value {
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     e.open(wave).unwrap();
     let n = if quick { 40 } else { 200 };
     let r0 = rss_mib();

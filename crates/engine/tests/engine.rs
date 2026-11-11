@@ -88,7 +88,7 @@ fn audio_clips_play_at_their_position() {
     // 0.5 s of 440 Hz at 44.1 kHz — a different rate than the render
     let tone: Vec<f32> = (0..22050).flat_map(|i| { let v = (i as f32 * 440.0 * std::f32::consts::TAU / 44100.0).sin() * 0.5; [v, v] }).collect();
     wave_engine::sources::write_wav(&wav, &tone, 44100).unwrap();
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.inserts[0].fx.clear(); // no limiter, so levels are exact
     let e = Engine::new(p, Arc::new(NoPlugins));
     let (_, clips) = e.import_audio(&[wav.clone()], Some((0, 4.0))).unwrap();
@@ -114,7 +114,7 @@ fn dry_wet_of_a_latent_effect_lines_up() {
     let sr = 48000.0f32;
     let x: Vec<f32> = (0..96000).flat_map(|i| { let v = (1..8).map(|k| (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.2; [v, v] }).collect();
     wave_engine::sources::write_wav(&wav, &x, 48000).unwrap();
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.inserts[0].fx.clear();
     let ins = p.tracks[0].insert;
     let voice = new_fx(90_000, FxKind::Voice, p.bpm);
@@ -141,7 +141,7 @@ fn save_and_open_round_trip() {
     e.apply(&[Op::SetBpm { bpm: 133.0 }], false, None).unwrap();
     e.save(&path).unwrap();
     assert!(!e.state().dirty);
-    let f = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let f = Engine::new(Project::routed(), Arc::new(NoPlugins));
     let warnings = f.open(&path).unwrap();
     assert!(warnings.is_empty());
     assert_eq!(f.project(), e.project());
@@ -391,7 +391,7 @@ fn export_tail_extends_length_and_cancel_aborts() {
     let err = e.render_cancelable(0.0, 32.0, 2.0, 48000, &cancel).unwrap_err();
     assert!(matches!(err, EngineError::Cancelled));
 
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     for t in p.tracks.iter_mut() {
         t.muted = true;
     }
@@ -425,7 +425,7 @@ fn music_analysis_excludes_vocal_insert_and_caches() {
     };
     let c_wav = chord_wav("c_maj.wav", [60, 64, 67]);
     let fs_wav = chord_wav("fs_maj.wav", [66, 70, 73]);
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     let tune = new_fx(9500, FxKind::Tune, p.bpm);
     p.inserts[2].fx.push(tune);
     let e = Engine::new(p, Arc::new(NoPlugins));
@@ -446,7 +446,7 @@ fn width_render(width: f32) -> Vec<f32> {
     let wav = dir.join("st.wav");
     let tone: Vec<f32> = (0..24000).flat_map(|i| [(i as f32 * 0.05).sin() * 0.4, (i as f32 * 0.071).sin() * 0.3]).collect();
     wave_engine::sources::write_wav(&wav, &tone, 48000).unwrap();
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.inserts[0].fx.clear();
     p.inserts[0].width = width;
     let e = Engine::new(p, Arc::new(NoPlugins));
@@ -475,7 +475,7 @@ fn insert_width_scales_the_side_signal() {
 
 #[test]
 fn old_insert_json_loads_with_unity_width() {
-    let mut v = serde_json::to_value(&Project::empty().inserts[0]).unwrap();
+    let mut v = serde_json::to_value(&Project::routed().inserts[0]).unwrap();
     assert_eq!(v["width"], 1.0);
     v.as_object_mut().unwrap().remove("width");
     let ins: Insert = serde_json::from_value(v).unwrap();

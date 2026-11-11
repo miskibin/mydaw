@@ -34,6 +34,9 @@ shown in the app after an update and is published as the release notes (see
 - A double-click on a pattern always opens the Channel Rack (it used to open the Piano roll
   instead when only one channel played the pattern).
 - **Split by channel adds the tracks it needs** instead of stacking clips on the last track.
+- **Playlist tracks in a new project are plain lanes**, as in FL: none is tied to a mixer
+  insert any more (they play into the master). Send a track to an insert from its header when
+  you want to; existing projects keep their routing.
 - Stop works like Space; pressing it again while stopped goes back to the start of the song.
 - Paste on the playlist lands right after what you copied, and keeps chaining.
 - A project with nothing on the playlist opens on the Channel Rack.

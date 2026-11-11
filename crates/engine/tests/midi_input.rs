@@ -51,7 +51,7 @@ fn off(key: u8) -> MidiMsg {
 
 #[test]
 fn a_held_key_sounds_until_released() {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     let bass = held_bass(&mut p);
     let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
@@ -68,7 +68,7 @@ fn a_held_key_sounds_until_released() {
 
 #[test]
 fn sustain_pedal_holds_released_keys() {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     let bass = held_bass(&mut p);
     let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
@@ -85,7 +85,7 @@ fn sustain_pedal_holds_released_keys() {
 
 #[test]
 fn panic_and_disconnect_silence_everything() {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     let bass = held_bass(&mut p);
     let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
@@ -102,7 +102,7 @@ fn panic_and_disconnect_silence_everything() {
 
 #[test]
 fn a_recorded_take_becomes_a_pattern_clip_on_the_armed_track() {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.tracks[2].arm = true;
     let bpm = p.bpm;
     let e = engine(p);
@@ -142,7 +142,7 @@ fn a_recorded_take_becomes_a_pattern_clip_on_the_armed_track() {
 
 #[test]
 fn nothing_played_adds_nothing() {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.tracks[0].arm = true;
     let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
@@ -156,7 +156,7 @@ fn nothing_played_adds_nothing() {
 
 #[test]
 fn not_armed_or_not_recording_plays_but_does_not_record() {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.tracks[0].arm = true;
     let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
@@ -171,7 +171,7 @@ fn not_armed_or_not_recording_plays_but_does_not_record() {
 
 #[test]
 fn keys_follow_project_edits_and_stream_restarts_without_the_core_lock() {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.tracks[2].arm = true;
     let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
@@ -208,7 +208,7 @@ fn keys_follow_project_edits_and_stream_restarts_without_the_core_lock() {
 fn live_keys_play_where_the_song_plays_the_channel_not_through_the_armed_track() {
     // the armed track is a vocal track: its chain (compressor, pitch correction) pumped and
     // mangled chords played on the keyboard that sounded right in the piano roll
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.inserts[0].fx.clear();
     let id = held_bass(&mut p);
     p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes: vec![Note::new(id, 0.0, 4.0, Some(45))], swing: 0.0 }];

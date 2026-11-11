@@ -269,7 +269,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
     let mut rng = Rng::new(7 + spec.tracks as u64);
     let audio_dir = dir.join("audio");
     std::fs::create_dir_all(&audio_dir).unwrap();
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.bpm = spec.bpm;
     p.tracks.clear();
     p.inserts.truncate(1); // master

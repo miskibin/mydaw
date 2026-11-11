@@ -22,7 +22,7 @@ fn tmp(tag: &str) -> PathBuf {
 
 /// No effects anywhere, so the only processing is what the test puts on the vocal insert.
 fn dry_project() -> Project {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     for m in p.inserts.iter_mut() {
         m.fx.clear();
     }

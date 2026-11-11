@@ -19,7 +19,7 @@ fn tmp(name: &str) -> PathBuf {
 
 /// An empty project (the starter kit in the rack), no master limiter, one pattern on track 0.
 fn one_pattern(notes: Vec<Note>, len: f64, swing: f32) -> Project {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     p.inserts[0].fx.clear();
     p.patterns = vec![Pattern {
         id: 1,
@@ -76,7 +76,7 @@ fn onset(x: &[f32], thr: f32) -> Option<usize> {
 
 #[test]
 fn new_projects_start_with_the_starter_kit_as_samplers() {
-    let p = Project::empty();
+    let p = Project::routed();
     assert_eq!(p.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Kick", "Clap", "Hat", "Snare"]);
     for (c, (file, _)) in p.channels.iter().zip(STARTER_KIT) {
         // every channel is a plain sampler of a standard-library file the project lists
@@ -95,7 +95,7 @@ fn new_projects_start_with_the_starter_kit_as_samplers() {
 #[test]
 fn velocity_scales_the_output() {
     for inst in ["Kick", "Snare"] {
-        let p0 = Project::empty();
+        let p0 = Project::routed();
         let k = chan(&p0, inst);
         let loud = render(
             one_pattern(vec![Note::new(k, 0.0, 4.0, None)], 4.0, 0.0),
@@ -137,7 +137,7 @@ fn swing_moves_only_odd_sixteenths() {
     let spb = 60.0 / 128.0;
     let step_frames = spb / 4.0 * SR as f64;
     for s in [0u32, 1, 2, 3, 6, 7] {
-        let p0 = Project::empty();
+        let p0 = Project::routed();
         let k = chan(&p0, "Kick");
         let out = render(
             one_pattern(vec![Note::new(k, s as f32, 1.0, None)], 4.0, 1.0),
@@ -158,7 +158,7 @@ fn files_with_the_old_synthesised_instruments_open_as_samplers() {
     let dir = tmp("migrate");
     let path = dir.join("demo_v1.wave");
     std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/demo_v1.wave"), &path).unwrap();
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     assert!(e.open(&path).unwrap().is_empty());
     let p = e.project();
     // one sampler channel per instrument the song used, each note on its channel
@@ -172,7 +172,7 @@ fn files_with_the_old_synthesised_instruments_open_as_samplers() {
     assert_eq!(gated.iter().filter(|g| **g).count(), 1);
     assert!(rms(&e.render(0.0, 32.0, 0.0, SR).unwrap()) > 0.01);
     // a file with `"kind":"inst"` channels (after channels, before the standard library)
-    let mut doc: serde_json::Value = serde_json::to_value(Project::empty()).unwrap();
+    let mut doc: serde_json::Value = serde_json::to_value(Project::routed()).unwrap();
     doc["channels"] = serde_json::json!([
         { "id": 1000, "name": "My Kick", "color": "#4f8ef7", "kind": "inst", "inst": "kick", "vol": 0.5, "pan": -0.25, "root": 60 },
         { "id": 1001, "name": "Bass", "color": "#7c8cf8", "kind": "inst", "inst": "bass", "root": 36 },
@@ -193,7 +193,7 @@ fn files_with_the_old_synthesised_instruments_open_as_samplers() {
 
 #[test]
 fn notes_of_unknown_channels_are_refused() {
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     let bad = Pattern { id: 8, name: "x".into(), color: "#fff".into(), len: 4.0, min_len: 4.0, notes: vec![Note::new(424242, 0.0, 1.0, None)], swing: 0.0 };
     assert!(e.apply(&[Op::PutPattern { pattern: bad }], false, None).is_err());
 }
@@ -228,7 +228,7 @@ fn sampler_channel_plays_its_sample_at_the_note_pitch() {
     let dir = tmp("sampler");
     let wav = dir.join("a440.wav");
     sine_wav(&wav, 440.0);
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::routed(), Arc::new(NoPlugins));
     let (srcs, _) = e.import_audio(&[wav], None).unwrap();
     let p = e.project();
     let id = p.next_id;
@@ -299,7 +299,7 @@ fn sampler_channel_plays_its_sample_at_the_note_pitch() {
 
 #[test]
 fn pattern_length_follows_its_notes_and_whole_clips_follow_it() {
-    let p0 = Project::empty();
+    let p0 = Project::routed();
     let k = chan(&p0, "Kick");
     // a length sent by the caller is ignored: the notes reach into bar 2
     let mut p = one_pattern(
@@ -403,7 +403,7 @@ fn removing_a_pattern_removes_its_clips_and_undoes() {
 
 #[test]
 fn notes_past_the_song_end_are_refused() {
-    let p0 = Project::empty();
+    let p0 = Project::routed();
     let k = chan(&p0, "Kick");
     let e = Engine::new(one_pattern(vec![], 4.0, 0.0), Arc::new(NoPlugins));
     let mut pat = e.project().patterns[0].clone();
@@ -465,7 +465,7 @@ fn step_edits_undo_and_redo() {
 
 #[test]
 fn channels_mute_solo_route_and_remove() {
-    let p0 = Project::empty();
+    let p0 = Project::routed();
     let (k, h) = (chan(&p0, "Kick"), chan(&p0, "Hat"));
     let p = one_pattern(
         vec![Note::new(k, 0.0, 1.0, None), Note::new(h, 4.0, 1.0, None)],
@@ -614,7 +614,7 @@ fn save_and_open_round_trip() {
     assert!(
         text.contains("\"channels\"") && !text.contains("\"inst\": \"kick\",\n          \"step\"")
     );
-    let e2 = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    let e2 = Engine::new(Project::routed(), Arc::new(NoPlugins));
     assert!(e2.open(&path).unwrap().is_empty());
     assert_eq!(e2.project(), e.project());
     assert_eq!(e2.project().channels[1].name, "Tone");

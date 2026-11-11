@@ -13,7 +13,7 @@ const BLOCK: usize = 256;
 
 /// No effects anywhere, track 0 armed, no count-in, recording on.
 fn armed() -> Project {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     for m in p.inserts.iter_mut() {
         m.fx.clear();
     }

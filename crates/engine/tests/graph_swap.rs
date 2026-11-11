@@ -29,7 +29,7 @@ fn longest_gap(x: &[f32]) -> usize {
 /// A steady 15 s tone (stereo) on tracks 2, 4 and 5 (never crossing zero for long), optionally a 1.6 s Rider
 /// on track 1; playing from 0 and run past the compensation delay.
 fn setup(rider: bool, tag: &str) -> (Arc<Engine>, Rt) {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     for m in p.inserts.iter_mut() {
         m.fx.clear();
     }

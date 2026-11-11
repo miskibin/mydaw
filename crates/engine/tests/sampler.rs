@@ -16,7 +16,10 @@ fn tmp(name: &str) -> PathBuf {
 
 /// One second, 440 Hz: loud (0.8) for the first half, quiet (0.1) for the second.
 fn two_level_wav(name: &str) -> PathBuf {
-    let path = tmp(name).join("two-level.wav");
+    // one file per call: tests run in parallel and several share a `name`, so one could read the
+    // file while another was still writing it ("no suitable format reader found")
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let path = tmp(name).join(format!("two-level-{}.wav", N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
     let spec = hound::WavSpec { channels: 1, sample_rate: SR, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
     let mut w = hound::WavWriter::create(&path, spec).unwrap();
     for i in 0..SR {

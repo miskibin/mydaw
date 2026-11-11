@@ -12,7 +12,7 @@ const SR: u32 = 48000;
 const BLOCK: usize = 256;
 
 fn project() -> Project {
-    let mut p = Project::empty();
+    let mut p = Project::routed();
     for m in p.inserts.iter_mut() {
         m.fx.clear();
     }

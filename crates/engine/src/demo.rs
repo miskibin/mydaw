@@ -34,7 +34,9 @@ fn base(names: &[&str], ins_names: &[&str]) -> Project {
     p
 }
 
-pub fn empty_project() -> Project {
+/// The empty project with track n sent to insert n (a multitrack session): what tests and
+/// benchmarks that put effects on single tracks build on.
+pub fn routed_project() -> Project {
     let mut p = base(
         &["Track 1", "Track 2", "Track 3", "Track 4", "Track 5", "Track 6", "Track 7", "Track 8"],
         &["Insert 1", "Insert 2", "Insert 3", "Insert 4", "Insert 5", "Insert 6", "Insert 7", "Insert 8"],
@@ -42,6 +44,17 @@ pub fn empty_project() -> Project {
     p.add_starter_kit();
     // one empty pattern, as in FL Studio: the Channel Rack and the Piano roll have something to edit
     p.patterns.push(Pattern { id: 1, name: "Pattern 1".into(), color: TC[0].into(), len: 4.0, min_len: 4.0, notes: vec![], swing: 0.0 });
+    p
+}
+
+/// What the program starts with. Playlist tracks are plain lanes, as in FL Studio: none is tied
+/// to a mixer insert (they play into the master); routing belongs to the channels, and a track
+/// is sent to an insert by hand.
+pub fn empty_project() -> Project {
+    let mut p = routed_project();
+    for t in &mut p.tracks {
+        t.insert = 0;
+    }
     p
 }
 

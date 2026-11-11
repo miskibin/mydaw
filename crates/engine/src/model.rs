@@ -1011,4 +1011,9 @@ impl Project {
     pub fn empty() -> Self {
         crate::demo::empty_project()
     }
+
+    /// The empty project with track n sent to mixer insert n (tests and benchmarks).
+    pub fn routed() -> Self {
+        crate::demo::routed_project()
+    }
 }
