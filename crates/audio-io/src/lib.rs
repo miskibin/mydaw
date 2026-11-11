@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub use probe::LatencyReport;
 use jitter::{IoStats, JitterBuf};
+pub use probe::LatencyReport;
 use probe::Probe;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -101,7 +101,13 @@ fn host_key(id: cpal::HostId) -> String {
 }
 
 pub fn hosts() -> Vec<HostInfo> {
-    cpal::available_hosts().into_iter().map(|h| HostInfo { id: host_key(h), name: h.name().to_string() }).collect()
+    cpal::available_hosts()
+        .into_iter()
+        .map(|h| HostInfo {
+            id: host_key(h),
+            name: h.name().to_string(),
+        })
+        .collect()
 }
 
 fn pick_host(want: &str) -> (cpal::Host, Option<String>) {
@@ -110,14 +116,25 @@ fn pick_host(want: &str) -> (cpal::Host, Option<String>) {
             if host_key(id) == want {
                 match cpal::host_from_id(id) {
                     Ok(h) => return (h, None),
-                    Err(e) => return (cpal::default_host(), Some(format!("{want} is unavailable ({e}); using {} instead.", cpal::default_host().id().name()))),
+                    Err(e) => {
+                        return (
+                            cpal::default_host(),
+                            Some(format!(
+                                "{want} is unavailable ({e}); using {} instead.",
+                                cpal::default_host().id().name()
+                            )),
+                        )
+                    }
                 }
             }
         }
         let note = if want == "asio" && !asio_compiled() {
             "This WAVE build has no ASIO host. Using the system audio instead — install a release build with ASIO.".to_string()
         } else {
-            format!("Audio host \"{want}\" is not available here; using {}.", cpal::default_host().id().name())
+            format!(
+                "Audio host \"{want}\" is not available here; using {}.",
+                cpal::default_host().id().name()
+            )
         };
         return (cpal::default_host(), Some(note));
     }
@@ -128,8 +145,14 @@ pub fn devices(host: &str) -> DeviceList {
     let (h, _) = pick_host(host);
     let name = |d: cpal::Device| dev_name(&d);
     DeviceList {
-        outputs: h.output_devices().map(|it| it.filter_map(name).collect()).unwrap_or_default(),
-        inputs: h.input_devices().map(|it| it.filter_map(name).collect()).unwrap_or_default(),
+        outputs: h
+            .output_devices()
+            .map(|it| it.filter_map(name).collect())
+            .unwrap_or_default(),
+        inputs: h
+            .input_devices()
+            .map(|it| it.filter_map(name).collect())
+            .unwrap_or_default(),
     }
 }
 
@@ -150,7 +173,13 @@ pub struct AudioIo {
 
 /// The same devices and stream settings (everything but the calibration offset).
 fn same_streams(a: &AudioConfig, b: &AudioConfig) -> bool {
-    AudioConfig { rec_offset_ms: None, ..a.clone() } == AudioConfig { rec_offset_ms: None, ..b.clone() }
+    AudioConfig {
+        rec_offset_ms: None,
+        ..a.clone()
+    } == AudioConfig {
+        rec_offset_ms: None,
+        ..b.clone()
+    }
 }
 
 impl AudioIo {
@@ -160,7 +189,10 @@ impl AudioIo {
             .name("wave-audio-io".into())
             .spawn(move || {
                 let mut cur: Option<Running> = None;
-                let mut status = AudioStatus { asio_compiled: asio_compiled(), ..Default::default() };
+                let mut status = AudioStatus {
+                    asio_compiled: asio_compiled(),
+                    ..Default::default()
+                };
                 let mut cfg_now = AudioConfig::default();
                 // The microphone is opened only when it is needed (recording / monitoring):
                 // on Bluetooth headphones an open mic forces the low-quality "headset" profile.
@@ -173,8 +205,12 @@ impl AudioIo {
                     let (cfg, reply) = match req {
                         Req::Start(cfg, reply) => {
                             // only the calibration offset changed: no reason to restart the streams
-                            if let Some(r) = cur.as_ref().filter(|_| status.running && same_streams(&cfg, &cfg_now)) {
-                                r.offset_ms.store(cfg.rec_offset_ms.unwrap_or(0.0).to_bits(), Relaxed);
+                            if let Some(r) = cur
+                                .as_ref()
+                                .filter(|_| status.running && same_streams(&cfg, &cfg_now))
+                            {
+                                r.offset_ms
+                                    .store(cfg.rec_offset_ms.unwrap_or(0.0).to_bits(), Relaxed);
                                 cfg_now = cfg.clone();
                                 status.config = cfg;
                                 let _ = reply.send(status.clone());
@@ -212,8 +248,14 @@ impl AudioIo {
                         Req::Probe(job, reply) => {
                             let res = match cur.as_mut() {
                                 None => Err("Audio is not running.".to_string()),
-                                Some(r) if !r.input_open => Err("No recording input is open: choose an input in Settings.".to_string()),
-                                Some(r) => r.probe_tx.push(job).map_err(|_| "A measurement is already running.".to_string()),
+                                Some(r) if !r.input_open => {
+                                    Err("No recording input is open: choose an input in Settings."
+                                        .to_string())
+                                }
+                                Some(r) => r
+                                    .probe_tx
+                                    .push(job)
+                                    .map_err(|_| "A measurement is already running.".to_string()),
                             };
                             let _ = reply.send(res);
                             continue;
@@ -241,7 +283,12 @@ impl AudioIo {
                             status = st;
                         }
                         Err(e) => {
-                            status = AudioStatus { config: cfg, error: Some(e), asio_compiled: asio_compiled(), ..Default::default() };
+                            status = AudioStatus {
+                                config: cfg,
+                                error: Some(e),
+                                asio_compiled: asio_compiled(),
+                                ..Default::default()
+                            };
                         }
                     }
                     let _ = reply.send(status.clone());
@@ -291,9 +338,14 @@ impl AudioIo {
         let plan = probe::click_plan(rate);
         let id = NEXT.fetch_add(1, Relaxed);
         let (tx, rx) = mpsc::channel();
-        let _ = self.tx.send(Req::Probe(Box::new(Probe::new(id, plan.signal.clone())), tx));
-        rx.recv().map_err(|_| "The audio thread is gone.".to_string())??;
-        let deadline = Instant::now() + Duration::from_secs_f64(plan.signal.len() as f64 / rate as f64 + 3.0);
+        let _ = self.tx.send(Req::Probe(
+            Box::new(Probe::new(id, plan.signal.clone())),
+            tx,
+        ));
+        rx.recv()
+            .map_err(|_| "The audio thread is gone.".to_string())??;
+        let deadline =
+            Instant::now() + Duration::from_secs_f64(plan.signal.len() as f64 / rate as f64 + 3.0);
         loop {
             thread::sleep(Duration::from_millis(50));
             let (tx, rx) = mpsc::channel();
@@ -302,7 +354,10 @@ impl AudioIo {
                 return probe::report(&plan, &p, rate);
             }
             if Instant::now() > deadline {
-                return Err("The measurement did not finish (the audio device stopped or restarted).".into());
+                return Err(
+                    "The measurement did not finish (the audio device stopped or restarted)."
+                        .into(),
+                );
             }
         }
     }
@@ -353,10 +408,18 @@ impl Running {
             st.input_channels = 0;
             return;
         }
-        match open_input(&self.host, cfg.input.as_deref(), cfg, self.rate, self.buffer, self.error.clone()) {
+        match open_input(
+            &self.host,
+            cfg.input.as_deref(),
+            cfg,
+            self.rate,
+            self.buffer,
+            self.error.clone(),
+        ) {
             Ok(Some(o)) => {
                 if self.swap.push(Some(o.side)).is_err() {
-                    st.note = Some("Recording input could not start (the output is not running).".into());
+                    st.note =
+                        Some("Recording input could not start (the output is not running).".into());
                     return;
                 }
                 if let Err(e) = o.stream.play() {
@@ -369,15 +432,23 @@ impl Running {
                 st.input_channels = o.channels;
             }
             Ok(None) => {}
-            Err(e) => st.note = Some(format!("Recording input could not open ({e}). Playback works.")),
+            Err(e) => {
+                st.note = Some(format!(
+                    "Recording input could not open ({e}). Playback works."
+                ))
+            }
         }
     }
 }
 
 const MAX_CALLBACK: usize = 8192;
 
-fn find(devs: Result<impl Iterator<Item = cpal::Device>, cpal::Error>, name: &str) -> Option<cpal::Device> {
-    devs.ok()?.find(|d| dev_name(d).map(|n| n == name).unwrap_or(false))
+fn find(
+    devs: Result<impl Iterator<Item = cpal::Device>, cpal::Error>,
+    name: &str,
+) -> Option<cpal::Device> {
+    devs.ok()?
+        .find(|d| dev_name(d).map(|n| n == name).unwrap_or(false))
 }
 
 struct OpenedInput {
@@ -389,7 +460,14 @@ struct OpenedInput {
 
 /// Builds (does not start) the input stream. `name`: `None` = the system default,
 /// `Some("")` = no input.
-fn open_input(host: &cpal::Host, name: Option<&str>, cfg: &AudioConfig, rate: u32, buffer: cpal::BufferSize, err: Arc<std::sync::Mutex<Option<String>>>) -> Result<Option<OpenedInput>, String> {
+fn open_input(
+    host: &cpal::Host,
+    name: Option<&str>,
+    cfg: &AudioConfig,
+    rate: u32,
+    buffer: cpal::BufferSize,
+    err: Arc<std::sync::Mutex<Option<String>>>,
+) -> Result<Option<OpenedInput>, String> {
     let dev = match name {
         Some("") => return Ok(None),
         Some(n) => find(host.input_devices(), n),
@@ -398,18 +476,39 @@ fn open_input(host: &cpal::Host, name: Option<&str>, cfg: &AudioConfig, rate: u3
     let Some(d) = dev else { return Ok(None) };
     let ic = d.default_input_config().map_err(|e| e.to_string())?;
     let ich = ic.channels().max(1);
-    let isc = cpal::StreamConfig { channels: ich, sample_rate: rate, buffer_size: buffer };
+    let isc = cpal::StreamConfig {
+        channels: ich,
+        sample_rate: rate,
+        buffer_size: buffer,
+    };
     let pick = cfg.input_channel.unwrap_or(0).min(ich - 1) as usize;
     let (tx, rx) = rtrb::RingBuffer::<f32>::new(rate as usize * 2);
     let clock = Arc::new(InClock::default());
     let stream = build_input(&d, &isc, ic.sample_format(), tx, err, pick, clock.clone())?;
     // ASIO delivers each input buffer just before the output callback that uses it; other
     // hosts run the two streams on their own schedules and need two periods in reserve
-    let periods = if host.id().name().eq_ignore_ascii_case("asio") { 1 } else { 2 };
-    Ok(Some(OpenedInput { stream, side: InputSide { ring: rx, clock, jb: JitterBuf::new(rate, periods) }, name: dev_name(&d), channels: ich }))
+    let periods = if host.id().name().eq_ignore_ascii_case("asio") {
+        1
+    } else {
+        2
+    };
+    Ok(Some(OpenedInput {
+        stream,
+        side: InputSide {
+            ring: rx,
+            clock,
+            jb: JitterBuf::new(rate, periods),
+        },
+        name: dev_name(&d),
+        channels: ich,
+    }))
 }
 
-fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Running, AudioStatus), String> {
+fn open(
+    engine: &Arc<Engine>,
+    cfg: &AudioConfig,
+    want_input: bool,
+) -> Result<(Running, AudioStatus), String> {
     let (host, mut note) = pick_host(&cfg.host);
     let out_dev = match cfg.output.as_deref().filter(|s| !s.is_empty()) {
         Some(n) => match find(host.output_devices(), n) {
@@ -422,16 +521,24 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
         None => host.default_output_device().ok_or("no output device")?,
     };
     let out_name = dev_name(&out_dev).unwrap_or_default();
-    let def = out_dev.default_output_config().map_err(|e| format!("{out_name}: {e}"))?;
+    let def = out_dev
+        .default_output_config()
+        .map_err(|e| format!("{out_name}: {e}"))?;
     let rate = cfg.sample_rate.unwrap_or(def.sample_rate());
     let channels = def.channels().max(1);
     let fmt = def.sample_format();
     let buffer = match (cfg.buffer_size, def.buffer_size()) {
-        (Some(b), cpal::SupportedBufferSize::Range { min, max }) => cpal::BufferSize::Fixed(b.clamp(*min, *max)),
+        (Some(b), cpal::SupportedBufferSize::Range { min, max }) => {
+            cpal::BufferSize::Fixed(b.clamp(*min, *max))
+        }
         (Some(b), _) => cpal::BufferSize::Fixed(b),
         _ => cpal::BufferSize::Default,
     };
-    let sc = cpal::StreamConfig { channels, sample_rate: rate, buffer_size: buffer };
+    let sc = cpal::StreamConfig {
+        channels,
+        sample_rate: rate,
+        buffer_size: buffer,
+    };
     let nominal = match buffer {
         cpal::BufferSize::Fixed(b) => b,
         _ => 512,
@@ -440,7 +547,9 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
     let is_asio = host_name.eq_ignore_ascii_case("asio");
     // input and output timestamps share the system clock here (QPC, mach time), so the
     // round trip is measured from them; elsewhere per-stream clocks are not comparable
-    let shared_clock = ["wasapi", "coreaudio"].iter().any(|h| host_name.eq_ignore_ascii_case(h));
+    let shared_clock = ["wasapi", "coreaudio"]
+        .iter()
+        .any(|h| host_name.eq_ignore_ascii_case(h));
 
     let error = Arc::new(std::sync::Mutex::new(None::<String>));
     let (mut swap_tx, swap_rx) = rtrb::RingBuffer::<Option<InputSide>>::new(16);
@@ -471,15 +580,30 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
                 inp = Some(o.stream);
             }
             Ok(None) => {}
-            Err(e) => note = Some(format!("Recording input could not open ({e}). Playback works.")),
+            Err(e) => {
+                note = Some(format!(
+                    "Recording input could not open ({e}). Playback works."
+                ))
+            }
         }
     }
 
     let mut rt = engine.create_rt(rate as f32, (nominal as usize).clamp(64, 2048));
     // after Play the music is heard at once, not after the plugin delay compensation
     rt.set_instant_start(Some(0.7));
-    let wires = OutWires { shared: engine.shared(), swap: swap_rx, trash: trash_tx, probe: probe_rx, back: back_tx, offset_ms: offset_ms.clone(), stats: stats.clone(), shared_clock, buffer: nominal };
-    let out = build_output(&out_dev, &sc, fmt, rt, error.clone(), wires).map_err(|e| format!("{out_name}: {e}"))?;
+    let wires = OutWires {
+        shared: engine.shared(),
+        swap: swap_rx,
+        trash: trash_tx,
+        probe: probe_rx,
+        back: back_tx,
+        offset_ms: offset_ms.clone(),
+        stats: stats.clone(),
+        shared_clock,
+        buffer: nominal,
+    };
+    let out = build_output(&out_dev, &sc, fmt, rt, error.clone(), wires)
+        .map_err(|e| format!("{out_name}: {e}"))?;
     out.play().map_err(|e| format!("{out_name}: {e}"))?;
     if let Some(s) = &inp {
         if let Err(e) = s.play() {
@@ -502,7 +626,22 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
         asio_compiled: asio_compiled(),
         ..Default::default()
     };
-    let run = Running { _out: out, inp, input_open, asio: is_asio, host, rate, buffer, error, swap: swap_tx, trash: trash_rx, probe_tx, probe_back: back_rx, offset_ms, stats };
+    let run = Running {
+        _out: out,
+        inp,
+        input_open,
+        asio: is_asio,
+        host,
+        rate,
+        buffer,
+        error,
+        swap: swap_tx,
+        trash: trash_rx,
+        probe_tx,
+        probe_back: back_rx,
+        offset_ms,
+        stats,
+    };
     Ok((run, status))
 }
 
@@ -523,7 +662,11 @@ struct InClock {
 
 impl Default for InClock {
     fn default() -> Self {
-        Self { origin: AtomicU64::new(f64::NAN.to_bits()), lat: AtomicU32::new(0), packet: AtomicU32::new(0) }
+        Self {
+            origin: AtomicU64::new(f64::NAN.to_bits()),
+            lat: AtomicU32::new(0),
+            packet: AtomicU32::new(0),
+        }
     }
 }
 
@@ -531,8 +674,12 @@ impl InClock {
     /// Called by the input callback after pushing a packet whose first frame was captured
     /// at `capture_ns`, with `pushed_before` frames pushed by earlier packets.
     fn publish(&self, capture_ns: f64, pushed_before: u64, frames: u64, rate: u32) {
-        self.packet.store(frames.min(u32::MAX as u64) as u32, Relaxed);
-        self.origin.store((capture_ns - pushed_before as f64 * 1e9 / rate as f64).to_bits(), Relaxed);
+        self.packet
+            .store(frames.min(u32::MAX as u64) as u32, Relaxed);
+        self.origin.store(
+            (capture_ns - pushed_before as f64 * 1e9 / rate as f64).to_bits(),
+            Relaxed,
+        );
     }
 }
 
@@ -575,7 +722,11 @@ struct Estimator {
 
 impl Estimator {
     fn new(rate: u32) -> Self {
-        Self { rate, smooth: -1.0, live: false }
+        Self {
+            rate,
+            smooth: -1.0,
+            live: false,
+        }
     }
 
     /// A new input stream: what was measured before says nothing about it.
@@ -588,7 +739,15 @@ impl Estimator {
     /// the clock the input shares (NaN = not comparable); `pos`: the input frame (fractional)
     /// the jitter buffer plays at this callback's first frame (`None` while it is not
     /// playing real input); `backlog`: frames buffered ahead of it.
-    fn step(&mut self, out_lat: u32, frames: u32, now_ns: f64, clock: Option<&InClock>, pos: Option<f64>, backlog: u32) -> Measure {
+    fn step(
+        &mut self,
+        out_lat: u32,
+        frames: u32,
+        now_ns: f64,
+        clock: Option<&InClock>,
+        pos: Option<f64>,
+        backlog: u32,
+    ) -> Measure {
         let out = if out_lat == 0 { frames } else { out_lat };
         let origin = clock.map_or(f64::NAN, |c| f64::from_bits(c.origin.load(Relaxed)));
         let in_lat = clock.map_or(0, |c| c.lat.load(Relaxed));
@@ -597,10 +756,15 @@ impl Estimator {
             None => None, // nothing captured yet, or the jitter buffer is refilling
             Some(_) if origin.is_nan() => None,
             Some(x) => {
-            // age at this callback of the input frame played first in it
-            let age = (now_ns - origin) * self.rate as f64 / 1e9 - x;
-            let ok = age.is_finite() && age > -(self.rate as f64) * 0.002 && age < self.rate as f64;
-            Some(if ok { out + age.max(0.0).round() as u32 } else { fallback })
+                // age at this callback of the input frame played first in it
+                let age = (now_ns - origin) * self.rate as f64 / 1e9 - x;
+                let ok =
+                    age.is_finite() && age > -(self.rate as f64) * 0.002 && age < self.rate as f64;
+                Some(if ok {
+                    out + age.max(0.0).round() as u32
+                } else {
+                    fallback
+                })
             }
         };
         // the first real measurement replaces whatever was guessed before the input ran
@@ -610,15 +774,24 @@ impl Estimator {
         }
         if take.is_some() || !self.live {
             let raw = take.unwrap_or(fallback) as f64;
-            self.smooth = if self.smooth < 0.0 { raw } else { self.smooth * 0.95 + raw * 0.05 };
+            self.smooth = if self.smooth < 0.0 {
+                raw
+            } else {
+                self.smooth * 0.95 + raw * 0.05
+            };
         }
-        Measure { shown: self.smooth.max(0.0).round() as u32, take }
+        Measure {
+            shown: self.smooth.max(0.0).round() as u32,
+            take,
+        }
     }
 }
 
 /// Round trip plus the calibration offset, never negative.
 fn with_offset(frames: u32, offset_ms: f32, rate: u32) -> u32 {
-    (frames as f64 + offset_ms as f64 * rate as f64 / 1000.0).round().max(0.0) as u32
+    (frames as f64 + offset_ms as f64 * rate as f64 / 1000.0)
+        .round()
+        .max(0.0) as u32
 }
 
 /// Everything the output callback talks to besides the engine.
@@ -634,7 +807,14 @@ struct OutWires {
     buffer: u32,
 }
 
-fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut rt: wave_engine::Rt, err: Arc<std::sync::Mutex<Option<String>>>, mut w: OutWires) -> Result<cpal::Stream, String> {
+fn build_output(
+    dev: &cpal::Device,
+    sc: &cpal::StreamConfig,
+    fmt: cpal::SampleFormat,
+    mut rt: wave_engine::Rt,
+    err: Arc<std::sync::Mutex<Option<String>>>,
+    mut w: OutWires,
+) -> Result<cpal::Stream, String> {
     let ch = sc.channels as usize;
     let rate = sc.sample_rate;
     let mut est = Estimator::new(rate);
@@ -645,69 +825,85 @@ fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFo
     let mut il = vec![0f32; MAX_CALLBACK];
     let mut ir = vec![0f32; MAX_CALLBACK];
     let shared_clock = w.shared_clock;
-    let mut render = move |frames: usize, out_lat: u32, now_ns: f64, write: &mut dyn FnMut(usize, f32, f32)| {
-        while let Ok(next) = w.swap.pop() {
-            if let Some(old) = std::mem::replace(&mut input, next) {
-                // freed by the control thread (if its trash were ever full, it drops here)
-                let _ = w.trash.push(old);
-            }
-            est.restart();
-        }
-        if probe.is_none() {
-            probe = w.probe.pop().ok();
-        }
-        let (pos, backlog) = input.as_ref().map_or((None, 0), |i| (i.jb.pos(), i.jb.fill(i.ring.slots() / 2).max(0.0) as u32));
-        let now = if shared_clock { now_ns } else { f64::NAN };
-        let m = est.step(out_lat, frames as u32, now, input.as_ref().map(|i| &*i.clock), pos, backlog);
-        let off = f32::from_bits(w.offset_ms.load(Relaxed));
-        w.shared.set_io_latency(with_offset(m.shown, off, rate));
-        if let Some(raw) = m.take {
-            w.shared.add_take_latency(with_offset(raw, off, rate));
-            if let Some(p) = probe.as_mut() {
-                p.reported_sum += raw as f64;
-                p.reported_n += 1;
-            }
-        }
-        let mut done = 0;
-        while done < frames {
-            let n = (frames - done).min(MAX_CALLBACK);
-            // input: as many frames as are ready, zero-padded
-            // input through the jitter buffer: gap-free, never zero-padded mid-stream
-            match input.as_mut() {
-                Some(inp) => {
-                    let packet = inp.clock.packet.load(Relaxed) as usize;
-                    inp.jb.pull(&mut inp.ring, &mut il[..n], w.buffer as usize, packet, &w.stats);
-                    ir[..n].copy_from_slice(&il[..n]);
+    let mut render =
+        move |frames: usize, out_lat: u32, now_ns: f64, write: &mut dyn FnMut(usize, f32, f32)| {
+            while let Ok(next) = w.swap.pop() {
+                if let Some(old) = std::mem::replace(&mut input, next) {
+                    // freed by the control thread (if its trash were ever full, it drops here)
+                    let _ = w.trash.push(old);
                 }
-                None => {
-                    il[..n].fill(0.0);
-                    ir[..n].fill(0.0);
+                est.restart();
+            }
+            if probe.is_none() {
+                probe = w.probe.pop().ok();
+            }
+            let (pos, backlog) = input.as_ref().map_or((None, 0), |i| {
+                (i.jb.pos(), i.jb.fill(i.ring.slots() / 2).max(0.0) as u32)
+            });
+            let now = if shared_clock { now_ns } else { f64::NAN };
+            let m = est.step(
+                out_lat,
+                frames as u32,
+                now,
+                input.as_ref().map(|i| &*i.clock),
+                pos,
+                backlog,
+            );
+            let off = f32::from_bits(w.offset_ms.load(Relaxed));
+            w.shared.set_io_latency(with_offset(m.shown, off, rate));
+            if let Some(raw) = m.take {
+                w.shared.add_take_latency(with_offset(raw, off, rate));
+                if let Some(p) = probe.as_mut() {
+                    p.reported_sum += raw as f64;
+                    p.reported_n += 1;
                 }
             }
-            rt.process(&mut l[..n], &mut r[..n], Some((&il[..n], &ir[..n])));
-            // a latency measurement plays its clicks instead of the mix and keeps the input
-            if let Some(p) = probe.as_mut() {
-                for i in 0..n {
-                    let s = p.signal.get(p.pos).copied().unwrap_or(0.0);
-                    if let Some(c) = p.cap.get_mut(p.pos) {
-                        *c = il[i];
+            let mut done = 0;
+            while done < frames {
+                let n = (frames - done).min(MAX_CALLBACK);
+                // input: as many frames as are ready, zero-padded
+                // input through the jitter buffer: gap-free, never zero-padded mid-stream
+                match input.as_mut() {
+                    Some(inp) => {
+                        let packet = inp.clock.packet.load(Relaxed) as usize;
+                        inp.jb.pull(
+                            &mut inp.ring,
+                            &mut il[..n],
+                            w.buffer as usize,
+                            packet,
+                            &w.stats,
+                        );
+                        ir[..n].copy_from_slice(&il[..n]);
                     }
-                    p.pos += 1;
-                    l[i] = s;
-                    r[i] = s;
+                    None => {
+                        il[..n].fill(0.0);
+                        ir[..n].fill(0.0);
+                    }
+                }
+                rt.process(&mut l[..n], &mut r[..n], Some((&il[..n], &ir[..n])));
+                // a latency measurement plays its clicks instead of the mix and keeps the input
+                if let Some(p) = probe.as_mut() {
+                    for i in 0..n {
+                        let s = p.signal.get(p.pos).copied().unwrap_or(0.0);
+                        if let Some(c) = p.cap.get_mut(p.pos) {
+                            *c = il[i];
+                        }
+                        p.pos += 1;
+                        l[i] = s;
+                        r[i] = s;
+                    }
+                }
+                for i in 0..n {
+                    write(done + i, l[i], r[i]);
+                }
+                done += n;
+            }
+            if probe.as_ref().is_some_and(|p| p.done()) {
+                if let Some(p) = probe.take() {
+                    let _ = w.back.push(p);
                 }
             }
-            for i in 0..n {
-                write(done + i, l[i], r[i]);
-            }
-            done += n;
-        }
-        if probe.as_ref().is_some_and(|p| p.done()) {
-            if let Some(p) = probe.take() {
-                let _ = w.back.push(p);
-            }
-        }
-    };
+        };
     let on_err = move |e: cpal::Error| {
         if let Ok(mut g) = err.lock() {
             *g = Some(e.to_string());
@@ -721,16 +917,21 @@ fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFo
                     let frames = data.len() / ch;
                     let ts = info.timestamp();
                     let out_lat = frames_of(ts.playback.duration_since(ts.callback), rate);
-                    render(frames, out_lat, ts.callback.as_nanos() as f64, &mut |i, a, b| {
-                        let base = i * ch;
-                        data[base] = $conv(a);
-                        if ch > 1 {
-                            data[base + 1] = $conv(b);
-                            for k in 2..ch {
-                                data[base + k] = $conv(0.0);
+                    render(
+                        frames,
+                        out_lat,
+                        ts.callback.as_nanos() as f64,
+                        &mut |i, a, b| {
+                            let base = i * ch;
+                            data[base] = $conv(a);
+                            if ch > 1 {
+                                data[base + 1] = $conv(b);
+                                for k in 2..ch {
+                                    data[base + k] = $conv(0.0);
+                                }
                             }
-                        }
-                    });
+                        },
+                    );
                 },
                 on_err,
                 None,
@@ -740,14 +941,26 @@ fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFo
     let s = match fmt {
         cpal::SampleFormat::F32 => stream!(f32, |x: f32| x),
         cpal::SampleFormat::I16 => stream!(i16, |x: f32| (x.clamp(-1.0, 1.0) * 32767.0) as i16),
-        cpal::SampleFormat::I32 => stream!(i32, |x: f32| (x.clamp(-1.0, 1.0) as f64 * 2147483647.0) as i32),
-        cpal::SampleFormat::U16 => stream!(u16, |x: f32| ((x.clamp(-1.0, 1.0) * 32767.0) as i32 + 32768) as u16),
+        cpal::SampleFormat::I32 => {
+            stream!(i32, |x: f32| (x.clamp(-1.0, 1.0) as f64 * 2147483647.0)
+                as i32)
+        }
+        cpal::SampleFormat::U16 => stream!(u16, |x: f32| ((x.clamp(-1.0, 1.0) * 32767.0) as i32
+            + 32768) as u16),
         f => return Err(format!("unsupported sample format {f:?}")),
     };
     s.map_err(|e| e.to_string())
 }
 
-fn build_input(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut tx: rtrb::Producer<f32>, err: Arc<std::sync::Mutex<Option<String>>>, pick: usize, clock: Arc<InClock>) -> Result<cpal::Stream, String> {
+fn build_input(
+    dev: &cpal::Device,
+    sc: &cpal::StreamConfig,
+    fmt: cpal::SampleFormat,
+    mut tx: rtrb::Producer<f32>,
+    err: Arc<std::sync::Mutex<Option<String>>>,
+    pick: usize,
+    clock: Arc<InClock>,
+) -> Result<cpal::Stream, String> {
     let ch = sc.channels as usize;
     let pick = pick.min(ch - 1);
     let rate = sc.sample_rate;
@@ -763,7 +976,10 @@ fn build_input(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFor
                 *sc,
                 move |data: &[$t], info: &cpal::InputCallbackInfo| {
                     let ts = info.timestamp();
-                    clock.lat.store(frames_of(ts.callback.duration_since(ts.capture), rate), Relaxed);
+                    clock.lat.store(
+                        frames_of(ts.callback.duration_since(ts.capture), rate),
+                        Relaxed,
+                    );
                     // one channel (a mic on input 1 or 2), mono in both sides: a vocal recorded
                     // from a stereo interface must not end up in the left ear only
                     let mut k = 0u64;
@@ -830,7 +1046,18 @@ mod tests {
 
     impl Default for Sim {
         fn default() -> Self {
-            Self { out_period: 512, out_lat: 1100, in_packet: 480, in_delay_ms: 1.0, jitter_ms: 0.0, in_start_s: -2.0, ppm: 0.0, click: 48000, secs: 3.0, signal: None }
+            Self {
+                out_period: 512,
+                out_lat: 1100,
+                in_packet: 480,
+                in_delay_ms: 1.0,
+                jitter_ms: 0.0,
+                in_start_s: -2.0,
+                ppm: 0.0,
+                click: 48000,
+                secs: 3.0,
+                signal: None,
+            }
         }
     }
 
@@ -856,15 +1083,24 @@ mod tests {
         let in_start = base + s.in_start_s * 1e9;
         // when the click (output frame `click`) is heard, and which input frame captures it
         let jc = s.click / s.out_period;
-        let heard = t_out(jc) + (s.out_lat as f64 + (s.click - jc * s.out_period) as f64) * 1e9 / rate;
+        let heard =
+            t_out(jc) + (s.out_lat as f64 + (s.click - jc * s.out_period) as f64) * 1e9 / rate;
         let q_click = ((heard - in_start) * in_rate / 1e9).round() as i64;
         let (mut tx, rx) = rtrb::RingBuffer::<f32>::new(RATE as usize * 2);
-        let mut side = InputSide { ring: rx, clock: Arc::new(InClock::default()), jb: JitterBuf::new(RATE, 2) };
+        let mut side = InputSide {
+            ring: rx,
+            clock: Arc::new(InClock::default()),
+            jb: JitterBuf::new(RATE, 2),
+        };
         let mut est = Estimator::new(RATE);
         let stats = IoStats::default();
         let mut pushed = 0u64;
         // a running input: the stream holds only what arrives after the output starts
-        let mut packet = if s.in_start_s < 0.0 { ((base - in_start) * in_rate / 1e9) as usize / s.in_packet } else { 0 };
+        let mut packet = if s.in_start_s < 0.0 {
+            ((base - in_start) * in_rate / 1e9) as usize / s.in_packet
+        } else {
+            0
+        };
         let mut seed = 0x1234_5678u32;
         let mut rnd = move || {
             seed ^= seed << 13;
@@ -875,14 +1111,23 @@ mod tests {
         let mut last_delivery = 0.0f64;
         let mut next_delivery = f64::NAN;
         let mut il = vec![0f32; s.out_period];
-        let mut run = Run { takes: vec![], at_click: None, truth: None, input: vec![], stats: IoStats::default() };
+        let mut run = Run {
+            takes: vec![],
+            at_click: None,
+            truth: None,
+            input: vec![],
+            stats: IoStats::default(),
+        };
         for j in 0..(s.secs * rate) as usize / s.out_period {
             let now = t_out(j);
             // deliver every packet whose input callback came before this output callback
             loop {
                 let cap = in_start + (packet * s.in_packet) as f64 * 1e9 / in_rate;
                 if next_delivery.is_nan() {
-                    let d = cap + s.in_packet as f64 * 1e9 / in_rate + s.in_delay_ms * 1e6 + s.jitter_ms * 1e6 * rnd();
+                    let d = cap
+                        + s.in_packet as f64 * 1e9 / in_rate
+                        + s.in_delay_ms * 1e6
+                        + s.jitter_ms * 1e6 * rnd();
                     next_delivery = d.max(last_delivery);
                 }
                 if next_delivery > now {
@@ -906,13 +1151,25 @@ mod tests {
                 packet += 1;
             }
             let (pos, backlog) = (side.jb.pos(), side.jb.fill(side.ring.slots() / 2) as u32);
-            let m = est.step(s.out_lat, s.out_period as u32, now, Some(&side.clock), pos, backlog);
+            let m = est.step(
+                s.out_lat,
+                s.out_period as u32,
+                now,
+                Some(&side.clock),
+                pos,
+                backlog,
+            );
             if let Some(t) = m.take {
                 run.takes.push(t);
             }
-            side.jb.pull(&mut side.ring, &mut il, s.out_period, s.in_packet, &stats);
+            side.jb
+                .pull(&mut side.ring, &mut il, s.out_period, s.in_packet, &stats);
             if s.signal.is_none() {
-                if let Some((i, v)) = il.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())) {
+                if let Some((i, v)) = il
+                    .iter()
+                    .enumerate()
+                    .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+                {
                     if v.abs() > 0.5 {
                         run.truth = Some((j * s.out_period + i - s.click) as u32);
                         run.at_click = m.take;
@@ -930,8 +1187,14 @@ mod tests {
     }
 
     fn assert_aligned(r: &Run, what: &str) {
-        let (at, truth) = (r.at_click.expect("a round trip was measured"), r.truth.expect("the click came back"));
-        assert!((at as f64 - truth as f64).abs() <= MS1, "{what}: measured {at}, true {truth}");
+        let (at, truth) = (
+            r.at_click.expect("a round trip was measured"),
+            r.truth.expect("the click came back"),
+        );
+        assert!(
+            (at as f64 - truth as f64).abs() <= MS1,
+            "{what}: measured {at}, true {truth}"
+        );
     }
 
     #[test]
@@ -939,17 +1202,29 @@ mod tests {
         let r = simulate(&Sim::default());
         assert_aligned(&r, "running");
         let truth = r.truth.unwrap() as f64;
-        assert!((mean(&r.takes) - truth).abs() <= MS1, "take mean {} vs {truth}", mean(&r.takes));
+        assert!(
+            (mean(&r.takes) - truth).abs() <= MS1,
+            "take mean {} vs {truth}",
+            mean(&r.takes)
+        );
     }
 
     #[test]
     fn an_input_opened_at_the_take_start_measures_right_from_its_first_frame() {
         // the output runs; the input opens 0.4 s later (punch-in / arming with monitoring
         // off). Only real input is measured, so nothing from before it ran skews the take.
-        let r = simulate(&Sim { in_start_s: 0.4, click: 40000, ..Sim::default() });
+        let r = simulate(&Sim {
+            in_start_s: 0.4,
+            click: 40000,
+            ..Sim::default()
+        });
         assert_aligned(&r, "opened late");
         let truth = r.truth.unwrap() as f64;
-        let worst = r.takes.iter().map(|t| (*t as f64 - truth).abs()).fold(0.0, f64::max);
+        let worst = r
+            .takes
+            .iter()
+            .map(|t| (*t as f64 - truth).abs())
+            .fold(0.0, f64::max);
         assert!(worst <= MS1, "a sample is {worst} frames off");
     }
 
@@ -957,7 +1232,16 @@ mod tests {
     fn different_input_and_output_devices_are_measured_per_callback() {
         // a separate input device: its own clock (+-200 ppm), other packets, its own delay
         for (ppm, packet) in [(200.0, 128), (-200.0, 441), (0.0, 1024)] {
-            let r = simulate(&Sim { out_lat: 2400, in_packet: packet, in_delay_ms: 4.0, jitter_ms: 2.0, in_start_s: -1.0, ppm, click: 100_000, ..Sim::default() });
+            let r = simulate(&Sim {
+                out_lat: 2400,
+                in_packet: packet,
+                in_delay_ms: 4.0,
+                jitter_ms: 2.0,
+                in_start_s: -1.0,
+                ppm,
+                click: 100_000,
+                ..Sim::default()
+            });
             assert_aligned(&r, &format!("ppm {ppm} packet {packet}"));
         }
     }
@@ -976,7 +1260,10 @@ mod tests {
             run = if *v == 0.0 { run + 1 } else { 0 };
             longest = longest.max(run);
         }
-        let jump = x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        let jump = x
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
         (longest, jump)
     }
 
@@ -988,10 +1275,18 @@ mod tests {
         // the owner's take: WASAPI input periods of 480 frames arriving irregularly (up to
         // 6 ms late) against 512-frame output callbacks used to put ~477 zeros into the take
         // several times a second
-        let r = simulate(&Sim { jitter_ms: 6.0, secs: 8.0, signal: Some(sine), ..Sim::default() });
+        let r = simulate(&Sim {
+            jitter_ms: 6.0,
+            secs: 8.0,
+            signal: Some(sine),
+            ..Sim::default()
+        });
         let (zeros, jump) = damage(&r.input);
         assert!(zeros < 2, "a run of {zeros} zeros in the take");
-        assert!(jump <= CLEAN_STEP * 1.02, "a jump of {jump} (clean sine: {CLEAN_STEP})");
+        assert!(
+            jump <= CLEAN_STEP * 1.02,
+            "a jump of {jump} (clean sine: {CLEAN_STEP})"
+        );
         assert_eq!(r.stats.underruns.load(Relaxed), 0);
         assert_eq!(r.stats.overruns.load(Relaxed), 0);
     }
@@ -999,21 +1294,37 @@ mod tests {
     #[test]
     fn a_separate_input_clock_200_ppm_off_is_followed_without_discontinuities() {
         for ppm in [200.0, -200.0] {
-            let r = simulate(&Sim { jitter_ms: 4.0, ppm, secs: 40.0, signal: Some(sine), ..Sim::default() });
+            let r = simulate(&Sim {
+                jitter_ms: 4.0,
+                ppm,
+                secs: 40.0,
+                signal: Some(sine),
+                ..Sim::default()
+            });
             let (zeros, jump) = damage(&r.input);
             assert!(zeros < 2, "ppm {ppm}: a run of {zeros} zeros");
-            assert!(jump <= CLEAN_STEP * 1.02, "ppm {ppm}: a jump of {jump} (clean sine: {CLEAN_STEP})");
+            assert!(
+                jump <= CLEAN_STEP * 1.02,
+                "ppm {ppm}: a jump of {jump} (clean sine: {CLEAN_STEP})"
+            );
             assert_eq!(r.stats.underruns.load(Relaxed), 0, "ppm {ppm}: underruns");
             assert_eq!(r.stats.overruns.load(Relaxed), 0, "ppm {ppm}: overruns");
             let seen = f32::from_bits(r.stats.drift_ppm.load(Relaxed)) as f64;
-            assert!((seen - ppm).abs() < 40.0, "drift measured {seen} ppm, really {ppm}");
+            assert!(
+                (seen - ppm).abs() < 40.0,
+                "drift measured {seen} ppm, really {ppm}"
+            );
         }
     }
 
     #[test]
     fn an_input_that_stalls_fades_out_and_back_in_and_is_counted() {
         // packets stop for 100 ms: a counted gap, faded, never a hard jump
-        let mut s = Sim { secs: 3.0, signal: Some(sine), ..Sim::default() };
+        let mut s = Sim {
+            secs: 3.0,
+            signal: Some(sine),
+            ..Sim::default()
+        };
         s.jitter_ms = 0.0;
         let (mut tx, rx) = rtrb::RingBuffer::<f32>::new(RATE as usize * 2);
         let mut jb = JitterBuf::new(RATE, 2);
@@ -1039,9 +1350,15 @@ mod tests {
         }
         assert!(stats.underruns.load(Relaxed) >= 1, "the stall is counted");
         let start = out.iter().position(|v| *v != 0.0).unwrap();
-        let jump = out[start..].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        let jump = out[start..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
         // fades are 2 ms (96 frames): at most 0.5/96 per sample on top of the sine
-        assert!(jump <= CLEAN_STEP + 0.5 / 96.0 + 1e-3, "a hard jump of {jump}");
+        assert!(
+            jump <= CLEAN_STEP + 0.5 / 96.0 + 1e-3,
+            "a hard jump of {jump}"
+        );
         let _ = s;
     }
 
@@ -1054,15 +1371,30 @@ mod tests {
 
     #[test]
     fn only_the_offset_changing_does_not_restart_the_streams() {
-        let a = AudioConfig { output: Some("Speakers".into()), ..Default::default() };
-        let b = AudioConfig { rec_offset_ms: Some(3.0), ..a.clone() };
+        let a = AudioConfig {
+            output: Some("Speakers".into()),
+            ..Default::default()
+        };
+        let b = AudioConfig {
+            rec_offset_ms: Some(3.0),
+            ..a.clone()
+        };
         assert!(same_streams(&a, &b));
-        assert!(!same_streams(&a, &AudioConfig { buffer_size: Some(256), ..b }));
+        assert!(!same_streams(
+            &a,
+            &AudioConfig {
+                buffer_size: Some(256),
+                ..b
+            }
+        ));
     }
 
     #[test]
     fn settings_saved_before_input_channels_still_load() {
-        let c: AudioConfig = serde_json::from_str(r#"{"host":"","output":null,"input":null,"sampleRate":null,"bufferSize":null}"#).unwrap();
+        let c: AudioConfig = serde_json::from_str(
+            r#"{"host":"","output":null,"input":null,"sampleRate":null,"bufferSize":null}"#,
+        )
+        .unwrap();
         assert_eq!(c.input_channel, None);
         assert_eq!(c.rec_offset_ms, None);
     }

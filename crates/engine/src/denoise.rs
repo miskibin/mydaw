@@ -142,10 +142,15 @@ impl Denoise {
     }
 
     fn frame(&mut self) {
-        let (Some(fwd), Some(inv)) = (self.fwd.clone(), self.inv.clone()) else { return };
+        let (Some(fwd), Some(inv)) = (self.fwd.clone(), self.inv.clone()) else {
+            return;
+        };
         let n = self.n;
         let bins = n / 2 + 1;
-        for (src, spec) in [(&self.in_l, &mut self.spec_l), (&self.in_r, &mut self.spec_r)] {
+        for (src, spec) in [
+            (&self.in_l, &mut self.spec_l),
+            (&self.in_r, &mut self.spec_r),
+        ] {
             for k in 0..n {
                 self.tmp[k] = src[k] * self.win[k];
             }
@@ -185,7 +190,11 @@ impl Denoise {
             // cleaned estimate, a little of the raw excess → no twinkling leftovers
             let nz = self.noise[k];
             let post = p / nz;
-            let prio = if first { (post - 1.0).max(0.0) } else { 0.95 * self.clean[k] / nz + 0.05 * (post - 1.0).max(0.0) };
+            let prio = if first {
+                (post - 1.0).max(0.0)
+            } else {
+                0.95 * self.clean[k] / nz + 0.05 * (post - 1.0).max(0.0)
+            };
             let g = (prio / (prio + self.beta)).clamp(self.floor, 1.0);
             self.clean[k] = g * g * p;
             self.graw[k] = g;
@@ -201,9 +210,17 @@ impl Denoise {
             }
             let g = (s / (b - a + 1) as f32).max(self.graw[k]).min(1.0);
             // … and over time: open fast (attacks stay intact), close a bit slower
-            let kk = if g > self.gain[k] { 0.9 } else { 0.7 - 0.4 * self.smooth };
+            let kk = if g > self.gain[k] {
+                0.9
+            } else {
+                0.7 - 0.4 * self.smooth
+            };
             self.gain[k] += (g - self.gain[k]) * kk;
-            let gg = if self.listen { 1.0 - self.gain[k] } else { self.gain[k] };
+            let gg = if self.listen {
+                1.0 - self.gain[k]
+            } else {
+                self.gain[k]
+            };
             self.spec_l[k] *= gg;
             self.spec_r[k] *= gg;
             p_out += (self.spec_l[k].norm_sqr() + self.spec_r[k].norm_sqr()) * 0.5 * self.norm;
@@ -215,7 +232,10 @@ impl Denoise {
         self.spec_r[bins - 1].im = 0.0;
         // overlap-add: periodic sqrt-Hann² at 75 % overlap sums to 2, FFT unnormalised (×n)
         let scale = 1.0 / (2.0 * n as f32);
-        for (spec, acc) in [(&mut self.spec_l, &mut self.acc_l), (&mut self.spec_r, &mut self.acc_r)] {
+        for (spec, acc) in [
+            (&mut self.spec_l, &mut self.acc_l),
+            (&mut self.spec_r, &mut self.acc_r),
+        ] {
             let _ = inv.process_with_scratch(spec, &mut self.tmp, &mut self.scratch_i);
             for k in 0..n {
                 acc[k] += self.tmp[k] * self.win[k] * scale;
@@ -232,10 +252,21 @@ impl Denoise {
             b.copy_within(hop.., 0);
         }
         // meters: noise floor and gain per band, total reduction
-        let gr = if p_in > 1e-12 { 10.0 * (p_out.max(1e-14) / p_in).log10() } else { 0.0 };
-        self.gr = if self.listen { 0.0 } else { gr.clamp(-60.0, 0.0) };
+        let gr = if p_in > 1e-12 {
+            10.0 * (p_out.max(1e-14) / p_in).log10()
+        } else {
+            0.0
+        };
+        self.gr = if self.listen {
+            0.0
+        } else {
+            gr.clamp(-60.0, 0.0)
+        };
         for b in 0..BANDS {
-            let (a, e) = (self.edges[b], self.edges[b + 1].max(self.edges[b] + 1).min(bins));
+            let (a, e) = (
+                self.edges[b],
+                self.edges[b + 1].max(self.edges[b] + 1).min(bins),
+            );
             let (mut ns, mut gs) = (0f32, 0f32);
             for k in a..e {
                 ns += self.noise[k];
@@ -264,10 +295,20 @@ impl Processor for Denoise {
         self.scratch_i = inv.make_scratch_vec();
         self.fwd = Some(fwd);
         self.inv = Some(inv);
-        self.win = (0..n).map(|k| (0.5 - 0.5 * (std::f32::consts::TAU * k as f32 / n as f32).cos()).sqrt()).collect();
+        self.win = (0..n)
+            .map(|k| (0.5 - 0.5 * (std::f32::consts::TAU * k as f32 / n as f32).cos()).sqrt())
+            .collect();
         let wsum: f32 = self.win.iter().sum();
         self.norm = (2.0 / wsum) * (2.0 / wsum);
-        for b in [&mut self.in_l, &mut self.in_r, &mut self.out_l, &mut self.out_r, &mut self.acc_l, &mut self.acc_r, &mut self.tmp] {
+        for b in [
+            &mut self.in_l,
+            &mut self.in_r,
+            &mut self.out_l,
+            &mut self.out_r,
+            &mut self.acc_l,
+            &mut self.acc_r,
+            &mut self.tmp,
+        ] {
             *b = vec![0.0; n];
         }
         let bins = n / 2 + 1;
@@ -297,7 +338,14 @@ impl Processor for Denoise {
     }
 
     fn reset(&mut self) {
-        for b in [&mut self.in_l, &mut self.in_r, &mut self.out_l, &mut self.out_r, &mut self.acc_l, &mut self.acc_r] {
+        for b in [
+            &mut self.in_l,
+            &mut self.in_r,
+            &mut self.out_l,
+            &mut self.out_r,
+            &mut self.acc_l,
+            &mut self.acc_r,
+        ] {
             b.fill(0.0);
         }
         // keep the learned noise profile: a transport jump does not change the room
@@ -397,7 +445,11 @@ mod tests {
         let x: Vec<f32> = (0..n)
             .map(|i| {
                 let t = i as f32 / sr;
-                let tone = if t > 2.0 { 0.3 * (std::f32::consts::TAU * 440.0 * t).sin() } else { 0.0 };
+                let tone = if t > 2.0 {
+                    0.3 * (std::f32::consts::TAU * 440.0 * t).sin()
+                } else {
+                    0.0
+                };
                 tone + 0.02 * rng(&mut seed)
             })
             .collect();
@@ -425,7 +477,11 @@ mod tests {
         let mut x = vec![0f32; 8192];
         x[100] = 1.0;
         let y = run(&mut d, &x);
-        let pk = y.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).unwrap();
+        let pk = y
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .unwrap();
         assert_eq!(pk.0, 100 + latency(sr));
         assert!((pk.1 - 1.0).abs() < 0.02, "impulse came out at {}", pk.1);
     }

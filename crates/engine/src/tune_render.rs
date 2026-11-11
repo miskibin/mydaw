@@ -17,7 +17,12 @@ use crate::sources::Audio;
 fn note_center(curve: &[f32], rate: f32, start: f64, end: f64) -> Option<f32> {
     let r = rate as f64;
     let (i0, i1) = ((start * r) as usize, ((end * r) as usize).min(curve.len()));
-    let mut v: Vec<f32> = curve.get(i0..i1)?.iter().copied().filter(|x| !x.is_nan()).collect();
+    let mut v: Vec<f32> = curve
+        .get(i0..i1)?
+        .iter()
+        .copied()
+        .filter(|x| !x.is_nan())
+        .collect();
     if v.is_empty() {
         return None;
     }
@@ -44,8 +49,20 @@ fn pencil_at(p: &[[f32; 2]], t: f32) -> Option<f32> {
 
 /// The pitch each analysis frame will be rendered at (NaN = unvoiced, untouched).
 pub fn edited_curve(a: &PitchAnalysis, tune: &ClipTune, target: Option<&PitchTarget>) -> Vec<f32> {
-    let base: Vec<f32> = (0..a.curve.len()).map(|f| if a.curve[f].is_nan() { f32::NAN } else { target.and_then(|t| t.at(f)).unwrap_or(a.curve[f]) }).collect();
-    let centers: Vec<Option<f32>> = tune.notes.iter().map(|nt| note_center(&base, a.rate, nt.start, nt.end)).collect();
+    let base: Vec<f32> = (0..a.curve.len())
+        .map(|f| {
+            if a.curve[f].is_nan() {
+                f32::NAN
+            } else {
+                target.and_then(|t| t.at(f)).unwrap_or(a.curve[f])
+            }
+        })
+        .collect();
+    let centers: Vec<Option<f32>> = tune
+        .notes
+        .iter()
+        .map(|nt| note_center(&base, a.rate, nt.start, nt.end))
+        .collect();
     let mut ni = 0usize;
     (0..base.len())
         .map(|f| {
@@ -70,7 +87,12 @@ pub fn edited_curve(a: &PitchAnalysis, tune: &ClipTune, target: Option<&PitchTar
 }
 
 /// Renders `audio` with `tune` applied. Same length and rate as the input.
-pub fn render(audio: &Audio, a: &PitchAnalysis, tune: &ClipTune, target: Option<&PitchTarget>) -> Audio {
+pub fn render(
+    audio: &Audio,
+    a: &PitchAnalysis,
+    tune: &ClipTune,
+    target: Option<&PitchTarget>,
+) -> Audio {
     let sr = audio.sr as f32;
     let n = audio.frames;
     let src = audio.content();
@@ -78,7 +100,12 @@ pub fn render(audio: &Audio, a: &PitchAnalysis, tune: &ClipTune, target: Option<
     let delta: Vec<f32> = want.iter().zip(&a.curve).map(|(w, o)| w - o).collect();
     let delta = smooth(&delta, (0.0175 * a.rate) as usize);
     // nothing to change: the take itself, bit for bit (PSOLA at ratio 1 is close, not equal)
-    if delta.iter().all(|d| d.is_nan() || d.abs() < 1e-4) && tune.notes.iter().all(|nt| nt.formant == 0.0 && nt.gain == 0.0) {
+    if delta.iter().all(|d| d.is_nan() || d.abs() < 1e-4)
+        && tune
+            .notes
+            .iter()
+            .all(|nt| nt.formant == 0.0 && nt.gain == 0.0)
+    {
         return Audio::from_stereo(src.to_vec(), audio.sr, audio.channels);
     }
     let mut ps = [Psola::new(sr), Psola::new(sr)];
@@ -88,7 +115,11 @@ pub fn render(audio: &Audio, a: &PitchAnalysis, tune: &ClipTune, target: Option<
     let fade = 0.01f64; // 10 ms gain ramps at note edges
     for i in 0..n + lat {
         let t = i as f64 / sr as f64;
-        let (x0, x1) = if i < n { (src[i * 2], src[i * 2 + 1]) } else { (0.0, 0.0) };
+        let (x0, x1) = if i < n {
+            (src[i * 2], src[i * 2 + 1])
+        } else {
+            (0.0, 0.0)
+        };
         let fi = (t * a.rate as f64) as f32;
         let orig = lerp_at(&a.curve, fi);
         while note_i < tune.notes.len() && tune.notes[note_i].end <= t {
@@ -131,7 +162,16 @@ mod tests {
     use crate::pitch::{analyze, Detector};
 
     fn voice(hz: f32, sr: f32, n: usize) -> Vec<f32> {
-        (0..n).map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3).collect()
+        (0..n)
+            .map(|i| {
+                (1..8)
+                    .map(|k| {
+                        (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32
+                    })
+                    .sum::<f32>()
+                    * 0.3
+            })
+            .collect()
     }
 
     #[test]
@@ -144,7 +184,22 @@ mod tests {
         let audio = Audio::from_stereo(st, 48000, 1);
         let a = analyze(&mono, sr);
         assert_eq!(a.notes.len(), 2);
-        let mut tune = ClipTune { notes: a.notes.iter().map(|n| NoteEdit { start: n.start, end: n.end, shift: 0.0, drift: 0.0, formant: 0.0, gain: 0.0 }).collect(), pencil: vec![], reference: None };
+        let mut tune = ClipTune {
+            notes: a
+                .notes
+                .iter()
+                .map(|n| NoteEdit {
+                    start: n.start,
+                    end: n.end,
+                    shift: 0.0,
+                    drift: 0.0,
+                    formant: 0.0,
+                    gain: 0.0,
+                })
+                .collect(),
+            pencil: vec![],
+            reference: None,
+        };
         tune.notes[0].shift = 200.0; // first note up a whole tone
         let out = render(&audio, &a, &tune, None);
         let pitch = |from: usize, to: usize| {
@@ -159,7 +214,10 @@ mod tests {
         let c1 = 1200.0 * (p1 / (220.0 * 2f32.powf(2.0 / 12.0))).log2();
         let c2 = 1200.0 * (p2 / 330.0).log2();
         assert!(c1.abs() < 20.0, "first note at {p1} Hz ({c1:.0} cents off)");
-        assert!(c2.abs() < 15.0, "second note moved to {p2} Hz ({c2:.0} cents)");
+        assert!(
+            c2.abs() < 15.0,
+            "second note moved to {p2} Hz ({c2:.0} cents)"
+        );
         assert_eq!(out.frames, audio.frames);
     }
 
@@ -170,12 +228,27 @@ mod tests {
         let mono = voice(220.0, sr, 48000);
         let a = analyze(&mono, sr);
         let mid = 0.5;
-        let edit = |start, end, shift| NoteEdit { start, end, shift, drift: 0.0, formant: 0.0, gain: 0.0 };
-        let tune = ClipTune { notes: vec![edit(0.0, mid, 150.0), edit(mid, 1.0, -150.0)], pencil: vec![], reference: None };
+        let edit = |start, end, shift| NoteEdit {
+            start,
+            end,
+            shift,
+            drift: 0.0,
+            formant: 0.0,
+            gain: 0.0,
+        };
+        let tune = ClipTune {
+            notes: vec![edit(0.0, mid, 150.0), edit(mid, 1.0, -150.0)],
+            pencil: vec![],
+            reference: None,
+        };
         let want = edited_curve(&a, &tune, None);
         let delta: Vec<f32> = want.iter().zip(&a.curve).map(|(w, o)| w - o).collect();
         let d = smooth(&delta, (0.0175 * a.rate) as usize);
-        let steps: f32 = d.windows(2).filter(|w| !w[0].is_nan() && !w[1].is_nan()).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
+        let steps: f32 = d
+            .windows(2)
+            .filter(|w| !w[0].is_nan() && !w[1].is_nan())
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0, f32::max);
         // 3 semitones spread over 35 ms (7 frames): no frame-to-frame step above half a semitone
         assert!(steps < 0.5, "largest step {steps:.2} semitones per 5 ms");
     }

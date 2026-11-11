@@ -93,7 +93,9 @@ impl Detector {
     pub fn set_range(&mut self, lo: f32, hi: f32) {
         let (lo, hi) = (lo.clamp(MIN_HZ, MAX_HZ), hi.clamp(MIN_HZ, MAX_HZ));
         self.tau_max = ((self.sr_dec / lo) as usize + 2).min(self.tau_cap);
-        self.tau_min = ((self.sr_dec / hi) as usize).max(2).min(self.tau_max.saturating_sub(4));
+        self.tau_min = ((self.sr_dec / hi) as usize)
+            .max(2)
+            .min(self.tau_max.saturating_sub(4));
     }
 
     pub fn latency(&self) -> usize {
@@ -163,14 +165,22 @@ impl Detector {
             i += 1;
         }
         if best == 0 {
-            best = (tmin..tmax).min_by(|&a, &b| self.d[a].total_cmp(&self.d[b])).unwrap_or(tmin);
+            best = (tmin..tmax)
+                .min_by(|&a, &b| self.d[a].total_cmp(&self.d[b]))
+                .unwrap_or(tmin);
             // no clear dip: a loud harmonic can win here; follow the line being sung instead
             if self.hint > 0.0 {
                 let th = self.sr_dec / self.hint;
-                let (a, b) = (((th * 0.88) as usize).max(tmin), ((th * 1.14) as usize + 1).min(tmax - 1));
+                let (a, b) = (
+                    ((th * 0.88) as usize).max(tmin),
+                    ((th * 1.14) as usize + 1).min(tmax - 1),
+                );
                 if a < b {
-                    let near = (a..=b).min_by(|&x, &y| self.d[x].total_cmp(&self.d[y])).unwrap_or(best);
-                    let is_dip = self.d[near] <= self.d[near - 1] && self.d[near] <= self.d[near + 1];
+                    let near = (a..=b)
+                        .min_by(|&x, &y| self.d[x].total_cmp(&self.d[y]))
+                        .unwrap_or(best);
+                    let is_dip =
+                        self.d[near] <= self.d[near - 1] && self.d[near] <= self.d[near + 1];
                     if is_dip && self.d[near] < 0.45 {
                         best = near;
                     }
@@ -189,7 +199,11 @@ impl Detector {
                 if c + span >= tmax {
                     return None;
                 }
-                Some((c - span..=c + span).map(|j| self.d[j]).fold(f32::MAX, f32::min))
+                Some(
+                    (c - span..=c + span)
+                        .map(|j| self.d[j])
+                        .fold(f32::MAX, f32::min),
+                )
             };
             let (l2, l3, l4) = (dip(2), dip(3), dip(4));
             let low = |v: Option<f32>| v.is_some_and(|v| v < 0.25);
@@ -198,7 +212,10 @@ impl Detector {
                 3
             } else if low(l2) && high(l3) && (l4.is_none() || low(l4)) {
                 2
-            } else if best >= 30 && self.d[best] > 0.03 && l2.is_some_and(|v| v < self.d[best] * 0.5) {
+            } else if best >= 30
+                && self.d[best] > 0.03
+                && l2.is_some_and(|v| v < self.d[best] * 0.5)
+            {
                 // loud 2nd harmonic: T/2 and 3T/2 look alike, but the true period is clearly deeper
                 2
             } else if high(l2) && high(l3) && low(l4) {
@@ -209,14 +226,20 @@ impl Detector {
             if k > 1 {
                 let c = best * k;
                 let span = k + 1;
-                best = (c - span..=c + span).min_by(|&a, &b| self.d[a].total_cmp(&self.d[b])).unwrap_or(c);
+                best = (c - span..=c + span)
+                    .min_by(|&a, &b| self.d[a].total_cmp(&self.d[b]))
+                    .unwrap_or(c);
             }
         }
         let dv = self.d[best];
         // parabolic refinement
         let (a, b, c) = (self.d[best - 1], dv, self.d[best + 1]);
         let den = a - 2.0 * b + c;
-        let off = if den.abs() > 1e-9 { 0.5 * (a - c) / den } else { 0.0 };
+        let off = if den.abs() > 1e-9 {
+            0.5 * (a - c) / den
+        } else {
+            0.0
+        };
         let tau = best as f32 + off.clamp(-1.0, 1.0);
         self.confidence = (1.0 - dv).clamp(0.0, 1.0);
         self.hz = if dv < 0.35 { self.sr_dec / tau } else { 0.0 };
@@ -254,12 +277,27 @@ impl Psola {
     pub fn new(sr: f32) -> Self {
         let tmax = (sr / MIN_HZ * 0.75) as usize + 1; // half-grain bound
         let len = (tmax * 8).next_power_of_two();
-        let hann = (0..1025).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / 1024.0).cos()).collect();
+        let hann = (0..1025)
+            .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / 1024.0).cos())
+            .collect();
         let mut lp1 = Biquad::default();
         let mut lp2 = Biquad::default();
         lp1.set(FilterType::Lowpass, sr, 900.0, 0.6, 0.0);
         lp2.set(FilterType::Lowpass, sr, 900.0, 0.6, 0.0);
-        Self { inp: vec![0.0; len], lpb: vec![0.0; len], lp1, lp2, out: vec![0.0; len], n: 0, tmax, next_syn: 0.0, mark: 0.0, next_mark: 0.0, voiced_prev: false, hann }
+        Self {
+            inp: vec![0.0; len],
+            lpb: vec![0.0; len],
+            lp1,
+            lp2,
+            out: vec![0.0; len],
+            n: 0,
+            tmax,
+            next_syn: 0.0,
+            mark: 0.0,
+            next_mark: 0.0,
+            voiced_prev: false,
+            hann,
+        }
     }
 
     pub fn latency(&self) -> usize {
@@ -332,7 +370,11 @@ impl Psola {
         self.inp[now % m] = x;
         self.lpb[now % m] = self.lp2.tick(self.lp1.tick(x));
         let voiced = period >= 8.0;
-        let t = if voiced { period.min(self.tmax as f32) } else { (self.tmax as f32 * 0.4).max(32.0) };
+        let t = if voiced {
+            period.min(self.tmax as f32)
+        } else {
+            (self.tmax as f32 * 0.4).max(32.0)
+        };
         let ratio = if voiced { ratio.clamp(0.25, 4.0) } else { 1.0 };
         let fr = if voiced { formant.clamp(0.5, 2.0) } else { 1.0 };
         let lat = self.tmax as f64;
@@ -341,9 +383,13 @@ impl Psola {
         while self.next_syn <= now as f64 {
             let ts = self.next_syn;
             let c = ts - lat; // input time this grain represents
-            // (re)lock the analysis marks: at a voicing change or when they lost the grain
+                              // (re)lock the analysis marks: at a voicing change or when they lost the grain
             if voiced != self.voiced_prev || (self.mark - c).abs() > 2.0 * tf {
-                self.mark = if voiced { self.peak_near(c, tf * 0.5, limit) } else { c };
+                self.mark = if voiced {
+                    self.peak_near(c, tf * 0.5, limit)
+                } else {
+                    c
+                };
                 self.next_mark = self.mark + tf;
                 self.voiced_prev = voiced;
                 // put the grain where its mark is (no time offset): unshifted audio stays
@@ -360,10 +406,17 @@ impl Psola {
             while self.next_mark - c < c - self.mark {
                 self.mark = self.next_mark;
                 let guess = self.mark + tf;
-                self.next_mark = if voiced { self.peak_near(guess, tf * 0.2, limit).max(self.mark + tf * 0.6) } else { guess };
+                self.next_mark = if voiced {
+                    self.peak_near(guess, tf * 0.2, limit)
+                        .max(self.mark + tf * 0.6)
+                } else {
+                    guess
+                };
             }
             // grain: two local periods, centred on the analysis mark, placed at ts
-            let span = (self.next_mark - self.mark).clamp(tf * 0.6, tf * 1.4).min(self.tmax as f64);
+            let span = (self.next_mark - self.mark)
+                .clamp(tf * 0.6, tf * 1.4)
+                .min(self.tmax as f64);
             let half = span;
             let norm = 1.0 / ratio.max(1e-3);
             let k0 = (ts - half).ceil() as i64;
@@ -472,7 +525,9 @@ pub trait F0Estimator: Send + Sync {
 
 /// Analysis with `est` when given (falls back to YIN if it fails).
 pub fn analyze_with(mono: &[f32], sr: f32, est: Option<&dyn F0Estimator>) -> PitchAnalysis {
-    let Some(est) = est else { return analyze(mono, sr) };
+    let Some(est) = est else {
+        return analyze(mono, sr);
+    };
     let tr = match est.estimate(mono, sr) {
         Ok(t) if !t.hz.is_empty() && t.rate > 0.0 => t,
         Ok(_) => return analyze(mono, sr),
@@ -558,7 +613,12 @@ pub fn analyze(mono: &[f32], sr: f32) -> PitchAnalysis {
     finish(curve, levels, confidence, "yin")
 }
 
-fn finish(mut curve: Vec<f32>, levels: Vec<f32>, confidence: Vec<f32>, backend: &str) -> PitchAnalysis {
+fn finish(
+    mut curve: Vec<f32>,
+    levels: Vec<f32>,
+    confidence: Vec<f32>,
+    backend: &str,
+) -> PitchAnalysis {
     let frames = curve.len();
     // remove octave jumps lasting a few frames and single voiced frames
     for f in 1..frames.saturating_sub(1) {
@@ -574,7 +634,14 @@ fn finish(mut curve: Vec<f32>, levels: Vec<f32>, confidence: Vec<f32>, backend: 
         fold_octave_errors(&mut curve);
     }
     let notes = segment(&curve, &levels);
-    PitchAnalysis { rate: ANALYSIS_RATE, curve, levels, confidence, notes, backend: backend.to_string() }
+    PitchAnalysis {
+        rate: ANALYSIS_RATE,
+        curve,
+        levels,
+        confidence,
+        notes,
+        backend: backend.to_string(),
+    }
 }
 
 /// Detector slips onto a harmonic (or an octave below) show up as frames far from
@@ -600,7 +667,12 @@ fn fold_octave_errors(curve: &mut [f32]) {
             continue;
         }
         win.clear();
-        win.extend(src[f.saturating_sub(half)..(f + half + 1).min(src.len())].iter().copied().filter(|x| !x.is_nan()));
+        win.extend(
+            src[f.saturating_sub(half)..(f + half + 1).min(src.len())]
+                .iter()
+                .copied()
+                .filter(|x| !x.is_nan()),
+        );
         let reference = if win.len() >= 20 {
             win.sort_by(f32::total_cmp);
             win[win.len() / 2]
@@ -614,7 +686,11 @@ fn fold_octave_errors(curve: &mut [f32]) {
                 .map(|k| m + k)
                 .min_by(|a, b| (a - reference).abs().total_cmp(&(b - reference).abs()))
                 .unwrap_or(m);
-            v = if (best - reference).abs() < 3.0 { best } else { f32::NAN };
+            v = if (best - reference).abs() < 3.0 {
+                best
+            } else {
+                f32::NAN
+            };
         }
         if (v - global).abs() > 18.0 {
             v = f32::NAN;
@@ -643,7 +719,11 @@ pub(crate) fn segment(curve: &[f32], levels: &[f32]) -> Vec<NoteBlob> {
         let mut k = f;
         while k < g {
             let hold = 8;
-            if (curve[k] - anchor).abs() > 0.75 && k + hold < g && (k..k + hold).all(|j| (curve[j] - anchor).abs() > 0.75 && (curve[j] - curve[k]).abs() < 0.6) {
+            if (curve[k] - anchor).abs() > 0.75
+                && k + hold < g
+                && (k..k + hold)
+                    .all(|j| (curve[j] - anchor).abs() > 0.75 && (curve[j] - curve[k]).abs() < 0.6)
+            {
                 push_note(&mut notes, curve, levels, start, k, dt);
                 start = k;
                 anchor = curve[k];
@@ -658,7 +738,14 @@ pub(crate) fn segment(curve: &[f32], levels: &[f32]) -> Vec<NoteBlob> {
     notes
 }
 
-fn push_note(notes: &mut Vec<NoteBlob>, curve: &[f32], levels: &[f32], a: usize, b: usize, dt: f64) {
+fn push_note(
+    notes: &mut Vec<NoteBlob>,
+    curve: &[f32],
+    levels: &[f32],
+    a: usize,
+    b: usize,
+    dt: f64,
+) {
     if b <= a + 3 {
         return; // shorter than 20 ms: a glitch, not a note
     }
@@ -666,7 +753,12 @@ fn push_note(notes: &mut Vec<NoteBlob>, curve: &[f32], levels: &[f32], a: usize,
     v.sort_by(|x, y| x.total_cmp(y));
     let pitch = v[v.len() / 2];
     let level = levels[a..b].iter().fold(0f32, |m, x| m.max(*x));
-    notes.push(NoteBlob { start: a as f64 * dt, end: b as f64 * dt, pitch, level });
+    notes.push(NoteBlob {
+        start: a as f64 * dt,
+        end: b as f64 * dt,
+        pitch,
+        level,
+    });
 }
 
 #[cfg(test)]
@@ -674,12 +766,23 @@ mod tests {
     use super::*;
 
     fn sine(hz: f32, sr: f32, n: usize) -> Vec<f32> {
-        (0..n).map(|i| (std::f32::consts::TAU * hz * i as f32 / sr).sin() * 0.5).collect()
+        (0..n)
+            .map(|i| (std::f32::consts::TAU * hz * i as f32 / sr).sin() * 0.5)
+            .collect()
     }
 
     /// A voice-like tone: harmonics with falling amplitude.
     fn voice(hz: f32, sr: f32, n: usize) -> Vec<f32> {
-        (0..n).map(|i| (1..8).map(|k| (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.3).collect()
+        (0..n)
+            .map(|i| {
+                (1..8)
+                    .map(|k| {
+                        (std::f32::consts::TAU * hz * k as f32 * i as f32 / sr).sin() / k as f32
+                    })
+                    .sum::<f32>()
+                    * 0.3
+            })
+            .collect()
     }
 
     #[test]
@@ -691,7 +794,11 @@ mod tests {
                 d.push(s);
             }
             let err = 1200.0 * (d.hz / hz).log2();
-            assert!(err.abs() < 15.0, "{hz} Hz detected as {} ({err:.1} cents)", d.hz);
+            assert!(
+                err.abs() < 15.0,
+                "{hz} Hz detected as {} ({err:.1} cents)",
+                d.hz
+            );
         }
         let mut d = Detector::new(48000.0);
         let mut seed = 1u32;
@@ -699,16 +806,32 @@ mod tests {
             seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
             d.push((seed as f32 / u32::MAX as f32 - 0.5) * 0.5);
         }
-        assert!(d.hz == 0.0 || d.confidence < 0.6, "noise read as {} Hz", d.hz);
+        assert!(
+            d.hz == 0.0 || d.confidence < 0.6,
+            "noise read as {} Hz",
+            d.hz
+        );
     }
 
     #[test]
     fn weak_fundamental_with_a_loud_harmonic_is_not_read_as_the_harmonic() {
         // 120 Hz with almost no 1st/2nd harmonic and a huge 3rd (or 2nd) — a phone-mic male voice
-        for (amps, name) in [([0.05f32, 0.1, 1.0, 0.3, 0.25, 0.1], "loud 3rd"), ([0.05, 1.0, 0.2, 0.3, 0.1, 0.1], "loud 2nd")] {
+        for (amps, name) in [
+            ([0.05f32, 0.1, 1.0, 0.3, 0.25, 0.1], "loud 3rd"),
+            ([0.05, 1.0, 0.2, 0.3, 0.1, 0.1], "loud 2nd"),
+        ] {
             let sr = 48000.0;
             let x: Vec<f32> = (0..24000)
-                .map(|i| amps.iter().enumerate().map(|(k, a)| a * (std::f32::consts::TAU * 120.0 * (k + 1) as f32 * i as f32 / sr).sin()).sum::<f32>() * 0.2)
+                .map(|i| {
+                    amps.iter()
+                        .enumerate()
+                        .map(|(k, a)| {
+                            a * (std::f32::consts::TAU * 120.0 * (k + 1) as f32 * i as f32 / sr)
+                                .sin()
+                        })
+                        .sum::<f32>()
+                        * 0.2
+                })
                 .collect();
             let mut d = Detector::new(sr);
             let mut wrong = 0;
@@ -727,17 +850,27 @@ mod tests {
         for (hz, ratio) in [(220.0f32, 1.0f32), (220.0, 1.12246), (200.0, 0.8909)] {
             let x = voice(hz, sr, 48000);
             let mut p = Psola::new(sr);
-            let y: Vec<f32> = x.iter().map(|&s| p.process(s, sr / hz, ratio, 1.0)).collect();
+            let y: Vec<f32> = x
+                .iter()
+                .map(|&s| p.process(s, sr / hz, ratio, 1.0))
+                .collect();
             let mut d = Detector::new(sr);
             for &s in &y[10000..] {
                 d.push(s);
             }
             let want = hz * ratio;
             let err = 1200.0 * (d.hz / want).log2();
-            assert!(err.abs() < 20.0, "{hz}×{ratio}: got {} Hz, want {want} ({err:.1} cents)", d.hz);
+            assert!(
+                err.abs() < 20.0,
+                "{hz}×{ratio}: got {} Hz, want {want} ({err:.1} cents)",
+                d.hz
+            );
             let rms_in = (x[10000..].iter().map(|v| v * v).sum::<f32>() / 38000.0).sqrt();
             let rms_out = (y[10000..].iter().map(|v| v * v).sum::<f32>() / 38000.0).sqrt();
-            assert!((rms_out / rms_in - 1.0).abs() < 0.25, "level changed {rms_in} → {rms_out}");
+            assert!(
+                (rms_out / rms_in - 1.0).abs() < 0.25,
+                "level changed {rms_in} → {rms_out}"
+            );
         }
         let _ = sine;
     }

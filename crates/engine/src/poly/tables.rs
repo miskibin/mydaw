@@ -99,37 +99,89 @@ fn spectra(wave: u8) -> [Spec; FRAMES] {
         SINE => [
             spec_fn(|n| (if n == 1 { 1.0 } else { 0.0 }, 0.0)),
             // a warm, slightly saturated sine (2nd–4th harmonics)
-            spec_fn(|n| (match n { 1 => 1.0, 2 => 0.32, 3 => 0.16, 4 => 0.06, _ => 0.0 }, 0.0)),
+            spec_fn(|n| {
+                (
+                    match n {
+                        1 => 1.0,
+                        2 => 0.32,
+                        3 => 0.16,
+                        4 => 0.06,
+                        _ => 0.0,
+                    },
+                    0.0,
+                )
+            }),
         ],
         TRI => [
-            spec_fn(|n| if n % 2 == 1 { (8.0 / (PI * PI) / (n * n) as f64, if (n / 2) % 2 == 0 { 0.0 } else { PI }) } else { (0.0, 0.0) }),
+            spec_fn(|n| {
+                if n % 2 == 1 {
+                    (
+                        8.0 / (PI * PI) / (n * n) as f64,
+                        if (n / 2) % 2 == 0 { 0.0 } else { PI },
+                    )
+                } else {
+                    (0.0, 0.0)
+                }
+            }),
             // between a triangle and a square: odd harmonics at 1/n^1.5
-            spec_fn(|n| if n % 2 == 1 { (1.0 / (n as f64).powf(1.5), 0.0) } else { (0.0, 0.0) }),
+            spec_fn(|n| {
+                if n % 2 == 1 {
+                    (1.0 / (n as f64).powf(1.5), 0.0)
+                } else {
+                    (0.0, 0.0)
+                }
+            }),
         ],
         SAW | SQUARE => [
             spec_fn(saw),
             // saw with its octave: brighter, more "double"
             spec_fn(|n| {
-                let a = 2.0 / PI / n as f64 + if n % 2 == 0 { 0.7 * 2.0 / PI / (n / 2) as f64 } else { 0.0 };
+                let a = 2.0 / PI / n as f64
+                    + if n % 2 == 0 {
+                        0.7 * 2.0 / PI / (n / 2) as f64
+                    } else {
+                        0.0
+                    };
                 (a, PI)
             }),
         ],
         HOLLOW => [
             // odd harmonics with every fourth odd one missing: a hollow, pipe-like tone
-            spec_fn(|n| if n % 2 == 1 && n % 8 != 7 { (1.0 / (n as f64).powf(1.15), 0.0) } else { (0.0, 0.0) }),
+            spec_fn(|n| {
+                if n % 2 == 1 && n % 8 != 7 {
+                    (1.0 / (n as f64).powf(1.15), 0.0)
+                } else {
+                    (0.0, 0.0)
+                }
+            }),
             // fundamental and octaves/even harmonics: organ-flute hollow
-            spec_fn(|n| if n == 1 || (n % 2 == 0 && n % 6 != 0) { (1.0 / (n as f64).powf(1.05), 0.0) } else { (0.0, 0.0) }),
+            spec_fn(|n| {
+                if n == 1 || (n % 2 == 0 && n % 6 != 0) {
+                    (1.0 / (n as f64).powf(1.05), 0.0)
+                } else {
+                    (0.0, 0.0)
+                }
+            }),
         ],
         AIR => [
             // formant bumps (open vowel) over a soft 1/sqrt(n) floor, scattered phases
             spec_fn(|n| {
                 let x = n as f64;
-                let a = (gauss(x, 3.0, 1.2) + 0.7 * gauss(x, 9.0, 2.5) + 0.4 * gauss(x, 24.0, 6.0) + 0.05) / x.sqrt();
+                let a = (gauss(x, 3.0, 1.2)
+                    + 0.7 * gauss(x, 9.0, 2.5)
+                    + 0.4 * gauss(x, 24.0, 6.0)
+                    + 0.05)
+                    / x.sqrt();
                 (a, 2.0 * PI * hash(n, 1))
             }),
             spec_fn(|n| {
                 let x = n as f64;
-                let a = (0.8 * gauss(x, 2.0, 0.8) + gauss(x, 6.0, 1.6) + 0.6 * gauss(x, 16.0, 4.0) + 0.35 * gauss(x, 40.0, 10.0) + 0.05) / x.sqrt();
+                let a = (0.8 * gauss(x, 2.0, 0.8)
+                    + gauss(x, 6.0, 1.6)
+                    + 0.6 * gauss(x, 16.0, 4.0)
+                    + 0.35 * gauss(x, 40.0, 10.0)
+                    + 0.05)
+                    / x.sqrt();
                 (a, 2.0 * PI * hash(n, 2))
             }),
         ],
@@ -143,11 +195,25 @@ fn spectra(wave: u8) -> [Spec; FRAMES] {
             // metallic: sparse, wide-spaced harmonics with slow decay
             spec_fn(|n| {
                 const SET: [usize; 10] = [1, 5, 9, 14, 21, 30, 41, 53, 67, 83];
-                (if SET.contains(&n) { 1.0 / (n as f64).powf(0.45) } else { 0.0 }, 2.0 * PI * hash(n, 3))
+                (
+                    if SET.contains(&n) {
+                        1.0 / (n as f64).powf(0.45)
+                    } else {
+                        0.0
+                    },
+                    2.0 * PI * hash(n, 3),
+                )
             }),
             spec_fn(|n| {
                 const SET: [usize; 10] = [1, 3, 7, 11, 17, 26, 37, 49, 62, 78];
-                (if SET.contains(&n) { 1.0 / (n as f64).powf(0.4) } else { 0.0 }, 2.0 * PI * hash(n, 4))
+                (
+                    if SET.contains(&n) {
+                        1.0 / (n as f64).powf(0.4)
+                    } else {
+                        0.0
+                    },
+                    2.0 * PI * hash(n, 4),
+                )
             }),
         ],
     }
@@ -155,7 +221,9 @@ fn spectra(wave: u8) -> [Spec; FRAMES] {
 
 /// Harmonics kept at mip level `j`.
 fn harmonics(j: usize) -> usize {
-    ((MAX_H as f64) * 2f64.powf(-(j as f64) / LPO as f64)).floor().max(1.0) as usize
+    ((MAX_H as f64) * 2f64.powf(-(j as f64) / LPO as f64))
+        .floor()
+        .max(1.0) as usize
 }
 
 fn kaiser_halfband() -> [f32; HB_TAPS] {
@@ -203,7 +271,8 @@ impl Bank {
                     spec.iter_mut().for_each(|c| *c = Complex::new(0.0, 0.0));
                     for (n, &(a, ph)) in sp.iter().enumerate().take(nh) {
                         // a·sin(θ+φ) = 2·Re(X·e^{iθ}) with X = (a/2)·e^{i(φ−π/2)}
-                        spec[n + 1] = Complex::from_polar(a / 2.0, ph - std::f64::consts::FRAC_PI_2);
+                        spec[n + 1] =
+                            Complex::from_polar(a / 2.0, ph - std::f64::consts::FRAC_PI_2);
                     }
                     inv.process(&mut spec, &mut out).unwrap();
                     if j == 0 {
@@ -219,7 +288,12 @@ impl Bank {
                 }
             }
         }
-        Bank { levels, harm, data, hb: kaiser_halfband() }
+        Bank {
+            levels,
+            harm,
+            data,
+            hb: kaiser_halfband(),
+        }
     }
 
     fn offset_of(levels: usize, wave: u8, frame: usize, level: usize) -> usize {
@@ -254,7 +328,11 @@ impl Bank {
         let js = jr.ceil();
         let w = js - jr;
         let j = (js as usize).min(self.levels - 1);
-        (j, (j + 1).min(self.levels - 1), if j == self.levels - 1 { 1.0 } else { w })
+        (
+            j,
+            (j + 1).min(self.levels - 1),
+            if j == self.levels - 1 { 1.0 } else { w },
+        )
     }
 }
 
@@ -281,7 +359,10 @@ mod tests {
             let (j0, j1, _) = b.select(dt);
             for j in [j0, j1] {
                 if b.harmonics(j) > 1 {
-                    assert!(b.harmonics(j) as f32 * dt <= 0.5 + 1e-6, "dt {dt} level {j}");
+                    assert!(
+                        b.harmonics(j) as f32 * dt <= 0.5 + 1e-6,
+                        "dt {dt} level {j}"
+                    );
                 }
             }
         }
@@ -292,7 +373,13 @@ mod tests {
         let b = bank();
         let t = b.table(SAW, 0, 0);
         // rising ramp: mid-cycle value near 0, increasing
-        assert!(t[SIZE / 4] < t[SIZE / 2] && t[SIZE / 2] < t[3 * SIZE / 4], "{} {} {}", t[SIZE / 4], t[SIZE / 2], t[3 * SIZE / 4]);
+        assert!(
+            t[SIZE / 4] < t[SIZE / 2] && t[SIZE / 2] < t[3 * SIZE / 4],
+            "{} {} {}",
+            t[SIZE / 4],
+            t[SIZE / 2],
+            t[3 * SIZE / 4]
+        );
         let pk = t.iter().fold(0f32, |m, v| m.max(v.abs()));
         assert!((pk - 1.0).abs() < 1e-3);
     }

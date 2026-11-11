@@ -81,15 +81,25 @@ fn sinc() -> &'static Sinc {
                 let mut row = [0f64; TAPS];
                 for (k, v) in row.iter_mut().enumerate() {
                     let t = k as f64 - CENTRE as f64 - f;
-                    let s = if t.abs() < 1e-12 { 1.0 } else { (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t) };
+                    let s = if t.abs() < 1e-12 {
+                        1.0
+                    } else {
+                        (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t)
+                    };
                     let r = t / half;
-                    let w = if r.abs() < 1.0 { bessel_i0(beta * (1.0 - r * r).sqrt()) / bessel_i0(beta) } else { 0.0 };
+                    let w = if r.abs() < 1.0 {
+                        bessel_i0(beta * (1.0 - r * r).sqrt()) / bessel_i0(beta)
+                    } else {
+                        0.0
+                    };
                     *v = s * w;
                 }
                 let sum: f64 = row.iter().sum();
                 // whole-frame positions are exact copies (no rounding residue)
                 if p == 0 || p == PHASES {
-                    return std::array::from_fn(|k| if k == CENTRE + p / PHASES { 1.0 } else { 0.0 });
+                    return std::array::from_fn(
+                        |k| if k == CENTRE + p / PHASES { 1.0 } else { 0.0 },
+                    );
                 }
                 std::array::from_fn(|k| (row[k] / sum) as f32)
             })
@@ -110,7 +120,10 @@ enum Mode {
     Running,
     /// Fading to silence over `left` more frames: `hold` = no input left (underrun), the
     /// last sample decays; otherwise (overflow) the input keeps playing and then skips.
-    FadeOut { left: u32, hold: bool },
+    FadeOut {
+        left: u32,
+        hold: bool,
+    },
 }
 
 pub(crate) struct JitterBuf {
@@ -145,7 +158,25 @@ impl JitterBuf {
     pub fn new(rate: u32, periods: usize) -> Self {
         warm_up();
         let fade = (rate / 500).max(8);
-        Self { buf: [0.0; HIST], have: 0, x: 0.0, mode: Mode::Priming, fade_in: 0, fade, last: 0.0, corr: 0.0, fill_s: 0.0, anchor: f64::NAN, settle: 0, settle_sum: 0.0, drift: 0.0, deadband: rate as f64 * 0.001, margin: rate as f64 * 0.002, max_margin: rate as f64 * 0.05, periods: periods.max(1) }
+        Self {
+            buf: [0.0; HIST],
+            have: 0,
+            x: 0.0,
+            mode: Mode::Priming,
+            fade_in: 0,
+            fade,
+            last: 0.0,
+            corr: 0.0,
+            fill_s: 0.0,
+            anchor: f64::NAN,
+            settle: 0,
+            settle_sum: 0.0,
+            drift: 0.0,
+            deadband: rate as f64 * 0.001,
+            margin: rate as f64 * 0.002,
+            max_margin: rate as f64 * 0.05,
+            periods: periods.max(1),
+        }
     }
 
     /// Backlog aimed for: `periods` input periods + half a callback + the interpolator's
@@ -199,7 +230,14 @@ impl JitterBuf {
     /// Fills `out` (mono) for one output callback. `n_ref`: the callback size the backlog
     /// is planned for (max of this callback and the nominal buffer); `packet`: the input
     /// period in frames.
-    pub fn pull(&mut self, ring: &mut rtrb::Consumer<f32>, out: &mut [f32], n_ref: usize, packet: usize, stats: &IoStats) {
+    pub fn pull(
+        &mut self,
+        ring: &mut rtrb::Consumer<f32>,
+        out: &mut [f32],
+        n_ref: usize,
+        packet: usize,
+        stats: &IoStats,
+    ) {
         let n = out.len();
         let n_ref = n_ref.max(n);
         let packet_unknown = packet == 0;
@@ -226,7 +264,10 @@ impl JitterBuf {
                 let fill = self.fill(ring_frames);
                 if fill > target + (4 * n_ref.max(packet)) as f64 + self.max_margin {
                     stats.overruns.fetch_add(1, Relaxed);
-                    self.mode = Mode::FadeOut { left: self.fade, hold: false };
+                    self.mode = Mode::FadeOut {
+                        left: self.fade,
+                        hold: false,
+                    };
                 } else {
                     self.fill_s = self.fill_s * 0.98 + fill * 0.02;
                     if self.anchor.is_nan() {
@@ -242,10 +283,13 @@ impl JitterBuf {
                     } else {
                         // near the anchor nothing is steered: a shared clock stays an exact copy
                         let e = self.fill_s - self.anchor;
-                        self.corr = (KP * e.signum() * (e.abs() - self.deadband).max(0.0)).clamp(-MAX_CORR, MAX_CORR);
+                        self.corr = (KP * e.signum() * (e.abs() - self.deadband).max(0.0))
+                            .clamp(-MAX_CORR, MAX_CORR);
                     }
                     self.drift = self.drift * 0.995 + self.corr * 0.005;
-                    stats.drift_ppm.store(((self.drift * 1e6) as f32).to_bits(), Relaxed);
+                    stats
+                        .drift_ppm
+                        .store(((self.drift * 1e6) as f32).to_bits(), Relaxed);
                 }
             }
             _ => {}
@@ -264,7 +308,10 @@ impl JitterBuf {
                         // the input stopped delivering: fade out what was playing, refill
                         stats.underruns.fetch_add(1, Relaxed);
                         self.margin = (self.margin + n_ref as f64 / 4.0).min(self.max_margin);
-                        self.mode = Mode::FadeOut { left: self.fade, hold: true };
+                        self.mode = Mode::FadeOut {
+                            left: self.fade,
+                            hold: true,
+                        };
                         *o = self.last;
                         continue;
                     }
@@ -287,7 +334,10 @@ impl JitterBuf {
 
     fn step_fade(&mut self, left: u32, hold: bool, ring: &mut rtrb::Consumer<f32>, target: f64) {
         if left > 1 {
-            self.mode = Mode::FadeOut { left: left - 1, hold };
+            self.mode = Mode::FadeOut {
+                left: left - 1,
+                hold,
+            };
             return;
         }
         self.last = 0.0;
@@ -315,7 +365,9 @@ mod tests {
     #[test]
     fn a_shared_clock_passes_the_input_through_untouched() {
         let (mut tx, mut rx) = rtrb::RingBuffer::<f32>::new(1 << 16);
-        let src: Vec<f32> = (0..200_000).map(|i| ((i * 7919) % 1000) as f32 / 1000.0 - 0.5).collect();
+        let src: Vec<f32> = (0..200_000)
+            .map(|i| ((i * 7919) % 1000) as f32 / 1000.0 - 0.5)
+            .collect();
         let mut jb = JitterBuf::new(48000, 2);
         let stats = IoStats::default();
         let (mut out, mut o, mut fed) = (vec![], vec![0f32; 512], 0);
@@ -333,8 +385,18 @@ mod tests {
         }
         assert_eq!(stats.underruns.load(Relaxed), 0);
         let start = out.iter().position(|v| *v != 0.0).unwrap() + 200;
-        let lag = (0..src.len() - 64).find(|&k| (0..64).all(|j| src[k + j] == out[start + j])).expect("the input passes through bit-exact");
+        let lag = (0..src.len() - 64)
+            .find(|&k| (0..64).all(|j| src[k + j] == out[start + j]))
+            .expect("the input passes through bit-exact");
         let bad = (start..out.len()).find(|&i| out[i] != src[lag + i - start]);
-        assert_eq!(bad, None, "an interpolated sample (start {start}, len {}, fill {}, anchor {}, target {})", out.len(), jb.fill_s, jb.anchor, jb.target(512, 480));
+        assert_eq!(
+            bad,
+            None,
+            "an interpolated sample (start {start}, len {}, fill {}, anchor {}, target {})",
+            out.len(),
+            jb.fill_s,
+            jb.anchor,
+            jb.target(512, 480)
+        );
     }
 }

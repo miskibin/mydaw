@@ -3,7 +3,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
 use super::*;
 
 fn dev(id: &str, name: &str) -> MidiDevice {
-    MidiDevice { id: id.into(), name: name.into() }
+    MidiDevice {
+        id: id.into(),
+        name: name.into(),
+    }
 }
 
 #[derive(Default)]
@@ -72,7 +75,13 @@ fn rig() -> Rig {
     };
     // the watcher is exercised by calling `reconcile` directly: no timing in tests
     let input = MidiInput::start_with(fake.clone(), hooks, Duration::from_secs(3600));
-    Rig { fake, input, msgs, statuses, live }
+    Rig {
+        fake,
+        input,
+        msgs,
+        statuses,
+        live,
+    }
 }
 
 #[test]
@@ -83,7 +92,9 @@ fn plan_covers_every_case() {
     assert!(matches!(plan(None, Some(&k), &ports).0, Plan::Close(_)));
     assert_eq!(plan(Some(&k), None, &ports).0, Plan::Open("a".into()));
     assert_eq!(plan(Some(&k), Some(&k), &ports).0, Plan::Nothing);
-    assert!(matches!(plan(Some(&k), Some(&k), &[]).0, Plan::Close(m) if m.contains("disconnected")));
+    assert!(
+        matches!(plan(Some(&k), Some(&k), &[]).0, Plan::Close(m) if m.contains("disconnected"))
+    );
     assert_eq!(plan(Some(&k), None, &[]).0, Plan::Absent);
     // the same device back on another slot: found by name
     let moved = vec![dev("b", "Keys")];
@@ -111,7 +122,18 @@ fn select_opens_and_forwards_decoded_messages() {
     r.fake.send(&[0x90, 60, 0]);
     r.fake.send(&[0xB0, 64, 127]);
     r.fake.send(&[0xF8]); // clock: ignored
-    assert_eq!(*r.msgs.lock(), vec![MidiMsg::NoteOn { ch: 0, key: 60, vel: 100 }, MidiMsg::NoteOff { ch: 0, key: 60 }, MidiMsg::Sustain { ch: 0, down: true }]);
+    assert_eq!(
+        *r.msgs.lock(),
+        vec![
+            MidiMsg::NoteOn {
+                ch: 0,
+                key: 60,
+                vel: 100
+            },
+            MidiMsg::NoteOff { ch: 0, key: 60 },
+            MidiMsg::Sustain { ch: 0, down: true }
+        ]
+    );
 }
 
 #[test]
@@ -123,12 +145,26 @@ fn status_reports_the_last_note_and_a_running_count() {
     r.fake.send(&[0x90, 64, 90]);
     let st = r.input.status();
     assert_eq!(st.note_count, 1);
-    assert_eq!(st.last_note, Some(LastNote { key: 64, velocity: 90, on: true }));
+    assert_eq!(
+        st.last_note,
+        Some(LastNote {
+            key: 64,
+            velocity: 90,
+            on: true
+        })
+    );
     r.fake.send(&[0x80, 64, 0]);
     r.fake.send(&[0xB0, 64, 127]); // not a key event: no activity
     let st = r.input.status();
     assert_eq!(st.note_count, 2);
-    assert_eq!(st.last_note, Some(LastNote { key: 64, velocity: 0, on: false }));
+    assert_eq!(
+        st.last_note,
+        Some(LastNote {
+            key: 64,
+            velocity: 0,
+            on: false
+        })
+    );
 }
 
 #[test]
@@ -141,7 +177,11 @@ fn unplugging_closes_without_panic_and_replugging_reopens() {
     r.fake.ports.lock().clear();
     let st = r.input.reconcile();
     assert_eq!(st.connected, None);
-    assert_eq!(st.selected, Some(dev("a", "Keys")), "the choice is remembered");
+    assert_eq!(
+        st.selected,
+        Some(dev("a", "Keys")),
+        "the choice is remembered"
+    );
     assert!(st.error.as_deref().unwrap().contains("disconnected"));
     assert!(!r.live.load(SeqCst));
     assert_eq!(r.fake.closes.load(SeqCst), 1);
@@ -228,7 +268,24 @@ fn target_is_part_of_the_status() {
 
 #[test]
 fn last_note_packing_round_trips() {
-    for (count, n) in [(1u64, LastNote { key: 0, velocity: 0, on: false }), (999_999, LastNote { key: 127, velocity: 127, on: true })] {
+    for (count, n) in [
+        (
+            1u64,
+            LastNote {
+                key: 0,
+                velocity: 0,
+                on: false,
+            },
+        ),
+        (
+            999_999,
+            LastNote {
+                key: 127,
+                velocity: 127,
+                on: true,
+            },
+        ),
+    ] {
         assert_eq!(unpack(pack(count, n)), (count, Some(n)));
     }
     assert_eq!(unpack(0), (0, None));

@@ -397,6 +397,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
             name: format!("Pattern {i}"),
             color: color(i),
             len,
+            min_len: len,
             notes,
             swing: 0.0,
         });
@@ -422,6 +423,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
             name: "Piano roll stress (2000 notes)".into(),
             color: color(9),
             len: 256.0,
+            min_len: 256.0,
             notes,
             swing: 0.0,
         });

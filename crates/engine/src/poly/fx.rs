@@ -6,8 +6,8 @@
 use std::f32::consts::TAU;
 
 use super::params::{ix, Patch, DELAY_BEATS};
-use crate::dsp::saturator::{self, Settings as SatSettings};
 use crate::dsp::reverb_v2::{idx, ReverbV2};
+use crate::dsp::saturator::{self, Settings as SatSettings};
 use crate::processor::{ParamBlock, ProcessCtx, Processor};
 
 #[inline(always)]
@@ -29,7 +29,11 @@ struct Line {
 impl Line {
     fn new(min_len: usize) -> Self {
         let n = min_len.next_power_of_two();
-        Self { buf: vec![0.0; n], mask: n - 1, w: 0 }
+        Self {
+            buf: vec![0.0; n],
+            mask: n - 1,
+            w: 0,
+        }
     }
     #[inline(always)]
     fn push(&mut self, x: f32) {
@@ -127,7 +131,13 @@ impl Fx {
         let mut reverb = ReverbV2::default();
         reverb.prepare(sr, max_chunk);
         let delay_len = (sr * 2.6) as usize + 8;
-        let sat_set = SatSettings { style: saturator::TRIODE, drive: 0.0, auto: true, mix: 0.0, ..Default::default() };
+        let sat_set = SatSettings {
+            style: saturator::TRIODE,
+            drive: 0.0,
+            auto: true,
+            mix: 0.0,
+            ..Default::default()
+        };
         let mut sat = saturator::Core::default();
         sat.set(&sat_set);
         sat.prepare(sr, 2);
@@ -135,8 +145,19 @@ impl Fx {
             sr,
             sat,
             sat_set,
-            chorus: Chorus { l: Line::new((sr * 0.03) as usize + 8), r: Line::new((sr * 0.03) as usize + 8), ph1: 0.0, ph2: 0.25 },
-            delay: PingPong { l: Line::new(delay_len), r: Line::new(delay_len), d: 0.0, lp: 0.0, hp: 0.0 },
+            chorus: Chorus {
+                l: Line::new((sr * 0.03) as usize + 8),
+                r: Line::new((sr * 0.03) as usize + 8),
+                ph1: 0.0,
+                ph2: 0.25,
+            },
+            delay: PingPong {
+                l: Line::new(delay_len),
+                r: Line::new(delay_len),
+                d: 0.0,
+                lp: 0.0,
+                hp: 0.0,
+            },
             reverb,
             rv_vals: [f32::NAN; 12],
         }
@@ -177,7 +198,11 @@ impl Fx {
         // drive: the saturator always runs (its latency stays put when the knob leaves 0);
         // the first 5 % of the knob blends it in, so leaving 0 is continuous
         let dr = (p[ix::FX_DRIVE] * 0.01).clamp(0.0, 1.0);
-        let want = SatSettings { drive: dr, mix: (dr * 20.0).min(1.0), ..self.sat_set };
+        let want = SatSettings {
+            drive: dr,
+            mix: (dr * 20.0).min(1.0),
+            ..self.sat_set
+        };
         if want != self.sat_set {
             self.sat_set = want;
             self.sat.set(&want);
@@ -194,7 +219,8 @@ impl Fx {
         if self.delay.d == 0.0 {
             self.delay.d = dsec * sr;
         }
-        self.delay.process(l, r, dm, (p[ix::FX_DFB] * 0.01).min(0.9), dsec * sr, sr);
+        self.delay
+            .process(l, r, dm, (p[ix::FX_DFB] * 0.01).min(0.9), dsec * sr, sr);
         let rm = p[ix::FX_REVERB];
         {
             let mut v = [0f32; 12];
@@ -212,9 +238,21 @@ impl Fx {
             v[idx::MOD] = 60.0;
             if v != self.rv_vals {
                 self.rv_vals = v;
-                self.reverb.set_params(&ParamBlock { values: v, ..Default::default() });
+                self.reverb.set_params(&ParamBlock {
+                    values: v,
+                    ..Default::default()
+                });
             }
-            self.reverb.process(l, r, &ProcessCtx { sample_rate: sr, bpm, beat: 0.0, playing: false });
+            self.reverb.process(
+                l,
+                r,
+                &ProcessCtx {
+                    sample_rate: sr,
+                    bpm,
+                    beat: 0.0,
+                    playing: false,
+                },
+            );
         }
     }
 }

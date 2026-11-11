@@ -16,7 +16,8 @@ pub fn alias_snr(x: &[f32], f0: f64, sr: f64, fmax: f64) -> f64 {
         .enumerate()
         .map(|(i, &v)| {
             let t = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
-            let w = 0.35875 - 0.48829 * t.cos() + 0.14128 * (2.0 * t).cos() - 0.01168 * (3.0 * t).cos();
+            let w =
+                0.35875 - 0.48829 * t.cos() + 0.14128 * (2.0 * t).cos() - 0.01168 * (3.0 * t).cos();
             v as f64 * w
         })
         .collect();
@@ -57,22 +58,50 @@ pub fn click_flags(x: &[f32], sr: f32, k: f32) -> Vec<usize> {
     if n < 4 {
         return vec![];
     }
-    let d: Vec<f32> = (0..n).map(|i| if i < 2 { 0.0 } else { (x[i] - 2.0 * x[i - 1] + x[i - 2]).abs() }).collect();
+    let d: Vec<f32> = (0..n)
+        .map(|i| {
+            if i < 2 {
+                0.0
+            } else {
+                (x[i] - 2.0 * x[i - 1] + x[i - 2]).abs()
+            }
+        })
+        .collect();
     let bs = ((0.0005 * sr) as usize).max(1); // 0.5 ms blocks
     let nb = n.div_ceil(bs);
-    let bmax: Vec<f32> = (0..nb).map(|b| d[b * bs..((b + 1) * bs).min(n)].iter().fold(0f32, |m, v| m.max(*v))).collect();
+    let bmax: Vec<f32> = (0..nb)
+        .map(|b| {
+            d[b * bs..((b + 1) * bs).min(n)]
+                .iter()
+                .fold(0f32, |m, v| m.max(*v))
+        })
+        .collect();
     let (near, far) = (2usize, (0.04 * sr) as usize / bs);
-    let amax: Vec<f32> = (0..nb).map(|b| x[b * bs..((b + 1) * bs).min(n)].iter().fold(0f32, |m, v| m.max(v.abs()))).collect();
+    let amax: Vec<f32> = (0..nb)
+        .map(|b| {
+            x[b * bs..((b + 1) * bs).min(n)]
+                .iter()
+                .fold(0f32, |m, v| m.max(v.abs()))
+        })
+        .collect();
     let mut out: Vec<usize> = vec![];
     for (i, &di) in d.iter().enumerate() {
         if di <= 1e-3 {
             continue;
         }
         let b = i / bs;
-        let past = bmax[b.saturating_sub(far)..b.saturating_sub(near)].iter().fold(0f32, |m, v| m.max(*v));
-        let fut = bmax[(b + near).min(nb)..(b + far).min(nb)].iter().fold(0f32, |m, v| m.max(*v));
-        let before = amax[b.saturating_sub(far)..b.saturating_sub(near)].iter().fold(0f32, |m, v| m.max(*v));
-        let level = amax[b.saturating_sub(far)..(b + far).min(nb)].iter().fold(0f32, |m, v| m.max(*v));
+        let past = bmax[b.saturating_sub(far)..b.saturating_sub(near)]
+            .iter()
+            .fold(0f32, |m, v| m.max(*v));
+        let fut = bmax[(b + near).min(nb)..(b + far).min(nb)]
+            .iter()
+            .fold(0f32, |m, v| m.max(*v));
+        let before = amax[b.saturating_sub(far)..b.saturating_sub(near)]
+            .iter()
+            .fold(0f32, |m, v| m.max(*v));
+        let level = amax[b.saturating_sub(far)..(b + far).min(nb)]
+            .iter()
+            .fold(0f32, |m, v| m.max(*v));
         if before < 1e-3 || di < 0.02 * level {
             continue;
         }
@@ -85,8 +114,14 @@ pub fn click_flags(x: &[f32], sr: f32, k: f32) -> Vec<usize> {
 
 /// Integrated loudness (BS.1770, stereo: channel energies summed) and true peak (dBTP).
 pub fn loudness(l: &[f32], r: &[f32], sr: f32) -> (f64, f64) {
-    let kl: Vec<f64> = crate::autovocal::k_weight(l, sr).iter().map(|v| v * v).collect();
-    let kr: Vec<f64> = crate::autovocal::k_weight(r, sr).iter().map(|v| v * v).collect();
+    let kl: Vec<f64> = crate::autovocal::k_weight(l, sr)
+        .iter()
+        .map(|v| v * v)
+        .collect();
+    let kr: Vec<f64> = crate::autovocal::k_weight(r, sr)
+        .iter()
+        .map(|v| v * v)
+        .collect();
     let k: Vec<f64> = kl.iter().zip(&kr).map(|(a, b)| a + b).collect();
     let (w, h) = ((sr * 0.4) as usize, (sr * 0.1) as usize);
     let tp = crate::autovocal::true_peak_db(l).max(crate::autovocal::true_peak_db(r));
@@ -97,7 +132,9 @@ pub fn loudness(l: &[f32], r: &[f32], sr: f32) -> (f64, f64) {
     for i in 0..k.len() {
         pre[i + 1] = pre[i] + k[i];
     }
-    let z: Vec<f64> = (0..=(k.len() - w) / h).map(|j| (pre[j * h + w] - pre[j * h]) / w as f64).collect();
+    let z: Vec<f64> = (0..=(k.len() - w) / h)
+        .map(|j| (pre[j * h + w] - pre[j * h]) / w as f64)
+        .collect();
     let lk = |z: f64| -0.691 + 10.0 * z.max(1e-20).log10();
     let abs: Vec<f64> = z.iter().copied().filter(|&v| lk(v) > -70.0).collect();
     if abs.is_empty() {
@@ -137,7 +174,11 @@ pub fn probe_patch(patch: &Patch, key: u8, sr: f32) -> (Vec<f32>, Vec<f32>) {
 /// drive and a modulated cutoff, every global effect on.
 pub fn heaviest_patch() -> Patch {
     use super::params::ix;
-    let mut p = super::presets::all().into_iter().find(|p| p.name == "Supersaw Lead").map(|p| p.patch).unwrap_or_else(super::params::defaults);
+    let mut p = super::presets::all()
+        .into_iter()
+        .find(|p| p.name == "Supersaw Lead")
+        .map(|p| p.patch)
+        .unwrap_or_else(super::params::defaults);
     p[ix::UNI_VOICES] = 3.0;
     p[ix::O2_LEVEL] = 40.0;
     p[ix::FLT_TYPE] = 1.0;

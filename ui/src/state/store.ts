@@ -216,6 +216,10 @@ function applyInPlace(p: Project, op: Op) {
       if (a.id >= p.nextId) p.nextId = a.id + 1;
       return;
     }
+    case 'removePattern':
+      p.patterns = p.patterns.filter(x => x.id !== op.id);
+      p.clips = p.clips.filter(c => !(c.kind === 'pat' && c.ref === op.id));
+      return;
     case 'removeAutomation':
       p.automations = (p.automations ?? []).filter(a => a.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'auto' && c.ref === op.id));

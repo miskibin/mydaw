@@ -6,25 +6,104 @@ use serde::Serialize;
 use crate::catalog::ParamDef;
 use crate::model::SynthState;
 
-const fn p(id: &'static str, label: &'static str, min: f64, max: f64, def: f64, unit: &'static str, log: bool) -> ParamDef {
-    ParamDef { id, label, min, max, def, unit, log, options: None }
+const fn p(
+    id: &'static str,
+    label: &'static str,
+    min: f64,
+    max: f64,
+    def: f64,
+    unit: &'static str,
+    log: bool,
+) -> ParamDef {
+    ParamDef {
+        id,
+        label,
+        min,
+        max,
+        def,
+        unit,
+        log,
+        options: None,
+    }
 }
 
-const fn choice(id: &'static str, label: &'static str, def: f64, options: &'static [&'static str]) -> ParamDef {
-    ParamDef { id, label, min: 0.0, max: (options.len() - 1) as f64, def, unit: "", log: false, options: Some(options) }
+const fn choice(
+    id: &'static str,
+    label: &'static str,
+    def: f64,
+    options: &'static [&'static str],
+) -> ParamDef {
+    ParamDef {
+        id,
+        label,
+        min: 0.0,
+        max: (options.len() - 1) as f64,
+        def,
+        unit: "",
+        log: false,
+        options: Some(options),
+    }
 }
 
-pub const WAVES: &[&str] = &["Sine", "Triangle", "Saw", "Square", "Hollow", "Air", "Digital", "Metal"];
+pub const WAVES: &[&str] = &[
+    "Sine", "Triangle", "Saw", "Square", "Hollow", "Air", "Digital", "Metal",
+];
 pub const LFO_WAVES: &[&str] = &["Sine", "Triangle", "Saw", "Square", "S&H"];
 /// LFO rate: free (Hz) or a note value at the project tempo.
-pub const SYNCS: &[&str] = &["Hz", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/2T", "1/4T", "1/8T", "1/16T", "1/4D", "1/8D"];
+pub const SYNCS: &[&str] = &[
+    "Hz", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/2T", "1/4T", "1/8T",
+    "1/16T", "1/4D", "1/8D",
+];
 /// Beats per LFO cycle for each [`SYNCS`] entry (0 = free).
-pub const SYNC_BEATS: [f32; 15] = [0.0, 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 0.125, 4.0 / 3.0, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0, 1.5, 0.75];
+pub const SYNC_BEATS: [f32; 15] = [
+    0.0,
+    16.0,
+    8.0,
+    4.0,
+    2.0,
+    1.0,
+    0.5,
+    0.25,
+    0.125,
+    4.0 / 3.0,
+    2.0 / 3.0,
+    1.0 / 3.0,
+    1.0 / 6.0,
+    1.5,
+    0.75,
+];
 /// "LFO 1 × wheel": LFO 1 scaled by the mod wheel (vibrato that the wheel brings in).
-pub const SOURCES: &[&str] = &["Off", "Mod env", "LFO 1", "LFO 2", "Velocity", "Mod wheel", "Random", "Key", "LFO 1 × wheel"];
-pub const DESTS: &[&str] = &["Pitch", "Osc 1 pitch", "Osc 2 pitch", "Osc 1 shape", "Osc 2 shape", "Osc 1 level", "Osc 2 level", "Cutoff", "Resonance", "Pan", "Detune", "Drive", "Amp", "Noise"];
+pub const SOURCES: &[&str] = &[
+    "Off",
+    "Mod env",
+    "LFO 1",
+    "LFO 2",
+    "Velocity",
+    "Mod wheel",
+    "Random",
+    "Key",
+    "LFO 1 × wheel",
+];
+pub const DESTS: &[&str] = &[
+    "Pitch",
+    "Osc 1 pitch",
+    "Osc 2 pitch",
+    "Osc 1 shape",
+    "Osc 2 shape",
+    "Osc 1 level",
+    "Osc 2 level",
+    "Cutoff",
+    "Resonance",
+    "Pan",
+    "Detune",
+    "Drive",
+    "Amp",
+    "Noise",
+];
 /// What ±100 % of a matrix slot means for each destination (semitones, octaves, or 0..1 units).
-pub const DEST_SCALE: [f32; 14] = [48.0, 48.0, 48.0, 1.0, 1.0, 1.0, 1.0, 8.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+pub const DEST_SCALE: [f32; 14] = [
+    48.0, 48.0, 48.0, 1.0, 1.0, 1.0, 1.0, 8.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+];
 pub const FILTERS: &[&str] = &["LP 12", "LP 24", "BP", "HP", "Notch"];
 pub const MODES: &[&str] = &["Poly", "Mono", "Legato"];
 pub const DELAY_TIMES: &[&str] = &["1/16", "1/8T", "1/8", "1/8D", "1/4", "1/4D", "1/2"];
@@ -134,7 +213,14 @@ const SECTIONS: [(&str, &str, usize, usize); 12] = [
 ];
 
 pub fn sections() -> Vec<SectionDef> {
-    SECTIONS.iter().map(|&(id, name, a, b)| SectionDef { id, name, params: &PARAMS[a..b] }).collect()
+    SECTIONS
+        .iter()
+        .map(|&(id, name, a, b)| SectionDef {
+            id,
+            name,
+            params: &PARAMS[a..b],
+        })
+        .collect()
 }
 
 pub fn index_of(id: &str) -> Option<usize> {
@@ -152,7 +238,11 @@ pub fn defaults() -> Patch {
 /// Clamps a value into a parameter's range (choices rounded to an option).
 pub fn clamp(i: usize, v: f64) -> f32 {
     let d = &PARAMS[i];
-    let v = if v.is_finite() { v.clamp(d.min, d.max) } else { d.def };
+    let v = if v.is_finite() {
+        v.clamp(d.min, d.max)
+    } else {
+        d.def
+    };
     (if d.options.is_some() { v.round() } else { v }) as f32
 }
 
@@ -170,7 +260,20 @@ pub fn resolve(s: &SynthState) -> Patch {
 /// Parameters that glide (smoothed on the audio thread) when changed; the rest switch at once.
 pub fn smoothed(i: usize) -> bool {
     let d = &PARAMS[i];
-    d.options.is_none() && !matches!(i, ix::V_GLIDE | ix::AMP_A | ix::AMP_D | ix::AMP_R | ix::MOD_A | ix::MOD_D | ix::MOD_R | ix::L1_RATE | ix::L2_RATE | ix::FX_RSIZE)
+    d.options.is_none()
+        && !matches!(
+            i,
+            ix::V_GLIDE
+                | ix::AMP_A
+                | ix::AMP_D
+                | ix::AMP_R
+                | ix::MOD_A
+                | ix::MOD_D
+                | ix::MOD_R
+                | ix::L1_RATE
+                | ix::L2_RATE
+                | ix::FX_RSIZE
+        )
 }
 
 #[cfg(test)]

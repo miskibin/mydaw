@@ -1176,7 +1176,11 @@ mod tests {
     #[test]
     fn the_singers_vibrato_is_kept() {
         let s = song(11, 20);
-        let v = Voice { vib_rate: 5.0, vib_depth: 0.5, ..Voice::default() };
+        let v = Voice {
+            vib_rate: 5.0,
+            vib_depth: 0.5,
+            ..Voice::default()
+        };
         let take = sing(&s, &v, &[40.0; 20], 0.0, SR);
         let reference = sing(&s, &reference_voice(), &[], 0.0, SR);
         let (_, t) = run(&take, &reference, &params());

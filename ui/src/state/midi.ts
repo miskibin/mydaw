@@ -31,7 +31,7 @@ export function startMidi() {
     if (ev.note.on) { setFlash(true); clearTimeout(flashTimer); flashTimer = setTimeout(() => setFlash(false), 120); }
   });
   createRoot(() => createEffect(() => {
-    const ch = U.patWin?.ch ?? null;
+    const ch = U.selCh ?? null;
     if (follow() && ch != null && status()?.target !== ch) void setMidiTarget(ch);
   }));
 }

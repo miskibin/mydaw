@@ -26,12 +26,43 @@ pub struct ParamDef {
     pub options: Option<&'static [&'static str]>,
 }
 
-const fn p(id: &'static str, label: &'static str, min: f64, max: f64, def: f64, unit: &'static str, log: bool) -> ParamDef {
-    ParamDef { id, label, min, max, def, unit, log, options: None }
+const fn p(
+    id: &'static str,
+    label: &'static str,
+    min: f64,
+    max: f64,
+    def: f64,
+    unit: &'static str,
+    log: bool,
+) -> ParamDef {
+    ParamDef {
+        id,
+        label,
+        min,
+        max,
+        def,
+        unit,
+        log,
+        options: None,
+    }
 }
 
-const fn choice(id: &'static str, label: &'static str, def: f64, options: &'static [&'static str]) -> ParamDef {
-    ParamDef { id, label, min: 0.0, max: (options.len() - 1) as f64, def, unit: "", log: false, options: Some(options) }
+const fn choice(
+    id: &'static str,
+    label: &'static str,
+    def: f64,
+    options: &'static [&'static str],
+) -> ParamDef {
+    ParamDef {
+        id,
+        label,
+        min: 0.0,
+        max: (options.len() - 1) as f64,
+        def,
+        unit: "",
+        log: false,
+        options: Some(options),
+    }
 }
 
 pub fn params(kind: FxKind) -> &'static [ParamDef] {
@@ -75,7 +106,12 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("width", "Width", 0.0, 100.0, 100.0, "%", false),
         p("mix", "Mix", 0.0, 100.0, 15.0, "%", false),
         p("tone", "Tone", -100.0, 100.0, 0.0, "%", false),
-        choice("space", "Space", 0.0, &["Plate", "Room", "Hall", "Ambience"]),
+        choice(
+            "space",
+            "Space",
+            0.0,
+            &["Plate", "Room", "Hall", "Ambience"],
+        ),
         p("duck", "Ducking", 0.0, 12.0, 0.0, "dB", false),
         p("early", "Early", 0.0, 100.0, 50.0, "%", false),
         p("bass", "Bass decay", 0.5, 1.5, 1.0, "×", false),
@@ -110,8 +146,20 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         choice("detect", "Detect", 0.0, &["Absolute", "Relative"]),
     ];
     const TUNE: &[ParamDef] = &[
-        choice("key", "Key", 0.0, &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]),
-        choice("scale", "Scale", 0.0, &["Chromatic", "Major", "Minor", "Maj pent", "Min pent"]),
+        choice(
+            "key",
+            "Key",
+            0.0,
+            &[
+                "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+            ],
+        ),
+        choice(
+            "scale",
+            "Scale",
+            0.0,
+            &["Chromatic", "Major", "Minor", "Maj pent", "Min pent"],
+        ),
         p("retune", "Retune", 0.0, 400.0, 20.0, "ms", false),
         p("humanize", "Humanize", 0.0, 100.0, 0.0, "%", false),
         p("flex", "Flex", 0.0, 100.0, 0.0, "%", false),
@@ -119,7 +167,12 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("transpose", "Transpose", -12.0, 12.0, 0.0, "st", false),
         p("formant", "Formant", -12.0, 12.0, 0.0, "st", false),
         // like Auto-Tune's input type: the pitch search range, so a loud harmonic can't be taken for the note
-        choice("voice", "Voice", 0.0, &["Auto", "Low male", "Male", "Female", "Soprano"]),
+        choice(
+            "voice",
+            "Voice",
+            0.0,
+            &["Auto", "Low male", "Male", "Female", "Soprano"],
+        ),
     ];
     const DENOISE: &[ParamDef] = &[
         p("reduction", "Reduction", 0.0, 40.0, 12.0, "dB", false),
@@ -152,7 +205,16 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         // value = `rider::look`: 0 short, 1 long (old projects), 2 live. Live (no latency) by
         // default: Short (≈ 0.3 s) and Long (≈ 1–1.6 s) delay the whole mix through PDC; the
         // auto-vocal chain bakes the long rider into the audio instead (`Engine::bake_rider`)
-        choice("look", "Look-ahead", 2.0, &["Krótki (+0,3 s opóźnienia)", "Długi (+1–1,6 s opóźnienia)", "Na żywo"]),
+        choice(
+            "look",
+            "Look-ahead",
+            2.0,
+            &[
+                "Krótki (+0,3 s opóźnienia)",
+                "Długi (+1–1,6 s opóźnienia)",
+                "Na żywo",
+            ],
+        ),
         p("out", "Output", -24.0, 24.0, 0.0, "dB", false),
         // below this word level the rider idles at 0 dB (breaths, bleed, room)
         p("gate", "Gate", -100.0, -10.0, -60.0, "dB", false),
@@ -205,11 +267,34 @@ pub fn type_name(kind: FxKind) -> &'static str {
     }
 }
 
-pub const BUILTIN: [FxKind; 13] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Rider, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Half, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 13] = [
+    FxKind::Denoise,
+    FxKind::Tune,
+    FxKind::Voice,
+    FxKind::Eq,
+    FxKind::Rider,
+    FxKind::Deess,
+    FxKind::Comp,
+    FxKind::Fet,
+    FxKind::Sat,
+    FxKind::Delay,
+    FxKind::Half,
+    FxKind::Reverb,
+    FxKind::Limit,
+];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
-    let b = |on, kind, f, q| EqBand { on, kind, f, g: 0.0, q, slope: 12, place: Default::default(), dynamic: None };
+    let b = |on, kind, f, q| EqBand {
+        on,
+        kind,
+        f,
+        g: 0.0,
+        q,
+        slope: 12,
+        place: Default::default(),
+        dynamic: None,
+    };
     vec![
         b(false, Lowcut, 30.0, 0.71),
         b(true, Lowshelf, 90.0, 0.71),
@@ -222,12 +307,24 @@ pub fn default_bands() -> Vec<EqBand> {
 }
 
 pub fn default_params(kind: FxKind) -> BTreeMap<String, f64> {
-    params(kind).iter().map(|d| (d.id.to_owned(), d.def)).collect()
+    params(kind)
+        .iter()
+        .map(|d| (d.id.to_owned(), d.def))
+        .collect()
 }
 
 /// A fresh built-in effect loaded with its first preset.
 pub fn new_fx(id: Id, kind: FxKind, bpm: f64) -> Fx {
-    let mut fx = Fx { id, kind, bypass: false, mix: 1.0, preset: None, params: default_params(kind), bands: None, plugin: None };
+    let mut fx = Fx {
+        id,
+        kind,
+        bypass: false,
+        mix: 1.0,
+        preset: None,
+        params: default_params(kind),
+        bands: None,
+        plugin: None,
+    };
     if kind == FxKind::Eq {
         fx.bands = Some(default_bands());
     }
@@ -251,7 +348,12 @@ pub struct Preset {
 }
 
 fn pr(name: &'static str, kv: &[(&'static str, f64)]) -> Preset {
-    Preset { name, params: kv.iter().copied().collect(), bands: None, beats: None }
+    Preset {
+        name,
+        params: kv.iter().copied().collect(),
+        bands: None,
+        beats: None,
+    }
 }
 
 type BandEdit = (usize, Option<bool>, Option<f64>, Option<f64>, Option<f64>);
@@ -273,11 +375,23 @@ fn eqp(name: &'static str, out: f64, edits: &[BandEdit]) -> Preset {
             b.q = v;
         }
     }
-    Preset { name, params: [("out", out)].into_iter().collect(), bands: Some(bands), beats: None }
+    Preset {
+        name,
+        params: [("out", out)].into_iter().collect(),
+        bands: Some(bands),
+        beats: None,
+    }
 }
 
 fn dly(name: &'static str, beats: Option<f64>, time: f64, fb: f64, mix: f64) -> Preset {
-    Preset { name, params: [("time", time), ("fb", fb), ("mix", mix)].into_iter().collect(), bands: None, beats }
+    Preset {
+        name,
+        params: [("time", time), ("fb", fb), ("mix", mix)]
+            .into_iter()
+            .collect(),
+        bands: None,
+        beats,
+    }
 }
 
 pub fn presets(kind: FxKind) -> Vec<Preset> {
@@ -285,34 +399,224 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
     match kind {
         FxKind::Eq => vec![
             eqp("Flat", 0.0, &[]),
-            eqp("Wokal — obecność", 0.0, &[(0, t, Some(100.0), n, n), (2, f, Some(300.0), Some(-2.5), Some(1.2)), (4, f, Some(3500.0), Some(3.0), Some(0.9)), (5, f, Some(10000.0), Some(2.5), n)]),
-            eqp("Kick — punch", 0.0, &[(0, t, Some(30.0), n, n), (1, f, Some(60.0), Some(3.0), n), (2, f, Some(350.0), Some(-4.0), Some(1.4)), (4, f, Some(4000.0), Some(3.0), Some(1.2))]),
-            eqp("Bas — czysty dół", 0.0, &[(0, t, Some(35.0), n, n), (1, f, Some(80.0), Some(2.0), n), (2, f, Some(250.0), Some(-3.0), n), (6, t, Some(8000.0), n, n)]),
-            eqp("Mud cut", 0.0, &[(0, t, Some(60.0), n, n), (2, f, Some(300.0), Some(-4.0), Some(1.5))]),
-            eqp("Air / połysk", 0.0, &[(4, f, Some(5000.0), Some(1.0), n), (5, f, Some(12000.0), Some(4.0), n)]),
-            eqp("Pasmo — wytnij dół i górę", 0.0, &[(0, t, Some(120.0), n, n), (6, t, Some(9000.0), n, n)]),
-            eqp("Telefon / lo-fi", 2.0, &[(0, t, Some(400.0), n, n), (3, f, Some(1500.0), Some(4.0), Some(0.8)), (6, t, Some(3200.0), n, n)]),
-            eqp("Master — smile", 0.0, &[(1, f, Some(80.0), Some(1.5), n), (3, f, Some(1000.0), Some(-0.5), Some(0.6)), (5, f, Some(10000.0), Some(1.5), n)]),
+            eqp(
+                "Wokal — obecność",
+                0.0,
+                &[
+                    (0, t, Some(100.0), n, n),
+                    (2, f, Some(300.0), Some(-2.5), Some(1.2)),
+                    (4, f, Some(3500.0), Some(3.0), Some(0.9)),
+                    (5, f, Some(10000.0), Some(2.5), n),
+                ],
+            ),
+            eqp(
+                "Kick — punch",
+                0.0,
+                &[
+                    (0, t, Some(30.0), n, n),
+                    (1, f, Some(60.0), Some(3.0), n),
+                    (2, f, Some(350.0), Some(-4.0), Some(1.4)),
+                    (4, f, Some(4000.0), Some(3.0), Some(1.2)),
+                ],
+            ),
+            eqp(
+                "Bas — czysty dół",
+                0.0,
+                &[
+                    (0, t, Some(35.0), n, n),
+                    (1, f, Some(80.0), Some(2.0), n),
+                    (2, f, Some(250.0), Some(-3.0), n),
+                    (6, t, Some(8000.0), n, n),
+                ],
+            ),
+            eqp(
+                "Mud cut",
+                0.0,
+                &[
+                    (0, t, Some(60.0), n, n),
+                    (2, f, Some(300.0), Some(-4.0), Some(1.5)),
+                ],
+            ),
+            eqp(
+                "Air / połysk",
+                0.0,
+                &[
+                    (4, f, Some(5000.0), Some(1.0), n),
+                    (5, f, Some(12000.0), Some(4.0), n),
+                ],
+            ),
+            eqp(
+                "Pasmo — wytnij dół i górę",
+                0.0,
+                &[(0, t, Some(120.0), n, n), (6, t, Some(9000.0), n, n)],
+            ),
+            eqp(
+                "Telefon / lo-fi",
+                2.0,
+                &[
+                    (0, t, Some(400.0), n, n),
+                    (3, f, Some(1500.0), Some(4.0), Some(0.8)),
+                    (6, t, Some(3200.0), n, n),
+                ],
+            ),
+            eqp(
+                "Master — smile",
+                0.0,
+                &[
+                    (1, f, Some(80.0), Some(1.5), n),
+                    (3, f, Some(1000.0), Some(-0.5), Some(0.6)),
+                    (5, f, Some(10000.0), Some(1.5), n),
+                ],
+            ),
         ],
         FxKind::Comp => vec![
-            pr("Domyślny", &[("thr", -18.0), ("ratio", 4.0), ("att", 10.0), ("rel", 150.0), ("gain", 0.0)]),
-            pr("Wokal — wyrównanie", &[("thr", -20.0), ("ratio", 3.0), ("att", 5.0), ("rel", 120.0), ("gain", 4.0)]),
-            pr("Drum bus — glue", &[("thr", -14.0), ("ratio", 2.0), ("att", 30.0), ("rel", 200.0), ("gain", 2.0)]),
-            pr("Kick — punch", &[("thr", -16.0), ("ratio", 4.0), ("att", 25.0), ("rel", 80.0), ("gain", 3.0)]),
-            pr("Bas — kontrola", &[("thr", -22.0), ("ratio", 5.0), ("att", 3.0), ("rel", 90.0), ("gain", 4.0)]),
-            pr("Delikatny", &[("thr", -12.0), ("ratio", 1.5), ("att", 20.0), ("rel", 250.0), ("gain", 1.0)]),
-            pr("Smash", &[("thr", -35.0), ("ratio", 12.0), ("att", 0.5), ("rel", 60.0), ("gain", 12.0)]),
+            pr(
+                "Domyślny",
+                &[
+                    ("thr", -18.0),
+                    ("ratio", 4.0),
+                    ("att", 10.0),
+                    ("rel", 150.0),
+                    ("gain", 0.0),
+                ],
+            ),
+            pr(
+                "Wokal — wyrównanie",
+                &[
+                    ("thr", -20.0),
+                    ("ratio", 3.0),
+                    ("att", 5.0),
+                    ("rel", 120.0),
+                    ("gain", 4.0),
+                ],
+            ),
+            pr(
+                "Drum bus — glue",
+                &[
+                    ("thr", -14.0),
+                    ("ratio", 2.0),
+                    ("att", 30.0),
+                    ("rel", 200.0),
+                    ("gain", 2.0),
+                ],
+            ),
+            pr(
+                "Kick — punch",
+                &[
+                    ("thr", -16.0),
+                    ("ratio", 4.0),
+                    ("att", 25.0),
+                    ("rel", 80.0),
+                    ("gain", 3.0),
+                ],
+            ),
+            pr(
+                "Bas — kontrola",
+                &[
+                    ("thr", -22.0),
+                    ("ratio", 5.0),
+                    ("att", 3.0),
+                    ("rel", 90.0),
+                    ("gain", 4.0),
+                ],
+            ),
+            pr(
+                "Delikatny",
+                &[
+                    ("thr", -12.0),
+                    ("ratio", 1.5),
+                    ("att", 20.0),
+                    ("rel", 250.0),
+                    ("gain", 1.0),
+                ],
+            ),
+            pr(
+                "Smash",
+                &[
+                    ("thr", -35.0),
+                    ("ratio", 12.0),
+                    ("att", 0.5),
+                    ("rel", 60.0),
+                    ("gain", 12.0),
+                ],
+            ),
         ],
         FxKind::Sat => vec![
             pr("Domyślny", &[("style", 0.0), ("drive", 40.0)]),
-            pr("Wokal — ciepło", &[("style", 0.0), ("drive", 35.0), ("lowcut", 80.0), ("tone", 10.0), ("highcut", 16000.0)]),
-            pr("Wokal — lampa", &[("style", 3.0), ("drive", 45.0), ("lowcut", 70.0), ("highcut", 15000.0)]),
-            pr("Rap — ziarno", &[("style", 1.0), ("drive", 58.0), ("lowcut", 100.0), ("tone", 25.0), ("highcut", 14000.0)]),
-            pr("Bębny — smash", &[("style", 1.0), ("drive", 80.0), ("lowcut", 30.0), ("thump", 30.0), ("mix", 70.0)]),
-            pr("Bas — waga", &[("style", 2.0), ("drive", 50.0), ("lowcut", 35.0), ("thump", 40.0), ("tone", -20.0)]),
-            pr("Lo-fi głośnik", &[("style", 4.0), ("drive", 60.0), ("lowcut", 300.0), ("thump", 35.0), ("tone", 20.0), ("highcut", 4500.0), ("steep", 1.0)]),
-            pr("Równoległe zgniecenie", &[("style", 4.0), ("drive", 90.0), ("punish", 1.0), ("mix", 30.0)]),
-            pr("Taśma — klej na bus", &[("style", 0.0), ("drive", 22.0), ("highcut", 18000.0)]),
+            pr(
+                "Wokal — ciepło",
+                &[
+                    ("style", 0.0),
+                    ("drive", 35.0),
+                    ("lowcut", 80.0),
+                    ("tone", 10.0),
+                    ("highcut", 16000.0),
+                ],
+            ),
+            pr(
+                "Wokal — lampa",
+                &[
+                    ("style", 3.0),
+                    ("drive", 45.0),
+                    ("lowcut", 70.0),
+                    ("highcut", 15000.0),
+                ],
+            ),
+            pr(
+                "Rap — ziarno",
+                &[
+                    ("style", 1.0),
+                    ("drive", 58.0),
+                    ("lowcut", 100.0),
+                    ("tone", 25.0),
+                    ("highcut", 14000.0),
+                ],
+            ),
+            pr(
+                "Bębny — smash",
+                &[
+                    ("style", 1.0),
+                    ("drive", 80.0),
+                    ("lowcut", 30.0),
+                    ("thump", 30.0),
+                    ("mix", 70.0),
+                ],
+            ),
+            pr(
+                "Bas — waga",
+                &[
+                    ("style", 2.0),
+                    ("drive", 50.0),
+                    ("lowcut", 35.0),
+                    ("thump", 40.0),
+                    ("tone", -20.0),
+                ],
+            ),
+            pr(
+                "Lo-fi głośnik",
+                &[
+                    ("style", 4.0),
+                    ("drive", 60.0),
+                    ("lowcut", 300.0),
+                    ("thump", 35.0),
+                    ("tone", 20.0),
+                    ("highcut", 4500.0),
+                    ("steep", 1.0),
+                ],
+            ),
+            pr(
+                "Równoległe zgniecenie",
+                &[
+                    ("style", 4.0),
+                    ("drive", 90.0),
+                    ("punish", 1.0),
+                    ("mix", 30.0),
+                ],
+            ),
+            pr(
+                "Taśma — klej na bus",
+                &[("style", 0.0), ("drive", 22.0), ("highcut", 18000.0)],
+            ),
         ],
         FxKind::Delay => vec![
             dly("Ósemka 1/8", Some(0.5), 0.0, 35.0, 20.0),
@@ -324,50 +628,303 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
         ],
         FxKind::Reverb => {
             let rv = |name, size, pre, lo, hi, width, mix, tone, space, duck, bass| {
-                pr(name, &[("size", size), ("pre", pre), ("lo", lo), ("hi", hi), ("width", width), ("mix", mix), ("tone", tone), ("space", space), ("duck", duck), ("early", 50.0), ("bass", bass), ("mod", 50.0)])
+                pr(
+                    name,
+                    &[
+                        ("size", size),
+                        ("pre", pre),
+                        ("lo", lo),
+                        ("hi", hi),
+                        ("width", width),
+                        ("mix", mix),
+                        ("tone", tone),
+                        ("space", space),
+                        ("duck", duck),
+                        ("early", 50.0),
+                        ("bass", bass),
+                        ("mod", 50.0),
+                    ],
+                )
             };
             vec![
-                rv("Vocal Plate", 1.0, 25.0, 300.0, 7000.0, 100.0, 15.0, 0.0, 0.0, 3.0, 0.8),
-                rv("Vocal Room", 0.6, 10.0, 250.0, 8000.0, 90.0, 12.0, -10.0, 1.0, 0.0, 0.9),
-                rv("Vocal Hall", 2.0, 35.0, 250.0, 6500.0, 100.0, 14.0, -20.0, 2.0, 4.0, 0.8),
-                rv("Ambience", 0.4, 0.0, 200.0, 9000.0, 100.0, 12.0, 10.0, 3.0, 0.0, 1.0),
-                rv("Ballada — długi plate", 2.4, 40.0, 350.0, 6000.0, 100.0, 18.0, -30.0, 0.0, 6.0, 0.8),
-                rv("Bębny — pokój", 0.7, 0.0, 150.0, 9000.0, 80.0, 12.0, 0.0, 1.0, 0.0, 1.0),
-                rv("Wysyłka — hala 100 %", 2.2, 20.0, 200.0, 7000.0, 100.0, 100.0, -10.0, 2.0, 0.0, 0.9),
+                rv(
+                    "Vocal Plate",
+                    1.0,
+                    25.0,
+                    300.0,
+                    7000.0,
+                    100.0,
+                    15.0,
+                    0.0,
+                    0.0,
+                    3.0,
+                    0.8,
+                ),
+                rv(
+                    "Vocal Room",
+                    0.6,
+                    10.0,
+                    250.0,
+                    8000.0,
+                    90.0,
+                    12.0,
+                    -10.0,
+                    1.0,
+                    0.0,
+                    0.9,
+                ),
+                rv(
+                    "Vocal Hall",
+                    2.0,
+                    35.0,
+                    250.0,
+                    6500.0,
+                    100.0,
+                    14.0,
+                    -20.0,
+                    2.0,
+                    4.0,
+                    0.8,
+                ),
+                rv(
+                    "Ambience", 0.4, 0.0, 200.0, 9000.0, 100.0, 12.0, 10.0, 3.0, 0.0, 1.0,
+                ),
+                rv(
+                    "Ballada — długi plate",
+                    2.4,
+                    40.0,
+                    350.0,
+                    6000.0,
+                    100.0,
+                    18.0,
+                    -30.0,
+                    0.0,
+                    6.0,
+                    0.8,
+                ),
+                rv(
+                    "Bębny — pokój",
+                    0.7,
+                    0.0,
+                    150.0,
+                    9000.0,
+                    80.0,
+                    12.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    1.0,
+                ),
+                rv(
+                    "Wysyłka — hala 100 %",
+                    2.2,
+                    20.0,
+                    200.0,
+                    7000.0,
+                    100.0,
+                    100.0,
+                    -10.0,
+                    2.0,
+                    0.0,
+                    0.9,
+                ),
             ]
         }
         FxKind::Limit => vec![
             pr("Bezpieczny", &[("gain", 0.0), ("ceil", -1.0)]),
-            pr("Streaming −1 dBTP", &[("gain", 4.0), ("ceil", -1.0), ("rel", 80.0)]),
-            pr("Głośny master", &[("gain", 7.0), ("ceil", -1.0), ("rel", 120.0)]),
-            pr("Bardzo głośny", &[("gain", 10.0), ("ceil", -0.5), ("rel", 150.0), ("look", 5.0)]),
-            pr("Przezroczysty", &[("gain", 3.0), ("ceil", -1.0), ("rel", 250.0), ("look", 5.0)]),
+            pr(
+                "Streaming −1 dBTP",
+                &[("gain", 4.0), ("ceil", -1.0), ("rel", 80.0)],
+            ),
+            pr(
+                "Głośny master",
+                &[("gain", 7.0), ("ceil", -1.0), ("rel", 120.0)],
+            ),
+            pr(
+                "Bardzo głośny",
+                &[
+                    ("gain", 10.0),
+                    ("ceil", -0.5),
+                    ("rel", 150.0),
+                    ("look", 5.0),
+                ],
+            ),
+            pr(
+                "Przezroczysty",
+                &[("gain", 3.0), ("ceil", -1.0), ("rel", 250.0), ("look", 5.0)],
+            ),
         ],
         FxKind::Fet => vec![
-            pr("Wokal — klasyk", &[("input", 8.0), ("output", -2.0), ("ratio", 0.0), ("attack", 400.0), ("release", 250.0), ("mix", 100.0)]),
-            pr("Wokal — z przodu", &[("input", 12.0), ("output", -4.0), ("ratio", 1.0), ("attack", 200.0), ("release", 150.0), ("mix", 100.0)]),
-            pr("Bas — kontrola", &[("input", 10.0), ("output", -3.0), ("ratio", 2.0), ("attack", 600.0), ("release", 400.0), ("mix", 100.0)]),
-            pr("Równoległa kompresja", &[("input", 18.0), ("output", -6.0), ("ratio", 4.0), ("attack", 100.0), ("release", 120.0), ("mix", 45.0)]),
-            pr("All buttons — smash", &[("input", 20.0), ("output", -10.0), ("ratio", 4.0), ("attack", 60.0), ("release", 100.0), ("mix", 100.0)]),
+            pr(
+                "Wokal — klasyk",
+                &[
+                    ("input", 8.0),
+                    ("output", -2.0),
+                    ("ratio", 0.0),
+                    ("attack", 400.0),
+                    ("release", 250.0),
+                    ("mix", 100.0),
+                ],
+            ),
+            pr(
+                "Wokal — z przodu",
+                &[
+                    ("input", 12.0),
+                    ("output", -4.0),
+                    ("ratio", 1.0),
+                    ("attack", 200.0),
+                    ("release", 150.0),
+                    ("mix", 100.0),
+                ],
+            ),
+            pr(
+                "Bas — kontrola",
+                &[
+                    ("input", 10.0),
+                    ("output", -3.0),
+                    ("ratio", 2.0),
+                    ("attack", 600.0),
+                    ("release", 400.0),
+                    ("mix", 100.0),
+                ],
+            ),
+            pr(
+                "Równoległa kompresja",
+                &[
+                    ("input", 18.0),
+                    ("output", -6.0),
+                    ("ratio", 4.0),
+                    ("attack", 100.0),
+                    ("release", 120.0),
+                    ("mix", 45.0),
+                ],
+            ),
+            pr(
+                "All buttons — smash",
+                &[
+                    ("input", 20.0),
+                    ("output", -10.0),
+                    ("ratio", 4.0),
+                    ("attack", 60.0),
+                    ("release", 100.0),
+                    ("mix", 100.0),
+                ],
+            ),
         ],
         FxKind::Deess => vec![
-            pr("Wokal — domyślny", &[("thr", -32.0), ("range", 8.0), ("freq", 6000.0), ("mode", 0.0), ("look", 5.0), ("listen", 0.0)]),
-            pr("Ostre „s”", &[("thr", -36.0), ("range", 12.0), ("freq", 6500.0), ("mode", 0.0), ("look", 8.0), ("listen", 0.0)]),
-            pr("Delikatnie", &[("thr", -26.0), ("range", 5.0), ("freq", 7000.0), ("mode", 0.0), ("look", 5.0), ("listen", 0.0)]),
-            pr("Wokal żeński", &[("thr", -32.0), ("range", 8.0), ("freq", 8000.0), ("mode", 0.0), ("look", 6.0), ("listen", 0.0)]),
-            pr("Wokal męski", &[("thr", -32.0), ("range", 8.0), ("freq", 5000.0), ("mode", 0.0), ("look", 6.0), ("listen", 0.0)]),
-            pr("Szerokopasmowy", &[("thr", -30.0), ("range", 6.0), ("freq", 6000.0), ("mode", 1.0), ("look", 5.0), ("listen", 0.0)]),
+            pr(
+                "Wokal — domyślny",
+                &[
+                    ("thr", -32.0),
+                    ("range", 8.0),
+                    ("freq", 6000.0),
+                    ("mode", 0.0),
+                    ("look", 5.0),
+                    ("listen", 0.0),
+                ],
+            ),
+            pr(
+                "Ostre „s”",
+                &[
+                    ("thr", -36.0),
+                    ("range", 12.0),
+                    ("freq", 6500.0),
+                    ("mode", 0.0),
+                    ("look", 8.0),
+                    ("listen", 0.0),
+                ],
+            ),
+            pr(
+                "Delikatnie",
+                &[
+                    ("thr", -26.0),
+                    ("range", 5.0),
+                    ("freq", 7000.0),
+                    ("mode", 0.0),
+                    ("look", 5.0),
+                    ("listen", 0.0),
+                ],
+            ),
+            pr(
+                "Wokal żeński",
+                &[
+                    ("thr", -32.0),
+                    ("range", 8.0),
+                    ("freq", 8000.0),
+                    ("mode", 0.0),
+                    ("look", 6.0),
+                    ("listen", 0.0),
+                ],
+            ),
+            pr(
+                "Wokal męski",
+                &[
+                    ("thr", -32.0),
+                    ("range", 8.0),
+                    ("freq", 5000.0),
+                    ("mode", 0.0),
+                    ("look", 6.0),
+                    ("listen", 0.0),
+                ],
+            ),
+            pr(
+                "Szerokopasmowy",
+                &[
+                    ("thr", -30.0),
+                    ("range", 6.0),
+                    ("freq", 6000.0),
+                    ("mode", 1.0),
+                    ("look", 5.0),
+                    ("listen", 0.0),
+                ],
+            ),
         ],
         FxKind::Denoise => vec![
-            pr("Wokal — delikatnie", &[("reduction", 8.0), ("sens", 35.0), ("smooth", 50.0)]),
-            pr("Wokal — szum pokoju", &[("reduction", 14.0), ("sens", 50.0), ("smooth", 60.0)]),
-            pr("Telefon / dyktafon", &[("reduction", 20.0), ("sens", 65.0), ("smooth", 70.0)]),
-            pr("Mocno", &[("reduction", 30.0), ("sens", 80.0), ("smooth", 80.0)]),
+            pr(
+                "Wokal — delikatnie",
+                &[("reduction", 8.0), ("sens", 35.0), ("smooth", 50.0)],
+            ),
+            pr(
+                "Wokal — szum pokoju",
+                &[("reduction", 14.0), ("sens", 50.0), ("smooth", 60.0)],
+            ),
+            pr(
+                "Telefon / dyktafon",
+                &[("reduction", 20.0), ("sens", 65.0), ("smooth", 70.0)],
+            ),
+            pr(
+                "Mocno",
+                &[("reduction", 30.0), ("sens", 80.0), ("smooth", 80.0)],
+            ),
         ],
         FxKind::Tune => vec![
-            pr("Naturalny", &[("retune", 40.0), ("humanize", 30.0), ("flex", 40.0), ("vibrato", 60.0)]),
-            pr("Delikatna korekta", &[("retune", 80.0), ("humanize", 50.0), ("flex", 70.0), ("vibrato", 80.0)]),
-            pr("Pop — mocno", &[("retune", 10.0), ("humanize", 10.0), ("flex", 10.0), ("vibrato", 30.0)]),
+            pr(
+                "Naturalny",
+                &[
+                    ("retune", 40.0),
+                    ("humanize", 30.0),
+                    ("flex", 40.0),
+                    ("vibrato", 60.0),
+                ],
+            ),
+            pr(
+                "Delikatna korekta",
+                &[
+                    ("retune", 80.0),
+                    ("humanize", 50.0),
+                    ("flex", 70.0),
+                    ("vibrato", 80.0),
+                ],
+            ),
+            pr(
+                "Pop — mocno",
+                &[
+                    ("retune", 10.0),
+                    ("humanize", 10.0),
+                    ("flex", 10.0),
+                    ("vibrato", 30.0),
+                ],
+            ),
             pr("Efekt robota", &[("retune", 0.0)]),
         ],
         FxKind::Voice => vec![
@@ -378,33 +935,174 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Zmiana płci ↓", &[("pitch", -4.0), ("formant", -4.0)]),
             pr("Zmiana płci ↑", &[("pitch", 4.0), ("formant", 4.0)]),
             pr("Chipmunk", &[("pitch", 7.0), ("link", 1.0)]),
-            pr("Demon", &[("pitch", -7.0), ("formant", -6.0), ("drive", 12.0), ("out", -4.0)]),
-            pr("Hard tune + drive", &[("mode", 1.0), ("drive", 10.0), ("out", -3.0)]),
+            pr(
+                "Demon",
+                &[
+                    ("pitch", -7.0),
+                    ("formant", -6.0),
+                    ("drive", 12.0),
+                    ("out", -4.0),
+                ],
+            ),
+            pr(
+                "Hard tune + drive",
+                &[("mode", 1.0), ("drive", 10.0), ("out", -3.0)],
+            ),
             pr("Robot", &[("mode", 2.0), ("drive", 6.0), ("out", -2.0)]),
         ],
         FxKind::Rider => vec![
-            pr("Wokal — śpiew", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
-            pr("Rap", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 1.0), ("auto", 1.0), ("look", 2.0)]),
-            pr("Delikatnie", &[("amount", 30.0), ("phrase", 10.0), ("up", 3.0), ("down", 4.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
-            pr("Mocno", &[("amount", 80.0), ("phrase", 30.0), ("up", 8.0), ("down", 9.0), ("speed", 0.0), ("auto", 1.0), ("look", 2.0)]),
-            pr("Wokal — śpiew (długi look-ahead, opóźnienie)", &[("amount", 50.0), ("phrase", 20.0), ("up", 5.0), ("down", 6.0), ("speed", 0.0), ("auto", 1.0), ("look", 1.0)]),
+            pr(
+                "Wokal — śpiew",
+                &[
+                    ("amount", 50.0),
+                    ("phrase", 20.0),
+                    ("up", 5.0),
+                    ("down", 6.0),
+                    ("speed", 0.0),
+                    ("auto", 1.0),
+                    ("look", 2.0),
+                ],
+            ),
+            pr(
+                "Rap",
+                &[
+                    ("amount", 50.0),
+                    ("phrase", 20.0),
+                    ("up", 5.0),
+                    ("down", 6.0),
+                    ("speed", 1.0),
+                    ("auto", 1.0),
+                    ("look", 2.0),
+                ],
+            ),
+            pr(
+                "Delikatnie",
+                &[
+                    ("amount", 30.0),
+                    ("phrase", 10.0),
+                    ("up", 3.0),
+                    ("down", 4.0),
+                    ("speed", 0.0),
+                    ("auto", 1.0),
+                    ("look", 2.0),
+                ],
+            ),
+            pr(
+                "Mocno",
+                &[
+                    ("amount", 80.0),
+                    ("phrase", 30.0),
+                    ("up", 8.0),
+                    ("down", 9.0),
+                    ("speed", 0.0),
+                    ("auto", 1.0),
+                    ("look", 2.0),
+                ],
+            ),
+            pr(
+                "Wokal — śpiew (długi look-ahead, opóźnienie)",
+                &[
+                    ("amount", 50.0),
+                    ("phrase", 20.0),
+                    ("up", 5.0),
+                    ("down", 6.0),
+                    ("speed", 0.0),
+                    ("auto", 1.0),
+                    ("look", 1.0),
+                ],
+            ),
         ],
         FxKind::Half => {
             // (name, speed, loop, smooth, lo, hi, solo, mix)
-            let h = |name, speed: f64, lp: f64, smooth: f64, lo: f64, hi: f64, solo: f64, mix: f64| {
-                pr(name, &[("speed", speed), ("loop", lp), ("smooth", smooth), ("lo", lo), ("hi", hi), ("solo", solo), ("mix", mix)])
-            };
+            let h =
+                |name, speed: f64, lp: f64, smooth: f64, lo: f64, hi: f64, solo: f64, mix: f64| {
+                    pr(
+                        name,
+                        &[
+                            ("speed", speed),
+                            ("loop", lp),
+                            ("smooth", smooth),
+                            ("lo", lo),
+                            ("hi", hi),
+                            ("solo", solo),
+                            ("mix", mix),
+                        ],
+                    )
+                };
             vec![
-                h("Half-time — 1 takt", 1.0, 4.0, 10.0, 20.0, 20000.0, 0.0, 100.0),
-                h("Bębny — ósemki, punch", 1.0, 1.0, -12.0, 20.0, 20000.0, 0.0, 100.0),
-                h("Szesnastki — oktawa w dół", 1.0, 0.0, -8.0, 20.0, 20000.0, 0.0, 100.0),
-                h("Triola — kwinta niżej", 0.0, 2.0, 10.0, 20.0, 20000.0, 0.0, 100.0),
-                h("Kwinta — harmonia 50 %", 0.0, 3.0, 20.0, 20.0, 20000.0, 0.0, 50.0),
+                h(
+                    "Half-time — 1 takt",
+                    1.0,
+                    4.0,
+                    10.0,
+                    20.0,
+                    20000.0,
+                    0.0,
+                    100.0,
+                ),
+                h(
+                    "Bębny — ósemki, punch",
+                    1.0,
+                    1.0,
+                    -12.0,
+                    20.0,
+                    20000.0,
+                    0.0,
+                    100.0,
+                ),
+                h(
+                    "Szesnastki — oktawa w dół",
+                    1.0,
+                    0.0,
+                    -8.0,
+                    20.0,
+                    20000.0,
+                    0.0,
+                    100.0,
+                ),
+                h(
+                    "Triola — kwinta niżej",
+                    0.0,
+                    2.0,
+                    10.0,
+                    20.0,
+                    20000.0,
+                    0.0,
+                    100.0,
+                ),
+                h(
+                    "Kwinta — harmonia 50 %",
+                    0.0,
+                    3.0,
+                    20.0,
+                    20.0,
+                    20000.0,
+                    0.0,
+                    50.0,
+                ),
                 h("4× — tekstura", 2.0, 4.0, 45.0, 20.0, 20000.0, 0.0, 100.0),
                 h("Swell — od tyłu", 1.0, 3.0, 80.0, 20.0, 20000.0, 0.0, 100.0),
                 h("FX — swoop", 1.0, 2.0, -70.0, 20.0, 20000.0, 0.0, 100.0),
-                h("Tylko góra (sub zostaje)", 1.0, 4.0, 10.0, 150.0, 20000.0, 0.0, 100.0),
-                h("Środek pasma — solo", 1.0, 2.0, 10.0, 300.0, 4000.0, 1.0, 100.0),
+                h(
+                    "Tylko góra (sub zostaje)",
+                    1.0,
+                    4.0,
+                    10.0,
+                    150.0,
+                    20000.0,
+                    0.0,
+                    100.0,
+                ),
+                h(
+                    "Środek pasma — solo",
+                    1.0,
+                    2.0,
+                    10.0,
+                    300.0,
+                    4000.0,
+                    1.0,
+                    100.0,
+                ),
             ]
         }
         FxKind::Vst3 => vec![],
@@ -418,12 +1116,29 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
     }
     match fx.kind {
         FxKind::Tune | FxKind::Voice => crate::vocal::tune_latency(sample_rate),
-        FxKind::Sat => crate::dsp::saturator::latency_samples(fx.params.get("hq").copied().unwrap_or(0.0) >= 0.5),
+        FxKind::Sat => crate::dsp::saturator::latency_samples(
+            fx.params.get("hq").copied().unwrap_or(0.0) >= 0.5,
+        ),
         FxKind::Denoise => crate::denoise::latency(sample_rate),
-        FxKind::Rider => crate::rider::latency_samples(fx.params.get("speed").copied().unwrap_or(0.0) as f32, fx.params.get("look").copied().unwrap_or(0.0) as f32, sample_rate),
+        FxKind::Rider => crate::rider::latency_samples(
+            fx.params.get("speed").copied().unwrap_or(0.0) as f32,
+            fx.params.get("look").copied().unwrap_or(0.0) as f32,
+            sample_rate,
+        ),
         // look-ahead delays the audio so the gain is already down when the "s" arrives
-        FxKind::Limit => crate::dsp::limiter_v2::latency_samples(fx.params.get("look").copied().unwrap_or(3.0) as f32, sample_rate),
-        FxKind::Deess => ((fx.params.get("look").copied().unwrap_or(5.0).clamp(0.0, 15.0) / 1000.0) * sample_rate as f64) as usize,
+        FxKind::Limit => crate::dsp::limiter_v2::latency_samples(
+            fx.params.get("look").copied().unwrap_or(3.0) as f32,
+            sample_rate,
+        ),
+        FxKind::Deess => {
+            ((fx.params
+                .get("look")
+                .copied()
+                .unwrap_or(5.0)
+                .clamp(0.0, 15.0)
+                / 1000.0)
+                * sample_rate as f64) as usize
+        }
         _ => 0,
     }
 }
@@ -431,13 +1146,16 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
 /// Loads preset `index` into `fx` (tempo-synced delay times resolved at `bpm`).
 pub fn load_preset(fx: &mut Fx, index: usize, bpm: f64) -> bool {
     let list = presets(fx.kind);
-    let Some(pr) = list.get(index) else { return false };
+    let Some(pr) = list.get(index) else {
+        return false;
+    };
     fx.params = default_params(fx.kind);
     for (k, v) in &pr.params {
         fx.params.insert((*k).to_owned(), *v);
     }
     if let Some(beats) = pr.beats {
-        fx.params.insert("time".into(), (beats * 60000.0 / bpm).clamp(10.0, 1500.0));
+        fx.params
+            .insert("time".into(), (beats * 60000.0 / bpm).clamp(10.0, 1500.0));
     }
     if let Some(b) = &pr.bands {
         fx.bands = Some(b.clone());
@@ -462,7 +1180,18 @@ pub struct Catalog {
 
 pub fn catalog() -> Catalog {
     Catalog {
-        types: BUILTIN.iter().map(|&k| (k, TypeDef { name: type_name(k), params: params(k) })).collect(),
+        types: BUILTIN
+            .iter()
+            .map(|&k| {
+                (
+                    k,
+                    TypeDef {
+                        name: type_name(k),
+                        params: params(k),
+                    },
+                )
+            })
+            .collect(),
         presets: BUILTIN.iter().map(|&k| (k, presets(k))).collect(),
         synth: crate::poly::catalog(),
     }
@@ -472,7 +1201,12 @@ pub fn catalog() -> Catalog {
 pub fn param_block(fx: &Fx) -> ParamBlock {
     let mut pb = ParamBlock::default();
     for (i, d) in params(fx.kind).iter().enumerate().take(12) {
-        let v = fx.params.get(d.id).copied().unwrap_or(d.def).clamp(d.min, d.max);
+        let v = fx
+            .params
+            .get(d.id)
+            .copied()
+            .unwrap_or(d.def)
+            .clamp(d.min, d.max);
         pb.values[i] = v as f32;
     }
     if let Some(bands) = &fx.bands {
@@ -495,8 +1229,14 @@ pub fn param_block(fx: &Fx) -> ParamBlock {
                 stages: (b.slope / 12).clamp(1, 4),
                 place: b.place as u8,
                 dynamic: b.dynamic.is_some(),
-                range: b.dynamic.map(|d| d.range.clamp(-30.0, 30.0) as f32).unwrap_or(0.0),
-                thr: b.dynamic.map(|d| d.thr.clamp(-80.0, 0.0) as f32).unwrap_or(0.0),
+                range: b
+                    .dynamic
+                    .map(|d| d.range.clamp(-30.0, 30.0) as f32)
+                    .unwrap_or(0.0),
+                thr: b
+                    .dynamic
+                    .map(|d| d.thr.clamp(-80.0, 0.0) as f32)
+                    .unwrap_or(0.0),
             };
         }
     }

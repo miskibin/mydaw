@@ -21,12 +21,18 @@ pub struct Settings {
 }
 
 fn path() -> PathBuf {
-    wave_engine::engine::scratch_dir().parent().unwrap().join("settings.json")
+    wave_engine::engine::scratch_dir()
+        .parent()
+        .unwrap()
+        .join("settings.json")
 }
 
 impl Settings {
     pub fn load() -> Self {
-        std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+        std::fs::read_to_string(path())
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
     }
     pub fn save(&self) {
         let p = path();
@@ -45,7 +51,8 @@ mod tests {
 
     #[test]
     fn updates_are_checked_by_default_and_old_files_still_load() {
-        let s: Settings = serde_json::from_str(r#"{"folders":["a"],"lastProject":"x.wave"}"#).unwrap();
+        let s: Settings =
+            serde_json::from_str(r#"{"folders":["a"],"lastProject":"x.wave"}"#).unwrap();
         assert!(!s.no_auto_update);
         assert_eq!(s.seen_version, None);
         assert_eq!(s.folders, ["a"]);
@@ -53,9 +60,16 @@ mod tests {
 
     #[test]
     fn update_fields_round_trip_in_camel_case() {
-        let s = Settings { seen_version: Some("0.9.3".into()), no_auto_update: true, ..Default::default() };
+        let s = Settings {
+            seen_version: Some("0.9.3".into()),
+            no_auto_update: true,
+            ..Default::default()
+        };
         let t = serde_json::to_string(&s).unwrap();
-        assert!(t.contains("\"seenVersion\":\"0.9.3\"") && t.contains("\"noAutoUpdate\":true"), "{t}");
+        assert!(
+            t.contains("\"seenVersion\":\"0.9.3\"") && t.contains("\"noAutoUpdate\":true"),
+            "{t}"
+        );
         let back: Settings = serde_json::from_str(&t).unwrap();
         assert_eq!(back.seen_version.as_deref(), Some("0.9.3"));
         assert!(back.no_auto_update);

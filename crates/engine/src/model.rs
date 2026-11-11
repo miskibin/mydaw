@@ -269,9 +269,15 @@ pub enum ChannelSrc {
     /// A one-shot sampler playing a project source, pitched by the note (`root` = original pitch).
     Sample { source: Id },
     /// The built-in polyphonic synthesizer (see `crate::poly`).
-    Synth { #[serde(default)] synth: SynthState },
+    Synth {
+        #[serde(default)]
+        synth: SynthState,
+    },
     /// WAVE Keys: the sampled grand piano (see `crate::keys`).
-    Keys { #[serde(default)] keys: KeysState },
+    Keys {
+        #[serde(default)]
+        keys: KeysState,
+    },
 }
 
 /// A WAVE Keys channel's settings.
@@ -294,7 +300,10 @@ fn keys_dynamics() -> f32 {
 
 impl Default for KeysState {
     fn default() -> Self {
-        Self { release: keys_release(), dynamics: keys_dynamics() }
+        Self {
+            release: keys_release(),
+            dynamics: keys_dynamics(),
+        }
     }
 }
 
@@ -348,7 +357,18 @@ fn sample_root() -> u8 {
 
 impl Channel {
     pub fn builtin(id: Id, inst: Inst) -> Self {
-        Self { id, name: inst.name().into(), color: inst.color().into(), src: ChannelSrc::Inst { inst }, vol: VOL_UNITY, pan: 0.0, mute: false, solo: false, insert: None, root: inst.default_root() }
+        Self {
+            id,
+            name: inst.name().into(),
+            color: inst.color().into(),
+            src: ChannelSrc::Inst { inst },
+            vol: VOL_UNITY,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+            insert: None,
+            root: inst.default_root(),
+        }
     }
     /// Channel gain: the fader curve normalised so the unity position is exactly 1.
     pub fn gain(&self) -> f32 {
@@ -356,7 +376,13 @@ impl Channel {
     }
     /// True for channels whose notes have a meaningful pitch (piano roll).
     pub fn pitched(&self) -> bool {
-        matches!(self.src, ChannelSrc::Sample { .. } | ChannelSrc::Synth { .. } | ChannelSrc::Keys { .. } | ChannelSrc::Inst { inst: Inst::Bass })
+        matches!(
+            self.src,
+            ChannelSrc::Sample { .. }
+                | ChannelSrc::Synth { .. }
+                | ChannelSrc::Keys { .. }
+                | ChannelSrc::Inst { inst: Inst::Bass }
+        )
     }
 }
 
@@ -386,7 +412,14 @@ fn is_one(v: &f32) -> bool {
 
 impl Note {
     pub fn new(ch: Id, step: f32, len: f32, p: Option<u8>) -> Self {
-        Self { ch, inst: None, step, len, p, v: 1.0 }
+        Self {
+            ch,
+            inst: None,
+            step,
+            len,
+            p,
+            v: 1.0,
+        }
     }
 }
 
@@ -395,8 +428,15 @@ pub struct Pattern {
     pub id: Id,
     pub name: String,
     pub color: String,
-    /// Length in beats. Notes at or after the end are kept but not played or shown.
+    /// Length in beats, always whole bars: derived, never chosen directly. It is the end of
+    /// the last note rounded up to a bar, but at least `min_len` (FL Studio's automatic
+    /// pattern length). [`Pattern::fit_len`] sets it; every `putPattern` and file load does.
+    #[serde(default = "bar")]
     pub len: f64,
+    /// The shortest the pattern may be, in beats (whole bars, at least one): bars the user
+    /// added on purpose ("+ bar") stay even while empty, e.g. a crash every second bar.
+    #[serde(default = "bar", rename = "minLen")]
+    pub min_len: f64,
     pub notes: Vec<Note>,
     /// 0..1: how far every second 16th is delayed (see [`swing_offset`]).
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -405,6 +445,36 @@ pub struct Pattern {
 
 fn is_zero(v: &f32) -> bool {
     *v == 0.0
+}
+
+fn bar() -> f64 {
+    4.0
+}
+
+/// Beats in one bar (the project is in 4/4).
+pub const BAR_BEATS: f64 = 4.0;
+
+impl Pattern {
+    /// The length its notes need: the end of the last note rounded up to a whole bar, at
+    /// least one bar, at most [`TOTAL_BEATS`].
+    pub fn content_len(notes: &[Note]) -> f64 {
+        let end = notes
+            .iter()
+            .map(|n| (n.step + n.len) as f64 / 4.0)
+            .fold(0.0, f64::max);
+        ((end / BAR_BEATS - 1e-6).ceil().max(1.0) * BAR_BEATS).min(TOTAL_BEATS)
+    }
+
+    /// Sets `len` from the notes and `min_len` (whole bars), and normalises `min_len`.
+    pub fn fit_len(&mut self) {
+        let min = if self.min_len.is_finite() {
+            (self.min_len / BAR_BEATS - 1e-6).ceil().max(1.0) * BAR_BEATS
+        } else {
+            BAR_BEATS
+        };
+        self.min_len = min.min(TOTAL_BEATS);
+        self.len = Self::content_len(&self.notes).max(self.min_len);
+    }
 }
 
 /// Swing, in steps, added to a note that starts on an odd 16th (0-based 1, 3, 5 …).
@@ -448,25 +518,54 @@ pub enum ClipKind {
 
 /// What an automation moves.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AutoTarget {
     /// A built-in effect parameter (catalog id), or `band:<i>:f|g|q` of an EQ.
-    Fx { fx_id: Id, param: String },
+    Fx {
+        fx_id: Id,
+        param: String,
+    },
     /// An effect's dry/wet.
-    Mix { fx_id: Id },
-    InsertVol { id: Id },
-    InsertPan { id: Id },
-    TrackVol { id: Id },
+    Mix {
+        fx_id: Id,
+    },
+    InsertVol {
+        id: Id,
+    },
+    InsertPan {
+        id: Id,
+    },
+    TrackVol {
+        id: Id,
+    },
     /// A Channel Rack channel's volume (fader position 0..1, like `vol`) and pan.
-    ChanVol { id: Id },
-    ChanPan { id: Id },
+    ChanVol {
+        id: Id,
+    },
+    ChanPan {
+        id: Id,
+    },
     /// A synth channel's patch parameter (catalog id, `poly::params`).
-    Synth { chan_id: Id, param: String },
+    Synth {
+        chan_id: Id,
+        param: String,
+    },
     /// A WAVE Keys channel's `release` (ms, logarithmic) or `dynamics` (%).
-    Keys { chan_id: Id, param: String },
+    Keys {
+        chan_id: Id,
+        param: String,
+    },
     /// An audio clip's own gain (−24..+12 dB) and pan.
-    ClipGain { id: Id },
-    ClipPan { id: Id },
+    ClipGain {
+        id: Id,
+    },
+    ClipPan {
+        id: Id,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -703,8 +802,16 @@ impl Comp {
     }
     /// Earliest take start and latest take end (comp beats).
     pub fn extent(&self) -> (f64, f64) {
-        let a = self.takes.iter().map(|t| t.start).fold(f64::INFINITY, f64::min);
-        let b = self.takes.iter().map(|t| t.end()).fold(f64::NEG_INFINITY, f64::max);
+        let a = self
+            .takes
+            .iter()
+            .map(|t| t.start)
+            .fold(f64::INFINITY, f64::min);
+        let b = self
+            .takes
+            .iter()
+            .map(|t| t.end())
+            .fold(f64::NEG_INFINITY, f64::max);
         if a.is_finite() {
             (a, b)
         } else {
@@ -729,10 +836,19 @@ impl Comp {
                 out.push(CompRegion { to: from, ..*r });
             }
             if r.to > to {
-                out.push(CompRegion { from: to, xfade: None, ..*r });
+                out.push(CompRegion {
+                    from: to,
+                    xfade: None,
+                    ..*r
+                });
             }
         }
-        out.push(CompRegion { take, from, to, xfade: None });
+        out.push(CompRegion {
+            take,
+            from,
+            to,
+            xfade: None,
+        });
         out.sort_by(|a, b| a.from.total_cmp(&b.from));
         self.regions = merge_regions(out);
     }
@@ -769,7 +885,11 @@ impl Project {
     /// The channel that plays a legacy `inst` note: the first built-in channel of that
     /// instrument, created (appended) when there is none.
     pub fn channel_for_inst(&mut self, inst: Inst) -> Id {
-        if let Some(c) = self.channels.iter().find(|c| c.src == ChannelSrc::Inst { inst }) {
+        if let Some(c) = self
+            .channels
+            .iter()
+            .find(|c| c.src == ChannelSrc::Inst { inst })
+        {
             return c.id;
         }
         let id = self.alloc_id();
@@ -815,6 +935,7 @@ impl Project {
         let mut pats = std::mem::take(&mut self.patterns);
         for pt in pats.iter_mut() {
             self.resolve_note_channels(&mut pt.notes);
+            pt.fit_len();
         }
         self.patterns = pats;
         if self.channels.is_empty() {
@@ -853,7 +974,11 @@ impl Project {
 
     /// End of the last clip, rounded up to a bar; at least one bar.
     pub fn song_end(&self) -> f64 {
-        let end = self.clips.iter().map(|c| c.start + c.len).fold(4.0, f64::max);
+        let end = self
+            .clips
+            .iter()
+            .map(|c| c.start + c.len)
+            .fold(4.0, f64::max);
         (end / 4.0).ceil() * 4.0
     }
 

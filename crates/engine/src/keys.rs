@@ -50,7 +50,9 @@ pub fn parse_note(s: &str) -> Option<u8> {
         None => (0, rest),
     };
     let oct: i32 = oct.parse().ok()?;
-    u8::try_from((oct + 1) * 12 + base + acc).ok().filter(|k| *k <= 127)
+    u8::try_from((oct + 1) * 12 + base + acc)
+        .ok()
+        .filter(|k| *k <= 127)
 }
 
 /// `F#3v9.flac` → (key 54, layer 9).
@@ -88,7 +90,11 @@ impl KeysBank {
         let mut zones = vec![];
         let mut audio = vec![];
         for (root, layers) in notes {
-            zones.push(Zone { root, first: audio.len() as u16, layers: layers.len() as u16 });
+            zones.push(Zone {
+                root,
+                first: audio.len() as u16,
+                layers: layers.len() as u16,
+            });
             audio.extend(layers);
         }
         Ok(Self { zones, audio })
@@ -96,7 +102,14 @@ impl KeysBank {
 
     /// True when `dir` holds every file a bank needs (at least one note; no half-written files).
     pub fn present(dir: &Path) -> bool {
-        std::fs::read_dir(dir).map(|rd| rd.flatten().filter(|e| parse_file(&e.file_name().to_string_lossy()).is_some()).count() >= 30).unwrap_or(false)
+        std::fs::read_dir(dir)
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| parse_file(&e.file_name().to_string_lossy()).is_some())
+                    .count()
+                    >= 30
+            })
+            .unwrap_or(false)
     }
 
     /// Loads every `<note>v<layer>.<ext>` recording in `dir` (decoded on a few threads).
@@ -104,27 +117,39 @@ impl KeysBank {
         let mut files: Vec<(u8, u32, std::path::PathBuf)> = std::fs::read_dir(dir)
             .map_err(|e| format!("{}: {e}", dir.display()))?
             .flatten()
-            .filter_map(|e| parse_file(&e.file_name().to_string_lossy()).map(|(k, l)| (k, l, e.path())))
+            .filter_map(|e| {
+                parse_file(&e.file_name().to_string_lossy()).map(|(k, l)| (k, l, e.path()))
+            })
             .collect();
         files.sort();
         if files.is_empty() {
             return Err(format!("{}: no piano samples", dir.display()));
         }
-        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2).clamp(1, 6);
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .clamp(1, 6);
         let next = std::sync::atomic::AtomicUsize::new(0);
-        let out: Vec<std::sync::Mutex<Option<Result<Audio, String>>>> = files.iter().map(|_| std::sync::Mutex::new(None)).collect();
+        let out: Vec<std::sync::Mutex<Option<Result<Audio, String>>>> =
+            files.iter().map(|_| std::sync::Mutex::new(None)).collect();
         std::thread::scope(|s| {
             for _ in 0..threads {
                 s.spawn(|| loop {
                     let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some((_, _, path)) = files.get(i) else { break };
+                    let Some((_, _, path)) = files.get(i) else {
+                        break;
+                    };
                     *out[i].lock().unwrap() = Some(Audio::load(path).map(trimmed));
                 });
             }
         });
         let mut notes: Vec<(u8, Vec<Arc<Audio>>)> = vec![];
         for ((key, _, path), slot) in files.iter().zip(out) {
-            let a = slot.into_inner().unwrap().unwrap_or_else(|| Err("not decoded".into())).map_err(|e| format!("{}: {e}", path.display()))?;
+            let a = slot
+                .into_inner()
+                .unwrap()
+                .unwrap_or_else(|| Err("not decoded".into()))
+                .map_err(|e| format!("{}: {e}", path.display()))?;
             match notes.last_mut() {
                 Some((k, l)) if k == key => l.push(Arc::new(a)),
                 _ => notes.push((*key, vec![Arc::new(a)])),
@@ -137,7 +162,11 @@ impl KeysBank {
     /// semitones, and the gain that carries the velocity inside the layer.
     /// `dynamics` 0..1: how much the velocity changes the level (the timbre always follows it).
     pub fn pick(&self, key: u8, vel: f32, dynamics: f32) -> (u16, f32, f32) {
-        let z = self.zones.iter().min_by_key(|z| (z.root as i32 - key as i32).abs()).expect("a bank has zones");
+        let z = self
+            .zones
+            .iter()
+            .min_by_key(|z| (z.root as i32 - key as i32).abs())
+            .expect("a bank has zones");
         let n = z.layers.max(1) as f32;
         let vel = vel.clamp(0.0, 1.0);
         let layer = ((vel * n) as u16).min(z.layers.saturating_sub(1));
@@ -181,7 +210,11 @@ mod tests {
 
     #[test]
     fn picks_the_nearest_note_and_the_velocity_layer() {
-        let b = KeysBank::from_layers(vec![(60, vec![tone(0.1), tone(0.5), tone(0.9)]), (63, vec![tone(0.1), tone(0.5), tone(0.9)])]).unwrap();
+        let b = KeysBank::from_layers(vec![
+            (60, vec![tone(0.1), tone(0.5), tone(0.9)]),
+            (63, vec![tone(0.1), tone(0.5), tone(0.9)]),
+        ])
+        .unwrap();
         let (i, st, _) = b.pick(61, 0.1, 1.0);
         assert_eq!((i, st), (0, 1.0));
         let (i, st, _) = b.pick(62, 0.5, 1.0);

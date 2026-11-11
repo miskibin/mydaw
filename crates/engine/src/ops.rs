@@ -12,45 +12,100 @@ use crate::model::*;
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Op {
     /// Insert or replace clips by id.
-    PutClips { clips: Vec<Clip> },
-    RemoveClips { ids: Vec<Id> },
+    PutClips {
+        clips: Vec<Clip>,
+    },
+    RemoveClips {
+        ids: Vec<Id>,
+    },
     /// Insert (new id) or replace a track. New tracks are appended.
-    PutTrack { track: Track },
+    PutTrack {
+        track: Track,
+    },
     /// Remove a track (lane) with its clips; lanes below move up one.
-    RemoveTrack { id: Id },
+    RemoveTrack {
+        id: Id,
+    },
     /// Insert or replace a mixer insert *without* touching its effect chain
     /// (`fx` in the payload is ignored for an existing insert).
-    PutInsert { insert: Insert },
-    RemoveInsert { id: Id },
+    PutInsert {
+        insert: Insert,
+    },
+    RemoveInsert {
+        id: Id,
+    },
     /// Insert or replace an effect. `index` places a new effect (default: end of chain).
-    PutFx { insert_id: Id, fx: Fx, #[serde(default)] index: Option<usize> },
-    RemoveFx { fx_id: Id },
-    MoveFx { fx_id: Id, to: usize },
+    PutFx {
+        insert_id: Id,
+        fx: Fx,
+        #[serde(default)]
+        index: Option<usize>,
+    },
+    RemoveFx {
+        fx_id: Id,
+    },
+    MoveFx {
+        fx_id: Id,
+        to: usize,
+    },
     /// Insert or replace a pattern. Notes may still say `inst` instead of `ch` (old
-    /// scripts): they get that instrument's built-in channel (created if missing). When an
-    /// existing pattern's `len` changes, its clips that show exactly one whole pass of it
-    /// (`offset` 0, `len` = old length) take the new length; other clips keep theirs.
-    PutPattern { pattern: Pattern },
+    /// scripts): they get that instrument's built-in channel (created if missing). `len` is
+    /// derived (the notes' end rounded up to a bar, at least `minLen`); whatever is sent is
+    /// replaced. When an existing pattern's length changes, its clips that show exactly one
+    /// whole pass of it (`offset` 0, `len` = old length) take the new length; other clips
+    /// keep theirs.
+    PutPattern {
+        pattern: Pattern,
+    },
+    /// Remove a pattern and every clip that plays it.
+    RemovePattern {
+        id: Id,
+    },
     /// Insert or replace a Channel Rack channel. `index` places a new channel (default:
     /// last) or moves an existing one.
-    PutChannel { channel: Channel, #[serde(default)] index: Option<usize> },
+    PutChannel {
+        channel: Channel,
+        #[serde(default)]
+        index: Option<usize>,
+    },
     /// Remove a channel and its notes in every pattern.
-    RemoveChannel { id: Id },
+    RemoveChannel {
+        id: Id,
+    },
     /// Rename / recolour a source. Audio itself is changed with dedicated commands.
-    PutSource { source: Source },
-    RemoveSource { id: Id },
+    PutSource {
+        source: Source,
+    },
+    RemoveSource {
+        id: Id,
+    },
     /// Insert or replace an automation envelope.
-    PutAutomation { automation: Automation },
+    PutAutomation {
+        automation: Automation,
+    },
     /// Remove an automation and every clip that plays it.
-    RemoveAutomation { id: Id },
+    RemoveAutomation {
+        id: Id,
+    },
     /// Insert or replace a take group with its comp (takes, regions, crossfade).
-    PutComp { comp: Comp },
+    PutComp {
+        comp: Comp,
+    },
     /// Remove a take group and every clip that plays it.
-    RemoveComp { id: Id },
+    RemoveComp {
+        id: Id,
+    },
     /// Replace the lyrics notebook (all pages, in tab order). Never touches the audio graph.
-    PutNotebook { notebook: Notebook },
-    SetBpm { bpm: f64 },
-    SetLoop { #[serde(rename = "loop")] range: Option<LoopRange> },
+    PutNotebook {
+        notebook: Notebook,
+    },
+    SetBpm {
+        bpm: f64,
+    },
+    SetLoop {
+        #[serde(rename = "loop")]
+        range: Option<LoopRange>,
+    },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -96,10 +151,16 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         Op::PutClips { clips } => {
             for c in clips {
                 if c.len <= 0.0 || c.start < 0.0 || !c.start.is_finite() || !c.len.is_finite() {
-                    return Err(OpError::Invalid(format!("clip {} has an invalid range", c.id)));
+                    return Err(OpError::Invalid(format!(
+                        "clip {} has an invalid range",
+                        c.id
+                    )));
                 }
                 if c.track as usize >= p.tracks.len() {
-                    return Err(OpError::Invalid(format!("clip {} is on track {} which does not exist", c.id, c.track)));
+                    return Err(OpError::Invalid(format!(
+                        "clip {} is on track {} which does not exist",
+                        c.id, c.track
+                    )));
                 }
                 let known = match c.kind {
                     ClipKind::Pat => p.patterns.iter().any(|x| x.id == c.source),
@@ -108,16 +169,31 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     ClipKind::Comp => p.comps.iter().any(|x| x.id == c.source),
                 };
                 if !known {
-                    return Err(OpError::Missing { what: "clip source", id: c.source });
+                    return Err(OpError::Missing {
+                        what: "clip source",
+                        id: c.source,
+                    });
                 }
                 if let Some(r) = c.tune.as_ref().and_then(|t| t.reference.as_ref()) {
                     if !p.sources.iter().any(|x| x.id == r.source) {
-                        return Err(OpError::Missing { what: "reference source", id: r.source });
+                        return Err(OpError::Missing {
+                            what: "reference source",
+                            id: r.source,
+                        });
                     }
-                    if [r.correction, r.vibrato, r.influence].iter().any(|v| !(0.0..=1.0).contains(v)) {
-                        return Err(OpError::Invalid(format!("clip {}: reference correction, vibrato and influence must be 0..1", c.id)));
+                    if [r.correction, r.vibrato, r.influence]
+                        .iter()
+                        .any(|v| !(0.0..=1.0).contains(v))
+                    {
+                        return Err(OpError::Invalid(format!(
+                            "clip {}: reference correction, vibrato and influence must be 0..1",
+                            c.id
+                        )));
                     }
-                    if r.octave.is_some_and(|o| o % 12 != 0 || o.abs() > 36) || r.key > 11 || r.scale > 4 {
+                    if r.octave.is_some_and(|o| o % 12 != 0 || o.abs() > 36)
+                        || r.key > 11
+                        || r.scale > 4
+                    {
                         return Err(OpError::Invalid(format!("clip {}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4", c.id)));
                     }
                 }
@@ -137,7 +213,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         }
         Op::PutTrack { track } => {
             if p.insert(track.insert).is_none() {
-                return Err(OpError::Missing { what: "insert", id: track.insert });
+                return Err(OpError::Missing {
+                    what: "insert",
+                    id: track.insert,
+                });
             }
             bump(p, track.id);
             match p.tracks.iter_mut().find(|x| x.id == track.id) {
@@ -156,7 +235,14 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             d.timeline = true;
         }
         Op::RemoveTrack { id } => {
-            let idx = p.tracks.iter().position(|t| t.id == *id).ok_or(OpError::Missing { what: "track", id: *id })? as u32;
+            let idx = p
+                .tracks
+                .iter()
+                .position(|t| t.id == *id)
+                .ok_or(OpError::Missing {
+                    what: "track",
+                    id: *id,
+                })? as u32;
             if p.tracks.len() == 1 {
                 return Err(OpError::Invalid("the last track cannot be removed".into()));
             }
@@ -175,7 +261,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             match p.inserts.iter_mut().find(|x| x.id == insert.id) {
                 Some(x) => {
                     let fx = std::mem::take(&mut x.fx);
-                    *x = Insert { fx, ..insert.clone() };
+                    *x = Insert {
+                        fx,
+                        ..insert.clone()
+                    };
                     d.params = true;
                 }
                 None => {
@@ -194,7 +283,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 return Err(OpError::Invalid("the master cannot be removed".into()));
             }
             if p.insert(*id).is_none() {
-                return Err(OpError::Missing { what: "insert", id: *id });
+                return Err(OpError::Missing {
+                    what: "insert",
+                    id: *id,
+                });
             }
             p.inserts.retain(|m| m.id != *id);
             for t in &mut p.tracks {
@@ -204,29 +296,44 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             }
             d.mixer = true;
         }
-        Op::PutFx { insert_id, fx, index } => {
+        Op::PutFx {
+            insert_id,
+            fx,
+            index,
+        } => {
             validate_fx(fx)?;
             if let Some((m, old)) = p.find_fx(fx.id) {
                 if m.id != *insert_id || old.kind != fx.kind {
-                    return Err(OpError::Invalid(format!("effect {} cannot change insert or type; remove and add it", fx.id)));
+                    return Err(OpError::Invalid(format!(
+                        "effect {} cannot change insert or type; remove and add it",
+                        fx.id
+                    )));
                 }
-                let plugin_changed = old.plugin.as_ref().map(|x| (&x.path, &x.cid)) != fx.plugin.as_ref().map(|x| (&x.path, &x.cid));
+                let plugin_changed = old.plugin.as_ref().map(|x| (&x.path, &x.cid))
+                    != fx.plugin.as_ref().map(|x| (&x.path, &x.cid));
                 if plugin_changed {
-                    return Err(OpError::Invalid("a VST3 slot cannot swap its plugin; remove and add it".into()));
+                    return Err(OpError::Invalid(
+                        "a VST3 slot cannot swap its plugin; remove and add it".into(),
+                    ));
                 }
                 // a parameter that changes the effect's latency (look-ahead) re-plans the PDC
-                let bypass_changed = old.bypass != fx.bypass || crate::catalog::latency(old, 48000.0) != crate::catalog::latency(fx, 48000.0);
+                let bypass_changed = old.bypass != fx.bypass
+                    || crate::catalog::latency(old, 48000.0)
+                        != crate::catalog::latency(fx, 48000.0);
                 let m = p.inserts.iter_mut().find(|m| m.id == *insert_id).unwrap();
                 let slot = m.fx.iter_mut().find(|f| f.id == fx.id).unwrap();
                 *slot = fx.clone();
                 d.params = true;
                 d.mixer |= bypass_changed;
             } else {
-                let m = p
-                    .inserts
-                    .iter_mut()
-                    .find(|m| m.id == *insert_id)
-                    .ok_or(OpError::Missing { what: "insert", id: *insert_id })?;
+                let m =
+                    p.inserts
+                        .iter_mut()
+                        .find(|m| m.id == *insert_id)
+                        .ok_or(OpError::Missing {
+                            what: "insert",
+                            id: *insert_id,
+                        })?;
                 let at = index.unwrap_or(m.fx.len()).min(m.fx.len());
                 m.fx.insert(at, fx.clone());
                 bump(p, fx.id);
@@ -241,7 +348,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 found |= m.fx.len() != n;
             }
             if !found {
-                return Err(OpError::Missing { what: "effect", id: *fx_id });
+                return Err(OpError::Missing {
+                    what: "effect",
+                    id: *fx_id,
+                });
             }
             d.mixer = true;
         }
@@ -250,7 +360,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 .inserts
                 .iter_mut()
                 .find(|m| m.fx.iter().any(|f| f.id == *fx_id))
-                .ok_or(OpError::Missing { what: "effect", id: *fx_id })?;
+                .ok_or(OpError::Missing {
+                    what: "effect",
+                    id: *fx_id,
+                })?;
             let from = m.fx.iter().position(|f| f.id == *fx_id).unwrap();
             let f = m.fx.remove(from);
             let to = (*to).min(m.fx.len());
@@ -258,16 +371,16 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             d.mixer = true;
         }
         Op::PutPattern { pattern } => {
-            if !(pattern.len > 0.0 && pattern.len <= TOTAL_BEATS) {
-                return Err(OpError::Invalid(format!("pattern length must be within 0..{TOTAL_BEATS} beats")));
-            }
             if !(pattern.swing.is_finite() && (0.0..=1.0).contains(&pattern.swing)) {
                 return Err(OpError::Invalid("swing must be 0..1".into()));
             }
             let mut pt = pattern.clone();
             for n in &pt.notes {
                 if !(n.step.is_finite() && n.step >= 0.0 && n.len.is_finite() && n.len > 0.0) {
-                    return Err(OpError::Invalid(format!("pattern {}: a note has an invalid step/len", pt.id)));
+                    return Err(OpError::Invalid(format!(
+                        "pattern {}: a note has an invalid step/len",
+                        pt.id
+                    )));
                 }
                 if !(n.v.is_finite() && (0.0..=1.0).contains(&n.v)) {
                     return Err(OpError::Invalid("note velocity `v` must be 0..1".into()));
@@ -275,21 +388,34 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 if n.p.is_some_and(|k| k > 127) {
                     return Err(OpError::Invalid("note key `p` must be 0..127".into()));
                 }
+                if (n.step + n.len) as f64 > TOTAL_BEATS * 4.0 {
+                    return Err(OpError::Invalid(format!(
+                        "pattern {}: notes must end within {TOTAL_BEATS} beats",
+                        pt.id
+                    )));
+                }
                 if n.ch == 0 && n.inst.is_none() {
-                    return Err(OpError::Invalid("every note needs `ch` (a channel id, see `wave channels`)".into()));
+                    return Err(OpError::Invalid(
+                        "every note needs `ch` (a channel id, see `wave channels`)".into(),
+                    ));
                 }
             }
             p.resolve_note_channels(&mut pt.notes);
             if let Some(n) = pt.notes.iter().find(|n| p.channel(n.ch).is_none()) {
-                return Err(OpError::Missing { what: "channel", id: n.ch });
+                return Err(OpError::Missing {
+                    what: "channel",
+                    id: n.ch,
+                });
             }
+            pt.fit_len();
             bump(p, pt.id);
-            match p.patterns.iter_mut().find(|x| x.id == pt.id) {
+            let (id, len) = (pt.id, pt.len);
+            match p.patterns.iter_mut().find(|x| x.id == id) {
                 Some(x) => {
                     let old = x.len;
                     *x = pt;
-                    if (old - pattern.len).abs() > 1e-9 {
-                        follow_pattern_length(p, pattern.id, old, pattern.len);
+                    if (old - len).abs() > 1e-9 {
+                        follow_pattern_length(p, id, old, len);
                     }
                 }
                 None => p.patterns.push(pt),
@@ -299,7 +425,9 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         Op::PutChannel { channel, index } => {
             let c = channel;
             if !(c.vol.is_finite() && (0.0..=1.0).contains(&c.vol)) {
-                return Err(OpError::Invalid("channel vol is a fader position 0..1".into()));
+                return Err(OpError::Invalid(
+                    "channel vol is a fader position 0..1".into(),
+                ));
             }
             if !(c.pan.is_finite() && (-1.0..=1.0).contains(&c.pan)) {
                 return Err(OpError::Invalid("channel pan must be -1..1".into()));
@@ -309,7 +437,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             }
             if let ChannelSrc::Sample { source } = c.src {
                 if !p.sources.iter().any(|s| s.id == source) {
-                    return Err(OpError::Missing { what: "source", id: source });
+                    return Err(OpError::Missing {
+                        what: "source",
+                        id: source,
+                    });
                 }
             }
             if let ChannelSrc::Synth { synth } = &c.src {
@@ -318,14 +449,19 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                         return Err(OpError::Invalid(format!("synth has no parameter `{k}`")));
                     }
                     if !v.is_finite() {
-                        return Err(OpError::Invalid(format!("synth parameter `{k}` must be a number")));
+                        return Err(OpError::Invalid(format!(
+                            "synth parameter `{k}` must be a number"
+                        )));
                     }
                 }
             }
             if let ChannelSrc::Keys { keys } = &c.src {
                 let (r, y) = (crate::keys::RELEASE_MS, crate::keys::DYNAMICS);
                 if !(keys.release.is_finite() && (r.0..=r.1).contains(&keys.release)) {
-                    return Err(OpError::Invalid(format!("keys release must be {}..{} ms", r.0, r.1)));
+                    return Err(OpError::Invalid(format!(
+                        "keys release must be {}..{} ms",
+                        r.0, r.1
+                    )));
                 }
                 if !(keys.dynamics.is_finite() && (y.0..=y.1).contains(&keys.dynamics)) {
                     return Err(OpError::Invalid("keys dynamics must be 0..100 %".into()));
@@ -333,7 +469,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             }
             if let Some(ins) = c.insert {
                 if p.insert(ins).is_none() {
-                    return Err(OpError::Missing { what: "insert", id: ins });
+                    return Err(OpError::Missing {
+                        what: "insert",
+                        id: ins,
+                    });
                 }
             }
             bump(p, c.id);
@@ -342,7 +481,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     let x = &p.channels[i];
                     // knobs and mute/solo take the fast path; what a note plays or where it goes rebuilds
                     // a synth's sound (its parameters) takes the fast path too
-                    let same_kind = matches!((&x.src, &c.src), (ChannelSrc::Synth { .. }, ChannelSrc::Synth { .. }));
+                    let same_kind = matches!(
+                        (&x.src, &c.src),
+                        (ChannelSrc::Synth { .. }, ChannelSrc::Synth { .. })
+                    );
                     // (a piano's knobs are read from the channel table, which the timeline carries)
                     if (x.src != c.src && !same_kind) || x.insert != c.insert || x.root != c.root {
                         d.timeline = true;
@@ -366,7 +508,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         }
         Op::RemoveChannel { id } => {
             if p.channel(*id).is_none() {
-                return Err(OpError::Missing { what: "channel", id: *id });
+                return Err(OpError::Missing {
+                    what: "channel",
+                    id: *id,
+                });
             }
             p.channels.retain(|c| c.id != *id);
             for pt in p.patterns.iter_mut() {
@@ -379,29 +524,49 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 .sources
                 .iter_mut()
                 .find(|x| x.id == source.id)
-                .ok_or(OpError::Missing { what: "source", id: source.id })?;
+                .ok_or(OpError::Missing {
+                    what: "source",
+                    id: source.id,
+                })?;
             s.name = source.name.clone();
             s.color = source.color.clone();
         }
         Op::RemoveSource { id } => {
             p.sources.retain(|s| s.id != *id);
             // sampler channels playing it go, with their notes
-            let gone: Vec<Id> = p.channels.iter().filter(|c| c.src == ChannelSrc::Sample { source: *id }).map(|c| c.id).collect();
+            let gone: Vec<Id> = p
+                .channels
+                .iter()
+                .filter(|c| c.src == ChannelSrc::Sample { source: *id })
+                .map(|c| c.id)
+                .collect();
             p.channels.retain(|c| !gone.contains(&c.id));
             for pt in p.patterns.iter_mut() {
                 pt.notes.retain(|n| !gone.contains(&n.ch));
             }
-            p.clips.retain(|c| !(c.kind == ClipKind::Audio && c.source == *id));
+            p.clips
+                .retain(|c| !(c.kind == ClipKind::Audio && c.source == *id));
             // takes recorded into this source go too; a comp left without takes goes with its clips
             for cp in p.comps.iter_mut() {
-                let gone: Vec<Id> = cp.takes.iter().filter(|t| t.source == *id).map(|t| t.id).collect();
+                let gone: Vec<Id> = cp
+                    .takes
+                    .iter()
+                    .filter(|t| t.source == *id)
+                    .map(|t| t.id)
+                    .collect();
                 for t in gone {
                     cp.remove_take(t);
                 }
             }
-            let empty: Vec<Id> = p.comps.iter().filter(|c| c.takes.is_empty()).map(|c| c.id).collect();
+            let empty: Vec<Id> = p
+                .comps
+                .iter()
+                .filter(|c| c.takes.is_empty())
+                .map(|c| c.id)
+                .collect();
             p.comps.retain(|c| !c.takes.is_empty());
-            p.clips.retain(|c| !(c.kind == ClipKind::Comp && empty.contains(&c.source)));
+            p.clips
+                .retain(|c| !(c.kind == ClipKind::Comp && empty.contains(&c.source)));
             for t in p.clips.iter_mut().filter_map(|c| c.tune.as_mut()) {
                 if t.reference.is_some_and(|r| r.source == *id) {
                     t.reference = None;
@@ -411,7 +576,10 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         }
         Op::PutAutomation { automation } => {
             let mut a = automation.clone();
-            if a.points.iter().any(|q| !q.t.is_finite() || !q.v.is_finite()) {
+            if a.points
+                .iter()
+                .any(|q| !q.t.is_finite() || !q.v.is_finite())
+            {
                 return Err(OpError::Invalid("automation points must be numbers".into()));
             }
             a.points.sort_by(|x, y| x.t.total_cmp(&y.t));
@@ -425,9 +593,22 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             }
             d.timeline = true;
         }
+        Op::RemovePattern { id } => {
+            if !p.patterns.iter().any(|x| x.id == *id) {
+                return Err(OpError::Missing {
+                    what: "pattern",
+                    id: *id,
+                });
+            }
+            p.patterns.retain(|x| x.id != *id);
+            p.clips
+                .retain(|c| !(c.kind == ClipKind::Pat && c.source == *id));
+            d.timeline = true;
+        }
         Op::RemoveAutomation { id } => {
             p.automations.retain(|a| a.id != *id);
-            p.clips.retain(|c| !(c.kind == ClipKind::Auto && c.source == *id));
+            p.clips
+                .retain(|c| !(c.kind == ClipKind::Auto && c.source == *id));
             d.timeline = true;
         }
         Op::PutComp { comp } => {
@@ -444,10 +625,14 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         }
         Op::RemoveComp { id } => {
             if p.comp(*id).is_none() {
-                return Err(OpError::Missing { what: "comp", id: *id });
+                return Err(OpError::Missing {
+                    what: "comp",
+                    id: *id,
+                });
             }
             p.comps.retain(|c| c.id != *id);
-            p.clips.retain(|c| !(c.kind == ClipKind::Comp && c.source == *id));
+            p.clips
+                .retain(|c| !(c.kind == ClipKind::Comp && c.source == *id));
             d.timeline = true;
         }
         Op::PutNotebook { notebook } => {
@@ -482,7 +667,11 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
 /// their length (they were sized on purpose). Clips never run past the playlist end.
 fn follow_pattern_length(p: &mut Project, id: Id, old: f64, new: f64) {
     for c in p.clips.iter_mut() {
-        if c.kind == ClipKind::Pat && c.source == id && c.offset.abs() < 1e-9 && (c.len - old).abs() < 1e-6 {
+        if c.kind == ClipKind::Pat
+            && c.source == id
+            && c.offset.abs() < 1e-9
+            && (c.len - old).abs() < 1e-6
+        {
             c.len = new.min(TOTAL_BEATS - c.start).max(1.0 / 16.0);
         }
     }
@@ -500,10 +689,16 @@ pub fn validate_notebook(nb: &Notebook) -> Result<(), OpError> {
             return bad(format!("notebook page id {} is used twice", pg.id));
         }
         if !(1..=NOTEBOOK_MAX_BAR).contains(&pg.start_bar) {
-            return bad(format!("page {}: start bar must be 1..{NOTEBOOK_MAX_BAR}", pg.id));
+            return bad(format!(
+                "page {}: start bar must be 1..{NOTEBOOK_MAX_BAR}",
+                pg.id
+            ));
         }
         if pg.text.len() > NOTEBOOK_MAX_TEXT {
-            return bad(format!("page {}: text is longer than {NOTEBOOK_MAX_TEXT} bytes", pg.id));
+            return bad(format!(
+                "page {}: text is longer than {NOTEBOOK_MAX_TEXT} bytes",
+                pg.id
+            ));
         }
         if pg.name.chars().count() > 80 {
             return bad(format!("page {}: name is longer than 80 characters", pg.id));
@@ -522,23 +717,35 @@ pub fn validate_comp(p: &Project, comp: &Comp) -> Result<Comp, OpError> {
         return bad(format!("crossfade must be 0..{} s", MAX_XFADE));
     }
     for (i, t) in comp.takes.iter().enumerate() {
-        if !(t.start.is_finite() && t.len.is_finite() && t.offset.is_finite()) || t.len <= 0.0 || t.offset < 0.0 {
+        if !(t.start.is_finite() && t.len.is_finite() && t.offset.is_finite())
+            || t.len <= 0.0
+            || t.offset < 0.0
+        {
             return bad(format!("take {} has an invalid range", t.id));
         }
         if comp.takes[..i].iter().any(|x| x.id == t.id) {
             return bad(format!("take id {} is used twice", t.id));
         }
         if !p.sources.iter().any(|s| s.id == t.source) {
-            return Err(OpError::Missing { what: "take source", id: t.source });
+            return Err(OpError::Missing {
+                what: "take source",
+                id: t.source,
+            });
         }
     }
     let mut regions = comp.regions.clone();
     for r in &regions {
         if !(r.from.is_finite() && r.to.is_finite()) || r.to <= r.from {
-            return bad(format!("comp region {}..{} is empty or invalid", r.from, r.to));
+            return bad(format!(
+                "comp region {}..{} is empty or invalid",
+                r.from, r.to
+            ));
         }
         if comp.take(r.take).is_none() {
-            return Err(OpError::Missing { what: "take", id: r.take });
+            return Err(OpError::Missing {
+                what: "take",
+                id: r.take,
+            });
         }
         if let Some(x) = r.xfade {
             if !(x.is_finite() && (0.0..=MAX_XFADE).contains(&x)) {
@@ -550,7 +757,10 @@ pub fn validate_comp(p: &Project, comp: &Comp) -> Result<Comp, OpError> {
     if regions.windows(2).any(|w| w[1].from < w[0].to - 1e-9) {
         return bad("comp regions overlap".into());
     }
-    Ok(Comp { regions: merge_regions(regions), ..comp.clone() })
+    Ok(Comp {
+        regions: merge_regions(regions),
+        ..comp.clone()
+    })
 }
 
 fn validate_fx(fx: &Fx) -> Result<(), OpError> {

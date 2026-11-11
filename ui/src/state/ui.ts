@@ -12,11 +12,11 @@ export interface PitchWin { clipId: Id; x: number; y: number; w: number; h: numb
 export interface EditorWin { clipId: Id; x: number; y: number; w: number; h: number }
 export interface MusicWin { clipId?: Id; fxId?: Id }
 /**
- * The pattern editor (Channel Rack + piano roll). It lives in the effect-window layer: F5 /
- * a playlist click hide it with the effect windows, "Okna" brings it back. `ch`: selected
- * channel (velocity lane, piano roll); `view`: rack or the piano roll of `ch`.
+ * A pattern window: the Channel Rack (F6) or the Piano roll (F7). Both live in the effect-window
+ * layer (F5 / a playlist click hide them with the effect windows, "Okna" brings them back) and
+ * both show the current pattern (`UiState.pat`); the piano roll edits the selected channel.
  */
-export interface PatWin { pat: Id; ch: Id | null; view: 'rack' | 'roll'; x: number; y: number; w: number; h: number; z: number }
+export interface PatWin { x: number; y: number; w: number; h: number; z: number }
 
 export type MenuItem =
   | { t: 'title'; label: string }
@@ -58,7 +58,14 @@ export interface UiState {
   eqSel: Record<number, number>;
   fetMode: Record<number, 'gr' | 'out'>;
   pitchEd: PitchWin | null;
-  patWin: PatWin | null;
+  /** The current pattern (FL's pattern selector): what the Channel Rack, the Piano roll and PAT mode show. */
+  pat: Id | null;
+  /** The selected Channel Rack channel: the Piano roll's channel, the graph editor's, the typing keyboard's. */
+  selCh: Id | null;
+  rackWin: PatWin | null;
+  rollWin: PatWin | null;
+  /** The Channel Rack's graph editor (per-step velocity / key of the selected channel) is shown. */
+  rackGraph: 'vel' | 'key' | null;
   /** True while the engine loops a pattern on its own (telemetry `patBeat` ≥ 0). */
   patPlaying: boolean;
   /** track id → take lanes expanded */
@@ -83,7 +90,7 @@ export const [U, setU] = createStore<UiState>({
   plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null, fxPicker: null, musicWin: null,
   readout: t('d.ui.ready'),
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
-  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, patWin: null, patPlaying: false, takesOpen: {}, compSel: null, autoEdit: null, zTop: 1, marquee: null,
+  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, pat: 1, selCh: null, rackWin: null, rollWin: null, rackGraph: null, patPlaying: false, takesOpen: {}, compSel: null, autoEdit: null, zTop: 1, marquee: null,
   playing: false, previewing: false, previewPath: null,
 });
 

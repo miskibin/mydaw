@@ -27,7 +27,9 @@ pub enum VoiceKind {
     Keys,
     /// A synth channel: its notes go to the channel's `poly::SynthInst`, not this pool.
     Synth,
-    Click { accent: bool },
+    Click {
+        accent: bool,
+    },
 }
 
 impl VoiceKind {
@@ -174,7 +176,10 @@ pub fn mtof(key: f32) -> f32 {
 /// Balance pan law shared with the mixer: the far side is attenuated linearly.
 #[inline]
 pub fn pan_gains(pan: f32) -> (f32, f32) {
-    (if pan > 0.0 { 1.0 - pan } else { 1.0 }, if pan < 0.0 { 1.0 + pan } else { 1.0 })
+    (
+        if pan > 0.0 { 1.0 - pan } else { 1.0 },
+        if pan < 0.0 { 1.0 + pan } else { 1.0 },
+    )
 }
 
 /// Ends a held voice with a 20 ms release (the bass tail; one-shots just ring out).
@@ -182,15 +187,35 @@ fn release(v: &mut Voice, sr: f32) {
     v.held = false;
     v.sus = false;
     // a piano note starts its own release (the channel's release time) right away
-    v.len = if v.kind == VoiceKind::Keys { v.t } else { v.t.saturating_add((0.02 * sr) as u32) };
+    v.len = if v.kind == VoiceKind::Keys {
+        v.t
+    } else {
+        v.t.saturating_add((0.02 * sr) as u32)
+    };
 }
 
 impl VoicePool {
     pub fn new(sr: f32) -> Self {
         let keys = (0..KEYS_BUSES)
-            .map(|_| KeysBus { chan_id: 0, dest: Dest::Click, fed: false, tail: 0, used: false, lim: OutLimiter::new(sr), l: vec![0.0; BUS_FRAMES], r: vec![0.0; BUS_FRAMES] })
+            .map(|_| KeysBus {
+                chan_id: 0,
+                dest: Dest::Click,
+                fed: false,
+                tail: 0,
+                used: false,
+                lim: OutLimiter::new(sr),
+                l: vec![0.0; BUS_FRAMES],
+                r: vec![0.0; BUS_FRAMES],
+            })
             .collect();
-        Self { voices: vec![Voice::dead(); MAX_VOICES], keys, sr, seed: 0x1234_5678, pedal: false, bend: 1.0 }
+        Self {
+            voices: vec![Voice::dead(); MAX_VOICES],
+            keys,
+            sr,
+            seed: 0x1234_5678,
+            pedal: false,
+            bend: 1.0,
+        }
     }
 
     pub fn set_sr(&mut self, sr: f32) {
@@ -217,7 +242,9 @@ impl VoicePool {
     pub fn note_on(&mut self, ch: &ChanRt, idx: usize, dest: Dest, key: u8, vel: f32) -> bool {
         // the same key struck again releases its previous note
         self.release_where(|v| v.held && v.chan_id == ch.id && v.key == key);
-        let Some(i) = self.note_slot(ch, idx, dest, 0, 3600.0, key, vel, 1.0) else { return false };
+        let Some(i) = self.note_slot(ch, idx, dest, 0, 3600.0, key, vel, 1.0) else {
+            return false;
+        };
         let v = &mut self.voices[i];
         v.held = true;
         v.key = key;
@@ -227,7 +254,11 @@ impl VoicePool {
     /// A live key went up. With the pedal down the note keeps sounding until it comes up.
     pub fn note_off(&mut self, chan_id: Id, key: u8) {
         let (pedal, sr) = (self.pedal, self.sr);
-        for v in self.voices.iter_mut().filter(|v| v.alive && v.held && v.chan_id == chan_id && v.key == key) {
+        for v in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.alive && v.held && v.chan_id == chan_id && v.key == key)
+        {
             if pedal {
                 v.sus = true;
             } else {
@@ -265,7 +296,11 @@ impl VoicePool {
     /// A new channel table arrived: point every voice at its channel's new index, and
     /// silence voices whose channel is gone. RT-safe (no allocation).
     pub fn remap(&mut self, chans: &[ChanRt]) {
-        for v in self.voices.iter_mut().filter(|v| v.alive && v.chan != NO_CHAN) {
+        for v in self
+            .voices
+            .iter_mut()
+            .filter(|v| v.alive && v.chan != NO_CHAN)
+        {
             match chans.iter().position(|c| c.id == v.chan_id) {
                 Some(i) => v.chan = i,
                 None => v.alive = false,
@@ -275,26 +310,68 @@ impl VoicePool {
 
     /// The metronome click.
     pub fn click(&mut self, accent: bool, delay: u32) {
-        self.trigger(VoiceKind::Click { accent }, Dest::Click, NO_CHAN, 0, delay, 0.06, 0.0, 1.0, 1.0);
+        self.trigger(
+            VoiceKind::Click { accent },
+            Dest::Click,
+            NO_CHAN,
+            0,
+            delay,
+            0.06,
+            0.0,
+            1.0,
+            1.0,
+        );
     }
 
     /// A note of channel `ch` (index `idx` in the table). `key` is a MIDI key, `vel` the
     /// velocity 0..1 and `gain` level on top of it (the track gain when the channel skips the track).
     /// Returns false when nothing can play (a sampler channel without audio).
     #[allow(clippy::too_many_arguments)]
-    pub fn note(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32) -> bool {
-        self.note_slot(ch, idx, dest, delay, len_s, key, vel, gain).is_some()
+    pub fn note(
+        &mut self,
+        ch: &ChanRt,
+        idx: usize,
+        dest: Dest,
+        delay: u32,
+        len_s: f32,
+        key: u8,
+        vel: f32,
+        gain: f32,
+    ) -> bool {
+        self.note_slot(ch, idx, dest, delay, len_s, key, vel, gain)
+            .is_some()
     }
 
     /// Like [`Self::note`], returning the voice slot that was started.
     #[allow(clippy::too_many_arguments)]
-    fn note_slot(&mut self, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32) -> Option<usize> {
+    fn note_slot(
+        &mut self,
+        ch: &ChanRt,
+        idx: usize,
+        dest: Dest,
+        delay: u32,
+        len_s: f32,
+        key: u8,
+        vel: f32,
+        gain: f32,
+    ) -> Option<usize> {
         let level = vel * gain;
         match ch.kind {
             VoiceKind::Sample => {
                 let a = ch.sample.as_ref()?;
-                let rate = a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0);
-                Some(self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, key as f32, level, rate))
+                let rate =
+                    a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0);
+                Some(self.trigger(
+                    VoiceKind::Sample,
+                    dest,
+                    idx,
+                    ch.id,
+                    delay,
+                    len_s,
+                    key as f32,
+                    level,
+                    rate,
+                ))
             }
             VoiceKind::Keys => {
                 let bank = ch.keys.as_ref()?;
@@ -302,33 +379,82 @@ impl VoicePool {
                 let a = bank.audio(zone)?;
                 let rate = a.sr as f64 / self.sr as f64 * 2f64.powf(semis as f64 / 12.0);
                 // the same key struck again: the string's previous note is damped
-                for v in self.voices.iter_mut().filter(|v| v.alive && v.kind == VoiceKind::Keys && v.chan_id == ch.id && v.key == key) {
+                for v in self.voices.iter_mut().filter(|v| {
+                    v.alive && v.kind == VoiceKind::Keys && v.chan_id == ch.id && v.key == key
+                }) {
                     v.held = false;
                     v.sus = false;
                     v.len = v.len.min(v.t);
                 }
-                let i = self.trigger(VoiceKind::Keys, dest, idx, ch.id, delay, len_s, key as f32, hit * gain, rate);
+                let i = self.trigger(
+                    VoiceKind::Keys,
+                    dest,
+                    idx,
+                    ch.id,
+                    delay,
+                    len_s,
+                    key as f32,
+                    hit * gain,
+                    rate,
+                );
                 self.voices[i].zone = zone;
                 self.voices[i].key = key;
                 Some(i)
             }
             VoiceKind::Synth => None,
-            kind => Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, level, 1.0)),
+            // built-in drums follow the key like a sampler: the root plays them as designed
+            kind @ (VoiceKind::Kick | VoiceKind::Clap | VoiceKind::Hat) => {
+                let rate = 2f64.powf((key as f64 - ch.root as f64) / 12.0);
+                Some(self.trigger(
+                    kind, dest, idx, ch.id, delay, len_s, key as f32, level, rate,
+                ))
+            }
+            kind => {
+                Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, level, 1.0))
+            }
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn trigger(&mut self, kind: VoiceKind, dest: Dest, chan: usize, chan_id: Id, delay: u32, len_s: f32, key: f32, vel: f32, rate: f64) -> usize {
+    fn trigger(
+        &mut self,
+        kind: VoiceKind,
+        dest: Dest,
+        chan: usize,
+        chan_id: Id,
+        delay: u32,
+        len_s: f32,
+        key: f32,
+        vel: f32,
+        rate: f64,
+    ) -> usize {
         // steal the oldest voice if the pool is full
         let idx = match self.voices.iter().position(|v| !v.alive) {
             Some(i) => i,
-            None => (0..self.voices.len()).max_by_key(|&i| self.voices[i].t).unwrap_or(0),
+            None => (0..self.voices.len())
+                .max_by_key(|&i| self.voices[i].t)
+                .unwrap_or(0),
         };
-        self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        self.seed = self
+            .seed
+            .wrapping_mul(1_664_525)
+            .wrapping_add(1_013_904_223);
         let mut filt = Biquad::default();
         match kind {
-            VoiceKind::Hat => filt.set(FilterType::Highpass, self.sr, 7000.0, 0.707, 0.0),
-            VoiceKind::Clap => filt.set(FilterType::Bandpass, self.sr, 1400.0, 0.9, 0.0),
+            VoiceKind::Hat => filt.set(
+                FilterType::Highpass,
+                self.sr,
+                (7000.0 * rate as f32).clamp(200.0, self.sr * 0.45),
+                0.707,
+                0.0,
+            ),
+            VoiceKind::Clap => filt.set(
+                FilterType::Bandpass,
+                self.sr,
+                (1400.0 * rate as f32).clamp(60.0, self.sr * 0.45),
+                0.9,
+                0.0,
+            ),
             VoiceKind::Bass => filt.set(FilterType::Lowpass, self.sr, 900.0, 0.707, 0.0),
             _ => {}
         }
@@ -360,7 +486,14 @@ impl VoicePool {
     /// Adds every live voice into its destination: a track buffer, an insert's input, or
     /// the click bus. Built-in instruments are mono (then the channel's pan); samples are
     /// stereo (balance).
-    pub fn render(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], inserts: &mut [InsertRt], click: &mut [f32], chans: &[ChanRt]) {
+    pub fn render(
+        &mut self,
+        n: usize,
+        tracks: &mut [(Vec<f32>, Vec<f32>)],
+        inserts: &mut [InsertRt],
+        click: &mut [f32],
+        chans: &[ChanRt],
+    ) {
         let sr = self.sr;
         let bend = self.bend;
         let bussed = n <= BUS_FRAMES;
@@ -377,7 +510,14 @@ impl VoicePool {
             let (g, pan, g0, pan0, sample, piano) = match chans.get(v.chan) {
                 Some(c) => {
                     let on = if c.on { v.vel } else { 0.0 };
-                    (c.gain * on, c.pan, c.gain0 * on, c.pan0, c.sample.as_deref(), c.keys.as_deref().map(|b| (b, c.keys_release)))
+                    (
+                        c.gain * on,
+                        c.pan,
+                        c.gain0 * on,
+                        c.pan0,
+                        c.sample.as_deref(),
+                        c.keys.as_deref().map(|b| (b, c.keys_release)),
+                    )
                 }
                 None if v.chan == NO_CHAN => (v.vel, 0.0, v.vel, 0.0, None, None),
                 None => {
@@ -415,12 +555,17 @@ impl VoicePool {
             };
             let stereo = !out_r.is_empty();
             if v.kind == VoiceKind::Keys {
-                let Some((a, release)) = piano.and_then(|(b, r)| b.audio(v.zone).map(|a| (a, r))) else {
+                let Some((a, release)) = piano.and_then(|(b, r)| b.audio(v.zone).map(|a| (a, r)))
+                else {
                     v.alive = false;
                     continue;
                 };
                 // the channel's bus (through the limiter), or straight out when every bus is taken
-                let bus = if bussed { keys_bus(&mut self.keys, v.chan_id, v.dest) } else { None };
+                let bus = if bussed {
+                    keys_bus(&mut self.keys, v.chan_id, v.dest)
+                } else {
+                    None
+                };
                 let (out_l, out_r, stereo): (&mut [f32], &mut [f32], bool) = match bus {
                     Some(b) => {
                         b.fed = true;
@@ -481,9 +626,12 @@ impl VoicePool {
                 let t = v.t as f32 / sr;
                 let (s, done) = match v.kind {
                     VoiceKind::Kick => {
-                        let f = exp_ramp(150.0, 42.0, t, 0.12);
+                        let f = exp_ramp(150.0, 42.0, t, 0.12) * v.rate as f32;
                         v.phase = (v.phase + f / sr).fract();
-                        ((v.phase * TAU).sin() * exp_ramp(0.9, 0.001, t, 0.38), t > 0.4)
+                        (
+                            (v.phase * TAU).sin() * exp_ramp(0.9, 0.001, t, 0.38),
+                            t > 0.4,
+                        )
                     }
                     VoiceKind::Hat | VoiceKind::Clap => {
                         v.rng ^= v.rng << 13;
@@ -494,7 +642,11 @@ impl VoicePool {
                         if v.kind == VoiceKind::Hat {
                             (x * exp_ramp(0.22, 0.001, t, 0.05), t > 0.06)
                         } else {
-                            let a = if t < 0.003 { 0.7 * t / 0.003 } else { exp_ramp(0.7, 0.001, t - 0.003, 0.197) };
+                            let a = if t < 0.003 {
+                                0.7 * t / 0.003
+                            } else {
+                                exp_ramp(0.7, 0.001, t - 0.003, 0.197)
+                            };
                             (x * a, t > 0.25)
                         }
                     }
@@ -523,7 +675,11 @@ impl VoicePool {
                         let f = if accent { 1760.0 } else { 1320.0 };
                         v.phase = (v.phase + f / sr).fract();
                         let sq = if v.phase < 0.5 { 1.0 } else { -1.0 };
-                        let a = if t < 0.002 { exp_ramp(0.0001, 0.22, t, 0.002) } else { exp_ramp(0.22, 0.0001, t - 0.002, 0.048) };
+                        let a = if t < 0.002 {
+                            exp_ramp(0.0001, 0.22, t, 0.002)
+                        } else {
+                            exp_ramp(0.22, 0.0001, t - 0.002, 0.048)
+                        };
                         (sq * a, t > 0.06)
                     }
                     VoiceKind::Sample | VoiceKind::Synth | VoiceKind::Keys => (0.0, true),
@@ -545,7 +701,12 @@ impl VoicePool {
 
     /// Each Keys bus through its limiter into its destination; a bus no voice feeds any more
     /// flushes the limiter's look-ahead, then is free again.
-    fn flush_keys(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], inserts: &mut [InsertRt]) {
+    fn flush_keys(
+        &mut self,
+        n: usize,
+        tracks: &mut [(Vec<f32>, Vec<f32>)],
+        inserts: &mut [InsertRt],
+    ) {
         for b in self.keys.iter_mut().filter(|b| b.used) {
             if b.fed {
                 b.tail = OutLimiter::LOOK;
@@ -583,7 +744,10 @@ impl VoicePool {
 
 /// The bus of `chan_id` playing into `dest`, or a free one claimed for it.
 fn keys_bus(buses: &mut [KeysBus], chan_id: Id, dest: Dest) -> Option<&mut KeysBus> {
-    let i = buses.iter().position(|b| b.used && b.chan_id == chan_id && b.dest == dest).or_else(|| buses.iter().position(|b| !b.used))?;
+    let i = buses
+        .iter()
+        .position(|b| b.used && b.chan_id == chan_id && b.dest == dest)
+        .or_else(|| buses.iter().position(|b| !b.used))?;
     let b = &mut buses[i];
     if !b.used {
         b.used = true;

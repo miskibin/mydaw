@@ -67,7 +67,15 @@ pub struct Biquad {
 
 impl Default for Biquad {
     fn default() -> Self {
-        Self { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0, z1: 0.0, z2: 0.0 }
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+            z1: 0.0,
+            z2: 0.0,
+        }
     }
 }
 
@@ -91,11 +99,32 @@ impl Biquad {
         let alpha = sw / (2.0 * q);
         let a = 10f32.powf(gain_db / 40.0);
         let (b0, b1, b2, a0, a1, a2) = match t {
-            FilterType::Lowpass => ((1.0 - cw) / 2.0, 1.0 - cw, (1.0 - cw) / 2.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
-            FilterType::Highpass => ((1.0 + cw) / 2.0, -(1.0 + cw), (1.0 + cw) / 2.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
+            FilterType::Lowpass => (
+                (1.0 - cw) / 2.0,
+                1.0 - cw,
+                (1.0 - cw) / 2.0,
+                1.0 + alpha,
+                -2.0 * cw,
+                1.0 - alpha,
+            ),
+            FilterType::Highpass => (
+                (1.0 + cw) / 2.0,
+                -(1.0 + cw),
+                (1.0 + cw) / 2.0,
+                1.0 + alpha,
+                -2.0 * cw,
+                1.0 - alpha,
+            ),
             FilterType::Bandpass => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
             FilterType::Notch => (1.0, -2.0 * cw, 1.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha),
-            FilterType::Peak => (1.0 + alpha * a, -2.0 * cw, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cw, 1.0 - alpha / a),
+            FilterType::Peak => (
+                1.0 + alpha * a,
+                -2.0 * cw,
+                1.0 - alpha * a,
+                1.0 + alpha / a,
+                -2.0 * cw,
+                1.0 - alpha / a,
+            ),
             FilterType::LowShelf => {
                 let s = 2.0 * a.sqrt() * alpha;
                 (
@@ -152,7 +181,9 @@ impl Biquad {
         let ni = -(self.b1 * s1 + self.b2 * s2);
         let dr = 1.0 + self.a1 * c1 + self.a2 * c2;
         let di = -(self.a1 * s1 + self.a2 * s2);
-        10.0 * ((nr * nr + ni * ni) / (dr * dr + di * di)).max(1e-30).log10()
+        10.0 * ((nr * nr + ni * ni) / (dr * dr + di * di))
+            .max(1e-30)
+            .log10()
     }
 }
 
@@ -219,7 +250,18 @@ pub struct Eq {
 
 impl Default for Eq {
     fn default() -> Self {
-        Self { sr: 0.0, bands: [BandState::default(); EQ_BANDS], p: [Default::default(); EQ_BANDS], n_on: 0, out: 1.0, gain: Smooth::default(), last: None, att: 0.0, rel: 0.0, tick: 0 }
+        Self {
+            sr: 0.0,
+            bands: [BandState::default(); EQ_BANDS],
+            p: [Default::default(); EQ_BANDS],
+            n_on: 0,
+            out: 1.0,
+            gain: Smooth::default(),
+            last: None,
+            att: 0.0,
+            rel: 0.0,
+            tick: 0,
+        }
     }
 }
 
@@ -255,7 +297,11 @@ impl Eq {
             st.l[k].set(t, sr, b.f, 0.707, 0.0);
             st.r[k].set(t, sr, b.f, 0.707, 0.0);
         }
-        st.tilt_out = if b.kind == 7 { db_to_gain(-g / 2.0) } else { 1.0 };
+        st.tilt_out = if b.kind == 7 {
+            db_to_gain(-g / 2.0)
+        } else {
+            1.0
+        };
     }
 }
 
@@ -286,10 +332,16 @@ impl Processor for Eq {
             if self.p[i].on {
                 self.n_on = i + 1;
             }
-            let dyn_g = if self.p[i].dynamic { self.bands[i].dyn_g } else { 0.0 };
+            let dyn_g = if self.p[i].dynamic {
+                self.bands[i].dyn_g
+            } else {
+                0.0
+            };
             self.design(i, dyn_g);
             let b = self.p[i];
-            self.bands[i].det.set(FilterType::Bandpass, self.sr, b.f, b.q.max(0.3), 0.0);
+            self.bands[i]
+                .det
+                .set(FilterType::Bandpass, self.sr, b.f, b.q.max(0.3), 0.0);
         }
     }
     fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
@@ -310,9 +362,17 @@ impl Processor for Eq {
                     };
                     let d = st.det.tick(src);
                     let e = d * d;
-                    st.env = if e > st.env { e + (st.env - e) * self.att } else { e + (st.env - e) * self.rel };
+                    st.env = if e > st.env {
+                        e + (st.env - e) * self.att
+                    } else {
+                        e + (st.env - e) * self.rel
+                    };
                 }
-                let n = if bp.kind == 0 || bp.kind == 4 { bp.stages as usize } else { 1 };
+                let n = if bp.kind == 0 || bp.kind == 4 {
+                    bp.stages as usize
+                } else {
+                    1
+                };
                 let run = |f: &mut [Biquad; EQ_STAGES], mut x: f32| {
                     for s in f.iter_mut().take(n) {
                         x = s.tick(x);
@@ -325,7 +385,11 @@ impl Processor for Eq {
                     2 => b = run(&mut st.r, b) * to,
                     3 | 4 => {
                         let (m, s) = ((a + b) * 0.5, (a - b) * 0.5);
-                        let (m, s) = if bp.place == 3 { (run(&mut st.l, m) * to, s) } else { (m, run(&mut st.l, s) * to) };
+                        let (m, s) = if bp.place == 3 {
+                            (run(&mut st.l, m) * to, s)
+                        } else {
+                            (m, run(&mut st.l, s) * to)
+                        };
                         a = m + s;
                         b = m - s;
                     }
@@ -364,7 +428,9 @@ impl Processor for Eq {
     }
     fn reset(&mut self) {
         for st in self.bands.iter_mut() {
-            st.l.iter_mut().chain(st.r.iter_mut()).for_each(Biquad::reset);
+            st.l.iter_mut()
+                .chain(st.r.iter_mut())
+                .for_each(Biquad::reset);
             st.env = 0.0;
         }
     }
@@ -378,7 +444,11 @@ impl Processor for Eq {
             if b.dynamic {
                 return None;
             }
-            let stages = if b.kind == 0 || b.kind == 4 { b.stages.max(1) as f32 } else { 1.0 };
+            let stages = if b.kind == 0 || b.kind == 4 {
+                b.stages.max(1) as f32
+            } else {
+                1.0
+            };
             let boost = 10f32.powf(b.g.abs().min(48.0) / 40.0);
             tau += stages * b.q.max(0.707) * boost / (PI * b.f.max(5.0));
         }
@@ -415,7 +485,20 @@ pub struct Comp {
 }
 impl Default for Comp {
     fn default() -> Self {
-        Self { sr: 48000.0, thr: -18.0, ratio: 4.0, att: 0.0, rel: 0.0, makeup: 1.0, env_db: 0.0, gr: 0.0, knee: 6.0, rms: false, ms: 0.0, k_ms: 0.0 }
+        Self {
+            sr: 48000.0,
+            thr: -18.0,
+            ratio: 4.0,
+            att: 0.0,
+            rel: 0.0,
+            makeup: 1.0,
+            env_db: 0.0,
+            gr: 0.0,
+            knee: 6.0,
+            rms: false,
+            ms: 0.0,
+            k_ms: 0.0,
+        }
     }
 }
 impl Comp {
@@ -460,7 +543,11 @@ impl Processor for Comp {
             };
             let target = self.curve(x);
             // envelope on the gain reduction: attack when reducing more
-            let k = if target < self.env_db { self.att } else { self.rel };
+            let k = if target < self.env_db {
+                self.att
+            } else {
+                self.rel
+            };
             self.env_db = target + (self.env_db - target) * k;
             let g = db_to_gain(self.env_db) * self.makeup;
             l[i] *= g;
@@ -477,7 +564,14 @@ impl Processor for Comp {
     fn tail_samples(&self) -> Option<usize> {
         // silent in = silent out; what has to settle is the gain-reduction envelope (and,
         // in RMS mode, the mean-square detector: flushed to zero within ~0.5 s)
-        Some(decay_samples(self.rel, 17.0) + if self.rms { (self.sr * 0.5) as usize } else { 0 })
+        Some(
+            decay_samples(self.rel, 17.0)
+                + if self.rms {
+                    (self.sr * 0.5) as usize
+                } else {
+                    0
+                },
+        )
     }
     fn gain_reduction_db(&self) -> f32 {
         self.gr
@@ -548,7 +642,11 @@ impl Processor for Delay {
         }
         let t = self.time.max(self.st.v).clamp(1.0, (n - 3) as f32);
         // every repeat is `fb` of the one before: down to -140 dB
-        let reps = if self.fb < 1e-4 { 1.0 } else { (16.2 / -self.fb.ln()).ceil().max(1.0) };
+        let reps = if self.fb < 1e-4 {
+            1.0
+        } else {
+            (16.2 / -self.fb.ln()).ceil().max(1.0)
+        };
         Some(((reps + 1.0) * t + 0.4 * self.sr) as usize)
     }
     fn park(&mut self) {
@@ -571,7 +669,11 @@ struct Line {
 }
 impl Line {
     fn new(len: usize) -> Self {
-        Self { buf: vec![0.0; len.max(1)], len: len.max(1), w: 0 }
+        Self {
+            buf: vec![0.0; len.max(1)],
+            len: len.max(1),
+            w: 0,
+        }
     }
     #[inline]
     fn read(&self) -> f32 {
@@ -658,8 +760,14 @@ impl Processor for Reverb {
         self.sr = sr;
         self.pre = vec![0.0; (sr * 0.21) as usize + 2];
         self.pre_w = 0;
-        self.diff = DIFF_MS.iter().map(|ms| Line::new((ms / 1000.0 * sr) as usize)).collect();
-        self.lines = LINE_MS.iter().map(|ms| Line::new((ms / 1000.0 * sr) as usize)).collect();
+        self.diff = DIFF_MS
+            .iter()
+            .map(|ms| Line::new((ms / 1000.0 * sr) as usize))
+            .collect();
+        self.lines = LINE_MS
+            .iter()
+            .map(|ms| Line::new((ms / 1000.0 * sr) as usize))
+            .collect();
         self.lp = [0.0; FDN];
         self.wet = vec![0.0; max.max(1)];
         self.apply();
@@ -714,8 +822,14 @@ impl Processor for Reverb {
             for k in 0..FDN {
                 self.lines[k].write(flush(o[k] * s + d));
             }
-            let wl = self.lines[0].read() + self.lines[2].read() + self.lines[4].read() + self.lines[6].read();
-            let wr = self.lines[1].read() + self.lines[3].read() + self.lines[5].read() + self.lines[7].read();
+            let wl = self.lines[0].read()
+                + self.lines[2].read()
+                + self.lines[4].read()
+                + self.lines[6].read();
+            let wr = self.lines[1].read()
+                + self.lines[3].read()
+                + self.lines[5].read()
+                + self.lines[7].read();
             let (wl, wr) = (self.hp_l.tick(wl * 0.35), self.hp_r.tick(wr * 0.35));
             let mid = (wl + wr) * 0.5;
             let side = (wl - wr) * 0.5 * self.width;
@@ -763,7 +877,18 @@ pub struct Limiter {
 }
 impl Default for Limiter {
     fn default() -> Self {
-        Self { sr: 48000.0, gain: 1.0, ceil: 0.966, dl: vec![], dr: vec![], req: vec![], w: 0, env: 1.0, rel: 0.999, gr: 0.0 }
+        Self {
+            sr: 48000.0,
+            gain: 1.0,
+            ceil: 0.966,
+            dl: vec![],
+            dr: vec![],
+            req: vec![],
+            w: 0,
+            env: 1.0,
+            rel: 0.999,
+            gr: 0.0,
+        }
     }
 }
 impl Processor for Limiter {
@@ -797,7 +922,11 @@ impl Processor for Limiter {
             for &g in &self.req {
                 target = target.min(g);
             }
-            self.env = if target < self.env { target } else { target + (self.env - target) * self.rel };
+            self.env = if target < self.env {
+                target
+            } else {
+                target + (self.env - target) * self.rel
+            };
             let (oa, ob) = (self.dl[self.w], self.dr[self.w]);
             l[i] = (oa * self.env).clamp(-self.ceil, self.ceil);
             r[i] = (ob * self.env).clamp(-self.ceil, self.ceil);
@@ -838,7 +967,11 @@ mod tests {
         assert!(mag_db(&q, 50.0, 48000.0) < -40.0);
         // a 50 Hz hum notch must leave a voice's body alone
         for f in [100.0, 160.0, 1000.0] {
-            assert!(mag_db(&q, f, 48000.0) > -0.3, "{f} Hz cut by {:.1} dB", mag_db(&q, f, 48000.0));
+            assert!(
+                mag_db(&q, f, 48000.0) > -0.3,
+                "{f} Hz cut by {:.1} dB",
+                mag_db(&q, f, 48000.0)
+            );
         }
     }
     use crate::catalog::{new_fx, param_block};
@@ -848,7 +981,10 @@ mod tests {
         p.prepare(48000.0, 256);
         p.set_params(&param_block(&new_fx(1, kind, 120.0)));
         let mut out = Vec::new();
-        let ctx = ProcessCtx { sample_rate: 48000.0, ..Default::default() };
+        let ctx = ProcessCtx {
+            sample_rate: 48000.0,
+            ..Default::default()
+        };
         let mut i = 0;
         while i < n {
             let mut l: Vec<f32> = (i..i + 256).map(&input).collect();
@@ -863,7 +999,12 @@ mod tests {
     #[test]
     fn flat_eq_is_transparent() {
         let (out, _) = run(FxKind::Eq, |i| (i as f32 * 0.05).sin() * 0.5, 4800);
-        let err: f32 = out.iter().enumerate().skip(1000).map(|(i, y)| (y - (i as f32 * 0.05).sin() * 0.5).abs()).fold(0.0, f32::max);
+        let err: f32 = out
+            .iter()
+            .enumerate()
+            .skip(1000)
+            .map(|(i, y)| (y - (i as f32 * 0.05).sin() * 0.5).abs())
+            .fold(0.0, f32::max);
         assert!(err < 1e-3, "flat EQ changed the signal by {err}");
     }
 
@@ -876,8 +1017,15 @@ mod tests {
         p
     }
 
-    fn rms_after(p: &mut Box<dyn Processor>, l0: impl Fn(usize) -> f32, r0: impl Fn(usize) -> f32) -> (f32, f32) {
-        let ctx = ProcessCtx { sample_rate: 48000.0, ..Default::default() };
+    fn rms_after(
+        p: &mut Box<dyn Processor>,
+        l0: impl Fn(usize) -> f32,
+        r0: impl Fn(usize) -> f32,
+    ) -> (f32, f32) {
+        let ctx = ProcessCtx {
+            sample_rate: 48000.0,
+            ..Default::default()
+        };
         let (mut el, mut er) = (0f32, 0f32);
         for blk in 0..200 {
             let mut l: Vec<f32> = (blk * 256..blk * 256 + 256).map(&l0).collect();
@@ -894,23 +1042,54 @@ mod tests {
     #[test]
     fn dynamic_band_only_acts_when_loud() {
         use crate::model::{BandType, DynBand, EqBand, Placement};
-        let band = EqBand { on: true, kind: BandType::Peak, f: 1000.0, g: 0.0, q: 1.0, slope: 12, place: Placement::Stereo, dynamic: Some(DynBand { range: -12.0, thr: -30.0 }) };
-        let sine = |a: f32| move |i: usize| (i as f32 * 1000.0 * std::f32::consts::TAU / 48000.0).sin() * a;
+        let band = EqBand {
+            on: true,
+            kind: BandType::Peak,
+            f: 1000.0,
+            g: 0.0,
+            q: 1.0,
+            slope: 12,
+            place: Placement::Stereo,
+            dynamic: Some(DynBand {
+                range: -12.0,
+                thr: -30.0,
+            }),
+        };
+        let sine = |a: f32| {
+            move |i: usize| (i as f32 * 1000.0 * std::f32::consts::TAU / 48000.0).sin() * a
+        };
         let mut p = eq_with(vec![band]);
         let (loud, _) = rms_after(&mut p, sine(0.5), sine(0.5));
         let mut flat = eq_with(vec![]);
         let (loud_ref, _) = rms_after(&mut flat, sine(0.5), sine(0.5));
-        assert!(gain_to_db(loud / loud_ref) < -9.0, "loud not ducked: {}", gain_to_db(loud / loud_ref));
+        assert!(
+            gain_to_db(loud / loud_ref) < -9.0,
+            "loud not ducked: {}",
+            gain_to_db(loud / loud_ref)
+        );
         let mut p = eq_with(vec![band]);
         let (quiet, _) = rms_after(&mut p, sine(0.005), sine(0.005));
         let (quiet_ref, _) = rms_after(&mut eq_with(vec![]), sine(0.005), sine(0.005));
-        assert!(gain_to_db(quiet / quiet_ref).abs() < 0.5, "quiet changed: {}", gain_to_db(quiet / quiet_ref));
+        assert!(
+            gain_to_db(quiet / quiet_ref).abs() < 0.5,
+            "quiet changed: {}",
+            gain_to_db(quiet / quiet_ref)
+        );
     }
 
     #[test]
     fn mid_band_leaves_the_side_alone() {
         use crate::model::{BandType, EqBand, Placement};
-        let cut = EqBand { on: true, kind: BandType::Peak, f: 1000.0, g: -18.0, q: 1.0, slope: 12, place: Placement::Mid, dynamic: None };
+        let cut = EqBand {
+            on: true,
+            kind: BandType::Peak,
+            f: 1000.0,
+            g: -18.0,
+            q: 1.0,
+            slope: 12,
+            place: Placement::Mid,
+            dynamic: None,
+        };
         let sine = |i: usize| (i as f32 * 1000.0 * std::f32::consts::TAU / 48000.0).sin() * 0.5;
         // pure side signal: L = -R
         let mut p = eq_with(vec![cut]);
@@ -942,8 +1121,14 @@ mod tests {
     #[test]
     fn reverb_tail_decays_near_rt60() {
         // impulse, then compare the tail around 0.15 s and 0.65 s (default preset: RT60 1.0 s → −30 dB)
-        let (out, _) = run(FxKind::Reverb, |i| if i == 0 { 1.0 } else { 0.0 }, 48000 * 2);
-        let rms = |a: usize, b: usize| (out[a..b].iter().map(|x| x * x).sum::<f32>() / (b - a) as f32).sqrt();
+        let (out, _) = run(
+            FxKind::Reverb,
+            |i| if i == 0 { 1.0 } else { 0.0 },
+            48000 * 2,
+        );
+        let rms = |a: usize, b: usize| {
+            (out[a..b].iter().map(|x| x * x).sum::<f32>() / (b - a) as f32).sqrt()
+        };
         let early = rms(4800, 9600);
         let late = rms(28800, 33600);
         assert!(early > 1e-5, "no tail at all");
@@ -956,6 +1141,9 @@ mod tests {
         let (out, _) = run(FxKind::Delay, |i| if i == 0 { 1.0 } else { 0.0 }, 48000);
         let t = (375.0 * 48.0) as usize; // default preset 1/8 at 120 bpm = 250 ms; params come from preset
         let t = if out[t].abs() > 0.05 { t } else { 250 * 48 };
-        assert!(out[t - 2..t + 3].iter().any(|x| x.abs() > 0.05), "no echo at {t}");
+        assert!(
+            out[t - 2..t + 3].iter().any(|x| x.abs() > 0.05),
+            "no echo at {t}"
+        );
     }
 }

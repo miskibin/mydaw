@@ -26,6 +26,7 @@ fn one_pattern(notes: Vec<Note>, len: f64, swing: f32) -> Project {
         name: "P".into(),
         color: "#4f8ef7".into(),
         len,
+        min_len: len,
         notes,
         swing,
     }];
@@ -258,6 +259,7 @@ fn legacy_inst_notes_through_put_pattern_get_a_channel() {
         name: "x".into(),
         color: "#fff".into(),
         len: 4.0,
+        min_len: 4.0,
         notes: vec![Note::new(424242, 0.0, 1.0, None)],
         swing: 0.0,
     };
@@ -336,6 +338,7 @@ fn sampler_channel_plays_its_sample_at_the_note_pitch() {
             name: "s".into(),
             color: "#fff".into(),
             len: 4.0,
+            min_len: 4.0,
             notes: vec![Note::new(id, 0.0, 1.0, key)],
             swing: 0.0,
         };
@@ -365,14 +368,44 @@ fn sampler_channel_plays_its_sample_at_the_note_pitch() {
 }
 
 #[test]
-fn pattern_length_changes_follow_whole_clips_and_hide_late_notes() {
+fn builtin_drums_follow_the_note_key() {
     let p0 = Project::empty();
     let k = chan(&p0, Inst::Kick);
+    let root = p0.channel(k).unwrap().root;
+    let tail = |key: Option<u8>| {
+        let out = left(&render(
+            one_pattern(vec![Note::new(k, 0.0, 1.0, key)], 4.0, 0.0),
+            1.0,
+        ));
+        // the settled body of the kick (its pitch sweep is over by ~0.12 s)
+        freq(
+            &out,
+            (0.15 * SR as f64) as usize,
+            (0.30 * SR as f64) as usize,
+        )
+    };
+    let (at_root, octave_up) = (tail(None), tail(Some(root + 12)));
+    assert!(
+        (tail(Some(root)) - at_root).abs() < 1.0,
+        "the root plays the kick as before"
+    );
+    assert!(
+        (octave_up / at_root - 2.0).abs() < 0.1,
+        "an octave up doubles the pitch: {at_root} → {octave_up}"
+    );
+}
+
+#[test]
+fn pattern_length_follows_its_notes_and_whole_clips_follow_it() {
+    let p0 = Project::empty();
+    let k = chan(&p0, Inst::Kick);
+    // a length sent by the caller is ignored: the notes reach into bar 2
     let mut p = one_pattern(
         vec![Note::new(k, 0.0, 1.0, None), Note::new(k, 20.0, 1.0, None)],
-        8.0,
+        4.0,
         0.0,
     );
+    p.clips[0].len = 8.0;
     p.clips.push(Clip {
         len: 16.0,
         ..clip(2, 1, 16.0, 16.0, 1)
@@ -383,8 +416,15 @@ fn pattern_length_changes_follow_whole_clips_and_hide_late_notes() {
         ..clip(3, 2, 40.0, 4.0, 1)
     }); // second half only
     let e = Engine::new(p, Arc::new(NoPlugins));
+    assert_eq!(
+        e.project().patterns[0].len,
+        8.0,
+        "derived on load from the last note"
+    );
+    // deleting the note in bar 2: the pattern shrinks to one bar
     let mut pat = e.project().patterns[0].clone();
-    pat.len = 4.0;
+    pat.notes.truncate(1);
+    pat.len = 64.0;
     e.apply(
         &[Op::PutPattern {
             pattern: pat.clone(),
@@ -394,30 +434,82 @@ fn pattern_length_changes_follow_whole_clips_and_hide_late_notes() {
     )
     .unwrap();
     let p = e.project();
-    let len = |id: Id| p.clips.iter().find(|c| c.id == id).unwrap().len;
-    assert_eq!(len(1), 4.0, "a clip showing the whole pattern follows it");
-    assert_eq!(len(2), 16.0);
-    assert_eq!(len(3), 4.0);
-    // the note at step 20 is kept, but neither played nor looped back in
-    assert_eq!(p.patterns[0].notes.len(), 2);
-    let out = left(&e.render(0.0, 4.0, 0.0, SR).unwrap());
-    let spb = 60.0 / 128.0;
-    let second = (1.0 * spb * SR as f64) as usize; // after the first kick has died away
-    assert!(
-        out[second..].iter().all(|v| v.abs() < 1e-6),
-        "a note past the end played"
+    let len = |p: &Project, id: Id| p.clips.iter().find(|c| c.id == id).unwrap().len;
+    assert_eq!(p.patterns[0].len, 4.0);
+    assert_eq!(
+        len(&p, 1),
+        4.0,
+        "a clip showing the whole pattern follows it"
     );
-    // growing it again brings the note (and the clip length) back
-    pat.len = 8.0;
+    assert_eq!(len(&p, 2), 16.0);
+    assert_eq!(len(&p, 3), 4.0);
+    // "+ bar": an empty second bar kept on purpose (minLen), so the kick plays every 2 bars
+    pat.min_len = 8.0;
+    e.apply(
+        &[Op::PutPattern {
+            pattern: pat.clone(),
+        }],
+        false,
+        None,
+    )
+    .unwrap();
+    assert_eq!(e.project().patterns[0].len, 8.0);
+    assert_eq!(len(&e.project(), 1), 8.0);
+    let out = left(&e.render(0.0, 8.0, 0.0, SR).unwrap());
+    let spb = 60.0 / 128.0;
+    let bar2 = (4.0 * spb * SR as f64) as usize;
+    assert!(
+        out[bar2..bar2 + 4000].iter().all(|v| v.abs() < 1e-6),
+        "the empty bar is silent"
+    );
+    // a note past the end grows it; minLen is whole bars and at least one
+    pat.min_len = 0.5;
+    pat.notes.push(Note::new(k, 40.0, 4.0, None));
     e.apply(&[Op::PutPattern { pattern: pat }], false, None)
         .unwrap();
-    assert_eq!(e.project().clips[0].len, 8.0);
-    let out = left(&e.render(0.0, 8.0, 0.0, SR).unwrap());
-    let at = (5.0 * spb * SR as f64) as usize;
-    assert!(out[at..at + 2000].iter().any(|v| v.abs() > 0.1));
-    // undo restores the clip with the pattern
+    let pt = &e.project().patterns[0];
+    assert_eq!((pt.len, pt.min_len), (12.0, 4.0));
+    // undo restores the length and the clip with it
     assert!(e.undo());
-    assert_eq!(e.project().clips[0].len, 4.0);
+    assert_eq!(e.project().patterns[0].len, 8.0);
+    assert_eq!(e.project().clips[0].len, 8.0);
+}
+
+#[test]
+fn removing_a_pattern_removes_its_clips_and_undoes() {
+    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let before = e.project();
+    let id = before.patterns[0].id;
+    assert!(before
+        .clips
+        .iter()
+        .any(|c| c.kind == ClipKind::Pat && c.source == id));
+    e.apply(&[Op::RemovePattern { id }], false, None).unwrap();
+    let p = e.project();
+    assert!(p.patterns.iter().all(|x| x.id != id));
+    assert!(!p
+        .clips
+        .iter()
+        .any(|c| c.kind == ClipKind::Pat && c.source == id));
+    assert!(
+        e.apply(&[Op::RemovePattern { id }], false, None).is_err(),
+        "an unknown pattern is refused"
+    );
+    assert!(e.undo());
+    assert_eq!(e.project(), before);
+}
+
+#[test]
+fn notes_past_the_song_end_are_refused() {
+    let p0 = Project::empty();
+    let k = chan(&p0, Inst::Kick);
+    let e = Engine::new(one_pattern(vec![], 4.0, 0.0), Arc::new(NoPlugins));
+    let mut pat = e.project().patterns[0].clone();
+    pat.notes
+        .push(Note::new(k, (TOTAL_BEATS * 4.0) as f32 - 1.0, 2.0, None));
+    assert!(e
+        .apply(&[Op::PutPattern { pattern: pat }], false, None)
+        .is_err());
 }
 
 #[test]
@@ -659,7 +751,9 @@ fn regenerate_demo_v1_render() {
         .chunks(w * 2)
         .map(|c| {
             let n = (c.len() / 2) as f64;
-            let (l, r) = c.as_chunks::<2>().0.iter().fold((0f64, 0f64), |(l, r), f| (l + (f[0] as f64).powi(2), r + (f[1] as f64).powi(2)));
+            let (l, r) = c.as_chunks::<2>().0.iter().fold((0f64, 0f64), |(l, r), f| {
+                (l + (f[0] as f64).powi(2), r + (f[1] as f64).powi(2))
+            });
             [(l / n).sqrt(), (r / n).sqrt()]
         })
         .collect();
@@ -671,5 +765,9 @@ fn regenerate_demo_v1_render() {
         "rms": rms,
         "window": w,
     });
-    std::fs::write(format!("{fixtures}/demo_v1_render.json"), serde_json::to_string(&json).unwrap()).unwrap();
+    std::fs::write(
+        format!("{fixtures}/demo_v1_render.json"),
+        serde_json::to_string(&json).unwrap(),
+    )
+    .unwrap();
 }

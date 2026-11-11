@@ -22,7 +22,7 @@ stdout is only JSON (`--pretty` to indent); messages go to stderr. Exit codes:
 | `wave status` | transport, revision, file, audio device, CLI path |
 | `wave context` | summary: tracks (index, insert, volume, clip count), inserts with effects and parameters, patterns, channels, sources, `nextId` |
 | `wave channels` | the Channel Rack: id, name, `inst`/`sample` (+ source)/`synth` (+ preset), volume, pan, mute/solo, mixer insert (`null` = the clip's track), root key, note count |
-| `wave pattern [--id N]` | a pattern as one step string per channel (`x` full velocity, `1`–`9` = 10–90 %, `.` empty, a space every beat) plus `notes` for melodic rows, bars, swing %, hidden notes past the end |
+| `wave pattern [--id N]` | a pattern as one step string per channel (`x` full velocity, `1`–`9` = 10–90 %, `.` empty, a space every beat) plus `notes` for melodic rows, bars, minimum bars, swing % |
 | `wave context --full` | the whole project JSON (every clip, note, parameter) |
 | `wave catalog` | effect types, parameter ids/ranges/units, presets, command list |
 | `wave schema` | every op `apply` accepts, with units and an example |
@@ -64,7 +64,9 @@ clip `gain` in dB; pan −1..1. New ids: start at `context.nextId`.
 ## Patterns and channels
 
 Channels (Channel Rack rows) are shared by all patterns; a note plays channel `ch`.
-Steps are sixteenths; `--bars` 1–8; swing 0–100 % (delays every odd 16th by up to half a
+Steps are sixteenths. A pattern is as long as its notes (the end of the last note rounded
+up to a bar, like FL Studio); `--bars N` sets the shortest it may be, for empty bars kept on
+purpose (a crash every second bar). Swing 0–100 % (delays every odd 16th by up to half a
 step). Each edit is one undo step.
 
 ```sh
@@ -88,9 +90,9 @@ wave pattern --id 2 --play                        # loop it on its own (stops th
 ```
 
 `--ch` takes a channel id or name (`kick`, `Hats 2` …). With `apply`, the ops are
-`putPattern` / `putChannel` / `removeChannel` (see `wave schema`). Changing a pattern's
-length also resizes clips that show exactly one whole pass of it; notes past the end stay
-in the pattern, hidden and silent, until it grows again.
+`putPattern` / `putChannel` / `removeChannel` (see `wave schema`). When a pattern's
+length changes (notes added past its end or removed, `--bars`), clips that show exactly one
+whole pass of it follow; clips sized on purpose keep their length.
 
 ## Takes and comping
 

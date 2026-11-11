@@ -16,16 +16,34 @@ pub const MIN_NOTE_STEPS: f32 = 0.25;
 /// A decoded channel-voice message. `ch` is the MIDI channel 0..15.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum MidiMsg {
-    NoteOn { ch: u8, key: u8, vel: u8 },
-    NoteOff { ch: u8, key: u8 },
+    NoteOn {
+        ch: u8,
+        key: u8,
+        vel: u8,
+    },
+    NoteOff {
+        ch: u8,
+        key: u8,
+    },
     /// CC 64 (damper pedal): down at value ≥ 64.
-    Sustain { ch: u8, down: bool },
+    Sustain {
+        ch: u8,
+        down: bool,
+    },
     /// Pitch bend in −8192..=8191 (0 = centre).
-    PitchBend { ch: u8, value: i16 },
+    PitchBend {
+        ch: u8,
+        value: i16,
+    },
     /// CC 1 (mod wheel), 0..=127.
-    ModWheel { ch: u8, value: u8 },
+    ModWheel {
+        ch: u8,
+        value: u8,
+    },
     /// CC 120 (all sound off) / CC 123 (all notes off).
-    AllNotesOff { ch: u8 },
+    AllNotesOff {
+        ch: u8,
+    },
 }
 
 impl MidiMsg {
@@ -57,7 +75,10 @@ impl MidiMsg {
                 (120 | 123, _) => Some(Self::AllNotesOff { ch }),
                 _ => None,
             },
-            0xE0 => Some(Self::PitchBend { ch, value: (((d2? as i16) << 7) | d1 as i16) - 8192 }),
+            0xE0 => Some(Self::PitchBend {
+                ch,
+                value: (((d2? as i16) << 7) | d1 as i16) - 8192,
+            }),
             _ => None,
         }
     }
@@ -104,7 +125,10 @@ pub struct MidiRecorder {
 
 impl MidiRecorder {
     pub fn new(from: f64) -> Self {
-        Self { from, ..Default::default() }
+        Self {
+            from,
+            ..Default::default()
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -117,7 +141,12 @@ impl MidiRecorder {
         }
         // the same key struck again ends its previous note first
         self.close(beat, key);
-        self.open.push(Open { key, vel, start: beat, sustained: false });
+        self.open.push(Open {
+            key,
+            vel,
+            start: beat,
+            sustained: false,
+        });
     }
 
     pub fn note_off(&mut self, beat: f64, key: u8) {
@@ -133,7 +162,12 @@ impl MidiRecorder {
     pub fn sustain(&mut self, beat: f64, down: bool) {
         self.pedal = down;
         if !down {
-            let ending: Vec<u8> = self.open.iter().filter(|o| o.sustained).map(|o| o.key).collect();
+            let ending: Vec<u8> = self
+                .open
+                .iter()
+                .filter(|o| o.sustained)
+                .map(|o| o.key)
+                .collect();
             for k in ending {
                 self.close(beat, k);
             }
@@ -144,7 +178,12 @@ impl MidiRecorder {
     fn close(&mut self, beat: f64, key: u8) {
         if let Some(i) = self.open.iter().position(|o| o.key == key) {
             let o = self.open.remove(i);
-            self.done.push(RecNote { key: o.key, vel: o.vel, start: o.start, end: beat.max(o.start) });
+            self.done.push(RecNote {
+                key: o.key,
+                vel: o.vel,
+                start: o.start,
+                end: beat.max(o.start),
+            });
         }
     }
 
@@ -152,9 +191,15 @@ impl MidiRecorder {
     /// start order.
     pub fn finish(mut self, beat: f64) -> Vec<RecNote> {
         for o in std::mem::take(&mut self.open) {
-            self.done.push(RecNote { key: o.key, vel: o.vel, start: o.start, end: beat.max(o.start) });
+            self.done.push(RecNote {
+                key: o.key,
+                vel: o.vel,
+                start: o.start,
+                end: beat.max(o.start),
+            });
         }
-        self.done.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.key.cmp(&b.key)));
+        self.done
+            .sort_by(|a, b| a.start.total_cmp(&b.start).then(a.key.cmp(&b.key)));
         self.done
     }
 }
@@ -174,7 +219,10 @@ pub struct RecordedClip {
 /// positions are in steps from the clip start, velocity is linear gain.
 pub fn layout(notes: &[RecNote], ch: Id, beats_per_bar: f64) -> Option<RecordedClip> {
     let first = notes.iter().map(|n| n.start).fold(f64::INFINITY, f64::min);
-    let last = notes.iter().map(|n| n.end).fold(f64::NEG_INFINITY, f64::max);
+    let last = notes
+        .iter()
+        .map(|n| n.end)
+        .fold(f64::NEG_INFINITY, f64::max);
     if !first.is_finite() || !last.is_finite() {
         return None;
     }
@@ -200,37 +248,87 @@ mod tests {
 
     #[test]
     fn parses_note_on_off() {
-        assert_eq!(MidiMsg::parse(&[0x90, 60, 100]), Some(MidiMsg::NoteOn { ch: 0, key: 60, vel: 100 }));
-        assert_eq!(MidiMsg::parse(&[0x93, 61, 1]), Some(MidiMsg::NoteOn { ch: 3, key: 61, vel: 1 }));
-        assert_eq!(MidiMsg::parse(&[0x80, 60, 64]), Some(MidiMsg::NoteOff { ch: 0, key: 60 }));
-        assert_eq!(MidiMsg::parse(&[0x8F, 60, 0]), Some(MidiMsg::NoteOff { ch: 15, key: 60 }));
+        assert_eq!(
+            MidiMsg::parse(&[0x90, 60, 100]),
+            Some(MidiMsg::NoteOn {
+                ch: 0,
+                key: 60,
+                vel: 100
+            })
+        );
+        assert_eq!(
+            MidiMsg::parse(&[0x93, 61, 1]),
+            Some(MidiMsg::NoteOn {
+                ch: 3,
+                key: 61,
+                vel: 1
+            })
+        );
+        assert_eq!(
+            MidiMsg::parse(&[0x80, 60, 64]),
+            Some(MidiMsg::NoteOff { ch: 0, key: 60 })
+        );
+        assert_eq!(
+            MidiMsg::parse(&[0x8F, 60, 0]),
+            Some(MidiMsg::NoteOff { ch: 15, key: 60 })
+        );
     }
 
     #[test]
     fn note_on_velocity_zero_is_note_off() {
-        assert_eq!(MidiMsg::parse(&[0x90, 60, 0]), Some(MidiMsg::NoteOff { ch: 0, key: 60 }));
+        assert_eq!(
+            MidiMsg::parse(&[0x90, 60, 0]),
+            Some(MidiMsg::NoteOff { ch: 0, key: 60 })
+        );
     }
 
     #[test]
     fn parses_sustain_with_threshold() {
-        assert_eq!(MidiMsg::parse(&[0xB0, 64, 127]), Some(MidiMsg::Sustain { ch: 0, down: true }));
-        assert_eq!(MidiMsg::parse(&[0xB0, 64, 64]), Some(MidiMsg::Sustain { ch: 0, down: true }));
-        assert_eq!(MidiMsg::parse(&[0xB2, 64, 63]), Some(MidiMsg::Sustain { ch: 2, down: false }));
-        assert_eq!(MidiMsg::parse(&[0xB0, 64, 0]), Some(MidiMsg::Sustain { ch: 0, down: false }));
+        assert_eq!(
+            MidiMsg::parse(&[0xB0, 64, 127]),
+            Some(MidiMsg::Sustain { ch: 0, down: true })
+        );
+        assert_eq!(
+            MidiMsg::parse(&[0xB0, 64, 64]),
+            Some(MidiMsg::Sustain { ch: 0, down: true })
+        );
+        assert_eq!(
+            MidiMsg::parse(&[0xB2, 64, 63]),
+            Some(MidiMsg::Sustain { ch: 2, down: false })
+        );
+        assert_eq!(
+            MidiMsg::parse(&[0xB0, 64, 0]),
+            Some(MidiMsg::Sustain { ch: 0, down: false })
+        );
     }
 
     #[test]
     fn parses_pitch_bend() {
-        assert_eq!(MidiMsg::parse(&[0xE0, 0x00, 0x40]), Some(MidiMsg::PitchBend { ch: 0, value: 0 }));
-        assert_eq!(MidiMsg::parse(&[0xE0, 0x00, 0x00]), Some(MidiMsg::PitchBend { ch: 0, value: -8192 }));
-        assert_eq!(MidiMsg::parse(&[0xE1, 0x7F, 0x7F]), Some(MidiMsg::PitchBend { ch: 1, value: 8191 }));
+        assert_eq!(
+            MidiMsg::parse(&[0xE0, 0x00, 0x40]),
+            Some(MidiMsg::PitchBend { ch: 0, value: 0 })
+        );
+        assert_eq!(
+            MidiMsg::parse(&[0xE0, 0x00, 0x00]),
+            Some(MidiMsg::PitchBend {
+                ch: 0,
+                value: -8192
+            })
+        );
+        assert_eq!(
+            MidiMsg::parse(&[0xE1, 0x7F, 0x7F]),
+            Some(MidiMsg::PitchBend { ch: 1, value: 8191 })
+        );
         assert!((MidiMsg::bend_semitones(-8192) + 2.0).abs() < 1e-6);
         assert_eq!(MidiMsg::bend_semitones(0), 0.0);
     }
 
     #[test]
     fn parses_all_notes_off_and_ignores_the_rest() {
-        assert_eq!(MidiMsg::parse(&[0xB0, 123, 0]), Some(MidiMsg::AllNotesOff { ch: 0 }));
+        assert_eq!(
+            MidiMsg::parse(&[0xB0, 123, 0]),
+            Some(MidiMsg::AllNotesOff { ch: 0 })
+        );
         assert_eq!(MidiMsg::parse(&[0xB0, 7, 100]), None); // volume CC
         assert_eq!(MidiMsg::parse(&[0xC0, 5]), None); // program change
         assert_eq!(MidiMsg::parse(&[0xF8]), None); // clock
@@ -258,7 +356,15 @@ mod tests {
         let mut r = MidiRecorder::new(0.0);
         r.note_on(1.0, 60, 100);
         r.note_off(1.5, 60);
-        assert_eq!(r.finish(4.0), vec![RecNote { key: 60, vel: 100, start: 1.0, end: 1.5 }]);
+        assert_eq!(
+            r.finish(4.0),
+            vec![RecNote {
+                key: 60,
+                vel: 100,
+                start: 1.0,
+                end: 1.5
+            }]
+        );
     }
 
     #[test]
@@ -266,7 +372,15 @@ mod tests {
         let mut r = MidiRecorder::new(0.0);
         r.note_on(2.0, 64, 90);
         let n = r.finish(3.25);
-        assert_eq!(n, vec![RecNote { key: 64, vel: 90, start: 2.0, end: 3.25 }]);
+        assert_eq!(
+            n,
+            vec![RecNote {
+                key: 64,
+                vel: 90,
+                start: 2.0,
+                end: 3.25
+            }]
+        );
     }
 
     #[test]
@@ -288,8 +402,24 @@ mod tests {
         r.note_off(1.75, 62);
         r.sustain(3.0, false);
         let n = r.finish(8.0);
-        assert_eq!(n[0], RecNote { key: 60, vel: 100, start: 0.5, end: 3.0 });
-        assert_eq!(n[1], RecNote { key: 62, vel: 100, start: 1.5, end: 3.0 });
+        assert_eq!(
+            n[0],
+            RecNote {
+                key: 60,
+                vel: 100,
+                start: 0.5,
+                end: 3.0
+            }
+        );
+        assert_eq!(
+            n[1],
+            RecNote {
+                key: 62,
+                vel: 100,
+                start: 1.5,
+                end: 3.0
+            }
+        );
     }
 
     #[test]
@@ -301,7 +431,15 @@ mod tests {
         let n = r.finish(4.0);
         assert_eq!(n.len(), 2);
         assert_eq!(n[0].end, 1.0);
-        assert_eq!(n[1], RecNote { key: 60, vel: 80, start: 1.0, end: 1.5 });
+        assert_eq!(
+            n[1],
+            RecNote {
+                key: 60,
+                vel: 80,
+                start: 1.0,
+                end: 1.5
+            }
+        );
     }
 
     #[test]
@@ -315,12 +453,35 @@ mod tests {
 
     #[test]
     fn layout_snaps_to_bars_and_converts_to_steps() {
-        let notes = [RecNote { key: 60, vel: 127, start: 4.5, end: 5.0 }, RecNote { key: 64, vel: 64, start: 5.0, end: 6.25 }];
+        let notes = [
+            RecNote {
+                key: 60,
+                vel: 127,
+                start: 4.5,
+                end: 5.0,
+            },
+            RecNote {
+                key: 64,
+                vel: 64,
+                start: 5.0,
+                end: 6.25,
+            },
+        ];
         let c = layout(&notes, 7, 4.0).unwrap();
         assert_eq!(c.start, 4.0);
         assert_eq!(c.len, 4.0); // up to 6.25 → 2.25 beats in → one bar
         assert_eq!(c.notes.len(), 2);
-        assert_eq!(c.notes[0], Note { ch: 7, inst: None, step: 2.0, len: 2.0, p: Some(60), v: 1.0 });
+        assert_eq!(
+            c.notes[0],
+            Note {
+                ch: 7,
+                inst: None,
+                step: 2.0,
+                len: 2.0,
+                p: Some(60),
+                v: 1.0
+            }
+        );
         assert_eq!(c.notes[1].step, 4.0);
         assert_eq!(c.notes[1].len, 5.0);
         assert!((c.notes[1].v - 64.0 / 127.0).abs() < 1e-6);
@@ -328,7 +489,20 @@ mod tests {
 
     #[test]
     fn layout_spans_extra_bars_and_enforces_min_length() {
-        let notes = [RecNote { key: 60, vel: 100, start: 3.9, end: 3.9 }, RecNote { key: 62, vel: 100, start: 8.0, end: 9.5 }];
+        let notes = [
+            RecNote {
+                key: 60,
+                vel: 100,
+                start: 3.9,
+                end: 3.9,
+            },
+            RecNote {
+                key: 62,
+                vel: 100,
+                start: 8.0,
+                end: 9.5,
+            },
+        ];
         let c = layout(&notes, 1, 4.0).unwrap();
         assert_eq!(c.start, 0.0);
         assert_eq!(c.len, 12.0);

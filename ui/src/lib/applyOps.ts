@@ -143,6 +143,11 @@ export function applyOp(p: Project, op: Op): void {
       if (i >= 0) list[i] = a; else list.push(a);
       return;
     }
+    case 'removePattern':
+      if (!p.patterns.some(x => x.id === op.id)) throw new OpError(`no pattern with id ${op.id}`);
+      p.patterns = p.patterns.filter(x => x.id !== op.id);
+      p.clips = p.clips.filter(c => !(c.kind === 'pat' && c.ref === op.id));
+      return;
     case 'removeAutomation':
       p.automations = (p.automations ?? []).filter(a => a.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'auto' && c.ref === op.id));
