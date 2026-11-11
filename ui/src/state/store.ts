@@ -79,6 +79,11 @@ export function plain<T>(v: T): T {
   return JSON.parse(r !== v ? JSON.stringify(r) : JSON.stringify(v, (_k, x) => rawOf(x)));
 }
 
+/** A copy of notes (flat objects) taken from the store or built from its notes: a spread per note, ~10× faster than `plain`. */
+export function plainNotes<T extends object>(notes: readonly T[]): T[] {
+  return notes.map(n => ({ ...(rawOf(n) as T) }));
+}
+
 // ---- ids ----
 let localNext = 1;
 /** Allocate a new id (project.nextId, increased locally). */
@@ -196,7 +201,7 @@ function applyInPlace(p: Project, op: Op) {
       const [f] = m.fx.splice(i, 1); m.fx.splice(to, 0, f);
       return;
     }
-    case 'putPattern': case 'putChannel': case 'removeChannel': applyPatternOp(p, op, false); return;
+    case 'putPattern': case 'putChannel': case 'removeChannel': applyPatternOp(p, op, false, fresh); return;
     case 'putSource': { const s = p.sources.find(x => x.id === op.source.id); if (s) { s.name = op.source.name; s.color = op.source.color; } return; }
     case 'putComp': case 'removeComp': applyCompOp(p, op, false); return;
     case 'removeSource':
@@ -231,9 +236,12 @@ export function applyLocal(ops: Op[]) {
   if (!ops.length) return;
   const arrangement = ops.some(op => !NOT_ARRANGEMENT.has(op.op));
   if (arrangement) tellArrangement(ops);
-  setS('project', produce(p => { for (const op of ops) applyInPlace(p, op); }));
-  bumpProject(arrangement);
-  if (!S.dirty) setS('dirty', true);
+  // one batch: memos that follow `arrVersion` are current before any effect of the edit runs
+  batch(() => {
+    setS('project', produce(p => { for (const op of ops) applyInPlace(p, op); }));
+    bumpProject(arrangement);
+    if (!S.dirty) setS('dirty', true);
+  });
 }
 
 // ---- lookups ----

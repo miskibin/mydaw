@@ -93,8 +93,10 @@ export function followPatternLength(p: Project, id: Id, oldLen: number, len: num
  * Applies a pattern/channel op in place (`putPattern`, `putChannel`, `removeChannel`, and the
  * channel side of `removeSource`). `strict` validates like the engine and throws; the
  * optimistic store applies without checks. Returns false for ops it does not handle.
+ * `adopt` is given the pattern (a private copy) before it is put in the project: the store marks
+ * it as plain data so that storing it does not walk all its notes.
  */
-export function applyPatternOp(p: Project, op: Op, strict: boolean): boolean {
+export function applyPatternOp(p: Project, op: Op, strict: boolean, adopt: <T extends object>(v: T) => T = v => v): boolean {
   const fail = (m: string) => { if (strict) throw new PatternOpError(m); };
   switch (op.op) {
     case 'putPattern': {
@@ -115,9 +117,9 @@ export function applyPatternOp(p: Project, op: Op, strict: boolean): boolean {
       const i = p.patterns.findIndex(x => x.id === pt.id);
       if (i >= 0) {
         const old = p.patterns[i].len;
-        p.patterns[i] = pt;
+        p.patterns[i] = adopt(pt);
         if (Math.abs(old - pt.len) > 1e-9) followPatternLength(p, pt.id, old, pt.len);
-      } else p.patterns.push(pt);
+      } else p.patterns.push(adopt(pt));
       return true;
     }
     case 'putChannel': {

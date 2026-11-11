@@ -47,6 +47,23 @@ describe('playlist tile', () => {
     expect(planTile(t, 0, 0, 900, 600, GW, GH, 1).full).toBe(true);
   });
 
+  it('keeps the tile while the view is resized a little (a mixer or browser resize drag)', () => {
+    const t = planTile(null, 1000, 500, 800, 600, GW, GH, 1).tile;
+    let fulls = 0, prev = t;
+    for (let h = 600; h >= 300; h -= 4) { const p = planTile(prev, 1000, 500, 800, h, GW, GH, 1); if (p.full) fulls++; prev = p.tile; expect(prev.y + prev.h).toBeGreaterThanOrEqual(500 + h); expect(prev.y).toBeLessThanOrEqual(500); }
+    expect(fulls).toBeLessThanOrEqual(4); // 76 sizes, a few tile sizes
+    expect(planTile(t, 1000, 500, 800, 590, GW, GH, 1).full).toBe(false);
+  });
+
+  it('keeps a larger tile when the view shrinks and grows back (mixer toggled)', () => {
+    const big = planTile(null, 1000, 500, 800, 700, GW, GH, 1).tile;
+    const small = planTile(big, 1000, 500, 800, 400, GW, GH, 1);
+    expect(small.full).toBe(false); expect(small.tile).toBe(big);
+    expect(planTile(small.tile, 1000, 500, 800, 700, GW, GH, 1).full).toBe(false);
+    // but not one that is far too large
+    expect(planTile(big, 1000, 500, 800, 100, GW, GH, 1).tile.h).toBeLessThan(big.h);
+  });
+
   it('keeps inside the grid and needs no guard at its edges', () => {
     const t = planTile(null, 0, 0, 800, 600, 1000, 700, 1).tile;
     expect(t).toEqual<Tile>({ x: 0, y: 0, w: 1000, h: 700 });

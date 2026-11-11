@@ -295,7 +295,7 @@ await frames(3);
 
 // piano roll on the 2000-note pattern
 const stress = await P(() => { const { S } = window.__perf; const p = S.project.patterns.find(x => x.name.startsWith('Piano roll stress')); const ch = p.notes[0].ch; return { id: p.id, ch, notes: p.notes.length }; });
-await scenario('pianoroll_open', async () => { const a = await P(() => performance.now()); await P(s => { window.__perf.P.openPattern(s.id, 'roll', s.ch); }, stress); await frames(3); return { open_ms: r1((await P(() => performance.now())) - a), notes: stress.notes }; });
+await scenario('pianoroll_open', async () => { const a = await P(() => performance.now()); await P(s => { window.__perf.P.closeRack(); window.__perf.P.setCurPattern(s.id, true); window.__perf.P.openRoll(s.ch); }, stress); await frames(3); return { open_ms: r1((await P(() => performance.now())) - a), notes: stress.notes }; });
 const roll = await P(() => { const cs = [...document.querySelectorAll('.win canvas')].filter(c => c.getBoundingClientRect().width > 400); const c = cs[0]; if (!c) return null; const r = c.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, n: cs.length }; });
 results.pianoroll_canvas = roll;
 if (roll) {
@@ -318,7 +318,16 @@ if (roll) {
   }, stress);
   console.error('[ui] pianoroll_op_cost', JSON.stringify(results.pianoroll_op_cost));
 }
-await P(() => window.__perf.P.closePattern());
+await P(() => window.__perf.P.closeRoll());
+// Channel Rack on the same pattern: open it, then click steps
+await scenario('rack_open', async () => { const a = await P(() => performance.now()); await P(() => window.__perf.P.openRack()); await frames(3); return { open_ms: r1((await P(() => performance.now())) - a) }; });
+const rack = await P(() => { const c = [...document.querySelectorAll('.win canvas')].filter(c => c.getBoundingClientRect().width > 300)[0]; if (!c) return null; const r = c.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; });
+results.rack_canvas = rack;
+if (rack) await scenario('rack_click_steps', async () => {
+  for (let i = 0; i < (quick ? 8 : 20); i++) { await page.mouse.click(rack.x + rack.w - 30 - (i % 10) * 22, rack.y + 12 + (i % 4) * 26); await page.waitForTimeout(40); }
+  await page.waitForTimeout(200);
+});
+await P(() => window.__perf.P.closeRack());
 
 results.console_errors = consoleErrors.slice(0, 10);
 mkdirSync(dirname(out), { recursive: true });

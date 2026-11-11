@@ -79,6 +79,23 @@ await P(() => { const { setU } = window.__perf; setU('sel', []); }); bad += awai
 const rul = await P(() => { const { geom, U } = window.__perf, r = geom.scroll.getBoundingClientRect(); return { x: r.left + U.headW + 120, y: r.top + 13 }; });
 await drag(rul, { x: rul.x + 500, y: rul.y }, 30); bad += await compare('loop range');
 await P(() => window.__perf.A.undo()); await frames(6); bad += await compare('undo');
+// a note edit repaints only the clips of that pattern; a fader or a channel knob repaints nothing
+const edited = await P(() => {
+  const { S, E, U, geom } = window.__perf, sc = geom.scroll;
+  const vis = c => c.kind === 'pat' && c.start * U.bw < sc.scrollLeft + sc.clientWidth && (c.start + c.len) * U.bw > sc.scrollLeft && geom.tops[c.track] < sc.scrollTop + sc.clientHeight && geom.tops[c.track + 1] > sc.scrollTop;
+  const c = S.project.clips.find(vis) ?? S.project.clips.find(c => c.kind === 'pat'); if (!c) return null;
+  const pt = JSON.parse(JSON.stringify(S.project.patterns.find(p => p.id === c.ref)));
+  pt.notes = pt.notes.slice(0, Math.ceil(pt.notes.length / 2)).map((n, i) => (i % 2 ? { ...n, len: n.len + 1 } : n)); pt.name = 'Edited';
+  E.commit([{ op: 'putPattern', pattern: pt }], 'check');
+  return { pattern: pt.id, visible: vis(c) };
+});
+console.log('pattern edit', JSON.stringify(edited)); await frames(6); bad += await compare('pattern note edit');
+await P(() => { const { S, E } = window.__perf; const pt = JSON.parse(JSON.stringify(S.project.patterns.find(p => S.project.clips.some(c => c.kind === 'pat' && c.ref === p.id)))); const end = Math.max(...pt.notes.map(n => n.step + n.len)); pt.notes.push({ ...pt.notes[0], step: end + 40 }); E.commit([{ op: 'putPattern', pattern: pt }], 'check'); });
+await frames(6); bad += await compare('pattern made longer');
+await P(() => { const { S, E } = window.__perf; const tr = JSON.parse(JSON.stringify(S.project.tracks[2])), ch = JSON.parse(JSON.stringify(S.project.channels[0])); E.commit([{ op: 'putTrack', track: { ...tr, vol: 0.3 } }, { op: 'putChannel', channel: { ...ch, vol: 0.4, pan: 0.5 } }], 'check'); });
+await frames(6); bad += await compare('fader and channel knob');
+await P(() => { const { S, E } = window.__perf; const tr = JSON.parse(JSON.stringify(S.project.tracks[2])); E.commit([{ op: 'putTrack', track: { ...tr, muted: !tr.muted } }], 'check'); });
+await frames(6); bad += await compare('track mute');
 console.log(errors.length ? 'page errors: ' + errors.join(' | ') : 'no page errors');
 await browser.close(); server.close();
 process.exit(bad || errors.length ? 1 : 0);

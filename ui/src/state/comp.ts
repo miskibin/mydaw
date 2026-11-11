@@ -1,12 +1,14 @@
 // Take lanes & comping: which comp a track shows, and the edits the playlist, its menus and
 // the keyboard make. Every edit is one `putComp` (or `removeComp`) undo step.
+import { createMemo, createRoot } from 'solid-js';
+import { unwrap } from 'solid-js/store';
 import { be } from '../api/backend';
 import { lang, t as tl } from '../lib/i18n';
 import type { Clip, Comp, CompRegion, Id, Take } from '../api/types';
 import { removeTake, swapRange, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import { fmtPos } from '../lib/format';
 import { commit, enqueue, resync } from './edit';
-import { plain, S } from './store';
+import { arrVersion, plain, S } from './store';
 import { say, setU, U } from './ui';
 
 /** Height of one take lane, px. */
@@ -18,7 +20,28 @@ export const compById = (id: Id) => S.project.comps?.find(c => c.id === id);
 
 /** Comp clips on a track, earliest first. */
 export function compClipsOn(track: number): Clip[] {
-  return S.project.clips.filter(c => c.track === track && c.kind === 'comp' && compById(c.ref)).sort((a, b) => a.start - b.start);
+  const out: Clip[] = [];
+  for (const i of compIndex().get(track) ?? []) { const c = S.project.clips[i]; if (c && c.kind === 'comp' && c.track === track) out.push(c); }
+  return out;
+}
+/**
+ * Track → positions (in `project.clips`, earliest clip first) of its comp clips. One walk of the
+ * plain clip list per arrangement change, shared by every lane header: each of them filtered the
+ * whole list through the store (a tracked read per clip and track) whenever a clip changed lane.
+ * Keeps its value while the result is the same, so a clip drag re-runs no header.
+ */
+const compIndex = createRoot(() => createMemo(() => {
+  arrVersion();
+  const P = unwrap(S.project), comps = new Set((P.comps ?? []).map(c => c.id));
+  const m = new Map<number, number[]>();
+  P.clips.forEach((c, i) => { if (c.kind === 'comp' && comps.has(c.ref)) { const a = m.get(c.track); if (a) a.push(i); else m.set(c.track, [i]); } });
+  for (const a of m.values()) a.sort((x, y) => P.clips[x].start - P.clips[y].start);
+  return m;
+}, new Map<number, number[]>(), { equals: sameIndex }));
+function sameIndex(a: Map<number, number[]>, b: Map<number, number[]>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, x] of a) { const y = b.get(k); if (!y || y.length !== x.length || x.some((v, i) => v !== y[i])) return false; }
+  return true;
 }
 
 /** The comp a track's take lanes show: the selected comp clip on it, else its first one. */

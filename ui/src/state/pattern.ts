@@ -10,7 +10,8 @@ import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, TOTAL_BEATS, type Channel, ty
 import { baseName, clamp, mod } from '../lib/format';
 import { BAR, barsText, builtinChannel, cloneNotes, INST_NAME, notesText, stepsOf } from '../lib/pattern';
 import { commit } from './edit';
-import { allocId, plain, S } from './store';
+import { unwrap } from 'solid-js/store';
+import { allocId, plain, plainNotes, S } from './store';
 import { curBeat, tele } from './telemetry';
 import { say, setU, U } from './ui';
 
@@ -129,7 +130,11 @@ export function selectChannel(id: Id) { if (U.selCh !== id) setU('selCh', id); }
 
 // ---------------------------------------------------------------- patterns
 
-export const putNotes = (pt: Pattern, notes: Note[]): Op => ({ op: 'putPattern', pattern: { ...plain(pt), notes: plain(notes) } });
+/** The pattern with other notes. Copies only the new notes (once per frame of a drag: the old ones are dropped anyway). */
+export const putNotes = (pt: Pattern, notes: Note[]): Op => {
+  const { notes: _old, ...rest } = unwrap(pt);
+  return { op: 'putPattern', pattern: { ...plain(rest), notes: plainNotes(notes) } };
+};
 export const patOp = (pt: Pattern, patch: Partial<Pattern>): Op => ({ op: 'putPattern', pattern: { ...plain(pt), ...plain(patch) } });
 
 const freshName = (base: string) => {

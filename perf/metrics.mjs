@@ -59,7 +59,7 @@ function engineSpecs(sizes) {
 function uiSpecs() {
   const S = [];
   const add = (key, path, unit, good, budget, desc, fn) => S.push({ key, path, unit, good, budget, desc, fn });
-  for (const sc of ['idle', 'scroll_horizontal', 'scroll_vertical', 'zoom_ctrl_wheel', 'clip_drag_mouse', 'mixer_resize', 'mixer_scroll', 'playback_meters_mixer_open', 'playback_mixer_closed', 'fxwin_open_1_eq', 'fxwin_open_4', 'fxwin_open_8', 'pianoroll_open', 'pianoroll_wheel_scroll_zoom', 'pianoroll_add_move_notes_mouse']) {
+  for (const sc of ['idle', 'scroll_horizontal', 'scroll_vertical', 'zoom_ctrl_wheel', 'clip_drag_mouse', 'mixer_resize', 'mixer_scroll', 'playback_meters_mixer_open', 'playback_mixer_closed', 'fxwin_open_1_eq', 'fxwin_open_4', 'fxwin_open_8', 'pianoroll_open', 'pianoroll_wheel_scroll_zoom', 'pianoroll_add_move_notes_mouse', 'rack_open', 'rack_click_steps']) {
     add(`ui.${sc}.frame_p95_ms`, `scenarios.${sc}.frame_ms.p95`, 'ms', 'low', 34, `p95 frame interval, ${sc}`);
     add(`ui.${sc}.busy_pct`, `scenarios.${sc}.busy_pct`, '%', 'low', null, `main-thread busy share, ${sc}`);
     add(`ui.${sc}.long_task_ms`, `scenarios.${sc}.long_tasks.total_ms`, 'ms', 'low', null, `time in long tasks (>50 ms), ${sc}`);

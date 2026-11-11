@@ -29,13 +29,24 @@ export function margins(vw: number, vh: number, dpr: number, maxPx = 12e6): { mx
   return { mx, my };
 }
 
+/** Tile sizes are multiples of this (CSS px), or the whole grid when that is smaller. */
+export const SIZE_STEP = 160;
+/** How much larger than needed (CSS px per axis) a tile may be and still be kept. */
+export const SIZE_KEEP = 640;
+
 /**
  * Where the tile must be for a view at (`sx`, `sy`) of `vw`×`vh` over a `gw`×`gh` grid.
  * Keeps `prev` while the view stays at least a third of a margin inside it.
  */
 export function planTile(prev: Tile | null, sx: number, sy: number, vw: number, vh: number, gw: number, gh: number, dpr: number): TilePlan {
   const { mx, my } = margins(vw, vh, dpr);
-  const w = snapPx(Math.max(1, Math.min(gw, vw + 2 * mx)), dpr), h = snapPx(Math.max(1, Math.min(gh, vh + 2 * my)), dpr);
+  // sizes in steps of `SIZE_STEP`: resizing the view (the mixer's height, the browser's width, a
+  // window drag) keeps the tile and its pixels, where an exact fit redrew every clip on each frame
+  const fit = (v: number, m: number, total: number) => snapPx(Math.max(1, Math.min(total, Math.ceil((v + 2 * m) / SIZE_STEP) * SIZE_STEP)), dpr);
+  // a tile somewhat larger than needed is kept as well: closing and reopening a panel (the mixer,
+  // F9) grows the tile once and then repaints nothing
+  const keep = (need: number, had: number | undefined) => (had != null && had >= need && had - need <= SIZE_KEEP ? had : need);
+  const w = keep(fit(vw, mx, gw), prev?.w), h = keep(fit(vh, my, gh), prev?.h);
   const place = (s: number, m: number, size: number, total: number) => snapPx(Math.max(0, Math.min(Math.max(0, total - size), s - m)), dpr);
   const fresh = (): TilePlan => ({ tile: { x: place(sx, mx, w, gw), y: place(sy, my, h, gh), w, h }, full: true, dx: 0, dy: 0, strips: [] });
   if (!prev || prev.w !== w || prev.h !== h) return fresh();

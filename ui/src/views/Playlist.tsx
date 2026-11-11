@@ -3,7 +3,7 @@ import { t as tl } from '../lib/i18n';
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { InstIcon, trackIcon } from '../ui/instIcons';
-import { VOL_UNITY, type Clip, type Comp, type Id, type Op, type Take, type Track } from '../api/types';
+import { VOL_UNITY, type Channel, type Clip, type Comp, type Id, type Op, type Take, type Track } from '../api/types';
 import { boundaries, boundaryXfade, moveBoundary, setBoundaryXfade, takeEnd, toComp, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import * as CA from '../state/comp';
 import { compById, LANE_H, takeRow, type TakeRow } from '../state/comp';
@@ -58,6 +58,15 @@ export function dropClipAt(clientX: number, clientY: number, kind: Clip['kind'],
   return true;
 }
 
+/** True when `b` changes nothing of `a` that the grid draws (a fader or routing move repaints no clip). */
+function sameDrawnTrack(a: Track | undefined, b: Track): boolean {
+  return !!a && a.name === b.name && a.color === b.color && a.muted === b.muted && a.solo === b.solo && a.arm === b.arm && a.h === b.h && (a.icon ?? null) === (b.icon ?? null);
+}
+/** Same for a channel: pattern clips show its notes' rows (kind, root) and an icon (name, instrument), not its knobs. */
+function sameDrawnChannel(a: Channel | undefined, b: Channel): boolean {
+  return !!a && a.name === b.name && a.kind === b.kind && a.root === b.root && (a as { inst?: string }).inst === (b as { inst?: string }).inst;
+}
+
 /** `cb`: a comp region boundary (`bnd` = its index in `boundaries(comp.regions)`). */
 interface Hit { c: Clip; edge: 'l' | 'r' | 'fi' | 'fo' | 'cb' | null; bnd?: number }
 /** A take lane under a track. `cb` = comp beat under the pointer. */
@@ -105,8 +114,9 @@ export function Playlist() {
   let lookVer = 0;
   const [autoHover, setAutoHover] = createSignal<number | null>(null);
   // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip.
+  // The view's size is not here either: `planTile` asks for a full paint only when the tile's size changes.
   // Scrolling is not here: the canvases scroll with the content and redraw only strips (`draw`)
-  createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; peaksVersion(); cw(); ch(); dirtyGrid = true; });
+  createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; peaksVersion(); dirtyGrid = true; });
   // the loop range is shaded on the overlay: moving it repaints no clip
   createEffect(() => { S.project.loop?.a; S.project.loop?.b; dirtyFade = true; });
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
@@ -114,7 +124,10 @@ export function Playlist() {
   const clipBox = (c: Clip, P: { tracks: Track[] }): Rect | null => {
     if (c.kind === 'comp') return null;
     const tr = P.tracks[c.track], t = tops(); if (!tr || t[c.track] == null) return null;
-    return { x: c.start * U.bw - 2, y: t[c.track] - 1, w: Math.max(3, c.len * U.bw - 1) + 4, h: tr.h + 2 };
+    // exactly the rows the clip is drawn on (top + 1 … top + h − 1): rounded out to device pixels the
+    // box still ends inside its own lane, so a repaint never cuts through a clip of the lane above or
+    // below (which chained, clip by clip, into a repaint of the whole view)
+    return { x: c.start * U.bw - 2, y: t[c.track] + 1, w: Math.max(3, c.len * U.bw - 1) + 4, h: tr.h - 2 };
   };
   const damageClip = (c: Clip | undefined, P: { tracks: Track[] }) => {
     if (!c) return;
@@ -134,16 +147,31 @@ export function Playlist() {
     const P = unwrap(S.project), ids = new Set(changed);
     for (const c of P.clips) if (ids.has(c.id)) damageClip(c, P);
   });
-  // clip edits: the old and the new box of each clip; anything else redraws the view
+  /**
+   * Patterns edited since the last frame → their length before the edit. A note edit repaints only
+   * the clips that show the pattern (their boxes change only when its length does: checked in `draw`,
+   * after the edit is applied) instead of every clip in view on each frame of a piano-roll drag.
+   */
+  const editedPats = new Map<Id, number>();
+  // clip edits: the old and the new box of each clip; pattern edits: the clips of that pattern;
+  // edits of fields the grid does not draw (a fader, a channel's knobs): nothing; anything else redraws the view
   onCleanup(onArrangementChange((ops, before) => {
-    dirtyFade = dirtyOv = true;
-    if (!ops) { dirtyGrid = true; lookVer++; return; }
+    if (!ops) { dirtyGrid = dirtyFade = dirtyOv = true; lookVer++; editedPats.clear(); return; }
     let byId: Map<Id, Clip> | null = null;
     const old = (id: Id) => (byId ??= new Map(before.clips.map(c => [c.id, c]))).get(id);
     for (const op of ops) {
-      if (op.op === 'putClips') for (const c of op.clips) { damageClip(old(c.id), before); damageClip(c, before); }
-      else if (op.op === 'removeClips') for (const id of op.ids) damageClip(old(id), before);
-      else { dirtyGrid = true; lookVer++; }
+      if (op.op === 'putClips') { dirtyFade = dirtyOv = true; for (const c of op.clips) { damageClip(old(c.id), before); damageClip(c, before); } }
+      else if (op.op === 'removeClips') { dirtyFade = dirtyOv = true; for (const id of op.ids) damageClip(old(id), before); }
+      else if (op.op === 'putPattern') {
+        lookVer++;
+        const was = before.patterns.find(x => x.id === op.pattern.id);
+        if (!was) continue; // a new pattern: no clip shows it yet
+        if (!editedPats.has(was.id)) editedPats.set(was.id, was.len);
+        for (const c of before.clips) if (c.kind === 'pat' && c.ref === was.id) damageClip(c, before);
+      }
+      else if (op.op === 'putTrack' && sameDrawnTrack(before.tracks.find(x => x.id === op.track.id), op.track)) continue;
+      else if (op.op === 'putChannel' && sameDrawnChannel(before.channels?.find(x => x.id === op.channel.id), op.channel)) continue;
+      else { dirtyGrid = dirtyFade = dirtyOv = true; lookVer++; }
     }
   }));
   createEffect(on(() => prefs().clipIcons, () => { dirtyGrid = true; }, { defer: true }));
@@ -182,7 +210,7 @@ export function Playlist() {
       let grew = false;
       for (const c of P.clips) {
         const tr = P.tracks[c.track]; if (!tr || t[c.track] == null) continue;
-        const x0 = c.start * bw - 2, x1 = x0 + Math.max(3, c.len * bw - 1) + 4, y0 = t[c.track] - 1, y1 = y0 + tr.h + 2;
+        const x0 = c.start * bw - 2, x1 = x0 + Math.max(3, c.len * bw - 1) + 4, y0 = t[c.track] + 1, y1 = y0 + tr.h - 2;
         for (const r of out) {
           if (x1 <= r.x || x0 >= r.x + r.w || y1 <= r.y || y0 >= r.y + r.h) continue;
           if (x0 >= r.x && x1 <= r.x + r.w && y0 >= r.y && y1 <= r.y + r.h) continue;
@@ -211,6 +239,18 @@ export function Playlist() {
     else if (!recActive && lastRecV !== -1) { dirtyGrid = true; lastRecV = -1; }
     const dpr = window.devicePixelRatio || 1;
     if (fontEpoch !== fonts.epoch || themeEpoch !== theme.epoch || dpr !== lastDpr) { fontEpoch = fonts.epoch; themeEpoch = theme.epoch; lastDpr = dpr; dirtyGrid = dirtyRuler = dirtyOv = true; }
+    if (editedPats.size) {
+      const P = unwrap(S.project);
+      for (const [id, len] of editedPats) {
+        const p = P.patterns.find(x => x.id === id);
+        if (!p) { dirtyGrid = dirtyFade = dirtyOv = true; continue; }
+        if (p.len === len) continue;
+        // its clips followed the new length: their new boxes, the fades and the overview too
+        dirtyFade = dirtyOv = true;
+        for (const c of P.clips) if (c.kind === 'pat' && c.ref === id) damageClip(c, P);
+      }
+      editedPats.clear();
+    }
     const beat = curBeat();
     follow(beat);
     const sx = scrollEl.scrollLeft, sy = scrollEl.scrollTop, W = cw(), H = ch();
