@@ -91,3 +91,86 @@ pub struct BandParams {
     pub range: f32,
     pub thr: f32,
 }
+
+/// While alive, the calling thread treats denormal floats as zero (x86-64: MXCSR FTZ + DAZ,
+/// AArch64: FPCR FZ); the previous mode comes back on drop.
+///
+/// Every recursive filter, envelope follower and feedback line decays towards zero after its
+/// input stops, and passes through the denormal range (below ~1e-38) on the way. Arithmetic on
+/// denormals is done in microcode, tens of times slower than normal floats: without this, the
+/// seconds after a phrase ends (the chain is not parked until its tail is over) are the most
+/// expensive blocks of a song, in every effect at once. The values dropped are 760 dB down.
+pub struct NoDenormals(#[allow(dead_code)] u64);
+
+impl NoDenormals {
+    #[inline]
+    pub fn new() -> Self {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let mut old: u32 = 0;
+            // SAFETY: stmxcsr/ldmxcsr read and write the calling thread's SSE control register
+            // through a valid pointer to a u32; SSE is part of the x86-64 baseline.
+            unsafe {
+                std::arch::asm!("stmxcsr [{}]", in(reg) &mut old, options(nostack, preserves_flags));
+                let new: u32 = old | 0x8040; // FTZ (bit 15) | DAZ (bit 6)
+                std::arch::asm!("ldmxcsr [{}]", in(reg) &new, options(nostack, preserves_flags, readonly));
+            }
+            Self(old as u64)
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            let old: u64;
+            // SAFETY: FPCR is the calling thread's floating-point control register, readable and
+            // writable at EL0.
+            unsafe {
+                std::arch::asm!("mrs {}, fpcr", out(reg) old, options(nomem, nostack, preserves_flags));
+                std::arch::asm!("msr fpcr, {}", in(reg) old | (1 << 24), options(nomem, nostack, preserves_flags));
+            }
+            Self(old)
+        }
+        #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+        Self(0)
+    }
+}
+
+impl Default for NoDenormals {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for NoDenormals {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            let old = self.0 as u32;
+            // SAFETY: as in `new`; restores the value read there.
+            unsafe { std::arch::asm!("ldmxcsr [{}]", in(reg) &old, options(nostack, preserves_flags, readonly)) };
+        }
+        #[cfg(target_arch = "aarch64")]
+        // SAFETY: as in `new`; restores the value read there.
+        unsafe {
+            std::arch::asm!("msr fpcr, {}", in(reg) self.0, options(nomem, nostack, preserves_flags));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NoDenormals;
+
+    #[test]
+    fn denormals_are_flushed_only_while_the_guard_lives() {
+        let tiny = std::hint::black_box(1.0e-30f32);
+        let scale = std::hint::black_box(1.0e-10f32);
+        assert!((tiny * scale) > 0.0, "a denormal result outside the guard");
+        {
+            let _g = NoDenormals::new();
+            if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
+                assert_eq!(std::hint::black_box(tiny) * std::hint::black_box(scale), 0.0);
+            }
+        }
+        assert!((std::hint::black_box(tiny) * std::hint::black_box(scale)) > 0.0, "the mode is restored");
+    }
+}

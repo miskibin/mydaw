@@ -318,15 +318,24 @@ impl SimResult {
 
 /// Renders `blocks` blocks synchronously (as fast as possible) and returns the stats.
 fn rt_sync(e: &Arc<Engine>, block: usize, from: f64, secs: f64) -> Value {
+    rt_run(e, block, from, secs, false)
+}
+
+/// `tails`: play 2 s, stop, then measure: every effect decays on silence until its chain is
+/// parked (where denormals, if they are not flushed, make blocks slow).
+fn rt_run(e: &Arc<Engine>, block: usize, from: f64, secs: f64, tails: bool) -> Value {
     let mut rt = e.create_rt(SR, block);
     if from >= 0.0 {
         e.play(from); // a negative `from` leaves the transport stopped (idle graph cost)
     }
     let mut l = vec![0f32; block];
     let mut r = vec![0f32; block];
-    let warm = (0.5 * SR as f64 / block as f64) as usize;
+    let warm = (if tails { 2.0 } else { 0.5 } * SR as f64 / block as f64) as usize;
     for _ in 0..warm {
         rt.process(&mut l, &mut r, None);
+    }
+    if tails {
+        e.stop();
     }
     let blocks = (secs * SR as f64 / block as f64) as usize;
     let mut times = Vec::with_capacity(blocks);
@@ -481,6 +490,7 @@ fn bench_rt_project(wave: &Path, quick: bool) -> Value {
     out["stopped_idle_512"] = rt_sync(&e, 512, -1.0, secs);
     out["from_start_512"] = rt_sync(&e, 512, 0.0, secs);
     out["from_middle_512"] = rt_sync(&e, 512, end * 0.5, secs);
+    out["tails_after_stop_512"] = rt_run(&e, 512, end * 0.5, if quick { 6.0 } else { 12.0 }, true);
     if !quick {
         out["block_64"] = rt_sync(&e, 64, end * 0.5, 6.0);
         out["block_128"] = rt_sync(&e, 128, end * 0.5, 8.0);
@@ -561,6 +571,22 @@ fn bench_ops(wave: &Path, _sp: &Spec, quick: bool) -> Value {
         true,
     );
     e.end_gesture();
+    // a note drag in the piano roll: the whole pattern per frame (as the UI sends it), from JSON
+    if let Some(big) = p.patterns.iter().max_by_key(|x| x.notes.len()).cloned() {
+        res["note_drag_pattern_notes"] = json!(big.notes.len());
+        e.begin_gesture();
+        let mut pt = big.clone();
+        res["note_drag_transient_ms"] = time_op(
+            Box::new(move |k| {
+                pt.notes[0].step = (k % 16) as f32;
+                // what arrives over IPC is JSON: parsing it is part of the step
+                let text = serde_json::to_string(&Op::PutPattern { pattern: pt.clone() }).unwrap();
+                vec![serde_json::from_str::<Op>(&text).unwrap()]
+            }),
+            true,
+        );
+        e.end_gesture();
+    }
     e.begin_gesture();
     let mut t = track.clone();
     res["fader_drag_transient_ms"] = time_op(

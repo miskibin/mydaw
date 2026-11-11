@@ -14,11 +14,14 @@ function engineSpecs(sizes) {
     add(`rt.${s}.cpu_load_p99_pct`, `rt_project.${s}.from_middle_512.cpu_load_p99_pct`, '%', 'low', 60, `audio callback load (p99 block / 10.7 ms), ${s} project, 512 frames`);
     add(`rt.${s}.cpu_load_mean_pct`, `rt_project.${s}.from_middle_512.cpu_load_mean_pct`, '%', 'low', 50, `mean audio-thread load while playing, ${s}`);
     add(`rt.${s}.idle_cpu_load_mean_pct`, `rt_project.${s}.stopped_idle_512.cpu_load_mean_pct`, '%', 'low', 10, `audio-thread load with the transport STOPPED (effects on silence), ${s}`);
+    add(`rt.${s}.tails_cpu_load_mean_pct`, `rt_project.${s}.tails_after_stop_512.cpu_load_mean_pct`, '%', 'low', 50, `mean audio-thread load in the seconds after Stop (effect tails decaying), ${s}`);
+    add(`rt.${s}.tails_cpu_load_p99_pct`, `rt_project.${s}.tails_after_stop_512.cpu_load_p99_pct`, '%', 'low', 60, `p99 block in the seconds after Stop, ${s}`);
     add(`rt.${s}.cpu_load_max_pct`, `rt_project.${s}.from_middle_512.cpu_load_max_pct`, '%', 'low', 100, `worst block vs its deadline, ${s}`);
     add(`rt.${s}.late_blocks`, `rt_project.${s}.from_middle_512.late_blocks`, 'blocks', 'low', 0, `blocks that missed the deadline, ${s}`);
     add(`rt.${s}.audio_allocs`, `rt_project.${s}.from_middle_512.audio_allocs`, 'allocs', 'low', 0, `heap allocations on the audio thread, ${s}`);
     add(`rt.${s}.block64_cpu_load_p99_pct`, `rt_project.${s}.block_64.cpu_load_p99_pct`, '%', 'low', 80, `p99 load at 64-frame blocks, ${s}`);
     add(`ops.${s}.drag_clip_ms`, `ops.${s}.drag_clip_transient_ms.p50`, 'ms', 'low', 4, `engine apply of one clip-drag step, ${s}`);
+    add(`ops.${s}.note_drag_ms`, `ops.${s}.note_drag_transient_ms.p50`, 'ms', 'low', 4, `engine apply of one piano-roll drag step (whole pattern, from JSON), ${s}`);
     add(`ops.${s}.fader_drag_ms`, `ops.${s}.fader_drag_transient_ms.p50`, 'ms', 'low', 4, `engine apply of one fader step, ${s}`);
     add(`ops.${s}.fader_drag_with_state_event_ms`, `ops.${s}.fader_drag_with_state_event_ms.p50`, 'ms', 'low', 4, `same, with the whole-project state event serialised, ${s}`);
     add(`ops.${s}.move_clip_ms`, `ops.${s}.move_clip_ms.p50`, 'ms', 'low', 16, `engine apply of a committed clip move, ${s}`);

@@ -19,7 +19,7 @@ import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '..
 import { dblCheck, track } from '../ui/drag';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
 import { drawFades, drawGrid, drawRuler, type View } from './playlistDraw';
-import { damageRects, followScroll, planTile, type Rect, type Tile } from './playlistTile';
+import { damageRects, followScroll, planTile, snapPx, type Rect, type Tile } from './playlistTile';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { sortPoints } from '../lib/automation';
 import { autoById } from '../state/store';
@@ -110,13 +110,28 @@ export function Playlist() {
    * repaints a few clips per frame instead of the whole view with every waveform in it.
    */
   let damage: Rect[] = [];
+  /**
+   * Zoom on a view too heavy to repaint within a frame: the tile (drawn at `tileBw` px per beat) is
+   * stretched to the new zoom on the compositor and repainted sharp once the zoom has settled, or
+   * as soon as the stretched tile no longer covers the view or is off by more than 2×. Without it
+   * every wheel step waited for a full paint of all the waveforms in view (a zoom at ~20 fps on a
+   * big song). Where a full paint fits in a frame nothing changes: every step is painted sharp.
+   */
+  let zoomed = false, stretched = false, tileBw = 0, zoomAt = 0;
+  /** Frame intervals after the last full paints (ms): their median says whether a full paint fits in a frame. */
+  const paintGaps: number[] = [];
+  let lastDrawAt = 0, paintedFull = false;
+  const heavyPaint = () => paintGaps.length >= 2 && [...paintGaps].sort((a, b) => a - b)[paintGaps.length >> 1] > 24;
+  const ZOOM_SETTLE_MS = 90;
   /** Bumped when the clip lookups of `drawGrid` (patterns, sources, …) may be stale: not for a clip-only edit. */
   let lookVer = 0;
   const [autoHover, setAutoHover] = createSignal<number | null>(null);
   // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip.
   // The view's size is not here either: `planTile` asks for a full paint only when the tile's size changes.
   // Scrolling is not here: the canvases scroll with the content and redraw only strips (`draw`)
-  createEffect(() => { U.bw; U.snap; U.tool; S.transport.rec; S.project.bpm; peaksVersion(); dirtyGrid = true; });
+  createEffect(() => { U.snap; U.tool; S.transport.rec; S.project.bpm; peaksVersion(); dirtyGrid = true; });
+  // a zoom step is handled in `draw`: a full paint, or the tile stretched until the zoom settles
+  createEffect(on(() => U.bw, () => { zoomed = true; }, { defer: true }));
   // the loop range is shaded on the overlay: moving it repaints no clip
   createEffect(() => { S.project.loop?.a; S.project.loop?.b; dirtyFade = true; });
   createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
@@ -233,7 +248,9 @@ export function Playlist() {
     setScroll({ x: scrollEl.scrollLeft, y: scrollEl.scrollTop });
   };
 
-  const draw = () => {
+  const draw = (now: number) => {
+    if (paintedFull && lastDrawAt) { paintGaps.push(now - lastDrawAt); if (paintGaps.length > 5) paintGaps.shift(); }
+    lastDrawAt = now; paintedFull = false;
     const recActive = recState.active && tele.frame.playing;
     if (recActive && recState.version !== lastRecV) { dirtyGrid = true; lastRecV = recState.version; }
     else if (!recActive && lastRecV !== -1) { dirtyGrid = true; lastRecV = -1; }
@@ -254,6 +271,24 @@ export function Playlist() {
     const beat = curBeat();
     follow(beat);
     const sx = scrollEl.scrollLeft, sy = scrollEl.scrollTop, W = cw(), H = ch();
+    if (zoomed) {
+      zoomed = false; zoomAt = now;
+      if (tile && tileBw && !dirtyGrid && heavyPaint()) stretched = true; else dirtyGrid = true;
+    }
+    if (stretched && tile) {
+      const k = U.bw / tileBw, x0 = tile.x * k, x1 = (tile.x + tile.w) * k;
+      const covers = x0 <= sx + 0.5 && (x1 >= sx + W - 0.5 || x1 >= gridW() - 1) && tile.y <= sy + 0.5 && (tile.y + tile.h >= sy + H - 0.5 || tile.y + tile.h >= gridH() - 1);
+      if (dirtyGrid || damage.length || !covers || k > 2 || k < 0.5 || now - zoomAt > ZOOM_SETTLE_MS) { stretched = false; dirtyGrid = true; }
+      else {
+        // the same pixels at the new zoom; ruler, overview and playhead are cheap and stay exact
+        gridCv.style.transform = fadeCv.style.transform = `translate(${x0}px, ${tile.y}px) scaleX(${k})`;
+        const rt: Tile = { x: snapPx(Math.max(0, sx - 96), dpr), y: 0, w: Math.min(gridW(), W + 192), h: 26 };
+        paintRuler(rt, dpr);
+        if (dirtyOv) { dirtyOv = false; drawOverview(); }
+        placePlayhead(beat);
+        return;
+      }
+    }
     const plan = planTile(dirtyGrid ? null : tile, sx, sy, W, H, gridW(), gridH(), dpr);
     const t = plan.tile, moved = !tile || t.x !== tile.x || t.y !== tile.y || t.w !== tile.w || t.h !== tile.h;
     const rects = plan.full ? [] : damageRects(damage.length ? closeOverClips(damage) : damage, t, dpr);
@@ -263,7 +298,7 @@ export function Playlist() {
       const rec = recActive ? recState : null, v = frameView();
       if (full) fitCanvas(gridCv, t.w, t.h);
       const g = gridCv.getContext('2d')!;
-      if (full) paintGrid(g, v, t, { x: 0, y: 0, w: t.w, h: t.h }, dpr, rec);
+      if (full) { paintGrid(g, v, t, { x: 0, y: 0, w: t.w, h: t.h }, dpr, rec); tileBw = U.bw; paintedFull = true; }
       else {
         if (moved) {
           // shift what is already drawn, then draw only the exposed strips
@@ -298,18 +333,22 @@ export function Playlist() {
       drawFades(g, at(frameView(), t, { x: 0, y: 0, w: t.w, h: t.h }), P);
     }
     // the ruler is cheap: redrawn whole whenever its tile moves
-    if (dirtyRuler || !rulerTile || rulerTile.x !== t.x || rulerTile.w !== t.w) {
-      dirtyRuler = false;
-      rulerTile = t;
-      fitCanvas(rulerCv, t.w, 26);
-      const g = rulerCv.getContext('2d')!;
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawRuler(g, t.x, t.w, U.bw, S.project.loop, U.start);
-      rulerCv.style.width = t.w + 'px';
-      rulerCv.style.transform = `translateX(${t.x}px)`;
-    }
+    if (dirtyRuler || !rulerTile || rulerTile.x !== t.x || rulerTile.w !== t.w) paintRuler(t, dpr);
     if (dirtyOv) { dirtyOv = false; drawOverview(); }
-    // the playhead lives in grid coordinates like the canvases: it scrolls with them
+    placePlayhead(beat);
+  };
+  const paintRuler = (t: Tile, dpr: number) => {
+    dirtyRuler = false;
+    rulerTile = t;
+    fitCanvas(rulerCv, t.w, 26);
+    const g = rulerCv.getContext('2d')!;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawRuler(g, t.x, t.w, U.bw, S.project.loop, U.start);
+    rulerCv.style.width = t.w + 'px';
+    rulerCv.style.transform = `translateX(${t.x}px)`;
+  };
+  /** The playhead lives in grid coordinates like the canvases: it scrolls with them. */
+  const placePlayhead = (beat: number) => {
     const x = Math.max(0, beat) * U.bw;
     if (x !== lastPhX) {
       lastPhX = x;
@@ -324,6 +363,7 @@ export function Playlist() {
     const onScroll = () => setScroll({ x: scrollEl.scrollLeft, y: scrollEl.scrollTop });
     scrollEl.addEventListener('scroll', onScroll, { passive: true });
     scrollEl.addEventListener('wheel', onWheel, { passive: false });
+    gridCv.style.transformOrigin = fadeCv.style.transformOrigin = '0 0';
     const stop = addFrameTask(draw);
     onCleanup(() => { ro.disconnect(); stop(); scrollEl.removeEventListener('scroll', onScroll); scrollEl.removeEventListener('wheel', onWheel); });
   });

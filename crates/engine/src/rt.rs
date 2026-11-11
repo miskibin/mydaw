@@ -997,6 +997,8 @@ impl Rt {
     /// Renders `out_l.len()` frames. `input` is the device input for the same period, if any.
     pub fn process(&mut self, out_l: &mut [f32], out_r: &mut [f32], input: Option<(&[f32], &[f32])>) {
         let t0 = Instant::now();
+        // device callback and offline render alike: decaying filters must not crawl through denormals
+        let _no_denormals = crate::processor::NoDenormals::new();
         self.drain();
         let n = out_l.len();
         let period = n as f32 / self.sr;
@@ -1442,6 +1444,8 @@ fn play(voices: &mut VoicePool, synths: &mut SynthBank, ch: &ChanRt, idx: usize,
 /// insert's output in `ins.l`/`ins.r` (or `ins.idle` set: it contributes nothing).
 #[allow(clippy::too_many_arguments)]
 fn process_insert(ins: &mut InsertRt, k: usize, n: usize, ctx: &ProcessCtx, enabled: bool, watch: &[Id], taps: &mut Taps, shared: &Shared) {
+    // also set here: offline renders run chains on worker threads, each with its own float mode
+    let _no_denormals = crate::processor::NoDenormals::new();
     let gate = gate(ins, n, enabled, watch);
     ins.idle = gate == Gate::Idle;
     if ins.idle {
