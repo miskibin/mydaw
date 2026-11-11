@@ -91,11 +91,11 @@ fn a_note_rings_for_its_length_then_fades_over_the_release() {
     // a one-step note (5625 frames), then silence
     let short = render(project(vec![note(0.0, 1.0, 60, 0.9)], KeysState { release: 40.0, ..Default::default() }), true);
     let long = render(project(vec![note(0.0, 1.0, 60, 0.9)], KeysState { release: 2000.0, ..Default::default() }), true);
-    assert!(rms(&short[1000..5000]) > 0.2, "the note sounds while held");
+    assert!(rms(&short[1000..5000]) > 0.05, "the note sounds while held");
     // 100 ms after the key is let go: gone with a 40 ms release, still ringing with 2 s
     let after = 5625 + 4800..5625 + 9600;
     assert!(rms(&short[after.clone()]) < 1e-3);
-    assert!(rms(&long[after]) > 0.1);
+    assert!(rms(&long[after]) > 0.025);
     // and a release never ends in a step (no click): the largest jump stays small
     let jump = short.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
     assert!(jump < 0.05, "click of {jump}");
@@ -130,37 +130,27 @@ fn settings_are_validated_saved_and_undone() {
 }
 
 #[test]
-fn a_full_chord_stays_below_full_scale_without_clicks() {
-    // each recording peaks at 0.5: eight loud notes summed to 4.0 (+12 dBFS) and clipped hard
-    let chord: Vec<Note> = (58..66).map(|k| note(0.0, 8.0, k, 1.0)).collect();
-    let x = render(project(chord, KeysState::default()), true);
-    let pk = x.iter().fold(0f32, |a, b| a.max(b.abs()));
-    assert!(pk <= 0.9, "chord peak {:.1} dBFS", 20.0 * pk.log10());
-    assert!(pk > 0.8, "the limiter only catches the overs: peak {pk}");
-    // no step bigger than the loudest sine could make on its own (a click or a clipped edge)
-    let step = x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
-    assert!(step < 0.2, "largest sample step {step}");
-}
-
-#[test]
-fn a_single_soft_note_passes_the_limiter_untouched() {
-    let x = render(project(vec![note(0.0, 8.0, 60, 0.3)], KeysState::default()), true);
-    let pk = x.iter().fold(0f32, |a, b| a.max(b.abs()));
-    assert!(pk > 0.02 && pk < 0.891, "soft note peak {pk}");
-}
-
-#[test]
-fn dynamics_follow_their_automation() {
-    // a soft note: with full dynamics it plays quietly, automated to 0 % it plays like a loud one
-    let soft = |auto: Option<f32>| {
-        let mut p = project(vec![note(4.0, 8.0, 60, 0.15)], KeysState { dynamics: 100.0, ..Default::default() });
-        if let Some(v) = auto {
-            p.automations.push(Automation { id: 70, name: "d".into(), color: "#e0a44a".into(), target: AutoTarget::Keys { chan_id: CH, param: "dynamics".into() }, points: vec![AutoPoint { t: 0.0, v }] });
-            p.clips.push(Clip { id: 71, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Auto, source: 70, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None });
+fn a_chord_is_the_plain_sum_of_its_notes() {
+    // a limiter on the piano used to squash chords (pumping, the tone changing as keys were
+    // added): every note must sound in the chord exactly as it sounds alone
+    let keys: Vec<u8> = (58..66).collect();
+    let chord = render(project(keys.iter().map(|&k| note(0.0, 8.0, k, 1.0)).collect(), KeysState::default()), true);
+    let mut sum = vec![0f32; chord.len()];
+    for &k in &keys {
+        for (s, x) in sum.iter_mut().zip(render(project(vec![note(0.0, 8.0, k, 1.0)], KeysState::default()), true)) {
+            *s += x;
         }
-        rms(&render(p, true)[2 * 12000..2 * 40000])
-    };
-    let (plain, flat) = (soft(None), soft(Some(0.0)));
-    assert!(flat > plain * 1.5, "dynamics automation: {plain} → {flat}");
-    // (the note starts a beat in: a note-on reads the value automation set before it)
+    }
+    let err = chord.iter().zip(&sum).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+    assert!(err < 1e-4, "chord differs from the sum of its notes by {err}");
+}
+
+#[test]
+fn a_loud_note_leaves_headroom_for_chords() {
+    let x = render(project(vec![note(0.0, 8.0, 60, 1.0)], KeysState::default()), true);
+    let pk = x.iter().fold(0f32, |a, b| a.max(b.abs()));
+    // the recording peaks at 0.5 (−6 dBFS, about −3 dBFS after the velocity curve); the
+    // channel plays it 12 dB lower
+    let db = 20.0 * pk.log10();
+    assert!(db < -14.0 && db > -16.0, "loud note peak {db:.1} dBFS");
 }

@@ -7,7 +7,6 @@
 
 use std::f32::consts::TAU;
 
-use crate::dsp::out_limiter::OutLimiter;
 use crate::dsp::{Biquad, FilterType};
 use crate::model::{Id, Inst};
 use crate::rt::{ChanRt, InsertRt};
@@ -116,31 +115,14 @@ impl Voice {
     }
 }
 
-/// WAVE Keys channels that can sound at once through their own output limiter (one bus per
-/// channel and destination); a further one plays without it.
-const KEYS_BUSES: usize = 8;
-/// The longest block a Keys bus holds (`Engine::create_rt` clamps blocks to this).
-const BUS_FRAMES: usize = 8192;
-
-/// The summed voices of one WAVE Keys channel on their way to its destination: a piano chord
-/// adds up far above full scale (ten notes: about +10 dBFS), so it passes the instruments'
-/// output limiter first. Buffers are allocated with the pool, never on the audio thread.
-struct KeysBus {
-    chan_id: Id,
-    dest: Dest,
-    /// Fed by a voice this block.
-    fed: bool,
-    /// Samples the limiter still has to flush after the last voice ended (its look-ahead).
-    tail: usize,
-    used: bool,
-    lim: OutLimiter,
-    l: Vec<f32>,
-    r: Vec<f32>,
-}
+/// Output level of WAVE Keys against its recordings (−12 dB). The Salamander bank is
+/// levelled hot: one full-velocity note peaks at +1 dBFS, ten keys at +10.5 dBFS. With this
+/// headroom a loud note sits near −11 dBFS and a ten-note chord near −1.8 dBFS, so chords sum
+/// linearly instead of being squashed by a limiter (which made them pump and change tone).
+pub const KEYS_HEADROOM: f32 = 0.251;
 
 pub struct VoicePool {
     pub voices: Vec<Voice>,
-    keys: Vec<KeysBus>,
     sr: f32,
     seed: u32,
     /// Sustain pedal state (live MIDI).
@@ -187,27 +169,16 @@ fn release(v: &mut Voice, sr: f32) {
 
 impl VoicePool {
     pub fn new(sr: f32) -> Self {
-        let keys = (0..KEYS_BUSES)
-            .map(|_| KeysBus { chan_id: 0, dest: Dest::Click, fed: false, tail: 0, used: false, lim: OutLimiter::new(sr), l: vec![0.0; BUS_FRAMES], r: vec![0.0; BUS_FRAMES] })
-            .collect();
-        Self { voices: vec![Voice::dead(); MAX_VOICES], keys, sr, seed: 0x1234_5678, pedal: false, bend: 1.0 }
+        Self { voices: vec![Voice::dead(); MAX_VOICES], sr, seed: 0x1234_5678, pedal: false, bend: 1.0 }
     }
 
     pub fn set_sr(&mut self, sr: f32) {
         self.sr = sr;
-        for b in &mut self.keys {
-            b.lim = OutLimiter::new(sr);
-        }
         self.clear();
     }
 
     pub fn clear(&mut self) {
         self.voices.iter_mut().for_each(|v| v.alive = false);
-        for b in &mut self.keys {
-            b.used = false;
-            b.tail = 0;
-            b.lim.reset();
-        }
         self.pedal = false;
         self.bend = 1.0;
     }
@@ -307,7 +278,7 @@ impl VoicePool {
                     v.sus = false;
                     v.len = v.len.min(v.t);
                 }
-                let i = self.trigger(VoiceKind::Keys, dest, idx, ch.id, delay, len_s, key as f32, hit * gain, rate);
+                let i = self.trigger(VoiceKind::Keys, dest, idx, ch.id, delay, len_s, key as f32, hit * gain * KEYS_HEADROOM, rate);
                 self.voices[i].zone = zone;
                 self.voices[i].key = key;
                 Some(i)
@@ -368,12 +339,6 @@ impl VoicePool {
     pub fn render(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], inserts: &mut [InsertRt], click: &mut [f32], chans: &[ChanRt]) {
         let sr = self.sr;
         let bend = self.bend;
-        let bussed = n <= BUS_FRAMES;
-        for b in self.keys.iter_mut().filter(|b| b.used) {
-            b.fed = false;
-            b.l[..n.min(BUS_FRAMES)].fill(0.0);
-            b.r[..n.min(BUS_FRAMES)].fill(0.0);
-        }
         for v in self.voices.iter_mut().filter(|v| v.alive) {
             let bend = if v.held { bend } else { 1.0 };
             let start = (v.delay as usize).min(n);
@@ -423,15 +388,6 @@ impl VoicePool {
                 let Some((a, release)) = piano.and_then(|(b, r)| b.audio(v.zone).map(|a| (a, r))) else {
                     v.alive = false;
                     continue;
-                };
-                // the channel's bus (through the limiter), or straight out when every bus is taken
-                let bus = if bussed { keys_bus(&mut self.keys, v.chan_id, v.dest) } else { None };
-                let (out_l, out_r, stereo): (&mut [f32], &mut [f32], bool) = match bus {
-                    Some(b) => {
-                        b.fed = true;
-                        (&mut b.l[..n], &mut b.r[..n], true)
-                    }
-                    None => (out_l, out_r, stereo),
                 };
                 // -60 dB after `release` seconds
                 let coef = 10f32.powf(-3.0 / (release.max(0.005) * sr));
@@ -545,59 +501,5 @@ impl VoicePool {
                 }
             }
         }
-        self.flush_keys(n, tracks, inserts);
     }
-
-    /// Each Keys bus through its limiter into its destination; a bus no voice feeds any more
-    /// flushes the limiter's look-ahead, then is free again.
-    fn flush_keys(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], inserts: &mut [InsertRt]) {
-        for b in self.keys.iter_mut().filter(|b| b.used) {
-            if b.fed {
-                b.tail = OutLimiter::LOOK;
-            }
-            let (out_l, out_r): (&mut [f32], &mut [f32]) = match b.dest {
-                Dest::Track(t) => match tracks.get_mut(t) {
-                    Some((l, r)) => (&mut l[..], &mut r[..]),
-                    None => (&mut [], &mut []),
-                },
-                Dest::Insert(k) => match inserts.get_mut(k) {
-                    Some(ins) => (&mut ins.l[..], &mut ins.r[..]),
-                    None => (&mut [], &mut []),
-                },
-                Dest::Click => (&mut [], &mut []),
-            };
-            let m = n.min(out_l.len()).min(b.l.len());
-            let stereo = out_r.len() >= m;
-            for i in 0..m {
-                let (x, y) = b.lim.tick(b.l[i], b.r[i]);
-                out_l[i] += x;
-                if stereo {
-                    out_r[i] += y;
-                }
-            }
-            if !b.fed {
-                b.tail = b.tail.saturating_sub(n);
-                if b.tail == 0 {
-                    b.used = false;
-                    b.lim.reset();
-                }
-            }
-        }
-    }
-}
-
-/// The bus of `chan_id` playing into `dest`, or a free one claimed for it.
-fn keys_bus(buses: &mut [KeysBus], chan_id: Id, dest: Dest) -> Option<&mut KeysBus> {
-    let i = buses.iter().position(|b| b.used && b.chan_id == chan_id && b.dest == dest).or_else(|| buses.iter().position(|b| !b.used))?;
-    let b = &mut buses[i];
-    if !b.used {
-        b.used = true;
-        b.chan_id = chan_id;
-        b.dest = dest;
-        b.tail = 0;
-        b.fed = false;
-        b.l.fill(0.0);
-        b.r.fill(0.0);
-    }
-    Some(b)
 }

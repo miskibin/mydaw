@@ -448,6 +448,9 @@ pub struct ChanRt {
     pub on: bool,
     /// Insert index the channel plays into; `None` = the clip's track.
     pub insert: Option<usize>,
+    /// Insert of the track that plays a pattern with this channel's notes (where the song
+    /// hears it), if any.
+    pub heard: Option<usize>,
     /// Where auditions go when nothing else decides: `insert`, else the insert of a track
     /// that plays a pattern with this channel's notes, else the master.
     pub home: usize,
@@ -496,8 +499,9 @@ pub enum Cmd {
     Audition { chan: Id, key: u8, vel: f32, len: f32, pattern: Option<Id> },
     /// Loop one pattern on its own (`None` stops). Exclusive with the song transport.
     PatPlay(Option<Id>),
-    /// Live MIDI key down/up on a channel. `ins`: insert index to play through when the
-    /// channel has no insert of its own (the armed track's), else the channel's home.
+    /// Live MIDI key down/up on a channel. It plays where the song plays the channel (its own
+    /// insert, else the track of its pattern); `ins` (the armed track's insert) only for a
+    /// channel the song does not play yet, else the master.
     MidiNote { chan: Id, key: u8, vel: f32, on: bool, ins: Option<usize> },
     /// Live MIDI sustain pedal.
     MidiSustain(bool),
@@ -887,7 +891,9 @@ impl Rt {
                     if on {
                         if let Some(i) = tl.chans.iter().position(|c| c.id == chan) {
                             let ch = &tl.chans[i];
-                            let ins = ch.insert.or(ins).unwrap_or(ch.home);
+                            // never through an unrelated armed track: a vocal chain (compressor, pitch
+                            // correction) mangles chords that sound right in the piano roll
+                            let ins = ch.insert.or(ch.heard).or(ins).unwrap_or(ch.home);
                             if ch.kind == VoiceKind::Synth {
                                 if let Some(s) = self.synths.get(chan) {
                                     s.key_down(key, vel, Dest::Insert(ins));

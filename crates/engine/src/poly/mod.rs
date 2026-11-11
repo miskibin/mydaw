@@ -3,8 +3,8 @@
 //! One [`SynthInst`] per synth channel lives on the audio thread (in the [`SynthBank`]), made
 //! off the audio thread by the engine and handed over through the command ring. Per instance:
 //! 16 voices (plus 4 slots where stolen voices fade out), sample-accurate note events, two
-//! global LFOs, then the global effects (drive, chorus, ping-pong delay, reverb) and the
-//! output trim. Voice signal flow:
+//! global LFOs, then the global effects (drive, chorus, ping-pong delay, reverb), the
+//! output trim and, for polyphonic patches, the chord headroom ([`POLY_HEADROOM`]). Voice signal flow:
 //!
 //! ```text
 //! osc 1 ─┐ (wavetable, unison ≤ 7, detune, width)
@@ -27,7 +27,6 @@ use std::f32::consts::TAU;
 
 use serde::Serialize;
 
-use crate::dsp::out_limiter::OutLimiter;
 use crate::model::Id;
 use crate::rt::{ChanRt, InsertRt};
 use crate::synth::{pan_gains, Dest};
@@ -48,6 +47,23 @@ pub const MAX_SYNTHS: usize = 64;
 const STEAL_S: f32 = 0.004;
 /// Fade when the transport restarts.
 const STOP_S: f32 = 0.006;
+/// Poly notes starting within this time of the first are one chord: with glide on they all
+/// slide from the note before the chord, not from each other.
+const CHORD_S: f32 = 0.03;
+/// Output level of a polyphonic patch (−12 dB). Presets are levelled for one note; notes add
+/// up, so a six-note chord of a pluck or keys patch is 8–13 dB louder than one note. This
+/// headroom keeps such a chord near full scale while every note sums linearly: no limiter
+/// squashing the chord (that made it pump and change tone as keys were added). Mono and legato
+/// patches play one note at a time and keep their level.
+pub const POLY_HEADROOM: f32 = 0.251;
+
+fn headroom(mode: f32) -> f32 {
+    if mode as u8 == 0 {
+        POLY_HEADROOM
+    } else {
+        1.0
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 enum Ev {
@@ -137,6 +153,10 @@ pub struct SynthInst {
     stack: [(u8, u32, f32, bool); 16],
     nstack: usize,
     last_st: Option<f32>,
+    /// Poly glide: when the current group of notes struck together (a chord) began, and the
+    /// key they all glide from (the note played before the chord).
+    chord_at: Option<u64>,
+    chord_from: Option<f32>,
     lfo: [Lfo; 2],
     lfo_buf: [[f32; CHUNK]; 2],
     wheel: f32,
@@ -152,8 +172,8 @@ pub struct SynthInst {
     /// destination first fades the old routing out, then the new one in.
     mslots: [(u8, usize, f32); 4],
     gain: (f32, f32),
-    /// Output safety limiter: chords sum above full scale, single notes never reach it.
-    lim: OutLimiter,
+    /// Output headroom as it sounds (glides when the voice mode changes, see [`POLY_HEADROOM`]).
+    hr: f32,
     quiet: usize,
     idle: bool,
     age: u64,
@@ -179,6 +199,8 @@ impl SynthInst {
             stack: [(0, 0, 0.0, false); 16],
             nstack: 0,
             last_st: None,
+            chord_at: None,
+            chord_from: None,
             lfo: [Lfo { rng: 0x2545_F491 ^ chan as u32 | 1, ..Default::default() }, Lfo { rng: 0x9E37_79B9 ^ chan as u32 | 1, ..Default::default() }],
             lfo_buf: [[0.0; CHUNK]; 2],
             wheel: 0.0,
@@ -191,7 +213,7 @@ impl SynthInst {
             rng: 0x1234_5678 ^ (chan as u32).wrapping_mul(0x9E37_79B9) | 1,
             mslots: [(0, 0, 0.0); 4],
             gain: (0.0, 0.0),
-            lim: OutLimiter::new(sr),
+            hr: headroom(patch[ix::V_MODE]),
             quiet: 0,
             idle: true,
             age: 0,
@@ -348,7 +370,11 @@ impl SynthInst {
         let seed = self.seed();
         let p = self.cur;
         if mode == 0 {
-            let from = if glide >= 1.0 { self.last_st } else { None };
+            if self.chord_at.is_none_or(|t| self.now.saturating_sub(t) > (CHORD_S * self.sr) as u64) {
+                self.chord_at = Some(self.now);
+                self.chord_from = self.last_st;
+            }
+            let from = if glide >= 1.0 { self.chord_from } else { None };
             let slot = self.free_slot();
             self.voices[slot].start(&p, id, key, vel, live, self.age, seed, from, glide);
         } else {
@@ -511,6 +537,7 @@ impl SynthInst {
             }
             if self.idle {
                 self.gain = (gl, gr);
+                self.hr = headroom(self.target[ix::V_MODE]);
                 self.now += m as u64;
                 done += m;
                 continue;
@@ -541,16 +568,20 @@ impl SynthInst {
             self.fx.process(&mut self.bl[..m], &mut self.br[..m], &self.cur, bpm);
             let trim = 10f32.powf(self.cur[ix::FX_OUT] / 20.0);
             let (g0l, g0r) = self.gain;
+            let hr0 = self.hr;
+            let hr1 = hr0 + (headroom(self.cur[ix::V_MODE]) - hr0) * (1.0 - (-(m as f32) / (0.012 * self.sr)).exp());
             let inv = 1.0 / m as f32;
             let mut pk = 0f32;
             for i in 0..m {
                 let t = (i + 1) as f32 * inv;
-                let (a, b) = self.lim.tick(self.bl[i] * trim, self.br[i] * trim);
+                let h = trim * (hr0 + (hr1 - hr0) * t);
+                let (a, b) = (self.bl[i] * h, self.br[i] * h);
                 pk = pk.max(a.abs()).max(b.abs());
                 self.bl[i] = a * (g0l + (gl - g0l) * t);
                 self.br[i] = b * (g0r + (gr - g0r) * t);
             }
             self.gain = (gl, gr);
+            self.hr = hr1;
             sink(done, &self.bl[..m], &self.br[..m]);
             if any || pk > 1e-6 {
                 self.quiet = 0;
@@ -559,7 +590,6 @@ impl SynthInst {
                 if self.quiet > self.fx.tail(&self.cur, bpm) + CHUNK {
                     self.idle = true;
                     self.fx.reset();
-                    self.lim.reset();
                 }
             }
             self.now += m as u64;

@@ -75,9 +75,11 @@ fn levels() {
         let (l, r) = lab::probe(&p, SR);
         let (lu, tp) = lab::loudness(&l, &r, SR);
         let now = p.patch[ix::FX_OUT] as f64;
-        let mut delta = target(p.category) - lu;
-        if tp + delta > -3.0 {
-            delta = -3.0 - tp;
+        // polyphonic patches play POLY_HEADROOM (−12 dB) lower so chords fit
+        let hr = if p.patch[ix::V_MODE] == 0.0 { 20.0 * (wave_engine::poly::POLY_HEADROOM as f64).log10() } else { 0.0 };
+        let mut delta = target(p.category) + hr - lu;
+        if tp + delta > -3.0 + hr {
+            delta = -3.0 + hr - tp;
         }
         println!("| {} | {} | {} | {:.1} | {:.1} | {:.1} | {:.1} |", p.name, p.category, p.probe_key(), lu, tp, now, now + delta);
     }

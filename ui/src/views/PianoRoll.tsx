@@ -233,10 +233,17 @@ function Roll(props: { z: number }) {
         return;
       }
     }
+    // Shift adds to the selection with any tool (click toggles a note, drag adds a box): with
+    // the pencil it used to move the clicked note alone and drop the rest of the selection
+    if (e.button === 0 && e.shiftKey) {
+      if (i < 0) return marqueeDrag(e, true);
+      const s = new Set(sel()); if (s.has(i)) s.delete(i); else s.add(i); setSel(s);
+      say(s.size ? t('b.pe.selCopy', { x: notesText(s.size) }) : t('b.pe.noSel'));
+      return;
+    }
     if (e.button === 2 || tool === 'erase') return eraseDrag(e);
     if (tool === 'select') {
-      if (i < 0) return marqueeDrag(e, e.shiftKey);
-      if (e.shiftKey) { const s = new Set(sel()); if (s.has(i)) s.delete(i); else s.add(i); setSel(s); return; }
+      if (i < 0) return marqueeDrag(e, false);
       const idx = sel().has(i) ? [...sel()] : [i];
       if (!sel().has(i)) setSel(new Set([i]));
       setLastLen(pt().notes[i].len);

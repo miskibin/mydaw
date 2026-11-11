@@ -4,7 +4,7 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
-## 0.9.4 — 2026-11-11
+## 0.9.6 — 2026-11-11
 
 ### Added
 - **Patterns like FL Studio.** The current pattern is picked in the toolbar (menu, mouse
@@ -29,6 +29,34 @@ shown in the app after an update and is published as the release notes (see
 - **Lower CPU after a phrase ends.** Effects fading out on silence (reverb and delay tails,
   filters) could cost more than the music itself; that part of the load is about a quarter lower.
 - Dragging one clip on a big song sometimes redrew the whole playlist on every step.
+
+## 0.9.5 — 2026-11-11
+
+### Fixed
+- **Chords from the computer keyboard and MIDI keyboard.** Keys you play live now sound
+  through the instrument's own mixer track, exactly like the piano roll. Before, they went
+  through the track armed for recording (in the starter project the Vocal track, with its
+  compressor), which squashed chords and made them sound unnatural.
+- **Shift+click selects notes in the piano roll with any tool.** With the pencil, Shift+click
+  used to move the clicked note and drop the rest of the selection, so Ctrl+C copied only one
+  note. Shift+click now adds or removes a note, Shift+drag adds a box of notes.
+
+## 0.9.4 — 2026-11-11
+
+### Fixed
+- **Chords sound like their notes.** Playing several keys at once on the Synth or WAVE Keys
+  no longer changes the sound: every note in a chord now sounds exactly as it does alone.
+  Before, each new key pulled the others down and the tone pumped and thinned out.
+- **Drive on chords.** Poly synth presets with drive (plucks, Keys Dance, Future Chord, arps,
+  Brass and more) now saturate each note on its own, so chords stay clean instead of turning
+  into a gritty mush.
+- **Glide on chords.** With glide on a poly patch, the notes of a chord no longer slide from
+  one another: they all glide from the note you played before the chord.
+
+### Good to know
+- Poly synth patches and WAVE Keys now play 12 dB quieter, so a full chord fits without
+  clipping. Turn the channel up if a single line feels quiet.
+- In older projects, pick a drive preset again to get its new per-note drive.
 
 ## 0.9.3 — 2026-11-10
 
