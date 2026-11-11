@@ -66,16 +66,15 @@ export function guessIcon(name: string | null | undefined): string | null {
 /** A track's icon: the picked one, else a guess from its name. */
 export const trackIcon = (t: { icon?: string | null; name: string }): string | null => t.icon ?? guessIcon(t.name);
 
-/** A Channel Rack row's icon: name first, then its built-in instrument, 'synth' or 'sample'. */
-export function channelIcon(c: { name: string; kind: 'inst' | 'sample' | 'synth' | 'keys'; inst?: string }): string {
+/** A Channel Rack row's icon: name first, then 'piano', 'synth' or 'sample'. */
+export function channelIcon(c: { name: string; kind: 'sample' | 'synth' | 'keys' }): string {
   const g = guessIcon(c.name); if (g) return g;
   if (c.kind === 'keys') return 'piano';
-  if (c.kind === 'inst') return c.inst === 'bass' ? 'bass' : 'drums';
   return c.kind === 'synth' ? 'synth' : 'sample';
 }
 
 /** A pattern's icon: name first, else the most used channel icon among its notes. */
-export function patternIcon(p: { name: string; notes: readonly { ch: number }[] }, chans: ReadonlyMap<number, { name: string; kind: 'inst' | 'sample' | 'synth' | 'keys'; inst?: string }>): string | null {
+export function patternIcon(p: { name: string; notes: readonly { ch: number }[] }, chans: ReadonlyMap<number, { name: string; kind: 'sample' | 'synth' | 'keys' }>): string | null {
   const g = guessIcon(p.name); if (g) return g;
   const n = new Map<string, number>();
   for (const x of p.notes) { const c = chans.get(x.ch); if (c) { const id = channelIcon(c); n.set(id, (n.get(id) ?? 0) + 1); } }

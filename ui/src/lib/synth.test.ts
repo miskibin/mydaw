@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SYNTH_CATALOG as cat } from '../api/synthCatalog';
 import { emptyProject, mockCatalog } from '../api/mockData';
-import { applyPatternOp, isPitched, PatternOpError } from './pattern';
+import { applyPatternOp, PatternOpError } from './pattern';
 import { clampSynth, newSynthChannel, presetState, synthDefaults, synthParam, synthParams, synthValue, withSynthParam, withSynthPreset } from './synth';
 
 describe('synth catalog', () => {
@@ -22,7 +22,6 @@ describe('synth channels', () => {
     if (c.kind !== 'synth') return;
     expect(c.synth.preset).toBe('808 Czysty');
     expect(c.root).toBe(36);
-    expect(isPitched(c)).toBe(true);
     const blank = newSynthChannel(cat, 8, null);
     if (blank.kind === 'synth') expect(blank.synth.params).toEqual(synthDefaults(cat));
   });
@@ -41,7 +40,7 @@ describe('synth channels', () => {
   });
 
   it('putChannel validates synth parameters like the engine', () => {
-    const p = emptyProject(mockCatalog());
+    const p = emptyProject();
     const c = newSynthChannel(cat, p.nextId, 'Pluck Trap');
     expect(applyPatternOp(p, { op: 'putChannel', channel: c }, true)).toBe(true);
     expect(p.channels!.some(x => x.id === c.id)).toBe(true);

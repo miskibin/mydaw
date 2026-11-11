@@ -33,6 +33,15 @@ fn run(rt: &mut Rt, frames: usize) -> f32 {
     peak
 }
 
+/// A channel that sounds for as long as its key is held: the 808 bass sample in gate mode.
+fn held_bass(p: &mut Project) -> Id {
+    let id = p.factory_channel("bass-808.flac").unwrap();
+    if let ChannelSrc::Sample { sampler, .. } = &mut p.channels.iter_mut().find(|c| c.id == id).unwrap().src {
+        sampler.gate = true;
+    }
+    id
+}
+
 fn on(key: u8) -> MidiMsg {
     MidiMsg::NoteOn { ch: 0, key, vel: 100 }
 }
@@ -42,27 +51,31 @@ fn off(key: u8) -> MidiMsg {
 
 #[test]
 fn a_held_key_sounds_until_released() {
-    let e = engine(Project::empty());
+    let mut p = Project::empty();
+    let bass = held_bass(&mut p);
+    let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
-    e.midi_configure(None, true);
+    e.midi_configure(Some(bass), true);
     assert_eq!(run(&mut rt, SR as usize / 10), 0.0);
-    e.midi_event(on(45));
+    e.midi_event(on(33));
     // still sounding a full second later: not a fixed-length audition
     assert!(run(&mut rt, SR as usize) > 0.01);
     assert!(run(&mut rt, SR as usize / 2) > 0.01);
-    e.midi_event(off(45));
+    e.midi_event(off(33));
     run(&mut rt, SR as usize / 10); // release
     assert_eq!(run(&mut rt, SR as usize / 10), 0.0);
 }
 
 #[test]
 fn sustain_pedal_holds_released_keys() {
-    let e = engine(Project::empty());
+    let mut p = Project::empty();
+    let bass = held_bass(&mut p);
+    let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
-    e.midi_configure(None, true);
+    e.midi_configure(Some(bass), true);
     e.midi_event(MidiMsg::Sustain { ch: 0, down: true });
-    e.midi_event(on(40));
-    e.midi_event(off(40));
+    e.midi_event(on(33));
+    e.midi_event(off(33));
     run(&mut rt, SR as usize / 10);
     assert!(run(&mut rt, SR as usize / 2) > 0.01, "pedal down: the note keeps sounding");
     e.midi_event(MidiMsg::Sustain { ch: 0, down: false });
@@ -72,16 +85,18 @@ fn sustain_pedal_holds_released_keys() {
 
 #[test]
 fn panic_and_disconnect_silence_everything() {
-    let e = engine(Project::empty());
+    let mut p = Project::empty();
+    let bass = held_bass(&mut p);
+    let e = engine(p);
     let mut rt = e.create_rt(SR as f32, BLOCK);
-    e.midi_configure(None, true);
-    e.midi_event(on(50));
+    e.midi_configure(Some(bass), true);
+    e.midi_event(on(33));
     run(&mut rt, SR as usize / 10);
-    e.midi_configure(None, false); // device gone
+    e.midi_configure(Some(bass), false); // device gone
     run(&mut rt, SR as usize / 10);
     assert_eq!(run(&mut rt, SR as usize / 10), 0.0);
     // events while no device is connected are ignored
-    e.midi_event(on(50));
+    e.midi_event(on(33));
     assert_eq!(run(&mut rt, SR as usize / 10), 0.0);
 }
 
@@ -195,8 +210,7 @@ fn live_keys_play_where_the_song_plays_the_channel_not_through_the_armed_track()
     // mangled chords played on the keyboard that sounded right in the piano roll
     let mut p = Project::empty();
     p.inserts[0].fx.clear();
-    let id = p.alloc_id();
-    p.channels.push(Channel { name: "Bass".into(), ..Channel::builtin(id, Inst::Bass) });
+    let id = held_bass(&mut p);
     p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes: vec![Note::new(id, 0.0, 4.0, Some(45))], swing: 0.0 }];
     p.clips = vec![Clip { id: 2, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None }];
     p.tracks[5].arm = true;

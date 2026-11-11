@@ -295,7 +295,7 @@ function ChanRow(props: { c: Channel }) {
     toggleChannelWindow(c().id);
   };
   return (
-    <div class="crow" classList={{ sel: sel(), muted: c().mute || (anySolo() && !c().solo) }} style={{ height: RACK_ROW + 'px' }}
+    <div class="crow" data-ch={c().id} classList={{ sel: sel(), muted: c().mute || (anySolo() && !c().solo) }} style={{ height: RACK_ROW + 'px' }}
       onPointerDown={e => { if (e.button === 0) selectChannel(c().id); }}
       onContextMenu={e => { e.preventDefault(); selectChannel(c().id); chanMenu(c(), e.clientX, e.clientY); }}>
       <span class="cstrip" style={{ background: c().color }} />
@@ -319,7 +319,6 @@ function ChanRow(props: { c: Channel }) {
         onPointerDown={nameDown}>
         <span class="cicon" style={{ color: c().color }}><InstIcon id={channelIcon(c())} size={11} /></span>
         <span class="ell">{c().name}</span>
-        <Show when={c().kind === 'sample'}><span class="ckind">SMP</span></Show>
         <Show when={c().kind === 'keys'}><span class="ckind">KEYS</span></Show>
       </button>
     </div>

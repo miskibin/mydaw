@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { Channel, Note, Project } from '../api/types';
+import { samplerDefault, type Channel, type Note, type Project } from '../api/types';
 import { applyAll } from './applyOps';
 import {
-  builtinChannel, cellsBetween, contentLen, duplicateRight, fillEvery, isRollRow, isStepOn, migrateProject, moveNotes, noteAt, resizeNotes,
-  rotate, setKeyAt, setStep, setVelAt, snapStep, swingOffset, transpose,
+  cellsBetween, contentLen, duplicateRight, fillEvery, isRollRow, isStepOn, migrateProject, moveNotes, noteAt, resizeNotes,
+  rotate, samplerError, setKeyAt, setStep, setVelAt, snapStep, swingOffset, transpose,
 } from './pattern';
 
 const KICK = 1000, BASS = 1003;
-const bass: Channel = { ...builtinChannel(BASS, 'bass') };
+const bass: Channel = { id: BASS, name: 'Bass', color: '#7c8cf8', kind: 'sample', source: 1, sampler: samplerDefault(), vol: 0.7937, pan: 0, mute: false, solo: false, insert: null, root: 36 };
 const steps = (notes: Note[], ch: number) => notes.filter(n => n.ch === ch).map(n => n.step).sort((a, b) => a - b);
 
 describe('step sequencer', () => {
@@ -124,22 +124,41 @@ describe('mock engine ops (mirror of ops.rs)', () => {
     migrateProject(p);
     return p;
   };
-  it('migrates legacy inst notes and resolves them in putPattern', () => {
+  // the starter kit: a source and its sampler channel per file, ids in that order (model.rs `add_starter_kit`)
+  const K = 1001, C = 1003;
+  it('gives a project without channels the starter kit and refuses notes of unknown channels', () => {
     const p = base();
-    expect(p.channels!.map(c => c.name)).toEqual(['Kick', 'Clap', 'Hat', 'Bass']);
-    const q = applyAll(p, [{ op: 'putPattern', pattern: { id: 5, name: 'x', color: '#fff', len: 4, notes: [{ inst: 'hat', step: 2, len: 1 } as Note] } }]);
-    expect(q.patterns[0].notes[0]).toEqual({ ch: 1002, step: 2, len: 1 });
+    expect(p.channels!.map(c => c.name)).toEqual(['Kick', 'Clap', 'Hat', 'Snare']);
+    expect(p.channels!.map(c => c.id).slice(0, 2)).toEqual([K, C]);
+    expect(p.channels!.every(c => c.kind === 'sample' && p.sources.some(s => s.id === c.source && s.path.startsWith('lib:Standard/')))).toBe(true);
+    expect(p.nextId).toBe(1008);
+    const again = structuredClone(p); migrateProject(again);
+    expect(again).toEqual(p);
     expect(() => applyAll(p, [{ op: 'putPattern', pattern: { id: 5, name: 'x', color: '#fff', len: 4, notes: [{ ch: 77, step: 0, len: 1 }] } }])).toThrow();
+  });
+  it('checks sampler settings like the engine', () => {
+    const p = base(), kick = p.channels![0];
+    const put = (patch: Partial<ReturnType<typeof samplerDefault>>) => applyAll(p, [{ op: 'putChannel', channel: { ...kick, sampler: { ...samplerDefault(), ...patch } } as Channel }]);
+    expect(samplerError(samplerDefault())).toBeNull();
+    const ok = put({ start: 0.25, end: 0.75, reverse: true, semi: -12, fine: 50, gate: true, attack: 5, decay: 200, sustain: 0.5, release: 300, cut: 8 });
+    expect(ok.channels![0]).toMatchObject({ kind: 'sample', sampler: { start: 0.25, cut: 8 } });
+    for (const bad of [{ start: 0.5, end: 0.5 }, { end: 1.2 }, { start: NaN }, { semi: 25 }, { semi: 1.5 }, { fine: -101 }, { attack: -1 }, { decay: 5001 }, { sustain: 1.1 }, { release: 0 }, { cut: 9 }, { cut: -1 }])
+      expect(() => put(bad), JSON.stringify(bad)).toThrow();
+    // a sampler needs its source
+    expect(() => applyAll(p, [{ op: 'putChannel', channel: { ...kick, source: 4242 } as Channel }])).toThrow();
+    // removing the source removes its sampler channels
+    const src = kick.kind === 'sample' ? kick.source : -1;
+    expect(applyAll(p, [{ op: 'removeSource', id: src }]).channels!.map(c => c.name)).toEqual(['Clap', 'Hat', 'Snare']);
   });
   it('length follows the notes and minLen; whole-pattern clips follow it; removing a channel removes its notes', () => {
     let p = base();
-    p = applyAll(p, [{ op: 'putPattern', pattern: { id: 5, name: 'x', color: '#fff', len: 99, notes: [{ ch: 1000, step: 0, len: 1 }, { ch: 1001, step: 4, len: 1 }] } },
+    p = applyAll(p, [{ op: 'putPattern', pattern: { id: 5, name: 'x', color: '#fff', len: 99, notes: [{ ch: K, step: 0, len: 1 }, { ch: C, step: 4, len: 1 }] } },
       { op: 'putClips', clips: [
         { id: 1, track: 0, start: 0, len: 4, offset: 0, kind: 'pat', ref: 5, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false },
         { id: 2, track: 0, start: 8, len: 16, offset: 0, kind: 'pat', ref: 5, muted: false, gain: 0, fadeIn: 0, fadeOut: 0, pan: 0, norm: false, rev: false }] }]);
     expect([p.patterns[0].len, p.patterns[0].minLen]).toEqual([4, 4]); // a sent len is ignored
     // a note in bar 2 grows it; the clip that shows one whole pass follows
-    p = applyAll(p, [{ op: 'putPattern', pattern: { ...p.patterns[0], notes: [...p.patterns[0].notes, { ch: 1000, step: 20, len: 1 }] } }]);
+    p = applyAll(p, [{ op: 'putPattern', pattern: { ...p.patterns[0], notes: [...p.patterns[0].notes, { ch: K, step: 20, len: 1 }] } }]);
     expect(p.patterns[0].len).toBe(8);
     expect(p.clips.map(c => c.len)).toEqual([8, 16]);
     // removed again: back to one bar — unless an empty bar is kept on purpose (minLen)
@@ -147,11 +166,11 @@ describe('mock engine ops (mirror of ops.rs)', () => {
     expect(applyAll(p, [{ op: 'putPattern', pattern: two }]).patterns[0].len).toBe(4);
     p = applyAll(p, [{ op: 'putPattern', pattern: { ...two, minLen: 8 } }]);
     expect([p.patterns[0].len, p.clips[0].len]).toEqual([8, 8]);
-    expect(() => applyAll(p, [{ op: 'putPattern', pattern: { ...two, notes: [{ ch: 1000, step: 2047, len: 2 }] } }])).toThrow();
+    expect(() => applyAll(p, [{ op: 'putPattern', pattern: { ...two, notes: [{ ch: K, step: 2047, len: 2 }] } }])).toThrow();
     // removePattern takes its clips with it
     expect(applyAll(p, [{ op: 'removePattern', id: 5 }]).clips).toEqual([]);
-    p = applyAll(p, [{ op: 'removeChannel', id: 1000 }]);
-    expect(p.patterns[0].notes).toEqual([{ ch: 1001, step: 4, len: 1 }]);
-    expect(p.channels!.some(c => c.id === 1000)).toBe(false);
+    p = applyAll(p, [{ op: 'removeChannel', id: K }]);
+    expect(p.patterns[0].notes).toEqual([{ ch: C, step: 4, len: 1 }]);
+    expect(p.channels!.some(c => c.id === K)).toBe(false);
   });
 });

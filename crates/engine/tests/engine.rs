@@ -10,7 +10,7 @@ fn rms(x: &[f32]) -> f32 {
 
 #[test]
 fn demo_renders_offline_with_sound_and_no_clipping() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let out = e.render(0.0, 16.0, 1.0, 48000).unwrap();
     let secs = out.len() as f32 / 2.0 / 48000.0;
     assert!((secs - (16.0 * 60.0 / 128.0 + 1.0)).abs() < 0.05, "length {secs}");
@@ -24,7 +24,7 @@ fn demo_renders_offline_with_sound_and_no_clipping() {
 
 #[test]
 fn muting_the_track_silences_it() {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
     for t in p.tracks.iter_mut() {
         t.muted = true;
     }
@@ -35,7 +35,7 @@ fn muting_the_track_silences_it() {
 
 #[test]
 fn undo_redo_and_gestures() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let r0 = e.revision();
     e.apply(&[Op::SetBpm { bpm: 140.0 }], false, None).unwrap();
     assert_eq!(e.project().bpm, 140.0);
@@ -59,7 +59,7 @@ fn undo_redo_and_gestures() {
 
 #[test]
 fn invalid_batches_change_nothing() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let before = e.project();
     let bad = vec![Op::SetBpm { bpm: 150.0 }, Op::RemoveInsert { id: 0 }];
     assert!(e.apply(&bad, false, None).is_err());
@@ -70,7 +70,7 @@ fn invalid_batches_change_nothing() {
 
 #[test]
 fn effects_change_the_render() {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
     let plain = Engine::new(p.clone(), Arc::new(NoPlugins)).render(0.0, 8.0, 0.0, 48000).unwrap();
     let mut sat = new_fx(5000, FxKind::Sat, p.bpm);
     sat.params.insert("drive".into(), 30.0);
@@ -137,7 +137,7 @@ fn save_and_open_round_trip() {
     let dir = std::env::temp_dir().join(format!("wave-proj-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("song.wave");
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     e.apply(&[Op::SetBpm { bpm: 133.0 }], false, None).unwrap();
     e.save(&path).unwrap();
     assert!(!e.state().dirty);
@@ -150,7 +150,7 @@ fn save_and_open_round_trip() {
 
 #[test]
 fn live_rt_follows_edits_and_transport() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let mut rt = e.create_rt(48000.0, 256);
     let (mut l, mut r) = (vec![0f32; 256], vec![0f32; 256]);
     e.play(0.0);
@@ -178,7 +178,7 @@ fn live_rt_follows_edits_and_transport() {
 
 #[test]
 fn recording_lands_as_a_clip_on_the_armed_track() {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
     for t in p.tracks.iter_mut() {
         t.arm = false;
     }
@@ -206,7 +206,7 @@ fn recording_lands_as_a_clip_on_the_armed_track() {
 }
 
 fn armed_engine() -> Arc<Engine> {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
     for t in p.tracks.iter_mut() {
         t.arm = false;
     }
@@ -281,7 +281,8 @@ fn restarting_the_audio_stream_mid_take_keeps_it() {
 #[test]
 fn latency_is_compensated_across_inserts() {
     // a pitch corrector on one insert must not make that track late against the others
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
+    // no master limiter: when it is working it magnifies the realignment's float rounding
     p.inserts[0].fx.clear();
     let tune = wave_engine::catalog::new_fx(7000, FxKind::Tune, p.bpm);
     p.inserts[6].fx = vec![tune];
@@ -302,7 +303,9 @@ fn latency_is_compensated_across_inserts() {
 
 #[test]
 fn mix_zero_is_the_dry_signal() {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
+    // no master limiter: when it is working it magnifies the realignment's float rounding
+    p.inserts[0].fx.clear();
     let dry = Engine::new(p.clone(), Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, 48000).unwrap();
     let mut sat = wave_engine::catalog::new_fx(6000, FxKind::Sat, p.bpm);
     sat.params.insert("drive".into(), 30.0);
@@ -317,7 +320,8 @@ fn mix_zero_is_the_dry_signal() {
 
 #[test]
 fn automation_moves_volume_and_effect_params() {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
+    // no master limiter: when it is working it magnifies the realignment's float rounding
     p.inserts[0].fx.clear();
     // drums insert volume: full for 2 beats, then silent
     p.automations.push(Automation {
@@ -344,7 +348,7 @@ fn automation_moves_volume_and_effect_params() {
 
 #[test]
 fn export_range_uses_song_or_loop() {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
     assert_eq!(Engine::export_range(&p, false), (0.0, 32.0));
     assert_eq!(Engine::export_range(&p, true), (0.0, 32.0)); // no loop → song
     p.loop_range = Some(LoopRange { a: 4.0, b: 12.0 });
@@ -357,7 +361,7 @@ fn export_writes_wav_that_round_trips() {
     let dir = std::env::temp_dir().join(format!("wave-export-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("bounce.wav");
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let (from, to) = Engine::export_range(&e.project(), false);
     let audio = e.render(from, to, 0.5, 48000).unwrap();
     wave_engine::sources::write_wav(&path, &audio, 48000).unwrap();
@@ -377,7 +381,7 @@ fn export_writes_wav_that_round_trips() {
 
 #[test]
 fn export_tail_extends_length_and_cancel_aborts() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let no_tail = e.render(0.0, 4.0, 0.0, 48000).unwrap();
     let with_tail = e.render(0.0, 4.0, 1.0, 48000).unwrap();
     assert_eq!(no_tail.len(), ((4.0 * 60.0 / 128.0) * 48000.0) as usize * 2);

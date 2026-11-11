@@ -2,13 +2,15 @@
 // (move, resize, focus, keys that must not reach the playlist), channel and pattern menus.
 import { createEffect, createSignal, onCleanup, onMount, type JSX } from 'solid-js';
 import { t, tName } from '../lib/i18n';
-import type { Channel, Note } from '../api/types';
+import type { Channel, LibFile, Note } from '../api/types';
 import { clamp } from '../lib/format';
-import { barsText, clearChannel, fillEvery, INST_NAME, INSTS, notesText, rotate, stepsOf } from '../lib/pattern';
+import { FACTORY_KIT, LIB_SCHEME } from '../lib/factory';
+import { barsText, clearChannel, fillEvery, notesText, rotate, stepsOf } from '../lib/pattern';
+import { libGroup, loadStdLib, stdLibGroups } from '../state/library';
 import { isTypingKey } from '../state/typingKeys';
 import { commit } from '../state/edit';
 import {
-  addBar, addBuiltin, addKeys, addSampler, addSamplerFiles, addSynth, audition, chanKindLabel, channels, clonePattern, cloneChannel, curPat, deleteChannel,
+  addBar, addKeys, addSampler, addSamplerFiles, addSynth, audition, chanKindLabel, channels, clonePattern, cloneChannel, curPat, deleteChannel,
   deletePattern, type InstrumentPick, newPattern, nextEmptyPattern, openRoll, putNotes, recolorPattern, removeBar, renamePattern, replaceChannel, replaceWithFile, setChannel, setCurPattern, splitByChannel,
 } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
@@ -99,7 +101,7 @@ export function chanMenu(c: Channel, x: number, y: number) {
   openMenu(x, y, [
     { t: 'title', label: c.name + ' · ' + chanKindLabel(c) },
     { t: 'item', label: 'Piano roll', kbd: 'F7', act: () => openRoll(c.id) },
-    { t: 'sub', label: t('b.pe.replace'), items: instrumentItems(p => replaceChannel(c, p), () => void replaceWithFile(c)) },
+    { t: 'sub', label: t('b.pe.replace'), items: instrumentItems(p => replaceChannel(c, p), f => void replaceWithFile(c, f)) },
     { t: 'sep' },
     { t: 'item', label: t('b.pe.fill2'), act: () => edit(fillEvery(pt.notes, c.id, steps, 2), t('b.pe.fill')) },
     { t: 'item', label: t('b.pe.fill4'), act: () => edit(fillEvery(pt.notes, c.id, steps, 4), t('b.pe.fill')) },
@@ -117,10 +119,21 @@ export function chanMenu(c: Channel, x: number, y: number) {
   ], 470);
 }
 
-/** The instruments a channel can play, as menu items: `pick` adds a channel or replaces one. */
-function instrumentItems(pick: (p: InstrumentPick) => void, file: () => void): MenuItem[] {
-  const items: MenuItem[] = [{ t: 'title', label: t('b.pe.menuBuiltin') }];
-  for (const i of INSTS) items.push({ t: 'item', label: INST_NAME[i], act: () => pick({ kind: 'inst', inst: i }) });
+/**
+ * The instruments a channel can play, as menu items: `pick` adds a channel or replaces one;
+ * `file` does it with a library file, or with nothing given a file picked from disk.
+ */
+function instrumentItems(pick: (p: InstrumentPick) => void, file: (f?: LibFile) => void): MenuItem[] {
+  // samplers first: the samples that ship with the program, the project's own audio, a file
+  const items: MenuItem[] = [{ t: 'title', label: t('b.pe.menuStdLib') }];
+  void loadStdLib();
+  for (const [g, fs] of stdLibGroups()) items.push({ t: 'sub', label: libGroup(g), items: fs.map(f => ({ t: 'item', label: f.name, act: () => file(f) }) as MenuItem) });
+  // the project's audio that is not a standard-library sample (those are in the groups above)
+  const own = S.project.sources.filter(s => !s.path.startsWith(LIB_SCHEME + FACTORY_KIT + '/'));
+  if (own.length) {
+    items.push({ t: 'sub', label: t('b.pe.menuSampler'), items: own.slice(0, 24).map(s => ({ t: 'item', label: s.name, kbd: s.dur.toFixed(1) + ' s', act: () => pick({ kind: 'sample', source: s.id }) }) as MenuItem) });
+  }
+  items.push({ t: 'item', label: t('b.pe.menuFile'), act: () => file() });
   const syn = S.catalog?.synth;
   if (syn) {
     items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSynth') });
@@ -131,20 +144,16 @@ function instrumentItems(pick: (p: InstrumentPick) => void, file: () => void): M
     items.push({ t: 'item', label: t('b.pe.menuSynthEmpty'), act: () => pick({ kind: 'synth', preset: null }) });
   }
   items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSampled') }, { t: 'item', label: t('b.pe.menuKeys'), act: () => pick({ kind: 'keys' }) });
-  items.push({ t: 'sep' }, { t: 'title', label: t('b.pe.menuSampler') });
-  for (const s of S.project.sources.slice(0, 14)) items.push({ t: 'item', label: s.name, kbd: s.dur.toFixed(1) + ' s', act: () => pick({ kind: 'sample', source: s.id }) });
-  items.push({ t: 'item', label: t('b.pe.menuFile'), act: file });
   return items;
 }
 
 export function addChannelMenu(x: number, y: number) {
   const add = (p: InstrumentPick) => {
-    if (p.kind === 'inst') addBuiltin(p.inst);
-    else if (p.kind === 'synth') addSynth(p.preset);
+    if (p.kind === 'synth') addSynth(p.preset);
     else if (p.kind === 'keys') addKeys();
     else addSampler(p.source);
   };
-  const items = instrumentItems(add, () => void addSamplerFiles(null));
+  const items = instrumentItems(add, f => void addSamplerFiles(f ? [f] : null));
   const h = Math.min(window.innerHeight - 20, 80 + items.length * 26);
   openMenu(x, Math.min(y, window.innerHeight - h - 8), items, h);
 }

@@ -8,7 +8,7 @@ use wave_engine::catalog::new_fx;
 use wave_engine::*;
 
 fn main() {
-    let mut p = Project::demo();
+    let mut p = Project::sketch();
     let mut id = 20_000;
     for m in p.inserts.iter_mut().skip(1) {
         m.fx.clear();

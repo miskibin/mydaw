@@ -19,7 +19,7 @@ fn notebook() -> Notebook {
 
 #[test]
 fn put_notebook_is_one_undo_step_and_bumps_ids() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     assert!(e.project().notebook.pages.is_empty());
     e.apply(&[Op::PutNotebook { notebook: notebook() }], false, None).unwrap();
     let p = e.project();
@@ -40,7 +40,7 @@ fn put_notebook_is_one_undo_step_and_bumps_ids() {
 
 #[test]
 fn invalid_notebooks_are_rejected() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let before = e.project();
     let mut dup = notebook();
     dup.pages[1].id = 5000;
@@ -59,7 +59,7 @@ fn notebook_survives_save_and_open() {
     let dir = std::env::temp_dir().join(format!("wave-notebook-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("song.wave");
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     e.apply(&[Op::PutNotebook { notebook: notebook() }], false, None).unwrap();
     e.save(&path).unwrap();
     let f = Engine::new(Project::empty(), Arc::new(NoPlugins));
@@ -71,7 +71,7 @@ fn notebook_survives_save_and_open() {
 
 #[test]
 fn old_projects_without_a_notebook_load() {
-    let mut v = serde_json::to_value(Project::demo()).unwrap();
+    let mut v = serde_json::to_value(Project::sketch()).unwrap();
     v.as_object_mut().unwrap().remove("notebook");
     let p: Project = serde_json::from_value(v).unwrap();
     assert!(p.notebook.pages.is_empty());

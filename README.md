@@ -32,7 +32,8 @@ I now use WAVE for everything I used FL Studio for.
   every pitched channel, and the computer keyboard or a MIDI keyboard as the instrument.
 - **Instruments.** A two-oscillator wavetable [synth](docs/synth.md) with unison, a mod matrix
   and its own effects; [WAVE Keys](docs/keys.md), a sampled concert grand that ships inside the
-  installer; one-shot sampler channels; a downloadable library of CC0 drum kits.
+  installer; a sampler (trim, reverse, envelope, one-shot or gate, cut groups) with a built-in
+  standard library of drum, percussion and tonal samples, plus downloadable CC0 kits.
 - **A mixer you can read.** Inserts with a 24-band dynamic EQ, compressor, FET compressor,
   [saturator](docs/saturator.md), delay, [reverb and limiter](docs/reverb-limiter-v2.md),
   de-esser, denoiser and more. Every effect has presets and draws what it is doing to the

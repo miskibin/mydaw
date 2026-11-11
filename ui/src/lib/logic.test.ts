@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { encodeFrame, MAGIC, SCOPE_LEN, SPEC_BANDS, TelemetryDecoder } from '../api/telemetry';
-import { demoProject, mockCatalog } from '../api/mockData';
+import { sketchProject, mockCatalog } from '../api/mockData';
 import type { Clip } from '../api/types';
 import { applyAll, OpError } from './applyOps';
 import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resizeClip, sliceClip } from './clipOps';
@@ -150,7 +150,7 @@ describe('op builders', () => {
     expect(out.map(c => [c.id, c.start, c.track])).toEqual([[100, 0, 0], [101, 2, 1]]);
   });
   it('inserting a track shifts lanes and clips (valid batch)', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     const ops = insertTrackOps(p, 1, p.nextId);
     const q = applyAll(p, ops);
     expect(q.tracks.length).toBe(9);
@@ -164,12 +164,12 @@ describe('op builders', () => {
 
 describe('mock op application', () => {
   it('is atomic', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     expect(() => applyAll(p, [{ op: 'setBpm', bpm: 100 }, { op: 'removeInsert', id: 0 }])).toThrow(OpError);
     expect(p.bpm).toBe(128);
   });
   it('moves effects and bumps nextId', () => {
-    const p = applyAll(demoProject(cat), [{ op: 'moveFx', fxId: 902, to: 2 }, { op: 'putFx', insertId: 2, fx: newFx(cat, 5000, 'sat', 128) }]);
+    const p = applyAll(sketchProject(cat), [{ op: 'moveFx', fxId: 902, to: 2 }, { op: 'putFx', insertId: 2, fx: newFx(cat, 5000, 'sat', 128) }]);
     expect(p.inserts[6].fx.map(f => f.id)).toEqual([903, 904, 902]);
     expect(p.nextId).toBe(5001);
   });
@@ -206,7 +206,7 @@ describe('formatting & eq', () => {
 
 describe('export range', () => {
   it('uses song by default and loop when asked', () => {
-    const p = demoProject(cat);
+    const p = sketchProject(cat);
     expect(songEnd(p)).toBe(32);
     expect(exportRange(p, false)).toEqual({ from: 0, to: 32 });
     expect(exportRange(p, true)).toEqual({ from: 0, to: 32 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { demoProject, mockCatalog } from '../api/mockData';
+import { sketchProject, mockCatalog } from '../api/mockData';
 import { CLIP_GAIN_DB, KEYS_RELEASE, VOL_UNITY, type AutoTarget, type Channel, type Clip, type Project } from '../api/types';
 import { applyAll } from './applyOps';
 import { createAutomationOps, denormalize, normalize, readTarget, targetKey, targetLabel } from './automation';
@@ -9,7 +9,7 @@ const cat = mockCatalog();
 
 /** The demo song plus a synth channel, a WAVE Keys channel and an audio clip to automate. */
 function project(): Project {
-  const p = demoProject(cat);
+  const p = sketchProject(cat);
   const synth = { ...newSynthChannel(cat.synth, 7001, null), name: 'Lead' };
   const keys: Channel = { ...p.channels![0], id: 7002, name: 'Piano', kind: 'keys', keys: { release: 350, dynamics: 80 } } as Channel;
   p.channels = [...(p.channels ?? []), synth, keys];

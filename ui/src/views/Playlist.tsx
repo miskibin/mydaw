@@ -64,7 +64,7 @@ function sameDrawnTrack(a: Track | undefined, b: Track): boolean {
 }
 /** Same for a channel: pattern clips show its notes' rows (kind, root) and an icon (name, instrument), not its knobs. */
 function sameDrawnChannel(a: Channel | undefined, b: Channel): boolean {
-  return !!a && a.name === b.name && a.kind === b.kind && a.root === b.root && (a as { inst?: string }).inst === (b as { inst?: string }).inst;
+  return !!a && a.name === b.name && a.kind === b.kind && a.root === b.root;
 }
 
 /** `cb`: a comp region boundary (`bnd` = its index in `boundaries(comp.regions)`). */

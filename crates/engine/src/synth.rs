@@ -1,25 +1,19 @@
-//! The built-in pattern instruments (kick, clap, hat, bass), the one-shot sampler and the
-//! metronome click. Same recipes as the prototype, rendered sample by sample from a fixed voice pool.
+//! The sampler, the piano voices and the metronome click, rendered sample by sample from a
+//! fixed voice pool.
 //!
 //! Every note voice belongs to a channel: an index into the timeline's channel table
 //! (re-mapped by channel id when a new timeline arrives). The voice reads its channel's
 //! gain, pan and mute every block, so Channel Rack knobs also move notes that are ringing.
 
-use std::f32::consts::TAU;
-
-use crate::dsp::{Biquad, FilterType};
-use crate::model::{Id, Inst};
+use crate::model::Id;
 use crate::rt::{ChanRt, InsertRt};
 
 pub const MAX_VOICES: usize = 96;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum VoiceKind {
-    Kick,
-    Clap,
-    Hat,
-    Bass,
-    /// One-shot sample of the voice's channel, pitched by the note.
+    /// The sample of the voice's channel, pitched by the note and shaped by the channel's
+    /// sampler settings (part of the file, direction, envelope, one-shot or gate).
     Sample,
     /// WAVE Keys: a recording of the channel's piano, picked by key and velocity; it rings
     /// for the note's length, then fades over the channel's release time.
@@ -27,17 +21,6 @@ pub enum VoiceKind {
     /// A synth channel: its notes go to the channel's `poly::SynthInst`, not this pool.
     Synth,
     Click { accent: bool },
-}
-
-impl VoiceKind {
-    pub fn of(inst: Inst) -> Self {
-        match inst {
-            Inst::Kick => VoiceKind::Kick,
-            Inst::Clap => VoiceKind::Clap,
-            Inst::Hat => VoiceKind::Hat,
-            Inst::Bass => VoiceKind::Bass,
-        }
-    }
 }
 
 /// Where a voice plays.
@@ -70,12 +53,9 @@ pub struct Voice {
     /// Samples to wait before the voice starts (sub-block accuracy).
     pub delay: u32,
     t: u32,
-    /// Note length in samples (bass).
+    /// Note length in samples: when a gated sample or a piano note starts its release.
     len: u32,
-    freq: f32,
     phase: f32,
-    filt: Biquad,
-    rng: u32,
     pub alive: bool,
     /// Live (MIDI) note whose key is still down: it sounds until released.
     held: bool,
@@ -85,13 +65,18 @@ pub struct Voice {
     key: u8,
     /// Piano: which recording of the bank plays, and the release envelope's level.
     zone: u16,
+    /// Release (and cut) level: 1 until the note ends, then it falls.
     env: f32,
+    /// Sampler: the channel's cut group when the note started (0 = none), and the voice's
+    /// own time at which a note of that group cuts it (`u32::MAX` = not cut).
+    cut: u8,
+    cut_at: u32,
 }
 
 impl Voice {
     fn dead() -> Self {
         Self {
-            kind: VoiceKind::Kick,
+            kind: VoiceKind::Sample,
             dest: Dest::Click,
             chan: NO_CHAN,
             chan_id: 0,
@@ -101,16 +86,15 @@ impl Voice {
             delay: 0,
             t: 0,
             len: 0,
-            freq: 0.0,
             phase: 0.0,
-            filt: Biquad::default(),
-            rng: 1,
             alive: false,
             held: false,
             sus: false,
             key: 0,
             zone: 0,
             env: 1.0,
+            cut: 0,
+            cut_at: u32::MAX,
         }
     }
 }
@@ -124,7 +108,6 @@ pub const KEYS_HEADROOM: f32 = 0.251;
 pub struct VoicePool {
     pub voices: Vec<Voice>,
     sr: f32,
-    seed: u32,
     /// Sustain pedal state (live MIDI).
     pedal: bool,
     /// Pitch-bend factor applied to live notes (1 = none).
@@ -134,19 +117,6 @@ pub struct VoicePool {
 #[inline]
 fn exp_ramp(v0: f32, v1: f32, t: f32, dur: f32) -> f32 {
     v0 * (v1 / v0).powf((t / dur).min(1.0))
-}
-
-#[inline]
-fn poly_blep(t: f32, dt: f32) -> f32 {
-    if t < dt {
-        let x = t / dt;
-        x + x - x * x - 1.0
-    } else if t > 1.0 - dt {
-        let x = (t - 1.0) / dt;
-        x * x + x + x + 1.0
-    } else {
-        0.0
-    }
 }
 
 pub fn mtof(key: f32) -> f32 {
@@ -159,17 +129,22 @@ pub fn pan_gains(pan: f32) -> (f32, f32) {
     (if pan > 0.0 { 1.0 - pan } else { 1.0 }, if pan < 0.0 { 1.0 + pan } else { 1.0 })
 }
 
-/// Ends a held voice with a 20 ms release (the bass tail; one-shots just ring out).
-fn release(v: &mut Voice, sr: f32) {
+/// Ends a held voice: its release (the channel's release time) starts now. A one-shot
+/// sample ignores it and rings out.
+fn release(v: &mut Voice) {
     v.held = false;
     v.sus = false;
-    // a piano note starts its own release (the channel's release time) right away
-    v.len = if v.kind == VoiceKind::Keys { v.t } else { v.t.saturating_add((0.02 * sr) as u32) };
+    v.len = v.t;
 }
+
+/// Time for a cut voice to fall 60 dB: fast, but not a click.
+const CUT_SECONDS: f32 = 0.006;
+/// Fade at a trimmed edge of a sample, where the waveform does not start or end at zero.
+const EDGE_SECONDS: f32 = 0.0015;
 
 impl VoicePool {
     pub fn new(sr: f32) -> Self {
-        Self { voices: vec![Voice::dead(); MAX_VOICES], sr, seed: 0x1234_5678, pedal: false, bend: 1.0 }
+        Self { voices: vec![Voice::dead(); MAX_VOICES], sr, pedal: false, bend: 1.0 }
     }
 
     pub fn set_sr(&mut self, sr: f32) {
@@ -197,12 +172,12 @@ impl VoicePool {
 
     /// A live key went up. With the pedal down the note keeps sounding until it comes up.
     pub fn note_off(&mut self, chan_id: Id, key: u8) {
-        let (pedal, sr) = (self.pedal, self.sr);
+        let pedal = self.pedal;
         for v in self.voices.iter_mut().filter(|v| v.alive && v.held && v.chan_id == chan_id && v.key == key) {
             if pedal {
                 v.sus = true;
             } else {
-                release(v, sr);
+                release(v);
             }
         }
     }
@@ -227,9 +202,8 @@ impl VoicePool {
     }
 
     fn release_where(&mut self, f: impl Fn(&Voice) -> bool) {
-        let sr = self.sr;
         for v in self.voices.iter_mut().filter(|v| v.alive && f(v)) {
-            release(v, sr);
+            release(v);
         }
     }
 
@@ -246,7 +220,7 @@ impl VoicePool {
 
     /// The metronome click.
     pub fn click(&mut self, accent: bool, delay: u32) {
-        self.trigger(VoiceKind::Click { accent }, Dest::Click, NO_CHAN, 0, delay, 0.06, 0.0, 1.0, 1.0);
+        self.trigger(VoiceKind::Click { accent }, Dest::Click, NO_CHAN, 0, delay, 0.06, 1.0, 1.0);
     }
 
     /// A note of channel `ch` (index `idx` in the table). `key` is a MIDI key, `vel` the
@@ -264,8 +238,21 @@ impl VoicePool {
         match ch.kind {
             VoiceKind::Sample => {
                 let a = ch.sample.as_ref()?;
-                let rate = a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0);
-                Some(self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, key as f32, level, rate))
+                let m = &ch.smp;
+                let rate = a.sr as f64 / self.sr as f64 * 2f64.powf((key as f64 - ch.root as f64) / 12.0) * m.rate;
+                // a note of a cut group silences what the group is playing, when it starts
+                if m.cut != 0 {
+                    for v in self.voices.iter_mut().filter(|v| v.alive && v.kind == VoiceKind::Sample && v.cut == m.cut && v.cut_at == u32::MAX) {
+                        v.cut_at = v.t.saturating_add(delay.saturating_sub(v.delay));
+                    }
+                }
+                let i = self.trigger(VoiceKind::Sample, dest, idx, ch.id, delay, len_s, level, rate);
+                let (lo, hi) = region(m.start, m.end, a.frames);
+                let v = &mut self.voices[i];
+                v.pos = if m.reverse { hi - 1.0 } else { lo };
+                v.cut = m.cut;
+                v.key = key;
+                Some(i)
             }
             VoiceKind::Keys => {
                 let bank = ch.keys.as_ref()?;
@@ -278,64 +265,28 @@ impl VoicePool {
                     v.sus = false;
                     v.len = v.len.min(v.t);
                 }
-                let i = self.trigger(VoiceKind::Keys, dest, idx, ch.id, delay, len_s, key as f32, hit * gain * KEYS_HEADROOM, rate);
+                let i = self.trigger(VoiceKind::Keys, dest, idx, ch.id, delay, len_s, hit * gain * KEYS_HEADROOM, rate);
                 self.voices[i].zone = zone;
                 self.voices[i].key = key;
                 Some(i)
             }
-            VoiceKind::Synth => None,
-            // built-in drums follow the key like a sampler: the root plays them as designed
-            kind @ (VoiceKind::Kick | VoiceKind::Clap | VoiceKind::Hat) => {
-                let rate = 2f64.powf((key as f64 - ch.root as f64) / 12.0);
-                Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, level, rate))
-            }
-            kind => Some(self.trigger(kind, dest, idx, ch.id, delay, len_s, key as f32, level, 1.0)),
+            VoiceKind::Synth | VoiceKind::Click { .. } => None,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn trigger(&mut self, kind: VoiceKind, dest: Dest, chan: usize, chan_id: Id, delay: u32, len_s: f32, key: f32, vel: f32, rate: f64) -> usize {
+    fn trigger(&mut self, kind: VoiceKind, dest: Dest, chan: usize, chan_id: Id, delay: u32, len_s: f32, vel: f32, rate: f64) -> usize {
         // steal the oldest voice if the pool is full
         let idx = match self.voices.iter().position(|v| !v.alive) {
             Some(i) => i,
             None => (0..self.voices.len()).max_by_key(|&i| self.voices[i].t).unwrap_or(0),
         };
-        self.seed = self.seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        let mut filt = Biquad::default();
-        match kind {
-            VoiceKind::Hat => filt.set(FilterType::Highpass, self.sr, (7000.0 * rate as f32).clamp(200.0, self.sr * 0.45), 0.707, 0.0),
-            VoiceKind::Clap => filt.set(FilterType::Bandpass, self.sr, (1400.0 * rate as f32).clamp(60.0, self.sr * 0.45), 0.9, 0.0),
-            VoiceKind::Bass => filt.set(FilterType::Lowpass, self.sr, 900.0, 0.707, 0.0),
-            _ => {}
-        }
-        self.voices[idx] = Voice {
-            kind,
-            dest,
-            chan,
-            chan_id,
-            vel: vel.max(0.0),
-            pos: 0.0,
-            rate,
-            delay,
-            t: 0,
-            len: (len_s * self.sr) as u32,
-            freq: mtof(key),
-            phase: 0.0,
-            filt,
-            rng: self.seed | 1,
-            alive: true,
-            held: false,
-            sus: false,
-            key: 0,
-            zone: 0,
-            env: 1.0,
-        };
+        self.voices[idx] = Voice { kind, dest, chan, chan_id, vel: vel.max(0.0), rate, delay, len: (len_s * self.sr) as u32, alive: true, ..Voice::dead() };
         idx
     }
 
     /// Adds every live voice into its destination: a track buffer, an insert's input, or
-    /// the click bus. Built-in instruments are mono (then the channel's pan); samples are
-    /// stereo (balance).
+    /// the click bus. Samples are stereo (the channel's pan is a balance).
     pub fn render(&mut self, n: usize, tracks: &mut [(Vec<f32>, Vec<f32>)], inserts: &mut [InsertRt], click: &mut [f32], chans: &[ChanRt]) {
         let sr = self.sr;
         let bend = self.bend;
@@ -346,8 +297,8 @@ impl VoicePool {
             // channel gain × velocity, split by the channel's pan
             let (g, pan, g0, pan0, sample, piano) = match chans.get(v.chan) {
                 Some(c) => {
-                    let on = if c.on { v.vel } else { 0.0 };
-                    (c.gain * on, c.pan, c.gain0 * on, c.pan0, c.sample.as_deref(), c.keys.as_deref().map(|b| (b, c.keys_release)))
+                    let on = if c.on { v.vel } else { 0.0 } * if v.kind == VoiceKind::Sample { c.smp.gain } else { 1.0 };
+                    (c.gain * on, c.pan, c.gain0 * on, c.pan0, c.sample.as_deref().map(|a| (a, c.smp)), c.keys.as_deref().map(|b| (b, c.keys_release)))
                 }
                 None if v.chan == NO_CHAN => (v.vel, 0.0, v.vel, 0.0, None, None),
                 None => {
@@ -416,90 +367,97 @@ impl VoicePool {
                 continue;
             }
             if v.kind == VoiceKind::Sample {
-                let Some(a) = sample else {
+                let Some((a, m)) = sample else {
                     v.alive = false;
                     continue;
                 };
+                let (lo, hi) = region(m.start, m.end, a.frames);
+                let (att, dec) = (m.attack * sr, m.decay * sr);
+                let rel = fall(m.release, sr);
+                let cut = fall(CUT_SECONDS, sr);
+                // a trimmed or reversed part starts and ends inside the waveform: fade its edges
+                let edge = EDGE_SECONDS * sr;
+                let (edge_in, edge_out) = (m.reverse || m.start > 0.0, m.reverse || m.end < 1.0);
+                let step = v.rate * bend as f64;
                 for i in start..n {
-                    if v.pos >= a.frames as f64 {
+                    if v.pos < lo || v.pos >= hi {
                         v.alive = false;
                         break;
                     }
+                    let t = v.t as f32;
+                    let shape = if t < att {
+                        t / att
+                    } else if t < att + dec {
+                        1.0 - (1.0 - m.sustain) * (t - att) / dec
+                    } else {
+                        m.sustain
+                    };
+                    if v.t >= v.cut_at {
+                        v.env *= cut;
+                    } else if m.gate && v.t >= v.len {
+                        v.env *= rel;
+                    }
+                    // decayed to nothing, released or cut: the voice is over
+                    if v.env < 1e-4 || (m.sustain <= 0.0 && t >= att + dec) {
+                        v.alive = false;
+                        break;
+                    }
+                    let mut fade = shape * v.env;
+                    if edge_in {
+                        fade *= (t / edge).min(1.0);
+                    }
+                    if edge_out {
+                        let left = if m.reverse { v.pos - lo } else { hi - v.pos };
+                        fade *= (left / step.max(1e-9) / edge as f64).min(1.0) as f32;
+                    }
                     let (x, y) = a.sample(v.pos);
-                    // 2 ms fade-in against a click when the sample does not start at zero
-                    let fade = (v.t as f32 / (0.002 * sr)).min(1.0);
                     let (gl, gr) = side(i);
                     out_l[i] += x * gl * fade;
                     if stereo {
                         out_r[i] += y * gr * fade;
                     }
-                    v.pos += v.rate * bend as f64;
+                    v.pos += if m.reverse { -step } else { step };
                     v.t += 1;
                 }
                 continue;
             }
+            // the metronome click
+            let VoiceKind::Click { accent } = v.kind else {
+                v.alive = false;
+                continue;
+            };
             for i in start..n {
                 let t = v.t as f32 / sr;
-                let (s, done) = match v.kind {
-                    VoiceKind::Kick => {
-                        let f = exp_ramp(150.0, 42.0, t, 0.12) * v.rate as f32;
-                        v.phase = (v.phase + f / sr).fract();
-                        ((v.phase * TAU).sin() * exp_ramp(0.9, 0.001, t, 0.38), t > 0.4)
-                    }
-                    VoiceKind::Hat | VoiceKind::Clap => {
-                        v.rng ^= v.rng << 13;
-                        v.rng ^= v.rng >> 17;
-                        v.rng ^= v.rng << 5;
-                        let noise = (v.rng as f32 / u32::MAX as f32) * 2.0 - 1.0;
-                        let x = v.filt.tick(noise);
-                        if v.kind == VoiceKind::Hat {
-                            (x * exp_ramp(0.22, 0.001, t, 0.05), t > 0.06)
-                        } else {
-                            let a = if t < 0.003 { 0.7 * t / 0.003 } else { exp_ramp(0.7, 0.001, t - 0.003, 0.197) };
-                            (x * a, t > 0.25)
-                        }
-                    }
-                    VoiceKind::Bass => {
-                        if v.t % 32 == 0 {
-                            let fc = exp_ramp(900.0, 240.0, t, 0.2);
-                            v.filt.set(FilterType::Lowpass, sr, fc, 0.707, 0.0);
-                        }
-                        let dt = v.freq * bend / sr;
-                        v.phase += dt;
-                        if v.phase >= 1.0 {
-                            v.phase -= 1.0;
-                        }
-                        let saw = 2.0 * v.phase - 1.0 - poly_blep(v.phase, dt);
-                        let d = v.len as f32 / sr;
-                        let a = if t < 0.006 {
-                            0.28 * t / 0.006
-                        } else if t < d - 0.02 {
-                            0.28
-                        } else {
-                            (0.28 * (d - t) / 0.02).max(0.0)
-                        };
-                        (v.filt.tick(saw) * a, t >= d)
-                    }
-                    VoiceKind::Click { accent } => {
-                        let f = if accent { 1760.0 } else { 1320.0 };
-                        v.phase = (v.phase + f / sr).fract();
-                        let sq = if v.phase < 0.5 { 1.0 } else { -1.0 };
-                        let a = if t < 0.002 { exp_ramp(0.0001, 0.22, t, 0.002) } else { exp_ramp(0.22, 0.0001, t - 0.002, 0.048) };
-                        (sq * a, t > 0.06)
-                    }
-                    VoiceKind::Sample | VoiceKind::Synth | VoiceKind::Keys => (0.0, true),
-                };
+                let f = if accent { 1760.0 } else { 1320.0 };
+                v.phase = (v.phase + f / sr).fract();
+                let sq = if v.phase < 0.5 { 1.0 } else { -1.0 };
+                let a = if t < 0.002 { exp_ramp(0.0001, 0.22, t, 0.002) } else { exp_ramp(0.22, 0.0001, t - 0.002, 0.048) };
                 let (gl, gr) = side(i);
-                out_l[i] += s * gl;
+                out_l[i] += sq * a * gl;
                 if stereo {
-                    out_r[i] += s * gr;
+                    out_r[i] += sq * a * gr;
                 }
                 v.t += 1;
-                if done {
+                if t > 0.06 {
                     v.alive = false;
                     break;
                 }
             }
         }
     }
+}
+
+/// Per-sample factor that falls 60 dB in `seconds`.
+#[inline]
+fn fall(seconds: f32, sr: f32) -> f32 {
+    10f32.powf(-3.0 / (seconds.max(0.0005) * sr))
+}
+
+/// The frames `[lo, hi)` a sampler plays: fractions of the file, at least one frame.
+#[inline]
+fn region(start: f32, end: f32, frames: usize) -> (f64, f64) {
+    let n = frames as f64;
+    let lo = (start as f64 * n).floor().clamp(0.0, (n - 1.0).max(0.0));
+    let hi = (end as f64 * n).ceil().clamp(lo + 1.0, n.max(lo + 1.0));
+    (lo, hi)
 }

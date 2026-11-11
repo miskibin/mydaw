@@ -17,7 +17,7 @@ fn tmp(name: &str) -> PathBuf {
     d
 }
 
-/// An empty project (four built-in channels), no master limiter, one pattern on track 0.
+/// An empty project (the starter kit in the rack), no master limiter, one pattern on track 0.
 fn one_pattern(notes: Vec<Note>, len: f64, swing: f32) -> Project {
     let mut p = Project::empty();
     p.inserts[0].fx.clear();
@@ -54,12 +54,9 @@ fn clip(id: Id, track: u32, start: f64, len: f64, pat: Id) -> Clip {
     }
 }
 
-fn chan(p: &Project, inst: Inst) -> Id {
-    p.channels
-        .iter()
-        .find(|c| c.src == ChannelSrc::Inst { inst })
-        .unwrap()
-        .id
+/// A starter-kit channel by name (Kick, Clap, Hat, Snare).
+fn chan(p: &Project, name: &str) -> Id {
+    p.channels.iter().find(|c| c.name == name).unwrap().id
 }
 
 fn render(p: Project, beats: f64) -> Vec<f32> {
@@ -78,26 +75,26 @@ fn onset(x: &[f32], thr: f32) -> Option<usize> {
 }
 
 #[test]
-fn new_projects_have_the_four_builtin_channels() {
+fn new_projects_start_with_the_starter_kit_as_samplers() {
     let p = Project::empty();
-    let kinds: Vec<_> = p.channels.iter().map(|c| c.src.clone()).collect();
-    assert_eq!(
-        kinds,
-        Inst::ALL
-            .iter()
-            .map(|&inst| ChannelSrc::Inst { inst })
-            .collect::<Vec<_>>()
-    );
-    assert!(p
-        .channels
-        .iter()
-        .all(|c| c.vol == VOL_UNITY && c.pan == 0.0 && c.insert.is_none()));
-    assert!(p.next_id > p.channels.iter().map(|c| c.id).max().unwrap());
+    assert_eq!(p.channels.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["Kick", "Clap", "Hat", "Snare"]);
+    for (c, (file, _)) in p.channels.iter().zip(STARTER_KIT) {
+        // every channel is a plain sampler of a standard-library file the project lists
+        let ChannelSrc::Sample { source, sampler } = c.src else { panic!("{} is not a sampler", c.name) };
+        assert_eq!(sampler, SamplerState::default());
+        let src = p.sources.iter().find(|s| s.id == source).unwrap();
+        assert_eq!(src.path, format!("lib:Standard/{file}"));
+        assert!(c.vol == VOL_UNITY && c.pan == 0.0 && c.insert.is_none() && c.root == SAMPLE_ROOT);
+    }
+    assert!(p.next_id > p.channels.iter().map(|c| c.id).chain(p.sources.iter().map(|s| s.id)).max().unwrap());
+    // and they sound without anything installed on the computer
+    let k = chan(&p, "Kick");
+    assert!(rms(&render(one_pattern(vec![Note::new(k, 0.0, 1.0, None)], 4.0, 0.0), 4.0)) > 0.01);
 }
 
 #[test]
 fn velocity_scales_the_output() {
-    for inst in [Inst::Kick, Inst::Bass] {
+    for inst in ["Kick", "Snare"] {
         let p0 = Project::empty();
         let k = chan(&p0, inst);
         let loud = render(
@@ -141,7 +138,7 @@ fn swing_moves_only_odd_sixteenths() {
     let step_frames = spb / 4.0 * SR as f64;
     for s in [0u32, 1, 2, 3, 6, 7] {
         let p0 = Project::empty();
-        let k = chan(&p0, Inst::Kick);
+        let k = chan(&p0, "Kick");
         let out = render(
             one_pattern(vec![Note::new(k, s as f32, 1.0, None)], 4.0, 1.0),
             4.0,
@@ -156,116 +153,49 @@ fn swing_moves_only_odd_sixteenths() {
 }
 
 #[test]
-fn old_projects_migrate_and_render_like_before() {
-    // a file written by the engine before channels existed (notes say `inst`)
+fn files_with_the_old_synthesised_instruments_open_as_samplers() {
+    // a file written before channels existed: its notes say `inst` (kick, clap, hat, bass)
     let dir = tmp("migrate");
     let path = dir.join("demo_v1.wave");
-    std::fs::copy(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/demo_v1.wave"),
-        &path,
-    )
-    .unwrap();
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/demo_v1.wave"), &path).unwrap();
     let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
     assert!(e.open(&path).unwrap().is_empty());
-    let migrated = e.project();
-    // the migration is exactly the new demo: built-in channels in Kick, Clap, Hat, Bass order.
-    // Reverb and limiter settings are the exception: their parameter sets and factory
-    // presets changed with the v2 DSP after the fixture was written, and old files keep theirs.
-    let mut expected = Project::demo();
-    for (m, d) in migrated.inserts.iter().zip(expected.inserts.iter_mut()) {
-        for (fm, fd) in m.fx.iter().zip(d.fx.iter_mut()) {
-            if fm.kind == FxKind::Reverb || fm.kind == FxKind::Limit {
-                fd.params = fm.params.clone();
-                fd.preset = fm.preset;
-            }
-            // parameters added later (Comp "det") are absent from old files; they read as
-            // their default, which is the old behaviour
-            if fm.kind == FxKind::Comp && !fm.params.contains_key("det") {
-                fd.params.remove("det");
-            }
-        }
-    }
-    assert_eq!(migrated, expected);
-    assert!(migrated
-        .patterns
-        .iter()
-        .flat_map(|p| &p.notes)
-        .all(|n| n.ch != 0 && n.inst.is_none()));
-    // the render matches the one made by the old engine (RMS per 20 ms)
-    let out = e.render(0.0, 32.0, 1.0, SR).unwrap();
-    let fx: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/demo_v1_render.json")).unwrap();
-    assert_eq!(out.len() / 2, fx["frames"].as_u64().unwrap() as usize);
-    let w = fx["window"].as_u64().unwrap() as usize;
-    for (i, (chunk, want)) in out
-        .chunks(w * 2)
-        .zip(fx["rms"].as_array().unwrap())
-        .enumerate()
-    {
-        let (mut l, mut r) = (0f64, 0f64);
-        for f in chunk.chunks_exact(2) {
-            l += (f[0] as f64).powi(2);
-            r += (f[1] as f64).powi(2);
-        }
-        let n = (chunk.len() / 2) as f64;
-        for (got, want) in [
-            ((l / n).sqrt(), want[0].as_f64().unwrap()),
-            ((r / n).sqrt(), want[1].as_f64().unwrap()),
-        ] {
-            assert!(
-                (got - want).abs() <= 1e-6 + want * 1e-5,
-                "window {i}: rms {got} vs {want} before channels"
-            );
-        }
-    }
-    // and the in-memory demo renders bit-identically to the migrated file
-    let demo = Engine::new(expected, Arc::new(NoPlugins))
-        .render(0.0, 32.0, 1.0, SR)
-        .unwrap();
-    assert!(demo == out, "demo and migrated file differ");
-    // migrating twice changes nothing
-    let mut again = migrated.clone();
-    again.migrate();
-    assert_eq!(again, migrated);
+    let p = e.project();
+    // one sampler channel per instrument the song used, each note on its channel
+    assert_eq!(p.channels.len(), 4);
+    assert!(p.channels.iter().all(|c| matches!(c.src, ChannelSrc::Sample { .. })));
+    let notes: Vec<&Note> = p.patterns.iter().flat_map(|pt| &pt.notes).collect();
+    assert_eq!(notes.len(), 23);
+    assert!(notes.iter().all(|n| p.channel(n.ch).is_some()));
+    // the bass held its notes: it is the one gated sampler
+    let gated: Vec<bool> = p.channels.iter().map(|c| matches!(c.src, ChannelSrc::Sample { sampler, .. } if sampler.gate)).collect();
+    assert_eq!(gated.iter().filter(|g| **g).count(), 1);
+    assert!(rms(&e.render(0.0, 32.0, 0.0, SR).unwrap()) > 0.01);
+    // a file with `"kind":"inst"` channels (after channels, before the standard library)
+    let mut doc: serde_json::Value = serde_json::to_value(Project::empty()).unwrap();
+    doc["channels"] = serde_json::json!([
+        { "id": 1000, "name": "My Kick", "color": "#4f8ef7", "kind": "inst", "inst": "kick", "vol": 0.5, "pan": -0.25, "root": 60 },
+        { "id": 1001, "name": "Bass", "color": "#7c8cf8", "kind": "inst", "inst": "bass", "root": 36 },
+    ]);
+    doc["sources"] = serde_json::json!([]);
+    doc["patterns"] = serde_json::json!([{ "id": 1, "name": "P", "color": "#fff", "len": 4, "notes": [{ "ch": 1000, "step": 0, "len": 1 }, { "ch": 1001, "step": 4, "len": 4, "p": 33 }] }]);
+    let q = Project::from_json(doc).unwrap();
+    let kick = q.channel(1000).unwrap();
+    // the channel keeps its name and mix; it now plays a sample the project lists
+    assert_eq!((kick.name.as_str(), kick.vol, kick.pan), ("My Kick", 0.5, -0.25));
+    let src = q.sources.iter().find(|s| Some(s.id) == kick.sample_source()).unwrap();
+    assert!(src.path.starts_with("lib:Standard/kick"));
+    assert!(q.next_id > q.sources.iter().map(|s| s.id).max().unwrap());
+    assert_eq!(q.patterns[0].notes.len(), 2);
+    // and reading it again changes nothing
+    assert_eq!(Project::from_json(serde_json::to_value(&q).unwrap()).unwrap(), q);
 }
 
 #[test]
-fn legacy_inst_notes_through_put_pattern_get_a_channel() {
+fn notes_of_unknown_channels_are_refused() {
     let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
-    e.apply(
-        &[Op::RemoveChannel {
-            id: chan(&e.project(), Inst::Hat),
-        }],
-        false,
-        None,
-    )
-    .unwrap();
-    let ops: Vec<Op> = serde_json::from_value(serde_json::json!([{ "op": "putPattern", "pattern": {
-        "id": 7, "name": "Hats", "color": "#e0a44a", "len": 4, "notes": [{"inst": "hat", "step": 0, "len": 1}, {"inst": "kick", "step": 4, "len": 1}] } }]))
-    .unwrap();
-    e.apply(&ops, false, None).unwrap();
-    let p = e.project();
-    let hat = chan(&p, Inst::Hat);
-    let pat = p.patterns.iter().find(|x| x.id == 7).unwrap();
-    assert_eq!(pat.notes[0].ch, hat);
-    assert_eq!(pat.notes[1].ch, chan(&p, Inst::Kick));
-    // the JSON never says `inst` again
-    assert!(!serde_json::to_string(&p)
-        .unwrap()
-        .contains("\"inst\":\"hat\",\"step\""));
-    // a note without a channel or with an unknown one is refused
-    let bad = Pattern {
-        id: 8,
-        name: "x".into(),
-        color: "#fff".into(),
-        len: 4.0,
-        min_len: 4.0,
-        notes: vec![Note::new(424242, 0.0, 1.0, None)],
-        swing: 0.0,
-    };
-    assert!(e
-        .apply(&[Op::PutPattern { pattern: bad }], false, None)
-        .is_err());
+    let bad = Pattern { id: 8, name: "x".into(), color: "#fff".into(), len: 4.0, min_len: 4.0, notes: vec![Note::new(424242, 0.0, 1.0, None)], swing: 0.0 };
+    assert!(e.apply(&[Op::PutPattern { pattern: bad }], false, None).is_err());
 }
 
 /// A 1 s mono sine at `hz` written to a WAV.
@@ -306,7 +236,7 @@ fn sampler_channel_plays_its_sample_at_the_note_pitch() {
         id,
         name: "A440".into(),
         color: "#47b8a8".into(),
-        src: ChannelSrc::Sample { source: srcs[0] },
+        src: ChannelSrc::Sample { source: srcs[0], sampler: SamplerState::default() },
         vol: VOL_UNITY,
         pan: 0.0,
         mute: false,
@@ -368,37 +298,9 @@ fn sampler_channel_plays_its_sample_at_the_note_pitch() {
 }
 
 #[test]
-fn builtin_drums_follow_the_note_key() {
-    let p0 = Project::empty();
-    let k = chan(&p0, Inst::Kick);
-    let root = p0.channel(k).unwrap().root;
-    let tail = |key: Option<u8>| {
-        let out = left(&render(
-            one_pattern(vec![Note::new(k, 0.0, 1.0, key)], 4.0, 0.0),
-            1.0,
-        ));
-        // the settled body of the kick (its pitch sweep is over by ~0.12 s)
-        freq(
-            &out,
-            (0.15 * SR as f64) as usize,
-            (0.30 * SR as f64) as usize,
-        )
-    };
-    let (at_root, octave_up) = (tail(None), tail(Some(root + 12)));
-    assert!(
-        (tail(Some(root)) - at_root).abs() < 1.0,
-        "the root plays the kick as before"
-    );
-    assert!(
-        (octave_up / at_root - 2.0).abs() < 0.1,
-        "an octave up doubles the pitch: {at_root} → {octave_up}"
-    );
-}
-
-#[test]
 fn pattern_length_follows_its_notes_and_whole_clips_follow_it() {
     let p0 = Project::empty();
-    let k = chan(&p0, Inst::Kick);
+    let k = chan(&p0, "Kick");
     // a length sent by the caller is ignored: the notes reach into bar 2
     let mut p = one_pattern(
         vec![Note::new(k, 0.0, 1.0, None), Note::new(k, 20.0, 1.0, None)],
@@ -477,7 +379,7 @@ fn pattern_length_follows_its_notes_and_whole_clips_follow_it() {
 
 #[test]
 fn removing_a_pattern_removes_its_clips_and_undoes() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let before = e.project();
     let id = before.patterns[0].id;
     assert!(before
@@ -502,7 +404,7 @@ fn removing_a_pattern_removes_its_clips_and_undoes() {
 #[test]
 fn notes_past_the_song_end_are_refused() {
     let p0 = Project::empty();
-    let k = chan(&p0, Inst::Kick);
+    let k = chan(&p0, "Kick");
     let e = Engine::new(one_pattern(vec![], 4.0, 0.0), Arc::new(NoPlugins));
     let mut pat = e.project().patterns[0].clone();
     pat.notes
@@ -514,10 +416,10 @@ fn notes_past_the_song_end_are_refused() {
 
 #[test]
 fn step_edits_undo_and_redo() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let before = e.project();
     let mut pat = before.patterns[0].clone();
-    let kick = chan(&before, Inst::Kick);
+    let kick = chan(&before, "Kick");
     pat.notes.push(Note::new(kick, 6.0, 1.0, None));
     e.apply(
         &[Op::PutPattern {
@@ -564,7 +466,7 @@ fn step_edits_undo_and_redo() {
 #[test]
 fn channels_mute_solo_route_and_remove() {
     let p0 = Project::empty();
-    let (k, h) = (chan(&p0, Inst::Kick), chan(&p0, Inst::Hat));
+    let (k, h) = (chan(&p0, "Kick"), chan(&p0, "Hat"));
     let p = one_pattern(
         vec![Note::new(k, 0.0, 1.0, None), Note::new(h, 4.0, 1.0, None)],
         4.0,
@@ -671,7 +573,7 @@ fn save_and_open_round_trip() {
     let dir = tmp("roundtrip");
     let wav = dir.join("tone.wav");
     sine_wav(&wav, 330.0);
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let (srcs, _) = e.import_audio(&[wav], None).unwrap();
     let p = e.project();
     let id = p.next_id;
@@ -679,7 +581,7 @@ fn save_and_open_round_trip() {
         id,
         name: "Tone".into(),
         color: "#47b8a8".into(),
-        src: ChannelSrc::Sample { source: srcs[0] },
+        src: ChannelSrc::Sample { source: srcs[0], sampler: SamplerState::default() },
         vol: 0.6,
         pan: 0.25,
         mute: false,
@@ -723,7 +625,7 @@ fn save_and_open_round_trip() {
 
 #[test]
 fn pattern_preview_and_auditions_are_not_edits() {
-    let e = Engine::new(Project::demo(), Arc::new(NoPlugins));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
     let r = e.revision();
     let k = e.project().channels[0].id;
     e.note_audition(k, None, 0.8, Some(1)).unwrap();
@@ -732,36 +634,4 @@ fn pattern_preview_and_auditions_are_not_edits() {
     assert_eq!(e.revision(), r);
     assert!(e.note_audition(424242, None, 1.0, None).is_err());
     assert!(e.pattern_play(Some(424242)).is_err());
-}
-
-/// Rewrites `fixtures/demo_v1_render.json` after an intended DSP change of a built-in effect
-/// the demo uses: `cargo test -p wave-engine --test patterns regenerate_demo_v1_render -- --ignored`.
-#[test]
-#[ignore]
-fn regenerate_demo_v1_render() {
-    let dir = tmp("regen");
-    let path = dir.join("demo_v1.wave");
-    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
-    std::fs::copy(format!("{fixtures}/demo_v1.wave"), &path).unwrap();
-    let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
-    assert!(e.open(&path).unwrap().is_empty());
-    let out = e.render(0.0, 32.0, 1.0, SR).unwrap();
-    let w = 960usize;
-    let rms: Vec<[f64; 2]> = out
-        .chunks(w * 2)
-        .map(|c| {
-            let n = (c.len() / 2) as f64;
-            let (l, r) = c.as_chunks::<2>().0.iter().fold((0f64, 0f64), |(l, r), f| (l + (f[0] as f64).powi(2), r + (f[1] as f64).powi(2)));
-            [(l / n).sqrt(), (r / n).sqrt()]
-        })
-        .collect();
-    let peak = out.iter().fold(0f32, |m, v| m.max(v.abs()));
-    let json = serde_json::json!({
-        "frames": out.len() / 2,
-        "note": "RMS per 20 ms window (L,R) of the demo_v1.wave fixture migrated and rendered 0..32 beats + 1 s tail at 48 kHz; notes from the engine before channels existed (commit d507fb6), regenerated for the v2 reverb and limiter DSP",
-        "peak": peak,
-        "rms": rms,
-        "window": w,
-    });
-    std::fs::write(format!("{fixtures}/demo_v1_render.json"), serde_json::to_string(&json).unwrap()).unwrap();
 }

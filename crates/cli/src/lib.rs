@@ -32,7 +32,7 @@ EDIT  (all edits are one undo step each; --if-revision N refuses to act if the p
 
 PATTERNS & CHANNELS  (steps: x = on, 1-9 = velocity 10-90 %, . = off; spaces and | are ignored)
   channels                                 Channel Rack: ids, instrument/sample, volume, pan, insert
-  channels --add kick|clap|hat|bass        add a built-in channel     (--sample SOURCE_ID: a sampler channel)
+  channels --add kick-808|snare|marimba…   add a sampler of a standard-library sample (--sample SOURCE_ID: of a project source)
   channels --keys                          add WAVE Keys, the sampled grand piano
   channels --synth "PRESET"                add a synth channel ("" = blank patch); --ch C --preset NAME loads one
   channels --ch C --param ID --value V     one knob of a synth (ids in `catalog`) or of WAVE Keys (release ms, dynamics %)

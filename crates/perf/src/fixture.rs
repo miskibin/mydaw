@@ -309,7 +309,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
             id,
             name: format!("Sampler {k}"),
             color: color(k + 3),
-            src: ChannelSrc::Sample { source: sid },
+            src: ChannelSrc::Sample { source: sid, sampler: Default::default() },
             vol: VOL_UNITY,
             pan: 0.0,
             mute: false,
@@ -368,7 +368,6 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
     let pitched: Vec<Id> = p
         .channels
         .iter()
-        .filter(|c| c.pitched())
         .map(|c| c.id)
         .collect();
     let mut pats = vec![];
