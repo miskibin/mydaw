@@ -188,7 +188,7 @@ pub fn land_takes(p: &mut Project, track: u32, passes: &[(Id, f64, f64)]) {
     if old.is_empty() && passes.len() == 1 {
         let (src, start, len) = passes[0];
         let id = p.alloc_id();
-        p.clips.push(Clip { id, track, start, len, offset: 0.0, kind: ClipKind::Audio, source: src, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false });
+        p.clips.push(Clip { id, track, start, len, offset: 0.0, kind: ClipKind::Audio, source: src, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 });
         return;
     }
     // (source, timeline start, len, source offset)
@@ -211,7 +211,7 @@ pub fn land_takes(p: &mut Project, track: u32, passes: &[(Id, f64, f64)]) {
     let gone: Vec<Id> = old.iter().map(|c| c.id).collect();
     p.clips.retain(|c| !gone.contains(&c.id));
     let cid = p.alloc_id();
-    p.clips.push(Clip { id: cid, track, start: origin, len: end - origin, offset: 0.0, kind: ClipKind::Comp, source: id, muted: false, gain, fade_in: 0.0, fade_out: 0.0, pan, norm: false, rev: false, tune: None, stretch: 1.0, resample: false });
+    p.clips.push(Clip { id: cid, track, start: origin, len: end - origin, offset: 0.0, kind: ClipKind::Comp, source: id, muted: false, gain, fade_in: 0.0, fade_out: 0.0, pan, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 });
     p.comps.push(comp);
 }
 

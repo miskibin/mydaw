@@ -1,7 +1,7 @@
 // Channel settings window (FL "Channel settings"): click a Channel Rack name to see what makes
 // the sound — the sampler with its waveform and settings, the synth, or WAVE Keys — plus level,
 // pan, root key, mixer routing and a keyboard to play it.
-import { createSignal, For, Show } from 'solid-js';
+import { createSignal, Show } from 'solid-js';
 import { VOL_UNITY, type AutoTarget, type Channel, type Id } from '../api/types';
 import { clamp, panText, volText } from '../lib/format';
 import { t, type TranslationKey } from '../lib/i18n';
@@ -9,11 +9,11 @@ import { noteName } from '../lib/pitch';
 import { autoDisplay, controlMenu, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { audition, chanById, chanOp } from '../state/pattern';
-import { insName, S } from '../state/store';
 import { say, U } from '../state/ui';
 import { channelIcon, InstIcon } from '../ui/instIcons';
 import { Knob } from '../ui/Knob';
 import { PianoKeys } from '../ui/PianoKeys';
+import { InsertPicker } from '../ui/InsertPicker';
 import { moveWindow } from './FxWindow';
 import { KeysPanel } from './KeysPanel';
 import { SamplerPanel } from './SamplerPanel';
@@ -78,6 +78,8 @@ function Body(props: { w: Win; c: Channel }) {
         <span class="title">{c().name}</span>
         <span class="sub">{t(c().kind === 'sample' ? 'b.cw.kSampler' : c().kind === 'synth' ? 'b.cw.kSynth' : 'b.cw.kKeys')}</span>
         <div style={{ flex: 1 }} />
+        <InsertPicker value={c().insert} nullLabel={t('b.cw.likeClipTrack')} ops={id => [chanOp(live(), { insert: id })]} label={t('b.pe.mixCh')}
+          wheelKey={'cwroute' + props.c.id} title={t('b.cw.mixerTip')} />
         <button class="iconbtn" title={t('b.cw.previewTitle')} onClick={() => audition(c().id, undefined, 0.9, true)}>▶</button>
         <button class="closebtn" title={t('b.cw.close')} onClick={closeChannelWindow}>×</button>
       </div>
@@ -88,14 +90,6 @@ function Body(props: { w: Win; c: Channel }) {
         {knob('b.cw.vol', 'b.cw.volCh', () => vol(), () => volText(vol()), t => ({ vol: Math.round(clamp(t, 0, 1) * 10000) / 10000 }), VOL_UNITY, undefined, volT)}
         {knob('b.cw.pan', 'b.cw.panCh', () => (pan() + 1) / 2, () => panText(pan()), t => ({ pan: Math.round(clamp(t * 2 - 1, -1, 1) * 100) / 100 }), 0.5, 0.5, panT)}
         {knob('b.cw.root', 'b.cw.rootCh', () => (c().root - ROOT_LO) / (ROOT_HI - ROOT_LO), () => noteName(c().root), t => ({ root: Math.round(ROOT_LO + clamp(t, 0, 1) * (ROOT_HI - ROOT_LO)) }), (60 - ROOT_LO) / (ROOT_HI - ROOT_LO))}
-        <div class="chroute">
-          <label>{t('b.cw.mixer')}</label>
-          <select class="sel" value={c().insert == null ? '' : String(c().insert)}
-            onChange={e => commit([chanOp(live(), { insert: e.currentTarget.value === '' ? null : +e.currentTarget.value })], t('b.pe.mixCh'))}>
-            <option value="">{t('b.cw.likeClipTrack')}</option>
-            <For each={S.project.inserts.filter(m => m.id !== 0)}>{m => <option value={String(m.id)}>{insName(m)}</option>}</For>
-          </select>
-        </div>
       </div>
       <Show when={c().kind === 'keys'}><PianoKeys ch={c().id} lo={21} hi={108} /></Show>
       <Show when={c().kind === 'sample'}><PianoKeys ch={c().id} lo={36} hi={96} mark={c().root} /></Show>

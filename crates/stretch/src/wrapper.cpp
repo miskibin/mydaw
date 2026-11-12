@@ -7,12 +7,14 @@
 extern "C" {
 
 // Stretches `channels` planar input buffers of `in_len` frames into planar output
-// buffers of `out_len` frames, keeping pitch. Returns 0 on success, 1 when the
-// output is too short for the algorithm (the caller pads), 2 on allocation failure.
-int wave_stretch_exact(float sample_rate, int channels, const float *const *input, size_t in_len, float *const *output, size_t out_len) {
+// buffers of `out_len` frames, keeping pitch, and transposes them by `semitones`
+// (0 = none). Returns 0 on success, 1 when the output is too short for the algorithm
+// (the caller pads), 2 on allocation failure.
+int wave_stretch_exact(float sample_rate, int channels, const float *const *input, size_t in_len, float *const *output, size_t out_len, float semitones) {
     try {
         signalsmith::stretch::SignalsmithStretch<float> s;
         s.presetDefault(channels, sample_rate);
+        if (semitones != 0.0f) s.setTransposeSemitones(semitones);
         // `exact` takes channel-indexable buffers; it reads input only
         float **in = const_cast<float **>(input);
         float *const *out = output;

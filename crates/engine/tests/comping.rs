@@ -61,7 +61,7 @@ fn comp_with(srcs: &[Id], regions: Vec<CompRegion>) -> Comp {
 }
 
 fn comp_clip(start: f64) -> Clip {
-    Clip { id: 9100, track: 0, start, len: 8.0, offset: 0.0, kind: ClipKind::Comp, source: 9000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false }
+    Clip { id: 9100, track: 0, start, len: 8.0, offset: 0.0, kind: ClipKind::Comp, source: 9000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 }
 }
 
 fn r(take: Id, from: f64, to: f64) -> CompRegion {

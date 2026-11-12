@@ -122,3 +122,19 @@ export function muteOps(cs: Clip[], val: boolean): Op[] {
   const ch = cs.filter(c => c.muted !== val).map(c => ({ ...c, muted: val }));
   return ch.length ? [{ op: 'putClips', clips: ch }] : [];
 }
+
+/** The "Fit to" lengths of the sample window, in beats (1, 2 beats; 1, 2, 4, 8 bars). */
+export const FIT_BEATS = [1, 2, 4, 8, 16, 32] as const;
+
+/**
+ * The audio clip stretched so the part of its audio it plays lasts `beats` (FL's TIME → Beat/Bar #):
+ * the stretch scales by `beats / len`, the offset with it (so the same audio plays), the start stays.
+ * Null when that needs a stretch outside `STRETCH_MIN..STRETCH_MAX` or runs past the song's end.
+ */
+export function fitClip(c: Clip, beats: number): Clip | null {
+  if (c.kind !== 'audio' || !(beats > 0) || !(c.len > 0)) return null;
+  const s = c.stretch ?? 1, k = beats / c.len, ns = s * k;
+  if (ns < STRETCH_MIN - 1e-9 || ns > STRETCH_MAX + 1e-9 || c.start + beats > TOTAL_BEATS + 1e-9) return null;
+  const r = (x: number) => Math.round(x * 1e9) / 1e9;
+  return { ...c, stretch: r(Math.min(STRETCH_MAX, Math.max(STRETCH_MIN, ns))), offset: r(c.offset * k), len: beats };
+}

@@ -44,7 +44,7 @@ fn engine(name: &str, set: impl Fn(&mut SamplerState), notes: &[(f32, f32, Optio
     set(&mut sampler);
     let channel = Channel::new(ch, "Test", "#4f8ef7", ChannelSrc::Sample { source: srcs[0], sampler });
     let pattern = Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 8.0, min_len: 8.0, notes: notes.iter().map(|&(s, l, k)| Note::new(ch, s, l, k)).collect(), swing: 0.0 };
-    let clip = Clip { id: 2, track: 0, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false };
+    let clip = Clip { id: 2, track: 0, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 };
     e.apply(&[Op::PutChannel { channel, index: None }, Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None).unwrap();
     (e, ch)
 }
@@ -313,7 +313,7 @@ fn a_new_project_does_not_inherit_audio_from_the_previous_one() {
     assert!(p.sources.iter().all(|s| s.path.starts_with("lib:")));
     let kick = p.channels[0].id;
     let pattern = Pattern { id: 1, name: "P".into(), color: "#fff".into(), len: 4.0, min_len: 4.0, notes: vec![Note::new(kick, 0.0, 1.0, None)], swing: 0.0 };
-    let clip = Clip { id: 2, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false };
+    let clip = Clip { id: 2, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 };
     e.apply(&[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None).unwrap();
     let out = e.render(0.0, 4.0, 0.0, SR).unwrap();
     // the kick is 0.38 s long; the test file would ring for a second

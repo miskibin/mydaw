@@ -794,7 +794,18 @@ pub struct Clip {
     /// default pitch-preserving time-stretch.
     #[serde(default, skip_serializing_if = "is_false")]
     pub resample: bool,
+    /// Audio clips: transposition in semitones (cents as the fraction), `CLIP_PITCH` either
+    /// way; the length stays. Rendered offline with the stretch, like it.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub pitch: f32,
 }
+
+fn is_zero_f32(x: &f32) -> bool {
+    *x == 0.0
+}
+
+/// Farthest `Clip::pitch`, in semitones either way.
+pub const CLIP_PITCH: f32 = 12.0;
 
 fn one_f64() -> f64 {
     1.0
@@ -817,9 +828,25 @@ impl Clip {
         let s = self.stretch.max(STRETCH_MIN);
         (self.offset * spb / s, (self.offset + self.len) * spb / s)
     }
-    /// A pitch-preserving time-stretch must be rendered for this clip.
+    /// A pitch-preserving time-stretch and/or a transposition must be rendered for this clip.
     pub fn needs_stretch(&self) -> bool {
-        self.kind == ClipKind::Audio && self.stretch != 1.0 && !self.resample
+        self.kind == ClipKind::Audio && ((self.stretch != 1.0 && !self.resample) || self.pitch != 0.0)
+    }
+    /// The length ratio the render makes (a resampled clip is stretched by its read rate instead).
+    pub fn render_ratio(&self) -> f64 {
+        if self.resample {
+            1.0
+        } else {
+            self.stretch
+        }
+    }
+    /// The rate the rendered audio is read at (source seconds per clip second).
+    pub fn rendered_rate(&self) -> f64 {
+        if self.resample {
+            1.0 / self.stretch
+        } else {
+            1.0
+        }
     }
 }
 

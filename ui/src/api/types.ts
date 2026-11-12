@@ -157,10 +157,15 @@ export interface Clip {
   stretch?: number;
   /** Stretch by changing speed and pitch together instead of keeping the pitch. */
   resample?: boolean;
+  /** Audio clips: transposition in semitones (cents as the fraction), ±`CLIP_PITCH`; the length stays.
+   *  Rendered offline with the stretch, in the background (absent = 0). */
+  pitch?: number;
 }
 /** Range of `Clip.stretch`. */
 export const STRETCH_MIN = 0.25;
 export const STRETCH_MAX = 4;
+/** Farthest `Clip.pitch`, semitones either way. */
+export const CLIP_PITCH = 12;
 
 /** Times in seconds of the source; `shift`/`formant` in cents, `drift` 0..1, `gain` dB. */
 export interface NoteEdit { start: number; end: number; shift: number; drift: number; formant: number; gain: number }

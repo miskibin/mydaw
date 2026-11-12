@@ -53,6 +53,7 @@ fn clip(id: Id, track: u32, start: f64, len: f64, pat: Id) -> Clip {
         tune: None,
         stretch: 1.0,
         resample: false,
+        pitch: 0.0,
     }
 }
 

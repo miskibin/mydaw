@@ -114,7 +114,7 @@ pub fn sketch_project() -> Project {
     ];
     let clip = |id, track, start, len, pat| Clip {
         id, track, start, len, offset: 0.0, kind: ClipKind::Pat, source: pat, muted: false, gain: 0.0,
-        fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false,
+        fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0,
     };
     p.clips = vec![clip(1, 0, 0.0, 16.0, 1), clip(2, 0, 16.0, 16.0, 1), clip(3, 1, 8.0, 24.0, 2), clip(4, 2, 0.0, 32.0, 3)];
     // Vocal chain: EQ (custom) → comp → reverb, drum bus comp.

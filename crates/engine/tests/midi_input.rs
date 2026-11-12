@@ -212,7 +212,7 @@ fn live_keys_play_where_the_song_plays_the_channel_not_through_the_armed_track()
     p.inserts[0].fx.clear();
     let id = held_bass(&mut p);
     p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes: vec![Note::new(id, 0.0, 4.0, Some(45))], swing: 0.0 }];
-    p.clips = vec![Clip { id: 2, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false }];
+    p.clips = vec![Clip { id: 2, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 }];
     p.tracks[5].arm = true;
     let vocal = p.tracks[5].insert;
     p.inserts.iter_mut().find(|m| m.id == vocal).unwrap().muted = true;

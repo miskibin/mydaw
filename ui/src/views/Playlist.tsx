@@ -1082,6 +1082,7 @@ export function Playlist() {
           { t: 'chips', label: tl('a.pl.stretchMethod', { k: (c.stretch ?? 1).toFixed(2) }), options: [tl('a.pl.keepPitch'), tl('a.pl.resample')], active: c.resample ? 1 : 0, pick: (i: number) => A.setStretchMethod(c, i === 1) } as MenuItem,
           ...(S.stretching[c.id] ? [{ t: 'item', label: tl('a.pl.stretchFailed'), title: S.stretching[c.id], disabled: true, act: () => {} } as MenuItem] : []),
           { t: 'item', label: tl('a.pl.detectTempoKey'), act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
+          { t: 'item', label: tl('a.pl.trimRegion'), title: tl('d.smp.trim.tip'), act: () => void A.trimClip(c.id) } as MenuItem,
           { t: 'sub', label: tl('a.pl.autoVocal'), items: [
             { t: 'item', label: tl('a.pl.autoVocalSing'), act: () => void A.autoVocal(c.id, 'natural'), title: tl('a.pl.autoVocalSingTip') },
             { t: 'item', label: tl('a.pl.autoVocalRap'), act: () => void A.autoVocal(c.id, 'hard'), title: tl('a.pl.autoVocalRapTip') },

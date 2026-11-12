@@ -335,7 +335,7 @@ fn automation_moves_volume_and_effect_params() {
     for t in p.tracks.iter_mut().skip(1) {
         t.muted = true;
     }
-    p.clips.push(Clip { id: 8001, track: 7, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Auto, source: 8000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false });
+    p.clips.push(Clip { id: 8001, track: 7, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Auto, source: 8000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 });
     let e = Engine::new(p, Arc::new(NoPlugins));
     let out = e.render(0.0, 4.0, 0.0, 48000).unwrap();
     let at = |b: f64| (b * 60.0 / 128.0 * 48000.0) as usize * 2;
@@ -534,7 +534,7 @@ fn an_arrangement_can_run_past_the_old_128_bar_limit() {
     let last = p.clips.iter().map(|c| c.id).max().unwrap_or(0);
     // bar 476: past the old 512-beat end, inside the new one
     let start = 1900.0;
-    p.clips.push(Clip { id: last + 1, track: 0, start, len, offset: 0.0, kind: ClipKind::Pat, source: pat, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false });
+    p.clips.push(Clip { id: last + 1, track: 0, start, len, offset: 0.0, kind: ClipKind::Pat, source: pat, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 });
     let e = Engine::new(p, Arc::new(NoPlugins));
     let (from, to) = Engine::export_range(&e.project(), false);
     assert_eq!(from, 0.0);

@@ -482,6 +482,11 @@ export function openEditor(id: Id) {
   const w = Math.min(780, window.innerWidth - 40), h = Math.min(420, window.innerHeight - 100);
   setU({ editor: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: 64, w, h }, sel: [id] });
 }
+/** Writes a new file with only the part the clip plays; the clip plays it (one undo step). */
+export async function trimClip(id: Id) {
+  try { await enqueue(() => be().trimClip(id)); say(t('d.smp.trimmed')); }
+  catch (e) { say(t('d.smp.trimfail', { err: String(e) })); void resync(); }
+}
 export function closeEditor() { if (U.previewing) void be().previewStop(); setU('editor', null); }
 /** The note-based pitch editor of an audio clip. */
 export function openPitchEditor(id: Id) {

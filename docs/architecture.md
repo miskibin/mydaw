@@ -74,6 +74,18 @@ resampled (`ClipRt::rate = 1/s`, pitch follows speed), and the state's `stretchi
 is rendered once, on release). Offline bounces render missing stretches themselves, outside
 the project lock. `"resample": true` always plays resampled (turntable-style), no render.
 
+### Transposed audio clips
+
+An audio clip may carry `"pitch": p`, semitones within ±12 (cents as the fraction, absent = 0):
+the clip sounds `p` semitones higher and keeps its length. It is rendered by the same path as a
+stretch, in the same Signalsmith pass (`stretch_shift_stereo`: length × `s`, transposed by `p`),
+cached by (source, pre-stretch audio, render ratio, `p`). The render ratio is `s`, or 1 for a
+resampled clip — that one reads the render at `1/s`, so speed and pitch move together on top of
+the transposition. Until the render lands the clip plays at its own pitch (`stretching` names
+it). Other clip kinds cannot be transposed (`putClips` rejects it). The sample window sets it
+with PITCH and FINE (whole semitones toward 0, and cents) and fits a clip to 1 or 2 beats or
+1–8 bars (`fitClip`: the stretch scales by `beats / len`, the offset with it, the start stays).
+
 ## Channels, patterns and notes (Channel Rack and Piano roll)
 
 Channels are **global to the project**, like FL Studio's Channel Rack: one row per

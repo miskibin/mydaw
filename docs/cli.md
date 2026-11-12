@@ -40,6 +40,7 @@ wave add-fx --insert 6 --type reverb --preset 3          # → {"fxId":1203,…}
 wave set-param --fx 1203 --param mix --value 30
 wave preset --fx 1203 --index 4
 wave import kick.wav loop.wav --track 3 --beat 16
+wave make-unique --clip 5012                           # own copy of the sample, new track + free insert
 wave apply --file edit.json --label "Busier hats"
 wave undo
 ```
@@ -58,7 +59,8 @@ Every note names its channel with `ch` (see `wave channels`).
 
 Units: playlist time in **beats**; pattern `step`/`len` in **sixteenths**;
 fades in seconds; track/insert `vol` is a fader position (0.7937 = 0 dB);
-clip `gain` in dB; pan −1..1. New ids: start at `context.nextId`.
+clip `gain` in dB; audio clip `pitch` in semitones (±12, cents as the fraction; the
+length stays) and `stretch` 0.25–4; pan −1..1. New ids: start at `context.nextId`.
 
 ## Patterns and channels
 

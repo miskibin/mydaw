@@ -111,6 +111,12 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 if c.kind != ClipKind::Audio && (c.stretch != 1.0 || c.resample) {
                     return Err(OpError::Invalid(format!("clip {}: only audio clips can be stretched", c.id)));
                 }
+                if !(c.pitch.is_finite() && c.pitch.abs() <= crate::model::CLIP_PITCH + 1e-4) {
+                    return Err(OpError::Invalid(format!("clip {}: pitch must be within ±{} semitones", c.id, crate::model::CLIP_PITCH)));
+                }
+                if c.kind != ClipKind::Audio && c.pitch != 0.0 {
+                    return Err(OpError::Invalid(format!("clip {}: only audio clips can be transposed", c.id)));
+                }
                 let known = match c.kind {
                     ClipKind::Pat => p.patterns.iter().any(|x| x.id == c.source),
                     ClipKind::Audio => p.sources.iter().any(|x| x.id == c.source),

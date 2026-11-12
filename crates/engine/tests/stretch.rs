@@ -333,6 +333,60 @@ fn undo_restores_the_unstretched_clip() {
         .find(|c| c.id == clip.id)
         .unwrap();
     assert_eq!(got, clip);
-    let out = left(&e.render(0.0, 6.0, 0.0, SR).unwrap());
+    let out = left(&e.render(0.0, 12.0, 0.0, SR).unwrap());
     assert!(rms(&out[sec(2.05)..sec(2.9)]) < 1e-3, "plays 2 s again");
+}
+
+#[test]
+fn pitch_transposes_and_keeps_the_length() {
+    let (e, clip) = engine_with_clip("pitch");
+    put(&e, Clip { pitch: 7.0, ..clip.clone() }).unwrap();
+    let out = left(&e.render(0.0, 12.0, 0.0, SR).unwrap());
+    let up = 2f64.powf(7.0 / 12.0);
+    let (f1, f2) = (freq(&out, sec(0.2), sec(0.8)), freq(&out, sec(1.2), sec(1.8)));
+    // within 10 cents
+    let cents = |f: f64, want: f64| 1200.0 * (f / want).log2();
+    assert!(cents(f1, 440.0 * up).abs() < 10.0, "first half at {f1} Hz");
+    assert!(cents(f2, 880.0 * up).abs() < 10.0, "second half at {f2} Hz");
+    // the length stays: sound until 2 s, then silence
+    assert!(rms(&out[sec(1.5)..sec(1.9)]) > 0.3);
+    assert!(rms(&out[sec(2.05)..sec(3.0)]) < 1e-3, "sound after the clip");
+
+    // with a stretch: one render, both at once
+    put(&e, Clip { pitch: -12.0, stretch: 2.0, len: 8.0, ..clip.clone() }).unwrap();
+    let out = left(&e.render(0.0, 12.0, 0.0, SR).unwrap());
+    let f1 = freq(&out, sec(0.4), sec(1.6));
+    assert!(cents(f1, 220.0).abs() < 10.0, "stretched and an octave down: {f1} Hz");
+    assert!(rms(&out[sec(3.5)..sec(3.9)]) > 0.3 && rms(&out[sec(4.05)..sec(5.0)]) < 1e-3, "4 s long");
+
+    // resampled (turntable) and transposed: the speed sets the length, pitch moves on top
+    put(&e, Clip { pitch: 12.0, stretch: 2.0, len: 8.0, resample: true, ..clip.clone() }).unwrap();
+    let out = left(&e.render(0.0, 12.0, 0.0, SR).unwrap());
+    let f1 = freq(&out, sec(0.4), sec(1.6));
+    assert!(cents(f1, 440.0).abs() < 10.0, "half speed an octave up = 440 Hz: {f1} Hz");
+
+    // back to 0: the source again, exactly
+    put(&e, clip.clone()).unwrap();
+    let out = left(&e.render(0.0, 3.0, 0.0, SR).unwrap());
+    assert!((freq(&out, sec(0.2), sec(0.8)) - 440.0).abs() < 2.0);
+}
+
+#[test]
+fn pitch_is_checked_and_saved() {
+    let (e, clip) = engine_with_clip("pitchops");
+    assert!(put(&e, Clip { pitch: 12.5, ..clip.clone() }).is_err());
+    assert!(put(&e, Clip { pitch: f32::NAN, ..clip.clone() }).is_err());
+    let pat = Clip { id: 77_000, kind: ClipKind::Pat, source: 1, start: 16.0, pitch: 2.0, ..clip.clone() };
+    assert!(put(&e, pat).is_err(), "only audio clips are transposed");
+    put(&e, Clip { pitch: -3.25, ..clip.clone() }).unwrap();
+    let json = serde_json::to_value(e.project()).unwrap();
+    let saved = json["clips"].as_array().unwrap().iter().find(|c| c["id"] == clip.id).unwrap();
+    assert_eq!(saved["pitch"], -3.25);
+    // 0 is left out, and a file without it loads as 0
+    put(&e, clip.clone()).unwrap();
+    let json = serde_json::to_value(e.project()).unwrap();
+    let saved = json["clips"].as_array().unwrap().iter().find(|c| c["id"] == clip.id).unwrap();
+    assert!(saved.get("pitch").is_none());
+    let back: Clip = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(back.pitch, 0.0);
 }

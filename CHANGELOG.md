@@ -13,8 +13,17 @@ shown in the app after an update and is published as the release notes (see
   free mixer insert named after it, so you can put effects on that one clip. Selected clips of the
   same sample on that track go along. Other clips of the sample stay as they are; Ctrl+Z undoes it
   in one step. From the command line: `wave make-unique --clip ID`.
-- **The sample editor's mixer picker sits in its header**, next to the close button. Scroll over it
-  to step through the mixer inserts.
+- **One sample window for audio clips and sampler channels**, like FL Studio. Double-click an audio
+  clip and you get the same window as a Channel Rack sampler: the waveform (click it to listen,
+  drag the markers for the part that plays and the corner handles for the fades), the file, then
+  Reverse, Normalize and the knobs. The MIXER picker sits in the header of both, next to the close
+  button; scroll over it to step through the mixer inserts.
+- **Transpose audio clips ±12 semitones without changing their length.** PITCH and FINE in the
+  sample window. It is rendered once in the background (the Playlist shows `+5 st …` meanwhile and
+  the clip plays at its own pitch until it is ready) and saved with the song.
+- **Fit an audio clip to 1 or 2 beats or 1, 2, 4 or 8 bars** with one click (*Fit to* in the sample
+  window), like FL Studio's TIME → Beat/Bar. Keep pitch stretches it at the same pitch; Resample
+  changes speed and pitch together. Lengths that would need more than ¼×–4× are greyed out.
 - **Icons in Project → Audio**: every sample shows the icon its clips show in the Playlist.
 
 - **Drop a library sample on a Channel Rack channel to replace its sample**, like FL Studio. The
@@ -24,6 +33,9 @@ shown in the app after an update and is published as the release notes (see
 
 ### Changed
 - **Play, stop and record come first in the toolbar**, right after the project name.
+- **The sample window has no Preview, Trim, Pitch… or Tempo / key… buttons any more.** Click the
+  waveform to listen. *Trim to the part that plays*, *Edit pitch…* and *Detect tempo and key…* are
+  in the clip's menu (the icon in its corner).
 - **PAT / SONG switches what is playing**, like FL Studio: while the song plays, PAT (or L) loops
   the current pattern straight away, and SONG goes back to the song, with no Stop in between.
 - **The Piano roll zooms out further**: until the whole pattern and the empty bars after it fit.

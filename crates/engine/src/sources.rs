@@ -152,22 +152,39 @@ pub struct SourceStore {
     estimator: Option<Arc<dyn F0Estimator>>,
 }
 
-/// (source id, identity of the audio before stretching, `Clip::stretch` bits)
-pub type StretchKey = (u64, u64, u64);
+/// (source id, identity of the audio before stretching, render ratio bits, `Clip::pitch` bits)
+pub type StretchKey = (u64, u64, u64, u32);
 type StretchDone = (StretchKey, Result<Arc<Audio>, String>);
 /// Stretched audio kept, in bytes (least recently played dropped first).
 const STRETCH_CACHE_BYTES: usize = 1 << 30;
 
-/// A time-stretch to render.
+/// A time-stretch and/or transposition to render.
 pub struct StretchJob {
     pub key: StretchKey,
     pub audio: Arc<Audio>,
+    /// Output length / input length.
     pub ratio: f64,
+    /// Transposition, semitones.
+    pub semis: f32,
+    /// The rate the clip reads the render at (`Clip::rendered_rate`), and the one it reads
+    /// `audio` at when there is no render (resampled, at its own pitch).
+    pub rate: f64,
+    pub fallback_rate: f64,
+}
+
+impl StretchJob {
+    fn of(c: &crate::model::Clip, ident: u64, audio: Arc<Audio>) -> Self {
+        StretchJob { key: stretch_key(c, ident), audio, ratio: c.render_ratio(), semis: c.pitch, rate: c.rendered_rate(), fallback_rate: 1.0 / c.stretch }
+    }
+}
+
+fn stretch_key(c: &crate::model::Clip, ident: u64) -> StretchKey {
+    (c.source, ident, c.render_ratio().to_bits(), c.pitch.to_bits())
 }
 
 /// Renders a stretch job (slow: run it off the engine lock).
 pub fn render_stretch(j: &StretchJob) -> Result<Arc<Audio>, String> {
-    let out = wave_stretch::stretch_stereo(j.audio.content(), j.audio.sr, j.ratio)?;
+    let out = wave_stretch::stretch_shift_stereo(j.audio.content(), j.audio.sr, j.ratio, j.semis)?;
     Ok(Arc::new(Audio::from_stereo(out, j.audio.sr, j.audio.channels)))
 }
 
@@ -423,23 +440,23 @@ impl SourceStore {
     /// drag is in progress) and the clip plays resampled meanwhile.
     pub fn clip_play(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<(Arc<Audio>, f64)> {
         let (pre, ident) = self.pre_stretch(c, allow_stale, bpm)?;
-        if c.kind != crate::model::ClipKind::Audio || c.stretch == 1.0 {
+        if c.kind != crate::model::ClipKind::Audio {
             self.stretch.waiting.remove(&c.id);
             return Some((pre, 1.0));
         }
         let rate = 1.0 / c.stretch;
-        if c.resample {
+        if !c.needs_stretch() {
             self.stretch.waiting.remove(&c.id);
             return Some((pre, rate));
         }
-        let key = (c.source, ident, c.stretch.to_bits());
+        let key = stretch_key(c, ident);
         if let Some(a) = self.stretch.get(&key) {
             self.stretch.waiting.remove(&c.id);
-            return Some((a, 1.0));
+            return Some((a, c.rendered_rate()));
         }
         self.stretch.waiting.insert(c.id, key);
         if !allow_stale && !self.stretch.pending.contains(&key) && !self.stretch.failed.contains_key(&key) {
-            self.stretch.submit(StretchJob { key, audio: pre.clone(), ratio: c.stretch });
+            self.stretch.submit(StretchJob::of(c, ident, pre.clone()));
         }
         Some((pre, rate))
     }
@@ -456,7 +473,7 @@ impl SourceStore {
                 if ok {
                     self.clip_play(c, allow_stale, bpm)
                 } else {
-                    Some((job.audio, 1.0 / job.ratio))
+                    Some((job.audio, job.fallback_rate))
                 }
             }
         }
@@ -469,14 +486,14 @@ impl SourceStore {
         if !c.needs_stretch() {
             return Some(Ok((pre, if c.kind == crate::model::ClipKind::Audio { 1.0 / c.stretch } else { 1.0 })));
         }
-        let key = (c.source, ident, c.stretch.to_bits());
+        let key = stretch_key(c, ident);
         if let Some(a) = self.stretch.get(&key) {
-            return Some(Ok((a, 1.0)));
+            return Some(Ok((a, c.rendered_rate())));
         }
         if self.stretch.failed.contains_key(&key) {
             return Some(Ok((pre, 1.0 / c.stretch)));
         }
-        Some(Err(StretchJob { key, audio: pre, ratio: c.stretch }))
+        Some(Err(StretchJob::of(c, ident, pre)))
     }
 
     /// Stores a finished (or failed) stretch render.
@@ -512,7 +529,7 @@ impl SourceStore {
         let mut failed = HashMap::new();
         for c in clips.iter().filter(|c| c.needs_stretch()) {
             let Some(k) = self.stretch.waiting.get(&c.id) else { continue };
-            if k.2 != c.stretch.to_bits() || k.0 != c.source {
+            if k.2 != c.render_ratio().to_bits() || k.3 != c.pitch.to_bits() || k.0 != c.source {
                 continue;
             }
             if let Some(e) = self.stretch.failed.get(k) {

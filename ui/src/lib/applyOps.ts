@@ -1,7 +1,7 @@
 // A TS port of crates/engine/src/ops.rs `apply` — used by the in-browser mock backend.
 // The real engine is the source of truth; this only has to agree on the happy path and
 // reject the same obviously-invalid batches.
-import { MAX_BANDS, STRETCH_MAX, STRETCH_MIN, type Id, type Op, type Project } from '../api/types';
+import { CLIP_PITCH, MAX_BANDS, STRETCH_MAX, STRETCH_MIN, type Id, type Op, type Project } from '../api/types';
 import { applyCompOp } from './comp';
 import { applyNotebookOp } from './notebook';
 import { applyPatternOp, PatternOpError } from './pattern';
@@ -19,6 +19,9 @@ export function applyOp(p: Project, op: Op): void {
         const s = c.stretch ?? 1;
         if (!(Number.isFinite(s) && s >= STRETCH_MIN - 1e-9 && s <= STRETCH_MAX + 1e-9)) throw new OpError(`clip ${c.id}: stretch must be ${STRETCH_MIN}..${STRETCH_MAX}`);
         if (c.kind !== 'audio' && (s !== 1 || c.resample)) throw new OpError(`clip ${c.id}: only audio clips can be stretched`);
+        const pt = c.pitch ?? 0;
+        if (!(Number.isFinite(pt) && Math.abs(pt) <= CLIP_PITCH + 1e-4)) throw new OpError(`clip ${c.id}: pitch must be within ±${CLIP_PITCH} semitones`);
+        if (c.kind !== 'audio' && pt !== 0) throw new OpError(`clip ${c.id}: only audio clips can be transposed`);
         const known = c.kind === 'pat' ? p.patterns.some(x => x.id === c.ref) : c.kind === 'auto' ? (p.automations ?? []).some(x => x.id === c.ref) : c.kind === 'comp' ? (p.comps ?? []).some(x => x.id === c.ref) : p.sources.some(x => x.id === c.ref);
         if (!known) throw new OpError(`no clip source with id ${c.ref}`);
         const r = c.tune?.reference;
@@ -34,6 +37,7 @@ export function applyOp(p: Project, op: Op): void {
         // the engine writes the defaults out (stretch 1, not resampled)
         if (nc.stretch === 1) delete nc.stretch;
         if (nc.resample === false) delete nc.resample;
+        if (nc.pitch === 0) delete nc.pitch;
         const i = p.clips.findIndex(x => x.id === c.id);
         if (i >= 0) p.clips[i] = nc; else p.clips.push(nc);
       }

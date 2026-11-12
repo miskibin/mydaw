@@ -775,6 +775,7 @@ impl Engine {
                     tune: None,
                     stretch: 1.0,
                     resample: false,
+                    pitch: 0.0,
                 });
                 clip_ids.push(cid);
             }
@@ -1038,7 +1039,7 @@ impl Engine {
             }
             let bpm = c.project.bpm;
             let (audio, rate) = c.sources.clip_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?;
-            if clip.needs_stretch() && rate != 1.0 {
+            if clip.needs_stretch() && rate != clip.rendered_rate() {
                 return Err(EngineError::Msg("the clip's time-stretch could not be rendered".into()));
             }
             let src = c.project.sources.iter().find(|s| s.id == clip.source);
@@ -1293,10 +1294,10 @@ impl Engine {
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
         let bpm = c.project.bpm;
         // a time-stretch that is not rendered yet previews the source at its own speed
-        let ready = if clip.needs_stretch() { c.sources.stretch_request(&clip, true, bpm).and_then(Result::ok).filter(|x| x.1 == 1.0) } else { None };
+        let ready = if clip.needs_stretch() { c.sources.stretch_request(&clip, true, bpm).and_then(Result::ok).filter(|x| x.1 == clip.rendered_rate()) } else { None };
         let (audio, (a, b)) = match ready {
-            Some((a, _)) => {
-                let r = crate::sources::clip_region(&clip, bpm, 1.0, a.seconds());
+            Some((a, rate)) => {
+                let r = crate::sources::clip_region(&clip, bpm, rate, a.seconds());
                 (a, r)
             }
             None => (c.sources.variant(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?, clip.source_span(bpm)),
@@ -1651,8 +1652,8 @@ impl Engine {
                 None => {
                     let r = crate::sources::render_stretch(&job);
                     let got = match &r {
-                        Ok(a) => (a.clone(), 1.0),
-                        Err(_) => (job.audio.clone(), 1.0 / job.ratio),
+                        Ok(a) => (a.clone(), job.rate),
+                        Err(_) => (job.audio.clone(), job.fallback_rate),
                     };
                     self.core.lock().sources.put_stretch(job.key, r);
                     rendered.insert(job.key, got.clone());
@@ -2110,6 +2111,7 @@ impl Engine {
             tune: None,
             stretch: 1.0,
             resample: false,
+            pitch: 0.0,
         };
         drop(c);
         if let Err(e) = self.apply(&[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None) {

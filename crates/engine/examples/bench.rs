@@ -20,7 +20,7 @@ fn main() {
     // put a clip on every lane so all eight are busy
     let pats = [1u64, 2, 3];
     p.clips = (0..8u32)
-        .map(|t| Clip { id: 30_000 + t as u64, track: t, start: 0.0, len: 64.0, offset: 0.0, kind: ClipKind::Pat, source: pats[t as usize % 3], muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false })
+        .map(|t| Clip { id: 30_000 + t as u64, track: t, start: 0.0, len: 64.0, offset: 0.0, kind: ClipKind::Pat, source: pats[t as usize % 3], muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 })
         .collect();
     let e = Engine::new(p, Arc::new(NoPlugins));
     let block = 128;
