@@ -93,7 +93,7 @@ pub fn specs() -> Vec<Spec> {
             tuned_clips: 2,
             vocal_tracks: 3,
         },
-        // 512 beats is the arrangement limit (TOTAL_BEATS); at 52 bpm that is a 9.8 minute song
+        // 512 beats at 52 bpm is a 9.8 minute song (the arrangement limit, TOTAL_BEATS, is 2048)
         Spec {
             name: "large",
             tracks: 64,

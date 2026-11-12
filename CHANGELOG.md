@@ -4,6 +4,25 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## 0.9.11 — 2026-11-12
+
+### Added
+- **Your work survives a crash, even before the first save.** A project you never saved is
+  copied aside at every autosave (Settings → General → Autosave, every 2 minutes by default).
+  If WAVE closes unexpectedly, the next start offers it back: *Recover*, *Delete copy* or
+  *Not now*. It opens as an unsaved project, so Ctrl+S asks where to put it.
+- **The previous save is kept.** Every save first keeps the file it replaces as
+  "Song (backup).wave" next to your project. It opens like any project.
+- **JACK on Linux.** Settings → Audio → Driver → JACK uses JACK or PipeWire's JACK at the rate and
+  buffer the server runs at. The ALSA audio thread now asks for real-time priority, so small
+  buffers drop out less.
+
+### Changed
+- **Songs can be four times longer:** 512 bars instead of 128 (almost 12 minutes at 174 BPM).
+- **VST3 on Linux says what it can do.** Plugin windows are not available on Linux yet; the
+  effect window shows a note instead of a button that failed, and you edit the plugin with
+  its parameter list.
+
 ## 0.9.10 — 2026-11-12
 
 ### Added

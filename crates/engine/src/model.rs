@@ -18,8 +18,10 @@ pub type Id = u64;
 
 /// Fader position that gives unity gain.
 pub const VOL_UNITY: f32 = 0.7937;
-/// Beats shown on the playlist. The arrangement may not go past this.
-pub const TOTAL_BEATS: f64 = 512.0;
+/// Beats shown on the playlist. The arrangement may not go past this: 512 bars of 4/4,
+/// 11:46 at 174 BPM, 17 minutes at 120. Nothing is allocated per beat, so the limit
+/// only bounds the playlist's scroll width (≈200k px at the deepest zoom).
+pub const TOTAL_BEATS: f64 = 2048.0;
 
 pub fn fader_gain(t: f32) -> f32 {
     2.0 * t * t * t

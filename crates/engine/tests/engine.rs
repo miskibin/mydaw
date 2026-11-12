@@ -481,3 +481,70 @@ fn old_insert_json_loads_with_unity_width() {
     let ins: Insert = serde_json::from_value(v).unwrap();
     assert_eq!(ins.width, 1.0);
 }
+
+#[test]
+fn saving_keeps_the_previous_save_as_a_backup() {
+    let dir = std::env::temp_dir().join(format!("wave-backup-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Song.wave");
+    let backup = engine::backup_path(&path);
+    assert_eq!(backup, dir.join("Song (backup).wave"));
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
+    e.apply(&[Op::SetBpm { bpm: 100.0 }], false, None).unwrap();
+    e.save(&path).unwrap();
+    assert!(!backup.exists(), "a first save has nothing to back up");
+    e.apply(&[Op::SetBpm { bpm: 150.0 }], false, None).unwrap();
+    e.save(&path).unwrap();
+    // the backup is an ordinary project: it opens, and holds the save before the last one
+    let f = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    f.open(&backup).unwrap();
+    assert_eq!(f.project().bpm, 100.0);
+    f.open(&path).unwrap();
+    assert_eq!(f.project().bpm, 150.0);
+    assert!(!dir.join("Song.wave.tmp").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_copy_leaves_the_project_unsaved_and_reopens_as_unsaved() {
+    let dir = std::env::temp_dir().join(format!("wave-copy-{}", std::process::id()));
+    let copy = dir.join("Recovery").join("1-2.wave");
+    let e = Engine::new(Project::sketch(), Arc::new(NoPlugins));
+    e.apply(&[Op::SetBpm { bpm: 133.0 }], false, None).unwrap();
+    e.save_copy(&copy).unwrap();
+    let st = e.state();
+    assert!(st.path.is_none() && st.dirty, "a recovery copy is not a save");
+    assert!(!engine::backup_path(&copy).exists(), "a copy keeps no backup");
+
+    let f = Engine::new(Project::empty(), Arc::new(NoPlugins));
+    f.open_recovered(&copy).unwrap();
+    let st = f.state();
+    assert_eq!(f.project(), e.project());
+    assert!(st.path.is_none(), "Save must ask where to put a recovered project");
+    assert!(st.dirty);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn an_arrangement_can_run_past_the_old_128_bar_limit() {
+    const { assert!(TOTAL_BEATS >= 2048.0) };
+    let mut p = Project::sketch();
+    let pat = p.patterns[0].id;
+    let len = p.patterns[0].len;
+    let last = p.clips.iter().map(|c| c.id).max().unwrap_or(0);
+    // bar 476: past the old 512-beat end, inside the new one
+    let start = 1900.0;
+    p.clips.push(Clip { id: last + 1, track: 0, start, len, offset: 0.0, kind: ClipKind::Pat, source: pat, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None });
+    let e = Engine::new(p, Arc::new(NoPlugins));
+    let (from, to) = Engine::export_range(&e.project(), false);
+    assert_eq!(from, 0.0);
+    assert!(to >= start + len - 1e-9, "the song runs to the late clip: {to}");
+    let out = e.render(start, start + len, 0.0, 48000).unwrap();
+    assert!(out.iter().any(|x| x.abs() > 1e-3), "the late clip plays");
+
+    // a pattern may hold notes past beat 512 too
+    let mut pat = e.project().patterns[0].clone();
+    let k = pat.notes.first().map(|n| n.ch).unwrap();
+    pat.notes.push(Note::new(k, 600.0 * 4.0, 4.0, None));
+    e.apply(&[Op::PutPattern { pattern: pat }], false, None).unwrap();
+}

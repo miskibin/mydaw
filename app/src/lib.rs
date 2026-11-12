@@ -7,6 +7,7 @@ mod keys;
 mod library;
 mod models;
 mod plugins;
+mod recovery;
 mod settings;
 mod updater;
 
@@ -44,6 +45,8 @@ pub struct App {
     pub updater: updater::State,
     /// Set once the window exists (events to the UI).
     pub handle: std::sync::OnceLock<AppHandle>,
+    /// Crash-recovery copy of a project that was never saved.
+    pub recovery: recovery::Recovery,
 }
 
 impl App {
@@ -482,6 +485,7 @@ async fn library_remove_folder(app: St<'_>, path: String) -> R<Vec<String>> {
 #[tauri::command]
 async fn project_new(app: St<'_>) -> R<StateDto> {
     app.engine.new_project(Project::empty());
+    app.recovery.clear();
     Ok(app.engine.state())
 }
 
@@ -501,6 +505,7 @@ async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R
     let e = app.engine.clone();
     let p2 = path.clone();
     let warnings = tauri::async_runtime::spawn_blocking(move || e.open(&p2)).await.map_err(es)?.map_err(es)?;
+    app.recovery.clear();
     let mut s = app.settings.lock();
     s.last_project = Some(path.display().to_string());
     s.save();
@@ -521,10 +526,39 @@ async fn project_save(app: St<'_>, handle: AppHandle, save_as: Option<bool>) -> 
     let e = app.engine.clone();
     let p2 = path.clone();
     tauri::async_runtime::spawn_blocking(move || e.save(&p2)).await.map_err(es)?.map_err(es)?;
+    app.recovery.clear();
     let mut s = app.settings.lock();
     s.last_project = Some(path.display().to_string());
     s.save();
     Ok(json!({ "path": path.display().to_string() }))
+}
+
+/// Autosave tick for a project that was never saved: writes (or, once it has a file or
+/// nothing to lose, removes) the crash-recovery copy. `true` when a copy was written.
+#[tauri::command]
+async fn recovery_write(app: St<'_>) -> R<bool> {
+    let a = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || a.recovery.write(&a.engine)).await.map_err(es)?
+}
+
+/// Unsaved projects left behind by a WAVE that crashed or was killed, newest first.
+#[tauri::command]
+async fn recovery_list(app: St<'_>) -> R<Vec<recovery::Orphan>> {
+    Ok(app.recovery.orphans())
+}
+
+/// Opens a recovered project as an unsaved project; replies like `project_open`.
+#[tauri::command]
+async fn recovery_restore(app: St<'_>, id: String) -> R<Value> {
+    let a = app.inner().clone();
+    let warnings = tauri::async_runtime::spawn_blocking(move || a.recovery.restore(&a.engine, &id)).await.map_err(es)??;
+    Ok(open_reply(app.engine.state(), warnings))
+}
+
+/// Deletes a recovered project the user does not want back.
+#[tauri::command]
+async fn recovery_discard(app: St<'_>, id: String) -> R<()> {
+    app.recovery.discard(&id)
 }
 
 /// Bounce the master mix to a 32-bit float stereo WAV, or a CBR MP3 (`format: "mp3"`,
@@ -615,7 +649,7 @@ async fn vst3_set_param(app: St<'_>, fx_id: u64, id: u32, value: f64) -> R<()> {
 #[tauri::command]
 async fn app_info(app: St<'_>, handle: AppHandle) -> R<updater::AppInfo> {
     let s = app.settings.lock();
-    Ok(updater::AppInfo { version: handle.package_info().version.to_string(), seen_version: s.seen_version.clone(), auto_update: !s.no_auto_update })
+    Ok(updater::AppInfo { version: handle.package_info().version.to_string(), seen_version: s.seen_version.clone(), auto_update: !s.no_auto_update, plugin_editors: cfg!(windows) })
 }
 
 #[tauri::command]
@@ -693,6 +727,8 @@ fn shutdown(h: &AppHandle, app: &App) {
         w.close_all();
     }
     app.audio.stop();
+    // a normal exit: the user already answered the unsaved-changes question
+    app.recovery.close();
 }
 
 pub fn run() {
@@ -754,6 +790,7 @@ pub fn run() {
         keys: keys::Keys::default(),
         updater: updater::State::default(),
         handle: std::sync::OnceLock::new(),
+        recovery: recovery::Recovery::start(recovery::default_dir()),
     });
     // the pitch model loads in the background; analysis uses YIN until it is ready
     let a = app.clone();
@@ -829,7 +866,7 @@ pub fn run() {
             audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,
-            project_new, project_open, project_save, export_audio, export_cancel,
+            project_new, project_open, project_save, recovery_write, recovery_list, recovery_restore, recovery_discard, export_audio, export_cancel,
             vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status,
             app_info, update_set_auto, update_mark_seen, update_check, update_download, update_install, open_release_page
         ])

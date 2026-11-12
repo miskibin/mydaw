@@ -93,7 +93,7 @@ this is the one you can take.
 | **Mixing** | 24-band dynamic EQ, compressor, FET compressor, [saturator](docs/saturator.md), delay, [reverb, limiter](docs/reverb-limiter-v2.md), de-esser, denoiser; presets on every effect |
 | **Recording** | Takes and comping, latency compensation, live monitoring |
 | **Vocals** | Pitch editor, live correction, Tune to Reference, vocal rider, vocal chain |
-| **Plugins and audio** | VST3 effects with their own windows after a crash-proof scan; WASAPI and ASIO on Windows, ALSA on Linux |
+| **Plugins and audio** | VST3 effects after a crash-proof scan (their own windows on Windows, WAVE's parameter list on Linux); WASAPI and ASIO on Windows, ALSA and JACK, including PipeWire's JACK, on Linux |
 | **Export** | Offline bounce of the song or a loop to 32-bit float WAV or MP3 |
 | **Language** | English and Polish |
 
@@ -110,7 +110,7 @@ than twenty-five years behind it and wins on breadth.
 | Vocal pitch editing | Included | NewTone and Pitcher come with the higher editions |
 | Working with an AI agent | The agent edits the open project and measures its own renders | No command line into the open project |
 | Built-in instruments and effects | 14 | More than a hundred across the editions |
-| Third-party plugins | VST3 effects only | VST instruments and effects, and more formats |
+| Third-party plugins | VST3 effects only; plugin windows on Windows only | VST instruments and effects, and more formats |
 | Platforms | Windows and Linux | Windows and macOS |
 | Maturity | Version 0.9, one developer, expect rough edges | Since 1998, large community, tutorials, sample packs |
 
@@ -125,11 +125,11 @@ view or clip launcher, so if you write by launching clips, it does not replace L
 Version 0.9, built by one person with AI agents. It covers a complete beat and a vocal
 session. What it does not do yet:
 
-- no VST instruments, only VST3 effects, and no CLAP or LV2;
+- no VST instruments, only VST3 effects, and no CLAP or LV2; on Linux a VST3 effect is edited
+  through WAVE's parameter list, because plugin windows work on Windows only;
 - no macOS build;
 - no Session view or clip launching;
 - no import of FL Studio projects (`.flp`); bring stems or samples over instead;
-- on Linux, audio goes through ALSA (PipeWire's ALSA layer included); there is no JACK backend;
 - releases come often, so things still move. The [changelog](CHANGELOG.md) is written for
   musicians, not for developers.
 
@@ -161,8 +161,9 @@ Linux packages are attached to the same release.
 
 ## Build from source
 
-Prerequisites: Rust stable, Node 22 + pnpm, and on Linux the WebKitGTK/ALSA dev packages
-(`libwebkit2gtk-4.1-dev libasound2-dev`).
+Prerequisites: Rust stable, Node 22 + pnpm, and on Linux the WebKitGTK, ALSA, JACK and D-Bus
+dev packages (`libwebkit2gtk-4.1-dev libasound2-dev libjack-jackd2-dev libdbus-1-dev`). JACK is
+loaded at run time, so the app still starts on a machine without it.
 
 ```sh
 pnpm --dir ui install

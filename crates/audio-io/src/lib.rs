@@ -107,6 +107,20 @@ pub fn hosts() -> Vec<HostInfo> {
     cpal::available_hosts().into_iter().map(|h| HostInfo { id: host_key(h), name: h.name().to_string() }).collect()
 }
 
+/// Hosts whose server owns the sample rate and period (JACK, PipeWire's JACK
+/// library): a stream must use them as they are.
+fn host_fixes_format(id: cpal::HostId) -> bool {
+    id.name().eq_ignore_ascii_case("jack")
+}
+
+fn no_output(host: &cpal::Host) -> String {
+    if host_fixes_format(host.id()) {
+        "JACK is not running. Start JACK (or install PipeWire's JACK support), or choose ALSA.".into()
+    } else {
+        "no output device".into()
+    }
+}
+
 fn pick_host(want: &str) -> (cpal::Host, Option<String>) {
     if !want.is_empty() {
         for id in cpal::available_hosts() {
@@ -487,18 +501,25 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
             Some(d) => d,
             None => {
                 note = Some(format!("Output \"{n}\" is gone; using the default device."));
-                host.default_output_device().ok_or("no output device")?
+                host.default_output_device().ok_or_else(|| no_output(&host))?
             }
         },
-        None => host.default_output_device().ok_or("no output device")?,
+        None => host.default_output_device().ok_or_else(|| no_output(&host))?,
     };
     let out_name = dev_name(&out_dev).unwrap_or_default();
     let def = out_dev.default_output_config().map_err(|e| format!("{out_name}: {e}"))?;
-    let rate = cfg.sample_rate.unwrap_or(def.sample_rate());
     let channels = def.channels().max(1);
     let fmt = def.sample_format();
-    let buffer = match (cfg.buffer_size, def.buffer_size()) {
+    let server_fixed = host_fixes_format(host.id());
+    let rate = if server_fixed { def.sample_rate() } else { cfg.sample_rate.unwrap_or(def.sample_rate()) };
+    if server_fixed && (cfg.sample_rate.is_some_and(|r| r != rate) || cfg.buffer_size.is_some()) && note.is_none() {
+        note = Some(format!("{} sets the sample rate and buffer size; change them in its own settings.", host.id().name()));
+    }
+    // a server's period is the one size its callbacks come in: ask for exactly that
+    let want_buffer = if server_fixed { Some(0) } else { cfg.buffer_size };
+    let buffer = match (want_buffer, def.buffer_size()) {
         (Some(b), cpal::SupportedBufferSize::Range { min, max }) => cpal::BufferSize::Fixed(b.clamp(*min, *max)),
+        (Some(_), _) if server_fixed => cpal::BufferSize::Default,
         (Some(b), _) => cpal::BufferSize::Fixed(b),
         _ => cpal::BufferSize::Default,
     };

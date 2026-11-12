@@ -6,13 +6,13 @@ Facts, as of version 0.9 (November 2026):
 
 - Price: free. One build, no paid edition, no account.
 - Licence: MIT or Apache-2.0.
-- Platforms: Windows (WASAPI, ASIO) and Linux (ALSA; deb, rpm, AppImage). No macOS build.
+- Platforms: Windows (WASAPI, ASIO) and Linux (ALSA and JACK, including PipeWire's JACK; deb, rpm, AppImage). No macOS build.
 - Engine: Rust; the audio callback does not allocate, lock or do I/O. Interface: Tauri 2, SolidJS, canvas.
 - Built in: a wavetable synth, a sampled grand piano (WAVE Keys), a sampler with a drum and tonal library, and 12 effects (24-band dynamic EQ, compressor, FET compressor, saturator, delay, reverb, limiter, de-esser, denoiser, pitch correction, voice, vocal rider).
 - Recording: loop recording with takes and comping, measured latency compensation, live monitoring.
 - Vocals: note-level pitch editor, live pitch correction, Tune to Reference, vocal rider.
-- Third-party plugins: VST3 effects only. No VST instruments, CLAP or LV2.
-- Not available: Session view or clip launching, FL Studio project (.flp) import, JACK backend.
+- Third-party plugins: VST3 effects only, with plugin editor windows on Windows and a parameter list on Linux. No VST instruments, CLAP or LV2.
+- Not available: Session view or clip launching, FL Studio project (.flp) import.
 - Export: offline bounce to 32-bit float WAV or MP3.
 - Made by one developer with AI coding agents.
 

@@ -89,12 +89,12 @@ function SettingsDialog() {
                 <For each={Array.from({ length: Math.max(s().inputChannels, (s().inputChannel ?? 0) + 1) }, (_, i) => i)}>{i => <option value={String(i)}>{t('d.set.inmono', { n: i + 1 })}</option>}</For>
               </select>
               <label>{t('d.set.rate')}</label>
-              <select class="sel" value={opt(s().sampleRate)} disabled={busy()} onChange={e => apply({ sampleRate: e.currentTarget.value ? +e.currentTarget.value : null })}>
+              <select class="sel" value={opt(s().sampleRate)} disabled={busy() || serverFixed(s().host)} title={serverFixed(s().host) ? t('d.set.serverfixed') : ''} onChange={e => apply({ sampleRate: e.currentTarget.value ? +e.currentTarget.value : null })}>
                 <option value="">{t('d.set.auto')}</option>
                 <For each={RATES}>{r => <option value={String(r)}>{r} Hz</option>}</For>
               </select>
               <label>{t('d.set.buffer')}</label>
-              <select class="sel" value={opt(s().bufferSize)} disabled={busy()} onChange={e => apply({ bufferSize: e.currentTarget.value ? +e.currentTarget.value : null })}>
+              <select class="sel" value={opt(s().bufferSize)} disabled={busy() || serverFixed(s().host)} title={serverFixed(s().host) ? t('d.set.serverfixed') : ''} onChange={e => apply({ bufferSize: e.currentTarget.value ? +e.currentTarget.value : null })}>
                 <option value="">{t('d.set.auto')}</option>
                 <For each={BUFFERS}>{b => <option value={String(b)}>{t('d.set.samples', { n: b })}</option>}</For>
               </select>
@@ -136,6 +136,8 @@ let lastTab: Tab = 'general';
 const OnOff = (p: { on: () => boolean; set: (v: boolean) => void; title?: string }) =>
   <Segmented options={[t('d.set.off'), t('d.set.on')]} value={() => (p.on() ? 1 : 0)} pick={i => p.set(i === 1)} title={p.title ?? ''} />;
 
+/** JACK (and PipeWire's JACK) runs every client at the server's rate and period. */
+const serverFixed = (host: string) => host === 'jack';
 const AUTOSAVE = [0, 1, 2, 5, 10];
 const SCALES = [0.8, 0.9, 1, 1.1, 1.25, 1.5];
 

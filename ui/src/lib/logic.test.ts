@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { encodeFrame, MAGIC, SCOPE_LEN, SPEC_BANDS, TelemetryDecoder } from '../api/telemetry';
 import { sketchProject, mockCatalog } from '../api/mockData';
-import type { Clip } from '../api/types';
+import { TOTAL_BEATS, type Clip } from '../api/types';
 import { applyAll, OpError } from './applyOps';
 import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resizeClip, resizeClips, sliceClip } from './clipOps';
 import { eqCurve } from './eq';
@@ -124,7 +124,7 @@ describe('op builders', () => {
   it('clamps group moves to the timeline and tracks', () => {
     const cs = [clip({ id: 1, start: 2, track: 1 }), clip({ id: 2, start: 8, track: 3 })];
     expect(clampMove(cs, -5, -3, 8)).toEqual([-2, -1]);
-    expect(clampMove(cs, 1000, 10, 8)).toEqual([512 - 12, 4]);
+    expect(clampMove(cs, 5000, 10, 8)).toEqual([TOTAL_BEATS - 12, 4]);
     expect(moveClips(cs, 1, 1).map(c => [c.start, c.track])).toEqual([[3, 2], [9, 4]]);
   });
   it('slices inside only', () => {
