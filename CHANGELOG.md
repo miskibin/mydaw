@@ -4,9 +4,7 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
-## Unreleased
-
-Rename this heading to `## <version> — <date>` when releasing (docs/releasing.md).
+## 0.9.12 — 2026-11-12
 
 ### Added
 - **Export stems.** *Export → Output: Stems* writes every mixer track that has sound as its own
@@ -16,6 +14,10 @@ Rename this heading to `## <version> — <date>` when releasing (docs/releasing.
   before the master; *Master* adds `Master.wav`, the whole mix with the master effects. Muted
   and empty tracks are skipped, solo is ignored, and a cancelled export leaves no half-written
   files. The same from the command line: `wave render --stems --out folder/`.
+- **Stretch audio clips in the Playlist.** Drag an audio clip's edge to make it longer or shorter.
+  Trim | Stretch (Shift+M) decides what the edge does: in Stretch mode the clip plays slower or
+  faster (¼× to 4×) and keeps its pitch. The stretch is rendered once, in the background, when
+  you let go; the Playlist shows which clips are still working.
 - **Warp: draw how time and volume move over every bar.** A new effect for stutters, rolls,
   half-time, tape stops and starts, reverses, scratches (time) and gates, trance gates and
   sidechain pumps (volume). Each effect holds 16 time and 16 volume slots, ready-made and
