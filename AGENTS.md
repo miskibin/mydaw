@@ -36,6 +36,21 @@ regression fixes may proceed after inspecting local context, without ceremonial
 market research. If the classification is uncertain, treat the work as
 substantial.
 
+## Competitor Reference: Nota
+
+Nota (https://github.com/nota-daw/nota) is a free, open-source DAW for macOS,
+Windows, and Linux and a direct competitor. Its core is C++20, its UI is
+.NET/Avalonia, and it uses JUCE for plugin hosting. It is licensed AGPL-3.0.
+Its code and docs are public, so read them as primary-source research when
+comparing workflows, architecture, or performance. Nota's docs are at
+https://nota-daw.github.io/nota-docs/.
+
+- Use it to learn what the project does and how, not to copy code. Do not paste
+  or port Nota source into WAVE without an explicit licensing decision from the
+  user, because AGPL-3.0 would bind the result.
+- Treat it as one input. Follow the Research Standard: compare it with the other
+  products and sources, and mark which claims are sourced and which are inferred.
+
 ## Research Standard
 
 Research must answer why a design is useful, not just show that a competitor has
