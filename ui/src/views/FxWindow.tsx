@@ -8,6 +8,7 @@ import { knobVal, paramDefs, pFmt, pNorm, presetInfo, presetList } from '../lib/
 import { noteName, stepBeats } from '../lib/beatDiv';
 import * as A from '../state/actions';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
+import type { AutoTarget } from '../api/types';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { findFx, insName, plain, S } from '../state/store';
 import { onFxFrame, tele } from '../state/telemetry';
@@ -627,14 +628,21 @@ function Vst3Body(props: { fx: Fx }) {
       <Show when={err()}><span class="note err">{err()}</span></Show>
       <div style={{ 'max-height': '320px', overflow: 'auto', 'padding-right': '4px' }}>
         <For each={shown()} fallback={<span class="note">{t('c.fx.noParams')}</span>}>
-          {p => (
-            <div class="vparam">
-              <span class="ell" style={{ font: '12px var(--sans)', color: 'var(--fg)' }} title={p.name}>{p.name}</span>
-              <input type="range" min="0" max="1" step="0.001" value={p.value} onInput={e => set(p.id, +e.currentTarget.value)}
-                onDblClick={() => set(p.id, p.def)} />
-              <span class="mono ell" style={{ 'font-size': '10px', color: 'var(--fg2)', 'text-align': 'right' }}>{p.display}</span>
-            </div>
-          )}
+          {p => {
+            const target: AutoTarget = { kind: 'plugin', fxId: props.fx.id, paramId: p.id };
+            return (
+              <div class="vparam" onContextMenu={e => { e.preventDefault(); e.stopPropagation();
+                paramMenu(e.clientX, e.clientY, target, () => set(p.id, p.def), undefined, { current: p.value, paramLabel: p.name });
+              }}>
+                <span class="ell" style={{ font: '12px var(--sans)', color: 'var(--fg)' }} title={p.name}>{p.name}</span>
+                <input type="range" min="0" max="1" step="0.001" value={p.value} onInput={e => set(p.id, +e.currentTarget.value)}
+                  onDblClick={() => set(p.id, p.def)} />
+                <span class="mono ell" style={{ 'font-size': '10px', color: 'var(--fg2)', 'text-align': 'right' }} title={isAutomated(target) ? t('d.ui.knob.auto') : p.display}>
+                  <Show when={isAutomated(target)}>● </Show>{p.display}
+                </span>
+              </div>
+            );
+          }}
         </For>
       </div>
     </div>

@@ -32,6 +32,9 @@ Rename this heading to `## <version> — <date>` when releasing (docs/releasing.
   offset, ping-pong, or no echo at all (a filter / lo-fi / drive unit). Repitch glides the
   pitch when the time changes, like tape; Keep pitch never bends it. Projects with the old
   Delay sound the same.
+- **WAVE opens its window right away.** It no longer waits for your last project to load before
+  showing anything: the window appears at once and the project comes in while the interface
+  starts, so a big session is ready sooner and there is no more clicking the icon again.
 - **A much smaller download.** The installers no longer carry the parts of the piano recordings
   that never play (each note rings at most 9 seconds), so the WAVE Keys piano takes about 23 MB
   instead of 138 MB. It sounds the same.

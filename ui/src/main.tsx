@@ -37,7 +37,9 @@ async function boot() {
   const p = S.project.patterns[0];
   setU('cur', p ? { kind: 'pat', ref: p.id } : S.project.sources[0] ? { kind: 'audio', ref: S.project.sources[0].id } : null);
   setU('playing', state.transport.playing);
-  render(() => <App />, document.getElementById('root')!);
+  const root = document.getElementById('root')!;
+  root.replaceChildren(); // the loading bar from index.html
+  render(() => <App />, root);
   // nothing on the playlist yet: start on the Channel Rack, where a beat begins (FL)
   if (!S.project.clips.length && S.project.patterns.length) openRack();
   void initUpdates(); // version, "What's new" after an update, the first automatic check

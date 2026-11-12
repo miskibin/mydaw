@@ -34,6 +34,12 @@ pub trait Processor: Send {
     /// so it must not allocate either. Unknown ids are ignored.
     fn set_params(&mut self, _params: &ParamBlock) {}
 
+    /// A hosted plugin's parameter, `normalized` 0..1 (`AutoTarget::Plugin`
+    /// automation; the plugin's own parameter id, as `vst3_params` reports
+    /// it). No-op for built-in effects. Unknown ids are ignored. Audio thread:
+    /// no allocation, no lock.
+    fn set_plugin_param(&mut self, _param_id: u32, _normalized: f32) {}
+
     /// Take new variable-size data (see [`FxData`]); returns the previous data, or `data`
     /// itself when this processor does not use it. Called on the audio thread: move only.
     fn swap_data(&mut self, data: FxData) -> Option<FxData> {

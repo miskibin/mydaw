@@ -31,9 +31,13 @@ a vocal over it, the way you would in FL Studio.
 - Along the way I tried almost every genre (EDM, lo-fi, classical, my own pop songs), often with real instruments in my beats. I also run a YouTube channel and master the voice for it myself.
 - **2022:** I joined Nokia, where I work on noise cancellation for telecom radios. That is a lot of DSP math, so I understand how sound works under the hood.
 
-My whole life led me to this product, and with AI I can finally build it. Yes, the app is vibe-coded with claude Fable, but at least I know what the code is doing.
+WAVE started as a fun experiment. I wanted a modern DAW where every instrument and effect
+feels like part of the same application: they share the same controls and visualizations, a
+new feature reaches the whole app at once, and you don't juggle a dozen different interfaces.
+Yes, it is vibe-coded with Claude Fable, but I know what the code is doing.
 
-I now use WAVE for everything I used FL Studio for.
+There are already excellent open-source DAWs, and I'm not trying to replace them. I just
+wanted a different workflow, and ended up using WAVE more than FL Studio itself.
 
 ## Why WAVE
 
