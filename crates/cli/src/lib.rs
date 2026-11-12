@@ -29,6 +29,8 @@ EDIT  (all edits are one undo step each; --if-revision N refuses to act if the p
   set-param --fx ID --param NAME --value V
   preset --fx ID --index N
   import <file>... [--track N --beat B]    load audio, optionally place it
+  make-unique --clip ID[,ID...]            give audio clips (one sample, one track) their own copy of the
+                                           sample on a new track below, routed to a free mixer insert
 
 PATTERNS & CHANNELS  (steps: x = on, 1-9 = velocity 10-90 %, . = off; spaces and | are ignored)
   channels                                 Channel Rack: ids, instrument/sample, volume, pan, insert
@@ -284,6 +286,21 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 args["notes"] = serde_json::from_str(n).map_err(|e| u(format!("--notes is not JSON: {e}")))?;
             }
             send(a, "pattern", args)
+        }
+        "make-unique" => {
+            let ids = a
+                .need("clip")
+                .map_err(u)?
+                .split(',')
+                .map(|x| {
+                    x.trim().parse::<u64>().map_err(|_| {
+                        u(format!(
+                            "--clip takes clip ids separated by commas, got {x}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            send(a, "make_unique", json!({ "clipIds": ids }))
         }
         "takes" => send(a, "takes", json!({"track": a.num("track").map_err(u)?.ok_or_else(|| u("missing --track".into()))? as u64})),
         "comp" => {

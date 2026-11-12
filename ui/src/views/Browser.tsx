@@ -16,7 +16,7 @@ import { addSamplerFiles, chanById, channels, newPattern, openPattern, replaceWi
 import { libGroup, STD_KIT } from '../state/library';
 import { chanWin } from './ChannelWindow';
 import { patternItemMenu } from './patternShared';
-import { InstIcon, patternIcon } from '../ui/instIcons';
+import { guessIcon, InstIcon, patternIcon } from '../ui/instIcons';
 
 /** Drag something from the browser with a ghost label; `onDrop` gets the release point. */
 function dragGhost(e: PointerEvent, name: string, color: string, onClick: () => void, onDrop: (x: number, y: number, alt: boolean) => void) {
@@ -113,7 +113,8 @@ function ProjectTab() {
             <div class="sitem" classList={{ on: U.cur?.kind === 'audio' && U.cur.ref === s.id }} title={t('d.br.src.tip')}
               onPointerDown={e => pick('audio', s.id, s.name, s.color, e)}>
               <div class="row" style={{ gap: '8px' }}>
-                <span style={{ width: '8px', height: '8px', 'border-radius': '50%', flex: 'none', background: s.color }} />
+                {/* the icon its clips show in the Playlist (guessed from the name), else a sample's */}
+                <span class="picon" style={{ color: s.color }}><InstIcon id={guessIcon(s.name) ?? 'sample'} size={12} /></span>
                 <span class="ell" style={{ flex: 1, font: '500 12px var(--sans)' }}>{s.name}</span>
                 <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg4)' }}>{s.dur.toFixed(2)}s</span>
               </div>

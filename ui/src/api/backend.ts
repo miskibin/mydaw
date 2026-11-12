@@ -66,6 +66,11 @@ export interface Backend {
    *  0 dB. One undo step; the original source stays in the project. Slow: seconds per minute of audio. */
   bakeRider(args: { clipId: Id; params: Record<string, number> }): Promise<{ sourceId: Id; clipId: Id }>;
   trimClip(clipId: Id): Promise<{ sourceId: Id }>;
+  /** FL's "Make unique" for audio clips (all of one source, on one track): they get their own copy of the source
+   *  (same file and audio, own name "Name #2" and colour) on a new track right below theirs, routed to a free mixer
+   *  insert (no track or channel routed to it, no effects; a new one when none is free), named after the copy.
+   *  One undo step; other clips of the source are untouched. Rejects other clip kinds and mixed sources/tracks. */
+  makeUnique(clipIds: Id[]): Promise<{ sourceId: Id; track: number; insertId: Id }>;
   /** Renders a comp clip to a new source; the clip becomes an ordinary audio clip (one undo step). */
   flattenComp(clipId: Id): Promise<{ sourceId: Id }>;
   /** Plays one whole take instead of the comp (null = back to the comp). Live only, not undone. */
@@ -226,6 +231,7 @@ export function tauriBackend(): Backend {
     autoVocalPlan: a => invoke('auto_vocal_plan', { clipId: a.clipId, beatClipId: a.beatClipId ?? null, style: a.style ?? null, bakeRider: a.bakeRider ?? null }),
     bakeRider: a => invoke('bake_rider', { clipId: a.clipId, params: a.params }),
     trimClip: clipId => invoke('trim_clip', { clipId }),
+    makeUnique: clipIds => invoke('make_unique', { clipIds }),
     flattenComp: clipId => invoke('flatten_comp', { clipId }),
     compAudition: (compId, takeId) => invoke('comp_audition', { compId, takeId }),
     previewClip: clipId => invoke('preview_clip', { clipId }),

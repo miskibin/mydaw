@@ -283,6 +283,16 @@ async fn trim_clip(app: St<'_>, clip_id: u64) -> R<Value> {
 }
 
 #[tauri::command]
+async fn make_unique(app: St<'_>, clip_ids: Vec<u64>) -> R<Value> {
+    let e = app.engine.clone();
+    let r = tauri::async_runtime::spawn_blocking(move || e.make_unique_audio(&clip_ids))
+        .await
+        .map_err(es)?
+        .map_err(es)?;
+    Ok(json!(r))
+}
+
+#[tauri::command]
 async fn flatten_comp(app: St<'_>, clip_id: u64) -> R<Value> {
     let e = app.engine.clone();
     let id = tauri::async_runtime::spawn_blocking(move || e.flatten_comp(clip_id)).await.map_err(es)?.map_err(es)?;
@@ -956,7 +966,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, make_unique, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,

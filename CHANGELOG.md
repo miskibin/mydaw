@@ -4,6 +4,25 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## Unreleased
+
+### Added
+- **Make unique for audio clips**, like FL Studio. Open an audio clip's menu (click or right-click
+  the icon in its top-left corner) and choose *Make unique*: the clip gets its own copy of the
+  sample ("Guitar #2", same file, nothing is copied on disk) on a new track right below, sent to a
+  free mixer insert named after it, so you can put effects on that one clip. Selected clips of the
+  same sample on that track go along. Other clips of the sample stay as they are; Ctrl+Z undoes it
+  in one step. From the command line: `wave make-unique --clip ID`.
+- **The sample editor's mixer picker sits in its header**, next to the close button. Scroll over it
+  to step through the mixer inserts.
+- **Icons in Project → Audio**: every sample shows the icon its clips show in the Playlist.
+
+### Changed
+- **Play, stop and record come first in the toolbar**, right after the project name.
+
+### Fixed
+- **808 drums get a drum icon.** "808 Kick", "808 Snare" and the like showed the bass icon.
+
 ## 0.9.12 — 2026-11-12
 
 ### Added

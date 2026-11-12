@@ -540,7 +540,7 @@ export function Playlist() {
       // narrow clips keep a body to grab: the trim zones shrink, and vanish on a sliver
       const ez = cwid < 14 ? 0 : Math.min(6, cwid / 4);
       if (!edge) edge = x - cx < ez ? 'l' : cx + cwid - x < ez ? 'r' : null;
-      // the icon in the clip's top-left corner opens its menu (FL): right-click deletes instead
+      // the icon in the clip's top-left corner opens its menu (FL), with either button
       if (!edge && cwid >= 36 && x - cx < 20 && y - cy < 15) edge = 'menu';
       return { c, edge };
     }
@@ -599,6 +599,7 @@ export function Playlist() {
       return;
     }
     if (U.compSel && e.button === 0) setU('compSel', null);
+    if (e.button === 2 && h?.edge === 'menu') { e.preventDefault(); closeMenu(); return openClipMenu(e.clientX, e.clientY, h.c, p); }
     if (e.button === 2) return rightDown(e, h, p);
     if (e.button !== 0) return;
     e.preventDefault(); closeMenu();
@@ -1074,6 +1075,7 @@ export function Playlist() {
         { t: 'sec', label: 'Audio' } as MenuItem,
         { t: 'gain', clipId: c.id } as MenuItem,
         ...(c.kind === 'audio' ? [
+          { t: 'item', label: tl('a.pl.makeUnique'), title: tl('a.pl.makeUniqueAudioTip'), act: () => A.makeUnique(c) } as MenuItem,
           { t: 'item', label: tl('a.pl.editSample'), kbd: tl('a.pl.dblClick'), act: () => A.openEditor(c.id) } as MenuItem,
           { t: 'item', label: tl('a.pl.editPitch'), kbd: c.tune?.notes.length ? tl('a.pl.edited') : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
           // how a stretch plays (the clip's stretch factor in the label: set it in Stretch mode)

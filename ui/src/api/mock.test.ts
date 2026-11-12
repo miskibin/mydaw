@@ -82,3 +82,52 @@ describe('stem export in the mock', () => {
     expect(await run).toEqual({ cancelled: true });
   });
 });
+
+// the same cases as crates/engine/tests/make_unique.rs
+describe('make unique (audio) in the mock', () => {
+  async function setup() {
+    const be = new MockBackend();
+    await be.projectNew();
+    const r = await be.importAudio({ paths: ['C:\\loops\\guitar.wav'], track: 0, beat: 0 });
+    const a = (await be.getState()).project.clips.find(c => c.id === r.clipIds[0])!;
+    await be.applyOps([{ op: 'putClips', clips: [{ ...a, id: 70001, start: 4 }, { ...a, id: 70002, track: 1 }] }]);
+    return { be, src: r.sourceIds[0], a: a.id };
+  }
+  const clip = async (be: MockBackend, id: number) => (await be.getState()).project.clips.find(c => c.id === id)!;
+
+  it('gives the clip its own source on a new track routed to a free insert, in one undo step', async () => {
+    const { be, src, a } = await setup();
+    const before = structuredClone((await be.getState()).project);
+    const r = await be.makeUnique([a]);
+    const p = (await be.getState()).project;
+    expect(p.sources.find(s => s.id === r.sourceId)).toMatchObject({ name: 'guitar #2', path: p.sources.find(s => s.id === src)!.path });
+    expect(r.track).toBe(1);
+    expect(p.tracks).toHaveLength(before.tracks.length + 1);
+    expect(p.inserts).toHaveLength(before.inserts.length);
+    expect(p.tracks[1]).toMatchObject({ name: 'guitar #2', insert: r.insertId });
+    expect(r.insertId).toBe(p.inserts[1].id);
+    expect(p.inserts[1].name).toBe('guitar #2');
+    expect(await clip(be, a)).toMatchObject({ track: 1, ref: r.sourceId });
+    expect(await clip(be, 70001)).toMatchObject({ track: 0, ref: src });
+    expect(await clip(be, 70002)).toMatchObject({ track: 2, ref: src });
+    await be.undo();
+    expect((await be.getState()).project).toEqual(before);
+  });
+  it('moves several clips together and counts names up', async () => {
+    const { be, a } = await setup();
+    const r = await be.makeUnique([a, 70001]);
+    const r2 = await be.makeUnique([70002]);
+    const r3 = await be.makeUnique([a]);
+    const name = async (id: number) => (await be.getState()).project.sources.find(s => s.id === id)!.name;
+    expect([await name(r.sourceId), await name(r2.sourceId), await name(r3.sourceId)]).toEqual(['guitar #2', 'guitar #3', 'guitar #4']);
+    expect(new Set([r.insertId, r2.insertId, r3.insertId]).size).toBe(3);
+  });
+  it('refuses what it cannot do and changes nothing', async () => {
+    const { be, a } = await setup();
+    const before = structuredClone((await be.getState()).project);
+    await expect(be.makeUnique([])).rejects.toThrow();
+    await expect(be.makeUnique([999999])).rejects.toThrow();
+    await expect(be.makeUnique([a, 70002])).rejects.toThrow(/same track/);
+    expect((await be.getState()).project).toEqual(before);
+  });
+});

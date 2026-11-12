@@ -259,6 +259,7 @@ export function sliceAt(id: Id, b: number, withSel = true) {
 }
 export function selectAll() { setU('sel', S.project.clips.map(c => c.id)); }
 export function makeUnique(clip: Clip) {
+  if (clip.kind === 'audio') return void makeUniqueAudio(clip);
   const p = S.project.patterns.find(x => x.id === clip.ref); if (!p) return;
   const baseName = p.name.replace(/ #\d+$/, '');
   const count = S.project.patterns.filter(x => x.name.startsWith(baseName)).length;
@@ -266,6 +267,28 @@ export function makeUnique(clip: Clip) {
   commit([{ op: 'putPattern', pattern: np }, { op: 'putClips', clips: [{ ...plain(clip), ref: np.id }] }], 'Make unique');
   setU('cur', { kind: 'pat', ref: np.id });
   say(t('d.act.newpat', { name: np.name }));
+}
+/**
+ * FL's "Make unique" for audio: the clip — with the selected clips of the same sample on its
+ * track, when it is selected — gets its own copy of the sample on a new track right below,
+ * routed to a free mixer insert (shown in the Mixer). One undo step (`Backend.makeUnique`).
+ */
+async function makeUniqueAudio(clip: Clip) {
+  const ids = U.sel.includes(clip.id)
+    ? S.project.clips.filter(c => U.sel.includes(c.id) && c.kind === 'audio' && c.ref === clip.ref && c.track === clip.track).map(c => c.id)
+    : [clip.id];
+  endWheelGestures();
+  try {
+    // queued behind pending edits; then the new state, so the names below are the engine's
+    const r = await enqueue(() => be().makeUnique(ids));
+    await resync();
+    setU({ sel: ids, cur: { kind: 'audio', ref: r.sourceId }, mixSel: r.insertId, fxSel: null });
+    const name = S.project.sources.find(s => s.id === r.sourceId)?.name ?? '';
+    say(t('d.act.madeUnique', { name, n: S.project.inserts.findIndex(m => m.id === r.insertId) }));
+  } catch (e) {
+    say(t('d.act.uniqueFail', { err: String(e) }));
+    void resync();
+  }
 }
 export function setSrcProp(clip: Clip, patch: { name?: string; color?: string }) {
   if (clip.kind === 'auto') {

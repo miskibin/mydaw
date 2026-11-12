@@ -78,6 +78,16 @@ pub struct StateDto {
     pub stretch_errors: HashMap<Id, String>,
 }
 
+/// What `Engine::make_unique_audio` made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MadeUnique {
+    pub source_id: Id,
+    /// Index of the new track (right below the clips' old one).
+    pub track: u32,
+    pub insert_id: Id,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     #[error(transparent)]
@@ -1138,6 +1148,146 @@ impl Engine {
         Ok(id)
     }
 
+    /// FL Studio's "Make unique" for audio clips. The clips (all of one source, on one track)
+    /// get their own copy of the source entry — the same file and decoded audio, nothing is
+    /// written — with its own name ("Name #2") and colour, and move to a new track right below
+    /// theirs that plays into a free mixer insert (no track or channel routed to it and no
+    /// effects; a new one when there is none), named and coloured after the copy. One undo step.
+    /// Other clips of the source keep it, their track and their routing.
+    pub fn make_unique_audio(&self, clip_ids: &[Id]) -> Result<MadeUnique, EngineError> {
+        let mut c = self.core.lock();
+        let err = |m: &str| EngineError::Msg(m.into());
+        let clips: Vec<Clip> = clip_ids
+            .iter()
+            .map(|id| {
+                c.project
+                    .clips
+                    .iter()
+                    .find(|x| x.id == *id)
+                    .cloned()
+                    .ok_or(err("no such clip"))
+            })
+            .collect::<Result<_, _>>()?;
+        let first = clips.first().ok_or(err("no clips given"))?.clone();
+        if clips.iter().any(|x| x.kind != ClipKind::Audio) {
+            return Err(err("only audio clips can be made unique this way"));
+        }
+        if clips
+            .iter()
+            .any(|x| x.source != first.source || x.track != first.track)
+        {
+            return Err(err("the clips must play the same sample on the same track"));
+        }
+        let old = c
+            .project
+            .sources
+            .iter()
+            .find(|s| s.id == first.source)
+            .cloned()
+            .ok_or(err("the clip's source is missing"))?;
+        let audio = c
+            .sources
+            .get(old.id)
+            .cloned()
+            .ok_or(err("audio not loaded"))?;
+        let track = c
+            .project
+            .tracks
+            .get(first.track as usize)
+            .cloned()
+            .ok_or(err("the clip's track is missing"))?;
+        let free = c.project.inserts.iter().find(|m| {
+            m.id != 0
+                && m.fx.is_empty()
+                && !c.project.tracks.iter().any(|t| t.insert == m.id)
+                && !c.project.channels.iter().any(|ch| ch.insert == Some(m.id))
+        });
+        let free = free.map(|m| m.id);
+        if free.is_none() && c.project.inserts.len() >= MAX_INSERTS {
+            return Err(err(
+                "every mixer insert is in use: free one or remove an unused one first",
+            ));
+        }
+        // "Guitar", "Guitar #2", … : the next number no source of that name has yet
+        let base = unique_base(&old.name);
+        let name = (2..)
+            .map(|k| format!("{base} #{k}"))
+            .find(|n| !c.project.sources.iter().any(|s| &s.name == n))
+            .unwrap();
+
+        let before = c.project.clone();
+        let id = c.project.alloc_id();
+        c.project.sources.push(Source {
+            id,
+            name: name.clone(),
+            ..old.clone()
+        });
+        c.sources.insert(id, audio);
+        let insert_id = match free {
+            Some(m) => m,
+            None => {
+                let m = c.project.alloc_id();
+                c.project.inserts.push(Insert {
+                    id: m,
+                    name: String::new(),
+                    color: String::new(),
+                    vol: VOL_UNITY,
+                    pan: 0.0,
+                    width: 1.0,
+                    muted: false,
+                    solo: false,
+                    fx: vec![],
+                });
+                m
+            }
+        };
+        if let Some(m) = c.project.inserts.iter_mut().find(|m| m.id == insert_id) {
+            m.name = name.clone();
+            m.color = old.color.clone();
+        }
+        let track_id = c.project.alloc_id();
+        let at = first.track + 1;
+        c.project.tracks.insert(
+            at as usize,
+            Track {
+                id: track_id,
+                name: name.clone(),
+                color: old.color.clone(),
+                muted: false,
+                solo: false,
+                arm: false,
+                vol: VOL_UNITY,
+                h: track.h,
+                insert: insert_id,
+                icon: track.icon.clone(),
+            },
+        );
+        for x in c.project.clips.iter_mut() {
+            if clip_ids.contains(&x.id) {
+                x.track = at;
+                x.source = id;
+            } else if x.track >= at {
+                x.track += 1;
+            }
+        }
+        push_undo(&mut c, before);
+        c.revision += 1;
+        self.sync(
+            &mut c,
+            Dirty {
+                timeline: true,
+                mixer: true,
+                ..Default::default()
+            },
+        );
+        self.changed(c);
+        Ok(MadeUnique {
+            source_id: id,
+            track: at,
+            insert_id,
+        })
+    }
+
     pub fn preview_clip(&self, clip_id: Id) -> Result<(), EngineError> {
         let mut c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
@@ -2071,6 +2221,16 @@ fn fx_send(f: &Fx) -> (Option<ParamBlock>, f32) {
 
 fn c_watch(w: &[Id]) -> Vec<Id> {
     w.to_vec()
+}
+
+/// The name without a trailing " #n" (the number "Make unique" adds).
+fn unique_base(name: &str) -> &str {
+    match name.rsplit_once(" #") {
+        Some((b, n)) if !b.is_empty() && !n.is_empty() && n.bytes().all(|d| d.is_ascii_digit()) => {
+            b
+        }
+        _ => name,
+    }
 }
 
 fn push_undo(c: &mut Core, before: Project) {

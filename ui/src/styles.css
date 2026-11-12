@@ -711,8 +711,8 @@ select option { background: var(--bg4); color: var(--fg); }
 
 
 /* automatic instrument icons (ui/instIcons guessIcon) */
-.pitem .picon, .cname .cicon, .strip .micon { display: inline-flex; flex: none; opacity: .9; }
-.pitem .picon { width: 12px; justify-content: center; }
+.pitem .picon, .sitem .picon, .cname .cicon, .strip .micon { display: inline-flex; flex: none; opacity: .9; }
+.pitem .picon, .sitem .picon { width: 12px; justify-content: center; }
 .cname .cicon { margin-right: 4px; }
 .strip .micon { margin-right: 4px; vertical-align: -1px; }
 

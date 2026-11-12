@@ -33,5 +33,5 @@ pub mod telemetry;
 pub mod tune_render;
 pub mod vocal;
 
-pub use engine::{Engine, EngineError, NoPlugins, PluginFactory, StateDto, TransportDto};
+pub use engine::{Engine, EngineError, MadeUnique, NoPlugins, PluginFactory, StateDto, TransportDto};
 pub use rt::Rt;

@@ -46,8 +46,9 @@ export function InstIcon(props: { id?: string | null; size?: number }) {
 
 const RULES: [RegExp, string][] = [
   [/vo[ck]|wokal|g[łl]os|rap|ch[óo]r|adlib|\bmic|\bvox|\bvoice|zwrotk|refren|nagran/i, 'vocal'],
-  [/bass|\bbas\b|\bbasy?\b|808|\bsub\b/i, 'bass'],
+  // drum words before bass: "808 Kick" is a drum, "808 Bass" a bass
   [/kick|snare|hat|clap|perc|drum|b[ęe]b|beat|\btom|cymb|ride|crash|shaker|rim|stopa|werbel|talerz/i, 'drums'],
+  [/bass|\bbas\b|\bbasy?\b|808|\bsub\b/i, 'bass'],
   [/piano|pian|keys|rhodes|klaw|organ|organy/i, 'piano'],
   [/guit|gitar/i, 'guitar'],
   [/synth|syntez|lead|\bpad|pluck|arp|chord|akord|string|smycz|bell/i, 'synth'],

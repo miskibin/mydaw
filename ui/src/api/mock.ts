@@ -805,6 +805,36 @@ export class MockBackend implements Backend {
     this.pushUndo(prev); this.changed();
     return { sourceId: id };
   }
+  async makeUnique(clipIds: Id[]) {
+    const cs = clipIds.map(id => this.p.clips.find(x => x.id === id));
+    const first = cs[0];
+    if (!first || cs.some(c => !c)) throw new Error(first ? 'no such clip' : 'no clips given');
+    if (cs.some(c => c!.kind !== 'audio')) throw new Error('only audio clips can be made unique this way');
+    if (cs.some(c => c!.ref !== first.ref || c!.track !== first.track)) throw new Error('the clips must play the same sample on the same track');
+    const old = this.p.sources.find(s => s.id === first.ref), meta = this.srcMeta.get(first.ref), tr = this.p.tracks[first.track];
+    if (!old || !meta) throw new Error("the clip's source is missing");
+    if (!tr) throw new Error("the clip's track is missing");
+    const used = (id: Id) => this.p.tracks.some(t => t.insert === id) || (this.p.channels ?? []).some(c => c.insert === id);
+    const free = this.p.inserts.find(m => m.id !== 0 && !m.fx.length && !used(m.id));
+    if (!free && this.p.inserts.length >= 128) throw new Error('every mixer insert is in use: free one or remove an unused one first');
+    // engine.rs `unique_base`: "Guitar #2" counts on from "Guitar"
+    const base = old.name.replace(/(.) #\d+$/, '$1');
+    let k = 2; while (this.p.sources.some(s => s.name === base + ' #' + k)) k++;
+    const name = base + ' #' + k;
+    const prev = structuredClone(this.p), id = this.p.nextId++;
+    this.srcMeta.set(id, { ...meta, id, name }); this.p.sources.push({ ...old, id, name });
+    const rp = this.recPeaks.get(first.ref); if (rp) this.recPeaks.set(id, rp);
+    let ins = free;
+    if (!ins) { ins = { id: this.p.nextId++, name: '', color: '', vol: 0.7937, pan: 0, muted: false, solo: false, fx: [] }; this.p.inserts.push(ins); }
+    Object.assign(ins, { name, color: old.color });
+    const at = first.track + 1, insertId = ins.id;
+    this.p.tracks.splice(at, 0, { id: this.p.nextId++, name, color: old.color, muted: false, solo: false, arm: false, vol: 0.7937, h: tr.h, insert: insertId, ...(tr.icon ? { icon: tr.icon } : {}) });
+    for (const c of this.p.clips) {
+      if (clipIds.includes(c.id)) { c.track = at; c.ref = id; } else if (c.track >= at) c.track++;
+    }
+    this.pushUndo(prev); this.changed();
+    return { sourceId: id, track: at, insertId };
+  }
   async previewClip(clipId: Id) {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) return;
     this.preview = { t0: performance.now(), dur: c.len * this.spb(), off: c.offset * this.spb() };

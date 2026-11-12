@@ -890,7 +890,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -942,6 +942,18 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({}))
         }
         "comp" => comp(app, a, if_revision),
+        "make_unique" => {
+            let ids: Vec<u64> = arg(a, "clipIds")
+                .and_then(Value::as_array)
+                .ok_or("`clipIds` (array of clip ids) is required")?
+                .iter()
+                .filter_map(as_index)
+                .collect();
+            let r = e.make_unique_audio(&ids).map_err(|x| x.to_string())?;
+            Ok(
+                json!({ "sourceId": r.source_id, "track": r.track, "insertId": r.insert_id, "revision": e.revision() }),
+            )
+        }
         "flatten_comp" => {
             let clip = comp_clip(&e.project(), a)?;
             let id = e.flatten_comp(clip.id).map_err(|x| x.to_string())?;
