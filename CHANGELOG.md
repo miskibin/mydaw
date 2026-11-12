@@ -4,7 +4,7 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
-## Unreleased
+## 0.9.13 — 2026-11-12
 
 ### Added
 - **Make unique for audio clips**, like FL Studio. Open an audio clip's menu (click or right-click
@@ -30,6 +30,25 @@ shown in the app after an update and is published as the release notes (see
   row lights up and the label says what will be replaced; the channel keeps its steps, notes and
   mixer routing (a synth or WAVE Keys channel becomes a sampler). Drop on empty rack space for a
   new channel.
+- **The standard library grew from 50 to 148 sounds.** More 808 (long, boomy, deep and punchy
+  kicks, four more snares, short and long open hats, deeper and brighter toms, a mid conga) and
+  six 808 basses, one of them driven so it carries on small speakers. More acoustic drums
+  (snares with and without wires, rimshot, cross stick, rope and field drums, group claps, floor
+  tom, cymbal bell, choke) and hand percussion: congas, darbuka, frame drum, agogo, cowbells,
+  guiro, vibraslap, sleigh bells, log drums, anvil, brake drum.
+- **Orchestra.** Three orchestra hits (open, minor, major) built from strings, brass and
+  timpani, a strings stab, a brass stab and pizzicato, all on C so they follow the notes you
+  play; single notes of tremolo strings, cello, contrabass, trumpet, horn, flute and harp;
+  timpani, concert bass drum, gong, tubular bell and an orchestral crash.
+- **More tonal one-shots**, each tuned to its key: vibraphone, xylophone, balafon, kalimba,
+  hand chime, harpsichord, upright piano, FM piano and clav, pipe organ, tenor sax.
+- **FX.** Cymbal swells (short and long) and a bass-drum swell for build-ups, timpani and snare
+  rolls, wind chimes, a bell tree and a zap.
+- **Search in the Library.** Type in the field above the list: several words must all match
+  the name or the group ("808 bass", "orchestra hit"). It looks in the standard library, your
+  installed kits and your folders at once.
+- **Browse samples with the keyboard.** ↑ and ↓ move through the list and play each sample;
+  Enter adds the one you are on as a sampler channel.
 
 ### Changed
 - **Play, stop and record come first in the toolbar**, right after the project name.
@@ -39,6 +58,14 @@ shown in the app after an update and is published as the release notes (see
 - **PAT / SONG switches what is playing**, like FL Studio: while the song plays, PAT (or L) loops
   the current pattern straight away, and SONG goes back to the song, with no Stop in between.
 - **The Piano roll zooms out further**: until the whole pattern and the empty bars after it fit.
+- **The Library tab is easier to read.** Groups are rows with their own icon, colour and file
+  count that open and close with a click anywhere on the row; the open/closed arrows are
+  drawn clearly instead of the tiny grey marks. Every sample carries its group's icon, your
+  own folders get icons from their names (kicks, snares, hats, bass, vocals …), and the
+  standard library has its own section above the kits you can download.
+- **Pitched samples show their key** (G#1, C4 …) in the Library, the key a sampler channel
+  made from them is rooted at.
+- The installer is about 11 MB larger: the new sounds ship inside WAVE and need no download.
 
 ### Fixed
 - **A new pattern plays at once.** Making or picking a pattern while a pattern loops could keep
