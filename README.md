@@ -49,14 +49,23 @@ latency compensation, a note-level pitch editor, live pitch correction, Tune to 
 the one free build.
 
 **Every effect draws what it does to your audio.** The picture above the knobs comes from the
-signal passing through, so you see the compressor's gain reduction or the saturator's curve
-instead of guessing. Two of them on a drum loop (captured in the interface's browser demo,
-where the signal is simulated; in the app the engine feeds the same drawing code):
+signal passing through, so you see the gain reduction or the added harmonics instead of
+guessing. These were recorded in the app while a beat plays (drums, an 808, the piano and a
+pluck, written through the `wave` command):
 
-<p align="center">
-  <img src="site/img/comp-live.gif" width="42%" alt="Compressor on a drum loop: the transfer curve, the level history and the gain reduction drawn over it">
-  <img src="site/img/eq-live.gif" width="56%" alt="Parametric EQ on a drum loop: the curve with a low cut and a mud cut over the live spectrum before and after">
-</p>
+<table>
+  <tr>
+    <td width="50%"><img src="site/img/comp-live.gif" alt="Compressor on the drum bus"><br><b>Compressor</b> on the drum bus. Left: the transfer curve with the threshold. Right: the level history, with the gain reduction drawn in red from the top.</td>
+    <td width="50%"><img src="site/img/limit-live.gif" alt="Limiter on the master"><br><b>Limiter</b> on the master, pushed 7 dB into a −1 dBTP ceiling. The red band is what it takes off each peak.</td>
+  </tr>
+  <tr>
+    <td><img src="site/img/sat-live.gif" alt="Saturator on the drums"><br><b>Saturator</b> on the drums. The trace is input against output on the transfer curve; the pink layer in the spectrum is the harmonics the stage adds.</td>
+    <td><img src="site/img/reverb-live.gif" alt="Reverb on the piano"><br><b>Reverb</b> on the piano. Each line is the tail at a later moment, across the spectrum; the orange surface is the decay the knobs ask for.</td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="site/img/eq-live.gif" alt="Parametric EQ on the master"><br><b>Parametric EQ</b> on the master. The spectrum before and after moves under the curve you drag.</td>
+  </tr>
+</table>
 
 All 14 plugin windows are on the [website](https://miskibin.github.io/wave-DAW/#plugins).
 
