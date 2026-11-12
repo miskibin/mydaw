@@ -18,12 +18,16 @@ jobs:
       fail-fast: false
       # both jobs add their platform to the same latest.json (the updater manifest): one at a time, or one overwrites the other
       max-parallel: 1
+      # One installer per kind of system people download (docs/releasing.md). No MSI: the
+      # NSIS setup.exe is the same app, and it is the one the updater installs.
       matrix:
         include:
           - os: windows-latest
             features: asio
+            bundles: nsis
           - os: ubuntu-24.04
             features: ""
+            bundles: deb,rpm,appimage
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -43,6 +47,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm, cache-dependency-path: ui/pnpm-lock.yaml }
       - run: pnpm --dir ui install --frozen-lockfile
+      # downloads the originals and cuts them to what the app plays (needs cargo, set up above)
       - name: WAVE Keys piano (bundled into the installer)
         run: node scripts/fetch-keys.mjs
       # The release notes are the CHANGELOG.md section of this version (fails when it is missing). They
@@ -62,7 +67,7 @@ jobs:
         with:
           projectPath: app
           # tauri.release.conf.json turns on the signed updater artifacts (a plain `tauri build` needs no key)
-          args: ${{ format('--config tauri.release.conf.json {0}', matrix.features != '' && format('--features {0}', matrix.features) || '') }}
+          args: ${{ format('--config tauri.release.conf.json --bundles {0} {1}', matrix.bundles, matrix.features != '' && format('--features {0}', matrix.features) || '') }}
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           tagName: v__VERSION__
@@ -74,6 +79,8 @@ jobs:
             ---
             WAVE: a fast, FL-Studio-style DAW. Website and audio examples: https://miskibin.github.io/wave-DAW/
             * The Windows installer is built **with ASIO** (Settings → Audio → ASIO) and includes the WAVE Keys piano.
+            * Windows: there is no `.msi` any more. If you installed WAVE from an `.msi`, uninstall it and install `WAVE_…_x64-setup.exe` once; updates then arrive by themselves.
+            * Linux: `.AppImage` (any distribution), `.deb` (Ubuntu, Debian, Mint) or `.rpm` (Fedora, openSUSE).
             * The interface is English by default; Polish is in Settings.
             * The `wave` command line works after the first start (open a new terminal): `wave status`, `wave context`, see docs/cli.md.
             * VST3 effects: Add effect → VST3… (the first scan may take a while).

@@ -1,0 +1,18 @@
+[package]
+name = "wave-keys-prep"
+description = "Release-build step: cuts the WAVE Keys piano recordings to what the engine plays and stores them as 16-bit FLAC. Not shipped."
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "keys-prep"
+path = "src/main.rs"
+
+[dependencies]
+wave-engine.workspace = true
+wave-audio-file.workspace = true
+# Pure Rust, so the step runs the same on the Windows and Linux release runners with no
+# system encoder to install. Single-threaded build: files are encoded in parallel instead.
+flacenc = { version = "0.5", default-features = false }

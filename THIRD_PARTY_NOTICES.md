@@ -37,5 +37,7 @@ CC0 asks for no credit; it is given here anyway.
 The WAVE Keys piano plays recordings from the
 [Salamander Grand Piano V3](https://github.com/sfzinstruments/SalamanderGrandPiano) by
 Alexander Holm, licensed [CC-BY-3.0](https://creativecommons.org/licenses/by/3.0/). Installers
-ship 90 of its FLAC files unmodified (see `docs/keys.md`); other builds download the same files.
+ship 90 of its recordings, modified: each is cut to 9 seconds with a fade-out (the longest a
+note rings in WAVE) and stored as 16-bit FLAC (see `docs/keys.md`). The in-app download installs
+the original files unmodified.
 Music made with WAVE Keys contains these recordings: credit them as the licence asks.

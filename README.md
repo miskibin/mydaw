@@ -180,7 +180,8 @@ cd app; cargo tauri build --features asio
 ```
 
 **WAVE Keys in your own build:** `node scripts/fetch-keys.mjs` downloads the piano (138 MB,
-checksummed) into `app/resources/keys` so `tauri build` ships it. Without it the app offers to
+checksummed, cached in `target/keys-src`) and prepares it in `app/resources/keys` (cut to what
+the app plays, 16-bit FLAC, about 23 MB) so `tauri build` ships it. It needs `cargo`. Without it the app offers to
 download the piano the first time you add the instrument.
 
 ## The `wave` command line

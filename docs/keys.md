@@ -28,7 +28,18 @@ channels have the same keyboard, with a dot on the root key.
 Salamander Grand Piano V3 (a Yamaha C5, recorded by Alexander Holm, **CC-BY-3.0**): 30 notes,
 every minor third from A0 to C8, at 3 of the 16 recorded dynamics (layers 4, 9 and 14), 48 kHz
 24-bit FLAC, 138 MB. They are pinned by URL and SHA-256 in `assets-manifest.json` (kit
-`salamander-piano`) and never re-encoded.
+`salamander-piano`).
+
+The installer carries them prepared, not as downloaded (about 23 MB instead of 138 MB). The
+engine keeps only the first 9 seconds of a recording, fading out over the last 1.5
+(`keys::trimmed`), so the recordings run up to 25 s but most of that never plays.
+`wave-keys-prep` (`crates/keys-prep`) applies that same cut ahead of time and stores 16-bit
+FLAC with triangular dither; when the app loads a prepared file the cut finds nothing to do.
+The 16-bit step is inaudible: the recordings' own noise is far above it. The tool decodes
+every file it writes and stops the build if any sample is more than 1.6 steps of 16-bit
+from the cut original; on the current files the largest difference is −86.8 dBFS. Its
+output is deterministic (the dither is seeded from the file name). The in-app download
+installs the original files.
 
 CC-BY is an attribution licence: a song that uses the piano should credit the recordings. The
 Keys window shows the credit, and `THIRD_PARTY_NOTICES.md` carries it for the app.
@@ -36,8 +47,8 @@ Keys window shows the credit, and `THIRD_PARTY_NOTICES.md` carries it for the ap
 Where the app finds them, in this order:
 
 1. **inside the app**: `keys/` in the bundled resources. `node scripts/fetch-keys.mjs`
-   downloads them into `app/resources/keys` (checksummed, not in Git) and `tauri build` ships
-   that folder; the release workflow runs the script, so installers always contain the piano;
+   downloads the originals into `target/keys-src` (checksummed, reused on the next run),
+   prepares them into `app/resources/keys` (not in Git) and `tauri build` ships that folder; the release workflow runs the script, so installers always contain the piano;
 2. **the sample library**: `<data>/WAVE/Library/salamander-piano`, for builds made without
    step 1 (a plain `cargo build`). The Keys window then offers **Pobierz fortepian**, which
    installs the library kit; the channel starts playing when the download ends.
