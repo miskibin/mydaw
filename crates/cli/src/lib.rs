@@ -84,6 +84,16 @@ PLUGINS
   auto-add --fx ID --param ID [--points "0:0.2,4:0.8" | --value V] [--track N --name TEXT]
                                            automate a hosted plugin parameter (adds the playlist clip too)
 
+NOTES  (deterministic transforms and generators for a pattern's notes)
+  notes humanize --pattern ID [--timing 0..1 --velocity 0..1]
+  notes quantize --pattern ID [--grid 1|2|4 --amount 0..1 --scale]
+  notes euclid --pattern ID --ch CH --k K --n N [--rotate INT --vel 0..1]
+  notes strum --pattern ID [--width STEPS --ramp VEL]
+  notes drums --pattern ID --bars N --seed S --voice "CH:K:N[:ROT[:VEL]]" (repeatable)
+  notes melody --pattern ID --ch CH [--bars N --density 0..1 --repeat N --seed S]
+  notes … [--select "FROM:TO[@CH]" | --indices "1,2,5"]                limit the notes a verb touches
+  key [NOTE] [SCALE] [--off]                            project key/scale (major minor pent…) for scale-aware tools
+
   call <command> [--args JSON]             raw request (see `catalog`)
   --pretty                                 indent JSON output
 "#;
@@ -113,6 +123,9 @@ impl Args {
     }
     fn get(&self, k: &str) -> Option<&str> {
         self.opts.iter().find(|(n, _)| n == k).and_then(|(_, v)| v.as_deref())
+    }
+    fn get_all(&self, k: &str) -> Vec<&str> {
+        self.opts.iter().filter(|(n, _)| n == k).filter_map(|(_, v)| v.as_deref()).collect()
     }
     fn has(&self, k: &str) -> bool {
         self.opts.iter().any(|(n, _)| n == k)
@@ -380,6 +393,73 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
                 {"op": "putAutomation", "automation": {"id": auto_id, "name": name, "color": "#e0a44a", "target": {"kind": "plugin", "fxId": fx, "paramId": param}, "points": points}},
                 {"op": "putClips", "clips": [{"id": clip_id, "track": track, "start": 0.0, "len": len, "offset": 0.0, "kind": "auto", "ref": auto_id, "muted": false, "gain": 0.0, "fadeIn": 0.0, "fadeOut": 0.0, "pan": 0.0, "norm": false, "rev": false}]}
             ]}))
+        }
+        "notes" => {
+            let verb = a.pos.get(1).ok_or_else(|| u("notes <humanize|quantize|euclid|strum|drums|melody> …".into()))?.clone();
+            let pattern = a.num("pattern").map_err(u)?.ok_or_else(|| u("missing --pattern".into()))? as u64;
+            let f = |k: &str| a.num(k);
+            let (verb_json, needs_ch) = match verb.as_str() {
+                "humanize" => (json!({"kind": "humanize", "timing": f("timing").map_err(u)?.unwrap_or(0.5), "velocity": f("velocity").map_err(u)?.unwrap_or(0.4)}), false),
+                "quantize" => (json!({"kind": "quantize", "grid": f("grid").map_err(u)?.unwrap_or(1.0), "amount": f("amount").map_err(u)?.unwrap_or(1.0), "scaleAware": a.has("scale")}), false),
+                "euclid" => (json!({"kind": "euclidFill", "ch": f("ch").map_err(u)?.ok_or_else(|| u("missing --ch".into()))? as u64, "k": f("k").map_err(u)?.ok_or_else(|| u("missing --k".into()))? as u32, "n": f("n").map_err(u)?.ok_or_else(|| u("missing --n".into()))? as u32, "rotate": f("rotate").map_err(u)?.unwrap_or(0.0) as i32, "vel": f("vel").map_err(u)?.unwrap_or(0.7)}), true),
+                "strum" => (json!({"kind": "strum", "width": f("width").map_err(u)?.unwrap_or(0.5), "ramp": f("ramp").map_err(u)?.unwrap_or(0.05)}), false),
+                "drums" => {
+                    let mut voices = vec![];
+                    for (i, v) in a.get_all("voice").iter().enumerate() {
+                        let parts: Vec<&str> = v.split(':').collect();
+                        if parts.len() < 3 {
+                            return Err(u(format!("--voice is CH:K:N[:ROT[:VEL]] (voice {i})").into()));
+                        }
+                        let num = |i: usize| parts.get(i).and_then(|x| x.trim().parse::<f64>().ok())
+                            .ok_or_else(|| u(format!("--voice {i}: bad number `{}`", parts.get(i).unwrap_or(&"")).into()));
+                        voices.push(json!({"ch": num(0)? as u64, "k": num(1)? as u32, "n": num(2)? as u32,
+                            "rotate": num(3).unwrap_or(0.0) as i32, "vel": num(4).unwrap_or(0.7)}));
+                    }
+                    if voices.is_empty() {
+                        return Err(u("drums needs at least one --voice CH:K:N".into()));
+                    }
+                    (json!({"kind": "euclidDrums", "voices": voices, "bars": f("bars").map_err(u)?.unwrap_or(2.0) as u32}), false)
+                }
+                "melody" => (json!({"kind": "melody", "ch": f("ch").map_err(u)?.ok_or_else(|| u("missing --ch".into()))? as u64, "bars": f("bars").map_err(u)?.unwrap_or(2.0) as u32, "density": f("density").map_err(u)?.unwrap_or(0.5), "repeat": f("repeat").map_err(u)?.unwrap_or(1.0) as u32}), true),
+                other => return Err(u(format!("unknown notes verb `{other}` (humanize|quantize|euclid|strum|drums|melody)").into())),
+            };
+            if needs_ch {
+                // a channel id here is the Channel Rack channel: accepted as-is, validated by the engine
+            }
+            let mut op = json!({"op": "transformNotes", "pattern": pattern, "verb": verb_json});
+            if let Some(seed) = f("seed").map_err(u)? {
+                op["seed"] = json!(seed as u64);
+            }
+            if let Some(sel) = a.get("select") {
+                let (from, rest) = sel.split_once(':').ok_or_else(|| u("--select is FROM:TO[@CH]".into()))?;
+                let (to, ch) = rest.split_once('@').map_or((rest, None), |(t, c)| (t, Some(c)));
+                let pf = |x: &str| x.trim().parse::<f64>().map_err(|_| u(format!("--select: bad number `{x}`").into()));
+                let mut node = json!({"kind": "range", "from": pf(from)?, "to": pf(to)?});
+                if let Some(c) = ch {
+                    node["ch"] = json!(c.trim().parse::<u64>().map_err(|_| u(format!("--select: bad channel `{c}`").into()))?);
+                }
+                op["select"] = node;
+            } else if let Some(ix) = a.get("indices") {
+                let list: Result<Vec<u64>, _> = ix.split(',').map(|x| x.trim().parse::<u64>()).collect();
+                op["select"] = json!({"kind": "indices", "indices": list.map_err(|_| u("--indices is a comma list of note indices".into()))?});
+            }
+            send(a, "apply", json!({"ops": [op]}))
+        }
+        "key" => {
+            if a.has("off") {
+                return send(a, "apply", json!({"ops": [{"op": "setKey", "key": null, "scale": 1}]}));
+            }
+            let note_names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+            let scales = ["chromatic", "major", "minor", "major pentatonic", "minor pentatonic"];
+            let note = a.pos.get(1).ok_or_else(|| u("key <NOTE> [SCALE] | key --off  (e.g. key C minor)".into()))?;
+            let key_id = note_names.iter().position(|n| n.eq_ignore_ascii_case(note))
+                .ok_or_else(|| u(format!("unknown note `{note}` (C…B)").into()))? as u64;
+            let scale = a.pos.get(2).map(|sc| {
+                scales.iter().position(|n| n.eq_ignore_ascii_case(sc))
+                    .map(|i| i as u64)
+                    .ok_or_else(|| u(format!("unknown scale `{sc}` ({} )", scales.join(", "))))
+            }).transpose()?;
+            send(a, "apply", json!({"ops": [{"op": "setKey", "key": key_id, "scale": scale.unwrap_or(1)}]}))
         }
         "call" => {
             let c = a.pos.get(1).ok_or_else(|| u("call <command> [--args JSON]".into()))?;

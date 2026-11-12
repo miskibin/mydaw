@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! WAVE desktop app: Tauri commands around the engine, the audio device, the
 //! sample library, VST3 plugins and the live session the `wave` CLI talks to.
 

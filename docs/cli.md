@@ -235,6 +235,26 @@ wave auto-add --fx 1210 --param 42 --points "0:0.2,8:0.8" --name "Reverb decay"
                 # playlist clip that plays it; ids come from context.nextId
 ```
 
+## Notes (deterministic transforms and generators)
+
+Every verb is one undo step and deterministic in `--seed`: the same command on the same
+pattern produces identical notes, so agents can generate variants, render each and keep
+a favourite.
+
+```sh
+wave notes humanize --pattern 1 --timing 0.3 --velocity 0.2
+wave notes quantize --pattern 1 --grid 1 --amount 1 --scale      # --scale: into the project key
+wave notes euclid --pattern 1 --ch 1001 --k 5 --n 16 --rotate 2  # E(k,n) fill for one channel
+wave notes strum --pattern 1 --width 0.5 --ramp 0.05
+wave notes drums --pattern 2 --bars 2 --seed 42 --voice "1001:4:16:0" --voice "1002:2:16:8"
+wave notes melody --pattern 3 --ch 1003 --bars 2 --seed 7 --density 0.5
+wave notes humanize --pattern 1 --select "0:16"                  # limit to a step range
+wave key C minor                                                  # project key for --scale
+wave key --off
+```
+
+`--select "0:16@1001"` also filters one channel; `--indices "1,2,5"` selects exact notes.
+
 ## Several apps open
 
 `wave sessions` lists them; pass `--session ID` (a prefix is enough).

@@ -4,7 +4,8 @@
 import { CLIP_PITCH, MAX_BANDS, STRETCH_MAX, STRETCH_MIN, type Id, type Op, type Project } from '../api/types';
 import { applyCompOp } from './comp';
 import { applyNotebookOp } from './notebook';
-import { applyPatternOp, PatternOpError } from './pattern';
+import { applyPatternOp, fitLen as fitPatternLen, PatternOpError } from './pattern';
+import { applyTransform } from './transforms';
 
 export class OpError extends Error {}
 
@@ -145,6 +146,29 @@ export function applyOp(p: Project, op: Op): void {
     case 'setLoop':
       if (op.loop && !(op.loop.b > op.loop.a && op.loop.a >= 0)) throw new OpError('loop end must be after its start');
       p.loop = op.loop ? { ...op.loop } : null; return;
+    case 'transformNotes': {
+      const pt = p.patterns.find(x => x.id === op.pattern);
+      if (!pt) throw new OpError(`no pattern with id ${op.pattern}`);
+      const roots = (p.channels ?? []).map(c => ({ id: c.id, root: c.root ?? 60 }));
+      const notes = structuredClone(pt.notes);
+      applyTransform(notes, op.verb, op.seed ?? 0, op.select ?? null, roots, p.key ?? null, p.scale ?? 1, Math.max(16, Math.round(pt.len * 4)));
+      for (const n of notes) {
+        if (!(isFinite(n.step) && n.step >= 0 && isFinite(n.len) && n.len > 0)) throw new OpError(`pattern ${op.pattern}: a note has an invalid step/len`);
+        const v = n.v ?? 1;
+        if (!(isFinite(v) && v >= 0 && v <= 1)) throw new OpError('note velocity `v` must be 0..1');
+      }
+      const known = new Set((p.channels ?? []).map(c => c.id));
+      if (notes.some(n => !known.has(n.ch))) throw new OpError(`pattern ${op.pattern}: a note refers to a missing channel`);
+      pt.notes = notes;
+      fitPatternLen(pt);
+      return;
+    }
+    case 'setKey':
+      if (op.key != null && (op.key < 0 || op.key > 11)) throw new OpError('key must be 0..11 (0 = C)');
+      if ((op.scale ?? 1) > 4) throw new OpError('scale must be 0..4');
+      p.key = op.key;
+      p.scale = op.scale ?? 1;
+      return;
     case 'putAutomation': {
       const a = structuredClone(op.automation);
       if (a.points.some(q => !isFinite(q.t) || !isFinite(q.v) || (q.tension != null && !isFinite(q.tension)))) throw new OpError('automation points must be numbers');
