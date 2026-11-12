@@ -189,6 +189,167 @@ pub fn render_to_file(
     }))
 }
 
+/// A file name for `name` that is valid on Windows, macOS and Linux: characters the file systems
+/// refuse become `_`, trailing dots and spaces go, a reserved device name (`CON`, `NUL`, …) gets a
+/// leading `_`, and an empty or very long name is replaced or cut.
+pub fn safe_file_stem(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || "<>:\"/\\|?*".contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned
+        .trim()
+        .trim_end_matches(['.', ' '])
+        .chars()
+        .take(100)
+        .collect::<String>();
+    let cleaned = cleaned.trim_end().to_string();
+    if cleaned.is_empty() {
+        return "Insert".into();
+    }
+    let base = cleaned.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((base.starts_with("COM") || base.starts_with("LPT"))
+            && base.len() == 4
+            && base.as_bytes()[3].is_ascii_digit()
+            && base.as_bytes()[3] != b'0');
+    if reserved {
+        format!("_{cleaned}")
+    } else {
+        cleaned
+    }
+}
+
+/// File stems for `names` in one folder: made safe by [`safe_file_stem`] and made unique with a
+/// ` (2)`, ` (3)` suffix. Compared without regard to case, because Windows and macOS do.
+pub fn unique_file_stems(names: &[String]) -> Vec<String> {
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
+    names
+        .iter()
+        .map(|n| {
+            let base = safe_file_stem(n);
+            let mut cand = base.clone();
+            let mut k = 2;
+            while !taken.insert(cand.to_lowercase()) {
+                cand = format!("{base} ({k})");
+                k += 1;
+            }
+            cand
+        })
+        .collect()
+}
+
+/// Stem export, like FL Studio's *Split mixer tracks*: one 32-bit float stereo WAV per mixer insert
+/// that has sound (`Engine::stem_inserts`), named after the insert, written into `dir`; plus
+/// `Master.wav`, the normal mix with the master's effects, when `include_master`. Every file has
+/// the same length and starts at `from`, so they line up when dropped into another project.
+///
+/// Nothing is left behind on cancel or error: files are written as `*.wav.part` and renamed only
+/// once every stem has rendered. `progress(done, total, name)` is called before each file starts.
+#[allow(clippy::too_many_arguments)]
+pub fn render_stems_to_dir(
+    engine: &wave_engine::Engine,
+    dir: &std::path::Path,
+    from: f64,
+    to: f64,
+    tail: f64,
+    rate: u32,
+    cancel: &std::sync::atomic::AtomicBool,
+    include_master: bool,
+    progress: &dyn Fn(usize, usize, &str),
+) -> R<Value> {
+    use std::sync::atomic::Ordering::Relaxed;
+    if to <= from {
+        return Err("`to` must be after `from`".into());
+    }
+    let project = engine.project();
+    // (insert id — None is the master mix, display name)
+    let mut jobs: Vec<(Option<u64>, String)> = vec![];
+    if include_master {
+        jobs.push((None, "Master".into()));
+    }
+    for (id, name) in wave_engine::Engine::stem_inserts(&project) {
+        jobs.push((
+            Some(id),
+            if name.trim().is_empty() {
+                format!("Insert {id}")
+            } else {
+                name
+            },
+        ));
+    }
+    if jobs.is_empty() {
+        return Err(
+            "nothing to export: every mixer track is muted or has no sound routed to it".into(),
+        );
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    let stems = unique_file_stems(&jobs.iter().map(|j| j.1.clone()).collect::<Vec<_>>());
+    let total = jobs.len();
+    let mut parts: Vec<(PathBuf, PathBuf)> = vec![];
+    let mut files: Vec<Value> = vec![];
+    let mut skipped: Vec<String> = vec![];
+    let rendered: R<()> = (|| {
+        for (i, (job, name)) in jobs.iter().enumerate() {
+            progress(i, total, name);
+            let audio = match job {
+                None => engine.render_cancelable(from, to, tail, rate, cancel),
+                Some(id) => engine.render_stem(*id, from, to, tail, rate, cancel),
+            }
+            .map_err(|e| e.to_string())?;
+            if cancel.load(Relaxed) {
+                return Err("cancelled".to_string());
+            }
+            let st = stats(&audio, rate);
+            // an insert that only looked busy (an empty pattern, an automation clip) gets no file
+            if job.is_some() && st["silent"] == json!(true) {
+                skipped.push(name.clone());
+                continue;
+            }
+            let file = format!("{}.wav", stems[i]);
+            let part = dir.join(format!("{file}.part"));
+            wave_engine::sources::write_wav(&part, &audio, rate)
+                .map_err(|e| format!("cannot write {file}: {e}"))?;
+            parts.push((part, dir.join(&file)));
+            files.push(json!({ "name": name, "file": file, "master": job.is_none(), "stats": st }));
+        }
+        if parts.is_empty() {
+            return Err("nothing to export: everything rendered silent".into());
+        }
+        Ok(())
+    })();
+    if let Err(e) = rendered {
+        for (part, _) in &parts {
+            let _ = std::fs::remove_file(part);
+        }
+        return Err(e);
+    }
+    for (k, (part, fin)) in parts.iter().enumerate() {
+        if let Err(e) = std::fs::rename(part, fin) {
+            for (rest, _) in &parts[k..] {
+                let _ = std::fs::remove_file(rest);
+            }
+            return Err(format!("cannot write {}: {e}", fin.display()));
+        }
+    }
+    progress(total, total, "");
+    Ok(json!({
+        "dir": dir.display().to_string(),
+        "fromBeat": from,
+        "toBeat": to,
+        "tail": tail,
+        "format": "wav",
+        "files": files,
+        "skipped": skipped,
+    }))
+}
+
 pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
     let out = PathBuf::from(need_str(a, "out")?);
     let p = app.engine.project();
@@ -196,6 +357,18 @@ pub fn render(app: &Arc<App>, a: &Value) -> R<Value> {
     let to = opt_f64(a, "to").unwrap_or_else(|| p.loop_range.map(|l| l.b).unwrap_or(p.song_end()));
     let tail = opt_f64(a, "tail").unwrap_or(2.0);
     let rate = opt_f64(a, "rate").unwrap_or(48000.0) as u32;
+    if arg(a, "stems").and_then(Value::as_bool).unwrap_or(false) {
+        if arg(a, "format").and_then(Value::as_str).is_some_and(|f| !f.eq_ignore_ascii_case("wav")) {
+            return Err("stems are always WAV; drop --format".into());
+        }
+        if !out.is_dir() && out.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("wav") || e.eq_ignore_ascii_case("mp3")) {
+            return Err("with stems, `out` is a folder for the files, not a .wav/.mp3 file".into());
+        }
+        let master = arg(a, "master").and_then(Value::as_bool).unwrap_or(true);
+        // a stem export must not start while the piano is still loading (its stems would be silent)
+        crate::keys::wait(app);
+        return render_stems_to_dir(&app.engine, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false), master, &|_, _, _| {});
+    }
     let by_ext = out.extension().and_then(|e| e.to_str()).filter(|e| e.eq_ignore_ascii_case("mp3")).map(|_| "mp3");
     let fmt = ExportFormat::parse(arg(a, "format").and_then(Value::as_str).or(by_ext), opt_f64(a, "mp3Kbps").map(|k| k as u32))?;
     render_to_file(app, &out, from, to, tail, rate, &std::sync::atomic::AtomicBool::new(false), fmt)
@@ -842,7 +1015,230 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
 
 #[cfg(test)]
 mod tests {
-    use super::parse_steps;
+    use super::{parse_steps, render_stems_to_dir, safe_file_stem, unique_file_stems};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use wave_engine::{Engine, NoPlugins, Project};
+
+    fn tmp(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("wave-stems-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        d
+    }
+
+    fn names(dir: &std::path::Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .map(|r| {
+                r.filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    }
+
+    fn sketch() -> Arc<Engine> {
+        Engine::new(Project::sketch(), Arc::new(NoPlugins))
+    }
+
+    #[test]
+    fn stem_files_are_named_after_the_inserts_and_are_all_equally_long() {
+        let dir = tmp("ok");
+        let e = sketch();
+        let seen = std::sync::Mutex::new(vec![]);
+        let r = render_stems_to_dir(
+            &e,
+            &dir,
+            0.0,
+            16.0,
+            0.0,
+            48_000,
+            &AtomicBool::new(false),
+            true,
+            &|d, t, n| seen.lock().unwrap().push((d, t, n.to_string())),
+        )
+        .unwrap();
+        assert_eq!(
+            names(&dir),
+            ["Bass.wav", "Drums.wav", "Hats.wav", "Master.wav"],
+            "no .part file is left"
+        );
+        // 32-bit float stereo: 8 bytes a frame plus a small header, the same in every file
+        let data = (16.0 * 60.0 / 128.0 * 48_000.0) as u64 * 8;
+        let lens: Vec<u64> = names(&dir)
+            .iter()
+            .map(|n| std::fs::metadata(dir.join(n)).unwrap().len())
+            .collect();
+        assert!(
+            lens.iter()
+                .all(|l| *l == lens[0] && (data..data + 200).contains(l)),
+            "{lens:?} vs {data}"
+        );
+        assert_eq!(r["files"].as_array().unwrap().len(), 4);
+        assert_eq!(r["files"][0]["file"], "Master.wav");
+        assert_eq!(r["files"][0]["master"], true);
+        assert_eq!(r["skipped"].as_array().unwrap().len(), 0);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.first().unwrap(), &(0, 4, "Master".to_string()));
+        assert_eq!(
+            seen.last().unwrap().0,
+            4,
+            "the last call reports everything done"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_master_file_is_optional() {
+        let dir = tmp("nomaster");
+        let r = render_stems_to_dir(
+            &sketch(),
+            &dir,
+            0.0,
+            16.0,
+            0.0,
+            48_000,
+            &AtomicBool::new(false),
+            false,
+            &|_, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(names(&dir), ["Bass.wav", "Drums.wav", "Hats.wav"]);
+        assert!(r["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["master"] == false));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_stem_that_renders_silent_gets_no_file_and_is_reported() {
+        // the hats only play from beat 8, so a bounce of beats 0..4 has nothing in them
+        let dir = tmp("silent");
+        let r = render_stems_to_dir(
+            &sketch(),
+            &dir,
+            0.0,
+            4.0,
+            0.0,
+            48_000,
+            &AtomicBool::new(false),
+            false,
+            &|_, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(names(&dir), ["Bass.wav", "Drums.wav"]);
+        assert_eq!(r["skipped"], serde_json::json!(["Hats"]));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn cancelling_leaves_nothing_behind() {
+        let dir = tmp("cancel");
+        let cancel = AtomicBool::new(false);
+        // cancel from the progress callback once the second file has started: one file is already on disk as .part
+        let r = render_stems_to_dir(
+            &sketch(),
+            &dir,
+            0.0,
+            16.0,
+            0.0,
+            48_000,
+            &cancel,
+            true,
+            &|d, _, _| {
+                if d == 2 {
+                    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            },
+        );
+        assert_eq!(r.unwrap_err(), "cancelled");
+        assert!(names(&dir).is_empty(), "left: {:?}", names(&dir));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn nothing_to_export_is_an_error_not_an_empty_folder() {
+        let mut p = Project::sketch();
+        for t in p.tracks.iter_mut() {
+            t.muted = true;
+        }
+        let dir = tmp("none");
+        let e = Engine::new(p, Arc::new(NoPlugins));
+        let err = render_stems_to_dir(
+            &e,
+            &dir,
+            0.0,
+            8.0,
+            0.0,
+            48_000,
+            &AtomicBool::new(false),
+            false,
+            &|_, _, _| {},
+        )
+        .unwrap_err();
+        assert!(err.contains("nothing to export"), "{err}");
+        assert!(!dir.exists() || names(&dir).is_empty());
+        // with the master asked for, the (silent) mix is still written: it is what the song sounds like
+        let r = render_stems_to_dir(
+            &e,
+            &dir,
+            0.0,
+            8.0,
+            0.0,
+            48_000,
+            &AtomicBool::new(false),
+            true,
+            &|_, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(names(&dir), ["Master.wav"]);
+        assert_eq!(r["files"][0]["stats"]["silent"], true);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_unwritable_folder_fails_cleanly() {
+        let blocker = tmp("blocker");
+        std::fs::write(&blocker, b"a file where the folder should go").unwrap();
+        let err = render_stems_to_dir(
+            &sketch(),
+            &blocker.join("stems"),
+            0.0,
+            8.0,
+            0.0,
+            48_000,
+            &AtomicBool::new(false),
+            true,
+            &|_, _, _| {},
+        )
+        .unwrap_err();
+        assert!(err.contains("cannot create"), "{err}");
+        std::fs::remove_file(&blocker).ok();
+    }
+
+    #[test]
+    fn file_names_are_safe_and_unique() {
+        assert_eq!(safe_file_stem("Kick / Snare: 2"), "Kick _ Snare_ 2");
+        assert_eq!(safe_file_stem("  Lead...  "), "Lead");
+        assert_eq!(safe_file_stem(""), "Insert");
+        assert_eq!(safe_file_stem("???"), "___");
+        assert_eq!(safe_file_stem("con"), "_con");
+        assert_eq!(safe_file_stem("NUL.txt"), "_NUL.txt");
+        assert_eq!(safe_file_stem("COM1"), "_COM1");
+        assert_eq!(safe_file_stem("COM0"), "COM0");
+        assert_eq!(safe_file_stem("Wokal główny"), "Wokal główny");
+        assert_eq!(safe_file_stem(&"x".repeat(300)).len(), 100);
+        let n =
+            |v: &[&str]| unique_file_stems(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(
+            n(&["Bass", "bass", "BASS", "Bass (2)"]),
+            ["Bass", "bass (2)", "BASS (3)", "Bass (2) (2)"]
+        );
+        assert_eq!(n(&["Master", "Master"]), ["Master", "Master (2)"]);
+    }
 
     #[test]
     fn step_strings() {

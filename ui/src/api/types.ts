@@ -435,6 +435,16 @@ export type ExportResult =
   | { cancelled: true }
   | { cancelled?: false; out: string; fromBeat: number; toBeat: number; tail: number; stats: ExportStats };
 
+/** One file of a stem export: an insert's stem, or `Master.wav` (the mix with the master's effects). */
+export interface StemFile { name: string; file: string; master: boolean; stats: ExportStats }
+/** `export-progress` while stems render: `done` files finished of `total`, `name` = the one in progress ('' at the end). */
+export interface ExportProgress { done: number; total: number; name: string }
+/** Result of `exportStems`; `{ cancelled: true }` when the folder dialog or the render was aborted.
+ *  `skipped`: inserts that looked busy but rendered silent, so got no file. */
+export type ExportStemsResult =
+  | { cancelled: true }
+  | { cancelled?: false; dir: string; fromBeat: number; toBeat: number; tail: number; format: 'wav'; files: StemFile[]; skipped: string[] };
+
 /** Result of `projectOpen`; `{ cancelled: true }` when the file dialog was dismissed. */
 export type OpenResult =
   | { cancelled: true }

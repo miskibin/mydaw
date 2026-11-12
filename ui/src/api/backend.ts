@@ -3,7 +3,7 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
-  AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
+  AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportProgress, ExportResult, ExportStemsResult, F0ModelStatus, Id, ImportResult, LibFile,
   KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RecoveredProject, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
@@ -15,6 +15,8 @@ export interface EventMap {
   /** WAVE Keys: the piano started loading, is ready, or is not on this computer. */
   'keys-status': KeysStatus;
   'model-progress': ModelProgress;
+  /** A stem export (`exportStems`) started the next file. */
+  'export-progress': ExportProgress;
   /** The update installer is downloading (`updateDownload`). `total` is 0 when the size is unknown. */
   'update-progress': UpdateProgress;
   'audio-status': AudioStatus;
@@ -116,7 +118,15 @@ export interface Backend {
   recoveryDiscard(id: string): Promise<void>;
   /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
   exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult>;
-  /** Abort an in-flight `exportAudio` before a file is written. */
+  /**
+   * Stem export, like FL Studio's "Split mixer tracks": asks for a folder, then writes one 32-bit float
+   * WAV per mixer insert that has sound (named after the insert, after its effects and fader, before the
+   * master), plus `Master.wav` (the mix with master effects) when `includeMaster`. Muted inserts and
+   * inserts with nothing routed into them get no file; solo is ignored. All files have the same length.
+   * Progress: `export-progress`. No file is left behind when aborted.
+   */
+  exportStems(opts: { useLoop: boolean; tail: number; sampleRate: number; includeMaster: boolean }): Promise<ExportStemsResult>;
+  /** Abort an in-flight `exportAudio` / `exportStems` before a file is written. */
   exportCancel(): Promise<void>;
   vst3Scan(rescan: boolean): Promise<Vst3Info[]>;
   vst3Editor(fxId: Id, open: boolean): Promise<void>;
@@ -248,6 +258,7 @@ export function tauriBackend(): Backend {
     recoveryRestore: id => invoke('recovery_restore', { id }),
     recoveryDiscard: id => invoke('recovery_discard', { id }),
     exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, format: opts.format, mp3Kbps: opts.mp3Kbps }),
+    exportStems: opts => invoke('export_stems', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, includeMaster: opts.includeMaster }),
     exportCancel: () => invoke('export_cancel'),
     vst3Scan: rescan => invoke('vst3_scan', { rescan }),
     vst3Editor: (fxId, open) => invoke('vst3_editor', { fxId, open }),

@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { MockBackend } from './mock';
 import { emptyProject, FACTORY_FILES, FACTORY_KIT, libPath } from '../lib/factory';
 import { migrateProject } from '../lib/pattern';
+import type { ExportProgress, ExportStemsResult } from './types';
 
 // the mock publishes itself on `window` for dev tools; node has none
 beforeAll(() => { vi.stubGlobal('window', {}); });
@@ -42,5 +43,42 @@ describe('standard library in the mock', () => {
     expect(p.channels!.map(c => c.name)).toEqual(['Kick', 'Clap', 'Hat', 'Snare']);
     // it is already what the engine would make of it
     const q = structuredClone(p); migrateProject(q); expect(q).toEqual(p);
+  });
+});
+
+describe('stem export in the mock', () => {
+  const opts = { useLoop: false, tail: 2, sampleRate: 48000, includeMaster: true };
+  const done = (r: ExportStemsResult) => { if (r.cancelled) throw new Error('cancelled'); return r; };
+
+  it('writes Master and one file per insert with sound, named after the insert, and reports progress', async () => {
+    const be = new MockBackend();
+    const seen: ExportProgress[] = [];
+    await be.on('export-progress', p => seen.push(p));
+    const r = done(await be.exportStems(opts));
+    expect(r.files.map(f => f.file)).toEqual(['Master.wav', 'Drums.wav', 'Hats.wav', 'Bass.wav']);
+    expect(r.files.map(f => f.master)).toEqual([true, false, false, false]);
+    expect(new Set(r.files.map(f => f.stats.seconds)).size).toBe(1); // all the same length
+    expect(r.format).toBe('wav');
+    await new Promise(res => setTimeout(res, 5)); // the mock delivers events on a timer
+    expect(seen.map(p => p.done)).toEqual([0, 1, 2, 3, 4]);
+    expect(seen[0]).toMatchObject({ total: 4, name: 'Master' });
+    expect(seen.at(-1)).toMatchObject({ done: 4, total: 4, name: '' });
+  });
+  it('can leave the master out', async () => {
+    const be = new MockBackend();
+    const r = done(await be.exportStems({ ...opts, includeMaster: false }));
+    expect(r.files.map(f => f.file)).toEqual(['Drums.wav', 'Hats.wav', 'Bass.wav']);
+  });
+  it('refuses when nothing has sound, instead of writing an empty folder', async () => {
+    const be = new MockBackend();
+    const tracks = (await be.getState()).project.tracks;
+    await be.applyOps(tracks.map(t => ({ op: 'putTrack' as const, track: { ...t, muted: true } })));
+    await expect(be.exportStems({ ...opts, includeMaster: false })).rejects.toThrow(/nothing to export/);
+  });
+  it('stops on cancel without a result', async () => {
+    const be = new MockBackend();
+    const run = be.exportStems(opts);
+    await be.exportCancel();
+    expect(await run).toEqual({ cancelled: true });
   });
 });

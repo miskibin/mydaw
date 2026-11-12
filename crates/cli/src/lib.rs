@@ -59,6 +59,8 @@ TRANSPORT
 FILES
   render --out file.wav|.mp3 [--from B --to B --tail SEC --rate HZ --format wav|mp3 --kbps 128|192|256|320]
                                            bounce offline (mp3 chosen by .mp3 extension); prints level stats
+  render --stems --out FOLDER [--no-master] [--from B --to B --tail SEC --rate HZ]
+                                           one WAV per mixer insert with sound (named after it) + Master.wav
   save [--path FILE] | open <FILE>
 
 PITCH  (Tune to Reference: pull a vocal take onto another performance of the same melody)
@@ -315,7 +317,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
         "render" => {
             let out = a.need("out").map_err(u)?;
             let out = std::path::absolute(out).map(|p| p.display().to_string()).unwrap_or_else(|_| out.to_string());
-            send(a, "render", json!({"out": out, "from": a.num("from").map_err(u)?, "to": a.num("to").map_err(u)?, "tail": a.num("tail").map_err(u)?, "rate": a.num("rate").map_err(u)?, "format": a.get("format"), "mp3Kbps": a.num("kbps").map_err(u)?}))
+            send(a, "render", json!({"out": out, "from": a.num("from").map_err(u)?, "to": a.num("to").map_err(u)?, "tail": a.num("tail").map_err(u)?, "rate": a.num("rate").map_err(u)?, "format": a.get("format"), "mp3Kbps": a.num("kbps").map_err(u)?, "stems": a.has("stems"), "master": !a.has("no-master")}))
         }
         "save" => send(a, "save", json!({"path": a.get("path").map(|p| std::path::absolute(p).map(|x| x.display().to_string()).unwrap_or_else(|_| p.to_string()))})),
         "open" => {

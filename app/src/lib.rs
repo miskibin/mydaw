@@ -624,6 +624,69 @@ async fn export_audio(app: St<'_>, handle: AppHandle, use_loop: bool, tail: f64,
     }
 }
 
+/// Stem export (FL Studio's *Split mixer tracks*): one 32-bit float WAV per mixer insert that has
+/// sound, named after the insert, plus `Master.wav` when `include_master`. Opens a native folder
+/// dialog first and writes the files straight into the chosen folder.
+///
+/// Progress goes out as `export-progress` events `{ done, total, name }`; call `export_cancel` to
+/// abort (no file is left behind, see `actions::render_stems_to_dir`).
+#[tauri::command]
+async fn export_stems(
+    app: St<'_>,
+    handle: AppHandle,
+    use_loop: bool,
+    tail: f64,
+    sample_rate: u32,
+    include_master: bool,
+) -> R<Value> {
+    if !(sample_rate == 44_100 || sample_rate == 48_000) {
+        return Err("sample rate must be 44100 or 48000".into());
+    }
+    if !(tail == 0.0 || tail == 2.0 || tail == 8.0) {
+        return Err("tail must be 0, 2 or 8 seconds".into());
+    }
+    let (from, to) = Engine::export_range(&app.engine.state().project, use_loop);
+    let Some(dir) = handle
+        .dialog()
+        .file()
+        .blocking_pick_folder()
+        .and_then(|p| p.into_path().ok())
+    else {
+        return Ok(json!({ "cancelled": true }));
+    };
+    app.export_cancel.store(false, Ordering::Relaxed);
+    let a = app.inner().clone();
+    let h = handle.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let progress = |done: usize, total: usize, name: &str| {
+            let _ = h.emit(
+                "export-progress",
+                json!({ "done": done, "total": total, "name": name }),
+            );
+        };
+        // a stem export must not start while the piano is still loading (its stems would be silent)
+        keys::wait(&a);
+        actions::render_stems_to_dir(
+            &a.engine,
+            &dir,
+            from,
+            to,
+            tail,
+            sample_rate,
+            &a.export_cancel,
+            include_master,
+            &progress,
+        )
+    })
+    .await
+    .map_err(es)?;
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) if e == "cancelled" => Ok(json!({ "cancelled": true })),
+        Err(e) => Err(e),
+    }
+}
+
 #[tauri::command]
 async fn export_cancel(app: St<'_>) -> R<()> {
     app.export_cancel.store(true, Ordering::Relaxed);
@@ -897,7 +960,7 @@ pub fn run() {
             audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,
-            project_new, project_open, project_save, recovery_write, recovery_list, recovery_restore, recovery_discard, export_audio, export_cancel,
+            project_new, project_open, project_save, recovery_write, recovery_list, recovery_restore, recovery_discard, export_audio, export_stems, export_cancel,
             vst3_scan, vst3_add, vst3_editor, vst3_params, vst3_set_param, cli_status,
             app_info, update_set_auto, update_mark_seen, update_check, update_download, update_install, open_release_page
         ])

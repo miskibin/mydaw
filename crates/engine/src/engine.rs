@@ -1398,6 +1398,63 @@ impl Engine {
         sample_rate: u32,
         cancel: &AtomicBool,
     ) -> Result<Vec<f32>, EngineError> {
+        self.render_inner(None, from, to, tail, sample_rate, cancel)
+    }
+
+    /// The mixer inserts a stem export writes a file for, in mixer order: every insert except the
+    /// master that is not muted and has something routed into it (a track with an unmuted clip, or a
+    /// channel sent to it). Like FL Studio's *Split mixer tracks*, unused and muted inserts are left
+    /// out; a candidate that still renders silent is dropped by the caller.
+    pub fn stem_inserts(project: &Project) -> Vec<(Id, String)> {
+        project
+            .inserts
+            .iter()
+            .filter(|m| m.id != 0 && !m.muted)
+            .filter(|m| {
+                let on_track = project.tracks.iter().enumerate().any(|(i, t)| {
+                    t.insert == m.id
+                        && !t.muted
+                        && project
+                            .clips
+                            .iter()
+                            .any(|c| c.track as usize == i && !c.muted)
+                });
+                let on_channel = project
+                    .channels
+                    .iter()
+                    .any(|c| c.insert == Some(m.id) && !c.mute);
+                on_track || on_channel
+            })
+            .map(|m| (m.id, m.name.clone()))
+            .collect()
+    }
+
+    /// Renders insert `insert` alone as a stem: what it plays after its own effects, fader, pan and
+    /// width, before the master (the master's effects, fader, pan and width are skipped). Same range,
+    /// tail, sample rate and delay compensation as [`Self::render`], so every stem lines up with the
+    /// others and with the mix. Mute is respected (a muted track or channel stays silent); solo is
+    /// ignored, so a soloed insert does not silence the other stems.
+    pub fn render_stem(
+        &self,
+        insert: Id,
+        from: f64,
+        to: f64,
+        tail: f64,
+        sample_rate: u32,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<f32>, EngineError> {
+        self.render_inner(Some(insert), from, to, tail, sample_rate, cancel)
+    }
+
+    fn render_inner(
+        &self,
+        stem: Option<Id>,
+        from: f64,
+        to: f64,
+        tail: f64,
+        sample_rate: u32,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<f32>, EngineError> {
         if to <= from {
             return Err(EngineError::Msg("`to` must be after `from`".into()));
         }
@@ -1428,6 +1485,10 @@ impl Engine {
             let mut audio = comp_audio(&c.sources, &c.project.comps);
             audio.extend(sample_audio(&c.sources, &c.project.channels));
             (c.project.clone(), map, stretches, audio, c.keys.clone())
+        };
+        let project = match stem {
+            Some(id) => stem_project(project, id),
+            None => project,
         };
         // time-stretches nobody played yet are rendered here, without holding the project
         let mut rendered: HashMap<crate::sources::StretchKey, (Arc<Audio>, f64)> = HashMap::new();
@@ -2149,6 +2210,31 @@ fn fresh_path(dir: &Path, stem: &str) -> PathBuf {
     while p.exists() {
         p = dir.join(format!("{stem} ({k}).wav"));
         k += 1;
+    }
+    p
+}
+
+/// The project as a stem export hears it: only insert `id` is audible, nothing is soloed, and the
+/// master is a plain unity sum (no effects, fader at 0 dB, centre, normal width). Inserts keep their
+/// effects so delay compensation stays the same as in the mix and every stem lines up.
+fn stem_project(mut p: Project, id: Id) -> Project {
+    for t in p.tracks.iter_mut() {
+        t.solo = false;
+    }
+    for c in p.channels.iter_mut() {
+        c.solo = false;
+    }
+    for m in p.inserts.iter_mut() {
+        m.solo = false;
+        if m.id == 0 {
+            m.fx.clear();
+            m.vol = crate::model::VOL_UNITY;
+            m.pan = 0.0;
+            m.width = 1.0;
+            m.muted = false;
+        } else {
+            m.muted = m.id != id;
+        }
     }
     p
 }

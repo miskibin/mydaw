@@ -9,6 +9,13 @@ shown in the app after an update and is published as the release notes (see
 Rename this heading to `## <version> — <date>` when releasing (docs/releasing.md).
 
 ### Added
+- **Export stems.** *Export → Output: Stems* writes every mixer track that has sound as its own
+  WAV, named after the track, with one folder pick, like FL Studio's *Split mixer tracks*: no more
+  soloing and bouncing one track at a time. All files have the same length and start together, so
+  they line up in another project or DAW. A stem is the track after its own effects and fader,
+  before the master; *Master* adds `Master.wav`, the whole mix with the master effects. Muted
+  and empty tracks are skipped, solo is ignored, and a cancelled export leaves no half-written
+  files. The same from the command line: `wave render --stems --out folder/`.
 - **Warp: draw how time and volume move over every bar.** A new effect for stutters, rolls,
   half-time, tape stops and starts, reverses, scratches (time) and gates, trance gates and
   sidechain pumps (volume). Each effect holds 16 time and 16 volume slots, ready-made and
