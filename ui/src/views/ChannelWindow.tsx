@@ -18,6 +18,17 @@ import { moveWindow } from './FxWindow';
 import { KeysPanel } from './KeysPanel';
 import { SamplerPanel } from './SamplerPanel';
 import { SynthPanel } from './SynthPanel';
+import { PitchCorrectButton } from './PitchCorrectButton';
+import { S } from '../state/store';
+
+/** The insert a channel is heard on: its own, else the track of the first playlist clip of a pattern with its
+ *  notes (rt.rs `ChanRt::heard`); null when it plays nowhere yet. */
+function chanHeardInsert(c: Channel): Id | null {
+  if (c.insert != null) return c.insert;
+  const pats = new Set(S.project.patterns.filter(p => p.notes.some(n => n.ch === c.id)).map(p => p.id));
+  const first = S.project.clips.filter(x => x.kind === 'pat' && pats.has(x.ref)).sort((a, b) => a.start - b.start)[0];
+  return first ? S.project.tracks[first.track]?.insert ?? null : null;
+}
 
 type Win = { id: Id; x: number; y: number; w: number };
 const [win, setWin] = createSignal<Win | null>(null);
@@ -80,6 +91,7 @@ function Body(props: { w: Win; c: Channel }) {
         <div style={{ flex: 1 }} />
         <InsertPicker value={c().insert} nullLabel={t('b.cw.likeClipTrack')} ops={id => [chanOp(live(), { insert: id })]} label={t('b.pe.mixCh')}
           wheelKey={'cwroute' + props.c.id} title={t('b.cw.mixerTip')} />
+        <Show when={c().kind === 'sample'}><PitchCorrectButton insert={() => chanHeardInsert(c())} /></Show>
         <button class="iconbtn" title={t('b.cw.previewTitle')} onClick={() => audition(c().id, undefined, 0.9, true)}>▶</button>
         <button class="closebtn" title={t('b.cw.close')} onClick={closeChannelWindow}>×</button>
       </div>

@@ -582,6 +582,7 @@ select option { background: var(--bg4); color: var(--fg); }
 .toolbar .patselbox, .toolbar .patselbtn, .toolbar .patselnew { height: 28px; box-sizing: border-box; }
 .tbmid { min-width: 0; display: flex; align-items: center; gap: 8px; overflow: hidden; }
 .tbmid > * { flex-shrink: 0; }
+.mainvol { display: flex; align-items: center; height: 30px; padding: 0 3px; }
 .tbright { min-width: 0; align-self: stretch; display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .tbright .dragfill { flex: 1 1 0; min-width: 0; align-self: stretch; }
 /* one height for every control in the bar */
@@ -931,3 +932,6 @@ select option { background: var(--bg4); color: var(--fg); }
 .updrow { display: flex; gap: 10px; align-items: center; font: 500 11px var(--sans); color: var(--fg2); min-height: 24px; }
 .updrow b { font: 600 12px var(--mono); color: var(--fg-hi); }
 @media (prefers-reduced-motion: reduce) { .updbar i { transition: none; } }
+.pcbtn { display: inline-flex; align-items: center; gap: 5px; position: relative; }
+.pcbtn .pcon { width: 5px; height: 5px; border-radius: 50%; }
+.refnote.warn { color: var(--amber); }

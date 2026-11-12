@@ -386,6 +386,12 @@ impl SourceStore {
     pub fn pitch_target(&mut self, c: &crate::model::Clip, bpm: f64, params: &crate::model::RefTune) -> Option<Arc<PitchTarget>> {
         let key = self.align_key(c, bpm, params.source)?;
         let take = self.analysis(c.source, c.norm, c.rev)?;
+        if let Some(m) = &params.melody {
+            // the timeline places the melody: nothing to align, nothing worth caching
+            let r = crate::pitch::ANALYSIS_RATE as f64;
+            let al = crate::melody::alignment(&take, (key.2 as f64 / r, key.3 as f64 / r), &note_spans(c, &take), &m.notes);
+            return Some(Arc::new(crate::reference::target(&take, &note_spans(c, &take), &al, params)));
+        }
         let al = match self.cached_alignment(&key) {
             Some(a) => a,
             None => {
@@ -544,7 +550,7 @@ impl SourceStore {
     /// Source variant plus pitch edits (cached per clip).
     fn tuned_audio(&mut self, c: &crate::model::Clip, base: Arc<Audio>, allow_stale: bool, bpm: f64) -> Option<Arc<Audio>> {
         let tune = c.tune.as_ref()?;
-        let region = tune.reference.and_then(|r| self.align_key(c, bpm, r.source)).map(|k| (k.2, k.3));
+        let region = tune.reference.as_ref().and_then(|r| self.align_key(c, bpm, r.source)).map(|k| (k.2, k.3));
         let hash = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -558,7 +564,7 @@ impl SourceStore {
             }
         }
         let an = self.analysis(c.source, c.norm, c.rev)?;
-        let target = tune.reference.and_then(|r| self.pitch_target(c, bpm, &r));
+        let target = tune.reference.as_ref().and_then(|r| self.pitch_target(c, bpm, r));
         let out = Arc::new(crate::tune_render::render(&base, &an, tune, target.as_deref()));
         self.tuned.insert(c.id, (hash, out.clone()));
         Some(out)
@@ -568,11 +574,15 @@ impl SourceStore {
 /// The target for clip `c` from a ready alignment. The note spans are the editor's
 /// segmentation when the clip has one, else the analysis'.
 pub fn target_for(c: &crate::model::Clip, take: &PitchAnalysis, al: &Alignment, params: &crate::model::RefTune) -> PitchTarget {
-    let spans: Vec<(f64, f64)> = match c.tune.as_ref().filter(|t| !t.notes.is_empty()) {
+    crate::reference::target(take, &note_spans(c, take), al, params)
+}
+
+/// The take's notes (seconds of the source): the editor's segmentation, else the analysis'.
+pub fn note_spans(c: &crate::model::Clip, take: &PitchAnalysis) -> Vec<(f64, f64)> {
+    match c.tune.as_ref().filter(|t| !t.notes.is_empty()) {
         Some(t) => t.notes.iter().map(|n| (n.start, n.end)).collect(),
         None => take.notes.iter().map(|n| (n.start, n.end)).collect(),
-    };
-    crate::reference::target(take, &spans, al, params)
+    }
 }
 
 /// Writes interleaved stereo float to a 32-bit float WAV.

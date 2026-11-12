@@ -72,6 +72,8 @@ fn params(a: &Args) -> Result<RefTune, String> {
         octave: None,
         key: 0,
         scale: 0,
+        speed: None,
+        melody: None,
     })
 }
 

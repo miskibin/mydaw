@@ -482,6 +482,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
                         drift: 0.5,
                         formant: 0.0,
                         gain: 0.0,
+                        speed: None,
                     })
                     .collect(),
                 pencil: vec![],

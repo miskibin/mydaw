@@ -851,8 +851,18 @@ pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
     if arg(a, "off").and_then(Value::as_bool).unwrap_or(false) {
         tune.reference = None;
     } else {
-        let prev = tune.reference;
-        let source = arg(a, "reference").and_then(as_index).or(prev.map(|r| r.source)).ok_or("`reference` (source id) is required")?;
+        let prev = tune.reference.clone();
+        // `melodyChannel`: the notes that channel plays over the clip become the reference (a
+        // copy, collected again by naming the channel again); `reference`: a recording
+        let melody = match arg(a, "melodyChannel").and_then(as_index) {
+            Some(ch) => Some(app.engine.melody_reference(cid, ch, None).map_err(|e| e.to_string())?.0),
+            None if arg(a, "reference").is_some() => None,
+            None => prev.as_ref().and_then(|r| r.melody.clone()),
+        };
+        let source = match &melody {
+            Some(_) => 0,
+            None => arg(a, "reference").and_then(as_index).or(prev.as_ref().filter(|r| r.melody.is_none()).map(|r| r.source)).ok_or("`reference` (source id) or `melodyChannel` is required")?,
+        };
         let unit = |k: &str, d: f32| -> R<f32> {
             match opt_f64(a, k) {
                 Some(v) if (0.0..=100.0).contains(&v) => Ok(v as f32 / 100.0),
@@ -860,20 +870,28 @@ pub fn tune_ref(app: &App, a: &Value, if_revision: Option<u64>) -> R<u64> {
                 None => Ok(d),
             }
         };
-        let base = prev.unwrap_or(RefTune { source, correction: 1.0, vibrato: 1.0, influence: 1.0, octave: None, key: 0, scale: 0 });
+        let base = prev.unwrap_or(RefTune { source, correction: 1.0, vibrato: 1.0, influence: 1.0, octave: None, key: 0, scale: 0, speed: None, melody: None });
         let octave = match arg(a, "octave") {
             Some(Value::String(s)) if s == "auto" => None,
             Some(v) => Some(v.as_i64().ok_or("`octave` is auto or a whole number of semitones")? as i32),
             None => base.octave,
         };
+        let speed = match opt_f64(a, "speed") {
+            Some(v) if (0.0..=1000.0).contains(&v) => Some(v as f32),
+            Some(_) => return Err("`speed` is 0..1000 ms".into()),
+            None => base.speed,
+        };
         tune.reference = Some(RefTune {
             source,
             correction: unit("correction", base.correction)?,
             vibrato: unit("vibrato", base.vibrato)?,
-            influence: unit("influence", base.influence)?,
+            // a melody gives every note's pitch: no scale share
+            influence: if melody.is_some() { 1.0 } else { unit("influence", base.influence)? },
             octave,
             key: arg(a, "key").and_then(as_index).map(|k| k as u32).unwrap_or(base.key),
             scale: arg(a, "scale").and_then(as_index).map(|k| k as u32).unwrap_or(base.scale),
+            speed,
+            melody,
         });
     }
     clip.tune = tune.is_active().then_some(tune);
@@ -890,7 +908,7 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
             Ok(json!({ "revision": st.revision, "transport": st.transport, "path": st.path, "dirty": st.dirty, "audio": app.audio_status(), "cli": *app.cli.lock() }))
         }
         "context" => Ok(context(app, arg(a, "full").and_then(Value::as_bool).unwrap_or(false))),
-        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
+        "catalog" => Ok(json!({ "effects": catalog::catalog(), "commands": ["status","context","catalog","schema","apply","undo","redo","play","stop","render","import","add_fx","set_param","load_preset","save","open","pitch_analyze","pitch_target","melody_channels","melody_reference","tune_ref","f0_model","music_analyze","auto_vocal_plan","bake_rider","make_unique","takes","comp","flatten_comp","comp_audition","channels","pattern","pattern_play","note_audition","vst3_scan","vst3_add","vst3_params","vst3_set_param"] })),
         "schema" => Ok(schema()),
         "apply" => {
             let ops: Vec<Op> = serde_json::from_value(arg(a, "ops").cloned().unwrap_or(json!([]))).map_err(|er| format!("BAD_OPS: {er}"))?;
@@ -978,6 +996,14 @@ pub fn control(app: &Arc<App>, cmd: &str, a: &Value, if_revision: Option<u64>) -
                 return Ok(json!(&*t));
             }
             Ok(json!({ "score": t.score, "octave": t.octave, "reason": t.reason, "start": t.start as f64 / t.rate as f64, "notes": t.notes }))
+        }
+        "melody_channels" => melody_channels(e, need_u64(a, "clipId")?),
+        "melody_reference" => {
+            let span = match arg(a, "span") {
+                Some(Value::Null) | None => None,
+                Some(v) => Some(serde_json::from_value::<[f64; 2]>(v.clone()).map_err(|er| format!("BAD_ARGS: span: {er}"))?),
+            };
+            melody_reference(e, need_u64(a, "clipId")?, need_u64(a, "channel")?, span)
         }
         "tune_ref" => tune_ref(app, a, if_revision).map(ok_rev),
         "f0_model" => Ok(json!(crate::models::status(e, app.model_error.lock().clone()))),
@@ -1259,4 +1285,22 @@ mod tests {
         assert!(parse_steps("x?x", 1.0).is_err());
         assert!(parse_steps("", 1.0).unwrap().is_empty());
     }
+}
+
+/// `melody_channels`: the channels whose notes play over an audio clip, best fit to the
+/// singing first: `[{channel, name, notes, fit}]` (`fit` 0..1).
+pub fn melody_channels(e: &wave_engine::Engine, clip_id: u64) -> Result<Value, String> {
+    let list = e.melody_channels(clip_id).map_err(|x| x.to_string())?;
+    let p = e.project();
+    Ok(json!(list
+        .into_iter()
+        .map(|(id, n, fit)| json!({ "channel": id, "name": p.channels.iter().find(|c| c.id == id).map(|c| c.name.clone()).unwrap_or_default(), "notes": n, "fit": fit }))
+        .collect::<Vec<_>>()))
+}
+
+/// `melody_reference`: the notes of `channel` over an audio clip as a melody reference
+/// (`span`: seconds of the source) — `{melody: {channel, span?, notes}, fit}`.
+pub fn melody_reference(e: &wave_engine::Engine, clip_id: u64, channel: u64, span: Option<[f64; 2]>) -> Result<Value, String> {
+    let (m, fit) = e.melody_reference(clip_id, channel, span).map_err(|x| x.to_string())?;
+    Ok(json!({ "melody": m, "fit": fit }))
 }

@@ -127,8 +127,16 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                     return Err(OpError::Missing { what: "clip source", id: c.source });
                 }
                 if let Some(r) = c.tune.as_ref().and_then(|t| t.reference.as_ref()) {
-                    if !p.sources.iter().any(|x| x.id == r.source) {
+                    if r.melody.is_none() && !p.sources.iter().any(|x| x.id == r.source) {
                         return Err(OpError::Missing { what: "reference source", id: r.source });
+                    }
+                    if let Some(m) = &r.melody {
+                        if m.notes.iter().any(|n| n.end.partial_cmp(&n.start) != Some(std::cmp::Ordering::Greater) || n.key > 127) {
+                            return Err(OpError::Invalid(format!("clip {}: melody notes need end > start and a key 0..127", c.id)));
+                        }
+                    }
+                    if r.speed.is_some_and(|v| !(0.0..=1000.0).contains(&v)) {
+                        return Err(OpError::Invalid(format!("clip {}: reference speed must be 0..1000 ms", c.id)));
                     }
                     if [r.correction, r.vibrato, r.influence].iter().any(|v| !(0.0..=1.0).contains(v)) {
                         return Err(OpError::Invalid(format!("clip {}: reference correction, vibrato and influence must be 0..1", c.id)));
@@ -418,7 +426,7 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
             p.comps.retain(|c| !c.takes.is_empty());
             p.clips.retain(|c| !(c.kind == ClipKind::Comp && empty.contains(&c.source)));
             for t in p.clips.iter_mut().filter_map(|c| c.tune.as_mut()) {
-                if t.reference.is_some_and(|r| r.source == *id) {
+                if t.reference.as_ref().is_some_and(|r| r.melody.is_none() && r.source == *id) {
                     t.reference = None;
                 }
             }

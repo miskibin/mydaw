@@ -26,7 +26,9 @@ export function applyOp(p: Project, op: Op): void {
         if (!known) throw new OpError(`no clip source with id ${c.ref}`);
         const r = c.tune?.reference;
         if (r) {
-          if (!p.sources.some(x => x.id === r.source)) throw new OpError(`no reference source with id ${r.source}`);
+          if (!r.melody && !p.sources.some(x => x.id === r.source)) throw new OpError(`no reference source with id ${r.source}`);
+          if (r.melody?.notes.some(n => !(n.end > n.start) || n.key < 0 || n.key > 127)) throw new OpError(`clip ${c.id}: melody notes need end > start and a key 0..127`);
+          if (r.speed != null && !(r.speed >= 0 && r.speed <= 1000)) throw new OpError(`clip ${c.id}: reference speed must be 0..1000 ms`);
           if ([r.correction, r.vibrato, r.influence].some(v => !(v >= 0 && v <= 1))) throw new OpError(`clip ${c.id}: reference correction, vibrato and influence must be 0..1`);
           if ((r.octave != null && (r.octave % 12 !== 0 || Math.abs(r.octave) > 36)) || (r.key ?? 0) > 11 || (r.scale ?? 0) > 4) throw new OpError(`clip ${c.id}: reference octave must be a multiple of 12 within ±36, key 0..11, scale 0..4`);
         }
@@ -127,7 +129,7 @@ export function applyOp(p: Project, op: Op): void {
       applyPatternOp(p, op, true);
       p.sources = p.sources.filter(s => s.id !== op.id);
       p.clips = p.clips.filter(c => !(c.kind === 'audio' && c.ref === op.id));
-      for (const c of p.clips) if (c.tune?.reference?.source === op.id) c.tune.reference = null;
+      for (const c of p.clips) if (c.tune?.reference && !c.tune.reference.melody && c.tune.reference.source === op.id) c.tune.reference = null;
       applyCompOp(p, op);
       return;
     case 'putComp':

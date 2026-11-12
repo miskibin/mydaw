@@ -4,6 +4,38 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## Unreleased
+
+### Added
+- **Tune a vocal to the melody you played in the piano roll.** Play a melody, sing along to it,
+  then in the Piano roll press **♪ Vocal reference** (only the selected notes, or the whole
+  channel) — the vocal's pitch editor opens with that melody as its target. Or open the pitch
+  editor, choose *To reference* and pick the melody from *Melodies in the project* (they are
+  listed by how well they fit what you sang). The vocal keeps its own timing: singing a little
+  early or late is fine, the octave nearest your voice is used (a melody played an octave higher
+  just works), in a chord the note nearest your voice is taken, and ad-libs with nothing played
+  under them stay as sung. The melody is copied into the vocal, so changing the piano roll later
+  does not change it until you press *Update*.
+- **Correction you can understand: Strength, Speed and Flatten**, with one-click styles
+  (Natural, Pop, Tight, Robot). *Speed* is how fast the voice is pulled onto the note — 0 ms is
+  the hard "robot" step, around 50 ms tight pop, 100 ms and more keeps the singer's own scoop. The
+  line under the controls says in words what *Correct* will do. A reference has its own Speed too.
+- **Play and loop in the pitch editor like in the Playlist.** Click the ruler to move the start
+  marker (while playing, playback jumps there), drag it to set the loop, double-click to remove
+  the loop; Space or *Play* plays the song so you hear the vocal in the mix, and the view follows
+  playback. *Solo* plays the vocal alone, with your edits, from the marker.
+- **Pitch Correct one click away.** The pitch editor, the sample window and a sampler channel's
+  window have a *Pitch Correct* button that puts the real-time tuner on that sound's mixer insert
+  (with the editor's key and scale), or opens it when it is already there. The sample window also
+  opens the pitch editor.
+- **Main volume knob next to Play and Stop**, like FL Studio: it is the Master fader (drag, scroll,
+  double-click for 0 dB, right-click to automate).
+
+### Fixed
+- The pitch editor's preview now plays your pitch edits (it used to play the original recording).
+- The reference list no longer offers drum hits and one-shots: only recordings in the playlist or
+  a comp, at least a second long.
+
 ## 0.9.13 — 2026-11-12
 
 ### Added

@@ -821,6 +821,7 @@ fn bench_analysis(wave: &Path, _name: &str) -> Value {
                 drift: 0.0,
                 formant: 0.0,
                 gain: 0.0,
+                speed: None,
             })
             .collect(),
         pencil: vec![],

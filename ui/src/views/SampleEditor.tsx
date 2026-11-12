@@ -23,6 +23,7 @@ import { InsertPicker } from '../ui/InsertPicker';
 import { Knob } from '../ui/Knob';
 import { rgba, T, theme } from '../ui/theme';
 import { moveWindow } from './FxWindow';
+import { PitchCorrectButton } from './PitchCorrectButton';
 
 export function SampleEditor() {
   const clip = () => U.editor ? S.project.clips.find(c => c.id === U.editor!.clipId) : undefined;
@@ -207,6 +208,8 @@ function EditorBody(props: { clip: Clip; src: Source }) {
         <div style={{ flex: 1 }} />
         <InsertPicker value={tr()?.insert ?? 0} master ops={id => { const op = A.trackOp(c().track, { insert: id ?? 0 }); return op ? [op] : []; }}
           label={t('d.smp.routing')} wheelKey="edroute" title={t('d.smp.mixer.tip', { track: tr()?.name ?? '' })} />
+        <button class="smallbtn" title={t('d.smp.pitchEd.tip')} onClick={() => { const id = c().id; A.closeEditor(); A.openPitchEditor(id); }}>{t('d.smp.pitchEd')}{c().tune ? ' •' : ''}</button>
+        <PitchCorrectButton insert={() => tr()?.insert ?? null} />
         <button class="closebtn" title={t('d.smp.close')} onClick={A.closeEditor}>×</button>
       </div>
       <div onPointerDown={waveDown} title={t('d.smp.waveTip')} class="smpwave" style={{ width: W() + 'px', height: H() + 'px' }}>

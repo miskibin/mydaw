@@ -21,7 +21,10 @@ import {
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { audition, chanKindLabel, channels, closeRoll, curPat, moveNotesToNewPattern, patPlayhead, putNotes, rollFront, selChan, selectChannel, toggleRollMax } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
-import { say, U } from '../state/ui';
+import { openMenu, say, U } from '../state/ui';
+import { selectionSpan, vocalsUnder } from '../lib/melody';
+import { fmtPos } from '../lib/format';
+import { openPitchEditor } from '../state/actions';
 import { dblCheck, edgeScroller, panDrag, track, trackFrame } from '../ui/drag';
 import { typingHeld } from '../state/typingKeys';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
@@ -561,6 +564,23 @@ function Roll(props: { z: number }) {
     apply(e);
     track(apply, () => g.end(), 'ns-resize');
   };
+  // ---- "Vocal reference": the melody (the selection, else the channel's notes) becomes the target of a vocal sung over it
+  const vocals = createMemo(() => { void arrVersion(); return vocalsUnder(S.project, pt().id); });
+  const vocalName = (id: number) => { const c = S.project.clips.find(x => x.id === id)!; return (S.project.sources.find(x => x.id === c.ref)?.name ?? '?') + ' · ' + (S.project.tracks[c.track]?.name ?? '') + ' · ' + fmtPos(c.start); };
+  const toVocal = (clipId: number) => {
+    const c = S.project.clips.find(x => x.id === clipId); if (!c) return;
+    const idx = [...sel()].filter(i => notesRaw()[i]?.ch === ch().id);
+    const span = idx.length ? selectionSpan(S.project, c, ch().id, pt().id, idx) : null;
+    if (idx.length && !span) { say(t('b.pr.vocalNoSel')); return; }
+    openPitchEditor(clipId, { channel: ch().id, span });
+    say(t('b.pr.vocalOpened', { x: idx.length ? notesText(idx.length) : ch().name, name: vocalName(clipId) }));
+  };
+  const vocalRef = (e: MouseEvent) => {
+    const vs = vocals();
+    if (vs.length === 1) return toVocal(vs[0].id);
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    openMenu(r.left, r.bottom + 4, vs.map(v => ({ t: 'item' as const, label: vocalName(v.id), act: () => toVocal(v.id) })));
+  };
   const moveSelToPattern = () => { const idx = [...sel()]; setSel(new Set<number>()); moveNotesToNewPattern(pt(), idx); };
   const onKey = (e: KeyboardEvent) => {
     const tg = (e.target as HTMLElement).tagName;
@@ -751,6 +771,9 @@ function Roll(props: { z: number }) {
           </span>
         </label>
         <div style={{ flex: 1 }} />
+        <Show when={vocals().length > 0 && chanNotes().length > 0}>
+          <button class="smallbtn" style={{ 'align-self': 'center' }} title={t('b.pr.vocalTip')} onClick={vocalRef}>♪ {t('b.pr.vocal')}{vocals().length > 1 ? ' …' : ''}</button>
+        </Show>
         <Show when={sel().size > 0}>
           <button class="smallbtn" style={{ 'align-self': 'center' }} title={t('b.pe.toNewPatTip')} onClick={e => { moveSelToPattern(); backToRoll(e.currentTarget); }}>{t('b.pe.toNewPat')}</button>
         </Show>

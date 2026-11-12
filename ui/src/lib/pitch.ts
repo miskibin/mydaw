@@ -145,7 +145,32 @@ export function editedCurve(an: PitchAnalysis, tune: ClipTune | null | undefined
     const pv = pencilAt(tune?.pencil, t);
     out[f] = pv ?? target;
   }
-  return out;
+  return retune(an, tune, out);
+}
+
+/** Retune speed (ms) at `t`: the note's own, else the reference's; null = immediate (pencil too) — tune_render.rs `speed_at`. */
+function speedAt(tune: ClipTune, n: NoteEdit | undefined, t: number): number | null {
+  if (pencilAt(tune.pencil, t) != null) return null;
+  const s = n && n.start <= t && t < n.end && n.speed != null ? n.speed : tune.reference?.speed ?? null;
+  return s != null && s > 0 ? s : null;
+}
+
+/** The correction (wanted − sung) follows its target with the note's retune speed: a one-pole lag reaching 95 %
+ *  of a change in `speed` ms, starting from none after an unvoiced gap — tune_render.rs `edited_curve`. */
+function retune(an: PitchAnalysis, tune: ClipTune | null | undefined, want: Float32Array): Float32Array {
+  if (!tune || !(tune.notes.some(n => n.speed != null) || tune.reference?.speed != null)) return want;
+  const dt = 1 / an.rate, notes = tune.notes;
+  let d = 0, ni = 0;
+  for (let f = 0; f < want.length; f++) {
+    const o = an.curve[f];
+    if (Number.isNaN(want[f]) || o == null) { d = 0; continue; }
+    const t = f / an.rate;
+    while (ni < notes.length && notes[ni].end <= t) ni++;
+    const goal = want[f] - o, ms = speedAt(tune, notes[ni], t);
+    d = ms == null ? goal : d + (goal - d) * (1 - Math.exp(-dt * 3000 / ms));
+    want[f] = o + d;
+  }
+  return want;
 }
 
 const cloneTune = (t: ClipTune): ClipTune => ({ notes: t.notes.map(n => ({ ...n })), pencil: (t.pencil ?? []).map(p => [p[0], p[1]] as [number, number]) });
@@ -197,14 +222,22 @@ export function dragShift(center: number, startShift: number, rawCents: number, 
  * "Popraw wysokość" macro: move each note's centre `centerPct` of the way to the nearest scale
  * note and flatten `driftPct` of its drift. Returns the new tune.
  */
-export function correctPitch(tune: ClipTune, an: PitchAnalysis, idx: Iterable<number>, centerPct: number, driftPct: number, key: number, mask: number): ClipTune {
+export function correctPitch(tune: ClipTune, an: PitchAnalysis, idx: Iterable<number>, centerPct: number, driftPct: number, key: number, mask: number, speed: number | null = null): ClipTune {
   return editNotes(tune, idx, n => {
     const c = noteCenter(an, n.start, n.end);
     if (c == null) return {};
     const target = snapNote(c, key, mask);
-    return { shift: Math.round((target - c) * 100 * centerPct / 100), drift: Math.min(1, Math.max(0, driftPct / 100)) };
+    return { shift: Math.round((target - c) * 100 * centerPct / 100), drift: Math.min(1, Math.max(0, driftPct / 100)), speed };
   });
 }
+
+/** One-click correction styles (Strength %, Speed ms, Flatten %), the same words as the Pitch Correct effect's presets. */
+export const CORRECT_PRESETS: { id: 'natural' | 'pop' | 'tight' | 'robot'; strength: number; speed: number; flatten: number }[] = [
+  { id: 'natural', strength: 80, speed: 120, flatten: 20 },
+  { id: 'pop', strength: 100, speed: 50, flatten: 50 },
+  { id: 'tight', strength: 100, speed: 15, flatten: 80 },
+  { id: 'robot', strength: 100, speed: 0, flatten: 100 },
+];
 
 /**
  * Inserts a pencil stroke (points sorted by time, spaced < 30 ms) replacing whatever was drawn

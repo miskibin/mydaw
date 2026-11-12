@@ -19,6 +19,10 @@ import { track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { Icon, ICONS } from '../ui/icons';
 import { UpdateChip } from './Updates';
+import { MiniKnob } from '../ui/Knob';
+import { VOL_UNITY } from '../api/types';
+import { volText } from '../lib/format';
+import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 
 export const TOOLS: [Tool, string, TranslationKey][] = [
   ['draw', 'P', 'a.tb.toolDraw'], ['paint', 'B', 'a.tb.toolPaint'], ['erase', 'D', 'a.tb.toolErase'], ['mute', 'T', 'a.tb.toolMute'], ['slice', 'C', 'a.tb.toolSlice'], ['select', 'E', 'a.tb.toolSelect'],
@@ -161,6 +165,7 @@ export function Toolbar() {
         </button>
         <button class="count" classList={{ on: T().countIn }} title={t('a.tb.countTip')} onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
+      <MainVolume />
       <div class="seg patsong" title={t('a.tb.patSongTip')}>
         <button class="pat" classList={{ on: patMode() }} onClick={() => A.switchMode(true)}>PAT</button>
         <button class="song" classList={{ on: !patMode() }} onClick={() => A.switchMode(false)}>SONG</button>
@@ -442,6 +447,33 @@ export function Help() {
             <For each={shortcuts()}>{([a, k]) => <div class="sc"><span class="a">{a}</span><span class="k">{k}</span></div>}</For>
           </div>
         </div>
+      </div>
+    </Show>
+  );
+}
+
+/**
+ * FL's main volume knob next to the transport: the Master insert's volume (the same value as
+ * the mixer's Master fader, saved with the project and undone like it). Drag ↕ (Shift = fine),
+ * wheel, double-click = unity, right-click = automation menu.
+ */
+function MainVolume() {
+  const master = () => S.project.inserts.find(m => m.id === 0);
+  const target = { kind: 'insertVol' as const, id: 0 };
+  const vol = () => autoDisplay(target) ?? master()?.vol ?? VOL_UNITY;
+  let g: Gesture | null = null;
+  const put = (v: number) => A.insertOp(0, { vol: clamp(v, 0, 1) });
+  const tell = (v: number) => say(t('a.tb.mainVol') + ' · ' + volText(v));
+  return (
+    <Show when={master()}>
+      <div class="mainvol" title={t('a.tb.mainVolTip', { v: volText(vol()) })}>
+        <MiniKnob t={vol} key="mainvol" title={t('a.tb.mainVolTip', { v: volText(vol()) })} automated={() => isAutomated(target)}
+          onStart={() => { g = new Gesture(t('a.tb.mainVol')); }}
+          onChange={v => { const op = put(v); if (op) g?.update([op]); tell(v); }}
+          onEnd={() => { g?.end(); g = null; }}
+          onReset={() => { const op = put(VOL_UNITY); if (op) commit([op], t('a.tb.mainVol')); tell(VOL_UNITY); }}
+          onWheel={v => { const op = put(v); if (op) wheelEdit('mainvol', t('a.tb.mainVol'), [op]); tell(v); }}
+          onMenu={(x, y) => paramMenu(x, y, target, () => { const op = put(VOL_UNITY); if (op) commit([op], t('a.tb.mainVol')); })} />
       </div>
     </Show>
   );
