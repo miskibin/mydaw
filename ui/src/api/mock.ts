@@ -617,10 +617,9 @@ export class MockBackend implements Backend {
       const c = this.p.clips.find(x => x.id === a.clipId);
       if (!c) throw new Error('no such clip');
       if (c.kind !== 'audio') throw new Error('only audio clips have tempo and key');
-      const s = this.p.sources.find(x => x.id === c.ref);
       const bpm = Math.round(this.p.bpm);
       // C minor profile (demo song is in C minor at 128 BPM)
-      const root = (s ? s.id % 2 === 0 ? 0 : 0 : 0), minor = true;
+      const root = 0, minor = true;
       const chroma = [1, 0.08, 0.42, 0.78, 0.09, 0.51, 0.07, 0.89, 0.36, 0.12, 0.44, 0.19];
       return {
         tempo: {

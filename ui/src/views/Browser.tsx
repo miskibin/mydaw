@@ -205,7 +205,7 @@ function LibraryTab() {
       setLib('progress', p.id, p);
       if (p.error) say(t('d.br.instfail', { id: p.id, err: p.error }));
       else if (p.done >= p.total) { setLib('progress', p.id, undefined); void refreshLib(); say(t('d.br.installed', { id: p.id })); }
-    }).then(u => { off = u; });
+    }).then(u => { off = u; }).catch(e => console.warn(e));
     onCleanup(() => off?.());
   });
   const install = (k: Kit) => {

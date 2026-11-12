@@ -30,6 +30,7 @@ import { FXMETA, Icon } from '../ui/icons';
 import { NumField, parseNum, Segmented } from '../ui/Knob';
 import { rgba, T, theme, themeVersion } from '../ui/theme';
 import { moveWindow } from './FxWindow';
+import { touch } from '../lib/touch';
 
 type Tool = 'main' | 'drift' | 'formant' | 'gain' | 'split' | 'pencil';
 const TOOLS: { id: Tool; key: string; label: TranslationKey; icon: string; tip: TranslationKey }[] = [
@@ -189,7 +190,7 @@ function PitchBody(props: { clipId: number }) {
   let dirty = true;
   createEffect(() => {
     viewV(); sel(); hover(); tool(); key(); scale(); marq(); pencilLive(); an(); peaksVersion(); edited(); themeVersion(); lang(); activeTarget(); lowRuns();
-    JSON.stringify(c().tune ?? null); c().offset; c().len; c().gain; S.project.bpm; src()?.color;
+    JSON.stringify(c().tune ?? null); touch(c().offset, c().len, c().gain, S.project.bpm, src()?.color);
     dirty = true;
   });
   onMount(() => {
@@ -511,7 +512,7 @@ function PitchBody(props: { clipId: number }) {
   onMount(() => {
     be().f0ModelStatus().then(setModel).catch(() => {});
     const un = be().on('model-progress', p => setDl(p.error ? null : p.total ? p.done / p.total : null));
-    onCleanup(() => { un.then(f => f()); });
+    onCleanup(() => { un.then(f => f()).catch(e => console.warn(e)); });
   });
   const installModel = () => {
     setAskModel(false); setDl(0);

@@ -28,6 +28,7 @@ import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
 import { Icon } from '../ui/icons';
 import { drawLane, drawRoll, rollX, rollY, type RollGeo } from './patternDraw';
 import { PatFrame, patternMenu, useDataVersion, useSize } from './patternShared';
+import { touch } from '../lib/touch';
 
 const LANE_H = 76, KW = 48;
 /** Steps past the pattern's end the roll lets you scroll to and draw in (the pattern grows). */
@@ -181,11 +182,11 @@ function Roll(props: { z: number }) {
   };
   let rafMain = 0, rafVel = 0;
   createEffect(() => {
-    data(); sel(); hoverKey(); marq(); zbox(); root(); mask(); void fonts.epoch; size(); view(); typingHeld(); ch(); pt().len;
+    data(); sel(); hoverKey(); marq(); zbox(); root(); mask(); touch(fonts.epoch); size(); view(); typingHeld(); ch(); touch(pt().len);
     if (!rafMain) rafMain = requestAnimationFrame(() => { rafMain = 0; untrack(drawMain); });
   });
   createEffect(() => {
-    data(); sel(); laneSize(); view(); size(); ch(); pt().len;
+    data(); sel(); laneSize(); view(); size(); ch(); touch(pt().len);
     if (!rafVel) rafVel = requestAnimationFrame(() => { rafVel = 0; untrack(drawVel); });
   });
   onCleanup(() => { cancelAnimationFrame(rafMain); cancelAnimationFrame(rafVel); });

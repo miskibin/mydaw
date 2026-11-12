@@ -16,6 +16,7 @@ import { rgba, T, theme } from '../ui/theme';
 import { Knob } from '../ui/Knob';
 import { autoDisplay, controlMenu, isAutomated, paramMenu } from '../state/automation';
 import { moveWindow } from './FxWindow';
+import { touch } from '../lib/touch';
 
 
 export function SampleEditor() {
@@ -45,7 +46,7 @@ function EditorBody(props: { clip: Clip; src: Source }) {
   // over it, so dragging a fade or a region edge costs the same for a 4 s or a 4 min file.
   const wave = new Layer();
   let dirty = true, themeEpoch = -1;
-  createEffect(() => { W(); H(); c().offset; c().len; c().fadeIn; c().fadeOut; c().gain; c().norm; c().rev; src().color; peaksVersion(); dirty = true; });
+  createEffect(() => { W(); H(); touch(c().offset, c().len, c().fadeIn, c().fadeOut, c().gain, c().norm, c().rev, src().color); peaksVersion(); dirty = true; });
   onMount(() => {
     const stop = addFrameTask(() => {
       if (themeEpoch !== theme.epoch) { themeEpoch = theme.epoch; dirty = true; }

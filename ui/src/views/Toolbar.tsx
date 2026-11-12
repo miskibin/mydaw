@@ -105,9 +105,9 @@ export function Toolbar() {
   onMount(() => {
     if (!win) return;
     const upd = () => win.isMaximized().then(setMaxed).catch(() => {});
-    upd();
+    void upd();
     let off: (() => void) | null = null;
-    win.onResized(upd).then(u => { off = u; });
+    win.onResized(upd).then(u => { off = u; }).catch(e => console.warn(e));
     onCleanup(() => off?.());
   });
   let lastDown = 0;

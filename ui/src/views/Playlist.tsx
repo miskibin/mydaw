@@ -29,6 +29,7 @@ import { addPoint, deletePoints, dragTension, hitEnv, movePoints, pointsInBox, s
 import { autoById } from '../state/store';
 import { openPattern } from '../state/pattern';
 import { rgba, T, theme } from '../ui/theme';
+import { touch } from '../lib/touch';
 
 
 /** Shared geometry, so the browser and OS drops can find a beat/track under the pointer. */
@@ -146,12 +147,12 @@ export function Playlist() {
   // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip.
   // The view's size is not here either: `planTile` asks for a full paint only when the tile's size changes.
   // Scrolling is not here: the canvases scroll with the content and redraw only strips (`draw`)
-  createEffect(() => { U.snap; U.tool; S.transport.rec; S.project.bpm; peaksVersion(); dirtyGrid = true; });
+  createEffect(() => { touch(U.snap, U.tool, S.transport.rec, S.project.bpm); peaksVersion(); dirtyGrid = true; });
   // a zoom step is handled in `draw`: a full paint, or the tile stretched until the zoom settles
   createEffect(on(() => U.bw, () => { zoomed = true; }, { defer: true }));
   // the loop range is shaded on the overlay: moving it repaints no clip
-  createEffect(() => { S.project.loop?.a; S.project.loop?.b; dirtyFade = true; });
-  createEffect(() => { for (const t of S.project.tracks) { t.h; t.arm; t.color; } dirtyGrid = true; });
+  createEffect(() => { touch(S.project.loop?.a, S.project.loop?.b); dirtyFade = true; });
+  createEffect(() => { for (const t of S.project.tracks) touch(t.h, t.arm, t.color); dirtyGrid = true; });
   /** The clip's box in grid coordinates (with its ring), or null when it is drawn beyond it (comps open take lanes). */
   const clipBox = (c: Clip, P: { tracks: Track[] }): Rect | null => {
     if (c.kind === 'comp') return null;
@@ -209,7 +210,7 @@ export function Playlist() {
   createEffect(on(() => prefs().clipIcons, () => { dirtyGrid = true; }, { defer: true }));
   createEffect(() => {
     for (const k in S.audition) void S.audition[k];
-    U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
+    touch(U.compSel?.from, U.compSel?.to, U.compSel?.clipId); rows(); bndHover(); dirtyGrid = true;
   });
   // envelope focus and point selection: only the automation clips involved are repainted
   let envDrawn: Id[] = [];
@@ -221,7 +222,7 @@ export function Playlist() {
     for (const c of P.clips) if (all.has(c.id)) damageClip(c, P);
     envDrawn = ids;
   });
-  createEffect(() => { U.bw; U.start; S.project.loop?.a; S.project.loop?.b; cw(); dirtyRuler = true; });
+  createEffect(() => { touch(U.bw, U.start, S.project.loop?.a, S.project.loop?.b); cw(); dirtyRuler = true; });
 
   /** The grid view of one frame; `at` places it on a region of the tile (tile-local CSS px). */
   const frameView = (): View => ({
@@ -1181,7 +1182,7 @@ export function Playlist() {
     onCleanup(() => ro.disconnect());
   });
   // drawn from the frame loop: a drag changes the arrangement on every pointer move
-  createEffect(() => { ovW(); ovRange(); arrVersion(); theme.epoch; dirtyOv = true; });
+  createEffect(() => { ovW(); ovRange(); arrVersion(); touch(theme.epoch); dirtyOv = true; });
   function drawOverview() {
     const W = ovW(), H = 18, R = ovRange();
     fitCanvas(ovCv, W, H);

@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="pl">
 <head>
 <meta charset="utf-8">
+<title>WAVE Studio — Playlista v5 (projekt)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="./support.js"></script>
 </head>
@@ -77,7 +78,7 @@ button,select,input{font:inherit}
         </button>
       </sc-for>
     </div>
-    <select onChange="{{ onSnap }}" value="{{ snapVal }}" title="Przyciąganie do siatki" style="height:28px;background:#0a0c0f;color:#d5dae2;border:1px solid #252b34;border-radius:5px;padding:0 6px;font:500 11px Geist,sans-serif;cursor:pointer">
+    <select id="snap-select" aria-label="Przyciąganie do siatki" onChange="{{ onSnap }}" value="{{ snapVal }}" title="Przyciąganie do siatki" style="height:28px;background:#0a0c0f;color:#d5dae2;border:1px solid #252b34;border-radius:5px;padding:0 6px;font:500 11px Geist,sans-serif;cursor:pointer">
       <sc-for list="{{ snapOpts }}" as="o" hint-placeholder-count="5"><option value="{{ o.v }}">{{ o.label }}</option></sc-for>
     </select>
     <div style="flex:1 1 0;min-width:0"></div>
@@ -399,7 +400,7 @@ button,select,input{font:inherit}
         <div style="flex:1"></div>
         <div style="display:flex;align-items:center;gap:6px">
           <span style="font:500 9px 'Geist Mono',monospace;color:#7d8592;letter-spacing:.08em">MIXER</span>
-          <select onChange="{{ edInsert }}" value="{{ ed.insertVal }}" style="height:26px;background:#0a0c0f;color:#d5dae2;border:1px solid #252b34;border-radius:4px;padding:0 6px;font:500 11px Geist,sans-serif;cursor:pointer">
+          <select id="mixer-insert" aria-label="Mikser" onChange="{{ edInsert }}" value="{{ ed.insertVal }}" style="height:26px;background:#0a0c0f;color:#d5dae2;border:1px solid #252b34;border-radius:4px;padding:0 6px;font:500 11px Geist,sans-serif;cursor:pointer">
             <sc-for list="{{ edInserts }}" as="o" hint-placeholder-count="9"><option value="{{ o.v }}">{{ o.label }}</option></sc-for>
           </select>
         </div>
@@ -519,7 +520,7 @@ button,select,input{font:inherit}
           </div>
         </sc-if>
         <sc-if value="{{ it.isRename }}" hint-placeholder-val="{{ false }}">
-          <input ref="{{ it.inputRef }}" onKeyDown="{{ it.onKey }}" style="margin:3px 4px;height:26px;padding:0 8px;background:#0a0c0f;color:#f2f4f7;border:1px solid #4f8ef7;border-radius:3px;outline:none;font:500 12px Geist,sans-serif">
+          <input id="rename-input" aria-label="Nowa nazwa" ref="{{ it.inputRef }}" onKeyDown="{{ it.onKey }}" style="margin:3px 4px;height:26px;padding:0 8px;background:#0a0c0f;color:#f2f4f7;border:1px solid #4f8ef7;border-radius:3px;outline:none;font:500 12px Geist,sans-serif">
         </sc-if>
       </sc-for>
     </div>

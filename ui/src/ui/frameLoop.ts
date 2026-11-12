@@ -59,7 +59,7 @@ export function fitCanvas(cv: HTMLCanvasElement, W: number, H: number): boolean 
 /** Bumped when web fonts finish loading, so canvases drawn with fallback glyphs redraw. */
 export const fonts = { epoch: 0 };
 if (typeof document !== 'undefined' && document.fonts) {
-  document.fonts.ready.then(() => { fonts.epoch++; });
+  void document.fonts.ready.then(() => { fonts.epoch++; });
   document.fonts.addEventListener('loadingdone', () => { fonts.epoch++; });
 }
 

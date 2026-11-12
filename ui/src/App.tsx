@@ -186,7 +186,7 @@ export function App() {
       if (ev.type === 'over') { if (!U.dragOver) setU('dragOver', true); }
       else if (ev.type === 'leave') setU('dragOver', false);
       else { setU('dragOver', false); if (ev.paths.length) void importAt(ev.paths, ev.x, ev.y, U.alt); }
-    }).then(u => { offDrop = u; });
+    }).then(u => { offDrop = u; }).catch(e => console.warn(e));
     onCleanup(() => {
       window.removeEventListener('keydown', onKey); window.removeEventListener('pointerdown', reclaimFocus, true); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur);
       offDrop?.();

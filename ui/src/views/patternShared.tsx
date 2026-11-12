@@ -19,6 +19,7 @@ import { track } from '../ui/drag';
 import { libGlyph, PICK_GLYPH, synthCategoryGlyph } from '../ui/menuIcons';
 import { theme } from '../ui/theme';
 import { moveWindow } from './FxWindow';
+import { touch } from '../lib/touch';
 
 /** Size of an element, tracked. */
 export function useSize(el: () => HTMLElement | undefined) {
@@ -35,7 +36,7 @@ export function useSize(el: () => HTMLElement | undefined) {
 export function useDataVersion() {
   const [v, setV] = createSignal(0);
   // arrVersion bumps on every arrangement change: no deep JSON walk of a 2000-note pattern per edit
-  createEffect(() => { arrVersion(); curPat(); channels(); theme.epoch; setV(x => x + 1); });
+  createEffect(() => { arrVersion(); curPat(); channels(); touch(theme.epoch); setV(x => x + 1); });
   return v;
 }
 

@@ -30,6 +30,7 @@ import { TuneViz } from './fx/tune';
 import { RiderViz } from './fx/rider';
 import { halfHit, HalfViz, halfXf } from './fx/half';
 import { onVoicePad, padParams, padToVoice, VoiceViz } from './fx/voice';
+import { touch } from '../lib/touch';
 
 
 function makeViz(f: Fx): Viz | null {
@@ -390,10 +391,10 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
   let version = 0, drawnVersion = -1, lastW = 0, fontEpoch = -1, themeEpoch = -1;
   createEffect(() => { // anything param-ish changes → redraw
     const f = ff()?.f; if (!f) return;
-    f.bypass; f.mix; for (const k in f.params) void f.params[k];
-    f.bands?.forEach(b => { b.on; b.type; b.f; b.g; b.q; b.slope; b.place; b.dynamic?.range; b.dynamic?.thr; });
-    f.bands?.length;
-    U.eqSel[props.fxId]; U.fetMode[props.fxId]; S.project.bpm; lang();
+    touch(f.bypass, f.mix); for (const k in f.params) touch(f.params[k]);
+    f.bands?.forEach(b => touch(b.on, b.type, b.f, b.g, b.q, b.slope, b.place, b.dynamic?.range, b.dynamic?.thr));
+    touch(f.bands?.length);
+    touch(U.eqSel[props.fxId], U.fetMode[props.fxId], S.project.bpm); lang();
     version++;
   });
   onMount(() => {
@@ -549,7 +550,7 @@ function Vst3Body(props: { fx: Fx }) {
   const [q, setQ] = createSignal('');
   let refresh = 0;
   const load = () => be().vst3Params(props.fx.id).then(p => { setParams(p); setErr(null); }).catch(e => setErr(String(e)));
-  onMount(() => { load(); be().appInfo().then(i => setEditors(i.pluginEditors)).catch(() => {}); });
+  onMount(() => { void load(); be().appInfo().then(i => setEditors(i.pluginEditors)).catch(() => {}); });
   onCleanup(() => { if (guiOpen()) void be().vst3Editor(props.fx.id, false).catch(() => {}); });
   const set = (id: number, v: number) => {
     setParams(ps => ps.map(p => p.id === id ? { ...p, value: v } : p));
