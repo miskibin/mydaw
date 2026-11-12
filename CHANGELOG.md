@@ -4,6 +4,38 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## 0.9.10 — 2026-11-12
+
+### Added
+- **Automation you edit right on the clip, with curves.** No more double-click to start
+  editing: drag any point straight away (Shift locks the value, Ctrl the time, Alt skips the
+  snap). Drag the dot halfway between two points to bend that stretch; right-click a point for
+  *Single curve*, *Double curve (S)*, *Hold* or *Stairs*, or to type in an exact value in the
+  control's own unit ("-6 dB", "1.2k"). Right-click empty space to add a point, double-click a
+  point to delete it, Ctrl+drag to select several and move or delete them together. Values show
+  as the knob shows them while you drag. What you see is exactly what plays.
+- **Piano roll: To new pattern (Ctrl+Shift+X).** Select notes and move them into a new pattern
+  in the same place. The playlist keeps playing them: every clip of the old pattern gets a clip
+  of the new one on a free track below. One undo step.
+- **Stacked clips are visible.** Where clips on a track overlap, the header is hatched; a clip
+  that hides others completely shows "×2", "×3"…, and clicking it says so.
+- **Audio comes back by itself.** If the audio device or driver stops (PipeWire/ALSA restart,
+  an interface unplugged), WAVE reopens it and tells you, instead of freezing the transport
+  until you change the audio settings.
+
+### Changed
+- **Picking or making a pattern from the toolbar opens the Channel Rack.** Browsing to a
+  shorter pattern no longer shrinks the rack, and it reopens as wide as you left it.
+- **A closed hand while you drag.** Clips, notes and windows show the grabbing cursor for the
+  whole drag (it used to stay an open hand).
+
+### Fixed
+- **Opening a saved project failed** with "undefined is not an object
+  (…hasOwnProperty…)". Missing audio files are now listed when a project opens.
+- **Cancelling the save dialog no longer loses work.** "Save" in the unsaved-changes question
+  followed by Cancel used to go on and discard the project.
+- The mixer no longer leaves a grabbing cursor behind after you reorder effects.
+
 ## 0.9.9 — 2026-11-11
 
 ### Added
