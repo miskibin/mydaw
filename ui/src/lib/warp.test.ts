@@ -4,6 +4,7 @@ import { newFx } from './presets';
 import { curveAt, valueAt } from './automation';
 import { speedAt, speedText } from './warp';
 import warpJson from '../../../crates/engine/src/warp_factory.json?raw';
+import { names } from '../i18n/names-fx';
 
 const cat = mockCatalog();
 
@@ -42,5 +43,19 @@ describe('Warp', () => {
     }
     // a vertical jump: two points at one time
     expect(valueAt([{ t: 0, v: 1 }, { t: 2, v: 1 }, { t: 2, v: 0.5 }, { t: 4, v: 0.5 }], 2)).toBe(0.5);
+  });
+  it('the map library is in the catalog, every map is valid and has an English name', () => {
+    const lib = cat.warpLibrary!;
+    expect(lib.time.length).toBeGreaterThanOrEqual(40);
+    expect(lib.vol.length).toBeGreaterThanOrEqual(30);
+    for (const m of [...lib.time, ...lib.vol]) {
+      expect(m.points.every((p, i, a) => i === 0 || a[i - 1].t <= p.t)).toBe(true);
+      expect(m.points.every(p => p.v >= 0 && p.v <= 1 && p.t >= 0 && p.t <= 4)).toBe(true);
+      // Polish letters left untranslated would show in the English UI
+      for (const n of [m.name, m.cat]) expect(names[n] ?? (/[ąćęłńóśźż]/i.test(n) ? undefined : n), n).toBeDefined();
+    }
+    // reverse maps really read backwards: slope −2 somewhere
+    const rev = lib.time.find(m => m.name === 'Wstecz — każda ćwierćnuta')!;
+    expect(speedAt(rev.points, 0.5)).toBeCloseTo(-1);
   });
 });

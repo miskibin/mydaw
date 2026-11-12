@@ -551,6 +551,9 @@ pub struct Catalog {
     pub synth: crate::poly::SynthCatalog,
     /// Warp's factory slots (what a new Warp holds, and what "restore slot" brings back).
     pub warp: crate::model::WarpMaps,
+    /// Warp's map library: ready-made maps by category, loaded into a slot from its menu.
+    #[serde(rename = "warpLibrary")]
+    pub warp_library: crate::dsp::warp::Library,
 }
 
 pub fn catalog() -> Catalog {
@@ -559,6 +562,7 @@ pub fn catalog() -> Catalog {
         presets: BUILTIN.iter().map(|&k| (k, presets(k))).collect(),
         synth: crate::poly::catalog(),
         warp: crate::dsp::warp::factory_maps(),
+        warp_library: crate::dsp::warp::library(),
     }
 }
 

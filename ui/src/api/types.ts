@@ -55,6 +55,7 @@ export interface Fx {
 /** A Warp map over one bar: `t` 0..4 beats, `v` 0..1 (time: 1 = now, 0 = 8 beats back; volume: gain). */
 export interface WarpSlot { name: string; points: AutoPoint[] }
 export interface WarpMaps { time: WarpSlot[]; vol: WarpSlot[] }
+export interface WarpLibraryMap { cat: string; name: string; points: AutoPoint[] }
 
 export interface Insert {
   id: Id; name: string; color: string;
@@ -345,6 +346,8 @@ export interface Catalog {
   synth: SynthCatalog;
   /** Warp's factory slots (catalog.rs `warp`). */
   warp?: WarpMaps;
+  /** Warp's map library by category (catalog.rs `warpLibrary`), loaded into a slot from its menu. */
+  warpLibrary?: { time: WarpLibraryMap[]; vol: WarpLibraryMap[] };
 }
 
 export interface AudioHost { id: string; name: string }

@@ -13,7 +13,7 @@ import { addPoint, deletePoints, dragTension, handleAt, hitEnv, movePoints, setS
 import * as A from '../../state/actions';
 import { commit, Gesture } from '../../state/edit';
 import { findFx, plain, S } from '../../state/store';
-import { openMenu, say } from '../../state/ui';
+import { openMenu, say, type MenuItem } from '../../state/ui';
 import { paramMenu } from '../../state/automation';
 import { dblCheck, track } from '../../ui/drag';
 import { FXMETA } from '../../ui/icons';
@@ -311,9 +311,17 @@ let clip: { bank: Bank; slot: { name: string; points: AutoPoint[] } } | null = n
 function slotMenu(cx: number, cy: number, fxId: number, viz: WarpViz, k: number, bump: () => void) {
   const f = findFx(fxId)?.f; if (!f || !f.maps) return;
   const bank = viz.bank, s = f.maps[bank][k], fac = S.catalog?.warp?.[bank][k];
-  const put = (slot: { name: string; points: AutoPoint[] }, lab: string) => { const op = slotOp(fxId, bank, k, structuredClone(plain(slot.points)), slot.name); if (op) commit([op], lab); viz.dirty = true; bump(); };
+  const put = (slot: { name: string; points: AutoPoint[] }, lab: string) => { const op = slotOp(fxId, bank, k, structuredClone(plain(slot.points)), slot.name); if (op) commit([op], lab); viz.edit[bank] = k; viz.dirty = true; bump(); };
+  // the library: ready-made maps of this bank, one submenu per category
+  const lib = S.catalog?.warpLibrary?.[bank] ?? [];
+  const cats = [...new Set(lib.map(m => m.cat))];
+  const libItems: MenuItem[] = cats.map(c => ({ t: 'sub', label: tName(c), items: lib.filter(m => m.cat === c).map(m => ({ t: 'item', label: tName(m.name), act: () => {
+    put({ name: m.name, points: m.points }, tr('c.fx.warp.loadMap'));
+    say(tr(bank === 'time' ? 'c.fx.warp.timeSlot' : 'c.fx.warp.volSlot') + ' ' + (k + 1) + ' · ' + tName(m.name));
+  } }) as MenuItem) }));
   openMenu(cx, cy, [
     { t: 'title', label: (k + 1) + ' · ' + tName(s?.name ?? '') },
+    ...(libItems.length ? [{ t: 'sec', label: tr('c.fx.warp.library') } as MenuItem, ...libItems, { t: 'sep' } as MenuItem] : []),
     { t: 'item', label: tr('c.fx.warp.copySlot'), act: () => { clip = { bank, slot: structuredClone(plain(s)) }; } },
     { t: 'item', label: tr('c.fx.warp.pasteSlot'), disabled: !clip, act: () => { if (clip) put(clip.slot, tr('c.fx.warp.pasteSlot')); } },
     { t: 'item', label: tr('c.fx.warp.clearSlot'), act: () => put({ name: s?.name ?? '', points: [{ t: 0, v: 1 }, { t: BAR, v: 1 }] }, tr('c.fx.warp.clearSlot')) },
@@ -321,7 +329,7 @@ function slotMenu(cx: number, cy: number, fxId: number, viz: WarpViz, k: number,
     { t: 'sep' },
     // switching slots over the song: an automation clip of the slot parameter (hold points)
     { t: 'item', label: tr('c.fx.warp.automateSlots'), act: () => queueMicrotask(() => paramMenu(cx, cy, { kind: 'fx', fxId, param: bank === 'time' ? 'tslot' : 'vslot' }, null, FXMETA.warp.color)) },
-  ], 230);
+  ], 230 + (libItems.length + 2) * 26);
 }
 
 /** Pointer move without buttons: hover state and cursor. */

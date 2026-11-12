@@ -552,6 +552,27 @@ impl Processor for Warp {
     }
 }
 
+/// One map of the library offered in the slot menu.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct LibraryMap {
+    /// Category (shown as a submenu).
+    pub cat: String,
+    pub name: String,
+    pub points: Vec<crate::model::AutoPoint>,
+}
+
+/// The map library (catalog `warpLibrary`): ready-made time and volume maps by category that
+/// load into any slot. `src/warp_library.json`.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct Library {
+    pub time: Vec<LibraryMap>,
+    pub vol: Vec<LibraryMap>,
+}
+
+pub fn library() -> Library {
+    serde_json::from_str(include_str!("../warp_library.json")).expect("warp_library.json is valid")
+}
+
 /// The factory slots (also the catalog's `warp` section): `src/warp_factory.json`.
 pub fn factory_maps() -> WarpMaps {
     #[derive(serde::Deserialize)]
@@ -884,6 +905,29 @@ mod tests {
             },
         );
         assert_eq!(l[LATENCY], 0.3);
+    }
+
+    #[test]
+    fn library_maps_are_valid_and_named_once() {
+        let lib = library();
+        assert!(lib.time.len() >= 40 && lib.vol.len() >= 30);
+        for (bank, maps) in [("time", &lib.time), ("vol", &lib.vol)] {
+            let mut names: Vec<&str> = maps.iter().map(|m| m.name.as_str()).collect();
+            names.sort();
+            let n = names.len();
+            names.dedup();
+            assert_eq!(names.len(), n, "{bank}: names are unique");
+            for m in maps.iter() {
+                assert!(!m.cat.is_empty() && !m.points.is_empty() && m.points.len() <= crate::model::WARP_POINTS, "{}", m.name);
+                assert!(m.points.windows(2).all(|w| w[0].t <= w[1].t), "{} is sorted", m.name);
+                assert!(m.points.iter().all(|p| (0.0..=1.0).contains(&p.v) && (0.0..=WARP_BAR).contains(&p.t)), "{}", m.name);
+            }
+        }
+        // a library map plays through the effect: half-time is an octave down
+        let half = lib.time.iter().find(|m| m.name == "Half-time — cały takt").unwrap();
+        let mut w = make(half.points.clone(), flat(), &[]);
+        let out = run(&mut w, |i| (i as f32 * 440.0 * std::f32::consts::TAU / SR).sin(), SPB * 4);
+        assert!((freq(&out[SPB..SPB * 3]) - 220.0).abs() < 1.0);
     }
 
     #[test]

@@ -28,6 +28,24 @@ Segment shapes (shared with automation clips, `model::curve_at`, checked against
 (square, 1–16 cycles from the tension), **wave** (cosine, an odd number of half cycles so it
 ends on its point), **half sine** (tension −1 ease in = tape stop, +1 ease out = tape start).
 
+## Map library
+
+Beyond the 16 + 16 slots, a library of ready-made maps (`crates/engine/src/warp_library.json`,
+catalog `warpLibrary`, also read by the UI mock) loads into any slot from its right-click menu
+(*Library → category → map*; one undo step, and the editor switches to that slot). Time maps
+(51): slow-down (half-time per bar / half bar / beat, quarter speed, a fifth down, sinking,
+dive), stutter and repeats (beat 1 ×4, first half, beats 1 and 3, last beat, 1/8, 1/16,
+triplet, end only, shrinking echo, 1/8 dub shift), rolls and build-ups (1/16, 1/32, triplet,
+1/4 → 1/32), tape (stops over a bar / half / beat / eighth, start, stop-and-start, wow, wobbly
+cassette), reverse (per beat / half bar / eighth, previous bar, last beat, forward–back, half
+speed, 2×), scratch (baby, chirp, per beat, triplet), glitch and speed (shuffled sixteenths,
+skips, catch-up ×2 / ×1.5, half-time + stutter). Volume maps (35): sidechain (1/4 hard /
+classic / gentle, 1/8, 1/2, with off-beat), gates (1/4 … 1/32, triplet, dotted 3/16, half
+bar), trance gates (four patterns, fading chop, 1/32 transformer), transitions (fades, swells),
+mutes (last beat / eighth, on 2 and 4, first beat only, off-beats only, second half), tremolo
+(1/4, 1/8, 1/16, triplet). The maps are our own, built from the musical idea (each time map is a
+list of "play the source from beat s at speed k" pieces, so it never reads the future).
+
 ## Parameters
 
 | id | | |

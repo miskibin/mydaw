@@ -18,6 +18,9 @@ Rename this heading to `## <version> — <date>` when releasing (docs/releasing.
   automation clip, or live; Trigger sync waits for the next 1/16 … bar, One-shot plays one bar
   and returns, Hold loops the previous or the next bar. Jumps are de-clicked, and drum hits
   keep their attack.
+- **A library of 86 ready-made Warp maps.** Right-click a slot → *Library*: stutters, rolls and
+  build-ups, half-time, tape stops and brakes, reverses, scratches, glitches (time), and
+  sidechain pumps, gates, trance gates, fades, mutes and tremolos (volume).
 - **Three new automation curve shapes:** pulse (square), wave and half sine (tape stop / start).
 
 ### Changed

@@ -6,6 +6,7 @@ import { addStarterKit, factoryChannel } from '../lib/factory';
 export { emptyProject } from '../lib/factory';
 import { SYNTH_CATALOG } from './synthCatalog';
 import warpFactoryJson from '../../../crates/engine/src/warp_factory.json?raw';
+import warpLibraryJson from '../../../crates/engine/src/warp_library.json?raw';
 
 /** catalog.rs `warp`: the factory slots, from the same file the engine embeds. */
 function warpFactory(): WarpMaps {
@@ -226,6 +227,7 @@ export function mockCatalog(): Catalog {
     presets: Object.fromEntries(BUILTIN.map(k => [k, PRESETS[k]])),
     synth: structuredClone(SYNTH_CATALOG),
     warp: warpFactory(),
+    warpLibrary: (({ time, vol }) => ({ time, vol }))(JSON.parse(warpLibraryJson)),
   };
 }
 
