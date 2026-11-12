@@ -258,6 +258,7 @@ export function autoValueText(p: Project, cat: Catalog | null, t: AutoTarget, v:
     case 'mix': return Math.round(x * 100) + '%';
     case 'synth': { const d = cat && synthParam(cat.synth, t.param); return d ? pFmt(d, x) : Math.round(v * 100) + '%'; }
     case 'keys': return t.param === 'release' ? x.toFixed(2) + ' s' : Math.round(x * 100) + '%';
+    case 'plugin': return Math.round(x * 100) + '%';
     case 'fx': {
       const b = parseBandParam(t.param);
       if (b) return b.k === 'f' ? hzText(x) : b.k === 'g' ? dbText(x) : 'Q ' + x.toFixed(2);
