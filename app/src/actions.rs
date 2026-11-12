@@ -247,7 +247,7 @@ pub fn context(app: &App, full: bool) -> Value {
 
 pub fn schema() -> Value {
     json!({
-        "automation": "an automation plays through a clip of kind `auto` whose `ref` is the automation id; points t = beats from the automation start, v = 0..1 normalised (log params normalised logarithmically)",
+        "automation": "an automation plays through a clip of kind `auto` whose `ref` is the automation id; points t = beats from the automation start, v = 0..1 normalised (log params normalised logarithmically); optional per point, for the segment ending there: tension -1..1 (0 = straight) and shape curve|double|hold|stairs (stairs: tension sets 2..16 steps)",
         "units": "time in beats (quarter notes); pattern len in beats (4 = 1 bar, derived from the notes, at least minLen), note step/len in sixteenths, note v (velocity) 0..1, swing 0..1; fades in seconds; vol = fader 0..1 (0.7937 = 0 dB); clip gain in dB; pan -1..1",
         "patterns": "channels are global (Channel Rack rows, `wave channels`); a pattern note plays channel `ch`; p = MIDI key (absent = the channel's root, the key at which a sampler plays its file unpitched); swing delays notes on odd 16ths by swing × ½ step; the pattern length is derived: the end of the last note rounded up to a bar, at least `minLen` beats (a `len` you send is ignored); when it changes, clips that show exactly one whole pass (offset 0) follow. Easier: `wave pattern --id N --ch C --steps \"x...x...x...x...\"`",
         "ids": "take new ids from context.nextId and count up",
@@ -268,7 +268,7 @@ pub fn schema() -> Value {
             "removeSource": {"id": 0},
             "setBpm": {"bpm": 128},
             "setLoop": {"loop": {"a": 0, "b": 16}},
-            "putAutomation": {"automation": {"id": 0, "name": "Reverb mix", "color": "#e0a44a", "target": {"kind": "fx|mix|insertVol|insertPan|trackVol|chanVol|chanPan|synth|keys|clipGain|clipPan", "fxId": 0, "chanId": 0, "param": "fx: mix or band:<i>:f|g|q; synth: catalog id; keys: release|dynamics", "id": "insert/track/channel/clip id for vol/pan/gain"}, "points": [{"t": 0, "v": 0.2}, {"t": 8, "v": 0.8}]}},
+            "putAutomation": {"automation": {"id": 0, "name": "Reverb mix", "color": "#e0a44a", "target": {"kind": "fx|mix|insertVol|insertPan|trackVol|chanVol|chanPan|synth|keys|clipGain|clipPan", "fxId": 0, "chanId": 0, "param": "fx: mix or band:<i>:f|g|q; synth: catalog id; keys: release|dynamics", "id": "insert/track/channel/clip id for vol/pan/gain"}, "points": [{"t": 0, "v": 0.2}, {"t": 8, "v": 0.8, "tension": -0.4}, {"t": 12, "v": 0.5, "shape": "hold"}]}},
             "removeAutomation": {"id": 0},
             "putComp": {"comp": {"id": 0, "name": "Comp 1", "xfade": 0.01, "takes": [{"id": 0, "name": "Take 1", "ref": "source id", "start": 0, "len": 8, "offset": 0}], "regions": [{"take": 0, "from": 0, "to": 4, "xfade": 0.02}]}},
             "removeComp": {"id": 0},

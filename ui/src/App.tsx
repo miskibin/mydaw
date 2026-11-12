@@ -83,7 +83,7 @@ function onKey(e: KeyboardEvent) {
   if (typingDown(e, typingTarget)) return;
   if (e.key === 'Escape') {
     if (U.menu) return closeMenu();
-    if (U.autoEdit != null) return setU('autoEdit', null);
+    if (U.autoSel) return setU('autoSel', null);
     if (U.musicWin) return A.closeMusicAnalysis();
     if (U.fxPicker) return setU('fxPicker', null);
     if (U.vstPicker) return setU('vstPicker', null);
@@ -135,7 +135,7 @@ function onKey(e: KeyboardEvent) {
   if (m && k === 'm') { e.preventDefault(); return A.toggleMuteSel(); }
   if (m && (k === '=' || k === '+')) { e.preventDefault(); return A.zoomAt(1.25); }
   if (m && k === '-') { e.preventDefault(); return A.zoomAt(0.8); }
-  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); return A.delIds([...U.sel]); }
+  if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); return U.autoSel?.idx.length ? A.deleteAutoPoints() : A.delIds([...U.sel]); }
   if (e.key === 'Home') { e.preventDefault(); return A.seek(0); }
   if (e.key === '?') return setU('help', !U.help);
   if (m && !e.shiftKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown') && swapTake(e.key === 'ArrowUp' ? -1 : 1)) { e.preventDefault(); return; }

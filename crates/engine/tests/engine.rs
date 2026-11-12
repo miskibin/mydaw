@@ -329,7 +329,7 @@ fn automation_moves_volume_and_effect_params() {
         name: "Drums vol".into(),
         color: "#e0a44a".into(),
         target: AutoTarget::InsertVol { id: 1 },
-        points: vec![AutoPoint { t: 0.0, v: VOL_UNITY }, AutoPoint { t: 1.99, v: VOL_UNITY }, AutoPoint { t: 2.0, v: 0.0 }],
+        points: vec![AutoPoint::at(0.0, VOL_UNITY), AutoPoint::at(1.99, VOL_UNITY), AutoPoint::at(2.0, 0.0)],
     });
     // only drums audible
     for t in p.tracks.iter_mut().skip(1) {

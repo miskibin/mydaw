@@ -76,8 +76,8 @@ export interface UiState {
   takesOpen: Record<number, boolean>;
   /** comp time selection (comp beats): the last swiped range, the target of Ctrl+↑/↓ */
   compSel: { clipId: Id; from: number; to: number } | null;
-  /** automation clip whose envelope is being edited inline on the playlist */
-  autoEdit: Id | null;
+  /** selected points of one automation clip's envelope (indices into its points) */
+  autoSel: { clip: Id; idx: number[] } | null;
   /** next z for plugin windows (monotonic) */
   zTop: number;
   marquee: { x0: number; y0: number; x1: number; y1: number } | null;
@@ -94,7 +94,7 @@ export const [U, setU] = createStore<UiState>({
   plugs: [], plugsHidden: false, editor: null, menu: null, help: false, settings: false, exportOpen: false, exportBusy: false, vstPicker: null, fxPicker: null, musicWin: null,
   readout: t('d.ui.ready'),
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
-  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, pat: 1, selCh: null, rackWin: null, rollWin: null, rackGraph: null, patPlaying: false, takesOpen: {}, compSel: null, autoEdit: null, zTop: 1, marquee: null,
+  ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, pat: 1, selCh: null, rackWin: null, rollWin: null, rackGraph: null, patPlaying: false, takesOpen: {}, compSel: null, autoSel: null, zTop: 1, marquee: null,
   playing: false, previewing: false, previewPath: null,
 });
 
@@ -136,6 +136,6 @@ export function menuPos(x: number, y: number, h: number) {
 export function openMenu(x: number, y: number, items: MenuItem[], h = 300) {
   setU('menu', { ...menuPos(x, y, h), items });
 }
-export function openRename(x: number, y: number, value: string, done: (v: string) => void) {
-  openMenu(x, y, [{ t: 'title', label: t('d.ui.renameTitle') }, { t: 'rename', value, done }], 80);
+export function openRename(x: number, y: number, value: string, done: (v: string) => void, title = t('d.ui.renameTitle')) {
+  openMenu(x, y, [{ t: 'title', label: title }, { t: 'rename', value, done }], 80);
 }

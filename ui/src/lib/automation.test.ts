@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { sketchProject, mockCatalog } from '../api/mockData';
-import { CLIP_GAIN_DB, KEYS_RELEASE, VOL_UNITY, type AutoTarget, type Channel, type Clip, type Project } from '../api/types';
+import { CLIP_GAIN_DB, KEYS_RELEASE, VOL_UNITY, type AutoTarget, type CurveShape, type Channel, type Clip, type Project } from '../api/types';
 import { applyAll } from './applyOps';
-import { createAutomationOps, denormalize, normalize, readTarget, targetKey, targetLabel } from './automation';
+import { createAutomationOps, curveAt, denormalize, normalize, autoValueText, parseAutoValue, readTarget, sortPoints, targetKey, targetLabel, valueAt } from './automation';
 import { newSynthChannel, synthParam } from './synth';
+import curvesJson from '../../../crates/engine/tests/fixtures/curves.json?raw';
 
 const cat = mockCatalog();
 
@@ -105,5 +106,41 @@ describe('automation of channels, synth and Keys parameters, and audio clips', (
     expect(targetLabel(p, cat, targets[2])).toMatch(/^Lead · /);
     expect(targetLabel(p, cat, { kind: 'keys', chanId: 7002, param: 'release' })).toMatch(/^Piano · /);
     expect(targetLabel(p, cat, { kind: 'clipGain', id: 7003 })).toContain(' · ');
+  });
+});
+
+describe('segment shapes', () => {
+  it('match the engine on the shared reference values', () => {
+    const doc = JSON.parse(curvesJson) as { cases: { shape: CurveShape; tension: number; f: number; g: number }[] };
+    expect(doc.cases.length).toBeGreaterThan(100);
+    for (const c of doc.cases) expect(Math.abs(curveAt(c.shape, c.tension, c.f) - c.g), `${c.shape} ${c.tension} ${c.f}`).toBeLessThan(1e-9);
+  });
+  it('shape the segment that ends at a point, and old points stay straight', () => {
+    expect(valueAt([{ t: 0, v: 0 }, { t: 4, v: 1 }], 1)).toBeCloseTo(0.25, 9);
+    expect(valueAt([{ t: 0, v: 0 }, { t: 4, v: 1, shape: 'hold' }], 3.99)).toBe(0);
+    expect(valueAt([{ t: 0, v: 0 }, { t: 4, v: 1, shape: 'hold' }], 4)).toBe(1);
+    expect(valueAt([{ t: 0, v: 0 }, { t: 4, v: 1, tension: 1 }], 2)!).toBeLessThan(0.05);
+  });
+  it('keeps the shapes when points are sorted', () => {
+    expect(sortPoints([{ t: 4, v: 1, shape: 'stairs', tension: 0.5 }, { t: 0, v: 0 }])).toEqual([{ t: 0, v: 0 }, { t: 4, v: 1, shape: 'stairs', tension: 0.5 }]);
+  });
+});
+
+describe('point values in the control\'s unit', () => {
+  const p = sketchProject(cat);
+  it('shows and reads volume in dB and pan as L / R', () => {
+    const vol: AutoTarget = { kind: 'insertVol', id: p.inserts[1].id };
+    const v = parseAutoValue(p, cat, vol, '-6 dB')!;
+    expect(autoValueText(p, cat, vol, v)).toBe('-6.0 dB');
+    expect(parseAutoValue(p, cat, vol, '-inf')).toBe(0);
+    const pan: AutoTarget = { kind: 'insertPan', id: p.inserts[1].id };
+    expect(autoValueText(p, cat, pan, parseAutoValue(p, cat, pan, '25 L')!)).toBe('25L');
+    expect(autoValueText(p, cat, pan, 0.5)).toBe('C');
+  });
+  it('reads kHz and rejects text that is no number', () => {
+    const fx = p.inserts.flatMap(m => m.fx).find(f => f.type === 'eq')!;
+    const f: AutoTarget = { kind: 'fx', fxId: fx.id, param: 'band:0:f' };
+    expect(autoValueText(p, cat, f, parseAutoValue(p, cat, f, '1.2k')!)).toBe('1.20 kHz');
+    expect(parseAutoValue(p, cat, f, 'loud')).toBeNull();
   });
 });

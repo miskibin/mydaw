@@ -199,16 +199,24 @@ function Rack(props: { z: number }) {
     setU('rackGraph', on ? 'vel' : null);
     if (w) setU('rackWin', 'h', clamp(w.h + (on ? GRAPH_H : -GRAPH_H), 200, window.innerHeight - w.y - 10));
   };
-  // The window's width follows the pattern's length, both ways (longer / shorter pattern, + / − bar,
-  // another pattern, undo): the pattern and its greyed bar at the comfortable step width, up to ~4
-  // bars and the screen's edge (beyond that the grid scrolls). Only a length change refits, so a
-  // width the user set by hand stays until then; never while steps are painted (`hold`): on release.
-  let fitted = stepsOf(pt());
+  // The window's width follows the pattern's length: the pattern and its greyed bar at the
+  // comfortable step width, up to the screen's edge (beyond that the grid scrolls). Switching to
+  // another pattern only ever widens it (FL keeps the rack's size as you browse patterns: a
+  // shorter one shows empty room instead of the window jumping); + / − bar and undo on the same
+  // pattern refit both ways. Only a change refits, so a width set by hand stays until then; never
+  // while steps are painted (`hold`): on release.
+  let fitted = stepsOf(pt()), fittedId = pt().id;
   createEffect(() => {
-    const steps = stepsOf(pt());
-    if (hold() || steps === fitted) return;
-    fitted = steps;
-    untrack(() => { const w = U.rackWin; if (w) { const pl = rackPlaceFor(steps, w.x); setU('rackWin', v => v && { ...v, x: pl.x, w: pl.w }); } });
+    const steps = stepsOf(pt()), id = pt().id;
+    if (hold() || (steps === fitted && id === fittedId)) return;
+    const other = id !== fittedId;
+    fitted = steps; fittedId = id;
+    untrack(() => {
+      const w = U.rackWin; if (!w) return;
+      const pl = rackPlaceFor(steps, w.x);
+      if (other && pl.w <= w.w) return;
+      setU('rackWin', v => v && { ...v, x: pl.x, w: pl.w });
+    });
   });
   /** Ctrl+C / X / V: copy, cut, paste the selected channel's notes in the current pattern (FL). */
   const clipboardKey = (k: 'c' | 'x' | 'v') => {

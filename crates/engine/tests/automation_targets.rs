@@ -21,7 +21,7 @@ fn auto_clip(id: Id, source: Id, track: u32, len: f64) -> Clip {
 
 /// Full for 2 beats, then `then`.
 fn step_down(id: Id, target: AutoTarget, from: f32, then: f32) -> Automation {
-    Automation { id, name: "a".into(), color: "#e0a44a".into(), target, points: vec![AutoPoint { t: 0.0, v: from }, AutoPoint { t: 1.99, v: from }, AutoPoint { t: 2.0, v: then }] }
+    Automation { id, name: "a".into(), color: "#e0a44a".into(), target, points: vec![AutoPoint::at(0.0, from), AutoPoint::at(1.99, from), AutoPoint::at(2.0, then)] }
 }
 
 /// The demo song with only the drums track audible and no master effects.
@@ -80,7 +80,7 @@ fn a_clips_gain_automation_glides_without_steps() {
     let e = Engine::new(p, Arc::new(NoPlugins));
     let (_, clips) = e.import_audio(std::slice::from_ref(&wav), Some((0, 0.0))).unwrap();
     // gain ramps from +12 dB (v = 1) down to −24 dB (v = 0) over 4 beats
-    let a = Automation { id: 9200, name: "g".into(), color: "#e0a44a".into(), target: AutoTarget::ClipGain { id: clips[0] }, points: vec![AutoPoint { t: 0.0, v: 1.0 }, AutoPoint { t: 4.0, v: 0.0 }] };
+    let a = Automation { id: 9200, name: "g".into(), color: "#e0a44a".into(), target: AutoTarget::ClipGain { id: clips[0] }, points: vec![AutoPoint::at(0.0, 1.0), AutoPoint::at(4.0, 0.0)] };
     e.apply(&[Op::PutAutomation { automation: a }, Op::PutClips { clips: vec![auto_clip(9201, 9200, 0, 4.0)] }], false, None).unwrap();
     let out = e.render(0.0, 4.0, 0.0, SR).unwrap();
     let early = rms(&out[at(0.1)..at(0.3)]);
@@ -163,7 +163,7 @@ fn an_edit_during_playback_keeps_the_automated_value() {
     }
     let e = Engine::new(p, Arc::new(NoPlugins));
     let (_, clips) = e.import_audio(std::slice::from_ref(&wav), Some((0, 0.0))).unwrap();
-    let a = Automation { id: 9500, name: "g".into(), color: "#e0a44a".into(), target: AutoTarget::ClipGain { id: clips[0] }, points: vec![AutoPoint { t: 0.0, v: 0.0 }] };
+    let a = Automation { id: 9500, name: "g".into(), color: "#e0a44a".into(), target: AutoTarget::ClipGain { id: clips[0] }, points: vec![AutoPoint::at(0.0, 0.0)] };
     e.apply(&[Op::PutAutomation { automation: a }, Op::PutClips { clips: vec![auto_clip(9501, 9500, 0, 16.0)] }], false, None).unwrap();
     let mut rt = e.create_rt(SR as f32, BLOCK);
     e.play(0.0);
@@ -186,4 +186,34 @@ fn an_edit_during_playback_keeps_the_automated_value() {
         assert!(p < held * 1.1, "edit {k}: the static 0 dB came back for a moment (peak {p})");
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The segment shapes against reference values that the UI checks too (`ui/src/lib/automation.test.ts`).
+#[test]
+fn curve_shapes_match_the_shared_reference() {
+    let doc: serde_json::Value = serde_json::from_str(include_str!("fixtures/curves.json")).unwrap();
+    for c in doc["cases"].as_array().unwrap() {
+        let shape: CurveShape = serde_json::from_value(c["shape"].clone()).unwrap();
+        let (k, f, g) = (c["tension"].as_f64().unwrap() as f32, c["f"].as_f64().unwrap(), c["g"].as_f64().unwrap());
+        let got = curve_at(shape, k, f);
+        assert!((got - g).abs() < 1e-6, "{shape:?} k={k} f={f}: {got} != {g}"); // tension is f32 here
+    }
+}
+
+#[test]
+fn shaped_segments_play_their_shape_and_old_points_stay_straight() {
+    // an old project's points (no tension, no shape) read and play exactly as before
+    let old: Vec<AutoPoint> = serde_json::from_str(r#"[{"t":0,"v":0},{"t":4,"v":1}]"#).unwrap();
+    let a = Automation { id: 1, name: "a".into(), color: "#fff".into(), target: AutoTarget::TrackVol { id: 1 }, points: old };
+    assert!((a.value_at(1.0).unwrap() - 0.25).abs() < 1e-6);
+    // and they are written back without the new fields
+    assert_eq!(serde_json::to_string(&a.points[1]).unwrap(), r#"{"t":4.0,"v":1.0}"#);
+    let mut b = a.clone();
+    b.points[1].shape = CurveShape::Hold;
+    assert_eq!(b.value_at(3.99), Some(0.0));
+    assert_eq!(b.value_at(4.0), Some(1.0));
+    b.points[1] = AutoPoint { tension: 1.0, shape: CurveShape::Curve, ..b.points[1] };
+    assert!(b.value_at(2.0).unwrap() < 0.05, "a bent curve rises late");
+    let json = serde_json::to_string(&b.points[1]).unwrap();
+    assert!(json.contains(r#""tension":1.0"#) && !json.contains("shape"), "{json}");
 }

@@ -414,12 +414,13 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
         }
         Op::PutAutomation { automation } => {
             let mut a = automation.clone();
-            if a.points.iter().any(|q| !q.t.is_finite() || !q.v.is_finite()) {
+            if a.points.iter().any(|q| !q.t.is_finite() || !q.v.is_finite() || !q.tension.is_finite()) {
                 return Err(OpError::Invalid("automation points must be numbers".into()));
             }
             a.points.sort_by(|x, y| x.t.total_cmp(&y.t));
             for q in a.points.iter_mut() {
                 q.v = q.v.clamp(0.0, 1.0);
+                q.tension = q.tension.clamp(-1.0, 1.0);
             }
             bump(p, a.id);
             match p.automations.iter_mut().find(|x| x.id == a.id) {

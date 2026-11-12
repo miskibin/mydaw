@@ -117,6 +117,20 @@ the source's length, and every playlist clip of the source gets a clip of the ne
 beside it, on the nearest lane below that is free over its span (a new lane when none is),
 so the song sounds the same. It is one undo step (`lib/moveNotes.ts`).
 
+**Automation clips** are edited on the playlist without an edit mode, as in FL. Points and the
+tension handles halfway along each segment (shown on the clip under the pointer) are live:
+- drag a point (Shift locks the value, Ctrl the time, Alt skips the snap), or drag a handle to
+  bend the segment (Ctrl: finer);
+- double-click: a point deletes it, a handle straightens it, empty envelope adds a point;
+- right-click: empty envelope adds a point that stays under the pointer until release, a point
+  opens its menu (type in a value in the control's unit, curve type, delete);
+- Ctrl+drag selects points (Shift adds); a selection moves together and Delete removes it.
+Each `AutoPoint` may carry `tension` (−1..1) and `shape` (`curve`, `double`, `hold`, `stairs`,
+default `curve`) for the segment that ends at it. They are omitted when default, so older
+projects load and play unchanged. `curve_at` (model.rs) and `curveAt` (`lib/automation.ts`) are
+the same formulas, both checked against `crates/engine/tests/fixtures/curves.json`. The engine
+still evaluates automation once per audio block, so a hold or a stair lands on a block boundary.
+
 **Stacked clips.** Clips may overlap on a track, as in FL (layers, crossfades). The
 playlist overlay hatches the header where clips of a track play at once, and puts "×N" on a
 clip that hides N − 1 clips entirely (`lib/overlaps.ts`). Clicking such a clip says so in

@@ -134,9 +134,14 @@ export function applyOp(p: Project, op: Op): void {
       p.loop = op.loop ? { ...op.loop } : null; return;
     case 'putAutomation': {
       const a = structuredClone(op.automation);
-      if (a.points.some(q => !isFinite(q.t) || !isFinite(q.v))) throw new OpError('automation points must be numbers');
+      if (a.points.some(q => !isFinite(q.t) || !isFinite(q.v) || (q.tension != null && !isFinite(q.tension)))) throw new OpError('automation points must be numbers');
       a.points.sort((x, y) => x.t - y.t);
-      for (const q of a.points) q.v = Math.min(1, Math.max(0, q.v));
+      for (const q of a.points) {
+        q.v = Math.min(1, Math.max(0, q.v));
+        // as the engine stores them: no tension / shape fields when straight
+        if (q.tension != null) { q.tension = Math.min(1, Math.max(-1, q.tension)); if (!q.tension) delete q.tension; }
+        if (q.shape === 'curve') delete q.shape;
+      }
       bump(p, a.id);
       const list = p.automations ?? (p.automations = []);
       const i = list.findIndex(x => x.id === a.id);

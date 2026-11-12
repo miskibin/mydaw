@@ -1,4 +1,4 @@
-import { curPat, newPattern, patMode, setPatMode, stepPattern, toggleRack, toggleRoll } from '../state/pattern';
+import { curPat, newPattern, openRack, patMode, setPatMode, stepPattern, toggleRack, toggleRoll } from '../state/pattern';
 import { patternMenu } from './patternShared';
 import { t, type TranslationKey } from '../lib/i18n';
 import { setTypingOn, typingBase, typingOn } from '../state/typingKeys';
@@ -313,7 +313,7 @@ function PatSelector() {
   return (
     <div class="patselbox" data-patsel>
       <button class="patselbtn" title={t('b.ps.title')} onWheel={wheel}
-        onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); patternMenu(r.left, r.bottom + 4); }}>
+        onClick={e => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); patternMenu(r.left, r.bottom + 4, true); }}>
         <Show when={curPat()} fallback={<span class="ell" style={{ color: 'var(--fg5)' }}>—</span>}>
           {p => <>
             <span class="num mono">{n()}</span>
@@ -323,7 +323,7 @@ function PatSelector() {
         </Show>
         <svg width="8" height="8" viewBox="0 0 8 8"><path d="M1 2.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.3" /></svg>
       </button>
-      <button class="patselnew" title={t('b.pat.new')} onClick={newPattern}><Icon d="M12 5v14 M5 12h14" size={11} /></button>
+      <button class="patselnew" title={t('b.pat.new')} onClick={() => { newPattern(); openRack(); }}><Icon d="M12 5v14 M5 12h14" size={11} /></button>
     </div>
   );
 }

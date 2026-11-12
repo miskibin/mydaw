@@ -3,7 +3,7 @@ import { t as tl } from '../lib/i18n';
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { InstIcon, trackIcon } from '../ui/instIcons';
-import { VOL_UNITY, type Channel, type Clip, type Comp, type Id, type Op, type Take, type Track } from '../api/types';
+import { VOL_UNITY, type Automation, type AutoPoint, type Channel, type Clip, type Comp, type CurveShape, type Id, type Op, type Take, type Track } from '../api/types';
 import { boundaries, boundaryXfade, moveBoundary, setBoundaryXfade, takeEnd, toComp, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import * as CA from '../state/comp';
 import { compById, LANE_H, takeRow, type TakeRow } from '../state/comp';
@@ -24,7 +24,8 @@ import { drawFades, drawGrid, drawOverlaps, drawRuler, type View } from './playl
 import { laneOverlaps } from '../lib/overlaps';
 import { damageRects, followScroll, planTile, snapPx, type Rect, type Tile } from './playlistTile';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
-import { sortPoints } from '../lib/automation';
+import { autoValueText, parseAutoValue, stairsOf } from '../lib/automation';
+import { addPoint, deletePoints, dragTension, hitEnv, movePoints, pointsInBox, setShape, type EnvHit } from '../lib/envEdit';
 import { autoById } from '../state/store';
 import { openPattern } from '../state/pattern';
 import { rgba, T, theme } from '../ui/theme';
@@ -140,7 +141,8 @@ export function Playlist() {
   const ZOOM_SETTLE_MS = 90;
   /** Bumped when the clip lookups of `drawGrid` (patterns, sources, …) may be stale: not for a clip-only edit. */
   let lookVer = 0;
-  const [autoHover, setAutoHover] = createSignal<number | null>(null);
+  /** The automation clip under the pointer, and the point / tension handle there. */
+  const [envHover, setEnvHover] = createSignal<{ clip: Id; hover: EnvHit | null } | null>(null);
   // what the grid canvas depends on (not mixer state), split so a zoom does not re-walk every clip.
   // The view's size is not here either: `planTile` asks for a full paint only when the tile's size changes.
   // Scrolling is not here: the canvases scroll with the content and redraw only strips (`draw`)
@@ -209,12 +211,21 @@ export function Playlist() {
     for (const k in S.audition) void S.audition[k];
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
   });
-  createEffect(() => { U.autoEdit; autoHover(); dirtyGrid = true; });
+  // envelope focus and point selection: only the automation clips involved are repainted
+  let envDrawn: Id[] = [];
+  createEffect(() => {
+    const hv = envHover(), sel = U.autoSel, ids: Id[] = [];
+    if (hv) ids.push(hv.clip);
+    if (sel) { ids.push(sel.clip); void [...sel.idx]; }
+    const P = unwrap(S.project), all = new Set([...envDrawn, ...ids]);
+    for (const c of P.clips) if (all.has(c.id)) damageClip(c, P);
+    envDrawn = ids;
+  });
   createEffect(() => { U.bw; U.start; S.project.loop?.a; S.project.loop?.b; cw(); dirtyRuler = true; });
 
   /** The grid view of one frame; `at` places it on a region of the tile (tile-local CSS px). */
   const frameView = (): View => ({
-    offX: 0, offY: 0, W: 0, H: 0, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, autoEdit: U.autoEdit, autoHover: autoHover(),
+    offX: 0, offY: 0, W: 0, H: 0, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, env: envHover(), autoSel: U.autoSel ? { clip: U.autoSel.clip, idx: [...U.autoSel.idx] } : null,
     rows: rows().map(r => r && { clip: unwrap(r.clip), comp: unwrap(r.comp) }), laneH: LANE_H, audition: { ...S.audition }, compSel: U.compSel ? { ...U.compSel } : null, bndHover: bndHover(), ver: lookVer,
   });
   const at = (v: View, t: Tile, r: Rect): View => ({ ...v, offX: t.x + r.x, offY: t.y + r.y, W: r.w, H: r.h });
@@ -552,13 +563,14 @@ export function Playlist() {
     const bh = h?.edge === 'cb' ? { clipId: h.c.id, i: h.bnd! } : null, cur0 = bndHover();
     if ((bh?.clipId ?? -1) !== (cur0?.clipId ?? -1) || (bh?.i ?? -1) !== (cur0?.i ?? -1)) setBndHover(bh);
     if (L) { const c = editable() ? 'text' : toolCursor(); if (gridCv.style.cursor !== c) gridCv.style.cursor = c; return; }
-    if (U.autoEdit != null && h && h.c.id === U.autoEdit && p.y > tops()[h.c.track] + 16) {
-      const i = envHit(h.c, p.x, p.y);
-      if (i !== autoHover()) setAutoHover(i < 0 ? null : i);
-      gridCv.style.cursor = i >= 0 ? 'move' : 'copy';
-      return;
-    }
-    if (autoHover() != null) setAutoHover(null);
+    // an automation clip: its points and tension handles are live under the pointer (no edit mode)
+    const prevEnv = envHover();
+    if (h?.c.kind === 'auto' && editable()) {
+      const hv = envAt(h.c, p.x, p.y);
+      if (!prevEnv || prevEnv.clip !== h.c.id || !sameHit(prevEnv.hover, hv)) setEnvHover({ clip: h.c.id, hover: hv });
+      if (!prevEnv || prevEnv.clip !== h.c.id) say(tl('a.pl.autoEditHint'));
+      if (hv) { const c = hv.kind === 'point' ? 'move' : 'ns-resize'; if (gridCv.style.cursor !== c) gridCv.style.cursor = c; return; }
+    } else if (prevEnv) setEnvHover(null);
     let cur = toolCursor();
     if (h) {
       if (h.edge === 'menu') cur = 'pointer';
@@ -576,10 +588,8 @@ export function Playlist() {
     const modK = e.ctrlKey || e.metaKey;
     if (e.button === 2 && modK) return zoomBoxDrag(e);
     const p = pt(e), h = hit(p.x, p.y), id = h?.c.id ?? null;
-    if (U.autoEdit != null) {
-      if (h && h.c.id === U.autoEdit && (e.button === 0 || e.button === 2) && envDown(e, h.c, p.x, p.y)) return;
-      if (!h || h.c.id !== U.autoEdit) setU('autoEdit', null);
-    }
+    if (h?.c.kind === 'auto' && editable() && (e.button === 0 || e.button === 2) && envDown(e, h.c, p.x, p.y)) return;
+    if (U.autoSel && (!h || h.c.id !== U.autoSel.clip)) setU('autoSel', null);
     const L = laneHit(p.x, p.y);
     if (L) {
       e.preventDefault(); closeMenu();
@@ -774,7 +784,12 @@ export function Playlist() {
   const gridDbl = (e: MouseEvent) => {
     const p = pt(e), h = hit(p.x, p.y); if (!h) return;
     if (h.c.kind === 'comp') { if (!U.sel.includes(h.c.id)) setU('sel', [h.c.id]); CA.toggleTakes(h.c.track); return; }
-    if (h.c.kind === 'auto') { setU({ autoEdit: h.c.id, sel: [h.c.id] }); say(tl('a.pl.autoEditHint')); return; }
+    // the envelope handles its own double-clicks (add / delete a point, straighten); on the header: every point
+    if (h.c.kind === 'auto') {
+      const a = autoById(h.c.ref);
+      if (a && p.y < envGeom(h.c).by) { setU('autoSel', { clip: h.c.id, idx: a.points.map((_, i) => i) }); say(tl('a.pl.ptsSelected', { n: a.points.length })); }
+      return;
+    }
     setU('cur', { kind: h.c.kind, ref: h.c.ref });
     if (h.c.kind === 'audio') A.openEditor(h.c.id);
     if (h.c.kind === 'pat') openPattern(h.c.ref);
@@ -785,43 +800,152 @@ export function Playlist() {
     const t = tops(), tr = S.project.tracks[c.track], cy = t[c.track] + 1, by = cy + 15, bh = tr.h - 2 - 15, pad = 3;
     return { by, bh, X: (tt: number) => (c.start + tt - c.offset) * U.bw, Y: (v: number) => by + pad + (1 - v) * (bh - 2 * pad), T: (x: number) => x / U.bw - c.start + c.offset, V: (y: number) => clamp(1 - (y - by - pad) / (bh - 2 * pad), 0, 1) };
   };
-  const envHit = (c: Clip, x: number, y: number) => {
-    const a = autoById(c.ref); if (!a) return -1;
-    const G = envGeom(c);
-    let best = -1, bd = 8;
-    a.points.forEach((q, i) => { const d = Math.hypot(G.X(q.t) - x, G.Y(q.v) - y); if (d < bd) { bd = d; best = i; } });
-    return best;
+  const sameHit = (a: EnvHit | null, b: EnvHit | null) => a === b || (!!a && !!b && a.kind === b.kind && a.i === b.i);
+  /** The point or handle of automation clip `c` under (x, y): none on its header or beyond its envelope. */
+  const envAt = (c: Clip, x: number, y: number): EnvHit | null => {
+    const a = autoById(c.ref); if (!a) return null;
+    const G = envGeom(c); if (y < G.by || G.bh < 14) return null;
+    return hitEnv(a.points, G, x, y);
   };
+  const putEnv = (a: Automation, points: AutoPoint[]): Op => ({ op: 'putAutomation', automation: { ...plain(a), points } });
+  const withTension = (q: AutoPoint, k: number): AutoPoint => { const { tension: _t, ...r } = q; return Math.abs(k) < 1e-3 ? r : { ...r, tension: k }; };
+  const valText = (a: Automation, v: number) => autoValueText(unwrap(S.project), S.catalog, a.target, v);
+  /** Straightens the segments ending at `idx` (tension back to 0). */
+  const straighten = (a: Automation, idx: number[]) => {
+    commit([putEnv(a, plain(a.points).map((q, i) => (idx.includes(i) ? withTension(q, 0) : q)))], tl('a.pl.straighten'));
+    say(tl('a.pl.straighten'));
+  };
+  /**
+   * A press on an automation clip's envelope (below its header). Points and handles work without
+   * an edit mode, as in FL: drag a point (Shift locks the value, Ctrl the time, Alt skips the
+   * snap); drag a handle to bend (Ctrl: finer); double-click a point to delete it, a handle to
+   * straighten, empty envelope to add a point; Ctrl+drag selects points; right-click adds a point
+   * (held: placed by the drag), opens a point's menu, or straightens a handle. False: not ours
+   * (the clip moves as any clip).
+   */
   const envDown = (e: PointerEvent, c: Clip, x: number, y: number): boolean => {
     const a = autoById(c.ref); if (!a) return false;
     const G = envGeom(c);
-    if (y < G.by) return false;
-    e.preventDefault();
-    let i = envHit(c, x, y);
+    if (y < G.by || G.bh < 14) return false;
+    if (e.button === 0 && (U.tool === 'erase' || U.tool === 'mute' || U.tool === 'slice')) return false;
+    const pts = plain(a.points), hit = hitEnv(pts, G, x, y), modK = e.ctrlKey || e.metaKey;
+    e.preventDefault(); closeMenu();
+    if (!U.sel.includes(c.id)) setU('sel', [c.id]);
     if (e.button === 2) {
-      if (i >= 0 && a.points.length > 1) { commit([{ op: 'putAutomation', automation: { ...plain(a), points: a.points.filter((_, k) => k !== i).map(q => ({ ...q })) } }], tl('a.pl.deletePoint')); say(tl('a.pl.pointDeleted')); }
-      else if (i >= 0) say(tl('a.pl.autoMinPoint'));
+      if (hit?.kind === 'point') { const sx = e.clientX, sy = e.clientY, i = hit.i; track(() => {}, () => openPointMenu(sx, sy, c, i)); return true; }
+      if (hit?.kind === 'handle') { straighten(a, [hit.i]); return true; }
+      addAndDrag(e, c, a, G, x, y);
       return true;
     }
-    const g = new Gesture(i >= 0 ? tl('a.pl.movePoint') : tl('a.pl.addPoint'));
-    let pts = plain(a.points);
-    if (i < 0) {
-      const nt = Math.max(0, snapRound(G.T(x) + c.start - c.offset, unit(e.altKey)) - c.start + c.offset);
-      pts = sortPoints([...pts, { t: nt, v: G.V(y) }]);
-      i = pts.findIndex(q => q.t === nt && Math.abs(q.v - G.V(y)) < 1e-9);
-      g.update([{ op: 'putAutomation', automation: { ...plain(a), points: pts } }]);
+    if (hit?.kind === 'point') {
+      if (dblCheck('ap' + c.id + ':' + hit.i)) {
+        const left = deletePoints(pts, new Set([hit.i]));
+        if (!left) { say(tl('a.pl.autoMinPoint')); return true; }
+        commit([putEnv(a, left)], tl('a.pl.deletePoint')); setU('autoSel', null); say(tl('a.pl.pointDeleted'));
+        return true;
+      }
+      const cur = U.autoSel?.clip === c.id ? U.autoSel.idx : [];
+      if (e.shiftKey && !modK) {
+        // Shift+click: add to / take from the selection
+        const next = cur.includes(hit.i) ? cur.filter(i => i !== hit.i) : [...cur, hit.i].sort((p, q) => p - q);
+        setU('autoSel', next.length ? { clip: c.id, idx: next } : null);
+        say(tl('a.pl.ptsSelected', { n: next.length }));
+        return true;
+      }
+      const sel = cur.includes(hit.i) ? cur : [hit.i];
+      setU('autoSel', { clip: c.id, idx: sel });
+      pointDrag(e, c, a, G, pts, sel, hit.i, new Gesture(tl('a.pl.movePoint')));
+      return true;
     }
-    const idx = i, r = gridEl.getBoundingClientRect();
-    track(ev => {
-      const px = ev.clientX - r.left, py = ev.clientY - r.top;
-      const lo = idx > 0 ? pts[idx - 1].t : -Infinity, hi = idx < pts.length - 1 ? pts[idx + 1].t : Infinity;
-      const nt = clamp(snapRound(G.T(px) + c.start - c.offset, unit(ev.altKey)) - c.start + c.offset, Math.max(0, lo), hi);
-      const next = pts.map((q, k) => k === idx ? { t: nt, v: G.V(py) } : q);
-      g.update([{ op: 'putAutomation', automation: { ...plain(a), points: next } }]);
-      say(a.name + ' · ' + Math.round(G.V(py) * 100) + '% · ' + fmtPos(c.start + nt - c.offset));
-    }, () => g.end(), 'move');
-    return true;
+    if (hit?.kind === 'handle') {
+      if (dblCheck('ah' + c.id + ':' + hit.i)) { straighten(a, [hit.i]); return true; }
+      tensionDrag(e, a, pts, hit.i);
+      return true;
+    }
+    if (modK) { pointMarquee(e, c, a, G, e.shiftKey); return true; }
+    if (dblCheck('ab' + c.id)) { addAndDrag(e, c, a, G, x, y); return true; }
+    setU('autoSel', null);
+    return false;
   };
+  /** Envelope time at grid x, on the playlist's snap (Alt: free). */
+  const envT = (c: Clip, G: ReturnType<typeof envGeom>, x: number, free: boolean) => snapRound(G.T(x) + c.start - c.offset, unit(free)) - c.start + c.offset;
+  function pointDrag(e: PointerEvent, c: Clip, a: Automation, G: ReturnType<typeof envGeom>, pts0: AutoPoint[], sel: number[], lead: number, g: Gesture) {
+    const set = new Set(sel), l = pts0[lead], sx = e.clientX, sy = e.clientY;
+    let moved = false;
+    track(ev => {
+      if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 3) return;
+      moved = true;
+      const q = pt(ev);
+      // the point under the pointer snaps; the rest of the selection follows by as much
+      const dt = ev.ctrlKey || ev.metaKey ? 0 : envT(c, G, q.x, ev.altKey) - l.t;
+      const dv = ev.shiftKey ? 0 : G.V(q.y) - l.v;
+      const m = movePoints(pts0, set, dt, dv);
+      g.update([putEnv(a, m.points)]);
+      const p = m.points[lead];
+      say(a.name + ' · ' + valText(a, p.v) + ' · ' + fmtPos(c.start + p.t - c.offset) + (sel.length > 1 ? ' · ' + tl('a.pl.ptsSelected', { n: sel.length }).split(' · ')[0] : ''));
+    }, () => g.end(), 'grabbing');
+  }
+  function tensionDrag(e: PointerEvent, a: Automation, pts0: AutoPoint[], i: number) {
+    const A0 = pts0[i - 1], B0 = pts0[i], k0 = B0.tension ?? 0, sy = e.clientY;
+    const g = new Gesture(tl('a.pl.bend'));
+    track(ev => {
+      const k = dragTension(k0, ev.clientY - sy, A0, B0, ev.ctrlKey || ev.metaKey);
+      g.update([putEnv(a, pts0.map((q, j) => (j === i ? withTension(q, k) : q)))]);
+      say(B0.shape === 'stairs' ? tl('a.pl.steps', { n: stairsOf(k) }) : tl('a.pl.bend') + ' · ' + Math.round(k * 100) + '%');
+    }, () => g.end(), 'ns-resize');
+  }
+  /** Adds a point at the press and keeps it under the pointer until release (FL's right-click). */
+  function addAndDrag(e: PointerEvent, c: Clip, a: Automation, G: ReturnType<typeof envGeom>, x: number, y: number) {
+    const { points, i } = addPoint(plain(a.points), Math.max(0, envT(c, G, x, e.altKey)), G.V(y));
+    const g = new Gesture(tl('a.pl.addPoint'));
+    g.update([putEnv(a, points)]);
+    setU('autoSel', { clip: c.id, idx: [i] });
+    say(a.name + ' · ' + valText(a, points[i].v) + ' · ' + fmtPos(c.start + points[i].t - c.offset));
+    pointDrag(e, c, a, G, points, [i], i, g);
+  }
+  /** Ctrl+drag on an envelope: a box that selects its points (Shift adds to the selection). */
+  function pointMarquee(e: PointerEvent, c: Clip, a: Automation, G: ReturnType<typeof envGeom>, additive: boolean) {
+    const p0 = pt(e), base = additive && U.autoSel?.clip === c.id ? U.autoSel.idx : [];
+    setU({ marquee: { x0: p0.x, y0: p0.y, x1: p0.x, y1: p0.y }, autoSel: base.length ? { clip: c.id, idx: base } : null });
+    track(ev => {
+      const q = pt(ev);
+      const idx = [...new Set([...base, ...pointsInBox(a.points, G, p0.x, p0.y, q.x, q.y)])].sort((m, n) => m - n);
+      setU({ marquee: { x0: p0.x, y0: p0.y, x1: q.x, y1: q.y }, autoSel: idx.length ? { clip: c.id, idx } : null });
+    }, () => {
+      setU('marquee', null);
+      const n = U.autoSel?.clip === c.id ? U.autoSel.idx.length : 0;
+      say(n ? tl('a.pl.ptsSelected', { n }) : tl('a.pl.autoEditHint'));
+    }, 'crosshair');
+  }
+  /** A point's menu: its value, the curve of the segment(s) ending at it, delete. Acts on the
+   *  whole selection when the point is in it. */
+  function openPointMenu(x: number, y: number, c: Clip, i: number) {
+    const a = autoById(c.ref); if (!a || !a.points[i]) return;
+    const sel = U.autoSel?.clip === c.id && U.autoSel.idx.includes(i) ? [...U.autoSel.idx] : [i];
+    const segs = sel.filter(j => j > 0), q = a.points[i];
+    const shapes: [CurveShape, string][] = [['curve', 'a.pl.shape.curve'], ['double', 'a.pl.shape.double'], ['hold', 'a.pl.shape.hold'], ['stairs', 'a.pl.shape.stairs']];
+    const shapeOf = (j: number) => a.points[j].shape ?? 'curve';
+    const items: MenuItem[] = [
+      { t: 'title', label: valText(a, q.v) + ' · ' + fmtPos(c.start + q.t - c.offset) + (sel.length > 1 ? ' · ×' + sel.length : '') },
+      { t: 'item', label: tl('a.pl.typeValue'), act: () => openRename(x, y, valText(a, q.v), txt => {
+        const v = parseAutoValue(unwrap(S.project), S.catalog, a.target, txt);
+        if (v == null) { say(tl('a.pl.badValue', { v: txt })); return; }
+        const cur = autoById(c.ref); if (!cur) return;
+        commit([putEnv(cur, plain(cur.points).map((p, j) => (sel.includes(j) ? { ...p, v } : p)))], tl('a.pl.movePoint'));
+        say(cur.name + ' · ' + valText(cur, v));
+      }, tl('a.pl.valueTitle')) },
+      { t: 'sep' },
+      { t: 'sec', label: tl('a.pl.curveType') },
+      ...shapes.map(([sh, key]): MenuItem => ({
+        t: 'item', label: tl(key as Parameters<typeof tl>[0]), disabled: !segs.length, checked: segs.length > 0 && segs.every(j => shapeOf(j) === sh),
+        act: () => { commit([putEnv(a, setShape(plain(a.points), segs, sh))], tl('a.pl.curveType') + ' · ' + tl(key as Parameters<typeof tl>[0])); },
+      })),
+      { t: 'item', label: tl('a.pl.straighten'), disabled: !segs.some(j => a.points[j].tension), act: () => straighten(a, segs) },
+      { t: 'sep' },
+      { t: 'item', label: tl('a.pl.deletePoint') + (sel.length > 1 ? ' ×' + sel.length : ''), kbd: 'Del', danger: true, act: () => { setU('autoSel', { clip: c.id, idx: sel }); A.deleteAutoPoints(); } },
+    ];
+    openMenu(x, y, items, 40 + items.length * 26);
+  }
 
   // ---------- menus ----------
   // ---------- swipe comping ----------
@@ -880,7 +1004,6 @@ export function Playlist() {
       const a = autoById(c.ref);
       openMenu(x, y, [
         { t: 'title', label: tl('a.pl.autoPrefix') + (a?.name ?? '') },
-        { t: 'item', label: tl('a.pl.editPoints'), kbd: tl('a.pl.dblClick'), act: () => setU({ autoEdit: c.id }) },
         { t: 'item', label: tl('a.pl.rename'), act: () => openRename(x, y, a?.name ?? '', v => A.setSrcProp(c, { name: v })) },
         { t: 'swatches', current: a?.color, pick: col => A.setSrcProp(c, { color: col }) },
         { t: 'sep' },
@@ -890,7 +1013,7 @@ export function Playlist() {
         { t: 'item', label: tl('a.pl.selAllAuto'), act: () => setU('sel', S.project.clips.filter(v => v.kind === 'auto' && v.ref === c.ref).map(v => v.id)) },
         { t: 'sep' },
         { t: 'item', label: tl('a.pl.deleteClip'), kbd: 'Del', danger: true, act: () => A.delIds(U.sel.includes(c.id) ? [...U.sel] : [c.id]) },
-        { t: 'item', label: tl('a.pl.deleteAutoAll'), danger: true, act: () => { commit([{ op: 'removeAutomation', id: c.ref }], tl('a.pl.deleteAuto')); setU('autoEdit', null); } },
+        { t: 'item', label: tl('a.pl.deleteAutoAll'), danger: true, act: () => { commit([{ op: 'removeAutomation', id: c.ref }], tl('a.pl.deleteAuto')); setU('autoSel', null); } },
       ], 380);
       return;
     }

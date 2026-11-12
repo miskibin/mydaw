@@ -551,12 +551,84 @@ pub enum AutoTarget {
     ClipPan { id: Id },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// How an automation segment travels from the previous point to this one (FL's curve types).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CurveShape {
+    /// One curve, bent by the tension (straight at 0).
+    #[default]
+    Curve,
+    /// An S: slow at both ends, fast in the middle; the tension sharpens or flattens it.
+    Double,
+    /// Holds the previous value until this point, then jumps.
+    Hold,
+    /// Even steps from the previous value to this one; the tension sets how many (2..16).
+    Stairs,
+}
+
+impl CurveShape {
+    fn is_curve(&self) -> bool {
+        *self == CurveShape::Curve
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AutoPoint {
     /// Beats from the start of the automation.
     pub t: f64,
     /// Normalised 0..1 (log parameters are normalised logarithmically).
     pub v: f32,
+    /// Bend of the segment that ends at this point, -1..1 (0 = straight). The first point's is unused.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub tension: f32,
+    /// Shape of the segment that ends at this point.
+    #[serde(default, skip_serializing_if = "CurveShape::is_curve")]
+    pub shape: CurveShape,
+}
+
+impl AutoPoint {
+    /// A point ending a straight segment.
+    pub fn at(t: f64, v: f32) -> Self {
+        Self { t, v, ..Self::default() }
+    }
+}
+
+/// `(e^(s·x) − 1) / (e^s − 1)`: 0 at 0, 1 at 1, slow start for s > 0, straight at s = 0.
+fn bend(x: f64, s: f64) -> f64 {
+    if s.abs() < 1e-6 {
+        x
+    } else {
+        (s * x).exp_m1() / s.exp_m1()
+    }
+}
+
+/// Progress 0..1 along a segment of `shape` and `tension` at `f` (0..1 of its time).
+/// The UI (`ui/src/lib/automation.ts` `curveAt`) uses the same formulas; both are checked
+/// against `tests/fixtures/curves.json`.
+pub fn curve_at(shape: CurveShape, tension: f32, f: f64) -> f64 {
+    let k = (tension as f64).clamp(-1.0, 1.0);
+    let f = f.clamp(0.0, 1.0);
+    match shape {
+        CurveShape::Curve => bend(f, 8.0 * k),
+        CurveShape::Double => {
+            let s = 4.0 + 6.0 * k;
+            if f < 0.5 {
+                0.5 * bend(2.0 * f, s)
+            } else {
+                1.0 - 0.5 * bend(2.0 - 2.0 * f, s)
+            }
+        }
+        CurveShape::Hold => 0.0,
+        CurveShape::Stairs => {
+            let n = stairs_of(tension) as f64;
+            ((f * n).floor() / (n - 1.0)).min(1.0)
+        }
+    }
+}
+
+/// Steps of a `Stairs` segment for `tension` -1..1: 2..16.
+pub fn stairs_of(tension: f32) -> u32 {
+    2 + (((tension as f64).clamp(-1.0, 1.0) + 1.0) / 2.0 * 14.0).round() as u32
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -569,7 +641,7 @@ pub struct Automation {
 }
 
 impl Automation {
-    /// Value at `t` beats (linear between points, held at the ends).
+    /// Value at `t` beats (each segment shaped by its end point, held at the ends).
     pub fn value_at(&self, t: f64) -> Option<f32> {
         let p = &self.points;
         let first = p.first()?;
@@ -581,8 +653,9 @@ impl Automation {
             return Some(p[p.len() - 1].v);
         }
         let (a, b) = (p[i - 1], p[i]);
-        let f = ((t - a.t) / (b.t - a.t).max(1e-9)) as f32;
-        Some(a.v + (b.v - a.v) * f)
+        let f = (t - a.t) / (b.t - a.t).max(1e-9);
+        let g = curve_at(b.shape, b.tension, f);
+        Some((a.v as f64 + (b.v as f64 - a.v as f64) * g) as f32)
     }
 }
 

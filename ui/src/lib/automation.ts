@@ -2,9 +2,11 @@
 // as the engine does, the value of an envelope at a beat, which clip drives a target at the
 // playhead, and the ops that create a new automation clip ("Automatyzuj na playliście").
 import { t as tl, tName } from './i18n';
-import { CLIP_GAIN_DB, KEYS_DYNAMICS, KEYS_RELEASE, type AutoPoint, type AutoTarget, type Automation, type Catalog, type Channel, type Clip, type Id, type Op, type Project, type Track } from '../api/types';
+import { CLIP_GAIN_DB, KEYS_DYNAMICS, KEYS_RELEASE, type AutoPoint, type AutoTarget, type CurveShape, type Automation, type Catalog, type Channel, type Clip, type Id, type Op, type Project, type Track } from '../api/types';
 import { insertTrackOps } from './clipOps';
 import { synthParam } from './synth';
+import { dbText, hzText, panText, volText } from './format';
+import { pFmt } from './presets';
 
 const lg = (x: number, a: number, b: number) => Math.log(Math.max(a, Math.min(b, x)) / a) / Math.log(b / a);
 const ex = (v: number, a: number, b: number) => a * Math.pow(b / a, v);
@@ -116,7 +118,26 @@ export function readTarget(p: Project, t: AutoTarget): number | null {
   }
 }
 
-/** Envelope value at `t` beats: linear between points, held at the ends (model.rs `value_at`). */
+/** `(e^(s·x) − 1) / (e^s − 1)`: 0 at 0, 1 at 1, slow start for s > 0, straight at s = 0. */
+const bend = (x: number, s: number) => (Math.abs(s) < 1e-6 ? x : Math.expm1(s * x) / Math.expm1(s));
+/** Steps of a `stairs` segment for `tension` −1..1: 2..16 (model.rs `stairs_of`). */
+export const stairsOf = (tension = 0) => 2 + Math.round((Math.min(1, Math.max(-1, tension)) + 1) / 2 * 14);
+/**
+ * Progress 0..1 along a segment of `shape` and `tension` at `f` (0..1 of its time): exactly the
+ * engine's `curve_at` (model.rs), both checked against crates/engine/tests/fixtures/curves.json.
+ */
+export function curveAt(shape: CurveShape | undefined, tension: number | undefined, f: number): number {
+  const k = Math.min(1, Math.max(-1, tension ?? 0));
+  f = Math.min(1, Math.max(0, f));
+  switch (shape ?? 'curve') {
+    case 'curve': return bend(f, 8 * k);
+    case 'double': { const s = 4 + 6 * k; return f < 0.5 ? 0.5 * bend(2 * f, s) : 1 - 0.5 * bend(2 - 2 * f, s); }
+    case 'hold': return 0;
+    case 'stairs': { const n = stairsOf(k); return Math.min(1, Math.floor(f * n) / (n - 1)); }
+  }
+}
+
+/** Envelope value at `t` beats: each segment shaped by its end point, held at the ends (model.rs `value_at`). */
 export function valueAt(points: AutoPoint[], t: number): number | null {
   if (!points.length) return null;
   if (t <= points[0].t) return points[0].v;
@@ -124,7 +145,7 @@ export function valueAt(points: AutoPoint[], t: number): number | null {
   while (lo < hi) { const m = (lo + hi) >> 1; if (points[m].t <= t) lo = m + 1; else hi = m; }
   if (lo >= points.length) return points[points.length - 1].v;
   const a = points[lo - 1], b = points[lo];
-  return a.v + (b.v - a.v) * (t - a.t) / Math.max(1e-9, b.t - a.t);
+  return a.v + (b.v - a.v) * curveAt(b.shape, b.tension, (t - a.t) / Math.max(1e-9, b.t - a.t));
 }
 
 /** Automations per target key (for "is this knob automated?"). */
@@ -210,7 +231,53 @@ export function targetLabel(p: Project, cat: Catalog | null, t: AutoTarget): str
   }
 }
 
-/** Clamp/sort helper for edited envelopes. */
+/** Clamp/sort helper for edited envelopes (keeps each point's segment shape). */
 export function sortPoints(pts: AutoPoint[]): AutoPoint[] {
-  return pts.map(q => ({ t: Math.max(0, q.t), v: c01(q.v) })).sort((a, b) => a.t - b.t);
+  return pts.map(q => ({ ...q, t: Math.max(0, q.t), v: c01(q.v) })).sort((a, b) => a.t - b.t);
+}
+
+/** The control's value for normalised `v`, as its knob shows it ("−6.0 dB", "1.20 kHz", "25L"). */
+export function autoValueText(p: Project, cat: Catalog | null, t: AutoTarget, v: number): string {
+  const x = denormalize(p, cat, t, v);
+  switch (t.kind) {
+    case 'insertVol': case 'trackVol': case 'chanVol': return volText(x);
+    case 'insertPan': case 'chanPan': case 'clipPan': return panText(x);
+    case 'clipGain': return dbText(x);
+    case 'mix': return Math.round(x * 100) + '%';
+    case 'synth': { const d = cat && synthParam(cat.synth, t.param); return d ? pFmt(d, x) : Math.round(v * 100) + '%'; }
+    case 'keys': return t.param === 'release' ? x.toFixed(2) + ' s' : Math.round(x * 100) + '%';
+    case 'fx': {
+      const b = parseBandParam(t.param);
+      if (b) return b.k === 'f' ? hzText(x) : b.k === 'g' ? dbText(x) : 'Q ' + x.toFixed(2);
+      const ff = fxOf(p, t.fxId); const d = ff && cat?.types[ff.f.type]?.params.find(q => q.id === t.param);
+      return d ? pFmt(d, x) : Math.round(v * 100) + '%';
+    }
+  }
+}
+
+/**
+ * A value typed for a point → normalised 0..1, or null if it is not a number. Read in the
+ * control's own unit where it has one people type ("-6" dB, "1.2k" Hz, "250" ms, "30" %);
+ * volume faders take dB, pans −100 (L) … 100 (R).
+ */
+export function parseAutoValue(p: Project, cat: Catalog | null, t: AutoTarget, text: string): number | null {
+  const vol = t.kind === 'insertVol' || t.kind === 'trackVol' || t.kind === 'chanVol';
+  if (vol && /-?inf|∞/i.test(text)) return 0;
+  const m = /^\s*([-+]?\d*[.,]?\d+)\s*(k)?/i.exec(text);
+  if (!m) return null;
+  let x = parseFloat(m[1].replace(',', '.')) * (m[2] ? 1000 : 1);
+  if (!isFinite(x)) return null;
+  switch (t.kind) {
+    case 'insertVol': case 'trackVol': case 'chanVol': {
+      // dB → fader travel (gain = 2·t³)
+      return c01(Math.cbrt(Math.pow(10, x / 20) / 2));
+    }
+    case 'insertPan': case 'chanPan': case 'clipPan': {
+      if (/l\s*$/i.test(text)) x = -Math.abs(x);
+      return normalize(p, cat, t, Math.max(-1, Math.min(1, x / 100)));
+    }
+    case 'mix': return c01(x / 100);
+    case 'keys': if (t.param !== 'release') return c01(x / 100); break;
+  }
+  return normalize(p, cat, t, x);
 }

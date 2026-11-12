@@ -263,7 +263,10 @@ export type AutoTarget =
 /** The span of an audio clip's gain automation, dB (the sample editor's VOL knob; rt.rs `CLIP_GAIN_DB`). */
 export const CLIP_GAIN_DB = { min: -24, max: 12 } as const;
 /** `t` beats from the start of the automation, `v` normalised 0..1. */
-export interface AutoPoint { t: number; v: number }
+/** How a segment travels from the previous point to this one (FL's curve types). */
+export type CurveShape = 'curve' | 'double' | 'hold' | 'stairs';
+/** `tension` (−1..1, 0 = straight) and `shape` (default `curve`) shape the segment that ends here. */
+export interface AutoPoint { t: number; v: number; tension?: number; shape?: CurveShape }
 export interface Automation { id: Id; name: string; color: string; target: AutoTarget; points: AutoPoint[] }
 
 export interface Project {

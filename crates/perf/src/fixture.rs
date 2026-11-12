@@ -516,9 +516,11 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
         };
         let span = 64.0;
         let points: Vec<AutoPoint> = (0..spec.auto_points)
-            .map(|k| AutoPoint {
-                t: span * k as f64 / (spec.auto_points - 1).max(1) as f64,
-                v: (0.5 + 0.4 * (k as f32 * 0.37 + i as f32).sin()).clamp(0.0, 1.0),
+            .map(|k| {
+                AutoPoint::at(
+                    span * k as f64 / (spec.auto_points - 1).max(1) as f64,
+                    (0.5 + 0.4 * (k as f32 * 0.37 + i as f32).sin()).clamp(0.0, 1.0),
+                )
             })
             .collect();
         p.automations.push(Automation {

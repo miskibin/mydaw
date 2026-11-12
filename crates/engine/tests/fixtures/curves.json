@@ -1,0 +1,1301 @@
+{
+"note": "curve_at(shape, tension, f) reference values (independent Python implementation): engine model.rs curve_at and ui lib/automation.ts curveAt must match within 1e-6 (the engine stores tension as f32)",
+"cases": [
+{
+"shape": "curve",
+"tension": -1,
+"f": 0,
+"g": -0.0
+},
+{
+"shape": "curve",
+"tension": -1,
+"f": 0.1,
+"g": 0.5508558274262423
+},
+{
+"shape": "curve",
+"tension": -1,
+"f": 0.25,
+"g": 0.8649548767993755
+},
+{
+"shape": "curve",
+"tension": -1,
+"f": 0.49,
+"g": 0.9804878222771173
+},
+{
+"shape": "curve",
+"tension": -1,
+"f": 0.5,
+"g": 0.9820137900379085
+},
+{
+"shape": "curve",
+"tension": -1,
+"f": 0.75,
+"g": 0.9978559912164153
+},
+{
+"shape": "curve",
+"tension": -1,
+"f": 0.9,
+"g": 0.9995887388567819
+},
+{
+"shape": "curve",
+"tension": -1,
+"f": 0.999,
+"g": 0.9999973046312937
+},
+{
+"shape": "curve",
+"tension": -1,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 0.1,
+"g": 0.33583091167018625
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 0.25,
+"g": 0.6439142598879724
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 0.49,
+"g": 0.875170893123333
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 0.5,
+"g": 0.8807970779778824
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 0.75,
+"g": 0.9679413967199151
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 0.9,
+"g": 0.9908238493803027
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 0.999,
+"g": 0.999925221100451
+},
+{
+"shape": "curve",
+"tension": -0.5,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 0.1,
+"g": 0.13961811790248305
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 0.25,
+"g": 0.3291788293012836
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 0.49,
+"g": 0.5889103746295583
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 0.5,
+"g": 0.598687660112452
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 0.75,
+"g": 0.8193428281236463
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 0.9,
+"g": 0.9320405661380811
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 0.999,
+"g": 0.9993469658444333
+},
+{
+"shape": "curve",
+"tension": -0.1,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 0,
+"g": 0
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 0.1,
+"g": 0.1
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 0.25,
+"g": 0.25
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 0.49,
+"g": 0.49
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 0.75,
+"g": 0.75
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 0.9,
+"g": 0.9
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 0.999,
+"g": 0.999
+},
+{
+"shape": "curve",
+"tension": 0,
+"f": 1,
+"g": 1
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 0.1,
+"g": 0.02706219465969744
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 0.25,
+"g": 0.08202178323214179
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 0.49,
+"g": 0.22362000041444158
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 0.5,
+"g": 0.23147521650098235
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 0.75,
+"g": 0.503797127043045
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 0.9,
+"g": 0.765339984765629
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 0.999,
+"g": 0.9973637197486849
+},
+{
+"shape": "curve",
+"tension": 0.3,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 0.1,
+"g": 0.00041126114321802566
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 0.25,
+"g": 0.002144008783584634
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 0.49,
+"g": 0.016577564178046154
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 0.5,
+"g": 0.017986209962091555
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 0.75,
+"g": 0.13504512320062448
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 0.9,
+"g": 0.4491441725737578
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 0.999,
+"g": 0.9920292409452817
+},
+{
+"shape": "curve",
+"tension": 1,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 0,
+"g": -0.0
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 0.1,
+"g": 0.19064034161034038
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 0.25,
+"g": 0.36552928931500245
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 0.49,
+"g": 0.4968061969123092
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 0.75,
+"g": 0.6344707106849976
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 0.9,
+"g": 0.8093596583896596
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 0.999,
+"g": 0.9976915846231408
+},
+{
+"shape": "double",
+"tension": -1,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 0.1,
+"g": 0.06442562404292078
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 0.25,
+"g": 0.18877033439907276
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 0.49,
+"g": 0.48433738120308856
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 0.75,
+"g": 0.8112296656009272
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 0.9,
+"g": 0.9355743759570793
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 0.999,
+"g": 0.9994174409282452
+},
+{
+"shape": "double",
+"tension": -0.5,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 0.1,
+"g": 0.016811807213702287
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 0.25,
+"g": 0.07723263254176735
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 0.49,
+"g": 0.4659953918199177
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 0.75,
+"g": 0.9227673674582326
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 0.9,
+"g": 0.9831881927862978
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 0.999,
+"g": 0.9998822132832821
+},
+{
+"shape": "double",
+"tension": -0.1,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 0.1,
+"g": 0.011432679371719106
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 0.25,
+"g": 0.05960146101105878
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 0.49,
+"g": 0.46084095017754384
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 0.75,
+"g": 0.9403985389889412
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 0.9,
+"g": 0.9885673206282809
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 0.999,
+"g": 0.999925071243137
+},
+{
+"shape": "double",
+"tension": 0,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 0.1,
+"g": 0.0033251384798647266
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 0.25,
+"g": 0.026076781539208872
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 0.49,
+"g": 0.4450713120388424
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 0.75,
+"g": 0.9739232184607911
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 0.9,
+"g": 0.9966748615201353
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 0.999,
+"g": 0.9999822843053469
+},
+{
+"shape": "double",
+"tension": 0.3,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 0.1,
+"g": 0.0001450379337820201
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 0.25,
+"g": 0.0033464254621424273
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 0.49,
+"g": 0.40936126154663166
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 0.75,
+"g": 0.9966535745378575
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 0.9,
+"g": 0.9998549620662179
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 0.999,
+"g": 0.9999995414094709
+},
+{
+"shape": "double",
+"tension": 1,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 0.25,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 0.49,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 0.5,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 0.75,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 0.9,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 0.999,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -1,
+"f": 1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 0.25,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 0.49,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 0.5,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 0.75,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 0.9,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 0.999,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.5,
+"f": 1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 0.25,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 0.49,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 0.5,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 0.75,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 0.9,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 0.999,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": -0.1,
+"f": 1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 0.25,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 0.49,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 0.5,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 0.75,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 0.9,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 0.999,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0,
+"f": 1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 0.25,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 0.49,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 0.5,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 0.75,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 0.9,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 0.999,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 0.3,
+"f": 1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 0.25,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 0.49,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 0.5,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 0.75,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 0.9,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 0.999,
+"g": 0.0
+},
+{
+"shape": "hold",
+"tension": 1,
+"f": 1,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 0.25,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 0.49,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 0.5,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 0.75,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 0.9,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 0.999,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -1,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 0.25,
+"g": 0.2
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 0.49,
+"g": 0.4
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 0.5,
+"g": 0.6
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 0.75,
+"g": 0.8
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 0.9,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 0.999,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -0.5,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 0.25,
+"g": 0.2857142857142857
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 0.49,
+"g": 0.42857142857142855
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 0.5,
+"g": 0.5714285714285714
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 0.75,
+"g": 0.8571428571428571
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 0.9,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 0.999,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": -0.1,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 0.1,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 0.25,
+"g": 0.25
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 0.49,
+"g": 0.5
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 0.75,
+"g": 0.75
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 0.9,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 0.999,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": 0,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 0.1,
+"g": 0.1
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 0.25,
+"g": 0.2
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 0.49,
+"g": 0.5
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 0.5,
+"g": 0.5
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 0.75,
+"g": 0.8
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 0.9,
+"g": 0.9
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 0.999,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": 0.3,
+"f": 1,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 0,
+"g": 0.0
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 0.1,
+"g": 0.06666666666666667
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 0.25,
+"g": 0.26666666666666666
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 0.49,
+"g": 0.4666666666666667
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 0.5,
+"g": 0.5333333333333333
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 0.75,
+"g": 0.8
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 0.9,
+"g": 0.9333333333333333
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 0.999,
+"g": 1.0
+},
+{
+"shape": "stairs",
+"tension": 1,
+"f": 1,
+"g": 1.0
+}
+]
+}

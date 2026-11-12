@@ -115,7 +115,8 @@ export function openRack() {
   const x = g ? clamp(g.x, 0, Math.max(0, window.innerWidth - 120)) : Math.max(20, Math.round((window.innerWidth - w) / 2));
   const y = g ? clamp(g.y, 0, Math.max(0, window.innerHeight - 80)) : 64;
   const h = clamp(Math.max(need, g?.h ?? 0), 220, Math.max(220, window.innerHeight - y - 20));
-  const pl = rackPlaceFor(stepsOf(pt), x);
+  // as wide as when it was closed if that is wider (patterns browsed before), like FL
+  const fit = rackPlaceFor(stepsOf(pt), x), pl = g && g.w > fit.w ? fitOnScreen(x, g.w, window.innerWidth) : fit;
   setU({ zTop: z, plugsHidden: false, rackWin: { x: pl.x, y, w: pl.w, h, z } });
 }
 /** Where the pattern windows were when last closed: they reopen there instead of jumping back to the centre. */

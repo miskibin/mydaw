@@ -2,6 +2,8 @@
 // recording clip. Only the visible window is drawn; everything is in grid coordinates.
 import type { Automation, Channel, Clip, Comp, Id, Note, Pattern, Project, Source, Take, Track } from '../api/types';
 import { keyOf } from '../lib/pattern';
+import { valueAt } from '../lib/automation';
+import { handleAt, HANDLE_MIN_W, type EnvHit } from '../lib/envEdit';
 import type { LaneOverlaps } from '../lib/overlaps';
 import { boundaries, takeEnd, toComp } from '../lib/comp';
 import { mix } from '../lib/color';
@@ -19,8 +21,10 @@ export interface View {
   orgX?: number; orgY?: number;
   bw: number; snap: number; spb: number;
   tops: number[]; sel: Set<number>; editable: boolean; recArmedBg: boolean;
-  /** automation clip being edited inline (points shown as handles), and its hovered point */
-  autoEdit?: number | null; autoHover?: number | null;
+  /** the automation clip under the pointer and the point / handle there */
+  env?: { clip: number; hover: EnvHit | null } | null;
+  /** selected envelope points of one automation clip */
+  autoSel?: { clip: number; idx: number[] } | null;
   /** per track: the comp whose take lanes are expanded below it (null = none) */
   rows?: ({ clip: Clip; comp: Comp } | null)[];
   laneH?: number;
@@ -427,35 +431,53 @@ function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | 
   g.globalAlpha = 1;
 }
 
-/** Automation envelope inside a clip: filled area below the line, points as handles when edited. */
+/** Automation envelope inside a clip: filled area below the curve (sampled per pixel, exactly as
+ *  it plays), its points, and on the clip under the pointer or with selected points, the tension
+ *  handles between them. */
 function drawEnvelope(g: CanvasRenderingContext2D, v: View, c: Clip, a: Automation, cx: number, by: number, cw: number, bh: number, vis0: number, vis1: number, color: string, ink: string) {
   const pts = a.points, pad = 3, Y = (val: number) => by + pad + (1 - val) * (bh - 2 * pad);
-  const X = (t: number) => cx + (t - c.offset) * v.bw;
-  const valAt = (t: number) => {
-    if (!pts.length) return 0.5;
-    if (t <= pts[0].t) return pts[0].v;
-    for (let i = 1; i < pts.length; i++) if (t < pts[i].t) { const p0 = pts[i - 1], p1 = pts[i]; return p0.v + (p1.v - p0.v) * (t - p0.t) / Math.max(1e-9, p1.t - p0.t); }
-    return pts[pts.length - 1].v;
-  };
-  const tA = c.offset + (vis0 - cx) / v.bw, tB = c.offset + (vis1 - cx) / v.bw;
-  g.beginPath(); g.moveTo(vis0, by + bh); g.lineTo(vis0, Y(valAt(tA)));
-  for (const q of pts) if (q.t > tA && q.t < tB) g.lineTo(X(q.t), Y(q.v));
-  g.lineTo(vis1, Y(valAt(tB))); g.lineTo(vis1, by + bh); g.closePath();
-  g.fillStyle = rgba(color, 0.22); g.fill();
-  g.beginPath(); g.moveTo(vis0, Y(valAt(tA)));
-  for (const q of pts) if (q.t > tA && q.t < tB) g.lineTo(X(q.t), Y(q.v));
-  g.lineTo(vis1, Y(valAt(tB)));
-  g.strokeStyle = ink; g.lineWidth = 1.5; g.stroke();
-  const editing = v.autoEdit === c.id;
-  if (editing || cw / Math.max(1, pts.length) > 14) {
-    pts.forEach((q, i) => {
-      const x = X(q.t); if (x < vis0 - 5 || x > vis1 + 5) return;
-      g.beginPath(); g.arc(x, Y(q.v), editing ? (v.autoHover === i ? 5 : 4) : 2.5, 0, Math.PI * 2);
-      g.fillStyle = editing ? (v.autoHover === i ? T.ink : ink) : ink; g.fill();
-      if (editing) { g.strokeStyle = T.clipBase; g.lineWidth = 1.5; g.stroke(); }
-    });
+  const X = (t: number) => cx + (t - c.offset) * v.bw, Tt = (x: number) => c.offset + (x - cx) / v.bw;
+  const val = (t: number) => valueAt(pts, t) ?? 0.5;
+  const x0 = Math.floor(Math.max(vis0, cx)), x1 = Math.ceil(Math.min(vis1, cx + cw));
+  if (x1 <= x0) return;
+  // the curve: one vertex per pixel, plus both sides of every point (holds and stairs jump there)
+  const line: [number, number][] = [];
+  let k = 0; while (k < pts.length && X(pts[k].t) < x0) k++;
+  for (let x = x0; x <= x1; x++) {
+    while (k < pts.length && X(pts[k].t) <= x) { const px = X(pts[k].t); line.push([px, Y(val(pts[k].t - 1e-9))], [px, Y(pts[k].v)]); k++; }
+    line.push([x, Y(val(Tt(x)))]);
   }
-  if (editing) { g.strokeStyle = rgba(T.ink, 0.6); g.setLineDash([3, 3]); g.lineWidth = 1; g.strokeRect(cx + 1.5, by + 0.5, cw - 3, bh - 2); g.setLineDash([]); }
+  g.beginPath(); g.moveTo(x0, by + bh);
+  for (const [x, y] of line) g.lineTo(x, y);
+  g.lineTo(x1, by + bh); g.closePath();
+  g.fillStyle = rgba(color, 0.22); g.fill();
+  g.beginPath(); line.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+  g.strokeStyle = ink; g.lineWidth = 1.5; g.stroke();
+  const focus = v.env?.clip === c.id ? v.env : null;
+  const sel = v.autoSel?.clip === c.id ? new Set(v.autoSel.idx) : null;
+  const hov = focus?.hover;
+  if (bh < 14) return; // too low to grab anything: the curve alone
+  // handles of the focused clip: hollow dots halfway along each bendable segment
+  if (focus || sel) {
+    for (let i = 1; i < pts.length; i++) {
+      if (X(pts[i].t) - X(pts[i - 1].t) < HANDLE_MIN_W) continue;
+      const h = handleAt(pts, i); if (!h) continue;
+      const hx = X(h.t); if (hx < vis0 - 5 || hx > vis1 + 5) continue;
+      const on = hov?.kind === 'handle' && hov.i === i;
+      g.beginPath(); g.arc(hx, Y(h.v), on ? 4 : 3, 0, Math.PI * 2);
+      g.fillStyle = on ? T.ink : T.clipBase; g.fill();
+      g.strokeStyle = on ? T.ink : ink; g.lineWidth = 1.25; g.stroke();
+    }
+  }
+  // points: always where there is room for them, bigger on the focused clip
+  if (!focus && !sel && cw / Math.max(1, pts.length) <= 8) return;
+  pts.forEach((q, i) => {
+    const x = X(q.t); if (x < vis0 - 5 || x > vis1 + 5) return;
+    const on = hov?.kind === 'point' && hov.i === i, picked = !!sel?.has(i);
+    g.beginPath(); g.arc(x, Y(q.v), on || picked ? 4.5 : focus ? 3.5 : 2.5, 0, Math.PI * 2);
+    g.fillStyle = picked ? T.amber : on ? T.ink : ink; g.fill();
+    if (focus || picked) { g.strokeStyle = T.clipBase; g.lineWidth = 1.25; g.stroke(); }
+  });
 }
 
 function drawRec(g: CanvasRenderingContext2D, v: View, r: { track: number; clipStart: number; seconds: number; peaks: Float32Array; nPeaks: number; pass?: number }, trackH: number) {

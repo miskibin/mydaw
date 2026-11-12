@@ -11,7 +11,7 @@ import { isTypingKey } from '../state/typingKeys';
 import { commit } from '../state/edit';
 import {
   addBar, addKeys, addSampler, addSamplerFiles, addSynth, audition, chanKindLabel, channels, clonePattern, cloneChannel, curPat, deleteChannel,
-  deletePattern, type InstrumentPick, newPattern, nextEmptyPattern, openPattern, openRoll, putNotes, recolorPattern, removeBar, renamePattern, replaceChannel, replaceWithFile, setChannel, setCurPattern, splitByChannel,
+  deletePattern, type InstrumentPick, newPattern, nextEmptyPattern, openPattern, openRack, openRoll, putNotes, recolorPattern, removeBar, renamePattern, replaceChannel, replaceWithFile, setChannel, setCurPattern, splitByChannel,
 } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
 import { openMenu, openRename, say, setU, type MenuItem, type PatWin } from '../state/ui';
@@ -197,17 +197,20 @@ export function patternItemMenu(p: Pattern, x: number, y: number) {
 }
 
 /** The pattern selector's menu (toolbar and Channel Rack title): pick, new, clone, rename, colour, split, delete. */
-export function patternMenu(x: number, y: number) {
+/** The pattern picker. From the toolbar (`showRack`), picking or making a pattern also opens the
+ *  Channel Rack, where a pattern is edited; from the rack or the Piano roll it only switches. */
+export function patternMenu(x: number, y: number, showRack = false) {
   const cur = curPat();
+  const andRack = (f: () => void) => () => { f(); if (showRack) openRack(); };
   const items: MenuItem[] = [{ t: 'title', label: t('b.pm.title') }];
   S.project.patterns.forEach((p, i) => items.push({
     t: 'item', label: (i < 9 ? i + 1 + ' · ' : '') + p.name, icon: 'M5 5h14v14H5z', iconColor: p.color,
     kbd: p.id === cur?.id ? '✓' : p.notes.length ? barsText(p.len / 4) : t('b.pm.empty'),
-    act: () => setCurPattern(p.id),
+    act: andRack(() => setCurPattern(p.id)),
   }));
   items.push({ t: 'sep' },
-    { t: 'item', label: t('b.pat.new'), act: newPattern },
-    { t: 'item', label: t('b.pm.nextEmpty'), kbd: 'F4', act: nextEmptyPattern });
+    { t: 'item', label: t('b.pat.new'), act: andRack(newPattern) },
+    { t: 'item', label: t('b.pm.nextEmpty'), kbd: 'F4', act: andRack(nextEmptyPattern) });
   if (cur) items.push({ t: 'sep' }, { t: 'title', label: cur.name }, ...patItems(cur, x, y));
   const h = Math.min(window.innerHeight - 20, 40 + items.length * 26);
   openMenu(x, y, items, h);

@@ -7,6 +7,7 @@ import { clampMove, duplicateSpan, insertTrackOps, moveClips, muteOps, pasteClip
 import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
 import { snapName, snapRes } from '../lib/snap';
+import { deletePoints } from '../lib/envEdit';
 import { acceptReply, commit, endWheelGestures, enqueue, resync } from './edit';
 import { flushNotebook } from './notebook';
 import { clearPeaks } from './peaks';
@@ -164,6 +165,17 @@ let clipboard: Clip[] = [];
 let pasteAt: number | null = null;
 export const hasClipboard = () => clipboard.length > 0;
 
+/** Delete / Backspace with envelope points selected: they go (one undo step; one point always stays). */
+export function deleteAutoPoints() {
+  const s = U.autoSel; if (!s) return;
+  const c = S.project.clips.find(x => x.id === s.clip), a = c && S.project.automations?.find(x => x.id === c.ref);
+  if (!a) { setU('autoSel', null); return; }
+  const pts = deletePoints(plain(a.points), new Set(s.idx));
+  if (!pts) { say(t('a.pl.autoMinPoint')); return; }
+  commit([{ op: 'putAutomation', automation: { ...plain(a), points: pts } }], t('a.pl.deletePoint'));
+  setU('autoSel', null);
+  say(t('a.pl.pointsDeleted', { n: s.idx.length }));
+}
 export function delIds(ids: Id[]) {
   if (!ids.length) return;
   commit([{ op: 'removeClips', ids: [...ids] }], t('d.act.op.delclips'));
