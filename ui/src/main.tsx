@@ -7,7 +7,8 @@ import { onStateEvent } from './state/edit';
 import { replaceState, S, setS } from './state/store';
 import { openRack } from './state/pattern';
 import { startTelemetry } from './state/telemetry';
-import { setU } from './state/ui';
+import { say, setU } from './state/ui';
+import { watchAudio } from './state/audioWatch';
 import { App } from './App';
 import { initTheme } from './ui/theme';
 import { initPrefs } from './state/prefs';
@@ -26,6 +27,7 @@ async function boot() {
   replaceState(state);
   await be.on('state', onStateEvent);
   await startTelemetry();
+  void be.audioGetConfig().then(a => watchAudio(a, cb => be.on('audio-status', cb), say));
   // the standard library's file list, so the first "add channel" menu already offers it
   void loadStdLib();
   // initial selection like the prototype: the Vocal insert with its compressor

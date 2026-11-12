@@ -485,6 +485,12 @@ async fn project_new(app: St<'_>) -> R<StateDto> {
     Ok(app.engine.state())
 }
 
+/// `project_open`'s reply: the opened project's whole state (the UI replaces its own with it)
+/// and the sources that could not be loaded.
+fn open_reply(state: StateDto, warnings: Vec<String>) -> Value {
+    json!({ "state": state, "warnings": warnings })
+}
+
 #[tauri::command]
 async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R<Value> {
     let path = match path {
@@ -498,7 +504,7 @@ async fn project_open(app: St<'_>, handle: AppHandle, path: Option<String>) -> R
     let mut s = app.settings.lock();
     s.last_project = Some(path.display().to_string());
     s.save();
-    Ok(json!({ "warnings": warnings }))
+    Ok(open_reply(app.engine.state(), warnings))
 }
 
 #[tauri::command]
@@ -703,8 +709,16 @@ pub fn run() {
             log::warn!("could not reopen {p}: {e}");
         }
     }
-    let audio = AudioIo::spawn(engine.clone());
     let events: Arc<std::sync::OnceLock<AppHandle>> = Arc::new(std::sync::OnceLock::new());
+    // an output the device or driver stopped is reopened by the audio thread: tell the UI
+    let audio = {
+        let ev = events.clone();
+        AudioIo::spawn_watched(engine.clone(), move |st| {
+            if let Some(h) = ev.get() {
+                let _ = h.emit("audio-status", st);
+            }
+        })
+    };
     let midi = {
         let (e1, e2, ev1, ev2) = (engine.clone(), engine.clone(), events.clone(), events.clone());
         MidiInput::start(
@@ -826,4 +840,34 @@ pub fn run() {
                 shutdown(h, &app_exit);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_reply;
+    use std::sync::Arc;
+    use wave_engine::{Engine, NoPlugins, Project};
+
+    /// The UI replaces its whole state with `state` after an open: it must be a full StateDto
+    /// (a reply with only `warnings` crashed the UI on every open).
+    #[test]
+    fn open_reply_carries_the_opened_state() {
+        let dir = std::env::temp_dir().join(format!("wave-open-reply-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Song.wave");
+        Engine::new(Project::sketch(), Arc::new(NoPlugins)).save(&path).unwrap();
+
+        let e = Engine::new(Project::empty(), Arc::new(NoPlugins));
+        let warnings = e.open(&path).unwrap();
+        let v = open_reply(e.state(), warnings);
+        std::fs::remove_dir_all(&dir).ok();
+
+        let state = &v["state"];
+        assert!(state["project"]["clips"].as_array().is_some_and(|c| !c.is_empty()), "{v}");
+        assert!(state["revision"].is_u64());
+        assert_eq!(state["dirty"], false);
+        assert!(state["path"].as_str().is_some_and(|p| p.ends_with("Song.wave")));
+        assert!(v["warnings"].is_array());
+        assert!(v.get("cancelled").is_none());
+    }
 }

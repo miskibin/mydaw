@@ -1,15 +1,26 @@
-// Pointer drag helper: window-level move/up listeners plus a body cursor while dragging.
+// Pointer drag helper: window-level move/up listeners plus a forced cursor while dragging.
 import { edgeSpeed } from '../lib/viewNav';
+
+/**
+ * Force `cursor` on the whole page until `null`: a drag shows its own cursor (a closed hand while
+ * something is held) even over elements that set their own, such as a canvas showing `grab` on hover.
+ * A body cursor alone loses to those (styles.css `html.dragcur`).
+ */
+export function dragCursor(cursor: string | null) {
+  const el = document.documentElement;
+  if (cursor) { el.style.setProperty('--drag-cursor', cursor); el.classList.add('dragcur'); }
+  else { el.classList.remove('dragcur'); el.style.removeProperty('--drag-cursor'); }
+}
 
 export function track(move: (e: PointerEvent) => void, up?: ((e: PointerEvent) => void) | null, cursor?: string) {
   const u = (ev: PointerEvent) => {
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', u);
     window.removeEventListener('pointercancel', u);
-    document.body.style.cursor = '';
+    if (cursor) dragCursor(null);
     up?.(ev);
   };
-  if (cursor) document.body.style.cursor = cursor;
+  if (cursor) dragCursor(cursor);
   window.addEventListener('pointermove', move);
   window.addEventListener('pointerup', u);
   window.addEventListener('pointercancel', u);

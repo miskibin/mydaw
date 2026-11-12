@@ -18,7 +18,7 @@ import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitc
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, PitchAnalysis, PitchTarget, Project, RefTune, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 import { exportRange, exportSeconds } from '../lib/export';
 import { MockUpdates } from './mockUpdates';
@@ -127,7 +127,7 @@ export class MockBackend implements Backend {
   private audio: AudioStatus = {
     host: 'wasapi', output: 'Głośniki (Realtek High Definition Audio)', input: 'Mikrofon (USB Audio)', sampleRate: null, bufferSize: null, inputChannel: null,
     running: true, actualRate: 48000, actualBuffer: 480, latencyMs: 20, inputChannels: 2, error: null, note: t('d.mock.noaudio'), asioCompiled: false,
-    recOffsetMs: 0, inputUnderruns: 0, inputOverruns: 0, inputDriftPpm: 0,
+    recOffsetMs: 0, inputUnderruns: 0, inputOverruns: 0, inputDriftPpm: 0, restarts: 0,
   };
 
   private midiPorts: MidiDevice[] = [{ id: 'mock-keys', name: 'Mock Keystation 61' }, { id: 'mock-pads', name: 'Mock Pad Controller' }];
@@ -807,6 +807,12 @@ export class MockBackend implements Backend {
     return { ...this.audio };
   }
 
+  /** Dev tools / tests: the device stops by itself and the audio thread reopens it, as in the app. */
+  audioDeviceLost(why = 'The requested device is no longer available') {
+    this.audio = { ...this.audio, running: true, error: null, restarts: this.audio.restarts + 1, note: `Audio restarted by itself: ${why}.` };
+    this.emit('audio-status', { ...this.audio });
+  }
+
   async audioMeasureLatency(): Promise<LatencyReport> {
     if (this.tr.playing) throw new Error('Stop playback before measuring the latency.');
     await delay(5200);
@@ -868,9 +874,19 @@ export class MockBackend implements Backend {
     this.emit('state', this.dto());
   }
   async projectNew() { this.resetTo(emptyProject(), null); return this.dto(); }
-  async projectOpen(path?: string) { this.resetTo(sketchProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave'); return this.dto(); }
-  async projectSave(saveAs?: boolean) {
-    if (!this.path || saveAs) this.path = 'C:\\Users\\michal\\Music\\Projekt ' + (1 + (this.revision % 9)) + '.wave';
+  /** Tests: the next native file dialog is dismissed, as when the user presses Cancel. */
+  dismissNextDialog = false;
+  private dialog(): boolean { const ok = !this.dismissNextDialog; this.dismissNextDialog = false; return ok; }
+  async projectOpen(path?: string): Promise<OpenResult> {
+    if (path == null && !this.dialog()) return { cancelled: true };
+    this.resetTo(sketchProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave');
+    return { state: this.dto(), warnings: [] };
+  }
+  async projectSave(saveAs?: boolean): Promise<SaveResult> {
+    if (!this.path || saveAs) {
+      if (!this.dialog()) return { cancelled: true };
+      this.path = 'C:\\Users\\michal\\Music\\Projekt ' + (1 + (this.revision % 9)) + '.wave';
+    }
     this.savedRev = this.revision; this.emit('state', this.dto());
     return { path: this.path };
   }

@@ -19,7 +19,7 @@ import {
   parseKey, parseLen, parseStart, parseVel, quantizeStarts, readProps, wheelNotches,
 } from '../lib/rollEdit';
 import { commit, Gesture, wheelEdit } from '../state/edit';
-import { audition, chanKindLabel, channels, closeRoll, curPat, patPlayhead, putNotes, rollFront, selChan, selectChannel, toggleRollMax } from '../state/pattern';
+import { audition, chanKindLabel, channels, closeRoll, curPat, moveNotesToNewPattern, patPlayhead, putNotes, rollFront, selChan, selectChannel, toggleRollMax } from '../state/pattern';
 import { arrVersion, S } from '../state/store';
 import { say, U } from '../state/ui';
 import { dblCheck, edgeScroller, panDrag, track, trackFrame } from '../ui/drag';
@@ -559,6 +559,7 @@ function Roll(props: { z: number }) {
     apply(e);
     track(apply, () => g.end(), 'ns-resize');
   };
+  const moveSelToPattern = () => { const idx = [...sel()]; setSel(new Set<number>()); moveNotesToNewPattern(pt(), idx); };
   const onKey = (e: KeyboardEvent) => {
     const tg = (e.target as HTMLElement).tagName;
     if (tg === 'INPUT' || tg === 'SELECT') return;
@@ -603,6 +604,8 @@ function Roll(props: { z: number }) {
       }
       return;
     }
+    // Ctrl+Shift+X: cut the selection out to a new pattern, in place (the playlist keeps it)
+    if (m && e.shiftKey && k === 'x') { stop(); if (s.length) moveSelToPattern(); else say(t('b.pe.noSel')); return; }
     if (m && (k === 'c' || k === 'x') && !e.shiftKey) {
       stop(); if (!s.length) return;
       noteClip = s.map(i => notesRaw()[i]); noteClipAt = null;
@@ -746,6 +749,9 @@ function Roll(props: { z: number }) {
           </span>
         </label>
         <div style={{ flex: 1 }} />
+        <Show when={sel().size > 0}>
+          <button class="smallbtn" style={{ 'align-self': 'center' }} title={t('b.pe.toNewPatTip')} onClick={e => { moveSelToPattern(); backToRoll(e.currentTarget); }}>{t('b.pe.toNewPat')}</button>
+        </Show>
         <span class="note mono" style={{ 'align-self': 'center', 'font-size': '10px', color: 'var(--fg5)' }}>{sel().size ? t('b.pe.nSel', { n: sel().size }) : notesText(chanNotes().length)}{t('b.pe.newNote', { len: lastLenText() })}</span>
       </div>
       <div class="rollgrid">

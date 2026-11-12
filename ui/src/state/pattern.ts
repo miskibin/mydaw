@@ -12,6 +12,7 @@ import { BAR, barsText, cloneNotes, notesText, stepsOf } from '../lib/pattern';
 import { fitOnScreen, rackFitWidth } from '../lib/rack';
 import { commit } from './edit';
 import { newTrack } from '../lib/clipOps';
+import { planMoveNotes } from '../lib/moveNotes';
 import { unwrap } from 'solid-js/store';
 import { allocId, plain, plainNotes, S } from './store';
 import { curBeat, tele } from './telemetry';
@@ -254,6 +255,22 @@ export function splitByChannel(pt = curPat()) {
   commit(ops, t('b.st.splitPat'));
   setCurPattern(made[0].id, true);
   say(t('b.st.splitSay', { name: pt.name, n: made.length }));
+}
+/**
+ * Moves notes `idx` of `pt` to a new pattern at the same steps (one undo step), made current.
+ * The playlist keeps sounding the same: every clip of `pt` gets a clip of the new one beside it.
+ */
+export function moveNotesToNewPattern(pt: Pattern, idx: readonly number[]) {
+  const P = unwrap(S.project), src = unwrap(pt);
+  const chs = new Set(idx.map(i => src.notes[i]?.ch));
+  const ch = chs.size === 1 ? channels().find(c => chs.has(c.id)) : undefined;
+  const name = freshName(src.name + ' – ' + (ch?.name ?? t('b.st.movePart')));
+  const color = ch?.color ?? PCOLORS[P.patterns.length % PCOLORS.length];
+  const plan = planMoveNotes(plain(P), plain(src), idx, name, color, allocId);
+  if (!plan) { say(t('b.pe.noSel')); return; }
+  commit(plan.ops, t('b.st.moveNotes'));
+  setCurPattern(plan.pattern.id, true);
+  say(t(plan.placed ? 'b.st.movedNotesClips' : 'b.st.movedNotes', { x: notesText(plan.pattern.notes.length), name: plan.pattern.name, n: plan.placed }));
 }
 /** "+ bar": keep one more (empty) bar at the end of the pattern. */
 export function addBar(pt = curPat()) {

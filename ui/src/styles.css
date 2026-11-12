@@ -219,6 +219,8 @@ a { color: var(--blue); }
 .slot { height: 34px; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 8px; border-bottom: 1px solid var(--bg1); cursor: pointer; touch-action: none; }
 .slot:hover { background: var(--bg6); }
 .slot.on { background: var(--sel-bg); }
+/* while a drag holds something its cursor wins over every element's own (ui/drag.ts dragCursor) */
+html.dragcur, html.dragcur * { cursor: var(--drag-cursor) !important; }
 .slot.drag { background: var(--drag-bg); box-shadow: inset 0 0 0 1px var(--blue); cursor: grabbing; }
 .slot .n { width: 12px; flex: none; font: 500 9px var(--mono); color: var(--fg5); }
 .tile { flex: none; border-radius: 5px; display: flex; align-items: center; justify-content: center; }

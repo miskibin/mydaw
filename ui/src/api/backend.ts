@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
-  KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, PitchAnalysis, PitchTarget, RefTune, StateDto, TransportDto, Vst3Info, Vst3Param,
+  KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -101,8 +101,10 @@ export interface Backend {
   libraryAddFolder(): Promise<string[]>;
   libraryRemoveFolder(path: string): Promise<string[]>;
   projectNew(): Promise<StateDto>;
-  projectOpen(path?: string): Promise<StateDto>;
-  projectSave(saveAs?: boolean): Promise<{ path: string }>;
+  /** The file dialog when `path` is omitted. */
+  projectOpen(path?: string): Promise<OpenResult>;
+  /** The save dialog when the project has no path yet or `saveAs`. */
+  projectSave(saveAs?: boolean): Promise<SaveResult>;
   /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
   exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult>;
   /** Abort an in-flight `exportAudio` before a file is written. */

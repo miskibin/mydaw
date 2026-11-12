@@ -2,6 +2,7 @@
 // recording clip. Only the visible window is drawn; everything is in grid coordinates.
 import type { Automation, Channel, Clip, Comp, Id, Note, Pattern, Project, Source, Take, Track } from '../api/types';
 import { keyOf } from '../lib/pattern';
+import type { LaneOverlaps } from '../lib/overlaps';
 import { boundaries, takeEnd, toComp } from '../lib/comp';
 import { mix } from '../lib/color';
 import { rgba, T } from '../ui/theme';
@@ -323,6 +324,44 @@ export function drawFades(g: CanvasRenderingContext2D, v: View, p: Project) {
       g.beginPath(); g.roundRect(cx + cw - fo - 8, by, 9, 9, [0, 0, 0, 3]); g.fill();
     }
     g.restore();
+  }
+  g.restore();
+}
+
+/**
+ * Overlapping clips, on the overlay: an amber hatch along the header where clips of a track
+ * play at once, and "×N" on a clip that hides N − 1 clips entirely (a stacked duplicate).
+ */
+export function drawOverlaps(g: CanvasRenderingContext2D, v: View, p: Project, o: LaneOverlaps) {
+  if (!o.spans.length && !o.covers.size) return;
+  const { offX, offY, W, H, bw, tops } = v;
+  const x0 = offX, x1 = offX + W, y0 = offY, y1 = offY + H;
+  g.save(); g.translate(-offX, -offY);
+  g.lineWidth = 1;
+  for (const s of o.spans) {
+    const tr = p.tracks[s.track], top = tops[s.track]; if (!tr || top == null) continue;
+    const sx = s.a * bw, ex = s.b * bw, cy = top + 1;
+    if (ex < x0 || sx > x1 || cy + 15 < y0 || cy > y1) continue;
+    const w = Math.max(2, ex - sx);
+    g.save();
+    g.beginPath(); g.rect(sx, cy, w, 15); g.clip();
+    g.strokeStyle = rgba(T.amber, 0.55); g.beginPath();
+    for (let x = sx - 15; x < sx + w; x += 5) { g.moveTo(x, cy + 15); g.lineTo(x + 15, cy); }
+    g.stroke();
+    g.fillStyle = rgba(T.amber, 0.9); g.fillRect(sx, cy, w, 2);
+    g.restore();
+  }
+  g.font = MONO9; g.textBaseline = 'middle'; g.textAlign = 'center';
+  for (const c of p.clips) {
+    const n = o.covers.get(c.id); if (!n) continue;
+    const tr = p.tracks[c.track], top = tops[c.track]; if (!tr || top == null) continue;
+    const cx = c.start * bw, cw = Math.max(3, c.len * bw - 1), cy = top + 1;
+    if (cx > x1 || cx + cw < x0 || cy > y1 || cy + 15 < y0) continue;
+    const label = '\u00d7' + (n + 1), bwid = 6 + label.length * 6;
+    if (cw < bwid + 4) continue; // too narrow: the hatch above still shows the stack
+    const bx = cx + cw - bwid - 2;
+    g.fillStyle = T.amber; g.beginPath(); g.roundRect(bx, cy + 2, bwid, 11, 3); g.fill();
+    g.fillStyle = T.onFill; g.fillText(label, bx + bwid / 2, cy + 8);
   }
   g.restore();
 }

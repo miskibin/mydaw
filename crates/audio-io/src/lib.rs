@@ -16,7 +16,7 @@
 mod jitter;
 mod probe;
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering::Relaxed};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -74,6 +74,9 @@ pub struct AudioStatus {
     /// Clock difference of the input against the output in ppm, as followed by the jitter
     /// buffer (0 for one device; up to a few hundred for separate ones).
     pub input_drift_ppm: f32,
+    /// Times the output was reopened by itself after the device or driver stopped it (or the
+    /// audio callback crashed) since the app started. The last reason is in `note`.
+    pub restarts: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -153,8 +156,26 @@ fn same_streams(a: &AudioConfig, b: &AudioConfig) -> bool {
     AudioConfig { rec_offset_ms: None, ..a.clone() } == AudioConfig { rec_offset_ms: None, ..b.clone() }
 }
 
+/// How often the audio thread checks that the output stream is still alive.
+const WATCH: Duration = Duration::from_millis(500);
+
+/// Delay before the `n`-th consecutive attempt to reopen a lost output (1, 2, 4 … 30 s).
+fn retry_delay(n: u32) -> Duration {
+    Duration::from_secs(1u64 << n.min(5)).min(Duration::from_secs(30))
+}
+
 impl AudioIo {
     pub fn spawn(engine: Arc<Engine>) -> Self {
+        Self::spawn_watched(engine, |_| {})
+    }
+
+    /// [`AudioIo::spawn`], calling `changed` (on the audio-io thread) whenever the status
+    /// changes by itself: the output died and was reopened, or could not be reopened.
+    ///
+    /// A device that disappears or a driver error (PipeWire/ALSA restarts, a USB interface
+    /// unplugged) ends a cpal stream for good, and so does a panic in the output callback;
+    /// without this the transport would freeze until the user changed the audio settings.
+    pub fn spawn_watched(engine: Arc<Engine>, changed: impl Fn(&AudioStatus) + Send + 'static) -> Self {
         let (tx, rx) = mpsc::channel::<Req>();
         thread::Builder::new()
             .name("wave-audio-io".into())
@@ -166,7 +187,44 @@ impl AudioIo {
                 // on Bluetooth headphones an open mic forces the low-quality "headset" profile.
                 // It opens and closes on its own, without restarting the output.
                 let mut want_input = false;
-                while let Ok(req) = rx.recv() {
+                // the output was lost and could not be reopened yet: the next attempt and its number
+                let mut lost: Option<(Instant, u32)> = None;
+                let mut restarts = 0u32;
+                loop {
+                    let req = match rx.recv_timeout(WATCH) {
+                        Ok(r) => Some(r),
+                        Err(mpsc::RecvTimeoutError::Timeout) => None,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    // ---- watchdog: reopen an output that died by itself
+                    let why = cur.as_ref().and_then(Running::failure);
+                    let retry = lost.filter(|(at, _)| Instant::now() >= *at);
+                    if why.is_some() || retry.is_some() {
+                        let tries = retry.map_or(0, |(_, n)| n);
+                        drop(cur.take());
+                        match open(&engine, &cfg_now, want_input) {
+                            Ok((run, st)) => {
+                                cur = Some(run);
+                                restarts += 1;
+                                lost = None;
+                                let why = why.unwrap_or_else(|| "the device was unavailable".into());
+                                status = AudioStatus { note: Some(format!("Audio restarted by itself: {why}.")), restarts, ..st };
+                            }
+                            Err(e) => {
+                                lost = Some((Instant::now() + retry_delay(tries), tries + 1));
+                                let why = why.map(|w| format!("{w}; ")).unwrap_or_default();
+                                status = AudioStatus {
+                                    config: cfg_now.clone(),
+                                    error: Some(format!("Audio stopped ({why}reopening failed: {e}). Retrying…")),
+                                    asio_compiled: asio_compiled(),
+                                    restarts,
+                                    ..Default::default()
+                                };
+                            }
+                        }
+                        changed(&status);
+                    }
+                    let Some(req) = req else { continue };
                     if let Some(r) = cur.as_mut() {
                         r.collect_garbage();
                     }
@@ -194,6 +252,7 @@ impl AudioIo {
                         }
                         Req::Stop(reply) => {
                             drop(cur.take());
+                            lost = None;
                             status.running = false;
                             let _ = reply.send(());
                             continue;
@@ -202,8 +261,9 @@ impl AudioIo {
                             if let Some(r) = cur.as_ref() {
                                 r.read_stats(&mut status);
                                 if let Some(e) = r.error.lock().ok().and_then(|g| g.clone()) {
+                                    // a lost microphone leaves the output playing
+                                    status.running = e.starts_with(INPUT_ERR);
                                     status.error = Some(e);
-                                    status.running = false;
                                 }
                             }
                             let _ = reply.send(status.clone());
@@ -234,14 +294,15 @@ impl AudioIo {
                         }
                     };
                     cfg_now = cfg.clone();
+                    lost = None; // the user chose (or re-chose) the devices: no automatic retries
                     drop(cur.take()); // stop the old streams before opening new ones (ASIO is exclusive)
                     match open(&engine, &cfg, want_input) {
                         Ok((run, st)) => {
                             cur = Some(run);
-                            status = st;
+                            status = AudioStatus { restarts, ..st };
                         }
                         Err(e) => {
-                            status = AudioStatus { config: cfg, error: Some(e), asio_compiled: asio_compiled(), ..Default::default() };
+                            status = AudioStatus { config: cfg, error: Some(e), asio_compiled: asio_compiled(), restarts, ..Default::default() };
                         }
                     }
                     let _ = reply.send(status.clone());
@@ -328,9 +389,19 @@ struct Running {
     /// `recOffsetMs` as f32 bits, read by the output callback.
     offset_ms: Arc<AtomicU32>,
     stats: Arc<IoStats>,
+    /// Set by the output callback when the engine panicked in it; it plays silence after that.
+    crashed: Arc<AtomicBool>,
 }
 
 impl Running {
+    /// Why the output stream is gone for good, if it is: a stream error reported by the driver
+    /// (cpal ends the stream after one) or a crash in the callback. Input errors are not
+    /// fatal here: the output keeps playing without the microphone.
+    fn failure(&self) -> Option<String> {
+        let err = self.error.lock().ok().and_then(|g| g.clone());
+        output_failure(self.crashed.load(Relaxed), err.as_deref())
+    }
+
     fn read_stats(&self, st: &mut AudioStatus) {
         st.input_underruns = self.stats.underruns.load(Relaxed);
         st.input_overruns = self.stats.overruns.load(Relaxed);
@@ -478,7 +549,8 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
     let mut rt = engine.create_rt(rate as f32, (nominal as usize).clamp(64, 2048));
     // after Play the music is heard at once, not after the plugin delay compensation
     rt.set_instant_start(Some(0.7));
-    let wires = OutWires { shared: engine.shared(), swap: swap_rx, trash: trash_tx, probe: probe_rx, back: back_tx, offset_ms: offset_ms.clone(), stats: stats.clone(), shared_clock, buffer: nominal };
+    let crashed = Arc::new(AtomicBool::new(false));
+    let wires = OutWires { shared: engine.shared(), swap: swap_rx, trash: trash_tx, probe: probe_rx, back: back_tx, offset_ms: offset_ms.clone(), stats: stats.clone(), shared_clock, buffer: nominal, crashed: crashed.clone() };
     let out = build_output(&out_dev, &sc, fmt, rt, error.clone(), wires).map_err(|e| format!("{out_name}: {e}"))?;
     out.play().map_err(|e| format!("{out_name}: {e}"))?;
     if let Some(s) = &inp {
@@ -502,7 +574,7 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
         asio_compiled: asio_compiled(),
         ..Default::default()
     };
-    let run = Running { _out: out, inp, input_open, asio: is_asio, host, rate, buffer, error, swap: swap_tx, trash: trash_rx, probe_tx, probe_back: back_rx, offset_ms, stats };
+    let run = Running { _out: out, inp, input_open, asio: is_asio, host, rate, buffer, error, swap: swap_tx, trash: trash_rx, probe_tx, probe_back: back_rx, offset_ms, stats, crashed };
     Ok((run, status))
 }
 
@@ -621,6 +693,29 @@ fn with_offset(frames: u32, offset_ms: f32, rate: u32) -> u32 {
     (frames as f64 + offset_ms as f64 * rate as f64 / 1000.0).round().max(0.0) as u32
 }
 
+/// Prefix of the stream errors that come from the input.
+const INPUT_ERR: &str = "input: ";
+
+/// Whether the output stream is dead, and why: a crash in its callback, or a stream error that
+/// is not the input's.
+fn output_failure(crashed: bool, error: Option<&str>) -> Option<String> {
+    if crashed {
+        return Some("the audio engine crashed in the output callback".into());
+    }
+    error.filter(|e| !e.starts_with(INPUT_ERR)).map(str::to_string)
+}
+
+/// Runs one output callback's work; a panic in it is caught (it must not unwind into the
+/// driver: on ALSA it would end cpal's thread, and the stream with it, silently) and marks the
+/// stream `crashed`. Returns false when it panicked. Costs nothing unless one happens.
+fn guarded(crashed: &AtomicBool, work: impl FnOnce()) -> bool {
+    let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).is_ok();
+    if !ok {
+        crashed.store(true, Relaxed);
+    }
+    ok
+}
+
 /// Everything the output callback talks to besides the engine.
 struct OutWires {
     shared: Arc<wave_engine::rt::Shared>,
@@ -632,6 +727,7 @@ struct OutWires {
     stats: Arc<IoStats>,
     shared_clock: bool,
     buffer: u32,
+    crashed: Arc<AtomicBool>,
 }
 
 fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut rt: wave_engine::Rt, err: Arc<std::sync::Mutex<Option<String>>>, mut w: OutWires) -> Result<cpal::Stream, String> {
@@ -645,6 +741,7 @@ fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFo
     let mut il = vec![0f32; MAX_CALLBACK];
     let mut ir = vec![0f32; MAX_CALLBACK];
     let shared_clock = w.shared_clock;
+    let crashed = w.crashed.clone();
     let mut render = move |frames: usize, out_lat: u32, now_ns: f64, write: &mut dyn FnMut(usize, f32, f32)| {
         while let Ok(next) = w.swap.pop() {
             if let Some(old) = std::mem::replace(&mut input, next) {
@@ -718,19 +815,30 @@ fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFo
             dev.build_output_stream(
                 *sc,
                 move |data: &mut [$t], info: &cpal::OutputCallbackInfo| {
+                    // after a crash the engine's state is unknown: silence until the audio
+                    // thread reopens the stream with a fresh one
+                    if crashed.load(Relaxed) {
+                        data.fill($conv(0.0));
+                        return;
+                    }
                     let frames = data.len() / ch;
                     let ts = info.timestamp();
                     let out_lat = frames_of(ts.playback.duration_since(ts.callback), rate);
-                    render(frames, out_lat, ts.callback.as_nanos() as f64, &mut |i, a, b| {
-                        let base = i * ch;
-                        data[base] = $conv(a);
-                        if ch > 1 {
-                            data[base + 1] = $conv(b);
-                            for k in 2..ch {
-                                data[base + k] = $conv(0.0);
+                    let ok = guarded(&crashed, || {
+                        render(frames, out_lat, ts.callback.as_nanos() as f64, &mut |i, a, b| {
+                            let base = i * ch;
+                            data[base] = $conv(a);
+                            if ch > 1 {
+                                data[base + 1] = $conv(b);
+                                for k in 2..ch {
+                                    data[base + k] = $conv(0.0);
+                                }
                             }
-                        }
+                        })
                     });
+                    if !ok {
+                        data.fill($conv(0.0));
+                    }
                 },
                 on_err,
                 None,
@@ -754,7 +862,7 @@ fn build_input(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFor
     let mut pushed = 0u64;
     let on_err = move |e: cpal::Error| {
         if let Ok(mut g) = err.lock() {
-            *g = Some(format!("input: {e}"));
+            *g = Some(format!("{INPUT_ERR}{e}"));
         }
     };
     macro_rules! stream {
@@ -1065,5 +1173,40 @@ mod tests {
         let c: AudioConfig = serde_json::from_str(r#"{"host":"","output":null,"input":null,"sampleRate":null,"bufferSize":null}"#).unwrap();
         assert_eq!(c.input_channel, None);
         assert_eq!(c.rec_offset_ms, None);
+    }
+
+    #[test]
+    fn only_output_errors_and_crashes_kill_the_output() {
+        assert_eq!(output_failure(false, None), None);
+        // a lost microphone leaves the output playing
+        assert_eq!(output_failure(false, Some("input: device disconnected")), None);
+        assert_eq!(output_failure(false, Some("The requested device is no longer available")).as_deref(), Some("The requested device is no longer available"));
+        assert!(output_failure(true, None).unwrap().contains("crashed"));
+        assert!(output_failure(true, Some("input: x")).is_some());
+    }
+
+    #[test]
+    fn a_panicking_callback_is_caught_and_marks_the_stream() {
+        let crashed = AtomicBool::new(false);
+        assert!(guarded(&crashed, || {}));
+        assert!(!crashed.load(Relaxed));
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // keep the test output clean
+        let ok = guarded(&crashed, || panic!("plugin blew up"));
+        std::panic::set_hook(prev);
+        assert!(!ok);
+        assert!(crashed.load(Relaxed));
+    }
+
+    #[test]
+    fn reopening_backs_off_up_to_30_s() {
+        let d: Vec<u64> = (0..8).map(|n| retry_delay(n).as_secs()).collect();
+        assert_eq!(d, vec![1, 2, 4, 8, 16, 30, 30, 30]);
+    }
+
+    #[test]
+    fn restarts_are_reported_in_camel_case() {
+        let v = serde_json::to_value(AudioStatus { restarts: 2, ..Default::default() }).unwrap();
+        assert_eq!(v["restarts"], 2);
     }
 }

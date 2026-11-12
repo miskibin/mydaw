@@ -11,7 +11,7 @@ import { MiniKnob } from '../ui/Knob';
 import { anyInsertSolo, insName, S } from '../state/store';
 import { tele } from '../state/telemetry';
 import { openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
-import { dblCheck, track } from '../ui/drag';
+import { dblCheck, dragCursor, track } from '../ui/drag';
 import { addFrameTask } from '../ui/frameLoop';
 import { FXMETA, FxTile, Icon, ICONS } from '../ui/icons';
 import { guessIcon, InstIcon, trackIcon } from '../ui/instIcons';
@@ -180,12 +180,12 @@ function FxSlot(props: { f: Fx; n: number; insId: Id }) {
     setU('fxSel', fxId);
     track(ev => {
       const dy = ev.clientY - sy;
-      if (!g) { if (Math.abs(dy) < 4) return; g = new Gesture(tr('c.mix.fxOrder')); setU('fxDrag', fxId); document.body.style.cursor = 'grabbing'; }
+      if (!g) { if (Math.abs(dy) < 4) return; g = new Gesture(tr('c.mix.fxOrder')); setU('fxDrag', fxId); dragCursor('grabbing'); }
       const ins = S.project.inserts.find(m => m.id === props.insId); if (!ins) return;
       const cur = ins.fx.findIndex(x => x.id === fxId), to = clamp(i0 + Math.round(dy / rowH), 0, ins.fx.length - 1);
       if (cur >= 0 && to !== cur) g.update([{ op: 'moveFx', fxId, to }]);
     }, () => {
-      if (g) { g.end(); setU('fxDrag', null); say(tr('c.mix.fxOrderDone')); }
+      if (g) { dragCursor(null); g.end(); setU('fxDrag', null); say(tr('c.mix.fxOrderDone')); }
       else A.openPlug(fxId);
     });
   };

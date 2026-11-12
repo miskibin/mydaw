@@ -111,11 +111,21 @@ export async function projectNew() {
 export async function projectOpen() {
   if (!(await guardUnsaved(t('d.act.guard.open')))) return;
   flushNotebook();
-  try { acceptReply(await enqueue(() => be().projectOpen())); afterProjectLoad(); say(t('d.act.opened', { path: S.path ?? '' })); } catch (e) { say(t('d.act.openfail', { err: String(e) })); }
+  try {
+    const r = await enqueue(() => be().projectOpen());
+    if (r.cancelled) return;
+    acceptReply(r.state); afterProjectLoad();
+    const path = S.path ?? '';
+    say(r.warnings.length ? t('d.act.openedwarn', { path, n: r.warnings.length, first: r.warnings[0] }) : t('d.act.opened', { path }));
+  } catch (e) { say(t('d.act.openfail', { err: String(e) })); }
 }
 export async function projectSave(saveAs = false): Promise<boolean> {
   flushNotebook();
-  try { const r = await enqueue(() => be().projectSave(saveAs)); say(t('d.act.saved', { path: r.path })); await resync(); return true; } catch (e) { say(t('d.act.savefail', { err: String(e) })); return false; }
+  try {
+    const r = await enqueue(() => be().projectSave(saveAs));
+    if (r.cancelled) return false; // the save dialog was dismissed: nothing was written
+    say(t('d.act.saved', { path: r.path })); await resync(); return true;
+  } catch (e) { say(t('d.act.savefail', { err: String(e) })); return false; }
 }
 /** Window close: ask about unsaved changes, then really close. */
 export async function closeWindowGuarded(): Promise<boolean> {

@@ -111,7 +111,17 @@ pan, volume, mixer insert, name, steps — "+ / −" bars, swing, and the graph 
 per-step velocity and key of the selected channel) and the **Piano roll** (F7: the selected
 channel's notes in the current pattern, any channel; the pattern's other channels as ghost
 notes, double right-click one to switch). PAT mode (L) loops the current pattern and follows
-it when it changes.
+it when it changes. *To new pattern* (Ctrl+Shift+X, or the button shown while notes are
+selected) moves the selected notes to a new pattern at the same steps. Both patterns keep
+the source's length, and every playlist clip of the source gets a clip of the new pattern
+beside it, on the nearest lane below that is free over its span (a new lane when none is),
+so the song sounds the same. It is one undo step (`lib/moveNotes.ts`).
+
+**Stacked clips.** Clips may overlap on a track, as in FL (layers, crossfades). The
+playlist overlay hatches the header where clips of a track play at once, and puts "×N" on a
+clip that hides N − 1 clips entirely (`lib/overlaps.ts`). Clicking such a clip says so in
+the status line. The overlay is recomputed with the fades on clip edits and tile moves,
+never per frame.
 
 **The standard library** (`crates/engine/src/factory.rs`). Fifty CC0 one-shots (kicks,
 snares, claps, hats, cymbals, toms, percussion, a few tonal ones) are embedded in the engine
@@ -223,7 +233,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `library_install` | `{id}` | – ; progress as event `library-progress {id,done,total,error?}` |
 | `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group, root?}]`; kit `Standard` = the standard library (always installed); `root` = the file's own pitch when the library knows it |
 | `library_add_folder` / `library_remove_folder` | – (native dialog) / `{path}` | updated `folders` |
-| `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `StateDto` / `{path}` |
+| `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `{state: StateDto, warnings}` or `{cancelled}` / `{path}` or `{cancelled}` |
 | `export_audio` | `{useLoop, tail, sampleRate}` | `{out, fromBeat, toBeat, tail, stats}` or `{cancelled:true}`; native save dialog; offline master → 32-bit float stereo WAV |
 | `export_cancel` | – | – (abort an in-flight `export_audio` before a file is written) |
 | `vst3_scan` | `{rescan}` | `[{path,cid,name,vendor,category}]` |
@@ -364,6 +374,18 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
     peak prominence over echoes. The job travels to the audio thread and back
     in a preallocated `Box` through lock-free rings; analysis runs on the
     caller's thread.
+* **Output watchdog** (`AudioIo::spawn_watched`). A driver error ends a cpal
+  stream for good (PipeWire/ALSA restarted, a USB interface unplugged), and a
+  panic in the output callback would unwind into the driver (on ALSA it ends
+  cpal's thread silently). The callback runs the engine under `catch_unwind`
+  (no cost unless one happens) and plays silence after a crash; the audio-io
+  thread checks every 500 ms and reopens a dead output with the same config
+  and a fresh `Rt` (input errors only drop the microphone). When reopening
+  fails it retries after 1, 2, 4 … 30 s until it works or the user changes the
+  settings. `AudioStatus.restarts` counts the reopenings, the reason is in
+  `note`, and each change is pushed as an `audio-status` event that the UI
+  shows in its status line. A callback that *blocks* is not reopened, because
+  dropping a stream whose callback is stuck can hang the thread that drops it.
 * **Input jitter buffer** (`crates/audio-io/src/jitter.rs`). The input stream
   opens and closes on its own (`AudioIo::set_input` hands the output callback
   a new ring through a lock-free swap ring; the old one is freed off the audio

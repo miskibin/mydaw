@@ -16,11 +16,12 @@ import { peaksVersion } from '../state/peaks';
 import { allocId, anyTrackSolo, arrVersion, onArrangementChange, plain, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
-import { dblCheck, edgeScroller, panDrag, track } from '../ui/drag';
+import { dblCheck, dragCursor, edgeScroller, panDrag, track } from '../ui/drag';
 import { fitSpan, zoomScroll, zoomToRange } from '../lib/viewNav';
 import { barsText } from '../lib/pattern';
 import { addFrameTask, fitCanvas, fonts } from '../ui/frameLoop';
-import { drawFades, drawGrid, drawRuler, type View } from './playlistDraw';
+import { drawFades, drawGrid, drawOverlaps, drawRuler, type View } from './playlistDraw';
+import { laneOverlaps } from '../lib/overlaps';
 import { damageRects, followScroll, planTile, snapPx, type Rect, type Tile } from './playlistTile';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { sortPoints } from '../lib/automation';
@@ -344,7 +345,10 @@ export function Playlist() {
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       const P = unwrap(S.project);
       if (P.loop) { g.fillStyle = rgba(T.green, 0.05); g.fillRect(P.loop.a * U.bw - t.x, 0, (P.loop.b - P.loop.a) * U.bw, Math.min(t.h, gridH() - t.y)); }
-      drawFades(g, at(frameView(), t, { x: 0, y: 0, w: t.w, h: t.h }), P);
+      const fv = at(frameView(), t, { x: 0, y: 0, w: t.w, h: t.h });
+      drawFades(g, fv, P);
+      // stacked clips: recomputed with the overlay, i.e. on clip edits and tile moves, never per frame
+      drawOverlaps(g, fv, P, laneOverlaps(P.clips));
     }
     // the ruler is cheap: redrawn whole whenever its tile moves
     if (dirtyRuler || !rulerTile || rulerTile.x !== t.x || rulerTile.w !== t.w) paintRuler(t, dpr);
@@ -624,6 +628,9 @@ export function Playlist() {
     let orig = plain(S.project.clips.filter(c => idSet.has(c.id)));
     let lead = clip.id;
     setU('sel', ids);
+    // a clip with others hidden under it ("×N"): say so before the drag reveals them
+    const hidden = laneOverlaps(unwrap(S.project).clips.filter(c => c.track === clip.track)).covers.get(clip.id);
+    if (hidden) say(tl('a.pl.stacked', { n: hidden + 1 }));
     const sx = e.clientX, sy = e.clientY, n = S.project.tracks.length, gx0 = sx - gridLeft();
     const t0 = trackAtYClamped(sy - gridEl.getBoundingClientRect().top);
     let moved = false, lastD = NaN, lastDt = NaN;
@@ -751,13 +758,13 @@ export function Playlist() {
     };
     // FL: a right-click on a clip deletes it at once and a right-drag deletes what it crosses (one
     // undo step). The clip's menu is on its icon; empty space and a comp boundary keep their menus.
-    const start = () => { g = new Gesture(tl('a.pl.deleteClips')); document.body.style.cursor = 'not-allowed'; del(h?.c.id); };
+    const start = () => { g = new Gesture(tl('a.pl.deleteClips')); dragCursor('not-allowed'); del(h?.c.id); };
     if (h && h.edge !== 'cb') start();
     track(ev => {
       if (!g && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 5) start();
       if (g) { const q = pt(ev); del(hit(q.x, q.y)?.c.id); }
     }, () => {
-      document.body.style.cursor = '';
+      dragCursor(null);
       if (g) { g.end(); return; }
       if (h?.edge === 'cb') openBoundaryMenu(sx, sy, h.c, h.bnd!);
       else openGridMenu(sx, sy, p);

@@ -355,6 +355,8 @@ export interface AudioStatus extends AudioConfig {
   inputOverruns: number;
   /** Input clock vs output clock in ppm as followed by the jitter buffer (≈0 for one device). */
   inputDriftPpm: number;
+  /** Times the output reopened by itself after the device or driver stopped it (reason in `note`). */
+  restarts: number;
 }
 /** Result of `audioMeasureLatency`. */
 export interface LatencyReport {
@@ -403,6 +405,13 @@ export interface ExportStats {
 export type ExportResult =
   | { cancelled: true }
   | { cancelled?: false; out: string; fromBeat: number; toBeat: number; tail: number; stats: ExportStats };
+
+/** Result of `projectOpen`; `{ cancelled: true }` when the file dialog was dismissed. */
+export type OpenResult =
+  | { cancelled: true }
+  | { cancelled?: false; state: StateDto; warnings: string[] };
+/** Result of `projectSave`; `{ cancelled: true }` when the save dialog was dismissed. */
+export type SaveResult = { cancelled: true } | { cancelled?: false; path: string };
 
 export interface ImportResult { sourceIds: Id[]; clipIds: Id[] }
 
