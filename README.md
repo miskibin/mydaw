@@ -50,7 +50,8 @@ the one free build.
 
 **Every effect draws what it does to your audio.** The picture above the knobs comes from the
 signal passing through, so you see the compressor's gain reduction or the saturator's curve
-instead of guessing. Recorded from the running interface, on a drum loop:
+instead of guessing. Two of them on a drum loop (captured in the interface's browser demo,
+where the signal is simulated; in the app the engine feeds the same drawing code):
 
 <p align="center">
   <img src="site/img/comp-live.gif" width="42%" alt="Compressor on a drum loop: the transfer curve, the level history and the gain reduction drawn over it">
@@ -74,8 +75,9 @@ wave render --out check.wav --to 16       # offline bounce + level statistics
 
 **The engine is written for the audio thread first.** The callback never allocates, locks or
 touches a file (the benchmark counts allocations on the audio thread: zero). Moving a knob never rebuilds the graph.
-The synth's oscillators stay more than 60 dB above their aliasing up to C7
-([measurements](docs/synth.md)). How it is put together: [`docs/architecture.md`](docs/architecture.md).
+Sixteen synth voices with two oscillators and seven-voice unison each, every effect on, take
+about 17 % of one core at 48 kHz with 64-sample blocks, and the oscillators stay more than
+60 dB above their aliasing up to C7 ([measurements](docs/synth.md)). How it is put together: [`docs/architecture.md`](docs/architecture.md).
 
 **The licence lets you do what you want with it.** WAVE is MIT or Apache-2.0. LMMS, Zrythm,
 Nota and openDAW are GPL or AGPL. If you want to build on a DAW engine without those terms,
@@ -148,8 +150,8 @@ instruments such as Serum, or on FL's own plugins: not yet.
 `wave` command is there if you want an agent, or your own script, to work in the project.
 
 **Was it written by AI?** Mostly, yes, directed by a musician who works with DSP for a living;
-see the note above. The engine has tests for clicks, aliasing, loudness and allocations in the
-audio callback, and they run on every change.
+see the note above. The engine has tests for clicks, aliasing and loudness that run on every
+change, and a benchmark that counts allocations in the audio callback.
 
 ## Install
 
