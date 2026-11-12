@@ -125,6 +125,19 @@ function EditorBody(props: { clip: Clip; src: Source }) {
     track(ev => setU('editor', ed => ed && { ...ed, w: clamp(o.w + ev.clientX - sx, 600, window.innerWidth - 20), h: clamp(o.h + ev.clientY - sy, 340, window.innerHeight - 20) }), null, 'nwse-resize');
   };
   const previewing = () => U.previewing;
+  /** The mixer insert of the clip's track (every clip on that track plays through it). */
+  const route = (id: number) => { A.setTrack(c().track, { insert: id }, t('d.smp.routing')); setU('mixSel', id); };
+  /** Wheel over the picker steps through the inserts (FL's channel settings): down = next. One undo step per burst. */
+  const routeWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    const ins = S.project.inserts, cur = tr(); if (!cur || !e.deltaY) return;
+    const i = ins.findIndex(m => m.id === cur.insert), j = clamp(i + (e.deltaY > 0 ? 1 : -1), 0, ins.length - 1);
+    if (j === i) return;
+    const op = A.trackOp(c().track, { insert: ins[j].id }); if (!op) return;
+    wheelEdit('edroute', t('d.smp.routing'), [op]);
+    setU('mixSel', ins[j].id);
+    say(t('d.smp.routedTo', { name: insName(ins[j]) }));
+  };
   const handle = (left: () => number, kind: string, title: string) => (
     <div data-ed={kind} title={title} style={{ position: 'absolute', top: 0, bottom: 0, left: left() + 'px', width: '9px', 'margin-left': '-4px', cursor: 'ew-resize' }} />
   );
@@ -132,9 +145,15 @@ function EditorBody(props: { clip: Clip; src: Source }) {
     <div class="win" style={{ left: E().x + 'px', top: E().y + 'px', width: E().w + 'px', height: E().h + 'px', 'z-index': 40 }} data-editor>
       <div class="winhd" style={{ height: '32px', padding: '0 6px 0 12px' }} onPointerDown={e => moveWindow(e, () => E(), (x, y) => setU('editor', ed => ed && { ...ed, x, y }))}>
         <span style={{ width: '8px', height: '8px', 'border-radius': '50%', background: src().color }} />
-        <span class="title">{src().name}</span>
+        <span class="title ell" style={{ 'min-width': '0', flex: '0 1 auto' }} title={src().name}>{src().name}</span>
         <span class="sub">{tr()?.name ?? ''}</span>
         <div style={{ flex: 1 }} />
+        <span class="tag9">MIXER</span>
+        <select class="sel" style={{ height: '22px', 'max-width': '170px', flex: 'none' }} value={String(tr()?.insert ?? 0)}
+          title={t('d.smp.mixer.tip', { track: tr()?.name ?? '' })}
+          onChange={e => route(+e.currentTarget.value)} onWheel={routeWheel}>
+          <For each={S.project.inserts}>{m => <option value={String(m.id)}>{insName(m)}</option>}</For>
+        </select>
         <button class="closebtn" title={t('d.smp.close')} onClick={A.closeEditor}>×</button>
       </div>
       <div class="row mono" style={{ height: '28px', flex: 'none', 'justify-content': 'space-between', gap: '12px', padding: '0 16px', 'font-size': '10px', color: 'var(--fg4)' }}>
@@ -184,14 +203,6 @@ function EditorBody(props: { clip: Clip; src: Source }) {
           <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title={t('d.smp.music.tip')} onClick={() => A.openMusicAnalysis({ clipId: c().id })}>{t('d.smp.music')}</button>
           <button class="smallbtn" style={{ height: '22px', padding: '0 12px' }} title={t('d.smp.trim.tip')}
             onClick={() => be().trimClip(c().id).then(() => say(t('d.smp.trimmed'))).catch(e => say(t('d.smp.trimfail', { err: String(e) })))}>{t('d.smp.trim')}</button>
-        </div>
-        <div style={{ flex: 1 }} />
-        <div class="row" style={{ gap: '6px' }}>
-          <span class="tag9">MIXER</span>
-          <select class="sel" style={{ height: '26px' }} value={String(tr()?.insert ?? 0)}
-            onChange={e => { const id = +e.currentTarget.value; A.setTrack(c().track, { insert: id }, t('d.smp.routing')); setU('mixSel', id); }}>
-            <For each={S.project.inserts}>{m => <option value={String(m.id)}>{insName(m)}</option>}</For>
-          </select>
         </div>
       </div>
       <div class="resizer" onPointerDown={resize} title={t('d.smp.resize')} />
