@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://miskibin.github.io/wave-DAW/sitemap.xml

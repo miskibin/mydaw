@@ -3,11 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WAVE — a fast, open-source DAW</title>
-<meta name="description" content="WAVE is a fast, FL-Studio-style DAW written in Rust: playlist, piano roll, mixer with visual effects, a built-in synth, a sampled grand piano, recording with comping, pitch editing, VST3, ASIO and a command line that edits the open project live.">
-<meta property="og:title" content="WAVE — a fast, open-source DAW">
-<meta property="og:description" content="Playlist, piano roll, mixer, synth, sampled grand, recording, pitch editing, VST3 and ASIO. Rust engine, free and open source.">
-<meta property="og:image" content="img/hero.png">
+<title>WAVE: a free, open-source DAW that works the FL Studio way</title>
+<meta name="description" content="WAVE is a free, open-source DAW for Windows and Linux that works the FL Studio way: patterns, Channel Rack, piano roll and playlist. Audio recording with comping and vocal pitch editing are included, and an AI agent can edit the open project through the wave command line. Rust audio engine, MIT or Apache-2.0.">
+<link rel="canonical" href="https://miskibin.github.io/wave-DAW/">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://miskibin.github.io/wave-DAW/">
+<meta property="og:title" content="WAVE: a free, open-source DAW that works the FL Studio way">
+<meta property="og:description" content="Patterns, Channel Rack, piano roll, playlist. Recording with comping and vocal tuning included. An AI agent can edit the open project. Windows and Linux, MIT or Apache-2.0.">
+<meta property="og:image" content="https://miskibin.github.io/wave-DAW/img/hero.png">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "WAVE",
+  "alternateName": "WAVE Studio",
+  "applicationCategory": "MultimediaApplication",
+  "applicationSubCategory": "Digital audio workstation",
+  "operatingSystem": "Windows, Linux",
+  "description": "WAVE is a free, open-source DAW for Windows and Linux that works the FL Studio way: patterns, Channel Rack, piano roll and playlist. Audio recording with comping and vocal pitch editing are included, and an AI agent can edit the open project through the wave command line. Rust audio engine, MIT or Apache-2.0.",
+  "url": "https://miskibin.github.io/wave-DAW/",
+  "downloadUrl": "https://github.com/miskibin/wave-DAW/releases/latest",
+  "codeRepository": "https://github.com/miskibin/wave-DAW",
+  "license": "https://github.com/miskibin/wave-DAW#licence",
+  "isAccessibleForFree": true,
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "screenshot": "https://miskibin.github.io/wave-DAW/img/hero.png"
+}
+</script>
 <link rel="icon" type="image/png" href="img/icon.png">
 <style>
   :root {
@@ -227,8 +250,8 @@
     </div>
     <h3 class="group">Mixing</h3>
     <div class="gallery small">
-      <figure><img src="img/eq.png" alt="Parametric EQ window" loading="lazy"><figcaption><b>Parametric EQ</b>Up to 24 bands, dynamic bands, mid/side placement and a live analyser, edited by dragging the curve.</figcaption></figure>
-      <figure><img src="img/compressor.png" alt="Compressor window" loading="lazy"><figcaption><b>Compressor</b>The transfer curve with the threshold on it, next to the level history with the gain reduction drawn over it.</figcaption></figure>
+      <figure><img src="img/eq-live.gif" alt="Parametric EQ window on a drum loop, with the live spectrum moving under the curve" loading="lazy"><figcaption><b>Parametric EQ</b>Up to 24 bands, dynamic bands, mid/side placement and a live analyser, edited by dragging the curve.</figcaption></figure>
+      <figure><img src="img/comp-live.gif" alt="Compressor window on a drum loop, with the gain reduction drawn over the level history" loading="lazy"><figcaption><b>Compressor</b>The transfer curve with the threshold on it, next to the level history with the gain reduction drawn over it.</figcaption></figure>
       <figure><img src="img/fet.png" alt="FET compressor window" loading="lazy"><figcaption><b>FET compressor</b>The fast, coloured one. A needle with real VU ballistics, peak bars and six seconds of gain-reduction history.</figcaption></figure>
       <figure><img src="img/saturator.png" alt="Saturator window" loading="lazy"><figcaption><b>Saturator</b>Five voicings from tape to pentode. The live input/output trace rides the transfer curve, and the spectrum shows the harmonics the stage adds.</figcaption></figure>
       <figure><img src="img/limiter.png" alt="Limiter window" loading="lazy"><figcaption><b>Limiter</b>True-peak ceiling for the master, with the same curve and history view as the compressor.</figcaption></figure>
@@ -339,6 +362,23 @@
       <div class="stat"><div class="n">17 %</div><div class="l">of one core for 16 synth voices × 2 oscillators × 7 unison with every effect on, 48 kHz, 64-sample blocks</div></div>
       <div class="stat"><div class="n">&gt; 60 dB</div><div class="l">alias-to-signal ratio of the synth's oscillators across the keyboard</div></div>
       <div class="stat"><div class="n">Rust</div><div class="l">engine and shell (Tauri 2), SolidJS and canvas for the interface</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <div class="kicker">Questions</div>
+    <h2>What people ask first</h2>
+    <div class="grid">
+      <div class="cell"><h3>Is it really free?</h3><p>Yes. There is one build, no paid edition and no account. The source is open under MIT or Apache-2.0.</p></div>
+      <div class="cell"><h3>Can it replace FL Studio?</h3><p>For beats built from the built-in synth, the piano, samples and your own recordings: yes. If your sound depends on VST instruments such as Serum, or on FL's own plugins: not yet.</p></div>
+      <div class="cell"><h3>Does it run on a Mac?</h3><p>No. Windows and Linux (deb, rpm, AppImage) only.</p></div>
+      <div class="cell"><h3>Which plugins does it load?</h3><p>VST3 effects, with their own windows on Windows and WAVE's parameter list on Linux. No VST instruments, CLAP or LV2 yet.</p></div>
+      <div class="cell"><h3>Can it open FL Studio projects?</h3><p>No. Bring stems or samples over; WAV, FLAC, OGG and MP3 import by drag and drop.</p></div>
+      <div class="cell"><h3>Do I need an AI agent?</h3><p>No. It is a normal DAW with a mouse and a keyboard. The <code>wave</code> command is there if you want an agent, or your own script, to work in the project.</p></div>
+      <div class="cell"><h3>Does it work with PipeWire?</h3><p>Yes. Pick JACK in Settings to use PipeWire's JACK at the server's rate and buffer, or use ALSA. WAVE reopens the device if the audio server restarts.</p></div>
+      <div class="cell"><h3>Was it written by AI?</h3><p>Mostly, directed by a musician who works with DSP for a living. The engine has tests for clicks, aliasing and loudness, and a benchmark that counts allocations in the audio callback.</p></div>
     </div>
   </div>
 </section>
