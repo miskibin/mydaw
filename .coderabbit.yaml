@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit reviews pull requests from contributors only.
+language: en-US
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    # The maintainer's own PRs are not reviewed.
+    ignore_usernames:
+      - miskibin
+    # Review once when the PR opens, not on every push, so the free
+    # open-source quota lasts. Comment `@coderabbitai review` to re-run.
+    auto_incremental_review: false
+    drafts: false
+knowledge_base:
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - AGENTS.md
+      - docs/architecture.md
