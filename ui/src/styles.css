@@ -110,13 +110,38 @@ a { color: var(--blue); }
   0% { transform: translateX(-100%); }
   100% { transform: translateX(350%); }
 }
-.fgroup { padding: 4px 10px 2px 22px; font: 600 9px var(--sans); letter-spacing: .1em; color: var(--fg5); text-transform: uppercase; }
-.fitem { height: 22px; display: flex; align-items: center; gap: 6px; padding: 0 10px 0 22px; font: 12px var(--sans); color: var(--fg2); cursor: grab; }
+.bsearch { height: 30px; flex: none; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 10px; border-bottom: 1px solid var(--bg0); color: var(--fg4); }
+.bsearch:focus-within { color: var(--fg2); box-shadow: inset 0 -1px 0 var(--blue); }
+.bsearch input { flex: 1; min-width: 0; height: 22px; border: 0; outline: 0; background: transparent; color: var(--fg-hi); font: 12px var(--sans); }
+.bsearch input::placeholder { color: var(--fg5); }
+.browser .scroll:focus { outline: none; }
+.browser .scroll:focus-visible { box-shadow: inset 0 0 0 1px var(--sel-ring); }
+.hmeta { flex: none; margin-left: 8px; font: 500 10px var(--mono); letter-spacing: 0; color: var(--fg4); }
+.flist { padding: 3px 0 5px; }
+.flist.in { margin: 4px -10px -6px; }
+/* open / closed mark of a group, kit or folder: points right, turns down when open */
+.chev { flex: none; color: var(--fg3); transition: transform .12s; }
+.chev.open { transform: rotate(90deg); }
+.grow { height: 26px; display: flex; align-items: center; gap: 7px; padding: 0 10px 0 8px; font: 500 12px var(--sans); color: var(--fg2); cursor: pointer; }
+.grow:hover { background: var(--bg6); color: var(--fg-hi); }
+.grow:hover .chev, .folder:hover .chev, .kit .top.can:hover .chev { color: var(--fg-hi); }
+.grow .gico { width: 18px; height: 18px; flex: none; display: grid; place-items: center; border-radius: 4px; background: color-mix(in srgb, var(--c) 20%, transparent); color: var(--c); }
+.grow .nm { flex: 1; min-width: 0; }
+.grow .cnt { font: 500 10px var(--mono); color: var(--fg4); }
+.fitem { height: 22px; display: flex; align-items: center; gap: 7px; padding: 0 10px; font: 12px var(--sans); color: var(--fg2); cursor: grab; }
+.fitem.sub { padding-left: 30px; }
+.fitem .fico { width: 14px; flex: none; display: grid; place-items: center; }
+.fitem .nm { flex: 1; min-width: 0; }
 .fitem:hover { background: var(--bg6); color: var(--fg-hi); }
-.fitem.playing { color: var(--green); }
-.chev { width: 14px; flex: none; color: var(--fg5); font: 10px var(--mono); text-align: center; }
-.folder { height: 26px; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 10px; font: 12px var(--sans); color: var(--fg2); cursor: pointer; }
-.folder:hover { background: var(--bg6); }
+.fitem.sel { background: var(--sel-bg); color: var(--fg-hi); box-shadow: inset 2px 0 0 var(--blue); }
+.fitem.playing, .fitem.playing .fico { color: var(--green) !important; }
+.fkey { flex: none; padding: 1px 4px; border-radius: 3px; background: var(--bg1); font: 500 9px var(--mono); color: var(--fg3); }
+.fnote { padding: 4px 10px 4px 10px; font: 11px var(--sans); color: var(--fg4); }
+.fnote.sub { padding-left: 30px; }
+.fnote.err { color: var(--danger); }
+.kit .top.can { cursor: pointer; }
+.folder { height: 26px; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 8px; font: 12px var(--sans); color: var(--fg2); cursor: pointer; }
+.folder:hover { background: var(--bg6); color: var(--fg-hi); }
 .xbtn { width: 18px; height: 18px; border: 0; border-radius: 3px; background: transparent; color: var(--fg4); cursor: pointer; padding: 0; font-size: 13px; line-height: 1; }
 .xbtn:hover { background: var(--line2); color: var(--danger); }
 .vsplit { width: 5px; flex: none; cursor: col-resize; background: var(--bg0); }

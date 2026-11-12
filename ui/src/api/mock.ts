@@ -923,7 +923,7 @@ export class MockBackend implements Backend {
   async libraryFiles(q: { kit?: string; folder?: string }): Promise<LibFile[]> {
     await delay(10);
     // the standard library is listed by its portable paths (the app lists where it is installed; importing either gives `lib:` sources)
-    if (q.kit === FACTORY_KIT) return FACTORY_FILES.map(f => ({ name: f.name, path: libPath(f.file), group: f.group, root: f.root }));
+    if (q.kit === FACTORY_KIT) return FACTORY_FILES.map(f => ({ name: f.name, path: libPath(f.file), group: f.group, root: f.root, ...(f.pitched ? { pitched: true } : {}) }));
     const root = q.kit ? 'C:\\WAVE\\Library\\' + q.kit : q.folder ?? '';
     const groups: Record<string, string[]> = q.kit === 'wave-keys'
       ? { Pady: ['Warm Pad C', 'Glass Pad Am', 'Choir Pad F'], Akordy: ['Rhodes Chord 1', 'Rhodes Chord 2', 'Piano Stab'], Pętle: ['Keys Loop 120', 'Pad Loop Am-F'] }

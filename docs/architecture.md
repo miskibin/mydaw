@@ -167,10 +167,14 @@ clip that hides N − 1 clips entirely (`lib/overlaps.ts`). Clicking such a clip
 the status line. The overlay is recomputed with the fades on clip edits and tile moves,
 never per frame.
 
-**The standard library** (`crates/engine/src/factory.rs`). Fifty CC0 one-shots (kicks,
-snares, claps, hats, cymbals, toms, percussion, a few tonal ones) are embedded in the engine
-(`crates/engine/library`, 3.2 MB of FLAC; built by `scripts/make-factory-library.py`,
-which trims, fades and normalises picks from the kits pinned in `assets-manifest.json`).
+**The standard library** (`crates/engine/src/factory.rs`). 148 CC0 one-shots in ten groups
+(kicks, snares, claps, hats, cymbals, toms, percussion, tonal, orchestra, FX) are embedded in
+the engine (`crates/engine/library`, 14 MB of FLAC). `scripts/make-factory-library.py` builds
+them: it downloads each pick at a pinned commit (the kits in `assets-manifest.json`, and the
+files listed under `factory` there, each with its SHA-256), trims, fades and normalises it,
+tunes the pitched ones onto their root key (`pitched` in the table: the browser shows that
+key) and mixes the orchestra hits and stabs from tuned layers. A file whose audio did not
+change is not rewritten, and existing files keep their names: projects name them by path.
 There is nothing synthesised behind a channel any more: a new project's Channel Rack is four
 samplers of these files (`STARTER_KIT`: Kick, Clap, Hat, Snare), and the program starts
 with that empty project. A source inside the sample library is stored by a portable
@@ -279,7 +283,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `asio_control_panel` | – | – (opens the driver's own panel, Windows only) |
 | `library_list` | – | `{kits:[{id,name,description,bytes,count,installed}], folders:string[]}` |
 | `library_install` | `{id}` | – ; progress as event `library-progress {id,done,total,error?}` |
-| `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group, root?}]`; kit `Standard` = the standard library (always installed); `root` = the file's own pitch when the library knows it |
+| `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group, root?, pitched?}]`; kit `Standard` = the standard library (always installed); `root` = the key a sampler made from the file is rooted at, when the library knows it; `pitched` = the file plays a note there (drums and noises do not) |
 | `library_add_folder` / `library_remove_folder` | – (native dialog) / `{path}` | updated `folders` |
 | `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `{state: StateDto, warnings}` or `{cancelled}` / `{path}` or `{cancelled}`. A save first keeps the file it replaces as `<name> (backup).wave` |
 | `recovery_write` | – | `bool`; the autosave tick for a project with no file: writes its crash-recovery copy (`<data>/WAVE/Recovery/<session>.wave`), or removes it once the project has a file or nothing unsaved |

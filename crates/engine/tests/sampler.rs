@@ -329,7 +329,7 @@ fn a_new_project_does_not_inherit_audio_from_the_previous_one() {
 fn the_mock_fixture_matches_the_engine() {
     let files: Vec<serde_json::Value> = factory::files()
         .iter()
-        .map(|f| serde_json::json!({ "file": f.file, "name": f.name, "group": f.group, "root": f.root, "dur": f.dur, "ch": f.ch, "bytes": f.bytes.len(), "color": factory::color(f) }))
+        .map(|f| serde_json::json!({ "file": f.file, "name": f.name, "group": f.group, "root": f.root, "pitched": f.pitched, "dur": f.dur, "ch": f.ch, "bytes": f.bytes.len(), "color": factory::color(f) }))
         .collect();
     let want = serde_json::json!({ "kit": factory::KIT, "files": files, "empty": Project::empty() });
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../ui/src/api/factory.json");

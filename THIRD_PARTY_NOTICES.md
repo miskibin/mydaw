@@ -25,10 +25,14 @@ recordings released to the public domain under
 
 * files named `*-808*`: a Roland TR-808 sampled by Michael Fischer (Technopolis), 1994, via
   the [TidalCycles sound library](https://github.com/tidalcycles/sounds-tr808-fischer);
+* the orchestra hits and stabs, the string, brass, flute and timpani notes and `zap.flac`:
+  [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE) by Versilian Studios LLC
+  (the hits and stabs are mixes of several of its recordings);
 * all other files: the
   [Versilian Community Sample Library](https://github.com/sgossner/VCSL) by Versilian Studios LLC.
 
-The files are edited (silence trimmed, tails faded, peaks normalised, re-encoded as FLAC) by
+The files are edited (silence trimmed, tails faded, peaks normalised, pitched ones tuned,
+`bass-808-drive.flac` saturated, re-encoded as FLAC) by
 `scripts/make-factory-library.py`; the exact source of each is pinned in `assets-manifest.json`.
 CC0 asks for no credit; it is given here anyway.
 

@@ -426,8 +426,8 @@ export interface MidiNoteEvent { note: MidiLastNote; count: number }
 
 export interface Kit { id: string; name: string; description: string; bytes: number; count: number; installed: boolean }
 export interface LibraryList { kits: Kit[]; folders: string[] }
-/** `root`: the MIDI key at which the file sounds at its own pitch, when the library knows it. */
-export interface LibFile { name: string; path: string; group: string; root?: number }
+/** `root`: the MIDI key at which the file sounds at its own pitch, when the library knows it; `pitched`: it plays a note there (drums and noises do not). */
+export interface LibFile { name: string; path: string; group: string; root?: number; pitched?: boolean }
 export interface LibraryProgress { id: string; done: number; total: number; error?: string }
 
 /** Level stats returned by an offline master bounce. */

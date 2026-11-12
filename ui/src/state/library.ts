@@ -25,7 +25,7 @@ export function loadStdLib(): Promise<void> {
 
 const GROUPS: Record<string, TranslationKey> = {
   Kicks: 'b.lib.kicks', Snares: 'b.lib.snares', Claps: 'b.lib.claps', Hats: 'b.lib.hats',
-  Cymbals: 'b.lib.cymbals', Toms: 'b.lib.toms', Percussion: 'b.lib.percussion', Tonal: 'b.lib.tonal',
+  Cymbals: 'b.lib.cymbals', Toms: 'b.lib.toms', Percussion: 'b.lib.percussion', Tonal: 'b.lib.tonal', Orchestra: 'b.lib.orchestra', FX: 'b.lib.fx',
 };
 /** A standard-library group name in the UI language (other kits' and folders' group names pass through). */
 export const libGroup = (g: string) => (Object.prototype.hasOwnProperty.call(GROUPS, g) ? t(GROUPS[g]) : g);
