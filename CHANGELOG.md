@@ -4,6 +4,17 @@ What changed in each release of WAVE. The newest version comes first; its sectio
 shown in the app after an update and is published as the release notes (see
 `docs/releasing.md`). Write for musicians: what you can do now, not how it works inside.
 
+## Unreleased
+
+Rename this heading to `## <version> — <date>` when releasing (docs/releasing.md).
+
+### Changed
+- **A much smaller download.** The installers no longer carry the parts of the piano recordings
+  that never play (each note rings at most 9 seconds), so the WAVE Keys piano takes about 23 MB
+  instead of 138 MB. It sounds the same.
+- **One Windows installer.** Releases have only `setup.exe` now. If you installed WAVE from the
+  `.msi`, uninstall it and install the `setup.exe` once; updates then arrive by themselves.
+
 ## 0.9.11 — 2026-11-12
 
 ### Added

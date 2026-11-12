@@ -14,6 +14,7 @@ members = [
     "crates/tune-bench",
     "crates/midi-in",
     "crates/perf",
+    "crates/keys-prep",
 ]
 
 [workspace.package]

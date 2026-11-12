@@ -60,8 +60,10 @@ fn parse_file(name: &str) -> Option<(u8, u32)> {
     Some((parse_note(note)?, layer.parse().ok()?))
 }
 
-/// The recording, cut to [`MAX_SECONDS`] with a fade so the cut is not heard.
-fn trimmed(a: Audio) -> Audio {
+/// The recording, cut to [`MAX_SECONDS`] with a fade so the cut is not heard. A recording
+/// already this short is returned as is, so the release build can apply it ahead of time
+/// (`wave-keys-prep`) and loading then leaves the file untouched.
+pub fn trimmed(a: Audio) -> Audio {
     let max = (MAX_SECONDS * a.sr as f64) as usize;
     if a.frames <= max {
         return a;

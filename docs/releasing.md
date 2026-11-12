@@ -6,12 +6,25 @@ A release is one commit; the workflow does the rest. Installed copies find it by
 ## Each release
 
 1. Bump `version` in `app/tauri.conf.json` (the version the app, the installers and the updater use).
-2. Add a section to the top of `CHANGELOG.md`: `## 0.9.4 — 2026-12-01`, then `### Added`,
+2. Add a section to the top of `CHANGELOG.md` (or rename `## Unreleased`, where changes made
+   since the last release collect, and drop its reminder line): `## 0.9.4 — 2026-12-01`, then `### Added`,
    `### Changed`, `### Fixed` with bullets written for musicians. The release workflow stops
    when the section is missing or empty, so a release cannot go out without notes.
 3. Push to `main` with `[release]` in the commit message (or push a `v*` tag, or run the
    workflow by hand). `tauri-action` builds Windows (with ASIO) and Linux one after the other,
    signs the installers, creates the GitHub release and uploads `latest.json`.
+
+## What a release contains
+
+* Windows: `WAVE_<v>_x64-setup.exe` (NSIS). No `.msi`: it was the same app a second time, and
+  the updater installs the NSIS one anyway (`updaterJsonPreferNsis`).
+* Linux: `.AppImage` (any distribution; the most downloaded), `.deb` and `.rpm`.
+* A `.sig` beside each (the updater's signature) and `latest.json`.
+
+The bundle list is `bundles` in the matrix of `.github/workflows/release.yml`. Every installer
+carries the WAVE Keys piano, which `scripts/fetch-keys.mjs` cuts to what the app plays before
+the build (138 MB of downloads become about 23 MB; see `docs/keys.md`). The AppImage is the
+largest because it also carries its own WebKit and GTK.
 
 ## What the updater uses
 
