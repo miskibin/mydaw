@@ -61,6 +61,18 @@ export function togglePlay() {
   return play();
 }
 /**
+ * The PAT / SONG switch (L): while something plays, what plays switches with it (FL) — the song
+ * hands over to the current pattern's loop, the loop to the song from its start marker. A
+ * recording keeps going.
+ */
+export function switchMode(on: boolean) {
+  if (on === patMode()) return;
+  setPatMode(on);
+  if (S.transport.rec && U.playing) return;
+  if (on && U.playing) { const p = modePattern(); if (p) void togglePreview(p.id); }
+  else if (!on && U.patPlaying) void play(U.start);
+}
+/**
  * A click on the playlist's time ruler (FL): SONG mode from there. A pattern loop that is
  * playing hands over to the song at that position, so moving between them needs no L key.
  */

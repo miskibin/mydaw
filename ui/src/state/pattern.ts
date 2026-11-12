@@ -10,7 +10,7 @@ import { KEYS_DYNAMICS, KEYS_RELEASE, SAMPLE_ROOT, samplerDefault, TOTAL_BEATS, 
 import { baseName, clamp, mod } from '../lib/format';
 import { BAR, barsText, cloneNotes, notesText, stepsOf } from '../lib/pattern';
 import { fitOnScreen, rackFitWidth } from '../lib/rack';
-import { commit } from './edit';
+import { commit, enqueue } from './edit';
 import { newTrack } from '../lib/clipOps';
 import { planMoveNotes } from '../lib/moveNotes';
 import { unwrap } from 'solid-js/store';
@@ -424,13 +424,14 @@ export async function togglePreview(id: Id) {
     if (U.patPlaying && previewId === id) { await stopPreview(); say(t('b.st.prevStopped')); return; }
     previewId = id;
     if (U.playing) setU('playing', false);
-    await be().patternPlay(id);
+    // queued behind pending edits: a pattern made a moment ago must reach the engine first
+    await enqueue(() => be().patternPlay(id));
     setU('patPlaying', true);
     say(t('b.st.prevSay', { mode: t(patMode() ? 'b.st.modePatWord' : 'b.st.modePrevWord'), name: patById(id)?.name ?? t('b.st.patternWord'), hint: patMode() ? '' : t('b.st.prevHint') }));
   } catch (e) { say(t('b.st.prevErr', { err: String(e) })); }
 }
 export async function stopPreview() {
-  try { await be().patternPlay(null); setU('patPlaying', false); } catch (e) { console.warn(e); }
+  try { await enqueue(() => be().patternPlay(null)); setU('patPlaying', false); } catch (e) { console.warn(e); }
 }
 
 /**

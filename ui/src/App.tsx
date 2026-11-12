@@ -32,7 +32,7 @@ import { PianoRoll } from './views/PianoRoll';
 import { renameCurrent } from './views/patternShared';
 import { NotebookHost } from './views/Notebook';
 import { toggleNotebook } from './state/notebook';
-import { clonePattern, closeTopPatWin, nextEmptyPattern, patMode, pickPatternNum, setPatMode, stepPattern, toggleRack, toggleRoll } from './state/pattern';
+import { clonePattern, closeTopPatWin, nextEmptyPattern, patMode, pickPatternNum, stepPattern, toggleRack, toggleRoll } from './state/pattern';
 import { Help, Toolbar, TOOLS } from './views/Toolbar';
 
 /** Stacking rank of a window (effect windows, Channel Rack, Piano roll) inside the window layer (1 = bottom). */
@@ -152,7 +152,7 @@ function onKey(e: KeyboardEvent) {
   if (e.shiftKey && !m && !e.altKey && e.code === 'KeyM' && !patWinFocused()) { e.preventDefault(); return A.toggleStretchMode(); }
   if (!m && !e.altKey) {
     if (k === 'r') return A.toggleRec();
-    if (k === 'l') return setPatMode(!patMode());
+    if (k === 'l') return A.switchMode(!patMode());
     if (k === 'f') { setU('follow', !U.follow); return say(U.follow ? tl('a.app.followOn') : tl('a.app.followOff')); }
     const t = TOOLS.find(x => x[1].toLowerCase() === k);
     if (t) { setU('tool', t[0]); say(tl('a.app.tool', { name: tl(t[2]) })); }

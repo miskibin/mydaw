@@ -1,4 +1,4 @@
-import { curPat, newPattern, openRack, patMode, setPatMode, stepPattern, toggleRack, toggleRoll } from '../state/pattern';
+import { curPat, newPattern, openRack, patMode, stepPattern, toggleRack, toggleRoll } from '../state/pattern';
 import { patternMenu } from './patternShared';
 import { t, type TranslationKey } from '../lib/i18n';
 import { setTypingOn, typingBase, typingOn } from '../state/typingKeys';
@@ -162,8 +162,8 @@ export function Toolbar() {
         <button class="count" classList={{ on: T().countIn }} title={t('a.tb.countTip')} onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
       <div class="seg patsong" title={t('a.tb.patSongTip')}>
-        <button class="pat" classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
-        <button class="song" classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
+        <button class="pat" classList={{ on: patMode() }} onClick={() => A.switchMode(true)}>PAT</button>
+        <button class="song" classList={{ on: !patMode() }} onClick={() => A.switchMode(false)}>SONG</button>
       </div>
       <PatSelector />
       <div class="clockbox" onContextMenu={bpmMenu}>

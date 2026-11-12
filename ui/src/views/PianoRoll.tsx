@@ -116,12 +116,14 @@ function Roll(props: { z: number }) {
   const hTotal = () => Math.min(MAX_STEPS, stepsOf(pt()) + ROOM);
   const maxSxAt = (pps: number) => Math.max(0, hTotal() * pps - gridW());
   const maxSx = () => maxSxAt(geo().pps);
+  /** Zoom-out limit: half the fitted width, or further when that is needed to see all the steps the view scrolls over (pattern + room). */
+  const zMin = () => Math.min(Z_MIN, gridW() / hTotal() / basePps());
   const maxSyAt = (rowH: number) => Math.max(0, 128 * rowH - size().h);
   // the zoom scrollbars, in steps (time) and keys from the top (key height)
   const hRange = (): ZRange => { const G = geo(); return { pos: G.sx / G.pps, len: gridW() / G.pps }; };
-  const hLimits = () => ({ total: hTotal(), minLen: gridW() / (basePps() * Z_MAX), maxLen: gridW() / (basePps() * Z_MIN) });
+  const hLimits = () => ({ total: hTotal(), minLen: gridW() / (basePps() * Z_MAX), maxLen: gridW() / (basePps() * zMin()) });
   const applyH = (r: ZRange) => {
-    const zoom = clamp(gridW() / r.len / basePps(), Z_MIN, Z_MAX), pps = basePps() * zoom;
+    const zoom = clamp(gridW() / r.len / basePps(), zMin(), Z_MAX), pps = basePps() * zoom;
     setViewS(v => ({ ...v, zoom, sx: clamp(r.pos * pps, 0, maxSxAt(pps)) }));
   };
   // Follow the playhead (the app-wide Follow toggle): the frame task flips the view a page when
@@ -528,7 +530,7 @@ function Roll(props: { z: number }) {
       if (i >= 0) return velWheel(e, i);
     }
     if (e.ctrlKey || e.metaKey) {
-      const p = pos(e), z = clamp(view().zoom * Math.pow(1.0015, -d), Z_MIN, Z_MAX);
+      const p = pos(e), z = clamp(view().zoom * Math.pow(1.0015, -d), zMin(), Z_MAX);
       const pps = basePps() * z;
       setViewS(v => ({ ...v, zoom: z, sx: clamp(p.step * pps - (p.x - KW), 0, maxSxAt(pps)) }));
     } else if (e.altKey) {
