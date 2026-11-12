@@ -6,6 +6,11 @@ import type { FxKind } from '../api/types';
 const svg = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" width="100%" height="100%">${body}</svg>`;
 
 export const FX_ART: Record<FxKind, string> = {
+  warp: svg(`
+  <rect x="10" y="16" width="80" height="68" rx="12" fill="#CCFBF1"/>
+  <path d="M18 28h16v14h12l14 24v-38l14 18" stroke="#0F766E" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M18 72h16v-6h16v6h16v-6h8" stroke="#14B8A6" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none" opacity=".8"/>
+  <rect x="57" y="20" width="3" height="60" rx="1.5" fill="#0D9488" opacity=".5"/>`),
   half: svg(`
   <rect x="10" y="22" width="80" height="56" rx="12" fill="#ECFCCB"/>
   <path d="M16 50c3-12 6-12 9 0s6 12 9 0 6-12 9 0" stroke="#84CC16" stroke-width="3.5" stroke-linecap="round" fill="none"/>

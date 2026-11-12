@@ -118,7 +118,7 @@ pub struct Fx {
     chorus: Chorus,
     delay: PingPong,
     reverb: ReverbV2,
-    rv_vals: [f32; 12],
+    rv_vals: [f32; crate::processor::MAX_PARAMS],
 }
 
 impl Fx {
@@ -138,7 +138,7 @@ impl Fx {
             chorus: Chorus { l: Line::new((sr * 0.03) as usize + 8), r: Line::new((sr * 0.03) as usize + 8), ph1: 0.0, ph2: 0.25 },
             delay: PingPong { l: Line::new(delay_len), r: Line::new(delay_len), d: 0.0, lp: 0.0, hp: 0.0 },
             reverb,
-            rv_vals: [f32::NAN; 12],
+            rv_vals: [f32::NAN; crate::processor::MAX_PARAMS],
         }
     }
 
@@ -197,7 +197,7 @@ impl Fx {
         self.delay.process(l, r, dm, (p[ix::FX_DFB] * 0.01).min(0.9), dsec * sr, sr);
         let rm = p[ix::FX_REVERB];
         {
-            let mut v = [0f32; 12];
+            let mut v = [0f32; crate::processor::MAX_PARAMS];
             v[idx::SIZE] = p[ix::FX_RSIZE];
             v[idx::PRE] = 12.0;
             v[idx::LO] = 220.0;

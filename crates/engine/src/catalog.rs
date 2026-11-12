@@ -61,10 +61,37 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         p("out", "Output", -24.0, 12.0, 0.0, "dB", false),
         choice("hq", "Oversampling", 0.0, &["2×", "4×"]),
     ];
+    // order = dsp::delay::idx. `time`/`fb`/`mix` keep the ids of the first delay (old projects
+    // and their automation stay valid); `beats` is the synced time, `time` the free time in ms.
     const DELAY: &[ParamDef] = &[
-        p("time", "Time", 10.0, 1500.0, 375.0, "ms", true),
-        p("fb", "Feedback", 0.0, 95.0, 35.0, "%", false),
-        p("mix", "Mix", 0.0, 100.0, 25.0, "%", false),
+        p("input", "Input", 0.0, 100.0, 100.0, "%", false),
+        choice("sync", "Sync", 0.0, &crate::dsp::delay::SYNCS),
+        p("beats", "Time", 1.0 / 48.0, 4.0, 0.75, "beat", true),
+        p("time", "Time", 1.0, 2000.0, 375.0, "ms", true),
+        choice("keep", "Keep pitch", 0.0, &["Off", "On"]),
+        p("smooth", "Smoothing", 0.0, 100.0, 40.0, "%", false),
+        p("offset", "Offset", -100.0, 100.0, 0.0, "%", false),
+        p("pan", "Pan", -100.0, 100.0, -60.0, "%", false),
+        choice("model", "Model", 1.0, &crate::dsp::delay::MODELS),
+        p("spread", "Stereo", 0.0, 100.0, 100.0, "%", false),
+        p("fb", "Feedback", 0.0, 125.0, 35.0, "%", false),
+        choice("ftype", "Filter", 1.0, &crate::dsp::delay::FILTERS),
+        p("cutoff", "Cutoff", 20.0, 20000.0, 6000.0, "Hz", true),
+        p("res", "Resonance", 0.0, 100.0, 0.0, "%", false),
+        p("srate", "Sample rate", 500.0, 48000.0, 48000.0, "Hz", true),
+        p("bits", "Bits", 2.0, 24.0, 24.0, "bit", false),
+        choice("dist", "Distortion", 1.0, &crate::dsp::delay::DISTS),
+        p("level", "Threshold", -36.0, 0.0, 0.0, "dB", false),
+        p("knee", "Knee", 0.0, 100.0, 50.0, "%", false),
+        p("sym", "Symmetry", 0.0, 100.0, 0.0, "%", false),
+        p("diff", "Diffusion", 0.0, 100.0, 0.0, "%", false),
+        p("dspread", "Diff. spread", 0.0, 100.0, 50.0, "%", false),
+        p("rate", "LFO rate", 0.05, 20.0, 0.5, "Hz", true),
+        p("mtime", "Mod time", 0.0, 100.0, 0.0, "%", false),
+        p("mcut", "Mod cutoff", 0.0, 100.0, 0.0, "%", false),
+        p("mix", "Wet", 0.0, 100.0, 25.0, "%", false),
+        p("tone", "Tone", -100.0, 100.0, 0.0, "%", false),
+        p("dry", "Dry", 0.0, 100.0, 100.0, "%", false),
     ];
     // order = dsp::reverb_v2::idx; size/pre/tone/mix are the macros, the rest is "advanced"
     const REVERB: &[ParamDef] = &[
@@ -168,7 +195,25 @@ pub fn params(kind: FxKind) -> &'static [ParamDef] {
         choice("solo", "Band solo", 0.0, &["Off", "On"]),
         p("mix", "Mix", 0.0, 100.0, 100.0, "%", false),
     ];
+    // order = dsp::warp::idx. The slots themselves are `Fx::maps`.
+    const WARP: &[ParamDef] = &[
+        choice("tslot", "Time slot", 0.0, &crate::dsp::warp::SLOT_NAMES),
+        choice("vslot", "Volume slot", 0.0, &crate::dsp::warp::SLOT_NAMES),
+        choice("trig", "Trigger sync", 0.0, &crate::dsp::warp::TRIGS),
+        choice("pos", "Position", 0.0, &crate::dsp::warp::POSITIONS),
+        choice("oneshot", "One-shot", 0.0, &["Off", "On"]),
+        choice("hold", "Hold", 0.0, &crate::dsp::warp::HOLDS),
+        p("tmix", "Time mix", 0.0, 100.0, 100.0, "%", false),
+        p("vmix", "Volume mix", 0.0, 100.0, 100.0, "%", false),
+        p("att", "Attack", 0.0, 500.0, 0.0, "ms", false),
+        p("rel", "Release", 0.0, 1000.0, 0.0, "ms", false),
+        p("tns", "Tension", -100.0, 100.0, 0.0, "%", false),
+        choice("click", "Click reduction", 1.0, &["Off", "On"]),
+        choice("attack", "Attack protect", 1.0, &["Off", "On"]),
+        choice("dc", "DC removal", 1.0, &["Off", "On"]),
+    ];
     match kind {
+        FxKind::Warp => WARP,
         FxKind::Half => HALF,
         FxKind::Rider => RIDER,
         FxKind::Denoise => DENOISE,
@@ -201,11 +246,13 @@ pub fn type_name(kind: FxKind) -> &'static str {
         FxKind::Voice => "Voice",
         FxKind::Rider => "Vocal Rider",
         FxKind::Half => "Half-Speed",
+        FxKind::Warp => "Warp",
         FxKind::Vst3 => "VST3",
     }
 }
 
-pub const BUILTIN: [FxKind; 13] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Rider, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Half, FxKind::Reverb, FxKind::Limit];
+pub const BUILTIN: [FxKind; 14] = [FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Rider, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Delay, FxKind::Half,
+    FxKind::Warp, FxKind::Reverb, FxKind::Limit];
 
 pub fn default_bands() -> Vec<EqBand> {
     use BandType::*;
@@ -227,9 +274,12 @@ pub fn default_params(kind: FxKind) -> BTreeMap<String, f64> {
 
 /// A fresh built-in effect loaded with its first preset.
 pub fn new_fx(id: Id, kind: FxKind, bpm: f64) -> Fx {
-    let mut fx = Fx { id, kind, bypass: false, mix: 1.0, preset: None, params: default_params(kind), bands: None, plugin: None };
+    let mut fx = Fx { id, kind, bypass: false, mix: 1.0, preset: None, params: default_params(kind), bands: None, plugin: None, maps: None };
     if kind == FxKind::Eq {
         fx.bands = Some(default_bands());
+    }
+    if kind == FxKind::Warp {
+        fx.maps = Some(crate::dsp::warp::factory_maps());
     }
     if !presets(kind).is_empty() {
         load_preset(&mut fx, 0, bpm);
@@ -245,13 +295,10 @@ pub struct Preset {
     /// EQ band overrides: (band index, on, f, g, q); unspecified fields keep the default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bands: Option<Vec<EqBand>>,
-    /// Delay: tempo-synced time in beats. Resolved to `time` at the current BPM.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub beats: Option<f64>,
 }
 
 fn pr(name: &'static str, kv: &[(&'static str, f64)]) -> Preset {
-    Preset { name, params: kv.iter().copied().collect(), bands: None, beats: None }
+    Preset { name, params: kv.iter().copied().collect(), bands: None }
 }
 
 type BandEdit = (usize, Option<bool>, Option<f64>, Option<f64>, Option<f64>);
@@ -273,7 +320,7 @@ fn eqp(name: &'static str, out: f64, edits: &[BandEdit]) -> Preset {
             b.q = v;
         }
     }
-    Preset { name, params: [("out", out)].into_iter().collect(), bands: Some(bands), beats: None }
+    Preset { name, params: [("out", out)].into_iter().collect(), bands: Some(bands) }
 }
 
 /// A preset that uses only the listed bands: every other band is switched off (no handle on the
@@ -290,8 +337,17 @@ fn eqo(name: &'static str, out: f64, slope: u8, edits: &[BandEdit]) -> Preset {
     p
 }
 
-fn dly(name: &'static str, beats: Option<f64>, time: f64, fb: f64, mix: f64) -> Preset {
-    Preset { name, params: [("time", time), ("fb", fb), ("mix", mix)].into_iter().collect(), bands: None, beats }
+/// A synced delay preset: `beats` of echo, feedback %, wet %, then any other overrides.
+fn dly(name: &'static str, beats: f64, fb: f64, wet: f64, kv: &[(&'static str, f64)]) -> Preset {
+    let mut p = pr(name, kv);
+    p.params.extend([("sync", 0.0), ("beats", beats), ("fb", fb), ("mix", wet)]);
+    p
+}
+/// A free-time (ms) delay preset.
+fn dly_ms(name: &'static str, ms: f64, fb: f64, wet: f64, kv: &[(&'static str, f64)]) -> Preset {
+    let mut p = pr(name, kv);
+    p.params.extend([("sync", 1.0), ("time", ms), ("fb", fb), ("mix", wet)]);
+    p
 }
 
 pub fn presets(kind: FxKind) -> Vec<Preset> {
@@ -333,12 +389,22 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
             pr("Taśma — klej na bus", &[("style", 0.0), ("drive", 22.0), ("highcut", 18000.0)]),
         ],
         FxKind::Delay => vec![
-            dly("Ósemka 1/8", Some(0.5), 0.0, 35.0, 20.0),
-            dly("Ćwierćnuta 1/4", Some(1.0), 0.0, 30.0, 22.0),
-            dly("Kropkowana 1/8", Some(0.75), 0.0, 40.0, 22.0),
-            dly("Triola 1/8T", Some(1.0 / 3.0), 0.0, 35.0, 20.0),
-            dly("Slapback", None, 90.0, 0.0, 25.0),
-            dly("Długi dub", Some(1.5), 0.0, 65.0, 30.0),
+            dly("Ósemka 1/8", 0.5, 35.0, 22.0, &[]),
+            // ping-pong: the input is panned left so a centred (mono) source bounces too
+            dly("Ping-pong 1/8", 0.5, 50.0, 30.0, &[("model", 2.0), ("pan", -70.0), ("cutoff", 7000.0)]),
+            dly("Ping-pong kropkowana 1/8", 0.75, 50.0, 30.0, &[("model", 2.0), ("pan", -70.0), ("cutoff", 7000.0)]),
+            dly("Ping-pong 1/4", 1.0, 45.0, 28.0, &[("model", 2.0), ("pan", -70.0), ("cutoff", 6000.0)]),
+            dly("Kropkowana 1/8", 0.75, 40.0, 22.0, &[]),
+            dly("Ćwierćnuta 1/4", 1.0, 30.0, 22.0, &[]),
+            dly("Triola 1/8T", 1.0 / 3.0, 35.0, 20.0, &[]),
+            dly_ms("Slapback", 90.0, 0.0, 25.0, &[("ftype", 1.0), ("cutoff", 7000.0)]),
+            dly("Wysyłka — 100 % wet", 0.75, 40.0, 100.0, &[("dry", 0.0), ("tone", 25.0)]),
+            dly("Taśma — dub", 1.5, 70.0, 30.0, &[("cutoff", 2400.0), ("res", 20.0), ("level", -10.0), ("knee", 70.0), ("sym", 30.0), ("mtime", 18.0), ("rate", 0.6), ("smooth", 65.0), ("diff", 15.0)]),
+            dly("Dub — samooscylacja", 0.75, 108.0, 28.0, &[("cutoff", 1200.0), ("res", 55.0), ("level", -9.0), ("knee", 80.0), ("smooth", 80.0)]),
+            dly("Lo-fi / bitcrush", 0.5, 45.0, 30.0, &[("ftype", 0.0), ("srate", 8000.0), ("bits", 8.0), ("level", -6.0)]),
+            dly("Rozmyte echo (ambient)", 1.0, 60.0, 30.0, &[("cutoff", 4500.0), ("diff", 70.0), ("dspread", 70.0), ("mtime", 10.0), ("rate", 0.3)]),
+            dly_ms("Chorus / dublowanie", 14.0, 15.0, 45.0, &[("ftype", 0.0), ("offset", 40.0), ("mtime", 55.0), ("rate", 0.7), ("keep", 1.0)]),
+            dly_ms("Multi-FX: filtr + drive (bez echa)", 100.0, 0.0, 100.0, &[("model", 3.0), ("dry", 0.0), ("cutoff", 1800.0), ("res", 55.0), ("level", -14.0), ("mcut", 45.0), ("rate", 0.25)]),
         ],
         FxKind::Reverb => {
             let rv = |name, size, pre, lo, hi, width, mix, tone, space, duck, bass| {
@@ -425,6 +491,14 @@ pub fn presets(kind: FxKind) -> Vec<Preset> {
                 h("Środek pasma — solo", 1.0, 2.0, 10.0, 300.0, 4000.0, 1.0, 100.0),
             ]
         }
+        FxKind::Warp => vec![
+            pr("Domyślny", &[]),
+            pr("Half-time", &[("tslot", 1.0)]),
+            pr("Sidechain 1/4", &[("vslot", 1.0)]),
+            pr("Tape stop (pół taktu)", &[("tslot", 8.0)]),
+            pr("Stutter 1/8 + bramka", &[("tslot", 5.0), ("vslot", 4.0)]),
+            pr("Wyzwalanie na żywo (co ćwierćnutę, one-shot)", &[("trig", 3.0), ("oneshot", 1.0)]),
+        ],
         FxKind::Vst3 => vec![],
     }
 }
@@ -441,21 +515,20 @@ pub fn latency(fx: &Fx, sample_rate: f32) -> usize {
         FxKind::Rider => crate::rider::latency_samples(fx.params.get("speed").copied().unwrap_or(0.0) as f32, fx.params.get("look").copied().unwrap_or(0.0) as f32, sample_rate),
         // look-ahead delays the audio so the gain is already down when the "s" arrives
         FxKind::Limit => crate::dsp::limiter_v2::latency_samples(fx.params.get("look").copied().unwrap_or(3.0) as f32, sample_rate),
+        FxKind::Warp => crate::dsp::warp::LATENCY,
         FxKind::Deess => ((fx.params.get("look").copied().unwrap_or(5.0).clamp(0.0, 15.0) / 1000.0) * sample_rate as f64) as usize,
         _ => 0,
     }
 }
 
-/// Loads preset `index` into `fx` (tempo-synced delay times resolved at `bpm`).
-pub fn load_preset(fx: &mut Fx, index: usize, bpm: f64) -> bool {
+/// Loads preset `index` into `fx`. `_bpm` is unused: synced delay presets store beats, which
+/// the effect resolves at the live tempo.
+pub fn load_preset(fx: &mut Fx, index: usize, _bpm: f64) -> bool {
     let list = presets(fx.kind);
     let Some(pr) = list.get(index) else { return false };
     fx.params = default_params(fx.kind);
     for (k, v) in &pr.params {
         fx.params.insert((*k).to_owned(), *v);
-    }
-    if let Some(beats) = pr.beats {
-        fx.params.insert("time".into(), (beats * 60000.0 / bpm).clamp(10.0, 1500.0));
     }
     if let Some(b) = &pr.bands {
         fx.bands = Some(b.clone());
@@ -476,6 +549,8 @@ pub struct Catalog {
     pub presets: BTreeMap<FxKind, Vec<Preset>>,
     /// The built-in synth (Channel Rack channels of kind `synth`): its parameter sections and presets.
     pub synth: crate::poly::SynthCatalog,
+    /// Warp's factory slots (what a new Warp holds, and what "restore slot" brings back).
+    pub warp: crate::model::WarpMaps,
 }
 
 pub fn catalog() -> Catalog {
@@ -483,13 +558,14 @@ pub fn catalog() -> Catalog {
         types: BUILTIN.iter().map(|&k| (k, TypeDef { name: type_name(k), params: params(k) })).collect(),
         presets: BUILTIN.iter().map(|&k| (k, presets(k))).collect(),
         synth: crate::poly::catalog(),
+        warp: crate::dsp::warp::factory_maps(),
     }
 }
 
 /// Resolves an effect's parameters to the fixed block the DSP reads.
 pub fn param_block(fx: &Fx) -> ParamBlock {
     let mut pb = ParamBlock::default();
-    for (i, d) in params(fx.kind).iter().enumerate().take(12) {
+    for (i, d) in params(fx.kind).iter().enumerate().take(crate::processor::MAX_PARAMS) {
         let v = fx.params.get(d.id).copied().unwrap_or(d.def).clamp(d.min, d.max);
         pb.values[i] = v as f32;
     }

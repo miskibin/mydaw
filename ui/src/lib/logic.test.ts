@@ -7,7 +7,7 @@ import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resize
 import { eqCurve } from './eq';
 import { exportRange, exportSeconds, fmtExportLen, songEnd } from './export';
 import { fmtClock, fmtPos, panText, TapTracker, volText } from './format';
-import { loadPreset, newFx, paramsMatch, presetInfo, pFmt, pNorm, pVal, resolvePreset } from './presets';
+import { loadPreset, newFx, paramsMatch, presetInfo, presetList, pFmt, pNorm, pVal, resolvePreset } from './presets';
 import { autoSnap, snapFloor, snapLabel, snapRes, snapRound } from './snap';
 import { t } from './i18n';
 
@@ -91,12 +91,14 @@ describe('presets', () => {
     const g = { ...f, params: { ...f.params, mix: 40 } };
     expect(presetInfo(cat, g, 128)).toEqual({ idx: 4, name: 'Ballada — długi plate', mod: true });
   });
-  it('tempo-synced delay presets resolve time at the bpm', () => {
-    const r = resolvePreset(cat, 'delay', 1, 120)!;
-    expect(r.params.time).toBeCloseTo(500);
-    const f = loadPreset(cat, newFx(cat, 1, 'delay', 120), 1, 120);
+  it('tempo-synced delay presets store beats, so a tempo change keeps them matching', () => {
+    const i = presetList(cat, 'delay').findIndex(p => p.name === 'Kropkowana 1/8');
+    const r = resolvePreset(cat, 'delay', i, 120)!;
+    expect(r.params.sync).toBe(0);
+    expect(r.params.beats).toBeCloseTo(0.75);
+    const f = loadPreset(cat, newFx(cat, 1, 'delay', 120), i, 120);
     expect(presetInfo(cat, f, 120).mod).toBe(false);
-    expect(presetInfo(cat, f, 140).mod).toBe(true); // tempo changed: no longer the synced value
+    expect(presetInfo(cat, f, 140).mod).toBe(false); // the echo follows the tempo, the preset still matches
   });
   it('EQ presets compare bands', () => {
     const f = loadPreset(cat, newFx(cat, 1, 'eq', 128), 1, 128);

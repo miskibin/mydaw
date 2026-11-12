@@ -1,6 +1,7 @@
 // In-browser fake engine, used when the page is not running inside Tauri.
 // Holds the demo project, applies ops with undo/gestures, plays a fake transport and
 // streams binary telemetry frames (encoded exactly like the real ones).
+import { delayMs, loopGain } from '../lib/delay';
 import type { Backend, EventMap, OsDropEvent } from './backend';
 import { encodeFrame, SCOPE_LEN, SPEC_BANDS, type EncFx } from './telemetry';
 import { BUILTIN, emptyProject, mockCatalog, sketchProject } from './mockData';
@@ -313,7 +314,7 @@ export class MockBackend implements Backend {
     const fx: EncFx[] = [];
     if (seq % 2 === 0) for (const id of this.watched) {
       const found = this.findFx(id); if (!found) continue;
-      fx.push(this.fakeAnalysis(found.fx, found.ins, playing ? (insLvl.get(found.ins) ?? 0) + 0.05 : 0, t, beat, playing));
+      fx.push(this.fakeAnalysis(found.fx, found.ins, playing ? (insLvl.get(found.ins) ?? 0) + 0.05 : 0, t, beat, playing, patBeat));
     }
     let rec = null;
     if (this.rec && playing && this.rawBeat() >= this.rec.clipStart) {
@@ -356,7 +357,7 @@ export class MockBackend implements Backend {
     return fx.type === 'tune' || fx.type === 'voice' || fx.type === 'deess' || fx.type === 'fet' ? vocalAt(synthVocal(4242, VOCAL_DUR), t) : null;
   }
 
-  private fakeAnalysis(fx: Fx, ins: Id, level: number, t: number, beat: number, playing: boolean): EncFx {
+  private fakeAnalysis(fx: Fx, ins: Id, level: number, t: number, beat: number, playing: boolean, patBeat = -1): EncFx {
     const specIn = new Float32Array(SPEC_BANDS), specOut = new Float32Array(SPEC_BANDS);
     const scopeIn = new Float32Array(SCOPE_LEN), scopeOut = new Float32Array(SCOPE_LEN);
     const meters = new Float32Array(32);
@@ -459,6 +460,24 @@ export class MockBackend implements Backend {
       // harmonics grow with the drive; auto gain keeps the level (dsp/saturator.rs)
       const dd = satDriveDb(pr);
       for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + (pr.auto ?? 1 ? 0 : dd * 0.5) + (k > 60 ? dd * 0.3 : 0);
+    } else if (fx.type === 'warp') {
+      // dsp::warp meters: [0] bar position (−1 stopped), [1]/[2] playing slots, [3]/[4] queued (−1), [9] hold, [10] seconds buffered
+      // like the engine, tempo-locked effects follow the pattern loop preview too
+      const b = playing ? beat : patBeat, on = playing || patBeat >= 0;
+      meters[0] = on ? ((b % 4) + 4) % 4 : -1;
+      meters[1] = Math.round(pr.tslot ?? 0); meters[2] = Math.round(pr.vslot ?? 0); meters[3] = -1; meters[4] = -1;
+      meters[9] = Math.round(pr.hold ?? 0) ? 2 : 0; meters[10] = on ? Math.min(12.5, Math.max(0, b) * 60 / this.p.bpm) : 0;
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k];
+    } else if (fx.type === 'delay') {
+      // dsp::delay meters: [0]/[1] read heads ms (LFO on time), [2] loop dB, [3] drive dB, [4] LFO, [5] model, [6] wet dB, [7] time ms
+      const model = Math.round(pr.model ?? 1), base = delayMs(pr, this.p.bpm), lfo = Math.sin(t * 2 * Math.PI * (pr.rate ?? 0.5));
+      const mod = (pr.mtime ?? 0) / 100 * lfo * Math.min(6, 0.45 * base), off = (pr.offset ?? 0) / 100;
+      const loopDb = level > 0 ? lvDb + 20 * Math.log10(Math.max(1e-3, Math.min(1, loopGain(pr)) * 0.9)) : -120;
+      meters[0] = model === 3 ? 0 : base * (model === 0 ? 1 + Math.max(0, -off) : 1) + mod;
+      meters[1] = model === 3 ? 0 : base * (model === 0 ? 1 + Math.max(0, off) : 1) + mod;
+      meters[2] = Math.min(loopDb, pr.level ?? 0); meters[3] = Math.min(0, (pr.level ?? 0) - Math.max(lvDb, -60)) * 0.3;
+      meters[4] = lfo; meters[5] = model; meters[6] = loopDb + 20 * Math.log10(Math.max(1e-3, (pr.mix ?? 25) / 100)); meters[7] = base;
+      for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + 20 * Math.log10(1 + (pr.mix ?? 25) / 100);
     } else {
       for (let k = 0; k < SPEC_BANDS; k++) specOut[k] = specIn[k] + 20 * Math.log10(1 + (pr.mix ?? 25) / 100);
     }

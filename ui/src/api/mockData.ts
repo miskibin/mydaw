@@ -1,15 +1,23 @@
 // Data for the in-browser mock backend: the catalog of crates/engine/src/catalog.rs and the
 // demo song of crates/engine/src/demo.rs. Only the mock uses these; the real UI reads `fx_catalog`.
-import { VOL_UNITY, type AnyBuiltinKind, type Catalog, type Clip, type EqBand, type Note, type ParamDef, type Preset, type Project } from './types';
+import { VOL_UNITY, type AnyBuiltinKind, type Catalog, type Clip, type EqBand, type Note, type ParamDef, type Preset, type Project, type WarpMaps } from './types';
 import { defaultBands, loadPreset, newFx } from '../lib/presets';
 import { addStarterKit, factoryChannel } from '../lib/factory';
 export { emptyProject } from '../lib/factory';
 import { SYNTH_CATALOG } from './synthCatalog';
+import warpFactoryJson from '../../../crates/engine/src/warp_factory.json?raw';
+
+/** catalog.rs `warp`: the factory slots, from the same file the engine embeds. */
+function warpFactory(): WarpMaps {
+  const f = JSON.parse(warpFactoryJson) as WarpMaps;
+  return { time: f.time, vol: f.vol };
+}
 
 const p = (id: string, label: string, min: number, max: number, def: number, unit: string, log = false): ParamDef => ({ id, label, min, max, def, unit, log });
 /** catalog.rs `choice`: a discrete parameter (value = index) shown as buttons. */
 const choice = (id: string, label: string, def: number, options: string[]): ParamDef => ({ id, label, min: 0, max: options.length - 1, def, unit: '', log: false, options });
 
+const SLOTS = Array.from({ length: 16 }, (_, i) => String(i + 1));
 const PARAMS: Record<AnyBuiltinKind, ParamDef[]> = {
   eq: [p('out', 'Output', -18, 18, 0, 'dB')],
   comp: [p('thr', 'Thresh', -60, 0, -18, 'dB'), p('ratio', 'Ratio', 1, 20, 4, ':1', true), p('att', 'Attack', 0.1, 100, 10, 'ms', true),
@@ -20,7 +28,16 @@ const PARAMS: Record<AnyBuiltinKind, ParamDef[]> = {
     p('tone', 'Tone', -100, 100, 0, '%'), p('highcut', 'High cut', 500, 20000, 20000, 'Hz', true), choice('steep', 'Steep', 0, ['Off', 'On']),
     choice('auto', 'Auto gain', 1, ['Off', 'On']), p('mix', 'Mix', 0, 100, 100, '%'), p('out', 'Output', -24, 12, 0, 'dB'),
     choice('hq', 'Oversampling', 0, ['2×', '4×'])],
-  delay: [p('time', 'Time', 10, 1500, 375, 'ms', true), p('fb', 'Feedback', 0, 95, 35, '%'), p('mix', 'Mix', 0, 100, 25, '%')],
+  // catalog.rs DELAY (dsp::delay::idx order)
+  delay: [p('input', 'Input', 0, 100, 100, '%'), choice('sync', 'Sync', 0, ['Tempo', 'ms']), p('beats', 'Time', 1 / 48, 4, 0.75, 'beat', true),
+    p('time', 'Time', 1, 2000, 375, 'ms', true), choice('keep', 'Keep pitch', 0, ['Off', 'On']), p('smooth', 'Smoothing', 0, 100, 40, '%'),
+    p('offset', 'Offset', -100, 100, 0, '%'), p('pan', 'Pan', -100, 100, -60, '%'), choice('model', 'Model', 1, ['Mono', 'Stereo', 'Ping-pong', 'Off']),
+    p('spread', 'Stereo', 0, 100, 100, '%'), p('fb', 'Feedback', 0, 125, 35, '%'), choice('ftype', 'Filter', 1, ['Off', 'LP', 'HP', 'BP']),
+    p('cutoff', 'Cutoff', 20, 20000, 6000, 'Hz', true), p('res', 'Resonance', 0, 100, 0, '%'), p('srate', 'Sample rate', 500, 48000, 48000, 'Hz', true),
+    p('bits', 'Bits', 2, 24, 24, 'bit'), choice('dist', 'Distortion', 1, ['Limit', 'Sat']), p('level', 'Threshold', -36, 0, 0, 'dB'),
+    p('knee', 'Knee', 0, 100, 50, '%'), p('sym', 'Symmetry', 0, 100, 0, '%'), p('diff', 'Diffusion', 0, 100, 0, '%'),
+    p('dspread', 'Diff. spread', 0, 100, 50, '%'), p('rate', 'LFO rate', 0.05, 20, 0.5, 'Hz', true), p('mtime', 'Mod time', 0, 100, 0, '%'),
+    p('mcut', 'Mod cutoff', 0, 100, 0, '%'), p('mix', 'Wet', 0, 100, 25, '%'), p('tone', 'Tone', -100, 100, 0, '%'), p('dry', 'Dry', 0, 100, 100, '%')],
   // catalog.rs REVERB / LIMIT (v2)
   reverb: [p('size', 'Decay', 0.2, 6, 1, 's', true), p('pre', 'Pre-delay', 0, 150, 25, 'ms'), p('lo', 'Low cut', 20, 1000, 300, 'Hz', true),
     p('hi', 'High cut', 2000, 16000, 7000, 'Hz', true), p('width', 'Width', 0, 100, 100, '%'), p('mix', 'Mix', 0, 100, 15, '%'),
@@ -48,12 +65,17 @@ const PARAMS: Record<AnyBuiltinKind, ParamDef[]> = {
     p('target', 'Target', -60, 0, -24, 'dB'), p('floor', 'Noise floor', -100, -20, -70, 'dB'), choice('look', 'Look-ahead', 2, ['Krótki (+0,3 s opóźnienia)', 'Długi (+1–1,6 s opóźnienia)', 'Na żywo']),
     p('out', 'Output', -24, 24, 0, 'dB'), p('gate', 'Gate', -100, -10, -60, 'dB')],
   // catalog.rs HALF (order = dsp::halftime::idx)
+  // catalog.rs WARP (dsp::warp::idx order)
+  warp: [choice('tslot', 'Time slot', 0, SLOTS), choice('vslot', 'Volume slot', 0, SLOTS), choice('trig', 'Trigger sync', 0, ['Off', '1/16', '1/8', '1/4', '1/2', '1 takt']),
+    choice('pos', 'Position', 0, ['Song', 'Trigger']), choice('oneshot', 'One-shot', 0, ['Off', 'On']), choice('hold', 'Hold', 0, ['Off', 'Poprzedni takt', 'Następny takt']),
+    p('tmix', 'Time mix', 0, 100, 100, '%'), p('vmix', 'Volume mix', 0, 100, 100, '%'), p('att', 'Attack', 0, 500, 0, 'ms'), p('rel', 'Release', 0, 1000, 0, 'ms'),
+    p('tns', 'Tension', -100, 100, 0, '%'), choice('click', 'Click reduction', 1, ['Off', 'On']), choice('attack', 'Attack protect', 1, ['Off', 'On']), choice('dc', 'DC removal', 1, ['Off', 'On'])],
   half: [choice('speed', 'Speed', 1, ['1.5×', '2×', '4×']), choice('loop', 'Loop', 4, ['1/16', '1/8', '1/4', '1/2', '1 takt', '2 takty', '4 takty', '8 taktów']),
     p('smooth', 'Smooth', -100, 100, 10, '%'), p('lo', 'Band low', 20, 20000, 20, 'Hz', true), p('hi', 'Band high', 20, 20000, 20000, 'Hz', true),
     choice('solo', 'Band solo', 0, ['Off', 'On']), p('mix', 'Mix', 0, 100, 100, '%')],
 };
 const NAMES: Record<AnyBuiltinKind, string> = { eq: 'Parametric EQ', comp: 'Compressor', sat: 'Saturator', delay: 'Delay', reverb: 'Reverb', limit: 'Limiter',
-  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser', voice: 'Voice', rider: 'Vocal Rider', half: 'Half-Speed' };
+  fet: 'FET Compressor', deess: 'De-esser', tune: 'Pitch Correct', denoise: 'Denoiser', voice: 'Voice', rider: 'Vocal Rider', half: 'Half-Speed', warp: 'Warp' };
 
 type BandEdit = [number, boolean | null, number | null, number | null, number | null];
 function eqp(name: string, out: number, edits: BandEdit[]): Preset {
@@ -74,8 +96,9 @@ function eqo(name: string, out: number, slope: number, edits: BandEdit[]): Prese
   return p;
 }
 const pr = (name: string, params: Record<string, number>): Preset => ({ name, params });
-const dly = (name: string, beats: number | null, time: number, fb: number, mix: number): Preset =>
-  ({ name, params: { time, fb, mix }, ...(beats != null ? { beats } : {}) });
+/** catalog.rs `dly` / `dly_ms`: synced (beats) or free (ms) delay presets. */
+const dly = (name: string, beats: number, fb: number, mix: number, kv: Record<string, number> = {}): Preset => ({ name, params: { ...kv, sync: 0, beats, fb, mix } });
+const dlyMs = (name: string, time: number, fb: number, mix: number, kv: Record<string, number> = {}): Preset => ({ name, params: { ...kv, sync: 1, time, fb, mix } });
 const T = true, n = null;
 
 const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
@@ -115,8 +138,18 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     pr('Taśma — klej na bus', { style: 0, drive: 22, highcut: 18000 }),
   ],
   delay: [
-    dly('Ósemka 1/8', 0.5, 0, 35, 20), dly('Ćwierćnuta 1/4', 1, 0, 30, 22), dly('Kropkowana 1/8', 0.75, 0, 40, 22),
-    dly('Triola 1/8T', 1 / 3, 0, 35, 20), dly('Slapback', null, 90, 0, 25), dly('Długi dub', 1.5, 0, 65, 30),
+    dly('Ósemka 1/8', 0.5, 35, 22),
+    dly('Ping-pong 1/8', 0.5, 50, 30, { model: 2, pan: -70, cutoff: 7000 }), dly('Ping-pong kropkowana 1/8', 0.75, 50, 30, { model: 2, pan: -70, cutoff: 7000 }),
+    dly('Ping-pong 1/4', 1, 45, 28, { model: 2, pan: -70, cutoff: 6000 }),
+    dly('Kropkowana 1/8', 0.75, 40, 22), dly('Ćwierćnuta 1/4', 1, 30, 22), dly('Triola 1/8T', 1 / 3, 35, 20),
+    dlyMs('Slapback', 90, 0, 25, { ftype: 1, cutoff: 7000 }),
+    dly('Wysyłka — 100 % wet', 0.75, 40, 100, { dry: 0, tone: 25 }),
+    dly('Taśma — dub', 1.5, 70, 30, { cutoff: 2400, res: 20, level: -10, knee: 70, sym: 30, mtime: 18, rate: 0.6, smooth: 65, diff: 15 }),
+    dly('Dub — samooscylacja', 0.75, 108, 28, { cutoff: 1200, res: 55, level: -9, knee: 80, smooth: 80 }),
+    dly('Lo-fi / bitcrush', 0.5, 45, 30, { ftype: 0, srate: 8000, bits: 8, level: -6 }),
+    dly('Rozmyte echo (ambient)', 1, 60, 30, { cutoff: 4500, diff: 70, dspread: 70, mtime: 10, rate: 0.3 }),
+    dlyMs('Chorus / dublowanie', 14, 15, 45, { ftype: 0, offset: 40, mtime: 55, rate: 0.7, keep: 1 }),
+    dlyMs('Multi-FX: filtr + drive (bez echa)', 100, 0, 100, { model: 3, dry: 0, cutoff: 1800, res: 55, level: -14, mcut: 45, rate: 0.25 }),
   ],
   reverb: ([
     ['Vocal Plate', 1.0, 25, 300, 7000, 100, 15, 0, 0, 3, 0.8], ['Vocal Room', 0.6, 10, 250, 8000, 90, 12, -10, 1, 0, 0.9],
@@ -171,6 +204,10 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
     pr('Mocno', { amount: 80, phrase: 30, up: 8, down: 9, speed: 0, auto: 1, look: 2 }),
     pr('Wokal — śpiew (długi look-ahead, opóźnienie)', { amount: 50, phrase: 20, up: 5, down: 6, speed: 0, auto: 1, look: 1 }),
   ],
+  warp: [
+    pr('Domyślny', {}), pr('Half-time', { tslot: 1 }), pr('Sidechain 1/4', { vslot: 1 }), pr('Tape stop (pół taktu)', { tslot: 8 }),
+    pr('Stutter 1/8 + bramka', { tslot: 5, vslot: 4 }), pr('Wyzwalanie na żywo (co ćwierćnutę, one-shot)', { trig: 3, oneshot: 1 }),
+  ],
   half: ([
     ['Half-time — 1 takt', 1, 4, 10, 20, 20000, 0, 100], ['Bębny — ósemki, punch', 1, 1, -12, 20, 20000, 0, 100],
     ['Szesnastki — oktawa w dół', 1, 0, -8, 20, 20000, 0, 100], ['Triola — kwinta niżej', 0, 2, 10, 20, 20000, 0, 100],
@@ -181,13 +218,14 @@ const PRESETS: Record<AnyBuiltinKind, Preset[]> = {
 };
 
 /** catalog.rs `BUILTIN` (also the order of the "add effect" menu). */
-export const BUILTIN: AnyBuiltinKind[] = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'half', 'reverb', 'limit'];
+export const BUILTIN: AnyBuiltinKind[] = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'half', 'warp', 'reverb', 'limit'];
 
 export function mockCatalog(): Catalog {
   return {
     types: Object.fromEntries(BUILTIN.map(k => [k, { name: NAMES[k], params: PARAMS[k] }])),
     presets: Object.fromEntries(BUILTIN.map(k => [k, PRESETS[k]])),
     synth: structuredClone(SYNTH_CATALOG),
+    warp: warpFactory(),
   };
 }
 

@@ -13,6 +13,10 @@ pub struct ProcessCtx {
     pub playing: bool,
 }
 
+/// Variable-size data for a processor, built off the audio thread (Warp's maps). The audio
+/// thread only moves the box; the one it replaces goes back to be dropped off-thread.
+pub type FxData = Box<dyn std::any::Any + Send>;
+
 /// A stereo, in-place audio effect.
 ///
 /// Real-time contract for [`Processor::process`]: no allocation, no locks that
@@ -29,6 +33,12 @@ pub trait Processor: Send {
     /// Apply a parameter set (built-in effects). Called on the audio thread,
     /// so it must not allocate either. Unknown ids are ignored.
     fn set_params(&mut self, _params: &ParamBlock) {}
+
+    /// Take new variable-size data (see [`FxData`]); returns the previous data, or `data`
+    /// itself when this processor does not use it. Called on the audio thread: move only.
+    fn swap_data(&mut self, data: FxData) -> Option<FxData> {
+        Some(data)
+    }
 
     /// Forget tails and envelopes (transport jump, bypass toggled on).
     fn reset(&mut self) {}
@@ -65,12 +75,15 @@ pub trait Processor: Send {
     }
 }
 
+/// Most parameters a built-in effect can have (the delay has the most).
+pub const MAX_PARAMS: usize = 32;
+
 /// Parameters of a built-in effect, already resolved to numbers on the
 /// non-audio side. Fixed size so it travels through a ring buffer by value.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ParamBlock {
     /// Built-in effect parameters, in the order of the type's parameter list (see `fx::params`).
-    pub values: [f32; 12],
+    pub values: [f32; MAX_PARAMS],
     /// EQ bands (unused slots have `on = false`).
     pub bands: [BandParams; 24],
 }

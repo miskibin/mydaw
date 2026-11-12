@@ -534,6 +534,8 @@ pub enum Cmd {
     Timeline(Box<Timeline>),
     Mix(Box<MixState>),
     Params { fx: Id, params: Option<ParamBlock>, mix: f32 },
+    /// Variable-size data for one effect (Warp's maps), built off the audio thread.
+    FxData { fx: Id, data: crate::processor::FxData },
     /// `rec_loop`: record in passes over the loop range (one take per pass).
     Play { from: f64, count_in: f64, rec: bool, rec_loop: bool },
     /// Stops capturing input but keeps the transport running.
@@ -577,6 +579,7 @@ pub enum Garbage {
     Preview(Box<Preview>),
     Synth(Box<SynthInst>),
     Patch(Box<Patch>),
+    FxData(crate::processor::FxData),
 }
 
 pub struct Taps {
@@ -875,6 +878,22 @@ impl Rt {
                                 p.set_params(&params);
                             }
                         }
+                    }
+                }
+                Cmd::FxData { fx, data } => {
+                    let back = match self
+                        .graph
+                        .inserts
+                        .iter_mut()
+                        .flat_map(|i| i.fx.iter_mut())
+                        .find(|s| s.id == fx)
+                        .and_then(|s| s.proc.as_mut())
+                    {
+                        Some(p) => p.swap_data(data),
+                        None => Some(data),
+                    };
+                    if let Some(old) = back {
+                        self.trash(Garbage::FxData(old));
                     }
                 }
                 Cmd::Play { from, count_in, rec, rec_loop } => {

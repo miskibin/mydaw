@@ -18,7 +18,7 @@ export interface Track {
   icon?: string | null;
 }
 
-export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'rider' | 'half' | 'vst3';
+export type FxKind = 'eq' | 'comp' | 'sat' | 'delay' | 'reverb' | 'limit' | 'fet' | 'deess' | 'tune' | 'denoise' | 'voice' | 'rider' | 'half' | 'warp' | 'vst3';
 /** Built-in kinds the effect picker lists (the views keep a label and blurb per kind). */
 export type BuiltinKind = Exclude<FxKind, 'vst3'>;
 /** Every built-in kind, including ones the picker does not list yet ('rider': added by "Auto wokal"). */
@@ -48,7 +48,13 @@ export interface Fx {
   params: Record<string, number>;
   bands?: EqBand[];
   plugin?: PluginRef;
+  /** Warp only: its time and volume map slots. */
+  maps?: WarpMaps;
 }
+
+/** A Warp map over one bar: `t` 0..4 beats, `v` 0..1 (time: 1 = now, 0 = 8 beats back; volume: gain). */
+export interface WarpSlot { name: string; points: AutoPoint[] }
+export interface WarpMaps { time: WarpSlot[]; vol: WarpSlot[] }
 
 export interface Insert {
   id: Id; name: string; color: string;
@@ -265,7 +271,7 @@ export type AutoTarget =
 export const CLIP_GAIN_DB = { min: -24, max: 12 } as const;
 /** `t` beats from the start of the automation, `v` normalised 0..1. */
 /** How a segment travels from the previous point to this one (FL's curve types). */
-export type CurveShape = 'curve' | 'double' | 'hold' | 'stairs';
+export type CurveShape = 'curve' | 'double' | 'hold' | 'stairs' | 'pulse' | 'wave' | 'halfSine';
 /** `tension` (−1..1, 0 = straight) and `shape` (default `curve`) shape the segment that ends here. */
 export interface AutoPoint { t: number; v: number; tension?: number; shape?: CurveShape }
 export interface Automation { id: Id; name: string; color: string; target: AutoTarget; points: AutoPoint[] }
@@ -326,7 +332,7 @@ export interface StateDto {
 /** `options`: a discrete choice (value = index), shown as buttons instead of a knob. */
 export interface ParamDef { id: string; label: string; min: number; max: number; def: number; unit: string; log: boolean; options?: string[] }
 export interface TypeDef { name: string; params: ParamDef[] }
-export interface Preset { name: string; params: Record<string, number>; bands?: EqBand[]; beats?: number }
+export interface Preset { name: string; params: Record<string, number>; bands?: EqBand[] }
 /** One panel section of the synth (ids in order: osc1, osc2, subnoise, unison, filter, ampenv, modenv, lfo1, lfo2, matrix, voice, fx). */
 export interface SynthSection { id: string; name: string; params: ParamDef[] }
 /** A factory synth preset: `params` is the complete parameter set (every id). */
@@ -337,6 +343,8 @@ export interface Catalog {
   presets: Partial<Record<FxKind, Preset[]>>;
   /** The built-in synth (Channel Rack channels of kind `synth`). */
   synth: SynthCatalog;
+  /** Warp's factory slots (catalog.rs `warp`). */
+  warp?: WarpMaps;
 }
 
 export interface AudioHost { id: string; name: string }

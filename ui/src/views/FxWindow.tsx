@@ -4,7 +4,8 @@ import type { Fx, FxKind, Id, ParamDef, Vst3Param } from '../api/types';
 import { clamp } from '../lib/format';
 import { lang, t, tName, type TranslationKey } from '../lib/i18n';
 import { NOTE_NAMES } from '../lib/pitch';
-import { paramDefs, pFmt, pNorm, presetInfo, presetList, pVal } from '../lib/presets';
+import { knobVal, paramDefs, pFmt, pNorm, presetInfo, presetList } from '../lib/presets';
+import { noteName, stepBeats } from '../lib/beatDiv';
 import * as A from '../state/actions';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
 import { commit, Gesture, wheelEdit } from '../state/edit';
@@ -25,10 +26,12 @@ import { EqStrips } from './fx/eqStrips';
 import { EqPanel, eqHover, eqLeave, eqPointerDown, eqWheel } from './fx/eqEdit';
 import { fetModes, FetViz } from './fx/fet';
 import { defaultView, ReverbViz, views3d } from './fx/reverb';
-import { DelayViz, SatViz } from './fx/satDelay';
+import { SatViz } from './fx/satDelay';
+import { DelayViz } from './fx/delay';
 import { TuneViz } from './fx/tune';
 import { RiderViz } from './fx/rider';
 import { halfHit, HalfViz, halfXf } from './fx/half';
+import { warpDown, warpHover, WarpViz } from './fx/warp';
 import { onVoicePad, padParams, padToVoice, VoiceViz } from './fx/voice';
 
 
@@ -46,12 +49,13 @@ function makeViz(f: Fx): Viz | null {
     case 'voice': return new VoiceViz();
     case 'rider': return new RiderViz();
     case 'half': return new HalfViz();
+    case 'warp': return new WarpViz();
     default: return null;
   }
 }
-const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, sat: 240, deess: 230, denoise: 240, voice: 250, rider: 220, half: 250 };
+const VIZ_H: Partial<Record<Fx['type'], number>> = { eq: 300, reverb: 260, tune: 280, fet: 250, sat: 240, deess: 230, denoise: 240, voice: 250, rider: 220, half: 250, delay: 230, warp: 360 };
 /** Default window widths per type (actions.openPlug). */
-export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700, half: 760 };
+export const WIN_W: Partial<Record<Fx['type'], number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700, half: 760, delay: 760, warp: 820 };
 
 const HINTS: Partial<Record<Fx['type'], TranslationKey>> = {
   eq: 'c.fx.hint.eq',
@@ -61,6 +65,8 @@ const HINTS: Partial<Record<Fx['type'], TranslationKey>> = {
   denoise: 'c.fx.hint.denoise',
   tune: 'c.fx.hint.tune',
   half: 'c.fx.hint.half',
+  delay: 'c.fx.hint.delay',
+  warp: 'c.fx.hint.warp',
   voice: 'c.fx.hint.voice',
 };
 
@@ -130,7 +136,7 @@ export function FxWindow(props: { pw: PlugWin; z: number }) {
 }
 
 /** Dry/wet of the effect (fx.mix), automatable. */
-const OWN_MIX = new Set<string>(['reverb', 'delay', 'sat', 'fet', 'half']);
+const OWN_MIX = new Set<string>(['reverb', 'delay', 'sat', 'fet', 'half', 'warp']);
 function MixControl(props: { fx: Fx }) {
   const target = () => ({ kind: 'mix' as const, fxId: props.fx.id });
   const val = () => autoDisplay(target()) ?? props.fx.mix ?? 1;
@@ -163,6 +169,13 @@ function setParam(fxId: Id, id: string, v: number) {
 }
 const defOf = (fx: Fx, id: string) => paramDefs(S.catalog, fx.type).find(p => p.id === id);
 
+/** The value for the status line: a synced time also names its note value and length at the tempo. */
+function fmtLong(p: ParamDef, v: number): string {
+  if (p.unit !== 'beat') return pFmt(p, v);
+  const n = noteName(v);
+  return pFmt(p, v) + (n ? ' (' + n + ')' : '') + ' · ' + Math.round(v * 60000 / Math.max(1, S.project.bpm)) + ' ms';
+}
+
 function ParamKnob(props: { fxId: Id; p: ParamDef; ends?: [string, string]; color?: string; size?: KnobSize }) {
   const fx = () => findFx(props.fxId)?.f;
   const target = () => ({ kind: 'fx' as const, fxId: props.fxId, param: props.p.id });
@@ -175,11 +188,15 @@ function ParamKnob(props: { fxId: Id; p: ParamDef; ends?: [string, string]; colo
       automated={() => isAutomated(target())}
       zero={() => (p.min < 0 && p.max > 0 && !p.log ? pNorm(p, 0) : 0)} text={() => pFmt(p, val())}
       onStart={() => { g = new Gesture(tName(p.label)); }}
-      onChange={t => { const v = pVal(p, t); const op = setParam(props.fxId, p.id, v); if (op) g?.update([op]); say(A.fxName(fx()!) + ' · ' + tName(p.label) + ' ' + pFmt(p, v)); }}
+      onChange={t => { const v = knobVal(p, t); const op = setParam(props.fxId, p.id, v); if (op) g?.update([op]); say(A.fxName(fx()!) + ' · ' + tName(p.label) + ' ' + fmtLong(p, v)); }}
       onEnd={() => { g?.end(); g = null; }}
       onReset={reset}
       onMenu={(x, y) => paramMenu(x, y, target(), reset, props.color)}
-      onWheel={t => { const v = pVal(p, t); const op = setParam(props.fxId, p.id, v); if (op) wheelEdit('fx' + props.fxId + p.id, tName(p.label), [op]); say(A.fxName(fx()!) + ' · ' + tName(p.label) + ' ' + pFmt(p, v)); }} />
+      onWheel={t => {
+        // a synced time steps one note value per notch (snapping alone would undo a small move)
+        const v = p.unit === 'beat' ? stepBeats(val(), t - pNorm(p, val())) : knobVal(p, t);
+        const op = setParam(props.fxId, p.id, v); if (op) wheelEdit('fx' + props.fxId + p.id, tName(p.label), [op]); say(A.fxName(fx()!) + ' · ' + tName(p.label) + ' ' + fmtLong(p, v));
+      }} />
   );
 }
 
@@ -218,7 +235,8 @@ const L = (s: string) => (s.startsWith('c.') ? t(s as TranslationKey) : s);
 // ---- shared layout system: every built-in effect is described as titled sections of controls.
 // Size tiers: `lg` for the one or two controls that define the effect, `md` standard, `sm` trims.
 // Choices render as segmented buttons; `stack` puts items in a column; `x` is a custom widget.
-type Item = { id: string; size?: KnobSize; ends?: [string, string] | ((fx: Fx) => [string, string] | undefined); labels?: string[]; danger?: number; small?: boolean }
+/** `when`: the control is shown only while it applies (e.g. the delay's Offset vs Pan per model). */
+type Item = { id: string; size?: KnobSize; ends?: [string, string] | ((fx: Fx) => [string, string] | undefined); labels?: string[]; danger?: number; small?: boolean; when?: (fx: Fx) => boolean }
   | { stack: Item[] } | { x: 'fetMeter' };
 /** Titles, labels and ends: keys starting with `c.` (see `L`). `adv`: shown only after the window's "Advanced" toggle (keeps the first view simple). */
 type Section = { title: string; items: Item[]; adv?: boolean };
@@ -248,9 +266,31 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
     { title: 'c.fx.sec.output', items: [{ stack: [{ id: 'auto', labels: ['c.fx.lab.manual', 'Auto'], small: true }] }, { id: 'mix' }, { id: 'out' }] },
     { title: 'c.fx.sec.quality', adv: true, items: [{ stack: [{ id: 'hq', labels: ['2×', '4× HQ'], small: true }] }] },
   ],
+  // first view: the four things you reach for (time, repeats, stereo, level); the loop's
+  // character (filter detail, drive, lo-fi, diffusion, modulation) is under "Advanced"
   delay: [
-    { title: 'c.fx.sec.echo', items: [{ id: 'time', size: 'lg' }, { id: 'fb' }] },
-    { title: 'c.fx.sec.output', items: [{ id: 'mix' }] },
+    { title: 'c.fx.sec.echo', items: [
+      { stack: [{ id: 'sync', small: true }] },
+      { id: 'beats', size: 'lg', when: fx => (fx.params.sync ?? 0) < 0.5 }, { id: 'time', size: 'lg', when: fx => (fx.params.sync ?? 0) >= 0.5 },
+      { id: 'fb', size: 'lg' },
+    ] },
+    { title: 'c.fx.sec.model', items: [{ stack: [{ id: 'model', small: true }] }] },
+    { title: 'c.fx.sec.tone', items: [{ id: 'cutoff', when: fx => (fx.params.ftype ?? 1) >= 0.5 }] },
+    { title: 'c.fx.sec.output', items: [{ id: 'mix' }, { id: 'dry' }] },
+    { title: 'c.fx.sec.time', adv: true, items: [
+      { stack: [{ id: 'keep', labels: ['c.fx.lab.repitch', 'c.fx.lab.keepPitch'], small: true }] },
+      { id: 'smooth', size: 'sm', when: fx => (fx.params.keep ?? 0) < 0.5 },
+      { id: 'offset', size: 'sm', ends: ['L', 'R'], when: fx => dlyModel(fx) <= 1 }, { id: 'pan', size: 'sm', ends: ['L', 'R'], when: fx => dlyModel(fx) === 2 },
+      { id: 'spread', size: 'sm', ends: ['c.fx.end.mono', 'c.fx.end.stereo'] }, { id: 'input', size: 'sm' },
+    ] },
+    { title: 'c.fx.sec.feedback', adv: true, items: [{ stack: [{ id: 'ftype', small: true }] }, { id: 'res', size: 'sm', when: fx => (fx.params.ftype ?? 1) >= 0.5 }, { id: 'tone', size: 'sm', ends: ['LP', 'HP'] }] },
+    { title: 'c.fx.sec.loopDrive', adv: true, items: [
+      { stack: [{ id: 'dist', small: true }] }, { id: 'level', size: 'sm' },
+      { id: 'knee', size: 'sm', ends: ['c.fx.end.solid', 'c.fx.end.valve'], when: fx => (fx.params.dist ?? 1) >= 0.5 }, { id: 'sym', size: 'sm', when: fx => (fx.params.dist ?? 1) >= 0.5 },
+    ] },
+    { title: 'c.fx.sec.lofi', adv: true, items: [{ id: 'srate', size: 'sm' }, { id: 'bits', size: 'sm' }] },
+    { title: 'c.fx.sec.diffusion', adv: true, items: [{ id: 'diff', size: 'sm' }, { id: 'dspread', size: 'sm' }] },
+    { title: 'c.fx.sec.modulation', adv: true, items: [{ id: 'rate', size: 'sm' }, { id: 'mtime', size: 'sm' }, { id: 'mcut', size: 'sm' }] },
   ],
   reverb: [
     { title: 'c.fx.sec.space', items: [{ stack: [{ id: 'space', small: true }] }, { id: 'size', size: 'lg' }, { id: 'pre' }] },
@@ -285,6 +325,12 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
     { title: 'c.fx.sec.shift', items: [{ id: 'transpose', size: 'sm' }, { id: 'formant', size: 'sm' }] },
   ],
   eq: [{ title: 'c.fx.sec.output', items: [{ id: 'out', size: 'sm' }] }],
+  warp: [
+    { title: 'c.fx.sec.trigger', items: [{ stack: [{ id: 'trig', small: true }, { id: 'pos', small: true }] }, { stack: [{ id: 'oneshot', small: true }, { id: 'hold', small: true, danger: 1 }] }] },
+    { title: 'c.fx.sec.mix', items: [{ id: 'tmix' }, { id: 'vmix' }] },
+    { title: 'c.fx.sec.volEnv', items: [{ id: 'att', size: 'sm' }, { id: 'rel', size: 'sm' }, { id: 'tns', size: 'sm' }] },
+    { title: 'c.fx.sec.cleanup', adv: true, items: [{ stack: [{ id: 'click', small: true }, { id: 'attack', small: true }] }, { stack: [{ id: 'dc', small: true }] }] },
+  ],
   half: [
     { title: 'c.fx.sec.slowdown', items: [{ stack: [{ id: 'speed', labels: ['c.fx.lab.halfFifth', 'c.fx.lab.halfOctave', 'c.fx.lab.halfTwoOct'], small: true }, { id: 'loop', small: true }] }] },
     { title: 'c.fx.sec.transitions', items: [{ id: 'smooth', size: 'lg', ends: ['c.fx.end.percussive', 'c.fx.end.swell'] }] },
@@ -292,6 +338,9 @@ const LAYOUT: Partial<Record<FxKind, Section[]>> = {
     { title: 'c.fx.sec.output', items: [{ id: 'mix' }] },
   ],
 };
+
+/** The delay's model index (0 mono, 1 stereo, 2 ping-pong, 3 off). */
+const dlyModel = (fx: Fx) => Math.round(fx.params.model ?? 1);
 
 function LayoutItem(props: { fx: Fx; it: Item }) {
   const it = props.it;
@@ -314,11 +363,12 @@ function Sections(props: { fx: Fx }) {
     const walk = (xs: Item[]) => xs.forEach(x => ('stack' in x ? walk(x.stack) : 'id' in x ? placed.add(x.id) : null));
     lay.forEach(s => walk(s.items));
     const known = new Set(defs.map(p => p.id));
-    const rest = defs.filter(p => !placed.has(p.id) && !(props.fx.type === 'tune' && ['key', 'scale', 'voice'].includes(p.id)));
+    // the tuner's key/scale/voice have their own row; Warp's slots are picked on its slot strip
+    const rest = defs.filter(p => !placed.has(p.id) && !(props.fx.type === 'tune' && ['key', 'scale', 'voice'].includes(p.id)) && !(props.fx.type === 'warp' && ['tslot', 'vslot'].includes(p.id)));
     // drop layout items the engine does not define (older catalog), then sections left empty
     const keep = (xs: Item[]): Item[] => xs.flatMap((x): Item[] => {
       if ('stack' in x) { const k = keep(x.stack); return k.length ? [{ stack: k }] : []; }
-      return 'id' in x && !known.has(x.id) ? [] : [x];
+      return 'id' in x && (!known.has(x.id) || (x.when && !x.when(props.fx))) ? [] : [x];
     });
     const all = lay.map(s => ({ ...s, items: keep(s.items) })).filter(s => s.items.length);
     return rest.length ? [...all, { title: 'c.fx.sec.other', adv: true, items: rest.map(p => ({ id: p.id })) }] : all;
@@ -393,6 +443,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     f.bypass; f.mix; for (const k in f.params) void f.params[k];
     f.bands?.forEach(b => { b.on; b.type; b.f; b.g; b.q; b.slope; b.place; b.dynamic?.range; b.dynamic?.thr; });
     f.bands?.length;
+    for (const b of [f.maps?.time, f.maps?.vol]) b?.forEach(sl => { sl.name; sl.points.forEach(q => { q.t; q.v; q.tension; q.shape; }); sl.points.length; });
     U.eqSel[props.fxId]; U.fetMode[props.fxId]; S.project.bpm; lang();
     version++;
   });
@@ -427,6 +478,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     else if (got.f.type === 'deess') deessDown(e, got.f);
     else if (got.f.type === 'voice') voiceDown(e);
     else if (got.f.type === 'half') halfDown(e, got.f);
+    else if (got.f.type === 'warp') warpDown(e, cv, props.fxId, viz as WarpViz, () => version++);
     else if (got.f.type === 'fet' && e.button === 0) {
       const m = fetModes.get(props.fxId) === 'out' ? 'gr' : 'out';
       fetModes.set(props.fxId, m); version++; say(m === 'gr' ? t('c.fx.meterGr') : t('c.fx.meterOut'));
@@ -441,6 +493,8 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
       const onF = x >= G.sx && Math.abs(x - deessFx(got.f.params.freq ?? 6000, W, H)) < 8;
       if (onThr !== d.hoverThr || onF !== d.hoverFreq) { d.hoverThr = onThr; d.hoverFreq = onF; version++; }
       cv.style.cursor = onThr ? 'ns-resize' : onF ? 'ew-resize' : 'default';
+    } else if (got.f.type === 'warp') {
+      if (warpHover(e, cv, props.fxId, viz as WarpViz)) version++;
     } else if (got.f.type === 'half') {
       const v = viz as HalfViz, { x, y, W, H } = rel(e), on = halfHit(got.f, x, y, W, H);
       if (on !== v.hover) { v.hover = on; version++; }
@@ -457,6 +511,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     if (got.f.type === 'deess') { const d = viz as DeessViz; d.hoverThr = d.hoverFreq = false; version++; }
     if (got.f.type === 'voice') { (viz as VoiceViz).hover = false; version++; }
     if (got.f.type === 'half') { (viz as HalfViz).hover = null; version++; }
+    if (got.f.type === 'warp') { const w = viz as WarpViz; w.hover = null; w.hoverX = null; version++; }
   };
   /** Pad: click / drag sets Pitch and Formant together (one undo step), double click resets both. */
   const voiceDown = (e: PointerEvent) => {

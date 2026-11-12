@@ -118,6 +118,8 @@ pub enum FxKind {
     Rider,
     /// Tempo-locked slow-down (`dsp::halftime`).
     Half,
+    /// Time and volume maps over a two-bar buffer (`dsp::warp`).
+    Warp,
     Vst3,
 }
 
@@ -143,6 +145,61 @@ pub struct Fx {
     /// VST3 only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginRef>,
+    /// Warp only: its time and volume map slots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maps: Option<WarpMaps>,
+}
+
+/// Most slots of each Warp map bank.
+pub const WARP_SLOTS: usize = 16;
+/// Most points of one Warp map.
+pub const WARP_POINTS: usize = 256;
+/// Width of a Warp map, beats (one 4/4 bar).
+pub const WARP_BAR: f64 = 4.0;
+/// Depth of a Warp time map, beats: `v` 1 = now, 0 = this many beats ago.
+pub const WARP_DEPTH: f64 = 8.0;
+
+/// A Warp map: points over one bar (`t` 0..4 beats, `v` 0..1, the same segment shapes as
+/// automation). Time maps: `v` 1 = the live input, lower = up to `WARP_DEPTH` beats back (the
+/// slope sets speed and direction). Volume maps: `v` = gain.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WarpSlot {
+    #[serde(default)]
+    pub name: String,
+    pub points: Vec<AutoPoint>,
+}
+
+impl WarpSlot {
+    /// Value at `x` beats into the bar (held before the first and after the last point; a
+    /// segment of zero length is a vertical jump). `tension_add` bends every curve segment
+    /// further (the volume maps' global tension).
+    pub fn value_at(&self, x: f64, tension_add: f32) -> f32 {
+        let p = &self.points;
+        let Some(first) = p.first() else { return 1.0 };
+        if x < first.t {
+            return first.v;
+        }
+        let i = p.partition_point(|q| q.t <= x);
+        if i >= p.len() {
+            return p[p.len() - 1].v;
+        }
+        let (a, b) = (p[i - 1], p[i]);
+        let f = (x - a.t) / (b.t - a.t).max(1e-9);
+        let t = if b.shape == CurveShape::Curve {
+            (b.tension + tension_add).clamp(-1.0, 1.0)
+        } else {
+            b.tension
+        };
+        let g = curve_at(b.shape, t, f);
+        (a.v as f64 + (b.v as f64 - a.v as f64) * g) as f32
+    }
+}
+
+/// The two banks of a Warp effect.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WarpMaps {
+    pub time: Vec<WarpSlot>,
+    pub vol: Vec<WarpSlot>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -566,6 +623,15 @@ pub enum CurveShape {
     Hold,
     /// Even steps from the previous value to this one; the tension sets how many (2..16).
     Stairs,
+    /// A square wave between the previous value and this one, starting at this one; the tension
+    /// sets how many cycles (1..16). Ends at this point's value.
+    Pulse,
+    /// A cosine wave between the previous value and this one (an odd number of half cycles,
+    /// 1..31 from the tension, so it ends at this point's value).
+    Wave,
+    /// A quarter sine: tension −1 = ease in (slow start: a tape stop), +1 = ease out (slow end:
+    /// a tape start), 0 = the blend of both.
+    HalfSine,
 }
 
 impl CurveShape {
@@ -625,7 +691,32 @@ pub fn curve_at(shape: CurveShape, tension: f32, f: f64) -> f64 {
             let n = stairs_of(tension) as f64;
             ((f * n).floor() / (n - 1.0)).min(1.0)
         }
+        CurveShape::Pulse => {
+            if f >= 1.0 {
+                return 1.0;
     }
+            let n = cycles_of(tension) as f64;
+            if (f * n).fract() < 0.5 {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        CurveShape::Wave => {
+            let m = (2 * cycles_of(tension) - 1) as f64;
+            0.5 - 0.5 * (std::f64::consts::PI * m * f).cos()
+        }
+        CurveShape::HalfSine => {
+            let e = (k + 1.0) / 2.0;
+            let a = f * std::f64::consts::FRAC_PI_2;
+            e * a.sin() + (1.0 - e) * (1.0 - a.cos())
+        }
+    }
+}
+
+/// Cycles of a `Pulse` / `Wave` segment for `tension` -1..1: 1..16.
+pub fn cycles_of(tension: f32) -> u32 {
+    1 + (((tension as f64).clamp(-1.0, 1.0) + 1.0) / 2.0 * 15.0).round() as u32
 }
 
 /// Steps of a `Stairs` segment for `tension` -1..1: 2..16.
@@ -965,6 +1056,26 @@ impl Project {
             for fx in ins.fx.iter_mut().filter(|f| f.kind == FxKind::Sat) {
                 if crate::dsp::saturator::migrate_params(&mut fx.params) {
                     fx.preset = None;
+                }
+            }
+        }
+        // the first delay (time / feedback / mix only): same sound with the new parameters, and
+        // automation of its time and feedback rescaled to the new ranges
+        let mut old_delays = vec![];
+        for ins in &mut self.inserts {
+            for fx in ins.fx.iter_mut().filter(|f| f.kind == FxKind::Delay) {
+                if crate::dsp::delay::migrate_params(&mut fx.params) {
+                    fx.preset = None;
+                    old_delays.push(fx.id);
+                }
+            }
+        }
+        for a in &mut self.automations {
+            if let AutoTarget::Fx { fx_id, param } = &a.target {
+                if old_delays.contains(fx_id) {
+                    for pt in a.points.iter_mut() {
+                        pt.v = crate::dsp::delay::migrate_auto_value(param, pt.v);
+                    }
                 }
             }
         }

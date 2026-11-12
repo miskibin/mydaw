@@ -190,6 +190,8 @@ struct Core {
     /// Effect ids the audio thread currently holds a processor for.
     live_fx: HashSet<Id>,
     sent_params: HashMap<Id, (Option<ParamBlock>, f32)>,
+    /// Warp maps the audio thread has, by effect id (a change is sent as `Cmd::FxData`).
+    sent_maps: HashMap<Id, crate::model::WarpMaps>,
     fx_errors: HashMap<Id, String>,
     wires: Option<Wires>,
     take: Option<RecBuf>,
@@ -279,6 +281,7 @@ impl Engine {
                 transport: TransportDto { playing: false, rec: false, monitor: false, metro: false, count_in: true, start_beat: 0.0 },
                 live_fx: HashSet::new(),
                 sent_params: HashMap::new(),
+                sent_maps: HashMap::new(),
                 fx_errors: HashMap::new(),
                 wires: None,
                 take: None,
@@ -380,6 +383,7 @@ impl Engine {
             self.factory.release(id);
         }
         c.sent_params.clear();
+        c.sent_maps.clear();
         c.synths.clear();
         // the old stream is gone: keep what it captured instead of orphaning the take
         self.finalize_take(&mut c);
@@ -1486,6 +1490,14 @@ impl Engine {
             c.fx_errors = errs;
             c.live_fx = graph.inserts.iter().flat_map(|i| i.fx.iter().map(|s| s.id)).collect();
             c.sent_params = c.project.inserts.iter().flat_map(|m| m.fx.iter()).map(|f| (f.id, fx_send(f))).collect();
+            // fresh processors got their maps in `build_graph`; carried ones keep what they had
+            let fresh: HashSet<Id> = graph.inserts.iter().flat_map(|i| i.fx.iter()).filter(|s| s.proc.is_some()).map(|s| s.id).collect();
+            c.sent_maps.retain(|id, _| now.contains(id) && !fresh.contains(id));
+            for f in c.project.inserts.iter().flat_map(|m| m.fx.iter()) {
+                if let (true, Some(m)) = (fresh.contains(&f.id), f.maps.as_ref()) {
+                    c.sent_maps.insert(f.id, m.clone());
+                }
+            }
             send(c, Cmd::Graph(Box::new(graph)));
         } else if d.params || defer {
             send(c, Cmd::Mix(Box::new(mix_state(&c.project))));
@@ -1500,6 +1512,21 @@ impl Engine {
             for (id, (params, mix)) in changed {
                 c.sent_params.insert(id, (params, mix));
                 send(c, Cmd::Params { fx: id, params, mix });
+            }
+        }
+        if d.mixer || d.params || defer {
+            let changed: Vec<(Id, crate::model::WarpMaps)> = c
+                .project
+                .inserts
+                .iter()
+                .flat_map(|m| m.fx.iter())
+                .filter_map(|f| f.maps.as_ref().map(|m| (f.id, m)))
+                .filter(|(id, m)| c.sent_maps.get(id) != Some(*m))
+                .map(|(id, m)| (id, m.clone()))
+                .collect();
+            for (id, m) in changed {
+                send(c, Cmd::FxData { fx: id, data: Box::new(m.clone()) });
+                c.sent_maps.insert(id, m);
             }
         }
         if d.timeline {
@@ -2175,6 +2202,9 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
                         let mut pr = crate::dsp::create(f.kind).unwrap();
                         pr.prepare(sr, max_block);
                         pr.set_params(&param_block(f));
+                        if let Some(m) = &f.maps {
+                            let _ = pr.swap_data(Box::new(m.clone()));
+                        }
                         Some(pr)
                     };
                     let params = if f.kind == FxKind::Vst3 { None } else { Some(param_block(f)) };
