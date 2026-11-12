@@ -13,13 +13,12 @@
 <p align="center">
   <a href="https://github.com/miskibin/wave-DAW/releases/latest"><img src="https://img.shields.io/github/v/release/miskibin/wave-DAW?label=release" alt="Latest release"></a>
   <a href="https://github.com/miskibin/wave-DAW/actions/workflows/ci.yml"><img src="https://github.com/miskibin/wave-DAW/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/badge/licence-MIT%20or%20Apache--2.0-blue" alt="MIT or Apache-2.0">
 </p>
 
 [![WAVE: playlist, automation and the mixer. Click for the video.](site/img/hero.png)](https://www.youtube.com/watch?v=wtuHDyIQpYk)
 
 WAVE is a desktop music production program (a DAW) for Windows and Linux. It is free, the
-source is open under MIT or Apache-2.0, and it is made for one job: making a beat and recording
+source is open, and it is made for one job: making a beat and recording
 a vocal over it, the way you would in FL Studio.
 
 ## Note from developer (This part is not AI SLOP)
@@ -88,10 +87,6 @@ Sixteen synth voices with two oscillators and seven-voice unison each, every eff
 about 17 % of one core at 48 kHz with 64-sample blocks, and the oscillators stay more than
 60 dB above their aliasing up to C7 ([measurements](docs/synth.md)). How it is put together: [`docs/architecture.md`](docs/architecture.md).
 
-**The licence lets you do what you want with it.** WAVE is MIT or Apache-2.0. LMMS, Zrythm,
-Nota and openDAW are GPL or AGPL. If you want to build on a DAW engine without those terms,
-this is the one you can take.
-
 ## What is in the box
 
 | | |
@@ -114,7 +109,7 @@ than twenty-five years behind it and wins on breadth.
 | | WAVE 0.9 | FL Studio |
 | --- | --- | --- |
 | Price | Free | About $99 to $450 depending on the edition |
-| Source code | Open, MIT or Apache-2.0 | Closed |
+| Source code | Open | Closed |
 | Audio recording | Included, with takes and comping | Producer edition or higher |
 | Vocal pitch editing | Included | NewTone and Pitcher come with the higher editions |
 | Working with an AI agent | The agent edits the open project and measures its own renders | No command line into the open project |
@@ -146,8 +141,7 @@ Found a bug or miss something from FL? [Open an issue](https://github.com/miskib
 
 ## Questions people ask
 
-**Is it really free?** Yes. There is one build, no paid edition and no account. The licence is
-MIT or Apache-2.0.
+**Is it really free?** Yes. There is one build, no paid edition and no account.
 
 **Can it replace FL Studio?** For beats built from the built-in synth, the piano, samples and
 your own recordings: yes, that is what it is made for. If your sound depends on VST
@@ -224,7 +218,7 @@ pnpm --dir ui test
 cargo run -p wave-engine --example bench --release   # callback load, heavy mixer
 ```
 
-## Licence
+## Credits
 
-MIT or Apache-2.0. Third-party components and sample credits:
+Third-party components and sample credits are in
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

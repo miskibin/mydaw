@@ -1,6 +1,6 @@
 # Third-party notices
 
-WAVE is licensed MIT OR Apache-2.0. It links the following component whose licence differs.
+WAVE is licensed AGPL-3.0-only (see [`LICENSE`](LICENSE)). It links or bundles the following components whose licences differ.
 
 ## LAME (MP3 encoding)
 
