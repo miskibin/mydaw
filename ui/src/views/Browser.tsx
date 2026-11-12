@@ -1,7 +1,7 @@
 import { createEffect, createMemo, For, onCleanup, onMount, Show } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { be } from '../api/backend';
-import type { ClipKind, Id, Kit, LibFile, LibraryProgress, Source } from '../api/types';
+import type { Channel, ClipKind, Id, Kit, LibFile, LibraryProgress, Source } from '../api/types';
 import { clamp, fmtBytes, baseName } from '../lib/format';
 import { t } from '../lib/i18n';
 import { snapFloor } from '../lib/snap';
@@ -12,19 +12,23 @@ import { openMenu, say, setU, U } from '../state/ui';
 import { dblCheck, track } from '../ui/drag';
 import { fitCanvas } from '../ui/frameLoop';
 import { dropClipAt, gridPoint } from './Playlist';
-import { addSamplerFiles, chanById, channels, newPattern, openPattern, replaceWithFile } from '../state/pattern';
+import { addSamplerFiles, chanById, newPattern, openPattern, replaceWithFile } from '../state/pattern';
 import { libGroup, STD_KIT } from '../state/library';
 import { chanWin } from './ChannelWindow';
 import { patternItemMenu } from './patternShared';
 import { guessIcon, InstIcon, patternIcon } from '../ui/instIcons';
 
-/** Drag something from the browser with a ghost label; `onDrop` gets the release point. */
-function dragGhost(e: PointerEvent, name: string, color: string, onClick: () => void, onDrop: (x: number, y: number, alt: boolean) => void) {
+/**
+ * Drag something from the browser with a ghost label; `onDrop` gets the release point. `over`
+ * names what a drop at a point would do (the ghost shows it instead of the name), or null.
+ */
+function dragGhost(e: PointerEvent, name: string, color: string, onClick: () => void, onDrop: (x: number, y: number, alt: boolean) => void, over?: (x: number, y: number) => string | null) {
   const sx = e.clientX, sy = e.clientY; let drag = false;
   track(ev => {
     if (!drag && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 4) drag = true;
-    if (drag) setU('ghost', { x: ev.clientX + 12, y: ev.clientY + 8, name, color });
+    if (drag) setU('ghost', { x: ev.clientX + 12, y: ev.clientY + 8, name: over?.(ev.clientX, ev.clientY) ?? name, color });
   }, ev => {
+    if (over) markRow(null);
     setU('ghost', null);
     if (!drag) return onClick();
     onDrop(ev.clientX, ev.clientY, ev.altKey);
@@ -153,19 +157,35 @@ function previewFile(f: LibFile) {
 }
 
 /**
- * A library file let go at a client point: onto a sampler's window = that channel plays it; onto
- * the Channel Rack = a new sampler channel (before the row it was dropped on); anywhere else it
- * is imported, as an audio clip when the point is on a playlist track. One source either way.
+ * Where a library file let go at a client point goes (FL): onto a channel's row in the Channel
+ * Rack, or onto a sampler's window = that channel plays it (a sampler keeps its settings, another
+ * instrument becomes a sampler; notes and routing stay); elsewhere on the rack = a new sampler
+ * channel at the end; anywhere else it is imported, as an audio clip when the point is on a
+ * playlist track. One source either way.
  */
-function dropFile(f: LibFile, x: number, y: number, alt: boolean) {
+function fileTarget(x: number, y: number): { replace?: Channel; row?: HTMLElement; rack?: boolean } {
   const el = document.elementFromPoint(x, y) as HTMLElement | null;
-  const w = el?.closest('.chanwin') ? chanWin() : null, target = w ? chanById(w.id) : undefined;
-  if (target?.kind === 'sample') return void replaceWithFile(target, f);
-  if (w || el?.closest('.rackwin')) {
-    const row = el?.closest<HTMLElement>('[data-ch]');
-    const at = row ? channels().findIndex(c => c.id === Number(row.dataset.ch)) : -1;
-    return void addSamplerFiles([f], at >= 0 ? at : undefined);
-  }
+  const w = el?.closest('.chanwin') ? chanWin() : null, win = w ? chanById(w.id) : undefined;
+  if (win?.kind === 'sample') return { replace: win };
+  const row = el?.closest<HTMLElement>('.rackwin [data-ch]') ?? undefined, c = row ? chanById(Number(row.dataset.ch)) : undefined;
+  if (c && row) return { replace: c, row };
+  return { rack: !!(w || el?.closest('.rackwin')) };
+}
+let marked: HTMLElement | null = null;
+/** Outline the rack row a drop would replace. */
+function markRow(row: HTMLElement | null | undefined) {
+  if (marked === (row ?? null)) return;
+  marked?.classList.remove('dropon'); marked = row ?? null; marked?.classList.add('dropon');
+}
+function fileOver(x: number, y: number): string | null {
+  const d = fileTarget(x, y);
+  markRow(d.row);
+  return d.replace ? t('d.br.dropReplace', { name: d.replace.name }) : d.rack ? t('d.br.dropNewCh') : null;
+}
+function dropFile(f: LibFile, x: number, y: number, alt: boolean) {
+  const d = fileTarget(x, y);
+  if (d.replace) return void replaceWithFile(d.replace, f);
+  if (d.rack) return void addSamplerFiles([f]);
   void importAt([f.path], x, y, alt);
 }
 
@@ -185,7 +205,7 @@ function FileList(props: { k: string }) {
               {f => (
                 <div class="fitem" classList={{ playing: U.previewing && U.previewPath === f.path }} title={t('d.br.file.tip')}
                   onContextMenu={e => { e.preventDefault(); openMenu(e.clientX, e.clientY, [{ t: 'title', label: f.name }, { t: 'item', label: t('d.br.addsampler'), title: t('d.br.addsampler.tip'), act: () => void addSamplerFiles([f]) }], 90); }}
-                  onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); dragGhost(e, f.name, '#47b8a8', () => previewFile(f), (x, y, alt) => dropFile(f, x, y, alt)); }}>
+                  onPointerDown={e => { if (e.button !== 0) return; e.preventDefault(); dragGhost(e, f.name, '#47b8a8', () => previewFile(f), (x, y, alt) => dropFile(f, x, y, alt), fileOver); }}>
                   <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" style={{ flex: 'none', opacity: 0.7 }}><path d="M4 12h2l2-6 3 12 3-9 2 3h4" /></svg>
                   <span class="ell">{f.name.replace(/\.[^.]+$/, '')}</span>
                 </div>

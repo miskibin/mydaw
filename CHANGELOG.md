@@ -17,10 +17,20 @@ shown in the app after an update and is published as the release notes (see
   to step through the mixer inserts.
 - **Icons in Project → Audio**: every sample shows the icon its clips show in the Playlist.
 
+- **Drop a library sample on a Channel Rack channel to replace its sample**, like FL Studio. The
+  row lights up and the label says what will be replaced; the channel keeps its steps, notes and
+  mixer routing (a synth or WAVE Keys channel becomes a sampler). Drop on empty rack space for a
+  new channel.
+
 ### Changed
 - **Play, stop and record come first in the toolbar**, right after the project name.
+- **PAT / SONG switches what is playing**, like FL Studio: while the song plays, PAT (or L) loops
+  the current pattern straight away, and SONG goes back to the song, with no Stop in between.
+- **The Piano roll zooms out further**: until the whole pattern and the empty bars after it fit.
 
 ### Fixed
+- **A new pattern plays at once.** Making or picking a pattern while a pattern loops could keep
+  playing the old one until Stop.
 - **808 drums get a drum icon.** "808 Kick", "808 Snare" and the like showed the bass icon.
 
 ## 0.9.12 — 2026-11-12
