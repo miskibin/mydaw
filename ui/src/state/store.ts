@@ -19,6 +19,8 @@ export interface EngineState {
   catalog: Catalog | null;
   /** Comp id → take auditioned instead of the comp (live only). */
   audition: Record<string, Id>;
+  /** Clip id → stretch status: being rendered (`''`) or failed (the message). Live only. */
+  stretching: Record<string, string>;
 }
 
 const emptyProject = (): Project => ({ version: 2, bpm: 128, tracks: [], inserts: [], patterns: [], sources: [], clips: [], loop: null, nextId: 1 });
@@ -26,8 +28,14 @@ const emptyProject = (): Project => ({ version: 2, bpm: 128, tracks: [], inserts
 export const [S, setS] = createStore<EngineState>({
   ready: false, project: emptyProject(), revision: 0, canUndo: false, canRedo: false,
   transport: { playing: false, rec: false, monitor: false, metro: false, countIn: true, startBeat: 0 },
-  path: null, dirty: false, catalog: null, audition: {},
+  path: null, dirty: false, catalog: null, audition: {}, stretching: {},
 });
+
+function stretchStatus(dto: StateDto): Record<string, string> {
+  const out: Record<string, string> = { ...(dto.stretchErrors ?? {}) };
+  for (const id of dto.stretching ?? []) out[id] = '';
+  return out;
+}
 
 /**
  * Bumped on every change to the project (local edit or engine state). Canvas views that draw
@@ -112,6 +120,7 @@ export function replaceState(dto: StateDto) {
     setS({ revision: dto.revision, canUndo: dto.canUndo, canRedo: dto.canRedo, path: dto.path, dirty: dto.dirty, ready: true });
     setS('transport', reconcile(dto.transport));
     setS('audition', reconcile(dto.audition ?? {}));
+    setS('stretching', reconcile(stretchStatus(dto)));
   });
   localNext = Math.max(localNext, dto.project.nextId);
 }
@@ -122,6 +131,7 @@ export function replaceMeta(dto: StateDto) {
     setS({ revision: dto.revision, canUndo: dto.canUndo, canRedo: dto.canRedo, path: dto.path, dirty: dto.dirty, ready: true });
     setS('transport', reconcile(dto.transport));
     setS('audition', reconcile(dto.audition ?? {}));
+    setS('stretching', reconcile(stretchStatus(dto)));
   });
   localNext = Math.max(localNext, dto.project.nextId);
 }
@@ -133,6 +143,9 @@ function assignClip(dst: Clip, src: Clip) {
     if (dst[k] !== src[k]) (dst as unknown as Record<string, unknown>)[k] = src[k];
   }
   if (!('tune' in src) && dst.tune) dst.tune = null;
+  // the engine leaves the defaults out (stretch 1, not resampled)
+  if (!('stretch' in src) && dst.stretch !== undefined) delete dst.stretch;
+  if (!('resample' in src) && dst.resample !== undefined) delete dst.resample;
 }
 function assignFx(dst: Fx, src: Fx) {
   if (dst.bypass !== src.bypass) dst.bypass = src.bypass;
@@ -262,6 +275,10 @@ export function srcLenBeats(kind: Clip['kind'], ref: Id): number {
   if (kind === 'auto') return Infinity; // an envelope holds its last value: auto clips can be any length
   const s = S.project.sources.find(x => x.id === ref);
   return s ? s.dur / spb() : 4;
+}
+/** How long clip `c` can be, in beats: its source as the clip plays it (audio stretched). */
+export function clipSrcLen(c: Clip): number {
+  return srcLenBeats(c.kind, c.ref) * (c.kind === 'audio' ? c.stretch ?? 1 : 1);
 }
 export function insName(m: Insert): string {
   const i = S.project.inserts.indexOf(m);

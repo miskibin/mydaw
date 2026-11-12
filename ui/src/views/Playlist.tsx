@@ -3,17 +3,17 @@ import { t as tl } from '../lib/i18n';
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { unwrap } from 'solid-js/store';
 import { InstIcon, trackIcon } from '../ui/instIcons';
-import { VOL_UNITY, type Automation, type AutoPoint, type Channel, type Clip, type Comp, type CurveShape, type Id, type Op, type Take, type Track } from '../api/types';
+import { STRETCH_MAX, STRETCH_MIN, VOL_UNITY, type Automation, type AutoPoint, type Channel, type Clip, type Comp, type CurveShape, type Id, type Op, type Take, type Track } from '../api/types';
 import { boundaries, boundaryXfade, moveBoundary, setBoundaryXfade, takeEnd, toComp, toTimeline, unusedTakes, usedBeats, writeRange } from '../lib/comp';
 import * as CA from '../state/comp';
 import { compById, LANE_H, takeRow, type TakeRow } from '../state/comp';
-import { clampMove, moveClips, resizeClip, resizeClips, TOTAL } from '../lib/clipOps';
+import { clampMove, moveClips, resizeClip, resizeClips, stretchClip, stretchClips, TOTAL } from '../lib/clipOps';
 import { clamp, fmtPos, volText } from '../lib/format';
 import { snapFloor, snapRes, snapRound } from '../lib/snap';
 import * as A from '../state/actions';
 import { commit, Gesture, wheelEdit } from '../state/edit';
 import { peaksVersion } from '../state/peaks';
-import { allocId, anyTrackSolo, arrVersion, onArrangementChange, plain, S, srcLenBeats, srcOf } from '../state/store';
+import { allocId, anyTrackSolo, arrVersion, clipSrcLen, onArrangementChange, plain, S, srcLenBeats, srcOf } from '../state/store';
 import { curBeat, recState, tele } from '../state/telemetry';
 import { closeMenu, openMenu, openRename, say, setU, U, type MenuItem } from '../state/ui';
 import { dblCheck, dragCursor, edgeScroller, panDrag, track } from '../ui/drag';
@@ -209,6 +209,7 @@ export function Playlist() {
   createEffect(on(() => prefs().clipIcons, () => { dirtyGrid = true; }, { defer: true }));
   createEffect(() => {
     for (const k in S.audition) void S.audition[k];
+    for (const k in S.stretching) void S.stretching[k];
     U.compSel?.from; U.compSel?.to; U.compSel?.clipId; rows(); bndHover(); dirtyGrid = true;
   });
   // envelope focus and point selection: only the automation clips involved are repainted
@@ -226,7 +227,7 @@ export function Playlist() {
   /** The grid view of one frame; `at` places it on a region of the tile (tile-local CSS px). */
   const frameView = (): View => ({
     offX: 0, offY: 0, W: 0, H: 0, bw: U.bw, snap: U.snap, spb: 60 / S.project.bpm, tops: tops(), sel: new Set(U.sel), editable: editable(), recArmedBg: S.transport.rec, env: envHover(), autoSel: U.autoSel ? { clip: U.autoSel.clip, idx: [...U.autoSel.idx] } : null,
-    rows: rows().map(r => r && { clip: unwrap(r.clip), comp: unwrap(r.comp) }), laneH: LANE_H, audition: { ...S.audition }, compSel: U.compSel ? { ...U.compSel } : null, bndHover: bndHover(), ver: lookVer,
+    rows: rows().map(r => r && { clip: unwrap(r.clip), comp: unwrap(r.comp) }), laneH: LANE_H, audition: { ...S.audition }, stretching: { ...S.stretching }, compSel: U.compSel ? { ...U.compSel } : null, bndHover: bndHover(), ver: lookVer,
   });
   const at = (v: View, t: Tile, r: Rect): View => ({ ...v, offX: t.x + r.x, offY: t.y + r.y, W: r.w, H: r.h });
   /** Draws the grid into `r` of the grid canvas only (clipped to whole device pixels: nothing is painted twice). */
@@ -669,9 +670,14 @@ export function Playlist() {
   }
 
   function resizeDrag(e: PointerEvent, clip: Clip, edge: 'l' | 'r') {
+    if (U.stretchMode) {
+      if (clip.kind === 'audio') return stretchDrag(e, clip, edge);
+      // only audio stretches: anything else trims, and says why
+      say(tl(clip.kind === 'comp' ? 'a.pl.stretchComp' : 'a.pl.stretchNotAudio'));
+    }
     const g = new Gesture(tl('a.pl.resizeClip'));
     const o = plain(clip), sx = e.clientX, gx0 = sx - gridLeft();
-    const srcLenOf = (c: Clip) => (c.kind === 'audio' || c.kind === 'comp' ? srcLenBeats(c.kind, c.ref) : Infinity);
+    const srcLenOf = (c: Clip) => (c.kind === 'audio' || c.kind === 'comp' ? clipSrcLen(c) : Infinity);
     const minL = Math.max(1 / 16, snapRes(U.snap, U.bw) || 1 / 16);
     // the edge of a selected clip trims the whole selection by the same amount (FL / Ableton)
     const others = U.sel.includes(o.id) ? S.project.clips.filter(c => c.id !== o.id && U.sel.includes(c.id)).map(plain) : [];
@@ -688,6 +694,32 @@ export function Playlist() {
       last = key;
       g.update([{ op: 'putClips', clips: all }]);
       say(tl('a.pl.startLen', { pos: fmtPos(nc.start), len: nc.len.toFixed(2) }));
+    }, () => g.end(), 'ew-resize', { x: true });
+  }
+
+  /** Stretch mode: the edge of an audio clip makes it play longer or shorter (the selected audio
+   *  clips by the same factor); the other edge stays. */
+  function stretchDrag(e: PointerEvent, clip: Clip, edge: 'l' | 'r') {
+    const g = new Gesture(tl('a.pl.stretchClip'));
+    const o = plain(clip), sx = e.clientX, gx0 = sx - gridLeft();
+    const minL = Math.max(1 / 16, snapRes(U.snap, U.bw) || 1 / 16);
+    const others = U.sel.includes(o.id) ? S.project.clips.filter(c => c.id !== o.id && c.kind === 'audio' && U.sel.includes(c.id)).map(plain) : [];
+    let last = '', moved = false;
+    trackEdge(ev => {
+      if (!moved && Math.abs(ev.clientX - sx) < 3) return; // a click on an edge is not a stretch
+      moved = true;
+      const raw = (ev.clientX - gridLeft() - gx0) / U.bw, edge0 = edge === 'r' ? o.start + o.len : o.start;
+      const target = snapRound(edge0 + raw, unit(ev.altKey));
+      const nc = stretchClip(o, edge, target, minL);
+      const all = [nc, ...stretchClips(others, edge, nc.len / o.len, minL)];
+      const key = all.map(c => c.start + ':' + c.len).join('|');
+      if (key === last) return;
+      last = key;
+      g.update([{ op: 'putClips', clips: all }]);
+      // the pointer went past what the stretch range (or the song) allows
+      const want = edge === 'r' ? target - o.start : o.start + o.len - target;
+      const capped = Math.abs(want - nc.len) > 1e-6 && (nc.stretch === STRETCH_MAX || nc.stretch === STRETCH_MIN);
+      say(tl('a.pl.stretchLen', { k: (nc.stretch ?? 1).toFixed(2), len: nc.len.toFixed(2) }) + (capped ? ' · ' + tl('a.pl.stretchLimit') : ''));
     }, () => g.end(), 'ew-resize', { x: true });
   }
 
@@ -1044,6 +1076,9 @@ export function Playlist() {
         ...(c.kind === 'audio' ? [
           { t: 'item', label: tl('a.pl.editSample'), kbd: tl('a.pl.dblClick'), act: () => A.openEditor(c.id) } as MenuItem,
           { t: 'item', label: tl('a.pl.editPitch'), kbd: c.tune?.notes.length ? tl('a.pl.edited') : '', act: () => A.openPitchEditor(c.id) } as MenuItem,
+          // how a stretch plays (the clip's stretch factor in the label: set it in Stretch mode)
+          { t: 'chips', label: tl('a.pl.stretchMethod', { k: (c.stretch ?? 1).toFixed(2) }), options: [tl('a.pl.keepPitch'), tl('a.pl.resample')], active: c.resample ? 1 : 0, pick: (i: number) => A.setStretchMethod(c, i === 1) } as MenuItem,
+          ...(S.stretching[c.id] ? [{ t: 'item', label: tl('a.pl.stretchFailed'), title: S.stretching[c.id], disabled: true, act: () => {} } as MenuItem] : []),
           { t: 'item', label: tl('a.pl.detectTempoKey'), act: () => A.openMusicAnalysis({ clipId: c.id }) } as MenuItem,
           { t: 'sub', label: tl('a.pl.autoVocal'), items: [
             { t: 'item', label: tl('a.pl.autoVocalSing'), act: () => void A.autoVocal(c.id, 'natural'), title: tl('a.pl.autoVocalSingTip') },
@@ -1237,8 +1272,12 @@ export function Playlist() {
         <div style={{ width: U.headW + gridW() + 'px', position: 'relative' }}>
           <div class="rulerRow">
             <div class="plhead" style={{ width: U.headW + 'px' }}>
-              <span style={{ font: '600 10px var(--sans)', 'letter-spacing': '.12em', color: 'var(--fg4)' }}>PLAYLIST</span>
-              <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg5)' }}>{S.project.tracks.length} tr</span>
+              {/* what dragging a clip edge does (FL's stretch switch, Shift+M) */}
+              <div class="seg rsz" role="radiogroup" aria-label={tl('a.pl.resizeMode')}>
+                <button role="radio" aria-checked={!U.stretchMode} classList={{ on: !U.stretchMode }} title={tl('a.pl.modeTrimTip')} onClick={() => { if (U.stretchMode) A.toggleStretchMode(); }}>{tl('a.pl.modeTrim')}</button>
+                <button role="radio" aria-checked={U.stretchMode} classList={{ on: U.stretchMode }} title={tl('a.pl.modeStretchTip')} onClick={() => { if (!U.stretchMode) A.toggleStretchMode(); }}>{tl('a.pl.modeStretch')}</button>
+              </div>
+              <span class="mono" style={{ 'font-size': '10px', color: 'var(--fg5)', 'min-width': 0, overflow: 'hidden', 'white-space': 'nowrap', 'margin-left': '6px' }}>{S.project.tracks.length} tr</span>
             </div>
             <div style={{ position: 'relative', width: gridW() + 'px', height: '26px', flex: 'none' }}>
               <div class="phtile"><div ref={phRuler} class="phead" style={{ height: '26px' }} /></div>

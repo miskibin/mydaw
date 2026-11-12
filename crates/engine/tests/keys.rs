@@ -35,7 +35,7 @@ fn project(notes: Vec<Note>, keys: KeysState) -> Project {
     p.inserts[0].fx.clear();
     p.channels.push(Channel { name: "WAVE Keys".into(), src: ChannelSrc::Keys { keys }, root: 60, ..Channel::new(CH, "", "#4f8ef7", ChannelSrc::Keys { keys: Default::default() }) });
     p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes, swing: 0.0 }];
-    p.clips = vec![Clip { id: 1, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None }];
+    p.clips = vec![Clip { id: 1, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false }];
     p
 }
 

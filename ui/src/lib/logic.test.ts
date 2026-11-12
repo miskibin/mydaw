@@ -3,7 +3,7 @@ import { encodeFrame, MAGIC, SCOPE_LEN, SPEC_BANDS, TelemetryDecoder } from '../
 import { sketchProject, mockCatalog } from '../api/mockData';
 import { TOTAL_BEATS, type Clip } from '../api/types';
 import { applyAll, OpError } from './applyOps';
-import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resizeClip, resizeClips, sliceClip } from './clipOps';
+import { clampMove, duplicateSpan, insertTrackOps, moveClips, pasteClips, resizeClip, resizeClips, sliceClip, stretchClip, stretchClips } from './clipOps';
 import { eqCurve } from './eq';
 import { exportRange, exportSeconds, fmtExportLen, songEnd } from './export';
 import { fmtClock, fmtPos, panText, TapTracker, volText } from './format';
@@ -149,6 +149,47 @@ describe('op builders', () => {
     expect(out.map(c => c.len)).toEqual([8, 5, 6]); // the audio clip stops at its source
     expect(resizeClips([pat, short], 'r', -2, 0.25, () => Infinity).map(c => c.len)).toEqual([2, 0.25]);
     expect(resizeClips([pat], 'l', 1, 0.25, () => Infinity).map(c => [c.start, c.len])).toEqual([[1, 3]]);
+  });
+  it('stretches an audio clip from the right edge, keeping the part of the source it shows', () => {
+    const c = clip({ kind: 'audio', start: 4, len: 4, offset: 1 });
+    const s = stretchClip(c, 'r', 12, 0.25);
+    expect([s.start, s.len, s.offset, s.stretch]).toEqual([4, 8, 2, 2]);
+    // back to the original length is exactly unstretched again
+    const back = stretchClip(s, 'r', 8, 0.25);
+    expect([back.start, back.len, back.offset, 'stretch' in back]).toEqual([4, 4, 1, false]);
+  });
+  it('stretches from the left edge with the end fixed', () => {
+    const c = clip({ kind: 'audio', start: 4, len: 4, offset: 0 });
+    const s = stretchClip(c, 'l', 2, 0.25);
+    expect([s.start, s.len, s.stretch]).toEqual([2, 6, 1.5]);
+    // the start of the song limits it
+    const z = stretchClip(c, 'l', -10, 0.25);
+    expect([z.start, z.len, z.stretch]).toEqual([0, 8, 2]);
+  });
+  it('keeps the stretch within 0.25..4', () => {
+    const c = clip({ kind: 'audio', start: 0, len: 4, offset: 0, stretch: 2 });
+    expect(stretchClip(c, 'r', 100, 0.25).stretch).toBe(4);
+    expect(stretchClip(c, 'r', 100, 0.25).len).toBe(8);
+    expect(stretchClip(c, 'r', 0, 0.25).stretch).toBe(0.25);
+    expect(stretchClip(c, 'r', 0, 0.25).len).toBe(0.5);
+    // the minimum length wins over a stretch the clip could still take
+    expect(stretchClip(c, 'r', 0, 1).len).toBe(1);
+  });
+  it('stretches a selection by the same factor', () => {
+    const a = clip({ id: 1, kind: 'audio', start: 0, len: 4 }), b = clip({ id: 2, kind: 'audio', start: 8, len: 2, stretch: 0.5 });
+    const out = stretchClips([a, b], 'r', 1.5, 0.25);
+    expect(out.map(c => [c.start, c.len, c.stretch])).toEqual([[0, 6, 1.5], [8, 3, 0.75]]);
+    const left = stretchClips([b], 'l', 2, 0.25);
+    expect(left.map(c => [c.start, c.len])).toEqual([[6, 4]]);
+  });
+  it('the mock rejects stretches the engine rejects', () => {
+    const p = sketchProject(cat);
+    const pat = p.clips.find(c => c.kind === 'pat')!;
+    expect(() => applyAll(p, [{ op: 'putClips', clips: [{ ...pat, stretch: 2 }] }])).toThrow(OpError);
+    const audio: Clip = { ...pat, id: 9999, kind: 'audio', ref: p.sources[0].id };
+    expect(() => applyAll(p, [{ op: 'putClips', clips: [{ ...audio, stretch: 5 }] }])).toThrow(OpError);
+    expect(() => applyAll(p, [{ op: 'putClips', clips: [{ ...audio, stretch: Number.NaN }] }])).toThrow(OpError);
+    expect(applyAll(p, [{ op: 'putClips', clips: [{ ...audio, stretch: 2 }] }]).clips.find(c => c.id === 9999)!.stretch).toBe(2);
   });
   it('duplicate span rounds up to the snap', () => {
     expect(duplicateSpan([clip({ start: 0, len: 3 })], 4)).toBe(4);

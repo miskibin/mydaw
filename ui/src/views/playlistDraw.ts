@@ -30,6 +30,8 @@ export interface View {
   laneH?: number;
   /** comp id → auditioned take */
   audition?: Record<string, number>;
+  /** clip id → stretch status: being rendered (`''`) or failed (message) */
+  stretching?: Record<string, string>;
   /** comp time selection (comp beats) */
   compSel?: { clipId: number; from: number; to: number } | null;
   /** comp boundary under the pointer: clip id + boundary index */
@@ -387,9 +389,21 @@ function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | 
     if (c.muted) { g.font = '600 9px "Geist Mono Variable", monospace'; g.fillText('M', tx, cy + 11); tx += 10; }
     if (icon && cw > 30) { drawGlyph(g, icon, tx, cy + 2.5, 10); tx += 13; }
     g.font = FONT; g.fillText(src.name, tx, cy + 11);
+    let ax = tx + g.measureText(src.name).width + 5;
+    const st = isAudio ? c.stretch ?? 1 : 1;
+    if (st !== 1) {
+      // the stretch factor; '…' while the pitch-preserving render is not ready (the clip plays
+      // resampled meanwhile), '!' when it failed; 'rs' = resampled on purpose (pitch follows)
+      const status = v.stretching?.[c.id];
+      const label = '×' + st.toFixed(2) + (c.resample ? ' rs' : status === '' ? ' …' : status != null ? ' !' : '');
+      g.font = MONO9;
+      if (status) g.fillStyle = T.red;
+      g.fillText(label, ax, cy + 11);
+      g.fillStyle = sel ? T.clipTextSel : T.clipText;
+      ax += g.measureText(label).width + 5;
+    }
     if (isAudio && c.gain) {
-      const w = g.measureText(src.name).width;
-      g.font = MONO9; g.globalAlpha *= 0.65; g.fillText((c.gain >= 0 ? '+' : '') + c.gain.toFixed(1) + ' dB', tx + w + 5, cy + 11);
+      g.font = MONO9; g.globalAlpha *= 0.65; g.fillText((c.gain >= 0 ? '+' : '') + c.gain.toFixed(1) + ' dB', ax, cy + 11);
       g.globalAlpha = c.muted ? 0.38 : prevAlpha;
     }
   }
@@ -408,7 +422,8 @@ function drawClip(g: CanvasRenderingContext2D, v: View, c: Clip, src: Pattern | 
     g.fill();
   } else {
     const pk = getClipPeaks(c);
-    const mid = by + bh / 2, gain = dbg(c.gain), rate = 100 * v.spb;
+    // peaks are in source time: a stretched clip shows them stretched
+    const mid = by + bh / 2, gain = dbg(c.gain), rate = 100 * v.spb / (c.stretch ?? 1);
     if (pk) {
       g.fillStyle = ink; g.beginPath();
       const xs = Math.floor(vis0 - cx), xe = Math.ceil(vis1 - cx);

@@ -5316,6 +5316,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "wave-audio-file",
+ "wave-stretch",
 ]
 
 [[package]]
@@ -5388,6 +5389,13 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "wave-stretch"
+version = "0.4.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

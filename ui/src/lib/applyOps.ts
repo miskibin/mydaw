@@ -1,7 +1,7 @@
 // A TS port of crates/engine/src/ops.rs `apply` — used by the in-browser mock backend.
 // The real engine is the source of truth; this only has to agree on the happy path and
 // reject the same obviously-invalid batches.
-import { MAX_BANDS, type Id, type Op, type Project } from '../api/types';
+import { MAX_BANDS, STRETCH_MAX, STRETCH_MIN, type Id, type Op, type Project } from '../api/types';
 import { applyCompOp } from './comp';
 import { applyNotebookOp } from './notebook';
 import { applyPatternOp, PatternOpError } from './pattern';
@@ -16,6 +16,9 @@ export function applyOp(p: Project, op: Op): void {
       for (const c of op.clips) {
         if (!(c.len > 0) || c.start < 0 || !isFinite(c.start) || !isFinite(c.len)) throw new OpError(`clip ${c.id} has an invalid range`);
         if (c.track >= p.tracks.length || c.track < 0) throw new OpError(`clip ${c.id} is on track ${c.track} which does not exist`);
+        const s = c.stretch ?? 1;
+        if (!(Number.isFinite(s) && s >= STRETCH_MIN - 1e-9 && s <= STRETCH_MAX + 1e-9)) throw new OpError(`clip ${c.id}: stretch must be ${STRETCH_MIN}..${STRETCH_MAX}`);
+        if (c.kind !== 'audio' && (s !== 1 || c.resample)) throw new OpError(`clip ${c.id}: only audio clips can be stretched`);
         const known = c.kind === 'pat' ? p.patterns.some(x => x.id === c.ref) : c.kind === 'auto' ? (p.automations ?? []).some(x => x.id === c.ref) : c.kind === 'comp' ? (p.comps ?? []).some(x => x.id === c.ref) : p.sources.some(x => x.id === c.ref);
         if (!known) throw new OpError(`no clip source with id ${c.ref}`);
         const r = c.tune?.reference;
@@ -27,8 +30,12 @@ export function applyOp(p: Project, op: Op): void {
       }
       for (const c of op.clips) {
         bump(p, c.id);
+        const nc = structuredClone(c);
+        // the engine writes the defaults out (stretch 1, not resampled)
+        if (nc.stretch === 1) delete nc.stretch;
+        if (nc.resample === false) delete nc.resample;
         const i = p.clips.findIndex(x => x.id === c.id);
-        if (i >= 0) p.clips[i] = structuredClone(c); else p.clips.push(structuredClone(c));
+        if (i >= 0) p.clips[i] = nc; else p.clips.push(nc);
       }
       return;
     }

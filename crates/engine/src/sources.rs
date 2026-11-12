@@ -146,8 +146,108 @@ pub struct SourceStore {
     music: HashMap<Variant, Arc<crate::music::SourceMusic>>,
     /// clip id → (hash of its edits, rendered audio)
     tuned: HashMap<u64, (u64, Arc<Audio>)>,
+    /// Pitch-preserving time-stretches of clips' audio.
+    stretch: Stretcher,
     /// Pitch detector for analysis (`None` = built-in YIN).
     estimator: Option<Arc<dyn F0Estimator>>,
+}
+
+/// (source id, identity of the audio before stretching, `Clip::stretch` bits)
+pub type StretchKey = (u64, u64, u64);
+type StretchDone = (StretchKey, Result<Arc<Audio>, String>);
+/// Stretched audio kept, in bytes (least recently played dropped first).
+const STRETCH_CACHE_BYTES: usize = 1 << 30;
+
+/// A time-stretch to render.
+pub struct StretchJob {
+    pub key: StretchKey,
+    pub audio: Arc<Audio>,
+    pub ratio: f64,
+}
+
+/// Renders a stretch job (slow: run it off the engine lock).
+pub fn render_stretch(j: &StretchJob) -> Result<Arc<Audio>, String> {
+    let out = wave_stretch::stretch_stereo(j.audio.content(), j.audio.sr, j.ratio)?;
+    Ok(Arc::new(Audio::from_stereo(out, j.audio.sr, j.audio.channels)))
+}
+
+/// Cache of rendered time-stretches and the background thread that renders them.
+#[derive(Default)]
+struct Stretcher {
+    cache: HashMap<StretchKey, (u64, Arc<Audio>)>,
+    bytes: usize,
+    tick: u64,
+    pending: std::collections::HashSet<StretchKey>,
+    failed: HashMap<StretchKey, String>,
+    /// clip id → the stretch it last asked for and did not have
+    waiting: HashMap<u64, StretchKey>,
+    jobs: Option<std::sync::mpsc::Sender<StretchJob>>,
+    done: Option<std::sync::mpsc::Receiver<StretchDone>>,
+}
+
+impl Stretcher {
+    fn get(&mut self, k: &StretchKey) -> Option<Arc<Audio>> {
+        self.tick += 1;
+        let t = self.tick;
+        self.cache.get_mut(k).map(|e| {
+            e.0 = t;
+            e.1.clone()
+        })
+    }
+
+    fn put(&mut self, k: StretchKey, a: Arc<Audio>) {
+        self.tick += 1;
+        self.bytes += a.data.len() * 4;
+        if let Some((_, old)) = self.cache.insert(k, (self.tick, a)) {
+            self.bytes -= old.data.len() * 4;
+        }
+        // keep the newest entry even if it alone is over the budget
+        while self.bytes > STRETCH_CACHE_BYTES && self.cache.len() > 1 {
+            let oldest = *self.cache.iter().min_by_key(|e| e.1 .0).map(|e| e.0).unwrap();
+            if let Some((_, a)) = self.cache.remove(&oldest) {
+                self.bytes -= a.data.len() * 4;
+            }
+        }
+    }
+
+    fn forget_source(&mut self, id: u64) {
+        let gone: Vec<StretchKey> = self.cache.keys().filter(|k| k.0 == id).copied().collect();
+        for k in gone {
+            if let Some((_, a)) = self.cache.remove(&k) {
+                self.bytes -= a.data.len() * 4;
+            }
+        }
+        self.failed.retain(|k, _| k.0 != id);
+    }
+
+    /// Queues a render on the background thread (started on first use).
+    fn submit(&mut self, job: StretchJob) {
+        if self.jobs.is_none() {
+            let (jtx, jrx) = std::sync::mpsc::channel::<StretchJob>();
+            let (dtx, drx) = std::sync::mpsc::channel::<StretchDone>();
+            let spawned = std::thread::Builder::new().name("wave-stretch".into()).spawn(move || {
+                // ends when the store (holding the job sender) is dropped
+                while let Ok(j) = jrx.recv() {
+                    let r = render_stretch(&j);
+                    if dtx.send((j.key, r)).is_err() {
+                        break;
+                    }
+                }
+            });
+            if let Err(e) = spawned {
+                self.failed.insert(job.key, format!("cannot start the stretch renderer: {e}"));
+                return;
+            }
+            self.jobs = Some(jtx);
+            self.done = Some(drx);
+        }
+        let key = job.key;
+        if self.jobs.as_ref().is_some_and(|tx| tx.send(job).is_ok()) {
+            self.pending.insert(key);
+        } else {
+            self.failed.insert(key, "the stretch renderer stopped".into());
+        }
+    }
 }
 
 /// Mono mix of a variant.
@@ -155,11 +255,12 @@ pub fn mono_of(audio: &Audio) -> Vec<f32> {
     audio.content().chunks_exact(2).map(|f| (f[0] + f[1]) * 0.5).collect()
 }
 
-/// The part of its source a clip plays, in seconds.
-pub fn clip_region(c: &crate::model::Clip, bpm: f64, source_seconds: f64) -> (f64, f64) {
+/// The part of the audio [`SourceStore::clip_audio`] returned that clip `c` plays, in
+/// seconds of that audio (read at `rate`), clamped to its `seconds`.
+pub fn clip_region(c: &crate::model::Clip, bpm: f64, rate: f64, seconds: f64) -> (f64, f64) {
     let spb = 60.0 / bpm.max(1.0);
-    let a = (c.offset * spb).clamp(0.0, source_seconds);
-    (a, ((c.offset + c.len) * spb).clamp(a, source_seconds))
+    let a = (c.offset * spb * rate).clamp(0.0, seconds);
+    (a, ((c.offset + c.len) * spb * rate).clamp(a, seconds))
 }
 
 impl SourceStore {
@@ -169,6 +270,7 @@ impl SourceStore {
         self.content.retain(|k, _| k.0 != id);
         self.aligned.retain(|k, _| k.0 .0 != id && k.1 .0 != id);
         self.music.retain(|k, _| k.0 != id);
+        self.stretch.forget_source(id);
         self.audio.insert(id, a);
     }
 
@@ -256,7 +358,9 @@ impl SourceStore {
     /// Alignment key of a clip's region against its reference, if it has one.
     pub fn align_key(&mut self, c: &crate::model::Clip, bpm: f64, reference: u64) -> Option<AlignKey> {
         let audio = self.variant(c.source, c.norm, c.rev)?;
-        let (a, b) = clip_region(c, bpm, audio.seconds());
+        let (a, b) = c.source_span(bpm);
+        let (a, b) = (a.clamp(0.0, audio.seconds()), b.clamp(0.0, audio.seconds()));
+        let (a, b) = (a, b.max(a));
         let r = crate::pitch::ANALYSIS_RATE as f64;
         Some(((c.source, c.norm, c.rev), (reference, false, false), (a * r).round() as usize, (b * r).round() as usize))
     }
@@ -291,12 +395,138 @@ impl SourceStore {
         self.music.insert((id, norm, rev), m);
     }
 
-    /// The audio a clip plays: source variant plus its pitch edits. While
-    /// `allow_stale` (a drag is in progress) a previous render is reused rather
+    /// What a clip plays before stretching: source variant plus its pitch edits, in source
+    /// time. While `allow_stale` (a drag is in progress) a previous render is reused rather
     /// than re-rendering the whole clip on every mouse move.
-    pub fn clip_audio(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<Arc<Audio>> {
+    pub fn clip_source_audio(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<Arc<Audio>> {
+        self.pre_stretch(c, allow_stale, bpm).map(|x| x.0)
+    }
+
+    /// [`Self::clip_source_audio`] with an identity of that audio (for the stretch cache).
+    fn pre_stretch(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<(Arc<Audio>, u64)> {
+        use std::hash::{Hash, Hasher};
         let base = self.variant(c.source, c.norm, c.rev)?;
-        let Some(tune) = c.tune.as_ref().filter(|t| t.is_active()) else { return Some(base) };
+        let Some(_) = c.tune.as_ref().filter(|t| t.is_active()) else {
+            return Some((base, (c.norm as u64) | (c.rev as u64) << 1));
+        };
+        let a = self.tuned_audio(c, base, allow_stale, bpm)?;
+        // the hash of the edits the returned render was made with (a stale one in a drag)
+        let edits = self.tuned.get(&c.id).map(|t| t.0).unwrap_or_default();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (c.id, edits).hash(&mut h);
+        Some((a, h.finish() | 1 << 63))
+    }
+
+    /// What a clip plays, in clip time, and the rate to read it at (source seconds per clip
+    /// second: 1 unless the clip is resampled, or its time-stretch is not rendered yet).
+    /// Never blocks: a missing time-stretch is queued for the background renderer (unless a
+    /// drag is in progress) and the clip plays resampled meanwhile.
+    pub fn clip_play(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<(Arc<Audio>, f64)> {
+        let (pre, ident) = self.pre_stretch(c, allow_stale, bpm)?;
+        if c.kind != crate::model::ClipKind::Audio || c.stretch == 1.0 {
+            self.stretch.waiting.remove(&c.id);
+            return Some((pre, 1.0));
+        }
+        let rate = 1.0 / c.stretch;
+        if c.resample {
+            self.stretch.waiting.remove(&c.id);
+            return Some((pre, rate));
+        }
+        let key = (c.source, ident, c.stretch.to_bits());
+        if let Some(a) = self.stretch.get(&key) {
+            self.stretch.waiting.remove(&c.id);
+            return Some((a, 1.0));
+        }
+        self.stretch.waiting.insert(c.id, key);
+        if !allow_stale && !self.stretch.pending.contains(&key) && !self.stretch.failed.contains_key(&key) {
+            self.stretch.submit(StretchJob { key, audio: pre.clone(), ratio: c.stretch });
+        }
+        Some((pre, rate))
+    }
+
+    /// [`Self::clip_play`] that renders a missing time-stretch now (offline renders,
+    /// analysis). Slow for long audio. Falls back to resampling if the stretch fails.
+    pub fn clip_audio(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<(Arc<Audio>, f64)> {
+        match self.stretch_request(c, allow_stale, bpm)? {
+            Ok(x) => Some(x),
+            Err(job) => {
+                let r = render_stretch(&job);
+                let ok = r.is_ok();
+                self.put_stretch(job.key, r);
+                if ok {
+                    self.clip_play(c, allow_stale, bpm)
+                } else {
+                    Some((job.audio, 1.0 / job.ratio))
+                }
+            }
+        }
+    }
+
+    /// What [`Self::clip_audio`] returns if it is ready, else the stretch to render (outside
+    /// any lock) and hand back through [`Self::put_stretch`].
+    pub fn stretch_request(&mut self, c: &crate::model::Clip, allow_stale: bool, bpm: f64) -> Option<Result<(Arc<Audio>, f64), StretchJob>> {
+        let (pre, ident) = self.pre_stretch(c, allow_stale, bpm)?;
+        if !c.needs_stretch() {
+            return Some(Ok((pre, if c.kind == crate::model::ClipKind::Audio { 1.0 / c.stretch } else { 1.0 })));
+        }
+        let key = (c.source, ident, c.stretch.to_bits());
+        if let Some(a) = self.stretch.get(&key) {
+            return Some(Ok((a, 1.0)));
+        }
+        if self.stretch.failed.contains_key(&key) {
+            return Some(Ok((pre, 1.0 / c.stretch)));
+        }
+        Some(Err(StretchJob { key, audio: pre, ratio: c.stretch }))
+    }
+
+    /// Stores a finished (or failed) stretch render.
+    pub fn put_stretch(&mut self, key: StretchKey, r: Result<Arc<Audio>, String>) {
+        self.stretch.pending.remove(&key);
+        match r {
+            Ok(a) => self.stretch.put(key, a),
+            Err(e) => {
+                log::warn!("time-stretch failed: {e}");
+                self.stretch.failed.insert(key, e);
+            }
+        }
+    }
+
+    /// Collects stretches the background renderer finished. True if any did (the timeline
+    /// should be rebuilt to play them).
+    pub fn poll_stretch(&mut self) -> bool {
+        let done: Vec<StretchDone> = match self.stretch.done.as_ref() {
+            Some(rx) => rx.try_iter().collect(),
+            None => return false,
+        };
+        let any = !done.is_empty();
+        for (k, r) in done {
+            self.put_stretch(k, r);
+        }
+        any
+    }
+
+    /// Clips whose time-stretch is being rendered (they play resampled meanwhile), and
+    /// clips whose time-stretch failed (they play resampled) with the reason.
+    pub fn stretch_status(&self, clips: &[crate::model::Clip]) -> (Vec<u64>, HashMap<u64, String>) {
+        let mut busy = vec![];
+        let mut failed = HashMap::new();
+        for c in clips.iter().filter(|c| c.needs_stretch()) {
+            let Some(k) = self.stretch.waiting.get(&c.id) else { continue };
+            if k.2 != c.stretch.to_bits() || k.0 != c.source {
+                continue;
+            }
+            if let Some(e) = self.stretch.failed.get(k) {
+                failed.insert(c.id, e.clone());
+            } else if self.stretch.pending.contains(k) {
+                busy.push(c.id);
+            }
+        }
+        (busy, failed)
+    }
+
+    /// Source variant plus pitch edits (cached per clip).
+    fn tuned_audio(&mut self, c: &crate::model::Clip, base: Arc<Audio>, allow_stale: bool, bpm: f64) -> Option<Arc<Audio>> {
+        let tune = c.tune.as_ref()?;
         let region = tune.reference.and_then(|r| self.align_key(c, bpm, r.source)).map(|k| (k.2, k.3));
         let hash = {
             use std::hash::{Hash, Hasher};

@@ -35,7 +35,13 @@ function EditorBody(props: { clip: Clip; src: Source }) {
   const src = () => S.project.sources.find(s => s.id === c().ref) ?? props.src;
   const spb = () => 60 / S.project.bpm;
   const W = () => E().w - 32, H = () => Math.max(80, E().h - 210);
-  const durB = () => src().dur / spb();
+  // beats of the clip: a stretched clip shows its source stretched (offset and len are in them)
+  const st = () => c().stretch ?? 1;
+  const durB = () => src().dur / spb() * st();
+  /** Seconds of the source at clip beat `b`. */
+  const srcSec = (b: number) => b * spb() / st();
+  /** The preview plays the stretched audio once it is rendered (else the source at its own speed). */
+  const previewDur = () => src().dur * (st() !== 1 && !c().resample && !(c().id in S.stretching) ? st() : 1);
   const pxB = () => W() / durB();
   const x0 = () => c().offset * pxB(), x1 = () => (c().offset + c().len) * pxB();
   const fi = () => c().fadeIn / spb() * pxB(), fo = () => c().fadeOut / spb() * pxB();
@@ -45,13 +51,13 @@ function EditorBody(props: { clip: Clip; src: Source }) {
   // over it, so dragging a fade or a region edge costs the same for a 4 s or a 4 min file.
   const wave = new Layer();
   let dirty = true, themeEpoch = -1;
-  createEffect(() => { W(); H(); c().offset; c().len; c().fadeIn; c().fadeOut; c().gain; c().norm; c().rev; src().color; peaksVersion(); dirty = true; });
+  createEffect(() => { W(); H(); c().offset; c().len; c().fadeIn; c().fadeOut; c().gain; c().norm; c().rev; c().stretch; src().color; peaksVersion(); dirty = true; });
   onMount(() => {
     const stop = addFrameTask(() => {
       if (themeEpoch !== theme.epoch) { themeEpoch = theme.epoch; dirty = true; }
       if (dirty) { dirty = false; draw(); }
       const f = tele.frame;
-      if (f.previewing && f.previewPos >= 0) { prevLine.style.opacity = '1'; prevLine.style.transform = `translateX(${f.previewPos / src().dur * W()}px)`; }
+      if (f.previewing && f.previewPos >= 0) { prevLine.style.opacity = '1'; prevLine.style.transform = `translateX(${f.previewPos / previewDur() * W()}px)`; }
       else if (prevLine.style.opacity !== '0') prevLine.style.opacity = '0';
     });
     onCleanup(stop);
@@ -103,7 +109,7 @@ function EditorBody(props: { clip: Clip; src: Source }) {
       else if (kind === 'fi') n.fadeIn = clamp(o.fadeIn + dB * s, 0, o.len * s - o.fadeOut);
       else if (kind === 'fo') n.fadeOut = clamp(o.fadeOut - dB * s, 0, o.len * s - o.fadeIn);
       g.update([{ op: 'putClips', clips: [n] }]);
-      say(kind === 'fi' ? 'Fade in ' + Math.round(n.fadeIn * 1000) + ' ms' : kind === 'fo' ? 'Fade out ' + Math.round(n.fadeOut * 1000) + ' ms' : 'Region ' + (n.offset * s).toFixed(3) + ' – ' + ((n.offset + n.len) * s).toFixed(3) + ' s');
+      say(kind === 'fi' ? 'Fade in ' + Math.round(n.fadeIn * 1000) + ' ms' : kind === 'fo' ? 'Fade out ' + Math.round(n.fadeOut * 1000) + ' ms' : 'Region ' + srcSec(n.offset).toFixed(3) + ' – ' + srcSec(n.offset + n.len).toFixed(3) + ' s');
     }, () => g.end(), kind === 'l' || kind === 'r' ? 'ew-resize' : 'col-resize');
   };
 
@@ -133,7 +139,7 @@ function EditorBody(props: { clip: Clip; src: Source }) {
       </div>
       <div class="row mono" style={{ height: '28px', flex: 'none', 'justify-content': 'space-between', gap: '12px', padding: '0 16px', 'font-size': '10px', color: 'var(--fg4)' }}>
         <span>{src().dur.toFixed(3) + ' s · ' + src().sr + ' Hz · ' + (src().ch === 2 ? 'stereo' : 'mono') + ' · peak ' + src().peakDb.toFixed(1) + ' dBFS'}</span>
-        <span>REGION {(c().offset * spb()).toFixed(3) + ' – ' + ((c().offset + c().len) * spb()).toFixed(3) + ' s'}</span>
+        <span>REGION {srcSec(c().offset).toFixed(3) + ' – ' + srcSec(c().offset + c().len).toFixed(3) + ' s' + (st() !== 1 ? ' · ×' + st().toFixed(2) + (c().resample ? ' rs' : '') : '')}</span>
       </div>
       <div onPointerDown={waveDown} style={{ position: 'relative', flex: 'none', margin: '0 16px', width: W() + 'px', height: H() + 'px', border: '1px solid var(--line)', 'border-radius': '3px', overflow: 'hidden' }}>
         <canvas ref={cv} style={{ position: 'absolute', left: 0, top: 0, width: W() + 'px', height: H() + 'px', 'pointer-events': 'none' }} />

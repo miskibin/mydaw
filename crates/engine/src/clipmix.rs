@@ -71,8 +71,10 @@ pub(crate) fn mix_audio_clip(c: &ClipRt, a: &Audio, b0: f64, bps: f64, spb: f64,
         }
     }
     let fsr = a.sr as f64;
-    let step = bps * spb * fsr;
-    let src_at = |i: usize| (c.offset + (b0 + i as f64 * bps - c.start)) * spb * fsr;
+    // `rate` is exactly 1 unless the clip is resampled, so unstretched clips read the same
+    // positions (and keep the on-grid fast path) as before it existed
+    let step = bps * spb * fsr * c.rate;
+    let src_at = |i: usize| (c.offset + (b0 + i as f64 * bps - c.start)) * spb * fsr * c.rate;
     if glide {
         // automated: every sample its own gain and pan (the fades on top)
         let pan_at = |i: usize| {
@@ -217,7 +219,7 @@ mod tests {
             if c.fade_out > 0.0 && left < c.fade_out as f64 {
                 env *= (left / c.fade_out as f64) as f32;
             }
-            let src = (c.offset + rel) * spb * fsr;
+            let src = (c.offset + rel) * spb * fsr * c.rate;
             let (x, y) = a.sample(src);
             out_l[i] += x * env * pl;
             out_r[i] += y * env * pr;
@@ -242,7 +244,7 @@ mod tests {
         let a = audio(48000, 1.0);
         let spb = 0.5;
         let bps = 1.0 / (48000.0 * spb);
-        let mut c = ClipRt { id: 1, track: 0, start: 0.0, end: 4.0, offset: 0.0, gain: 0.0, pan: 0.0, fade_in: 0.0, fade_out: 0.0, src: ClipSrc::Audio(a.clone()), gain0: -24.0, pan0: 0.0 };
+        let mut c = ClipRt { id: 1, track: 0, start: 0.0, end: 4.0, offset: 0.0, rate: 1.0, gain: 0.0, pan: 0.0, fade_in: 0.0, fade_out: 0.0, src: ClipSrc::Audio(a.clone()), gain0: -24.0, pan0: 0.0 };
         let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
         mix_audio_clip(&c, &a, 0.5, bps, spb, &mut l, &mut r);
         // the reference at the old and the new gain bound the glide; it starts at the old one
@@ -288,6 +290,7 @@ mod tests {
                     start,
                     end: start + len,
                     offset: rnd() * 0.5 / spb,
+                    rate: 1.0,
                     gain: (rnd() * 12.0 - 6.0) as f32,
                     pan: if rnd() < 0.5 { 0.0 } else { (rnd() * 2.0 - 1.0) as f32 },
                     fade_in: fade(rnd()),
@@ -297,6 +300,10 @@ mod tests {
                     pan0: 0.0,
                 };
                 (c.gain0, c.pan0) = (c.gain, c.pan);
+                // a third of the clips resampled (stretched by 0.25..4 without keeping pitch)
+                if rnd() < 0.33 {
+                    c.rate = 0.25 + rnd() * 3.75;
+                }
                 // blocks around the clip: before, over the start, inside, over the end, after
                 let first = (start - 2.0 * block as f64 * bps).max(0.0);
                 let mut b0 = first;
@@ -325,7 +332,7 @@ mod tests {
             let a = audio(file_sr, 10.0);
             let spb = 60.0 / 120.0;
             let bps = 1.0 / (spb * 48000.0);
-            let c = ClipRt { id: 1, track: 0, start: 0.0, end: 16.0, offset: 0.3, gain: -3.0, pan: 0.2, fade_in: 0.01, fade_out: 0.01, src: ClipSrc::Audio(a.clone()), gain0: -3.0, pan0: 0.2 };
+            let c = ClipRt { id: 1, track: 0, start: 0.0, end: 16.0, offset: 0.3, rate: 1.0, gain: -3.0, pan: 0.2, fade_in: 0.01, fade_out: 0.01, src: ClipSrc::Audio(a.clone()), gain0: -3.0, pan0: 0.2 };
             let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
             let reps = 20000;
             let t = std::time::Instant::now();

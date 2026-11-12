@@ -261,6 +261,8 @@ fn new_clip(id: Id, track: u32, start: f64, len: f64, kind: ClipKind, source: Id
         norm: false,
         rev: false,
         tune: None,
+        stretch: 1.0,
+        resample: false,
     }
 }
 

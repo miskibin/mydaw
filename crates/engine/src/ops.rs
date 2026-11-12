@@ -105,6 +105,12 @@ pub fn apply(p: &mut Project, op: &Op) -> Result<Dirty, OpError> {
                 if c.track as usize >= p.tracks.len() {
                     return Err(OpError::Invalid(format!("clip {} is on track {} which does not exist", c.id, c.track)));
                 }
+                if !(c.stretch.is_finite() && (crate::model::STRETCH_MIN - 1e-9..=crate::model::STRETCH_MAX + 1e-9).contains(&c.stretch)) {
+                    return Err(OpError::Invalid(format!("clip {}: stretch must be {}..{}", c.id, crate::model::STRETCH_MIN, crate::model::STRETCH_MAX)));
+                }
+                if c.kind != ClipKind::Audio && (c.stretch != 1.0 || c.resample) {
+                    return Err(OpError::Invalid(format!("clip {}: only audio clips can be stretched", c.id)));
+                }
                 let known = match c.kind {
                     ClipKind::Pat => p.patterns.iter().any(|x| x.id == c.source),
                     ClipKind::Audio => p.sources.iter().any(|x| x.id == c.source),

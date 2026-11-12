@@ -785,6 +785,42 @@ pub struct Clip {
     /// Note-level pitch edits (the pitch editor). Rendered offline, latency-free.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tune: Option<ClipTune>,
+    /// Audio clips: how many times longer the clip plays its audio than the audio is
+    /// (2 = half speed). `offset` and `len` are beats of the stretched audio, so a source
+    /// second sits at `stretch` seconds of the clip. 1 for every other kind.
+    #[serde(default = "one_f64", skip_serializing_if = "is_one_f64")]
+    pub stretch: f64,
+    /// Stretch by playing faster/slower (pitch follows, like a turntable) instead of the
+    /// default pitch-preserving time-stretch.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub resample: bool,
+}
+
+fn one_f64() -> f64 {
+    1.0
+}
+fn is_one_f64(x: &f64) -> bool {
+    *x == 1.0
+}
+fn is_false(x: &bool) -> bool {
+    !*x
+}
+
+/// Shortest and longest `Clip::stretch`.
+pub const STRETCH_MIN: f64 = 0.25;
+pub const STRETCH_MAX: f64 = 4.0;
+
+impl Clip {
+    /// The part of its source the clip plays, in source seconds (before stretching).
+    pub fn source_span(&self, bpm: f64) -> (f64, f64) {
+        let spb = 60.0 / bpm.max(1.0);
+        let s = self.stretch.max(STRETCH_MIN);
+        (self.offset * spb / s, (self.offset + self.len) * spb / s)
+    }
+    /// A pitch-preserving time-stretch must be rendered for this clip.
+    pub fn needs_stretch(&self) -> bool {
+        self.kind == ClipKind::Audio && self.stretch != 1.0 && !self.resample
+    }
 }
 
 /// Pitch edits of an audio clip. `notes` starts as the analysis' segmentation and

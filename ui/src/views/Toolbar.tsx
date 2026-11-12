@@ -363,6 +363,7 @@ const shortcuts = (): [string, string][] => [
   [t('a.sc.31'), 'Ctrl+C · X · V'],
   [t('a.sc.32'), 'Del'],
   [t('a.sc.33'), 'Ctrl+M'],
+  [t('a.sc.stretchMode'), 'Shift+M'],
   [t('a.sc.34'), 'Shift + ← →'],
   [t('a.sc.35'), 'Shift + ↑ ↓'],
   [t('a.sc.36'), 'Ctrl+Z · Ctrl+Shift+Z'],

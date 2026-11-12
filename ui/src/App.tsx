@@ -148,6 +148,8 @@ function onKey(e: KeyboardEvent) {
     if (e.key === 'ArrowDown') A.nudge(0, 1);
     return;
   }
+  // FL's Shift+M: dragging a clip edge stretches instead of trimming
+  if (e.shiftKey && !m && !e.altKey && e.code === 'KeyM' && !patWinFocused()) { e.preventDefault(); return A.toggleStretchMode(); }
   if (!m && !e.altKey) {
     if (k === 'r') return A.toggleRec();
     if (k === 'l') return setPatMode(!patMode());

@@ -401,6 +401,9 @@ pub struct ClipRt {
     pub start: f64,
     pub end: f64,
     pub offset: f64,
+    /// Audio clips: seconds of the audio read per second of the clip (1, or a resampled
+    /// stretch: then `offset` beats of the clip are `offset * rate` beats of the audio).
+    pub rate: f64,
     pub gain: f32,
     pub pan: f32,
     pub fade_in: f32,

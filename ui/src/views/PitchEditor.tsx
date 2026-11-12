@@ -56,7 +56,11 @@ function PitchBody(props: { clipId: number }) {
   const c = () => S.project.clips.find(x => x.id === props.clipId)!;
   const src = () => S.project.sources.find(s => s.id === c()?.ref);
   const spb = () => 60 / S.project.bpm;
-  const t0 = () => c().offset * spb(), t1 = () => (c().offset + c().len) * spb();
+  // the editor works in source seconds; a stretched clip plays `st` clip seconds per source second
+  const st = () => c().stretch ?? 1;
+  const t0 = () => c().offset * spb() / st(), t1 = () => (c().offset + c().len) * spb() / st();
+  /** Source seconds per clip beat. */
+  const spbSrc = () => spb() / st();
   const anKey = () => c().ref + '|' + (c().norm ? 1 : 0) + (c().rev ? 1 : 0);
   const [an, setAn] = createSignal<PitchAnalysis | null>(anCache.get(anKey()) ?? null);
   const [err, setErr] = createSignal<string | null>(null);
@@ -189,7 +193,7 @@ function PitchBody(props: { clipId: number }) {
   let dirty = true;
   createEffect(() => {
     viewV(); sel(); hover(); tool(); key(); scale(); marq(); pencilLive(); an(); peaksVersion(); edited(); themeVersion(); lang(); activeTarget(); lowRuns();
-    JSON.stringify(c().tune ?? null); c().offset; c().len; c().gain; S.project.bpm; src()?.color;
+    JSON.stringify(c().tune ?? null); c().offset; c().len; c().stretch; c().gain; S.project.bpm; src()?.color;
     dirty = true;
   });
   onMount(() => {
@@ -202,7 +206,7 @@ function PitchBody(props: { clipId: number }) {
       // playhead (telemetry), as a DOM line — no canvas redraw per frame
       const f = tele.frame;
       let ts = -1;
-      if (f.playing && f.beat >= c().start && f.beat < c().start + c().len) ts = c().offset * spb() + (f.beat - c().start) * spb();
+      if (f.playing && f.beat >= c().start && f.beat < c().start + c().len) ts = t0() + (f.beat - c().start) * spbSrc();
       else if (f.previewing && f.previewPos >= 0) ts = f.previewPos;
       if (ts >= 0 && X(ts) >= KW && X(ts) <= W) { phead.style.opacity = '1'; phead.style.transform = `translateX(${X(ts)}px)`; }
       else if (phead.style.opacity !== '0') phead.style.opacity = '0';
@@ -238,7 +242,7 @@ function PitchBody(props: { clipId: number }) {
     }) as CanvasImageSource, 0, 0, W, H);
     g.save(); g.beginPath(); g.rect(KW, 0, W - KW, H); g.clip();
     // beat grid + ruler
-    const sp = spb(), b0 = c().start + (tAt(KW) - t0()) / sp, b1 = c().start + (tAt(W) - t0()) / sp;
+    const sp = spbSrc(), b0 = c().start + (tAt(KW) - t0()) / sp, b1 = c().start + (tAt(W) - t0()) / sp;
     const beatX = (bt: number) => X(t0() + (bt - c().start) * sp);
     const step = view.pps * sp < 14 ? 4 : 1;
     g.fillStyle = T.rulerBg; g.fillRect(KW, 0, W - KW, RH);
@@ -388,7 +392,7 @@ function PitchBody(props: { clipId: number }) {
     if (e.button === 1 || (e.button === 0 && e.altKey && tool() !== 'pencil' && tool() !== 'main')) return pan(e);
     if (e.button !== 0) return;
     e.preventDefault();
-    if (y < RH) { A.seek(c().start + (tAt(x) - t0()) / spb()); return; }
+    if (y < RH) { A.seek(c().start + (tAt(x) - t0()) / spbSrc()); return; }
     if (x < KW) return;
     const i = hitNote(x, y), sp = hitSplit(x, y), tk = tool();
     if (tk === 'pencil') return pencil(e);

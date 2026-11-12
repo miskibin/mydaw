@@ -85,6 +85,9 @@ export interface UiState {
   playing: boolean;
   previewing: boolean;
   previewPath: string | null;
+  /** Dragging an audio clip's edge stretches it instead of trimming (Shift+M). Not saved: a
+   *  launch starts in trim mode, so a forgotten stretch mode cannot surprise the next session. */
+  stretchMode: boolean;
 }
 
 export const [U, setU] = createStore<UiState>({
@@ -95,7 +98,7 @@ export const [U, setU] = createStore<UiState>({
   readout: t('d.ui.ready'),
   headW: 196, pickW: 220, pickOpen: true, browserTab: 'project',
   ghost: null, dragOver: false, eqSel: {}, fetMode: {}, pitchEd: null, pat: 1, selCh: null, rackWin: null, rollWin: null, rackGraph: null, patPlaying: false, takesOpen: {}, compSel: null, autoSel: null, zTop: 1, marquee: null,
-  playing: false, previewing: false, previewPath: null,
+  playing: false, previewing: false, previewPath: null, stretchMode: false,
 });
 
 // Until the first status message the readout follows the language (a live switch re-translates "Ready").

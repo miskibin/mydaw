@@ -56,6 +56,24 @@ project looks like:
 }
 ```
 
+### Stretched audio clips
+
+An audio clip may carry `"stretch": s` (0.25–4, absent = 1) and `"resample": true`. The clip
+plays its audio `s` times longer than it is; `offset` and `len` are beats of the *stretched*
+audio, so trimming, slicing and moving work exactly as on an unstretched clip, and a source
+second sits at `offset·spb/s`. The Playlist's Trim | Stretch switch (Shift+M) decides whether
+dragging an audio clip's edge trims it or changes `s` (offset and length scale with it, the
+opposite edge stays). Other clip kinds cannot be stretched (`putClips` rejects it).
+
+By default the pitch is kept: `SourceStore` renders the stretch offline with Signalsmith
+Stretch (`crates/stretch`, vendored C++, MIT) on a background thread (`wave-stretch`), caches
+it by (source, pre-stretch audio, `s`) within 1 GiB (least recently played dropped first) and
+rebuilds the timeline when it lands. Until then — and if the render fails — the clip plays
+resampled (`ClipRt::rate = 1/s`, pitch follows speed), and the state's `stretching` /
+`stretchErrors` name it so the Playlist can show it. A drag never queues renders (the stretch
+is rendered once, on release). Offline bounces render missing stretches themselves, outside
+the project lock. `"resample": true` always plays resampled (turntable-style), no render.
+
 ## Channels, patterns and notes (Channel Rack and Piano roll)
 
 Channels are **global to the project**, like FL Studio's Channel Rack: one row per
@@ -234,7 +252,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `f0_model_install` | – | – ; downloads RMVPE, verifies size and SHA-256, activates it; progress as event `model-progress {id,done,total,error?}` |
 | `music_analyze` | `{clipId?, excludeFx?}` | `{tempo: {bpm, confidence, candidates:[{bpm,score}], firstBeat}\|null, key: {root, minor, confidence, candidates:[{root,minor,score}], chroma:number[12], tuningCents}\|null}` — tempo and key of a clip, or of the project's active audio clips (excluding tracks routed to `excludeFx`'s insert) |
 | `auto_vocal_plan` | `{clipId, beatClipId?, style?: "natural"\|"hard"}` | `AutoVocalPlan` (`ui/src/api/types.ts`): `{version, style, analysis, chain: [{type, params, mix, enabled, note}], trackGainDb\|null, stages, warnings}` — "Auto wokal": measures the vocal clip's region and calibrates tune → rider → fet → comp → deess → reverb → limit on it (`crates/engine/src/autovocal.rs`; key from `beatClipId`, else from the tracks not routed to the vocal's insert). Read-only, seconds per minute of audio; the UI applies the chain with `apply_ops` |
-| `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied) |
+| `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied), in source time: a stretched clip draws them stretched |
 | `trim_clip` | `{clipId}` | `{sourceId}` — writes a new file with only the clip region, clip now points at it |
 | `flatten_comp` | `{clipId}` | `{sourceId}` — renders a comp clip to a new file; the clip becomes an `audio` clip, the takes go (one undo step) |
 | `comp_audition` | `{compId, takeId?}` | – ; plays one whole take instead of the comp (`null` = the comp). Live only: not saved, not undone, ignored by renders |

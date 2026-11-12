@@ -1,5 +1,5 @@
 // Pure builders for playlist edits. They return new clips / ops; nothing here touches the store.
-import { TOTAL_BEATS, VOL_UNITY, type Clip, type Op, type Project, type Track } from '../api/types';
+import { STRETCH_MAX, STRETCH_MIN, TOTAL_BEATS, VOL_UNITY, type Clip, type Op, type Project, type Track } from '../api/types';
 import { clamp } from './format';
 
 export const TOTAL = TOTAL_BEATS;
@@ -57,6 +57,32 @@ export function resizeClip(o: Clip, edge: 'l' | 'r', target: number, minL: numbe
     n.start = ns; n.offset = o.offset + (ns - o.start); n.len = o.len - (ns - o.start);
   }
   return n;
+}
+
+/**
+ * Stretch an audio clip from an edge to `target`: the opposite edge stays, and the audio the
+ * clip shows is played longer or shorter (offset and length scale with the stretch, so the
+ * clip keeps showing the same part of its source). The stretch is kept within
+ * STRETCH_MIN..STRETCH_MAX and the clip on the timeline and at least `minL` long.
+ */
+export function stretchClip(o: Clip, edge: 'l' | 'r', target: number, minL: number): Clip {
+  const s0 = o.stretch ?? 1, end = o.start + o.len;
+  // lengths the stretch limits and the song allow
+  const lo = Math.max(minL, o.len * STRETCH_MIN / s0), hi = Math.min(o.len * STRETCH_MAX / s0, edge === 'r' ? TOTAL - o.start : end);
+  if (hi < lo) return o;
+  const len = clamp(edge === 'r' ? target - o.start : end - target, lo, hi);
+  const k = len / o.len, s = s0 * k;
+  // a stretch back to (almost) 1 snaps to exactly 1, so the clip plays its file untouched
+  const exact = Math.abs(s - 1) < 1e-6;
+  const n: Clip = { ...o, len: exact ? o.len / s0 : len, offset: exact ? o.offset / s0 : o.offset * k };
+  if (exact) { delete n.stretch; delete n.resample; } else n.stretch = s;
+  if (edge === 'l') n.start = end - n.len;
+  return n;
+}
+
+/** Stretch several clips together by the factor the dragged clip's length changed (`k`). */
+export function stretchClips(clips: Clip[], edge: 'l' | 'r', k: number, minL: number): Clip[] {
+  return clips.map(o => stretchClip(o, edge, edge === 'r' ? o.start + o.len * k : o.start + o.len - o.len * k, minL));
 }
 
 /**

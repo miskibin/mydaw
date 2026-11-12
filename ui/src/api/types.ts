@@ -152,7 +152,15 @@ export interface Clip {
   fadeIn: number; fadeOut: number; pan: number; norm: boolean; rev: boolean;
   /** Note-level pitch edits (the pitch editor); rendered offline by the engine. */
   tune?: ClipTune | null;
+  /** Audio clips: how many times longer the clip plays its audio (2 = half speed; absent = 1).
+   *  `offset` and `len` are beats of the stretched audio. */
+  stretch?: number;
+  /** Stretch by changing speed and pitch together instead of keeping the pitch. */
+  resample?: boolean;
 }
+/** Range of `Clip.stretch`. */
+export const STRETCH_MIN = 0.25;
+export const STRETCH_MAX = 4;
 
 /** Times in seconds of the source; `shift`/`formant` in cents, `drift` 0..1, `gain` dB. */
 export interface NoteEdit { start: number; end: number; shift: number; drift: number; formant: number; gain: number }
@@ -330,6 +338,10 @@ export interface StateDto {
   transport: TransportDto; path: string | null; dirty: boolean;
   /** Comp id (as a string key) → take played instead of the comp. Live only, not undone. */
   audition?: Record<string, Id>;
+  /** Audio clips whose pitch-preserving stretch is being rendered (they play resampled meanwhile). */
+  stretching?: Id[];
+  /** Audio clips whose stretch failed (they play resampled): clip id → message. */
+  stretchErrors?: Record<string, string>;
 }
 
 /** `options`: a discrete choice (value = index), shown as buttons instead of a knob. */

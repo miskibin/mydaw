@@ -362,7 +362,8 @@ export class MockBackend implements Backend {
       if (c.kind !== 'audio' || c.muted || beat < c.start || beat >= c.start + c.len) continue;
       const tr = this.p.tracks[c.track]; if (!tr || tr.insert !== ins || tr.muted) continue;
       const m = this.srcMeta.get(c.ref); if (!m?.vocal) continue;
-      return vocalAt(synthVocal(m.seed, m.dur), (c.offset + beat - c.start) * this.spb());
+      // source seconds: a stretched clip reads its source `stretch` times slower
+      return vocalAt(synthVocal(m.seed, m.dur), (c.offset + beat - c.start) * this.spb() / (c.stretch ?? 1));
     }
     return fx.type === 'tune' || fx.type === 'voice' || fx.type === 'deess' || fx.type === 'fet' ? vocalAt(synthVocal(4242, VOCAL_DUR), t) : null;
   }
@@ -772,14 +773,23 @@ export class MockBackend implements Backend {
     if (!c || c.kind !== 'audio') throw new Error('only audio clips can be baked');
     const s = this.srcMeta.get(c.ref); if (!s) throw new Error('audio not loaded');
     const prev = structuredClone(this.p), id = this.p.nextId++;
-    const spb = this.spb(), a0 = c.offset * spb, dur = Math.max(0, Math.min(s.dur, (c.offset + c.len) * spb) - a0);
-    const src: MockSource = { ...s, id, name: s.name + ' (rider)', path: s.path.replace(/\.wav$/i, '') + ' rider.wav', dur, trimFrom: undefined };
+    // the source region (source seconds); a time-stretched clip bakes its stretched audio (engine `bake_rider`)
+    const st = c.stretch ?? 1, keep = st !== 1 && !c.resample;
+    const spb = this.spb(), a0 = c.offset * spb / st, dur = Math.max(0, Math.min(s.dur, (c.offset + c.len) * spb / st) - a0);
+    const src: MockSource = { ...s, id, name: s.name + ' (rider)', path: s.path.replace(/\.wav$/i, '') + ' rider.wav', dur: keep ? dur * st : dur, trimFrom: undefined };
     this.srcMeta.set(id, src);
     const pk = await this.sourcePeaks(c.ref, c.norm, c.rev);
     const g = dbg(c.gain);
-    this.recPeaks.set(id, pk.slice(Math.floor(a0 * 100) * 2, Math.ceil((a0 + dur) * 100) * 2).map(v => v * g));
+    let baked = pk.slice(Math.floor(a0 * 100) * 2, Math.ceil((a0 + dur) * 100) * 2).map(v => v * g);
+    if (keep) {
+      const n = Math.round(baked.length / 2 * st), out = new Float32Array(n * 2);
+      for (let i = 0; i < n; i++) { const j = Math.min(baked.length / 2 - 1, Math.floor(i / st)); out[2 * i] = baked[2 * j]; out[2 * i + 1] = baked[2 * j + 1]; }
+      baked = out;
+    }
+    this.recPeaks.set(id, baked);
     this.p.sources.push(strip(src));
     Object.assign(c, { ref: id, offset: 0, gain: 0, norm: false, rev: false, tune: null });
+    if (keep) { delete c.stretch; delete c.resample; }
     this.pushUndo(prev); this.changed();
     return { sourceId: id, clipId: c.id };
   }
@@ -787,7 +797,9 @@ export class MockBackend implements Backend {
     const c = this.p.clips.find(x => x.id === clipId); if (!c) throw new Error('no clip');
     const s = this.srcMeta.get(c.ref); if (!s) throw new Error('no source');
     const prev = structuredClone(this.p), spb = this.spb(), id = this.p.nextId++;
-    const ns: MockSource = { ...s, id, dur: c.len * spb, path: s.path.replace(/(\.\w+)?$/, '-trim.wav'), trimFrom: { id: s.id, offSec: c.offset * spb } };
+    // the source region in source seconds: a stretched clip keeps its stretch over the trimmed file
+    const st = c.stretch ?? 1;
+    const ns: MockSource = { ...s, id, dur: c.len * spb / st, path: s.path.replace(/(\.\w+)?$/, '-trim.wav'), trimFrom: { id: s.id, offSec: c.offset * spb / st } };
     this.srcMeta.set(id, ns); this.p.sources.push(strip(ns));
     Object.assign(this.p.clips.find(x => x.id === clipId)!, { ref: id, offset: 0, norm: false, rev: false });
     this.pushUndo(prev); this.changed();

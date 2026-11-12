@@ -15,6 +15,7 @@ members = [
     "crates/midi-in",
     "crates/perf",
     "crates/keys-prep",
+    "crates/stretch",
 ]
 
 [workspace.package]
@@ -54,6 +55,7 @@ wave-plugin-scan = { path = "crates/plugin-scan" }
 wave-session = { path = "crates/session" }
 wave-rmvpe = { path = "crates/rmvpe" }
 wave-midi-in = { path = "crates/midi-in" }
+wave-stretch = { path = "crates/stretch" }
 
 [profile.dev]
 opt-level = 1           # DSP in debug is unusably slow otherwise

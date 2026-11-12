@@ -227,6 +227,18 @@ export function paste(at?: { beat: number; track: number }) {
   setU('sel', copies.map(c => c.id));
   say(t('d.act.pasted', { n: copies.length, pos: fmtPos(beat) }));
 }
+/** Playlist resize mode: trim ↔ stretch (Shift+M, the switch in the playlist's corner). */
+export function toggleStretchMode() {
+  setU('stretchMode', !U.stretchMode);
+  say(t(U.stretchMode ? 'a.pl.stretchOn' : 'a.pl.stretchOff'));
+}
+/** How the selected audio clips (or `c`) stretch: keeping pitch, or resampled (speed and pitch together). */
+export function setStretchMethod(c: Clip, resample: boolean) {
+  const ids = U.sel.includes(c.id) ? U.sel : [c.id];
+  const cs = S.project.clips.filter(x => ids.includes(x.id) && x.kind === 'audio' && !!x.resample !== resample).map(plain);
+  if (!cs.length) return;
+  commit([{ op: 'putClips', clips: cs.map(x => ({ ...x, resample })) }], t(resample ? 'a.pl.resampleOp' : 'a.pl.keepPitchOp'));
+}
 export function toggleMuteSel() {
   const cs = selClips(); if (!cs.length) return;
   commit(muteOps(cs.map(plain), !cs.every(c => c.muted)), t('d.act.op.muteclips'));

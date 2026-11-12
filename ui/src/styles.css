@@ -856,6 +856,10 @@ select option { background: var(--bg4); color: var(--fg); }
 .syn-amt .fill { position: absolute; top: 4px; bottom: 4px; background: #60a5fa; border-radius: 2px; opacity: .85; }
 .syn-amt span { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 600 10px var(--mono); color: var(--fg-hi); text-shadow: 0 1px 2px rgba(0,0,0,.6); pointer-events: none; }
 /* PAT / SONG switch and the typing-keyboard toggle */
+/* the playlist corner's resize mode (trim / stretch) */
+.seg.rsz { padding: 1px; min-width: 0; }
+.seg.rsz > button { width: auto; height: 18px; padding: 0 7px; font: 600 9px var(--mono); letter-spacing: .05em; text-transform: uppercase; color: var(--fg4); white-space: nowrap; }
+.seg.rsz > button.on { color: var(--blue-hi); }
 .seg.patsong > button { width: auto; padding: 0 7px; font: 700 9.5px var(--mono); letter-spacing: .05em; color: var(--fg4); }
 .seg.patsong > button.pat.on { color: var(--amber); }
 .seg.patsong > button.song.on { color: var(--green); }

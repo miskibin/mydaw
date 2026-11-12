@@ -72,6 +72,10 @@ pub struct StateDto {
     pub fx_errors: HashMap<Id, String>,
     /// Comp id → take being auditioned (played instead of the comp). Live only.
     pub audition: HashMap<Id, Id>,
+    /// Audio clips whose time-stretch is being rendered; they play resampled until it is.
+    pub stretching: Vec<Id>,
+    /// Audio clips whose time-stretch failed (they play resampled): clip id → message.
+    pub stretch_errors: HashMap<Id, String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -419,6 +423,7 @@ impl Engine {
     }
 
     fn dto(&self, c: &Core) -> StateDto {
+        let (stretching, stretch_errors) = c.sources.stretch_status(&c.project.clips);
         StateDto {
             project: c.project.clone(),
             revision: c.revision,
@@ -429,6 +434,8 @@ impl Engine {
             dirty: c.revision != c.saved_revision,
             fx_errors: c.fx_errors.clone(),
             audition: live_audition(c),
+            stretching,
+            stretch_errors,
         }
     }
 
@@ -756,6 +763,8 @@ impl Engine {
                     norm: false,
                     rev: false,
                     tune: None,
+                    stretch: 1.0,
+                    resample: false,
                 });
                 clip_ids.push(cid);
             }
@@ -887,8 +896,7 @@ impl Engine {
                 return Err(EngineError::Msg("only audio clips have tempo and key".into()));
             }
             let m = self.source_music(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
-            let spb = 60.0 / bpm;
-            let (a, b) = (clip.offset * spb, (clip.offset + clip.len) * spb);
+            let (a, b) = clip.source_span(bpm);
             let (mut cs, n) = m.chroma_sum(a, b);
             if n == 0 {
                 (cs, _) = m.chroma_sum(0.0, 1e9);
@@ -917,7 +925,6 @@ impl Engine {
                 .collect();
             (active, ex_ins, p.bpm)
         };
-        let spb = 60.0 / bpm;
         let use_non_excluded = excluded_insert.is_some() && all_clips.iter().any(|(_, ex)| !*ex);
         let chosen: Vec<Clip> = all_clips.into_iter().filter(|(_, ex)| !use_non_excluded || !*ex).map(|(cl, _)| cl).collect();
         let mut total_chroma = [0f32; 12];
@@ -926,7 +933,7 @@ impl Engine {
         let mut best_tempo: Option<(f64, crate::music::TempoEstimate)> = None;
         for cl in chosen {
             let Some(m) = self.source_music(cl.source, cl.norm, cl.rev) else { continue };
-            let (a, b) = (cl.offset * spb, (cl.offset + cl.len) * spb);
+            let (a, b) = cl.source_span(bpm);
             let (cs, n) = m.chroma_sum(a, b);
             if n > 0 {
                 for k in 0..12 {
@@ -957,14 +964,14 @@ impl Engine {
     pub fn auto_vocal_plan(&self, clip_id: Id, beat_clip: Option<Id>, style: crate::autovocal::Style, bake_rider: bool) -> Result<crate::autovocal::AutoVocalPlan, EngineError> {
         let clip = self.audio_clip(clip_id)?;
         let region = |cl: &Clip| -> Result<(Vec<f32>, f32), EngineError> {
-            let (audio, bpm) = {
+            let ((audio, rate), bpm) = {
                 let mut c = self.core.lock();
                 let bpm = c.project.bpm;
                 (c.sources.clip_audio(cl, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?, bpm)
             };
             let mono = crate::sources::mono_of(&audio);
             let sr = audio.sr as f64;
-            let (a, b) = crate::sources::clip_region(cl, bpm, mono.len() as f64 / sr);
+            let (a, b) = crate::sources::clip_region(cl, bpm, rate, mono.len() as f64 / sr);
             let (i0, i1) = ((a * sr) as usize, ((b * sr) as usize).min(mono.len()));
             let gain = crate::dsp::db_to_gain(cl.gain);
             Ok((mono[i0.min(i1)..i1].iter().map(|v| v * gain).collect(), audio.sr as f32))
@@ -1020,13 +1027,18 @@ impl Engine {
                 return Err(EngineError::Msg("only audio clips can be baked".into()));
             }
             let bpm = c.project.bpm;
-            let audio = c.sources.clip_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            let (audio, rate) = c.sources.clip_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            if clip.needs_stretch() && rate != 1.0 {
+                return Err(EngineError::Msg("the clip's time-stretch could not be rendered".into()));
+            }
             let src = c.project.sources.iter().find(|s| s.id == clip.source);
             let (name, color) = src.map(|s| (s.name.clone(), s.color.clone())).unwrap_or_else(|| ("Vocal".into(), "#e05263".into()));
-            (clip, audio, bpm, name, color)
+            (clip, (audio, rate), bpm, name, color)
         };
+        // a resampled clip bakes its source region, and keeps playing it resampled
+        let (audio, rate) = audio;
         let sr = audio.sr;
-        let (a, b) = crate::sources::clip_region(&clip, bpm, audio.seconds());
+        let (a, b) = crate::sources::clip_region(&clip, bpm, rate, audio.seconds());
         // the same frames `auto_vocal_plan` measures (truncated start); the fraction of a
         // frame the region starts past it stays on the clip as its offset
         let pos = a * sr as f64;
@@ -1045,7 +1057,9 @@ impl Engine {
         let (yl, yr) = crate::autovocal::render_stereo(FxKind::Rider, params, &l, &r, sr as f32);
         let data: Vec<f32> = yl.iter().zip(&yr).flat_map(|(a, b)| [*a, *b]).collect();
         let spb = 60.0 / bpm;
-        let offset = (pos - i0 as f64) / sr as f64 / spb;
+        // beats of the clip (a resampled clip reads `rate` source beats per clip beat)
+        let offset = (pos - i0 as f64) / sr as f64 / spb / rate;
+        let (stretch, resample) = if rate != 1.0 { (clip.stretch, clip.resample) } else { (1.0, false) };
 
         let mut c = self.core.lock();
         let now = c.project.clips.iter().find(|x| x.id == clip_id).cloned();
@@ -1061,7 +1075,8 @@ impl Engine {
         c.project.sources.push(Source { id, name, color, path: path.display().to_string(), dur: baked.seconds(), sr, ch: audio.channels, peak_db: crate::dsp::gain_to_db(baked.peak()) });
         c.sources.insert(id, Arc::new(baked));
         if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
-            *x = Clip { source: id, offset, gain: 0.0, norm: false, rev: false, tune: None, ..clip };
+            // a time-stretched bake holds the stretched audio: it plays as it is
+            *x = Clip { source: id, offset, gain: 0.0, norm: false, rev: false, tune: None, stretch, resample, ..clip };
         }
         push_undo(&mut c, before);
         c.revision += 1;
@@ -1070,12 +1085,13 @@ impl Engine {
         Ok((id, clip_id))
     }
 
-    /// Peaks of what the clip actually plays (including pitch edits), for drawing.
+    /// Peaks of what the clip actually plays (including pitch edits), for drawing. In source
+    /// time: a stretched clip draws them stretched (`Clip::stretch`).
     pub fn clip_peaks(&self, clip_id: Id) -> Option<Vec<f32>> {
         let mut c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned()?;
         let bpm = c.project.bpm;
-        c.sources.clip_audio(&clip, true, bpm).map(|a| a.peaks.clone())
+        c.sources.clip_source_audio(&clip, true, bpm).map(|a| a.peaks.clone())
     }
 
     /// [min,max] pairs at 100/s for drawing.
@@ -1092,10 +1108,11 @@ impl Engine {
             return Err(EngineError::Msg("only audio clips can be trimmed".into()));
         }
         let audio = c.sources.variant(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
-        let spb = 60.0 / c.project.bpm;
         let sr = audio.sr as f64;
-        let a = ((clip.offset * spb * sr) as usize).min(audio.frames);
-        let b = (((clip.offset + clip.len) * spb * sr) as usize).min(audio.frames);
+        // the source region (a stretched clip keeps its stretch over the trimmed source)
+        let (sa, sb) = clip.source_span(c.project.bpm);
+        let a = ((sa * sr) as usize).min(audio.frames);
+        let b = ((sb * sr) as usize).min(audio.frames);
         if b <= a + 16 {
             return Err(EngineError::Msg("the region is empty".into()));
         }
@@ -1124,13 +1141,21 @@ impl Engine {
     pub fn preview_clip(&self, clip_id: Id) -> Result<(), EngineError> {
         let mut c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
-        let audio = c.sources.variant(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
-        let spb = 60.0 / c.project.bpm;
+        let bpm = c.project.bpm;
+        // a time-stretch that is not rendered yet previews the source at its own speed
+        let ready = if clip.needs_stretch() { c.sources.stretch_request(&clip, true, bpm).and_then(Result::ok).filter(|x| x.1 == 1.0) } else { None };
+        let (audio, (a, b)) = match ready {
+            Some((a, _)) => {
+                let r = crate::sources::clip_region(&clip, bpm, 1.0, a.seconds());
+                (a, r)
+            }
+            None => (c.sources.variant(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?, clip.source_span(bpm)),
+        };
         let sr = audio.sr as f64;
         let pv = Preview {
-            pos: clip.offset * spb * sr,
-            start: clip.offset * spb * sr,
-            end: ((clip.offset + clip.len) * spb * sr).min(audio.frames as f64),
+            pos: a * sr,
+            start: a * sr,
+            end: (b * sr).min(audio.frames as f64),
             gain: 10f32.powf(clip.gain / 20.0),
             fade_in: clip.fade_in as f64,
             fade_out: clip.fade_out as f64,
@@ -1382,23 +1407,49 @@ impl Engine {
         if cancel.load(Relaxed) {
             return Err(EngineError::Cancelled);
         }
-        let (project, store_snapshot, takes, keys) = {
+        let (project, mut store_snapshot, stretches, takes, keys) = {
             let mut guard = self.core.lock();
             let c = &mut *guard;
             self.snapshot_plugin_states(c);
             let mut map = HashMap::new();
+            let mut stretches = vec![];
             let bpm = c.project.bpm;
             for clip in &c.project.clips {
                 if clip.kind == ClipKind::Audio {
-                    if let Some(a) = c.sources.clip_audio(clip, false, bpm) {
-                        map.insert(clip.id, a);
+                    match c.sources.stretch_request(clip, false, bpm) {
+                        Some(Ok(a)) => {
+                            map.insert(clip.id, a);
+                        }
+                        Some(Err(job)) => stretches.push((clip.id, job)),
+                        None => {}
                     }
                 }
             }
             let mut audio = comp_audio(&c.sources, &c.project.comps);
             audio.extend(sample_audio(&c.sources, &c.project.channels));
-            (c.project.clone(), map, audio, c.keys.clone())
+            (c.project.clone(), map, stretches, audio, c.keys.clone())
         };
+        // time-stretches nobody played yet are rendered here, without holding the project
+        let mut rendered: HashMap<crate::sources::StretchKey, (Arc<Audio>, f64)> = HashMap::new();
+        for (clip_id, job) in stretches {
+            if cancel.load(Relaxed) {
+                return Err(EngineError::Cancelled);
+            }
+            let got = match rendered.get(&job.key) {
+                Some(x) => x.clone(),
+                None => {
+                    let r = crate::sources::render_stretch(&job);
+                    let got = match &r {
+                        Ok(a) => (a.clone(), 1.0),
+                        Err(_) => (job.audio.clone(), 1.0 / job.ratio),
+                    };
+                    self.core.lock().sources.put_stretch(job.key, r);
+                    rendered.insert(job.key, got.clone());
+                    got
+                }
+            };
+            store_snapshot.insert(clip_id, got);
+        }
         let sr = sample_rate as f32;
         let block = 512;
         let (mut cmd_tx, cmd_rx) = rtrb::RingBuffer::<Cmd>::new(64 + project.channels.len());
@@ -1557,12 +1608,20 @@ impl Engine {
             let mut takes = comp_audio(sources, &project.comps);
             takes.extend(sample_audio(sources, &project.channels));
             let bpm = project.bpm;
-            let tl = build_timeline(project, &mut |clip| sources.clip_audio(clip, stale, bpm), &takes, &audition, keys.as_ref());
+            let tl = build_timeline(project, &mut |clip| sources.clip_play(clip, stale, bpm), &takes, &audition, keys.as_ref());
             send(c, Cmd::Timeline(Box::new(tl)));
         }
     }
 
     fn housekeeping(&self, tick: u32) {
+        {
+            // finished time-stretches replace their resampled stand-ins
+            let mut c = self.core.lock();
+            if c.sources.poll_stretch() {
+                self.sync(&mut c, Dirty { timeline: true, ..Default::default() });
+                self.changed(c);
+            }
+        }
         let shared = self.shared();
         let frame_parts;
         {
@@ -1838,6 +1897,8 @@ impl Engine {
             norm: false,
             rev: false,
             tune: None,
+            stretch: 1.0,
+            resample: false,
         };
         drop(c);
         if let Err(e) = self.apply(&[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None) {
@@ -1898,7 +1959,7 @@ impl Engine {
         c.project.sources.push(Source { id, name, color: "#e05263".into(), path: path.display().to_string(), dur: audio.seconds(), sr, ch, peak_db: crate::dsp::gain_to_db(audio.peak()) });
         c.sources.insert(id, Arc::new(audio));
         if let Some(x) = c.project.clips.iter_mut().find(|x| x.id == clip_id) {
-            *x = Clip { kind: ClipKind::Audio, source: id, offset: 0.0, norm: false, rev: false, tune: None, ..clip.clone() };
+            *x = Clip { kind: ClipKind::Audio, source: id, offset: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, ..clip.clone() };
         }
         if !c.project.clips.iter().any(|x| x.kind == ClipKind::Comp && x.source == comp.id) {
             c.project.comps.retain(|x| x.id != comp.id);
@@ -2247,7 +2308,10 @@ pub(crate) fn build_graph(p: &Project, live: &HashSet<Id>, sr: f32, max_block: u
 }
 
 /// `takes`: loaded audio by source id of every comp take and sampler channel.
-pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option<Arc<Audio>>, takes: &HashMap<Id, Arc<Audio>>, audition: &HashMap<Id, Id>, keys: Option<&Arc<crate::keys::KeysBank>>) -> Timeline {
+/// What an audio clip plays and the rate it reads it at (`SourceStore::clip_play`).
+type ClipAudioFn<'a> = dyn FnMut(&Clip) -> Option<(Arc<Audio>, f64)> + 'a;
+
+pub(crate) fn build_timeline(p: &Project, audio: &mut ClipAudioFn<'_>, takes: &HashMap<Id, Arc<Audio>>, audition: &HashMap<Id, Id>, keys: Option<&Arc<crate::keys::KeysBank>>) -> Timeline {
     // comps are resolved once each, shared by every clip that plays them
     let spb = 60.0 / p.bpm;
     let comps: HashMap<Id, Arc<crate::comp::CompRt>> = p.comps.iter().map(|cp| (cp.id, Arc::new(crate::comp::build(cp, spb, audition.get(&cp.id).copied(), takes)))).collect();
@@ -2266,6 +2330,7 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option
         if c.track as usize >= p.tracks.len() {
             continue;
         }
+        let mut rate = 1.0;
         let src = match c.kind {
             ClipKind::Pat => match p.patterns.iter().position(|x| x.id == c.source) {
                 Some(i) => ClipSrc::Pat(i),
@@ -2276,7 +2341,10 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option
                 None => continue,
             },
             ClipKind::Audio => match audio(c) {
-                Some(a) => ClipSrc::Audio(a),
+                Some((a, r)) => {
+                    rate = r;
+                    ClipSrc::Audio(a)
+                }
                 None => continue,
             },
             ClipKind::Comp => match comps.get(&c.source) {
@@ -2284,7 +2352,7 @@ pub(crate) fn build_timeline(p: &Project, audio: &mut dyn FnMut(&Clip) -> Option
                 None => continue,
             },
         };
-        clips.push(ClipRt { id: c.id, track: c.track as usize, start: c.start, end: c.start + c.len, offset: c.offset, gain: c.gain, pan: c.pan, fade_in: c.fade_in, fade_out: c.fade_out, src, gain0: c.gain, pan0: c.pan });
+        clips.push(ClipRt { id: c.id, track: c.track as usize, start: c.start, end: c.start + c.len, offset: c.offset, rate, gain: c.gain, pan: c.pan, fade_in: c.fade_in, fade_out: c.fade_out, src, gain0: c.gain, pan0: c.pan });
     }
     clips.sort_by(|a, b| a.start.total_cmp(&b.start));
     // clip targets point at the sorted list (a muted clip is not in it: its automation rests)
