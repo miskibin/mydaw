@@ -2,6 +2,7 @@
 //! sample library, VST3 plugins and the live session the `wave` CLI talks to.
 
 mod actions;
+mod boot;
 mod cli_shim;
 mod keys;
 mod library;
@@ -47,6 +48,8 @@ pub struct App {
     pub handle: std::sync::OnceLock<AppHandle>,
     /// Crash-recovery copy of a project that was never saved.
     pub recovery: recovery::Recovery,
+    /// Startup progress: the UI's first state reply waits for the last project here.
+    pub boot: Arc<boot::Boot>,
 }
 
 impl App {
@@ -68,6 +71,16 @@ fn es<E: ToString>(e: E) -> String {
 
 #[tauri::command]
 async fn get_state(app: St<'_>) -> R<StateDto> {
+    // the first call is the UI booting: hold it until the last project has been reopened
+    let boot = app.boot.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if !boot.wait(std::time::Duration::from_secs(60)) {
+            log::warn!("the last project is still loading; starting without it");
+        }
+        boot.mark("first state served to the UI");
+    })
+    .await
+    .map_err(es)?;
     Ok(app.engine.state())
 }
 
@@ -732,19 +745,18 @@ fn shutdown(h: &AppHandle, app: &App) {
 }
 
 pub fn run() {
+    let boot = boot::Boot::new();
+    boot.mark("run() entered");
     let plugins = plugins::Plugins::new();
     let settings = settings::Settings::load();
-    let project = settings
+    // reopened on a thread of its own once the window exists (decoding its audio is slow)
+    let last_project = settings
         .last_project
         .as_ref()
         .filter(|p| std::path::Path::new(p).is_file())
         .cloned();
     let engine = Engine::new(Project::empty(), plugins.factory());
-    if let Some(p) = project {
-        if let Err(e) = engine.open(std::path::Path::new(&p)) {
-            log::warn!("could not reopen {p}: {e}");
-        }
-    }
+    let loading = boot.loading();
     let events: Arc<std::sync::OnceLock<AppHandle>> = Arc::new(std::sync::OnceLock::new());
     // an output the device or driver stopped is reopened by the audio thread: tell the UI
     let audio = {
@@ -791,7 +803,9 @@ pub fn run() {
         updater: updater::State::default(),
         handle: std::sync::OnceLock::new(),
         recovery: recovery::Recovery::start(recovery::default_dir()),
+        boot: boot.clone(),
     });
+    boot.mark("app state built");
     // the pitch model loads in the background; analysis uses YIN until it is ready
     let a = app.clone();
     std::thread::spawn(move || {
@@ -801,25 +815,9 @@ pub fn run() {
         }
     });
 
-    // live session for the CLI
-    let weak = Arc::downgrade(&app);
-    let handler: Arc<wave_session::Handler> = Arc::new(move |req: &wave_session::Request| {
-        let Some(app) = weak.upgrade() else { return Err(wave_session::ErrorBody::new("GONE", "the app is closing")) };
-        let res = actions::control(&app, &req.command, &req.args, req.if_revision);
-        let rev = app.engine.revision();
-        res.map(|d| (d, rev)).map_err(|m| {
-            let code = m.split(':').next().filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2).unwrap_or("REFUSED").to_string();
-            wave_session::ErrorBody::new(&code, m)
-        })
-    });
-    match wave_session::Server::start(handler) {
-        Ok(s) => *app.session.lock() = Some(s),
-        Err(e) => log::warn!("CLI session unavailable: {e}"),
-    }
-
     let app_setup = app.clone();
     let app_exit = app.clone();
-    tauri::Builder::default()
+    let tapp = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app.clone())
@@ -857,6 +855,39 @@ pub fn run() {
             if let Some(w) = tapp.get_webview_window("main") {
                 let _ = w.set_title("WAVE");
             }
+            app_setup.boot.mark("tauri setup done");
+            // the last project and the CLI session come in off the critical path: the UI's first
+            // state reply (see `get_state`) is the only thing that waits for them
+            let a = app_setup.clone();
+            
+            std::thread::Builder::new()
+                .name("wave-boot".into())
+                .spawn(move || {
+                    let _loading = loading; // released when this thread ends, however it ends
+                    if let Some(p) = last_project {
+                        match a.engine.open(std::path::Path::new(&p)) {
+                            Ok(_) => {}
+                            Err(e) => log::warn!("could not reopen {p}: {e}"),
+                        }
+                        a.boot.mark("last project loaded");
+                    }
+                    let weak = Arc::downgrade(&a);
+                    let handler: Arc<wave_session::Handler> = Arc::new(move |req: &wave_session::Request| {
+                        let Some(app) = weak.upgrade() else { return Err(wave_session::ErrorBody::new("GONE", "the app is closing")) };
+                        let res = actions::control(&app, &req.command, &req.args, req.if_revision);
+                        let rev = app.engine.revision();
+                        res.map(|d| (d, rev)).map_err(|m| {
+                            let code = m.split(':').next().filter(|c| c.chars().all(|ch| ch.is_ascii_uppercase() || ch == '_') && c.len() > 2).unwrap_or("REFUSED").to_string();
+                            wave_session::ErrorBody::new(&code, m)
+                        })
+                    });
+                    match wave_session::Server::start(handler) {
+                        Ok(s) => *a.session.lock() = Some(s),
+                        Err(e) => log::warn!("CLI session unavailable: {e}"),
+                    }
+                    a.boot.mark("CLI session up");
+                })
+                .expect("spawn boot thread");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -871,12 +902,13 @@ pub fn run() {
             app_info, update_set_auto, update_mark_seen, update_check, update_download, update_install, open_release_page
         ])
         .build(tauri::generate_context!())
-        .expect("error while building WAVE")
-        .run(move |h, ev| {
-            if let tauri::RunEvent::Exit = ev {
-                shutdown(h, &app_exit);
-            }
-        });
+        .expect("error while building WAVE");
+    app_exit.boot.mark("tauri built, entering the event loop");
+    tapp.run(move |h, ev| {
+        if let tauri::RunEvent::Exit = ev {
+            shutdown(h, &app_exit);
+        }
+    });
 }
 
 #[cfg(test)]
