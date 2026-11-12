@@ -1,0 +1,26 @@
+# WAVE
+
+> WAVE is a free, open-source digital audio workstation (DAW) for Windows and Linux. It works the FL Studio way (patterns, Channel Rack, piano roll, playlist), includes audio recording and vocal pitch editing, and installs a `wave` command line through which a script or an AI agent can edit the project that is open in the app.
+
+Facts, as of version 0.9 (November 2026):
+
+- Price: free. One build, no paid edition, no account.
+- Licence: MIT or Apache-2.0.
+- Platforms: Windows (WASAPI, ASIO) and Linux (ALSA; deb, rpm, AppImage). No macOS build.
+- Engine: Rust; the audio callback does not allocate, lock or do I/O. Interface: Tauri 2, SolidJS, canvas.
+- Built in: a wavetable synth, a sampled grand piano (WAVE Keys), a sampler with a drum and tonal library, and 12 effects (24-band dynamic EQ, compressor, FET compressor, saturator, delay, reverb, limiter, de-esser, denoiser, pitch correction, voice, vocal rider).
+- Recording: loop recording with takes and comping, measured latency compensation, live monitoring.
+- Vocals: note-level pitch editor, live pitch correction, Tune to Reference, vocal rider.
+- Third-party plugins: VST3 effects only. No VST instruments, CLAP or LV2.
+- Not available: Session view or clip launching, FL Studio project (.flp) import, JACK backend.
+- Export: offline bounce to 32-bit float WAV or MP3.
+- Made by one developer with AI coding agents.
+
+## Links
+
+- [Download](https://github.com/miskibin/wave-DAW/releases/latest): installers for Windows and Linux
+- [Source code and README](https://github.com/miskibin/wave-DAW)
+- [Command line reference](https://github.com/miskibin/wave-DAW/blob/main/docs/cli.md): every `wave` command an agent can run
+- [Architecture](https://github.com/miskibin/wave-DAW/blob/main/docs/architecture.md): engine, ops and undo, telemetry, UI boundaries
+- [Changelog](https://github.com/miskibin/wave-DAW/blob/main/CHANGELOG.md): what changed in each release
+- [Video](https://www.youtube.com/watch?v=wtuHDyIQpYk)

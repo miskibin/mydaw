@@ -18,6 +18,10 @@
 
 [![WAVE: playlist, automation and the mixer. Click for the video.](site/img/hero.png)](https://www.youtube.com/watch?v=wtuHDyIQpYk)
 
+WAVE is a desktop music production program (a DAW) for Windows and Linux. It is free, the
+source is open under MIT or Apache-2.0, and it is made for one job: making a beat and recording
+a vocal over it, the way you would in FL Studio.
+
 ## Note from developer (This part is not AI SLOP)
 
 ![From the first FL Studio in 2010 to WAVE in 2026](site/img/journey.svg)
@@ -46,19 +50,20 @@ the one free build.
 
 **Every effect draws what it does to your audio.** The picture above the knobs comes from the
 signal passing through, so you see the compressor's gain reduction or the saturator's curve
-instead of guessing. These are the real windows:
+instead of guessing. Recorded from the running interface, on a drum loop:
 
 <p align="center">
-  <img src="site/img/eq.png" width="32%" alt="24-band dynamic EQ">
-  <img src="site/img/saturator.png" width="32%" alt="Saturator">
-  <img src="site/img/pitch.png" width="32%" alt="Vocal pitch editor">
+  <img src="site/img/comp-live.gif" width="42%" alt="Compressor on a drum loop: the transfer curve, the level history and the gain reduction drawn over it">
+  <img src="site/img/eq-live.gif" width="56%" alt="Parametric EQ on a drum loop: the curve with a low cut and a mud cut over the live spectrum before and after">
 </p>
+
+All 14 plugin windows are on the [website](https://miskibin.github.io/wave-DAW/#plugins).
 
 **An AI agent can work in the project you have open.** WAVE installs a `wave` command that
 talks to the running app. The agent reads the song as JSON, writes notes and sets knobs on
 your screen, then bounces offline and reads back peak, level and clipping, because it cannot
 hear. Every command is one step in your undo history, so Ctrl+Z removes whatever you do not
-like. [This trap beat](https://miskibin.github.io/wave-DAW/) was made that way.
+like. [This trap beat](https://miskibin.github.io/wave-DAW/#listen) was made that way.
 
 ```sh
 wave context --pretty                     # tracks, inserts, patterns, channels
@@ -71,6 +76,10 @@ wave render --out check.wav --to 16       # offline bounce + level statistics
 touches a file (the benchmark counts allocations on the audio thread: zero). Moving a knob never rebuilds the graph.
 The synth's oscillators stay more than 60 dB above their aliasing up to C7
 ([measurements](docs/synth.md)). How it is put together: [`docs/architecture.md`](docs/architecture.md).
+
+**The licence lets you do what you want with it.** WAVE is MIT or Apache-2.0. LMMS, Zrythm,
+Nota and openDAW are GPL or AGPL. If you want to build on a DAW engine without those terms,
+this is the one you can take.
 
 ## What is in the box
 
@@ -111,16 +120,36 @@ view or clip launcher, so if you write by launching clips, it does not replace L
 
 ## Where it stands
 
-Version 0.9. It covers a complete beat and a vocal session, and I make my own music in it.
-What it does not do yet:
+Version 0.9, built by one person with AI agents. It covers a complete beat and a vocal
+session. What it does not do yet:
 
-- no VST instruments, only VST3 effects;
+- no VST instruments, only VST3 effects, and no CLAP or LV2;
 - no macOS build;
 - no Session view or clip launching;
+- no import of FL Studio projects (`.flp`); bring stems or samples over instead;
+- on Linux, audio goes through ALSA (PipeWire's ALSA layer included); there is no JACK backend;
 - releases come often, so things still move. The [changelog](CHANGELOG.md) is written for
   musicians, not for developers.
 
 Found a bug or miss something from FL? [Open an issue](https://github.com/miskibin/wave-DAW/issues).
+
+## Questions people ask
+
+**Is it really free?** Yes. There is one build, no paid edition and no account. The licence is
+MIT or Apache-2.0.
+
+**Can it replace FL Studio?** For beats built from the built-in synth, the piano, samples and
+your own recordings: yes, that is what it is made for. If your sound depends on VST
+instruments such as Serum, or on FL's own plugins: not yet.
+
+**Does it run on a Mac?** No. Windows and Linux (deb, rpm, AppImage) only.
+
+**Do I need an AI agent to use it?** No. It is a normal DAW with a mouse and a keyboard. The
+`wave` command is there if you want an agent, or your own script, to work in the project.
+
+**Was it written by AI?** Mostly, yes, directed by a musician who works with DSP for a living;
+see the note above. The engine has tests for clicks, aliasing, loudness and allocations in the
+audio callback, and they run on every change.
 
 ## Install
 
