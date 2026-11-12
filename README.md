@@ -1,14 +1,22 @@
 <p align="center"><img src="app/icons/128x128@2x.png" width="96" alt=""></p>
 <h1 align="center">WAVE</h1>
-<p align="center">A fast, FL-Studio-style DAW with a Rust audio engine. Free and open source.</p>
 <p align="center">
-  <a href="https://github.com/miskibin/wave-DAW/releases/latest"><b>Download</b></a> ·
-  <a href="https://miskibin.github.io/wave-DAW/">Website and audio examples</a> ·
-  <a href="docs/cli.md">Command line</a> ·
-  <a href="docs/architecture.md">Architecture</a>
+  A free, open-source DAW that works the FL Studio way: patterns, Channel Rack, piano roll, playlist.<br>
+  Audio recording and vocal tuning are included, and an AI agent can edit the project you have open.
+</p>
+<p align="center">
+  <a href="https://github.com/miskibin/wave-DAW/releases/latest"><b>Download</b> (Windows, Linux)</a> ·
+  <a href="https://www.youtube.com/watch?v=wtuHDyIQpYk">Watch the video</a> ·
+  <a href="https://miskibin.github.io/wave-DAW/">Hear a beat made in it</a> ·
+  <a href="docs/cli.md">Command line</a>
+</p>
+<p align="center">
+  <a href="https://github.com/miskibin/wave-DAW/releases/latest"><img src="https://img.shields.io/github/v/release/miskibin/wave-DAW?label=release" alt="Latest release"></a>
+  <a href="https://github.com/miskibin/wave-DAW/actions/workflows/ci.yml"><img src="https://github.com/miskibin/wave-DAW/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/licence-MIT%20or%20Apache--2.0-blue" alt="MIT or Apache-2.0">
 </p>
 
-![WAVE: playlist, automation and the mixer](site/img/hero.png)
+[![WAVE: playlist, automation and the mixer. Click for the video.](site/img/hero.png)](https://www.youtube.com/watch?v=wtuHDyIQpYk)
 
 ## Note from developer (This part is not AI SLOP)
 
@@ -24,33 +32,95 @@ My whole life led me to this product, and with AI I can finally build it. Yes, t
 
 I now use WAVE for everything I used FL Studio for.
 
-## What it does
+## Why WAVE
 
-- **Playlist and patterns.** Pattern, audio and automation clips on free lanes; slice, fade,
-  reverse, normalise; every edit is one undo step.
-- **Channel Rack and piano roll.** A step sequencer with swing and velocity, a piano roll for
-  every pitched channel, and the computer keyboard or a MIDI keyboard as the instrument.
-- **Instruments.** A two-oscillator wavetable [synth](docs/synth.md) with unison, a mod matrix
-  and its own effects; [WAVE Keys](docs/keys.md), a sampled concert grand that ships inside the
-  installer; a sampler (trim, reverse, envelope, one-shot or gate, cut groups) with a built-in
-  standard library of drum, percussion and tonal samples, plus downloadable CC0 kits.
-- **A mixer you can read.** Inserts with a 24-band dynamic EQ, compressor, FET compressor,
-  [saturator](docs/saturator.md), delay, [reverb and limiter](docs/reverb-limiter-v2.md),
-  de-esser, denoiser and more. Every effect has presets and draws what it is doing to the
-  audio that is passing through.
-- **Recording.** Loop recording with takes and comping, measured latency compensation,
-  live monitoring.
-- **Vocal tools.** A note-level pitch editor, Tune to Reference (pull a take onto a guide
-  vocal), live pitch correction, a vocal rider and a one-click vocal chain.
-- **VST3 effects and ASIO.** Plugins run with their own editor windows after a crash-proof
-  scan; WASAPI and ASIO on Windows, ALSA on Linux.
-- **A command line.** `wave` edits the open project live, with the same undo history, and
-  bounces it offline. Scripts and AI agents can write a song and check the result.
-- **English and Polish** interface, switched in Settings.
+**If you know FL Studio, you already know WAVE.** Patterns on a free playlist, a Channel Rack
+with a step sequencer, a piano roll per channel. The gestures are the same too: right-click
+deletes, middle-button drag pans, Ctrl+Q quantizes, Alt+wheel changes velocity. A beat plays
+on the first press of Space.
 
-Performance is the first requirement: the audio callback never allocates or locks, moving a
-knob never rebuilds the graph, and every moving picture in the interface is drawn on canvas
-from one binary telemetry frame. See [`docs/architecture.md`](docs/architecture.md).
+**Recording and vocals are not an edition.** Loop recording with takes and comping, measured
+latency compensation, a note-level pitch editor, live pitch correction, Tune to Reference
+(pull a take onto a guide vocal), a vocal rider and a one-click vocal chain. All of it is in
+the one free build.
+
+**Every effect draws what it does to your audio.** The picture above the knobs comes from the
+signal passing through, so you see the compressor's gain reduction or the saturator's curve
+instead of guessing. These are the real windows:
+
+<p align="center">
+  <img src="site/img/eq.png" width="32%" alt="24-band dynamic EQ">
+  <img src="site/img/saturator.png" width="32%" alt="Saturator">
+  <img src="site/img/pitch.png" width="32%" alt="Vocal pitch editor">
+</p>
+
+**An AI agent can work in the project you have open.** WAVE installs a `wave` command that
+talks to the running app. The agent reads the song as JSON, writes notes and sets knobs on
+your screen, then bounces offline and reads back peak, level and clipping, because it cannot
+hear. Every command is one step in your undo history, so Ctrl+Z removes whatever you do not
+like. [This trap beat](https://miskibin.github.io/wave-DAW/) was made that way.
+
+```sh
+wave context --pretty                     # tracks, inserts, patterns, channels
+wave pattern --id 2 --ch hat --steps "x.x. x.x. x.x5 x.x9"
+wave add-fx --insert 6 --type reverb --preset 3
+wave render --out check.wav --to 16       # offline bounce + level statistics
+```
+
+**The engine is written for the audio thread first.** The callback never allocates, locks or
+touches a file (the benchmark counts allocations on the audio thread: zero). Moving a knob never rebuilds the graph.
+The synth's oscillators stay more than 60 dB above their aliasing up to C7
+([measurements](docs/synth.md)). How it is put together: [`docs/architecture.md`](docs/architecture.md).
+
+## What is in the box
+
+| | |
+| --- | --- |
+| **Arranging** | Pattern, audio and automation clips on free lanes; slice, fade, reverse, normalise; automation curves edited on the clip |
+| **Writing** | Step sequencer with swing and velocity, piano roll, computer keyboard or MIDI keyboard as the instrument |
+| **Instruments** | Two-oscillator wavetable [synth](docs/synth.md) (unison, mod matrix, 46 presets); [WAVE Keys](docs/keys.md), a sampled concert grand; a sampler with a built-in drum and tonal library plus downloadable CC0 kits |
+| **Mixing** | 24-band dynamic EQ, compressor, FET compressor, [saturator](docs/saturator.md), delay, [reverb, limiter](docs/reverb-limiter-v2.md), de-esser, denoiser; presets on every effect |
+| **Recording** | Takes and comping, latency compensation, live monitoring |
+| **Vocals** | Pitch editor, live correction, Tune to Reference, vocal rider, vocal chain |
+| **Plugins and audio** | VST3 effects with their own windows after a crash-proof scan; WASAPI and ASIO on Windows, ALSA on Linux |
+| **Export** | Offline bounce of the song or a loop to 32-bit float WAV or MP3 |
+| **Language** | English and Polish |
+
+## WAVE and FL Studio, honestly
+
+WAVE borrows FL Studio's way of working, so that is the fair comparison. FL Studio has more
+than twenty-five years behind it and wins on breadth.
+
+| | WAVE 0.9 | FL Studio |
+| --- | --- | --- |
+| Price | Free | About $99 to $450 depending on the edition |
+| Source code | Open, MIT or Apache-2.0 | Closed |
+| Audio recording | Included, with takes and comping | Producer edition or higher |
+| Vocal pitch editing | Included | NewTone and Pitcher come with the higher editions |
+| Working with an AI agent | The agent edits the open project and measures its own renders | No command line into the open project |
+| Built-in instruments and effects | 14 | More than a hundred across the editions |
+| Third-party plugins | VST3 effects only | VST instruments and effects, and more formats |
+| Platforms | Windows and Linux | Windows and macOS |
+| Maturity | Version 0.9, one developer, expect rough edges | Since 1998, large community, tutorials, sample packs |
+
+FL Studio details as of November 2026; see Image-Line's edition comparison for current
+prices. FL Studio is a trademark of Image-Line, and WAVE is not affiliated with it.
+
+**Coming from Ableton Live?** The arrangement side will feel familiar. WAVE has no Session
+view or clip launcher, so if you write by launching clips, it does not replace Live yet.
+
+## Where it stands
+
+Version 0.9. It covers a complete beat and a vocal session, and I make my own music in it.
+What it does not do yet:
+
+- no VST instruments, only VST3 effects;
+- no macOS build;
+- no Session view or clip launching;
+- releases come often, so things still move. The [changelog](CHANGELOG.md) is written for
+  musicians, not for developers.
+
+Found a bug or miss something from FL? [Open an issue](https://github.com/miskibin/wave-DAW/issues).
 
 ## Install
 
@@ -83,15 +153,13 @@ download the piano the first time you add the instrument.
 
 ## The `wave` command line
 
-It works as soon as the app has run once (open a new terminal). Full reference:
-[`docs/cli.md`](docs/cli.md).
+It works as soon as the app has run once (open a new terminal). To let an agent such as
+Claude Code work on your song, start it in any folder and tell it to run `wave context`.
+Full reference: [`docs/cli.md`](docs/cli.md).
 
 ```sh
-wave context --pretty                     # tracks, inserts, patterns, channels
 wave channels --keys                      # add the WAVE Keys piano
-wave pattern --id 2 --ch hat --steps "x.x. x.x. x.x5 x.x9"
-wave add-fx --insert 6 --type reverb --preset 3
-wave render --out check.wav --to 16       # offline bounce + level statistics
+wave undo                                 # or press Ctrl+Z in the app
 ```
 
 ## Layout
