@@ -145,11 +145,6 @@ export function Toolbar() {
         </div>
       </div>
       <div class="tbmid" data-drag>
-      <div class="seg patsong" title={t('a.tb.patSongTip')}>
-        <button class="pat" classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
-        <button class="song" classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
-      </div>
-      <PatSelector />
       <div class="seg">
         <button title={patMode() ? t('a.tb.playPat') : t('a.tb.playSong')} data-act="play" classList={{ play: U.playing || U.patPlaying }} onClick={() => void A.togglePlay()}>
           <svg width="11" height="11" viewBox="0 0 14 14"><path d="M3 1.5v11l9-5.5z" fill="currentColor" /></svg>
@@ -166,6 +161,11 @@ export function Toolbar() {
         </button>
         <button class="count" classList={{ on: T().countIn }} title={t('a.tb.countTip')} onClick={() => void A.setTransportFlag('countIn', !T().countIn)}>1 BAR</button>
       </div>
+      <div class="seg patsong" title={t('a.tb.patSongTip')}>
+        <button class="pat" classList={{ on: patMode() }} onClick={() => setPatMode(true)}>PAT</button>
+        <button class="song" classList={{ on: !patMode() }} onClick={() => setPatMode(false)}>SONG</button>
+      </div>
+      <PatSelector />
       <div class="clockbox" onContextMenu={bpmMenu}>
         <span ref={clockEl} class="clock">1:01:01</span>
         <div style={{ width: '1px', height: '14px', background: 'var(--line)' }} />
