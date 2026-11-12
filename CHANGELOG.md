@@ -8,7 +8,30 @@ shown in the app after an update and is published as the release notes (see
 
 Rename this heading to `## <version> — <date>` when releasing (docs/releasing.md).
 
+### Added
+- **Warp: draw how time and volume move over every bar.** A new effect for stutters, rolls,
+  half-time, tape stops and starts, reverses, scratches (time) and gates, trance gates and
+  sidechain pumps (volume). Each effect holds 16 time and 16 volume slots, ready-made and
+  editable: click a slot to edit and play it, drag points on the map (the slope is the speed,
+  the dashed line is "stopped", the grey lines are "reversed"), right-click a point for its
+  shape or a musical speed (×½, −7 st, stop, reverse). Change slots over the song with an
+  automation clip, or live; Trigger sync waits for the next 1/16 … bar, One-shot plays one bar
+  and returns, Hold loops the previous or the next bar. Jumps are de-clicked, and drum hits
+  keep their attack.
+- **A library of 86 ready-made Warp maps.** Right-click a slot → *Library*: stutters, rolls and
+  build-ups, half-time, tape stops and brakes, reverses, scratches, glitches (time), and
+  sidechain pumps, gates, trance gates, fades, mutes and tremolos (volume).
+- **Three new automation curve shapes:** pulse (square), wave and half sine (tape stop / start).
+
 ### Changed
+- **The Delay is now a full echo unit.** Its time is set in beats ("1/2 beat", "1 1/2 beats",
+  triplets and dotted) and follows the song tempo, even tempo changes; or in ms. Inside the
+  feedback loop: a resonant filter (LP/HP/BP), sample-rate and bit reduction, a saturator or
+  limiter you can drive into self-oscillation (feedback up to 125 %), diffusion that smears
+  repeats into a cloud, and an LFO for tape wow, chorus or filter sweeps. Mono, stereo with an
+  offset, ping-pong, or no echo at all (a filter / lo-fi / drive unit). Repitch glides the
+  pitch when the time changes, like tape; Keep pitch never bends it. Projects with the old
+  Delay sound the same.
 - **WAVE opens its window right away.** It no longer waits for your last project to load before
   showing anything: the window appears at once and the project comes in while the interface
   starts, so a big session is ready sooner and there is no more clicking the icon again.

@@ -167,12 +167,12 @@ pub struct LimiterV2 {
     gr: f32,
     /// Samples the safety clamp had to touch since `prepare` (diagnostic; should stay 0).
     pub clamped: u64,
-    v: [f32; 12],
+    v: [f32; crate::processor::MAX_PARAMS],
 }
 
 impl Default for LimiterV2 {
     fn default() -> Self {
-        let mut v = [0f32; 12];
+        let mut v = [0f32; crate::processor::MAX_PARAMS];
         v[idx::CEIL] = -1.0;
         v[idx::REL] = 80.0;
         v[idx::AUTO] = 1.0;

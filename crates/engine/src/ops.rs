@@ -575,9 +575,53 @@ fn validate_fx(fx: &Fx) -> Result<(), OpError> {
     if fx.kind == FxKind::Vst3 && fx.plugin.is_none() {
         return Err(OpError::Invalid("a VST3 slot needs `plugin`".into()));
     }
+    match (&fx.maps, fx.kind == FxKind::Warp) {
+        (None, true) => {
+            return Err(OpError::Invalid(
+                "a Warp needs `maps` (see fx_catalog().warp for the factory slots)".into(),
+            ))
+        }
+        (Some(_), false) => return Err(OpError::Invalid("only a Warp has `maps`".into())),
+        (Some(m), true) => validate_maps(m)?,
+        (None, false) => {}
+    }
     for (k, v) in &fx.params {
         if !v.is_finite() {
             return Err(OpError::Invalid(format!("parameter {k} is not a number")));
+        }
+    }
+    Ok(())
+}
+
+fn validate_maps(m: &crate::model::WarpMaps) -> Result<(), OpError> {
+    use crate::model::{WARP_BAR, WARP_POINTS, WARP_SLOTS};
+    for (bank, slots) in [("time", &m.time), ("vol", &m.vol)] {
+        if slots.len() > WARP_SLOTS {
+            return Err(OpError::Invalid(format!(
+                "Warp {bank} maps: at most {WARP_SLOTS} slots"
+            )));
+        }
+        for (i, s) in slots.iter().enumerate() {
+            let bad = |why: &str| {
+                Err(OpError::Invalid(format!(
+                    "Warp {bank} slot {}: {why}",
+                    i + 1
+                )))
+            };
+            if s.points.len() > WARP_POINTS {
+                return bad(&format!("at most {WARP_POINTS} points"));
+            }
+            if s.points.iter().any(|p| {
+                !(0.0..=WARP_BAR).contains(&p.t)
+                    || !(0.0..=1.0).contains(&p.v)
+                    || !p.tension.is_finite()
+                    || p.tension.abs() > 1.0
+            }) {
+                return bad("points need t 0..4 beats, v 0..1, tension -1..1");
+            }
+            if s.points.windows(2).any(|w| w[1].t < w[0].t) {
+                return bad("points must be in time order");
+            }
         }
     }
     Ok(())

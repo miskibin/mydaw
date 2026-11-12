@@ -26,11 +26,12 @@ export const FXMETA: Record<FxKind, { icon: string; color: string; /** translati
   fet: { icon: 'M3.5 17a8.5 8.5 0 0 1 17 0 M12 17l4.5-6.5 M6.2 11.2l1.2 1 M17.8 11.2l-1.2 1 M12 8.5v1.5', color: '#f07f4f', tag: 'c.fxtag.fetComp' },
   denoise: { icon: 'M2 12h2l1.5-3 1.5 6 1.5-4 1.5 2h2 M13 12c1.5-4 3-6 4.5-6S20 9 22 12 M13 12c1.5 4 3 6 4.5 6S20 15 22 12', color: '#8fb3ff', tag: 'c.fxtag.denoising' },
   voice: { icon: 'M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z M5.5 11a6.5 6.5 0 0 0 13 0 M12 17.5V21 M17.5 3.5l3 2-3 2 M20.5 5.5h-2', color: '#c77ddb', tag: 'c.fxtag.voiceTimbre' },
+  warp: { icon: 'M3 18h4l3-12 4 12 3-6h4 M3 6h18', color: '#3fd0c9', tag: 'c.fxtag.warp' },
   half: { icon: 'M2 12c1-4 2-4 3 0s2 4 3 0 M10 12c2.5-8 5-8 7 0s4.5 8 5 0', color: '#a3d65f', tag: 'c.fxtag.slowdown' },
   rider: { icon: 'M3 15c2 0 2-6 4-6s2 8 4 8 2-10 4-10 2 6 4 6h2 M3 12h18', color: '#e8c55a', tag: 'c.fxtag.leveling' },
   vst3: { icon: ICONS.vst, color: '#9a8cf0', tag: 'c.fxtag.plugin' },
 };
-export const FX_ORDER = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'half', 'reverb', 'limit'] as const;
+export const FX_ORDER = ['denoise', 'tune', 'voice', 'eq', 'rider', 'deess', 'comp', 'fet', 'sat', 'delay', 'half', 'warp', 'reverb', 'limit'] as const;
 export const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
 
 export function Icon(props: { d: string; size?: number; sw?: number }) {

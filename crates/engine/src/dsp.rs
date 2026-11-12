@@ -2,10 +2,12 @@
 
 use std::f32::consts::PI;
 
+pub mod delay;
 pub mod halftime;
 pub mod limiter_v2;
 pub mod reverb_v2;
 pub mod saturator;
+pub mod warp;
 
 use crate::model::FxKind;
 use crate::processor::{ParamBlock, ProcessCtx, Processor};
@@ -36,8 +38,9 @@ pub fn create(kind: FxKind) -> Option<Box<dyn Processor>> {
         FxKind::Eq => Box::new(Eq::default()),
         FxKind::Comp => Box::new(Comp::default()),
         FxKind::Sat => Box::new(saturator::Saturator::default()),
-        FxKind::Delay => Box::new(Delay::default()),
+        FxKind::Delay => Box::new(delay::Delay::default()),
         FxKind::Half => Box::new(halftime::HalfTime::default()),
+        FxKind::Warp => Box::new(warp::Warp::default()),
         FxKind::Reverb => Box::new(reverb_v2::ReverbV2::default()),
         FxKind::Limit => Box::new(limiter_v2::LimiterV2::default()),
         FxKind::Fet => Box::new(crate::vocal::Fet::default()),
@@ -483,79 +486,6 @@ impl Processor for Comp {
     }
 }
 
-// ---------------------------------------------------------------- delay
-
-#[derive(Default)]
-pub struct Delay {
-    sr: f32,
-    bl: Vec<f32>,
-    br: Vec<f32>,
-    w: usize,
-    time: f32,
-    fb: f32,
-    mix: f32,
-    st: Smooth,
-}
-impl Processor for Delay {
-    fn prepare(&mut self, sr: f32, _max: usize) {
-        self.sr = sr;
-        let n = (sr * 2.1) as usize + 4;
-        self.bl = vec![0.0; n];
-        self.br = vec![0.0; n];
-        self.w = 0;
-        self.st.setup(sr, 60.0);
-    }
-    fn set_params(&mut self, p: &ParamBlock) {
-        self.time = p.values[0].clamp(1.0, 2000.0) * self.sr / 1000.0;
-        self.fb = (p.values[1] / 100.0).min(0.98);
-        self.mix = p.values[2] / 100.0;
-        if self.st.v == 0.0 {
-            self.st.v = self.time;
-        }
-    }
-    fn process(&mut self, l: &mut [f32], r: &mut [f32], _c: &ProcessCtx) {
-        let n = self.bl.len();
-        if n == 0 {
-            return;
-        }
-        for i in 0..l.len() {
-            let d = self.st.next(self.time).clamp(1.0, (n - 3) as f32);
-            let pos = self.w as f32 - d + n as f32;
-            let i0 = pos as usize;
-            let fr = pos - i0 as f32;
-            let read = |b: &[f32]| {
-                let a = b[i0 % n];
-                let c = b[(i0 + 1) % n];
-                a + (c - a) * fr
-            };
-            let (yl, yr) = (read(&self.bl), read(&self.br));
-            self.bl[self.w] = flush(l[i] + yl * self.fb);
-            self.br[self.w] = flush(r[i] + yr * self.fb);
-            self.w = (self.w + 1) % n;
-            l[i] += yl * self.mix;
-            r[i] += yr * self.mix;
-        }
-    }
-    fn reset(&mut self) {
-        self.bl.fill(0.0);
-        self.br.fill(0.0);
-    }
-    fn tail_samples(&self) -> Option<usize> {
-        let n = self.bl.len();
-        if n < 4 {
-            return Some(0);
-        }
-        let t = self.time.max(self.st.v).clamp(1.0, (n - 3) as f32);
-        // every repeat is `fb` of the one before: down to -140 dB
-        let reps = if self.fb < 1e-4 { 1.0 } else { (16.2 / -self.fb.ln()).ceil().max(1.0) };
-        Some(((reps + 1.0) * t + 0.4 * self.sr) as usize)
-    }
-    fn park(&mut self) {
-        self.reset();
-        self.st.v = self.time;
-    }
-}
-
 // ---------------------------------------------------------------- reverb (FDN)
 
 const FDN: usize = 8;
@@ -953,8 +883,8 @@ mod tests {
     #[test]
     fn delay_repeats_at_time() {
         let (out, _) = run(FxKind::Delay, |i| if i == 0 { 1.0 } else { 0.0 }, 48000);
-        let t = (375.0 * 48.0) as usize; // default preset 1/8 at 120 bpm = 250 ms; params come from preset
-        let t = if out[t].abs() > 0.05 { t } else { 250 * 48 };
+        // the first preset is a synced 1/2 beat; the test context has no tempo, the delay assumes 120 bpm
+        let t = 250 * 48;
         assert!(out[t - 2..t + 3].iter().any(|x| x.abs() > 0.05), "no echo at {t}");
     }
 }

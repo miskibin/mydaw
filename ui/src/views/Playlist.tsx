@@ -24,7 +24,7 @@ import { drawFades, drawGrid, drawOverlaps, drawRuler, type View } from './playl
 import { laneOverlaps } from '../lib/overlaps';
 import { damageRects, followScroll, planTile, snapPx, type Rect, type Tile } from './playlistTile';
 import { autoDisplay, isAutomated, paramMenu } from '../state/automation';
-import { autoValueText, parseAutoValue, stairsOf } from '../lib/automation';
+import { autoValueText, parseAutoValue, cyclesOf, stairsOf } from '../lib/automation';
 import { addPoint, deletePoints, dragTension, hitEnv, movePoints, pointsInBox, setShape, type EnvHit } from '../lib/envEdit';
 import { autoById } from '../state/store';
 import { openPattern } from '../state/pattern';
@@ -891,7 +891,7 @@ export function Playlist() {
     track(ev => {
       const k = dragTension(k0, ev.clientY - sy, A0, B0, ev.ctrlKey || ev.metaKey);
       g.update([putEnv(a, pts0.map((q, j) => (j === i ? withTension(q, k) : q)))]);
-      say(B0.shape === 'stairs' ? tl('a.pl.steps', { n: stairsOf(k) }) : tl('a.pl.bend') + ' · ' + Math.round(k * 100) + '%');
+      say(B0.shape === 'stairs' ? tl('a.pl.steps', { n: stairsOf(k) }) : B0.shape === 'pulse' || B0.shape === 'wave' ? tl('a.pl.cycles', { n: cyclesOf(k) }) : tl('a.pl.bend') + ' · ' + Math.round(k * 100) + '%');
     }, () => g.end(), 'ns-resize');
   }
   /** Adds a point at the press and keeps it under the pointer until release (FL's right-click). */
@@ -923,7 +923,8 @@ export function Playlist() {
     const a = autoById(c.ref); if (!a || !a.points[i]) return;
     const sel = U.autoSel?.clip === c.id && U.autoSel.idx.includes(i) ? [...U.autoSel.idx] : [i];
     const segs = sel.filter(j => j > 0), q = a.points[i];
-    const shapes: [CurveShape, string][] = [['curve', 'a.pl.shape.curve'], ['double', 'a.pl.shape.double'], ['hold', 'a.pl.shape.hold'], ['stairs', 'a.pl.shape.stairs']];
+    const shapes: [CurveShape, string][] = [['curve', 'a.pl.shape.curve'], ['double', 'a.pl.shape.double'], ['hold', 'a.pl.shape.hold'], ['stairs', 'a.pl.shape.stairs'],
+      ['pulse', 'a.pl.shape.pulse'], ['wave', 'a.pl.shape.wave'], ['halfSine', 'a.pl.shape.halfSine']];
     const shapeOf = (j: number) => a.points[j].shape ?? 'curve';
     const items: MenuItem[] = [
       { t: 'title', label: valText(a, q.v) + ' · ' + fmtPos(c.start + q.t - c.offset) + (sel.length > 1 ? ' · ×' + sel.length : '') },

@@ -283,7 +283,7 @@ pub struct Derived {
 }
 
 /// Maps the user parameters to the decay targets per band (also used by tests and the tail estimate).
-pub fn derive(v: &[f32; 12]) -> Derived {
+pub fn derive(v: &[f32; crate::processor::MAX_PARAMS]) -> Derived {
     let space = (v[idx::SPACE].round().max(0.0) as usize).min(SPACES.len() - 1);
     let sp = SPACES[space];
     let t_mid = v[idx::SIZE].clamp(0.2, MAX_DECAY);
@@ -309,7 +309,7 @@ pub fn derive(v: &[f32; 12]) -> Derived {
 /// How long the effect keeps sounding after its input goes silent (s): down to −140 dB
 /// (2.33 × the longest band RT60, rounded up) plus pre-delay, early reflections, diffusers
 /// and the ducking release.
-pub fn tail_seconds(v: &[f32; 12]) -> f32 {
+pub fn tail_seconds(v: &[f32; crate::processor::MAX_PARAMS]) -> f32 {
     let d = derive(v);
     let sp = SPACES[d.space];
     v[idx::PRE].clamp(0.0, MAX_PRE_MS) / 1000.0
@@ -320,7 +320,7 @@ pub fn tail_seconds(v: &[f32; 12]) -> f32 {
 
 /// The RT60 the network is designed to have at frequency `f` (s): the mean over lines of
 /// −3·L / log10|H_line(f)|. Used by the tests (measured vs designed) and usable by a UI curve.
-pub fn design_rt60(v: &[f32; 12], f: f32, sr: f32) -> f32 {
+pub fn design_rt60(v: &[f32; crate::processor::MAX_PARAMS], f: f32, sr: f32) -> f32 {
     let d = derive(v);
     let sp = SPACES[d.space];
     let wl = (std::f32::consts::PI * d.x_low / sr).tan();
@@ -351,7 +351,7 @@ fn wet_norm(t_mid: f32) -> f32 {
 
 pub struct ReverbV2 {
     sr: f32,
-    v: [f32; 12],
+    v: [f32; crate::processor::MAX_PARAMS],
     have_params: bool,
     // input
     hp: [Biquad; 2],
@@ -400,7 +400,7 @@ pub struct ReverbV2 {
 
 impl Default for ReverbV2 {
     fn default() -> Self {
-        let mut v = [0f32; 12];
+        let mut v = [0f32; crate::processor::MAX_PARAMS];
         v[idx::SIZE] = 1.0;
         v[idx::PRE] = 25.0;
         v[idx::LO] = 300.0;

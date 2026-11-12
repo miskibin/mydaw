@@ -20,7 +20,7 @@ pub mod singer;
 
 pub use model::*;
 pub use ops::{Dirty, Op, OpError};
-pub use processor::{BandParams, ParamBlock, ProcessCtx, Processor};
+pub use processor::{BandParams, FxData, ParamBlock, ProcessCtx, Processor, MAX_PARAMS};
 pub mod analysis;
 pub mod denoise;
 pub mod dsp;

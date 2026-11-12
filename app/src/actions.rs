@@ -28,7 +28,7 @@ fn opt_f64(a: &Value, k: &str) -> Option<f64> {
 }
 
 pub fn parse_kind(s: &str) -> R<FxKind> {
-    serde_json::from_value(json!(s)).map_err(|_| format!("unknown effect type `{s}` (eq, comp, sat, delay, reverb, limit)"))
+    serde_json::from_value(json!(s)).map_err(|_| format!("unknown effect type `{s}` (eq, comp, sat, delay, half, warp, reverb, limit, fet, deess, tune, denoise, voice, rider)"))
 }
 
 pub fn add_fx(app: &App, insert_id: u64, kind: FxKind, preset: Option<usize>, index: Option<usize>) -> R<(u64, u64)> {
@@ -90,6 +90,7 @@ pub fn vst3_add(app: &App, insert_id: u64, path: &str, cid: &str, index: Option<
         params: Default::default(),
         bands: None,
         plugin: Some(PluginRef { format: "vst3".into(), path: path.into(), cid: cid.into(), name, vendor, state: None }),
+        maps: None,
     };
     let rev = app.engine.apply(&[Op::PutFx { insert_id, fx, index }], false, None).map_err(|e| e.to_string())?;
     if let Some(err) = app.engine.state().fx_errors.get(&id) {

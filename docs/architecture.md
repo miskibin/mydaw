@@ -178,7 +178,8 @@ the audio thread drains with the command ring. Offline renders may run the inser
 worker threads (`Engine::set_render_workers`), bit-identical to one thread.
 
 Effect types: `eq` (7 `bands`), `comp`, `sat` (character saturator, see
-`docs/saturator.md`), `delay`, `reverb`, `limit`,
+`docs/saturator.md`), `delay` (echo with a processing loop, `docs/delay.md`), `half`, `warp`
+(time and volume maps, `maps: {time, vol}` slots, `docs/warp.md`), `reverb`, `limit`,
 `vst3` (`plugin: {format,path,cid,name,vendor,state}`). Parameter ids, ranges
 and presets come from `fx_catalog` — the UI must not hard-code them.
 
@@ -312,6 +313,8 @@ f64 patBeat         // beats into the pattern the loop preview plays; −1 = sto
 | `tune` | `[0]` detected input Hz (0 = unvoiced), `[1]` target note Hz, `[2]` output Hz, `[3]` confidence 0..1, `[4]` input offset from target in cents, `[5]` correction applied in cents |
 | `voice` | `[0]` detected input Hz (0 = unvoiced), `[1]` output Hz, `[2]` confidence 0..1, `[3]` pitch shift applied in semitones. Same latency as `tune`, compensated by PDC; an effect's dry/wet (`fx.mix`) delays its dry path by the effect's latency, so blends line up |
 | `half` | `[0]` position in the loop window 0..1, `[1]` 1 = slowing down (0 = stopped, or passing the input through until the first window after a playhead jump), `[2]`/`[3]` gains of read heads A/B (crossfade), `[4]` speed divisor (1.5 / 2 / 4), `[5]` window in beats, `[6]` crossfade ms (negative = before the window start, Percussive/FX), `[7]`/`[8]` band edges Hz (0 = that side not split). Zero latency; follows the song and the pattern loop preview (`ProcessCtx` carries the preview's beat) |
+| `delay` | see `docs/delay.md`: `[0]`/`[1]` read heads L/R ms, `[2]` loop dBFS, `[3]` drive reduction dB, `[4]` LFO, `[5]` model, `[6]` wet dBFS, `[7]` set time ms. Zero latency |
+| `warp` | see `docs/warp.md`: `[0]` bar position (−1 stopped), `[1]`/`[2]` playing slots, `[3]`/`[4]` queued slots, `[5]` offset beats, `[6]` speed, `[7]` gain, `[9]` hold state, `[10]` buffered s. 2 samples latency, compensated by PDC; maps arrive through `Processor::swap_data` (`Cmd::FxData`) |
 
 ## Take lanes and comping
 

@@ -402,7 +402,7 @@ export function stepPreset(fxId: Id, d: number) {
 }
 
 // ---------- windows ----------
-const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700 };
+const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 520, tune: 800, fet: 700, deess: 680, denoise: 640, voice: 700, delay: 760, warp: 820 };
 /** Open (or bring to front) an effect window. The newest/most recently focused window is always on top. */
 /** Playlist to the front: effect windows go behind it (they keep their place and state). */
 export function playlistFront() { if ((U.plugs.length || U.rackWin || U.rollWin) && !U.plugsHidden) setU('plugsHidden', true); }

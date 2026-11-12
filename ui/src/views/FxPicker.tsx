@@ -28,6 +28,7 @@ const DESC: Record<BuiltinKind, TranslationKey> = {
   sat: 'c.picker.desc.sat',
   delay: 'c.picker.desc.delay',
   half: 'c.picker.desc.half',
+  warp: 'c.picker.desc.warp',
   reverb: 'c.picker.desc.reverb',
   limit: 'c.picker.desc.limit',
 };
@@ -36,7 +37,7 @@ const DESC: Record<BuiltinKind, TranslationKey> = {
 const KW: Record<BuiltinKind, TranslationKey> = {
   denoise: 'c.picker.kw.denoise', tune: 'c.picker.kw.tune', voice: 'c.picker.kw.voice',
   eq: 'c.picker.kw.eq', deess: 'c.picker.kw.deess', rider: 'c.picker.kw.rider', comp: 'c.picker.kw.comp',
-  fet: 'c.picker.kw.fet', sat: 'c.picker.kw.sat', delay: 'c.picker.kw.delay', half: 'c.picker.kw.half',
+  fet: 'c.picker.kw.fet', sat: 'c.picker.kw.sat', delay: 'c.picker.kw.delay', half: 'c.picker.kw.half', warp: 'c.picker.kw.warp',
   reverb: 'c.picker.kw.reverb', limit: 'c.picker.kw.limit',
 };
 
@@ -49,7 +50,7 @@ const CATS: Cat[] = [
   { id: 'repair', label: 'c.picker.cat.repair', types: ['denoise', 'deess'] },
   { id: 'dyn', label: 'c.picker.cat.dyn', types: ['rider', 'comp', 'fet', 'limit'] },
   { id: 'tone', label: 'c.picker.cat.tone', types: ['eq', 'sat'] },
-  { id: 'space', label: 'c.picker.cat.space', types: ['delay', 'half', 'reverb'] },
+  { id: 'space', label: 'c.picker.cat.space', types: ['delay', 'half', 'warp', 'reverb'] },
   { id: 'vst', label: 'c.picker.cat.vst' },
   { id: 'tools', label: 'c.picker.cat.tools' },
 ];

@@ -126,6 +126,8 @@ export function readTarget(p: Project, t: AutoTarget): number | null {
 const bend = (x: number, s: number) => (Math.abs(s) < 1e-6 ? x : Math.expm1(s * x) / Math.expm1(s));
 /** Steps of a `stairs` segment for `tension` −1..1: 2..16 (model.rs `stairs_of`). */
 export const stairsOf = (tension = 0) => 2 + Math.round((Math.min(1, Math.max(-1, tension)) + 1) / 2 * 14);
+/** Cycles of a `pulse` / `wave` segment for `tension` −1..1: 1..16 (model.rs `cycles_of`). */
+export const cyclesOf = (tension = 0) => 1 + Math.round((Math.min(1, Math.max(-1, tension)) + 1) / 2 * 15);
 /**
  * Progress 0..1 along a segment of `shape` and `tension` at `f` (0..1 of its time): exactly the
  * engine's `curve_at` (model.rs), both checked against crates/engine/tests/fixtures/curves.json.
@@ -138,6 +140,9 @@ export function curveAt(shape: CurveShape | undefined, tension: number | undefin
     case 'double': { const s = 4 + 6 * k; return f < 0.5 ? 0.5 * bend(2 * f, s) : 1 - 0.5 * bend(2 - 2 * f, s); }
     case 'hold': return 0;
     case 'stairs': { const n = stairsOf(k); return Math.min(1, Math.floor(f * n) / (n - 1)); }
+    case 'pulse': { if (f >= 1) return 1; const x = f * cyclesOf(k); return x - Math.floor(x) < 0.5 ? 1 : 0; }
+    case 'wave': return 0.5 - 0.5 * Math.cos(Math.PI * (2 * cyclesOf(k) - 1) * f);
+    case 'halfSine': { const e = (k + 1) / 2, a = f * Math.PI / 2; return e * Math.sin(a) + (1 - e) * (1 - Math.cos(a)); }
   }
 }
 

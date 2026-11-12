@@ -1,4 +1,4 @@
-// Saturator (live transfer trace, added harmonics, waveform) and delay (tap diagram + scope).
+// Saturator: live transfer trace, added harmonics, waveform. (The delay's view is in delay.ts.)
 import type { Fx } from '../../api/types';
 import { SCOPE_LEN, type FxFrame } from '../../api/telemetry';
 import { clamp, dbg } from '../../lib/format';
@@ -7,7 +7,7 @@ import { satDriveDb } from '../../lib/saturator';
 import { Layer } from '../../ui/frameLoop';
 import { t as tr } from '../../lib/i18n';
 import { FXMETA } from '../../ui/icons';
-import { freqGrid, MONO10, MONO9, rgba, scope, specCurve, T, TeleGate, type Viz } from './common';
+import { freqGrid, MONO9, rgba, specCurve, T, TeleGate, type Viz } from './common';
 
 const SAT_STYLES = ['Taśma', 'Konsola', 'Transformator', 'Trioda', 'Pentoda'];
 /** Longest in → out delay searched when lining the two scopes up (the oversampler's latency). */
@@ -149,39 +149,5 @@ export class SatViz implements Viz {
     g.fillText(tr('c.viz.addedHarmonics') + ' ' + (this.live && !fx.bypass ? Math.round(this.amount * 100) + ' %' : '—'), x1 + w - 4, 30);
     g.textAlign = 'left'; g.fillStyle = T.vizLabel;
     g.fillText(tr('c.viz.harmonics6s'), x1 + 5, scY + 11); g.textAlign = 'right'; g.fillText('25 %', x1 + w - 4, scY + scH / 2 - 3); g.textAlign = 'left';
-  }
-}
-
-export class DelayViz implements Viz {
-  cursor = 'default';
-  private layer = new Layer();
-  private gate = new TeleGate();
-  private sOut = new Float32Array(SCOPE_LEN);
-  private lvl = 0;
-  update(_fx: Fx, a: FxFrame | null) {
-    if (!this.gate.fresh(a, 2)) return false;
-    this.sOut.set(a!.scopeOut); this.lvl = a!.inPeak; return true;
-  }
-  draw(g: CanvasRenderingContext2D, W: number, H: number, fx: Fx) {
-    const p = fx.params, maxT = 2000, base = H - 16;
-    g.fillStyle = T.viz; g.fillRect(0, 0, W, H);
-    g.drawImage(this.layer.get(W, H, 'dly', c => {
-      c.font = MONO10; c.lineWidth = 1;
-      for (let t = 0; t <= maxT; t += 250) {
-        const x = Math.round(t / maxT * W) + 0.5;
-        c.strokeStyle = T.vizGrid; c.beginPath(); c.moveTo(x, 0); c.lineTo(x, base); c.stroke();
-        if (t % 500 === 0) { c.fillStyle = T.vizLabel; c.fillText(t + ' ms', x + 3, H - 4); }
-      }
-      c.fillStyle = T.ink; c.fillRect(1, base - base * 0.85, 4, base * 0.85);
-    }) as CanvasImageSource, 0, 0, W, H);
-    scope(g, this.sOut, 0, 0, W, base * 0.55, rgba(T.post, 0.35));
-    const a0 = fx.bypass ? 0.25 : 0.35 + 0.65 * Math.min(1, this.lvl * 3);
-    g.fillStyle = rgba(T.blue, +a0.toFixed(2));
-    for (let k = 1; k < 24; k++) {
-      const t = p.time * k; if (t > maxT) break;
-      const a = p.mix / 100 * Math.pow(p.fb / 100, k - 1); if (a < 0.01) break;
-      const x = t / maxT * W, bh = a * base * 0.85;
-      g.fillRect(x - 2, base - bh, 4, bh);
-    }
   }
 }

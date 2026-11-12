@@ -1,6 +1,7 @@
 // Preset resolution and matching against the catalog from `fx_catalog`.
 import type { AnyBuiltinKind, Catalog, EqBand, Fx, FxKind, Id, ParamDef, Preset } from '../api/types';
 import { t, tName } from './i18n';
+import { beatsLabel, snapBeats } from './beatDiv';
 
 export interface ResolvedPreset { params: Record<string, number>; bands?: EqBand[] }
 
@@ -14,12 +15,11 @@ export function defaultParams(cat: Catalog | null | undefined, type: FxKind): Re
   return Object.fromEntries(paramDefs(cat, type).map(d => [d.id, d.def]));
 }
 
-/** Same as catalog.rs `load_preset`: defaults, then overrides, then tempo-synced time, then bands. */
-export function resolvePreset(cat: Catalog, type: FxKind, i: number, bpm: number, curBands?: EqBand[]): ResolvedPreset | null {
+/** Same as catalog.rs `load_preset`: defaults, then overrides, then bands. `_bpm` is unused (synced delays store beats). */
+export function resolvePreset(cat: Catalog, type: FxKind, i: number, _bpm: number, curBands?: EqBand[]): ResolvedPreset | null {
   const pr = presetList(cat, type)[i];
   if (!pr) return null;
   const params = { ...defaultParams(cat, type), ...pr.params };
-  if (pr.beats != null) params.time = Math.min(1500, Math.max(10, pr.beats * 60000 / bpm));
   const bands = pr.bands ? pr.bands.map(b => ({ ...b })) : curBands?.map(b => ({ ...b }));
   return { params, bands };
 }
@@ -74,6 +74,8 @@ export function defaultBands(): EqBand[] {
 export function newFx(cat: Catalog, id: Id, type: AnyBuiltinKind, bpm: number): Fx {
   let fx: Fx = { id, type, bypass: false, preset: null, params: defaultParams(cat, type) };
   if (type === 'eq') fx.bands = defaultBands();
+  // a deep copy (the catalog may be a reactive store proxy, which structuredClone refuses)
+  if (type === 'warp' && cat.warp) fx.maps = JSON.parse(JSON.stringify(cat.warp));
   if (presetList(cat, type).length) fx = loadPreset(cat, fx, 0, bpm);
   return fx;
 }
@@ -81,8 +83,14 @@ export function newFx(cat: Catalog, id: Id, type: AnyBuiltinKind, bpm: number): 
 // ---- parameter mapping (knob travel) ----
 export const pNorm = (p: ParamDef, v: number) => p.log ? Math.log(v / p.min) / Math.log(p.max / p.min) : (v - p.min) / (p.max - p.min);
 export const pVal = (p: ParamDef, t: number) => p.log ? p.min * Math.pow(p.max / p.min, t) : p.min + t * (p.max - p.min);
+/** A knob position → value: like `pVal`, but tempo-synced times snap to note values (`lib/beatDiv`). */
+export const knobVal = (p: ParamDef, t: number) => (p.unit === 'beat' ? Math.min(p.max, Math.max(p.min, snapBeats(pVal(p, t)))) : pVal(p, t));
 export function pFmt(p: ParamDef, v: number): string {
   const u = p.unit;
+  if (u === 'beat') return beatsLabel(v);
+  if (u === 'bit') return v >= 24 ? 'Off' : Math.round(v) + ' bit';
+  // the delay's sample-rate reduction is off at the top of its range (dsp::delay::SRATE_OFF)
+  if (p.id === 'srate' && v >= 47000) return 'Off';
   if (u === 'Hz') return v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 1 : 2) + ' kHz' : Math.round(v) + ' Hz';
   if (u === 'ms') return (v < 10 ? v.toFixed(1) : Math.round(v)) + ' ms';
   if (u === 's') return v.toFixed(2) + ' s';
