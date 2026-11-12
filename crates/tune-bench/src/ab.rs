@@ -32,6 +32,7 @@ fn snapped(take: &Audio, est: Option<&dyn F0Estimator>) -> Audio {
             drift: 0.0,
             formant: 0.0,
             gain: 0.0,
+            speed: None,
         })
         .collect();
     wave_engine::tune_render::render(
@@ -107,6 +108,7 @@ fn fragments(
                     drift: 0.0,
                     formant: 0.0,
                     gain: 0.0,
+                    speed: None,
                 })
                 .collect();
             let off = wave_engine::tune_render::render(

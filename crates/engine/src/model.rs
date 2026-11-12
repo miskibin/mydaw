@@ -875,10 +875,11 @@ impl ClipTune {
 
 /// Parameters of Tune to Reference. The target pitch is derived from them
 /// deterministically (`crate::reference`), so only these are stored.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefTune {
-    /// Audio source holding the reference vocal (a cappella).
+    /// Audio source holding the reference vocal (a cappella). Unused (0) with a `melody`.
+    #[serde(default)]
     pub source: Id,
     /// 0..1: how far the pitch moves from the sung one toward the target.
     pub correction: f32,
@@ -894,6 +895,37 @@ pub struct RefTune {
     pub key: u32,
     #[serde(default)]
     pub scale: u32,
+    /// Retune speed in ms (time to reach the target note, see `NoteEdit::speed`) for notes
+    /// without their own; `None` = immediate (smoothed over 35 ms only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f32>,
+    /// The reference is a melody from the project (piano roll notes) instead of a recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub melody: Option<Melody>,
+}
+
+/// A melody used as the reference: a copy of piano roll notes, placed on the take's own time
+/// axis (seconds of its source) where the playlist played them over the clip. A copy, so a
+/// later change in the piano roll never changes the vocal by itself (`melody_reference`
+/// collects them again on request).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Melody {
+    /// The channel the notes were taken from.
+    pub channel: Id,
+    /// Only notes within these seconds of the source (a piano roll selection); `None` = all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<[f64; 2]>,
+    pub notes: Vec<MelodyNote>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MelodyNote {
+    /// Seconds of the take's source.
+    pub start: f64,
+    pub end: f64,
+    /// MIDI key as written (the octave to sing it in is chosen at render time).
+    pub key: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -913,6 +945,11 @@ pub struct NoteEdit {
     /// Level change in dB.
     #[serde(default)]
     pub gain: f32,
+    /// Retune speed in ms: how long the pitch takes to reach the corrected note (95 %) when it
+    /// starts or the correction changes — 0 = instant (the hard "robot" step). `None` = the
+    /// reference's speed, else immediate (as before speeds existed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<f32>,
 }
 
 /// Default crossfade at comp region boundaries, seconds.

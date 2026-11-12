@@ -66,8 +66,11 @@ FILES
   save [--path FILE] | open <FILE>
 
 PITCH  (Tune to Reference: pull a vocal take onto another performance of the same melody)
-  tune-ref --clip ID --reference SOURCE [--correction 0..100 --vibrato 0..100 --influence 0..100
-           --octave auto|-12|0|12 --key 0..11 --scale 0..4]     switch a clip to it (--off: manual)
+  tune-ref --clip ID --reference SOURCE | --melody CHANNEL [--correction 0..100 --vibrato 0..100
+           --influence 0..100 --speed 0..1000 --octave auto|-24..24 --key 0..11 --scale 0..4]
+                                           switch a clip to it (--off: manual); --melody: the notes that
+                                           channel plays over the clip in the playlist (taken again each time)
+  melody-channels --clip ID                channels playing notes over the clip, best fit to the singing first
   pitch-target --clip ID [--full]          the computed target: score, octave, notes (--full: curves)
   f0-model                                 pitch detector in use; RMVPE model install state
   tune-file --take u.wav --reference r.wav --out o.wav [--json target.json]
@@ -389,10 +392,13 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
         "pitch-target" => send(a, "pitch_target", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "full": a.has("full")})),
         "tune-ref" => {
             let mut args = json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64, "off": a.has("off")});
-            for k in ["reference", "correction", "vibrato", "influence", "key", "scale"] {
+            for k in ["reference", "correction", "vibrato", "influence", "key", "scale", "speed"] {
                 if let Some(v) = a.num(k).map_err(u)? {
                     args[k] = json!(v);
                 }
+            }
+            if let Some(v) = a.num("melody").map_err(u)? {
+                args["melodyChannel"] = json!(v);
             }
             match a.get("octave") {
                 Some("auto") => args["octave"] = json!("auto"),
@@ -401,6 +407,7 @@ fn run(cmd: &str, a: &Args) -> Result<Value, Fail> {
             }
             send(a, "tune_ref", args)
         }
+        "melody-channels" => send(a, "melody_channels", json!({"clipId": a.num("clip").map_err(u)?.ok_or_else(|| u("missing --clip".into()))? as u64})),
         "f0-model" => send(a, "f0_model", json!({})),
         "tune-file" => tune_file(a),
         other => Err(u(format!("unknown command `{other}`"))),
@@ -433,6 +440,8 @@ fn tune_file(a: &Args) -> Result<Value, Fail> {
         octave,
         key: a.num("key").map_err(u)?.map(|k| k as u32).unwrap_or(0).min(11),
         scale: a.num("scale").map_err(u)?.map(|k| k as u32).unwrap_or(0).min(4),
+        speed: None,
+        melody: None,
     };
     let model = if a.has("yin") {
         None

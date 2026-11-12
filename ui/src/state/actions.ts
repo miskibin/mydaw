@@ -82,6 +82,14 @@ export function seekSong(b: number) {
   if (U.patPlaying) { setU('start', from); void play(from); return; }
   seek(from);
 }
+/** Play / stop the song from the start marker, whatever PAT / SONG says (the pitch editor: a vocal is
+ *  heard in its song, never alone in a pattern loop). */
+export function toggleSong() {
+  if (U.playing) return stop();
+  if (U.patPlaying) void stopPreview();
+  if (patMode()) setPatMode(false);
+  return play(U.start);
+}
 export function seek(b: number) {
   setU('start', Math.max(0, b));
   if (U.playing) void be().transportPlay(U.start);
@@ -455,6 +463,17 @@ const PLUG_W: Partial<Record<string, number>> = { eq: 780, reverb: 640, vst3: 52
 export function playlistFront() { if ((U.plugs.length || U.rackWin || U.rollWin) && !U.plugsHidden) setU('plugsHidden', true); }
 export function showPlugs() { setU('plugsHidden', false); }
 
+/** The real-time Pitch Correct effect onto insert `insId` (key and scale from the caller, e.g. the pitch editor's). */
+export function addPitchCorrect(insId: Id, ks?: { key: number; scale: number }) {
+  if (!S.catalog || insId === 0) return;
+  const f = newFx(S.catalog, allocId(), 'tune', S.project.bpm);
+  if (ks) f.params = { ...f.params, key: ks.key, scale: ks.scale };
+  commit([{ op: 'putFx', insertId: insId, fx: f }], t('d.act.op.addfx'));
+  setU({ mixSel: insId, fxSel: f.id });
+  openPlug(f.id);
+  const m = S.project.inserts.find(x => x.id === insId);
+  say(t('d.pc.added', { name: m ? insName(m) : '' }));
+}
 export function openPlug(fxId: Id) {
   if (U.plugsHidden) setU('plugsHidden', false);
   const ex = U.plugs.find(p => p.fxId === fxId);
@@ -489,10 +508,19 @@ export async function trimClip(id: Id) {
 }
 export function closeEditor() { if (U.previewing) void be().previewStop(); setU('editor', null); }
 /** The note-based pitch editor of an audio clip. */
-export function openPitchEditor(id: Id) {
+export function openPitchEditor(id: Id, melody?: { channel: Id; span?: [number, number] | null }) {
   const c = S.project.clips.find(x => x.id === id); if (!c || c.kind !== 'audio') return;
-  const w = Math.min(1100, window.innerWidth - 40), h = Math.min(560, window.innerHeight - 90);
-  setU({ pitchEd: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: Math.max(44, (window.innerHeight - h) / 2 - 20), w, h }, sel: [id] });
+  // already open on this clip: keep its place, only pass the melody on
+  const z = U.zTop + 1;
+  if (U.pitchEd?.clipId === id) { setU({ zTop: z }); setU('pitchEd', ed => ed && { ...ed, z, ...(melody ? { melody } : {}) }); return; }
+  const w = Math.min(1180, window.innerWidth - 40), h = Math.min(600, window.innerHeight - 90);
+  setU({ zTop: z, pitchEd: { clipId: id, x: Math.max(20, (window.innerWidth - w) / 2), y: Math.max(44, (window.innerHeight - h) / 2 - 20), w, h, z, melody }, sel: [id] });
+}
+/** The pitch editor over the plugin / pattern windows (it is used last). */
+export function pitchFront() {
+  if (!U.pitchEd || (U.pitchEd.z ?? 0) === U.zTop) return;
+  const z = U.zTop + 1;
+  setU('zTop', z); setU('pitchEd', ed => ed && { ...ed, z });
 }
 export const closePitchEditor = () => setU('pitchEd', null);
 

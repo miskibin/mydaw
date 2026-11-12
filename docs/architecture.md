@@ -264,6 +264,8 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `source_peaks` | `{id, norm?, rev?}` | `ArrayBuffer` of f32 `[min,max]` pairs, 100 per second of audio |
 | `pitch_analyze` | `{clipId}` | `{rate, curve: (midi\|null)[], levels: number[], confidence: number[], notes: [{start,end,pitch,level}], backend: "rmvpe"\|"yin"}` — pitch every 1/rate s (null = unvoiced: breath, sibilant, silence); times in seconds of the source |
 | `pitch_target` | `{clipId, reference?: RefTune}` | `PitchTarget` (below) — Tune to Reference for the clip, with `reference` or the clip's own `tune.reference` (preview before applying) |
+| `melody_channels` | `{clipId}` | `[{channel, name, notes, fit}]` — channels whose notes the playlist plays over the clip, best `fit` (0..1, share of the sung frames within a semitone of a sounding note) first |
+| `melody_reference` | `{clipId, channel, span?: [s, s]}` | `{melody: Melody, fit}` — those notes as a melody reference (a copy, seconds of the source; `span` = only notes overlapping it) |
 | `f0_model_status` | – | `{id, name, bytes, installed, backend, licenseNote, licenseUrl, path, error}` |
 | `f0_model_install` | – | – ; downloads RMVPE, verifies size and SHA-256, activates it; progress as event `model-progress {id,done,total,error?}` |
 | `music_analyze` | `{clipId?, excludeFx?}` | `{tempo: {bpm, confidence, candidates:[{bpm,score}], firstBeat}\|null, key: {root, minor, confidence, candidates:[{root,minor,score}], chroma:number[12], tuningCents}\|null}` — tempo and key of a clip, or of the project's active audio clips (excluding tracks routed to `excludeFx`'s insert) |
@@ -275,7 +277,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `comp_audition` | `{compId, takeId?}` | – ; plays one whole take instead of the comp (`null` = the comp). Live only: not saved, not undone, ignored by renders |
 | `note_audition` | `{ch, key?, vel?, pattern?}` | – ; plays one note of a channel now (step clicks, piano-roll keys). `pattern`: the edited pattern, so a track-routed channel is heard through that pattern's track. Not an edit |
 | `pattern_play` | `{pattern}` (`null` stops) | – ; loops one pattern on its own. Starting it stops the song, starting the song stops it (FL's PAT / SONG). Position in telemetry `patBeat` |
-| `preview_clip` / `preview_file` / `preview_stop` | `{clipId}` / `{path}` / – | – |
+| `preview_clip` / `preview_file` / `preview_stop` | `{clipId, from?}` / `{path}` / – | – — `from` (seconds of the source): the take alone with its pitch edits at the source's speed from there to the clip's end (the pitch editor's Solo); rejects when nothing is left |
 | `audio_hosts` | – | `[{id, name}]` (ids like `"wasapi"`, `"asio"`, `"alsa"`) |
 | `audio_devices` | `{host}` | `{outputs: string[], inputs: string[]}` |
 | `audio_get_config` / `audio_set_config` | `– / AudioConfig` | `AudioStatus` (a config without `recOffsetMs` keeps the saved one; changing only `recOffsetMs` does not restart the device) |
@@ -557,12 +559,26 @@ empty `Dirty`). Old files without `notebook` open with no pages (`#[serde(defaul
 
 ## Pitch edits on audio clips
 
-`clip.tune = { notes: [{start, end, shift, drift, formant, gain}], pencil: [[sec, midi], …] }`
-(seconds into the source; `shift`/`formant` in cents; `drift` 0..1 flattens pitch
+`clip.tune = { notes: [{start, end, shift, drift, formant, gain, speed?}], pencil: [[sec, midi], …] }`
+(seconds into the source; `shift`/`formant` in cents; `speed` ms, see below; `drift` 0..1 flattens pitch
 movement inside the note toward its centre; `gain` dB). Start from
 `pitch_analyze` notes, edit, send with `putClips`. Rendering is offline and
 latency-free; during a gesture the previous render keeps playing and the new
 one is made at `end_gesture`.
+
+**Retune speed.** The correction (edited − sung pitch) follows its target with a one-pole
+lag that reaches 95 % of a change in `speed` ms (Auto-Tune's Retune Speed): a note's own
+`speed`, else `tune.reference.speed`, else immediate. After an unvoiced gap it starts from no
+correction, so the singer's attack is heard and pulled into tune. Below 5 ms (hard tune) the
+render smooths the change over ±5 ms instead of ±17.5 ms, keeping the steps. A tune without
+speeds renders exactly as before they existed. The editor's Correct macro writes Strength
+(`shift` toward the scale note), Speed and Flatten (`drift`) onto the notes; its presets
+(Natural 80 %/120 ms/20 %, Pop 100/50/50, Tight 100/15/80, Robot 100/0/100) are UI only.
+
+**Playback in the editor.** The ruler is the Playlist's: a click sets the start marker (playback
+jumps there), a drag sets the project loop (`setLoop`, one undo step), a double-click removes it;
+Space and Play run the song from the marker in SONG mode, so the vocal is heard in its mix.
+Solo is `preview_clip` with `from`.
 
 ### Tune to Reference (`crates/engine/src/reference.rs`)
 
@@ -603,6 +619,22 @@ type PitchTarget = { rate: number; start: number;            // first analysis f
   alignmentConfidence: number[]; refTime: number[];          // seconds into the reference
   octave: number; notes: Note[]; score: number; reason: string | null };  // reason set = refused
 ```
+
+### Melody as the reference (`crates/engine/src/melody.rs`)
+
+`reference.melody = {channel, span?, notes: [{start, end, key}]}` (source 0, influence 1): a
+copy of the notes `channel` plays over the clip in the playlist (pattern repeats, swing and
+clip edges as the sequencer plays them; muted pattern clips left out), in seconds of the take's
+source — so it moves with the clip, and a later piano roll edit changes nothing until the
+editor's *Update* (shown when `melody_reference` differs from the copy). No alignment is guessed:
+`melody::alignment` builds an `Alignment` for `reference::target` directly — per sung note
+(the editor's segmentation), stretches between played-note edges take the sounding note nearest
+the voice (chords), slivers under 150 ms take their neighbour's (singing early or late keeps its
+own timing), a played change inside one sung note moves to the take's steepest pitch change
+within 150 ms (melisma); full confidence where a note sounds, none elsewhere (ad-libs stay as
+sung); the octave is the multiple of 12 nearest the singing. The Piano roll's *Vocal reference*
+button opens the pitch editor of a vocal the pattern plays over with the selected notes (`span`
+= the source seconds they cover) or all of the channel's.
 
 The RMVPE model is not shipped: `f0_model_install` downloads it (URL,
 size, SHA-256 and licence link are constants in `crates/rmvpe`) to

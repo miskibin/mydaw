@@ -835,7 +835,14 @@ impl Engine {
     /// cached, so committing the same reference afterwards only renders.
     pub fn pitch_target(&self, clip_id: Id, params: Option<RefTune>) -> Result<Arc<crate::reference::PitchTarget>, EngineError> {
         let clip = self.audio_clip(clip_id)?;
-        let p = params.or_else(|| clip.tune.as_ref().and_then(|t| t.reference)).ok_or(EngineError::Msg("the clip has no reference".into()))?;
+        let p = params.or_else(|| clip.tune.as_ref().and_then(|t| t.reference.clone())).ok_or(EngineError::Msg("the clip has no reference".into()))?;
+        if let Some(m) = &p.melody {
+            let region = clip.source_span(self.core.lock().project.bpm);
+            let take = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+            let spans = crate::sources::note_spans(&clip, &take);
+            let al = crate::melody::alignment(&take, region, &spans, &m.notes);
+            return Ok(Arc::new(crate::reference::target(&take, &spans, &al, &p)));
+        }
         let key = {
             let mut c = self.core.lock();
             if !c.project.sources.iter().any(|s| s.id == p.source) {
@@ -863,6 +870,39 @@ impl Engine {
             }
         };
         Ok(Arc::new(crate::sources::target_for(&clip, &take, &al, &p)))
+    }
+
+    /// The notes `channel` plays over an audio clip, as a melody reference (`span`: seconds of
+    /// the source, only notes overlapping it), and how well they fit what is sung (0..1).
+    pub fn melody_reference(&self, clip_id: Id, channel: Id, span: Option<[f64; 2]>) -> Result<(crate::model::Melody, f32), EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let (notes, region) = {
+            let c = self.core.lock();
+            if c.project.channels.iter().all(|ch| ch.id != channel) {
+                return Err(EngineError::Msg("no such channel".into()));
+            }
+            (crate::melody::collect(&c.project, &clip, channel, span), clip.source_span(c.project.bpm))
+        };
+        let take = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        let fit = crate::melody::fit(&take, region, &notes);
+        Ok((crate::model::Melody { channel, span, notes }, fit))
+    }
+
+    /// Channels whose notes play over an audio clip: `(channel, notes, fit 0..1)`, best fit first.
+    pub fn melody_channels(&self, clip_id: Id) -> Result<Vec<(Id, usize, f32)>, EngineError> {
+        let clip = self.audio_clip(clip_id)?;
+        let (sets, region) = {
+            let c = self.core.lock();
+            let sets: Vec<(Id, Vec<MelodyNote>)> = crate::melody::channels_over(&c.project, &clip).into_iter().map(|(id, _)| (id, crate::melody::collect(&c.project, &clip, id, None))).collect();
+            (sets, clip.source_span(c.project.bpm))
+        };
+        if sets.is_empty() {
+            return Ok(vec![]);
+        }
+        let take = self.source_analysis(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?;
+        let mut out: Vec<(Id, usize, f32)> = sets.iter().map(|(id, ns)| (*id, ns.len(), crate::melody::fit(&take, region, ns))).collect();
+        out.sort_by(|a, b| b.2.total_cmp(&a.2).then(b.1.cmp(&a.1)));
+        Ok(out)
     }
 
     /// Uses `est` for pitch analysis from now on (`None` = built-in YIN). Pitch-edited
@@ -1289,26 +1329,35 @@ impl Engine {
         })
     }
 
-    pub fn preview_clip(&self, clip_id: Id) -> Result<(), EngineError> {
+    /// Plays one clip alone on the output. `from` (seconds of the source) starts there and plays
+    /// the take with its pitch edits at the source's own speed (the pitch editor's Solo), to the
+    /// end of the clip's region; without it the whole clip plays as the playlist would.
+    pub fn preview_clip(&self, clip_id: Id, from: Option<f64>) -> Result<(), EngineError> {
         let mut c = self.core.lock();
         let clip = c.project.clips.iter().find(|x| x.id == clip_id).cloned().ok_or(EngineError::Msg("no such clip".into()))?;
         let bpm = c.project.bpm;
         // a time-stretch that is not rendered yet previews the source at its own speed
-        let ready = if clip.needs_stretch() { c.sources.stretch_request(&clip, true, bpm).and_then(Result::ok).filter(|x| x.1 == clip.rendered_rate()) } else { None };
+        let ready = if from.is_none() && clip.needs_stretch() { c.sources.stretch_request(&clip, true, bpm).and_then(Result::ok).filter(|x| x.1 == clip.rendered_rate()) } else { None };
         let (audio, (a, b)) = match ready {
             Some((a, rate)) => {
                 let r = crate::sources::clip_region(&clip, bpm, rate, a.seconds());
                 (a, r)
             }
-            None => (c.sources.variant(clip.source, clip.norm, clip.rev).ok_or(EngineError::Msg("audio not loaded".into()))?, clip.source_span(bpm)),
+            None => (c.sources.clip_source_audio(&clip, false, bpm).ok_or(EngineError::Msg("audio not loaded".into()))?, clip.source_span(bpm)),
         };
         let sr = audio.sr as f64;
+        let end = (b * sr).min(audio.frames as f64);
+        let pos = from.map_or(a, |f| f.clamp(a, b)) * sr;
+        if pos >= end {
+            return Err(EngineError::Msg("nothing to play after that point".into()));
+        }
         let pv = Preview {
-            pos: a * sr,
+            pos,
             start: a * sr,
-            end: (b * sr).min(audio.frames as f64),
+            end,
             gain: 10f32.powf(clip.gain / 20.0),
-            fade_in: clip.fade_in as f64,
+            // a start inside the clip is not its beginning: no fade-in there
+            fade_in: if from.is_some_and(|f| f > a + 1e-3) { 0.0 } else { clip.fade_in as f64 },
             fade_out: clip.fade_out as f64,
             audio,
         };

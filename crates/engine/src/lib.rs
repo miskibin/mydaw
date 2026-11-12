@@ -3,6 +3,7 @@
 pub mod catalog;
 mod clipmix;
 pub mod midi;
+pub mod melody;
 pub mod comp;
 pub mod content;
 pub mod demo;

@@ -9,7 +9,8 @@ export type Tool = 'draw' | 'paint' | 'erase' | 'mute' | 'slice' | 'select';
 
 /** `z`: stacking order — the most recently opened/focused window has the highest. */
 export interface PlugWin { fxId: Id; x: number; y: number; w: number; z: number }
-export interface PitchWin { clipId: Id; x: number; y: number; w: number; h: number }
+/** `melody`: open with this channel's notes as the reference (`span`: seconds of the source; a Piano roll selection). */
+export interface PitchWin { clipId: Id; x: number; y: number; w: number; h: number; z?: number; melody?: { channel: Id; span?: [number, number] | null } }
 export interface EditorWin { clipId: Id; x: number; y: number; w: number; h: number }
 export interface MusicWin { clipId?: Id; fxId?: Id }
 /**

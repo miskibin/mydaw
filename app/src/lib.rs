@@ -210,6 +210,18 @@ async fn pitch_analyze(app: St<'_>, clip_id: u64) -> R<std::sync::Arc<wave_engin
 }
 
 #[tauri::command]
+async fn melody_channels(app: St<'_>, clip_id: u64) -> R<Value> {
+    let e = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::actions::melody_channels(&e, clip_id)).await.map_err(es)?
+}
+
+#[tauri::command]
+async fn melody_reference(app: St<'_>, clip_id: u64, channel: u64, span: Option<[f64; 2]>) -> R<Value> {
+    let e = app.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::actions::melody_reference(&e, clip_id, channel, span)).await.map_err(es)?
+}
+
+#[tauri::command]
 async fn pitch_target(app: St<'_>, clip_id: u64, reference: Option<wave_engine::RefTune>) -> R<std::sync::Arc<wave_engine::reference::PitchTarget>> {
     let e = app.engine.clone();
     tauri::async_runtime::spawn_blocking(move || e.pitch_target(clip_id, reference)).await.map_err(es)?.map_err(es)
@@ -305,8 +317,10 @@ async fn comp_audition(app: St<'_>, comp_id: u64, take_id: Option<u64>) -> R<()>
 }
 
 #[tauri::command]
-async fn preview_clip(app: St<'_>, clip_id: u64) -> R<()> {
-    app.engine.preview_clip(clip_id).map_err(es)
+async fn preview_clip(app: St<'_>, clip_id: u64, from: Option<f64>) -> R<()> {
+    let e = app.engine.clone();
+    // a start inside the clip may render its pitch edits first: off the IPC thread
+    tauri::async_runtime::spawn_blocking(move || e.preview_clip(clip_id, from)).await.map_err(es)?.map_err(es)
 }
 
 #[tauri::command]
@@ -966,7 +980,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state, apply_ops, begin_gesture, end_gesture, undo, redo, fx_catalog,
             transport_play, transport_stop, transport_set, telemetry_subscribe, watch_fx,
-            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, make_unique, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
+            import_audio, source_peaks, clip_peaks, pitch_analyze, pitch_target, melody_channels, melody_reference, f0_model_status, f0_model_install, music_analyze, auto_vocal_plan, bake_rider, trim_clip, make_unique, flatten_comp, comp_audition, preview_clip, preview_file, preview_stop, note_audition, typing_note, pattern_play,
             audio_hosts, audio_devices, audio_get_config, audio_set_config, audio_measure_latency,
             midi_list_devices, midi_select_device, midi_status, midi_set_target,
             library_list, library_install, keys_status, library_files, library_add_folder, library_remove_folder,

@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportProgress, ExportResult, ExportStemsResult, F0ModelStatus, Id, ImportResult, LibFile,
-  KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RecoveredProject, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
+  KeysStatus, LibraryList, LibraryProgress, Melody, MelodyChannel, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RecoveredProject, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -75,7 +75,13 @@ export interface Backend {
   flattenComp(clipId: Id): Promise<{ sourceId: Id }>;
   /** Plays one whole take instead of the comp (null = back to the comp). Live only, not undone. */
   compAudition(compId: Id, takeId: Id | null): Promise<void>;
-  previewClip(clipId: Id): Promise<void>;
+  /** Plays one clip alone. `from` (seconds of the source): from there, the take with its pitch edits at the
+   *  source's own speed, to the end of the clip (the pitch editor's Solo); rejects when nothing is left after it. */
+  previewClip(clipId: Id, from?: number): Promise<void>;
+  /** Channels whose notes play over an audio clip (pattern clips in the playlist), best fit to the singing first. */
+  melodyChannels(clipId: Id): Promise<MelodyChannel[]>;
+  /** The notes `channel` plays over the clip as a melody reference (a copy; `span`: seconds of the source). */
+  melodyReference(clipId: Id, channel: Id, span?: [number, number] | null): Promise<{ melody: Melody; fit: number }>;
   previewFile(path: string): Promise<void>;
   previewStop(): Promise<void>;
   /** Play one note of a channel now (not an edit). `key` MIDI (default: the channel's root), `vel` 0..1, `pattern`: the one being edited (routing). */
@@ -234,7 +240,9 @@ export function tauriBackend(): Backend {
     makeUnique: clipIds => invoke('make_unique', { clipIds }),
     flattenComp: clipId => invoke('flatten_comp', { clipId }),
     compAudition: (compId, takeId) => invoke('comp_audition', { compId, takeId }),
-    previewClip: clipId => invoke('preview_clip', { clipId }),
+    previewClip: (clipId, from) => invoke('preview_clip', { clipId, from: from ?? null }),
+    melodyChannels: clipId => invoke('melody_channels', { clipId }),
+    melodyReference: (clipId, channel, span) => invoke('melody_reference', { clipId, channel, span: span ?? null }),
     previewFile: path => invoke('preview_file', { path }),
     previewStop: () => invoke('preview_stop'),
     typingNote: a => invoke('typing_note', { ch: a.ch, key: a.key, vel: a.vel ?? null, on: a.on }),

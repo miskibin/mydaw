@@ -181,6 +181,20 @@ wave tune-ref --clip 412 --off          # back to manual pitch edits
 wave f0-model                           # which pitch detector runs (RMVPE or YIN) and its install state
 ```
 
+A melody you played in the piano roll can be the reference instead: the notes a
+channel plays over the clip in the playlist (a copy, so changing the piano roll
+later does not change the vocal; `--melody` again takes them again). The take
+keeps its own timing; the octave nearest the voice is used unless `--octave`
+says otherwise; stretches nothing is played under stay as sung.
+
+```sh
+wave melody-channels --clip 412         # [{channel, name, notes, fit}] — fit = share of the singing it matches
+wave tune-ref --clip 412 --melody 1003 --speed 40      # follow the Piano channel, 40 ms to reach each note
+```
+
+`--speed` is the retune speed in ms: how long the voice takes to reach each
+target note (95 %); 0 or absent = at once.
+
 `--correction` (how far toward the target), `--vibrato` (how much of the
 singer's own movement is kept) and `--influence` (100 = the reference's note
 centres, 0 = nearest note of `--key`/`--scale`) are percentages. Manual note

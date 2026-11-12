@@ -990,7 +990,7 @@ pub fn tune_audio(
     let tune = crate::model::ClipTune {
         notes: vec![],
         pencil: vec![],
-        reference: Some(*p),
+        reference: Some(p.clone()),
     };
     let out = crate::tune_render::render(take, &ta, &tune, Some(&t));
     (out, t, ta)
@@ -1015,6 +1015,8 @@ mod tests {
             octave: None,
             key: 0,
             scale: 0,
+            speed: None,
+            melody: None,
         }
     }
 
