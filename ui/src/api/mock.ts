@@ -19,9 +19,9 @@ import { midiToHz, noteAt, scaleMask, simpleTarget, snapNote } from '../lib/pitc
 import { newFx } from '../lib/presets';
 import { synthVocal, vocalAt, vocalPeaks, type VocalSample } from './mockVocal';
 import type {
-  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
+  AudioConfig, AudioStatus, LatencyReport, AnyBuiltinKind, AutoVocalPlan, AutoVocalStyle, Catalog, Clip, ExportResult, ExportStemsResult, F0ModelStatus, Fx, Id, KeysStatus, LibFile, LibraryList, MidiDevice, MidiStatus, MusicAnalysis, Op, OpenResult, PitchAnalysis, PitchTarget, Project, RefTune, SaveResult, Source, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
-import { exportRange, exportSeconds } from '../lib/export';
+import { exportRange, exportSeconds, stemInserts, uniqueFileStems } from '../lib/export';
 import { MockUpdates } from './mockUpdates';
 
 const TC = ['#4f8ef7', '#5aa9e6', '#69c3d6', '#47b8a8', '#5fbf8a', '#7c8cf8', '#e0a44a', '#9a8cf0', '#d9678f', '#8b93a1'];
@@ -994,6 +994,31 @@ export class MockBackend implements Backend {
         silent,
       },
     };
+  }
+  /** Like the engine: one file per insert with sound (+ Master), the same names, nothing written when cancelled. */
+  async exportStems(opts: { useLoop: boolean; tail: number; sampleRate: number; includeMaster: boolean }): Promise<ExportStemsResult> {
+    this.exportAbort = false;
+    const { from, to } = exportRange(this.p, opts.useLoop);
+    const secs = exportSeconds(from, to, this.p.bpm, opts.tail);
+    const jobs = [
+      ...(opts.includeMaster ? [{ name: 'Master', master: true }] : []),
+      ...stemInserts(this.p).map(m => ({ name: m.name.trim() || `Insert ${m.id}`, master: false })),
+    ];
+    if (!jobs.length) throw new Error('nothing to export: every mixer track is muted or has no sound routed to it');
+    const stems = uniqueFileStems(jobs.map(j => j.name));
+    const files: Extract<ExportStemsResult, { files: unknown }>['files'] = [];
+    for (let i = 0; i < jobs.length; i++) {
+      this.emit('export-progress', { done: i, total: jobs.length, name: jobs[i].name });
+      await delay(40);
+      if (this.exportAbort) return { cancelled: true };
+      files.push({
+        name: jobs[i].name, file: `${stems[i]}.wav`, master: jobs[i].master,
+        stats: { seconds: secs, sampleRate: opts.sampleRate, peakDbfs: -6.1, rmsDbfs: -18.2, crestDb: 12.1, clippedSamples: 0, silent: false },
+      });
+    }
+    this.emit('export-progress', { done: jobs.length, total: jobs.length, name: '' });
+    const dir = this.path ? this.path.replace(/[\\/][^\\/]*$/, '') : 'C:\\Users\\michal\\Music';
+    return { dir, fromBeat: from, toBeat: to, tail: opts.tail, format: 'wav', files, skipped: [] };
   }
   async exportCancel() { this.exportAbort = true; }
 

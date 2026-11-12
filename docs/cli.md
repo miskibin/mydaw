@@ -136,6 +136,30 @@ check its work, then listen to the WAV. The same bounce is available in the
 app as **Eksport** (`Ctrl+Shift+R`): song or loop, a 0/2/8 s effect tail, and
 44.1 or 48 kHz, written as a 32-bit float stereo WAV.
 
+### Stems
+
+```sh
+wave render --stems --out stems/ --from 0 --to 32     # a folder, created if needed
+wave render --stems --out stems/ --no-master          # without Master.wav
+```
+
+writes one 32-bit float stereo WAV per mixer insert that has sound, named after the insert
+(`Drums.wav`, `Bass.wav`; a repeated name becomes `Bass (2).wav`), like FL Studio's *Split mixer
+tracks*. In the app: **Eksport → Wynik: Stemy**, then pick the folder.
+
+- A stem is what the insert plays after its own effects, fader, pan and width, **before the
+  master**: the master's effects and fader are not in it. `Master.wav` is the normal mix with the
+  master's effects (leave it out with `--no-master`), so the stems add up to it only while the
+  master effects are linear (a limiter or compressor on the master is not).
+- Every file has the same length and starts at `--from`, so they line up when dropped into another
+  project. The range and the effect tail work as in a normal bounce.
+- Muted inserts and inserts with nothing routed into them get no file, and neither does one that
+  turns out silent in the range (the reply lists those under `skipped`). Solo is ignored, so a
+  soloed insert does not silence the other stems; a muted track or channel stays silent.
+- WAV only (`--format mp3` is refused), as in FL Studio. If anything fails or is cancelled no
+  file is left in the folder; existing files with the same names are replaced when it succeeds.
+- The reply lists every file with its level statistics (`files`), so an agent can check each stem.
+
 ## Tune to Reference
 
 Pulls a vocal take onto another performance of the same melody (a guide vocal,
