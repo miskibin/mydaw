@@ -9,6 +9,9 @@ shown in the app after an update and is published as the release notes (see
 Rename this heading to `## <version> — <date>` when releasing (docs/releasing.md).
 
 ### Changed
+- **WAVE opens its window right away.** It no longer waits for your last project to load before
+  showing anything: the window appears at once and the project comes in while the interface
+  starts, so a big session is ready sooner and there is no more clicking the icon again.
 - **A much smaller download.** The installers no longer carry the parts of the piano recordings
   that never play (each note rings at most 9 seconds), so the WAVE Keys piano takes about 23 MB
   instead of 138 MB. It sounds the same.
