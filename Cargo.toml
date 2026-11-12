@@ -26,7 +26,7 @@ publish = false
 # --- real-time plumbing ---
 rtrb = "0.4"            # lock-free SPSC ring: UI/engine thread <-> audio callback
 # --- audio I/O ---
-cpal = "0.18"           # WASAPI / ASIO (feature "asio") / CoreAudio / ALSA
+cpal = "0.18"           # WASAPI / ASIO (feature "asio") / CoreAudio / ALSA / JACK (Linux)
 # --- decoding (non-RT only) ---
 symphonia = { version = "0.6", default-features = false, features = ["flac", "wav", "pcm", "ogg", "vorbis"] }
 minimp3 = "0.5"

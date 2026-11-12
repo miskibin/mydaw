@@ -15,7 +15,8 @@ export interface Prefs {
   clipIcons: boolean;
   /** play notes while drawing / clicking them in the step sequencer and piano roll */
   noteAudition: boolean;
-  /** autosave interval in minutes (0 = off); only projects that were saved once */
+  /** autosave interval in minutes (0 = off): a saved project is saved to its file, one that
+   *  was never saved gets a crash-recovery copy (app/src/recovery.rs) */
   autosaveMin: number;
   /** show the tool hint in the toolbar's hint line */
   hints: boolean;
@@ -52,7 +53,10 @@ function applyPref(k: keyof Prefs, p: Prefs) {
   if (k === 'autosaveMin') {
     if (timer) clearInterval(timer);
     timer = null;
-    if (p.autosaveMin > 0) timer = setInterval(() => { if (S.path && S.dirty) void A.projectSave(false); }, p.autosaveMin * 60_000);
+    if (p.autosaveMin > 0) timer = setInterval(() => {
+      if (!S.path) void A.recoveryTick(); // also drops a stale copy once nothing is unsaved
+      else if (S.dirty) void A.projectSave(false);
+    }, p.autosaveMin * 60_000);
   }
 }
 

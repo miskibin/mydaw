@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { samplerDefault, type Channel, type Note, type Project } from '../api/types';
+import { samplerDefault, TOTAL_BEATS, type Channel, type Note, type Project } from '../api/types';
 import { applyAll } from './applyOps';
 import {
   BEAT_GAP, cellsBetween, fitCw, gridW, stepAt, stepX, contentLen, duplicateRight, fillEvery, isRollRow, isStepOn, migrateProject, moveNotes, noteAt, resizeNotes,
@@ -190,7 +190,7 @@ describe('mock engine ops (mirror of ops.rs)', () => {
     expect(applyAll(p, [{ op: 'putPattern', pattern: two }]).patterns[0].len).toBe(4);
     p = applyAll(p, [{ op: 'putPattern', pattern: { ...two, minLen: 8 } }]);
     expect([p.patterns[0].len, p.clips[0].len]).toEqual([8, 8]);
-    expect(() => applyAll(p, [{ op: 'putPattern', pattern: { ...two, notes: [{ ch: K, step: 2047, len: 2 }] } }])).toThrow();
+    expect(() => applyAll(p, [{ op: 'putPattern', pattern: { ...two, notes: [{ ch: K, step: TOTAL_BEATS * 4 - 1, len: 2 }] } }])).toThrow();
     // removePattern takes its clips with it
     expect(applyAll(p, [{ op: 'removePattern', id: 5 }]).clips).toEqual([]);
     p = applyAll(p, [{ op: 'removeChannel', id: K }]);

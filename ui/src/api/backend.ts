@@ -4,7 +4,7 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type {
   AudioConfig, AudioDevices, AudioHost, AudioStatus, LatencyReport, Catalog, CliStatus, ExportResult, F0ModelStatus, Id, ImportResult, LibFile,
-  KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
+  KeysStatus, LibraryList, LibraryProgress, MidiDevice, MidiNoteEvent, MidiStatus, ModelProgress, AppInfo, UpdateInfo, UpdateProgress, MusicAnalysis, AutoVocalPlan, AutoVocalStyle, Op, OpenResult, PitchAnalysis, PitchTarget, RecoveredProject, RefTune, SaveResult, StateDto, TransportDto, Vst3Info, Vst3Param,
 } from './types';
 
 export interface OsDropEvent { type: 'over' | 'drop' | 'leave'; paths: string[]; x: number; y: number }
@@ -105,6 +105,15 @@ export interface Backend {
   projectOpen(path?: string): Promise<OpenResult>;
   /** The save dialog when the project has no path yet or `saveAs`. */
   projectSave(saveAs?: boolean): Promise<SaveResult>;
+  /** Autosave tick for a project that was never saved: keeps its crash-recovery copy current
+   *  (removes it once the project has a file or nothing unsaved). True when a copy was written. */
+  recoveryWrite(): Promise<boolean>;
+  /** Unsaved projects left behind by a WAVE that crashed or was killed, newest first. */
+  recoveryList(): Promise<RecoveredProject[]>;
+  /** Opens a recovered project as an unsaved project (Save asks where to put it). */
+  recoveryRestore(id: string): Promise<{ state: StateDto; warnings: string[] }>;
+  /** Deletes a recovered project the user does not want. */
+  recoveryDiscard(id: string): Promise<void>;
   /** Offline bounce of the master mix to a 32-bit float stereo WAV. */
   exportAudio(opts: { useLoop: boolean; tail: number; sampleRate: number; format?: 'wav' | 'mp3'; mp3Kbps?: number }): Promise<ExportResult>;
   /** Abort an in-flight `exportAudio` before a file is written. */
@@ -234,6 +243,10 @@ export function tauriBackend(): Backend {
     projectNew: () => invoke('project_new'),
     projectOpen: path => invoke('project_open', { path: path ?? null }),
     projectSave: saveAs => invoke('project_save', { saveAs: !!saveAs }),
+    recoveryWrite: () => invoke('recovery_write'),
+    recoveryList: () => invoke('recovery_list'),
+    recoveryRestore: id => invoke('recovery_restore', { id }),
+    recoveryDiscard: id => invoke('recovery_discard', { id }),
     exportAudio: opts => invoke('export_audio', { useLoop: opts.useLoop, tail: opts.tail, sampleRate: opts.sampleRate, format: opts.format, mp3Kbps: opts.mp3Kbps }),
     exportCancel: () => invoke('export_cancel'),
     vst3Scan: rescan => invoke('vst3_scan', { rescan }),

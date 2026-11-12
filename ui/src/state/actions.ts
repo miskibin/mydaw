@@ -2,7 +2,7 @@
 import { batch } from 'solid-js';
 import { be } from '../api/backend';
 import { t, tName } from '../lib/i18n';
-import { VOL_UNITY, type AnyBuiltinKind, type Clip, type Fx, type Id, type Insert, type Op, type Track } from '../api/types';
+import { VOL_UNITY, type AnyBuiltinKind, type Clip, type Fx, type Id, type Insert, type Op, type RecoveredProject, type Track } from '../api/types';
 import { clampMove, duplicateSpan, insertTrackOps, moveClips, muteOps, pasteClips, sliceClip, TOTAL } from '../lib/clipOps';
 import { clamp, fmtPos } from '../lib/format';
 import { loadPreset as loadPresetFx, newFx, presetInfo, presetList } from '../lib/presets';
@@ -14,7 +14,7 @@ import { clearPeaks } from './peaks';
 import { modePattern, openRack, patMode, setPatMode, stopPreview, togglePreview } from './pattern';
 import { allocId, findFx, insName, plain, S, setTransport } from './store';
 import { say, setU, U } from './ui';
-import { confirmUnsaved } from '../ui/Confirm';
+import { confirmRecover, confirmUnsaved } from '../ui/Confirm';
 
 // ---------- transport ----------
 /** Recording is on but no track is armed: the engine plays and records nothing. */
@@ -127,6 +127,31 @@ export async function projectSave(saveAs = false): Promise<boolean> {
     if (r.cancelled) return false; // the save dialog was dismissed: nothing was written
     say(t('d.act.saved', { path: r.path })); await resync(); return true;
   } catch (e) { say(t('d.act.savefail', { err: String(e) })); return false; }
+}
+/** Autosave tick for a project without a file: keeps its crash-recovery copy current. */
+export async function recoveryTick() {
+  try { await enqueue(() => be().recoveryWrite()); } catch (e) { console.warn('[wave] recovery copy:', e); }
+}
+/**
+ * Startup: offer back the unsaved projects a WAVE that crashed or was killed left behind,
+ * newest first. "Not now" keeps them for the next start; one restore ends the round.
+ */
+export async function offerRecovery() {
+  let list: RecoveredProject[];
+  try { list = await be().recoveryList(); } catch { return; }
+  for (const r of list) {
+    const a = await confirmRecover(r.savedMs);
+    if (a === 'later') return;
+    if (a === 'discard') { await be().recoveryDiscard(r.id).catch(e => say(t('d.act.err', { err: String(e) }))); continue; }
+    if (!(await guardUnsaved(t('d.act.guard.open')))) return;
+    flushNotebook();
+    try {
+      const res = await enqueue(() => be().recoveryRestore(r.id));
+      acceptReply(res.state); afterProjectLoad();
+      say(res.warnings.length ? t('d.act.openedwarn', { path: t('d.ui.unnamed'), n: res.warnings.length, first: res.warnings[0] }) : t('d.act.recovered'));
+    } catch (e) { say(t('d.act.recoverfail', { err: String(e) })); }
+    return;
+  }
 }
 /** Window close: ask about unsaved changes, then really close. */
 export async function closeWindowGuarded(): Promise<boolean> {

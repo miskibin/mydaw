@@ -12,7 +12,7 @@
  ┌───────────────────────────▼──────────────────────────────────────────────────┐
  │ crates/engine: model · ops · history · sequencer · instruments · built-in FX  │
  │                mixer graph · recording · offline render · analysis thread    │
- │ crates/audio-io: cpal (WASAPI / ASIO / CoreAudio / ALSA) duplex streams       │
+ │ crates/audio-io: cpal (WASAPI / ASIO / CoreAudio / ALSA / JACK) duplex streams│
  │ crates/vst3-host: VST3 effects as `Processor`s, scan in a child process      │
  └──────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -247,7 +247,9 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `library_install` | `{id}` | – ; progress as event `library-progress {id,done,total,error?}` |
 | `library_files` | `{kit?}` or `{folder?}` | `[{name, path, group, root?}]`; kit `Standard` = the standard library (always installed); `root` = the file's own pitch when the library knows it |
 | `library_add_folder` / `library_remove_folder` | – (native dialog) / `{path}` | updated `folders` |
-| `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `{state: StateDto, warnings}` or `{cancelled}` / `{path}` or `{cancelled}` |
+| `project_new` / `project_open` / `project_save` | – / `{path?}` / `{saveAs?}` | `StateDto` / `{state: StateDto, warnings}` or `{cancelled}` / `{path}` or `{cancelled}`. A save first keeps the file it replaces as `<name> (backup).wave` |
+| `recovery_write` | – | `bool`; the autosave tick for a project with no file: writes its crash-recovery copy (`<data>/WAVE/Recovery/<session>.wave`), or removes it once the project has a file or nothing unsaved |
+| `recovery_list` / `recovery_restore` / `recovery_discard` | – / `{id}` / `{id}` | `[{id, savedMs}]` newest first (copies of sessions that did not exit normally) / `{state, warnings}` (opened as an unsaved project) / – |
 | `export_audio` | `{useLoop, tail, sampleRate}` | `{out, fromBeat, toBeat, tail, stats}` or `{cancelled:true}`; native save dialog; offline master → 32-bit float stereo WAV |
 | `export_cancel` | – | – (abort an in-flight `export_audio` before a file is written) |
 | `vst3_scan` | `{rescan}` | `[{path,cid,name,vendor,category}]` |
@@ -350,6 +352,16 @@ Projects without `comps` open unchanged (`#[serde(default)]`).
 * Recordings stay sources (`"Take N"`) next to the project like any audio
   (`<project> Audio/`, or the scratch folder until the first save); a new file
   never overwrites an existing one (`Take 2 1234 (2).wav`).
+* **Saving and crash recovery** (`Engine::save`, `app/src/recovery.rs`). A save
+  writes a temp file and renames it over the project, after copying the file it
+  replaces to `<name> (backup).wave` (an ordinary project, so File > Open opens
+  it). The autosave timer (Settings, default 2 min) saves a project that has a
+  file; one that was never saved goes to `Engine::save_copy` in the Recovery
+  folder instead (recordings stay in the scratch folder, so the copy finds them).
+  Each running WAVE holds an exclusive lock on its own `<session>.lock`; a copy
+  whose lock nobody holds belongs to a session that crashed or was killed, and
+  the UI offers it at the next start (`Engine::open_recovered`: no path, dirty).
+  New, Open, Save and a normal exit remove the session's copy.
 * **Takes line up with what was heard.** Input captured at a frame was sung
   to playback heard *round trip + PDC* frames earlier. `finalize_take` drops
   that many frames from the front; pass marks stay put, since they already
@@ -566,7 +578,7 @@ The app updates itself from GitHub Releases (public repository: no token). See
   `latest.json`), `update_download` (progress on the `update-progress` event, signature
   verified, nothing restarts) and `update_install` (detaches plugin editors, stops audio, runs
   the installer, restarts; on failure audio comes back and the old version keeps running).
-  `app_info`, `update_set_auto` and `update_mark_seen` read and write `settings.json`
+  `app_info` (also `pluginEditors`: VST3 editor windows exist, Windows only), `update_set_auto` and `update_mark_seen` read and write `settings.json`
   (`seenVersion`, `noAutoUpdate`). Views reach them only through `backend.ts`
   (`appInfo`, `updateCheck`, …); `api/mockUpdates.ts` is the browser mock with a fake newer release.
 * `ui/src/state/updateCtl.ts` is the state machine

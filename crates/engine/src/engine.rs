@@ -1232,11 +1232,7 @@ impl Engine {
                 s.path = rel.display().to_string();
             }
         }
-        let doc = serde_json::json!({ "format": "wave-project", "version": 2, "project": p });
-        let text = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
-        let tmp = path.with_extension("wave.tmp");
-        std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        write_project_file(&p, path, true)?;
         // keep absolute paths in memory
         for s in c.project.sources.iter_mut() {
             let sp = PathBuf::from(&s.path);
@@ -1248,6 +1244,32 @@ impl Engine {
         c.saved_revision = c.revision;
         self.changed(c);
         Ok(())
+    }
+
+    /// Writes the current project to `path` without making it the project's file: the
+    /// path, the dirty flag and the sources stay as they are (recordings stay in the
+    /// scratch folder, paths are absolute). Crash recovery uses it for projects that
+    /// were never saved.
+    pub fn save_copy(&self, path: &Path) -> Result<(), EngineError> {
+        let mut c = self.core.lock();
+        self.snapshot_plugin_states(&mut c);
+        let p = c.project.clone();
+        drop(c);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        write_project_file(&p, path, false)
+    }
+
+    /// Opens a copy written by [`Engine::save_copy`] as an unsaved project with unsaved
+    /// changes: Save asks where to put it instead of overwriting the copy.
+    pub fn open_recovered(&self, path: &Path) -> Result<Vec<String>, EngineError> {
+        let warnings = self.open(path)?;
+        let mut c = self.core.lock();
+        c.path = None;
+        c.revision += 1;
+        self.changed(c);
+        Ok(warnings)
     }
 
     /// Loads a project file. Missing audio is reported, not fatal.
@@ -1951,6 +1973,30 @@ fn watch_cmd(ids: &[Id]) -> Cmd {
         a[i] = *id;
     }
     Cmd::Watch { ids: a, n: ids.len().min(WATCH_SLOTS) as u8 }
+}
+
+/// `Song.wave` -> `Song (backup).wave`: the previous save, kept next to the project.
+/// It is an ordinary project file, so File > Open shows and opens it.
+pub fn backup_path(path: &Path) -> PathBuf {
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!("{stem} (backup).wave"))
+}
+
+/// Serializes `p` and replaces `path` atomically (temp file + rename). With `backup`,
+/// the file being replaced is kept as [`backup_path`] first; a failed backup never
+/// blocks the save.
+fn write_project_file(p: &Project, path: &Path, backup: bool) -> Result<(), EngineError> {
+    let doc = serde_json::json!({ "format": "wave-project", "version": 2, "project": p });
+    let text = serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("wave.tmp");
+    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    if backup && path.is_file() {
+        if let Err(e) = std::fs::copy(path, backup_path(path)) {
+            log::warn!("could not keep a backup of {}: {e}", path.display());
+        }
+    }
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 pub fn scratch_dir() -> PathBuf {

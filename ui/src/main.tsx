@@ -15,6 +15,7 @@ import { initPrefs } from './state/prefs';
 import { initUpdates } from './state/updates';
 import { t } from './lib/i18n';
 import { loadStdLib } from './state/library';
+import { offerRecovery } from './state/actions';
 
 initTheme();
 initPrefs();
@@ -40,6 +41,7 @@ async function boot() {
   // nothing on the playlist yet: start on the Channel Rack, where a beat begins (FL)
   if (!S.project.clips.length && S.project.patterns.length) openRack();
   void initUpdates(); // version, "What's new" after an update, the first automatic check
+  void offerRecovery(); // an unsaved project a crashed WAVE left behind
 }
 
 boot().catch(e => {

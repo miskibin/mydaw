@@ -544,10 +544,12 @@ function Vst3Body(props: { fx: Fx }) {
   const [params, setParams] = createSignal<Vst3Param[]>([]);
   const [err, setErr] = createSignal<string | null>(null);
   const [guiOpen, setGuiOpen] = createSignal(false);
+  // plugin editor windows exist on Windows only; elsewhere this list is the plugin's UI
+  const [editors, setEditors] = createSignal(true);
   const [q, setQ] = createSignal('');
   let refresh = 0;
   const load = () => be().vst3Params(props.fx.id).then(p => { setParams(p); setErr(null); }).catch(e => setErr(String(e)));
-  onMount(load);
+  onMount(() => { load(); be().appInfo().then(i => setEditors(i.pluginEditors)).catch(() => {}); });
   onCleanup(() => { if (guiOpen()) void be().vst3Editor(props.fx.id, false).catch(() => {}); });
   const set = (id: number, v: number) => {
     setParams(ps => ps.map(p => p.id === id ? { ...p, value: v } : p));
@@ -558,10 +560,12 @@ function Vst3Body(props: { fx: Fx }) {
   return (
     <div style={{ padding: '12px 14px', display: 'flex', 'flex-direction': 'column', gap: '10px' }}>
       <div class="row" style={{ gap: '8px' }}>
-        <button class="smallbtn primary" style={{ height: '26px', padding: '0 12px' }} onClick={() => {
-          const open = !guiOpen();
-          be().vst3Editor(props.fx.id, open).then(() => setGuiOpen(open)).catch(e => say(t('c.fx.guiFail', { e: String(e) })));
-        }}>{guiOpen() ? t('c.fx.guiClose') : t('c.fx.guiOpen')}</button>
+        <Show when={editors()} fallback={<span class="note" style={{ flex: 'none' }} title={t('c.fx.guiNone')}>{t('c.fx.guiNoneShort')}</span>}>
+          <button class="smallbtn primary" style={{ height: '26px', padding: '0 12px' }} onClick={() => {
+            const open = !guiOpen();
+            be().vst3Editor(props.fx.id, open).then(() => setGuiOpen(open)).catch(e => say(t('c.fx.guiFail', { e: String(e) })));
+          }}>{guiOpen() ? t('c.fx.guiClose') : t('c.fx.guiOpen')}</button>
+        </Show>
         <span class="note ell" style={{ flex: 1 }}>{props.fx.plugin?.vendor} · {props.fx.plugin?.path}</span>
       </div>
       <input class="textin" placeholder={t('c.fx.searchParam')} value={q()} onInput={e => setQ(e.currentTarget.value)} onKeyDown={e => e.stopPropagation()} />

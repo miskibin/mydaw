@@ -45,7 +45,7 @@ export class MockUpdates {
   private get version() { return this.store.get('wave.mock.version') ?? MOCK_START; }
 
   async appInfo(): Promise<AppInfo> {
-    return { version: this.version, seenVersion: this.store.get('wave.mock.seen'), autoUpdate: this.store.get('wave.mock.noauto') !== '1' };
+    return { version: this.version, seenVersion: this.store.get('wave.mock.seen'), autoUpdate: this.store.get('wave.mock.noauto') !== '1', pluginEditors: true };
   }
   async updateCheck(): Promise<UpdateInfo | null> {
     await this.wait(500);

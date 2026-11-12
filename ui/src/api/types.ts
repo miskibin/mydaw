@@ -6,7 +6,7 @@ export type Id = number;
 /** Fader position that gives unity gain (gain = 2·t³). */
 export const VOL_UNITY = 0.7937;
 /** Beats shown on the playlist; the arrangement may not go past this. */
-export const TOTAL_BEATS = 512;
+export const TOTAL_BEATS = 2048; // engine `model::TOTAL_BEATS`: 512 bars
 
 export interface LoopRange { a: number; b: number }
 
@@ -178,7 +178,8 @@ export interface F0ModelStatus {
 /** An update found on GitHub Releases (`update_check`). `notes`: the release notes (Markdown), `date`: `YYYY-MM-DD`. */
 export interface UpdateInfo { version: string; notes: string | null; date: string | null }
 /** `app_info`: the running version, the version whose notes were last shown (null on a fresh install), the auto-check switch. */
-export interface AppInfo { version: string; seenVersion: string | null; autoUpdate: boolean }
+/** `pluginEditors`: VST3 plugins can open their own editor windows (Windows only for now). */
+export interface AppInfo { version: string; seenVersion: string | null; autoUpdate: boolean; pluginEditors: boolean }
 export interface UpdateProgress { done: number; total: number }
 export interface ModelProgress { id: string; done: number; total: number; error?: string }
 
@@ -415,6 +416,8 @@ export type OpenResult =
   | { cancelled?: false; state: StateDto; warnings: string[] };
 /** Result of `projectSave`; `{ cancelled: true }` when the save dialog was dismissed. */
 export type SaveResult = { cancelled: true } | { cancelled?: false; path: string };
+/** An unsaved project a WAVE that crashed or was killed left behind (`recovery_list`). */
+export interface RecoveredProject { id: string; savedMs: number }
 
 export interface ImportResult { sourceIds: Id[]; clipIds: Id[] }
 

@@ -42,8 +42,10 @@ I now use WAVE for everything I used FL Studio for.
   live monitoring.
 - **Vocal tools.** A note-level pitch editor, Tune to Reference (pull a take onto a guide
   vocal), live pitch correction, a vocal rider and a one-click vocal chain.
-- **VST3 effects and ASIO.** Plugins run with their own editor windows after a crash-proof
-  scan; WASAPI and ASIO on Windows, ALSA on Linux.
+- **VST3 effects and ASIO.** VST3 effects load after a crash-proof scan. On Windows they open
+  their own editor windows; on Linux they run with WAVE's parameter list (no plugin windows
+  yet). VST3 instruments are not supported yet. WASAPI and ASIO on Windows, ALSA and JACK
+  (including PipeWire's JACK) on Linux.
 - **A command line.** `wave` edits the open project live, with the same undo history, and
   bounces it offline. Scripts and AI agents can write a song and check the result.
 - **English and Polish** interface, switched in Settings.
@@ -60,8 +62,9 @@ Linux packages are attached to the same release.
 
 ## Build from source
 
-Prerequisites: Rust stable, Node 22 + pnpm, and on Linux the WebKitGTK/ALSA dev packages
-(`libwebkit2gtk-4.1-dev libasound2-dev`).
+Prerequisites: Rust stable, Node 22 + pnpm, and on Linux the WebKitGTK, ALSA, JACK and D-Bus
+dev packages (`libwebkit2gtk-4.1-dev libasound2-dev libjack-jackd2-dev libdbus-1-dev`). JACK is
+loaded at run time, so the app still starts on a machine without it.
 
 ```sh
 pnpm --dir ui install

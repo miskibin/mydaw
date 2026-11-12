@@ -873,13 +873,14 @@ export class MockBackend implements Backend {
     this.tr = { ...this.tr, playing: false }; this.revision++; this.savedRev = this.revision;
     this.emit('state', this.dto());
   }
-  async projectNew() { this.resetTo(emptyProject(), null); return this.dto(); }
+  async projectNew() { this.resetTo(emptyProject(), null); this.recovery = null; return this.dto(); }
   /** Tests: the next native file dialog is dismissed, as when the user presses Cancel. */
   dismissNextDialog = false;
   private dialog(): boolean { const ok = !this.dismissNextDialog; this.dismissNextDialog = false; return ok; }
   async projectOpen(path?: string): Promise<OpenResult> {
     if (path == null && !this.dialog()) return { cancelled: true };
     this.resetTo(sketchProject(this.cat), path ?? 'C:\\Users\\michal\\Music\\Demo.wave');
+    this.recovery = null;
     return { state: this.dto(), warnings: [] };
   }
   async projectSave(saveAs?: boolean): Promise<SaveResult> {
@@ -887,8 +888,41 @@ export class MockBackend implements Backend {
       if (!this.dialog()) return { cancelled: true };
       this.path = 'C:\\Users\\michal\\Music\\Projekt ' + (1 + (this.revision % 9)) + '.wave';
     }
-    this.savedRev = this.revision; this.emit('state', this.dto());
+    this.savedRev = this.revision; this.recovery = null; this.emit('state', this.dto());
     return { path: this.path };
+  }
+
+  // ---------- crash recovery (app/src/recovery.rs) ----------
+  /** This session's copy of a project that was never saved. */
+  private recovery: { project: Project; savedMs: number } | null = null;
+  /** Copies left by sessions that "crashed" (see `simulateCrash`). */
+  private orphans = new Map<string, { project: Project; savedMs: number }>();
+  async recoveryWrite() {
+    if (this.path || this.revision === this.savedRev) { this.recovery = null; return false; }
+    this.recovery = { project: JSON.parse(JSON.stringify(this.p)), savedMs: Date.now() };
+    return true;
+  }
+  async recoveryList() {
+    return [...this.orphans].map(([id, o]) => ({ id, savedMs: o.savedMs })).sort((a, b) => b.savedMs - a.savedMs);
+  }
+  async recoveryRestore(id: string) {
+    const o = this.orphans.get(id);
+    if (!o) throw new Error(`no recovered project \`${id}\``);
+    this.orphans.delete(id);
+    this.resetTo(o.project, null);
+    this.revision++; // unsaved changes: Save asks where to put it
+    this.recovery = o;
+    this.emit('state', this.dto());
+    return { state: this.dto(), warnings: [] };
+  }
+  async recoveryDiscard(id: string) {
+    if (!this.orphans.delete(id)) throw new Error(`no recovered project \`${id}\``);
+  }
+  /** Tests: the app dies without a normal exit and starts again with an empty project. */
+  simulateCrash() {
+    if (this.recovery) this.orphans.set(`${1000 + this.orphans.size}-${this.recovery.savedMs}`, this.recovery);
+    this.recovery = null;
+    this.resetTo(emptyProject(), null);
   }
 
   private exportAbort = false;

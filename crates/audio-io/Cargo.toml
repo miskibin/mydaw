@@ -1,6 +1,6 @@
 [package]
 name = "wave-audio-io"
-description = "WAVE audio devices: WASAPI, ASIO (feature `asio`), CoreAudio, ALSA via cpal; duplex in/out feeding the engine."
+description = "WAVE audio devices: WASAPI, ASIO (feature `asio`), CoreAudio, ALSA and JACK via cpal; duplex in/out feeding the engine."
 edition.workspace = true
 version.workspace = true
 license.workspace = true
@@ -18,6 +18,13 @@ cpal.workspace = true
 rtrb.workspace = true
 serde.workspace = true
 log.workspace = true
+
+# Linux: the JACK host (libjack is loaded at run time, so a system without JACK or
+# PipeWire's JACK library still starts on ALSA) and real-time priority for the ALSA
+# audio thread, through RealtimeKit when the user has no rtprio limit of their own.
+# Building needs the libjack and libdbus development packages.
+[target.'cfg(target_os = "linux")'.dependencies]
+cpal = { workspace = true, features = ["jack", "realtime-dbus"] }
 
 [dev-dependencies]
 serde_json.workspace = true
