@@ -53,5 +53,12 @@ jobs:
       - run: pnpm --dir ui build
       - name: Tests
         run: cargo test --workspace
-      - name: Build app with ASIO (installers come from the Release workflow)
-        run: cargo build -p wave-app --features asio,custom-protocol
+      - name: Build app with ASIO and the session CLI
+        run: |
+          cargo build --locked -p wave-app -p wave-cli --features asio,custom-protocol
+      - name: Bundle NSIS installer
+        working-directory: app
+        run: pnpm dlx @tauri-apps/cli@2.12.4 bundle --debug --features asio --bundles nsis --ci
+      - name: Test project file association
+        shell: pwsh
+        run: ./scripts/test-project-association.ps1

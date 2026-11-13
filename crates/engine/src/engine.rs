@@ -479,7 +479,16 @@ impl Engine {
     /// Applies a batch. `transient` edits (inside a gesture) do not create undo steps.
     /// With `if_revision`, fails if the project changed since that revision.
     pub fn apply(&self, ops: &[Op], transient: bool, if_revision: Option<u64>) -> Result<u64, EngineError> {
-        let mut c = self.core.lock();
+        self.apply_locked(self.core.lock(), ops, transient, if_revision)
+    }
+
+    fn apply_locked(
+        &self,
+        mut c: parking_lot::MutexGuard<'_, Core>,
+        ops: &[Op],
+        transient: bool,
+        if_revision: Option<u64>,
+    ) -> Result<u64, EngineError> {
         if let Some(r) = if_revision {
             if r != c.revision {
                 return Err(EngineError::Msg(format!("REVISION_CONFLICT: project is at revision {}, not {r}", c.revision)));
@@ -1523,6 +1532,11 @@ impl Engine {
 
     /// Loads a project file. Missing audio is reported, not fatal.
     pub fn open(&self, path: &Path) -> Result<Vec<String>, EngineError> {
+        self.open_at_revision(path, None)
+    }
+
+    /// Checks the expected revision after decoding, before replacing the current project.
+    pub fn open_at_revision(&self, path: &Path, if_revision: Option<u64>) -> Result<Vec<String>, EngineError> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
         let doc: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("not a WAVE project: {e}"))?;
         let mut p = Project::from_json(doc.get("project").cloned().unwrap_or(doc)).map_err(|e| format!("not a WAVE project: {e}"))?;
@@ -1546,6 +1560,17 @@ impl Engine {
             return Err(EngineError::Msg("the project has no master insert".into()));
         }
         let mut c = self.core.lock();
+        if c.take.is_some() || self.midi_take.lock().rec.is_some() {
+            return Err(EngineError::Msg("recording: stop it first".into()));
+        }
+        if let Some(r) = if_revision {
+            if r != c.revision {
+                return Err(EngineError::Msg(format!(
+                    "REVISION_CONFLICT: project is at revision {}, not {r}",
+                    c.revision
+                )));
+            }
+        }
         send(&mut c, Cmd::Stop);
         send(&mut c, Cmd::PatPlay(None));
         c.transport.playing = false;
@@ -2162,8 +2187,7 @@ impl Engine {
             resample: false,
             pitch: 0.0,
         };
-        drop(c);
-        if let Err(e) = self.apply(&[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None) {
+        if let Err(e) = self.apply_locked(c, &[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None) {
             log::error!("could not place the MIDI take: {e}");
         }
     }

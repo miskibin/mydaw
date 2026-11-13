@@ -172,6 +172,16 @@ impl Throttle {
 
 /// Asks GitHub whether a newer release exists. The found update is kept for `download`.
 pub async fn check(handle: &AppHandle, st: &State) -> Result<Option<UpdateInfo>, String> {
+    // The passive NSIS installer should reopen the last project from settings. The
+    // updater's default /ARGS would replay the project supplied to the original process.
+    #[cfg(windows)]
+    let updater = handle
+        .updater_builder()
+        .restart_after_install(false)
+        .installer_arg("/R")
+        .build()
+        .map_err(|e| e.to_string())?;
+    #[cfg(not(windows))]
     let updater = handle.updater().map_err(|e| e.to_string())?;
     let found = updater.check().await.map_err(|e| e.to_string())?;
     let mut pending = st.pending.lock();

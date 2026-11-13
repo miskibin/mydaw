@@ -43,3 +43,6 @@ ureq.workspace = true
 sha2.workspace = true
 libc = "0.2"
 base64.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+tauri-plugin-single-instance = "2.5"
