@@ -831,6 +831,23 @@ fn shutdown(h: &AppHandle, app: &App) {
     app.recovery.close();
 }
 
+/// Keeps `LC_NUMERIC` in the C locale. `gtk_init` runs `setlocale(LC_ALL, "")`,
+/// so on comma-decimal locales (de, da, pl, …) every C-side text parse of a
+/// VST3 preset — `atof` inside DPF-style state restore — reads `0.4` as `0`,
+/// which some plugins turn into division-by-zero NaNs. Hosts keep numeric
+/// formatting themselves (the UI formats for the user), so nothing else sees
+/// the change. Call once before any plugin work and again after `gtk_init`.
+pub fn ensure_c_numeric_locale() {
+    // SAFETY: `setlocale` with a valid category and NUL-terminated string; the
+    // returned locale string is ignored. `LC_NUMERIC` and "C" are C-ABI constants.
+    unsafe extern "C" {
+        fn setlocale(category: i32, locale: *const std::ffi::c_char) -> *mut std::ffi::c_char;
+    }
+    unsafe {
+        setlocale(libc::LC_NUMERIC, b"C\0".as_ptr().cast());
+    }
+}
+
 pub fn run() {
     let boot = boot::Boot::new();
     boot.mark("run() entered");
@@ -909,6 +926,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app.clone())
         .setup(move |tapp| {
+            // gtk_init pulled the user locale back over LC_NUMERIC; plugin state
+            // text parsing must stay in the C locale (see ensure_c_numeric_locale)
+            ensure_c_numeric_locale();
             // plugin work that must happen on the UI thread is posted here
             let mh = tapp.handle().clone();
             wave_vst3::set_main_thread_executor(move |job| {
@@ -1025,5 +1045,78 @@ mod tests {
         assert!(state["path"].as_str().is_some_and(|p| p.ends_with("Song.wave")));
         assert!(v["warnings"].is_array());
         assert!(v.get("cancelled").is_none());
+    }
+}
+
+mod locale_tests {
+    use super::ensure_c_numeric_locale;
+
+    /// `gtk_init` pulls `LC_NUMERIC` to the user's locale; plugin preset text
+    /// (`atof` in state restore) must keep parsing `0.4` as 0.4 regardless.
+    /// Skips silently when no comma-decimal locale is installed.
+    ///
+    /// The locale swap runs in a dedicated child process: `setlocale` is
+    /// process-global and glibc documents it as thread-unsafe, and the test
+    /// harness runs tests on parallel threads, so unrelated tests or native
+    /// dependencies must not observe the temporary comma locale.
+    #[test]
+    fn numeric_parsing_survives_the_user_locale() {
+        const CHILD_ENV: &str = "WAVE_LOCALE_TEST_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            // parent: rerun this binary for just this test with the child
+            // marker set (keep the --exact name in sync with the fn name)
+            let exe = std::env::current_exe().expect("test executable path");
+            let out = std::process::Command::new(exe)
+                .args([
+                    "--exact",
+                    "locale_tests::numeric_parsing_survives_the_user_locale",
+                    "--nocapture",
+                ])
+                .env(CHILD_ENV, "1")
+                .output()
+                .expect("spawn the locale test child process");
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(
+                out.status.success() && stdout.contains("1 passed"),
+                "locale child process failed: {}\n{stdout}",
+                out.status
+            );
+            return;
+        }
+
+        // child process only from here on: the swap stays out of the shared
+        // test process
+        // SAFETY: setlocale/strtod with valid NUL-terminated strings; this
+        // test is all the child runs, so no other thread reads the locale.
+        unsafe extern "C" {
+            fn setlocale(category: i32, locale: *const std::ffi::c_char) -> *mut std::ffi::c_char;
+            fn strtod(s: *const std::ffi::c_char, end: *mut *mut std::ffi::c_char) -> f64;
+        }
+        let parse = |s: &str| unsafe {
+            let c = std::ffi::CString::new(s).unwrap();
+            strtod(c.as_ptr(), std::ptr::null_mut())
+        };
+
+        // find an installed comma-decimal locale; the machine's own locale set
+        // decides, the test only needs one
+        let mut found = None;
+        for loc in ["de_DE.UTF-8", "da_DK.UTF-8", "fr_FR.UTF-8", "pl_PL.UTF-8"] {
+            let c = std::ffi::CString::new(loc).unwrap();
+            let set = unsafe { setlocale(libc::LC_NUMERIC, c.as_ptr()) };
+            if !set.is_null() && parse("0.4") != 0.4 {
+                found = Some(loc);
+                break;
+            }
+        }
+        let Some(loc) = found else {
+            return; // no comma-decimal locale installed: nothing to guard against
+        };
+
+        ensure_c_numeric_locale();
+        assert_eq!(
+            parse("0.4"),
+            0.4,
+            "after ensure_c_numeric_locale, {loc} must not break decimal parsing"
+        );
     }
 }

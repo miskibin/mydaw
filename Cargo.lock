@@ -5250,6 +5250,7 @@ name = "wave-app"
 version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
+ "libc",
  "log",
  "parking_lot",
  "serde",
