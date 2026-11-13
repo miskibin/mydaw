@@ -156,11 +156,7 @@ fn synth(style: usize, secs: f64, sr: u32, seed: u64) -> Vec<f32> {
                 let rest = rng.f() < 0.18;
                 for k in 0..len.min(n - i) {
                     let t = k as f32 / srf;
-                    let env = if rest {
-                        0.0
-                    } else {
-                        (t * 40.0).min(1.0) * (((len - k) as f32 / srf) * 30.0).min(1.0)
-                    };
+                    let env = if rest { 0.0 } else { (t * 40.0).min(1.0) * (((len - k) as f32 / srf) * 30.0).min(1.0) };
                     let vib = 1.0 + 0.012 * (TAU * 5.5 * t).sin() * (t * 3.0).min(1.0);
                     phase += TAU * f0 * vib / srf;
                     if phase > TAU {
@@ -169,8 +165,7 @@ fn synth(style: usize, secs: f64, sr: u32, seed: u64) -> Vec<f32> {
                     let mut s = 0.0;
                     for h in 1..=14 {
                         let hf = f0 * h as f32;
-                        let form = (-((hf - 700.0) / 500.0).powi(2)).exp()
-                            + 0.6 * (-((hf - 2400.0) / 700.0).powi(2)).exp();
+                        let form = (-((hf - 700.0) / 500.0).powi(2)).exp() + 0.6 * (-((hf - 2400.0) / 700.0).powi(2)).exp();
                         s += (phase * h as f32).sin() * form / h as f32;
                     }
                     let noise = (rng.f() as f32 - 0.5) * 0.02;
@@ -201,13 +196,8 @@ fn synth(style: usize, secs: f64, sr: u32, seed: u64) -> Vec<f32> {
                 let at = b * beat;
                 for k in 0..(beat / 2).min(n.saturating_sub(at)) {
                     let t = k as f32 / srf;
-                    let kick =
-                        (TAU * (60.0 + 90.0 * (-t * 30.0).exp()) * t).sin() * (-t * 9.0).exp();
-                    let hat = if b % 2 == 1 {
-                        (rng.f() as f32 - 0.5) * (-t * 40.0).exp() * 0.5
-                    } else {
-                        0.0
-                    };
+                    let kick = (TAU * (60.0 + 90.0 * (-t * 30.0).exp()) * t).sin() * (-t * 9.0).exp();
+                    let hat = if b % 2 == 1 { (rng.f() as f32 - 0.5) * (-t * 40.0).exp() * 0.5 } else { 0.0 };
                     let v = kick * 0.7 + hat;
                     out[(at + k) * 2] += v;
                     out[(at + k) * 2 + 1] += v;
@@ -219,11 +209,7 @@ fn synth(style: usize, secs: f64, sr: u32, seed: u64) -> Vec<f32> {
 }
 
 fn color(i: usize) -> String {
-    [
-        "#4f8ef7", "#5aa9e6", "#69c3d6", "#47b8a8", "#5fbf8a", "#7c8cf8", "#e0a44a", "#9a8cf0",
-        "#d9678f", "#8b93a1",
-    ][i % 10]
-        .into()
+    ["#4f8ef7", "#5aa9e6", "#69c3d6", "#47b8a8", "#5fbf8a", "#7c8cf8", "#e0a44a", "#9a8cf0", "#d9678f", "#8b93a1"][i % 10].into()
 }
 
 const LIGHT: [&[FxKind]; 4] = [
@@ -232,17 +218,8 @@ const LIGHT: [&[FxKind]; 4] = [
     &[FxKind::Eq, FxKind::Comp, FxKind::Delay, FxKind::Reverb],
     &[FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Limit],
 ];
-const VOCAL: &[FxKind] = &[
-    FxKind::Denoise,
-    FxKind::Tune,
-    FxKind::Voice,
-    FxKind::Eq,
-    FxKind::Deess,
-    FxKind::Comp,
-    FxKind::Fet,
-    FxKind::Sat,
-    FxKind::Reverb,
-];
+const VOCAL: &[FxKind] =
+    &[FxKind::Denoise, FxKind::Tune, FxKind::Voice, FxKind::Eq, FxKind::Deess, FxKind::Comp, FxKind::Fet, FxKind::Sat, FxKind::Reverb];
 
 fn new_clip(id: Id, track: u32, start: f64, len: f64, kind: ClipKind, source: Id) -> Clip {
     Clip {
@@ -350,11 +327,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
         });
         p.tracks.push(Track {
             id: tid,
-            name: if vocal {
-                format!("Vocal {t}")
-            } else {
-                format!("Track {t}")
-            },
+            name: if vocal { format!("Vocal {t}") } else { format!("Track {t}") },
             color: color(t),
             muted: false,
             solo: false,
@@ -368,11 +341,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
 
     // ---- patterns
     let chans: Vec<Id> = p.channels.iter().map(|c| c.id).collect();
-    let pitched: Vec<Id> = p
-        .channels
-        .iter()
-        .map(|c| c.id)
-        .collect();
+    let pitched: Vec<Id> = p.channels.iter().map(|c| c.id).collect();
     let mut pats = vec![];
     for i in 0..spec.patterns {
         let id = p.alloc_id();
@@ -386,23 +355,11 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
                 ch,
                 rng.below(steps) as f32,
                 [1.0, 1.0, 2.0, 4.0][rng.below(4)],
-                if pitched_ch {
-                    Some(36 + rng.below(36) as u8)
-                } else {
-                    None
-                },
+                if pitched_ch { Some(36 + rng.below(36) as u8) } else { None },
             ));
         }
         notes.sort_by(|a, b| a.step.total_cmp(&b.step));
-        p.patterns.push(Pattern {
-            id,
-            name: format!("Pattern {i}"),
-            color: color(i),
-            len,
-            min_len: len,
-            notes,
-            swing: 0.0,
-        });
+        p.patterns.push(Pattern { id, name: format!("Pattern {i}"), color: color(i), len, min_len: len, notes, swing: 0.0 });
         pats.push(id);
     }
     // one stress pattern for the piano roll
@@ -410,14 +367,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
         let id = p.alloc_id();
         let ch = pitched.first().copied().unwrap_or(chans[0]);
         let mut notes: Vec<Note> = (0..2000)
-            .map(|_| {
-                Note::new(
-                    ch,
-                    rng.below(1024) as f32,
-                    [1.0, 2.0, 4.0][rng.below(3)],
-                    Some(24 + rng.below(60) as u8),
-                )
-            })
+            .map(|_| Note::new(ch, rng.below(1024) as f32, [1.0, 2.0, 4.0][rng.below(3)], Some(24 + rng.below(60) as u8)))
             .collect();
         notes.sort_by(|a, b| a.step.total_cmp(&b.step));
         p.patterns.push(Pattern {
@@ -434,33 +384,14 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
     // ---- clips
     let cid = |p: &mut Project| p.alloc_id();
     for i in 0..spec.audio_clips {
-        let track = if i < spec.tuned_clips {
-            i % spec.vocal_tracks.max(1)
-        } else {
-            rng.below(spec.tracks)
-        };
-        let si = if track < spec.vocal_tracks {
-            vocals[rng.below(vocals.len())]
-        } else {
-            rng.below(spec.sources)
-        };
+        let track = if i < spec.tuned_clips { i % spec.vocal_tracks.max(1) } else { rng.below(spec.tracks) };
+        let si = if track < spec.vocal_tracks { vocals[rng.below(vocals.len())] } else { rng.below(spec.sources) };
         let s = &p.sources[si];
         let len = (s.dur / spb).min(spec.beats / 4.0).max(0.5);
-        let start = if i < spec.tuned_clips {
-            4.0 + 20.0 * i as f64
-        } else {
-            rng.range(0.0, (spec.beats - len).max(0.0))
-        };
+        let start = if i < spec.tuned_clips { 4.0 + 20.0 * i as f64 } else { rng.range(0.0, (spec.beats - len).max(0.0)) };
         let src = s.id;
         let id = cid(&mut p);
-        let mut c = new_clip(
-            id,
-            track as u32,
-            (start * 4.0).round() / 4.0,
-            len,
-            ClipKind::Audio,
-            src,
-        );
+        let mut c = new_clip(id, track as u32, (start * 4.0).round() / 4.0, len, ClipKind::Audio, src);
         c.gain = rng.range(-6.0, 2.0) as f32;
         if i % 5 == 0 {
             c.fade_in = 0.02;
@@ -497,8 +428,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
         let plen = p.patterns.iter().find(|x| x.id == pat).unwrap().len;
         let start = (rng.range(0.0, spec.beats - plen) / 4.0).floor() * 4.0;
         let id = cid(&mut p);
-        p.clips
-            .push(new_clip(id, track as u32, start, plen, ClipKind::Pat, pat));
+        p.clips.push(new_clip(id, track as u32, start, plen, ClipKind::Pat, pat));
     }
 
     // ---- automation
@@ -511,10 +441,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
         } else {
             let f = &ins.fx[rng.below(ins.fx.len())];
             match params(f.kind).first() {
-                Some(d) => AutoTarget::Fx {
-                    fx_id: f.id,
-                    param: d.id.to_string(),
-                },
+                Some(d) => AutoTarget::Fx { fx_id: f.id, param: d.id.to_string() },
                 None => AutoTarget::InsertPan { id: ins.id },
             }
         };
@@ -527,26 +454,13 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
                 )
             })
             .collect();
-        p.automations.push(Automation {
-            id,
-            name: format!("Auto {i}"),
-            color: color(i),
-            target,
-            points,
-        });
+        p.automations.push(Automation { id, name: format!("Auto {i}"), color: color(i), target, points });
         autos.push((id, span));
     }
     for (k, (aid, span)) in autos.iter().enumerate() {
         let id = cid(&mut p);
         let track = (k * 3) % spec.tracks;
-        p.clips.push(new_clip(
-            id,
-            track as u32,
-            (k % 8) as f64 * 64.0,
-            *span,
-            ClipKind::Auto,
-            *aid,
-        ));
+        p.clips.push(new_clip(id, track as u32, (k % 8) as f64 * 64.0, *span, ClipKind::Auto, *aid));
     }
 
     // ---- comps (takes of a vocal source, comp clip on a vocal track)
@@ -568,13 +482,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
             });
         }
         let end = takes.iter().map(|t| t.len).fold(f64::MAX, f64::min);
-        let mut comp = Comp {
-            id,
-            name: format!("Comp {k}"),
-            takes,
-            regions: vec![],
-            xfade: DEFAULT_XFADE,
-        };
+        let mut comp = Comp { id, name: format!("Comp {k}"), takes, regions: vec![], xfade: DEFAULT_XFADE };
         let seg = end / 6.0;
         for r in 0..6 {
             let take = comp.takes[r % 4].id;
@@ -582,14 +490,7 @@ pub fn build(spec: &Spec, dir: &Path) -> Project {
         }
         let cl = cid(&mut p);
         let track = (k % spec.vocal_tracks.max(1)) as u32;
-        p.clips.push(new_clip(
-            cl,
-            track,
-            300.0 + k as f64 * 40.0,
-            end.min(32.0),
-            ClipKind::Comp,
-            id,
-        ));
+        p.clips.push(new_clip(cl, track, 300.0 + k as f64 * 40.0, end.min(32.0), ClipKind::Comp, id));
         p.comps.push(comp);
     }
 

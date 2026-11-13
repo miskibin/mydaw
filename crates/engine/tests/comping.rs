@@ -54,14 +54,45 @@ fn comp_with(srcs: &[Id], regions: Vec<CompRegion>) -> Comp {
     Comp {
         id: 9000,
         name: "Vox comp".into(),
-        takes: srcs.iter().enumerate().map(|(k, &s)| Take { id: 9001 + k as Id, name: format!("Take {}", k + 1), source: s, start: 0.0, len: 8.0, offset: 0.0, color: None }).collect(),
+        takes: srcs
+            .iter()
+            .enumerate()
+            .map(|(k, &s)| Take {
+                id: 9001 + k as Id,
+                name: format!("Take {}", k + 1),
+                source: s,
+                start: 0.0,
+                len: 8.0,
+                offset: 0.0,
+                color: None,
+            })
+            .collect(),
         regions,
         xfade: DEFAULT_XFADE,
     }
 }
 
 fn comp_clip(start: f64) -> Clip {
-    Clip { id: 9100, track: 0, start, len: 8.0, offset: 0.0, kind: ClipKind::Comp, source: 9000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 }
+    Clip {
+        id: 9100,
+        track: 0,
+        start,
+        len: 8.0,
+        offset: 0.0,
+        kind: ClipKind::Comp,
+        source: 9000,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }
 }
 
 fn r(take: Id, from: f64, to: f64) -> CompRegion {
@@ -88,10 +119,12 @@ fn five_loop_passes_make_five_takes_and_the_newest_plays() {
     let mut done = 0;
     while done < total {
         let n = 256.min(total - done);
-        let inp: Vec<f32> = (0..n).map(|i| {
-            let f = done + i;
-            (f as f32 * 0.05).sin() * 0.1 * (f / pass + 1) as f32
-        }).collect();
+        let inp: Vec<f32> = (0..n)
+            .map(|i| {
+                let f = done + i;
+                (f as f32 * 0.05).sin() * 0.1 * (f / pass + 1) as f32
+            })
+            .collect();
         rt.process(&mut l[..n], &mut r[..n], Some((&inp, &inp)));
         done += n;
     }
@@ -121,7 +154,18 @@ fn five_loop_passes_make_five_takes_and_the_newest_plays() {
 #[test]
 fn a_last_pass_cut_short_leaves_the_rest_to_the_previous_one() {
     let mut p = dry_project();
-    p.sources = (1..=3).map(|id| Source { id, name: format!("Take {id}"), color: "#e05263".into(), path: String::new(), dur: 2.0, sr: SR, ch: 1, peak_db: 0.0 }).collect();
+    p.sources = (1..=3)
+        .map(|id| Source {
+            id,
+            name: format!("Take {id}"),
+            color: "#e05263".into(),
+            path: String::new(),
+            dur: 2.0,
+            sr: SR,
+            ch: 1,
+            peak_db: 0.0,
+        })
+        .collect();
     wave_engine::comp::land_takes(&mut p, 0, &[(1, 8.0, 4.0), (2, 8.0, 4.0), (3, 8.0, 1.5)]);
     let c = &p.comps[0];
     let (t2, t3) = (c.takes[1].id, c.takes[2].id);
@@ -274,7 +318,8 @@ fn flatten_renders_the_comp_to_one_audio_clip() {
     let c = p.clips.iter().find(|c| c.id == 9100).unwrap();
     assert_eq!((c.kind, c.source, c.gain, c.offset), (ClipKind::Audio, src, -6.0, 0.0));
     let after = e.render(0.0, 14.0, 0.0, SR).unwrap();
-    let (worst, diff) = before.iter().zip(&after).map(|(a, b)| (a - b).abs()).enumerate().fold((0, 0f32), |m, (i, d)| if d > m.1 { (i, d) } else { m });
+    let (worst, diff) =
+        before.iter().zip(&after).map(|(a, b)| (a - b).abs()).enumerate().fold((0, 0f32), |m, (i, d)| if d > m.1 { (i, d) } else { m });
     assert!(diff < 1e-4, "flattened audio differs by {diff} at frame {} ({} vs {})", worst / 2, before[worst], after[worst]);
     assert!(e.undo());
     assert_eq!(e.project().comps.len(), 1);

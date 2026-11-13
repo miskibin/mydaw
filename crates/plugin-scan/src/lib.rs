@@ -56,10 +56,7 @@ use serde::Serialize;
 
 pub use blocklist::{data_dir, data_file, BlockList};
 pub use cache::{Fingerprint, Outcome, ScanCache};
-pub use worker::{
-    declare_worker_capable, run_worker_if_requested, WorkerHandler, WorkerOutcome, WorkerSpawn,
-    CHILD_TIMEOUT,
-};
+pub use worker::{declare_worker_capable, run_worker_if_requested, WorkerHandler, WorkerOutcome, WorkerSpawn, CHILD_TIMEOUT};
 
 /// One plugin format, from the scanner's point of view.
 ///
@@ -110,10 +107,7 @@ pub trait ScanTarget: Clone + Serialize + DeserializeOwned + Send + 'static {
     fn worker_handler() -> WorkerHandler {
         WorkerHandler {
             format: Self::FORMAT,
-            scan: |module| {
-                Self::read_module(module)
-                    .and_then(|found| serde_json::to_value(found).map_err(|err| err.to_string()))
-            },
+            scan: |module| Self::read_module(module).and_then(|found| serde_json::to_value(found).map_err(|err| err.to_string())),
         }
     }
 }
@@ -229,12 +223,7 @@ impl<T: ScanTarget> ModuleScan<T> {
     /// a test that wrote to the developer's real block list would be a test that
     /// changed which plugins their DAW can see.
     pub fn in_memory() -> Self {
-        Self {
-            blocklist: BlockList::in_memory(),
-            cache: ScanCache::in_memory(),
-            spawn: WorkerSpawn::Auto,
-            timeout: CHILD_TIMEOUT,
-        }
+        Self { blocklist: BlockList::in_memory(), cache: ScanCache::in_memory(), spawn: WorkerSpawn::Auto, timeout: CHILD_TIMEOUT }
     }
 
     /// Replace the block list.
@@ -340,26 +329,20 @@ impl<T: ScanTarget> ModuleScan<T> {
 
             match outcome {
                 Ok(plugins) => {
-                    let plugins: Vec<T> = plugins
-                        .into_iter()
-                        .map(|plugin| plugin.with_module_path(module))
-                        .collect();
+                    let plugins: Vec<T> = plugins.into_iter().map(|plugin| plugin.with_module_path(module)).collect();
                     if let Some(print) = fingerprint {
-                        self.cache
-                            .put(module, print, Outcome::Found(plugins.clone()));
+                        self.cache.put(module, print, Outcome::Found(plugins.clone()));
                         learned_something = true;
                     }
                     pass.found.extend(plugins);
                 }
                 Err(ScanFailure::Refused(message)) => {
                     if let Some(print) = fingerprint {
-                        self.cache
-                            .put(module, print, Outcome::Refused(message.clone()));
+                        self.cache.put(module, print, Outcome::Refused(message.clone()));
                         learned_something = true;
                     }
                     log::debug!("skipping plugin module {}: {message}", module.display());
-                    pass.failures
-                        .push((module.clone(), ScanFailure::Refused(message)));
+                    pass.failures.push((module.clone(), ScanFailure::Refused(message)));
                 }
                 Err(ScanFailure::Blocked(message)) => self.block(module, &mut pass, message),
             }
@@ -381,14 +364,8 @@ impl<T: ScanTarget> ModuleScan<T> {
         };
         pass.cache_hits += 1;
         match known {
-            Outcome::Found(plugins) => pass.found.extend(
-                plugins
-                    .into_iter()
-                    .map(|plugin| plugin.with_module_path(module)),
-            ),
-            Outcome::Refused(message) => pass
-                .failures
-                .push((module.to_path_buf(), ScanFailure::Refused(message))),
+            Outcome::Found(plugins) => pass.found.extend(plugins.into_iter().map(|plugin| plugin.with_module_path(module))),
+            Outcome::Refused(message) => pass.failures.push((module.to_path_buf(), ScanFailure::Refused(message))),
         }
         true
     }
@@ -398,21 +375,12 @@ impl<T: ScanTarget> ModuleScan<T> {
     /// `None` means there was no worker and the module was opened *here*, on a
     /// worker thread with a deadline, and that deadline passed -- so this process
     /// may now be holding a poisoned loader lock.
-    fn read_one(
-        &self,
-        module: &Path,
-        pass: &mut ScanPass<T>,
-    ) -> Option<Result<Vec<T>, ScanFailure>> {
+    fn read_one(&self, module: &Path, pass: &mut ScanPass<T>) -> Option<Result<Vec<T>, ScanFailure>> {
         if let Some(outcome) = worker::scan_in_child(&self.spawn, T::FORMAT, module, self.timeout) {
             pass.children += 1;
             return Some(match outcome {
-                WorkerOutcome::Scanned(value) => {
-                    serde_json::from_value::<Vec<T>>(value).map_err(|err| {
-                        ScanFailure::Refused(format!(
-                            "the scan worker sent an unreadable result: {err}"
-                        ))
-                    })
-                }
+                WorkerOutcome::Scanned(value) => serde_json::from_value::<Vec<T>>(value)
+                    .map_err(|err| ScanFailure::Refused(format!("the scan worker sent an unreadable result: {err}"))),
                 WorkerOutcome::Refused(message) => Err(ScanFailure::Refused(message)),
                 WorkerOutcome::Crashed(message) => Err(ScanFailure::Blocked(message)),
                 WorkerOutcome::TimedOut => Err(ScanFailure::Blocked(timeout_message(self.timeout))),
@@ -420,8 +388,7 @@ impl<T: ScanTarget> ModuleScan<T> {
         }
 
         pass.in_process += 1;
-        read_module_with_deadline::<T>(module, self.timeout)
-            .map(|result| result.map_err(ScanFailure::Refused))
+        read_module_with_deadline::<T>(module, self.timeout).map(|result| result.map_err(ScanFailure::Refused))
     }
 
     fn block(&self, module: &Path, pass: &mut ScanPass<T>, message: String) {
@@ -430,8 +397,7 @@ impl<T: ScanTarget> ModuleScan<T> {
         if self.blocklist.block(module) {
             pass.newly_blocked.push(module.to_path_buf());
         }
-        pass.failures
-            .push((module.to_path_buf(), ScanFailure::Blocked(message)));
+        pass.failures.push((module.to_path_buf(), ScanFailure::Blocked(message)));
     }
 }
 
@@ -461,23 +427,15 @@ fn in_process_hang_message() -> String {
 ///
 /// `None` is "the deadline passed"; the results are plain data and `Send`, so
 /// they come back over a channel.
-fn read_module_with_deadline<T: ScanTarget>(
-    module: &Path,
-    timeout: Duration,
-) -> Option<Result<Vec<T>, String>> {
+fn read_module_with_deadline<T: ScanTarget>(module: &Path, timeout: Duration) -> Option<Result<Vec<T>, String>> {
     let owned = module.to_path_buf();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    let spawned = std::thread::Builder::new()
-        .name("wave-scan-inline".to_owned())
-        .spawn(move || {
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| T::read_module(&owned)))
-                    .unwrap_or_else(|_| {
-                        Err("the module panicked while it was being read".to_owned())
-                    });
-            // A caller that has already given up has dropped the receiver.
-            let _ = tx.send(result);
-        });
+    let spawned = std::thread::Builder::new().name("wave-scan-inline".to_owned()).spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| T::read_module(&owned)))
+            .unwrap_or_else(|_| Err("the module panicked while it was being read".to_owned()));
+        // A caller that has already given up has dropped the receiver.
+        let _ = tx.send(result);
+    });
 
     match spawned {
         Ok(_handle) => rx.recv_timeout(timeout).ok(),
@@ -514,10 +472,7 @@ mod tests {
             if text.starts_with("bad") {
                 return Err("not a plugin".to_owned());
             }
-            Ok(vec![FakePlugin {
-                name: text.trim().to_owned(),
-                path: PathBuf::new(),
-            }])
+            Ok(vec![FakePlugin { name: text.trim().to_owned(), path: PathBuf::new() }])
         }
 
         fn with_module_path(mut self, module: &Path) -> Self {
@@ -532,12 +487,10 @@ mod tests {
     ) -> (ModuleScan<FakePlugin>, Arc<AtomicUsize>) {
         let spawned = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&spawned);
-        let scan = ModuleScan::<FakePlugin>::in_memory().with_spawn(WorkerSpawn::Custom(Arc::new(
-            move |format, module| {
-                counter.fetch_add(1, Ordering::Relaxed);
-                build(format, module)
-            },
-        )));
+        let scan = ModuleScan::<FakePlugin>::in_memory().with_spawn(WorkerSpawn::Custom(Arc::new(move |format, module| {
+            counter.fetch_add(1, Ordering::Relaxed);
+            build(format, module)
+        })));
         (scan, spawned)
     }
 
@@ -562,10 +515,7 @@ mod tests {
         assert_eq!(pass.newly_blocked, vec![one.clone()]);
         assert!(scan.blocklist().contains(&one));
         // ...and the parent is very much alive, which is the entire claim.
-        assert!(scan
-            .cache()
-            .get(&one, Fingerprint::of(&one).unwrap())
-            .is_none());
+        assert!(scan.cache().get(&one, Fingerprint::of(&one).unwrap()).is_none());
     }
 
     #[test]
@@ -604,12 +554,7 @@ mod tests {
         let pass = scan.scan_all(&[hangs.clone(), after.clone()]);
 
         assert_eq!(pass.newly_blocked, vec![hangs]);
-        assert_eq!(
-            pass.found.len(),
-            1,
-            "the module after a hang must still be scanned: {:?}",
-            pass.failures
-        );
+        assert_eq!(pass.found.len(), 1, "the module after a hang must still be scanned: {:?}", pass.failures);
         assert_eq!(pass.found[0].path, after);
         assert!(pass.aborted_at.is_none(), "a child hanging aborts nothing");
     }
@@ -623,11 +568,7 @@ mod tests {
         scan.scan_all(std::slice::from_ref(&one));
         let again = scan.scan_all(std::slice::from_ref(&one));
 
-        assert_eq!(
-            spawned.load(Ordering::Relaxed),
-            1,
-            "the second pass must not start a child for a blocked module"
-        );
+        assert_eq!(spawned.load(Ordering::Relaxed), 1, "the second pass must not start a child for a blocked module");
         assert_eq!(again.skipped, vec![one]);
         assert!(again.newly_blocked.is_empty());
     }
@@ -655,17 +596,10 @@ mod tests {
         assert_eq!(first.cache_hits, 0);
 
         let second = scan.scan_all(std::slice::from_ref(&one));
-        assert_eq!(
-            spawned.load(Ordering::Relaxed),
-            1,
-            "a cache hit must not start a child"
-        );
+        assert_eq!(spawned.load(Ordering::Relaxed), 1, "a cache hit must not start a child");
         assert_eq!(second.cache_hits, 1);
         assert_eq!(second.found, first.found);
-        assert_eq!(
-            second.found[0].path, one,
-            "the module path is stamped on by the parent, not sent by the child"
-        );
+        assert_eq!(second.found[0].path, one, "the module path is stamped on by the parent, not sent by the child");
 
         // ...until the file changes underneath it.
         std::fs::write(&one, "Two and then some").unwrap();
@@ -697,11 +631,7 @@ mod tests {
         assert_eq!(listed.found.len(), 1);
         assert_eq!(listed.found[0].name, "Known");
         assert_eq!(listed.skipped, vec![unknown]);
-        assert_eq!(
-            spawned.load(Ordering::Relaxed),
-            1,
-            "an unknown module must wait for Rescan, not be opened to fill a list"
-        );
+        assert_eq!(spawned.load(Ordering::Relaxed), 1, "an unknown module must wait for Rescan, not be opened to fill a list");
         assert_eq!(listed.children, 0);
         assert_eq!(listed.cache_hits, 1);
     }
@@ -711,10 +641,7 @@ mod tests {
         let dir = scratch_dir("pass-refused");
         let bad = module(dir.path(), "bad.fake", "bad file");
         let (scan, spawned) = counting_scan(|_, _| {
-            trivial_worker(&format!(
-                "echo {}{{\"status\":\"error\",\"v\":1,\"message\":\"not a plugin\"}}",
-                worker::RESULT_PREFIX
-            ))
+            trivial_worker(&format!("echo {}{{\"status\":\"error\",\"v\":1,\"message\":\"not a plugin\"}}", worker::RESULT_PREFIX))
         });
 
         let first = scan.scan_all(std::slice::from_ref(&bad));
@@ -735,9 +662,8 @@ mod tests {
         let dir = scratch_dir("pass-inline");
         let one = module(dir.path(), "one.fake", "One");
         let bad = module(dir.path(), "bad.fake", "bad file");
-        let scan = ModuleScan::<FakePlugin>::in_memory().with_spawn(WorkerSpawn::Custom(Arc::new(
-            |_, _| Err(std::io::Error::other("no worker in this build")),
-        )));
+        let scan = ModuleScan::<FakePlugin>::in_memory()
+            .with_spawn(WorkerSpawn::Custom(Arc::new(|_, _| Err(std::io::Error::other("no worker in this build")))));
 
         let pass = scan.scan_all(&[one.clone(), bad.clone()]);
 
@@ -775,9 +701,6 @@ mod tests {
         let handler = FakePlugin::worker_handler();
         let value = (handler.scan)(&one).expect("the fake module reads");
         assert_eq!(value, serde_json::json!([{ "name": "One" }]));
-        assert!(
-            (handler.scan)(Path::new("nowhere.fake")).is_err(),
-            "a module that is not there is a refusal, not a panic"
-        );
+        assert!((handler.scan)(Path::new("nowhere.fake")).is_err(), "a module that is not there is a refusal, not a panic");
     }
 }

@@ -95,9 +95,7 @@ fn read_f0(path: &Path) -> Option<Vec<(f64, f32)>> {
 
 fn read_notes(path: &Path) -> Option<Vec<(f64, f64)>> {
     let text = std::fs::read_to_string(path).ok()?;
-    let mut lines = text
-        .lines()
-        .skip_while(|l| !l.trim_start().starts_with("Sequence"));
+    let mut lines = text.lines().skip_while(|l| !l.trim_start().starts_with("Sequence"));
     lines.next()?;
     let notes: Vec<(f64, f64)> = lines
         .filter_map(|l| {
@@ -122,59 +120,29 @@ pub fn index(root: &Path) -> Result<Vec<Item>, String> {
         .filter_map(|p| Some((p.file_stem()?.to_str()?.to_lowercase(), p)))
         .collect();
     if by_stem.is_empty() {
-        return Err(format!(
-            "no .wav files under {}",
-            root.join("audio").display()
-        ));
+        return Err(format!("no .wav files under {}", root.join("audio").display()));
     }
     let mut items = vec![];
     for k in 1..=4 {
         let raw = ann.join(format!("raw {k}")).join("csv");
         let mut files = vec![];
         walk(&raw, &mut files);
-        for f in files
-            .into_iter()
-            .filter(|p| p.extension().is_some_and(|e| e == "csv"))
-        {
-            let Some(stem) = f
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .map(str::to_lowercase)
-            else {
+        for f in files.into_iter().filter(|p| p.extension().is_some_and(|e| e == "csv")) {
+            let Some(stem) = f.file_stem().and_then(|s| s.to_str()).map(str::to_lowercase) else {
                 continue;
             };
-            let technique = f
-                .parent()
-                .and_then(|p| p.file_name())
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_string();
-            let audio = by_stem
-                .get(&stem)
-                .or_else(|| by_stem.get(&stem.replace("vibrado", "vibrato")))
-                .cloned();
-            let ext = ann
-                .join(format!("extended {k}"))
-                .join("with file header")
-                .join(&technique)
-                .join(f.file_name().unwrap_or_default());
+            let technique = f.parent().and_then(|p| p.file_name()).and_then(|s| s.to_str()).unwrap_or("").to_string();
+            let audio = by_stem.get(&stem).or_else(|| by_stem.get(&stem.replace("vibrado", "vibrato"))).cloned();
+            let ext = ann.join(format!("extended {k}")).join("with file header").join(&technique).join(f.file_name().unwrap_or_default());
             if let (Some(audio), Some(f0), Some(notes)) = (audio, read_f0(&f), read_notes(&ext)) {
-                items.push(Item {
-                    stem,
-                    audio,
-                    f0,
-                    notes,
-                });
+                items.push(Item { stem, audio, f0, notes });
             }
         }
     }
     items.sort_by(|a, b| a.stem.cmp(&b.stem));
     items.dedup_by(|a, b| a.stem == b.stem);
     if items.is_empty() {
-        return Err(format!(
-            "no annotated recordings found under {}",
-            ann.display()
-        ));
+        return Err(format!("no annotated recordings found under {}", ann.display()));
     }
     Ok(items)
 }
@@ -212,9 +180,7 @@ fn offsets(frames: usize, notes: &[(f64, f64)], detune: &[f32], drift: f32) -> V
 fn detuned(audio: &Audio, off: &[f32], est: Option<&dyn F0Estimator>) -> Audio {
     let a = analyze_with(&mono_of(audio), audio.sr as f32, est);
     let n = a.curve.len();
-    let target_f0: Vec<f32> = (0..n)
-        .map(|f| a.curve[f] + off.get(f).copied().unwrap_or(0.0) / 100.0)
-        .collect();
+    let target_f0: Vec<f32> = (0..n).map(|f| a.curve[f] + off.get(f).copied().unwrap_or(0.0) / 100.0).collect();
     let pt = PitchTarget {
         rate: a.rate,
         start: 0,
@@ -236,17 +202,12 @@ fn edges(truth: &[f32], notes: &[(f64, f64)]) -> Vec<bool> {
     let n = truth.len();
     let near_note_edge = |f: usize| {
         let t = f as f64 / RATE as f64;
-        notes
-            .iter()
-            .any(|&(a, b)| (t - a).abs() < 0.04 || (t - b).abs() < 0.04)
-            || !notes.iter().any(|&(a, b)| t > a && t < b)
+        notes.iter().any(|&(a, b)| (t - a).abs() < 0.04 || (t - b).abs() < 0.04) || !notes.iter().any(|&(a, b)| t > a && t < b)
     };
     (0..n)
         .map(|f| {
             let (a, b) = (f.saturating_sub(8), (f + 8).min(n - 1));
-            near_note_edge(f)
-                || truth[a..=b].iter().any(|x| x.is_nan())
-                || (truth[b] - truth[a]).abs() > 0.6
+            near_note_edge(f) || truth[a..=b].iter().any(|x| x.is_nan()) || (truth[b] - truth[a]).abs() > 0.6
         })
         .collect()
 }
@@ -254,11 +215,7 @@ fn edges(truth: &[f32], notes: &[(f64, f64)]) -> Vec<bool> {
 fn note_pitch(curve: &[f32], (a, b): (f64, f64)) -> Option<f32> {
     let hi = (((b - 0.03) * RATE as f64) as usize).min(curve.len());
     let lo = (((a + 0.05) * RATE as f64) as usize).min(hi);
-    let mut v: Vec<f32> = curve[lo..hi]
-        .iter()
-        .copied()
-        .filter(|x| x.is_finite())
-        .collect();
+    let mut v: Vec<f32> = curve[lo..hi].iter().copied().filter(|x| x.is_finite()).collect();
     if v.len() < 4 {
         return None;
     }
@@ -280,24 +237,14 @@ pub fn run_self(items: &[&Item], p: &RefTune, est: Option<&dyn F0Estimator>) -> 
         let truth = it.curve(frames);
         let level = LEVELS[i % LEVELS.len()];
         let drift = if i % 6 == 5 { 30.0 } else { 0.0 };
-        let detune: Vec<f32> = (0..it.notes.len())
-            .map(|k| if (k + i) % 2 == 0 { level } else { -level })
-            .collect();
+        let detune: Vec<f32> = (0..it.notes.len()).map(|k| if (k + i) % 2 == 0 { level } else { -level }).collect();
         let off = offsets(frames, &it.notes, &detune, drift);
         let take = detuned(&audio, &off, est);
         let sung: Vec<f32> = truth.iter().zip(&off).map(|(t, o)| t + o / 100.0).collect();
-        let notes: Vec<(f64, f64, f32)> = it
-            .notes
-            .iter()
-            .filter_map(|&n| Some((n.0, n.1, note_pitch(&truth, n)?)))
-            .collect();
+        let notes: Vec<(f64, f64, f32)> = it.notes.iter().filter_map(|&n| Some((n.0, n.1, note_pitch(&truth, n)?))).collect();
         let c = Case {
             name: it.stem.clone(),
-            group: if drift > 0.0 {
-                format!("±{level:.0} ct + drift")
-            } else {
-                format!("±{level:.0} ct")
-            },
+            group: if drift > 0.0 { format!("±{level:.0} ct + drift") } else { format!("±{level:.0} ct") },
             take: &take,
             reference: &audio,
             edge: edges(&truth, &it.notes),
@@ -329,22 +276,16 @@ pub fn cross_pairs(items: &[Item]) -> Vec<(&Item, &Item)> {
         if a.is_excerpt() {
             continue;
         }
-        if let Some(b) = items.iter().skip(i + 1).find(|b| {
-            b.exercise() == a.exercise()
-                && b.singer() != a.singer()
-                && b.notes.len() == a.notes.len()
-        }) {
+        if let Some(b) =
+            items.iter().skip(i + 1).find(|b| b.exercise() == a.exercise() && b.singer() != a.singer() && b.notes.len() == a.notes.len())
+        {
             pairs.push((a, b));
         }
     }
     pairs
 }
 
-pub fn run_cross(
-    pairs: &[&(&Item, &Item)],
-    p: &RefTune,
-    est: Option<&dyn F0Estimator>,
-) -> Vec<Outcome> {
+pub fn run_cross(pairs: &[&(&Item, &Item)], p: &RefTune, est: Option<&dyn F0Estimator>) -> Vec<Outcome> {
     let mut out = vec![];
     for (i, (ti, ri)) in pairs.iter().enumerate() {
         let (Ok(orig), Ok(reference)) = (Audio::load(&ti.audio), Audio::load(&ri.audio)) else {
@@ -354,16 +295,10 @@ pub fn run_cross(
         let truth_take = ti.curve(frames);
         let truth_ref = ri.curve(frames_of(&reference));
         let level = LEVELS[i % LEVELS.len()];
-        let detune: Vec<f32> = (0..ti.notes.len())
-            .map(|k| if (k + i) % 2 == 0 { level } else { -level })
-            .collect();
+        let detune: Vec<f32> = (0..ti.notes.len()).map(|k| if (k + i) % 2 == 0 { level } else { -level }).collect();
         let off = offsets(frames, &ti.notes, &detune, 0.0);
         let take = detuned(&orig, &off, est);
-        let sung: Vec<f32> = truth_take
-            .iter()
-            .zip(&off)
-            .map(|(t, o)| t + o / 100.0)
-            .collect();
+        let sung: Vec<f32> = truth_take.iter().zip(&off).map(|(t, o)| t + o / 100.0).collect();
         // the take's note k should land on the reference singer's note k, in the take's octave
         let notes: Vec<(f64, f64, f32)> = ti
             .notes
@@ -383,12 +318,7 @@ pub fn run_cross(
             edge: vec![],
             sung,
             notes,
-            onsets: ti
-                .notes
-                .iter()
-                .zip(&ri.notes)
-                .map(|(a, b)| (a.0, b.0))
-                .collect(),
+            onsets: ti.notes.iter().zip(&ri.notes).map(|(a, b)| (a.0, b.0)).collect(),
             expect_rejection: false,
         };
         let (o, _) = eval::run(&c, p, est);
@@ -407,12 +337,7 @@ pub fn run_cross(
     out
 }
 
-pub fn run_mismatch(
-    items: &[Item],
-    n: usize,
-    p: &RefTune,
-    est: Option<&dyn F0Estimator>,
-) -> Vec<Outcome> {
+pub fn run_mismatch(items: &[Item], n: usize, p: &RefTune, est: Option<&dyn F0Estimator>) -> Vec<Outcome> {
     let excerpts: Vec<&Item> = items.iter().filter(|i| i.is_excerpt()).collect();
     let exercises: Vec<&Item> = items.iter().filter(|i| !i.is_excerpt()).collect();
     if excerpts.is_empty() || exercises.is_empty() {
@@ -438,16 +363,7 @@ pub fn run_mismatch(
             expect_rejection: true,
         };
         let (o, _) = eval::run(&c, p, est);
-        eprintln!(
-            "  miss  {:<52} score {:.2} {}",
-            o.name,
-            o.score,
-            if o.corrected {
-                "CORRECTED (wrong)"
-            } else {
-                "held back"
-            }
-        );
+        eprintln!("  miss  {:<52} score {:.2} {}", o.name, o.score, if o.corrected { "CORRECTED (wrong)" } else { "held back" });
         out.push(o);
     }
     out

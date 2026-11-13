@@ -22,8 +22,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub use probe::LatencyReport;
 use jitter::{IoStats, JitterBuf};
+pub use probe::LatencyReport;
 use probe::Probe;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -127,7 +127,12 @@ fn pick_host(want: &str) -> (cpal::Host, Option<String>) {
             if host_key(id) == want {
                 match cpal::host_from_id(id) {
                     Ok(h) => return (h, None),
-                    Err(e) => return (cpal::default_host(), Some(format!("{want} is unavailable ({e}); using {} instead.", cpal::default_host().id().name()))),
+                    Err(e) => {
+                        return (
+                            cpal::default_host(),
+                            Some(format!("{want} is unavailable ({e}); using {} instead.", cpal::default_host().id().name())),
+                        )
+                    }
                 }
             }
         }
@@ -316,7 +321,8 @@ impl AudioIo {
                             status = AudioStatus { restarts, ..st };
                         }
                         Err(e) => {
-                            status = AudioStatus { config: cfg, error: Some(e), asio_compiled: asio_compiled(), restarts, ..Default::default() };
+                            status =
+                                AudioStatus { config: cfg, error: Some(e), asio_compiled: asio_compiled(), restarts, ..Default::default() };
                         }
                     }
                     let _ = reply.send(status.clone());
@@ -474,7 +480,14 @@ struct OpenedInput {
 
 /// Builds (does not start) the input stream. `name`: `None` = the system default,
 /// `Some("")` = no input.
-fn open_input(host: &cpal::Host, name: Option<&str>, cfg: &AudioConfig, rate: u32, buffer: cpal::BufferSize, err: Arc<std::sync::Mutex<Option<String>>>) -> Result<Option<OpenedInput>, String> {
+fn open_input(
+    host: &cpal::Host,
+    name: Option<&str>,
+    cfg: &AudioConfig,
+    rate: u32,
+    buffer: cpal::BufferSize,
+    err: Arc<std::sync::Mutex<Option<String>>>,
+) -> Result<Option<OpenedInput>, String> {
     let dev = match name {
         Some("") => return Ok(None),
         Some(n) => find(host.input_devices(), n),
@@ -491,7 +504,12 @@ fn open_input(host: &cpal::Host, name: Option<&str>, cfg: &AudioConfig, rate: u3
     // ASIO delivers each input buffer just before the output callback that uses it; other
     // hosts run the two streams on their own schedules and need two periods in reserve
     let periods = if host.id().name().eq_ignore_ascii_case("asio") { 1 } else { 2 };
-    Ok(Some(OpenedInput { stream, side: InputSide { ring: rx, clock, jb: JitterBuf::new(rate, periods) }, name: dev_name(&d), channels: ich }))
+    Ok(Some(OpenedInput {
+        stream,
+        side: InputSide { ring: rx, clock, jb: JitterBuf::new(rate, periods) },
+        name: dev_name(&d),
+        channels: ich,
+    }))
 }
 
 fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Running, AudioStatus), String> {
@@ -571,7 +589,18 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
     // after Play the music is heard at once, not after the plugin delay compensation
     rt.set_instant_start(Some(0.7));
     let crashed = Arc::new(AtomicBool::new(false));
-    let wires = OutWires { shared: engine.shared(), swap: swap_rx, trash: trash_tx, probe: probe_rx, back: back_tx, offset_ms: offset_ms.clone(), stats: stats.clone(), shared_clock, buffer: nominal, crashed: crashed.clone() };
+    let wires = OutWires {
+        shared: engine.shared(),
+        swap: swap_rx,
+        trash: trash_tx,
+        probe: probe_rx,
+        back: back_tx,
+        offset_ms: offset_ms.clone(),
+        stats: stats.clone(),
+        shared_clock,
+        buffer: nominal,
+        crashed: crashed.clone(),
+    };
     let out = build_output(&out_dev, &sc, fmt, rt, error.clone(), wires).map_err(|e| format!("{out_name}: {e}"))?;
     out.play().map_err(|e| format!("{out_name}: {e}"))?;
     if let Some(s) = &inp {
@@ -595,7 +624,23 @@ fn open(engine: &Arc<Engine>, cfg: &AudioConfig, want_input: bool) -> Result<(Ru
         asio_compiled: asio_compiled(),
         ..Default::default()
     };
-    let run = Running { _out: out, inp, input_open, asio: is_asio, host, rate, buffer, error, swap: swap_tx, trash: trash_rx, probe_tx, probe_back: back_rx, offset_ms, stats, crashed };
+    let run = Running {
+        _out: out,
+        inp,
+        input_open,
+        asio: is_asio,
+        host,
+        rate,
+        buffer,
+        error,
+        swap: swap_tx,
+        trash: trash_rx,
+        probe_tx,
+        probe_back: back_rx,
+        offset_ms,
+        stats,
+        crashed,
+    };
     Ok((run, status))
 }
 
@@ -690,10 +735,10 @@ impl Estimator {
             None => None, // nothing captured yet, or the jitter buffer is refilling
             Some(_) if origin.is_nan() => None,
             Some(x) => {
-            // age at this callback of the input frame played first in it
-            let age = (now_ns - origin) * self.rate as f64 / 1e9 - x;
-            let ok = age.is_finite() && age > -(self.rate as f64) * 0.002 && age < self.rate as f64;
-            Some(if ok { out + age.max(0.0).round() as u32 } else { fallback })
+                // age at this callback of the input frame played first in it
+                let age = (now_ns - origin) * self.rate as f64 / 1e9 - x;
+                let ok = age.is_finite() && age > -(self.rate as f64) * 0.002 && age < self.rate as f64;
+                Some(if ok { out + age.max(0.0).round() as u32 } else { fallback })
             }
         };
         // the first real measurement replaces whatever was guessed before the input ran
@@ -751,7 +796,14 @@ struct OutWires {
     crashed: Arc<AtomicBool>,
 }
 
-fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut rt: wave_engine::Rt, err: Arc<std::sync::Mutex<Option<String>>>, mut w: OutWires) -> Result<cpal::Stream, String> {
+fn build_output(
+    dev: &cpal::Device,
+    sc: &cpal::StreamConfig,
+    fmt: cpal::SampleFormat,
+    mut rt: wave_engine::Rt,
+    err: Arc<std::sync::Mutex<Option<String>>>,
+    mut w: OutWires,
+) -> Result<cpal::Stream, String> {
     let ch = sc.channels as usize;
     let rate = sc.sample_rate;
     let mut est = Estimator::new(rate);
@@ -876,7 +928,15 @@ fn build_output(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFo
     s.map_err(|e| e.to_string())
 }
 
-fn build_input(dev: &cpal::Device, sc: &cpal::StreamConfig, fmt: cpal::SampleFormat, mut tx: rtrb::Producer<f32>, err: Arc<std::sync::Mutex<Option<String>>>, pick: usize, clock: Arc<InClock>) -> Result<cpal::Stream, String> {
+fn build_input(
+    dev: &cpal::Device,
+    sc: &cpal::StreamConfig,
+    fmt: cpal::SampleFormat,
+    mut tx: rtrb::Producer<f32>,
+    err: Arc<std::sync::Mutex<Option<String>>>,
+    pick: usize,
+    clock: Arc<InClock>,
+) -> Result<cpal::Stream, String> {
     let ch = sc.channels as usize;
     let pick = pick.min(ch - 1);
     let rate = sc.sample_rate;
@@ -959,7 +1019,18 @@ mod tests {
 
     impl Default for Sim {
         fn default() -> Self {
-            Self { out_period: 512, out_lat: 1100, in_packet: 480, in_delay_ms: 1.0, jitter_ms: 0.0, in_start_s: -2.0, ppm: 0.0, click: 48000, secs: 3.0, signal: None }
+            Self {
+                out_period: 512,
+                out_lat: 1100,
+                in_packet: 480,
+                in_delay_ms: 1.0,
+                jitter_ms: 0.0,
+                in_start_s: -2.0,
+                ppm: 0.0,
+                click: 48000,
+                secs: 3.0,
+                signal: None,
+            }
         }
     }
 
@@ -1086,7 +1157,16 @@ mod tests {
     fn different_input_and_output_devices_are_measured_per_callback() {
         // a separate input device: its own clock (+-200 ppm), other packets, its own delay
         for (ppm, packet) in [(200.0, 128), (-200.0, 441), (0.0, 1024)] {
-            let r = simulate(&Sim { out_lat: 2400, in_packet: packet, in_delay_ms: 4.0, jitter_ms: 2.0, in_start_s: -1.0, ppm, click: 100_000, ..Sim::default() });
+            let r = simulate(&Sim {
+                out_lat: 2400,
+                in_packet: packet,
+                in_delay_ms: 4.0,
+                jitter_ms: 2.0,
+                in_start_s: -1.0,
+                ppm,
+                click: 100_000,
+                ..Sim::default()
+            });
             assert_aligned(&r, &format!("ppm {ppm} packet {packet}"));
         }
     }
@@ -1201,7 +1281,10 @@ mod tests {
         assert_eq!(output_failure(false, None), None);
         // a lost microphone leaves the output playing
         assert_eq!(output_failure(false, Some("input: device disconnected")), None);
-        assert_eq!(output_failure(false, Some("The requested device is no longer available")).as_deref(), Some("The requested device is no longer available"));
+        assert_eq!(
+            output_failure(false, Some("The requested device is no longer available")).as_deref(),
+            Some("The requested device is no longer available")
+        );
         assert!(output_failure(true, None).unwrap().contains("crashed"));
         assert!(output_failure(true, Some("input: x")).is_some());
     }

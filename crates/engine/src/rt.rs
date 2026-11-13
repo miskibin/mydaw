@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::model::{Id, SamplerState};
+use crate::poly::{Patch, SynthBank, SynthInst};
 use crate::processor::{ParamBlock, ProcessCtx, Processor, METERS};
 use crate::sources::Audio;
-use crate::poly::{Patch, SynthBank, SynthInst};
 use crate::synth::{Dest, VoiceKind, VoicePool};
 
 pub const MAX_INSERTS: usize = 128;
@@ -224,7 +224,28 @@ pub struct InsertRt {
 
 impl InsertRt {
     pub fn new(id: Id, gain: f32, pan: f32, width: f32, on: bool, fx: Vec<FxSlot>, max_block: usize) -> Self {
-        Self { id, gain, pan, width, w_cur: width, on, fx, g_cur: if on { gain } else { 0.0 }, l: vec![0.0; max_block], r: vec![0.0; max_block], pdc_l: vec![], pdc_r: vec![], pdc_w: 0, dry_l: vec![0.0; max_block], dry_r: vec![0.0; max_block], quiet: 0, parked: false, idle_at: usize::MAX, idle: false, low_lat: false }
+        Self {
+            id,
+            gain,
+            pan,
+            width,
+            w_cur: width,
+            on,
+            fx,
+            g_cur: if on { gain } else { 0.0 },
+            l: vec![0.0; max_block],
+            r: vec![0.0; max_block],
+            pdc_l: vec![],
+            pdc_r: vec![],
+            pdc_w: 0,
+            dry_l: vec![0.0; max_block],
+            dry_r: vec![0.0; max_block],
+            quiet: 0,
+            parked: false,
+            idle_at: usize::MAX,
+            idle: false,
+            low_lat: false,
+        }
     }
 
     /// Delays this insert's output by `samples` (allocates; call off the audio thread).
@@ -366,10 +387,22 @@ pub enum ClipSrc {
 /// A resolved automation target (indices into the graph built from the same project).
 #[derive(Clone, Copy, Debug)]
 pub enum TargetRt {
-    Param { fx: Id, idx: usize, min: f32, max: f32, log: bool },
+    Param {
+        fx: Id,
+        idx: usize,
+        min: f32,
+        max: f32,
+        log: bool,
+    },
     /// EQ band field: 0 freq, 1 gain, 2 Q.
-    Band { fx: Id, band: usize, field: u8 },
-    Mix { fx: Id },
+    Band {
+        fx: Id,
+        band: usize,
+        field: u8,
+    },
+    Mix {
+        fx: Id,
+    },
     InsVol(usize),
     InsPan(usize),
     TrackVol(usize),
@@ -377,11 +410,21 @@ pub enum TargetRt {
     ChanVol(usize),
     ChanPan(usize),
     /// A synth channel's patch parameter (`poly::params` index), glided by the synth.
-    Synth { chan: Id, idx: usize, min: f32, max: f32, log: bool, choice: bool },
+    Synth {
+        chan: Id,
+        idx: usize,
+        min: f32,
+        max: f32,
+        log: bool,
+        choice: bool,
+    },
     /// A hosted plugin parameter (`fx` is the effect id, `param_id` the
     /// plugin's own parameter id); the envelope value goes through as the
     /// plugin's normalized 0..1.
-    PluginParam { fx: Id, param_id: u32 },
+    PluginParam {
+        fx: Id,
+        param_id: u32,
+    },
     /// WAVE Keys channel (index into `Timeline::chans`): release time, dynamics.
     KeysRelease(usize),
     KeysDynamics(usize),
@@ -536,33 +579,68 @@ pub struct Preview {
 
 // ------------------------------------------------------------------ messages
 
+// `Params` is large on purpose: a parameter move is a fixed-size message the audio thread
+// reads in place. Boxing it (what the lint suggests) would free memory on the audio thread.
+#[allow(clippy::large_enum_variant)]
 pub enum Cmd {
     Graph(Box<Graph>),
     Timeline(Box<Timeline>),
     Mix(Box<MixState>),
-    Params { fx: Id, params: Option<ParamBlock>, mix: f32 },
+    Params {
+        fx: Id,
+        params: Option<ParamBlock>,
+        mix: f32,
+    },
     /// Variable-size data for one effect (Warp's maps), built off the audio thread.
-    FxData { fx: Id, data: crate::processor::FxData },
+    FxData {
+        fx: Id,
+        data: crate::processor::FxData,
+    },
     /// `rec_loop`: record in passes over the loop range (one take per pass).
-    Play { from: f64, count_in: f64, rec: bool, rec_loop: bool },
+    Play {
+        from: f64,
+        count_in: f64,
+        rec: bool,
+        rec_loop: bool,
+    },
     /// Stops capturing input but keeps the transport running.
     PunchOut,
     /// Starts capturing input at the current beat while playing. `rec_loop`: wrap at the
     /// loop end in passes (one take per pass), like loop recording.
-    PunchIn { rec_loop: bool },
+    PunchIn {
+        rec_loop: bool,
+    },
     Stop,
-    Flags { metro: bool, monitor: bool },
-    Watch { ids: [Id; WATCH_SLOTS], n: u8 },
+    Flags {
+        metro: bool,
+        monitor: bool,
+    },
+    Watch {
+        ids: [Id; WATCH_SLOTS],
+        n: u8,
+    },
     Preview(Option<Box<Preview>>),
     /// Play one note of a channel now (step clicks, the piano-roll keyboard). `pattern`
     /// decides where a track-routed channel is heard (that pattern's track).
-    Audition { chan: Id, key: u8, vel: f32, len: f32, pattern: Option<Id> },
+    Audition {
+        chan: Id,
+        key: u8,
+        vel: f32,
+        len: f32,
+        pattern: Option<Id>,
+    },
     /// Loop one pattern on its own (`None` stops). Exclusive with the song transport.
     PatPlay(Option<Id>),
     /// Live MIDI key down/up on a channel. It plays where the song plays the channel (its own
     /// insert, else the track of its pattern); `ins` (the armed track's insert) only for a
     /// channel the song does not play yet, else the master.
-    MidiNote { chan: Id, key: u8, vel: f32, on: bool, ins: Option<usize> },
+    MidiNote {
+        chan: Id,
+        key: u8,
+        vel: f32,
+        on: bool,
+        ins: Option<usize>,
+    },
     /// Live MIDI sustain pedal.
     MidiSustain(bool),
     /// Live MIDI pitch bend in semitones.
@@ -574,7 +652,10 @@ pub enum Cmd {
     /// A synth channel's instance, made off the audio thread (replaces one of the same channel).
     SynthAdd(Box<SynthInst>),
     /// New parameter values of a synth channel.
-    SynthPatch { chan: Id, patch: Box<Patch> },
+    SynthPatch {
+        chan: Id,
+        patch: Box<Patch>,
+    },
     /// A synth channel is gone.
     SynthRemove(Id),
 }
@@ -662,7 +743,15 @@ pub struct Rt {
 const DECLICK_S: f32 = 0.003;
 
 impl Rt {
-    pub fn new(sr: f32, max_block: usize, cmds: rtrb::Consumer<Cmd>, garbage: rtrb::Producer<Garbage>, shared: Arc<Shared>, taps: Taps, record: rtrb::Producer<f32>) -> Self {
+    pub fn new(
+        sr: f32,
+        max_block: usize,
+        cmds: rtrb::Consumer<Cmd>,
+        garbage: rtrb::Producer<Garbage>,
+        shared: Arc<Shared>,
+        taps: Taps,
+        record: rtrb::Producer<f32>,
+    ) -> Self {
         shared.sample_rate.store(sr as u32, Relaxed);
         Self {
             sr,
@@ -671,7 +760,15 @@ impl Rt {
             garbage,
             shared,
             graph: Box::new(Graph::new(vec![], vec![], None, max_block)),
-            timeline: Box::new(Timeline { bpm: 120.0, clips: vec![], pats: vec![], chans: vec![], autos: vec![], loop_range: None, song_end: 4.0 }),
+            timeline: Box::new(Timeline {
+                bpm: 120.0,
+                clips: vec![],
+                pats: vec![],
+                chans: vec![],
+                autos: vec![],
+                loop_range: None,
+                song_end: 4.0,
+            }),
             voices: VoicePool::new(sr),
             synths: SynthBank::default(),
             click: vec![0.0; max_block],
@@ -1058,7 +1155,19 @@ impl Rt {
                 }
                 let ins = ch.insert.or(pat.home).unwrap_or(ch.home);
                 let delay = ((nb - b0) / bps) as u32;
-                play(&mut self.voices, &mut self.synths, ch, nt.chan, Dest::Insert(ins), delay, (nt.len * spb) as f32, nt.key, nt.vel, 1.0, self.sr);
+                play(
+                    &mut self.voices,
+                    &mut self.synths,
+                    ch,
+                    nt.chan,
+                    Dest::Insert(ins),
+                    delay,
+                    (nt.len * spb) as f32,
+                    nt.key,
+                    nt.vel,
+                    1.0,
+                    self.sr,
+                );
             }
         }
         self.pat_beat = b1.rem_euclid(pat.len);
@@ -1141,7 +1250,16 @@ impl Rt {
     /// not heard (pre-roll); `ahead`: a pre-roll block rendered ahead of the device clock
     /// (no device input, no preview: those follow the real clock).
     #[allow(clippy::too_many_arguments)]
-    fn block(&mut self, at: usize, n: usize, out_l: &mut [f32], out_r: &mut [f32], input: Option<(&[f32], &[f32])>, mute: usize, ahead: bool) {
+    fn block(
+        &mut self,
+        at: usize,
+        n: usize,
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+        input: Option<(&[f32], &[f32])>,
+        mute: usize,
+        ahead: bool,
+    ) {
         let sr = self.sr;
         for (l, r) in self.graph.track_bufs.iter_mut() {
             l[..n].fill(0.0);
@@ -1242,7 +1360,12 @@ impl Rt {
         let mon_ins = match input {
             // a pre-roll block has no device input: the monitoring set-up stays as it is
             _ if ahead => self.graph.mon_ins,
-            Some(_) if self.monitor => self.graph.monitor_track.and_then(|t| self.graph.tracks.get(t)).map(|t| t.insert).filter(|&k| k > 0 && k < self.graph.inserts.len()),
+            Some(_) if self.monitor => self
+                .graph
+                .monitor_track
+                .and_then(|t| self.graph.tracks.get(t))
+                .map(|t| t.insert)
+                .filter(|&k| k > 0 && k < self.graph.inserts.len()),
             _ => None,
         };
         if mon_ins != self.graph.mon_ins {
@@ -1460,7 +1583,19 @@ impl Rt {
                                         _ => continue,
                                     },
                                 };
-                                play(&mut self.voices, &mut self.synths, ch, nt.chan, dest, delay, (len_beats * spb) as f32, nt.key, nt.vel, gain, self.sr);
+                                play(
+                                    &mut self.voices,
+                                    &mut self.synths,
+                                    ch,
+                                    nt.chan,
+                                    dest,
+                                    delay,
+                                    (len_beats * spb) as f32,
+                                    nt.key,
+                                    nt.vel,
+                                    gain,
+                                    self.sr,
+                                );
                             }
                         }
                     }
@@ -1517,7 +1652,19 @@ impl Rt {
 /// synth instance for synth channels. `len_s` in seconds; `gain` is level on top of the
 /// velocity (a track fader the channel's routing skips).
 #[allow(clippy::too_many_arguments)]
-fn play(voices: &mut VoicePool, synths: &mut SynthBank, ch: &ChanRt, idx: usize, dest: Dest, delay: u32, len_s: f32, key: u8, vel: f32, gain: f32, sr: f32) {
+fn play(
+    voices: &mut VoicePool,
+    synths: &mut SynthBank,
+    ch: &ChanRt,
+    idx: usize,
+    dest: Dest,
+    delay: u32,
+    len_s: f32,
+    key: u8,
+    vel: f32,
+    gain: f32,
+    sr: f32,
+) {
     if ch.kind == VoiceKind::Synth {
         if let Some(s) = synths.get(ch.id) {
             s.note(delay, (len_s.max(0.0) * sr) as u32, key, vel * gain, dest);

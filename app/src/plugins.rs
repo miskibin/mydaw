@@ -25,7 +25,8 @@ struct Factory(Arc<Plugins>);
 impl PluginFactory for Factory {
     fn create(&self, fx_id: Id, p: &PluginRef, sr: f32, max_block: usize, live: bool) -> Result<Box<dyn Processor>, String> {
         let state = p.state.as_deref().and_then(|s| base64::engine::general_purpose::STANDARD.decode(s).ok());
-        let (proc, handle) = wave_vst3::instantiate(&p.path, &p.cid, state.as_deref(), sr, max_block).map_err(|e| format!("{}: {e}", p.name))?;
+        let (proc, handle) =
+            wave_vst3::instantiate(&p.path, &p.cid, state.as_deref(), sr, max_block).map_err(|e| format!("{}: {e}", p.name))?;
         if live {
             self.0.handles.lock().insert(fx_id, handle);
         }
@@ -60,7 +61,9 @@ impl Plugins {
 
     /// (name, vendor) of a scanned plugin.
     pub fn info(&self, path: &str, cid: &str) -> Option<(String, String)> {
-        let find = |l: &[wave_vst3::PluginInfo]| l.iter().find(|p| p.path == path && p.cid.eq_ignore_ascii_case(cid)).map(|p| (p.name.clone(), p.vendor.clone()));
+        let find = |l: &[wave_vst3::PluginInfo]| {
+            l.iter().find(|p| p.path == path && p.cid.eq_ignore_ascii_case(cid)).map(|p| (p.name.clone(), p.vendor.clone()))
+        };
         if let Some(x) = find(&self.known.lock()) {
             return Some(x);
         }

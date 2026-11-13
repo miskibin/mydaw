@@ -92,25 +92,14 @@ fn frames_of(perf: &Performance, f0: usize, f1: usize) -> Vec<Fr> {
             let rel = if p[i].is_nan() {
                 f32::NAN
             } else {
-                let w: Vec<f32> = p[i.saturating_sub(15)..(i + 16).min(n)]
-                    .iter()
-                    .copied()
-                    .filter(|x| !x.is_nan())
-                    .collect();
+                let w: Vec<f32> = p[i.saturating_sub(15)..(i + 16).min(n)].iter().copied().filter(|x| !x.is_nan()).collect();
                 if w.len() >= 5 {
                     p[i] - median(w).unwrap_or(p[i])
                 } else {
                     f32::NAN
                 }
             };
-            Fr {
-                m,
-                a: c.energy[f0 + i] > top - 40.0,
-                v: !p[i].is_nan(),
-                p: p[i],
-                d,
-                rel,
-            }
+            Fr { m, a: c.energy[f0 + i] > top - 40.0, v: !p[i].is_nan(), p: p[i], d, rel }
         })
         .collect()
 }
@@ -128,14 +117,7 @@ fn coarse(fr: &[Fr], q: usize) -> Vec<Fr> {
             ps.sort_by(f32::total_cmp);
             let v = ps.len() * 2 >= ch.len();
             let a = ch.iter().filter(|f| f.a).count() * 2 >= ch.len();
-            Fr {
-                m,
-                a,
-                v,
-                p: if v { ps[ps.len() / 2] } else { f32::NAN },
-                d: f32::NAN,
-                rel: f32::NAN,
-            }
+            Fr { m, a, v, p: if v { ps[ps.len() / 2] } else { f32::NAN }, d: f32::NAN, rel: f32::NAN }
         })
         .collect()
 }
@@ -210,9 +192,7 @@ fn dtw_subsequence(n: usize, m: usize, c: impl Fn(usize, usize) -> f32, pen: f32
         }
         std::mem::swap(&mut prev, &mut cur);
     }
-    let mut j = (0..m)
-        .min_by(|&a, &b| prev[a].total_cmp(&prev[b]))
-        .unwrap_or(0);
+    let mut j = (0..m).min_by(|&a, &b| prev[a].total_cmp(&prev[b])).unwrap_or(0);
     let mut i = n - 1;
     backtrack(n, |i, j| bp[i * m + j], &mut i, &mut j)
 }
@@ -232,26 +212,11 @@ fn backtrack(n: usize, bp: impl Fn(usize, usize) -> u8, i: &mut usize, j: &mut u
             _ => break,
         }
     }
-    sum.iter()
-        .zip(&cnt)
-        .map(|(s, &k)| {
-            if k > 0 {
-                (*s / k as f64) as f32
-            } else {
-                f32::NAN
-            }
-        })
-        .collect()
+    sum.iter().zip(&cnt).map(|(s, &k)| if k > 0 { (*s / k as f64) as f32 } else { f32::NAN }).collect()
 }
 
 /// Banded DTW: row `u` may only match columns within `±w` of `center[u]`.
-fn dtw_band(
-    m: usize,
-    center: &[f32],
-    w: usize,
-    c: impl Fn(usize, usize) -> f32,
-    pen: f32,
-) -> Vec<f32> {
+fn dtw_band(m: usize, center: &[f32], w: usize, c: impl Fn(usize, usize) -> f32, pen: f32) -> Vec<f32> {
     let n = center.len();
     let mut lo = vec![0usize; n];
     let mut hi = vec![0usize; n];
@@ -270,9 +235,7 @@ fn dtw_band(
     }
     let mut dd = vec![f32::INFINITY; off[n]];
     let mut bp = vec![3u8; off[n]];
-    let at = |u: usize, j: usize| -> Option<usize> {
-        (j >= lo[u] && j <= hi[u]).then(|| off[u] + j - lo[u])
-    };
+    let at = |u: usize, j: usize| -> Option<usize> { (j >= lo[u] && j <= hi[u]).then(|| off[u] + j - lo[u]) };
     for j in lo[0]..=hi[0] {
         dd[off[0] + j - lo[0]] = c(0, j);
     }
@@ -313,11 +276,7 @@ pub(crate) fn smooth(x: &[f32], h: usize) -> Vec<f32> {
     let mut cs = vec![(0f64, 0u32); n + 1];
     for i in 0..n {
         let (s, k) = cs[i];
-        cs[i + 1] = if x[i].is_nan() {
-            (s, k)
-        } else {
-            (s + x[i] as f64, k + 1)
-        };
+        cs[i + 1] = if x[i].is_nan() { (s, k) } else { (s + x[i] as f64, k + 1) };
     }
     (0..n)
         .map(|i| {
@@ -332,14 +291,7 @@ pub(crate) fn smooth(x: &[f32], h: usize) -> Vec<f32> {
 }
 
 fn min_filter(x: &[f32], h: usize) -> Vec<f32> {
-    (0..x.len())
-        .map(|i| {
-            x[i.saturating_sub(h)..(i + h + 1).min(x.len())]
-                .iter()
-                .copied()
-                .fold(f32::INFINITY, f32::min)
-        })
-        .collect()
+    (0..x.len()).map(|i| x[i.saturating_sub(h)..(i + h + 1).min(x.len())].iter().copied().fold(f32::INFINITY, f32::min)).collect()
 }
 
 fn median(mut v: Vec<f32>) -> Option<f32> {
@@ -413,14 +365,8 @@ fn evidence(uf: &[Fr], rf: &[Fr], map: &[f32], chance: &[f32]) -> Evidence {
                 sxx += x * x;
             }
             let slope = sxy / sxx.max(1.0);
-            let res = median(
-                map[a..b]
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &y)| (y - my - slope * ((a + i) as f32 - mx)).abs())
-                    .collect(),
-            )
-            .unwrap_or(0.0)
+            let res = median(map[a..b].iter().enumerate().map(|(i, &y)| (y - my - slope * ((a + i) as f32 - mx)).abs()).collect())
+                .unwrap_or(0.0)
                 * 1.25;
             if !(0.6..=1.67).contains(&slope) {
                 return f32::INFINITY;
@@ -430,26 +376,17 @@ fn evidence(uf: &[Fr], rf: &[Fr], map: &[f32], chance: &[f32]) -> Evidence {
         .collect();
     // Content alone may not veto: across octaves and voices some vowels look unlike
     // themselves (a first formant below the fundamental). The tempo map decides.
-    let content_n: Vec<f32> = (0..n)
-        .map(|u| ((1.0 - ratio[u]) / 0.4).clamp(0.0, 1.0))
-        .collect();
+    let content_n: Vec<f32> = (0..n).map(|u| ((1.0 - ratio[u]) / 0.4).clamp(0.0, 1.0)).collect();
     // ... unless the content matches far better than chance: a reference sung with its own
     // rubato is irregular against the take, and that is no sign of a wrong path
-    let strict_ok: Vec<f32> = (0..n)
-        .map(|u| ((6.0 - warp[u]) / 3.0).clamp(0.0, 1.0))
-        .collect();
-    let warp_ok: Vec<f32> = (0..n)
-        .map(|u| strict_ok[u].max(((0.2 - ratio[u]) / 0.1).clamp(0.0, 1.0)))
-        .collect();
+    let strict_ok: Vec<f32> = (0..n).map(|u| ((6.0 - warp[u]) / 3.0).clamp(0.0, 1.0)).collect();
+    let warp_ok: Vec<f32> = (0..n).map(|u| strict_ok[u].max(((0.2 - ratio[u]) / 0.1).clamp(0.0, 1.0))).collect();
     // ... and how well the pitch contours move together
     let rp: Vec<f32> = (0..n).map(|u| rf[jr(u)].p).collect();
     let conf_shape: Vec<f32> = (0..n)
         .map(|u| {
             let (a, b) = (u.saturating_sub(40), (u + 41).min(n));
-            let mut pairs: Vec<(f32, f32)> = (a..b)
-                .filter(|&k| uf[k].v && !rp[k].is_nan())
-                .map(|k| (uf[k].p, rp[k]))
-                .collect();
+            let mut pairs: Vec<(f32, f32)> = (a..b).filter(|&k| uf[k].v && !rp[k].is_nan()).map(|k| (uf[k].p, rp[k])).collect();
             // octave slips of either detector are outliers, not evidence against the match
             if let Some(md) = median(pairs.iter().map(|p| p.0 - p.1).collect()) {
                 pairs.retain(|p| (p.0 - p.1 - md).abs() < 4.0);
@@ -458,10 +395,7 @@ fn evidence(uf: &[Fr], rf: &[Fr], map: &[f32], chance: &[f32]) -> Evidence {
                 return 0.5;
             }
             let k = pairs.len() as f32;
-            let (mx, my) = (
-                pairs.iter().map(|p| p.0).sum::<f32>() / k,
-                pairs.iter().map(|p| p.1).sum::<f32>() / k,
-            );
+            let (mx, my) = (pairs.iter().map(|p| p.0).sum::<f32>() / k, pairs.iter().map(|p| p.1).sum::<f32>() / k);
             let (mut sxy, mut sxx, mut syy) = (0f32, 0f32, 0f32);
             for &(x, y) in &pairs {
                 sxy += (x - mx) * (y - my);
@@ -476,18 +410,10 @@ fn evidence(uf: &[Fr], rf: &[Fr], map: &[f32], chance: &[f32]) -> Evidence {
         })
         .collect();
     // an irregular tempo map vetoes; contour and content add up as evidence
-    let support: Vec<f32> = (0..n)
-        .map(|u| (0.35 + 0.35 * content_n[u] + 0.5 * conf_shape[u]).min(1.0))
-        .collect();
+    let support: Vec<f32> = (0..n).map(|u| (0.35 + 0.35 * content_n[u] + 0.5 * conf_shape[u]).min(1.0)).collect();
     let conf0 = (0..n).map(|u| warp_ok[u] * support[u]).collect();
     let strict = (0..n).map(|u| strict_ok[u] * support[u]).collect();
-    Evidence {
-        conf0,
-        rp,
-        strict,
-        strict_ok,
-        ratio,
-    }
+    Evidence { conf0, rp, strict, strict_ok, ratio }
 }
 
 /// `map` with each implausible stretch (`ok` < 0.5) replaced by a straight line between
@@ -545,17 +471,10 @@ pub fn align(take: &Performance, region: (f64, f64), reference: &Performance) ->
 }
 
 /// One alignment; `pitch_weight` scales the pitch terms of the path cost (0 = content only).
-fn align_pass(
-    take: &Performance,
-    region: (f64, f64),
-    reference: &Performance,
-    pitch_weight: f32,
-) -> Alignment {
+fn align_pass(take: &Performance, region: (f64, f64), reference: &Performance, pitch_weight: f32) -> Alignment {
     let rate = take.pitch.rate;
     let a0 = ((region.0.max(0.0) * rate as f64).round() as usize).min(take.pitch.curve.len());
-    let a1 = ((region.1 * rate as f64).round() as usize)
-        .min(take.pitch.curve.len())
-        .max(a0);
+    let a1 = ((region.1 * rate as f64).round() as usize).min(take.pitch.curve.len()).max(a0);
     let empty = |reason: &str| Alignment {
         start: a0,
         ref_time: vec![f32::NAN; a1 - a0],
@@ -586,12 +505,7 @@ fn align_pass(
         q += 1;
     }
     let (uc, rc) = (coarse(&uf, q), coarse(&rf, q));
-    let path_c = dtw_subsequence(
-        uc.len(),
-        rc.len(),
-        |i, j| cost(&uc[i], &rc[j], 0.2 * pitch_weight, 0.0),
-        0.15,
-    );
+    let path_c = dtw_subsequence(uc.len(), rc.len(), |i, j| cost(&uc[i], &rc[j], 0.2 * pitch_weight, 0.0), 0.15);
     let center: Vec<f32> = (0..n)
         .map(|u| {
             let x = (u as f32 + 0.5) / q as f32 - 0.5;
@@ -599,27 +513,11 @@ fn align_pass(
         })
         .collect();
     // fine: local alignment with pitch shape
-    let jf = dtw_band(
-        m,
-        &center,
-        q * 3 + 4,
-        |u, j| cost(&uf[u], &rf[j], 0.2 * pitch_weight, SHAPE * pitch_weight),
-        0.1,
-    );
+    let jf = dtw_band(m, &center, q * 3 + 4, |u, j| cost(&uf[u], &rf[j], 0.2 * pitch_weight, SHAPE * pitch_weight), 0.1);
     let mut map = monotone(&jf);
     // chance level of the content match per take frame (independent of the path)
     let probes: Vec<usize> = (0..24).map(|k| (k * m + m / 2) / 24).collect();
-    let chance: Vec<f32> = (0..n)
-        .map(|u| {
-            median(
-                probes
-                    .iter()
-                    .map(|&j| content_cost(&uf[u], &rf[j]))
-                    .collect(),
-            )
-            .unwrap_or(1.0)
-        })
-        .collect();
+    let chance: Vec<f32> = (0..n).map(|u| median(probes.iter().map(|&j| content_cost(&uf[u], &rf[j])).collect()).unwrap_or(1.0)).collect();
     let chance = smooth(&chance, 25);
     let mut ev = evidence(&uf, &rf, &map, &chance);
     // a jump-and-stall of the path (repeated syllables, a misleading contour) shows as an
@@ -627,50 +525,26 @@ fn align_pass(
     // it. A straight path is plausible by construction, so over the bridged stretch the
     // content has to vouch for it (an unrelated reference stays near chance there).
     if let Some(line) = bridged(&map, &ev.strict_ok) {
-        let jf2 = dtw_band(
-            m,
-            &line,
-            (0.15 * cr) as usize,
-            |u, j| cost(&uf[u], &rf[j], 0.2 * pitch_weight, SHAPE * pitch_weight),
-            0.1,
-        );
+        let jf2 = dtw_band(m, &line, (0.15 * cr) as usize, |u, j| cost(&uf[u], &rf[j], 0.2 * pitch_weight, SHAPE * pitch_weight), 0.1);
         let map2 = monotone(&jf2);
         let ev2 = evidence(&uf, &rf, &map2, &chance);
-        let bridged_ratio = median(
-            (0..n)
-                .filter(|&u| ev.strict_ok[u] < 0.5 && uf[u].v)
-                .map(|u| ev2.ratio[u])
-                .collect(),
-        )
-        .unwrap_or(1.0);
-        let total = |e: &Evidence| {
-            (0..n)
-                .filter(|&u| uf[u].v)
-                .map(|u| e.strict[u])
-                .sum::<f32>()
-        };
+        let bridged_ratio = median((0..n).filter(|&u| ev.strict_ok[u] < 0.5 && uf[u].v).map(|u| ev2.ratio[u]).collect()).unwrap_or(1.0);
+        let total = |e: &Evidence| (0..n).filter(|&u| uf[u].v).map(|u| e.strict[u]).sum::<f32>();
         if bridged_ratio < BRIDGE_RATIO && total(&ev2) > total(&ev) {
             (map, ev) = (map2, ev2);
         }
     }
-    let Evidence {
-        conf0, rp, ratio, ..
-    } = ev;
+    let Evidence { conf0, rp, ratio, .. } = ev;
     // register: the octave that brings the reference closest to the take
     let diffs = |min_conf: f32| -> Vec<f32> {
-        (0..n)
-            .filter(|&u| uf[u].v && !rp[u].is_nan() && conf0[u] >= min_conf)
-            .map(|u| uf[u].p - rp[u])
-            .collect()
+        (0..n).filter(|&u| uf[u].v && !rp[u].is_nan() && conf0[u] >= min_conf).map(|u| uf[u].p - rp[u]).collect()
     };
     let mut ds = diffs(0.4);
     if ds.len() < 20 {
         ds = diffs(0.0);
     }
     let octave = (-3..=3).min_by(|&a, &b| {
-        let e = |k: i32| {
-            median(ds.iter().map(|d| (d - 12.0 * k as f32).abs()).collect()).unwrap_or(f32::MAX)
-        };
+        let e = |k: i32| median(ds.iter().map(|d| (d - 12.0 * k as f32).abs()).collect()).unwrap_or(f32::MAX);
         e(a).total_cmp(&e(b))
     });
     let octave = octave.unwrap_or(0) * 12;
@@ -699,22 +573,13 @@ fn align_pass(
         * ((MAX_CONTENT_RATIO + 0.05 - content) / 0.1).clamp(0.0, 1.0);
     // back to the analysis rate, over the region
     let rr = reference.pitch.rate;
-    let mut out = Alignment {
-        start: a0,
-        ref_time: vec![],
-        reference_f0: vec![],
-        confidence: vec![],
-        octave,
-        score,
-        reason: None,
-    };
+    let mut out = Alignment { start: a0, ref_time: vec![], reference_f0: vec![], confidence: vec![], octave, score, reason: None };
     for f in a0..a1 {
         let x = f as f32 / rate * cr - u0 as f32;
         let j = lerp_at(&map, x);
         let t = j / reference.content.rate;
         out.ref_time.push(t);
-        out.reference_f0
-            .push(lerp_at(&reference.pitch.curve, t * rr));
+        out.reference_f0.push(lerp_at(&reference.pitch.curve, t * rr));
         out.confidence.push(lerp_at(&conf, x).clamp(0.0, 1.0));
     }
     if score < MIN_SCORE {
@@ -752,10 +617,7 @@ pub struct PitchTarget {
 impl PitchTarget {
     /// Target pitch at analysis frame `f` of the source, if the region covers it.
     pub fn at(&self, f: usize) -> Option<f32> {
-        f.checked_sub(self.start)
-            .and_then(|i| self.target_f0.get(i))
-            .copied()
-            .filter(|v| !v.is_nan())
+        f.checked_sub(self.start).and_then(|i| self.target_f0.get(i)).copied().filter(|v| !v.is_nan())
     }
 }
 
@@ -768,35 +630,21 @@ pub fn gate(conf: f32) -> f32 {
 
 /// The target pitch for `take` given an alignment and the user's parameters.
 /// `spans` are the take's notes (seconds; the editor's segmentation).
-pub fn target(
-    take: &PitchAnalysis,
-    spans: &[(f64, f64)],
-    al: &Alignment,
-    p: &RefTune,
-) -> PitchTarget {
+pub fn target(take: &PitchAnalysis, spans: &[(f64, f64)], al: &Alignment, p: &RefTune) -> PitchTarget {
     let n = al.ref_time.len();
     let s = al.start;
     let rate = take.rate;
-    let u: Vec<f32> = (s..s + n)
-        .map(|f| take.curve.get(f).copied().unwrap_or(f32::NAN))
-        .collect();
+    let u: Vec<f32> = (s..s + n).map(|f| take.curve.get(f).copied().unwrap_or(f32::NAN)).collect();
     let octave = p.octave.unwrap_or(al.octave);
     let r: Vec<f32> = al.reference_f0.iter().map(|x| x + octave as f32).collect();
     // the reference's notes, where the take is sung
-    let rmask: Vec<f32> = (0..n)
-        .map(|f| if u[f].is_nan() { f32::NAN } else { r[f] })
-        .collect();
-    let levels: Vec<f32> = (s..s + n)
-        .map(|f| take.levels.get(f).copied().unwrap_or(0.0))
-        .collect();
+    let rmask: Vec<f32> = (0..n).map(|f| if u[f].is_nan() { f32::NAN } else { r[f] }).collect();
+    let levels: Vec<f32> = (s..s + n).map(|f| take.levels.get(f).copied().unwrap_or(0.0)).collect();
     let rnotes = segment(&rmask, &levels);
     let mut refc = vec![f32::NAN; n];
     let mut cuts = vec![false; n + 1];
     for nt in &rnotes {
-        let (fa, fb) = (
-            ((nt.start * rate as f64).round() as usize).min(n),
-            ((nt.end * rate as f64).round() as usize).min(n),
-        );
+        let (fa, fb) = (((nt.start * rate as f64).round() as usize).min(n), ((nt.end * rate as f64).round() as usize).min(n));
         refc[fa..fb].fill(nt.pitch);
         cuts[fa] = true;
         cuts[fb] = true;
@@ -811,28 +659,15 @@ pub fn target(
     // ... and the reference's median pitch over it, where it sings most of it
     let mut sung_ref = vec![f32::NAN; n];
     for &(a, b) in spans {
-        let fa = ((a * rate as f64).round() as usize)
-            .saturating_sub(s)
-            .min(n);
-        let fb = ((b * rate as f64).round() as usize)
-            .saturating_sub(s)
-            .min(n);
+        let fa = ((a * rate as f64).round() as usize).saturating_sub(s).min(n);
+        let fb = ((b * rate as f64).round() as usize).saturating_sub(s).min(n);
         if fb <= fa {
             continue;
         }
         let sung = u[fa..fb].iter().filter(|x| !x.is_nan()).count();
-        let covered = (fa..fb)
-            .filter(|&f| !u[f].is_nan() && !refc[f].is_nan())
-            .count();
-        let rv: Vec<f32> = (fa..fb)
-            .filter(|&f| !u[f].is_nan() && !r[f].is_nan())
-            .map(|f| r[f])
-            .collect();
-        let rmed = if rv.len() * 2 >= sung {
-            median(rv).unwrap_or(f32::NAN)
-        } else {
-            f32::NAN
-        };
+        let covered = (fa..fb).filter(|&f| !u[f].is_nan() && !refc[f].is_nan()).count();
+        let rv: Vec<f32> = (fa..fb).filter(|&f| !u[f].is_nan() && !r[f].is_nan()).map(|f| r[f]).collect();
+        let rmed = if rv.len() * 2 >= sung { median(rv).unwrap_or(f32::NAN) } else { f32::NAN };
         cover[fa..fb].fill(covered as f32 / sung.max(1) as f32);
         sung_ref[fa..fb].fill(rmed);
         let mut edges: Vec<usize> = (fa + 1..fb).filter(|&f| cuts[f]).collect();
@@ -843,28 +678,15 @@ pub fn target(
             if fb <= fa {
                 continue;
             }
-            let Some(c) = median(u[fa..fb].iter().copied().filter(|x| !x.is_nan()).collect())
-            else {
+            let Some(c) = median(u[fa..fb].iter().copied().filter(|x| !x.is_nan()).collect()) else {
                 continue;
             };
             // octave slips of the detector are no movement of the voice; transitions into the
             // neighbouring notes are kept as sung but say nothing about the drift
-            let dev: Vec<f32> = u[fa..fb]
-                .iter()
-                .map(|x| if (x - c).abs() > 6.0 { f32::NAN } else { x - c })
-                .collect();
-            let near: Vec<f32> = dev
-                .iter()
-                .map(|&d| if d.abs() > 1.5 { f32::NAN } else { d })
-                .collect();
-            let drift = smooth(
-                &smooth(&near, (0.09 * rate) as usize),
-                (0.07 * rate) as usize,
-            );
-            let drift: Vec<f32> = drift
-                .iter()
-                .map(|d| if d.is_nan() { 0.0 } else { *d })
-                .collect();
+            let dev: Vec<f32> = u[fa..fb].iter().map(|x| if (x - c).abs() > 6.0 { f32::NAN } else { x - c }).collect();
+            let near: Vec<f32> = dev.iter().map(|&d| if d.abs() > 1.5 { f32::NAN } else { d }).collect();
+            let drift = smooth(&smooth(&near, (0.09 * rate) as usize), (0.07 * rate) as usize);
+            let drift: Vec<f32> = drift.iter().map(|d| if d.is_nan() { 0.0 } else { *d }).collect();
             for k in 0..fb - fa {
                 uc[fa + k] = c;
                 if !dev[k].is_nan() {
@@ -887,11 +709,7 @@ pub fn target(
             }
             (1..=reach)
                 .find_map(|d| {
-                    [f.checked_sub(d), Some(f + d).filter(|&g| g < n)]
-                        .into_iter()
-                        .flatten()
-                        .map(|g| refc[g])
-                        .find(|v| !v.is_nan())
+                    [f.checked_sub(d), Some(f + d).filter(|&g| g < n)].into_iter().flatten().map(|g| refc[g]).find(|v| !v.is_nan())
                 })
                 .unwrap_or(f32::NAN)
         })
@@ -909,15 +727,7 @@ pub fn target(
     let h = (0.03 * rate) as usize;
     let tc = smooth(&smooth(&tc_raw, h), h);
     // smoothed over sung frames only: a consonant gap must not fade the correction around it
-    let w_raw: Vec<f32> = (0..n)
-        .map(|f| {
-            if tc[f].is_nan() {
-                f32::NAN
-            } else {
-                gate(al.confidence[f])
-            }
-        })
-        .collect();
+    let w_raw: Vec<f32> = (0..n).map(|f| if tc[f].is_nan() { f32::NAN } else { gate(al.confidence[f]) }).collect();
     let w = smooth(&smooth(&w_raw, h), h);
     let (corr, keep) = (p.correction.clamp(0.0, 1.0), p.vibrato.clamp(0.0, 1.0));
     let target_f0: Vec<f32> = (0..n)
@@ -934,15 +744,7 @@ pub fn target(
         })
         .collect();
     let t0 = s as f64 / rate as f64;
-    let notes = rnotes
-        .iter()
-        .map(|nt| NoteBlob {
-            start: nt.start + t0,
-            end: nt.end + t0,
-            pitch: nt.pitch,
-            level: nt.level,
-        })
-        .collect();
+    let notes = rnotes.iter().map(|nt| NoteBlob { start: nt.start + t0, end: nt.end + t0, pitch: nt.pitch, level: nt.level }).collect();
     PitchTarget {
         rate,
         start: s,
@@ -961,37 +763,15 @@ pub fn target(
 /// Headless Tune to Reference of a whole take: analysis, alignment, target and render.
 /// Returns the corrected audio (same length and rate as `take`), the target and the
 /// take's analysis.
-pub fn tune_audio(
-    take: &Audio,
-    reference: &Audio,
-    p: &RefTune,
-    est: Option<&dyn F0Estimator>,
-) -> (Audio, PitchTarget, PitchAnalysis) {
+pub fn tune_audio(take: &Audio, reference: &Audio, p: &RefTune, est: Option<&dyn F0Estimator>) -> (Audio, PitchTarget, PitchAnalysis) {
     let (tm, rm) = (mono_of(take), mono_of(reference));
     let ta = crate::pitch::analyze_with(&tm, take.sr as f32, est);
     let ra = crate::pitch::analyze_with(&rm, reference.sr as f32, est);
-    let (tc, rc) = (
-        crate::content::mfcc(&tm, take.sr as f32),
-        crate::content::mfcc(&rm, reference.sr as f32),
-    );
-    let al = align(
-        &Performance {
-            pitch: &ta,
-            content: &tc,
-        },
-        (0.0, take.seconds()),
-        &Performance {
-            pitch: &ra,
-            content: &rc,
-        },
-    );
+    let (tc, rc) = (crate::content::mfcc(&tm, take.sr as f32), crate::content::mfcc(&rm, reference.sr as f32));
+    let al = align(&Performance { pitch: &ta, content: &tc }, (0.0, take.seconds()), &Performance { pitch: &ra, content: &rc });
     let spans: Vec<(f64, f64)> = ta.notes.iter().map(|n| (n.start, n.end)).collect();
     let t = target(&ta, &spans, &al, p);
-    let tune = crate::model::ClipTune {
-        notes: vec![],
-        pencil: vec![],
-        reference: Some(p.clone()),
-    };
+    let tune = crate::model::ClipTune { notes: vec![], pencil: vec![], reference: Some(p.clone()) };
     let out = crate::tune_render::render(take, &ta, &tune, Some(&t));
     (out, t, ta)
 }
@@ -1007,17 +787,7 @@ mod tests {
     const SR: f32 = 24000.0;
 
     fn params() -> RefTune {
-        RefTune {
-            source: 0,
-            correction: 1.0,
-            vibrato: 1.0,
-            influence: 1.0,
-            octave: None,
-            key: 0,
-            scale: 0,
-            speed: None,
-            melody: None,
-        }
+        RefTune { source: 0, correction: 1.0, vibrato: 1.0, influence: 1.0, octave: None, key: 0, scale: 0, speed: None, melody: None }
     }
 
     fn run(take: &Rendition, reference: &Rendition, p: &RefTune) -> (PitchAnalysis, PitchTarget) {
@@ -1025,52 +795,25 @@ mod tests {
         (ta, t)
     }
 
-    fn run_with_ref(
-        take: &Rendition,
-        reference: &Rendition,
-        p: &RefTune,
-    ) -> (PitchAnalysis, PitchTarget, PitchAnalysis) {
+    fn run_with_ref(take: &Rendition, reference: &Rendition, p: &RefTune) -> (PitchAnalysis, PitchTarget, PitchAnalysis) {
         let (ta, ra) = (analyze(&take.audio, SR), analyze(&reference.audio, SR));
         let (tc, rc) = (mfcc(&take.audio, SR), mfcc(&reference.audio, SR));
         let dur = take.audio.len() as f64 / SR as f64;
-        let al = align(
-            &Performance {
-                pitch: &ta,
-                content: &tc,
-            },
-            (0.0, dur),
-            &Performance {
-                pitch: &ra,
-                content: &rc,
-            },
-        );
+        let al = align(&Performance { pitch: &ta, content: &tc }, (0.0, dur), &Performance { pitch: &ra, content: &rc });
         let spans: Vec<(f64, f64)> = ta.notes.iter().map(|n| (n.start, n.end)).collect();
         let t = target(&ta, &spans, &al, p);
         (ta, t, ra)
     }
 
     fn reference_voice() -> Voice {
-        Voice {
-            formant: 1.17,
-            tempo: 0.88,
-            jitter: 0.12,
-            transpose: 12.0,
-            vib_rate: 6.2,
-            vib_depth: 0.25,
-            seed: 9,
-        }
+        Voice { formant: 1.17, tempo: 0.88, jitter: 0.12, transpose: 12.0, vib_rate: 6.2, vib_depth: 0.25, seed: 9 }
     }
 
     #[test]
     fn detuned_take_is_pulled_onto_the_reference_melody() {
         let s = song(7, 28);
-        let detune: Vec<f32> = (0..s.len())
-            .map(|k| {
-                [
-                    25.0, -50.0, 100.0, -200.0, 400.0, -25.0, 50.0, -100.0, 200.0, -400.0,
-                ][k % 10]
-            })
-            .collect();
+        let detune: Vec<f32> =
+            (0..s.len()).map(|k| [25.0, -50.0, 100.0, -200.0, 400.0, -25.0, 50.0, -100.0, 200.0, -400.0][k % 10]).collect();
         let take = sing(&s, &Voice::default(), &detune, 0.0, SR);
         let reference = sing(&s, &reference_voice(), &[], 0.0, SR);
         let (_, t, ra) = run_with_ref(&take, &reference, &params());
@@ -1092,48 +835,19 @@ mod tests {
             .source_f0
             .iter()
             .enumerate()
-            .map(|(i, &v)| {
-                if (v - take.sung[i + t.start]).abs() < 1.0 && ref_ok(i) {
-                    v
-                } else {
-                    f32::NAN
-                }
-            })
+            .map(|(i, &v)| if (v - take.sung[i + t.start]).abs() < 1.0 && ref_ok(i) { v } else { f32::NAN })
             .collect();
-        let slips = t
-            .source_f0
-            .iter()
-            .zip(&ok)
-            .filter(|(a, b)| !a.is_nan() && b.is_nan())
-            .count();
+        let slips = t.source_f0.iter().zip(&ok).filter(|(a, b)| !a.is_nan() && b.is_nan()).count();
         let voiced = t.source_f0.iter().filter(|a| !a.is_nan()).count();
         eprintln!("YIN slipped on {slips} of {voiced} voiced frames (take or reference)");
-        assert!(
-            slips * 100 < voiced * 20,
-            "detector slipped on {slips} of {voiced} frames"
-        );
-        let only_ok = |c: &[f32]| -> Vec<f32> {
-            c.iter()
-                .zip(&ok)
-                .map(|(&x, o)| if o.is_nan() { f32::NAN } else { x })
-                .collect()
-        };
+        assert!(slips * 100 < voiced * 20, "detector slipped on {slips} of {voiced} frames");
+        let only_ok = |c: &[f32]| -> Vec<f32> { c.iter().zip(&ok).map(|(&x, o)| if o.is_nan() { f32::NAN } else { x }).collect() };
         let raw = pitch_errors(&take.truth, &take.edge, &only_ok(&t.source_f0), t.start);
         let fixed = pitch_errors(&take.truth, &take.edge, &only_ok(&t.target_f0), t.start);
-        let (mr, mf, p90) = (
-            raw.iter().sum::<f32>() / raw.len() as f32,
-            quantile(&fixed, 0.5),
-            quantile(&fixed, 0.9),
-        );
+        let (mr, mf, p90) = (raw.iter().sum::<f32>() / raw.len() as f32, quantile(&fixed, 0.5), quantile(&fixed, 0.9));
         let mae = fixed.iter().sum::<f32>() / fixed.len() as f32;
-        eprintln!(
-            "raw MAE {mr:.1} ct · fixed median {mf:.1} p90 {p90:.1} MAE {mae:.1} · score {:.2}",
-            t.score
-        );
-        assert!(
-            mf < 20.0 && p90 < 50.0,
-            "median {mf:.1}, p90 {p90:.1} cents"
-        );
+        eprintln!("raw MAE {mr:.1} ct · fixed median {mf:.1} p90 {p90:.1} MAE {mae:.1} · score {:.2}", t.score);
+        assert!(mf < 20.0 && p90 < 50.0, "median {mf:.1}, p90 {p90:.1} cents");
         assert!(mae < mr * 0.5, "MAE {mae:.1} vs raw {mr:.1}");
     }
 
@@ -1154,10 +868,7 @@ mod tests {
             })
             .collect();
         let med = quantile(&errs, 0.5);
-        eprintln!(
-            "boundary error median {med:.0} ms, p90 {:.0} ms",
-            quantile(&errs, 0.9)
-        );
+        eprintln!("boundary error median {med:.0} ms, p90 {:.0} ms", quantile(&errs, 0.9));
         assert!(med < 60.0, "median boundary error {med:.0} ms");
     }
 
@@ -1168,11 +879,7 @@ mod tests {
         let (_, t) = run(&take, &other, &params());
         eprintln!("unrelated score {:.2}", t.score);
         assert!(t.reason.is_some(), "score {:.2}", t.score);
-        assert!(t
-            .source_f0
-            .iter()
-            .zip(&t.target_f0)
-            .all(|(a, b)| (a.is_nan() && b.is_nan()) || a == b));
+        assert!(t.source_f0.iter().zip(&t.target_f0).all(|(a, b)| (a.is_nan() && b.is_nan()) || a == b));
     }
 
     #[test]
@@ -1186,19 +893,13 @@ mod tests {
         let rate = |c: &[f32]| -> f32 {
             let mut rates = vec![];
             for &(a, b, _) in take.notes.iter().filter(|n| n.1 - n.0 > 0.6) {
-                let (fa, fb) = (
-                    ((a + 0.25) * t.rate as f64) as usize - t.start,
-                    ((b - 0.05) * t.rate as f64) as usize - t.start,
-                );
+                let (fa, fb) = (((a + 0.25) * t.rate as f64) as usize - t.start, ((b - 0.05) * t.rate as f64) as usize - t.start);
                 let seg: Vec<f32> = c[fa..fb].to_vec();
                 if seg.iter().any(|x| x.is_nan()) {
                     continue;
                 }
                 let m = seg.iter().sum::<f32>() / seg.len() as f32;
-                let zc = seg
-                    .windows(2)
-                    .filter(|w| (w[0] - m) * (w[1] - m) < 0.0)
-                    .count();
+                let zc = seg.windows(2).filter(|w| (w[0] - m) * (w[1] - m) < 0.0).count();
                 rates.push(zc as f32 / 2.0 / (seg.len() as f32 / t.rate));
             }
             rates.iter().sum::<f32>() / rates.len().max(1) as f32
@@ -1211,14 +912,10 @@ mod tests {
     #[test]
     fn the_rendered_take_sings_the_reference_melody() {
         let s = song(21, 16);
-        let detune: Vec<f32> = (0..s.len())
-            .map(|k| [60.0, -45.0, 90.0, -30.0, 120.0, -80.0][k % 6])
-            .collect();
+        let detune: Vec<f32> = (0..s.len()).map(|k| [60.0, -45.0, 90.0, -30.0, 120.0, -80.0][k % 6]).collect();
         let take = sing(&s, &Voice::default(), &detune, 0.0, SR);
         let reference = sing(&s, &reference_voice(), &[], 0.0, SR);
-        let audio = |r: &Rendition| {
-            Audio::from_stereo(r.audio.iter().flat_map(|&x| [x, x]).collect(), SR as u32, 1)
-        };
+        let audio = |r: &Rendition| Audio::from_stereo(r.audio.iter().flat_map(|&x| [x, x]).collect(), SR as u32, 1);
         let (out, t, ta) = tune_audio(&audio(&take), &audio(&reference), &params(), None);
         assert_eq!(out.frames, take.audio.len());
         assert!(t.reason.is_none(), "rejected: {:?}", t.reason);
@@ -1227,42 +924,21 @@ mod tests {
             take.notes
                 .iter()
                 .filter_map(|&(a, b, m)| {
-                    let v: Vec<f32> = c
-                        [((a + 0.06) * 200.0) as usize..((b - 0.04) * 200.0) as usize]
-                        .iter()
-                        .copied()
-                        .filter(|x| !x.is_nan())
-                        .collect();
-                    median(v)
-                        .map(|p| ((p - m) * 100.0).abs())
-                        .filter(|e| *e < 600.0)
+                    let v: Vec<f32> =
+                        c[((a + 0.06) * 200.0) as usize..((b - 0.04) * 200.0) as usize].iter().copied().filter(|x| !x.is_nan()).collect();
+                    median(v).map(|p| ((p - m) * 100.0).abs()).filter(|e| *e < 600.0)
                 })
                 .collect()
         };
         let (before, after) = (per_note(&ta.curve), per_note(&oa.curve));
         let (mb, ma) = (quantile(&before, 0.5), quantile(&after, 0.5));
-        eprintln!(
-            "rendered note error median {mb:.1} → {ma:.1} ct, worst {:.1} ct",
-            quantile(&after, 1.0)
-        );
-        assert!(
-            ma < 20.0 && ma < mb * 0.5,
-            "median note error {mb:.1} → {ma:.1} cents"
-        );
+        eprintln!("rendered note error median {mb:.1} → {ma:.1} ct, worst {:.1} ct", quantile(&after, 1.0));
+        assert!(ma < 20.0 && ma < mb * 0.5, "median note error {mb:.1} → {ma:.1} cents");
         // voicing is the take's: PSOLA leaves unvoiced sound alone
-        let flips = ta
-            .curve
-            .iter()
-            .zip(&oa.curve)
-            .filter(|(a, b)| a.is_nan() != b.is_nan())
-            .count();
+        let flips = ta.curve.iter().zip(&oa.curve).filter(|(a, b)| a.is_nan() != b.is_nan()).count();
         let frac = flips as f32 / ta.curve.len() as f32;
         eprintln!("voiced/unvoiced flips {:.2} %", frac * 100.0);
-        assert!(
-            frac < 0.01,
-            "{:.2} % of frames changed voicing",
-            frac * 100.0
-        );
+        assert!(frac < 0.01, "{:.2} % of frames changed voicing", frac * 100.0);
     }
 
     #[test]
@@ -1274,30 +950,20 @@ mod tests {
         p.correction = 0.0;
         let (_, t) = run(&take, &reference, &p);
         assert!(
-            t.source_f0
-                .iter()
-                .zip(&t.target_f0)
-                .all(|(a, b)| (a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-4),
+            t.source_f0.iter().zip(&t.target_f0).all(|(a, b)| (a.is_nan() && b.is_nan()) || (a - b).abs() < 1e-4),
             "0 % correction is the take"
         );
         p.correction = 0.5;
         let (_, half) = run(&take, &reference, &p);
         let e = pitch_errors(&take.truth, &take.edge, &half.target_f0, half.start);
         let med = quantile(&e, 0.5);
-        assert!(
-            (med - 35.0).abs() < 12.0,
-            "half correction of +70 ct leaves ~35 ct, got {med:.1}"
-        );
+        assert!((med - 35.0).abs() < 12.0, "half correction of +70 ct leaves ~35 ct, got {med:.1}");
         // influence 0: nearest scale note (C major here = the melody's own notes)
         p.correction = 1.0;
         p.influence = 0.0;
         p.scale = 1;
         let (_, sc) = run(&take, &reference, &p);
         let e = pitch_errors(&take.truth, &take.edge, &sc.target_f0, sc.start);
-        assert!(
-            quantile(&e, 0.5) < 20.0,
-            "scale snap median {:.1}",
-            quantile(&e, 0.5)
-        );
+        assert!(quantile(&e, 0.5) < 20.0, "scale snap median {:.1}", quantile(&e, 0.5));
     }
 }

@@ -16,12 +16,37 @@ fn at(beat: f64) -> usize {
 }
 
 fn auto_clip(id: Id, source: Id, track: u32, len: f64) -> Clip {
-    Clip { id, track, start: 0.0, len, offset: 0.0, kind: ClipKind::Auto, source, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 }
+    Clip {
+        id,
+        track,
+        start: 0.0,
+        len,
+        offset: 0.0,
+        kind: ClipKind::Auto,
+        source,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }
 }
 
 /// Full for 2 beats, then `then`.
 fn step_down(id: Id, target: AutoTarget, from: f32, then: f32) -> Automation {
-    Automation { id, name: "a".into(), color: "#e0a44a".into(), target, points: vec![AutoPoint::at(0.0, from), AutoPoint::at(1.99, from), AutoPoint::at(2.0, then)] }
+    Automation {
+        id,
+        name: "a".into(),
+        color: "#e0a44a".into(),
+        target,
+        points: vec![AutoPoint::at(0.0, from), AutoPoint::at(1.99, from), AutoPoint::at(2.0, then)],
+    }
 }
 
 /// The demo song with only the drums track audible and no master effects.
@@ -70,17 +95,25 @@ fn a_clips_gain_automation_glides_without_steps() {
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("tone.wav");
     // 4 s of a steady 220 Hz sine
-    let tone: Vec<f32> = (0..SR as usize * 4).flat_map(|i| {
-        let v = (i as f32 * 220.0 * std::f32::consts::TAU / SR as f32).sin() * 0.5;
-        [v, v]
-    }).collect();
+    let tone: Vec<f32> = (0..SR as usize * 4)
+        .flat_map(|i| {
+            let v = (i as f32 * 220.0 * std::f32::consts::TAU / SR as f32).sin() * 0.5;
+            [v, v]
+        })
+        .collect();
     sources::write_wav(&wav, &tone, SR).unwrap();
     let mut p = Project::empty();
     p.inserts[0].fx.clear();
     let e = Engine::new(p, Arc::new(NoPlugins));
     let (_, clips) = e.import_audio(std::slice::from_ref(&wav), Some((0, 0.0))).unwrap();
     // gain ramps from +12 dB (v = 1) down to −24 dB (v = 0) over 4 beats
-    let a = Automation { id: 9200, name: "g".into(), color: "#e0a44a".into(), target: AutoTarget::ClipGain { id: clips[0] }, points: vec![AutoPoint::at(0.0, 1.0), AutoPoint::at(4.0, 0.0)] };
+    let a = Automation {
+        id: 9200,
+        name: "g".into(),
+        color: "#e0a44a".into(),
+        target: AutoTarget::ClipGain { id: clips[0] },
+        points: vec![AutoPoint::at(0.0, 1.0), AutoPoint::at(4.0, 0.0)],
+    };
     e.apply(&[Op::PutAutomation { automation: a }, Op::PutClips { clips: vec![auto_clip(9201, 9200, 0, 4.0)] }], false, None).unwrap();
     let out = e.render(0.0, 4.0, 0.0, SR).unwrap();
     let early = rms(&out[at(0.1)..at(0.3)]);
@@ -111,14 +144,39 @@ fn a_muted_clip_ignores_its_automation_and_others_are_unaffected() {
 #[test]
 fn synth_parameter_automation_closes_the_filter() {
     let cat = wave_engine::poly::catalog();
-    let cutoff = cat.sections.iter().flat_map(|s| s.params.iter()).find(|d| d.id.contains("cutoff")).expect("a cutoff parameter").id.to_string();
+    let cutoff =
+        cat.sections.iter().flat_map(|s| s.params.iter()).find(|d| d.id.contains("cutoff")).expect("a cutoff parameter").id.to_string();
     let mut p = Project::empty();
     p.inserts[0].fx.clear();
     let ch: Id = 3000;
-    p.channels.push(Channel { name: "Synth".into(), src: ChannelSrc::Synth { synth: SynthState::default() }, root: 60, ..Channel::new(ch, "", "#4f8ef7", ChannelSrc::Keys { keys: Default::default() }) });
+    p.channels.push(Channel {
+        name: "Synth".into(),
+        src: ChannelSrc::Synth { synth: SynthState::default() },
+        root: 60,
+        ..Channel::new(ch, "", "#4f8ef7", ChannelSrc::Keys { keys: Default::default() })
+    });
     let notes = vec![Note { v: 0.9, ..Note::new(ch, 0.0, 64.0, Some(48)) }];
     p.patterns = vec![Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 4.0, min_len: 4.0, notes, swing: 0.0 }];
-    p.clips = vec![Clip { id: 1, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 }];
+    p.clips = vec![Clip {
+        id: 1,
+        track: 0,
+        start: 0.0,
+        len: 4.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: 1,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    }];
     p.automations.push(step_down(9400, AutoTarget::Synth { chan_id: ch, param: cutoff }, 1.0, 0.0));
     p.clips.push(auto_clip(9401, 9400, 1, 8.0));
     let out = Engine::new(p, Arc::new(NoPlugins)).render(0.0, 4.0, 0.0, SR).unwrap();
@@ -163,7 +221,13 @@ fn an_edit_during_playback_keeps_the_automated_value() {
     }
     let e = Engine::new(p, Arc::new(NoPlugins));
     let (_, clips) = e.import_audio(std::slice::from_ref(&wav), Some((0, 0.0))).unwrap();
-    let a = Automation { id: 9500, name: "g".into(), color: "#e0a44a".into(), target: AutoTarget::ClipGain { id: clips[0] }, points: vec![AutoPoint::at(0.0, 0.0)] };
+    let a = Automation {
+        id: 9500,
+        name: "g".into(),
+        color: "#e0a44a".into(),
+        target: AutoTarget::ClipGain { id: clips[0] },
+        points: vec![AutoPoint::at(0.0, 0.0)],
+    };
     e.apply(&[Op::PutAutomation { automation: a }, Op::PutClips { clips: vec![auto_clip(9501, 9500, 0, 16.0)] }], false, None).unwrap();
     let mut rt = e.create_rt(SR as f32, BLOCK);
     e.play(0.0);

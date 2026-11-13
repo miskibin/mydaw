@@ -39,37 +39,25 @@ pub fn mfcc(mono: &[f32], sr: f32) -> ContentFeatures {
     let win = ((sr * 0.032) as usize).max(64);
     let nfft = win.next_power_of_two();
     let frames = (mono.len() as f64 / hop) as usize + 1;
-    let hann: Vec<f32> = (0..win)
-        .map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / win as f32).cos())
-        .collect();
+    let hann: Vec<f32> = (0..win).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / win as f32).cos()).collect();
     // triangular mel filters on the power spectrum
     let bins = nfft / 2 + 1;
     let (lo, hi) = (mel(80.0), mel((sr * 0.5 * 0.95).min(7600.0)));
-    let edges: Vec<f32> = (0..N_MEL + 2)
-        .map(|k| mel_inv(lo + (hi - lo) * k as f32 / (N_MEL + 1) as f32) * nfft as f32 / sr)
-        .collect();
+    let edges: Vec<f32> = (0..N_MEL + 2).map(|k| mel_inv(lo + (hi - lo) * k as f32 / (N_MEL + 1) as f32) * nfft as f32 / sr).collect();
     let filt: Vec<Vec<(usize, f32)>> = (0..N_MEL)
         .map(|m| {
             let (a, b, c) = (edges[m], edges[m + 1], edges[m + 2]);
             (a.floor() as usize..=(c.ceil() as usize).min(bins - 1))
                 .filter_map(|k| {
                     let x = k as f32;
-                    let w = if x <= b {
-                        (x - a) / (b - a).max(1e-6)
-                    } else {
-                        (c - x) / (c - b).max(1e-6)
-                    };
+                    let w = if x <= b { (x - a) / (b - a).max(1e-6) } else { (c - x) / (c - b).max(1e-6) };
                     (w > 0.0).then_some((k, w))
                 })
                 .collect()
         })
         .collect();
     let dct: Vec<f32> = (1..=N_MFCC)
-        .flat_map(|k| {
-            (0..N_MEL).map(move |m| {
-                (std::f32::consts::PI * k as f32 * (m as f32 + 0.5) / N_MEL as f32).cos()
-            })
-        })
+        .flat_map(|k| (0..N_MEL).map(move |m| (std::f32::consts::PI * k as f32 * (m as f32 + 0.5) / N_MEL as f32).cos()))
         .collect();
     let mut planner = RealFftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(nfft);
@@ -100,11 +88,7 @@ pub fn mfcc(mono: &[f32], sr: f32) -> ContentFeatures {
         }
         let o = &mut out[f * N_MFCC..(f + 1) * N_MFCC];
         for (k, ok) in o.iter_mut().enumerate() {
-            *ok = dct[k * N_MEL..(k + 1) * N_MEL]
-                .iter()
-                .zip(&logmel)
-                .map(|(a, b)| a * b)
-                .sum();
+            *ok = dct[k * N_MEL..(k + 1) * N_MEL].iter().zip(&logmel).map(|(a, b)| a * b).sum();
         }
     }
     // normalise over the audible frames (silence would pull the mean toward its own spectrum)
@@ -112,24 +96,15 @@ pub fn mfcc(mono: &[f32], sr: f32) -> ContentFeatures {
     let active: Vec<usize> = (0..frames).filter(|&f| energy[f] > top - 45.0).collect();
     if active.len() > 4 {
         for k in 0..N_MFCC {
-            let mean =
-                active.iter().map(|&f| out[f * N_MFCC + k]).sum::<f32>() / active.len() as f32;
-            let var = active
-                .iter()
-                .map(|&f| (out[f * N_MFCC + k] - mean).powi(2))
-                .sum::<f32>()
-                / active.len() as f32;
+            let mean = active.iter().map(|&f| out[f * N_MFCC + k]).sum::<f32>() / active.len() as f32;
+            let var = active.iter().map(|&f| (out[f * N_MFCC + k] - mean).powi(2)).sum::<f32>() / active.len() as f32;
             let sd = var.sqrt().max(1e-3);
             for f in 0..frames {
                 out[f * N_MFCC + k] = (out[f * N_MFCC + k] - mean) / sd;
             }
         }
     }
-    ContentFeatures {
-        rate: CONTENT_RATE,
-        mfcc: out,
-        energy,
-    }
+    ContentFeatures { rate: CONTENT_RATE, mfcc: out, energy }
 }
 
 #[cfg(test)]
@@ -147,9 +122,7 @@ mod tests {
                     (1..40)
                         .map(|k| {
                             let h = 150.0 * k as f32;
-                            let g = (-((h - f1) / 120.0).powi(2)).exp()
-                                + 0.6 * (-((h - f2) / 160.0).powi(2)).exp()
-                                + 0.02;
+                            let g = (-((h - f1) / 120.0).powi(2)).exp() + 0.6 * (-((h - f2) / 160.0).powi(2)).exp() + 0.02;
                             g * (std::f32::consts::TAU * h * t).sin()
                         })
                         .sum::<f32>()
@@ -161,19 +134,7 @@ mod tests {
         x.extend(vowel(300.0, 2300.0, 24000));
         let c = mfcc(&x, sr);
         assert_eq!(c.frames(), 101); // 1 s at 100 frames/s, frame 0 centred on t = 0
-        let d = |a: usize, b: usize| {
-            c.frame(a)
-                .iter()
-                .zip(c.frame(b))
-                .map(|(p, q)| (p - q).powi(2))
-                .sum::<f32>()
-                .sqrt()
-        };
-        assert!(
-            d(20, 30) * 3.0 < d(20, 70),
-            "same vowel {} vs other vowel {}",
-            d(20, 30),
-            d(20, 70)
-        );
+        let d = |a: usize, b: usize| c.frame(a).iter().zip(c.frame(b)).map(|(p, q)| (p - q).powi(2)).sum::<f32>().sqrt();
+        assert!(d(20, 30) * 3.0 < d(20, 70), "same vowel {} vs other vowel {}", d(20, 30), d(20, 70));
     }
 }

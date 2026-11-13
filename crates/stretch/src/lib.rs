@@ -44,9 +44,7 @@ pub fn stretch_shift_stereo(input: &[f32], sr: u32, ratio: f64, semitones: f32) 
         return Err(format!("transposition {semitones} is outside ±{MAX_SEMITONES} semitones"));
     }
     if !(ratio.is_finite() && (MIN_RATIO - 1e-9..=MAX_RATIO + 1e-9).contains(&ratio)) {
-        return Err(format!(
-            "stretch ratio {ratio} is outside {MIN_RATIO}–{MAX_RATIO}"
-        ));
+        return Err(format!("stretch ratio {ratio} is outside {MIN_RATIO}–{MAX_RATIO}"));
     }
     let frames = input.len() / 2;
     let out_len = out_frames(frames, ratio);
@@ -59,11 +57,7 @@ pub fn stretch_shift_stereo(input: &[f32], sr: u32, ratio: f64, semitones: f32) 
     let srf = sr.max(1) as f32;
     // very short buffers: pad with silence so the algorithm has room, then crop
     let min_out = unsafe { wave_stretch_min_output(srf, 2) } + 1;
-    let (in_n, out_n) = if out_len < min_out {
-        (((min_out as f64) / ratio).ceil() as usize, min_out)
-    } else {
-        (frames, out_len)
-    };
+    let (in_n, out_n) = if out_len < min_out { (((min_out as f64) / ratio).ceil() as usize, min_out) } else { (frames, out_len) };
     let mut l = vec![0.0f32; in_n];
     let mut r = vec![0.0f32; in_n];
     for (i, [a, b]) in input.as_chunks::<2>().0.iter().enumerate() {
@@ -97,8 +91,7 @@ mod tests {
         let n = (sr as f64 * secs) as usize;
         (0..n)
             .flat_map(|i| {
-                let v =
-                    (0.5 * (2.0 * std::f64::consts::PI * freq * i as f64 / sr as f64).sin()) as f32;
+                let v = (0.5 * (2.0 * std::f64::consts::PI * freq * i as f64 / sr as f64).sin()) as f32;
                 [v, v]
             })
             .collect()

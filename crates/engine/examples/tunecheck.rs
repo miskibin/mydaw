@@ -9,7 +9,15 @@ fn main() {
     let x: Vec<f32> = a.content().chunks(2).map(|f| f[0]).collect();
     let mut fx = new_fx(1, FxKind::Tune, 120.0);
     let arg = |i: usize, d: f64| std::env::args().nth(i).and_then(|s| s.parse().ok()).unwrap_or(d);
-    for (k, v) in [("retune", arg(6, 0.0)), ("flex", 0.0), ("vibrato", arg(5, 0.0)), ("humanize", 0.0), ("key", arg(2, 0.0)), ("scale", arg(3, 0.0)), ("voice", arg(4, 0.0))] {
+    for (k, v) in [
+        ("retune", arg(6, 0.0)),
+        ("flex", 0.0),
+        ("vibrato", arg(5, 0.0)),
+        ("humanize", 0.0),
+        ("key", arg(2, 0.0)),
+        ("scale", arg(3, 0.0)),
+        ("voice", arg(4, 0.0)),
+    ] {
         fx.params.insert(k.into(), v);
     }
     let mut t = wave_engine::vocal::Tune::default();
@@ -50,9 +58,15 @@ fn main() {
         dout.push(*y.get(i + lat).unwrap_or(&0.0));
         if i % (sr as usize / 4) == 0 && i > 0 {
             let m = meters[i / 256];
-            println!("{:5.2}s in {:6.2} out {:6.2}  meters in {:6.2} target {:6.2} out {:6.2}", i as f32 / sr,
-                if di.hz > 0.0 { hz_to_midi(di.hz) } else { 0.0 }, if dout.hz > 0.0 { hz_to_midi(dout.hz) } else { 0.0 },
-                if m[0] > 0.0 { hz_to_midi(m[0]) } else { 0.0 }, if m[1] > 0.0 { hz_to_midi(m[1]) } else { 0.0 }, if m[2] > 0.0 { hz_to_midi(m[2]) } else { 0.0 });
+            println!(
+                "{:5.2}s in {:6.2} out {:6.2}  meters in {:6.2} target {:6.2} out {:6.2}",
+                i as f32 / sr,
+                if di.hz > 0.0 { hz_to_midi(di.hz) } else { 0.0 },
+                if dout.hz > 0.0 { hz_to_midi(dout.hz) } else { 0.0 },
+                if m[0] > 0.0 { hz_to_midi(m[0]) } else { 0.0 },
+                if m[1] > 0.0 { hz_to_midi(m[1]) } else { 0.0 },
+                if m[2] > 0.0 { hz_to_midi(m[2]) } else { 0.0 }
+            );
         }
     }
 }

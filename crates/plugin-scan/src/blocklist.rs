@@ -71,18 +71,12 @@ impl BlockList {
     pub fn load(file_name: &str) -> Self {
         let file = data_file(file_name);
         let blocked = file.as_deref().map(Self::read_file).unwrap_or_default();
-        Self {
-            blocked: Mutex::new(blocked),
-            file,
-        }
+        Self { blocked: Mutex::new(blocked), file }
     }
 
     /// An in-memory list that is never written anywhere. For tests.
     pub fn in_memory() -> Self {
-        Self {
-            blocked: Mutex::new(BTreeSet::new()),
-            file: None,
-        }
+        Self { blocked: Mutex::new(BTreeSet::new()), file: None }
     }
 
     /// A list backed by an explicit file. For tests, and for a caller that keeps
@@ -90,21 +84,14 @@ impl BlockList {
     pub fn with_file(file: impl Into<PathBuf>) -> Self {
         let file = file.into();
         let blocked = Self::read_file(&file);
-        Self {
-            blocked: Mutex::new(blocked),
-            file: Some(file),
-        }
+        Self { blocked: Mutex::new(blocked), file: Some(file) }
     }
 
     fn read_file(path: &Path) -> BTreeSet<PathBuf> {
         let Ok(text) = std::fs::read_to_string(path) else {
             return BTreeSet::new();
         };
-        text.lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty() && !line.starts_with('#'))
-            .map(PathBuf::from)
-            .collect()
+        text.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')).map(PathBuf::from).collect()
     }
 
     /// Whether `module` must be skipped.
@@ -166,10 +153,7 @@ impl BlockList {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Err(err) = std::fs::write(file, text) {
-            log::debug!(
-                "could not write the plugin block list to {}: {err}",
-                file.display()
-            );
+            log::debug!("could not write the plugin block list to {}: {err}", file.display());
         }
     }
 }
@@ -225,11 +209,7 @@ mod tests {
     fn comments_and_blank_lines_in_the_file_are_ignored() {
         let dir = scratch_dir("block-comments");
         let file = dir.path().join("blocklist.txt");
-        std::fs::write(
-            &file,
-            "# a comment\n\n   \nC:\\plugins\\One.vst3\n  C:\\plugins\\Two.vst3  \n",
-        )
-        .unwrap();
+        std::fs::write(&file, "# a comment\n\n   \nC:\\plugins\\One.vst3\n  C:\\plugins\\Two.vst3  \n").unwrap();
 
         let list = BlockList::with_file(&file);
         assert_eq!(list.len(), 2);
@@ -251,11 +231,7 @@ mod tests {
         // in which case the list is in-memory only.
         if let Some(path) = data_file("vst3-blocklist.txt") {
             assert!(path.ends_with("vst3-blocklist.txt"));
-            assert!(
-                path.to_string_lossy().contains("WAVE"),
-                "{}",
-                path.display()
-            );
+            assert!(path.to_string_lossy().contains("WAVE"), "{}", path.display());
         }
     }
 }

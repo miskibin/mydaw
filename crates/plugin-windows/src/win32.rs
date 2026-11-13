@@ -20,19 +20,14 @@ use windows_sys::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW,
-    IsWindow, KillTimer, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
-    CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, GW_CHILD, MINMAXINFO,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOWNORMAL, USER_DEFAULT_SCREEN_DPI,
-    WINDOW_EX_STYLE, WM_CLOSE, WM_DPICHANGED, WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY, WM_SIZE,
-    WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetWindow, GetWindowLongPtrW, IsWindow, KillTimer, RegisterClassW,
+    SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, GW_CHILD,
+    MINMAXINFO, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_SHOWNORMAL, USER_DEFAULT_SCREEN_DPI, WINDOW_EX_STYLE, WM_CLOSE, WM_DPICHANGED,
+    WM_GETMINMAXINFO, WM_NCCREATE, WM_NCDESTROY, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CAPTION, WS_CLIPCHILDREN, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
     WS_OVERLAPPED, WS_SYSMENU, WS_THICKFRAME,
 };
 
-use crate::service::{
-    WindowError, WindowEvent, WindowId, WindowOptions, WindowSize, WindowState, MIN_WINDOW_SIZE,
-    PUMP_INTERVAL_MS,
-};
+use crate::service::{WindowError, WindowEvent, WindowId, WindowOptions, WindowSize, WindowState, MIN_WINDOW_SIZE, PUMP_INTERVAL_MS};
 
 /// Window class name, unique to WAVE so it cannot collide with a plugin's own.
 const CLASS_NAME: &str = "WavePluginWindow";
@@ -47,13 +42,7 @@ static CLASS: Once = Once::new();
 /// `0` = registered, anything else = the `GetLastError` from the attempt.
 static CLASS_ERROR: AtomicU32 = AtomicU32::new(u32::MAX);
 
-const STYLE_RESIZABLE: u32 = WS_OVERLAPPED
-    | WS_CAPTION
-    | WS_SYSMENU
-    | WS_THICKFRAME
-    | WS_MINIMIZEBOX
-    | WS_MAXIMIZEBOX
-    | WS_CLIPCHILDREN;
+const STYLE_RESIZABLE: u32 = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_CLIPCHILDREN;
 
 /// No drag frame, no maximise box: an editor that cannot resize must not be
 /// given a frame the user can drag.
@@ -255,31 +244,15 @@ pub(crate) fn has_child_window(hwnd: isize) -> Result<bool, WindowError> {
 }
 
 pub(crate) fn client_size(id: WindowId, hwnd: isize) -> Result<WindowSize, WindowError> {
-    let mut rect = RECT {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
+    let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
     // SAFETY: created by this module on this thread; `rect` is ours.
     if unsafe { GetClientRect(hwnd as HWND, &mut rect) } == 0 {
-        return Err(WindowError::Win32 {
-            id,
-            api: "GetClientRect",
-            code: last_error(),
-        });
+        return Err(WindowError::Win32 { id, api: "GetClientRect", code: last_error() });
     }
-    Ok(WindowSize {
-        width: (rect.right - rect.left).max(0) as u32,
-        height: (rect.bottom - rect.top).max(0) as u32,
-    })
+    Ok(WindowSize { width: (rect.right - rect.left).max(0) as u32, height: (rect.bottom - rect.top).max(0) as u32 })
 }
 
-pub(crate) fn set_client_size(
-    id: WindowId,
-    hwnd: isize,
-    size: WindowSize,
-) -> Result<(), WindowError> {
+pub(crate) fn set_client_size(id: WindowId, hwnd: isize, size: WindowSize) -> Result<(), WindowError> {
     let hwnd = hwnd as HWND;
     // SAFETY: created by this module on this thread.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
@@ -288,11 +261,7 @@ pub(crate) fn set_client_size(
     if unsafe { apply_client_size(hwnd, size, style, dpi) } {
         Ok(())
     } else {
-        Err(WindowError::Win32 {
-            id,
-            api: "SetWindowPos",
-            code: last_error(),
-        })
+        Err(WindowError::Win32 { id, api: "SetWindowPos", code: last_error() })
     }
 }
 
@@ -302,15 +271,8 @@ pub(crate) fn set_client_size(
 /// `hwnd` must be a live window owned by the calling thread.
 unsafe fn apply_client_size(hwnd: HWND, size: WindowSize, style: u32, dpi: u32) -> bool {
     let rect = window_rect_for(size, style, dpi);
-    SetWindowPos(
-        hwnd,
-        ptr::null_mut(),
-        0,
-        0,
-        rect.right - rect.left,
-        rect.bottom - rect.top,
-        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
-    ) != 0
+    SetWindowPos(hwnd, ptr::null_mut(), 0, 0, rect.right - rect.left, rect.bottom - rect.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE)
+        != 0
 }
 
 /// The state a window carries. `None` before WM_NCCREATE and after WM_NCDESTROY.
@@ -326,15 +288,9 @@ unsafe fn state_of<'a>(hwnd: HWND) -> Option<&'a WindowState> {
 ///
 /// It queues events and returns; the only owner code it runs is the tick
 /// handler, at `WM_TIMER`, which is always dispatched from the top of the loop.
-unsafe extern "system" fn window_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+unsafe extern "system" fn window_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // A panic unwinding into Windows' frames is undefined behaviour.
-    let handled =
-        catch_unwind(AssertUnwindSafe(|| dispatch(hwnd, message, wparam, lparam))).unwrap_or(None);
+    let handled = catch_unwind(AssertUnwindSafe(|| dispatch(hwnd, message, wparam, lparam))).unwrap_or(None);
     match handled {
         Some(result) => result,
         None => DefWindowProcW(hwnd, message, wparam, lparam),
@@ -364,10 +320,7 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
             let info = (lparam as *mut MINMAXINFO).as_mut()?;
             let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
             let rect = window_rect_for(state.min_size, style, dpi(hwnd as isize));
-            info.ptMinTrackSize = POINT {
-                x: rect.right - rect.left,
-                y: rect.bottom - rect.top,
-            };
+            info.ptMinTrackSize = POINT { x: rect.right - rect.left, y: rect.bottom - rect.top };
             Some(0)
         }
         WM_DPICHANGED => {
@@ -437,11 +390,7 @@ mod tests {
 
     #[test]
     fn the_window_rectangle_is_larger_than_the_client_area_it_wraps() {
-        let rect = window_rect_for(
-            WindowSize::new(400, 250),
-            style_for(true),
-            USER_DEFAULT_SCREEN_DPI,
-        );
+        let rect = window_rect_for(WindowSize::new(400, 250), style_for(true), USER_DEFAULT_SCREEN_DPI);
         let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
         assert!(width >= 400 && height >= 250, "got {width}x{height}");
         assert!(height - 250 < 200, "implausible caption height");

@@ -263,12 +263,7 @@ impl Curve {
         if self.wc > 1e-4 {
             // cubic soft clipper, unity slope at 0, flat from |u| = 1.5
             let x = u / 1.5;
-            y += self.wc
-                * if x.abs() <= 1.0 {
-                    1.5 * (x - x * x * x / 3.0)
-                } else {
-                    x.signum()
-                };
+            y += self.wc * if x.abs() <= 1.0 { 1.5 * (x - x * x * x / 3.0) } else { x.signum() };
         }
         y
     }
@@ -290,13 +285,7 @@ impl Curve {
         if self.wc > 1e-4 {
             let x = u / 1.5;
             let a = x.abs();
-            y += self.wc
-                * 1.5
-                * if a <= 1.0 {
-                    1.5 * (x * x / 2.0 - x * x * x * x / 12.0)
-                } else {
-                    a - 0.375
-                };
+            y += self.wc * 1.5 * if a <= 1.0 { 1.5 * (x * x / 2.0 - x * x * x * x / 12.0) } else { a - 0.375 };
         }
         y
     }
@@ -360,11 +349,7 @@ impl Shaper {
         let fy = if s.adaa {
             let dx = xin - self.x1;
             let f = c.big_f(xin);
-            let y = if dx.abs() > 1e-6 {
-                (f - self.f1) / dx
-            } else {
-                c.f(0.5 * (xin + self.x1))
-            };
+            let y = if dx.abs() > 1e-6 { (f - self.f1) / dx } else { c.f(0.5 * (xin + self.x1)) };
             self.f1 = f;
             y
         } else {
@@ -406,10 +391,7 @@ fn hb_design(n: usize, tbw: f64) -> HbCoefs {
     let e2 = e * e;
     let e4 = e2 * e2;
     let q = e * (1.0 + e4 * (2.0 + e4 * (15.0 + 150.0 * e4)));
-    let mut out = HbCoefs {
-        n,
-        ..Default::default()
-    };
+    let mut out = HbCoefs { n, ..Default::default() };
     for i in 0..n {
         let c = (i + 1) as f64;
         let mut num = 0.0;
@@ -458,13 +440,7 @@ struct Hb {
 
 impl Hb {
     #[inline]
-    fn chain(
-        c: &HbCoefs,
-        start: usize,
-        xs: &mut [f32; MAXC / 2],
-        ys: &mut [f32; MAXC / 2],
-        mut v: f32,
-    ) -> f32 {
+    fn chain(c: &HbCoefs, start: usize, xs: &mut [f32; MAXC / 2], ys: &mut [f32; MAXC / 2], mut v: f32) -> f32 {
         let mut i = start;
         let mut k = 0;
         while i < c.n {
@@ -480,10 +456,7 @@ impl Hb {
     /// One low-rate sample in, two high-rate samples out.
     #[inline]
     fn up(&mut self, c: &HbCoefs, x: f32) -> (f32, f32) {
-        (
-            Self::chain(c, 0, &mut self.xa, &mut self.ya, x),
-            Self::chain(c, 1, &mut self.xb, &mut self.yb, x),
-        )
+        (Self::chain(c, 0, &mut self.xa, &mut self.ya, x), Self::chain(c, 1, &mut self.xb, &mut self.yb, x))
     }
     /// Two high-rate samples in, one low-rate sample out.
     #[inline]
@@ -588,9 +561,7 @@ pub fn pink_noise(n: usize, dbfs: f32, seed: u32) -> Vec<f32> {
         out.push(b.iter().sum::<f32>() + w * 0.5362);
         b[6] = w * 0.115926;
     }
-    let rms = (out.iter().map(|x| x * x).sum::<f32>() / n as f32)
-        .sqrt()
-        .max(1e-9);
+    let rms = (out.iter().map(|x| x * x).sum::<f32>() / n as f32).sqrt().max(1e-9);
     let g = db_to_gain(dbfs) / rms;
     for x in &mut out {
         *x *= g;
@@ -640,17 +611,9 @@ pub fn calibrate_auto() -> [[[f32; AUTO_STEPS]; 2]; 5] {
     for (style, ts) in t.iter_mut().enumerate() {
         for (pi, tp) in ts.iter_mut().enumerate() {
             for (di, g) in tp.iter_mut().enumerate() {
-                let set = Settings {
-                    style,
-                    drive: di as f32 / (AUTO_STEPS - 1) as f32,
-                    punish: pi == 1,
-                    auto: false,
-                    ..Default::default()
-                };
-                let mut core = Core {
-                    calibrating: true,
-                    ..Default::default()
-                };
+                let set =
+                    Settings { style, drive: di as f32 / (AUTO_STEPS - 1) as f32, punish: pi == 1, auto: false, ..Default::default() };
+                let mut core = Core { calibrating: true, ..Default::default() };
                 core.set(&set);
                 core.prepare(sr, 1);
                 let mut x = noise.clone();
@@ -741,11 +704,7 @@ impl Chan {
         }
         v = self.pre_hi.tick(self.pre_lo.tick(v));
         let y0 = self.sh.tick(v * r.k, &r.sk) * r.inv_k;
-        let y = if r.sk.adaa {
-            (1.0 + 2.0 * r.fir_a) * self.fir[0] - r.fir_a * (y0 + self.fir[1])
-        } else {
-            y0
-        };
+        let y = if r.sk.adaa { (1.0 + 2.0 * r.fir_a) * self.fir[0] - r.fir_a * (y0 + self.fir[1]) } else { y0 };
         self.fir = [y0, self.fir[0]];
         let mut w = self.soft.tick(self.de_hi.tick(self.de_lo.tick(y)));
         // DC block (the bias moves the operating point)
@@ -841,12 +800,7 @@ impl Core {
         self.sr = sr;
         self.nch = channels.clamp(1, 2);
         let _ = coefs();
-        for s in [
-            &mut self.s_gain,
-            &mut self.s_mix,
-            &mut self.s_comp,
-            &mut self.s_out,
-        ] {
+        for s in [&mut self.s_gain, &mut self.s_mix, &mut self.s_comp, &mut self.s_out] {
             s.setup(sr, 20.0);
         }
         // block-rate one-pole, ~20 ms
@@ -916,11 +870,7 @@ impl Core {
         let thump_q = 0.707 + 3.3 * s.thump;
         let eq = [s.lowcut, thump_q, s.tone * 5.0, s.highcut];
         let gain = db_to_gain(s.gain_db());
-        let comp = if s.auto && !self.calibrating {
-            auto_gain(s.style, s.punish, s.drive)
-        } else {
-            1.0
-        };
+        let comp = if s.auto && !self.calibrating { auto_gain(s.style, s.punish, s.drive) } else { 1.0 };
         (vo, eq, gain, s.mix, comp, db_to_gain(s.out_db))
     }
 
@@ -1108,24 +1058,15 @@ impl Core {
                             let (h0, h1) = c.up1.up(&c1, x);
                             let (q0, q1) = c.up2.up(&c2, h0);
                             let (q2, q3) = c.up2.up(&c2, h1);
-                            let (w0, w1) = (
-                                Self::os_sample(c, &run, q0, g, m, cp),
-                                Self::os_sample(c, &run, q1, g, m, cp),
-                            );
-                            let (w2, w3) = (
-                                Self::os_sample(c, &run, q2, g, m, cp),
-                                Self::os_sample(c, &run, q3, g, m, cp),
-                            );
+                            let (w0, w1) = (Self::os_sample(c, &run, q0, g, m, cp), Self::os_sample(c, &run, q1, g, m, cp));
+                            let (w2, w3) = (Self::os_sample(c, &run, q2, g, m, cp), Self::os_sample(c, &run, q3, g, m, cp));
                             let a = c.dn2.down(&c2, w0, w1);
                             let b = c.dn2.down(&c2, w2, w3);
                             c.dn1.down(&c1, a, b)
                         }
                         _ => {
                             let (h0, h1) = c.up1.up(&c1, x);
-                            let (w0, w1) = (
-                                Self::os_sample(c, &run, h0, g, m, cp),
-                                Self::os_sample(c, &run, h1, g, m, cp),
-                            );
+                            let (w0, w1) = (Self::os_sample(c, &run, h0, g, m, cp), Self::os_sample(c, &run, h1, g, m, cp));
                             c.dn1.down(&c1, w0, w1)
                         }
                     };
@@ -1196,9 +1137,7 @@ mod tests {
     use super::*;
 
     fn sine(f: f32, amp: f32, sr: f32, n: usize) -> Vec<f32> {
-        (0..n)
-            .map(|i| (std::f32::consts::TAU * f * i as f32 / sr).sin() * amp)
-            .collect()
+        (0..n).map(|i| (std::f32::consts::TAU * f * i as f32 / sr).sin() * amp).collect()
     }
 
     fn run(set: Settings, x: &[f32], sr: f32) -> Vec<f32> {
@@ -1230,54 +1169,29 @@ mod tests {
             20.0 * (r * r + i * i).sqrt().log10()
         };
         // stage 1 at 96 kHz: 20 kHz passes, 28 kHz+ (images of 20 kHz) is gone
-        assert!(
-            db(c1, 20000.0 / 96000.0).abs() < 0.01,
-            "{}",
-            db(c1, 20000.0 / 96000.0)
-        );
-        assert!(
-            db(c1, 28000.0 / 96000.0) < -100.0,
-            "{}",
-            db(c1, 28000.0 / 96000.0)
-        );
+        assert!(db(c1, 20000.0 / 96000.0).abs() < 0.01, "{}", db(c1, 20000.0 / 96000.0));
+        assert!(db(c1, 28000.0 / 96000.0) < -100.0, "{}", db(c1, 28000.0 / 96000.0));
         assert!(db(c2, 24000.0 / 192000.0).abs() < 0.01);
-        assert!(
-            db(c2, 72000.0 / 192000.0) < -70.0,
-            "{}",
-            db(c2, 72000.0 / 192000.0)
-        );
+        assert!(db(c2, 72000.0 / 192000.0) < -70.0, "{}", db(c2, 72000.0 / 192000.0));
     }
 
     #[test]
     fn small_signals_pass_flat_and_on_time() {
         let sr = 48000.0;
         for hq in [false, true] {
-            let set = Settings {
-                drive: 0.0,
-                auto: false,
-                style: CONSOLE,
-                hq,
-                mix: 0.0,
-                ..Default::default()
-            };
+            let set = Settings { drive: 0.0, auto: false, style: CONSOLE, hq, mix: 0.0, ..Default::default() };
             let lat = latency_exact(hq);
             for f in [100.0f32, 1000.0, 10000.0, 18000.0] {
                 let x = sine(f, 0.001, sr, 24000);
                 let y = run(set, &x, sr);
                 let g = bin(&y[12000..], f, sr) / bin(&x[12000..], f, sr);
-                assert!(
-                    (20.0 * g.log10()).abs() < 0.3,
-                    "hq {hq} {f} Hz: {} dB",
-                    20.0 * g.log10()
-                );
+                assert!((20.0 * g.log10()).abs() < 0.3, "hq {hq} {f} Hz: {} dB", 20.0 * g.log10());
             }
             // the reported latency lines a low tone up within a sample
             let x = sine(200.0, 0.001, sr, 24000);
             let y = run(set, &x, sr);
             let d = lat.round() as usize;
-            let err: f32 = (12000..20000)
-                .map(|i| (y[i + d] - x[i]).abs())
-                .fold(0.0, f32::max);
+            let err: f32 = (12000..20000).map(|i| (y[i + d] - x[i]).abs()).fold(0.0, f32::max);
             assert!(err < 0.001 * 0.06, "hq {hq}: misaligned by {err}");
         }
     }
@@ -1287,16 +1201,7 @@ mod tests {
         let sr = 48000.0;
         let x = sine(1000.0, 0.5, sr, 72000);
         let h = |style| {
-            let y = run(
-                Settings {
-                    style,
-                    drive: 0.6,
-                    auto: false,
-                    ..Default::default()
-                },
-                &x,
-                sr,
-            );
+            let y = run(Settings { style, drive: 0.6, auto: false, ..Default::default() }, &x, sr);
             let s = &y[24000..72000];
             let h1 = bin(s, 1000.0, sr);
             (bin(s, 2000.0, sr) / h1, bin(s, 3000.0, sr) / h1)
@@ -1312,16 +1217,7 @@ mod tests {
         let sr = 48000.0;
         let x = sine(5000.0, 0.5, sr, 96000);
         let alias = |hq| {
-            let y = run(
-                Settings {
-                    style: PENTODE,
-                    drive: 1.0,
-                    hq,
-                    ..Default::default()
-                },
-                &x,
-                sr,
-            );
+            let y = run(Settings { style: PENTODE, drive: 1.0, hq, ..Default::default() }, &x, sr);
             let s = &y[48000..96000];
             let mut off = 0.0;
             for k in 1..24 {
@@ -1345,15 +1241,7 @@ mod tests {
         let rin = rms(&x[8000..]);
         for (style, name) in STYLES.iter().enumerate() {
             for d in [0.0, 0.25, 0.5, 0.75, 1.0] {
-                let y = run(
-                    Settings {
-                        style,
-                        drive: d,
-                        ..Default::default()
-                    },
-                    &x,
-                    sr,
-                );
+                let y = run(Settings { style, drive: d, ..Default::default() }, &x, sr);
                 let db = 20.0 * (rms(&y[8000..]) / rin).log10();
                 assert!(db.abs() < 1.0, "{name} drive {d}: {db:.2} dB");
             }
@@ -1374,11 +1262,7 @@ mod tests {
 ";
             for p in st {
                 o += "        [";
-                o += &p
-                    .iter()
-                    .map(|g| format!("{g:.5}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                o += &p.iter().map(|g| format!("{g:.5}")).collect::<Vec<_>>().join(", ");
                 o += "],
 ";
             }
@@ -1393,30 +1277,11 @@ mod tests {
     fn mix_zero_is_dry_and_silence_stays_silent() {
         let sr = 48000.0;
         let x = sine(440.0, 0.5, sr, 24000);
-        let y = run(
-            Settings {
-                drive: 1.0,
-                mix: 0.0,
-                ..Default::default()
-            },
-            &x,
-            sr,
-        );
+        let y = run(Settings { drive: 1.0, mix: 0.0, ..Default::default() }, &x, sr);
         let d = latency_samples(false);
-        let err: f32 = (12000..20000)
-            .map(|i| (y[i + d] - x[i]).abs())
-            .fold(0.0, f32::max);
+        let err: f32 = (12000..20000).map(|i| (y[i + d] - x[i]).abs()).fold(0.0, f32::max);
         assert!(err < 0.02, "mix 0 differs by {err}");
-        let z = run(
-            Settings {
-                style: TRIODE,
-                drive: 1.0,
-                punish: true,
-                ..Default::default()
-            },
-            &vec![0.0; 4800],
-            sr,
-        );
+        let z = run(Settings { style: TRIODE, drive: 1.0, punish: true, ..Default::default() }, &vec![0.0; 4800], sr);
         assert!(z.iter().all(|v| v.abs() < 1e-6), "silence in, noise out");
     }
 
@@ -1424,15 +1289,7 @@ mod tests {
     fn dc_is_blocked() {
         let sr = 48000.0;
         let x = sine(100.0, 0.7, sr, 96000);
-        let y = run(
-            Settings {
-                style: TRIODE,
-                drive: 1.0,
-                ..Default::default()
-            },
-            &x,
-            sr,
-        );
+        let y = run(Settings { style: TRIODE, drive: 1.0, ..Default::default() }, &x, sr);
         let s = &y[48000..96000];
         let mean = s.iter().sum::<f32>() / s.len() as f32;
         assert!(mean.abs() < 1e-3, "DC {mean}");
@@ -1459,24 +1316,15 @@ mod tests {
             c.process_mono(ch);
         }
         // the largest sample-to-sample step stays near what a 220 Hz tone at this level makes
-        let step = y
-            .windows(2)
-            .skip(2000)
-            .map(|w| (w[1] - w[0]).abs())
-            .fold(0.0, f32::max);
+        let step = y.windows(2).skip(2000).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max);
         assert!(step < 0.1, "step {step}");
         assert!(y.iter().all(|v| v.is_finite()));
     }
 
     #[test]
     fn old_params_migrate_to_the_same_drive() {
-        let mut p: std::collections::BTreeMap<String, f64> = [
-            ("drive".to_string(), 9.0),
-            ("mix".to_string(), 80.0),
-            ("out".to_string(), -3.0),
-        ]
-        .into_iter()
-        .collect();
+        let mut p: std::collections::BTreeMap<String, f64> =
+            [("drive".to_string(), 9.0), ("mix".to_string(), 80.0), ("out".to_string(), -3.0)].into_iter().collect();
         assert!(migrate_params(&mut p));
         assert!((drive_db(p["drive"] as f32 / 100.0) - 9.0).abs() < 1e-3);
         assert_eq!(p["style"], 0.0);

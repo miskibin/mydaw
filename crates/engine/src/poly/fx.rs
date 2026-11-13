@@ -6,8 +6,8 @@
 use std::f32::consts::TAU;
 
 use super::params::{ix, Patch, DELAY_BEATS};
-use crate::dsp::saturator::{self, Settings as SatSettings};
 use crate::dsp::reverb_v2::{idx, ReverbV2};
+use crate::dsp::saturator::{self, Settings as SatSettings};
 use crate::processor::{ParamBlock, ProcessCtx, Processor};
 
 #[inline(always)]

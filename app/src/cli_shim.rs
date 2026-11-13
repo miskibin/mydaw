@@ -41,7 +41,9 @@ fn on_path(dir: &std::path::Path) -> bool {
 pub fn install() -> CliStatus {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
-        Err(e) => return CliStatus { installed: false, command: "wave".into(), path: None, note: Some(format!("cannot locate the app: {e}")) },
+        Err(e) => {
+            return CliStatus { installed: false, command: "wave".into(), path: None, note: Some(format!("cannot locate the app: {e}")) }
+        }
     };
     let Some(dir) = target_dir() else {
         return CliStatus { installed: false, command: "wave".into(), path: None, note: Some("no home folder to install into".into()) };
@@ -53,7 +55,12 @@ pub fn install() -> CliStatus {
     let unchanged = std::fs::read_to_string(&file).map(|t| t == body).unwrap_or(false);
     if !unchanged {
         if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&file, &body)) {
-            return CliStatus { installed: false, command: format!("\"{}\" --cli", exe.display()), path: None, note: Some(format!("could not write {}: {e}", file.display())) };
+            return CliStatus {
+                installed: false,
+                command: format!("\"{}\" --cli", exe.display()),
+                path: None,
+                note: Some(format!("could not write {}: {e}", file.display())),
+            };
         }
         #[cfg(unix)]
         {
@@ -61,6 +68,10 @@ pub fn install() -> CliStatus {
             let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755));
         }
     }
-    let note = if on_path(&dir) { None } else { Some(format!("{} is not on PATH — add it, or call {} directly", dir.display(), file.display())) };
+    let note = if on_path(&dir) {
+        None
+    } else {
+        Some(format!("{} is not on PATH — add it, or call {} directly", dir.display(), file.display()))
+    };
     CliStatus { installed: true, command: "wave".into(), path: Some(file.display().to_string()), note }
 }

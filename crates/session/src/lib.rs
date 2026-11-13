@@ -135,7 +135,14 @@ impl Server {
                 }
             }
         }
-        let endpoint = Endpoint { version: PROTOCOL_VERSION, session_id: id.clone(), socket: sock, token: token.clone(), pid: std::process::id(), project: None };
+        let endpoint = Endpoint {
+            version: PROTOCOL_VERSION,
+            session_id: id.clone(),
+            socket: sock,
+            token: token.clone(),
+            pid: std::process::id(),
+            project: None,
+        };
         let endpoint_path = dir.join(format!("{id}.json"));
         std::fs::write(&endpoint_path, serde_json::to_vec_pretty(&endpoint)?)?;
         thread::Builder::new().name("wave-session".into()).spawn(move || {
@@ -145,13 +152,28 @@ impl Server {
                 let token = token.clone();
                 let _ = thread::Builder::new().name("wave-session-conn".into()).spawn(move || {
                     let reply = match read_message::<Request>(&mut conn) {
-                        Ok(req) if req.token != token => Reply { ok: false, revision: 0, data: Value::Null, error: Some(ErrorBody::new("UNAUTHORIZED", "bad session token")) },
-                        Ok(req) if req.version != PROTOCOL_VERSION => Reply { ok: false, revision: 0, data: Value::Null, error: Some(ErrorBody::new("VERSION", format!("this app speaks protocol {PROTOCOL_VERSION}, the CLI sent {}", req.version))) },
+                        Ok(req) if req.token != token => Reply {
+                            ok: false,
+                            revision: 0,
+                            data: Value::Null,
+                            error: Some(ErrorBody::new("UNAUTHORIZED", "bad session token")),
+                        },
+                        Ok(req) if req.version != PROTOCOL_VERSION => Reply {
+                            ok: false,
+                            revision: 0,
+                            data: Value::Null,
+                            error: Some(ErrorBody::new(
+                                "VERSION",
+                                format!("this app speaks protocol {PROTOCOL_VERSION}, the CLI sent {}", req.version),
+                            )),
+                        },
                         Ok(req) => match h(&req) {
                             Ok((data, revision)) => Reply { ok: true, revision, data, error: None },
                             Err(e) => Reply { ok: false, revision: 0, data: Value::Null, error: Some(e) },
                         },
-                        Err(e) => Reply { ok: false, revision: 0, data: Value::Null, error: Some(ErrorBody::new("BAD_REQUEST", e.to_string())) },
+                        Err(e) => {
+                            Reply { ok: false, revision: 0, data: Value::Null, error: Some(ErrorBody::new("BAD_REQUEST", e.to_string())) }
+                        }
                     };
                     let _ = write_message(&mut conn, &reply);
                 });
@@ -176,7 +198,7 @@ pub fn sessions() -> Vec<Endpoint> {
             out.push((m, ep));
         }
     }
-    out.sort_by(|a, b| b.0.cmp(&a.0));
+    out.sort_by_key(|x| std::cmp::Reverse(x.0));
     out.into_iter().map(|x| x.1).collect()
 }
 

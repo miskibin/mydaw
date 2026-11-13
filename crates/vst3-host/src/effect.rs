@@ -39,24 +39,20 @@ use std::sync::{Arc, Weak};
 use parking_lot::Mutex;
 use serde::Serialize;
 use vst3::Steinberg::Vst::{
-    AudioBusBuffers, AudioBusBuffers__type0, BusDirections_, BusInfo, IAudioProcessor,
-    IAudioProcessorTrait, IComponent, IComponentHandler, IComponentTrait, IConnectionPoint,
-    IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IParameterChanges,
-    MediaTypes_, ParamID, ParameterInfo, ParameterInfo_::ParameterFlags_, ProcessContext,
-    ProcessContext_, ProcessData, ProcessModes_, ProcessSetup, SpeakerArr, SpeakerArrangement,
-    String128, SymbolicSampleSizes_,
+    AudioBusBuffers, AudioBusBuffers__type0, BusDirections_, BusInfo, IAudioProcessor, IAudioProcessorTrait, IComponent, IComponentHandler,
+    IComponentTrait, IConnectionPoint, IConnectionPointTrait, IEditController, IEditControllerTrait, IEventList, IParameterChanges,
+    MediaTypes_, ParamID, ParameterInfo, ParameterInfo_::ParameterFlags_, ProcessContext, ProcessContext_, ProcessData, ProcessModes_,
+    ProcessSetup, SpeakerArr, SpeakerArrangement, String128, SymbolicSampleSizes_,
 };
 use vst3::Steinberg::{
-    kNotImplemented, kResultOk, kResultTrue, IBStream, IPluginBaseTrait, IPluginFactory3,
-    IPluginFactory3Trait, IPluginFactoryTrait, TUID,
+    kNotImplemented, kResultOk, kResultTrue, IBStream, IPluginBaseTrait, IPluginFactory3, IPluginFactory3Trait, IPluginFactoryTrait, TUID,
 };
 use vst3::{ComPtr, ComWrapper};
 use wave_engine::{ProcessCtx, Processor};
 
 use crate::editor::EditorSession;
 use crate::host::{
-    host_context_ptr, Counters, EmptyEventList, GuiRequests, HostContext, HostFlags, MemoryStream,
-    ParamMailbox, ParameterChanges,
+    host_context_ptr, Counters, EmptyEventList, GuiRequests, HostContext, HostFlags, MemoryStream, ParamMailbox, ParameterChanges,
 };
 use crate::module::{utf16_to_string, ClassId, Module};
 use crate::scan::{read_classes, PluginInfo};
@@ -106,21 +102,13 @@ impl BusLayout {
             });
         };
         if main_in != 2 || main_out != 2 {
-            return Err(format!(
-                "its main buses are {main_in} channel(s) in and {main_out} out, not stereo"
-            ));
+            return Err(format!("its main buses are {main_in} channel(s) in and {main_out} out, not stereo"));
         }
         if self.inputs.len() > MAX_BUSES
             || self.outputs.len() > MAX_BUSES
-            || self
-                .inputs
-                .iter()
-                .chain(&self.outputs)
-                .any(|count| *count > MAX_BUS_CHANNELS)
+            || self.inputs.iter().chain(&self.outputs).any(|count| *count > MAX_BUS_CHANNELS)
         {
-            return Err(
-                "it declares more buses or channels than an insert slot supports".to_owned(),
-            );
+            return Err("it declares more buses or channels than an insert slot supports".to_owned());
         }
         Ok(())
     }
@@ -131,15 +119,11 @@ fn read_bus_layout(component: &ComPtr<IComponent>) -> BusLayout {
     // out-parameter. Nonsense answers produce a layout that is then refused.
     unsafe {
         let read = |direction: i32| -> Vec<u32> {
-            let count = component
-                .getBusCount(MediaTypes_::kAudio as i32, direction)
-                .clamp(0, 64);
+            let count = component.getBusCount(MediaTypes_::kAudio as i32, direction).clamp(0, 64);
             (0..count)
                 .map(|index| {
                     let mut info: BusInfo = std::mem::zeroed();
-                    if component.getBusInfo(MediaTypes_::kAudio as i32, direction, index, &mut info)
-                        == kResultOk
-                    {
+                    if component.getBusInfo(MediaTypes_::kAudio as i32, direction, index, &mut info) == kResultOk {
                         u32::try_from(info.channelCount).unwrap_or(0)
                     } else {
                         0
@@ -147,10 +131,7 @@ fn read_bus_layout(component: &ComPtr<IComponent>) -> BusLayout {
                 })
                 .collect()
         };
-        BusLayout {
-            inputs: read(BusDirections_::kInput as i32),
-            outputs: read(BusDirections_::kOutput as i32),
-        }
+        BusLayout { inputs: read(BusDirections_::kInput as i32), outputs: read(BusDirections_::kOutput as i32) }
     }
 }
 
@@ -200,20 +181,12 @@ impl Instance {
 
     /// Create and initialise the plugin class `cid` of the module at `path`,
     /// restore `state`, and check it is a stereo effect. Not yet active.
-    fn create(
-        path: &Path,
-        cid: ClassId,
-        state: Option<&[u8]>,
-        flags: Arc<HostFlags>,
-    ) -> Result<(Self, PluginInfo), Vst3Error> {
+    fn create(path: &Path, cid: ClassId, state: Option<&[u8]>, flags: Arc<HostFlags>) -> Result<(Self, PluginInfo), Vst3Error> {
         let module = Module::shared(path)?;
         let class = read_classes(module.factory(), path)
             .into_iter()
             .find(|class| class.cid == cid)
-            .ok_or_else(|| Vst3Error::ClassNotFound {
-                path: path.to_path_buf(),
-                cid: cid.to_hex(),
-            })?;
+            .ok_or_else(|| Vst3Error::ClassNotFound { path: path.to_path_buf(), cid: cid.to_hex() })?;
         let name = class.name.clone();
         let context = HostContext::new(flags);
         let context_ptr = host_context_ptr(&context);
@@ -229,17 +202,10 @@ impl Instance {
             }
             let tuid: TUID = cid.to_tuid();
             let mut raw: *mut std::ffi::c_void = std::ptr::null_mut();
-            let result = factory.createInstance(
-                tuid.as_ptr(),
-                vst3::Steinberg::Vst::IComponent_iid.as_ptr(),
-                &mut raw,
-            );
+            let result = factory.createInstance(tuid.as_ptr(), vst3::Steinberg::Vst::IComponent_iid.as_ptr(), &mut raw);
             ComPtr::<IComponent>::from_raw(raw.cast())
                 .filter(|_| result == kResultOk)
-                .ok_or(Vst3Error::CreateInstance {
-                    cid: cid.to_hex(),
-                    result,
-                })?
+                .ok_or(Vst3Error::CreateInstance { cid: cid.to_hex(), result })?
         };
         let mut instance = Self {
             editor: None,
@@ -274,14 +240,8 @@ impl Instance {
             if separate {
                 instance.single_component = false;
                 let mut raw: *mut std::ffi::c_void = std::ptr::null_mut();
-                let result = factory.createInstance(
-                    controller_tuid.as_ptr(),
-                    vst3::Steinberg::Vst::IEditController_iid.as_ptr(),
-                    &mut raw,
-                );
-                if let Some(controller) =
-                    ComPtr::<IEditController>::from_raw(raw.cast()).filter(|_| result == kResultOk)
-                {
+                let result = factory.createInstance(controller_tuid.as_ptr(), vst3::Steinberg::Vst::IEditController_iid.as_ptr(), &mut raw);
+                if let Some(controller) = ComPtr::<IEditController>::from_raw(raw.cast()).filter(|_| result == kResultOk) {
                     if controller.initialize(context_ptr) == kResultOk {
                         instance.controller_initialized = true;
                         instance.controller = Some(controller);
@@ -290,13 +250,9 @@ impl Instance {
                         log::warn!("VST3 plugin '{name}': its controller refused to initialise");
                     }
                 }
-                if let (Some(from_component), Some(from_controller)) = (
-                    component.cast::<IConnectionPoint>(),
-                    instance
-                        .controller
-                        .as_ref()
-                        .and_then(ComPtr::cast::<IConnectionPoint>),
-                ) {
+                if let (Some(from_component), Some(from_controller)) =
+                    (component.cast::<IConnectionPoint>(), instance.controller.as_ref().and_then(ComPtr::cast::<IConnectionPoint>))
+                {
                     let _ = from_component.connect(from_controller.as_ptr());
                     let _ = from_controller.connect(from_component.as_ptr());
                     instance.component_connection = Some(from_component);
@@ -316,13 +272,7 @@ impl Instance {
         let processor = component_processor(&instance, &name)?;
         instance.processor = Some(processor);
         instance.layout = read_bus_layout(instance.component());
-        instance
-            .layout
-            .check_stereo_effect()
-            .map_err(|message| Vst3Error::NotAStereoEffect {
-                name: name.clone(),
-                message,
-            })?;
+        instance.layout.check_stereo_effect().map_err(|message| Vst3Error::NotAStereoEffect { name: name.clone(), message })?;
         match state {
             Some(bytes) => instance.restore_state(bytes)?,
             None => instance.sync_controller_from_component(),
@@ -369,19 +319,13 @@ impl Instance {
     fn restore_state(&self, bytes: &[u8]) -> Result<(), Vst3Error> {
         let (component_bytes, controller_bytes) = crate::state::decode(bytes)?;
         let stream = MemoryStream::reading(component_bytes);
-        let bstream = stream
-            .as_com_ref::<IBStream>()
-            .ok_or_else(|| Vst3Error::InvalidState("no state stream".to_owned()))?;
+        let bstream = stream.as_com_ref::<IBStream>().ok_or_else(|| Vst3Error::InvalidState("no state stream".to_owned()))?;
         // SAFETY: live objects; each stream outlives the calls reading it. The
         // rewind matters: `setState` leaves the cursor at the end.
         unsafe {
             let result = self.component().setState(bstream.as_ptr());
             if result != kResultOk {
-                return Err(Vst3Error::State {
-                    name: self.name.clone(),
-                    direction: "restore",
-                    result,
-                });
+                return Err(Vst3Error::State { name: self.name.clone(), direction: "restore", result });
             }
             if let Some(controller) = self.controller.as_ref() {
                 stream.rewind();
@@ -399,17 +343,11 @@ impl Instance {
 
     fn save_state(&self) -> Result<Vec<u8>, Vst3Error> {
         let stream = MemoryStream::empty();
-        let bstream = stream
-            .as_com_ref::<IBStream>()
-            .ok_or_else(|| Vst3Error::InvalidState("no state stream".to_owned()))?;
+        let bstream = stream.as_com_ref::<IBStream>().ok_or_else(|| Vst3Error::InvalidState("no state stream".to_owned()))?;
         // SAFETY: live objects; streams outlive the calls writing them.
         let result = unsafe { self.component().getState(bstream.as_ptr()) };
         if result != kResultOk {
-            return Err(Vst3Error::State {
-                name: self.name.clone(),
-                direction: "save",
-                result,
-            });
+            return Err(Vst3Error::State { name: self.name.clone(), direction: "save", result });
         }
         // The controller's own stream (editor-only settings). A separate stream
         // for single-component plugins too.
@@ -418,11 +356,7 @@ impl Instance {
                 let editor_stream = MemoryStream::empty();
                 match editor_stream.as_com_ref::<IBStream>() {
                     // SAFETY: as above.
-                    Some(bstream)
-                        if unsafe { controller.getState(bstream.as_ptr()) } == kResultOk =>
-                    {
-                        editor_stream.contents()
-                    }
+                    Some(bstream) if unsafe { controller.getState(bstream.as_ptr()) } == kResultOk => editor_stream.contents(),
                     _ => Vec::new(),
                 }
             }
@@ -435,9 +369,7 @@ impl Instance {
     /// Returns the bus layout the plugin settled on.
     fn activate(&mut self, sample_rate: f64, max_block: usize) -> Result<BusLayout, Vst3Error> {
         if !(sample_rate.is_finite() && sample_rate > 0.0) {
-            return Err(Vst3Error::InvalidAudioConfig(format!(
-                "sample rate {sample_rate} is not a positive number"
-            )));
+            return Err(Vst3Error::InvalidAudioConfig(format!("sample rate {sample_rate} is not a positive number")));
         }
         let max_samples = i32::try_from(max_block)
             .ok()
@@ -448,11 +380,7 @@ impl Instance {
         let component = self.component().clone();
         let processor = self.processor().clone();
         let name = self.name.clone();
-        let refused = |stage: &'static str, result: i32| Vst3Error::Activate {
-            name: name.clone(),
-            stage,
-            result,
-        };
+        let refused = |stage: &'static str, result: i32| Vst3Error::Activate { name: name.clone(), stage, result };
         // SAFETY: live objects, the component is inactive, every pointer is to
         // a live local. This is the activation order VST3 requires.
         unsafe {
@@ -469,25 +397,14 @@ impl Instance {
                     .collect()
             };
             let mut inputs = arrangements(BusDirections_::kInput as i32, self.layout.inputs.len());
-            let mut outputs =
-                arrangements(BusDirections_::kOutput as i32, self.layout.outputs.len());
-            let result = processor.setBusArrangements(
-                inputs.as_mut_ptr(),
-                inputs.len() as i32,
-                outputs.as_mut_ptr(),
-                outputs.len() as i32,
-            );
+            let mut outputs = arrangements(BusDirections_::kOutput as i32, self.layout.outputs.len());
+            let result = processor.setBusArrangements(inputs.as_mut_ptr(), inputs.len() as i32, outputs.as_mut_ptr(), outputs.len() as i32);
             if result != kResultTrue {
                 // Not fatal: the layout check below decides.
                 log::debug!("VST3 plugin '{name}' declined the stereo arrangement ({result:#x})");
             }
             let layout = read_bus_layout(&component);
-            layout
-                .check_stereo_effect()
-                .map_err(|message| Vst3Error::NotAStereoEffect {
-                    name: name.clone(),
-                    message,
-                })?;
+            layout.check_stereo_effect().map_err(|message| Vst3Error::NotAStereoEffect { name: name.clone(), message })?;
 
             let mut setup = ProcessSetup {
                 processMode: ProcessModes_::kRealtime as i32,
@@ -501,17 +418,11 @@ impl Instance {
             }
             // Buses default to inactive unless flagged otherwise; only the
             // main pair carries audio.
-            for (direction, count) in [
-                (BusDirections_::kInput as i32, layout.inputs.len()),
-                (BusDirections_::kOutput as i32, layout.outputs.len()),
-            ] {
+            for (direction, count) in
+                [(BusDirections_::kInput as i32, layout.inputs.len()), (BusDirections_::kOutput as i32, layout.outputs.len())]
+            {
                 for index in 0..count {
-                    let _ = component.activateBus(
-                        MediaTypes_::kAudio as i32,
-                        direction,
-                        index as i32,
-                        u8::from(index == 0),
-                    );
+                    let _ = component.activateBus(MediaTypes_::kAudio as i32, direction, index as i32, u8::from(index == 0));
                 }
             }
             let result = component.setActive(1);
@@ -556,19 +467,17 @@ impl Instance {
                 if controller.getParameterInfo(index, &mut info) != kResultOk {
                     continue;
                 }
-                let hidden =
-                    ParameterFlags_::kIsHidden as i32 | ParameterFlags_::kIsReadOnly as i32;
+                let hidden = ParameterFlags_::kIsHidden as i32 | ParameterFlags_::kIsReadOnly as i32;
                 if info.flags & hidden != 0 {
                     continue;
                 }
                 let value = controller.getParamNormalized(info.id);
                 let mut text: String128 = [0; 128];
-                let mut display =
-                    if controller.getParamStringByValue(info.id, value, &mut text) == kResultOk {
-                        utf16_to_string(&text)
-                    } else {
-                        format!("{value:.3}")
-                    };
+                let mut display = if controller.getParamStringByValue(info.id, value, &mut text) == kResultOk {
+                    utf16_to_string(&text)
+                } else {
+                    format!("{value:.3}")
+                };
                 let units = utf16_to_string(&info.units);
                 if !units.is_empty() && !display.ends_with(&units) {
                     display = format!("{display} {units}");
@@ -577,13 +486,7 @@ impl Instance {
                 if name.is_empty() {
                     name = utf16_to_string(&info.shortTitle);
                 }
-                list.push(ParamInfo {
-                    id: info.id,
-                    name,
-                    value,
-                    display,
-                    def: info.defaultNormalizedValue,
-                });
+                list.push(ParamInfo { id: info.id, name, value, display, def: info.defaultNormalizedValue });
             }
             list
         }
@@ -597,23 +500,11 @@ impl Instance {
     }
 }
 
-fn component_processor(
-    instance: &Instance,
-    name: &str,
-) -> Result<ComPtr<IAudioProcessor>, Vst3Error> {
-    let processor = instance
-        .component()
-        .cast::<IAudioProcessor>()
-        .ok_or_else(|| Vst3Error::NoAudioProcessor {
-            name: name.to_owned(),
-        })?;
+fn component_processor(instance: &Instance, name: &str) -> Result<ComPtr<IAudioProcessor>, Vst3Error> {
+    let processor = instance.component().cast::<IAudioProcessor>().ok_or_else(|| Vst3Error::NoAudioProcessor { name: name.to_owned() })?;
     // SAFETY: live processor, scalar argument.
-    if unsafe { processor.canProcessSampleSize(SymbolicSampleSizes_::kSample32 as i32) }
-        != kResultTrue
-    {
-        return Err(Vst3Error::NoFloat32 {
-            name: name.to_owned(),
-        });
+    if unsafe { processor.canProcessSampleSize(SymbolicSampleSizes_::kSample32 as i32) } != kResultTrue {
+        return Err(Vst3Error::NoFloat32 { name: name.to_owned() });
     }
     Ok(processor)
 }
@@ -628,10 +519,8 @@ impl Drop for Instance {
         // SAFETY: live handles, each terminated once (a single-component
         // plugin's controller *is* its component).
         unsafe {
-            if let (Some(from_component), Some(from_controller)) = (
-                self.component_connection.as_ref(),
-                self.controller_connection.as_ref(),
-            ) {
+            if let (Some(from_component), Some(from_controller)) = (self.component_connection.as_ref(), self.controller_connection.as_ref())
+            {
                 let _ = from_component.disconnect(from_controller.as_ptr());
                 let _ = from_controller.disconnect(from_component.as_ptr());
             }
@@ -678,9 +567,7 @@ impl Shared {
     /// Hand the processor's output parameter values to the controller. UI
     /// thread, with the instance locked.
     fn apply_feedback(&self, instance: &Instance) {
-        self.feedback.drain(usize::MAX, |id, value| {
-            instance.set_controller_param(id, value)
-        });
+        self.feedback.drain(usize::MAX, |id, value| instance.set_controller_param(id, value));
     }
 
     /// The editor's per-tick work. UI thread.
@@ -737,9 +624,7 @@ impl Io {
         let bus = |channels: u32| AudioBusBuffers {
             numChannels: channels as i32,
             silenceFlags: 0,
-            __field0: AudioBusBuffers__type0 {
-                channelBuffers32: std::ptr::null_mut(),
-            },
+            __field0: AudioBusBuffers__type0 { channelBuffers32: std::ptr::null_mut() },
         };
         Self {
             main_in: [vec![0.0; max_block], vec![0.0; max_block]],
@@ -759,8 +644,7 @@ impl Io {
     /// nothing a plugin did to the arrays last block can leak into this one.
     fn wire(&mut self) {
         let mut cursor = 0;
-        for (index, (bus, channels)) in self.in_buses.iter_mut().zip(&self.in_channels).enumerate()
-        {
+        for (index, (bus, channels)) in self.in_buses.iter_mut().zip(&self.in_channels).enumerate() {
             let start = cursor;
             for channel in 0..*channels as usize {
                 self.in_ptrs[cursor] = match (index, channel) {
@@ -774,12 +658,7 @@ impl Io {
             bus.__field0.channelBuffers32 = self.in_ptrs[start..].as_mut_ptr();
         }
         let mut cursor = 0;
-        for (index, (bus, channels)) in self
-            .out_buses
-            .iter_mut()
-            .zip(&self.out_channels)
-            .enumerate()
-        {
+        for (index, (bus, channels)) in self.out_buses.iter_mut().zip(&self.out_channels).enumerate() {
             let start = cursor;
             for channel in 0..*channels as usize {
                 self.out_ptrs[cursor] = match (index, channel) {
@@ -851,8 +730,7 @@ impl Vst3Effect {
             self.io.silence[..frames].fill(0.0);
         }
         self.io.wire();
-        self.input_changes
-            .fill(&self.shared.inbox, &mut self.unlisted);
+        self.input_changes.fill(&self.shared.inbox, &mut self.unlisted);
         self.output_changes.clear();
 
         let mut context = self.process_context(ctx, offset);
@@ -872,10 +750,7 @@ impl Vst3Effect {
                 .output_changes
                 .as_com_ref::<IParameterChanges>()
                 .map_or(std::ptr::null_mut(), |changes| changes.as_ptr()),
-            inputEvents: self
-                .events
-                .as_com_ref::<IEventList>()
-                .map_or(std::ptr::null_mut(), |events| events.as_ptr()),
+            inputEvents: self.events.as_com_ref::<IEventList>().map_or(std::ptr::null_mut(), |events| events.as_ptr()),
             outputEvents: std::ptr::null_mut(),
             processContext: &mut context,
         };
@@ -899,18 +774,12 @@ impl Vst3Effect {
             l.copy_from_slice(&self.io.main_out[0][..frames]);
             r.copy_from_slice(&self.io.main_out[1][..frames]);
         } else {
-            self.shared
-                .counters
-                .process_errors
-                .fetch_add(1, Ordering::Relaxed);
+            self.shared.counters.process_errors.fetch_add(1, Ordering::Relaxed);
         }
         let shared = &self.shared;
         self.output_changes.for_each_last(|id, value| {
             if !shared.feedback.post_listed(id, value) {
-                shared
-                    .counters
-                    .feedback_dropped
-                    .fetch_add(1, Ordering::Relaxed);
+                shared.counters.feedback_dropped.fetch_add(1, Ordering::Relaxed);
             }
         });
     }
@@ -945,10 +814,7 @@ impl Vst3Effect {
 impl Processor for Vst3Effect {
     fn prepare(&mut self, sample_rate: f32, max_block: usize) {
         let sample_rate = f64::from(sample_rate);
-        if (sample_rate - self.sample_rate).abs() < 1e-6
-            && max_block <= self.max_block
-            && !self.failed
-        {
+        if (sample_rate - self.sample_rate).abs() < 1e-6 && max_block <= self.max_block && !self.failed {
             return;
         }
         let shared = Arc::clone(&self.shared);
@@ -1080,14 +946,7 @@ impl Vst3Handle {
     /// to store in the project and pass back to [`instantiate`].
     pub fn get_state(&self) -> Result<Vec<u8>, Vst3Error> {
         let shared = Arc::clone(&self.shared);
-        main_thread::run("saving its state", move || {
-            shared
-                .instance
-                .lock()
-                .as_ref()
-                .ok_or(Vst3Error::Closed)?
-                .save_state()
-        })?
+        main_thread::run("saving its state", move || shared.instance.lock().as_ref().ok_or(Vst3Error::Closed)?.save_state())?
     }
 
     /// Whether the plugin's state may have changed since the last call (an
@@ -1135,16 +994,9 @@ impl Vst3Handle {
         }
         let controller = instance.controller.clone().ok_or(Vst3Error::NoEditor)?;
         let session = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            EditorSession::open(
-                &controller,
-                windows,
-                &self.shared.info.name,
-                Arc::clone(&self.shared.gui),
-            )
+            EditorSession::open(&controller, windows, &self.shared.info.name, Arc::clone(&self.shared.gui))
         }))
-        .map_err(|_| Vst3Error::Panicked {
-            stage: "opening its editor",
-        })??;
+        .map_err(|_| Vst3Error::Panicked { stage: "opening its editor" })??;
         let weak: Weak<Shared> = Arc::downgrade(&self.shared);
         let tick: Rc<dyn Fn()> = Rc::new(move || {
             if let Some(shared) = weak.upgrade() {
@@ -1162,12 +1014,7 @@ impl Vst3Handle {
         if !main_thread::on_main_thread() {
             return Err(Vst3Error::WrongThread);
         }
-        let session = self
-            .shared
-            .instance
-            .lock()
-            .as_mut()
-            .and_then(|instance| instance.editor.take());
+        let session = self.shared.instance.lock().as_mut().and_then(|instance| instance.editor.take());
         // Dropped outside the lock: closing may run the window's handlers.
         drop(session);
         self.shared.editor_open.store(false, Ordering::Release);
@@ -1177,10 +1024,7 @@ impl Vst3Handle {
 
 impl std::fmt::Debug for Vst3Handle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Vst3Handle")
-            .field("plugin", &self.shared.info)
-            .field("editor_open", &self.is_editor_open())
-            .finish()
+        f.debug_struct("Vst3Handle").field("plugin", &self.shared.info).field("editor_open", &self.is_editor_open()).finish()
     }
 }
 
@@ -1219,8 +1063,7 @@ pub(crate) fn instantiate_effect(
     sample_rate: f32,
     max_block: usize,
 ) -> Result<(Vst3Effect, Vst3Handle), Vst3Error> {
-    let class_id =
-        ClassId::from_hex(cid).ok_or_else(|| Vst3Error::InvalidClassId(cid.to_owned()))?;
+    let class_id = ClassId::from_hex(cid).ok_or_else(|| Vst3Error::InvalidClassId(cid.to_owned()))?;
     let path = std::path::PathBuf::from(path);
     let state = state.map(<[u8]>::to_vec);
     let flags = Arc::new(HostFlags::default());
@@ -1274,56 +1117,29 @@ mod tests {
     use super::*;
 
     fn stereo() -> BusLayout {
-        BusLayout {
-            inputs: vec![2],
-            outputs: vec![2],
-        }
+        BusLayout { inputs: vec![2], outputs: vec![2] }
     }
 
     #[test]
     fn only_a_stereo_in_stereo_out_layout_is_an_insert_effect() {
         assert!(stereo().check_stereo_effect().is_ok());
-        let sidechain = BusLayout {
-            inputs: vec![2, 2],
-            outputs: vec![2],
-        };
-        assert!(
-            sidechain.check_stereo_effect().is_ok(),
-            "a side-chain bus is fed silence"
-        );
+        let sidechain = BusLayout { inputs: vec![2, 2], outputs: vec![2] };
+        assert!(sidechain.check_stereo_effect().is_ok(), "a side-chain bus is fed silence");
 
-        let instrument = BusLayout {
-            inputs: vec![],
-            outputs: vec![2],
-        };
+        let instrument = BusLayout { inputs: vec![], outputs: vec![2] };
         let err = instrument.check_stereo_effect().unwrap_err();
         assert!(err.contains("no audio input"), "{err}");
-        let mono = BusLayout {
-            inputs: vec![1],
-            outputs: vec![1],
-        };
-        assert!(mono
-            .check_stereo_effect()
-            .unwrap_err()
-            .contains("1 channel"));
-        let sink = BusLayout {
-            inputs: vec![2],
-            outputs: vec![],
-        };
+        let mono = BusLayout { inputs: vec![1], outputs: vec![1] };
+        assert!(mono.check_stereo_effect().unwrap_err().contains("1 channel"));
+        let sink = BusLayout { inputs: vec![2], outputs: vec![] };
         assert!(sink.check_stereo_effect().is_err());
-        let absurd = BusLayout {
-            inputs: vec![2; MAX_BUSES + 1],
-            outputs: vec![2],
-        };
+        let absurd = BusLayout { inputs: vec![2; MAX_BUSES + 1], outputs: vec![2] };
         assert!(absurd.check_stereo_effect().is_err());
     }
 
     #[test]
     fn io_wires_the_main_pair_to_real_buffers_and_extras_to_silence_and_a_sink() {
-        let layout = BusLayout {
-            inputs: vec![2, 1],
-            outputs: vec![2, 2],
-        };
+        let layout = BusLayout { inputs: vec![2, 1], outputs: vec![2, 2] };
         let mut io = Io::new(&layout, 64);
         io.wire();
         assert_eq!(io.in_buses.len(), 2);
@@ -1333,10 +1149,7 @@ mod tests {
             let main_in = io.in_buses[0].__field0.channelBuffers32;
             assert_eq!(*main_in, io.main_in[0].as_mut_ptr());
             assert_eq!(*main_in.add(1), io.main_in[1].as_mut_ptr());
-            assert_eq!(
-                *io.in_buses[1].__field0.channelBuffers32,
-                io.silence.as_mut_ptr()
-            );
+            assert_eq!(*io.in_buses[1].__field0.channelBuffers32, io.silence.as_mut_ptr());
             let main_out = io.out_buses[0].__field0.channelBuffers32;
             assert_eq!(*main_out.add(1), io.main_out[1].as_mut_ptr());
             let extra_out = io.out_buses[1].__field0.channelBuffers32;
@@ -1348,42 +1161,20 @@ mod tests {
 
     #[test]
     fn instantiating_garbage_is_a_typed_error_not_a_panic() {
-        let err = instantiate("/nowhere/x.vst3", "not-a-cid", None, 48_000.0, 256)
-            .err()
-            .expect("must fail");
+        let err = instantiate("/nowhere/x.vst3", "not-a-cid", None, 48_000.0, 256).err().expect("must fail");
         assert!(matches!(err, Vst3Error::InvalidClassId(_)), "got {err:?}");
 
         let dir = crate::module::scratch_dir("instantiate");
         let bogus = dir.join("garbage.vst3");
         std::fs::write(&bogus, b"not a library").unwrap();
-        let err = instantiate(
-            bogus.to_str().unwrap(),
-            &"00".repeat(16),
-            None,
-            48_000.0,
-            256,
-        )
-        .err()
-        .expect("must fail");
-        assert!(
-            matches!(err, Vst3Error::Load { .. } | Vst3Error::UnsupportedPlatform),
-            "got {err:?}"
-        );
+        let err = instantiate(bogus.to_str().unwrap(), &"00".repeat(16), None, 48_000.0, 256).err().expect("must fail");
+        assert!(matches!(err, Vst3Error::Load { .. } | Vst3Error::UnsupportedPlatform), "got {err:?}");
     }
 
     #[test]
     fn param_info_serialises_in_the_shape_the_ui_expects() {
-        let info = ParamInfo {
-            id: 3,
-            name: "Gain".to_owned(),
-            value: 0.5,
-            display: "-6.0 dB".to_owned(),
-            def: 1.0,
-        };
+        let info = ParamInfo { id: 3, name: "Gain".to_owned(), value: 0.5, display: "-6.0 dB".to_owned(), def: 1.0 };
         let json = serde_json::to_value(&info).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({"id": 3, "name": "Gain", "value": 0.5, "display": "-6.0 dB", "def": 1.0})
-        );
+        assert_eq!(json, serde_json::json!({"id": 3, "name": "Gain", "value": 0.5, "display": "-6.0 dB", "def": 1.0}));
     }
 }

@@ -4,20 +4,14 @@ use std::path::Path;
 /// relative to the directory of the process that received it.
 pub fn project_path(arg: &str, cwd: Option<&Path>) -> Option<String> {
     let path = Path::new(arg);
-    if arg.starts_with('-')
-        || !path
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("wave"))
-    {
+    if arg.starts_with('-') || !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("wave")) {
         return None;
     }
     if path.is_absolute() {
         return Some(arg.to_owned());
     }
     let absolute = cwd?.join(path);
-    absolute
-        .is_absolute()
-        .then(|| absolute.display().to_string())
+    absolute.is_absolute().then(|| absolute.display().to_string())
 }
 
 #[cfg(test)]

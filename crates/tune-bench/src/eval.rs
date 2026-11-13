@@ -70,25 +70,15 @@ fn vibrato_rate(seg: &[f32], rate: f32) -> Option<f32> {
     }
     let mx = (n - 1) as f32 / 2.0;
     let my = seg.iter().sum::<f32>() / n as f32;
-    let (sxy, sxx) = seg
-        .iter()
-        .enumerate()
-        .fold((0f32, 0f32), |(a, b), (i, &y)| {
-            (a + (i as f32 - mx) * (y - my), b + (i as f32 - mx).powi(2))
-        });
+    let (sxy, sxx) =
+        seg.iter().enumerate().fold((0f32, 0f32), |(a, b), (i, &y)| (a + (i as f32 - mx) * (y - my), b + (i as f32 - mx).powi(2)));
     let k = sxy / sxx.max(1e-6);
-    let r: Vec<f32> = seg
-        .iter()
-        .enumerate()
-        .map(|(i, &y)| y - my - k * (i as f32 - mx))
-        .collect();
+    let r: Vec<f32> = seg.iter().enumerate().map(|(i, &y)| y - my - k * (i as f32 - mx)).collect();
     let e0: f32 = r.iter().map(|x| x * x).sum();
     if (e0 / n as f32).sqrt() < 0.06 {
         return None;
     }
-    let ac = |lag: usize| -> f32 {
-        r.iter().zip(&r[lag..]).map(|(a, b)| a * b).sum::<f32>() / e0 * n as f32 / (n - lag) as f32
-    };
+    let ac = |lag: usize| -> f32 { r.iter().zip(&r[lag..]).map(|(a, b)| a * b).sum::<f32>() / e0 * n as f32 / (n - lag) as f32 };
     let (lo, hi) = ((rate / 9.0) as usize, ((rate / 3.0) as usize).min(n / 2));
     let best = (lo..=hi).max_by(|&a, &b| ac(a).total_cmp(&ac(b)))?;
     if ac(best) < 0.3 {
@@ -97,11 +87,7 @@ fn vibrato_rate(seg: &[f32], rate: f32) -> Option<f32> {
     // parabolic peak interpolation
     let (y0, y1, y2) = (ac(best - 1), ac(best), ac((best + 1).min(n - 1)));
     let den = y0 - 2.0 * y1 + y2;
-    let off = if den.abs() > 1e-6 {
-        (0.5 * (y0 - y2) / den).clamp(-0.5, 0.5)
-    } else {
-        0.0
-    };
+    let off = if den.abs() > 1e-6 { (0.5 * (y0 - y2) / den).clamp(-0.5, 0.5) } else { 0.0 };
     Some(rate / (best as f32 + off))
 }
 
@@ -112,11 +98,13 @@ pub fn run(c: &Case, p: &RefTune, est: Option<&dyn F0Estimator>) -> (Outcome, Au
     let oa: PitchAnalysis = analyze_with(&mono_of(&out), out.sr as f32, est);
     let rate = ta.rate;
     let n = ta.curve.len().min(oa.curve.len());
-    let slip: Vec<bool> = (0..n).map(|f| matches!((ta.curve[f], c.sung.get(f)), (a, Some(&s)) if a.is_finite() && s.is_finite() && (a - s).abs() > 1.0)).collect();
+    let slip: Vec<bool> = (0..n)
+        .map(|f| matches!((ta.curve[f], c.sung.get(f)), (a, Some(&s)) if a.is_finite() && s.is_finite() && (a - s).abs() > 1.0))
+        .collect();
     let (mut frames_before, mut frames_after) = (vec![], vec![]);
-    for f in 0..n {
+    for (f, &slipped) in slip.iter().enumerate() {
         let Some(&w) = c.truth.get(f) else { break };
-        if !w.is_finite() || c.edge.get(f).copied().unwrap_or(true) || slip[f] {
+        if !w.is_finite() || c.edge.get(f).copied().unwrap_or(true) || slipped {
             continue;
         }
         if ta.curve[f].is_finite() {
@@ -128,31 +116,21 @@ pub fn run(c: &Case, p: &RefTune, est: Option<&dyn F0Estimator>) -> (Outcome, Au
     }
     let (mut notes_before, mut notes_after, mut vibrato) = (vec![], vec![], vec![]);
     for &(a, b, m) in &c.notes {
-        let (fa, fb) = (
-            ((a + 0.05) * rate as f64) as usize,
-            (((b - 0.03) * rate as f64) as usize).min(n),
-        );
+        let (fa, fb) = (((a + 0.05) * rate as f64) as usize, (((b - 0.03) * rate as f64) as usize).min(n));
         if fb <= fa + 4 {
             continue;
         }
-        let pick =
-            |curve: &[f32]| median_of((fa..fb).filter(|&f| !slip[f]).map(|f| curve[f]).collect());
+        let pick = |curve: &[f32]| median_of((fa..fb).filter(|&f| !slip[f]).map(|f| curve[f]).collect());
         if let (Some(x), Some(y)) = (pick(&ta.curve), pick(&oa.curve)) {
             notes_before.push((x - m) * 100.0);
             notes_after.push((y - m) * 100.0);
         }
         if b - a > 0.6 {
-            let (va, vb) = (
-                ((a + 0.25) * rate as f64) as usize,
-                (((b - 0.05) * rate as f64) as usize).min(n),
-            );
+            let (va, vb) = (((a + 0.25) * rate as f64) as usize, (((b - 0.05) * rate as f64) as usize).min(n));
             if vb <= va {
                 continue;
             }
-            if let (Some(x), Some(y)) = (
-                vibrato_rate(&ta.curve[va..vb], rate),
-                vibrato_rate(&oa.curve[va..vb], rate),
-            ) {
+            if let (Some(x), Some(y)) = (vibrato_rate(&ta.curve[va..vb], rate), vibrato_rate(&oa.curve[va..vb], rate)) {
                 vibrato.push((x, y));
             }
         }
@@ -163,25 +141,17 @@ pub fn run(c: &Case, p: &RefTune, est: Option<&dyn F0Estimator>) -> (Outcome, Au
         .filter_map(|&(a, b)| {
             let i = ((a * rate as f64).round() as usize).checked_sub(t.start)?;
             let got = *t.ref_time.get(i)?;
-            got.is_finite()
-                .then(|| ((got as f64 - b).abs() * 1000.0) as f32)
+            got.is_finite().then(|| ((got as f64 - b).abs() * 1000.0) as f32)
         })
         .collect();
     // a voicing edge moving by a frame or two is timing, not corruption: frames within 10 ms
     // of an edge of the take's voicing are counted apart
     let flip = |f: usize| ta.curve[f].is_nan() != oa.curve[f].is_nan();
     let tol = (0.01 * rate).ceil() as usize;
-    let edge = |f: usize| {
-        (f.saturating_sub(tol)..(f + tol).min(n - 1))
-            .any(|g| ta.curve[g].is_nan() != ta.curve[g + 1].is_nan())
-    };
+    let edge = |f: usize| (f.saturating_sub(tol)..(f + tol).min(n - 1)).any(|g| ta.curve[g].is_nan() != ta.curve[g + 1].is_nan());
     let vuv_flips_raw = (0..n).filter(|&f| flip(f)).count();
     let vuv_flips = (0..n).filter(|&f| flip(f) && !edge(f)).count();
-    let untouched = out
-        .content()
-        .iter()
-        .zip(c.take.content())
-        .all(|(a, b)| (a - b).abs() < 1e-4);
+    let untouched = out.content().iter().zip(c.take.content()).all(|(a, b)| (a - b).abs() < 1e-4);
     let o = Outcome {
         name: c.name.clone(),
         group: c.group.clone(),
@@ -222,61 +192,29 @@ fn mean(v: &[f32]) -> f32 {
 pub fn summarize(label: &str, os: &[&Outcome]) -> Value {
     let accepted: Vec<&&Outcome> = os.iter().filter(|o| !o.expect_rejection).collect();
     let rejected: Vec<&&Outcome> = os.iter().filter(|o| o.expect_rejection).collect();
-    let cat = |f: fn(&Outcome) -> &Vec<f32>| -> Vec<f32> {
-        accepted.iter().flat_map(|o| f(o).iter().copied()).collect()
-    };
+    let cat = |f: fn(&Outcome) -> &Vec<f32>| -> Vec<f32> { accepted.iter().flat_map(|o| f(o).iter().copied()).collect() };
     let (fb, fa) = (cat(|o| &o.frames_before), cat(|o| &o.frames_after));
     let (nb, na) = (cat(|o| &o.notes_before), cat(|o| &o.notes_after));
     let bms = cat(|o| &o.boundary_ms);
-    let octave_err =
-        |v: &[f32]| v.iter().filter(|e| e.abs() > 600.0).count() as f32 / v.len().max(1) as f32;
-    let note_err = |v: &[f32]| {
-        v.iter()
-            .filter(|e| e.abs() > 50.0 && e.abs() <= 600.0)
-            .count() as f32
-            / v.len().max(1) as f32
-    };
+    let octave_err = |v: &[f32]| v.iter().filter(|e| e.abs() > 600.0).count() as f32 / v.len().max(1) as f32;
+    let note_err = |v: &[f32]| v.iter().filter(|e| e.abs() > 50.0 && e.abs() <= 600.0).count() as f32 / v.len().max(1) as f32;
     let (mae_b, mae_a) = (mean(&fb), mean(&fa));
-    let (nmae_b, nmae_a) = (
-        mean(&nb.iter().map(|x| x.abs()).collect::<Vec<_>>()),
-        mean(&na.iter().map(|x| x.abs()).collect::<Vec<_>>()),
-    );
+    let (nmae_b, nmae_a) = (mean(&nb.iter().map(|x| x.abs()).collect::<Vec<_>>()), mean(&na.iter().map(|x| x.abs()).collect::<Vec<_>>()));
     let flips: usize = accepted.iter().map(|o| o.vuv_flips).sum();
     let flips_raw: usize = accepted.iter().map(|o| o.vuv_flips_raw).sum();
     let frames: usize = accepted.iter().map(|o| o.vuv_frames).sum();
-    let vib: Vec<f32> = accepted
-        .iter()
-        .flat_map(|o| o.vibrato.iter().map(|(a, b)| (a - b).abs()))
-        .collect();
+    let vib: Vec<f32> = accepted.iter().flat_map(|o| o.vibrato.iter().map(|(a, b)| (a - b).abs())).collect();
     let corrected = accepted.iter().filter(|o| o.corrected).count();
-    let held_back = rejected
-        .iter()
-        .filter(|o| !o.corrected && o.untouched)
-        .count();
+    let held_back = rejected.iter().filter(|o| !o.corrected && o.untouched).count();
     let has_frames = !fa.is_empty();
     let mut checks = vec![];
     let mut check = |name: &str, value: f32, limit: &str, ok: bool| {
         checks.push(json!({ "criterion": name, "value": value, "limit": limit, "pass": ok }))
     };
     if has_frames {
-        check(
-            "frame error median (cents)",
-            quantile(&fa, 0.5),
-            "< 20",
-            quantile(&fa, 0.5) < 20.0,
-        );
-        check(
-            "frame error P90 (cents)",
-            quantile(&fa, 0.9),
-            "< 50",
-            quantile(&fa, 0.9) < 50.0,
-        );
-        check(
-            "MAE improvement",
-            1.0 - mae_a / mae_b,
-            ">= 50 %",
-            1.0 - mae_a / mae_b >= 0.5,
-        );
+        check("frame error median (cents)", quantile(&fa, 0.5), "< 20", quantile(&fa, 0.5) < 20.0);
+        check("frame error P90 (cents)", quantile(&fa, 0.9), "< 50", quantile(&fa, 0.9) < 50.0);
+        check("MAE improvement", 1.0 - mae_a / mae_b, ">= 50 %", 1.0 - mae_a / mae_b >= 0.5);
     } else if !na.is_empty() {
         check(
             "note error median (cents)",
@@ -284,58 +222,23 @@ pub fn summarize(label: &str, os: &[&Outcome]) -> Value {
             "< 20",
             quantile(&na.iter().map(|x| x.abs()).collect::<Vec<_>>(), 0.5) < 20.0,
         );
-        check(
-            "note MAE improvement",
-            1.0 - nmae_a / nmae_b,
-            ">= 50 %",
-            1.0 - nmae_a / nmae_b >= 0.5,
-        );
+        check("note MAE improvement", 1.0 - nmae_a / nmae_b, ">= 50 %", 1.0 - nmae_a / nmae_b >= 0.5);
     }
     if !na.is_empty() {
-        check(
-            "note errors (>50 ct)",
-            note_err(&na),
-            "< 2 %",
-            note_err(&na) < 0.02,
-        );
-        check(
-            "octave errors",
-            octave_err(&na),
-            "< 2 %",
-            octave_err(&na) < 0.02,
-        );
+        check("note errors (>50 ct)", note_err(&na), "< 2 %", note_err(&na) < 0.02);
+        check("octave errors", octave_err(&na), "< 2 %", octave_err(&na) < 0.02);
     }
     if !bms.is_empty() {
-        check(
-            "boundary error median (ms)",
-            quantile(&bms, 0.5),
-            "< 60",
-            quantile(&bms, 0.5) < 60.0,
-        );
+        check("boundary error median (ms)", quantile(&bms, 0.5), "< 60", quantile(&bms, 0.5) < 60.0);
     }
     if frames > 0 {
-        check(
-            "V/UV corruption (off edges ±10 ms)",
-            flips as f32 / frames as f32,
-            "< 1 %",
-            (flips as f32) < frames as f32 * 0.01,
-        );
+        check("V/UV corruption (off edges ±10 ms)", flips as f32 / frames as f32, "< 1 %", (flips as f32) < frames as f32 * 0.01);
     }
     if !vib.is_empty() {
-        check(
-            "vibrato rate change P90 (Hz)",
-            quantile(&vib, 0.9),
-            "< 0.5",
-            quantile(&vib, 0.9) < 0.5,
-        );
+        check("vibrato rate change P90 (Hz)", quantile(&vib, 0.9), "< 0.5", quantile(&vib, 0.9) < 0.5);
     }
     if !rejected.is_empty() {
-        check(
-            "low confidence → no correction",
-            held_back as f32 / rejected.len() as f32,
-            "100 %",
-            held_back == rejected.len(),
-        );
+        check("low confidence → no correction", held_back as f32 / rejected.len() as f32, "100 %", held_back == rejected.len());
     }
     json!({
         "label": label,
@@ -374,18 +277,10 @@ pub fn print(s: &Value) {
     );
     for c in s["checks"].as_array().into_iter().flatten() {
         let v = c["value"].as_f64().unwrap_or(f64::NAN);
-        let shown = if c["limit"].as_str().is_some_and(|l| l.contains('%')) {
-            format!("{:.2} %", v * 100.0)
-        } else {
-            format!("{v:.2}")
-        };
+        let shown = if c["limit"].as_str().is_some_and(|l| l.contains('%')) { format!("{:.2} %", v * 100.0) } else { format!("{v:.2}") };
         eprintln!(
             "  {} {:<34} {:>10}   (limit {})",
-            if c["pass"].as_bool() == Some(true) {
-                "PASS"
-            } else {
-                "FAIL"
-            },
+            if c["pass"].as_bool() == Some(true) { "PASS" } else { "FAIL" },
             c["criterion"].as_str().unwrap_or(""),
             shown,
             c["limit"].as_str().unwrap_or("")

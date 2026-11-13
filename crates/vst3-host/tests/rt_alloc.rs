@@ -46,26 +46,15 @@ fn processing_allocates_nothing_even_with_parameter_changes() {
         eprintln!("skipped: WAVE_VST3_TEST_BUNDLE is not set (no VST3 plugin to host)");
         return;
     };
-    let root = std::path::Path::new(&bundle)
-        .parent()
-        .unwrap()
-        .to_path_buf();
+    let root = std::path::Path::new(&bundle).parent().unwrap().to_path_buf();
     let worker = std::path::Path::new(env!("CARGO_BIN_EXE_wave-vst3-scan-worker"));
     let (effects, _, _) = wave_vst3::testing::scan_roots(&[root], Some(worker));
-    let info = effects
-        .into_iter()
-        .find(|effect| std::path::Path::new(&effect.path) == std::path::Path::new(&bundle))
-        .expect("fixture listed");
-    let (mut effect, handle) =
-        wave_vst3::instantiate(&info.path, &info.cid, None, 48_000.0, 256).unwrap();
+    let info =
+        effects.into_iter().find(|effect| std::path::Path::new(&effect.path) == std::path::Path::new(&bundle)).expect("fixture listed");
+    let (mut effect, handle) = wave_vst3::instantiate(&info.path, &info.cid, None, 48_000.0, 256).unwrap();
     let id = handle.params()[0].id;
 
-    let ctx = ProcessCtx {
-        sample_rate: 48_000.0,
-        bpm: 128.0,
-        beat: 0.0,
-        playing: true,
-    };
+    let ctx = ProcessCtx { sample_rate: 48_000.0, bpm: 128.0, beat: 0.0, playing: true };
     let mut l = vec![0.25_f32; 256];
     let mut r = vec![-0.25_f32; 256];
     effect.process(&mut l, &mut r, &ctx); // warm-up
@@ -81,14 +70,7 @@ fn processing_allocates_nothing_even_with_parameter_changes() {
         COUNTING.store(false, Ordering::SeqCst);
         total += EVENTS.swap(0, Ordering::SeqCst);
     }
-    assert_eq!(
-        total, 0,
-        "Vst3Effect::process allocated {total} time(s) over 64 blocks"
-    );
+    assert_eq!(total, 0, "Vst3Effect::process allocated {total} time(s) over 64 blocks");
     let expected = 63.0 / 64.0 * 0.25;
-    assert!(
-        (l[0] - expected).abs() < 1e-6,
-        "the last parameter value arrived: {}",
-        l[0]
-    );
+    assert!((l[0] - expected).abs() < 1e-6, "the last parameter value arrived: {}", l[0]);
 }

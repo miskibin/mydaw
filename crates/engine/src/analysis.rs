@@ -89,7 +89,18 @@ impl Analyzer {
                 (b0, b1)
             })
             .collect();
-        Self { inputs, outputs, hin: (0..n).map(|_| History::new()).collect(), hout: (0..n).map(|_| History::new()).collect(), ids: vec![], fft, window, scratch: vec![0.0; FFT], spec, bands }
+        Self {
+            inputs,
+            outputs,
+            hin: (0..n).map(|_| History::new()).collect(),
+            hout: (0..n).map(|_| History::new()).collect(),
+            ids: vec![],
+            fft,
+            window,
+            scratch: vec![0.0; FFT],
+            spec,
+            bands,
+        }
     }
 
     fn spectrum(&mut self, h: &History, smooth: &mut [f32; BANDS]) -> [f32; BANDS] {
@@ -134,7 +145,17 @@ impl Analyzer {
             let mut scope_out = [0f32; SCOPE];
             hin.last(&mut scope_in);
             hout.last(&mut scope_out);
-            res.push(FxAnalysis { id, in_peak: hin.peak, out_peak: hout.peak, gr: shared.gr(slot), meters: shared.fx_meters(slot), spec_in, spec_out, scope_in, scope_out });
+            res.push(FxAnalysis {
+                id,
+                in_peak: hin.peak,
+                out_peak: hout.peak,
+                gr: shared.gr(slot),
+                meters: shared.fx_meters(slot),
+                spec_in,
+                spec_out,
+                scope_in,
+                scope_out,
+            });
             self.hin[slot] = History { peak: 0.0, smooth: si, ..hin };
             self.hout[slot] = History { peak: 0.0, smooth: so, ..hout };
         }

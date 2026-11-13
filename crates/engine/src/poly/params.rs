@@ -17,12 +17,28 @@ const fn choice(id: &'static str, label: &'static str, def: f64, options: &'stat
 pub const WAVES: &[&str] = &["Sine", "Triangle", "Saw", "Square", "Hollow", "Air", "Digital", "Metal"];
 pub const LFO_WAVES: &[&str] = &["Sine", "Triangle", "Saw", "Square", "S&H"];
 /// LFO rate: free (Hz) or a note value at the project tempo.
-pub const SYNCS: &[&str] = &["Hz", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/2T", "1/4T", "1/8T", "1/16T", "1/4D", "1/8D"];
+pub const SYNCS: &[&str] =
+    &["Hz", "4/1", "2/1", "1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/2T", "1/4T", "1/8T", "1/16T", "1/4D", "1/8D"];
 /// Beats per LFO cycle for each [`SYNCS`] entry (0 = free).
 pub const SYNC_BEATS: [f32; 15] = [0.0, 16.0, 8.0, 4.0, 2.0, 1.0, 0.5, 0.25, 0.125, 4.0 / 3.0, 2.0 / 3.0, 1.0 / 3.0, 1.0 / 6.0, 1.5, 0.75];
 /// "LFO 1 × wheel": LFO 1 scaled by the mod wheel (vibrato that the wheel brings in).
 pub const SOURCES: &[&str] = &["Off", "Mod env", "LFO 1", "LFO 2", "Velocity", "Mod wheel", "Random", "Key", "LFO 1 × wheel"];
-pub const DESTS: &[&str] = &["Pitch", "Osc 1 pitch", "Osc 2 pitch", "Osc 1 shape", "Osc 2 shape", "Osc 1 level", "Osc 2 level", "Cutoff", "Resonance", "Pan", "Detune", "Drive", "Amp", "Noise"];
+pub const DESTS: &[&str] = &[
+    "Pitch",
+    "Osc 1 pitch",
+    "Osc 2 pitch",
+    "Osc 1 shape",
+    "Osc 2 shape",
+    "Osc 1 level",
+    "Osc 2 level",
+    "Cutoff",
+    "Resonance",
+    "Pan",
+    "Detune",
+    "Drive",
+    "Amp",
+    "Noise",
+];
 /// What ±100 % of a matrix slot means for each destination (semitones, octaves, or 0..1 units).
 pub const DEST_SCALE: [f32; 14] = [48.0, 48.0, 48.0, 1.0, 1.0, 1.0, 1.0, 8.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
 pub const FILTERS: &[&str] = &["LP 12", "LP 24", "BP", "HP", "Notch"];
@@ -170,7 +186,11 @@ pub fn resolve(s: &SynthState) -> Patch {
 /// Parameters that glide (smoothed on the audio thread) when changed; the rest switch at once.
 pub fn smoothed(i: usize) -> bool {
     let d = &PARAMS[i];
-    d.options.is_none() && !matches!(i, ix::V_GLIDE | ix::AMP_A | ix::AMP_D | ix::AMP_R | ix::MOD_A | ix::MOD_D | ix::MOD_R | ix::L1_RATE | ix::L2_RATE | ix::FX_RSIZE)
+    d.options.is_none()
+        && !matches!(
+            i,
+            ix::V_GLIDE | ix::AMP_A | ix::AMP_D | ix::AMP_R | ix::MOD_A | ix::MOD_D | ix::MOD_R | ix::L1_RATE | ix::L2_RATE | ix::FX_RSIZE
+        )
 }
 
 #[cfg(test)]

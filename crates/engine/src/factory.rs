@@ -188,10 +188,25 @@ mod tests {
     #[test]
     fn pitched_samples_sound_their_root_key() {
         let pitched = [
-            "vibraphone.flac", "vibraphone-high.flac", "xylophone.flac", "balafon.flac", "kalimba.flac", "hand-chime.flac",
-            "harpsichord.flac", "upright-piano.flac", "fm-piano.flac", "pipe-organ.flac", "tenor-sax.flac", "strings-tremolo.flac",
-            "cello-spiccato.flac", "contrabass-pizz.flac", "trumpet-staccato.flac", "horn-staccato.flac", "flute-staccato.flac",
-            "harp.flac", "harp-high.flac",
+            "vibraphone.flac",
+            "vibraphone-high.flac",
+            "xylophone.flac",
+            "balafon.flac",
+            "kalimba.flac",
+            "hand-chime.flac",
+            "harpsichord.flac",
+            "upright-piano.flac",
+            "fm-piano.flac",
+            "pipe-organ.flac",
+            "tenor-sax.flac",
+            "strings-tremolo.flac",
+            "cello-spiccato.flac",
+            "contrabass-pizz.flac",
+            "trumpet-staccato.flac",
+            "horn-staccato.flac",
+            "flute-staccato.flac",
+            "harp.flac",
+            "harp-high.flac",
         ];
         for name in pitched {
             let f = file(name).unwrap_or_else(|| panic!("{name} is not in the library"));
@@ -200,7 +215,9 @@ mod tests {
             assert!((key - f.root as f64).abs() <= 0.15, "{name}: sounds key {key:.2}, table says {}", f.root);
         }
         // the hits and stabs are layers on C: every octave of C is loud in them
-        for name in ["orch-hit.flac", "orch-hit-minor.flac", "orch-hit-major.flac", "strings-stab.flac", "brass-stab.flac", "pizzicato.flac"] {
+        for name in
+            ["orch-hit.flac", "orch-hit-minor.flac", "orch-hit-major.flac", "strings-stab.flac", "brass-stab.flac", "pizzicato.flac"]
+        {
             let f = file(name).unwrap();
             assert_eq!(f.root % 12, 0, "{name}");
             let a = crate::sources::Audio::load_path(&lib_path(f.file), Path::new(".")).unwrap();

@@ -60,9 +60,7 @@ pub fn install(progress: impl Fn(u64, u64)) -> Result<(), String> {
     let dir = dst.parent().ok_or("no folder for the model")?;
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let total = wave_rmvpe::MODEL_BYTES;
-    let mut resp = ureq::get(wave_rmvpe::MODEL_URL)
-        .call()
-        .map_err(|e| format!("download failed: {e}"))?;
+    let mut resp = ureq::get(wave_rmvpe::MODEL_URL).call().map_err(|e| format!("download failed: {e}"))?;
     let mut body = resp.body_mut().with_config().limit(total + 1).reader();
     let tmp = dst.with_extension("part");
     let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
@@ -93,16 +91,10 @@ pub fn install(progress: impl Fn(u64, u64)) -> Result<(), String> {
         }
     }
     drop(file);
-    let got: String = hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
+    let got: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
     if done != total || !got.eq_ignore_ascii_case(wave_rmvpe::MODEL_SHA256) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(
-            "checksum mismatch — the download was altered or damaged; nothing was saved".into(),
-        );
+        return Err("checksum mismatch — the download was altered or damaged; nothing was saved".into());
     }
     std::fs::rename(&tmp, &dst).map_err(|e| e.to_string())?;
     progress(total, total);

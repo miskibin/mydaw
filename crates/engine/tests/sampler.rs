@@ -43,9 +43,37 @@ fn engine(name: &str, set: impl Fn(&mut SamplerState), notes: &[(f32, f32, Optio
     let mut sampler = SamplerState::default();
     set(&mut sampler);
     let channel = Channel::new(ch, "Test", "#4f8ef7", ChannelSrc::Sample { source: srcs[0], sampler });
-    let pattern = Pattern { id: 1, name: "P".into(), color: "#4f8ef7".into(), len: 8.0, min_len: 8.0, notes: notes.iter().map(|&(s, l, k)| Note::new(ch, s, l, k)).collect(), swing: 0.0 };
-    let clip = Clip { id: 2, track: 0, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 };
-    e.apply(&[Op::PutChannel { channel, index: None }, Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None).unwrap();
+    let pattern = Pattern {
+        id: 1,
+        name: "P".into(),
+        color: "#4f8ef7".into(),
+        len: 8.0,
+        min_len: 8.0,
+        notes: notes.iter().map(|&(s, l, k)| Note::new(ch, s, l, k)).collect(),
+        swing: 0.0,
+    };
+    let clip = Clip {
+        id: 2,
+        track: 0,
+        start: 0.0,
+        len: 8.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: 1,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    };
+    e.apply(&[Op::PutChannel { channel, index: None }, Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None)
+        .unwrap();
     (e, ch)
 }
 
@@ -81,9 +109,11 @@ fn a_one_shot_plays_the_whole_file_whatever_the_note_length() {
 
 #[test]
 fn gate_stops_with_the_note_and_fades_over_the_release() {
-    let gate = |release: f32| move |s: &mut SamplerState| {
-        s.gate = true;
-        s.release = release;
+    let gate = |release: f32| {
+        move |s: &mut SamplerState| {
+            s.gate = true;
+            s.release = release;
+        }
     };
     // at the test tempo (120 BPM) a sixteenth is 0.125 s
     let short = one(gate(10.0), 1.0);
@@ -208,7 +238,15 @@ fn a_cut_group_silences_its_sounding_notes() {
         let sampler = SamplerState { cut: group, start: 0.5, ..Default::default() };
         let mut pat = p.patterns[0].clone();
         pat.notes.push(Note::new(other, 4.0, 1.0, None));
-        e.apply(&[Op::PutChannel { channel: Channel::new(other, "Other", "#fff", ChannelSrc::Sample { source: src, sampler }), index: None }, Op::PutPattern { pattern: pat }], false, None).unwrap();
+        e.apply(
+            &[
+                Op::PutChannel { channel: Channel::new(other, "Other", "#fff", ChannelSrc::Sample { source: src, sampler }), index: None },
+                Op::PutPattern { pattern: pat },
+            ],
+            false,
+            None,
+        )
+        .unwrap();
         peak_in(&render(&e, 4.0), 0.55, 0.95)
     };
     assert!((across(1) - 0.1).abs() < 0.02, "same group: the first channel is cut");
@@ -247,15 +285,19 @@ fn settings_out_of_range_are_refused() {
 
 #[test]
 fn settings_survive_a_save_and_files_without_them_get_the_defaults() {
-    let (e, ch) = engine("save", |s| {
-        s.start = 0.25;
-        s.reverse = true;
-        s.semi = -5;
-        s.gate = true;
-        s.decay = 80.0;
-        s.sustain = 0.4;
-        s.cut = 3;
-    }, &[(0.0, 2.0, None)]);
+    let (e, ch) = engine(
+        "save",
+        |s| {
+            s.start = 0.25;
+            s.reverse = true;
+            s.semi = -5;
+            s.gate = true;
+            s.decay = 80.0;
+            s.sustain = 0.4;
+            s.cut = 3;
+        },
+        &[(0.0, 2.0, None)],
+    );
     let path = tmp("save").join("song.wave");
     e.save(&path).unwrap();
     let before = render(&e, 2.0);
@@ -264,7 +306,8 @@ fn settings_survive_a_save_and_files_without_them_get_the_defaults() {
     assert_eq!(f.project().channel(ch).unwrap().src, e.project().channel(ch).unwrap().src);
     assert!(render(&f, 2.0) == before);
     // a channel written before the sampler had settings
-    let old: Channel = serde_json::from_value(serde_json::json!({ "id": 7, "name": "Stab", "color": "#fff", "kind": "sample", "source": 3 })).unwrap();
+    let old: Channel =
+        serde_json::from_value(serde_json::json!({ "id": 7, "name": "Stab", "color": "#fff", "kind": "sample", "source": 3 })).unwrap();
     assert_eq!(old.src, ChannelSrc::Sample { source: 3, sampler: SamplerState::default() });
 }
 
@@ -312,8 +355,35 @@ fn a_new_project_does_not_inherit_audio_from_the_previous_one() {
     let p = e.project();
     assert!(p.sources.iter().all(|s| s.path.starts_with("lib:")));
     let kick = p.channels[0].id;
-    let pattern = Pattern { id: 1, name: "P".into(), color: "#fff".into(), len: 4.0, min_len: 4.0, notes: vec![Note::new(kick, 0.0, 1.0, None)], swing: 0.0 };
-    let clip = Clip { id: 2, track: 0, start: 0.0, len: 4.0, offset: 0.0, kind: ClipKind::Pat, source: 1, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 };
+    let pattern = Pattern {
+        id: 1,
+        name: "P".into(),
+        color: "#fff".into(),
+        len: 4.0,
+        min_len: 4.0,
+        notes: vec![Note::new(kick, 0.0, 1.0, None)],
+        swing: 0.0,
+    };
+    let clip = Clip {
+        id: 2,
+        track: 0,
+        start: 0.0,
+        len: 4.0,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: 1,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    };
     e.apply(&[Op::PutPattern { pattern }, Op::PutClips { clips: vec![clip] }], false, None).unwrap();
     let out = e.render(0.0, 4.0, 0.0, SR).unwrap();
     // the kick is 0.38 s long; the test file would ring for a second

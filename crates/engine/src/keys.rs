@@ -98,7 +98,9 @@ impl KeysBank {
 
     /// True when `dir` holds every file a bank needs (at least one note; no half-written files).
     pub fn present(dir: &Path) -> bool {
-        std::fs::read_dir(dir).map(|rd| rd.flatten().filter(|e| parse_file(&e.file_name().to_string_lossy()).is_some()).count() >= 30).unwrap_or(false)
+        std::fs::read_dir(dir)
+            .map(|rd| rd.flatten().filter(|e| parse_file(&e.file_name().to_string_lossy()).is_some()).count() >= 30)
+            .unwrap_or(false)
     }
 
     /// Loads every `<note>v<layer>.<ext>` recording in `dir` (decoded on a few threads).
@@ -126,7 +128,8 @@ impl KeysBank {
         });
         let mut notes: Vec<(u8, Vec<Arc<Audio>>)> = vec![];
         for ((key, _, path), slot) in files.iter().zip(out) {
-            let a = slot.into_inner().unwrap().unwrap_or_else(|| Err("not decoded".into())).map_err(|e| format!("{}: {e}", path.display()))?;
+            let a =
+                slot.into_inner().unwrap().unwrap_or_else(|| Err("not decoded".into())).map_err(|e| format!("{}: {e}", path.display()))?;
             match notes.last_mut() {
                 Some((k, l)) if k == key => l.push(Arc::new(a)),
                 _ => notes.push((*key, vec![Arc::new(a)])),
@@ -183,7 +186,8 @@ mod tests {
 
     #[test]
     fn picks_the_nearest_note_and_the_velocity_layer() {
-        let b = KeysBank::from_layers(vec![(60, vec![tone(0.1), tone(0.5), tone(0.9)]), (63, vec![tone(0.1), tone(0.5), tone(0.9)])]).unwrap();
+        let b =
+            KeysBank::from_layers(vec![(60, vec![tone(0.1), tone(0.5), tone(0.9)]), (63, vec![tone(0.1), tone(0.5), tone(0.9)])]).unwrap();
         let (i, st, _) = b.pick(61, 0.1, 1.0);
         assert_eq!((i, st), (0, 1.0));
         let (i, st, _) = b.pick(62, 0.5, 1.0);

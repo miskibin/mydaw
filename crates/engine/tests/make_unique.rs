@@ -36,25 +36,10 @@ fn setup(p: Project, tag: &str) -> (Arc<Engine>, PathBuf, Id, [Id; 3]) {
     let (dir, wav) = tone(tag);
     let e = Engine::new(dry(p), Arc::new(NoPlugins));
     let (srcs, clips) = e.import_audio(&[wav], Some((0, 0.0))).unwrap();
-    let a = e
-        .project()
-        .clips
-        .iter()
-        .find(|c| c.id == clips[0])
-        .cloned()
-        .unwrap();
-    let b = Clip {
-        id: 70_001,
-        start: 4.0,
-        ..a.clone()
-    };
-    let c = Clip {
-        id: 70_002,
-        track: 1,
-        ..a.clone()
-    };
-    e.apply(&[Op::PutClips { clips: vec![b, c] }], false, None)
-        .unwrap();
+    let a = e.project().clips.iter().find(|c| c.id == clips[0]).cloned().unwrap();
+    let b = Clip { id: 70_001, start: 4.0, ..a.clone() };
+    let c = Clip { id: 70_002, track: 1, ..a.clone() };
+    e.apply(&[Op::PutClips { clips: vec![b, c] }], false, None).unwrap();
     (e, dir, srcs[0], [a.id, 70_001, 70_002])
 }
 
@@ -76,10 +61,7 @@ fn the_clip_gets_its_own_source_and_track_with_the_old_routing() {
     let old = p.sources.iter().find(|s| s.id == src).unwrap();
     let new = p.sources.iter().find(|s| s.id == r.source_id).unwrap();
     assert_eq!(new.name, "guitar #2");
-    assert_eq!(
-        (&new.path, new.dur, &new.color),
-        (&old.path, old.dur, &old.color)
-    );
+    assert_eq!((&new.path, new.dur, &new.color), (&old.path, old.dur, &old.color));
     assert_eq!(old.name, "guitar", "the original keeps its name");
 
     // a new track right below, playing into the master like the old one: no insert is claimed
@@ -96,10 +78,7 @@ fn the_clip_gets_its_own_source_and_track_with_the_old_routing() {
     assert_eq!((ca.track, ca.source, ca.start), (1, r.source_id, 0.0));
     assert_eq!((clip(&e, b).track, clip(&e, b).source), (0, src));
     assert_eq!((clip(&e, c).track, clip(&e, c).source), (2, src));
-    assert_eq!(
-        p.tracks[2].id, before.tracks[1].id,
-        "tracks below keep their ids and contents"
-    );
+    assert_eq!(p.tracks[2].id, before.tracks[1].id, "tracks below keep their ids and contents");
 
     // one undo step restores everything, redo brings it back
     assert!(e.undo());
@@ -113,8 +92,7 @@ fn the_clip_gets_its_own_source_and_track_with_the_old_routing() {
 fn the_unique_clip_keeps_the_old_tracks_insert() {
     // Project::routed sends track n to insert n: the user's routing carries over
     let (e, dir, _, [a, b, c]) = setup(Project::routed(), "route");
-    e.apply(&[Op::RemoveClips { ids: vec![b, c] }], false, None)
-        .unwrap();
+    e.apply(&[Op::RemoveClips { ids: vec![b, c] }], false, None).unwrap();
     let spb = 60.0 / e.project().bpm;
     let at = |beat: f64| (beat * spb * SR as f64) as usize * 2;
     let level = |e: &Engine| {
@@ -129,20 +107,11 @@ fn the_unique_clip_keeps_the_old_tracks_insert() {
     assert_eq!(r.insert_id, old_insert);
     assert_eq!(e.project().tracks[1].insert, old_insert);
     assert_eq!(e.project().inserts.len(), n, "no insert added");
-    assert!(
-        (level(&e) - dry_level).abs() < 1e-3,
-        "same sound after making it unique"
-    );
+    assert!((level(&e) - dry_level).abs() < 1e-3, "same sound after making it unique");
     // muting the old track's insert silences it: it really plays through there
-    let mut m = e
-        .project()
-        .inserts
-        .into_iter()
-        .find(|m| m.id == old_insert)
-        .unwrap();
+    let mut m = e.project().inserts.into_iter().find(|m| m.id == old_insert).unwrap();
     m.muted = true;
-    e.apply(&[Op::PutInsert { insert: m }], false, None)
-        .unwrap();
+    e.apply(&[Op::PutInsert { insert: m }], false, None).unwrap();
     assert!(level(&e) < 1e-6, "muted insert still sounds");
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -156,18 +125,8 @@ fn several_clips_move_together_and_names_count_up() {
     // the third copy, from the original and from the copy alike, is "#3", then "#4"
     let r2 = e.make_unique_audio(&[c]).unwrap();
     let r3 = e.make_unique_audio(&[a]).unwrap();
-    let name = |id: Id| {
-        e.project()
-            .sources
-            .into_iter()
-            .find(|s| s.id == id)
-            .unwrap()
-            .name
-    };
-    assert_eq!(
-        (name(r.source_id), name(r2.source_id), name(r3.source_id)),
-        ("guitar #2".into(), "guitar #3".into(), "guitar #4".into())
-    );
+    let name = |id: Id| e.project().sources.into_iter().find(|s| s.id == id).unwrap().name;
+    assert_eq!((name(r.source_id), name(r2.source_id), name(r3.source_id)), ("guitar #2".into(), "guitar #3".into(), "guitar #4".into()));
     // none claimed an insert: every new track plays into the master like its old one
     assert_eq!([r.insert_id, r2.insert_id, r3.insert_id], [0, 0, 0]);
     let _ = std::fs::remove_dir_all(dir);
@@ -179,20 +138,9 @@ fn refuses_what_it_cannot_do_and_changes_nothing() {
     let before = e.project();
     assert!(e.make_unique_audio(&[]).is_err());
     assert!(e.make_unique_audio(&[999_999]).is_err());
-    assert!(
-        e.make_unique_audio(&[a, c]).is_err(),
-        "clips on different tracks"
-    );
-    let pat = Clip {
-        id: 70_100,
-        kind: ClipKind::Pat,
-        source: 1,
-        start: 16.0,
-        len: 4.0,
-        ..clip(&e, a)
-    };
-    e.apply(&[Op::PutClips { clips: vec![pat] }], false, None)
-        .unwrap();
+    assert!(e.make_unique_audio(&[a, c]).is_err(), "clips on different tracks");
+    let pat = Clip { id: 70_100, kind: ClipKind::Pat, source: 1, start: 16.0, len: 4.0, ..clip(&e, a) };
+    e.apply(&[Op::PutClips { clips: vec![pat] }], false, None).unwrap();
     let before_pat = e.project();
     assert!(e.make_unique_audio(&[70_100]).is_err(), "a pattern clip");
     assert_eq!(e.project(), before_pat);

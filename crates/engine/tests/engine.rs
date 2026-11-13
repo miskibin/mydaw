@@ -86,12 +86,17 @@ fn audio_clips_play_at_their_position() {
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("tone.wav");
     // 0.5 s of 440 Hz at 44.1 kHz — a different rate than the render
-    let tone: Vec<f32> = (0..22050).flat_map(|i| { let v = (i as f32 * 440.0 * std::f32::consts::TAU / 44100.0).sin() * 0.5; [v, v] }).collect();
+    let tone: Vec<f32> = (0..22050)
+        .flat_map(|i| {
+            let v = (i as f32 * 440.0 * std::f32::consts::TAU / 44100.0).sin() * 0.5;
+            [v, v]
+        })
+        .collect();
     wave_engine::sources::write_wav(&wav, &tone, 44100).unwrap();
     let mut p = Project::routed();
     p.inserts[0].fx.clear(); // no limiter, so levels are exact
     let e = Engine::new(p, Arc::new(NoPlugins));
-    let (_, clips) = e.import_audio(&[wav.clone()], Some((0, 4.0))).unwrap();
+    let (_, clips) = e.import_audio(std::slice::from_ref(&wav), Some((0, 4.0))).unwrap();
     assert_eq!(clips.len(), 1);
     let out = e.render(0.0, 8.0, 0.0, 48000).unwrap();
     let spb = 60.0 / 128.0;
@@ -112,7 +117,12 @@ fn dry_wet_of_a_latent_effect_lines_up() {
     std::fs::create_dir_all(&dir).unwrap();
     let wav = dir.join("voice.wav");
     let sr = 48000.0f32;
-    let x: Vec<f32> = (0..96000).flat_map(|i| { let v = (1..8).map(|k| (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.2; [v, v] }).collect();
+    let x: Vec<f32> = (0..96000)
+        .flat_map(|i| {
+            let v = (1..8).map(|k| (std::f32::consts::TAU * 220.0 * k as f32 * i as f32 / sr).sin() / k as f32).sum::<f32>() * 0.2;
+            [v, v]
+        })
+        .collect();
     wave_engine::sources::write_wav(&wav, &x, 48000).unwrap();
     let mut p = Project::routed();
     p.inserts[0].fx.clear();
@@ -365,7 +375,26 @@ fn automation_moves_volume_and_effect_params() {
     for t in p.tracks.iter_mut().skip(1) {
         t.muted = true;
     }
-    p.clips.push(Clip { id: 8001, track: 7, start: 0.0, len: 8.0, offset: 0.0, kind: ClipKind::Auto, source: 8000, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 });
+    p.clips.push(Clip {
+        id: 8001,
+        track: 7,
+        start: 0.0,
+        len: 8.0,
+        offset: 0.0,
+        kind: ClipKind::Auto,
+        source: 8000,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    });
     let e = Engine::new(p, Arc::new(NoPlugins));
     let out = e.render(0.0, 4.0, 0.0, 48000).unwrap();
     let at = |b: f64| (b * 60.0 / 128.0 * 48000.0) as usize * 2;
@@ -429,7 +458,7 @@ fn export_tail_extends_length_and_cancel_aborts() {
     let peak = silent.iter().fold(0f32, |a, b| a.max(b.abs()));
     assert!(peak < 1e-5, "empty project should be silent");
 }
- 
+
 #[test]
 fn music_analysis_excludes_vocal_insert_and_caches() {
     let dir = std::env::temp_dir().join(format!("wave-music-{}", std::process::id()));
@@ -564,7 +593,26 @@ fn an_arrangement_can_run_past_the_old_128_bar_limit() {
     let last = p.clips.iter().map(|c| c.id).max().unwrap_or(0);
     // bar 476: past the old 512-beat end, inside the new one
     let start = 1900.0;
-    p.clips.push(Clip { id: last + 1, track: 0, start, len, offset: 0.0, kind: ClipKind::Pat, source: pat, muted: false, gain: 0.0, fade_in: 0.0, fade_out: 0.0, pan: 0.0, norm: false, rev: false, tune: None, stretch: 1.0, resample: false, pitch: 0.0 });
+    p.clips.push(Clip {
+        id: last + 1,
+        track: 0,
+        start,
+        len,
+        offset: 0.0,
+        kind: ClipKind::Pat,
+        source: pat,
+        muted: false,
+        gain: 0.0,
+        fade_in: 0.0,
+        fade_out: 0.0,
+        pan: 0.0,
+        norm: false,
+        rev: false,
+        tune: None,
+        stretch: 1.0,
+        resample: false,
+        pitch: 0.0,
+    });
     let e = Engine::new(p, Arc::new(NoPlugins));
     let (from, to) = Engine::export_range(&e.project(), false);
     assert_eq!(from, 0.0);

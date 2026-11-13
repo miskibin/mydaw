@@ -110,7 +110,10 @@ enum Mode {
     Running,
     /// Fading to silence over `left` more frames: `hold` = no input left (underrun), the
     /// last sample decays; otherwise (overflow) the input keeps playing and then skips.
-    FadeOut { left: u32, hold: bool },
+    FadeOut {
+        left: u32,
+        hold: bool,
+    },
 }
 
 pub(crate) struct JitterBuf {
@@ -145,7 +148,25 @@ impl JitterBuf {
     pub fn new(rate: u32, periods: usize) -> Self {
         warm_up();
         let fade = (rate / 500).max(8);
-        Self { buf: [0.0; HIST], have: 0, x: 0.0, mode: Mode::Priming, fade_in: 0, fade, last: 0.0, corr: 0.0, fill_s: 0.0, anchor: f64::NAN, settle: 0, settle_sum: 0.0, drift: 0.0, deadband: rate as f64 * 0.001, margin: rate as f64 * 0.002, max_margin: rate as f64 * 0.05, periods: periods.max(1) }
+        Self {
+            buf: [0.0; HIST],
+            have: 0,
+            x: 0.0,
+            mode: Mode::Priming,
+            fade_in: 0,
+            fade,
+            last: 0.0,
+            corr: 0.0,
+            fill_s: 0.0,
+            anchor: f64::NAN,
+            settle: 0,
+            settle_sum: 0.0,
+            drift: 0.0,
+            deadband: rate as f64 * 0.001,
+            margin: rate as f64 * 0.002,
+            max_margin: rate as f64 * 0.05,
+            periods: periods.max(1),
+        }
     }
 
     /// Backlog aimed for: `periods` input periods + half a callback + the interpolator's
@@ -335,6 +356,14 @@ mod tests {
         let start = out.iter().position(|v| *v != 0.0).unwrap() + 200;
         let lag = (0..src.len() - 64).find(|&k| (0..64).all(|j| src[k + j] == out[start + j])).expect("the input passes through bit-exact");
         let bad = (start..out.len()).find(|&i| out[i] != src[lag + i - start]);
-        assert_eq!(bad, None, "an interpolated sample (start {start}, len {}, fill {}, anchor {}, target {})", out.len(), jb.fill_s, jb.anchor, jb.target(512, 480));
+        assert_eq!(
+            bad,
+            None,
+            "an interpolated sample (start {start}, len {}, fill {}, anchor {}, target {})",
+            out.len(),
+            jb.fill_s,
+            jb.anchor,
+            jb.target(512, 480)
+        );
     }
 }

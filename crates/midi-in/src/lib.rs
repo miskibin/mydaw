@@ -138,7 +138,12 @@ impl MidiInput {
     }
 
     pub fn start_with(backend: Arc<dyn Backend>, hooks: Hooks, poll: Duration) -> Arc<Self> {
-        let m = Arc::new(Self { backend, hooks, inner: Mutex::new(Inner { wanted: None, open: None, error: None, target: None }), last: Arc::new(AtomicU64::new(0)) });
+        let m = Arc::new(Self {
+            backend,
+            hooks,
+            inner: Mutex::new(Inner { wanted: None, open: None, error: None, target: None }),
+            last: Arc::new(AtomicU64::new(0)),
+        });
         let weak: Weak<Self> = Arc::downgrade(&m);
         thread::Builder::new()
             .name("wave-midi-watch".into())
@@ -162,7 +167,14 @@ impl MidiInput {
 
     fn status_of(&self, g: &Inner) -> MidiStatus {
         let (note_count, last_note) = unpack(self.last.load(Relaxed));
-        MidiStatus { connected: g.open.as_ref().map(|(d, _)| d.clone()), selected: g.wanted.clone(), error: g.error.clone(), last_note, note_count, target: g.target }
+        MidiStatus {
+            connected: g.open.as_ref().map(|(d, _)| d.clone()),
+            selected: g.wanted.clone(),
+            error: g.error.clone(),
+            last_note,
+            note_count,
+            target: g.target,
+        }
     }
 
     /// Chooses the device (`None` = no device) and opens it now. Remembered across unplugging:
@@ -170,7 +182,12 @@ impl MidiInput {
     pub fn select(&self, id: Option<&str>, name_hint: Option<&str>) -> MidiStatus {
         let ports = self.backend.list();
         let wanted = id.map(|id| {
-            let name = ports.iter().find(|p| p.id == id).map(|p| p.name.clone()).or_else(|| name_hint.map(String::from)).unwrap_or_else(|| id.to_string());
+            let name = ports
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| p.name.clone())
+                .or_else(|| name_hint.map(String::from))
+                .unwrap_or_else(|| id.to_string());
             MidiDevice { id: id.to_string(), name }
         });
         {

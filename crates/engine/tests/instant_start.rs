@@ -23,12 +23,7 @@ fn project() -> Project {
     let mut f = new_fx(7000, FxKind::Rider, p.bpm);
     f.params.insert("look".into(), 1.0);
     let ins = p.tracks[1].insert;
-    p.inserts
-        .iter_mut()
-        .find(|m| m.id == ins)
-        .unwrap()
-        .fx
-        .push(f);
+    p.inserts.iter_mut().find(|m| m.id == ins).unwrap().fx.push(f);
     p
 }
 
@@ -39,10 +34,7 @@ fn frames(beats: f64, bpm: f64) -> usize {
 fn engine(tag: &str) -> (Arc<Engine>, usize) {
     let p = project();
     let pdc = wave_engine::engine::playback_latency(&p, SR as f32);
-    assert!(
-        pdc > SR as usize,
-        "the long Rider should delay playback by over a second, got {pdc}"
-    );
+    assert!(pdc > SR as usize, "the long Rider should delay playback by over a second, got {pdc}");
     let dir = std::env::temp_dir().join(format!("wave-instant-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
@@ -97,26 +89,12 @@ fn play_is_heard_at_once_and_on_the_timeline() {
     assert_eq!(rt.preroll(), 0);
     // beat 5 is one beat after the start, beat 6 two: no latency in between
     let a = onset(&out, 0.3).expect("beat 5 not heard");
-    assert!(
-        a.abs_diff(frames(1.0, bpm)) <= 1,
-        "beat 5 heard at frame {a}, want {} (pdc {pdc})",
-        frames(1.0, bpm)
-    );
-    let b = onset(&out[a + 200..], 0.3)
-        .map(|i| i + a + 200)
-        .expect("beat 6 not heard");
-    assert!(
-        b.abs_diff(frames(2.0, bpm)) <= 1,
-        "beat 6 (Rider track) heard at frame {b}, want {}",
-        frames(2.0, bpm)
-    );
+    assert!(a.abs_diff(frames(1.0, bpm)) <= 1, "beat 5 heard at frame {a}, want {} (pdc {pdc})", frames(1.0, bpm));
+    let b = onset(&out[a + 200..], 0.3).map(|i| i + a + 200).expect("beat 6 not heard");
+    assert!(b.abs_diff(frames(2.0, bpm)) <= 1, "beat 6 (Rider track) heard at frame {b}, want {}", frames(2.0, bpm));
     // the playhead shows what is heard
     let bps = bpm / 60.0 / SR as f64;
-    assert!(
-        (e.shared().heard_beat() - (4.0 + out.len() as f64 * bps)).abs() < 2.0 * bps,
-        "heard beat {}",
-        e.shared().heard_beat()
-    );
+    assert!((e.shared().heard_beat() - (4.0 + out.len() as f64 * bps)).abs() < 2.0 * bps, "heard beat {}", e.shared().heard_beat());
 }
 
 #[test]
@@ -136,31 +114,18 @@ fn seek_and_loop_restart_are_heard_at_once() {
     assert_eq!(onset(&out, 0.3), Some(0), "after a seek");
 
     // loop 0..2 from beat 1: the clip on beat 0 comes back exactly when the loop wraps
-    e.apply(
-        &[Op::SetLoop {
-            range: Some(LoopRange { a: 0.0, b: 2.0 }),
-        }],
-        false,
-        None,
-    )
-    .unwrap();
+    e.apply(&[Op::SetLoop { range: Some(LoopRange { a: 0.0, b: 2.0 }) }], false, None).unwrap();
     e.play(1.0);
     let out = run(&mut rt, frames(1.0, bpm) + 4000);
     let w = onset(&out, 0.3).expect("the loop start not heard after the wrap");
-    assert!(
-        w.abs_diff(frames(1.0, bpm)) <= 1,
-        "loop start heard at {w}, want {}",
-        frames(1.0, bpm)
-    );
+    assert!(w.abs_diff(frames(1.0, bpm)) <= 1, "loop start heard at {w}, want {}", frames(1.0, bpm));
 }
 
 #[test]
 fn a_jump_while_sound_plays_does_not_click() {
     let (e, _) = engine("click");
     // a 0.5 amplitude 110 Hz sine over 16 beats: a seek lands in another phase
-    let x: Vec<f32> = (0..frames(16.0, 120.0))
-        .map(|i| 0.5 * (i as f32 * 110.0 * std::f32::consts::TAU / SR as f32).sin())
-        .collect();
+    let x: Vec<f32> = (0..frames(16.0, 120.0)).map(|i| 0.5 * (i as f32 * 110.0 * std::f32::consts::TAU / SR as f32).sin()).collect();
     clip(&e, 0, 0.0, &x, "click");
     let mut rt = e.create_rt(SR as f32, BLOCK);
     rt.set_instant_start(Some(f32::INFINITY));
@@ -172,18 +137,9 @@ fn a_jump_while_sound_plays_does_not_click() {
     }
     // the steepest step of the sine itself, with a margin
     let slope = 0.5 * 110.0 * std::f32::consts::TAU / SR as f32;
-    let step = out
-        .windows(2)
-        .map(|w| (w[1] - w[0]).abs())
-        .fold(0f32, f32::max);
-    assert!(
-        step < slope * 1.6,
-        "a jump steps by {step}, the sine by at most {slope}"
-    );
-    assert!(
-        out[out.len() - 2000..].iter().any(|v| v.abs() > 0.4),
-        "music after the last jump"
-    );
+    let step = out.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+    assert!(step < slope * 1.6, "a jump steps by {step}, the sine by at most {slope}");
+    assert!(out[out.len() - 2000..].iter().any(|v| v.abs() > 0.4), "music after the last jump");
 }
 
 #[test]
@@ -194,9 +150,7 @@ fn a_bounded_pre_roll_is_heard_soon_and_on_the_timeline() {
     clip(&e, 0, 4.0, &burst(), "budget");
     clip(&e, 0, 5.0, &burst(), "budget");
     // a quiet voice-like tone through the Rider, so its chain really works during the pre-roll
-    let v: Vec<f32> = (0..frames(12.0, bpm))
-        .map(|i| 0.05 * (i as f32 * 220.0 * std::f32::consts::TAU / SR as f32).sin())
-        .collect();
+    let v: Vec<f32> = (0..frames(12.0, bpm)).map(|i| 0.05 * (i as f32 * 220.0 * std::f32::consts::TAU / SR as f32).sin()).collect();
     clip(&e, 1, 0.0, &v, "budget");
     let mut rt = e.create_rt(SR as f32, BLOCK);
     rt.set_instant_start(Some(0.7));
@@ -209,19 +163,14 @@ fn a_bounded_pre_roll_is_heard_soon_and_on_the_timeline() {
     let first = onset(&out, 0.3).expect("nothing heard");
     let ms = first as f64 * 1000.0 / SR as f64;
     let render_ms = wall * 1000.0 * pdc as f64 / out.len() as f64;
-    println!("pdc {:.0} ms · first sound after {ms:.1} ms of device time (pre-roll at {render_ms:.1} ms of CPU)", pdc as f64 * 1000.0 / SR as f64);
+    println!(
+        "pdc {:.0} ms · first sound after {ms:.1} ms of device time (pre-roll at {render_ms:.1} ms of CPU)",
+        pdc as f64 * 1000.0 / SR as f64
+    );
     // whatever the speed, the music is on the timeline: the next clip one beat later
-    let next = onset(&out[first + 200..], 0.3)
-        .map(|i| i + first + 200)
-        .expect("beat 5 not heard");
-    assert!(
-        next.abs_diff(first + frames(1.0, bpm)) <= 1,
-        "beat 5 at {next}, beat 4 at {first}"
-    );
-    assert!(
-        first < pdc,
-        "no faster than without pre-roll ({first} frames)"
-    );
+    let next = onset(&out[first + 200..], 0.3).map(|i| i + first + 200).expect("beat 5 not heard");
+    assert!(next.abs_diff(first + frames(1.0, bpm)) <= 1, "beat 5 at {next}, beat 4 at {first}");
+    assert!(first < pdc, "no faster than without pre-roll ({first} frames)");
     if !cfg!(debug_assertions) {
         assert!(ms < 60.0, "first sound after {ms:.1} ms");
     }

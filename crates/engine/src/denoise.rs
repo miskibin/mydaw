@@ -146,8 +146,8 @@ impl Denoise {
         let n = self.n;
         let bins = n / 2 + 1;
         for (src, spec) in [(&self.in_l, &mut self.spec_l), (&self.in_r, &mut self.spec_r)] {
-            for k in 0..n {
-                self.tmp[k] = src[k] * self.win[k];
+            for ((t, &x), &w) in self.tmp[..n].iter_mut().zip(&src[..n]).zip(&self.win[..n]) {
+                *t = x * w;
             }
             let _ = fwd.process_with_scratch(&mut self.tmp, spec, &mut self.scratch_f);
         }
@@ -217,8 +217,8 @@ impl Denoise {
         let scale = 1.0 / (2.0 * n as f32);
         for (spec, acc) in [(&mut self.spec_l, &mut self.acc_l), (&mut self.spec_r, &mut self.acc_r)] {
             let _ = inv.process_with_scratch(spec, &mut self.tmp, &mut self.scratch_i);
-            for k in 0..n {
-                acc[k] += self.tmp[k] * self.win[k] * scale;
+            for ((a, &t), &w) in acc[..n].iter_mut().zip(&self.tmp[..n]).zip(&self.win[..n]) {
+                *a += t * w * scale;
             }
         }
         let hop = self.hop;

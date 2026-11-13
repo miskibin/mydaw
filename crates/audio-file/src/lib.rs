@@ -168,12 +168,7 @@ pub fn taps(padded: &[f32], index: usize, channel: usize) -> [f32; 4] {
     // Content frame `index` sits at padded frame `index + PAD_LEAD`, so the tap
     // at `index - 1` is padded frame `index`, which always exists.
     let base = index * CHANNELS + channel;
-    [
-        padded[base],
-        padded[base + CHANNELS],
-        padded[base + 2 * CHANNELS],
-        padded[base + 3 * CHANNELS],
-    ]
+    [padded[base], padded[base + CHANNELS], padded[base + 2 * CHANNELS], padded[base + 3 * CHANNELS]]
 }
 
 /// Four-point Catmull-Rom at `x` in `0.0..1.0` between `taps[1]` and `taps[2]`.
@@ -209,10 +204,7 @@ pub fn cubic(taps: [f32; 4], x: f32) -> f32 {
 /// A [`DecodeError`] naming `path`. Every variant is survivable: a caller
 /// loading ninety files skips the entry and carries on, and a caller loading one
 /// shows the message.
-pub fn decode_stereo(
-    path: &Path,
-    max_frames_for: impl Fn(f64) -> Option<usize>,
-) -> Result<DecodedAudio, DecodeError> {
+pub fn decode_stereo(path: &Path, max_frames_for: impl Fn(f64) -> Option<usize>) -> Result<DecodedAudio, DecodeError> {
     match decode_symphonia(path, &max_frames_for) {
         Ok(audio) => Ok(audio),
         Err(first) if looks_like_mp3(path) => match decode_mp3(path, max_frames_for) {
@@ -224,20 +216,12 @@ pub fn decode_stereo(
 }
 
 fn looks_like_mp3(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"))
+    path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("mp3"))
 }
 
 /// MPEG-1/2 Layer III through minimp3. i16 interleaved → stereo f32.
-fn decode_mp3(
-    path: &Path,
-    max_frames_for: impl Fn(f64) -> Option<usize>,
-) -> Result<DecodedAudio, DecodeError> {
-    let file = std::fs::File::open(path).map_err(|source| DecodeError::Open {
-        path: path.to_path_buf(),
-        source,
-    })?;
+fn decode_mp3(path: &Path, max_frames_for: impl Fn(f64) -> Option<usize>) -> Result<DecodedAudio, DecodeError> {
+    let file = std::fs::File::open(path).map_err(|source| DecodeError::Open { path: path.to_path_buf(), source })?;
     let mut decoder = minimp3::Decoder::new(file);
     let mut content: Vec<f32> = Vec::new();
     let mut sample_rate = 0_f64;
@@ -249,10 +233,7 @@ fn decode_mp3(
             Ok(frame) => {
                 if sample_rate == 0.0 {
                     if frame.sample_rate == 0 {
-                        return Err(DecodeError::BadRate {
-                            path: path.to_path_buf(),
-                            rate: 0,
-                        });
+                        return Err(DecodeError::BadRate { path: path.to_path_buf(), rate: 0 });
                     }
                     sample_rate = f64::from(frame.sample_rate);
                     max_frames = max_frames_for(sample_rate);
@@ -264,11 +245,7 @@ fn decode_mp3(
                         break;
                     }
                     let left = pcm[0] as f32 / 32768.0;
-                    let right = if channels == 1 {
-                        left
-                    } else {
-                        pcm[1] as f32 / 32768.0
-                    };
+                    let right = if channels == 1 { left } else { pcm[1] as f32 / 32768.0 };
                     content.push(left);
                     content.push(right);
                 }
@@ -277,37 +254,19 @@ fn decode_mp3(
                 }
             }
             Err(minimp3::Error::Eof) => break,
-            Err(err) => {
-                return Err(DecodeError::Decode {
-                    path: path.to_path_buf(),
-                    reason: err.to_string(),
-                })
-            }
+            Err(err) => return Err(DecodeError::Decode { path: path.to_path_buf(), reason: err.to_string() }),
         }
     }
 
     if content.is_empty() || sample_rate <= 0.0 {
-        return Err(DecodeError::Empty {
-            path: path.to_path_buf(),
-        });
+        return Err(DecodeError::Empty { path: path.to_path_buf() });
     }
     let frames = content.len() / CHANNELS;
-    Ok(DecodedAudio {
-        data: content,
-        frames,
-        sample_rate,
-        truncated,
-    })
+    Ok(DecodedAudio { data: content, frames, sample_rate, truncated })
 }
 
-fn decode_symphonia(
-    path: &Path,
-    max_frames_for: &impl Fn(f64) -> Option<usize>,
-) -> Result<DecodedAudio, DecodeError> {
-    let file = std::fs::File::open(path).map_err(|source| DecodeError::Open {
-        path: path.to_path_buf(),
-        source,
-    })?;
+fn decode_symphonia(path: &Path, max_frames_for: &impl Fn(f64) -> Option<usize>) -> Result<DecodedAudio, DecodeError> {
+    let file = std::fs::File::open(path).map_err(|source| DecodeError::Open { path: path.to_path_buf(), source })?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
     decode_symphonia_stream(stream, path, max_frames_for)
 }
@@ -337,35 +296,18 @@ fn decode_symphonia_stream(
     }
 
     let mut format = symphonia::default::get_probe()
-        .probe(
-            &hint,
-            stream,
-            FormatOptions::default(),
-            MetadataOptions::default(),
-        )
-        .map_err(|err| DecodeError::Format {
-            path: path.to_path_buf(),
-            reason: err.to_string(),
-        })?;
+        .probe(&hint, stream, FormatOptions::default(), MetadataOptions::default())
+        .map_err(|err| DecodeError::Format { path: path.to_path_buf(), reason: err.to_string() })?;
 
-    let track = format
-        .first_track_known_codec(TrackType::Audio)
-        .ok_or_else(|| DecodeError::NoTrack {
-            path: path.to_path_buf(),
-        })?;
+    let track = format.first_track_known_codec(TrackType::Audio).ok_or_else(|| DecodeError::NoTrack { path: path.to_path_buf() })?;
     let track_id = track.id;
     let Some(CodecParameters::Audio(params)) = track.codec_params.as_ref() else {
-        return Err(DecodeError::NoTrack {
-            path: path.to_path_buf(),
-        });
+        return Err(DecodeError::NoTrack { path: path.to_path_buf() });
     };
 
     let mut decoder = symphonia::default::get_codecs()
         .make_audio_decoder(params, &AudioDecoderOptions::default())
-        .map_err(|err| DecodeError::Format {
-            path: path.to_path_buf(),
-            reason: err.to_string(),
-        })?;
+        .map_err(|err| DecodeError::Format { path: path.to_path_buf(), reason: err.to_string() })?;
 
     let mut content: Vec<f32> = Vec::new();
     let mut scratch: Vec<f32> = Vec::new();
@@ -377,28 +319,17 @@ fn decode_symphonia_stream(
         let packet = match format.next_packet() {
             Ok(Some(packet)) => packet,
             Ok(None) => break,
-            Err(err) => {
-                return Err(DecodeError::Decode {
-                    path: path.to_path_buf(),
-                    reason: err.to_string(),
-                })
-            }
+            Err(err) => return Err(DecodeError::Decode { path: path.to_path_buf(), reason: err.to_string() }),
         };
         if packet.track_id != track_id {
             continue;
         }
-        let buffer = decoder.decode(&packet).map_err(|err| DecodeError::Decode {
-            path: path.to_path_buf(),
-            reason: err.to_string(),
-        })?;
+        let buffer = decoder.decode(&packet).map_err(|err| DecodeError::Decode { path: path.to_path_buf(), reason: err.to_string() })?;
 
         let (rate, channels) = spec_of(&buffer);
         if sample_rate == 0.0 {
             if rate == 0 {
-                return Err(DecodeError::BadRate {
-                    path: path.to_path_buf(),
-                    rate,
-                });
+                return Err(DecodeError::BadRate { path: path.to_path_buf(), rate });
             }
             sample_rate = f64::from(rate);
             max_frames = max_frames_for(sample_rate);
@@ -424,18 +355,11 @@ fn decode_symphonia_stream(
     }
 
     if content.is_empty() || sample_rate <= 0.0 {
-        return Err(DecodeError::Empty {
-            path: path.to_path_buf(),
-        });
+        return Err(DecodeError::Empty { path: path.to_path_buf() });
     }
 
     let frames = content.len() / CHANNELS;
-    Ok(DecodedAudio {
-        data: content,
-        frames,
-        sample_rate,
-        truncated,
-    })
+    Ok(DecodedAudio { data: content, frames, sample_rate, truncated })
 }
 
 /// Sample rate and channel count of a decoded buffer.
@@ -453,11 +377,7 @@ mod tests {
 
     impl TempDir {
         fn new(tag: &str) -> Self {
-            let base = std::env::temp_dir().join(format!(
-                "wave-audio-file-{tag}-{}-{:?}",
-                std::process::id(),
-                std::thread::current().id()
-            ));
+            let base = std::env::temp_dir().join(format!("wave-audio-file-{tag}-{}-{:?}", std::process::id(), std::thread::current().id()));
             std::fs::create_dir_all(&base).expect("temp dir");
             Self(base)
         }
@@ -474,12 +394,7 @@ mod tests {
     }
 
     fn write_wav(path: &Path, rate: u32, channels: u16, samples: &[f32]) {
-        let spec = hound::WavSpec {
-            channels,
-            sample_rate: rate,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        };
+        let spec = hound::WavSpec { channels, sample_rate: rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
         let mut writer = hound::WavWriter::create(path, spec).expect("wav writer");
         for sample in samples {
             writer.write_sample(*sample).expect("wav sample");
@@ -536,19 +451,14 @@ mod tests {
         let mut checked = 0_usize;
         for root in &roots {
             for entry in walk(root) {
-                let extension = entry
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
+                let extension = entry.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
                 // Driven by the exported list, so a format added to the filter
                 // without a decoder behind it fails here rather than in a file
                 // dialog that offers something this build cannot open.
                 if !AUDIO_EXTENSIONS.contains(&extension.as_str()) {
                     continue;
                 }
-                let decoded = decode_stereo(&entry, |rate| Some(rate as usize))
-                    .unwrap_or_else(|err| panic!("{}: {err}", entry.display()));
+                let decoded = decode_stereo(&entry, |rate| Some(rate as usize)).unwrap_or_else(|err| panic!("{}: {err}", entry.display()));
                 assert!(decoded.frames > 0, "{} decoded to nothing", entry.display());
                 assert!(decoded.sample_rate > 0.0);
                 checked += 1;
@@ -622,10 +532,7 @@ mod tests {
         let path = dir.path().join("garbage.wav");
         std::fs::write(&path, b"this is definitely not a wave file").unwrap();
         let err = decode_stereo(&path, |_| None).unwrap_err();
-        assert!(
-            matches!(err, DecodeError::Format { .. } | DecodeError::Decode { .. }),
-            "{err}"
-        );
+        assert!(matches!(err, DecodeError::Format { .. } | DecodeError::Decode { .. }), "{err}");
     }
 
     #[test]
@@ -669,24 +576,14 @@ mod tests {
 
     #[test]
     fn mp3_is_in_the_filter_this_build_claims() {
-        assert!(
-            AUDIO_EXTENSIONS.contains(&"mp3"),
-            "the dialog and the library listing share this list"
-        );
+        assert!(AUDIO_EXTENSIONS.contains(&"mp3"), "the dialog and the library listing share this list");
     }
 
     #[test]
     fn an_mp3_decodes_through_the_minimp3_path() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests")
-            .join("fixtures")
-            .join("sine.mp3");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join("sine.mp3");
         let decoded = decode_stereo(&path, |_| None).expect("decodes mp3");
-        assert!(
-            decoded.frames > 1_000,
-            "220 ms of 22.05 kHz should be thousands of frames, got {}",
-            decoded.frames
-        );
+        assert!(decoded.frames > 1_000, "220 ms of 22.05 kHz should be thousands of frames, got {}", decoded.frames);
         assert!((decoded.sample_rate - 22_050.0).abs() < 1.0);
         assert_eq!(decoded.data.len(), decoded.frames * CHANNELS);
         // The fixture is a 220 Hz sine: both channels must move, not sit at zero.
