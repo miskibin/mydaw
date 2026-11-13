@@ -2,7 +2,13 @@
 //! stdout is the JSON report; progress and the PASS/FAIL table go to stderr.
 
 mod ab;
+mod agent;
+mod agent_vocalset;
+mod cases;
 mod eval;
+mod gtsinger;
+mod listen;
+mod medley;
 mod synth;
 mod vocalset;
 
@@ -19,6 +25,18 @@ const HELP: &str = "tune-bench — Tune to Reference benchmarks
   tune-bench vocalset --root DIR [--mode self|cross|mismatch|all] [--limit 40]
   tune-bench ab --out DIR [--root DIR] [--fragments 20] [--baseline snap|take] [--seed 1]
   tune-bench ab-score --kit DIR --ratings ratings.csv
+
+  agent workflow (pitch inspect/compare/suggest → editTune → render), scored on the re-analysed render,
+  with existing Tune to Reference on the same cases for comparison:
+  tune-bench agent-vocalset --root DIR [--limit 30]      Annotated VocalSet (controlled + cross-singer + other key + unrelated)
+  tune-bench agent-gtsinger --root DIR [--limit 16]      GTSinger subset (scripts/fetch_gtsinger.py): ornaments, tenor/alto
+  tune-bench agent-medley --root DIR [--limit 12]        MedleyDB_Sample: a song's lead vocal, backing vocals as references
+  tune-bench estimation [--vocalset DIR] [--gtsinger DIR] [--medley DIR] [--limit 40]   detector vs annotations
+  tune-bench listen --out DIR [--vocalset DIR] [--gtsinger DIR] [--fragments 12] [--seed 1]
+                                                         blind 3-way kit: original / tune-ref / agent
+  tune-bench listen-score --kit DIR --ratings ratings.csv
+  agent options: --max-cents 60 --min-cents 15 (planner limits), --no-tune-ref (skip the comparison),
+                 --dump DIR (each case's take/reference/output WAV and the planner's decisions)
 
 common: --rmvpe model.onnx | --yin   (default: the installed RMVPE model, else YIN)
         --correction --vibrato --influence 0..100   --json report.json
@@ -79,13 +97,23 @@ fn estimator(a: &Args) -> Result<Option<wave_rmvpe::Rmvpe>, String> {
     }
 }
 
+/// Every scored summary passes, and there is something to pass: a run with no summary, a summary
+/// with no case or no criterion, or a failed case is a failure, never a silent PASS.
+pub fn all_pass(v: &Value) -> bool {
+    let scored: Vec<&Value> =
+        v["summaries"].as_array().into_iter().flatten().filter(|s| s["informational"].as_bool() != Some(true)).collect();
+    !scored.is_empty()
+        && scored.iter().all(|s| {
+            let checks = s["checks"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+            s["cases"].as_u64().unwrap_or(0) > 0
+                && !checks.is_empty()
+                && checks.iter().all(|c| c["pass"].as_bool() == Some(true))
+                && s["failed"].as_array().is_none_or(|f| f.is_empty())
+        })
+}
+
 fn report(a: &Args, v: Value) -> Result<bool, String> {
-    let all_pass = v["summaries"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|s| s["checks"].as_array().into_iter().flatten())
-        .all(|c| c["pass"].as_bool() == Some(true));
+    let all_pass = all_pass(&v);
     let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
     if let Some(p) = a.get("json") {
         std::fs::write(p, &text).map_err(|e| format!("{p}: {e}"))?;
@@ -169,6 +197,148 @@ fn run(cmd: &str, a: &Args) -> Result<bool, String> {
                 est,
             )?;
             println!("{v}");
+            Ok(true)
+        }
+        "agent-vocalset" | "agent-gtsinger" | "agent-medley" => {
+            let root = PathBuf::from(a.get("root").ok_or("missing --root")?);
+            let model = estimator(a)?;
+            let est = model.as_ref().map(|m| m as &dyn F0Estimator);
+            let backend = if est.is_some() { "rmvpe" } else { "yin" };
+            let sp = wave_engine::pitch_api::SuggestParams {
+                max_cents: a.num("max-cents", 60.0)? as f32,
+                min_cents: a.num("min-cents", 15.0)? as f32,
+                ..Default::default()
+            };
+            let mut failed: Vec<(String, String)> = vec![];
+            let mut skipped: Vec<String> = vec![];
+            let (suite, cases, dataset) = match cmd {
+                "agent-vocalset" => {
+                    let items = vocalset::index(&root)?;
+                    let cs = agent_vocalset::cases(&items, a.num("limit", 30.0)? as usize, est, &mut failed);
+                    (
+                        "vocalset",
+                        cs,
+                        json!({ "name": "Annotated VocalSet", "zenodo": ["7061507", "1442513"], "licence": "CC BY 4.0", "annotated": items.len() }),
+                    )
+                }
+                "agent-gtsinger" => {
+                    let segs = gtsinger::index(&root)?;
+                    let cs = gtsinger::cases(&segs, a.num("limit", 16.0)? as usize, est, &mut failed, &mut skipped);
+                    (
+                        "gtsinger",
+                        cs,
+                        json!({ "name": "GTSinger (English subset)", "source": "huggingface.co/datasets/GTSinger/GTSinger", "licence": "CC BY-NC-SA 4.0", "segments": segs.len() }),
+                    )
+                }
+                _ => {
+                    let songs = medley::index(&root)?;
+                    let cs = medley::cases(&songs, a.num("limit", 12.0)? as usize, est, &mut failed, &mut skipped);
+                    (
+                        "medleydb",
+                        cs,
+                        json!({ "name": "MedleyDB_Sample", "zenodo": "1438309", "licence": "CC BY-SA 4.0", "songs": songs.iter().map(|s| s.name.clone()).collect::<Vec<_>>() }),
+                    )
+                }
+            };
+            eprintln!("{suite}: {} cases, {} failed to build, detector {backend}", cases.len(), failed.len());
+            let mut methods = vec![agent::Method::Agent(sp.clone())];
+            if !a.has("no-tune-ref") {
+                methods.push(agent::Method::TuneRef(p.clone()));
+            }
+            let mut os: Vec<agent::Outcome> = vec![];
+            for c in &cases {
+                let mut ms = methods.clone();
+                // the large controlled errors also with the limit raised, as an agent that knows the take is far off would
+                if c.group.contains("large") {
+                    ms.push(agent::Method::Agent(wave_engine::pitch_api::SuggestParams { max_cents: 250.0, ..sp.clone() }));
+                }
+                for m in &ms {
+                    if matches!(m, agent::Method::TuneRef(_)) && c.reference.is_none() {
+                        continue;
+                    }
+                    let o = agent::run(&c.case(), m, est, a.get("dump").map(Path::new));
+                    eprintln!(
+                        "  {:<12} {:<44} {:<40} slips {:5.1}→{:5.1} ct  moved {}/{} kept {}/{} {}",
+                        o.method,
+                        o.group,
+                        o.name.chars().take(40).collect::<String>(),
+                        o.slip_before.iter().map(|x| x.abs()).sum::<f32>() / o.slip_before.len().max(1) as f32,
+                        o.slip_after.iter().map(|x| x.abs()).sum::<f32>() / o.slip_after.len().max(1) as f32,
+                        o.in_tune_change.iter().filter(|x| **x > 15.0).count(),
+                        o.in_tune_change.len(),
+                        o.intended_change.iter().filter(|x| **x < 20.0).count(),
+                        o.intended_change.len(),
+                        o.failed.as_deref().unwrap_or("")
+                    );
+                    os.push(o);
+                }
+            }
+            // cases that could not even be built are failures of every method's run
+            for (name, why) in &failed {
+                for m in &methods {
+                    os.push(agent::Outcome {
+                        name: name.clone(),
+                        group: "could not be built".into(),
+                        method: m.label(),
+                        agent: m.is_agent(),
+                        failed: Some(why.clone()),
+                        ..Default::default()
+                    });
+                }
+            }
+            let s = agent::summaries(suite, &os);
+            s.iter().for_each(eval::print);
+            report(
+                a,
+                json!({
+                    "suite": format!("agent-{suite}"), "detector": backend, "dataset": dataset,
+                    "planner": { "maxCents": sp.max_cents, "minCents": sp.min_cents, "strength": sp.strength },
+                    "tuneRef": { "correction": p.correction, "vibrato": p.vibrato, "influence": p.influence },
+                    "skipped": skipped,
+                    "summaries": s, "cases": os.iter().map(agent::outcome_json).collect::<Vec<_>>(),
+                }),
+            )
+        }
+        "estimation" => {
+            let model = estimator(a)?;
+            let est = model.as_ref().map(|m| m as &dyn F0Estimator);
+            let limit = a.num("limit", 40.0)? as usize;
+            let mut v = json!({ "detector": if est.is_some() { "rmvpe" } else { "yin" } });
+            if let Some(r) = a.get("vocalset") {
+                v["vocalset"] = agent_vocalset::estimation(&vocalset::index(Path::new(r))?, limit, est);
+            }
+            if let Some(r) = a.get("gtsinger") {
+                v["gtsingerScoreAgreement"] = gtsinger::score_agreement(&gtsinger::index(Path::new(r))?, limit, est);
+            }
+            if let Some(r) = a.get("medley") {
+                v["medleydb"] = medley::estimation(&medley::index(Path::new(r))?, est);
+            }
+            let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?;
+            if let Some(p) = a.get("json") {
+                std::fs::write(p, &text).map_err(|e| format!("{p}: {e}"))?;
+            }
+            println!("{text}");
+            Ok(true)
+        }
+        "listen" => {
+            let model = estimator(a)?;
+            let est = model.as_ref().map(|m| m as &dyn F0Estimator);
+            let v = listen::make(
+                Path::new(a.get("out").ok_or("missing --out")?),
+                a.get("vocalset").map(Path::new),
+                a.get("gtsinger").map(Path::new),
+                a.num("fragments", 12.0)? as usize,
+                a.num("seed", 1.0)? as u32,
+                &p,
+                est,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
+            Ok(true)
+        }
+        "listen-score" => {
+            let v =
+                listen::score(Path::new(a.get("kit").ok_or("missing --kit")?), Path::new(a.get("ratings").ok_or("missing --ratings")?))?;
+            println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
             Ok(true)
         }
         "ab-score" => {

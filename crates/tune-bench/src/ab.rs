@@ -38,13 +38,13 @@ fn snapped(take: &Audio, est: Option<&dyn F0Estimator>) -> Audio {
     wave_engine::tune_render::render(take, &a, &ClipTune { notes, pencil: vec![], reference: None }, None)
 }
 
-fn trimmed(a: &Audio) -> Audio {
+pub(crate) fn trimmed(a: &Audio) -> Audio {
     let n = (a.frames as f64).min(MAX_SECONDS * a.sr as f64) as usize;
     Audio::from_stereo(a.content()[..n * 2].to_vec(), a.sr, a.channels)
 }
 
 /// RMS over the active 20 ms blocks (gate −50 dBFS).
-fn active_rms(x: &[f32], sr: u32) -> f32 {
+pub(crate) fn active_rms(x: &[f32], sr: u32) -> f32 {
     let block = (sr as usize / 50).max(1) * 2;
     let ms: Vec<f32> = x.chunks(block).map(|c| c.iter().map(|v| v * v).sum::<f32>() / c.len() as f32).filter(|m| *m > 1e-5).collect();
     if ms.is_empty() {
@@ -166,7 +166,7 @@ pub fn make(
 }
 
 /// P(X ≥ k or X ≤ n−k) for X ~ Binomial(n, ½), k ≥ n/2: the two-sided exact p-value.
-fn binomial_two_sided(k: usize, n: usize) -> f64 {
+pub(crate) fn binomial_two_sided(k: usize, n: usize) -> f64 {
     let k = k.max(n - k);
     let mut ln_c = vec![0f64; n + 1];
     for i in 1..=n {
