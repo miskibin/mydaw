@@ -636,6 +636,14 @@ sung); the octave is the multiple of 12 nearest the singing. The Piano roll's *V
 button opens the pitch editor of a vocal the pattern plays over with the selected notes (`span`
 = the source seconds they cover) or all of the channel's.
 
+The other way round, the pitch editor's *Copy notes* (Ctrl+C) puts the selected sung notes (all
+without a selection) on the Piano roll's note clipboard, UI only (`ui/src/lib/vocalNotes.ts`):
+source seconds go through the clip (offset, stretch, tempo) to the 1/16 grid, the key is the
+sounding pitch (edits included, pencil excepted) rounded to a semitone, velocity follows the
+level relative to the loudest copied note, overlaps the grid creates are trimmed (the voice is
+monophonic), and steps count from the bar of the first note, so Ctrl+V in any pattern keeps the
+melody's place in the bar (from the pattern's start; a second paste lands a bar after it).
+
 The RMVPE model is not shipped: `f0_model_install` downloads it (URL,
 size, SHA-256 and licence link are constants in `crates/rmvpe`) to
 `<data>/Models/rmvpe.onnx`; `WAVE_RMVPE_MODEL` overrides the path.

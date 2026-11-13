@@ -10,6 +10,8 @@
 import { lang, t } from '../lib/i18n';
 import type { TranslationKey } from '../lib/i18n';
 import { isTypingKey } from '../state/typingKeys';
+import { setNoteClip } from '../state/noteClipboard';
+import { sungToPattern } from '../lib/vocalNotes';
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js';
 import { be } from '../api/backend';
 import type { Clip, ClipTune, F0ModelStatus, Melody, MelodyChannel, Op, PitchAnalysis, PitchTarget, RefTune } from '../api/types';
@@ -558,6 +560,7 @@ function PitchBody(props: { clipId: number }) {
     const tl = TOOLS.find(x => x.key === e.key);
     if (tl && !m) { e.stopPropagation(); setTool(tl.id); say(t('d.pitch.say.tool', { name: t(tl.label) })); return; }
     if (m && k === 'a') { e.preventDefault(); e.stopPropagation(); setSel(new Set(notes().map((_, i) => i))); return; }
+    if (m && k === 'c' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); copyNotes(); return; }
     if (e.key === 'Escape' && sel().size) { e.stopPropagation(); setSel(new Set<number>()); return; }
     if ((e.key === 'Delete' || e.key === 'Backspace') && sel().size) { e.preventDefault(); e.stopPropagation(); resetNotes(); return; }
     if (e.key === 'f' && !m) { e.stopPropagation(); fitView(); return; }
@@ -568,6 +571,21 @@ function PitchBody(props: { clipId: number }) {
 
   // ---- macros
   const scope = () => sel().size ? [...sel()] : notes().map((_, i) => i);
+  /** Copy notes (Ctrl+C): the selected notes (all without a selection) at the pitch they sound at, for Ctrl+V in the Piano roll. */
+  const copyNotes = () => {
+    const a = an(); if (!a) return;
+    const ns = notes();
+    const sung = scope().flatMap(i => {
+      const n = ns[i], p = pitchOf(i); if (p == null) return [];
+      const f0 = Math.max(0, Math.floor(n.start * a.rate)), f1 = Math.min(a.levels.length, Math.max(f0 + 1, Math.ceil(n.end * a.rate)));
+      let lv = 0; for (let f = f0; f < f1; f++) lv += a.levels[f] ?? 0;
+      return [{ start: n.start, end: n.end, pitch: p, level: lv / Math.max(1, f1 - f0) * dbg(n.gain) }];
+    });
+    const r = sungToPattern(sung, { start: c().start, t0: t0(), t1: t1(), spbSrc: spbSrc() });
+    if (!r.notes.length) { say(t('d.pitch.copy.none')); return; }
+    setNoteClip(r.notes, 0, 0);
+    say(t('d.pitch.copy.done', { n: r.notes.length }));
+  };
   const correct = () => {
     const a = an(); if (!a) return;
     const nt = correctPitch(tuneOrInit(), a, scope(), centerPct(), driftPct(), key(), mask(), speedMs());
@@ -674,6 +692,7 @@ function PitchBody(props: { clipId: number }) {
         <Segmented small label={t('d.pitch.key')} options={NOTE_NAMES} value={key} pick={setKey} color={FXMETA.tune.color} title={t('d.pitch.key.tip')} />
         <Segmented small options={SCALES} value={scale} pick={setScale} color={FXMETA.tune.color} />
         <div class="vsep" />
+        <button class="smallbtn" disabled={!an()} title={an() ? t('d.pitch.copy.tip') : t('d.pitch.copy.wait')} onClick={copyNotes}>{sel().size ? t('d.pitch.copy.sel', { n: sel().size }) : t('d.pitch.copy.all')}</button>
         <button class="smallbtn" disabled={!tune()} title={sel().size ? t('d.pitch.reset.tip1') : t('d.pitch.reset.tip2')} onClick={resetNotes}>{sel().size ? t('d.pitch.reset.notes') : t('d.pitch.reset')}</button>
         <div style={{ flex: 1 }} />
         <button class="smallbtn" classList={{ playing: U.playing }} title={t('d.pitch.play.tip')} onClick={() => void A.toggleSong()}>{U.playing ? t('d.pitch.stop') : t('d.pitch.play')}</button>
