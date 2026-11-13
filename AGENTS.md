@@ -134,6 +134,18 @@ documentation.
 - For DSP or performance work, add objective measurements or deterministic test
   signals where practical.
 
+## Commits and Pull Requests
+
+The repository owner is the author of every commit and pull request.
+
+- Commit with the repository's configured git identity. Do not set Claude (or any
+  AI tool) as author or committer.
+- Do not add `Co-Authored-By`, `Claude-Session`, "Generated with Claude Code" or
+  any other AI attribution to commit messages, pull request titles, bodies or
+  comments, and do not mention Claude in them.
+- Describe the change itself: what changed for the user, why, and how it was
+  verified.
+
 ## Verification and Definition of Done
 
 Run the gates relevant to the touched areas. For a repository-wide or

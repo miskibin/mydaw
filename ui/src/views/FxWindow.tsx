@@ -26,7 +26,8 @@ import { EqViz } from './fx/eq';
 import { EqStrips } from './fx/eqStrips';
 import { EqPanel, eqHover, eqLeave, eqPointerDown, eqWheel } from './fx/eqEdit';
 import { fetModes, FetViz } from './fx/fet';
-import { defaultView, ReverbViz, views3d } from './fx/reverb';
+import { ReverbViz, verbHit, verbLayout } from './fx/reverb';
+import { decayAt } from '../lib/reverbSpace';
 import { SatViz } from './fx/satDelay';
 import { DelayViz } from './fx/delay';
 import { TuneViz } from './fx/tune';
@@ -42,7 +43,7 @@ function makeViz(f: Fx): Viz | null {
     case 'comp': case 'limit': return new DynViz();
     case 'sat': return new SatViz();
     case 'delay': return new DelayViz();
-    case 'reverb': return new ReverbViz(f.id);
+    case 'reverb': return new ReverbViz();
     case 'tune': return new TuneViz();
     case 'fet': return new FetViz(f.id);
     case 'deess': return new DeessViz();
@@ -475,7 +476,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
   const down = (e: PointerEvent) => {
     const got = ff(); if (!got || !viz) return;
     if (got.f.type === 'eq') eqPointerDown(e, cv, props.fxId, viz as EqViz);
-    else if (got.f.type === 'reverb') verbDown(e);
+    else if (got.f.type === 'reverb') verbDown(e, got.f);
     else if (got.f.type === 'deess') deessDown(e, got.f);
     else if (got.f.type === 'voice') voiceDown(e);
     else if (got.f.type === 'half') halfDown(e, got.f);
@@ -494,6 +495,10 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
       const onF = x >= G.sx && Math.abs(x - deessFx(got.f.params.freq ?? 6000, W, H)) < 8;
       if (onThr !== d.hoverThr || onF !== d.hoverFreq) { d.hoverThr = onThr; d.hoverFreq = onF; version++; }
       cv.style.cursor = onThr ? 'ns-resize' : onF ? 'ew-resize' : 'default';
+    } else if (got.f.type === 'reverb') {
+      const v = viz as ReverbViz, { x, y, W, H } = rel(e), on = verbHit(got.f, x, y, W, H);
+      if (on !== v.hover) { v.hover = on; version++; }
+      cv.style.cursor = on ? 'ew-resize' : 'default';
     } else if (got.f.type === 'warp') {
       if (warpHover(e, cv, props.fxId, viz as WarpViz)) version++;
     } else if (got.f.type === 'half') {
@@ -512,6 +517,7 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     if (got.f.type === 'deess') { const d = viz as DeessViz; d.hoverThr = d.hoverFreq = false; version++; }
     if (got.f.type === 'voice') { (viz as VoiceViz).hover = false; version++; }
     if (got.f.type === 'half') { (viz as HalfViz).hover = null; version++; }
+    if (got.f.type === 'reverb') { (viz as ReverbViz).hover = null; version++; }
     if (got.f.type === 'warp') { const w = viz as WarpViz; w.hover = null; w.hoverX = null; version++; }
   };
   /** Pad: click / drag sets Pitch and Formant together (one undo step), double click resets both. */
@@ -580,13 +586,27 @@ function VizCanvas(props: { fxId: Id; pw: PlugWin; height: number }) {
     }, () => g.end(), onThr ? 'ns-resize' : 'ew-resize');
     if (onF && !onThr) { const op = setParam(props.fxId, 'freq', Math.round(clamp(deessXf(x, W, H), frP.min, frP.max))); if (op) g.update([op]); }
   };
-  const verbDown = (e: PointerEvent) => {
-    if (e.button !== 0) return; e.preventDefault();
-    let v = views3d.get(props.fxId); if (!v) { v = defaultView(); views3d.set(props.fxId, v); }
-    const bump = () => { (viz as ReverbViz).viewVersion++; };
-    if (dblCheck('verb' + props.fxId)) { Object.assign(v, defaultView()); bump(); say(t('c.fx.view3dReset')); return; }
-    let lx = e.clientX, ly = e.clientY;
-    track(ev => { v!.yaw = clamp(v!.yaw + (ev.clientX - lx) * 0.008, -1.2, 1.2); v!.pitch = clamp(v!.pitch + (ev.clientY - ly) * 0.006, 0.1, 1.3); lx = ev.clientX; ly = ev.clientY; bump(); }, null, 'grabbing');
+  /** Reverb envelope: drag PRE (pre-delay) or the tail's end (decay), one undo step; double-click = default. */
+  const verbDown = (e: PointerEvent, f: Fx) => {
+    if (e.button !== 0) return;
+    const { x, y, W, H } = rel(e), which = verbHit(f, x, y, W, H); if (!which) return;
+    e.preventDefault();
+    const id = which === 'pre' ? 'pre' : 'size', pd = defOf(f, id); if (!pd) return;
+    const name = t(which === 'pre' ? 'c.verb.preName' : 'c.verb.decayName');
+    if (dblCheck('verb' + which + props.fxId)) { const op = setParam(props.fxId, id, pd.def); if (op) commit([op], name); return; }
+    const g = new Gesture(name), v = viz as ReverbViz, r = cv.getBoundingClientRect();
+    v.drag = which; version++;
+    const at = (cx: number) => {
+      const cur = findFx(props.fxId)?.f; if (!cur) return;
+      // map through the layout the user sees at the start of the drag: the axis would rescale under the pointer
+      const tm = L0.xt(cx - r.left);
+      const val = which === 'pre' ? Math.round(clamp(tm * 1000, pd.min, pd.max)) : Math.round(decayAt(cur.params, tm) * 100) / 100;
+      const op = setParam(props.fxId, id, clamp(val, pd.min, pd.max)); if (op) g.update([op]);
+      const nv = findFx(props.fxId)?.f.params[id] ?? val;
+      say(name + ': ' + (which === 'pre' ? Math.round(nv) + ' ms' : nv.toFixed(2) + ' s'));
+    };
+    const L0 = verbLayout(W, H, f);
+    track(ev => at(ev.clientX), () => { g.end(); v.drag = null; version++; }, 'ew-resize');
   };
   const wheel = (e: WheelEvent) => {
     const got = ff(); if (!got || !viz) return;

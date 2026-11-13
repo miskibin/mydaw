@@ -47,6 +47,23 @@ uncompensated 1 ms delay. v2: true-peak detection per ITU-R BS.1770-4 Annex 2 (4
 the look-ahead (gain ramp lands exactly on the peak; Giannoulis, Massberg & Reiss, JAES 2012
 for the gain-computer structure), program-dependent release, stereo link, latency reported.
 
+## Display
+
+The reverb window draws the space and its decay from the DSP's own numbers
+(`ui/src/views/fx/reverb.ts`, `ui/src/lib/reverbSpace.ts`):
+- **Room**: the equivalent room of the network, `reverb_v2::equivalent_room_m`: the mean
+  delay-line length (× the decay's network scale) is the mean free path, `4V/S`, which for a
+  cube of side `L` is `2L/3`; the box is that volume in the space's usual proportions, drawn to
+  one scale for all spaces (a hall is visibly bigger than a room), with the first reflections off
+  its walls (brighter with *Early*). A Plate is drawn as a plate: it has no room.
+- **Decay**: pre-delay, the early reflections in the space's real span and slope, and the late
+  tail per band (`derive`: bass, mid, treble) to −60 dB, with the output after the last hit traced
+  over it. PRE and the mid tail's end are drag handles (Pre-delay, Decay; one undo step each).
+
+`ui/src/api/reverbSpaces.json` carries the spaces and sample values from the engine
+(`tests/reverb_spaces.rs`, regenerate with `WAVE_UPDATE_FIXTURES=1`); `reverbSpace.test.ts`
+checks the UI reproduces them.
+
 ## Measurements (44.1 kHz; 96 kHz within ±0.05 s / ±0.03)
 
 | reverb | NED ≥ 0.9 at | Wiener flatness | ring peak p99.9 / max | L/R corr | CPU µs / 128 fr |

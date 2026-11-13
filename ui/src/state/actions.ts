@@ -305,7 +305,7 @@ export function makeUnique(clip: Clip) {
 /**
  * FL's "Make unique" for audio: the clip — with the selected clips of the same sample on its
  * track, when it is selected — gets its own copy of the sample on a new track right below,
- * routed to a free mixer insert (shown in the Mixer). One undo step (`Backend.makeUnique`).
+ * playing where the old track does (no mixer insert is claimed). One undo step (`Backend.makeUnique`).
  */
 async function makeUniqueAudio(clip: Clip) {
   const ids = U.sel.includes(clip.id)
@@ -316,9 +316,9 @@ async function makeUniqueAudio(clip: Clip) {
     // queued behind pending edits; then the new state, so the names below are the engine's
     const r = await enqueue(() => be().makeUnique(ids));
     await resync();
-    setU({ sel: ids, cur: { kind: 'audio', ref: r.sourceId }, mixSel: r.insertId, fxSel: null });
+    setU({ sel: ids, cur: { kind: 'audio', ref: r.sourceId } });
     const name = S.project.sources.find(s => s.id === r.sourceId)?.name ?? '';
-    say(t('d.act.madeUnique', { name, n: S.project.inserts.findIndex(m => m.id === r.insertId) }));
+    say(t('d.act.madeUnique', { name }));
   } catch (e) {
     say(t('d.act.uniqueFail', { err: String(e) }));
     void resync();

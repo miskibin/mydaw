@@ -276,7 +276,7 @@ client: take them from `project.nextId` and increase locally (the engine bumps
 | `auto_vocal_plan` | `{clipId, beatClipId?, style?: "natural"\|"hard"}` | `AutoVocalPlan` (`ui/src/api/types.ts`): `{version, style, analysis, chain: [{type, params, mix, enabled, note}], trackGainDb\|null, stages, warnings}` — "Auto wokal": measures the vocal clip's region and calibrates tune → rider → fet → comp → deess → reverb → limit on it (`crates/engine/src/autovocal.rs`; key from `beatClipId`, else from the tracks not routed to the vocal's insert). Read-only, seconds per minute of audio; the UI applies the chain with `apply_ops` |
 | `clip_peaks` | `{clipId}` | like `source_peaks`, but of what the clip actually plays (norm/rev/pitch edits applied), in source time: a stretched clip draws them stretched |
 | `trim_clip` | `{clipId}` | `{sourceId}` — writes a new file with only the clip region, clip now points at it |
-| `make_unique` | `{clipIds}` | `{sourceId, track, insertId}` — FL's "Make unique" for audio clips (one source, one track): a copy of the source entry (same file and decoded audio, name "Name #n"), a new track right below routed to a free insert (no track or channel routed to it, no effects; a new insert when none is free, up to 128), the clips move there. One undo step |
+| `make_unique` | `{clipIds}` | `{sourceId, track, insertId}` — FL's "Make unique" for audio clips (one source, one track): a copy of the source entry (same file and decoded audio, name "Name #n"), a new track right below that plays where the old track does (the master unless the user routed it; no insert is claimed), the clips move there. One undo step |
 | `flatten_comp` | `{clipId}` | `{sourceId}` — renders a comp clip to a new file; the clip becomes an `audio` clip, the takes go (one undo step) |
 | `comp_audition` | `{compId, takeId?}` | – ; plays one whole take instead of the comp (`null` = the comp). Live only: not saved, not undone, ignored by renders |
 | `note_audition` | `{ch, key?, vel?, pattern?}` | – ; plays one note of a channel now (step clicks, piano-roll keys). `pattern`: the edited pattern, so a track-routed channel is heard through that pattern's track. Not an edit |
@@ -640,6 +640,14 @@ within 150 ms (melisma); full confidence where a note sounds, none elsewhere (ad
 sung); the octave is the multiple of 12 nearest the singing. The Piano roll's *Vocal reference*
 button opens the pitch editor of a vocal the pattern plays over with the selected notes (`span`
 = the source seconds they cover) or all of the channel's.
+
+The other way round, the pitch editor's *Copy notes* (Ctrl+C) puts the selected sung notes (all
+without a selection) on the Piano roll's note clipboard, UI only (`ui/src/lib/vocalNotes.ts`):
+source seconds go through the clip (offset, stretch, tempo) to the 1/16 grid, the key is the
+sounding pitch (edits included, pencil excepted) rounded to a semitone, velocity follows the
+level relative to the loudest copied note, overlaps the grid creates are trimmed (the voice is
+monophonic), and steps count from the bar of the first note, so Ctrl+V in any pattern keeps the
+melody's place in the bar (from the pattern's start; a second paste lands a bar after it).
 
 The RMVPE model is not shipped: `f0_model_install` downloads it (URL,
 size, SHA-256 and licence link are constants in `crates/rmvpe`) to

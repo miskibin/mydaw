@@ -1,10 +1,10 @@
-//! "Make unique" for audio clips: the clip gets its own copy of the source on a new track
-//! routed to a free mixer insert, in one undo step, without touching other clips.
+//! "Make unique" for audio clips: the clip gets its own copy of the source on a new track that
+//! plays where the old track does (no mixer insert is claimed), in one undo step, without
+//! touching other clips.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use wave_engine::catalog::new_fx;
 use wave_engine::*;
 
 const SR: u32 = 48000;
@@ -63,7 +63,7 @@ fn clip(e: &Engine, id: Id) -> Clip {
 }
 
 #[test]
-fn the_clip_gets_its_own_source_track_and_free_insert() {
+fn the_clip_gets_its_own_source_and_track_with_the_old_routing() {
     let (e, dir, src, [a, b, c]) = setup(Project::empty(), "basic");
     let before = e.project();
     let n_tracks = before.tracks.len();
@@ -82,18 +82,14 @@ fn the_clip_gets_its_own_source_track_and_free_insert() {
     );
     assert_eq!(old.name, "guitar", "the original keeps its name");
 
-    // a new track right below, routed to the first free insert (Insert 1: tracks play into the master)
+    // a new track right below, playing into the master like the old one: no insert is claimed
     assert_eq!(r.track, 1);
     assert_eq!(p.tracks.len(), n_tracks + 1);
-    assert_eq!(
-        p.inserts.len(),
-        n_inserts,
-        "a free insert is reused, none added"
-    );
+    assert_eq!(p.inserts, before.inserts, "the mixer is untouched");
+    assert_eq!(p.inserts.len(), n_inserts);
     let t = &p.tracks[1];
-    assert_eq!((t.name.as_str(), t.insert), ("guitar #2", r.insert_id));
-    assert_eq!(r.insert_id, p.inserts[1].id);
-    assert_eq!(p.inserts[1].name, "guitar #2");
+    assert_eq!((t.name.as_str(), t.insert), ("guitar #2", 0));
+    assert_eq!(r.insert_id, 0);
 
     // only the given clip moved; the clip that was on track 1 is now on track 2
     let ca = clip(&e, a);
@@ -114,8 +110,9 @@ fn the_clip_gets_its_own_source_track_and_free_insert() {
 }
 
 #[test]
-fn the_unique_clip_plays_through_its_own_insert() {
-    let (e, dir, _, [a, b, c]) = setup(Project::empty(), "route");
+fn the_unique_clip_keeps_the_old_tracks_insert() {
+    // Project::routed sends track n to insert n: the user's routing carries over
+    let (e, dir, _, [a, b, c]) = setup(Project::routed(), "route");
     e.apply(&[Op::RemoveClips { ids: vec![b, c] }], false, None)
         .unwrap();
     let spb = 60.0 / e.project().bpm;
@@ -126,17 +123,22 @@ fn the_unique_clip_plays_through_its_own_insert() {
     };
     let dry_level = level(&e);
     assert!(dry_level > 0.2, "the clip plays ({dry_level})");
+    let n = e.project().inserts.len();
+    let old_insert = e.project().tracks[0].insert;
     let r = e.make_unique_audio(&[a]).unwrap();
+    assert_eq!(r.insert_id, old_insert);
+    assert_eq!(e.project().tracks[1].insert, old_insert);
+    assert_eq!(e.project().inserts.len(), n, "no insert added");
     assert!(
         (level(&e) - dry_level).abs() < 1e-3,
         "same sound after making it unique"
     );
-    // muting the new insert silences it: it really plays through there (the decoded audio is shared)
+    // muting the old track's insert silences it: it really plays through there
     let mut m = e
         .project()
         .inserts
         .into_iter()
-        .find(|m| m.id == r.insert_id)
+        .find(|m| m.id == old_insert)
         .unwrap();
     m.muted = true;
     e.apply(&[Op::PutInsert { insert: m }], false, None)
@@ -166,52 +168,8 @@ fn several_clips_move_together_and_names_count_up() {
         (name(r.source_id), name(r2.source_id), name(r3.source_id)),
         ("guitar #2".into(), "guitar #3".into(), "guitar #4".into())
     );
-    // each got its own insert
-    let ins = [r.insert_id, r2.insert_id, r3.insert_id];
-    assert!(ins[0] != ins[1] && ins[1] != ins[2] && ins[0] != ins[2]);
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
-fn a_new_insert_is_added_when_every_insert_is_used() {
-    // Project::routed sends track n to insert n: none is free
-    let (e, dir, _, [a, ..]) = setup(Project::routed(), "full");
-    let n = e.project().inserts.len();
-    let r = e.make_unique_audio(&[a]).unwrap();
-    let p = e.project();
-    assert_eq!(p.inserts.len(), n + 1);
-    assert_eq!(p.inserts.last().unwrap().id, r.insert_id);
-    assert_eq!(p.inserts.last().unwrap().name, "guitar #2");
-    assert!(p.inserts.last().unwrap().fx.is_empty());
-    let _ = std::fs::remove_dir_all(dir);
-}
-
-#[test]
-fn an_insert_with_effects_or_routing_is_not_free() {
-    let (e, dir, _, [a, ..]) = setup(Project::empty(), "busy");
-    let mut p = e.project();
-    // Insert 1 has an effect, a channel plays into Insert 2: Insert 3 is the first free one
-    let fx = new_fx(80_000, FxKind::Eq, p.bpm);
-    let (i1, i2, i3) = (p.inserts[1].id, p.inserts[2].id, p.inserts[3].id);
-    let mut ch = p.channels[0].clone();
-    ch.insert = Some(i2);
-    e.apply(
-        &[
-            Op::PutFx {
-                insert_id: i1,
-                fx,
-                index: None,
-            },
-            Op::PutChannel {
-                channel: ch,
-                index: None,
-            },
-        ],
-        false,
-        None,
-    )
-    .unwrap();
-    assert_eq!(e.make_unique_audio(&[a]).unwrap().insert_id, i3);
+    // none claimed an insert: every new track plays into the master like its old one
+    assert_eq!([r.insert_id, r2.insert_id, r3.insert_id], [0, 0, 0]);
     let _ = std::fs::remove_dir_all(dir);
 }
 

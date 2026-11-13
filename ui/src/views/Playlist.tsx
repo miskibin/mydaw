@@ -1316,12 +1316,14 @@ export function Playlist() {
 // ---------- lane headers & routing ----------
 export function openRouteMenu(i: number, x: number, y: number) {
   const t = S.project.tracks[i]; if (!t) return;
-  openMenu(x, y, [
-    { t: 'title', label: tl('a.pl.toMixer', { name: t.name }) },
-    ...S.project.inserts.map(m => ({ t: 'item', label: insLabel(m.id), kbd: t.insert === m.id ? '●' : '', act: () => {
-      A.setTrack(i, { insert: m.id }, 'Routing'); A.selectInsert(m.id); say(t.name + ' → ' + insLabel(m.id));
-    } }) as MenuItem),
-  ], 340);
+  openMenu(x, y, [{ t: 'title', label: tl('a.pl.toMixer', { name: t.name }) }, ...routeItems(i)], 340);
+}
+/** Where track `i` plays: the master (the default) or a mixer insert the user picks. */
+function routeItems(i: number): MenuItem[] {
+  const t = S.project.tracks[i]; if (!t) return [];
+  return S.project.inserts.map(m => ({ t: 'item', label: insLabel(m.id), kbd: t.insert === m.id ? '●' : '', act: () => {
+    A.setTrack(i, { insert: m.id }, 'Routing'); A.selectInsert(m.id); say(t.name + ' → ' + insLabel(m.id));
+  } }) as MenuItem);
 }
 const insLabel = (id: Id) => { const i = S.project.inserts.findIndex(m => m.id === id); const m = S.project.inserts[i]; return !m ? '?' : id === 0 ? 'Master' : 'Ins ' + i + ' · ' + m.name; };
 
@@ -1336,6 +1338,7 @@ function openLaneMenu(x: number, y: number, i: number) {
     { t: 'item', label: t.muted ? tl('a.pl.unmute') : tl('a.pl.mute'), act: () => A.toggleTrackMute(i) },
     { t: 'item', label: t.solo ? tl('a.pl.soloOff') : 'Solo', act: () => A.toggleTrackSolo(i) },
     { t: 'item', label: t.arm ? tl('a.pl.disarm') : tl('a.pl.arm'), act: () => A.armTrack(i) },
+    { t: 'sub', label: tl('a.pl.routeItem'), items: routeItems(i) },
     { t: 'item', label: tl('a.pl.selTrackClips'), act: () => setU('sel', S.project.clips.filter(c => c.track === i).map(c => c.id)) },
     ...(CA.activeComp(i) ? [
       { t: 'item', label: U.takesOpen[t.id] ? tl('a.pl.hideTakes') : tl('a.pl.showTakes'), kbd: CA.takesLabel(CA.activeComp(i)!.comp.takes.length), act: () => CA.toggleTakes(i) } as MenuItem,
@@ -1402,7 +1405,10 @@ function LaneHeader(props: { t: Track; i: number }) {
                 <svg width="7" height="7" viewBox="0 0 8 8" style={{ transform: U.takesOpen[t().id] ? 'rotate(90deg)' : 'none' }}><path d="M2 1l4 3-4 3z" fill="currentColor" /></svg>{r().comp.takes.length}
               </button>
             )}</Show>
-            <button class="mini route" title={tl('a.pl.routeTip', { out: routeIdx() <= 0 ? 'Master' : 'Insert ' + routeIdx() })} onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{routeIdx() <= 0 ? 'M' : 'Ins ' + routeIdx()}</button>
+            {/* tracks play into the master unless the user sends one to a mixer channel (lane menu); only then is it shown */}
+            <Show when={routeIdx() > 0}>
+              <button class="mini route" title={tl('a.pl.routeTip', { out: 'Insert ' + routeIdx() })} onPointerDown={stop} onClick={e => openRouteMenu(props.i, e.clientX, e.clientY)}>{'Ins ' + routeIdx()}</button>
+            </Show>
             <button class="mini m" classList={{ on: t().muted }} title={tl('a.pl.muteTip')} onPointerDown={stop} onClick={() => A.toggleTrackMute(props.i)}>M</button>
             <button class="mini s" classList={{ on: t().solo }} title={tl('a.pl.soloTip')} onPointerDown={stop} onClick={e => A.toggleTrackSolo(props.i, e.ctrlKey || e.metaKey)}>S</button>
             <button class="mini r" classList={{ on: t().arm }} title={tl('a.pl.arm')} onPointerDown={stop} onClick={() => A.armTrack(props.i)}>

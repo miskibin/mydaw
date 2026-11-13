@@ -85,6 +85,7 @@ pub struct MadeUnique {
     pub source_id: Id,
     /// Index of the new track (right below the clips' old one).
     pub track: u32,
+    /// The insert the new track plays into: the old track's (the master unless routed).
     pub insert_id: Id,
 }
 
@@ -1201,9 +1202,10 @@ impl Engine {
     /// FL Studio's "Make unique" for audio clips. The clips (all of one source, on one track)
     /// get their own copy of the source entry — the same file and decoded audio, nothing is
     /// written — with its own name ("Name #2") and colour, and move to a new track right below
-    /// theirs that plays into a free mixer insert (no track or channel routed to it and no
-    /// effects; a new one when there is none), named and coloured after the copy. One undo step.
-    /// Other clips of the source keep it, their track and their routing.
+    /// theirs, named and coloured after the copy. The new track plays where the old one does
+    /// (the master unless the user routed it): no mixer insert is claimed or created on its
+    /// behalf, routing is the user's choice. One undo step. Other clips of the source keep it,
+    /// their track and their routing.
     pub fn make_unique_audio(&self, clip_ids: &[Id]) -> Result<MadeUnique, EngineError> {
         let mut c = self.core.lock();
         let err = |m: &str| EngineError::Msg(m.into());
@@ -1246,18 +1248,6 @@ impl Engine {
             .get(first.track as usize)
             .cloned()
             .ok_or(err("the clip's track is missing"))?;
-        let free = c.project.inserts.iter().find(|m| {
-            m.id != 0
-                && m.fx.is_empty()
-                && !c.project.tracks.iter().any(|t| t.insert == m.id)
-                && !c.project.channels.iter().any(|ch| ch.insert == Some(m.id))
-        });
-        let free = free.map(|m| m.id);
-        if free.is_none() && c.project.inserts.len() >= MAX_INSERTS {
-            return Err(err(
-                "every mixer insert is in use: free one or remove an unused one first",
-            ));
-        }
         // "Guitar", "Guitar #2", … : the next number no source of that name has yet
         let base = unique_base(&old.name);
         let name = (2..)
@@ -1273,28 +1263,7 @@ impl Engine {
             ..old.clone()
         });
         c.sources.insert(id, audio);
-        let insert_id = match free {
-            Some(m) => m,
-            None => {
-                let m = c.project.alloc_id();
-                c.project.inserts.push(Insert {
-                    id: m,
-                    name: String::new(),
-                    color: String::new(),
-                    vol: VOL_UNITY,
-                    pan: 0.0,
-                    width: 1.0,
-                    muted: false,
-                    solo: false,
-                    fx: vec![],
-                });
-                m
-            }
-        };
-        if let Some(m) = c.project.inserts.iter_mut().find(|m| m.id == insert_id) {
-            m.name = name.clone();
-            m.color = old.color.clone();
-        }
+        let insert_id = track.insert;
         let track_id = c.project.alloc_id();
         let at = first.track + 1;
         c.project.tracks.insert(

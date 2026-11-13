@@ -31,6 +31,7 @@ import { fmtPos } from '../lib/format';
 import { openPitchEditor } from '../state/actions';
 import { dblCheck, edgeScroller, panDrag, track, trackFrame } from '../ui/drag';
 import { typingHeld } from '../state/typingKeys';
+import { noteClip, setNoteClip } from '../state/noteClipboard';
 import { addFrameTask, fitCanvas, fonts, Layer } from '../ui/frameLoop';
 import { Icon } from '../ui/icons';
 import { drawLane, drawRoll, rollX, rollY, type RollGeo } from './patternDraw';
@@ -52,9 +53,6 @@ const TOOLS: { id: Tool; key: string; label: Parameters<typeof t>[0]; icon: stri
   { id: 'select', key: 'e', label: 'b.pe.tool.select', icon: 'M4 4h4 M12 4h4 M20 4v4 M20 12v4 M20 20h-4 M12 20H8 M4 20v-4 M4 12V8', tip: 'b.pe.tool.select.tip' },
   { id: 'erase', key: 'd', label: 'b.pe.tool.erase', icon: 'M8 20h12 M4.5 15.5L14 6l5 5-7.5 7.5H8z', tip: 'b.pe.tool.erase.tip' },
 ];
-/** Piano-roll note clipboard (shared across patterns); `noteClipAt` = where the next paste lands. */
-let noteClip: Note[] = [];
-let noteClipAt: number | null = null;
 
 /** The Piano roll window (shown while `U.rollWin` is set and there is a pattern and a channel). */
 export function PianoRoll(props: { z: number }) {
@@ -682,19 +680,20 @@ function Roll(props: { z: number }) {
     if (m && e.shiftKey && k === 'x') { stop(); if (s.length) moveSelToPattern(); else say(t('b.pe.noSel')); return; }
     if (m && (k === 'c' || k === 'x') && !e.shiftKey) {
       stop(); if (!s.length) return;
-      noteClip = s.map(i => notesRaw()[i]); noteClipAt = null;
+      setNoteClip(s.map(i => notesRaw()[i]));
       if (k === 'x') { const del = new Set(s); commitNotes(notesRaw().filter((_, i) => !del.has(i)), t('b.pe.cutNotes')); setSel(new Set<number>()); }
       say(t(k === 'x' ? 'b.pe.cutX' : 'b.pe.copiedX', { x: notesText(s.length) }));
       return;
     }
     if (m && k === 'v' && !e.shiftKey) {
-      stop(); if (!noteClip.length) return;
-      const a = Math.min(...noteClip.map(n => n.step)), b = Math.max(...noteClip.map(n => n.step + n.len));
-      const at = noteClipAt ?? a + Math.max(4, Math.ceil((b - a) / 4 - 1e-9) * 4); // first paste lands after the copied block, further ones chain on
-      const copies = noteClip.map(n => ({ ...n, ch: ch().id, step: n.step - a + at }));
+      stop(); const clip = noteClip.notes; if (!clip.length) return;
+      const a = noteClip.from ?? Math.min(...clip.map(n => n.step)), b = Math.max(...clip.map(n => n.step + n.len));
+      const at = noteClip.at ?? a + Math.max(4, Math.ceil((b - a) / 4 - 1e-9) * 4); // first paste lands after the copied block, further ones chain on
+      const copies = clip.map(n => ({ ...n, ch: ch().id, step: n.step - a + at }));
       const base = notesRaw().length;
       commitNotes([...notesRaw(), ...copies], t('b.pe.pasteNotes')); setSel(new Set(copies.map((_, j) => base + j)));
-      noteClipAt = at + (b - a);
+      // the next paste chains on: right after the block, or a whole bar on when the block keeps its place in the bar
+      noteClip.at = at + (noteClip.from != null ? Math.max(1, Math.ceil((b - a) / 16 - 1e-9)) * 16 : b - a);
       say(t('b.pe.pastedX', { x: notesText(copies.length) }));
       return;
     }
