@@ -1071,6 +1071,12 @@ fn pitch_edit_args(a: &Args, clip: u64, mut args: Value) -> Result<Value, Fail> 
     };
     if let Some(t) = text {
         let mut v: Value = serde_json::from_str(&t).map_err(|e| u(format!("the edit is not JSON: {e}")))?;
+        // a whole `pitch suggest` result: its ready op
+        if v.get("op").is_some_and(Value::is_object) {
+            v = v["op"].clone();
+        } else if v.get("suggestions").is_some() {
+            return Err(u("this `pitch suggest` result has no edits (its `op` is null): nothing to apply".into()));
+        }
         if v.get("op").and_then(Value::as_str) == Some("editTune") {
             if v.get("clip").and_then(Value::as_u64).is_some_and(|c| c != clip) {
                 return Err(u(format!("the op edits clip {}, not --clip {clip}", v["clip"])));
@@ -1561,6 +1567,9 @@ mod pitch_args_tests {
         let op = r#"{"op":"editTune","clip":5,"edit":{"base":"f00","notes":[{"i":1,"shift":-30}]}}"#;
         let v = pitch_edit_args(&args(&["pitch", "edit", "--clip", "5", "--json", op]), 5, json!({ "clipId": 5 })).unwrap();
         assert_eq!(v, json!({ "clipId": 5, "base": "f00", "notes": [{ "i": 1, "shift": -30 }] }));
+        let plan = format!(r#"{{"suggestions":[],"op":{op}}}"#);
+        let v2 = pitch_edit_args(&args(&["pitch", "edit", "--clip", "5", "--json", &plan]), 5, json!({ "clipId": 5 })).unwrap();
+        assert_eq!(v2, v, "a whole `pitch suggest` result is its op");
         let wrong = pitch_edit_args(&args(&["pitch", "edit", "--clip", "6", "--json", op]), 6, json!({ "clipId": 6 }));
         assert!(matches!(wrong, Err(Fail::Usage(m)) if m.contains("clip 5")));
         for bad in [

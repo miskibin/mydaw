@@ -309,7 +309,7 @@ wave pitch inspect --clip 412 --full --from 10 --to 14   # plus 5 ms frame curve
 wave pitch compare --clip 412 --source 7          # read-only: against another singer's take
 wave pitch suggest --clip 412 --source 7          # a proposal with a reason per note; changes nothing
 wave pitch edit --clip 412 --base 9d0cbbba3b9fc299 --note 3 --cents -25
-wave pitch edit --clip 412 --file edit.json       # several notes at once (or a suggestion's `op`)
+wave pitch edit --clip 412 --file edit.json       # several notes at once; also a `pitch suggest` result or its `op`
 wave pitch render --clip 412 --out take.wav       # the clip alone with its edits (--original: without)
 ```
 
@@ -413,7 +413,7 @@ deliberate variation, add your own (`--target`, a split before a scoop you want 
 apply them as one edit:
 
 ```sh
-jq '.op' plan.json > edit.json
+jq 'del(.op.edit.notes[] | select(.i == 21))' plan.json > edit.json   # e.g. drop note 21's change
 wave pitch edit --clip 412 --file edit.json --if-revision "$(jq .revision plan.json)" --max-cents 80
 wave pitch render --clip 412 --out after.wav && wave pitch render --clip 412 --out before.wav --original
 wave pitch inspect --clip 412                          # `out` per note: did it land?
